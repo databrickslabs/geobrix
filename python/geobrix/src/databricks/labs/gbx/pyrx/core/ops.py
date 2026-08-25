@@ -14,6 +14,7 @@ from rasterio.enums import Resampling
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core import compression as _comp
 
 # Heavyweight gdaladdo resampling name -> rasterio.enums.Resampling name.
 # Mirrors the AllowedResampling set in RST_BuildOverviews.scala; "near" is the
@@ -108,8 +109,12 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
     resampling_enum = Resampling[_OVERVIEW_RESAMPLING_MAP[key]]
 
     data = ds.read()
+    out_dtype = ds.dtypes[0]
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
+    )
     # BuildOverviews needs an r+ dataset; reopening a MemoryFile in update mode
     # mints a fresh vsimem path that does not see the just-written bytes. A
     # round-trip through a real temp file keeps the path stable, so overviews
@@ -128,21 +133,22 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
         os.unlink(tmp.name)
 
 
-def sample(ds, geom) -> list:
+def sample(ds, geom, geom_crs=None) -> list:
     """Sample per-band raster values at a POINT geometry.
 
     Mirrors the heavyweight ``gbx_rst_sample`` (requires a POINT; one Double per
     band in band order) with two robustness guarantees beyond the heavy compute
     path:
 
-      * **CRS alignment** — ``geom`` may be a shapely geometry (carrying an SRID
-        via ``shapely.set_srid``) or raw WKB/EWKB ``bytes`` (back-compat). When
-        the point carries a positive SRID and the raster has a CRS, the point is
-        reprojected from EPSG:srid to the raster CRS before indexing (so a 4326
-        point against a UTM raster lands correctly). Otherwise the point is
-        assumed already aligned to the raster CRS. (Heavy's pure ``execute`` path
-        assumes the point is pre-aligned; the light tier reprojects so a
-        differently-projected point does not silently miss.)
+      * **CRS alignment (Rule 1)** — ``geom`` may be a shapely geometry (carrying
+        an SRID via ``shapely.set_srid``) or raw WKB/EWKB ``bytes`` (back-compat).
+        The point's source CRS is resolved per-geom: an embedded SRID wins; else
+        the explicit ``geom_crs`` (int SRID or CRS string, incl. ESRI/WKT); else
+        None. When the source CRS is known and the raster has a CRS, the point is
+        reprojected to the raster CRS before indexing (so a 4326 point against a
+        UTM raster lands correctly). A CRS-less point is assumed already aligned —
+        never errors. (Heavy's pure ``execute`` path assumes pre-aligned; the
+        light tier reprojects so a differently-projected point does not miss.)
       * **Graceful out-of-bounds** — a point outside the raster pixel extent
         returns ``None`` (not the NoData fill ``ds.sample`` would emit, and not a
         crash), matching heavy ``RST_Sample`` which returns ``null``.
@@ -155,14 +161,15 @@ def sample(ds, geom) -> list:
     x, y = geom.x, geom.y
     srid = shapely.get_srid(geom)  # 0 when no SRID is set
     dst_crs = ds.crs  # rasterio CRS or None
-    if srid > 0 and dst_crs is not None:
-        try:
-            from rasterio.warp import transform as _transform
+    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
 
-            src_crs = rasterio.crs.CRS.from_epsg(srid)
+    src_crs = resolve_source_crs(srid, crs=geom_crs)  # Rule 1 (embedded wins)
+    if src_crs is not None and dst_crs is not None:
+        try:
+            from databricks.labs.gbx.pyrx.core.crs import get_transformer
+
             if src_crs != dst_crs:
-                xs, ys = _transform(src_crs, dst_crs, [x], [y])
-                x, y = xs[0], ys[0]
+                x, y = get_transformer(src_crs, dst_crs).transform(x, y)
         except Exception:
             # Unknown EPSG / transform failure -> assume already aligned.
             x, y = geom.x, geom.y

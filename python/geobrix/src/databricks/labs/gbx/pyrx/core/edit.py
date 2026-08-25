@@ -3,11 +3,12 @@ initialise NoData, threshold, stamp SRID, extract band. Each returns new
 GTiff bytes."""
 
 import numpy as np
-import rasterio
 import shapely
 import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.mask import mask as _rio_mask
+
+from databricks.labs.gbx.pyrx.core import compression as _comp
 
 # GDAL data-type name -> numpy dtype string.
 _GDAL_TO_NP = {
@@ -24,14 +25,35 @@ _GDAL_TO_NP = {
 _DEFAULT_NODATA = -9999.0
 
 
+def _nodata_fits_dtype(nodata: float, dtype_str: str) -> bool:
+    """Return True if *nodata* is representable in *dtype_str*.
+
+    Float dtypes always fit (rasterio allows any float nodata for float bands).
+    Integer dtypes are checked via numpy's iinfo range.
+    """
+    try:
+        dt = np.dtype(dtype_str)
+        if np.issubdtype(dt, np.integer):
+            info = np.iinfo(dt)
+            return info.min <= nodata <= info.max
+        return True  # float dtypes: always fits
+    except Exception:
+        return True  # unknown dtype: don't block
+
+
 def _write(profile, data) -> bytes:
+    dtype = profile.get("dtype", str(np.asarray(data).dtype))
+    decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None
+    profile.update(
+        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(data)
         return mf.read()
 
 
-def clip_to_geom(ds, geom, all_touched: bool = False):
+def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
     """Clip a raster to a geometry; return GTiff bytes, or ``None`` on non-overlap.
 
     ``geom`` may be a shapely geometry (preferred — carries SRID via
@@ -56,12 +78,16 @@ def clip_to_geom(ds, geom, all_touched: bool = False):
     mask_shape = geom
     srid = shapely.get_srid(geom)  # 0 when no SRID is set
     dst_crs = ds.crs  # rasterio CRS or None
-    if srid > 0 and dst_crs is not None:
+    # Rule 1 source-CRS: embedded SRID wins; else the explicit geom_crs (int SRID
+    # or CRS string, incl. ESRI/WKT); else None (assume aligned, never error).
+    from databricks.labs.gbx.pyrx.core.crs import resolve_source_crs
+
+    src_crs = resolve_source_crs(srid, crs=geom_crs)
+    if src_crs is not None and dst_crs is not None:
         try:
             from rasterio.warp import transform_geom
             from shapely.geometry import mapping
 
-            src_crs = rasterio.crs.CRS.from_epsg(srid)
             if src_crs != dst_crs:
                 # transform_geom returns a GeoJSON-like dict; rasterio.mask
                 # accepts GeoJSON geometries directly.
@@ -113,12 +139,21 @@ def update_type(ds, new_type: str) -> bytes:
 def init_nodata(ds, default: float = _DEFAULT_NODATA) -> bytes:
     """Ensure NoData is set on the raster; use *default* if not already set.
 
-    If NoData is already set, the existing value is preserved.
+    Semantics (shared with the virtual apply-at-open path in open_tile):
+    - If NoData is already set, the existing value is preserved.
+    - If NoData is not set and *default* fits the band dtype, set it.
+    - If NoData is not set and *default* does NOT fit the band dtype (e.g.
+      -9999.0 for uint16), leave nodata unset rather than writing an invalid
+      value. This prevents a ``ValueError`` on integer dtypes that can't
+      represent the default sentinel.
     """
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
     if profile.get("nodata") is None:
-        profile["nodata"] = default
+        dtype_str = profile.get("dtype", ds.dtypes[0])
+        if _nodata_fits_dtype(default, dtype_str):
+            profile["nodata"] = default
+        # else: default out of range for this dtype; leave nodata unset.
     return _write(profile, ds.read())
 
 
@@ -159,26 +194,58 @@ def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
 
 
 def set_srid(ds, srid: int) -> bytes:
-    """Stamp the CRS as ``EPSG:<srid>`` WITHOUT reprojecting.
+    """Stamp the CRS from a SRID integer WITHOUT reprojecting.
 
     Mirrors the heavyweight ``gbx_rst_setsrid`` (``gdal_edit.py -a_srs``):
     pixel values and the GeoTransform are unchanged; only the CRS metadata is
     rewritten. Use ``rst_transform`` for an actual reprojecting warp.
 
+    SRID bound: ``srid >= 0`` — a negative SRID is rejected (the one set-time
+    guard). ``0`` means "no CRS" and clears the CRS metadata. A positive code is
+    classified via the authoritative EPSG/ESRI rule (so ESRI codes like 54008
+    work); a code in neither registry raises here — writing CRS bytes is the
+    apply moment.
+
     Args:
         ds:   Open rasterio DatasetReader.
-        srid: Positive EPSG code to stamp.
+        srid: Non-negative SRID (EPSG or ESRI code; ``0`` clears the CRS).
 
     Returns:
-        GTiff bytes with the same pixels/transform but CRS = EPSG:srid.
+        GTiff bytes with the same pixels/transform but the resolved CRS
+        (or no CRS when ``srid == 0``).
     """
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
     srid = int(srid)
-    if srid <= 0:
-        raise ValueError(f"rst_setsrid requires a positive EPSG code; got {srid}")
-    try:
-        crs = rasterio.crs.CRS.from_epsg(srid)
-    except Exception as exc:  # invalid / unknown EPSG
-        raise ValueError(f"rst_setsrid: unknown EPSG code {srid}") from exc
+    if srid < 0:
+        raise ValueError(f"rst_setsrid: SRID must be >= 0; got {srid}")
+    crs = (
+        None if srid == 0 else resolve_crs(srid)
+    )  # raises for an invalid positive code
+    profile = ds.profile.copy()
+    profile.update(driver="GTiff", crs=crs)
+    return _write(profile, ds.read())
+
+
+def set_crs(ds, crs_value) -> bytes:
+    """Stamp the CRS WITHOUT reprojecting.
+
+    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
+    string accepted by ``rasterio.crs.CRS.from_user_input`` (``"ESRI:54008"``,
+    WKT, PROJ4, …).  Pixel values and the GeoTransform are unchanged; only the
+    CRS metadata is rewritten.  Use ``rst_transformcrs`` for an actual
+    reprojecting warp.
+
+    Args:
+        ds:        Open rasterio DatasetReader.
+        crs_value: CRS descriptor — int EPSG, int-castable string, or CRS string.
+
+    Returns:
+        GTiff bytes with the same pixels/transform but the new CRS.
+    """
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    crs = resolve_crs(crs_value)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", crs=crs)
     return _write(profile, ds.read())

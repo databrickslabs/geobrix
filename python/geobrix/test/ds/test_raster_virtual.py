@@ -1,0 +1,438 @@
+"""virtualTiles emit mode: bytes-free (path, whole-file window) tiles that
+round-trip through open_tile to the correct pixels.
+"""
+
+import numpy as np
+import rasterio
+from rasterio.transform import from_origin
+
+from databricks.labs.gbx.ds.cog import CogGbxDataSource
+from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
+
+# ---------------------------------------------------------------------------
+# Inline layout helpers (sourced from test/pyrx/_layouts.py — inlined here
+# because test/ds/ cannot do a relative import from the sibling test/pyrx/
+# package and the installed namespace has no test.pyrx path).
+# ---------------------------------------------------------------------------
+_PX = 0.001
+
+
+def _PIXELS(width, height):
+    return np.arange(width * height, dtype="float32").reshape(height, width)
+
+
+def _base_profile(width, height, epsg):
+    return dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="float32",
+        crs=f"EPSG:{epsg}",
+        transform=from_origin(10.0, 50.0, _PX, _PX),
+        nodata=-9999.0,
+    )
+
+
+def write_striped_gtiff(dst_path, width=512, height=512, epsg=4326):
+    prof = _base_profile(width, height, epsg)
+    prof.update(tiled=False)
+    with rasterio.open(dst_path, "w", **prof) as ds:
+        ds.write(_PIXELS(width, height), 1)
+    return dst_path
+
+
+def write_tiled_gtiff(dst_path, width=512, height=512, blocksize=256, epsg=4326):
+    prof = _base_profile(width, height, epsg)
+    prof.update(tiled=True, blockxsize=blocksize, blockysize=blocksize)
+    with rasterio.open(dst_path, "w", **prof) as ds:
+        ds.write(_PIXELS(width, height), 1)
+    return dst_path
+
+
+def write_cog(dst_path, width=512, height=512, blocksize=256, epsg=4326):
+    prof = _base_profile(width, height, epsg)
+    prof.update(driver="COG", blocksize=blocksize, overview_resampling="nearest")
+    prof.pop("tiled", None)
+    with rasterio.open(dst_path, "w", **prof) as ds:
+        ds.write(_PIXELS(width, height), 1)
+    return dst_path
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _write3(tmp_path):
+    return {
+        "cog": write_cog(str(tmp_path / "a.cog.tif"), 512, 512, 256),
+        "tiled": write_tiled_gtiff(str(tmp_path / "a.tiled.tif"), 512, 512, 256),
+        "striped": write_striped_gtiff(str(tmp_path / "a.striped.tif"), 512, 512),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Tests
+# ---------------------------------------------------------------------------
+
+
+def test_virtual_emits_bytes_free_rows(spark, tmp_path):
+    spark.dataSource.register(RasterGbxDataSource)
+    _write3(tmp_path)
+    df = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "true")
+        .load(str(tmp_path))
+    )
+    assert df.schema["tile"].dataType == V2_TILE_SCHEMA
+    rows = df.collect()
+    assert len(rows) == 3  # one per file
+    for r in rows:
+        t = r["tile"]
+        assert t["raster"] is None  # bytes-free
+        assert t["path"] is not None
+        # Task 2: window is deferred (None) for whole-file virtual tiles.
+        assert (
+            t["window"] is None
+        ), "whole-file virtual tile must have window=None (deferred)"
+        # Task 2: width/height/count/driver omitted; sourcePath, format, path_file_size present.
+        assert t["metadata"] is not None
+        assert "sourcePath" in t["metadata"]
+        assert "format" in t["metadata"]
+        assert "path_file_size" in t["metadata"]
+        assert "width" not in t["metadata"], "width must NOT be eagerly emitted"
+        assert "height" not in t["metadata"], "height must NOT be eagerly emitted"
+
+
+def test_virtual_row_round_trips_through_open_tile(spark, tmp_path):
+    spark.dataSource.register(RasterGbxDataSource)
+    _write3(tmp_path)
+    tiled_path = str(tmp_path / "a.tiled.tif")
+    rows = (
+        spark.read.format("raster_gbx").option("virtualTiles", "true").load(tiled_path)
+    ).collect()
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    tile = VirtualTile.from_row(t)  # reader row -> VirtualTile
+    with ot.open_tile(tile) as ds:
+        got = ds.read(1)
+    with rasterio.open(tiled_path) as ds:
+        exp = ds.read(1)
+    assert np.array_equal(got, exp)  # whole-file window == full read
+
+
+# ---------------------------------------------------------------------------
+# Default behavior tests: verify virtualTiles defaults to true
+# ---------------------------------------------------------------------------
+
+
+def test_raster_gbx_defaults_to_virtual(spark, tmp_path):
+    """raster_gbx with NO virtualTiles option should default to virtual tiles."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = spark.read.format("raster_gbx").load(tiled_path).collect()
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "raster_gbx must default to virtual (bytes-free)"
+    assert t["path"] is not None
+    # Task 2: whole-file virtual tiles have deferred window (None)
+    assert t["window"] is None, "whole-file virtual tile must have deferred window=None"
+
+
+def test_gtiff_gbx_defaults_to_virtual(spark, tmp_path):
+    """gtiff_gbx with NO virtualTiles option should default to virtual tiles."""
+    spark.dataSource.register(GTiffGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = spark.read.format("gtiff_gbx").load(tiled_path).collect()
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "gtiff_gbx must default to virtual (bytes-free)"
+    assert t["path"] is not None
+    # Task 2: whole-file virtual tiles have deferred window (None)
+    assert t["window"] is None, "whole-file virtual tile must have deferred window=None"
+
+
+def test_cog_gbx_defaults_to_virtual(spark, tmp_path):
+    """cog_gbx with NO virtualTiles option should default to virtual tiles."""
+    spark.dataSource.register(CogGbxDataSource)
+    paths = _write3(tmp_path)
+    cog_path = str(paths["cog"])
+    rows = spark.read.format("cog_gbx").load(cog_path).collect()
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "cog_gbx must default to virtual (bytes-free)"
+    assert t["path"] is not None
+    # Task 2: whole-file virtual tiles have deferred window (None)
+    assert t["window"] is None, "whole-file virtual tile must have deferred window=None"
+
+
+def test_raster_gbx_virtualtiles_false_materializes(spark, tmp_path):
+    """raster_gbx with virtualTiles=false should materialize bytes."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "virtualTiles=false must materialize bytes"
+
+
+def test_gtiff_gbx_virtualtiles_false_materializes(spark, tmp_path):
+    """gtiff_gbx with virtualTiles=false should materialize bytes."""
+    spark.dataSource.register(GTiffGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    rows = (
+        spark.read.format("gtiff_gbx")
+        .option("virtualTiles", "false")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "virtualTiles=false must materialize bytes"
+
+
+def test_cog_gbx_virtualtiles_false_materializes(spark, tmp_path):
+    """cog_gbx with virtualTiles=false should materialize bytes."""
+    spark.dataSource.register(CogGbxDataSource)
+    paths = _write3(tmp_path)
+    cog_path = str(paths["cog"])
+    rows = (
+        spark.read.format("cog_gbx")
+        .option("virtualTiles", "false")
+        .load(cog_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "virtualTiles=false must materialize bytes"
+
+
+def test_netcdf_gbx_still_materializes(spark, tmp_path):
+    """netcdf_gbx should still materialize by default (unchanged behavior)."""
+    from netCDF4 import Dataset
+
+    from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
+
+    # Write a minimal netcdf file
+    nc_path = tmp_path / "grid.nc"
+    with Dataset(str(nc_path), "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        v = ds.createVariable("ch4", "f4", ("lat", "lon"), fill_value=-9999.0)
+        v[:] = np.arange(12, dtype="float32").reshape(3, 4)
+
+    spark.dataSource.register(NetcdfGbxDataSource)
+    rows = (
+        spark.read.format("netcdf_gbx")
+        .option("variable", "ch4")
+        .load(str(nc_path))
+        .collect()
+    )
+    assert len(rows) >= 1, "netcdf_gbx should produce at least one row"
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "netcdf_gbx must materialize by default (unchanged)"
+
+
+# ---------------------------------------------------------------------------
+# Phase 1: Tile size metadata (path_file_size / tile_size)
+# ---------------------------------------------------------------------------
+
+
+def test_virtual_tile_has_path_file_size_metadata(spark, tmp_path):
+    """Virtual tiles carry path_file_size in metadata matching the source file size."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+    file_size = (tmp_path / "a.tiled.tif").stat().st_size
+
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "true")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is None, "virtual tile must have no raster bytes"
+    metadata = t["metadata"]
+    assert (
+        "path_file_size" in metadata
+    ), "virtual tile must have path_file_size metadata"
+    assert (
+        int(metadata["path_file_size"]) == file_size
+    ), f"path_file_size={metadata['path_file_size']} must match file_size={file_size}"
+
+
+def test_materialized_tile_has_tile_size_metadata(spark, tmp_path):
+    """Materialized tiles carry tile_size in metadata matching the raster byte length."""
+    spark.dataSource.register(RasterGbxDataSource)
+    paths = _write3(tmp_path)
+    tiled_path = str(paths["tiled"])
+
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(tiled_path)
+        .collect()
+    )
+    assert len(rows) == 1
+    t = rows[0]["tile"]
+    assert t["raster"] is not None, "materialized tile must have raster bytes"
+    raster_bytes = t["raster"]
+    metadata = t["metadata"]
+    assert (
+        "tile_byte_size" in metadata
+    ), "materialized tile must have tile_size metadata"
+    assert int(metadata["tile_byte_size"]) == len(
+        raster_bytes
+    ), f"tile_size={metadata['tile_byte_size']} must match len(raster)={len(raster_bytes)}"
+
+
+# ---------------------------------------------------------------------------
+# Task 2: deferred header open — no rasterio.open for whole-file virtual tiles
+# ---------------------------------------------------------------------------
+
+
+def test_read_wholefile_virtual_no_rasterio_open(tmp_path, monkeypatch):
+    """Whole-file virtual tile: read() emits 0 rasterio.open calls.
+
+    The per-tile FUSE header open is the ~74s/1k Serverless cost; Task 2 defers
+    it by emitting window=None with only the metadata knowable from the path.
+    """
+    import rasterio as _rasterio
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
+
+    path = write_striped_gtiff(str(tmp_path / "src.tif"), 256, 256)
+
+    open_call_count = [0]
+    _original_open = _rasterio.open
+
+    def _counting_open(*args, **kwargs):
+        open_call_count[0] += 1
+        return _original_open(*args, **kwargs)
+
+    # Patch rasterio.open on the module object — the local `import rasterio`
+    # inside read() returns the same cached module, so this intercepts it.
+    monkeypatch.setattr(_rasterio, "open", _counting_open)
+
+    reader = RasterGbxReader({"path": str(tmp_path)})
+    partition = _TilePartition(
+        file_path=path,
+        window=None,
+        emit_virtual=True,
+    )
+
+    rows = list(reader.read(partition))
+
+    assert open_call_count[0] == 0, (
+        f"Expected 0 rasterio.open calls for whole-file virtual tile, "
+        f"got {open_call_count[0]}"
+    )
+    assert len(rows) == 1, "read() must emit exactly one row"
+    source, tile_row = rows[0]
+
+    # window field (index 4) must be None — deferred
+    assert (
+        tile_row[4] is None
+    ), "window must be None (deferred) for whole-file virtual tile"
+
+    # metadata field (index 8): sourcePath + format present; width/height absent
+    meta = tile_row[8]
+    assert "sourcePath" in meta, "metadata must contain sourcePath"
+    assert "format" in meta, "metadata must contain format"
+    assert "path_file_size" in meta, "metadata must contain path_file_size"
+    assert "width" not in meta, "width must NOT be in deferred metadata"
+    assert "height" not in meta, "height must NOT be in deferred metadata"
+    assert "count" not in meta, "count must NOT be in deferred metadata"
+    assert "driver" not in meta, "driver must NOT be in deferred metadata"
+
+
+def test_read_materialized_still_opens_header(tmp_path, monkeypatch):
+    """Byte-identical guard: virtualTiles=false (materialized) still opens the header."""
+    import rasterio as _rasterio
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
+
+    path = write_striped_gtiff(str(tmp_path / "src.tif"), 256, 256)
+
+    open_call_count = [0]
+    _original_open = _rasterio.open
+
+    def _counting_open(*args, **kwargs):
+        open_call_count[0] += 1
+        return _original_open(*args, **kwargs)
+
+    monkeypatch.setattr(_rasterio, "open", _counting_open)
+
+    reader = RasterGbxReader({"path": str(tmp_path)})
+    # Materialized tile: emit_virtual=False
+    partition = _TilePartition(
+        file_path=path,
+        window=None,
+        emit_virtual=False,
+        is_passthrough=True,
+    )
+
+    rows = list(reader.read(partition))
+
+    assert open_call_count[0] > 0, "materialized path must still open the header"
+    assert len(rows) == 1
+    source, tile_row = rows[0]
+    assert tile_row[1] is not None, "materialized tile must have raster bytes"
+
+
+def test_read_tilesize_virtual_still_opens_header(tmp_path, monkeypatch):
+    """Byte-identical guard: tileSize virtual tiles (window≠None) keep the header open."""
+    import rasterio as _rasterio
+
+    from databricks.labs.gbx.ds.raster import RasterGbxReader, _TilePartition
+
+    path = write_striped_gtiff(str(tmp_path / "src.tif"), 256, 256)
+
+    open_call_count = [0]
+    _original_open = _rasterio.open
+
+    def _counting_open(*args, **kwargs):
+        open_call_count[0] += 1
+        return _original_open(*args, **kwargs)
+
+    monkeypatch.setattr(_rasterio, "open", _counting_open)
+
+    reader = RasterGbxReader({"path": str(tmp_path)})
+    # tile_size virtual tile: window is already set (not whole-file)
+    partition = _TilePartition(
+        file_path=path,
+        window=(0, 0, 128, 128),  # explicit window — NOT whole-file
+        emit_virtual=True,
+    )
+
+    rows = list(reader.read(partition))
+
+    assert (
+        open_call_count[0] > 0
+    ), "non-whole-file virtual tile (explicit window) must still open the header"
+    assert len(rows) == 1
+    source, tile_row = rows[0]
+    assert tile_row[4] is not None, "explicit-window tile must have non-None window"
+    meta = tile_row[8]
+    assert "width" in meta, "non-deferred virtual tile must include width in metadata"

@@ -17,7 +17,7 @@ from typing import Dict, Iterator, Tuple
 from pyspark.sql.datasource import DataSource, DataSourceReader
 from pyspark.sql.types import StructType
 
-from databricks.labs.gbx.ds import _encode, _netcdf
+from databricks.labs.gbx.ds import _encode, _listing, _netcdf
 from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
 
 
@@ -28,6 +28,14 @@ class NetcdfRasterReader(RasterGbxReader):
         super().__init__(options)  # path/sizeInMB/filterRegex/bbox/bboxCrs
         self.options = dict(options)
         self.group = options.get("group")
+
+    def partitions(self):
+        # NetCDF raster reader emits one row PER VARIABLE per file, not per tile
+        # window. The tile-window planning in RasterGbxReader.partitions() does not
+        # apply here — return one legacy _FilePartition per file so read() receives
+        # a file-scoped partition and can iterate over variables itself.
+        files = _listing.list_files(self.path, self.filter_regex)
+        return [_FilePartition(f, self.size_mib) for f in files]
 
     def read(self, partition: "_FilePartition") -> Iterator[Tuple]:
         from rasterio.io import MemoryFile
@@ -60,6 +68,7 @@ class NetcdfRasterReader(RasterGbxReader):
                             window=(0, 0, w, h),
                             source_path=partition.file_path,
                             all_parents="",
+                            tile_format="gtiff",
                         )
                 yield (source, (cellid, raster_bytes, meta))
 

@@ -15,6 +15,8 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
+import org.apache.spark.sql.catalyst.util.{ArrayBasedMapData, GenericArrayData}
+
 import java.nio.file.Files
 
 /** Direct-execute tests for [[RST_FromBandsAgg]].
@@ -83,18 +85,65 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
 
     // ---- agg factory --------------------------------------------------------
 
-    private def makeAgg(): RST_FromBandsAgg = {
-        val tileType = org.apache.spark.sql.types.StructType(Seq(
-            org.apache.spark.sql.types.StructField("cellid",   org.apache.spark.sql.types.LongType,   nullable = false),
-            org.apache.spark.sql.types.StructField("raster",   BinaryType,                            nullable = false),
-            org.apache.spark.sql.types.StructField("metadata", org.apache.spark.sql.types.MapType(
-                org.apache.spark.sql.types.StringType, org.apache.spark.sql.types.StringType),        nullable = true)
-        ))
+    private val v1TileType = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("cellid",   org.apache.spark.sql.types.LongType,   nullable = false),
+        org.apache.spark.sql.types.StructField("raster",   BinaryType,                            nullable = false),
+        org.apache.spark.sql.types.StructField("metadata", org.apache.spark.sql.types.MapType(
+            org.apache.spark.sql.types.StringType, org.apache.spark.sql.types.StringType),        nullable = true)
+    ))
+
+    private val v2TileType = org.apache.spark.sql.types.StructType(Seq(
+        org.apache.spark.sql.types.StructField("cellid",       org.apache.spark.sql.types.LongType,   nullable = false),
+        org.apache.spark.sql.types.StructField("raster",       BinaryType,                            nullable = true),
+        org.apache.spark.sql.types.StructField("path",         org.apache.spark.sql.types.StringType, nullable = true),
+        org.apache.spark.sql.types.StructField("path_mode",    org.apache.spark.sql.types.StringType, nullable = true),
+        org.apache.spark.sql.types.StructField("window",       org.apache.spark.sql.types.StringType, nullable = true),
+        org.apache.spark.sql.types.StructField("clip_polygon", BinaryType,                            nullable = true),
+        org.apache.spark.sql.types.StructField("clip_crs",     org.apache.spark.sql.types.StringType, nullable = true),
+        org.apache.spark.sql.types.StructField("crs",          org.apache.spark.sql.types.StringType, nullable = true),
+        org.apache.spark.sql.types.StructField("metadata",     org.apache.spark.sql.types.MapType(
+            org.apache.spark.sql.types.StringType, org.apache.spark.sql.types.StringType),        nullable = true)
+    ))
+
+    private def makeAgg(): RST_FromBandsAgg = makeAggForTileType(v1TileType)
+
+    private def makeAggForTileType(tileType: org.apache.spark.sql.types.StructType): RST_FromBandsAgg =
         RST_FromBandsAgg(
-            tileExpr      = Literal.create(null, tileType),
+            tile      = Literal.create(null, tileType),
             bandIndexExpr = Literal(0),
             exprConfExpr  = Literal.create(encodedEmpty(), StringType)
         )
+
+    /** Create a v2 (9-field) tile row from raster bytes; fields 2-7 are null, metadata at position 8. */
+    private def makeSingleBandTileRowV2(tag: String, fillValue: Int): InternalRow = {
+        val path = s"/vsimem/frombands_agg_v2_test_$tag.tif"
+        val drv = gdal.GetDriverByName("GTiff")
+        val ds = drv.Create(path, 4, 4, 1, gdalconstConstants.GDT_Float32)
+        ds.SetGeoTransform(Array[Double](0.0, 1.0, 0.0, 4.0, 0.0, -1.0))
+        val sr = new org.gdal.osr.SpatialReference()
+        sr.ImportFromEPSG(4326)
+        ds.SetProjection(sr.ExportToWkt())
+        val band = ds.GetRasterBand(1)
+        band.Fill(fillValue.toDouble)
+        band.FlushCache()
+        ds.FlushCache()
+        val bytes = RasterDriver.writeToBytes(ds, Map.empty)
+        ds.delete()
+        gdal.Unlink(path)
+
+        val emptyMeta = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
+        // v2 layout: cellid, raster, path, path_mode, window, clip_polygon, clip_crs, crs, metadata
+        InternalRow.fromSeq(Seq(
+            1L,        // cellid
+            bytes,     // raster (BinaryType)  — position 1
+            null,      // path
+            null,      // path_mode — position 3
+            null,      // window
+            null,      // clip_polygon
+            null,      // clip_crs
+            null,      // crs
+            emptyMeta  // metadata — position 8
+        ))
     }
 
     // ---- pixel readback helper ----------------------------------------------
@@ -200,7 +249,7 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
                 org.apache.spark.sql.types.StringType, org.apache.spark.sql.types.StringType),      nullable = true)
         ))
         val aggLong = RST_FromBandsAgg(
-            tileExpr      = Literal.create(tileA, tileType),
+            tile      = Literal.create(tileA, tileType),
             bandIndexExpr = Literal(1L),    // Long literal — this is what PySpark sends
             exprConfExpr  = Literal.create(encodedEmpty(), StringType)
         )
@@ -211,6 +260,61 @@ class RST_FromBandsAggTest extends AnyFunSuite with BeforeAndAfterAll {
         // Must not throw ClassCastException (the pre-fix behaviour).
         noException should be thrownBy aggLong.update(buf, InternalRow.empty)
         buf should have length 1
+    }
+
+    // ---- v2 (9-field) tile tests -------------------------------------------
+
+    test("v2 tiles: band-order correctness from v2 input rows") {
+        // Regression: getStruct(1, 3) on an 8-field row truncated to 3 fields,
+        // causing rowToTile to misread the metadata position. Now uses 9-field rows.
+        val tileA = makeSingleBandTileRowV2("v2A", 10)
+        val tileB = makeSingleBandTileRowV2("v2B", 20)
+        val tileC = makeSingleBandTileRowV2("v2C", 30)
+
+        val agg = makeAggForTileType(v2TileType)
+        val buf = agg.createAggregationBuffer()
+
+        // SHUFFLED: insert C(idx=3), A(idx=1), B(idx=2)
+        agg.updateWithIndex(buf, tileC, 3)
+        agg.updateWithIndex(buf, tileA, 1)
+        agg.updateWithIndex(buf, tileB, 2)
+
+        val result = agg.eval(buf).asInstanceOf[InternalRow]
+        result should not be null
+
+        val bandCount = readBandCount(result)
+        bandCount shouldBe 3
+
+        // After sort by band_index: band1=A(10), band2=B(20), band3=C(30)
+        readBandMean(result, 1) shouldBe 10.0 +- 0.5
+        readBandMean(result, 2) shouldBe 20.0 +- 0.5
+        readBandMean(result, 3) shouldBe 30.0 +- 0.5
+    }
+
+    test("v2 tiles: merge then eval with v2 inputs assembles correct band order") {
+        val tileA = makeSingleBandTileRowV2("v2mA", 10)
+        val tileB = makeSingleBandTileRowV2("v2mB", 20)
+        val tileC = makeSingleBandTileRowV2("v2mC", 30)
+
+        val agg = makeAggForTileType(v2TileType)
+
+        val buf1 = agg.createAggregationBuffer()
+        agg.updateWithIndex(buf1, tileC, 3)
+
+        val buf2 = agg.createAggregationBuffer()
+        agg.updateWithIndex(buf2, tileA, 1)
+        agg.updateWithIndex(buf2, tileB, 2)
+
+        val merged = agg.merge(buf1, buf2)
+        merged should have length 3
+
+        val result = agg.eval(merged).asInstanceOf[InternalRow]
+        result should not be null
+
+        readBandCount(result) shouldBe 3
+        readBandMean(result, 1) shouldBe 10.0 +- 0.5
+        readBandMean(result, 2) shouldBe 20.0 +- 0.5
+        readBandMean(result, 3) shouldBe 30.0 +- 0.5
     }
 
     test("buffer serde roundtrip preserves band indices") {

@@ -21,18 +21,18 @@ GeoBrix ships in two tiers that share the same function names — pick one with 
 Pure-Python (rasterio / pyogrio / NumPy), no JAR and no GDAL or OGR to install. A single wheel via `%pip` or as a cluster library, and it runs on serverless, standard/shared, ARM, and Lakeflow declarative pipelines. Covers **RasterX** (every `rst_*` function), **VectorX** (`gbx_st_*`), and the **GridX quadbin** grid (`gbx_quadbin_*`), plus the lightweight readers.
 
 ```python
-# Stage the wheel in a Unity Catalog Volume, then install the [light] extra.
+# Stage the wheel in a Unity Catalog Volume, then install the [light_env6] extra.
 # Use the quoted PEP 508 "name[extra] @ file://" form (Serverless-safe):
-%pip install "geobrix[light] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
 
 from databricks.labs.gbx.pyrx import functions as rx
 rx.register(spark)   # installs the gbx_rst_* SQL names, pyspark-backed
 ```
 
-:::warning Quote the `geobrix[light] @ file://…` requirement
+:::warning Quote the `geobrix[light_env6] @ file://…` requirement
 Install with the **named, quoted** form above. Do **not** put the extra on the
-path (`'/Volumes/…/…whl[light]'`): on **Serverless**, `%pip` writes the
-requirement to a file *including the quotes*, so pip reads `[light]` as part of
+path (`'/Volumes/…/…whl[light_env6]'`): on **Serverless**, `%pip` writes the
+requirement to a file *including the quotes*, so pip reads `[light_env6]` as part of
 the filename and fails with *"Expected package name at the start of dependency
 specifier."* The named form installs cleanly on Serverless, standard/shared,
 and ARM.
@@ -174,6 +174,13 @@ Register the lightweight readers once per session, then load by format string (`
   testFile="docs/tests/python/quickstart/test_examples.py"
   outputConstant="READ_GEOTIFF_LIGHT_output"
 />
+
+:::note Virtual tiles by default
+The lightweight raster reader returns **[virtual tiles](./api/virtual-tiles)** by default — each row
+carries a bytes-free `(path, window)` reference instead of the raster pixels, so a large file fans
+into tiles without accumulating memory. Pass `.option("virtualTiles", "false")` (or use
+`materialize=True` on a downstream `rst_*` call) when you need the bytes in-row.
+:::
 
 #### Read Shapefile
 

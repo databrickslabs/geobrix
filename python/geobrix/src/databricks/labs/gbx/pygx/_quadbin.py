@@ -3,6 +3,12 @@
 Cell math via the `quadbin` package; logic the package lacks (distance, bbox
 polyfill) is ported to match the heavy `gridx/grid/Quadbin.scala` exactly.
 Geometry outputs are EWKB (SRID 4326), matching heavy's JTS.toEWKB.
+
+Out-of-range coordinates are CLAMPED (not rejected): latitude is clamped to
+±85.05112878° and longitude to ±180°. This is intentional web-mercator behavior
+inherited from the quadbin tile scheme, not a degrade. It is distinct from BNG
+and Custom grids, which return NULL (None) when a point falls outside their
+declared extent.
 """
 
 import math

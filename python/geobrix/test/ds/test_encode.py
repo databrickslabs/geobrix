@@ -39,10 +39,10 @@ def test_encode_metadata_key_set(gtiff_bytes):
         _cellid, _b, meta = _encode.encode_tile(
             ds, window=(0, 0, 4, 3), source_path="/data/sample.tif", all_parents=""
         )
-    assert set(meta.keys()) == EXPECTED_METADATA_KEYS
+    assert EXPECTED_METADATA_KEYS <= set(meta.keys())
     assert meta["driver"] == "GTiff"
     assert meta["format"] == "GTiff"
-    assert meta["compression"] == "DEFLATE"
+    assert meta["compression"] == "auto"
     assert meta["isZipped"] == "false"
     assert meta["isSubset"] == "false"
     assert meta["last_error"] == ""

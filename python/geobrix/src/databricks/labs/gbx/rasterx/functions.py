@@ -34,6 +34,17 @@ def _col(x: ColLike) -> Union[Column, str]:
     return f.lit(x)
 
 
+def _crs_col(x: ColLike) -> Column:
+    """Coerce a CRS argument to a literal Column.
+
+    A bare ``str`` (e.g. ``"EPSG:4326"``) is a CRS descriptor, not a column
+    name, so lift it via ``f.lit``. Columns pass through unchanged.
+    """
+    if isinstance(x, str):
+        return f.lit(x)
+    return _col(x)
+
+
 def register(_spark: SparkSession) -> None:
     """Register RasterX functions with the Spark session.
 
@@ -50,17 +61,24 @@ def register(_spark: SparkSession) -> None:
     # UC Volume (/Volumes/...) FUSE path in the Spark execution context -- the UC credential is held
     # only by Spark's managed Python worker -- so the canonical implementation is the pyrx Python
     # UDF, which DOES read /Volumes (and /Workspace, DBFS, local). Override the Scala registration
-    # with it when pyrx ([light]) is importable. If it is NOT present, skip gracefully and leave the
+    # with it when pyrx (a light-tier extra) is importable. If it is NOT present, skip gracefully and leave the
     # Scala gbx_rst_fromfile in place (it still reads local / DBFS / Workspace, just not /Volumes).
     try:
         from databricks.labs.gbx.pyrx.functions import (
-            _fromfile_udf as _pyrx_fromfile_udf,
+            _fromfile_sql_materialized_udf as _pyrx_fromfile_materialized_udf,
         )
 
-        _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_udf)
+        # Register the 2-arg (path, driver) SQL UDF, but the HEAVY variant that
+        # MATERIALIZES: heavy/JVM callers need bytes (a virtual path-only tile is
+        # useless to them). Same call text as the light registration
+        # (gbx_rst_fromfile(path, driver)); the tier decides virtual vs
+        # materialized, last register() wins. (_fromfile_udf is the 3-arg
+        # Python-binding variant and must NOT be registered here, or 2-arg SQL
+        # calls break on arity.)
+        _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_materialized_udf)
     except (
         Exception
-    ):  # noqa: BLE001 - pyrx/[light] not installed: keep the Scala fallback
+    ):  # noqa: BLE001 - pyrx/light-tier not installed: keep the Scala fallback
         pass
 
 
@@ -429,19 +447,21 @@ def rst_combineavg_agg(tile: ColLike) -> Column:
     return f.call_function("gbx_rst_combineavg_agg", _col(tile))
 
 
-def rst_derivedband_agg(tile: ColLike, pyfunc: ColLike, func_name: ColLike) -> Column:
+def rst_derivedband_agg(
+    tile: ColLike, python_func: ColLike, func_name: ColLike
+) -> Column:
     """Aggregate tiles and apply a Python UDF per band (use with groupBy).
 
     Args:
         tile: Raster tile column.
-        pyfunc: Python source code of the UDF (string).
-        func_name: Name of the callable in pyfunc.
+        python_func: Python source code of the UDF (string).
+        func_name: Name of the callable in python_func.
 
     Returns:
         Column of derived raster tile.
     """
     return f.call_function(
-        "gbx_rst_derivedband_agg", _col(tile), _col(pyfunc), _col(func_name)
+        "gbx_rst_derivedband_agg", _col(tile), _col(python_func), _col(func_name)
     )
 
 
@@ -458,7 +478,7 @@ def rst_merge_agg(tile: ColLike) -> Column:
 
 
 def rst_rasterize_agg(
-    geom_wkb: ColLike,
+    geom: ColLike,
     value: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -466,15 +486,15 @@ def rst_rasterize_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
 ) -> Column:
-    """Rasterize streaming (geom_wkb, value) rows into a single raster tile (use with groupBy).
+    """Rasterize streaming (geom, value) rows into a single raster tile (use with groupBy).
 
     Streams one geometry/value pair per row; the extent and pixel-size arguments
     are per-group constants.  Overlap is last-wins (nondeterministic across the group).
 
     Args:
-        geom_wkb: BINARY column of geometry WKB (Polygon, MultiPolygon, etc.).
+        geom: Geometry (WKB, EWKB, WKT, or EWKT) column (Polygon, MultiPolygon, etc.).
         value: DOUBLE burn value column.
         xmin: Minimum X of the output raster extent.
         ymin: Minimum Y of the output raster extent.
@@ -482,14 +502,14 @@ def rst_rasterize_agg(
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID of the geometry / output raster.
+        out_srid: EPSG SRID of the output raster.
 
     Returns:
         Column of raster tile.
     """
     return f.call_function(
         "gbx_rst_rasterize_agg",
-        _col(geom_wkb),
+        _col(geom),
         _col(value),
         _col(xmin),
         _col(ymin),
@@ -497,7 +517,7 @@ def rst_rasterize_agg(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
     )
 
 
@@ -529,31 +549,36 @@ def rst_frombands_agg(tile: ColLike, band_index: ColLike) -> Column:
 
 def rst_h3_rasterize_agg(
     cellid: ColLike,
-    value: ColLike,
-    srid: ColLike,
-    pixel_size: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width: ColLike,
-    height: ColLike,
-    mode: ColLike,
-    kring_pad: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = None,
+    kring_pad: ColLike = None,
 ) -> Column:
     """Rasterize a group's H3 cells into one tile (pixel-centroid burn).
 
     Use with ``groupBy``; each row contributes one H3 ``cellid`` (and optionally
-    a ``value``). When ``value`` is ``None`` / ``f.lit(None)``, pixels covered by
-    any cell are burned with ``1.0`` (presence mask).  Supply an explicit canvas
+    a ``value``). When ``value`` is omitted (or ``None``), pixels covered by any
+    cell are burned with ``1.0`` (presence mask).  Supply an explicit canvas
     (``xmin`` … ``height``) from ``rst_h3_gridspec`` for aligned multi-band
     stacking; otherwise the grid is auto-derived from the cell set.
 
+    Every argument except ``cellid`` is optional and defaults to the same value
+    the lightweight tier uses, so the common call is simply
+    ``rx.rst_h3_rasterize_agg("cellid", "value")``. Because SQL binds
+    positionally, an omitted keyword is filled here with a correctly-typed SQL
+    literal (a typed ``NULL`` for the extent/size fields).
+
     Args:
         cellid:     LONG column of H3 cell ids.
-        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
-                    for a presence mask.
-        srid:       EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
+        value:      DOUBLE burn-value column; omit for a presence mask.
+        out_srid:   EPSG SRID of the output raster (default ``4326``).
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (CRS units).
         ymin:       Minimum Y of the output canvas (CRS units).
@@ -561,28 +586,32 @@ def rst_h3_rasterize_agg(
         ymax:       Maximum Y of the output canvas (CRS units).
         width:      Canvas width in pixels (INTEGER).
         height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
-                    (``f.lit(0)`` = no expansion).
+                    (default ``1``; ``0`` = no expansion).
 
     Returns:
-        Column of raster tile (tile struct with ``source``, ``raster``,
-        ``metadata`` fields).
+        Column of raster tile — the v2 tile struct with fields
+        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
+
+    def _c(x, default):
+        return _col(x) if x is not None else default
+
     return f.call_function(
         "gbx_rst_h3_rasterize_agg",
         _col(cellid),
-        _col(value),
-        _col(srid),
-        _col(pixel_size),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width),
-        _col(height),
-        _col(mode),
-        _col(kring_pad),
+        _c(value, f.lit(None).cast("double")),
+        _c(out_srid, f.lit(4326)),
+        _c(pixel_size, f.lit(None).cast("double")),
+        _c(xmin, f.lit(None).cast("double")),
+        _c(ymin, f.lit(None).cast("double")),
+        _c(xmax, f.lit(None).cast("double")),
+        _c(ymax, f.lit(None).cast("double")),
+        _c(width, f.lit(None).cast("int")),
+        _c(height, f.lit(None).cast("int")),
+        _c(mode, f.lit("centroids")),
+        _c(kring_pad, f.lit(1)),
     )
 
 
@@ -637,30 +666,37 @@ def rst_fromfile(path: ColLike, driver: ColLike) -> Column:
     """Build a raster tile from a file path and GDAL driver name.
 
     Args:
-        path: Column of file path (string).
+        path: Column of SOURCE FILE path (string) — a filesystem or Volume path read to
+            produce a materialized bytes-tile.  This is a raster-constructor argument,
+            not a "path-tile" field; the returned tile always carries raster bytes.
         driver: GDAL driver name (e.g. GTiff).
 
     Returns:
-        Column of raster tile.
+        Column of raster tile (materialized — raster bytes present).
 
     Note:
         ``gbx_rst_fromfile`` is **lightweight-only**: it is implemented by the ``pyrx`` Python loader
         (a ``pandas_udf``) and has no JVM/Scala implementation. On Databricks the executor JVM cannot
         read a UC Volume (``/Volumes/...``) FUSE path — the UC credential is held only by Spark's
         managed Python worker — so this delegates to ``pyrx.rst_fromfile`` and **requires
-        ``geobrix[light]``**. If ``[light]`` is not installed, this raises with guidance. The
-        portable alternative (no ``[light]``, works on every tier) is
+        a light-tier extra (e.g. ``geobrix[light_env6]``)**. If no light-tier extra is installed,
+        this raises with guidance. The portable alternative (works on every tier) is
         ``spark.read.format("binaryFile").load(path)`` + ``gbx_rst_fromcontent(content, driver)``.
     """
     try:
         from databricks.labs.gbx.pyrx import functions as _pyrx
     except ImportError as e:  # pragma: no cover
         raise ImportError(
-            "gbx_rst_fromfile is lightweight-only and requires geobrix[light] (it is implemented by "
-            "the pyrx Python reader; the JVM cannot read UC Volumes). Install geobrix[light], or use "
+            "gbx_rst_fromfile is lightweight-only and requires a light-tier extra, e.g. geobrix[light_env6] "
+            "(implemented by the pyrx Python reader; the JVM cannot read UC Volumes). "
+            "Install a light-tier extra, or use "
             "spark.read.format('binaryFile').load(path) + gbx_rst_fromcontent(content, driver)."
         ) from e
-    return _pyrx.rst_fromfile(path, driver)
+    # The heavyweight surface always yields a MATERIALIZED tile (raster bytes
+    # present): a virtual tile carries only a path, which JVM expressions cannot
+    # read. pyrx.rst_fromfile now defaults to a virtual tile, so force
+    # materialize=True here to preserve this shim's bytes-present contract.
+    return _pyrx.rst_fromfile(path, driver, materialize=True)
 
 
 def rst_frombands(bands: ColLike) -> Column:
@@ -1179,31 +1215,36 @@ def rst_bng_tessellate(
 
 def rst_quadbin_rasterize_agg(
     cellid: ColLike,
-    value: ColLike,
-    srid: ColLike,
-    pixel_size: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width: ColLike,
-    height: ColLike,
-    mode: ColLike,
-    kring_pad: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = None,
+    kring_pad: ColLike = None,
 ) -> Column:
     """Rasterize a group's CARTO quadbin v0 cells into one tile (pixel-centroid burn).
 
     Use with ``groupBy``; each row contributes one quadbin ``cellid`` (BIGINT) and
-    optionally a ``value``. When ``value`` is ``None`` / ``f.lit(None)``, pixels
-    covered by any cell are burned with ``1.0`` (presence mask). Supply an explicit
-    canvas (``xmin`` … ``height``) for aligned multi-band stacking; otherwise the
-    grid is auto-derived from the cell set.
+    optionally a ``value``. When ``value`` is omitted (or ``None``), pixels covered
+    by any cell are burned with ``1.0`` (presence mask). Supply an explicit canvas
+    (``xmin`` … ``height``) for aligned multi-band stacking; otherwise the grid is
+    auto-derived from the cell set.
+
+    Every argument except ``cellid`` is optional and defaults to the same value
+    the lightweight tier uses, so the common call is simply
+    ``rx.rst_quadbin_rasterize_agg("cellid", "value")``. Because SQL binds
+    positionally, an omitted keyword is filled here with a correctly-typed SQL
+    literal (a typed ``NULL`` for the extent/size fields).
 
     Args:
         cellid:     BIGINT column of quadbin cell ids.
-        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
-                    for a presence mask.
-        srid:       EPSG SRID of the output raster (e.g. ``f.lit(4326)``).
+        value:      DOUBLE burn-value column; omit for a presence mask.
+        out_srid:   EPSG SRID of the output raster (default ``4326``).
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (CRS units).
         ymin:       Minimum Y of the output canvas (CRS units).
@@ -1211,65 +1252,73 @@ def rst_quadbin_rasterize_agg(
         ymax:       Maximum Y of the output canvas (CRS units).
         width:      Canvas width in pixels (INTEGER).
         height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
-                    (``f.lit(0)`` = no expansion).
+                    (default ``1``; ``0`` = no expansion).
 
     Returns:
-        Column of raster tile (tile struct with ``source``, ``raster``,
-        ``metadata`` fields).
+        Column of raster tile — the v2 tile struct with fields
+        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
+
+    def _c(x, default):
+        return _col(x) if x is not None else default
+
     return f.call_function(
         "gbx_rst_quadbin_rasterize_agg",
         _col(cellid),
-        _col(value),
-        _col(srid),
-        _col(pixel_size),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width),
-        _col(height),
-        _col(mode),
-        _col(kring_pad),
+        _c(value, f.lit(None).cast("double")),
+        _c(out_srid, f.lit(4326)),
+        _c(pixel_size, f.lit(None).cast("double")),
+        _c(xmin, f.lit(None).cast("double")),
+        _c(ymin, f.lit(None).cast("double")),
+        _c(xmax, f.lit(None).cast("double")),
+        _c(ymax, f.lit(None).cast("double")),
+        _c(width, f.lit(None).cast("int")),
+        _c(height, f.lit(None).cast("int")),
+        _c(mode, f.lit("centroids")),
+        _c(kring_pad, f.lit(1)),
     )
 
 
 def rst_bng_rasterize_agg(
     cellid: ColLike,
-    value: ColLike,
-    srid: ColLike,
-    pixel_size: ColLike,
-    xmin: ColLike,
-    ymin: ColLike,
-    xmax: ColLike,
-    ymax: ColLike,
-    width: ColLike,
-    height: ColLike,
-    mode: ColLike,
-    kring_pad: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = None,
+    kring_pad: ColLike = None,
 ) -> Column:
     """Rasterize a group's BNG grid cells into one tile (pixel-centroid burn).
 
     Use with ``groupBy``; each row contributes one BNG ``cellid`` (STRING, e.g.
-    ``"TQ3080"``) and optionally a ``value``. When ``value`` is ``None`` /
-    ``f.lit(None)``, pixels covered by any cell are burned with ``1.0``
-    (presence mask). Supply an explicit canvas (``xmin`` … ``height``) for
-    aligned multi-band stacking; otherwise the grid is auto-derived from the
-    cell set.
+    ``"TQ3080"``) and optionally a ``value``. When ``value`` is omitted (or
+    ``None``), pixels covered by any cell are burned with ``1.0`` (presence
+    mask). Supply an explicit canvas (``xmin`` … ``height``) for aligned
+    multi-band stacking; otherwise the grid is auto-derived from the cell set.
 
-    Note on ``srid``: BNG always operates in EPSG:27700 (British National Grid).
-    The ``srid`` argument is accepted for API consistency with the H3 and
+    Every argument except ``cellid`` is optional and defaults to the same value
+    the lightweight tier uses, so the common call is simply
+    ``rx.rst_bng_rasterize_agg("cellid", "value")``. Because SQL binds
+    positionally, an omitted keyword is filled here with a correctly-typed SQL
+    literal (a typed ``NULL`` for the extent/size fields).
+
+    Note on ``out_srid``: BNG always operates in EPSG:27700 (British National Grid).
+    The ``out_srid`` argument is accepted for API consistency with the H3 and
     quadbin variants but is a no-op — the function forces EPSG:27700 regardless
     of the value passed.
 
     Args:
         cellid:     STRING column of BNG cell ids (e.g. ``"TQ3080"``).
-        value:      DOUBLE burn-value column, or ``f.lit(None).cast("double")``
-                    for a presence mask.
-        srid:       Ignored — BNG forces EPSG:27700. Pass ``f.lit(27700)`` for
-                    clarity or any integer; the value has no effect.
+        value:      DOUBLE burn-value column; omit for a presence mask.
+        out_srid:   Ignored — BNG forces EPSG:27700 (default). Accepted for
+                    parity with the H3/quadbin variants; the value has no effect.
         pixel_size: Pixel size in CRS units (used when extent is auto-derived).
         xmin:       Minimum X of the output canvas (BNG eastings).
         ymin:       Minimum Y of the output canvas (BNG northings).
@@ -1277,28 +1326,32 @@ def rst_bng_rasterize_agg(
         ymax:       Maximum Y of the output canvas (BNG northings).
         width:      Canvas width in pixels (INTEGER).
         height:     Canvas height in pixels (INTEGER).
-        mode:       Sampling mode string (e.g. ``f.lit("centroids")``).
+        mode:       Sampling mode string (default ``"centroids"``).
         kring_pad:  K-ring expansion around each cell before rasterizing
-                    (``f.lit(0)`` = no expansion).
+                    (default ``1``; ``0`` = no expansion).
 
     Returns:
-        Column of raster tile (tile struct with ``source``, ``raster``,
-        ``metadata`` fields).
+        Column of raster tile — the v2 tile struct with fields
+        ``cellid, raster, path, window, clip_polygon, clip_crs, crs, metadata``.
     """
+
+    def _c(x, default):
+        return _col(x) if x is not None else default
+
     return f.call_function(
         "gbx_rst_bng_rasterize_agg",
         _col(cellid),
-        _col(value),
-        _col(srid),
-        _col(pixel_size),
-        _col(xmin),
-        _col(ymin),
-        _col(xmax),
-        _col(ymax),
-        _col(width),
-        _col(height),
-        _col(mode),
-        _col(kring_pad),
+        _c(value, f.lit(None).cast("double")),
+        _c(out_srid, f.lit(27700)),
+        _c(pixel_size, f.lit(None).cast("double")),
+        _c(xmin, f.lit(None).cast("double")),
+        _c(ymin, f.lit(None).cast("double")),
+        _c(xmax, f.lit(None).cast("double")),
+        _c(ymax, f.lit(None).cast("double")),
+        _c(width, f.lit(None).cast("int")),
+        _c(height, f.lit(None).cast("int")),
+        _c(mode, f.lit("centroids")),
+        _c(kring_pad, f.lit(1)),
     )
 
 
@@ -1318,19 +1371,32 @@ def rst_asformat(tile: ColLike, new_format: ColLike) -> Column:
     return f.call_function("gbx_rst_asformat", _col(tile), _col(new_format))
 
 
-def rst_clip(tile: ColLike, clip: ColLike, cutline_all_touched: ColLike) -> Column:
+def rst_clip(
+    tile: ColLike, geom: ColLike, cutline_all_touched: ColLike, clip_crs: ColLike = None
+) -> Column:
     """Clip the raster to a geometry (or mask).
 
     Args:
         tile: Raster tile column.
-        clip: Clipping geometry column (WKT/WKB) or raster mask.
+        geom: Clipping geometry column (WKT/WKB/EWKT/EWKB).
         cutline_all_touched: If True, include pixels touched by the boundary.
+        clip_crs: Optional source CRS of a plain WKB/WKT cutline (int SRID or
+            CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
+            assumed already in the raster CRS.
 
     Returns:
         Column of clipped raster tile.
     """
+    if clip_crs is None:
+        return f.call_function(
+            "gbx_rst_clip", _col(tile), _col(geom), _col(cutline_all_touched)
+        )
     return f.call_function(
-        "gbx_rst_clip", _col(tile), _col(clip), _col(cutline_all_touched)
+        "gbx_rst_clip",
+        _col(tile),
+        _col(geom),
+        _col(cutline_all_touched),
+        _crs_col(clip_crs),
     )
 
 
@@ -1359,19 +1425,38 @@ def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
     return f.call_function("gbx_rst_convolve", _col(tile), _col(kernel))
 
 
-def rst_derivedband(tile_expr: ColLike, pyfunc: ColLike, func_name: ColLike) -> Column:
+def rst_crs(tile: ColLike) -> Column:
+    """Return the canonical CRS string for the raster tile.
+
+    Returns an authority string (``'EPSG:4326'``, ``'ESRI:54008'``) when the
+    CRS has a recognised authority code, or a WKT string for authority-less
+    projections. Returns NULL for a tile with no CRS.
+
+    Distinct from ``rst_srid`` (int / NULL): ``rst_crs`` preserves non-EPSG
+    authority codes (ESRI, IAU, etc.) and falls back to WKT rather than NULL.
+
+    Args:
+        tile: Tile struct column.
+
+    Returns:
+        STRING column — canonical CRS string, or NULL if CRS is absent.
+    """
+    return f.call_function("gbx_rst_crs", _col(tile))
+
+
+def rst_derivedband(tile: ColLike, python_func: ColLike, func_name: ColLike) -> Column:
     """Apply a Python UDF to each pixel (or band) to produce a derived band.
 
     Args:
-        tile_expr: Raster tile column (or expression).
-        pyfunc: Python source code of the UDF (string).
-        func_name: Name of the callable in pyfunc.
+        tile: Raster tile column.
+        python_func: Python source code of the UDF (string).
+        func_name: Name of the callable in python_func.
 
     Returns:
         Column of raster tile with derived band(s).
     """
     return f.call_function(
-        "gbx_rst_derivedband", _col(tile_expr), _col(pyfunc), _col(func_name)
+        "gbx_rst_derivedband", _col(tile), _col(python_func), _col(func_name)
     )
 
 
@@ -1415,17 +1500,17 @@ def rst_isempty(tile: ColLike) -> Column:
     return f.call_function("gbx_rst_isempty", _col(tile))
 
 
-def rst_mapalgebra(tiles: ColLike, expression: ColLike) -> Column:
+def rst_mapalgebra(tiles: ColLike, json_spec: ColLike) -> Column:
     """Apply a map algebra expression to one or more tiles.
 
     Args:
         tiles: Column of array of raster tiles (or single tile).
-        expression: Expression string (e.g. A + B, A * 2).
+        json_spec: Expression string (e.g. A + B, A * 2).
 
     Returns:
         Column of result raster tile.
     """
-    return f.call_function("gbx_rst_mapalgebra", _col(tiles), _col(expression))
+    return f.call_function("gbx_rst_mapalgebra", _col(tiles), _col(json_spec))
 
 
 def rst_merge(tiles: ColLike) -> Column:
@@ -1440,83 +1525,94 @@ def rst_merge(tiles: ColLike) -> Column:
     return f.call_function("gbx_rst_merge", _col(tiles))
 
 
-def rst_ndvi(tile: ColLike, red_band: ColLike, nir_band: ColLike) -> Column:
+def rst_ndvi(tile: ColLike, red_idx: ColLike, nir_idx: ColLike) -> Column:
     """Compute NDVI from red and NIR band indices.
 
     Args:
         tile: Raster tile column.
-        red_band: 1-based red band index.
-        nir_band: 1-based NIR band index.
+        red_idx: 1-based red band index.
+        nir_idx: 1-based NIR band index.
 
     Returns:
         Column of raster tile (single-band NDVI).
     """
-    return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_band), _col(nir_band))
+    return f.call_function("gbx_rst_ndvi", _col(tile), _col(red_idx), _col(nir_idx))
 
 
-def rst_rastertoworldcoord(tile: ColLike, pixel_x: ColLike, pixel_y: ColLike) -> Column:
+def rst_rastertoworldcoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert pixel (x, y) to world (x, y) in the CRS of the raster.
 
     Args:
         tile: Raster tile column.
-        pixel_x: Pixel column index.
-        pixel_y: Pixel row index.
+        x: Pixel column index.
+        y: Pixel row index.
 
     Returns:
         Column of struct (x, y as double) in world coordinates.
     """
-    return f.call_function(
-        "gbx_rst_rastertoworldcoord", _col(tile), _col(pixel_x), _col(pixel_y)
-    )
+    return f.call_function("gbx_rst_rastertoworldcoord", _col(tile), _col(x), _col(y))
 
 
-def rst_rastertoworldcoordx(
-    tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
-) -> Column:
+def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert pixel (x, y) to world X coordinate.
 
     Args:
         tile: Raster tile column.
-        pixel_x: Pixel column index.
-        pixel_y: Pixel row index.
+        x: Pixel column index.
+        y: Pixel row index.
 
     Returns:
         Column of double.
     """
-    return f.call_function(
-        "gbx_rst_rastertoworldcoordx", _col(tile), _col(pixel_x), _col(pixel_y)
-    )
+    return f.call_function("gbx_rst_rastertoworldcoordx", _col(tile), _col(x), _col(y))
 
 
-def rst_rastertoworldcoordy(
-    tile: ColLike, pixel_x: ColLike, pixel_y: ColLike
-) -> Column:
+def rst_rastertoworldcoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert pixel (x, y) to world Y coordinate.
 
     Args:
         tile: Raster tile column.
-        pixel_x: Pixel column index.
-        pixel_y: Pixel row index.
+        x: Pixel column index.
+        y: Pixel row index.
 
     Returns:
         Column of double.
     """
-    return f.call_function(
-        "gbx_rst_rastertoworldcoordy", _col(tile), _col(pixel_x), _col(pixel_y)
-    )
+    return f.call_function("gbx_rst_rastertoworldcoordy", _col(tile), _col(x), _col(y))
 
 
-def rst_transform(tile: ColLike, target_srid: ColLike) -> Column:
+def rst_transform(tile: ColLike, srid: ColLike) -> Column:
     """Reproject the raster to the target SRID (EPSG code).
 
     Args:
         tile: Raster tile column.
-        target_srid: Target spatial reference ID (e.g. 4326 for WGS84).
+        srid: Target spatial reference ID (e.g. 4326 for WGS84).
 
     Returns:
         Column of reprojected raster tile.
     """
-    return f.call_function("gbx_rst_transform", _col(tile), _col(target_srid))
+    return f.call_function("gbx_rst_transform", _col(tile), _col(srid))
+
+
+def rst_transformcrs(tile: ColLike, crs: ColLike) -> Column:
+    """Reproject the raster to a string-given target CRS.
+
+    Accepts any CRS descriptor accepted by rasterio's CRS parser: int EPSG,
+    int-castable string, authority string (``"EPSG:3857"``, ``"ESRI:54008"``),
+    WKT, or PROJ4. Unlike ``rst_transform`` (int EPSG only) this supports
+    non-EPSG targets such as ESRI codes or custom projections.
+
+    Pixel-producing: always materializes (a new reprojected tile is emitted).
+
+    Args:
+        tile: Tile struct column.
+        crs:  Target CRS descriptor — int EPSG, int-castable string, authority
+              string, WKT, or PROJ4.
+
+    Returns:
+        Tile reprojected to the target CRS.
+    """
+    return f.call_function("gbx_rst_transformcrs", _col(tile), _crs_col(crs))
 
 
 def rst_tryopen(tile: ColLike) -> Column:
@@ -1544,56 +1640,46 @@ def rst_updatetype(tile: ColLike, new_type: ColLike) -> Column:
     return f.call_function("gbx_rst_updatetype", _col(tile), _col(new_type))
 
 
-def rst_worldtorastercoord(tile: ColLike, world_x: ColLike, world_y: ColLike) -> Column:
+def rst_worldtorastercoord(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert world (x, y) to pixel (x, y) in the raster.
 
     Args:
         tile: Raster tile column.
-        world_x: World X coordinate.
-        world_y: World Y coordinate.
+        x: World X coordinate.
+        y: World Y coordinate.
 
     Returns:
         Column of struct (x, y as integer) in pixel coordinates.
     """
-    return f.call_function(
-        "gbx_rst_worldtorastercoord", _col(tile), _col(world_x), _col(world_y)
-    )
+    return f.call_function("gbx_rst_worldtorastercoord", _col(tile), _col(x), _col(y))
 
 
-def rst_worldtorastercoordx(
-    tile: ColLike, world_x: ColLike, world_y: ColLike
-) -> Column:
+def rst_worldtorastercoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert world (x, y) to pixel column index.
 
     Args:
         tile: Raster tile column.
-        world_x: World X coordinate.
-        world_y: World Y coordinate.
+        x: World X coordinate.
+        y: World Y coordinate.
 
     Returns:
         Column of integer (pixel column index).
     """
-    return f.call_function(
-        "gbx_rst_worldtorastercoordx", _col(tile), _col(world_x), _col(world_y)
-    )
+    return f.call_function("gbx_rst_worldtorastercoordx", _col(tile), _col(x), _col(y))
 
 
-def rst_worldtorastercoordy(
-    tile: ColLike, world_x: ColLike, world_y: ColLike
-) -> Column:
+def rst_worldtorastercoordy(tile: ColLike, x: ColLike, y: ColLike) -> Column:
     """Convert world (x, y) to pixel row index.
 
     Args:
         tile: Raster tile column.
-        world_x: World X coordinate.
-        world_y: World Y coordinate.
+        x: World X coordinate.
+        y: World Y coordinate.
 
     Returns:
         Column of integer (pixel row index).
     """
-    return f.call_function(
-        "gbx_rst_worldtorastercoordy", _col(tile), _col(world_x), _col(world_y)
-    )
+    return f.call_function("gbx_rst_worldtorastercoordy", _col(tile), _col(x), _col(y))
 
 
 def rst_to_webmercator(
@@ -1753,7 +1839,7 @@ def rst_xyzpyramid(
 
 
 def rst_rasterize(
-    geom_wkb: ColLike,
+    geom: ColLike,
     value: ColLike,
     xmin: ColLike,
     ymin: ColLike,
@@ -1761,7 +1847,7 @@ def rst_rasterize(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
 ) -> Column:
     """Burn a vector geometry into a raster tile at the given extent and resolution.
 
@@ -1771,7 +1857,7 @@ def rst_rasterize(
     (-9999.0, Float64).
 
     Args:
-        geom_wkb: Geometry as WKB ``bytes`` column.
+        geom: Geometry (WKB, EWKB, WKT, or EWKT) column.
         value: Burn value (``float``).
         xmin: Minimum X of the output raster extent.
         ymin: Minimum Y of the output raster extent.
@@ -1779,14 +1865,14 @@ def rst_rasterize(
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID of the extent / geometry.
+        out_srid: EPSG SRID of the output raster.
 
     Returns:
         Raster tile column.
     """
     return f.call_function(
         "gbx_rst_rasterize",
-        _col(geom_wkb),
+        _col(geom),
         _col(value),
         _col(xmin),
         _col(ymin),
@@ -1794,7 +1880,7 @@ def rst_rasterize(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
     )
 
 
@@ -1832,18 +1918,21 @@ def rst_polygonize(
 def rst_slope(
     tile: ColLike,
     unit: ColLike = None,
-    scale: ColLike = None,
+    xscale: ColLike = None,
+    yscale: ColLike = None,
 ) -> Column:
     """Compute slope from a DEM tile via ``gdal.DEMProcessing("slope")``.
 
     Args:
         tile: Single-band DEM tile column.
         unit: ``"degrees"`` (default) or ``"percent"``.
-        scale: Horizontal scale (ratio of vertical units to horizontal units).
+        xscale: Explicit horizontal scale override (vertical/horizontal ratio)
+            along the x axis. Must be supplied together with ``yscale``.
             By default the scale is auto-derived from the raster CRS (GDAL 3.11
             behavior), so projected CRS in metres and geographic CRS in degrees
-            both work without an explicit value. Pass an explicit ``scale``
-            (e.g. 111120 for degree grids) to override.
+            both work without an explicit value.
+        yscale: Explicit horizontal scale override along the y axis. Must be
+            supplied together with ``xscale``.
 
     Returns:
         Single-band Float32 GTiff tile column.
@@ -1853,8 +1942,15 @@ def rst_slope(
         if unit is None
         else (f.lit(unit) if isinstance(unit, str) else _col(unit))
     )
-    scale_col = f.lit(float("nan")) if scale is None else _col(scale)
-    return f.call_function("gbx_rst_slope", _col(tile), unit_col, scale_col)
+    if xscale is None and yscale is None:
+        return f.call_function("gbx_rst_slope", _col(tile), unit_col)
+    if xscale is None or yscale is None:
+        raise ValueError(
+            "rst_slope: xscale and yscale must be supplied together (both or neither)"
+        )
+    return f.call_function(
+        "gbx_rst_slope", _col(tile), unit_col, _col(xscale), _col(yscale)
+    )
 
 
 def rst_aspect(
@@ -2214,35 +2310,35 @@ def rst_resample_to_res(
 
 
 def rst_gridfrompoints(
-    points: ColLike,
-    values: ColLike,
+    points_array: ColLike,
+    values_array: ColLike,
     xmin: ColLike,
     ymin: ColLike,
     xmax: ColLike,
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     power: ColLike = None,
     max_pts: ColLike = None,
 ) -> Column:
     """Inverse-Distance-Weighted (IDW) interpolation - non-aggregator form.
 
-    Points (``ARRAY<BINARY>`` WKB or ``ARRAY<STRING>`` WKT) and ``values``
+    Points (``ARRAY<BINARY>`` WKB or ``ARRAY<STRING>`` WKT) and ``values_array``
     (``ARRAY<DOUBLE>``) are passed in a single row. The output is a Float64
     GTiff tile of shape ``width_px x height_px`` covering
     ``(xmin, ymin) -> (xmax, ymax)`` in the given SRID.
 
     Args:
-        points: Column of array of point geometries (WKB or WKT).
-        values: Column of array of double values (same length as ``points``).
+        points_array: Column of array of point geometries (WKB or WKT).
+        values_array: Column of array of double values (same length as ``points_array``).
         xmin: Minimum X of the output raster extent.
         ymin: Minimum Y of the output raster extent.
         xmax: Maximum X of the output raster extent.
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID of the extent / point geometries.
+        out_srid: EPSG SRID of the output raster.
         power: IDW exponent (default 2.0).
         max_pts: Maximum neighbour points per cell (default 12).
 
@@ -2253,15 +2349,15 @@ def rst_gridfrompoints(
     max_pts_col = f.lit(12) if max_pts is None else _col(max_pts)
     return f.call_function(
         "gbx_rst_gridfrompoints",
-        _col(points),
-        _col(values),
+        _col(points_array),
+        _col(values_array),
         _col(xmin),
         _col(ymin),
         _col(xmax),
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         power_col,
         max_pts_col,
     )
@@ -2276,7 +2372,7 @@ def rst_gridfrompoints_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     power: ColLike = None,
     max_pts: ColLike = None,
 ) -> Column:
@@ -2295,7 +2391,7 @@ def rst_gridfrompoints_agg(
         ymax: Maximum Y of the output raster extent.
         width_px: Output raster width in pixels.
         height_px: Output raster height in pixels.
-        srid: EPSG SRID.
+        out_srid: EPSG SRID of the output raster.
         power: IDW exponent (default 2.0).
         max_pts: Maximum neighbour points per cell (default 12).
 
@@ -2314,7 +2410,7 @@ def rst_gridfrompoints_agg(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         power_col,
         max_pts_col,
     )
@@ -2330,8 +2426,8 @@ def rst_gridfrompoints_agg(
 
 
 def rst_dtmfromgeoms(
-    points: ColLike,
-    breaklines: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     xmin: ColLike,
@@ -2340,7 +2436,7 @@ def rst_dtmfromgeoms(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     no_data: ColLike = None,
 ) -> Column:
     """DTM from Z-valued points + optional breaklines via Delaunay-TIN interpolation.
@@ -2350,13 +2446,13 @@ def rst_dtmfromgeoms(
     ``height_px = round((ymax-ymin)/N)`` (e.g. a 1000 m extent at 10 m cells -> 100 px).
 
     Args:
-        points: Array column of Z-valued point geometries (WKB binary or WKT string).
-        breaklines: Array column of breakline LineString geometries; pass an empty array for none.
+        points_array: Array column of Z-valued point geometries (WKB binary or WKT string).
+        breaklines_array: Array column of breakline LineString geometries; pass an empty array for none.
         merge_tolerance: Delaunay segment-merge tolerance.
         snap_tolerance: Vertex-to-breakline snap tolerance.
         xmin, ymin, xmax, ymax: Output raster extent.
         width_px, height_px: Output raster size in pixels.
-        srid: EPSG SRID.
+        out_srid: EPSG SRID of the output raster.
         no_data: No-data sentinel (default -9999.0).
 
     Returns:
@@ -2365,8 +2461,8 @@ def rst_dtmfromgeoms(
     nd = f.lit(-9999.0) if no_data is None else _col(no_data)
     return f.call_function(
         "gbx_rst_dtmfromgeoms",
-        _col(points),
-        _col(breaklines),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(xmin),
@@ -2375,7 +2471,7 @@ def rst_dtmfromgeoms(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         nd,
     )
 
@@ -2391,7 +2487,7 @@ def rst_dtmfromgeoms_agg(
     ymax: ColLike,
     width_px: ColLike,
     height_px: ColLike,
-    srid: ColLike,
+    out_srid: ColLike,
     no_data: ColLike = None,
 ) -> Column:
     """DTM aggregator - one Z-valued ``point`` per row, grouped by extent key.
@@ -2416,7 +2512,7 @@ def rst_dtmfromgeoms_agg(
         _col(ymax),
         _col(width_px),
         _col(height_px),
-        _col(srid),
+        _col(out_srid),
         nd,
     )
 
@@ -2495,7 +2591,7 @@ def rst_fillnodata(
     return f.call_function("gbx_rst_fillnodata", _col(tile), msd_col, si_col)
 
 
-def rst_sample(tile: ColLike, geom: ColLike) -> Column:
+def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
     """Sample raster pixel values at a POINT geometry — returns one Double per band.
 
     The point coordinates must be in the raster's CRS. Out-of-extent points
@@ -2504,11 +2600,35 @@ def rst_sample(tile: ColLike, geom: ColLike) -> Column:
     Args:
         tile: Raster tile column.
         geom: POINT geometry — WKB ``bytes`` or WKT ``string`` column.
+        crs: Optional source CRS of a plain WKB/WKT point (int SRID or CRS
+            string). An EWKB/EWKT embedded SRID wins; absent + no SRID ->
+            assumed already in the raster CRS.
 
     Returns:
         Column of ``ARRAY<DOUBLE>`` (one value per band) or ``null`` outside extent.
     """
-    return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
+    if crs is None:
+        return f.call_function("gbx_rst_sample", _col(tile), _col(geom))
+    return f.call_function("gbx_rst_sample", _col(tile), _col(geom), _crs_col(crs))
+
+
+def rst_setcrs(tile: ColLike, crs: ColLike) -> Column:
+    """Stamp the CRS WITHOUT reprojecting, accepting any CRS string.
+
+    Accepts an int EPSG code, an int-castable string (``"4326"``), or any
+    string accepted by rasterio's CRS parser such as ``"ESRI:54008"``, WKT, or
+    PROJ4 strings. Pixel values and the GeoTransform are unchanged; only the
+    CRS metadata is rewritten. Use ``rst_transformcrs`` for a reprojecting warp.
+
+    Args:
+        tile: Tile struct column.
+        crs:  CRS descriptor — int EPSG code, int-castable string, authority
+              string (``"EPSG:4326"``, ``"ESRI:54008"``), WKT, or PROJ4.
+
+    Returns:
+        Tile with the same pixels/transform but the new CRS.
+    """
+    return f.call_function("gbx_rst_setcrs", _col(tile), _crs_col(crs))
 
 
 def rst_setsrid(tile: ColLike, srid: ColLike) -> Column:
@@ -2672,7 +2792,7 @@ def rst_cog_convert(
 def rst_proximity(
     tile: ColLike,
     target_values: Union[ColLike, None] = None,
-    distunits: Union[ColLike, None] = None,
+    dist_units: Union[ColLike, None] = None,
     max_distance: ColLike = None,
 ) -> Column:
     """Compute a proximity raster: each pixel = distance to nearest source pixel.
@@ -2686,9 +2806,9 @@ def rst_proximity(
         target_values: Optional comma-separated list of source-pixel values to
             measure distance to (e.g. ``"1,2,3"``). ``None`` = any non-NoData
             pixel is a target.
-        distunits: ``"GEO"`` (CRS ground units, default) or ``"PIXEL"``.
+        dist_units: ``"GEO"`` (CRS ground units, default) or ``"PIXEL"``.
         max_distance: Optional cap on output distance (in the same units as
-            ``distunits``). ``None`` = unlimited.
+            ``dist_units``). ``None`` = unlimited.
 
     Returns:
         Float32 proximity raster tile column.
@@ -2704,8 +2824,8 @@ def rst_proximity(
     )
     du_col = (
         f.lit("GEO")
-        if distunits is None
-        else (f.lit(distunits) if isinstance(distunits, str) else _col(distunits))
+        if dist_units is None
+        else (f.lit(dist_units) if isinstance(dist_units, str) else _col(dist_units))
     )
     md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
     return f.call_function("gbx_rst_proximity", _col(tile), tv_col, du_col, md_col)
@@ -2755,6 +2875,7 @@ def rst_viewshed(
     observer_height: ColLike,
     target_height: ColLike = None,
     max_distance: ColLike = None,
+    crs: ColLike = None,
 ) -> Column:
     """Compute a binary viewshed raster from a DEM and an observer POINT.
 
@@ -2772,12 +2893,24 @@ def rst_viewshed(
             Default ``1.6`` (~average eye height).
         max_distance: Optional clipping distance in CRS units; ``None`` =
             unlimited (only bounded by raster extent).
+        crs: Optional source CRS of a plain WKB/WKT observer point (int SRID
+            or CRS string). An EWKB/EWKT embedded SRID wins; absent + no SRID
+            -> assumed already in the raster CRS.
 
     Returns:
         Byte raster tile column (0 / 255).
     """
     th_col = f.lit(1.6) if target_height is None else _col(target_height)
     md_col = f.lit(None).cast("double") if max_distance is None else _col(max_distance)
+    if crs is None:
+        return f.call_function(
+            "gbx_rst_viewshed",
+            _col(tile),
+            _col(observer_geom),
+            _col(observer_height),
+            th_col,
+            md_col,
+        )
     return f.call_function(
         "gbx_rst_viewshed",
         _col(tile),
@@ -2785,4 +2918,5 @@ def rst_viewshed(
         _col(observer_height),
         th_col,
         md_col,
+        _crs_col(crs),
     )

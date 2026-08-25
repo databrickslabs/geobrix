@@ -12,6 +12,8 @@ import numpy as np
 from shapely import wkb as _wkb
 from shapely.geometry import box
 
+from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
+
 # Rasterio/numpy dtype string -> GDAL data-type name (mirrors heavyweight rst_type).
 _NP_TO_GDAL = {
     "uint8": "Byte",
@@ -39,6 +41,16 @@ def numbands(ds) -> int:
 
 def srid(ds) -> Optional[int]:
     return ds.crs.to_epsg() if ds.crs is not None else None
+
+
+def crs(ds) -> Optional[str]:
+    """Return the canonical CRS string: authority string ('EPSG:4326'/'ESRI:54008') or WKT.
+
+    None-safe: returns None when ds.crs is None. Distinct from srid() which
+    returns int/null; crs() preserves non-EPSG authority codes (ESRI, etc.)
+    and falls back to WKT for authority-less projections.
+    """
+    return crs_to_canonical(ds.crs)
 
 
 def pixelwidth(ds) -> float:
@@ -287,7 +299,10 @@ def summary(ds) -> str:
     info = {
         "driverShortName": ds.driver,
         "size": [int(ds.width), int(ds.height)],
-        "coordinateSystem": {"epsg": ds.crs.to_epsg() if ds.crs is not None else None},
+        "coordinateSystem": {
+            "epsg": ds.crs.to_epsg() if ds.crs is not None else None,
+            "crs": crs_to_canonical(ds.crs),
+        },
         "geoTransform": list(_gdal_gt(ds)),
         "bands": bands,
     }

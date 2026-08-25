@@ -13,17 +13,15 @@ import org.gdal.gdal.Dataset
 
 /** Expression that re-encodes the raster to a new GDAL format (e.g. COG, Zarr). Arguments: tile, newFormat. */
 case class RST_AsFormat(
-    tileExpr: Expression,
+    tile: Expression,
     newFormat: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, newFormat, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, newFormat, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_AsFormat.name
-    override def replacement: Expression = rstInvoke(RST_AsFormat, rasterType)
+    override def replacement: Expression = invoke(RST_AsFormat)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -31,8 +29,7 @@ case class RST_AsFormat(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_AsFormat extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, newFormat: UTF8String, conf: UTF8String): InternalRow = eval(row, newFormat, conf, BinaryType)
-    def evalPath(row: InternalRow, newFormat: UTF8String, conf: UTF8String): InternalRow = eval(row, newFormat, conf, StringType)
+    def eval(row: InternalRow, newFormat: UTF8String, conf: UTF8String): InternalRow = eval(row, newFormat, conf, BinaryType)
 
     /** Converts tile to newFormat via TranslateFormat or returns unchanged row; uses safeEval. */
     private def eval(row: InternalRow, newFormat: UTF8String, conf: UTF8String, dt: DataType): InternalRow =

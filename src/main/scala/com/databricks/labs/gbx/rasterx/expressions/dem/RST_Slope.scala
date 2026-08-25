@@ -14,47 +14,47 @@ import org.gdal.gdal.Dataset
   * Compute slope from a single-band DEM tile via `gdal.DEMProcessing("slope")`.
   *
   *   - `unit` (default "degrees"): "degrees" or "percent".
-  *   - `scale` (default: unset): ratio of vertical units to horizontal units.
-  *     When omitted, GDAL 3.11+ auto-derives the scale from the CRS (degree->metre
-  *     for geographic rasters), matching `gdaldem slope` with no `-s`. Supply an
-  *     explicit value (e.g. 1.0 for a projected CRS already in metres) to override.
+  *   - `xscale` / `yscale` (default: unset): ratio of vertical units to horizontal
+  *     units per axis. Both must be supplied together (both-or-neither). When
+  *     omitted, GDAL 3.11+ auto-derives the scale from the CRS (degree->metre for
+  *     geographic rasters), matching `gdaldem slope` with no `-xscale`/`-yscale`.
+  *     Pass both explicitly (e.g. 1.0 / 1.0 for a projected CRS in metres) to
+  *     override per axis.
   *
   * Output is a single-band Float32 GTiff with slope per pixel.
   */
 case class RST_Slope(
-    tileExpr: Expression,
+    tile: Expression,
     unitExpr: Expression,
-    scaleExpr: Expression
+    xscaleExpr: Expression,
+    yscaleExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, unitExpr, scaleExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, unitExpr, xscaleExpr, yscaleExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals (e.g. ``1.0``) coerce to Double cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, StringType, DoubleType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, StringType, DoubleType, DoubleType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Slope.name
-    override def replacement: Expression = rstInvoke(RST_Slope, rasterType)
+    override def replacement: Expression = invoke(RST_Slope)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1), nc(2))
+        copy(nc(0), nc(1), nc(2), nc(3))
 
 }
 
 object RST_Slope extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, unit: UTF8String, scale: Double, conf: UTF8String): InternalRow =
-        runDispatch(row, unit, scale, conf, BinaryType)
-    def evalPath(row: InternalRow, unit: UTF8String, scale: Double, conf: UTF8String): InternalRow =
-        runDispatch(row, unit, scale, conf, StringType)
+    def eval(row: InternalRow, unit: UTF8String, xscale: Double, yscale: Double, conf: UTF8String): InternalRow =
+        runDispatch(row, unit, xscale, yscale, conf, BinaryType)
 
-    private def runDispatch(row: InternalRow, unit: UTF8String, scale: Double, conf: UTF8String, dt: DataType): InternalRow =
+    private def runDispatch(row: InternalRow, unit: UTF8String, xscale: Double, yscale: Double, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, _) = RasterSerializationUtil.rowToTile(row, dt)
               val unitStr = if (unit == null) "degrees" else unit.toString
-              val (resDs, resMtd) = execute(ds, unitStr, scale)
+              val (resDs, resMtd) = execute(ds, unitStr, xscale, yscale)
               RasterDriver.releaseDataset(ds)
               val out = RasterSerializationUtil.tileToRow((cell, resDs, resMtd), dt, exprConf.hConf)
               RasterDriver.releaseDataset(resDs)
@@ -64,14 +64,17 @@ object RST_Slope extends WithExpressionInfo {
           dt
         )
 
-    /** Pure compute path - extracted for direct unit-testing without Spark. */
-    def execute(ds: Dataset, unit: String, scale: Double): (Dataset, Map[String, String]) = {
+    /** Pure compute path - extracted for direct unit-testing without Spark.
+      *
+      * xscale and yscale are both-or-neither: emit `-xscale`/`-yscale` only
+      * when BOTH are non-NaN. When either is NaN (the default), omit both so
+      * GDAL 3.11+ auto-derives horizontal scale from the CRS.
+      */
+    def execute(ds: Dataset, unit: String, xscale: Double, yscale: Double): (Dataset, Map[String, String]) = {
         val opts = scala.collection.mutable.Buffer.empty[String]
-        // Double.NaN sentinel = "no explicit scale" (mirrors GDAL's own
-        // std::isnan(xscale) check): omit -s so GDAL 3.11+ auto-derives the
-        // xscale/yscale from the CRS (degree->metre for geographic rasters).
-        // Emit -s only when the caller explicitly supplies a scale.
-        if (!scale.isNaN) opts ++= Seq("-s", scale.toString)
+        // Emit -xscale / -yscale only when BOTH are non-NaN (anisotropic explicit
+        // scale). When either is NaN, omit both so GDAL 3.11+ auto-derives from CRS.
+        if (!xscale.isNaN && !yscale.isNaN) opts ++= Seq("-xscale", xscale.toString, "-yscale", yscale.toString)
         if (unit != null && unit.equalsIgnoreCase("percent")) opts += "-p"
         RST_DEMProcessingHelper.process(ds, "slope", opts.toSeq)
     }
@@ -79,11 +82,16 @@ object RST_Slope extends WithExpressionInfo {
     override def name: String = "gbx_rst_slope"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 1 => RST_Slope(c(0), Literal("degrees"), Literal(Double.NaN))
-        case 2 => RST_Slope(c(0), c(1), Literal(Double.NaN))
-        case 3 => RST_Slope(c(0), c(1), c(2))
+        case 1 => RST_Slope(c(0), Literal("degrees"), Literal(Double.NaN), Literal(Double.NaN))
+        case 2 => RST_Slope(c(0), c(1), Literal(Double.NaN), Literal(Double.NaN))
+        case 3 => throw new IllegalArgumentException(
+            "gbx_rst_slope: xscale and yscale must be supplied together; " +
+            "got 3 arguments (tile, unit, xscale) but yscale is missing. " +
+            "Use 4 arguments: gbx_rst_slope(tile, unit, xscale, yscale)"
+        )
+        case 4 => RST_Slope(c(0), c(1), c(2), c(3))
         case n => throw new IllegalArgumentException(
-            s"gbx_rst_slope takes 1 to 3 arguments (tile, [unit, [scale]]); got $n"
+            s"gbx_rst_slope takes 1, 2, or 4 arguments (tile, [unit, [xscale, yscale]]); got $n"
         )
     }
 

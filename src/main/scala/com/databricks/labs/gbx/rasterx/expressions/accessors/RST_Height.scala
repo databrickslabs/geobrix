@@ -12,16 +12,14 @@ import org.gdal.gdal.Dataset
 
 /** Expression that evaluates to the raster height in pixels (GDAL GetRasterYSize). */
 case class RST_Height(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
     override def nullable: Boolean = true
     override def prettyName: String = RST_Height.name
-    override def replacement: Expression = rstInvoke(RST_Height, rasterType)
+    override def replacement: Expression = invoke(RST_Height)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -29,10 +27,9 @@ case class RST_Height(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Height extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): Int = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): Int = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Integer = eval(row, conf, BinaryType)
 
-    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): Int =
+    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): java.lang.Integer =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -47,7 +44,7 @@ object RST_Height extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Int]).getOrElse(-1)
+        ).map(v => java.lang.Integer.valueOf(v.asInstanceOf[Int])).orNull
 
     def execute(ds: Dataset): Int = ds.GetRasterYSize()
 

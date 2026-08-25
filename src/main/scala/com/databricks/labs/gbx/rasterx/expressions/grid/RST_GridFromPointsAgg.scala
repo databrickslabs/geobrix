@@ -34,7 +34,7 @@ final case class RST_GridFromPointsAgg(
     ymaxExpr: Expression,
     widthPxExpr: Expression,
     heightPxExpr: Expression,
-    sridExpr: Expression,
+    outSridExpr: Expression,
     powerExpr: Expression,
     maxPtsExpr: Expression,
     mutableAggBufferOffset: Int = 0,
@@ -55,7 +55,7 @@ final case class RST_GridFromPointsAgg(
     override def children: Seq[Expression] = Seq(
         pointExpr, valueExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr,
+        widthPxExpr, heightPxExpr, outSridExpr,
         powerExpr, maxPtsExpr
     )
 
@@ -64,7 +64,7 @@ final case class RST_GridFromPointsAgg(
         copy(
             pointExpr = nc(0), valueExpr = nc(1),
             xminExpr = nc(2), yminExpr = nc(3), xmaxExpr = nc(4), ymaxExpr = nc(5),
-            widthPxExpr = nc(6), heightPxExpr = nc(7), sridExpr = nc(8),
+            widthPxExpr = nc(6), heightPxExpr = nc(7), outSridExpr = nc(8),
             powerExpr = nc(9), maxPtsExpr = nc(10)
         )
     }
@@ -106,7 +106,7 @@ final case class RST_GridFromPointsAgg(
         val ymax = evalDouble(ymaxExpr, emptyRow, "ymax")
         val widthPx = evalInt(widthPxExpr, emptyRow, "width_px")
         val heightPx = evalInt(heightPxExpr, emptyRow, "height_px")
-        val srid = evalInt(sridExpr, emptyRow, "srid")
+        val srid = evalInt(outSridExpr, emptyRow, "out_srid")
         val power = evalDouble(powerExpr, emptyRow, "power")
         val maxPts = evalInt(maxPtsExpr, emptyRow, "max_pts")
         RST_GridFromPoints.execute(
@@ -172,7 +172,7 @@ object RST_GridFromPointsAgg extends WithExpressionInfo {
         )
         case n => throw new IllegalArgumentException(
             s"$name takes 9 to 11 arguments " +
-            s"(point, value, xmin, ymin, xmax, ymax, width_px, height_px, srid, [power, [max_pts]]); got $n"
+            s"(point, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power, [max_pts]]); got $n"
         )
     }
 }

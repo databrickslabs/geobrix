@@ -7,7 +7,7 @@ import org.apache.spark.util.SerializableConfiguration
 
 /**
   * Case class: serializable snapshot of Spark and Hadoop config used when evaluating expressions on executors.
-  * Raster (and other) expressions need GDAL options, checkpoint dir, etc. Built on the driver from the
+  * Raster (and other) expressions need GDAL options and other settings. Built on the driver from the
   * active session, serialized to base64 via toB64, and passed via [[ExpressionConfigExpr]] so executors
   * can reconstruct config for GDAL and other libraries.
   */
@@ -40,16 +40,6 @@ case class ExpressionConfig(
         })
     }
 
-    /** Directory for raster checkpoint files when useCheckpoint is true. */
-    def getRasterCheckpointDir: String = {
-        configs.getOrElse("spark.databricks.labs.gbx.raster.checkpoint.dir", "/tmp/raster-checkpoint")
-    }
-
-    /** Whether to checkpoint intermediate rasters to getRasterCheckpointDir. */
-    def useCheckpoint: Boolean = {
-        configs.getOrElse("spark.databricks.labs.gbx.raster.use.checkpoint", "false").toBoolean
-    }
-
     /** If true, expression errors surface as exceptions; if false, return null and optionally log. */
     def crashExpressions: Boolean = {
         configs.getOrElse("spark.databricks.labs.gbx.expressions.crash.on.error", "false").toBoolean
@@ -59,12 +49,22 @@ case class ExpressionConfig(
 
 object ExpressionConfig {
 
-    /** Build config from the given Spark session (driver-side). */
+    /** Build config from the given Spark session (driver-side).
+      *
+      * Merges [[com.databricks.labs.gbx.operations.ProjGridRegistry]] dirs under the synthetic
+      * key `spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS` (colon-joined) so that executors
+      * receive them via the serialized ExpressionConfig and GDALManager can prepend them to the
+      * PROJ search path at init time.  The key uses the `spark.databricks.labs.gbx.gdal.`
+      * prefix so it travels with the rest of the GDAL config; GDALManager's generic config loop
+      * explicitly skips it to avoid setting a bogus GDAL option.
+      */
     def apply(spark: SparkSession): ExpressionConfig = {
-        new ExpressionConfig(
-          spark.conf.getAll,
-          new SerializableConfiguration(spark.sessionState.newHadoopConf())
-        )
+        val base = spark.conf.getAll
+        val gridDirs = com.databricks.labs.gbx.operations.ProjGridRegistry.get
+        val merged =
+          if (gridDirs.isEmpty) base
+          else base + ("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS" -> gridDirs.mkString(":"))
+        new ExpressionConfig(merged, new SerializableConfiguration(spark.sessionState.newHadoopConf()))
     }
 
     /** Deserialize from base64 (used on executors). */

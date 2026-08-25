@@ -1,0 +1,130 @@
+---
+sidebar_label: File Writer (file_gbx)
+---
+
+# File Writer — `file_gbx`
+
+`file_gbx` is the shared write committer for all lightweight writers. You do not call it
+directly through the DataSource V2 `write.format(...)` API — instead, every `*_gbx` writer
+that produces a Delta table with a FILE column routes through `open_for_write` internally.
+This page documents the write-side API for use in scripts and pipeline code.
+
+For the read side and a diagram of the full FILE flow, see the
+[`file_gbx` Reader](../readers/file) page and the
+[Shared file-access base](../readers-writers#file-gbx) section.
+
+:::note Lightweight only
+`file_gbx` write support is light-tier only. The heavyweight (JAR-backed) writers use
+their own GDAL/OGR output paths and are unaffected.
+:::
+
+## `open_for_write` — write committer
+
+```python
+from databricks.labs.gbx.ds.file_gbx import open_for_write
+
+open_for_write(
+    spark,
+    df,                        # DataFrame with a 'tile' struct or pre-flattened columns
+    "main.geo.raster_tiles",   # fully-qualified Delta table name
+    file_mode="auto",          # "auto" | "managed" | "external" | "fuse"
+    filespace="/Volumes/main/geo/store",  # required for managed mode
+    layout="order",            # "order" | "cluster" | "plain"
+    overwrite=False,
+    file_col="tile_file",      # name of the FILE-typed column
+)
+```
+
+### `file_mode` options
+
+| Value | Condition | What happens |
+|---|---|---|
+| `"auto"` | FILE available + `filespace` given | → `"managed"`: `create_file` writes a MANAGED FILE column |
+| `"auto"` | FILE available, no `filespace` | → `"external"`: `try_to_file` writes an EXTERNAL FILE column |
+| `"auto"` | No FILE (fuse tier, DBR < 13) | → `"fuse"`: plain Delta, path STRING / raster BINARY |
+| `"managed"` | explicit, `filespace` required | `create_file` — FILE lifecycle managed by the table |
+| `"external"` | explicit | `try_to_file` — FILE reference pointing to an existing Volume path |
+| `"fuse"` | explicit | Plain Delta write regardless of FILE capability |
+
+Requesting `"managed"` without a `filespace` raises `ValueError` immediately. Requesting
+`"managed"` or `"external"` on a fuse-only runtime raises a clear error with upgrade steps.
+
+### `layout` options
+
+| Value | Behaviour |
+|---|---|
+| `"order"` | `ORDER BY path` at write time (default — scan-friendly) |
+| `"cluster"` | `CLUSTER BY path` in the DDL (FILE-mode tables only); durable clustering requires a subsequent `OPTIMIZE <table>` run |
+| `"plain"` | No ordering — fastest write, scan order determined by the cluster |
+
+:::caution CLUSTER BY needs OPTIMIZE
+Writing with `layout="cluster"` declares the clustering column in the table DDL but does
+**not** immediately reorganize existing data. Run `OPTIMIZE <table>` afterward to apply
+durable clustering. On FUSE-mode tables `layout="cluster"` falls back to `ORDER BY` with
+a warning, because `CLUSTER BY` requires a FILE-column table.
+:::
+
+`partitionBy` is not supported. Passing an invalid layout value raises `ValueError`.
+
+## Vector writer FILE options
+
+The lightweight vector writers (`vector_gbx`, `shapefile_gbx`, `geojson_gbx`, `gpkg_gbx`,
+`file_gdb_gbx`) also accept the FILE write options as DataSource V2 options:
+
+```python
+(
+    df.write
+    .format("shapefile_gbx")
+    .option("fileMode", "managed")           # "fuse" (default) | "managed" | "external"
+    .option("filespace", "/Volumes/main/geo/store")  # required for managed
+    .option("layout", "order")               # "order" | "cluster" | "plain"
+    .mode("overwrite")
+    .save("main.geo.road_shapefiles")        # Delta table name (when fileMode != fuse)
+                                              # or /Volumes/… path (when fileMode = fuse)
+)
+```
+
+| Option | Default | Description |
+|---|---|---|
+| `fileMode` | `"fuse"` | Write mode: `"fuse"` (plain file on Volume), `"managed"` (FILE MANAGED), `"external"` (FILE EXTERNAL) |
+| `filespace` | — | Required when `fileMode="managed"`: the `/Volumes/…` path for the managed filespace |
+| `layout` | `"order"` | Row ordering: `"order"`, `"cluster"`, or `"plain"` (see above) |
+
+When `fileMode="fuse"`, `.save(path)` receives a Volume path and the writer assembles
+a single file on FUSE as usual. When `fileMode="managed"` or `"external"`, `.save(table)`
+receives a fully-qualified Delta table name and the writer routes through `open_for_write`.
+
+## `ingest_files` — register existing files as FILE MANAGED
+
+`ingest_files` reads files from an external Volume path via `read_files(format=>'file')`
+(DBR 13.3+) and inserts them as FILE MANAGED references into a Delta table, without copying
+the byte content:
+
+```python
+from databricks.labs.gbx.ds.file_gbx import ingest_files
+
+ingest_files(
+    spark,
+    src="/Volumes/main/geo/archive/rasters",
+    target="main.geo.raster_registry",
+    filespace="/Volumes/main/geo/managed_store",
+    file_col="tile_file",
+    layout="order",
+    recursive=True,
+    overwrite=False,   # CREATE TABLE IF NOT EXISTS — idempotent
+)
+```
+
+`ingest_files` requires FILE support (DBR 13.3+). On FUSE-only runtimes it raises
+`ValueError` — use `open_for_write(file_mode="fuse")` for a plain Delta write instead.
+
+The managed table schema is `(path STRING, <file_col> FILE MANAGED)`. On the first call
+the table is created (with `CREATE TABLE IF NOT EXISTS` when `overwrite=False`), so
+repeated calls are idempotent.
+
+## Next steps
+
+- [`file_gbx` Reader](../readers/file) — enumeration, `include_hidden`, filters, `open_for_read`
+- [Shared file-access base](../readers-writers#file-gbx) — capability tiers, the no-gating rule, layout options
+- [Raster Writer](./raster) — write raster tiles via the shared committer
+- [Vector Writer](./vector) — vector FILE mode options (`fileMode`, `filespace`, `layout`)

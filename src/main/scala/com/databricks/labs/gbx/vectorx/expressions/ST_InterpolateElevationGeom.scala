@@ -20,8 +20,8 @@ package com.databricks.labs.gbx.vectorx.expressions
  *
  *  Signature:
  *    gbx_st_interpolateelevationgeom(
- *        points_geom       ARRAY<BINARY|STRING>,
- *        breaklines_geom   ARRAY<BINARY|STRING>,
+ *        points_array      ARRAY<BINARY|STRING>,
+ *        breaklines_array  ARRAY<BINARY|STRING>,
  *        merge_tolerance   DOUBLE,
  *        snap_tolerance    DOUBLE,
  *        split_point_finder STRING,
@@ -215,14 +215,14 @@ object ST_InterpolateElevationGeom extends WithExpressionInfo {
             c(5), c(6), c(7), c(8), c(9), c(10))
         case n => throw new IllegalArgumentException(
             s"gbx_st_interpolateelevationgeom takes 10 or 11 arguments " +
-            s"(points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, " +
+            s"(points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, " +
             s"grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode]); got $n"
         )
     }
 
     override def usageArgs: String =
-        "points_geom, breaklines_geom, merge_tolerance, snap_tolerance, split_point_finder, " +
-        "grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, mode"
+        "points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, " +
+        "grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode]"
 
     override def description: String =
         "Generator: emit one row per Z-interpolated grid cell center (WKB BINARY) " +

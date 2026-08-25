@@ -9,6 +9,8 @@ NOT pass pyfunc sourced from untrusted input."""
 import numpy as np
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
 
 def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
     """Apply a user-provided Python function to the raster's bands.
@@ -38,6 +40,10 @@ def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
     func(in_ar, out_ar, 0, 0, ds.width, ds.height, ds.width, ds.height, 0, gt)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", count=1, dtype="float64")
+    decoded_bytes = out_ar.nbytes
+    profile.update(
+        _comp.creation_opts("float64", decoded_bytes=decoded_bytes, compress="auto")
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(out_ar.astype("float64"), 1)

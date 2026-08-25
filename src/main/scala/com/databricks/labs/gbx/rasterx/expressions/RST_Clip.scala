@@ -7,43 +7,60 @@ import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUti
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
 import org.gdal.osr.SpatialReference
 import org.locationtech.jts.geom.Geometry
 
-import scala.util.Try
-
-/** The expression for clipping a raster by a vector. */
+/** The expression for clipping a raster by a vector.
+  *
+  * Optional 4th arg `clipCrsExpr` (String) declares the source CRS of a plain
+  * WKB/WKT cutline (an EWKB/EWKT embedded SRID still wins); absent -> assume the
+  * cutline is already in the raster CRS. */
 case class RST_Clip(
-    tileExpr: Expression,
-    geometryExpr: Expression,
-    cutlineAllTouchedExpr: Expression
+    tile: Expression,
+    geomExpr: Expression,
+    cutlineAllTouchedExpr: Expression,
+    clipCrsExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, geometryExpr, cutlineAllTouchedExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] =
+        Seq(tile, geomExpr, cutlineAllTouchedExpr, clipCrsExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Clip.name
-    override def replacement: Expression = rstInvoke(RST_Clip, rasterType)
-    override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
+    // propagateNull=false: builder() injects Literal(null, StringType) as the optional clipCrs
+    // default, so a null clipCrs must NOT short-circuit the whole result to null (eval must run).
+    // The shared eval below guards a null primary tile row so the prior null-tile→null holds.
+    override def replacement: Expression = invoke(RST_Clip, propagateNull = false)
+    override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
+        copy(nc(0), nc(1), nc(2), nc(3))
 
 }
 
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Clip extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String): InternalRow =
-        eval(row, geom, cutlineAllTouched, conf, BinaryType)
-    def evalPath(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String): InternalRow =
-        eval(row, geom, cutlineAllTouched, conf, StringType)
+    def eval(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String): InternalRow =
+        eval(row, geom, cutlineAllTouched, null, conf, BinaryType)
 
-    def eval(row: InternalRow, geom: Any, cutlineAllTouched: Boolean, conf: UTF8String, dt: DataType): InternalRow =
-        RST_ErrorHandler.safeEval(
+    def eval(
+        row: InternalRow, geom: Any, cutlineAllTouched: Boolean, clipCrs: UTF8String, conf: UTF8String
+    ): InternalRow =
+        eval(row, geom, cutlineAllTouched, clipCrs, conf, BinaryType)
+
+    def eval(
+        row: InternalRow, geom: Any, cutlineAllTouched: Boolean, clipCrs: UTF8String,
+        conf: UTF8String, dt: DataType
+    ): InternalRow =
+        // With propagateNull=false the invoke now runs eval even for a null primary tile OR a null
+        // geom; preserve the prior "null in -> null tile out" behavior. Without these guards a null
+        // row NPEs in rowToTile, and a null geom hits the exhaustive geom match (no `case other`)
+        // -> MatchError -> a non-null error tile from safeEval. Contract: null tile or null geom -> null.
+        if (row == null || geom == null) null
+        else RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
@@ -52,7 +69,8 @@ object RST_Clip extends WithExpressionInfo {
                   case g: UTF8String  => JTS.fromWKT(g.toString)
                   case g: Array[Byte] => JTS.fromWKB(g)
               }
-              val (resultDs, metadata) = execute(ds, options, geometry, cutlineAllTouched)
+              val clipCrsOpt = Option(clipCrs).map(_.toString).filter(_.nonEmpty)
+              val (resultDs, metadata) = execute(ds, options, geometry, cutlineAllTouched, clipCrsOpt)
               RasterDriver.releaseDataset(ds)
               val res = RasterSerializationUtil.tileToRow((row.getLong(0), resultDs, metadata), dt, exprConf.hConf)
               RasterDriver.releaseDataset(resultDs)
@@ -62,34 +80,42 @@ object RST_Clip extends WithExpressionInfo {
           dt
         )
 
-    def execute(ds: Dataset, options: Map[String, String], geom: Geometry, cutlineAllTouched: Boolean): (Dataset, Map[String, String]) = {
-        val geomSR = new SpatialReference()
+    def execute(
+        ds: Dataset, options: Map[String, String], geom: Geometry, cutlineAllTouched: Boolean,
+        clipCrs: Option[String] = None
+    ): (Dataset, Map[String, String]) = {
         val epsgCode = geom.getSRID
-        // Plain WKB/WKT leave SRID=0; EWKB (PostGIS extension) and EWKT carry SRID through
-        // JTS.fromWKB / JTS.fromWKT. ImportFromEPSG(0) or an unknown code returns a non-zero
-        // OGRERR but does NOT throw — a bare Try would treat it as success and leave geomSR
-        // uninitialized, the subsequent OSR transform would silently no-op, and the raw geom
-        // coords would be sent into a differently-projected raster (empty clip / black output).
-        // Require BOTH epsgCode > 0 AND a zero return code; otherwise fall back to the raster's
-        // CRS — i.e. assume the caller passed the geometry already in the raster's CRS.
-        val imported = epsgCode > 0 && Try(geomSR.ImportFromEPSG(epsgCode)).toOption.contains(0)
-        if (!imported) {
-            val dsSR = ds.GetSpatialRef
-            if (dsSR != null) {
-                val dsEpsgCode = SpatialRefOps.getEPSGCode(dsSR)
-                if (dsEpsgCode != 0) geomSR.ImportFromEPSG(dsEpsgCode)
-                else geomSR.ImportFromWkt(dsSR.ExportToWkt())
-            } else {
-                geomSR.SetWellKnownGeogCS("WGS84")
+        // Rule 1 source-CRS: an embedded SRID (EWKB/EWKT) wins; else the explicit
+        // clipCrs (int SRID or CRS string, incl. ESRI/WKT); else None -> fall back to
+        // the raster's CRS (assume the cutline is already in the raster CRS). A bare
+        // WKB/WKT cutline leaves SRID=0.
+        val srcSR: SpatialReference =
+            if (epsgCode > 0) SpatialRefOps.resolveCrs(epsgCode.toString)
+            else clipCrs match {
+                case Some(c) => SpatialRefOps.resolveCrs(c)
+                case None =>
+                    val geomSR = new SpatialReference()
+                    val dsSR = ds.GetSpatialRef
+                    if (dsSR != null) {
+                        val dsEpsgCode = SpatialRefOps.getEPSGCode(dsSR)
+                        if (dsEpsgCode != 0) geomSR.ImportFromEPSG(dsEpsgCode)
+                        else geomSR.ImportFromWkt(dsSR.ExportToWkt())
+                    } else {
+                        geomSR.SetWellKnownGeogCS("WGS84")
+                    }
+                    geomSR
             }
-        }
-        val res = ClipToGeom.clip(ds, options, geom, geomSR, cutlineAllTouched)
-        geomSR.delete()
+        val res = ClipToGeom.clip(ds, options, geom, srcSR, cutlineAllTouched)
+        srcSR.delete()
         res
     }
 
     override def name: String = "gbx_rst_clip"
 
-    override def builder(): FunctionBuilder = (c: Seq[Expression]) => new RST_Clip(c(0), c(1), c(2))
+    override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
+        // 3-arg (no clip_crs) stays valid; 4-arg adds the source-CRS override.
+        case 3 => RST_Clip(c(0), c(1), c(2), Literal(null, StringType))
+        case 4 => RST_Clip(c(0), c(1), c(2), c(3))
+    }
 
 }

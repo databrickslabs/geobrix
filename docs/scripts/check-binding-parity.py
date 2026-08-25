@@ -38,7 +38,22 @@ PYTHON_ROOT = REPO_ROOT / "python/geobrix/src"
 # reads a file path, and on Databricks only the credentialed Python worker can read a UC Volume
 # (/Volumes) FUSE path -- the executor JVM cannot. These are EXEMPT from the Scala-expression
 # requirement; they still require a Python binding and a function-info.json entry. Issue #34.
-PYTHON_REGISTERED = {"gbx_rst_fromfile"}
+PYTHON_REGISTERED = {
+    "gbx_rst_fromfile",
+    "gbx_st_explainvalidity",
+    "gbx_st_makevalid",
+    "gbx_st_node",
+    "gbx_st_reduceprecision",
+    "gbx_st_removerepeatedpoints",
+    "gbx_st_shiftlongitude",
+    "gbx_st_simplifypreservetopology",
+    "gbx_st_snap",
+    "gbx_st_split",
+    "gbx_st_wrapx",
+    # coverage validity (light-only)
+    "gbx_st_coverageisvalid",
+    "gbx_st_coverageinvalidedges",
+}
 
 # `override def name: String = "gbx_..."` — the canonical SQL name a companion registers under.
 SCALA_NAME_RE = re.compile(r'override\s+def\s+name\s*:\s*String\s*=\s*"(gbx_[a-z0-9_]+)"')

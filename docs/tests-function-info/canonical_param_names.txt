@@ -1,0 +1,205 @@
+# canonical_param_names.txt
+# FROZEN TARGET — post-rename canonical parameter names for GeoBrix registered functions.
+# This file is the single source of truth for docs/scripts/check-param-names.py.
+# Generated 2026-08-06. Do NOT hand-edit after the fixture is used as a CI baseline.
+#
+# Format: one function per line — name<TAB>arg_list
+# Optional args use Style B: brackets wrap only the param name, comma outside: a, b, [c], [d]
+#
+# Exceptions documented here (guards expect these — do NOT "correct" them):
+#   cellid    — deliberate single lowercase token (not cell_id, not cellId).
+#               Matches the v1/v2 tile struct field, Mosaic convention, and product.
+#               cellid1/cellid2 for bare-id pairs.
+#   *_chip    — left_chip / right_chip / input_chip are STRUCT inputs {cellid, core, chip},
+#               NOT scalar cell IDs. NEVER rename to cellid. See R4c ruling.
+#   out_srid / out_crs — output-direction prefix on 9 output-producing rasterization functions.
+#               Bare srid/crs would be ambiguous vs the input geometry's embedded CRS.
+#   *_array   — points_array / breaklines_array are ArrayType inputs (not single geometries).
+#               See N9 ruling. Do not drop the _array suffix.
+#   [c1]/[c2] in gbx_rst_evi — EVI formula atmospheric correction coefficients (C1≈6.0,
+#               C2≈7.5 MODIS-canonical), NOT cell IDs. Left as c1/c2 per domain semantics.
+#   cellid — canonical single lowercase token for a bare BNG/quadbin cell id, on params AND
+#               struct fields (matches the v1/v2 tile struct field, Databricks product, Mosaic).
+#               cellid1/cellid2 for two-bare-id functions (bng_distance etc). The chip STRUCT
+#               keeps left_chip/right_chip/input_chip (struct != scalar). quadbin_cellunion_agg
+#               takes a scalar cell id (BIGINT, no chip struct) so it is cellid, not input_chip.
+gbx_rst_avg	tile
+gbx_rst_bandmetadata	tile, band
+gbx_rst_boundingbox	tile
+gbx_rst_format	tile
+gbx_rst_georeference	tile
+gbx_rst_getnodata	tile
+gbx_rst_getsubdataset	tile, subset_name
+gbx_rst_height	tile
+gbx_rst_max	tile
+gbx_rst_median	tile
+gbx_rst_memsize	tile
+gbx_rst_metadata	tile
+gbx_rst_min	tile
+gbx_rst_numbands	tile
+gbx_rst_pixelcount	tile
+gbx_rst_pixelheight	tile
+gbx_rst_pixelwidth	tile
+gbx_rst_rotation	tile
+gbx_rst_scalex	tile
+gbx_rst_scaley	tile
+gbx_rst_skewx	tile
+gbx_rst_skewy	tile
+gbx_rst_srid	tile
+gbx_rst_crs	tile
+gbx_rst_subdatasets	tile
+gbx_rst_summary	tile
+gbx_rst_type	tile
+gbx_rst_upperleftx	tile
+gbx_rst_upperlefty	tile
+gbx_rst_width	tile
+gbx_rst_combineavg_agg	tile
+gbx_rst_derivedband_agg	tile, python_func, func_name
+gbx_rst_merge_agg	tile
+gbx_rst_frombands_agg	tile, band_index
+gbx_rst_frombands	bands
+gbx_rst_fromcontent	content, driver
+gbx_rst_fromfile	path, [driver]
+gbx_rst_h3_tessellate	tile, resolution, [mode]
+gbx_rst_maketiles	tile, size_in_mb
+gbx_rst_retile	tile, tile_width, tile_height
+gbx_rst_separatebands	tile
+gbx_rst_tooverlappingtiles	tile, tile_width, tile_height, overlap
+gbx_rst_h3_rasterize_agg	cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad
+gbx_rst_h3_rastertogridavg	tile, resolution
+gbx_rst_h3_rastertogridcount	tile, resolution
+gbx_rst_h3_rastertogridmax	tile, resolution
+gbx_rst_h3_rastertogridmin	tile, resolution
+gbx_rst_h3_rastertogridmedian	tile, resolution
+gbx_rst_h3_rastertogridsum	tile, resolution
+gbx_rst_h3_rastertogridvariance	tile, resolution
+gbx_rst_h3_rastertogridstddev	tile, resolution
+gbx_rst_quadbin_rastertogridavg	tile, resolution
+gbx_rst_quadbin_rastertogridcount	tile, resolution
+gbx_rst_quadbin_rastertogridmax	tile, resolution
+gbx_rst_quadbin_rastertogridmin	tile, resolution
+gbx_rst_quadbin_rastertogridmedian	tile, resolution
+gbx_rst_quadbin_rastertogridsum	tile, resolution
+gbx_rst_quadbin_rastertogridvariance	tile, resolution
+gbx_rst_quadbin_rastertogridstddev	tile, resolution
+gbx_rst_bng_rastertogridavg	tile, resolution
+gbx_rst_bng_rastertogridcount	tile, resolution
+gbx_rst_bng_rastertogridmax	tile, resolution
+gbx_rst_bng_rastertogridmedian	tile, resolution
+gbx_rst_bng_rastertogridmin	tile, resolution
+gbx_rst_bng_rastertogridsum	tile, resolution
+gbx_rst_bng_rastertogridvariance	tile, resolution
+gbx_rst_bng_rastertogridstddev	tile, resolution
+gbx_rst_bng_rasterize_agg	cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad
+gbx_rst_bng_tessellate	tile, resolution, [mode]
+gbx_rst_quadbin_rasterize_agg	cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad
+gbx_rst_quadbin_tessellate	tile, resolution, [mode]
+gbx_rst_asformat	tile, new_format
+gbx_rst_clip	tile, geom, cutline_all_touched, [clip_crs]
+gbx_rst_combineavg	tiles
+gbx_rst_convolve	tile, kernel
+gbx_rst_derivedband	tile, python_func, func_name
+gbx_rst_filter	tile, kernel_size, operation
+gbx_rst_initnodata	tile
+gbx_rst_isempty	tile
+gbx_rst_mapalgebra	tiles, json_spec
+gbx_rst_merge	tiles
+gbx_rst_ndvi	tile, red_idx, nir_idx
+gbx_rst_rastertoworldcoord	tile, x, y
+gbx_rst_rastertoworldcoordx	tile, x, y
+gbx_rst_rastertoworldcoordy	tile, x, y
+gbx_rst_transform	tile, srid
+gbx_rst_transformcrs	tile, crs
+gbx_rst_tryopen	tile
+gbx_rst_updatetype	tile, new_type
+gbx_rst_worldtorastercoord	tile, x, y
+gbx_rst_worldtorastercoordx	tile, x, y
+gbx_rst_worldtorastercoordy	tile, x, y
+gbx_rst_tilexyz	tile, z, x, y, [format], [size], [resampling], [rescale]
+gbx_rst_to_webmercator	tile, [resampling]
+gbx_rst_xyzpyramid	tile, min_z, max_z, [format], [size], [resampling], [rescale]
+gbx_rst_polygonize	tile, [band], [connectedness]
+gbx_rst_rasterize_agg	geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid
+gbx_rst_rasterize	geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid
+gbx_rst_aspect	tile, [trigonometric], [zero_for_flat]
+gbx_rst_color_relief	tile, color_table_path
+gbx_rst_hillshade	tile, [azimuth], [altitude], [z_factor]
+gbx_rst_roughness	tile
+gbx_rst_slope	tile, [unit], [xscale], [yscale]
+gbx_rst_tpi	tile
+gbx_rst_tri	tile
+gbx_rst_evi	tile, red_idx, nir_idx, blue_idx, [l], [c1], [c2], [g]
+gbx_rst_index	tile, formula_name, band_map
+gbx_rst_nbr	tile, nir_idx, swir_idx
+gbx_rst_ndwi	tile, green_idx, nir_idx
+gbx_rst_savi	tile, red_idx, nir_idx, [l]
+gbx_rst_gridfrompoints	points_array, values_array, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power], [max_pts]
+gbx_rst_gridfrompoints_agg	point, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [power], [max_pts]
+gbx_rst_dtmfromgeoms	points_array, breaklines_array, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]
+gbx_rst_dtmfromgeoms_agg	point, breaklines, merge_tolerance, snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]
+gbx_rst_resample	tile, factor, [algorithm]
+gbx_rst_resample_to_res	tile, x_res, y_res, [algorithm]
+gbx_rst_resample_to_size	tile, width_px, height_px, [algorithm]
+gbx_rst_band	tile, band_index
+gbx_rst_buildoverviews	tile, levels, [resampling]
+gbx_rst_fillnodata	tile, [max_search_dist], [smoothing_iter]
+gbx_rst_histogram	tile, [n_buckets], [min_val], [max_val], [include_nodata]
+gbx_rst_sample	tile, geom, [crs]
+gbx_rst_setsrid	tile, srid
+gbx_rst_setcrs	tile, crs
+gbx_rst_threshold	tile, op, value
+gbx_rst_cog_convert	tile, [compression], [blocksize], [overview_resampling]
+gbx_rst_contour	tile, levels, [interval], [base], [attr_field]
+gbx_rst_proximity	tile, [target_values], [dist_units], [max_distance]
+gbx_rst_viewshed	tile, observer_geom, observer_height, [target_height], [max_distance], [crs]
+gbx_bng_aswkb	cellid
+gbx_bng_aswkt	cellid
+gbx_bng_cellarea	cellid
+gbx_bng_cellintersection	left_chip, right_chip
+gbx_bng_cellunion	left_chip, right_chip
+gbx_bng_centroid	cellid
+gbx_bng_distance	cellid1, cellid2
+gbx_bng_eastnorthasbng	easting, northing, resolution
+gbx_bng_euclideandistance	cellid1, cellid2
+gbx_bng_geomkloop	geom, resolution, k
+gbx_bng_geomkring	geom, resolution, k
+gbx_bng_kloop	cellid, k
+gbx_bng_kring	cellid, k
+gbx_bng_pointascell	geom, resolution
+gbx_bng_polyfill	geom, resolution
+gbx_bng_tessellate	geom, resolution, [keep_core_geom]
+gbx_bng_cellintersection_agg	input_chip
+gbx_bng_cellunion_agg	input_chip
+gbx_bng_geomkloopexplode	geom, resolution, k
+gbx_bng_geomkringexplode	geom, resolution, k
+gbx_bng_kloopexplode	cellid, k
+gbx_bng_kringexplode	cellid, k
+gbx_bng_tessellateexplode	geom, resolution, keep_core_geom
+gbx_h3_cell_bbox	cellid, [srid], [mode], [kring_pad], [out_crs]
+gbx_quadbin_aswkb	cell
+gbx_quadbin_cellunion_agg	cellid
+gbx_quadbin_cellunion	cells
+gbx_quadbin_centroid	cell
+gbx_quadbin_distance	cellid1, cellid2
+gbx_quadbin_kring	cell, k
+gbx_quadbin_pointascell	longitude, latitude, resolution
+gbx_quadbin_polyfill	geom, resolution
+gbx_quadbin_resolution	cell
+gbx_quadbin_tessellate	geom, resolution
+gbx_custom_grid	bound_x_min, bound_x_max, bound_y_min, bound_y_max, cell_splits, root_cell_size_x, root_cell_size_y, srid
+gbx_custom_pointascell	point, grid, resolution
+gbx_custom_cellaswkb	cell, grid
+gbx_custom_cellaswkt	cell, grid
+gbx_custom_centroid	cell, grid
+gbx_custom_polyfill	geom, grid, resolution
+gbx_custom_kring	cell, grid, k
+gbx_st_asmvt	geom, attrs, layer_name
+gbx_st_asmvt_pyramid	geom, attrs, min_z, max_z, layer_name, [extent]
+gbx_st_legacyaswkb	geom
+gbx_st_triangulate	points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, [mode]
+gbx_st_interpolateelevationbbox	points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, xmin, ymin, xmax, ymax, width_px, height_px, srid, [mode]
+gbx_st_interpolateelevationgeom	points_array, breaklines_array, merge_tolerance, snap_tolerance, split_point_finder, grid_origin, grid_cols, grid_rows, cell_size_x, cell_size_y, [mode]
+gbx_pmtiles_agg	bytes, z, x, y, [metadata_json]
+gbx_st_crs	geom
+gbx_st_setcrs	geom, crs
+gbx_st_transformcrs	geom, target_crs, [source_crs]

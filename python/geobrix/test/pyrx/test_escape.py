@@ -1,9 +1,10 @@
 from test.pyrx.conftest import make_geotiff_bytes
 
 import numpy as np
-from pyspark.sql.types import IntegerType
+from pyspark.sql.types import IntegerType, StructField, StructType
 
 from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 from databricks.labs.gbx.pyrx.functions import rst_apply, tile_to_numpy
 
 
@@ -18,11 +19,9 @@ def test_tile_to_numpy_bytes_and_struct_agree():
 
 
 def test_rst_apply_scalar_with_nondefault_returntype(spark):
-    from pyspark.sql.types import StructField, StructType
-
     raw = make_geotiff_bytes(width=4, height=3, count=1)
     tile = _serde.build_tile(raw, "GTiff", cellid=0)
-    schema = StructType([StructField("tile", _serde.TILE_SCHEMA, nullable=True)])
+    schema = StructType([StructField("tile", V2_TILE_SCHEMA, nullable=True)])
     df = spark.createDataFrame([(tile,)], schema)
     out = df.select(
         rst_apply("tile", lambda ds: ds.count, returnType=IntegerType()).alias("nbands")
@@ -33,7 +32,7 @@ def test_rst_apply_scalar_with_nondefault_returntype(spark):
 def test_rst_apply_null_tile_returns_null(spark):
     df = spark.createDataFrame(
         [(None,)],
-        "tile struct<cellid:bigint,raster:binary,metadata:map<string,string>>",
+        StructType([StructField("tile", V2_TILE_SCHEMA, nullable=True)]),
     )
     out = df.select(rst_apply("tile", lambda ds: 1.0).alias("v")).collect()
     assert out[0]["v"] is None

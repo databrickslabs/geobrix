@@ -8,9 +8,8 @@ import json
 import os
 import shutil
 from dataclasses import dataclass
-from typing import Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Dict, Iterator, List, Optional
 
-from pmtiles.tile import Compression, TileType, zxy_to_tileid
 from pyspark.sql.datasource import (
     DataSource,
     DataSourceReader,
@@ -31,6 +30,12 @@ from databricks.labs.gbx.ds.tiles.catalog import (
 from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
 from databricks.labs.gbx.ds.vector import _resolve_single_file_output
 
+if TYPE_CHECKING:
+    # Runtime uses of TileType are function-local (pmtiles is optional); this import
+    # only resolves the name in the module-level annotation on _tile_type(). Lazy at
+    # runtime via `from __future__ import annotations`.
+    from pmtiles.tile import TileType
+
 INPUT_SCHEMA = StructType(
     [
         StructField("z", IntegerType(), nullable=False),
@@ -40,20 +45,6 @@ INPUT_SCHEMA = StructType(
     ]
 )
 
-_COMPRESSION = {
-    "none": Compression.NONE,
-    "gzip": Compression.GZIP,
-    "brotli": Compression.BROTLI,
-    "zstd": Compression.ZSTD,
-}
-_TILETYPE = {
-    "png": TileType.PNG,
-    "jpeg": TileType.JPEG,
-    "jpg": TileType.JPEG,
-    "webp": TileType.WEBP,
-    "avif": TileType.AVIF,
-    "mvt": TileType.MVT,
-}
 _CATALOGS = {"stac": STACManifestCatalog, "tilejson": TileJSONCatalog}
 
 
@@ -108,6 +99,27 @@ class PMTilesGbxDataSource(DataSource):
 
 class PMTilesGbxWriter(DataSourceWriter):
     def __init__(self, path: str, options: Dict[str, str], overwrite: bool):
+        # Lazy import: pmtiles is only needed when actually writing PMTiles output.
+        # Keeping it at module level would force the pmtiles package to be installed
+        # even on raster-only paths that import ds/register.py (e.g. a bench run that
+        # never writes PMTiles). The import is cheap after the first call (cached by
+        # the Python module system) and only runs when a PMTiles write is initiated.
+        from pmtiles.tile import Compression, TileType
+
+        _compression_map = {
+            "none": Compression.NONE,
+            "gzip": Compression.GZIP,
+            "brotli": Compression.BROTLI,
+            "zstd": Compression.ZSTD,
+        }
+        _tiletype_map = {
+            "png": TileType.PNG,
+            "jpeg": TileType.JPEG,
+            "jpg": TileType.JPEG,
+            "webp": TileType.WEBP,
+            "avif": TileType.AVIF,
+            "mvt": TileType.MVT,
+        }
         # PySpark DataSource V2 lowercases all option keys (e.g. shardZoom → shardzoom).
         # Normalise once so the rest of the class uses consistent names.
         from databricks.labs.gbx.ds._listing import to_local_path
@@ -124,8 +136,8 @@ class PMTilesGbxWriter(DataSourceWriter):
         if self.catalog_kind not in _CATALOGS and self.catalog_kind != "none":
             raise ValueError(f"unknown catalog {self.catalog_kind!r}")
         tt = opts.get("tiletype")
-        self.tile_type_override = _TILETYPE[tt.lower()] if tt else None
-        self.tile_compression = _COMPRESSION[
+        self.tile_type_override = _tiletype_map[tt.lower()] if tt else None
+        self.tile_compression = _compression_map[
             opts.get("tilecompression", "none").lower()
         ]
         self.metadata = json.loads(opts["metadata"]) if opts.get("metadata") else {}
@@ -134,8 +146,20 @@ class PMTilesGbxWriter(DataSourceWriter):
         # fileName option (case-insensitively received as 'filename') lets callers
         # control the output name independently of the path argument.
         file_name = opts.get("filename")
-        ext = ".pmtiles" if self.shard_zoom == 0 else ""
-        self.path = _resolve_single_file_output(raw_path, file_name, ext)
+        if self.shard_zoom == 0:
+            # Single-archive mode: name a .pmtiles FILE via the 3-case single-file
+            # naming contract (parent dir / after-dir / file-like).
+            self.path = _resolve_single_file_output(raw_path, file_name, ".pmtiles")
+        else:
+            # Sharded mode: the save path IS the output-root DIRECTORY -- tileset/,
+            # overview.pmtiles, and the catalog live directly under it. Do NOT route
+            # through _resolve_single_file_output: its existing-dir naming (case 2)
+            # would nest the output under an extra <basename> subdir (a user's
+            # .save("/out") would land at /out/out/tileset/... instead of
+            # /out/tileset/...). fileName, if given, names a subdirectory root.
+            root = raw_path.rstrip("/")
+            self.path = os.path.join(root, file_name) if file_name else root
+            os.makedirs(self.path, exist_ok=True)
         # For single-archive mode path is a .pmtiles file; scratch must live
         # beside it (in parent dir), not inside it. Use a per-write unique scratch
         # dir under the hidden, self-GC'ing .gbx_scratch container so concurrent
@@ -173,6 +197,8 @@ class PMTilesGbxWriter(DataSourceWriter):
 
     # ---- executor: stream bytes to indexed scratch ----
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        from pmtiles.tile import zxy_to_tileid
+
         writer = _shard.ScratchWriter(self.scratch_dir)
         for row in iterator:
             z, x, y, data = int(row[0]), int(row[1]), int(row[2]), bytes(row[3])

@@ -1,0 +1,131 @@
+# Source of truth for the protobuf-6 CI lock (Serverless env 6 / classic DBR 19).
+# Covers: light_env6, light_dbr19 — all alias geobrix[light_dbr19], the canonical
+# pb6 extra.  THIS IS THE PRIMARY CI LIGHT LOCK (pyrx_build action).
+# Protobuf-5 twin: requirements-light-env5-ci.in (env5 + dbr17 + dbr18).
+#
+# Consumed by .github/actions/pyrx_build via:
+#   pip install --require-hashes -r python/geobrix/requirements-light-env6-ci.txt
+#
+# Regenerate the hash-pinned lock alongside any edit:
+#   cd python/geobrix
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#       --output-file requirements-light-env6-ci.txt requirements-light-env6-ci.in
+#
+# Unlike requirements-ci.txt (heavyweight), this lock needs NO GDAL exception:
+# the lightweight API uses rasterio's bundled-GDAL binary wheel, which is itself
+# hash-pinned here. There is no separate native GDAL install and no JAR.
+# Versions track Serverless env 6 / classic DBR 19 / the dev container
+# (requirements-dev-container.in) where applicable; bump in lockstep and regenerate.
+
+# --- build backend (for `python -m build` lightweight wheel) ---
+build==1.4.4
+setuptools==80.9.0
+wheel==0.45.1
+
+# --- runtime: pyspark local mode + pandas_udf (Arrow) ---
+# base pyspark pulls neither pandas nor pyarrow; pandas_udf needs both.
+# numpy / pandas / pyarrow versions are shared across DBR regimes (same values in DBR 19 /
+# Serverless env 6; see DBR 17.3 release notes for provenance):
+# https://docs.databricks.com/aws/en/release-notes/runtime/17.3lts#installed-python-libraries
+pyspark==4.0.0
+numpy==2.1.3
+pandas==2.2.3
+pyarrow==19.0.1
+
+# --- lightweight raster stack (rasterio ships bundled GDAL — no native install) ---
+rasterio==1.5.0
+shapely==2.1.2
+
+# --- entity-hardened XML parsing for external GDAL .vrt mosaic indexes ---
+# (raster_gbx VRT expansion; guards untrusted .vrt against XXE / billion-laughs).
+# Dep-free, pure Python. Matches the [light-base] pyproject floor + dev container.
+defusedxml==0.7.1
+
+# --- band math: focal filters / convolution (scipy.ndimage) + map-algebra (numexpr) ---
+# scipy pinned to the DBR 19 / Serverless env 6 installed version. numexpr is NOT in DBR's
+# library set, so it is pinned independently (safe math-expression evaluator for
+# rst_mapalgebra — no arbitrary-code exec).
+scipy==1.15.1
+numexpr==2.11.0
+
+# --- web-mercator XYZ tiling (rio-tiler bundles morecantile + color-operations) ---
+rio-tiler==9.0.6
+
+# --- COG output (rst_cog_convert) ---
+rio-cogeo==7.0.2
+
+# --- PMTiles tile-archive output (pmtiles_gbx writer) ---
+pmtiles==3.7.0
+
+# --- OGR-free vector reading (light *_gbx vector DataSources) ---
+pyogrio==0.12.1
+pyproj==3.7.2
+
+# --- MVT (light pyvx) decode oracle used in test/pyvx/ ---
+# MUST match pyproject [light_env6] (alias of [light_dbr19]): mapbox-vector-tile>=2.2
+# Protobuf-6 env; no <2.2 cap needed.  Confirmed on Serverless env 6 2026-08-23.
+mapbox-vector-tile==2.2.0
+
+# --- discrete global grids: raster->H3/quadbin aggregation ---
+h3==4.4.2
+quadbin==0.2.2
+
+# --- contour (scikit-image) + viewshed (xarray-spatial) ---
+scikit-image==0.26.0
+xarray-spatial==0.9.9
+
+# --- NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P,
+# ERA5). xarray comes transitively via xarray-spatial; netcdf4 is the one new
+# engine (single wheel bundling netcdf-c + HDF5). Pulls cftime. Keep in lockstep
+# with the pyproject [light-base] floor and requirements-dev-container.in. ---
+netcdf4==1.7.2
+
+# --- STAC light client deps the test/stac suite actually imports: requests
+# (stac/_download.py, module top) + tenacity (stac/_search.py search_one retry,
+# exercised by test_search). pystac-client / planetary-computer are NOT needed --
+# the suite stubs them (test/stac/_fake_catalog.py + an addPyFile pystac_client
+# stub + monkeypatch), which is why they stay out of this light lock. Versions
+# match requirements-dev-container.in. ---
+requests==2.32.3
+tenacity==9.1.4
+# MUST match pyproject [light_env6] (alias of [light_dbr19]): idna<3.12
+# Serverless env 6 / DBR 19 base is idna 3.11; cap <3.12 silences the
+# "a core package changed: idna" notebook notice. idna 3.x is API-stable; cosmetic.
+idna<3.12
+# NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
+# Runtime-only for the real EMIT path; unit tests inject a fake. Keep in lockstep
+# with the [stac] pyproject extra + requirements-dev-container.in.
+earthaccess==0.18.0
+# Constrain the transitive botocore (earthaccess -> s3fs -> aiobotocore -> botocore)
+# to below the base boto3 cap so [stac] doesn't upgrade botocore past the pre-installed
+# boto3. Holds aiobotocore on 2.x; s3fs/fsspec are unaffected.
+# Mirror of the [stac] pyproject extra cap (floor dropped — single-side cap only).
+# Serverless env 6 / DBR 19 base botocore confirmed at 1.40.46 (boto3 1.40.x).
+botocore<1.41.0
+
+# --- Overture static-STAC catalog traversal (gbx.sample.overture). pystac is the
+# static-catalog reader (distinct from pystac-client, which is the search-API client
+# the stac/ suite stubs). geopandas/pyarrow for parquet read are already pinned above.
+# pystac>=1.9 is the floor set by rio-tiler (already in this lock); <2 matches the
+# [overture] pyproject.toml extra ceiling. ---
+pystac>=1.9,<2
+
+# --- visualization ([vizx] extra): gbx.vizx raster rendering + GeoDataFrame map
+# adapters + interactive MapLibre GL viewer (anywidget) + tile simplification
+# (tippecanoe). geopandas matches requirements-dev-container.in;
+# matplotlib/mapclassify/anywidget/tippecanoe are vizx-only and not in the
+# dev-container lock. ---
+matplotlib==3.10.9
+geopandas==1.1.3
+mapclassify==2.10.0
+contextily==1.6.2
+anywidget==0.9.18
+tippecanoe==2.45.0
+# IPython is what the Databricks/Jupyter runtime provides; gbx.vizx.plot_interactive
+# reaches displayHTML through it (IPython.get_ipython user_ns) and falls back to
+# IPython.display. test/vizx/test_interactive.py exercises both paths, so the light
+# CI env needs IPython present. Pinned to the dev-container version (8.30.0).
+ipython==8.30.0
+
+# --- test runner ---
+pytest==8.4.2

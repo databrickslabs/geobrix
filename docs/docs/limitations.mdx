@@ -7,13 +7,13 @@ import limitationsCode from '!!raw-loader!../tests-dbr/python/limitations/exampl
 
 # Known Limitations
 
-GeoBrix Beta has some known limitations that will be addressed in future releases.
+GeoBrix has some known limitations that will be addressed in future releases.
 
 ## Databricks Spatial Types
 
 ### Current State
 
-The Beta does not yet support Databricks Spatial Types directly but is standardized to WKB or WKT where geometries are involved.
+GeoBrix does not yet support Databricks Spatial Types directly but is standardized to WKB or WKT where geometries are involved.
 
 ### Workaround
 
@@ -76,7 +76,7 @@ PROJ in a future release.
 
 ## Compute Requirements
 
-The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (`geobrix[light]`, pure-Python on rasterio's bundled GDAL) has none of them — it runs on Serverless compute (environment v5), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
+The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (light-tier extras, e.g. `geobrix[light_env6]`; pure-Python on rasterio's bundled GDAL) has none of them — it runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
 
 The heavyweight tier requires Databricks Classic Clusters:
 - **Not** compatible with Serverless compute (use the lightweight tier there)
@@ -86,6 +86,17 @@ The heavyweight tier requires Databricks Classic Clusters:
 Databricks Runtime:
 - **Minimum**: DBR 17.1 (recommended/tested: DBR 17.3 LTS or 18 LTS)
 - GeoBrix is designed to work with Databricks product spatial functions (available DBR 17.1+)
+
+### Serverless Spark configuration
+
+On Serverless compute most Spark properties are locked to platform defaults and cannot be
+overridden (for example, adaptive-query-execution toggles are ignored). Serverless does, however,
+accept a **limited set** of Spark configs — including **`spark.sql.files.maxPartitionBytes`**, which
+you can tune down (e.g. `"32m"`) to reduce the rows/bytes per partition on file and Delta scans. This
+is a useful lever for controlling memory per task in decode-heavy pipelines (each partition holds
+fewer files/rows, so each task decodes less at once). See the Databricks docs on
+[configuring Spark properties for Serverless](https://docs.databricks.com/aws/en/spark/conf) for the
+full allowlist.
 
 ## Format Support
 

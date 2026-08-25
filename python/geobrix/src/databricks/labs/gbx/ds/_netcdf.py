@@ -7,8 +7,11 @@ unsupported), derives an affine+CRS for grids, and flattens point/swath data to
 
 from __future__ import annotations
 
+import logging
 from contextlib import contextmanager
 from typing import Dict, Iterator, List, Optional, Tuple
+
+_logger = logging.getLogger(__name__)
 
 GRID = "grid"  # class 1/2 -> raster
 POINTS = "points"  # CF discrete sampling geometries -> vector
@@ -113,9 +116,29 @@ def grid_transform_crs(ds, variable: str) -> Tuple["object", str]:
 
 
 def _crs_string(ds) -> str:
-    # Look for a CF grid_mapping variable carrying an EPSG/authority code.
+    """Return the CRS string for a CF grid dataset.
+
+    Check order (first match wins):
+    1. ``crs_canonical``: authority string ("EPSG:4326", "ESRI:54008") or WKT
+       written by the current writer.  Handles non-EPSG CRS that to_epsg()
+       would have silently dropped.
+    2. ``crs_wkt``: CF standard WKT attribute written by the current writer and
+       compliant producers.
+    3. ``epsg_code`` / ``spatial_epsg``: legacy integer attribute; returns
+       "EPSG:<int>".
+    4. Default: "EPSG:4326" (geographic lon/lat).
+    """
     for name in list(ds.variables):
         v = ds[name]
+        # 1. crs_canonical (authority string or WKT — written by current writer)
+        canonical = getattr(v, "crs_canonical", None)
+        if canonical is not None:
+            return str(canonical)
+        # 2. crs_wkt (CF standard; rioxarray and compliant writers emit this)
+        wkt = getattr(v, "crs_wkt", None)
+        if wkt is not None:
+            return str(wkt)
+        # 3. Legacy EPSG integer attributes
         epsg = getattr(v, "epsg_code", None) or getattr(v, "spatial_epsg", None)
         if epsg is not None:
             code = _epsg_int(epsg)
@@ -144,9 +167,24 @@ def array_2d(ds, variable: str) -> "object":
     import numpy as np
 
     da = _decoded_or_raw(ds, variable)
-    # Squeeze any leading dims (e.g. time): take the first index until 2-D.
+    # Squeeze any leading dims (e.g. time / level): take the first index until 2-D.
+    # A leading dim of size > 1 means only its FIRST slice is read and the rest are
+    # silently dropped — warn so the data loss is visible. Per-slice fan-out (one
+    # tile per time/level, or a multi-band stack) is a planned feature.
     while da.ndim > 2:
-        da = da.isel({da.dims[0]: 0})
+        drop_dim = da.dims[0]
+        drop_size = int(da.sizes[drop_dim])
+        if drop_size > 1:
+            _logger.warning(
+                "netcdf_gbx: variable %r has leading dimension %r of size %d; "
+                "reading only index 0 and dropping the other %d slice(s). "
+                "Per-slice fan-out is not yet supported.",
+                variable,
+                drop_dim,
+                drop_size,
+                drop_size - 1,
+            )
+        da = da.isel({drop_dim: 0})
     lat, _ = _find_lat_lon(ds)
     latdim = lat.dims[0]
     # Ensure north-up: descending latitude along the lat dimension.

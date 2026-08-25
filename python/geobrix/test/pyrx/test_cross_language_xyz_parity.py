@@ -43,7 +43,7 @@ import pytest
 # via _LIGHT_TEST_DIRS, but an explicit guard keeps the skip message clear.
 pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (geobrix[light] or [test] required)",
+    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) or [test] required)",
 )
 
 from rasterio.io import MemoryFile  # noqa: E402
@@ -69,7 +69,7 @@ def spark_with_jar():
             "no geobrix JAR staged under python/geobrix/lib/ "
             "-- run: bash scripts/commands/gbx-docker-exec.sh "
             "'mvn clean package -PskipScoverage -DskipTests' "
-            "then copy target/geobrix-0.4.3-jar-with-dependencies.jar "
+            "then copy target/geobrix-0.5.0-jar-with-dependencies.jar "
             "to python/geobrix/lib/"
         )
     from pyspark.sql import SparkSession
@@ -422,7 +422,7 @@ def test_auto_does_not_crush_heavy(heavy_registered):
         f"heavy tier STILL crushed under auto rescale (spread={heavy_spread}). "
         "The staged JAR likely predates the Scala rescale commits (Tasks 1-3). "
         "Rebuild: gbx:docker:exec 'mvn clean package -PskipScoverage -DskipTests' "
-        "then copy target/geobrix-0.4.3-jar-with-dependencies.jar to python/geobrix/lib/"
+        "then copy target/geobrix-0.5.0-jar-with-dependencies.jar to python/geobrix/lib/"
     )
 
 

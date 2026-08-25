@@ -9,7 +9,7 @@ package com.databricks.labs.gbx.rasterx.expressions
  */
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.vectorx.jts.InterpolateElevation
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -31,14 +31,14 @@ case class RST_DTMFromGeoms(
     ymaxExpr: Expression,
     widthPxExpr: Expression,
     heightPxExpr: Expression,
-    sridExpr: Expression,
+    outSridExpr: Expression,
     noDataExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
         pointsArray, breaklinesArray, mergeTolerance, snapTolerance,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr, noDataExpr,
+        widthPxExpr, heightPxExpr, outSridExpr, noDataExpr,
         ExpressionConfigExpr()
     )
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(BinaryType)
@@ -60,28 +60,28 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
         pointsArray: ArrayData, breaklinesArray: ArrayData,
         mergeTolerance: Double, snapTolerance: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int, noData: Double,
+        widthPx: Int, heightPx: Int, out_srid: Int, noData: Double,
         conf: UTF8String
     ): InternalRow = doInvoke(
         pointsArray, breaklinesArray, mergeTolerance, snapTolerance,
-        xmin, ymin, xmax, ymax, widthPx, heightPx, srid, noData, conf)
+        xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, noData, conf)
 
     // Long-args entry (PySpark passes Python ints as Long).
     def eval(
         pointsArray: ArrayData, breaklinesArray: ArrayData,
         mergeTolerance: Double, snapTolerance: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Long, heightPx: Long, srid: Long, noData: Double,
+        widthPx: Long, heightPx: Long, out_srid: Long, noData: Double,
         conf: UTF8String
     ): InternalRow = doInvoke(
         pointsArray, breaklinesArray, mergeTolerance, snapTolerance,
-        xmin, ymin, xmax, ymax, widthPx.toInt, heightPx.toInt, srid.toInt, noData, conf)
+        xmin, ymin, xmax, ymax, widthPx.toInt, heightPx.toInt, out_srid.toInt, noData, conf)
 
     private def doInvoke(
         pointsArray: ArrayData, breaklinesArray: ArrayData,
         mergeTolerance: Double, snapTolerance: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int, noData: Double,
+        widthPx: Int, heightPx: Int, out_srid: Int, noData: Double,
         conf: UTF8String
     ): InternalRow =
         Option(
@@ -95,7 +95,7 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
                                  else geomsFromArrayData(breaklinesArray).toSeq)
                         .map(_.asInstanceOf[LineString])
                     execute(pts, lines, mergeTolerance, snapTolerance,
-                        xmin, ymin, xmax, ymax, widthPx, heightPx, srid, noData)
+                        xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, noData)
                 },
                 null, BinaryType, conf
             )
@@ -132,7 +132,7 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
         mergeTolerance: Double,
         snapTolerance: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
+        widthPx: Int, heightPx: Int, out_srid: Int,
         noData: Double
     ): InternalRow = {
         // Materialize rootPath defensively
@@ -145,14 +145,14 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
         require(points.nonEmpty, "rst_dtmfromgeoms: at least one point is required")
 
         val mp = JTS.multiPoint(points.toArray)
-        mp.setSRID(srid)
-        val grid = InterpolateElevation.pointGridBBox(xmin, ymin, xmax, ymax, widthPx, heightPx, srid)
+        mp.setSRID(out_srid)
+        val grid = InterpolateElevation.pointGridBBox(xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid)
         // Pin to the conforming (Steiner) path: rst_dtmfromgeoms keeps its established behavior;
         // the constrained/conforming mode switch is scoped to the VectorX TIN expressions.
         val interpolated = InterpolateElevation.interpolate(
             mp, breaklines, grid, mergeTolerance, snapTolerance, None, "conforming")
 
-        val ds = VectorRasterBridge.buildEmptyRaster(xmin, ymin, xmax, ymax, widthPx, heightPx, srid, noData)
+        val ds = VectorRasterBridge.buildEmptyRaster(xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, noData)
         try {
             val xRes = (xmax - xmin) / widthPx
             val yRes = (ymax - ymin) / heightPx
@@ -182,7 +182,7 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
             "all_parents" -> "",
             "last_command" -> "gbx_rst_dtmfromgeoms"
         )
-        InternalRow.fromSeq(Seq(0L, bytes, SerializationUtil.toMapData[String, String](mtd)))
+        V2Tile.row(cellid = 0L, raster = bytes, metadata = SerializationUtil.toMapData[String, String](mtd))
     }
 
     override def name: String = "gbx_rst_dtmfromgeoms"
@@ -192,8 +192,8 @@ object RST_DTMFromGeoms extends WithExpressionInfo {
             Literal(DefaultNoData))
         case 12 => RST_DTMFromGeoms(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
         case n => throw new IllegalArgumentException(
-            s"gbx_rst_dtmfromgeoms takes 11 or 12 arguments (points, breaklines, merge_tolerance, " +
-            s"snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, srid, [no_data]); got $n")
+            s"gbx_rst_dtmfromgeoms takes 11 or 12 arguments (points_array, breaklines_array, merge_tolerance, " +
+            s"snap_tolerance, xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]); got $n")
     }
 
 }

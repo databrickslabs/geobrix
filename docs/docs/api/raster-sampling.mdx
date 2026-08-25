@@ -1,0 +1,338 @@
+---
+sidebar_position: 6
+sidebar_label: Raster Sampling
+title: Raster Sampling
+---
+
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+import Tier from '@site/src/components/Tier';
+
+# Raster Sampling
+
+**Raster sampling** is the operation of reading raster values at one or more point locations — the equivalent of Esri's ArcGIS **Sample** tool and its `RS_VALUE` output columns. You have a raster (a DEM, a satellite scene, a modeled surface) and a set of coordinates; you want the cell value at each coordinate.
+
+GeoBrix covers this with [`rst_sample`](./raster-functions#rst_sample), available in both execution tiers.
+
+## Value at a point — `rst_sample`
+
+<Tier both/>
+
+```sql
+gbx_rst_sample(tile, geom [, crs])  →  ARRAY<DOUBLE>
+```
+
+**`rst_sample`** reads the raster at a single `POINT` geometry and returns `ARRAY<DOUBLE>` — one value per band, in band-index order. A single-band DEM returns `[302.0]`; a four-band multispectral tile returns `[b1, b2, b3, b4]`. Index into the array to select a specific band: `result[0]` for band 1.
+
+### CRS handling
+
+The point's CRS and the raster's CRS do not need to match — `rst_sample` reprojects automatically using the **source-CRS rule**:
+
+1. **Embedded SRID wins** — an EWKB or EWKT geometry with an embedded SRID (e.g. `SRID=4326;POINT(...)`) is reprojected from that SRID to the raster's CRS.
+2. **Explicit `crs` argument** — if the geometry has no embedded SRID, the optional third argument names the point's source CRS (`'EPSG:4326'`, `'32618'`, WKT, PROJ4).
+3. **Assumed aligned** — if neither an SRID nor a `crs` argument is supplied, the point is assumed to be in the raster's CRS already.
+
+See [Coordinate Reference Systems](./coordinate-reference-systems#source-crs-vs-output-crs) for the full rule.
+
+### NoData and out-of-extent
+
+If the point falls outside the raster's extent, or if the raster's geotransform is degenerate (zero determinant), `rst_sample` returns `null` (SQL `NULL`). NoData pixels at the sampled location are also returned as `null`. Use `COALESCE` or a `CASE` expression downstream if you need a sentinel value instead.
+
+### Sampling method
+
+`rst_sample` uses **nearest-pixel** sampling. For bilinear, cubic, or other interpolation methods, see [Interpolation](#interpolation-bilinear-and-cubic) below.
+
+For `rst_sample` examples (doc-tested), see the [`rst_sample` function reference](./raster-functions#rst_sample).
+
+---
+
+## Interpolation — bilinear and cubic {#interpolation-bilinear-and-cubic}
+
+`rst_sample` reads the nearest pixel. To sample with a different interpolation method, **resample the raster first**, then sample:
+
+1. **Choose a target resolution** using one of the `rst_resample*` variants:
+   - [`rst_resample(tile, factor, algorithm)`](./raster-functions#rst_resample) — by a multiplicative factor.
+   - [`rst_resample_to_res(tile, xRes, yRes, algorithm)`](./raster-functions#rst_resample_to_res) — by target ground resolution in CRS units.
+   - [`rst_resample_to_size(tile, widthPx, heightPx, algorithm)`](./raster-functions#rst_resample_to_size) — by target pixel dimensions.
+
+2. **Pass the resampled tile to `rst_sample`**.
+
+The `algorithm` parameter accepts the standard GDAL resampling names: `near`, `bilinear`, `cubic`, `cubicspline`, `lanczos`, `average`.
+
+:::note
+Resampling rewrites the whole pixel grid; `rst_sample` then reads the nearest pixel of that rewritten grid. The combination gives you bilinear- or cubic-quality values at query points, at the cost of one extra warp pass per tile. For nearest-pixel sampling there is no benefit in resampling first.
+:::
+
+For `rst_resample*` examples (doc-tested), see the [`rst_resample` function reference](./raster-functions#rst_resample).
+
+---
+
+## Workflows
+
+The patterns below are **illustrative** SQL, Python, and Scala sketches. A runnable end-to-end sampling notebook is a doc-test follow-up.
+
+### Workflow 1 — single point value
+
+Extract a value (e.g. elevation) at one location across a set of raster tiles.
+
+<Tabs groupId="gbx-lang" queryString="lang">
+<TabItem value="sql" label="SQL">
+
+```sql
+-- Nearest-pixel sample from a DEM at a POINT already in the raster's CRS
+SELECT
+  tile_id,
+  gbx_rst_sample(tile, 'SRID=32618;POINT(500320 4500320)') AS elevation_array,
+  gbx_rst_sample(tile, 'SRID=32618;POINT(500320 4500320)')[0] AS elevation_m
+FROM dem_rasters;
+
+-- Bilinear: resample first, then sample
+SELECT
+  tile_id,
+  gbx_rst_sample(
+    gbx_rst_resample(tile, 1.0, 'bilinear'),
+    'SRID=32618;POINT(500320 4500320)'
+  )[0] AS elevation_bilinear
+FROM dem_rasters;
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+import pyspark.sql.functions as F
+from databricks.labs.gbx.pyrx import functions as rx      # lightweight
+# from databricks.labs.gbx.rasterx import functions as rx  # heavyweight — same call
+
+point = F.lit("SRID=32618;POINT(500320 4500320)")
+
+# Nearest-pixel
+df = spark.table("dem_rasters")
+df_sampled = df.select(
+    "tile_id",
+    rx.rst_sample("tile", point).alias("elevation_array"),
+    rx.rst_sample("tile", point)[0].alias("elevation_m"),
+)
+
+# Bilinear: resample first, then sample
+df_bilinear = df.select(
+    "tile_id",
+    rx.rst_sample(
+        rx.rst_resample("tile", F.lit(1.0), F.lit("bilinear")),
+        point
+    )[0].alias("elevation_bilinear"),
+)
+```
+
+</TabItem>
+<TabItem value="scala" label="Scala">
+
+```scala
+import com.databricks.labs.gbx.rasterx.functions as rasterx
+import org.apache.spark.sql.functions.lit
+
+val point = lit("SRID=32618;POINT(500320 4500320)")
+
+val df = spark.table("dem_rasters")
+
+// Nearest-pixel
+val dfSampled = df.select(
+  col("tile_id"),
+  rasterx.rst_sample(col("tile"), point).alias("elevation_array"),
+  rasterx.rst_sample(col("tile"), point).getItem(0).alias("elevation_m")
+)
+
+// Bilinear: resample first, then sample
+val dfBilinear = df.select(
+  col("tile_id"),
+  rasterx.rst_sample(
+    rasterx.rst_resample(col("tile"), lit(1.0), lit("bilinear")),
+    point
+  ).getItem(0).alias("elevation_bilinear")
+)
+```
+
+</TabItem>
+</Tabs>
+
+---
+
+### Workflow 2 — multiple rasters (RS_VALUE1 / RS_VALUE2 / …)
+
+Esri's Sample tool, when given multiple rasters, produces columns named `RS_VALUE1`, `RS_VALUE2`, and so on. In GeoBrix, compose one `rst_sample` call per raster and alias each result:
+
+<Tabs groupId="gbx-lang" queryString="lang">
+<TabItem value="sql" label="SQL">
+
+```sql
+-- Sample elevation, slope, and aspect at one point across aligned tile sets.
+-- Replace the tile joins with the pattern that matches your tile schema.
+WITH point AS (
+  SELECT 'SRID=32618;POINT(500320 4500320)' AS geom
+)
+SELECT
+  d.tile_id,
+  gbx_rst_sample(d.tile, p.geom)[0] AS RS_VALUE1,   -- elevation (band 1 of DEM)
+  gbx_rst_sample(s.tile, p.geom)[0] AS RS_VALUE2,   -- slope
+  gbx_rst_sample(a.tile, p.geom)[0] AS RS_VALUE3    -- aspect
+FROM
+  dem_rasters   d
+  JOIN slope_rasters   s ON d.tile_id = s.tile_id
+  JOIN aspect_rasters  a ON d.tile_id = a.tile_id
+  CROSS JOIN point p;
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+from databricks.labs.gbx.pyrx import functions as rx   # or ...rasterx
+
+point = F.lit("SRID=32618;POINT(500320 4500320)")
+
+# Join three tile tables on a shared tile_id key, then sample each
+df = (
+    spark.table("dem_rasters").alias("d")
+    .join(spark.table("slope_rasters").alias("s"),  "tile_id")
+    .join(spark.table("aspect_rasters").alias("a"), "tile_id")
+    .select(
+        "tile_id",
+        rx.rst_sample(F.col("d.tile"), point)[0].alias("RS_VALUE1"),
+        rx.rst_sample(F.col("s.tile"), point)[0].alias("RS_VALUE2"),
+        rx.rst_sample(F.col("a.tile"), point)[0].alias("RS_VALUE3"),
+    )
+)
+```
+
+</TabItem>
+</Tabs>
+
+For a multi-band raster, index with `[0]`, `[1]`, `[2]`, … to extract individual bands into separate columns.
+
+---
+
+### Workflow 3 — points table × raster tiles at scale
+
+The real-world sampling scenario: a table of many points (field survey, GPS tracks, sensor readings) against a tiled raster dataset. The key is a **spatial join** that pairs each point with the tile(s) that cover it, then calls `rst_sample` per matched row.
+
+Two spatial-join strategies:
+
+#### Option A — geometry intersection
+
+Use `st_intersects` on the raster tile's bounding geometry and the point. This is the general-purpose approach and works for any tiled raster.
+
+<Tabs groupId="gbx-lang" queryString="lang">
+<TabItem value="sql" label="SQL">
+
+```sql
+-- Assume dem_rasters has a precomputed tile_bounds column (WKB geometry of the tile extent)
+SELECT
+  p.id,
+  p.geom                                        AS point_geom,
+  gbx_rst_sample(d.tile, p.geom)[0]             AS elevation_m
+FROM
+  points_table  p
+  JOIN dem_rasters d
+    ON st_intersects(d.tile_bounds, p.geom)
+WHERE d.tile_bounds IS NOT NULL;
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+from databricks.labs.gbx.pyrx import functions as rx
+from pyspark.sql import functions as F
+
+points = spark.table("points_table")
+tiles  = spark.table("dem_rasters")
+
+result = (
+    points.join(
+        tiles,
+        # st_intersects is a Databricks built-in spatial predicate (not a GeoBrix function)
+        F.expr("st_intersects(tile_bounds, geom)"),
+        "inner",
+    )
+    .select(
+        points["id"],
+        points["geom"],
+        rx.rst_sample(tiles["tile"], points["geom"])[0].alias("elevation_m"),
+    )
+)
+```
+
+</TabItem>
+</Tabs>
+
+#### Option B — grid index join (H3 or BNG)
+
+When the raster is already indexed by a discrete grid (H3, BNG, quadbin), a grid-key equi-join scales better than a geometry predicate at millions of rows.
+
+<Tabs groupId="gbx-lang" queryString="lang">
+<TabItem value="sql" label="SQL">
+
+```sql
+-- 1. Assign each point an H3 index at the raster's native resolution
+-- 2. Join to the H3-indexed raster table
+-- 3. Sample
+SELECT
+  p.id,
+  gbx_rst_sample(d.tile, p.geom)[0] AS elevation_m
+FROM
+  (SELECT id, geom, h3_pointash3(geom, 8) AS h3_index FROM points_table) p
+  JOIN dem_rasters_h3 d ON p.h3_index = d.h3_index;
+```
+
+</TabItem>
+<TabItem value="python" label="Python">
+
+```python
+from databricks.labs.gbx.pyrx import functions as rx
+# h3_pointash3 is a Databricks built-in H3 function
+from pyspark.sql.functions import expr
+
+points = spark.table("points_table").withColumn(
+    "h3_index", expr("h3_pointash3(geom, 8)")
+)
+tiles = spark.table("dem_rasters_h3")   # pre-indexed by h3_index
+
+result = (
+    points.join(tiles, "h3_index", "inner")
+    .select(
+        points["id"],
+        rx.rst_sample(tiles["tile"], points["geom"])[0].alias("elevation_m"),
+    )
+)
+```
+
+</TabItem>
+</Tabs>
+
+:::tip Scale note
+For millions of points × thousands of tiles, the **grid-index equi-join** is significantly faster than a geometry intersection — it avoids a cross-product and uses Spark's hash or sort-merge join. Index the raster tiles at ingest time with `rst_h3_tessellate` (see [H3 Raster Tessellation](./h3-raster-tessellation)) and assign points the same H3 resolution at query time.
+:::
+
+---
+
+## Related functions
+
+| Function | What it does | Relation to sampling |
+|---|---|---|
+| [`rst_gridfrompoints`](./raster-functions#rst_gridfrompoints) / [`rst_gridfrompoints_agg`](./raster-functions#rst_gridfrompoints_agg) | **Inverse**: interpolate a raster *from* a set of Z-valued points (IDW) | Produces a raster from points; sampling reads a raster at points |
+| [`rst_h3_rastertogrid*`](./raster-functions#rst_h3_rastertogridavg) | **Zonal aggregation**: reduce pixels within each H3 cell to a statistic (avg, sum, max, …) | Aggregates pixels to grid cells; sampling reads one pixel at a coordinate |
+| [`rst_bng_rastertogrid*`](./raster-functions#rst_bng_rastertogridavg) | Same as above for British National Grid | Same distinction — aggregation vs point lookup |
+| [`rst_quadbin_rastertogrid*`](./raster-functions#rst_quadbin_rastertogridavg) | Same for CARTO quadbin | Same distinction |
+| [`rst_h3_tessellate`](./raster-functions#rst_h3_tessellate) | Tile indexing for H3-grid joins | Supports the scale-out join in Workflow 3 |
+
+The `rst_*_rastertogrid*` family and `rst_gridfrompoints*` answer **area questions** (what is the average elevation in this H3 cell?). `rst_sample` answers **point questions** (what is the elevation exactly here?). Choose based on the spatial resolution your downstream analysis requires.
+
+---
+
+## Function reference cross-links
+
+- [`rst_sample`](./raster-functions#rst_sample) — full signature, examples, tier notes
+- [`rst_resample`](./raster-functions#rst_resample) — resample by factor
+- [`rst_resample_to_res`](./raster-functions#rst_resample_to_res) — resample by ground resolution
+- [`rst_resample_to_size`](./raster-functions#rst_resample_to_size) — resample by pixel dimensions
+- [Coordinate Reference Systems](./coordinate-reference-systems) — CRS handling rules used by `rst_sample`

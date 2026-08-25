@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.custom
 
 import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
@@ -14,17 +15,17 @@ import org.apache.spark.sql.types.{ArrayType, DataType, LongType}
   * its center point falls strictly inside (or on the boundary of) the input geometry,
   * as determined by JTS `Geometry.contains(centroid)`.
   *
-  * Arguments: geomExpr (BINARY WKB or STRING WKT), gridExpr (grid-spec STRUCT), resExpr (INT or LONG).
+  * Arguments: geomExpr (BINARY WKB or STRING WKT), gridExpr (grid-spec STRUCT), resolutionExpr (INT or LONG).
   *
   * Returns: ARRAY<BIGINT> of cell IDs.
   */
 case class Custom_Polyfill(
-    geomExpr: Expression,
-    gridExpr: Expression,
-    resExpr:  Expression
+    geomExpr:       Expression,
+    gridExpr:       Expression,
+    resolutionExpr: Expression
 ) extends Expression with CodegenFallback {
 
-    override def children: Seq[Expression] = Seq(geomExpr, gridExpr, resExpr)
+    override def children: Seq[Expression] = Seq(geomExpr, gridExpr, resolutionExpr)
     override def dataType: DataType        = ArrayType(LongType, containsNull = false)
     override def nullable: Boolean         = true
     override def foldable: Boolean         = children.forall(_.foldable)
@@ -36,12 +37,15 @@ case class Custom_Polyfill(
         val gridVal = gridExpr.eval(input)
         if (gridVal == null) return null
 
-        val geom = Custom_PointAsCell.decodeGeom(geomVal)
-        val sys  = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])
-        val res  = Custom_GridSpec.asInt(resExpr.eval(input), "resolution")
-
-        val cells: Seq[Long] = sys.polyfill(geom, res)
-        ArrayData.toArrayData(cells.toArray)
+        val sys = Custom_GridSpec.systemFromRow(gridVal.asInstanceOf[InternalRow])  // PARAMETER
+        val res = Custom_GridSpec.asInt(resolutionExpr.eval(input), "resolution")  // PARAMETER (type check)
+        if (res > sys.conf.maxResolution)                                          // PARAMETER range: must raise, not null
+            throw new IllegalStateException(s"Resolution exceeds maximum resolution of ${sys.conf.maxResolution}.")
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geom = Custom_PointAsCell.decodeGeom(geomVal)
+            val cells: Seq[Long] = sys.polyfill(geom, res)
+            ArrayData.toArrayData(cells.toArray)
+        }
     }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =

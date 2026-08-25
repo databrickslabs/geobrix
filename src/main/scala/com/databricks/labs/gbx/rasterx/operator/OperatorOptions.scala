@@ -18,18 +18,26 @@ object OperatorOptions {
     def appendOptions(command: String, writeOptions: Map[String, String], ds: Dataset): String = {
         val format = writeOptions.getOrElse("format", "GTiff")
         // scalastyle:off caselocale
-        val compression = writeOptions.getOrElse("compression", "DEFLATE").toUpperCase
+        val compression = writeOptions.getOrElse("compression", "ZSTD").toUpperCase
         // scalastyle:on caselocale
         val missingGeoRef = writeOptions.getOrElse("missingGeoRef", "false").toBoolean
         val isCalc = command.startsWith("gdal_calc")
         val ofFlag = if (isCalc) "--format" else "-of"
         val coFlag = if (isCalc) "--co" else "-co"
 
-        val anyFloat = (1 to ds.GetRasterCount).exists { i =>
-            val dt = ds.GetRasterBand(i).GetRasterDataType
-            dt == GDT_Float32 || dt == GDT_Float64
+        // Compute predictor based on dtype: 3 for float, 1 for uint8/int8, 2 for others.
+        // Mirrors pyrx.core.compression._FLOAT, _SMALL_INT predictor mapping.
+        val predictor = {
+            val anyFloat = (1 to ds.GetRasterCount).exists { i =>
+                val dt = ds.GetRasterBand(i).GetRasterDataType
+                dt == GDT_Float32 || dt == GDT_Float64
+            }
+            val anySmallInt = (1 to ds.GetRasterCount).exists { i =>
+                val dt = ds.GetRasterBand(i).GetRasterDataType
+                dt == GDT_Byte || dt == GDT_Int8
+            }
+            if (anyFloat) "3" else if (anySmallInt) "1" else "2"
         }
-        val predictor = if (anyFloat) "3" else "2"
 
         val w = ds.GetRasterXSize; val h = ds.GetRasterYSize
         val rawBlk = math.max(64, math.min(writeOptions.getOrElse("blocksize", "512").toInt, math.min(w, h)))
@@ -42,12 +50,22 @@ object OperatorOptions {
         }
 
         val coComp = compression match {
-            case "ZSTD"    => Seq(s"$coFlag COMPRESS=ZSTD", s"$coFlag ZSTD_LEVEL=${writeOptions.getOrElse("zstd_level", "9")}")
-            case "DEFLATE" => Seq(
-                  s"$coFlag COMPRESS=DEFLATE",
-                  s"$coFlag PREDICTOR=$predictor",
-                  s"$coFlag ZLEVEL=${writeOptions.getOrElse("zlevel", "6")}"
+            case "ZSTD"    => {
+                // COG driver uses "LEVEL"; GTiff uses "ZSTD_LEVEL"
+                val levelOption = if (format == "COG") "LEVEL" else "ZSTD_LEVEL"
+                val levelKey = if (format == "COG") "level" else "zstd_level"
+                Seq(s"$coFlag COMPRESS=ZSTD", s"$coFlag $levelOption=${writeOptions.getOrElse(levelKey, "9")}", s"$coFlag PREDICTOR=$predictor")
+            }
+            case "DEFLATE" => {
+                // COG driver uses "LEVEL"; GTiff uses "ZLEVEL"
+                val levelOption = if (format == "COG") "LEVEL" else "ZLEVEL"
+                val levelKey = if (format == "COG") "level" else "zlevel"
+                Seq(
+                    s"$coFlag COMPRESS=DEFLATE",
+                    s"$coFlag PREDICTOR=$predictor",
+                    s"$coFlag $levelOption=${writeOptions.getOrElse(levelKey, "6")}"
                 )
+            }
             case "LZW"     => Seq(s"$coFlag COMPRESS=LZW", s"$coFlag PREDICTOR=$predictor")
             case other     => Seq(s"$coFlag COMPRESS=$other")
         }

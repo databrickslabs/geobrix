@@ -39,5 +39,7 @@ def test_reads_geotiff_like_catch_all(spark, tmp_path):
     df = spark.read.format("gtiff_gbx").load(str(f))
     rows = df.collect()
     assert len(rows) == 1
-    assert rows[0]["tile"]["metadata"]["driver"] == "GTiff"
+    # Task 2: whole-file virtual tiles defer the rasterio.open, so 'driver' is
+    # no longer eagerly emitted.  'format' is inferred from the file extension.
+    assert rows[0]["tile"]["metadata"]["format"] == "gtiff"
     assert rows[0]["tile"]["cellid"] == -1

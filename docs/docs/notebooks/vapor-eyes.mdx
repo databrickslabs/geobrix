@@ -15,7 +15,7 @@ on a schedule to stay current, and an **interactive notebook series** that is mo
 start for understanding the GeoBrix functions involved in the detection cascade.
 
 :::note Requires GeoBrix 0.4.1+
-Both flavors depend on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader (Sentinel-5P swath → points) and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so install `geobrix[light,stac,vizx]` **0.4.1 or newer**.
+Both flavors depend on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader (Sentinel-5P swath → points) and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so install `geobrix[light_env6,stac,vizx]` **0.4.1 or newer**.
 :::
 
 <Tabs groupId="vapor-eyes-flavor" queryString="flavor">
@@ -30,7 +30,7 @@ This is the production counterpart to the notebook series (see the other tab) �
 :::
 
 :::info Runs on the lightweight tier (Serverless)
-The pipeline and its `land` downloader task both install `geobrix[light,stac,vizx]` from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout (environment version 5). See [Execution Tiers](../api/execution-tiers).
+The pipeline and its `land` downloader task both install `geobrix[light_env6,stac,vizx]` from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout (environment version 6). See [Execution Tiers](../api/execution-tiers).
 :::
 
 ## How it works: from a raw satellite signal to a leaderboard
@@ -115,7 +115,7 @@ A five-notebook series that takes one Permian (Delaware Basin) bounding box and 
 :::
 
 :::info Lightweight tier (Serverless) by default
-Pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`) plus the `geobrix[light,stac,vizx]` wheel — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Execution Tiers](../api/execution-tiers).
+Pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`) plus the `geobrix[light_env6,stac,vizx]` wheel — no JAR. It features the net-new **`netcdf_gbx` reader** (`databricks.labs.gbx.ds`), which transcodes the Sentinel-5P netCDF-4 swath directly to points with no regridding. See [Execution Tiers](../api/execution-tiers).
 :::
 
 ### 01 — Wide-area screening (Sentinel-5P)

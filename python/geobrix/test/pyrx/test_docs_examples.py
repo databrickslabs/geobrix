@@ -22,10 +22,13 @@ _spec.loader.exec_module(pyrx_doc_examples)
 
 
 def test_setup_example(spark):
-    """pyrx_setup_example returns a DataFrame with a 'tile' column."""
+    """pyrx_setup_example loads the samples and creates the four temp views."""
     df = pyrx_doc_examples.pyrx_setup_example(spark)
     assert "tile" in df.columns
     assert df.count() == 1
+    # Every example on the page reads from one of these views.
+    for view in ("rasters", "multiband_rasters", "dem_rasters", "netcdf_rasters"):
+        assert spark.catalog.tableExists(view), f"setup did not create view {view}"
 
 
 def test_accessors_example(spark):

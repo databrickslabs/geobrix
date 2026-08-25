@@ -7,11 +7,36 @@ something is wrong with the layering.
 
 import logging
 import os
+import sys
 
 import numpy as np
 import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
+
+# Ensure PySpark workers use the same interpreter as the driver.  Must be set
+# before any SparkContext is created (local-mode workers are separate Python
+# processes spawned per-task; without this they default to system Python and
+# fail with PYTHON_VERSION_MISMATCH when the test venv uses a different minor).
+os.environ.setdefault("PYSPARK_PYTHON", sys.executable)
+os.environ.setdefault("PYSPARK_DRIVER_PYTHON", sys.executable)
+
+
+@pytest.fixture(autouse=True)
+def _clear_file_support_cache():
+    """Clear _FILE_SUPPORT_CACHE before and after every test.
+
+    file_supported() caches its result in _FILE_SUPPORT_CACHE keyed by
+    id(spark).  Tests that monkeypatch spark.sql to force True/False must
+    not pollute later tests that share the same Spark session (same id(spark)).
+    Without this fixture, test_file_supported_returns_true_when_probe_succeeds
+    caches True and causes ~55 order-dependent failures in the full suite.
+    """
+    from databricks.labs.gbx.pyrx._file_ref import _FILE_SUPPORT_CACHE
+
+    _FILE_SUPPORT_CACHE.clear()
+    yield
+    _FILE_SUPPORT_CACHE.clear()
 
 
 @pytest.fixture(autouse=True)
@@ -64,6 +89,8 @@ def gtiff_bytes():
 
 @pytest.fixture(scope="module")
 def spark():
+    import sys
+
     logging.getLogger("py4j").setLevel(logging.ERROR)
     from pyspark.sql import SparkSession
 
@@ -71,6 +98,8 @@ def spark():
         SparkSession.builder.master("local[2]")
         .appName("pyrx-tests")
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
+        .config("spark.pyspark.python", sys.executable)
+        .config("spark.pyspark.driver.python", sys.executable)
         .getOrCreate()
     )
     yield session

@@ -810,3 +810,178 @@ def test_pure_core_emits_na_by_design_for_low_band_count(tmp_path):
     )
     assert rows and all(r.status == "na_by_design" for r in rows)
     assert all("band" in r.note.lower() for r in rows)
+
+
+def test_build_input_tile_virtual_is_bytes_free(tmp_path):
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=1,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    te = next(t for t in corpus.size_sweep if t.role != "bng_gb")
+    p = tmp_path / te.path
+    content = p.read_bytes()
+    mat = rn._build_input_tile(str(p), content, 7, "materialized")
+    assert mat["raster"] is not None and mat["cellid"] == 7
+    virt = rn._build_input_tile(str(p), content, 7, "virtual")
+    assert virt["raster"] is None
+    assert virt["path"] and virt["window"] is not None
+    assert virt["cellid"] == 7  # corpus cellid preserved (not _fromfile_impl's 0)
+
+
+def test_build_input_tile_virtual_no_silent_fallback(monkeypatch):
+    import databricks.labs.gbx.pyrx.functions as pf
+
+    monkeypatch.setattr(pf, "_fromfile_impl", lambda *a, **kw: None)
+    with pytest.raises(ValueError, match="returned null"):
+        rn._build_input_tile("/any.tif", b"", 0, "virtual")
+
+
+def test_run_spark_path_accepts_input_tile_kwarg():
+    import inspect
+
+    assert "input_tile" in inspect.signature(rn.run_spark_path).parameters
+
+
+def test_disposition_accessor_uses_classifier():
+    assert rn._disposition_of(s.REGISTRY["rst_avg"], None) == "materialized"
+    assert rn._disposition_of(s.REGISTRY["rst_width"], None) == "deferred"
+
+
+def test_disposition_tile_returning_from_output_tile():
+    assert (
+        rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": b"xx"}) == "materialized"
+    )
+    assert rn._disposition_of(s.REGISTRY["rst_slope"], {"raster": None}) == "deferred"
+    # no sample available -> "na" (not a crash)
+    assert rn._disposition_of(s.REGISTRY["rst_slope"], None) == "na"
+
+
+def test_pure_core_parity_slope_width(tmp_path):
+    from databricks.labs.gbx.bench import datagen as dg
+    from databricks.labs.gbx.bench import runner as rn
+    from databricks.labs.gbx.bench import spec as s
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=1,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_slope", "rst_width"])
+    res = rn.run_pure_core_parity(tmp_path, corpus, fns)
+    assert res, "expected parity rows"
+    for name, px, ok, mat, virt in res:
+        assert ok, f"{name}@{px}: virtual != materialized ({mat} vs {virt})"
+
+
+def test_pure_core_parity_full_tile_set(tmp_path):
+    """Parity: virtual-open == materialized-open output fingerprint for every
+    tile-input fn in the full registry over a 1-band 64px float32 4326 corpus.
+
+    Exclusions (non-virtual reasons, not divergences):
+      - input_kind != "tile": tile_array / bytes / path / geometry / *_aggregate
+        fns are not tile-input and are excluded by design.
+      - min_bands > 1: rst_ndvi, rst_ndwi, rst_nbr, rst_band, rst_evi, rst_savi,
+        rst_index require >= 2 input bands; the 1-band corpus cannot satisfy them.
+        This is a corpus limitation, not a virtual-tile issue.
+
+    fingerprint=False fns (timing-only, e.g. rst_boundingbox returning WKB,
+    rst_viewshed, rst_color_relief) are still exercised: run_pure_core_parity
+    skips fingerprinting for those and uses "" == "" (both succeed → ok=True).
+    A virtual-tile open failure would still surface as ok=False.
+
+    If this test finds ok=False for any (fn, tile_px) pair it is a REAL virtual-tile
+    divergence — do not weaken the assertion or exclude the fn without root-cause.
+    """
+    from databricks.labs.gbx.bench import datagen as dg
+    from databricks.labs.gbx.bench import runner as rn
+    from databricks.labs.gbx.bench import spec as s
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=1,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = [
+        f
+        for f in s.select(set="full")
+        if getattr(f, "input_kind", "tile") == "tile"
+        and getattr(f, "min_bands", 1) <= 1
+    ]
+    assert fns, "expected tile-input fns from full registry"
+    res = rn.run_pure_core_parity(tmp_path, corpus, fns)
+    assert res, "expected parity rows"
+    bad = [(name, px, mat, virt) for name, px, ok, mat, virt in res if not ok]
+    assert not bad, f"virtual!=materialized divergences: {bad}"
+
+
+def test_creation_microleg_defined():
+    from databricks.labs.gbx.bench import runner as rn
+
+    assert hasattr(rn, "_run_sp_creation")
+
+
+def test_rst_fromfile_column_builds():
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    c = prx.rst_fromfile(F.col("path"), "GTiff")
+    assert c is not None
+
+
+def test_spark_virtual_leg_smoke(spark, tmp_path):
+    from databricks.labs.gbx.bench import datagen as dg
+    from databricks.labs.gbx.bench import runner as rn
+    from databricks.labs.gbx.bench import spec as s
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=9,
+        tile_px=[64],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=64,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    fns = s.select(functions=["rst_slope", "rst_setsrid", "rst_avg", "rst_fromfile"])
+    rows = rn.run_spark_path(
+        spark, tmp_path, corpus, fns, "smoke", [4], 1, 1, "venv", input_tile="virtual"
+    )
+    ok = [r for r in rows if r.status == "ok"]
+    assert ok, "expected ok rows"
+    assert all(r.input_tile == "virtual" for r in ok)
+    disp = {r.fn: r.output_disposition for r in ok}
+    assert disp.get("rst_slope") == "materialized"
+    assert disp.get("rst_setsrid") == "deferred"
+    assert disp.get("rst_avg") == "materialized"
+    assert disp.get("rst_fromfile") == "deferred"  # creation micro-leg
+    assert all(r.per_tile_avg_s >= 0 for r in ok)

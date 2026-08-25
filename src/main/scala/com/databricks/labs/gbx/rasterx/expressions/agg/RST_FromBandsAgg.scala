@@ -12,6 +12,7 @@ import org.apache.spark.sql.types._
 
 import java.io.{ByteArrayInputStream, ByteArrayOutputStream, DataInputStream, DataOutputStream}
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Try
 
 /** Streaming aggregator: stacks single-band tiles into a multi-band tile.
  *
@@ -28,23 +29,28 @@ import scala.collection.mutable.ArrayBuffer
  *  `[count:Int][ idx:Int, tileLen:Int, tileBytes:Bytes ]*N`
  */
 case class RST_FromBandsAgg(
-    tileExpr:             Expression,
+    tile:             Expression,
     bandIndexExpr:        Expression,
     exprConfExpr:         Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset:   Int = 0
 ) extends TypedImperativeAggregate[ArrayBuffer[Any]] {
 
-    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
+    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
+    /** Field count of the input tile struct (3 for v1, 9 for v2), from the declared element schema. */
+    private lazy val tileFieldCount: Int = tile.dataType match {
+        case st: org.apache.spark.sql.types.StructType => st.fields.length
+        case _                                         => 3
+    }
     override lazy val deterministic: Boolean = true
     override val nullable: Boolean = true
     override def prettyName: String = RST_FromBandsAgg.name
 
-    override def children: Seq[Expression] = Seq(tileExpr, bandIndexExpr, exprConfExpr)
+    override def children: Seq[Expression] = Seq(tile, bandIndexExpr, exprConfExpr)
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): RST_FromBandsAgg =
-        copy(tileExpr = nc(0), bandIndexExpr = nc(1), exprConfExpr = nc(2))
+        copy(tile = nc(0), bandIndexExpr = nc(1), exprConfExpr = nc(2))
 
     override def withNewMutableAggBufferOffset(n: Int): ImperativeAggregate =
         copy(mutableAggBufferOffset = n)
@@ -54,32 +60,12 @@ case class RST_FromBandsAgg(
 
     override def createAggregationBuffer(): ArrayBuffer[Any] = ArrayBuffer.empty
 
-    /** Normalize any tile row to a BinaryType tile row (bytes at field 1).
-     *  If the incoming tile is already BinaryType, copies it as-is.
-     *  If path-based (StringType), opens via GDAL and writes back to bytes.
-     *  This guarantees the buffer is uniformly binary so eval/deserialize
+    /** Copy the BinaryType tile row through as-is.
+     *  Raster is always binary; the buffer is uniformly binary so eval/deserialize
      *  can always use BinaryType without branching on rasterType.
      */
-    private def toBinaryTileRow(tileRow: InternalRow): InternalRow = {
-        rasterType match {
-            case org.apache.spark.sql.types.BinaryType =>
-                InternalRow.copyValue(tileRow).asInstanceOf[InternalRow]
-            case _ =>
-                val (cellId, ds, mtd) = RasterSerializationUtil.rowToTile(tileRow, rasterType)
-                try {
-                    val bytes = RasterDriver.writeToBytes(ds, mtd)
-                    import org.apache.spark.sql.catalyst.util.ArrayBasedMapData
-                    import org.apache.spark.unsafe.types.UTF8String
-                    InternalRow.fromSeq(Seq(
-                        cellId,
-                        bytes,
-                        ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
-                    ))
-                } finally {
-                    RasterDriver.releaseDataset(ds)
-                }
-        }
-    }
+    private def toBinaryTileRow(tileRow: InternalRow): InternalRow =
+        InternalRow.copyValue(tileRow).asInstanceOf[InternalRow]
 
     /** Catalyst-facing update: extract tile and band_index from the row. */
     override def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {
@@ -91,7 +77,7 @@ case class RST_FromBandsAgg(
             case other   => throw new IllegalArgumentException(
                 s"rst_frombands_agg: band_index must be INT or LONG; got ${other.getClass.getName}")
         }
-        val tileRaw = tileExpr.eval(input)
+        val tileRaw = tile.eval(input)
         if (tileRaw == null) return buffer
         val binaryTileRow = toBinaryTileRow(tileRaw.asInstanceOf[InternalRow])
         buffer += InternalRow(idx, binaryTileRow)
@@ -121,18 +107,28 @@ case class RST_FromBandsAgg(
             .map(_.asInstanceOf[InternalRow])
             .sortBy(_.getInt(0))
 
-        // Open each buffered tile. Buffer is uniformly BinaryType (normalized in update).
-        val tiles: Seq[(Long, org.gdal.gdal.Dataset, Map[String, String])] = sorted.map { row =>
-            val tileRow = row.getStruct(1, 3)
-            RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)
+        // Open each buffered tile, skipping corrupt members.
+        // Buffer is uniformly BinaryType (normalized in update/updateWithIndex).
+        var dropped = 0
+        val tiles: Seq[(Long, org.gdal.gdal.Dataset, Map[String, String])] = sorted.flatMap { row =>
+            val tileRow = row.getStruct(1, tileFieldCount)
+            Try(RasterSerializationUtil.rowToTile(tileRow, org.apache.spark.sql.types.BinaryType)).toOption match {
+                case Some(t) if t._2 != null => Some(t)
+                case _ => dropped += 1; None
+            }
         }.toSeq
+
+        if (tiles.isEmpty) return null
 
         var resultDs: org.gdal.gdal.Dataset = null
         try {
-            val (rds, resultMtd) = RST_FromBands.execute(tiles)
+            val (rds, resMtd) = RST_FromBands.execute(tiles)
             resultDs = rds
+            val finalMtd = if (dropped > 0)
+                resMtd + ("last_error" -> s"RST_FromBandsAgg: skipped $dropped corrupt input tile(s)")
+            else resMtd
             RasterSerializationUtil.tileToRow(
-                (tiles.head._1, resultDs, resultMtd),
+                (tiles.head._1, resultDs, finalMtd),
                 rasterType,
                 exprConf.hConf
             )
@@ -150,7 +146,7 @@ case class RST_FromBandsAgg(
         for (elem <- obj) {
             val row = elem.asInstanceOf[InternalRow]
             val idx = row.getInt(0)
-            val tileRow = row.getStruct(1, 3)
+            val tileRow = row.getStruct(1, tileFieldCount)
             val tileBytes = serializeTileRow(tileRow)
             out.writeInt(idx)
             out.writeInt(tileBytes.length)

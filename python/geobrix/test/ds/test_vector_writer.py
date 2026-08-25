@@ -210,6 +210,22 @@ def test_srid_to_crs():
     assert _srid_to_crs("", "") is None
 
 
+def test_srid_to_crs_esri_code_labels_esri():
+    # An ESRI-code SRID (54008 = World Sinusoidal, no EPSG code) must classify as
+    # ESRI, not be blindly prefixed "EPSG:" (the old authority-name gap that Spec R2
+    # subsumes). Routes through resolve_crs' authoritative epsg->esri classification.
+    assert _srid_to_crs("54008", "") == "ESRI:54008"
+    assert _srid_to_crs("102008", "") == "ESRI:102008"
+    # An EPSG code still classifies EPSG.
+    assert _srid_to_crs("27700", "") == "EPSG:27700"
+    # An unresolvable/garbage SRID falls back to the PROJ4 string (never raises).
+    assert _srid_to_crs("99999999", "+proj=longlat +datum=WGS84 +no_defs") == (
+        "+proj=longlat +datum=WGS84 +no_defs"
+    )
+    # Unresolvable with no PROJ4 fallback -> None (CRS-less, lenient, no raise).
+    assert _srid_to_crs("99999999", "") is None
+
+
 def test_writer_col_roles_named_geom():
     schema = StructType(
         [
@@ -830,3 +846,131 @@ def test_shapefile_no_zip_no_regression(spark, tmp_path):
     assert zip_files == [], f"Unexpected .zip in {zip_files}"
     back = spark.read.format("shapefile_gbx").load(out)
     assert back.count() == 2
+
+
+def test_non_streaming_fallback_writes_and_roundtrips(spark, tmp_path):
+    """Non-streaming drivers (FlatGeobuf, etc.) produce correct output by writing
+    fragments with bounded memory usage (generator-based, not list-based). This is
+    a regression test to ensure the fix doesn't break output correctness."""
+    register(spark)
+    out = str(tmp_path / "nonstream.fgb")
+    rows = [
+        (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
+        for i in range(6)
+    ]
+    df = spark.createDataFrame(
+        rows,
+        schema="name string, pop int, geom_0 binary, "
+        "geom_0_srid string, geom_0_srid_prop string",
+    ).repartition(
+        3, F.col("geom_0")
+    )  # 3 fragments
+
+    # Write using non-streaming driver
+    df.write.format("vector_gbx").mode("overwrite").option(
+        "driverName", "FlatGeobuf"
+    ).save(out)
+
+    # Read back and verify all rows and geometries are intact
+    back = spark.read.format("vector_gbx").load(out)
+    assert back.count() == 6
+    got_names = {r["name"] for r in back.collect()}
+    assert got_names == {str(i) for i in range(6)}
+    got_pops = {r["pop"] for r in back.collect()}
+    assert got_pops == set(range(6))
+
+
+def test_non_streaming_fallback_roundtrip_output_equivalence(spark, tmp_path):
+    """Non-streaming driver write (with lazy fragment reading) must round-trip
+    all rows and geometries without loss."""
+    register(spark)
+    out = str(tmp_path / "nonstream_roundtrip.fgb")
+    rows = [
+        (str(i), i, bytearray(to_wkb(Point(float(i) / 10.0, 40.0))), "4326", "")
+        for i in range(20)
+    ]
+    df = spark.createDataFrame(
+        rows,
+        schema="name string, pop int, geom_0 binary, "
+        "geom_0_srid string, geom_0_srid_prop string",
+    ).repartition(
+        4, F.col("geom_0")
+    )  # 4 partitions
+
+    df.write.format("vector_gbx").mode("overwrite").option(
+        "driverName", "FlatGeobuf"
+    ).save(out)
+
+    # Read back and verify all rows and geometries are intact.
+    back = spark.read.format("vector_gbx").load(out)
+    assert back.count() == 20
+    got_names = {r["name"] for r in back.collect()}
+    assert got_names == {str(i) for i in range(20)}
+    got_pops = {r["pop"] for r in back.collect()}
+    assert got_pops == set(range(20))
+    gcol = [f.name for f in back.schema.fields if f.name.endswith("_srid")][0][:-5]
+    geom_types = {
+        _from_wkb(bytes(r[gcol])).geom_type for r in back.select(gcol).collect()
+    }
+    assert geom_types == {"Point"}
+
+
+def test_write_local_streams_generator_without_materializing(tmp_path, monkeypatch):
+    # The whole-RAM finding: the non-streaming fallback (_write_local, reached via
+    # commit()'s else branch) must consume its tables iterable LAZILY -- pulling and
+    # writing one fragment at a time -- never draining the whole generator before the
+    # first write. Call _write_local directly (in-process, so patching pyogrio is
+    # observable; the Spark DataSource commit() runs in a worker where it is not) with
+    # a counting generator and assert only ONE table is pulled before the first write.
+    import pyarrow as pa
+    import pyogrio
+
+    from databricks.labs.gbx.ds.vector import VectorGbxWriter
+
+    w = object.__new__(VectorGbxWriter)
+    w.driver = "GeoJSON"  # Arrow-write supported -> exercises the streaming Arrow path
+    w.geom_col, w.srid_col, w.proj_col = "geom_0", "geom_0_srid", "geom_0_srid_proj"
+    w.layer_name = ""
+    w.path = str(tmp_path / "streamed.geojson")
+
+    schema = pa.schema(
+        [
+            ("geom_0", pa.binary()),
+            ("geom_0_srid", pa.string()),
+            ("geom_0_srid_proj", pa.string()),
+        ]
+    )
+
+    def _tbl(i):
+        return pa.table(
+            {
+                "geom_0": [to_wkb(Point(float(i), float(i)))],
+                "geom_0_srid": ["4326"],
+                "geom_0_srid_proj": [""],
+            },
+            schema=schema,
+        )
+
+    pulled = {"n": 0}
+    pulled_at_first_write = {"v": None}
+
+    def _gen():
+        for i in range(5):
+            pulled["n"] += 1
+            yield _tbl(i)
+
+    real_write = pyogrio.write_arrow
+
+    def spy_write(*a, **k):
+        if pulled_at_first_write["v"] is None:
+            pulled_at_first_write["v"] = pulled["n"]
+        return real_write(*a, **k)
+
+    monkeypatch.setattr(pyogrio, "write_arrow", spy_write)
+
+    w._write_local(_gen(), w.path, "Point", "EPSG:4326")
+
+    # Exactly one table pulled before the first write => lazy streaming, not
+    # whole-generator materialization; and all five were eventually written.
+    assert pulled_at_first_write["v"] == 1
+    assert pulled["n"] == 5

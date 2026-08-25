@@ -57,29 +57,6 @@ class CoreClassesTest extends PlanTest with SilentSparkSession {
         soConfigs should contain key "spark.sharedobjects.lib2"
     }
 
-    test("ExpressionConfig should provide raster checkpoint directory") {
-        val configs = Map("spark.databricks.labs.gbx.raster.checkpoint.dir" -> "/custom/checkpoint")
-        val config = ExpressionConfig(configs, null)
-        
-        config.getRasterCheckpointDir shouldBe "/custom/checkpoint"
-    }
-
-    test("ExpressionConfig should use default checkpoint directory if not configured") {
-        val config = ExpressionConfig(Map.empty, null)
-        config.getRasterCheckpointDir shouldBe "/tmp/raster-checkpoint"
-    }
-
-    test("ExpressionConfig should parse useCheckpoint flag") {
-        val configTrue = ExpressionConfig(Map("spark.databricks.labs.gbx.raster.use.checkpoint" -> "true"), null)
-        configTrue.useCheckpoint shouldBe true
-        
-        val configFalse = ExpressionConfig(Map("spark.databricks.labs.gbx.raster.use.checkpoint" -> "false"), null)
-        configFalse.useCheckpoint shouldBe false
-        
-        val configDefault = ExpressionConfig(Map.empty, null)
-        configDefault.useCheckpoint shouldBe false
-    }
-
     test("ExpressionConfig should parse crashExpressions flag") {
         val configTrue = ExpressionConfig(Map("spark.databricks.labs.gbx.expressions.crash.on.error" -> "true"), null)
         configTrue.crashExpressions shouldBe true

@@ -6,6 +6,9 @@ import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
+// Neutral-package alias for dual-path assertions (Task 2)
+import com.databricks.labs.gbx.{operations => gbxops}
+
 /** Tests for SpatialRefOps (OSR SpatialReference helpers). Requires GDAL native libs (e.g. run in Docker). */
 class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -50,5 +53,304 @@ class SpatialRefOpsTest extends AnyFunSuite with BeforeAndAfterAll {
         val sr = new SpatialReference()
         // No ImportFromEPSG or other authority set -> GetAuthorityName(null) typically null
         SpatialRefOps.getEPSGCode(sr) shouldBe 0
+    }
+
+    // --- resolveCrs int-string path: the SRID resolution rule (epsg -> esri) ---
+    // ImportFromEPSG auto-recovers an ESRI code, so an int-castable SRID string is
+    // classified as EPSG or ESRI (mirrors the light tier's resolve_crs), and a code in
+    // neither authority raises. This is the int path RST_SetSrid stamps through.
+
+    test("resolveCrs: int-string ESRI-only code (54008) -> ESRI, not mislabeled EPSG") {
+        val sr = SpatialRefOps.resolveCrs("54008")
+        sr should not be null
+        SpatialRefOps.crsToCanonical(sr) shouldBe "ESRI:54008"
+        sr.delete()
+    }
+
+    test("resolveCrs: int-string EPSG code (4326) -> EPSG") {
+        val sr = SpatialRefOps.resolveCrs("4326")
+        sr should not be null
+        SpatialRefOps.crsToCanonical(sr) shouldBe "EPSG:4326"
+        sr.delete()
+    }
+
+    test("resolveCrs: int-string code in neither authority (99999999) throws") {
+        an[IllegalArgumentException] should be thrownBy SpatialRefOps.resolveCrs("99999999")
+    }
+
+    // --- Task 2 (CRS-100 foundation): getTransformer cache + resolveSourceSR ---
+
+    test("getTransformer reuses the same CoordinateTransformation for equivalent CRS keys") {
+        val t1 = SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val t2 = SpatialRefOps.getTransformer("4326", "32633") // equivalent spellings
+        assert(t1 eq t2) // same cached instance (same thread)
+    }
+
+    test("getTransformer stays bounded (LRU-evicts) beyond the cache cap") {
+        // 120 valid UTM zones x 2 targets = 240 distinct pairs > cap; no error, bounded.
+        val zones = (32601 to 32660) ++ (32701 to 32760)
+        zones.foreach { z =>
+            SpatialRefOps.getTransformer(z.toString, "4326")
+            SpatialRefOps.getTransformer(z.toString, "3857")
+        }
+        // a freshly requested pair still works after eviction churn
+        SpatialRefOps.getTransformer("4326", "3857") should not be null
+    }
+
+    test("resolveSourceSR: embedded wins; single param; both -> error; neither -> None") {
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(4326, None, None).get) shouldBe "EPSG:4326"
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(54008, None, None).get) shouldBe "ESRI:54008"
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(0, Some(32633), None).get) shouldBe "EPSG:32633"
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(0, None, Some("ESRI:54008")).get) shouldBe "ESRI:54008"
+        SpatialRefOps.resolveSourceSR(0, None, None) shouldBe None
+        an[IllegalArgumentException] should be thrownBy
+            SpatialRefOps.resolveSourceSR(0, Some(4326), Some("EPSG:3857"))
+        // embedded present + param -> param ignored, no error (mixed-column safe)
+        SpatialRefOps.crsToCanonical(
+          SpatialRefOps.resolveSourceSR(4326, Some(32633), None).get) shouldBe "EPSG:4326"
+    }
+
+    // --- Task 2: dual-path assertions ---
+    // The neutral com.databricks.labs.gbx.operations.SpatialRefOps must resolve correctly,
+    // AND the rasterx.operations.SpatialRefOps forwarder must return identical results.
+    // This is the regression gate for the ~12 unchanged rasterx importers.
+
+    test("Task2: neutral SpatialRefOps.resolveCrs(54008) canonicalizes to ESRI:54008") {
+        val sr = gbxops.SpatialRefOps.resolveCrs("54008")
+        sr should not be null
+        gbxops.SpatialRefOps.crsToCanonical(sr) shouldBe "ESRI:54008"
+        sr.delete()
+    }
+
+    test("Task2: rasterx forwarder resolveCrs(54008) matches neutral path") {
+        val srNeutral = gbxops.SpatialRefOps.resolveCrs("54008")
+        val srForwarder = SpatialRefOps.resolveCrs("54008")
+        gbxops.SpatialRefOps.crsToCanonical(srNeutral) shouldBe
+            SpatialRefOps.crsToCanonical(srForwarder)
+        srNeutral.delete()
+        srForwarder.delete()
+    }
+
+    test("Task2: neutral SpatialRefOps.resolveCrs(4326) canonicalizes to EPSG:4326") {
+        val sr = gbxops.SpatialRefOps.resolveCrs("4326")
+        sr should not be null
+        gbxops.SpatialRefOps.crsToCanonical(sr) shouldBe "EPSG:4326"
+        sr.delete()
+    }
+
+    test("Task2: rasterx forwarder resolveCrs(4326) matches neutral path") {
+        val srNeutral = gbxops.SpatialRefOps.resolveCrs("4326")
+        val srForwarder = SpatialRefOps.resolveCrs("4326")
+        gbxops.SpatialRefOps.crsToCanonical(srNeutral) shouldBe
+            SpatialRefOps.crsToCanonical(srForwarder)
+        srNeutral.delete()
+        srForwarder.delete()
+    }
+
+    test("Task2: neutral getEPSGCode(4326) returns 4326") {
+        val sr = gbxops.SpatialRefOps.fromEPSGCode(4326)
+        gbxops.SpatialRefOps.getEPSGCode(sr) shouldBe 4326
+    }
+
+    test("Task2: rasterx forwarder getEPSGCode matches neutral path") {
+        val sr = gbxops.SpatialRefOps.fromEPSGCode(4326)
+        SpatialRefOps.getEPSGCode(sr) shouldBe gbxops.SpatialRefOps.getEPSGCode(sr)
+    }
+
+    test("Task2: neutral fromEPSGCode(27700) returns BNG SR") {
+        val sr = gbxops.SpatialRefOps.fromEPSGCode(27700)
+        sr should not be null
+        gbxops.SpatialRefOps.getEPSGCode(sr) shouldBe 27700
+    }
+
+    test("Task2: rasterx forwarder fromEPSGCode(27700) matches neutral path") {
+        val srNeutral = gbxops.SpatialRefOps.fromEPSGCode(27700)
+        val srForwarder = SpatialRefOps.fromEPSGCode(27700)
+        SpatialRefOps.getEPSGCode(srForwarder) shouldBe gbxops.SpatialRefOps.getEPSGCode(srNeutral)
+    }
+
+    test("Task2: neutral resolveSourceSR embedded SRID=4326 wins") {
+        val sr = gbxops.SpatialRefOps.resolveSourceSR(4326, None, None).get
+        gbxops.SpatialRefOps.crsToCanonical(sr) shouldBe "EPSG:4326"
+    }
+
+    test("Task2: rasterx forwarder resolveSourceSR matches neutral path") {
+        val canonical = gbxops.SpatialRefOps.crsToCanonical(
+            gbxops.SpatialRefOps.resolveSourceSR(4326, None, None).get)
+        val canonicalFwd = SpatialRefOps.crsToCanonical(
+            SpatialRefOps.resolveSourceSR(4326, None, None).get)
+        canonicalFwd shouldBe canonical
+    }
+
+    // --- getTransformer: axis correctness and leak-free resource handling ---
+
+    test("getTransformer: returns non-null CoordinateTransformation") {
+        val ct = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        ct should not be null
+    }
+
+    test("getTransformer: cache hit returns same instance") {
+        val ct1 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        assert(ct1 eq ct2)
+    }
+
+    test("getTransformer: different key pair creates new CT (cache miss)") {
+        val ct1 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32634")
+        assert(!(ct1 eq ct2))
+    }
+
+    test("getTransformer: produces non-axis-flipped coordinates for EPSG:4326 -> EPSG:32633") {
+        // POINT (11, 42) in 4326 (lon=11, lat=42) should project to UTM zone 33N
+        // Expected: x ≈ 168701 m, y ≈ 4657521 m (NOT axis-flipped ~3.5M, 168701).
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val ct = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ogrGeom = OGRGeometry.CreateFromWkt("POINT (11 42)")
+        ogrGeom.Transform(ct)
+        val wkb = JTS.fromWKB(ogrGeom.ExportToWkb())
+        ogrGeom.delete()
+        wkb.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        wkb.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+    }
+
+    // --- getTransformerByCanonical (Round 3 perf overload) ---
+
+    test("getTransformerByCanonical: returns non-null CoordinateTransformation") {
+        val ct = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        ct should not be null
+    }
+
+    test("getTransformerByCanonical: cache hit returns same instance") {
+        val ct1 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        assert(ct1 eq ct2)
+    }
+
+    test("getTransformerByCanonical: different key pair creates new CT (cache miss)") {
+        val ct1 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        val ct2 = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32634")
+        assert(!(ct1 eq ct2))
+    }
+
+    test("getTransformerByCanonical: produces non-axis-flipped coordinates for EPSG:4326 -> EPSG:32633") {
+        // Verify the canonical-overload CT gives the same result as getTransformer.
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val ct = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        val ogrGeom = OGRGeometry.CreateFromWkt("POINT (11 42)")
+        ogrGeom.Transform(ct)
+        val wkb = JTS.fromWKB(ogrGeom.ExportToWkb())
+        ogrGeom.delete()
+        wkb.getCoordinate.getX shouldBe (168701.0 +- 168701.0 * 1e-4)
+        wkb.getCoordinate.getY shouldBe (4657521.0 +- 4657521.0 * 1e-4)
+    }
+
+    test("getTransformerByCanonical: result equivalent to getTransformer for same CRS pair") {
+        // Both should transform POINT (11, 42) to the same coordinates.
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val ctOld = gbxops.SpatialRefOps.getTransformer("EPSG:4326", "EPSG:32633")
+        val ctNew = gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32633")
+        // They should be the same instance (same thread, same canonical key, same LRU cache)
+        assert(ctOld eq ctNew)
+    }
+
+    // --- crsInfo (handle-free cached CRS descriptor; removes per-row resolveCrs) ---
+
+    test("crsInfo: EPSG int spelling -> canonical EPSG:4326 with authority SRID 4326") {
+        val info = gbxops.SpatialRefOps.crsInfo("4326")
+        info.canonical shouldBe "EPSG:4326"
+        info.authoritySrid shouldBe Some(4326)
+    }
+
+    test("crsInfo: ESRI code -> canonical ESRI:54008 with authority SRID 54008") {
+        val info = gbxops.SpatialRefOps.crsInfo("54008")
+        info.canonical shouldBe "ESRI:54008"
+        info.authoritySrid shouldBe Some(54008)
+    }
+
+    test("crsInfo: equivalent spellings agree and hit the same cache entry") {
+        val a = gbxops.SpatialRefOps.crsInfo("EPSG:32633")
+        val b = gbxops.SpatialRefOps.crsInfo(" EPSG:32633 ") // trimmed to the same key
+        assert(a eq b)
+        a.canonical shouldBe "EPSG:32633"
+    }
+
+    test("crsInfo: cache hit returns the identical immutable record") {
+        val a = gbxops.SpatialRefOps.crsInfo("EPSG:3857")
+        val b = gbxops.SpatialRefOps.crsInfo("EPSG:3857")
+        assert(a eq b)
+    }
+
+    test("crsInfo: authority-less PROJ4 -> WKT canonical, no authority SRID") {
+        val info = gbxops.SpatialRefOps.crsInfo("+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs")
+        info.authoritySrid shouldBe None
+        info.canonical should startWith("PROJCS")
+    }
+
+    test("crsInfo: non-numeric authority code (OGC:CRS84) -> no authority SRID") {
+        val info = gbxops.SpatialRefOps.crsInfo("OGC:CRS84")
+        info.authoritySrid shouldBe None
+    }
+
+    test("crsInfo: unresolvable CRS throws and caches nothing (degrade stays repeatable)") {
+        // The never-error invariant in ST_TransformCrs relies on a MISS throwing every time
+        // rather than a poisoned cache entry silently succeeding later.
+        an[IllegalArgumentException] should be thrownBy gbxops.SpatialRefOps.crsInfo("999999")
+        an[IllegalArgumentException] should be thrownBy gbxops.SpatialRefOps.crsInfo("999999")
+        an[IllegalArgumentException] should be thrownBy
+            gbxops.SpatialRefOps.crsInfo("BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
+    }
+
+    // --- transformPlan (cached identity flag + cache-owned CT) ---
+
+    test("transformPlan: distinct CRS pair -> non-identity plan with a non-null CT") {
+        val plan = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32633")
+        plan.identity shouldBe false
+        plan.transformation should not be null
+    }
+
+    test("transformPlan: same CRS both ends -> identity plan, null CT") {
+        val plan = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:4326")
+        plan.identity shouldBe true
+        plan.transformation shouldBe null
+    }
+
+    test("transformPlan: identity is decided by OSR IsSame, not canonical string equality") {
+        // EPSG:4326 and the equivalent OGC:CRS84 have different canonical strings but IsSame=1.
+        val plan = gbxops.SpatialRefOps.transformPlan(
+          "EPSG:4326", gbxops.SpatialRefOps.crsInfo("OGC:CRS84").canonical)
+        plan.identity shouldBe true
+    }
+
+    test("transformPlan: cache hit returns the identical plan and reuses the cached CT") {
+        val p1 = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32634")
+        val p2 = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32634")
+        assert(p1 eq p2)
+        assert(p1.transformation eq
+            gbxops.SpatialRefOps.getTransformerByCanonical("EPSG:4326", "EPSG:32634"))
+    }
+
+    test("transformPlan: CT is axis-correct (POINT(11 42) 4326 -> 32633)") {
+        import org.gdal.ogr.{Geometry => OGRGeometry}
+        import com.databricks.labs.gbx.vectorx.jts.JTS
+        val plan = gbxops.SpatialRefOps.transformPlan("EPSG:4326", "EPSG:32633")
+        val ogrGeom = OGRGeometry.CreateFromWkt("POINT (11 42)")
+        ogrGeom.Transform(plan.transformation)
+        val g = JTS.fromWKB(ogrGeom.ExportToWkb())
+        ogrGeom.delete()
+        g.getCoordinate.getX shouldBe (168701.01508871152 +- 1e-6)
+        g.getCoordinate.getY shouldBe (4657521.062149809 +- 1e-6)
+    }
+
+    test("transformPlan: unresolvable canonical raises (no silent identity)") {
+        an[IllegalArgumentException] should be thrownBy
+            gbxops.SpatialRefOps.transformPlan("EPSG:4326", "BOGUS_CRS_THAT_DOESNT_EXIST_XYZ")
     }
 }

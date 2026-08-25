@@ -83,3 +83,69 @@
   border-left-color: #6b8cff;
   background: rgba(107, 140, 255, 0.08);
 }
+
+/* --------------------------------------------------------------------------
+ * Per-example language tabs (groupId="gbx-example-lang"): SQL(1) and
+ * Python-light(2) keep the default green accent. Python-heavy(3) and
+ * Scala-heavy(4) get the blue heavyweight tint — same tokens as
+ * .gbx-tier-tabs above. Scoped to .gbx-example-lang-tabs.
+ * ------------------------------------------------------------------------ */
+
+/* Heavy tabs = 3rd + 4th .tabs__item; recolor active underline + label. */
+.gbx-example-lang-tabs.tabs .tabs__item:nth-child(3).tabs__item--active,
+.gbx-example-lang-tabs.tabs .tabs__item:nth-child(4).tabs__item--active {
+  --ifm-tabs-color-active: #2545b3;
+  --ifm-tabs-color-active-border: #2545b3;
+}
+
+/* Tint the visible heavy content panel while it is selected. */
+.tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(3).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]),
+.tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(4).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]) {
+  border-left: 3px solid #2545b3;
+  background: #f5f8ff;
+  padding: 0.75rem 1rem;
+  border-radius: 0 4px 4px 0;
+}
+
+[data-theme='dark']
+  .tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(3).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]),
+[data-theme='dark']
+  .tabs-container:has(
+    > .gbx-example-lang-tabs .tabs__item:nth-child(4).tabs__item--active
+  )
+  div[role='tabpanel']:not([hidden]) {
+  border-left-color: #6b8cff;
+  background: rgba(107, 140, 255, 0.08);
+}
+
+/* --------------------------------------------------------------------------
+ * Benchmarking result tabs (groupId="bench-results", className gbx-bench-tabs).
+ * These tabs group result CATEGORIES, not tiers, so they use the light/GREEN
+ * accent (NOT the heavyweight blue #2545b3, which is reserved for the heavy
+ * tier). The tint is ALWAYS ON — regardless of which category tab is active —
+ * purely to bound the tabbed region so the reader can see where the tabbed
+ * content stops and the common page content resumes. Green tokens match the
+ * .light tier badge (#1e7e34). Scoped to .gbx-bench-tabs.
+ * ------------------------------------------------------------------------ */
+.tabs-container:has(> .gbx-bench-tabs) div[role='tabpanel']:not([hidden]) {
+  border-left: 3px solid #1e7e34;
+  background: #f2f9f4;
+  padding: 0.75rem 1rem;
+  border-radius: 0 4px 4px 0;
+}
+
+[data-theme='dark']
+  .tabs-container:has(> .gbx-bench-tabs)
+  div[role='tabpanel']:not([hidden]) {
+  border-left-color: #5cc07a;
+  background: rgba(46, 125, 50, 0.08);
+}

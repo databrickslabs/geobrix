@@ -60,7 +60,7 @@ bash scripts/commands/gbx-test-python-docs.sh --suite integration --skip-build
 pytest docs/tests/python/ -v -m integration
 ```
 
-Integration tests live in **`docs/tests/python/integration/`** (physical split). See `prompts/testing/2026-01-26-skipped-tests-inventory.md` for which tests are integration and why.
+Integration tests live in **`docs/tests/python/integration/`** (physical split). See `.superpowers/prompts/testing/2026-01-26-skipped-tests-inventory.md` for which tests are integration and why.
 
 ## Running Tests
 

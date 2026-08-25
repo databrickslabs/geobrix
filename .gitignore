@@ -53,3 +53,17 @@ test-logs/bench/
 # Lakeflow DAB local override files (real per-workspace values; template committed as *.override.yml.example)
 *.override.yml
 .databricks/
+
+# Agent/session scratch + local tooling (never committed). All internal planning
+# (specs, plans, prompts, input, SDD ledgers) is consolidated under /.superpowers/;
+# the public representation of decisions lives in docs/docs/. The legacy root
+# locations (/prompts/, /input/, /docs/superpowers/) stay ignored as guards.
+/.superpowers/
+/docs/superpowers/
+/.isaac/
+/.tmp
+/scratchpad/
+# pytest cache (appears in repo root and under docs/, python/, notebooks/, etc.)
+.pytest_cache/
+# Locally-built docs bundle (only the LFS platform tarball in resources/static/ is committed)
+/resources/static/geobrix-docs-*.zip

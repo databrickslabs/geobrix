@@ -14,18 +14,16 @@ import scala.collection.mutable.ArrayBuffer
 
 /** Returns the population variance of the raster values within the grid cell. */
 case class RST_H3_RasterToGridVariance(
-    tileExpr: Expression,
+    tile: Expression,
     resolution: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, resolution, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, resolution, ExpressionConfigExpr())
     override def dataType: DataType =
         ArrayType(ArrayType(StructType(Seq(StructField("cellID", LongType), StructField("measure", DoubleType)))))
     override def nullable: Boolean = true
     override def prettyName: String = RST_H3_RasterToGridVariance.name
-    override def replacement: Expression = rstInvoke(RST_H3_RasterToGridVariance, rasterType)
+    override def replacement: Expression = invoke(RST_H3_RasterToGridVariance)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -33,8 +31,7 @@ case class RST_H3_RasterToGridVariance(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_H3_RasterToGridVariance extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = eval(row, resolution, conf, StringType)
-    def evalBinary(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = eval(row, resolution, conf, BinaryType)
+    def eval(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = eval(row, resolution, conf, BinaryType)
 
     def eval(row: InternalRow, resolution: Int, conf: UTF8String, rdt: DataType): ArrayData =
         Option(RST_ErrorHandler.safeEval(() => RST_H3_RasterToGrid.eval[Double](row, resolution, conf, rdt, this.execute), row, rdt, conf))

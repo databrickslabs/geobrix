@@ -15,8 +15,8 @@ The notebook works through the San Francisco Bay Area: it reads a 1°×1° SRTM 
 **[notebooks/examples/h3-rasterize](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/h3-rasterize)** — download `h3_rasterize_isobands.ipynb` and import it into your Databricks workspace to run.
 :::
 
-:::info Runs on the lightweight tier (`geobrix[light,vizx]`)
-The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light,vizx]` wheel — so it runs on **Serverless** with no JAR or GDAL init script. The per-band rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
+:::info Runs on the lightweight tier (`geobrix[light_env6,vizx]`)
+The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env6,vizx]` wheel — so it runs on **Serverless** with no JAR or GDAL init script. The per-band rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
 :::
 
 ---
@@ -33,15 +33,15 @@ The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`da
 ## Prerequisites
 
 - **Databricks Runtime 17.3 LTS / 18.1+ or Serverless** (Spark 4 / Python 3.12). Lightweight default runs on Serverless. Session temp tables (Step 4) require Serverless or DBR 18.1+; they are not available on dedicated / single-user clusters.
-- **GeoBrix** (version 0.4.0). The `%pip install` cell installs the `geobrix[light,vizx]` wheel, which pulls in `rasterio` (used for the driver-side DEM read and isoband extraction), `h3` (polyfill), `matplotlib`, `geopandas`, and `mapclassify` (visualization). No JAR or GDAL init script is required.
+- **GeoBrix** (version 0.4.0). The `%pip install` cell installs the `geobrix[light_env6,vizx]` wheel, which pulls in `rasterio` (used for the driver-side DEM read and isoband extraction), `h3` (polyfill), `matplotlib`, `geopandas`, and `mapclassify` (visualization). No JAR or GDAL init script is required.
 - **Unity Catalog Volume**: the DEM is staged to `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation/srtm_n37w123.tif`. Update `DEM_PATH` if your Volume layout differs. The Volume root must already exist; the staging cell creates sub-directories but not the root.
-- **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.4.3-py3-none-any.whl` if its Volume path differs from the default.
+- **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.5.0-py3-none-any.whl` if its Volume path differs from the default.
 
 ---
 
 ## Run order
 
-1. **Install and restart** — the `%pip install` cell installs `geobrix[light,vizx]` and is followed immediately by `%restart_python`; run cells in order without skipping the restart.
+1. **Install and restart** — the `%pip install` cell installs `geobrix[light_env6,vizx]` and is followed immediately by `%restart_python`; run cells in order without skipping the restart.
 2. **Imports and registration** — imports `pyrx`, `gbx.vizx` helpers, and calls `rx.register(spark)` + `register(spark)` to install SQL UDFs.
 3. **Stage the DEM** — the staging cell downloads `srtm_n37w123.tif` from public AWS Terrain Tiles to the Volume (idempotent; skipped if the file already exists).
 4. **Steps 1–2 (driver)** — DEM read, isoband extraction, and H3 polyfill all run on the driver via `rasterio` and `h3`. A Spark DataFrame is created from the resulting `(band_level, cellid)` rows.

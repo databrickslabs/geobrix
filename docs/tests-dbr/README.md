@@ -177,7 +177,7 @@ Only modules that are imported and displayed in documentation (via `CodeFromTest
 
 - **Main Documentation Tests**: `docs/tests/` - Tests that work in open-source Spark
 - **Sample Data Guide**: `docs/docs/sample-data.md` - Sample data catalog
-- **Databricks Integration**: See `prompts/testing/2026-01-26-databricks-integration-testing.md`
+- **Databricks Integration**: See `.superpowers/prompts/testing/2026-01-26-databricks-integration-testing.md`
 
 ## Notes
 

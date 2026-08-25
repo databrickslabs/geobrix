@@ -17,6 +17,13 @@ def test_new_public_symbols_exported():
         assert name in vizx.__all__, f"not in __all__: {name}"
 
 
+def test_plot_tiles_exported():
+    """plot_tiles is importable from databricks.labs.gbx.vizx and in __all__."""
+    assert hasattr(vizx, "plot_tiles"), "plot_tiles missing from vizx"
+    assert "plot_tiles" in vizx.__all__, "plot_tiles not in __all__"
+    assert callable(vizx.plot_tiles), "plot_tiles is not callable"
+
+
 def test_sri_hashes_are_real():
     """SRI hash constants are real sha384 values — no placeholder remains."""
     from databricks.labs.gbx.vizx import _maplibre as m

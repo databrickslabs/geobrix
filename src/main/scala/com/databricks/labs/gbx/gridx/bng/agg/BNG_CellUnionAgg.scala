@@ -51,10 +51,12 @@ final case class BNG_CellUnionAgg(
 
     override def update(b: UnionAcc, in: InternalRow): UnionAcc = {
         val r = child.eval(in).asInstanceOf[InternalRow]
-        val cellId = idType match {
-            case StringType => BNG.parse(r.getString(idFieldIndex))
+        if (r == null) return b
+        val cellId: java.lang.Long = idType match {
+            case StringType => BNG.parseOrNull(r.getString(idFieldIndex))
             case LongType   => r.getLong(idFieldIndex)
         }
+        if (cellId == null) return b  // skip a member with a malformed cell id
         b.update(cellId, r.getBoolean(coreFieldIndex), r.getBinary(wkbFieldIndex))
     }
 

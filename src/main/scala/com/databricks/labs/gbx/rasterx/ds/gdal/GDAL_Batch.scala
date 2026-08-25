@@ -20,13 +20,22 @@ class GDAL_Batch(schema: StructType, options: Map[String, String]) extends Scan 
         val inPath = options("path")
         val sizeInMB = options.getOrElse("sizeInMB", "-1").toInt
         val filterRegex = options.getOrElse("filterRegex", ".*")
+        // clipCrs option (parity with the light reader): resolve to a canonical CRS
+        // string once, stamped into each tile's v2 clip_crs field. Absent -> None
+        // (never errors); an explicitly-unresolvable value raises (apply-time).
+        val clipCrs = options.get("clipCrs").filter(_.nonEmpty).map { c =>
+            com.databricks.labs.gbx.rasterx.operations.SpatialRefOps.crsToCanonical(
+              com.databricks.labs.gbx.rasterx.operations.SpatialRefOps.resolveCrs(c))
+        }
 
         val sparkSession = SparkSession.builder.getOrCreate
         val exprConfig = ExpressionConfig(sparkSession)
         NodeFileManager.init(exprConfig.hConf)
 
         val files = HadoopUtils.listAllHadoopFiles(inPath, exprConfig.hConf, filterRegex)
-        val partitions = files.map { file => GDAL_Partition(file, sizeInMB, exprConfig) }
+        val partitions = files.map { file =>
+            GDAL_Partition(file, sizeInMB, exprConfig, clipCrs)
+        }
         partitions.toArray
     }
 

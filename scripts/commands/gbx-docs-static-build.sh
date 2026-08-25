@@ -82,6 +82,10 @@ fi
 
 print_banner "📚 GeoBrix: Docs Static Build (Offline Zip)"
 
+# A host build rewrites the shared .docusaurus/ cache; warn if a docs server is
+# live and would be corrupted by it (stop it first, or use gbx:docs:build).
+warn_if_docs_server_running
+
 cd "$PROJECT_ROOT/docs" || exit 1
 
 print_separator

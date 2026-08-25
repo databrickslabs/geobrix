@@ -26,6 +26,11 @@ try:
 except ImportError:
     rx = None
 
+try:
+    from databricks.labs.gbx.pyrx import functions as pyrx
+except ImportError:
+    pyrx = None
+
 
 # SQL constant for cellid example (use your sample raster path)
 SQL_CELLID_NON_TESSELLATED = f"""-- Non-tessellated: cellid is null
@@ -43,22 +48,87 @@ FROM (
 
 
 def access_path_and_binary(spark):
-    """Access binary raster bytes from rst_fromfile and from the GDAL reader."""
-    from databricks.labs.gbx.rasterx import functions as rx
+    """Distinguish virtual from materialized tiles by inspecting path and raster.
 
-    # rst_fromfile loads the file into the tile as binary content
-    df = spark.range(1).select(
-        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
+    A **virtual** tile (default for the light tier) has ``tile.raster = null``
+    and ``tile.path`` set to the source file path — it carries no bytes, only
+    a reference. A **materialized** tile is the opposite: ``tile.raster``
+    holds the encoded bytes and ``tile.path`` is null. Checking both fields
+    is the correct way to classify a tile at runtime.
+    """
+    from databricks.labs.gbx.pyrx import functions as pyrx
+
+    # Light-tier rst_fromfile returns a VIRTUAL tile by default:
+    # raster=null, path set to the source path.
+    virtual_df = spark.range(1).select(
+        pyrx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
+    ).select(
+        f.col("tile.path").alias("path"),          # non-null: source file path
+        f.col("tile.raster").isNull().alias("is_virtual"),  # True: bytes-free
     )
-    from_file_df = df.select(f.col("tile.raster").alias("raster_binary"))
-    # Returns: b'\x4d\x4d\x00\x2a...' (binary GeoTIFF data)
+    # Returns: path=/Volumes/.../nyc_sentinel2_red.tif, is_virtual=true
 
-    # The GDAL reader also produces binary tiles
-    df = spark.read.format("gdal").load(SAMPLE_NYC_RASTER)
-    from_reader_df = df.select(f.col("tile.raster").alias("raster_binary"))
-    # Returns: b'\x4d\x4d\x00\x2a...' (binary GeoTIFF data)
+    # Materialized tile: binaryFile reader + rst_fromcontent embeds bytes.
+    # tile.raster holds the encoded GeoTIFF; tile.path is null.
+    materialized_df = (
+        spark.read.format("binaryFile").load(SAMPLE_NYC_RASTER)
+        .select(
+            rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        )
+        .select(
+            f.col("tile.path").isNull().alias("path_null"),    # True: no source path
+            f.col("tile.raster").isNull().alias("is_virtual"), # False: bytes present
+        )
+    )
+    # Returns: path_null=true, is_virtual=false
 
-    return from_file_df, from_reader_df
+    return virtual_df, materialized_df
+
+
+def tile_path_mode_storage(spark):
+    """Inspect tile.path_mode to determine how a tile's pixels are stored.
+
+    ``tile.path_mode`` records the storage model for a virtual tile's backing
+    data:
+
+    - ``null`` — either a materialized tile (``raster`` bytes present) or a
+      plain FUSE-path virtual tile (path points to a Volume or local path).
+    - ``"external"`` — FILE EXTERNAL: the tile is backed by a governed
+      Databricks FILE column (externally managed lifecycle).
+    - ``"managed"``  — FILE MANAGED: like external, but lifecycle is
+      managed by Delta.
+
+    Because both materialized tiles and plain virtual tiles have
+    ``path_mode = null``, use ``tile.raster is null`` (or ``tile.path``) to
+    tell them apart.
+    """
+    from databricks.labs.gbx.pyrx import functions as pyrx
+
+    # Virtual tile (plain FUSE path) — raster null, path set, path_mode null
+    virtual_df = spark.range(1).select(
+        pyrx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
+    ).select(
+        f.col("tile.path_mode").alias("path_mode"),          # null (plain FUSE virtual)
+        f.col("tile.raster").isNull().alias("is_virtual"),   # True
+        f.col("tile.path").isNull().alias("path_null"),      # False
+    )
+    # Returns: path_mode=null, is_virtual=true, path_null=false
+
+    # Materialized tile — raster bytes present, path null, path_mode null
+    materialized_df = (
+        spark.read.format("binaryFile").load(SAMPLE_NYC_RASTER)
+        .select(
+            rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        )
+        .select(
+            f.col("tile.path_mode").alias("path_mode"),          # null (materialized)
+            f.col("tile.raster").isNull().alias("is_virtual"),   # False
+            f.col("tile.path").isNull().alias("path_null"),      # True
+        )
+    )
+    # Returns: path_mode=null, is_virtual=false, path_null=true
+
+    return virtual_df, materialized_df
 
 
 def access_metadata_fields(spark):
@@ -172,32 +242,43 @@ def processing_binary_raster_data(spark):
 
 
 def comparing_fromfile_vs_fromcontent_tiles(spark):
-    """Compare rst_fromfile and rst_fromcontent — both produce binary tiles."""
-    from databricks.labs.gbx.rasterx import functions as rx
+    """Compare rst_fromfile (virtual by default) and rst_fromcontent (always materialized).
 
-    # rst_fromfile reads the file off a path and embeds its bytes in the tile
+    In the light tier, ``rst_fromfile`` returns a **virtual** tile — bytes-free,
+    path+window set. Pass ``materialize=True`` to force bytes. ``rst_fromcontent``
+    always embeds the bytes you supply, returning a materialized tile in both tiers.
+    """
+    from databricks.labs.gbx.pyrx import functions as pyrx
+
+    # Light-tier rst_fromfile: VIRTUAL tile (raster=null, path set)
     fromfile_tile = spark.range(1).select(
-        rx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
+        pyrx.rst_fromfile(f.lit(SAMPLE_NYC_RASTER), f.lit("GTiff")).alias("tile")
     )
 
-    fromfile_tile.select(f.length(f.col("tile.raster")).alias("size_bytes")).show()
-    # +-----------+
-    # |size_bytes |
-    # +-----------+
-    # |2345678    |
-    # +-----------+
+    fromfile_tile.select(
+        f.col("tile.raster").isNull().alias("raster_null"),  # True: virtual tile
+        f.col("tile.path").isNull().alias("path_null"),      # False: path set
+    ).show()
+    # +-----------+---------+
+    # |raster_null|path_null|
+    # +-----------+---------+
+    # |true       |false    |
+    # +-----------+---------+
 
     # rst_fromcontent takes bytes you already have in a column (e.g. from binaryFile)
     fromcontent_tile = spark.read.format("binaryFile").load(SAMPLE_NYC_RASTER).select(
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
+        pyrx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
     )
 
-    fromcontent_tile.select(f.length(f.col("tile.raster")).alias("size_bytes")).show()
-    # +-----------+
-    # |size_bytes |
-    # +-----------+
-    # |2345678    |
-    # +-----------+
+    fromcontent_tile.select(
+        f.col("tile.raster").isNull().alias("raster_null"),  # False: bytes present
+        f.col("tile.path").isNull().alias("path_null"),      # True: no source path
+    ).show()
+    # +-----------+---------+
+    # |raster_null|path_null|
+    # +-----------+---------+
+    # |false      |true     |
+    # +-----------+---------+
     return fromfile_tile, fromcontent_tile
 
 
@@ -224,7 +305,7 @@ def tessellated_tiles(spark):
     df.select(
         f.col("tile.cellid"),      # H3 cell ID (e.g., 604189641255419903)
         f.col("tile.raster"),      # binary data (clipped to cell)
-        f.col("tile.metadata")     # {driver: "GTiff", RASTERX_CELL_ID: "604...", ...}
+        f.col("tile.metadata")     # {driver: "GTiff", gridSystem: "h3", width: "...", ...}
     ).show()
     return df
 
@@ -393,11 +474,36 @@ SQL_CELLID_TESSELLATED_output = """
 """
 
 access_path_and_binary_output = """
-+--------------+
-|raster_binary |
-+--------------+
-|[BINARY]      |
-+--------------+
+Virtual tile — raster null, path set:
++-----------------------------------------------------+----------+
+|path                                                 |is_virtual|
++-----------------------------------------------------+----------+
+|/Volumes/main/.../nyc_sentinel2_red.tif              |true      |
++-----------------------------------------------------+----------+
+
+Materialized tile — raster bytes present, path null:
++---------+----------+
+|path_null|is_virtual|
++---------+----------+
+|true     |false     |
++---------+----------+
+"""
+
+tile_path_mode_storage_output = """
+Virtual tile (plain FUSE) — path_mode null, raster null:
++---------+----------+---------+
+|path_mode|is_virtual|path_null|
++---------+----------+---------+
+|null     |true      |false    |
++---------+----------+---------+
+
+Materialized tile — path_mode null, raster bytes present:
++---------+----------+---------+
+|path_mode|is_virtual|path_null|
++---------+----------+---------+
+|null     |false     |true     |
++---------+----------+---------+
+(path_mode is "external" for FILE EXTERNAL tiles, "managed" for FILE MANAGED tiles)
 """
 
 access_metadata_fields_output = """
@@ -445,11 +551,19 @@ processing_binary_raster_data_output = """
 """
 
 comparing_fromfile_vs_fromcontent_tiles_output = """
-+-----------+
-|size_bytes |
-+-----------+
-|2345678    |
-+-----------+
+rst_fromfile (light tier) — VIRTUAL tile:
++-----------+---------+
+|raster_null|path_null|
++-----------+---------+
+|true       |false    |
++-----------+---------+
+
+rst_fromcontent — MATERIALIZED tile (bytes embedded):
++-----------+---------+
+|raster_null|path_null|
++-----------+---------+
+|false      |true     |
++-----------+---------+
 """
 
 non_tessellated_tiles_output = """

@@ -1,0 +1,60 @@
+# Functions pending canonical param-name migration; shrinks to empty. See spec 2026-08-06-canonical-param-names-design.md
+#
+# Remaining 5 are the bng *explode fns — PERMANENT [B] waivers by design (see spec
+# 2026-08-07-arity-gap-wrapup). They are registered row-streaming UDTFs (one row per
+# cell, array-free); a pyspark Column form is intentionally absent because it would
+# force large-array materialization. Invoke via SQL LATERAL. NOT gaps to close.
+# (The other 2 arity gaps — rst_xyzpyramid rescale, bng_tessellate keep_core_geom —
+# were closed by the arity-gap-wrapup work; they are no longer waived.)
+#
+# Resolved by Tasks 1-4 (orphan-tail branch, beta/0.5.0):
+# R4 DONE: gbx_bng_aswkb, gbx_bng_aswkt, gbx_bng_cellarea, gbx_bng_centroid, gbx_bng_distance,
+#          gbx_bng_euclideandistance, gbx_bng_kloop, gbx_bng_kring, gbx_bng_cellintersection,
+#          gbx_bng_cellunion, gbx_bng_cellintersection_agg, gbx_bng_cellunion_agg,
+#          gbx_quadbin_distance, gbx_quadbin_cellunion_agg
+# gbx_bng_eastnorthasbng  # Task 3 DONE: east/north (heavy) and e/n (light) -> easting/northing
+# gbx_bng_pointascell  # Task 3 DONE: point (heavy) -> geom
+# gbx_custom_grid  # Task 3 DONE: light x_min.../root_x -> bound_x_min.../root_cell_size_x
+# gbx_rst_bng_rasterize_agg  # R6 DONE: out_srid renamed
+# gbx_rst_clip  # Task 4 DONE: geometry -> geom, D3 clip_crs exposed
+# gbx_rst_combineavg  # Task 4 DONE: Scala field tile -> tiles
+# gbx_rst_derivedband  # Task 4 DONE: tile_expr/pyfunc -> tile/python_func
+# gbx_rst_derivedband_agg  # Task 4 DONE: pyfunc -> python_func
+# gbx_rst_dtmfromgeoms  # N9 DONE: points/breaklines renamed to *_array
+# gbx_rst_dtmfromgeoms_agg  # R6 DONE: out_srid renamed
+# gbx_rst_getsubdataset  # Task 2 DONE: light name -> subset_name
+# gbx_rst_gridfrompoints  # N9 DONE: points/values renamed to *_array
+# gbx_rst_gridfrompoints_agg  # R6 DONE: out_srid renamed
+# gbx_rst_h3_rasterize_agg  # R6 DONE: out_srid renamed
+# gbx_rst_histogram  # Task 5 DONE: light min/max -> min_val/max_val (matches heavy)
+# gbx_rst_mapalgebra  # Task 4 DONE: Scala field tile -> tiles, expression -> json_spec
+# gbx_rst_merge  # Task 4 DONE: Scala field tile -> tiles
+# gbx_rst_ndvi  # Task 4 DONE: red_index/nir_index -> red_idx/nir_idx
+# gbx_rst_proximity  # Task 2 DONE: distunits -> dist_units
+# gbx_rst_quadbin_rasterize_agg  # R6 DONE: out_srid renamed
+# gbx_rst_rasterize  # N1 DONE: geom_wkb renamed to geom
+# gbx_rst_rasterize_agg  # N1 DONE: geom_wkb renamed to geom
+# gbx_rst_rastertoworldcoord  # Task 2 DONE: pixel_x/pixel_y -> x/y
+# gbx_rst_rastertoworldcoordx  # Task 2 DONE: pixel_x/pixel_y -> x/y
+# gbx_rst_rastertoworldcoordy  # Task 2 DONE: pixel_x/pixel_y -> x/y
+# gbx_rst_sample  # Task 4 DONE: D3 crs exposed
+# gbx_rst_transform  # Task 2 DONE: target_srid -> srid
+# gbx_rst_viewshed  # Task 4 DONE: D3 crs exposed
+# gbx_rst_worldtorastercoord  # Task 2 DONE: world_x/world_y -> x/y
+# gbx_rst_worldtorastercoordx  # Task 2 DONE: world_x/world_y -> x/y
+# gbx_rst_worldtorastercoordy  # Task 2 DONE: world_x/world_y -> x/y
+# gbx_st_asmvt  # N1 DONE: geom_wkb renamed to geom
+# gbx_st_asmvt_pyramid  # N1 DONE: geom_wkb renamed to geom
+# gbx_st_interpolateelevationbbox  # N9 DONE: points_geom/breaklines_geom renamed to *_array
+# gbx_st_interpolateelevationgeom  # N9 DONE: points_geom/breaklines_geom renamed to *_array
+# gbx_st_triangulate  # N9 DONE: points_geom/breaklines_geom renamed to *_array
+#
+# --- 5 PERMANENT [B] waivers: bng *explode streaming UDTFs (by design, not gaps) ---
+# The 5 bng *explode fns below are PERMANENT [B] waivers — streaming UDTFs, not gaps. See spec 2026-08-07-arity-gap-wrapup.
+gbx_bng_geomkloopexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_geomkringexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_kloopexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_kringexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+gbx_bng_tessellateexplode # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+# Task 2 DONE: gbx_rst_xyzpyramid light rescale added (arity now 7, matches heavy)
+# Task 3 DONE: gbx_bng_tessellate light keep_core_geom added (arity now 3, matches heavy)

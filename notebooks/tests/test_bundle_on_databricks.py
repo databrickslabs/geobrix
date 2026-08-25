@@ -3,13 +3,19 @@ Test the Essential bundle against a live Databricks workspace (Volumes via SDK).
 
 Runs locally: your machine runs the bundle code and uses WorkspaceClient (Databricks SDK)
 to upload files to the configured Unity Catalog Volume. No code runs on the cluster;
-this validates that DATABRICKS_HOST + DATABRICKS_TOKEN (or profile) and the Volume path
-work with the bundle's SDK-based upload path.
+this validates that the configured credentials and the Volume path work with the bundle's
+SDK-based upload path.
+
+Auth: prefer ``DATABRICKS_CONFIG_PROFILE`` (e.g. ``oauth-fe``). A named profile is
+host-scoped and refreshes silently for OAuth, and it records which workspace a run
+targeted. ``DATABRICKS_HOST`` + ``DATABRICKS_TOKEN`` also work but are global and
+override any profile for every SDK/CLI call in the same shell, so reach for them only
+where a profile is unavailable (e.g. CI with a service-principal secret).
 
 Setup:
   1. pip install databricks-sdk (and geobrix, requests, pystac-client, planetary-computer for full bundle).
   2. Copy notebooks/tests/databricks_cluster_config.example.env to databricks_cluster_config.env.
-  3. Set DATABRICKS_HOST, DATABRICKS_TOKEN (or DATABRICKS_CONFIG_PROFILE) and
+  3. Set DATABRICKS_CONFIG_PROFILE (preferred) or DATABRICKS_HOST + DATABRICKS_TOKEN, and
      GBX_BUNDLE_VOLUME_* (catalog, schema, volume name).
   4. Ensure the Volume exists in the workspace (create it in Unity Catalog if needed).
 
@@ -39,14 +45,31 @@ if _env_file.exists():
 
 
 def _get_workspace_client():
+    """Build a WorkspaceClient, preferring an explicit profile over ambient env vars.
+
+    A named profile is the repo convention: it is host-scoped and, for OAuth profiles,
+    refreshes silently. Passing it explicitly also documents WHICH workspace a run
+    targeted. Bare env vars cannot say that — ``DATABRICKS_HOST``/``DATABRICKS_TOKEN``
+    are global and take precedence over any profile the caller thinks it selected.
+    """
     try:
         from databricks.sdk import WorkspaceClient
+        profile = os.environ.get("DATABRICKS_CONFIG_PROFILE")
+        if profile:
+            return WorkspaceClient(profile=profile)
         return WorkspaceClient()
     except Exception:
         return None
 
 
 def _is_configured() -> bool:
+    """True when EITHER auth path is fully set up.
+
+    The profile branch must come first and stand alone: an earlier version documented
+    "DATABRICKS_HOST, DATABRICKS_TOKEN (or profile)" while the client ignored the
+    profile, so a profile-only setup silently SKIPPED this test instead of running it —
+    a green run that proved nothing.
+    """
     if os.environ.get("DATABRICKS_CONFIG_PROFILE"):
         return True
     return bool(os.environ.get("DATABRICKS_HOST") and os.environ.get("DATABRICKS_TOKEN"))

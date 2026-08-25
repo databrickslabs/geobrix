@@ -131,7 +131,9 @@ def test_pmtiles_writer_sharded_filename_option(tmp_path):
 
 
 def test_pmtiles_writer_sharded_existing_dir(tmp_path):
-    """shardZoom=6 + existing dir -> <dir>/<dirname> (named after dir, under it)."""
+    """shardZoom=6 + existing dir (no fileName) -> the save dir IS the output root
+    (tileset/ lives directly under it); NOT nested under <dirname> (that single-file
+    naming-after-dir behavior produced /out/out/tileset for sharded output)."""
     d = tmp_path / "tileset_dir"
     d.mkdir()
     w = PMTilesGbxWriter(
@@ -139,7 +141,7 @@ def test_pmtiles_writer_sharded_existing_dir(tmp_path):
         {},
         overwrite=True,
     )
-    assert w.path == str(d / "tileset_dir")
+    assert w.path == str(d)
 
 
 # ---------------------------------------------------------------------------
@@ -261,11 +263,12 @@ def test_sharded_filename_option(spark, tmp_path):
 
 
 def test_sharded_existing_dir_naming(spark, tmp_path):
-    """Sharded: existing dir -> <dir>/<dirname>/tileset/..."""
+    """Sharded: existing dir -> <dir>/tileset/... (the save dir is the output root;
+    no basename nesting)."""
     register(spark)
     d = tmp_path / "tileset_dir"
     d.mkdir()
-    expected_dir = str(d / "tileset_dir")
+    expected_dir = str(d)
     _rows(spark, TILES).write.format("pmtiles_gbx").mode("overwrite").save(str(d))
     tileset = os.path.join(expected_dir, "tileset")
     assert os.path.isdir(tileset), f"Expected tileset dir at {tileset}"

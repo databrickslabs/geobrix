@@ -21,10 +21,10 @@ PHASE0 = {
     "rst_scalex": ("tile",),
     "rst_scaley": ("tile",),
     "rst_isempty": ("tile",),
-    "rst_rastertoworldcoordx": ("tile", "pixel_x", "pixel_y"),
-    "rst_rastertoworldcoordy": ("tile", "pixel_x", "pixel_y"),
-    "rst_worldtorastercoordx": ("tile", "world_x", "world_y"),
-    "rst_worldtorastercoordy": ("tile", "world_x", "world_y"),
+    "rst_rastertoworldcoordx": ("tile", "x", "y"),
+    "rst_rastertoworldcoordy": ("tile", "x", "y"),
+    "rst_worldtorastercoordx": ("tile", "x", "y"),
+    "rst_worldtorastercoordy": ("tile", "x", "y"),
 }
 
 

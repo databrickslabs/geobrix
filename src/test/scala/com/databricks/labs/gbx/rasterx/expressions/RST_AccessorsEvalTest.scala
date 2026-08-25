@@ -82,4 +82,79 @@ class RST_AccessorsEvalTest extends PlanTest with SilentSparkSession {
 
     }
 
+    test("RST_Width returns NULL (not 0) on a corrupt raster") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+        // Wrap garbage bytes as a tile struct via rst_fromcontent; GDAL open fails -> safeEval swallows to null.
+        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
+            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
+        val res = df.select(rst_width(col("raster")).as("w")).collect()
+        assert(res.head.get(0) == null, "corrupt raster width must be NULL, not the 0 sentinel")
+    }
+
+    test("RST_Height returns NULL (not -1) on a corrupt raster") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
+            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
+        val res = df.select(rst_height(col("raster")).as("h")).collect()
+        assert(res.head.get(0) == null, "corrupt raster height must be NULL, not the -1 sentinel")
+    }
+
+    test("RST_MemSize returns NULL (not -1L) on a corrupt raster") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
+            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
+        val res = df.select(rst_memsize(col("raster")).as("m")).collect()
+        assert(res.head.get(0) == null, "corrupt raster memsize must be NULL, not the -1L sentinel")
+    }
+
+    test("RST_ScaleX returns NULL (not NaN) on a corrupt raster") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
+            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
+        val res = df.select(rst_scalex(col("raster")).as("sx")).collect()
+        assert(res.head.get(0) == null, "corrupt raster scalex must be NULL, not NaN sentinel")
+    }
+
+    test("RST_SRID returns NULL (not 0) on a corrupt raster") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+        // Wrap garbage bytes as a tile struct via rst_fromcontent; GDAL open fails -> safeEval swallows to null.
+        val df = Seq(Array[Byte](1, 2, 3, 4)).toDF("content")
+            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
+        val res = df.select(rst_srid(col("raster")).as("s")).collect()
+        assert(res.head.get(0) == null, "corrupt raster SRID must be NULL, not 0")
+    }
+
+    test("RST_SRID returns real EPSG code (non-null, non-zero) for a valid EPSG raster") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+        // chicago_sp27.tif has EPSG:26771 — a known non-zero SRID, proving execute()'s happy path is untouched.
+        val tifPath = this.getClass.getResource("/binary/geotiff-small/chicago_sp27.tif").toString
+        val df = spark.read
+            .format("binaryFile")
+            .load(tifPath)
+            .withColumn("raster", rst_fromcontent(col("content"), lit("GTiff")))
+        val res = df.select(rst_srid(col("raster")).as("s")).collect()
+        val srid = res.head.get(0)
+        assert(srid != null, "valid EPSG raster SRID must not be NULL")
+        assert(srid.asInstanceOf[Int] != 0, "valid EPSG raster SRID must not be 0")
+        assert(srid.asInstanceOf[Int] == 26771, s"expected EPSG:26771 but got $srid")
+    }
+
 }

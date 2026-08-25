@@ -18,24 +18,22 @@ import org.gdal.gdal.Dataset
   * Output is a single-band Float32 GTiff. No options.
   */
 case class RST_Roughness(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Roughness.name
-    override def replacement: Expression = rstInvoke(RST_Roughness, rasterType)
+    override def replacement: Expression = invoke(RST_Roughness)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
 
 object RST_Roughness extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, conf: UTF8String): InternalRow = runDispatch(row, conf, BinaryType)
-    def evalPath(row: InternalRow, conf: UTF8String): InternalRow = runDispatch(row, conf, StringType)
+    def eval(row: InternalRow, conf: UTF8String): InternalRow = runDispatch(row, conf, BinaryType)
 
     private def runDispatch(row: InternalRow, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

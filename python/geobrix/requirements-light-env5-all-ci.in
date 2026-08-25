@@ -1,0 +1,20 @@
+# Source of truth for the protobuf-5 all-features umbrella CI lock
+# (Serverless env 5 / classic DBR 17.3–18, full feature set).
+# Covers: light_env5_all, light_dbr17_all, light_dbr18_all — all alias
+# geobrix[light_dbr17_all], the canonical pb5 all-features extra.
+#
+# Regenerate (from python/geobrix/):
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#       --output-file requirements-light-env5-all-ci.txt requirements-light-env5-all-ci.in
+#
+# This .in uses a local-package-with-extra reference so uv expands [light_env5_all]
+# directly from pyproject.toml. The [light_env5_all] extra pulls
+# [light_dbr17]+[stac]+[vizx]+[overture] (protobuf-5 / mapbox-vector-tile<2.2).
+# Protobuf-6 all-features twin: see requirements-light-env6-all-ci.in.
+#
+# Note: CI resolves without Serverless grpcio-status constraints; the protobuf version
+# in this lock (5.x) reflects the [light_dbr17] cap on mapbox-vector-tile, NOT a CI
+# grpcio constraint. The real runtime protobuf is set at cluster install time.
+
+# Local package — expands geobrix[light_env5_all] from pyproject.toml
+.[light_env5_all]

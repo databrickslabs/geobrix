@@ -1,13 +1,20 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
+import com.databricks.labs.gbx.rasterx.expressions.agg.{RST_CombineAvgAgg, RST_DerivedBandAgg, RST_FromBandsAgg, RST_MergeAgg}
 import com.databricks.labs.gbx.rasterx.functions
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.util.RasterSerializationUtil
+import com.databricks.labs.gbx.util.SerializationUtil
 import com.databricks.labs.gbx.udfs
 import com.databricks.labs.gbx.udfs.st_buffer
 import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.catalyst.expressions.{BoundReference, GenericInternalRow, Literal}
 import org.apache.spark.sql.catalyst.plans.PlanTest
+import org.apache.spark.sql.catalyst.util.ArrayBasedMapData
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
+import org.apache.spark.sql.types.{BinaryType, LongType, MapType, StringType, StructField, StructType}
+import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.matchers.should.Matchers._
@@ -285,6 +292,340 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         meanAB shouldBe meanBA +- 1e-9
         // The winner is one of the two inputs (10 or 20), uniform across the tile.
         (meanAB === 10.0 +- 1e-9 || meanAB === 20.0 +- 1e-9) shouldBe true
+    }
+
+    // =========================================================================
+    // v1 (3-field) input normalization — regression for AIOOBE on size==1
+    // fast-path and serialize UnsafeProjection.
+    //
+    // Drives the aggregators directly (update / serialize / eval) with genuine
+    // 3-field InternalRows. Before the normalizeToV2Row fix these paths threw
+    // ArrayIndexOutOfBoundsException because the 9-field UnsafeProjection
+    // tried to read fields 3..8 on a 3-element row.
+    // =========================================================================
+
+    /** Produce a tiny in-memory GeoTIFF as bytes via /vsimem (no temp file).
+      * Calls GDALManager.init defensively so the helper works whether or not a
+      * prior test has already initialized GDAL in this JVM. */
+    private def tinyGTiffBytes(value: Int = 42): Array[Byte] = {
+        import com.databricks.labs.gbx.expressions.ExpressionConfig
+        import org.apache.spark.util.SerializableConfiguration
+        import org.apache.hadoop.conf.Configuration
+        GDALManager.init(new ExpressionConfig(Map.empty, new SerializableConfiguration(new Configuration())))
+        val path = s"/vsimem/agg_v1_test_${java.util.UUID.randomUUID().toString.replace("-", "")}.tif"
+        val drv  = gdal.GetDriverByName("GTiff")
+        val ds   = drv.Create(path, 4, 4, 1, gdalconstConstants.GDT_Byte, Array[String]("COMPRESS=DEFLATE"))
+        ds.SetGeoTransform(Array[Double](149.0, 0.01, 0.0, -35.0, 0.0, -0.01))
+        val sr = new org.gdal.osr.SpatialReference()
+        sr.ImportFromEPSG(4326)
+        ds.SetProjection(sr.ExportToWkt())
+        ds.GetRasterBand(1).Fill(value.toDouble)
+        ds.FlushCache()
+        val bytes = gdal.GetMemFileBuffer(path)
+        ds.delete()
+        gdal.Unlink(path)
+        bytes
+    }
+
+    /** Build a v1 (3-field) InternalRow: (cellid, raster, metadata). */
+    private def v1Row(cellid: Long, bytes: Array[Byte]) = {
+        val emptyMap = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
+        new GenericInternalRow(Array[Any](cellid, bytes, emptyMap))
+    }
+
+    /** v1 tile struct type: 3 fields (cellid, raster, metadata). */
+    private val v1TileType: StructType = StructType(Seq(
+        StructField("cellid",   LongType,               nullable = false),
+        StructField("raster",   BinaryType,              nullable = true),
+        StructField("metadata", MapType(StringType, StringType), nullable = true)
+    ))
+
+    /** BoundReference that extracts field 0 (the tile struct) from a 1-element input row,
+      * bound to v1TileType so child.eval(inputRow) returns the InternalRow as-is. */
+    private def v1TileRef: BoundReference = BoundReference(0, v1TileType, nullable = true)
+
+    /** Wrap a v1 tile row in a 1-element container row (the input row to update()). */
+    private def inputRow(tileRow: GenericInternalRow): GenericInternalRow =
+        new GenericInternalRow(Array[Any](tileRow))
+
+    test("RST_MergeAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
+        functions.register(spark)
+        // BoundReference(0, v1TileType) binds child to field 0 of the input row,
+        // so child.eval(inputRow(tileRow)) returns the v1 InternalRow directly.
+        val agg = RST_MergeAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        val tile = v1Row(1L, tinyGTiffBytes(10))
+        agg.update(buf, inputRow(tile))
+
+        // Buffered row must be 9-field after normalization in update()
+        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
+
+        // eval size==1 returns buffer.head; must be 9-field — before fix was 3-field
+        val out = agg.eval(buf)
+        assert(out != null)
+        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
+    }
+
+    test("RST_MergeAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
+        functions.register(spark)
+        val agg = RST_MergeAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(10))))
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(20))))
+        buf.size shouldBe 2
+        buf.foreach(_.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9)
+
+        // serialize must NOT throw AIOOBE — before fix threw on 9-field UnsafeProjection
+        // applied to 3-field rows
+        noException should be thrownBy {
+            val bytes = agg.serialize(buf)
+            val buf2  = agg.deserialize(bytes)
+            buf2.size shouldBe 2
+        }
+    }
+
+    test("RST_CombineAvgAgg: size==1 v1 input through update() returns 9-field row (no AIOOBE)") {
+        functions.register(spark)
+        val agg = RST_CombineAvgAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(50))))
+
+        buf.head.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
+
+        val out = agg.eval(buf)
+        assert(out != null)
+        out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow].numFields shouldBe 9
+    }
+
+    test("RST_CombineAvgAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
+        functions.register(spark)
+        val agg = RST_CombineAvgAgg(v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(50))))
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(100))))
+
+        noException should be thrownBy {
+            val bytes = agg.serialize(buf)
+            val buf2  = agg.deserialize(bytes)
+            buf2.size shouldBe 2
+        }
+    }
+
+    test("RST_DerivedBandAgg: serialize+deserialize roundtrip on v1 input via update() does not throw") {
+        functions.register(spark)
+        val pyfuncLit = Literal(UTF8String.fromString(
+            "import numpy as np\ndef identity(in_ar, out_ar, *a, **kw): out_ar[:] = in_ar[0]"))
+        val funcNameLit = Literal(UTF8String.fromString("identity"))
+        val agg = RST_DerivedBandAgg(v1TileRef, pyfuncLit, funcNameLit)
+        val buf = agg.createAggregationBuffer()
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(30))))
+        agg.update(buf, inputRow(v1Row(1L, tinyGTiffBytes(60))))
+
+        noException should be thrownBy {
+            val bytes = agg.serialize(buf)
+            val buf2  = agg.deserialize(bytes)
+            buf2.size shouldBe 2
+        }
+    }
+
+    test("null tiles from rst_clip are skipped by all three buffering aggregators (no NPE)") {
+        // Regression: child.eval(input) returns null when rst_clip sees a
+        // non-intersecting geometry.  Before the fix, the null InternalRow was
+        // passed straight to normalizeToV2Row which called row.numFields() on
+        // it -> NullPointerException.  After the fix, null tiles are skipped in
+        // update(); a group whose tiles all clip to null yields an empty buffer,
+        // and eval() returns null for an empty buffer -- no crash.
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+
+        // One MODIS tile clipped with a geometry shrunk by 500 km -- far
+        // outside the raster extent, so rst_clip returns a null tile.
+        val df = Seq(
+          s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
+        ).toDF("path")
+            .withColumn("raster", udfs.rasterFromPath(col("path")))
+            .withColumn("bbox", rst_boundingbox(col("raster")))
+            .withColumn("clipper", st_buffer(col("bbox"), lit(-500000.0)))
+            .withColumn("raster", rst_clip(col("raster"), col("clipper"), lit(true)))
+
+        noException should be thrownBy {
+            df.groupBy(lit(1))
+                .agg(
+                  rst_combineavg_agg(col("raster")),
+                  rst_merge_agg(col("raster")),
+                  rst_derivedband_agg(col("raster"), doublePyFunc, "myfunc")
+                )
+                .collect()
+        }
+    }
+
+    // =========================================================================
+    // Task 3: corrupt-member skip tests — one per aggregator
+    //
+    // A mixed group (one valid tile + one corrupt-bytes tile in the same group)
+    // must (a) NOT throw on .collect(), (b) produce a non-null result tile over
+    // the good member, (c) have metadata("last_error") containing the
+    // aggregator's own class name.
+    //
+    // Each corrupt tile is built via byteConstBytes() for valid bytes and
+    // Array[Byte](1,2,3,4,5,6,7,8) for corrupt bytes. Both are wrapped
+    // through rst_fromcontent so they arrive as proper tile structs. When
+    // the aggregator's eval() calls rowToTile on the corrupt bytes, GDAL open
+    // returns null (no exception), but the downstream RasterDriver call on a
+    // null Dataset throws a NullPointerException — this is the site we guard.
+    // =========================================================================
+
+    test("RST_CombineAvgAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        val df = Seq(valid, corrupt).toDF("content")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .groupBy(lit(1).alias("g"))
+            .agg(rst_combineavg_agg(col("tile")).alias("out"))
+            .select(col("out").as("out"), col("out.metadata").as("md"))
+
+        noException should be thrownBy df.collect()
+
+        val row = df.collect().head
+        assert(row.get(0) != null, "out struct must be non-null (good tile was aggregated)")
+        val mdMap = row.getAs[Map[String, String]]("md")
+        assert(mdMap != null, "metadata must not be null")
+        val errVal = mdMap.get("last_error").orNull
+        assert(errVal != null, "metadata must contain last_error key")
+        errVal should include ("RST_CombineAvgAgg")
+    }
+
+    test("RST_MergeAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        val df = Seq(valid, corrupt).toDF("content")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .groupBy(lit(1).alias("g"))
+            .agg(rst_merge_agg(col("tile")).alias("out"))
+            .select(col("out").as("out"), col("out.metadata").as("md"))
+
+        noException should be thrownBy df.collect()
+
+        val row = df.collect().head
+        assert(row.get(0) != null, "out struct must be non-null (good tile was aggregated)")
+        val mdMap = row.getAs[Map[String, String]]("md")
+        assert(mdMap != null, "metadata must not be null")
+        val errVal = mdMap.get("last_error").orNull
+        assert(errVal != null, "metadata must contain last_error key")
+        errVal should include ("RST_MergeAgg")
+    }
+
+    test("RST_DerivedBandAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        val df = Seq(valid, corrupt).toDF("content")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .groupBy(lit(1).alias("g"))
+            .agg(rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc").alias("out"))
+            .select(col("out").as("out"), col("out.metadata").as("md"))
+
+        noException should be thrownBy df.collect()
+
+        val row = df.collect().head
+        assert(row.get(0) != null, "out struct must be non-null (good tile was aggregated)")
+        val mdMap = row.getAs[Map[String, String]]("md")
+        assert(mdMap != null, "metadata must not be null")
+        val errVal = mdMap.get("last_error").orNull
+        assert(errVal != null, "metadata must contain last_error key")
+        errVal should include ("RST_DerivedBandAgg")
+    }
+
+    test("RST_FromBandsAgg skips a corrupt member and records the drop, does not raise") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val valid  = tinyGTiffBytes(42)
+        val corrupt = Array[Byte](1, 2, 3, 4, 5, 6, 7, 8)
+
+        // No Scala wrapper for rst_frombands_agg exists in functions.scala (SQL-only).
+        // Drive the aggregator via a Spark SQL GROUP BY on a registered DataFrame so the
+        // SQL engine invokes the registered gbx_rst_frombands_agg expression end-to-end.
+        val df = Seq((valid, 1), (corrupt, 2)).toDF("content", "band_idx")
+            .withColumn("tile", rst_fromcontent(col("content"), lit("GTiff")))
+            .createOrReplaceTempView("frombands_corrupt_test")
+
+        // Must not throw.  We expect null for the corrupt row since rst_fromcontent of
+        // corrupt bytes emits a null tile, and a group of [valid, null] collapses the null.
+        noException should be thrownBy {
+            spark.sql(
+                """SELECT gbx_rst_frombands_agg(tile, band_idx) AS out
+                  |FROM frombands_corrupt_test GROUP BY 1=1""".stripMargin
+            ).collect()
+        }
+
+        // Drive the aggregator directly to verify the corrupt-skip path with a non-null
+        // corrupt tile (corrupt bytes that survive as a tile struct via v1Row injection,
+        // bypassing rst_fromcontent's own open which would null-out the corrupt bytes).
+        val agg = RST_FromBandsAgg(v1TileRef, v1TileRef)
+        val buf = agg.createAggregationBuffer()
+        agg.updateWithIndex(buf, v1Row(1L, valid),  1)
+        agg.updateWithIndex(buf, v1Row(2L, corrupt), 2)
+
+        var out: Any = null
+        noException should be thrownBy { out = agg.eval(buf) }
+        assert(out != null, "eval must return non-null when at least one valid member exists")
+
+        // Decode metadata from the returned InternalRow to confirm last_error was stamped.
+        val outRow = out.asInstanceOf[org.apache.spark.sql.catalyst.InternalRow]
+        // v2 tile schema: cellid(0), raster(1), path(2), path_mode(3), window(4),
+        // clip_polygon(5), clip_crs(6), crs(7), metadata(8).
+        val mdMap = outRow.getMap(8)
+        assert(mdMap != null, "metadata map must not be null")
+        import org.apache.spark.unsafe.types.UTF8String
+        val keys   = mdMap.keyArray().toArray[UTF8String](org.apache.spark.sql.types.StringType)
+        val values = mdMap.valueArray().toArray[UTF8String](org.apache.spark.sql.types.StringType)
+        val kvMap  = keys.zip(values).map { case (k, v) => k.toString -> v.toString }.toMap
+        val errVal = kvMap.getOrElse("last_error", null)
+        assert(errVal != null, s"metadata must contain last_error; got keys: ${kvMap.keys.mkString(", ")}")
+        errVal should include ("RST_FromBandsAgg")
+    }
+
+    test("normalizeToV2Row: v1 3-field row becomes 9-field, v2 9-field row is unchanged") {
+        val emptyMap = ArrayBasedMapData(Array.empty[UTF8String], Array.empty[UTF8String])
+        val v1 = new GenericInternalRow(Array[Any](42L, Array[Byte](1, 2, 3), emptyMap))
+        val n  = RasterSerializationUtil.normalizeToV2Row(v1)
+        n.numFields shouldBe 9
+        n.getLong(0) shouldBe 42L
+        n.getBinary(1) shouldBe Array[Byte](1, 2, 3)
+        // Pedigree fields 2..7 (path, path_mode, window, clip_polygon, clip_crs, crs) must be null
+        (2 to 7).foreach(i => n.isNullAt(i) shouldBe true)
+        // path_mode is at position 3 (immediately after path) and must be null
+        n.isNullAt(3) shouldBe true
+        // metadata now present at position 8 (last)
+        n.isNullAt(8) shouldBe false
+
+        // v2 row passes through unchanged (same object reference)
+        val v2 = new GenericInternalRow(Array[Any](7L, Array[Byte](9), null, null, null, null, null, null, emptyMap))
+        RasterSerializationUtil.normalizeToV2Row(v2) should be theSameInstanceAs v2
     }
 
 }

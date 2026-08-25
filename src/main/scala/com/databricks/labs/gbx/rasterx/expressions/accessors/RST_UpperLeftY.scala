@@ -12,16 +12,14 @@ import org.gdal.gdal.Dataset
 
 /** Expression that evaluates to the Y coordinate of the upper-left corner of the raster (geotransform). */
 case class RST_UpperLeftY(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_UpperLeftY.name
-    override def replacement: Expression = rstInvoke(RST_UpperLeftY, rasterType)
+    override def replacement: Expression = invoke(RST_UpperLeftY)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -29,10 +27,9 @@ case class RST_UpperLeftY(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_UpperLeftY extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): Double = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): Double = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Double = eval(row, conf, BinaryType)
 
-    def eval(row: InternalRow, conf: UTF8String, dt: DataType): Double =
+    def eval(row: InternalRow, conf: UTF8String, dt: DataType): java.lang.Double =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -47,7 +44,7 @@ object RST_UpperLeftY extends WithExpressionInfo {
             dt,
             conf
           )
-        ).map(_.asInstanceOf[Double]).getOrElse(Double.NaN)
+        ).map(v => java.lang.Double.valueOf(v.asInstanceOf[Double])).orNull
 
     def execute(ds: Dataset): Double = {
         val gt = ds.GetGeoTransform

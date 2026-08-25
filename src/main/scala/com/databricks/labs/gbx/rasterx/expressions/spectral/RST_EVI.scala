@@ -25,7 +25,7 @@ import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
   * bands wired to A/B/C and delegates to ``RST_MapAlgebra.execute``.
   */
 case class RST_EVI(
-    tileExpr: Expression,
+    tile: Expression,
     redIdxExpr: Expression,
     nirIdxExpr: Expression,
     blueIdxExpr: Expression,
@@ -35,20 +35,19 @@ case class RST_EVI(
     gExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
-        tileExpr, redIdxExpr, nirIdxExpr, blueIdxExpr, lExpr, c1Expr, c2Expr, gExpr, ExpressionConfigExpr()
+        tile, redIdxExpr, nirIdxExpr, blueIdxExpr, lExpr, c1Expr, c2Expr, gExpr, ExpressionConfigExpr()
     )
     // Pin types so SQL decimal literals (e.g. ``1.0``) coerce to Double cleanly
     // and band-index literals coerce to Int.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, IntegerType, IntegerType,
+        tile.dataType, IntegerType, IntegerType, IntegerType,
         DoubleType, DoubleType, DoubleType, DoubleType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_EVI.name
-    override def replacement: Expression = rstInvoke(RST_EVI, rasterType)
+    override def replacement: Expression = invoke(RST_EVI)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7))
 
@@ -56,14 +55,10 @@ case class RST_EVI(
 
 object RST_EVI extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, redIdx: Int, nirIdx: Int, blueIdx: Int,
         l: Double, c1: Double, c2: Double, g: Double, conf: UTF8String
     ): InternalRow = runDispatch(row, redIdx, nirIdx, blueIdx, l, c1, c2, g, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, redIdx: Int, nirIdx: Int, blueIdx: Int,
-        l: Double, c1: Double, c2: Double, g: Double, conf: UTF8String
-    ): InternalRow = runDispatch(row, redIdx, nirIdx, blueIdx, l, c1, c2, g, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, redIdx: Int, nirIdx: Int, blueIdx: Int,

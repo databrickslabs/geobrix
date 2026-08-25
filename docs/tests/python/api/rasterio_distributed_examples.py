@@ -69,8 +69,8 @@ def _register(spark):
 
 def _one_tile_df(spark, src_path):
     """Load a single-file raster as a one-row (source, tile) DataFrame via the
-    lightweight raster_gbx reader."""
-    return spark.read.format("raster_gbx").load(src_path)
+    lightweight raster_gbx reader (materialized — pyrx UDFs require raster bytes)."""
+    return spark.read.format("raster_gbx").option("virtualTiles", "false").load(src_path)
 
 
 # ---------------------------------------------------------------------------

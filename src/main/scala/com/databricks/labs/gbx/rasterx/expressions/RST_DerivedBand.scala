@@ -13,18 +13,16 @@ import org.gdal.gdal.Dataset
 
 /** Expression that computes a new band by applying a Python UDF to existing band values (tile, pythonCode, funcName). */
 case class RST_DerivedBand(
-    tileExpr: Expression,
+    tile: Expression,
     pythonFuncExpr: Expression,
     funcNameExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, pythonFuncExpr, funcNameExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, pythonFuncExpr, funcNameExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_DerivedBand.name
-    override def replacement: Expression = rstInvoke(RST_DerivedBand, rasterType)
+    override def replacement: Expression = invoke(RST_DerivedBand)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }
@@ -32,9 +30,7 @@ case class RST_DerivedBand(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_DerivedBand extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, pyFunc: UTF8String, funcName: UTF8String, conf: UTF8String): InternalRow =
-        eval(row, pyFunc, funcName, conf, StringType)
-    def evalBinary(row: InternalRow, pyFunc: UTF8String, funcName: UTF8String, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, pyFunc: UTF8String, funcName: UTF8String, conf: UTF8String): InternalRow =
         eval(row, pyFunc, funcName, conf, BinaryType)
 
     def eval(row: InternalRow, pythonFunc: UTF8String, funcName: UTF8String, conf: UTF8String, rdt: DataType): InternalRow =

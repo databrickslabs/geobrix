@@ -12,8 +12,10 @@ The cluster + artifacts must be provisioned by the operator (see the installatio
 - heavyweight: x86 DBR 17.3 or 18 LTS with the init script + bundle + geobrix wheel + the bench
   geobrix-*-tests.jar staged on a Volume (the tests.jar is attached here as a job library;
   the production fat JAR is installed by the heavyweight init script, NOT attached here).
-- lightweight (incl. ARM): just the [light] wheel (installed by the notebook's %pip cell).
-  On ARM clusters use --lightweight-only (heavyweight is x86-only by design).
+- lightweight (incl. ARM): the [light-dbr19] wheel (installed by the notebook's %pip cell).
+  [light-dbr19] is the classic DBR 19 variant; it drops the mapbox-vector-tile<2.2 cap
+  that conflicts with DBR 19's protobuf>=6.31.1. On ARM clusters use --lightweight-only
+  (heavyweight is x86-only by design).
 
 Requires: databricks-sdk, and env config (see databricks_cluster_config.example.env).
 
@@ -25,6 +27,8 @@ Usage:
   4. Run: python push_and_run_bench_on_cluster.py [options]
      Options: --no-wait, --heavyweight-only, --lightweight-only, --run-id, --functions,
               --modes, --row-counts, --warmup, --measured,
+              --existing-cluster-id <id> (attach to a warm all-purpose cluster; skips
+                4-8 min job-cluster startup; overrides the CLUSTER_ID env var),
               --truncate-results (clear only this run_id + this invocation's tier(s)),
               --truncate-all (empty the whole table -> only the current run remains)
 """
@@ -238,6 +242,15 @@ def main() -> int:
     do_wait = "--no-wait" not in sys.argv
     heavyweight = "--lightweight-only" not in sys.argv
     lightweight = "--heavyweight-only" not in sys.argv
+    # --serverless: submit to Serverless compute instead of an existing cluster. Light-only (no JAR).
+    # --env-version N: Serverless environment version to request (default 6; env v6 is the
+    # protobuf-6 regime, uses [light-dbr19] extras). Skips the cluster_id requirement.
+    serverless = "--serverless" in sys.argv
+    env_version = _arg("--env-version", "6")
+    if serverless:
+        # Serverless has no JAR; force light-only regardless of --heavyweight-only.
+        heavyweight = False
+        lightweight = True
     # --explain-only: print/persist each spark-path fn's physical plan, run nothing timed.
     # It's a lightweight spark-path-only diagnostic -- force that scope so the heavy JVM
     # path (which can't .explain) and the pure-core path stay out entirely.
@@ -404,6 +417,65 @@ def main() -> int:
     # Tiles per spark-path partition; 0 = auto (n / (slots*4): oversubscribe slots ~4x so
     # finished slots grab pending tasks rather than idling on the straggler tail).
     partition_size = int(_arg("--override-partition-size", "0"))
+    # --input-tile materialized|virtual: input tile mode for the light spark-path leg.
+    # materialized = bytes column (default, matches all prior bench runs).
+    # virtual = path+window tile (tests the new virtual-tile reader path).
+    input_tile = _arg("--input-tile", "materialized")
+    if input_tile not in ("materialized", "virtual"):
+        print(
+            f"ERROR: --input-tile must be 'materialized' or 'virtual' (got '{input_tile}')",
+            file=sys.stderr,
+        )
+        return 2
+    # --disable-file: set GBX_DISABLE_FILE=1 in the notebook so virtual-tile reads
+    # fall back to plain-path I/O (FILE type bypassed). Intended for the FILE-off A/B leg.
+    # Only meaningful when --input-tile virtual; silently a no-op for materialized inputs.
+    disable_file = "--disable-file" in sys.argv
+    # --disable-fuse-direct: set GBX_DISABLE_FUSE_DIRECT=1 in the notebook so whole-file
+    # /Volumes tiles take the FileRef byte-range stream instead of the scoped FUSE-direct
+    # default. This is the stream-baseline leg of the FUSE-direct A/B (run once without the
+    # flag = FUSE-direct default, once with it = stream, and compare).
+    disable_fuse_direct = "--disable-fuse-direct" in sys.argv
+    # --grouped-file: also run the grouped FILE-amortization benchmark (rst_clip_grouped +
+    #   pixel-op _grouped fns) over a MULTIWINDOW COG corpus, across three tile modes
+    #   (materialized / virtual+FILE-off / virtual+FILE-on). This is the leg that actually
+    #   exercises grouped_tile_map's per-source open-cost amortization -- the FILE win the
+    #   scalar bench misses. The leg toggles FILE on/off internally per mode, so --disable-file
+    #   is NOT needed (and should not be combined with it).
+    # --grouped-file-only: ONLY run the grouped-file benchmark, skip all fn benchmarks.
+    benchmark_grouped_file = "--grouped-file" in sys.argv
+    grouped_file_only = "--grouped-file-only" in sys.argv
+    # --multiwindow-corpus PATH: the multiwindow COG corpus dir (holding
+    #   cog_multiwindow_manifest.json). Default (empty) -> CORPUS/bench-corpus-cog-multiwindow.
+    multiwindow_corpus = _arg("--multiwindow-corpus", "")
+    # Phase-2 FILE legs (light-only, serialized, each *-only-capable):
+    # --file-matrix: sweep file_mode in (fuse, external, managed) for GeoTIFF + GeoPackage.
+    file_matrix = "--file-matrix" in sys.argv
+    file_matrix_only = "--file-matrix-only" in sys.argv
+    # --gpkg-chunksize: sweep chunkSize (1k/10k/100k) for GeoPackage fuse reads.
+    gpkg_chunksize = "--gpkg-chunksize" in sys.argv
+    gpkg_chunksize_only = "--gpkg-chunksize-only" in sys.argv
+    # --layout-sweep: sweep GeoTIFF + GeoPackage write layouts (order/cluster/plain).
+    layout_sweep = "--layout-sweep" in sys.argv
+    layout_sweep_only = "--layout-sweep-only" in sys.argv
+    # --layout-scan: compare sequential-scan cost across write layouts (FILE tables).
+    layout_scan = "--layout-scan" in sys.argv
+    layout_scan_only = "--layout-scan-only" in sys.argv
+    # --vector-table-read: read a FILE-column table back via vector_file_read TABLE mode
+    #   (managed/external), across the layout-sweep's gpkg FILE tables.
+    vector_table_read = "--vector-table-read" in sys.argv
+    vector_table_read_only = "--vector-table-read-only" in sys.argv
+    # --raster-decode-read: pixel-decode throughput (rst_avg) over raster FILE tiles across
+    #   managed/external/fuse, plus the auto-order-vs-skipOrdering amortization comparison.
+    raster_decode_read = "--raster-decode-read" in sys.argv
+    raster_decode_read_only = "--raster-decode-read-only" in sys.argv
+    # --file-filespace <id>: filespace identifier for FILE EXTERNAL/MANAGED table creation.
+    file_filespace = _arg("--file-filespace", "")
+    # --gpkg-corpus <path>: GeoPackage bench corpus base dir (staged by stage_gpkg_bench_corpus).
+    gpkg_corpus = _arg("--gpkg-corpus", "")
+    # --max-partition-bytes <v>: cap bytes-per-partition (e.g. "32m") to reduce rows/task on
+    # file/Delta scans. Settable on Serverless (unlike AQE). Empty = leave the platform default.
+    max_partition_bytes = _arg("--max-partition-bytes", "")
 
     host = os.environ.get("DATABRICKS_HOST")
     token = os.environ.get("DATABRICKS_TOKEN")
@@ -415,10 +487,15 @@ def main() -> int:
         )
         return 2
 
-    cluster_id = _strip_invisible(os.environ.get("CLUSTER_ID") or "")
-    if not cluster_id:
+    # --existing-cluster-id <id>: attach to this all-purpose cluster (overrides CLUSTER_ID env).
+    # Skips the 4-8 min job-cluster startup by reusing a warm persistent cluster.
+    cluster_id = _strip_invisible(
+        _arg("--existing-cluster-id", "") or os.environ.get("CLUSTER_ID") or ""
+    )
+    if not serverless and not cluster_id:
         print(
-            "Set CLUSTER_ID (existing cluster to run the benchmark on)", file=sys.stderr
+            "Set CLUSTER_ID env var or pass --existing-cluster-id <id>",
+            file=sys.stderr,
         )
         return 2
 
@@ -544,6 +621,46 @@ def main() -> int:
         benchmark_netcdf_writer=benchmark_netcdf_writer,
         #  --netcdf-writer-only: ONLY run the NetCDF writer benchmark, skip fn benchmarks.
         netcdf_writer_only=netcdf_writer_only,
+        #  --input-tile materialized|virtual: input tile mode for the light spark-path leg.
+        input_tile=input_tile,
+        #  --disable-file: set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg).
+        disable_file=disable_file,
+        #  --disable-fuse-direct: set GBX_DISABLE_FUSE_DIRECT=1 (FUSE-direct stream-baseline A/B leg).
+        disable_fuse_direct=disable_fuse_direct,
+        #  --grouped-file: also run the grouped FILE-amortization benchmark (multiwindow COG,
+        #  3 tile modes). --grouped-file-only: ONLY that leg. --multiwindow-corpus: its corpus dir.
+        benchmark_grouped_file=benchmark_grouped_file,
+        grouped_file_only=grouped_file_only,
+        multiwindow_corpus=multiwindow_corpus,
+        #  Phase-2 FILE legs (light-only, serialized):
+        #  --file-matrix: file_mode sweep (fuse/external/managed) for GeoTIFF + GeoPackage reads.
+        file_matrix=file_matrix,
+        file_matrix_only=file_matrix_only,
+        #  --gpkg-chunksize: GeoPackage chunkSize sweep (1k/10k/100k; fanout-invariance check).
+        gpkg_chunksize=gpkg_chunksize,
+        gpkg_chunksize_only=gpkg_chunksize_only,
+        #  --layout-sweep: GeoTIFF + GeoPackage write layout sweep (order/cluster/plain).
+        layout_sweep=layout_sweep,
+        layout_sweep_only=layout_sweep_only,
+        #  --layout-scan: sequential-scan + shuffle-input cost across write layouts (FILE tables).
+        layout_scan=layout_scan,
+        layout_scan_only=layout_scan_only,
+        #  --vector-table-read: vector_file_read TABLE mode over the layout-sweep's gpkg FILE tables.
+        vector_table_read=vector_table_read,
+        vector_table_read_only=vector_table_read_only,
+        #  --raster-decode-read: rst_avg pixel-decode over raster FILE tiles + auto-vs-skip ordering.
+        raster_decode_read=raster_decode_read,
+        raster_decode_read_only=raster_decode_read_only,
+        #  --file-filespace: filespace identifier for FILE EXTERNAL/MANAGED tables.
+        file_filespace=file_filespace,
+        #  --gpkg-corpus: GeoPackage bench corpus base dir.
+        gpkg_corpus=gpkg_corpus,
+        #  --max-partition-bytes: cap bytes-per-partition (Serverless-settable) to tune rows/task.
+        max_partition_bytes=max_partition_bytes,
+        #  --serverless: use Serverless compute (light-only, no JAR). --env-version N selects
+        #  the environment version to pin (default 6 = protobuf-6 / [light-dbr19] regime).
+        serverless=serverless,
+        env_version=env_version,
     )
     if explain_only:
         # Plans are a spark-path concern only; never run the pure-core sections.
@@ -581,6 +698,27 @@ def main() -> int:
     if netcdf_writer_only:
         # NetCDF writer benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
+    if grouped_file_only:
+        # Grouped FILE-amortization benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if file_matrix_only:
+        # FILE matrix benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if gpkg_chunksize_only:
+        # GeoPackage chunkSize sweep is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if layout_sweep_only:
+        # Layout sweep benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if layout_scan_only:
+        # Layout scan benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if vector_table_read_only:
+        # Vector table-read benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if raster_decode_read_only:
+        # Raster decode-read benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
 
     # Import the notebook builder from the repo source (this runs on the HOST, not the cluster).
     sys.path.insert(0, "python/geobrix/src")
@@ -609,8 +747,12 @@ def main() -> int:
 
     # Pre-flight: show the operator exactly what will run before submitting.
     print("=" * 64)
-    print("gbx:bench:cluster pre-flight")
-    print(f"  cluster_id : {cluster_id}")
+    if serverless:
+        print("gbx:bench:cluster pre-flight (SERVERLESS)")
+        print(f"  env_version: {env_version}")
+    else:
+        print("gbx:bench:cluster pre-flight")
+        print(f"  cluster_id : {cluster_id}")
     print(f"  scope      : heavyweight={heavyweight}  lightweight={lightweight}")
     print(f"  run_id     : {run_id}")
     print(f"  functions  : {functions or f'(set={sel})'}")
@@ -656,6 +798,13 @@ def main() -> int:
         or cfg.get("grid_custom_only")
         or cfg.get("fanout_only")
         or cfg.get("netcdf_only")
+        or cfg.get("grouped_file_only")
+        or cfg.get("file_matrix_only")
+        or cfg.get("gpkg_chunksize_only")
+        or cfg.get("layout_sweep_only")
+        or cfg.get("layout_scan_only")
+        or cfg.get("vector_table_read_only")
+        or cfg.get("raster_decode_read_only")
     )
     if (
         cfg["modes"] in ("spark-path", "both")
@@ -673,11 +822,20 @@ def main() -> int:
             )
             _pool = len(_cj.get("row_pool", {}).get("tiles", []))
         except Exception as _e:
-            print(
-                f"ERROR: cannot read {corpus}/corpus.json to validate the row pool size: {_e}",
-                file=sys.stderr,
-            )
-            return 2
+            _e_str = str(_e)
+            if "disabled for users without account admin" in _e_str or "API is disabled" in _e_str:
+                print(
+                    f"WARNING: cannot read {corpus}/corpus.json (Files API admin-gated on this workspace); "
+                    f"skipping pool-size validation. Ensure --row-counts <= corpus pool size.",
+                    file=sys.stderr,
+                )
+                _pool = _max_rc  # bypass the size check below
+            else:
+                print(
+                    f"ERROR: cannot read {corpus}/corpus.json to validate the row pool size: {_e}",
+                    file=sys.stderr,
+                )
+                return 2
         if _max_rc > _pool:
             print(
                 f"ERROR: spark-path --row-counts max ({_max_rc}) exceeds the corpus row pool "
@@ -720,25 +878,55 @@ def main() -> int:
     # Attach the bench tests.jar only for the heavyweight leg (it carries the bench Scala classes).
     libraries = [compute.Library(jar=tests_jar)] if heavyweight else None
 
-    print("Submitting one-off benchmark run on cluster...")
-    submit_waiter = w.jobs.submit(
-        run_name=f"geobrix-bench-{run_id}",
-        # 6h: the full 1000-row both-run is dominated by the slow light spark-path fns
-        # (the perf gap being measured). 2h timed out mid light-spark-path; 6h covers
-        # light+heavy spark-path even before cluster upsizing parallelizes it.
-        timeout_seconds=21600,
-        tasks=[
-            jobs.SubmitTask(
-                task_key="run_bench",
-                existing_cluster_id=cluster_id,
-                notebook_task=jobs.NotebookTask(
-                    notebook_path=notebook_path,
-                    source=jobs.Source.WORKSPACE,
-                ),
-                libraries=libraries,
-            )
-        ],
-    )
+    if serverless:
+        # Serverless submission: environment_version-pinned compute, no cluster_id, no JAR.
+        # max_retries=0: a failed bench task must surface immediately, not auto-retry and mask
+        # the failure (standing bench rule).
+        env_version_str = str(env_version)
+        print(f"Submitting one-off benchmark run on Serverless (env v{env_version_str})...")
+        submit_waiter = w.jobs.submit(
+            run_name=f"geobrix-bench-{run_id}",
+            # 6h matches the classic timeout; Serverless light spark-path can still be slow
+            # on a large tile set with the virtual-tile reader path.
+            timeout_seconds=21600,
+            environments=[
+                jobs.JobEnvironment(
+                    environment_key="bench_env",
+                    spec=compute.Environment(environment_version=env_version_str),
+                )
+            ],
+            tasks=[
+                jobs.SubmitTask(
+                    task_key="run_bench",
+                    environment_key="bench_env",
+                    notebook_task=jobs.NotebookTask(
+                        notebook_path=notebook_path,
+                        source=jobs.Source.WORKSPACE,
+                    ),
+                    max_retries=0,
+                )
+            ],
+        )
+    else:
+        print("Submitting one-off benchmark run on cluster...")
+        submit_waiter = w.jobs.submit(
+            run_name=f"geobrix-bench-{run_id}",
+            # 6h: the full 1000-row both-run is dominated by the slow light spark-path fns
+            # (the perf gap being measured). 2h timed out mid light-spark-path; 6h covers
+            # light+heavy spark-path even before cluster upsizing parallelizes it.
+            timeout_seconds=21600,
+            tasks=[
+                jobs.SubmitTask(
+                    task_key="run_bench",
+                    existing_cluster_id=cluster_id,
+                    notebook_task=jobs.NotebookTask(
+                        notebook_path=notebook_path,
+                        source=jobs.Source.WORKSPACE,
+                    ),
+                    libraries=libraries,
+                )
+            ],
+        )
 
     remote_run_id = submit_waiter.run_id
 

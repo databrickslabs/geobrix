@@ -15,7 +15,7 @@ import org.apache.spark.sql.types.{DataType, StructField, StructType}
   * tileHeight).
   */
 case class RST_ReTile(
-    tileExpr: Expression,
+    tile: Expression,
     tileWidthExpr: Expression,
     tileHeightExpr: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr()
@@ -24,20 +24,20 @@ case class RST_ReTile(
       with CodegenFallback {
 
     /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    private def rasterType = RST_ExpressionUtil.rasterType(tile)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def position: Boolean = false
     override def inline: Boolean = false
     override def elementSchema: StructType = StructType(Array(StructField("tile", dataType)))
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2), nc(3))
-    override def children: Seq[Expression] = Seq(tileExpr, tileWidthExpr, tileHeightExpr, exprConfExpr)
+    override def children: Seq[Expression] = Seq(tile, tileWidthExpr, tileHeightExpr, exprConfExpr)
 
     override def eval(input: InternalRow): IterableOnce[InternalRow] =
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
               RST_ExpressionUtil.init(exprConf)
-              val rawTile = tileExpr.eval(input).asInstanceOf[InternalRow]
+              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
               val tileWidth = tileWidthExpr.eval(input).asInstanceOf[Int]
               val tileHeight = tileHeightExpr.eval(input).asInstanceOf[Int]

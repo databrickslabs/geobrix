@@ -19,7 +19,8 @@ const sidebars = {
     'installation',
     'quick-start',
     'databricks-spatial',
-    'beta-release-notes',
+    'serverless-and-memory',
+    'release-notes',
     {
       type: 'category',
       label: 'Examples',
@@ -73,6 +74,7 @@ const sidebars = {
       collapsed: true,
       link: { type: 'doc', id: 'readers-writers' },
       items: [
+        'common-functions',
         {
           type: 'category',
           label: 'Readers',
@@ -80,7 +82,8 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
+            'readers/file',
           ],
         },
         {
@@ -90,7 +93,8 @@ const sidebars = {
           items: [
             'writers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['writers/raster', 'writers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/netcdf', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['writers/geotiff', 'writers/cog', 'writers/netcdf', 'writers/pmtiles', 'writers/shapefile', 'writers/geojson', 'writers/geojsonl', 'writers/geopackage', 'writers/filegdb'] },
+            'writers/file',
           ],
         },
       ],
@@ -101,8 +105,9 @@ const sidebars = {
       collapsed: true,
       items: [
         'api/overview',
-        'api/tile-structure',
         'api/execution-tiers',
+        'api/coordinate-reference-systems',
+        'api/error-handling',
         'api/language-bindings',
         {
           type: 'category',
@@ -110,11 +115,29 @@ const sidebars = {
           collapsed: true,
           link: { type: 'doc', id: 'api/raster-functions' },
           items: [
+            'api/tile-structure',
             'api/rasterio-distributed',
+            'api/large-rasters',
+            'api/virtual-tiles',
+            'api/vrt-mosaic',
+            'api/materialized-compression',
             'api/h3-raster-tessellation',
+            'api/raster-sampling',
           ],
         },
-        { type: 'doc', id: 'api/vectorx-functions', label: 'VectorX' },
+        {
+          type: 'category',
+          label: 'VectorX',
+          collapsed: true,
+          link: { type: 'doc', id: 'api/vectorx-functions' },
+          items: [
+            'api/geometry-validity',
+            'api/coverage-validity',
+            'api/geometry-cleaning',
+            'api/antimeridian',
+            // 'api/shapely-distributed' — reserved for the Shapely Distributed page
+          ],
+        },
         { type: 'doc', id: 'api/gridx-functions', label: 'GridX' },
         {
           type: 'category',

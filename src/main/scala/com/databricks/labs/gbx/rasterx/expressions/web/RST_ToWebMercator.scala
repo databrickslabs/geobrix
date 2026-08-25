@@ -24,16 +24,15 @@ import org.gdal.gdal.Dataset
  *  Use `"near"` for categorical rasters (land cover, classification masks).
  */
 case class RST_ToWebMercator(
-    tileExpr: Expression,
+    tile: Expression,
     resamplingExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, resamplingExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, resamplingExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ToWebMercator.name
-    override def replacement: Expression = rstInvoke(RST_ToWebMercator, rasterType)
+    override def replacement: Expression = invoke(RST_ToWebMercator)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 }
 
@@ -46,10 +45,8 @@ object RST_ToWebMercator extends WithExpressionInfo {
         "average", "mode", "max", "min", "med", "q1", "q3"
     )
 
-    def evalBinary(row: InternalRow, resampling: UTF8String, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, resampling: UTF8String, conf: UTF8String): InternalRow =
         doInvoke(row, resampling, conf, BinaryType)
-    def evalPath(row: InternalRow, resampling: UTF8String, conf: UTF8String): InternalRow =
-        doInvoke(row, resampling, conf, StringType)
 
     private def doInvoke(row: InternalRow, resampling: UTF8String, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(

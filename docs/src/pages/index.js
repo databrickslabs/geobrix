@@ -71,7 +71,7 @@ function HomepageFeatures() {
           <Feature
             title="Powerful Readers & Writers"
             description="Automatically registered Spark readers and writers for Shapefile, GeoJSON, GeoPackage, GeoTIFF, PMTiles, and more."
-            link="/docs/readers/overview"
+            link="/docs/readers-writers"
           />
           <Feature
             title="Multi-Language APIs"
@@ -132,7 +132,7 @@ export default function Home() {
                   <code>
 {`# Install the lightweight wheel (single library, no JAR, no GDAL)
 # Stage the wheel on a Unity Catalog Volume, then install the quoted PEP 508 named form:
-%pip install --quiet "geobrix[light] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
+%pip install --quiet "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
 
 # Import and register functions
 from databricks.labs.gbx.pyrx import functions as rx

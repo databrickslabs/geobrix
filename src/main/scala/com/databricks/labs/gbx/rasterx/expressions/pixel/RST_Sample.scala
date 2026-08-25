@@ -2,74 +2,84 @@ package com.databricks.labs.gbx.rasterx.expressions.pixel
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
+import org.locationtech.jts.geom.Geometry
 
 /**
   * Sample raster pixel values at a point geometry — returns one Double per
   * band, in band-index order.
   *
-  * The point is converted from its geometry's CRS to the raster's CRS (when an
-  * SRID is set), then the affine GeoTransform maps the world coordinate to a
-  * pixel (col, row) which is read via `band.ReadRaster(col, row, 1, 1)`. Points
-  * outside the raster extent return `null` for the whole array.
+  * The point is reprojected from its source CRS to the raster's CRS (Rule 1: an
+  * EWKB/EWKT embedded SRID wins; else the optional `crs` arg — int SRID or CRS
+  * string; else assumed already in the raster CRS), then the affine GeoTransform
+  * maps the world coordinate to a pixel (col, row) read via
+  * `band.ReadRaster(col, row, 1, 1)`. Points outside the extent return `null`.
   *
   * Geometries other than POINT are rejected up front — use `gbx_rst_polygonize`
   * or a clip + reduction for polygon sampling.
   */
 case class RST_Sample(
-    tileExpr: Expression,
-    geomExpr: Expression
+    tile: Expression,
+    geomExpr: Expression,
+    crsExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, geomExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, geomExpr, crsExpr, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Sample.name
-    override def replacement: Expression = rstInvoke(RST_Sample, rasterType)
+    // propagateNull=false: builder() injects Literal(null, StringType) as the optional crs default,
+    // so a null crs must NOT short-circuit the whole result to null (eval must run). doInvoke below
+    // guards a null primary tile row so the prior null-tile→null behavior holds.
+    override def replacement: Expression = invoke(RST_Sample, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1))
+        copy(nc(0), nc(1), nc(2))
 
 }
 
 object RST_Sample extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, geom: Any, conf: UTF8String): ArrayData =
-        doInvoke(row, geom, conf, BinaryType)
-    def evalPath(row: InternalRow, geom: Any, conf: UTF8String): ArrayData =
-        doInvoke(row, geom, conf, StringType)
+    def eval(row: InternalRow, geom: Any, conf: UTF8String): ArrayData =
+        doInvoke(row, geom, null, conf, BinaryType)
 
-    private def doInvoke(row: InternalRow, geom: Any, conf: UTF8String, dt: DataType): ArrayData =
-        Option(
+    def eval(row: InternalRow, geom: Any, crs: UTF8String, conf: UTF8String): ArrayData =
+        doInvoke(row, geom, crs, conf, BinaryType)
+
+    private def doInvoke(
+        row: InternalRow, geom: Any, crs: UTF8String, conf: UTF8String, dt: DataType
+    ): ArrayData =
+        // With propagateNull=false the invoke now runs eval even for a null primary tile OR a null
+        // geom; preserve the prior "null in -> null out" behavior (rowToDS/safeEval would otherwise
+        // NPE on a null row, and a null geom would hit the `case other` throw -> error path).
+        if (row == null || geom == null) null
+        else Option(
           RST_ErrorHandler.safeEval(
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
                 val ds = RasterSerializationUtil.rowToDS(row, dt)
-                val (x, y) = geom match {
-                    case g: UTF8String  =>
-                        val parsed = JTS.fromWKT(g.toString)
-                        require(parsed.getGeometryType == "Point",
-                            s"gbx_rst_sample requires a POINT geometry; got ${parsed.getGeometryType}")
-                        (parsed.getCoordinate.x, parsed.getCoordinate.y)
-                    case g: Array[Byte] =>
-                        val parsed = JTS.fromWKB(g)
-                        require(parsed.getGeometryType == "Point",
-                            s"gbx_rst_sample requires a POINT geometry; got ${parsed.getGeometryType}")
-                        (parsed.getCoordinate.x, parsed.getCoordinate.y)
+                val parsed: Geometry = geom match {
+                    case g: UTF8String  => JTS.fromWKT(g.toString)
+                    case g: Array[Byte] => JTS.fromWKB(g)
                     case other          =>
                         throw new IllegalArgumentException(
                             s"gbx_rst_sample: unsupported geom payload type ${if (other == null) "null" else other.getClass.getName}"
                         )
                 }
+                require(parsed.getGeometryType == "Point",
+                    s"gbx_rst_sample requires a POINT geometry; got ${parsed.getGeometryType}")
+                val clip = Option(crs).map(_.toString).filter(_.nonEmpty)
+                val (x, y) = reprojectToRaster(
+                  ds, parsed.getCoordinate.x, parsed.getCoordinate.y, parsed.getSRID, clip)
                 val res = execute(ds, x, y)
                 RasterDriver.releaseDataset(ds)
                 if (res == null) null else ArrayData.toArrayData(res)
@@ -79,6 +89,34 @@ object RST_Sample extends WithExpressionInfo {
             conf
           )
         ).map(_.asInstanceOf[ArrayData]).orNull
+
+    /** Reproject a point (x, y) from its source CRS to the raster's CRS. Rule 1:
+      * embedded SRID wins; else the explicit `crs`; else assume aligned. A missing
+      * source or raster CRS, or any transform failure, returns the point as-is
+      * (never errors). */
+    private def reprojectToRaster(
+        ds: Dataset, x: Double, y: Double, srid: Int, crs: Option[String]
+    ): (Double, Double) = {
+        val dsSR = ds.GetSpatialRef
+        if (dsSR == null) return (x, y)
+        val srcSR =
+            if (srid > 0) Some(SpatialRefOps.resolveCrs(srid.toString))
+            else crs.map(SpatialRefOps.resolveCrs)
+        srcSR match {
+            case Some(sr) =>
+                try {
+                    if (sr.IsSame(dsSR) == 1) (x, y) // already aligned; no transform
+                    else {
+                        val tf = new org.gdal.osr.CoordinateTransformation(sr, dsSR)
+                        val pt = tf.TransformPoint(x, y)
+                        tf.delete()
+                        (pt(0), pt(1))
+                    }
+                } catch { case _: Throwable => (x, y) }
+                finally sr.delete() // release the source SR on every path (incl. identity)
+            case None => (x, y)
+        }
+    }
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
@@ -122,9 +160,11 @@ object RST_Sample extends WithExpressionInfo {
     override def name: String = "gbx_rst_sample"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 2 => RST_Sample(c(0), c(1))
+        // 2-arg (no crs) stays valid; 3-arg adds the optional source-CRS override.
+        case 2 => RST_Sample(c(0), c(1), Literal(null, StringType))
+        case 3 => RST_Sample(c(0), c(1), c(2))
         case n => throw new IllegalArgumentException(
-            s"gbx_rst_sample takes 2 arguments (tile, point_geom); got $n"
+            s"gbx_rst_sample takes 2 or 3 arguments (tile, point_geom, [crs]); got $n"
         )
     }
 

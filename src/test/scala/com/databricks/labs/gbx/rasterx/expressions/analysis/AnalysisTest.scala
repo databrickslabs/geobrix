@@ -94,11 +94,12 @@ class AnalysisTest extends AnyFunSuite with BeforeAndAfterAll {
     // RST_CogConvert
     // ------------------------------------------------------------------
 
-    test("RST_CogConvert produces a COG-layout GTiff (header LAYOUT=COG, tile width matches blocksize)") {
+    test("RST_CogConvert produces a COG-layout GTiff with ZSTD+predictor (header LAYOUT=COG, tile width matches blocksize)") {
         // 256x256 raster — large enough that COG actually tiles internally.
         val src = buildRaster(256, 256, (c, r) => (c + r).toDouble)
         try {
-            val (out, mtd) = track(RST_CogConvert.execute(src, Map.empty, "DEFLATE", 128, "AVERAGE"))
+            // Now defaults to ZSTD+predictor via OperatorOptions (compression param still works for backwards compat).
+            val (out, mtd) = track(RST_CogConvert.execute(src, Map.empty, "ZSTD", 128, "AVERAGE"))
             out should not be null
             // Driver metadata reports GTiff (COG is a GTiff variant on disk).
             mtd("driver") shouldBe "GTiff"

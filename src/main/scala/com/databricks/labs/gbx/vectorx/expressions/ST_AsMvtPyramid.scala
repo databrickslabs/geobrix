@@ -11,7 +11,7 @@ import org.apache.spark.unsafe.types.UTF8String
 
 import scala.collection.mutable.ArrayBuffer
 
-/** Generator: explode one `(geom_wkb, attrs)` row into one output row per intersecting
+/** Generator: explode one `(geom, attrs)` row into one output row per intersecting
  *  `(z, x, y)` tile across a zoom range, encoded as MVT bytes.
  *
  *  Pattern-mirrors [[com.databricks.labs.gbx.rasterx.expressions.web.RST_XYZPyramid]].
@@ -143,12 +143,12 @@ object ST_AsMvtPyramid extends WithExpressionInfo {
             case 5 => ST_AsMvtPyramid(c(0), c(1), c(2), c(3), c(4), Literal(MvtWriter.DefaultExtent))
             case 6 => ST_AsMvtPyramid(c(0), c(1), c(2), c(3), c(4), c(5))
             case n => throw new IllegalArgumentException(
-                s"gbx_st_asmvt_pyramid takes 5 or 6 arguments (geom_wkb, attrs_struct, min_z, max_z, layer_name, [extent]); got $n"
+                s"gbx_st_asmvt_pyramid takes 5 or 6 arguments (geom, attrs_struct, min_z, max_z, layer_name, [extent]); got $n"
             )
         }
     }
 
-    override def usageArgs: String = "geom_wkb, attrs_struct, min_z, max_z, layer_name, [extent]"
+    override def usageArgs: String = "geom, attrs_struct, min_z, max_z, layer_name, [extent]"
 
     override def description: String =
         "Generator: emit one row per (z, x, y) tile a feature intersects, encoded as MVT protobuf bytes."

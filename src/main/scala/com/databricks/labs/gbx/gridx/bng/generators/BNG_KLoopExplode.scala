@@ -9,9 +9,9 @@ import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expressio
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
-/** Generator expression that explodes the k-loop (hollow ring) of a BNG cell into one row per cell. Arguments: cellId, k. */
+/** Generator expression that explodes the k-loop (hollow ring) of a BNG cell into one row per cell. Arguments: cellid, k. */
 case class BNG_KLoopExplode(
-    cellId: Expression,
+    cellid: Expression,
     k: Expression
 ) extends CollectionGenerator
       with Serializable
@@ -19,27 +19,28 @@ case class BNG_KLoopExplode(
 
     override def position: Boolean = false
     override def inline: Boolean = false
-    override def children: Seq[Expression] = Seq(cellId, k)
+    override def children: Seq[Expression] = Seq(cellid, k)
 
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
-        val cellIdValue = cellId.eval(input)
+        val cellidValue = cellid.eval(input)
         val kValue = k.eval(input)
 
-        if (cellIdValue == null || kValue == null) return Iterator.empty[InternalRow]
+        if (cellidValue == null || kValue == null) return Iterator.empty[InternalRow]
 
-        cellIdValue match {
+        cellidValue match {
             case s: UTF8String =>
-                val cid = BNG.parse(s.toString)
-                BNG.kLoop(cid, kValue.asInstanceOf[Int])
+                val cid = BNG.parseOrNull(s.toString)
+                if (cid == null) Iterator.empty[InternalRow]
+                else BNG.kLoop(cid, kValue.asInstanceOf[Int])
                     .map(cid => InternalRow.fromSeq(Seq(UTF8String.fromString(BNG.format(cid)))))
             case l: Long       => BNG
                     .kLoop(l, kValue.asInstanceOf[Int])
                     .map(cid => InternalRow.fromSeq(Seq(cid)))
-            case _             => throw new IllegalArgumentException(s"Unsupported cellId type: ${cellIdValue.getClass.getName}")
+            case _             => throw new IllegalArgumentException(s"Unsupported cellid type: ${cellidValue.getClass.getName}")
         }
     }
 
-    override def elementSchema: StructType = StructType(Seq(StructField("cellId", cellId.dataType)))
+    override def elementSchema: StructType = StructType(Seq(StructField("cellid", cellid.dataType)))
 
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 

@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.vector
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -20,7 +20,7 @@ import java.util.{Vector => JVector}
  *  (-9999.0, Float64).
  */
 case class RST_Rasterize(
-    geomWkbExpr: Expression,
+    geomExpr: Expression,
     valueExpr: Expression,
     xminExpr: Expression,
     yminExpr: Expression,
@@ -28,13 +28,13 @@ case class RST_Rasterize(
     ymaxExpr: Expression,
     widthPxExpr: Expression,
     heightPxExpr: Expression,
-    sridExpr: Expression
+    outSridExpr: Expression
 ) extends InvokedExpression {
 
     override def children: Seq[Expression] = Seq(
-        geomWkbExpr, valueExpr,
+        geomExpr, valueExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr,
+        widthPxExpr, heightPxExpr, outSridExpr,
         ExpressionConfigExpr()
     )
     // Pin the numeric arg types so ImplicitCastInputTypes coerces SQL decimal literals
@@ -52,7 +52,7 @@ case class RST_Rasterize(
     override def prettyName: String = RST_Rasterize.name
     override def replacement: Expression = invoke(RST_Rasterize)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), outSridExpr = nc(8))
 
 }
 
@@ -65,30 +65,30 @@ case class RST_Rasterize(
 object RST_Rasterize extends WithExpressionInfo {
 
     def eval(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
+        widthPx: Int, heightPx: Int, out_srid: Int,
         conf: UTF8String
-    ): InternalRow = doInvoke(geomWkb, value, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, conf)
+    ): InternalRow = doInvoke(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, conf)
 
     /** Long-overload for PySpark callers - promotes Int args sent as Long. */
     def eval(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Long, heightPx: Long, srid: Long,
+        widthPx: Long, heightPx: Long, out_srid: Long,
         conf: UTF8String
-    ): InternalRow = doInvoke(geomWkb, value, xmin, ymin, xmax, ymax,
-        widthPx.toInt, heightPx.toInt, srid.toInt, conf)
+    ): InternalRow = doInvoke(geom, value, xmin, ymin, xmax, ymax,
+        widthPx.toInt, heightPx.toInt, out_srid.toInt, conf)
 
     private def doInvoke(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
+        widthPx: Int, heightPx: Int, out_srid: Int,
         conf: UTF8String
     ): InternalRow =
         Option(
           RST_ErrorHandler.safeEval(
-            () => execute(geomWkb, value, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, conf),
+            () => execute(geom, value, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, conf),
             null,
             BinaryType,
             conf
@@ -97,17 +97,17 @@ object RST_Rasterize extends WithExpressionInfo {
 
     /** Pure compute path - extracted for direct unit-testing without Spark. */
     def execute(
-        geomWkb: Array[Byte], value: Double,
+        geom: Array[Byte], value: Double,
         xmin: Double, ymin: Double, xmax: Double, ymax: Double,
-        widthPx: Int, heightPx: Int, srid: Int,
+        widthPx: Int, heightPx: Int, out_srid: Int,
         conf: UTF8String
     ): InternalRow = {
         val exprConf = ExpressionConfig.fromB64(conf.toString)
         RST_ExpressionUtil.init(exprConf)
-        if (geomWkb == null) return null
-        val (ogrDs, layer) = VectorRasterBridge.buildOgrLayer(Seq((geomWkb, value)), srid)
+        if (geom == null) return null
+        val (ogrDs, layer) = VectorRasterBridge.buildOgrLayer(Seq((geom, value)), out_srid)
         val rasterDs: Dataset = VectorRasterBridge.buildEmptyRaster(
-            xmin, ymin, xmax, ymax, widthPx, heightPx, srid)
+            xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid)
         try {
             val bands = Array(1)
             val burnValues = Array(0.0) // ignored; ATTRIBUTE option overrides
@@ -124,7 +124,7 @@ object RST_Rasterize extends WithExpressionInfo {
                 "all_parents" -> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, mapData))
+            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
         } finally {
             rasterDs.delete()
             ogrDs.delete()
@@ -137,7 +137,7 @@ object RST_Rasterize extends WithExpressionInfo {
         case 9 => RST_Rasterize(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8))
         case n => throw new IllegalArgumentException(
             s"gbx_rst_rasterize expects 9 arguments " +
-            s"(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, srid); got $n"
+            s"(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid); got $n"
         )
     }
 

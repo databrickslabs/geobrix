@@ -181,12 +181,16 @@ elif [ -n "$COMMAND" ]; then
         print_separator
     fi
     
+    # Run the command under `set -o pipefail` so a failure anywhere in a pipeline
+    # propagates (e.g. `mvn ... | tail` must surface mvn's non-zero exit, not tail's 0).
+    # Without this the wrapper faithfully reports the last pipe stage's status, which
+    # silently masks build/test failures piped through head/tail/grep.
     if [ "$INTERACTIVE" = true ]; then
-        docker exec -it geobrix-dev bash -c "$COMMAND"
+        docker exec -it geobrix-dev bash -c "set -o pipefail; $COMMAND"
     else
-        docker exec geobrix-dev bash -c "$COMMAND"
+        docker exec geobrix-dev bash -c "set -o pipefail; $COMMAND"
     fi
-    
+
     EXIT_CODE=$?
     
     if [ -z "$MODE" ]; then

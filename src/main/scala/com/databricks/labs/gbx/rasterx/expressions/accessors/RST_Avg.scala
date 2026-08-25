@@ -14,16 +14,14 @@ import org.gdal.gdal.Dataset
 /** Expression that evaluates to the average pixel value per band (array of doubles);
  *  an all-nodata band (zero valid pixels) yields a NULL element. */
 case class RST_Avg(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = ArrayType(DoubleType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Avg.name
-    override def replacement: PrettyInvoke = rstInvoke(RST_Avg, rasterType)
+    override def replacement: PrettyInvoke = invoke(RST_Avg)
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
@@ -32,8 +30,7 @@ case class RST_Avg(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Avg extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, BinaryType)
-    def evalPath(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, StringType)
+    def eval(row: InternalRow, conf: UTF8String): ArrayData = eval(row, conf, BinaryType)
 
     def eval(row: InternalRow, conf: UTF8String, dt: DataType): ArrayData =
         Option(

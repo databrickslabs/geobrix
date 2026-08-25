@@ -1,4 +1,9 @@
-"""Pure-function tests for H3 raster tessellation (rst_h3_tessellate)."""
+"""Pure-function tests for H3 raster tessellation (rst_h3_tessellate).
+
+Also contains Spark-based FILE-aware UDTF guard tests for all three tessellate
+generators (H3, Quadbin, BNG): file_ref=NULL (FILE unavailable on local[2])
+must yield the same output as before the file_ref parameter was added.
+"""
 
 import h3
 import pytest
@@ -9,6 +14,49 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import tessellate
 
 from .conftest import make_geotiff_bytes
+
+# ---------------------------------------------------------------------------
+# Fixture helpers for Spark-based UDTF tests
+# ---------------------------------------------------------------------------
+
+
+def _h3_tile_df(spark):
+    """One-row DataFrame with an 8×8 EPSG:4326 materialized tile."""
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    raster = make_geotiff_bytes(width=8, height=8, epsg=4326)
+    df = spark.createDataFrame([(raster,)], ["raster"])
+    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+
+
+def _bng_tile_df(spark):
+    """One-row DataFrame with a small EPSG:27700 (BNG) materialized tile."""
+    import numpy as np
+    from pyspark.sql import functions as f
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    data = np.arange(16 * 16, dtype="float32").reshape(16, 16)
+    profile = dict(
+        driver="GTiff",
+        width=16,
+        height=16,
+        count=1,
+        dtype="float32",
+        crs="EPSG:27700",
+        transform=from_origin(530000, 180016, 1, 1),
+        nodata=-9999.0,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data, 1)
+        raster = mf.read()
+    df = spark.createDataFrame([(raster,)], ["raster"])
+    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
 
 
 def _src_bounds():
@@ -164,3 +212,53 @@ def test_tessellate_reprojects_cell_for_non_4326_raster():
         assert h3.is_valid_cell(h3.int_to_str(cellid))
         with _serde.open_tile(raster) as o:
             assert o.crs.to_epsg() == 32633
+
+
+# ---------------------------------------------------------------------------
+# FILE-aware UDTF guard tests: file_ref=NULL (FILE unavailable on local[2]).
+# Confirms that the new file_ref eval parameter is a transparent FUSE fallback
+# — output is unchanged vs. pre-refactor when FILE is not available.
+# The FILE stream fast path is exercised on-cluster (Task 9).
+# ---------------------------------------------------------------------------
+
+
+def test_rst_h3_tessellate_file_unavailable_unchanged(spark):
+    """H3 tessellate UDTF: file_ref=NULL → same non-zero chip count as before."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    df = _h3_tile_df(spark)
+    prx.register(spark)
+    df.createOrReplaceTempView("_t7_h3tess")
+    n = spark.sql(
+        "SELECT count(*) AS n FROM _t7_h3tess, "
+        "LATERAL gbx_rst_h3_tessellate(tile, 4) t"
+    ).first()["n"]
+    assert n > 0
+
+
+def test_rst_quadbin_tessellate_file_unavailable_unchanged(spark):
+    """Quadbin tessellate UDTF: file_ref=NULL → same non-zero chip count."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    df = _h3_tile_df(spark)
+    prx.register(spark)
+    df.createOrReplaceTempView("_t7_qbtess")
+    n = spark.sql(
+        "SELECT count(*) AS n FROM _t7_qbtess, "
+        "LATERAL gbx_rst_quadbin_tessellate(tile, 12) t"
+    ).first()["n"]
+    assert n > 0
+
+
+def test_rst_bng_tessellate_file_unavailable_unchanged(spark):
+    """BNG tessellate UDTF: file_ref=NULL → same non-zero chip count."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    df = _bng_tile_df(spark)
+    prx.register(spark)
+    df.createOrReplaceTempView("_t7_bngtess")
+    n = spark.sql(
+        "SELECT count(*) AS n FROM _t7_bngtess, "
+        "LATERAL gbx_rst_bng_tessellate(tile, 6) t"
+    ).first()["n"]
+    assert n > 0

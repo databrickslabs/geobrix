@@ -1,0 +1,224 @@
+---
+sidebar_position: 4
+sidebar_label: Large Rasters
+title: Large Rasters
+---
+
+# Large Rasters
+
+Preparing and working with rasters that are too big to load whole — multi-gigabyte
+scenes, striped GeoTIFFs, satellite mosaics. This page covers the formats
+involved, why Cloud-Optimized GeoTIFF (COG) is the target, and how GeoBrix
+prepares COGs at scale on Databricks. For the reading model that builds on these
+prepared COGs — bytes-free windowed reads and the virtual/materialized tile
+lifecycle — see **[Virtual Tiles](./virtual-tiles)**.
+
+---
+
+## Raster formats: striped, tiled, and COG
+
+A GeoTIFF stores its pixels in one of two internal layouts, and the layout
+decides how efficiently you can read part of the image.
+
+- **Striped GeoTIFF** — pixels are stored in horizontal strips that span the
+  full width of the image (often a single row, or a small band of rows, per
+  strip). To read any region you must walk strips from the top. There is no way
+  to jump to an arbitrary sub-window cheaply, and reading "just a corner" can
+  force a read of much of the file. Many source rasters (including a lot of
+  satellite output) arrive striped. Striped layout is the worst case for
+  large-raster access: it resists partial reads and, when a tool tries to load a
+  large striped image, it tends to pull far more into memory than the region
+  actually needed.
+
+- **Tiled GeoTIFF** — pixels are stored in a regular grid of rectangular blocks
+  (for example 256×256 or 512×512). Any sub-window maps to a small set of blocks
+  that can be read directly, without scanning the rest of the file. Tiling is
+  what makes efficient windowed reads possible.
+
+- **Cloud-Optimized GeoTIFF (COG)** — a tiled GeoTIFF with two additional
+  guarantees: (1) it carries **overviews** — pre-computed, progressively
+  coarser downsampled copies of the image, so a zoomed-out view reads a small
+  overview instead of decoding full resolution; and (2) its internal directory
+  is laid out so a reader can fetch the header once and then request only the
+  byte ranges it needs. A COG is readable as an ordinary GeoTIFF everywhere, but
+  a COG-aware reader can serve any window or zoom level with a handful of ranged
+  reads. This is the format GeoBrix prepares and reads for large-raster work.
+
+:::note BigTIFF: the &gt;4 GiB boundary
+The classic TIFF container addresses data with 32-bit offsets, which caps a file
+at roughly **4 GiB**. Any COG whose output would exceed that must use the
+**BigTIFF** extension (64-bit offsets). BigTIFF is read transparently by modern
+GDAL/rasterio-based tooling (which is what reads these files on Databricks).
+GeoBrix writes BigTIFF **by default** so that preparation never fails at the
+4 GiB boundary and every prepared COG has one predictable structure; you can
+override this per the [options](#options) below when maximum compatibility with
+very old, non-GDAL TIFF readers is required.
+:::
+
+### Windows and virtual tiles
+
+A **window** is a rectangular region of a raster — a pixel offset plus a width
+and height. Because a COG is tiled and carries overviews, a reader can
+materialize a single window (at full resolution or from an overview) with a
+small ranged read, instead of loading the whole image.
+
+Windows are the foundation for **virtual tiles** — bytes-free references (a path
+plus a window) that flow through a DataFrame and materialize pixels only when an
+operation needs them, keeping memory bounded when fanning a large raster into
+many pieces. The full reading model, the tile struct, and the
+virtual↔materialized lifecycle are covered on the **[Virtual Tiles](./virtual-tiles)**
+page. The rest of *this* page focuses on **preparing** COGs — what makes those
+efficient windowed reads possible in the first place.
+
+---
+
+## Writing COGs, and why
+
+The single most useful thing you can do with a large or striped raster is
+**master it into a COG once**, then read windows from it many times. Preparation
+is where the cost of tiling and overview generation is paid — deliberately, up
+front — so that every downstream read is cheap. Compression is applied per block
+during preparation; see **[Materialized Compression](./materialized-compression)**
+for codec choices, size-adaptive defaults, and when to override them.
+
+GeoBrix offers two ways to prepare COGs, sharing one conversion core. Both write
+a COG that passes `rio_cogeo`'s COG validation.
+
+### `prepare_cogs` — driver-orchestrated preparation
+
+`prepare_cogs` prepares one master COG per source, running on the **driver**. It
+accepts a directory, a single file, or a list freely mixing directories and
+files, resolves them to a flat de-duplicated set, and converts each one,
+printing per-file progress and returning a summary.
+
+```python
+from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+
+# sources may be a dir, a single file, or a list mixing both
+summary = prepare_cogs(
+    "/Volumes/<catalog>/<schema>/<volume>/scenes",   # input dir (or file, or list)
+    "/Volumes/<catalog>/<schema>/<volume>/cogs",     # output dir
+    blocksize=512,
+    verbose=True,
+)
+# summary -> {"total": N, "ok": ..., "skipped": ..., "error": ...,
+#             "peak_rss_mib": ..., "elapsed_s": ..., "results": [...]}
+```
+
+Each source is converted to `<original-name>.cog`. Preparation is **idempotent**:
+by default a source whose output already exists is skipped, so re-running after
+an interruption only fills the gaps. A failure on one file is isolated — it is
+recorded in the summary and the batch continues — so one bad input never aborts
+a large run.
+
+### `cog_gbx` writer with `driverMode`
+
+The [`cog_gbx` writer](../writers/cog) integrates preparation into a DataFrame
+write. Its default mode converts per partition (suitable for moderate files);
+its opt-in [`driverMode`](../writers/cog#drivermode-preparing-large-files) routes
+conversion to the driver via `prepare_cogs`, which is the mode for large files:
+
+```python
+(spark.read.format("file_gbx").load(input_dir)
+   .write.format("cog_gbx")
+   .option("driverMode", "true")
+   .option("cogSkipIfExists", "true")
+   .mode("overwrite")
+   .save(output_dir))
+```
+
+:::warning Long driverMode writes: use `prepare_cogs` directly
+In `driverMode`, conversion runs inside the `.save()` call. A write that blocks
+for many minutes — a large batch, or very large files (rough throughput is on
+the order of **1 GB/min**) — can have its connection cancelled, surfacing as a
+failed run with a `CancelledKeyException`, even though the conversion itself is
+fine. If you hit this, prepare the files by calling `prepare_cogs` **directly**
+in your notebook instead of through the writer. It is plain Python on the driver
+with no such connection to cancel, and it is idempotent, so re-running after a
+cancellation resumes cleanly.
+:::
+
+### Options
+
+These apply to both `cog_gbx` (as writer options) and `prepare_cogs`/`prepare_cog`
+(as keyword arguments):
+
+| `cog_gbx` option | `prepare_cogs` arg | Default | Meaning |
+|---|---|---|---|
+| `cogBlockSize` | `blocksize` | `512` | Internal tile size in pixels. |
+| `cogOverviewResampling` | `resampling` | `AVERAGE` | Resampling used to build overviews. |
+| `compress` | `compress` | `auto` | Per-block compression: `auto` (size-adaptive ZSTD+predictor — recommended), `zstd`, `deflate`, `lzw`, `none`. See [Materialized Compression](./materialized-compression). |
+| `compressLevel` | `compressLevel` | (codec-dependent) | Compression level for `zstd`/`deflate`. Ignored when `compress="auto"`. |
+| `predictor` | `predictor` | (dtype-matched) | TIFF predictor tag (1–3). Ignored when `compress="auto"`. |
+| `cogCompression` | `compression` | (deprecated) | **Deprecated alias** for `compress`; use `compress` instead. |
+| `cogSubdataset` | `subdataset` | none | Subdataset to select from a multi-subdataset source (e.g. NetCDF). |
+| `cogSkipIfExists` | `skip_if_exists` | `true` | Skip a source whose `.cog` output already exists (idempotent resume). |
+| `cogBigTiff` | `bigtiff` | `YES` | BigTIFF policy: `YES` (always), `IF_SAFER`/`IF_NEEDED` (size-adaptive), `NO` (force classic TIFF — fails past ~4 GiB). |
+| `driverMode` | — | `false` | Route conversion to the driver (large-file mode). |
+| `driverModeVerbose` | `verbose` | `true` | Print per-file progress from the driver. |
+
+### Memory footprint, and staying on standard Serverless
+
+COG generation streams block-by-block within a bounded cache and processes one
+file at a time. As a result, **peak memory is essentially flat regardless of
+source size or batch count** — dominated by the transient cost of building the
+overview pyramid, not by the size of the raster. In testing, preparing a
+1.5 GiB source, ten 1.5 GiB sources, and a single 10 GiB source all peaked at
+roughly the same **~2 GiB**.
+
+That comfortably fits a **standard Serverless driver**, so no special compute is
+required to prepare large COGs. A **high-memory driver** adds headroom for
+pushing to much larger single files, but is not required for the sizes above.
+
+The reason preparation runs on the **driver** — rather than distributed across
+workers — is a hard platform limit: a Serverless worker task has a fixed
+per-task memory ceiling (on the order of 1 GB) that no instance size raises.
+Converting a multi-gigabyte source needs more than that transiently, so a
+distributed (per-worker) conversion of a large file runs out of memory
+regardless of the cluster's size. The driver is not under that per-task ceiling,
+so driver-orchestrated preparation succeeds where a distributed conversion of
+the same file cannot. This is why `prepare_cogs` and the `cog_gbx` `driverMode`
+exist, and why increasing worker memory does not help large-file preparation.
+
+For the full connect-aware memory model that keeps raster **reads and writes**
+within this per-task ceiling — the stream cap, the materialize-vs-virtual
+decision, and the FILE Delta-table fast path — see
+**[Serverless & Memory](../serverless-and-memory)**.
+
+---
+
+## Reading prepared COGs
+
+Once a source is mastered as a COG, reads become cheap: a COG-aware reader can
+fetch any window, at any zoom level, with a small number of ranged reads instead
+of loading the whole image. GeoBrix's `cog_gbx` reader turns that into
+**virtual tiles** — bytes-free rows that materialize pixels only on demand — so a
+large raster fans into many pieces without any executor holding the whole image.
+
+The full reading model — the tile struct, virtual vs. materialized state, the
+reader selection options, and how `rst_*` functions choose their output shape —
+is covered on the **[Virtual Tiles](./virtual-tiles)** page. Prepare your COGs
+here; read them there.
+
+:::tip Virtual tiles + large COGs: byte-range reads
+When virtual tiles reference **windows** of a large Cloud-Optimized GeoTIFF,
+Databricks FILE fetches only the bytes covering each window's COG tile blocks —
+rather than opening and seeking the full file. The read advantage is realized with
+**per-partition open-amortization**: opening the source once per partition and reading
+all its windows from the same cached dataset handle, rather than opening a new connection
+per tile. With amortization, byte-range stream reads are 10–290× faster than FUSE for
+windowed COG reads.
+
+See [Virtual tile read performance](../api/performance#virtual-tile-read-performance)
+for amortized numbers and guidance on the grouped executor. For per-tile-open (non-amortized)
+benchmarks, see [FILE vs FUSE: large-COG results](../api/benchmarking#file-capability-cog-multiwindow)
+— in that regime FUSE wins; the two pages cover different access patterns.
+:::
+
+## See also
+
+- [Virtual Tiles](./virtual-tiles) — the reading model and virtual↔materialized lifecycle over prepared COGs
+- [VRT & Mosaics](./vrt-mosaic) — decompose a large source into bounded mini-COGs + a portable VRT index (a 308 MB raster becomes ~130 mini-COGs of ~4 MB each, Serverless-safe)
+- [COG writer (`cog_gbx`)](../writers/cog) — the DataFrame-write entry point for preparation, including `driverMode`
+- [COG reader (`cog_gbx`)](../readers/cog) — windowed, bbox-clipped reads from prepared COGs
+- [File lister (`file_gbx`)](../readers/file) — enumerate source files (paths only) to feed preparation

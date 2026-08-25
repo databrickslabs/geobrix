@@ -45,7 +45,7 @@ show_banner "Versions audit"
 setup_log_file "$LOG_PATH"
 
 # Files where pinned versions live. Keep this list in sync with the SECURITY/CI
-# review notes in prompts/security/. New file? Add it here AND remove this line
+# review notes in .superpowers/prompts/security/. New file? Add it here AND remove this line
 # of staleness.
 FILES=(
     ".github/actions/scala_build/action.yml"
@@ -54,7 +54,6 @@ FILES=(
     ".github/workflows/build_python.yml"
     ".github/workflows/build_scala.yml"
     ".github/workflows/build_scala_by_package.yml"
-    ".github/workflows/codecov-upload.yml"
     ".github/workflows/codecov-scala-parallel.yml"
     "scripts/docker/Dockerfile"
     "scripts/geobrix-gdal-init.sh"

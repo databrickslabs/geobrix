@@ -50,6 +50,23 @@ ORDER = [
     "iter_min_s",
     "iter_p90_s",
     "iter_total_wall_clock_s",
+    # Large-raster profile: splitStrategy value ("none"|"serverless"|"classic"|"auto").
+    # None for all other profiles; the field is optional in ResultRow.
+    "split_strategy",
+    # Virtual-tile bench leg: which input-tile form was measured ("materialized" or "virtual").
+    "input_tile",
+    # Whether the fn materialized pixels on a virtual input: "deferred", "materialized", "na".
+    "output_disposition",
+    # Spark-path plan build time (seconds): time to call col_fn + build the DataFrame plan.
+    # Isolates the plan-build cost from the actual execution time.
+    "plan_s",
+    # FILE-access matrix (Phase 2): mode, layout, parallelism, chunk size.
+    "file_mode",
+    "layout",
+    "input_partitions",
+    "launched_tasks",
+    "slots_available",
+    "chunk_size",
 ]
 
 # Guard against drift: ORDER must cover exactly the ResultRow fields, no more, no less.
@@ -67,11 +84,26 @@ def rows_to_dataframe(rows: List[ResultRow], spark, where: str = "cluster"):
     Columns are emitted in the explicit ``ORDER`` (not dataclass field order) so the
     Delta table column layout is the human-readable grouping, with the per-iter
     distribution (iter_*) trailing.
+
+    Optional[str] fields (e.g. ``split_strategy``) that are all-None in the batch
+    must be explicitly typed as StringType; Spark/pandas cannot infer the type of an
+    all-None column. The pandas column is filled with empty string before creating the
+    DataFrame so the inference path works; the value is preserved as-is for non-None
+    rows (the actual strategy label), and the empty string is a safe sentinel for rows
+    where the field is not applicable (all non-large-raster profiles).
     """
     import pandas as pd
 
+    _OPTIONAL_STR_FIELDS = {"split_strategy"}
+
     retagged = [replace(r, env_where=where) for r in rows]
-    df = spark.createDataFrame(pd.DataFrame([asdict(r) for r in retagged]))
+    records = [asdict(r) for r in retagged]
+    # Fill all-None optional-str columns so pandas can infer "object" (string) dtype.
+    for field in _OPTIONAL_STR_FIELDS:
+        if all(rec.get(field) is None for rec in records):
+            for rec in records:
+                rec[field] = ""
+    df = spark.createDataFrame(pd.DataFrame(records))
     return df.select(*ORDER)
 
 
@@ -130,6 +162,46 @@ def _cell(source: str, kind: str = "code", collapsed: bool = False) -> dict:
 
 _PREAMBLE = """import json
 import os
+import importlib as _importlib
+import sys as _sys
+
+# --disable-file: suppress Databricks FILE type for virtual-tile reads (FILE-off A/B leg).
+# Must run before any geobrix imports that call file_supported() so the memoized
+# per-session cache is never populated with True.
+DISABLE_FILE = {disable_file!r}
+if DISABLE_FILE:
+    os.environ["GBX_DISABLE_FILE"] = "1"
+    print("GBX_DISABLE_FILE=1 — FILE type disabled for this leg")
+
+# --disable-fuse-direct: set GBX_DISABLE_FUSE_DIRECT=1 so whole-file /Volumes tiles take the
+# FileRef byte-range stream instead of the scoped FUSE-direct default. This is the stream
+# baseline leg of the FUSE-direct A/B (default run = FUSE-direct; this run = stream). The env
+# var is read fresh per file_ref_arg call (not memoized), so placement is not import-order
+# sensitive; kept beside DISABLE_FILE for clarity.
+DISABLE_FUSE_DIRECT = {disable_fuse_direct!r}
+if DISABLE_FUSE_DIRECT:
+    os.environ["GBX_DISABLE_FUSE_DIRECT"] = "1"
+    print("GBX_DISABLE_FUSE_DIRECT=1 — scoped FUSE-direct disabled; using FileRef stream")
+
+# DBR ships databricks/__init__.py that pre-sets databricks.__path__ to specific
+# system directories, excluding the %pip virtual-env site-packages where
+# geobrix just landed. Extend the path before any geobrix imports so that
+# `databricks.labs.gbx` resolves correctly.
+try:
+    import databricks as _db_pkg
+    for _p in _sys.path:
+        _db_dir = _p + "/databricks"
+        if (
+            _db_dir not in _db_pkg.__path__
+            and not os.path.exists(_db_dir + "/__init__.py")
+            and os.path.isdir(_db_dir)
+        ):
+            _db_pkg.__path__.append(_db_dir)
+    _importlib.invalidate_caches()
+    del _p, _db_dir, _db_pkg
+except Exception:
+    pass
+del _importlib, _sys
 
 from databricks.labs.gbx.bench import compare, results, runner
 from databricks.labs.gbx.bench import cluster as _cl
@@ -241,26 +313,128 @@ VECTOR_LEGS = {vector_legs!r}
 # "geojson_gbx"). Empty = all four. Combined with --vector-legs and --lightweight-only/
 # --heavyweight-only, this runs ONE (format x tier x leg) per job for true cold isolation.
 VECTOR_FORMATS = {vector_formats!r}
+# --input-tile: which form of input tile the spark-path runner receives ("materialized" or
+# "virtual"). "materialized" is the classic path (bytes from binaryFile); "virtual" passes
+# a path+window tile struct and triggers the virtual-tile reader code path.
+INPUT_TILE = {input_tile!r}
+# --grouped-file: also run the grouped FILE-amortization benchmark (rst_clip_grouped +
+# pixel-op _grouped fns) over a MULTIWINDOW COG corpus, across three tile modes
+# (materialized / virtual+FILE-off / virtual+FILE-on). --grouped-file-only: ONLY run it.
+# --multiwindow-corpus: the corpus dir (holds cog_multiwindow_manifest.json); default is
+# CORPUS + "/bench-corpus-cog-multiwindow". Skips cleanly when the manifest is absent.
+BENCHMARK_GROUPED_FILE = {benchmark_grouped_file!r}
+GROUPED_FILE_ONLY = {grouped_file_only!r}
+MULTIWINDOW_CORPUS = {multiwindow_corpus!r} or (CORPUS + "/bench-corpus-cog-multiwindow")
+# --file-matrix: sweep file_mode in ("fuse","external","managed") for GeoTIFF + GeoPackage reads.
+# --file-matrix-only: ONLY run the FILE matrix, skip all fn benchmarks.
+BENCHMARK_FILE_MATRIX = {benchmark_file_matrix!r}
+FILE_MATRIX_ONLY = {file_matrix_only!r}
+# --gpkg-chunksize: sweep chunkSize (1k/10k/100k) for GeoPackage fuse reads (fanout-invariance).
+# --gpkg-chunksize-only: ONLY run the chunkSize sweep, skip all fn benchmarks.
+BENCHMARK_GPKG_CHUNKSIZE = {benchmark_gpkg_chunksize!r}
+GPKG_CHUNKSIZE_ONLY = {gpkg_chunksize_only!r}
+# --layout-sweep: sweep GeoTIFF + GeoPackage write layouts (order/cluster/plain).
+# --layout-sweep-only: ONLY run the layout sweep, skip all fn benchmarks.
+BENCHMARK_LAYOUT_SWEEP = {benchmark_layout_sweep!r}
+LAYOUT_SWEEP_ONLY = {layout_sweep_only!r}
+# --layout-scan: compare sequential-scan cost across write layouts (requires FILE tables from
+# the layout-sweep leg). --layout-scan-only: ONLY run the layout scan.
+BENCHMARK_LAYOUT_SCAN = {benchmark_layout_scan!r}
+LAYOUT_SCAN_ONLY = {layout_scan_only!r}
+# --vector-table-read: measure vector FILE-column-table read (vector_file_read TABLE mode)
+# across managed/external.  Requires FILE tables written by the layout sweep leg.
+# --vector-table-read-only: ONLY run the vector table-read leg, skip fn benchmarks.
+BENCHMARK_VECTOR_TABLE_READ = {benchmark_vector_table_read!r}
+VECTOR_TABLE_READ_ONLY = {vector_table_read_only!r}
+# --raster-decode-read: measure raster pixel-decode throughput across managed/external/fuse
+# (reads FILE tiles from the layout-sweep tables and forces pixel decode via rst_avg).
+# Also emits an ordering-amortization comparison (auto-order vs skipOrdering) for
+# managed/external.  Requires FILE tables written by the layout sweep leg.
+# --raster-decode-read-only: ONLY run this leg, skip fn benchmarks.
+BENCHMARK_RASTER_DECODE_READ = {benchmark_raster_decode_read!r}
+RASTER_DECODE_READ_ONLY = {raster_decode_read_only!r}
+# Filespace identifier for FILE EXTERNAL/MANAGED table creation (e.g. a TBLPROPERTIES
+# filespace path such as "/Volumes/catalog/schema/vol/filespace"). Empty string means no
+# filespace provisioned; external/managed legs yield na_by_design on FUSE-only tiers or
+# when not configured.
+FILE_FILESPACE = {file_filespace!r}
+# GeoPackage bench corpus base dir. Sub-dirs staged by corpus_vector.stage_gpkg_bench_corpus().
+# Default: CORPUS + "/bench-corpus-gpkg".
+GPKG_CORPUS = {gpkg_corpus!r} or (CORPUS + "/bench-corpus-gpkg")
 
 os.makedirs(OUT, exist_ok=True)
 # Disable AQE so it can't coalesce the spark-path repartition back toward
 # defaultParallelism (~slots) -- which reintroduces the straggler idle. The runner sets an
-# explicit partition count per fn; with AQE off it's respected. Set both the Apache and the
-# Databricks switches at runtime, then echo the effective values so the run log shows it took.
-for _ck, _cv in (
-    ("spark.sql.adaptive.enabled", "false"),
-    ("spark.databricks.optimizer.adaptive.enabled", "false"),
-):
+# explicit partition count per fn; with AQE off it's respected. This is a CLASSIC-cluster
+# optimization: on Serverless / Spark Connect these configs are not settable
+# (CONFIG_NOT_AVAILABLE, even to GET with a default) and AQE-off does not apply -- so detect
+# Connect and skip cleanly rather than attempt-and-catch (which logged a misleading
+# "could not set ... CONFIG_NOT_AVAILABLE" that reads like a failure). See the serverless
+# forbidden-config guidance: never attempt a restricted conf on Connect, detect and skip.
+if "connect" in type(spark).__module__:
+    print("AQE: skipped on Serverless/Connect (configs not settable; using platform defaults)")
+else:
+    # Classic: set both the Apache and the Databricks switches, then echo the effective values.
+    for _ck, _cv in (
+        ("spark.sql.adaptive.enabled", "false"),
+        ("spark.databricks.optimizer.adaptive.enabled", "false"),
+    ):
+        try:
+            spark.conf.set(_ck, _cv)
+        except Exception as _e:
+            print(f"could not set {{_ck}}: {{_e}}")
     try:
-        spark.conf.set(_ck, _cv)
+        print(
+            "AQE: adaptive.enabled="
+            + str(spark.conf.get("spark.sql.adaptive.enabled", "?"))
+            + " databricks.adaptive="
+            + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
+        )
     except Exception as _e:
-        print(f"could not set {{_ck}}: {{_e}}")
-print(
-    "AQE: adaptive.enabled="
-    + str(spark.conf.get("spark.sql.adaptive.enabled", "?"))
-    + " databricks.adaptive="
-    + str(spark.conf.get("spark.databricks.optimizer.adaptive.enabled", "?"))
-)
+        print(f"AQE: config readback unavailable: {{_e}}")
+
+# Diagnostic: best-effort enable the Python-worker faulthandler so a NATIVE worker crash
+# (segfault in GDAL/rasterio/pyogrio) dumps a C-level traceback to the executor stderr
+# instead of the opaque "Python worker exited unexpectedly (crashed)". Driver-side enable
+# is harmless; the two spark confs are what install the handler in the WORKER. Guarded:
+# on Serverless/Connect the conf may be rejected -- catch and continue (no worse than default).
+try:
+    import faulthandler as _fh
+    _fh.enable()  # driver-side; harmless on all tiers
+except Exception:
+    pass
+# The worker-faulthandler confs are NOT in the Serverless config allowlist (only 6 confs
+# are settable there per Databricks docs -- maxPartitionBytes, shuffle.partitions, ansi,
+# session.timeZone, timeParserPolicy, execution.timeout), so setting them on Serverless
+# throws. Attempt on classic only; on Serverless a worker native traceback needs
+# faulthandler enabled inside the worker PROCESS (code), not a session conf.
+if "connect" not in type(spark).__module__:
+    for _fk in (
+        "spark.python.worker.faulthandler.enabled",
+        "spark.sql.execution.pyspark.udf.faulthandler.enabled",
+    ):
+        try:
+            spark.conf.set(_fk, "true")
+            print(f"faulthandler: set {{_fk}}")
+        except Exception as _e:
+            print(f"faulthandler: {{_fk}} not settable ({{_e}})")
+else:
+    print(
+        "faulthandler: worker confs not in the Serverless allowlist; skipping "
+        "(enable via worker-process code if a native traceback is needed)"
+    )
+
+# Tuning: cap bytes-per-partition to reduce rows/task on file/Delta scans (the
+# FILE-column-table reads + read_files legs). Smaller partitions = less memory per
+# decode task, a mitigation for worker memory pressure. This conf IS settable on
+# Serverless (per Databricks docs), unlike AQE. Empty ('') leaves the platform default.
+MAX_PARTITION_BYTES = {max_partition_bytes!r}
+if MAX_PARTITION_BYTES:
+    try:
+        spark.conf.set("spark.sql.files.maxPartitionBytes", MAX_PARTITION_BYTES)
+        print(f"maxPartitionBytes: set to {{MAX_PARTITION_BYTES}}")
+    except Exception as _e:
+        print(f"maxPartitionBytes: not settable ({{_e}})")
 # Reader-only runs (readers/pmtiles/vector/mvt/pmtiles-agg/tin/grid/fanout/netcdf --*-only) stage
 # their OWN corpus (a reader pool, a vector corpus, synthetic in-memory rows, or -- for netcdf --
 # the {{CORPUS}}/netcdf + {{CORPUS}}/netcdf-swath pools). They do NOT use the function-bench row
@@ -270,7 +444,9 @@ print(
 _READER_ONLY = (
     READERS_ONLY or PMTILES_ONLY or VECTOR_ONLY or MVT_ONLY or PMTILES_AGG_ONLY
     or VECTOR_TIN_ONLY or GRID_QUADBIN_ONLY or GRID_BNG_ONLY or GRID_CUSTOM_ONLY
-    or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY
+    or FANOUT_ONLY or NETCDF_ONLY or NETCDF_WRITER_ONLY or GROUPED_FILE_ONLY
+    or FILE_MATRIX_ONLY or GPKG_CHUNKSIZE_ONLY or LAYOUT_SWEEP_ONLY or LAYOUT_SCAN_ONLY
+    or VECTOR_TABLE_READ_ONLY or RASTER_DECODE_READ_ONLY
 )
 corpus = None if _READER_ONLY else _m.Corpus.read(f"{{CORPUS}}/corpus.json")
 # Function-bench summaries annotate results with the row-pool size; reader-only runs have no
@@ -500,7 +676,7 @@ def run_light(mode):
         runner.run_spark_path(
             spark, CORPUS, corpus, fnspecs, RUN_ID, ROW_COUNTS, SPARK_WARMUP,
             SPARK_MEASURED, "cluster", sink=None, partition_size=PARTITION_SIZE,
-            explain_only=True, explain_dir=EXPLAIN_DIR,
+            explain_only=True, explain_dir=EXPLAIN_DIR, input_tile=INPUT_TILE,
         )
         return []
     _purge_errors("lightweight", mode)
@@ -524,7 +700,7 @@ def run_light(mode):
             )
         else:
             _new = runner.run_spark_path(
-                spark, CORPUS, corpus, _todo, RUN_ID, ROW_COUNTS, SPARK_WARMUP, SPARK_MEASURED, "cluster", sink=_sink, partition_size=PARTITION_SIZE
+                spark, CORPUS, corpus, _todo, RUN_ID, ROW_COUNTS, SPARK_WARMUP, SPARK_MEASURED, "cluster", sink=_sink, partition_size=PARTITION_SIZE, input_tile=INPUT_TILE
             )
         lw.extend(_new)
     return _loaded + _new
@@ -2591,6 +2767,469 @@ if _fanout_rows:
 FANOUT_ONLY = {"fanout"}
 BENCHMARK_FANOUT = {"fanout"}
 
+_CELL_GROUPED_FILE = """# Grouped FILE-amortization benchmark: rst_clip_grouped + pixel-op _grouped fns over a
+# MULTIWINDOW COG corpus, across three tile modes (materialized / virtual+FILE-off /
+# virtual+FILE-on). The win = grouped_tile_map amortizing one source .open() across a
+# source's windows; FILE-on vs FILE-off is the amortization spread (per-tile ms). LIGHT-only
+# (pure Python; no JAR). Skips cleanly when the multiwindow manifest is absent.
+import os as _os
+from databricks.labs.gbx.bench import grouped_file as _gf
+print("=== grouped FILE-amortization starting ===", flush=True)
+_gfile_manifest = _gf.resolve_manifest_path(corpus_path=MULTIWINDOW_CORPUS)
+if not _os.path.exists(_gfile_manifest):
+    print(
+        "grouped-file benchmark SKIPPED: no manifest at "
+        + str(_gfile_manifest)
+        + " (stage the multiwindow COG corpus first via "
+        + "datagen.generate_cog_multiwindow_corpus)"
+    )
+else:
+    _gfile_rows = _gf.run_grouped_file(
+        spark,
+        corpus_path=MULTIWINDOW_CORPUS,
+        warmup=SPARK_WARMUP,
+        measured=SPARK_MEASURED,
+        run_id=RUN_ID,
+        where="cluster",
+    )
+    _sink(_gfile_rows)
+    lw.extend(_gfile_rows)
+    if _gfile_rows:
+        _df_gfile = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'grouped-file'"
+        )
+        try:
+            display(_df_gfile)
+        except Exception:
+            _df_gfile.show(100, truncate=False)
+        _md = results.summarize(_gfile_rows)
+        _show_md(f"grouped FILE-amortization benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_FILE_MATRIX = """# FILE-access matrix: GeoTIFF + GeoPackage reads across file_mode in ("fuse","external","managed").
+# Isolation: each mode's DataFrame is built fresh inside its own loop iteration so no warm
+# table/partition state carries from one mode to the next. GeoTIFF reuses {CORPUS}/rows
+# (10k tiles, exceeds cluster slots -- saturation preserved). GeoPackage stages
+# {GPKG_CORPUS}/copies_{N}/ via stage_gpkg_bench_corpus (80-copy bracket ~ cluster slots).
+# external/managed yield na_by_design on FUSE-only tiers (clean skip, no error).
+# managed mode requires a pre-written FILE-column table; when FILE_FILESPACE is empty the
+# Volume path is passed for managed -- access='managed'+location raises ValueError ->
+# na_by_design, matching FUSE-tier behavior. Each ResultRow is _sink'd immediately (serialized).
+import os as _os
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import corpus_vector as _cv
+print("=== FILE-access matrix starting ===", flush=True)
+_fm_rows = []
+_fm_gtiff_src = f"{CORPUS}/rows"
+# Stage GeoPackage FILE matrix corpus (idempotent: existing copies_N/ dirs reused).
+_fm_gpkg_dirs = _cv.stage_gpkg_bench_corpus(
+    spark, GPKG_CORPUS, rows=100000, copies_ladder=(10, 80, 160)
+)
+# Use the ~80-slot bracket for the mode sweep; fall back to the first available dir.
+_fm_gpkg_src = _fm_gpkg_dirs.get(80) or next(iter(_fm_gpkg_dirs.values()), None)
+_fm_modes = ("fuse", "external", "managed")
+for _fm_i, _fm in enumerate(_fm_modes, 1):
+    print(f"[read-matrix] {_fm} ({_fm_i} of {len(_fm_modes)})…", flush=True)
+    # Isolation: managed reads require a FILE-managed table (not a raw Volume path).
+    # Use a per-mode filespace sub-path when FILE_FILESPACE is set so each mode's
+    # table is distinct and no layout advantage carries between modes.
+    if _fm == "managed" and FILE_FILESPACE:
+        _gt_src = f"{FILE_FILESPACE}/bench_fm_gtiff"
+        _gp_src = f"{FILE_FILESPACE}/bench_fm_gpkg"
+    else:
+        # fuse/external: Volume path (FILE EXTERNAL on capable tiers; fuse auto-fallback).
+        # managed without FILE_FILESPACE: Volume path -> access='managed'+location raises
+        # ValueError inside run_gtiff_file_read -> na_by_design (clean skip).
+        _gt_src = _fm_gtiff_src
+        _gp_src = _fm_gpkg_src
+    # GeoTIFF FILE read leg.
+    _r = _rd.run_gtiff_file_read(
+        spark, _gt_src, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+        file_mode=_fm, api="lightweight", where="cluster",
+    )
+    _sink([_r]); lw.append(_r); _fm_rows.append(_r)
+    # GeoPackage FILE read leg (skip if corpus staging failed).
+    if _gp_src:
+        _r = _rd.run_gpkg_file_read(
+            spark, _gp_src, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+            file_mode=_fm, chunk_size=10000, api="lightweight", where="cluster",
+        )
+        _sink([_r]); lw.append(_r); _fm_rows.append(_r)
+    print(f"[read-matrix] {_fm}: done", flush=True)
+if _fm_rows:
+    _df_fm = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' "
+        f"AND fn IN ('gtiff_file_read','gpkg_file_read')"
+    )
+    try:
+        display(_df_fm)
+    except Exception:
+        _df_fm.show(100, truncate=False)
+    _md = results.summarize(_fm_rows)
+    _show_md(f"FILE access matrix (file_mode sweep) -- {RUN_ID}", _md)
+"""
+
+_CELL_GPKG_CHUNKSIZE = """# GeoPackage chunkSize sweep: confirms fanout-invariance (partition count stable across
+# 1k/10k/100k chunkSizes). Stages {GPKG_CORPUS}/copies_N/ via stage_gpkg_bench_corpus
+# (idempotent). Uses fuse mode -- chunkSize is a within-task amortization lever, NOT a
+# fanout lever; partition count is file-count bound. The 80-copy bracket sizes input so
+# partitions >= cluster slots (saturation). Each ResultRow is _sink'd immediately.
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import corpus_vector as _cv
+print("=== GPKG chunkSize sweep starting ===", flush=True)
+_cs_dirs = _cv.stage_gpkg_bench_corpus(
+    spark, GPKG_CORPUS, rows=100000, copies_ladder=(10, 80, 160)
+)
+# 80-copy bracket: saturation (copies >= slots). Fall back to any staged dir.
+_cs_src = _cs_dirs.get(80) or next(iter(_cs_dirs.values()), None)
+_cs_rows = []
+if _cs_src:
+    _cs_rows = _rd.run_gpkg_chunksize_sweep(
+        spark, _cs_src, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+        file_mode="fuse", chunk_sizes=(1000, 10000, 100000),
+        api="lightweight", where="cluster",
+    )
+    for _r in _cs_rows:
+        _sink([_r]); lw.append(_r)
+if _cs_rows:
+    _df_cs = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND fn = 'gpkg_file_read'"
+    )
+    try:
+        display(_df_cs)
+    except Exception:
+        _df_cs.show(100, truncate=False)
+    # Fanout-invariance check: partition count should be constant across chunkSizes.
+    _cs_ok = [r for r in _cs_rows if r.status not in ("na_by_design", "error")]
+    _cs_parts = [r.input_partitions for r in _cs_ok]
+    if len(set(_cs_parts)) > 1:
+        print(f"GPKG CHUNKSIZE: WARNING -- partition counts vary: {_cs_parts} (expected stable)")
+    elif _cs_parts:
+        print(f"GPKG CHUNKSIZE: fanout-invariant (partitions={_cs_parts[0]})")
+    _md = results.summarize(_cs_rows)
+    _show_md(f"GeoPackage chunkSize sweep -- {RUN_ID}", _md)
+"""
+
+_CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across write modes × layouts.
+# Mode and layout scope (bounded — enough to understand write behaviour):
+#   fuse (always)           : layout  ("order",) only              -- mode-comparison baseline.
+#                             Target: filesystem PATH under OUT.
+#                             NOTE: the fuse DataSource writer IGNORES the layout arg, so
+#                             sweeping all three layouts on fuse is redundant.
+#   external (if FILESPACE) : layouts ("order","cluster","plain") -- the FILE-table layout dim.
+#                             Target: TABLE NAME schema.bench_layout_<fmt>_external_<layout>.
+#                             These are the tables the layout SCAN reads (read_file_table).
+#   managed  (if FILESPACE) : layout  ("order",) only              -- mode-comparison at order.
+#                             Target: TABLE NAME schema.bench_layout_<fmt>_managed_order.
+# Net: fuse×1 + external×3 + managed×1 = 5 write legs per format, 10 total.
+# Per-leg isolation: each (mode, layout, format) writes its OWN distinct target so no
+# layout can benefit from a prior write's on-disk grouping. fuse targets are Volume paths;
+# external/managed targets are catalog table names (schema.table). "cluster" layout runs
+# OPTIMIZE on the FILE table. na_by_design is returned for external/managed on FUSE-only tiers.
+# Each ResultRow is _sink'd immediately (serialized).
+import glob as _glob
+import os as _os
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import corpus_vector as _cv
+from databricks.labs.gbx.ds.register import register as _ds_reg
+print("=== FILE write layout sweep starting ===", flush=True)
+_ls_rows = []
+# Derive the catalog+schema prefix for FILE table targets from the results TABLE name.
+# TABLE = "catalog.schema.bench_results" -> _TABLE_SCHEMA = "catalog.schema"
+_TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
+# Build GeoTIFF tile_df for the WRITE sweep. IMPORTANT: `.limit(N)` does NOT bound a raster_gbx
+# read -- Spark 4's Python DataSource API has no limit pushdown, so `.load(dir).limit(N)` still
+# opens EVERY tile in `dir` on each action (read() opens each virtual tile for metadata). The
+# write leg has ~5 actions (measure-parallelism, count, probe-write, measured-write, read-back),
+# so an un-cached, unbounded source re-scans the whole directory ~5x per layout -- dominating the
+# wall-clock AND inflating the write timing. So (1) size the SOURCE DIR to what the write demo
+# needs -- point GBX_BENCH_CORPUS at a ~1k-tile pool (e.g. bench-corpus-1024-1k) -- and (2)
+# `.cache()` so the leg's actions share ONE metadata read. The write still materializes pixels per
+# tile (the real write cost); caching only removes the redundant re-opens.
+_ds_reg(spark)
+_ls_gtiff_src = f"{CORPUS}/rows"
+_ls_tile_df = (
+    spark.read.format("raster_gbx")
+    .option("filterRegex", r".*\\.tif$")
+    .load(_ls_gtiff_src)
+    .cache()
+)
+# Stage GeoPackage write corpus once (idempotent) and pick a single .gpkg as write source.
+_ls_gpkg_dirs = _cv.stage_gpkg_bench_corpus(
+    spark, GPKG_CORPUS, rows=100000, copies_ladder=(10, 80, 160)
+)
+_ls_gpkg_dir = _ls_gpkg_dirs.get(80) or next(iter(_ls_gpkg_dirs.values()), None)
+_ls_gpkg_src = None
+if _ls_gpkg_dir:
+    _ls_gpkg_files = sorted(_glob.glob(_os.path.join(_ls_gpkg_dir, "*.gpkg")))
+    _ls_gpkg_src = _ls_gpkg_files[0] if _ls_gpkg_files else None
+# Mode sweep: fuse always runs; external/managed require a provisioned FILE_FILESPACE.
+_ls_modes = ("fuse", "external", "managed") if FILE_FILESPACE else ("fuse",)
+for _ls_mode in _ls_modes:
+    # external: full layout sweep (all three layouts -- the FILE-table layout dimension).
+    # fuse/managed: only "order" layout (mode-comparison baseline; fuse ignores layout anyway).
+    _ls_layouts = ("order", "cluster", "plain") if _ls_mode == "external" else ("order",)
+    # Vector external writes need a filespace (staging dir for the assembled .gpkg);
+    # raster external ignores it. Both managed modes use it.
+    _ls_filespace = FILE_FILESPACE if _ls_mode in ("external", "managed") else None
+    # Target prefix: filesystem PATH for fuse (run_file_write_layout_sweep appends
+    # "_{layout}" to form the per-layout path); TABLE NAME for external/managed (appending
+    # "_{layout}" gives a valid three-part table name: schema.table_layout).
+    if _ls_mode == "fuse":
+        _ls_gtiff_prefix = OUT + "/bench_layout_gtiff"
+        _ls_gpkg_prefix  = OUT + "/bench_layout_gpkg"
+    elif _ls_mode == "external":
+        _ls_gtiff_prefix = f"{_TABLE_SCHEMA}.bench_layout_gtiff_external"
+        _ls_gpkg_prefix  = f"{_TABLE_SCHEMA}.bench_layout_gpkg_external"
+    else:  # managed
+        _ls_gtiff_prefix = f"{_TABLE_SCHEMA}.bench_layout_gtiff_managed"
+        _ls_gpkg_prefix  = f"{_TABLE_SCHEMA}.bench_layout_gpkg_managed"
+    print(
+        f"[write-sweep] mode={_ls_mode} layouts={_ls_layouts} starting…",
+        flush=True,
+    )
+    _gtiff_sweep = _rd.run_file_write_layout_sweep(
+        spark,
+        fmt="gtiff", source=_ls_tile_df, target_prefix=_ls_gtiff_prefix,
+        run_id=RUN_ID, warmup=SPARK_WARMUP, measured=SPARK_MEASURED,
+        file_mode=_ls_mode, filespace=_ls_filespace,
+        layouts=_ls_layouts,
+        where="cluster",
+    )
+    for _r in _gtiff_sweep:
+        _sink([_r]); lw.append(_r); _ls_rows.append(_r)
+    if _ls_gpkg_src:
+        _gpkg_sweep = _rd.run_file_write_layout_sweep(
+            spark,
+            fmt="gpkg", source=_ls_gpkg_src, target_prefix=_ls_gpkg_prefix,
+            run_id=RUN_ID, warmup=SPARK_WARMUP, measured=SPARK_MEASURED,
+            file_mode=_ls_mode, filespace=_ls_filespace,
+            layouts=_ls_layouts,
+            where="cluster",
+        )
+        for _r in _gpkg_sweep:
+            _sink([_r]); lw.append(_r); _ls_rows.append(_r)
+    print(f"[write-sweep] mode={_ls_mode}: done", flush=True)
+if _ls_rows:
+    _df_ls = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' "
+        f"AND fn IN ('gtiff_file_write','gpkg_file_write')"
+    )
+    try:
+        display(_df_ls)
+    except Exception:
+        _df_ls.show(100, truncate=False)
+    _md = results.summarize(_ls_rows)
+    _show_md(f"FILE write layout sweep -- {RUN_ID}", _md)
+"""
+
+_CELL_LAYOUT_SCAN = """# Layout scan comparison: sequential-scan cost across write layouts (order/cluster/plain).
+# Reads the FILE EXTERNAL tables written by the layout sweep via read_file_table and times
+# df.count() and df.repartition(n, "path").count().
+# GeoTIFF only (bench_layout_gtiff_external_*): raster writes one FILE-ref ROW PER TILE, so
+# the order/cluster/plain layout dimension has a real scan/prune effect. GeoPackage is SKIPPED
+# BY DESIGN -- a vector FILE write stores the whole .gpkg as ONE FILE reference (one row per
+# external table), so a per-layout scan comparison is meaningless; the vector FILE write +
+# round-trip parity is measured in the layout SWEEP (gpkg_file_write) instead.
+# Skip cleanly when FILE_FILESPACE is not set (external tables only exist when the layout
+# sweep ran with a provisioned filespace).
+# Each ResultRow is _sink'd immediately (serialized).
+from databricks.labs.gbx.bench import readers as _rd
+print("=== layout scan comparison starting ===", flush=True)
+_scan_rows = []
+if not FILE_FILESPACE:
+    print(
+        "LAYOUT SCAN SKIPPED: FILE_FILESPACE not set. "
+        "Run the layout sweep with --file-filespace provisioned to create FILE external "
+        "tables, then re-run with --layout-scan / --layout-scan-only.",
+        flush=True,
+    )
+else:
+    # Derive catalog+schema prefix matching the layout sweep (same TABLE derivation).
+    _scan_schema = ".".join(TABLE.split(".")[:2])
+    # GeoTIFF external tables written by the layout sweep: one per layout.
+    # The scan compares sequential-scan cost; the sweep must have run first so the tables exist.
+    _tables_by_layout_gtiff = {
+        "order":   f"{_scan_schema}.bench_layout_gtiff_external_order",
+        "cluster": f"{_scan_schema}.bench_layout_gtiff_external_cluster",
+        "plain":   f"{_scan_schema}.bench_layout_gtiff_external_plain",
+    }
+    _scan_rows_gtiff = _rd.run_layout_scan_comparison(
+        spark,
+        tables_by_layout=_tables_by_layout_gtiff,
+        run_id=RUN_ID,
+        warmup=SPARK_WARMUP,
+        measured=SPARK_MEASURED,
+        file_mode="external",
+        where="cluster",
+        include_shuffle_input=True,
+    )
+    for _r in _scan_rows_gtiff:
+        _sink([_r]); lw.append(_r)
+    _scan_rows.extend(_scan_rows_gtiff)
+    # GeoPackage layout scan: SKIPPED BY DESIGN.
+    # A vector FILE write (vector_file_write) stores the WHOLE .gpkg as ONE FILE
+    # reference, so each bench_layout_gpkg_external_<layout> table holds exactly ONE
+    # row. A sequential-scan / pruning comparison across order/cluster/plain is
+    # meaningless on single-row tables (nothing to prune, nothing to cluster), so the
+    # gpkg leg is not wired into run_layout_scan_comparison. The meaningful vector FILE
+    # measurement is the write leg + round-trip feature-parity check in the layout
+    # SWEEP (bench_layout_gpkg_* / gpkg_file_write), not a per-layout scan.
+    print(
+        "[layout-scan] gpkg SKIPPED BY DESIGN: a vector FILE write stores the whole "
+        ".gpkg as ONE FILE reference (one row per external table), so a per-layout "
+        "sequential-scan comparison across order/cluster/plain is not meaningful. The "
+        "vector FILE write + round-trip parity is measured in the layout SWEEP "
+        "(gpkg_file_write), not here.",
+        flush=True,
+    )
+if _scan_rows:
+    _df_scan = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' "
+        f"AND category IN ('layout-scan','layout-shuffle-input')"
+    )
+    try:
+        display(_df_scan)
+    except Exception:
+        _df_scan.show(100, truncate=False)
+    _md = results.summarize(_scan_rows)
+    _show_md(f"Layout scan comparison -- {RUN_ID}", _md)
+"""
+
+_CELL_VECTOR_TABLE_READ = """# Vector FILE-column-table read benchmark: vector_file_read TABLE mode across managed/external.
+# Reads the FILE-column Delta tables written by the gpkg write leg (layout sweep) back through
+# the vector table-read entry (vector_file_read table mode).  Measures read+decode throughput
+# and feature-count parity.  fuse mode is na_by_design (no FILE-column table on FUSE tier).
+# Skipped cleanly when FILE_FILESPACE is not set (no FILE tables were provisioned).
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import results
+print("=== vector FILE-column-table read starting ===", flush=True)
+_vtr_rows = []
+# _TABLE_SCHEMA derives from the results TABLE name (first two dot-separated parts).
+# TABLE = "catalog.schema.bench_results" -> _TABLE_SCHEMA = "catalog.schema"
+_TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
+if not FILE_FILESPACE:
+    print(
+        "VECTOR TABLE READ SKIPPED: FILE_FILESPACE not set. "
+        "Run the layout sweep with --file-filespace provisioned to create FILE "
+        "tables, then re-run with --vector-table-read / --vector-table-read-only.",
+        flush=True,
+    )
+else:
+    # Tables written by the gpkg write leg (layout sweep, "order" layout):
+    #   managed: {_TABLE_SCHEMA}.bench_layout_gpkg_managed_order
+    #   external: {_TABLE_SCHEMA}.bench_layout_gpkg_external_order
+    # fuse: na_by_design (returned cleanly by run_vector_table_read_sweep).
+    _vtr_modes = ("managed", "external", "fuse")
+    for _vtr_mode in _vtr_modes:
+        if _vtr_mode == "fuse":
+            _vtr_table = ""
+        elif _vtr_mode == "managed":
+            _vtr_table = f"{_TABLE_SCHEMA}.bench_layout_gpkg_managed_order"
+        else:
+            _vtr_table = f"{_TABLE_SCHEMA}.bench_layout_gpkg_external_order"
+        print(
+            f"[gpkg-table-read] mode={_vtr_mode}"
+            + (f" table={_vtr_table}" if _vtr_mode != "fuse" else " (na_by_design)"),
+            flush=True,
+        )
+        _vtr_r = _rd.run_vector_table_read_sweep(
+            spark,
+            _vtr_table if _vtr_mode != "fuse" else "",
+            RUN_ID,
+            SPARK_WARMUP,
+            SPARK_MEASURED,
+            file_mode=_vtr_mode,
+            where="cluster",
+        )
+        _sink([_vtr_r]); lw.append(_vtr_r); _vtr_rows.append(_vtr_r)
+        print(
+            f"[gpkg-table-read] mode={_vtr_mode}: {_vtr_r.status}, "
+            f"{_vtr_r.rows} features, {_vtr_r.iter_median_s:.1f}s",
+            flush=True,
+        )
+if _vtr_rows:
+    _df_vtr = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND fn = 'gpkg_table_read'"
+    )
+    try:
+        display(_df_vtr)
+    except Exception:
+        _df_vtr.show(100, truncate=False)
+    _md = results.summarize(_vtr_rows)
+    _show_md(f"Vector FILE-column-table read -- {RUN_ID}", _md)
+"""
+
+_CELL_RASTER_DECODE_READ = """# Raster pixel-decode throughput benchmark: rst_avg over FILE tiles (MANAGED/EXTERNAL/FUSE).
+# Reads GeoTIFF tiles from the layout-sweep FILE tables (or a Volume dir for fuse) and
+# forces actual pixel decode via rst_avg -- NOT enumeration (gbx_file_read+count).
+# For managed/external: also emits an ordering-amortization comparison (auto-order vs
+# skipOrdering=True) to measure the T8 same-source sort payoff on open/LRU reuse.
+# Skipped cleanly when FILE_FILESPACE is not set (no FILE tables were provisioned).
+from databricks.labs.gbx.bench import readers as _rd
+from databricks.labs.gbx.bench import results
+print("=== raster decode-read starting ===", flush=True)
+_rdr_rows = []
+# _TABLE_SCHEMA derives from the results TABLE name (first two dot-separated parts).
+_TABLE_SCHEMA = ".".join(TABLE.split(".")[:2])
+if not FILE_FILESPACE:
+    print(
+        "RASTER DECODE READ SKIPPED: FILE_FILESPACE not set. "
+        "Run the layout sweep with --file-filespace provisioned to create FILE "
+        "tables, then re-run with --raster-decode-read / --raster-decode-read-only.",
+        flush=True,
+    )
+else:
+    # FILE tables written by the gtiff layout-sweep leg (external order layout):
+    #   managed: {_TABLE_SCHEMA}.bench_layout_gtiff_managed_order
+    #   external: {_TABLE_SCHEMA}.bench_layout_gtiff_external_order
+    # fuse: uses the GeoTIFF corpus row-pool dir (virtualTiles=true, no table ordering
+    # concept) — the SAME {CORPUS}/rows the file-matrix + layout-sweep gtiff legs read,
+    # so all legs are corpus-consistent (CORPUS = a seeded corpus dir with rows/).
+    _rdr_modes = (
+        ("managed", f"{_TABLE_SCHEMA}.bench_layout_gtiff_managed_order"),
+        ("external", f"{_TABLE_SCHEMA}.bench_layout_gtiff_external_order"),
+        ("fuse", CORPUS + "/rows"),
+    )
+    for _rdr_fm, _rdr_src in _rdr_modes:
+        print(
+            f"[raster-decode-read] mode={_rdr_fm}"
+            + (f" source={_rdr_src}" if _rdr_fm == 'fuse'
+               else f" table={_rdr_src}"),
+            flush=True,
+        )
+        # For fuse: single row (no table ordering); for managed/external:
+        # skip_ordering=None emits two rows (auto-order + skip-order comparison).
+        _rdr_skip = None if _rdr_fm in ("managed", "external") else False
+        _rdr_batch = _rd.run_raster_decode_read_sweep(
+            spark,
+            _rdr_src,
+            RUN_ID,
+            SPARK_WARMUP,
+            SPARK_MEASURED,
+            file_mode=_rdr_fm,
+            skip_ordering=_rdr_skip,
+            where="cluster",
+        )
+        for _rdr_r in _rdr_batch:
+            _sink([_rdr_r]); lw.append(_rdr_r); _rdr_rows.append(_rdr_r)
+            print(
+                f"[raster-decode-read] mode={_rdr_fm} {_rdr_r.mode}: "
+                f"{_rdr_r.status}, {_rdr_r.rows} tiles, {_rdr_r.iter_median_s:.1f}s",
+                flush=True,
+            )
+if _rdr_rows:
+    _df_rdr = spark.sql(
+        f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND fn = 'gtiff_decode_read'"
+    )
+    try:
+        display(_df_rdr)
+    except Exception:
+        _df_rdr.show(100, truncate=False)
+    _md = results.summarize(_rdr_rows)
+    _show_md(f"Raster decode-read (FILE) -- {RUN_ID}", _md)
+"""
+
 _CELL_VECTOR = """# Vector reader + writer benchmark: light *_gbx vs heavy *_ogr (+ row-count parity)
 # Two-leg pipeline (scaled branch):
 #   Leg 1 (reader): spark.read.format(fmt).load(copies/) -> Delta ingest table (forces
@@ -2798,9 +3437,10 @@ def build_bench_notebook(cfg: dict) -> dict:
         row_counts=cfg["row_counts"],
         warmup=cfg["warmup"],
         measured=cfg["measured"],
-        spark_warmup=cfg.get("spark_warmup", 1),
+        spark_warmup=cfg.get("spark_warmup", 0),
         spark_measured=cfg.get("spark_measured", 1),
         partition_size=int(cfg.get("partition_size", 0)),
+        max_partition_bytes=str(cfg.get("max_partition_bytes", "") or ""),
         truncate=cfg.get("truncate_results", False),
         truncate_all=cfg.get("truncate_all", False),
         resume=bool(cfg.get("resume")),
@@ -2838,6 +3478,26 @@ def build_bench_notebook(cfg: dict) -> dict:
         netcdf_only=bool(cfg.get("netcdf_only")),
         benchmark_netcdf_writer=bool(cfg.get("benchmark_netcdf_writer")),
         netcdf_writer_only=bool(cfg.get("netcdf_writer_only")),
+        input_tile=str(cfg.get("input_tile", "materialized")),
+        disable_file=bool(cfg.get("disable_file", False)),
+        disable_fuse_direct=bool(cfg.get("disable_fuse_direct", False)),
+        benchmark_grouped_file=bool(cfg.get("benchmark_grouped_file")),
+        grouped_file_only=bool(cfg.get("grouped_file_only")),
+        multiwindow_corpus=str(cfg.get("multiwindow_corpus", "") or ""),
+        benchmark_file_matrix=bool(cfg.get("file_matrix")),
+        file_matrix_only=bool(cfg.get("file_matrix_only")),
+        benchmark_gpkg_chunksize=bool(cfg.get("gpkg_chunksize")),
+        gpkg_chunksize_only=bool(cfg.get("gpkg_chunksize_only")),
+        benchmark_layout_sweep=bool(cfg.get("layout_sweep")),
+        layout_sweep_only=bool(cfg.get("layout_sweep_only")),
+        benchmark_layout_scan=bool(cfg.get("layout_scan")),
+        layout_scan_only=bool(cfg.get("layout_scan_only")),
+        benchmark_vector_table_read=bool(cfg.get("vector_table_read")),
+        vector_table_read_only=bool(cfg.get("vector_table_read_only")),
+        benchmark_raster_decode_read=bool(cfg.get("raster_decode_read")),
+        raster_decode_read_only=bool(cfg.get("raster_decode_read_only")),
+        file_filespace=str(cfg.get("file_filespace", "") or ""),
+        gpkg_corpus=str(cfg.get("gpkg_corpus", "") or ""),
     )
     setup += (
         _SINK  # truncate up-front + define the incremental Delta sink + show_section
@@ -2876,26 +3536,97 @@ def build_bench_notebook(cfg: dict) -> dict:
     netcdf_only = bool(cfg.get("netcdf_only"))
     benchmark_netcdf_writer = bool(cfg.get("benchmark_netcdf_writer"))
     netcdf_writer_only = bool(cfg.get("netcdf_writer_only"))
+    benchmark_grouped_file = bool(cfg.get("benchmark_grouped_file"))
+    grouped_file_only = bool(cfg.get("grouped_file_only"))
+    benchmark_file_matrix = bool(cfg.get("file_matrix"))
+    file_matrix_only = bool(cfg.get("file_matrix_only"))
+    benchmark_gpkg_chunksize = bool(cfg.get("gpkg_chunksize"))
+    gpkg_chunksize_only = bool(cfg.get("gpkg_chunksize_only"))
+    benchmark_layout_sweep = bool(cfg.get("layout_sweep"))
+    layout_sweep_only = bool(cfg.get("layout_sweep_only"))
+    benchmark_layout_scan = bool(cfg.get("layout_scan"))
+    layout_scan_only = bool(cfg.get("layout_scan_only"))
+    benchmark_vector_table_read = bool(cfg.get("vector_table_read"))
+    vector_table_read_only = bool(cfg.get("vector_table_read_only"))
+    benchmark_raster_decode_read = bool(cfg.get("raster_decode_read"))
+    raster_decode_read_only = bool(cfg.get("raster_decode_read_only"))
 
     # Setup is one cell; then ONE cell per selected (tier x mode) section so each renders
     # its table + summary the moment it finishes; then the wrap-up cell. Order: pure-core
     # (light, heavy) then spark-path (light, heavy).
+    # Choose the install cell based on whether this is a Serverless job or a classic cluster.
+    # Serverless: %pip magic is not available in a running notebook job cell; install via
+    # subprocess so we control the restart precisely. Classic: the single %pip cell is
+    # preferred (ONE kernel restart, no manual dbutils.library.restartPython() needed, and
+    # avoids the triple-restart failure on DBR 19.x-snapshot).
+    if cfg.get("serverless"):
+        _install_cell_src = (
+            "import subprocess, sys\n"
+            "WHL = {wheel!r}\n"
+            "r = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet', '--force-reinstall',\n"
+            "     '--no-deps', WHL],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('whl install rc:', r.returncode, flush=True)\n"
+            "if r.returncode != 0:\n"
+            "    raise RuntimeError('whl install failed: '\n"
+            "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
+            "r2 = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
+            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('deps install rc:', r2.returncode, flush=True)\n"
+            "if r2.returncode != 0:\n"
+            "    raise RuntimeError('deps install failed: '\n"
+            "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
+            "print('installs done; restarting Python', flush=True)\n"
+            "dbutils.library.restartPython()\n"
+        ).format(wheel=cfg["wheel"])
+    else:
+        # Classic cluster: two-step subprocess install (same shape as serverless), one restart.
+        # WHY NOT a single `%pip install --force-reinstall "geobrix[..] @ file://<whl>"`:
+        #  - The fixed 0.5.0 version means a PLAIN install skips stale code (a warm-cluster prior
+        #    0.5.0 is treated as satisfied -> a freshly added bench helper is missing).
+        #  - But a FULL --force-reinstall reinstalls the entire closure every run: slow (it
+        #    re-fetches DBR-provided numpy/pandas/rasterio from the mirror -> ~tens of minutes)
+        #    AND it re-resolves transitive deps, bumping rio-tiler's UNPINNED cachetools past
+        #    pyiceberg's <7 cap (dependency-conflict warning).
+        # Fix: (1) --force-reinstall --no-deps the wheel -> refresh ONLY geobrix code (fast,
+        # touches nothing else); (2) a NON-forced deps install -> adds only MISSING deps and
+        # leaves satisfied ones (incl DBR's cachetools<7) untouched, so no pyiceberg conflict and
+        # DBR-provided packages are skipped. One dbutils.library.restartPython() (no %pip magic,
+        # so no double/triple restart on the DBR 19.x-snapshot).
+        _install_cell_src = (
+            "import subprocess, sys\n"
+            "WHL = {wheel!r}\n"
+            "r = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet', '--force-reinstall',\n"
+            "     '--no-deps', WHL],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('whl (code) install rc:', r.returncode, flush=True)\n"
+            "if r.returncode != 0:\n"
+            "    raise RuntimeError('whl install failed: '\n"
+            "                       + r.stdout[-1200:] + ' || ' + r.stderr[-1200:])\n"
+            "r2 = subprocess.run(\n"
+            "    [sys.executable, '-m', 'pip', 'install', '--quiet',\n"
+            "     'geobrix[light-dbr19]', 'markdown'],\n"
+            "    capture_output=True, text=True,\n"
+            ")\n"
+            "print('deps install rc:', r2.returncode, flush=True)\n"
+            "if r2.returncode != 0:\n"
+            "    raise RuntimeError('deps install failed: '\n"
+            "                       + r2.stdout[-1200:] + ' || ' + r2.stderr[-1200:])\n"
+            "print('installs done; restarting Python', flush=True)\n"
+            "dbutils.library.restartPython()\n"
+        ).format(wheel=cfg["wheel"])
     cells = [
-        # Ensure BOTH fresh geobrix code AND the full [light] dep set every run. The wheel
-        # version is a fixed 0.4.3 string, so on a WARM cluster that already has geobrix
-        # installed, a bare `pip install '<wheel>[light]'` no-ops: pip sees geobrix==0.4.3
-        # satisfied and skips the install ENTIRELY -- including resolving the [light] extra
-        # deps. So the cluster can end up running STALE code (e.g. a freshly added DataSource
-        # -> DATA_SOURCE_NOT_FOUND) OR missing a [light] dep (e.g. shapely -> ModuleNotFound
-        # at `import bench.spec`). The old fix (`--force-reinstall --no-deps`) swapped the
-        # code but, by skipping deps, LEFT geobrix present without its extras -> the next
-        # warm run's [light] install then no-ops on those deps. Uninstalling first forces the
-        # install to actually run: fresh code from the wheel FILE + resolved [light] extras
-        # (shapely/rasterio/pyogrio/...). Deps come from pip's cache (fast); only the small
-        # geobrix wheel is re-read. `markdown` powers the displayHTML summaries (_show_md).
-        _cell("%pip uninstall -y geobrix"),
-        _cell(f"%pip install --quiet '{cfg['wheel']}[light]' markdown"),
-        _cell("dbutils.library.restartPython()"),
+        # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.
+        # [light-dbr19] is the canonical protobuf-6 classic DBR 19 extra: it drops the
+        # mapbox-vector-tile<2.2 cap that conflicts with DBR 19's protobuf>=6.31.1.
+        _cell(_install_cell_src),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the
         # run view leads with the per-section result cells, not this wall of setup code.
         _cell(setup, collapsed=True),
@@ -2917,6 +3648,13 @@ def build_bench_notebook(cfg: dict) -> dict:
             fanout_only,
             netcdf_only,
             netcdf_writer_only,
+            grouped_file_only,
+            file_matrix_only,
+            gpkg_chunksize_only,
+            layout_sweep_only,
+            layout_scan_only,
+            vector_table_read_only,
+            raster_decode_read_only,
         )
     )
     if not _any_only:
@@ -2946,6 +3684,19 @@ def build_bench_notebook(cfg: dict) -> dict:
         (benchmark_grid_bng or grid_bng_only, [_CELL_GRID_BNG]),
         (benchmark_grid_custom or grid_custom_only, [_CELL_GRID_CUSTOM]),
         (benchmark_fanout or fanout_only, [_CELL_FANOUT]),
+        (benchmark_grouped_file or grouped_file_only, [_CELL_GROUPED_FILE]),
+        (benchmark_file_matrix or file_matrix_only, [_CELL_FILE_MATRIX]),
+        (benchmark_gpkg_chunksize or gpkg_chunksize_only, [_CELL_GPKG_CHUNKSIZE]),
+        (benchmark_layout_sweep or layout_sweep_only, [_CELL_LAYOUT_SWEEP]),
+        (benchmark_layout_scan or layout_scan_only, [_CELL_LAYOUT_SCAN]),
+        (
+            benchmark_vector_table_read or vector_table_read_only,
+            [_CELL_VECTOR_TABLE_READ],
+        ),
+        (
+            benchmark_raster_decode_read or raster_decode_read_only,
+            [_CELL_RASTER_DECODE_READ],
+        ),
     ]
     for _enabled, _cell_srcs in _bench_cells:
         if _enabled:

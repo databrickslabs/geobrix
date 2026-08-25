@@ -21,7 +21,7 @@ import pytest
 
 mvt = pytest.importorskip(
     "mapbox_vector_tile",
-    reason="mapbox-vector-tile not installed (geobrix[light] or [test] required)",
+    reason="mapbox-vector-tile not installed (a light-tier extra (e.g. geobrix[light_env6]) or [test] required)",
 )
 from shapely import to_wkb  # noqa: E402
 from shapely.geometry import Point, Polygon  # noqa: E402

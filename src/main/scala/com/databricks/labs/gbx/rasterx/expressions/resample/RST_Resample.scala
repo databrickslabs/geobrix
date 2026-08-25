@@ -24,19 +24,18 @@ import org.gdal.gdal.Dataset
   * source CRS and extent are preserved; only pixel density changes.
   */
 case class RST_Resample(
-    tileExpr: Expression,
+    tile: Expression,
     factorExpr: Expression,
     algorithmExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, factorExpr, algorithmExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, factorExpr, algorithmExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals (e.g. ``2.0``) coerce to Double cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, DoubleType, StringType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, DoubleType, StringType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Resample.name
-    override def replacement: Expression = rstInvoke(RST_Resample, rasterType)
+    override def replacement: Expression = invoke(RST_Resample)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -44,10 +43,8 @@ case class RST_Resample(
 
 object RST_Resample extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, factor: Double, algorithm: UTF8String, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, factor: Double, algorithm: UTF8String, conf: UTF8String): InternalRow =
         runDispatch(row, factor, algorithm, conf, BinaryType)
-    def evalPath(row: InternalRow, factor: Double, algorithm: UTF8String, conf: UTF8String): InternalRow =
-        runDispatch(row, factor, algorithm, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, factor: Double, algorithm: UTF8String, conf: UTF8String, dt: DataType

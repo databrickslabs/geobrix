@@ -16,10 +16,10 @@ import org.gdal.gdal.Dataset
   *
   * Returns `MAP<STRING, ARRAY<LONG>>` keyed by ``"band_<i>"`` (1-based) with a
   * length-`n_buckets` array of bucket counts per band. Pixels with values
-  * outside `[min, max]` are dropped (no out-of-range bucket).
+  * outside `[min_val, max_val]` are dropped (no out-of-range bucket).
   *
-  *   - `n_buckets` (default 256): number of equal-width buckets across `[min, max]`.
-  *   - `min` / `max` (defaults: derived from band statistics if null): explicit
+  *   - `n_buckets` (default 256): number of equal-width buckets across `[min_val, max_val]`.
+  *   - `min_val` / `max_val` (defaults: derived from band statistics if null): explicit
   *     histogram range. Passing both lets the caller align histograms across
   *     tiles for comparable distributions.
   *   - `include_nodata` (default false): currently ignored — GDAL excludes
@@ -27,26 +27,28 @@ import org.gdal.gdal.Dataset
   *     symmetry with `gdal_histogram`'s `--no_data` flag.
   */
 case class RST_Histogram(
-    tileExpr: Expression,
+    tile: Expression,
     nBucketsExpr: Expression,
-    minExpr: Expression,
-    maxExpr: Expression,
+    minValExpr: Expression,
+    maxValExpr: Expression,
     includeNodataExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
-        tileExpr, nBucketsExpr, minExpr, maxExpr, includeNodataExpr, ExpressionConfigExpr()
+        tile, nBucketsExpr, minValExpr, maxValExpr, includeNodataExpr, ExpressionConfigExpr()
     )
     // Pin n_buckets as IntegerType, min/max as DoubleType, include_nodata as BooleanType
     // so SQL literals (e.g. `null`, `5.0`, `false`) coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, DoubleType, DoubleType, BooleanType, StringType
+        tile.dataType, IntegerType, DoubleType, DoubleType, BooleanType, StringType
     )
     override def dataType: DataType = MapType(StringType, ArrayType(LongType))
     override def nullable: Boolean = true
     override def prettyName: String = RST_Histogram.name
-    override def replacement: Expression = rstInvoke(RST_Histogram, rasterType)
+    // propagateNull=false: builder() injects Literal(null, DoubleType) defaults for the optional
+    // min_val/max_val, so a null there must NOT short-circuit the whole result to null (eval must
+    // run). doInvoke below guards a null primary tile row so the prior null-tile→null behavior holds.
+    override def replacement: Expression = invoke(RST_Histogram, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4))
 
@@ -54,41 +56,36 @@ case class RST_Histogram(
 
 object RST_Histogram extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow,
         nBuckets: Int, minVal: java.lang.Double, maxVal: java.lang.Double,
         includeNodata: Boolean, conf: UTF8String
     ): MapData = doInvoke(row, nBuckets, minVal, maxVal, includeNodata, conf, BinaryType)
-    def evalPath(
-        row: InternalRow,
-        nBuckets: Int, minVal: java.lang.Double, maxVal: java.lang.Double,
-        includeNodata: Boolean, conf: UTF8String
-    ): MapData = doInvoke(row, nBuckets, minVal, maxVal, includeNodata, conf, StringType)
     // PySpark commonly serialises integer literals as Long.
-    def evalBinary (
+    def eval (
         row: InternalRow,
         nBuckets: Long, minVal: java.lang.Double, maxVal: java.lang.Double,
         includeNodata: Boolean, conf: UTF8String
     ): MapData = doInvoke(row, nBuckets.toInt, minVal, maxVal, includeNodata, conf, BinaryType)
-    def evalPath (
-        row: InternalRow,
-        nBuckets: Long, minVal: java.lang.Double, maxVal: java.lang.Double,
-        includeNodata: Boolean, conf: UTF8String
-    ): MapData = doInvoke(row, nBuckets.toInt, minVal, maxVal, includeNodata, conf, StringType)
 
     private def doInvoke(
         row: InternalRow,
         nBuckets: Int, minVal: java.lang.Double, maxVal: java.lang.Double,
         includeNodata: Boolean, conf: UTF8String, dt: DataType
     ): MapData =
-        Option(
+        // With propagateNull=false the invoke now runs eval even for a null primary tile; preserve
+        // the prior null-tile→null behavior (rowToDS/safeEval would otherwise NPE on a null row).
+        if (row == null) null
+        else Option(
           RST_ErrorHandler.safeEval(
             () => {
                 val exprConf = ExpressionConfig.fromB64(conf.toString)
                 RST_ExpressionUtil.init(exprConf)
                 val ds = RasterSerializationUtil.rowToDS(row, dt)
-                val minOpt = if (minVal == null) None else Some(minVal.doubleValue())
-                val maxOpt = if (maxVal == null) None else Some(maxVal.doubleValue())
+                // NaN is the "absent" sentinel for the optional min/max (see builder): treat it, like
+                // a genuine null, as "derive from band statistics".
+                val minOpt = Option(minVal).map(_.doubleValue()).filterNot(_.isNaN)
+                val maxOpt = Option(maxVal).map(_.doubleValue()).filterNot(_.isNaN)
                 val hist = execute(ds, nBuckets, minOpt, maxOpt, includeNodata)
                 RasterDriver.releaseDataset(ds)
                 // Build MapData manually because the values are Array[Long].
@@ -106,7 +103,7 @@ object RST_Histogram extends WithExpressionInfo {
 
     /** Pure compute path — extracted for direct unit-testing without Spark.
       *
-      * `minOpt` / `maxOpt` default to the band's `[min, max]` via
+      * `minOpt` / `maxOpt` default to the band's `[min_val, max_val]` via
       * `band.GetMinimum / GetMaximum` (with a `ComputeStatistics` fallback).
       */
     def execute(
@@ -163,18 +160,20 @@ object RST_Histogram extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_histogram"
 
-    /** Build a Literal that boxes a Java Double null — needed so the optional
-      * min/max can be passed through SQL `null` literals without a coercion error. */
-    private def nullDouble: Literal = Literal.create(null, DoubleType)
+    // min/max default is NaN, NOT Literal(null, DoubleType): a null primitive-Double arg is
+    // force-null-checked by Spark's Invoke regardless of propagateNull=false (it short-circuits the
+    // whole result to null before eval runs, which silently broke rst_histogram(tile)). A non-null
+    // NaN sentinel is never null-checked; eval treats NaN like null -> derive range from band stats.
+    private def nanDouble: Literal = Literal(Double.NaN, DoubleType)
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 1 => RST_Histogram(c(0), Literal(256), nullDouble, nullDouble, Literal(false))
-        case 2 => RST_Histogram(c(0), c(1), nullDouble, nullDouble, Literal(false))
-        case 3 => RST_Histogram(c(0), c(1), c(2), nullDouble, Literal(false))
+        case 1 => RST_Histogram(c(0), Literal(256), nanDouble, nanDouble, Literal(false))
+        case 2 => RST_Histogram(c(0), c(1), nanDouble, nanDouble, Literal(false))
+        case 3 => RST_Histogram(c(0), c(1), c(2), nanDouble, Literal(false))
         case 4 => RST_Histogram(c(0), c(1), c(2), c(3), Literal(false))
         case 5 => RST_Histogram(c(0), c(1), c(2), c(3), c(4))
         case n => throw new IllegalArgumentException(
-            s"gbx_rst_histogram takes 1 to 5 arguments (tile, [n_buckets, [min, [max, [include_nodata]]]]); got $n"
+            s"gbx_rst_histogram takes 1 to 5 arguments (tile, [n_buckets, [min_val, [max_val, [include_nodata]]]]); got $n"
         )
     }
 

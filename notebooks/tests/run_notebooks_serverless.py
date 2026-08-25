@@ -4,19 +4,19 @@
 Each notebook is imported into the workspace (optionally with %pip/%restart_python
 cells stripped — Serverless JOB %pip fails with WSFS), then submitted as a one-time
 serverless notebook task.  Dependencies go in the environment spec (environment_version
-"5"), not %pip.  Dep list = wheel + union of requested extras' deps (read from
+"6"), not %pip.  Dep list = wheel + union of requested extras' deps (read from
 pyproject.toml via tomllib) + any --extra-deps.
 
 Usage examples:
-  # Run the four Helios notebooks with defaults (extras=light,stac,vizx,overture, rich):
+  # Run the four Helios notebooks with defaults (extras=light_env6,stac,vizx,overture, rich):
   python run_notebooks_serverless.py \\
     --dir notebooks/examples/helios \\
     --extra-deps rich
 
-  # Run a single notebook with only the light extra:
+  # Run a single notebook with only the light_env6 extra:
   python run_notebooks_serverless.py \\
     --notebook notebooks/examples/helios/01\\ Vector\\ Engine\\(MVT\\).ipynb \\
-    --extras light
+    --extras light_env6
 
   # Explicit workspace folder:
   python run_notebooks_serverless.py \\
@@ -46,12 +46,12 @@ _PYPROJECT_PATH = PROJECT_ROOT / "python" / "geobrix" / "pyproject.toml"
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-ENV_KEY = "ser5"
+ENV_KEY = "ser6"
 DEFAULT_WHEEL = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.4.3-py3-none-any.whl"
+    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl"
 )
-DEFAULT_EXTRAS = "light,stac,vizx,overture"
-DEFAULT_ENV_VERSION = "5"
+DEFAULT_EXTRAS = "light_env6,stac,vizx,overture"
+DEFAULT_ENV_VERSION = "6"
 DEFAULT_POLL_SECS = 20
 
 # Cells whose source contains a line beginning with these magic prefixes are
@@ -125,6 +125,64 @@ def _strip_pip_cells(nb_bytes: bytes) -> bytes:
     return json.dumps(nb).encode()
 
 
+def _inject_override_cell(nb_bytes: bytes, assignments: list[str]) -> bytes:
+    """Inject a code cell of Python assignments so validation runs force compute.
+
+    Example series notebooks skip the expensive compute steps when their output
+    tables already exist (guards like ``do_overwrite=FORCE_REBUILD`` with
+    ``FORCE_REBUILD=False`` committed as the default). A green run that skips
+    every ``rst_*`` / reader step validates nothing. This injects an override
+    cell (e.g. ``FORCE_REBUILD=True``) into the UPLOADED copy only — the
+    committed notebook keeps its safe defaults.
+
+    Placement: immediately AFTER the last cell that runs ``%run`` (the shared
+    config / user-settings cell), so the override wins over the config's
+    default. If no ``%run`` cell exists, the override is inserted after the
+    first code cell. The assignments are plain ``NAME = VALUE`` Python lines,
+    so they override module-level names regardless of which notebook or series
+    this is (works for lakeflow config cells too).
+    """
+    if not assignments:
+        return nb_bytes
+    nb = json.loads(nb_bytes)
+    cells = nb.get("cells", [])
+
+    # Find the last %run cell (config include); else the first code cell.
+    insert_after = None
+    for idx, cell in enumerate(cells):
+        if cell.get("cell_type") != "code":
+            continue
+        src = cell.get("source", [])
+        if isinstance(src, str):
+            src = src.splitlines(keepends=True)
+        if any(line.lstrip().startswith("%run") for line in src):
+            insert_after = idx
+    if insert_after is None:
+        for idx, cell in enumerate(cells):
+            if cell.get("cell_type") == "code":
+                insert_after = idx
+                break
+    if insert_after is None:
+        insert_after = -1  # empty / markdown-only notebook -> prepend
+
+    body = ["# --- validation override (injected by runner; NOT in the committed notebook) ---\n"]
+    body += [f"{a}\n" for a in assignments]
+    override = {
+        "cell_type": "code",
+        "execution_count": 0,
+        "metadata": {},
+        "outputs": [],
+        "source": body,
+    }
+    cells.insert(insert_after + 1, override)
+    nb["cells"] = cells
+    print(
+        f"    injected override cell after cell {insert_after}: {', '.join(assignments)}",
+        flush=True,
+    )
+    return json.dumps(nb).encode()
+
+
 # ---------------------------------------------------------------------------
 # Polling helpers
 # ---------------------------------------------------------------------------
@@ -147,6 +205,7 @@ def _import_notebook(
     local_path: pathlib.Path,
     ws_dir: str,
     strip_pip: bool,
+    set_vars: list[str] | None = None,
 ) -> str:
     """Import a local .ipynb to the workspace; return the workspace path."""
     from databricks.sdk.service.workspace import ImportFormat
@@ -154,10 +213,15 @@ def _import_notebook(
     nb_bytes = local_path.read_bytes()
     if strip_pip:
         nb_bytes = _strip_pip_cells(nb_bytes)
+    if set_vars:
+        nb_bytes = _inject_override_cell(nb_bytes, set_vars)
 
     stem = local_path.stem  # filename without .ipynb
     ws_path = f"{ws_dir.rstrip('/')}/{stem}"
 
+    # Ensure the target workspace folder exists — import_ raises ResourceDoesNotExist
+    # if the parent folder is absent (mkdirs is idempotent, creates parents).
+    w.workspace.mkdirs(ws_dir.rstrip("/"))
     w.workspace.import_(
         path=ws_path,
         format=ImportFormat.JUPYTER,
@@ -176,13 +240,14 @@ def run_one(
     env_version: str,
     poll_secs: int,
     strip_pip: bool,
+    set_vars: list[str] | None = None,
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS."""
     from databricks.sdk.service import compute, jobs
 
     print(f"\n=== SUBMIT (serverless): {local_path.name} ===", flush=True)
 
-    ws_path = _import_notebook(w, local_path, ws_dir, strip_pip)
+    ws_path = _import_notebook(w, local_path, ws_dir, strip_pip, set_vars=set_vars)
 
     task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
 
@@ -202,6 +267,16 @@ def run_one(
                 task_key=task_key,
                 environment_key=ENV_KEY,
                 notebook_task=jobs.NotebookTask(notebook_path=ws_path),
+                # Run exactly once — do not retry a failed validation run (a retry
+                # just re-burns compute on the same failure and doubles the child
+                # runs to sift through).
+                max_retries=0,
+                # max_retries alone does NOT stop serverless auto-optimization
+                # retries (the "Enable serverless auto-optimization (may include
+                # additional retries)" box, on by default). That is what produced
+                # a duplicate child run on INTERNAL_ERROR. disable_auto_optimization
+                # is the API equivalent of unchecking it → truly at-most-once.
+                disable_auto_optimization=True,
             )
         ],
     )
@@ -235,6 +310,17 @@ def run_one(
     for t in r.tasks or []:
         ts = t.state.result_state if t.state else None
         print(f"    task {t.task_key}: {ts}  page={t.run_page_url}", flush=True)
+        # The jobs API does NOT expose serverless notebook stdout; a notebook that
+        # ends with dbutils.notebook.exit(<json>) surfaces its result here. Print
+        # it so experiment summaries are captured client-side (reliable, not stdout).
+        try:
+            out = w.jobs.get_run_output(run_id=t.run_id)
+            nb_out = getattr(out, "notebook_output", None)
+            payload = getattr(nb_out, "result", None) if nb_out else None
+            if payload:
+                print(f"    task {t.task_key} notebook_output: {payload}", flush=True)
+        except Exception as exc:  # noqa: BLE001 — output fetch is best-effort
+            print(f"    (no notebook_output for {t.task_key}: {exc})", flush=True)
 
     from databricks.sdk.service.jobs import RunResultState
     ok = (result == RunResultState.SUCCESS)
@@ -365,8 +451,38 @@ def main() -> int:
             "(default: strip them — they fail in Serverless JOB compute)."
         ),
     )
+    parser.add_argument(
+        "--dep-notebook",
+        metavar="PATH",
+        action="append",
+        dest="dep_notebooks",
+        help=(
+            "Local .ipynb to import into ws-dir but NOT submit (e.g. config_nb.ipynb "
+            "used via %%run). Repeatable."
+        ),
+    )
+    parser.add_argument(
+        "--set-var",
+        metavar="NAME=VALUE",
+        action="append",
+        dest="set_vars",
+        help=(
+            "Inject a Python assignment into the UPLOADED notebook copy (after the "
+            "%%run/config cell) so a validation run forces compute the committed "
+            "notebook would skip. Example: --set-var FORCE_REBUILD=True forces the "
+            "reader/rst_* rebuild steps that are gated on do_overwrite=FORCE_REBUILD, "
+            "without changing the committed default. VALUE is inlined as a Python "
+            "literal. Repeatable. Applies to every submitted notebook."
+        ),
+    )
 
     args = parser.parse_args()
+
+    # Validate --set-var forms early (NAME=VALUE, NAME a valid identifier).
+    for sv in args.set_vars or []:
+        name, sep, _ = sv.partition("=")
+        if not sep or not name.strip().isidentifier():
+            parser.error(f"--set-var must be NAME=VALUE with NAME a valid identifier; got {sv!r}")
 
     notebooks = _collect_notebooks(args.notebooks, args.dirs)
     if not notebooks:
@@ -394,7 +510,18 @@ def main() -> int:
     print(f"Deps     : {len(deps)} entries (wheel + {len(deps) - 1} packages)", flush=True)
     print(f"Notebooks: {len(notebooks)}", flush=True)
     print(f"Strip %%pip: {args.strip_pip}", flush=True)
+    if args.set_vars:
+        print(f"Override vars: {', '.join(args.set_vars)}", flush=True)
     print("", flush=True)
+
+    # Upload dep-notebooks (referenced via %run) before submitting main notebooks.
+    for dep_path_str in args.dep_notebooks or []:
+        dep_path = pathlib.Path(dep_path_str).resolve()
+        if not dep_path.exists():
+            print(f"ERROR: dep-notebook not found: {dep_path}", file=sys.stderr)
+            return 2
+        print(f"=== DEP-IMPORT: {dep_path.name} ===", flush=True)
+        _import_notebook(w, dep_path, ws_dir, strip_pip=args.strip_pip)
 
     for nb_path in notebooks:
         ok = run_one(
@@ -405,6 +532,7 @@ def main() -> int:
             env_version=args.env_version,
             poll_secs=args.poll_secs,
             strip_pip=args.strip_pip,
+            set_vars=args.set_vars,
         )
         if not ok:
             return 1

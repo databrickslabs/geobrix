@@ -35,7 +35,9 @@ show_help() {
 }
 
 # Parse arguments
-TEST_PATH="/root/geobrix/python/geobrix/test/"
+# TEST_PATH accumulates one or more --path values (pytest accepts multiple positional
+# paths in a single run). Empty until the first --path; falls back to the full test tree.
+TEST_PATH=""
 LOG_PATH=""
 KEYWORD=""
 # Default: exclude integration tests (network downloads); matches CI's python_build action.
@@ -44,7 +46,8 @@ MARKERS="-m 'not integration'"
 while [[ $# -gt 0 ]]; do
     case $1 in
         --path)
-            TEST_PATH="/root/geobrix/$2"
+            # Append so repeated --path flags all run in one pytest invocation.
+            TEST_PATH="$TEST_PATH /root/geobrix/$2"
             shift 2
             ;;
         -k)
@@ -75,6 +78,10 @@ while [[ $# -gt 0 ]]; do
             ;;
     esac
 done
+
+# No --path given → run the full test tree. Trim the leading space from accumulation.
+TEST_PATH="${TEST_PATH:-/root/geobrix/python/geobrix/test/}"
+TEST_PATH="${TEST_PATH# }"
 
 cd "$PROJECT_ROOT"
 

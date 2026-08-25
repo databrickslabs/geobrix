@@ -13,6 +13,7 @@ This is a static source guard: if someone adds a forbidden call, this test
 fails with the exact file:line, before it ships and breaks on Serverless.
 """
 
+import ast
 import re
 from pathlib import Path
 
@@ -49,11 +50,36 @@ def _source_files():
             yield p
 
 
+def _prose_lines(source: str) -> set[int]:
+    """Line numbers occupied by string literals (docstrings included).
+
+    The guard describes the very APIs it forbids, so documentation that names
+    ``.rdd`` or ``spark.conf.set`` — module docstrings, Serverless-safety notes,
+    error messages — used to trip it and fail CI on a purely documentary line.
+    Stripping ``#`` comments was not enough. Prose cannot call anything, so
+    every string literal is excluded and only executable code is scanned.
+    """
+    try:
+        tree = ast.parse(source)
+    except SyntaxError:  # unparseable file: fall back to scanning every line
+        return set()
+    prose: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str):
+            end = node.end_lineno if node.end_lineno is not None else node.lineno
+            prose.update(range(node.lineno, end + 1))
+    return prose
+
+
 def test_light_product_never_mutates_spark_config_or_uses_jvm_bridge():
     violations = []
     for path in _source_files():
-        for i, line in enumerate(path.read_text().splitlines(), start=1):
-            code = line.split("#", 1)[0]  # ignore comments/docstring-prose mentions
+        source = path.read_text()
+        prose = _prose_lines(source)
+        for i, line in enumerate(source.splitlines(), start=1):
+            if i in prose:
+                continue
+            code = line.split("#", 1)[0]  # ignore trailing comments
             for label, pat in _FORBIDDEN.items():
                 if pat.search(code):
                     violations.append(f"{path.name}:{i} [{label}] -> {line.strip()}")

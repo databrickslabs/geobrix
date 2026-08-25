@@ -14,30 +14,26 @@ import org.gdal.gdal.Dataset
 import scala.collection.mutable.ArrayBuffer
 
 /** Returns the maximum raster value in each BNG grid cell. */
-case class RST_BNG_RasterToGridMax(tileExpr: Expression, resolution: Expression) extends InvokedExpression {
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, resolution, ExpressionConfigExpr())
+case class RST_BNG_RasterToGridMax(tile: Expression, resolution: Expression) extends InvokedExpression {
+    override def children: Seq[Expression] = Seq(tile, resolution, ExpressionConfigExpr())
     override def dataType: DataType =
         ArrayType(ArrayType(StructType(Seq(StructField("cellID", StringType), StructField("measure", DoubleType)))))
     override def nullable: Boolean = true
     override def prettyName: String = RST_BNG_RasterToGridMax.name
-    override def replacement: Expression = rstInvoke(RST_BNG_RasterToGridMax, rasterType)
+    override def replacement: Expression = invoke(RST_BNG_RasterToGridMax)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 }
 
 /** Companion: SQL name, builder, and entry points for path/binary tile. */
 object RST_BNG_RasterToGridMax extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = doInvoke(row, resolution, conf, StringType)
-    def evalBinary(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = doInvoke(row, resolution, conf, BinaryType)
+    def eval(row: InternalRow, resolution: Int, conf: UTF8String): ArrayData = doInvoke(row, resolution, conf, BinaryType)
 
     // Long overloads -- PySpark sends Python ints as LongType.
-    def evalPath(row: InternalRow, resolution: Long, conf: UTF8String): ArrayData = evalPath(row, resolution.toInt, conf)
-    def evalBinary(row: InternalRow, resolution: Long, conf: UTF8String): ArrayData = evalBinary(row, resolution.toInt, conf)
+    def eval(row: InternalRow, resolution: Long, conf: UTF8String): ArrayData = eval(row, resolution.toInt, conf)
 
     // BNG string-key resolution ("1km" etc.) -- PySpark may send a UTF8String.
-    def evalPath(row: InternalRow, resolution: UTF8String, conf: UTF8String): ArrayData = evalPath(row, BNG.getResolution(resolution), conf)
-    def evalBinary(row: InternalRow, resolution: UTF8String, conf: UTF8String): ArrayData = evalBinary(row, BNG.getResolution(resolution), conf)
+    def eval(row: InternalRow, resolution: UTF8String, conf: UTF8String): ArrayData = eval(row, BNG.getResolution(resolution), conf)
 
     private def doInvoke(row: InternalRow, resolution: Int, conf: UTF8String, rdt: DataType): ArrayData =
         Option(RST_ErrorHandler.safeEval(() => RST_BNG_RasterToGrid.eval[Double](row, resolution, conf, rdt, this.execute), row, rdt, conf))

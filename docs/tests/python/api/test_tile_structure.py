@@ -25,8 +25,13 @@ def test_sql_cellid_tessellated():
 
 
 def test_access_path_and_binary(spark):
-    """Test accessing path and binary (structure check)."""
+    """Test distinguishing virtual from materialized tiles via path and raster (structure check)."""
     assert callable(tile_structure.access_path_and_binary)
+
+
+def test_tile_path_mode_storage(spark):
+    """Test tile_path_mode_storage example is defined (structure check)."""
+    assert callable(tile_structure.tile_path_mode_storage)
 
 
 def test_access_metadata_fields(spark):

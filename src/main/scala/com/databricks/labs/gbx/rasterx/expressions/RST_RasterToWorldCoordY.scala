@@ -12,18 +12,16 @@ import org.gdal.gdal.Dataset
 
 /** Returns the world coordinates of the raster (x,y) pixel. */
 case class RST_RasterToWorldCoordY(
-    tileExpr: Expression,
+    tile: Expression,
     x: Expression,
     y: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, x, y, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, x, y, ExpressionConfigExpr())
     override def dataType: DataType = DoubleType
     override def nullable: Boolean = true
     override def prettyName: String = RST_RasterToWorldCoordY.name
-    override def replacement: Expression = rstInvoke(RST_RasterToWorldCoordY, rasterType)
+    override def replacement: Expression = invoke(RST_RasterToWorldCoordY)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }
@@ -31,10 +29,9 @@ case class RST_RasterToWorldCoordY(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_RasterToWorldCoordY extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, x: Int, y: Int, conf: UTF8String): Double = eval(row, x, y, conf, StringType)
-    def evalBinary(row: InternalRow, x: Int, y: Int, conf: UTF8String): Double = eval(row, x, y, conf, BinaryType)
+    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String): java.lang.Double = eval(row, x, y, conf, BinaryType)
 
-    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String, rdt: DataType): Double =
+    def eval(row: InternalRow, x: Int, y: Int, conf: UTF8String, rdt: DataType): java.lang.Double =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -49,7 +46,7 @@ object RST_RasterToWorldCoordY extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Double]).getOrElse(Double.NaN)
+        ).map(v => java.lang.Double.valueOf(v.asInstanceOf[Double])).orNull
 
     def execute(ds: Dataset, x: Int, y: Int): (Double, Double) = GDAL.toWorldCoord(ds.GetGeoTransform, x, y)
 

@@ -41,10 +41,19 @@ def test_set_srid_stamps_crs_without_reprojecting():
         assert o.transform == src_transform
 
 
-def test_set_srid_rejects_nonpositive():
+def test_set_srid_rejects_negative():
+    # Spec R2 dumb-storage: srid >= 0. Only a NEGATIVE srid is rejected.
     with _serde.open_tile(make_geotiff_bytes()) as ds:
         with pytest.raises(ValueError):
-            edit.set_srid(ds, 0)
+            edit.set_srid(ds, -1)
+
+
+def test_set_srid_zero_clears_crs():
+    # srid == 0 means "no CRS": clears the CRS metadata, no raise (R2 semantics).
+    with _serde.open_tile(make_geotiff_bytes()) as ds:
+        cleared = edit.set_srid(ds, 0)
+    with _serde.open_tile(cleared) as out:
+        assert out.crs is None
 
 
 # --- band -------------------------------------------------------------------

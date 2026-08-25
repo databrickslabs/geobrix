@@ -20,6 +20,27 @@ def _strip_scheme(path: str) -> str:
     return path
 
 
+def _resolve_plot_crs(ds_crs, crs_override=None):
+    """The CRS VizX hands to the basemap (Group G, source role).
+
+    Routes through the shared canonical CRS authority so VizX shares one CRS
+    implementation instead of a parallel ``ds.crs`` read: a raster that carries a
+    CRS uses it (canonicalised, so ESRI/WKT are consistent); else the ``crs_override``
+    (for a CRS-less-but-known raster); else ``None`` -> a basemap-less plot. Never
+    errors on an absent CRS (the never-error invariant).
+    """
+    from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
+
+    if ds_crs is not None:
+        try:
+            return crs_to_canonical(resolve_crs(ds_crs.to_wkt()))
+        except Exception:
+            return crs_to_canonical(resolve_crs(str(ds_crs)))
+    if crs_override is not None:
+        return crs_to_canonical(resolve_crs(crs_override))
+    return None
+
+
 # ---------------------------------------------------------------------------
 # emphasis styling defaults (static raster / COG tier)
 # ---------------------------------------------------------------------------
@@ -122,6 +143,7 @@ def plot_tile(
     fig_w=10,
     fig_h=9,
     ax=None,
+    crs=None,
 ):
     """Drape a single raster-tile band over a contextily basemap (static figure).
 
@@ -149,7 +171,8 @@ def plot_tile(
     assert_viz_available()
     raw = tile if isinstance(tile, (bytes, bytearray)) else tile["raster"]
     with MemoryFile(bytes(raw)) as mf, mf.open() as ds:
-        crs = ds.crs
+        # Group G: canonical CRS for the basemap; `crs` overrides a CRS-less tile.
+        crs = _resolve_plot_crs(ds.crs, crs)
         if window_bounds is not None:
             win = from_bounds(*window_bounds, ds.transform)
             # boundless: return the FULL requested window (pixels outside the raster
@@ -226,6 +249,7 @@ def plot_cog(
     ax=None,
     emphasis="blend",
     debug_mode=1,
+    crs=None,
     **kw,
 ):
     """Render a Cloud-Optimized GeoTIFF inline over a contextily basemap.
@@ -272,7 +296,8 @@ def plot_cog(
             )
         else:
             data, transform, _ = _decimated_read(src, max_pixels)
-        crs = src.crs
+        # Group G: canonical CRS for the basemap; `crs` overrides a CRS-less source.
+        crs = _resolve_plot_crs(src.crs, crs)
     return _render_cog(
         data,
         transform,

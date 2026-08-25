@@ -102,12 +102,32 @@ def main() -> int:
         except Exception:
             pass
         print("Uploading to %s (overwrite if exists)..." % volume_path)
-        w.files.upload_from(
-            file_path=volume_path,
-            source_path=str(whl.resolve()),
-            overwrite=True,
-            use_parallel=False,
-        )
+        # Use files.upload (streaming PUT) — NOT files.upload_from. upload_from hits
+        # an admin-gated bulk API that PermissionDenies non-account-admins on some
+        # workspaces (e.g. dogfood: "This API is disabled for users without account
+        # admin status"), while the streaming files.upload may return without raising
+        # even if bytes do not land on some workspaces (e.g. dogfood for non-admins).
+        # Verify bytes actually landed by comparing remote size to local size.
+        local_size = whl.stat().st_size
+        with open(whl.resolve(), "rb") as _fh:
+            w.files.upload(volume_path, _fh, overwrite=True)
+        try:
+            remote_metadata = w.files.get_metadata(volume_path)
+            remote_size = remote_metadata.content_length
+            if remote_size != local_size:
+                print(
+                    f"Error: upload verification failed. Local size: {local_size}, "
+                    f"remote size: {remote_size}. Bytes may not have landed correctly.",
+                    file=sys.stderr,
+                )
+                return 1
+        except Exception as e:
+            print(
+                f"Error: failed to verify upload. Could not read remote metadata for "
+                f"{volume_path}: {e}",
+                file=sys.stderr,
+            )
+            return 1
         print("Done: %s" % volume_path)
     else:
         print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: skipping wheel build/upload.")

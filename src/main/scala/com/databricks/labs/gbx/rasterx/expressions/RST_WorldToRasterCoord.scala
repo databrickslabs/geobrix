@@ -12,18 +12,16 @@ import org.gdal.gdal.Dataset
 
 /** Returns the world coordinate of the raster. */
 case class RST_WorldToRasterCoord(
-    tileExpr: Expression,
+    tile: Expression,
     x: Expression,
     y: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, x, y, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, x, y, ExpressionConfigExpr())
     override def dataType: DataType = StructType(Seq(StructField("x", IntegerType), StructField("y", IntegerType)))
     override def nullable: Boolean = true
     override def prettyName: String = RST_WorldToRasterCoord.name
-    override def replacement: Expression = rstInvoke(RST_WorldToRasterCoord, rasterType)
+    override def replacement: Expression = invoke(RST_WorldToRasterCoord)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }
@@ -31,9 +29,7 @@ case class RST_WorldToRasterCoord(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_WorldToRasterCoord extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, xGeo: Double, yGeo: Double, conf: UTF8String): InternalRow =
-        eval(row, xGeo: Double, yGeo: Double, conf, StringType)
-    def evalBinary(row: InternalRow, xGeo: Double, yGeo: Double, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, xGeo: Double, yGeo: Double, conf: UTF8String): InternalRow =
         eval(row, xGeo: Double, yGeo: Double, conf, BinaryType)
 
     def eval(row: InternalRow, xGeo: Double, yGeo: Double, conf: UTF8String, dt: DataType): InternalRow =

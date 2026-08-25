@@ -1,11 +1,11 @@
 package com.databricks.labs.gbx.rasterx.util
 
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GDT_Float64
 import org.gdal.ogr.{DataSource, Feature, FeatureDefn, FieldDefn, Geometry, Layer, ogr}
 import org.gdal.ogr.ogrConstants.{OFTReal, wkbUnknown}
-import org.gdal.osr.SpatialReference
 
 import java.util.UUID
 
@@ -37,8 +37,9 @@ object VectorRasterBridge {
         GDALManager.initOgr()
         val driver = ogr.GetDriverByName("Memory")
         val ds = driver.CreateDataSource(s"mem_${UUID.randomUUID().toString.replace("-", "")}")
-        val sr = new SpatialReference()
-        sr.ImportFromEPSG(srid)
+        // Resolve via the shared rule so an ESRI code (e.g. 54008) classifies
+        // correctly, not only EPSG — matches the light tier's out_srid handling.
+        val sr = SpatialRefOps.resolveCrs(srid.toString)
         val layer = ds.CreateLayer("features", sr, wkbUnknown)
         val fd = new FieldDefn(ValueFieldName, OFTReal)
         layer.CreateField(fd); fd.delete()
@@ -76,8 +77,8 @@ object VectorRasterBridge {
         val xRes = (xmax - xmin) / widthPx
         val yRes = (ymax - ymin) / heightPx
         ds.SetGeoTransform(Array(xmin, xRes, 0.0, ymax, 0.0, -yRes))
-        val sr = new SpatialReference()
-        sr.ImportFromEPSG(srid)
+        // Resolve via the shared rule so ESRI codes classify correctly (not just EPSG).
+        val sr = SpatialRefOps.resolveCrs(srid.toString)
         ds.SetProjection(sr.ExportToWkt())
         sr.delete()
         val band = ds.GetRasterBand(1)

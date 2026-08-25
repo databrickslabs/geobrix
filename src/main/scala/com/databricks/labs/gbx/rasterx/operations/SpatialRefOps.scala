@@ -1,29 +1,33 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import org.gdal.osr.SpatialReference
+import com.databricks.labs.gbx.{operations => gbxops}
+import org.gdal.osr.{CoordinateTransformation, SpatialReference}
 
-/** Helpers for OSR SpatialReference: EPSG code extraction and construction from EPSG code. */
+/** Forwarder — the real implementation lives in `com.databricks.labs.gbx.operations.SpatialRefOps`
+  * (tier-neutral). This object re-exposes every public member so that the ~12 rasterx importers
+  * (RST_Clip, RST_Sample, RST_Viewshed, RST_SetSrid, RST_SetCrs, RST_TransformCrs,
+  * RST_Crs, RST_H3_CellBBox, RST_GridFromPoints, VectorRasterBridge, GDAL_Batch,
+  * GDALRasterize) compile unchanged. */
 object SpatialRefOps {
 
-    /** Returns the EPSG authority code as Int, or 0 if not EPSG (e.g. ESRI). */
-    def getEPSGCode(spatialRef: SpatialReference): Int = {
-        // Try to get the PROJCS/GEOGCS authority code
-        // Returns 0 if no EPSG authority is found (e.g., for ESRI projections like ESRI:54008)
-        (spatialRef.GetAuthorityName(null), spatialRef.GetAuthorityCode(null)) match {
-            case (name: String, code: String) if name == "EPSG" => code.toInt
-            case _                                              => 0  // Default to 0 for non-EPSG projections
-        }
-    }
+    def getEPSGCode(spatialRef: SpatialReference): Int =
+        gbxops.SpatialRefOps.getEPSGCode(spatialRef)
 
-    /** Builds a SpatialReference from an EPSG code; uses WGS84 if code <= 0. */
-    def fromEPSGCode(getSRID: Int): SpatialReference = {
-        val sr = new SpatialReference()
-        if (getSRID > 0) {
-            sr.ImportFromEPSG(getSRID)
-        } else {
-            sr.SetWellKnownGeogCS("WGS84") // Default to WGS84 if no valid EPSG code
-        }
-        sr
-    }
+    def resolveCrs(value: String): SpatialReference =
+        gbxops.SpatialRefOps.resolveCrs(value)
+
+    def crsToCanonical(spatialRef: SpatialReference): String =
+        gbxops.SpatialRefOps.crsToCanonical(spatialRef)
+
+    def getTransformer(srcKey: String, dstKey: String): CoordinateTransformation =
+        gbxops.SpatialRefOps.getTransformer(srcKey, dstKey)
+
+    def resolveSourceSR(
+        embeddedSrid: Int, srid: Option[Int], crs: Option[String]
+    ): Option[SpatialReference] =
+        gbxops.SpatialRefOps.resolveSourceSR(embeddedSrid, srid, crs)
+
+    def fromEPSGCode(getSRID: Int): SpatialReference =
+        gbxops.SpatialRefOps.fromEPSGCode(getSRID)
 
 }

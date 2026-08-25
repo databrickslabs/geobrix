@@ -20,10 +20,32 @@ ColLike = Union[Column, str, bool, int, float, bytes]
 
 
 def _col(x: ColLike) -> Union[Column, str]:
-    """Mirror rasterx: auto-wrap bool/int/float/bytes; pass str/Column through."""
+    """Mirror rasterx: auto-wrap bool/int/float/bytes; pass str/Column through.
+
+    The ``str`` passthrough is deliberate — it is how ``rst_avg("tile")`` names a column.
+    For CRS-shaped arguments that reading is wrong; use :func:`_crs_col` there.
+    """
     if isinstance(x, (Column, str)):
         return x
     return f.lit(x)
+
+
+def _crs_col(x: ColLike) -> Column:
+    """Coerce a CRS argument: plain str -> ``f.lit`` (CRS literal, NOT a column name).
+
+    A CRS descriptor is itself a string, so ``_col`` would hand ``"EPSG:4326"`` to Spark as a
+    column reference and the plan would die with
+    ``UNRESOLVED_COLUMN.WITH_SUGGESTION: ... name `EPSG:4326` cannot be resolved`` — while the
+    identical heavy-tier call succeeds, because heavy's ``String`` overloads ``lit()``-wrap.
+    A bare literal is the overwhelmingly common way to name a CRS, so it must be the shape
+    that works. Mirrors ``pyvx.functions._crs_col``.
+
+    Pass a ``Column`` (e.g. ``f.col("crs_column")``) to read the CRS per row; ``f.lit`` returns
+    a ``Column`` unchanged, so wrapping an already-lifted value stays correct.
+    """
+    if isinstance(x, str):
+        return f.lit(x)
+    return _col(x)
 
 
 def _raster_field(tile: ColLike) -> Column:
@@ -34,10 +56,15 @@ def _raster_field(tile: ColLike) -> Column:
 
 def tile_scalar_udf(core_fn: Callable, return_type: DataType):
     """Build a pandas_udf: (raster: Series[bytes]) -> Series, calling core_fn(ds)."""
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @pandas_udf(return_type)
     def _udf(raster: pd.Series) -> pd.Series:
-        _env.configure_gdal_env()  # runs on the worker process
+        _env.configure_gdal_env(
+            extra_proj_dirs=_grid_dirs
+        )  # runs on the worker process
         out = []
         # Per-row loop: rasterio MemoryFile open is inherently per-raster; the
         # Arrow batch still crosses the JVM<->Python boundary once per batch.
@@ -54,10 +81,13 @@ def tile_scalar_udf(core_fn: Callable, return_type: DataType):
 
 def tile_scalar_udf2(core_fn: Callable, return_type: DataType):
     """Build a pandas_udf: (raster, a, b) -> Series, calling core_fn(ds, a, b)."""
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @pandas_udf(return_type)
     def _udf(raster: pd.Series, a: pd.Series, b: pd.Series) -> pd.Series:
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
         out = []
         # Per-row loop: rasterio MemoryFile open is inherently per-raster; the
         # Arrow batch still crosses the JVM<->Python boundary once per batch.
@@ -80,12 +110,15 @@ def sql_scalar_udf(core_fn: Callable, return_type: DataType):
     core_fn on the opened DatasetReader. Used only for spark.udf.register()
     entries; the Python Column API still goes through the pandas_udf path.
     """
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @f.udf(return_type)
     def _udf(tile):
         if tile is None or tile["raster"] is None:
             return None
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
         with _serde.open_tile(bytes(tile["raster"])) as ds:
             return core_fn(ds)
 
@@ -97,12 +130,15 @@ def sql_scalar_udf2(core_fn: Callable, return_type: DataType):
 
     Struct-accepting counterpart to tile_scalar_udf2, for SQL registration.
     """
+    from databricks.labs.gbx.core import proj_grids
+
+    _grid_dirs = tuple(proj_grids.get_registered_dirs())  # captured at build → pickled
 
     @f.udf(return_type)
     def _udf(tile, a, b):
         if tile is None or tile["raster"] is None:
             return None
-        _env.configure_gdal_env()
+        _env.configure_gdal_env(extra_proj_dirs=_grid_dirs)
         with _serde.open_tile(bytes(tile["raster"])) as ds:
             return core_fn(ds, a, b)
 

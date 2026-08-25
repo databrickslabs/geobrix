@@ -64,7 +64,7 @@ class RST_GridFromPointsTest extends AnyFunSuite with BeforeAndAfterAll {
             cornerPoints(),
             xmin = 0.0, ymin = 0.0, xmax = 100.0, ymax = 100.0,
             widthPx = 50, heightPx = 50,
-            srid = 32633,
+            out_srid = 32633,
             power = 2.0, maxPts = 12
         )
         row should not be null
@@ -100,7 +100,7 @@ class RST_GridFromPointsTest extends AnyFunSuite with BeforeAndAfterAll {
             ymaxExpr = org.apache.spark.sql.catalyst.expressions.Literal(100.0),
             widthPxExpr = org.apache.spark.sql.catalyst.expressions.Literal(50),
             heightPxExpr = org.apache.spark.sql.catalyst.expressions.Literal(50),
-            sridExpr = org.apache.spark.sql.catalyst.expressions.Literal(32633),
+            outSridExpr = org.apache.spark.sql.catalyst.expressions.Literal(32633),
             powerExpr = org.apache.spark.sql.catalyst.expressions.Literal(2.0),
             maxPtsExpr = org.apache.spark.sql.catalyst.expressions.Literal(12)
         )

@@ -38,13 +38,13 @@ GeoBrix is a high-performance spatial processing library for Databricks. It ship
     background: 'var(--ifm-card-background-color, var(--ifm-background-surface-color))',
   }}>
     <img src={GeoBrixLogo} alt="GeoBrix" style={{maxWidth: '100%', maxHeight: '64px', objectFit: 'contain', marginBottom: '0.75rem'}} />
-    <div style={{fontSize: '2.75rem', fontWeight: 800, lineHeight: 1, color: '#2e7d32'}}>154</div>
+    <div style={{fontSize: '2.75rem', fontWeight: 800, lineHeight: 1, color: '#2e7d32'}}>192</div>
     <div style={{marginTop: '0.5rem', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ifm-color-emphasis-700)'}}>Functions</div>
   </div>
   {[
-    {n: '107', label: 'RasterX'},
-    {n: '40', label: 'GridX'},
-    {n: '6', label: 'VectorX'},
+    {n: '129', label: 'RasterX'},
+    {n: '41', label: 'GridX'},
+    {n: '21', label: 'VectorX'},
     {n: '1', label: 'PMTiles'},
   ].map((s) => (
     <div key={s.label} style={{
@@ -79,20 +79,19 @@ GeoBrix is a high-performance spatial processing library for Databricks. It ship
   ))}
 </div>
 
-GridX's 40 functions break down as **BNG (23)**, **Quadbin (10)**, and **custom grids (7)**.
+GridX's 41 functions break down as **BNG (23)**, **Quadbin (10)**, **custom grids (7)**, and **H3 (1)**.
 
 ## Supported Databricks Runtimes
 
-GeoBrix supports both current Databricks Runtime LTS releases — a **single wheel + single JAR** runs on both (Scala 2.13.16 matches both, the JAR is Java-17 bytecode that loads on both JVMs, and Spark is a `provided` dependency):
+GeoBrix supports the following Databricks Runtime releases. A **single wheel + single JAR** runs on **17.3, 18, and 19**: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-| DBR LTS | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
+| DBR | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
 |---|---|---|---|---|---|---|
-| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
-| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
+| **17.3** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
+| **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
+| **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-:::note DBR 19 LTS is coming soon
-**DBR 19 LTS is coming soon**, built on **Ubuntu 26.04**. The **lightweight** tier (pure-Python, rasterio's bundled GDAL) will be unaffected; the **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so they will need to be rebuilt for the new base image.
-:::
+GeoBrix Light is **Serverless-first** — install `[light_env6]` on Serverless environment v6 (recommended) or `[light_env5]` for env 5. On classic clusters, use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]`. See [Installation](./installation?tier=lightweight) for details.
 
 ## Background
 

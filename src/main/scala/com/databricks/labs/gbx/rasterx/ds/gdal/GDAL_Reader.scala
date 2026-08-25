@@ -27,7 +27,8 @@ class GDAL_Reader(partition: GDAL_Partition) extends PartitionReader[InternalRow
     override def get(): InternalRow = {
         val tile = tilesIter.next()
         counter += 1
-        val tileRow = RasterSerializationUtil.tileToRow((-1L, tile._1, tile._2), BinaryType, hconf)
+        val tileRow = RasterSerializationUtil.tileToRow(
+          (-1L, tile._1, tile._2), BinaryType, hconf, partition.clipCrs)
         RasterDriver.releaseDataset(tile._1)
         InternalRow.fromSeq(
           Seq(

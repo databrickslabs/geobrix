@@ -17,6 +17,101 @@ For measured timing and output-consistency numbers, see **[Benchmarking](./bench
 
 ---
 
+## Virtual tile read performance {#virtual-tile-read-performance}
+
+:::note Key takeaways
+- **Deferred edits run 1.5–12× faster on virtual tiles** — metadata operations (set-CRS/SRID/nodata/band-select) complete without pixel I/O. Chain several deferred edits before a terminal step to materialize once and pay pixel cost only at the end.
+- **Open amortization is the lever** — grouping same-source windows (via `ORDER BY path` or repartitioning) cuts per-tile open cost from ~multiple-seconds to ~2 ms per window. Without amortization (per-tile-open), stream reads grow expensive with file size; FUSE becomes viable.
+- **FILE-on ≈ FILE-off for reads on dedicated clusters** — FILE is a governance/access mechanism, not a per-tile read optimization. Amortization (grouped executor) is the performance lever. Serverless FILE support is coming soon.
+- **COG + amortization beats FUSE** — byte-range stream reads are 10–290× faster than FUSE for windowed COGs when opens are amortized. Choose COG format and group by source path for best throughput.
+:::
+
+Virtual tiles are read on demand. Reading cost is dominated by **opening** the source raster, not by the pixel read itself. A pipeline that reads many tiles from the same source raster should open that source once and amortize the cost across all its windows — not open it once per tile.
+
+### Two access modes: stream and FUSE
+
+GeoBrix's virtual tile reader supports two access modes:
+
+| Mode | Per-open cost | Typical per-window cost | Memory per open source | Best for |
+|---|---|---|---|---|
+| **Byte-range stream** (`.open()`) | Scales with file size and layout | ~2 ms (COG, with amortization) | **RAM ≈ source file size** | Grouped reads on small-to-moderate files |
+| **FUSE** (`.as_local_file()`) | Flat ~7 ms at any size | ~124 ms (cold read baseline) | Low — reads only requested bytes lazily | Large files, per-tile-open, RAM-constrained workers |
+
+When the open cost is amortized across multiple windows from the same source, byte-range stream reads are **10–290× faster** than FUSE for windowed COG reads. Without amortization (one open per tile), FUSE's flat open cost wins: stream's per-open header parse grows with file size and becomes prohibitive at scale.
+
+**You don't choose stream vs FUSE — GeoBrix does, automatically, per source.** The reader inspects each source's size and layout and picks the access mode that's correct for it. This table is what GeoBrix does for you, not a decision you make:
+
+| Source (per file) | GeoBrix auto-selects | Why |
+|---|---|---|
+| Tiled / COG, ≤ 256 MiB | **byte-range stream** | random-window reads are efficient on a tiled layout; the source buffers into executor RAM |
+| Large (over 256 MiB) **or** striped | **FUSE (lazy)** | fetches only the bytes each window needs — no whole-file RAM, safe at any size |
+| stream **or** FUSE open fails | **staging fallback** (temp file) | correctness over speed |
+
+The 256 MiB stream cutoff (`GBX_STREAM_MAX_BYTES`) is an optional environment override — the default handles the common cases, so you normally set nothing.
+
+**Executor RAM is auto-managed by a byte-budgeted LRU cache — you don't size or clear it.** Open sources are held in a per-partition LRU keyed by source path, capped at a byte budget (`GBX_LRU_MAX_BYTES`, default 4 GiB). Stream handles count their buffered size against the budget; FUSE handles count only a small nominal (they don't buffer the file). When the budget would be exceeded, the least-recently-used source is evicted and closed. So a partition **never blows executor RAM no matter how many sources it touches**, and repeated windows from an already-open source are ~2 ms cache hits (the amortization in the next section).
+
+:::note Why the auto-rules look the way they do — the striped-file trap GeoBrix sidesteps
+Opening a large source via byte-range buffers it into executor RAM, and for a **large striped GeoTIFF** parsing the strip-offset table over byte-range can reach **47–54 seconds per open at 10 GB, consuming 10 GB of executor RAM**. That is exactly why GeoBrix routes large or striped sources to FUSE (lazy, low-RAM) automatically rather than streaming them. For best windowed-read throughput, **prefer COGs** — a tiled COG under the threshold takes the fast stream path and amortizes across its windows.
+:::
+
+### Per-partition open-amortization (the grouped executor)
+
+GeoBrix's grouped executor holds a small per-partition LRU cache of open stream handles, keyed by source path. The first access for a source in a partition opens it (cache miss); all subsequent windows from that source in the same partition are cache hits (~2 ms each). When tiles are sorted by source path within each partition, even a partition holding several sources fully amortizes at LRU size ~2.
+
+Measured on a 647 MB COG corpus (15 sources × 12 windows = 180 tiles):
+
+| Write layout | Read approach | Opens | Total time |
+|---|---|---|---|
+| Scattered (no alignment) | Dumb (as-written) | 135 | 173 s |
+| `ORDER BY path` | Dumb (as-written) | **15** | 37 s |
+| `ORDER BY path` | Smart (re-partition) | **15** | **11 s** |
+
+To enable amortization after a join or reshape that has scattered tiles across partitions, re-align before processing:
+
+```python
+df = df.repartition(n, "tile.path").sortWithinPartitions("tile.path")
+```
+
+Size `n` for parallelism, not for file count:
+- **Classic clusters (fixed workers):** `n ≈ 3–5× total worker cores` — e.g. 20 workers × 4 cores → `n ≈ 100`
+- **Serverless (elastic workers):** `n` is the parallelism signal; smaller values pull in fewer workers, larger pull in more
+
+Do not set `n = number_of_files` for large corpora — over-partitioning produces tiny tasks and scheduling overhead.
+
+### MANAGED vs EXTERNAL: identical read performance
+
+A tile column declared `FILE MANAGED` and one declared `FILE EXTERNAL` perform identically for reads. Both resolve to the same underlying paths; the open-cost and windowed-read cost are indistinguishable. The choice between MANAGED and EXTERNAL is about **governance and lifecycle**, not read speed. MANAGED tiles carry governed lifecycle (tied to the table) and `content_type` detection; EXTERNAL tiles reference files managed independently in a Volume. Choose based on governance requirements, not on any expected read-latency difference.
+
+### Write-side layout for efficient reads
+
+The GeoBrix writer optionally lays tiles out source-aligned at write time, so the reader can amortize for free on the first read — no re-partition step required after a normal read-write round trip.
+
+| Write strategy | Effect on reads |
+|---|---|
+| `INSERT … ORDER BY tile.path` | Immediate physical grouping — dumb reads amortize without any re-partition |
+| `CLUSTER BY (tile.path)` on the table + periodic `OPTIMIZE` | Durable layout after Delta applies liquid clustering |
+| `CLUSTER BY (tile.path)` on the initial insert only (no `OPTIMIZE`) | May not be grouped yet — combine with `ORDER BY` in the `INSERT` for insert-time grouping |
+| No alignment | Scattered — requires explicit `repartition + sortWithinPartitions` on every read |
+
+:::caution Avoid `partitionBy("tile.path")`
+`tile.path` is high-cardinality — one value per source file. Using it as a Delta partition column creates thousands of partition directories, causing metadata explosion and slow query planning. Use `ORDER BY` and `CLUSTER BY` instead.
+:::
+
+### FILE type and `path_mode`
+
+When FILE is available (Databricks Runtime 19 dedicated clusters; coming soon to Serverless), the tile struct's [`path_mode` field](./tile-structure) records how the virtual tile was stored:
+
+| `path_mode` | Meaning |
+|---|---|
+| `null` | Materialized tile (raster bytes present), or a plain FUSE-path virtual tile |
+| `"external"` | FILE EXTERNAL virtual tile — opened via byte-range stream |
+| `"managed"` | FILE MANAGED virtual tile — opened via byte-range stream; lifecycle governed by the table |
+
+On runtimes without FILE support (Serverless today, DBR 17/18), `path_mode` is always `null` and virtual tiles use the FUSE path — correct and unchanged.
+
+---
+
 ## Execution shapes
 
 ### Streaming UDTFs
@@ -42,6 +137,10 @@ This is the right shape for **per-row (1→1) tile and geometry transforms**: op
 :::note
 Functions that return `MapType` columns use a plain `@f.udf` for SQL registration (Arrow does not support `MapType` in all `pandas_udf` builds); the Python Column API routes through the `pandas_udf` path for all tile-returning operations.
 :::
+
+### Chaining functions
+
+Compose light-tier tile functions in **one expression** — `rx.rst_slope(rx.rst_setcrs(col("tile"), "EPSG:32633"))` — rather than materializing intermediates across separate `.select()` / `.withColumn()` steps. Spark **fuses chained Column-API calls into a single Python worker**, so the intermediate tile passes from the inner function to the outer one as a live in-worker object: the JVM↔Python boundary is crossed **once for the whole chain instead of once per function**. Splitting the same pipeline into separate steps sends each intermediate tile back to the JVM and re-serializes it at the next step — paying the per-batch boundary cost at every stage instead of once. Chaining is strictly the lighter path, and it composes with virtual-tile deferral (see [Choosing an Execution Tier](./execution-tiers)): chained deferrable ops both defer materialization *and* stay in one worker.
 
 ### Vectorized cores
 
@@ -173,6 +272,8 @@ These functions are Arrow-backed `pandas_udf(BinaryType())` aggregators used ins
 | SQL name | Python name | Aggregation |
 |---|---|---|
 | `gbx_st_asmvt` | `st_asmvt` | Encode a group of tile-local features into one MVT protobuf blob |
+| `gbx_st_coverageisvalid` | `st_coverageisvalid` | BOOLEAN — is this polygon group a valid coverage? (no overlaps; no gaps narrower than `gap_width`) |
+| `gbx_st_coverageinvalidedges` | `st_coverageinvalidedges` | BINARY — union of the boundary segments that violate the coverage; empty geometry when clean |
 
 **GridX (pygx)**
 

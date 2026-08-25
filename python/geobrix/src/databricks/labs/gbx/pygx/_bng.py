@@ -124,8 +124,13 @@ def get_resolution_str(resolution: int) -> str:
 
 
 def cell_digits(cell_id: int) -> list:
-    """Cell id Long -> list of decimal digits (BNG.cellDigits)."""
-    return [int(c) for c in str(cell_id)]
+    """Cell id Long -> list of decimal digits (BNG.cellDigits).
+
+    A negative id can arise from an out-of-GB coordinate (the encoder runs before
+    ``is_valid``); take the digits of its magnitude so ``is_valid`` can reject it
+    via its len/bounds checks instead of crashing on the ``-`` sign.
+    """
+    return [int(c) for c in str(abs(int(cell_id)))]
 
 
 def _safe_digit_index(digit_slice, max_idx: int) -> int:
@@ -290,6 +295,18 @@ def format(cell_id: int) -> str:
         x_str = "".join(str(d) for d in x_part)
         y_str = "".join(str(d) for d in y_part)
     return f"{prefix}{x_str}{y_str}{QUADRANTS[q_idx]}"
+
+
+def parse_safe(cell_id: str):
+    """Bad-DATA-tolerant parse: a malformed BNG cell string (unrecognised prefix or
+    non-digit body) returns None rather than raising StopIteration/ValueError, so one
+    bad cell id in a column degrades to NULL instead of killing the stage."""
+    try:
+        return parse(cell_id)
+    except (
+        Exception
+    ):  # noqa: BLE001 — StopIteration (bad prefix) or ValueError (bad body)
+        return None
 
 
 def parse(cell_id: str) -> int:
@@ -500,6 +517,11 @@ def polyfill(geometry, resolution: int) -> list:
         if current in visited:
             continue
         visited.add(current)
+        # Skip out-of-GB / malformed seed cells (e.g. a raster reprojected to
+        # 27700 whose coords fall outside the BNG envelope): they have no valid
+        # geometry to test or walk, so the fill simply yields nothing for them.
+        if not is_valid(current):
+            continue
         center = cell_id_to_geometry(current).centroid
         if geometry.contains(_Point(center.x, center.y)):
             out.append(current)

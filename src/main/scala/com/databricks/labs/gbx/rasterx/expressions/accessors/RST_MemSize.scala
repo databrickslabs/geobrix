@@ -13,16 +13,14 @@ import org.gdal.gdal.Dataset
 
 /** Returns the memory size of the raster in bytes. */
 case class RST_MemSize(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = LongType
     override def nullable: Boolean = true
     override def prettyName: String = RST_MemSize.name
-    override def replacement: Expression = rstInvoke(RST_MemSize, rasterType)
+    override def replacement: Expression = invoke(RST_MemSize)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -30,10 +28,9 @@ case class RST_MemSize(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MemSize extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): Long = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): Long = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Long = eval(row, conf, BinaryType)
 
-    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): Long =
+    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): java.lang.Long =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -48,7 +45,7 @@ object RST_MemSize extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Long]).getOrElse(-1L)
+        ).map(v => java.lang.Long.valueOf(v.asInstanceOf[Long])).orNull
 
     def execute(ds: Dataset): Long = RasterAccessors.memSize(ds)
 

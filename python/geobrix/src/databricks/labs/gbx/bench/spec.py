@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, Dict, List
+from typing import Callable, Dict, List, Optional
 
 import shapely.geometry
 import shapely.wkb
@@ -286,9 +286,42 @@ class FnSpec:
     # stream; heavy: array-returning scalar), which is the honest comparison -- there
     # is no light scalar form to force, and no heavy UDTF form to force.
     udtf: bool = False
+    # Optional explicit disposition for a scalar accessor on a virtual input:
+    # "deferred" (header-only) or "materialized" (reads pixels). None => derive
+    # from the pixel-reading allowlist below. Ignored for tile-returning ops
+    # (their disposition is sampled from the output tile at run time).
+    virtual_disposition: Optional[str] = None
 
 
 _BOTH = ("pure-core", "spark-path")
+
+# Accessors that MUST read pixels (statistics over pixel values); everything
+# else in the accessor category reads only the header/metadata via open_header.
+# Verified against pyrx: these route through pixel-reading UDFs, the rest through
+# _header_accessor_udf (open_header, no pixel I/O).
+_PIXEL_READING_ACCESSORS = frozenset(
+    {
+        "rst_avg",
+        "rst_min",
+        "rst_max",
+        "rst_median",
+        "rst_pixelcount",
+        "rst_summary",
+        "rst_histogram",
+        # rst_isempty scans every band's valid-pixel values (accessors.isempty ->
+        # _valid_values per band) to decide all-NoData, so it reads pixels and
+        # materializes on a virtual tile -- NOT a header-only accessor.
+        "rst_isempty",
+    }
+)
+
+
+def accessor_disposition(name: str, fs: "FnSpec | None" = None) -> str:
+    """Disposition of a scalar accessor on a virtual input tile."""
+    if fs is not None and fs.virtual_disposition is not None:
+        return fs.virtual_disposition
+    return "materialized" if name in _PIXEL_READING_ACCESSORS else "deferred"
+
 
 # --- source-path groups (DRY) ----------------------------------------------
 # Editing the registry must NOT re-bench everything, so the harness files
@@ -1145,6 +1178,44 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetSrid.scala",),
         core=False,
     ),
+    # --- CRS-string ops (Sub-spec R): string companions to the srid ops ---
+    "rst_crs": FnSpec(
+        "rst_crs",
+        "gbx_rst_crs",
+        "accessor",
+        _BOTH,
+        {},
+        core_fn=lambda ds, a: accessors.crs(ds),
+        col_fn=lambda t, a: prx.rst_crs(t),
+        sources=_ACCESSORS_LIGHT + (_HEAVY + "accessors/RST_Crs.scala",),
+        core=False,
+    ),
+    "rst_setcrs": FnSpec(
+        "rst_setcrs",
+        "gbx_rst_setcrs",
+        "edit",
+        _BOTH,
+        {"crs": "EPSG:4326"},
+        core_fn=lambda ds, a: edit.set_crs(ds, a["crs"]),
+        # F.lit the STRING crs arg (bare str would resolve as a column name).
+        col_fn=lambda t, a: prx.rst_setcrs(t, F.lit(a["crs"])),
+        sources=_EDIT_LIGHT + (_HEAVY + "pixel/RST_SetCrs.scala",),
+        core=False,
+    ),
+    "rst_transformcrs": FnSpec(
+        "rst_transformcrs",
+        "gbx_rst_transformcrs",
+        "warp",
+        _BOTH,
+        {"target_crs": "EPSG:3857"},
+        # core=False: rst_transform is already the representative "warp" core fn;
+        # rst_transformcrs is the string companion, covered by the family.
+        core=False,
+        core_fn=lambda ds, a: warp.reproject_to_crs(ds, a["target_crs"]),
+        # F.lit the STRING crs arg (bare str would resolve as a column name).
+        col_fn=lambda t, a: prx.rst_transformcrs(t, F.lit(a["target_crs"])),
+        sources=_WARP_LIGHT + (_HEAVY + "RST_TransformCrs.scala",),
+    ),
     "rst_updatetype": FnSpec(
         "rst_updatetype",
         "gbx_rst_updatetype",
@@ -1707,12 +1778,17 @@ REGISTRY: Dict[str, FnSpec] = {
     # --- bucket C, group C4: tiling fns -> a COLLECTION of tiles (5) ----------
     # rst_maketiles / rst_retile / rst_tooverlappingtiles / rst_separatebands /
     # rst_xyzpyramid each take ONE tile and emit MANY. They ride the default
-    # input_kind == "tile" (a single open dataset), but the core_fn returns a
+    # input_kind == "tile" (a single open dataset), and the core_fn returns a
     # LIST of tile bytes, which the runner fingerprints with the new
     # `raster_collection` kind: tile COUNT (compared exactly) plus the pooled,
-    # ORDER-INDEPENDENT agg stats over all output tiles' pixels. The col_fn
-    # yields an ARRAY column the spark-path runner writes via noop. Args are
-    # sized for the 256/512-px corpus (e.g. retile 128x128 -> 4 tiles on 256).
+    # ORDER-INDEPENDENT agg stats over all output tiles' pixels.
+    # rst_maketiles / rst_retile / rst_tooverlappingtiles / rst_separatebands have
+    # udtf=True: their light implementation is a Python UDTF (col_fn raises
+    # NotImplementedError with a LATERAL hint); udtf=True routes the spark-path
+    # through SQL LATERAL instead of the scalar col_fn path (see FnSpec.udtf).
+    # rst_xyzpyramid is modes=("pure-core",) only — it has NO spark-path leg and
+    # therefore does NOT use udtf=True or LATERAL routing. Args are sized for the
+    # 256/512-px corpus (e.g. retile 128x128 -> 4 tiles on 256).
     "rst_maketiles": FnSpec(
         "rst_maketiles",
         "gbx_rst_maketiles",
@@ -1721,6 +1797,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"size_in_mb": 1},
         core_fn=lambda ds, a: tiling.make_tiles(ds, float(a["size_in_mb"])),
         col_fn=lambda t, a: prx.rst_maketiles(t, a["size_in_mb"]),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
             _HEAVY + "generators/RST_MakeTiles.scala",
@@ -1737,6 +1814,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {"tile_width": 128, "tile_height": 128},
         core_fn=lambda ds, a: tiling.retile(ds, a["tile_width"], a["tile_height"]),
         col_fn=lambda t, a: prx.rst_retile(t, a["tile_width"], a["tile_height"]),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (_HEAVY + "generators/RST_ReTile.scala", _OPS + "ReTile.scala"),
         core=False,
@@ -1754,6 +1832,7 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: prx.rst_tooverlappingtiles(
             t, a["tile_width"], a["tile_height"], a["overlap"]
         ),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
             _HEAVY + "generators/RST_ToOverlappingTiles.scala",
@@ -1770,6 +1849,7 @@ REGISTRY: Dict[str, FnSpec] = {
         {},
         core_fn=lambda ds, a: tiling.separate_bands(ds),
         col_fn=lambda t, a: prx.rst_separatebands(t),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
         sources=_TILING_LIGHT
         + (
             _HEAVY + "generators/RST_SeparateBands.scala",
@@ -2430,6 +2510,11 @@ REGISTRY: Dict[str, FnSpec] = {
             t, F.array(*[F.lit(float(v)) for v in a["levels"]])
         ),
         fingerprint_kind="vector",
+        # Reads every pixel to trace iso-lines and emits geometry rows, not an output
+        # tile: the disposition sampler finds no tile struct, so pin it explicitly
+        # (same rationale as rst_polygonize -> materialized). Without this it would
+        # sample-classify as "deferred" (no raster field) despite reading all pixels.
+        virtual_disposition="materialized",
         # GDAL's contour generator and the lightweight marching-squares segmenter
         # produce the same iso-lines but split them into segments differently, so
         # per-segment measures/attrs spread ~1.5%. That is an inherent algorithm
@@ -2449,6 +2534,10 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda t, a: prx.rst_polygonize(
             t, F.lit(a["band"]), F.lit(a["connectedness"])
         ),
+        udtf=True,  # light impl is a UDTF -> spark-path via SQL LATERAL (see FnSpec.udtf)
+        # Reads every pixel to vectorize and emits geometry rows, not an output tile:
+        # the disposition sampler finds no tile-struct column, so we pin it explicitly.
+        virtual_disposition="materialized",
         fingerprint_kind="vector",
         sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Polygonize.scala",),
         core=False,
@@ -2788,7 +2877,7 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda cid, v, a: prx.rst_h3_rasterize_agg(
             cid,
             value=v,
-            srid=F.lit(a["grid"][6]),
+            out_srid=F.lit(a["grid"][6]),
             pixel_size=F.lit(a["pixel_size"]),
             xmin=F.lit(a["grid"][0]),
             ymin=F.lit(a["grid"][1]),

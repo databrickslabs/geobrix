@@ -1,11 +1,13 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.rasterx.{ErrorTokenListener, ProjErrorFilter, functions}
+import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
 import com.databricks.labs.gbx.udfs
-import org.apache.spark.sql.DataFrame
+import org.apache.spark.sql.{DataFrame, Row}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions.{not => _, _}
 import org.apache.spark.sql.test.SilentSparkSession
+import org.apache.spark.sql.types.{StructField, StructType}
 import org.scalatest.matchers.should.Matchers._
 
 /**
@@ -384,6 +386,137 @@ class RST_TransformationsEvalTest extends PlanTest with SilentSparkSession {
         val result = df.select("clipped_size").collect()
         result should not be empty
         result.head.getAs[Long]("clipped_size") should be > 5000L
+    }
+
+    test("RST_Clip on a NULL primary tile returns null (not an NPE)") {
+        // Guards the propagateNull=false path: with the optional clipCrs default injected as
+        // Literal(null, StringType), the invoke no longer short-circuits to null on any null arg,
+        // so eval now runs even when the primary tile row is null. The null-primary guard in
+        // RST_Clip.eval must preserve the prior "null tile in -> null tile out" behavior instead
+        // of NPE-ing inside rowToTile/safeEval.
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        functions.register(spark)
+
+        // A single row whose v2 tile struct is fully null (nullable outer field).
+        val schema = StructType(Seq(
+            StructField("tile", RST_ExpressionUtil.v2TileType, nullable = true)))
+        val df = spark.createDataFrame(
+            spark.sparkContext.parallelize(Seq(Row(null))),
+            schema)
+            .withColumn(
+              "clipped",
+              rst_clip(col("tile"), lit("POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"), lit(true)))
+
+        noException should be thrownBy df.collect()
+        val result = df.select("clipped").collect()
+        result should not be empty
+        assert(result.head.get(0) == null, "clip of a null tile must be null, not a materialized/error tile")
+    }
+
+    test("RST_Clip on a NULL geom returns null (not an error tile)") {
+        // Companion to the null-tile guard: with propagateNull=false a null geom now reaches eval;
+        // the geom match is exhaustive (no `case other`), so an unguarded null geom would MatchError
+        // into safeEval and emit a NON-null error tile. Contract: null geom -> null, like a null tile.
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+
+        val df: DataFrame = Seq(
+          (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
+        ).toDF("id", "path")
+            .withColumn("raster", udfs.rasterFromPath(col("path")))
+            .withColumn("clipped", rst_clip(col("raster"), lit(null).cast("string"), lit(true)))
+
+        noException should be thrownBy df.collect()
+        val result = df.select("clipped").collect()
+        result should not be empty
+        assert(result.head.get(0) == null, "clip with a null geom must be null, not an error tile")
+    }
+
+    test("RST_Proximity short-arity (tile only) returns a non-null tile") {
+        // Regression for the propagateNull short-circuit: rst_proximity(tile) hits builder() case 1
+        // which injects Literal(null, StringType)/Literal(null, DoubleType) defaults. With the old
+        // propagateNull=true, those null defaults short-circuited the whole result to null (eval never
+        // ran) — the .execute-only tests never caught it. Now it must produce a real tile.
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+
+        val df: DataFrame = Seq(
+          (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
+        ).toDF("id", "path")
+            .withColumn("raster", udfs.rasterFromPath(col("path")))
+            .withColumn("prox", rst_proximity(col("raster")))
+
+        noException should be thrownBy df.collect()
+        val result = df.select("prox").collect()
+        result should not be empty
+        assert(result.head.get(0) != null, "rst_proximity(tile) must return a non-null tile")
+    }
+
+    test("RST_Proximity on a NULL primary tile returns null (not an NPE)") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        functions.register(spark)
+
+        val schema = StructType(Seq(
+            StructField("tile", RST_ExpressionUtil.v2TileType, nullable = true)))
+        val df = spark.createDataFrame(
+            spark.sparkContext.parallelize(Seq(Row(null))),
+            schema)
+            .withColumn("prox", rst_proximity(col("tile")))
+
+        noException should be thrownBy df.collect()
+        val result = df.select("prox").collect()
+        result should not be empty
+        assert(result.head.get(0) == null, "proximity of a null tile must be null")
+    }
+
+    test("RST_Histogram short-arity (tile only) returns a non-null histogram map") {
+        // rst_histogram(tile) hits builder() case 1 which injects nullDouble defaults for min/max.
+        // Old propagateNull=true nulled the whole result; now it must produce a real MAP.
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+
+        val df: DataFrame = Seq(
+          (1, s"$tifPath/MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF")
+        ).toDF("id", "path")
+            .withColumn("raster", udfs.rasterFromPath(col("path")))
+            .withColumn("hist", rst_histogram(col("raster")))
+
+        noException should be thrownBy df.collect()
+        val result = df.select("hist").collect()
+        result should not be empty
+        assert(result.head.get(0) != null, "rst_histogram(tile) must return a non-null histogram map")
+    }
+
+    test("RST_Histogram on a NULL primary tile returns null (not an NPE)") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        functions.register(spark)
+
+        val schema = StructType(Seq(
+            StructField("tile", RST_ExpressionUtil.v2TileType, nullable = true)))
+        val df = spark.createDataFrame(
+            spark.sparkContext.parallelize(Seq(Row(null))),
+            schema)
+            .withColumn("hist", rst_histogram(col("tile")))
+
+        noException should be thrownBy df.collect()
+        val result = df.select("hist").collect()
+        result should not be empty
+        assert(result.head.get(0) == null, "histogram of a null tile must be null")
     }
 
     test("RST_Transform should surface a clear error for invalid SRID") {

@@ -13,8 +13,18 @@ object NodeFilePathUtil {
 
     private val hasher = MurmurHash.getInstance()
     private val uuid = this.hashCode().toHexString
-    /** Base directory for this JVM's cached files (/tmp/gdal_local_files/&lt;uuid&gt;). */
-    val rootPath: Path = Paths.get(s"/tmp/gdal_local_files/$uuid")
+    /** Base directory for this JVM's cached files (/tmp/gdal_local_files/&lt;uuid&gt;).
+      *
+      * Created eagerly: several callers (RST_MapAlgebra, RST_NDVI, NDVI, ClipToGeom,
+      * GDAL_RowWriter) write GDAL outputs directly under this path, and GDAL's
+      * gdal_translate / gdal_calc silently return a null Dataset when the target
+      * directory does not exist — so the directory must exist before any write.
+      */
+    val rootPath: Path = {
+        val p = Paths.get(s"/tmp/gdal_local_files/$uuid")
+        scala.util.Try(Files.createDirectories(p))
+        p
+    }
     private val maxRetries = 3
     private val tinyBackoffMs = 2L
 

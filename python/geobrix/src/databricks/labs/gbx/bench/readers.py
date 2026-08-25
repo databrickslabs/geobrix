@@ -22,6 +22,23 @@ from databricks.labs.gbx.bench.results import ResultRow
 from databricks.labs.gbx.bench.runner import capture_env, peak_rss_mb, time_iters
 
 
+def measure_parallelism(spark, df):
+    """(input_partitions, slots_available) for a timed df, Connect-safe.
+
+    input_partitions: number of partitions that carry >=1 row, via
+    spark_partition_id() (no .rdd -> Connect-safe). slots_available: cluster task
+    slots via bench.runner._bench_parallelism (classic:
+    sparkContext.defaultParallelism; Connect: spark.sql.shuffle.partitions). The
+    QA report derives slots-used = min(input_partitions, slots_available) and
+    idle = slots_available - slots-used from these two numbers."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench.runner import _bench_parallelism
+
+    parts = int(df.select(F.spark_partition_id().alias("_pid")).distinct().count())
+    return parts, int(_bench_parallelism(spark))
+
+
 def _read_one_file_light(file_path: str, size_mib: int) -> int:
     """Open a raster file, compute tiles, return tile count."""
     import rasterio
@@ -125,12 +142,18 @@ def run_spark_path_reader(
     measured: int,
     size_mib: int = 16,
     where: str = "venv",
+    split_plan_read: bool = False,
 ) -> List[ResultRow]:
     """Time the raster_gbx Spark data source over a corpus directory.
 
     Registers the light DS, then times
     ``spark.read.format("raster_gbx").option("sizeInMB", ...).load(path).count()``.
     One ResultRow is emitted covering the whole directory.
+
+    When ``split_plan_read=True``, times ``RasterGbxReader.partitions()``
+    separately (driver-side planning) and records the result as ``plan_s`` in the
+    emitted ``ResultRow``. The total ``.count()`` iteration time is unchanged.
+    This isolates the listing/header-open planning cost from the executor read cost.
     """
     from databricks.labs.gbx.ds.register import register
 
@@ -144,6 +167,20 @@ def run_spark_path_reader(
             .load(path)
             .count()
         )
+
+    # Optional: time planning separately to isolate the listing/header-open cost.
+    _plan_s = 0.0
+    if split_plan_read:
+        import time as _time
+
+        from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+        _plan_start = _time.monotonic()
+        try:
+            RasterGbxReader({"path": path, "sizeInMB": str(size_mib)}).partitions()
+        except Exception:  # noqa: BLE001
+            pass  # planning failure handled by the timed _job below
+        _plan_s = _time.monotonic() - _plan_start
 
     try:
         stats = time_iters(_job, warmup, measured)
@@ -185,6 +222,7 @@ def run_spark_path_reader(
                 status="ok",
                 note=os.path.basename(path.rstrip("/\\")),
                 output_fingerprint="",
+                plan_s=_plan_s,
                 **env,
             )
         ]
@@ -213,10 +251,164 @@ def run_spark_path_reader(
                 status="error",
                 note=str(e)[:300],
                 output_fingerprint="",
+                plan_s=0.0,
                 **env,
             )
         ]
     return out
+
+
+def run_virtual_tile_pixel_read(
+    spark,
+    path: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    where: str = "cluster",
+    disable_file: bool = False,
+    manifest: Optional[str] = None,
+) -> List[ResultRow]:
+    """Time a pixel-reading operation over virtual tiles from the light raster reader.
+
+    Loads a directory as virtual tiles (``virtualTiles=true``), then applies
+    ``rst_avg`` (the geobrix pyrx pixel accessor) on each tile to force actual pixel
+    reads via the shipping FILE path.  ``rst_avg`` calls ``file_ref_arg(tile_col)``
+    internally, which mints a FILE byte-range reference when ``file_supported()``
+    is True; otherwise falls back to the plain FUSE-path read.  This is the real
+    geobrix code path — ``file_ref_arg`` / ``open_windowed_via_fileref`` are both on
+    the critical path, so the FILE-on vs FILE-off comparison is valid.
+
+    ``disable_file=True`` sets ``GBX_DISABLE_FILE=1`` before the run; this causes
+    ``file_supported()`` to return False → ``file_ref_arg`` returns ``lit(None)`` →
+    the UDF falls back to the FUSE read (no FILE byte-range). Compare FILE-on vs
+    FILE-off to measure the FILE byte-range read win in the virtual-tile reader path.
+
+    **Cluster-only:** intended for manual at-scale runs on a dedicated cluster (not CI).
+    Run the listing comparative first (``run_spark_path_reader`` with ``split_plan_read``),
+    then this leg to measure executor-side read cost separately.
+
+    Runbook:
+    1. Confirm ``bench-corpus-reader-10k`` exists at
+       ``/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-reader-10k``
+       (10,000 tiny 256px / 1-band / float32 tiles; generated separately).
+    2. Stage the wheel: ``gbx:data:push-wheel``.
+    3. Run FILE-on (no env override).  Pass ``SPARK_WARMUP, SPARK_MEASURED`` (0/1)
+       from the notebook globals — this is a spark-path leg, not a pure-core microbench::
+
+         run_virtual_tile_pixel_read(spark, corpus_dir, run_id, SPARK_WARMUP, SPARK_MEASURED)
+
+    4. Run FILE-off::
+
+         run_virtual_tile_pixel_read(spark, corpus_dir, run_id, SPARK_WARMUP, SPARK_MEASURED,
+                                     disable_file=True)
+
+    5. Compare ``iter_median_s`` and ``throughput_rows_s`` between the two result rows.
+    """
+    import os
+
+    if disable_file:
+        os.environ["GBX_DISABLE_FILE"] = "1"
+    else:
+        os.environ.pop("GBX_DISABLE_FILE", None)
+
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    import pyspark.sql.functions as _F
+
+    from databricks.labs.gbx.pyrx import functions as _pyrx
+
+    def _job():
+        reader = spark.read.format("raster_gbx").option("virtualTiles", "true")
+        if manifest is not None:
+            reader = reader.option("manifest", manifest)
+            load_path = path or "/"
+        else:
+            load_path = path
+        return (
+            reader.load(load_path)
+            .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+            .count()
+        )
+
+    mode_label = "virtual-pixel-read-no-file" if disable_file else "virtual-pixel-read"
+    try:
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        try:
+            actual_rows = _job()
+        except Exception:  # noqa: BLE001
+            actual_rows = 0
+        return [
+            ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="raster_read_pixels",
+                category="reader",
+                mode=mode_label,
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=int(actual_rows),
+                nodata_frac=0.0,
+                warmup_iters=stats["warmup_iters"],
+                measured_iters=stats["measured_iters"],
+                iter_median_s=ms / 1000.0,
+                iter_min_s=stats["iter_min_ms"] / 1000.0,
+                iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                per_tile_avg_s=(
+                    (ms / actual_rows / 1000.0) if (ms and actual_rows) else 0.0
+                ),
+                per_tile_avg_ms=(ms / actual_rows) if (ms and actual_rows) else 0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=(
+                    (actual_rows / (ms / 1000.0)) if (ms and actual_rows) else 0.0
+                ),
+                peak_rss_mb=peak_rss_mb(),
+                status="ok",
+                note=f"virtual-tile pixel read ({mode_label})",
+                output_fingerprint="",
+                **env,
+            )
+        ]
+    except Exception as e:  # noqa: BLE001
+        return [
+            ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="raster_read_pixels",
+                category="reader",
+                mode=mode_label,
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                iter_total_wall_clock_s=0.0,
+                avg_wall_clock_s=0.0,
+                per_tile_avg_s=0.0,
+                per_tile_avg_ms=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=peak_rss_mb(),
+                status="error",
+                note=str(e)[:500],
+                output_fingerprint="",
+                **env,
+            )
+        ]
 
 
 def run_format_read(
@@ -1470,6 +1662,1538 @@ def run_pmtiles_agg(
             output_fingerprint="",
             **env,
         )
+
+
+def _error_row(fn, category, run_id, api, warmup, env, e, **extra):
+    """Module-private helper: build a status='error' ResultRow with zeroed timing.
+
+    Factors the repeated 20-field error-row pattern across the FILE bench legs.
+    ``**extra`` forwards keyword arguments specific to each leg (e.g.
+    ``file_mode``, ``layout``) so callers stay readable.
+    """
+    return ResultRow(
+        run_id=run_id,
+        api=api,
+        fn=fn,
+        category=category,
+        mode="spark-path",
+        tile_px=0,
+        bands=0,
+        dtype="",
+        srid=0,
+        rows=0,
+        nodata_frac=0.0,
+        warmup_iters=warmup,
+        measured_iters=0,
+        iter_median_s=0.0,
+        iter_min_s=0.0,
+        iter_p90_s=0.0,
+        throughput_mpix_s=0.0,
+        throughput_rows_s=0.0,
+        peak_rss_mb=0.0,
+        status="error",
+        note=str(e)[-500:],
+        output_fingerprint="",
+        **extra,
+        **env,
+    )
+
+
+def run_gtiff_file_read(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoTIFF read via gbx_file_read + count.
+
+    ``file_mode`` ∈ {"fuse", "external", "managed"}.  ``source`` is a Volume dir
+    for fuse/external, or a FILE-table name for managed.
+
+    On a FUSE-only tier (local[2], no FILE), external/managed raise ValueError from
+    ``gbx_file_read`` → clean ``status="na_by_design"`` row (FILE unavailable note).
+
+    Returns a single ResultRow (mode="spark-path", category="reader").
+    """
+    from databricks.labs.gbx.ds.file_gbx import gbx_file_read
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+    access = {"fuse": "auto", "external": "external", "managed": "managed"}[file_mode]
+
+    def _job():
+        refs = gbx_file_read(spark, source, access=access)
+        return int(refs.count())
+
+    try:
+        # Probe once: on a FUSE-only tier, external/managed raise ValueError →
+        # clean na_by_design skip (local has no FILE tier; this is the on-cluster gate).
+        try:
+            n0 = _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gtiff_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                **env,
+            )
+        refs = gbx_file_read(spark, source, access=access)
+        parts, slots = measure_parallelism(spark, refs)
+        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        print(f"[gtiff-read] [{file_mode}] {_src_name}…", flush=True)
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        print(
+            f"[gtiff-read] [{file_mode}] {_src_name}: "
+            f"{'ok' if n0 > 0 else 'empty'}, {n0} rows, {ms / 1000.0:.1f}s",
+            flush=True,
+        )
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gtiff_file_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n0,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n0 / 1000.0) if (ms and n0) else 0.0,
+            per_tile_avg_ms=(ms / n0) if (ms and n0) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status="ok" if n0 > 0 else "empty",
+            note=f"gtiff FILE read [{file_mode}] over {_src_name}",
+            output_fingerprint="",
+            file_mode=file_mode,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gtiff_file_read",
+            "reader",
+            run_id,
+            api,
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+        )
+
+
+def run_gtiff_file_write(
+    spark,
+    tile_df,
+    target: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    filespace: Optional[str] = None,
+    layout: str = "order",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoTIFF write: FILE table (managed/external) or FUSE gtiff_gbx.
+
+    ``file_mode`` ∈ {"fuse", "external", "managed"}.  For FUSE, uses
+    ``tile_df.write.format("gtiff_gbx").mode("overwrite").save(target)``.  For FILE
+    modes, delegates to ``write_file_table(..., file_mode=file_mode, ...)``.
+
+    ``tile_df`` may carry virtual tiles (``tile.path`` set, raster None) — this leg
+    thereby covers virtual-tile → Volume/FILE-table write.
+
+    Records ``file_mode``, ``layout``, and ``measure_parallelism(spark, tile_df)``.
+    Performs a read-back correctness check after timing.
+
+    On a FUSE-only tier (local[2]), FILE modes raise ValueError →
+    ``status="na_by_design"`` (FILE unavailable).
+
+    Returns a single ResultRow (mode="spark-path", category="writer").
+    """
+    from databricks.labs.gbx.ds.register import register
+    from databricks.labs.gbx.pyrx.file_table import write_file_table
+
+    register(spark)
+    env = capture_env(where)
+    parts, slots = measure_parallelism(spark, tile_df)
+    n = int(tile_df.count())
+
+    if file_mode == "fuse":
+
+        def _job():
+            tile_df.write.format("gtiff_gbx").mode("overwrite").save(target)
+
+    else:  # managed or external
+
+        def _job():
+            write_file_table(
+                spark,
+                tile_df,
+                target,
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                overwrite=True,
+            )
+
+    # Probe once: on FUSE-only tier, external/managed raise ValueError → na_by_design.
+    try:
+        _job()
+    except ValueError as ve:
+        return ResultRow(
+            run_id=run_id,
+            api="lightweight",
+            fn="gtiff_file_write",
+            category="writer",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=0,
+            nodata_frac=0.0,
+            warmup_iters=warmup,
+            measured_iters=0,
+            iter_median_s=0.0,
+            iter_min_s=0.0,
+            iter_p90_s=0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=0.0,
+            peak_rss_mb=0.0,
+            status="na_by_design",
+            note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+            output_fingerprint="",
+            file_mode=file_mode,
+            layout=layout,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gtiff_file_write",
+            "writer",
+            run_id,
+            "lightweight",
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+            layout=layout,
+        )
+
+    try:
+        _tgt_name = os.path.basename(str(target).rstrip("/\\"))
+        print(
+            f"[gtiff-write] [{file_mode}] {layout} {_tgt_name} ({n} tiles)…", flush=True
+        )
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+
+        # Correctness check: read back and compare count.
+        if file_mode == "fuse":
+            back_n = int(spark.read.format("gtiff_gbx").load(target).count())
+        else:
+            from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+            back_n = int(read_file_table(spark, target).count())
+
+        _ok = back_n == n
+        _status = "ok" if _ok else "error"
+        _note = f"gtiff FILE write [{file_mode}] {n} tiles" + (
+            f" -- readback {back_n} != {n}" if not _ok else ""
+        )
+        print(
+            f"[gtiff-write] [{file_mode}] {layout} {_tgt_name}: "
+            f"{_status}, {n} rows, {ms / 1000.0:.1f}s",
+            flush=True,
+        )
+        return ResultRow(
+            run_id=run_id,
+            api="lightweight",
+            fn="gtiff_file_write",
+            category="writer",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+            per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status=_status,
+            note=_note,
+            output_fingerprint="",
+            file_mode=file_mode,
+            layout=layout,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gtiff_file_write",
+            "writer",
+            run_id,
+            "lightweight",
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+            layout=layout,
+        )
+
+
+def run_gpkg_file_read(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    chunk_size: int = 10000,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoPackage read via vector_file_read / gpkg_gbx + count.
+
+    ``file_mode`` in {"fuse", "external", "managed"}.  ``source`` is a Volume
+    dir for fuse/external (a directory of .gpkg files), or a FILE-table name
+    for managed.
+
+    - fuse: reads the dir via ``spark.read.format("gpkg_gbx").option("chunkSize",
+      chunk_size).load(source)``; records ``chunk_size`` in the result.
+    - external: ``vector_file_read(spark, source, driver="GPKG", access="external")``
+      raises ValueError on a FUSE-only tier → ``status="na_by_design"``.
+    - managed: ``read_file_table(spark, source)`` → filter non-null path + count.
+
+    Timed ``_job`` = ``df.filter("geometry IS NOT NULL").count()`` (fuse/external)
+    or ``df.filter(F.col("tile.path").isNotNull()).count()`` (managed).
+
+    Records ``chunk_size``, ``file_mode``, and ``measure_parallelism`` on the
+    input df.
+
+    Returns a single ResultRow (mode="spark-path", category="reader").
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    # --- build the input df and _job based on file_mode -------------------- #
+    if file_mode == "fuse":
+        df = (
+            spark.read.format("gpkg_gbx")
+            .option("chunkSize", str(chunk_size))
+            .load(source)
+        )
+        # Detect geometry column via *_srid sibling (robust to any GPKG layer name).
+        _srid_cols = [f.name for f in df.schema.fields if f.name.endswith("_srid")]
+        _gcol = _srid_cols[0][: -len("_srid")] if _srid_cols else "geometry"
+
+        def _job():
+            import pyspark.sql.functions as _F
+
+            return int(df.filter(_F.col(_gcol).isNotNull()).count())
+
+    elif file_mode == "external":
+        # Probe once: on a FUSE-only tier, vector_file_read raises ValueError →
+        # clean na_by_design skip (no FILE tier available locally).
+        try:
+            from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+            df = vector_file_read(spark, source, driver="GPKG", access="external")
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                chunk_size=chunk_size,
+                **env,
+            )
+
+        def _job():
+            import pyspark.sql.functions as _F
+
+            return int(df.filter(_F.col("geometry").isNotNull()).count())
+
+    else:  # managed
+        # Guard: a MANAGED read requires a FILE-column TABLE source, not a path or
+        # directory. A Volume path cannot yield a MANAGED FILE reference — that is
+        # minted on write. Return na_by_design early (symmetric with the raster
+        # gbx_file_read gate and vector_file_read's own managed guard) rather than
+        # letting SHOW TBLPROPERTIES receive a bare path and raise a parse error.
+        if source.startswith("/") or source.startswith("dbfs:"):
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=(
+                    "access='managed' is only valid for a MANAGED FILE-column table "
+                    "source. A Volume path/directory cannot yield a MANAGED FILE "
+                    "reference — minted on write via vector_file_write."
+                ),
+                output_fingerprint="",
+                file_mode=file_mode,
+                chunk_size=chunk_size,
+                **env,
+            )
+        from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+        df = read_file_table(spark, source)
+
+        def _job():
+            import pyspark.sql.functions as _F
+
+            return int(df.filter(_F.col("tile.path").isNotNull()).count())
+
+    # --- probe once for count + parallelism --------------------------------- #
+    try:
+        try:
+            n0 = _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_file_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                chunk_size=chunk_size,
+                **env,
+            )
+        parts, slots = measure_parallelism(spark, df)
+        _src_name = os.path.basename(str(source).rstrip("/\\"))
+        print(f"[gpkg-read] [{file_mode}] chunk={chunk_size} {_src_name}…", flush=True)
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        print(
+            f"[gpkg-read] [{file_mode}] chunk={chunk_size} {_src_name}: "
+            f"{'ok' if n0 > 0 else 'empty'}, {n0} rows, {ms / 1000.0:.1f}s",
+            flush=True,
+        )
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gpkg_file_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n0,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n0 / 1000.0) if (ms and n0) else 0.0,
+            per_tile_avg_ms=(ms / n0) if (ms and n0) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status="ok" if n0 > 0 else "empty",
+            note=f"gpkg FILE read [{file_mode}] over {_src_name}",
+            output_fingerprint="",
+            file_mode=file_mode,
+            chunk_size=chunk_size,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gpkg_file_read",
+            "reader",
+            run_id,
+            api,
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+            chunk_size=chunk_size,
+        )
+
+
+def run_gpkg_chunksize_sweep(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    chunk_sizes: tuple = (1000, 10000, 100000),
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> List["ResultRow"]:
+    """Sweep ``chunkSize`` across GeoPackage FILE reads and confirm fanout-invariance.
+
+    GeoPackage is one staged file per partition; ``chunkSize`` + the
+    per-partition ``_VEC_STAGED_FILES`` LRU amortize one open/stage across many
+    chunk reads — the vector analog of raster multi-window amortization.
+    Partition count is file-count bound; it does **not** grow with chunkSize
+    (chunkSize is within-task amortization, not a fanout lever).
+
+    Calls ``run_gpkg_file_read`` once per value in ``chunk_sizes`` and returns
+    one ResultRow per chunkSize.  Each row records ``chunk_size`` and
+    ``input_partitions`` so the fanout-invariance claim is checkable at a glance.
+
+    Args:
+        spark: active SparkSession.
+        source: Volume dir (fuse/external) or FILE-table name (managed).
+        run_id: benchmark run identifier label.
+        warmup: warmup iterations.
+        measured: measured iterations.
+        file_mode: ``"fuse"``, ``"external"``, or ``"managed"``.
+        chunk_sizes: chunkSize values to sweep (default: 1k / 10k / 100k).
+        api: api label recorded in each ResultRow.
+        where: env_where label recorded in each ResultRow.
+
+    Returns:
+        List of ResultRow — one per chunkSize in ``chunk_sizes`` order.
+    """
+    results: List["ResultRow"] = []
+    _n_cs = len(chunk_sizes)
+    for _i_cs, cs in enumerate(chunk_sizes, 1):
+        print(
+            f"[chunksize] [{file_mode}] chunk={cs} ({_i_cs} of {_n_cs})…",
+            flush=True,
+        )
+        row = run_gpkg_file_read(
+            spark,
+            source,
+            run_id,
+            warmup,
+            measured,
+            file_mode=file_mode,
+            chunk_size=cs,
+            api=api,
+            where=where,
+        )
+        print(
+            f"[chunksize] [{file_mode}] chunk={cs}: "
+            f"{row.status}, {row.rows} rows, {row.iter_median_s:.1f}s"
+            f" ({_i_cs} of {_n_cs})",
+            flush=True,
+        )
+        results.append(row)
+    return results
+
+
+def _gpkg_fuse_readback(spark, path: str, n: int) -> Tuple[str, str]:
+    """Read back a fuse-written GPKG and return (status, note) for the ResultRow.
+
+    Finds the geometry column via the *_srid sibling, counts non-null geometries,
+    and returns ("ok", ...) if the count matches *n*, ("error", ...) otherwise.
+    On any exception returns ("error", truncated exception message).
+    """
+    try:
+        import pyspark.sql.functions as _F
+
+        back = spark.read.format("gpkg_gbx").load(path)
+        _srid_fields = [f.name for f in back.schema.fields if f.name.endswith("_srid")]
+        if _srid_fields:
+            _gcol = _srid_fields[0][: -len("_srid")]
+            back_n = int(back.filter(_F.col(_gcol).isNotNull()).count())
+        else:
+            back_n = int(back.count())
+        ok = back_n == n
+        note = f"gpkg FILE write [fuse] {n} features" + (
+            f" -- readback {back_n} != {n}" if not ok else ""
+        )
+        return "ok" if ok else "error", note
+    except Exception as e:  # noqa: BLE001
+        return "error", f"readback error: {str(e)[-450:]}"
+
+
+def _gpkg_file_readback(
+    spark, target: str, n: int, file_mode: str
+) -> Tuple[str, str, int]:
+    """Read back a vector FILE write and return ``(status, note, file_ref_count)``.
+
+    A vector FILE write (``vector_file_write``) stores the WHOLE .gpkg as ONE FILE
+    reference in a FILE-column Delta table at *target* — NOT one row per feature.
+    Correctness is therefore FEATURE parity, never a file-ref count:
+    ``read_file_table`` resolves ``tile.path`` to a FUSE-openable /Volumes path
+    (managed: the ``create_file`` ``.uri`` with the ``dbfs:`` scheme stripped;
+    external: the staged Volume path), then that single .gpkg is read back via the
+    vector FILE read path (``vector_file_read`` on the PATH) and its feature count
+    is compared to the source *n*.
+
+    Crucial: *target* (a ``schema.table`` name) must NEVER be handed to
+    ``vector_file_read`` — that function reads a LOCATION path/directory and would
+    raise ``FileNotFoundError`` (external) or the managed-source guard (managed).
+    The resolved ``tile.path`` (a Volume file path) is what gets read.
+
+    On any exception returns ``("error", <msg>, 0)`` — never raises (mirrors
+    :func:`_gpkg_fuse_readback`).
+    """
+    try:
+        import pyspark.sql.functions as _F
+
+        from databricks.labs.gbx.pyrx.file_table import read_file_table
+        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+        _tbl = read_file_table(spark, target).filter(_F.col("tile.path").isNotNull())
+        _paths = [
+            r["path"] for r in _tbl.select(_F.col("tile.path").alias("path")).collect()
+        ]
+        _ref_count = len(_paths)
+        if not _paths:
+            return (
+                "error",
+                f"gpkg FILE write [{file_mode}] {n} features -- 0 file refs",
+                0,
+            )
+        # One .gpkg per write: read its features back via the vector FILE read path,
+        # pointed at the RESOLVED path (access='auto' → graceful FILE/FUSE, never
+        # raises for a location source).
+        features_back = vector_file_read(spark, _paths[0], driver="GPKG", access="auto")
+        back_n = int(features_back.count())
+        _ok = back_n == n and _ref_count >= 1
+        _status = "ok" if _ok else "error"
+        _note = f"gpkg FILE write [{file_mode}] {n} features" + (
+            f" -- readback {back_n} != {n}" if back_n != n else ""
+        )
+        return _status, _note, _ref_count
+    except Exception as e:  # noqa: BLE001
+        return (
+            "error",
+            f"gpkg FILE write [{file_mode}] {n} features "
+            f"-- round-trip read failed: {str(e)[:120]}",
+            0,
+        )
+
+
+def run_gpkg_file_write(
+    spark,
+    local_out: str,
+    target: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    filespace: Optional[str] = None,
+    layout: str = "order",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a FILE-mode GeoPackage write: FILE table (managed/external) or FUSE gpkg_gbx.
+
+    ``file_mode`` in {"fuse", "external", "managed"}.  ``local_out`` is a path
+    to a local/FUSE-accessible .gpkg file (the assembled source to write from).
+
+    - fuse: reads ``local_out`` via ``spark.read.format("gpkg_gbx")``, caches the
+      DataFrame, then times ``df.write.format("gpkg_gbx").mode("overwrite").save(target_iter)``
+      per iteration into fresh sub-directories to avoid append/overwrite contention.
+      Performs a read-back correctness check on the last written target.
+    - managed/external: delegates to ``vector_file_write(spark, local_out, target,
+      driver="GPKG", file_mode=file_mode, ...)``.  On a FUSE-only tier both modes
+      raise ValueError → ``status="na_by_design"``.
+
+    Records ``file_mode``, ``layout``, and ``measure_parallelism`` on the source df.
+
+    Returns a single ResultRow (mode="spark-path", category="writer").
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    if file_mode == "fuse":
+        # Read the assembled .gpkg file into a cached DataFrame.
+        try:
+            df = spark.read.format("gpkg_gbx").load(local_out)
+            df = df.cache()
+            n = int(df.count())
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+        parts, slots = measure_parallelism(spark, df)
+
+        # Per-iteration target paths to avoid append/overwrite contention.
+        # Include .gpkg extension so the writer places the file at the exact
+        # target path (without extension, GDAL appends .gpkg, producing a
+        # path different from what the readback expects).
+        _targets = [f"{target}/iter.m{i}.gpkg" for i in range(max(1, measured))]
+        _iter_idx = [0]
+
+        def _job():
+            t = _targets[_iter_idx[0] % len(_targets)]
+            _iter_idx[0] += 1
+            df.write.format("gpkg_gbx").mode("overwrite").save(t)
+
+        # Probe once: fuse write should not raise ValueError, but guard anyway.
+        try:
+            _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+        try:
+            _src_gpkg = os.path.basename(str(local_out))
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg} ({n} features)…",
+                flush=True,
+            )
+            stats = time_iters(_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+
+            # Read-back correctness check on the last written target.
+            _last = _targets[(max(1, measured) - 1) % len(_targets)]
+            _status, _note = _gpkg_fuse_readback(spark, _last, n)
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg}: "
+                f"{_status}, {n} rows, {ms / 1000.0:.1f}s",
+                flush=True,
+            )
+
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=n,
+                nodata_frac=0.0,
+                warmup_iters=stats["warmup_iters"],
+                measured_iters=stats["measured_iters"],
+                iter_median_s=ms / 1000.0,
+                iter_min_s=stats["iter_min_ms"] / 1000.0,
+                iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+                per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+                peak_rss_mb=peak_rss_mb(),
+                status=_status,
+                note=_note,
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+    else:  # managed or external
+        from databricks.labs.gbx.pyvx.file_write import vector_file_write
+
+        # Read the source gpkg to get parallelism info.
+        try:
+            df_src = spark.read.format("gpkg_gbx").load(local_out)
+            parts, slots = measure_parallelism(spark, df_src)
+            n = int(df_src.count())
+        except Exception:  # noqa: BLE001
+            parts, slots, n = 0, 0, 0
+
+        def _job():
+            vector_file_write(
+                spark,
+                local_out,
+                target,
+                driver="GPKG",
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                overwrite=True,
+            )
+
+        # Probe once: on FUSE-only tier, managed/external raise ValueError → na_by_design.
+        try:
+            _job()
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+        try:
+            _src_gpkg2 = os.path.basename(str(local_out))
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg2} ({n} features)…",
+                flush=True,
+            )
+            stats = time_iters(_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+
+            # Correctness check: round-trip read.
+            # A vector FILE write stores the whole .gpkg as ONE FILE reference in a
+            # FILE-column Delta table at `target`; read it back via the vector FILE
+            # read path (resolve tile.path, then vector_file_read that PATH) and
+            # compare FEATURE count to the source (never a file-ref count).
+            _status, _note, _ = _gpkg_file_readback(spark, target, n, file_mode)
+            print(
+                f"[gpkg-write] [{file_mode}] {layout} {_src_gpkg2}: "
+                f"{_status}, {n} rows, {ms / 1000.0:.1f}s",
+                flush=True,
+            )
+            return ResultRow(
+                run_id=run_id,
+                api="lightweight",
+                fn="gpkg_file_write",
+                category="writer",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=n,
+                nodata_frac=0.0,
+                warmup_iters=stats["warmup_iters"],
+                measured_iters=stats["measured_iters"],
+                iter_median_s=ms / 1000.0,
+                iter_min_s=stats["iter_min_ms"] / 1000.0,
+                iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                per_tile_avg_s=(ms / n / 1000.0) if (ms and n) else 0.0,
+                per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+                peak_rss_mb=peak_rss_mb(),
+                status=_status,
+                note=_note,
+                output_fingerprint="",
+                file_mode=file_mode,
+                layout=layout,
+                input_partitions=parts,
+                launched_tasks=parts,
+                slots_available=slots,
+                **env,
+            )
+        except Exception as e:  # noqa: BLE001
+            return _error_row(
+                "gpkg_file_write",
+                "writer",
+                run_id,
+                "lightweight",
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+                layout=layout,
+            )
+
+
+def run_vector_table_read_sweep(
+    spark,
+    table: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    expected_n: int = 0,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time a vector FILE-column-table read via ``vector_file_read`` table mode.
+
+    Reads the FILE-column Delta table written by the gpkg write leg (via
+    ``vector_file_write``) back through the Task-2 vector table-read entry:
+    ``vector_file_read(spark, table, source_type='table')``.  Measures wall-clock
+    read+decode time and feature-count parity.
+
+    ``file_mode`` ∈ {"managed", "external", "fuse"}.
+
+    - **managed/external**: calls ``vector_file_read(spark, table,
+      source_type='table')`` (the new TABLE mode).  Measures ``df.count()`` as the
+      timed job.  If ``expected_n > 0``, asserts feature-count parity: ``status="ok"``
+      when the decoded count matches, ``status="error"`` with a note otherwise.
+      If ``expected_n == 0`` (unknown), reports ``status="ok"`` on any non-zero count.
+      Records ``file_mode``, ``input_partitions``, ``launched_tasks``,
+      ``slots_available``.  Progress prints: ``[gpkg-table-read] [{file_mode}]...``.
+    - **fuse**: a vector FILE write stores the whole .gpkg as ONE FILE reference in a
+      FILE-column Delta table (minted on write).  A FUSE-only tier has no FILE tier and
+      therefore no written FILE tables to read back → clean ``status="na_by_design"``.
+
+    Per-task avg = total / n_tasks (n_tasks < cores; do NOT force saturation; do NOT
+    add a blob-shuffle repartition).
+
+    Returns a single ResultRow (mode="spark-path", category="reader").
+    """
+    env = capture_env(where)
+
+    if file_mode == "fuse":
+        # A FUSE-only tier has no FILE-column Delta tables to read back.
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gpkg_table_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=0,
+            nodata_frac=0.0,
+            warmup_iters=warmup,
+            measured_iters=0,
+            iter_median_s=0.0,
+            iter_min_s=0.0,
+            iter_p90_s=0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=0.0,
+            peak_rss_mb=0.0,
+            status="na_by_design",
+            note=(
+                "FILE FUSE tier has no FILE-column Delta table; "
+                "vector table-read requires a managed or external FILE table."
+            ),
+            output_fingerprint="",
+            file_mode=file_mode,
+            **env,
+        )
+
+    # managed or external: read back via the new TABLE mode.
+    try:
+        from databricks.labs.gbx.pyvx.file_read import vector_file_read
+
+        # Probe once: on a FUSE-only tier, resolve_file_table raises ValueError
+        # (FILE unavailable) → na_by_design.
+        try:
+            df = vector_file_read(spark, table, source_type="table")
+            n0 = int(df.count())
+        except ValueError as ve:
+            return ResultRow(
+                run_id=run_id,
+                api=api,
+                fn="gpkg_table_read",
+                category="reader",
+                mode="spark-path",
+                tile_px=0,
+                bands=0,
+                dtype="",
+                srid=0,
+                rows=0,
+                nodata_frac=0.0,
+                warmup_iters=warmup,
+                measured_iters=0,
+                iter_median_s=0.0,
+                iter_min_s=0.0,
+                iter_p90_s=0.0,
+                throughput_mpix_s=0.0,
+                throughput_rows_s=0.0,
+                peak_rss_mb=0.0,
+                status="na_by_design",
+                note=f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}",
+                output_fingerprint="",
+                file_mode=file_mode,
+                **env,
+            )
+
+        parts, slots = measure_parallelism(spark, df)
+        _tbl_short = table.rsplit(".", 1)[-1]
+        print(
+            f"[gpkg-table-read] [{file_mode}] {_tbl_short} ({n0} features)…",
+            flush=True,
+        )
+
+        def _job():
+            return int(vector_file_read(spark, table, source_type="table").count())
+
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        n_tasks = max(1, parts)
+
+        # Parity check.
+        if expected_n > 0:
+            _ok = n0 == expected_n
+            _status = "ok" if _ok else "error"
+            _note = f"gpkg TABLE read [{file_mode}] {_tbl_short}: {n0} features" + (
+                f" -- readback {n0} != {expected_n}" if not _ok else ""
+            )
+        else:
+            _status = "ok" if n0 > 0 else "empty"
+            _note = f"gpkg TABLE read [{file_mode}] {_tbl_short}: {n0} features"
+
+        print(
+            f"[gpkg-table-read] [{file_mode}] {_tbl_short}: "
+            f"{_status}, {n0} features, {ms / 1000.0:.1f}s",
+            flush=True,
+        )
+
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gpkg_table_read",
+            category="reader",
+            mode="spark-path",
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=n0,
+            nodata_frac=0.0,
+            warmup_iters=stats["warmup_iters"],
+            measured_iters=stats["measured_iters"],
+            iter_median_s=ms / 1000.0,
+            iter_min_s=stats["iter_min_ms"] / 1000.0,
+            iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+            iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+            avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+            per_tile_avg_s=(ms / n_tasks / 1000.0) if (ms and n_tasks) else 0.0,
+            per_tile_avg_ms=(ms / n_tasks) if (ms and n_tasks) else 0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+            peak_rss_mb=peak_rss_mb(),
+            status=_status,
+            note=_note,
+            output_fingerprint="",
+            file_mode=file_mode,
+            input_partitions=parts,
+            launched_tasks=parts,
+            slots_available=slots,
+            **env,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _error_row(
+            "gpkg_table_read",
+            "reader",
+            run_id,
+            api,
+            warmup,
+            env,
+            e,
+            file_mode=file_mode,
+        )
+
+
+def run_raster_decode_read_sweep(
+    spark,
+    source: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    file_mode: str,
+    skip_ordering: Optional[bool] = None,
+    expected_n: int = 0,
+    api: str = "lightweight",
+    where: str = "cluster",
+) -> List["ResultRow"]:
+    """Time raster pixel-decode throughput from FILE tiles across MANAGED / EXTERNAL / FUSE.
+
+    Reads GeoTIFF tiles (written by the layout sweep) and forces **pixel decode** via
+    ``rst_avg`` — the same FILE code path used by ``run_virtual_tile_pixel_read``.
+    This measures actual decode-read throughput, NOT enumeration (gbx_file_read+count).
+
+    ``file_mode`` ∈ {"fuse", "external", "managed"}:
+
+    - **fuse**: loads ``source`` (a Volume dir) via ``raster_gbx`` with
+      ``virtualTiles=true``, applies ``rst_avg`` to force pixel reads via the shipping
+      ``file_ref_arg`` / ``open_windowed_via_fileref`` FILE path.  Returns one row.
+      ``skip_ordering`` is ignored for fuse (no table ordering concept).
+    - **external** / **managed**: loads ``source`` (a FILE-column Delta table name)
+      via ``read_file_table(spark, source, skip_ordering=<val>)``, applies ``rst_avg``
+      to force pixel decode.  On a FUSE-only tier (local[2], no FILE), raises ValueError
+      → clean ``status="na_by_design"`` row.
+
+    **Ordering-amortization comparison** (``skip_ordering=None``, the default, for
+    managed/external):
+    Runs the decode job **twice** — once with the T8 auto-order (same-source tiles
+    grouped → ``open_windowed_via_fileref`` reuse across consecutive tiles in a source
+    file, amortising the open cost) and once with ``skipOrdering=True`` (random order,
+    no batching).  Returns **two** ``ResultRow`` objects so the ordering payoff is
+    directly measurable.  ``mode="spark-path"`` for the ordered variant;
+    ``mode="spark-path-skip-order"`` for the unordered variant.
+
+    When ``skip_ordering`` is explicitly ``True`` or ``False``, only that variant runs
+    and a single row is returned.
+
+    Per-task avg = total / n_tasks (n_tasks < slots; no saturation repartition added).
+
+    Args:
+        spark: Active SparkSession.
+        source: Volume dir (fuse) or FILE-column table name (managed/external).
+        run_id: Benchmark run label.
+        warmup: Warmup iterations.
+        measured: Measured iterations.
+        file_mode: "fuse", "external", or "managed".
+        skip_ordering: None = run both variants (ordered + unordered, managed/external
+            only).  True / False = run only that variant.  Ignored for fuse mode.
+        expected_n: Expected tile count; 0 = accept any non-zero count.
+        api: Tier label recorded in the result row.
+        where: Env label recorded in the result row.
+
+    Returns:
+        List of one or two ResultRow instances (mode="spark-path" / "spark-path-skip-order").
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    env = capture_env(where)
+
+    import pyspark.sql.functions as _F
+
+    from databricks.labs.gbx.pyrx import functions as _pyrx
+
+    def _na_row(mode_label: str, note: str) -> "ResultRow":
+        return ResultRow(
+            run_id=run_id,
+            api=api,
+            fn="gtiff_decode_read",
+            category="reader",
+            mode=mode_label,
+            tile_px=0,
+            bands=0,
+            dtype="",
+            srid=0,
+            rows=0,
+            nodata_frac=0.0,
+            warmup_iters=warmup,
+            measured_iters=0,
+            iter_median_s=0.0,
+            iter_min_s=0.0,
+            iter_p90_s=0.0,
+            throughput_mpix_s=0.0,
+            throughput_rows_s=0.0,
+            peak_rss_mb=0.0,
+            status="na_by_design",
+            note=note,
+            output_fingerprint="",
+            file_mode=file_mode,
+            **env,
+        )
+
+    # ------------------------------------------------------------------ fuse #
+    if file_mode == "fuse":
+        # Load a Volume directory as virtual tiles and force pixel decode via rst_avg.
+        # skip_ordering has no meaning for a directory scan; ignored here.
+        def _fuse_job():
+            return (
+                spark.read.format("raster_gbx")
+                .option("virtualTiles", "true")
+                .load(source)
+                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .count()
+            )
+
+        _src_short = os.path.basename(str(source).rstrip("/\\")) or source
+        print(f"[raster-decode-read] [fuse] {_src_short}…", flush=True)
+        try:
+            # Probe once to get row count + measure parallelism.
+            _ref_df = (
+                spark.read.format("raster_gbx")
+                .option("virtualTiles", "true")
+                .load(source)
+            )
+            parts, slots = measure_parallelism(spark, _ref_df)
+            n0 = _fuse_job()
+            stats = time_iters(_fuse_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+            n_tasks = max(1, parts)
+            _ok = (expected_n == 0 and n0 > 0) or (expected_n > 0 and n0 == expected_n)
+            _status = "ok" if _ok else ("error" if expected_n > 0 else "empty")
+            _note = f"raster decode-read [fuse] {_src_short}: {n0} tiles" + (
+                f" -- readback {n0} != {expected_n}"
+                if expected_n > 0 and not _ok
+                else ""
+            )
+            print(
+                f"[raster-decode-read] [fuse] {_src_short}: "
+                f"{_status}, {n0} tiles, {ms / 1000.0:.1f}s",
+                flush=True,
+            )
+            return [
+                ResultRow(
+                    run_id=run_id,
+                    api=api,
+                    fn="gtiff_decode_read",
+                    category="reader",
+                    mode="spark-path",
+                    tile_px=0,
+                    bands=0,
+                    dtype="",
+                    srid=0,
+                    rows=n0,
+                    nodata_frac=0.0,
+                    warmup_iters=stats["warmup_iters"],
+                    measured_iters=stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                    avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                    per_tile_avg_s=(ms / n_tasks / 1000.0) if (ms and n_tasks) else 0.0,
+                    per_tile_avg_ms=(ms / n_tasks) if (ms and n_tasks) else 0.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status=_status,
+                    note=_note,
+                    output_fingerprint="",
+                    file_mode=file_mode,
+                    input_partitions=parts,
+                    launched_tasks=parts,
+                    slots_available=slots,
+                    **env,
+                )
+            ]
+        except Exception as e:  # noqa: BLE001
+            return [
+                _error_row(
+                    "gtiff_decode_read",
+                    "reader",
+                    run_id,
+                    api,
+                    warmup,
+                    env,
+                    e,
+                    file_mode=file_mode,
+                )
+            ]
+
+    # ------------------------------------------- managed / external (table) #
+    # Determine which skip_ordering variants to run.
+    if skip_ordering is None:
+        _variants = [(False, "spark-path"), (True, "spark-path-skip-order")]
+    elif skip_ordering:
+        _variants = [(True, "spark-path-skip-order")]
+    else:
+        _variants = [(False, "spark-path")]
+
+    # Probe once (default ordering) to get tile count + check FILE availability.
+    from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+    try:
+        _probe_df = read_file_table(spark, source, skip_ordering=False)
+        _n_probe = int(
+            _probe_df.select(_pyrx.rst_avg(_F.col("tile")).alias("avg")).count()
+        )
+    except ValueError as ve:
+        note = f"FILE {file_mode} unavailable on this tier: {str(ve)[:160]}"
+        return [_na_row(ml, note) for _, ml in _variants]
+    except Exception as e:  # noqa: BLE001
+        return [
+            _error_row(
+                "gtiff_decode_read",
+                "reader",
+                run_id,
+                api,
+                warmup,
+                env,
+                e,
+                file_mode=file_mode,
+            )
+        ]
+
+    parts, slots = measure_parallelism(spark, _probe_df)
+    n_tasks = max(1, parts)
+    _tbl_short = source.rsplit(".", 1)[-1]
+
+    out: List["ResultRow"] = []
+    for _skip_ord, _mode_label in _variants:
+        print(
+            f"[raster-decode-read] [{file_mode}] {_tbl_short}"
+            f" skip_ordering={_skip_ord}…",
+            flush=True,
+        )
+
+        def _table_job(skip_ord=_skip_ord):
+            return int(
+                read_file_table(spark, source, skip_ordering=skip_ord)
+                .select(_pyrx.rst_avg(_F.col("tile")).alias("avg"))
+                .count()
+            )
+
+        try:
+            stats = time_iters(_table_job, warmup, measured)
+            ms = stats["iter_median_ms"]
+            n0 = _n_probe
+            if expected_n > 0:
+                _ok = n0 == expected_n
+                _status = "ok" if _ok else "error"
+                _note = (
+                    f"raster decode-read [{file_mode}] {_tbl_short}"
+                    f" skip_ordering={_skip_ord}: {n0} tiles"
+                    + (f" -- readback {n0} != {expected_n}" if not _ok else "")
+                )
+            else:
+                _status = "ok" if n0 > 0 else "empty"
+                _note = (
+                    f"raster decode-read [{file_mode}] {_tbl_short}"
+                    f" skip_ordering={_skip_ord}: {n0} tiles"
+                )
+            print(
+                f"[raster-decode-read] [{file_mode}] {_tbl_short}"
+                f" skip_ordering={_skip_ord}: {_status}, {n0} tiles,"
+                f" {ms / 1000.0:.1f}s",
+                flush=True,
+            )
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api=api,
+                    fn="gtiff_decode_read",
+                    category="reader",
+                    mode=_mode_label,
+                    tile_px=0,
+                    bands=0,
+                    dtype="",
+                    srid=0,
+                    rows=n0,
+                    nodata_frac=0.0,
+                    warmup_iters=stats["warmup_iters"],
+                    measured_iters=stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=stats["iter_total_wall_clock_ms"] / 1000.0,
+                    avg_wall_clock_s=stats["avg_wall_clock_ms"] / 1000.0,
+                    per_tile_avg_s=(ms / n_tasks / 1000.0) if (ms and n_tasks) else 0.0,
+                    per_tile_avg_ms=(ms / n_tasks) if (ms and n_tasks) else 0.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=(n0 / (ms / 1000.0)) if (ms and n0) else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status=_status,
+                    note=_note,
+                    output_fingerprint="",
+                    file_mode=file_mode,
+                    input_partitions=parts,
+                    launched_tasks=parts,
+                    slots_available=slots,
+                    **env,
+                )
+            )
+        except Exception as e:  # noqa: BLE001
+            out.append(
+                _error_row(
+                    "gtiff_decode_read",
+                    "reader",
+                    run_id,
+                    api,
+                    warmup,
+                    env,
+                    e,
+                    file_mode=file_mode,
+                )
+            )
+
+    return out
 
 
 def _tin_result_row(
@@ -6673,6 +8397,829 @@ def stage_nasanex_corpus(
         flush=True,
     )
     return manifest
+
+
+def _write_striped_gtiff(
+    path: str, width: int, height: int, bands: int, dtype: str
+) -> None:
+    """Write a fully-striped (1-row-per-strip) GeoTIFF to ``path``.
+
+    Striped layout is what large satellite sensors produce; it is the worst-case
+    for the window-read path because each windowed ds.read() must seek to the
+    row's strip offset instead of reading pre-tiled blocks. ``path`` must end in
+    ``.tif``. Dimensions are configurable so tests can use tiny fixtures (< 1 MB)
+    while the cluster profile uses VIIRS/UK-scale sizes (> 1 GB).
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    data = np.zeros((bands, height, width), dtype=dtype)
+    # Fill with a ramp so checksums are non-trivial.
+    for b in range(bands):
+        data[b] = np.arange(height * width, dtype=dtype).reshape(height, width) % 256
+
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=bands,
+        dtype=dtype,
+        crs="EPSG:4326",
+        transform=from_origin(0.0, 60.0, 0.01, 0.01),
+        compress="DEFLATE",
+        # Explicit STRIP layout — no tiling, no blockxsize/blockysize.
+        tiled=False,
+    )
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data)
+
+
+def _write_tiled_cog(
+    path: str,
+    width: int,
+    height: int,
+    bands: int,
+    dtype: str,
+    cog_blocksize: int = 64,
+) -> None:
+    """Write a genuine Cloud-Optimized GeoTIFF (COG) to ``path``.
+
+    A real COG has (a) internal tiling AND (b) pre-built overview pyramid.
+    This function writes a temporary plain GeoTIFF, then converts it to COG
+    using the shared ``pyrx.core.analysis.cog_convert`` path — the same path
+    the reader/writer COG features use — so the result is identical to what the
+    product emits.
+
+    ``cog_blocksize`` controls the overview tile size.  It must be small enough
+    that at least one overview level is generated for the given ``width``/``height``
+    (rule of thumb: ``max(width, height) > cog_blocksize``).  The default 64 is
+    small so even tiny 128×128 unit-test fixtures produce overviews.
+
+    ``path`` must end in ``.tif``.
+    """
+    import tempfile
+
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+
+    data = np.zeros((bands, height, width), dtype=dtype)
+    for b in range(bands):
+        data[b] = np.arange(height * width, dtype=dtype).reshape(height, width) % 256
+
+    # Write a plain GTiff first, then convert to COG in-memory.
+    fd, tmp_path = tempfile.mkstemp(suffix=".tif")
+    import os
+
+    os.close(fd)
+    try:
+        profile = dict(
+            driver="GTiff",
+            width=width,
+            height=height,
+            count=bands,
+            dtype=dtype,
+            crs="EPSG:4326",
+            transform=from_origin(0.0, 60.0, 0.01, 0.01),
+        )
+        with rasterio.open(tmp_path, "w", **profile) as ds_tmp:
+            ds_tmp.write(data)
+        # Convert to real COG (tiled + overviews) using the shared converter.
+        with rasterio.open(tmp_path) as ds_src:
+            cog_bytes = cog_convert(ds_src, "DEFLATE", cog_blocksize, "AVERAGE")
+    finally:
+        os.unlink(tmp_path)
+
+    with open(path, "wb") as fh:
+        fh.write(cog_bytes)
+
+
+# ---------------------------------------------------------------------------
+# Large-raster bench profile
+# ---------------------------------------------------------------------------
+
+#: Default corpus parameters for the full-scale cluster run (VIIRS/UK-scale).
+#: Override via ``LargeRasterCorpusConfig`` in the cluster notebook.
+_LARGE_RASTER_CLUSTER_DEFAULTS = {
+    "width": 86400,  # VIIRS 750m global (~86400 cols)
+    "height": 43200,  # VIIRS 750m global (~43200 rows)
+    "bands": 1,
+    "dtype": "float32",
+    # Strategy sweep — the key variable under test.
+    "split_strategies": ("none", "serverless", "classic", "auto"),
+    # Serverless decoded budget (~512 MiB decoded) expressed as sizeInMB for the
+    # legacy pure-local path that still takes a sizeInMB arg.
+    "size_mib_serverless": 512,
+    "size_mib_classic": 1536,
+}
+
+
+def _large_raster_result_row(
+    *,
+    run_id: str,
+    env: dict,
+    source_tag: str,
+    raster_dtype: str,
+    strategy: str,
+    rows: int,
+    status: str,
+    note: str,
+    stats=None,
+    warmup: int = 0,
+    corpus_size_mib: float = 0.0,
+    throughput_mib_s: float = 0.0,
+) -> "ResultRow":
+    """Build a ResultRow for one large-raster bench leg.
+
+    ``source_tag``    — "striped" | "tiled-cog"
+    ``raster_dtype``  — the actual NumPy/rasterio dtype of the corpus raster
+                        (e.g. "float32"), stored in the ``dtype`` field as intended.
+    ``strategy``      — splitStrategy value: "none"|"serverless"|"classic"|"auto",
+                        stored in the dedicated ``split_strategy`` optional field.
+    ``corpus_size_mib`` — decoded file size in MiB; stamped into ``note`` so a
+                          0-row fast read is immediately visible as wrong.
+    ``throughput_mib_s`` — decoded MiB/s; stored in ``throughput_mpix_s``
+                           (repurposed for this profile since mpix doesn't apply
+                           to large single-file reads).
+    """
+    ms = stats["iter_median_ms"] if stats else 0.0
+    return ResultRow(
+        run_id=run_id,
+        api="lightweight",
+        fn=f"raster_read_large_{source_tag}",
+        category="large_raster",
+        mode="spark-path",
+        tile_px=0,
+        bands=0,
+        dtype=raster_dtype,
+        srid=0,
+        rows=rows,
+        nodata_frac=0.0,
+        warmup_iters=(stats["warmup_iters"] if stats else warmup),
+        measured_iters=(stats["measured_iters"] if stats else 0),
+        iter_median_s=(ms / 1000.0),
+        iter_min_s=((stats["iter_min_ms"] / 1000.0) if stats else 0.0),
+        iter_p90_s=((stats["iter_p90_ms"] / 1000.0) if stats else 0.0),
+        iter_total_wall_clock_s=(
+            (stats["iter_total_wall_clock_ms"] / 1000.0) if stats else 0.0
+        ),
+        avg_wall_clock_s=((stats["avg_wall_clock_ms"] / 1000.0) if stats else 0.0),
+        per_tile_avg_s=((ms / rows / 1000.0) if (ms and rows) else 0.0),
+        per_tile_avg_ms=((ms / rows) if (ms and rows) else 0.0),
+        # throughput_mpix_s repurposed for decoded MiB/s (mpix doesn't apply here).
+        throughput_mpix_s=throughput_mib_s,
+        throughput_rows_s=((rows / (ms / 1000.0)) if (ms and rows) else 0.0),
+        peak_rss_mb=peak_rss_mb(),
+        status=status,
+        note=note,
+        output_fingerprint="",
+        split_strategy=strategy,
+        **env,
+    )
+
+
+def _bench_large_raster_leg(
+    spark,
+    corpus_path: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    source_tag: str,
+    strategy: str,
+    corpus_size_mib: float,
+    raster_dtype: str,
+    where: str,
+    env: dict,
+) -> "ResultRow":
+    """Time one leg of the large-raster profile.
+
+    Reads ``corpus_path`` (a directory with one raster file) via ``raster_gbx``
+    with the specified ``splitStrategy``. Times the full
+    ``spark.read.format("raster_gbx").option(...).load(path).count()`` job.
+    Verifies rows > 0 before recording (bench-verify-nonzero rule).
+
+    ``corpus_size_mib`` is the decoded uncompressed size of the source file in MiB;
+    it is stamped into the note so a 0-row fast read is visible. Throughput in
+    MiB/s is computed from corpus_size_mib / iter_median_s (total file / one pass).
+    """
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+
+    def _job():
+        return (
+            spark.read.format("raster_gbx")
+            .option("splitStrategy", strategy)
+            .load(corpus_path)
+            .count()
+        )
+
+    note_prefix = (
+        f"{source_tag} strategy={strategy} " f"corpus={corpus_size_mib:.1f}MiB"
+    )
+    try:
+        stats = time_iters(_job, warmup, measured)
+        ms = stats["iter_median_ms"]
+        # Verify rows > 0 before recording (bench-verify-nonzero rule: a 0-row
+        # read is not a valid throughput measurement — it means the corpus is wrong
+        # or the reader silently skipped the file).
+        actual_rows = _job()
+        actual_rows = int(actual_rows)
+        if actual_rows == 0:
+            note = f"{note_prefix} -- READ 0 ROWS (check corpus/options)"
+            return _large_raster_result_row(
+                run_id=run_id,
+                env=env,
+                source_tag=source_tag,
+                raster_dtype=raster_dtype,
+                strategy=strategy,
+                rows=0,
+                status="empty",
+                note=note,
+                warmup=warmup,
+                corpus_size_mib=corpus_size_mib,
+            )
+        throughput = (corpus_size_mib / (ms / 1000.0)) if ms else 0.0
+        note = f"{note_prefix} -> {actual_rows} tile(s) " f"({throughput:.1f} MiB/s)"
+        return _large_raster_result_row(
+            run_id=run_id,
+            env=env,
+            source_tag=source_tag,
+            raster_dtype=raster_dtype,
+            strategy=strategy,
+            rows=actual_rows,
+            status="ok",
+            note=note,
+            stats=stats,
+            corpus_size_mib=corpus_size_mib,
+            throughput_mib_s=throughput,
+        )
+    except Exception as e:  # noqa: BLE001
+        return _large_raster_result_row(
+            run_id=run_id,
+            env=env,
+            source_tag=source_tag,
+            raster_dtype=raster_dtype,
+            strategy=strategy,
+            rows=0,
+            status="error",
+            note=f"{note_prefix} -- {str(e)[-400:]}",
+            warmup=warmup,
+            corpus_size_mib=corpus_size_mib,
+        )
+
+
+def run_large_raster_profile(
+    spark,
+    corpus_dir: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    width: int = _LARGE_RASTER_CLUSTER_DEFAULTS["width"],
+    height: int = _LARGE_RASTER_CLUSTER_DEFAULTS["height"],
+    bands: int = _LARGE_RASTER_CLUSTER_DEFAULTS["bands"],
+    dtype: str = _LARGE_RASTER_CLUSTER_DEFAULTS["dtype"],
+    split_strategies: tuple = _LARGE_RASTER_CLUSTER_DEFAULTS["split_strategies"],
+    where: str = "cluster",
+) -> List[ResultRow]:
+    """Large-raster bench profile: striped vs tiled-COG across splitStrategy values.
+
+    Generates two synthetic corpora under ``corpus_dir`` — a striped GeoTIFF
+    (worst-case sequential layout as produced by large satellite sensors) and a
+    tiled COG (cloud-native baseline) — then times the light ``raster_gbx`` reader
+    over each for every value in ``split_strategies``.
+
+    Measurement goals:
+    - **Ingest throughput** (decoded MiB/s): ``corpus_size_mib / iter_median_s``.
+    - **Per-tile memory proxy**: ``peak_rss_mb`` captured after each leg (the
+      Spark task memory watermark is not directly measurable from the driver in
+      local mode, so RSS is the best available proxy for unit tests; on the cluster
+      the executor RSS is observable via Spark metrics/Ganglia).
+    - **Striped-vs-COG delta**: the ratio ``striped_median_s / cog_median_s`` for
+      the same strategy — measurable from the returned rows.
+    - **OOM envelope concept**: the ``strategy=serverless`` leg uses the ~512 MiB
+      decoded budget; a file whose decoded size exceeds that will split into
+      multiple tiles. The ``strategy=none`` leg disables splitting — if the file
+      is large enough it will fail with an explicit error (the caller can read the
+      OOM boundary from the ``status=error`` rows).
+
+    Corpora are created lazily (idempotent): if the files already exist at the
+    expected paths they are reused, so a cluster run that stages real VIIRS/UK
+    GeoTIFFs beforehand does not regenerate them.
+
+    For the unit test, pass small dimensions (e.g. width=512, height=512) so the
+    fixture is generated quickly and the Spark job completes in seconds.
+    For the full cluster run, use the class defaults (VIIRS-scale: 86400x43200).
+
+    Args:
+        spark: Active SparkSession (local or cluster).
+        corpus_dir: Directory under which the two fixture sub-directories are
+            created (``striped/`` and ``tiled_cog/``).
+        run_id: Run-ID label stamped into every ResultRow.
+        warmup: Warmup iterations per leg.
+        measured: Measured iterations per leg.
+        width: Raster width in pixels.
+        height: Raster height in pixels.
+        bands: Number of bands.
+        dtype: NumPy/rasterio dtype string (e.g. ``"float32"``).
+        split_strategies: Sequence of ``splitStrategy`` option values to sweep.
+        where: ``env_where`` label (``"cluster"`` for cluster runs).
+
+    Returns:
+        A list of ``ResultRow`` instances, one per (source_tag, strategy) leg plus
+        one ``ResultRow`` for the delta comparison (status="ok", category="large_raster",
+        fn ending in "_delta").  The list length is
+        ``len(split_strategies) * 2 + len(split_strategies)`` at most:
+        striped × strategies + cog × strategies + delta per strategy.
+    """
+    import os
+
+    env = capture_env(where)
+    import numpy as np
+
+    # Decoded size in MiB (before compression; this is what the reader must budget).
+    itemsize = np.dtype(dtype).itemsize
+    decoded_mib = (width * height * bands * itemsize) / (1024 * 1024)
+
+    corpus_dir = str(corpus_dir)
+    striped_dir = os.path.join(corpus_dir, "striped")
+    cog_dir = os.path.join(corpus_dir, "tiled_cog")
+    os.makedirs(striped_dir, exist_ok=True)
+    os.makedirs(cog_dir, exist_ok=True)
+
+    striped_path = os.path.join(striped_dir, "large_striped.tif")
+    cog_path = os.path.join(cog_dir, "large_cog.tif")
+
+    # Create fixtures lazily (idempotent).
+    leg_n = len(split_strategies) * 2
+    leg_i = 0
+    print(
+        f"[bench] large-raster profile: {width}x{height}x{bands} {dtype} "
+        f"({decoded_mib:.1f} MiB decoded) — "
+        f"{len(split_strategies)} strategies × 2 layouts = {leg_n} leg(s)"
+    )
+
+    if not os.path.exists(striped_path):
+        print(f"  generating striped fixture -> {striped_path} ...", flush=True)
+        _write_striped_gtiff(striped_path, width, height, bands, dtype)
+    else:
+        print(f"  reusing striped fixture at {striped_path}", flush=True)
+
+    if not os.path.exists(cog_path):
+        print(f"  generating tiled-COG fixture -> {cog_path} ...", flush=True)
+        _write_tiled_cog(cog_path, width, height, bands, dtype)
+    else:
+        print(f"  reusing tiled-COG fixture at {cog_path}", flush=True)
+
+    out: List[ResultRow] = []
+    striped_by_strategy: dict = {}
+    cog_by_strategy: dict = {}
+
+    for strategy in split_strategies:
+        # Striped leg.
+        leg_i += 1
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  striped  strategy={strategy}  ...",
+            flush=True,
+        )
+        r_striped = _bench_large_raster_leg(
+            spark,
+            striped_dir,
+            run_id,
+            warmup,
+            measured,
+            source_tag="striped",
+            strategy=strategy,
+            corpus_size_mib=decoded_mib,
+            raster_dtype=dtype,
+            where=where,
+            env=env,
+        )
+        out.append(r_striped)
+        striped_by_strategy[strategy] = r_striped
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  striped  strategy={strategy}  "
+            f"{r_striped.iter_median_s * 1000:.1f}ms  rows={r_striped.rows}  "
+            f"{r_striped.status}",
+            flush=True,
+        )
+
+        # Tiled-COG leg.
+        leg_i += 1
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  tiled-cog  strategy={strategy}  ...",
+            flush=True,
+        )
+        r_cog = _bench_large_raster_leg(
+            spark,
+            cog_dir,
+            run_id,
+            warmup,
+            measured,
+            source_tag="tiled-cog",
+            strategy=strategy,
+            corpus_size_mib=decoded_mib,
+            raster_dtype=dtype,
+            where=where,
+            env=env,
+        )
+        out.append(r_cog)
+        cog_by_strategy[strategy] = r_cog
+        print(
+            f"[{leg_i}/{leg_n}] large-raster  tiled-cog  strategy={strategy}  "
+            f"{r_cog.iter_median_s * 1000:.1f}ms  rows={r_cog.rows}  "
+            f"{r_cog.status}",
+            flush=True,
+        )
+
+    # Emit one delta row per strategy so the striped-vs-COG ratio is explicit in
+    # the results table without requiring the user to compute it from the raw rows.
+    # The delta row is status="ok" even when one leg errored, but its note makes
+    # the situation explicit (so it doesn't masquerade as a clean measurement).
+    for strategy in split_strategies:
+        r_s = striped_by_strategy.get(strategy)
+        r_c = cog_by_strategy.get(strategy)
+        if r_s is not None and r_c is not None:
+            if r_s.status == "ok" and r_c.status == "ok" and r_c.iter_median_s > 0:
+                delta = r_s.iter_median_s / r_c.iter_median_s
+                note = (
+                    f"striped/cog delta: strategy={strategy} "
+                    f"ratio={delta:.2f}x "
+                    f"(striped={r_s.iter_median_s * 1000:.1f}ms "
+                    f"cog={r_c.iter_median_s * 1000:.1f}ms)"
+                )
+                delta_status = "ok"
+            else:
+                delta = 0.0
+                note = (
+                    f"striped/cog delta: strategy={strategy} "
+                    f"could not compute (striped={r_s.status} cog={r_c.status})"
+                )
+                delta_status = (
+                    "error"
+                    if (r_s.status == "error" or r_c.status == "error")
+                    else "empty"
+                )
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn="raster_read_large_delta",
+                    category="large_raster",
+                    mode="spark-path",
+                    tile_px=0,
+                    bands=0,
+                    dtype=dtype,
+                    srid=0,
+                    rows=r_s.rows + r_c.rows,
+                    nodata_frac=0.0,
+                    warmup_iters=warmup,
+                    measured_iters=measured if delta_status == "ok" else 0,
+                    iter_median_s=delta,
+                    iter_min_s=0.0,
+                    iter_p90_s=0.0,
+                    iter_total_wall_clock_s=0.0,
+                    avg_wall_clock_s=0.0,
+                    per_tile_avg_s=0.0,
+                    per_tile_avg_ms=0.0,
+                    throughput_mpix_s=delta,
+                    throughput_rows_s=0.0,
+                    split_strategy=strategy,
+                    peak_rss_mb=peak_rss_mb(),
+                    status=delta_status,
+                    note=note,
+                    output_fingerprint="",
+                    **env,
+                )
+            )
+
+    # Progress summary.
+    ok_rows = [
+        r
+        for r in out
+        if r.status == "ok" and r.category == "large_raster" and "delta" not in r.fn
+    ]
+    print(
+        f"[bench] large-raster profile done: "
+        f"{len(ok_rows)} ok legs, {len(out)} total rows",
+        flush=True,
+    )
+    return out
+
+
+def _backtick_qualified(name: str) -> str:
+    """Backtick each dot-separated identifier part of a (possibly qualified) table
+    name: ``cat.sch.tbl`` -> ``\\`cat\\`.\\`sch\\`.\\`tbl\\```. Backticking the WHOLE
+    dotted name makes SQL treat it as one identifier in the current schema
+    (TABLE_OR_VIEW_NOT_FOUND for a qualified name) — that bug silently skipped the
+    cluster-layout OPTIMIZE."""
+    return ".".join(f"`{_p}`" for _p in name.split("."))
+
+
+def run_file_write_layout_sweep(
+    spark,
+    *,
+    fmt: str,
+    source,
+    target_prefix: str,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    file_mode: str,
+    filespace: Optional[str] = None,
+    layouts: tuple = ("order", "cluster", "plain"),
+    where: str = "cluster",
+) -> List["ResultRow"]:
+    """Run the FILE-write leg for each layout and return one ResultRow per layout.
+
+    Loops ``layouts`` ("order"/"cluster"/"plain"), calls the format's write leg
+    (``run_gtiff_file_write`` for ``fmt="gtiff"``, ``run_gpkg_file_write`` for
+    ``fmt="gpkg"``) with ``layout=<L>`` and a per-layout target
+    ``{target_prefix}_{L}`` (leg isolation — each layout writes its own table
+    so no layout can advantage another by inheriting a prior write's on-disk
+    grouping).
+
+    For ``layout="cluster"``, runs ``OPTIMIZE <table>`` after the write inside a
+    guarded ``try`` block:
+    - On success: appends ``" +OPTIMIZE"`` to the row's ``note``.
+    - On failure/skip: appends the skip reason to the row's ``note``.
+
+    ``file_mode="fuse"`` legs pass ``layout`` through to the write leg (the
+    DataSource writer ignores it), but still record it so the sweep row is
+    complete.  The meaningful layout bite is on FILE-table writes (on-cluster
+    legs).
+
+    Args:
+        spark: active SparkSession.
+        fmt: ``"gtiff"`` or ``"gpkg"``.
+        source: for ``"gtiff"`` — a tile DataFrame (passed as ``tile_df``);
+                for ``"gpkg"`` — a path to a local/FUSE-accessible .gpkg file.
+        target_prefix: path prefix; each layout writes to ``{target_prefix}_{L}``.
+        run_id: benchmark run identifier label.
+        warmup: number of warmup iterations.
+        measured: number of measured iterations.
+        file_mode: ``"fuse"``, ``"external"``, or ``"managed"``.
+        filespace: filespace identifier (passed through for FILE modes).
+        layouts: ordered tuple of layout names to sweep.
+        where: env_where label recorded in each ResultRow.
+
+    Returns:
+        List of ResultRow — one per layout in ``layouts`` order.
+    """
+    results: List["ResultRow"] = []
+    _n_layouts = len(layouts)
+
+    for _i_sweep, layout in enumerate(layouts, 1):
+        target = f"{target_prefix}_{layout}"
+        print(
+            f"[write-sweep] {fmt} [{file_mode}] {layout} writing…"
+            f" ({_i_sweep} of {_n_layouts})",
+            flush=True,
+        )
+
+        if fmt == "gtiff":
+            row = run_gtiff_file_write(
+                spark,
+                source,
+                target,
+                run_id,
+                warmup,
+                measured,
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                where=where,
+            )
+        elif fmt == "gpkg":
+            row = run_gpkg_file_write(
+                spark,
+                source,
+                target,
+                run_id,
+                warmup,
+                measured,
+                file_mode=file_mode,
+                filespace=filespace,
+                layout=layout,
+                where=where,
+            )
+        else:
+            raise ValueError(f"run_file_write_layout_sweep: unsupported fmt={fmt!r}")
+
+        # For the "cluster" layout, attempt OPTIMIZE on the FILE table.
+        # FUSE legs have no Delta table → guard and record skip reason.
+        if layout == "cluster":
+            import dataclasses
+
+            try:
+                # Quote each dot-separated identifier part (NOT the whole dotted
+                # name — see _backtick_qualified). Backticking `catalog.schema.table`
+                # as one identifier -> TABLE_OR_VIEW_NOT_FOUND, so OPTIMIZE silently
+                # skipped and the cluster layout was never materialized (unfair).
+                spark.sql(f"OPTIMIZE {_backtick_qualified(target)}")
+                # Append "+OPTIMIZE" to the note on success.
+                existing_note = row.note or ""
+                row = dataclasses.replace(
+                    row, note=(existing_note + " +OPTIMIZE").strip()
+                )
+            except Exception as exc:  # noqa: BLE001
+                skip_reason = str(exc)[:160]
+                existing_note = row.note or ""
+                row = dataclasses.replace(
+                    row,
+                    note=(existing_note + f" OPTIMIZE skipped: {skip_reason}").strip(),
+                )
+
+        print(
+            f"[write-sweep] {fmt} [{file_mode}] {layout}: "
+            f"{row.status}, {row.rows} rows, {row.iter_median_s:.1f}s"
+            f" ({_i_sweep} of {_n_layouts})",
+            flush=True,
+        )
+        results.append(row)
+
+    return results
+
+
+def run_layout_scan_comparison(
+    spark,
+    *,
+    tables_by_layout: dict,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    file_mode: str,
+    where: str = "cluster",
+    include_shuffle_input: bool = False,
+) -> List["ResultRow"]:
+    """Measure writer-layout effects on sequential scan and shuffle-input cost.
+
+    For each layout in ``tables_by_layout``, reads the FILE table via
+    ``read_file_table`` and times:
+
+    * A sequential scan (``df.count()``) → category ``"layout-scan"``.
+    * Optionally, the shuffle-input cost (``df.repartition(n, "path").count()``)
+      → category ``"layout-shuffle-input"`` (emitted when
+      ``include_shuffle_input=True``).
+
+    The grouped-read wall-clock is **not** measured here — the grouped read
+    self-amortizes via its own ``repartition(n, path).sortWithinPartitions(path)``
+    regardless of layout.  The comparison axis is scan/pruning/shuffle cost.
+
+    Args:
+        spark: active SparkSession.
+        tables_by_layout: dict mapping layout name → FILE-table name.
+        run_id: benchmark run identifier label.
+        warmup: number of warmup iterations.
+        measured: number of measured iterations.
+        file_mode: ``"fuse"``, ``"external"``, or ``"managed"``.
+        where: env_where label recorded in each ResultRow.
+        include_shuffle_input: when True, also emits a
+            ``"layout-shuffle-input"`` row per layout measuring the
+            repartition shuffle cost to a downstream grouped read.
+
+    Returns:
+        List of ResultRow — one ``"layout-scan"`` row per layout, plus one
+        ``"layout-shuffle-input"`` row per layout when
+        ``include_shuffle_input=True``.
+    """
+    from databricks.labs.gbx.pyrx.file_table import read_file_table
+
+    env = capture_env(where)
+    out: List["ResultRow"] = []
+
+    _n_layouts = len(tables_by_layout)
+    for _i_layout, (layout, table) in enumerate(tables_by_layout.items(), 1):
+        print(
+            f"[layout-scan] [{layout}] ({_i_layout} of {_n_layouts})…",
+            flush=True,
+        )
+        try:
+            df = read_file_table(spark, table)
+            parts, slots = measure_parallelism(spark, df)
+
+            # --- layout-scan: sequential scan (df.count()) ---
+            def _scan(df=df):
+                return int(df.count())
+
+            n = _scan()
+            scan_stats = time_iters(_scan, warmup, measured)
+            ms = scan_stats["iter_median_ms"]
+            print(
+                f"[layout-scan] [{layout}]: "
+                f"{'ok' if n > 0 else 'empty'}, {n} rows, {ms / 1000.0:.1f}s"
+                f" ({_i_layout} of {_n_layouts})",
+                flush=True,
+            )
+            out.append(
+                ResultRow(
+                    run_id=run_id,
+                    api="lightweight",
+                    fn="layout_scan",
+                    category="layout-scan",
+                    mode="spark-path",
+                    tile_px=0,
+                    bands=0,
+                    dtype="",
+                    srid=0,
+                    rows=n,
+                    nodata_frac=0.0,
+                    warmup_iters=scan_stats["warmup_iters"],
+                    measured_iters=scan_stats["measured_iters"],
+                    iter_median_s=ms / 1000.0,
+                    iter_min_s=scan_stats["iter_min_ms"] / 1000.0,
+                    iter_p90_s=scan_stats["iter_p90_ms"] / 1000.0,
+                    iter_total_wall_clock_s=scan_stats["iter_total_wall_clock_ms"]
+                    / 1000.0,
+                    avg_wall_clock_s=scan_stats["avg_wall_clock_ms"] / 1000.0,
+                    throughput_mpix_s=0.0,
+                    throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
+                    peak_rss_mb=peak_rss_mb(),
+                    status="ok" if n > 0 else "empty",
+                    note=f"layout-scan [{layout}] table={table}",
+                    output_fingerprint="",
+                    file_mode=file_mode,
+                    layout=layout,
+                    input_partitions=parts,
+                    launched_tasks=parts,
+                    slots_available=slots,
+                    **env,
+                )
+            )
+
+            # --- layout-shuffle-input: repartition shuffle cost ---
+            if include_shuffle_input:
+                n_parts = max(1, parts)
+
+                def _shuffle(df=df, n_parts=n_parts):
+                    import pyspark.sql.functions as _F
+
+                    return int(df.repartition(n_parts, _F.col("tile.path")).count())
+
+                shuf_stats = time_iters(_shuffle, warmup, measured)
+                ms_shuf = shuf_stats["iter_median_ms"]
+                out.append(
+                    ResultRow(
+                        run_id=run_id,
+                        api="lightweight",
+                        fn="layout_shuffle_input",
+                        category="layout-shuffle-input",
+                        mode="spark-path",
+                        tile_px=0,
+                        bands=0,
+                        dtype="",
+                        srid=0,
+                        rows=n,
+                        nodata_frac=0.0,
+                        warmup_iters=shuf_stats["warmup_iters"],
+                        measured_iters=shuf_stats["measured_iters"],
+                        iter_median_s=ms_shuf / 1000.0,
+                        iter_min_s=shuf_stats["iter_min_ms"] / 1000.0,
+                        iter_p90_s=shuf_stats["iter_p90_ms"] / 1000.0,
+                        iter_total_wall_clock_s=shuf_stats["iter_total_wall_clock_ms"]
+                        / 1000.0,
+                        avg_wall_clock_s=shuf_stats["avg_wall_clock_ms"] / 1000.0,
+                        throughput_mpix_s=0.0,
+                        throughput_rows_s=(
+                            (n / (ms_shuf / 1000.0)) if (ms_shuf and n) else 0.0
+                        ),
+                        peak_rss_mb=peak_rss_mb(),
+                        status="ok" if n > 0 else "empty",
+                        note=(
+                            f"layout-shuffle-input [{layout}] "
+                            f"table={table} repartition({n_parts})"
+                        ),
+                        output_fingerprint="",
+                        file_mode=file_mode,
+                        layout=layout,
+                        input_partitions=parts,
+                        launched_tasks=parts,
+                        slots_available=slots,
+                        **env,
+                    )
+                )
+
+        except Exception as e:  # noqa: BLE001
+            out.append(
+                _error_row(
+                    "layout_scan",
+                    "layout-scan",
+                    run_id,
+                    "lightweight",
+                    warmup,
+                    env,
+                    e,
+                    file_mode=file_mode,
+                    layout=layout,
+                )
+            )
+
+    return out
 
 
 def _print_summary(rows: List[ResultRow]) -> None:

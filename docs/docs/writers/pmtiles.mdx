@@ -263,7 +263,7 @@ Override via `.option("tileType", "<byte>")` when auto-detection isn't appropria
 
 ## Reading PMTiles
 
-Reading PMTiles is not supported in GeoBrix 0.4.0 — `spark.read.format("pmtiles")` raises a friendly "Reading PMTiles archives is not supported in GeoBrix 0.4.0" error. Use one of the client libraries instead:
+Reading PMTiles through the **heavyweight** DataSource is not supported — `spark.read.format("pmtiles")` raises a friendly error. To read PMTiles **within GeoBrix**, use the lightweight [`pmtiles_gbx` reader](../readers/pmtiles), which reads tiles from an existing archive or builds a mosaic pyramid from rasters. For browser/inspection use, the client libraries also work:
 
 - [pmtiles JS library](https://github.com/protomaps/PMTiles) for MapLibre / browser rendering.
 - The Python [`pmtiles`](https://pypi.org/project/pmtiles/) package for tile inspection and extraction.
@@ -292,3 +292,18 @@ PMTiles is designed to be served as a single static file with HTTP `Range` reque
 - [Raster Functions](../api/raster-functions#rst_xyzpyramid) — Generate per-tile PNG bytes with `gbx_rst_xyzpyramid`.
 - [Helios notebooks](../notebooks/helios) — worked end-to-end example: the PMTiles writer packages raster XYZ pyramids (NB02) and terrain hillshade (NB03) over a San Francisco AOI.
 - [VectorX Function Reference](../api/vectorx-functions#st_asmvt_pyramid) — Generate per-tile MVT bytes with `gbx_st_asmvt_pyramid`.
+
+## Common functions: used vs excluded
+
+See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
+primitives. The table below shows which are active in this writer and which are not, and why.
+
+| Common capability | Used here? | How / why |
+|---|---|---|
+| `list_local_files` (session-free enumeration) | Not used by the writer | Writers do not enumerate source files; they write a DataFrame's output partitions. |
+| `gbx_file_write` / FILE-tier write | Not in the DataSource | The DataSource writer (`df.write.format(...)`) is session-less on Connect and commits via FUSE. FILE-tier writes use `gbx_file_write` at the function layer instead. |
+| `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for raster data go through `gbx_file_read` at the function layer. |
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::

@@ -14,16 +14,59 @@ _NODATA = -9999.0
 
 
 def rasterize_geom(
-    geom_wkb: bytes, value, xmin, ymin, xmax, ymax, width_px, height_px, srid
+    geom_wkb: bytes,
+    value,
+    xmin,
+    ymin,
+    xmax,
+    ymax,
+    width_px,
+    height_px,
+    out_srid=None,
+    out_crs=None,
 ) -> bytes:
-    """Burn a geometry (WKB) into a new raster at the given extent/size/SRID.
+    """Burn a geometry (WKB/EWKB) into a new raster at the given extent/size.
 
     Pixels inside the geometry get *value*; outside pixels get NoData (-9999.0).
     Returns GTiff bytes.
+
+    Output CRS (Rule 2): ``out_crs`` (string) wins over ``out_srid`` (int); both
+    set -> error; neither -> the geometry's own source CRS carried through (or
+    CRS-less). The geometry is reprojected from its source CRS (embedded EWKB
+    SRID) into the output CRS before burning, so a geometry in one CRS and an
+    output declared in another is correct — not garbage (Rule-2 reprojection).
     """
+    from databricks.labs.gbx.pyrx.core.crs import (
+        crs_to_canonical,
+        get_transformer,
+        resolve_crs,
+        resolve_source_crs,
+    )
+
     geom = shapely.wkb.loads(bytes(geom_wkb))
     width_px = int(width_px)
     height_px = int(height_px)
+
+    # Rule 1 source CRS (embedded SRID only — rasterize has no source param).
+    src_crs = resolve_source_crs(shapely.get_srid(geom))
+    # Rule 2 target CRS: out_crs wins over out_srid (both -> error); neither ->
+    # the source CRS carried through (NOT a forced default).
+    if out_srid is not None and out_crs is not None:
+        raise ValueError("rst_rasterize: provide out_srid OR out_crs, not both")
+    if out_crs is not None:
+        tgt_crs = resolve_crs(out_crs)
+    elif out_srid is not None:
+        tgt_crs = resolve_crs(out_srid)
+    else:
+        tgt_crs = src_crs  # carry source through; may be None (CRS-less)
+
+    # Reproject the geometry source -> target before burning (never on CRS-less).
+    if src_crs is not None and tgt_crs is not None and src_crs != tgt_crs:
+        from shapely.ops import transform as _shapely_transform
+
+        tr = get_transformer(src_crs, tgt_crs)
+        geom = _shapely_transform(lambda xs, ys: tr.transform(xs, ys), geom)
+
     transform = from_bounds(
         float(xmin), float(ymin), float(xmax), float(ymax), width_px, height_px
     )
@@ -40,7 +83,7 @@ def rasterize_geom(
         height=height_px,
         count=1,
         dtype="float64",
-        crs=f"EPSG:{int(srid)}",
+        crs=crs_to_canonical(tgt_crs),  # None -> CRS-less output
         transform=transform,
         nodata=_NODATA,
     )

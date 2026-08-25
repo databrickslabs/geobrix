@@ -342,14 +342,23 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
         bng.functions.register(spark)
-        
+
         val wkb = JTS.toWKB(JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"))
         val resolution = "500m"
-        
+
         val df = spark.createDataFrame(Seq((wkb, resolution))).toDF("geom", "res")
         val result = df.select(bng_tessellateexplode(df("geom"), df("res")).as("chip")).collect()
-        
+
         assert(result.length > 0)
+    }
+
+    test("BNG.parse should throw IllegalArgumentException for invalid cell ID prefix") {
+        val ex = intercept[IllegalArgumentException] {
+            BNG.parse("!!")
+        }
+        assert(ex.getMessage.contains("!!"))
+        assert(ex.getMessage.contains("Invalid BNG cell id"))
+        assert(ex.getMessage.contains("not a recognised BNG"))
     }
 
 }

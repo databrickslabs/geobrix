@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -34,33 +35,35 @@ case class BNG_CellUnion(
 /** Companion: SQL name gbx_bng_cellunion, builder, and eval. */
 object BNG_CellUnion extends WithExpressionInfo {
 
-    def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow = {
-        // Note: we do check twice for early exit cases
-        // that is a bit redundant but allows UDF callable abstraction
-        // and avoids unnecessary WKB parsing at the same time
-        if (chip1.getBoolean(1)) return chip1
-        if (chip2.getBoolean(1)) return chip2
-        val cellId = chip1.getLong(0)
-        require(chip2.getLong(0) == cellId, "Can only union chips with the same grid cell id")
-        val geom1 = JTS.fromWKB(chip1.getBinary(2))
-        val geom2 = JTS.fromWKB(chip2.getBinary(2))
-        val union = executeLong((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
-        InternalRow.fromSeq(Seq(union._1, union._2, JTS.toWKB(union._3)))
-    }
+    def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow =
+        // Note: core-chip early exits avoid unnecessary WKB parsing
+        if (chip1.getBoolean(1)) chip1
+        else if (chip2.getBoolean(1)) chip2
+        else GridErrorHandler.safeEval[InternalRow](null) {
+            val cellId = chip1.getLong(0)
+            // Mismatched cell ids are treated as bad DATA (likely a bad join key) and degrade to NULL
+            // rather than raising. Revisit when the strict-mode workstream lands (strict=raise, default=degrade).
+            require(chip2.getLong(0) == cellId, "Can only union chips with the same grid cell id")
+            val geom1 = JTS.fromWKB(chip1.getBinary(2))
+            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val union = executeLong((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
+            InternalRow.fromSeq(Seq(union._1, union._2, JTS.toWKB(union._3)))
+        }
 
-    def evalString(chip1: InternalRow, chip2: InternalRow): InternalRow = {
-        // Note: we do check twice for early exit cases
-        // that is a bit redundant but allows UDF callable abstraction
-        // and avoids unnecessary WKB parsing at the same time
-        if (chip1.getBoolean(1)) return chip1
-        if (chip2.getBoolean(1)) return chip2
-        val cellId = chip1.getString(0)
-        require(chip2.getString(0) == cellId, "Can only union chips with the same grid cell id")
-        val geom1 = JTS.fromWKB(chip1.getBinary(2))
-        val geom2 = JTS.fromWKB(chip2.getBinary(2))
-        val union = executeString((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
-        InternalRow.fromSeq(Seq(UTF8String.fromString(union._1), union._2, JTS.toWKB(union._3)))
-    }
+    def evalString(chip1: InternalRow, chip2: InternalRow): InternalRow =
+        // Note: core-chip early exits avoid unnecessary WKB parsing
+        if (chip1.getBoolean(1)) chip1
+        else if (chip2.getBoolean(1)) chip2
+        else GridErrorHandler.safeEval[InternalRow](null) {
+            val cellId = chip1.getString(0)
+            // Mismatched cell ids are treated as bad DATA (likely a bad join key) and degrade to NULL
+            // rather than raising. Revisit when the strict-mode workstream lands (strict=raise, default=degrade).
+            require(chip2.getString(0) == cellId, "Can only union chips with the same grid cell id")
+            val geom1 = JTS.fromWKB(chip1.getBinary(2))
+            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val union = executeString((cellId, chip1.getBoolean(1), geom1), (cellId, chip2.getBoolean(1), geom2))
+            InternalRow.fromSeq(Seq(UTF8String.fromString(union._1), union._2, JTS.toWKB(union._3)))
+        }
 
     @inline def executeLong(chip1: (Long, Boolean, Geometry), chip2: (Long, Boolean, Geometry)): (Long, Boolean, Geometry) = {
         if (chip1._1 != chip2._1) (chip1._1, chip1._2, JTS.emptyPolygon)

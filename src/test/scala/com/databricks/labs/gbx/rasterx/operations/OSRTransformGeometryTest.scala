@@ -90,4 +90,31 @@ class OSRTransformGeometryTest extends AnyFunSuite with BeforeAndAfterAll {
         dstSR.delete()
     }
 
+    test("transform: mixed-Z polygon (some NaN Z) completes without throwing") {
+        // A cutline with one NaN Z vertex and one finite Z vertex — ClipToGeom passes such
+        // geometries from user WKB/WKT. Before the round-2 regression, toWKBAdaptive produced
+        // 3D WKB with NaN Z → OGR 'General Error'. After the revert to toWKB (2D only), OGR
+        // receives a clean 2D polygon and the transform succeeds.
+        val gf = new org.locationtech.jts.geom.GeometryFactory()
+        val ring = gf.createLinearRing(Array(
+            new org.locationtech.jts.geom.Coordinate(0.0, 0.0),      // Z = NaN
+            new org.locationtech.jts.geom.Coordinate(1.0, 0.0, 5.0), // Z = 5
+            new org.locationtech.jts.geom.Coordinate(1.0, 1.0),      // Z = NaN
+            new org.locationtech.jts.geom.Coordinate(0.0, 0.0)       // Z = NaN (close ring)
+        ))
+        val poly = gf.createPolygon(ring)
+
+        val srcSR = new SpatialReference()
+        srcSR.ImportFromEPSG(4326)
+        val dstSR = new SpatialReference()
+        dstSR.ImportFromEPSG(3857)
+
+        // Must NOT throw (pre-fix: toWKBAdaptive + OGR = General Error)
+        val result = OSRTransformGeometry.transform(poly, srcSR, dstSR)
+        assert(result != null)
+
+        srcSR.delete()
+        dstSR.delete()
+    }
+
 }

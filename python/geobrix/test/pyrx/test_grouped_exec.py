@@ -1,0 +1,445 @@
+"""Tests for grouped_tile_map — partition-scoped mapInPandas executor.
+
+Local Spark (local[2]) always returns file_supported()=False, so all tests
+exercise the fallback opener path over materialized tiles.  The FILE-stream
+fast path is validated on-cluster in Task 9.
+
+T9b fix: the worker no longer calls file_supported() to decide the FILE path;
+it keys off _file_ref column presence (has_fr_col) instead, avoiding the
+getActiveSession()==None pitfall on Spark-Connect worker threads.
+"""
+
+import numpy as np
+from pyspark.sql.types import LongType, StructField, StructType
+
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
+from databricks.labs.gbx.pyrx.grouped_exec import grouped_tile_map
+
+_FLOAT32_ITEMSIZE = 4  # bytes per sample in the test GeoTIFFs (float32)
+
+
+def _tile_df(spark, tile_bytes):
+    """Create a 3-row DataFrame with materialized tiles (raster inline, path None)."""
+    rows = [
+        (VirtualTile.from_v1(cellid=i, raster=tile_bytes).to_row(),) for i in range(3)
+    ]
+    return spark.createDataFrame(
+        rows, StructType([StructField("tile", V2_TILE_SCHEMA)])
+    )
+
+
+def test_grouped_map_matches_per_row_memsize(spark, gtiff_bytes):
+    """grouped_tile_map result equals per-row memsize computation.
+
+    gtiff_bytes = 4x3 float32 count=1; expected sz = 4*3*1*4 = 48 bytes.
+    The fallback path (file_supported()=False locally) opens each materialized
+    tile per-row via _open and applies core_fn on the open DatasetReader.
+    """
+
+    def core_fn(ds, cellid):
+        itemsize = np.dtype(ds.dtypes[0]).itemsize
+        return int(ds.count * ds.width * ds.height * itemsize)
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        core_fn,
+        return_field=StructField("sz", LongType()),
+    )
+    vals = sorted(r["sz"] for r in out.collect())
+    assert vals == [4 * 3 * 1 * 4] * 3, f"unexpected sizes: {vals}"
+
+
+def test_grouped_map_output_schema_extends_input(spark, gtiff_bytes):
+    """Output schema is input schema + return_field (no extra cast)."""
+    df = _tile_df(spark, gtiff_bytes)
+    out = grouped_tile_map(
+        df,
+        lambda ds, cellid: ds.count,
+        return_field=StructField("band_count", LongType()),
+    )
+    assert out.schema.fieldNames() == ["tile", "band_count"]
+
+
+def test_grouped_map_custom_tile_col(spark, gtiff_bytes):
+    """tile_col kwarg selects the correct struct column by name."""
+    rows = [
+        (i, VirtualTile.from_v1(cellid=i, raster=gtiff_bytes).to_row())
+        for i in range(2)
+    ]
+    df = spark.createDataFrame(
+        rows,
+        StructType(
+            [
+                StructField("id", LongType()),
+                StructField("raster_tile", V2_TILE_SCHEMA),
+            ]
+        ),
+    )
+    out = grouped_tile_map(
+        df,
+        lambda ds, cellid: ds.count,
+        return_field=StructField("nb", LongType()),
+        tile_col="raster_tile",
+    )
+    nbs = [r["nb"] for r in out.collect()]
+    assert all(nb == 1 for nb in nbs)
+
+
+# ---------------------------------------------------------------------------
+# T9b: _make_opener no longer calls worker-side file_supported()
+# ---------------------------------------------------------------------------
+
+
+def test_make_opener_returns_four_items_not_five():
+    """_OpenerContext must expose fr_holder, open, close, weigh — no worker-side file_supported().
+
+    Under the OLD implementation _make_opener called file_supported() on the
+    worker and returned a 5-tuple (file_ok, fr_holder, opener, closer, weigher).
+    The T9b fix removes the worker-side file_supported() call; the opener/closer/
+    weigher are now methods on _OpenerContext, and the FILE capability signal is
+    the _file_ref column's presence (has_fr_col) set by the driver.
+    """
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+    assert (
+        isinstance(ctx.fr_holder, list) and len(ctx.fr_holder) == 1
+    ), "fr_holder must be a one-element list (T9b contract)"
+    assert callable(ctx.open), "_OpenerContext.open must be callable"
+    assert callable(ctx.close), "_OpenerContext.close must be callable"
+    assert callable(ctx.weigh), "_OpenerContext.weigh must be callable"
+
+
+# ---------------------------------------------------------------------------
+# I2: grouped executor robustness
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_map_windowless_virtual_tile(spark, gtiff_bytes, tmp_path):
+    """A windowless virtual tile (window=None) returns the full-source footprint.
+
+    file_supported()=False locally so tiles take the fallback path.  The fallback
+    must route windowless virtual tiles through open_header (not _open, which
+    raises ValueError for window=None).  This matches per-row rst_memsize behavior.
+    gtiff_bytes is 4x3 float32 count=1 → 4*3*1*4=48 bytes footprint.
+    """
+    tif = tmp_path / "whole.tif"
+    tif.write_bytes(gtiff_bytes)
+
+    vt = VirtualTile(cellid=7, path=str(tif), raster=None, window=None)
+    df = spark.createDataFrame(
+        [(vt.to_row(),)],
+        StructType([StructField("tile", V2_TILE_SCHEMA)]),
+    )
+
+    def core_fn(ds, cellid):
+        return int(ds.count * ds.width * ds.height * np.dtype(ds.dtypes[0]).itemsize)
+
+    out = grouped_tile_map(df, core_fn, return_field=StructField("sz", LongType()))
+    vals = [r["sz"] for r in out.collect()]
+    assert vals == [
+        4 * 3 * 1 * _FLOAT32_ITEMSIZE
+    ], f"unexpected result for windowless virtual tile: {vals}"
+
+
+# ---------------------------------------------------------------------------
+# T9c: out_schema collision — return_field.name matches an input column
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_map_out_col_collision_replaces_not_appends(spark, gtiff_bytes):
+    """When return_field.name collides with an input column, out_schema REPLACES it.
+
+    T9c root cause: rst_clip_grouped uses out_col='tile' by default, which
+    collides with the input 'tile' column.  The pre-fix code did:
+        out_schema = StructType(original_fields + [return_field])
+    producing TWO 'tile' fields.  The _map function's .assign(**{out_name: ...})
+    overwrites the pandas column (ONE 'tile' in the output pandas df), so Arrow
+    sees one column against a schema declaring two — raising
+    "not all nodes, buffers and variadicBufferCounts were consumed" on-cluster.
+
+    Fix: filter out any field whose name matches return_field.name before appending.
+    """
+    df = _tile_df(spark, gtiff_bytes)  # schema has exactly one field: "tile"
+
+    # Return a LongType column also named "tile" — the collision case.
+    out = grouped_tile_map(
+        df,
+        lambda ds, cellid: ds.count,  # returns an int, typed as LongType
+        return_field=StructField("tile", LongType()),
+    )
+    field_names = out.schema.fieldNames()
+    assert field_names.count("tile") == 1, (
+        f"Expected exactly one 'tile' field in output schema, got {field_names}. "
+        f"T9c regression: duplicate field causes Arrow schema mismatch on-cluster."
+    )
+    # collect() must not raise (Arrow schema matches pandas output)
+    rows = out.collect()
+    assert len(rows) == 3
+    # core_fn returns ds.count (1 band) cast to LongType
+    assert all(r["tile"] == 1 for r in rows)
+
+
+def test_grouped_map_unreadable_tile_degrades_gracefully(spark, gtiff_bytes, tmp_path):
+    """An unreadable tile (bogus path) degrades to None; partition does NOT crash.
+
+    The good tile in the same partition still computes its result correctly.
+    gtiff_bytes is 4x3 float32 count=1 → 48 bytes footprint.
+    """
+    good = tmp_path / "good.tif"
+    good.write_bytes(gtiff_bytes)
+
+    rows = [
+        (
+            VirtualTile(
+                cellid=0,
+                path="/nonexistent/bogus.tif",
+                raster=None,
+                window=(0, 0, 4, 3),
+            ).to_row(),
+        ),
+        (
+            VirtualTile(
+                cellid=1, path=str(good), raster=None, window=(0, 0, 4, 3)
+            ).to_row(),
+        ),
+    ]
+    df = spark.createDataFrame(rows, StructType([StructField("tile", V2_TILE_SCHEMA)]))
+
+    def core_fn(ds, cellid):
+        return int(ds.count * ds.width * ds.height * np.dtype(ds.dtypes[0]).itemsize)
+
+    out = grouped_tile_map(df, core_fn, return_field=StructField("sz", LongType()))
+    result = {r["tile"]["cellid"]: r["sz"] for r in out.collect()}
+
+    assert result[0] is None, f"expected None for unreadable tile, got {result[0]}"
+    assert (
+        result[1] == 4 * 3 * 1 * _FLOAT32_ITEMSIZE
+    ), f"readable tile wrong: {result[1]}"
+
+
+# ---------------------------------------------------------------------------
+# Task 3: header-vs-pixel view contract (M2)
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_tile_map_pixel_view_allows_read(spark, gtiff_bytes):
+    """view="pixels" hands core_fn a real DatasetReader whose .read(1) works.
+
+    Uses the fallback path (materialized tiles, file_supported()=False locally).
+    The fallback already yields a real DatasetReader, so view="pixels" passes it
+    straight through — this test validates the kwarg is accepted and the path works.
+    """
+
+    def core(ds, cellid):
+        return int(ds.read(1).sum())  # reads pixels
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        core,
+        return_field=StructField("s", LongType()),
+        view="pixels",
+    )
+    assert out.select("s").head()[0] is not None
+
+
+# ---------------------------------------------------------------------------
+# Tile size metadata: path_file_size / tile_size preference
+# ---------------------------------------------------------------------------
+
+
+def test_opener_context_has_size_holder():
+    """_OpenerContext initializes a size_holder like fr_holder."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+    assert (
+        isinstance(ctx.size_holder, list) and len(ctx.size_holder) == 1
+    ), "size_holder must be a one-element list (mirrors fr_holder)"
+    assert ctx.size_holder[0] is None, "size_holder initial value must be None"
+
+
+def test_weigh_prefers_metadata_size_over_fr_size():
+    """When size_holder contains a metadata size, weigh() uses it (no fr.size call)."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+
+    # Create a mock FileRef whose .size raises if called (proof it's not called)
+    class CountingFileRef:
+        def __init__(self):
+            self.size_access_count = 0
+
+        @property
+        def size(self):
+            self.size_access_count += 1
+            raise RuntimeError("fr.size should not be called when metadata size is set")
+
+    fr_mock = CountingFileRef()
+    ctx.fr_holder[0] = fr_mock
+
+    # Set metadata size (simulating what happens in _run_file_fast_path)
+    ctx.size_holder[0] = 5_242_880  # 5 MiB
+
+    # Mock src (only needed for id tracking)
+    class MockDataset:
+        pass
+
+    src = MockDataset()
+
+    # weigh() should use metadata size, not call fr.size
+    weight = ctx.weigh(src, "dummy_uri")
+    assert weight == 5_242_880, f"weigh() should use metadata size, got {weight}"
+    assert fr_mock.size_access_count == 0, "fr.size should not have been called"
+
+
+def test_weigh_falls_back_to_fr_size_when_metadata_absent():
+    """When size_holder is None, weigh() falls back to fr.size."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+
+    # Create a FileRef with a known size
+    class FileRefWithSize:
+        @property
+        def size(self):
+            return 10_485_760  # 10 MiB
+
+    fr_mock = FileRefWithSize()
+    ctx.fr_holder[0] = fr_mock
+    ctx.size_holder[0] = None  # No metadata size
+
+    # Mock src
+    class MockDataset:
+        pass
+
+    src = MockDataset()
+
+    # weigh() should fall back to fr.size
+    weight = ctx.weigh(src, "dummy_uri")
+    assert weight == 10_485_760, f"weigh() should fall back to fr.size, got {weight}"
+
+
+def test_weigh_falls_back_to_nominal_when_all_absent():
+    """When both metadata size and fr.size are absent, weigh() uses nominal."""
+    from databricks.labs.gbx.pyrx.grouped_exec import (
+        STREAM_NOMINAL_BYTES,
+        _OpenerContext,
+    )
+
+    ctx = _OpenerContext()
+    ctx.size_holder[0] = None  # No metadata size
+    ctx.fr_holder[0] = None  # No FileRef
+
+    # Mock src (not in _fuse_sources so it's not FUSE-weighted)
+    class MockDataset:
+        pass
+
+    src = MockDataset()
+
+    # weigh() should use nominal
+    weight = ctx.weigh(src, "dummy_uri")
+    assert weight == STREAM_NOMINAL_BYTES, f"weigh() should use nominal, got {weight}"
+
+
+def test_grouped_tile_map_header_view_forbids_read(spark, gtiff_bytes):
+    """view="header" (default) hands core_fn a _WindowHeaderView whose .read() raises.
+
+    The view exposes header attrs (width, height, count, dtypes) but intentionally
+    blocks pixel I/O.
+    """
+
+    def core(view, cellid):
+        try:
+            view.read(1)
+            return -1  # should not reach here
+        except Exception:
+            return int(view.width)  # header attrs only
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        core,
+        return_field=StructField("w", LongType()),
+    )  # default view="header"
+    assert out.select("w").head()[0] > 0
+
+
+def test_grouped_tile_map_cellid_passed_to_core(spark, gtiff_bytes):
+    """core_fn receives the cellid matching the tile's cellid field."""
+
+    def core(ds, cellid):
+        return int(cellid)
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        core,
+        return_field=StructField("cid", LongType()),
+    )
+    result = {r["tile"]["cellid"]: r["cid"] for r in out.collect()}
+    # Each row should return its own cellid (0, 1, 2 as created by _tile_df).
+    for expected_cellid in [0, 1, 2]:
+        assert result[expected_cellid] == expected_cellid, (
+            f"cellid mismatch: tile cellid={expected_cellid}, "
+            f"core_fn got {result[expected_cellid]}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Task 4: _make_opener weigher uses real FileRef.size (not STREAM_NOMINAL_BYTES)
+# ---------------------------------------------------------------------------
+
+
+def test_make_opener_weigher_uses_fileref_size():
+    """_OpenerContext.weigh returns fr_holder[0].size (real bytes) for stream-opened entries.
+
+    The old weigher always returned STREAM_NOMINAL_BYTES (16 MiB), so the LRU byte
+    budget never fired for large files.  The fix: the weigher reads fr_holder[0].size
+    for stream-opened entries (not in _fuse_sources) so large-file entries carry
+    their real cost.
+    """
+    from databricks.labs.gbx.pyrx.grouped_exec import _OpenerContext
+
+    ctx = _OpenerContext()
+
+    class FakeSrc:
+        pass
+
+    src = FakeSrc()
+    ctx.fr_holder[0] = type("FR", (), {"size": 500_000_000})()  # 500 MB FileRef
+    assert (
+        ctx.weigh(src, "uri") == 500_000_000
+    ), "weigh must return fr_holder[0].size, not STREAM_NOMINAL_BYTES"
+
+
+# ---------------------------------------------------------------------------
+# Task 5: byte-identical regression lock on the materialized grouped read path
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_tile_map_materialized_is_byte_identical(spark, gtiff_bytes):
+    """Protected path: a materialized tile passed through grouped_tile_map with a
+    pixel-read core_fn round-trips the pixels byte-identically.
+
+    Uses the fallback opener path (file_supported()=False locally) over materialized
+    tiles.  If this test FAILS, the composition changed byte output and must be
+    fixed — do not weaken this test.
+    """
+    import rasterio
+    from pyspark.sql.types import BinaryType, StructField
+
+    def _read_pixels(ds, cellid):
+        return bytearray(ds.read(1).tobytes())
+
+    out = grouped_tile_map(
+        _tile_df(spark, gtiff_bytes),
+        _read_pixels,
+        return_field=StructField("pixels", BinaryType()),
+        view="pixels",
+    ).collect()
+
+    with rasterio.open(rasterio.io.MemoryFile(gtiff_bytes)) as ds:
+        expected = ds.read(1).tobytes()
+
+    assert all(
+        bytes(r["pixels"]) == expected for r in out
+    ), "grouped_tile_map materialized path is not byte-identical — composition changed"

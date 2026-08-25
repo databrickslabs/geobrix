@@ -45,9 +45,3 @@ jobs:
           enable_coverage: "true"
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts
-      - name: Publish test coverage to Codecov
-        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de  # v5.5.2
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          files: target/scoverage.xml,target/scoverage-report/scoverage.xml
-          fail_ci_if_error: false

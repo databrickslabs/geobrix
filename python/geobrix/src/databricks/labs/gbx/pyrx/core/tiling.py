@@ -7,8 +7,15 @@ import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
 
 def _write(profile, data) -> bytes:
+    dtype = profile.get("dtype", str(np.asarray(data).dtype))
+    decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None
+    profile.update(
+        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
             dst.write(data)
@@ -74,6 +81,27 @@ def _overlap_steps(tile_width, tile_height, overlap):
     return tw, th, max(1, tw - overlap_w), max(1, th - overlap_h)
 
 
+def plan_grid_windows(width, height, tile_width, tile_height, overlap=0):
+    """Enumerate a regular grid of (col_off, row_off, w, h) windows over
+    ``width x height``, stepping by the overlap-adjusted stride and clamping
+    each window to the extent. Pure window planning -- no dataset, no bytes.
+    Overlap semantics match ``_iter_window_tiles`` / ``rst_tooverlappingtiles``.
+    """
+    tw, th, step_x, step_y = _overlap_steps(tile_width, tile_height, overlap)
+    windows = []
+    row = 0
+    while row < height:
+        col = 0
+        while col < width:
+            w = min(tw, width - col)
+            h = min(th, height - row)
+            if w > 0 and h > 0:
+                windows.append((col, row, w, h))
+            col += step_x
+        row += step_y
+    return windows
+
+
 def iter_to_overlapping_tiles(ds, tile_width, tile_height, overlap):
     tw, th, sx, sy = _overlap_steps(tile_width, tile_height, overlap)
     return _iter_window_tiles(ds, tw, th, sx, sy)
@@ -117,10 +145,18 @@ def _encoded_size_bytes(ds) -> int:
     Used when the caller did not supply ``size_bytes``; re-encodes the open
     dataset to an in-memory GTiff and measures the buffer length, matching the
     vsimem buffer size heavy reads via GetMemFileBuffer.
+
+    # EXEMPT: measurement-only encode (size probe for tiling-budget decisions),
+    # no compression policy. The result is used only to count bytes, not stored
+    # or returned to callers. Compression here would only change the estimate
+    # vs the uncompressed-size contract heavy uses.
     """
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
-    return len(_write(profile, ds.read()))
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(ds.read())
+        return len(mf.read())
 
 
 def iter_make_tiles(ds, size_in_mb, size_bytes=None):

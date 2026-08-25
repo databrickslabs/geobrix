@@ -6,6 +6,11 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+# metadata's position in the v2 tile tuple. path_mode was appended after it, so
+# metadata is no longer the last field — index it by name to stay append-proof.
+_MD = V2_TILE_SCHEMA.fieldNames().index("metadata")
 
 EXPECTED_METADATA_KEYS = {
     "path",
@@ -38,26 +43,50 @@ def _write_sample(path, width=4, height=3):
         ds.write(data, 1)
 
 
-def test_schema_matches_tile_schema():
-    from databricks.labs.gbx.pyrx import _serde
+def test_schema_is_v2_tile():
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
 
     ds = RasterGbxDataSource(options={"path": "/tmp/none"})
     schema = ds.schema()
     assert [f.name for f in schema.fields] == ["source", "tile"]
-    assert schema["tile"].dataType == _serde.TILE_SCHEMA
+    assert schema["tile"].dataType == V2_TILE_SCHEMA
+
+
+def test_materialized_row_is_v2_with_populated_raster(spark, tmp_path):
+    f = tmp_path / "sample.tif"
+    _write_sample(str(f))
+    spark.dataSource.register(RasterGbxDataSource)
+    row = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(str(f))
+        .collect()[0]
+    )
+    tile = row["tile"]
+    assert tile["cellid"] == -1
+    assert tile["raster"] is not None  # materialized: bytes present
+    assert tile["path"] is not None  # provenance populated
+    # whole-file GTiff passthrough -> window is the whole file
+    assert tile["window"]["width"] > 0 and tile["window"]["height"] > 0
+    # clip_polygon is null for a plain materialized tile; crs is populated from source
+    assert tile["clip_polygon"] is None
+    assert tile["crs"] == "EPSG:4326"  # reader now populates tile.crs from source
+    # pixels still decode
+    with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as out:
+        assert out.width > 0
 
 
 def test_read_single_file_yields_one_row(spark, tmp_path):
     f = tmp_path / "sample.tif"
     _write_sample(str(f))
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").load(str(f))
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(str(f))
     rows = df.collect()
     assert len(rows) == 1
     row = rows[0]
     assert row["source"] == str(f)
     assert row["tile"]["cellid"] == -1
-    assert set(row["tile"]["metadata"].keys()) == EXPECTED_METADATA_KEYS
+    assert EXPECTED_METADATA_KEYS <= set(row["tile"]["metadata"].keys())
     with MemoryFile(bytes(row["tile"]["raster"])) as mf, mf.open() as out:
         arr = out.read(1)
     np.testing.assert_allclose(
@@ -78,23 +107,34 @@ def test_read_directory_one_partition_per_file(spark, tmp_path):
     assert df.count() == 3
 
 
-def test_corrupt_file_fails_fast(spark, tmp_path):
+def test_corrupt_file_fails_fast_materialized(spark, tmp_path):
+    """A corrupt file raises at collect() time when using materialised tiles.
+
+    Task 2 note: with virtualTiles=true (the default), read() now defers the
+    rasterio.open for whole-file virtual tiles, so a corrupt file only raises
+    when the tile is materialized by a downstream pixel op (not at collect()
+    time).  This test uses virtualTiles=false to preserve "fails fast" coverage
+    for the materialized path, which is unchanged.
+    """
     import pytest
 
     bad = tmp_path / "bad.tif"
     bad.write_bytes(b"not a raster")
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").load(str(bad))
+    df = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")  # materialized: header opened in read()
+        .load(str(bad))
+    )
     with pytest.raises(Exception):
         df.collect()
 
 
-def test_multi_tile_split_matches_core_tiling(spark, tmp_path):
-    import os
-
+def test_multi_tile_split_matches_plan_layout(spark, tmp_path):
     import rasterio
 
-    from databricks.labs.gbx.pyrx.core import tiling as core_tiling
+    from databricks.labs.gbx.ds.raster import _numpy_itemsize
+    from databricks.labs.gbx.pyrx.core import budget as budget_mod
 
     # Incompressible noise so the on-disk file is genuinely large -> forces a split.
     f = tmp_path / "big.tif"
@@ -112,13 +152,28 @@ def test_multi_tile_split_matches_core_tiling(spark, tmp_path):
     with rasterio.open(str(f), "w", **profile) as ds:
         ds.write(data)
 
-    size_bytes = os.path.getsize(str(f))
+    # Expected count via plan_layout (decoded-size budget, the new semantics for sizeInMB).
+    budget_bytes = 1 * 1024 * 1024  # 1 MiB
     with rasterio.open(str(f)) as ds:
-        expected = len(core_tiling.make_tiles(ds, size_in_mb=1, size_bytes=size_bytes))
+        width, height = ds.width, ds.height
+        bands = ds.count
+        itemsize = _numpy_itemsize(ds.dtypes[0])
+        tiled = bool(ds.profile.get("tiled", False))
+        bx = ds.profile.get("blockxsize")
+        by = ds.profile.get("blockysize")
+    plan = budget_mod.plan_layout(
+        width, height, bands, itemsize, tiled, bx, by, budget_bytes
+    )
+    expected = len(plan.tiles)
     assert expected > 1, "test setup failed to force a multi-tile split"
 
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").option("sizeInMB", "1").load(str(f))
+    df = (
+        spark.read.format("raster_gbx")
+        .option("sizeInMB", "1")
+        .option("virtualTiles", "false")
+        .load(str(f))
+    )
     assert df.count() == expected
     # every emitted tile is a fresh, un-tessellated tile
     assert all(r["tile"]["cellid"] == -1 for r in df.select("tile").collect())
@@ -133,14 +188,19 @@ def test_whole_file_gtiff_is_passthrough(spark, tmp_path):
     raw = f.read_bytes()
 
     spark.dataSource.register(RasterGbxDataSource)
-    rows = spark.read.format("raster_gbx").load(str(f)).collect()
+    rows = (
+        spark.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(str(f))
+        .collect()
+    )
     assert len(rows) == 1
     tile = rows[0]["tile"]
     assert (
         bytes(tile["raster"]) == raw
     ), "whole-file GTiff should pass through unchanged"
     assert tile["cellid"] == -1
-    assert set(tile["metadata"].keys()) == EXPECTED_METADATA_KEYS
+    assert EXPECTED_METADATA_KEYS <= set(tile["metadata"].keys())
     with MemoryFile(bytes(tile["raster"])) as mf, mf.open() as out:
         arr = out.read(1)
     np.testing.assert_allclose(
@@ -188,7 +248,11 @@ def test_multi_tile_subwindows_are_reencoded(spark, tmp_path):
 
     spark.dataSource.register(RasterGbxDataSource)
     rows = (
-        spark.read.format("raster_gbx").option("sizeInMB", "1").load(str(f)).collect()
+        spark.read.format("raster_gbx")
+        .option("sizeInMB", "1")
+        .option("virtualTiles", "false")
+        .load(str(f))
+        .collect()
     )
     assert len(rows) > 1  # split happened
     assert all(
@@ -212,16 +276,90 @@ def _write_big_incompressible(path, side=2048):
         ds.write(data)
 
 
-def test_no_split_by_default_yields_one_row(spark, tmp_path):
-    # The default (sizeInMB=-1) must NOT split, even for a large raster that the
-    # old 16MB-split default would have multi-tiled. One file -> one row.
+def test_none_strategy_yields_one_row(spark, tmp_path):
+    # splitStrategy=none explicitly disables auto-split. One file -> one row.
     f = tmp_path / "big_default.tif"
     _write_big_incompressible(str(f))
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").load(str(f))  # no sizeInMB option
+    df = spark.read.format("raster_gbx").option("splitStrategy", "none").load(str(f))
     rows = df.collect()
-    assert len(rows) == 1, "default reader must emit exactly one tile per file"
+    assert len(rows) == 1, "splitStrategy=none must emit exactly one tile per file"
     assert rows[0]["tile"]["cellid"] == -1
+
+
+def test_default_strategy_is_no_split(tmp_path):
+    # Default splitStrategy=none (halo mode): large rasters are NOT split by default.
+    # One partition per file, regardless of size.
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    f = tmp_path / "big_default.tif"
+    _write_big_incompressible(str(f))
+
+    # Read with DEFAULT options — no splitStrategy, no sizeInMB.
+    reader = RasterGbxReader({"path": str(f)})
+    assert reader.strategy == "none"
+    parts = reader.partitions()
+
+    # Default=none: exactly one partition per file (no split).
+    assert (
+        len(parts) == 1
+    ), "default strategy=none must emit exactly one partition per file"
+
+    # Each partition yields exactly one row.
+    part_rows = list(reader.read(parts[0]))
+    assert len(part_rows) == 1, "read() must yield exactly one row per partition"
+
+
+def test_optin_split_splits_large_raster(tmp_path, monkeypatch):
+    # Opt-in splitStrategy=serverless must split large rasters on a decoded-memory budget.
+    #
+    # With the one-tile-per-partition architecture, partitions() returns one
+    # _TilePartition per tile window.  Each read() call yields exactly ONE row.
+    # We monkeypatch the budget so a 2048×2048×3 uint8 raster (12 MiB decoded)
+    # forces a split under a 1 MiB budget.
+    import databricks.labs.gbx.pyrx.core.budget as budget_mod
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    monkeypatch.setattr(
+        budget_mod, "decoded_budget_bytes", lambda _strategy: 1024 * 1024
+    )
+
+    f = tmp_path / "big_split.tif"
+    _write_big_incompressible(str(f))
+
+    # Opt-in split with explicit splitStrategy=serverless.
+    reader = RasterGbxReader(
+        {"path": str(f), "splitStrategy": "serverless", "virtualTiles": "false"}
+    )
+    parts = reader.partitions()
+
+    # One-tile-per-partition: the split must produce more than one partition.
+    assert (
+        len(parts) > 1
+    ), "partitions() must produce >1 _TilePartition for a raster exceeding the budget"
+
+    # Each partition yields exactly one row (structural OOM fix).
+    for p in parts:
+        part_rows = list(reader.read(p))
+        assert (
+            len(part_rows) == 1
+        ), "read() must yield exactly one row per _TilePartition"
+
+    # Total emitted rows across all partitions equals total planned tiles.
+    total_rows = sum(len(list(reader.read(p))) for p in parts)
+    assert total_rows == len(parts)
+
+    # Opt-in split tiles are plain GTiff (not COG — COG is a writer concern).
+    from databricks.labs.gbx.pyrx.core import cog as cog_mod
+
+    for p in parts:
+        for _, tile in reader.read(p):
+            # read() emits a raw v2 tuple in V2_TILE_SCHEMA order; metadata is
+            # indexed by name (it is the last field; path_mode sits after path).
+            md = tile[_MD]
+            assert (
+                md.get(cog_mod.GBX_FORMAT) == "gtiff"
+            ), f"split tiles must be plain gtiff; got {md.get(cog_mod.GBX_FORMAT)!r}"
 
 
 def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):
@@ -229,7 +367,12 @@ def test_explicit_small_sizeinmb_still_splits(spark, tmp_path):
     f = tmp_path / "big_split.tif"
     _write_big_incompressible(str(f))
     spark.dataSource.register(RasterGbxDataSource)
-    df = spark.read.format("raster_gbx").option("sizeInMB", "8").load(str(f))
+    df = (
+        spark.read.format("raster_gbx")
+        .option("sizeInMB", "8")
+        .option("virtualTiles", "false")
+        .load(str(f))
+    )
     assert df.count() > 1
 
 
@@ -264,3 +407,70 @@ def test_estimate_tile_bytes_uses_max_of_raw_and_file():
     assert (
         raster_mod._estimate_tile_bytes(100, 100, 2, "float32", 10) == 100 * 100 * 2 * 4
     )
+
+
+def test_reader_default_is_no_split():
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    r = RasterGbxReader({"path": "/x"})
+    assert r.strategy == "none"  # default reversed from 0.4.4 'auto'
+
+
+def test_reader_optin_split_still_works():
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    r = RasterGbxReader({"path": "/x", "splitStrategy": "serverless"})
+    assert r.strategy == "serverless"
+
+
+def test_gtiff_writer_has_no_cog_option(tmp_path):
+    # The gtiff lane writes plain GTiff; cog options belong to cog_gbx.
+    # Even if a caller passes cog=true as an option, gtiff_gbx must IGNORE it
+    # (COG kwargs were removed from GTiffGbxDataSource.writer — they don't reach
+    # RasterGbxWriter so it stays at its default cog=False).
+    from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+    from databricks.labs.gbx.ds.raster import reader_schema
+
+    src = GTiffGbxDataSource(options={"path": str(tmp_path), "cog": "true"})
+    writer = src.writer(reader_schema(), overwrite=True)
+    # RasterGbxWriter.cog must be False — gtiff lane never COGs.
+    assert getattr(writer, "cog", False) is False
+
+
+def test_file_and_cog_registered():
+    from databricks.labs.gbx.ds.register import _SOURCES
+
+    names = {s.name() for s in _SOURCES}
+    assert "file_gbx" in names and "cog_gbx" in names
+
+
+# ---------------------------------------------------------------------------
+# Task 4: session-free enumeration via file_gbx core
+# ---------------------------------------------------------------------------
+
+
+def test_raster_reader_extensions_option_filters_members(tmp_path):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    (tmp_path / "a.tif").write_bytes(b"x")
+    (tmp_path / "b.nc").write_bytes(b"x")
+    r = RasterGbxReader({"path": str(tmp_path), "extensions": ".tif"})
+    assert r._list_source_files() == [str(tmp_path / "a.tif")]
+
+
+def test_raster_reader_skips_hidden_by_default(tmp_path):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    (tmp_path / "a.tif").write_bytes(b"x")
+    (tmp_path / "_SUCCESS").write_bytes(b"")
+    r = RasterGbxReader({"path": str(tmp_path)})
+    assert r._list_source_files() == [str(tmp_path / "a.tif")]
+
+
+def test_raster_reader_filter_regex_still_composes(tmp_path):
+    from databricks.labs.gbx.ds.raster import RasterGbxReader
+
+    (tmp_path / "keep_2024.tif").write_bytes(b"x")
+    (tmp_path / "drop_2023.tif").write_bytes(b"x")
+    r = RasterGbxReader({"path": str(tmp_path), "filterRegex": r".*_2024\.tif$"})
+    assert r._list_source_files() == [str(tmp_path / "keep_2024.tif")]

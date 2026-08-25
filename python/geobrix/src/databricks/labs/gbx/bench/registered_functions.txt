@@ -24,6 +24,7 @@ gbx_rst_scaley
 gbx_rst_skewx
 gbx_rst_skewy
 gbx_rst_srid
+gbx_rst_crs
 gbx_rst_subdatasets
 gbx_rst_summary
 gbx_rst_type
@@ -86,6 +87,7 @@ gbx_rst_rastertoworldcoord
 gbx_rst_rastertoworldcoordx
 gbx_rst_rastertoworldcoordy
 gbx_rst_transform
+gbx_rst_transformcrs
 gbx_rst_tryopen
 gbx_rst_updatetype
 gbx_rst_worldtorastercoord
@@ -122,6 +124,7 @@ gbx_rst_fillnodata
 gbx_rst_histogram
 gbx_rst_sample
 gbx_rst_setsrid
+gbx_rst_setcrs
 gbx_rst_threshold
 gbx_rst_cog_convert
 gbx_rst_contour
@@ -175,3 +178,18 @@ gbx_st_triangulate
 gbx_st_interpolateelevationbbox
 gbx_st_interpolateelevationgeom
 gbx_pmtiles_agg
+gbx_st_crs
+gbx_st_setcrs
+gbx_st_transformcrs
+gbx_st_shiftlongitude
+gbx_st_split
+gbx_st_wrapx
+gbx_st_explainvalidity
+gbx_st_makevalid
+gbx_st_node
+gbx_st_reduceprecision
+gbx_st_removerepeatedpoints
+gbx_st_simplifypreservetopology
+gbx_st_snap
+gbx_st_coverageisvalid
+gbx_st_coverageinvalidedges

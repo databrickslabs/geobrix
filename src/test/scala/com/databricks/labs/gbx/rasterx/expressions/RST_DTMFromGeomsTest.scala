@@ -48,7 +48,7 @@ class RST_DTMFromGeomsTest extends AnyFunSuite with BeforeAndAfterAll {
             planePoints(), Seq.empty[LineString],
             mergeTolerance = 0.0, snapTolerance = 0.0,
             xmin = 0.0, ymin = 0.0, xmax = 100.0, ymax = 100.0,
-            widthPx = 10, heightPx = 10, srid = 32633, noData = -9999.0
+            widthPx = 10, heightPx = 10, out_srid = 32633, noData = -9999.0
         )
         row should not be null
         pixel(row, 0, 0) shouldBe 300.0 +- 1e-3
@@ -60,7 +60,7 @@ class RST_DTMFromGeomsTest extends AnyFunSuite with BeforeAndAfterAll {
             planePoints(), Seq.empty[LineString],
             0.0, 0.0,
             xmin = -100.0, ymin = -100.0, xmax = 200.0, ymax = 200.0,
-            widthPx = 30, heightPx = 30, srid = 32633, noData = -9999.0
+            widthPx = 30, heightPx = 30, out_srid = 32633, noData = -9999.0
         )
         pixel(row, 0, 0) shouldBe -9999.0 +- 1e-6
     }
@@ -112,7 +112,7 @@ class RST_DTMFromGeomsTest extends AnyFunSuite with BeforeAndAfterAll {
             breaklinesExpr = lit(null),
             mergeToleranceExpr = lit(0.0), snapToleranceExpr = lit(0.0),
             xminExpr = lit(0.0), yminExpr = lit(0.0), xmaxExpr = lit(100.0), ymaxExpr = lit(100.0),
-            widthPxExpr = lit(10), heightPxExpr = lit(10), sridExpr = lit(32633),
+            widthPxExpr = lit(10), heightPxExpr = lit(10), outSridExpr = lit(32633),
             noDataExpr = lit(-9999.0)
         )
         val aggRow = agg.eval(buf).asInstanceOf[InternalRow]
@@ -132,7 +132,7 @@ class RST_DTMFromGeomsTest extends AnyFunSuite with BeforeAndAfterAll {
             breaklinesExpr = lit(null),
             mergeToleranceExpr = lit(0.0), snapToleranceExpr = lit(0.0),
             xminExpr = lit(0.0), yminExpr = lit(0.0), xmaxExpr = lit(100.0), ymaxExpr = lit(100.0),
-            widthPxExpr = lit(10), heightPxExpr = lit(10), sridExpr = lit(32633),
+            widthPxExpr = lit(10), heightPxExpr = lit(10), outSridExpr = lit(32633),
             noDataExpr = lit(-9999.0)
         )
         an[IllegalArgumentException] should be thrownBy {

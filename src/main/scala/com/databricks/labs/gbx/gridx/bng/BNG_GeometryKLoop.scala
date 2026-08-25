@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -29,21 +30,21 @@ case class BNG_GeometryKLoop(
 
 /** Companion: SQL name gbx_bng_geometrykloop, builder, and eval. */
 object BNG_GeometryKLoop extends WithExpressionInfo {
-    def eval(geom: UTF8String, res: Int, k: Int): ArrayData = {
-        val geometry = JTS.fromWKT(geom.toString)
-        val result = execute(geometry, res, k)
-        ArrayData.toArrayData(result.map(UTF8String.fromString).toArray)
-    }
+    def eval(geom: UTF8String, res: Int, k: Int): ArrayData =
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geometry = JTS.fromWKT(geom.toString)
+            ArrayData.toArrayData(execute(geometry, res, k).map(UTF8String.fromString).toArray)
+        }
 
-    def eval(geom: Array[Byte], res: Int, k: Int): ArrayData = {
-        val geometry = JTS.fromWKB(geom)
-        val result = execute(geometry, res, k)
-        ArrayData.toArrayData(result.map(UTF8String.fromString).toArray)
-    }
+    def eval(geom: Array[Byte], res: Int, k: Int): ArrayData =
+        GridErrorHandler.safeEval[ArrayData](null) {
+            val geometry = JTS.fromWKB(geom)
+            ArrayData.toArrayData(execute(geometry, res, k).map(UTF8String.fromString).toArray)
+        }
 
-    def eval(geom: UTF8String, res: UTF8String, k: Int): ArrayData = eval(geom, BNG.getResolution(res), k)
+    def eval(geom: UTF8String, res: UTF8String, k: Int): ArrayData = eval(geom, BNG.getResolution(res), k) // PARAMETER: getResolution raises on bad res
 
-    def eval(geom: Array[Byte], res: UTF8String, k: Int): ArrayData = eval(geom, BNG.getResolution(res), k)
+    def eval(geom: Array[Byte], res: UTF8String, k: Int): ArrayData = eval(geom, BNG.getResolution(res), k) // PARAMETER: getResolution raises on bad res
 
     def execute(geom: Geometry, res: Int, k: Int): Set[String] = {
         val kLoop = BNG.geometryKLoop(geom, res, k)

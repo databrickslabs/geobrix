@@ -10,12 +10,12 @@ cluster.
 Workspace config (host, profile, Volume coordinates) is read from the gitignored
 notebooks/tests/databricks_cluster_config.env. Auth mints a bearer token from the
 configured CLI profile (the SDK's profile refresh is flaky on some networks) and
-uses WorkspaceClient(host, token). With no --spec, the Volume-staged [light] wheel
+uses WorkspaceClient(host, token). With no --spec, the Volume-staged [light_env6] wheel
 path is derived from GBX_BUNDLE_VOLUME_*.
 
 Usage (run under .venv-pyrx which has databricks-sdk):
     .venv-pyrx/bin/python notebooks/tests/serverless_light_smoke.py \
-        --spec 'geobrix[light] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl' \
+        --spec 'geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl' \
         --env-version 5
 """
 import argparse
@@ -55,13 +55,13 @@ NB_NAME = "geobrix_serverless_light_smoke"
 
 
 def _default_spec() -> str:
-    """Volume-staged [light] wheel path, derived from GBX_BUNDLE_VOLUME_* config."""
+    """Volume-staged [light_env6] wheel path, derived from GBX_BUNDLE_VOLUME_* config."""
     catalog = os.environ.get("GBX_BUNDLE_VOLUME_CATALOG", "main")
     schema = os.environ.get("GBX_BUNDLE_VOLUME_SCHEMA", "default")
     volume = os.environ.get("GBX_BUNDLE_VOLUME_NAME", "geobrix_samples")
     ver = os.environ.get("GBX_VERSION", "0.4.0")
     return (
-        f"geobrix[light] @ file:///Volumes/{catalog}/{schema}/{volume}/"
+        f"geobrix[light_env6] @ file:///Volumes/{catalog}/{schema}/{volume}/"
         f"geobrix-{ver}-py3-none-any.whl"
     )
 

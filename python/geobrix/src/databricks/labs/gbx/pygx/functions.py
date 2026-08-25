@@ -77,10 +77,19 @@ def _resolution_udf(cell: pd.Series) -> pd.Series:
 def _distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
     # Same-resolution-or-error; Chebyshev on cell_to_tile coords. Looped per
     # element (cell_to_tile is scalar in the lib); batched Arrow transfer is the win.
+    # NULL input -> NULL (matches heavy NULL propagation).  ValueError from
+    # mismatched-resolution pair still propagates unchanged.
     return pd.Series(
-        [int(_quadbin.distance(int(x), int(y))) for x, y in zip(a, b)],
-        dtype="int32",
-    )
+        [
+            (
+                int(_quadbin.distance(int(x), int(y)))
+                if (x is not None and y is not None)
+                else None
+            )
+            for x, y in zip(a, b)
+        ],
+        dtype="object",
+    ).astype("Int32")
 
 
 # --- single-geometry UDFs (pandas_udf, bounded scalar output) --------------------------------
@@ -196,58 +205,72 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
 
 @pandas_udf(DoubleType())
 def _bng_cellarea_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.area(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _area(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.area(cid) if cid is not None else None
+
+    return pd.Series([_area(c) for c in cellid])
 
 
 @pandas_udf(LongType())
 def _bng_distance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                int(_bng.distance(_bng.parse(x), _bng.parse(y)))
-                if x is not None and y is not None
-                else None
-            )
-            for x, y in zip(a, b)
-        ]
-    )
+    def _dist(x, y):
+        if x is None or y is None:
+            return None
+        cx, cy = _bng.parse_safe(x), _bng.parse_safe(y)
+        return int(_bng.distance(cx, cy)) if cx is not None and cy is not None else None
+
+    return pd.Series([_dist(x, y) for x, y in zip(a, b)])
 
 
 @pandas_udf(LongType())
 def _bng_euclideandistance_udf(a: pd.Series, b: pd.Series) -> pd.Series:
-    return pd.Series(
-        [
-            (
-                int(_bng.euclidean_distance(_bng.parse(x), _bng.parse(y)))
-                if x is not None and y is not None
-                else None
-            )
-            for x, y in zip(a, b)
-        ]
-    )
+    def _edist(x, y):
+        if x is None or y is None:
+            return None
+        cx, cy = _bng.parse_safe(x), _bng.parse_safe(y)
+        return (
+            int(_bng.euclidean_distance(cx, cy))
+            if cx is not None and cy is not None
+            else None
+        )
+
+    return pd.Series([_edist(x, y) for x, y in zip(a, b)])
 
 
 @pandas_udf(BinaryType())
 def _bng_aswkb_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.cell_aswkb(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _aswkb(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.cell_aswkb(cid) if cid is not None else None
+
+    return pd.Series([_aswkb(c) for c in cellid])
 
 
 @pandas_udf(StringType())
 def _bng_aswkt_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.cell_aswkt(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _aswkt(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.cell_aswkt(cid) if cid is not None else None
+
+    return pd.Series([_aswkt(c) for c in cellid])
 
 
 @pandas_udf(BinaryType())
 def _bng_centroid_udf(cellid: pd.Series) -> pd.Series:
-    return pd.Series(
-        [_bng.cell_centroid(_bng.parse(c)) if c is not None else None for c in cellid]
-    )
+    def _centroid(c):
+        if c is None:
+            return None
+        cid = _bng.parse_safe(c)
+        return _bng.cell_centroid(cid) if cid is not None else None
+
+    return pd.Series([_centroid(c) for c in cellid])
 
 
 # --- chip-pair scalar ops -> pandas_udf returning BNG_CHIP_SCHEMA ------------
@@ -327,40 +350,67 @@ def _bng_cellintersection_udf(left: pd.DataFrame, right: pd.DataFrame) -> pd.Dat
 def _bng_kring(cellid, k):
     if cellid is None or k is None:
         return None
-    return _bng.k_ring_str(cellid, int(k))
+    cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
+    if cid is None:
+        return None
+    return [_bng.format(c) for c in _bng.k_ring(cid, int(k))]
 
 
 def _bng_kloop(cellid, k):
     if cellid is None or k is None:
         return None
-    return _bng.k_loop_str(cellid, int(k))
+    cid = _bng.parse_safe(cellid)  # bad cell id DATA -> None
+    if cid is None:
+        return None
+    return [_bng.format(c) for c in _bng.k_loop(cid, int(k))]
 
 
 def _bng_polyfill(geom, res):
     if geom is None or res is None:
         return None
-    return _bng.polyfill_str(geom, _norm_res(res))
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    try:
+        return _bng.polyfill_str(geom, _norm_res(res))
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
 def _bng_geomkring(geom, res, k):
     if geom is None or res is None or k is None:
         return None
-    return sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k)))
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    k_int = int(k)  # bad k PARAMETER -> raises
+    try:
+        return sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), k_int))
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
 def _bng_geomkloop(geom, res, k):
     if geom is None or res is None or k is None:
         return None
-    return sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k)))
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    k_int = int(k)  # bad k PARAMETER -> raises
+    try:
+        return sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), k_int))
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
-def _bng_tessellate(geom, res):
+def _bng_tessellate(geom, res, keep_core_geom=True):
     if geom is None or res is None:
         return None
-    return [
-        {"cellid": c, "core": bool(core), "chip": chip}
-        for (c, core, chip) in _bng.tessellate_str(geom, _norm_res(res))
-    ]
+    _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+    keep = True if keep_core_geom is None else bool(keep_core_geom)
+    try:
+        return [
+            {"cellid": c, "core": bool(core), "chip": chip}
+            for (c, core, chip) in _bng.tessellate_str(
+                geom, _norm_res(res), keep_core_geom=keep
+            )
+        ]
+    except Exception:
+        return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
 # --- explode UDTFs (SQL-LATERAL only) ---------------------------------------
@@ -371,8 +421,11 @@ class _BngKRingExplode:
     def eval(self, cellid, k):
         if cellid is None or k is None:
             return
-        for c in _bng.k_ring_str(cellid, int(k)):
-            yield (c,)
+        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
+        if cid is None:
+            return
+        for c in _bng.k_ring(cid, int(k)):
+            yield (_bng.format(c),)
 
 
 @udtf(returnType="cellid: string")
@@ -380,8 +433,11 @@ class _BngKLoopExplode:
     def eval(self, cellid, k):
         if cellid is None or k is None:
             return
-        for c in _bng.k_loop_str(cellid, int(k)):
-            yield (c,)
+        cid = _bng.parse_safe(cellid)  # bad cell id DATA -> yield nothing
+        if cid is None:
+            return
+        for c in _bng.k_loop(cid, int(k)):
+            yield (_bng.format(c),)
 
 
 @udtf(returnType="cellid: string")
@@ -389,8 +445,13 @@ class _BngGeomKRingExplode:
     def eval(self, geom, res, k):
         if geom is None or res is None or k is None:
             return
-        for c in sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), int(k))):
-            yield (c,)
+        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        k_int = int(k)  # bad k PARAMETER -> raises
+        try:
+            for c in sorted(_bng.geometry_k_ring_str(geom, _norm_res(res), k_int)):
+                yield (c,)
+        except Exception:
+            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
 
 
 @udtf(returnType="cellid: string")
@@ -398,8 +459,13 @@ class _BngGeomKLoopExplode:
     def eval(self, geom, res, k):
         if geom is None or res is None or k is None:
             return
-        for c in sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), int(k))):
-            yield (c,)
+        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        k_int = int(k)  # bad k PARAMETER -> raises
+        try:
+            for c in sorted(_bng.geometry_k_loop_str(geom, _norm_res(res), k_int)):
+                yield (c,)
+        except Exception:
+            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
 
 
 @udtf(returnType="cellid: string, core: boolean, chip: binary")
@@ -407,8 +473,12 @@ class _BngTessellateExplode:
     def eval(self, geom, res):
         if geom is None or res is None:
             return
-        for c, core, chip in _bng.tessellate_str(geom, _norm_res(res)):
-            yield (c, bool(core), chip)
+        _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
+        try:
+            for c, core, chip in _bng.tessellate_str(geom, _norm_res(res)):
+                yield (c, bool(core), chip)
+        except Exception:
+            return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)
 
 
 # --- grouped-agg pandas_udf returning BNG_CHIP_SCHEMA ------------------------
@@ -431,6 +501,10 @@ def _fold_chip_geom(chip, op):
         if row is None:
             continue
         cur = _chip_tuple(row)
+        # Skip whole row if the cell id is malformed DATA (parse_safe -> None).
+        cellid_str = cur[0]
+        if cellid_str is not None and _bng.parse_safe(cellid_str) is None:
+            continue
         acc = cur if acc is None else op(acc, cur)
     if acc is None:
         return None
@@ -438,7 +512,8 @@ def _fold_chip_geom(chip, op):
     # A core chip carries None geometry in the array form; materialize the full
     # cell polygon so the dissolved output is always a real geometry.
     if (geom is None or geom.is_empty) and core and cellid is not None:
-        geom = _bng.cell_id_to_geometry(_bng.parse(cellid))
+        cid = _bng.parse_safe(cellid)  # bad accumulated cellid -> degrade, don't raise
+        geom = _bng.cell_id_to_geometry(cid) if cid is not None else None
     if geom is None or geom.is_empty:
         return None
     from shapely import to_wkb as _to_wkb
@@ -543,7 +618,9 @@ def _custom_pointascell_udf(
             continue
         conf = _custom.conf_from_row(spec)
         x, y = _custom_first_coord(pg)
-        out.append(_custom.point_to_cell_id(conf, x, y, int(r)))
+        # resolution PARAMETER raises (via point_to_cell_id_or_none);
+        # NaN / out-of-bounds coordinate DATA -> None
+        out.append(_custom.point_to_cell_id_or_none(conf, x, y, int(r)))
     return pd.Series(out)
 
 
@@ -763,14 +840,19 @@ def register(spark: SparkSession = None, only: Optional[List[str]] = None) -> No
     if spark is None:
         spark = SparkSession.builder.getOrCreate()
     _register.run_groups(_registrar_groups(), spark, only)
+    globals()["_gbx_registered"] = True
 
 
 # --- Column wrappers (mirror heavy gridx.grid.functions) ------------------------------------
 
 
-def quadbin_pointascell(lon: ColLike, lat: ColLike, res: ColLike) -> Column:
-    """Quadbin cell (LONG) containing the WGS84 lon/lat point at `res`."""
-    return f.call_function("gbx_quadbin_pointascell", _col(lon), _col(lat), _col(res))
+def quadbin_pointascell(
+    longitude: ColLike, latitude: ColLike, resolution: ColLike
+) -> Column:
+    """Quadbin cell (LONG) for the WGS84 longitude/latitude point at `resolution`."""
+    return f.call_function(
+        "gbx_quadbin_pointascell", _col(longitude), _col(latitude), _col(resolution)
+    )
 
 
 def quadbin_resolution(cell: ColLike) -> Column:
@@ -783,14 +865,14 @@ def quadbin_kring(cell: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_quadbin_kring", _col(cell), _col(k))
 
 
-def quadbin_distance(cell_a: ColLike, cell_b: ColLike) -> Column:
+def quadbin_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Chebyshev grid distance (INT) between two same-resolution cells."""
-    return f.call_function("gbx_quadbin_distance", _col(cell_a), _col(cell_b))
+    return f.call_function("gbx_quadbin_distance", _col(cellid1), _col(cellid2))
 
 
-def quadbin_polyfill(geom: ColLike, res: ColLike) -> Column:
-    """ARRAY<LONG> of cells covering the geometry's envelope at `res`."""
-    return f.call_function("gbx_quadbin_polyfill", _col(geom), _col(res))
+def quadbin_polyfill(geom: ColLike, resolution: ColLike) -> Column:
+    """ARRAY<LONG> of cells covering the geometry's envelope at `resolution`."""
+    return f.call_function("gbx_quadbin_polyfill", _col(geom), _col(resolution))
 
 
 def quadbin_aswkb(cell: ColLike) -> Column:
@@ -808,28 +890,32 @@ def quadbin_cellunion(cells: ColLike) -> Column:
     return f.call_function("gbx_quadbin_cellunion", _col(cells))
 
 
-def quadbin_tessellate(geom: ColLike, res: ColLike) -> Column:
+def quadbin_tessellate(geom: ColLike, resolution: ColLike) -> Column:
     """ARRAY<STRUCT<cell:LONG, geom:BINARY>> chips clipping the geometry per cell."""
-    return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(res))
+    return f.call_function("gbx_quadbin_tessellate", _col(geom), _col(resolution))
 
 
-def quadbin_cellunion_agg(cell: ColLike) -> Column:
+def quadbin_cellunion_agg(cellid: ColLike) -> Column:
     """Aggregator: union a group's cell boundaries into one EWKB (SRID 4326) BINARY."""
-    return _cellunion_agg_udf(_col(cell))
+    return _cellunion_agg_udf(_col(cellid))
 
 
 # --- BNG Column wrappers (mirror heavy gridx.bng.functions) ----------------------------------
 # Cell ids are STRING; geometry outputs are plain WKB (EPSG:27700, no SRID).
 
 
-def bng_pointascell(geom: ColLike, res: ColLike) -> Column:
+def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
     """BNG cell id (STRING) for the centroid of a geometry (EPSG:27700)."""
-    return f.call_function("gbx_bng_pointascell", _col(geom), _col(res))
+    return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
 
 
-def bng_eastnorthasbng(e: ColLike, n: ColLike, res: ColLike) -> Column:
-    """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `res`."""
-    return f.call_function("gbx_bng_eastnorthasbng", _col(e), _col(n), _col(res))
+def bng_eastnorthasbng(
+    easting: ColLike, northing: ColLike, resolution: ColLike
+) -> Column:
+    """BNG cell id (STRING) for scalar EPSG:27700 eastings/northings at `resolution`."""
+    return f.call_function(
+        "gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution)
+    )
 
 
 def bng_cellarea(cellid: ColLike) -> Column:
@@ -837,14 +923,14 @@ def bng_cellarea(cellid: ColLike) -> Column:
     return f.call_function("gbx_bng_cellarea", _col(cellid))
 
 
-def bng_distance(cell_a: ColLike, cell_b: ColLike) -> Column:
+def bng_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Manhattan grid distance (LONG) between two BNG cells (edge-size units)."""
-    return f.call_function("gbx_bng_distance", _col(cell_a), _col(cell_b))
+    return f.call_function("gbx_bng_distance", _col(cellid1), _col(cellid2))
 
 
-def bng_euclideandistance(cell_a: ColLike, cell_b: ColLike) -> Column:
+def bng_euclideandistance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Chebyshev grid distance (LONG) between two BNG cells (edge-size units)."""
-    return f.call_function("gbx_bng_euclideandistance", _col(cell_a), _col(cell_b))
+    return f.call_function("gbx_bng_euclideandistance", _col(cellid1), _col(cellid2))
 
 
 def bng_aswkb(cellid: ColLike) -> Column:
@@ -862,14 +948,16 @@ def bng_centroid(cellid: ColLike) -> Column:
     return f.call_function("gbx_bng_centroid", _col(cellid))
 
 
-def bng_cellintersection(left: ColLike, right: ColLike) -> Column:
+def bng_cellintersection(left_chip: ColLike, right_chip: ColLike) -> Column:
     """Per-cell chip intersection STRUCT<cellid, core, chip> (left-hand rule)."""
-    return f.call_function("gbx_bng_cellintersection", _col(left), _col(right))
+    return f.call_function(
+        "gbx_bng_cellintersection", _col(left_chip), _col(right_chip)
+    )
 
 
-def bng_cellunion(left: ColLike, right: ColLike) -> Column:
+def bng_cellunion(left_chip: ColLike, right_chip: ColLike) -> Column:
     """Per-cell chip union STRUCT<cellid, core, chip> (left-hand rule)."""
-    return f.call_function("gbx_bng_cellunion", _col(left), _col(right))
+    return f.call_function("gbx_bng_cellunion", _col(left_chip), _col(right_chip))
 
 
 def bng_kring(cellid: ColLike, k: ColLike) -> Column:
@@ -882,38 +970,46 @@ def bng_kloop(cellid: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_bng_kloop", _col(cellid), _col(k))
 
 
-def bng_polyfill(geom: ColLike, res: ColLike) -> Column:
+def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:
     """ARRAY<STRING> of cells whose centroid is contained by the geometry."""
-    return f.call_function("gbx_bng_polyfill", _col(geom), _col(res))
+    return f.call_function("gbx_bng_polyfill", _col(geom), _col(resolution))
 
 
-def bng_geomkring(geom: ColLike, res: ColLike, k: ColLike) -> Column:
+def bng_geomkring(geom: ColLike, resolution: ColLike, k: ColLike) -> Column:
     """ARRAY<STRING> k-ring around a geometry's covering chips."""
-    return f.call_function("gbx_bng_geomkring", _col(geom), _col(res), _col(k))
+    return f.call_function("gbx_bng_geomkring", _col(geom), _col(resolution), _col(k))
 
 
-def bng_geomkloop(geom: ColLike, res: ColLike, k: ColLike) -> Column:
+def bng_geomkloop(geom: ColLike, resolution: ColLike, k: ColLike) -> Column:
     """ARRAY<STRING> k-loop around a geometry's covering chips."""
-    return f.call_function("gbx_bng_geomkloop", _col(geom), _col(res), _col(k))
+    return f.call_function("gbx_bng_geomkloop", _col(geom), _col(resolution), _col(k))
 
 
-def bng_tessellate(geom: ColLike, res: ColLike) -> Column:
-    """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell."""
-    return f.call_function("gbx_bng_tessellate", _col(geom), _col(res))
+def bng_tessellate(
+    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = True
+) -> Column:
+    """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell.
+
+    keep_core_geom (default True, matches heavy): when True, a fully-interior
+    cell's chip holds its core-geometry WKB; when False the chip is null.
+    """
+    return f.call_function(
+        "gbx_bng_tessellate", _col(geom), _col(resolution), _col(keep_core_geom)
+    )
 
 
-def bng_cellunion_agg(chip: ColLike) -> Column:
+def bng_cellunion_agg(input_chip: ColLike) -> Column:
     """Aggregator: union a group's same-cell chips into one dissolved-chip WKB BINARY.
 
     (Light grouped-agg cannot return a STRUCT; emits the dissolved chip geometry,
     keyed by the group's cellid — see the registration note.)
     """
-    return f.call_function("gbx_bng_cellunion_agg", _col(chip))
+    return f.call_function("gbx_bng_cellunion_agg", _col(input_chip))
 
 
-def bng_cellintersection_agg(chip: ColLike) -> Column:
+def bng_cellintersection_agg(input_chip: ColLike) -> Column:
     """Aggregator: intersect a group's same-cell chips into one dissolved-chip WKB BINARY."""
-    return f.call_function("gbx_bng_cellintersection_agg", _col(chip))
+    return f.call_function("gbx_bng_cellintersection_agg", _col(input_chip))
 
 
 # The five *explode functions are SQL-LATERAL-only table functions in the light
@@ -922,27 +1018,29 @@ def bng_cellintersection_agg(chip: ColLike) -> Column:
 # pointing to the registered UDTF; invoke them via SQL LATERAL instead.
 
 _EXPLODE_HINT = (
-    "Light BNG {name} has no Python Column form; invoke the registered UDTF via "
-    "SQL LATERAL, e.g. SELECT t.* FROM <df>, LATERAL {udtf}(...) t"
+    "Light BNG {name} is a streaming table function (registered UDTF {udtf}): it "
+    "emits one row per cell with no array materialized, so it has no pyspark "
+    "Column form by design. Invoke via SQL LATERAL, e.g. "
+    "SELECT t.* FROM <df>, LATERAL {udtf}(...) t  (or spark.sql(...))."
 )
 
 
 def bng_kringexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT cellid FROM gbx_bng_kringexplode(cellid, k)."""
+    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kringexplode(cellid, k). No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(name="bng_kringexplode", udtf="gbx_bng_kringexplode")
     )
 
 
 def bng_kloopexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT cellid FROM gbx_bng_kloopexplode(cellid, k)."""
+    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_bng_kloopexplode(cellid, k). No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(name="bng_kloopexplode", udtf="gbx_bng_kloopexplode")
     )
 
 
 def bng_geomkringexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT t.* FROM <df>, LATERAL gbx_bng_geomkringexplode(geom, res, k) t."""
+    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkringexplode(geom, res, k) t. No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(
             name="bng_geomkringexplode", udtf="gbx_bng_geomkringexplode"
@@ -951,7 +1049,7 @@ def bng_geomkringexplode(*args, **kwargs) -> Column:
 
 
 def bng_geomkloopexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT t.* FROM <df>, LATERAL gbx_bng_geomkloopexplode(geom, res, k) t."""
+    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_geomkloopexplode(geom, res, k) t. No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(
             name="bng_geomkloopexplode", udtf="gbx_bng_geomkloopexplode"
@@ -960,7 +1058,7 @@ def bng_geomkloopexplode(*args, **kwargs) -> Column:
 
 
 def bng_tessellateexplode(*args, **kwargs) -> Column:
-    """SQL-LATERAL-only: SELECT t.* FROM <df>, LATERAL gbx_bng_tessellateexplode(geom, res) t."""
+    """Streaming UDTF (SQL-LATERAL): SELECT t.* FROM <df>, LATERAL gbx_bng_tessellateexplode(geom, res) t. No Column form."""
     raise NotImplementedError(
         _EXPLODE_HINT.format(
             name="bng_tessellateexplode", udtf="gbx_bng_tessellateexplode"
@@ -974,32 +1072,34 @@ def bng_tessellateexplode(*args, **kwargs) -> Column:
 
 
 def custom_grid(
-    x_min: ColLike,
-    x_max: ColLike,
-    y_min: ColLike,
-    y_max: ColLike,
+    bound_x_min: ColLike,
+    bound_x_max: ColLike,
+    bound_y_min: ColLike,
+    bound_y_max: ColLike,
     cell_splits: ColLike,
-    root_x: ColLike,
-    root_y: ColLike,
+    root_cell_size_x: ColLike,
+    root_cell_size_y: ColLike,
     srid: ColLike = -1,
 ) -> Column:
     """Build a custom-grid spec STRUCT (validated eagerly). srid=-1 means no CRS."""
     return f.call_function(
         "gbx_custom_grid",
-        _col(x_min),
-        _col(x_max),
-        _col(y_min),
-        _col(y_max),
+        _col(bound_x_min),
+        _col(bound_x_max),
+        _col(bound_y_min),
+        _col(bound_y_max),
         _col(cell_splits),
-        _col(root_x),
-        _col(root_y),
+        _col(root_cell_size_x),
+        _col(root_cell_size_y),
         _col(srid),
     )
 
 
-def custom_pointascell(point: ColLike, grid: ColLike, res: ColLike) -> Column:
-    """Custom-grid cell ID (BIGINT) for the first coordinate of a geometry at `res`."""
-    return f.call_function("gbx_custom_pointascell", _col(point), _col(grid), _col(res))
+def custom_pointascell(point: ColLike, grid: ColLike, resolution: ColLike) -> Column:
+    """Custom-grid cell ID (BIGINT) for the first coordinate of a geometry at `resolution`."""
+    return f.call_function(
+        "gbx_custom_pointascell", _col(point), _col(grid), _col(resolution)
+    )
 
 
 def custom_cellaswkb(cell: ColLike, grid: ColLike) -> Column:
@@ -1017,9 +1117,11 @@ def custom_centroid(cell: ColLike, grid: ColLike) -> Column:
     return f.call_function("gbx_custom_centroid", _col(cell), _col(grid))
 
 
-def custom_polyfill(geom: ColLike, grid: ColLike, res: ColLike) -> Column:
+def custom_polyfill(geom: ColLike, grid: ColLike, resolution: ColLike) -> Column:
     """ARRAY<BIGINT> of cells whose center is contained by the geometry."""
-    return f.call_function("gbx_custom_polyfill", _col(geom), _col(grid), _col(res))
+    return f.call_function(
+        "gbx_custom_polyfill", _col(geom), _col(grid), _col(resolution)
+    )
 
 
 def custom_kring(cell: ColLike, grid: ColLike, k: ColLike) -> Column:

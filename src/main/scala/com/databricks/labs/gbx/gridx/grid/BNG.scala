@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx.grid
 
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.GeometryTypeEnum._
 import com.databricks.labs.gbx.vectorx.jts.{GeometryTypeEnum, JTS}
 import org.apache.spark.sql.types._
@@ -426,7 +427,13 @@ object BNG extends Serializable {
       */
     def parse(cellID: String): Long = {
         val prefix = if (cellID.length >= 2) cellID.take(2) else s"${cellID}V"
-        val letterRow = letterMap.find(_.contains(prefix)).get
+        val letterRow = letterMap
+            .find(_.contains(prefix))
+            .getOrElse(
+                throw new IllegalArgumentException(
+                    s"Invalid BNG cell id '$cellID': prefix '$prefix' is not a recognised BNG 100km grid-square letter pair"
+                )
+            )
         val eLetter: Int = letterRow.indexOf(prefix)
         val nLetter: Int = letterMap.indexOf(letterRow)
 
@@ -447,6 +454,13 @@ object BNG extends Serializable {
             }
         }
     }
+
+    /** Bad-DATA-tolerant [[parse]]: a malformed BNG cell string (unrecognised 100km prefix or
+      * non-digit body) returns null rather than throwing, so one bad cell id in a column
+      * degrades to NULL instead of killing the stage. Callers unbox only after a null check.
+      * The raising [[parse]] is kept for internal callers that have already validated. */
+    def parseOrNull(cellID: String): java.lang.Long =
+        GridErrorHandler.safeEval[java.lang.Long](null)(parse(cellID))
 
     /**
       * Constructs a geometry representing the grid tile corresponding to

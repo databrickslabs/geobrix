@@ -19,22 +19,21 @@ import org.gdal.gdal.Dataset
   * `algorithm` defaults to `"bilinear"`; see [[RST_ResampleHelper.AllowedAlgorithms]].
   */
 case class RST_ResampleToRes(
-    tileExpr: Expression,
+    tile: Expression,
     xResExpr: Expression,
     yResExpr: Expression,
     algorithmExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] =
-        Seq(tileExpr, xResExpr, yResExpr, algorithmExpr, ExpressionConfigExpr())
+        Seq(tile, xResExpr, yResExpr, algorithmExpr, ExpressionConfigExpr())
     // Pin types so SQL decimal literals coerce to Double cleanly.
     override def inputTypes: Seq[DataType] =
-        Seq(tileExpr.dataType, DoubleType, DoubleType, StringType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+        Seq(tile.dataType, DoubleType, DoubleType, StringType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_ResampleToRes.name
-    override def replacement: Expression = rstInvoke(RST_ResampleToRes, rasterType)
+    override def replacement: Expression = invoke(RST_ResampleToRes)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -42,12 +41,9 @@ case class RST_ResampleToRes(
 
 object RST_ResampleToRes extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, xRes: Double, yRes: Double, algorithm: UTF8String, conf: UTF8String
     ): InternalRow = runDispatch(row, xRes, yRes, algorithm, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, xRes: Double, yRes: Double, algorithm: UTF8String, conf: UTF8String
-    ): InternalRow = runDispatch(row, xRes, yRes, algorithm, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, xRes: Double, yRes: Double,

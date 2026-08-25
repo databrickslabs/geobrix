@@ -112,7 +112,7 @@ jobs:
       - name: build scala
         uses: ./.github/actions/scala_build
         with:
-          # Disable scoverage in main build to keep CI ~10–15 min (full Scala coverage is ~30+ min). Run "Upload coverage to Codecov" workflow manually for Scala+Python coverage.
+          # Disable scoverage in main build to keep CI ~10–15 min (full Scala coverage is ~30+ min). Run coverage locally via the gbx:coverage:* commands.
           enable_coverage: "false"
           fail_on_scalastyle: ${{ github.event_name == 'pull_request' && github.base_ref == 'main' }}
       - name: build python
@@ -130,44 +130,6 @@ jobs:
         run: |
           mkdir -p "$GBX_SAMPLE_DATA_ROOT"
           sudo -E mvn -C -q test -Dsuites='tests.docs.scala.*,docs.tests.scala.*' -DfailIfNoTests=false -Dscoverage.skip
-      - name: Stage coverage for upload job
-        run: |
-          mkdir -p coverage-reports
-          cp -f target/scoverage.xml coverage-reports/ 2>/dev/null || true
-          cp -f target/scoverage-report/scoverage.xml coverage-reports/scoverage-report.xml 2>/dev/null || true
-          cp -f python/geobrix/coverage.xml coverage-reports/ 2>/dev/null || true
-          if [ -z "$(ls -A coverage-reports 2>/dev/null)" ]; then
-            echo "No coverage files found. Expected Scala: target/scoverage.xml or target/scoverage-report/scoverage.xml; Python: python/geobrix/coverage.xml"
-            exit 1
-          fi
-          ls -la coverage-reports/
-      - name: Upload coverage artifacts
-        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f  # v7.0.0
-        with:
-          name: coverage-reports
-          path: coverage-reports
-          if-no-files-found: warn
       - name: upload artifacts
         uses: ./.github/actions/upload_artifacts
 
-  codecov:
-    name: Upload to Codecov
-    runs-on:
-      group: databrickslabs-protected-runner-group
-      labels: linux-ubuntu-latest
-    needs: build
-    if: always() && needs.build.result == 'success'
-    permissions:
-      contents: read
-    steps:
-      - name: Download coverage artifacts
-        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3  # v8.0.0
-        with:
-          name: coverage-reports
-          path: coverage-reports
-      - name: Upload to Codecov
-        uses: codecov/codecov-action@671740ac38dd9b0130fbe1cec585b89eea48d3de  # v5.5.2
-        with:
-          token: ${{ secrets.CODECOV_TOKEN }}
-          directory: coverage-reports
-          fail_ci_if_error: false

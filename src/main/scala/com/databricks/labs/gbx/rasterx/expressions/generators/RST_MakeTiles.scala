@@ -13,15 +13,8 @@ import org.apache.spark.unsafe.types.UTF8String
 
 /**
   * Creates raster tiles from the input column.
-  *   - spark config to turn checkpointing on for all functions in 0.4.2
-  *   - this is the only function able to write raster to checkpoint (even if
-  *     the spark config is set to false).
-  *   - can be useful when you want to start from the configured checkpoint but
-  *     work with binary payloads from there.
-  * @param tileExpr
-  *   The expression for the raster. If the raster is stored on disc, the path
-  *   to the raster is provided. If the raster is stored in memory, the bytes of
-  *   the raster are provided.
+  * @param tile
+  *   The expression for the raster (BinaryType tile); bytes of the raster are provided.
   * @param sizeInMBExpr
   *   The size of the tiles in MB. If set to -1, the file is loaded and returned
   *   as a single tile. If set to 0, the file is loaded and subdivided into
@@ -31,9 +24,12 @@ import org.apache.spark.unsafe.types.UTF8String
   * @param exprConfExpr
   *   Additional arguments for the expression (expressionConfigs).
   * Used as the catalyst node when gbx_rst_maketiles(tile, sizeInMB) is invoked in SQL or DataFrame API.
+  * @note
+  *   The second argument is a size budget in MB, NOT pixel dimensions. For explicit
+  *   tile width/height, use `gbx_rst_retile` instead.
   */
 case class RST_MakeTiles(
-    tileExpr: Expression,
+    tile: Expression,
     sizeInMBExpr: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr()
 ) extends CollectionGenerator
@@ -41,13 +37,13 @@ case class RST_MakeTiles(
       with CodegenFallback {
 
     /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    private def rasterType = RST_ExpressionUtil.rasterType(tile)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def position: Boolean = false
     override def inline: Boolean = false
     override def elementSchema: StructType = StructType(Array(StructField("tile", dataType)))
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
-    override def children: scala.Seq[Expression] = Seq(tileExpr, sizeInMBExpr, exprConfExpr)
+    override def children: scala.Seq[Expression] = Seq(tile, sizeInMBExpr, exprConfExpr)
 
     /** Overrides generator eval: subdivides tile into (Dataset, metadata) rows by sizeInMB via BalancedSubdivision; caller must release. */
     override def eval(input: InternalRow): IterableOnce[InternalRow] =
@@ -57,7 +53,7 @@ case class RST_MakeTiles(
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
 
-              val rawTile = tileExpr.eval(input).asInstanceOf[InternalRow]
+              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
 
               val targetSize = sizeInMBExpr.eval(input).asInstanceOf[Int]
@@ -87,7 +83,7 @@ case class RST_MakeTiles(
 
 }
 
-/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
+/** Companion: SQL name and builder for `gbx_rst_maketiles`. */
 object RST_MakeTiles extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_maketiles"

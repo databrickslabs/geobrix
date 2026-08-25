@@ -7,6 +7,7 @@ import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import rasterGbxExamples from '!!raw-loader!../../tests/python/readers/raster_gbx_read_examples.py';
+import largeRasterExamples from '!!raw-loader!../../tests/python/readers/large_raster_examples.py';
 import gdalExamples from '!!raw-loader!../../tests/python/readers/gdal_examples.py';
 import gdalScala from '!!raw-loader!../../tests/scala/readers/GDALExamples.scala';
 
@@ -35,15 +36,127 @@ the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and meth
 
 ### Lightweight (`raster_gbx`)
 
+The lightweight reader defaults to **no splitting** (`splitStrategy=none`):
+one whole-image tile per file. Splitting is opt-in; COG creation is a
+separate concern handled by the `cog_gbx` writer. See
+[COG Reader](./cog) and [COG Writer](../writers/cog) for the
+prepare-then-read pipeline.
+
 | Option | Default | Description |
 |--------|---------|-------------|
-| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split: one whole-image tile per file. Set a positive MB value to tile large rasters into multiple tiles. |
+| `virtualTiles` | `"true"` | **Default.** Emit bytes-free **virtual tiles** — each row carries the source `path` + pixel `window` instead of raster bytes; pixels are read lazily when an operation needs them (the ingest-OOM-dissolving default for the light tier). Set `"false"` to materialize raster bytes into each row. See [Virtual Tiles](../api/virtual-tiles). |
+| `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one whole-image tile per file), `auto` (resolve to `serverless` or `classic` by environment), `serverless` (opt-in, 64 MiB decoded budget per tile), `classic` (opt-in, 1 536 MiB decoded budget per tile). |
+| `sizeInMB` | `"-1"` | Power-user override: set a positive value to pin the per-tile decoded-memory budget in MiB. A positive value implies opt-in split regardless of `splitStrategy`. `-1` = defer to `splitStrategy`. |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
+| `clipPolygons` | _none_ | Area(s) of interest to clip to. One WKT/EWKT string for a single polygon, or a JSON-array string for a list, e.g. `'["POLYGON((...))","POLYGON((...))"]'` (raw WKB/EWKB bytes are accepted only from programmatic callers). One tile is emitted per polygon whose envelope intersects the raster; a polygon that misses the raster emits no tile. Materialized tiles are pre-clipped (pixels outside the polygon are NoData); virtual tiles carry the clip as a deferred instruction. Mutually exclusive with `windows` and `tileSize`. Pairs naturally with the [COG Reader](./cog). |
+| `windows` | _none_ | Pixel window(s) to read. A JSON 4-int array `"[col,row,w,h]"` for one, or a JSON array of them `"[[..],[..]]"` for a list. One tile per window; partial windows clip to the raster extent, fully-outside windows are skipped. Mutually exclusive with `clipPolygons` and `tileSize`. |
+| `clipCrs` | _none_ | CRS for `clipPolygons` that lack an embedded SRID (e.g. `"EPSG:27700"`). Precedence: an EWKB/EWKT polygon's embedded SRID → `clipCrs` → the raster's CRS. |
+| `tileSize` | _none_ | Cut the whole raster into a regular fixed-size pixel grid: `"w,h"` (e.g. `"512,512"`) or a single `"512"` for square tiles. One tile per grid cell; edge cells are clamped to the extent. Mutually exclusive with `clipPolygons` and `windows`. Materialized tiles are guarded to the ~2 GB Spark-cell limit (a too-large `tileSize` raises a clear error); virtual tiles (`virtualTiles=true`) carry no bytes and are unguarded. |
+| `overlapPercent` | `0` | Overlap between adjacent `tileSize` cells, as a percentage of tile size (`overlap_px = ceil(tile_dim · pct/100)`, `step = tile_dim − overlap_px`). Applies to **`tileSize` only** (an error otherwise). Default `0` = non-overlapping grid. |
+| `tilesTable` | _none_ | Delta table to use as a tile index (see [pre-computed tile inputs](#advanced-pre-computed-tile-inputs) below). |
+| `skipOrdering` | `"false"` | Pass `"true"` to suppress the auto-sort-by-source-path that `tilesTable` reads apply by default. See [tilesTable auto-order](#tiles-table-auto-order) below. |
+
+:::tip Why overlap?
+A hard tiling grid can slice straight through a spatial feature (a field, a building, an airport)
+that straddles a seam, so no single tile sees it whole. Set `overlapPercent` so adjacent `tileSize`
+cells overlap — a feature near a boundary then appears complete in at least one tile, which per-tile
+analysis needs. Overlap only makes sense for a reader-chosen grid (`tileSize`); `windows` and
+`clipPolygons` are extents you specify explicitly, so they take no overlap.
+:::
+
+:::note Virtual tiles are the default
+Light raster readers now emit **virtual tiles** by default (`virtualTiles=true`) — bytes-free
+`(path, window)` references that read pixels lazily. Previously the reader materialized raster
+bytes into every row. To restore materialized reads, pass `.option("virtualTiles", "false")`.
+A virtual tile passed to a heavyweight function must be materialized first — see
+[Virtual Tiles](../api/virtual-tiles).
+:::
+
+:::note Default changed from `auto` to `none`
+Prior to this release the reader defaulted to `splitStrategy=auto`, which
+auto-split large rasters on a decoded-memory budget. The default is now
+`none` — one tile per file. To opt back into splitting, pass
+`.option("splitStrategy", "serverless")` or `.option("splitStrategy", "classic")`.
+
+When splitting is enabled, split tiles are emitted as plain GeoTIFF.
+COG output is a `cog_gbx` writer concern, not a reader concern: the
+`tileFormat`, `cogBlockSize`, and `cogOverviewResampling` reader options
+are removed. For COG-encoded output, use the
+[COG Writer](../writers/cog) to prepare master COGs, then read them with
+the [COG Reader](./cog).
+
+**Striped GeoTIFFs** (no internal tiling) split into full-width row-bands.
+**Internally-tiled sources** split on a block-snapped grid.
+:::
+
+#### Directory reads {#loading-many-small-files}
+
+Reading a directory plans every file (fast, stat-free listing — ~1.5 s at 10k files); for pre-computed windows or very large tile counts see [Advanced: pre-computed tile inputs](#advanced-pre-computed-tile-inputs) below.
+
+:::tip Reading GeoBrix output with a stock Spark reader
+Stock Spark file readers (`spark.read.format("binaryFile")`, `text`, `parquet`, …)
+silently skip any file whose name starts with `_` or `.` — Spark's hidden-file filter,
+applied during directory listing. Some GeoBrix raster tiles are written with a leading
+`_` in their (hashed) name, so a stock reader can miss a large fraction of a directory.
+Note that **`.option("pathGlobFilter", "*.tif")` does not override this filter** — the
+filter runs before the glob, so `_`-prefixed files stay excluded (an explicit `_*` glob,
+explicit `_`-file paths, and `recursiveFileLookup` do not help either).
+
+To read every tile, enumerate the paths on the driver (which does not apply the filter)
+and build the DataFrame explicitly — ideal when you only need the file list, e.g. to feed
+a VRT builder:
+
+```python
+from pathlib import Path
+paths = [str(p) for p in Path(output_dir).rglob("*.tif")]
+files_df = spark.createDataFrame([(p,) for p in paths], ["path"])
+```
+
+GeoBrix's own raster readers (`raster_gbx` / `gtiff_gbx` / `cog_gbx`) list files directly
+and are **not** affected — this applies only to stock Spark file readers.
+:::
+
+**Opt-in split (serverless budget):**
+
+<CodeFromTest code={largeRasterExamples} language="python" functionName="SPLIT_OPTIONS_TABLE"
+  source="docs/tests/python/readers/large_raster_examples.py" />
+
+:::tip Classic `READ_WITH_OPTIONS` example
+The `sizeInMB` option remains available as a power-user override:
+:::
 
 <CodeFromTest code={rasterGbxExamples} language="python" functionName="READ_WITH_OPTIONS"
   source="docs/tests/python/readers/raster_gbx_read_examples.py" />
 
 `gtiff_gbx` is `raster_gbx` with the GeoTIFF driver preset.
+
+### COG lane for large rasters
+
+For large rasters, the recommended path is to **prepare master COGs** with the
+`cog_gbx` writer and then **clip windows** with the `cog_gbx` reader. This
+keeps the reader simple (no split, no re-encode) and lets GDAL's range-read
+mechanism fetch only the bytes that intersect the AOI.
+
+**Who benefits from pre-built COG overviews:**
+
+- **`rst_tilexyz` and `rst_xyzpyramid`** — the XYZ tile-serving pipeline uses
+  [rio-tiler](https://cogeotiff.github.io/rio-tiler/), which automatically
+  selects the appropriate COG overview level for the requested zoom.
+- **`rst_resample*`** — the resample family triggers overview-level selection
+  automatically when a COG source has pre-built overviews.
+
+**COG preparation + windowed read:**
+
+See [COG Writer](../writers/cog) for the preparation step and
+[COG Reader](./cog) for the windowed read.
+
+**Force-writing COG output from a tile DataFrame:** the `gtiff_gbx` writer
+still accepts a `cog=true` option to re-encode any `(source, tile)` DataFrame
+as COG when you already have tiles in memory:
+
+<CodeFromTest code={largeRasterExamples} language="python" functionName="WRITER_COG"
+  source="docs/tests/python/readers/large_raster_examples.py"
+  testFile="docs/tests/python/readers/test_large_raster_examples.py" />
 
 ### Heavyweight (`gdal`)
 
@@ -299,8 +412,102 @@ The `hrrr-weather` dataset is included in the **complete** sample-data bundle, n
 - Use **GRIB2** for weather models
 - Use **Zarr** for cloud-native analysis at scale
 
+## Common functions: used vs excluded
+
+See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
+primitives. The table below shows which are active in this reader and which are not, and why.
+
+| Common capability | Used here? | How / why |
+|---|---|---|
+| `list_local_files` (session-free enumeration) | Used | All directory reads — `recursive`, `include_hidden`, `extensions`, `path_glob_filter` options are routed through this shared predicate. |
+| `enumerate_files` (FILE-tier enumeration) | Not in the DataSource | The DataSource is session-less on Connect and does not call `enumerate_files`; FILE-tier enumeration is only available through `gbx_file_read` at the function layer. |
+| `gbx_file_read` / `gbx_file_write` (FILE tier) | Not in the DataSource | The DataSource is FUSE-only (session-less on Connect); FILE reads go through `gbx_file_read` → `rst_fromfile` at the function layer. |
+
+## Advanced: pre-computed tile inputs (`manifest` / tile index) {#advanced-pre-computed-tile-inputs}
+
+The default directory read is fast — a stat-free listing plans ~10k files in ~1.5 s — so most reads need nothing special. The `manifest` and `tilesTable` options are an optional optimization for two specific cases:
+
+- **Pre-computed windows you already maintain** — a manifest or tile index lets the reader use your saved file listing directly, skipping the directory walk entirely.
+- **Very large tile counts** where even a fast listing accumulates across many repeated job runs.
+
+Both options reduce plan time from the directory walk (~1.5 s at 10k files) to a single file or table read. See [Benchmarking → Reader plan-time listing](../api/benchmarking#reader-plan-time-listing) for the measured numbers.
+
+- **`manifest` option** — supply a JSON or Parquet file listing `path` + `window` for each tile; the reader skips the directory walk and header opens entirely.
+  ```python
+  spark.read.format("raster_gbx") \
+      .option("manifest", "/Volumes/catalog/schema/vol/tiles.json") \
+      .option("virtualTiles", "true") \
+      .load("/Volumes/catalog/schema/vol/rasters")
+  ```
+- **`tilesTable` option** — point to a Delta table that serves as a **tile index**: one row per tile with a `path` column (+ optional `window` / dimension columns). It is a catalog of file *references*, **not** the tile pixels — the reader still opens each referenced file and extracts its window; it only skips discovering the files by walking the directory.
+  ```python
+  spark.read.format("raster_gbx") \
+      .option("tilesTable", "geospatial.myschema.tile_index") \
+      .option("virtualTiles", "true") \
+      .load("/")
+  ```
+- **Fewer, larger COGs** — consolidate small files into Cloud-Optimized GeoTIFFs using the [COG Writer](../writers/cog); the reader then opens a small number of large files whose headers are comparatively cheap.
+
+**A tile index is not a materialized-tile table.** `manifest` / `tilesTable` catalog *where the rasters are* (paths, plus optional windows) — essentially a saved file listing. The raster bytes stay in files and are read lazily (especially with `virtualTiles=true`); the index only lets the reader skip re-walking the directory. That is different from an ingest that has already **decoded** rasters into a Delta table with a tile-struct/bytes column — if you have that, read it directly with `spark.table(...)`; you don't need a reader at all.
+
+### tilesTable auto-order and `skipOrdering` {#tiles-table-auto-order}
+
+When `tilesTable` is set, the reader **auto-orders tiles by source path** before planning
+partitions. This groups all tiles from the same source GeoTIFF into adjacent partitions, so a
+worker that opens a large raster once can decode all its windows without reopening it. For a
+table with many tiles per source file (a common windowed-GeoTIFF ingest), this amortization
+meaningfully reduces open overhead — each file is opened once per partition instead of once per
+tile.
+
+Pass `skipOrdering="true"` when the table is already physically ordered (e.g. written with
+`layout="order"` or `layout="cluster"`) or when you apply ordering downstream:
+
+```python
+spark.read.format("raster_gbx") \
+    .option("tilesTable", "geospatial.myschema.tile_index") \
+    .option("skipOrdering", "true") \
+    .option("virtualTiles", "true") \
+    .load("/")
+```
+
+#### Durable co-location: `CLUSTER BY` + `OPTIMIZE`
+
+`layout="order"` (the default write layout) sorts rows by path at insert time, which groups
+tiles per source for the lifetime of that write. New inserts and compaction can scatter them.
+For a stable layout that survives compaction, use `layout="cluster"` at write time and run
+`OPTIMIZE` afterward:
+
+```python
+from databricks.labs.gbx.ds.file_gbx import gbx_file_write
+
+gbx_file_write(
+    tiles_df,
+    target="geospatial.myschema.tile_index",
+    layout="cluster",      # CLUSTER BY path in the DDL
+    file_mode="auto",
+)
+```
+
+```sql
+-- After initial write (or after bulk inserts), materialize clustering:
+OPTIMIZE geospatial.myschema.tile_index;
+```
+
+With `layout="cluster"`, `OPTIMIZE` physically co-locates tiles from the same source into the
+same data files. Subsequent reads with `tilesTable` have source-adjacent rows from the
+start — `skipOrdering="true"` is safe once the table has been optimized, and it avoids
+re-sorting an already-ordered scan.
+
+`layout="order"` (insert-time `ORDER BY path`) is the simpler default: no DDL change, no
+`OPTIMIZE` required. It works well for tables that are built once. Use `layout="cluster"` when
+the table is updated incrementally and you run periodic `OPTIMIZE` as part of maintenance.
+
 ## Next Steps
 
 - [GeoTIFF Reader](./geotiff) - Named reader for GeoTIFF format
 - [Raster Functions](../api/raster-functions) - Raster processing operations
 - [Quick Start](../quick-start) - Get started with GeoBrix
+
+:::note Shared file-access layer
+Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+:::

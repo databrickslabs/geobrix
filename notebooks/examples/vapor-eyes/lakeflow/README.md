@@ -2,7 +2,7 @@
 
 A standalone, production-grade **Permian Basin methane-monitoring pipeline**: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), built as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
-> **Requires GeoBrix 0.4.1+.** This example depends on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so the staged wheel (`gbx_wheel`) must be `geobrix-0.4.1-py3-none-any.whl` or newer, installed with the `[light,stac,vizx]` extras.
+> **Requires GeoBrix 0.4.1+.** This example depends on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so the staged wheel (`gbx_wheel`) must be `geobrix-0.4.1-py3-none-any.whl` or newer, installed with the `[light_env6,stac,vizx]` extras.
 
 This is not the notebook cascade documented in [`../README.md`](../README.md) — it's a different artifact with a different purpose. The notebook series is a five-step teaching walkthrough of one overpass. **This pipeline is the production shape**: it runs on a schedule, ingests incrementally across a multi-year date range, cascades bronze → silver → gold through a declared dependency graph with data-quality expectations, and serves a live dashboard off Delta tables instead of one-off notebook outputs. It also adds a fifth data source — Carbon Mapper Tanager — that the notebook cascade does not use, making it the *current* (through 2026) view of Permian methane activity rather than a single historical case study.
 
@@ -44,7 +44,7 @@ databricks bundle  →  vapor_eyes_lf_job
 ```
 
 - **Task 1 — `land`** (`land/land.py`): a date-parameterized downloader driver. Takes `--sources`, `--window` / `--s5p-windows` / `--emit-windows` / `--cm-window`, and secret references as CLI parameters (all wired from bundle variables), and stages raw files/metadata to `/Volumes/<catalog>/<schema>/data/vapor-eyes-lf/{s5p,sentinel2,emit,wells,cm}`. Runs on its own Serverless environment (`land_env`, environment version 5) with the same GeoBrix wheel installed.
-- **Task 2 — `pipeline`**: the Lakeflow Declarative Pipeline itself (`vapor_eyes_lf_pipeline`, `serverless: true`), rooted at `./transformations`. Its environment installs `${var.gbx_wheel}[light,stac,vizx]` — the GeoBrix wheel with the `light`, `stac`, and `vizx` extras — as a **single pip dependency entry**. Lakeflow resolves one `%pip install` per dependency entry, so splitting the extras into separate entries breaks pip's resolver (a rebuild is forced once `rasterio` is already pinned); the bracketed single-entry form keeps it one pass.
+- **Task 2 — `pipeline`**: the Lakeflow Declarative Pipeline itself (`vapor_eyes_lf_pipeline`, `serverless: true`), rooted at `./transformations`. Its environment installs `${var.gbx_wheel}[light_env6,stac,vizx]` — the GeoBrix wheel with the `light_env6`, `stac`, and `vizx` extras — as a **single pip dependency entry**. Lakeflow resolves one `%pip install` per dependency entry, so splitting the extras into separate entries breaks pip's resolver (a rebuild is forced once `rasterio` is already pinned); the bracketed single-entry form keeps it one pass.
 
 ### Medallion layers
 
@@ -148,7 +148,7 @@ databricks bundle run vapor_eyes_lf_job
 - The bundle validates and deploys with the committed defaults in `databricks.yml` out of the box. Set your own workspace CLI profile and SQL warehouse by copying `databricks.override.yml.example` to `databricks.override.yml` (git-ignored) and filling in your profile and `warehouse_id`; it's layered in automatically via `include: ["*.override.yml"]`. The warehouse is used both for the AI/BI dashboard and for validation queries — a fresh clone with no override file still validates/deploys, it just has no dashboard until a `warehouse_id` is set.
 - **Schedule**: the job carries a daily schedule (`0 0 7 * * ?`, America/Chicago) but ships **paused** (`pause_status: PAUSED`) — unpause it in the workspace (or in `databricks.yml`) once you've confirmed a manual run.
 - **Backfill**: to widen or shift the historical window, edit the `date_window`, `s5p_temporal`, `s5p_windows`, or `emit_windows` variables (in `databricks.yml` or your override file) and re-run the job. Widening the window re-downloads a correspondingly larger volume of granules — see [Caveats](#caveats).
-- **The GeoBrix wheel**: `gbx_wheel` points at a wheel staged on a Volume (`geobrix-0.4.3-py3-none-any.whl`); both the pipeline and the `land` task install `${var.gbx_wheel}[light,stac,vizx]` from that path. Stage your own build there, or point the variable at wherever your wheel lives.
+- **The GeoBrix wheel**: `gbx_wheel` points at a wheel staged on a Volume (`geobrix-0.5.0-py3-none-any.whl`); both the pipeline and the `land` task install `${var.gbx_wheel}[light_env6,stac,vizx]` from that path. Stage your own build there, or point the variable at wherever your wheel lives.
 
 ---
 

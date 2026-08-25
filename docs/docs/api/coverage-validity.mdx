@@ -1,0 +1,168 @@
+---
+sidebar_position: 9
+title: Coverage Validity
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import Tier from '@site/src/components/Tier';
+import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
+import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
+
+# Coverage Validity
+
+VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
+
+:::note Lightweight tier only
+The functions on this page are available in the **lightweight (`pyvx`) tier**. Register pyvx before using them in SQL or Python:
+```python
+from databricks.labs.gbx.pyvx import functions as vx
+vx.register(spark)
+```
+:::
+
+A **coverage** is a set of polygons that together partition a region: each polygon may be valid on its own (passes `ST_IsValid`), yet the *set* may still be invalid because polygons overlap, or because gaps appear between them. Coverage validity is a set-level question that single-geometry validity functions cannot answer.
+
+The canonical use cases are polygon layers where precise boundary alignment matters: administrative boundaries, parcels, land-cover patches, building footprints, or any layer where features share edges. Gaps and overlaps in such layers cause double-counting, broken spatial joins, and tile-rendering seams.
+
+GeoBrix provides two SQL grouped-aggregate functions plus one Python-API helper:
+
+- **`gbx_st_coverageisvalid`** — *detect*: `GROUP BY`-based boolean check. `true` when the coverage has no overlaps and no gaps thinner than `gap_width`.
+- **`gbx_st_coverageinvalidedges`** — *inspect*: returns the union of the boundary segments that violate the coverage. Empty geometry when the coverage is clean.
+- **`coverage_simplify`** — *repair and simplify*: Python-API only. Topology-preserving simplification of a whole coverage — shared edges stay shared after simplification.
+
+## What is gap_width?
+
+Both `gbx_st_coverageisvalid` and `gbx_st_coverageinvalidedges` take a required `gap_width` argument:
+
+- **Overlaps are always invalid**, regardless of `gap_width`. Any two polygons in the group whose interiors intersect cause the coverage to fail.
+- **Gaps thinner than `gap_width` are also flagged.** A gap is a region between two adjacent polygons that does not belong to any polygon in the group. `gap_width=0.0` means only overlaps are detected (no gap tolerance). A positive `gap_width` also flags slivers — thin corridors between nearly-touching polygons that may be digitizing artefacts rather than intentional gaps.
+
+**Worked example:**
+
+| Coverage | `gap_width=0.0` | `gap_width=0.5` |
+|---|---|---|
+| Two squares sharing a clean edge (no gap, no overlap) | valid | valid |
+| Two squares with a 0.3-unit gap between them | valid (gap ignored) | **invalid** (gap detected) |
+| Two squares with a 0.3-unit overlap | **invalid** | **invalid** |
+
+## gbx_st_coverageisvalid
+
+<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
+
+Check whether a group of polygons forms a valid coverage. Use `GROUP BY` to define which polygons belong to the same coverage — the aggregator evaluates the entire group at once and returns a single `BOOLEAN` per group.
+
+**Signature:** `gbx_st_coverageisvalid(geom, gap_width)`
+
+**Parameters:**
+- `geom` — Geometry column containing polygon or multipolygon values. Accepts WKB/EWKB/WKT/EWKT. Every member of the group must parse to a polygon type.
+- `gap_width` (`DOUBLE`, **required**) — Gap tolerance. Overlaps are always invalid; gaps thinner than this threshold are also flagged. Pass `0.0` to detect only overlaps.
+
+**Returns:** `BOOLEAN` — `true` when the coverage is valid (no overlaps; no gaps narrower than `gap_width`). `NULL` when the group is empty or all members are null.
+
+:::caution gap_width is required in SQL
+`gbx_st_coverageisvalid(geom)` (one-argument form) does **not** resolve in SQL and will raise an `UNRESOLVED_ROUTINE` error. Always pass `gap_width` explicitly: `gbx_st_coverageisvalid(geom, 0.0)`. The Python Column wrapper (`vx.st_coverageisvalid`) defaults `gap_width` to `0.0` and does not require it.
+:::
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_coverageisvalid_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_coverageisvalid_sql_example_output"
+/>
+
+## gbx_st_coverageinvalidedges
+
+<Tier light/> <span style={{display:'inline-flex', gap:'0.3rem', verticalAlign:'middle'}}><span style={{background:'#f0f0f0', borderRadius:'4px', padding:'2px 7px', fontSize:'0.78rem', fontFamily:'monospace'}}>grouped-agg</span></span>
+
+Return the union of the boundary segments that violate the coverage. Like `gbx_st_coverageisvalid`, this is a grouped aggregate — it evaluates all polygons in the group together and returns one geometry per group.
+
+**Signature:** `gbx_st_coverageinvalidedges(geom, gap_width)`
+
+**Parameters:**
+- `geom` — Geometry column. Accepts WKB/EWKB/WKT/EWKT. Every member must parse to a polygon type.
+- `gap_width` (`DOUBLE`, **required**) — Gap tolerance. Same semantics as `gbx_st_coverageisvalid`. Pass `0.0` to detect only overlap-zone edges.
+
+**Returns:** `BINARY` — WKB (or EWKB if the input group carries a SRID): the union of the edges that violate the coverage. An **empty** `MultiLineString` is returned when the coverage is clean (no invalid edges). `NULL` when the group is empty.
+
+The output geometry is useful for spatial debugging: join it back to a map layer to highlight exactly where the coverage breaks down.
+
+:::caution gap_width is required in SQL
+Same constraint as `gbx_st_coverageisvalid` — always pass the second argument explicitly.
+:::
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_coverageinvalidedges_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_coverageinvalidedges_sql_example_output"
+/>
+
+## coverage_simplify (Python API)
+
+<Tier light/>
+
+Topology-preserving simplification of a whole coverage. Unlike `gbx_st_simplifypreservetopology` (which simplifies each geometry independently), `coverage_simplify` simplifies the entire coverage as a unit — vertices on shared edges are dropped or kept together in both polygons, so boundaries that were shared before simplification remain shared after.
+
+This is a **Python-API only** function. There is no SQL form; it operates directly on a Spark DataFrame.
+
+**Signature:** `coverage_simplify(df, group_col, geom_col, tolerance, simplify_boundary=True, out_col="geom_simplified")`
+
+**Parameters:**
+- `df` — Input Spark DataFrame.
+- `group_col` — Column name that identifies coverage groups (e.g. `"cov_id"`). All rows with the same value form one coverage and are simplified together.
+- `geom_col` — Column name of the geometry (WKB/EWKB/WKT/EWKT column).
+- `tolerance` (`float`) — Simplification tolerance in the geometry's coordinate units. Vertices whose removal would shift the boundary by less than `tolerance` are candidates for removal.
+- `simplify_boundary` (`bool`, default `True`) — Whether to simplify the outer boundary of the coverage (the edges that are not shared between polygons). Set to `False` to preserve the outer boundary exactly and simplify only interior shared edges.
+- `out_col` (`str`, default `"geom_simplified"`) — Name of the new column added to the output DataFrame for the simplified geometry.
+
+**Returns:** A Spark DataFrame with the same rows and all original columns, plus `out_col` (`BINARY` WKB/EWKB). Row identity is preserved — the output has exactly the same number of rows as the input (N→N), in the same order within each group.
+
+**Import:**
+```python
+from databricks.labs.gbx.pyvx import functions as vx
+vx.register(spark)
+
+result = vx.coverage_simplify(df, "admin_level", "geom_wkb", tolerance=50.0)
+```
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="coverage_simplify_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="coverage_simplify_python_light_example_output"
+/>
+
+### When to use coverage_simplify vs gbx_st_simplifypreservetopology
+
+| Scenario | Recommendation |
+|---|---|
+| Simplify features in isolation (no shared edges) | `gbx_st_simplifypreservetopology` — simpler, per-row operation |
+| Simplify a parcel/boundary layer where features share edges | `coverage_simplify` — shared edges stay aligned after simplification |
+| Very large coverage that does not fit in one executor | See [Scale ceiling](#scale-ceiling) below |
+
+## Scale ceiling
+
+`gbx_st_coverageisvalid`, `gbx_st_coverageinvalidedges`, and `coverage_simplify` all require the **entire coverage group to be resident on a single executor** — GEOS needs to see all polygons in the group at once to evaluate shared edges. This is a fundamental constraint of coverage-level operations.
+
+**Practical limit:** A coverage group that fits in one executor's Python worker (typically ~1–3 GB on Serverless, more on dedicated clusters) will process without issue. Large administrative boundary datasets with thousands of polygons and complex geometries may exceed this limit.
+
+**If your coverage exceeds executor memory:**
+- Partition the coverage spatially into sub-regions (e.g. by grid cell or administrative hierarchy level) and process sub-regions independently.
+- Use `gbx_st_coverageinvalidedges` on candidate problem zones rather than on the full coverage.
+- For simplification of very large coverages, consider iterating over spatial tiles with an overlap buffer.
+
+Future versions of GeoBrix will explore streaming coverage algorithms that relax the all-in-memory constraint.
+
+## Tier availability
+
+| Function | Lightweight (`pyvx`) | Heavyweight (`vectorx`) |
+|---|---|---|
+| `gbx_st_coverageisvalid` | Supported | — |
+| `gbx_st_coverageinvalidedges` | Supported | — |
+| `coverage_simplify` | Supported (Python API) | — |

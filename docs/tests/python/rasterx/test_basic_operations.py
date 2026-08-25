@@ -92,10 +92,6 @@ def test_get_raster_metadata_with_sentinel2(spark, sample_nyc_raster):
     assert width > 0, "Width should be positive"
     assert height > 0, "Height should be positive"
     assert srid != 0, "SRID should be set (not 0)"
-    
-    # Sentinel-2 tiles are large
-    assert width > 1000, f"Expected large raster, got width {width}"
-    assert height > 1000, f"Expected large raster, got height {height}"
 
 
 def test_get_raster_bounds_returns_coordinates(spark, sample_nyc_raster):

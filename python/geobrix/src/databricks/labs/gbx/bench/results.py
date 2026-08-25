@@ -6,7 +6,7 @@ import json
 from collections import defaultdict
 from dataclasses import asdict, dataclass, fields
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 
 @dataclass(frozen=True)
@@ -59,6 +59,36 @@ class ResultRow:
     # order so the table's first column shows what ran last + reveals per-event slowdown.
     # 0 at construction; the cluster sink stamps the real value (continues across resume).
     run_event_num: int = 0
+    # splitStrategy label for the large-raster profile. None for all other profiles so
+    # existing callers are unaffected (the field has a default). Carries values like
+    # "none", "serverless", "classic", or "auto".
+    split_strategy: Optional[str] = None
+    # Which input tile the row measured: "materialized" (bytes) or "virtual"
+    # (path+window, bytes-free). Default preserves every pre-existing row.
+    input_tile: str = "materialized"
+    # Did the fn materialize pixels on a virtual input: "deferred" (stayed
+    # virtual / header-only), "materialized" (read/generated pixels), or "na"
+    # (not applicable / not captured). Default "na".
+    output_disposition: str = "na"
+    # Planning time in seconds from a split plan/read measurement.
+    # 0.0 when not measured (the default; all pre-existing rows stay valid).
+    plan_s: float = 0.0
+    # FILE-access matrix dimensions (Phase 2 named-format bench).
+    # file_mode: "managed" | "external" | "fuse" | "na" (na = pre-existing rows /
+    # legs with no FILE dimension). layout: "order" | "cluster" | "plain" | "na"
+    # (write strategy of the table the leg read/wrote; na for plain reads).
+    file_mode: str = "na"
+    layout: str = "na"
+    # Parallelism / fanout (spec 2e-bis). input_partitions: partitions carrying data
+    # on the timed input (Connect-safe spark_partition_id distinct-count).
+    # launched_tasks: tasks launched for the timed stage (== input_partitions for the
+    # single-stage read/write legs here; a precise multi-stage tally needs the Spark
+    # REST API and is out of scope). slots_available: cluster task slots.
+    input_partitions: int = 0
+    launched_tasks: int = 0
+    slots_available: int = 0
+    # Vector reader chunkSize option for the leg (0 = not applicable / not a vector leg).
+    chunk_size: int = 0
 
 
 def write_jsonl(rows: List[ResultRow], path) -> None:
@@ -336,6 +366,28 @@ def summarize(rows: List[ResultRow], pool_size=None) -> str:
             ["note"],
             lambda r: [r.note],
         )
+    virt = [row for row in rows if row.input_tile == "virtual"]
+    if virt:
+        _def = sum(1 for row in virt if row.output_disposition == "deferred")
+        _mat = sum(1 for row in virt if row.output_disposition == "materialized")
+        _na_d = sum(1 for row in virt if row.output_disposition == "na")
+        lines += [
+            "",
+            "## Virtual-tile disposition",
+            f"- deferred (stayed virtual / header-only): {_def}",
+            f"- materialized (read/generated pixels): {_mat}",
+            f"- na (not applicable / not captured): {_na_d}",
+            "",
+            "| fn | disposition |",
+            "|---|---|",
+        ]
+        for row in sorted(virt, key=lambda x: x.fn):
+            lines.append(f"| {row.fn} | {row.output_disposition} |")
+    _anom = [row for row in rows if row.status == "error"]
+    if _anom:
+        lines += ["", "## QA anomalies (must be triaged, not published around)"]
+        for row in _anom:
+            lines.append(f"- {row.fn} ({row.input_tile}): {row.note}")
     return "\n".join(lines)
 
 

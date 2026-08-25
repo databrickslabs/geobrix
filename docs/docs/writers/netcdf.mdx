@@ -186,3 +186,18 @@ would be mislabeled as degrees.
 - [GeoTIFF Writer](./geotiff) — for COG/GeoTIFF raster output.
 - [Writers Overview](./overview) — all writer formats and the tier split.
 - [Raster Functions](../api/raster-functions) — tessellation, band math, tiling, `gbx_rst_merge_agg`.
+
+## Common functions: used vs excluded
+
+See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
+primitives. The table below shows which are active in this writer and which are not, and why.
+
+| Common capability | Used here? | How / why |
+|---|---|---|
+| `list_local_files` (session-free enumeration) | Not used by the writer | Writers do not enumerate source files; they write a DataFrame's output partitions. |
+| `gbx_file_write` / FILE-tier write | Not in the DataSource | The DataSource writer (`df.write.format(...)`) is session-less on Connect and commits via FUSE. FILE-tier writes use `gbx_file_write` at the function layer instead. |
+| `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for raster data go through `gbx_file_read` at the function layer. |
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::

@@ -5,8 +5,6 @@ from __future__ import annotations
 
 from typing import Iterator, Protocol, Tuple
 
-from pmtiles.writer import Writer
-
 from databricks.labs.gbx.ds.tiles._header import HeaderInfo
 
 SortedTiles = Iterator[Tuple[int, bytes]]  # ascending tileid
@@ -24,6 +22,8 @@ class PMTilesBackend:
     def assemble(
         self, sorted_tiles: SortedTiles, header_info: HeaderInfo, out_path: str
     ) -> None:
+        from pmtiles.writer import Writer
+
         with open(out_path, "wb") as f:
             writer = Writer(f)
             for tileid, data in sorted_tiles:

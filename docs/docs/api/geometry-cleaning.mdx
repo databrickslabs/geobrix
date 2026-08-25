@@ -1,0 +1,209 @@
+---
+sidebar_position: 10
+title: Geometry Cleaning
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import Tier from '@site/src/components/Tier';
+import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
+import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
+
+# Geometry Cleaning
+
+VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
+
+:::note Lightweight tier only
+The functions on this page are available in the **lightweight (`pyvx`) tier**. Register pyvx before using them in SQL or Python:
+```python
+from databricks.labs.gbx.pyvx import functions as vx
+vx.register(spark)
+```
+:::
+
+Geometry *cleaning* and *normalization* act on **already-valid** geometry — geometry that passes `ST_IsValid`. This is a distinct capability from validity repair: if your geometry is invalid (self-intersections, ring topology violations, coordinate errors), fix it first with `gbx_st_makevalid` (see the [Geometry Validity](./geometry-validity) page), then clean it. If your geometry is already valid, the functions on this page improve its quality: reduce redundant vertices, snap coordinates to a precision grid, resolve linework intersections, or align features to a reference.
+
+GeoBrix provides five light-tier cleaning functions:
+
+- **`gbx_st_simplifypreservetopology`** — Douglas-Peucker simplification that **preserves topology** (no collapsing or splitting).
+- **`gbx_st_removerepeatedpoints`** — removes consecutive duplicate (or near-duplicate) vertices.
+- **`gbx_st_reduceprecision`** — snaps coordinates to a precision grid (also known as snap-to-grid).
+- **`gbx_st_node`** — nodes linework by splitting at all self-intersections.
+- **`gbx_st_snap`** — snaps a geometry's vertices onto a reference geometry within a tolerance.
+
+## Topology-preserving simplify vs the product's st_simplify
+
+The product's built-in `st_simplify` applies the Douglas-Peucker algorithm with `preserve_topology=False`. This is a vertex-dropping algorithm: it aggressively removes vertices to meet a tolerance, and in doing so it **can split a polygon into multiple pieces or collapse a small polygon to nothing**. For most use cases — rendering at small scale, reducing transfer size — this is fine, but it is not suitable for overlay, union, or intersection workflows where ring connectivity must be maintained.
+
+`gbx_st_simplifypreservetopology` uses `preserve_topology=True`. The same Douglas-Peucker algorithm runs, but GEOS guarantees that the output geometry has the same topological class as the input: a polygon stays a polygon (not a multipolygon or an empty result), a ring stays closed, and holes stay inside their outer ring. **Use `gbx_st_simplifypreservetopology` when you need to reduce vertex count without breaking spatial relationships.** Use the product's `st_simplify` when maximum compression matters more than topology.
+
+## gbx_st_simplifypreservetopology
+
+<Tier light/>
+
+Simplify a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped, but the resulting geometry is guaranteed to be of the same topological class as the input and to remain valid.
+
+**Signature:** `gbx_st_simplifypreservetopology(geom, tolerance)`
+
+**Parameters:**
+- `geom` — Geometry to simplify. Accepts WKB/EWKB/WKT/EWKT.
+- `tolerance` — Simplification tolerance in the geometry's coordinate units. Vertices within this distance of the simplified line are removed.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved without reprojection. Returns `NULL` for null or unparseable input.
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_simplifypreservetopology_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_simplifypreservetopology_sql_example_output"
+/>
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="st_simplifypreservetopology_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="st_simplifypreservetopology_python_light_example_output"
+/>
+
+## gbx_st_removerepeatedpoints
+
+<Tier light/>
+
+Remove consecutive duplicate or near-duplicate vertices from a geometry. With the default `tolerance=0.0`, only exact duplicate consecutive coordinate pairs are removed. A positive `tolerance` also removes vertices that are within that distance of their predecessor, collapsing near-duplicate runs into a single representative vertex.
+
+**Signature:** `gbx_st_removerepeatedpoints(geom [, tolerance])`
+
+**Parameters:**
+- `geom` — Geometry to deduplicate. Accepts WKB/EWKB/WKT/EWKT.
+- `tolerance` (optional, default `0.0`) — Distance threshold. Consecutive vertices within this distance of each other are collapsed.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved without reprojection. Returns `NULL` for null or unparseable input.
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_removerepeatedpoints_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_removerepeatedpoints_sql_example_output"
+/>
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="st_removerepeatedpoints_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="st_removerepeatedpoints_python_light_example_output"
+/>
+
+## gbx_st_reduceprecision
+
+<Tier light/>
+
+Snap coordinates to a precision grid of size `grid_size`. Each coordinate is rounded to the nearest multiple of `grid_size`. This operation is also known as **snap-to-grid** (`ST_SnapToGrid` in PostGIS). It is useful for eliminating floating-point noise, aligning data from different sources, or reducing coordinate storage size. Uses GEOS `set_precision` with `mode="valid_output"` so the output remains valid even if snapping would otherwise collapse a ring.
+
+**Signature:** `gbx_st_reduceprecision(geom, grid_size)`
+
+**Parameters:**
+- `geom` — Geometry to snap to grid. Accepts WKB/EWKB/WKT/EWKT.
+- `grid_size` — Precision grid size in the geometry's coordinate units. For example, `1.0` snaps to integer coordinates; `0.001` snaps to 3 decimal places.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved without reprojection. Returns `NULL` for null or unparseable input.
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_reduceprecision_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_reduceprecision_sql_example_output"
+/>
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="st_reduceprecision_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="st_reduceprecision_python_light_example_output"
+/>
+
+## gbx_st_node
+
+<Tier light/>
+
+Node a geometry's linework: split at all self-intersections and pairwise intersections. The result is a `MultiLineString` (or `LineString`) where every segment endpoint is a valid node — no two segments cross without sharing an explicit endpoint. Noding is typically a prerequisite for polygonization, planar graph analysis, or building topologically clean networks from raw linework.
+
+**Signature:** `gbx_st_node(geom)`
+
+**Parameters:**
+- `geom` — Linework geometry to node. Accepts WKB/EWKB/WKT/EWKT. Best suited for `LineString` and `MultiLineString` inputs; polygon rings can also be noded.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved without reprojection. Returns `NULL` for null or unparseable input.
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_node_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_node_sql_example_output"
+/>
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="st_node_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="st_node_python_light_example_output"
+/>
+
+## gbx_st_snap
+
+<Tier light/>
+
+Snap `geom`'s vertices onto `reference` where within `tolerance`. Any vertex in `geom` that lies within `tolerance` distance of a vertex or edge in `reference` is moved onto that nearest point. This is useful for aligning features from different sources that should share boundaries but don't quite meet due to digitizing differences or floating-point noise.
+
+This function is complementary to the product's `ST_ClosestPoint(g1, g2)`, which returns the single exact point on `g1` nearest to `g2` (Euclidean, 2D, no tolerance gate). Use `gbx_st_snap` to bulk-align a geometry's vertices to a reference within a tolerance; use `ST_ClosestPoint` when you need one exact nearest or projected point — for example, to project a vertex that falls outside the snap tolerance onto the reference.
+
+**Signature:** `gbx_st_snap(geom, reference, tolerance)`
+
+**Parameters:**
+- `geom` — Geometry whose vertices will be snapped. Accepts WKB/EWKB/WKT/EWKT.
+- `reference` — Reference geometry to snap onto. Accepts WKB/EWKB/WKT/EWKT.
+- `tolerance` — Maximum snap distance in the geometry's coordinate units. Vertices within this distance of the reference are moved onto it.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The SRID of `geom` is preserved. Returns `NULL` if either input is null or unparseable.
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_snap_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_snap_sql_example_output"
+/>
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="st_snap_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="st_snap_python_light_example_output"
+/>
+
+## Tier availability
+
+| Function | Lightweight (`pyvx`) | Heavyweight (`vectorx`) |
+|---|---|---|
+| `gbx_st_simplifypreservetopology` | Supported | — |
+| `gbx_st_removerepeatedpoints` | Supported | — |
+| `gbx_st_reduceprecision` | Supported | — |
+| `gbx_st_node` | Supported | — |
+| `gbx_st_snap` | Supported | — |

@@ -1,0 +1,201 @@
+---
+sidebar_position: 8
+title: Geometry Validity
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import Tier from '@site/src/components/Tier';
+import vectorxSqlCode from '!!raw-loader!../../tests/python/api/vectorx_functions_sql.py';
+import vectorxLightCode from '!!raw-loader!../../tests/python/api/vectorx_functions_python_light.py';
+
+# Geometry Validity
+
+VectorX ships a set of geometry-processing helpers powered by [shapely](https://shapely.readthedocs.io/) (GEOS under the hood), running as distributed Python UDFs across your Spark cluster. These functions fill gaps in the product's native `ST_*` surface — operations that are standard in shapely but have no direct built-in counterpart in Databricks Runtime.
+
+:::note Lightweight tier only
+The functions on this page are available in the **lightweight (`pyvx`) tier**. Register pyvx before using them in SQL or Python:
+```python
+from databricks.labs.gbx.pyvx import functions as vx
+vx.register(spark)
+```
+:::
+
+The **OGC Simple Features Specification (SFS)** defines what makes a geometry valid: every ring must be closed, holes must lie inside their outer boundary, no ring may properly self-intersect, every ring must have at least four points, and coordinates must be finite. Databricks Runtime's `ST_IsValid` checks these rules and returns a boolean. What it does not provide is the *why*, the *where*, or the *fix* — and at scale, a single malformed geometry can fail a worker or a shuffle.
+
+GeoBrix fills those gaps with two light-tier functions:
+
+- **`gbx_st_explainvalidity`** — *diagnose*: returns a JSON string with the SFS violation class, a stable code, and the coordinate where the violation occurs.
+- **`gbx_st_makevalid`** — *repair*: returns a valid geometry, preserving the original CRS.
+
+## ST_IsValid vs Shapely vs GeoBrix
+
+Understanding which tool catches which invalidity class matters for the conditional-repair pattern.
+
+| Invalidity class | `ST_IsValid`<br/>(product) | Shapely `is_valid` | `gbx_st_explainvalidity` / `gbx_st_makevalid` |
+|---|---|---|---|
+| Self-touching ring (bowtie at vertex) | Flags invalid | Flags invalid | Diagnoses + repairs |
+| Self-intersecting shell (edge crossing) | Flags invalid | Flags invalid | Diagnoses + repairs |
+| Hole outside shell | Flags invalid | Flags invalid | Diagnoses + repairs |
+| Nested holes (hole-in-hole) | Flags invalid | Flags invalid | Diagnoses + repairs |
+| Overlapping holes | Flags invalid | Flags invalid | Diagnoses + repairs |
+| Multipolygon overlapping components | Flags invalid | Flags invalid | Diagnoses + repairs |
+| Disconnected interior (hole tangent to shell) | Flags invalid | Flags invalid | Diagnoses + repairs |
+| **Ring-orientation mismatch (same-winding outer + hole)** | **Flags invalid** | **Does not flag** | Diagnoses + repairs (default mode also normalizes orientation) |
+| Duplicate consecutive ring point | Both agree valid | Both agree valid | Valid Geometry (code 0) |
+| Near-zero-area sliver | Both agree valid | Both agree valid | Valid Geometry (code 0) |
+
+**Key takeaway:** `ST_IsValid` is the *stricter* check. It enforces OGC ring orientation (outer ring counter-clockwise, holes clockwise) in addition to all topological rules. Shapely's `is_valid` ignores orientation — a geometry can pass Shapely's validity test and fail `ST_IsValid`. The default `gbx_st_makevalid` repair (`level='linework'` or `'structure'`) applies `orient_polygons` after topology repair, so output passes `ST_IsValid`'s stricter gate.
+
+## Conditional repair workflow
+
+At scale, you want to *gate* repairs and diagnostics: run `ST_IsValid` as a cheap per-row boolean first, then pass only the flagged rows to `gbx_st_makevalid` or `gbx_st_explainvalidity`. Calling either function on every row (including already-valid ones) wastes compute.
+
+**Three-part workflow:**
+
+1. **Gate with `ST_IsValid`** — cheap per-row boolean; skips valid rows entirely.
+2. **Repair flagged rows** — `gbx_st_makevalid` rewrites only the invalid rows; valid rows pass through unchanged.
+3. **Diagnose systematically** — `gbx_st_explainvalidity` on the flagged rows, then `GROUP BY` the reason `code` to find systemic invalidity classes. Using `gbx_st_explainvalidity` as a per-row validity test is wasteful; `ST_IsValid` is the right boolean gate.
+
+The following patterns run on Databricks Runtime where `ST_IsValid` is a built-in. `ST_IsValid` operates on the built-in `GEOMETRY` type, while GeoBrix functions consume and return `BINARY` (WKB/EWKB) — so the `geom` column is coerced with `ST_GeomFromEWKB(geom)` before the gate:
+
+```sql
+-- Repair only the rows that need it.
+-- ST_GeomFromEWKB coerces GeoBrix BINARY (EWKB) to the built-in GEOMETRY type ST_IsValid requires.
+SELECT CASE
+         WHEN NOT ST_IsValid(ST_GeomFromEWKB(geom)) THEN gbx_st_makevalid(geom)
+         ELSE geom
+       END AS clean
+FROM t;
+```
+
+```sql
+-- Diagnose flagged rows: which SFS rules are being violated?
+SELECT geom, gbx_st_explainvalidity(geom) AS detail
+FROM t
+WHERE NOT ST_IsValid(ST_GeomFromEWKB(geom));
+```
+
+```sql
+-- Systemic analysis: count violations by class
+SELECT
+  json_tuple(gbx_st_explainvalidity(geom), 'code', 'reason') AS (code, reason),
+  COUNT(*) AS n
+FROM t
+WHERE NOT ST_IsValid(ST_GeomFromEWKB(geom))
+GROUP BY code, reason
+ORDER BY n DESC;
+```
+
+```sql
+-- Explain and fix in one pass
+SELECT
+  geom,
+  gbx_st_explainvalidity(geom) AS detail,
+  gbx_st_makevalid(geom) AS clean
+FROM t
+WHERE NOT ST_IsValid(ST_GeomFromEWKB(geom));
+```
+
+## gbx_st_makevalid
+
+<Tier light/>
+
+Repairs a geometry to OGC-SFS validity. Uses GEOS `make_valid` under the hood (via shapely). The default `linework` level splits self-intersections by noding edges into a valid multi-polygon; `structure` uses the more conservative GEOS structure/overlay method. Both default modes also apply `orient_polygons` so output passes the product's stricter `ST_IsValid` (which enforces ring orientation in addition to OGC topology). The `ogc` level skips orientation normalization for callers who need OGC-only semantics.
+
+**Signature:** `gbx_st_makevalid(geom [, level])`
+
+**Parameters:**
+- `geom` — Geometry to repair. Accepts WKB/EWKB/WKT/EWKT.
+- `level` (optional) — Repair strategy. One of:
+  - `'linework'` (default) — GEOS linework noding + `orient_polygons`. Splits self-intersections; self-touching rings become `MULTIPOLYGON` pieces. Output passes `ST_IsValid` (topology + orientation).
+  - `'structure'` — Conservative GEOS structure/overlay method + `orient_polygons`. Preserves more of the original topology. Output passes `ST_IsValid`.
+  - `'ogc'` — Linework noding only, no orientation normalization. OGC-valid, orientation-agnostic.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved without reprojection. Returns `NULL` for null or unparseable input.
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_makevalid_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_makevalid_sql_example_output"
+/>
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="st_makevalid_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="st_makevalid_python_light_example_output"
+/>
+
+## gbx_st_explainvalidity
+
+<Tier light/>
+
+Diagnoses geometry validity and returns a JSON string with four fields. The `valid` and `reason` fields are always present. The `code` and `location` fields are best-effort: GEOS embeds the violation coordinate in the reason string as `Reason[x y]`, and `gbx_st_explainvalidity` extracts it to a `POINT(x y)` WKT string; `code` maps the GEOS reason prefix to a stable integer from the table below. Both are `null` when GEOS does not provide them. Nothing throws.
+
+**Signature:** `gbx_st_explainvalidity(geom)`
+
+**Parameters:**
+- `geom` — Geometry to diagnose. Accepts WKB/EWKB/WKT/EWKT.
+
+**Returns:** `STRING` — JSON with shape:
+
+```json
+{
+  "valid": true | false,
+  "reason": "<GEOS reason string>",
+  "code": <integer> | null,
+  "location": "POINT(x y)" | null
+}
+```
+
+Returns `NULL` for null or unparseable input.
+
+<CodeFromTest
+  code={vectorxSqlCode}
+  functionName="st_explainvalidity_sql_example"
+  language="sql"
+  source="docs/tests/python/api/vectorx_functions_sql.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_sql.py"
+  outputConstant="st_explainvalidity_sql_example_output"
+/>
+
+<CodeFromTest
+  code={vectorxLightCode}
+  functionName="st_explainvalidity_python_light_example"
+  language="python"
+  source="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+  outputConstant="st_explainvalidity_python_light_example_output"
+/>
+
+## Tier availability
+
+| Function | Lightweight (`pyvx`) | Heavyweight (`vectorx`) |
+|---|---|---|
+| `gbx_st_makevalid` | Supported | — |
+| `gbx_st_explainvalidity` | Supported | — |
+
+## Invalidity reason codes
+
+The `code` field in `gbx_st_explainvalidity` output maps the GEOS reason prefix to a stable integer. Use these codes in `GROUP BY` queries to count violations by class.
+
+| Code | SFS violation class | Notes |
+|---|---|---|
+| `0` | Valid Geometry | The geometry passed all validity checks |
+| `1` | Too few points in geometry component | Ring has fewer than 4 points |
+| `2` | Invalid coordinate | Non-finite coordinate (NaN / Inf) |
+| `3` | Ring not closed | First and last ring vertices differ |
+| `4` | Repeated point | Consecutive duplicate vertices in a ring. Current GEOS (3.13.1) does not flag this as invalid — the code is mapped for completeness but no current GEOS version emits this reason |
+| `10` | Self-intersection | Shell or hole edges cross each other |
+| `11` | Ring Self-intersection | A ring touches itself at a vertex (bowtie) |
+| `20` | Hole lies outside shell | A hole is not contained within its outer ring |
+| `21` | Holes are nested | A hole is contained within another hole |
+| `22` | Interior is disconnected | A hole is tangent to the shell from inside |
+| `23` | Nested shells | Two outer rings are nested (multipolygon) |
+| `24` | Duplicate rings | Two rings are identical |
+| `null` | Unmapped reason | A GEOS reason string not yet in the lookup table |

@@ -57,7 +57,7 @@ serving a same-version-but-different-bytes wheel fails closed.
 | Path | Lockfile |
 |---|---|
 | CI (Scala + Python build) | [`python/geobrix/requirements-ci.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-ci.txt) |
-| CI (lightweight pyrx build) | [`python/geobrix/requirements-pyrx-ci.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-pyrx-ci.txt) |
+| CI (lightweight build) | [`python/geobrix/requirements-light-env6-ci.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-light-env6-ci.txt) |
 | Dev container | [`python/geobrix/requirements-dev-container.txt`](https://github.com/databrickslabs/geobrix/blob/main/python/geobrix/requirements-dev-container.txt) |
 | Notebook test harness | [`notebooks/tests/requirements.txt`](https://github.com/databrickslabs/geobrix/blob/main/notebooks/tests/requirements.txt) |
 
@@ -66,7 +66,7 @@ wheel must match the GDAL native version installed on the host, so it is
 installed separately against the detected version. The native side is pinned
 via the init script (see below). The lightweight `pyrx` build path has no such
 exception — it uses rasterio's bundled-GDAL binary wheel, which is hash-pinned
-in `requirements-pyrx-ci.txt` like every other dependency (no native GDAL, no
+in `requirements-light-env6-ci.txt` like every other dependency (no native GDAL, no
 JAR).
 
 ### Pinned GDAL native + multi-layer trust chain
@@ -189,10 +189,10 @@ with the bundle by GeoBrix version.
 
 ### 3. Pin the GeoBrix version in your cluster libraries
 
-GeoBrix is **Beta** — APIs may break to stabilize, and there are no function
-aliases. Pin the exact wheel and JAR version in your cluster configuration
-and only bump deliberately. See the
-[Beta Release Notes](./beta-release-notes) for the change list per version.
+GeoBrix APIs may change to stabilize, and there are no function aliases —
+one canonical name per function. Pin the exact wheel and JAR version in your
+cluster configuration and only bump deliberately. See the
+[Release Notes](./release-notes) for the change list per version.
 
 ### 4. Restrict GDAL drivers for untrusted inputs
 

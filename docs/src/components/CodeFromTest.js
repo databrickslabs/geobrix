@@ -114,11 +114,25 @@ function pythonFunctionToSnippet(fullFunction) {
   }
   const withoutReturns = bodyLines.slice(0, end);
 
+  // Strip trailing lint-directive comments (noqa / type: ignore / pragma) so
+  // they don't leak into the rendered example. These are required on the source
+  // line (e.g. `# noqa: PLC0415` for the function-local imports the single-source
+  // doc-test pattern uses) but are pure noise to a reader. Only the directive is
+  // removed; a preceding explanatory comment on the same line is preserved.
+  // A comment-only directive line (nothing but the directive) is dropped.
+  const lintDirective = /\s*#\s*(?:noqa\b[^#]*|type:\s*ignore\b[^#]*|pragma:\s*no\s*cover\b[^#]*)$/;
+  const deLinted = withoutReturns.map(l => {
+    if (!lintDirective.test(l)) return l;
+    const stripped = l.replace(lintDirective, '');
+    // If only indentation remains (the line was just a directive comment), drop it.
+    return stripped.trim() === '' && l.trim().startsWith('#') ? null : stripped;
+  }).filter(l => l !== null);
+
   // Dedent: use minimum non-zero indent
-  const nonEmpty = withoutReturns.filter(l => l.trim() !== '');
-  if (nonEmpty.length === 0) return withoutReturns.join('\n').trim();
+  const nonEmpty = deLinted.filter(l => l.trim() !== '');
+  if (nonEmpty.length === 0) return deLinted.join('\n').trim();
   const minIndent = Math.min(...nonEmpty.map(l => l.match(/^\s*/)[0].length));
-  const dedented = withoutReturns.map(l => l.length >= minIndent ? l.slice(minIndent) : l);
+  const dedented = deLinted.map(l => l.length >= minIndent ? l.slice(minIndent) : l);
 
   return dedented.join('\n').trim();
 }

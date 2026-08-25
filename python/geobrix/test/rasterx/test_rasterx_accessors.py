@@ -300,3 +300,98 @@ def test_all_accessors_together(spark):
         key in row_dict
         for key in ["avg", "min", "max", "width", "height", "bands", "format", "srid"]
     )
+
+
+def test_light_accessor_corrupt_tile_returns_none(spark):
+    """Light accessors must return None (not raise) on a corrupt (non-empty) raster.
+
+    A tile whose ``raster`` field is non-null but contains garbage bytes is not
+    empty — ``_tile_is_empty`` lets it through — but rasterio cannot open it.
+    The UDF factories must degrade to None (matching heavy NULL-on-corrupt)
+    rather than surfacing the exception to the caller.
+    """
+    # Light-tier path (pyrx pandas_udf): skip in the heavy CI phase, which has
+    # no pandas/rasterio (requirements-ci.txt). Runs in the light job + Docker.
+    pytest.importorskip("pandas")
+    pytest.importorskip("rasterio")
+    from databricks.labs.gbx.pyrx import functions as pf
+
+    # Build a minimal tile struct with garbage raster bytes (non-null, non-empty
+    # so _tile_is_empty returns False, but rasterio cannot open it).
+    corrupt_tile = f.struct(
+        f.lit(None).cast("long").alias("cellid"),
+        f.lit(b"THIS_IS_NOT_A_RASTER").alias("raster"),
+        f.lit(None).cast("string").alias("path"),
+        f.lit(None)
+        .cast("struct<col_off:int,row_off:int,width:int,height:int>")
+        .alias("window"),
+        f.lit(None).cast("binary").alias("clip_polygon"),
+        f.lit(None).cast("string").alias("clip_crs"),
+        f.lit(None).cast("string").alias("crs"),
+        f.lit(None).cast("map<string,string>").alias("metadata"),
+    )
+
+    df = spark.range(1).select(
+        pf.rst_width(corrupt_tile).alias("width"),
+        pf.rst_srid(corrupt_tile).alias("srid"),
+        pf.rst_scalex(corrupt_tile).alias("scalex"),
+    )
+
+    result = df.collect()
+    assert len(result) == 1, "expected exactly one row"
+    assert (
+        result[0]["width"] is None
+    ), f"rst_width on corrupt tile should be None, got {result[0]['width']!r}"
+    assert (
+        result[0]["srid"] is None
+    ), f"rst_srid on corrupt tile should be None, got {result[0]['srid']!r}"
+    # Parity: light scalex must degrade to None (not NaN) matching heavy NULL-on-corrupt
+    assert (
+        result[0]["scalex"] is None
+    ), f"rst_scalex on corrupt tile should be None (not NaN), got {result[0]['scalex']!r}"
+
+
+def test_light_pixel_accessor_corrupt_tile_returns_none(spark):
+    """_pixel_accessor_udf-backed functions must return None on a corrupt raster.
+
+    rst_min, rst_max, rst_median, rst_isempty are all backed by _pixel_accessor_udf
+    (_open, which materialises the pixel window). A corrupt raster must degrade to
+    None rather than surfacing the rasterio exception to the caller.
+    """
+    # Light-tier path (pyrx pandas_udf): skip in the heavy CI phase, which has
+    # no pandas/rasterio (requirements-ci.txt). Runs in the light job + Docker.
+    pytest.importorskip("pandas")
+    pytest.importorskip("rasterio")
+    from databricks.labs.gbx.pyrx import functions as pf
+
+    # Same corrupt-tile construction as the header-accessor test above.
+    corrupt_tile = f.struct(
+        f.lit(None).cast("long").alias("cellid"),
+        f.lit(b"THIS_IS_NOT_A_RASTER").alias("raster"),
+        f.lit(None).cast("string").alias("path"),
+        f.lit(None)
+        .cast("struct<col_off:int,row_off:int,width:int,height:int>")
+        .alias("window"),
+        f.lit(None).cast("binary").alias("clip_polygon"),
+        f.lit(None).cast("string").alias("clip_crs"),
+        f.lit(None).cast("string").alias("crs"),
+        f.lit(None).cast("map<string,string>").alias("metadata"),
+    )
+
+    df = spark.range(1).select(
+        pf.rst_min(corrupt_tile).alias("min_val"),
+        pf.rst_max(corrupt_tile).alias("max_val"),
+        pf.rst_median(corrupt_tile).alias("median_val"),
+    )
+
+    result = df.collect()
+    assert len(result) == 1, "expected exactly one row"
+    assert (
+        result[0]["min_val"] is None
+    ), f"rst_min on corrupt tile should be None, got {result[0]['min_val']!r}"
+    assert (
+        result[0]["max_val"] is None
+    ), f"rst_max on corrupt tile should be None, got {result[0]['max_val']!r}"
+    assert (
+        result[0]["median_val"] is None
+    ), f"rst_median on corrupt tile should be None, got {result[0]['median_val']!r}"

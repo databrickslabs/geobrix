@@ -33,9 +33,13 @@ import pytest
 
 # Light core (h3-py + rasterio) and heavy (JNI GDAL) deps; skip cleanly if absent.
 rasterio = pytest.importorskip(
-    "rasterio", reason="rasterio not installed (geobrix[light] required)"
+    "rasterio",
+    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
 )
-pytest.importorskip("h3", reason="h3-py not installed (geobrix[light] required)")
+pytest.importorskip(
+    "h3",
+    reason="h3-py not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+)
 import numpy as np  # noqa: E402
 
 pytestmark = pytest.mark.integration

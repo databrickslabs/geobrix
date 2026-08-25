@@ -71,12 +71,12 @@ class RST_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
     // ---- agg factory --------------------------------------------------------
 
     /** Build an RST_RasterizeAgg with all constant children as Literals.
-     *  geomWkbExpr and valueExpr are null literals -- not used in eval (only in update),
+     *  geomExpr and valueExpr are null literals -- not used in eval (only in update),
      *  so they do not need to produce real values here.
      */
     private def makeAgg(): RST_RasterizeAgg =
         RST_RasterizeAgg(
-            geomWkbExpr  = Literal.create(null, org.apache.spark.sql.types.BinaryType),
+            geomExpr     = Literal.create(null, org.apache.spark.sql.types.BinaryType),
             valueExpr    = Literal(0.0),
             xminExpr     = Literal(0.0),
             yminExpr     = Literal(0.0),
@@ -84,7 +84,7 @@ class RST_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
             ymaxExpr     = Literal(100.0),
             widthPxExpr  = Literal(100),
             heightPxExpr = Literal(100),
-            sridExpr     = Literal(32633),
+            outSridExpr  = Literal(32633),
             exprConfExpr = Literal.create(encodedEmpty(), StringType)
         )
 

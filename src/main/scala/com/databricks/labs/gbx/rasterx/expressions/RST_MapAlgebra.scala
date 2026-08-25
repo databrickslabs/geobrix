@@ -8,7 +8,7 @@ import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUti
 import com.databricks.labs.gbx.util.NodeFilePathUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
-import org.apache.spark.sql.catalyst.expressions.Expression
+import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -19,18 +19,21 @@ import scala.util.Try
 
 /** The expression for map algebra. */
 case class RST_MapAlgebra(
-    tileExpr: Expression,
+    tiles: Expression,
     jsonSpecExpr: Expression
 ) extends InvokedExpression {
 
     private def rasterType = RST_ExpressionUtil.arrayOfTileRasterType(
-        RST_MapAlgebra.name, tileExpr, aggHint = None
+        RST_MapAlgebra.name, tiles, aggHint = None
     )
-    override def children: Seq[Expression] = Seq(tileExpr, jsonSpecExpr, ExpressionConfigExpr())
+    /** Element field count from the declared input array element struct (3 for v1, 9 for v2). */
+    private lazy val elementFieldCountLit: Expression =
+        Literal(RST_ExpressionUtil.arrayOfTileElementFieldCount(tiles), IntegerType)
+    override def children: Seq[Expression] = Seq(tiles, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit)
     override def dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def nullable: Boolean = true
     override def prettyName: String = RST_MapAlgebra.name
-    override def replacement: Expression = rstInvoke(RST_MapAlgebra, rasterType)
+    override def replacement: Expression = invoke(RST_MapAlgebra)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -38,28 +41,19 @@ case class RST_MapAlgebra(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_MapAlgebra extends WithExpressionInfo {
 
-    def evalPath(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
-        RST_ErrorHandler.safeEval(
-          () => {
-              val exprConf = ExpressionConfig.fromB64(conf.toString)
-              RST_ExpressionUtil.init(exprConf)
-              val dss = RasterSerializationUtil.arrayToTiles(array, StringType)
-              val (result, mtd) = execute(dss.map(_._2), dss.head._3, spec.toString)
-              dss.foreach(ds => RasterDriver.releaseDataset(ds._2))
-              val res = RasterSerializationUtil.tileToRow((dss.head._1, result, mtd), StringType, exprConf.hConf)
-              RasterDriver.releaseDataset(result)
-              res
-          },
-          array,
-          StringType
-        )
 
-    def evalBinary(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
+    // Called by Spark reflection when children = [tile, jsonSpecExpr, ExpressionConfigExpr()]  (v1 legacy path).
+    def eval(array: ArrayData, spec: UTF8String, conf: UTF8String): InternalRow =
+        eval(array, spec, conf, 3)
+
+    // Called by Spark reflection when children = [tile, jsonSpecExpr, ExpressionConfigExpr(), elementFieldCountLit].
+    // elementFieldCount is derived from the declared input array element struct (3=v1, 9=v2).
+    def eval(array: ArrayData, spec: UTF8String, conf: UTF8String, elementFieldCount: Int): InternalRow =
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val dss = RasterSerializationUtil.arrayToTiles(array, BinaryType)
+              val dss = RasterSerializationUtil.arrayToTiles(array, BinaryType, elementFieldCount)
               // GDAL calc does not work with /vsimem/ files, so we need to copy them to a local path
               val dssCpy = dss.map { ds =>
                   val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
@@ -80,7 +74,8 @@ object RST_MapAlgebra extends WithExpressionInfo {
               res
           },
           array,
-          BinaryType
+          BinaryType,
+          elementFieldCount
         )
 
     def execute(dss: Seq[Dataset], options: Map[String, String], spec: String): (Dataset, Map[String, String]) = {

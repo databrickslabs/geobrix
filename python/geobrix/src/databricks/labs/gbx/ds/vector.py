@@ -4,10 +4,12 @@ typed attributes). Pure-Python / Serverless-safe (no JVM)."""
 
 from __future__ import annotations
 
+import atexit
 import contextlib
 import os
 import shutil
 import tempfile
+import threading
 import uuid
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -34,6 +36,72 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx.ds import _scratch
+
+# ---------------------------------------------------------------------------
+# Worker-local staging cache (module-level, process-global)
+# ---------------------------------------------------------------------------
+# Mirrors raster._STAGED_FILES: key = original source path, value = locally-staged path.
+# Guarded by _VEC_STAGE_LOCK for thread safety (multiple Spark tasks in one worker).
+# Staged copies are held for the process lifetime and removed at exit via atexit.
+# This amortizes the staging cost: N partitions of the same source file share one copy.
+_VEC_STAGED_FILES: Dict[str, str] = {}
+_VEC_STAGE_LOCK = threading.Lock()
+_VEC_STAGE_DIR: Optional[str] = None
+
+
+def _ensure_vec_stage_dir() -> str:
+    """Return (creating if needed) the process-wide stage directory. Must be called while holding `_VEC_STAGE_LOCK`."""
+    global _VEC_STAGE_DIR
+    if _VEC_STAGE_DIR is None:
+        _VEC_STAGE_DIR = tempfile.mkdtemp(prefix="gbx_vecstage_")
+        atexit.register(_cleanup_vec_stage_dir)
+    return _VEC_STAGE_DIR
+
+
+def _cleanup_vec_stage_dir() -> None:
+    global _VEC_STAGE_DIR
+    if _VEC_STAGE_DIR and os.path.isdir(_VEC_STAGE_DIR):
+        shutil.rmtree(_VEC_STAGE_DIR, ignore_errors=True)
+        _VEC_STAGE_DIR = None
+
+
+def _get_or_stage_vec(source_path: str) -> str:
+    """Return a worker-local path for *source_path*, staging it if not yet cached.
+
+    For directories (e.g. ``.gdb``), copies the entire directory tree.
+    For regular files, copies the single file.
+
+    The result is cached by source path: multiple partitions targeting the same
+    source file on the same worker process share one staged copy, paying the
+    sequential-copy cost only once.
+
+    Args:
+        source_path: FUSE path to the source file or directory.
+
+    Returns:
+        Absolute local path to the staged copy (file or directory).
+    """
+    with _VEC_STAGE_LOCK:
+        if source_path in _VEC_STAGED_FILES:
+            return _VEC_STAGED_FILES[source_path]
+
+        stage_dir = _ensure_vec_stage_dir()
+        # Use uuid4 to guarantee a collision-free on-disk name even when two
+        # different source paths share the same basename.  The cache key remains
+        # source_path, so a repeat call for the same path returns the cached
+        # entry above and never reaches this branch.
+        basename = os.path.basename(source_path.rstrip("/")) or "vector_src"
+        safe_name = f"{uuid.uuid4().hex}_{basename}"
+        local = os.path.join(stage_dir, safe_name)
+
+        if os.path.isdir(source_path):
+            shutil.copytree(source_path, local)
+        else:
+            shutil.copy(source_path, local)  # sequential read — FUSE-safe
+
+        _VEC_STAGED_FILES[source_path] = local
+        return local
+
 
 # OGR field type (+ subtype) -> Spark type, matching heavy OGR_SchemaInference.getType.
 _OGR_TO_SPARK = {
@@ -283,10 +351,22 @@ def _geometry_type_of(wkb: bytes) -> str:
 
 
 def _srid_to_crs(srid: str, proj4: str):
-    """Inverse of the reader's CRS encoding: authority code -> 'EPSG:<code>',
-    else the PROJ4 string, else None (CRS-less)."""
+    """Inverse of the reader's CRS encoding: classify a SRID into its canonical
+    authority string ('EPSG:<n>' or 'ESRI:<n>'), else the PROJ4 string, else None
+    (CRS-less).
+
+    The SRID is classified through the shared resolver (`resolve_crs`), so an ESRI
+    code (e.g. 54008) is labeled ``ESRI:54008`` rather than blindly prefixed
+    ``EPSG:``. This is a reader/writer edge, not an apply site, so it stays lenient:
+    a SRID in neither authority falls back to the PROJ4 string (or None), never
+    raising."""
     if srid and srid != "0":
-        return f"EPSG:{srid}"
+        from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical, resolve_crs
+
+        try:
+            return crs_to_canonical(resolve_crs(srid))
+        except Exception:
+            pass  # unresolvable SRID -> fall through to the PROJ4 string / None
     if proj4:
         return proj4
     return None
@@ -322,9 +402,11 @@ def _should_stream(driver):
     GeoJSON/Shapefile geometry is structural (no rename); GPKG's geometry column
     is renamed per batch to its format default (see ``_write_streaming``).
 
-    OpenFileGDB is excluded: its write goes through the native ``osgeo`` path
-    (pyogrio's bundled GDAL is read-only for it), so it can't use
-    ``write_arrow``; bounding its memory is a separate follow-up.
+    OpenFileGDB is excluded from this function: its write goes through the
+    native ``osgeo`` OGR path (pyogrio's bundled GDAL has a read-only
+    OpenFileGDB driver), so it cannot use ``write_arrow``. Memory is bounded
+    via ``_write_local_osgeo_gdb``, which streams fragments one at a time
+    with OGR transaction batching (committed every ``_GDB_TX_BATCH`` rows).
     """
     return driver in ("GeoJSON", "ESRI Shapefile", "GPKG")
 
@@ -510,13 +592,38 @@ class VectorGbxReader(DataSourceReader):
     }
 
     def __init__(self, options: Dict[str, str]):
-        from databricks.labs.gbx.ds._listing import to_local_path
-
         raw_path = options.get("path")
         if not raw_path:
             raise ValueError("vector_gbx requires a 'path' (e.g. .load(path)).")
-        # Columns/options may carry a dbfs:-qualified path; strip the scheme once
-        # so all os.* + pyogrio reads use the bare FUSE path.
+        # FILE access mode. The df.read.format('vector_gbx') DataSource is
+        # FUSE-only (session-less on Spark Connect / DBR 19): 'auto' and 'fuse'
+        # both read via to_local_path. 'managed'/'external' are function-layer
+        # concerns — reject them here with a pointer at vector_file_read so the
+        # option is never silently ignored (mirrors the FUSE-only writer's
+        # rejection, which points at vector_file_write).
+        access = options.get("access", "auto")
+        if access not in ("auto", "fuse", "managed", "external"):
+            raise ValueError(
+                f"vector_gbx 'access' option must be 'auto', 'fuse', 'managed', or "
+                f"'external'; got {access!r}"
+            )
+        if access in ("managed", "external"):
+            raise ValueError(
+                f"access='{access}' is not supported on the "
+                f"df.read.format('vector_gbx') reader (FUSE-only, session-less on "
+                f"Spark Connect). Use the function-layer API instead: "
+                f"from databricks.labs.gbx.pyvx.file_read import vector_file_read. "
+                f"It reads a directory of vector files with FILE (MANAGED/EXTERNAL) "
+                f"leverage where the runtime supports it."
+            )
+        self.access = access
+
+        # Session-free path resolution: a DataSource reader is session-less on
+        # Spark Connect (getActiveSession() -> None). Use to_local_path, the
+        # session-free FUSE primitive (strips scheme, returns /Volumes/... as-is).
+        # managed/external are already rejected above, so only auto/fuse reach here.
+        from databricks.labs.gbx.ds._listing import to_local_path
+
         self.path = to_local_path(raw_path)
         self.driver = options.get("driverName", "") or self._DRIVER
         # `multi=true` reads a DIRECTORY of newline-delimited GeoJSONL shards (the
@@ -547,6 +654,13 @@ class VectorGbxReader(DataSourceReader):
             self.bbox = None
         self.where = options.get("where") or None
 
+        # No in-DataSource FILE-tier probe: a DataSource reader is session-less on
+        # Spark Connect (getActiveSession() -> None), so probing here falsely
+        # resolves to "fuse" and raises for explicit managed/external on
+        # FILE-capable runtimes. FILE-tier reads go through the function layer
+        # (pyvx.file_read.vector_file_read), where a session is available.
+        self._resolved_tier = None
+
     def _layer(self):
         return self.layer_name if self.layer_name else self.layer_number
 
@@ -559,26 +673,37 @@ class VectorGbxReader(DataSourceReader):
         pyogrio.set_gdal_config_options({"OGR_SQLITE_JOURNAL": "DELETE"})
 
     def _members(self) -> List[str]:
-        """Member paths to read. For a plain directory, enumerate matching vector
-        files (by driver extension) RECURSIVELY into sub-directories. A .gdb
-        directory is a single FileGDB dataset and is returned as-is. A regular
-        file path returns [self.path]."""
+        """Member paths to read.  A ``.gdb`` directory is a single FileGDB
+        dataset (returned as-is); a regular file returns ``[self.path]``; a plain
+        directory is enumerated via the session-free file_gbx core using this
+        driver's recognised extensions."""
         if not os.path.isdir(self.path) or self.path.lower().rstrip("/").endswith(
             ".gdb"
         ):
             return [self.path]
+        from databricks.labs.gbx.ds.file_gbx import list_local_files
+
         exts: Tuple[str, ...] = self._EXT_FOR_DRIVER.get(self.driver) or ()
-        members = []
-        for root, dirs, files in os.walk(self.path):
-            # Skip hidden/marker dirs (Spark convention): a writer's in-flight or
-            # orphaned .gbx_scratch container, _SUCCESS-style markers, etc. are
-            # never input data. Pruning `dirs` in place stops os.walk descending.
-            dirs[:] = [d for d in dirs if not d.startswith((".", "_"))]
-            for n in sorted(files):
-                low = n.lower()
-                if (exts and low.endswith(exts)) or low.rstrip("/").endswith(".gdb"):
-                    members.append(os.path.join(root, n))
-        return sorted(members) or [self.path]
+        if not exts:
+            # Generic (no-driver) directory read: filter to the union of every
+            # driver's PRIMARY extensions plus the module-recognized geo
+            # extensions. This picks up any primary vector file while excluding
+            # shapefile sidecars (.cpg/.shx/.dbf/.prj) — which appear in no
+            # driver's list — so a generic read of a shapefile bundle directory
+            # opens only the .shp and never hands a .cpg to pyogrio (which
+            # rejects it as an unsupported format). Without this filter the
+            # recursive enumeration returns every sidecar and the read fails.
+            exts = tuple(
+                sorted(
+                    {e for group in self._EXT_FOR_DRIVER.values() for e in group}
+                    | set(_RECOGNIZED_EXTS)
+                )
+            )
+        try:
+            members = list_local_files(self.path, recursive=True, extensions=exts)
+        except FileNotFoundError:
+            return [self.path]
+        return members or [self.path]
 
     def _needs_stage(self) -> bool:
         """Random-access formats (GeoPackage = SQLite; FileGDB = seeked multi-file).
@@ -589,26 +714,22 @@ class VectorGbxReader(DataSourceReader):
 
     @contextlib.contextmanager
     def _staged(self, path: str):
-        """Yield a locally-readable path. For random-access drivers, copy the source
-        (a file, or a `.gdb` directory) to worker-local temp with a sequential copy
-        (FUSE-safe), so GDAL does its seeked I/O on local disk, then clean up -- all
-        transparent to the caller. Sequential drivers (GeoJSON/Shapefile) read in place.
+        """Yield a locally-readable path.
+
+        For random-access drivers (GPKG, FileGDB), the source is copied to worker-local
+        temp via a sequential read (FUSE-safe) so GDAL can do seeked I/O on local disk.
+        The copy is **cached per (process, source path)** via the module-level
+        ``_VEC_STAGED_FILES`` dict: N partitions of the same file share one staged copy,
+        paying the copy cost only once (open amortization).
+
+        For sequential drivers (GeoJSON/Shapefile/GeoJSONSeq), the source is yielded
+        in-place — no copy is made or cached.
         """
         if not self._needs_stage():
             yield path
             return
-        tmpd = tempfile.mkdtemp(prefix="gbx_vecstage_")
-        try:
-            local = os.path.join(tmpd, os.path.basename(path.rstrip("/")))
-            if os.path.isdir(path):
-                shutil.copytree(path, local)
-            else:
-                shutil.copy(
-                    path, local
-                )  # sequential read of object storage -> FUSE-safe
-            yield local
-        finally:
-            shutil.rmtree(tmpd, ignore_errors=True)
+        local = _get_or_stage_vec(path)
+        yield local
 
     def _info_for(self, path: str):
         """Read pyogrio metadata for the given path. Random-access formats are staged
@@ -661,6 +782,15 @@ class VectorGbxReader(DataSourceReader):
         # cost). Parallelism comes from reading many files concurrently (one task per file);
         # within a single read, chunk_size only bounds the Arrow batch size on the yield, not
         # the parse. Random-access formats (GPKG/FileGDB) are staged to local temp + read whole.
+        #
+        # Layout convention (T8): _members() returns paths sorted alphabetically so
+        # partitions are emitted in source-path order. When a worker pulls consecutive
+        # tasks from the same source file the per-worker staged-file cache (_VEC_STAGED_FILES)
+        # is reused, paying the copy cost only once per source.
+        # To control task parallelism or re-align after a join, use
+        #   df.repartition(n, 'path').sortWithinPartitions('path')
+        # on the read result; n is a parallelism signal (classic ≈ 3–5× cores),
+        # never n = file_count.
         return [
             _ChunkPartition(
                 member,
@@ -680,7 +810,15 @@ class VectorGbxReader(DataSourceReader):
         geometry column, vectorized WKB/WKT, constant srid/proj columns, cast to the
         declared StructType) and yield pyarrow.RecordBatch objects. No per-row Python
         tuple construction -- that per-row loop made large reads ~10x slower than the
-        JVM reader."""
+        JVM reader.
+
+        FILE access mode (``self.access``):
+        - ``"auto"`` / ``"fuse"``: reads via FUSE (to_local_path).
+        - ``"managed"`` / ``"external"``: rejected at __init__ time with a pointer
+          to ``vector_file_read``; never reaches read().
+        """
+        # managed/external are rejected in __init__; read() always takes the FUSE path.
+
         import numpy as np
         import pyarrow as pa
         import shapely
@@ -854,8 +992,43 @@ class VectorGbxWriter(DataSourceWriter):
         from databricks.labs.gbx.ds._listing import to_local_path
 
         opts = {k.lower(): v for k, v in options.items()}
-        # Strip a dbfs:/file: scheme so all os.* writes hit the bare FUSE path.
+
+        # --- FILE-write options (parse before path normalization) ---
+        # file_mode: "fuse" (default) | "managed" | "external"
+        #   "fuse"     — write assembled file to a Volume FUSE path (default, byte-identical
+        #                to existing behavior; self.path is a filesystem path).
+        #   "managed"  — route through open_for_write(file_mode="managed"): assemble locally,
+        #                read bytes, create a 1-row DataFrame {tile: {raster: <bytes>}}, call
+        #                open_for_write; self.path is the target Delta TABLE name.
+        #   "external" — route through open_for_write(file_mode="external"): assemble locally,
+        #                copy to {filespace}/{uuid}/{basename} on the Volume, create a 1-row
+        #                DataFrame {tile: {path: <volume_path>}}, call open_for_write;
+        #                self.path is the target Delta TABLE name.
+        # filespace: required for managed mode (/Volumes/…).
+        #   For external mode, also used as the Volume directory where the assembled file is
+        #   placed before try_to_file registers it; both modes share the same option so the
+        #   caller only needs to specify one "where my files live" Volume.
+        # layout: passed through to open_for_write ("order" | "cluster" | "plain").
+        self._file_mode = opts.get("filemode", "fuse").lower()
+        self._filespace = opts.get("filespace") or None
+        self._layout = opts.get("layout", "order").lower()
+
+        # FILE-tier writes are a FUNCTION-LAYER concern (a DataSource writer's
+        # commit() session availability on Spark Connect is unverified). The
+        # df.write.format writer is FUSE-only; route FILE writes through
+        # pyvx.file_write.vector_file_write instead.
+        if self._file_mode in ("managed", "external"):
+            raise ValueError(
+                f"file_mode='{self._file_mode}' is not supported on the "
+                f"df.write.format('vector_gbx') writer (FUSE-only). Use the "
+                f"function-layer API instead: "
+                f"from databricks.labs.gbx.pyvx.file_write import vector_file_write. "
+                f"It assembles your vector output into a FILE-column Delta table "
+                f"(MANAGED create_file / EXTERNAL try_to_file)."
+            )
+        # FUSE mode (default): normalize path (strip dbfs:/file: scheme).
         self.path = to_local_path(path)
+
         self.driver = opts.get("drivername", "") or driver
         if not self.driver:
             raise ValueError(
@@ -870,8 +1043,9 @@ class VectorGbxWriter(DataSourceWriter):
         self._file_name = opts.get(
             "filename"
         )  # .option("fileName", ...) (opts are lower-cased)
-        # Single-file/unit writers (gpkg/geojson, shapefile+zip, file_gdb): adaptive naming.
-        # Non-zip shapefile remains a directory bundle (existing behavior; not single-file).
+
+        # FUSE mode: apply single-file output path resolution (extension appending).
+        # Non-zip shapefile remains a directory bundle (existing behavior).
         if (
             self.driver in ("GPKG", "GeoJSON")
             or self.zip
@@ -879,6 +1053,7 @@ class VectorGbxWriter(DataSourceWriter):
         ):
             ext = _canonical_ext(self.driver, self.zip)
             self.path = _resolve_single_file_output(self.path, self._file_name, ext)
+
         self.overwrite = overwrite
         self.geometry_type_override = opts.get("geometrytype")
         self.layer_name = opts.get("layername")
@@ -894,6 +1069,8 @@ class VectorGbxWriter(DataSourceWriter):
             f.name == self.geom_col and isinstance(f.dataType, BinaryType)
             for f in schema.fields
         )
+        # Scratch dir for executor-written fragments. The writer is FUSE-only so
+        # self.path is always a filesystem path — use its parent for the scratch dir.
         parent = os.path.dirname(self.path) or "."
         # Per-write unique scratch dir under a hidden, self-GC'ing container: the
         # writer instance is created once on the driver and serialized to the
@@ -956,6 +1133,7 @@ class VectorGbxWriter(DataSourceWriter):
             # FileGDB/Shapefile sidecars), then copy to the Volume target with
             # sequential byte copies (FUSE-safe). Mirrors the PMTiles writer.
             local_dir = tempfile.mkdtemp(prefix="gbx_vecout_")
+            # Writer is FUSE-only: base local_out on the resolved FUSE path.
             local_out = os.path.join(local_dir, os.path.basename(self.path.rstrip("/")))
             if self.zip:
                 # zip=true: write the normal output to <stem>.shp / <stem>.gdb,
@@ -1009,11 +1187,15 @@ class VectorGbxWriter(DataSourceWriter):
                 del first_tbl
                 self._write_streaming(frags, local_out, geom_type, crs)
             else:
-                tables = [feather.read_table(f) for f in frags]
-                geom_type, crs = self._infer_geom_crs(tables)
-                self._write_local(tables, local_out, geom_type, crs)
-            # Clear any Spark-created stub at self.path, then copy everything
-            # pyogrio produced in local_dir (file, sidecar set, or .gdb dir).
+                # Infer geom/CRS from first fragment only (bounded memory), then
+                # stream remaining fragments via generator (lazy, not list).
+                first_tbl = feather.read_table(frags[0])
+                geom_type, crs = self._infer_geom_crs([first_tbl])
+                del first_tbl
+                tables_gen = (feather.read_table(f) for f in frags)
+                self._write_local(tables_gen, local_out, geom_type, crs)
+            # Writer is FUSE-only: clear any Spark stub, copy everything pyogrio
+            # produced in local_dir to the Volume target (byte-only, FUSE-safe).
             self._prepare_target()
             parent = os.path.dirname(self.path) or "."
             os.makedirs(parent, exist_ok=True)
@@ -1083,17 +1265,27 @@ class VectorGbxWriter(DataSourceWriter):
             # re-raise genuine write errors.
             if "does not support" not in str(e) and not isinstance(e, TypeError):
                 raise
-            tables = [feather.read_table(f) for f in frags]
-            if len(tables) > 1:
-                tables = [pa.concat_tables(tables)]
-            self._write_local(tables, local_out, geom_type, crs)
+            # Fall back to _write_local with lazy generator (bounded memory).
+            tables_gen = (feather.read_table(f) for f in frags)
+            self._write_local(tables_gen, local_out, geom_type, crs)
 
     def _write_local(self, tables, local_out, geom_type, crs) -> None:
         """Write the merged tables to a local path. Use the fast Arrow path; if the
         driver lacks Arrow-write support, fall back to the classic feature-based path.
         OpenFileGDB is NOT routed here; the commit() method calls _write_local_osgeo_gdb
-        directly with fragment paths (streaming + transaction batching)."""
+        directly with fragment paths (streaming + transaction batching).
+
+        Accepts tables as an iterable (list or generator). For generators, the first
+        table is read explicitly to detect Arrow-write support, then remaining tables
+        are streamed to avoid whole-dataset materialization (bounded memory)."""
         import pyogrio
+
+        # Convert to iterator so we can pull the first table explicitly
+        it = iter(tables)
+        try:
+            first_tbl = next(it)
+        except StopIteration:
+            return  # no tables, nothing to write
 
         # Write SQLite-backed formats (GPKG) with a DELETE journal -- no WAL/-shm
         # sidecars -- so the output reads back from read-only object storage (a
@@ -1113,17 +1305,14 @@ class VectorGbxWriter(DataSourceWriter):
             # when it starts with the reserved 'gpkg' prefix; use a safe default.
             kw["layer"] = _default_gpkg_layer(self.path)
         out_geom = _output_geom_name(self.driver, self.geom_col)
+
         try:
-            for n, tbl in enumerate(tables):
-                t = self._drop_meta_cols(tbl)
-                # Rename the input geom column to the format-canonical output name
-                # (e.g. GPKG: geom_0 -> geom) so pyogrio can find the geometry by
-                # the name passed as geometry_name=out_geom.
-                if out_geom != self.geom_col and self.geom_col in t.column_names:
-                    t = t.rename_columns(
-                        [out_geom if c == self.geom_col else c for c in t.column_names]
-                    )
-                pyogrio.write_arrow(t, local_out, append=(n > 0), **kw)
+            # Write the first table to test Arrow-write support; if this raises
+            # "does not support write functionality", catch it and fall back to classic.
+            self._write_one_arrow(first_tbl, local_out, out_geom, kw, append=False)
+            # Arrow write succeeded; stream remaining tables
+            for n, tbl in enumerate(it, start=1):
+                self._write_one_arrow(tbl, local_out, out_geom, kw, append=True)
         except Exception as e:  # noqa: BLE001
             if "does not support write functionality" not in str(e):
                 raise
@@ -1133,7 +1322,28 @@ class VectorGbxWriter(DataSourceWriter):
                 shutil.rmtree(local_out, ignore_errors=True)
             elif os.path.isfile(local_out):
                 os.remove(local_out)
-            self._write_local_classic(tables, local_out, geom_type, crs)
+            # Chain first table + remaining iterator LAZILY. 'it' is pristine here:
+            # "does not support" only fires on the first write (before the loop below
+            # consumes it), so the classic fallback stays bounded (one fragment at a
+            # time) instead of materializing every fragment via list(it).
+            from itertools import chain as _chain
+
+            all_tables = _chain((first_tbl,), it)
+            self._write_local_classic(all_tables, local_out, geom_type, crs)
+
+    def _write_one_arrow(self, tbl, local_out, out_geom, kw, append):
+        """Write one table via the Arrow path, handling geom column rename."""
+        import pyogrio
+
+        t = self._drop_meta_cols(tbl)
+        # Rename the input geom column to the format-canonical output name
+        # (e.g. GPKG: geom_0 -> geom) so pyogrio can find the geometry by
+        # the name passed as geometry_name=out_geom.
+        if out_geom != self.geom_col and self.geom_col in t.column_names:
+            t = t.rename_columns(
+                [out_geom if c == self.geom_col else c for c in t.column_names]
+            )
+        pyogrio.write_arrow(t, local_out, append=append, **kw)
 
     def _write_local_osgeo_gdb(  # noqa: C901
         self, frags, local_out, geom_type, crs
@@ -1266,6 +1476,8 @@ class VectorGbxWriter(DataSourceWriter):
             ds = None  # flush + close
 
     def _write_local_classic(self, tables, local_out, geom_type, crs) -> None:
+        """Write tables via the classic (non-Arrow) OGR path. Accepts an iterable
+        (list or generator) and streams one table at a time (bounded memory)."""
         import numpy as np
         import pyogrio.raw
 

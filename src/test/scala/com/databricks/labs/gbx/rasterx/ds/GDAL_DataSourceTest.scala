@@ -38,6 +38,33 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
 
     }
 
+    test("GDAL reader clipCrs option populates the v2 tile.clip_crs (parity with light)") {
+        rasterx.functions.register(spark)
+        val tifPath = this.getClass.getResource("/modis/").toString
+
+        // clipCrs given -> tile.clip_crs is the canonical CRS string (incl. ESRI).
+        val withOpt = spark.read
+            .format("gdal")
+            .option("sizeInMB", "1")
+            .option("clipCrs", "ESRI:54008")
+            .load(tifPath)
+            .limit(1)
+            .select(col("tile.clip_crs").alias("cc"))
+            .collect()
+        withOpt.length should be > 0
+        withOpt.foreach(r => r.getString(0) should be("ESRI:54008"))
+
+        // No clipCrs option -> clip_crs stays null (never errors).
+        val noOpt = spark.read
+            .format("gdal")
+            .option("sizeInMB", "1")
+            .load(tifPath)
+            .limit(1)
+            .select(col("tile.clip_crs").alias("cc"))
+            .collect()
+        noOpt.foreach(r => r.isNullAt(0) should be(true))
+    }
+
     test("GDAL Data Source must write valid tifs for rows") {
         functions.register(spark)
 
@@ -75,6 +102,47 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
 
         //        while (true) {}
 
+    }
+
+    test("GDAL RowWriter default filename is digit-leading (regression: Hadoop hidden-file filter)") {
+        // Regression for signed-hash bug: MurmurHash3.seqHash returns a signed Int, so
+        // the old .toString.replace("-","_") produced "_"-leading names for ~half of all
+        // tiles.  Hadoop's hidden-file filter silently skips files whose name starts with
+        // "_", "-", or ".", so customers lost roughly half their heavy-writer output.
+        // Fix (commit 666ca77d): Integer.toUnsignedString() — always digit-leading.
+        functions.register(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+        val outDir = Files.createTempDirectory("gdal_default_names_out_").toString
+
+        try {
+            spark.read
+                .format("gdal")
+                .option("sizeInMB", "1")
+                .load(tifPath)
+                .write
+                .format("gdal")
+                .option("ext", "tif")
+                .mode("append")
+                .save(outDir)
+
+            val tifs = Files.list(Paths.get(outDir)).toList.asScala
+                .filter(p => p.toString.endsWith(".tif"))
+                .toList
+            assert(tifs.nonEmpty, "expected at least one .tif output")
+            tifs.foreach { p =>
+                val fname = p.getFileName.toString
+                assert(fname.head.isDigit,
+                    s"default filename '$fname' starts with '${fname.head}'" +
+                    " — Hadoop hidden-file filter would silently skip it")
+            }
+        } finally {
+            val p = Paths.get(outDir)
+            if (Files.exists(p)) {
+                Files.list(p).toList.asScala.foreach(Files.deleteIfExists)
+                Files.deleteIfExists(p)
+            }
+        }
     }
 
     test("GDAL Data Source nameCol option controls output filename prefix") {

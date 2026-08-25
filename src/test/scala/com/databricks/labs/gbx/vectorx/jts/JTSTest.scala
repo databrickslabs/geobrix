@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.vectorx.jts
 
-import org.locationtech.jts.geom.{Coordinate, Point, Polygon}
+import org.locationtech.jts.geom.{Coordinate, GeometryFactory, Point, Polygon}
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
@@ -328,6 +328,166 @@ class JTSTest extends AnyFunSuite {
         val ewkb = JTS.toEWKB(poly)
         val parsed = JTS.fromWKB(ewkb)
         parsed.getSRID shouldBe 27700
+    }
+
+    // ====== Adaptive writers (Z-preserving without NaN-Z injection) ======
+
+    test("toEWKBAdaptive: 2D point produces same bytes as toEWKB") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        pt.setSRID(4326)
+        val adaptive = JTS.toEWKBAdaptive(pt)
+        val standard = JTS.toEWKB(pt)
+        adaptive.length shouldBe standard.length
+        adaptive shouldEqual standard
+    }
+
+    test("toEWKBAdaptive: 2D point is 25 bytes (no Z)") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        pt.setSRID(4326)
+        JTS.toEWKBAdaptive(pt).length shouldBe 25
+    }
+
+    test("toEWKBAdaptive: 3D point is 33 bytes (has Z)") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        pt.setSRID(4326)
+        JTS.toEWKBAdaptive(pt).length shouldBe 33
+    }
+
+    test("toEWKBAdaptive: 3D point round-trips Z") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.5, 2.5, 99.25))
+        pt.setSRID(4326)
+        val bytes = JTS.toEWKBAdaptive(pt)
+        val decoded = JTS.fromWKB(bytes)
+        decoded.getCoordinate.z shouldBe (99.25 +- 1e-9)
+        decoded.getSRID shouldBe 4326
+    }
+
+    test("toWKBAdaptive: 2D point produces same bytes as toWKB") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        JTS.toWKBAdaptive(pt) shouldEqual JTS.toWKB(pt)
+    }
+
+    test("toWKBAdaptive: 3D point round-trips Z") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.5, 2.5, 42.0))
+        val bytes = JTS.toWKBAdaptive(pt)
+        val decoded = JTS.fromWKB(bytes)
+        decoded.getCoordinate.z shouldBe (42.0 +- 1e-9)
+    }
+
+    test("toEWKTAdaptive: 2D point produces plain WKT (no Z marker)") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0))
+        val wkt = JTS.toEWKTAdaptive(pt)
+        wkt should not include "Z"
+    }
+
+    test("toEWKTAdaptive: 3D point includes Z ordinate") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        val wkt = JTS.toEWKTAdaptive(pt)
+        wkt should include ("3")  // Z value appears in the string
+    }
+
+    test("toEWKTAdaptive: SRID is included for 3D point") {
+        val gf = new GeometryFactory()
+        val pt = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        pt.setSRID(4326)
+        val wkt = JTS.toEWKTAdaptive(pt)
+        wkt should startWith("SRID=4326;")
+    }
+
+    // ====== Adaptive Z probe — mixed-geometry regression cases ======
+
+    test("toEWKBAdaptive: GEOMETRYCOLLECTION where first coord NaN-Z but later has Z -> 3D output") {
+        // Regression: old code probed only geom.getCoordinate (first coord).
+        // GEOMETRYCOLLECTION(POINT(0 0), POINT Z(1 1 5)) — first coord has NaN Z.
+        val gf = new GeometryFactory()
+        val pt2d = gf.createPoint(new Coordinate(0.0, 0.0))       // Z = NaN
+        val pt3d = gf.createPoint(new Coordinate(1.0, 1.0, 5.0))  // Z = 5
+        val coll = gf.createGeometryCollection(Array(pt2d, pt3d))
+        val bytes = JTS.toEWKBAdaptive(coll)
+        // 3D output is larger than 2D; exact size varies but must carry Z
+        val decoded = JTS.fromWKB(bytes)
+        // Second point's coordinate should have Z = 5
+        val coords = decoded.getCoordinates
+        val z5 = coords.find(c => !c.z.isNaN && math.abs(c.z - 5.0) < 1e-9)
+        z5 should not be None
+    }
+
+    test("toEWKBAdaptive: LINESTRING where first vertex NaN-Z but second has Z -> 3D output") {
+        val gf = new GeometryFactory()
+        // Create LINESTRING where vertex 0 has NaN Z and vertex 1 has Z = 10
+        val coords = Array(new Coordinate(0.0, 0.0), new Coordinate(1.0, 1.0, 10.0))
+        val line = gf.createLineString(coords)
+        val bytes = JTS.toEWKBAdaptive(line)
+        val decoded = JTS.fromWKB(bytes)
+        val c1 = decoded.getCoordinates()(1)
+        c1.z shouldBe (10.0 +- 1e-9)
+    }
+
+    test("toEWKBAdaptive: 2D GEOMETRYCOLLECTION produces same bytes as toEWKB") {
+        val gf = new GeometryFactory()
+        val pt1 = gf.createPoint(new Coordinate(0.0, 0.0))
+        val pt2 = gf.createPoint(new Coordinate(1.0, 1.0))
+        val coll = gf.createGeometryCollection(Array(pt1, pt2))
+        JTS.toEWKBAdaptive(coll).length shouldBe JTS.toEWKB(coll).length
+    }
+
+    // ====== toWKBForOGR — all-coords-must-have-Z rule ======
+
+    test("toWKBForOGR: 2D geometry stays 2D") {
+        val p = JTS.point(11.0, 42.0)  // Z = NaN
+        val wkb = JTS.toWKBForOGR(p)
+        wkb.length shouldBe 21  // plain WKB for 2D point: 1+4+8+8
+    }
+
+    test("toWKBForOGR: all-Z geometry becomes 3D") {
+        val gf = new GeometryFactory()
+        val p = gf.createPoint(new Coordinate(1.0, 2.0, 3.0))
+        val wkb = JTS.toWKBForOGR(p)
+        wkb.length shouldBe 29  // 3D WKB for point: 1+4+8+8+8
+    }
+
+    test("toWKBForOGR: mixed-Z LINESTRING (any NaN) falls back to 2D") {
+        val gf = new GeometryFactory()
+        // LINESTRING where first vertex has NaN Z, second has Z=5 — mixed → 2D
+        val ls = gf.createLineString(Array(
+            new Coordinate(0.0, 0.0),       // Z = NaN
+            new Coordinate(1.0, 1.0, 5.0)   // Z = 5
+        ))
+        val wkb = JTS.toWKBForOGR(ls)
+        // 2D WKB LINESTRING: 1+4+4 + 2*(8+8) = 41 bytes
+        wkb.length shouldBe 41
+        val decoded = new org.locationtech.jts.io.WKBReader().read(wkb)
+        decoded.getCoordinate.z.isNaN shouldBe true  // no Z in 2D WKB
+    }
+
+    test("toWKBForOGR: mixed-Z GEOMETRYCOLLECTION falls back to 2D") {
+        val gf = new GeometryFactory()
+        val pt2d = gf.createPoint(new Coordinate(0.0, 0.0))       // Z = NaN
+        val pt3d = gf.createPoint(new Coordinate(1.0, 1.0, 5.0))  // Z = 5
+        val coll = gf.createGeometryCollection(Array(pt2d, pt3d))
+        val wkb = JTS.toWKBForOGR(coll)
+        val decoded = new org.locationtech.jts.io.WKBReader().read(wkb)
+        // 2D output: first coord should have NaN Z
+        decoded.getCoordinates.forall(c => c.z.isNaN) shouldBe true
+    }
+
+    test("toWKBForOGR: all-Z LINESTRING keeps Z") {
+        val gf = new GeometryFactory()
+        val ls = gf.createLineString(Array(
+            new Coordinate(0.0, 0.0, 1.0),  // Z = 1
+            new Coordinate(1.0, 1.0, 5.0)   // Z = 5
+        ))
+        val wkb = JTS.toWKBForOGR(ls)
+        val decoded = new org.locationtech.jts.io.WKBReader().read(wkb)
+        decoded.getCoordinates()(1).z shouldBe (5.0 +- 1e-9)
     }
 
 }

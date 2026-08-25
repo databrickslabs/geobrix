@@ -5,6 +5,7 @@ pixel grid (dimensions / resolution) changes."""
 from affine import Affine
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core._util import resampling_enum
 
 
@@ -19,9 +20,20 @@ def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> byt
     profile.update(
         driver="GTiff", width=dst_width, height=dst_height, transform=new_transform
     )
+    # Passing out_shape lets GDAL serve the read from internal overviews
+    # when the dataset has them (COGs being the common case we produce).
+    # GDAL selects the best overview level automatically; no explicit
+    # overview-selection code is needed.  For upsampling or plain GTiffs
+    # without overviews, out_shape triggers the same decimated-read path
+    # at full resolution — behaviour is identical to the pre-COG code.
     data = ds.read(
         out_shape=(ds.count, dst_height, dst_width),
         resampling=resampling_enum(algorithm),
+    )
+    out_dtype = profile.get("dtype", ds.dtypes[0])
+    decoded_bytes = data.nbytes
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:

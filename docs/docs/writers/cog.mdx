@@ -1,0 +1,259 @@
+---
+sidebar_position: 3
+sidebar_label: COG
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import cogExamples from '!!raw-loader!../../tests/python/readers/cog_gbx_examples.py';
+
+# COG Writer
+
+`cog_gbx` is the **COG preparation writer**: it takes path-reference rows from
+`file_gbx`, opens each source file, and converts it to a spec-valid
+Cloud-Optimized GeoTIFF — one master COG per source file — written to the
+output directory.
+
+A master COG carries:
+- **Internal tiling** — the file is divided into a regular grid of blocks so
+  range-reads can fetch any window without scanning the whole file.
+- **Overview levels** — pre-built down-sampled versions at progressively
+  coarser resolution, so the `cog_gbx` reader (and rio-tiler / GDAL) can
+  serve a low-zoom clip without decoding full-resolution data.
+- **DEFLATE (or chosen) compression** — applied per block.
+
+The output is a directory of `.tif` files that can be read back with the
+`cog_gbx` reader for windowed (bbox-clipped) access.
+
+It converts per partition by default (for moderate files) and offers an opt-in
+[`driverMode`](#drivermode-preparing-large-files) that prepares large files on
+the driver. For the concepts behind COG preparation — striped vs. tiled layout,
+overviews, BigTIFF, and the memory model — see
+[Large Rasters](../api/large-rasters).
+
+`cog_gbx` also writes **mosaics**: instead of one master COG per source, it
+can tile each source into bounded mini-COGs and optionally emit a portable
+`mosaic.vrt` index over them — so a source too large to hold in a single COG
+(or in per-task memory) is split into pieces every `rst_*` function can process
+independently. The tile grid can be native pixel-based (`gridSystem="none"`,
+default), quadbin cell-aligned (`gridSystem="quadbin"`), BNG cell-aligned
+(`gridSystem="bng"`, Great Britain only), or h3 cell-aligned (`gridSystem="h3"`).
+The VRT index is optional (`writeVrt="false"` writes tiles only).
+See [Mosaic mode](#mosaic-mode) below for the writer options, and the
+[VRT & Mosaics](../api/vrt-mosaic) reference for the full pattern.
+
+:::note Lightweight only
+`cog_gbx` is a pure-Python lightweight DataSource (no JAR). It uses GDAL's
+`driver="COG"` creation path internally, which produces spec-compliant COGs
+without the memory overhead of re-encode paths. Register with `register(spark)`
+before use.
+:::
+
+## Input schema
+
+`cog_gbx` takes **path-reference rows** from `file_gbx` — not a raster tile
+DataFrame. The required columns are the ones `file_gbx` emits:
+
+```
+root
+ |-- path:  string  — absolute path to the source raster file
+ |-- name:  string  — (used to derive the output filename when nameCol is unset)
+ |-- ...    other file_gbx columns (ignored by the writer)
+```
+
+Alternatively, supply any DataFrame with at minimum a `path` string column and
+set `nameCol="path"` to use the basename of the path as the output filename.
+
+## COG Options
+
+These options control per-file COG encoding. For VRT-mosaic mode
+(`vrtMosaic` / `gridSystem`), see [Mosaic-mode options](#mosaic-mode-options)
+below — mosaic mode has its own tile-grid and index options in addition to
+these encoding options.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `cogBlockSize` | `"512"` | Internal tile size in pixels for the COG grid. |
+| `cogOverviewResampling` | `"AVERAGE"` | Resampling algorithm for overview levels. Any GDAL-supported value: `AVERAGE`, `NEAREST`, `BILINEAR`, `CUBICSPLINE`, `LANCZOS`, … |
+| `compress` | `"auto"` | Compression codec: `auto` (size-adaptive ZSTD+predictor — recommended), `zstd`, `deflate`, `lzw`, `none`. See [Materialized Compression](../api/materialized-compression). |
+| `compressLevel` | (codec-dependent) | Compression level: for `zstd` and `deflate` only. Ignored when `compress="auto"`. |
+| `predictor` | (dtype-matched) | TIFF predictor tag (1–3) for byte reordering. Ignored when `compress="auto"`. |
+| `cogCompression` | (deprecated) | **Deprecated alias** for `compress`; use `compress` instead. |
+| `cogSubdataset` | none | Subdataset to select from a multi-subdataset source (e.g. a NetCDF variable). |
+| `cogSkipIfExists` | `"true"` | Skip a source whose output already exists — idempotent resume after an interrupted run. |
+| `cogBigTiff` | `"YES"` | BigTIFF policy: `YES` (always — required for outputs over ~4 GiB), `IF_SAFER`/`IF_NEEDED` (size-adaptive), `NO` (force classic TIFF, fails past ~4 GiB). See the [BigTIFF note](../api/large-rasters#raster-formats-striped-tiled-and-cog). |
+| `driverMode` | `"false"` | Route conversion to the **driver** instead of per-partition workers — the mode for large single files. See [driverMode](#drivermode-preparing-large-files) below. |
+| `driverModeVerbose` | `"true"` | In `driverMode`, print per-file progress from the driver. |
+| `nameCol` | `"name"` | Column whose value becomes the output filename (without extension). Defaults to the `name` column emitted by `file_gbx`. |
+
+## Register
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+```
+
+## Prepare master COGs
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_PREPARE"
+  source="docs/tests/python/readers/cog_gbx_examples.py"
+  testFile="docs/tests/python/readers/test_cog_gbx_examples.py" />
+
+## Output
+
+One `.tif` file per input row, written under the target directory. Output filenames
+are derived from the `name` column (or `nameCol` override) with a `.tif` extension.
+
+Each output file passes `rio_cogeo.cogeo.cog_validate` — the `cog_gbx` writer
+uses GDAL's `driver="COG"` creation path, which produces a genuine, spec-valid COG
+in a single encode pass.
+
+## Prepare then read
+
+The `cog_gbx` writer and reader are designed to work together as a two-step
+preparation + windowed-read pattern:
+
+```
+file_gbx → cog_gbx writer   (prepare: one master COG per source file)
+                   ↓
+            cog_gbx reader + bbox  (read: fetch only the AOI window)
+```
+
+After preparation, read with bbox clip:
+
+<CodeFromTest code={cogExamples} language="python" functionName="COG_BBOX_READ"
+  source="docs/tests/python/readers/cog_gbx_examples.py" />
+
+## `driverMode`: preparing large files
+
+By default `cog_gbx` converts each source **inside a distributed write task**
+(per partition). On Databricks Serverless a write task runs under a fixed
+per-task memory ceiling (on the order of 1 GB) that no instance size raises, and
+GDAL's overview build for a **very large single source** (roughly 1 GiB or more,
+especially a striped GeoTIFF) can exceed it. The default per-partition mode is
+therefore intended for **moderate files**.
+
+Set **`driverMode="true"`** to prepare large files. In this mode the write step
+on the workers only gathers the source paths (no conversion), and the actual
+conversion runs on the **driver**, which is not under the per-task worker
+ceiling:
+
+```python
+(spark.read.format("file_gbx").load(input_dir)
+   .write.format("cog_gbx")
+   .option("driverMode", "true")
+   .option("cogSkipIfExists", "true")
+   .mode("overwrite")
+   .save(output_dir))
+```
+
+Driver-orchestrated preparation streams block-by-block and processes one file at
+a time, so peak memory stays flat (~2 GiB in testing) regardless of source size
+or batch count — a **standard Serverless driver handles multi-gigabyte sources**;
+no classic cluster is required. See
+[Large Rasters → memory footprint](../api/large-rasters#memory-footprint-and-staying-on-standard-serverless)
+for the full explanation.
+
+:::warning Long driverMode writes: call `prepare_cogs` directly
+In `driverMode` the conversion runs inside the `.save()` call. A write that
+blocks for many minutes — a large batch, or very large files (roughly 1 GB/min)
+— can have its connection cancelled and fail even though the conversion is fine.
+If you hit this, prepare the files by calling `prepare_cogs` **directly** in your
+notebook instead of through the writer — it is plain Python on the driver with
+no such connection, and it is idempotent so re-running resumes cleanly. See
+[Large Rasters → Writing COGs](../api/large-rasters#writing-cogs-and-why).
+:::
+
+## Mosaic mode
+
+For sources too large to process as a single master COG — or when you want a
+spatially indexed, portable tile set — use **mosaic mode**. Mosaic mode has two
+independent choices:
+
+- **Tile grid (`gridSystem`)** — how tiles are aligned on disk and (for DGGS
+  grids) tagged with a cell identifier. `"none"` (native pixel tiling, the
+  default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to
+  EPSG:3857), `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326,
+  hex-clipped), or `"bng"` (cell-aligned to the British National Grid,
+  reprojected to EPSG:27700, Great Britain only).
+- **VRT index (`writeVrt`)** — whether to emit a `mosaic.vrt` index alongside
+  the tiles. Defaults to `"true"`. Set `"false"` to write tiles only (build the
+  index later with `mint_vrt`, or enumerate tiles directly).
+
+Activate mosaic mode by passing `vrtMosaic="true"` or by supplying `gridSystem`.
+For native tiling, `vrtMosaic="true"` alone is enough:
+
+```python
+(
+    sources
+    .write.format("cog_gbx")
+    .option("vrtMosaic", "true")
+    .option("tileSize", "1024")   # optional; defaults to 1024
+    .mode("overwrite")
+    .save(output_dir)
+)
+```
+
+### Mosaic-mode options
+
+These options apply when `vrtMosaic="true"`. All the COG encoding options above
+(`cogBlockSize`, `cogOverviewResampling`, `compress`, `compressLevel`,
+`predictor`, `cogBigTiff`, `cogSkipIfExists`) pass through to each mini-COG.
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `vrtMosaic` | — | Set `"true"` to activate mosaic mode. (Supplying `gridSystem` also activates it; one of the two must be present.) |
+| `gridSystem` | `"none"` | Tile grid. `"none"` (native pixel tiling, default), `"quadbin"` (cell-aligned to the quadbin grid, reprojected to EPSG:3857), `"h3"` (cell-aligned to the h3 grid, reprojected to EPSG:4326, hex-clipped), or `"bng"` (cell-aligned to the British National Grid, reprojected to EPSG:27700, Great Britain only). |
+| `gridResolution` | — | Grid resolution. Required when `gridSystem="quadbin"`, `gridSystem="h3"`, or `gridSystem="bng"`; invalid with `gridSystem="none"`. Quadbin: range `0`–`20`. H3: range `0`–`15`. BNG: integer index `±1`–`±6` or string key (e.g. `"1km"`, `"100m"`). |
+| `tileSize` | `"1024"` | Tile edge length in pixels (square tiles). The last row and column are clipped to the source boundary. Valid only with `gridSystem="none"`. |
+| `overlapPercent` | `"0"` | Tile-edge halo as a percent of `tileSize` (e.g. `5` adds `ceil(tileSize·5/100)` px on each side, clamped to source bounds). Valid only with `gridSystem="none"`. |
+| `mergeStrategy` | `"none"` | How spatially overlapping tiles from different sources blend: `none` (last-write wins), `min`, `max`, `avg`, `first`, `last`. |
+| `pruneEmpty` | `"true"` | Skip tiles whose pixels are entirely NoData — saves storage and reader work on sparse sources. |
+| `writeVrt` | `"true"` | Emit `mosaic.vrt` alongside the tiles. `"false"` writes tiles only — build the index later with `mint_vrt` or enumerate tiles directly. |
+| `vrtPaths` | `"relative"` | Tile paths inside the VRT: `"relative"` (bare filenames — directory is portable) or `"absolute"` (works from any location). |
+
+:::note Disallowed combinations raise a clear error
+`driverMode=true` cannot combine with mosaic mode (mosaic writes per-tile
+mini-COGs on executors; `driverMode` produces a single driver-side COG). The
+DGGS-only options (`gridMinResolution`, `gridMaxResolution`,
+`gridStepResolution`) are rejected for `gridSystem="none"`, and `tileSize` /
+`overlapPercent` are rejected for any grid-aligned system.
+:::
+
+See [VRT & Mosaics](../api/vrt-mosaic) for the full pattern — quadbin mosaic
+with `tile.metadata` cell ids, `mint_vrt` for on-demand transient VRTs, reading
+a mosaic back, and spatial filtering of VRT loads.
+
+## When to use `cog_gbx` writer vs `gtiff_gbx` writer with `cog=true`
+
+| | `cog_gbx` writer | `gtiff_gbx` with `cog=true` |
+|---|---|---|
+| **Input** | path-reference rows (`file_gbx` output) | raster tile DataFrame (`(source, tile)`) |
+| **Purpose** | prepare master COGs from source files | re-encode already-loaded tiles as COG |
+| **Use when** | you have files on disk to convert | you have tiles in memory to write |
+
+For a tile DataFrame produced by a raster reader, use
+`df.write.format("gtiff_gbx").option("cog", "true").save(...)`. For source
+files on disk that need preparation before distributed reading, use `cog_gbx`.
+
+## Common functions: used vs excluded
+
+See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
+primitives. The table below shows which are active in this writer and which are not, and why.
+
+| Common capability | Used here? | How / why |
+|---|---|---|
+| `list_local_files` (session-free enumeration) | Not used by the writer | Writers do not enumerate source files; they write a DataFrame's output partitions. |
+| `gbx_file_write` / FILE-tier write | Not in the DataSource | The DataSource writer (`df.write.format(...)`) is session-less on Connect and commits via FUSE. FILE-tier writes use `gbx_file_write` at the function layer instead. |
+| `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for raster data go through `gbx_file_read` at the function layer. |
+
+:::note Shared file-access layer
+Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
+:::
+
+## Next steps
+
+- [Large Rasters](../api/large-rasters) — formats, BigTIFF, the memory model, and `prepare_cogs`
+- [VRT & Mosaics](../api/vrt-mosaic) — tile a large source into bounded mini-COGs; native or quadbin grid; optional VRT index
+- [File Lister](../readers/file) — list source files before preparation
+- [COG Reader](../readers/cog) — windowed read from prepared COGs
+- [Raster Reader](../readers/raster) — decode rasters into the `(source, tile)` schema

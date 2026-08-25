@@ -154,47 +154,79 @@ class DEMProcessingTest extends AnyFunSuite with BeforeAndAfterAll {
     // One happy-path test per expression (Task 4 budget: 7 tests)
     // ------------------------------------------------------------------
 
-    test("RST_Slope.execute returns ~45 deg slope across the 1-m-per-pixel east-ramp") {
-        val (out, _) = track(RST_Slope.execute(demDs, "degrees", 1.0))
+    test("RST_Slope.execute returns ~45 deg slope across the 1-m-per-pixel east-ramp (isotropic 1.0/1.0)") {
+        val (out, _) = track(RST_Slope.execute(demDs, "degrees", 1.0, 1.0))
         out should not be null
         // Tolerance is broad - the center cell of a 1m/m gradient should be ~45 deg.
         val sl = centerPixel(out)
         sl should (be > 30.0 and be < 60.0)
     }
 
-    /** Extract the default `scale` literal the builder injects when the caller
-     *  omits it (1-arg form). This is the value the GDAL-normal default hinges on:
-     *  Double.NaN => no -s => auto-scale; 1.0 => forced -s 1.0 => saturation.
+    /** Extract the default xscale/yscale literals the builder injects when the caller
+     *  omits them (1-arg form). Both must be NaN (GDAL-normal auto-scale).
      */
-    private def builderDefaultScale(): Double = {
+    private def builderDefaultScales(): (Double, Double) = {
         val tile = org.apache.spark.sql.catalyst.expressions.Literal(null, org.apache.spark.sql.types.BinaryType)
         val expr = RST_Slope.builder()(Seq(tile)).asInstanceOf[RST_Slope]
-        expr.scaleExpr.asInstanceOf[org.apache.spark.sql.catalyst.expressions.Literal].value
+        val xs = expr.xscaleExpr.asInstanceOf[org.apache.spark.sql.catalyst.expressions.Literal].value
             .asInstanceOf[Double]
+        val ys = expr.yscaleExpr.asInstanceOf[org.apache.spark.sql.catalyst.expressions.Literal].value
+            .asInstanceOf[Double]
+        (xs, ys)
     }
 
-    test("RST_Slope default (no explicit scale) is the NaN sentinel so -s is omitted") {
-        // GDAL-normal default: the 1-arg/2-arg builder must inject Double.NaN, not
-        // 1.0. Under the old code this is 1.0 (forces -s 1.0); under the fix it is
-        // NaN (omits -s, lets GDAL 3.11 auto-derive the CRS scale).
-        builderDefaultScale().isNaN shouldBe true
+    test("RST_Slope default (no explicit xscale/yscale) injects NaN sentinels so -xscale/-yscale are omitted") {
+        // GDAL-normal default: the 1-arg/2-arg builder must inject (NaN, NaN), not
+        // 1.0. NaN sentinels cause omission of -xscale/-yscale, letting GDAL 3.11
+        // auto-derive the CRS scale.
+        val (xs, ys) = builderDefaultScales()
+        xs.isNaN shouldBe true
+        ys.isNaN shouldBe true
     }
 
-    test("RST_Slope auto-scales a geographic (EPSG:4326) DEM but saturates with explicit -s 1.0") {
-        // Drive the SAME paths the SQL/Column API drives: the default scale (from
-        // the builder) vs an explicit 1.0. On a geographic raster, the default
-        // (NaN => omit -s => GDAL auto-scale) yields a sane slope, while -s 1.0
-        // treats ~0.001 deg spacing as metres and saturates near vertical.
-        val (auto, _) = track(RST_Slope.execute(geoDemDs, "degrees", builderDefaultScale()))
-        val (saturated, _) = track(RST_Slope.execute(geoDemDs, "degrees", 1.0))
+    test("RST_Slope auto-scales a geographic (EPSG:4326) DEM but saturates with explicit xscale=1.0/yscale=1.0") {
+        // Drive the SAME paths the SQL/Column API drives: the default (NaN/NaN)
+        // vs an explicit (1.0, 1.0). On a geographic raster, NaN/NaN omits
+        // -xscale/-yscale so GDAL auto-derives the scale, while 1.0/1.0 treats
+        // ~0.001 deg spacing as metres and saturates near vertical.
+        val (xs, ys) = builderDefaultScales()
+        val (auto, _) = track(RST_Slope.execute(geoDemDs, "degrees", xs, ys))
+        val (saturated, _) = track(RST_Slope.execute(geoDemDs, "degrees", 1.0, 1.0))
         auto should not be null
         saturated should not be null
         val autoSl = centerPixel(auto)
         val satSl = centerPixel(saturated)
-        // Saturated (-s 1.0) is pinned near vertical; auto is well below it.
+        // Saturated (-xscale 1.0 -yscale 1.0) is pinned near vertical; auto is well below it.
         satSl should be > 80.0
         autoSl should be < 80.0
         satSl should be > (autoSl + 1.0)
+    }
+
+    test("RST_Slope anisotropic xscale: doubling xscale halves perceived gradient in X axis") {
+        // The test DEM is a west-to-east ramp (all gradient is in X). Doubling xscale
+        // tells GDAL each pixel spans 2 m in X instead of 1 m, halving the perceived
+        // slope steepness in that direction. Verify the result differs from xscale=1.0.
+        val (iso, _) = track(RST_Slope.execute(demDs, "degrees", 1.0, 1.0))
+        val (aniso, _) = track(RST_Slope.execute(demDs, "degrees", 2.0, 1.0))
+        iso should not be null
+        aniso should not be null
+        val isoSl = centerPixel(iso)
+        val anisoSl = centerPixel(aniso)
+        // xscale=2.0 makes the pixel 2x wider in X, so the slope angle decreases.
+        math.abs(isoSl - anisoSl) should be > 0.1
+        anisoSl should be < isoSl
+    }
+
+    test("RST_Slope builder rejects arity-3 (xscale without yscale)") {
+        val tile = org.apache.spark.sql.catalyst.expressions.Literal(null, org.apache.spark.sql.types.BinaryType)
+        val unit = org.apache.spark.sql.catalyst.expressions.Literal(
+            org.apache.spark.unsafe.types.UTF8String.fromString("degrees"),
+            org.apache.spark.sql.types.StringType
+        )
+        val scale = org.apache.spark.sql.catalyst.expressions.Literal(1.0, org.apache.spark.sql.types.DoubleType)
+        an[IllegalArgumentException] should be thrownBy {
+            RST_Slope.builder()(Seq(tile, unit, scale))
+        }
     }
 
     test("RST_Aspect.execute returns ~270 deg (west-facing) for a west-to-east ramp") {

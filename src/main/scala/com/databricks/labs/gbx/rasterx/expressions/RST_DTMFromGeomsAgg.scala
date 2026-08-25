@@ -24,7 +24,7 @@ final case class RST_DTMFromGeomsAgg(
     mergeToleranceExpr: Expression,
     snapToleranceExpr: Expression,
     xminExpr: Expression, yminExpr: Expression, xmaxExpr: Expression, ymaxExpr: Expression,
-    widthPxExpr: Expression, heightPxExpr: Expression, sridExpr: Expression,
+    widthPxExpr: Expression, heightPxExpr: Expression, outSridExpr: Expression,
     noDataExpr: Expression,
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0
@@ -44,11 +44,11 @@ final case class RST_DTMFromGeomsAgg(
     override def children: Seq[Expression] = Seq(
         pointExpr, breaklinesExpr, mergeToleranceExpr, snapToleranceExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr, noDataExpr)
+        widthPxExpr, heightPxExpr, outSridExpr, noDataExpr)
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): RST_DTMFromGeomsAgg = {
         require(nc.length == 12, s"RST_DTMFromGeomsAgg expects 12 children; got ${nc.length}")
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), nc(10), nc(11))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7), nc(8), nc(9), outSridExpr = nc(10), nc(11))
     }
 
     override def withNewMutableAggBufferOffset(n: Int): ImperativeAggregate = copy(mutableAggBufferOffset = n)
@@ -90,7 +90,7 @@ final case class RST_DTMFromGeomsAgg(
             evalDouble(xminExpr, empty, "xmin"), evalDouble(yminExpr, empty, "ymin"),
             evalDouble(xmaxExpr, empty, "xmax"), evalDouble(ymaxExpr, empty, "ymax"),
             evalInt(widthPxExpr, empty, "width_px"), evalInt(heightPxExpr, empty, "height_px"),
-            evalInt(sridExpr, empty, "srid"),
+            evalInt(outSridExpr, empty, "out_srid"),
             evalDouble(noDataExpr, empty, "no_data"))
     }
 
@@ -147,6 +147,6 @@ object RST_DTMFromGeomsAgg extends WithExpressionInfo {
         case 12 => RST_DTMFromGeomsAgg(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
         case n => throw new IllegalArgumentException(
             s"$name takes 11 or 12 arguments (point, breaklines, merge_tolerance, snap_tolerance, " +
-            s"xmin, ymin, xmax, ymax, width_px, height_px, srid, [no_data]); got $n")
+            s"xmin, ymin, xmax, ymax, width_px, height_px, out_srid, [no_data]); got $n")
     }
 }

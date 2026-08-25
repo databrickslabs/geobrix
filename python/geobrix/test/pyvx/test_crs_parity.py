@@ -1,0 +1,1195 @@
+"""Light (pyvx) vs heavy (vectorx) CRS-family parity: st_crs / st_setcrs / st_transformcrs.
+
+## Comparison rule: DECODED GEOMETRIES, never raw bytes
+
+The two tiers emit the same EWKB *content* in different byte orders — the heavy tier's
+JTS ``WKBWriter`` defaults to big-endian (``0020000001…``) while shapely writes
+little-endian (``0101000020…``). Both are valid EWKB, both decode identically, and the
+difference is a pre-existing writer default with nothing to do with CRS behavior. A
+byte-equality parity test would fail spuriously, so every assertion here compares:
+
+- decoded geometry type and coordinates (within ``COORD_TOL``),
+- decoded SRID,
+- ``st_crs`` strings (plain string equality — it is an authority string, not a geometry).
+
+## How each tier is invoked
+
+Both tiers register the SAME three SQL names, so they cannot both own
+``gbx_st_transformcrs`` in one Spark session. Heavy is therefore exercised through real
+SQL against the JAR (the registered surface), and light through the exact Python
+callables its registrar binds to those names (``_crs.st_crs``, ``_crs._udf_st_setcrs``,
+``_crs._udf_st_transformcrs``) — same code path, no name collision. One dedicated test
+registers the light callables under temporary ``gbxlight_*`` names to prove the light SQL
+surface also *declares* BINARY in the Spark schema.
+
+## What is covered
+
+- all three functions;
+- all four geometry input encodings (WKB / EWKB / WKT / EWKT);
+- authority-coded targets (EPSG and ESRI);
+- authority-less targets — raw ``PROJCS[...]`` WKT and a PROJ4 string;
+- a non-numeric authority code (``OGC:CRS84``);
+- the never-error degrade paths (unresolvable embedded SRID, unresolvable ``source_crs``,
+  plain geometry with no source at all);
+- ``st_setcrs`` raising for a CRS with no integer authority code;
+- the always-BINARY SQL contract on both tiers;
+- clean-3D Z preservation and partial-Z quiet-2D handling.
+
+## Running this suite — it is a GATE, not an optional extra
+
+Heavy requires the geobrix JAR *and* the GDAL/OGR native libraries (JNI), both present in
+the geobrix-dev Docker container. Because the suite is ``integration``-marked AND needs a
+staged JAR, a plain ``gbx:test:python`` run SKIPS it — and a skipped suite reads as green.
+Use the dedicated gate, which rebuilds the JAR, stages it, enables integration, and fails
+if nothing actually ran::
+
+    bash scripts/commands/gbx-test-parity.sh                  # full gate
+    bash scripts/commands/gbx-test-parity.sh --skip-build -k crs   # fast iteration
+
+A stale staged JAR shows up as mass ``UNRESOLVED_ROUTINE`` errors (the heavy functions
+simply are not in it); the gate's default rebuild removes that failure mode.
+"""
+
+import logging
+from pathlib import Path
+
+import pytest
+
+pytest.importorskip("shapely")
+pytest.importorskip("pyproj")
+
+import shapely  # noqa: E402
+from shapely import from_wkb, get_coordinates, get_srid, to_wkb  # noqa: E402
+from shapely.geometry import LineString, Point  # noqa: E402
+
+pytestmark = pytest.mark.integration
+
+_HERE = Path(__file__).resolve()
+# parents[2] == python/geobrix (test/pyvx -> test -> python/geobrix)
+_JARS = sorted((_HERE.parents[2] / "lib").glob("geobrix-*-jar-with-dependencies.jar"))
+
+# Reprojected metre coordinates are compared to 1e-6 m (a micrometre): far tighter than
+# any real georeferencing need, loose enough for double-rounding between PROJ (light) and
+# the GDAL/OGR CT (heavy), which are the same PROJ underneath.
+COORD_TOL = 1e-6
+
+_CUSTOM_TM_WKT = (
+    'PROJCS["Custom_TM",'
+    'GEOGCS["WGS 84",'
+    'DATUM["WGS_1984",SPHEROID["WGS 84",6378137,298.257223563]],'
+    'PRIMEM["Greenwich",0],'
+    'UNIT["degree",0.0174532925199433]],'
+    'PROJECTION["Transverse_Mercator"],'
+    'PARAMETER["central_meridian",13.7],'
+    'PARAMETER["scale_factor",0.9996],'
+    'UNIT["metre",1]]'
+)
+_PROJ4_UTM33 = "+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs"
+
+# Dutch RD written as PROJ4 with a NULL datum shift. PROJ's fuzzy matcher pairs this with
+# EPSG:28992 at its default confidence, but the +towgs84=0,0,0,0,0,0,0 forces a ballpark
+# datum transformation, so its true coordinates sit ~177 m from real EPSG:28992.
+#
+# This is the cell _PROJ4_UTM33 cannot cover: for UTM33/WGS84 the fuzzy match and the exact
+# definition coincide numerically, so a fuzzy authority leaking into the reprojection math
+# is invisible there. Here it is a 177 m cross-tier divergence.
+_PROJ4_RD_NULL_SHIFT = (
+    "+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889 +k=0.9999079 "
+    "+x_0=155000 +y_0=463000 +ellps=bessel +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+)
+_RD_LON, _RD_LAT = 5.39, 52.16
+
+# A WKT body whose parts disagree about dimensionality — no WKT parser accepts it as-is.
+# Coordinates (15, 51) / (16, 52) are inside EPSG:32633's area_of_use (lon 12°–18°E).
+# Changed from (11, 42)/(12, 43) after Tasks 2+3 added the domain-check: the old coords
+# (lon 11°/12°E) sit outside or on the boundary of EPSG:32633, so both tiers returned NULL.
+_MIXED_DIM_WKT = "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT (16 52))"
+
+# Mixed-dimensionality WKT shapes BEYOND the flat one above. Each has a structural feature
+# the flat case does not, and each was a real light-vs-heavy divergence: an EMPTY component
+# has no ordinates to normalize, an M ordinate must be dropped the way JTS drops it, and a
+# NESTED collection needs its own dimensionality tag re-derived.
+_MIXED_DIM_SHAPES = [
+    ("empty-component", "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), POINT EMPTY)"),
+    ("zm-ordinates", "GEOMETRYCOLLECTION ZM (POINT ZM (15 51 3 4), POINT (16 52))"),
+    (
+        "nested-collection",
+        "GEOMETRYCOLLECTION Z (POINT Z (15 51 5), GEOMETRYCOLLECTION (POINT (16 52)))",
+    ),
+]
+
+
+# ---------------------------------------------------------------------------
+# Session
+# ---------------------------------------------------------------------------
+
+
+# A skipped parity suite reads as green, which is worse than an absent one. Both skip
+# reasons below therefore name the ONE command that turns this into a real gate, and say
+# outright that the skip is not a pass. `gbx:test:parity` additionally fails the run when
+# 0 tests actually executed, so a fully-skipped suite cannot be mistaken for success.
+_GATE_CMD = "bash scripts/commands/gbx-test-parity.sh"
+
+
+@pytest.fixture(scope="module")
+def spark_with_jar():
+    if not _JARS:
+        pytest.skip(
+            "CROSS-TIER PARITY NOT VERIFIED (this skip is NOT a pass): no geobrix "
+            "assembly JAR staged under python/geobrix/lib/, so the heavy tier cannot be "
+            f"called. Run the gate: {_GATE_CMD}"
+        )
+    from pyspark.sql import SparkSession
+
+    logging.getLogger("py4j").setLevel(logging.ERROR)
+
+    # spark.jars is a JVM-startup-time setting: it has no effect if a JVM (and therefore
+    # a Spark session) is already live in this process. Skip instead of producing a
+    # misleading failure when another test suite already created a JAR-free session.
+    active = SparkSession.getActiveSession()
+    if active is not None:
+        active_jars = active.conf.get("spark.jars", "")
+        if str(_JARS[-1]) not in active_jars:
+            pytest.skip(
+                "CROSS-TIER PARITY NOT VERIFIED (this skip is NOT a pass): a JAR-free "
+                "Spark session is already live in this process, so spark.jars cannot "
+                f"take effect. Run the gate, which runs this suite properly: {_GATE_CMD}"
+            )
+
+    session = (
+        SparkSession.builder.master("local[2]")
+        .appName("gbx-pyvx-crs-parity")
+        .config("spark.sql.shuffle.partitions", "2")
+        .config(
+            "spark.driver.extraJavaOptions",
+            "-Djava.library.path=/usr/local/lib:/usr/lib:/usr/java/packages/lib:"
+            "/usr/lib64:/lib64:/lib:/usr/local/hadoop/lib/native",
+        )
+        .config("spark.jars", str(_JARS[-1]))
+        .getOrCreate()
+    )
+    yield session
+
+
+@pytest.fixture(scope="module")
+def heavy(spark_with_jar):
+    """Spark session with the HEAVY (JAR) gbx_st_* CRS functions registered."""
+    from databricks.labs.gbx.vectorx import functions as hx
+
+    hx.register(spark_with_jar)
+    return spark_with_jar
+
+
+@pytest.fixture(scope="module")
+def light():
+    """The light-tier callables the pyvx registrar binds to the gbx_st_* names."""
+    from databricks.labs.gbx.pyvx import _crs
+
+    return _crs
+
+
+# ---------------------------------------------------------------------------
+# Geometry fixtures / helpers
+# ---------------------------------------------------------------------------
+
+
+def _ewkb(srid: int, geom=None) -> bytes:
+    # POINT(15, 51): lon=15°E lat=51°N — inside EPSG:32633 (UTM33N, lon 12°–18°E).
+    # Changed from (11, 42) after Tasks 2+3 added the domain-check: lon=11°E is outside
+    # EPSG:32633's bounds, so the old point was NULL'd by the domain guard on both tiers.
+    g = Point(15.0, 51.0) if geom is None else geom
+    return to_wkb(shapely.set_srid(g, srid), include_srid=True)
+
+
+def _plain_wkb() -> bytes:
+    return to_wkb(Point(15.0, 51.0))
+
+
+def _ewkt(srid: int) -> str:
+    return f"SRID={srid};POINT (15 51)"
+
+
+def _plain_wkt() -> str:
+    return "POINT (15 51)"
+
+
+def _sql_lit(geom) -> str:
+    """SQL literal for a geometry: unhex(...) for bytes, a quoted string for text."""
+    if isinstance(geom, (bytes, bytearray)):
+        return f"unhex('{bytes(geom).hex()}')"
+    escaped = str(geom).replace("\\", "\\\\").replace("'", "\\'")
+    return f"'{escaped}'"
+
+
+def _heavy_binary(spark, sql: str) -> bytes:
+    value = spark.sql(sql).first()[0]
+    return None if value is None else bytes(value)
+
+
+def _decoded(value):
+    """Decode a tier result (bytes or EWKT/WKT text) into (geom, srid)."""
+    if value is None:
+        return None, None
+    if isinstance(value, (bytes, bytearray)):
+        g = from_wkb(bytes(value))
+    else:
+        from databricks.labs.gbx._geom import parse_geom
+
+        g = parse_geom(value)
+    return g, int(get_srid(g))
+
+
+def assert_geom_parity(light_value, heavy_value, *, expect_srid=None, expect_z=None):
+    """Assert two tier results describe the same geometry: type, SRID, coordinates.
+
+    Compares DECODED geometries, never raw bytes — see the module docstring on the
+    big-endian (heavy/JTS) vs little-endian (light/shapely) EWKB writer defaults.
+    """
+    lg, lsrid = _decoded(light_value)
+    hg, hsrid = _decoded(heavy_value)
+    assert lg is not None, "light returned no geometry"
+    assert hg is not None, "heavy returned no geometry"
+
+    assert (
+        lg.geom_type == hg.geom_type
+    ), f"geometry type mismatch: light={lg.geom_type} heavy={hg.geom_type}"
+    assert lsrid == hsrid, f"SRID mismatch: light={lsrid} heavy={hsrid}"
+    if expect_srid is not None:
+        assert (
+            lsrid == expect_srid
+        ), f"expected SRID {expect_srid}, both tiers gave {lsrid}"
+
+    assert (
+        lg.has_z == hg.has_z
+    ), f"dimensionality mismatch: light has_z={lg.has_z} heavy has_z={hg.has_z}"
+    if expect_z is not None:
+        assert (
+            lg.has_z is expect_z
+        ), f"expected has_z={expect_z}, both tiers gave {lg.has_z}"
+
+    lc = get_coordinates(lg, include_z=lg.has_z)
+    hc = get_coordinates(hg, include_z=hg.has_z)
+    assert lc.shape == hc.shape, f"vertex count mismatch: {lc.shape} vs {hc.shape}"
+    for i, (lrow, hrow) in enumerate(zip(lc, hc)):
+        for j, (lv, hv) in enumerate(zip(lrow, hrow)):
+            if lv != lv and hv != hv:  # both NaN — agreed "no value"
+                continue
+            assert abs(lv - hv) <= COORD_TOL, (
+                f"coordinate mismatch at vertex {i} ordinate {j}: "
+                f"light={lv!r} heavy={hv!r} (tol {COORD_TOL})"
+            )
+
+
+# ---------------------------------------------------------------------------
+# st_crs
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "geom,expected",
+    [
+        (_ewkb(4326), "EPSG:4326"),
+        (_ewkb(54008), "ESRI:54008"),
+        (_ewkb(32633), "EPSG:32633"),
+        (_ewkt(4326), "EPSG:4326"),
+        (_ewkt(54008), "ESRI:54008"),
+    ],
+    ids=["ewkb-4326", "ewkb-esri54008", "ewkb-32633", "ewkt-4326", "ewkt-esri54008"],
+)
+def test_st_crs_parity_authority_strings(heavy, light, geom, expected):
+    """Both tiers classify an embedded SRID to the same canonical authority string."""
+    heavy_value = heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0]
+    light_value = light.st_crs(geom)
+    assert light_value == heavy_value == expected
+
+
+@pytest.mark.parametrize(
+    "geom",
+    [_plain_wkb(), _plain_wkt(), _ewkb(999999)],
+    ids=["plain-wkb", "plain-wkt", "unresolvable-srid"],
+)
+def test_st_crs_parity_null_cases(heavy, light, geom):
+    """Plain geometries and unresolvable SRIDs return NULL/None on both tiers."""
+    heavy_value = heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0]
+    assert heavy_value is None
+    assert light.st_crs(geom) is None
+
+
+def test_st_crs_parity_null_geom(heavy, light):
+    heavy_value = heavy.sql("SELECT gbx_st_crs(CAST(NULL AS BINARY))").first()[0]
+    assert heavy_value is None
+    assert light.st_crs(None) is None
+
+
+# ---------------------------------------------------------------------------
+# st_setcrs — all four input encodings x authority-coded CRS
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "geom",
+    [_plain_wkb(), _ewkb(4326), _plain_wkt(), _ewkt(4326)],
+    ids=["wkb", "ewkb", "wkt", "ewkt"],
+)
+@pytest.mark.parametrize("crs,srid", [("EPSG:32633", 32633), ("ESRI:54008", 54008)])
+def test_st_setcrs_parity_encodings(heavy, light, geom, crs, srid):
+    """st_setcrs stamps the same SRID on the same coordinates from every encoding.
+
+    Also the always-BINARY contract: the heavy SQL result is BINARY even for the WKT and
+    EWKT inputs, matching the light UDF.
+    """
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, '{crs}')"
+    )
+    light_value = light._udf_st_setcrs(geom, crs)
+    assert isinstance(light_value, (bytes, bytearray))
+    assert isinstance(heavy_value, bytes)
+    assert_geom_parity(light_value, heavy_value, expect_srid=srid)
+
+
+def test_st_setcrs_parity_integer_srid_argument(heavy, light):
+    """An int-castable CRS argument behaves the same on both tiers."""
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(_plain_wkb())}, 32633)"
+    )
+    light_value = light._udf_st_setcrs(_plain_wkb(), "32633")
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633)
+
+
+@pytest.mark.parametrize(
+    "crs",
+    [_PROJ4_UTM33, _PROJ4_RD_NULL_SHIFT, _CUSTOM_TM_WKT, "OGC:CRS84", "IGNF:LAMB93"],
+    ids=["proj4", "proj4-null-shift", "raw-wkt", "ogc-crs84", "ignf-lamb93"],
+)
+def test_st_setcrs_parity_no_integer_authority_raises_both_tiers(heavy, light, crs):
+    """A CRS with no integer authority code is rejected by BOTH tiers.
+
+    PROJ4 and raw WKT are authority-less; 'OGC:CRS84' and 'IGNF:LAMB93' resolve but their
+    codes are not integers. None can be stored in a geometry's SRID slot, so both tiers
+    raise rather than stamp a guess.
+    """
+    with pytest.raises(Exception):
+        heavy.sql(
+            f"SELECT gbx_st_setcrs({_sql_lit(_plain_wkb())}, {_sql_lit(crs)})"
+        ).first()
+    with pytest.raises(ValueError):
+        light._udf_st_setcrs(_plain_wkb(), crs)
+
+
+# ---------------------------------------------------------------------------
+# st_transformcrs — authority-coded targets across all four input encodings
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("geom", [_ewkb(4326), _ewkt(4326)], ids=["ewkb", "ewkt"])
+@pytest.mark.parametrize("crs,srid", [("EPSG:32633", 32633), ("ESRI:54008", 54008)])
+def test_st_transformcrs_parity_authority_targets(heavy, light, geom, crs, srid):
+    """Reprojection to an authority-coded target agrees in coordinates and SRID."""
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, '{crs}')"
+    )
+    light_value = light._udf_st_transformcrs(geom, crs)
+    assert isinstance(light_value, (bytes, bytearray))
+    assert isinstance(heavy_value, bytes)
+    assert_geom_parity(light_value, heavy_value, expect_srid=srid)
+
+
+@pytest.mark.parametrize("geom", [_plain_wkb(), _plain_wkt()], ids=["wkb", "wkt"])
+@pytest.mark.parametrize(
+    "crs,srid", [("EPSG:32633", 32633), ("ESRI:54008", 54008)], ids=["epsg", "esri"]
+)
+def test_st_transformcrs_parity_explicit_source_crs(heavy, light, geom, crs, srid):
+    """The 3-arg form (explicit source_crs for plain inputs) agrees across tiers.
+
+    Parametrized over an ESRI target as well as EPSG: ESRI codes travel a different
+    authority path than EPSG on both tiers, so the 3-arg x ESRI cell is worth pinning
+    rather than assuming it follows from the 2-arg ESRI case.
+    """
+    heavy_value = _heavy_binary(
+        heavy,
+        f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, '{crs}', 'EPSG:4326')",
+    )
+    light_value = light._udf_st_transformcrs(geom, crs, "EPSG:4326")
+    assert_geom_parity(light_value, heavy_value, expect_srid=srid)
+
+
+def test_st_transformcrs_parity_identity_target(heavy, light):
+    """An identity transform (4326 -> 4326) stamps the target SRID on both tiers."""
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(_ewkb(4326))}, 'EPSG:4326')"
+    )
+    light_value = light._udf_st_transformcrs(_ewkb(4326), "EPSG:4326")
+    assert_geom_parity(light_value, heavy_value, expect_srid=4326)
+
+
+def test_st_transformcrs_parity_round_trip(heavy, light):
+    """Reproject out and back: both tiers land on the original lon/lat."""
+    for tier_value in (
+        _heavy_binary(
+            heavy,
+            "SELECT gbx_st_transformcrs(gbx_st_transformcrs("
+            f"{_sql_lit(_ewkb(4326))}, 'EPSG:32633'), 'EPSG:4326')",
+        ),
+        light._udf_st_transformcrs(
+            light._udf_st_transformcrs(_ewkb(4326), "EPSG:32633"), "EPSG:4326"
+        ),
+    ):
+        g, srid = _decoded(tier_value)
+        assert srid == 4326
+        assert abs(g.x - 15.0) < 1e-8 and abs(g.y - 51.0) < 1e-8
+
+
+# ---------------------------------------------------------------------------
+# st_transformcrs — targets with no integer authority code (SRID cleared)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "crs",
+    # IGNF:LAMB93 is excluded here: its area_of_use (lon -5.5°–10°, lat 41°–52°) does not
+    # overlap with our standard test point POINT(15,51) (lon 15°E is outside France).  It
+    # gets its own dedicated test below that uses Paris coords inside the domain.
+    [_CUSTOM_TM_WKT, _PROJ4_UTM33, "OGC:CRS84"],
+    ids=["raw-wkt", "proj4", "ogc-crs84"],
+)
+@pytest.mark.parametrize("geom", [_ewkb(4326), _ewkt(4326)], ids=["ewkb", "ewkt"])
+def test_st_transformcrs_parity_authorityless_target_clears_srid(
+    heavy, light, crs, geom
+):
+    """A target with no integer authority code reprojects and CLEARS the stale SRID.
+
+    A PROJ4 string would fuzzy-match EPSG:32633 at PROJ's default 70% confidence; both
+    tiers refuse that guess (heavy because GDAL reports no authority at all, light
+    because it probes at full confidence), so PROJ4 lands on this authority-less path.
+    """
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, {_sql_lit(crs)})"
+    )
+    light_value = light._udf_st_transformcrs(geom, crs)
+    assert_geom_parity(light_value, heavy_value, expect_srid=0)
+
+
+@pytest.mark.parametrize("medium", ["ewkb", "ewkt"])
+def test_st_transformcrs_parity_ignf_lamb93_clears_srid(heavy, light, medium):
+    """IGNF:LAMB93 reprojects a point inside metropolitan France and clears the SRID.
+
+    IGNF:LAMB93's area_of_use is lon -5.5°–10°, lat 41°–52° (metropolitan France).
+    Our standard test point POINT(15, 51) lies outside that domain and would be NULL'd,
+    so this test uses Paris POINT(2, 48) — inside the domain.  Both tiers must agree.
+    """
+    paris_ewkb = to_wkb(shapely.set_srid(Point(2.0, 48.0), 4326), include_srid=True)
+    paris_ewkt = "SRID=4326;POINT (2 48)"
+    geom = paris_ewkb if medium == "ewkb" else paris_ewkt
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'IGNF:LAMB93')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "IGNF:LAMB93")
+    assert_geom_parity(light_value, heavy_value, expect_srid=0)
+
+
+def test_st_transformcrs_parity_proj4_reaches_utm_coordinates(heavy, light):
+    """The PROJ4 target still reprojects (only the SRID is dropped, not the math)."""
+    heavy_value = _heavy_binary(
+        heavy,
+        f"SELECT gbx_st_transformcrs({_sql_lit(_ewkb(4326))}, {_sql_lit(_PROJ4_UTM33)})",
+    )
+    light_value = light._udf_st_transformcrs(_ewkb(4326), _PROJ4_UTM33)
+    assert_geom_parity(light_value, heavy_value, expect_srid=0)
+    g, _ = _decoded(light_value)
+    # POINT(15, 51) is the central meridian of UTM zone 33 — easting = 500000 exactly.
+    assert abs(g.x - 500000.0) < 1e-3, f"PROJ4 target did not reproject: {g}"
+
+
+@pytest.mark.parametrize(
+    "order",
+    [[_PROJ4_RD_NULL_SHIFT, "EPSG:28992"], ["EPSG:28992", _PROJ4_RD_NULL_SHIFT]],
+    ids=["proj4-first", "epsg-first"],
+)
+def test_st_transformcrs_parity_fuzzy_matched_proj4_does_not_leak_into_math(
+    heavy, light, order
+):
+    """A PROJ4 CRS whose fuzzy match DIFFERS numerically must still agree cross-tier.
+
+    THE cell the rest of the suite cannot reach. `_PROJ4_UTM33` is the case where the
+    fuzzy match (EPSG:32633) and the exact definition coincide numerically, so a fuzzy
+    authority leaking into the reprojection math is invisible there. This PROJ4 string
+    fuzzy-matches EPSG:28992 but its null datum shift puts coordinates ~177 m away, so a
+    leak shows up as a large cross-tier divergence.
+
+    Both request orders run because the leak was a transformer CACHE COLLISION: keyed on
+    the canonical name, whichever CRS was requested first answered for both. Each target
+    is therefore checked against heavy in both orders — a collision in either direction
+    fails.
+    """
+    geom = _ewkb(4326, Point(_RD_LON, _RD_LAT))
+    for crs in order:
+        heavy_value = _heavy_binary(
+            heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, {_sql_lit(crs)})"
+        )
+        light_value = light._udf_st_transformcrs(geom, crs)
+        expect_srid = 28992 if crs == "EPSG:28992" else 0
+        assert_geom_parity(light_value, heavy_value, expect_srid=expect_srid)
+
+    # And the two CRSes must remain genuinely distinct on the light tier — if they had
+    # collapsed onto one transformer this separation would be 0.
+    a, _ = _decoded(light._udf_st_transformcrs(geom, "EPSG:28992"))
+    b, _ = _decoded(light._udf_st_transformcrs(geom, _PROJ4_RD_NULL_SHIFT))
+    separation = ((a.x - b.x) ** 2 + (a.y - b.y) ** 2) ** 0.5
+    assert separation > 100.0, (
+        f"EPSG:28992 and its fuzzy-matched PROJ4 twin collapsed to the same "
+        f"transformer (separation {separation} m)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Never-error invariant: degrade paths
+# ---------------------------------------------------------------------------
+
+
+def test_st_transformcrs_parity_unresolvable_embedded_srid_returns_null(heavy, light):
+    """An SRID in no registry returns NULL on both tiers (data condition, not a param error).
+
+    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    NULL: an embedded SRID that cannot be resolved means the CRS of the data is unknown,
+    so the result is meaningless and suppressed rather than passed through silently.
+    """
+    bad = _ewkb(999999)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(bad)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(bad, "EPSG:32633")
+    assert heavy_value is None
+    assert light_value is None
+
+
+def test_st_transformcrs_parity_unresolvable_source_crs_raises_both_tiers(heavy, light):
+    """An explicit source_crs that cannot be resolved RAISES on both tiers (parameter condition).
+
+    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract treats
+    an explicit source_crs arg as a PARAMETER: an invalid value is a caller error, not a data
+    condition, so both tiers raise rather than silently passing through unprojected bytes.
+    """
+    plain = _plain_wkb()
+    with pytest.raises(Exception):
+        heavy.sql(
+            f"SELECT gbx_st_transformcrs({_sql_lit(plain)}, 'EPSG:32633', 'NOT_A_CRS_XYZ')"
+        ).first()
+    with pytest.raises(Exception):
+        light._udf_st_transformcrs(plain, "EPSG:32633", "NOT_A_CRS_XYZ")
+
+
+@pytest.mark.parametrize("geom", [_plain_wkb(), _plain_wkt()], ids=["wkb", "wkt"])
+def test_st_transformcrs_parity_no_source_at_all_returns_null(heavy, light, geom):
+    """A plain geometry with no source CRS returns NULL on both tiers (data condition).
+
+    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    NULL: if there is no source CRS the reprojection is undefined, not a pass-through.
+    """
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert heavy_value is None
+    assert light_value is None
+
+
+# ---------------------------------------------------------------------------
+# Shared-corpus parity: the Task-4 gate contract
+# ---------------------------------------------------------------------------
+#
+# These tests assert the OUTCOME CLASS (null / raise / value) agrees across tiers
+# for the error-handling corpus introduced in Tasks 2 + 3.  The fixture helpers below
+# encode the specific geometries the brief specifies; the assertions delegate to
+# `assert_geom_parity` for value cases and use plain None checks for null cases.
+
+
+def _ewkb_point(lon: float, lat: float, srid: int) -> bytes:
+    """EWKB for a 2D point with the given SRID stamped in the header."""
+    return to_wkb(shapely.set_srid(Point(lon, lat), srid), include_srid=True)
+
+
+def _wkb_point(x: float, y: float) -> bytes:
+    """Plain (SRID-less) WKB for a 2D point."""
+    return to_wkb(Point(x, y))
+
+
+def test_transformcrs_parity_unparseable_both_null(heavy, light):
+    """Garbage bytes return NULL on both tiers — unparseable data is a data condition."""
+    light_result = light._udf_st_transformcrs(b"NOT_WKB", "EPSG:3857")
+    heavy_result = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(b'NOT_WKB')}, 'EPSG:3857')"
+    )
+    assert light_result is None
+    assert heavy_result is None
+
+
+def test_transformcrs_parity_out_of_domain_both_null(heavy, light):
+    """An out-of-domain input (SRID=4326 → EPSG:27700) returns NULL on both tiers.
+
+    POINT(150, -80) is legitimately parseable and carries a resolvable SRID, but lon=150°E
+    and lat=-80°S lie far outside EPSG:27700's (British National Grid) area_of_use.  The
+    domain check introduced in Tasks 2+3 must suppress this on both tiers.
+    """
+    g = _ewkb_point(150.0, -80.0, 4326)
+    light_result = light._udf_st_transformcrs(g, "EPSG:27700")
+    heavy_result = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(g)}, 'EPSG:27700')"
+    )
+    assert light_result is None
+    assert heavy_result is None
+
+
+def test_transformcrs_parity_in_domain_coords_agree(heavy, light):
+    """An in-domain point (London, SRID=4326 → EPSG:27700) gives the same result on both tiers."""
+    g = _ewkb_point(-0.13, 51.5, 4326)
+    light_result = light._udf_st_transformcrs(g, "EPSG:27700")
+    heavy_result = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(g)}, 'EPSG:27700')"
+    )
+    assert_geom_parity(light_result, heavy_result, expect_srid=27700)
+
+
+def test_transformcrs_parity_bad_target_both_raise(heavy, light):
+    """An unresolvable TARGET CRS raises on both tiers (parameter condition).
+
+    'EPSG:99999' is an integer-format authority string that does not exist in the PROJ
+    registry; both tiers must raise rather than silently returning NULL or unchanged bytes.
+    """
+    g = _ewkb_point(-0.13, 51.5, 4326)
+    with pytest.raises(Exception):
+        light._udf_st_transformcrs(g, "EPSG:99999")
+    with pytest.raises(Exception):
+        heavy.sql(f"SELECT gbx_st_transformcrs({_sql_lit(g)}, 'EPSG:99999')").first()
+
+
+def test_transformcrs_parity_bad_source_arg_both_raise(heavy, light):
+    """An explicit source_crs of 'EPSG:99999' raises on both tiers (parameter condition).
+
+    An explicit source_crs is a PARAMETER, not data — the caller asserted the CRS and it
+    cannot be resolved, so both tiers must raise rather than degrade.
+    """
+    g = _wkb_point(1.0, 1.0)
+    with pytest.raises(Exception):
+        light._udf_st_transformcrs(g, "EPSG:3857", "EPSG:99999")
+    with pytest.raises(Exception):
+        heavy.sql(
+            f"SELECT gbx_st_transformcrs({_sql_lit(g)}, 'EPSG:3857', 'EPSG:99999')"
+        ).first()
+
+
+def test_transformcrs_parity_bounds_absent_not_nulled(heavy, light):
+    """A target CRS with no area_of_use must NOT be NULL'd on either tier (conservative skip).
+
+    A raw-PROJ4 mercator has no area_of_use metadata, so the domain check is skipped entirely
+    rather than assuming out-of-domain.  An in-range point survives on both tiers.
+    """
+    g = _ewkb_point(0.0, 0.0, 4326)
+    proj4 = "+proj=merc +lon_0=0 +k=1 +x_0=0 +y_0=0 +datum=WGS84 +units=m +no_defs"
+    light_result = light._udf_st_transformcrs(g, proj4)
+    heavy_result = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(g)}, {_sql_lit(proj4)})"
+    )
+    assert light_result is not None, "light must not NULL a bounds-absent target"
+    assert heavy_result is not None, "heavy must not NULL a bounds-absent target"
+
+
+def test_st_transformcrs_parity_unresolvable_target_raises_both_tiers(heavy, light):
+    """An explicitly bad TARGET is the one case that may raise — on both tiers."""
+    with pytest.raises(Exception):
+        heavy.sql(
+            f"SELECT gbx_st_transformcrs({_sql_lit(_ewkb(4326))}, 'NOT_A_CRS_XYZ')"
+        ).first()
+    with pytest.raises(Exception):
+        light._udf_st_transformcrs(_ewkb(4326), "NOT_A_CRS_XYZ")
+
+
+def test_st_transformcrs_parity_null_target_returns_null(heavy, light):
+    """NULL target_crs returns NULL/None on both tiers, never an error."""
+    heavy_value = heavy.sql(
+        f"SELECT gbx_st_transformcrs({_sql_lit(_ewkb(4326))}, CAST(NULL AS STRING))"
+    ).first()[0]
+    assert heavy_value is None
+    assert light._udf_st_transformcrs(_ewkb(4326), None) is None
+
+
+def test_st_setcrs_parity_null_geom_returns_null(heavy, light):
+    heavy_value = heavy.sql(
+        "SELECT gbx_st_setcrs(CAST(NULL AS BINARY), 'EPSG:4326')"
+    ).first()[0]
+    assert heavy_value is None
+    assert light._udf_st_setcrs(None, "EPSG:4326") is None
+
+
+# ---------------------------------------------------------------------------
+# Z handling parity
+# ---------------------------------------------------------------------------
+
+
+def _ewkb3d(srid: int, geom) -> bytes:
+    return to_wkb(shapely.set_srid(geom, srid), include_srid=True, output_dimension=3)
+
+
+def test_st_transformcrs_parity_clean_3d_preserves_z(heavy, light):
+    """Every vertex has a finite Z -> both tiers carry the Z through the reprojection."""
+    geom = _ewkb3d(4326, Point(15.0, 51.0, 500.0))
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=True)
+    g, _ = _decoded(light_value)
+    assert abs(g.z - 500.0) < 1e-6
+
+
+def test_st_setcrs_parity_clean_3d_preserves_z(heavy, light):
+    geom = _ewkb3d(0, Point(11.0, 42.0, 500.0))
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:4326')"
+    )
+    light_value = light._udf_st_setcrs(geom, "EPSG:4326")
+    assert_geom_parity(light_value, heavy_value, expect_srid=4326, expect_z=True)
+
+
+def test_transformcrs_parity_2d_stays_2d(heavy, light):
+    """A genuinely 2D geometry must not gain a Z slot on either tier."""
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(_ewkb(4326))}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(_ewkb(4326), "EPSG:32633")
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=False)
+    # 2D EWKB is 25 bytes for a POINT; 3D would be 33.
+    assert len(heavy_value) == 25
+    assert len(bytes(light_value)) == 25
+
+
+def test_st_transformcrs_parity_partial_z_is_quiet_2d(heavy, light):
+    """A partial-Z geometry reprojects as 2D on both tiers — no throw, no NaN X/Y.
+
+    This is the CURRENT rule for mixed-dimensionality input: the missing Z is not
+    fabricated and the geometry is handled as 2D so that no horizontal coordinate is
+    destroyed by propagating a non-finite ordinate through the transform.
+    """
+    ls = LineString([(15.0, 51.0, 5.0), (16.0, 52.0, float("nan"))])
+    geom = _ewkb3d(4326, ls)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=False)
+    for value in (light_value, heavy_value):
+        g, _ = _decoded(value)
+        for x, y in g.coords:
+            assert x == x and y == y, f"coordinate corrupted to NaN: {list(g.coords)}"
+
+
+def test_st_transformcrs_parity_mixed_dimensionality_wkt_does_not_raise(heavy, light):
+    """Mixed-dimensionality WKT reprojects to the same 2D result on both tiers."""
+    wkt = f"SRID=4326;{_MIXED_DIM_WKT}"
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(wkt)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(wkt, "EPSG:32633")
+    assert heavy_value is not None and light_value is not None
+    # Partial Z -> reprojected as 2D on both tiers, X/Y intact for every vertex.
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=False)
+
+
+@pytest.mark.parametrize(
+    "geom,source",
+    [
+        (f"SRID=999999;{_MIXED_DIM_WKT}", None),
+        (_MIXED_DIM_WKT, None),
+    ],
+    ids=["unresolvable-srid", "no-source"],
+)
+def test_st_transformcrs_parity_mixed_dim_wkt_null_cases(heavy, light, geom, source):
+    """Mixed-dimensionality WKT x NULL path: both tiers return NULL, no raise.
+
+    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    NULL for data conditions (unresolvable embedded SRID, no source CRS).
+
+    The test is split from the bad-source-crs case, which now RAISES on both tiers.
+    """
+    src_sql = "" if source is None else f", {_sql_lit(source)}"
+    heavy_value = _heavy_binary(
+        heavy,
+        f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633'{src_sql})",
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633", source)
+    assert heavy_value is None, "heavy must return NULL (data condition)"
+    assert light_value is None, "light must return NULL (data condition)"
+
+
+def test_st_transformcrs_parity_mixed_dim_wkt_bad_source_raises(heavy, light):
+    """Mixed-dimensionality WKT x bad explicit source_crs: both tiers RAISE.
+
+    Pre-Task-2/3 both tiers returned the input unchanged (degrade).  The new contract is
+    RAISE for parameter conditions: an explicitly-provided source_crs that cannot be
+    resolved is a caller error, so both tiers raise rather than silently degrading.
+    """
+    with pytest.raises(Exception):
+        heavy.sql(
+            f"SELECT gbx_st_transformcrs({_sql_lit(_MIXED_DIM_WKT)}, 'EPSG:32633', "
+            f"'NOT_A_CRS_XYZ')"
+        ).first()
+    with pytest.raises(Exception):
+        light._udf_st_transformcrs(_MIXED_DIM_WKT, "EPSG:32633", "NOT_A_CRS_XYZ")
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _MIXED_DIM_SHAPES], ids=[n for n, _ in _MIXED_DIM_SHAPES]
+)
+def test_st_setcrs_parity_mixed_dim_shapes(heavy, light, wkt):
+    """st_setcrs must agree cross-tier on mixed-dim shapes beyond the flat collection.
+
+    These three shapes each broke a normalizer that only handled the flat
+    ``GC Z (POINT Z, POINT)`` case, returning NULL from the light tier while heavy returned
+    real geometry. Comparing against heavy — rather than against a hardcoded expectation —
+    is what makes this a parity test: whatever heavy does with an EMPTY component, an M
+    ordinate, or a nested collection is by definition the target.
+    """
+    geom = f"SRID=4326;{wkt}"
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_setcrs(geom, "EPSG:32633")
+    assert heavy_value is not None, "heavy must not return NULL here"
+    assert (
+        light_value is not None
+    ), "light must not degrade to NULL where heavy succeeds"
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633)
+    # st_setcrs never moves coordinates, so the encodings should match byte-for-byte too —
+    # a stricter check than geometry parity, and the one that catches a dimensionality tag
+    # going missing at some nesting level.
+    assert len(bytes(light_value)) == len(heavy_value), (
+        f"encoded length differs: light={len(bytes(light_value))} "
+        f"heavy={len(heavy_value)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _MIXED_DIM_SHAPES], ids=[n for n, _ in _MIXED_DIM_SHAPES]
+)
+def test_st_crs_parity_mixed_dim_shapes(heavy, light, wkt):
+    """st_crs must read the embedded SRID off every mixed-dim shape on both tiers.
+
+    Returning NULL for a geometry that plainly carries ``SRID=4326`` is a WRONG answer,
+    not a missing one — worth its own assertion rather than folding into the setcrs test.
+    """
+    geom = f"SRID=4326;{wkt}"
+    heavy_value = heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0]
+    light_value = light.st_crs(geom)
+    assert light_value == heavy_value == "EPSG:4326"
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [w for n, w in _MIXED_DIM_SHAPES if n != "empty-component"],
+    ids=[n for n, _ in _MIXED_DIM_SHAPES if n != "empty-component"],
+)
+def test_st_transformcrs_parity_mixed_dim_shapes(heavy, light, wkt):
+    """st_transformcrs must agree cross-tier on the mixed-dim shapes it can reproject.
+
+    The empty-component shape is excluded deliberately: heavy RAISES on it, so there is no
+    heavy answer to compare against. The trigger is specifically an **EMPTY POINT** — a
+    bare ``SRID=4326;POINT EMPTY`` raises on heavy too, while ``LINESTRING EMPTY``,
+    ``POLYGON EMPTY`` and ``GEOMETRYCOLLECTION EMPTY`` all reproject successfully — so it
+    is not "any empty component in a collection". That heavy-side limitation is tracked
+    separately; the contract asserted here is that light must not diverge where heavy
+    succeeds, and light handles this shape without error.
+    """
+    geom = f"SRID=4326;{wkt}"
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert heavy_value is not None and light_value is not None
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633)
+
+
+# Mixed-dimensionality WKT that is NOT a GEOMETRYCOLLECTION. Heavy returns NULL for these
+# from all three functions; light handles them. Pinned as a KNOWN DIVERGENCE below.
+# Coordinates (15, 51) / (16, 52) are inside EPSG:32633's area_of_use.
+_NON_GC_MIXED_DIM_SHAPES = [
+    ("multipoint", "MULTIPOINT Z ((15 51 5), (16 52))"),
+    ("linestring", "LINESTRING Z (15 51 5, 16 52)"),
+]
+
+
+@pytest.mark.parametrize(
+    "wkt",
+    [w for _, w in _NON_GC_MIXED_DIM_SHAPES],
+    ids=[n for n, _ in _NON_GC_MIXED_DIM_SHAPES],
+)
+def test_non_gc_mixed_dim_known_divergence(heavy, light, wkt):
+    """KNOWN DIVERGENCE, pinned rather than fixed: non-collection mixed-dim WKT.
+
+    For a mixed-dimensionality geometry that is NOT a GEOMETRYCOLLECTION, the two tiers
+    disagree today:
+
+    - **heavy returns NULL** from all three functions — its WKT reader rejects the body and
+      the expressions treat an unparseable geometry as "no result";
+    - **light returns a real geometry**, because it normalizes such a body to uniform 3D
+      before parsing (the same normalization that makes the collection shapes work).
+
+    This test deliberately asserts what each tier does TODAY rather than forcing agreement.
+    The direction is unchanged from before light gained that normalization — light simply
+    handles strictly more input than heavy here, which does not violate the never-error
+    invariant on either side — so making them agree is a cross-tier semantics decision,
+    not a bug fix. Pinning it means the divergence is visible and any future change to
+    either tier is a deliberate, reviewed one instead of a surprise.
+
+    ``st_crs`` is included because it is the sharpest case: heavy returns NULL for a
+    geometry that plainly carries ``SRID=4326``.
+    """
+    geom = f"SRID=4326;{wkt}"
+
+    # --- heavy: NULL from all three ---
+    assert heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0] is None
+    assert (
+        _heavy_binary(heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:32633')")
+        is None
+    )
+    assert (
+        _heavy_binary(
+            heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+        )
+        is None
+    )
+
+    # --- light: real answers ---
+    assert light.st_crs(geom) == "EPSG:4326"
+
+    stamped = light._udf_st_setcrs(geom, "EPSG:32633")
+    assert stamped is not None
+    g_stamped, srid_stamped = _decoded(stamped)
+    assert srid_stamped == 32633
+    # st_setcrs never moves coordinates, so the partial Z is written back as-is.
+    assert g_stamped.has_z
+
+    projected = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert projected is not None
+    g_proj, srid_proj = _decoded(projected)
+    assert srid_proj == 32633
+    # A partial Z is dropped by the reproject, so this comes back 2D with X/Y intact.
+    assert not g_proj.has_z
+    for x, y in get_coordinates(g_proj).tolist():
+        assert x == x and y == y, "reprojected coordinates must not be NaN"
+
+
+def test_st_setcrs_parity_mixed_dim_wkt(heavy, light):
+    """st_setcrs on mixed-dimensionality WKT must agree across tiers, including Z.
+
+    st_setcrs never touches coordinates, so heavy keeps the geometry uniformly 3D with
+    NaN for the vertex that had no Z. Light must produce the same thing rather than
+    downcasting to 2D — otherwise the tiers disagree in the text medium.
+    """
+    geom = f"SRID=4326;{_MIXED_DIM_WKT}"
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_setcrs(geom, "EPSG:32633")
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=True)
+
+    # The vertex that HAD a Z keeps its exact value; the one that did not stays absent.
+    for value in (light_value, heavy_value):
+        g, _ = _decoded(value)
+        zs = get_coordinates(g, include_z=True)[:, 2].tolist()
+        assert zs[0] == pytest.approx(5.0)
+        assert zs[1] != zs[1], "absent Z must stay absent, never fabricated"
+
+
+# ---------------------------------------------------------------------------
+# SQL-surface BINARY contract on the LIGHT tier
+# ---------------------------------------------------------------------------
+
+
+def test_light_sql_surface_declares_binary(spark_with_jar, light):
+    """The light UDFs declare BINARY in the Spark schema, matching the heavy expression.
+
+    Registered under temporary ``gbxlight_*`` names: the two tiers share the real
+    ``gbx_st_*`` names and cannot both own them in one session, and this test only needs
+    the declared return type of the same callables the light registrar binds.
+    """
+    from pyspark.sql.types import BinaryType, StringType
+
+    spark = spark_with_jar
+    spark.udf.register("gbxlight_st_crs", light.st_crs, StringType())
+    spark.udf.register("gbxlight_st_setcrs", light._udf_st_setcrs, BinaryType())
+    spark.udf.register(
+        "gbxlight_st_transformcrs", light._udf_st_transformcrs, BinaryType()
+    )
+
+    ewkt = _ewkt(4326)
+    df = spark.sql(
+        f"SELECT gbxlight_st_crs('{ewkt}') AS crs, "
+        f"gbxlight_st_setcrs('{ewkt}', 'EPSG:32633') AS stamped, "
+        f"gbxlight_st_transformcrs('{ewkt}', 'EPSG:32633') AS projected"
+    )
+    fields = {f.name: f.dataType for f in df.schema.fields}
+    assert isinstance(fields["crs"], StringType)
+    assert isinstance(fields["stamped"], BinaryType)
+    assert isinstance(fields["projected"], BinaryType)
+
+    row = df.first()
+    assert row["crs"] == "EPSG:4326"
+    # TEXT geometry input, BINARY output — the same contract the heavy expression declares.
+    assert get_srid(from_wkb(bytes(row["stamped"]))) == 32633
+    assert get_srid(from_wkb(bytes(row["projected"]))) == 32633
+
+
+# ---------------------------------------------------------------------------
+# UNIFORM ZM geometries — cross-tier M truncation
+# ---------------------------------------------------------------------------
+
+# UNIFORM ZM: one dimensionality for the whole geometry, so these parse on the first
+# attempt and never touch the mixed-dimensionality normalizer. The only ZM shape covered
+# above is the MIXED-dim collection in _MIXED_DIM_SHAPES, which the partial-Z rescue turns
+# 2D before the measure can matter — so no uniform-ZM geometry was compared cross-tier at
+# all, and two light-tier divergences hid there: st_setcrs kept the measure heavy drops,
+# and st_transformcrs raised on all four ordinates.
+#
+# Heavy is the target by construction: JTS is XYZ-only, so its readers discard M before any
+# CRS code runs and both heavy functions answer with the 3D geometry.
+_UNIFORM_ZM_SHAPES = [
+    # Coordinates (15, 51) / (16, 52) are inside EPSG:32633's area_of_use (lon 12°–18°E).
+    # Changed from (11, 42)/(12, 43) after Tasks 2+3 added the domain-check.
+    ("point", "POINT ZM (15 51 5 99)"),
+    ("linestring", "LINESTRING ZM (15 51 5 99, 16 52 6 98)"),
+    ("polygon", "POLYGON ZM ((15 51 5 99, 16 51 5 98, 16 52 5 97, 15 51 5 99))"),
+    ("multipoint", "MULTIPOINT ZM ((15 51 5 99), (16 52 6 98))"),
+]
+
+
+def _zm_ewkb(wkt: str, srid: int = 4326) -> bytes:
+    """EWKB with all FOUR ordinates written — a real ZM input, not a truncated one.
+
+    ``output_dimension=4`` matters: shapely's writer default would drop the M here and the
+    test would prove nothing about either tier's reader.
+    """
+    return to_wkb(
+        shapely.set_srid(shapely.from_wkt(wkt), srid),
+        output_dimension=4,
+        flavor="extended",
+        include_srid=True,
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _UNIFORM_ZM_SHAPES], ids=[n for n, _ in _UNIFORM_ZM_SHAPES]
+)
+@pytest.mark.parametrize("medium", ["ewkt", "ewkb"])
+def test_st_setcrs_parity_uniform_zm(heavy, light, wkt, medium):
+    """st_setcrs must return the same XYZ geometry on both tiers for a uniform-ZM input.
+
+    Light used to hand the measure straight back (``SRID=4326;POINT ZM (11 42 5 99)``,
+    41-byte EWKB) where heavy returned 33-byte ``POINT Z (11 42 5)`` — so a column
+    round-tripped through the two tiers came back with a different geometry type.
+    """
+    geom = f"SRID=4326;{wkt}" if medium == "ewkt" else _zm_ewkb(wkt)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_setcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_setcrs(geom, "EPSG:32633")
+    assert heavy_value is not None and light_value is not None
+    # expect_z=True pins the shared answer: the measure is gone, the elevation is not.
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=True)
+    assert not shapely.has_m(
+        from_wkb(bytes(light_value))
+    ), "light kept the measure heavy drops"
+    assert not shapely.has_m(from_wkb(heavy_value))
+    # st_setcrs moves no coordinates, so the encoded lengths must match too.
+    assert len(bytes(light_value)) == len(heavy_value), (
+        f"encoded length differs: light={len(bytes(light_value))} "
+        f"heavy={len(heavy_value)}"
+    )
+
+
+@pytest.mark.parametrize(
+    "wkt", [w for _, w in _UNIFORM_ZM_SHAPES], ids=[n for n, _ in _UNIFORM_ZM_SHAPES]
+)
+@pytest.mark.parametrize("medium", ["ewkt", "ewkb"])
+def test_st_transformcrs_parity_uniform_zm(heavy, light, wkt, medium):
+    """st_transformcrs must reproject a uniform-ZM geometry identically on both tiers.
+
+    On light this RAISED ``ValueError: The ordinate (last) dimension should be 2 or 3, got
+    4`` for every one of these shapes, in both media and through the registered UDF, while
+    heavy reprojected them fine — a never-error violation on the registered surface, where
+    one ZM row failed the whole stage.
+    """
+    geom = f"SRID=4326;{wkt}" if medium == "ewkt" else _zm_ewkb(wkt)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    light_value = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert heavy_value is not None and light_value is not None
+    assert_geom_parity(light_value, heavy_value, expect_srid=32633, expect_z=True)
+    assert not shapely.has_m(from_wkb(bytes(light_value)))
+    assert not shapely.has_m(from_wkb(heavy_value))
+
+
+def test_st_crs_parity_uniform_zm(heavy, light):
+    """st_crs must read the SRID off a uniform-ZM geometry identically on both tiers."""
+    for wkt in (w for _, w in _UNIFORM_ZM_SHAPES):
+        for geom in (f"SRID=4326;{wkt}", _zm_ewkb(wkt)):
+            heavy_value = heavy.sql(f"SELECT gbx_st_crs({_sql_lit(geom)})").first()[0]
+            assert light.st_crs(geom) == heavy_value == "EPSG:4326"
+
+
+# ---------------------------------------------------------------------------
+# Non-finite reprojection: both tiers NULL (bad data → NULL)
+# ---------------------------------------------------------------------------
+
+
+def _ewkb_pt(x, y, srid):
+    return to_wkb(shapely.set_srid(Point(x, y), srid), include_srid=True)
+
+
+def _ewkt_pt(x, y, srid):
+    return f"SRID={srid};POINT ({x} {y})"
+
+
+@pytest.mark.parametrize(
+    "geom,label",
+    [
+        (_ewkb_pt(500000.0, 5600000.0, 4326), "mislabelled-ewkb"),
+        (_ewkt_pt(500000.0, 5600000.0, 4326), "mislabelled-ewkt"),
+        (_ewkb_pt(10.0, 100.0, 4326), "invalid-lat-ewkb"),
+        (_ewkt_pt(10.0, 100.0, 4326), "invalid-lat-ewkt"),
+    ],
+    ids=lambda x: x if isinstance(x, str) else "",
+)
+def test_st_transformcrs_nonfinite_both_null(heavy, light, geom, label):
+    """Non-finite reprojection result → NULL on BOTH tiers (bad data → NULL).
+
+    The two CRS parameters both resolve (source EPSG:4326, target EPSG:32633); it is the
+    input *coordinate* that cannot be projected — UTM coordinates mislabelled as geographic
+    EPSG:4326, or latitude=100 which is outside the valid geographic range. Under the
+    "bad parameter → raise, bad data → NULL" contract this is a data condition, so both
+    tiers degrade to NULL.
+
+    The two tiers reach that NULL by different routes, which is why this used to be a pinned
+    divergence:
+    - **light**: pyproj *returns* Infinity, caught by ``_has_nonfinite_xy`` → NULL.
+    - **heavy**: OGR/PROJ *throws* ("PROJ: utm: Invalid latitude" or equivalent) mid-transform;
+      ``TransformCrsCore`` now catches that NonFatal error on an already-valid CRS pair and
+      returns ``NullOut``. Both tiers therefore agree — no divergence.
+
+    Both triggers and both media are parametrized to confirm the pattern is consistent
+    rather than incidental.
+    """
+    # heavy returns NULL (the transform throws internally; TransformCrsCore degrades it)
+    heavy_value = _heavy_binary(
+        heavy, f"SELECT gbx_st_transformcrs({_sql_lit(geom)}, 'EPSG:32633')"
+    )
+    assert heavy_value is None, (
+        f"[{label}] heavy must return NULL for non-finite reprojection result, "
+        f"got {heavy_value!r}"
+    )
+
+    # light returns NULL (None), not Infinity
+    result = light._udf_st_transformcrs(geom, "EPSG:32633")
+    assert result is None, (
+        f"[{label}] light must return NULL for non-finite reprojection result, "
+        f"got {result!r}"
+    )

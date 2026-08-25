@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses as _dc
 import platform
 import statistics
 import time
@@ -233,6 +234,41 @@ def _fingerprint_for(fs, out):
     if kind == "collection":
         return fingerprint_collection(out)
     return fingerprint_output(out)
+
+
+def run_pure_core_parity(corpus_root, corpus, fnspecs):
+    """Per tile-input fn, compare materialized-open vs virtual-open output
+    fingerprints. Returns (fn, tile_px, matched, mat_fp, virt_fp). Exceptions are
+    recorded as matched=False findings, never swallowed."""
+    from databricks.labs.gbx.pyrx.core import open_tile as _ot
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    root = Path(corpus_root)
+    sweep = [t for t in corpus.size_sweep if t.role != "bng_gb"]
+    out = []
+    for fs in fnspecs:
+        if getattr(fs, "input_kind", "tile") != "tile":
+            continue
+        _do_fp = getattr(fs, "fingerprint", True)
+        for te in sweep:
+            p = root / te.path
+            try:
+                with _serde.open_tile(p.read_bytes()) as ds:
+                    _mat_out = fs.core_fn(ds, fs.args)
+                mat_fp = _fingerprint_for(fs, _mat_out) if _do_fp else ""
+                vt = VirtualTile(
+                    cellid=int(te.cellid),
+                    raster=None,
+                    path=str(p),
+                    window=(0, 0, te.tile_px, te.tile_px),
+                ).to_row()
+                with _ot._open(vt) as ds:
+                    _virt_out = fs.core_fn(ds, fs.args)
+                virt_fp = _fingerprint_for(fs, _virt_out) if _do_fp else ""
+                out.append((fs.name, te.tile_px, mat_fp == virt_fp, mat_fp, virt_fp))
+            except Exception as e:  # noqa: BLE001 — finding, not silent skip
+                out.append((fs.name, te.tile_px, False, "", f"ERROR: {e}"))
+    return out
 
 
 def run_pure_core(
@@ -475,38 +511,77 @@ def _tile_aggregate_df(spark, root, corpus, fs):
     per-band split. Each synthesized tile becomes ONE group row; frombands rows
     additionally carry a 0-based ``band_index`` (the ascending-sort key both tiers
     rely on). Returns ``(df, has_band_index)`` -- df has columns tile[, band_index].
-    """
-    from pyspark.sql import functions as F
 
-    recipe = _spec.agg_synth_recipe(fs.name)
-    array_root = corpus.row_pool.tiles[0].path
-    out_dir = _synth.synth_dir(root, array_root, recipe)
-    paths = _synth.synthesize(str(root / array_root), recipe, out_dir)
-    rows = []
-    for i, p in enumerate(paths):
-        d = _serde.build_tile(Path(p).read_bytes(), "GTiff", 0)
-        rows.append((d["cellid"], d["raster"], d["metadata"], i))
+    Implementation note: rows are built as path-based virtual tile structs (V2
+    with path+window set, raster=None) rather than embedding GTiff bytes directly.
+    Embedding bytes in a LocalRelation / Spark plan literal is fine for small tiles
+    but fails for large tiles (1024px ~ 8 MB / tile) because the plan binary
+    exceeds Spark's task broadcast ceiling, causing executors to receive corrupt or
+    truncated bytes and raise "Cannot open TIFF image".  Path-based virtual tiles
+    avoid this: only small strings and ints are serialized in the plan; executors
+    read the bytes from the synth file paths at runtime.
+    """
+    import rasterio as _rasterio
+    from pyspark.sql import functions as F
     from pyspark.sql.types import (
-        BinaryType,
         IntegerType,
         LongType,
-        MapType,
         StringType,
         StructField,
         StructType,
     )
 
-    schema = StructType(
+    recipe = _spec.agg_synth_recipe(fs.name)
+    array_root = corpus.row_pool.tiles[0].path
+    out_dir = _synth.synth_dir(root, array_root, recipe)
+    paths = _synth.synthesize(str(root / array_root), recipe, out_dir)
+
+    # Build rows with only the path, tile dimensions, and band_index — no bytes.
+    # The tile struct is assembled as a path-based virtual tile (V2) below.
+    path_rows = []
+    for i, p in enumerate(paths):
+        abs_p = str(Path(p).resolve())
+        with _rasterio.open(abs_p) as ds:
+            w, h = ds.width, ds.height
+        path_rows.append((abs_p, w, h, i))
+
+    path_schema = StructType(
         [
-            StructField("cellid", LongType(), False),
-            StructField("raster", BinaryType(), False),
-            StructField("metadata", MapType(StringType(), StringType()), True),
+            StructField("abs_path", StringType(), False),
+            StructField("tile_width", IntegerType(), False),
+            StructField("tile_height", IntegerType(), False),
             StructField("band_index", IntegerType(), False),
         ]
     )
-    base = spark.createDataFrame(rows, schema=schema)
+    base = spark.createDataFrame(path_rows, schema=path_schema)
+
+    # Build a V2 virtual tile struct: path+window set, raster=None.
+    # The agg UDF opens each tile via its path on the executor (_tile_raster_bytes
+    # materializes virtual tiles through ot.materialize_to_bytes), so the bytes
+    # are read from disk on demand rather than shipped through the plan.
     df = base.select(
-        F.struct("cellid", "raster", "metadata").alias("tile"),
+        F.struct(
+            F.lit(0).cast(LongType()).alias("cellid"),
+            F.lit(None).cast("binary").alias("raster"),
+            F.col("abs_path").alias("path"),
+            F.struct(
+                F.lit(0).cast(IntegerType()).alias("col_off"),
+                F.lit(0).cast(IntegerType()).alias("row_off"),
+                F.col("tile_width").alias("width"),
+                F.col("tile_height").alias("height"),
+            ).alias("window"),
+            F.lit(None).cast("binary").alias("clip_polygon"),
+            F.lit(None).cast(StringType()).alias("clip_crs"),
+            F.lit(None).cast(StringType()).alias("crs"),
+            F.create_map(
+                F.lit("driver"),
+                F.lit("GTiff"),
+                F.lit("width"),
+                F.col("tile_width").cast(StringType()),
+                F.lit("height"),
+                F.col("tile_height").cast(StringType()),
+            ).alias("metadata"),
+        ).alias("tile"),
         F.col("band_index"),
     )
     return df, (fs.name == "rst_frombands_agg")
@@ -626,6 +701,72 @@ def _grid_aggregate_df(spark, fs):
         ]
     )
     return spark.createDataFrame(rows, schema=schema)
+
+
+def _build_input_tile(path, content, cellid, input_tile):
+    """Build a V2 tile dict for the spark-path leg.
+
+    materialized -> bytes tile (build_tile). virtual -> bytes-free tile pointing
+    at the path over its whole-file window, built via the real rst_fromfile
+    creation path (_fromfile_impl), so the leg dogfoods the feature. Raises on a
+    virtual build failure -- NEVER silently falls back to materialized.
+    """
+    if input_tile == "virtual":
+        from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+        row = _fromfile_impl(path, "GTiff", False)
+        if row is None:
+            raise ValueError(f"virtual tile build returned null for {path!r}")
+        row["cellid"] = int(cellid)  # preserve corpus cellid for key alignment
+        return row
+    return _serde.build_tile(bytes(content), "GTiff", int(cellid))
+
+
+def _disposition_of(fs, sample_out_tile):
+    """Disposition for a fn on a virtual input. Accessors: classify by name.
+    Tile-returning: inspect the sampled output tile (raster None => deferred).
+    None sample => "na" (uncaptured), never a crash.
+
+    Highest-precedence rule: if the FnSpec sets virtual_disposition explicitly,
+    that value wins for any category (accessor, UDTF, or tile-returning fn).
+    This lets fns like rst_polygonize (emits geometry rows, not tiles) be pinned
+    to "materialized" without needing a tile-struct sample.
+    """
+    from databricks.labs.gbx.bench.spec import accessor_disposition
+
+    # Explicit per-fn override wins unconditionally — checked before accessor/sample logic.
+    if getattr(fs, "virtual_disposition", None) is not None:
+        return fs.virtual_disposition
+    if fs.category == "accessor":
+        return accessor_disposition(fs.name, fs)
+    if sample_out_tile is None:
+        return "na"
+    try:
+        raster = sample_out_tile["raster"]
+    except (KeyError, TypeError, IndexError):
+        raster = None
+    return "deferred" if raster is None else "materialized"
+
+
+def _find_udtf_tile_struct(row):
+    """Return row as the tile-struct sample if it contains a 'raster' field, else None.
+
+    For UDTFs that emit V2_TILE_SCHEMA rows (separatebands, retile,
+    tooverlappingtiles, maketiles, tessellate*), the collected Row IS the tile
+    struct — its top-level fields match V2_TILE_SCHEMA including 'raster'.
+
+    For UDTFs emitting flat grid rows (band/cellID/measure from rastertogrid*)
+    or vector rows (geom_wkb/value from polygonize), there is no 'raster' field
+    and this returns None, leaving the caller to fall through to the
+    virtual_disposition override or 'na'.
+
+    Pure (no Spark): testable with plain dicts or Row-like objects.
+    """
+    try:
+        _ = row["raster"]
+        return row
+    except (KeyError, ValueError, TypeError, AttributeError):
+        return None
 
 
 def _emit_explain(label: str, df, explain_dir: str = "") -> None:
@@ -1270,6 +1411,57 @@ def _sp_scalar_error_row(fs, run_id, pool, n, env, warmup_iters, e):
     )
 
 
+def _run_sp_creation(
+    spark,
+    run_id,
+    pool,
+    env,
+    row_counts,
+    warmup,
+    measured,
+    raw,
+    nparts,
+    partition_size,
+    F,
+):
+    """Time rst_fromfile virtual-tile CREATION over the binaryFile `path` column.
+
+    The binaryFile DataFrame ``raw`` carries a ``path`` URI column; this leg times
+    ``prx.rst_fromfile(F.col("path"), "GTiff")`` at each row-count ladder point and
+    emits rows with ``input_tile="virtual"``, ``output_disposition="deferred"``.
+    Runs only when ``input_tile == "virtual"`` and ``rst_fromfile`` is among the
+    selected fn names (gated in ``run_spark_path``).
+    """
+    import math as _math
+
+    from databricks.labs.gbx.bench.spec import REGISTRY
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    fs = REGISTRY["rst_fromfile"]
+    path_df = raw.select(F.col("path"))
+    rows = []
+    for n in sorted(row_counts):
+        _psize = (
+            partition_size
+            if partition_size and partition_size > 0
+            else max(1, n // (nparts * 4))
+        )
+        _parts = max(1, _math.ceil(n / _psize))
+        df = path_df.limit(n).repartition(_parts, F.rand())
+        try:
+
+            def job(_df=df):
+                c = prx.rst_fromfile(F.col("path"), "GTiff")
+                _df.select(c.alias("out")).write.format("noop").mode("overwrite").save()
+
+            stats = time_iters(job, warmup, measured)
+            r = _sp_scalar_ok_row(fs, run_id, pool, n, env, stats)
+        except Exception as e:  # noqa: BLE001
+            r = _sp_scalar_error_row(fs, run_id, pool, n, env, warmup, e)
+        rows.append(_dc.replace(r, input_tile="virtual", output_disposition="deferred"))
+    return rows
+
+
 def _run_sp_scalar_fn(
     fs,
     run_id,
@@ -1342,7 +1534,69 @@ def _run_sp_scalar_fn(
     return rows
 
 
-def run_spark_path(
+def _is_spark_connect(spark) -> bool:
+    """True on a Spark Connect (Serverless) session, False on a classic cluster.
+
+    Connect sessions live under ``pyspark.sql.connect.*``; classic sessions do
+    not. We branch on this rather than feature-probing because the Connect
+    surface deliberately omits ``SparkContext`` and ``DataFrame.rdd`` (they raise
+    on access), and an explicit branch keeps genuine classic-path failures from
+    being masked by a broad ``except``.
+    """
+    return "connect" in type(spark).__module__
+
+
+def _bench_parallelism(spark, default: int = 8) -> int:
+    """Connect-safe partition count for repartitioning the bench row DataFrame.
+
+    Classic clusters expose ``sparkContext.defaultParallelism`` (~ total executor
+    cores), which the spark-path bench used to reproduce the createDataFrame
+    layout so per-row timing stays comparable across runs. Spark Connect
+    (Serverless) has no ``SparkContext``, so fall back to
+    ``spark.sql.shuffle.partitions`` (when it is a plain integer) and finally to a
+    fixed sensible default. Classic behavior is unchanged.
+    """
+    if not _is_spark_connect(spark):
+        try:
+            return max(1, spark.sparkContext.defaultParallelism)
+        except Exception:  # noqa: BLE001
+            pass
+    try:
+        return max(1, int(spark.conf.get("spark.sql.shuffle.partitions")))
+    except Exception:  # noqa: BLE001
+        return default
+
+
+def _one_row_per_partition(spark, df):
+    """One row per partition of ``df``, preserving ``df``'s schema.
+
+    Warm-up intent: touch exactly one row on every executor slot's Python worker
+    so a warm-up pass exercises each slot's UDF once without paying the full
+    row-count cost.
+
+    Classic clusters do this with ``df.rdd.mapPartitions(take 1)``. Spark Connect
+    has no ``.rdd``, so tag each row with its (pre-shuffle) partition id via the
+    DataFrame-native ``spark_partition_id()``, keep one row per distinct id, then
+    drop the tag. Same intent (one warm row per source partition); the rows chosen
+    per partition may differ from the classic "first row", which does not matter
+    for warm-up.
+    """
+    from pyspark.sql import functions as F
+
+    if _is_spark_connect(spark):
+        return (
+            df.withColumn("_bench_pid", F.spark_partition_id())
+            .dropDuplicates(["_bench_pid"])
+            .drop("_bench_pid")
+        )
+    import itertools as _it
+
+    return spark.createDataFrame(
+        df.rdd.mapPartitions(lambda _p: _it.islice(_p, 1)), df.schema
+    )
+
+
+def run_spark_path(  # noqa: C901
     spark,
     corpus_root,
     corpus: m.Corpus,
@@ -1356,6 +1610,7 @@ def run_spark_path(
     partition_size: int = 0,
     explain_only: bool = False,
     explain_dir: str = "",
+    input_tile: str = "materialized",
 ) -> List[ResultRow]:
     """Time each fn as a Spark Column over N tile rows (serialization + UDF overhead).
 
@@ -1409,21 +1664,28 @@ def run_spark_path(
     # (e.g. dbfs:/Volumes/...) that won't string-match the local path, but the basename is
     # stable. Tiny dict (basename -> cellid), safe to capture in the UDF closure.
     _cellid_by_base = {Path(te.path).name: int(te.cellid) for te in tiles}
+    # Look up the GB tile from the corpus size_sweep (added by generate_corpus for the BNG
+    # raster->grid / tessellate fns). Add its cellid BEFORE the UDF is defined so the
+    # closure captures the complete dict; then reuse _gb_entry when building df_gb below.
+    _gb_entry = next((te for te in corpus.size_sweep if te.role == "bng_gb"), None)
+    if _gb_entry is not None:
+        _cellid_by_base[Path(_gb_entry.path).name] = int(_gb_entry.cellid)
 
-    @F.udf(returnType=_serde.TILE_SCHEMA)
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    @F.udf(returnType=V2_TILE_SCHEMA)
     def _to_tile(path, content):
         import os
 
         cid = _cellid_by_base.get(os.path.basename(path), 0)
-        d = _serde.build_tile(bytes(content), "GTiff", cid)
-        return (d["cellid"], d["raster"], d["metadata"])
+        return _build_input_tile(path, content, cid, input_tile)
 
     raw = spark.read.format("binaryFile").load(paths)
     # binaryFile partitions by maxPartitionBytes (packs many small tiles per partition);
     # repartition to defaultParallelism to reproduce the previous createDataFrame layout
     # (e.g. a 12-core cluster -> 12 partitions, so 12 Spark tasks for 10 rows, 2 empty),
     # keeping per-row timing comparable to prior runs. We deliberately DON'T coalesce.
-    _nparts = max(1, spark.sparkContext.defaultParallelism)
+    _nparts = _bench_parallelism(spark)
     df_all = (
         raw.select(_to_tile(F.col("path"), F.col("content")).alias("tile"))
         # repartition by F.rand() not the tile struct (hashing the raster payload would
@@ -1441,21 +1703,46 @@ def run_spark_path(
     _array_root = pool.tiles[0].path if pool.tiles else None
 
     def _synth_array_col(fn: str):
-        """ARRAY<tile> literal column of the synthesized tiles for a tile_array fn."""
+        """ARRAY<tile> column of the synthesized tiles for a tile_array fn.
+
+        Builds path-based virtual tile structs (V2 with path+window set,
+        raster=None) so executors read the bytes from the synth file paths at
+        runtime.  Embedding GTiff bytes as F.lit literals is fine for small
+        corpus tiles but fails for large tiles (1024px ~ 8 MB / tile) because
+        the plan binary exceeds Spark's task broadcast ceiling, causing executors
+        to receive corrupt or truncated bytes and raise "Cannot open TIFF image".
+        """
+        import rasterio as _rasterio
+
         paths = _synthesized_paths(root, _array_root, fn)
         elems = []
         for p in paths:
-            d = _serde.build_tile(Path(p).read_bytes(), "GTiff", 0)
+            abs_p = str(Path(p).resolve())
+            with _rasterio.open(abs_p) as ds:
+                w, h, cnt = ds.width, ds.height, ds.count
             elems.append(
                 F.struct(
-                    F.lit(d["cellid"]).cast("long").alias("cellid"),
-                    F.lit(d["raster"]).alias("raster"),
+                    F.lit(0).cast("long").alias("cellid"),
+                    F.lit(None).cast("binary").alias("raster"),
+                    F.lit(abs_p).alias("path"),
+                    F.struct(
+                        F.lit(0).cast("int").alias("col_off"),
+                        F.lit(0).cast("int").alias("row_off"),
+                        F.lit(w).cast("int").alias("width"),
+                        F.lit(h).cast("int").alias("height"),
+                    ).alias("window"),
+                    F.lit(None).cast("binary").alias("clip_polygon"),
+                    F.lit(None).cast("string").alias("clip_crs"),
+                    F.lit(None).cast("string").alias("crs"),
                     F.create_map(
-                        *[
-                            x
-                            for k, v in d["metadata"].items()
-                            for x in (F.lit(k), F.lit(v))
-                        ]
+                        F.lit("driver"),
+                        F.lit("GTiff"),
+                        F.lit("width"),
+                        F.lit(str(w)),
+                        F.lit("height"),
+                        F.lit(str(h)),
+                        F.lit("count"),
+                        F.lit(str(cnt)),
                     ).alias("metadata"),
                 )
             )
@@ -1477,12 +1764,41 @@ def run_spark_path(
     # paying the full row-count cost. (df.limit(N) would pull all N rows from the first
     # couple of partitions, warming only a slot or two.) The measured iterations run the
     # cached df_all directly (repartitioned); only the warm-up uses this slot-spread DF.
-    import itertools as _it
-
-    _warm_df = spark.createDataFrame(
-        df_all.rdd.mapPartitions(lambda _p: _it.islice(_p, 1)), df_all.schema
-    ).cache()
+    _warm_df = _one_row_per_partition(spark, df_all).cache()
     _warm_df.count()  # materialize so building it isn't charged to any fn's timing
+
+    # GB tile DataFrame for BNG raster->grid / tessellate fns (gb_tile=True).
+    # Pure-core routes these fns to the corpus's "bng_gb" tile so they bin REAL BNG
+    # cells; without the same routing the spark-path benches NYC (EPSG:4326) tiles
+    # reprojected to EPSG:27700, which land outside Great Britain -> empty grid.
+    # Replicate the single GB tile to max_rows rows (1000 identical tiles is fine;
+    # per-tile timing + disposition are what matter) via crossJoin against
+    # spark.range(max_rows) so no duplicate paths go into binaryFile.load().
+    _want_gb = any(getattr(f, "gb_tile", False) for f in fnspecs)
+    df_gb = None
+    warm_df_gb = None
+    # Skip when explain_only: that branch returns before the timing loop that uses
+    # df_gb (and _explain_spark_path plans over df_all), so building + caching the GB
+    # tile here would only leak the cache and run a needless count in plan-only mode.
+    if _want_gb and not explain_only:
+        if _gb_entry is None:
+            print(
+                "[bench] gb_tile fns present but corpus has no role='bng_gb' entry; "
+                "these fns will fall back to the ordinary row pool (NYC tiles)."
+            )
+        else:
+            _gb_path = str(root / _gb_entry.path)
+            df_gb = (
+                spark.read.format("binaryFile")
+                .load([_gb_path])
+                .crossJoin(spark.range(max_rows))
+                .select(_to_tile(F.col("path"), F.col("content")).alias("tile"))
+                .repartition(_nparts, F.rand())
+                .cache()
+            )
+            df_gb.count()
+            warm_df_gb = _one_row_per_partition(spark, df_gb).cache()
+            warm_df_gb.count()
 
     # --explain-only: build each fn's spark-path DataFrame and PRINT its physical plan,
     # no timing / no Delta write (delegated to _explain_spark_path).
@@ -1551,6 +1867,17 @@ def run_spark_path(
         if "spark-path" not in fs.modes:
             continue
         _sp_leg_i += 1
+        # Route gb_tile fns (BNG raster->grid / tessellate, which reproject to
+        # EPSG:27700 and drop out-of-GB pixels) to the dedicated GB tile DF so
+        # they bench REAL cells.  Every other fn uses the ordinary NYC row pool DF.
+        _fn_df = (
+            df_gb if (getattr(fs, "gb_tile", False) and df_gb is not None) else df_all
+        )
+        _fn_warm_df = (
+            warm_df_gb
+            if (getattr(fs, "gb_tile", False) and warm_df_gb is not None)
+            else _warm_df
+        )
         _mark = len(out)
         if getattr(fs, "input_kind", "tile") in _agg_kinds:
             out += _run_aggregate(
@@ -1565,10 +1892,7 @@ def run_spark_path(
                 env,
                 partition_size=partition_size,
             )
-            _flush(out, _mark)
-            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
-            continue
-        if getattr(fs, "udtf", False):
+        elif getattr(fs, "udtf", False):
             # UDTF grid fns (rastertogrid* / tessellate): the lightweight impl is a
             # registered Python UDTF, so the realistic distributed per-tile cost is a
             # SQL LATERAL table-function join over the tile DataFrame -- NOT a scalar
@@ -1585,37 +1909,129 @@ def run_spark_path(
                 measured,
                 env,
                 pool,
-                df_all,
-                _warm_df,
+                _fn_df,
+                _fn_warm_df,
                 max_rows,
                 _nparts,
                 partition_size,
                 math,
                 F,
             )
-            _flush(out, _mark)
-            _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
-            continue
-        out += _run_sp_scalar_fn(
-            fs,
+        else:
+            out += _run_sp_scalar_fn(
+                fs,
+                run_id,
+                pool,
+                env,
+                row_counts,
+                warmup,
+                measured,
+                _fn_df,
+                _fn_warm_df,
+                max_rows,
+                _nparts,
+                partition_size,
+                _input_col,
+                math,
+                F,
+            )
+        if input_tile == "virtual" and getattr(fs, "input_kind", "tile") == "tile":
+            _sample = None
+            # True when the UDTF returned rows but none contained a tile struct
+            # (case 2: flat measure rows / geometry rows — rastertogrid*, polygonize).
+            _got_flat_udtf_rows = False
+            if fs.category != "accessor":
+                if getattr(fs, "udtf", False):
+                    # UDTF: col_fn raises NotImplementedError; sample via SQL LATERAL.
+                    # Three cases from the LATERAL sample:
+                    #   1. Row returned AND _find_udtf_tile_struct finds tile struct ->
+                    #      pass to _disposition_of for raster null-ness check
+                    #      (tessellate, retile, maketiles, tooverlappingtiles, separatebands)
+                    #   2. Row returned but NO tile struct (flat measures / geometry rows) ->
+                    #      set _got_flat_udtf_rows=True; _disp resolved to "materialized"
+                    #      below (rastertogrid* emit measure rows; polygonize emits geometry)
+                    #   3. No rows / sample failed -> _sample stays None -> "na" or
+                    #      virtual_disposition override
+                    _disp_view = f"_bench_disp_{fs.name}_{id(_fn_df)}"
+                    try:
+                        _fn_df.limit(1).createOrReplaceTempView(_disp_view)
+                        _udtf_rows = (
+                            spark.sql(_udtf_lateral_sql(_disp_view, fs))
+                            .limit(1)
+                            .collect()
+                        )
+                        if _udtf_rows:
+                            _tile_struct = _find_udtf_tile_struct(_udtf_rows[0])
+                            if _tile_struct is not None:
+                                _sample = _tile_struct  # case 1
+                            else:
+                                _got_flat_udtf_rows = True  # case 2
+                    except Exception as _e:  # noqa: BLE001 — finding, not a silent skip
+                        print(
+                            f"[bench][QA] disposition sample failed for {fs.name}: {_e}"
+                        )
+                    finally:
+                        try:
+                            spark.catalog.dropTempView(_disp_view)
+                        except Exception:  # noqa: BLE001 — best-effort cleanup
+                            pass
+                else:
+                    try:
+                        _row1 = (
+                            _fn_df.limit(1)
+                            .select(
+                                fs.col_fn(
+                                    _input_col(fs.name, "tile", _fn_df), fs.args
+                                ).alias("out")
+                            )
+                            .collect()
+                        )
+                        _sample = _row1[0]["out"] if _row1 else None
+                    except Exception as _e:  # noqa: BLE001 — finding, not a silent skip
+                        print(
+                            f"[bench][QA] disposition sample failed for {fs.name}: {_e}"
+                        )
+            _disp = _disposition_of(fs, _sample)
+            # Case 2: UDTF emitted non-tile rows (flat measure rows from rastertogrid*
+            # or geometry rows from polygonize). These UDTFs necessarily read all
+            # input pixels to produce their output, so the virtual input is consumed
+            # -> "materialized". virtual_disposition override has already been applied
+            # by _disposition_of above and wins unconditionally; only rewrite "na".
+            # A hypothetical header-only UDTF that emits flat rows without reading
+            # pixels would need virtual_disposition="deferred" to override this.
+            if _got_flat_udtf_rows and _disp == "na":
+                _disp = "materialized"
+            for _i in range(_mark, len(out)):
+                out[_i] = _dc.replace(
+                    out[_i], input_tile="virtual", output_disposition=_disp
+                )
+        _flush(out, _mark)
+        _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
+    # rst_fromfile creation micro-leg: times virtual-tile creation from a path column.
+    # rst_fromfile has no ordinary spark-path form (pure-core only in the registry); the
+    # binaryFile `raw` DataFrame carries a `path` column, so this dedicated leg measures
+    # the distributed creation cost. Runs only when input_tile=="virtual" AND the caller
+    # explicitly selected rst_fromfile.
+    _fn_names = {fs.name for fs in fnspecs}
+    if input_tile == "virtual" and "rst_fromfile" in _fn_names:
+        out += _run_sp_creation(
+            spark,
             run_id,
             pool,
             env,
             row_counts,
             warmup,
             measured,
-            df_all,
-            _warm_df,
-            max_rows,
+            raw,
             _nparts,
             partition_size,
-            _input_col,
-            math,
             F,
         )
-        _flush(out, _mark)
-        _sp_progress_line(fs.name, out, _mark, _sp_leg_i, _sp_leg_n)
     df_all.unpersist()
+    if df_gb is not None:
+        df_gb.unpersist()
+    if warm_df_gb is not None:
+        warm_df_gb.unpersist()
     return out
 
 

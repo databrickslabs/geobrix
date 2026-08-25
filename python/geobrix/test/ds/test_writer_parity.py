@@ -62,7 +62,11 @@ def spark_with_jar():
 
 def test_light_write_roundtrips_to_same_pixels_as_source(spark_with_jar, tmp_path):
     out_dir = str(tmp_path / "light_out")
-    light = spark_with_jar.read.format("raster_gbx").load(SAMPLE)
+    light = (
+        spark_with_jar.read.format("raster_gbx")
+        .option("virtualTiles", "false")
+        .load(SAMPLE)
+    )
     light.write.format("gtiff_gbx").mode("overwrite").save(out_dir)
 
     written = [f for f in os.listdir(out_dir) if f.endswith(".tif")]

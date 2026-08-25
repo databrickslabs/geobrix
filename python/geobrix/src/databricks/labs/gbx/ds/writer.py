@@ -18,7 +18,80 @@ from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import _write
-from databricks.labs.gbx.ds.raster import reader_schema
+from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
+
+def _raster_bytes_compression(raster_bytes: bytes) -> "Optional[str]":
+    """Return the lowercase compression name from the raster header, or None.
+
+    Opens only the TIFF header (fast — no pixel decode).
+    """
+    from rasterio.io import MemoryFile
+
+    try:
+        with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+            comp = ds.compression
+            return comp.value.lower() if comp is not None else None
+    except Exception:
+        return None
+
+
+def _apply_compression(
+    raster_bytes: bytes,
+    compress: str,
+    compress_level: "Optional[int]",
+    predictor: "Optional[int]",
+) -> bytes:
+    """Re-encode *raster_bytes* with the requested compression profile.
+
+    Routes through the compression authority (``pyrx.core.compression``) so
+    that auto / ZSTD / deflate / lzw / none are all handled consistently with
+    dtype-appropriate predictors. Returns the re-encoded GTiff bytes.
+
+    When compress='auto', this will return ZSTD+predictor output. When
+    compress='none', the output has no compression keys.
+
+    Fast-path: when compress='auto' and *raster_bytes* are already
+    ZSTD-compressed, returns *raster_bytes* unchanged (no re-encode).  This
+    avoids a wasteful double-encode for tiles produced by the virtual-tile
+    materializer (which already ZSTD-encodes) and for passthrough ZSTD tiles.
+    Explicit codecs always re-encode even when the input is already in that
+    format (the caller requested a specific codec, so we honour it).
+    """
+    if compress == "auto" and _raster_bytes_compression(raster_bytes) == "zstd":
+        return raster_bytes
+
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
+        data = src.read()
+        profile = src.profile.copy()
+        profile.update(driver="GTiff")
+        out_dtype = profile.get("dtype", str(src.dtypes[0]))
+        decoded_bytes = src.count * src.width * src.height
+        try:
+            import numpy as np
+
+            decoded_bytes *= np.dtype(out_dtype).itemsize
+        except (TypeError, AttributeError):
+            pass
+        # Remove stale compression keys before merging authority output.
+        for _k in ("compress", "predictor", "zstd_level", "zlevel"):
+            profile.pop(_k, None)
+        profile.update(
+            _comp.creation_opts(
+                out_dtype,
+                decoded_bytes=decoded_bytes,
+                compress=compress,
+                level=compress_level,
+                predictor=predictor,
+            )
+        )
+        with MemoryFile() as out_mf:
+            with out_mf.open(**profile) as dst:
+                dst.write(data)
+            return out_mf.read()
 
 
 @dataclass
@@ -27,12 +100,25 @@ class RasterCommitMessage(WriterCommitMessage):
 
 
 def assert_write_schema(schema: StructType) -> None:
-    """Exact (source, tile) — extras OR missing both fail (matches GDAL writer)."""
-    expected = reader_schema()
-    if [f.name for f in schema.fields] != [f.name for f in expected.fields]:
+    """Exact (source, tile) envelope; tile may be v1 OR v2.
+
+    The top-level columns must be exactly ``(source, tile)``. The ``tile`` struct
+    may be either the v1 shape (``cellid, raster, metadata``) or the v2 virtual
+    envelope (8 fields). Anything else fails, matching the strict GDAL writer.
+    """
+    v1 = reader_schema()
+    if [f.name for f in schema.fields] != [f.name for f in v1.fields]:
         raise ValueError(
             f"raster writer requires exactly columns "
-            f"{[f.name for f in expected.fields]}, got {[f.name for f in schema.fields]}"
+            f"{[f.name for f in v1.fields]}, got {[f.name for f in schema.fields]}"
+        )
+    tile_names = [f.name for f in schema["tile"].dataType.fields]
+    v1_tile = [f.name for f in v1["tile"].dataType.fields]
+    v2_tile = [f.name for f in reader_schema_v2()["tile"].dataType.fields]
+    if tile_names != v1_tile and tile_names != v2_tile:
+        raise ValueError(
+            f"raster writer 'tile' must be the v1 {v1_tile} or v2 {v2_tile} "
+            f"struct, got {tile_names}"
         )
 
 
@@ -56,6 +142,23 @@ class RasterGbxWriter(DataSourceWriter):
         name_col: Optional[str] = None,
         ext: str = "tif",
         force_driver: Optional[str] = None,
+        cog: bool = False,
+        cog_blocksize: int = 512,
+        cog_overview_resampling: str = "AVERAGE",
+        # Unified compression surface (Task 5).
+        # ``compress`` = "auto" (default) | "zstd" | "deflate" | "lzw" | "none".
+        # ``compress_level`` and ``predictor`` refine it when compress != "auto".
+        # When compress == "auto", explicit level/predictor are ignored (with a
+        # UserWarning from the authority).
+        # Deprecated: ``cog_compression`` is the old single-codec option accepted
+        # by the pre-Task-5 API; it still works but maps to ``compress`` internally.
+        # If BOTH are supplied, ``compress`` wins (callers should migrate).
+        compress: str = "auto",
+        compress_level: Optional[int] = None,
+        predictor: Optional[int] = None,
+        # Kept for legacy callers that construct RasterGbxWriter directly with
+        # cog_compression; stripped out here and replaced by compress.
+        cog_compression: Optional[str] = None,
     ):
         assert_write_schema(schema)
         if name_col and name_col not in [f.name for f in schema.fields]:
@@ -72,6 +175,33 @@ class RasterGbxWriter(DataSourceWriter):
         self.name_col = name_col
         self.ext = ext
         self.force_driver = force_driver
+        self.cog = cog
+        self.cog_blocksize = cog_blocksize
+        self.cog_overview_resampling = cog_overview_resampling
+        # Resolve final compress value: explicit ``compress`` wins over ``cog_compression``.
+        if compress == "auto" and cog_compression is not None:
+            # Legacy caller passed only cog_compression; adopt it as compress.
+            self.compress = cog_compression.lower()
+        else:
+            self.compress = compress
+        self.compress_level = compress_level
+        self.predictor = predictor
+        # Driver-capture the connect-aware materialize cap. __init__ runs on the
+        # DRIVER (DataSource V2 contract), where a live session is present; the
+        # instance is pickled to workers, so self._cap travels to write(). Resolving
+        # the cap inside write() (which runs per-partition on a Serverless worker
+        # with NO session) would silently fall back to the 256 MiB classic cap and
+        # mis-gate a 64-256 MiB tile as "stream" → full materialize → OOM. Use
+        # _resolve_session_for_cap() (getActiveSession → getOrCreate fallback) so
+        # that threading contexts where getActiveSession() returns None still resolve
+        # to the live Connect session. Mirrors file_ref_arg / rst_fromfile's driver
+        # capture (parity with those read-gate surfaces).
+        from databricks.labs.gbx.ds.file_gbx import (
+            _connect_aware_lru_sizing,
+            _resolve_session_for_cap,
+        )
+
+        self._cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
         # Use self.path (scheme stripped), NOT the raw path: a dbfs:/file:-qualified
         # path makes os.path.isdir(path) False, which would silently skip the
         # overwrite cleanup and leave stale tiles from a prior write mixed in.
@@ -83,13 +213,96 @@ class RasterGbxWriter(DataSourceWriter):
                     pass
 
     def write(self, iterator: Iterator) -> WriterCommitMessage:
+        from databricks.labs.gbx.ds.file_gbx import materialize_decision
+        from databricks.labs.gbx.pyrx.core.open_tile import (
+            _to_virtual_tile,
+            _windowed_materialize_bytes,
+            materialize_to_bytes,
+            open_header,
+        )
+
         os.makedirs(self.path, exist_ok=True)
         written: List[str] = []
         for row in iterator:
-            tile = row["tile"]
-            cellid = tile["cellid"]
-            raster_bytes = bytes(tile["raster"])
-            metadata = dict(tile["metadata"] or {})
+            # Normalize any tile shape (v1 / v2-materialized / virtual) to a
+            # VirtualTile, then materialize virtual tiles (raster is None) to
+            # bytes. Downstream (cog re-encode / tile_to_bytes / naming) only
+            # needs raster_bytes + metadata + cellid, unchanged from before.
+            vt = _to_virtual_tile(row["tile"])
+            if vt.is_virtual():
+                # Size-gate: route large virtual tiles through a block-streaming
+                # write that never holds the full pixel array in RAM — essential
+                # under the ~1 GiB Serverless per-task cap.
+                #
+                # Gate on the DECODED size (count*width*height*itemsize from the
+                # tile header), NOT the compressed on-disk size: the "stream"
+                # branch does materialize_to_bytes → ds.read() → a full DECODED
+                # array in RAM, which can be ~10x the compressed size for a
+                # highly-compressible tile. path_file_size (compressed) would
+                # under-estimate RAM and mis-gate a large-decoded tile as "stream".
+                # open_header is header-only (no pixel read); for a windowed tile
+                # it reflects the WINDOW dims (exactly what ds.read() will hold).
+                # Unknown/failed header → None → "stream" (safe default). The cap
+                # is the driver-captured self._cap (see __init__): resolving it on
+                # a session-less Serverless worker would wrongly use the 256 MiB
+                # classic cap.
+                _size: Optional[int]
+                try:
+                    import numpy as _np
+
+                    with open_header(vt) as _h:
+                        _size = (
+                            _h.count
+                            * _h.width
+                            * _h.height
+                            * int(_np.dtype(_h.dtypes[0]).itemsize)
+                        )
+                except Exception:
+                    _size = None  # unknown size → "stream" (safe default)
+                _decision = materialize_decision(_size, "write", cap_bytes=self._cap)
+                if _decision == "fuse":
+                    raster_bytes = _windowed_materialize_bytes(vt)
+                else:
+                    raster_bytes = materialize_to_bytes(vt).raster
+            else:
+                raster_bytes = bytes(vt.raster)
+            cellid = vt.cellid
+            metadata = dict(vt.metadata or {})
+            if self.cog:
+                # COG path: cog_convert handles compression directly; skip the
+                # pre-encode _apply_compression step to avoid a double re-encode.
+                # Pass "auto" through to cog_convert unchanged: cog_convert
+                # accepts "auto" as a special sentinel that bypasses cog_profiles
+                # validation and routes through creation_opts(compress="auto",
+                # decoded_bytes=...) for size-adaptive ZSTD level + predictor —
+                # the ZSTD baseline, same as the GTiff path.
+                _cog_compress = str(self.compress).lower()
+                if _cog_compress == "none":
+                    _cog_compress = "raw"
+                from rasterio.io import MemoryFile
+
+                from databricks.labs.gbx.pyrx.core import analysis as _analysis
+                from databricks.labs.gbx.pyrx.core import cog as _cog
+
+                info = _cog.detect_cog(metadata, raster_bytes)
+                if not info.is_cog:
+                    with MemoryFile(raster_bytes) as mf:
+                        with mf.open() as ds:
+                            raster_bytes = _analysis.cog_convert(
+                                ds,
+                                _cog_compress,
+                                self.cog_blocksize,
+                                self.cog_overview_resampling,
+                            )
+                    metadata = _cog.stamp_format_metadata(raster_bytes, metadata)
+            else:
+                # GTiff path: apply user-requested compression to the output tile.
+                # Re-encodes the tile bytes through the compression authority so the
+                # output file has the correct codec regardless of whether the input
+                # came through the passthrough path or a re-encode path.
+                raster_bytes = _apply_compression(
+                    raster_bytes, self.compress, self.compress_level, self.predictor
+                )
             if self.name_col:
                 raw_name = row[self.name_col]
                 name = os.path.basename(str(raw_name)) if raw_name is not None else ""

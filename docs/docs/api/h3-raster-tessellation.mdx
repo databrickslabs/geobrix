@@ -88,7 +88,7 @@ FROM rasters,
 LATERAL gbx_rst_h3_tessellate(tile, 7) t;
 ```
 
-Each row in the result is a tile struct with `cellid` (the H3 cell integer ID), `raster` (clipped raster bytes), and `metadata`.
+Each row in the result is a v2 tile struct — `cellid` (the H3 cell integer ID), `raster` (clipped raster bytes), `path`, `window`, `clip_polygon`, `clip_crs`, `crs`, and `metadata`.
 
 ---
 

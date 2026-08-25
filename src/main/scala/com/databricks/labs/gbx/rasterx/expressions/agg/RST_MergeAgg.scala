@@ -3,21 +3,22 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.operations.MergeRasters
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil, V2Tile}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
 import org.apache.spark.sql.catalyst.expressions.{Expression, UnsafeProjection, UnsafeRow}
 import org.apache.spark.sql.catalyst.trees.UnaryLike
 import org.apache.spark.sql.catalyst.util.GenericArrayData
-import org.apache.spark.sql.types.{ArrayType, DataType, StringType}
+import org.apache.spark.sql.types.{ArrayType, DataType}
 
 import scala.collection.mutable.ArrayBuffer
+import scala.util.Try
 
 /** Merges rasters into a single raster. */
 //noinspection DuplicatedCode
 case class RST_MergeAgg(
-    tileExpr: Expression,
+    tile: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0
@@ -25,9 +26,9 @@ case class RST_MergeAgg(
       with UnaryLike[Expression] {
 
     override lazy val deterministic: Boolean = true
-    override val child: Expression = tileExpr
-    override val nullable: Boolean = false
-    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tileExpr)
+    override val child: Expression = tile
+    override val nullable: Boolean = true
+    lazy val rasterType: DataType = RST_ExpressionUtil.rasterType(tile)
     override lazy val dataType: DataType = RST_ExpressionUtil.tileDataType(rasterType)
     override def prettyName: String = RST_MergeAgg.name
 
@@ -36,7 +37,11 @@ case class RST_MergeAgg(
 
     def update(buffer: ArrayBuffer[Any], input: InternalRow): ArrayBuffer[Any] = {
         val value = child.eval(input)
-        buffer += InternalRow.copyValue(value)
+        if (value != null) {
+            buffer += InternalRow.copyValue(
+                RasterSerializationUtil.normalizeToV2Row(value.asInstanceOf[InternalRow])
+            )
+        }
         buffer
     }
 
@@ -74,21 +79,35 @@ case class RST_MergeAgg(
             // nondeterministic: two overlapping tiles sharing an origin tied on the origin
             // and fell back to GetDescription, which for an in-memory BinaryType tile is a
             // per-open /vsimem/<uuid> path -- i.e. random. Raw content has no such hole.
+            var dropped = 0
             val tiles = buffer
                 .map(_.asInstanceOf[InternalRow])
-                .sortBy(row => RST_MergeAgg.contentKey(row, rasterType))(RST_MergeAgg.unsignedBytesOrdering)
-                .map(row => RasterSerializationUtil.rowToTile(row, rasterType))
+                .sortBy(row => RST_MergeAgg.contentKey(row))(RST_MergeAgg.unsignedBytesOrdering)
+                .flatMap { row =>
+                    Try(RasterSerializationUtil.rowToTile(row, rasterType)).toOption match {
+                        case Some(t) if t._2 != null => Some(t)
+                        case _ => dropped += 1; None
+                    }
+                }
 
-            // If merging multiple index rasters, the index value is dropped
-            val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
-            val (res, resMtd) = MergeRasters.merge(tiles.map(_._2).toArray, tiles.head._3)
+            if (tiles.isEmpty) {
+                null
+            } else {
+                // If merging multiple index rasters, the index value is dropped
+                val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
+                val (res, resMtd) = MergeRasters.merge(tiles.map(_._2).toArray, tiles.head._3)
 
-            val resRow = RasterSerializationUtil.tileToRow((idx, res, resMtd), rasterType, exprConf.hConf)
+                val finalMtd = if (dropped > 0)
+                    resMtd + ("last_error" -> s"RST_MergeAgg: skipped $dropped corrupt input tile(s)")
+                else resMtd
 
-            tiles.foreach(t => RasterDriver.releaseDataset(t._2))
-            RasterDriver.releaseDataset(res)
+                val resRow = RasterSerializationUtil.tileToRow((idx, res, finalMtd), rasterType, exprConf.hConf)
 
-            resRow
+                tiles.foreach(t => RasterDriver.releaseDataset(t._2))
+                RasterDriver.releaseDataset(res)
+
+                resRow
+            }
         }
     }
 
@@ -104,27 +123,23 @@ case class RST_MergeAgg(
         buffer
     }
 
-    override protected def withNewChildInternal(newChild: Expression): RST_MergeAgg = copy(tileExpr = newChild)
+    override protected def withNewChildInternal(newChild: Expression): RST_MergeAgg = copy(tile = newChild)
 
 }
 
-/** Companion: SQL name, builder, and eval entry points for path/binary tile. */
+/** Companion: SQL name, builder, and sort helpers for binary tile. */
 object RST_MergeAgg extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_merge_agg"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => RST_MergeAgg(c(0))
 
-    /** Canonical sort key for a tile row: its raw serialized content (the GTiff bytes a
-      * BinaryType tile carries, or the UTF-8 path bytes a StringType tile carries). This is
+    /** Canonical sort key for a tile row: the raw GTiff bytes (BinaryType, field 1). This is
       * a total order intrinsic to the tile -- bitwise-identical to what the lightweight tier
       * sorts on -- with no random per-open component.
       */
-    private[agg] def contentKey(row: InternalRow, rasterDT: DataType): Array[Byte] =
-        rasterDT match {
-            case StringType => row.getString(1).getBytes("UTF-8")
-            case _          => row.getBinary(1)
-        }
+    private[agg] def contentKey(row: InternalRow): Array[Byte] =
+        V2Tile.getRaster(row)
 
     /** Unsigned lexicographic ordering of byte arrays (a stable total order on raw content). */
     private[agg] val unsignedBytesOrdering: Ordering[Array[Byte]] = new Ordering[Array[Byte]] {

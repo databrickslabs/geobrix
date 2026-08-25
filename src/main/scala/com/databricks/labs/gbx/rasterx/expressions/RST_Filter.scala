@@ -13,18 +13,16 @@ import org.gdal.gdal.Dataset
 
 /** The expression for applying NxN filter on a raster. */
 case class RST_Filter(
-    tileExpr: Expression,
+    tile: Expression,
     kernelSizeExpr: Expression,
     operationExpr: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, kernelSizeExpr, operationExpr, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, kernelSizeExpr, operationExpr, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Filter.name
-    override def replacement: Expression = rstInvoke(RST_Filter, rasterType)
+    override def replacement: Expression = invoke(RST_Filter)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
 }
@@ -32,8 +30,7 @@ case class RST_Filter(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Filter extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String): InternalRow = eval(row, n, operation, conf, StringType)
-    def evalBinary(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String): InternalRow =
         eval(row, n, operation, conf, BinaryType)
 
     def eval(row: InternalRow, n: Int, operation: UTF8String, conf: UTF8String, rdt: DataType): InternalRow =

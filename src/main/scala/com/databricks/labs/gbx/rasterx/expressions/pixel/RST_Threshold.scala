@@ -24,23 +24,22 @@ import org.gdal.gdal.Dataset
   * cells stay NoData; the calc only fires over valid pixels.
   */
 case class RST_Threshold(
-    tileExpr: Expression,
+    tile: Expression,
     opExpr: Expression,
     valueExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
-        tileExpr, opExpr, valueExpr, ExpressionConfigExpr()
+        tile, opExpr, valueExpr, ExpressionConfigExpr()
     )
     // Pin `value` as DoubleType so SQL decimal literals (e.g. ``5.0``) coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, StringType, DoubleType, StringType
+        tile.dataType, StringType, DoubleType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Threshold.name
-    override def replacement: Expression = rstInvoke(RST_Threshold, rasterType)
+    override def replacement: Expression = invoke(RST_Threshold)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -51,10 +50,8 @@ object RST_Threshold extends WithExpressionInfo {
     /** Supported comparison operators and their numpy equivalents. */
     private val AllowedOps: Set[String] = Set(">", ">=", "<", "<=", "==", "!=")
 
-    def evalBinary(row: InternalRow, op: UTF8String, value: Double, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, op: UTF8String, value: Double, conf: UTF8String): InternalRow =
         runDispatch(row, op, value, conf, BinaryType)
-    def evalPath(row: InternalRow, op: UTF8String, value: Double, conf: UTF8String): InternalRow =
-        runDispatch(row, op, value, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, op: UTF8String, value: Double, conf: UTF8String, dt: DataType

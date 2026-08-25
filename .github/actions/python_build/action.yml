@@ -6,7 +6,7 @@ inputs:
     description: 'Run Python lint (isort, black, flake8) and fail build on errors? true or false. Typically true only for PRs targeting main.'
     default: 'false'
   enable_coverage:
-    description: 'Run pytest with coverage (--cov) and emit coverage.xml for Codecov? true or false.'
+    description: 'Run pytest with coverage (--cov) and emit coverage.xml? true or false.'
     default: 'false'
 runs:
   using: "composite"
@@ -117,14 +117,14 @@ runs:
         # Heavyweight must not test lightweight. The lightweight tiers (pyrx, pyvx,
         # pygx, ds, pmtiles_light, stac, earthdata, vizx, sample) need
         # rasterio/shapely/pandas/pyarrow etc. that are NOT in requirements-ci.txt;
-        # they run in their own 'pyrx' CI job against requirements-pyrx-ci.txt.
+        # they run in their own 'pyrx' CI job against requirements-light-env6-ci.txt.
         # test/conftest.py collect_ignore already skips these when rasterio is
         # absent, but we ALSO pass --ignore explicitly so a light dir can never run
         # in the heavy phase even if the env drifts (gains rasterio) or a caller
         # invokes a light dir directly. This list MUST stay in sync with
         # _LIGHT_TEST_DIRS in test/conftest.py.
         # pytest-cov is already locked in requirements-ci.txt; no extra install needed.
-        LIGHT_IGNORES="--ignore=test/pyrx --ignore=test/pyvx --ignore=test/pygx --ignore=test/ds --ignore=test/pmtiles_light --ignore=test/stac --ignore=test/earthdata --ignore=test/vizx --ignore=test/sample --ignore=test/bench"
+        LIGHT_IGNORES="--ignore=test/pyrx --ignore=test/pyvx --ignore=test/pygx --ignore=test/ds --ignore=test/pmtiles_light --ignore=test/stac --ignore=test/earthdata --ignore=test/vizx --ignore=test/sample --ignore=test/bench --ignore=test/core"
         if [ "${{ inputs.enable_coverage }}" = "true" ]; then
           pytest -m "not integration" $LIGHT_IGNORES --cov=src --cov-report=xml --cov-report=term --cov-config=pyproject.toml -q
         else

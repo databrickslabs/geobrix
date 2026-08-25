@@ -27,24 +27,23 @@ import java.util.{Vector => JVector}
   * passes `null` as the mask, asking it to derive the mask from the band itself).
   */
 case class RST_FillNodata(
-    tileExpr: Expression,
+    tile: Expression,
     maxSearchDistExpr: Expression,
     smoothingIterExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
-        tileExpr, maxSearchDistExpr, smoothingIterExpr, ExpressionConfigExpr()
+        tile, maxSearchDistExpr, smoothingIterExpr, ExpressionConfigExpr()
     )
     // Pin max_search_dist as DoubleType (gdal.FillNodata takes a Double), and
     // smoothing_iter as IntegerType so SQL literals coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, DoubleType, IntegerType, StringType
+        tile.dataType, DoubleType, IntegerType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_FillNodata.name
-    override def replacement: Expression = rstInvoke(RST_FillNodata, rasterType)
+    override def replacement: Expression = invoke(RST_FillNodata)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -52,14 +51,10 @@ case class RST_FillNodata(
 
 object RST_FillNodata extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, maxSearchDist: Double, smoothingIter: Int, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, maxSearchDist: Double, smoothingIter: Int, conf: UTF8String): InternalRow =
         runDispatch(row, maxSearchDist, smoothingIter, conf, BinaryType)
-    def evalPath(row: InternalRow, maxSearchDist: Double, smoothingIter: Int, conf: UTF8String): InternalRow =
-        runDispatch(row, maxSearchDist, smoothingIter, conf, StringType)
-    def evalBinary (row: InternalRow, maxSearchDist: Double, smoothingIter: Long, conf: UTF8String): InternalRow =
+    def eval (row: InternalRow, maxSearchDist: Double, smoothingIter: Long, conf: UTF8String): InternalRow =
         runDispatch(row, maxSearchDist, smoothingIter.toInt, conf, BinaryType)
-    def evalPath (row: InternalRow, maxSearchDist: Double, smoothingIter: Long, conf: UTF8String): InternalRow =
-        runDispatch(row, maxSearchDist, smoothingIter.toInt, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, maxSearchDist: Double, smoothingIter: Int, conf: UTF8String, dt: DataType

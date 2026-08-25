@@ -23,6 +23,8 @@ import numpy as np
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+
 _NODATA = -9999.0
 _U64 = 0xFFFFFFFFFFFFFFFF
 
@@ -47,13 +49,43 @@ def _resolution(cell_strs) -> int:
 
 
 def _reproject(xs, ys, src, dst):
-    if src == dst:
-        return np.asarray(xs, dtype="float64"), np.asarray(ys, dtype="float64")
+    # src/dst may be an int SRID, int-like/CRS string, or a CRS object. Route
+    # through the shared resolver (int/int-like classified EPSG-vs-ESRI via the
+    # authoritative rule — a bare int like 54008 is ESRI, NOT EPSG:54008 which
+    # pyproj's lenient from_user_input would reject). The identity short-circuit
+    # survives across spellings (4326 == "EPSG:4326" == CRS(4326)).
     from pyproj import Transformer
 
-    tr = Transformer.from_crs(src, dst, always_xy=True)
+    s = _norm_out_crs(src)
+    d = _norm_out_crs(dst)
+    if s == d:
+        return np.asarray(xs, dtype="float64"), np.asarray(ys, dtype="float64")
+    tr = Transformer.from_crs(s, d, always_xy=True)
     x2, y2 = tr.transform(np.asarray(xs), np.asarray(ys))
     return np.asarray(x2, dtype="float64"), np.asarray(y2, dtype="float64")
+
+
+def _norm_out_crs(srid):
+    """Resolve an output-CRS spec (int SRID, int-like/CRS string, or CRS object) to
+    a rasterio CRS via the shared resolver — the single place grid rasterize output
+    CRS is built. Ints/int-like are classified EPSG-vs-ESRI (54008 -> ESRI:54008)."""
+    from rasterio.crs import CRS as _RioCRS
+
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    if isinstance(srid, _RioCRS):
+        return srid
+    return resolve_crs(srid)
+
+
+def _is_geographic(srid) -> bool:
+    """Whether an output-CRS spec is geographic (lon/lat degrees). Replaces the old
+    ``srid == 4326`` check so ANY geographic CRS gets the degrees pixel-size path,
+    not only EPSG:4326."""
+    try:
+        return bool(_norm_out_crs(srid).is_geographic)
+    except Exception:
+        return False
 
 
 # --- per-grid adapters --------------------------------------------------------
@@ -90,7 +122,7 @@ class _H3Adapter:
 
     def default_pixel_size(self, keys, res, srid, bymin, bymax):
         edge_m = h3.average_hexagon_edge_length(res, unit="m")
-        if srid == 4326:
+        if _is_geographic(srid):
             midlat = (bymin + bymax) / 2.0
             return edge_m / (111320.0 * max(math.cos(math.radians(midlat)), 1e-6))
         return edge_m
@@ -145,7 +177,7 @@ class _QuadbinAdapter:
         poly = self._from_wkb(self._qb.as_wkb(sample_key))
         minx, _miny, maxx, _maxy = poly.bounds
         edge_deg = abs(maxx - minx)
-        if srid == 4326:
+        if _is_geographic(srid):
             return edge_deg
         midlat = (bymin + bymax) / 2.0
         return edge_deg * 111320.0 * max(math.cos(math.radians(midlat)), 1e-6)
@@ -340,15 +372,21 @@ def cells_to_raster(
             out[i] = v
 
     data = out.reshape(height, width)
+    decoded_bytes = data.nbytes
+    from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
+
     profile = dict(
         driver="GTiff",
         width=width,
         height=height,
         count=1,
         dtype="float64",
-        crs=f"EPSG:{srid}",
+        crs=crs_to_canonical(_norm_out_crs(srid)),  # canonical (EPSG/ESRI/WKT)
         transform=transform,
         nodata=_NODATA,
+    )
+    profile.update(
+        _comp.creation_opts("float64", decoded_bytes=decoded_bytes, compress="auto")
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as ds:

@@ -191,7 +191,7 @@ Tile type is detected automatically from the content of the first non-null paylo
 ### Typical pipelines
 
 - **Raster pyramid:** `gbx_rst_xyzpyramid(tile, minZoom, maxZoom)` produces per-tile rows of PNG bytes — pipe straight into `gbx_pmtiles_agg`.
-- **Vector pyramid:** `gbx_st_asmvt_pyramid(geom_wkb, attrs, minZoom, maxZoom, layer)` produces per-tile MVT bytes — pipe straight into `gbx_pmtiles_agg`. Because `gbx_st_asmvt_pyramid` emits one row per feature, the aggregate merges all features that share a tile coordinate into a single multi-feature tile.
+- **Vector pyramid:** `gbx_st_asmvt_pyramid(geom, attrs, minZoom, maxZoom, layer)` produces per-tile MVT bytes — pipe straight into `gbx_pmtiles_agg`. Because `gbx_st_asmvt_pyramid` emits one row per feature, the aggregate merges all features that share a tile coordinate into a single multi-feature tile.
 
 For pyramids that exceed the Spark cell ceiling, use the [PMTiles Writer](../writers/pmtiles) instead.
 
@@ -227,7 +227,7 @@ PMTiles is designed to be served as a single static file via HTTP `Range` reques
 ## Limits in v0.4.0
 
 - **No leaf directories.** If the global root directory would exceed 16,257 bytes (spec § 4), the encoder errors out and asks you to split your input. In practice this only happens with very large pyramids (tens of millions of tiles); the limit will be relaxed in a future release.
-- **No read path.** `spark.read.format("pmtiles")` raises a friendly "Reading PMTiles archives is not supported in GeoBrix 0.4.0" error — use one of the JS / Python pmtiles client libraries for read access.
+- **No heavyweight read path.** `spark.read.format("pmtiles")` raises a friendly error. Read within GeoBrix via the lightweight [`pmtiles_gbx` reader](../readers/pmtiles); the JS / Python pmtiles client libraries also work for external read access.
 - **No cross-task dedup in the DataSource.** Identical tiles across partitions are stored multiple times in the final file. The UDAF path does per-blob SHA-256 dedup, so for known-redundant pyramids prefer the UDAF if your data fits.
 
 ## References

@@ -57,7 +57,7 @@ def spark():
 def test_rows_to_dataframe_schema_and_where(spark):
     df = cl.rows_to_dataframe([_row(), _row(fn="rst_avg")], spark, where="cluster")
     cols = df.columns
-    assert len(cols) == 35
+    assert len(cols) == 45
     assert "output_fingerprint" in cols
     assert "iter_total_wall_clock_s" in cols
     assert "avg_wall_clock_s" in cols
@@ -66,18 +66,27 @@ def test_rows_to_dataframe_schema_and_where(spark):
     # run_event_num is the FIRST column (monotonic per-run event index).
     assert cols[0] == "run_event_num"
     # Column ORDER: the headline timing metrics sit right after `mode` (per_tile_avg_s
-    # immediately left of per_tile_avg_ms), and the per-iter distribution (iter_*) trails
-    # as the last four columns.
+    # immediately left of per_tile_avg_ms), the per-iter distribution (iter_*) trails,
+    # then the virtual-tile fields, plan_s, and then the FILE-matrix dimensions last.
     assert cols == cl.ORDER
     mo = cols.index("mode")
     assert cols[mo + 1] == "avg_wall_clock_s"
     assert cols[mo + 2] == "per_tile_avg_s"
     assert cols[mo + 3] == "per_tile_avg_ms"
-    assert cols[-4:] == [
-        "iter_median_s",
+    assert cols[-13:] == [
         "iter_min_s",
         "iter_p90_s",
         "iter_total_wall_clock_s",
+        "split_strategy",
+        "input_tile",
+        "output_disposition",
+        "plan_s",
+        "file_mode",
+        "layout",
+        "input_partitions",
+        "launched_tasks",
+        "slots_available",
+        "chunk_size",
     ]
     vals = {r["fn"]: r["env_where"] for r in df.collect()}
     assert vals == {"rst_width": "cluster", "rst_avg": "cluster"}
@@ -100,8 +109,12 @@ def test_build_bench_notebook_cells():
     )
     nb = cl.build_bench_notebook(cfg)
     src = "\n".join("".join(c.get("source", [])) for c in nb["cells"])
-    assert "geobrix-0.4.3-py3-none-any.whl[light]" in src
-    assert "restartPython" in src
+    # Classic install cell is a two-step subprocess (force-reinstall geobrix CODE only via
+    # --no-deps, then a non-forced deps install) -- NOT the old single-%pip URL-reference form.
+    # See fix(bench): classic install force-reinstalls geobrix CODE only, not the closure.
+    assert "/Volumes/c/s/v/geobrix-0.4.3-py3-none-any.whl" in src
+    assert "--force-reinstall" in src and "--no-deps" in src
+    assert "geobrix[light-dbr19]" in src
     assert "HeavyBenchMain" in src and "_jvm" in src
     assert "run_spark_path" in src or "run_pure_core" in src
     assert "bench_results" in src
@@ -195,10 +208,10 @@ def test_build_bench_notebook_one_cell_per_section_in_order():
     assert (
         'show_section("heavyweight", "spark-path", run_heavy("spark-path"))' in secs[3]
     )
-    # 3 install cells (uninstall + install + restartPython) + setup + 4 sections +
-    # epilogue + exit (exit is its own cell so the compare summary render isn't
-    # truncated -- see build_bench_notebook)
-    assert len(nb["cells"]) == 10
+    # 1 install cell ([light-dbr19] @ file:// -- no uninstall/restartPython dance) +
+    # setup + 4 sections + epilogue + exit (exit is its own cell so the compare
+    # summary render isn't truncated -- see build_bench_notebook)
+    assert len(nb["cells"]) == 8
     src = "\n".join("".join(c["source"]) for c in nb["cells"])
     assert "def show_section(" in src
     assert "dbutils.notebook.exit" in src
@@ -270,10 +283,10 @@ def test_build_bench_notebook_fix_errors_default_and_override():
 
 
 def test_build_bench_notebook_setup_cell_collapsed():
-    # cells[3] (the big setup cell) is collapsed by default; the 3 install/restart cells
-    # (uninstall + install + restartPython) and the section cells are not.
+    # cells[1] (the big setup cell) is collapsed by default; the single install cell
+    # ([light-dbr19] @ file://) and the section cells are not.
     nb = cl.build_bench_notebook(_cfg())
-    setup = nb["cells"][3]
+    setup = nb["cells"][1]
     assert "import json" in "".join(setup["source"])  # it's the assembled setup, sanity
     assert setup["metadata"].get("collapsed") is True
     assert setup["metadata"].get("jupyter", {}).get("source_hidden") is True
@@ -350,3 +363,20 @@ def test_build_bench_notebook_explain_only_threading():
     assert "EXPLAIN_ONLY = True" in src_ex
     assert "explain_only=True" in src_ex
     assert "explain_dir=EXPLAIN_DIR" in src_ex
+
+
+def _build_min_notebook(cl, input_tile="materialized"):
+    """Render the bench notebook source string for the given input_tile value."""
+    cfg = _cfg(input_tile=input_tile)
+    return "\n".join(
+        "".join(c.get("source", [])) for c in cl.build_bench_notebook(cfg)["cells"]
+    )
+
+
+def test_notebook_threads_input_tile():
+    from databricks.labs.gbx.bench import cluster as cl  # noqa: F811
+
+    src = _build_min_notebook(cl, input_tile="virtual")
+    assert "INPUT_TILE" in src
+    assert "input_tile=INPUT_TILE" in src
+    assert "'virtual'" in src or '"virtual"' in src

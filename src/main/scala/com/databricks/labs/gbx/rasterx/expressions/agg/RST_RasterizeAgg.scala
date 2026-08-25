@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -87,9 +87,9 @@ object RasterizeAcc {
     }
 }
 
-/** UDAF: `gbx_rst_rasterize_agg(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, srid)`.
+/** UDAF: `gbx_rst_rasterize_agg(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, srid)`.
  *
- *  Streams `(geom_wkb BINARY, value DOUBLE)` per row; the remaining seven
+ *  Streams `(geom BINARY, value DOUBLE)` per row; the remaining seven
  *  arguments are per-group constants (Literal or constant expressions).  On
  *  `eval` all accumulated features are burned into one raster via
  *  [[VectorRasterBridge]] -- identical to [[RST_Rasterize.execute]] except
@@ -103,7 +103,7 @@ object RasterizeAcc {
  *  which sorts on the same key).
  */
 case class RST_RasterizeAgg(
-    geomWkbExpr:  Expression,
+    geomExpr:     Expression,
     valueExpr:    Expression,
     xminExpr:     Expression,
     yminExpr:     Expression,
@@ -111,7 +111,7 @@ case class RST_RasterizeAgg(
     ymaxExpr:     Expression,
     widthPxExpr:  Expression,
     heightPxExpr: Expression,
-    sridExpr:     Expression,
+    outSridExpr:  Expression,
     exprConfExpr: Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset:   Int = 0
@@ -125,9 +125,9 @@ case class RST_RasterizeAgg(
     override def prettyName: String = RST_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        geomWkbExpr, valueExpr,
+        geomExpr, valueExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
-        widthPxExpr, heightPxExpr, sridExpr,
+        widthPxExpr, heightPxExpr, outSridExpr,
         exprConfExpr
     )
 
@@ -142,9 +142,9 @@ case class RST_RasterizeAgg(
 
     override def createAggregationBuffer(): RasterizeAcc = RasterizeAcc.empty
 
-    /** Catalyst-facing update: extract geom_wkb and value from the row, delegate to typed helper. */
+    /** Catalyst-facing update: extract geom and value from the row, delegate to typed helper. */
     override def update(buffer: RasterizeAcc, input: InternalRow): RasterizeAcc = {
-        val raw = geomWkbExpr.eval(input)
+        val raw = geomExpr.eval(input)
         if (raw == null) return buffer
         val wkb = raw.asInstanceOf[Array[Byte]]
         val vRaw = valueExpr.eval(input)
@@ -173,7 +173,7 @@ case class RST_RasterizeAgg(
         val ymax     = evalDouble(ymaxExpr,     empty, "ymax")
         val widthPx  = evalInt(widthPxExpr,     empty, "width_px")
         val heightPx = evalInt(heightPxExpr,    empty, "height_px")
-        val srid     = evalInt(sridExpr,        empty, "srid")
+        val srid     = evalInt(outSridExpr,     empty, "out_srid")
 
         // Canonical fold order: sort by (geom_wkb lexicographic, value) so the
         // last-wins overlap winner is deterministic regardless of the order rows
@@ -200,7 +200,7 @@ case class RST_RasterizeAgg(
                 "all_parents"-> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, mapData))
+            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
         } finally {
             rasterDs.delete()
             ogrDs.delete()
@@ -220,7 +220,7 @@ object RST_RasterizeAgg extends WithExpressionInfo {
         case 9 => RST_RasterizeAgg(c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8))
         case n => throw new IllegalArgumentException(
             s"$name expects 9 arguments " +
-            s"(geom_wkb, value, xmin, ymin, xmax, ymax, width_px, height_px, srid); got $n")
+            s"(geom, value, xmin, ymin, xmax, ymax, width_px, height_px, out_srid); got $n")
     }
 
     /** Unsigned lexicographic comparison of two byte arrays (stable canonical key). */

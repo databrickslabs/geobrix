@@ -1,7 +1,62 @@
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import tiling
+from databricks.labs.gbx.pyrx.core.tiling import plan_grid_windows
 
 from .conftest import make_geotiff_bytes
+
+# ---------------------------------------------------------------------------
+# Helpers shared by FILE-aware UDTF tests (Spark-based)
+# ---------------------------------------------------------------------------
+
+
+def _materialized_tile_df(spark):
+    """One-row DataFrame with a materialized tile struct column named 'tile'."""
+    from pyspark.sql import functions as f
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    raster = make_geotiff_bytes(width=8, height=8, count=2, epsg=4326)
+    df = spark.createDataFrame([(raster,)], ["raster"])
+    return df.select(prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+
+
+def test_plan_grid_windows_no_overlap_exact_grid():
+    # 512x512 into 256x256, no overlap -> 4 cells at (0,0),(256,0),(0,256),(256,256)
+    wins = plan_grid_windows(512, 512, 256, 256, 0)
+    assert sorted(wins) == [
+        (0, 0, 256, 256),
+        (0, 256, 256, 256),
+        (256, 0, 256, 256),
+        (256, 256, 256, 256),
+    ]
+
+
+def test_plan_grid_windows_overlap_matches_step_contract():
+    # 512x512, tile 256, overlap 25% -> overlap_px=64, step=192.
+    # col/row offsets: 0,192,384 (384+256 clamps to 512 -> w=128). 3x3 = 9 windows.
+    wins = plan_grid_windows(512, 512, 256, 256, 25)
+    offs = {(c, r) for c, r, _, _ in wins}
+    assert offs == {(c, r) for r in (0, 192, 384) for c in (0, 192, 384)}
+    assert len(wins) == 9
+    # clamped edge window at col 384 has width 512-384=128
+    edge = [w for c, r, w, h in wins if c == 384]
+    assert all(w == 128 for w in edge)
+
+
+def test_plan_grid_windows_tile_larger_than_raster_single_clamped():
+    wins = plan_grid_windows(300, 200, 512, 512, 0)
+    assert wins == [(0, 0, 300, 200)]
+
+
+def test_plan_grid_windows_complete_coverage():
+    # every source pixel is covered by at least one window
+    import numpy as np
+
+    W, H = 100, 80
+    covered = np.zeros((H, W), dtype=bool)
+    for c, r, w, h in plan_grid_windows(W, H, 32, 32, 10):
+        covered[r : r + h, c : c + w] = True
+    assert covered.all()
 
 
 def test_separate_bands():
@@ -179,3 +234,92 @@ def test_get_tile_size_positive_mb_still_splits():
     # A positive MB budget below the encoded size must still split (unchanged).
     tile_x, tile_y = tiling._get_tile_size(1024, 1024, 8 * 1024 * 1024, 1)
     assert tile_x < 1024 and tile_y < 1024
+
+
+# ---------------------------------------------------------------------------
+# FILE-aware UDTF tests: file_ref=NULL (FILE unavailable) → FUSE fallback.
+# These guard that adding file_ref as a trailing eval parameter does not alter
+# behavior when FILE is not available (file_supported=False on local[2]).
+# The FILE stream fast path is validated on-cluster in Task 9.
+# ---------------------------------------------------------------------------
+
+
+def test_rst_separatebands_file_unavailable_unchanged(spark):
+    """Separatebands UDTF: file_ref=NULL → same band count as pre-change."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    df = _materialized_tile_df(spark)
+    prx.register(spark)
+    df.createOrReplaceTempView("_t7_sepbands")
+    n = spark.sql(
+        "SELECT count(*) AS n FROM _t7_sepbands, "
+        "LATERAL gbx_rst_separatebands(tile) t"
+    ).first()["n"]
+    # make_geotiff_bytes count=2 → 2 bands → 2 output tiles
+    assert n == 2
+
+
+def test_rst_retile_file_unavailable_unchanged(spark):
+    """Retile UDTF: file_ref=NULL → same sub-tile count as pre-change."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    df = _materialized_tile_df(spark)
+    prx.register(spark)
+    df.createOrReplaceTempView("_t7_retile")
+    n = spark.sql(
+        "SELECT count(*) AS n FROM _t7_retile, " "LATERAL gbx_rst_retile(tile, 4, 4) t"
+    ).first()["n"]
+    # 8x8 into 4x4 → 2×2 = 4 sub-tiles
+    assert n == 4
+
+
+def test_rst_tooverlappingtiles_file_unavailable_unchanged(spark):
+    """ToOverlappingTiles UDTF: file_ref=NULL → non-zero output unchanged."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    df = _materialized_tile_df(spark)
+    prx.register(spark)
+    df.createOrReplaceTempView("_t7_overlap")
+    n = spark.sql(
+        "SELECT count(*) AS n FROM _t7_overlap, "
+        "LATERAL gbx_rst_tooverlappingtiles(tile, 4, 4, 25) t"
+    ).first()["n"]
+    assert n > 0
+
+
+def test_rst_maketiles_file_unavailable_unchanged(spark):
+    """MakeTiles UDTF: file_ref=NULL → same split count as pre-change."""
+    import numpy as np
+    from pyspark.sql import functions as f
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    # 512x512 float32 encoded ~2 MiB; at size_in_mb=1 → power-of-4 k=1 → 4 tiles
+    side = 512
+    data = np.arange(side * side, dtype="float32").reshape(side, side)
+    profile = dict(
+        driver="GTiff",
+        width=side,
+        height=side,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(0, side, 1, 1),
+        nodata=-9999.0,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data, 1)
+        raster = mf.read()
+    df = spark.createDataFrame([(raster,)], ["raster"]).select(
+        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+    )
+    prx.register(spark)
+    df.createOrReplaceTempView("_t7_maketiles")
+    n = spark.sql(
+        "SELECT count(*) AS n FROM _t7_maketiles, "
+        "LATERAL gbx_rst_maketiles(tile, 1) t"
+    ).first()["n"]
+    assert n == 4

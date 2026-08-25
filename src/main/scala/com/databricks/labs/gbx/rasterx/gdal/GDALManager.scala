@@ -10,10 +10,10 @@ import scala.util.{Success, Try}
 /**
   * One-time GDAL environment setup for the JVM process (driver or executor).
   *
-  * Initializes GDAL driver registration, config options (from ExpressionConfig), shared native
-  * libraries, and checkpoint paths. Must be called before any raster operations; typically
-  * triggered from [[com.databricks.labs.gbx.rasterx.functions.register]] or when the first
-  * raster expression runs on an executor.
+  * Initializes GDAL driver registration, config options (from ExpressionConfig), and shared native
+  * libraries. Must be called before any raster operations; typically triggered from
+  * [[com.databricks.labs.gbx.rasterx.functions.register]] or when the first raster expression
+  * runs on an executor.
   */
 object GDALManager extends Logging {
 
@@ -25,8 +25,6 @@ object GDALManager extends Logging {
 
     var isEnabled = false
     private val lock = AnyRef
-    var checkpointPath: String = _
-    var useCheckpoint: Boolean = _
 
     /** Tracks whether OGR drivers have been registered in this JVM. See [[initOgr]]. */
     @volatile private var ogrEnabled = false
@@ -109,19 +107,37 @@ object GDALManager extends Logging {
             gdal.GetDriverByName(shortName)
         }
 
-    /** Apply ExpressionConfig to GDAL options and store checkpoint settings for this process. */
+    /** Apply ExpressionConfig to GDAL options for this process.
+      *
+      * The synthetic key `spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS` (populated by
+      * [[com.databricks.labs.gbx.expressions.ExpressionConfig.apply]] from
+      * [[com.databricks.labs.gbx.operations.ProjGridRegistry]]) is handled separately:
+      * it is EXCLUDED from the generic SetConfigOption loop (which would produce a bogus
+      * `PROJ_GRID_DIRS` GDAL option) and instead used to PREPEND to `PROJ_DATA`/`PROJ_LIB`
+      * so the in-JVM GDAL PROJ search path is extended.
+      *
+      * `gdal.Warp()` in [[com.databricks.labs.gbx.rasterx.operator.GDALWarp]] is the in-JVM
+      * GDAL Java API — not a subprocess — so SetConfigOption("PROJ_DATA", …) reaches it
+      * directly; no child-process environment patching is needed for the warp/transform path.
+      */
     def configureGDAL(config: ExpressionConfig): Unit = {
         val CPL_TMPDIR = config.configs.getOrElse("cpl_tmpdir", "/tmp/gdal")
         val GDAL_PAM_PROXY_DIR = config.configs.getOrElse("gdal_pam_proxy_dir", "/tmp/gdal/pam")
         configureGDAL(CPL_TMPDIR, GDAL_PAM_PROXY_DIR)
+        // Apply GDAL config options; skip PROJ_GRID_DIRS (synthetic GeoBrix key, handled below).
         config.getGDALConfig.foreach { case (key, value) =>
             val gdalKey = key
                 .stripPrefix("spark.databricks.labs.gbx.gdal.")
                 .stripPrefix("spark.gdal.")
-            gdal.SetConfigOption(gdalKey, value)
+            if (gdalKey != "PROJ_GRID_DIRS") gdal.SetConfigOption(gdalKey, value)
         }
-        this.checkpointPath = config.getRasterCheckpointDir
-        this.useCheckpoint = config.useCheckpoint
+        // Prepend user-supplied PROJ grid dirs to the in-JVM PROJ search path.
+        config.configs.get("spark.databricks.labs.gbx.gdal.PROJ_GRID_DIRS").foreach { dirs =>
+            val existing = Option(gdal.GetConfigOption("PROJ_DATA")).getOrElse("/usr/share/proj")
+            val prepended = (dirs.split(":").toSeq :+ existing).distinct.mkString(":")
+            gdal.SetConfigOption("PROJ_DATA", prepended)
+            gdal.SetConfigOption("PROJ_LIB", prepended) // legacy alias PROJ still honors
+        }
     }
 
     def configureGDAL(CPL_TMPDIR: String, GDAL_PAM_PROXY_DIR: String, CPL_DEBUG: String = "OFF",
@@ -134,6 +150,12 @@ object GDALManager extends Logging {
         gdal.SetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "YES")
         gdal.SetConfigOption("CPL_TMPDIR", CPL_TMPDIR)
         gdal.SetConfigOption("GDAL_PAM_PROXY_DIR", GDAL_PAM_PROXY_DIR)
+        // GDAL writes intermediate files (e.g. the COG driver's .ovr.tmp overview
+        // sidecar) into CPL_TMPDIR and PAM sidecars into GDAL_PAM_PROXY_DIR. GDAL
+        // does not create these dirs itself — a missing dir makes VSI_TIFFOpen()
+        // fail and gdal.Translate return null (see rst_cog_convert). Create them.
+        Try(Files.createDirectories(Paths.get(CPL_TMPDIR)))
+        Try(Files.createDirectories(Paths.get(GDAL_PAM_PROXY_DIR)))
         gdal.SetConfigOption("GDAL_PAM_ENABLED", "YES")
         gdal.SetConfigOption("CPL_VSIL_USE_TEMP_FILE_FOR_RANDOM_WRITE", "NO")
         gdal.SetConfigOption("GDAL_CACHEMAX", "512")

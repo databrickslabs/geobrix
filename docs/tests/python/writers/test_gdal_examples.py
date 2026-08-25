@@ -24,10 +24,12 @@ from path_config import SAMPLE_DATA_BASE
 SAMPLE_GTIFF = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 
 
-@pytest.fixture(scope="module")
-def spark():
-    from pyspark.sql import SparkSession
-    return SparkSession.builder.appName("GDALWriterExamplesTest").getOrCreate()
+# NOTE: no local `spark` fixture here. A bare SparkSession.getOrCreate() would create
+# a JAR-less session first, and because Spark reuses one active session per JVM, conftest's
+# `spark_with_geobrix` (which attaches the geobrix JAR + registers) would then get that
+# existing JAR-less session back (builder .config is ignored once a session is active),
+# so `format("gdal")` fails with DATA_SOURCE_NOT_FOUND. Inherit the conftest `spark`
+# fixture instead so the JAR-attached, registered session is created.
 
 
 @pytest.fixture

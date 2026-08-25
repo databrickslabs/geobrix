@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -34,33 +35,31 @@ case class BNG_CellIntersection(
 /** Companion: SQL name gbx_bng_cellintersection, builder, and eval. */
 object BNG_CellIntersection extends WithExpressionInfo {
 
-    def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow = {
-        // Note: we do check twice for early exit cases
-        // that is a bit redundant but allows UDF callable abstraction
-        // and avoids unnecessary WKB parsing at the same time
-        if (chip1.getBoolean(1)) return chip1
-        if (chip2.getBoolean(1)) return chip2
-        val cell1 = chip1.getLong(0)
-        val cell2 = chip2.getLong(0)
-        val geom1 = JTS.fromWKB(chip1.getBinary(2))
-        val geom2 = JTS.fromWKB(chip2.getBinary(2))
-        val res = executeLong((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
-        InternalRow.fromSeq(Seq(res._1, res._2, JTS.toWKB(res._3)))
-    }
+    def evalLong(chip1: InternalRow, chip2: InternalRow): InternalRow =
+        // Note: core-chip early exits avoid unnecessary WKB parsing
+        if (chip1.getBoolean(1)) chip1
+        else if (chip2.getBoolean(1)) chip2
+        else GridErrorHandler.safeEval[InternalRow](null) {
+            val cell1 = chip1.getLong(0)
+            val cell2 = chip2.getLong(0)
+            val geom1 = JTS.fromWKB(chip1.getBinary(2))
+            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val res = executeLong((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
+            InternalRow.fromSeq(Seq(res._1, res._2, JTS.toWKB(res._3)))
+        }
 
-    def evalString(chip1: InternalRow, chip2: InternalRow): InternalRow = {
-        // Note: we do check twice for early exit cases
-        // that is a bit redundant but allows UDF callable abstraction
-        // and avoids unnecessary WKB parsing at the same time
-        if (chip1.getBoolean(1)) return chip1
-        if (chip2.getBoolean(1)) return chip2
-        val cell1 = chip1.getString(0)
-        val cell2 = chip2.getString(0)
-        val geom1 = JTS.fromWKB(chip1.getBinary(2))
-        val geom2 = JTS.fromWKB(chip2.getBinary(2))
-        val res = executeString((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
-        InternalRow(UTF8String.fromString(res._1), res._2, JTS.toWKB(res._3))
-    }
+    def evalString(chip1: InternalRow, chip2: InternalRow): InternalRow =
+        // Note: core-chip early exits avoid unnecessary WKB parsing
+        if (chip1.getBoolean(1)) chip1
+        else if (chip2.getBoolean(1)) chip2
+        else GridErrorHandler.safeEval[InternalRow](null) {
+            val cell1 = chip1.getString(0)
+            val cell2 = chip2.getString(0)
+            val geom1 = JTS.fromWKB(chip1.getBinary(2))
+            val geom2 = JTS.fromWKB(chip2.getBinary(2))
+            val res = executeString((cell1, chip1.getBoolean(1), geom1), (cell2, chip2.getBoolean(1), geom2))
+            InternalRow(UTF8String.fromString(res._1), res._2, JTS.toWKB(res._3))
+        }
 
     def executeLong(chip1: (Long, Boolean, Geometry), chip2: (Long, Boolean, Geometry)): (Long, Boolean, Geometry) = {
         // Left hand rule, only chip1 survives intersection

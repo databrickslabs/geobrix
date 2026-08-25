@@ -101,12 +101,15 @@ print_separator
 if [ "$SKIP_BUILD" = true ]; then
     echo -e "${CYAN}⏭️  Skipping build...${NC}"
 else
+    # A host build rewrites the shared .docusaurus/ cache; warn if another docs
+    # server (e.g. on a different port) is live and would be corrupted by it.
+    warn_if_docs_server_running
     echo -e "${CYAN}🔨 Building documentation...${NC}"
     print_separator
-    
+
     npm run build
     BUILD_EXIT=$?
-    
+
     if [ $BUILD_EXIT -ne 0 ]; then
         echo ""
         echo -e "${RED}❌ Build failed!${NC}"

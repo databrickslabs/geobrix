@@ -27,23 +27,22 @@ import org.gdal.gdal.Dataset
   * pre-compute the zoom pyramid.
   */
 case class RST_BuildOverviews(
-    tileExpr: Expression,
+    tile: Expression,
     levelsExpr: Expression,
     resamplingExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
-        tileExpr, levelsExpr, resamplingExpr, ExpressionConfigExpr()
+        tile, levelsExpr, resamplingExpr, ExpressionConfigExpr()
     )
     // Pin levels as ARRAY<INT> and resampling as String so SQL literals coerce cleanly.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, ArrayType(IntegerType), StringType, StringType
+        tile.dataType, ArrayType(IntegerType), StringType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_BuildOverviews.name
-    override def replacement: Expression = rstInvoke(RST_BuildOverviews, rasterType)
+    override def replacement: Expression = invoke(RST_BuildOverviews)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2))
 
@@ -57,10 +56,8 @@ object RST_BuildOverviews extends WithExpressionInfo {
         "lanczos", "bilinear", "mode", "none"
     )
 
-    def evalBinary(row: InternalRow, levels: ArrayData, resampling: UTF8String, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, levels: ArrayData, resampling: UTF8String, conf: UTF8String): InternalRow =
         runDispatch(row, levels, resampling, conf, BinaryType)
-    def evalPath(row: InternalRow, levels: ArrayData, resampling: UTF8String, conf: UTF8String): InternalRow =
-        runDispatch(row, levels, resampling, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, levels: ArrayData, resampling: UTF8String, conf: UTF8String, dt: DataType

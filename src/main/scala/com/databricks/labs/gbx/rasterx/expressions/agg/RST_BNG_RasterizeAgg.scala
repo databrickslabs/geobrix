@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.gridx.grid.BNG
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, VectorRasterBridge}
+import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, V2Tile, VectorRasterBridge}
 import com.databricks.labs.gbx.util.SerializationUtil
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -110,9 +110,9 @@ object BNGRasterizeAcc {
  *  order (matches the lightweight tier).
  */
 case class RST_BNG_RasterizeAgg(
-    cellIdExpr:    Expression,
+    cellidExpr:    Expression,
     valueExpr:     Expression,
-    sridExpr:      Expression,
+    outSridExpr:   Expression,
     pixelSizeExpr: Expression,
     xminExpr:      Expression,
     yminExpr:      Expression,
@@ -135,7 +135,7 @@ case class RST_BNG_RasterizeAgg(
     override def prettyName: String = RST_BNG_RasterizeAgg.name
 
     override def children: Seq[Expression] = Seq(
-        cellIdExpr, valueExpr, sridExpr, pixelSizeExpr,
+        cellidExpr, valueExpr, outSridExpr, pixelSizeExpr,
         xminExpr, yminExpr, xmaxExpr, ymaxExpr,
         widthExpr, heightExpr, modeExpr, kringPadExpr,
         exprConfExpr
@@ -158,7 +158,7 @@ case class RST_BNG_RasterizeAgg(
      *  [[BNG.parse]]; the accumulator stays Long-keyed so the serde is unchanged.
      */
     override def update(buffer: BNGRasterizeAcc, input: InternalRow): BNGRasterizeAcc = {
-        val raw = cellIdExpr.eval(input)
+        val raw = cellidExpr.eval(input)
         if (raw == null) return buffer
         val cellId = raw match {
             case s: org.apache.spark.unsafe.types.UTF8String => BNG.parse(s.toString)
@@ -207,7 +207,7 @@ case class RST_BNG_RasterizeAgg(
 
         // BNG rasters are always EPSG:27700-native: cell centroids/boundaries and
         // pointToCellID all operate in 27700, so there is no reprojection hop. The
-        // sridExpr argument is retained for signature parity with the H3/quadbin UDAFs.
+        // outSridExpr argument is retained for signature parity with the H3/quadbin UDAFs.
         val srid = BNG.crsID
 
         // Resolution from the cells (derived from each cell's Long id); error on mixed.
@@ -266,7 +266,7 @@ case class RST_BNG_RasterizeAgg(
                 "all_parents" -> ""
             )
             val mapData = SerializationUtil.toMapData[String, String](mtd)
-            InternalRow.fromSeq(Seq(0L, bytes, mapData))
+            V2Tile.row(cellid = 0L, raster = bytes, metadata = mapData)
         } finally {
             rasterDs.delete()
         }
@@ -289,7 +289,7 @@ object RST_BNG_RasterizeAgg extends WithExpressionInfo {
             c(0), c(1), c(2), c(3), c(4), c(5), c(6), c(7), c(8), c(9), c(10), c(11))
         case n => throw new IllegalArgumentException(
             s"$name expects 12 arguments " +
-            s"(cellid, value, srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
+            s"(cellid, value, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad); got $n")
     }
 
     /** Resolution of a cell set (derived from each cell's Long id); throws on a mixed-resolution set. */

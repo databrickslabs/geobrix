@@ -17,8 +17,10 @@ Usage (from repo root):
 
 import json
 import os
+import re
 import sys
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional, Set
 
 # Script lives in docs/scripts/; repo root is two levels up.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -44,6 +46,49 @@ PMTILES_MODULE = ("tests.python.api.pmtiles_functions_sql", "pmtiles_", "gbx_pmt
 REGISTERED_FUNCTIONS_TXT = os.path.join(
     REPO_ROOT, "docs", "tests-function-info", "registered_functions.txt"
 )
+
+
+# Load parsed builder metadata (usage_args from Scala case classes)
+def _load_parsed_builders() -> Dict[str, dict]:
+    """Load parsed builder metadata from extend_function_metadata.py."""
+    try:
+        # Execute the extend_function_metadata script as a subprocess
+        import subprocess
+        import json
+
+        script_path = os.path.join(
+            os.path.dirname(__file__), "extend-function-metadata.py"
+        )
+        result = subprocess.run(
+            [sys.executable, script_path, REPO_ROOT],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # Fail LOUDLY, never silently. Returning {} on error looks like "no functions have
+        # signatures" and would quietly wipe usage_args out of the JSON on the next run.
+        if result.returncode != 0:
+            raise SystemExit(
+                "generate-function-info: signature parser FAILED — refusing to write "
+                "metadata that would silently drop usage_args.\n"
+                f"{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+            )
+        # Find the first '{' and parse from there (skip diagnostic output)
+        output = result.stdout
+        json_start = output.find("{")
+        if json_start < 0:
+            raise SystemExit(
+                "generate-function-info: signature parser produced no JSON.\n"
+                f"{output[-2000:]}"
+            )
+        try:
+            return json.loads(output[json_start:])
+        except json.JSONDecodeError as e:
+            raise SystemExit(f"generate-function-info: parser JSON is invalid: {e}")
+    except SystemExit:
+        raise
+    except Exception as e:
+        raise SystemExit(f"generate-function-info: could not run signature parser: {e}")
 
 
 def _split_sql_statements(sql: str) -> List[str]:
@@ -123,7 +168,10 @@ def format_examples_block(sql_line: str) -> str:
 
 
 def _collect_from_module(
-    mod, local_prefix: str, spark_prefix: str, registered_for_package: Optional[List[str]] = None
+    mod,
+    local_prefix: str,
+    spark_prefix: str,
+    registered_for_package: Optional[List[str]] = None,
 ) -> dict:
     """
     Collect examples from one doc module.
@@ -149,7 +197,7 @@ def _collect_from_module(
         if not callable(getattr(mod, attr)):
             continue
         middle = attr[: -len("_sql_example")]
-        dedicated_targets.add(spark_prefix + middle[len(local_prefix):])
+        dedicated_targets.add(spark_prefix + middle[len(local_prefix) :])
 
     result = {}
     for attr in dir(mod):
@@ -180,7 +228,7 @@ def _collect_from_module(
             # is no dedicated cellunion_sql_example), but a name that DOES have its own
             # dedicated example function never picks up another's example as substring.
             middle = attr[: -len("_sql_example")]
-            exact_target = spark_prefix + middle[len(local_prefix):]
+            exact_target = spark_prefix + middle[len(local_prefix) :]
             for name in registered_for_package:
                 if name not in stmt or name in result:
                     continue
@@ -209,6 +257,8 @@ def discover_and_collect(registered: Optional[List[str]] = None) -> dict:
     sys.path.insert(0, DOCS_ROOT)
     # Examples in rasterx_functions_sql.py import `path_config` from docs/tests/python/
     sys.path.insert(0, os.path.join(DOCS_ROOT, "tests", "python"))
+    # ...and `_fixtures` (e.g. multiband_path) from docs/tests/python/api/
+    sys.path.insert(0, os.path.join(DOCS_ROOT, "tests", "python", "api"))
     result = {}
     try:
         for module_path, local_prefix, spark_prefix in MODULES:
@@ -218,7 +268,9 @@ def discover_and_collect(registered: Optional[List[str]] = None) -> dict:
                 if registered
                 else None
             )
-            collected = _collect_from_module(mod, local_prefix, spark_prefix, reg_for_pkg)
+            collected = _collect_from_module(
+                mod, local_prefix, spark_prefix, reg_for_pkg
+            )
             # First example wins for each name
             for k, v in collected.items():
                 if k not in result:
@@ -293,12 +345,128 @@ def _package_for(name: str) -> str:
     return "other"
 
 
-def build_functions_object(registered: list, doc_examples: dict) -> dict:
+# All MODULES entries (including optional ones) used for base derivation.
+# Each tuple: (spark_prefix, local_prefix)
+_ALL_MODULE_PREFIXES = [
+    (spark_prefix, local_prefix) for (_mod, local_prefix, spark_prefix) in MODULES
+] + [
+    (VECTORX_MODULE[2], VECTORX_MODULE[1]),
+    (PMTILES_MODULE[2], PMTILES_MODULE[1]),
+]
+
+
+def _base_for_spark_name(spark_name: str) -> str:
+    """
+    Derive the 'base' name for tier example symbol lookup.
+
+    Mirrors the SQL convention: strip spark_prefix, prepend local_prefix.
+    E.g. gbx_rst_avg (spark_prefix='gbx_rst_', local_prefix='rst_') -> 'rst_avg'.
+    Falls back to stripping 'gbx_' if no prefix matches.
+    """
+    for spark_prefix, local_prefix in _ALL_MODULE_PREFIXES:
+        if spark_name.startswith(spark_prefix):
+            suffix = spark_name[len(spark_prefix) :]
+            return local_prefix + suffix
+    # Fallback: strip leading 'gbx_'
+    if spark_name.startswith("gbx_"):
+        return spark_name[4:]
+    return spark_name
+
+
+# tier -> (doc-test source path relative to docs/, symbol template, binding label)
+# Missing files are tolerated; their tier is simply absent from bindings for all functions.
+# Glob patterns (containing '*') expand to all matching files; their text is concatenated.
+_TIER_SCANS = [
+    (
+        # Covers rasterx_*_python_light.py (RasterX family files) AND
+        # vectorx_functions_python_light.py (VectorX, created in T1).
+        "tests/python/api/*_python_light.py",
+        "def {base}_python_light_example",
+        "python-light",
+    ),
+    (
+        "tests/python/api/rasterx_functions.py",
+        "def {base}_python_heavy_example",
+        "python-heavy",
+    ),
+    (
+        # VectorX heavy examples live in vectorx_functions.py (T2-T5 add
+        # *_python_heavy_example functions here; scanned alongside rasterx).
+        "tests/python/api/vectorx_functions.py",
+        "def {base}_python_heavy_example",
+        "python-heavy",
+    ),
+    (
+        # GridX heavy examples live in gridx_functions.py (T2-T7 add
+        # *_python_heavy_example functions here for BNG/quadbin/custom).
+        "tests/python/api/gridx_functions.py",
+        "def {base}_python_heavy_example",
+        "python-heavy",
+    ),
+    (
+        "tests/scala/api/ScalaApiExamples.scala",
+        "val {base}_scala_example",
+        "scala",
+    ),
+]
+
+
+def _scan_tier_bindings(docs_root: str, spark_names: List[str]) -> Dict[str, Set[str]]:
+    """
+    Return spark_name -> set of tier labels whose example symbol is present in source text.
+
+    Detection is TEXT-SCAN only (no import/execution). Missing files are tolerated
+    (that tier is simply absent from bindings for all functions). A glob pattern
+    (containing '*') expands to all matching files; their text is concatenated before
+    scanning, and an empty glob match is treated as missing (empty text, tier absent).
+    """
+    found: Dict[str, Set[str]] = {name: set() for name in spark_names}
+    docs_path = Path(docs_root)
+    for rel, template, label in _TIER_SCANS:
+        if "*" in rel:
+            matches = sorted(docs_path.glob(rel))
+            text = "".join(p.read_text() for p in matches)
+        else:
+            path = docs_path / rel
+            text = path.read_text() if path.exists() else ""
+        for spark_name in spark_names:
+            base = _base_for_spark_name(spark_name)
+            symbol = template.format(base=base)
+            # Match symbol followed by '(' (Python def) or ':'/whitespace (Scala val).
+            if re.search(re.escape(symbol) + r"\s*[(:]", text):
+                found[spark_name].add(label)
+    return found
+
+
+def build_functions_object(
+    registered: list,
+    doc_examples: dict,
+    parsed_builders: Optional[Dict] = None,
+    docs_root: Optional[str] = None,
+) -> dict:
     """
     Build the "functions" object: only functions with non-empty examples from docs.
     Ordered by package, then sorted by function name. Section markers _package_<name>
-    separate packages. Empty usage is not allowed; only doc-derived entries are included.
+    separate packages. Optionally merge in parsed builder metadata (usage_args).
+    Empty usage is not allowed; only doc-derived entries are included.
+
+    Each function entry gains a 'bindings' list (subset of
+    ["sql","python-light","python-heavy","scala"]) recording which tiers have an example.
+    'sql' is present whenever the entry has a non-empty examples value.
+    The other three are present when a text-scan of the tier's doc-test source file finds
+    the corresponding example symbol (e.g. def rst_avg_python_light_example).
     """
+    if parsed_builders is None:
+        parsed_builders = {}
+
+    # Pre-compute per-tier bindings via text scan (missing files -> empty set).
+    tier_bindings: Dict[str, Set[str]] = _scan_tier_bindings(
+        docs_root or DOCS_ROOT, list(registered)
+    )
+
+    # Fixed order for the 'bindings' list.
+    _BINDING_ORDER = ["sql", "python-light", "python-heavy", "scala"]
+
     by_package = {}
     for name in registered:
         pkg = _package_for(name)
@@ -316,7 +484,22 @@ def build_functions_object(registered: list, doc_examples: dict) -> dict:
             entry = doc_examples.get(name) or {}
             examples = (entry.get("examples") or "").strip()
             if examples:
-                out[name] = {"examples": examples}
+                func_entry = {"examples": examples}
+                # Add parsed builder metadata if available
+                if name in parsed_builders:
+                    parsed = parsed_builders[name]
+                    if "usage_args" in parsed and parsed["usage_args"]:
+                        func_entry["usage_args"] = parsed["usage_args"]
+                # Build bindings list in fixed order
+                present = tier_bindings.get(name, set())
+                bindings = []
+                if examples:
+                    bindings.append("sql")
+                for b in _BINDING_ORDER[1:]:
+                    if b in present:
+                        bindings.append(b)
+                func_entry["bindings"] = bindings
+                out[name] = func_entry
     other_names = by_package.get("other", [])
     if other_names:
         out["_package_other"] = "--- other ---"
@@ -324,12 +507,28 @@ def build_functions_object(registered: list, doc_examples: dict) -> dict:
             entry = doc_examples.get(name) or {}
             examples = (entry.get("examples") or "").strip()
             if examples:
-                out[name] = {"examples": examples}
+                func_entry = {"examples": examples}
+                # Add parsed builder metadata if available
+                if name in parsed_builders:
+                    parsed = parsed_builders[name]
+                    if "usage_args" in parsed and parsed["usage_args"]:
+                        func_entry["usage_args"] = parsed["usage_args"]
+                # Build bindings list in fixed order
+                present = tier_bindings.get(name, set())
+                bindings = []
+                if examples:
+                    bindings.append("sql")
+                for b in _BINDING_ORDER[1:]:
+                    if b in present:
+                        bindings.append(b)
+                func_entry["bindings"] = bindings
+                out[name] = func_entry
     return out
 
 
 def main():
     import argparse
+
     parser = argparse.ArgumentParser(
         description="Generate function-info.json from doc SQL examples (no empty usage; fix missing upstream in docs)"
     )
@@ -338,10 +537,13 @@ def main():
     os.makedirs(RESOURCE_DIR, exist_ok=True)
     registered = load_registered_functions_txt()
     doc_examples = discover_and_collect(registered)
+    parsed_builders = _load_parsed_builders()
 
     if not registered:
         # No registered list: output only doc-derived (legacy)
-        functions = build_functions_object(sorted(doc_examples.keys()), doc_examples)
+        functions = build_functions_object(
+            sorted(doc_examples.keys()), doc_examples, parsed_builders
+        )
         with open(RESOURCE_FILE, "w") as f:
             json.dump({"functions": functions}, f, indent=2)
         count = len([k for k in functions if not k.startswith("_")])
@@ -349,12 +551,18 @@ def main():
         return
 
     # Full overwrite from registered; only include entries with non-empty examples.
-    functions = build_functions_object(registered, doc_examples)
+    functions = build_functions_object(registered, doc_examples, parsed_builders)
     included = {k for k in functions if not k.startswith("_")}
     missing_or_empty = [n for n in registered if n not in included]
     if missing_or_empty:
-        print("ERROR: Empty or missing usage is not allowed. Fix upstream: add SQL examples in docs.", file=sys.stderr)
-        print("Functions missing a doc SQL example (add *_sql_example() in the API function ref):", file=sys.stderr)
+        print(
+            "ERROR: Empty or missing usage is not allowed. Fix upstream: add SQL examples in docs.",
+            file=sys.stderr,
+        )
+        print(
+            "Functions missing a doc SQL example (add *_sql_example() in the API function ref):",
+            file=sys.stderr,
+        )
         for name in sorted(missing_or_empty):
             pkg = _package_for(name)
             if pkg in ("rasterx", "rasterx_h3"):
@@ -368,7 +576,10 @@ def main():
             else:
                 path = "docs/tests/python/api/*_functions_sql.py"
             print(f"  {name}  -> {path}", file=sys.stderr)
-        print(f"\nTotal: {len(missing_or_empty)} function(s) need a doc SQL example.", file=sys.stderr)
+        print(
+            f"\nTotal: {len(missing_or_empty)} function(s) need a doc SQL example.",
+            file=sys.stderr,
+        )
         sys.exit(1)
 
     with open(RESOURCE_FILE, "w") as f:

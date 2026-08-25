@@ -32,12 +32,34 @@ Both named readers preset the GeoTIFF driver and inherit their respective generi
 
 ### Lightweight (`gtiff_gbx`)
 
-Inherits the [lightweight `raster_gbx` options](./raster#options):
+Inherits the [lightweight `raster_gbx` options](./raster#options). Key options:
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split: one whole-image tile per file. Set a positive MB value to tile large rasters into multiple tiles. |
+| `virtualTiles` | `"true"` | **Default.** Emit bytes-free **virtual tiles** — each row carries the source `path` + pixel `window` instead of raster bytes; pixels are read lazily when an operation needs them (the ingest-OOM-dissolving default for the light tier). Set `"false"` to materialize raster bytes into each row. See [Virtual Tiles](../api/virtual-tiles). |
+| `splitStrategy` | `"none"` | When to split large rasters: `none` (default — one tile per file), `auto`, `serverless`, `classic`. See [Raster Options](./raster#options). |
+| `sizeInMB` | `"-1"` | Power-user budget override in MiB (positive value). `-1` = use `splitStrategy`. |
+| `clipPolygons` | _none_ | Area(s) of interest: one WKT/EWKT string, or a JSON-array string for a list. One tile per intersecting polygon; mutually exclusive with `windows`/`tileSize`. See [Raster Options](./raster#options). |
+| `windows` | _none_ | Pixel window(s): JSON 4-int array `"[col,row,w,h]"`, or a JSON array of them. Mutually exclusive with `clipPolygons`/`tileSize`. |
+| `clipCrs` | _none_ | CRS for `clipPolygons` lacking an embedded SRID (embedded SRID → `clipCrs` → raster CRS). |
+| `tileSize` | _none_ | Regular fixed-size grid: `"w,h"` or a single `"n"` (square). One tile per cell; mutually exclusive with `clipPolygons`/`windows`. Materialized cells guarded to ~2 GB; virtual unguarded. See [Raster Options](./raster#options). |
+| `overlapPercent` | `0` | Overlap % between `tileSize` cells (`tileSize`-only). See [Raster Options](./raster#options). |
 | `filterRegex` | `".*"` | When loading a directory, keep files whose full path matches this regex. |
+
+:::note Virtual tiles are the default
+Light raster readers now emit **virtual tiles** by default (`virtualTiles=true`) — bytes-free
+`(path, window)` references that read pixels lazily. Previously the reader materialized raster
+bytes into every row. To restore materialized reads, pass `.option("virtualTiles", "false")`.
+A virtual tile passed to a heavyweight function must be materialized first — see
+[Virtual Tiles](../api/virtual-tiles).
+:::
+
+:::note COG output is a writer concern
+The `tileFormat`, `cogBlockSize`, and `cogOverviewResampling` reader options are
+removed. COG creation belongs to the `cog_gbx` writer — see
+[COG Writer](../writers/cog). The `gtiff_gbx` writer still accepts `cog=true` to
+re-encode a tile DataFrame as COG.
+:::
 
 ### Heavyweight (`gtiff_gdal`)
 
@@ -229,3 +251,18 @@ GeoBrix reads compressed GeoTIFFs transparently. The compression format is autom
 - [GDAL Reader](./raster) - Generic raster reader for all GDAL formats
 - [Raster Functions](../api/raster-functions) - Raster processing operations
 - [Quick Start](../quick-start) - Get started with GeoBrix
+
+## Common functions: used vs excluded
+
+See [GBX Common Functions](../common-functions) for the full catalog of shared file-access
+primitives. The table below shows which are active in this reader and which are not, and why.
+
+| Common capability | Used here? | How / why |
+|---|---|---|
+| `list_local_files` (session-free enumeration) | Used | All directory reads — `recursive`, `include_hidden`, `extensions`, `path_glob_filter` options are routed through this shared predicate. |
+| `enumerate_files` (FILE-tier enumeration) | Not in the DataSource | The DataSource is session-less on Connect and does not call `enumerate_files`; FILE-tier enumeration is only available through `gbx_file_read` at the function layer. |
+| `gbx_file_read` / `gbx_file_write` (FILE tier) | Not in the DataSource | The DataSource is FUSE-only (session-less on Connect); FILE reads go through `gbx_file_read` → `rst_fromfile` at the function layer. |
+
+:::note Shared file-access layer
+Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
+:::

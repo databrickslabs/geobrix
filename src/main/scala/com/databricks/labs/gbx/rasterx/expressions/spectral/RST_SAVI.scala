@@ -22,23 +22,22 @@ import org.gdal.gdal.Dataset
   * Output is a single-band Float32 GTiff matching the input raster's extent.
   */
 case class RST_SAVI(
-    tileExpr: Expression,
+    tile: Expression,
     redIdxExpr: Expression,
     nirIdxExpr: Expression,
     lExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
-        tileExpr, redIdxExpr, nirIdxExpr, lExpr, ExpressionConfigExpr()
+        tile, redIdxExpr, nirIdxExpr, lExpr, ExpressionConfigExpr()
     )
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, IntegerType, IntegerType, DoubleType, StringType
+        tile.dataType, IntegerType, IntegerType, DoubleType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_SAVI.name
-    override def replacement: Expression = rstInvoke(RST_SAVI, rasterType)
+    override def replacement: Expression = invoke(RST_SAVI)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -46,10 +45,8 @@ case class RST_SAVI(
 
 object RST_SAVI extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, redIdx: Int, nirIdx: Int, l: Double, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, redIdx: Int, nirIdx: Int, l: Double, conf: UTF8String): InternalRow =
         runDispatch(row, redIdx, nirIdx, l, conf, BinaryType)
-    def evalPath(row: InternalRow, redIdx: Int, nirIdx: Int, l: Double, conf: UTF8String): InternalRow =
-        runDispatch(row, redIdx, nirIdx, l, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, redIdx: Int, nirIdx: Int, l: Double, conf: UTF8String, dt: DataType

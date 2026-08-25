@@ -201,8 +201,8 @@ class RasterXFunctionsTest extends AnyFunSuite {
         result should not be null
     }
 
-    test("rst_maketiles should accept tile, width, and height") {
-        val result = functions.rst_maketiles(col("tile"), col("w"), col("h"))
+    test("rst_maketiles should accept tile and size in MB") {
+        val result = functions.rst_maketiles(col("tile"), col("size_in_mb"))
         result should not be null
     }
 

@@ -6,6 +6,7 @@ import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoord
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_RasterToWorldCoordY
 import com.databricks.labs.gbx.rasterx.expressions.RST_Transform
+import com.databricks.labs.gbx.rasterx.expressions.RST_TransformCrs
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoord
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordX
 import com.databricks.labs.gbx.rasterx.expressions.RST_WorldToRasterCoordY
@@ -38,6 +39,7 @@ import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_FillNodata
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Histogram
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Sample
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
+import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Threshold
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_Resample
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToRes
@@ -128,9 +130,9 @@ object BenchDispatch {
     "rst_slope" -> TER, "rst_aspect" -> TER, "rst_hillshade" -> TER,
     "rst_tri" -> TER, "rst_tpi" -> TER, "rst_roughness" -> TER,
     "rst_ndvi" -> BM, "rst_ndwi" -> BM, "rst_nbr" -> BM,
-    "rst_transform" -> WARP, "rst_to_webmercator" -> WARP,
+    "rst_transform" -> WARP, "rst_transformcrs" -> WARP, "rst_to_webmercator" -> WARP,
     // scalar accessors (Task 2)
-    "rst_srid" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
+    "rst_srid" -> ACC, "rst_crs" -> ACC, "rst_pixelwidth" -> ACC, "rst_pixelheight" -> ACC,
     "rst_upperleftx" -> ACC, "rst_upperlefty" -> ACC, "rst_scalex" -> ACC,
     "rst_scaley" -> ACC, "rst_skewx" -> ACC, "rst_skewy" -> ACC,
     "rst_rotation" -> ACC, "rst_isempty" -> ACC, "rst_getnodata" -> ACC,
@@ -145,7 +147,7 @@ object BenchDispatch {
     "rst_boundingbox" -> ACC, "rst_summary" -> ACC, "rst_histogram" -> ACC,
     // tile-out transforms with scalar / fixed args (Task 5)
     "rst_band" -> EDIT, "rst_threshold" -> EDIT, "rst_initnodata" -> EDIT,
-    "rst_setsrid" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
+    "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
     "rst_filter" -> FOCAL, "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT, "rst_cog_convert" -> FMT,
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
@@ -397,7 +399,7 @@ object BenchDispatch {
     case "rst_max"        => BenchFingerprint.ofArray(RST_Max.execute(ds))
     case "rst_median"     => BenchFingerprint.ofArray(RST_Median.execute(ds, Map.empty))
     case "rst_pixelcount" => BenchFingerprint.ofArray(RST_PixelCount.execute(ds).map(_.toDouble))
-    case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "scale", Double.NaN)))
+    case "rst_slope"      => fpDerived(RST_Slope.execute(ds, argS(a, "unit", "degrees"), argD(a, "xscale", Double.NaN), argD(a, "yscale", Double.NaN)))
     case "rst_aspect"     => fpDerived(RST_Aspect.execute(ds, argB(a, "trigonometric", false), argB(a, "zero_for_flat", false)))
     case "rst_hillshade"  => fpDerived(RST_Hillshade.execute(ds, argD(a, "azimuth", 315.0), argD(a, "altitude", 45.0), argD(a, "z_factor", 1.0)))
     case "rst_tri"        => fpDerived(RST_TRI.execute(ds))
@@ -407,9 +409,15 @@ object BenchDispatch {
     case "rst_ndwi"       => fpDerived(RST_NDWI.execute(ds, argI(a, "green_idx", 1), argI(a, "nir_idx", 2)))
     case "rst_nbr"        => fpDerived(RST_NBR.execute(ds, argI(a, "nir_idx", 1), argI(a, "swir_idx", 2)))
     case "rst_transform"  => fpDerived(RST_Transform.execute(ds, Map.empty, argI(a, "target_srid", 3857)))
+    // rst_transformcrs: string-CRS warp (int-cast rule). Default target "3857"
+    // mirrors rst_transform's 3857 so the reprojected grid is directly comparable.
+    case "rst_transformcrs" => fpDerived(RST_TransformCrs.execute(ds, Map.empty, argS(a, "target_crs", "3857")))
     case "rst_to_webmercator" => fpDerived(RST_ToWebMercator.execute(ds, Map.empty, argS(a, "resampling", "bilinear")))
     // scalar accessors (Task 2)
     case "rst_srid"        => BenchFingerprint.ofScalar(RST_SRID.execute(ds))
+    // rst_crs: canonical CRS STRING (authority else WKT). ofScalar coerces the
+    // String via toString -> a "scalar" fingerprint (CRS-string-comparable).
+    case "rst_crs"         => BenchFingerprint.ofScalar(RST_Crs.execute(ds))
     case "rst_pixelwidth"  => BenchFingerprint.ofScalar(RST_PixelWidth.execute(ds))
     case "rst_pixelheight" => BenchFingerprint.ofScalar(RST_PixelHeight.execute(ds))
     case "rst_upperleftx"  => BenchFingerprint.ofScalar(RST_UpperLeftX.execute(ds))
@@ -461,6 +469,8 @@ object BenchDispatch {
     case "rst_threshold"   => fpDerived(RST_Threshold.execute(ds, argS(a, "op", ">"), argD(a, "value", 0.5)))
     case "rst_initnodata"  => fpDerived(RST_InitNoData.execute(ds, Map.empty))
     case "rst_setsrid"     => fpDerived(RST_SetSrid.execute(ds, Map.empty, argI(a, "srid", 4326)))
+    // rst_setcrs: string-CRS relabel (int-cast rule); no reproject, pixels unchanged.
+    case "rst_setcrs"      => fpDerived(RST_SetCrs.execute(ds, Map.empty, argS(a, "crs", "4326")))
     case "rst_updatetype"  => fpDerived(RST_UpdateType.execute(ds, Map.empty, argS(a, "new_type", "Float64")))
     case "rst_fillnodata"  =>
       fpDerived(RST_FillNodata.execute(ds, Map.empty, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0)))
@@ -478,7 +488,7 @@ object BenchDispatch {
     // when newFormat differs; the no-op case times the cheap identity return.
     case "rst_asformat"    => fpAsFormat(RST_AsFormat.execute(ds, Map.empty, argS(a, "new_format", "GTiff")), ds)
     case "rst_cog_convert" =>
-      fpDerived(RST_CogConvert.execute(ds, Map.empty, argS(a, "compression", "DEFLATE"),
+      fpDerived(RST_CogConvert.execute(ds, Map.empty, argS(a, "compression", "ZSTD"),
         argI(a, "blocksize", 512), argS(a, "overview_resampling", "AVERAGE")))
     case "rst_resample" =>
       fpDerived(RST_Resample.execute(ds, Map.empty, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear")))
@@ -966,9 +976,11 @@ object BenchDispatch {
       case "rst_ndwi"       => rst_ndwi(tile, argI(a, "green_idx", 1), argI(a, "nir_idx", 2))
       case "rst_nbr"        => rst_nbr(tile, argI(a, "nir_idx", 1), argI(a, "swir_idx", 2))
       case "rst_transform"  => rst_transform(tile, argI(a, "target_srid", 3857))
+      case "rst_transformcrs" => rst_transformcrs(tile, argS(a, "target_crs", "3857"))
       case "rst_to_webmercator" => rst_to_webmercator(tile, argS(a, "resampling", "bilinear"))
       // scalar accessors (Task 2)
       case "rst_srid"        => rst_srid(tile)
+      case "rst_crs"         => rst_crs(tile)
       case "rst_pixelwidth"  => rst_pixelwidth(tile)
       case "rst_pixelheight" => rst_pixelheight(tile)
       case "rst_upperleftx"  => rst_upperleftx(tile)
@@ -1006,6 +1018,7 @@ object BenchDispatch {
       case "rst_threshold"   => rst_threshold(tile, argS(a, "op", ">"), argD(a, "value", 0.5))
       case "rst_initnodata"  => rst_initnodata(tile)
       case "rst_setsrid"     => rst_setsrid(tile, argI(a, "srid", 4326))
+      case "rst_setcrs"      => rst_setcrs(tile, argS(a, "crs", "4326"))
       case "rst_updatetype"  => rst_updatetype(tile, argS(a, "new_type", "Float64"))
       case "rst_fillnodata"  =>
         rst_fillnodata(tile, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0))
@@ -1016,7 +1029,7 @@ object BenchDispatch {
         rst_convolve(tile, kernelCol)
       case "rst_asformat"    => rst_asformat(tile, argS(a, "new_format", "GTiff"))
       case "rst_cog_convert" =>
-        rst_cog_convert(tile, argS(a, "compression", "DEFLATE"),
+        rst_cog_convert(tile, argS(a, "compression", "ZSTD"),
           argI(a, "blocksize", 512), argS(a, "overview_resampling", "AVERAGE"))
       case "rst_resample" =>
         rst_resample(tile, argD(a, "factor", 2.0), argS(a, "algorithm", "bilinear"))
@@ -1081,11 +1094,9 @@ object BenchDispatch {
       case "rst_combineavg" => rst_combineavg(tile)
       case "rst_merge"      => rst_merge(tile)
       // bucket C, group C4: tiling fns -> ARRAY column (spark-path is timing-only,
-      // not fingerprint-compared, so the args only need to be valid). The Scala
-      // rst_maketiles wrapper takes (tileWidth, tileHeight) rather than the SQL
-      // sizeInMB form, so the column path passes tile dimensions; the pure-core
-      // path (which IS compared) uses the sizeInMB BalancedSubdivision directly.
-      case "rst_maketiles"   => rst_maketiles(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128))
+      // not fingerprint-compared, so the args only need to be valid). maketiles takes
+      // an MB budget, matching the sizeInMB BalancedSubdivision the pure-core path uses.
+      case "rst_maketiles"   => rst_maketiles(tile, argI(a, "size_in_mb", 1))
       case "rst_retile"      => rst_retile(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128))
       case "rst_tooverlappingtiles" =>
         rst_tooverlappingtiles(tile, argI(a, "tile_width", 128), argI(a, "tile_height", 128), argI(a, "overlap", 25))

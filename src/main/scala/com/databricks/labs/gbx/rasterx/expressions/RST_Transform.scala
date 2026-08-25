@@ -14,17 +14,15 @@ import org.gdal.osr.SpatialReference
 
 /** Returns the upper left x of the raster. */
 case class RST_Transform(
-    tileExpr: Expression,
+    tile: Expression,
     srid: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, srid, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def children: Seq[Expression] = Seq(tile, srid, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Transform.name
-    override def replacement: Expression = rstInvoke(RST_Transform, rasterType)
+    override def replacement: Expression = invoke(RST_Transform)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
 
 }
@@ -32,8 +30,7 @@ case class RST_Transform(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_Transform extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, srid: Int, conf: UTF8String): InternalRow = eval(row, srid, conf, BinaryType)
-    def evalPath(row: InternalRow, srid: Int, conf: UTF8String): InternalRow = eval(row, srid, conf, StringType)
+    def eval(row: InternalRow, srid: Int, conf: UTF8String): InternalRow = eval(row, srid, conf, BinaryType)
 
     def eval(row: InternalRow, srid: Int, conf: UTF8String, dt: DataType): InternalRow =
         RST_ErrorHandler.safeEval(
@@ -52,15 +49,19 @@ object RST_Transform extends WithExpressionInfo {
         )
 
     def execute(ds: Dataset, options: Map[String, String], srid: Int): (Dataset, Map[String, String]) = {
-        // ImportFromEPSG(0) or an unknown code returns a non-zero OGRERR but does NOT throw,
-        // leaving dstSR empty — warp would then silently no-op and produce an invalid raster.
-        // Validate up-front so the caller gets a clear error.
-        require(srid > 0, s"rst_transform requires a positive EPSG code; got $srid")
+        // A target SRID must be positive: reprojecting to "no CRS" (0) is meaningless.
+        // ImportFromEPSG(0) or a code in neither the EPSG nor ESRI authority returns a
+        // non-zero OGRERR but does NOT throw, leaving dstSR empty — warp would then
+        // silently no-op and produce an invalid raster. Validate up-front so the caller
+        // gets a clear error. (ImportFromEPSG auto-recovers ESRI codes like 54008, so a
+        // positive EPSG *or* ESRI code is accepted.)
+        require(srid > 0, s"rst_transform requires a positive EPSG or ESRI code; got $srid")
         val dstSR = new SpatialReference()
         val rc = dstSR.ImportFromEPSG(srid)
         if (rc != 0) {
             dstSR.delete()
-            throw new IllegalArgumentException(s"rst_transform: unknown EPSG code $srid (OGRERR=$rc)")
+            throw new IllegalArgumentException(
+              s"rst_transform: $srid is not a valid EPSG or ESRI code (OGRERR=$rc)")
         }
         RasterProject.project(ds, options, dstSR)
     }

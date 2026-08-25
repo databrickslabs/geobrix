@@ -13,16 +13,14 @@ import org.gdal.gdal.Dataset
 
 /** Returns true if the raster is empty. */
 case class RST_IsEmpty(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = BooleanType
     override def nullable: Boolean = true
     override def prettyName: String = RST_IsEmpty.name
-    override def replacement: Expression = rstInvoke(RST_IsEmpty, rasterType)
+    override def replacement: Expression = invoke(RST_IsEmpty)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -30,8 +28,7 @@ case class RST_IsEmpty(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_IsEmpty extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): Boolean = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): Boolean = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): Boolean = eval(row, conf, BinaryType)
 
     def eval(row: InternalRow, conf: UTF8String, rdt: DataType): Boolean =
         Option(

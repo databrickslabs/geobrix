@@ -38,7 +38,11 @@ class GDAL_RowWriter(
         val name = nameIdx match {
             case Some(idx) => row.getString(idx)
             case None      =>
-                val mm3 = MurmurHash3.seqHash(tile.toSeq(tileDt)).toString.replace("-", "_")
+                // Unsigned decimal keeps the tile name digit-leading (never "_", "-", or "."),
+                // so stock Spark file readers (binaryFile, etc.) do not silently skip it via
+                // Hadoop's hidden-file filter. MurmurHash3.seqHash is a signed Int, so the old
+                // .toString.replace("-", "_") produced "_"-leading names for ~half of all tiles.
+                val mm3 = java.lang.Integer.toUnsignedString(MurmurHash3.seqHash(tile.toSeq(tileDt)))
                 s"${mm3}_${pid}_$tid"
         }
         val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(tile, tileDt.fields(1).dataType)

@@ -38,19 +38,18 @@ import scala.collection.mutable.ArrayBuffer
   * contour LineString. Geometry is WKB in the raster's CRS.
   */
 case class RST_Contour(
-    tileExpr: Expression,
+    tile: Expression,
     levelsExpr: Expression,
     intervalExpr: Expression,
     baseExpr: Expression,
     attrFieldExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] =
-        Seq(tileExpr, levelsExpr, intervalExpr, baseExpr, attrFieldExpr, ExpressionConfigExpr())
+        Seq(tile, levelsExpr, intervalExpr, baseExpr, attrFieldExpr, ExpressionConfigExpr())
     // Pin types — levels is ARRAY<DOUBLE>, interval/base Double, attr_field String.
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, ArrayType(DoubleType), DoubleType, DoubleType, StringType, StringType
+        tile.dataType, ArrayType(DoubleType), DoubleType, DoubleType, StringType, StringType
     )
     override def dataType: DataType = ArrayType(
         StructType(Seq(
@@ -60,7 +59,7 @@ case class RST_Contour(
     )
     override def nullable: Boolean = true
     override def prettyName: String = RST_Contour.name
-    override def replacement: Expression = rstInvoke(RST_Contour, rasterType)
+    override def replacement: Expression = invoke(RST_Contour)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4))
 
@@ -68,14 +67,10 @@ case class RST_Contour(
 
 object RST_Contour extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, levels: ArrayData, interval: Double, base: Double,
         attrField: UTF8String, conf: UTF8String
     ): ArrayData = doInvoke(row, levels, interval, base, attrField, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, levels: ArrayData, interval: Double, base: Double,
-        attrField: UTF8String, conf: UTF8String
-    ): ArrayData = doInvoke(row, levels, interval, base, attrField, conf, StringType)
 
     private def doInvoke(
         row: InternalRow, levels: ArrayData, interval: Double, base: Double,

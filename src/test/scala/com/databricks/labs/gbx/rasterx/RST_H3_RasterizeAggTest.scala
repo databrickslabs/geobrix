@@ -53,9 +53,9 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
     /** Build an auto-grid RST_H3_RasterizeAgg (centroids mode, kring_pad=1, EPSG:4326). */
     private def makeAutoAgg(): RST_H3_RasterizeAgg =
         RST_H3_RasterizeAgg(
-            cellIdExpr    = Literal.create(null, LongType),
+            cellidExpr    = Literal.create(null, LongType),
             valueExpr     = Literal(0.0),
-            sridExpr      = Literal(4326),
+            outSridExpr   = Literal(4326),
             pixelSizeExpr = Literal.create(null, org.apache.spark.sql.types.DoubleType),
             xminExpr      = Literal.create(null, org.apache.spark.sql.types.DoubleType),
             yminExpr      = Literal.create(null, org.apache.spark.sql.types.DoubleType),
@@ -184,9 +184,12 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
         deserialized.cells.map(_._1).toSet shouldBe cellIds.toSet
     }
 
+    private val _noCrs = Literal(null, org.apache.spark.sql.types.StringType)
+
     test("gbx_h3_cell_bbox centroids mode returns a degenerate point bbox") {
         val cell = H3.pointToCellID(-0.1276, 51.5074, res)
-        val expr = RST_H3_CellBBox(Literal(cell), Literal(4326), Literal("centroids"), Literal(0))
+        val expr = RST_H3_CellBBox(
+          Literal(cell), Literal(4326), Literal("centroids"), Literal(0), _noCrs)
         val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
         row should not be null
         val xmin = row.getDouble(0); val ymin = row.getDouble(1)
@@ -200,11 +203,29 @@ class RST_H3_RasterizeAggTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("gbx_h3_cell_bbox spatial_envelope mode is a non-degenerate hexagon envelope") {
         val cell = H3.pointToCellID(-0.1276, 51.5074, res)
-        val expr = RST_H3_CellBBox(Literal(cell), Literal(4326), Literal("spatial_envelope"), Literal(0))
+        val expr = RST_H3_CellBBox(
+          Literal(cell), Literal(4326), Literal("spatial_envelope"), Literal(0), _noCrs)
         val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
         val xmin = row.getDouble(0); val ymin = row.getDouble(1)
         val xmax = row.getDouble(2); val ymax = row.getDouble(3)
         xmax should be > xmin
         ymax should be > ymin
+    }
+
+    test("gbx_h3_cell_bbox out_crs string wins over srid + reprojects to web mercator") {
+        val cell = H3.pointToCellID(-0.1276, 51.5074, res)
+        // out_crs = EPSG:3857 -> bbox in metres (large magnitudes), not degrees.
+        val expr = RST_H3_CellBBox(
+          Literal(cell), Literal(4326), Literal("centroids"), Literal(0), Literal("EPSG:3857"))
+        val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
+        math.abs(row.getDouble(2)) should be > 1000.0
+    }
+
+    test("gbx_h3_cell_bbox accepts an ESRI srid (resolveCrs), no error") {
+        val cell = H3.pointToCellID(-0.1276, 51.5074, res)
+        val expr = RST_H3_CellBBox(
+          Literal(cell), Literal(54008), Literal("centroids"), Literal(0), _noCrs)
+        val row = expr.eval(InternalRow.empty).asInstanceOf[InternalRow]
+        row should not be null
     }
 }

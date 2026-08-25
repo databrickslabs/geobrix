@@ -20,18 +20,17 @@ import java.util.{Vector => JVector}
   * CRS, GeoTransform, and pixel values; only the band count is reduced to 1.
   */
 case class RST_Band(
-    tileExpr: Expression,
+    tile: Expression,
     bandIndexExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, bandIndexExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, bandIndexExpr, ExpressionConfigExpr())
     // Pin band_index as IntegerType so SQL integer literals coerce cleanly.
-    override def inputTypes: Seq[DataType] = Seq(tileExpr.dataType, IntegerType, StringType)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def inputTypes: Seq[DataType] = Seq(tile.dataType, IntegerType, StringType)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Band.name
-    override def replacement: Expression = rstInvoke(RST_Band, rasterType)
+    override def replacement: Expression = invoke(RST_Band)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1))
 
@@ -39,14 +38,10 @@ case class RST_Band(
 
 object RST_Band extends WithExpressionInfo {
 
-    def evalBinary(row: InternalRow, bandIndex: Int, conf: UTF8String): InternalRow =
+    def eval(row: InternalRow, bandIndex: Int, conf: UTF8String): InternalRow =
         runDispatch(row, bandIndex, conf, BinaryType)
-    def evalPath(row: InternalRow, bandIndex: Int, conf: UTF8String): InternalRow =
-        runDispatch(row, bandIndex, conf, StringType)
-    def evalBinary (row: InternalRow, bandIndex: Long, conf: UTF8String): InternalRow =
+    def eval (row: InternalRow, bandIndex: Long, conf: UTF8String): InternalRow =
         runDispatch(row, bandIndex.toInt, conf, BinaryType)
-    def evalPath (row: InternalRow, bandIndex: Long, conf: UTF8String): InternalRow =
-        runDispatch(row, bandIndex.toInt, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, bandIndex: Int, conf: UTF8String, dt: DataType

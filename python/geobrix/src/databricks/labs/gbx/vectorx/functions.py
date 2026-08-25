@@ -47,6 +47,17 @@ def _mode_col(mode: ColLike) -> Column:
     return f.lit(mode) if isinstance(mode, str) else _col(mode)
 
 
+def _crs_col(x: ColLike) -> Column:
+    """Coerce a CRS argument to a literal Column.
+
+    A bare ``str`` (e.g. ``"EPSG:4326"``) is a CRS descriptor, not a column
+    name, so lift it via ``f.lit``. Columns pass through unchanged.
+    """
+    if isinstance(x, str):
+        return f.lit(x)
+    return _col(x)
+
+
 def register(spark: SparkSession) -> None:
     """Register VectorX expression-level SQL functions with the Spark session.
 
@@ -63,11 +74,84 @@ def register(spark: SparkSession) -> None:
     spark._jvm.com.databricks.labs.gbx.vectorx.functions.register(spark._jsparkSession)
 
 
-def st_asmvt(geom_wkb: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
+def st_crs(geom: ColLike) -> Column:
+    """Return the canonical CRS string embedded in a geometry's SRID, or NULL.
+
+    Reads the integer SRID from EWKB / EWKT and classifies it via the
+    authoritative PROJ code sets (``EPSG:<n>`` or ``ESRI:<n>``). Returns NULL
+    for plain WKB / WKT geometries with no embedded SRID.
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+
+    Returns:
+        STRING column: canonical CRS string (e.g. ``'EPSG:4326'``,
+        ``'ESRI:54008'``), or NULL when no SRID is embedded.
+    """
+    return f.call_function("gbx_st_crs", _col(geom))
+
+
+def st_setcrs(geom: ColLike, crs: ColLike) -> Column:
+    """Stamp a CRS on a geometry without reprojecting (SQL surface, BINARY out).
+
+    Assigns the EPSG or ESRI SRID to the geometry. Authority-less CRS strings
+    (WKT / PROJ4 with no authority code) are rejected because a geometry SRID
+    must be an integer.
+
+    The SQL UDF always returns BINARY (EWKB), regardless of input encoding.
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        crs:  Column, CRS string literal (e.g. ``'EPSG:32633'``), or integer
+              SRID. A plain Python str is treated as a CRS literal, not a
+              column name. WKT / PROJ4 strings raise at execution time.
+
+    Returns:
+        BINARY column: EWKB geometry with the new SRID stamped.
+    """
+    return f.call_function("gbx_st_setcrs", _col(geom), _crs_col(crs))
+
+
+def st_transformcrs(
+    geom: ColLike,
+    target_crs: ColLike,
+    source_crs: ColLike = None,
+) -> Column:
+    """Reproject a geometry to the target CRS (SQL surface, BINARY output).
+
+    Source CRS resolution order:
+    1. Embedded SRID from the geometry (EWKB / EWKT).
+    2. Explicit ``source_crs`` column / literal (for plain WKB / WKT inputs).
+    3. No source CRS resolvable -> input returned UNCHANGED (never-error).
+
+    The SQL UDF always returns BINARY (WKB / EWKB), regardless of input
+    encoding.
+
+    Args:
+        geom:       BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        target_crs: Column, CRS string literal (e.g. ``'EPSG:32633'``), or
+                    integer SRID. A plain Python str is a CRS literal, not a
+                    column name.
+        source_crs: Optional Column, CRS string literal, or integer SRID —
+                    explicit source CRS for plain (SRID-less) geometries.
+
+    Returns:
+        BINARY column: reprojected geometry (EWKB when target has an authority
+        code, plain WKB when authority-less), or the original bytes when no
+        source CRS is resolvable.
+    """
+    if source_crs is None:
+        return f.call_function("gbx_st_transformcrs", _col(geom), _crs_col(target_crs))
+    return f.call_function(
+        "gbx_st_transformcrs", _col(geom), _crs_col(target_crs), _crs_col(source_crs)
+    )
+
+
+def st_asmvt(geom: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     """Aggregator: encode a group of features into a Mapbox Vector Tile (MVT) protobuf blob.
 
     Args:
-        geom_wkb: Per-row geometry in WKB (BINARY) column, in tile-local coordinates.
+        geom: Per-row geometry (WKB, EWKB, WKT, or EWKT) column, in tile-local coordinates.
         attrs:    Per-row attribute struct column (encoded with native MVT value types).
         layer_name: Constant MVT layer name. Pass a plain ``str`` for a literal layer
                     name (auto-wrapped with ``f.lit``), or a ``Column`` to reference
@@ -78,13 +162,11 @@ def st_asmvt(geom_wkb: ColLike, attrs: ColLike, layer_name: ColLike) -> Column:
     """
     if isinstance(layer_name, str):
         layer_name = f.lit(layer_name)
-    return f.call_function(
-        "gbx_st_asmvt", _col(geom_wkb), _col(attrs), _col(layer_name)
-    )
+    return f.call_function("gbx_st_asmvt", _col(geom), _col(attrs), _col(layer_name))
 
 
 def st_asmvt_pyramid(
-    geom_wkb: ColLike,
+    geom: ColLike,
     attrs: ColLike,
     min_z: ColLike,
     max_z: ColLike,
@@ -103,7 +185,7 @@ def st_asmvt_pyramid(
     across the requested zoom range capped at 10^6.
 
     Args:
-        geom_wkb:   Per-feature geometry in WKB (BINARY) column.
+        geom:       Per-feature geometry (WKB, EWKB, WKT, or EWKT) column.
         attrs:      Per-feature attribute struct column (encoded with native MVT value types).
         min_z:      Inclusive minimum zoom level.
         max_z:      Inclusive maximum zoom level (<= 20).
@@ -122,7 +204,7 @@ def st_asmvt_pyramid(
     extent_col = f.lit(4096) if extent is None else _col(extent)
     return f.call_function(
         "gbx_st_asmvt_pyramid",
-        _col(geom_wkb),
+        _col(geom),
         _col(attrs),
         _col(min_z),
         _col(max_z),
@@ -132,8 +214,8 @@ def st_asmvt_pyramid(
 
 
 def st_triangulate(
-    points_geom: ColLike,
-    breaklines_geom: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     split_point_finder: ColLike,
@@ -149,9 +231,9 @@ def st_triangulate(
     N points produces at least ``N - 2`` triangle rows (Delaunay property).
 
     Args:
-        points_geom:        Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
+        points_array:       Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
                             Each element is a WKB byte array or a WKT/EWKT string.
-        breaklines_geom:    Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
+        breaklines_array:   Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
                             Pass an empty array (``array().cast(ArrayType(StringType()))``) when
                             no breaklines are needed.
         merge_tolerance:    Distance tolerance for merging nearby vertices (``DOUBLE``).
@@ -168,8 +250,8 @@ def st_triangulate(
     """
     return f.call_function(
         "gbx_st_triangulate",
-        _col(points_geom),
-        _col(breaklines_geom),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(split_point_finder),
@@ -178,8 +260,8 @@ def st_triangulate(
 
 
 def st_interpolateelevationbbox(
-    points_geom: ColLike,
-    breaklines_geom: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     split_point_finder: ColLike,
@@ -201,8 +283,8 @@ def st_interpolateelevationbbox(
     a WKB-encoded 3D Point. Invoke directly in ``select(...)`` as a top-level generator.
 
     Args:
-        points_geom:        Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
-        breaklines_geom:    Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
+        points_array:       Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
+        breaklines_array:   Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
         merge_tolerance:    Vertex merge tolerance (``DOUBLE``).
         snap_tolerance:     Triangulator snap tolerance (``DOUBLE``).
         split_point_finder: Edge-split strategy — ``"NONENCROACHING"`` or ``"MIDPOINT"``.
@@ -224,8 +306,8 @@ def st_interpolateelevationbbox(
     """
     return f.call_function(
         "gbx_st_interpolateelevationbbox",
-        _col(points_geom),
-        _col(breaklines_geom),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(split_point_finder),
@@ -241,8 +323,8 @@ def st_interpolateelevationbbox(
 
 
 def st_interpolateelevationgeom(
-    points_geom: ColLike,
-    breaklines_geom: ColLike,
+    points_array: ColLike,
+    breaklines_array: ColLike,
     merge_tolerance: ColLike,
     snap_tolerance: ColLike,
     split_point_finder: ColLike,
@@ -266,8 +348,8 @@ def st_interpolateelevationgeom(
     to the output points. Plain WKB and plain WKT carry no SRID; in that case output SRID is 0.
 
     Args:
-        points_geom:        Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
-        breaklines_geom:    Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
+        points_array:       Array column of Z-valued point geometries (``ARRAY<BINARY|STRING>``).
+        breaklines_array:   Array column of LineString geometries (``ARRAY<BINARY|STRING>``).
         merge_tolerance:    Vertex merge tolerance (``DOUBLE``).
         snap_tolerance:     Triangulator snap tolerance (``DOUBLE``).
         split_point_finder: Edge-split strategy — ``"NONENCROACHING"`` or ``"MIDPOINT"``.
@@ -287,8 +369,8 @@ def st_interpolateelevationgeom(
     """
     return f.call_function(
         "gbx_st_interpolateelevationgeom",
-        _col(points_geom),
-        _col(breaklines_geom),
+        _col(points_array),
+        _col(breaklines_array),
         _col(merge_tolerance),
         _col(snap_tolerance),
         _col(split_point_finder),

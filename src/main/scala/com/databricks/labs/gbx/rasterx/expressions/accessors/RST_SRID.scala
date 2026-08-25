@@ -15,16 +15,14 @@ import scala.util.Try
 
 /** Returns the SRID of the raster. */
 case class RST_SRID(
-    tileExpr: Expression
+    tile: Expression
 ) extends InvokedExpression {
 
-    /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def children: Seq[Expression] = Seq(tileExpr, ExpressionConfigExpr())
+    override def children: Seq[Expression] = Seq(tile, ExpressionConfigExpr())
     override def dataType: DataType = IntegerType
     override def nullable: Boolean = true
     override def prettyName: String = RST_SRID.name
-    override def replacement: Expression = rstInvoke(RST_SRID, rasterType)
+    override def replacement: Expression = invoke(RST_SRID)
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0))
 
 }
@@ -32,10 +30,9 @@ case class RST_SRID(
 /** Companion: SQL name, builder, and eval entry points for path/binary tile. */
 object RST_SRID extends WithExpressionInfo {
 
-    def evalPath(row: InternalRow, conf: UTF8String): Int = eval(row, conf, StringType)
-    def evalBinary(row: InternalRow, conf: UTF8String): Int = eval(row, conf, BinaryType)
+    def eval(row: InternalRow, conf: UTF8String): java.lang.Integer = eval(row, conf, BinaryType)
 
-    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): Int =
+    def eval(row: InternalRow, conf: UTF8String, rdt: DataType): java.lang.Integer =
         Option(
           RST_ErrorHandler.safeEval(
             () => {
@@ -50,7 +47,7 @@ object RST_SRID extends WithExpressionInfo {
             rdt,
             conf
           )
-        ).map(_.asInstanceOf[Int]).getOrElse(0)
+        ).map(v => java.lang.Integer.valueOf(v.asInstanceOf[Int])).orNull
 
     def execute(ds: Dataset): Int = {
         val proj = new SpatialReference(ds.GetProjection())

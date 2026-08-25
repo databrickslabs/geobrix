@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.gridx.bng
 
 import com.databricks.labs.gbx.expressions.{InvokedExpression, WithExpressionInfo}
+import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.gridx.grid.BNG
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -8,12 +9,12 @@ import org.apache.spark.sql.catalyst.expressions._
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
-/** Expression that returns the BNG cell geometry as WKB (binary). Case class holding cellID; used as the catalyst node when gbx_bng_aswkb(cellId) is invoked in SQL or DataFrame API. */
+/** Expression that returns the BNG cell geometry as WKB (binary). Case class holding cellid; used as the catalyst node when gbx_bng_aswkb(cellid) is invoked in SQL or DataFrame API. */
 case class BNG_AsWKB(
-    cellID: Expression
+    cellid: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(cellID)
+    override def children: Seq[Expression] = Seq(cellid)
     override def dataType: DataType = BinaryType
     override def nullable: Boolean = true
     override def prettyName: String = BNG_AsWKB.name
@@ -25,8 +26,11 @@ case class BNG_AsWKB(
 /** Companion: SQL name gbx_bng_aswkb, builder, and eval. */
 object BNG_AsWKB extends WithExpressionInfo {
 
-    def eval(cellID: Long): Array[Byte] = execute(cellID)
-    def eval(cellID: UTF8String): Array[Byte] = execute(cellID.toString)
+    def eval(cellID: Long): Array[Byte] = GridErrorHandler.safeEval[Array[Byte]](null)(execute(cellID))
+    def eval(cellID: UTF8String): Array[Byte] = {
+        val cid = BNG.parseOrNull(cellID.toString)
+        if (cid == null) null else GridErrorHandler.safeEval[Array[Byte]](null)(execute(cid))
+    }
 
     def execute(cellID: Long): Array[Byte] = {
         val geom = BNG.cellIdToGeometry(cellID)

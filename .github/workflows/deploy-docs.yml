@@ -57,8 +57,19 @@ jobs:
       - name: Install dependencies
         run: cd docs && npm ci
 
-      - name: Build
-        run: cd docs && npm run build
+      - name: Build (strict — fail on broken links)
+        run: |
+          cd docs
+          set -o pipefail
+          npm run build 2>&1 | tee /tmp/docs-build.log
+          # docusaurus.config.js keeps onBrokenLinks='warn' (permissive for local
+          # dev / gbx:docs:dev), so `npm run build` exits 0 even with broken
+          # internal links. This CI gate greps the build output for Docusaurus's
+          # broken-link report and fails explicitly — the green validation step.
+          if grep -qiE "found broken links|broken links found|Broken link on source" /tmp/docs-build.log; then
+            echo "::error::Docusaurus reported broken links — failing the strict docs gate (see the build log above)."
+            exit 1
+          fi
         env:
           NODE_ENV: production
           # Force public GitHub Pages baseUrl (https://databrickslabs.github.io/geobrix/)

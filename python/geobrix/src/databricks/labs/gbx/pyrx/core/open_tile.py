@@ -1,0 +1,997 @@
+"""The single v1/v2/virtual chokepoint.
+
+open_tile(tile) yields an open rasterio dataset regardless of tile shape:
+  - raster present  -> open the bytes (v1 / materialized). Provenance fields
+    (window/clip/crs) are informational; the bytes ARE the result.
+  - raster None      -> stage path local, read exactly `window` (may span >1
+    block), lazy-warp to `crs` if set & different, clip to `clip_polygon` if set.
+Function bodies never branch on tile shape — they call open_tile and operate on
+an open dataset. This is the ONLY place that knows the three tile shapes.
+
+Lifecycle: the yielded dataset is backed by a rasterio MemoryFile (and possibly
+a staged temp file). All layers are held open on a single contextlib.ExitStack
+so the dataset stays valid for the caller's entire ``with`` block; the stack
+unwinds in reverse (close dataset, close MemoryFile, remove staged temp) only
+after the caller exits. This avoids the "dataset closed" trap of yielding out of
+a nested ``with`` that has already closed.
+"""
+
+import os
+import shutil
+import tempfile
+from contextlib import ExitStack, contextmanager
+from typing import Iterator, Optional, Tuple
+
+import numpy as np
+import rasterio
+import rasterio.windows
+from rasterio.coords import BoundingBox
+from rasterio.io import DatasetReader, MemoryFile
+from rasterio.vrt import WarpedVRT
+from rasterio.windows import Window
+
+from databricks.labs.gbx.pyrx import _serde
+from databricks.labs.gbx.pyrx.core import _clip
+from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.edit import _nodata_fits_dtype
+from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
+from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+# ---------------------------------------------------------------------------
+# Pending-instruction metadata keys
+# These keys in a virtual tile's metadata map record cheap ops (band-select,
+# nodata assign, CRS relabel) that are applied together at the next open_tile
+# call, avoiding a pixel read just to record the intent.
+# Apply order (fixed, order-independent of call order):
+#   band-select -> nodata -> setsrid -> window -> clip -> reproject
+# ---------------------------------------------------------------------------
+
+PENDING_NODATA = "pending_nodata"
+PENDING_SRID = "pending_srid"
+PENDING_BANDS = "pending_bands"
+PENDING_CRS = "pending_crs"
+
+_PENDING_KEYS = (PENDING_NODATA, PENDING_SRID, PENDING_BANDS, PENDING_CRS)
+
+# ---------------------------------------------------------------------------
+# Metadata-key helpers for tile size information (informational, not pending)
+# These keys are NOT pending instructions: they persist through operations
+# that don't change size, and are refreshed when a tile is re-minted.
+# ---------------------------------------------------------------------------
+
+
+def _read_size_key(metadata, key) -> Optional[int]:
+    """Parse a size key from tile metadata.
+
+    Returns the int value if present and parseable, None otherwise.
+    Useful for reading ``path_file_size`` (underlying source file size in bytes)
+    or ``tile_size`` (materialized raster bytes) from the metadata map.
+    """
+    if not metadata:
+        return None
+    value = metadata.get(key)
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (ValueError, TypeError):
+        return None
+
+
+def _parse_pending(metadata):
+    """Return (bands|None, nodata|None, srid|None, crs_str|None) from tile metadata.
+
+    ``pending_crs`` (a canonical CRS string e.g. 'ESRI:54008') supersedes
+    ``pending_srid`` when both are present — the caller should prefer
+    ``pending_crs`` for CRS relabelling to support non-EPSG targets.
+    """
+    md = metadata or {}
+    bands = None
+    if md.get(PENDING_BANDS):
+        bands = [int(b) for b in str(md[PENDING_BANDS]).split(",") if b.strip()]
+    nodata = (
+        float(md[PENDING_NODATA]) if md.get(PENDING_NODATA) not in (None, "") else None
+    )
+    srid = int(md[PENDING_SRID]) if md.get(PENDING_SRID) not in (None, "") else None
+    crs_str = md[PENDING_CRS] if md.get(PENDING_CRS) not in (None, "") else None
+    return bands, nodata, srid, crs_str
+
+
+def _without_pending(metadata):
+    """Metadata map with all pending_* keys removed (consumed on materialization)."""
+    return {k: v for k, v in (metadata or {}).items() if k not in _PENDING_KEYS}
+
+
+def _epsg_of(crs) -> Optional[int]:
+    """Parse 'EPSG:3857' / '3857' -> 3857; None if not a plain EPSG code."""
+    s = str(crs).strip().upper()
+    if s.startswith("EPSG:"):
+        s = s[5:]
+    try:
+        return int(s)
+    except ValueError:
+        return None
+
+
+def _window_dataset_bytes(
+    src, window: Window, pending=(None, None, None, None)
+) -> bytes:
+    """Read one window into standalone GTiff bytes, applying pending instructions.
+
+    pending = (bands|None, nodata|None, srid|None, crs_str|None); applied in
+    fixed order: band-select -> nodata -> CRS relabel (crs_str supersedes srid).
+
+    Nodata "ensure/preserve" semantics (matches edit.init_nodata):
+    - If the source already carries a nodata value, PRESERVE it (do not override
+      with the pending default).
+    - If the source has no nodata AND the pending default fits the output dtype
+      range, set it.
+    - If the source has no nodata AND the pending default does NOT fit the dtype
+      (e.g. -9999 for uint16), leave nodata unset rather than writing an invalid
+      value.
+    """
+    # Unpack — tolerate the legacy 3-tuple form (srid only, no crs_str).
+    if len(pending) == 4:
+        bands, nodata, srid, crs_str = pending
+    else:
+        bands, nodata, srid = pending
+        crs_str = None
+    indexes = bands if bands else None  # rasterio: 1-based band list or None=all
+    # src.read with indexes as a list always returns 3D (bands, h, w); the
+    # 2D-collapse path is unreachable here and has been removed.
+    data = src.read(window=window, indexes=indexes)
+    profile = src.profile.copy()
+    count = len(bands) if bands else src.count
+    profile.update(
+        driver="GTiff",
+        height=int(window.height),
+        width=int(window.width),
+        count=count,
+        transform=src.window_transform(window),
+    )
+    if nodata is not None:
+        if src.nodata is not None:
+            # Source already has a nodata value: preserve it (pending_nodata
+            # means "ensure exists", not "force override").
+            profile["nodata"] = src.nodata
+        else:
+            # Source has no nodata: apply the pending default only if it fits.
+            out_dtype = profile.get("dtype", src.dtypes[0])
+            if _nodata_fits_dtype(nodata, out_dtype):
+                profile["nodata"] = nodata
+            # else: default doesn't fit the dtype; leave nodata unset.
+    # CRS relabel: pending_crs (full string) supersedes pending_srid.
+    if crs_str is not None:
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+        profile["crs"] = resolve_crs(crs_str)
+    elif srid is not None:
+        from databricks.labs.gbx.pyrx.core.crs import resolve_crs as _resolve
+
+        profile["crs"] = _resolve(
+            srid
+        )  # epsg/esri classification, not lenient from_epsg
+    # Route through the compression authority: ZSTD + dtype-predictor baseline.
+    out_dtype = profile.get("dtype", src.dtypes[0])
+    decoded_bytes = (
+        count * int(window.width) * int(window.height) * np.dtype(out_dtype).itemsize
+    )
+    profile.update(
+        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data)
+        return mf.read()
+
+
+def _warp_window_bytes(
+    src, window: Window, want_epsg: int, pending=(None, None, None)
+) -> bytes:
+    """Materialize a window, lazily reproject it to want_epsg, return GTiff bytes."""
+    win_bytes = _window_dataset_bytes(src, window, pending=pending)
+    with MemoryFile(win_bytes) as mf, mf.open() as wds:
+        with WarpedVRT(wds, crs=f"EPSG:{want_epsg}") as vrt:
+            prof = vrt.profile.copy()
+            prof.update(driver="GTiff")
+            data = vrt.read()
+            # Route through the compression authority for the reprojected output.
+            out_dtype = prof.get("dtype", vrt.dtypes[0])
+            decoded_bytes = (
+                vrt.count * vrt.width * vrt.height * np.dtype(out_dtype).itemsize
+            )
+            prof.update(
+                _comp.creation_opts(
+                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+                )
+            )
+            with MemoryFile() as out_mf:
+                with out_mf.open(**prof) as dst:
+                    dst.write(data)
+                return out_mf.read()
+
+
+def _warp_window_bytes_crs(
+    src, window: Window, want_crs, pending=(None, None, None, None)
+) -> bytes:
+    """Materialize a window, lazily reproject it to a CRS object, return GTiff bytes.
+
+    Like ``_warp_window_bytes`` but accepts any rasterio CRS object (not just an
+    EPSG int), so non-EPSG targets (ESRI:54008, WKT, PROJ4) work correctly.
+    ``want_crs`` must be a ``rasterio.crs.CRS`` instance.
+    """
+    win_bytes = _window_dataset_bytes(src, window, pending=pending)
+    with MemoryFile(win_bytes) as mf, mf.open() as wds:
+        with WarpedVRT(wds, crs=want_crs) as vrt:
+            prof = vrt.profile.copy()
+            prof.update(driver="GTiff")
+            data = vrt.read()
+            out_dtype = prof.get("dtype", vrt.dtypes[0])
+            decoded_bytes = (
+                vrt.count * vrt.width * vrt.height * np.dtype(out_dtype).itemsize
+            )
+            prof.update(
+                _comp.creation_opts(
+                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+                )
+            )
+            with MemoryFile() as out_mf:
+                with out_mf.open(**prof) as dst:
+                    dst.write(data)
+                return out_mf.read()
+
+
+def _empty_dataset_bytes(ref) -> bytes:
+    """A valid 1x1 NoData GTiff mirroring ref's band count / dtype (disjoint clip).
+
+    Built from a CLEAN minimal profile — the source's tiling keys
+    (tiled/blockxsize/blockysize) make no sense at 1x1 and copying them risks a
+    GDAL GTiff-creation warning/error, so they are deliberately dropped.
+    """
+    nodata = ref.nodata if ref.nodata is not None else 0
+    dtype = ref.dtypes[0]
+    profile = dict(
+        driver="GTiff",
+        width=1,
+        height=1,
+        count=ref.count,
+        dtype=dtype,
+        crs=ref.crs,
+        nodata=nodata,
+        transform=ref.transform,  # source origin; valid georeference for the 1x1
+    )
+    # 1x1 tile: decoded_bytes is tiny; auto picks the highest level (fast, negligible).
+    decoded_bytes = ref.count * 1 * 1 * np.dtype(dtype).itemsize
+    profile.update(
+        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
+    )
+    arr = np.full((ref.count, 1, 1), nodata, dtype=dtype)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(arr)
+        return mf.read()
+
+
+def _open_bytes(stack: ExitStack, raster_bytes: bytes) -> DatasetReader:
+    """Open standalone raster bytes on the stack so it lives until the stack exits."""
+    mf = stack.enter_context(MemoryFile(raster_bytes))
+    return stack.enter_context(mf.open())
+
+
+@contextmanager
+def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
+    # 1. raster present: the bytes ARE the result; provenance fields are ignored
+    #    (including any bogus path). Delegate to the v1 bytes contextmanager.
+    if tile.raster is not None:
+        with _serde.open_tile(tile.raster) as ds:
+            yield ds
+        return
+
+    # 2. virtual: try FILE windowed-read first (if file_ref provided), else stage
+    #    path locally and read the window with optional warp + clip.
+    with ExitStack() as stack:
+        pending = _parse_pending(tile.metadata)
+
+        # FILE branch: try windowed read via FileRef (avoids staging the full file).
+        # A FileRef is a handle to the same source file — it does NOT reproject
+        # or clip.  This fast-path only applies for the no-clip AND no-warp case:
+        #   - clip_polygon is not None → fall through; local-path branch clips.
+        #   - warp needed → open_windowed_via_fileref raises FileRefReadError → fall through.
+        # On any FileRefReadError fall through to the local-path branch below.
+        if file_ref is not None and tile.clip_polygon is None:
+            try:
+                from databricks.labs.gbx.pyrx._file_ref import (
+                    FileRefReadError,
+                    open_windowed_via_fileref,
+                )
+
+                with open_windowed_via_fileref(
+                    file_ref, tile.window, pending, tile_crs=tile.crs
+                ) as ds:
+                    yield ds
+                return
+            except FileRefReadError:
+                pass  # fall through to local-path branch
+
+        # Local-path branch: shared helper handles file_ref degradation
+        # (as_local_file → tile.path) and today's plain tile.path read (file_ref=None).
+        local_path = _resolve_local_or_windowed(tile, file_ref, stack)
+
+        bands, _nodata, pending_srid, _pending_crs_str = pending
+        with rasterio.open(local_path) as src:
+            # Resolve window=None → full extent, mirroring open_header() semantics.
+            if tile.window is None:
+                window = Window(0, 0, src.width, src.height)
+            else:
+                c, r, w, h = tile.window
+                window = Window(c, r, w, h)
+            src_epsg = src.crs.to_epsg() if src.crs else None
+            want = _epsg_of(tile.crs) if tile.crs else None
+            # When pending_srid relabels the CRS, use the relabeled EPSG as the
+            # "current" CRS for the warp skip-decision.  Without this, a tile
+            # with pending_srid=3857 + tile.crs=4326 would skip the warp
+            # (want==src_epsg==4326) even though the relabeled CRS is 3857.
+            effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
+            if want is not None and want != effective_src_epsg:
+                tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
+            elif tile.crs is not None and want is None:
+                # Non-EPSG tile.crs (e.g. 'ESRI:54008', WKT, PROJ4): _epsg_of returned
+                # None so the EPSG path above was skipped.  Resolve via CRS-object
+                # comparison: if the source CRS differs from the requested CRS, warp;
+                # otherwise passthrough (identity for non-EPSG sources).
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                want_crs = resolve_crs(tile.crs)
+                effective_src_crs = (
+                    resolve_crs(pending_srid) if pending_srid is not None else src.crs
+                )
+                if effective_src_crs is None or effective_src_crs != want_crs:
+                    tile_bytes = _warp_window_bytes_crs(
+                        src, window, want_crs, pending=pending
+                    )
+                else:
+                    tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+            else:
+                tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+        # src is closed here; we hold only standalone bytes.
+
+        wds = _open_bytes(stack, tile_bytes)
+        if tile.clip_polygon is None:
+            yield wds
+            return
+
+        clipped = _clip.clip_dataset(wds, tile.clip_polygon, tile.clip_crs)
+        if clipped is None:  # disjoint -> valid empty NoData dataset, not an error
+            yield _open_bytes(stack, _empty_dataset_bytes(wds))
+        else:
+            yield _open_bytes(stack, clipped)
+
+
+def _safe_remove(path: str) -> None:
+    try:
+        os.remove(path)
+    except OSError:
+        pass
+
+
+def _resolve_local_or_windowed(tile: VirtualTile, file_ref, stack: ExitStack) -> str:
+    """Shared local-path resolver for open_tile, _open, and open_header.
+
+    Returns a staged local path ready for rasterio.open, registering cleanup on
+    ``stack`` if ``_stage_local_if_needed`` produced a temp file:
+
+    - ``file_ref`` provided: try ``file_ref.as_local_file()`` first; fall back to
+      ``tile.path`` if ``as_local_file`` raises.
+    - ``file_ref`` is None: ``tile.path`` directly (today's behavior, unchanged).
+
+    This helper covers the *fallback / degradation* path.  The FILE-first windowed
+    read (``open_windowed_via_fileref``) is handled inline by ``open_tile`` before
+    this helper is called; if the FILE attempt succeeds, this helper is never
+    reached.
+    """
+    if file_ref is not None:
+        try:
+            raw = file_ref.as_local_file()
+        except Exception:
+            raw = tile.path
+    else:
+        raw = tile.path
+    local_path, is_temp = _stage_local_if_needed(raw)
+    if is_temp:
+        stack.callback(_safe_remove, local_path)
+    return local_path
+
+
+def _to_virtual_tile(tile) -> VirtualTile:
+    """Normalize any tile shape to VirtualTile.
+
+    Accepted shapes:
+    - ``VirtualTile`` → passthrough.
+    - ``bytes`` / ``bytearray`` → materialized tile with ``cellid=0``.
+    - dict/Row with a ``path`` or ``window`` key → v2 struct (``VirtualTile.from_row``).
+    - dict/Row with a ``raster`` key (no ``path``) → v1 struct (``VirtualTile.from_v1``).
+    """
+    if isinstance(tile, VirtualTile):
+        return tile
+    if isinstance(tile, (bytes, bytearray)):
+        return VirtualTile(cellid=0, raster=bytes(tile))
+    d = tile.asDict() if hasattr(tile, "asDict") else dict(tile)
+    if "path" in d or "window" in d:
+        return VirtualTile.from_row(d)
+    return VirtualTile.from_v1(d.get("cellid", 0), d["raster"], d.get("metadata"))
+
+
+@contextmanager
+def _open(tile, file_ref=None):
+    """Context manager that yields an open ``DatasetReader`` for any tile shape.
+
+    Accepts a ``VirtualTile``, raw bytes/bytearray, a v1 dict/Row
+    ``{cellid, raster, metadata}``, or a v2 dict/Row (9-field struct).
+    Normalises to ``VirtualTile`` via ``_to_virtual_tile`` then delegates to
+    ``open_tile``; all lifecycle management (MemoryFile, staged temps) is
+    handled there.
+
+    ``file_ref``: optional FileRef for FILE-type windowed reads; threaded through
+    to ``open_tile``.  Defaults to None (today's behaviour, unchanged).
+    """
+    with open_tile(_to_virtual_tile(tile), file_ref=file_ref) as ds:
+        yield ds
+
+
+@contextmanager
+def _open_all(tiles):
+    """Context manager that yields a list of open ``DatasetReader`` objects.
+
+    Opens each tile in *tiles* under a single ``ExitStack`` so all datasets
+    stay valid for the caller's entire ``with`` block and are closed together
+    on exit. Useful for multi-input operations (map-algebra, aggregation).
+    """
+    with ExitStack() as stack:
+        yield [stack.enter_context(_open(t)) for t in tiles]
+
+
+class _WindowHeaderView:
+    """Read-free header view of a source dataset restricted to a sub-window.
+
+    Presents the window-varying fields (``width``, ``height``, ``transform``,
+    ``bounds``, ``profile``) as the sub-window's values, computed purely from the
+    source header + the window offset/size (no pixel I/O). Every other attribute
+    (``crs``, ``count``, ``nodata``, ``dtypes``, ``driver``, ``tags()``,
+    ``subdatasets``, ...) proxies straight through to the source dataset via
+    ``__getattr__`` — those are window-invariant. ``read`` is intentionally NOT
+    proxied: this view exists precisely to avoid materialising pixels.
+
+    Optional ``pending_count``, ``pending_crs``, and ``pending_nodata`` override
+    ``count``, ``crs``, and ``nodata`` to reflect pending band-select, setsrid,
+    and init_nodata instructions recorded on the tile.
+
+    For ``pending_nodata``: the same ensure/preserve+dtype-fit logic as
+    open_tile applies — if the source already has nodata, source value is
+    preserved; if the source has no nodata and the pending value fits the dtype,
+    it is shown; otherwise source nodata (None) is preserved.
+    """
+
+    def __init__(
+        self,
+        src,
+        window: Window,
+        pending_count=None,
+        pending_crs=None,
+        pending_nodata=None,
+    ):
+        self._src = src
+        self._window = window
+        self._transform = src.window_transform(window)
+        # Bounds of the window in the source CRS, derived from the source
+        # transform + window (no read).
+        left, bottom, right, top = rasterio.windows.bounds(window, src.transform)
+        self._bounds = BoundingBox(left, bottom, right, top)
+        self._pending_count = pending_count
+        self._pending_crs = pending_crs
+        # Resolve nodata once at construction (no pixel I/O needed).
+        if src.nodata is not None:
+            # Source already has nodata: preserve it.
+            self._resolved_nodata = src.nodata
+        elif pending_nodata is not None:
+            # Source has no nodata: apply pending default only if it fits.
+            dtype_str = src.dtypes[0]
+            self._resolved_nodata = (
+                pending_nodata
+                if _nodata_fits_dtype(pending_nodata, dtype_str)
+                else None
+            )
+        else:
+            self._resolved_nodata = None
+        self._has_nodata_override = pending_nodata is not None and src.nodata is None
+
+    @property
+    def width(self) -> int:
+        return int(self._window.width)
+
+    @property
+    def height(self) -> int:
+        return int(self._window.height)
+
+    @property
+    def transform(self):
+        return self._transform
+
+    @property
+    def bounds(self) -> BoundingBox:
+        return self._bounds
+
+    @property
+    def count(self) -> int:
+        if self._pending_count is not None:
+            return self._pending_count
+        return self._src.count
+
+    @property
+    def crs(self):
+        if self._pending_crs is not None:
+            return self._pending_crs
+        return self._src.crs
+
+    @property
+    def nodata(self):
+        if self._has_nodata_override:
+            return self._resolved_nodata
+        return self._src.nodata
+
+    @property
+    def profile(self):
+        prof = self._src.profile.copy()
+        prof.update(
+            width=int(self._window.width),
+            height=int(self._window.height),
+            transform=self._transform,
+        )
+        if self._pending_count is not None:
+            prof["count"] = self._pending_count
+        if self._pending_crs is not None:
+            prof["crs"] = self._pending_crs
+        if self._has_nodata_override:
+            prof["nodata"] = self._resolved_nodata
+        return prof
+
+    def __getattr__(self, name):
+        # Window-invariant attributes/methods proxy to the source dataset. Guard
+        # against read to keep the view header-only.
+        if name == "read":
+            raise AttributeError(
+                "_WindowHeaderView is header-only; pixel reads are not supported"
+            )
+        return getattr(self._src, name)
+
+
+def _is_full_extent(window, src) -> bool:
+    """True if ``window`` (col, row, w, h) covers the full source extent."""
+    c, r, w, h = window
+    return c == 0 and r == 0 and w == src.width and h == src.height
+
+
+@contextmanager
+def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
+    """Context manager yielding an open dataset for **header/metadata access only**.
+
+    Unlike ``open_tile`` / ``_open``, this function never materialises a pixel
+    window.  Callers may safely inspect ``.width``, ``.height``, ``.crs``,
+    ``.transform``, ``.bounds``, ``.profile``, etc.  They must NOT call
+    ``ds.read()`` — that would materialise pixels and defeats the purpose.
+
+    Accepted tile shapes:
+    - bytes / bytearray / v1 dict (``raster`` set) → open the bytes via the
+      MemoryFile path (``_open``).  The bytes already contain the full result so
+      header is trivially available; no window read is performed by this call.
+    - virtual dict / v2 struct / VirtualTile (``raster`` None) → resolve local
+      path via ``_resolve_local_or_windowed`` (uses ``file_ref.as_local_file()``
+      if provided, else ``tile.path``; handles staging for /Volumes paths), then
+      open the source file with a plain ``rasterio.open`` (lazy, no pixel I/O).
+      If the tile carries a sub-window (present AND not the full source extent),
+      yield a read-free ``_WindowHeaderView`` whose
+      ``width``/``height``/``transform``/``bounds``/``profile`` reflect the WINDOW
+      (consistent with the pixel path and the materialized-equivalent tile) while
+      other fields proxy the source. For a whole-file window (None or == full
+      extent) yield the source dataset directly. The ExitStack cleans up the
+      staged temp on exit.
+
+    ``file_ref``: optional FileRef for FILE-type reads.  For header-only reads,
+    ``file_ref.as_local_file()`` is tried (avoids re-implementing pixel
+    materialisation); falls back to ``tile.path`` if that raises.  Defaults to
+    None (today's behaviour, unchanged).
+    """
+    vt = _to_virtual_tile(tile)
+
+    if not vt.is_virtual():
+        # Bytes path: delegate to _open; no pixel read is performed here.
+        with _open(vt) as ds:
+            yield ds
+        return
+
+    # Virtual path: open the source header — no window read in either branch.
+    with ExitStack() as stack:
+        local_path = _resolve_local_or_windowed(vt, file_ref, stack)
+        src = stack.enter_context(rasterio.open(local_path))
+
+        # Parse pending instructions to reflect band-select / setsrid / nodata in header.
+        bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
+        pending_count = len(bands) if bands else None
+        # pending_crs: pending_crs (string) supersedes pending_srid.
+        pending_crs = None
+        if crs_str is not None or srid is not None:
+            from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+            pending_crs = resolve_crs(crs_str if crs_str is not None else srid)
+
+        # pending_nodata is passed to _WindowHeaderView, which applies the same
+        # ensure/preserve+dtype-fit logic as _window_dataset_bytes so header and
+        # pixel views agree on nodata.
+        pending_nodata = raw_nodata  # may be None
+
+        any_pending = (
+            pending_count is not None
+            or pending_crs is not None
+            or pending_nodata is not None
+        )
+
+        if vt.window is None or _is_full_extent(vt.window, src):
+            # Whole-file: yield a view that reflects pending overrides but
+            # otherwise proxies the source directly.
+            if not any_pending:
+                yield src
+            else:
+                # Re-use _WindowHeaderView with the full-source window to get
+                # the pending overrides; width/height/transform/bounds are
+                # identical to the source for a whole-file window.
+                full_window = Window(0, 0, src.width, src.height)
+                yield _WindowHeaderView(
+                    src,
+                    full_window,
+                    pending_count=pending_count,
+                    pending_crs=pending_crs,
+                    pending_nodata=pending_nodata,
+                )
+        else:
+            # Sub-window: present the window's dims/extent + pending overrides.
+            c, r, w, h = vt.window
+            yield _WindowHeaderView(
+                src,
+                Window(c, r, w, h),
+                pending_count=pending_count,
+                pending_crs=pending_crs,
+                pending_nodata=pending_nodata,
+            )
+
+
+def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
+    """Convert a (possibly virtual) tile to a v2-materialized tile: run open_tile
+    on the light side (which CAN read /Volumes), capture the window+warp+clip
+    result into `raster`, keep provenance. Output is heavy-consumable. This is
+    the single sanctioned light->heavy crossing for virtual tiles.
+    """
+    with open_tile(tile) as ds:
+        data = ds.read()
+        profile = ds.profile.copy()
+        profile.update(driver="GTiff")
+        # Route through the compression authority: ZSTD + dtype-predictor baseline.
+        out_dtype = profile.get("dtype", ds.dtypes[0])
+        decoded_bytes = ds.count * ds.width * ds.height * np.dtype(out_dtype).itemsize
+        profile.update(
+            _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
+        )
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(data)
+            raster = mf.read()
+    # Pending keys are baked into the produced bytes; strip them so the
+    # materialized tile's metadata stays honest (no double-application).
+    meta = _without_pending(tile.metadata)
+    # Stamp tile_byte_size (materialized raster byte length) into metadata.
+    meta["tile_byte_size"] = str(len(raster))
+    return VirtualTile(
+        cellid=tile.cellid,
+        raster=raster,
+        path=tile.path,
+        window=tile.window,
+        clip_polygon=tile.clip_polygon,
+        clip_crs=tile.clip_crs,
+        crs=tile.crs,
+        metadata=meta,
+    )
+
+
+def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
+    """Block-streaming equivalent of ``materialize_to_bytes(tile).raster``.
+
+    Opens the source file lazily and writes the output GTiff block-by-block,
+    so the full pixel array is never held in RAM.  Returns encoded GTiff bytes
+    that are **pixel-array-equal and profile-equal** to ``materialize_to_bytes``
+    for the common (no-warp, no-clip) case.
+
+    Profile building exactly mirrors ``_window_dataset_bytes`` / ``materialize_to_bytes``:
+    - Same driver, height, width, count, transform.
+    - Same nodata ensure/preserve+dtype-fit logic.
+    - Same CRS relabel (pending_crs supersedes pending_srid).
+    - Same compression authority (``_comp.creation_opts``, "auto", full decoded_bytes).
+
+    **Fallback for warp / clip:**  Reprojection and clipping require full-window
+    context that cannot be assembled block-by-block safely.  These cases delegate
+    to ``materialize_to_bytes(tile).raster``.  Tests exercise the no-warp / no-clip
+    path only and assert ``materialize_to_bytes`` is NOT called there.
+    """
+    with ExitStack() as stack:
+        pending = _parse_pending(tile.metadata)
+        bands, nodata, srid, crs_str = pending
+
+        # Resolve the local path — same as open_tile's local-path branch.
+        local_path = _resolve_local_or_windowed(tile, None, stack)
+
+        with rasterio.open(local_path) as src:
+            # Resolve window → same semantics as open_tile.
+            if tile.window is None:
+                window = Window(0, 0, src.width, src.height)
+            else:
+                c, r, w, h = tile.window
+                window = Window(c, r, w, h)
+
+            # Detect whether reprojection is needed.  Warp and clip cannot be
+            # done block-by-block (they need full-window context), so fall back.
+            src_epsg = src.crs.to_epsg() if src.crs else None
+            want = _epsg_of(tile.crs) if tile.crs else None
+            effective_src_epsg = srid if srid is not None else src_epsg
+            needs_warp = (want is not None and want != effective_src_epsg) or (
+                tile.crs is not None and want is None
+            )
+            needs_clip = tile.clip_polygon is not None
+
+            if needs_warp or needs_clip:
+                # Warp / clip require full-window context; delegate to the
+                # standard materializer.  This branch is not exercised by the
+                # size-gate test suite (test tiles are no-warp / no-clip).
+                return materialize_to_bytes(tile).raster
+
+            # --- Block-streaming path: no warp, no clip ---
+            indexes = bands if bands else None
+            count = len(bands) if bands else src.count
+
+            # Build the exact profile that _window_dataset_bytes / materialize_to_bytes
+            # would produce.
+            profile = src.profile.copy()
+            profile.update(
+                driver="GTiff",
+                height=int(window.height),
+                width=int(window.width),
+                count=count,
+                transform=src.window_transform(window),
+            )
+
+            # Nodata: same ensure/preserve + dtype-fit logic as _window_dataset_bytes.
+            if nodata is not None:
+                if src.nodata is not None:
+                    # Source already carries nodata → preserve it.
+                    profile["nodata"] = src.nodata
+                else:
+                    out_dtype_nd = profile.get("dtype", src.dtypes[0])
+                    if _nodata_fits_dtype(nodata, out_dtype_nd):
+                        profile["nodata"] = nodata
+
+            # CRS relabel: pending_crs (full string) supersedes pending_srid.
+            if crs_str is not None:
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                profile["crs"] = resolve_crs(crs_str)
+            elif srid is not None:
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                profile["crs"] = resolve_crs(srid)
+
+            # Compression: same authority as materialize_to_bytes (full decoded size).
+            out_dtype = profile.get("dtype", src.dtypes[0])
+            decoded_bytes = (
+                count
+                * int(window.width)
+                * int(window.height)
+                * np.dtype(out_dtype).itemsize
+            )
+            profile.update(
+                _comp.creation_opts(
+                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
+                )
+            )
+
+            # Write block-by-block — at most one output block in RAM at a time.
+            with MemoryFile() as mf:
+                with mf.open(**profile) as dst:
+                    for _, block_window in dst.block_windows(1):
+                        # Translate the output-local (0-based) block_window to
+                        # source-file coordinates (offset by the tile window origin).
+                        src_block = Window(
+                            col_off=int(block_window.col_off) + int(window.col_off),
+                            row_off=int(block_window.row_off) + int(window.row_off),
+                            width=int(block_window.width),
+                            height=int(block_window.height),
+                        )
+                        data = src.read(window=src_block, indexes=indexes)
+                        dst.write(data, window=block_window)
+                return mf.read()
+
+
+def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
+    """Return GTiff bytes for a tile, avoiding the double-encode of materialize_to_bytes.
+
+    For materialized tiles (``raster`` set), returns ``bytes(vt.raster)`` unchanged.
+    For virtual tiles (``raster`` None), produces bytes via the local-path pipeline
+    (``_window_dataset_bytes`` / ``_warp_window_bytes`` / clip) and returns them
+    **directly** — without the ``_open_bytes`` → ``ds.read()`` → re-encode cycle
+    that ``materialize_to_bytes`` performs.
+
+    Compared to ``materialize_to_bytes(vt).raster``, this saves one ZSTD compress
+    + one ZSTD decompress per virtual input tile in the common case (no clip / no
+    warp).  The bytes returned are semantically identical: same pixels, same
+    georeference, same nodata, same compression.
+
+    **Constraints**:
+    - ``file_ref=None`` only (local-path branch; the FILE path is not needed here
+      because callers that use FILE already go through ``_uf_*`` variants).
+    - Use when only the pixel bytes matter and the full ``VirtualTile`` provenance
+      returned by ``materialize_to_bytes`` is not needed.
+    """
+    if not vt.is_virtual():
+        return bytes(vt.raster) if vt.raster is not None else None
+
+    with ExitStack() as stack:
+        pending = _parse_pending(vt.metadata)
+        local_path = _resolve_local_or_windowed(vt, None, stack)
+        _, _, pending_srid, _ = pending
+
+        with rasterio.open(local_path) as src:
+            # Resolve window=None → full extent, mirroring open_tile() semantics.
+            # A deferred whole-file virtual tile (Task 2) carries window=None;
+            # materialising it must produce the same bytes as an explicit full window.
+            if vt.window is None:
+                window = Window(0, 0, src.width, src.height)
+            else:
+                c, r, w, h = vt.window
+                window = Window(c, r, w, h)
+            src_epsg = src.crs.to_epsg() if src.crs else None
+            want = _epsg_of(vt.crs) if vt.crs else None
+            effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
+            if want is not None and want != effective_src_epsg:
+                tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
+            elif vt.crs is not None and want is None:
+                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+                want_crs = resolve_crs(vt.crs)
+                effective_src_crs = (
+                    resolve_crs(pending_srid) if pending_srid is not None else src.crs
+                )
+                if effective_src_crs is None or effective_src_crs != want_crs:
+                    tile_bytes = _warp_window_bytes_crs(
+                        src, window, want_crs, pending=pending
+                    )
+                else:
+                    tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+            else:
+                tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+
+        if vt.clip_polygon is None:
+            return tile_bytes
+
+        # Clip path: open tile_bytes temporarily to clip, return clipped bytes directly.
+        with MemoryFile(tile_bytes) as mf:
+            with mf.open() as wds:
+                clipped = _clip.clip_dataset(wds, vt.clip_polygon, vt.clip_crs)
+                if clipped is None:
+                    return _empty_dataset_bytes(wds)
+                return clipped
+
+
+def materialize_array(tile: VirtualTile) -> Tuple[np.ndarray, "rasterio.Affine", dict]:
+    """Convenience wrapper: (array, transform, profile) from open_tile."""
+    with open_tile(tile) as ds:
+        return ds.read(), ds.transform, ds.profile.copy()
+
+
+def shape_output(
+    tile,
+    *,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> VirtualTile:
+    """Force the output shape of a tile.
+
+    Accepted input: any tile shape (VirtualTile, bytes, v1/v2 dict/Row);
+    normalised via ``_to_virtual_tile`` before processing.
+
+    Rules
+    -----
+    ``virtualize_dir`` and ``materialize=True`` are mutually exclusive.
+
+    ``virtualize_dir`` set:
+      - The tile is already a REFERENCE to backing pixels (``raster`` is None —
+        header reads, reader selection): return as-is.
+        ``virtualize_dir`` has no meaningful effect here because the tile already
+        references real, self-consistent bytes on a backing store.
+      - The tile carries PRODUCED pixels (``raster`` set — a pixel-producing op
+        such as reproject/merge/combineavg/frombands materialized its result):
+        write bytes to
+        ``<dir>/[<prefix>_]<cellid>_<col>_<row>_<w>_<h>.tif`` (overwrite),
+        FUSE-safe (local temp -> shutil.copyfile), return a VirtualTile with
+        ``raster=None`` referencing the written file. This is the ONLY way a
+        pixel-producer returns a virtual tile.
+
+    ``materialize=True``:
+      - Tile virtual → read via ``open_tile`` (lazy), capture bytes,
+        return a materialized VirtualTile (delegates to
+        ``materialize_to_bytes``).
+      - Tile already materialized → no-op (return as-is).
+
+    Neither → return the tile as-is (auto).
+    """
+    vt = _to_virtual_tile(tile)
+
+    if virtualize_dir is not None and materialize:
+        raise ValueError(
+            "shape_output: virtualize_dir and materialize=True are mutually exclusive"
+        )
+
+    if virtualize_dir is not None:
+        # Already virtual — nothing to do.
+        if vt.is_virtual():
+            return vt
+
+        # Determine (col, row, w, h) for the filename.
+        if vt.window is not None:
+            col, row, w, h = vt.window
+        else:
+            # Read only the header to get dimensions.
+            with _serde.open_tile(vt.raster) as ds:
+                w, h = ds.width, ds.height
+            col, row = 0, 0
+
+        parts = [str(vt.cellid), str(col), str(row), str(w), str(h)]
+        base = "_".join(parts) + ".tif"
+        if virtualize_prefix:
+            base = f"{virtualize_prefix}_{base}"
+
+        os.makedirs(virtualize_dir, exist_ok=True)
+        out_path = os.path.join(virtualize_dir, base)
+
+        # FUSE-safe write: write to a local temp, then copy into place.
+        fd, tmp = tempfile.mkstemp(suffix=".tif")
+        try:
+            os.close(fd)
+            with open(tmp, "wb") as f:
+                f.write(vt.raster)
+            shutil.copyfile(tmp, out_path)
+        finally:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+
+        # Pending keys were applied when open_tile read the bytes above; strip
+        # them so the produced tile's metadata is pending-free (keys are baked
+        # into the written file, no longer pending).
+        meta = _without_pending(vt.metadata)
+        meta["shape_output"] = "virtualized"
+        # Stamp path_file_size (underlying source file size in bytes) into metadata.
+        file_size = os.path.getsize(out_path)
+        meta["path_file_size"] = str(file_size)
+        return VirtualTile(
+            cellid=vt.cellid,
+            raster=None,
+            path=out_path,
+            window=(col, row, w, h),
+            clip_polygon=vt.clip_polygon,
+            clip_crs=vt.clip_crs,
+            crs=vt.crs,
+            metadata=meta,
+        )
+
+    if materialize:
+        if not vt.is_virtual():
+            return vt
+        return materialize_to_bytes(vt)
+
+    # Auto: return as-is.
+    return vt

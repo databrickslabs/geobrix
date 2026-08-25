@@ -33,24 +33,26 @@ import java.util.{Vector => JVector}
   * pre-processing, watershed buffer maps.
   */
 case class RST_Proximity(
-    tileExpr: Expression,
+    tile: Expression,
     targetValuesExpr: Expression,
     distUnitsExpr: Expression,
     maxDistanceExpr: Expression
 ) extends InvokedExpression {
 
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
     override def children: Seq[Expression] = Seq(
-        tileExpr, targetValuesExpr, distUnitsExpr, maxDistanceExpr, ExpressionConfigExpr()
+        tile, targetValuesExpr, distUnitsExpr, maxDistanceExpr, ExpressionConfigExpr()
     )
     // Pin types: target_values String (nullable), distunits String, max_distance Double (nullable).
     override def inputTypes: Seq[DataType] = Seq(
-        tileExpr.dataType, StringType, StringType, DoubleType, StringType
+        tile.dataType, StringType, StringType, DoubleType, StringType
     )
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Proximity.name
-    override def replacement: Expression = rstInvoke(RST_Proximity, rasterType)
+    // propagateNull=false: builder() injects Literal(null, ...) defaults for the optional args
+    // (target_values, max_distance), so a null there must NOT short-circuit the whole result to null
+    // (eval must run). runDispatch below guards a null primary tile row so null-tile→null holds.
+    override def replacement: Expression = invoke(RST_Proximity, propagateNull = false)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -58,32 +60,32 @@ case class RST_Proximity(
 
 object RST_Proximity extends WithExpressionInfo {
 
-    def evalBinary(
+    def eval(
         row: InternalRow, targetValues: UTF8String, distUnits: UTF8String,
         maxDistance: Any, conf: UTF8String
     ): InternalRow = runDispatch(row, targetValues, distUnits, maxDistance, conf, BinaryType)
-    def evalPath(
-        row: InternalRow, targetValues: UTF8String, distUnits: UTF8String,
-        maxDistance: Any, conf: UTF8String
-    ): InternalRow = runDispatch(row, targetValues, distUnits, maxDistance, conf, StringType)
 
     private def runDispatch(
         row: InternalRow, targetValues: UTF8String, distUnits: UTF8String,
         maxDistance: Any, conf: UTF8String, dt: DataType
     ): InternalRow =
-        RST_ErrorHandler.safeEval(
+        // With propagateNull=false the invoke now runs eval even for a null primary tile; preserve
+        // the prior null-tile→null behavior (rowToTile/safeEval would otherwise NPE on a null row).
+        if (row == null) null
+        else RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
               val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
               val tvOpt = Option(targetValues).map(_.toString)
               val unitsStr = Option(distUnits).map(_.toString).getOrElse("GEO")
-              val maxDistOpt = maxDistance match {
-                  case null         => None
-                  case d: Double    => Some(d)
-                  case n: Number    => Some(n.doubleValue())
-                  case _            => None
-              }
+              // NaN is the "absent" sentinel for the optional max_distance (see builder): drop it to
+              // None so execute() treats it as unlimited rather than failing its `> 0 && !NaN` check.
+              val maxDistOpt = (maxDistance match {
+                  case d: Double => Some(d)
+                  case n: Number => Some(n.doubleValue())
+                  case _         => None
+              }).filterNot(_.isNaN)
               val (resDs, resMtd) = execute(ds, options, tvOpt, unitsStr, maxDistOpt)
               RasterDriver.releaseDataset(ds)
               val out = RasterSerializationUtil.tileToRow((cell, resDs, resMtd), dt, exprConf.hConf)
@@ -166,10 +168,15 @@ object RST_Proximity extends WithExpressionInfo {
 
     override def name: String = "gbx_rst_proximity"
 
+    // max_distance default is NaN, NOT Literal(null, DoubleType): a null primitive-Double arg is
+    // force-null-checked by Spark's Invoke regardless of propagateNull=false (it short-circuits the
+    // whole result to null before eval runs). A non-null NaN sentinel is never null-checked; eval
+    // maps NaN -> None (unlimited). target_values stays StringType (object) so its null is fine.
+    private val nanDist: Literal = Literal(Double.NaN, DoubleType)
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 1 => RST_Proximity(c(0), Literal(null, StringType), Literal("GEO"), Literal(null, DoubleType))
-        case 2 => RST_Proximity(c(0), c(1), Literal("GEO"), Literal(null, DoubleType))
-        case 3 => RST_Proximity(c(0), c(1), c(2), Literal(null, DoubleType))
+        case 1 => RST_Proximity(c(0), Literal(null, StringType), Literal("GEO"), nanDist)
+        case 2 => RST_Proximity(c(0), c(1), Literal("GEO"), nanDist)
+        case 3 => RST_Proximity(c(0), c(1), c(2), nanDist)
         case 4 => RST_Proximity(c(0), c(1), c(2), c(3))
         case n => throw new IllegalArgumentException(
             s"gbx_rst_proximity takes 1 to 4 arguments (tile, [target_values, [distunits, [max_distance]]]); got $n"

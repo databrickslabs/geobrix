@@ -14,9 +14,9 @@ def assert_mvt_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx requires the [light] extra; missing: "
+            "pyvx requires a light-tier extra; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light]'"
+            + ". Install with: pip install 'geobrix[light_env6]'"
         )
 
 
@@ -34,9 +34,9 @@ def assert_legacy_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx legacy requires the [light] extra; missing: "
+            "pyvx legacy requires a light-tier extra; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light]'"
+            + ". Install with: pip install 'geobrix[light_env6]'"
         )
 
 
@@ -53,7 +53,30 @@ def assert_tin_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pyvx TIN/legacy requires the [light] extra; missing: "
+            "pyvx TIN/legacy requires a light-tier extra; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light]'"
+            + ". Install with: pip install 'geobrix[light_env6]'"
+        )
+
+
+def assert_crs_available() -> None:
+    """Raise a clear ImportError if the CRS light deps are missing."""
+    missing = []
+    try:
+        import pyproj  # noqa: F401
+    except Exception:  # noqa: BLE001
+        missing.append("pyproj")
+    try:
+        import rasterio  # noqa: F401
+    except Exception:  # noqa: BLE001
+        missing.append("rasterio")
+    try:
+        import shapely  # noqa: F401
+    except Exception:  # noqa: BLE001
+        missing.append("shapely")
+    if missing:
+        raise ImportError(
+            "pyvx CRS requires a light-tier extra; missing: "
+            + ", ".join(missing)
+            + ". Install with: pip install 'geobrix[light_env6]'"
         )

@@ -12,95 +12,47 @@ Understanding the internal structure of GeoBrix tiles is essential for advanced 
 
 ## Overview
 
-In GeoBrix, a **tile** is not a simple binary column—it's a **structured type** (struct) containing three fields that together represent a raster dataset along with its metadata and optional grid cell information.
+In GeoBrix, a **tile** is not a simple binary column—it's a **structured type** (struct) that represents a raster dataset along with its metadata, grid-cell information, and — when the tile is a bytes-free reference — the source path, window, and clip/CRS provenance. The same struct is shared by both execution tiers.
 
 ## Tile Schema
 
 A tile has the following structure:
 
-![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, required), metadata (map of string to string), with non-tessellated vs tessellated examples](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
+![GeoBrix tile schema — cellid (bigint, nullable), raster (binary, nullable), path (string, nullable), path_mode (string, storage mode: null / 'external' / 'managed'), window/clip_polygon/clip_crs/crs provenance fields, metadata (map of string to string, last field)](../../../resources/images/diagrams/rasterx/rasterx-tile-structure.png)
 
 ```
 struct<
-  cellid: bigint,                 -- Grid cell ID (nullable)
-  raster: binary,                 -- Raster bytes
-  metadata: map<string,string>    -- Driver, extension, size, etc.
+  cellid: bigint,                                -- Grid cell ID (nullable)
+  raster: binary,                                -- Raster bytes (NULL when virtual)
+  path: string,                                  -- Source path (set when virtual)
+  path_mode: string,                             -- Storage mode: null, 'external', or 'managed'
+  window: struct<col_off,row_off,width,height>,  -- Pixel window
+  clip_polygon: binary,                          -- Optional clip geometry (WKB)
+  clip_crs: string,                              -- CRS for clip_polygon
+  crs: string,                                   -- Working/target CRS
+  metadata: map<string,string>                   -- Driver, extension, size, etc.
 >
 ```
+
+A tile is **materialized** when `raster` carries the encoded bytes (the common case, and the only form the heavyweight tier consumes). A tile is **virtual** when `raster` is `NULL` and `path` + `window` are set — a bytes-free reference that materializes pixels on demand (a lightweight-tier capability). For the full virtual/materialized model, see **[Virtual Tiles](./virtual-tiles)**.
 
 ### Field Descriptions
 
 | Field | Type | Nullable | Description |
 |-------|------|----------|-------------|
 | `cellid` | `bigint` (Long) | Yes | Grid cell identifier for tessellated rasters. `null` for non-tessellated rasters. |
-| `raster` | `binary` | No | Binary raster content (bytes). |
+| `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
+| `path` | `string` | Yes | Source path for a virtual tile; `null` for a materialized tile. |
+| `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
+| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. |
+| `clip_polygon` | `binary` | Yes | Optional clip geometry (WKB). Instruction on a virtual tile; applied-provenance on a materialized tile. |
+| `clip_crs` | `string` | Yes | CRS for `clip_polygon` (e.g. `"EPSG:4326"`). |
+| `crs` | `string` | Yes | Working/target CRS. |
 | `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. |
 
----
-
-## Field Details
-
-### 1. cellid
-
-The `cellid` field identifies which grid cell a tile belongs to when using tessellation (e.g., `rst_h3_tessellate`).
-
-**Properties:**
-- **Type**: `bigint` (64-bit integer)
-- **Nullable**: Yes
-- **Purpose**: Enables spatial indexing and joining of tessellated rasters
-
-**Values:**
-- `null` - For non-tessellated rasters (e.g., from `rst_fromfile`)
-- `> 0` - For tessellated rasters (H3 cell ID)
-
-**Example:**
-
-<CodeFromTest code={tileStructureExamples} functionName="SQL_CELLID_NON_TESSELLATED" language="sql" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="SQL_CELLID_NON_TESSELLATED_output" />
-
-<CodeFromTest code={tileStructureExamples} functionName="SQL_CELLID_TESSELLATED" language="sql" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="SQL_CELLID_TESSELLATED_output" />
-
-### 2. raster
-
-The `raster` field contains the actual raster bytes — the full file content in memory.
-
-**All tile constructors and readers produce binary content:**
-- `rst_fromfile(path, driver)` → reads the file at `path` into **binary** bytes
-- `rst_fromcontent(content, driver)` → embeds the given **binary** bytes
-- GDAL reader → **binary** (raster bytes)
-
-**Properties:**
-- **Type**: `binary`
-- **Nullable**: No
-- **Purpose**: Self-contained raster payload carried through the plan; downstream operators
-  (`rst_clip`, `rst_transform`, ...) read and produce bytes, so there is no orphan-path risk.
-
-**Binary Format:**
-- Complete raster file (e.g. GeoTIFF) in memory
-- Can be deserialized with GDAL/rasterio
-- Typically compressed (LZW, DEFLATE, etc.)
-
-**Example:**
-
-<CodeFromTest code={tileStructureExamples} functionName="access_path_and_binary" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_path_and_binary_output" />
-
-### 3. metadata
-
-The `metadata` field contains key-value pairs describing the raster format and properties.
-
-**Properties:**
-- **Type**: `map<string,string>`
-- **Nullable**: Yes
-- **Purpose**: Provides format information needed for GDAL operations
-
-**Common Keys:**
-- `driver` - GDAL driver name (e.g., "GTiff", "NetCDF", "HDF4")
-- `extension` - File extension (e.g., ".tif", ".nc")
-- `size` - Size in bytes (as string) matching the length of the raster payload
-- Other format-specific metadata
-
-**Example:**
-
-<CodeFromTest code={tileStructureExamples} functionName="access_metadata_fields" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_metadata_fields_output" />
+:::note Reference vs. instruction
+On a **materialized** tile, `window` / `clip_polygon` / `clip_crs` / `crs` are **provenance** — a record of what was already applied to produce the bytes. On a **virtual** tile they are **instructions** — pending operations applied when the tile is read. See [Virtual Tiles](./virtual-tiles#reference-vs-instruction).
+:::
 
 ---
 
@@ -135,22 +87,38 @@ Filter tiles based on driver or other metadata:
 
 <CodeFromTest code={tileStructureExamples} functionName="filtering_by_metadata" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="filtering_by_metadata_output" />
 
+Access individual metadata keys from a tile:
+
+<CodeFromTest code={tileStructureExamples} functionName="access_metadata_fields" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_metadata_fields_output" />
+
 ### Using Tiles in Custom UDFs
 
 Access tile components for custom processing:
 
 <CodeFromTest code={tileStructureExamples} functionName="using_tiles_in_custom_udfs" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="using_tiles_in_custom_udfs_output" />
 
-### Processing Binary Raster Data
+### Materialized vs Virtual: path and raster
 
-When the `raster` field contains binary data, use it with rasterio or GDAL:
+A virtual tile has `tile.raster = null` and `tile.path` set to the source file path. A materialized tile is the opposite — `tile.raster` carries the encoded bytes and `tile.path` is null. Check both fields to classify a tile at runtime:
+
+<CodeFromTest code={tileStructureExamples} functionName="access_path_and_binary" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_path_and_binary_output" />
+
+### Tile Storage Mode
+
+`tile.path_mode` records the storage model used by a virtual tile's backing data. It is `null` for both materialized tiles and plain FUSE-path virtual tiles. Use `tile.raster is null` (or check `tile.path`) to distinguish those two cases. The field carries `"external"` for FILE EXTERNAL tiles and `"managed"` for FILE MANAGED tiles (governed lifecycle via Delta):
+
+<CodeFromTest code={tileStructureExamples} functionName="tile_path_mode_storage" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="tile_path_mode_storage_output" />
+
+When `tile.raster` contains binary data, use it with rasterio or GDAL:
 
 <CodeFromTest code={tileStructureExamples} functionName="processing_binary_raster_data" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="processing_binary_raster_data_output" />
 
 ### Comparing `rst_fromfile` vs `rst_fromcontent`
 
-Both produce tiles whose `raster` field is binary. Use `rst_fromfile` when you have a path,
-and `rst_fromcontent` when you already have bytes (e.g. from `spark.read.format("binaryFile")`).
+`rst_fromfile` takes a path and returns a **virtual** tile in the light tier (bytes-free by default; pass `materialize=True` to force bytes). `rst_fromcontent` always returns a **materialized** tile — it takes bytes you already have (e.g. from `spark.read.format("binaryFile")`) and embeds them directly.
+
+To enumerate paths from a Volume directory and decode each one in a single pipeline, compose
+`gbx_file_read` with `rst_fromfile` — see [GBX Common Functions](../common-functions).
 
 <CodeFromTest code={tileStructureExamples} functionName="comparing_fromfile_vs_fromcontent_tiles" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="comparing_fromfile_vs_fromcontent_tiles_output" />
 
@@ -176,15 +144,16 @@ Created by `rst_h3_tessellate`:
 <CodeFromTest code={tileStructureExamples} functionName="tessellated_tiles" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="tessellated_tiles_output" />
 
 **Characteristics:**
-- `cellid` contains H3 cell ID
-- Raster clipped to cell bounds
-- Enables spatial joins and grid-based processing
-- Metadata includes `RASTERX_CELL_ID` key
+- `cellid` contains the grid cell id (H3, quadbin, or BNG depending on the tessellate function used)
+- `tile.metadata["gridSystem"]` names the DGGS: `"h3"`, `"quadbin"`, or `"bng"`
+- Raster is clipped to the cell's bounds
+- Enables equi-joins with any DGGS-indexed table via `cellid` + `gridSystem` for unambiguous matching
 
 ---
 
 ## Next Steps
 
+- [Virtual Tiles](./virtual-tiles) - The virtual↔materialized model over this struct
 - [Raster Functions](./raster-functions) - Functions that work with tiles
 - [Custom UDFs](../advanced/custom-udfs) - Build custom tile processing
 - [Library Integration](../advanced/library-integration) - Use tiles with rasterio/xarray

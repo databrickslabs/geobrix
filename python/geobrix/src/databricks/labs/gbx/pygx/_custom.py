@@ -227,6 +227,20 @@ def point_to_cell_id(conf: CustomGridConf, x: float, y: float, resolution: int) 
     return get_cell_id(cell_pos, resolution)
 
 
+def point_to_cell_id_or_none(conf: CustomGridConf, x: float, y: float, resolution: int):
+    """Resolution PARAMETER still raises ValueError; NaN / out-of-bounds coordinate DATA
+    returns None so one bad row degrades to NULL."""
+    if resolution > conf.max_resolution:  # PARAMETER -> raise
+        raise ValueError(
+            f"gbx_custom: resolution ({resolution}) exceeds maximum "
+            f"resolution of {conf.max_resolution}."
+        )
+    try:
+        return point_to_cell_id(conf, x, y, resolution)  # DATA (NaN/bounds) -> None
+    except ValueError:
+        return None
+
+
 # --- cell -> geometry (CustomGridSystem.cellIdToGeometry / cellIdToCenter) ----
 
 

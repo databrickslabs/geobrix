@@ -1,0 +1,144 @@
+---
+sidebar_position: 3
+sidebar_label: Materialized Compression
+title: Materialized Compression
+---
+
+# Materialized Compression
+
+When a virtual tile becomes bytes on disk or in a Spark row — during a materialize operation, a write, or a tile format conversion — compression is applied. This page explains what GeoBrix compresses by default, how it chooses compression settings for different tile sizes, and when you might want to override the defaults.
+
+## What gets compressed
+
+A **materialized tile** carries its raster payload as encoded bytes. Those bytes flow through Spark DataFrames (each row's `tile.raster` field holds up to a few hundred megabytes) and are written to files when you persist results. At each step, GDAL's GeoTIFF codec is applied, choosing a balance of compression ratio, memory use, and encoding time.
+
+For the structure of a tile and the full virtual↔materialized lifecycle, see **[Tile Structure](./tile-structure)** and **[Virtual Tiles](./virtual-tiles)**.
+
+## GeoBrix's approach: ZSTD + dtype-matched predictor
+
+The default compression in GeoBrix is **ZSTD** paired with a **dtype-matched predictor** that reorders bytes to improve compression ratio:
+
+- **float32 / float64**: predictor 3 (horizontal differencing for floating-point data)
+- **int16 / uint16 / int32 / uint32**: predictor 2 (delta encoding for integer data)
+- **uint8 / int8**: predictor 1 (byte data; predictor adds negligible benefit)
+
+The `auto` (default) compression mode selects a **size-adaptive ZSTD level** so small tiles in Spark rows squeeze harder (higher level, negligible cost at small size) while large tiles stay lighter to protect worker memory and write time:
+
+| Decoded tile size | ZSTD level | Why |
+|---|---|---|
+| ≤ 4 MiB | 16 | Small encode cost (36–127 ms), high ratio, safe RSS |
+| 4–128 MiB | 12 | Safe across the range; write ≤ 3× baseline, RSS ≤ 1.2× |
+| 128 MiB – 1 GiB | 9 | Balances ratio and memory; large payloads need headroom |
+| > 1 GiB | 6 | OOM guard; write time is flat, memory is the constraint |
+
+This ladder is grounded by a benchmark of real encoding across codec families, sizes, and data types (see **[Evidence](#evidence-table)** below).
+
+## When `auto` is the right choice
+
+`auto` is the default and works for **nearly all cases**:
+- Tiles are compressed once at materialize or write time.
+- Readers (both in-cluster and off-cluster) decompress just-in-time, and decompression time is flat across all ZSTD levels (no cost for picking a high level).
+- The size-adaptive level protects Serverless workers from memory spikes at large payloads.
+
+Use `auto` unless you have a specific reason not to.
+
+## When to reach for other codecs
+
+**`compress="deflate"`** — For maximum portability to tools that don't support ZSTD:
+- Older GDAL versions (pre-3.1) lack ZSTD support off-cluster.
+- If you hand off files to external tools, DEFLATE is more widely supported.
+- Trade-off: DEFLATE is 2–3× slower to write than ZSTD at the same ratio, and doesn't adapt to tile size.
+
+**`compress="zstd"` with explicit `compressLevel`** — For write-once, read-many catalogs:
+- If you're building a reference dataset that will be read many times, a high fixed level (e.g. `compressLevel=19` for sizes up to 128 MiB) pays off over the lifetime of many reads.
+- Warning: levels ≥ 19 get exponentially slower to write (100–300ms per small tile) and use significant memory (100+ MiB per encode); use only on the driver or small batches.
+
+**`compress="lzw"` or `compress="none"`** — Rarely needed:
+- LZW **expands** float32 and continuous data; use only for categorical/integer classification data.
+- No compression is occasionally useful for debugging, but costs both space and downstream reading time.
+
+## Control surface: `compress` / `compressLevel` / `predictor`
+
+When writing tiles, you can override the codec and settings:
+
+```python
+# Write with the default size-adaptive ZSTD (recommended)
+df.write.format("gtiff_gbx").option("compress", "auto").save(...)
+
+# Write with DEFLATE, level 9 (maximum portability)
+df.write.format("gtiff_gbx") \
+  .option("compress", "deflate") \
+  .option("compressLevel", "9") \
+  .save(...)
+
+# Explicit ZSTD at a fixed high level (write-once catalog)
+df.write.format("gtiff_gbx") \
+  .option("compress", "zstd") \
+  .option("compressLevel", "16") \
+  .save(...)
+
+# No compression (debugging only)
+df.write.format("gtiff_gbx").option("compress", "none").save(...)
+```
+
+For `prepare_cogs` (driver-based COG preparation), pass the same options as kwargs:
+
+```python
+from databricks.labs.gbx.pyrx.core.preparer import prepare_cogs
+
+prepare_cogs(
+    input_dir,
+    output_dir,
+    compress="deflate",
+    compressLevel=9,
+    verbose=True
+)
+```
+
+The deprecated option name `cogCompression` is accepted as an alias for `compress` in the writer.
+
+## Portability: ZSTD off-cluster
+
+Cloud-Optimized GeoTIFFs prepared with ZSTD can be read on Databricks (in-cluster GDAL has ZSTD support), but **off-cluster tools may not**:
+
+- **GDAL 3.1+** (and rasterio 1.2+) supports ZSTD natively.
+- **GDAL 3.0 and earlier** will fail to open ZSTD-compressed GeoTIFFs.
+
+If you expect downstream processing by tools without ZSTD support, use `compress="deflate"` instead. The compression ratio is similar (1–2% difference), and DEFLATE is universally available.
+
+## Evidence table
+
+The following table shows popular codec combinations (none, LZW, DEFLATE, and ZSTD at levels 9–16+predictor) across realistic tile sizes and data types. The benchmark ran on macOS arm64 with GDAL 3.12 and rasterio 1.5. Sizes 256 MiB–1 GiB are extrapolated and pending Serverless validation.
+
+| Size | Codec | Dtype | Ratio | Write (ms) | Read (ms) | Peak RSS (MiB) |
+|---|---|---|---|---|---|---|
+| 1 MiB | none | float32 | 0.99× | 8 | 0.5 | 14 |
+| 1 MiB | DEFLATE z6 + p3 | float32 | 1.17× | 25 | 5.0 | 14 |
+| 1 MiB | ZSTD L9 + p3 | float32 | 1.17× | 18 | 1.8 | 24 |
+| 1 MiB | ZSTD L16 + p3 | float32 | 1.18× | 44 | 1.9 | 46 |
+| 8 MiB | none | float32 | 1.00× | 12 | 2.0 | 45 |
+| 8 MiB | DEFLATE z6 + p3 | float32 | 1.18× | 168 | 39 | 35 |
+| 8 MiB | ZSTD L9 + p3 | float32 | 1.17× | 76 | 11 | 45 |
+| 8 MiB | ZSTD L12 + p3 | float32 | 1.17× | 110 | 11 | 75 |
+| 32 MiB | none | float32 | 1.00× | 23 | 8 | 143 |
+| 32 MiB | DEFLATE z6 + p3 | float32 | 1.19× | 593 | 143 | 99 |
+| 32 MiB | ZSTD L9 + p3 | float32 | 1.19× | 234 | 40 | 109 |
+| 32 MiB | ZSTD L12 + p3 | float32 | 1.19× | 347 | 41 | 112 |
+| 128 MiB | none | float32 | 1.00× | 63 | 36 | 532 |
+| 128 MiB | DEFLATE z6 + p3 | float32 | 1.20× | 2827 | 535 | 355 |
+| 128 MiB | ZSTD L9 + p3 | float32 | 1.20× | 887 | 167 | 375 |
+| 128 MiB | ZSTD L12 + p3 | float32 | 1.20× | 1291 | 166 | 395 |
+
+**Key observations:**
+- ZSTD L9 + predictor beats or matches DEFLATE, while writing **2–3× faster** across all sizes.
+- ZSTD's compression ratio plateaus at level 9; higher levels (12, 16) add write time and memory with minimal ratio gain.
+- Read decompression time is flat across levels — no penalty for high compression.
+- LZW expands float32 data (not shown); use only for categorical integer rasters.
+
+---
+
+## Next steps
+
+- [Large Rasters](./large-rasters) — preparing COGs and understanding memory constraints
+- [Virtual Tiles](./virtual-tiles) — the virtual↔materialized lifecycle and when tiles materialize
+- [Tile Structure](./tile-structure) — the internal schema of a raster tile

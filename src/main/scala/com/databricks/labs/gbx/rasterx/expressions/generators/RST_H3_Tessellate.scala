@@ -16,7 +16,7 @@ import org.apache.spark.unsafe.types.UTF8String
   * input raster.
   */
 case class RST_H3_Tessellate(
-    tileExpr: Expression,
+    tile: Expression,
     resolutionExpr: Expression,
     modeExpr: Expression,
     exprConfExpr: Expression = ExpressionConfigExpr()
@@ -25,12 +25,12 @@ case class RST_H3_Tessellate(
       with CodegenFallback {
 
     /** Raster DataType from the tile expression. */
-    private def rasterType = RST_ExpressionUtil.rasterType(tileExpr)
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tileExpr)
+    private def rasterType = RST_ExpressionUtil.rasterType(tile)
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def position: Boolean = false
     override def inline: Boolean = false
     override def elementSchema: StructType = StructType(Array(StructField("tile", dataType)))
-    override def children: Seq[Expression] = Seq(tileExpr, resolutionExpr, modeExpr, exprConfExpr)
+    override def children: Seq[Expression] = Seq(tile, resolutionExpr, modeExpr, exprConfExpr)
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3))
 
@@ -40,7 +40,7 @@ case class RST_H3_Tessellate(
               val conf = exprConfExpr.eval(input).asInstanceOf[UTF8String]
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val rawTile = tileExpr.eval(input).asInstanceOf[InternalRow]
+              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val resolution = resolutionExpr.eval(input).asInstanceOf[Int]
               val mode = modeExpr.eval(input).asInstanceOf[UTF8String].toString
               require(
@@ -52,7 +52,8 @@ case class RST_H3_Tessellate(
               RST_ExpressionUtil.addCleanupListener(iter)
               iter
                   .map { case (newCell, resDs, resMtd) =>
-                      val tile = RasterSerializationUtil.tileToRow((newCell, resDs, resMtd), rasterType, exprConf.hConf)
+                      val augMtd = resMtd + ("gridSystem" -> "h3")
+                      val tile = RasterSerializationUtil.tileToRow((newCell, resDs, augMtd), rasterType, exprConf.hConf)
                       RasterDriver.releaseDataset(resDs)
                       InternalRow.fromSeq(Seq(tile)) // Row wrapping in generator
                   }

@@ -46,99 +46,103 @@ def register(_spark: SparkSession) -> None:
     _spark.read.format("register_ds").option("functions", "gridx.bng").load().collect()
 
 
-def bng_aswkb(cell_id: ColLike) -> Column:
+def bng_aswkb(cellid: ColLike) -> Column:
     """Return the BNG cell as Well-Known Binary.
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
 
     Returns:
         Column of WKB (binary).
     """
-    return f.call_function("gbx_bng_aswkb", _col(cell_id))
+    return f.call_function("gbx_bng_aswkb", _col(cellid))
 
 
-def bng_aswkt(cell_id: ColLike) -> Column:
+def bng_aswkt(cellid: ColLike) -> Column:
     """Return the BNG cell as Well-Known Text.
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
 
     Returns:
         Column of WKT (string).
     """
-    return f.call_function("gbx_bng_aswkt", _col(cell_id))
+    return f.call_function("gbx_bng_aswkt", _col(cellid))
 
 
-def bng_cellarea(cell_id: ColLike) -> Column:
+def bng_cellarea(cellid: ColLike) -> Column:
     """Return the area of the BNG cell in square kilometres.
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
 
     Returns:
         Column of area (double, km²).
     """
-    return f.call_function("gbx_bng_cellarea", _col(cell_id))
+    return f.call_function("gbx_bng_cellarea", _col(cellid))
 
 
-def bng_cellintersection(cell_id1: ColLike, cell_id2: ColLike) -> Column:
-    """Return the intersection of two BNG cells as geometry.
-
-    Args:
-        cell_id1: First BNG cell identifier column.
-        cell_id2: Second BNG cell identifier column.
-
-    Returns:
-        Column of geometry (WKB).
-    """
-    return f.call_function("gbx_bng_cellintersection", _col(cell_id1), _col(cell_id2))
-
-
-def bng_cellunion(cell_id1: ColLike, cell_id2: ColLike) -> Column:
-    """Return the union of two BNG cells as geometry.
+def bng_cellintersection(left_chip: ColLike, right_chip: ColLike) -> Column:
+    """Return the intersection of two BNG cell chips as a chip struct.
 
     Args:
-        cell_id1: First BNG cell identifier column.
-        cell_id2: Second BNG cell identifier column.
+        left_chip: Left BNG chip struct column.
+        right_chip: Right BNG chip struct column.
 
     Returns:
-        Column of geometry (WKB).
+        Column of chip struct (cellid, core, chip).
     """
-    return f.call_function("gbx_bng_cellunion", _col(cell_id1), _col(cell_id2))
+    return f.call_function(
+        "gbx_bng_cellintersection", _col(left_chip), _col(right_chip)
+    )
 
 
-def bng_centroid(cell_id: ColLike) -> Column:
+def bng_cellunion(left_chip: ColLike, right_chip: ColLike) -> Column:
+    """Return the union of two BNG cell chips as a chip struct.
+
+    Args:
+        left_chip: Left BNG chip struct column.
+        right_chip: Right BNG chip struct column.
+
+    Returns:
+        Column of chip struct (cellid, core, chip).
+    """
+    return f.call_function("gbx_bng_cellunion", _col(left_chip), _col(right_chip))
+
+
+def bng_centroid(cellid: ColLike) -> Column:
     """Return the centroid of the BNG cell as geometry.
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
 
     Returns:
         Column of point geometry (WKB).
     """
-    return f.call_function("gbx_bng_centroid", _col(cell_id))
+    return f.call_function("gbx_bng_centroid", _col(cellid))
 
 
-def bng_distance(cell_id1: ColLike, cell_id2: ColLike) -> Column:
+def bng_distance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Return the grid distance between two BNG cells (in cell units).
 
     Args:
-        cell_id1: First BNG cell identifier column.
-        cell_id2: Second BNG cell identifier column.
+        cellid1: First BNG cell identifier column.
+        cellid2: Second BNG cell identifier column.
 
     Returns:
         Column of long (grid distance).
     """
-    return f.call_function("gbx_bng_distance", _col(cell_id1), _col(cell_id2))
+    return f.call_function("gbx_bng_distance", _col(cellid1), _col(cellid2))
 
 
-def bng_eastnorthasbng(east: ColLike, north: ColLike, resolution: ColLike) -> Column:
+def bng_eastnorthasbng(
+    easting: ColLike, northing: ColLike, resolution: ColLike
+) -> Column:
     """Convert easting and northing to a BNG cell identifier.
 
     Args:
-        east: Easting column (metres).
-        north: Northing column (metres).
+        easting: Easting column (metres).
+        northing: Northing column (metres).
         resolution: BNG resolution — integer index ±1..±6 or string key from
             ``BNG.resolutionMap`` (e.g. ``"1km"``). NOT metres.
 
@@ -146,21 +150,21 @@ def bng_eastnorthasbng(east: ColLike, north: ColLike, resolution: ColLike) -> Co
         Column of BNG cell identifier.
     """
     return f.call_function(
-        "gbx_bng_eastnorthasbng", _col(east), _col(north), _col(resolution)
+        "gbx_bng_eastnorthasbng", _col(easting), _col(northing), _col(resolution)
     )
 
 
-def bng_euclideandistance(cell_id1: ColLike, cell_id2: ColLike) -> Column:
+def bng_euclideandistance(cellid1: ColLike, cellid2: ColLike) -> Column:
     """Return the Euclidean distance between two BNG cell centres (metres).
 
     Args:
-        cell_id1: First BNG cell identifier column.
-        cell_id2: Second BNG cell identifier column.
+        cellid1: First BNG cell identifier column.
+        cellid2: Second BNG cell identifier column.
 
     Returns:
         Column of long (distance in metres).
     """
-    return f.call_function("gbx_bng_euclideandistance", _col(cell_id1), _col(cell_id2))
+    return f.call_function("gbx_bng_euclideandistance", _col(cellid1), _col(cellid2))
 
 
 def bng_geomkloop(geom: ColLike, resolution: ColLike, k: ColLike) -> Column:
@@ -191,33 +195,33 @@ def bng_geomkring(geom: ColLike, resolution: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_bng_geomkring", _col(geom), _col(resolution), _col(k))
 
 
-def bng_kloop(cell_id: ColLike, k: ColLike) -> Column:
+def bng_kloop(cellid: ColLike, k: ColLike) -> Column:
     """Return the k-ring of cell IDs around the given cell (including centre).
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
         k: Ring distance (0 = cell itself only).
 
     Returns:
         Column of array of BNG cell identifiers.
     """
-    return f.call_function("gbx_bng_kloop", _col(cell_id), _col(k))
+    return f.call_function("gbx_bng_kloop", _col(cellid), _col(k))
 
 
-def bng_kring(cell_id: ColLike, k: ColLike) -> Column:
+def bng_kring(cellid: ColLike, k: ColLike) -> Column:
     """Return the k-loop (hollow ring) of cell IDs around the given cell.
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
         k: Ring distance.
 
     Returns:
         Column of array of BNG cell identifiers.
     """
-    return f.call_function("gbx_bng_kring", _col(cell_id), _col(k))
+    return f.call_function("gbx_bng_kring", _col(cellid), _col(k))
 
 
-def bng_pointascell(point: ColLike, resolution: ColLike) -> Column:
+def bng_pointascell(geom: ColLike, resolution: ColLike) -> Column:
     """Convert a point geometry to a BNG grid cell identifier.
 
     The point must be a Column of WKT (string) or WKB (binary) with BNG
@@ -226,7 +230,7 @@ def bng_pointascell(point: ColLike, resolution: ColLike) -> Column:
     geometry functions).
 
     Args:
-        point: Point geometry (WKT/WKB) in BNG coordinates.
+        geom: Point geometry (WKT/WKB) in BNG coordinates.
         resolution: BNG resolution — integer index ±1..±6 or string key.
 
     Returns:
@@ -235,7 +239,7 @@ def bng_pointascell(point: ColLike, resolution: ColLike) -> Column:
     Example:
         bx.bng_pointascell("POINT(400000 400000)", "1km")
     """
-    return f.call_function("gbx_bng_pointascell", _col(point), _col(resolution))
+    return f.call_function("gbx_bng_pointascell", _col(geom), _col(resolution))
 
 
 def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:
@@ -272,32 +276,32 @@ def bng_tessellate(
 # Aggregators
 
 
-def bng_cellintersection_agg(cells: ColLike) -> Column:
-    """Aggregate multiple BNG cell IDs into their intersection geometry.
+def bng_cellintersection_agg(input_chip: ColLike) -> Column:
+    """Aggregate multiple BNG cell chips into their intersection chip.
 
     Use with grouped aggregation (groupBy).
 
     Args:
-        cells: Column of array of BNG cell identifiers.
+        input_chip: Column of BNG chip structs.
 
     Returns:
-        Column of geometry (WKB).
+        Column of chip struct (cellid, core, chip).
     """
-    return f.call_function("gbx_bng_cellintersection_agg", _col(cells))
+    return f.call_function("gbx_bng_cellintersection_agg", _col(input_chip))
 
 
-def bng_cellunion_agg(cells: ColLike) -> Column:
-    """Aggregate multiple BNG cell IDs into their union geometry.
+def bng_cellunion_agg(input_chip: ColLike) -> Column:
+    """Aggregate multiple BNG cell chips into their union chip.
 
     Use with grouped aggregation (groupBy).
 
     Args:
-        cells: Column of array of BNG cell identifiers.
+        input_chip: Column of BNG chip structs.
 
     Returns:
-        Column of geometry (WKB).
+        Column of chip struct (cellid, core, chip).
     """
-    return f.call_function("gbx_bng_cellunion_agg", _col(cells))
+    return f.call_function("gbx_bng_cellunion_agg", _col(input_chip))
 
 
 # Generators
@@ -339,30 +343,30 @@ def bng_geomkringexplode(geom: ColLike, resolution: ColLike, k: ColLike) -> Colu
     )
 
 
-def bng_kloopexplode(cell_id: ColLike, k: ColLike) -> Column:
+def bng_kloopexplode(cellid: ColLike, k: ColLike) -> Column:
     """Explode the k-ring around the cell into one row per cell.
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
         k: Ring distance.
 
     Returns:
         Column of exploded BNG cell identifiers (use with explode).
     """
-    return f.explode(f.call_function("gbx_bng_kloopexplode", _col(cell_id), _col(k)))
+    return f.explode(f.call_function("gbx_bng_kloopexplode", _col(cellid), _col(k)))
 
 
-def bng_kringexplode(cell_id: ColLike, k: ColLike) -> Column:
+def bng_kringexplode(cellid: ColLike, k: ColLike) -> Column:
     """Explode the k-loop (hollow ring) around the cell into one row per cell.
 
     Args:
-        cell_id: BNG cell identifier column.
+        cellid: BNG cell identifier column.
         k: Ring distance.
 
     Returns:
         Column of exploded BNG cell identifiers (use with explode).
     """
-    return f.explode(f.call_function("gbx_bng_kringexplode", _col(cell_id), _col(k)))
+    return f.explode(f.call_function("gbx_bng_kringexplode", _col(cellid), _col(k)))
 
 
 def bng_tessellateexplode(

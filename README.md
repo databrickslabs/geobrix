@@ -1,7 +1,6 @@
 <img src="resources/images/brand/GeoBriX.png" width="50%" />
 
 [![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
-[![codecov](https://codecov.io/gh/databrickslabs/geobrix/branch/main/graph/badge.svg)](https://codecov.io/gh/databrickslabs/geobrix)
 [![documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://databrickslabs.github.io/geobrix/)
 [![scala](https://img.shields.io/badge/scala-2.13-red.svg)](https://www.scala-lang.org/)
 [![python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
@@ -16,11 +15,11 @@
   python/geobrix/src/databricks/labs/gbx/vizx/__init__.py __all__, and is excluded from the total.
   Update these badges if functions are added or removed.
 -->
-![Functions](https://img.shields.io/badge/functions-174-2e7d32)
-![RasterX](https://img.shields.io/badge/RasterX-126-1565c0)
+![Functions](https://img.shields.io/badge/functions-192-2e7d32)
+![RasterX](https://img.shields.io/badge/RasterX-129-1565c0)
 ![GridX](https://img.shields.io/badge/GridX-41-1565c0)
-![VectorX](https://img.shields.io/badge/VectorX-6-1565c0)
-![VizX](https://img.shields.io/badge/VizX-19-6a1b9a)
+![VectorX](https://img.shields.io/badge/VectorX-21-1565c0)
+![VizX](https://img.shields.io/badge/VizX-20-6a1b9a)
 ![PMTiles](https://img.shields.io/badge/PMTiles-1-1565c0)
 
 **GeoBrix** is a high-performance spatial library for Databricks that delivers the next generation of *product-augmenting* capabilities — raster, discrete global grids, and vector format I/O — and is built to drive you *deeper* into Databricks-native [`GEOMETRY`/`GEOGRAPHY` and ST/H3 functions](https://databrickslabs.github.io/geobrix/docs/databricks-spatial), not replace them. It is the modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/) (now in maintenance).
@@ -46,28 +45,27 @@ All SQL functions register with a `gbx_` prefix (e.g. `gbx_rst_clip`, `gbx_bng_c
 
 ## Supported Databricks Runtimes
 
-GeoBrix supports both current Databricks Runtime LTS releases:
+GeoBrix supports the following Databricks Runtime releases:
 
-| DBR LTS | Ubuntu | Spark | Python | Scala | Java | Serverless env | GeoBrix |
-|---|---|---|---|---|---|---|---|
-| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | **5+** (Py 3.12) | ✅ Supported |
-| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | **5+** (Py 3.12) | ✅ Supported |
+| DBR | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
+|---|---|---|---|---|---|---|
+| **17.3** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
+| **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
+| **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-A **single wheel + single JAR** runs on both: Scala 2.13.16 matches both runtimes, the JAR is compiled to Java-17 bytecode so it loads on both JVMs, and Spark is a `provided` dependency.
+A **single wheel + single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-The **Serverless env** column is the minimum Serverless environment version for the lightweight tier: **version 5+** provides Python 3.12, which the `[light]` dependencies require (Python ≥ 3.11). Older environment versions (Python 3.10) can't install `geobrix[light]`. Env v5 release notes: [AWS](https://docs.databricks.com/aws/en/release-notes/serverless/environment-version/five) · [Azure](https://learn.microsoft.com/azure/databricks/release-notes/serverless/environment-version/five) · [GCP](https://docs.databricks.com/gcp/en/release-notes/serverless/environment-version/five).
-
-> **DBR 19 LTS is coming soon**, built on **Ubuntu 26.04**. The **lightweight** tier (pure-Python, rasterio's bundled GDAL) will be unaffected; the **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so they will need to be rebuilt for the new base image.
+GeoBrix Light uses **explicit, runtime-pinned extras** — each install names the target runtime. On Serverless use `[light_env6]` (environment v6, recommended) or `[light_env5]` (env 5); on classic clusters use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]`. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation?tier=lightweight) for the full extras table.
 
 ## Quick start (lightweight)
 
-Stage the wheel (a [Releases](https://github.com/databrickslabs/geobrix/releases) artifact, not on PyPI) in a Unity Catalog Volume, then install the `[light]` extra:
+Stage the wheel (a [Releases](https://github.com/databrickslabs/geobrix/releases) artifact, not on PyPI) in a Unity Catalog Volume, then install the `[light_env6]` extra (Serverless env 6, recommended):
 
 ```python
-%pip install "geobrix[light] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
 ```
 
-> **Use the quoted `geobrix[light] @ file://…` form** (PEP 508, one argument). Don't put the extra on the path (`'/Volumes/…/…whl[light]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[light]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
+> **Use the quoted `geobrix[light_env6] @ file://…` form** (PEP 508, one argument). Don't put the extra on the path (`'/Volumes/…/…whl[light_env6]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[light_env6]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
 
 ```python
 from databricks.labs.gbx.ds.register import register   # *_gbx readers/writers

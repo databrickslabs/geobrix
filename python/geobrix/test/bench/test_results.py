@@ -281,3 +281,87 @@ def test_read_jsonl_normalizes_heavyweight_ms_shard(tmp_path):
     assert row.iter_median_s == 2.5
     assert row.iter_min_s == 2.0
     assert row.avg_wall_clock_s == 2.5
+
+
+def _row_for_new_fields(**over):
+    """A minimal valid ResultRow; override any field via kwargs."""
+    base = dict(
+        run_id="t",
+        api="lightweight",
+        fn="rst_slope",
+        category="terrain",
+        mode="spark-path",
+        tile_px=64,
+        bands=1,
+        dtype="float32",
+        srid=4326,
+        rows=10,
+        nodata_frac=0.0,
+        warmup_iters=1,
+        measured_iters=2,
+        iter_median_s=0.1,
+        iter_min_s=0.09,
+        iter_p90_s=0.11,
+        throughput_mpix_s=1.0,
+        throughput_rows_s=1.0,
+        peak_rss_mb=1.0,
+        status="ok",
+        note="",
+        env_arch="x86_64",
+        env_cpu_model="m",
+        env_cpu_count=4,
+        env_os="linux",
+        env_gbx_version="0.5.0",
+        env_gdal_version="3.11",
+        env_runtime_version="18",
+        env_where="venv",
+    )
+    base.update(over)
+    return r.ResultRow(**base)
+
+
+def test_resultrow_new_fields_default_and_roundtrip(tmp_path):
+    row = _row_for_new_fields()
+    assert row.input_tile == "materialized"
+    assert row.output_disposition == "na"
+    row2 = dataclasses.replace(row, input_tile="virtual", output_disposition="deferred")
+    p = tmp_path / "x.jsonl"
+    r.write_jsonl([row2], p)
+    back = r.read_jsonl(p)[0]
+    assert back.input_tile == "virtual"
+    assert back.output_disposition == "deferred"
+
+
+def test_resultrow_loads_legacy_row_without_new_fields(tmp_path):
+    d = dataclasses.asdict(_row_for_new_fields())
+    d.pop("input_tile")
+    d.pop("output_disposition")
+    p = tmp_path / "legacy.jsonl"
+    p.write_text(json.dumps(d) + "\n")
+    row = r.read_jsonl(p)[0]
+    assert row.input_tile == "materialized"
+    assert row.output_disposition == "na"
+
+
+def test_summarize_surfaces_disposition_and_anomalies():
+    from databricks.labs.gbx.bench.results import summarize
+
+    rows = [
+        _row_for_new_fields(
+            fn="rst_setsrid", input_tile="virtual", output_disposition="deferred"
+        ),
+        _row_for_new_fields(
+            fn="rst_slope", input_tile="virtual", output_disposition="materialized"
+        ),
+        _row_for_new_fields(
+            fn="rst_clip",
+            input_tile="virtual",
+            output_disposition="na",
+            status="error",
+            note="boom",
+        ),
+    ]
+    md = summarize(rows)
+    assert "disposition" in md.lower()
+    assert "deferred" in md and "materialized" in md
+    assert "rst_clip" in md  # anomaly surfaced

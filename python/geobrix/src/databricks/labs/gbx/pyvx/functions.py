@@ -371,30 +371,46 @@ def _registrar_groups() -> List[_register.Group]:
         "gbx_st_explainvalidity": _reg_gbx_st_explainvalidity,
     }
 
-    def _reg_cleaning(s):
+    def _reg_gbx_st_simplifypreservetopology(s):
         from . import _cleaning as _cl
-
-        def _rrp_udf(geom, tolerance=None):
-            return _cl._udf_st_removerepeatedpoints(geom, tolerance)
 
         s.udf.register(
             "gbx_st_simplifypreservetopology",
             _cl._udf_st_simplifypreservetopology,
             BinaryType(),
         )
+
+    def _reg_gbx_st_removerepeatedpoints(s):
+        from . import _cleaning as _cl
+
+        def _rrp_udf(geom, tolerance=None):
+            return _cl._udf_st_removerepeatedpoints(geom, tolerance)
+
         s.udf.register("gbx_st_removerepeatedpoints", _rrp_udf, BinaryType())
+
+    def _reg_gbx_st_reduceprecision(s):
+        from . import _cleaning as _cl
+
         s.udf.register(
             "gbx_st_reduceprecision", _cl._udf_st_reduceprecision, BinaryType()
         )
+
+    def _reg_gbx_st_node(s):
+        from . import _cleaning as _cl
+
         s.udf.register("gbx_st_node", _cl._udf_st_node, BinaryType())
+
+    def _reg_gbx_st_snap(s):
+        from . import _cleaning as _cl
+
         s.udf.register("gbx_st_snap", _cl._udf_st_snap, BinaryType())
 
     cleaning = {
-        "gbx_st_simplifypreservetopology": _reg_cleaning,
-        "gbx_st_removerepeatedpoints": _reg_cleaning,
-        "gbx_st_reduceprecision": _reg_cleaning,
-        "gbx_st_node": _reg_cleaning,
-        "gbx_st_snap": _reg_cleaning,
+        "gbx_st_simplifypreservetopology": _reg_gbx_st_simplifypreservetopology,
+        "gbx_st_removerepeatedpoints": _reg_gbx_st_removerepeatedpoints,
+        "gbx_st_reduceprecision": _reg_gbx_st_reduceprecision,
+        "gbx_st_node": _reg_gbx_st_node,
+        "gbx_st_snap": _reg_gbx_st_snap,
     }
     return [
         (lambda: _env.assert_mvt_available(), mvt),

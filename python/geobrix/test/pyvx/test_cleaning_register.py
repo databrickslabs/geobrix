@@ -1,3 +1,33 @@
+def test_cleaning_registrars_are_granular():
+    """Each cleaning name must map to a distinct registrar so register(only=[...]) is granular.
+
+    Regression guard: the previous implementation mapped all 5 names to a single shared
+    _reg_cleaning function, so register(only=["gbx_st_node"]) silently registered all 5.
+    """
+    from databricks.labs.gbx.pyvx.functions import _registrar_groups
+
+    cleaning_names = {
+        "gbx_st_simplifypreservetopology",
+        "gbx_st_removerepeatedpoints",
+        "gbx_st_reduceprecision",
+        "gbx_st_node",
+        "gbx_st_snap",
+    }
+    groups = _registrar_groups()
+    cleaning_dict = None
+    for _, group_dict in groups:
+        if cleaning_names.issubset(set(group_dict.keys())):
+            cleaning_dict = group_dict
+            break
+
+    assert cleaning_dict is not None, "cleaning group not found in _registrar_groups()"
+    registrars = [cleaning_dict[n] for n in cleaning_names]
+    assert len(set(id(fn) for fn in registrars)) == len(cleaning_names), (
+        "register(only=['gbx_st_node']) would register all 5 — each name must map to a "
+        "distinct registrar (one-name→one-registrar contract violated)"
+    )
+
+
 def test_sql_cleaning_functions(spark):
     from databricks.labs.gbx.pyvx import functions as vx
 

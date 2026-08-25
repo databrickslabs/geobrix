@@ -1,5 +1,5 @@
 ---
-sidebar_position: 10
+sidebar_position: 9
 title: Geometry Cleaning
 ---
 
@@ -20,7 +20,7 @@ vx.register(spark)
 ```
 :::
 
-Geometry *cleaning* and *normalization* act on **already-valid** geometry — geometry that passes `ST_IsValid`. This is a distinct capability from validity repair: if your geometry is invalid (self-intersections, ring topology violations, coordinate errors), fix it first with `gbx_st_makevalid` (see the [Geometry Validity](geometry-validity.mdx) page), then clean it. If your geometry is already valid, the functions on this page improve its quality: reduce redundant vertices, snap coordinates to a precision grid, resolve linework intersections, or align features to a reference.
+Geometry *cleaning* and *normalization* act on **already-valid** geometry — geometry that passes `ST_IsValid`. This is a distinct capability from validity repair: if your geometry is invalid (self-intersections, ring topology violations, coordinate errors), fix it first with `gbx_st_makevalid` (see the [Geometry Validity](./geometry-validity) page), then clean it. If your geometry is already valid, the functions on this page improve its quality: reduce redundant vertices, snap coordinates to a precision grid, resolve linework intersections, or align features to a reference.
 
 GeoBrix provides five light-tier cleaning functions:
 

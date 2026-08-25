@@ -33,7 +33,9 @@
     "raw-loader": "^4.0.2"
   },
   "overrides": {
-    "serve-handler": "6.1.6"
+    "serve-handler": "6.1.6",
+    "react-loadable-ssr-addon-v5-slorber": "1.0.1",
+    "minimatch": "3.1.2"
   },
   "browserslist": {
     "production": [

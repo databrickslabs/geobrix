@@ -3624,7 +3624,7 @@ def build_bench_notebook(cfg: dict) -> dict:
         ).format(wheel=cfg["wheel"])
     cells = [
         # Ensure BOTH fresh geobrix code AND the full [light-dbr19] dep set every run.
-        # [light-dbr19] is the classic DBR 19 variant of [light]: it drops the
+        # [light-dbr19] is the canonical protobuf-6 classic DBR 19 extra: it drops the
         # mapbox-vector-tile<2.2 cap that conflicts with DBR 19's protobuf>=6.31.1.
         _cell(_install_cell_src),
         # Cmd 3 -- the big setup cell (preamble + sink + helpers). Collapsed by default so the

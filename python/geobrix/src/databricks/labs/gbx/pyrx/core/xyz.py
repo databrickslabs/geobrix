@@ -23,7 +23,7 @@ from rasterio.warp import transform_bounds
 # to import under Databricks Serverless %pip (its immutable constraints hold
 # typing_extensions back). Keeping the import lazy means `import pyrx` — and every
 # rst_* function that does NOT use XYZ tiling — works on Serverless; only rst_tilexyz
-# / rst_xyzpyramid require rio-tiler at call time. See pyproject [light] rio-tiler pin.
+# / rst_xyzpyramid require rio-tiler at call time. See pyproject [light-base] rio-tiler pin.
 
 # --- constants (mirror heavyweight) -----------------------------------------
 MAX_ZOOM = 20

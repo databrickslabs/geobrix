@@ -8,7 +8,7 @@ GeoTIFF stack. Visualized with the `gbx.vizx` helpers throughout.
 ![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/diagrams/h3-rasterize/h3-rasterize.png)
 
 > **Lightweight tier (Serverless) by default.** The notebook uses the lightweight
-> tier — `geobrix[light,vizx]` — pure Python/PySpark bindings with no JAR or GDAL
+> tier — `geobrix[light_env6,vizx]` — pure Python/PySpark bindings with no JAR or GDAL
 > init script required. It runs on Serverless compute or a standard cluster. See
 > [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
@@ -46,8 +46,8 @@ full stack.
   lightweight default runs on Serverless. The `CREATE TEMP TABLE` materialization
   used in Step 4 requires Serverless or DBR 18.1+ — it is **not** supported on
   dedicated/single-user clusters.
-- **GeoBrix 0.4.0.** Update the `%pip install` cell to point at your staged
-  `geobrix-0.5.0-py3-none-any.whl`. The `[light,vizx]` extras install rasterio,
+- **GeoBrix 0.5.0.** Update the `%pip install` cell to point at your staged
+  `geobrix-0.5.0-py3-none-any.whl`. The `[light_env6,vizx]` extras install rasterio,
   geopandas, matplotlib, and mapclassify — no other dependencies assumed
   pre-staged.
 - **Unity Catalog Volume.** The DEM staging cell writes to

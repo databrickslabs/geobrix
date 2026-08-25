@@ -61,7 +61,7 @@ def register(_spark: SparkSession) -> None:
     # UC Volume (/Volumes/...) FUSE path in the Spark execution context -- the UC credential is held
     # only by Spark's managed Python worker -- so the canonical implementation is the pyrx Python
     # UDF, which DOES read /Volumes (and /Workspace, DBFS, local). Override the Scala registration
-    # with it when pyrx ([light]) is importable. If it is NOT present, skip gracefully and leave the
+    # with it when pyrx (a light-tier extra) is importable. If it is NOT present, skip gracefully and leave the
     # Scala gbx_rst_fromfile in place (it still reads local / DBFS / Workspace, just not /Volumes).
     try:
         from databricks.labs.gbx.pyrx.functions import (
@@ -78,7 +78,7 @@ def register(_spark: SparkSession) -> None:
         _spark.udf.register("gbx_rst_fromfile", _pyrx_fromfile_materialized_udf)
     except (
         Exception
-    ):  # noqa: BLE001 - pyrx/[light] not installed: keep the Scala fallback
+    ):  # noqa: BLE001 - pyrx/light-tier not installed: keep the Scala fallback
         pass
 
 
@@ -679,16 +679,17 @@ def rst_fromfile(path: ColLike, driver: ColLike) -> Column:
         (a ``pandas_udf``) and has no JVM/Scala implementation. On Databricks the executor JVM cannot
         read a UC Volume (``/Volumes/...``) FUSE path — the UC credential is held only by Spark's
         managed Python worker — so this delegates to ``pyrx.rst_fromfile`` and **requires
-        ``geobrix[light]``**. If ``[light]`` is not installed, this raises with guidance. The
-        portable alternative (no ``[light]``, works on every tier) is
+        a light-tier extra (e.g. ``geobrix[light_env6]``)**. If no light-tier extra is installed,
+        this raises with guidance. The portable alternative (works on every tier) is
         ``spark.read.format("binaryFile").load(path)`` + ``gbx_rst_fromcontent(content, driver)``.
     """
     try:
         from databricks.labs.gbx.pyrx import functions as _pyrx
     except ImportError as e:  # pragma: no cover
         raise ImportError(
-            "gbx_rst_fromfile is lightweight-only and requires geobrix[light] (it is implemented by "
-            "the pyrx Python reader; the JVM cannot read UC Volumes). Install geobrix[light], or use "
+            "gbx_rst_fromfile is lightweight-only and requires a light-tier extra, e.g. geobrix[light_env6] "
+            "(implemented by the pyrx Python reader; the JVM cannot read UC Volumes). "
+            "Install a light-tier extra, or use "
             "spark.read.format('binaryFile').load(path) + gbx_rst_fromcontent(content, driver)."
         ) from e
     # The heavyweight surface always yields a MATERIALIZED tile (raster bytes

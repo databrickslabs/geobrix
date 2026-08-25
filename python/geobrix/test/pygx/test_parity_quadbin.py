@@ -33,7 +33,7 @@ from pathlib import Path
 import pytest
 
 quadbin = pytest.importorskip(
-    "quadbin", reason="quadbin package not installed (geobrix[light] or [test])"
+    "quadbin", reason="quadbin package not installed (a light-tier extra or [test])"
 )
 from shapely import equals_exact, from_wkb, get_srid  # noqa: E402
 from shapely import to_wkb as _to_wkb  # noqa: E402

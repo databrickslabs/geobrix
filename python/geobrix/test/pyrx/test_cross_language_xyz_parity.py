@@ -43,7 +43,7 @@ import pytest
 # via _LIGHT_TEST_DIRS, but an explicit guard keeps the skip message clear.
 pytest.importorskip(
     "rasterio",
-    reason="rasterio not installed (geobrix[light] or [test] required)",
+    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) or [test] required)",
 )
 
 from rasterio.io import MemoryFile  # noqa: E402

@@ -49,6 +49,10 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a
 The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
 the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting
 required on Serverless.
+
+:::note Upgrading from GeoBrix 0.4.x?
+**GeoBrix 0.4.x** used a single unversioned extra: `geobrix[light]` (basic) or `geobrix[light,stac,vizx]` (with feature extras). In **0.5.0+** those bare extras are removed — every install names the target runtime explicitly. Replace `[light]` with the matching runtime extra from the table above (e.g. `[light_env6]` on Serverless, `[light_dbr19]` on classic DBR 19). Feature extras (`stac`, `vizx`, `overture`) are unchanged and still combine with the runtime extra.
+:::
 :::
 
 The lightweight tier is a single Python wheel installed with a runtime-pinned light extra (`light_env6` on Serverless, `light_dbrN` on classic) — **no init script, no JAR, no native GDAL bundle** (rasterio's bundled GDAL does the work). It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).

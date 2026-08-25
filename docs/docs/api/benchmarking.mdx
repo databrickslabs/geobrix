@@ -59,7 +59,7 @@ Provision a cluster and stage the artifacts per the [installation guide](../inst
 | Tier | Cluster | Artifacts |
 |---|---|---|
 | Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
-| Lightweight (pyrx) | x86 **or ARM** | The `[light]` wheel only |
+| Lightweight (pyrx) | x86 **or ARM** | The `[light_env6]` wheel (Serverless) or `[light_dbrN]` (classic) |
 
 Then fill in the cluster configuration file (`notebooks/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
 
@@ -1116,7 +1116,7 @@ Provision a cluster and stage the artifacts per the [installation guide](../inst
 | Tier | Cluster | Artifacts |
 |---|---|---|
 | Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
-| Lightweight (pyrx) | x86 **or ARM** | The `[light]` wheel only |
+| Lightweight (pyrx) | x86 **or ARM** | The `[light_env6]` wheel (Serverless) or `[light_dbrN]` (classic) |
 
 Then fill in the cluster configuration file (`notebooks/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
 

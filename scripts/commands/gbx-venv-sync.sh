@@ -48,7 +48,7 @@ fi
 
 # uv venvs are no-system-site-packages by default.
 uv venv "$VENV_DIR" --python "$PYTHON_VERSION" || { echo "❌ uv venv failed" >&2; exit 1; }
-uv pip install --python "$VENV_DIR/bin/python" -e "./python/geobrix[light,test]" \
+uv pip install --python "$VENV_DIR/bin/python" -e "./python/geobrix[light_env6,test]" \
     || { echo "❌ uv pip install failed" >&2; exit 1; }
 
 # Assert isolation: the venv must not see host site-packages.

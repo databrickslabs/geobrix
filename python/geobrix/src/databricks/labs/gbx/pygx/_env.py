@@ -14,9 +14,9 @@ def assert_quadbin_available() -> None:
         missing.append("shapely")
     if missing:
         raise ImportError(
-            "pygx quadbin requires the [light] extra; missing: "
+            "pygx quadbin requires a light-tier extra; missing: "
             + ", ".join(missing)
-            + ". Install with: pip install 'geobrix[light]'"
+            + ". Install with: pip install 'geobrix[light_env6]'"
         )
 
 
@@ -30,8 +30,8 @@ def assert_bng_available() -> None:
         import shapely  # noqa: F401
     except Exception:  # noqa: BLE001
         raise ImportError(
-            "pygx BNG requires the [light] extra (shapely). "
-            "Install with: pip install 'geobrix[light]'"
+            "pygx BNG requires a light-tier extra (shapely). "
+            "Install with: pip install 'geobrix[light_env6]'"
         )
 
 
@@ -45,6 +45,6 @@ def assert_custom_available() -> None:
         import shapely  # noqa: F401
     except Exception:  # noqa: BLE001
         raise ImportError(
-            "pygx custom gridding requires the [light] extra (shapely). "
-            "Install with: pip install 'geobrix[light]'"
+            "pygx custom gridding requires a light-tier extra (shapely). "
+            "Install with: pip install 'geobrix[light_env6]'"
         )

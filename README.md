@@ -55,7 +55,7 @@ GeoBrix supports the following Databricks Runtime releases:
 
 A **single wheel + single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[light]`. On Serverless use `[light_env6]` (environment v6, recommended) or `[light_env5]` (env 5); on classic clusters use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]`. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation?tier=lightweight) for the full extras table.
+GeoBrix Light uses **explicit, runtime-pinned extras** — each install names the target runtime. On Serverless use `[light_env6]` (environment v6, recommended) or `[light_env5]` (env 5); on classic clusters use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]`. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation?tier=lightweight) for the full extras table.
 
 ## Quick start (lightweight)
 

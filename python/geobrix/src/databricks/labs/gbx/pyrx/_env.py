@@ -127,6 +127,6 @@ def assert_rasterio_available() -> Tuple[str, str]:
         import rasterio
     except ImportError as e:  # pragma: no cover - exercised only without the extra
         raise ImportError(
-            "pyrx requires rasterio. Install with: pip install 'geobrix[light]'"
+            "pyrx requires rasterio. Install with: pip install 'geobrix[light_env6]'"
         ) from e
     return rasterio.__gdal_version__, rasterio.__version__

@@ -193,13 +193,13 @@ databricks = [
     "databricks-sdk",
 ]
 # Overture Maps data source (gbx.sample.overture): static-STAC catalog traversal.
-# pystac is the static-catalog reader; geopandas/pyarrow (in [light]) do parquet read.
+# pystac is the static-catalog reader; geopandas/pyarrow (in [light-base]) do parquet read.
 overture = [
     "pystac>=1.9,<2",
     "overturemaps>=0.13",
 ]
 # STAC catalog client (lightweight): distributed search + resilient download + repair.
-# Optional extra so [light] users who don't need STAC don't pull pystac/planetary-computer.
+# Optional extra so [light_env6] users who don't need STAC don't pull pystac/planetary-computer.
 stac = [
     "pystac-client>=0.7,<1",
     "planetary-computer>=1.0,<2",
@@ -207,7 +207,7 @@ stac = [
     "requests>=2.25",
     # NASA EMIT (CH4) fetch for the sample EmitDownloader — Earthdata-Login
     # authenticated (earthaccess), used by the vapor-eyes series. Lives here with
-    # the other remote-data-acquisition clients (not base [light]).
+    # the other remote-data-acquisition clients (not [light-base]).
     "earthaccess>=0.11,<1",
     # Cap the transitive botocore (earthaccess -> s3fs -> aiobotocore -> botocore)
     # to keep [stac] versionless across all supported bases. The ceiling <1.41.0
@@ -226,7 +226,7 @@ stac = [
 ]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based
-# tile simplification.  Optional so [light] users who don't visualize don't
+# tile simplification.  Optional so light-tier users who don't visualize don't
 # pull the GUI stack.  Package code imports only matplotlib + geopandas at
 # module level; anywidget, tippecanoe, and mapclassify are optional at call time.
 vizx = [

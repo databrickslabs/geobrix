@@ -74,14 +74,14 @@ resources:
             include: transformations/**
       environment:
         dependencies:
-          # Install the geobrix wheel WITH its light/stac/vizx extras in ONE pip
-          # resolution (mirrors the notebook's `%pip install geobrix[light,stac,vizx]
+          # Install the geobrix wheel WITH its light_env6/stac/vizx extras in ONE pip
+          # resolution (mirrors the notebook's `%pip install geobrix[light_env6,stac,vizx]
           # @ wheel`). Lakeflow runs one `%pip install` per dependency entry, so
           # enumerating the extras separately defeats pip's resolver — installing
           # rio-tiler after rasterio was already pinned forces a source rebuild
           # (ENVIRONMENT_PIP_INSTALL_ERROR). pip's `wheel[extras]` path form keeps it
           # a single pass and passes DAB path-normalization (no file:// colon).
-          - ${var.gbx_wheel}[light,stac,vizx]
+          - ${var.gbx_wheel}[light_env6,stac,vizx]
       configuration:
         vapor_eyes.catalog: ${var.catalog}
         vapor_eyes.schema: ${var.schema}
@@ -121,7 +121,7 @@ resources:
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
-              - ${var.gbx_wheel}[light,stac,vizx]
+              - ${var.gbx_wheel}[light_env6,stac,vizx]
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"
         timezone_id: "America/Chicago"

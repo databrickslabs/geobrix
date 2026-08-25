@@ -731,7 +731,7 @@ rst_upperleft_sql_example_output = """
 def rst_fromfile_sql_example():
     """Load raster from file path"""
     return """
--- gbx_rst_fromfile is a Python UDF (no JVM form; requires geobrix[light]). The
+-- gbx_rst_fromfile is a Python UDF (no JVM form; requires a light-tier extra, e.g. geobrix[light_env6]). The
 -- SQL call is the same 2-argument form in both tiers — the tier you register
 -- decides the result (whichever register() ran last wins):
 --   Lightweight (rx.register / pyrx):     returns a VIRTUAL tile (bytes-free,

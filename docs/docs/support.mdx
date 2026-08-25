@@ -89,7 +89,7 @@ On a Databricks Runtime 19 cluster (light tier):
 
 <CodeFromTest language="python" validationLevel="static" title="DBR 19 Reproduction Template">
 {`# Adapt the path below to your staged wheel location (see installation guide).
-%pip install "geobrix[light] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix[light_dbr19] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
 
 from databricks.labs.gbx import pyrx
 

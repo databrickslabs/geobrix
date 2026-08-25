@@ -1323,7 +1323,7 @@ Reference a raster on disk as a tile, by path.
 **Parameters:** `path` — raster file path; `driver` — GDAL driver-name hint carried into metadata (rasterio auto-detects the real format on open); `materialize` (light Python only) — `True` reads pixels now and returns a materialized tile, default `False` returns a virtual tile.
 
 :::note Tier differences — virtual vs materialized
-`gbx_rst_fromfile` is a Python UDF (requires `geobrix[light]`; **no Scala/JVM form** — the executor JVM cannot read a UC Volume `/Volumes/...` FUSE path, whose credential is held only by Spark's managed Python worker). The **SQL call is the same 2-argument form in both tiers**, but the tier that registered decides the result: the **lightweight** registration (`pyrx`) returns a **virtual** tile, the **heavyweight** registration (`rasterx`) returns a **materialized** tile (JVM/heavy callers cannot use a virtual path-only tile). Whichever `register()` ran last wins. From **Python**, pass `materialize=True` to force bytes regardless of tier. Without `[light]` the function is not registered and the Python binding raises with guidance.
+`gbx_rst_fromfile` is a Python UDF (requires a light-tier extra, e.g. `geobrix[light_env6]`; **no Scala/JVM form** — the executor JVM cannot read a UC Volume `/Volumes/...` FUSE path, whose credential is held only by Spark's managed Python worker). The **SQL call is the same 2-argument form in both tiers**, but the tier that registered decides the result: the **lightweight** registration (`pyrx`) returns a **virtual** tile, the **heavyweight** registration (`rasterx`) returns a **materialized** tile (JVM/heavy callers cannot use a virtual path-only tile). Whichever `register()` ran last wins. From **Python**, pass `materialize=True` to force bytes regardless of tier. Without a light-tier extra the function is not registered and the Python binding raises with guidance.
 :::
 
 :::caution `materialize=True` errors over the Serverless cap
@@ -1344,7 +1344,7 @@ Calling `rst_fromfile(..., materialize=True)` on a file larger than the connect-
 :::
 
 :::note Have the bytes already, or need a materialized tile? Use `rst_fromcontent`
-If you already hold raster bytes in a column (e.g. from Spark's built-in `binaryFile` reader), build the tile with [`gbx_rst_fromcontent(content, driver)`](#rst_fromcontent). Note this is **not** a lazy equivalent of `rst_fromfile` in the lightweight tier: `rst_fromcontent` takes bytes you have already read, so it always produces a **materialized** tile. (In the heavyweight tier all tiles are materialized, so there the two are interchangeable.) It also works without `geobrix[light]` and on any compute, since the `binaryFile` reader runs in Spark, which holds the Volume credential:
+If you already hold raster bytes in a column (e.g. from Spark's built-in `binaryFile` reader), build the tile with [`gbx_rst_fromcontent(content, driver)`](#rst_fromcontent). Note this is **not** a lazy equivalent of `rst_fromfile` in the lightweight tier: `rst_fromcontent` takes bytes you have already read, so it always produces a **materialized** tile. (In the heavyweight tier all tiles are materialized, so there the two are interchangeable.) It also works without a light-tier extra and on any compute, since the `binaryFile` reader runs in Spark, which holds the Volume credential:
 
 ```python
 df = (

@@ -86,7 +86,7 @@ object functions extends Serializable {
         // gbx_rst_fromfile is NOT registered here: it cannot be implemented in the JVM tier
         // (the executor JVM lacks the UC FUSE credential for /Volumes). It is registered as a
         // Python UDF in the lightweight tier (databricks.labs.gbx.rasterx.functions.register ->
-        // pyrx), accessible from Python and SQL when geobrix[light] is installed. Issue #34.
+        // pyrx), accessible from Python and SQL when a light-tier extra is installed. Issue #34.
 
         // Generators
         rd.register(RST_H3_Tessellate)

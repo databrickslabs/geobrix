@@ -49,9 +49,13 @@ from pathlib import Path
 import pytest
 
 rasterio = pytest.importorskip(
-    "rasterio", reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)"
+    "rasterio",
+    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
 )
-pytest.importorskip("shapely", reason="shapely not installed (a light-tier extra (e.g. geobrix[light_env6]) required)")
+pytest.importorskip(
+    "shapely",
+    reason="shapely not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
+)
 import numpy as np  # noqa: E402
 
 pytestmark = pytest.mark.integration

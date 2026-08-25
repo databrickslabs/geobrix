@@ -16,7 +16,8 @@ Demonstrates the gate is correctly decoded-pixel based and robust to codec-level
 import pytest
 
 rasterio = pytest.importorskip(
-    "rasterio", reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)"
+    "rasterio",
+    reason="rasterio not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
 )
 import numpy as np  # noqa: E402
 from rasterio.io import MemoryFile  # noqa: E402

@@ -4,7 +4,7 @@ WHY: The light-tier test dirs import packages whose import chain pulls in
 light-tier deps -- ``rasterio``, ``shapely``, ``h3``, ``quadbin``, ``pmtiles``,
 ``pandas``, ``numpy``, ``scipy`` -- that are NOT installed in the remote
 heavyweight CI Python environment (``requirements-ci.txt`` ships none of them;
-the lightweight CI uses ``requirements-light-ci.txt``). pytest imports a test
+the lightweight CI uses ``requirements-light-env6-ci.txt``). pytest imports a test
 module at COLLECTION time to read it, so a bare ``-m "not bench"`` marker filter
 does not help: the import (and its ``ModuleNotFoundError``) fires before the
 marker is ever seen, turning into a collection ERROR that fails the build.

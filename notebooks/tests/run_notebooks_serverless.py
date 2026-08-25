@@ -8,7 +8,7 @@ serverless notebook task.  Dependencies go in the environment spec (environment_
 pyproject.toml via tomllib) + any --extra-deps.
 
 Usage examples:
-  # Run the four Helios notebooks with defaults (extras=light,stac,vizx,overture, rich):
+  # Run the four Helios notebooks with defaults (extras=light_env6,stac,vizx,overture, rich):
   python run_notebooks_serverless.py \\
     --dir notebooks/examples/helios \\
     --extra-deps rich
@@ -50,7 +50,7 @@ ENV_KEY = "ser6"
 DEFAULT_WHEEL = (
     "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl"
 )
-DEFAULT_EXTRAS = "light,stac,vizx,overture"
+DEFAULT_EXTRAS = "light_env6,stac,vizx,overture"
 DEFAULT_ENV_VERSION = "6"
 DEFAULT_POLL_SECS = 20
 

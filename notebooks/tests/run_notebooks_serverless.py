@@ -4,7 +4,7 @@
 Each notebook is imported into the workspace (optionally with %pip/%restart_python
 cells stripped — Serverless JOB %pip fails with WSFS), then submitted as a one-time
 serverless notebook task.  Dependencies go in the environment spec (environment_version
-"5"), not %pip.  Dep list = wheel + union of requested extras' deps (read from
+"6"), not %pip.  Dep list = wheel + union of requested extras' deps (read from
 pyproject.toml via tomllib) + any --extra-deps.
 
 Usage examples:
@@ -46,12 +46,12 @@ _PYPROJECT_PATH = PROJECT_ROOT / "python" / "geobrix" / "pyproject.toml"
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-ENV_KEY = "ser5"
+ENV_KEY = "ser6"
 DEFAULT_WHEEL = (
     "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl"
 )
 DEFAULT_EXTRAS = "light,stac,vizx,overture"
-DEFAULT_ENV_VERSION = "5"
+DEFAULT_ENV_VERSION = "6"
 DEFAULT_POLL_SECS = 20
 
 # Cells whose source contains a line beginning with these magic prefixes are

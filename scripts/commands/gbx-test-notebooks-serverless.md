@@ -20,7 +20,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--extras CSV` – Geobrix extras whose deps to install (default: `light,stac,vizx,overture`).
 - `--extra-deps CSV` – Additional pip requirements (comma-separated).
 - `--wheel VOLPATH` – Volume path to the geobrix wheel.
-- `--env-version VER` – Serverless environment version (default: `5`).
+- `--env-version VER` – Serverless environment version (default: `6`).
 - `--profile PROFILE` – Databricks config profile (default: `oauth-fe` or `DATABRICKS_CONFIG_PROFILE`).
 - `--poll-secs N` – Polling interval in seconds (default: `20`).
 - `--no-strip-pip` – Do NOT strip `%pip`/`%restart_python` cells from uploaded notebooks.

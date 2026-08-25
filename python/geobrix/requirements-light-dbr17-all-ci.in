@@ -1,0 +1,21 @@
+# Source of truth for the light_dbr17_all umbrella CI lock
+# (classic DBR 17.3–18 LTS, full feature set, protobuf-5).
+# No dedicated CI job — lock exists for users who install geobrix[light_dbr17_all] or
+# geobrix[light_dbr18_all] on classic DBR 17.3 / 18 LTS.
+#
+# Regenerate (from python/geobrix/):
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#       --output-file requirements-light-dbr17-all-ci.txt requirements-light-dbr17-all-ci.in
+#
+# This .in uses a local-package-with-extra reference so uv expands [light_dbr17_all]
+# directly from pyproject.toml. The [light_dbr17_all] extra pulls [light_dbr17]+[stac]+[vizx]+[overture].
+# [light_dbr17] caps mapbox-vector-tile<2.2 (protobuf-5; classic DBR 17.3–18).
+# [light_all] (env v6 / Serverless) twin: see requirements-light-all-ci.in.
+# [light_dbr19_all] (protobuf-6 / classic DBR 19) twin: see requirements-light-dbr19-all-ci.in.
+#
+# Note: CI resolves without Serverless grpcio-status constraints; the protobuf version
+# in this lock (5.x) reflects the [light_dbr17] cap on mapbox-vector-tile, NOT a CI grpcio
+# constraint. The real runtime protobuf is set at cluster install time.
+
+# Local package — expands geobrix[light_dbr17_all] from pyproject.toml
+.[light_dbr17_all]

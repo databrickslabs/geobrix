@@ -42,7 +42,7 @@ show_help() {
     echo -e "                        (default: light,stac,vizx,overture)."
     echo -e "  ${GREEN}--extra-deps CSV${NC}      Additional pip requirements (comma-separated)."
     echo -e "  ${GREEN}--wheel VOLPATH${NC}       Volume path to the geobrix wheel."
-    echo -e "  ${GREEN}--env-version VER${NC}     Serverless environment version (default: 5)."
+    echo -e "  ${GREEN}--env-version VER${NC}     Serverless environment version (default: 6)."
     echo -e "  ${GREEN}--profile PROFILE${NC}     Databricks config profile (default: oauth-fe or"
     echo -e "                        DATABRICKS_CONFIG_PROFILE env var)."
     echo -e "  ${GREEN}--poll-secs N${NC}         Polling interval in seconds (default: 20)."

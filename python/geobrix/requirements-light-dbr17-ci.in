@@ -1,20 +1,17 @@
-# Source of truth for the light-tier CI job's Python deps (Serverless env v6 / current).
-# Consumed by .github/actions/pyrx_build via:
-#   pip install --require-hashes -r python/geobrix/requirements-light-ci.txt
+# Source of truth for the classic DBR 17.3–18 LTS light-tier Python deps (protobuf-5).
+# This is the profile `light` had before 0.5.0; the 0.5.0+ Serverless (env v6) profile
+# is requirements-light-ci.in (protobuf-6). No dedicated CI job — lock exists for users
+# of classic DBR 17.3 / 18 LTS who install geobrix[light_dbr17] or geobrix[light_dbr18].
 #
 # Regenerate the hash-pinned lock alongside any edit:
 #   cd python/geobrix
 #   uv pip compile --generate-hashes --python-version 3.12 \
-#       --output-file requirements-light-ci.txt requirements-light-ci.in
-#
-# `light` = current Databricks Serverless environment (env v6 for the 0.5.0 release);
-# advance per release. Classic clusters use geobrix[light_dbr17/18/19] instead.
-# Classic DBR 17/18 (protobuf-5) variant: see requirements-light-dbr17-ci.in.
+#       --output-file requirements-light-dbr17-ci.txt requirements-light-dbr17-ci.in
 #
 # Unlike requirements-ci.txt (heavyweight), this lock needs NO GDAL exception:
 # the lightweight API uses rasterio's bundled-GDAL binary wheel, which is itself
 # hash-pinned here. There is no separate native GDAL install and no JAR.
-# Versions track Serverless env v6 / the dev container
+# Versions track classic DBR 17.3 LTS / the dev container
 # (requirements-dev-container.in) where applicable; bump in lockstep and regenerate the lock.
 
 # --- build backend (for `python -m build` lightweight wheel) ---
@@ -61,7 +58,6 @@ pyogrio==0.12.1
 pyproj==3.7.2
 
 # --- MVT (light pyvx) decode oracle used in test/pyvx/ ---
-# Serverless env v6 / protobuf-6: no <2.2 cap; >=2.2.0 already selected by the existing test oracle pin.
 mapbox-vector-tile==2.2.0
 
 # --- discrete global grids: raster->H3/quadbin aggregation ---
@@ -86,11 +82,6 @@ netcdf4==1.7.2
 # match requirements-dev-container.in. ---
 requests==2.32.3
 tenacity==9.1.4
-# Cap idna to the dogfood serverless env-v6 base (3.11): uncapped it floats to the
-# latest (3.19) and shadows the base, firing the "a core package changed: idna" notice.
-# Mirrors the [light] pyproject pin (idna<3.12). Confirmed 2026-08-23: env v6 ships
-# idna 3.11; cap <3.12 silences the notice. idna 3.x is API-stable so this is cosmetic.
-idna<3.12
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
 # Runtime-only for the real EMIT path; unit tests inject a fake. Keep in lockstep
 # with the [stac] pyproject extra + requirements-dev-container.in.

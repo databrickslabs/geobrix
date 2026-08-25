@@ -7,6 +7,8 @@ import VizXIcon from '../../../resources/images/brand/VizX.png';
 
 # <img src={VizXIcon} alt="VizX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> VizX
 
+## Overview
+
 `databricks.labs.gbx.vizx` renders rasters and turns Spark DataFrames into GeoDataFrames for interactive maps. It is **tier-agnostic** — the raster plotters take tile bytes (use them with `pyrx` *or* `rasterx` tiles), and the vector adapters take any Spark DataFrame.
 
 These are driver-side, single-node helpers for inspecting results in a notebook — not distributed operations. They collect to the driver, so the vector adapters guard the collect with `max_rows`.
@@ -14,6 +16,15 @@ These are driver-side, single-node helpers for inspecting results in a notebook 
 :::note Opt-in extra
 `gbx.vizx` requires `geobrix[vizx]`, which pulls in `matplotlib`, `geopandas`, `folium`, and `mapclassify`. The package itself imports only `matplotlib` (raster rendering) and `geopandas` (the GeoDataFrame adapters); `folium` + `mapclassify` are used by `plot_interactive` / `GeoDataFrame.explore()` for interactive maps.
 :::
+
+## Key Features
+
+- **Raster plotting** — `plot_raster` / `plot_file` render tile bytes or files (single-band, RGB, percentile stretch, coverage-depth, and mask-layer composites)
+- **VRT mosaic rendering** — `plot_mosaic` renders a whole mini-COG VRT mosaic (from the `cog_gbx` `vrtMosaic` writer) as one memory-safe georeferenced image, with a bbox viewport and an optional h3 cell overlay
+- **DataFrame → GeoPandas adapters** — `as_gdf` / `cells_as_gdf` / `grid_as_gdf` turn Spark geometry, H3-cell, and gridspec DataFrames into GeoDataFrames for `.plot()` / `.explore()`
+- **Multi-layer compositor** — `plot_static` / `plot_interactive` overlay vector, raster, grid, and PMTiles layers in a single map
+- **PMTiles & COG viewers** — `plot_pmtiles`, `plot_cog`, and `pmtiles_info` inspect and render archives inline
+- **Tier-agnostic, Python-only** — works with `pyrx` or `rasterx` tiles; a driver-side notebook helper, not a SQL/Spark package
 
 ## Installation
 
@@ -38,6 +49,7 @@ from databricks.labs.gbx.vizx import (
     plot_interactive,
     plot_pmtiles,
     plot_cog,
+    plot_mosaic,
     as_gdf,
     cells_as_gdf,
     grid_as_gdf,
@@ -52,7 +64,7 @@ from databricks.labs.gbx.pmtiles import pmtiles_info
 | [Multi-Layer Compositor](./vizx-layers) | `plot_static` / `plot_interactive` with multiple layers; embed-size ladder; audit; simplify | Overlaying vector, raster, grid, and PMTiles layers in one map |
 | [PMTiles Viewers](./vizx-pmtiles) | `pmtiles_info`, `plot_pmtiles`, `plot_cog` | Inspecting and rendering PMTiles archives and COGs inline |
 | [Vector](./vizx-vector) | `plot_interactive` (single-layer), `plot_static` (single-layer), `as_gdf`, `cells_as_gdf`, `grid_as_gdf` | Interactive and static single-layer maps; converting DataFrames to GeoDataFrames |
-| [Raster](./vizx-raster) | `plot_raster`, `plot_file`, `plot_mask_layers`, escape hatches | Rendering raster tiles from bytes or disk |
+| [Raster](./vizx-raster) | `plot_raster`, `plot_file`, `plot_mask_layers`, `plot_mosaic`, escape hatches | Rendering raster tiles from bytes or disk, and whole VRT mosaics |
 
 ## Next steps
 

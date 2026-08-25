@@ -23,10 +23,11 @@ Complete reference for all GridX discrete-global-grid functions — CARTO Quadbi
 
 ## Overview
 
-GridX is GeoBrix's discrete-global-grid indexing package. As of v0.4.0 it ships two grid systems: **CARTO quadbin v0** for web-mercator-aligned global indexing and **British National Grid (BNG)** for Great Britain workloads.
+GridX is GeoBrix's discrete-global-grid indexing package. It ships **CARTO quadbin v0** for web-mercator-aligned global indexing, **British National Grid (BNG)** for Great Britain workloads, and **custom user-defined grids** — and pairs with the product's native H3 for global hex indexing.
 
 - **Quadbin (CARTO v0)** — a global zoom-indexed tile addressing scheme aligned with web-mercator slippy maps, compatible with CARTO's CDB_QuadKey IDs. Cell `(z, x, y)` coordinates align with the same XYZ tile grid that PMTiles / MVT readers consume — natural for slippy-map heatmaps and global analytics.
 - **BNG (British National Grid)** — the Ordnance Survey National Grid (OSGB36) used in Great Britain for spatial indexing and location-based services. Specialized for UK-based spatial data.
+- **Custom user-defined grids** — define a regional or equal-area grid and get cell math, polyfill, and tessellation on it.
 
 :::note Registration and import paths
 - Quadbin: `databricks.labs.gbx.gridx.quadbin` (Python) / `com.databricks.labs.gbx.gridx.quadbin` (Scala)
@@ -44,6 +45,7 @@ Use `RegisterBatch` with `functions=gridx.quadbin` or `functions=gridx.bng` to r
 - **Multi-Resolution Support**: Work with different grid resolutions (BNG: 1–6 integer indices; Quadbin: zoom 0..26)
 - **K-Ring / K-Loop Neighbourhoods**: Filled rings and hollow rings for both grid systems
 - **Polyfill and Tessellation**: Cover geometries with cells; tessellation returns per-cell clipped chip geometries
+- **Custom Grids**: Define your own regional or equal-area grid systems (cell math, polyfill, tessellation)
 
 ## Setup {#setup}
 

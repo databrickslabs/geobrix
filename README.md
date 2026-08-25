@@ -35,11 +35,12 @@
 
 ## Packages
 
-<img src="resources/images/brand/RasterX.png" width="18%" /> <img src="resources/images/brand/GridX.png" width="18%" /> <img src="resources/images/brand/VectorX.png" width="18%" />
+<img src="resources/images/brand/RasterX.png" width="18%" /> <img src="resources/images/brand/GridX.png" width="18%" /> <img src="resources/images/brand/VectorX.png" width="18%" /> <img src="resources/images/brand/VizX.png" width="18%" />
 
-- **[RasterX](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)** — raster I/O and analytics (gap-filling; the platform has no built-in raster). **Both tiers** — lightweight `pyrx` and heavyweight Scala.
-- **[GridX](https://databrickslabs.github.io/geobrix/docs/api/gridx-functions)** — BNG, Quadbin, and custom grids (pairs with native H3 for global hex). **Both tiers** — lightweight `pygx` and heavyweight Scala.
-- **[VectorX](https://databrickslabs.github.io/geobrix/docs/api/vectorx-functions)** — MVT tiles, TIN surfaces, and legacy-geometry migration on top of native ST. **Both tiers** — lightweight `pyvx` and heavyweight Scala.
+- **[RasterX](https://databrickslabs.github.io/geobrix/docs/api/raster-functions)** — full-spectrum raster I/O and analytics (gap-filling; the platform has no built-in raster): reprojection, terrain, spectral indices, XYZ/PMTiles tiling, and H3/quadbin/BNG aggregation, plus **virtual tiles** and a **COG-preparation lane** for memory-safe processing of multi-gigabyte rasters. **Both tiers** — lightweight `pyrx` and heavyweight Scala.
+- **[GridX](https://databrickslabs.github.io/geobrix/docs/api/gridx-functions)** — discrete global grids: British National Grid, CARTO quadbin, and custom user-defined grids — cell math, k-ring/k-loop, polyfill, tessellation, and grid-aware aggregation (pairs with native H3 for global hex). **Both tiers** — lightweight `pygx` and heavyweight Scala.
+- **[VectorX](https://databrickslabs.github.io/geobrix/docs/api/vectorx-functions)** — vector operations that augment the native ST functions: MVT tile encoding, TIN elevation surfaces, authority-string CRS transforms, antimeridian handling, and distributed-shapely geometry validity, cleaning & coverage-validity, plus legacy-geometry migration. **Both tiers** — lightweight `pyvx` and heavyweight Scala.
+- **[VizX](https://databrickslabs.github.io/geobrix/docs/api/vizx)** — tier-agnostic notebook visualization: render raster tiles/files, whole VRT mosaics (`plot_mosaic`), and PMTiles/COG archives, and turn Spark geometry/H3-cell/grid DataFrames into GeoPandas for static & interactive maps. **Python-only** (no SQL); works with either tier.
 
 All SQL functions register with a `gbx_` prefix (e.g. `gbx_rst_clip`, `gbx_bng_cellarea`, `gbx_st_asmvt`) so usage is clearly attributable to GeoBrix on classic compute. Python/Scala bindings mirror the names. See [benchmarks](https://databrickslabs.github.io/geobrix/docs/api/benchmarking) for light-vs-heavy timings. 
 

@@ -53,7 +53,7 @@ function HomepageFeatures() {
         <div className="row">
           <Feature
             title="RasterX"
-            description="Satellite imagery, elevation models, and gridded data — reprojection, terrain analysis, spectral indices, XYZ/PMTiles tiling, and H3/quadbin aggregation. In large part, distributed rasterio + best-of-breed raster packages."
+            description="Satellite imagery, elevation models, and gridded data — reprojection, terrain analysis, spectral indices, XYZ/PMTiles tiling, and H3/quadbin aggregation. Virtual tiles and a COG-preparation lane process multi-gigabyte rasters memory-safely. In large part, distributed rasterio + best-of-breed raster packages."
             link="/docs/api/raster-functions"
           />
           <Feature
@@ -63,7 +63,7 @@ function HomepageFeatures() {
           />
           <Feature
             title="VectorX"
-            description="Mapbox Vector Tile encoding, TIN elevation surfaces, and legacy Mosaic geometry migration to Databricks spatial types."
+            description="Vector operations that augment the native ST functions — Mapbox Vector Tile encoding, TIN elevation surfaces, authority-string CRS transforms, antimeridian handling, and distributed-shapely geometry validity, cleaning, and coverage-validity."
             link="/docs/api/vectorx-functions"
           />
         </div>

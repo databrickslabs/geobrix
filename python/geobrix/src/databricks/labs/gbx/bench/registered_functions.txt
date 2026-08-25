@@ -191,3 +191,5 @@ gbx_st_reduceprecision
 gbx_st_removerepeatedpoints
 gbx_st_simplifypreservetopology
 gbx_st_snap
+gbx_st_coverageisvalid
+gbx_st_coverageinvalidedges

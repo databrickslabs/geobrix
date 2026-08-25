@@ -15,7 +15,7 @@ import pandas as pd
 from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udtf
-from pyspark.sql.types import BinaryType, StringType
+from pyspark.sql.types import BinaryType, BooleanType, StringType
 
 from databricks.labs.gbx import _register
 
@@ -48,6 +48,28 @@ def _asmvt_udf(geom: pd.Series, attrs: pd.Series, layer: pd.Series) -> bytes:
         {"geometry": g, "properties": a} for g, a in zip(geom, attrs) if g is not None
     ]
     return _mvt.encode_layer(feats, layer_name=layer_name)
+
+
+@pandas_udf(BooleanType())
+def _coverageisvalid_udf(geom: pd.Series, gap_width: pd.Series) -> bool:
+    """Grouped-agg: is this group's polygon set a valid coverage?"""
+    from . import _coverage as _cov
+
+    gw = 0.0
+    if gap_width is not None and len(gap_width) > 0 and gap_width.iloc[0] is not None:
+        gw = float(gap_width.iloc[0])
+    return _cov.coverage_is_valid_agg(list(geom), gw)
+
+
+@pandas_udf(BinaryType())
+def _coverageinvalidedges_udf(geom: pd.Series, gap_width: pd.Series) -> bytes:
+    """Grouped-agg: union of this coverage's invalid edges (EWKB; empty when clean)."""
+    from . import _coverage as _cov
+
+    gw = 0.0
+    if gap_width is not None and len(gap_width) > 0 and gap_width.iloc[0] is not None:
+        gw = float(gap_width.iloc[0])
+    return _cov.coverage_invalid_edges_agg(list(geom), gw)
 
 
 def _legacyaswkb_impl(geom):
@@ -412,6 +434,17 @@ def _registrar_groups() -> List[_register.Group]:
         "gbx_st_node": _reg_gbx_st_node,
         "gbx_st_snap": _reg_gbx_st_snap,
     }
+
+    def _reg_gbx_st_coverageisvalid(s):
+        s.udf.register("gbx_st_coverageisvalid", _coverageisvalid_udf)
+
+    def _reg_gbx_st_coverageinvalidedges(s):
+        s.udf.register("gbx_st_coverageinvalidedges", _coverageinvalidedges_udf)
+
+    coverage = {
+        "gbx_st_coverageisvalid": _reg_gbx_st_coverageisvalid,
+        "gbx_st_coverageinvalidedges": _reg_gbx_st_coverageinvalidedges,
+    }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
         (lambda: _env.assert_legacy_available(), legacy),
@@ -421,6 +454,7 @@ def _registrar_groups() -> List[_register.Group]:
         (lambda: True, antimeridian),
         (lambda: True, validity),
         (lambda: True, cleaning),
+        (lambda: True, coverage),
     ]
 
 
@@ -781,3 +815,43 @@ def st_snap(geom: ColLike, reference: ColLike, tolerance: ColLike) -> Column:
         BINARY column: EWKB geometry with snapped vertices.
     """
     return f.call_function("gbx_st_snap", _col(geom), _col(reference), _col(tolerance))
+
+
+def st_coverageisvalid(geom: ColLike, gap_width: float = 0.0) -> Column:
+    """Column (grouped-agg): valid-coverage boolean over the grouped polygon set."""
+    return _coverageisvalid_udf(_col(geom), f.lit(gap_width))
+
+
+def st_coverageinvalidedges(geom: ColLike, gap_width: float = 0.0) -> Column:
+    """Column (grouped-agg): union of the coverage's invalid edges (BINARY)."""
+    return _coverageinvalidedges_udf(_col(geom), f.lit(gap_width))
+
+
+def coverage_simplify(
+    df,
+    group_col,
+    geom_col,
+    tolerance,
+    simplify_boundary=True,
+    out_col="geom_simplified",
+):
+    """Topology-preserving simplification of a whole coverage (Python-API only).
+
+    Groups df by group_col and simplifies each coverage together (shared edges stay
+    shared). N rows in -> N rows out; every input column preserved, EWKB written to
+    out_col. Serverless-safe (groupBy().applyInPandas()).
+    """
+    from pyspark.sql.types import StructField, StructType
+
+    from . import _coverage as _cov
+
+    out_schema = StructType(
+        list(df.schema.fields) + [StructField(out_col, BinaryType(), True)]
+    )
+
+    def _fn(pdf):
+        return _cov.coverage_simplify_pdf(
+            pdf, geom_col, tolerance, simplify_boundary, out_col
+        )
+
+    return df.groupBy(group_col).applyInPandas(_fn, schema=out_schema)

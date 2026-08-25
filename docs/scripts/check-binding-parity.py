@@ -50,6 +50,9 @@ PYTHON_REGISTERED = {
     "gbx_st_snap",
     "gbx_st_split",
     "gbx_st_wrapx",
+    # coverage validity (light-only)
+    "gbx_st_coverageisvalid",
+    "gbx_st_coverageinvalidedges",
 }
 
 # `override def name: String = "gbx_..."` — the canonical SQL name a companion registers under.

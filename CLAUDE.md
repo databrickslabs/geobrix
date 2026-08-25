@@ -4,11 +4,11 @@ This file is the entry point for any Claude (or Cursor) session in this repo. Us
 
 ## Project
 
-**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3 LTS or 18 LTS). Current version **0.5.0** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
+**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.5.0** (beta). APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
 
 Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
 
-Current branch: `beta/0.4.0`. Repo: `databrickslabs/geobrix`.
+Current branch: `beta/0.5.0`. Repo: `databrickslabs/geobrix`.
 
 ## Working patterns in this repo
 
@@ -67,7 +67,7 @@ These facts have been painfully rediscovered by multiple agents. Follow them; do
   - `gbx:test:notebooks` — runs notebooks **cell-by-cell inside the `geobrix-dev` Docker container** (fully local, `/Volumes` mounted, no workspace). Best for a quick "does it render/run" check.
   - If a command lacks a capability, **fix the command** (add an option) — don't write a one-off script.
 - **Staging on dogfood** (a non-account-admin identity is assumed): wheels/data → the Volume **`/Volumes/geospatial_docs/geobrix/sample-data/`** via SDK `files.upload` (streaming). The configured `GBX_ARTIFACT_VOLUME` default (`…/gdal_artifacts/noble/geobrix`) **does not exist on dogfood** and returns a *misleading* `PermissionDenied: … not account admin` — that's a missing-schema error, not a real block. Notebooks → WSFS **`/Users/<you>/GeoBrix/<fresh dated subfolder>`** (dogfood aggressively GCs old notebooks). **Import a notebook with `w.workspace.import_(path, format=ImportFormat.JUPYTER, content=base64(nb_bytes), overwrite=True)` after `w.workspace.mkdirs(parent)`** — this classic `/api/2.0/workspace/import` endpoint WORKS for a non-admin (it errors `ResourceDoesNotExist` if the parent folder is absent — hence the mkdirs). Do **NOT** use the `w.workspace.upload()` SDK mixin — *that* routes through the gated path and returns the misleading "not account admin" error (the mistake that made past sessions conclude "import is impossible"). `gbx:test:notebooks-serverless` already does the `import_` for you. `files.download`/`files.list` are gated — read job results via `jobs.get_run_output(task_run_id).notebook_output.result`, never `files.download`.
-- **Notebook `%pip` install of the wheel** — ALWAYS `@ file:///Volumes/…/geobrix-<ver>-py3-none-any.whl` **with the extra** (`light` for Serverless v6; `light_dbr17` / `light_dbr18` / `light_dbr19` for classic DBR 17.3 / 18 / 19). In 0.5.0, `light` targets Serverless v6 — `oauth-fe` is still on v5 during its upgrade window, so use `light` there too (it installs, though optimized for v6):
+- **Notebook `%pip` install of the wheel** — ALWAYS `@ file:///Volumes/…/geobrix-<ver>-py3-none-any.whl` **with the extra** (`light_env6` for Serverless env 6 / `light_env5` for Serverless env 5; `light_dbr17` / `light_dbr18` / `light_dbr19` for classic DBR 17.3 / 18 / 19):
   - **INTERACTIVE** (refresh a live session) — two steps: `--no-deps --force-reinstall "geobrix[EXTRA] @ file://…"` then the same line with no flags, then `restartPython()`. (`--force-reinstall` is needed to swap fresh bytes of an already-installed *same-version* wheel — `--no-cache-dir` alone won't; `--no-deps` is what keeps force-reinstall from touching pyspark/preinstalled deps.)
   - **JOB** (non-interactive, fresh kernel) — a single **plain** install, NO flags.
   - **Never `--force-reinstall` WITHOUT `--no-deps`** — that reinstalls pyspark/other preinstalled packages (serverless hard-fails `violate preinstalled package pyspark==…`; classic `Failure starting repl`). **Never a bare `geobrix[EXTRA]`** without `@ file://` — it resolves from PyPI and downgrades idna/protobuf → the kernel won't restart.

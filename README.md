@@ -51,23 +51,21 @@ GeoBrix supports the following Databricks Runtime releases:
 |---|---|---|---|---|---|---|
 | **17.3** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
 | **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
-| **19** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported (light tier) |
+| **19** | 24.04 | 4.2.0 | 3.12.3 | 2.13.18 | 21 | ✅ Supported |
 
-A **single wheel + single JAR** runs on both 17.3 and 18: Scala 2.13.16 matches both runtimes, the JAR is compiled to Java-17 bytecode so it loads on both JVMs, and Spark is a `provided` dependency.
+A **single wheel + single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-GeoBrix Light is **Serverless-first** — the `[light]` extra targets the latest Serverless environment (**currently v6** in GeoBrix 0.5.0). On classic clusters, use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]` to match the runtime. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation?tier=lightweight) for the full extras table.
-
-> **DBR 19** (Ubuntu 26.04) is now supported by the **lightweight** tier (✅ in the table above). The **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so heavyweight on DBR 19 requires a GDAL rebuild for the new base image — not yet available.
+GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[light]`. On Serverless use `[light_env6]` (environment v6, recommended) or `[light_env5]` (env 5); on classic clusters use `[light_dbr17]`, `[light_dbr18]`, or `[light_dbr19]`. See [Installation](https://databrickslabs.github.io/geobrix/docs/installation?tier=lightweight) for the full extras table.
 
 ## Quick start (lightweight)
 
-Stage the wheel (a [Releases](https://github.com/databrickslabs/geobrix/releases) artifact, not on PyPI) in a Unity Catalog Volume, then install the `[light]` extra:
+Stage the wheel (a [Releases](https://github.com/databrickslabs/geobrix/releases) artifact, not on PyPI) in a Unity Catalog Volume, then install the `[light_env6]` extra (Serverless env 6, recommended):
 
 ```python
-%pip install "geobrix[light] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl"
 ```
 
-> **Use the quoted `geobrix[light] @ file://…` form** (PEP 508, one argument). Don't put the extra on the path (`'/Volumes/…/…whl[light]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[light]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
+> **Use the quoted `geobrix[light_env6] @ file://…` form** (PEP 508, one argument). Don't put the extra on the path (`'/Volumes/…/…whl[light_env6]'`) — on Serverless, `%pip` keeps the surrounding quotes and pip reads `[light_env6]` as part of the filename, failing with *"Expected package name at the start of dependency specifier."* The named form installs cleanly on Serverless, standard/shared, and ARM.
 
 ```python
 from databricks.labs.gbx.ds.register import register   # *_gbx readers/writers

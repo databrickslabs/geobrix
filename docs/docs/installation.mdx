@@ -14,15 +14,15 @@ GeoBrix offers two execution tiers with different installation paths. See [Choos
 
 ## Supported Databricks Runtimes
 
-GeoBrix supports both current Databricks Runtime LTS releases:
+GeoBrix supports the following Databricks Runtime releases:
 
-| DBR LTS | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
+| DBR | Ubuntu | Spark | Python | Scala | Java | GeoBrix |
 |---|---|---|---|---|---|---|
-| **17.3 LTS** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
-| **18 LTS** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
-| **19 LTS** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported (light tier) |
+| **17.3** | 24.04 | 4.0.0 | 3.12.3 | 2.13.16 | 17 | ✅ Supported |
+| **18** | 24.04 | 4.1.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported |
+| **19** | 26.04 | 4.2.0 | 3.12.3 | 2.13.16 | 21 | ✅ Supported (light tier) |
 
-A **single wheel + single JAR** runs on both 17.3 and 18 LTS: Scala 2.13.16 matches both runtimes, the JAR is compiled to Java-17 bytecode so it loads on both JVMs, and Spark is a `provided` dependency.
+A **single wheel + single JAR** runs on both 17.3 and 18: Scala 2.13.16 matches both runtimes, the JAR is compiled to Java-17 bytecode so it loads on both JVMs, and Spark is a `provided` dependency.
 
 GeoBrix Light is **Serverless-first** — the `[light]` extra targets the latest Serverless environment (**currently v6** in GeoBrix 0.5.0). Serverless is a single moving target, so it is a version note rather than a table row.
 
@@ -30,8 +30,8 @@ GeoBrix Light is **Serverless-first** — the `[light]` extra targets the latest
 **GeoBrix 0.5.x on Serverless requires the v6 environment.** Set your Serverless environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job.
 :::
 
-:::note DBR 19 LTS — heavy tier coming soon
-**DBR 19 LTS** (Ubuntu 26.04) is now supported by the **lightweight** tier. The **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so heavyweight on DBR 19 requires a GDAL rebuild for the new base image — not yet available.
+:::note DBR 19 — heavy tier coming soon
+**DBR 19** (Ubuntu 26.04) is now supported by the **lightweight** tier. The **heavyweight** tier's native GDAL/OGR libraries are compiled against the cluster OS, so heavyweight on DBR 19 requires a GDAL rebuild for the new base image — not yet available.
 :::
 
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
@@ -131,9 +131,9 @@ The heavyweight tier needs the Scala JAR + a cluster init script that installs n
 
 The following prerequisites apply to the **heavyweight** tier.
 
-- **Databricks Runtime 17.3 LTS or 18 LTS.** The init script's pinned GDAL
-  package targets the Ubuntu 24.04 (`noble`) base shared by both DBR 17.3 LTS
-  and DBR 18 LTS, so one init script covers both; other runtimes use different
+- **Databricks Runtime 17.3 or 18.** The init script's pinned GDAL
+  package targets the Ubuntu 24.04 (`noble`) base shared by both DBR 17.3
+  and DBR 18, so one init script covers both; other runtimes use different
   bases and will either fail to install or silently fall back to an unpinned GDAL.
 - Classic Databricks cluster (not Serverless).
 - **Non-ARM instance type (Intel or AMD x86_64).** The GDAL bundle ships
@@ -338,7 +338,7 @@ The init script installs GDAL from a CI-built bundle staged in your Unity Catalo
 1. **Tarball sha256 mismatch** — the script exits with a `sha256sum: WARNING: 1 computed checksum did NOT match` error. The tarball in `VOL_DIR` doesn't match the sidecar staged alongside it: either an upload was truncated, the wrong tarball was uploaded, or the sidecar is stale. Re-download both the tarball and the `.sha256` sidecar from the GeoBrix [release page](https://github.com/databrickslabs/geobrix/releases) and re-upload as a pair.
 2. **No `*.tar.gz.sha256` sidecar found** — the operator uploaded the tarball but not its sidecar (or vice versa). Both must be present in `VOL_DIR`. If multiple sidecars are present, the script refuses to install — keep only the active version.
 3. **Unsupported architecture** — the script exits with `Unsupported architecture: arm64` or similar. The bundle ships `amd64` / `x86_64` `.deb`s only (Intel or AMD CPUs). Choose a non-ARM instance type for the cluster.
-4. **DBR base image mismatch** — the script targets the Ubuntu 24.04 (`noble`) base shared by both DBR 17.3 LTS and DBR 18 LTS.
+4. **DBR base image mismatch** — the script targets the Ubuntu 24.04 (`noble`) base shared by both DBR 17.3 and DBR 18.
 5. **General checks** — confirm the init script ran successfully (driver logs) and that `libgdalalljni.so` is in `/usr/lib` on the driver and executors. The script's tail-of-log section prints the installed `libgdal*` / `libproj*` / `libgeos*` versions — compare against `PACKAGES.txt` inside the tarball to confirm the cluster is on the expected versions.
 
 #### Reading init logs when the cluster fails to launch

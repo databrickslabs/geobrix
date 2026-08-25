@@ -58,7 +58,9 @@ pyogrio==0.12.1
 pyproj==3.7.2
 
 # --- MVT (light pyvx) decode oracle used in test/pyvx/ ---
-mapbox-vector-tile==2.2.0
+# MUST match pyproject [light_dbr17]: mapbox-vector-tile>=2.1,<2.2 (protobuf-5 cap).
+# 2.2+ pulls protobuf>=6.31.1; classic DBR 17.3/18 ships protobuf 5.x.
+mapbox-vector-tile==2.1.0
 
 # --- discrete global grids: raster->H3/quadbin aggregation ---
 h3==4.4.2
@@ -82,6 +84,9 @@ netcdf4==1.7.2
 # match requirements-dev-container.in. ---
 requests==2.32.3
 tenacity==9.1.4
+# MUST match pyproject [light_dbr17]: idna<3.8 (DBR 17.3/18 base is idna 3.7).
+# Uncapped, pip floats idna to 3.19; cap <3.8 keeps it at the DBR 17/18 base version.
+idna<3.8
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
 # Runtime-only for the real EMIT path; unit tests inject a fake. Keep in lockstep
 # with the [stac] pyproject extra + requirements-dev-container.in.

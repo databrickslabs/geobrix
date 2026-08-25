@@ -1667,35 +1667,21 @@
       ]
     },
     "gbx_st_node": {
-      "examples": "",
+      "examples": "Examples:\n      > SELECT gbx_st_node('LINESTRING(0 0,10 10,0 10,10 0)') AS noded;",
       "bindings": [
         "sql",
         "python-light"
       ]
     },
     "gbx_st_reduceprecision": {
-      "examples": "",
+      "examples": "Examples:\n      > SELECT gbx_st_reduceprecision('POINT(1.234 5.678)', 1.0) AS snapped;",
       "bindings": [
         "sql",
         "python-light"
       ]
     },
     "gbx_st_removerepeatedpoints": {
-      "examples": "",
-      "bindings": [
-        "sql",
-        "python-light"
-      ]
-    },
-    "gbx_st_simplifypreservetopology": {
-      "examples": "",
-      "bindings": [
-        "sql",
-        "python-light"
-      ]
-    },
-    "gbx_st_snap": {
-      "examples": "",
+      "examples": "Examples:\n      > SELECT gbx_st_removerepeatedpoints('LINESTRING(0 0,0 0,1 1,1 1,2 2)') AS deduped;",
       "bindings": [
         "sql",
         "python-light"
@@ -1713,6 +1699,20 @@
     },
     "gbx_st_shiftlongitude": {
       "examples": "Examples:\n      > SELECT gbx_st_shiftlongitude('POLYGON((-170 -10, -150 -10, -150 10, -170 10, -170 -10))') AS shifted;",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_simplifypreservetopology": {
+      "examples": "Examples:\n      > SELECT gbx_st_simplifypreservetopology('POLYGON((0 0,0 5,0.001 8,0 10,10 10,10 0,0 0))', 1.0) AS simplified;",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_snap": {
+      "examples": "Examples:\n      > SELECT gbx_st_snap('LINESTRING(0 0.4,10 0.4)', 'LINESTRING(0 0,10 0)', 0.5) AS snapped;",
       "bindings": [
         "sql",
         "python-light"

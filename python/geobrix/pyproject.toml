@@ -52,8 +52,9 @@ test = [
     "rasterio>=1.3.0",
     "numpy>=1.24.0",
     # pyvx (light VectorX / MVT) tests use mapbox-vector-tile as the decode
-    # oracle. Pinned to 2.1.x — see the [light] extra for why (protobuf <6 on
-    # Serverless). 2.1.0 still has the 2.x native-typed-attribute encode API.
+    # oracle. Pinned to 2.1.x — see the [light_dbr17] extra for why (protobuf <6
+    # on classic DBR 17.3/18; [light] itself is now Serverless-v6/protobuf-6).
+    # 2.1.0 still has the 2.x native-typed-attribute encode API.
     "mapbox-vector-tile>=2.1,<2.2",
 ]
 # Internal composition extra — NOT for direct user installation.

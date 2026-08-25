@@ -370,6 +370,32 @@ def _registrar_groups() -> List[_register.Group]:
         "gbx_st_makevalid": _reg_gbx_st_makevalid,
         "gbx_st_explainvalidity": _reg_gbx_st_explainvalidity,
     }
+
+    def _reg_cleaning(s):
+        from . import _cleaning as _cl
+
+        def _rrp_udf(geom, tolerance=None):
+            return _cl._udf_st_removerepeatedpoints(geom, tolerance)
+
+        s.udf.register(
+            "gbx_st_simplifypreservetopology",
+            _cl._udf_st_simplifypreservetopology,
+            BinaryType(),
+        )
+        s.udf.register("gbx_st_removerepeatedpoints", _rrp_udf, BinaryType())
+        s.udf.register(
+            "gbx_st_reduceprecision", _cl._udf_st_reduceprecision, BinaryType()
+        )
+        s.udf.register("gbx_st_node", _cl._udf_st_node, BinaryType())
+        s.udf.register("gbx_st_snap", _cl._udf_st_snap, BinaryType())
+
+    cleaning = {
+        "gbx_st_simplifypreservetopology": _reg_cleaning,
+        "gbx_st_removerepeatedpoints": _reg_cleaning,
+        "gbx_st_reduceprecision": _reg_cleaning,
+        "gbx_st_node": _reg_cleaning,
+        "gbx_st_snap": _reg_cleaning,
+    }
     return [
         (lambda: _env.assert_mvt_available(), mvt),
         (lambda: _env.assert_legacy_available(), legacy),
@@ -378,6 +404,7 @@ def _registrar_groups() -> List[_register.Group]:
         (lambda: _env.assert_crs_available(), crs),
         (lambda: True, antimeridian),
         (lambda: True, validity),
+        (lambda: True, cleaning),
     ]
 
 
@@ -660,3 +687,81 @@ def st_explainvalidity(geom: ColLike) -> Column:
         (WKT POINT or null — GEOS-reported violation site). NULL when input is NULL.
     """
     return f.call_function("gbx_st_explainvalidity", _col(geom))
+
+
+def st_simplifypreservetopology(geom: ColLike, tolerance: ColLike) -> Column:
+    """Douglas-Peucker simplify that preserves topology (SQL surface, BINARY output).
+
+    The topology-preserving counterpart to the product's ``st_simplify`` (which can
+    split or collapse a geometry).
+
+    Args:
+        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        tolerance: Simplification distance tolerance (numeric literal or column).
+
+    Returns:
+        BINARY column: EWKB simplified geometry, or NULL when input is NULL.
+    """
+    return f.call_function(
+        "gbx_st_simplifypreservetopology", _col(geom), _col(tolerance)
+    )
+
+
+def st_removerepeatedpoints(
+    geom: ColLike, tolerance: Optional[ColLike] = None
+) -> Column:
+    """Remove consecutive duplicate (or within-tolerance near-duplicate) vertices.
+
+    Args:
+        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        tolerance: Optional distance tolerance; duplicate vertices within this
+                   distance are collapsed. Defaults to 0.0 (exact duplicates only).
+
+    Returns:
+        BINARY column: EWKB geometry with repeated points removed.
+    """
+    if tolerance is None:
+        return f.call_function("gbx_st_removerepeatedpoints", _col(geom))
+    return f.call_function("gbx_st_removerepeatedpoints", _col(geom), _col(tolerance))
+
+
+def st_reduceprecision(geom: ColLike, grid_size: ColLike) -> Column:
+    """Snap coordinates to a grid of ``grid_size`` (a.k.a. snap-to-grid).
+
+    Uses GEOS precision model (``set_precision(mode="valid_output")``) so the
+    result stays valid after snapping.
+
+    Args:
+        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        grid_size: Grid cell size (numeric literal or column).
+
+    Returns:
+        BINARY column: EWKB geometry with coordinates snapped to the grid.
+    """
+    return f.call_function("gbx_st_reduceprecision", _col(geom), _col(grid_size))
+
+
+def st_node(geom: ColLike) -> Column:
+    """Node a linework: split at all self/pairwise intersections (SQL surface, BINARY output).
+
+    Args:
+        geom: BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+
+    Returns:
+        BINARY column: EWKB noded linework (MultiLineString or LineString).
+    """
+    return f.call_function("gbx_st_node", _col(geom))
+
+
+def st_snap(geom: ColLike, reference: ColLike, tolerance: ColLike) -> Column:
+    """Snap ``geom``'s vertices onto ``reference`` where within ``tolerance``.
+
+    Args:
+        geom:      BINARY (WKB / EWKB) or STRING (WKT / EWKT) geometry column.
+        reference: BINARY (WKB / EWKB) or STRING (WKT / EWKT) reference geometry.
+        tolerance: Snap distance tolerance (numeric literal or column).
+
+    Returns:
+        BINARY column: EWKB geometry with snapped vertices.
+    """
+    return f.call_function("gbx_st_snap", _col(geom), _col(reference), _col(tolerance))

@@ -42,7 +42,12 @@ PYTHON_REGISTERED = {
     "gbx_rst_fromfile",
     "gbx_st_explainvalidity",
     "gbx_st_makevalid",
+    "gbx_st_node",
+    "gbx_st_reduceprecision",
+    "gbx_st_removerepeatedpoints",
     "gbx_st_shiftlongitude",
+    "gbx_st_simplifypreservetopology",
+    "gbx_st_snap",
     "gbx_st_split",
     "gbx_st_wrapx",
 }

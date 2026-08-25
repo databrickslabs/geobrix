@@ -1666,6 +1666,41 @@
         "python-light"
       ]
     },
+    "gbx_st_node": {
+      "examples": "",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_reduceprecision": {
+      "examples": "",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_removerepeatedpoints": {
+      "examples": "",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_simplifypreservetopology": {
+      "examples": "",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
+    "gbx_st_snap": {
+      "examples": "",
+      "bindings": [
+        "sql",
+        "python-light"
+      ]
+    },
     "gbx_st_setcrs": {
       "examples": "Examples:\n      > SELECT gbx_st_setcrs(geom, 'EPSG:4326') AS stamped FROM vector_geoms;",
       "usage_args": "geom, crs",

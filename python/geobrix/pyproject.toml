@@ -60,8 +60,7 @@ test = [
 # Intentionally named `light-base` (not `light`) to distinguish it from user-
 # facing extras. pip has no mechanism to mark an extra as private; contributors
 # must treat it as a build-time composition tool. Install geobrix[light]
-# (Serverless env v5 / classic DBR <=18) or geobrix[light_dbr19]
-# (classic DBR 19+) instead.
+# (current Serverless, env v6) or geobrix[light_dbr17/18/19] for classic clusters.
 light-base = [
     "rasterio>=1.3.0",
     "shapely>=2.1.0",
@@ -83,8 +82,8 @@ light-base = [
     # Serverless (not held by the immutable base) — same float-and-break risk as
     # rio-tiler 9.3.0. No 4.x exists yet, so <4 is a no-op today but future-proofs.
     "pyproj>=3.6,<4",
-    # Functional floor only; the <2.2 Serverless cap and the uncapped DBR 19 form
-    # live in the [light] and [light_dbr19] variant deltas below.
+    # Functional floor only; the protobuf-5 cap (light_dbr17/18) and uncapped
+    # (light, light_dbr19) forms live in the per-env variant deltas below.
     "mapbox-vector-tile>=2.1",
     "scikit-image>=0.22,<1",
     "xarray-spatial>=0.4,<1",
@@ -93,7 +92,7 @@ light-base = [
     # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
     # Folded into [light-base] (not a separate [netcdf] extra) so geobrix[light]
     # reads NetCDF out of the box. Floor pinned; add a ceiling if a future
-    # release floats/breaks on Serverless env v5 (Py 3.12), same discipline as
+    # release floats/breaks on current Serverless (Py 3.12), same discipline as
     # the rio-tiler / mapbox-vector-tile pins above.
     "netcdf4>=1.6,<2",
     # Entity-hardened XML parsing for external-origin GDAL .vrt mosaic indexes
@@ -103,59 +102,36 @@ light-base = [
     # future-proofs (no 1.x exists today).
     "defusedxml>=0.7,<1",
 ]
-# Runtime deps for the lightweight pure-Python/PySpark APIs (no JAR) — the umbrella
-# extra covering all light tiers (raster today; vector/grid as they land). Install
-# with `pip install geobrix[light]` (Serverless env v5 / classic DBR <=18).
+# Runtime deps for the lightweight pure-Python/PySpark APIs (no JAR) — tracks the
+# current Databricks Serverless environment. `light` = env v6 for the 0.5.0 release;
+# advance this per release. Classic clusters use geobrix[light_dbr17/18/19] instead.
 # pandas + pyarrow are required by pyspark pandas_udf (Arrow batch serialization);
 # base pyspark does NOT pull them, so without these the rst_* wrappers fail to
 # import (_udf.py imports pandas) / at first invocation with a cryptic ImportError.
 light = [
     "geobrix[light-base]",
-    # --- Serverless (env v5) and classic DBR <=18 runtime-sensitive pins ---
-    # Combined with light-base's mapbox-vector-tile>=2.1, this resolves to
-    # >=2.1,<2.2 -- identical to the previous single [light] extra.
-    # rio-tiler 9 uses TypedDict(extra_items=...) (PEP 728), which needs a recent
-    # typing_extensions; DBR 17.3 ships an older one, so pin the floor explicitly
-    # or the [light] import fails on-cluster (rio_tiler/types.py TypeError).
+    # `light` = the CURRENT Databricks Serverless environment (v6 for the 0.5.0
+    # release). Serverless offers only one current env; we advance this per release.
+    # v6 base is protobuf-6 (grpcio-status>=... requires protobuf>=6.31.1) and
+    # Python 3.12. Classic clusters use light_dbr17/18/19 instead.
     "typing_extensions>=4.13",
-    # Exclude rio-tiler 9.3.0: it regressed the PEP 728 TypedDict(extra_items=...)
-    # import on Python 3.12 (Serverless env v5) — `import rio_tiler` raises
-    # TypeError even with typing_extensions>=4.13 present. 9.2.1 imports cleanly.
-    # Revisit the <9.3 cap once a fixed 9.3.x ships.
+    # rio-tiler 9.3.0 regressed a PEP 728 TypedDict import on Python 3.12; Serverless
+    # v6 is still py3.12, so keep the <9.3 cap (revisit when a fixed 9.3.x ships).
     "rio-tiler>=9.0,<9.3",
-    # rio-tiler -> httpx -> httpcore (which needs h11>=0.16). DBR ships an older
-    # httpcore 1.0.2 (pinned h11<0.15) that %pip leaves in place, so it conflicts
-    # with the h11>=0.16 the stack pulls. Force httpcore>=1.0.9 so the on-cluster
-    # install resolves cleanly (no h11 conflict warning).
     "httpcore>=1.0.9",
-    # idna is a transitive dep (requests / anyio / httpx) with no upper bound, so
-    # pip would pull the latest (3.18) and shadow Serverless v5's base idna 3.7,
-    # firing the "a core Python package changed: idna" notebook notice. Nothing in
-    # the stack needs >3.7 (requests <4,>=2.5; anyio >=2.8; httpx unpinned), so cap
-    # at <3.8 to keep the Serverless base in place and silence the notice.
-    "idna<3.8",
-    # Re-adds the floor from `light-base` to form the combined constraint
-    # `>=2.1,<2.2`. mapbox-vector-tile pinned to 2.1.x for the pyvx MVT encoder.
-    # Why this exact range matters on Databricks **Serverless** (env v5, the
-    # lightweight "halo" target): the resolver otherwise grabs 2.2.0, which
-    # hard-requires protobuf>=6.31.1 and so upgrades the immutable base protobuf
-    # 5.29.4 -> 6.x. protobuf 6 conflicts with Serverless's Spark-Connect/gRPC
-    # stack (grpcio-status / googleapis-common-protos pin protobuf<6); pip emits an
-    # ERROR-prefixed conflict report that the Serverless %pip magic treats as a
-    # hard install failure (verified on env v5). **2.1.0 keeps protobuf at the
-    # base 5.29.4** (verified: clean install, MVT encodes via the same 2.x
-    # default_options/native-typed-attr API), so it installs and runs on
-    # Serverless. Do NOT widen to <3 (pulls 2.2.0 -> protobuf 6) or down to <2.1
-    # (2.0.x downgrades protobuf to 4.25.9). 1.x lacks the 2.x encode API.
-    "mapbox-vector-tile>=2.1,<2.2",
+    # v6 base idna is 3.11; cap <3.12 to keep the base and silence the
+    # "a core package changed: idna" notebook notice.
+    "idna<3.12",
+    # v6 base has protobuf-6, so mapbox-vector-tile 2.2 (needs protobuf>=6.31.1)
+    # installs cleanly; require >=2.2 (drop the protobuf-5-era <2.2 cap).
+    "mapbox-vector-tile>=2.2",
 ]
-# Classic DBR 19 variant: grpcio-status on DBR 19 requires protobuf>=6.31.1,
-# which conflicts with the <2.2 cap on mapbox-vector-tile (2.2.0 requires
-# protobuf>=6.31.1). Dropping that cap is the SOLE structurally necessary
-# change from [light]. The rio-tiler relaxation is an OPTIONAL cleanliness
-# change validated on-cluster. NOTE: idna is CAPPED here (idna<3.12, see below) —
-# not removed — to keep the dogfood serverless env-v6 base idna (3.11) and silence
-# the "core package changed: idna" notice (light_dbr19 also runs on serverless v6).
+# Classic DBR 19 variant: protobuf-6 aligned with the new [light] (Serverless v6).
+# The only structural delta from [light] is the optional rio-tiler cap relaxation
+# (<9.4 vs <9.3 on Serverless); the 9.3.x typing regression was confirmed on
+# Serverless/py3.12 — unverified on DBR 19. idna cap mirrors [light] at <3.12
+# because light_dbr19 also runs on dogfood Serverless env v6, where the cap
+# silences the "core package changed: idna" notice.
 light_dbr19 = [
     "geobrix[light-base]",
     # --- Classic DBR 19 runtime-sensitive pins ---
@@ -170,21 +146,50 @@ light_dbr19 = [
     # unbounded transitive dep (requests/anyio/httpx); uncapped, pip floats it to
     # the latest (3.19), which shadows the env base and fires the "a core package
     # changed: idna" notebook notice on dogfood serverless. Nothing needs the newer
-    # idna, so cap it (mirrors [light]'s idna<3.8 for env v5). Confirmed 2026-08-23:
+    # idna, so cap it (mirrors [light]'s idna<3.12 for env v6). Confirmed 2026-08-23:
     # light_dbr19 runs on dogfood SERVERLESS env v6, not only classic — the notice
     # DOES apply there. idna 3.x is API-stable so this is cosmetic (silences the notice).
     "idna<3.12",
-    # REQUIRED: Drop <2.2 cap — protobuf>=6.31.1 is expected/required on DBR 19.
-    # This is the SOLE structurally necessary delta from [light].
+    # Protobuf-6 floor, consistent with DBR 19 base and the new [light] (v6).
     "mapbox-vector-tile>=2.2",
 ]
-# Feature-complete umbrella for Serverless (env v5) and classic DBR <=18.
-# Installs [light] + all optional feature extras ([stac], [vizx], [overture]).
+# Classic DBR 17.3 (protobuf-5 base). This is the profile `light` had before 0.5.0.
+light_dbr17 = [
+    "geobrix[light-base]",
+    "typing_extensions>=4.13",
+    "rio-tiler>=9.0,<9.3",
+    "httpcore>=1.0.9",
+    "idna<3.8",                     # DBR 17/18 protobuf-5 base idna 3.7
+    "mapbox-vector-tile>=2.1,<2.2", # protobuf-5 cap (2.2 would pull protobuf 6)
+]
+# Classic DBR 18 — identical package set to DBR 17.3; kept as an explicit,
+# documented name (aliases light_dbr17).
+light_dbr18 = ["geobrix[light_dbr17]"]
+# Feature-complete umbrella for the current Serverless environment (env v6 for
+# 0.5.0). Installs [light] + all optional feature extras ([stac], [vizx], [overture]).
 # [databricks] is NOT included — it is a Databricks SDK integration, not a geo
 # feature, and Databricks compute already provides its runtime.
-# Use this for the "don't reason about deps" full install on Serverless/DBR <=18.
+# Use this for the "don't reason about deps" full install on Serverless.
 light_all = [
     "geobrix[light]",
+    "geobrix[stac]",
+    "geobrix[vizx]",
+    "geobrix[overture]",
+]
+# Feature-complete umbrella for classic DBR 17.3 (protobuf-5). Same as [light_all]
+# but uses [light_dbr17] so the protobuf constraint is DBR-17-correct.
+# [databricks] excluded for the same reason as [light_all].
+light_dbr17_all = [
+    "geobrix[light_dbr17]",
+    "geobrix[stac]",
+    "geobrix[vizx]",
+    "geobrix[overture]",
+]
+# Feature-complete umbrella for classic DBR 18. Aliases [light_dbr17_all] via
+# [light_dbr18] — identical package set to DBR 17.3.
+# [databricks] excluded for the same reason as [light_all].
+light_dbr18_all = [
+    "geobrix[light_dbr18]",
     "geobrix[stac]",
     "geobrix[vizx]",
     "geobrix[overture]",

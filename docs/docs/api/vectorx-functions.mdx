@@ -21,6 +21,8 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 - **Vector tile encoding** — `gbx_st_asmvt` aggregator + `gbx_st_asmvt_pyramid` generator for publishing Mapbox Vector Tile (MVT) layers, available in **both** the lightweight (`pyvx`) and heavyweight (`vectorx`) tiers
 - **TIN surface modeling** — `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` for Delaunay triangulation and grid elevation interpolation from Z-valued points, in **both** tiers (with a `constrained`/`conforming` mode selector)
 - **CRS strings** — `gbx_st_crs`, `gbx_st_setcrs`, and `gbx_st_transformcrs` for reading, stamping, and reprojecting a geometry's coordinate reference system by **CRS string** (ESRI codes, WKT, PROJ4 — not just an EPSG integer), in **both** tiers
+- **Geometry validity** — `gbx_st_makevalid` and `gbx_st_explainvalidity` for repairing and diagnosing OGC-invalid geometries, **lightweight tier only** (`pyvx`)
+- **Geometry cleaning** — `gbx_st_simplifypreservetopology`, `gbx_st_removerepeatedpoints`, `gbx_st_reduceprecision`, `gbx_st_node`, and `gbx_st_snap` for topology-safe simplification, vertex deduplication, precision reduction, linework noding, and feature snapping, **lightweight tier only** (`pyvx`)
 - **Antimeridian handling** — `gbx_st_shiftlongitude`, `gbx_st_wrapx`, and `gbx_st_split` for normalizing geometries that cross the 180° antimeridian, **lightweight tier only** (`pyvx`)
 - **OGR-based vector readers** — Shapefile, GeoJSON, GeoPackage, FileGDB (heavyweight only)
 - **Legacy Mosaic conversion** — `gbx_st_legacyaswkb` for migrating geometries written by DBLabs Mosaic, in **both** tiers
@@ -44,6 +46,13 @@ VectorX augments the product's native `ST_*` functions with vector-tile encoding
 | `st_setcrs` | Supported | Supported |
 | `st_transformcrs` | Supported | Supported |
 | `st_legacyaswkb` | Supported | Supported |
+| `st_makevalid` | Supported | — |
+| `st_explainvalidity` | Supported | — |
+| `st_simplifypreservetopology` | Supported | — |
+| `st_removerepeatedpoints` | Supported | — |
+| `st_reduceprecision` | Supported | — |
+| `st_node` | Supported | — |
+| `st_snap` | Supported | — |
 | `st_shiftlongitude` | Supported | — |
 | `st_wrapx` | Supported | — |
 | `st_split` | Supported | — |
@@ -582,32 +591,183 @@ Source CRS resolution order: the geometry's embedded SRID first, then `source_cr
 
 ---
 
-## Legacy Mosaic conversion
+## Geometry validity
 
-### st_legacyaswkb
+Distributed shapely helpers — shapely/GEOS geometry operations running as Python UDFs across your Spark cluster — for diagnosing and repairing OGC-invalid geometries. **Lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Geometry Validity](./geometry-validity) for the full conditional-repair workflow and invalidity reason codes.
 
-<Tier both/>
+### st_makevalid
 
-Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WKB). Pass the raw legacy geometry column through `st_legacyaswkb` to obtain a WKB binary that all downstream `ST_*` functions accept — the practical first step when moving a Mosaic-era table onto the product's native `GEOMETRY`/`GEOGRAPHY` types.
+<Tier light/>
 
-A scalar function in **both** tiers (same registered name, same output bytes), so the migration query is a one-line tier swap.
+Repairs a geometry to OGC-SFS validity. The default `level='linework'` nodes self-intersections and applies `orient_polygons` so output passes the product's stricter `ST_IsValid` (topology + orientation). `level='structure'` uses a more conservative overlay method. `level='ogc'` applies OGC-only repair without orientation normalization.
 
-**Parameters:** `legacyGeometry` — Column containing a legacy Mosaic geometry value (e.g. `{1, [[[x, y]]], [[]]}`).
+**Signature:** `gbx_st_makevalid(geom [, level])`
 
-**Returns:** `BINARY` — standard WKB.
+**Parameters:**
+- `geom` — Geometry to repair. Accepts WKB/EWKB/WKT/EWKT.
+- `level` (optional) — Repair strategy: `'linework'` (default), `'structure'`, or `'ogc'`.
 
-**Migration notes:**
-- **Z values are preserved.** 3D legacy geometries round-trip through `st_legacyaswkb` with their Z coordinate intact.
-- **Polygon holes (interior rings) are preserved.**
-- **SRID is applied separately at ingestion.** The output is plain WKB and carries no SRID; assign the CRS when you read it back, e.g. `ST_GeomFromWKB(gbx_st_legacyaswkb(geom_legacy), 27700)`.
-- **M (measure) values are out of scope** for this conversion.
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
+
+See [Geometry Validity](./geometry-validity).
 
 <FunctionExamples
-  name="st_legacyaswkb"
+  name="st_makevalid"
   sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
   pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
-  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
-  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+### st_explainvalidity
+
+<Tier light/>
+
+Diagnoses geometry validity and returns a JSON string with four fields: `valid` (boolean), `reason` (GEOS reason string), `code` (stable integer violation class), and `location` (`POINT(x y)` WKT string of the violation site). `code` and `location` are `null` when GEOS does not provide them. Use `ST_IsValid` as a cheap boolean gate and call `gbx_st_explainvalidity` only on flagged rows.
+
+**Signature:** `gbx_st_explainvalidity(geom)`
+
+**Parameters:**
+- `geom` — Geometry to diagnose. Accepts WKB/EWKB/WKT/EWKT.
+
+**Returns:** `STRING` — JSON `{"valid": ..., "reason": ..., "code": ..., "location": ...}`. Returns `NULL` for null or unparseable input.
+
+See [Geometry Validity](./geometry-validity).
+
+<FunctionExamples
+  name="st_explainvalidity"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+## Geometry cleaning
+
+Distributed shapely helpers — shapely/GEOS operations running as Python UDFs — for improving the quality of **already-valid** geometries. If your geometry is invalid, repair it first with `gbx_st_makevalid`, then clean it. **Lightweight tier only** (`pyvx`); no heavyweight counterpart exists. See [Geometry Cleaning](./geometry-cleaning) for usage guidance and the comparison with the product's built-in simplify.
+
+### st_simplifypreservetopology
+
+<Tier light/>
+
+Simplifies a geometry using the Douglas-Peucker algorithm with topology preservation (`preserve_topology=True`). Vertices that deviate less than `tolerance` from the simplified line are dropped, but the output geometry is guaranteed to be of the same topological class as the input and to remain valid. Use this instead of the product's `st_simplify` when ring connectivity must be maintained.
+
+**Signature:** `gbx_st_simplifypreservetopology(geom, tolerance)`
+
+**Parameters:**
+- `geom` — Geometry to simplify. Accepts WKB/EWKB/WKT/EWKT.
+- `tolerance` — Simplification tolerance in the geometry's coordinate units.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
+
+See [Geometry Cleaning](./geometry-cleaning).
+
+<FunctionExamples
+  name="st_simplifypreservetopology"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+### st_removerepeatedpoints
+
+<Tier light/>
+
+Removes consecutive duplicate or near-duplicate vertices from a geometry. With the default `tolerance=0.0`, only exact duplicate consecutive coordinate pairs are removed. A positive `tolerance` collapses vertices within that distance of their predecessor into a single representative vertex.
+
+**Signature:** `gbx_st_removerepeatedpoints(geom [, tolerance])`
+
+**Parameters:**
+- `geom` — Geometry to deduplicate. Accepts WKB/EWKB/WKT/EWKT.
+- `tolerance` (optional, default `0.0`) — Distance threshold for consecutive near-duplicate vertices.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
+
+See [Geometry Cleaning](./geometry-cleaning).
+
+<FunctionExamples
+  name="st_removerepeatedpoints"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+### st_reduceprecision
+
+<Tier light/>
+
+Snaps coordinates to a precision grid of size `grid_size`, rounding each coordinate to the nearest multiple of `grid_size`. Useful for eliminating floating-point noise, aligning data from different sources, or reducing coordinate storage size. Uses GEOS `set_precision` with `mode="valid_output"` so the output remains valid even if snapping would otherwise collapse a ring.
+
+**Signature:** `gbx_st_reduceprecision(geom, grid_size)`
+
+**Parameters:**
+- `geom` — Geometry to snap to grid. Accepts WKB/EWKB/WKT/EWKT.
+- `grid_size` — Precision grid size in the geometry's coordinate units (e.g. `1.0` for integer coordinates, `0.001` for 3 decimal places).
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
+
+See [Geometry Cleaning](./geometry-cleaning).
+
+<FunctionExamples
+  name="st_reduceprecision"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+### st_node
+
+<Tier light/>
+
+Nodes a geometry's linework by splitting at all self-intersections and pairwise intersections. The result is a `MultiLineString` (or `LineString`) where every segment endpoint is a valid node — no two segments cross without sharing an explicit endpoint. Noding is typically a prerequisite for polygonization, planar graph analysis, or building topologically clean networks from raw linework.
+
+**Signature:** `gbx_st_node(geom)`
+
+**Parameters:**
+- `geom` — Linework geometry to node. Accepts WKB/EWKB/WKT/EWKT. Best suited for `LineString` and `MultiLineString` inputs; polygon rings can also be noded.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The original CRS is preserved. Returns `NULL` for null or unparseable input.
+
+See [Geometry Cleaning](./geometry-cleaning).
+
+<FunctionExamples
+  name="st_node"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
+### st_snap
+
+<Tier light/>
+
+Snaps `geom`'s vertices onto `reference` where within `tolerance`. Any vertex in `geom` that lies within `tolerance` distance of a vertex or edge in `reference` is moved onto that nearest point. Useful for aligning features from different sources that should share boundaries but don't quite meet due to digitizing differences or floating-point noise.
+
+**Signature:** `gbx_st_snap(geom, reference, tolerance)`
+
+**Parameters:**
+- `geom` — Geometry whose vertices will be snapped. Accepts WKB/EWKB/WKT/EWKT.
+- `reference` — Reference geometry to snap onto. Accepts WKB/EWKB/WKT/EWKT.
+- `tolerance` — Maximum snap distance in the geometry's coordinate units.
+
+**Returns:** `BINARY` — WKB (or EWKB if input carried a SRID). The SRID of `geom` is preserved. Returns `NULL` if either input is null or unparseable.
+
+See [Geometry Cleaning](./geometry-cleaning).
+
+<FunctionExamples
+  name="st_snap"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
   testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
 />
 
@@ -692,10 +852,42 @@ See [Antimeridian](./antimeridian).
 
 ---
 
+## Legacy Mosaic conversion
+
+### st_legacyaswkb
+
+<Tier both/>
+
+Migrates a legacy DBLabs Mosaic geometry value to standard Well-Known Binary (WKB). Pass the raw legacy geometry column through `st_legacyaswkb` to obtain a WKB binary that all downstream `ST_*` functions accept — the practical first step when moving a Mosaic-era table onto the product's native `GEOMETRY`/`GEOGRAPHY` types.
+
+A scalar function in **both** tiers (same registered name, same output bytes), so the migration query is a one-line tier swap.
+
+**Parameters:** `legacyGeometry` — Column containing a legacy Mosaic geometry value (e.g. `{1, [[[x, y]]], [[]]}`).
+
+**Returns:** `BINARY` — standard WKB.
+
+**Migration notes:**
+- **Z values are preserved.** 3D legacy geometries round-trip through `st_legacyaswkb` with their Z coordinate intact.
+- **Polygon holes (interior rings) are preserved.**
+- **SRID is applied separately at ingestion.** The output is plain WKB and carries no SRID; assign the CRS when you read it back, e.g. `ST_GeomFromWKB(gbx_st_legacyaswkb(geom_legacy), 27700)`.
+- **M (measure) values are out of scope** for this conversion.
+
+<FunctionExamples
+  name="st_legacyaswkb"
+  sql={vectorxSqlCode}               sqlSource="docs/tests/python/api/vectorx_functions_sql.py"
+  pythonLight={vectorxLightCode}     pythonLightSource="docs/tests/python/api/vectorx_functions_python_light.py"
+  pythonHeavy={vectorxFunctionsExamples} pythonHeavySource="docs/tests/python/api/vectorx_functions.py"
+  scala={scalaApiExamplesCode}       scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_vectorx_functions_python_light.py"
+/>
+
+---
+
 ## Next Steps
 
 - [Quick Start](../quick-start) — Register and use VectorX with the legacy example
 - [Geometry Validity](./geometry-validity) — diagnose and repair OGC-invalid geometries with `gbx_st_explainvalidity` and `gbx_st_makevalid`
+- [Geometry Cleaning](./geometry-cleaning) — topology-safe simplification, vertex deduplication, precision reduction, linework noding, and feature snapping
 - [Antimeridian](./antimeridian) — antimeridian composition pattern with full example
 - [Choosing an Execution Tier](./execution-tiers) — lightweight vs heavyweight comparison
 - [PMTiles Function Reference](./pmtiles-functions) — Aggregate MVT tiles into a single `.pmtiles` archive

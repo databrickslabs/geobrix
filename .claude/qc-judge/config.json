@@ -65,6 +65,15 @@
       "cmd": "[ -f docs/scripts/check-diagram-coverage.py ] || { echo 'absent; skip'; exit 0; }; python3 docs/scripts/check-diagram-coverage.py",
       "expect_exit": 0,
       "timeout_seconds": 30
+    },
+    "python-black": {
+      "name": "Python isort/black/flake8 clean in Docker (CI-pinned; matches the main-PR lint gate)",
+      "type": "command",
+      "severity": "warn",
+      "enabled": true,
+      "cmd": "docker ps --format '{{.Names}}' 2>/dev/null | grep -qx geobrix-dev || { echo 'geobrix-dev container down; skipping python-lint gate (gbx:docker:start then gbx:lint:python --check)'; exit 0; }; bash scripts/commands/gbx-lint-python.sh --check",
+      "expect_exit": 0,
+      "timeout_seconds": 180
     }
   }
 }

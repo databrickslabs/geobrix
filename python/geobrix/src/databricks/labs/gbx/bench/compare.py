@@ -400,6 +400,19 @@ def pyrx_implemented() -> "frozenset[str]":
     return frozenset(names)
 
 
+def registered_raster() -> "frozenset[str]":
+    """Registered raster (`rst_*`) function names — the scope `pyrx_implemented`
+    covers.
+
+    ``spec.registered_rst()`` spans `rst_*` AND `st_*` (it is the full bench-registry
+    coverage set). The `st_*` functions are pyvx/vector bindings with no pyrx (light
+    *raster*) definition, so raster parity/coverage reporting must exclude them or the
+    functional-parity gap would wrongly flag every `st_*` function as "no lightweight
+    implementation" (they are pyvx-implemented, just not pyrx).
+    """
+    return frozenset(n for n in spec.registered_rst() if n.startswith("rst_"))
+
+
 def coverage_block(cells) -> str:
     """Build the neutral 'Coverage & parity' markdown section.
 
@@ -407,7 +420,7 @@ def coverage_block(cells) -> str:
     win counts, the computed functional-parity gap (registered minus pyrx-
     implemented), and the registered functions not yet benchmarked.
     """
-    registered = spec.registered_rst()
+    registered = registered_raster()
     implemented = pyrx_implemented()
     n_registered = len(registered)
 
@@ -513,7 +526,7 @@ def scorecard_from_store(
     if specs_by_name is None:
         specs_by_name = {s.name: s for s in _spec.select(set="full")}
 
-    registered = spec.registered_rst()
+    registered = registered_raster()
     implemented = pyrx_implemented()
     n_registered = len(registered)
 

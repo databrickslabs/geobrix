@@ -906,6 +906,9 @@ runs **at parity with the heavyweight JVM/OGR aggregator** (~6% apart). Both enc
 decoded tiles are **feature-equivalent** — a hard parity gate; the benchmark fails if the tiers
 diverge. Tiles compose with `pmtiles_agg` for end-to-end publishing.
 
+`st_asmvt_pyramid` (a per-feature MVT tiling UDTF) is not yet in the benchmark suite; the scalar MVT
+aggregator `st_asmvt` is benchmarked above.
+
 ### TIN & legacy migration (`st_triangulate`, `st_interpolateelevation*`, `st_legacyaswkb`)
 
 The constrained-Delaunay TIN generators (`st_triangulate`, `st_interpolateelevationbbox`,
@@ -982,9 +985,6 @@ benchmark aggregates a coverage of overlapping polygons and times it per group, 
 |---|---|---|
 | `st_coverageinvalidedges` | 1.56 | 639 |
 | `st_coverageisvalid` | 2.41 | 415 |
-
-`st_asmvt_pyramid` (a per-feature MVT tiling UDTF) is not yet in the benchmark suite; the scalar MVT
-aggregator `st_asmvt` is covered under [MVT encoding](#mvt-encoding-st_asmvt) above.
 
 </TabItem>
 

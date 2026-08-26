@@ -1,11 +1,9 @@
 """Direct verification of geometry_scalar implementation without full bench infrastructure."""
 
-import json
 from pathlib import Path
-from databricks.labs.gbx.bench import manifest as m
+
 from databricks.labs.gbx.bench import runner as rn
 from databricks.labs.gbx.bench import spec as s
-import shapely.wkb
 
 
 def test_geometry_sets_loaded_from_corpus():
@@ -19,7 +17,9 @@ def test_geometry_sets_loaded_from_corpus():
     geom_corpus = rn._load_geometry_corpus(corpus_root)
     assert geom_corpus is not None
     assert len(geom_corpus.sets) > 0
-    print(f"Loaded {len(geom_corpus.sets)} geometry sets: {list(geom_corpus.sets.keys())}")
+    print(
+        f"Loaded {len(geom_corpus.sets)} geometry sets: {list(geom_corpus.sets.keys())}"
+    )
 
     # Verify each set has geometries
     for set_name, gset in geom_corpus.sets.items():
@@ -81,9 +81,15 @@ def test_st_specs_have_geometry_scalar_kind():
     fnspecs = s.select(functions=st_scalar_fns, set="full")
     print(f"\nChecked {len(fnspecs)} ST specs:")
     for fn in fnspecs:
-        print(f"  {fn.name:40s} input_kind={fn.input_kind:20s} geometry_set={getattr(fn, 'geometry_set', None)}")
-        assert fn.input_kind == "geometry_scalar", f"{fn.name} should be geometry_scalar, got {fn.input_kind}"
-        assert getattr(fn, 'geometry_set', None) is not None, f"{fn.name} should have geometry_set"
+        print(
+            f"  {fn.name:40s} input_kind={fn.input_kind:20s} geometry_set={getattr(fn, 'geometry_set', None)}"
+        )
+        assert (
+            fn.input_kind == "geometry_scalar"
+        ), f"{fn.name} should be geometry_scalar, got {fn.input_kind}"
+        assert (
+            getattr(fn, "geometry_set", None) is not None
+        ), f"{fn.name} should have geometry_set"
 
 
 def test_col_fn_produces_real_output():
@@ -106,9 +112,11 @@ def test_col_fn_produces_real_output():
         if validity_set.boxes:
             wkb = validity_set.boxes[0][0]
             geom = shapely.wkb.loads(wkb)
-            print(f"\n1. VALIDITY FUNCTION (st_makevalid):")
-            print(f"   Input:  valid={geom.is_valid}, coords={len(list(geom.exterior.coords))} pts")
-            print(f"   Expected: output geometry with no self-intersections")
+            print("\n1. VALIDITY FUNCTION (st_makevalid):")
+            print(
+                f"   Input:  valid={geom.is_valid}, coords={len(list(geom.exterior.coords))} pts"
+            )
+            print("   Expected: output geometry with no self-intersections")
 
     # Example 2: Antimeridian (st_shiftlongitude)
     if geom_corpus and "st_antimeridian" in geom_corpus.sets:
@@ -117,10 +125,10 @@ def test_col_fn_produces_real_output():
             wkb = antimeridian_set.boxes[0][0]
             geom = shapely.wkb.loads(wkb)
             bounds = geom.bounds  # (minx, miny, maxx, maxy)
-            print(f"\n2. ANTIMERIDIAN FUNCTION (st_shiftlongitude):")
+            print("\n2. ANTIMERIDIAN FUNCTION (st_shiftlongitude):")
             print(f"   Input:  bounds={bounds}")
             print(f"   Crosses antimeridian: {bounds[0] > bounds[2]}")
-            print(f"   Expected: output geometry with coordinates shifted by 180°")
+            print("   Expected: output geometry with coordinates shifted by 180°")
 
     # Example 3: Cleaning (st_simplifypreservetopology)
     if geom_corpus and "st_cleaning" in geom_corpus.sets:
@@ -128,17 +136,17 @@ def test_col_fn_produces_real_output():
         if cleaning_set.boxes:
             wkb = cleaning_set.boxes[0][0]
             geom = shapely.wkb.loads(wkb)
-            print(f"\n3. CLEANING FUNCTION (st_simplifypreservetopology):")
+            print("\n3. CLEANING FUNCTION (st_simplifypreservetopology):")
             print(f"   Input:  coords={len(list(geom.exterior.coords))} pts")
-            print(f"   Expected: output with fewer vertices (tolerance=0.001)")
+            print("   Expected: output with fewer vertices (tolerance=0.001)")
 
     # Example 4: Coverage (st_coverageinvalidedges)
     if geom_corpus and "st_coverage" in geom_corpus.sets:
         coverage_set = geom_corpus.sets["st_coverage"]
         if coverage_set.boxes:
-            print(f"\n4. COVERAGE FUNCTION (st_coverageinvalidedges):")
+            print("\n4. COVERAGE FUNCTION (st_coverageinvalidedges):")
             print(f"   Input:  {len(coverage_set.boxes)} polygons in coverage")
-            print(f"   Expected: output geometry collection of invalid edges (if any)")
+            print("   Expected: output geometry collection of invalid edges (if any)")
 
     # Example 5: CRS (st_transformcrs)
     if geom_corpus and "srid_4326" in geom_corpus.sets:
@@ -147,9 +155,9 @@ def test_col_fn_produces_real_output():
             wkb = crs_set.boxes[0][0]
             geom = shapely.wkb.loads(wkb)
             bounds = geom.bounds
-            print(f"\n5. CRS FUNCTION (st_transformcrs):")
+            print("\n5. CRS FUNCTION (st_transformcrs):")
             print(f"   Input:  EPSG:4326 bounds={bounds}")
-            print(f"   Expected: output in EPSG:3857 (Web Mercator)")
+            print("   Expected: output in EPSG:3857 (Web Mercator)")
 
     print("\n" + "=" * 60)
     print("All geometry transformation examples prepared from corpus.")

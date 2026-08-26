@@ -1,15 +1,13 @@
 """Test geometry set routing for VectorX ST functions in the benchmark spec."""
 
 import pytest
-from pathlib import Path
 
-from databricks.labs.gbx.bench import manifest as m
 from databricks.labs.gbx.bench import runner
 
 
 def test_geometry_set_field_added_to_fnspec():
     """Verify that FnSpec has the geometry_set field."""
-    from databricks.labs.gbx.bench.spec import FnSpec, _BOTH
+    from databricks.labs.gbx.bench.spec import _BOTH, FnSpec
 
     # Create a simple FnSpec with geometry_set
     fs = FnSpec(
@@ -33,7 +31,7 @@ def test_geometry_set_field_added_to_fnspec():
 
 def test_geometry_set_override_in_geometry_set_for():
     """Verify _geometry_set_for honors the geometry_set_override parameter."""
-    from databricks.labs.gbx.bench.manifest import GeometrySet, GeometryCorpus
+    from databricks.labs.gbx.bench.manifest import GeometryCorpus, GeometrySet
 
     # Create a minimal corpus with two sets
     set1 = GeometrySet(
@@ -50,12 +48,22 @@ def test_geometry_set_override_in_geometry_set_for():
         points=[],
         zpoints=[],
     )
-    corpus = GeometryCorpus(seed=1, srid=4326, source_tile="tile1.tif", sets={"set1": set1, "set2": set2})
+    corpus = GeometryCorpus(
+        seed=1, srid=4326, source_tile="tile1.tif", sets={"set1": set1, "set2": set2}
+    )
 
     # Create a dummy tile entry
     from databricks.labs.gbx.bench.manifest import TileEntry
 
-    te = TileEntry(path="tile1.tif", cellid=0, srid=4326, dtype="float32", bands=2, tile_px=256, nodata_frac=0.0)
+    te = TileEntry(
+        path="tile1.tif",
+        cellid=0,
+        srid=4326,
+        dtype="float32",
+        bands=2,
+        tile_px=256,
+        nodata_frac=0.0,
+    )
 
     # Test 1: Without override, should match by source_tile
     result = runner._geometry_set_for(corpus, te, None)
@@ -102,7 +110,11 @@ def test_st_functions_have_geometry_set():
 
 def test_geometry_set_for_with_default_matching():
     """Verify _geometry_set_for default behavior (no override) still works."""
-    from databricks.labs.gbx.bench.manifest import GeometrySet, GeometryCorpus, TileEntry
+    from databricks.labs.gbx.bench.manifest import (
+        GeometryCorpus,
+        GeometrySet,
+        TileEntry,
+    )
 
     # Create corpus with sets keyed by srid
     set_4326 = GeometrySet(

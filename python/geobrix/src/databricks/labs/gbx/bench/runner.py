@@ -1905,6 +1905,19 @@ def run_spark_path(  # noqa: C901
 
         _prx_reg.register(spark, only=[f.sql_name for f in _udtf_fns])
 
+    # geometry_scalar ST fns call registered gbx_st_* SQL UDFs (pyvx); register them
+    # in this session or every col_fn expr fails with UNRESOLVED_ROUTINE.
+    _geom_scalar_fns = [
+        f
+        for f in fnspecs
+        if getattr(f, "input_kind", "tile") == "geometry_scalar"
+        and "spark-path" in f.modes
+    ]
+    if _geom_scalar_fns:
+        from databricks.labs.gbx.pyvx import functions as _pyvx_reg
+
+        _pyvx_reg.register(spark, only=[f.sql_name for f in _geom_scalar_fns])
+
     # Spark warm-up: one throwaway job so JVM/Spark spin-up isn't charged to the first
     # timed cell (delegated to _spark_path_warmup).
     _spark_path_warmup(spark, fnspecs, pool, df_all, _input_col)

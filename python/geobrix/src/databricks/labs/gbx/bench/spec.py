@@ -3293,7 +3293,10 @@ REGISTRY: Dict[str, FnSpec] = {
         col_fn=lambda g, v, ext, a: pyvx.st_coverageinvalidedges(g),
         core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         core=False,
-        fingerprint=True,
+        # Timing-only: it returns WKB geometry, not a raster tile, and it is
+        # light-only (no heavy tier to parity-check), so skip the fingerprint
+        # (the raster fingerprint path can't open WKB bytes).
+        fingerprint=False,
         input_kind="geometry_aggregate",
         geometry_set="st_coverage",
         sources=_PYVX_COVERAGE_LIGHT,

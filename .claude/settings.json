@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Bash(git *)",
+            "command": "jq -r '.tool_input.command' | grep -qE 'git[[:space:]]+(push|pp|stack[[:space:]]+push)' && jq -nc '{systemMessage: \"Reminder: run gbx:review:round (scoped Isaac Review) before pushing if these changes have not been reviewed.\"}'; exit 0"
+          }
+        ]
+      }
+    ]
+  }
+}

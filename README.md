@@ -88,26 +88,42 @@ boroughs.write.format("geojson_gbx").mode("overwrite").save("/Volumes/.../out.ge
 
 ## Readers & writers
 
-Lightweight formats use the `*_gbx` suffix; heavyweight use `*_ogr` (vector) / `gdal` (raster). Light and heavy emit the **same schema**, so they are drop-in swaps. Full options and examples: [Readers](https://databrickslabs.github.io/geobrix/docs/readers/overview) · [Writers](https://databrickslabs.github.io/geobrix/docs/writers/overview).
+Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyweight counterpart (`*_ogr` / `gdal` / `gtiff_gdal`). Both tiers emit the **same schema** and are held to row-count / byte parity, so they are drop-in swaps. Full options, output schemas, and examples: [Readers](https://databrickslabs.github.io/geobrix/docs/readers/overview) · [Writers](https://databrickslabs.github.io/geobrix/docs/writers/overview).
 
-**Raster & tiles**
+**Readers**
 
-| Format | Read (light / heavy) | Write (light / heavy) |
+| Format | Lightweight | Heavyweight |
 |---|---|---|
-| Raster (any GDAL driver) | `raster_gbx` / `gdal` | `raster_gbx` / `gdal` |
-| GeoTIFF | `gtiff_gbx` / `gtiff_gdal` | `gtiff_gbx` / `gtiff_gdal` |
-| PMTiles | — | `pmtiles_gbx` / `pmtiles` |
+| Raster (generic) | `raster_gbx` | `gdal` |
+| GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
+| COG | `cog_gbx` | — (light-only) |
+| NetCDF | `netcdf_gbx` | `netcdf_gdal` / `netcdf_ogr` |
+| PMTiles | `pmtiles_gbx` | — (light-only) |
+| File lister | `file_gbx` | — (light-only) |
+| Vector (generic) | `vector_gbx` | `ogr` |
+| Shapefile | `shapefile_gbx` | `shapefile_ogr` |
+| GeoJSON | `geojson_gbx` | `geojson_ogr` |
+| GeoJSONL | `geojsonl_gbx` | — (light-only reader) |
+| GeoPackage | `gpkg_gbx` | `gpkg_ogr` |
+| File Geodatabase | `file_gdb_gbx` | `file_gdb_ogr` |
 
-**Vector** — single-file vector writes are lightweight-only; the **sharded GeoJSONL** writer (multi-file, one shard per partition, no driver merge — the recommended writer at any scale) is available in **both** tiers.
+**Writers**
 
-| Format | Read (light / heavy) | Write |
+| Format | Lightweight | Heavyweight |
 |---|---|---|
-| Vector (any OGR driver) | `vector_gbx` / `ogr` | `vector_gbx` (light) |
-| Shapefile | `shapefile_gbx` / `shapefile_ogr` | `shapefile_gbx` (light) |
-| GeoJSON | `geojson_gbx` / `geojson_ogr` | `geojson_gbx` (light) |
-| GeoPackage | `gpkg_gbx` / `gpkg_ogr` | `gpkg_gbx` (light) |
-| File Geodatabase | `file_gdb_gbx` / `file_gdb_ogr` | `file_gdb_gbx` (light) ¹ |
-| GeoJSONL — *sharded, multi-file* | read via `geojson_gbx` (`multi=true`) | `geojsonl_gbx` / `geojsonl` (light **and** heavy) |
+| Raster (generic) | `raster_gbx` | `gdal` |
+| GeoTIFF | `gtiff_gbx` | `gtiff_gdal` |
+| COG | `cog_gbx` | — (light-only) |
+| PMTiles | `pmtiles_gbx` | `pmtiles` |
+| NetCDF | `netcdf_gbx` | — (light-only) |
+| Vector (generic) | `vector_gbx` | — (light-only) |
+| Shapefile | `shapefile_gbx` | — (light-only) |
+| GeoJSON | `geojson_gbx` | — (light-only) |
+| GeoJSONL — *sharded, multi-file* | `geojsonl_gbx` | `geojsonl_ogr` |
+| GeoPackage | `gpkg_gbx` | — (light-only) |
+| File Geodatabase | `file_gdb_gbx` | — (hybrid; needs native GDAL) ¹ |
+
+Single-file vector writes are lightweight-only; the **sharded GeoJSONL** writer (multi-file, one shard per partition, no driver merge — the recommended writer at any scale) is available in **both** tiers.
 
 ¹ `file_gdb_gbx` write is a **hybrid**: it encodes the `.gdb` via the native GDAL (`osgeo`) from the heavyweight GDAL init script, because pyogrio's bundled GDAL ships a read-only OpenFileGDB driver. On compute with those natives it writes natively; otherwise it raises a clear error (use `gpkg_gbx` / `geojson_gbx`). FileGDB *reading* is lightweight-only.
 

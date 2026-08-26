@@ -28,16 +28,16 @@ The full pattern runs four steps:
 
 1. **Shift** the polygon from `[-180, 180]` into `[0, 360]` longitude space with `gbx_st_shiftlongitude`. This makes a crossing polygon contiguous — its western vertices (e.g. −170°) move to 190°, and the entire shape now sits around the 180° line without any coordinate-wrap artefacts.
 2. **Split** the contiguous polygon at the 180° meridian with `gbx_st_split`. The result is a `GEOMETRYCOLLECTION` containing two separate pieces.
-3. **Explode** the collection into individual rows with the built-in `ST_Dump`.
-4. **Wrap only the eastern pieces** back into `[-180, 0]` with `gbx_st_wrapx`. The conditional `CASE WHEN ST_XMax(piece) > 180` is essential: the eastern piece (all x ≥ 180) needs wrapping; the western piece (all x ≤ 180) is already in standard longitude range and must not be touched. Applying `gbx_st_wrapx` uniformly to both pieces would shift the western piece's 180° shared edge to −180°, producing a 350°-wide polygon instead of a clean 10° strip.
+3. **Dump** the collection with the built-in `ST_Dump`, which returns the pieces as an `ARRAY<GEOMETRY>`. Index them positionally — `geom_split[0]` and `geom_split[1]`.
+4. **Wrap only the eastern piece** back into `[-180, 0]` with `gbx_st_wrapx`. The conditional `CASE WHEN ST_XMax(piece) > 180` is essential: the eastern piece (all x ≥ 180) needs wrapping; the western piece (all x ≤ 180) is already in standard longitude range and must not be touched. Applying `gbx_st_wrapx` uniformly to both pieces would shift the western piece's 180° shared edge to −180°, producing a 350°-wide polygon instead of a clean 10° strip.
 
-The final `ST_Union` / `ST_Multi` reassembles the normalized pieces into a `MULTIPOLYGON`.
+The final `ST_Union(geom_0, geom_1)` / `ST_Multi` reassembles the two normalized pieces into a `MULTIPOLYGON`.
 
 ## WKB ↔ GEOMETRY bridge
 
 GeoBrix functions operate on `BINARY` (WKB/EWKB). The built-in product functions (`ST_Dump`, `ST_XMax`, `ST_Union`, `ST_Multi`, `ST_AsText`) operate on the product's `GEOMETRY` type. Where the two meet, bridge with:
 
-- `ST_GeomFromWKB(wkb_column)` — converts GeoBrix BINARY output to a product `GEOMETRY` value
+- `ST_GeomFromWKB(wkb_column, 4326)` — converts GeoBrix BINARY output to a product `GEOMETRY` value. Pass the SRID (`4326`) so the pieces share a CRS; `ST_Union` requires its inputs to be in the same spatial reference.
 - `ST_AsBinary(geometry_column)` — converts a product `GEOMETRY` value back to BINARY for GeoBrix input
 
 The pattern below shows both bridges in context.

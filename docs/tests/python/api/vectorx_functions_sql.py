@@ -336,42 +336,55 @@ def antimeridian_pattern_sql_example():
     1. ``gbx_st_shiftlongitude`` — shift [-180,180] → [0,360] so the polygon
        becomes contiguous (x ∈ [170, 190]) and cuttable at x=180.
     2. ``gbx_st_split`` — cut at the 180° meridian into a GeometryCollection.
-    3. ``ST_Dump`` — explode the collection into individual polygon rows.
-    4. ``CASE WHEN ST_XMax(piece) > 180 THEN gbx_st_wrapx(…) ELSE ST_AsBinary(piece) END``
+    3. ``ST_Dump`` — returns the collection's pieces as an ``ARRAY<GEOMETRY>``;
+       index them as ``geom_split[0]`` / ``geom_split[1]``.
+    4. ``CASE WHEN ST_XMax(piece) > 180 THEN ST_GeomFromWKB(gbx_st_wrapx(…), 4326) ELSE piece END``
        — wrap only the eastern piece (x ≥ 180) back to [-180, 0]; leave the
        western piece (all x ≤ 180) unchanged.  Applying wrapx uniformly would
        move the western piece's x=180 edge to x=-180, producing a 350°-wide
        polygon instead of a clean 10° strip.
-    5. ``ST_Union`` / ``ST_Multi`` — reassemble into a clean MULTIPOLYGON.
+    5. ``ST_Union(geom_0, geom_1)`` / ``ST_Multi`` — reassemble into a clean
+       MULTIPOLYGON.  The ``4326`` SRID on every ``ST_GeomFromWKB`` bridge keeps
+       both pieces in the same CRS so ``ST_Union`` accepts them.
+
+    Runs on Databricks Runtime 17.3+ where the built-in ``ST_Dump`` / ``ST_XMax``
+    / ``ST_Union`` / ``ST_Multi`` / ``ST_GeomFromWKB`` functions are available.
     """
     return """
 WITH raw AS (
-  SELECT 'POLYGON((170 -10, -170 -10, -170 10, 170 10, 170 -10))' AS geom
+  SELECT 'POLYGON((170 -10, -170 -10, -170 10, 170 10, 170 -10))' AS wkt
 ),
 pieces AS (
-  SELECT (ST_Dump(ST_GeomFromWKB(
-           gbx_st_split(gbx_st_shiftlongitude(geom),
-                        'LINESTRING(180 -90, 180 90)')))).geom AS piece
+  SELECT ST_Dump(
+           ST_GeomFromWKB(
+             gbx_st_split(gbx_st_shiftlongitude(wkt), 'LINESTRING(180 -90, 180 90)'),
+             4326
+           )
+         ) AS geom_split
   FROM raw
 ),
 parts AS (
-  SELECT CASE
-           WHEN ST_XMax(piece) > 180
-             THEN gbx_st_wrapx(ST_AsBinary(piece), 180, -360)
-           ELSE ST_AsBinary(piece)
-         END AS geom
-  FROM pieces)
-SELECT ST_AsText(ST_Multi(ST_Union(ST_GeomFromWKB(geom)))) AS normalized FROM parts;
+  SELECT
+    CASE WHEN ST_XMax(geom_split[0]) > 180
+         THEN ST_GeomFromWKB(gbx_st_wrapx(ST_AsBinary(geom_split[0]), 180, -360), 4326)
+         ELSE geom_split[0]
+    END AS geom_0,
+    CASE WHEN ST_XMax(geom_split[1]) > 180
+         THEN ST_GeomFromWKB(gbx_st_wrapx(ST_AsBinary(geom_split[1]), 180, -360), 4326)
+         ELSE geom_split[1]
+    END AS geom_1
+  FROM pieces
+)
+SELECT ST_AsText(ST_Multi(ST_Union(geom_0, geom_1))) AS normalized FROM parts;
 """
 
 
 antimeridian_pattern_sql_example_output = """
-+------------------+
-|normalized        |
-+------------------+
-|MULTIPOLYGON (...)|
-+------------------+
-... (WKT — two polygons, one on each side of the 180° antimeridian)
++-----------------------------------------------------------------------------------------------------+
+|normalized                                                                                           |
++-----------------------------------------------------------------------------------------------------+
+|MULTIPOLYGON(((180 -10,170 -10,170 10,180 10,180 -10)),((-180 10,-170 10,-170 -10,-180 -10,-180 10)))|
++-----------------------------------------------------------------------------------------------------+
 """
 
 

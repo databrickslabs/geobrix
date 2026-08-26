@@ -292,6 +292,12 @@ class FnSpec:
     # from the pixel-reading allowlist below. Ignored for tile-returning ops
     # (their disposition is sampled from the output tile at run time).
     virtual_disposition: Optional[str] = None
+    # Optional geometry set name for functions that operate on scalar geometry
+    # input (VectorX ST functions). When set, the bench uses geom_corpus.sets[geometry_set]
+    # for that function's geometry input. When None, uses the default srid/source_tile
+    # matching behavior (so raster geometry aggregators that reuse srid_4326/srid_27700
+    # are UNAFFECTED).
+    geometry_set: Optional[str] = None
 
 
 _BOTH = ("pure-core", "spark-path")
@@ -2976,13 +2982,14 @@ REGISTRY: Dict[str, FnSpec] = {
         "gbx_st_asmvt",
         "vector",
         ("spark-path",),
-        {},
-        col_fn=lambda col, a: pyvx.st_asmvt(col, F.lit(None), F.lit(None)),  # Placeholder attrs/layer
+        {"extent": 4096, "layer_name": "features"},
+        col_fn=lambda col, a: pyvx.st_asmvt(col, F.lit(None), F.lit(a["layer_name"])),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
         fingerprint_kind="vector",
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="srid_4326",
         sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvt.scala",),
     ),
     "st_legacyaswkb": FnSpec(
@@ -2995,7 +3002,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="srid_4326",
         sources=(_PYVX + "_legacy.py", "src/main/scala/com/databricks/labs/gbx/vectorx/jts/legacy/expressions/ST_LegacyAsWKB.scala"),
     ),
     "st_triangulate": FnSpec(
@@ -3059,13 +3067,14 @@ REGISTRY: Dict[str, FnSpec] = {
         "st_crs",
         "gbx_st_crs",
         "vector",
-        ("pure-core",),  # Header accessor, no spark-path needed
+        ("spark-path",),  # Spark-path only; lightweight accessor
         {},
-        core_fn=lambda ds, a: None,  # Timing-only placeholder
-        col_fn=lambda col, a: None,  # Placeholder; pure-core only
-        core=True,
+        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        col_fn=lambda col, a: pyvx.st_crs(col),
+        core=False,
         fingerprint=False,  # Timing-only
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="srid_4326",
         virtual_disposition="deferred",  # Header-only, no pixel read
         sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_Crs.scala",),
     ),
@@ -3073,13 +3082,14 @@ REGISTRY: Dict[str, FnSpec] = {
         "st_setcrs",
         "gbx_st_setcrs",
         "vector",
-        ("pure-core", "spark-path"),
+        ("spark-path",),
         {"srid": 4326},  # Default WGS84
-        core_fn=lambda col, a: None,  # Placeholder for pure-core
+        core_fn=lambda col, a: None,  # Placeholder for spark-path only
         col_fn=lambda col, a: pyvx.st_setcrs(col, F.lit(a["srid"])),
-        core=True,
+        core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="srid_4326",
         virtual_disposition="deferred",  # Header edit only
         sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_SetCrs.scala",),
     ),
@@ -3087,15 +3097,16 @@ REGISTRY: Dict[str, FnSpec] = {
         "st_transformcrs",
         "gbx_st_transformcrs",
         "vector",
-        ("pure-core", "spark-path"),
+        ("spark-path",),
         {"source_crs": "EPSG:4326", "target_crs": "EPSG:3857"},
-        core_fn=lambda col, a: None,  # Placeholder for pure-core
+        core_fn=lambda col, a: None,  # Placeholder for spark-path only
         col_fn=lambda col, a: pyvx.st_transformcrs(
             col, F.lit(a["target_crs"]), F.lit(a["source_crs"])
         ),
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="srid_4326",
         virtual_disposition="materialized",  # Full WKB transform
         sources=_PYVX_CRS_LIGHT + (_VECTORX + "ST_TransformCrs.scala",),
     ),
@@ -3105,12 +3116,13 @@ REGISTRY: Dict[str, FnSpec] = {
         "gbx_st_shiftlongitude",
         "vector",
         ("spark-path",),
-        {"shift": 180},
+        {},
         col_fn=lambda col, a: pyvx.st_shiftlongitude(col),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_antimeridian",
         sources=_PYVX_ANTIMERIDIAN_LIGHT,
     ),
     "st_split": FnSpec(
@@ -3118,12 +3130,15 @@ REGISTRY: Dict[str, FnSpec] = {
         "gbx_st_split",
         "vector",
         ("spark-path",),
-        {},
-        col_fn=lambda col, a: pyvx.st_split(col, F.lit(None)),  # Placeholder blade
+        {},  # blade built inline in col_fn (F.lit) so args stays JSON-serializable
+        col_fn=lambda col, a: pyvx.st_split(
+            col, F.lit(shapely.geometry.box(-180, -90, -179.9, 90).wkb)
+        ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_antimeridian",
         sources=_PYVX_ANTIMERIDIAN_LIGHT,
     ),
     "st_wrapx": FnSpec(
@@ -3138,7 +3153,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_antimeridian",
         sources=_PYVX_ANTIMERIDIAN_LIGHT,
     ),
     # --- Validity Functions (Light-Only) ---
@@ -3152,7 +3168,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=False,  # Timing-only; text output
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_validity",
         sources=_PYVX_VALIDITY_LIGHT,
     ),
     "st_makevalid": FnSpec(
@@ -3165,7 +3182,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_validity",
         sources=_PYVX_VALIDITY_LIGHT,
     ),
     # --- Cleaning Functions (Light-Only) ---
@@ -3179,7 +3197,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_cleaning",
         sources=_PYVX_CLEANING_LIGHT,
     ),
     "st_reduceprecision": FnSpec(
@@ -3192,7 +3211,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_cleaning",
         sources=_PYVX_CLEANING_LIGHT,
     ),
     "st_removerepeatedpoints": FnSpec(
@@ -3205,7 +3225,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_cleaning",
         sources=_PYVX_CLEANING_LIGHT,
     ),
     "st_simplifypreservetopology": FnSpec(
@@ -3218,7 +3239,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_cleaning",
         sources=_PYVX_CLEANING_LIGHT,
     ),
     "st_snap": FnSpec(
@@ -3233,7 +3255,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_cleaning",
         sources=_PYVX_CLEANING_LIGHT,
     ),
     # --- Coverage Functions (Light-Only) ---
@@ -3247,7 +3270,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=False,  # Timing-only; boolean result
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_coverage",
         sources=_PYVX_COVERAGE_LIGHT,
     ),
     "st_coverageinvalidedges": FnSpec(
@@ -3260,7 +3284,8 @@ REGISTRY: Dict[str, FnSpec] = {
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
-        input_kind="tile",
+        input_kind="geometry_scalar",
+        geometry_set="st_coverage",
         sources=_PYVX_COVERAGE_LIGHT,
     ),
 }

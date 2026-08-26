@@ -142,15 +142,26 @@ def _load_geometry_corpus(corpus_root):
     return m.GeometryCorpus.read(p)
 
 
-def _geometry_set_for(geom_corpus, te):
-    """The GeometrySet for a tile: by source_tile path, else by matching srid.
+def _geometry_set_for(geom_corpus, te, geometry_set_override=None):
+    """The GeometrySet for a tile: by explicit override, source_tile, or srid.
 
-    Geometry is generated per distinct CRS from a representative tile, so a tile
-    whose own path is not a geometry source still gets the in-extent set for its
-    srid (same projection, so the bounds-derived geometry is in-extent).
+    When geometry_set_override is set, use geom_corpus.sets[geometry_set_override] if
+    it exists. Otherwise, geometry is generated per distinct CRS from a representative
+    tile, so a tile whose own path is not a geometry source still gets the in-extent
+    set for its srid (same projection, so the bounds-derived geometry is in-extent).
     """
     if geom_corpus is None:
         return None
+    # Honor explicit per-function geometry set override.
+    if geometry_set_override is not None:
+        if geometry_set_override in geom_corpus.sets:
+            return geom_corpus.sets[geometry_set_override]
+        else:
+            raise ValueError(
+                f"geometry_set '{geometry_set_override}' not found in corpus. "
+                f"Available: {list(geom_corpus.sets.keys())}"
+            )
+    # Default: match by source_tile path, else by srid.
     for gset in geom_corpus.sets.values():
         if gset.source_tile == te.path:
             return gset
@@ -360,7 +371,11 @@ def run_pure_core(
                 else None
             )
             geom = (
-                _geometry_set_for(geom_corpus, te) if input_kind == "geometry" else None
+                _geometry_set_for(
+                    geom_corpus, te, getattr(fs, "geometry_set", None)
+                )
+                if input_kind == "geometry"
+                else None
             )
 
             try:
@@ -603,15 +618,14 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
     geom_corpus = _load_geometry_corpus(root)
     if geom_corpus is None:
         raise RuntimeError("geometry.json absent; cannot run geometry aggregator")
-    # The representative source tile (first row_pool tile) supplies extent + geom.
-    src_rel = corpus.row_pool.tiles[0].path
-    gset = None
-    for g in geom_corpus.sets.values():
-        if g.source_tile == src_rel:
-            gset = g
-            break
+    # Honor explicit geometry_set if set, else fall back to source_tile/srid lookup.
+    gset = _geometry_set_for(geom_corpus, corpus.row_pool.tiles[0], getattr(fs, "geometry_set", None))
     if gset is None:
-        gset = next(iter(geom_corpus.sets.values()))
+        raise RuntimeError(
+            f"Could not find geometry set for {fs.name} with geometry_set={getattr(fs, 'geometry_set', None)}"
+        )
+    # The representative source tile supplies extent.
+    src_rel = gset.source_tile
     with rasterio.open(root / src_rel) as ds:
         left, bottom, right, top = ds.bounds
         epsg = ds.crs.to_epsg() if ds.crs is not None else None
@@ -628,7 +642,7 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
         pairs = [(bytes(wkb), 0.0) for wkb in gset.zpoints]
     elif fs.name == "rst_gridfrompoints_agg":
         pairs = [(bytes(wkb), float(v)) for wkb, v in gset.points]
-    else:  # rst_rasterize_agg
+    else:  # rst_rasterize_agg or st_coverage*
         pairs = [(bytes(wkb), float(v)) for wkb, v in gset.boxes]
     schema = StructType(
         [
@@ -1749,15 +1763,24 @@ def run_spark_path(  # noqa: C901
         return F.array(*elems)
 
     def _input_col(fn: str, kind: str, df=None):
-        """The column fed to col_fn: an array literal for tile_array, else the tile.
+        """The column fed to col_fn: array literal for tile_array, geom for geometry_scalar, else tile.
 
-        ``df`` selects which DataFrame's ``tile`` column to reference -- the measured
+        ``df`` selects which DataFrame's column to reference -- the measured
         pass uses df_all, the warm-up pass uses the one-row-per-partition warm DF (a
         cross-DataFrame column ref would fail analysis, so each pass passes its own df).
-        The tile_array literal is DataFrame-independent.
+        The tile_array literal is DataFrame-independent; geometry_scalar routes to a
+        geometry DataFrame (passed separately below, not via df).
         """
-        _d = df_all if df is None else df
-        return _synth_array_col(fn) if kind == "tile_array" else _d["tile"]
+        if kind == "tile_array":
+            return _synth_array_col(fn)
+        elif kind == "geometry_scalar":
+            # Geometry column; df is the geometry DataFrame for this fn's set.
+            # If df is None, fall back to df_all["geom"] (shouldn't happen in normal flow).
+            _d = df if df is not None else df_all
+            return _d["geom"] if "geom" in _d.columns else _d["tile"]
+        else:
+            _d = df_all if df is None else df
+            return _d["tile"]
 
     # Warm-up DF: exactly one tile row per partition of df_all (mapPartitions -> take 1),
     # so a warm-up pass exercises EVERY executor slot's Python worker / UDF once without
@@ -1799,6 +1822,54 @@ def run_spark_path(  # noqa: C901
             df_gb.count()
             warm_df_gb = _one_row_per_partition(spark, df_gb).cache()
             warm_df_gb.count()
+
+    # Geometry DataFrames for scalar-geometry ST functions (e.g., st_makevalid, st_split).
+    # Build one per distinct geometry_set used by the batch's geometry_scalar fns,
+    # following the same pattern as df_gb/warm_df_gb: replicate to max_rows rows,
+    # repartition, cache, and warm.
+    geom_corpus = _load_geometry_corpus(root)
+    _geometry_dfs = {}  # Maps geometry_set -> (df, warm_df)
+    _want_geometry_sets = set()
+    if geom_corpus is not None:
+        for f in fnspecs:
+            if getattr(f, "input_kind", "tile") == "geometry_scalar":
+                gset_name = getattr(f, "geometry_set", None)
+                if gset_name is not None:
+                    _want_geometry_sets.add(gset_name)
+
+    if _want_geometry_sets and not explain_only:
+        from pyspark.sql.types import BinaryType, StructField, StructType
+
+        for gset_name in _want_geometry_sets:
+            if gset_name not in geom_corpus.sets:
+                print(
+                    f"[bench] geometry_set '{gset_name}' not found in corpus; "
+                    f"skipping this set of functions"
+                )
+                continue
+            gset = geom_corpus.sets[gset_name]
+            # Build (geom BINARY) pairs: extract WKB from the geometry set.
+            # For scalar geometry functions, use boxes (2D polygon geometries).
+            # If boxes is empty, fall back to points or zpoints.
+            if gset.boxes:
+                geoms = [bytes(wkb) for wkb, _ in gset.boxes]
+            elif gset.points:
+                geoms = [bytes(wkb) for wkb, _ in gset.points]
+            elif gset.zpoints:
+                geoms = [bytes(wkb) for wkb in gset.zpoints]
+            else:
+                print(f"[bench] geometry_set '{gset_name}' has no geometries; skipping")
+                continue
+            # Cycle geometries to fill max_rows rows.
+            geom_pairs = [(geoms[i % len(geoms)],) for i in range(max_rows)]
+            schema = StructType([StructField("geom", BinaryType(), False)])
+            df_geom = spark.createDataFrame(geom_pairs, schema=schema)
+            df_geom = df_geom.repartition(_nparts, F.rand()).cache()
+            df_geom.count()  # materialize the cache
+            warm_df_geom = _one_row_per_partition(spark, df_geom).cache()
+            warm_df_geom.count()
+            _geometry_dfs[gset_name] = (df_geom, warm_df_geom)
+            print(f"[bench] loaded geometry_set '{gset_name}' with {len(geoms)} unique geometries")
 
     # --explain-only: build each fn's spark-path DataFrame and PRINT its physical plan,
     # no timing / no Delta write (delegated to _explain_spark_path).
@@ -1867,17 +1938,25 @@ def run_spark_path(  # noqa: C901
         if "spark-path" not in fs.modes:
             continue
         _sp_leg_i += 1
-        # Route gb_tile fns (BNG raster->grid / tessellate, which reproject to
-        # EPSG:27700 and drop out-of-GB pixels) to the dedicated GB tile DF so
-        # they bench REAL cells.  Every other fn uses the ordinary NYC row pool DF.
-        _fn_df = (
-            df_gb if (getattr(fs, "gb_tile", False) and df_gb is not None) else df_all
-        )
-        _fn_warm_df = (
-            warm_df_gb
-            if (getattr(fs, "gb_tile", False) and warm_df_gb is not None)
-            else _warm_df
-        )
+        # Route based on input_kind and attributes:
+        # - gb_tile fns: use GB tile DF (EPSG:27700 cells)
+        # - geometry_scalar fns: use their geometry set DF
+        # - others: use the ordinary NYC tile row pool DF
+        _input_kind = getattr(fs, "input_kind", "tile")
+        if _input_kind == "geometry_scalar":
+            # Geometry scalar function: route to its geometry set's DF
+            gset_name = getattr(fs, "geometry_set", None)
+            if gset_name and gset_name in _geometry_dfs:
+                _fn_df, _fn_warm_df = _geometry_dfs[gset_name]
+            else:
+                print(f"[bench] {fs.name}: geometry_set '{gset_name}' not available, skipping")
+                continue
+        elif getattr(fs, "gb_tile", False) and df_gb is not None:
+            _fn_df = df_gb
+            _fn_warm_df = warm_df_gb
+        else:
+            _fn_df = df_all
+            _fn_warm_df = _warm_df
         _mark = len(out)
         if getattr(fs, "input_kind", "tile") in _agg_kinds:
             out += _run_aggregate(

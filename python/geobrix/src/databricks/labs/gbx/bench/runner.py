@@ -1936,9 +1936,14 @@ def run_spark_path(  # noqa: C901
 
         _prx_reg.register(spark, only=[f.sql_name for f in _udtf_fns])
 
-    # geometry_scalar / geometry_aggregate ST fns AND geometry-input UDTFs call
-    # registered gbx_st_* SQL UDFs/UDTFs (pyvx); register them in this session or
-    # every col_fn expr / LATERAL call fails with UNRESOLVED_ROUTINE.
+    # geometry_scalar / geometry_aggregate fns AND geometry-input UDTFs call
+    # registered gbx_ SQL UDFs/UDTFs; register them in this session or every
+    # col_fn expr / LATERAL call fails with UNRESOLVED_ROUTINE. Route by OWNING
+    # TIER, not input_kind: input_kind=="geometry_aggregate" spans BOTH tiers --
+    # the raster aggregators (gbx_rst_rasterize_agg / gridfrompoints / dtmfromgeoms)
+    # are pyrx, while the vector geometry fns (gbx_st_*) and pmtiles/quadbin
+    # aggregators are pyvx. Sending an rst_ name to the pyvx registrar fails its
+    # name validation.
     _geom_fns = [
         f
         for f in fnspecs
@@ -1949,10 +1954,16 @@ def run_spark_path(  # noqa: C901
             or (getattr(f, "udtf", False) and getattr(f, "geometry_set", None))
         )
     ]
-    if _geom_fns:
+    _geom_pyrx = [f for f in _geom_fns if f.sql_name.startswith("gbx_rst_")]
+    _geom_pyvx = [f for f in _geom_fns if not f.sql_name.startswith("gbx_rst_")]
+    if _geom_pyrx:
+        from databricks.labs.gbx.pyrx import functions as _prx_reg
+
+        _prx_reg.register(spark, only=[f.sql_name for f in _geom_pyrx])
+    if _geom_pyvx:
         from databricks.labs.gbx.pyvx import functions as _pyvx_reg
 
-        _pyvx_reg.register(spark, only=[f.sql_name for f in _geom_fns])
+        _pyvx_reg.register(spark, only=[f.sql_name for f in _geom_pyvx])
 
     # Spark warm-up: one throwaway job so JVM/Spark spin-up isn't charged to the first
     # timed cell (delegated to _spark_path_warmup).

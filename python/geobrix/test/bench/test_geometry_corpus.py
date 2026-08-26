@@ -161,6 +161,71 @@ def test_generate_corpus_persists_a_geometry_manifest(tmp_path):
             assert left <= p.x <= right and bottom <= p.y <= top
 
 
+def test_st_geometry_sets_are_generated(tmp_path):
+    # The geometry corpus must include ST function family geometry sets:
+    # st_validity (invalid geometries), st_antimeridian (crossing ±180°),
+    # st_cleaning (dense vertices), st_coverage (overlapping polygons).
+    # These are generated deterministically from the corpus seed and are
+    # accessible via runner._geometry_set_for().
+    dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=42,
+        tile_px=[32],
+        bands=[1],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=0,
+        row_tile_px=32,
+        row_bands=1,
+        row_dtype="float32",
+    )
+    geom_path = tmp_path / "geometry.json"
+    gc = m.GeometryCorpus.read(geom_path)
+
+    # Verify all 4 ST sets are present and non-empty
+    st_sets = ["st_validity", "st_antimeridian", "st_cleaning", "st_coverage"]
+    for name in st_sets:
+        assert name in gc.sets, f"Missing ST geometry set: {name}"
+        gset = gc.sets[name]
+        assert gset.srid == 4326
+        assert len(gset.boxes) > 0, f"{name} should have boxes"
+
+    # Verify st_validity geometries are actually invalid
+    validity_set = gc.sets["st_validity"]
+    if validity_set.boxes:
+        first_wkb, _ = validity_set.boxes[0]
+        first_geom = shapely.wkb.loads(first_wkb)
+        # At least the first geometry should be invalid (bowtie)
+        assert not first_geom.is_valid, "st_validity should contain invalid geometry"
+
+    # Verify st_antimeridian geometries cross ±180°
+    antimerid_set = gc.sets["st_antimeridian"]
+    if antimerid_set.boxes:
+        first_wkb, _ = antimerid_set.boxes[0]
+        first_geom = shapely.wkb.loads(first_wkb)
+        min_lon, _, max_lon, _ = first_geom.bounds
+        # Geometries should be in upper longitude range (near ±180°)
+        assert min_lon > 160 or max_lon > 160
+
+    # Verify st_cleaning geometries have dense vertices
+    cleaning_set = gc.sets["st_cleaning"]
+    if cleaning_set.boxes:
+        first_wkb, _ = cleaning_set.boxes[0]
+        first_geom = shapely.wkb.loads(first_wkb)
+        # Dense polygons should have many vertices
+        if hasattr(first_geom, "exterior"):
+            num_coords = len(list(first_geom.exterior.coords))
+        else:
+            num_coords = len(list(first_geom.coords))
+        assert num_coords > 30, "st_cleaning should have dense vertices"
+
+    # Verify runner can resolve the ST sets
+    for name in st_sets:
+        gset = rn._geometry_set_for(gc, None, name)
+        assert isinstance(gset, m.GeometrySet)
+
+
 def test_runner_feeds_geometry_set_to_geometry_input_kind(tmp_path):
     # The runner's input_kind == "geometry" branch loads the geometry corpus and
     # passes the tile's GeometrySet to core_fn(ds, args, geom). This smoke FnSpec

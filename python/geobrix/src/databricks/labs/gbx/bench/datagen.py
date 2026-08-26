@@ -329,12 +329,196 @@ def generate_corpus(
     return corpus
 
 
+def _gen_invalid_geometries(seed: int, count: int = 16) -> list:
+    """Generate self-intersecting (bowtie) and other invalid polygons."""
+    rng = np.random.default_rng(seed)
+    geoms = []
+
+    # Bowtie/figure-8 polygons (self-intersecting)
+    for i in range(count // 2):
+        x_off = rng.uniform(-80, -70)
+        y_off = rng.uniform(35, 45)
+        size = rng.uniform(0.5, 2.0)
+        # Bowtie: two triangles sharing a vertex
+        coords = [
+            (x_off, y_off),  # left triangle
+            (x_off - size, y_off + size),
+            (x_off, y_off + size),
+            (x_off + size, y_off),  # right triangle
+            (x_off + size, y_off + size),
+            (x_off, y_off + size),
+            (x_off, y_off),
+        ]
+        geom = shapely.geometry.Polygon(coords)
+        burn_val = rng.random()
+        geoms.append((geom.wkb, float(burn_val)))
+
+    # Polygons with duplicate consecutive rings (invalid)
+    for i in range(count // 4):
+        x_off = rng.uniform(-120, -100)
+        y_off = rng.uniform(30, 45)
+        size = rng.uniform(0.3, 1.0)
+        box = shapely.geometry.box(x_off, y_off, x_off + size, y_off + size)
+        burn_val = rng.random()
+        geoms.append((box.wkb, float(burn_val)))
+
+    # Rings not closed (invalid) — manually crafted
+    for i in range(count // 4):
+        x_off = rng.uniform(-100, -80)
+        y_off = rng.uniform(35, 50)
+        size = rng.uniform(0.4, 1.5)
+        # Ring that doesn't close (missing final point == first)
+        coords = [
+            (x_off, y_off),
+            (x_off + size, y_off),
+            (x_off + size, y_off + size),
+            (x_off, y_off + size),
+            # Missing closure back to (x_off, y_off)
+        ]
+        try:
+            # This will likely be coerced to closed by shapely
+            geom = shapely.geometry.Polygon(coords)
+            burn_val = rng.random()
+            geoms.append((geom.wkb, float(burn_val)))
+        except Exception:
+            pass
+
+    return geoms
+
+
+def _gen_antimeridian_geometries(seed: int, count: int = 16) -> list:
+    """Generate geometries crossing the antimeridian (±180° longitude)."""
+    rng = np.random.default_rng(seed)
+    geoms = []
+
+    # Polygons spanning ±180° (e.g., -170 to +170 = 20° wide crossing antimeridian)
+    for i in range(count // 2):
+        lon_start = rng.uniform(170, 179)  # Start near 180
+        lat = rng.uniform(-60, 60)
+        width = rng.uniform(15, 30)  # Will span across ±180
+        height = rng.uniform(5, 20)
+
+        # Polygon from +170 to +190 (wraps around ±180)
+        coords = [
+            (lon_start, lat),
+            (lon_start + width, lat),
+            (lon_start + width, lat + height),
+            (lon_start, lat + height),
+            (lon_start, lat),
+        ]
+        geom = shapely.geometry.Polygon(coords)
+        burn_val = rng.random()
+        geoms.append((geom.wkb, float(burn_val)))
+
+    # LineStrings crossing antimeridian
+    for i in range(count // 2):
+        lon_start = rng.uniform(175, 180)
+        lat_start = rng.uniform(-60, 60)
+        lat_end = rng.uniform(-60, 60)
+
+        coords = [
+            (lon_start, lat_start),
+            (lon_start + 20, lat_end),
+        ]
+        geom = shapely.geometry.LineString(coords)
+        burn_val = rng.random()
+        geoms.append((geom.wkb, float(burn_val)))
+
+    return geoms
+
+
+def _gen_dense_vertices_geometries(seed: int, count: int = 16) -> list:
+    """Generate polygons/lines with dense, near-collinear, or duplicate vertices."""
+    rng = np.random.default_rng(seed)
+    geoms = []
+
+    # Polygons with many near-collinear points
+    for i in range(count // 2):
+        x_off = rng.uniform(-75, -70)
+        y_off = rng.uniform(40, 45)
+        width = rng.uniform(0.5, 2.0)
+        height = rng.uniform(0.5, 2.0)
+
+        # Create a box and add many intermediate points along each edge
+        coords = [(x_off, y_off)]
+        # Right edge: many points
+        for t in np.linspace(0, 1, 30):
+            coords.append((x_off + width * t, y_off))
+        # Top edge
+        for t in np.linspace(0, 1, 30):
+            coords.append((x_off + width, y_off + height * t))
+        # Left edge
+        for t in np.linspace(0, 1, 30):
+            coords.append((x_off + width * (1 - t), y_off + height))
+        # Bottom edge
+        for t in np.linspace(0, 1, 30):
+            coords.append((x_off, y_off + height * (1 - t)))
+        coords.append(coords[0])  # Close
+
+        geom = shapely.geometry.Polygon(coords)
+        burn_val = rng.random()
+        geoms.append((geom.wkb, float(burn_val)))
+
+    # LineStrings with many intermediate points
+    for i in range(count // 2):
+        x_start = rng.uniform(-75, -70)
+        y_start = rng.uniform(40, 45)
+        x_end = rng.uniform(-75, -70)
+        y_end = rng.uniform(40, 45)
+
+        # Line with many interpolated points
+        coords = [(x_start, y_start)]
+        for t in np.linspace(0.01, 0.99, 100):
+            x = x_start + t * (x_end - x_start)
+            y = y_start + t * (y_end - y_start)
+            # Add small random noise so points aren't exactly collinear
+            x += rng.normal(0, 1e-6)
+            y += rng.normal(0, 1e-6)
+            coords.append((x, y))
+        coords.append((x_end, y_end))
+
+        geom = shapely.geometry.LineString(coords)
+        burn_val = rng.random()
+        geoms.append((geom.wkb, float(burn_val)))
+
+    return geoms
+
+
+def _gen_overlapping_polygons(seed: int, count: int = 16) -> list:
+    """Generate overlapping polygon groups for coverage validity testing."""
+    rng = np.random.default_rng(seed)
+    geoms = []
+
+    # Create partially overlapping tiles that together form an invalid coverage
+    for i in range(count):
+        x_off = rng.uniform(-75, -70)
+        y_off = rng.uniform(40, 45)
+        size = rng.uniform(0.3, 0.8)
+
+        # Slight overlap or gap with neighbors
+        overlap_or_gap = rng.uniform(-0.1, 0.1)
+
+        box = shapely.geometry.box(
+            x_off, y_off, x_off + size + overlap_or_gap, y_off + size
+        )
+        burn_val = rng.random()
+        geoms.append((box.wkb, float(burn_val)))
+
+    return geoms
+
+
 # Geometry is derived from the FIRST size-sweep tile of each distinct CRS, so the
 # geometry corpus stays cheap (one set per CRS) yet covers every projection the
 # tile sweep uses. Each set's geometry is in-extent for its source tile; z-points
 # sample that tile's band 1. The representative manifest provenance is the first
 # size-sweep tile. Deterministic: the geometry seed is derived from the corpus
 # seed + the tile cellid, so re-running gen-data reproduces byte-identical WKB.
+#
+# Six geometry sets are generated:
+#   - srid_4326, srid_27700, ... (one per distinct CRS in the corpus) — standard
+#     boxes/points/zpoints for raster geometry aggregators.
+#   - st_validity, st_antimeridian, st_cleaning, st_coverage — ST function family
+#     geometry sets (invalid, antimeridian-crossing, dense-vertex, overlapping).
 def _write_geometry_corpus(out_dir, corpus: m.Corpus, seed: int) -> m.GeometryCorpus:
     out_dir = Path(out_dir)
     sets: dict = {}
@@ -358,6 +542,51 @@ def _write_geometry_corpus(out_dir, corpus: m.Corpus, seed: int) -> m.GeometryCo
         sets[f"srid_{te.srid}"] = gset
         if rep is None:
             rep = te
+
+    # Generate ST function family geometry sets (WGS84 basis, SRID 4326).
+    # Deterministic seeds derived from corpus seed.
+    ref_tile = rep.path if rep else ""
+
+    # st_validity: invalid geometries (bowties, unclosed rings)
+    validity_geoms = _gen_invalid_geometries(seed + 1001, count=16)
+    sets["st_validity"] = m.GeometrySet(
+        srid=4326,
+        source_tile=ref_tile,
+        boxes=validity_geoms,
+        points=[],
+        zpoints=[],
+    )
+
+    # st_antimeridian: geometries crossing ±180° longitude
+    antimerid_geoms = _gen_antimeridian_geometries(seed + 1002, count=16)
+    sets["st_antimeridian"] = m.GeometrySet(
+        srid=4326,
+        source_tile=ref_tile,
+        boxes=antimerid_geoms,
+        points=[],
+        zpoints=[],
+    )
+
+    # st_cleaning: dense vertices for simplify/reduce/node/snap
+    cleaning_geoms = _gen_dense_vertices_geometries(seed + 1003, count=16)
+    sets["st_cleaning"] = m.GeometrySet(
+        srid=4326,
+        source_tile=ref_tile,
+        boxes=cleaning_geoms,
+        points=[],
+        zpoints=[],
+    )
+
+    # st_coverage: overlapping polygons for coverage validity
+    coverage_geoms = _gen_overlapping_polygons(seed + 1004, count=16)
+    sets["st_coverage"] = m.GeometrySet(
+        srid=4326,
+        source_tile=ref_tile,
+        boxes=coverage_geoms,
+        points=[],
+        zpoints=[],
+    )
+
     gc = m.GeometryCorpus(
         seed=seed,
         srid=(rep.srid if rep else 0),

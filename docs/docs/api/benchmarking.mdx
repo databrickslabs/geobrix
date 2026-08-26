@@ -906,6 +906,26 @@ runs **at parity with the heavyweight JVM/OGR aggregator** (~6% apart). Both enc
 decoded tiles are **feature-equivalent** — a hard parity gate; the benchmark fails if the tiers
 diverge. Tiles compose with `pmtiles_agg` for end-to-end publishing.
 
+### MVT pyramid tiling (`st_asmvt_pyramid`)
+
+`st_asmvt_pyramid` is a per-feature MVT tiling **UDTF**: each input geometry fans out to one
+`(z, x, y, mvt)` row per tile it intersects across a zoom range. The benchmark drives it in the
+same distributed shape it runs in production — a SQL `LATERAL` table-function join over a WKB
+geometry column — timing `SELECT t.* FROM geoms AS d, LATERAL gbx_st_asmvt_pyramid(d.geom, NULL,
+0, 5, 'layer') AS t` whole-job. It is **light-only** (no heavyweight counterpart), so this is an
+absolute lightweight number rather than a ratio.
+
+> **Environment:** Databricks · DBR 18 · 20 workers · 1000 input geometries → z 0–5 pyramid ·
+> whole-job wall-clock median.
+
+| Tier | Function | Input | Median | Throughput |
+|---|---|---|---|---|
+| lightweight | `pyvx.st_asmvt_pyramid` | 1000 geoms → z 0–5 tiles | ~2.4 s | **~420 geoms/s** |
+
+At **~2.4 ms per input geometry**, the per-geometry cost covers the full zoom-pyramid fan-out (each
+feature emitting a tile at every intersecting level z 0–5) plus MVT-encoding every output tile — so
+it runs higher than the scalar per-feature encoders, as expected for a one-to-many tiling operation.
+
 ### TIN & legacy migration (`st_triangulate`, `st_interpolateelevation*`, `st_legacyaswkb`)
 
 The constrained-Delaunay TIN generators (`st_triangulate`, `st_interpolateelevationbbox`,
@@ -920,7 +940,7 @@ non-constraint diagonals), **per-cell surface closeness within 1e-6** for elevat
 Cluster spark-path results (DBR 17.3 LTS; median wall-clock of one full distributed iteration over
 *N* tiles; same corpus both tiers):
 
-| Function | Tiles/iter | Heavy (s) | Light (s) | Light speedup |
+| Function | Geoms/iter | Heavy (s) | Light (s) | Light speedup |
 |---|---|---|---|---|
 | `st_interpolateelevationgeom` | 125 | 0.49 | 0.56 | 0.88× |
 | `st_legacyaswkb` | 1,000 | 0.39 | 0.48 | 0.82× |
@@ -932,6 +952,56 @@ on legacy migration and elevation interpolation (~0.75–0.88×) and ~1.7× behi
 the gap is the JVM↔Python serialization of the geometry arrays crossing the UDTF boundary (the same
 boundary cost seen for other byte-heavy lightweight UDTFs), not the triangulation compute itself.
 Decoded-output parity holds across both tiers (enforced by the cross-tier parity test suite, above).
+
+### Geometry validity & cleaning — scalar ST functions (lightweight tier only)
+
+The validity-checking and geometry-cleaning functions — `st_removeRepeatedPoints`, `st_snap`,
+`st_makeValid`, `st_node`, `st_simplifyPreserveTopology`, `st_reducePrecision`, `st_explainValidity`,
+`st_transformCrs`, `st_shiftLongitude`, `st_wrapX`, `st_split`, `st_setCrs`, and `st_crs` — are
+lightweight-tier scalar operations with no heavyweight equivalent. The benchmark measures **per-geometry latency** on a
+distributed job (1,000 geometries per function) and reports **absolute throughput** (geometries/sec)
+rather than a heavy-vs-light ratio. All are pure-Python using `shapely` for geometry validation,
+transformation, and cleaning.
+
+> **Environment:** Databricks · DBR 18.x · lightweight tier only · 1,000 geometries per function
+> · 20 workers · spark-path whole-job wall-clock median, one measured iteration. **Unit: per-geometry
+> latency (milliseconds) and throughput (geometries/second).**
+
+| Function | ms/geometry | geoms/sec |
+|---|---|---|
+| `st_removerepeatedpoints` | 0.90 | 1106 |
+| `st_snap` | 0.91 | 1096 |
+| `st_makevalid` | 0.91 | 1095 |
+| `st_node` | 0.93 | 1074 |
+| `st_simplifypreservetopology` | 0.95 | 1048 |
+| `st_reduceprecision` | 0.97 | 1034 |
+| `st_explainvalidity` | 1.02 | 982 |
+| `st_transformcrs` | 1.06 | 942 |
+| `st_shiftlongitude` | 1.08 | 923 |
+| `st_wrapx` | 1.08 | 923 |
+| `st_setcrs` | 1.12 | 895 |
+| `st_crs` | 1.24 | 810 |
+| `st_split` | 1.77 | 565 |
+
+These lightweight-tier functions reach **~800–1100 geometries/second per-core** (at 20 workers),
+covering the common validity repair and coordinate-transform use cases for vector-data pipelines.
+The UDF boundary cost is amortized across a batch in the Arrow `pandas_udf` path, so throughput is
+roughly uniform across the set.
+
+### Coverage validity — grouped aggregates (`st_coverageisvalid`, `st_coverageinvalidedges`)
+
+`st_coverageisvalid` and `st_coverageinvalidedges` are **grouped-aggregates**: they validate a whole
+polygon *coverage* (overlaps and gaps between polygons) rather than one geometry per row. The
+benchmark aggregates a coverage of overlapping polygons and times it per group, so the unit is a
+**coverage group**, not a single geometry. Lightweight tier only (no heavyweight equivalent).
+
+> **Environment:** Databricks · DBR 18.x · lightweight tier only · 1,000 coverage groups · 20 workers
+> · spark-path whole-job wall-clock median, one measured iteration. **Unit: per coverage group.**
+
+| Function | ms/group | groups/sec |
+|---|---|---|
+| `st_coverageinvalidedges` | 1.56 | 639 |
+| `st_coverageisvalid` | 2.41 | 415 |
 
 </TabItem>
 

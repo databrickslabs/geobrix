@@ -37,7 +37,7 @@ RasterX's lightweight tier is, in large part, **distributed rasterio** + a best-
 
 ## Overview
 
-RasterX is GeoBrix's raster data processing package, providing comprehensive tools for working with raster datasets such as satellite imagery, elevation models, and other gridded spatial data. It is a refactor and improvement of Mosaic raster functions, extended in v0.4.0 with terrain analysis, spectral indices, vector-raster bridging, web-mercator tile output, and quadbin grid aggregations. Since the Databricks product does not (yet) support anything built-in specifically for raster processing, RasterX provides a gap-filling capability for raster operations on the Databricks platform.
+RasterX is GeoBrix's raster data processing package, providing comprehensive tools for working with raster datasets such as satellite imagery, elevation models, and other gridded spatial data. It is a refactor and improvement of Mosaic raster functions, extended through v0.5.0 with terrain analysis, spectral indices, vector-raster bridging, web-mercator tile output, H3/quadbin/BNG grid aggregations, and — in v0.5.0 — **virtual tiles**, a **COG-preparation lane**, and **VRT mosaics** for memory-safe processing of multi-gigabyte rasters. Since the Databricks product does not (yet) support anything built-in specifically for raster processing, RasterX provides a gap-filling capability for raster operations on the Databricks platform.
 
 ## Key Features
 
@@ -51,11 +51,13 @@ RasterX is GeoBrix's raster data processing package, providing comprehensive too
 - **Spectral Indices**: EVI, SAVI, NDWI, NBR, NDVI, plus a generic dispatcher
 - **Vector-Raster Bridge**: Rasterize geometries, polygonize value regions
 - **Tile Publishing**: Web-mercator XYZ tile generation (PNG / JPEG / WebP)
-- **Grid Aggregations**: H3 and CARTO quadbin v0 cell aggregations
+- **Grid Aggregations**: H3, CARTO quadbin v0, and BNG cell aggregations
+- **Virtual Tiles**: Bytes-free windowed reads — process multi-gigabyte rasters without materializing them into executor memory
+- **COG Preparation & VRT Mosaics**: `file_gbx` + `cog_gbx` prepare spec-valid Cloud-Optimized GeoTIFFs and portable VRT mosaics for cheap windowed reads
 
 ## Function Categories
 
-RasterX exposes 87+ SQL functions (registered as `gbx_rst_*`; available in Python and Scala as `rst_*`), organized into the following categories (see [rasterx/functions.scala](https://github.com/databrickslabs/geobrix/blob/main/src/main/scala/com/databricks/labs/gbx/rasterx/functions.scala)):
+RasterX exposes 129 SQL functions (registered as `gbx_rst_*`; available in Python and Scala as `rst_*`), organized into the following categories (see [rasterx/functions.scala](https://github.com/databrickslabs/geobrix/blob/main/src/main/scala/com/databricks/labs/gbx/rasterx/functions.scala)):
 
 ![RasterX function categories — Constructors, Accessors, Aggregators, Generators, Operations, H3 Grid](../../../resources/images/diagrams/rasterx/rasterx-function-categories.png)
 

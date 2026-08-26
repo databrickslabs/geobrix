@@ -16,7 +16,13 @@ import VectorXIcon from '../../../resources/images/brand/VectorX.png';
 
 # <img src={VectorXIcon} alt="VectorX" style={{height: '3em', width: 'auto', verticalAlign: 'middle', marginRight: '0.5rem'}} /> Function Reference
 
-VectorX augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, and legacy-geometry migration helpers. As of v0.5.0 it covers:
+## Overview
+
+VectorX augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, authority-string CRS handling, antimeridian normalization, distributed-shapely geometry validity, cleaning, and coverage-validity, and legacy-geometry migration.
+
+## Key Features
+
+As of v0.5.0 it covers:
 
 - **Vector tile encoding** — `gbx_st_asmvt` aggregator + `gbx_st_asmvt_pyramid` generator for publishing Mapbox Vector Tile (MVT) layers, available in **both** the lightweight (`pyvx`) and heavyweight (`vectorx`) tiers
 - **TIN surface modeling** — `gbx_st_triangulate`, `gbx_st_interpolateelevationbbox`, and `gbx_st_interpolateelevationgeom` for Delaunay triangulation and grid elevation interpolation from Z-valued points, in **both** tiers (with a `constrained`/`conforming` mode selector)

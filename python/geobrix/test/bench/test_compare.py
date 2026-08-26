@@ -487,12 +487,10 @@ def test_pyrx_implemented_guards_against_binding_regression():
     # "no registered function lost its pyrx binding", NOT a brittle exact count.
     # Assert the meaningful invariant: every registered rst_ function has a pyrx
     # binding (so pyrx_implemented ⊇ the registered set), plus membership spot-checks.
-    from databricks.labs.gbx.bench import spec
-
     impl = c.pyrx_implemented()
-    registered = spec.registered_rst()
+    registered = c.registered_raster()
     missing = registered - impl
-    assert not missing, f"registered fns missing a pyrx binding: {sorted(missing)}"
+    assert not missing, f"registered rst_ fns missing a pyrx binding: {sorted(missing)}"
     assert len(impl) >= len(registered)
     assert "rst_slope" in impl
     assert "rst_merge" in impl
@@ -510,11 +508,9 @@ def test_coverage_block_reports_coverage_parity_gap_and_uncovered():
     md = c.coverage_block(cells)
     # Coverage: distinct fn count across all cells = 5, out of the registered rst_
     # total. Derive the denominator from the SAME source coverage_block uses
-    # (spec.registered_rst) so the "N / <total>" string matches whatever the code
-    # emits -- no magic literal.
-    from databricks.labs.gbx.bench import spec
-
-    total = len(spec.registered_rst())
+    # (compare.registered_raster -- rst_ only, excludes the pyvx st_ set) so the
+    # "N / <total>" string matches whatever the code emits -- no magic literal.
+    total = len(c.registered_raster())
     assert "Benchmark coverage:" in md
     assert f"/ {total}" in md
     assert f"5 / {total}" in md
@@ -539,9 +535,7 @@ def test_summarize_compare_includes_coverage_block():
         _cmp("rst_clip", "pure-core", 20.0, 10.0, 2.0, "na", ""),
     ]
     md = c.summarize_compare(cells, [], [], [])
-    from databricks.labs.gbx.bench import spec
-
-    total = len(spec.registered_rst())
+    total = len(c.registered_raster())
     assert "Coverage & parity" in md
     assert f"/ {total}" in md
     assert "Functional parity gap:** 0" in md

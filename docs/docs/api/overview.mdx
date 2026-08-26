@@ -21,7 +21,7 @@ GeoBrix provides four specialized packages for different spatial processing need
 
 ### <img src={RasterXIcon} alt="RasterX" style={{height: '88px', width: 'auto', verticalAlign: 'middle'}} /> {#rasterx}
 
-Full-spectrum raster processing for Databricks — successor to Mosaic raster, plus terrain analysis, spectral indices, tile publishing, and vector↔raster bridging.
+Full-spectrum raster processing for Databricks — successor to Mosaic raster, plus terrain analysis, spectral indices, tile publishing, vector↔raster bridging, and memory-safe large-raster processing (virtual tiles + a COG-preparation lane).
 
 - Process GeoTIFF and other GDAL-supported raster formats
 - Raster algebra, transformations, clipping, reprojection
@@ -33,6 +33,7 @@ Full-spectrum raster processing for Databricks — successor to Mosaic raster, p
 - Web-mercator XYZ tile output (`to_webmercator`, `tilexyz`, `xyzpyramid`)
 - Grid aggregations to H3 or CARTO quadbin v0 cells
 - COG output, proximity, contour, viewshed
+- Virtual tiles — bytes-free windowed reads for multi-gigabyte rasters; COG-preparation lane (`file_gbx` + `cog_gbx`) and VRT mosaics
 
 [Raster Function Reference →](./raster-functions)
 
@@ -40,10 +41,11 @@ Full-spectrum raster processing for Databricks — successor to Mosaic raster, p
 
 ### <img src={GridXIcon} alt="GridX" style={{height: '88px', width: 'auto', verticalAlign: 'middle'}} /> {#gridx}
 
-Spatial indexing across multiple discrete-global-grid systems: **BNG** (British National Grid) for Great Britain workloads and **CARTO quadbin v0** for web-mercator-aligned analytics.
+Spatial indexing across multiple discrete-global-grid systems: **BNG** (British National Grid) for Great Britain workloads, **CARTO quadbin v0** for web-mercator-aligned analytics, and **custom user-defined grids** — pairing with the product's native H3 for global hex.
 
 - British National Grid (BNG) — 21 functions covering cell math, kring/kloop, polyfill, tessellation, aggregators, and generators
 - CARTO Quadbin v0 — 9 functions (`pointascell`, `aswkb`, `centroid`, `resolution`, `polyfill`, `kring`, `tessellate`, `cellunion`, `distance`); cell IDs are 64-bit Long, aligned with the web-mercator XYZ tile grid
+- Custom user-defined grids — define a regional or equal-area grid and get cell math, polyfill, and tessellation on it
 - Cell area calculations, k-ring / k-loop neighborhoods, geometry-to-cell tessellation
 
 [GridX Function Reference →](./gridx-functions)
@@ -52,11 +54,14 @@ Spatial indexing across multiple discrete-global-grid systems: **BNG** (British 
 
 ### <img src={VectorXIcon} alt="VectorX" style={{height: '88px', width: 'auto', verticalAlign: 'middle'}} /> {#vectorx}
 
-Augments Databricks built-in `ST_*` functions with vector-tile encoding, TIN surface modeling, and legacy-Mosaic migration helpers.
+Augments the product's native `ST_*` functions with vector-tile encoding, TIN surface modeling, authority-string CRS transforms, antimeridian handling, and distributed-shapely geometry validity, cleaning, and coverage-validity — plus legacy-geometry migration.
 
-- Mapbox Vector Tile (MVT) encoding via `st_asmvt` aggregator
-- Vector tile pyramid via `st_asmvt_pyramid` generator — composes with `pmtiles_agg` for end-to-end publishing
-- TIN surface modeling — `st_triangulate` plus `st_interpolateelevationbbox` / `st_interpolateelevationgeom` (constrained-Delaunay triangulation and grid elevation interpolation from Z-valued points)
+- Mapbox Vector Tile (MVT) encoding via `st_asmvt` aggregator + `st_asmvt_pyramid` generator (composes with `pmtiles_agg` for end-to-end publishing)
+- TIN surface modeling — `st_triangulate`, `st_interpolateelevationbbox`, `st_interpolateelevationgeom` (constrained-Delaunay triangulation and grid elevation interpolation from Z-valued points)
+- CRS strings — `st_crs` / `st_setcrs` / `st_transformcrs` read, stamp, and reproject by authority-string CRS (ESRI codes, WKT, PROJ4 — not just an EPSG integer)
+- Geometry validity & cleaning (lightweight) — `st_makevalid`, `st_explainvalidity`, and topology-safe cleaning (`st_simplifypreservetopology`, `st_removerepeatedpoints`, `st_reduceprecision`, `st_node`, `st_snap`)
+- Coverage validity (lightweight) — `st_coverageisvalid`, `st_coverageinvalidedges`, `coverage_simplify`
+- Antimeridian handling (lightweight) — `st_shiftlongitude`, `st_wrapx`, `st_split`
 - Legacy Mosaic geometry conversion (migrate without installing Mosaic)
 - OGR-based reader data sources (Shapefile, GeoJSON, GeoPackage, FileGDB)
 
@@ -66,9 +71,11 @@ Augments Databricks built-in `ST_*` functions with vector-tile encoding, TIN sur
 
 ### <img src={VizXIcon} alt="VizX" style={{height: '88px', width: 'auto', verticalAlign: 'middle'}} /> {#vizx}
 
-Tier-agnostic visualization helpers for inspecting GeoBrix outputs in a notebook — Python-only, no SQL functions.
+Tier-agnostic visualization helpers for inspecting GeoBrix outputs in a notebook — render rasters and mosaics, and turn Spark geometry / H3-cell / grid DataFrames into GeoPandas for static & interactive maps. Python-only, no SQL functions.
 
 - Raster plotting (`plot_raster` / `plot_file`) with auto-decimation and percentile stretch, including coverage-depth and mask-layer composites for multi-band presence stacks
+- VRT mosaic rendering (`plot_mosaic`) — a whole mini-COG mosaic (from the `cog_gbx` `vrtMosaic` writer) as one memory-safe image, with a bbox viewport and optional h3 cell overlay
+- Multi-layer compositor (`plot_static` / `plot_interactive`) and PMTiles/COG viewers (`plot_pmtiles`, `plot_cog`, `pmtiles_info`)
 - Spark DataFrame → GeoPandas adapters (`as_gdf` / `cells_as_gdf` / `grid_as_gdf`) for `.plot()` / `.explore()` maps
 
 [VizX Reference →](./vizx)
@@ -102,7 +109,7 @@ Helpers for discovering and loading imagery from **SpatioTemporal Asset Catalog 
 | **Product Gap** | Full gap-filling | Specialized grids (BNG, quadbin) | Vector-tile encoding, legacy migration | Net-new | Supporting layer |
 | **GDAL Required** | Yes | No | Yes (readers + MVT) | No | No |
 | **Output Format** | Tile (struct) + arrays | Cell IDs (Long / String) + WKB | BINARY (MVT bytes), WKB | BINARY (PMTile blob) or file | Matplotlib figure / GeoDataFrame |
-| **Spark Surface** | 65+ SQL functions | 30+ SQL functions | 6+ SQL functions + DataSources | 1 UDAF + 1 DataSource | Python only (no SQL) |
+| **Spark Surface** | 129 SQL functions | 41 SQL functions | 21 SQL functions + DataSources | 1 UDAF + 1 DataSource | Python only (no SQL) |
 
 ## Choosing the Right Package
 
@@ -110,7 +117,7 @@ Helpers for discovering and loading imagery from **SpatioTemporal Asset Catalog 
 
 **Use GridX when:** working with British National Grid data; indexing global data into web-mercator-aligned quadbin cells; needing cell math (area, k-ring, polyfill, tessellation); building grid-aware aggregations or join keys.
 
-**Use VectorX when:** encoding features as Mapbox Vector Tiles; generating per-tile MVT layers; building TIN surfaces / interpolating elevation from Z-valued points; reading vector formats (Shapefile, GeoJSON, GeoPackage, FileGDB); migrating from DBLabs Mosaic.
+**Use VectorX when:** encoding features as Mapbox Vector Tiles; generating per-tile MVT layers; building TIN surfaces / interpolating elevation from Z-valued points; handling CRS by authority string or normalizing antimeridian-crossing geometries; repairing, cleaning, or coverage-validating geometry (lightweight); reading vector formats (Shapefile, GeoJSON, GeoPackage, FileGDB); migrating from DBLabs Mosaic.
 
 **Use PMTiles when:** publishing a tile pyramid (raster or vector) as a single static file; serving from S3/ABFS/GCS without a tile server; aggregating `(z, x, y, bytes)` rows into a deployable map.
 

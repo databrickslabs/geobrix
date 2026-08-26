@@ -948,10 +948,21 @@ def _run_aggregate(
         one = group_df.withColumn("key", F.lit(0))
         collected = one.groupBy("key").agg(_agg_col(one).alias("out")).collect()
         if collected:
-            tile = collected[0]["out"]
-            raster = tile["raster"] if tile is not None else None
+            out_val = collected[0]["out"]
+            # Tile-producing aggregators return a struct with a "raster" field;
+            # scalar/geometry aggregators (e.g. coverage validity) return a bool
+            # or WKB bytes -- don't assume a tile struct.
+            raster = None
+            if out_val is not None:
+                try:
+                    raster = out_val["raster"]
+                except (TypeError, KeyError, ValueError):
+                    raster = None
             if raster:
                 fingerprint = _fingerprint_for(fs, bytes(raster))
+            elif fs.fingerprint and isinstance(out_val, (bytes, bytearray)):
+                # WKB-returning aggregator (e.g. coverageinvalidedges).
+                fingerprint = _fingerprint_for(fs, bytes(out_val))
     except Exception as e:  # noqa: BLE001
         return [
             _agg_result_row(fs, run_id, pool, n, env, None, "", "error", str(e)[:300])

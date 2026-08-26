@@ -51,7 +51,7 @@ def test_scorecard_empty_store(tmp_path):
     out = compare.scorecard_from_store(root=tmp_path)
     # Denominator derived from the SAME source the scorecard uses
     # (spec.registered_rst) so it matches whatever the code emits -- no literal.
-    total = len(spec.registered_rst())
+    total = len(compare.registered_raster())
     assert "Benchmark coverage:** 0" in out
     assert f"/ {total}" in out
     # nothing covered -> every registered fn listed as not-yet-covered
@@ -86,7 +86,7 @@ def test_scorecard_aggregates_over_store(tmp_path):
     }
     out = compare.scorecard_from_store(root=tmp_path, specs_by_name=specs_by_name)
 
-    total = len(spec.registered_rst())
+    total = len(compare.registered_raster())
     assert f"Benchmark coverage:** 3 / {total}" in out
     # parity: 1 exact, 1 divergent, 1 timing-only (na)
     assert "exact 1" in out
@@ -104,7 +104,7 @@ def test_scorecard_aggregates_over_store(tmp_path):
 def test_scorecard_default_specs_from_registry(tmp_path):
     # With no specs_by_name override the scorecard resolves specs from the live
     # registry; a record for a real registered fn must not crash and must show up.
-    reg = sorted(spec.registered_rst())
+    reg = sorted(compare.registered_raster())
     fn = reg[0]
     specs_by_name = {s.name: s for s in spec.select(set="full")}
     _write(
@@ -114,7 +114,7 @@ def test_scorecard_default_specs_from_registry(tmp_path):
         cells=[_cell("exact", 0.0, 2.0)],
     )
     out = compare.scorecard_from_store(root=tmp_path)
-    total = len(spec.registered_rst())
+    total = len(compare.registered_raster())
     assert f"Benchmark coverage:** 1 / {total}" in out
     assert fn in out
 

@@ -83,7 +83,7 @@ def test_select_core_is_subset_of_full():
     full = {f.name for f in s.select(set="full")}
     assert core
     assert core <= full
-    assert len(core) == 21  # core == all current representative functions (rst + st)
+    assert len(core) == 19  # core == the 19 representative RST fns (ST fns are spark-path-only, not core)
     assert "rst_slope" in core and "rst_ndvi" in core
 
 

@@ -412,6 +412,28 @@ These functions are `pandas_udf`-backed (Arrow batch) scalar transforms: one inp
 | `gbx_rst_gridfrompoints` | `rst_gridfrompoints` |
 | `gbx_rst_dtmfromgeoms` | `rst_dtmfromgeoms` |
 
+**VectorX (pyvx) — geometry validity & cleaning**
+
+| SQL name | Python name | Operation |
+|---|---|---|
+| `gbx_st_makevalid` | `st_makevalid` | Repair invalid polygon/linestring geometry |
+| `gbx_st_removerepeatedpoints` | `st_removerepeatedpoints` | Remove consecutive duplicate vertices |
+| `gbx_st_snap` | `st_snap` | Snap vertices of one geometry to another within tolerance |
+| `gbx_st_node` | `st_node` | Node line crossings to vertices |
+| `gbx_st_simplifypreservetopology` | `st_simplifypreservetopology` | Simplify geometry while preserving topology |
+| `gbx_st_reduceprecision` | `st_reduceprecision` | Reduce coordinate precision to a grid |
+| `gbx_st_explainvalidity` | `st_explainvalidity` | Return `STRUCT` describing why a geometry is invalid (or empty struct if valid) |
+
+**VectorX (pyvx) — CRS & coordinate transformation**
+
+| SQL name | Python name | Operation |
+|---|---|---|
+| `gbx_st_transformcrs` | `st_transformcrs` | Reproject geometry from one CRS to another |
+| `gbx_st_setcrs` | `st_setcrs` | Assign a CRS to geometry (no reprojection) |
+| `gbx_st_crs` | `st_crs` | Extract CRS of a geometry as an EPSG code (integer) |
+| `gbx_st_shiftlongitude` | `st_shiftlongitude` | Shift longitude coordinates by ±180° (handle antimeridian wrapping) |
+| `gbx_st_wrapx` | `st_wrapx` | Normalize longitude to `[−180, 180]` or `[0, 360]` range |
+
 **VectorX (pyvx) — legacy-geometry migration**
 
 | SQL name | Python name | Operation |

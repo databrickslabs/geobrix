@@ -3262,18 +3262,23 @@ REGISTRY: Dict[str, FnSpec] = {
         geometry_set="st_cleaning",
         sources=_PYVX_CLEANING_LIGHT,
     ),
-    # --- Coverage Functions (Light-Only) ---
+    # --- Coverage Functions (Light-Only, grouped-aggregates) ---
+    # Coverage validation aggregates: consume a GROUP of polygons and validate
+    # the coverage topology. Input routes via geometry_aggregate (geom_wkb, value)
+    # pairs grouped as one batch. Coverage functions use only the geom column.
     "st_coverageisvalid": FnSpec(
         "st_coverageisvalid",
         "gbx_st_coverageisvalid",
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_coverageisvalid(col),
-        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        # col_fn receives (geom_col, value_col, extent_tuple, args) from the
+        # geometry_aggregate harness; coverage uses only the geom column.
+        col_fn=lambda g, v, ext, a: pyvx.st_coverageisvalid(g),
+        core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         core=False,
         fingerprint=False,  # Timing-only; boolean result
-        input_kind="geometry_scalar",
+        input_kind="geometry_aggregate",
         geometry_set="st_coverage",
         sources=_PYVX_COVERAGE_LIGHT,
     ),
@@ -3283,11 +3288,13 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_coverageinvalidedges(col),
-        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        # col_fn receives (geom_col, value_col, extent_tuple, args) from the
+        # geometry_aggregate harness; coverage uses only the geom column.
+        col_fn=lambda g, v, ext, a: pyvx.st_coverageinvalidedges(g),
+        core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
         core=False,
         fingerprint=True,
-        input_kind="geometry_scalar",
+        input_kind="geometry_aggregate",
         geometry_set="st_coverage",
         sources=_PYVX_COVERAGE_LIGHT,
     ),

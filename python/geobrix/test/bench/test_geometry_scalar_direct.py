@@ -73,9 +73,9 @@ def test_st_specs_have_geometry_scalar_kind():
         "st_setcrs",
         "st_split",
         "st_wrapx",
-        "st_coverageisvalid",
-        "st_coverageinvalidedges",
         "st_legacyaswkb",
+        # NB: st_coverageisvalid/coverageinvalidedges are geometry_AGGREGATE
+        # (grouped), not geometry_scalar -- asserted separately, not here.
     ]
 
     fnspecs = s.select(functions=st_scalar_fns, set="full")

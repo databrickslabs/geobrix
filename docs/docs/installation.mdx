@@ -28,6 +28,16 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[li
 
 :::tip On Serverless, use `geobrix[light_env6]`
 **Environment v6 is recommended for Serverless.** Install `geobrix[light_env6]` and set the environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job. For an env 5 Serverless cluster, use `geobrix[light_env5]` instead.
+
+**Force-reload on Serverless without touching dependencies.** To swap in fresh wheel bytes during an interactive session, run this in a cell towards the top of your notebook:
+
+```python
+%pip install --force-reinstall --no-deps "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+dbutils.library.restartPython()
+```
+
+Keep `--no-deps` alongside `--force-reinstall` — without it, pip reinstalls pyspark and other preinstalled packages and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out.
 :::
 
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">

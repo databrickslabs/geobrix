@@ -920,9 +920,9 @@ absolute lightweight number rather than a ratio.
 
 | Tier | Function | Input | Median | Throughput |
 |---|---|---|---|---|
-| lightweight | `pyvx.st_asmvt_pyramid` | 1000 geoms → z 0–5 tiles | ~2.6 s | **~390 geoms/s** |
+| lightweight | `pyvx.st_asmvt_pyramid` | 1000 geoms → z 0–5 tiles | ~2.4 s | **~420 geoms/s** |
 
-At **~2.6 ms per input geometry**, the per-geometry cost covers the full zoom-pyramid fan-out (each
+At **~2.4 ms per input geometry**, the per-geometry cost covers the full zoom-pyramid fan-out (each
 feature emitting a tile at every intersecting level z 0–5) plus MVT-encoding every output tile — so
 it runs higher than the scalar per-feature encoders, as expected for a one-to-many tiling operation.
 

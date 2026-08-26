@@ -22,7 +22,6 @@ import shapely.wkb
 from pyspark.sql import functions as F
 
 from databricks.labs.gbx.pyrx import functions as prx
-from databricks.labs.gbx.pyvx import functions as pyvx
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
@@ -44,6 +43,7 @@ from databricks.labs.gbx.pyrx.core import (
     warp,
     xyz,
 )
+from databricks.labs.gbx.pyvx import functions as pyvx
 
 # Fixed 3x3 normalised mean kernel for rst_convolve. Hardcoded identically here
 # (Python core_fn + col_fn) and in the Scala BenchDispatch case so the two engines
@@ -2977,18 +2977,24 @@ REGISTRY: Dict[str, FnSpec] = {
     ),
     # --- VectorX (pyvx/vectorx) functions ---
     # Already-benched ST functions (MVT, TIN families).
+    # st_asmvt is a grouped-aggregate MVT encoder, so it is benched via the
+    # geometry_aggregate path (groupBy().agg(...)) — NOT as a scalar (a scalar
+    # col_fn would raise AnalysisException invoking a grouped-agg UDF). Its full
+    # light-vs-heavy parity bench is the dedicated --mvt-only leg; this FnSpec
+    # keeps it in the registered-function coverage set with the correct shape.
     "st_asmvt": FnSpec(
         "st_asmvt",
         "gbx_st_asmvt",
         "vector",
         ("spark-path",),
-        {"extent": 4096, "layer_name": "features"},
-        col_fn=lambda col, a: pyvx.st_asmvt(col, F.lit(None), F.lit(a["layer_name"])),
-        core_fn=lambda ds, a: None,  # Placeholder; spark-path only
+        {"layer_name": "features"},
+        col_fn=lambda g, v, ext, a: pyvx.st_asmvt(
+            g, F.lit(None), F.lit(a["layer_name"])
+        ),
+        core_fn=lambda ds, a: None,  # spark-path only
         core=False,
-        fingerprint=True,
-        fingerprint_kind="vector",
-        input_kind="geometry_scalar",
+        fingerprint=False,
+        input_kind="geometry_aggregate",
         geometry_set="srid_4326",
         sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvt.scala",),
     ),
@@ -3004,7 +3010,10 @@ REGISTRY: Dict[str, FnSpec] = {
         fingerprint=True,
         input_kind="geometry_scalar",
         geometry_set="srid_4326",
-        sources=(_PYVX + "_legacy.py", "src/main/scala/com/databricks/labs/gbx/vectorx/jts/legacy/expressions/ST_LegacyAsWKB.scala"),
+        sources=(
+            _PYVX + "_legacy.py",
+            "src/main/scala/com/databricks/labs/gbx/vectorx/jts/legacy/expressions/ST_LegacyAsWKB.scala",
+        ),
     ),
     "st_triangulate": FnSpec(
         "st_triangulate",
@@ -3025,7 +3034,9 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_interpolateelevationgeom(col, F.lit(None)),  # Placeholder points
+        col_fn=lambda col, a: pyvx.st_interpolateelevationgeom(
+            col, F.lit(None)
+        ),  # Placeholder points
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3038,7 +3049,9 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},
-        col_fn=lambda col, a: pyvx.st_interpolateelevationbbox(col, F.lit(None)),  # Placeholder points
+        col_fn=lambda col, a: pyvx.st_interpolateelevationbbox(
+            col, F.lit(None)
+        ),  # Placeholder points
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,
@@ -3046,20 +3059,26 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=(_PYVX + "_tin.py", _VECTORX + "ST_InterpolateElevationBBox.scala"),
     ),
     # 16 new vector function benchmarks: 1 heavy+light (asmvt_pyramid), 15 light-only
-    # (CRS, antimeridian, validity, cleaning, coverage families).
+    # st_asmvt_pyramid is a per-feature MVT tiling UDTF (one geometry -> many
+    # (z,x,y,mvt) rows). Benched via the geometry-input UDTF-LATERAL path:
+    #   SELECT t.* FROM <geom view> AS d, LATERAL
+    #     gbx_st_asmvt_pyramid(d.geom, NULL, min_z, max_z, layer) AS t
+    # (attrs=NULL -> geometry-only tiles; the full t.* fan-out is realized to noop).
+    # args order mirrors the UDTF eval signature (geom, attrs, min_z, max_z, layer);
+    # the leading `attrs: None` renders as the SQL NULL literal after d.geom.
     "st_asmvt_pyramid": FnSpec(
         "st_asmvt_pyramid",
         "gbx_st_asmvt_pyramid",
         "vector",
-        ("spark-path",),  # Spark-path only (UDTF); no pure-core
-        {"min_z": 0, "max_z": 14, "layer_name": "features"},
-        col_fn=lambda col, a: pyvx.st_asmvt_pyramid(
-            col, a["min_z"], a["max_z"], a["layer_name"]
-        ),
-        core_fn=lambda ds, a: None,  # Placeholder; spark-path-only
+        ("spark-path",),
+        {"attrs": None, "min_z": 0, "max_z": 5, "layer_name": "features"},
+        col_fn=lambda col, a: None,  # UDTF: invoked via SQL LATERAL, not a scalar
+        core_fn=lambda ds, a: None,
         core=False,
-        fingerprint=True,
-        input_kind="tile",
+        fingerprint=False,
+        input_kind="geometry",
+        geometry_set="srid_4326",
+        udtf=True,
         sources=_PYVX_MVT_LIGHT + (_VECTORX + "ST_AsMvtPyramid.scala",),
     ),
     # --- CRS Functions (Light-Only) ---
@@ -3238,7 +3257,9 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {"tolerance": 0.001},
-        col_fn=lambda col, a: pyvx.st_simplifypreservetopology(col, F.lit(a["tolerance"])),
+        col_fn=lambda col, a: pyvx.st_simplifypreservetopology(
+            col, F.lit(a["tolerance"])
+        ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,
         fingerprint=True,

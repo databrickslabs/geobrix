@@ -371,9 +371,7 @@ def run_pure_core(
                 else None
             )
             geom = (
-                _geometry_set_for(
-                    geom_corpus, te, getattr(fs, "geometry_set", None)
-                )
+                _geometry_set_for(geom_corpus, te, getattr(fs, "geometry_set", None))
                 if input_kind == "geometry"
                 else None
             )
@@ -619,7 +617,9 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
     if geom_corpus is None:
         raise RuntimeError("geometry.json absent; cannot run geometry aggregator")
     # Honor explicit geometry_set if set, else fall back to source_tile/srid lookup.
-    gset = _geometry_set_for(geom_corpus, corpus.row_pool.tiles[0], getattr(fs, "geometry_set", None))
+    gset = _geometry_set_for(
+        geom_corpus, corpus.row_pool.tiles[0], getattr(fs, "geometry_set", None)
+    )
     if gset is None:
         raise RuntimeError(
             f"Could not find geometry set for {fs.name} with geometry_set={getattr(fs, 'geometry_set', None)}"
@@ -860,7 +860,7 @@ def _build_agg_group_df(spark, root, corpus, fs, kind):
     return group_df, False, extent
 
 
-def _run_aggregate(
+def _run_aggregate(  # noqa: C901
     spark,
     root,
     corpus,
@@ -1141,6 +1141,8 @@ def _sql_literal(v) -> str:
     (resolution / tile_width / tile_height / overlap / min_z / max_z), but keep the
     string branch defensive so a future string-arg UDTF still renders correctly.
     """
+    if v is None:
+        return "NULL"
     if isinstance(v, bool):
         return "true" if v else "false"
     if isinstance(v, (int, float)):
@@ -1161,9 +1163,13 @@ def _udtf_lateral_sql(view: str, fs) -> str:
     (and written to noop for timing), not short-circuited.
     """
     scalar_args = "".join(", " + _sql_literal(v) for v in fs.args.values())
+    # Grid UDTFs (rastertogrid* / tessellate) take the raster tile struct as their
+    # first arg; geometry UDTFs (st_asmvt_pyramid) take a WKB geometry column from
+    # the geometry corpus (routed by geometry_set). Same LATERAL shape either way.
+    _first = "d.geom" if getattr(fs, "geometry_set", None) else "d.tile"
     return (
         f"SELECT t.* FROM {view} AS d, "
-        f"LATERAL {fs.sql_name}(d.tile{scalar_args}) AS t"
+        f"LATERAL {fs.sql_name}({_first}{scalar_args}) AS t"
     )
 
 
@@ -1843,7 +1849,12 @@ def run_spark_path(  # noqa: C901
     _want_geometry_sets = set()
     if geom_corpus is not None:
         for f in fnspecs:
-            if getattr(f, "input_kind", "tile") == "geometry_scalar":
+            # Scalar-geometry fns AND geometry-input UDTFs (udtf + geometry_set,
+            # e.g. st_asmvt_pyramid) both need a WKB geom view built for their set.
+            _is_geom_udtf = getattr(f, "udtf", False) and getattr(
+                f, "geometry_set", None
+            )
+            if getattr(f, "input_kind", "tile") == "geometry_scalar" or _is_geom_udtf:
                 gset_name = getattr(f, "geometry_set", None)
                 if gset_name is not None:
                     _want_geometry_sets.add(gset_name)
@@ -1880,7 +1891,9 @@ def run_spark_path(  # noqa: C901
             warm_df_geom = _one_row_per_partition(spark, df_geom).cache()
             warm_df_geom.count()
             _geometry_dfs[gset_name] = (df_geom, warm_df_geom)
-            print(f"[bench] loaded geometry_set '{gset_name}' with {len(geoms)} unique geometries")
+            print(
+                f"[bench] loaded geometry_set '{gset_name}' with {len(geoms)} unique geometries"
+            )
 
     # --explain-only: build each fn's spark-path DataFrame and PRINT its physical plan,
     # no timing / no Delta write (delegated to _explain_spark_path).
@@ -1908,22 +1921,33 @@ def run_spark_path(  # noqa: C901
     # UDTFs needed by this run's udtf fns (idempotent; last registration wins) so the
     # LATERAL branch below can call them. The scalar col_fn path never needs this
     # (its UDFs are module-level singletons), so register only when a udtf fn is present.
+    # Grid UDTFs (rastertogrid* / tessellate) are pyrx; geometry-input UDTFs
+    # (st_asmvt_pyramid, marked by geometry_set) are pyvx and register with the
+    # geometry fns below -- so exclude them here or the pyrx registrar can't find them.
     _udtf_fns = [
-        f for f in fnspecs if getattr(f, "udtf", False) and "spark-path" in f.modes
+        f
+        for f in fnspecs
+        if getattr(f, "udtf", False)
+        and "spark-path" in f.modes
+        and not getattr(f, "geometry_set", None)
     ]
     if _udtf_fns:
         from databricks.labs.gbx.pyrx import functions as _prx_reg
 
         _prx_reg.register(spark, only=[f.sql_name for f in _udtf_fns])
 
-    # geometry_scalar and geometry_aggregate ST fns call registered gbx_st_* SQL UDFs
-    # (pyvx); register them in this session or every col_fn expr fails with
-    # UNRESOLVED_ROUTINE.
+    # geometry_scalar / geometry_aggregate ST fns AND geometry-input UDTFs call
+    # registered gbx_st_* SQL UDFs/UDTFs (pyvx); register them in this session or
+    # every col_fn expr / LATERAL call fails with UNRESOLVED_ROUTINE.
     _geom_fns = [
         f
         for f in fnspecs
-        if getattr(f, "input_kind", "tile") in ("geometry_scalar", "geometry_aggregate")
-        and "spark-path" in f.modes
+        if "spark-path" in f.modes
+        and (
+            getattr(f, "input_kind", "tile")
+            in ("geometry_scalar", "geometry_aggregate")
+            or (getattr(f, "udtf", False) and getattr(f, "geometry_set", None))
+        )
     ]
     if _geom_fns:
         from databricks.labs.gbx.pyvx import functions as _pyvx_reg
@@ -1968,13 +1992,17 @@ def run_spark_path(  # noqa: C901
         # - geometry_scalar fns: use their geometry set DF
         # - others: use the ordinary NYC tile row pool DF
         _input_kind = getattr(fs, "input_kind", "tile")
-        if _input_kind == "geometry_scalar":
-            # Geometry scalar function: route to its geometry set's DF
+        _is_geom_udtf = getattr(fs, "udtf", False) and getattr(fs, "geometry_set", None)
+        if _input_kind == "geometry_scalar" or _is_geom_udtf:
+            # Scalar-geometry fn OR geometry-input UDTF: route to its geometry set's
+            # DF (a WKB `geom` column view the scalar col_fn / LATERAL join reads).
             gset_name = getattr(fs, "geometry_set", None)
             if gset_name and gset_name in _geometry_dfs:
                 _fn_df, _fn_warm_df = _geometry_dfs[gset_name]
             else:
-                print(f"[bench] {fs.name}: geometry_set '{gset_name}' not available, skipping")
+                print(
+                    f"[bench] {fs.name}: geometry_set '{gset_name}' not available, skipping"
+                )
                 continue
         elif getattr(fs, "gb_tile", False) and df_gb is not None:
             _fn_df = df_gb

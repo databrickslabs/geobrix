@@ -3131,8 +3131,11 @@ REGISTRY: Dict[str, FnSpec] = {
         "vector",
         ("spark-path",),
         {},  # blade built inline in col_fn (F.lit) so args stays JSON-serializable
+        # Blade must be a LINE to split a polygon (shapely.ops.split rejects a
+        # polygon blade). Use the antimeridian meridian at x=180; the corpus
+        # crossers are represented in 0..360 lon, so this line bisects them.
         col_fn=lambda col, a: pyvx.st_split(
-            col, F.lit(shapely.geometry.box(-180, -90, -179.9, 90).wkb)
+            col, F.lit(shapely.geometry.LineString([(180, -95), (180, 95)]).wkb)
         ),
         core_fn=lambda ds, a: None,  # Placeholder; spark-path only
         core=False,

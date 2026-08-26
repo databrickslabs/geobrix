@@ -906,8 +906,25 @@ runs **at parity with the heavyweight JVM/OGR aggregator** (~6% apart). Both enc
 decoded tiles are **feature-equivalent** — a hard parity gate; the benchmark fails if the tiers
 diverge. Tiles compose with `pmtiles_agg` for end-to-end publishing.
 
-`st_asmvt_pyramid` (a per-feature MVT tiling UDTF) is not yet in the benchmark suite; the scalar MVT
-aggregator `st_asmvt` is benchmarked above.
+### MVT pyramid tiling (`st_asmvt_pyramid`)
+
+`st_asmvt_pyramid` is a per-feature MVT tiling **UDTF**: each input geometry fans out to one
+`(z, x, y, mvt)` row per tile it intersects across a zoom range. The benchmark drives it in the
+same distributed shape it runs in production — a SQL `LATERAL` table-function join over a WKB
+geometry column — timing `SELECT t.* FROM geoms AS d, LATERAL gbx_st_asmvt_pyramid(d.geom, NULL,
+0, 5, 'layer') AS t` whole-job. It is **light-only** (no heavyweight counterpart), so this is an
+absolute lightweight number rather than a ratio.
+
+> **Environment:** Databricks · DBR 18 · 20 workers · 1000 input geometries → z 0–5 pyramid ·
+> whole-job wall-clock median.
+
+| Tier | Function | Input | Median | Throughput |
+|---|---|---|---|---|
+| lightweight | `pyvx.st_asmvt_pyramid` | 1000 geoms → z 0–5 tiles | ~2.6 s | **~390 geoms/s** |
+
+At **~2.6 ms per input geometry**, the per-geometry cost covers the full zoom-pyramid fan-out (each
+feature emitting a tile at every intersecting level z 0–5) plus MVT-encoding every output tile — so
+it runs higher than the scalar per-feature encoders, as expected for a one-to-many tiling operation.
 
 ### TIN & legacy migration (`st_triangulate`, `st_interpolateelevation*`, `st_legacyaswkb`)
 

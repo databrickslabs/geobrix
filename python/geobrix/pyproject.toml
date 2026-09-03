@@ -113,7 +113,13 @@ light-base = [
 # Canonical protobuf-5 runtime extra. Classic DBR 17.3.
 light_dbr17 = [
     "geobrix[light-base]",
-    "typing_extensions>=4.13",
+    "typing_extensions>=4.12",
+    # Hold preinstalled core packages at the Serverless env5 / DBR17.3-18 base so a
+    # cluster %pip install is silent (no "a core Python package changed" notice).
+    # Bases: pandas 2.2.3, numpy 2.1.3, urllib3 2.3.0 (verified 2026-09-03).
+    "pandas<2.3",
+    "numpy<2.2",
+    "urllib3<2.4",
     # rio-tiler 9.3.0 regressed a PEP 728 TypedDict import on Python 3.12; both
     # pb5 and pb6 environments are py3.12, so <9.3 is unified across all regimes.
     "rio-tiler>=9.0,<9.3",
@@ -139,7 +145,12 @@ light_env5 = ["geobrix[light_dbr17]"]
 light_dbr19 = [
     "geobrix[light-base]",
     # --- Classic DBR 19 / Serverless env 6 runtime-sensitive pins ---
-    "typing_extensions>=4.13",  # DBR 19 / env 6 ship 4.13+; floor harmless
+    "typing_extensions>=4.12",  # DBR 19 / env 6 ship 4.13+; floor harmless
+    # Hold preinstalled core packages at the Serverless env6 / DBR19 base.
+    # Bases: pandas 2.3.3, numpy 2.3.4, urllib3 2.5.0 (verified 2026-09-03).
+    "pandas<2.4",
+    "numpy<2.4",
+    "urllib3<2.6",
     # rio-tiler <9.3 unified across both regimes: 9.3.0 has a PEP 728 TypedDict
     # regression on Python 3.12 (both pb5 and pb6 environments are py3.12).
     # Tightened from the previous <9.4 relaxation, which was unverified and
@@ -205,23 +216,18 @@ stac = [
     "planetary-computer>=1.0,<2",
     "tenacity>=8,<10",
     "requests>=2.25",
-    # NASA EMIT (CH4) fetch for the sample EmitDownloader — Earthdata-Login
-    # authenticated (earthaccess), used by the vapor-eyes series. Lives here with
-    # the other remote-data-acquisition clients (not [light-base]).
+]
+# NASA Earthdata / LP DAAC client (gbx.earthdata) + the EMIT CH4 sample downloader
+# (gbx.sample.emit). Opt-in and NOT part of any *_all umbrella: earthaccess pulls
+# s3fs, which ties fsspec+botocore to one release era and CANNOT be installed
+# quietly against a Databricks base carrying old fsspec (2023.5.0) + new botocore
+# (1.40.45) — installing it WILL move fsspec (and/or botocore/urllib3). Keep it out
+# of _all so the feature bundle stays silent on Serverless; EMIT users add [earthdata]
+# explicitly and accept the churn.
+earthdata = [
     "earthaccess>=0.11,<1",
-    # Cap the transitive botocore (earthaccess -> s3fs -> aiobotocore -> botocore)
-    # to keep [stac] versionless across all supported bases. The ceiling <1.41.0
-    # is the least-forcing constraint that spans every supported runtime:
-    #   env 6 / DBR 18 / DBR 19  — base botocore 1.40.45–1.40.46 (boto3 1.40.x)
-    #   DBR 17.3                  — base botocore 1.36.3 (boto3 1.36.2)
-    #   Serverless env 5          — base botocore unconfirmed, likely 1.40.x
-    # On boto3-1.40.x bases the floor >=1.40.45 is already enforced by boto3's
-    # OWN dependency declaration, so <1.41.0 alone yields >=1.40.45 there — no
-    # behavior change. On older-boto3 bases (DBR 17.3) the removed floor no longer
-    # forces botocore above what the pre-installed boto3 allows. We don't use
-    # boto3/S3 at runtime (earthaccess fetches over HTTPS) — this silences the
-    # pip resolver clash. Note: [stac] + DBR 17.3 is not yet cluster-verified;
-    # env 6, DBR 18, and DBR 19 are confirmed compatible.
+    # earthaccess -> s3fs -> aiobotocore -> botocore. Ceiling <1.41.0 spans supported
+    # bases without forcing botocore above the pre-installed boto3's own floor.
     "botocore<1.41.0",
 ]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map

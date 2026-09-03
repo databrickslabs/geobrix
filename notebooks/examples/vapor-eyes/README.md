@@ -9,7 +9,7 @@
 
 A five-notebook series that takes one Permian (Delaware Basin) bounding box and works a satellite methane signal from a wide-area screen down to a named operator's candidate well pads — then packages the whole result as a shareable [PMTiles](https://protomaps.com/docs/pmtiles) map, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks.
 
-> **Requires GeoBrix 0.4.1+.** This series depends on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader (NB01) and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so `config_nb` must install `geobrix[light_env6,stac,vizx,earthdata]` **0.4.1 or newer**.
+> **Requires GeoBrix 0.5.0+.** This series depends on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader (NB01) and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so `config_nb` must install `geobrix[light_env6,stac,vizx,earthdata]` **0.5.0 or newer** (`[earthdata]` is a 0.5.0 extra).
 
 The notebooks follow a detection cascade, each tier narrowing and sharpening the last: **screen** the region with Sentinel-5P TROPOMI methane (NB01), **detect** a plume at the strongest hotspot with Sentinel-2 20 m SWIR (NB02), **quantify** it with EMIT 60 m imaging spectroscopy (NB03), **attribute** the plume origin to nearby Texas Railroad Commission wells and their operators (NB04), and **synthesize** the cascade into one self-contained vector PMTiles portfolio (NB05). Each step composes GeoBrix functions with Databricks-native `st_*` / `h3_*` spatial SQL.
 

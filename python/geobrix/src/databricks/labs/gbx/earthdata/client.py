@@ -74,8 +74,14 @@ class EarthdataClient:
     def _ea(self):
         if self._earthaccess is not None:
             return self._earthaccess
-        import earthaccess
-
+        try:
+            import earthaccess
+        except ImportError as exc:
+            raise ImportError(
+                "earthaccess is required for the NASA Earthdata / EMIT client. "
+                "Install the optional extra: geobrix[earthdata] "
+                "(e.g. geobrix[light_env6,earthdata])."
+            ) from exc
         return earthaccess
 
     def login(self) -> None:

@@ -54,7 +54,9 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a
 | Classic DBR 18 | `%pip install "geobrix[light_dbr18] @ file:///Volumes/…"` | `geobrix[light_dbr18_all]` |
 | Classic DBR 19 | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | `geobrix[light_dbr19_all]` |
 
-*(Full feature set = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` + `[overture]` in one install. `[databricks]` is added separately if needed.)*
+*(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` + `[overture]` in one install. `[databricks]` is added separately if needed.)*
+
+*`[earthdata]` — NASA Earthdata login and the EMIT downloader (`earthaccess`) — is **not** included in `_all`: installing `earthaccess` updates `fsspec`, which can conflict with cluster preinstalled packages. For EMIT workflows, add it explicitly alongside your runtime extra, e.g. `geobrix[light_env6,earthdata]` or `geobrix[light_env6,stac,vizx,earthdata]`.*
 
 The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
 the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting

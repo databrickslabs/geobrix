@@ -20,6 +20,8 @@ Introduces **virtual tiles** — a bytes-free way to read and process huge raste
 ### Packaging
 
 - **Packaging: `[light]` and `[light_all]` are removed in 0.5.0 (beta break, no alias).** Every light-tier install now picks an explicit, runtime-pinned extra. On Serverless: install `geobrix[light_env6]` (environment v6, **recommended**) or `geobrix[light_env5]` (env 5). On classic clusters: install `geobrix[light_dbr17]`, `geobrix[light_dbr18]`, or `geobrix[light_dbr19]` to match your runtime. Full-feature-set variants (`_all`) are available for each extra. See [Installation](./installation?tier=lightweight).
+- **Light-tier dependencies are now pinned to the Databricks base.** All runtime-pinned light extras (`light_env5`, `light_env6`, `light_dbr17`–`light_dbr19`) pin their transitive dependencies to the versions already present in the corresponding Databricks base environment. Installing GeoBrix Light no longer unexpectedly upgrades preinstalled packages, and `%pip install` output is quieter.
+- **`earthaccess` and the EMIT downloader moved from `[stac]` to the new `[earthdata]` extra (beta break).** Installing `geobrix[...,stac]` no longer pulls in `earthaccess`. To use `EmitDownloader` or any NASA Earthdata / LP DAAC client, add the `[earthdata]` extra — e.g. `geobrix[light_env6,earthdata]`. The `[earthdata]` extra is not included in `_all` bundles because `earthaccess` updates `fsspec`, which can conflict with cluster preinstalled packages.
 
 ### Virtual tiles & tile struct
 

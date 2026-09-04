@@ -267,10 +267,8 @@ click==8.2.1 \
     # via
     #   click-plugins
     #   cligj
-    #   geobrix
     #   mercantile
     #   morecantile
-    #   overturemaps
     #   planetary-computer
     #   rasterio
     #   rio-cogeo
@@ -996,7 +994,6 @@ numpy==2.3.5 \
     #   netcdf4
     #   numba
     #   numexpr
-    #   overturemaps
     #   pandas
     #   pyogrio
     #   rasterio
@@ -1008,10 +1005,6 @@ numpy==2.3.5 \
     #   tifffile
     #   xarray
     #   xarray-spatial
-overturemaps==0.18.0 \
-    --hash=sha256:0f65807aec13d2e8ebdf46225a532e20cde8168853ace04a752956e802fd06b0 \
-    --hash=sha256:793db5be74ad48a63dc37e1877b3a48cb93ab0bef1ab3da8e772890e00467200
-    # via geobrix
 packaging==26.3 \
     --hash=sha256:94edc256424af38762eb31306eed28beb9f0efc50a8837492c9d6fd6004aed79 \
     --hash=sha256:d7193f7c8e4e93f444fde0262bf90af30e16fa0ad0ad44cb553c87339b23cd1c
@@ -1317,9 +1310,7 @@ pyarrow==25.0.1 \
     --hash=sha256:eb6203482ff3746a5632303a7279ae0b5a304c46985b49ed1378cb350ea6728d \
     --hash=sha256:f3831aaa25c67a99f99dc8b05873cb9d64560390372e2aa197ce9dd4a3f06a44 \
     --hash=sha256:f729cfdbd36fd99d543b67a914d2de044c84ebe45be8b34902b299b608c15c8f
-    # via
-    #   geobrix
-    #   overturemaps
+    # via geobrix
 pyclipper==1.4.0 \
     --hash=sha256:0a4d2736fb3c42e8eb1d38bf27a720d1015526c11e476bded55138a977c17d9d \
     --hash=sha256:0b74a9dd44b22a7fd35d65fb1ceeba57f3817f34a97a28c3255556362e491447 \
@@ -1590,7 +1581,6 @@ pystac==1.15.2 \
     --hash=sha256:4c9a3b2352cad7eb3c226145251c65cbe5c1b04b25d4265b30c015dddf5f391d \
     --hash=sha256:b006833253d7e5acd04d877bb7504e14aa1dc98dd0f0ab12f893595030dda2b3
     # via
-    #   geobrix
     #   planetary-computer
     #   pystac-client
     #   rio-tiler
@@ -2109,7 +2099,6 @@ shapely==2.1.2 \
     #   geobrix
     #   geopandas
     #   mapbox-vector-tile
-    #   overturemaps
 six==1.17.0 \
     --hash=sha256:4721f391ed90541fddacab5acf947aa0d3dc7d27b2e1e8eda2be8970586c3274 \
     --hash=sha256:ff70335d468e7eb6ec65b95b99d3a2836546063f63acc5171de367e834932a81
@@ -2143,10 +2132,6 @@ tippecanoe==2.72.0 \
     --hash=sha256:958b1ba08a06f416690a21714a22ca40462f1251d2d2821dea7624a9034da1f3 \
     --hash=sha256:cd35371d108b6a3f75517ca10b461c3c0a6110797d5b465ff504fee149136179 \
     --hash=sha256:d5edbb8021617ee4adac5e23c74c470c347697b6ced43a08ae4aeb61b76b1a89
-    # via geobrix
-tqdm==4.67.3 \
-    --hash=sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb \
-    --hash=sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf
     # via geobrix
 traitlets==5.16.1 \
     --hash=sha256:ed900c2b631aa3a112811139fa97b8d2c3bad5e989656bba4b7e52c7852c18c1 \

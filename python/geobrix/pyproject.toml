@@ -126,6 +126,10 @@ light_dbr17 = [
     "httpcore>=1.0.9",
     "idna<3.8",                     # DBR 17.3/18/env5 protobuf-5 base idna 3.7
     "mapbox-vector-tile>=2.1,<2.2", # protobuf-5 cap (2.2 would pull protobuf 6)
+    # hold click/tqdm at base (click via mercantile/planetary-computer floats otherwise)
+    # env5/DBR17.3-18 bases: click 8.1.8, tqdm 4.67.1
+    "click<8.2",
+    "tqdm<4.68",
 ]
 # Classic DBR 18 — identical package set to DBR 17.3 (protobuf-5 regime).
 # Aliases the canonical protobuf-5 extra [light_dbr17].
@@ -164,6 +168,10 @@ light_dbr19 = [
     "idna<3.12",
     # Protobuf-6 floor: require >=2.2 (drops the protobuf-5-era <2.2 cap).
     "mapbox-vector-tile>=2.2",
+    # hold click/tqdm at base (click via mercantile/planetary-computer floats otherwise)
+    # env6/DBR19 bases: click 8.2.1, tqdm 4.67.1
+    "click<8.3",
+    "tqdm<4.68",
 ]
 # Serverless env 6 — protobuf-6 regime, RECOMMENDED on Serverless.
 # Aliases the canonical protobuf-6 extra [light_dbr19].

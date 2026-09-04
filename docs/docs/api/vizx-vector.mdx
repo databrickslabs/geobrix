@@ -11,76 +11,72 @@ title: Vector
 
 > For multi-layer interactive maps, see the [Multi-Layer Compositor](./vizx-layers).
 
-`plot_interactive` is the **interactive twin of `plot_static`** — same input
-model (a `geopandas.GeoDataFrame`, or a Spark DataFrame via `geom_col` /
-`grid_system`), but it renders a pan/zoom [folium](https://python-visualization.github.io/folium/)
-map instead of a static matplotlib figure. It is the recommended way to get an
+`plot_interactive` renders one or more **layers** as a pan/zoom
+[MapLibre GL](https://maplibre.org/) map — the interactive counterpart to
+`plot_static`, sharing the same layer model. It is the recommended way to get an
 interactive map from GeoBrix results: it is **scale-safe** and
 **Databricks-safe**, neither of which a bare `GeoDataFrame.explore()` is.
 
-- **Scale-safe.** A raw `.explore()` embeds every vertex inline, so a few million
-  vertices hang folium and render a blank map. `plot_interactive` counts vertices
-  and, above a threshold, automatically falls back to a rasterized image overlay
-  (a viridis PNG laid over the basemap) that scales to millions of vertices.
-- **Databricks-safe.** It renders via `displayHTML` internally. Returning a folium
-  map (or calling `.explore()`) does **not** auto-render in a Databricks notebook;
-  `plot_interactive` does the right thing in both Databricks and plain Jupyter.
+- **Scale-safe.** The whole map is assembled into one self-contained HTML string
+  and embedded inline, so its size is bounded by an **embed budget**
+  (`max_embed_mb`), not by a tile server. When the layers exceed the budget,
+  `plot_interactive` degrades gracefully — by default (`fallback=True`) it falls
+  back to `plot_static`; the [Multi-Layer Compositor](./vizx-layers#the-embed-size-ladder)
+  documents the full delivery ladder (inline embed, URL streaming, downzoom,
+  static). Pass `dry_run=True` to inspect the size audit without rendering.
+- **Databricks-safe.** It renders via `displayHTML` internally and returns
+  `None`. Returning a folium map (or calling `.explore()`) does **not**
+  auto-render in a Databricks notebook; `plot_interactive` does the right thing in
+  both Databricks and plain Jupyter (outside a notebook — e.g. in tests — it
+  returns the HTML string so callers can assert on it).
 
 ### `plot_interactive`
 
 ```python
 plot_interactive(
-    data, *, column=None, geom_col=None, grid_system=None, grid_conf=None,
-    max_rows=10_000, sample_seed=None, srid=None, mode="auto",
-    max_vertices=60_000, max_px=1400, opacity=0.65, debug_level=1, **explore_kw,
+    layers, *, basemap="carto-positron", simplify_tiles_spec=None,
+    max_embed_mb=None, set_cell_max_output=True, fallback=True,
+    center=None, zoom=None, dry_run=False, debug_mode=1, emphasis="blend",
 )
 ```
 
-`data` is a Spark DataFrame **or** a `geopandas.GeoDataFrame`, resolved exactly as
-`plot_static` does — set `grid_system` to decode cell ids (`'h3'`, `'quadbin'`,
-`'bng'`, `'custom'` with `grid_conf=`) to boundary polygons, otherwise the geometry
-column is read via `geom_col` (auto-detected if omitted). The map renders as the
-function's last statement: in Databricks via `displayHTML` (returns `None`), in
-plain Jupyter by returning the folium map (which auto-renders). Extra keyword
-arguments are forwarded to `.explore()`.
-
-The **`mode`** parameter picks the rendering path:
-
-| `mode` value | Behaviour |
-|---|---|
-| `"auto"` (default) | Full vector `.explore()` when the total vertex count is ≤ `max_vertices`, otherwise the raster image overlay. Announces the chosen path at `debug_level >= 1`. |
-| `"detailed"` | Always geopandas `.explore()` — full vector, with per-feature hover / popups. Over `max_vertices` it warns that rendering may be slow and proceeds anyway. |
-| `"fast"` | Always rasterize the polygons to a PNG folium `ImageOverlay` — complete and scales to millions of vertices, but a flat image with no per-feature hover. |
+`layers` is a `Layer`, a list of layers, or any bare input `as_layers` accepts (a
+`geopandas.GeoDataFrame` or Spark DataFrame → `vector_layer`, a `.pmtiles` archive
+→ `pmtiles_layer`, a raster path / `numpy.ndarray` → `raster_layer`). Build layers
+with the constructors documented in the [Multi-Layer Compositor](./vizx-layers#layer-types) —
+`vector_layer`, `grid_layer`, `raster_layer`, `pmtiles_layer` — each of which
+carries its own `column` / `grid_system` / `cmap` / styling. The map renders as
+the function's last statement: in Databricks via `displayHTML` (returns `None`),
+outside a notebook by returning the HTML string.
 
 **Parameters:**
 
 | Parameter | Type | Default | Description |
 |---|---|---|---|
-| `column` | `str` or `None` | `None` | Column to colour by (choropleth for `.explore()`; value/category ramp for the overlay). |
-| `geom_col` | `str` or `None` | `None` | Geometry column on a Spark DataFrame (auto-detected if omitted). |
-| `grid_system` | `str` or `None` | `None` | Decode the column as DGGS cell ids: `'h3'`, `'quadbin'`, `'bng'`, `'custom'`. |
-| `grid_conf` | `Row`, `dict` or `None` | `None` | Grid spec for `grid_system='custom'`. |
-| `max_rows` | `int` or `None` | `10_000` | Row cap before the Spark → GeoDataFrame collect; `None` collects everything. |
-| `sample_seed` | `int` or `None` | `None` | How the `max_rows` cap is filled: `None` takes the first `max_rows` rows; an int draws a reproducible seeded sample. |
-| `srid` | `int` or `None` | `None` | CRS override for the input geometries. |
-| `mode` | `str` | `"auto"` | `"auto"` / `"detailed"` / `"fast"` (see table above). |
-| `max_vertices` | `int` | `60_000` | Auto crossover threshold (and the detailed-mode slow-render warning trigger). |
-| `max_px` | `int` | `1400` | Longest-edge pixel resolution of the `fast` raster overlay. |
-| `opacity` | `float` | `0.65` | Overlay fill opacity. |
-| `debug_level` | `int` | `1` | `0` silent / `1` key decisions + warnings / `2+` verbose internals. |
+| `layers` | `Layer`, `list[Layer]`, or bare input | — | The layer(s) to render. A bare `GeoDataFrame` / Spark DataFrame / `.pmtiles` archive / raster is coerced via `as_layers`. |
+| `basemap` | `str` | `"carto-positron"` | Base layer style: `"carto-positron"` (CARTO Positron) or `"none"` (blank dark canvas). |
+| `simplify_tiles_spec` | `dict` or `None` | `None` | Optional vector-tile simplification spec (see the compositor page). |
+| `max_embed_mb` | `float` or `None` | `None` | Max assembled-HTML embed size, in MiB, measured against the base64-rendered HTML. `None` resolves to ~6 MB when `set_cell_max_output` is on (sized for the raised 20 MB cap), else ~3 MB. |
+| `set_cell_max_output` | `bool` | `True` | On Databricks Serverless, raise the cell-output cap to its 20 MB max before an interactive embed so a larger map isn't truncated (graceful no-op elsewhere). `False` leaves the cap untouched. |
+| `fallback` | `bool` | `True` | When the embed budget is exceeded, degrade to `plot_static` (`True`) or raise (`False`). |
+| `center` | `[lon, lat]` or `None` | `None` | Map centre override. |
+| `zoom` | `float` or `None` | `None` | Initial zoom level override. |
+| `dry_run` | `bool` | `False` | Return the size-audit dict (see `audit_layers`) without rendering — no `displayHTML`, no HTML string. |
+| `debug_mode` | `int` | `1` | `[vizx]` status verbosity: `0` silent / `1` (default) concise (audit verdict, cap-raise) / `2` adds per-layer diagnostics. |
+| `emphasis` | `str` | `"blend"` | `"data"` styles data layers to pop against the full-strength basemap; `"blend"` (default) is a softer composite. Explicit per-layer style kwargs always override. |
 
 ```python
-from databricks.labs.gbx.vizx import plot_interactive
+from databricks.labs.gbx.vizx import grid_layer, plot_interactive
 
-# Interactive H3 choropleth straight from a Spark DataFrame — picks the vector
-# path for a small cell set, the raster overlay automatically once it's large.
-plot_interactive(cells_df, grid_system="h3", column="band_level")
+# Interactive H3 choropleth straight from a Spark DataFrame of cell ids —
+# grid_layer decodes the cells and colours them by `band_level` through `cmap`.
+plot_interactive(grid_layer(cells_df, grid_system="h3", column="band_level"))
 ```
 
-When the input is many small geometries (so the `max_rows` cap fires on the
-`fast` path), `plot_interactive` advises pre-aggregating with `st_union_agg` /
-`rst_h3_rasterize_agg` so the frame stays few-rows-many-vertices and the cap
-never truncates coverage.
+For a multi-layer overlay (say a raster DEM under vector boundaries under grid
+cells), pass a **list** of layers — see the
+[Multi-Layer Compositor](./vizx-layers) for the layer constructors, the
+embed-size ladder, and the audit/simplify workflow.
 
 ## Static Maps
 
@@ -101,12 +97,18 @@ emitted (never a hard error).
 
 ```python
 plot_static(
-    data, *, geom_col=None, grid_system=None, grid_conf=None, column=None,
-    cmap="viridis", legend=True, basemap=True, basemap_source=None, alpha=0.8,
-    edgecolor="face", fill=True, markersize=None, title=None, fig_w=10, fig_h=10,
-    max_rows=10_000, srid=None, ax=None,
+    data, *, column=None, geom_col=None, grid_system=None, grid_conf=None,
+    max_rows=10_000, sample_seed=None, srid=None, cmap="viridis", legend=True,
+    basemap=True, basemap_source=None, alpha=None, edgecolor=None, fill=True,
+    markersize=None, title=None, fig_w=10, fig_h=10, ax=None,
+    emphasis="blend", debug_mode=1,
 )
 ```
+
+`cmap`, `alpha`, `edgecolor`, and `markersize` left unset resolve to values
+derived from `emphasis` (`"blend"` default / `"data"`); `debug_mode` controls
+`[vizx]` status verbosity (`0`/`1`/`2`), and `sample_seed` selects how the
+`max_rows` cap is filled (`None` = first rows; an int = a reproducible sample).
 
 `data` is a Spark DataFrame **or** a `geopandas.GeoDataFrame`. Returns the
 matplotlib `Axes`; pass it back via `ax=` to overlay layers on one map. Every

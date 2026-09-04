@@ -152,6 +152,5 @@ def test_missing_earthaccess_names_the_extra(monkeypatch):
         return real_import(name, *a, **k)
     monkeypatch.setattr(builtins, "__import__", fake_import)
     from databricks.labs.gbx.earthdata.client import EarthdataClient
-    import pytest
     with pytest.raises(ImportError, match=r"geobrix\[earthdata\]"):
         EarthdataClient()._ea()  # accessor that imports earthaccess

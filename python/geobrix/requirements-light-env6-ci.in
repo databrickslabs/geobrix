@@ -28,9 +28,9 @@ wheel==0.45.1
 # Serverless env 6; see DBR 17.3 release notes for provenance):
 # https://docs.databricks.com/aws/en/release-notes/runtime/17.3lts#installed-python-libraries
 pyspark==4.0.0
-numpy==2.1.3
-pandas==2.2.3
-pyarrow==19.0.1
+numpy==2.3.4
+pandas==2.3.3
+pyarrow==21.0.0
 # urllib3 pinned to the Serverless env 6 / DBR 19 base version; cap <2.6 (pyproject [light_dbr19]).
 urllib3==2.5.0
 
@@ -47,7 +47,7 @@ defusedxml==0.7.1
 # scipy pinned to the DBR 19 / Serverless env 6 installed version. numexpr is NOT in DBR's
 # library set, so it is pinned independently (safe math-expression evaluator for
 # rst_mapalgebra — no arbitrary-code exec).
-scipy==1.15.1
+scipy==1.16.3
 numexpr==2.11.0
 
 # --- web-mercator XYZ tiling (rio-tiler bundles morecantile + color-operations) ---
@@ -88,7 +88,7 @@ netcdf4==1.7.2
 # the suite stubs them (test/stac/_fake_catalog.py + an addPyFile pystac_client
 # stub + monkeypatch), which is why they stay out of this light lock. Versions
 # match requirements-dev-container.in. ---
-requests==2.32.3
+requests==2.32.5
 tenacity==9.1.4
 # MUST match pyproject [light_env6] (alias of [light_dbr19]): idna<3.12
 # Serverless env 6 / DBR 19 base is idna 3.11; cap <3.12 silences the
@@ -101,9 +101,9 @@ idna<3.12
 # with the [earthdata] pyproject extra + requirements-dev-container.in.
 earthaccess==0.18.0
 # Constrain the transitive botocore (earthaccess -> s3fs -> aiobotocore -> botocore)
-# to below the base boto3 cap so [stac] doesn't upgrade botocore past the pre-installed
+# to below the base boto3 cap so [earthdata] doesn't upgrade botocore past the pre-installed
 # boto3. Holds aiobotocore on 2.x; s3fs/fsspec are unaffected.
-# Mirror of the [stac] pyproject extra cap (floor dropped — single-side cap only).
+# Mirror of the [earthdata] pyproject extra cap (floor dropped — single-side cap only).
 # Serverless env 6 / DBR 19 base botocore confirmed at 1.40.46 (boto3 1.40.x).
 botocore<1.41.0
 
@@ -129,7 +129,7 @@ tippecanoe==2.45.0
 # reaches displayHTML through it (IPython.get_ipython user_ns) and falls back to
 # IPython.display. test/vizx/test_interactive.py exercises both paths, so the light
 # CI env needs IPython present. Pinned to the dev-container version (8.30.0).
-ipython==8.30.0
+ipython==9.7.0
 
 # --- test runner ---
 pytest==8.4.2

@@ -103,9 +103,9 @@ idna<3.8
 # with the [earthdata] pyproject extra + requirements-dev-container.in.
 earthaccess==0.18.0
 # Constrain the transitive botocore (earthaccess -> s3fs -> aiobotocore -> botocore)
-# to below the base boto3 cap so [stac] doesn't upgrade botocore past the pre-installed
+# to below the base boto3 cap so [earthdata] doesn't upgrade botocore past the pre-installed
 # boto3. Holds aiobotocore on 2.x; s3fs/fsspec are unaffected.
-# Mirror of the [stac] pyproject extra cap (floor dropped — single-side cap only).
+# Mirror of the [earthdata] pyproject extra cap (floor dropped — single-side cap only).
 botocore<1.41.0
 
 # --- Overture static-STAC catalog traversal (gbx.sample.overture). pystac is the

@@ -267,6 +267,7 @@ click==8.2.1 \
     # via
     #   click-plugins
     #   cligj
+    #   geobrix
     #   mercantile
     #   morecantile
     #   planetary-computer

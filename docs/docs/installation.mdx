@@ -58,6 +58,8 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a
 
 *Source-specific downloaders are **not** included in `_all`: they change preinstalled base packages on install, which can conflict with cluster packages. `[earthdata]` (NASA Earthdata / EMIT, via `earthaccess`, which moves `fsspec`) and `[overture]` (Overture Maps CLI, via `overturemaps` 1.x, which bumps `click`) are opt-in extras — add them explicitly alongside your runtime extra, e.g. `geobrix[light_env6,earthdata]` or `geobrix[light_env6,overture]`. Future source-specific downloaders follow the same rule. `_all` contains only generic processing and visualization features that install quietly.*
 
+*To use a downloader **together with** the full feature set, install it as a **separate step after** the `_all` install — e.g. `%pip install "geobrix[light_env6_all] @ file:///Volumes/…"` then `%pip install "geobrix[light_env6,overture] @ file:///Volumes/…"`. Do not combine them in one command (`geobrix[light_env6_all,overture]`): `_all` pins `click` to the cluster base for a quiet install, while `overturemaps` needs a newer `click`, so a single install cannot satisfy both. The separate downloader install upgrades `click` on its own.*
+
 The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
 the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting
 required on Serverless.

@@ -176,6 +176,16 @@ light_env6 = ["geobrix[light_dbr19]"]
 # [overture] and [earthdata] are opt-in source-specific downloaders NOT in _all:
 #   overturemaps 1.x needs click>=8.4 (a base package move — accepted for a
 #   downloader, like [earthdata]); keeping it out lets _all stay silent on-cluster.
+# The umbrellas also cap `click` at the per-regime base (pb5 <8.2 base 8.1.8;
+#   pb6 >=8.2,<8.3 base 8.2.1 — the floor stops a downgrade to 8.1.8) so
+#   [stac]/[vizx]'s closure can't float it (verified: env6
+#   _all floats click 8.2.1->8.5.0 without this). The cap lives HERE, not in the
+#   shared light_dbrNN extra, so it does not bind the [overture] opt-in path.
+#   To add Overture on top of _all, install it as a SEPARATE step, e.g.
+#   `pip install geobrix[light_env6,overture]` after geobrix[light_env6_all] —
+#   a single combined geobrix[light_env6_all,overture] transaction is intentionally
+#   unsolvable (the second install upgrades click freely; the umbrella cap is
+#   dormant when only [overture] is requested).
 # [databricks] is NOT included: it is a Databricks SDK integration (sample-data
 # upload helpers), not a geo feature, and Databricks compute already provides
 # its runtime. Install [databricks] explicitly if needed.
@@ -187,6 +197,9 @@ light_dbr17_all = [
     "geobrix[light_dbr17]",
     "geobrix[stac]",
     "geobrix[vizx]",
+    # Hold click at the env5 / DBR17.3-18 base (8.1.8) so _all installs silently.
+    # Umbrella-only (see the header note) — does not bind the [overture] opt-in.
+    "click<8.2",
 ]
 # Classic DBR 18 all-features — aliases the canonical pb5 all-features extra.
 light_dbr18_all = ["geobrix[light_dbr17_all]"]
@@ -197,6 +210,11 @@ light_dbr19_all = [
     "geobrix[light_dbr19]",
     "geobrix[stac]",
     "geobrix[vizx]",
+    # Hold click at the env6 / DBR19 base (8.2.1) so _all installs silently.
+    # The floor matters: a bare click<8.3 lets the resolver DOWNGRADE to 8.1.8
+    # (verified on-cluster), so pin the 8.2.x line. Umbrella-only (see the header
+    # note) — does not bind the [overture] opt-in.
+    "click>=8.2,<8.3",
 ]
 # Serverless env 6 all-features — aliases the canonical pb6 all-features extra.
 # Recommended for Serverless full installs.

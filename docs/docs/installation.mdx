@@ -54,16 +54,16 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a
 | Classic DBR 18 | `%pip install "geobrix[light_dbr18] @ file:///Volumes/…"` | `geobrix[light_dbr18_all]` |
 | Classic DBR 19 | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | `geobrix[light_dbr19_all]` |
 
-*(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` + `[overture]` in one install. `[databricks]` is added separately if needed.)*
+*(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` in one install. `[databricks]` is added separately if needed.)*
 
-*`[earthdata]` — NASA Earthdata login and the EMIT downloader (`earthaccess`) — is **not** included in `_all`: installing `earthaccess` updates `fsspec`, which can conflict with cluster preinstalled packages. For EMIT workflows, add it explicitly alongside your runtime extra, e.g. `geobrix[light_env6,earthdata]` or `geobrix[light_env6,stac,vizx,earthdata]`.*
+*Source-specific downloaders are **not** included in `_all`: they change preinstalled base packages on install, which can conflict with cluster packages. `[earthdata]` (NASA Earthdata / EMIT, via `earthaccess`, which moves `fsspec`) and `[overture]` (Overture Maps CLI, via `overturemaps` 1.x, which bumps `click`) are opt-in extras — add them explicitly alongside your runtime extra, e.g. `geobrix[light_env6,earthdata]` or `geobrix[light_env6,overture]`. Future source-specific downloaders follow the same rule. `_all` contains only generic processing and visualization features that install quietly.*
 
 The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
 the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting
 required on Serverless.
 
 :::note Upgrading from GeoBrix 0.4.x?
-**GeoBrix 0.4.x** used a single unversioned extra: `geobrix[light]` (basic) or `geobrix[light,stac,vizx]` (with feature extras). In **0.5.0+** those bare extras are removed — every install names the target runtime explicitly. Replace `[light]` with the matching runtime extra from the table above (e.g. `[light_env6]` on Serverless, `[light_dbr19]` on classic DBR 19). Feature extras (`stac`, `vizx`, `overture`) are unchanged and still combine with the runtime extra.
+**GeoBrix 0.4.x** used a single unversioned extra: `geobrix[light]` (basic) or `geobrix[light,stac,vizx]` (with feature extras). In **0.5.0+** those bare extras are removed — every install names the target runtime explicitly. Replace `[light]` with the matching runtime extra from the table above (e.g. `[light_env6]` on Serverless, `[light_dbr19]` on classic DBR 19). Feature extras (`stac`, `vizx`, `overture`, `earthdata`) are still available and combine with the runtime extra; `[overture]` and `[earthdata]` are opt-in downloaders not included in `_all` — see the note above.
 :::
 :::
 

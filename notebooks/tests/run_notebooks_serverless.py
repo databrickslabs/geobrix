@@ -65,7 +65,15 @@ _STRIP_PREFIXES = ("%pip", "%restart_python")
 # ---------------------------------------------------------------------------
 
 def _load_extras_deps(extras: list[str]) -> list[str]:
-    """Return the union of pip deps for the requested extras from pyproject.toml."""
+    """Return the union of pip deps for the requested extras from pyproject.toml.
+
+    Recursively expands nested ``geobrix[<extra>]`` references (the light_* extras
+    alias one another, and the ``*_all`` umbrellas pull light-base/stac/vizx/overture)
+    into their real package requirements. Without this, a nested string like
+    ``geobrix[light_dbr19]`` would be injected verbatim into the Serverless
+    environment spec, which does NOT honor extras — so the extra's transitive deps
+    silently never install (the whole light raster/vector core would be missing).
+    """
     if not _PYPROJECT_PATH.exists():
         print(
             f"WARNING: pyproject.toml not found at {_PYPROJECT_PATH}; "
@@ -81,16 +89,28 @@ def _load_extras_deps(extras: list[str]) -> list[str]:
         data.get("project", {}).get("optional-dependencies", {})
     )
 
-    seen: set[str] = set()
+    seen_deps: set[str] = set()
+    seen_extras: set[str] = set()
     result: list[str] = []
-    for extra in extras:
+
+    def _visit(extra: str) -> None:
+        if extra in seen_extras:
+            return
+        seen_extras.add(extra)
         deps = opt_deps.get(extra, [])
         if not deps:
             print(f"WARNING: extra '{extra}' not found in pyproject.toml", flush=True)
         for dep in deps:
-            if dep not in seen:
-                seen.add(dep)
+            d = dep.strip()
+            if d.startswith("geobrix[") and d.endswith("]"):
+                for nested in d[len("geobrix["):-1].split(","):
+                    _visit(nested.strip())
+            elif dep not in seen_deps:
+                seen_deps.add(dep)
                 result.append(dep)
+
+    for extra in extras:
+        _visit(extra)
     return result
 
 

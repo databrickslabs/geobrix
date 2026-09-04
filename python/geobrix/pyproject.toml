@@ -169,8 +169,10 @@ light_dbr19 = [
     # Protobuf-6 floor: require >=2.2 (drops the protobuf-5-era <2.2 cap).
     "mapbox-vector-tile>=2.2",
     # hold click/tqdm at base (click via mercantile/planetary-computer floats otherwise)
-    # env6/DBR19 bases: click 8.2.1, tqdm 4.67.1
-    "click<8.3",
+    # env6/DBR19 bases: click 8.2.1, tqdm 4.67.1. click needs a floor too: on-cluster
+    # the _all resolve otherwise DOWNGRADES the base 8.2.1 to 8.1.8 (a version change),
+    # so pin the 8.2.x line to keep env6 silent.
+    "click>=8.2,<8.3",
     "tqdm<4.68",
 ]
 # Serverless env 6 — protobuf-6 regime, RECOMMENDED on Serverless.

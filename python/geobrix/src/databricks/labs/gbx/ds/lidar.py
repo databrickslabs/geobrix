@@ -1,14 +1,16 @@
 """Light Spark Python DataSource for LAS/LAZ point clouds (lidar_gbx).
 
-mode="metadata" (this task): one row per file, header-only (cheap; never loads points).
-mode="points"   (Task 3):    one row per point, chunk-iterated.
+mode="metadata": one row per file, header-only (cheap; never loads points).
+mode="points":   one row per point, chunk-iterated with class/return/decimate filters.
 
 Serverless-safe: session-free partitions()/read(); one InputPartition per file.
 Uses no forbidden Spark internal APIs — safe on Spark Connect / Serverless.
 """
 
 import os
-from typing import Dict, Iterator, Sequence, Tuple
+from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+
+import numpy as np
 
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 from pyspark.sql.types import (
@@ -49,7 +51,27 @@ LIDAR_META_SCHEMA = StructType(
     ]
 )
 
+LIDAR_POINTS_SCHEMA = StructType(
+    [
+        StructField("x", DoubleType(), True),
+        StructField("y", DoubleType(), True),
+        StructField("z", DoubleType(), True),
+        StructField("intensity", IntegerType(), True),
+        StructField("return_number", IntegerType(), True),
+        StructField("number_of_returns", IntegerType(), True),
+        StructField("classification", IntegerType(), True),
+        StructField("gps_time", DoubleType(), True),
+    ]
+)
+
 _LIDAR_EXTS = (".las", ".laz")
+
+
+def _parse_int_list(value: Optional[str]) -> Optional[List[int]]:
+    """Parse a comma-separated string of ints, or return None if value is absent."""
+    if value is None:
+        return None
+    return [int(v.strip()) for v in value.split(",") if v.strip()]
 
 
 class _LidarFilePartition(InputPartition):
@@ -63,6 +85,16 @@ class LidarGbxReader(DataSourceReader):
         if not self.path:
             raise ValueError("lidar_gbx requires a 'path' (e.g. .load(path)).")
         self.mode = (options.get("mode") or "points").lower()
+        # Points-mode options
+        self.class_filter: Optional[List[int]] = _parse_int_list(
+            options.get("classFilter")
+        )
+        return_filter_raw = options.get("returnFilter")
+        self.return_filter: Optional[int] = (
+            int(return_filter_raw) if return_filter_raw is not None else None
+        )
+        self.decimate: int = int(options.get("decimate", "1"))
+        self.chunk_size: int = int(options.get("chunkSize", "1000000"))
 
     def partitions(self) -> Sequence[InputPartition]:
         files = list_local_files(self.path, extensions=_LIDAR_EXTS)
@@ -72,9 +104,46 @@ class LidarGbxReader(DataSourceReader):
         if self.mode == "metadata":
             yield from self._read_metadata(partition.file_path)
         else:
-            raise ValueError(
-                "lidar_gbx points mode not yet available; use mode='metadata'."
-            )
+            yield from self._read_points(partition.file_path)
+
+    def _read_points(self, file_path: str) -> Iterator[Tuple]:
+        import laspy
+
+        local = _listing.to_local_path(file_path)
+        with laspy.open(local) as reader:
+            emitted = 0
+            for chunk in reader.chunk_iterator(self.chunk_size):
+                xs = np.asarray(chunk.x)
+                ys = np.asarray(chunk.y)
+                zs = np.asarray(chunk.z)
+                cls = np.asarray(chunk.classification)
+                rn = np.asarray(chunk.return_number)
+                nr = np.asarray(chunk.number_of_returns)
+                inten = np.asarray(chunk.intensity)
+                if "gps_time" in chunk.point_format.dimension_names:
+                    gt = np.asarray(chunk.gps_time)
+                else:
+                    gt = np.full(len(xs), np.nan)
+                mask = np.ones(len(xs), dtype=bool)
+                if self.class_filter is not None:
+                    mask &= np.isin(cls, self.class_filter)
+                if self.return_filter is not None:
+                    mask &= rn == self.return_filter
+                idx = np.nonzero(mask)[0]
+                for i in idx:
+                    emitted += 1
+                    if self.decimate > 1 and (emitted % self.decimate) != 0:
+                        continue
+                    yield (
+                        float(xs[i]),
+                        float(ys[i]),
+                        float(zs[i]),
+                        int(inten[i]),
+                        int(rn[i]),
+                        int(nr[i]),
+                        int(cls[i]),
+                        float(gt[i]),
+                    )
 
     def _read_metadata(self, file_path: str) -> Iterator[Tuple]:
         import datetime as _dt
@@ -134,10 +203,7 @@ class LidarGbxDataSource(DataSource):
         mode = (self.options.get("mode") or "points").lower()
         if mode == "metadata":
             return LIDAR_META_SCHEMA
-        # points schema wired in Task 3
-        raise ValueError(
-            "lidar_gbx points mode not yet available; use mode='metadata'."
-        )
+        return LIDAR_POINTS_SCHEMA
 
     def reader(self, schema: StructType) -> DataSourceReader:
         return LidarGbxReader(self.options)

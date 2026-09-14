@@ -102,6 +102,9 @@ light-base = [
     # _parse_vrt_members prefers. Dep-free, pure Python. Floor pinned; <1
     # future-proofs (no 1.x exists today).
     "defusedxml>=0.7,<1",
+    # --- LiDAR point-cloud reading (lidar_gbx DataSource; lazrs = pure-Rust LAZ backend) ---
+    "laspy>=2.5,<2.6",
+    "lazrs>=0.6,<0.7",
 ]
 # ---------------------------------------------------------------------------
 # protobuf-5 regime — classic DBR 17.3, DBR 18, Serverless env 5

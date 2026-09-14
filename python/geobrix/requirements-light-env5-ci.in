@@ -132,5 +132,9 @@ tippecanoe==2.45.0
 # CI env needs IPython present. Pinned to the dev-container version (8.30.0).
 ipython==8.30.0
 
+# --- LiDAR point-cloud reading (laspy + pure-Rust LAZ backend) ---
+laspy==2.5.4
+lazrs==0.6.3
+
 # --- test runner ---
 pytest==8.4.2

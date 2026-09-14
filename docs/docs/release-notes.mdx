@@ -13,6 +13,41 @@ This page tracks **API and naming changes** across GeoBrix releases — the sing
 
 ---
 
+## What's new in v0.5.2
+
+Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
+
+### LiDAR reader — `lidar_gbx` (new)
+
+- **New `lidar_gbx` Spark DataSource** reads LAS and LAZ point-cloud files into a
+  Spark DataFrame. Two modes: `metadata` (one row per file, header-level statistics,
+  cheap on large archives) and `points` (one row per point). Options: `classFilter`
+  (keep specific LAS classification codes), `returnFilter` (keep a specific return
+  number), `decimate` (keep every N-th point), `chunkSize`. Lightweight only;
+  Serverless-safe. See [LiDAR Reader](./readers/lidar).
+
+### Point-cloud DSM functions (new, lightweight tier)
+
+- **`gbx_rst_binpoints`** — bin parallel `ARRAY<DOUBLE>` x/y/z columns into a Float32
+  DSM raster. Each pixel carries a configurable statistic (`max`, `min`, `mean`,
+  `median`, `count`, or `percentile:<p>`) over all points whose centroid falls in the
+  cell. Empty cells carry NoData.
+
+- **`gbx_rst_binpoints_agg`** — streaming aggregator variant: one scalar (x, y, z) point
+  per row, binned into a DSM per group. The SQL aggregate returns `BINARY` (raster bytes);
+  wrap with `gbx_rst_fromcontent(<agg>, 'GTiff')` to rebuild a tile struct. The Python
+  wrapper `rx.rst_binpoints_agg(...)` returns the full tile struct.
+
+- **`gbx_rst_isoband`** — reclassify a raster band into value bins and return one WKB
+  polygon per contiguous patch. Returns
+  `ARRAY<STRUCT<geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE>>`. Useful for
+  height-band polygons from a CHM or elevation isobands from a DEM.
+
+- **`gbx_rst_chm`** — compute a Canopy Height Model: warp the DSM onto the DEM grid,
+  subtract, and clamp negatives to zero. NoData propagates from either input.
+
+---
+
 ## What's new in v0.5.1
 
 Extends the raster-grid family with coverage and assignment controls, on top of v0.5.0. The new **[Grid Raster Tessellation](./api/grid-raster-tessellation)** page documents the unified **coverage / assignment / fill** model that every raster-to-grid function now shares — start there for the concepts behind the changes below.

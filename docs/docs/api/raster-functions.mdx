@@ -1435,6 +1435,104 @@ The lightweight **Python** binding accepts an optional trailing `out_crs` (strin
 
 ---
 
+## LiDAR / Point-Cloud DSM {#lidar-dsm}
+
+Four functions for building raster products from LiDAR point clouds. Available on the
+**lightweight tier only** (`pyrx`). Load point clouds with the [`lidar_gbx` reader](../readers/lidar).
+
+### rst_binpoints {#rst_binpoints}
+
+<Tier light/>
+
+Bin a **per-row `ARRAY<DOUBLE>`** of (x, y, z) coordinate triples into a single-band
+Float32 raster tile. Each pixel carries the reduction of all points whose centroid falls
+within the pixel cell. Empty cells carry NoData (−9999). The bounding box uses a
+half-open interval on the upper x/y edges to prevent double-counting when DSM tiles
+are assembled from adjacent strips.
+
+**Signature:** `rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])`
+
+**Parameters:** `x_array`, `y_array`, `z_array` — parallel `ARRAY<DOUBLE>` columns of point coordinates and z-values; `xmin`/`ymin`/`xmax`/`ymax` — extent in CRS units; `width_px`/`height_px` — output pixel dimensions; `srid` — EPSG code; `statistic` — one of `"max"` (default, highest return for DSMs), `"min"`, `"mean"`, `"median"`, `"count"`, or `"percentile:<p>"` (e.g. `"percentile:90"`).
+
+<FunctionExamples
+  name="rst_binpoints"
+  sql={rasterxSqlCode}  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+/>
+
+---
+
+### rst_binpoints_agg {#rst_binpoints_agg}
+
+<Tier light/>
+
+Aggregator variant of [`rst_binpoints`](#rst_binpoints): stream **one scalar (x, y, z) point
+per row** into a DSM tile via `groupBy(...).agg(rx.rst_binpoints_agg(...))`. The
+`xmin`/`ymin`/`xmax`/`ymax`/`width_px`/`height_px`/`srid`/`statistic` arguments are
+per-group constants.
+
+The lightweight SQL aggregate returns **`BINARY`** (raster bytes). Wrap with
+`gbx_rst_fromcontent(<agg>, 'GTiff')` to rebuild a tile struct. The lightweight Python
+wrapper `rx.rst_binpoints_agg(...)` returns the full tile struct.
+
+**Signature:** `rst_binpoints_agg(x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])`
+
+**Parameters:** `x`, `y` — scalar `DOUBLE` columns of point coordinates; `z` — scalar `DOUBLE` z-value; remaining parameters match [`rst_binpoints`](#rst_binpoints).
+
+<FunctionExamples
+  name="rst_binpoints_agg"
+  sql={rasterxSqlCode}  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+/>
+
+---
+
+### rst_isoband {#rst_isoband}
+
+<Tier light/>
+
+Reclassify a raster band into value bins defined by a `breaks` array and return one
+polygon per **contiguous patch** of pixels in the same bin. Useful for producing
+height-band polygons from a CHM or DSM, or elevation isobands from a DEM.
+
+Returns `ARRAY<STRUCT<geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE>>` — one
+entry per contiguous region. `geom_wkb` is a WKB Polygon in the raster's own CRS.
+NoData pixels are excluded. Pixels below `breaks[0]` or `>= breaks[-1]` are dropped.
+
+Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL required.
+
+**Signature:** `rst_isoband(tile, breaks)`
+
+**Parameters:** `tile` — tile struct column; `breaks` — `ARRAY<DOUBLE>` of N+1 strictly-ascending boundary values defining N bands.
+
+<FunctionExamples
+  name="rst_isoband"
+  sql={rasterxSqlCode}  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+/>
+
+---
+
+### rst_chm {#rst_chm}
+
+<Tier light/>
+
+Compute a **Canopy Height Model (CHM)** from a Digital Surface Model (DSM) tile and a
+Digital Elevation Model (DEM) tile: `CHM = clamp(align(DSM → DEM grid) − DEM, min=0)`.
+
+The DSM is warped onto the DEM's grid (CRS, extent, width, height) via
+nearest-neighbour resampling before subtraction. Negative differences (where the DSM
+dips below the DEM due to noise) are clamped to 0. NoData in either input propagates
+to the output. Output is a Float32 GeoTIFF tile with NoData −9999.
+
+**Signature:** `rst_chm(dsm_tile, dem_tile)`
+
+**Parameters:** `dsm_tile` — Digital Surface Model tile (defines the surface heights); `dem_tile` — Digital Elevation Model tile (defines the bare-earth reference; also defines the output grid).
+
+<FunctionExamples
+  name="rst_chm"
+  sql={rasterxSqlCode}  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+/>
+
+---
+
 ## Generator Functions
 
 Produce multiple tiles or bands (7 total).

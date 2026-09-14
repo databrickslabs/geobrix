@@ -137,6 +137,10 @@ gbx_rst_cog_convert
 gbx_rst_contour
 gbx_rst_proximity
 gbx_rst_viewshed
+gbx_rst_binpoints
+gbx_rst_binpoints_agg
+gbx_rst_isoband
+gbx_rst_chm
 gbx_bng_aswkb
 gbx_bng_aswkt
 gbx_bng_cellarea

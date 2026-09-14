@@ -1237,6 +1237,32 @@ Throughput scales ~linearly at volume: **100,000 building footprints expand to 3
 
 </Tabs>
 
+### LiDAR DSM — `rst_binpoints` / `rst_binpoints_agg` / `rst_isoband` / `rst_chm` {#lidar-dsm}
+
+These four functions are **lightweight-only** (no heavyweight counterpart) and do not
+appear in the parity comparison tables. They belong to the **point-cloud-to-raster**
+shape family: binning scattered xyz points onto a pixel grid (`rst_binpoints`/`rst_binpoints_agg`),
+polygon-extraction per value band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
+
+> **Shape** (performance.mdx taxonomy): `rst_binpoints*` are geometry-input constructors
+> (no tile DataFrame input — similar to `rst_gridfrompoints`); `rst_isoband` is a
+> tile-to-feature-array transformer (similar to `rst_polygonize` and `rst_contour`);
+> `rst_chm` is a two-tile combiner (similar to `rst_combineavg`).
+
+**Expected performance characteristics** (local, single-tile, illustrative):
+
+| Function | Notes |
+|---|---|
+| `rst_binpoints` | NumPy 2D histogram (`np.histogram2d`); dominated by array allocation at low-density clouds, I/O at high density. |
+| `rst_binpoints_agg` | Same kernel as `rst_binpoints` — collects ARRAY per group then calls the same histogram path. Aggregator overhead is negligible relative to the binning kernel. |
+| `rst_isoband` | `numpy.digitize` + `rasterio.features.shapes` per band. Rasterio `shapes` is C-backed; cost grows with polygon complexity, not raster area. |
+| `rst_chm` | `rasterio.warp.reproject` (nearest-neighbour) + NumPy subtraction + clip-to-zero. Cost dominated by the warp (tiles with identical grids take only the subtract + clip). |
+
+No Databricks cluster benchmarks have been run for this family. Add your own timings and
+contribute them back as a PR; follow the methodology in the [How the benchmark works](#how-the-benchmark-works--how-to-run-it) section below.
+
+---
+
 ## How the benchmark works & how to run it
 
 ### What it measures

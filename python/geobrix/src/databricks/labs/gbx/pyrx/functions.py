@@ -30,6 +30,7 @@ from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
+from databricks.labs.gbx.pyrx.core import binning
 from databricks.labs.gbx.pyrx.core import cellraster as cellraster_core
 from databricks.labs.gbx.pyrx.core import coords
 from databricks.labs.gbx.pyrx.core import derivedband as derivedband_core
@@ -4571,6 +4572,86 @@ def rst_gridfrompoints(
     )
 
 
+# --- Tier 1e4: point-cloud binning (array -> tile) ---------------------------
+@f.udf(V2_TILE_SCHEMA)
+def _binpoints_udf(x_arr, y_arr, z_arr, xmin, ymin, xmax, ymax, w, h, srid, statistic):
+    """Scalar: bin parallel ARRAY<DOUBLE> columns into a single-band GTiff tile.
+
+    Produces one tile per row. Extent/size/srid/statistic are scalar args.
+    Empty or null input arrays return None.
+    """
+    if not x_arr:
+        return None
+    b = binning.bin_points(
+        x_arr,
+        y_arr,
+        z_arr,
+        float(xmin),
+        float(ymin),
+        float(xmax),
+        float(ymax),
+        int(w),
+        int(h),
+        int(srid),
+        str(statistic) if statistic is not None else "max",
+    )
+    return _serde.build_tile(b, "GTiff", 0)
+
+
+def rst_binpoints(
+    x_array: ColLike,
+    y_array: ColLike,
+    z_array: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Bin a per-row ARRAY of (x, y, z) points into a single-band raster tile.
+
+    ``x_array``, ``y_array``, ``z_array`` are parallel ``ARRAY<DOUBLE>`` columns.
+    Each output pixel carries the ``statistic`` reduction of all points whose
+    centre falls in that pixel's cell. Empty cells carry NoData (-9999.0).
+
+    Half-open interval: a point exactly on ``xmax`` (or ``ymin``) is dropped to
+    prevent cross-tile double-counting when DSMs are assembled from adjacent tiles.
+
+    Args:
+        x_array:          ARRAY<DOUBLE> of point x-coordinates (in CRS of srid).
+        y_array:          ARRAY<DOUBLE> of point y-coordinates, parallel to x.
+        z_array:          ARRAY<DOUBLE> of point z-values, parallel to x.
+        xmin, ymin,
+        xmax, ymax:       Spatial extent of the output raster in CRS units.
+        width_px,
+        height_px:        Output raster dimensions in pixels.
+        srid:             EPSG code for the output CRS.
+        statistic:        One of ``"max"`` (default), ``"min"``, ``"mean"``,
+                          ``"median"``, ``"count"``, or ``"percentile:<p>"``
+                          (e.g. ``"percentile:90"``).
+
+    Returns:
+        Single-band Float32 tile struct (cellid 0).
+    """
+    stat = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return _binpoints_udf(
+        _col(x_array),
+        _col(y_array),
+        _col(z_array),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width_px),
+        _col(height_px),
+        _col(srid),
+        stat,
+    )
+
+
 @f.udf(V2_TILE_SCHEMA)
 def _dtmfromgeoms_udf(
     points,
@@ -8051,6 +8132,51 @@ def _gridfrompoints_agg_udf(
 
 
 @pandas_udf(BinaryType())
+def _binpoints_agg_udf(
+    x: pd.Series,
+    y: pd.Series,
+    z: pd.Series,
+    xmin: pd.Series,
+    ymin: pd.Series,
+    xmax: pd.Series,
+    ymax: pd.Series,
+    w: pd.Series,
+    h: pd.Series,
+    srid: pd.Series,
+    statistic: pd.Series,
+) -> bytes:
+    """Grouped-agg: stream one (x, y, z) scalar point per row into one raster.
+
+    Returns raw GTiff bytes (BINARY). SQL callers wrap via
+    gbx_rst_fromcontent(<agg>, 'GTiff') to recover a tile struct; the Python
+    public function rst_binpoints_agg wraps automatically via _as_tile_udf.
+
+    Extent/size/srid/statistic are per-group constants; only the first row's
+    value is read.  Returns None for an empty group.
+    """
+    if len(x) == 0:
+        return None
+    stat = (
+        str(statistic.iloc[0])
+        if len(statistic) > 0 and statistic.iloc[0] is not None
+        else "max"
+    )
+    return binning.bin_points(
+        x.to_numpy(dtype="float64"),
+        y.to_numpy(dtype="float64"),
+        z.to_numpy(dtype="float64"),
+        float(xmin.iloc[0]),
+        float(ymin.iloc[0]),
+        float(xmax.iloc[0]),
+        float(ymax.iloc[0]),
+        int(w.iloc[0]),
+        int(h.iloc[0]),
+        int(srid.iloc[0]),
+        stat,
+    )
+
+
+@pandas_udf(BinaryType())
 def _dtmfromgeoms_agg_udf(
     point: pd.Series,
     breaklines: pd.Series,
@@ -8641,6 +8767,71 @@ def rst_gridfrompoints_agg(
     )
 
 
+def rst_binpoints_agg(
+    x: ColLike,
+    y: ColLike,
+    z: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Stream one scalar (x, y, z) point per row into a single-band raster tile.
+
+    Groups the stream by the enclosing ``groupBy`` key and bins each group's
+    points into a ``width_px × height_px`` raster over the given extent.
+    ``xmin``/``ymin``/``xmax``/``ymax``/``width_px``/``height_px``/``srid``/
+    ``statistic`` are per-group constants. Equal to running ``rst_binpoints``
+    on a pre-collected ARRAY column.
+
+    Use inside ``.agg()``::
+
+        df.groupBy(k).agg(
+            prx.rst_binpoints_agg(
+                "x", "y", "z", xmin, ymin, xmax, ymax, w, h, srid
+            ).alias("dsm")
+        )
+
+    Returns a tile struct (cellid 0). The raw BINARY form is available through
+    the SQL aggregate ``gbx_rst_binpoints_agg``; wrap it with
+    ``gbx_rst_fromcontent(<agg>, 'GTiff')`` to recover a tile struct.
+
+    Args:
+        x, y:       Scalar DOUBLE columns of point coordinates in CRS of srid.
+        z:          Scalar DOUBLE column of point z-values.
+        xmin, ymin,
+        xmax, ymax: Spatial extent of the output raster in CRS units (constants).
+        width_px,
+        height_px:  Output raster dimensions in pixels (constants).
+        srid:       EPSG code for the output CRS (constant).
+        statistic:  One of ``"max"`` (default), ``"min"``, ``"mean"``,
+                    ``"median"``, ``"count"``, or ``"percentile:<p>"``.
+
+    Returns:
+        Single-band Float32 tile struct (cellid 0).
+    """
+    stat = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return _as_tile_udf(
+        _binpoints_agg_udf(
+            _col(x),
+            _col(y),
+            _col(z),
+            _col(xmin),
+            _col(ymin),
+            _col(xmax),
+            _col(ymax),
+            _col(width_px),
+            _col(height_px),
+            _col(srid),
+            stat,
+        )
+    )
+
+
 def rst_dtmfromgeoms_agg(
     point: ColLike,
     breaklines: ColLike,
@@ -9211,6 +9402,7 @@ _sql_tile_ops = {
     "gbx_rst_rasterize": _rasterize_udf,
     "gbx_rst_gridfrompoints": _gridfrompoints_udf,
     "gbx_rst_dtmfromgeoms": _dtmfromgeoms_udf,
+    "gbx_rst_binpoints": _binpoints_udf,
     # gbx_rst_polygonize is a UDTF registered separately in register() via
     # spark.udtf.register — UDTFs cannot go through spark.udf.register.
     # gbx_rst_{h3,quadbin}_rastertogrid* are UDTFs registered separately in
@@ -9252,6 +9444,7 @@ _sql_aggregators = {
     "gbx_rst_derivedband_agg": _derivedband_agg_udf,
     "gbx_rst_gridfrompoints_agg": _gridfrompoints_agg_udf,
     "gbx_rst_dtmfromgeoms_agg": _dtmfromgeoms_agg_udf,
+    "gbx_rst_binpoints_agg": _binpoints_agg_udf,
     "gbx_rst_h3_rasterize_agg": _rst_h3_rasterize_agg_udf,
     "gbx_rst_quadbin_rasterize_agg": _rst_quadbin_rasterize_agg_udf,
     "gbx_rst_bng_rasterize_agg": _rst_bng_rasterize_agg_udf,

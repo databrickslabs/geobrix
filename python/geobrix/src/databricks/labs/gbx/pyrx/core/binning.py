@@ -25,37 +25,30 @@ def _cell_indices(
     """Map coordinate arrays to integer (row, col) cell indices.
 
     Raster convention: row 0 is the TOP (max y), so the row index flips y.
-    Points that fall on the upper or right boundary are clamped to the last
-    valid cell (standard half-open interval behaviour). Points strictly
-    outside the extent are excluded via the ``inb`` boolean mask.
+
+    Half-open interval: a point at exactly x==xmax (or y==ymax) computes
+    col==w (or row==h) and is DROPPED — not clamped into the last cell. This
+    matches the brief's reference code and prevents cross-tile double-counting
+    when DSMs are tiled on shared boundaries.
 
     Returns
     -------
-    row : int64 ndarray
-    col : int64 ndarray
+    row : int64 ndarray (only in-bounds points)
+    col : int64 ndarray (only in-bounds points)
     inb : bool ndarray  (same length as input x/y)
     """
     xa = np.asarray(x, dtype="float64")
     ya = np.asarray(y, dtype="float64")
 
-    # Fractional position in [0, 1) then multiply by grid dimensions.
-    # Flip y because raster row 0 = top.
-    col_f = (xa - xmin) / (xmax - xmin) * w
-    row_f = (ymax - ya) / (ymax - ymin) * h
+    # Fractional position then multiply by grid dimensions.
+    # Flip y: raster row 0 = top (max y).
+    col = np.floor((xa - xmin) / (xmax - xmin) * w).astype("int64")
+    row = np.floor((ymax - ya) / (ymax - ymin) * h).astype("int64")
 
-    col = np.floor(col_f).astype("int64")
-    row = np.floor(row_f).astype("int64")
-
-    # Clamp boundary pixels (points exactly on the upper/right edge) inward.
-    col = np.clip(col, 0, w - 1)
-    row = np.clip(row, 0, h - 1)
-
-    # Drop points genuinely outside the extent (before clamping would lie
-    # outside the half-open interval).
-    inb = (
-        (xa >= xmin) & (xa <= xmax)
-        & (ya >= ymin) & (ya <= ymax)
-    )
+    # Strict half-open interval: col in [0, w), row in [0, h).
+    # A point exactly on xmax yields col==w and is excluded.
+    # A point exactly on ymax yields row==h and is excluded.
+    inb = (col >= 0) & (col < w) & (row >= 0) & (row < h)
     return row[inb], col[inb], inb
 
 

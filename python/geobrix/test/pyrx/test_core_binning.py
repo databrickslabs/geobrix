@@ -180,3 +180,40 @@ def test_binpoints_unknown_statistic_raises():
 
     with pytest.raises(ValueError, match="unknown statistic"):
         bin_points([0.5], [1.5], [1.0], 0, 0, 2, 2, 2, 2, 4326, "bogus")
+
+
+def test_binpoints_exact_boundary_dropped():
+    """Half-open interval: points exactly on xmax or ymax are DROPPED (not
+    clamped into the last cell). A point just inside lands in the last col/row.
+    """
+    from databricks.labs.gbx.pyrx.core.binning import bin_points
+
+    # Grid: [0,2]x[0,2], 2x2.
+    # x==xmax (x=2) -> col==2 -> dropped (last col = col 1).
+    # y==ymax (y=2) -> row==h -> dropped (last row = row 1 in 0-indexed, but
+    #   row=floor((2-2)/2*2)=0... wait: row=floor((ymax-y)/(ymax-ymin)*h).
+    #   y=ymax=2 -> row=floor(0/2*2)=floor(0)=0, which IS in [0,h) = [0,2).
+    #   So y==ymax lands in row 0 (top row) — that's correct behaviour (it IS
+    #   the upper boundary of that pixel). Only x==xmax / col==w is the
+    #   problematic upper edge in x direction.
+    #   Similarly y==ymin -> row=floor(2/2*2)=floor(2)=2 which is >= h, dropped.
+    # Test the x-boundary case:
+    # - point A at x=2.0 (==xmax), y=0.5, z=999  -> col=2 -> DROPPED
+    # - point B at x=1.99, y=0.5, z=42            -> col=1 (last col) -> lands
+    # - point C at y=0.0 (==ymin), x=0.5, z=888   -> row=2 -> DROPPED
+    # - point D at y=0.01, x=0.5, z=55            -> row=1 (bottom row) -> lands
+    x = [2.0,  1.99, 0.5,  0.5]
+    y = [0.5,  0.5,  0.0,  0.01]
+    z = [999.0, 42.0, 888.0, 55.0]
+    b = bin_points(x, y, z, 0, 0, 2, 2, 2, 2, 4326, "max")
+    arr, nodata, _, _ = _read_band(b)
+    # A dropped: arr[1,1] should be 42 (from B), not 999.
+    assert arr[1, 1] == pytest.approx(42.0), (
+        f"expected 42.0 (B lands), got {arr[1,1]} — "
+        "x==xmax point was not dropped"
+    )
+    # C dropped: arr[1,0] should be 55 (from D), not 888.
+    assert arr[1, 0] == pytest.approx(55.0), (
+        f"expected 55.0 (D lands), got {arr[1,0]} — "
+        "y==ymin point was not dropped"
+    )

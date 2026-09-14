@@ -11,7 +11,7 @@
 
 <rect x="0" y="0" width="2100" height="1436" fill="url(#bg)"/>
 <text x="36" y="64" font-size="30" font-weight="800" fill="#0F1B2A">GeoBrix &#183; RasterX</text>
-<text x="36" y="92" font-size="15" fill="#3F4D5E">146 SQL functions for raster data on Spark &#8212; registered as <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan> &#183; also available in Python &amp; Scala as <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700" fill="#0F1B2A">rst_*</tspan></text>
+<text x="36" y="92" font-size="15" fill="#3F4D5E">150 SQL functions for raster data on Spark &#8212; registered as <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan> &#183; also available in Python &amp; Scala as <tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-weight="700" fill="#0F1B2A">rst_*</tspan></text>
 <rect x="2000" y="44" rx="13" ry="13" width="64" height="26" fill="#0F1B2A"/><text x="2032.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.5.2</text>
 <rect x="36" y="146" rx="14" ry="14" width="660" height="136" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
 <path d="M 36 160 A 14 14 0 0 1 50 146 H 682 A 14 14 0 0 1 696 160 V 151 H 36 Z" fill="#E04E2A"/>

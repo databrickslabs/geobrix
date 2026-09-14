@@ -172,6 +172,81 @@ def test_bad_kind_raises(holed_cls):
         D.geom_expand("disk", 1, "boundary-out", holed_cls, _neighbors)
 
 
+def test_boundary_out_holed_does_not_fill_hole(holed_cls):
+    """FIX: boundary-out must not seed from hole-rim cells and must not fill the hole.
+
+    Bug: with p_border frontier, h_core cells get seeded at k=1 because hole-rim
+    cells are in the frontier AND h_core cells are not in visited0 (p_cover).
+    Fix: s_border (outer-rim only) is the frontier; h_core is never reached because
+    the path from the outer rim to hole interior goes through p_cover (= visited0).
+    """
+    # k=2 confirms the hole is not filled (with the bug it fills at k=1)
+    r = D.geom_expand("ring", 2, "boundary-out", holed_cls, _neighbors)
+    # FAILS with buggy p_border frontier: hole-rim cells seed h_core at k=1
+    assert r.isdisjoint(
+        holed_cls.h_core
+    ), "boundary-out must not fill the hole; h_core cells found in result"
+    # outward expansion beyond the geom IS present (fix must not break outward growth)
+    assert r > holed_cls.p_cover, "boundary-out k=2 must expand beyond p_cover"
+
+
+def test_boundary_in_holed_k0_excludes_hole_rim(holed_cls):
+    """FIX: boundary-in k=0 must seed only from s_border (outer rim), not hole rim.
+
+    Bug: with p_border seed, h_border (hole-rim) cells appear in k=0 because
+    p_border = p_cover - p_core includes hole-rim cells (they touch P but are not
+    fully inside it).  Fix: k0 = s_border (outer ring only), disjoint from h_border.
+    """
+    # loop(0) == k0
+    k0 = D.geom_expand("loop", 0, "boundary-in", holed_cls, _neighbors)
+    # FAILS with buggy code: p_border ⊇ h_border → k0 contains hole-rim cells
+    assert k0.isdisjoint(holed_cls.h_border), (
+        "boundary-in k=0 must not include hole-rim (h_border) cells; "
+        "only outer-boundary (s_border) cells should seed this mode"
+    )
+
+
+def test_boundary_in_ignore_holes_holed_k0_excludes_hole_rim(holed_cls):
+    """FIX: boundary-in-ignore-holes k=0 must also use s_border, not p_border.
+
+    Same structural issue as boundary-in: the ignore-holes variant must seed only
+    from the outer ring (s_border), not from p_border (which includes hole-rim cells).
+    """
+    k0 = D.geom_expand("loop", 0, "boundary-in-ignore-holes", holed_cls, _neighbors)
+    # FAILS with buggy code: k0 = p_border ⊇ h_border
+    assert k0.isdisjoint(
+        holed_cls.h_border
+    ), "boundary-in-ignore-holes k=0 must not include hole-rim (h_border) cells"
+
+
+def test_boundary_modes_holeless_s_border_equals_p_border():
+    """REGRESSION GUARD: for a no-hole polygon, s_border == p_border; boundary-* unchanged.
+
+    For P without holes: S = P → s_core = p_core, s_cover = p_cover →
+    s_border = p_border.  The fix (seeding from s_border instead of p_border)
+    is therefore a no-op for holeless polygons.
+    """
+    solid = box(0, 0, 10, 10)
+
+    def polyfill_fn(g, res):
+        return [_cid(x, y) for x in range(-2, 13) for y in range(-2, 13)]
+
+    def cell_geom_fn(c):
+        x, y = _xy(c)
+        return box(x, y, x + 1, y + 1)
+
+    cls = D.classify(solid, 1, polyfill_fn, cell_geom_fn)
+    # For no-hole polygon: s_border must equal p_border (S = P when no holes)
+    assert (
+        cls.s_border == cls.p_border
+    ), "no-hole polygon: s_border must equal p_border (S = P when no holes)"
+    # boundary-in k=0 must be the full p_border (= s_border) for holeless case
+    k0_bi = D.geom_expand("loop", 0, "boundary-in", cls, _neighbors)
+    assert (
+        k0_bi == cls.p_border
+    ), "holeless boundary-in k=0 must equal p_border (= s_border for no holes)"
+
+
 def test_classify_filtering_polyfill_finds_hcore():
     """Fix B: classify re-polyfills S (solid), so a filtering polyfill still populates h_core.
 

@@ -54,6 +54,17 @@ class Classification:
         return self.p_cover - self.p_core
 
     @property
+    def s_border(self):
+        """Outer-boundary cells only: overlaps S but not fully inside S.
+
+        For a polygon with no holes, S = P so s_border == p_border.
+        For a holed polygon, s_border excludes hole-rim cells (which ARE in
+        p_border but are fully inside S and therefore in s_core, not s_border).
+        This is the correct frontier seed for boundary-* modes.
+        """
+        return self.s_cover - self.s_core
+
+    @property
     def h_border(self):
         return self.h_cover - self.h_core
 
@@ -102,18 +113,23 @@ def mode_setup(mode, cls):
     """Return (frontier0, visited0, admit, k0) for a traversal mode."""
     if mode not in MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of {MODES}")
-    pb, hb = cls.p_border, cls.h_border
+    # sb = outer-boundary cells only (s_cover - s_core).
+    # For a no-hole polygon S = P, so sb == pb — holeless behavior is unchanged.
+    # For a holed polygon, hole-rim cells are inside S (in s_core), so they are
+    # correctly excluded from sb.  This means boundary-* modes operate on the outer
+    # ring only; hole-rim traversal belongs to hole-* modes.
+    sb, hb = cls.s_border, cls.h_border
     if mode == "boundary-out":
         return (
-            frozenset(pb),
+            frozenset(sb),
             frozenset(cls.p_cover),
             (lambda n: True),
             frozenset(cls.p_cover),
         )
     if mode == "boundary-in":
-        return frozenset(pb), frozenset(pb), (lambda n: n in cls.p_core), frozenset(pb)
+        return frozenset(sb), frozenset(sb), (lambda n: n in cls.p_core), frozenset(sb)
     if mode == "boundary-in-ignore-holes":
-        return frozenset(pb), frozenset(pb), (lambda n: n in cls.s_core), frozenset(pb)
+        return frozenset(sb), frozenset(sb), (lambda n: n in cls.s_core), frozenset(sb)
     if mode == "hole-in":
         return frozenset(hb), frozenset(hb), (lambda n: n in cls.h_core), frozenset(hb)
     if mode == "hole-out":

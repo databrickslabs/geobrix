@@ -128,3 +128,43 @@ def test_chm_misaligned_grid_output_shape_equals_dem(spark):
     assert out_w == 2, f"Expected width 2 (DEM grid), got {out_w}"
     # DSM=15 > DEM everywhere -> CHM should be positive (no clamping here)
     assert np.all(arr >= 0.0), "CHM must be non-negative after clamping"
+    # Verify the alignment arithmetic: DSM=15, DEM[0,0]=10 -> CHM=5
+    assert arr[0, 0] == pytest.approx(5.0), f"Expected 15-10=5 at [0,0], got {arr[0,0]}"
+
+
+# ---------------------------------------------------------------------------
+# NoData propagation
+# ---------------------------------------------------------------------------
+
+
+def test_chm_nodata_propagation(spark):
+    """NoData in either input must propagate to -9999 in output, not 0."""
+    from databricks.labs.gbx.pyrx import functions as fns
+
+    fns.register(spark, only=["gbx_rst_chm", "gbx_rst_fromcontent"])
+
+    # DSM has one NoData pixel at [0,1]; DEM is fully valid
+    dsm_arr = np.array([[10.0, -9999.0], [5.0, 8.0]], dtype="float32")
+    dem_arr = np.array([[10.0, 15.0], [7.0, 8.0]], dtype="float32")
+
+    dsm = _make_geotiff_bytes(dsm_arr, nodata=-9999.0)
+    dem = _make_geotiff_bytes(dem_arr, nodata=-9999.0)
+
+    df = spark.createDataFrame([(dsm, dem)], "dsm binary, dem binary")
+    out = df.selectExpr(
+        "gbx_rst_chm(gbx_rst_fromcontent(dsm, 'GTiff'), gbx_rst_fromcontent(dem, 'GTiff')) AS r"
+    ).collect()[0]["r"]
+
+    with MemoryFile(bytes(out["raster"])) as mf, mf.open() as ds:
+        arr = ds.read(1)
+        result_nodata = ds.nodata
+
+    # NoData sentinel must be set and the nodata pixel must carry it
+    assert result_nodata == pytest.approx(-9999.0), f"Expected nodata=-9999, got {result_nodata}"
+    assert arr[0, 1] == pytest.approx(-9999.0), (
+        f"DSM NoData at [0,1] must propagate; got {arr[0,1]}"
+    )
+    # Valid neighbor must compute correctly: 10-10=0, clamp to 0
+    assert arr[0, 0] == pytest.approx(0.0), f"Expected 10-10=0 at [0,0], got {arr[0,0]}"
+    # Another valid cell: 5-7=-2, clamp to 0
+    assert arr[1, 0] == pytest.approx(0.0), f"Expected clamp(5-7,0)=0 at [1,0], got {arr[1,0]}"

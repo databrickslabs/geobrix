@@ -44,5 +44,4 @@ def test_only_none_registers_all(spark):
 
 def test_lidar_registered(spark):
     ds_register.register(spark, only=["lidar"])
-    reader = spark.read.format("lidar_gbx").option("mode", "metadata")
-    assert reader is not None
+    assert _format_ok(spark, "lidar_gbx")

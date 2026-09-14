@@ -3006,6 +3006,58 @@ def _contour_udf(tile, levels, interval, base, attr_field):
         return analysis_core.contour(ds, lvls, iv, bs, attr)
 
 
+# rst_isoband: tile + breaks (ARRAY<DOUBLE>) ->
+# ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>
+_ISOBAND_SCHEMA = ArrayType(
+    StructType(
+        [
+            StructField("geom_wkb", BinaryType(), nullable=True),
+            StructField("band", IntegerType(), nullable=True),
+            StructField("lower", DoubleType(), nullable=True),
+            StructField("upper", DoubleType(), nullable=True),
+        ]
+    )
+)
+
+
+@f.udf(_ISOBAND_SCHEMA)
+def _isoband_udf(tile, breaks):
+    if _tile_is_empty(tile):
+        return None
+    if not breaks:
+        return None
+    with ot._open(tile) as ds:
+        return features.isoband(ds, breaks)
+
+
+def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
+    """Reclassify a raster band into value bins and return one polygon per contiguous patch.
+
+    Mirrors ``gbx_rst_isoband``. Implemented with ``numpy.digitize`` +
+    ``rasterio.features.shapes`` (light tier, no GDAL required).
+
+    Each output element covers a contiguous run of pixels that fell in the same
+    break interval ``[breaks[i], breaks[i+1])``. NoData pixels are excluded.
+
+    Args:
+        tile:   Tile struct column.
+        breaks: ``ARRAY<DOUBLE>`` of N+1 strictly-ascending boundary values
+                defining N bands (e.g. ``f.array(f.lit(0.0), f.lit(5.0),
+                f.lit(10.0))`` → bands [0, 5) and [5, 10)).
+                Values below ``breaks[0]`` or >= ``breaks[-1]`` are dropped.
+
+    Returns:
+        ``ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>``
+        — one struct per contiguous polygon, tagged with its zero-based band index
+        and the ``[lower, upper)`` interval boundaries. ``geom_wkb`` is a WKB
+        Polygon in the raster's CRS.
+
+    Raises:
+        ValueError: if ``breaks`` is not strictly ascending.
+    """
+    return _isoband_udf(_col(tile), _col(breaks))
+
+
 def _viewshed_bytes(
     tile, observer_geom, observer_height, target_height, max_distance, crs=None
 ):
@@ -9396,6 +9448,7 @@ _sql_tile_ops = {
     "gbx_rst_sample": _sample_udf,
     "gbx_rst_proximity": _proximity_udf,
     "gbx_rst_contour": _contour_udf,
+    "gbx_rst_isoband": _isoband_udf,
     "gbx_rst_viewshed": _viewshed_udf,
     "gbx_rst_cog_convert": _cog_convert_udf,
     "gbx_rst_fillnodata": _fillnodata_udf,

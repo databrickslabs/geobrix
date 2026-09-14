@@ -32,6 +32,7 @@ from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
 from databricks.labs.gbx.pyrx.core import binning
 from databricks.labs.gbx.pyrx.core import cellraster as cellraster_core
+from databricks.labs.gbx.pyrx.core import chm as chm_core
 from databricks.labs.gbx.pyrx.core import coords
 from databricks.labs.gbx.pyrx.core import derivedband as derivedband_core
 from databricks.labs.gbx.pyrx.core import edit, features, focal, gridagg, indices
@@ -1591,6 +1592,45 @@ def rst_align_to(
             *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
         )
     return _align_to_udf(_col(tile), _col(reference))
+
+
+# rst_chm: Canopy Height Model = clamp(align(DSM->DEM) - DEM, min=0).
+# DSM is warped onto the DEM's grid; negative differences clamp to 0.
+# NoData in either input propagates to the output.
+# ---------------------------------------------------------------------------
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _chm_udf(dsm_tile, dem_tile):
+    if _tile_is_empty(dsm_tile) or _tile_is_empty(dem_tile):
+        return None
+    vt_dsm = ot._to_virtual_tile(dsm_tile)
+    dsm_bytes = ot.materialize_to_bytes(vt_dsm).raster if vt_dsm.is_virtual() else bytes(vt_dsm.raster)
+    vt_dem = ot._to_virtual_tile(dem_tile)
+    dem_bytes = ot.materialize_to_bytes(vt_dem).raster if vt_dem.is_virtual() else bytes(vt_dem.raster)
+    new_bytes = chm_core.chm(dsm_bytes, dem_bytes)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(dsm_tile))
+
+
+def rst_chm(dsm_tile: ColLike, dem_tile: ColLike) -> Column:
+    """Compute Canopy Height Model from DSM and DEM tiles.
+
+    Returns ``clamp(align(DSM->DEM) - DEM, min=0)``.  The DSM is warped onto
+    the DEM's grid (CRS, transform, width, height) via nearest-neighbour
+    resampling before subtraction.  Negative differences are clamped to 0.
+    NoData in either input propagates to the output.
+
+    Args:
+        dsm_tile: Digital Surface Model tile.
+        dem_tile:  Digital Elevation Model tile (defines the output grid).
+
+    Returns:
+        Tile with CHM values (Float32 GTiff; nodata -9999), or NULL if either
+        input is NULL.
+    """
+    return _chm_udf(_col(dsm_tile), _col(dem_tile))
 
 
 # rst_frombands: single ARRAY<single-band tile> arg -> multi-band tile.
@@ -9429,6 +9469,7 @@ _sql_tile_ops = {
     "gbx_rst_combinemedian": _combinemedian_udf,
     "gbx_rst_combinestddev": _combinestddev_udf,
     "gbx_rst_align_to": _align_to_udf,
+    "gbx_rst_chm": _chm_udf,
     "gbx_rst_frombands": _frombands_udf,
     "gbx_rst_transform": _transform_udf,
     "gbx_rst_to_webmercator": _to_webmercator_udf,

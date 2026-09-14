@@ -25,7 +25,7 @@ import os
 import time
 import urllib.request
 from collections import deque
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
@@ -58,8 +58,11 @@ def aoi_lonlat_to_3857(
     return (xmin, ymin, xmax, ymax)
 
 
-def _default_get(url: str, timeout: int = 120, retries: int = 4) -> bytes:
-    """Fetch ``url`` with exponential-backoff retry; returns raw bytes."""
+def _urllib_fetch(url: str, timeout: int = 120, retries: int = 4) -> bytes:
+    """Retry-backed urllib fetch; no self-dependency (safe for Spark worker closures).
+
+    Exponential backoff: sleeps 1 s, 2 s, 4 s, … up to 8 s between retries.
+    """
     last: Optional[Exception] = None
     for i in range(retries):
         try:
@@ -69,6 +72,11 @@ def _default_get(url: str, timeout: int = 120, retries: int = 4) -> bytes:
             last = exc
             time.sleep(min(2**i, 8))
     raise last  # type: ignore[misc]
+
+
+def _default_get(url: str) -> bytes:
+    """Default injectable ``_get`` for ``Ept`` and ``LidarDownloader``; delegates to ``_urllib_fetch``."""
+    return _urllib_fetch(url)
 
 
 class Ept:
@@ -157,6 +165,119 @@ class Ept:
         return selected
 
 
+def _make_fetch_nodes(
+    bases: Dict[str, str],
+    aoi: Tuple[float, float, float, float],
+    out_dir: Optional[str],
+    write_laz: bool,
+    clip: bool,
+    _fetch: Optional[Callable] = None,
+) -> Callable:
+    """Build the ``mapInPandas`` worker generator, exposed for offline unit tests.
+
+    In production ``_fetch`` is ``None`` → ``_urllib_fetch`` is used (the single copy of
+    the retry logic).  In unit tests pass ``_fetch=<mock>`` to avoid live network access
+    without needing a Spark cluster.
+
+    Parameters
+    ----------
+    bases     : ``{project: base_url_with_trailing_slash}``
+    aoi       : ``(xmin, ymin, xmax, ymax)`` in EPSG:3857.
+    out_dir   : Output directory for ``.laz`` files (``None`` skips writes).
+    write_laz : Whether to write raw ``.laz`` nodes to disk.
+    clip      : Whether to clip points to the AOI before yielding.
+    _fetch    : Fetch function ``(url) -> bytes``; defaults to ``_urllib_fetch``.
+    """
+    _f = _fetch if _fetch is not None else _urllib_fetch
+    _bases = bases
+    _aoi = aoi
+    _write_laz = write_laz
+    _out_dir = out_dir
+    _clip = clip
+    _merc_r = _MERC_R
+
+    def fetch_nodes(iterator):
+        import io as _io
+        import math as _math
+        import os as _os
+
+        import laspy
+        import numpy as np
+        import pandas as pd
+
+        for pdf in iterator:
+            for proj, key in zip(pdf["project"], pdf["node_key"]):
+                try:
+                    raw = _f(_bases[proj] + f"ept-data/{key}.laz")
+                except Exception:
+                    continue  # skip nodes that never come back
+
+                if _write_laz and _out_dir is not None:
+                    laz_dir = _os.path.join(_out_dir, proj)
+                    _os.makedirs(laz_dir, exist_ok=True)
+                    safe_key = key.replace("/", "_")
+                    laz_path = _os.path.join(laz_dir, f"{safe_key}.laz")
+                    if not _os.path.exists(laz_path):
+                        with open(laz_path, "wb") as fh:
+                            fh.write(raw)
+
+                las = laspy.read(_io.BytesIO(raw))
+                x = np.asarray(las.x)
+                y = np.asarray(las.y)
+                z = np.asarray(las.z)
+
+                if _clip:
+                    m = (
+                        (x >= _aoi[0])
+                        & (x <= _aoi[2])
+                        & (y >= _aoi[1])
+                        & (y <= _aoi[3])
+                    )
+                    if not m.any():
+                        continue
+                    x, y, z = x[m], y[m], z[m]
+                    intensity = np.asarray(las.intensity)[m].astype("int32")
+                    classification = np.asarray(las.classification)[m].astype("int32")
+                    return_number = np.asarray(las.return_number)[m].astype("int32")
+                    number_of_returns = np.asarray(las.number_of_returns)[m].astype(
+                        "int32"
+                    )
+                else:
+                    intensity = np.asarray(las.intensity).astype("int32")
+                    classification = np.asarray(las.classification).astype("int32")
+                    return_number = np.asarray(las.return_number).astype("int32")
+                    number_of_returns = np.asarray(las.number_of_returns).astype(
+                        "int32"
+                    )
+
+                lon = x / _merc_r * 180.0
+                lat = np.degrees(
+                    2.0 * np.arctan(np.exp(y / _merc_r * _math.pi))
+                    - _math.pi / 2.0
+                )
+                result = pd.DataFrame(
+                    {
+                        "project": proj,
+                        "node_key": key,
+                        "x_3857": x,
+                        "y_3857": y,
+                        "z_m": z,
+                        "lon": lon,
+                        "lat": lat,
+                        "intensity": intensity,
+                        "classification": classification,
+                        "return_number": return_number,
+                        "number_of_returns": number_of_returns,
+                    }
+                )
+                for col in result.columns:
+                    if pd.api.types.is_extension_array_dtype(result[col]):
+                        result[col] = result[col].to_numpy(na_value=None)
+                yield result
+
+    return fetch_nodes
+
+
 class LidarDownloader:
     """Distributed, AOI-driven USGS 3DEP LiDAR downloader via AWS Open Data EPT.
 
@@ -213,14 +334,15 @@ class LidarDownloader:
         write_laz: bool = True,
         clip: bool = True,
         aoi_3857: Optional[Tuple[float, float, float, float]] = None,
-    ) -> "DataFrame":
+    ) -> "Union[List[dict], DataFrame]":
         """Fetch EPT nodes, write LAZ files, and return clipped point rows.
 
         Either ``aoi_lonlat`` or ``aoi_3857`` must be supplied.  When both are given,
         ``aoi_3857`` takes precedence (useful in unit tests to skip the projection step).
 
-        When ``spark`` is given the download is distributed via ``mapInPandas``; otherwise
-        a driver-side loop is used (suitable for small AOIs and unit tests).
+        When ``spark`` is given the download is distributed via ``mapInPandas`` and returns
+        a ``pyspark.sql.DataFrame``; when ``spark`` is ``None`` the driver-side loop runs
+        and returns a ``list[dict]`` (suitable for small AOIs and unit tests).
 
         Parameters
         ----------
@@ -358,7 +480,11 @@ class LidarDownloader:
         write_laz: bool,
         clip: bool,
     ) -> "DataFrame":
-        """Spark-distributed download via ``mapInPandas``."""
+        """Spark-distributed download via ``mapInPandas``.
+
+        Worker logic lives in ``_make_fetch_nodes`` (module-level, testable without Spark).
+        The retry fetch is ``_urllib_fetch`` — single source of truth, no copy here.
+        """
         from pyspark.sql.types import (
             DoubleType,
             IntegerType,
@@ -383,110 +509,15 @@ class LidarDownloader:
             ]
         )
 
-        # Capture closure variables — no custom spark.conf keys (Serverless-safe)
-        _bases = {p: b.rstrip("/") + "/" for p, b in self.projects.items()}
-        _aoi = aoi_3857
-        _write_laz = write_laz
-        _out_dir = out_dir
-        _clip = clip
-        _merc_r = _MERC_R
-
-        def fetch_nodes(iterator):
-            import io as _io
-            import math as _math
-            import os as _os
-            import time as _time
-            import urllib.request as _urlreq
-
-            import numpy as np
-            import pandas as pd
-            import laspy
-
-            def dl(url: str) -> bytes:
-                last = None
-                for i in range(4):
-                    try:
-                        with _urlreq.urlopen(url, timeout=120) as r:
-                            return r.read()
-                    except Exception as exc:
-                        last = exc
-                        _time.sleep(min(2**i, 8))
-                raise last  # type: ignore[misc]
-
-            for pdf in iterator:
-                for proj, key in zip(pdf["project"], pdf["node_key"]):
-                    try:
-                        raw = dl(_bases[proj] + f"ept-data/{key}.laz")
-                    except Exception:
-                        continue  # skip nodes that never come back
-
-                    if _write_laz and _out_dir is not None:
-                        laz_dir = _os.path.join(_out_dir, proj)
-                        _os.makedirs(laz_dir, exist_ok=True)
-                        safe_key = key.replace("/", "_")
-                        laz_path = _os.path.join(laz_dir, f"{safe_key}.laz")
-                        if not _os.path.exists(laz_path):
-                            with open(laz_path, "wb") as fh:
-                                fh.write(raw)
-
-                    las = laspy.read(_io.BytesIO(raw))
-                    x = np.asarray(las.x)
-                    y = np.asarray(las.y)
-                    z = np.asarray(las.z)
-
-                    if _clip:
-                        m = (
-                            (x >= _aoi[0])
-                            & (x <= _aoi[2])
-                            & (y >= _aoi[1])
-                            & (y <= _aoi[3])
-                        )
-                        if not m.any():
-                            continue
-                        x, y, z = x[m], y[m], z[m]
-                        intensity = np.asarray(las.intensity)[m].astype("int32")
-                        classification = np.asarray(las.classification)[m].astype(
-                            "int32"
-                        )
-                        return_number = np.asarray(las.return_number)[m].astype(
-                            "int32"
-                        )
-                        number_of_returns = np.asarray(las.number_of_returns)[
-                            m
-                        ].astype("int32")
-                    else:
-                        intensity = np.asarray(las.intensity).astype("int32")
-                        classification = np.asarray(las.classification).astype("int32")
-                        return_number = np.asarray(las.return_number).astype("int32")
-                        number_of_returns = np.asarray(las.number_of_returns).astype(
-                            "int32"
-                        )
-
-                    lon = x / _merc_r * 180.0
-                    lat = np.degrees(
-                        2.0 * np.arctan(np.exp(y / _merc_r * _math.pi))
-                        - _math.pi / 2.0
-                    )
-                    result = pd.DataFrame(
-                        {
-                            "project": proj,
-                            "node_key": key,
-                            "x_3857": x,
-                            "y_3857": y,
-                            "z_m": z,
-                            "lon": lon,
-                            "lat": lat,
-                            "intensity": intensity,
-                            "classification": classification,
-                            "return_number": return_number,
-                            "number_of_returns": number_of_returns,
-                        }
-                    )
-                    for col in result.columns:
-                        if pd.api.types.is_extension_array_dtype(result[col]):
-                            result[col] = result[col].to_numpy(na_value=None)
-                    yield result
-
+        # Worker generator: closure variables captured here, no custom spark.conf keys
+        # (Serverless-safe). _fetch=None → _make_fetch_nodes uses _urllib_fetch.
+        fetch_nodes = _make_fetch_nodes(
+            bases={p: b.rstrip("/") + "/" for p, b in self.projects.items()},
+            aoi=aoi_3857,
+            out_dir=out_dir,
+            write_laz=write_laz,
+            clip=clip,
+        )
         nodes_df = spark.createDataFrame(
             node_rows, "project string, node_key string"
         ).repartition(num_partitions)

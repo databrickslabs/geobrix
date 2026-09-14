@@ -40,3 +40,9 @@ def test_only_none_registers_all(spark):
     ds_register.register(spark)
     for fmt in ("raster_gbx", "gtiff_gbx", "shapefile_gbx", "geojson_gbx"):
         assert _format_ok(spark, fmt)
+
+
+def test_lidar_registered(spark):
+    ds_register.register(spark, only=["lidar"])
+    reader = spark.read.format("lidar_gbx").option("mode", "metadata")
+    assert reader is not None

@@ -15,6 +15,7 @@ from databricks.labs.gbx import _register
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.ds.file import FileGbxDataSource
 from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
 from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
 from databricks.labs.gbx.ds.pmtiles import PMTilesGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
@@ -40,6 +41,7 @@ _SOURCES = (
     GeoJSONLGbxDataSource,
     GpkgGbxDataSource,
     FileGdbGbxDataSource,
+    LidarGbxDataSource,
 )
 
 

@@ -1,4 +1,4 @@
-__version__ = "0.5.1"
+__version__ = "0.5.2"
 
 from databricks.labs.gbx.crs_grids import register_proj_grids  # noqa: E402
 

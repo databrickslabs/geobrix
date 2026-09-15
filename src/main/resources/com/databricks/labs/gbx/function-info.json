@@ -68,13 +68,15 @@
       "examples": "Examples:\n      > SELECT gbx_rst_binpoints( array(550100.0, 550200.0, 550300.0), array(180100.0, 180200.0, 180500.0), array(42.5, 45.1, 38.7), 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max' ) AS dsm;",
       "bindings": [
         "sql"
-      ]
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_binpoints_agg": {
       "examples": "Examples:\n      > SELECT tile_id, gbx_rst_binpoints_agg(x, y, z, 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max') AS dsm FROM ( VALUES (1, 550100.0, 180100.0, 42.5), (1, 550200.0, 180200.0, 45.1), (1, 550300.0, 180500.0, 38.7) ) AS t(tile_id, x, y, z) GROUP BY tile_id;",
       "bindings": [
         "sql"
-      ]
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_bng_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;",
@@ -212,7 +214,8 @@
       "examples": "Examples:\n      > SELECT gbx_rst_chm(tile, tile) AS chm FROM dem_rasters;",
       "bindings": [
         "sql"
-      ]
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_clip": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_clip( tile, 'POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))', true ) as clipped FROM rasters;",
@@ -795,7 +798,8 @@
       "examples": "Examples:\n      > SELECT gbx_rst_isoband(tile, array(0.0, 50.0, 100.0, 150.0, 200.0)) AS patches FROM dem_rasters;",
       "bindings": [
         "sql"
-      ]
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_maketiles": {
       "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_maketiles(tile, 4) t;",

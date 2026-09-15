@@ -39,6 +39,7 @@ _NON_TILE_REGISTERED = {
     "gbx_rst_tryopen": "BooleanType (open-success flag)",
     "gbx_rst_sample": "ArrayType(DoubleType) (per-band pixel values)",
     "gbx_rst_contour": "contour result struct (vector output)",
+    "gbx_rst_isoband": "ArrayType of contour structs (vector output)",
     "gbx_rst_tilexyz": "BinaryType (encoded PNG/JPEG/WEBP image tile)",
 }
 

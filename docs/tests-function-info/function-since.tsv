@@ -66,6 +66,8 @@ gbx_rst_aspect	0.4.0
 gbx_rst_avg	0.2.0
 gbx_rst_band	0.4.0
 gbx_rst_bandmetadata	0.2.0
+gbx_rst_binpoints	0.5.2
+gbx_rst_binpoints_agg	0.5.2
 gbx_rst_bng_rasterize_agg	0.4.3
 gbx_rst_bng_rastertogridavg	0.4.3
 gbx_rst_bng_rastertogridcount	0.4.3
@@ -78,6 +80,7 @@ gbx_rst_bng_rastertogridvariance	0.4.3
 gbx_rst_bng_tessellate	0.4.3
 gbx_rst_boundingbox	0.2.0
 gbx_rst_buildoverviews	0.4.0
+gbx_rst_chm	0.5.2
 gbx_rst_clip	0.2.0
 gbx_rst_cog_convert	0.4.0
 gbx_rst_color_relief	0.4.0
@@ -135,6 +138,7 @@ gbx_rst_histogram	0.4.0
 gbx_rst_index	0.4.0
 gbx_rst_initnodata	0.2.0
 gbx_rst_isempty	0.2.0
+gbx_rst_isoband	0.5.2
 gbx_rst_maketiles	0.2.0
 gbx_rst_mapalgebra	0.2.0
 gbx_rst_max	0.2.0

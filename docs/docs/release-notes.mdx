@@ -46,6 +46,15 @@ Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
 - **`gbx_rst_chm`** — compute a Canopy Height Model: warp the DSM onto the DEM grid,
   subtract, and clamp negatives to zero. NoData propagates from either input.
 
+### Geom-aware grid functions — GeometryCollection inputs
+
+- **GeometryCollection inputs** to the geom-aware grid functions
+  (`gbx_*_geomkring` / `gbx_*_geomkloop` and their explode variants) are now
+  processed as the union of their members, matching `MULTI*` behavior — polygon,
+  line, and point members all contribute (previously non-polygon members were
+  dropped or the result was empty). As with a standalone point or line, point and
+  line members contribute only under `coverage = coveras`.
+
 ---
 
 ## What's new in v0.5.1

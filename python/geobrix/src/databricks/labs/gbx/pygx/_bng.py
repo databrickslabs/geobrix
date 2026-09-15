@@ -912,11 +912,12 @@ def geometry_k_ring(
 ) -> set:
     """k-ring of cell ids covering ``geometry`` (BNG.geometryKRing, BNG.scala L639).
 
-    boundary-out mode uses the lazy O(perimeter) seed path; all other modes use
-    the full O(area) classify + geom_expand path.  ``coverage`` ∈
+    boundary-out / boundary-in / boundary-in-ignore-holes use the lazy O(perimeter)
+    seed path for Polygon/MultiPolygon; all other modes and geometry types use the
+    full O(area) classify + geom_expand path.  ``coverage`` ∈
     {"coveras","polyfill","core"} selects the belongs-to basis.
     """
-    if mode == "boundary-out" and geometry.geom_type in ("Polygon", "MultiPolygon"):
+    if mode in _dilate._LAZY_MODES and geometry.geom_type in ("Polygon", "MultiPolygon"):
         return {
             c
             for c in _dilate.geom_expand_lazy(
@@ -944,11 +945,11 @@ def geometry_k_loop(
 ) -> set:
     """Hollow k-loop of cell ids around ``geometry`` (BNG.geometryKLoop, L619).
 
-    boundary-out on Polygon/MultiPolygon uses the lazy O(perimeter) seed path;
-    all other modes and geometry types use the full O(area) classify + geom_expand path.
-    ``coverage`` selects the belongs-to basis.
+    boundary-out / boundary-in / boundary-in-ignore-holes on Polygon/MultiPolygon use
+    the lazy O(perimeter) seed path; all other modes and geometry types use the full
+    O(area) classify + geom_expand path.  ``coverage`` selects the belongs-to basis.
     """
-    if mode == "boundary-out" and geometry.geom_type in ("Polygon", "MultiPolygon"):
+    if mode in _dilate._LAZY_MODES and geometry.geom_type in ("Polygon", "MultiPolygon"):
         return {
             c
             for c in _dilate.geom_expand_lazy(

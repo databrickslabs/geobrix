@@ -587,6 +587,63 @@ def geom_expand(kind, k, mode, cls, neighbors, coverage=DEFAULT_COVERAGE):
     return acc if kind == "ring" else shell_k
 
 
+_LAZY_MODES = frozenset({"boundary-out", "boundary-in", "boundary-in-ignore-holes"})
+
+
+def _lazy_boundary_in(mode, geom, res, hooks, coverage):
+    """Lazy O(perimeter) seed builder for boundary-in / boundary-in-ignore-holes.
+
+    Returns ``(frontier0, visited0, admit, k0)`` matching :func:`mode_setup`'s
+    boundary-in or boundary-in-ignore-holes branch, using on-demand
+    :func:`_classify_cell` calls instead of a pre-built :class:`Classification`.
+
+    Both modes share the same seed: the outer perimeter via the lazy
+    local-perimeter path.  They differ only in the admit/k0 predicate:
+      boundary-in:              admit/k0 check ``p_<basis>`` (respects holes)
+      boundary-in-ignore-holes: admit/k0 check ``s_<basis>`` (marches across holes)
+
+    Parameters
+    ----------
+    mode : "boundary-in" | "boundary-in-ignore-holes"
+    geom : shapely geometry (already parsed; not WKB)
+    res  : resolution (passed through to hooks, unused here; kept for API symmetry)
+    hooks : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    if coverage not in _COVERAGE_BASIS:
+        raise ValueError(f"unknown coverage {coverage!r}; expected one of {COVERAGE}")
+    point_to_cell, cell_geom, neighbors, cell_step = hooks
+    S, H = _solid_and_holes(geom)
+    dim = _geom_dimension(geom)
+    basis = _COVERAGE_BASIS[coverage]
+
+    ext_rings = (
+        [S.exterior] if S.geom_type == "Polygon" else [g.exterior for g in S.geoms]
+    )
+    band = _boundary_cells(ext_rings, point_to_cell, cell_step)
+
+    # Memoize _classify_cell per cell id (same pattern as _lazy_boundary_out)
+    _cache: dict = {}
+
+    def _m(c):
+        if c not in _cache:
+            _cache[c] = _classify_cell(c, cell_geom, geom, S, H, dim)
+        return _cache[c]
+
+    def s_cover(c):
+        return _m(c)["s_cover"]
+
+    # Lazy outer perimeter: s_cover cells near the boundary ring with out-of-region neighbors
+    op = _local_perimeter(band, neighbors, s_cover)
+
+    # admit/k0 key: "p_<basis>" for boundary-in, "s_<basis>" for boundary-in-ignore-holes
+    admit_key = ("p_" if mode == "boundary-in" else "s_") + basis
+
+    admit = lambda n: _m(n)[admit_key]  # noqa: E731
+    k0 = frozenset(c for c in op if _m(c)[admit_key])
+    return op, op, admit, k0
+
+
 def _lazy_boundary_out(geom, res, hooks, coverage):
     """Lazy O(perimeter) seed builder for boundary-out mode.
 
@@ -662,34 +719,39 @@ def _lazy_boundary_out(geom, res, hooks, coverage):
 
 
 def geom_expand_lazy(kind, k, mode, geom, res, hooks, coverage=DEFAULT_COVERAGE):
-    """Geometry-aware expand using the lazy O(perimeter) boundary-out seed.
+    """Geometry-aware expand using lazy O(perimeter) seed paths for boundary modes.
 
     Drop-in replacement for
-    ``geom_expand(kind, k, 'boundary-out', classify(...), neighbors, coverage)``
+    ``geom_expand(kind, k, mode, classify(...), neighbors, coverage)``
     that avoids the full O(area) polyfill+classification by tracing the geometry
     boundary ring instead.
 
-    Only handles ``mode='boundary-out'``; raises :exc:`ValueError` for other modes.
+    Handles ``mode`` in ``_LAZY_MODES``
+    (``"boundary-out"``, ``"boundary-in"``, ``"boundary-in-ignore-holes"``);
+    raises :exc:`ValueError` for other modes.
 
     Parameters
     ----------
     kind     : "ring" or "loop"
     k        : integer >= 0
-    mode     : must be "boundary-out"
+    mode     : one of the modes in ``_LAZY_MODES``
     geom     : shapely geometry (already parsed; not WKB/WKT)
     res      : resolution (passed through to hooks)
     hooks    : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
     coverage : "coveras" | "polyfill" | "core"
     """
-    if mode != "boundary-out":
+    if mode not in _LAZY_MODES:
         raise ValueError(
-            f"geom_expand_lazy only handles 'boundary-out'; got {mode!r}"
+            f"geom_expand_lazy only handles {sorted(_LAZY_MODES)}; got {mode!r}"
         )
     if kind not in ("ring", "loop"):
         raise ValueError(f"kind must be 'ring' or 'loop'; got {kind!r}")
 
     _, _, neighbors, _ = hooks
-    frontier0, visited0, admit, k0 = _lazy_boundary_out(geom, res, hooks, coverage)
+    if mode == "boundary-out":
+        frontier0, visited0, admit, k0 = _lazy_boundary_out(geom, res, hooks, coverage)
+    else:
+        frontier0, visited0, admit, k0 = _lazy_boundary_in(mode, geom, res, hooks, coverage)
 
     if k == 0:
         return set(k0)

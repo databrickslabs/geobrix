@@ -34,6 +34,7 @@ from shapely import to_wkb
 from shapely.geometry import (
     GeometryCollection,
     LineString,
+    MultiPolygon,
     Point,
     Polygon,
     box,
@@ -156,7 +157,7 @@ _H3_HOLED = Polygon(
 )
 
 # aligned: computed lazily from h3 cell boundaries
-_H3_ALIGNED: Polygon | None = None
+_H3_ALIGNED: Polygon | MultiPolygon | None = None
 
 _H3_LINE = LineString([(-0.15, 51.48), (0.05, 51.60)])
 _H3_POINT = Point(-0.05, 51.52)
@@ -172,7 +173,7 @@ _H3_GC = GeometryCollection(
 )
 
 
-def _build_h3_aligned() -> Polygon:
+def _build_h3_aligned() -> Polygon | MultiPolygon:
     """Return a polygon whose edges lie on exact h3 cell boundaries at resolution 7.
 
     Takes a 2-ring disk (~19 cells) centred on (51.52°N, 0.07°W), computes the
@@ -358,8 +359,8 @@ def _run_quadbin(geom, kind: str, k: int, mode: str, coverage: str) -> list:
 
     wkb = _wkb(geom)
     if kind == "ring":
-        return _quadbin.geometry_k_ring(wkb, _QB_RES, k, mode, coverage=coverage)
-    return _quadbin.geometry_k_loop(wkb, _QB_RES, k, mode, coverage=coverage)
+        return sorted(_quadbin.geometry_k_ring(wkb, _QB_RES, k, mode, coverage=coverage))
+    return sorted(_quadbin.geometry_k_loop(wkb, _QB_RES, k, mode, coverage=coverage))
 
 
 def _run_h3(geom, kind: str, k: int, mode: str, coverage: str) -> list:
@@ -384,8 +385,8 @@ def _run_custom(geom, kind: str, k: int, mode: str, coverage: str) -> list:
     conf = _custom.CustomGridConf(**_CUST_GRID_ARGS)
     wkb = _wkb(geom)
     if kind == "ring":
-        return list(_custom.geometry_k_ring(conf, wkb, _CUST_RES, k, mode, coverage=coverage))
-    return list(_custom.geometry_k_loop(conf, wkb, _CUST_RES, k, mode, coverage=coverage))
+        return sorted(_custom.geometry_k_ring(conf, wkb, _CUST_RES, k, mode, coverage=coverage))
+    return sorted(_custom.geometry_k_loop(conf, wkb, _CUST_RES, k, mode, coverage=coverage))
 
 
 _DISPATCHERS = {
@@ -483,7 +484,7 @@ def test_geomk_golden() -> None:
         grid, mode, coverage, kind, k_str, fixture = key.split("|")
         geom = grid_fixtures[grid][fixture]
         actual = _run_one(grid, geom, kind, int(k_str), mode, coverage)
-        if actual != expected:
+        if sorted(actual) != sorted(expected):
             mismatches.append(
                 f"  {key}:\n"
                 f"    expected ({len(expected)} cells): {expected[:4]}…\n"

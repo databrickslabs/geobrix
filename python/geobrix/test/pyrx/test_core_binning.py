@@ -6,9 +6,9 @@ bytes with rasterio. All assertions are hand-checkable.
 
 import numpy as np
 import pytest
+from rasterio.crs import CRS
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
-from rasterio.crs import CRS
 
 
 def _read_band(gtiff_bytes):
@@ -33,7 +33,7 @@ def test_binpoints_max_hand_computed():
     arr, nodata, _, _ = _read_band(b)
     assert arr.shape == (2, 2)
     assert arr[0, 0] == pytest.approx(25.0)  # top-left cell = max(10,25)
-    assert arr[1, 1] == pytest.approx(7.0)   # bottom-right
+    assert arr[1, 1] == pytest.approx(7.0)  # bottom-right
     assert arr[0, 1] == pytest.approx(nodata)  # empty cell -> NoData
     assert arr[1, 0] == pytest.approx(nodata)
 
@@ -124,17 +124,28 @@ def test_binpoints_georef_alignment():
     py = rng.uniform(ref_ymin, ref_ymax, 20)
     pz = rng.uniform(10.0, 100.0, 20)
 
-    b = bin_points(px, py, pz, ref_xmin, ref_ymin, ref_xmax, ref_ymax,
-                   ref_w, ref_h, ref_srid, "max")
+    b = bin_points(
+        px,
+        py,
+        pz,
+        ref_xmin,
+        ref_ymin,
+        ref_xmax,
+        ref_ymax,
+        ref_w,
+        ref_h,
+        ref_srid,
+        "max",
+    )
     arr, nodata, out_transform, out_crs = _read_band(b)
 
     assert arr.shape == (ref_h, ref_w)
     assert out_crs == ref_crs
     # All 6 affine coefficients must match exactly (from_bounds is deterministic)
     for i in range(6):
-        assert out_transform[i] == pytest.approx(ref_transform[i]), (
-            f"transform[{i}] mismatch: {out_transform[i]} != {ref_transform[i]}"
-        )
+        assert out_transform[i] == pytest.approx(
+            ref_transform[i]
+        ), f"transform[{i}] mismatch: {out_transform[i]} != {ref_transform[i]}"
 
 
 # ---------------------------------------------------------------------------
@@ -202,18 +213,16 @@ def test_binpoints_exact_boundary_dropped():
     # - point B at x=1.99, y=0.5, z=42            -> col=1 (last col) -> lands
     # - point C at y=0.0 (==ymin), x=0.5, z=888   -> row=2 -> DROPPED
     # - point D at y=0.01, x=0.5, z=55            -> row=1 (bottom row) -> lands
-    x = [2.0,  1.99, 0.5,  0.5]
-    y = [0.5,  0.5,  0.0,  0.01]
+    x = [2.0, 1.99, 0.5, 0.5]
+    y = [0.5, 0.5, 0.0, 0.01]
     z = [999.0, 42.0, 888.0, 55.0]
     b = bin_points(x, y, z, 0, 0, 2, 2, 2, 2, 4326, "max")
     arr, nodata, _, _ = _read_band(b)
     # A dropped: arr[1,1] should be 42 (from B), not 999.
     assert arr[1, 1] == pytest.approx(42.0), (
-        f"expected 42.0 (B lands), got {arr[1,1]} — "
-        "x==xmax point was not dropped"
+        f"expected 42.0 (B lands), got {arr[1, 1]} — " "x==xmax point was not dropped"
     )
     # C dropped: arr[1,0] should be 55 (from D), not 888.
     assert arr[1, 0] == pytest.approx(55.0), (
-        f"expected 55.0 (D lands), got {arr[1,0]} — "
-        "y==ymin point was not dropped"
+        f"expected 55.0 (D lands), got {arr[1, 0]} — " "y==ymin point was not dropped"
     )

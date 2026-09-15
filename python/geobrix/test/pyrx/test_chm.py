@@ -9,7 +9,6 @@ import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
-
 # ---------------------------------------------------------------------------
 # Local helper: build GTiff bytes from a custom numpy array
 # ---------------------------------------------------------------------------
@@ -129,7 +128,9 @@ def test_chm_misaligned_grid_output_shape_equals_dem(spark):
     # DSM=15 > DEM everywhere -> CHM should be positive (no clamping here)
     assert np.all(arr >= 0.0), "CHM must be non-negative after clamping"
     # Verify the alignment arithmetic: DSM=15, DEM[0,0]=10 -> CHM=5
-    assert arr[0, 0] == pytest.approx(5.0), f"Expected 15-10=5 at [0,0], got {arr[0,0]}"
+    assert arr[0, 0] == pytest.approx(
+        5.0
+    ), f"Expected 15-10=5 at [0,0], got {arr[0, 0]}"
 
 
 # ---------------------------------------------------------------------------
@@ -160,11 +161,17 @@ def test_chm_nodata_propagation(spark):
         result_nodata = ds.nodata
 
     # NoData sentinel must be set and the nodata pixel must carry it
-    assert result_nodata == pytest.approx(-9999.0), f"Expected nodata=-9999, got {result_nodata}"
-    assert arr[0, 1] == pytest.approx(-9999.0), (
-        f"DSM NoData at [0,1] must propagate; got {arr[0,1]}"
-    )
+    assert result_nodata == pytest.approx(
+        -9999.0
+    ), f"Expected nodata=-9999, got {result_nodata}"
+    assert arr[0, 1] == pytest.approx(
+        -9999.0
+    ), f"DSM NoData at [0,1] must propagate; got {arr[0, 1]}"
     # Valid neighbor must compute correctly: 10-10=0, clamp to 0
-    assert arr[0, 0] == pytest.approx(0.0), f"Expected 10-10=0 at [0,0], got {arr[0,0]}"
+    assert arr[0, 0] == pytest.approx(
+        0.0
+    ), f"Expected 10-10=0 at [0,0], got {arr[0, 0]}"
     # Another valid cell: 5-7=-2, clamp to 0
-    assert arr[1, 0] == pytest.approx(0.0), f"Expected clamp(5-7,0)=0 at [1,0], got {arr[1,0]}"
+    assert arr[1, 0] == pytest.approx(
+        0.0
+    ), f"Expected clamp(5-7,0)=0 at [1,0], got {arr[1, 0]}"

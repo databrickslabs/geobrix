@@ -161,7 +161,9 @@ class Ept:
                 for dx in (0, 1):
                     for dy in (0, 1):
                         for dz in (0, 1):
-                            stack.append(f"{d+1}-{2*xi+dx}-{2*yi+dy}-{2*zi+dz}")
+                            stack.append(
+                                f"{d + 1}-{2 * xi + dx}-{2 * yi + dy}-{2 * zi + dz}"
+                            )
         return selected
 
 
@@ -252,8 +254,7 @@ def _make_fetch_nodes(
 
                 lon = x / _merc_r * 180.0
                 lat = np.degrees(
-                    2.0 * np.arctan(np.exp(y / _merc_r * _math.pi))
-                    - _math.pi / 2.0
+                    2.0 * np.arctan(np.exp(y / _merc_r * _math.pi)) - _math.pi / 2.0
                 )
                 result = pd.DataFrame(
                     {
@@ -401,8 +402,8 @@ class LidarDownloader:
         clip: bool,
     ) -> List[dict]:
         """Driver-side loop; returns a list of point dicts."""
-        import numpy as np
         import laspy
+        import numpy as np
 
         bases = {p: b.rstrip("/") + "/" for p, b in self.projects.items()}
         all_points: List[dict] = []

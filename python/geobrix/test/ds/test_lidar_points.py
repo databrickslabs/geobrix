@@ -3,8 +3,8 @@
 Task 3 of the v0.5.2 LiDAR feature: one row per point with optional
 class/return/decimate filters and .las/.laz parity.
 """
+
 import numpy as np
-import pytest
 
 from .test_lidar_metadata import _write_tiny_las
 
@@ -149,6 +149,12 @@ def test_points_laz_parity(spark, tmp_path):
     xs_laz = sorted(r["x"] for r in df_laz.select("x").collect())
     assert xs_las == xs_laz, "x values differ between .las and .laz reads"
 
-    cls_las = sorted(r["classification"] for r in df_las.select("classification").collect())
-    cls_laz = sorted(r["classification"] for r in df_laz.select("classification").collect())
-    assert cls_las == cls_laz, "classification values differ between .las and .laz reads"
+    cls_las = sorted(
+        r["classification"] for r in df_las.select("classification").collect()
+    )
+    cls_laz = sorted(
+        r["classification"] for r in df_laz.select("classification").collect()
+    )
+    assert (
+        cls_las == cls_laz
+    ), "classification values differ between .las and .laz reads"

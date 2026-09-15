@@ -1605,9 +1605,17 @@ def _chm_udf(dsm_tile, dem_tile):
     if _tile_is_empty(dsm_tile) or _tile_is_empty(dem_tile):
         return None
     vt_dsm = ot._to_virtual_tile(dsm_tile)
-    dsm_bytes = ot.materialize_to_bytes(vt_dsm).raster if vt_dsm.is_virtual() else bytes(vt_dsm.raster)
+    dsm_bytes = (
+        ot.materialize_to_bytes(vt_dsm).raster
+        if vt_dsm.is_virtual()
+        else bytes(vt_dsm.raster)
+    )
     vt_dem = ot._to_virtual_tile(dem_tile)
-    dem_bytes = ot.materialize_to_bytes(vt_dem).raster if vt_dem.is_virtual() else bytes(vt_dem.raster)
+    dem_bytes = (
+        ot.materialize_to_bytes(vt_dem).raster
+        if vt_dem.is_virtual()
+        else bytes(vt_dem.raster)
+    )
     new_bytes = chm_core.chm(dsm_bytes, dem_bytes)
     if new_bytes is None:
         return None

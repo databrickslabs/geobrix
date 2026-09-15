@@ -11,7 +11,6 @@ import os
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 import numpy as np
-
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 from pyspark.sql.types import (
     ArrayType,
@@ -168,7 +167,11 @@ class LidarGbxReader(DataSourceReader):
             dims = [d.name for d in h.point_format.dimensions]
             # getattr + len check avoids `or []` on a numpy array (ambiguous truth value).
             rh_raw = getattr(h, "number_of_points_by_return", None)
-            rh = [int(x) for x in rh_raw] if rh_raw is not None and len(rh_raw) > 0 else []
+            rh = (
+                [int(x) for x in rh_raw]
+                if rh_raw is not None and len(rh_raw) > 0
+                else []
+            )
             area = float((maxs[0] - mins[0]) * (maxs[1] - mins[1]))
             density = (float(h.point_count) / area) if area > 0 else None
             yield (

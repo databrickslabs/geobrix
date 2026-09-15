@@ -2,8 +2,8 @@
 
 Task 2 of the v0.5.2 LiDAR feature: LAS/LAZ header scanning without reading points.
 """
+
 import numpy as np
-import pytest
 
 
 def _write_tiny_las(tmp_path, n=100, crs_epsg=None):
@@ -44,11 +44,25 @@ def test_metadata_header_fields(spark, tmp_path):
     assert row["size"] > 0
     # Schema completeness: all LIDAR_META_SCHEMA fields are present
     for field in (
-        "path", "name", "point_count",
-        "x_min", "x_max", "y_min", "y_max", "z_min", "z_max",
-        "crs", "point_format", "dimensions",
-        "scale", "offset", "return_histogram",
-        "density", "version", "size", "modificationTime",
+        "path",
+        "name",
+        "point_count",
+        "x_min",
+        "x_max",
+        "y_min",
+        "y_max",
+        "z_min",
+        "z_max",
+        "crs",
+        "point_format",
+        "dimensions",
+        "scale",
+        "offset",
+        "return_histogram",
+        "density",
+        "version",
+        "size",
+        "modificationTime",
     ):
         assert field in row.asDict(), f"Missing field: {field}"
 
@@ -79,6 +93,7 @@ def test_metadata_fuse_path_resolution(spark, tmp_path):
 def test_reader_source_is_serverless_safe():
     """No forbidden Spark APIs (sparkContext, _jvm, .rdd, _jsc) in lidar.py."""
     import inspect
+
     from databricks.labs.gbx.ds import lidar
 
     src = inspect.getsource(lidar)

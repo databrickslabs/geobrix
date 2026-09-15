@@ -24,7 +24,7 @@ from pathlib import Path
 
 import pytest
 from shapely import to_wkb
-from shapely.geometry import box
+from shapely.geometry import GeometryCollection, LineString, Point, box
 from shapely.geometry.polygon import Polygon
 
 pytestmark = pytest.mark.integration
@@ -247,6 +247,76 @@ def test_parity_quadbin_geomkloop_holed_all_modes(spark_with_jar, coverage):
         light = light_results[mode]
         assert light == heavy, (
             f"geomkloop holed mode={mode} coverage={coverage}: "
+            f"light={sorted(light)[:5]}... heavy={sorted(heavy)[:5]}... "
+            f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+        )
+
+
+# --- GeometryCollection fixture ---
+
+# Mixed GC: holed polygon (~0.1°×0.1° SF Bay Area) + a short line + a point.
+# At res 10 the polygon spans ~3–4 cells; the hole is ~1 cell wide (boundary-only).
+# Exercises member-union decomposition across polygon, line, and point types.
+_GC_MIXED = GeometryCollection(
+    [
+        Polygon(
+            [(-122.45, 37.74), (-122.40, 37.74), (-122.40, 37.79), (-122.45, 37.79)],
+            [[(-122.43, 37.76), (-122.42, 37.76), (-122.42, 37.77), (-122.43, 37.77)]],
+        ),
+        LineString([(-122.39, 37.80), (-122.37, 37.80)]),
+        Point(-122.36, 37.82),
+    ]
+)
+_RES_GC = 10  # Same resolution as holed polygon fixture.
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_quadbin_geomkring_gc_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkring over all 6 modes × 3 coverages, mixed GeometryCollection."""
+    from databricks.labs.gbx.gridx.quadbin import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+
+    gx.register(spark)
+    light_results = {}
+    for mode in _MODES:
+        light_results[mode] = _collect_light(_GC_MIXED, _RES_GC, 1, mode, coverage)
+
+    hx.register(spark)
+    for mode in _MODES:
+        heavy = _collect_heavy(
+            spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_quadbin_geomkring", coverage
+        )
+        light = light_results[mode]
+        assert light == heavy, (
+            f"geomkring gc mode={mode} coverage={coverage}: "
+            f"light={sorted(light)[:5]}... heavy={sorted(heavy)[:5]}... "
+            f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+        )
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_quadbin_geomkloop_gc_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkloop over all 6 modes × 3 coverages, mixed GeometryCollection."""
+    from databricks.labs.gbx.gridx.quadbin import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+
+    gx.register(spark)
+    light_results = {}
+    for mode in _MODES:
+        light_results[mode] = _collect_light_loop(_GC_MIXED, _RES_GC, 1, mode, coverage)
+
+    hx.register(spark)
+    for mode in _MODES:
+        heavy = _collect_heavy(
+            spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_quadbin_geomkloop", coverage
+        )
+        light = light_results[mode]
+        assert light == heavy, (
+            f"geomkloop gc mode={mode} coverage={coverage}: "
             f"light={sorted(light)[:5]}... heavy={sorted(heavy)[:5]}... "
             f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
         )

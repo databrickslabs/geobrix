@@ -280,6 +280,22 @@ def classify(geom, resolution):
     )
 
 
+def _qb_hooks(resolution: int) -> tuple:
+    """Build the (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step) hooks tuple
+    for quadbin at the given zoom level.
+
+    cell_step = tile width in degrees longitude at this zoom (density guard).
+    """
+    z = int(resolution)
+    cell_step = 360.0 / float(1 << z)
+    return (
+        lambda x, y: point_as_cell(x, y, z),
+        _cell_geom,
+        lambda c: k_loop(c, 1),
+        cell_step,
+    )
+
+
 def geometry_k_ring(
     geom,
     resolution: int,
@@ -291,10 +307,20 @@ def geometry_k_ring(
 
     ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
+
+    boundary-out mode uses the lazy O(perimeter) seed path; all other modes use
+    the full O(area) classify + geom_expand path.
     """
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
         return []
+    if mode == "boundary-out" and parsed.geom_type in ("Polygon", "MultiPolygon"):
+        return sorted(
+            _dilate.geom_expand_lazy(
+                "ring", int(k), mode, parsed, int(resolution),
+                _qb_hooks(int(resolution)), coverage,
+            )
+        )
     cls = classify(parsed, int(resolution))
     return sorted(
         _dilate.geom_expand("ring", int(k), mode, cls, lambda c: k_loop(c, 1), coverage)
@@ -312,10 +338,20 @@ def geometry_k_loop(
 
     ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
+
+    boundary-out on Polygon/MultiPolygon uses the lazy O(perimeter) seed path;
+    all other modes and geometry types use the full O(area) classify + geom_expand path.
     """
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
         return []
+    if mode == "boundary-out" and parsed.geom_type in ("Polygon", "MultiPolygon"):
+        return sorted(
+            _dilate.geom_expand_lazy(
+                "loop", int(k), mode, parsed, int(resolution),
+                _qb_hooks(int(resolution)), coverage,
+            )
+        )
     cls = classify(parsed, int(resolution))
     return sorted(
         _dilate.geom_expand("loop", int(k), mode, cls, lambda c: k_loop(c, 1), coverage)

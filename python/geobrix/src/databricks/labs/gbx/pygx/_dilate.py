@@ -585,3 +585,122 @@ def geom_expand(kind, k, mode, cls, neighbors, coverage=DEFAULT_COVERAGE):
             shell_k = shell
             break
     return acc if kind == "ring" else shell_k
+
+
+def _lazy_boundary_out(geom, res, hooks, coverage):
+    """Lazy O(perimeter) seed builder for boundary-out mode.
+
+    Returns ``(frontier0, visited0, admit, k0)`` matching :func:`mode_setup`'s
+    boundary-out branch, but using on-demand :func:`_classify_cell` calls instead
+    of a pre-built :class:`Classification`.  Avoids the O(area) polyfill by tracing
+    the exterior boundary ring to find the straddling-band seed.
+
+    ``admit = lambda n: not s_cover(n)`` replaces the original
+    ``visited0 = s_cov`` (pre-visiting the full solid): BFS never expands into
+    the solid cover, which is provably equivalent to the original for all k >= 1.
+
+    Parameters
+    ----------
+    geom : shapely geometry (already parsed; not WKB)
+    res  : resolution (passed through to hooks, unused here; kept for API symmetry)
+    hooks : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+        point_to_cell_fn : (x, y) -> cell_id | None
+        cell_geom_fn     : cell_id -> shapely polygon
+        neighbors_fn     : cell_id -> list[cell_id]
+        cell_step        : cell edge length at `res` (density guard for ring sampling)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    point_to_cell, cell_geom, neighbors, cell_step = hooks
+    S, H = _solid_and_holes(geom)
+    dim = _geom_dimension(geom)
+
+    ext_rings = (
+        [S.exterior] if S.geom_type == "Polygon" else [g.exterior for g in S.geoms]
+    )
+    band = _boundary_cells(ext_rings, point_to_cell, cell_step)
+
+    # Memoize _classify_cell per cell id (same cell probed multiple times)
+    _cache: dict = {}
+
+    def _m(c):
+        if c not in _cache:
+            _cache[c] = _classify_cell(c, cell_geom, geom, S, H, dim)
+        return _cache[c]
+
+    def s_cover(c):
+        return _m(c)["s_cover"]
+
+    def s_core(c):
+        return _m(c)["s_core"]
+
+    def s_centroid(c):
+        return _m(c)["s_centroid"]
+
+    # Band neighbourhood C = band ∪ {neighbors of each band cell}
+    C: set = set(band)
+    for c in band:
+        C.update(neighbors(c))
+
+    # Straddling band: cells that overlap S but are not fully inside
+    full_band = frozenset(c for c in C if s_cover(c) and not s_core(c))
+
+    # Alignment fallback: outer perimeter via the lazy local-perimeter
+    op = _local_perimeter(band, neighbors, s_cover)
+
+    frontier = full_band if full_band else op
+
+    if coverage == "polyfill":
+        # centroid-out cells: overlap S but centroid outside S
+        centroid_out = frozenset(c for c in C if s_cover(c) and not s_centroid(c))
+        k0 = centroid_out if centroid_out else op
+    else:
+        k0 = frontier
+
+    # admit replaces visited0 = s_cov: BFS never expands into the solid cover
+    admit = lambda n: not s_cover(n)  # noqa: E731
+    return frontier, set(frontier), admit, k0
+
+
+def geom_expand_lazy(kind, k, mode, geom, res, hooks, coverage=DEFAULT_COVERAGE):
+    """Geometry-aware expand using the lazy O(perimeter) boundary-out seed.
+
+    Drop-in replacement for
+    ``geom_expand(kind, k, 'boundary-out', classify(...), neighbors, coverage)``
+    that avoids the full O(area) polyfill+classification by tracing the geometry
+    boundary ring instead.
+
+    Only handles ``mode='boundary-out'``; raises :exc:`ValueError` for other modes.
+
+    Parameters
+    ----------
+    kind     : "ring" or "loop"
+    k        : integer >= 0
+    mode     : must be "boundary-out"
+    geom     : shapely geometry (already parsed; not WKB/WKT)
+    res      : resolution (passed through to hooks)
+    hooks    : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    if mode != "boundary-out":
+        raise ValueError(
+            f"geom_expand_lazy only handles 'boundary-out'; got {mode!r}"
+        )
+    if kind not in ("ring", "loop"):
+        raise ValueError(f"kind must be 'ring' or 'loop'; got {kind!r}")
+
+    _, _, neighbors, _ = hooks
+    frontier0, visited0, admit, k0 = _lazy_boundary_out(geom, res, hooks, coverage)
+
+    if k == 0:
+        return set(k0)
+    acc = set(k0) if kind == "ring" else set()
+    shell_k: set = set()
+    for kk, shell in dilate(frontier0, visited0, neighbors, admit):
+        if kk > k:
+            break
+        if kind == "ring":
+            acc |= shell
+        if kk == k:
+            shell_k = shell
+            break
+    return acc if kind == "ring" else shell_k

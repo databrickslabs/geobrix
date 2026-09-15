@@ -1,22 +1,23 @@
-"""Cross-tier parity: light (pygx) vs heavy (gridx.quadbin) for quadbin geometry-aware kring/kloop.
+"""Cross-tier parity: light (pygx) vs heavy (gridx.bng) for BNG geometry-aware kring/kloop.
 
 Tests all 6 dilation modes on both a simple polygon and a holed polygon, comparing
-light ``_quadbin.geometry_k_ring/loop`` against heavy ``gbx_quadbin_geomkring/geomkloop``
+light ``_bng.geometry_k_ring/loop`` against heavy ``gbx_bng_geomkring/geomkloop``
 registered functions.
 
-Simple fixture: NYC lon/lat box (-73.99, 40.71 → -73.95, 40.75) at resolution 12.
-Holed fixture: large east-US box (-76, 38 → -72, 43) with a 2°×3° interior hole
-(-75, 39 → -73, 42) at resolution 10. At res 10 (cells ≈0.35°) the hole spans
-~6 cells wide × ~9 cells tall, so hCore (cells fully inside the hole) is non-empty
-(~50 cells). This ensures hole-in/hole-out exercise genuine inward fill, not just
-h_border traversal.
+Simple fixture: London BNG box (530000,180000)→(533000,183000) at resolution 3 (1km).
+BNG coords are EPSG:27700; heavy registers the same SQL names as light.
+
+Holed fixture: larger BNG box (500000,150000)→(560000,210000) with a 20km×20km
+interior hole (520000,170000)→(540000,190000) at resolution 3 (1km cells ≈1km²).
+At res 3 the hole spans ~20 cells wide × ~20 cells tall; cells fully inside the hole
+polygon populate hCore so hole-in/hole-out genuinely exercise inward fill.
 
 Heavy requires the geobrix JAR. Mark integration; skips when no JAR under python/geobrix/lib/.
 
 Run in geobrix-dev Docker:
     bash scripts/commands/gbx-test-python.sh \\
-        --path python/geobrix/test/pygx/test_parity_quadbin_geomk.py \\
-        --with-integration --log parity-quadbin-geomk.log
+        --path python/geobrix/test/pygx/test_parity_bng_geomk.py \\
+        --with-integration --log parity-bng-geomk.log
 """
 
 import logging
@@ -34,18 +35,27 @@ _JARS = sorted((_HERE.parents[2] / "lib").glob("geobrix-*-jar-with-dependencies.
 
 # --- Fixtures ---
 
-# Simple NYC box at res 12
-_NYC_BOX = box(-73.99, 40.71, -73.95, 40.75)
-_RES_SIMPLE = 12
+# Simple London box at res 3 (1km cells)
+_LONDON_BOX = box(530000.0, 180000.0, 533000.0, 183000.0)
+_RES_SIMPLE = 3  # 1km resolution
 
-# Holed polygon: large east-US box (-76,38)→(-72,43) with 2°×3° interior hole (-75,39)→(-73,42).
-# At res 10 (cells ≈0.35° wide) the hole spans ~6 cells wide × ~9 cells tall.
-# Cells in roughly x∈[299..303], y∈[381..390] are fully contained by the hole polygon
-# → hCore is non-empty (~50 cells), so hole-in/hole-out genuinely exercise inward fill.
-_OUTER_H = [(-76.0, 38.0), (-72.0, 38.0), (-72.0, 43.0), (-76.0, 43.0)]
-_HOLE_H = [(-75.0, 39.0), (-73.0, 39.0), (-73.0, 42.0), (-75.0, 42.0)]
+# Holed polygon: larger BNG box with a 20km×20km interior hole.
+# At res 3 (1km cells) the hole spans ~20 cells wide × ~20 cells tall.
+# Cells fully inside the hole polygon are in hCore → hole-in/hole-out exercise inward fill.
+_OUTER_H = [
+    (500000.0, 150000.0),
+    (560000.0, 150000.0),
+    (560000.0, 210000.0),
+    (500000.0, 210000.0),
+]
+_HOLE_H = [
+    (520000.0, 170000.0),
+    (540000.0, 170000.0),
+    (540000.0, 190000.0),
+    (520000.0, 190000.0),
+]
 _HOLED_POLY = Polygon(_OUTER_H, [_HOLE_H])
-_RES_HOLED = 10
+_RES_HOLED = 3  # 1km resolution
 
 _MODES = (
     "boundary-out",
@@ -78,13 +88,13 @@ def spark_with_jar():
             pytest.skip(
                 "A JAR-free Spark session is already live in this process; "
                 "run in isolation: "
-                "gbx:test:python --path python/geobrix/test/pygx/test_parity_quadbin_geomk.py "
+                "gbx:test:python --path python/geobrix/test/pygx/test_parity_bng_geomk.py "
                 "--with-integration"
             )
 
     session = (
         SparkSession.builder.master("local[2]")
-        .appName("gbx-pygx-quadbin-geomk-parity")
+        .appName("gbx-pygx-bng-geomk-parity")
         .config("spark.sql.shuffle.partitions", "2")
         .config(
             "spark.driver.extraJavaOptions",
@@ -103,23 +113,23 @@ def _wkb(geom) -> bytes:
 
 def _collect_light(geom, res, k, mode, coverage="coveras"):
     """Collect light result for one (geom, res, k, mode, coverage) combination."""
-    from databricks.labs.gbx.pygx import _quadbin
+    from databricks.labs.gbx.pygx import _bng
 
-    return set(_quadbin.geometry_k_ring(to_wkb(geom), res, k, mode, coverage=coverage))
+    return set(_bng.geometry_k_ring_str(to_wkb(geom), res, k, mode, coverage))
 
 
 def _collect_light_loop(geom, res, k, mode, coverage="coveras"):
-    from databricks.labs.gbx.pygx import _quadbin
+    from databricks.labs.gbx.pygx import _bng
 
-    return set(_quadbin.geometry_k_loop(to_wkb(geom), res, k, mode, coverage=coverage))
+    return set(_bng.geometry_k_loop_str(to_wkb(geom), res, k, mode, coverage))
 
 
 def _collect_heavy(spark, geom, res, k, mode, fn_name, coverage="coveras"):
     """Collect heavy result for one (geom, res, k, mode, coverage) combination.
 
-    Uses SQL call_function routed through the registered gbx_quadbin_* name.
-    Calls heavy with registered SQL UDF names; returns a set of ints.
-    Coverage forwarded as a SQL literal (5th positional arg after mode).
+    BNG resolution is passed as an integer (1=100km … 6=1m; 3=1km).
+    Heavy returns an array of strings; light returns strings too.
+    Coverage is forwarded as a SQL literal (5th positional arg after mode).
     """
     from pyspark.sql import functions as f
 
@@ -139,13 +149,13 @@ def _collect_heavy(spark, geom, res, k, mode, fn_name, coverage="coveras"):
     ).collect()[0]
     if row["cells"] is None:
         return set()
-    return set(int(c) for c in row["cells"])
+    return set(str(c) for c in row["cells"])
 
 
 @pytest.mark.parametrize("coverage", _COVERAGES)
-def test_parity_quadbin_geomkring_simple_all_modes(spark_with_jar, coverage):
-    """Light vs heavy geomkring over all 6 modes × 3 coverage bases, simple polygon."""
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
+def test_parity_bng_geomkring_simple_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkring over all 6 modes × 3 coverage bases, simple BNG polygon."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
     from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
@@ -154,13 +164,15 @@ def test_parity_quadbin_geomkring_simple_all_modes(spark_with_jar, coverage):
     gx.register(spark)
     light_results = {}
     for mode in _MODES:
-        light_results[mode] = _collect_light(_NYC_BOX, _RES_SIMPLE, 1, mode, coverage)
+        light_results[mode] = _collect_light(
+            _LONDON_BOX, _RES_SIMPLE, 1, mode, coverage
+        )
 
     # Now register heavy (overwrites light SQL names).
     hx.register(spark)
     for mode in _MODES:
         heavy = _collect_heavy(
-            spark, _NYC_BOX, _RES_SIMPLE, 1, mode, "gbx_quadbin_geomkring", coverage
+            spark, _LONDON_BOX, _RES_SIMPLE, 1, mode, "gbx_bng_geomkring", coverage
         )
         light = light_results[mode]
         assert light == heavy, (
@@ -171,9 +183,9 @@ def test_parity_quadbin_geomkring_simple_all_modes(spark_with_jar, coverage):
 
 
 @pytest.mark.parametrize("coverage", _COVERAGES)
-def test_parity_quadbin_geomkloop_simple_all_modes(spark_with_jar, coverage):
-    """Light vs heavy geomkloop over all 6 modes × 3 coverage bases, simple polygon."""
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
+def test_parity_bng_geomkloop_simple_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkloop over all 6 modes × 3 coverage bases, simple BNG polygon."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
     from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
@@ -182,13 +194,13 @@ def test_parity_quadbin_geomkloop_simple_all_modes(spark_with_jar, coverage):
     light_results = {}
     for mode in _MODES:
         light_results[mode] = _collect_light_loop(
-            _NYC_BOX, _RES_SIMPLE, 1, mode, coverage
+            _LONDON_BOX, _RES_SIMPLE, 1, mode, coverage
         )
 
     hx.register(spark)
     for mode in _MODES:
         heavy = _collect_heavy(
-            spark, _NYC_BOX, _RES_SIMPLE, 1, mode, "gbx_quadbin_geomkloop", coverage
+            spark, _LONDON_BOX, _RES_SIMPLE, 1, mode, "gbx_bng_geomkloop", coverage
         )
         light = light_results[mode]
         assert light == heavy, (
@@ -199,9 +211,9 @@ def test_parity_quadbin_geomkloop_simple_all_modes(spark_with_jar, coverage):
 
 
 @pytest.mark.parametrize("coverage", _COVERAGES)
-def test_parity_quadbin_geomkring_holed_all_modes(spark_with_jar, coverage):
-    """Light vs heavy geomkring over all 6 modes × 3 coverage bases, holed polygon."""
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
+def test_parity_bng_geomkring_holed_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkring over all 6 modes × 3 coverage bases, holed BNG polygon."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
     from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
@@ -214,7 +226,7 @@ def test_parity_quadbin_geomkring_holed_all_modes(spark_with_jar, coverage):
     hx.register(spark)
     for mode in _MODES:
         heavy = _collect_heavy(
-            spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_quadbin_geomkring", coverage
+            spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_bng_geomkring", coverage
         )
         light = light_results[mode]
         assert light == heavy, (
@@ -225,9 +237,9 @@ def test_parity_quadbin_geomkring_holed_all_modes(spark_with_jar, coverage):
 
 
 @pytest.mark.parametrize("coverage", _COVERAGES)
-def test_parity_quadbin_geomkloop_holed_all_modes(spark_with_jar, coverage):
-    """Light vs heavy geomkloop over all 6 modes × 3 coverage bases, holed polygon."""
-    from databricks.labs.gbx.gridx.quadbin import functions as hx
+def test_parity_bng_geomkloop_holed_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkloop over all 6 modes × 3 coverage bases, holed BNG polygon."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
     from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
@@ -242,7 +254,7 @@ def test_parity_quadbin_geomkloop_holed_all_modes(spark_with_jar, coverage):
     hx.register(spark)
     for mode in _MODES:
         heavy = _collect_heavy(
-            spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_quadbin_geomkloop", coverage
+            spark, _HOLED_POLY, _RES_HOLED, 1, mode, "gbx_bng_geomkloop", coverage
         )
         light = light_results[mode]
         assert light == heavy, (

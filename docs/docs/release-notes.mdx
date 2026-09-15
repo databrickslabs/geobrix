@@ -52,6 +52,10 @@ Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
 
 Extends the raster-grid family with coverage and assignment controls, on top of v0.5.0. The new **[Grid Raster Tessellation](./api/grid-raster-tessellation)** page documents the unified **coverage / assignment / fill** model that every raster-to-grid function now shares — start there for the concepts behind the changes below.
 
+:::note
+v0.5.1 was re-cut shortly after its initial release to refine the new geometry-aware `kring`/`kloop` behaviors — boundary/hole semantics, grid-aligned robustness, point/line support, and the `coverage` parameter. The descriptions below reflect the current behavior.
+:::
+
 ### Raster-to-grid — coverage and assignment (breaking changes)
 
 - **`gbx_rst_{h3,quadbin,bng}_rastertogrid*` now default to `coverage=complete` (breaking behavior change).** Previously, only cells that contained at least one valid pixel were returned. With `coverage=complete`, every cell whose area overlaps the raster extent is returned — cells with valid pixels carry a numeric measure, and cells covered by the extent but containing only NoData are returned with a `NULL` measure (or `0.0` for count). Queries that assumed the result set was restricted to cells with data will now receive extra rows. Add `coverage='sparse'` to any call that should preserve the old drop-empty behavior: `gbx_rst_h3_rastertogridavg(tile, resolution, 'sparse')`.
@@ -103,18 +107,18 @@ Extends the raster-grid family with coverage and assignment controls, on top of 
 
 ### Geometry-aware kring/kloop across all grid families (new)
 
-- **BNG `gbx_bng_geomkring` / `gbx_bng_geomkloop` (and their `*explode` variants) gain an optional `mode` parameter.** The new `mode` argument controls how cells that touch the geometry boundary are classified. The default (`'boundary-out'`) preserves the existing behavior — boundary cells are included and expansion grows outward — so existing calls with three arguments continue to work unchanged on the JAR-based heavy tier. The lightweight SQL tier now requires an explicit fourth argument if you want non-default behavior; `mode` defaults to `'boundary-out'` if omitted. Available in both the heavyweight and lightweight tiers.
+- **BNG `gbx_bng_geomkring` / `gbx_bng_geomkloop` (and their `*explode` variants) gain an optional `mode` parameter.** The new `mode` argument controls how cells that touch the geometry boundary are classified. The default is `'boundary-out'` (outward band around the geometry; see the mode table below), so existing three-argument calls keep working; `mode` defaults to `'boundary-out'` when omitted. Available in both the heavyweight and lightweight tiers.
 
   The six mode values are:
 
   | Mode | Behaviour |
   |------|-----------|
-  | `'boundary-out'` | Default. Boundary cells included; expansion grows outward from the geometry edge. |
-  | `'boundary-in'` | Boundary cells included; expansion grows inward into the geometry. |
-  | `'boundary-in-ignore-holes'` | Like `'boundary-in'` but hole boundaries are not subtracted from the expansion. |
-  | `'hole-in'` | Expands inward from the interior edge of holes only. |
-  | `'hole-out'` | Expands outward from hole boundaries into the surrounding geometry. |
-  | `'hole-out-ignore-geom'` | Expands outward from holes, ignoring the outer geometry boundary. |
+  | `'boundary-out'` | Default. The geometry's **boundary band** (`k=0`) plus the outward band — cells within `k` steps **outside** the boundary. The geometry's fully-interior cells are not in the result. Under the default `coverage='coveras'` (and `'core'`) `k=0` is the whole straddling band; under `'polyfill'` it is the centroid-outside cells (see the `coverage` note). |
+  | `'boundary-in'` | Inward setback band — cells within `k` steps inside the outer boundary, stopping at holes. |
+  | `'boundary-in-ignore-holes'` | Like `'boundary-in'` but the polygon is treated as solid (holes are not subtracted), so the band can cross a hole. |
+  | `'hole-in'` | Fills each hole inward from its edge, up to `k` steps. |
+  | `'hole-out'` | Band in the solid around each hole, up to `k` steps, bounded by the outer geometry. |
+  | `'hole-out-ignore-geom'` | Band outward from each hole, up to `k` steps, **not** bounded by the outer geometry. |
 
 - **New `gbx_quadbin_geomkring`, `gbx_quadbin_geomkloop`, `gbx_quadbin_geomkringexplode`, `gbx_quadbin_geomkloopexplode` — geometry-aware expansion for quadbin.** These four functions follow the same contract as the BNG variants: polyfill a WGS84 geometry into quadbin cells at a given zoom level, then expand by `k` dilation steps using the optional `mode` parameter. Cell IDs are `BIGINT` (quadbin format). Available in both the heavyweight and lightweight tiers. See [GridX Functions](./api/gridx-functions).
 
@@ -126,6 +130,23 @@ Extends the raster-grid family with coverage and assignment controls, on top of 
   df.withColumn("kring", geomkring("geom_col", resolution=12, k=1))
   ```
   All six dilation modes work, including the hole-mode variants (`'hole-in'`, `'hole-out'`, `'hole-out-ignore-geom'`). Geometry input is WKB `BINARY` or WKT `STRING`. Cell IDs are `BIGINT` (H3 format). See [GridX Functions](./api/gridx-functions).
+
+- **Point and line geometries are supported, not just polygons.** `geomkring`/`geomkloop` accept `POINT`/`LINESTRING` (and their `MULTI*` forms) — a point covers its containing cell, a line covers the cells it crosses, and `boundary-out` expands outward from there. (Under the default `coverage='coveras'`; `'polyfill'`/`'core'` return empty for 0-/1-dimensional inputs — see the `coverage` note below.)
+
+- **Boundary/hole behavior.** `boundary-*` modes operate on the geometry's **outer boundary only** — polygon holes are handled exclusively by the `hole-*` modes. `boundary-out` returns the boundary band at `k=0` plus the outward band, excluding the fully-interior cells (its `k=0` follows the `coverage`: `coveras`/`core` give the whole straddling band, `polyfill` the centroid-outside cells; the outward `k≥1` rings are identical across coverages). All modes are robust to **grid-aligned** geometries (edges lying exactly on cell boundaries), and the heavyweight and lightweight tiers produce identical cell sets across every `mode` × `coverage` combination.
+
+### Geometry-aware kring/kloop — new `coverage` parameter
+
+- **All `gbx_{h3,bng,quadbin,custom}_geomkring`/`geomkloop`/`*explode` functions gain an optional trailing `coverage` parameter** (after `mode`), controlling how a cell is judged to belong to a region:
+
+  | `coverage` | Meaning |
+  |---|---|
+  | `'coveras'` | **Default.** A cell belongs if it *overlaps* the region — inclusive, so boundary cells are kept (no false negatives). |
+  | `'polyfill'` | A cell belongs if its *centre* is inside the region (standard polyfill). |
+  | `'core'` | A cell belongs only if it is *entirely* inside the region (strictest; no false positives). |
+
+  The nesting is `coveras ⊇ polyfill ⊇ core`; the default `'coveras'` is the most inclusive (boundary cells kept, no false negatives). Point/line geometries are covered only under `'coveras'` (a 0-/1-dimensional geometry has no cell whose centre is inside it or that fully contains it, so `'polyfill'` and `'core'` return empty for them). Available in both tiers; heavy and light agree across all `coverage` × `mode` combinations.
+
 
 ### Covering assignment performance improvement
 

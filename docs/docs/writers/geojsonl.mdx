@@ -8,6 +8,8 @@ import TabItem from '@theme/TabItem';
 
 # GeoJSONL Writer (multi-file)
 
+_Since:_ lightweight `geojsonl_gbx` **v0.4.0** · heavyweight `geojsonl_ogr` **v0.4.0**
+
 Emit a **directory of newline-delimited GeoJSONL shards** (OGR driver `GeoJSONSeq`, one
 `Feature` per line) — **one shard per partition, no driver merge**. Unlike the single-file
 GeoJSON writer — which merges every partition into one `FeatureCollection` file on the driver —

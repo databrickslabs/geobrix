@@ -281,10 +281,15 @@ def classify(geom, resolution):
 
 
 def geometry_k_ring(
-    geom, resolution: int, k: int, mode: str = _dilate.DEFAULT_MODE
+    geom,
+    resolution: int,
+    k: int,
+    mode: str = _dilate.DEFAULT_MODE,
+    coverage: str = _dilate.DEFAULT_COVERAGE,
 ) -> list:
     """Geometry-aware k-ring for quadbin: cells reachable from the covering set in k steps.
 
+    ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
     """
     parsed = parse_geom(geom)
@@ -292,15 +297,20 @@ def geometry_k_ring(
         return []
     cls = classify(parsed, int(resolution))
     return sorted(
-        _dilate.geom_expand("ring", int(k), mode, cls, lambda c: k_loop(c, 1))
+        _dilate.geom_expand("ring", int(k), mode, cls, lambda c: k_loop(c, 1), coverage)
     )
 
 
 def geometry_k_loop(
-    geom, resolution: int, k: int, mode: str = _dilate.DEFAULT_MODE
+    geom,
+    resolution: int,
+    k: int,
+    mode: str = _dilate.DEFAULT_MODE,
+    coverage: str = _dilate.DEFAULT_COVERAGE,
 ) -> list:
     """Geometry-aware k-loop for quadbin: hollow shell at exactly k steps.
 
+    ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
     """
     parsed = parse_geom(geom)
@@ -308,5 +318,5 @@ def geometry_k_loop(
         return []
     cls = classify(parsed, int(resolution))
     return sorted(
-        _dilate.geom_expand("loop", int(k), mode, cls, lambda c: k_loop(c, 1))
+        _dilate.geom_expand("loop", int(k), mode, cls, lambda c: k_loop(c, 1), coverage)
     )

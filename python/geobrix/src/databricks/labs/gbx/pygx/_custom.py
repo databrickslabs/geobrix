@@ -461,12 +461,20 @@ def classify(conf: CustomGridConf, geom, resolution: int):
     geom must already be a Shapely geometry; call parse_geom first if raw
     bytes/str.  Closures capture `conf` so callers need not thread it into
     the engine internals.
+
+    For non-polygon geometries (points, lines), the custom grid's centroid-
+    containment polyfill returns nothing.  The ``point_to_cell_fn`` hook is
+    passed so that the engine can fall back to coordinate sampling and per-grid
+    point-to-cell lookup, enabling dimension-aware coverage classification for
+    all geometry types.
     """
+    res = int(resolution)
     return _dilate.classify(
         geom,
-        int(resolution),
+        res,
         polyfill_fn=lambda g, r: polyfill(conf, g, r),
         cell_geom_fn=lambda c: _cell_geom(conf, c),
+        point_to_cell_fn=lambda x, y: point_to_cell_id_or_none(conf, x, y, res),
     )
 
 
@@ -476,11 +484,13 @@ def geometry_k_ring(
     resolution: int,
     k: int,
     mode: str = _dilate.DEFAULT_MODE,
+    coverage: str = _dilate.DEFAULT_COVERAGE,
 ) -> List[int]:
     """Geometry-aware k-ring for a custom grid.
 
     Mirrors ``_quadbin.geometry_k_ring`` with the leading ``conf`` argument
-    that all custom-grid functions require.
+    that all custom-grid functions require.  ``coverage`` ∈
+    {"coveras","polyfill","core"} selects the belongs-to basis.
 
     geom: WKB bytes, WKT string, or Shapely geometry.
     Returns a sorted list of int (BIGINT) cell ids.
@@ -490,7 +500,9 @@ def geometry_k_ring(
         return []
     cls = classify(conf, parsed, int(resolution))
     return sorted(
-        _dilate.geom_expand("ring", int(k), mode, cls, lambda c: k_loop(conf, c, 1))
+        _dilate.geom_expand(
+            "ring", int(k), mode, cls, lambda c: k_loop(conf, c, 1), coverage
+        )
     )
 
 
@@ -500,9 +512,11 @@ def geometry_k_loop(
     resolution: int,
     k: int,
     mode: str = _dilate.DEFAULT_MODE,
+    coverage: str = _dilate.DEFAULT_COVERAGE,
 ) -> List[int]:
     """Geometry-aware k-loop (hollow ring) for a custom grid.
 
+    ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
     """
     parsed = parse_geom(geom)
@@ -510,5 +524,7 @@ def geometry_k_loop(
         return []
     cls = classify(conf, parsed, int(resolution))
     return sorted(
-        _dilate.geom_expand("loop", int(k), mode, cls, lambda c: k_loop(conf, c, 1))
+        _dilate.geom_expand(
+            "loop", int(k), mode, cls, lambda c: k_loop(conf, c, 1), coverage
+        )
     )

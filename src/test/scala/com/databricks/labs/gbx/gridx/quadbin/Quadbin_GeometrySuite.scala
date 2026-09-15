@@ -30,27 +30,26 @@ class Quadbin_GeometrySuite extends AnyFunSuite {
     private val HOLED_WKB = JTS.toWKB(JTS.fromWKT(HOLED_WKT))
     private val HOLED_RES = 10  // cells ≈0.35°; 2°×3° hole spans ~6×9 tiles → hCore non-empty
 
-    test("Quadbin_GeometryKRing — k=0 == polyfill (execute)") {
+    test("Quadbin_GeometryKRing — boundary-out (coveras) k=0 is the full straddling band") {
+        // LOCKED: coveras boundary-out k0 = the full coveras band (sCover - sCore), with the
+        // outer-perimeter fallback when the band is empty (grid-aligned geom).
         val geom   = JTS.fromWKB(NYC_WKB)
-        val k0     = Quadbin_GeometryKRing.execute(geom, RES, 0, GeomDilation.DEFAULT_MODE)
-        val fill   = Quadbin.polyfillBbox(
-            (geom.getEnvelopeInternal.getMinX, geom.getEnvelopeInternal.getMinY,
-             geom.getEnvelopeInternal.getMaxX, geom.getEnvelopeInternal.getMaxY), RES)
-            .filter(c => Quadbin.cellIdToGeometry(c).intersects(geom))
-            .toSet
-        k0 shouldBe fill
+        val cls    = GeomDilation.classify(Quadbin, geom, RES)
+        val band   = cls.sCover -- cls.sCore
+        val expect = if (band.nonEmpty) band else GeomDilation.outerPerimeter(cls.sCover, Quadbin)
+        val k0Out  = Quadbin_GeometryKRing.execute(geom, RES, 0, GeomDilation.DEFAULT_MODE)
+        k0Out.nonEmpty shouldBe true
+        k0Out shouldBe expect
     }
 
-    test("Quadbin_GeometryKRing — filled superset of polyfill") {
+    test("Quadbin_GeometryKRing — boundary-out excludes the interior (sCore)") {
+        // boundary-out = full band (k0) + outward band; the geom INTERIOR (fully-contained
+        // sCore) is never returned.
         val geom = JTS.fromWKB(NYC_WKB)
         val k1   = Quadbin_GeometryKRing.execute(geom, RES, 1, GeomDilation.DEFAULT_MODE)
-        val fill = Quadbin.polyfillBbox(
-            (geom.getEnvelopeInternal.getMinX, geom.getEnvelopeInternal.getMinY,
-             geom.getEnvelopeInternal.getMaxX, geom.getEnvelopeInternal.getMaxY), RES)
-            .filter(c => Quadbin.cellIdToGeometry(c).intersects(geom))
-            .toSet
-        fill.subsetOf(k1) shouldBe true
-        k1.size should be > fill.size
+        val cls  = GeomDilation.classify(Quadbin, geom, RES)
+        k1.size should be > 0
+        k1.intersect(cls.sCore).isEmpty shouldBe true
     }
 
     test("Quadbin_GeometryKLoop — loop == ring diff") {

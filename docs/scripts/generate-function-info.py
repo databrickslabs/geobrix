@@ -51,6 +51,33 @@ PMTILES_MODULE = ("tests.python.api.pmtiles_functions_sql", "pmtiles_", "gbx_pmt
 REGISTERED_FUNCTIONS_TXT = os.path.join(
     REPO_ROOT, "docs", "tests-function-info", "registered_functions.txt"
 )
+# Introduced-in ("since") version per registered function: TSV `function_name<TAB>since`
+# (first line is a header). Rendered as a "Since vX.Y.Z" badge in the API docs and
+# surfaced in function-info.json so users on an older release know when a call arrived.
+FUNCTION_SINCE_TSV = os.path.join(
+    REPO_ROOT, "docs", "tests-function-info", "function-since.tsv"
+)
+
+
+def load_since_map() -> Dict[str, str]:
+    """Load {function_name: since_version} from function-since.tsv (skip header/#)."""
+    since: Dict[str, str] = {}
+    if not os.path.exists(FUNCTION_SINCE_TSV):
+        return since
+    with open(FUNCTION_SINCE_TSV) as f:
+        for i, line in enumerate(f):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            parts = line.split("\t")
+            if len(parts) != 2:
+                continue
+            name, ver = parts[0].strip(), parts[1].strip()
+            if i == 0 and (name == "function_name" or ver == "since"):
+                continue  # header
+            if name and ver:
+                since[name] = ver
+    return since
 
 
 # Load parsed builder metadata (usage_args from Scala case classes)
@@ -448,6 +475,7 @@ def build_functions_object(
     doc_examples: dict,
     parsed_builders: Optional[Dict] = None,
     docs_root: Optional[str] = None,
+    since_map: Optional[Dict[str, str]] = None,
 ) -> dict:
     """
     Build the "functions" object: only functions with non-empty examples from docs.
@@ -528,6 +556,11 @@ def build_functions_object(
                         bindings.append(b)
                 func_entry["bindings"] = bindings
                 out[name] = func_entry
+    # Inject the introduced-in ("since") version onto each real function entry.
+    if since_map:
+        for _n, _e in out.items():
+            if not _n.startswith("_") and _n in since_map:
+                _e["since"] = since_map[_n]
     return out
 
 
@@ -543,11 +576,12 @@ def main():
     registered = load_registered_functions_txt()
     doc_examples = discover_and_collect(registered)
     parsed_builders = _load_parsed_builders()
+    since_map = load_since_map()
 
     if not registered:
         # No registered list: output only doc-derived (legacy)
         functions = build_functions_object(
-            sorted(doc_examples.keys()), doc_examples, parsed_builders
+            sorted(doc_examples.keys()), doc_examples, parsed_builders, since_map=since_map
         )
         with open(RESOURCE_FILE, "w") as f:
             json.dump({"functions": functions}, f, indent=2)
@@ -556,7 +590,9 @@ def main():
         return
 
     # Full overwrite from registered; only include entries with non-empty examples.
-    functions = build_functions_object(registered, doc_examples, parsed_builders)
+    functions = build_functions_object(
+        registered, doc_examples, parsed_builders, since_map=since_map
+    )
     included = {k for k in functions if not k.startswith("_")}
     missing_or_empty = [n for n in registered if n not in included]
     if missing_or_empty:

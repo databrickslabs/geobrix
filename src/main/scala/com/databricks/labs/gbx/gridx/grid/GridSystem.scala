@@ -47,20 +47,29 @@ trait GridSystem extends Serializable {
   def renderCellId(cellID: Long): Any = cellID
 
   /**
-   * Geometry-aware k-ring with dilation mode. Default implementation routes through
-   * [[GeomDilation.expand]] so quadbin and custom grids get this for free. BNG overrides
-   * with an option-B split: boundary-out delegates to its proven flatMap algorithm,
-   * the other 5 modes use the engine.
+   * Geometry-aware k-ring with dilation mode + coverage basis. Default implementation routes
+   * through [[GeomDilation.expand]] so quadbin and custom grids get this for free. `coverage`
+   * ∈ {"coveras","polyfill","core"} selects the belongs-to basis (default "coveras"). BNG
+   * overrides the 5-arg form to additionally drop out-of-bounds cells via `BNG.isValid`.
    */
+  def geometryKRing(geom: Geometry, resolution: Int, k: Int, mode: String, coverage: String): Set[Long] =
+    GeomDilation.expand("ring", k, mode, this, geom, resolution, coverage)
+
+  /** 4-arg overload: default coverage "coveras". Delegates virtually to the 5-arg form so a
+    * grid overriding only the 5-arg form (e.g. BNG's isValid filter) is honoured here too. */
   def geometryKRing(geom: Geometry, resolution: Int, k: Int, mode: String): Set[Long] =
-    GeomDilation.expand("ring", k, mode, this, geom, resolution)
+    geometryKRing(geom, resolution, k, mode, GeomDilation.DEFAULT_COVERAGE)
 
   /**
-   * Geometry-aware k-loop with dilation mode. Default implementation routes through
-   * [[GeomDilation.expand]] so quadbin and custom grids get this for free.
+   * Geometry-aware k-loop with dilation mode + coverage basis. Default implementation routes
+   * through [[GeomDilation.expand]] so quadbin and custom grids get this for free.
    */
+  def geometryKLoop(geom: Geometry, resolution: Int, k: Int, mode: String, coverage: String): Set[Long] =
+    GeomDilation.expand("loop", k, mode, this, geom, resolution, coverage)
+
+  /** 4-arg overload: default coverage "coveras". Delegates virtually to the 5-arg form. */
   def geometryKLoop(geom: Geometry, resolution: Int, k: Int, mode: String): Set[Long] =
-    GeomDilation.expand("loop", k, mode, this, geom, resolution)
+    geometryKLoop(geom, resolution, k, mode, GeomDilation.DEFAULT_COVERAGE)
 
   /**
    * True iff this grid's point-partition (`pointToCellID`) coincides EXACTLY with the polygon

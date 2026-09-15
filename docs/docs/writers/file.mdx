@@ -4,6 +4,8 @@ sidebar_label: File Writer (file_gbx)
 
 # File Writer — `file_gbx`
 
+_Since:_ lightweight `file_gbx` **v0.5.0** · _(light-only — no heavyweight tier)_
+
 `file_gbx` is the shared write committer for all lightweight writers. You do not call it
 directly through the DataSource V2 `write.format(...)` API — instead, every `*_gbx` writer
 that produces a Delta table with a FILE column routes through `open_for_write` internally.

@@ -166,13 +166,25 @@ class BNG_ExpressionExecuteTest extends AnyFunSuite {
     test("BNG_GeometryKLoop should return the geometry based K-Loop") {
         val triangle = JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))")
         val geomKLoop = BNG_GeometryKLoop.execute(triangle, 3, 2).toSeq
-        geomKLoop.length shouldBe 52
+        // Perimeter-model expected value (corrected from 52 under the old straddling-cell seed).
+        // The outer perimeter of sCover is a subset of the old pBorder; the k-2 loop is smaller
+        // but correctly represents the second outward shell from the covering-set boundary.
+        geomKLoop.length shouldBe 48
     }
 
     test("BNG_GeometryKRing should return the geometry based K-Ring") {
         val triangle = JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))")
-        val geomKLoop = BNG_GeometryKRing.execute(triangle, 3, 2).toSeq
-        geomKLoop.length shouldBe 151
+        // boundary-out (0.5.1 re-cut) = the boundary ring (k0) + the outward k-shells, via the
+        // shared GeomDilation engine (blocked outward BFS), matching the light tier. ring(k) is
+        // the disjoint union of loops 0..k; the geom INTERIOR is excluded (verified in
+        // GeomDilationSuite).  k0 (the boundary ring) is non-empty even for an aligned geom.
+        val ring2 = BNG_GeometryKRing.execute(triangle, 3, 2).toSet
+        val k0    = BNG_GeometryKLoop.execute(triangle, 3, 0).toSet
+        val l1    = BNG_GeometryKLoop.execute(triangle, 3, 1).toSet
+        val l2    = BNG_GeometryKLoop.execute(triangle, 3, 2).toSet
+        k0.nonEmpty shouldBe true
+        ring2 shouldBe (k0 union l1 union l2)
+        ring2.size shouldBe (k0.size + l1.size + l2.size)  // loops are disjoint
     }
 
     test("BNG_GeometryKRing/KLoop eval accept a string resolution equal to the int index") {

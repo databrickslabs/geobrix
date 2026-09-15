@@ -57,19 +57,25 @@ class Custom_GeometrySuite extends AnyFunSuite {
     // Basic properties on the simple fixture
     // ------------------------------------------------------------------
 
-    test("Custom_GeometryKRing — k=0 == polyfill (execute via sys.geometryKRing)") {
-        val geom = JTS.fromWKB(SIMPLE_WKB)
-        val k0   = SYS.geometryKRing(geom, SIMPLE_RES, 0, GeomDilation.DEFAULT_MODE)
-        val fill = SYS.polyfill(geom, SIMPLE_RES).toSet
-        k0 shouldBe fill
+    test("Custom_GeometryKRing — boundary-out (coveras) k=0 is the full straddling band") {
+        // LOCKED: coveras boundary-out k0 = the full coveras band (sCover - sCore), with the
+        // outer-perimeter fallback when the band is empty (grid-aligned geom).
+        val geom  = JTS.fromWKB(SIMPLE_WKB)
+        val cls   = GeomDilation.classify(SYS, geom, SIMPLE_RES)
+        val band  = cls.sCover -- cls.sCore
+        val expect = if (band.nonEmpty) band else GeomDilation.outerPerimeter(cls.sCover, SYS)
+        val k0Out = SYS.geometryKRing(geom, SIMPLE_RES, 0, GeomDilation.DEFAULT_MODE)
+        k0Out.nonEmpty shouldBe true
+        k0Out shouldBe expect
     }
 
-    test("Custom_GeometryKRing — filled superset of polyfill") {
+    test("Custom_GeometryKRing — boundary-out excludes the interior (sCore)") {
+        // boundary-out = full band (k0) + outward band; the geom INTERIOR (sCore) excluded.
         val geom = JTS.fromWKB(SIMPLE_WKB)
         val k1   = SYS.geometryKRing(geom, SIMPLE_RES, 1, GeomDilation.DEFAULT_MODE)
-        val fill = SYS.polyfill(geom, SIMPLE_RES).toSet
-        fill.subsetOf(k1) shouldBe true
-        k1.size should be > fill.size
+        val cls  = GeomDilation.classify(SYS, geom, SIMPLE_RES)
+        k1.size should be > 0
+        k1.intersect(cls.sCore).isEmpty shouldBe true
     }
 
     test("Custom_GeometryKLoop — loop == ring diff") {
@@ -111,7 +117,8 @@ class Custom_GeometrySuite extends AnyFunSuite {
             Literal.create(gridRow, Custom_GridSpec.gridStructType),
             Literal(SIMPLE_RES, IntegerType),
             Literal(1, IntegerType),
-            Literal(GeomDilation.DEFAULT_MODE)
+            Literal(GeomDilation.DEFAULT_MODE),
+            Literal(GeomDilation.DEFAULT_COVERAGE)
         )
         val result = expr.eval(InternalRow.empty)
         assert(result != null)
@@ -137,14 +144,16 @@ class Custom_GeometrySuite extends AnyFunSuite {
             Literal.create(gridRow, Custom_GridSpec.gridStructType),
             Literal(SIMPLE_RES, IntegerType),
             Literal(1, IntegerType),
-            Literal(GeomDilation.DEFAULT_MODE)
+            Literal(GeomDilation.DEFAULT_MODE),
+            Literal(GeomDilation.DEFAULT_COVERAGE)
         )
         val exprWKB = Custom_GeometryKRing(
             Literal(SIMPLE_WKB, BinaryType),
             Literal.create(gridRow, Custom_GridSpec.gridStructType),
             Literal(SIMPLE_RES, IntegerType),
             Literal(1, IntegerType),
-            Literal(GeomDilation.DEFAULT_MODE)
+            Literal(GeomDilation.DEFAULT_MODE),
+            Literal(GeomDilation.DEFAULT_COVERAGE)
         )
 
         val wktResult = exprWKT.eval(InternalRow.empty).asInstanceOf[ArrayData]
@@ -180,7 +189,8 @@ class Custom_GeometrySuite extends AnyFunSuite {
             Literal.create(gridRow, Custom_GridSpec.gridStructType),
             Literal(SIMPLE_RES, IntegerType),
             Literal(1, IntegerType),
-            Literal(GeomDilation.DEFAULT_MODE)
+            Literal(GeomDilation.DEFAULT_MODE),
+            Literal(GeomDilation.DEFAULT_COVERAGE)
         )
         val result = expr.eval(InternalRow.empty)
         assert(result != null)
@@ -260,7 +270,8 @@ class Custom_GeometrySuite extends AnyFunSuite {
             Literal.create(gridRow, Custom_GridSpec.gridStructType),
             Literal(SIMPLE_RES, IntegerType),
             Literal(1, IntegerType),
-            Literal(GeomDilation.DEFAULT_MODE)
+            Literal(GeomDilation.DEFAULT_MODE),
+            Literal(GeomDilation.DEFAULT_COVERAGE)
         )
         assert(expr.eval(InternalRow.empty) == null)
     }

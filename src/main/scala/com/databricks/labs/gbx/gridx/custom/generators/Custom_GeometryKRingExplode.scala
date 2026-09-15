@@ -22,14 +22,15 @@ case class Custom_GeometryKRingExplode(
     grid:       Expression,
     resolution: Expression,
     k:          Expression,
-    mode:       Expression
+    mode:       Expression,
+    coverage:   Expression
 ) extends CollectionGenerator
       with Serializable
       with CodegenFallback {
 
     override def position: Boolean = false
     override def inline:   Boolean = false
-    override def children: Seq[Expression] = Seq(geom, grid, resolution, k, mode)
+    override def children: Seq[Expression] = Seq(geom, grid, resolution, k, mode, coverage)
 
     // noinspection DuplicatedCode
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
@@ -42,12 +43,14 @@ case class Custom_GeometryKRingExplode(
         } else {
             val mRaw    = mode.eval(input)
             val modeStr = if (mRaw == null) GeomDilation.DEFAULT_MODE else mRaw.asInstanceOf[UTF8String].toString
+            val cvRaw   = coverage.eval(input)
+            val coverageStr = if (cvRaw == null) GeomDilation.DEFAULT_COVERAGE else cvRaw.asInstanceOf[UTF8String].toString
             val sys     = Custom_GridSpec.systemFromRow(gridRaw.asInstanceOf[InternalRow])
             val res     = Custom_GridSpec.asInt(resRaw, "resolution")
             val kVal    = Custom_GridSpec.asInt(kRaw, "k")
             GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
                 val geomDecoded = Custom_PointAsCell.decodeGeom(geomRaw)
-                sys.geometryKRing(geomDecoded, res, kVal, modeStr)
+                sys.geometryKRing(geomDecoded, res, kVal, modeStr, coverageStr)
                     .map(cellId => InternalRow.fromSeq(Seq(cellId)))
             }
         }
@@ -56,20 +59,21 @@ case class Custom_GeometryKRingExplode(
     override def elementSchema: StructType = StructType(Seq(StructField("cellid", LongType)))
 
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5))
 
 }
 
-/** Companion: SQL name gbx_custom_geomkringexplode, 4- or 5-arg builder. */
+/** Companion: SQL name gbx_custom_geomkringexplode, 4-/5-/6-arg builder. */
 object Custom_GeometryKRingExplode extends WithExpressionInfo {
 
     override def name: String = "gbx_custom_geomkringexplode"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 4 => new Custom_GeometryKRingExplode(c(0), c(1), c(2), c(3), Literal(GeomDilation.DEFAULT_MODE))
-        case 5 => new Custom_GeometryKRingExplode(c(0), c(1), c(2), c(3), c(4))
+        case 4 => new Custom_GeometryKRingExplode(c(0), c(1), c(2), c(3), Literal(GeomDilation.DEFAULT_MODE), Literal(GeomDilation.DEFAULT_COVERAGE))
+        case 5 => new Custom_GeometryKRingExplode(c(0), c(1), c(2), c(3), c(4), Literal(GeomDilation.DEFAULT_COVERAGE))
+        case 6 => new Custom_GeometryKRingExplode(c(0), c(1), c(2), c(3), c(4), c(5))
         case n => throw new IllegalArgumentException(
-            s"gbx_custom_geomkringexplode requires 4 or 5 arguments; got $n")
+            s"gbx_custom_geomkringexplode requires 4, 5, or 6 arguments; got $n")
     }
 
 }

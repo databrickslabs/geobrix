@@ -78,22 +78,27 @@ def _wkb(geom) -> bytes:
 # ── basic properties ──────────────────────────────────────────────────────────
 
 
-def test_custom_geomkring_k0_is_polyfill():
-    """k=0 ring == polyfill (the covering set at boundary-out default mode)."""
+def test_custom_geomkring_boundary_out_k0_is_boundary_ring():
+    """boundary-out k=0 == the boundary covering ring (== boundary-in k0)."""
     conf = _conf()
     g = _wkb(_SIMPLE_GEOM)
+    k0_out = set(_custom.geometry_k_ring(conf, g, _SIMPLE_RES, 0))
+    k0_in = set(_custom.geometry_k_ring(conf, g, _SIMPLE_RES, 0, mode="boundary-in"))
+    assert (
+        k0_out == k0_in and k0_out
+    ), "boundary-out k0 = boundary-in k0 (boundary ring)"
+
+
+def test_custom_geomkring_boundary_out_excludes_interior():
+    """boundary-out k=1 = boundary ring (k0) + outward band; INTERIOR excluded."""
+    conf = _conf()
+    g = _wkb(_SIMPLE_GEOM)
+    fill = set(_custom.polyfill(conf, _SIMPLE_GEOM, _SIMPLE_RES))
     k0 = set(_custom.geometry_k_ring(conf, g, _SIMPLE_RES, 0))
-    fill = set(_custom.polyfill(conf, _SIMPLE_GEOM, _SIMPLE_RES))
-    assert k0 == fill
-
-
-def test_custom_geomkring_filled_superset_of_polyfill():
-    """k=1 ring is a superset of polyfill."""
-    conf = _conf()
-    g = _wkb(_SIMPLE_GEOM)
-    fill = set(_custom.polyfill(conf, _SIMPLE_GEOM, _SIMPLE_RES))
     k1 = set(_custom.geometry_k_ring(conf, g, _SIMPLE_RES, 1))
-    assert fill <= k1
+    assert k1, "boundary-out k=1 must be non-empty"
+    assert (k1 & fill) <= k0, "boundary-out excludes the covering-set interior"
+    assert k1 - fill, "boundary-out k=1 must add an outward band beyond the cover"
 
 
 def test_custom_geomkloop_is_ring_diff():
@@ -115,13 +120,13 @@ def test_custom_geomkring_returns_bigint():
     assert all(isinstance(c, int) for c in cells)
 
 
-def test_custom_geomkloop_k0_returns_polyfill():
-    """k=0 loop == polyfill (same as k=0 ring)."""
+def test_custom_geomkloop_boundary_out_k0_is_boundary_ring():
+    """boundary-out k=0 loop == the boundary ring (same as k=0 ring)."""
     conf = _conf()
     g = _wkb(_SIMPLE_GEOM)
-    fill = set(_custom.polyfill(conf, _SIMPLE_GEOM, _SIMPLE_RES))
     loop0 = set(_custom.geometry_k_loop(conf, g, _SIMPLE_RES, 0))
-    assert loop0 == fill
+    ring0 = set(_custom.geometry_k_ring(conf, g, _SIMPLE_RES, 0))
+    assert loop0 == ring0 and loop0, "boundary-out loop k0 = ring k0 (boundary ring)"
 
 
 def test_custom_geomkring_all_modes_return_bigints():
@@ -199,5 +204,8 @@ def test_custom_polyfill_and_kring_geom_straddling_upper_boundary():
     g = box(19950, 19950, 20010, 20010)  # extends to 20010 > bound_max 20000
     fill = _custom.polyfill(conf, g, 1)  # must not raise
     ring = _custom.geometry_k_ring(conf, _wkb(g), 1, 1)  # must not raise
+    k0 = _custom.geometry_k_ring(conf, _wkb(g), 1, 0)  # boundary ring (k0)
     assert isinstance(fill, list) and isinstance(ring, list)
-    assert set(fill) <= set(ring)  # k=1 ring is a superset of the polyfill
+    # boundary-out excludes the interior: any covering cell in the ring is on the
+    # boundary ring (k0); k>=1 adds the outward band.
+    assert (set(ring) & set(fill)) <= set(k0)

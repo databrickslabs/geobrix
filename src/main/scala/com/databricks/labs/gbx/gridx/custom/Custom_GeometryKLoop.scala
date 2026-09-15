@@ -26,10 +26,11 @@ case class Custom_GeometryKLoop(
     gridExpr:       Expression,
     resolutionExpr: Expression,
     kExpr:          Expression,
-    modeExpr:       Expression
+    modeExpr:       Expression,
+    coverageExpr:   Expression
 ) extends Expression with CodegenFallback {
 
-    override def children: Seq[Expression] = Seq(geomExpr, gridExpr, resolutionExpr, kExpr, modeExpr)
+    override def children: Seq[Expression] = Seq(geomExpr, gridExpr, resolutionExpr, kExpr, modeExpr, coverageExpr)
     override def dataType: DataType        = ArrayType(LongType)
     override def nullable: Boolean         = true
     override def foldable: Boolean         = children.forall(_.foldable)
@@ -45,28 +46,31 @@ case class Custom_GeometryKLoop(
         val k    = Custom_GridSpec.asInt(kExpr.eval(input), "k")
         val mRaw = modeExpr.eval(input)
         val mode = if (mRaw == null) GeomDilation.DEFAULT_MODE else mRaw.asInstanceOf[UTF8String].toString
+        val cvRaw = coverageExpr.eval(input)
+        val coverage = if (cvRaw == null) GeomDilation.DEFAULT_COVERAGE else cvRaw.asInstanceOf[UTF8String].toString
 
         GridErrorHandler.safeEval[ArrayData](null) {
             val geom = Custom_PointAsCell.decodeGeom(geomVal)
-            ArrayData.toArrayData(sys.geometryKLoop(geom, res, k, mode).toArray)
+            ArrayData.toArrayData(sys.geometryKLoop(geom, res, k, mode, coverage).toArray)
         }
     }
 
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
-        copy(nc(0), nc(1), nc(2), nc(3), nc(4))
+        copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5))
 
 }
 
-/** Companion: SQL name gbx_custom_geomkloop, 4- or 5-arg builder. */
+/** Companion: SQL name gbx_custom_geomkloop, 4-/5-/6-arg builder. */
 object Custom_GeometryKLoop extends WithExpressionInfo {
 
     override def name: String = "gbx_custom_geomkloop"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 4 => new Custom_GeometryKLoop(c(0), c(1), c(2), c(3), Literal(GeomDilation.DEFAULT_MODE))
-        case 5 => new Custom_GeometryKLoop(c(0), c(1), c(2), c(3), c(4))
+        case 4 => new Custom_GeometryKLoop(c(0), c(1), c(2), c(3), Literal(GeomDilation.DEFAULT_MODE), Literal(GeomDilation.DEFAULT_COVERAGE))
+        case 5 => new Custom_GeometryKLoop(c(0), c(1), c(2), c(3), c(4), Literal(GeomDilation.DEFAULT_COVERAGE))
+        case 6 => new Custom_GeometryKLoop(c(0), c(1), c(2), c(3), c(4), c(5))
         case n => throw new IllegalArgumentException(
-            s"gbx_custom_geomkloop requires 4 or 5 arguments; got $n")
+            s"gbx_custom_geomkloop requires 4, 5, or 6 arguments; got $n")
     }
 
 }

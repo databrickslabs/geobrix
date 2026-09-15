@@ -133,24 +133,28 @@ def _cellunion_udf(cells: pd.Series) -> pd.Series:
 # --- quadbin geometry-aware kring/kloop (array-output plain @udf) -----------
 
 
-def _quadbin_geomkring(geom, res, k, mode="boundary-out"):
+def _quadbin_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     try:
-        return _quadbin.geometry_k_ring(geom, int(res), int(k), mode or "boundary-out")
+        return _quadbin.geometry_k_ring(
+            geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
+        )
     except ValueError:
         raise  # re-raise param errors (bad mode propagated from engine)
     except Exception:
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
-def _quadbin_geomkloop(geom, res, k, mode="boundary-out"):
+def _quadbin_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     try:
-        return _quadbin.geometry_k_loop(geom, int(res), int(k), mode or "boundary-out")
+        return _quadbin.geometry_k_loop(
+            geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
+        )
     except ValueError:
         raise  # re-raise param errors
     except Exception:
@@ -162,13 +166,13 @@ def _quadbin_geomkloop(geom, res, k, mode="boundary-out"):
 
 @udtf(returnType="cellid: bigint")
 class _QuadbinGeomKRingExplode:
-    def eval(self, geom, res, k, mode="boundary-out"):
+    def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
         if geom is None or res is None or k is None:
             return
         _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
         try:
             for c in _quadbin.geometry_k_ring(
-                geom, int(res), int(k), mode or "boundary-out"
+                geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
             ):
                 yield (c,)
         except ValueError:
@@ -179,13 +183,13 @@ class _QuadbinGeomKRingExplode:
 
 @udtf(returnType="cellid: bigint")
 class _QuadbinGeomKLoopExplode:
-    def eval(self, geom, res, k, mode="boundary-out"):
+    def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
         if geom is None or res is None or k is None:
             return
         _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
         try:
             for c in _quadbin.geometry_k_loop(
-                geom, int(res), int(k), mode or "boundary-out"
+                geom, int(res), int(k), mode or "boundary-out", coverage or "coveras"
             ):
                 yield (c,)
         except ValueError:
@@ -442,7 +446,7 @@ def _bng_polyfill(geom, res):
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
-def _bng_geomkring(geom, res, k, mode="boundary-out"):
+def _bng_geomkring(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
@@ -451,7 +455,11 @@ def _bng_geomkring(geom, res, k, mode="boundary-out"):
     try:
         return sorted(
             _bng.geometry_k_ring_str(
-                geom, _norm_res(res), k_int, mode or "boundary-out"
+                geom,
+                _norm_res(res),
+                k_int,
+                mode or "boundary-out",
+                coverage or "coveras",
             )
         )
     except ValueError:
@@ -460,7 +468,7 @@ def _bng_geomkring(geom, res, k, mode="boundary-out"):
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
-def _bng_geomkloop(geom, res, k, mode="boundary-out"):
+def _bng_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or res is None or k is None:
         return None
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
@@ -469,7 +477,11 @@ def _bng_geomkloop(geom, res, k, mode="boundary-out"):
     try:
         return sorted(
             _bng.geometry_k_loop_str(
-                geom, _norm_res(res), k_int, mode or "boundary-out"
+                geom,
+                _norm_res(res),
+                k_int,
+                mode or "boundary-out",
+                coverage or "coveras",
             )
         )
     except ValueError:
@@ -523,7 +535,7 @@ class _BngKLoopExplode:
 
 @udtf(returnType="cellid: string")
 class _BngGeomKRingExplode:
-    def eval(self, geom, res, k, mode="boundary-out"):
+    def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
         if geom is None or res is None or k is None:
             return
         _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
@@ -532,7 +544,11 @@ class _BngGeomKRingExplode:
         try:
             for c in sorted(
                 _bng.geometry_k_ring_str(
-                    geom, _norm_res(res), k_int, mode or "boundary-out"
+                    geom,
+                    _norm_res(res),
+                    k_int,
+                    mode or "boundary-out",
+                    coverage or "coveras",
                 )
             ):
                 yield (c,)
@@ -544,7 +560,7 @@ class _BngGeomKRingExplode:
 
 @udtf(returnType="cellid: string")
 class _BngGeomKLoopExplode:
-    def eval(self, geom, res, k, mode="boundary-out"):
+    def eval(self, geom, res, k, mode="boundary-out", coverage="coveras"):
         if geom is None or res is None or k is None:
             return
         _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
@@ -553,7 +569,11 @@ class _BngGeomKLoopExplode:
         try:
             for c in sorted(
                 _bng.geometry_k_loop_str(
-                    geom, _norm_res(res), k_int, mode or "boundary-out"
+                    geom,
+                    _norm_res(res),
+                    k_int,
+                    mode or "boundary-out",
+                    coverage or "coveras",
                 )
             ):
                 yield (c,)
@@ -796,13 +816,18 @@ def _custom_polyfill(geom, grid, res):
     return _custom.polyfill(_custom.conf_from_row(grid), parse_geom(geom), int(res))
 
 
-def _custom_geomkring(geom, grid, res, k, mode="boundary-out"):
+def _custom_geomkring(geom, grid, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or grid is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     try:
         return _custom.geometry_k_ring(
-            _custom.conf_from_row(grid), geom, int(res), int(k), mode or "boundary-out"
+            _custom.conf_from_row(grid),
+            geom,
+            int(res),
+            int(k),
+            mode or "boundary-out",
+            coverage or "coveras",
         )
     except ValueError:
         raise  # re-raise param errors
@@ -810,13 +835,18 @@ def _custom_geomkring(geom, grid, res, k, mode="boundary-out"):
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
-def _custom_geomkloop(geom, grid, res, k, mode="boundary-out"):
+def _custom_geomkloop(geom, grid, res, k, mode="boundary-out", coverage="coveras"):
     if geom is None or grid is None or res is None or k is None:
         return None
     _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
     try:
         return _custom.geometry_k_loop(
-            _custom.conf_from_row(grid), geom, int(res), int(k), mode or "boundary-out"
+            _custom.conf_from_row(grid),
+            geom,
+            int(res),
+            int(k),
+            mode or "boundary-out",
+            coverage or "coveras",
         )
     except ValueError:
         raise  # re-raise param errors
@@ -826,7 +856,7 @@ def _custom_geomkloop(geom, grid, res, k, mode="boundary-out"):
 
 @udtf(returnType="cellid: bigint")
 class _CustomGeomKRingExplode:
-    def eval(self, geom, grid, res, k, mode="boundary-out"):
+    def eval(self, geom, grid, res, k, mode="boundary-out", coverage="coveras"):
         if geom is None or grid is None or res is None or k is None:
             return
         _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
@@ -837,6 +867,7 @@ class _CustomGeomKRingExplode:
                 int(res),
                 int(k),
                 mode or "boundary-out",
+                coverage or "coveras",
             ):
                 yield (c,)
         except ValueError:
@@ -847,7 +878,7 @@ class _CustomGeomKRingExplode:
 
 @udtf(returnType="cellid: bigint")
 class _CustomGeomKLoopExplode:
-    def eval(self, geom, grid, res, k, mode="boundary-out"):
+    def eval(self, geom, grid, res, k, mode="boundary-out", coverage="coveras"):
         if geom is None or grid is None or res is None or k is None:
             return
         _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
@@ -858,6 +889,7 @@ class _CustomGeomKLoopExplode:
                 int(res),
                 int(k),
                 mode or "boundary-out",
+                coverage or "coveras",
             ):
                 yield (c,)
         except ValueError:
@@ -1073,7 +1105,7 @@ def _custom_cellfill_agg_udf(
 # ============================================================================
 
 
-def _h3_geomkring(geom, resolution, k, mode="boundary-out"):
+def _h3_geomkring(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     """Geometry-aware h3 k-ring from a geometry (WKB BINARY or WKT STRING).
 
     Self-contained: the h3 library does both the polyfill (cover/core via
@@ -1085,6 +1117,7 @@ def _h3_geomkring(geom, resolution, k, mode="boundary-out"):
         resolution: H3 resolution (0..15).
         k:          Ring distance (int >= 0; 0 = the covering set only).
         mode:       Dilation mode (default "boundary-out"); one of _dilate.MODES.
+        coverage:   Coverage basis (default "coveras"); one of _dilate.COVERAGE.
 
     Returns:
         sorted list of int cell ids, or None on NULL/error.
@@ -1095,7 +1128,12 @@ def _h3_geomkring(geom, resolution, k, mode="boundary-out"):
     try:
         return sorted(
             _h3mod.geom_expand(
-                "ring", geom, int(resolution), int(k), mode or "boundary-out"
+                "ring",
+                geom,
+                int(resolution),
+                int(k),
+                mode or "boundary-out",
+                coverage or "coveras",
             )
         )
     except ValueError:
@@ -1104,7 +1142,7 @@ def _h3_geomkring(geom, resolution, k, mode="boundary-out"):
         return None  # bad geometry DATA -> degrade to NULL (matches heavy)
 
 
-def _h3_geomkloop(geom, resolution, k, mode="boundary-out"):
+def _h3_geomkloop(geom, resolution, k, mode="boundary-out", coverage="coveras"):
     """Geometry-aware h3 k-loop (hollow shell at exactly k). See :func:`_h3_geomkring`."""
     if geom is None or resolution is None or k is None:
         return None
@@ -1112,7 +1150,12 @@ def _h3_geomkloop(geom, resolution, k, mode="boundary-out"):
     try:
         return sorted(
             _h3mod.geom_expand(
-                "loop", geom, int(resolution), int(k), mode or "boundary-out"
+                "loop",
+                geom,
+                int(resolution),
+                int(k),
+                mode or "boundary-out",
+                coverage or "coveras",
             )
         )
     except ValueError:
@@ -1125,14 +1168,19 @@ def _h3_geomkloop(geom, resolution, k, mode="boundary-out"):
 class _H3GeomKRingExplode:
     """SQL-LATERAL UDTF: geometry-aware h3 k-ring, one row per cell id."""
 
-    def eval(self, geom, resolution, k, mode="boundary-out"):
+    def eval(self, geom, resolution, k, mode="boundary-out", coverage="coveras"):
         if geom is None or resolution is None or k is None:
             return
         _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
         try:
             for c in sorted(
                 _h3mod.geom_expand(
-                    "ring", geom, int(resolution), int(k), mode or "boundary-out"
+                    "ring",
+                    geom,
+                    int(resolution),
+                    int(k),
+                    mode or "boundary-out",
+                    coverage or "coveras",
                 )
             ):
                 yield (c,)
@@ -1146,14 +1194,19 @@ class _H3GeomKRingExplode:
 class _H3GeomKLoopExplode:
     """SQL-LATERAL UDTF: geometry-aware h3 k-loop, one row per cell id."""
 
-    def eval(self, geom, resolution, k, mode="boundary-out"):
+    def eval(self, geom, resolution, k, mode="boundary-out", coverage="coveras"):
         if geom is None or resolution is None or k is None:
             return
         _dilate_check_mode(mode)  # bad mode PARAMETER -> raises ValueError
         try:
             for c in sorted(
                 _h3mod.geom_expand(
-                    "loop", geom, int(resolution), int(k), mode or "boundary-out"
+                    "loop",
+                    geom,
+                    int(resolution),
+                    int(k),
+                    mode or "boundary-out",
+                    coverage or "coveras",
                 )
             ):
                 yield (c,)
@@ -1430,31 +1483,54 @@ def quadbin_cellunion_agg(cellid: ColLike) -> Column:
 
 
 def quadbin_geomkring(
-    geom: ColLike, resolution: ColLike, k: ColLike, mode: ColLike = "boundary-out"
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<BIGINT> geometry-aware k-ring around a geometry's covering cells.
 
     mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
     ``_dilate.MODES``.
+    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``:
+    ``"coveras"`` (overlap), ``"polyfill"`` (centroid), ``"core"`` (fully contained).
     """
-    # mode is always a string VALUE (never a column name); use f.lit so Spark
-    # does not misinterpret it as an unresolved column reference.
+    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
+    # does not misinterpret them as unresolved column references.
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
-        "gbx_quadbin_geomkring", _col(geom), _col(resolution), _col(k), mode_arg
+        "gbx_quadbin_geomkring",
+        _col(geom),
+        _col(resolution),
+        _col(k),
+        mode_arg,
+        cov_arg,
     )
 
 
 def quadbin_geomkloop(
-    geom: ColLike, resolution: ColLike, k: ColLike, mode: ColLike = "boundary-out"
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<BIGINT> geometry-aware k-loop (hollow shell) around a geometry's covering cells.
 
     mode: dilation mode (default ``"boundary-out"``). See :func:`quadbin_geomkring`.
+    coverage: coverage basis (default ``"coveras"``). See :func:`quadbin_geomkring`.
     """
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
-        "gbx_quadbin_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg
+        "gbx_quadbin_geomkloop",
+        _col(geom),
+        _col(resolution),
+        _col(k),
+        mode_arg,
+        cov_arg,
     )
 
 
@@ -1563,32 +1639,44 @@ def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:
 
 
 def bng_geomkring(
-    geom: ColLike, resolution: ColLike, k: ColLike, mode: ColLike = "boundary-out"
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<STRING> k-ring around a geometry's covering chips.
 
     mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
     ``_dilate.MODES``. ``"boundary-out"`` retains the existing get_chips path
     (byte-identical with the heavy tier); the 5 other modes use the engine.
+    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
     """
-    # mode is always a string VALUE (never a column name); use f.lit so Spark
-    # does not misinterpret it as an unresolved column reference.
+    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
+    # does not misinterpret them as unresolved column references.
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
-        "gbx_bng_geomkring", _col(geom), _col(resolution), _col(k), mode_arg
+        "gbx_bng_geomkring", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
     )
 
 
 def bng_geomkloop(
-    geom: ColLike, resolution: ColLike, k: ColLike, mode: ColLike = "boundary-out"
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<STRING> k-loop around a geometry's covering chips.
 
     mode: dilation mode (default ``"boundary-out"``). See :func:`bng_geomkring`.
+    coverage: coverage basis (default ``"coveras"``). See :func:`bng_geomkring`.
     """
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
-        "gbx_bng_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg
+        "gbx_bng_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
     )
 
 
@@ -1757,15 +1845,18 @@ def custom_geomkring(
     resolution: ColLike,
     k: ColLike,
     mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<BIGINT> geometry-aware k-ring around a geometry's covering cells.
 
     mode: dilation mode (default ``"boundary-out"``). One of the 6 modes in
     ``_dilate.MODES``.
+    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
     """
-    # mode is always a string VALUE (never a column name); use f.lit so Spark
-    # does not misinterpret it as an unresolved column reference.
+    # mode/coverage are always string VALUES (never column names); use f.lit so Spark
+    # does not misinterpret them as unresolved column references.
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
         "gbx_custom_geomkring",
         _col(geom),
@@ -1773,6 +1864,7 @@ def custom_geomkring(
         _col(resolution),
         _col(k),
         mode_arg,
+        cov_arg,
     )
 
 
@@ -1782,12 +1874,15 @@ def custom_geomkloop(
     resolution: ColLike,
     k: ColLike,
     mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<BIGINT> geometry-aware k-loop (hollow shell) around a geometry's covering cells.
 
     mode: dilation mode (default ``"boundary-out"``). See :func:`custom_geomkring`.
+    coverage: coverage basis (default ``"coveras"``). See :func:`custom_geomkring`.
     """
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
         "gbx_custom_geomkloop",
         _col(geom),
@@ -1795,6 +1890,7 @@ def custom_geomkloop(
         _col(resolution),
         _col(k),
         mode_arg,
+        cov_arg,
     )
 
 
@@ -1924,16 +2020,19 @@ def h3_geomkring(
     resolution: ColLike,
     k: ColLike,
     mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<BIGINT> h3 geometry-aware k-ring around a geometry's covering cells.
 
     geom: WKB BINARY or WKT STRING geometry column. resolution: H3 res 0..15.
     k: ring distance (0 = covering set only). mode: dilation mode (default
     "boundary-out"), one of the 6 modes.
+    coverage: coverage basis (default ``"coveras"``). One of ``_dilate.COVERAGE``.
     """
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
-        "gbx_h3_geomkring", _col(geom), _col(resolution), _col(k), mode_arg
+        "gbx_h3_geomkring", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
     )
 
 
@@ -1942,14 +2041,17 @@ def h3_geomkloop(
     resolution: ColLike,
     k: ColLike,
     mode: ColLike = "boundary-out",
+    coverage: ColLike = "coveras",
 ) -> Column:
     """ARRAY<BIGINT> h3 geometry-aware k-loop (hollow shell at exactly k steps).
 
     See :func:`h3_geomkring`. Returns cells at EXACTLY k steps.
+    coverage: coverage basis (default ``"coveras"``). See :func:`h3_geomkring`.
     """
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    cov_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
     return f.call_function(
-        "gbx_h3_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg
+        "gbx_h3_geomkloop", _col(geom), _col(resolution), _col(k), mode_arg, cov_arg
     )
 
 

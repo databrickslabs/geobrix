@@ -518,18 +518,32 @@ Powered by the **pure-Python quadbin interpolation port**. Cell-set and value pa
 
 ### Geometry-Aware Expansion (Quadbin)
 
-Geometry-aware functions polyfill a geometry into the grid and then expand outward (or inward at holes) using the dilation engine. They generalise the cell-centric `quadbin_kring` / `quadbin_kloop` to operate on arbitrary geometry shapes. The optional `mode` parameter controls how cells that touch the geometry boundary are classified; `'boundary-out'` (the default) keeps the covering boundary cells and expands outward.
+Geometry-aware functions polyfill a geometry into the grid and then expand outward (or inward at holes) using the dilation engine. They generalise the cell-centric `quadbin_kring` / `quadbin_kloop` to operate on arbitrary geometry shapes — polygons (with holes), lines, and points. The optional `mode` parameter selects the expansion direction and hole handling; the optional `coverage` parameter (after `mode`) selects how a cell is judged to belong to a region. This section is the canonical description; the BNG, custom, and H3 geometry-aware functions share the same `mode`/`coverage` contract.
 
-**Dilation modes** (exact hyphenated values):
+#### Dilation modes {#dilation-modes}
+
+The `mode` argument (**default `'boundary-out'`**) takes one of these exact hyphenated values — each produces a `k`-thick band; polygon holes are handled only by the `hole-*` modes, never by `boundary-*`:
 
 | Mode | Behaviour |
 |------|-----------|
-| `'boundary-out'` | Default. Boundary cells included; expansion grows outward from the edge. |
-| `'boundary-in'` | Boundary cells included; expansion grows inward into the geometry. |
-| `'boundary-in-ignore-holes'` | Like `'boundary-in'` but hole boundaries are not subtracted. |
-| `'hole-in'` | Expands inward from the interior edge of holes only. |
-| `'hole-out'` | Expands outward from hole boundaries into the surrounding geometry. |
-| `'hole-out-ignore-geom'` | Expands outward from holes ignoring the outer geometry boundary. |
+| `'boundary-out'` | Default. The geometry's **boundary band** (`k=0`) plus the outward band — cells within `k` steps **outside** the boundary; the fully-interior cells are excluded. `k=0` follows the coverage: `coveras`/`core` = the whole straddling band, `polyfill` = the centroid-outside cells. The outward `k≥1` rings are identical across coverages. Works on aligned and non-aligned geometries alike. |
+| `'boundary-in'` | Inward setback band from the outer boundary, stopping at holes. |
+| `'boundary-in-ignore-holes'` | Like `'boundary-in'` but treats the polygon as solid — the band can cross holes. |
+| `'hole-in'` | Fills each hole inward from its edge. |
+| `'hole-out'` | Band in the solid around each hole, bounded by the outer geometry. |
+| `'hole-out-ignore-geom'` | Band outward from each hole, not bounded by the outer geometry. |
+
+#### Coverage {#coverage}
+
+The `coverage` argument (**default `'coveras'`**) takes one of these exact values — it selects how a cell is judged to belong to a region:
+
+| Coverage | A cell belongs to a region if it… |
+|------|-----------|
+| `'coveras'` | **Default.** …*overlaps* the region (inclusive; boundary cells kept — no false negatives). |
+| `'polyfill'` | …has its *centre* inside the region (standard polyfill). |
+| `'core'` | …is *entirely* inside the region (strictest; no false positives). |
+
+Nesting: `coveras ⊇ polyfill ⊇ core`. Point and line geometries are covered only under `'coveras'` (they have no cell whose centre is inside them or that fully contains them, so `'polyfill'`/`'core'` return empty for them).
 
 ### quadbin_geomkring
 
@@ -537,13 +551,14 @@ Geometry-aware functions polyfill a geometry into the grid and then expand outwa
 
 Polyfill a geometry at a given quadbin zoom level then expand by `k` ring steps. Returns all cells within Chebyshev distance `k` of the covering set.
 
-**Signature:** `quadbin_geomkring(geom, resolution, k, [mode])`
+**Signature:** `quadbin_geomkring(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` — Geometry column (WKT or WKB, WGS84 coordinates)
 - `resolution` — Quadbin zoom level (integer `0..20`)
 - `k` — Ring distance (0 = covering set only)
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). See table above.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of quadbin cell IDs
@@ -565,13 +580,14 @@ Polyfill a geometry at a given quadbin zoom level then expand by `k` ring steps.
 
 Polyfill a geometry at a given quadbin zoom level then return only the hollow outer ring at exactly `k` steps.
 
-**Signature:** `quadbin_geomkloop(geom, resolution, k, [mode])`
+**Signature:** `quadbin_geomkloop(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` — Geometry column (WKT or WKB, WGS84 coordinates)
 - `resolution` — Quadbin zoom level (integer `0..20`)
 - `k` — Ring distance
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). See table above.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of quadbin cell IDs at exactly distance k
@@ -593,7 +609,7 @@ Polyfill a geometry at a given quadbin zoom level then return only the hollow ou
 
 Streaming UDTF version of `quadbin_geomkring` — one row per cell. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
 
-**Signature:** `quadbin_geomkringexplode(geom, resolution, k, [mode])`
+**Signature:** `quadbin_geomkringexplode(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:** Same as `quadbin_geomkring`.
 
@@ -617,7 +633,7 @@ Streaming UDTF version of `quadbin_geomkring` — one row per cell. Invoke via S
 
 Streaming UDTF version of `quadbin_geomkloop` — one row per cell at exactly `k` steps. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
 
-**Signature:** `quadbin_geomkloopexplode(geom, resolution, k, [mode])`
+**Signature:** `quadbin_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:** Same as `quadbin_geomkloop`.
 
@@ -1068,13 +1084,15 @@ Generate a k-ring of cells around a geometry at specified resolution.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then expands by ring distance `k`. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkring(geom, resolution, k, [mode])`
+**Signature:** `bng_geomkring(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
 - `k` - Integer ring distance
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). Controls how cells touching the geometry edge are treated. Values: `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'`, `'hole-out-ignore-geom'`.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
+- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
 
 **Returns:**
 - `ARRAY<STRING>` of BNG cell references
@@ -1100,13 +1118,15 @@ Generate a k-loop of cells around a geometry at specified resolution. The loop i
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfills the geometry then returns only the cells at exactly ring distance `k`. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkloop(geom, resolution, k, [mode])`
+**Signature:** `bng_geomkloop(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
 - `k` - Integer ring distance
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). See `bng_geomkring` for the full list of values.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
+- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
 
 **Returns:**
 - `ARRAY<STRING>` of BNG cell references at exactly distance k
@@ -1384,13 +1404,15 @@ Explode geometry k-ring cells into separate rows.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-ring cell. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkringexplode(geom, resolution, k, [mode])`
+**Signature:** `bng_geomkringexplode(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
 - `k` - Integer ring distance
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). See `bng_geomkring` for the full list of values.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
+- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
 
 **Returns:**
 - Exploded rows, one per cell (`STRING` BNG cell reference)
@@ -1414,13 +1436,15 @@ Explode geometry k-loop cells into separate rows.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per geometry k-loop cell. Exact cell-set parity with the heavyweight tier.
 :::
 
-**Signature:** `bng_geomkloopexplode(geom, resolution, k, [mode])`
+**Signature:** `bng_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` - Input geometry (WKT or WKB, EPSG:27700 coordinates required)
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. `'1km'`, `'100m'`)
 - `k` - Integer ring distance
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). See `bng_geomkring` for the full list of values.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
+- _`mode` and `coverage` were added in **v0.5.1**; on v0.2.0–v0.5.0 these functions accept only `(geom, resolution, k)`._
 
 **Returns:**
 - Exploded rows, one per cell at distance k (`STRING` BNG cell reference)
@@ -1717,24 +1741,21 @@ Return the hollow ring of custom grid cells at exactly `k` steps from the center
 
 Geometry-aware functions polyfill a geometry into the custom grid and then expand using the shared dilation engine. The `mode` parameter behaves the same as for `bng_geomkring` / `quadbin_geomkring` (see the Quadbin section for the full mode table). The grid descriptor is supplied as an additional `grid` argument (unlike the BNG and quadbin variants where the grid identity is implicit in the system).
 
-:::note Boundary alignment
-When the geometry edges fall exactly on cell boundaries, all cells in the polyfill may be classified as interior (no boundary cells), making the `boundary-out` frontier empty and the k=1 ring identical to the k=0 covering set. This occurs for polygons whose coordinates are exact multiples of the grid's cell size at the requested resolution. Use geometries with sub-cell offsets, or a finer resolution, to get outward expansion.
-:::
-
 ### custom_geomkring
 
 <Tier both/>
 
 Polyfill a geometry at a given custom grid resolution then expand by `k` ring steps.
 
-**Signature:** `custom_geomkring(geom, grid, resolution, k, [mode])`
+**Signature:** `custom_geomkring(geom, grid, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` — Geometry column (WKT or WKB, native grid CRS)
 - `grid` — Custom grid descriptor returned by `gbx_custom_grid`
 - `resolution` — Resolution level
 - `k` — Ring distance (0 = covering set only)
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). See Quadbin section for values.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of custom grid cell IDs
@@ -1756,14 +1777,15 @@ Polyfill a geometry at a given custom grid resolution then expand by `k` ring st
 
 Polyfill a geometry at a given custom grid resolution then return only the hollow outer ring at exactly `k` steps.
 
-**Signature:** `custom_geomkloop(geom, grid, resolution, k, [mode])`
+**Signature:** `custom_geomkloop(geom, grid, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` — Geometry column (WKT or WKB, native grid CRS)
 - `grid` — Custom grid descriptor returned by `gbx_custom_grid`
 - `resolution` — Resolution level
 - `k` — Ring distance
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`). See Quadbin section for values.
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of custom grid cell IDs at exactly distance k
@@ -1785,7 +1807,7 @@ Polyfill a geometry at a given custom grid resolution then return only the hollo
 
 Streaming UDTF version of `custom_geomkring` — one row per cell. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
 
-**Signature:** `custom_geomkringexplode(geom, grid, resolution, k, [mode])`
+**Signature:** `custom_geomkringexplode(geom, grid, resolution, k, [mode], [coverage])`
 
 **Parameters:** Same as `custom_geomkring`.
 
@@ -1809,7 +1831,7 @@ Streaming UDTF version of `custom_geomkring` — one row per cell. Invoke via SQ
 
 Streaming UDTF version of `custom_geomkloop` — one row per cell at exactly `k` steps. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
 
-**Signature:** `custom_geomkloopexplode(geom, grid, resolution, k, [mode])`
+**Signature:** `custom_geomkloopexplode(geom, grid, resolution, k, [mode], [coverage])`
 
 **Parameters:** Same as `custom_geomkloop`.
 
@@ -1913,13 +1935,14 @@ df.withColumn("kring", geomkring("geom_col", resolution=9, k=1))
 
 Geometry-aware H3 k-ring: the geometry's covering set expanded outward by `k` ring steps — the polyfill and neighbour walk both use the `h3` library.
 
-**Signature:** `h3_geomkring(geom, resolution, k, [mode])`
+**Signature:** `h3_geomkring(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:**
 - `geom` — geometry column (WKB `BINARY` or WKT `STRING`)
 - `resolution` — H3 resolution (`0`–`15`)
 - `k` — ring distance (`0` = covering set only)
-- `mode` *(optional)* — boundary classification mode (default `'boundary-out'`); one of `'boundary-out'`, `'boundary-in'`, `'boundary-in-ignore-holes'`, `'hole-in'`, `'hole-out'`, `'hole-out-ignore-geom'`
+- `mode` *(optional, default `'boundary-out'`)* — expansion direction & hole handling; see [Dilation modes](#dilation-modes) for all six values.
+- `coverage` *(optional, default `'coveras'`)* — how a cell is judged to belong to a region; see [Coverage](#coverage) for the three values.
 
 **Returns:**
 - `ARRAY<BIGINT>` of H3 cell IDs
@@ -1939,7 +1962,7 @@ Geometry-aware H3 k-ring: the geometry's covering set expanded outward by `k` ri
 
 Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).
 
-**Signature:** `h3_geomkloop(geom, resolution, k, [mode])`
+**Signature:** `h3_geomkloop(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:** Same as `h3_geomkring`.
 
@@ -1961,7 +1984,7 @@ Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).
 
 Streaming UDTF version of `h3_geomkring` — one row per cell. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
 
-**Signature:** `h3_geomkringexplode(geom, resolution, k, [mode])`
+**Signature:** `h3_geomkringexplode(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:** Same as `h3_geomkring`.
 
@@ -1983,7 +2006,7 @@ Streaming UDTF version of `h3_geomkring` — one row per cell. Invoke via SQL `L
 
 Streaming UDTF version of `h3_geomkloop` — one row per cell at exactly `k` steps. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
 
-**Signature:** `h3_geomkloopexplode(geom, resolution, k, [mode])`
+**Signature:** `h3_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
 
 **Parameters:** Same as `h3_geomkloop`.
 

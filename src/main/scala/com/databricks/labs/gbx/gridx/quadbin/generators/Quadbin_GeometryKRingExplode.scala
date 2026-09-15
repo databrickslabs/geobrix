@@ -18,14 +18,15 @@ case class Quadbin_GeometryKRingExplode(
     geom: Expression,
     resolution: Expression,
     k: Expression,
-    mode: Expression
+    mode: Expression,
+    coverage: Expression
 ) extends CollectionGenerator
       with Serializable
       with CodegenFallback {
 
     override def position: Boolean = false
     override def inline: Boolean = false
-    override def children: Seq[Expression] = Seq(geom, resolution, k, mode)
+    override def children: Seq[Expression] = Seq(geom, resolution, k, mode, coverage)
 
     // noinspection DuplicatedCode
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
@@ -33,19 +34,21 @@ case class Quadbin_GeometryKRingExplode(
         val resolutionRaw = resolution.eval(input)
         val kRaw = k.eval(input)
         val modeRaw = mode.eval(input)
+        val coverageRaw = coverage.eval(input)
         if (geometryRaw == null || resolutionRaw == null || kRaw == null) {
             Seq.empty
         } else {
             val resolutionVal = resolutionRaw.asInstanceOf[Int]
             val kVal = kRaw.asInstanceOf[Int]
             val modeStr = if (modeRaw == null) GeomDilation.DEFAULT_MODE else modeRaw.asInstanceOf[UTF8String].toString
+            val coverageStr = if (coverageRaw == null) GeomDilation.DEFAULT_COVERAGE else coverageRaw.asInstanceOf[UTF8String].toString
 
             GridErrorHandler.safeEval[IterableOnce[InternalRow]](Iterator.empty) {
                 val geometryVal = geom.dataType match {
                     case StringType => JTS.fromWKT(geometryRaw.asInstanceOf[UTF8String].toString)
                     case BinaryType => JTS.fromWKB(geometryRaw.asInstanceOf[Array[Byte]])
                 }
-                Quadbin.geometryKRing(geometryVal, resolutionVal, kVal, modeStr)
+                Quadbin.geometryKRing(geometryVal, resolutionVal, kVal, modeStr, coverageStr)
                     .map(cellId => InternalRow.fromSeq(Seq(cellId)))
             }
         }
@@ -53,7 +56,7 @@ case class Quadbin_GeometryKRingExplode(
 
     override def elementSchema: StructType = StructType(Seq(StructField("cellid", LongType)))
 
-    override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2), nc(3))
+    override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2), nc(3), nc(4))
 
 }
 
@@ -63,8 +66,9 @@ object Quadbin_GeometryKRingExplode extends WithExpressionInfo {
     override def name: String = "gbx_quadbin_geomkringexplode"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 3 => new Quadbin_GeometryKRingExplode(c(0), c(1), c(2), Literal(GeomDilation.DEFAULT_MODE))
-        case 4 => new Quadbin_GeometryKRingExplode(c(0), c(1), c(2), c(3))
+        case 3 => new Quadbin_GeometryKRingExplode(c(0), c(1), c(2), Literal(GeomDilation.DEFAULT_MODE), Literal(GeomDilation.DEFAULT_COVERAGE))
+        case 4 => new Quadbin_GeometryKRingExplode(c(0), c(1), c(2), c(3), Literal(GeomDilation.DEFAULT_COVERAGE))
+        case 5 => new Quadbin_GeometryKRingExplode(c(0), c(1), c(2), c(3), c(4))
     }
 
 }

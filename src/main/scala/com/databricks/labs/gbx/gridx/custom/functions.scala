@@ -55,6 +55,12 @@ object functions extends Serializable {
     def custom_geomkring(geom: Column, grid: Column, resolution: Column, k: Column, mode: String): Column =
         custom_geomkring(geom, grid, resolution, k, lit(mode))
 
+    def custom_geomkring(geom: Column, grid: Column, resolution: Column, k: Column, mode: Column, coverage: Column): Column =
+        ColumnAdapter(Custom_GeometryKRing.name, Seq(geom, grid, resolution, k, mode, coverage))
+
+    def custom_geomkring(geom: Column, grid: Column, resolution: Column, k: Column, mode: String, coverage: String): Column =
+        custom_geomkring(geom, grid, resolution, k, lit(mode), lit(coverage))
+
     def custom_geomkloop(geom: Column, grid: Column, resolution: Column, k: Column): Column =
         ColumnAdapter(Custom_GeometryKLoop.name, Seq(geom, grid, resolution, k))
 
@@ -64,6 +70,12 @@ object functions extends Serializable {
     def custom_geomkloop(geom: Column, grid: Column, resolution: Column, k: Column, mode: String): Column =
         custom_geomkloop(geom, grid, resolution, k, lit(mode))
 
+    def custom_geomkloop(geom: Column, grid: Column, resolution: Column, k: Column, mode: Column, coverage: Column): Column =
+        ColumnAdapter(Custom_GeometryKLoop.name, Seq(geom, grid, resolution, k, mode, coverage))
+
+    def custom_geomkloop(geom: Column, grid: Column, resolution: Column, k: Column, mode: String, coverage: String): Column =
+        custom_geomkloop(geom, grid, resolution, k, lit(mode), lit(coverage))
+
     // Generators
     def custom_geomkringexplode(geom: Column, grid: Column, resolution: Column, k: Column): Column =
         ColumnAdapter(Custom_GeometryKRingExplode.name, Seq(geom, grid, resolution, k))
@@ -71,11 +83,17 @@ object functions extends Serializable {
     def custom_geomkringexplode(geom: Column, grid: Column, resolution: Column, k: Column, mode: Column): Column =
         ColumnAdapter(Custom_GeometryKRingExplode.name, Seq(geom, grid, resolution, k, mode))
 
+    def custom_geomkringexplode(geom: Column, grid: Column, resolution: Column, k: Column, mode: Column, coverage: Column): Column =
+        ColumnAdapter(Custom_GeometryKRingExplode.name, Seq(geom, grid, resolution, k, mode, coverage))
+
     def custom_geomkloopexplode(geom: Column, grid: Column, resolution: Column, k: Column): Column =
         ColumnAdapter(Custom_GeometryKLoopExplode.name, Seq(geom, grid, resolution, k))
 
     def custom_geomkloopexplode(geom: Column, grid: Column, resolution: Column, k: Column, mode: Column): Column =
         ColumnAdapter(Custom_GeometryKLoopExplode.name, Seq(geom, grid, resolution, k, mode))
+
+    def custom_geomkloopexplode(geom: Column, grid: Column, resolution: Column, k: Column, mode: Column, coverage: Column): Column =
+        ColumnAdapter(Custom_GeometryKLoopExplode.name, Seq(geom, grid, resolution, k, mode, coverage))
 
     // ---------- Scalar-literal overloads ----------
 
@@ -85,11 +103,17 @@ object functions extends Serializable {
     def custom_geomkring(geom: Column, grid: Column, resolution: Int, k: Int, mode: String): Column =
         custom_geomkring(geom, grid, lit(resolution), lit(k), lit(mode))
 
+    def custom_geomkring(geom: Column, grid: Column, resolution: Int, k: Int, mode: String, coverage: String): Column =
+        custom_geomkring(geom, grid, lit(resolution), lit(k), lit(mode), lit(coverage))
+
     def custom_geomkloop(geom: Column, grid: Column, resolution: Int, k: Int): Column =
         custom_geomkloop(geom, grid, lit(resolution), lit(k))
 
     def custom_geomkloop(geom: Column, grid: Column, resolution: Int, k: Int, mode: String): Column =
         custom_geomkloop(geom, grid, lit(resolution), lit(k), lit(mode))
+
+    def custom_geomkloop(geom: Column, grid: Column, resolution: Int, k: Int, mode: String, coverage: String): Column =
+        custom_geomkloop(geom, grid, lit(resolution), lit(k), lit(mode), lit(coverage))
 
     def custom_geomkringexplode(geom: Column, grid: Column, resolution: Int, k: Int): Column =
         custom_geomkringexplode(geom, grid, lit(resolution), lit(k))
@@ -97,10 +121,16 @@ object functions extends Serializable {
     def custom_geomkringexplode(geom: Column, grid: Column, resolution: Int, k: Int, mode: String): Column =
         custom_geomkringexplode(geom, grid, lit(resolution), lit(k), lit(mode))
 
+    def custom_geomkringexplode(geom: Column, grid: Column, resolution: Int, k: Int, mode: String, coverage: String): Column =
+        custom_geomkringexplode(geom, grid, lit(resolution), lit(k), lit(mode), lit(coverage))
+
     def custom_geomkloopexplode(geom: Column, grid: Column, resolution: Int, k: Int): Column =
         custom_geomkloopexplode(geom, grid, lit(resolution), lit(k))
 
     def custom_geomkloopexplode(geom: Column, grid: Column, resolution: Int, k: Int, mode: String): Column =
         custom_geomkloopexplode(geom, grid, lit(resolution), lit(k), lit(mode))
+
+    def custom_geomkloopexplode(geom: Column, grid: Column, resolution: Int, k: Int, mode: String, coverage: String): Column =
+        custom_geomkloopexplode(geom, grid, lit(resolution), lit(k), lit(mode), lit(coverage))
 
 }

@@ -6,7 +6,7 @@ See .superpowers/specs/2026-09-11-geom-aware-kring-kloop-design.md §4/§5.
 
 from dataclasses import dataclass, field
 
-from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon, Polygon
+from shapely.geometry import LineString, MultiLineString, MultiPoint, MultiPolygon, Polygon
 
 MODES = (
     "boundary-out",
@@ -59,6 +59,103 @@ def outer_perimeter(s_cover, neighbors):
     - Non-empty whenever s_cover is non-empty.
     """
     return frozenset(c for c in s_cover if any(n not in s_cover for n in neighbors(c)))
+
+
+def _classify_cell(c, cell_geom_fn, geom, S, H, dim):
+    """Membership bits for ONE cell, identical to classify()'s loop body.
+
+    Returns a dict with the 9 boolean keys:
+        p_cover, p_centroid, p_core,
+        s_cover, s_centroid, s_core,
+        h_cover, h_centroid, h_core
+
+    Parameters mirror classify(): geom is the original geometry (may have holes),
+    S is the hole-filled solid, H is the union of holes (or None), dim is the
+    topological dimension (0=point, 1=line, 2=surface).
+    """
+    g = cell_geom_fn(c)
+    cen = g.centroid
+    if dim == 0:
+        p_in = geom.intersects(g)
+        s_in = S.intersects(g)
+    elif dim == 1:
+        p_in = geom.intersects(g) and geom.intersection(g).length > 0
+        s_in = S.intersects(g) and S.intersection(g).length > 0
+    else:
+        p_in = geom.intersects(g) and geom.intersection(g).area > 0
+        s_in = S.intersects(g) and S.intersection(g).area > 0
+    is_2d = dim == 2
+    m = dict(
+        p_cover=False, p_centroid=False, p_core=False,
+        s_cover=False, s_centroid=False, s_core=False,
+        h_cover=False, h_centroid=False, h_core=False,
+    )
+    if p_in:
+        m["p_cover"] = True
+        m["p_centroid"] = is_2d and geom.contains(cen)
+        m["p_core"] = is_2d and geom.contains(g)
+    if s_in:
+        m["s_cover"] = True
+        m["s_centroid"] = is_2d and S.contains(cen)
+        m["s_core"] = is_2d and S.contains(g)
+    if H is not None and H.intersects(g) and H.intersection(g).area > 0:
+        m["h_cover"] = True
+        m["h_centroid"] = is_2d and H.contains(cen)
+        m["h_core"] = is_2d and H.contains(g)
+    return m
+
+
+def _boundary_cells(rings, point_to_cell_fn, cell_step):
+    """Cells a set of boundary LineStrings pass through (O(perimeter)).
+
+    ``cell_step`` = the grid's cell edge length at the target resolution; the
+    sampling step along each ring segment is ≤ cell_step, guaranteeing no
+    boundary cell is skipped (the density guard).
+
+    Parameters
+    ----------
+    rings : iterable of shapely LinearRing / LineString
+        Exterior and/or interior rings of the polygon boundary to trace.
+    point_to_cell_fn : callable(x, y) -> cell_id | None
+        Per-grid hook that maps a coordinate pair to its containing cell.
+    cell_step : float
+        Cell edge length at the target resolution (e.g. 1 000 m for BNG res-3).
+    """
+    cells = set()
+    for ring in rings:
+        coords = list(ring.coords)
+        for i in range(len(coords) - 1):
+            (x0, y0), (x1, y1) = coords[i], coords[i + 1]
+            seg = LineString([(x0, y0), (x1, y1)])
+            n = max(1, int(seg.length / cell_step) + 1)
+            for j in range(n + 1):
+                pt = seg.interpolate(j / n, normalized=True)
+                try:
+                    c = point_to_cell_fn(pt.x, pt.y)
+                    if c is not None:
+                        cells.add(c)
+                except Exception:
+                    pass
+    return cells
+
+
+def _local_perimeter(band, neighbors, in_region):
+    """Cells in the band's neighbourhood that are in-region and have an out-of-region neighbour.
+
+    Formally: {c ∈ C : in_region(c) and ∃ n ∈ neighbors(c) with not in_region(n)}
+    where C = band ∪ {neighbors of each c ∈ band}.
+
+    This is the O(perimeter) lazy analogue of outer_perimeter().  When ``band``
+    is the output of _boundary_cells() for a polygon's exterior ring and
+    ``in_region`` tests membership in s_cover, the result equals
+    outer_perimeter(s_cover, neighbors) for both non-aligned and grid-aligned
+    polygons — the key alignment invariant that the boundary-as-line refactor
+    preserves.
+    """
+    C = set(band)
+    for c in band:
+        C.update(neighbors(c))
+    return frozenset(c for c in C if in_region(c) and any(not in_region(n) for n in neighbors(c)))
 
 
 def dilate(frontier0, visited0, neighbors, admit):
@@ -344,45 +441,24 @@ def classify(geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn=None):
     p_centroid, s_centroid, h_centroid = set(), set(), set()
 
     for c in cands:
-        g = cell_geom_fn(c)
-        cen = g.centroid  # cell centroid — the "polyfill" (centroid) basis probe
-
-        # Dimension-aware coverage test for P (the original geometry, may have holes)
-        # and S (the hole-filled solid, always a polygon when dim==2).
-        if dim == 0:
-            p_in_cover = geom.intersects(g)
-            s_in_cover = S.intersects(g)  # S == geom for non-polygon
-        elif dim == 1:
-            ix_p = geom.intersection(g)
-            p_in_cover = geom.intersects(g) and ix_p.length > 0
-            ix_s = S.intersection(g)
-            s_in_cover = S.intersects(g) and ix_s.length > 0
-        else:
-            p_in_cover = geom.intersects(g) and geom.intersection(g).area > 0
-            s_in_cover = S.intersects(g) and S.intersection(g).area > 0
-
-        # The centroid basis (and core basis) is 2D-only.  For a point/line region a
-        # cell centroid is "inside" only by measure-zero coincidence (e.g. a point
-        # placed exactly at a cell centre) — which is not a meaningful polyfill hit,
-        # so polyfill/core coverage of a 0/1-dim geom is empty by construction.
-        is_2d = dim == 2
-        if p_in_cover:
+        m = _classify_cell(c, cell_geom_fn, geom, S, H, dim)
+        if m["p_cover"]:
             p_cover.add(c)
-            if is_2d and geom.contains(cen):
+            if m["p_centroid"]:
                 p_centroid.add(c)
-            if is_2d and geom.contains(g):
+            if m["p_core"]:
                 p_core.add(c)
-        if s_in_cover:
+        if m["s_cover"]:
             s_cover.add(c)
-            if is_2d and S.contains(cen):
+            if m["s_centroid"]:
                 s_centroid.add(c)
-            if is_2d and S.contains(g):
+            if m["s_core"]:
                 s_core.add(c)
-        if H is not None and H.intersects(g) and H.intersection(g).area > 0:
+        if m["h_cover"]:
             h_cover.add(c)
-            if is_2d and H.contains(cen):
+            if m["h_centroid"]:
                 h_centroid.add(c)
-            if is_2d and H.contains(g):
+            if m["h_core"]:
                 h_core.add(c)
 
     return Classification(

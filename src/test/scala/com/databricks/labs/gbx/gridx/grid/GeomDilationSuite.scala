@@ -124,4 +124,36 @@ class GeomDilationSuite extends AnyFunSuite {
     val c  = GeomDilation.classify(grid, gc, 18)
     assert(c.pCover.isEmpty && c.sCover.isEmpty && c.hCover.isEmpty)
   }
+
+  test("nested GeometryCollection classifies equal to the flattened equivalent") {
+    // GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(poly), pt) should give the same
+    // Classification as GEOMETRYCOLLECTION(poly, pt) because flattenMembers recurses
+    // into nested collections.
+    val nested = wkt.read(
+      "GEOMETRYCOLLECTION(" +
+        "GEOMETRYCOLLECTION(" +
+          "POLYGON((-122.44 37.75,-122.43 37.75,-122.43 37.76,-122.44 37.76,-122.44 37.75)))," +
+        "POINT(-122.40 37.80))")
+    val flat = wkt.read(
+      "GEOMETRYCOLLECTION(" +
+        "POLYGON((-122.44 37.75,-122.43 37.75,-122.43 37.76,-122.44 37.76,-122.44 37.75))," +
+        "POINT(-122.40 37.80))")
+    val gcRes = 18
+    assert(
+      GeomDilation.classify(grid, nested, gcRes) == GeomDilation.classify(grid, flat, gcRes),
+      "nested GC must flatten to the same Classification as the equivalent flat GC")
+  }
+
+  test("GeometryCollection with an empty member skips empty and includes the live member") {
+    // A GC whose first member is an empty Polygon: the empty member is skipped
+    // and the live Point member's cells are present.
+    val gc  = wkt.read("GEOMETRYCOLLECTION(POLYGON EMPTY, POINT(-122.40 37.80))")
+    val pt  = wkt.read("POINT(-122.40 37.80)")
+    val gcRes = 18
+    val gcC = GeomDilation.classify(grid, gc, gcRes)
+    val ptC = GeomDilation.classify(grid, pt, gcRes)
+    assert(ptC.pCover.nonEmpty, "point alone must be non-empty (precondition)")
+    assert(ptC.pCover.subsetOf(gcC.pCover),
+      "GC with empty member must include the live member's cells")
+  }
 }

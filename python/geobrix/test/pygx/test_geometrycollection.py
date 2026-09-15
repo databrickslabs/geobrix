@@ -7,6 +7,7 @@ Tested via the quadbin public API (bbox polyfill needs no per-grid config).
 h3 GC support is tested via the _h3.geom_expand API (h3 is light-only for
 geom-aware kring/kloop).
 """
+
 from shapely import to_wkb
 from shapely.geometry import (
     GeometryCollection,
@@ -65,8 +66,12 @@ def test_gc_of_polygons_equals_multipolygon():
     gc = GeometryCollection(polys)
     mp = MultiPolygon(polys)
     for mode in (
-        "boundary-out", "boundary-in", "boundary-in-ignore-holes",
-        "hole-in", "hole-out", "hole-out-ignore-geom",
+        "boundary-out",
+        "boundary-in",
+        "boundary-in-ignore-holes",
+        "hole-in",
+        "hole-out",
+        "hole-out-ignore-geom",
     ):
         for coverage in ("coveras", "polyfill", "core"):
             gc_r = set(_quadbin.geometry_k_ring(to_wkb(gc), RES, 2, mode, coverage))
@@ -159,8 +164,12 @@ def test_h3_gc_of_polygons_equals_multipolygon():
     gc_wkb = to_wkb(gc)
     mp_wkb = to_wkb(mp)
     for mode in (
-        "boundary-out", "boundary-in", "boundary-in-ignore-holes",
-        "hole-in", "hole-out", "hole-out-ignore-geom",
+        "boundary-out",
+        "boundary-in",
+        "boundary-in-ignore-holes",
+        "hole-in",
+        "hole-out",
+        "hole-out-ignore-geom",
     ):
         for coverage in ("coveras", "polyfill", "core"):
             gc_r = _h3.geom_expand("ring", gc_wkb, _H3_RES, 2, mode, coverage)
@@ -179,7 +188,12 @@ def test_h3_gc_point_line_empty_under_core():
 
 def test_h3_empty_gc_returns_empty():
     """h3: empty GC returns empty set."""
-    assert _h3.geom_expand("ring", to_wkb(GeometryCollection([])), _H3_RES, 1, "boundary-out") == set()
+    assert (
+        _h3.geom_expand(
+            "ring", to_wkb(GeometryCollection([])), _H3_RES, 1, "boundary-out"
+        )
+        == set()
+    )
 
 
 def test_h3_nested_gc_flattens():

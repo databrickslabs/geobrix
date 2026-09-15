@@ -6,13 +6,7 @@ See .superpowers/specs/2026-09-11-geom-aware-kring-kloop-design.md §4/§5.
 
 from dataclasses import dataclass, field
 
-from shapely.geometry import (
-    GeometryCollection,
-    MultiLineString,
-    MultiPoint,
-    MultiPolygon,
-    Polygon,
-)
+from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon, Polygon
 
 MODES = (
     "boundary-out",
@@ -228,19 +222,53 @@ def _group_by_dimension(members):
 def _union_classifications(classifications):
     """Union the nine cell-sets across an iterable of Classifications."""
     fields = (
-        "p_cover", "p_core", "s_cover", "s_core", "h_cover", "h_core",
-        "p_centroid", "s_centroid", "h_centroid",
+        "p_cover",
+        "p_core",
+        "s_cover",
+        "s_core",
+        "h_cover",
+        "h_core",
+        "p_centroid",
+        "s_centroid",
+        "h_centroid",
     )
     acc = {f: set() for f in fields}
     for c in classifications:
         for f in fields:
             acc[f] |= getattr(c, f)
     return Classification(
-        acc["p_cover"], acc["p_core"], acc["s_cover"], acc["s_core"],
-        acc["h_cover"], acc["h_core"],
+        acc["p_cover"],
+        acc["p_core"],
+        acc["s_cover"],
+        acc["s_core"],
+        acc["h_cover"],
+        acc["h_core"],
         p_centroid=acc["p_centroid"],
         s_centroid=acc["s_centroid"],
         h_centroid=acc["h_centroid"],
+    )
+
+
+def _classify_collection(geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn):
+    """Classify a GeometryCollection by decomposing into per-dimension groups.
+
+    Nested collections flatten; empty collection returns an empty Classification.
+    Each homogeneous group (Multi* or single geometry) is classified via the
+    standard single-dimension path and the results are unioned.
+    """
+    members = list(_flatten_members(geom))
+    if not members:
+        return Classification(*(set() for _ in range(6)))
+    polys, lines, points = _group_by_dimension(members)
+    groups = []
+    if polys:
+        groups.append(MultiPolygon(polys) if len(polys) > 1 else polys[0])
+    if lines:
+        groups.append(MultiLineString(lines) if len(lines) > 1 else lines[0])
+    if points:
+        groups.append(MultiPoint(points) if len(points) > 1 else points[0])
+    return _union_classifications(
+        classify(g, res, polyfill_fn, cell_geom_fn, point_to_cell_fn) for g in groups
     )
 
 
@@ -279,25 +307,11 @@ def classify(geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn=None):
     point or line is naturally empty, which is the intended behaviour.
     """
     # GeometryCollection: mixed-dimension, so a single (S, dim) cannot represent it.
-    # Decompose into per-dimension homogeneous groups, classify each with the
-    # existing single-dimension path, and union. Nested collections flatten;
-    # MultiPolygon/MultiLineString/MultiPoint are NOT collections here (they take
-    # the path below).  Empty collection -> empty Classification.
+    # Decompose via helper; MultiPolygon/MultiLineString/MultiPoint are NOT collections
+    # and take the path below.
     if geom.geom_type == "GeometryCollection":
-        members = list(_flatten_members(geom))
-        if not members:
-            return Classification(*(set() for _ in range(6)))
-        polys, lines, points = _group_by_dimension(members)
-        groups = []
-        if polys:
-            groups.append(MultiPolygon(polys) if len(polys) > 1 else polys[0])
-        if lines:
-            groups.append(MultiLineString(lines) if len(lines) > 1 else lines[0])
-        if points:
-            groups.append(MultiPoint(points) if len(points) > 1 else points[0])
-        return _union_classifications(
-            classify(g, res, polyfill_fn, cell_geom_fn, point_to_cell_fn)
-            for g in groups
+        return _classify_collection(
+            geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn
         )
 
     S, H = _solid_and_holes(geom)

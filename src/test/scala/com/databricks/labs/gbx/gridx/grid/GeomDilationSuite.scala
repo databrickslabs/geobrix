@@ -90,4 +90,38 @@ class GeomDilationSuite extends AnyFunSuite {
     val g = wkt.read("POLYGON((0 0,0 1,1 1,1 0,0 0))")
     assertThrows[IllegalArgumentException](GeomDilation.expand("disk", 1, "boundary-out", grid, g, res))
   }
+
+  test("GeometryCollection is processed as the union of its members") {
+    val gc = wkt.read(
+      "GEOMETRYCOLLECTION(POLYGON((-122.44 37.75,-122.43 37.75," +
+        "-122.43 37.76,-122.44 37.76,-122.44 37.75)), POINT(-122.40 37.80))")
+    val poly = wkt.read(
+      "POLYGON((-122.44 37.75,-122.43 37.75,-122.43 37.76,-122.44 37.76,-122.44 37.75))")
+    val pt = wkt.read("POINT(-122.40 37.80)")
+    val gcRes = 18
+    val gcC   = GeomDilation.classify(grid, gc, gcRes)
+    val polyC = GeomDilation.classify(grid, poly, gcRes)
+    val ptC   = GeomDilation.classify(grid, pt, gcRes)
+    assert(polyC.pCover.subsetOf(gcC.pCover), "GC dropped the polygon member")
+    assert(ptC.pCover.subsetOf(gcC.pCover), "GC dropped the point member")
+  }
+
+  test("GeometryCollection of polygons equals the MultiPolygon of them") {
+    val gc = wkt.read(
+      "GEOMETRYCOLLECTION(" +
+        "POLYGON((-122.44 37.75,-122.43 37.75,-122.43 37.76,-122.44 37.76,-122.44 37.75))," +
+        "POLYGON((-122.42 37.75,-122.41 37.75,-122.41 37.76,-122.42 37.76,-122.42 37.75)))")
+    val mp = wkt.read(
+      "MULTIPOLYGON(" +
+        "((-122.44 37.75,-122.43 37.75,-122.43 37.76,-122.44 37.76,-122.44 37.75))," +
+        "((-122.42 37.75,-122.41 37.75,-122.41 37.76,-122.42 37.76,-122.42 37.75)))")
+    val gcRes = 18
+    assert(GeomDilation.classify(grid, gc, gcRes) == GeomDilation.classify(grid, mp, gcRes))
+  }
+
+  test("empty GeometryCollection classifies to empty") {
+    val gc = wkt.read("GEOMETRYCOLLECTION EMPTY")
+    val c  = GeomDilation.classify(grid, gc, 18)
+    assert(c.pCover.isEmpty && c.sCover.isEmpty && c.hCover.isEmpty)
+  }
 }

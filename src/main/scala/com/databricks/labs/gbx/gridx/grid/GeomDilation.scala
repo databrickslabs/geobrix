@@ -1,6 +1,9 @@
 package com.databricks.labs.gbx.gridx.grid
 
-import org.locationtech.jts.geom.{Geometry, GeometryCollection, GeometryFactory, LineString, Polygon}
+import org.locationtech.jts.geom.{
+  Geometry, GeometryCollection, GeometryFactory, LineString, MultiLineString,
+  MultiPoint, MultiPolygon, Point, Polygon
+}
 import org.locationtech.jts.linearref.LengthIndexedLine
 import scala.collection.mutable
 import scala.util.Try
@@ -54,6 +57,47 @@ object GeomDilation {
     (solid, hole)
   }
 
+  /** Non-empty, non-collection leaf members of a GeometryCollection, recursing
+    * into nested collections. A Multi* member is returned as-is (expanded later
+    * by groupByDimension). Tests the type STRING, not isInstanceOf — JTS
+    * MultiPolygon extends GeometryCollection. */
+  private def flattenMembers(geom: Geometry): Seq[Geometry] = {
+    val buf = mutable.ArrayBuffer.empty[Geometry]
+    (0 until geom.getNumGeometries).map(geom.getGeometryN).foreach { g =>
+      if (!g.isEmpty) {
+        if (g.getGeometryType == "GeometryCollection") buf ++= flattenMembers(g)
+        else buf += g
+      }
+    }
+    buf.toSeq
+  }
+
+  /** Group leaf members into (polygons, lines, points), expanding Multi* parts. */
+  private def groupByDimension(
+      members: Seq[Geometry]): (Seq[Polygon], Seq[LineString], Seq[Point]) = {
+    val polys  = mutable.ArrayBuffer.empty[Polygon]
+    val lines  = mutable.ArrayBuffer.empty[LineString]
+    val points = mutable.ArrayBuffer.empty[Point]
+    members.foreach { g =>
+      (0 until g.getNumGeometries).map(g.getGeometryN).foreach {
+        case p: Polygon    => polys  += p
+        case l: LineString => lines  += l
+        case pt: Point     => points += pt
+        case _             => ()
+      }
+    }
+    (polys.toSeq, lines.toSeq, points.toSeq)
+  }
+
+  /** Union the nine cell-sets across a sequence of Classifications. */
+  private def unionClassifications(cs: Seq[Classification]): Classification =
+    Classification(
+      cs.flatMap(_.pCover).toSet,    cs.flatMap(_.pCore).toSet,
+      cs.flatMap(_.sCover).toSet,    cs.flatMap(_.sCore).toSet,
+      cs.flatMap(_.hCover).toSet,    cs.flatMap(_.hCore).toSet,
+      cs.flatMap(_.pCentroid).toSet, cs.flatMap(_.sCentroid).toSet,
+      cs.flatMap(_.hCentroid).toSet)
+
   /** Topological dimension: 0=point, 1=line/ring, 2=surface/other. Mirrors `_geom_dimension`. */
   private def geomDimension(geom: Geometry): Int = geom.getGeometryType match {
     case "Point" | "MultiPoint"                       => 0
@@ -91,6 +135,23 @@ object GeomDilation {
   }
 
   def classify(grid: GridSystem, geom: Geometry, res: Int): Classification = {
+    // GeometryCollection: mixed-dimension. Flatten, group members by dimension
+    // into Multi*, classify each via the existing path, and union. Non-collection
+    // and homogeneous Multi* inputs skip this (getGeometryType != "GeometryCollection").
+    if (geom.getGeometryType == "GeometryCollection") {
+      val members = flattenMembers(geom)
+      if (members.isEmpty)
+        return Classification(
+          Set.empty, Set.empty, Set.empty, Set.empty, Set.empty, Set.empty)
+      val (polys, lines, points) = groupByDimension(members)
+      val gf = geom.getFactory
+      val groups: Seq[Geometry] = Seq(
+        if (polys.nonEmpty)  Some(gf.createMultiPolygon(polys.toArray))         else None,
+        if (lines.nonEmpty)  Some(gf.createMultiLineString(lines.toArray))       else None,
+        if (points.nonEmpty) Some(gf.createMultiPoint(points.toArray))           else None
+      ).flatten
+      return unionClassifications(groups.map(g => classify(grid, g, res)))
+    }
     val (solid, holeOpt) = solidAndHoles(geom)
     val dim = geomDimension(geom)
     // polyfill the SOLID so hole-interior cells are classified (hole modes need hCore).

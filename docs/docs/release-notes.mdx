@@ -69,13 +69,6 @@ Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
   medium-polygon throughput is 2–10× higher. **The cell sets returned are unchanged**
   — this is a pure performance improvement with no effect on results.
 
-  `gbx_h3_geomkring` / `gbx_h3_geomkloop` also move to a boundary-ring seed path
-  in this release, with a correctness improvement: the implementation now uses H3-native
-  per-cell containment tests so that results on grid-aligned polygons (polygon edges that
-  lie exactly on H3 cell boundaries) are byte-identical to H3's own polyfill oracle.
-  For large H3 polygons at fine resolutions these per-cell tests can make the H3 path
-  slower than prior versions; for small and medium polygons the performance is similar.
-
 - **Behaviour fix for non-rectangular polygons in the heavyweight tier.** For
   non-rectangular polygons, the geom-aware kring/kloop functions in the heavyweight
   (Scala/Spark) tier previously returned a slightly larger boundary band than the

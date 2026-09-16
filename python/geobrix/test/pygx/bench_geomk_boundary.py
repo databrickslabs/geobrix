@@ -1,9 +1,14 @@
-"""Micro-benchmark: geom-aware kring boundary-as-line speedup (all grids).
+"""Micro-benchmark: geom-aware kring boundary-as-line speedup (quadbin / bng / custom).
 
 Committed harness for the O(perimeter) lazy-seed optimisation that landed in v0.5.2:
-all six modes on all four grids (quadbin / bng / custom / h3) now scale with the
-polygon's *boundary*, not its area.  Results are byte-identical to before except for
-one corrected heavy-tier over-count on non-rectangular polygons (see release notes).
+quadbin, BNG, and custom grids now scale with the polygon's *boundary*, not its area.
+Results are byte-identical to before except for one corrected heavy-tier over-count on
+non-rectangular polygons (see release notes).
+
+h3 uses H3's native ``polygon_to_cells_experimental`` bulk fill (C-optimised); the
+perimeter-walk path was benchmarked and found to be 23–96× SLOWER than the native fill
+for large polygons, so h3 retains the native O(area) path.  The h3 section below times
+the native path only (no before/after comparison).
 
 This file is SPARK-FREE and needs no Docker, JAR, or Databricks cluster.
 
@@ -12,7 +17,8 @@ Benchmark tests carry the ``bench`` pytest marker and are SKIPPED in normal CI:
     pytest -m bench python/geobrix/test/pygx/bench_geomk_boundary.py
 
 Fast regression assertions (no ``bench`` marker) verify that the lazy path never
-calls the O(area) polyfill; they DO run in normal ``gbx:test:python`` runs.
+calls the O(area) polyfill for quadbin/bng/custom; they DO run in normal
+``gbx:test:python`` runs.
 
 Run the benchmark standalone (prints per-grid speedup tables):
 
@@ -22,9 +28,8 @@ Expected results (reference machine: geobrix-dev Docker, 4-core, 8 GB):
   - quadbin z=15 large poly: ~50–120× speedup (boundary-out)
   - bng res=3 large poly:    ~15–30× speedup  (boundary-out)
   - custom res=1 large poly: ~50–100× speedup (boundary-out)
-  - h3 res=8 large poly:     ~5–20× speedup   (lazy path still tests membership
-                              per boundary cell; ratio is real, not projected)
-  - h3 res=10 throughput:    ~3–6× polys/sec  (medium polygons, 200 samples)
+  - h3 res=8/10:             native bulk polyfill path (not converted — bulk
+                              polygon_to_cells_experimental outperforms perimeter-walk)
 """
 
 from __future__ import annotations
@@ -245,14 +250,14 @@ def _custom_after(conf, geom: Polygon, res: int, k: int = 2) -> list:
 
 # ---- h3 ----
 
-def _h3_before(geom: Polygon, res: int, k: int = 2) -> list:
-    """O(area) reference for h3: full polyfill classify + expand."""
-    cls = _h3._classify_polyfill(geom, res)
+def _h3_native(geom: Polygon, res: int, k: int = 2) -> list:
+    """Native O(area) h3 path: bulk polyfill classify + expand."""
+    cls = _h3.classify(geom, res)
     return sorted(_dilate.geom_expand("ring", k, "boundary-out", cls, _h3._neighbors))
 
 
-def _h3_after(geom: Polygon, res: int, k: int = 2) -> list:
-    """Lazy O(perimeter) public path for h3 (via geom_expand → geom_expand_lazy)."""
+def _h3_public(geom: Polygon, res: int, k: int = 2) -> list:
+    """Public h3 path (native O(area) bulk polyfill — not converted to lazy)."""
     from shapely import to_wkb
 
     wkb = to_wkb(geom)
@@ -350,59 +355,42 @@ def test_bench_custom_large():
 
 
 @_BENCH_MARK
-def test_bench_h3_large_res8():
-    """h3 res=8 large-polygon boundary-out: BEFORE vs AFTER (real ratio, not projected).
+def test_bench_h3_native_res8():
+    """h3 res=8 large-polygon boundary-out: native bulk polyfill path timing.
 
-    NOTE on h3 performance: the h3 lazy path uses h3-NATIVE per-cell membership
-    tests (via _local_contains / polygon_to_cells_experimental) rather than
-    shapely containment — this is required for byte-identical results on
-    grid-aligned polygons where shapely and h3 disagree at shared cell edges.
-    Each boundary cell requires multiple local polyfill calls, so for large
-    polygons at fine resolutions the after path can be SLOWER than the reference
-    O(area) polyfill.  The speedup ratio printed below is the ACTUAL measured
-    number (not a projection from the interior/perimeter ratio).
+    h3 uses H3's native ``polygon_to_cells_experimental`` bulk fill (C-optimised)
+    for all polygon inputs.  A perimeter-walk lazy path was evaluated and found to be
+    23–96× SLOWER than the native bulk fill for large polygons (each boundary cell
+    requires multiple local polyfill clips), so h3 retains the O(area) native path.
+    This test documents native-path timing only (no before/after comparison).
     """
     geom = _large_wgs84_blob()
     res = 8
-    _, t_before = _timed(lambda: _h3_before(geom, res), n_warmup=1, n_rep=3)
-    after_result, t_after = _timed(lambda: _h3_after(geom, res), n_warmup=1, n_rep=3)
-    before_result = _h3_before(geom, res)
-
-    assert sorted(before_result) == sorted(after_result), "BEFORE/AFTER results differ for h3 res=8!"
-    ratio = t_before / t_after if t_after > 0 else float("inf")
-    n_interior = len(_h3._classify_polyfill(geom, res).s_cover)
+    result, t_native = _timed(lambda: _h3_native(geom, res), n_warmup=1, n_rep=3)
+    n_interior = len(_h3.classify(geom, res).s_cover)
     print(
-        f"\n[h3 res={res}] N_interior={n_interior}, "
-        f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.2f}×"
-        f"\n  NOTE: h3 uses native per-cell membership — net speedup varies with polygon size/res"
+        f"\n[h3 res={res}] N_interior={n_interior}, native={t_native*1000:.0f}ms"
+        f"\n  NOTE: native path (not converted — bulk polyfill outperforms perimeter-walk for h3)"
     )
-    # Only verify correctness; do NOT assert a speedup (see NOTE above).
-    assert sorted(before_result) == sorted(after_result), "h3 res=8 BEFORE/AFTER mismatch"
+    assert result is not None
 
 
 @_BENCH_MARK
-def test_bench_h3_large_res10():
-    """h3 res=10 medium-throughput: BEFORE vs AFTER (50 medium polygons, polys/sec).
+def test_bench_h3_native_res10():
+    """h3 res=10 medium-throughput: native bulk polyfill path (50 medium polygons, polys/sec).
 
-    Measures the actual throughput ratio for medium polygons at res=10.
-    See NOTE in test_bench_h3_large_res8 for why h3 speedup differs from other grids.
+    h3 is not converted to a lazy perimeter-walk path (bulk polyfill outperforms it).
+    This test documents the native-path throughput.
     """
     polys = _medium_wgs84_blobs(n=50)
     res = 10
-
-    before_fns = [lambda p=p: _h3_before(p, res, k=1) for p in polys]
-    after_fns = [lambda p=p: _h3_after(p, res, k=1) for p in polys]
-
-    tp_before = _throughput(before_fns)
-    tp_after = _throughput(after_fns)
-    ratio = tp_after / tp_before if tp_before > 0 else float("inf")
+    native_fns = [lambda p=p: _h3_native(p, res, k=1) for p in polys]
+    tp_native = _throughput(native_fns)
     print(
-        f"\n[h3 res={res} throughput (50 med polys)] "
-        f"before={tp_before:.1f} pol/s, after={tp_after:.1f} pol/s, speedup={ratio:.2f}×"
-        f"\n  NOTE: h3 native membership tests dominate at fine resolutions"
+        f"\n[h3 res={res} throughput (50 med polys)] native={tp_native:.1f} pol/s"
+        f"\n  NOTE: native path (not converted — bulk polyfill outperforms perimeter-walk for h3)"
     )
-    # Only verify correctness; do NOT assert a throughput speedup for h3.
-    assert tp_after > 0, "h3 after throughput must be positive"
+    assert tp_native > 0, "h3 native throughput must be positive"
 
 
 @_BENCH_MARK
@@ -564,41 +552,6 @@ def test_regression_lazy_skips_polyfill_custom(monkeypatch):
     )
 
 
-def test_regression_lazy_skips_h3_fill(monkeypatch):
-    """Lazy h3 path must NOT call _h3._fill for polygon boundary-out.
-
-    _h3._fill wraps h3.polygon_to_cells_experimental over the FULL polygon
-    shape — the O(area) cost.  The lazy path uses per-cell local clips via
-    _h3._local_contains instead and must never touch _fill.
-    """
-    import h3
-    from shapely import to_wkb
-
-    call_count = {"n": 0}
-    real_fill = _h3._fill
-
-    def counting_fill(shapes, res, contain):
-        call_count["n"] += 1
-        return real_fill(shapes, res, contain)
-
-    monkeypatch.setattr(_h3, "_fill", counting_fill)
-    geom = _small_wgs84_poly()
-    wkb = to_wkb(geom)
-    res = 7
-
-    # BEFORE: _classify_polyfill calls _fill several times
-    count_before = call_count["n"]
-    _h3._classify_polyfill(geom, res)
-    assert call_count["n"] > count_before, "_classify_polyfill must call _fill"
-
-    # AFTER: geom_expand (lazy) must not call _fill
-    call_count["n"] = 0
-    _h3.geom_expand("ring", wkb, res, k=1, mode="boundary-out")
-    assert call_count["n"] == 0, (
-        f"Lazy h3 path called _fill {call_count['n']} time(s); "
-        "it must not materialise the full polygon interior for polygon boundary-out"
-    )
-
 
 # ===========================================================================
 # Standalone driver — run this file directly to see benchmark results
@@ -646,13 +599,12 @@ def _run_benchmark():
     n_int = len(_custom.classify(conf, geom_cust, res).s_cover)
     rows.append(("custom res=1 (large)", n_int, t_before, t_after))
 
-    # h3 res=8 (large)
+    # h3 res=8 (large) — native path only (not converted; bulk polyfill outperforms perimeter-walk)
     geom_wgs8 = _large_wgs84_blob()
     res = 8
-    _, t_before = _timed(lambda: _h3_before(geom_wgs8, res), n_warmup=1, n_rep=3)
-    _, t_after = _timed(lambda: _h3_after(geom_wgs8, res), n_warmup=1, n_rep=3)
-    n_int = len(_h3._classify_polyfill(geom_wgs8, res).s_cover)
-    rows.append(("h3 res=8 (large)", n_int, t_before, t_after))
+    _, t_native = _timed(lambda: _h3_native(geom_wgs8, res), n_warmup=1, n_rep=3)
+    n_int = len(_h3.classify(geom_wgs8, res).s_cover)
+    rows.append(("h3 res=8 (native, large)", n_int, t_native, t_native))
 
     print(f"\n{'Scenario':<28} {'N_interior':>12} {'before ms':>12} {'after ms':>10} {'speedup':>9}")
     print("-" * 76)
@@ -661,15 +613,13 @@ def _run_benchmark():
         print(f"  {name:<26} {n_int:>12,} {tb*1000:>12.0f} {ta*1000:>10.0f} {ratio:>8.1f}×")
 
     # -----------------------------------------------------------------------
-    # h3 res=10 large-polygon (separate row — the "throughput-scale" number)
+    # h3 res=10 large-polygon — native path only (no lazy conversion)
     # -----------------------------------------------------------------------
     res = 10
     geom_wgs10 = _large_wgs84_blob()
-    _, t_before = _timed(lambda: _h3_before(geom_wgs10, res), n_warmup=1, n_rep=3)
-    _, t_after = _timed(lambda: _h3_after(geom_wgs10, res), n_warmup=1, n_rep=3)
-    n_int = len(_h3._classify_polyfill(geom_wgs10, res).s_cover)
-    ratio = t_before / t_after if t_after > 0 else float("inf")
-    print(f"  {'h3 res=10 (large)':<26} {n_int:>12,} {t_before*1000:>12.0f} {t_after*1000:>10.0f} {ratio:>8.1f}×")
+    _, t_native10 = _timed(lambda: _h3_native(geom_wgs10, res), n_warmup=1, n_rep=3)
+    n_int = len(_h3.classify(geom_wgs10, res).s_cover)
+    print(f"  {'h3 res=10 (native,large)':<26} {n_int:>12,} {t_native10*1000:>12.0f} {'[native]':>10} {'n/a':>9}")
 
     # -----------------------------------------------------------------------
     # Medium-polygon throughput (polys/sec)
@@ -677,12 +627,10 @@ def _run_benchmark():
     print(f"\n{'Grid':<22} {'n polys':>8} {'before pol/s':>14} {'after pol/s':>14} {'speedup':>9}")
     print("-" * 72)
 
-    # h3 res=10 medium throughput
+    # h3 res=10 medium throughput — native path only (not converted)
     res10_polys = _medium_wgs84_blobs(n=200)
-    tp_b = _throughput([lambda p=p: _h3_before(p, 10, k=1) for p in res10_polys])
-    tp_a = _throughput([lambda p=p: _h3_after(p, 10, k=1) for p in res10_polys])
-    ratio = tp_a / tp_b if tp_b > 0 else float("inf")
-    print(f"  {'h3 res=10 throughput':<20} {200:>8} {tp_b:>14.1f} {tp_a:>14.1f} {ratio:>8.1f}×")
+    tp_native_h3 = _throughput([lambda p=p: _h3_native(p, 10, k=1) for p in res10_polys])
+    print(f"  {'h3 res=10 (native)':<20} {200:>8} {'[native]':>14} {tp_native_h3:>14.1f} {'n/a':>9}")
 
     # quadbin z=17 medium throughput
     qb_polys = _medium_wgs84_blobs(n=200)

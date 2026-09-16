@@ -52,12 +52,16 @@ object RST_Chm extends WithExpressionInfo {
               val demDs = RasterSerializationUtil.rowToDS(refRow, BinaryType)
               try {
                   val (resDs, resMtd) = execute(dsmDs, demDs, options)
-                  val out = RasterSerializationUtil.tileToRow((cell, resDs, resMtd), BinaryType, exprConf.hConf)
-                  // The result is written by gdal_calc to the local filesystem; delete it after serialisation.
+                  // The result is written by gdal_calc to the local filesystem.
+                  // Release resDs and delete its file in a finally so they are freed even if
+                  // tileToRow throws (Finding B fix).
                   val resPath = resDs.GetDescription()
-                  RasterDriver.releaseDataset(resDs)
-                  Try(Files.deleteIfExists(Paths.get(resPath)))
-                  out
+                  try {
+                      RasterSerializationUtil.tileToRow((cell, resDs, resMtd), BinaryType, exprConf.hConf)
+                  } finally {
+                      RasterDriver.releaseDataset(resDs)
+                      Try(Files.deleteIfExists(Paths.get(resPath)))
+                  }
               } finally {
                   RasterDriver.releaseDataset(dsmDs)
                   RasterDriver.releaseDataset(demDs)
@@ -136,31 +140,34 @@ object RST_Chm extends WithExpressionInfo {
         noData: Double
     ): (Dataset, Map[String, String]) = {
         // Copy aligned DSM to a local path.
+        // dsmCpy/pathA are guarded in an outer finally so they are freed even if the second
+        // translate or any subsequent step throws (Finding A fix).
         val extA = GDAL.getExtension(alignedDsm.GetDriver.getShortName)
         val pathA =
             s"${NodeFilePathUtil.rootPath}/${java.util.UUID.randomUUID().toString.replace("-", "_")}.$extA"
         val (dsmCpy, _) = GDALTranslate.executeTranslate(pathA, alignedDsm, "gdal_translate", options)
-
-        // Copy DEM to a local path.
-        val extB = GDAL.getExtension(demDs.GetDriver.getShortName)
-        val pathB =
-            s"${NodeFilePathUtil.rootPath}/${java.util.UUID.randomUUID().toString.replace("-", "_")}.$extB"
-        val (demCpy, _) = GDALTranslate.executeTranslate(pathB, demDs, "gdal_translate", options)
-
         try {
-            val extOut = GDAL.getExtension(dsmCpy.GetDriver.getShortName)
-            val resultPath =
-                s"${NodeFilePathUtil.rootPath}/chm_${java.util.UUID.randomUUID().toString.replace("-", "_")}.$extOut"
-            // extra_options carries --type and --NoDataValue; MapAlgebra.parseSpec appends them verbatim.
-            val spec =
-                s"""{"A_index":0,"B_index":1,"calc":"maximum(A-B,0)","extra_options":"--type=Float32 --NoDataValue=$noData"}"""
-            val command = MapAlgebra.parseSpec(spec, resultPath, Seq(dsmCpy, demCpy))
-            GDALCalc.executeCalc(command, resultPath, options, dsmCpy)
+            // Copy DEM to a local path.
+            val extB = GDAL.getExtension(demDs.GetDriver.getShortName)
+            val pathB =
+                s"${NodeFilePathUtil.rootPath}/${java.util.UUID.randomUUID().toString.replace("-", "_")}.$extB"
+            val (demCpy, _) = GDALTranslate.executeTranslate(pathB, demDs, "gdal_translate", options)
+            try {
+                val extOut = GDAL.getExtension(dsmCpy.GetDriver.getShortName)
+                val resultPath =
+                    s"${NodeFilePathUtil.rootPath}/chm_${java.util.UUID.randomUUID().toString.replace("-", "_")}.$extOut"
+                // extra_options carries --type and --NoDataValue; MapAlgebra.parseSpec appends them verbatim.
+                val spec =
+                    s"""{"A_index":0,"B_index":1,"calc":"maximum(A-B,0)","extra_options":"--type=Float32 --NoDataValue=$noData"}"""
+                val command = MapAlgebra.parseSpec(spec, resultPath, Seq(dsmCpy, demCpy))
+                GDALCalc.executeCalc(command, resultPath, options, dsmCpy)
+            } finally {
+                RasterDriver.releaseDataset(demCpy)
+                Try(Files.deleteIfExists(Paths.get(pathB)))
+            }
         } finally {
             RasterDriver.releaseDataset(dsmCpy)
-            RasterDriver.releaseDataset(demCpy)
             Try(Files.deleteIfExists(Paths.get(pathA)))
-            Try(Files.deleteIfExists(Paths.get(pathB)))
         }
     }
 

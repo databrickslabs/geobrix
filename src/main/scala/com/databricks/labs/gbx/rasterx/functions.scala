@@ -541,8 +541,8 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_combinecount(tiles: Column): Column = ColumnAdapter(RST_CombineCount.name, Seq(tiles))
     def rst_align_to(tile: Column, referenceTile: Column): Column =
         ColumnAdapter(RST_AlignTo.name, Seq(tile, referenceTile))
-    def rst_chm(dsm: Column, dem: Column): Column =
-        ColumnAdapter(RST_Chm.name, Seq(dsm, dem))
+    def rst_chm(dsmTile: Column, demTile: Column): Column =
+        ColumnAdapter(RST_Chm.name, Seq(dsmTile, demTile))
     def rst_convolve(tile: Column, kernel: Column): Column = ColumnAdapter(RST_Convolve.name, Seq(tile, kernel))
     def rst_derivedband(tile: Column, pyfunc: String, funcName: String): Column =
         ColumnAdapter(RST_DerivedBand.name, Seq(tile, lit(pyfunc), lit(funcName)))

@@ -26,12 +26,12 @@ import scala.util.Try
   * alignment-padding pixels (pixels not covered by the source DSM) propagate to −9999.
   */
 case class RST_Chm(
-    tile: Expression,
-    referenceTile: Expression
+    dsmTile: Expression,
+    demTile: Expression
 ) extends InvokedExpression {
 
-    override def children: Seq[Expression] = Seq(tile, referenceTile, ExpressionConfigExpr())
-    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
+    override def children: Seq[Expression] = Seq(dsmTile, demTile, ExpressionConfigExpr())
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(dsmTile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_Chm.name
     override def replacement: Expression = invoke(RST_Chm)

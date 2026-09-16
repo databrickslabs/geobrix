@@ -212,7 +212,7 @@
     },
     "gbx_rst_chm": {
       "examples": "Examples:\n      > SELECT gbx_rst_chm(tile, tile) AS chm FROM dem_rasters;",
-      "usage_args": "tile, reference_tile",
+      "usage_args": "dsm_tile, dem_tile",
       "bindings": [
         "sql"
       ],

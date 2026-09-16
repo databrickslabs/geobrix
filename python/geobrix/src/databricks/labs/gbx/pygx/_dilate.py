@@ -587,7 +587,16 @@ def geom_expand(kind, k, mode, cls, neighbors, coverage=DEFAULT_COVERAGE):
     return acc if kind == "ring" else shell_k
 
 
-_LAZY_MODES = frozenset({"boundary-out", "boundary-in", "boundary-in-ignore-holes"})
+_LAZY_MODES = frozenset(
+    {
+        "boundary-out",
+        "boundary-in",
+        "boundary-in-ignore-holes",
+        "hole-in",
+        "hole-out",
+        "hole-out-ignore-geom",
+    }
+)
 
 
 def _lazy_boundary_in(mode, geom, res, hooks, coverage):
@@ -718,16 +727,117 @@ def _lazy_boundary_out(geom, res, hooks, coverage):
     return frontier, set(frontier), admit, k0
 
 
+def _lazy_hole(mode, geom, res, hooks, coverage):
+    """Lazy O(hole-perimeter) seed builder for hole-in / hole-out / hole-out-ignore-geom.
+
+    Returns ``(frontier0, visited0, admit, k0)`` matching :func:`mode_setup`'s
+    hole-* branches, but using on-demand :func:`_classify_cell` calls instead of
+    a pre-built :class:`Classification`.
+
+    Seeds come from the INTERIOR rings of the polygon (O(hole perimeter)):
+        hole_band  = _boundary_cells(interior_rings, point_to_cell, cell_step)
+        C          = hole_band ∪ neighbors(hole_band)
+        void_edge  = { c ∈ C : h_cover(c) and ∃ n, not h_cover(n) }
+        solid_edge = { c ∈ C : p_cover(c) and ∃ n, h_cover(n) }
+
+    For geometries with no holes (H is None), returns (empty, empty, reject_all, empty).
+
+    visited0 equivalence for hole-out / hole-out-ignore-geom:
+        ``mode_setup`` uses ``visited0 = h_cov ∪ solid_edge`` (O(hole area)).
+        Here we use ``visited0 = solid_edge`` alone, because:
+          - hole-out:             admit = p_x; deep hole cells are not in P → blocked.
+          - hole-out-ignore-geom: admit = not h_x; hole cells are in H_x → blocked.
+        Pre-visiting the entire hole interior is redundant; hole-in keeps
+        visited0 = void_edge unchanged.
+
+    Parameters
+    ----------
+    mode     : "hole-in" | "hole-out" | "hole-out-ignore-geom"
+    geom     : shapely Polygon or MultiPolygon
+    res      : resolution (unused here; kept for API symmetry with other lazy builders)
+    hooks    : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    if coverage not in _COVERAGE_BASIS:
+        raise ValueError(f"unknown coverage {coverage!r}; expected one of {COVERAGE}")
+    point_to_cell, cell_geom, neighbors, cell_step = hooks
+    S, H = _solid_and_holes(geom)
+    dim = _geom_dimension(geom)
+    basis = _COVERAGE_BASIS[coverage]
+
+    # No holes → all hole-* modes return empty
+    if H is None:
+        empty: frozenset = frozenset()
+        return empty, empty, (lambda n: False), empty  # noqa: E731
+
+    # Interior rings from the original geometry (S has holes filled, so S.interiors is empty)
+    _polys = list(geom.geoms) if isinstance(geom, MultiPolygon) else [geom]
+    int_rings = [r for p in _polys if p.geom_type == "Polygon" for r in p.interiors]
+    if not int_rings:
+        empty = frozenset()
+        return empty, empty, (lambda n: False), empty  # noqa: E731
+
+    hole_band = _boundary_cells(int_rings, point_to_cell, cell_step)
+    if not hole_band:
+        empty = frozenset()
+        return empty, empty, (lambda n: False), empty  # noqa: E731
+
+    # Memoize _classify_cell per cell id
+    _cache: dict = {}
+
+    def _m(c):
+        if c not in _cache:
+            _cache[c] = _classify_cell(c, cell_geom, geom, S, H, dim)
+        return _cache[c]
+
+    # Build C = hole_band ∪ {neighbors of each band cell}
+    C: set = set(hole_band)
+    for c in hole_band:
+        C.update(neighbors(c))
+
+    # void_edge: h_cover cells in C with at least one non-h_cover neighbor
+    void_edge = frozenset(
+        c for c in C if _m(c)["h_cover"] and any(not _m(n)["h_cover"] for n in neighbors(c))
+    )
+    # solid_edge: p_cover cells in C with at least one h_cover neighbor
+    solid_edge = frozenset(
+        c for c in C if _m(c)["p_cover"] and any(_m(n)["h_cover"] for n in neighbors(c))
+    )
+
+    h_key = "h_" + basis  # e.g. "h_cover", "h_centroid", "h_core"
+    p_key = "p_" + basis  # e.g. "p_cover", "p_centroid", "p_core"
+
+    if mode == "hole-in":
+        # Seed void-side; expand into the hole (admit H_basis).
+        # visited0 = void_edge (identical to mode_setup).
+        admit = lambda n: _m(n)[h_key]  # noqa: E731
+        k0 = frozenset(c for c in void_edge if _m(c)[h_key])
+        return void_edge, void_edge, admit, k0
+
+    if mode == "hole-out":
+        # Seed solid-side; expand into the solid (admit P_basis).
+        # visited0 = solid_edge: admit rejects deep hole cells (not in P) so
+        # pre-visiting all of h_cov is unnecessary.
+        admit = lambda n: _m(n)[p_key]  # noqa: E731
+        k0 = frozenset(c for c in solid_edge if _m(c)[p_key])
+        return solid_edge, frozenset(solid_edge), admit, k0
+
+    # hole-out-ignore-geom: solid-side seed, expand away from hole (admit not H_basis).
+    # visited0 = solid_edge: admit rejects H_basis cells, so pre-visiting h_cov is unnecessary.
+    admit = lambda n: not _m(n)[h_key]  # noqa: E731
+    return solid_edge, frozenset(solid_edge), admit, frozenset(solid_edge)
+
+
 def geom_expand_lazy(kind, k, mode, geom, res, hooks, coverage=DEFAULT_COVERAGE):
-    """Geometry-aware expand using lazy O(perimeter) seed paths for boundary modes.
+    """Geometry-aware expand using lazy O(perimeter) seed paths for all polygon modes.
 
     Drop-in replacement for
     ``geom_expand(kind, k, mode, classify(...), neighbors, coverage)``
     that avoids the full O(area) polyfill+classification by tracing the geometry
     boundary ring instead.
 
-    Handles ``mode`` in ``_LAZY_MODES``
-    (``"boundary-out"``, ``"boundary-in"``, ``"boundary-in-ignore-holes"``);
+    Handles all modes in ``_LAZY_MODES`` (boundary-out, boundary-in,
+    boundary-in-ignore-holes, hole-in, hole-out, hole-out-ignore-geom);
     raises :exc:`ValueError` for other modes.
 
     Parameters
@@ -750,8 +860,11 @@ def geom_expand_lazy(kind, k, mode, geom, res, hooks, coverage=DEFAULT_COVERAGE)
     _, _, neighbors, _ = hooks
     if mode == "boundary-out":
         frontier0, visited0, admit, k0 = _lazy_boundary_out(geom, res, hooks, coverage)
-    else:
+    elif mode in ("boundary-in", "boundary-in-ignore-holes"):
         frontier0, visited0, admit, k0 = _lazy_boundary_in(mode, geom, res, hooks, coverage)
+    else:
+        # hole-in, hole-out, hole-out-ignore-geom
+        frontier0, visited0, admit, k0 = _lazy_hole(mode, geom, res, hooks, coverage)
 
     if k == 0:
         return set(k0)

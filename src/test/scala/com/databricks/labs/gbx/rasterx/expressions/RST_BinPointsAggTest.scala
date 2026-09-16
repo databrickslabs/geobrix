@@ -34,6 +34,9 @@ class RST_BinPointsAggTest extends AnyFunSuite with BeforeAndAfterAll {
         GDALManager.loadSharedObjects(Iterable.empty[String])
         GDALManager.configureGDAL("/tmp", "/tmp", logCPL = true, CPL_DEBUG = "OFF")
         gdal.AllRegister()
+        // Mark GDALManager.isEnabled so eval()'s guard skips ExpressionConfigExpr
+        // resolution (which requires SparkEnv, unavailable in this bare unit test).
+        GDALManager.isEnabled = true
         Files.createDirectories(NodeFilePathUtil.rootPath)
     }
 

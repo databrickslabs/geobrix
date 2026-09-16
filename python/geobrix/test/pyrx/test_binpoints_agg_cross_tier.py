@@ -217,34 +217,15 @@ def _run_heavy(spark, stat):
     Heavy returns a tile STRUCT → read via _read_band_from_tile_struct.
     The non-null assertion is the primary regression guard for the agg plumbing.
 
-    GDAL WARM-UP NOTE:
-    ``RST_BinPointsAgg.eval()`` calls ``RST_BinPoints.execute()`` which calls
-    ``gdal.GetDriverByName("MEM")`` directly, without a ``safeEval`` wrapper and
-    without a call to ``RST_ExpressionUtil.init()``.  In the scalar path
-    ``RST_BinPoints.doInvoke`` wraps everything in ``safeEval``, which calls
-    ``RST_ExpressionUtil.init(exprConf)`` → ``GDALManager.init(config)`` →
-    ``gdal.AllRegister()`` — so the MEM driver is always available for scalars.
-    For the aggregate, GDAL must already be registered in the JVM by the time
-    ``eval()`` runs.  In ``local`` mode the executor IS the driver JVM, so running
-    any scalar heavy expression first registers GDAL for the whole process.
-    The warm-up below triggers exactly that init path.
+    GDAL init: ``RST_BinPointsAgg.eval()`` carries an ``ExpressionConfigExpr``
+    field (same pattern as ``RST_CombineAvgAgg``) and calls
+    ``RST_ExpressionUtil.init(exprConf)`` at the top of ``eval`` before invoking
+    ``RST_BinPoints.execute``.  No scalar warm-up is needed; the aggregate
+    self-initialises GDAL on first eval on any executor JVM.
     """
     from databricks.labs.gbx.rasterx import functions as hx
 
     hx.register(spark)
-
-    # Warm up GDAL: run a scalar gbx_rst_binpoints expression so
-    # RST_ExpressionUtil.init() is called (via safeEval) before the aggregate
-    # calls gdal.GetDriverByName("MEM") in RST_BinPoints.execute().
-    # Without this, the aggregate's eval() has no safeEval wrapper and GDAL is
-    # uninitialised → NullPointerException on memDrv.Create().
-    spark.range(1).createOrReplaceTempView("_bpa_gdal_warmup")
-    spark.sql(
-        "SELECT gbx_rst_binpoints("
-        "  array(0.5), array(1.5), array(10.0),"
-        "  0.0, 0.0, 2.0, 2.0, 2, 2, 4326, 'max'"
-        ") AS r FROM _bpa_gdal_warmup"
-    ).collect()
 
     df = spark.createDataFrame(
         _POINT_ROWS,

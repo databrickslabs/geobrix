@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
-import com.databricks.labs.gbx.expressions.WithExpressionInfo
+import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
@@ -8,6 +8,7 @@ import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
 
 /**
@@ -27,9 +28,11 @@ import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
   * Supported statistics: `"max"` (default), `"min"`, `"mean"`, `"median"`,
   * `"count"`, `"percentile:<p>"`.  Empty groups return `null`.
   *
-  * @note GDAL must be initialised before [[eval]] is called (e.g. via
-  *       `GDALManager.init` on the executor, or `gdal.AllRegister` in tests).
-  *       This is consistent with all other heavy-tier raster aggregators.
+  * GDAL is self-initialised in [[eval]] via the [[ExpressionConfigExpr]] child
+  * (same pattern as [[com.databricks.labs.gbx.rasterx.expressions.agg.RST_CombineAvgAgg]]):
+  * `ExpressionConfig.fromExpr(exprConfExpr)` resolves the serialised config and
+  * `RST_ExpressionUtil.init(exprConf)` calls `GDALManager.init → gdal.AllRegister`
+  * once per JVM before `RST_BinPoints.execute` calls `GetDriverByName("MEM")`.
   */
 final case class RST_BinPointsAgg(
     xExpr: Expression,
@@ -43,6 +46,7 @@ final case class RST_BinPointsAgg(
     heightPxExpr: Expression,
     sridExpr: Expression,
     statisticExpr: Expression,
+    exprConfExpr: Expression = ExpressionConfigExpr(),
     mutableAggBufferOffset: Int = 0,
     inputAggBufferOffset: Int = 0
 ) extends TypedImperativeAggregate[BinPointsAcc] {
@@ -94,6 +98,14 @@ final case class RST_BinPointsAgg(
 
     override def eval(buffer: BinPointsAcc): Any = {
         if (buffer.points.isEmpty) return null
+        // Initialise GDAL once per JVM — idempotent when already enabled (e.g. unit tests
+        // that call gdal.AllRegister() in beforeAll, or a warm executor that ran a prior
+        // GDAL expression).  Cold executor JVMs (no prior GDAL expression) reach here with
+        // GDALManager.isEnabled == false and need the full init via ExpressionConfigExpr.
+        if (!GDALManager.isEnabled) {
+            val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
+            RST_ExpressionUtil.init(exprConf)
+        }
         val emptyRow = InternalRow.empty
         val xmin    = evalDouble(xminExpr,     emptyRow, "xmin")
         val ymin    = evalDouble(yminExpr,     emptyRow, "ymin")

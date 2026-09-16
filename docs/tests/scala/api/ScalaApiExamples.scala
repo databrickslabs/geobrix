@@ -1359,6 +1359,37 @@ result.show()
   // Aggregators family (Scala)
   // ===========================================================================
 
+  val rst_binpoints_agg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+rx.register(spark)
+// Multi-row fixture: 3 BNG (EPSG:27700) scalar x/y/z rows over a 1 km extent at 10×10 pixels.
+val schema = StructType(Seq(
+  StructField("region", StringType()), StructField("x", DoubleType()),
+  StructField("y", DoubleType()), StructField("z", DoubleType())))
+val rows = Seq(("R1",550100.0,180100.0,42.5),("R1",550200.0,180200.0,45.1),("R1",550300.0,180500.0,38.7))
+val df = spark.createDataFrame(spark.sparkContext.parallelize(rows.map(r => org.apache.spark.sql.Row(r._1,r._2,r._3,r._4))), schema)
+val result = df.groupBy("region").agg(
+  rx.rst_binpoints_agg(col("x"), col("y"), col("z"),
+    lit(550000.0), lit(180000.0), lit(551000.0), lit(181000.0),
+    lit(10), lit(10), lit(27700)).alias("tile")
+)
+result.show()
+""".trim
+
+  val rst_binpoints_agg_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
+""".trim
+
   val rst_combineavg_agg_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

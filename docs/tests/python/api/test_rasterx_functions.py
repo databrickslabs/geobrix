@@ -594,6 +594,13 @@ def test_rst_binpoints_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_binpoints")
 
 
+def test_rst_binpoints_agg_python_heavy_example(spark):
+    """rst_binpoints_agg returns a non-null Float32 tile struct from scalar point rows."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_binpoints_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_binpoints_agg")
+
+
 # ---------------------------------------------------------------------------
 # Band-math examples (tabbed docs: 10 functions)
 # All heavy band-math fns currently hit the GDAL null-output-dataset bug:

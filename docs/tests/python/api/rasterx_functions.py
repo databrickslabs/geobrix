@@ -3999,3 +3999,72 @@ rst_binpoints_python_heavy_example_output = """
 +-----------------------------------------------------------+
 (Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
 """
+
+
+# ---------------------------------------------------------------------------
+# rst_binpoints_agg -- bin one scalar (x, y, z) point per row into a tile
+# Fixture: synthesized 3 BNG (EPSG:27700) scalar rows over a 1 km extent
+# Output: tile struct (returns a Float32 raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_binpoints_agg_python_heavy_example(spark):
+    """Bin one scalar (x, y, z) point per row into a Float32 raster tile per group via the heavy rasterx tier.
+
+    Multi-row fixture: 3 rows of scalar BNG (EPSG:27700) x/y/z coordinates over
+    a 1 km extent [550000, 180000, 551000, 181000] at 10×10 pixels.
+    Grouped by region, producing 1 Float32 tile row where each pixel holds the
+    max z-value of points falling in that pixel; empty pixels carry NoData (-9999.0).
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from pyspark.sql.types import (
+        DoubleType,
+        StringType,
+        StructField,
+        StructType,
+    )  # noqa: PLC0415
+
+    rows = [
+        ("R1", 550100.0, 180100.0, 42.5),
+        ("R1", 550200.0, 180200.0, 45.1),
+        ("R1", 550300.0, 180500.0, 38.7),
+    ]
+    schema = StructType(
+        [
+            StructField("region", StringType()),
+            StructField("x", DoubleType()),
+            StructField("y", DoubleType()),
+            StructField("z", DoubleType()),
+        ]
+    )
+    df = spark.createDataFrame(rows, schema)
+    result = (
+        df.groupBy("region")
+        .agg(
+            rx.rst_binpoints_agg(
+                "x",
+                "y",
+                "z",
+                f.lit(550000.0),
+                f.lit(180000.0),
+                f.lit(551000.0),
+                f.lit(181000.0),
+                f.lit(10),
+                f.lit(10),
+                f.lit(27700),
+            ).alias("tile")
+        )
+        .first()
+    )
+    return result["tile"]
+
+
+rst_binpoints_agg_python_heavy_example_output = """
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
+"""

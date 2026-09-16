@@ -35,11 +35,10 @@ Expected results (reference machine: geobrix-dev Docker, 4-core, 8 GB):
 from __future__ import annotations
 
 import time
-from typing import Any, Callable
+from typing import Callable
 
 import pytest
-import shapely
-from shapely.geometry import MultiPolygon, Polygon
+from shapely.geometry import Polygon
 
 from databricks.labs.gbx.pygx import _bng, _custom, _dilate, _h3, _quadbin
 
@@ -350,7 +349,7 @@ def test_bench_quadbin_large():
     )
     print(
         f"\n[quadbin z={z}] N_interior={n_interior}, "
-        f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×"
+        f"before={t_before * 1000:.0f}ms, after={t_after * 1000:.0f}ms, speedup={ratio:.1f}×"
     )
     assert ratio >= 5, f"Expected ≥5× speedup for quadbin, got {ratio:.1f}×"
 
@@ -371,7 +370,7 @@ def test_bench_bng_large():
     n_interior = len(_bng.classify_bng(geom, res).s_cover)
     print(
         f"\n[bng res={res}] N_interior={n_interior}, "
-        f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×"
+        f"before={t_before * 1000:.0f}ms, after={t_after * 1000:.0f}ms, speedup={ratio:.1f}×"
     )
     assert ratio >= 5, f"Expected ≥5× speedup for BNG, got {ratio:.1f}×"
 
@@ -395,7 +394,7 @@ def test_bench_custom_large():
     n_interior = len(_custom.classify(conf, geom, res).s_cover)
     print(
         f"\n[custom res={res}] N_interior={n_interior}, "
-        f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×"
+        f"before={t_before * 1000:.0f}ms, after={t_after * 1000:.0f}ms, speedup={ratio:.1f}×"
     )
     assert ratio >= 5, f"Expected ≥5× speedup for custom, got {ratio:.1f}×"
 
@@ -415,7 +414,7 @@ def test_bench_h3_native_res8():
     result, t_native = _timed(lambda: _h3_native(geom, res), n_warmup=1, n_rep=3)
     n_interior = len(_h3.classify(geom, res).s_cover)
     print(
-        f"\n[h3 res={res}] N_interior={n_interior}, native={t_native*1000:.0f}ms"
+        f"\n[h3 res={res}] N_interior={n_interior}, native={t_native * 1000:.0f}ms"
         f"\n  NOTE: native path (not converted — bulk polyfill outperforms perimeter-walk for h3)"
     )
     assert result is not None
@@ -616,8 +615,6 @@ def test_regression_lazy_skips_polyfill_custom(monkeypatch):
 
 def _run_benchmark():
     """Print per-grid speedup table.  Called when this file is run as a script."""
-    import sys
-
     print("=" * 72)
     print("GeoBrix geom-aware kring boundary-as-line speedup benchmark")
     print("(BEFORE = O(area) classify+expand; AFTER = lazy O(perimeter) public path)")
@@ -679,7 +676,7 @@ def _run_benchmark():
     for name, n_int, tb, ta in rows:
         ratio = tb / ta if ta > 0 else float("inf")
         print(
-            f"  {name:<26} {n_int:>12,} {tb*1000:>12.0f} {ta*1000:>10.0f} {ratio:>8.1f}×"
+            f"  {name:<26} {n_int:>12,} {tb * 1000:>12.0f} {ta * 1000:>10.0f} {ratio:>8.1f}×"
         )
 
     # -----------------------------------------------------------------------
@@ -690,7 +687,7 @@ def _run_benchmark():
     _, t_native10 = _timed(lambda: _h3_native(geom_wgs10, res), n_warmup=1, n_rep=3)
     n_int = len(_h3.classify(geom_wgs10, res).s_cover)
     print(
-        f"  {'h3 res=10 (native,large)':<26} {n_int:>12,} {t_native10*1000:>12.0f} {'[native]':>10} {'n/a':>9}"
+        f"  {'h3 res=10 (native,large)':<26} {n_int:>12,} {t_native10 * 1000:>12.0f} {'[native]':>10} {'n/a':>9}"
     )
 
     # -----------------------------------------------------------------------

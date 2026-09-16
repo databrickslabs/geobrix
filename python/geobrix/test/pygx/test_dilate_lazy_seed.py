@@ -14,9 +14,8 @@ from __future__ import annotations
 import pytest
 from shapely.geometry import box
 
+# _dilate internals below: RED/GREEN trigger (ImportError until Task 1 done).
 from databricks.labs.gbx.pygx import _dilate as D
-
-# These three imports are the RED/GREEN trigger — ImportError until Task 1 is done.
 from databricks.labs.gbx.pygx._dilate import (
     _boundary_cells,
     _classify_cell,

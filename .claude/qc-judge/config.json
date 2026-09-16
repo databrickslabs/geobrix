@@ -66,6 +66,15 @@
       "expect_exit": 0,
       "timeout_seconds": 30
     },
+    "reader-since-tags": {
+      "name": "Every reader/writer docs page carries a canonical _Since:_ version line",
+      "type": "command",
+      "severity": "warn",
+      "enabled": true,
+      "cmd": "[ -f docs/scripts/check-reader-since-tags.py ] || { echo 'absent; skip'; exit 0; }; python3 docs/scripts/check-reader-since-tags.py",
+      "expect_exit": 0,
+      "timeout_seconds": 20
+    },
     "python-black": {
       "name": "Python isort/black/flake8 clean in Docker (CI-pinned; matches the main-PR lint gate)",
       "type": "command",

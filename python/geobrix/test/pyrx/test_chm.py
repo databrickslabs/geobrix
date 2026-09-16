@@ -138,6 +138,59 @@ def test_chm_misaligned_grid_output_shape_equals_dem(spark):
 # ---------------------------------------------------------------------------
 
 
+def test_chm_padded_dsm_below_datum_no_spurious_canopy(spark):
+    """A nodata-less DSM smaller than the DEM must not invent canopy on padding.
+
+    When the DSM has ``nodata=None`` and a smaller extent than the DEM, the
+    alignment step warps it onto the DEM grid and leaves uncovered pixels at
+    GDAL's fill value (0). If those filled 0s are treated as a valid surface,
+    ``CHM = clamp(0 - DEM, 0)`` invents positive canopy everywhere the DEM sits
+    below datum (bathymetry, polders, Death Valley). Uncovered pixels must be
+    NoData instead.
+    """
+    from databricks.labs.gbx.pyrx import functions as fns
+
+    fns.register(spark, only=["gbx_rst_chm", "gbx_rst_fromcontent"])
+
+    # DEM: 4x4, entirely below datum (-20 m), fully valid.
+    dem = _make_geotiff_bytes(
+        np.full((4, 4), -20.0, dtype="float32"),
+        pixel_size=1.0,
+        ulx=10.0,
+        uly=50.0,
+    )
+    # DSM: 2x2 covering only the DEM's top-left quadrant, and crucially NO nodata.
+    dsm = _make_geotiff_bytes(
+        np.full((2, 2), 5.0, dtype="float32"),
+        nodata=None,
+        pixel_size=1.0,
+        ulx=10.0,
+        uly=50.0,
+    )
+
+    df = spark.createDataFrame([(dsm, dem)], "dsm binary, dem binary")
+    out = df.selectExpr(
+        "gbx_rst_chm(gbx_rst_fromcontent(dsm, 'GTiff'), gbx_rst_fromcontent(dem, 'GTiff')) AS r"
+    ).collect()[0]["r"]
+
+    with MemoryFile(bytes(out["raster"])) as mf, mf.open() as ds:
+        arr = ds.read(1)
+        result_nodata = ds.nodata
+
+    assert result_nodata == pytest.approx(-9999.0)
+    # Covered quadrant: real canopy = clamp(5 - (-20), 0) = 25.
+    assert arr[0, 0] == pytest.approx(
+        25.0
+    ), f"Expected 5-(-20)=25 at [0,0], got {arr[0, 0]}"
+    # Uncovered pixels must be NoData, NOT the spurious clamp(0-(-20),0)=20.
+    assert arr[3, 3] == pytest.approx(
+        -9999.0
+    ), f"Uncovered pixel must be NoData, got {arr[3, 3]} (spurious canopy if ~20)"
+    assert arr[2, 2] == pytest.approx(
+        -9999.0
+    ), f"Uncovered pixel must be NoData, got {arr[2, 2]}"
+
+
 def test_chm_nodata_propagation(spark):
     """NoData in either input must propagate to -9999 in output, not 0."""
     from databricks.labs.gbx.pyrx import functions as fns

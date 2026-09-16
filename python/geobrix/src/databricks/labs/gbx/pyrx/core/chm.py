@@ -32,7 +32,10 @@ def chm(dsm_bytes: bytes, dem_bytes: bytes) -> bytes:
         Single-band Float32 GTiff bytes; nodata = -9999.  Returns ``None`` if
         either input is missing/empty (mirrors ``agg.align_to_tiles`` behaviour).
     """
-    aligned_dsm = agg.align_to_tiles(dsm_bytes, dem_bytes)
+    # Force uncovered (extent-padded) pixels to the NoData sentinel: a DSM with
+    # nodata=None would otherwise leave them at GDAL's fill of 0 and be read as
+    # a valid 0 m surface, inventing canopy wherever the DEM sits below datum.
+    aligned_dsm = agg.align_to_tiles(dsm_bytes, dem_bytes, dst_nodata=_NODATA)
     if aligned_dsm is None:
         return None
 

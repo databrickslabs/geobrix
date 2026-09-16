@@ -1450,6 +1450,13 @@ within the pixel cell. Empty cells carry NoData (−9999). The bounding box uses
 half-open interval on the upper x/y edges to prevent double-counting when DSM tiles
 are assembled from adjacent strips.
 
+**What it computes.** This is the point-cloud→raster (DSM-building) step: every input
+point is dropped into the grid cell its (x, y) falls in, and the pixel value is the chosen
+reduction of the z-values that landed there. With the default `"max"` that is the *tallest*
+return per cell — a surface model (DSM), exactly the input [`rst_chm`](#rst_chm) differences
+against a DEM; `"min"`/`"mean"`/`"median"`/`"count"`/`"percentile:<p>"` reduce the same
+points into other surfaces.
+
 **Signature:** `rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])`
 
 **Parameters:** `x_array`, `y_array`, `z_array` — parallel `ARRAY<DOUBLE>` columns of point coordinates and z-values; `xmin`/`ymin`/`xmax`/`ymax` — extent in CRS units; `width_px`/`height_px` — output pixel dimensions; `srid` — EPSG code; `statistic` — one of `"max"` (default, highest return for DSMs), `"min"`, `"mean"`, `"median"`, `"count"`, or `"percentile:<p>"` (e.g. `"percentile:90"`).
@@ -1468,7 +1475,9 @@ are assembled from adjacent strips.
 Aggregator variant of [`rst_binpoints`](#rst_binpoints): stream **one scalar (x, y, z) point
 per row** into a DSM tile via `groupBy(...).agg(rx.rst_binpoints_agg(...))`. The
 `xmin`/`ymin`/`xmax`/`ymax`/`width_px`/`height_px`/`srid`/`statistic` arguments are
-per-group constants.
+per-group constants. The per-cell binning is identical to [`rst_binpoints`](#rst_binpoints) —
+see **What it computes** there for the reduction semantics and statistic modes — it just
+streams one point per row instead of a per-row array.
 
 The lightweight SQL aggregate returns **`BINARY`** (raster bytes). Wrap with
 `gbx_rst_fromcontent(<agg>, 'GTiff')` to rebuild a tile struct. The lightweight Python

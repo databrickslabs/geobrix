@@ -2718,6 +2718,8 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
+Per-pixel mean across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the mean of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use for temporal/ensemble composites such as cloud-reduced mean reflectance.
+
 **Signature:** `rst_combineavg(tiles: Column): Column` — Average multiple tiles (e.g. temporal composite).
 
 <FunctionExamples
@@ -2737,7 +2739,7 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns a tile where each pixel is the count of valid (non-NoData) inputs across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output (never 0 for an all-NoData pixel). Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles. Use alongside the other `rst_combine*` reducers to build multi-statistic temporal or ensemble composites.
+Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the number of inputs whose value at that location is valid; a location that is NoData in *every* input yields NoData (never 0). Use alongside the other `rst_combine*` reducers to build multi-statistic temporal or ensemble composites.
 
 **Signature:** `rst_combinecount(tiles: Column): Column` — Count of valid pixels per location.
 
@@ -2758,7 +2760,7 @@ Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles.
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel maximum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel maximum across an `ARRAY` of aligned tiles. Use to build cloud-free maximum-NDVI composites or storm-peak accumulations.
+Per-pixel maximum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the largest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to build cloud-free maximum-NDVI composites or storm-peak accumulations.
 
 **Signature:** `rst_combinemax(tiles: Column): Column` — Maximum pixel value per location.
 
@@ -2779,7 +2781,7 @@ Per-pixel maximum across an `ARRAY` of aligned tiles. Use to build cloud-free ma
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel median; input tiles must share the same grid (shape/extent/CRS). Even-count median uses the mean of the two middle values (`numpy np.ma.median` convention). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel median across an `ARRAY` of aligned tiles. Robust to outliers — useful for seasonal median composites from time-series imagery.
+Per-pixel median across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the median of that location's valid (non-NoData) values across the stack (even counts average the two middle values; a pixel that is NoData in *every* input stays NoData). Robust to outliers — useful for seasonal median composites from time-series imagery.
 
 **Signature:** `rst_combinemedian(tiles: Column): Column` — Median pixel value per location.
 
@@ -2800,7 +2802,7 @@ Per-pixel median across an `ARRAY` of aligned tiles. Robust to outliers — usef
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel minimum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel minimum across an `ARRAY` of aligned tiles. Use to extract the lowest-cloud-probability pixel from a time stack or to track cumulative minimum temperatures.
+Per-pixel minimum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the smallest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to extract the lowest-cloud-probability pixel from a time stack or to track cumulative minimum temperatures.
 
 **Signature:** `rst_combinemin(tiles: Column): Column` — Minimum pixel value per location.
 
@@ -2821,7 +2823,7 @@ Per-pixel minimum across an `ARRAY` of aligned tiles. Use to extract the lowest-
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel population standard deviation (ddof=0) across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel population standard deviation across an `ARRAY` of aligned tiles. Quantifies variability in a time-series or multi-scene ensemble — high values indicate heterogeneous pixels.
+Per-pixel population standard deviation across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the population standard deviation (ddof=0) of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Quantifies variability in a time-series or multi-scene ensemble — high values indicate heterogeneous pixels.
 
 **Signature:** `rst_combinestddev(tiles: Column): Column` — Population standard deviation of pixel values per location.
 
@@ -2842,7 +2844,7 @@ Per-pixel population standard deviation across an `ARRAY` of aligned tiles. Quan
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel sum across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel sum across an `ARRAY` of aligned tiles. Use to accumulate total precipitation from a daily time-series or to sum spectral flux across dates.
+Per-pixel sum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the sum of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to accumulate total precipitation from a daily time-series or to sum spectral flux across dates.
 
 **Signature:** `rst_combinesum(tiles: Column): Column` — Sum of pixel values per location.
 

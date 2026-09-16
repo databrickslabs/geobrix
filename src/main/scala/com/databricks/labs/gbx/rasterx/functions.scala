@@ -11,7 +11,7 @@ import com.databricks.labs.gbx.rasterx.expressions.grid._
 import com.databricks.labs.gbx.rasterx.expressions.pixel._
 import com.databricks.labs.gbx.rasterx.expressions.resample._
 import com.databricks.labs.gbx.rasterx.expressions.spectral._
-import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Polygonize, RST_Rasterize}
+import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize, RST_Rasterize}
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
@@ -174,6 +174,7 @@ object functions extends Serializable {
         // Vector<->raster bridge
         rd.register(RST_Rasterize)
         rd.register(RST_Polygonize)
+        rd.register(RST_Isoband)
 
         // Terrain analysis (DEM processing)
         rd.register(RST_Aspect)
@@ -715,6 +716,8 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_Polygonize.name, Seq(tile, band, lit(4)))
     def rst_polygonize(tile: Column, band: Column, connectedness: Column): Column =
         ColumnAdapter(RST_Polygonize.name, Seq(tile, band, connectedness))
+    def rst_isoband(tile: Column, breaks: Column): Column =
+        ColumnAdapter(RST_Isoband.name, Seq(tile, breaks))
 
     // Terrain analysis (DEM processing) - Column form
     def rst_slope(tile: Column): Column =

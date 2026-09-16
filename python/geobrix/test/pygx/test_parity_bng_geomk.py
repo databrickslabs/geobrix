@@ -287,7 +287,13 @@ def test_parity_bng_geomkring_boundary_out_aligned(spark_with_jar, coverage):
     light = _collect_light(_BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage)
     hx.register(spark)
     heavy = _collect_heavy(
-        spark, _BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", "gbx_bng_geomkring", coverage
+        spark,
+        _BNG_ALIGNED_GEOM,
+        _RES_ALIGNED,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkring",
+        coverage,
     )
     assert light == heavy, (
         f"geomkring aligned boundary-out coverage={coverage}: "
@@ -303,10 +309,18 @@ def test_parity_bng_geomkloop_boundary_out_aligned(spark_with_jar, coverage):
 
     spark = spark_with_jar
     gx.register(spark)
-    light = _collect_light_loop(_BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage)
+    light = _collect_light_loop(
+        _BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
+    )
     hx.register(spark)
     heavy = _collect_heavy(
-        spark, _BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", "gbx_bng_geomkloop", coverage
+        spark,
+        _BNG_ALIGNED_GEOM,
+        _RES_ALIGNED,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkloop",
+        coverage,
     )
     assert light == heavy, (
         f"geomkloop aligned boundary-out coverage={coverage}: "
@@ -325,7 +339,13 @@ def test_parity_bng_geomkring_boundary_out_large(spark_with_jar, coverage):
     light = _collect_light(_BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
     hx.register(spark)
     heavy = _collect_heavy(
-        spark, _BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", "gbx_bng_geomkring", coverage
+        spark,
+        _BNG_LARGE_GEOM,
+        _RES_LARGE,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkring",
+        coverage,
     )
     assert light == heavy, (
         f"geomkring large boundary-out coverage={coverage}: "
@@ -341,10 +361,18 @@ def test_parity_bng_geomkloop_boundary_out_large(spark_with_jar, coverage):
 
     spark = spark_with_jar
     gx.register(spark)
-    light = _collect_light_loop(_BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
+    light = _collect_light_loop(
+        _BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage
+    )
     hx.register(spark)
     heavy = _collect_heavy(
-        spark, _BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", "gbx_bng_geomkloop", coverage
+        spark,
+        _BNG_LARGE_GEOM,
+        _RES_LARGE,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkloop",
+        coverage,
     )
     assert light == heavy, (
         f"geomkloop large boundary-out coverage={coverage}: "

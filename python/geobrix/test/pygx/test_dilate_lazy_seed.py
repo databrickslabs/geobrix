@@ -23,7 +23,6 @@ from databricks.labs.gbx.pygx._dilate import (
     _local_perimeter,
 )
 
-
 # ===========================================================================
 # Synthetic grid helpers  (pattern from test_dilate_engine.py)
 # ===========================================================================
@@ -118,9 +117,15 @@ def test_classify_cell_returns_nine_keys(simple_poly, simple_cls):
     c = next(iter(simple_cls.s_cover))
     m = _classify_cell(c, _cell_geom, simple_poly, S, H, dim)
     expected_keys = {
-        "p_cover", "p_centroid", "p_core",
-        "s_cover", "s_centroid", "s_core",
-        "h_cover", "h_centroid", "h_core",
+        "p_cover",
+        "p_centroid",
+        "p_core",
+        "s_cover",
+        "s_centroid",
+        "s_core",
+        "h_cover",
+        "h_centroid",
+        "h_core",
     }
     assert set(m.keys()) == expected_keys, f"unexpected keys: {set(m.keys())}"
 
@@ -148,11 +153,20 @@ def test_classify_cell_refactor_matches_classify_output(simple_poly):
     # needed for a non-degenerate polygon).
     cands = set(_polyfill(S, 1))
 
-    rebuilt = {k: set() for k in (
-        "p_cover", "p_centroid", "p_core",
-        "s_cover", "s_centroid", "s_core",
-        "h_cover", "h_centroid", "h_core",
-    )}
+    rebuilt = {
+        k: set()
+        for k in (
+            "p_cover",
+            "p_centroid",
+            "p_core",
+            "s_cover",
+            "s_centroid",
+            "s_core",
+            "h_cover",
+            "h_centroid",
+            "h_core",
+        )
+    }
     for c in cands:
         for k, v in _classify_cell(c, _cell_geom, simple_poly, S, H, dim).items():
             if v:
@@ -239,9 +253,9 @@ def test_local_perimeter_equals_outer_perimeter_aligned(aligned_poly, aligned_cl
     outer_perimeter and _local_perimeter must be non-empty AND equal.
     """
     # Fixture invariant: confirm alignment (s_border empty = no straddling cells).
-    assert aligned_cls.s_border == set(), (
-        "aligned_poly fixture broken: s_border must be empty for a grid-aligned polygon"
-    )
+    assert (
+        aligned_cls.s_border == set()
+    ), "aligned_poly fixture broken: s_border must be empty for a grid-aligned polygon"
 
     rings = [aligned_poly.exterior]
     band = _boundary_cells(rings, _point_to_cell, CELL_STEP)
@@ -265,6 +279,6 @@ def test_local_perimeter_returns_frozenset(simple_poly, simple_cls):
     rings = [simple_poly.exterior]
     band = _boundary_cells(rings, _point_to_cell, CELL_STEP)
     result = _local_perimeter(band, _neighbors, _in_region(simple_cls.s_cover))
-    assert isinstance(result, frozenset), (
-        f"expected frozenset, got {type(result).__name__}"
-    )
+    assert isinstance(
+        result, frozenset
+    ), f"expected frozenset, got {type(result).__name__}"

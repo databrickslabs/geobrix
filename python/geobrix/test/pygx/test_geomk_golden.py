@@ -65,9 +65,9 @@ _FIXTURES = ("simple", "holed", "aligned", "line", "point", "gc")
 # Per-grid resolution (single resolution for all fixtures in that grid)
 # ===========================================================================
 
-_QB_RES = 10   # quadbin zoom 10  — tiles ~0.35° wide
-_H3_RES = 7    # h3 resolution 7  — cells ~1.22 km²
-_BNG_RES = 3   # bng resolution 3 — 1 km cells (EPSG:27700)
+_QB_RES = 10  # quadbin zoom 10  — tiles ~0.35° wide
+_H3_RES = 7  # h3 resolution 7  — cells ~1.22 km²
+_BNG_RES = 3  # bng resolution 3 — 1 km cells (EPSG:27700)
 _CUST_RES = 0  # custom grid res 0 — 1 000 m cells
 
 # custom-grid constructor kwargs (matching parity tests)
@@ -185,8 +185,7 @@ def _build_h3_aligned() -> Polygon | MultiPolygon:
     center = h3.latlng_to_cell(51.52, -0.07, _H3_RES)
     disk = h3.grid_disk(center, 2)
     polys = [
-        Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(cell)])
-        for cell in disk
+        Polygon([(lng, lat) for lat, lng in h3.cell_to_boundary(cell)]) for cell in disk
     ]
     return unary_union(polys)
 
@@ -359,7 +358,9 @@ def _run_quadbin(geom, kind: str, k: int, mode: str, coverage: str) -> list:
 
     wkb = _wkb(geom)
     if kind == "ring":
-        return sorted(_quadbin.geometry_k_ring(wkb, _QB_RES, k, mode, coverage=coverage))
+        return sorted(
+            _quadbin.geometry_k_ring(wkb, _QB_RES, k, mode, coverage=coverage)
+        )
     return sorted(_quadbin.geometry_k_loop(wkb, _QB_RES, k, mode, coverage=coverage))
 
 
@@ -385,8 +386,12 @@ def _run_custom(geom, kind: str, k: int, mode: str, coverage: str) -> list:
     conf = _custom.CustomGridConf(**_CUST_GRID_ARGS)
     wkb = _wkb(geom)
     if kind == "ring":
-        return sorted(_custom.geometry_k_ring(conf, wkb, _CUST_RES, k, mode, coverage=coverage))
-    return sorted(_custom.geometry_k_loop(conf, wkb, _CUST_RES, k, mode, coverage=coverage))
+        return sorted(
+            _custom.geometry_k_ring(conf, wkb, _CUST_RES, k, mode, coverage=coverage)
+        )
+    return sorted(
+        _custom.geometry_k_loop(conf, wkb, _CUST_RES, k, mode, coverage=coverage)
+    )
 
 
 _DISPATCHERS = {
@@ -404,7 +409,9 @@ def _run_one(grid: str, geom, kind: str, k: int, mode: str, coverage: str) -> li
     return _DISPATCHERS[grid](geom, kind, k, mode, coverage)
 
 
-def _corpus_key(grid: str, mode: str, coverage: str, kind: str, k: int, fixture: str) -> str:
+def _corpus_key(
+    grid: str, mode: str, coverage: str, kind: str, k: int, fixture: str
+) -> str:
     return f"{grid}|{mode}|{coverage}|{kind}|{k}|{fixture}"
 
 
@@ -420,7 +427,14 @@ def _generate_corpus() -> dict:
     Degenerate combos (empty result) are recorded as [].
     """
     corpus: dict = {}
-    total = len(_GRIDS) * len(_MODES) * len(_COVERAGES) * len(_KINDS) * len(_K_VALUES) * len(_FIXTURES)
+    total = (
+        len(_GRIDS)
+        * len(_MODES)
+        * len(_COVERAGES)
+        * len(_KINDS)
+        * len(_K_VALUES)
+        * len(_FIXTURES)
+    )
     done = 0
 
     for grid in _GRIDS:
@@ -430,7 +444,9 @@ def _generate_corpus() -> dict:
                 for coverage in _COVERAGES:
                     for kind in _KINDS:
                         for k in _K_VALUES:
-                            key = _corpus_key(grid, mode, coverage, kind, k, fixture_name)
+                            key = _corpus_key(
+                                grid, mode, coverage, kind, k, fixture_name
+                            )
                             try:
                                 result = _run_one(grid, geom, kind, k, mode, coverage)
                                 corpus[key] = result

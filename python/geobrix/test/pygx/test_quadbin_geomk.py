@@ -137,3 +137,63 @@ def test_hole_in_mode_reaches_hcore():
     # Must not contain cells that are only in the solid interior (pCore \ hCover).
     solid_only = cls.p_core - cls.h_cover
     assert not (expanded & solid_only), "hole-in result leaked into solid pCore"
+
+
+# High-latitude gap fixture: a tall, narrow box spanning 60–80°N at zoom 5.
+#
+# Why this exercises the latitude-aware step gap:
+#   cell_step_lon = 360 / 2^5 = 11.25° (longitude width per tile at zoom 5)
+#   At 80°N: tile lat-height ≈ cos(80°) * 11.25° ≈ 0.174 * 11.25° ≈ 1.96°
+#
+# Pre-fix: the VERTICAL west/east edges (dy = 20°, dx ≈ 0) are sampled with
+#   n = max(1, int(20 / 11.25) + 1) = 2  →  3 sample points: 60°N (y=9), 70°N (y=7), 80°N (y=3)
+#   (tile indices at zoom 5; computed from the web-mercator projection)
+#   After 1-ring dilation C covers {y=10,9}, {y=8,7,6}, {y=4,3,2} — but y=5
+#   (approximately 73–76°N, also x=16) is NOT in C:
+#     y=6 ∈ C (neighbor of y=7), y=4 ∈ C (neighbor of y=3), but y=5 ∉ C because
+#     _local_perimeter expands ONE ring only — y=5 is 2 steps from y=3 and 2 from y=7,
+#     and not a neighbor of any band cell.
+#   Since y=5 overlaps the polygon it is in s_cover, but the lazy seed misses it.
+#
+# Post-fix: lat_step = 11.25° * cos(80°) ≈ 1.96°
+#   n = max(1, int(20 / 1.96) + 1) = 11  →  12 sample points, ≈1.67° apart.
+#   Every tile row (≈2–3° tall at these latitudes) gets at least one sample → y=5 captured.
+_QB_HIGH_LAT_GEOM = box(0.0, 60.0, 2.0, 80.0)
+_RES_HIGH_LAT = 5
+
+
+def test_quadbin_high_lat_lazy_matches_oracle():
+    """Lazy boundary-out at ~75°N equals the O(area) oracle after the lat-step fix.
+
+    Pre-fix: the longitude-only step (11.25° at zoom 5) samples the 20°-tall
+    vertical edge with only 3 points (60°N, 70°N, 80°N); after 1-ring dilation
+    the band C misses tile y=5 (~73–76°N) → lazy seed ≠ oracle seed → lazy ≠ oracle.
+
+    Post-fix: lat_step ≈ 1.96° gives 12 points → y=5 is captured → lazy == oracle.
+    """
+    from databricks.labs.gbx.pygx import _dilate
+
+    geom = _QB_HIGH_LAT_GEOM
+    res = _RES_HIGH_LAT
+    k = 1
+
+    # Oracle: full O(area) classify + geom_expand (never affected by lat step).
+    cls = _quadbin.classify(geom, res)
+    oracle = sorted(
+        _dilate.geom_expand(
+            "ring", k, "boundary-out", cls, lambda c: _quadbin.k_loop(c, 1)
+        )
+    )
+
+    # Lazy path via the public API (uses geom_expand_lazy with the lat-aware step post-fix).
+    lazy = sorted(_quadbin.geometry_k_ring(to_wkb(geom), res, k, "boundary-out"))
+
+    # Verify the oracle is non-trivial (sanity-check the fixture).
+    assert len(oracle) > 0, "oracle must be non-empty for this fixture"
+
+    assert lazy == oracle, (
+        f"High-lat lazy boundary-out mismatch at zoom {res}, 60–80°N: "
+        f"oracle has {len(oracle)} cells, lazy has {len(lazy)} cells; "
+        f"cells in oracle only: {sorted(set(oracle) - set(lazy))[:10]}; "
+        f"cells in lazy only: {sorted(set(lazy) - set(oracle))[:10]}"
+    )

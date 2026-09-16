@@ -108,6 +108,19 @@ trait GridSystem extends Serializable {
     throw new UnsupportedOperationException(
       s"cellStep not implemented for grid '${name}'; override in concrete GridSystem"
     )
+
+  /**
+   * Geometry-aware cell step for boundary-ring sampling at `resolution`.
+   *
+   * For most grids this equals `cellStep(resolution)`. Quadbin overrides this to
+   * multiply by `cos(maxAbsLat)` (where `maxAbsLat` is max(|yMin|, |yMax|) from the
+   * geometry envelope) so the sampling step is ≤ the tile's latitude height anywhere
+   * on Earth — preventing coarse sampling of near-vertical boundary segments at high
+   * latitudes that would skip cells between sampled points.
+   *
+   * Mirrors light `_qb_lat_step` in `_quadbin.py`.
+   */
+  def geomCellStep(geom: Geometry, resolution: Int): Double = cellStep(resolution)
 }
 
 object GridSystem {

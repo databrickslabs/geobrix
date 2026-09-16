@@ -338,7 +338,7 @@ object GeomDilation {
       geom: Geometry, solid: Geometry, holeOpt: Option[Geometry], dim: Int,
       grid: GridSystem, res: Int, coverage: String
   ): (Set[Long], Set[Long], Long => Boolean, Set[Long]) = {
-    val cs   = grid.cellStep(res)
+    val cs   = grid.geomCellStep(geom, res)
     val band = boundaryCells(extRingsOf(solid), grid, res, cs)
 
     val cache = mutable.Map.empty[Long, mutable.Map[String, Boolean]]
@@ -377,7 +377,7 @@ object GeomDilation {
       mode: String, geom: Geometry, solid: Geometry, holeOpt: Option[Geometry], dim: Int,
       grid: GridSystem, res: Int, coverage: String
   ): (Set[Long], Set[Long], Long => Boolean, Set[Long]) = {
-    val cs   = grid.cellStep(res)
+    val cs   = grid.geomCellStep(geom, res)
     val band = boundaryCells(extRingsOf(solid), grid, res, cs)
 
     val cache = mutable.Map.empty[Long, mutable.Map[String, Boolean]]
@@ -420,7 +420,7 @@ object GeomDilation {
     }
     if (intRings.isEmpty) return empty
 
-    val cs       = grid.cellStep(res)
+    val cs       = grid.geomCellStep(geom, res)
     val holeBand = boundaryCells(intRings, grid, res, cs)
     if (holeBand.isEmpty) return empty
 

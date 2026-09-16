@@ -508,9 +508,10 @@ def geometry_k_ring(
     that all custom-grid functions require.  ``coverage`` ∈
     {"coveras","polyfill","core"} selects the belongs-to basis.
 
-    boundary-out / boundary-in / boundary-in-ignore-holes use the lazy O(perimeter)
-    seed path for Polygon/MultiPolygon; all other modes use the full O(area)
-    classify + geom_expand path.
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs; line, point, and GeometryCollection inputs
+    use the full O(area) classify + geom_expand path.
 
     geom: WKB bytes, WKT string, or Shapely geometry.
     Returns a sorted list of int (BIGINT) cell ids.
@@ -521,8 +522,13 @@ def geometry_k_ring(
     if mode in _dilate._LAZY_MODES and parsed.geom_type in ("Polygon", "MultiPolygon"):
         return sorted(
             _dilate.geom_expand_lazy(
-                "ring", int(k), mode, parsed, int(resolution),
-                _custom_hooks(conf, int(resolution)), coverage,
+                "ring",
+                int(k),
+                mode,
+                parsed,
+                int(resolution),
+                _custom_hooks(conf, int(resolution)),
+                coverage,
             )
         )
     cls = classify(conf, parsed, int(resolution))
@@ -546,9 +552,10 @@ def geometry_k_loop(
     ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
 
-    boundary-out / boundary-in / boundary-in-ignore-holes on Polygon/MultiPolygon use
-    the lazy O(perimeter) seed path; all other modes and geometry types use the full
-    O(area) classify + geom_expand path.
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs; line, point, and GeometryCollection inputs
+    use the full O(area) classify + geom_expand path.
     """
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
@@ -556,8 +563,13 @@ def geometry_k_loop(
     if mode in _dilate._LAZY_MODES and parsed.geom_type in ("Polygon", "MultiPolygon"):
         return sorted(
             _dilate.geom_expand_lazy(
-                "loop", int(k), mode, parsed, int(resolution),
-                _custom_hooks(conf, int(resolution)), coverage,
+                "loop",
+                int(k),
+                mode,
+                parsed,
+                int(resolution),
+                _custom_hooks(conf, int(resolution)),
+                coverage,
             )
         )
     cls = classify(conf, parsed, int(resolution))

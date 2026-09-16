@@ -56,7 +56,9 @@ _BENCH_MARK = pytest.mark.skip(reason="benchmark - not included in normal CI run
 # ===========================================================================
 
 
-def _large_wgs84_blob(cx: float = -90.0, cy: float = 40.0, rx: float = 1.3, ry: float = 1.1):
+def _large_wgs84_blob(
+    cx: float = -90.0, cy: float = 40.0, rx: float = 1.3, ry: float = 1.1
+):
     """Irregular 20-vertex polygon in WGS84, ~230×240 km at mid-latitudes.
 
     Matches the spike harness (spike-h3-boundary-perf.md / spike_h3_boundary_perf.py)
@@ -80,7 +82,9 @@ def _large_wgs84_blob(cx: float = -90.0, cy: float = 40.0, rx: float = 1.3, ry: 
     return Polygon(coords)
 
 
-def _large_bng_blob(cx: float = 430_000, cy: float = 300_000, rx: float = 90_000, ry: float = 70_000):
+def _large_bng_blob(
+    cx: float = 430_000, cy: float = 300_000, rx: float = 90_000, ry: float = 70_000
+):
     """Irregular 20-vertex polygon in EPSG:27700 (BNG), ~90 km × 70 km."""
     import math
     import random
@@ -98,7 +102,9 @@ def _large_bng_blob(cx: float = 430_000, cy: float = 300_000, rx: float = 90_000
     return Polygon(coords)
 
 
-def _large_custom_blob(cx: float = 500_000, cy: float = 500_000, rx: float = 100_000, ry: float = 90_000):
+def _large_custom_blob(
+    cx: float = 500_000, cy: float = 500_000, rx: float = 100_000, ry: float = 90_000
+):
     """Irregular 20-vertex polygon for a 0..1 M × 0..1 M custom grid, ~100 km × 90 km cells."""
     import math
     import random
@@ -128,8 +134,10 @@ def _medium_wgs84_blobs(n: int = 200, seed: int = 7):
         r = rng.uniform(0.010, 0.022)
         angles = [i * 2 * math.pi / 12 for i in range(12)]
         coords = [
-            (cx + r * (0.7 + 0.6 * rng.random()) * math.cos(a),
-             cy + r * (0.7 + 0.6 * rng.random()) * math.sin(a))
+            (
+                cx + r * (0.7 + 0.6 * rng.random()) * math.cos(a),
+                cy + r * (0.7 + 0.6 * rng.random()) * math.sin(a),
+            )
             for a in angles
         ]
         coords.append(coords[0])
@@ -149,8 +157,10 @@ def _medium_bng_blobs(n: int = 200, seed: int = 7):
         r = rng.uniform(4_000, 9_000)
         angles = [i * 2 * math.pi / 12 for i in range(12)]
         coords = [
-            (cx + r * (0.7 + 0.6 * rng.random()) * math.cos(a),
-             cy + r * (0.7 + 0.6 * rng.random()) * math.sin(a))
+            (
+                cx + r * (0.7 + 0.6 * rng.random()) * math.cos(a),
+                cy + r * (0.7 + 0.6 * rng.random()) * math.sin(a),
+            )
             for a in angles
         ]
         coords.append(coords[0])
@@ -170,13 +180,17 @@ def _medium_custom_blobs(n: int = 200, seed: int = 7):
         r = rng.uniform(50_000, 100_000)
         angles = [i * 2 * math.pi / 12 for i in range(12)]
         coords = [
-            (cx + r * (0.7 + 0.6 * rng.random()) * math.cos(a),
-             cy + r * (0.7 + 0.6 * rng.random()) * math.sin(a))
+            (
+                cx + r * (0.7 + 0.6 * rng.random()) * math.cos(a),
+                cy + r * (0.7 + 0.6 * rng.random()) * math.sin(a),
+            )
             for a in angles
         ]
         coords.append(coords[0])
         # Clamp to grid extent
-        valid = Polygon([(max(0, min(1_000_000, x)), max(0, min(1_000_000, y))) for x, y in coords])
+        valid = Polygon(
+            [(max(0, min(1_000_000, x)), max(0, min(1_000_000, y))) for x, y in coords]
+        )
         if valid.is_valid and not valid.is_empty:
             polys.append(valid)
     return polys[:n]
@@ -203,6 +217,7 @@ _CUSTOM_CONF = _custom.CustomGridConf(
 
 # ---- quadbin ----
 
+
 def _qb_before(geom: Polygon, z: int, k: int = 2) -> list:
     """O(area) reference: classify all cells, then expand."""
     cls = _dilate.classify(
@@ -211,7 +226,11 @@ def _qb_before(geom: Polygon, z: int, k: int = 2) -> list:
         polyfill_fn=lambda g, r: _quadbin.polyfill(g, r),
         cell_geom_fn=_quadbin._cell_geom,
     )
-    return sorted(_dilate.geom_expand("ring", k, "boundary-out", cls, lambda c: _quadbin.k_loop(c, 1)))
+    return sorted(
+        _dilate.geom_expand(
+            "ring", k, "boundary-out", cls, lambda c: _quadbin.k_loop(c, 1)
+        )
+    )
 
 
 def _qb_after(geom: Polygon, z: int, k: int = 2) -> list:
@@ -221,11 +240,15 @@ def _qb_after(geom: Polygon, z: int, k: int = 2) -> list:
 
 # ---- bng ----
 
+
 def _bng_before(geom: Polygon, res: int, k: int = 2) -> list:
     """O(area) reference for BNG: classify + expand."""
     cls = _bng.classify_bng(geom, res)
     return sorted(
-        c for c in _dilate.geom_expand("ring", k, "boundary-out", cls, lambda c: _bng.k_loop(c, 1))
+        c
+        for c in _dilate.geom_expand(
+            "ring", k, "boundary-out", cls, lambda c: _bng.k_loop(c, 1)
+        )
         if _bng.is_valid(c)
     )
 
@@ -237,10 +260,15 @@ def _bng_after(geom: Polygon, res: int, k: int = 2) -> list:
 
 # ---- custom ----
 
+
 def _custom_before(conf, geom: Polygon, res: int, k: int = 2) -> list:
     """O(area) reference for custom grid: classify + expand."""
     cls = _custom.classify(conf, geom, res)
-    return sorted(_dilate.geom_expand("ring", k, "boundary-out", cls, lambda c: _custom.k_loop(conf, c, 1)))
+    return sorted(
+        _dilate.geom_expand(
+            "ring", k, "boundary-out", cls, lambda c: _custom.k_loop(conf, c, 1)
+        )
+    )
 
 
 def _custom_after(conf, geom: Polygon, res: int, k: int = 2) -> list:
@@ -249,6 +277,7 @@ def _custom_after(conf, geom: Polygon, res: int, k: int = 2) -> list:
 
 
 # ---- h3 ----
+
 
 def _h3_native(geom: Polygon, res: int, k: int = 2) -> list:
     """Native O(area) h3 path: bulk polyfill classify + expand."""
@@ -307,15 +336,22 @@ def test_bench_quadbin_large():
     after_result, t_after = _timed(lambda: _qb_after(geom, z), n_warmup=1, n_rep=3)
     before_result = _qb_before(geom, z)
 
-    assert sorted(before_result) == sorted(after_result), "BEFORE/AFTER results differ for quadbin!"
+    assert sorted(before_result) == sorted(
+        after_result
+    ), "BEFORE/AFTER results differ for quadbin!"
     ratio = t_before / t_after if t_after > 0 else float("inf")
-    n_interior = len(_dilate.classify(
-        geom, z,
-        polyfill_fn=lambda g, r: _quadbin.polyfill(g, r),
-        cell_geom_fn=_quadbin._cell_geom,
-    ).s_cover)
-    print(f"\n[quadbin z={z}] N_interior={n_interior}, "
-          f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×")
+    n_interior = len(
+        _dilate.classify(
+            geom,
+            z,
+            polyfill_fn=lambda g, r: _quadbin.polyfill(g, r),
+            cell_geom_fn=_quadbin._cell_geom,
+        ).s_cover
+    )
+    print(
+        f"\n[quadbin z={z}] N_interior={n_interior}, "
+        f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×"
+    )
     assert ratio >= 5, f"Expected ≥5× speedup for quadbin, got {ratio:.1f}×"
 
 
@@ -328,11 +364,15 @@ def test_bench_bng_large():
     after_result, t_after = _timed(lambda: _bng_after(geom, res), n_warmup=1, n_rep=3)
     before_result = _bng_before(geom, res)
 
-    assert sorted(before_result) == sorted(after_result), "BEFORE/AFTER results differ for BNG!"
+    assert sorted(before_result) == sorted(
+        after_result
+    ), "BEFORE/AFTER results differ for BNG!"
     ratio = t_before / t_after if t_after > 0 else float("inf")
     n_interior = len(_bng.classify_bng(geom, res).s_cover)
-    print(f"\n[bng res={res}] N_interior={n_interior}, "
-          f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×")
+    print(
+        f"\n[bng res={res}] N_interior={n_interior}, "
+        f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×"
+    )
     assert ratio >= 5, f"Expected ≥5× speedup for BNG, got {ratio:.1f}×"
 
 
@@ -343,14 +383,20 @@ def test_bench_custom_large():
     geom = _large_custom_blob()
     res = 1
     _, t_before = _timed(lambda: _custom_before(conf, geom, res), n_warmup=1, n_rep=3)
-    after_result, t_after = _timed(lambda: _custom_after(conf, geom, res), n_warmup=1, n_rep=3)
+    after_result, t_after = _timed(
+        lambda: _custom_after(conf, geom, res), n_warmup=1, n_rep=3
+    )
     before_result = _custom_before(conf, geom, res)
 
-    assert sorted(before_result) == sorted(after_result), "BEFORE/AFTER results differ for custom!"
+    assert sorted(before_result) == sorted(
+        after_result
+    ), "BEFORE/AFTER results differ for custom!"
     ratio = t_before / t_after if t_after > 0 else float("inf")
     n_interior = len(_custom.classify(conf, geom, res).s_cover)
-    print(f"\n[custom res={res}] N_interior={n_interior}, "
-          f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×")
+    print(
+        f"\n[custom res={res}] N_interior={n_interior}, "
+        f"before={t_before*1000:.0f}ms, after={t_after*1000:.0f}ms, speedup={ratio:.1f}×"
+    )
     assert ratio >= 5, f"Expected ≥5× speedup for custom, got {ratio:.1f}×"
 
 
@@ -415,8 +461,12 @@ def test_bench_throughput_all_grids():
     cust_polys = _medium_custom_blobs(n=100)[:100]
     conf = _CUSTOM_CONF
     res = 2
-    tp_b = _throughput([lambda p=p: _custom_before(conf, p, res, k=1) for p in cust_polys])
-    tp_a = _throughput([lambda p=p: _custom_after(conf, p, res, k=1) for p in cust_polys])
+    tp_b = _throughput(
+        [lambda p=p: _custom_before(conf, p, res, k=1) for p in cust_polys]
+    )
+    tp_a = _throughput(
+        [lambda p=p: _custom_after(conf, p, res, k=1) for p in cust_polys]
+    )
     results["custom res=2"] = (tp_b, tp_a)
 
     print("\n[throughput summary]")
@@ -427,7 +477,9 @@ def test_bench_throughput_all_grids():
 
     for name, (tb, ta) in results.items():
         ratio = ta / tb if tb > 0 else float("inf")
-        assert ratio >= 1.5, f"Expected ≥1.5× throughput speedup for {name}, got {ratio:.1f}×"
+        assert (
+            ratio >= 1.5
+        ), f"Expected ≥1.5× throughput speedup for {name}, got {ratio:.1f}×"
 
 
 # ===========================================================================
@@ -471,7 +523,8 @@ def test_regression_lazy_skips_polyfill_quadbin(monkeypatch):
     # BEFORE (reference O(area) path): should call polyfill at least once
     count_before = call_count["n"]
     _dilate.classify(
-        geom, z,
+        geom,
+        z,
         polyfill_fn=lambda g, r: _quadbin.polyfill(g, r),
         cell_geom_fn=_quadbin._cell_geom,
     )
@@ -503,7 +556,8 @@ def test_regression_lazy_skips_polyfill_bng(monkeypatch):
     # Need to call classify directly so our monkeypatched _bng.polyfill is reached.
     count_before = call_count["n"]
     _dilate.classify(
-        geom, res,
+        geom,
+        res,
         polyfill_fn=lambda g, r: _bng.polyfill(g, r),
         cell_geom_fn=_bng._bng_cell_geom,
         point_to_cell_fn=lambda x, y: _bng.point_to_cell_id(x, y, res),
@@ -536,12 +590,15 @@ def test_regression_lazy_skips_polyfill_custom(monkeypatch):
     # BEFORE: reference classify calls polyfill
     count_before = call_count["n"]
     _dilate.classify(
-        geom, res,
+        geom,
+        res,
         polyfill_fn=lambda g, r: _custom.polyfill(conf, g, r),
         cell_geom_fn=lambda c: _custom._cell_geom(conf, c),
         point_to_cell_fn=lambda x, y: _custom.point_to_cell_id_or_none(conf, x, y, res),
     )
-    assert call_count["n"] > count_before, "Reference classify() must call custom polyfill"
+    assert (
+        call_count["n"] > count_before
+    ), "Reference classify() must call custom polyfill"
 
     # AFTER: lazy path must not call polyfill
     call_count["n"] = 0
@@ -550,7 +607,6 @@ def test_regression_lazy_skips_polyfill_custom(monkeypatch):
         f"Lazy custom path called polyfill {call_count['n']} time(s); "
         "it must not materialise the interior for polygon boundary-out"
     )
-
 
 
 # ===========================================================================
@@ -578,8 +634,14 @@ def _run_benchmark():
     z = 15
     r_before, t_before = _timed(lambda: _qb_before(geom_wgs, z), n_warmup=1, n_rep=3)
     r_after, t_after = _timed(lambda: _qb_after(geom_wgs, z), n_warmup=1, n_rep=3)
-    n_int = len(_dilate.classify(geom_wgs, z, polyfill_fn=lambda g, r: _quadbin.polyfill(g, r),
-                                  cell_geom_fn=_quadbin._cell_geom).s_cover)
+    n_int = len(
+        _dilate.classify(
+            geom_wgs,
+            z,
+            polyfill_fn=lambda g, r: _quadbin.polyfill(g, r),
+            cell_geom_fn=_quadbin._cell_geom,
+        ).s_cover
+    )
     rows.append(("quadbin z=15 (large)", n_int, t_before, t_after))
 
     # bng res=3
@@ -594,8 +656,12 @@ def _run_benchmark():
     geom_cust = _large_custom_blob()
     conf = _CUSTOM_CONF
     res = 1
-    _, t_before = _timed(lambda: _custom_before(conf, geom_cust, res), n_warmup=1, n_rep=3)
-    _, t_after = _timed(lambda: _custom_after(conf, geom_cust, res), n_warmup=1, n_rep=3)
+    _, t_before = _timed(
+        lambda: _custom_before(conf, geom_cust, res), n_warmup=1, n_rep=3
+    )
+    _, t_after = _timed(
+        lambda: _custom_after(conf, geom_cust, res), n_warmup=1, n_rep=3
+    )
     n_int = len(_custom.classify(conf, geom_cust, res).s_cover)
     rows.append(("custom res=1 (large)", n_int, t_before, t_after))
 
@@ -606,11 +672,15 @@ def _run_benchmark():
     n_int = len(_h3.classify(geom_wgs8, res).s_cover)
     rows.append(("h3 res=8 (native, large)", n_int, t_native, t_native))
 
-    print(f"\n{'Scenario':<28} {'N_interior':>12} {'before ms':>12} {'after ms':>10} {'speedup':>9}")
+    print(
+        f"\n{'Scenario':<28} {'N_interior':>12} {'before ms':>12} {'after ms':>10} {'speedup':>9}"
+    )
     print("-" * 76)
     for name, n_int, tb, ta in rows:
         ratio = tb / ta if ta > 0 else float("inf")
-        print(f"  {name:<26} {n_int:>12,} {tb*1000:>12.0f} {ta*1000:>10.0f} {ratio:>8.1f}×")
+        print(
+            f"  {name:<26} {n_int:>12,} {tb*1000:>12.0f} {ta*1000:>10.0f} {ratio:>8.1f}×"
+        )
 
     # -----------------------------------------------------------------------
     # h3 res=10 large-polygon — native path only (no lazy conversion)
@@ -619,40 +689,56 @@ def _run_benchmark():
     geom_wgs10 = _large_wgs84_blob()
     _, t_native10 = _timed(lambda: _h3_native(geom_wgs10, res), n_warmup=1, n_rep=3)
     n_int = len(_h3.classify(geom_wgs10, res).s_cover)
-    print(f"  {'h3 res=10 (native,large)':<26} {n_int:>12,} {t_native10*1000:>12.0f} {'[native]':>10} {'n/a':>9}")
+    print(
+        f"  {'h3 res=10 (native,large)':<26} {n_int:>12,} {t_native10*1000:>12.0f} {'[native]':>10} {'n/a':>9}"
+    )
 
     # -----------------------------------------------------------------------
     # Medium-polygon throughput (polys/sec)
     # -----------------------------------------------------------------------
-    print(f"\n{'Grid':<22} {'n polys':>8} {'before pol/s':>14} {'after pol/s':>14} {'speedup':>9}")
+    print(
+        f"\n{'Grid':<22} {'n polys':>8} {'before pol/s':>14} {'after pol/s':>14} {'speedup':>9}"
+    )
     print("-" * 72)
 
     # h3 res=10 medium throughput — native path only (not converted)
     res10_polys = _medium_wgs84_blobs(n=200)
-    tp_native_h3 = _throughput([lambda p=p: _h3_native(p, 10, k=1) for p in res10_polys])
-    print(f"  {'h3 res=10 (native)':<20} {200:>8} {'[native]':>14} {tp_native_h3:>14.1f} {'n/a':>9}")
+    tp_native_h3 = _throughput(
+        [lambda p=p: _h3_native(p, 10, k=1) for p in res10_polys]
+    )
+    print(
+        f"  {'h3 res=10 (native)':<20} {200:>8} {'[native]':>14} {tp_native_h3:>14.1f} {'n/a':>9}"
+    )
 
     # quadbin z=17 medium throughput
     qb_polys = _medium_wgs84_blobs(n=200)
     tp_b = _throughput([lambda p=p: _qb_before(p, 17, k=1) for p in qb_polys])
     tp_a = _throughput([lambda p=p: _qb_after(p, 17, k=1) for p in qb_polys])
     ratio = tp_a / tp_b if tp_b > 0 else float("inf")
-    print(f"  {'quadbin z=17 thrput':<20} {200:>8} {tp_b:>14.1f} {tp_a:>14.1f} {ratio:>8.1f}×")
+    print(
+        f"  {'quadbin z=17 thrput':<20} {200:>8} {tp_b:>14.1f} {tp_a:>14.1f} {ratio:>8.1f}×"
+    )
 
     # bng res=3 medium throughput
     bng_polys = _medium_bng_blobs(n=200)
     tp_b = _throughput([lambda p=p: _bng_before(p, 3, k=1) for p in bng_polys])
     tp_a = _throughput([lambda p=p: _bng_after(p, 3, k=1) for p in bng_polys])
     ratio = tp_a / tp_b if tp_b > 0 else float("inf")
-    print(f"  {'bng res=3 thrput':<20} {200:>8} {tp_b:>14.1f} {tp_a:>14.1f} {ratio:>8.1f}×")
+    print(
+        f"  {'bng res=3 thrput':<20} {200:>8} {tp_b:>14.1f} {tp_a:>14.1f} {ratio:>8.1f}×"
+    )
 
     # custom res=2 medium throughput (100 polys — slower grid)
     cust_polys = _medium_custom_blobs(n=100)[:100]
     conf = _CUSTOM_CONF
-    tp_b = _throughput([lambda p=p: _custom_before(conf, p, 2, k=1) for p in cust_polys])
+    tp_b = _throughput(
+        [lambda p=p: _custom_before(conf, p, 2, k=1) for p in cust_polys]
+    )
     tp_a = _throughput([lambda p=p: _custom_after(conf, p, 2, k=1) for p in cust_polys])
     ratio = tp_a / tp_b if tp_b > 0 else float("inf")
-    print(f"  {'custom res=2 thrput':<20} {len(cust_polys):>8} {tp_b:>14.1f} {tp_a:>14.1f} {ratio:>8.1f}×")
+    print(
+        f"  {'custom res=2 thrput':<20} {len(cust_polys):>8} {tp_b:>14.1f} {tp_a:>14.1f} {ratio:>8.1f}×"
+    )
 
     print("\n" + "=" * 72)
     print("Done.")

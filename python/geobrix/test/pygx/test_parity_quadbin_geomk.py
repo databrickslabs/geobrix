@@ -254,12 +254,15 @@ def test_parity_quadbin_geomkloop_holed_all_modes(spark_with_jar, coverage):
 
 # --- aligned + large fixtures (boundary-out guard for lazy seed switch) ---
 
+
 # aligned: polygon whose edges lie on exact quadbin tile boundaries at zoom 10.
 # No straddling cells exist → exercises the _local_perimeter alignment fallback.
 def _build_qb_aligned_geom():
     import quadbin as _qb
 
-    cells = [_qb.tile_to_cell((x, y, 10)) for x in range(291, 300) for y in range(377, 384)]
+    cells = [
+        _qb.tile_to_cell((x, y, 10)) for x in range(291, 300) for y in range(377, 384)
+    ]
     bboxes = [_qb.cell_to_bounding_box(c) for c in cells]
     from shapely.geometry import box as _box
 
@@ -305,10 +308,18 @@ def test_parity_quadbin_geomkring_boundary_out_aligned(spark_with_jar, coverage)
 
     spark = spark_with_jar
     gx.register(spark)
-    light_ring = _collect_light(_QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage)
+    light_ring = _collect_light(
+        _QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
+    )
     hx.register(spark)
     heavy_ring = _collect_heavy(
-        spark, _QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", "gbx_quadbin_geomkring", coverage
+        spark,
+        _QB_ALIGNED_GEOM,
+        _RES_ALIGNED,
+        1,
+        "boundary-out",
+        "gbx_quadbin_geomkring",
+        coverage,
     )
     assert light_ring == heavy_ring, (
         f"geomkring aligned boundary-out coverage={coverage}: "
@@ -342,10 +353,18 @@ def test_parity_quadbin_geomkloop_boundary_out_aligned(spark_with_jar, coverage)
 
     spark = spark_with_jar
     gx.register(spark)
-    light = _collect_light_loop(_QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage)
+    light = _collect_light_loop(
+        _QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
+    )
     hx.register(spark)
     heavy = _collect_heavy(
-        spark, _QB_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", "gbx_quadbin_geomkloop", coverage
+        spark,
+        _QB_ALIGNED_GEOM,
+        _RES_ALIGNED,
+        1,
+        "boundary-out",
+        "gbx_quadbin_geomkloop",
+        coverage,
     )
     assert light == heavy, (
         f"geomkloop aligned boundary-out coverage={coverage}: "
@@ -364,7 +383,13 @@ def test_parity_quadbin_geomkring_boundary_out_large(spark_with_jar, coverage):
     light = _collect_light(_QB_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
     hx.register(spark)
     heavy = _collect_heavy(
-        spark, _QB_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", "gbx_quadbin_geomkring", coverage
+        spark,
+        _QB_LARGE_GEOM,
+        _RES_LARGE,
+        1,
+        "boundary-out",
+        "gbx_quadbin_geomkring",
+        coverage,
     )
     assert light == heavy, (
         f"geomkring large boundary-out coverage={coverage}: "
@@ -383,7 +408,13 @@ def test_parity_quadbin_geomkloop_boundary_out_large(spark_with_jar, coverage):
     light = _collect_light_loop(_QB_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
     hx.register(spark)
     heavy = _collect_heavy(
-        spark, _QB_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", "gbx_quadbin_geomkloop", coverage
+        spark,
+        _QB_LARGE_GEOM,
+        _RES_LARGE,
+        1,
+        "boundary-out",
+        "gbx_quadbin_geomkloop",
+        coverage,
     )
     assert light == heavy, (
         f"geomkloop large boundary-out coverage={coverage}: "

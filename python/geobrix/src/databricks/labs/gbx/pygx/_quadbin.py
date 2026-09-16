@@ -29,6 +29,10 @@ _MAX_POLYFILL_RES = 20
 _LAT_MIN = -85.05112878
 _LAT_MAX = 85.05112878
 
+# Floor for cos(lat) used in latitude-aware boundary sampling step.
+# cos(89°) ≈ 0.01745 prevents a near-zero step at the poles.
+_COS_FLOOR = math.cos(math.radians(89.0))
+
 # Quadbin bit-packing constants (mirror the `quadbin.main` HEADER/FOOTER/B/S used
 # by tile_to_cell). Kept as uint64 so the vectorized Morton spread below is
 # bit-identical to the scalar quadbin.tile_to_cell path.
@@ -285,6 +289,8 @@ def _qb_hooks(resolution: int) -> tuple:
     for quadbin at the given zoom level.
 
     cell_step = tile width in degrees longitude at this zoom (density guard).
+    This is the BASELINE (longitude-only) step; callers that have the polygon
+    should replace cell_step with `_qb_lat_step(parsed, z)` for a latitude-aware value.
     """
     z = int(resolution)
     cell_step = 360.0 / float(1 << z)
@@ -294,6 +300,36 @@ def _qb_hooks(resolution: int) -> tuple:
         lambda c: k_loop(c, 1),
         cell_step,
     )
+
+
+def _qb_lat_step(parsed, z: int) -> float:
+    """Latitude-aware boundary-sampling step for quadbin at zoom ``z``.
+
+    Web-mercator tile latitude height ≈ cos(maxAbsLat) * (360/2^z). Using only
+    the longitude step (360/2^z) would sample near-vertical boundary segments at
+    high latitudes too coarsely — skipping cells whose latitude height is much
+    smaller than the longitude width — and silently produce wrong seeds beyond
+    ~±70° because the one-ring dilation can only absorb ~1 missed cell.
+
+    This function multiplies the longitude step by cos(maxAbsLat), where
+    ``maxAbsLat`` is the maximum |latitude| over the polygon's bounding box.
+    This guarantees the step is ≤ the smallest tile latitude-height the polygon
+    spans, so no boundary cell is skipped anywhere on Earth.  ``_COS_FLOOR``
+    prevents a near-zero step at the poles.
+
+    Parameters
+    ----------
+    parsed : shapely geometry (already parsed, not WKB/WKT)
+    z : int — quadbin zoom level
+
+    Returns
+    -------
+    float — adjusted cell step in degrees
+    """
+    lon_step = 360.0 / float(1 << z)
+    _minx, miny, _maxx, maxy = parsed.bounds
+    max_abs_lat = max(abs(miny), abs(maxy))
+    return lon_step * max(math.cos(math.radians(max_abs_lat)), _COS_FLOOR)
 
 
 def geometry_k_ring(
@@ -308,18 +344,32 @@ def geometry_k_ring(
     ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
 
-    boundary-out / boundary-in / boundary-in-ignore-holes modes use the lazy
-    O(perimeter) seed path for Polygon/MultiPolygon; all other modes and geometry
-    types use the full O(area) classify + geom_expand path.
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs.  Line, point, and GeometryCollection inputs
+    fall back to the full O(area) classify + geom_expand path.
     """
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
         return []
     if mode in _dilate._LAZY_MODES and parsed.geom_type in ("Polygon", "MultiPolygon"):
+        z = int(resolution)
+        hooks = _qb_hooks(z)
+        # Replace the baseline longitude step with a latitude-aware step so that
+        # near-vertical boundary segments at high latitudes are sampled densely enough
+        # to capture every boundary cell (tile lat-height ≈ cos(lat) * lon-step shrinks
+        # toward the poles, so the longitude step alone coarsens to > 1 tile height
+        # beyond ~±70°).
+        hooks = (hooks[0], hooks[1], hooks[2], _qb_lat_step(parsed, z))
         return sorted(
             _dilate.geom_expand_lazy(
-                "ring", int(k), mode, parsed, int(resolution),
-                _qb_hooks(int(resolution)), coverage,
+                "ring",
+                int(k),
+                mode,
+                parsed,
+                z,
+                hooks,
+                coverage,
             )
         )
     cls = classify(parsed, int(resolution))
@@ -340,18 +390,29 @@ def geometry_k_loop(
     ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
 
-    boundary-out / boundary-in / boundary-in-ignore-holes on Polygon/MultiPolygon use
-    the lazy O(perimeter) seed path; all other modes and geometry types use the full
-    O(area) classify + geom_expand path.
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs.  Line, point, and GeometryCollection inputs
+    fall back to the full O(area) classify + geom_expand path.
     """
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
         return []
     if mode in _dilate._LAZY_MODES and parsed.geom_type in ("Polygon", "MultiPolygon"):
+        z = int(resolution)
+        hooks = _qb_hooks(z)
+        # Replace the baseline longitude step with a latitude-aware step (same rationale
+        # as geometry_k_ring: tile lat-height shrinks toward the poles).
+        hooks = (hooks[0], hooks[1], hooks[2], _qb_lat_step(parsed, z))
         return sorted(
             _dilate.geom_expand_lazy(
-                "loop", int(k), mode, parsed, int(resolution),
-                _qb_hooks(int(resolution)), coverage,
+                "loop",
+                int(k),
+                mode,
+                parsed,
+                z,
+                hooks,
+                coverage,
             )
         )
     cls = classify(parsed, int(resolution))

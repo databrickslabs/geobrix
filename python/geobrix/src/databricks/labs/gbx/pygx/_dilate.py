@@ -6,7 +6,13 @@ See .superpowers/specs/2026-09-11-geom-aware-kring-kloop-design.md §4/§5.
 
 from dataclasses import dataclass, field
 
-from shapely.geometry import LineString, MultiLineString, MultiPoint, MultiPolygon, Polygon
+from shapely.geometry import (
+    LineString,
+    MultiLineString,
+    MultiPoint,
+    MultiPolygon,
+    Polygon,
+)
 
 MODES = (
     "boundary-out",
@@ -86,9 +92,15 @@ def _classify_cell(c, cell_geom_fn, geom, S, H, dim):
         s_in = S.intersects(g) and S.intersection(g).area > 0
     is_2d = dim == 2
     m = dict(
-        p_cover=False, p_centroid=False, p_core=False,
-        s_cover=False, s_centroid=False, s_core=False,
-        h_cover=False, h_centroid=False, h_core=False,
+        p_cover=False,
+        p_centroid=False,
+        p_core=False,
+        s_cover=False,
+        s_centroid=False,
+        s_core=False,
+        h_cover=False,
+        h_centroid=False,
+        h_core=False,
     )
     if p_in:
         m["p_cover"] = True
@@ -155,7 +167,9 @@ def _local_perimeter(band, neighbors, in_region):
     C = set(band)
     for c in band:
         C.update(neighbors(c))
-    return frozenset(c for c in C if in_region(c) and any(not in_region(n) for n in neighbors(c)))
+    return frozenset(
+        c for c in C if in_region(c) and any(not in_region(n) for n in neighbors(c))
+    )
 
 
 def dilate(frontier0, visited0, neighbors, admit):
@@ -797,7 +811,9 @@ def _lazy_hole(mode, geom, res, hooks, coverage):
 
     # void_edge: h_cover cells in C with at least one non-h_cover neighbor
     void_edge = frozenset(
-        c for c in C if _m(c)["h_cover"] and any(not _m(n)["h_cover"] for n in neighbors(c))
+        c
+        for c in C
+        if _m(c)["h_cover"] and any(not _m(n)["h_cover"] for n in neighbors(c))
     )
     # solid_edge: p_cover cells in C with at least one h_cover neighbor
     solid_edge = frozenset(
@@ -861,7 +877,9 @@ def geom_expand_lazy(kind, k, mode, geom, res, hooks, coverage=DEFAULT_COVERAGE)
     if mode == "boundary-out":
         frontier0, visited0, admit, k0 = _lazy_boundary_out(geom, res, hooks, coverage)
     elif mode in ("boundary-in", "boundary-in-ignore-holes"):
-        frontier0, visited0, admit, k0 = _lazy_boundary_in(mode, geom, res, hooks, coverage)
+        frontier0, visited0, admit, k0 = _lazy_boundary_in(
+            mode, geom, res, hooks, coverage
+        )
     else:
         # hole-in, hole-out, hole-out-ignore-geom
         frontier0, visited0, admit, k0 = _lazy_hole(mode, geom, res, hooks, coverage)

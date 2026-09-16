@@ -55,6 +55,34 @@ Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
   dropped or the result was empty). As with a standalone point or line, point and
   line members contribute only under `coverage = coveras`.
 
+### Geom-aware grid functions — performance improvement for large polygons
+
+- **`gbx_quadbin_geomkring` / `gbx_quadbin_geomkloop`, `gbx_bng_geomkring` /
+  `gbx_bng_geomkloop`, and `gbx_custom_geomkring` / `gbx_custom_geomkloop`
+  (and their `*explode` variants) now scale with the polygon's boundary length rather
+  than its area.** For large polygons, the previous implementation enumerated every
+  cell inside the polygon before identifying the boundary band — a cost proportional
+  to the polygon's area. The new implementation traces the polygon boundary ring
+  directly, classifying only cells near the perimeter. For a polygon that covers tens
+  of thousands of cells at the target resolution, large-polygon `boundary-out` calls
+  are dramatically faster (10–100× depending on grid and resolution), and
+  medium-polygon throughput is 2–10× higher. **The cell sets returned are unchanged**
+  — this is a pure performance improvement with no effect on results.
+
+  `gbx_h3_geomkring` / `gbx_h3_geomkloop` also move to a boundary-ring seed path
+  in this release, with a correctness improvement: the implementation now uses H3-native
+  per-cell containment tests so that results on grid-aligned polygons (polygon edges that
+  lie exactly on H3 cell boundaries) are byte-identical to H3's own polyfill oracle.
+  For large H3 polygons at fine resolutions these per-cell tests can make the H3 path
+  slower than prior versions; for small and medium polygons the performance is similar.
+
+- **Behaviour fix for non-rectangular polygons in the heavyweight tier.** For
+  non-rectangular polygons, the geom-aware kring/kloop functions in the heavyweight
+  (Scala/Spark) tier previously returned a slightly larger boundary band than the
+  lightweight tier due to an over-count in the outer-perimeter seed calculation. The
+  heavyweight tier now uses the same boundary-tracing seed as the lightweight tier,
+  so the two tiers produce identical cell sets for all polygon shapes.
+
 ---
 
 ## What's new in v0.5.1

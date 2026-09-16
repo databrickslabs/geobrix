@@ -1497,6 +1497,12 @@ Returns `ARRAY<STRUCT<geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE>>` �
 entry per contiguous region. `geom_wkb` is a WKB Polygon in the raster's own CRS.
 NoData pixels are excluded. Pixels below `breaks[0]` or `>= breaks[-1]` are dropped.
 
+Each bin is **half-open — `[breaks[i], breaks[i+1])`** — closed on the lower bound and
+open on the upper, so a value equal to a break belongs to the band that break *opens*.
+For example, with `breaks = array(0, 50, 100, 150, 200)`, a value of `55.0` — and `50.0`
+itself — falls in the `[50.0, 100.0)` band (`band` index 1), while `100.0` moves up to
+the `[100.0, 150.0)` band and `200.0` (equal to `breaks[-1]`) is dropped.
+
 Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL required.
 
 **Signature:** `rst_isoband(tile, breaks)`

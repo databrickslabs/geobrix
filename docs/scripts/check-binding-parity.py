@@ -63,7 +63,6 @@ PYTHON_REGISTERED = {
     # LiDAR / point-cloud DSM functions — light-only (pure pyrx, no JVM equivalent).
     "gbx_rst_binpoints",
     "gbx_rst_binpoints_agg",
-    "gbx_rst_isoband",
 }
 
 # `override def name: String = "gbx_..."` — the canonical SQL name a companion registers under.

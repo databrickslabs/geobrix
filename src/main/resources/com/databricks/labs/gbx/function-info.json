@@ -797,6 +797,7 @@
     },
     "gbx_rst_isoband": {
       "examples": "Examples:\n      > SELECT gbx_rst_isoband(tile, array(0.0, 50.0, 100.0, 150.0, 200.0)) AS patches FROM dem_rasters;",
+      "usage_args": "tile, breaks",
       "bindings": [
         "sql"
       ],

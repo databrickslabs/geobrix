@@ -68,7 +68,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_binpoints( array(550100.0, 550200.0, 550300.0), array(180100.0, 180200.0, 180500.0), array(42.5, 45.1, 38.7), 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max' ) AS dsm;",
       "usage_args": "x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.2"
     },

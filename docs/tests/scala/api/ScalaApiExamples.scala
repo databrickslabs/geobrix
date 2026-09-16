@@ -961,6 +961,39 @@ result.show()
 (tile with internal overviews at levels [2, 4] embedded)
 """.trim
 
+  val rst_binpoints_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+// Inline 3-point BNG (EPSG:27700) set — no external raster file needed.
+val points = spark.range(1).select(
+  array(lit(550100.0), lit(550200.0), lit(550300.0)).alias("x"),
+  array(lit(180100.0), lit(180200.0), lit(180500.0)).alias("y"),
+  array(lit(42.5), lit(45.1), lit(38.7)).alias("z")
+)
+val result = points.select(
+  rx.rst_binpoints(
+    col("x"), col("y"), col("z"),
+    lit(550000.0), lit(180000.0),
+    lit(551000.0), lit(181000.0),
+    lit(10), lit(10),
+    lit(27700)
+  ).alias("tile")
+)
+result.show()
+""".trim
+
+  val rst_binpoints_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
+""".trim
+
   val rst_clip_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

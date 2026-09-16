@@ -225,3 +225,10 @@ def test_rst_fromfile_python_light_example(spark):
     assert tile["raster"] is None, "virtual tile must have raster=None (bytes-free)"
     assert tile["path"] is not None, "virtual tile must carry the source path"
     assert tile["window"] is not None, "virtual tile must carry the whole-file window"
+
+
+def test_rst_binpoints_python_light_example(spark):
+    """rst_binpoints returns a materialized Float32 tile from inline point arrays."""
+    assert tileops_examples is not None
+    result = tileops_examples.rst_binpoints_python_light_example(spark)
+    _assert_materialized_tile(result, "rst_binpoints")

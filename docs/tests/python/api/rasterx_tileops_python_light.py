@@ -703,3 +703,47 @@ rst_updatetype_python_light_example_output = """
 +-----------------------------------------------------------+
 (type-converted tile; use rst_type to confirm the new data type; light tier returns a materialized v2 Tile)
 """
+
+
+# ---------------------------------------------------------------------------
+# rst_binpoints — bin parallel x/y/z arrays into a Float32 raster tile (constructor)
+# Fixture: inline 3-point BNG (EPSG:27700) set, 10×10 pixel grid over 1 km extent
+# Output: tile struct (returns a Float32 raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_binpoints_python_light_example(spark):
+    """Bin per-row ARRAY<DOUBLE> x/y/z columns into a Float32 raster tile using the light pyrx tier.
+
+    Uses a tiny 3-point inline BNG (EPSG:27700) set covering a 1 km extent at 10×10 pixels
+    (100 m ground resolution). Each output pixel carries the max z-value of points whose centre
+    falls in that pixel; empty pixels carry NoData (-9999.0). No external raster file needed.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = spark.range(1).select(
+        f.array(f.lit(550100.0), f.lit(550200.0), f.lit(550300.0)).alias("x"),
+        f.array(f.lit(180100.0), f.lit(180200.0), f.lit(180500.0)).alias("y"),
+        f.array(f.lit(42.5), f.lit(45.1), f.lit(38.7)).alias("z"),
+    )
+    result = df.select(
+        rx.rst_binpoints(
+            "x", "y", "z",
+            f.lit(550000.0), f.lit(180000.0),
+            f.lit(551000.0), f.lit(181000.0),
+            f.lit(10), f.lit(10),
+            f.lit(27700),
+        ).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_binpoints_python_light_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0; light tier returns a materialized v2 Tile)
+"""

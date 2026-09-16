@@ -134,55 +134,60 @@ object RST_Isoband extends WithExpressionInfo {
 
         // Build in-memory Int32 GDAL raster carrying the bin index.
         // NoData = -1 so GetMaskBand() returns 0 for excluded pixels.
+        // Nested try/finally ensures both idxDs and outDs are released on every path
+        // (including errors during OGR layer setup or WriteRaster).
         val memDrv = gdal.GetDriverByName("MEM")
         val idxDs = memDrv.Create("", w, h, 1, gdalconstConstants.GDT_Int32)
-        idxDs.SetGeoTransform(gt)
-        val srcProj = srcDs.GetProjection()
-        if (srcProj != null && srcProj.nonEmpty) idxDs.SetProjection(srcProj)
-        val idxBand = idxDs.GetRasterBand(1)
-        idxBand.SetNoDataValue(-1.0)
-        idxBand.WriteRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Int32, idxArr)
-        idxBand.FlushCache()
-
-        // Build in-memory OGR output layer (wkbPolygon, integer "band" field).
-        GDALManager.initOgr()
-        val ogrDriver = ogr.GetDriverByName("Memory")
-        val outDs = ogrDriver.CreateDataSource("rst_isoband_out")
-        val sr = new SpatialReference()
-        val srcSrs = srcDs.GetSpatialRef
-        val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }
-        val outLayer = outDs.CreateLayer("isobands", outSr, wkbPolygon)
-        val fd = new FieldDefn("band", OFTInteger)
-        outLayer.CreateField(fd); fd.delete()
-
-        // 4-connectivity is the GDAL Polygonize default; omit "8CONNECTED=8".
-        val options = new JVector[String]()
-        val maskBand = idxBand.GetMaskBand()
-
         try {
-            // fieldIdx = 0 -> write bin index into the "band" field.
-            gdal.Polygonize(idxBand, maskBand, outLayer, 0, options)
-            outLayer.ResetReading()
-            val rows = ArrayBuffer.empty[InternalRow]
-            var feat = outLayer.GetNextFeature()
-            while (feat != null) {
-                val geom = feat.GetGeometryRef()
-                if (geom != null) {
-                    val wkb = geom.ExportToWkb()
-                    val v = feat.GetFieldAsInteger(0)
-                    // Guard: skip any stray feature with idx out of valid range.
-                    if (v >= 0 && v <= nBreaks - 2) {
-                        rows += InternalRow.fromSeq(Seq(wkb, v, breaks(v), breaks(v + 1)))
+            idxDs.SetGeoTransform(gt)
+            val srcProj = srcDs.GetProjection()
+            if (srcProj != null && srcProj.nonEmpty) idxDs.SetProjection(srcProj)
+            val idxBand = idxDs.GetRasterBand(1)
+            idxBand.SetNoDataValue(-1.0)
+            idxBand.WriteRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Int32, idxArr)
+            idxBand.FlushCache()
+
+            // Build in-memory OGR output layer (wkbPolygon, integer "band" field).
+            GDALManager.initOgr()
+            val ogrDriver = ogr.GetDriverByName("Memory")
+            val outDs = ogrDriver.CreateDataSource("rst_isoband_out")
+            val sr = new SpatialReference()
+            try {
+                val srcSrs = srcDs.GetSpatialRef
+                val outSr = if (srcSrs != null) srcSrs else { sr.ImportFromEPSG(4326); sr }
+                val outLayer = outDs.CreateLayer("isobands", outSr, wkbPolygon)
+                val fd = new FieldDefn("band", OFTInteger)
+                outLayer.CreateField(fd); fd.delete()
+
+                // 4-connectivity is the GDAL Polygonize default; omit "8CONNECTED=8".
+                val options = new JVector[String]()
+                val maskBand = idxBand.GetMaskBand()
+
+                // fieldIdx = 0 -> write bin index into the "band" field.
+                gdal.Polygonize(idxBand, maskBand, outLayer, 0, options)
+                outLayer.ResetReading()
+                val rows = ArrayBuffer.empty[InternalRow]
+                var feat = outLayer.GetNextFeature()
+                while (feat != null) {
+                    val geom = feat.GetGeometryRef()
+                    if (geom != null) {
+                        val wkb = geom.ExportToWkb()
+                        val v = feat.GetFieldAsInteger(0)
+                        // Guard: skip any stray feature with idx out of valid range.
+                        if (v >= 0 && v <= nBreaks - 2) {
+                            rows += InternalRow.fromSeq(Seq(wkb, v, breaks(v), breaks(v + 1)))
+                        }
                     }
+                    feat.delete()
+                    feat = outLayer.GetNextFeature()
                 }
-                feat.delete()
-                feat = outLayer.GetNextFeature()
+                ArrayData.toArrayData(rows.toArray)
+            } finally {
+                outDs.delete()
+                sr.delete()
             }
-            ArrayData.toArrayData(rows.toArray)
         } finally {
-            outDs.delete()
             idxDs.delete()
-            sr.delete()
         }
     }
 

@@ -115,6 +115,33 @@ class RST_IsobandTest extends AnyFunSuite with BeforeAndAfterAll {
         wkb.length should be > 0
     }
 
+    test("RST_Isoband: pixel value exactly equal to last break is excluded (upper boundary)") {
+        // A value == breaks[-1] must be dropped: binIdx = count(breaks <= v) - 1 = len - 1,
+        // which exceeds breaks.length - 2, so it falls outside the valid range.
+        // Build a 2x1 raster: left pixel = 50.0 (in band 1 [50,100)), right = 100.0 (== last break -> excluded).
+        val drv = gdal.GetDriverByName("MEM")
+        val ds  = drv.Create("", 2, 1, 1, gdalconstConstants.GDT_Float64)
+        ds.SetGeoTransform(Array(0.0, 1.0, 0.0, 1.0, 0.0, -1.0))
+        val sr = new SpatialReference(); sr.ImportFromEPSG(4326)
+        ds.SetProjection(sr.ExportToWkt()); sr.delete()
+        ds.GetRasterBand(1).WriteRaster(0, 0, 2, 1, Array(50.0, 100.0))
+        ds.GetRasterBand(1).FlushCache()
+
+        try {
+            val res = RST_Isoband.execute(ds, Array(0.0, 50.0, 100.0), 1)
+            res should not be null
+            val n = res.numElements()
+            // Only the 50.0 pixel lands in band 1 [50,100); 100.0 == breaks[-1] is excluded.
+            n shouldBe 1
+            val s = res.getStruct(0, 4)
+            s.getInt(1) shouldBe 1         // band 1
+            s.getDouble(2) shouldBe 50.0   // lower
+            s.getDouble(3) shouldBe 100.0  // upper
+        } finally {
+            ds.delete()
+        }
+    }
+
     test("RST_Isoband: non-strictly-ascending breaks throw IllegalArgumentException") {
         an[IllegalArgumentException] should be thrownBy {
             RST_Isoband.execute(srcDs, Array(0.0, 50.0, 50.0), 1)

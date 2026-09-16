@@ -36,6 +36,13 @@ case class RST_Isoband(
     override def children: Seq[Expression] =
         Seq(tile, breaksExpr, ExpressionConfigExpr())
 
+    // Pin breaks to ARRAY<DOUBLE> so ImplicitCastInputTypes coerces SQL literals
+    // (Spark 4.0 infers array(0.0, 50.0, …) as ARRAY<DECIMAL>, not ARRAY<DOUBLE>;
+    // without this override, breaksData.toDoubleArray() throws ClassCastException at
+    // runtime and RST_ErrorHandler silently returns null).  Mirrors RST_Contour.
+    override def inputTypes: Seq[DataType] =
+        Seq(tile.dataType, ArrayType(DoubleType), StringType)
+
     override def dataType: DataType = ArrayType(
         StructType(Seq(
             StructField("geom_wkb", BinaryType),

@@ -1,10 +1,17 @@
 """Cross-tier (light pyrx vs heavy Scala/GDAL) parity for gbx_rst_isoband.
 
 Both tiers are run on the SAME in-memory GTiff bytes with a five-break band
-schedule ``[0.0, 50.0, 100.0, 150.0, 200.0]``.  Their ARRAY<STRUCT> outputs are
-compared as SORTED SETS — not positionally — because ``gdal.Polygonize`` (heavy)
-and ``rasterio.features.shapes`` (light) return contiguous-patch polygons in
-arbitrary emission order.
+schedule ``[0.0, 50.0, 100.0, 150.0, 200.0]`` passed as **inline SQL literals**
+(``array(0.0, 50.0, 100.0, 150.0, 200.0)``).  Using inline literals is the primary
+regression guard for the Spark 4.0 Decimal/Double type-inference bug: without the
+``override def inputTypes`` fix in ``RST_Isoband``, those literals arrive as
+``ARRAY<DECIMAL>`` at the eval path, ``toDoubleArray()`` throws ``ClassCastException``,
+``RST_ErrorHandler`` swallows it, and the heavy tier silently returns null.  The test
+explicitly asserts that heavy results are non-null before comparing.
+
+ARRAY<STRUCT> outputs are compared as SORTED SETS — not positionally — because
+``gdal.Polygonize`` (heavy) and ``rasterio.features.shapes`` (light) emit patches in
+arbitrary order.
 
 Comparison contract:
   1. Identical total patch count.
@@ -131,38 +138,23 @@ def _make_geotiff_bytes(
 
 _BREAKS_5 = [0.0, 50.0, 100.0, 150.0, 200.0]
 
-# ---------------------------------------------------------------------------
-# Schema helpers: pass breaks as a typed ARRAY<DOUBLE> column so that the
-# Scala eval path receives real Double values.  Inline SQL literals like
-# array(0.0, 50.0, …) are inferred as DECIMAL in Spark 4.0, which causes
-# breaksData.toDoubleArray() to throw ClassCastException at runtime (the JVM
-# cannot cast Decimal to java.lang.Double in the GenericArrayData path).
-# Passing a pre-typed column avoids the type-inference gap without touching
-# RST_Isoband.scala.
-# ---------------------------------------------------------------------------
 
-from pyspark.sql.types import (  # noqa: E402
-    ArrayType,
-    BinaryType,
-    DoubleType,
-    StructField,
-    StructType,
-)
-
-_ISOBAND_INPUT_SCHEMA = StructType([
-    StructField("tile", BinaryType()),
-    StructField("breaks", ArrayType(DoubleType())),
-])
-
-
-def _collect_isoband_structs(rows):
+def _collect_isoband_structs(rows, tier="?"):
     """Extract list of (band, lower, upper, area) from a collected isoband row.
 
     *rows* is the list of PySpark Row objects returned by ``.collect()``.  The
     first (and only) row contains field ``r`` which is the isoband array result —
     a list of Rows each with fields ``geom_wkb``, ``band``, ``lower``, ``upper``.
+
+    An explicit non-null assertion guards the Decimal/Double coercion fix in
+    RST_Isoband.scala: before that fix the heavy tier silently returned null when
+    breaks were passed as inline SQL literals (Spark 4.0 infers them as DECIMAL).
     """
     result = rows[0]["r"]
+    assert result is not None, (
+        f"{tier} gbx_rst_isoband returned null — possible Decimal→Double coercion "
+        "failure: check RST_Isoband.inputTypes override"
+    )
     structs = []
     for s in result:
         geom = shapely.wkb.loads(bytes(s["geom_wkb"]))
@@ -220,13 +212,14 @@ def _assert_isoband_parity(light_structs, heavy_structs, label=""):
 # Two-phase isoband execution helpers
 # ---------------------------------------------------------------------------
 
-# Use a column reference (``breaks``) rather than inline SQL literals so that
-# the breaks value arrives at the Scala eval path as ARRAY<DOUBLE>, not as
-# the DECIMAL type that Spark 4.0 infers from ``array(0.0, 50.0, …)`` literals.
+# Breaks are passed as INLINE SQL literals — ``array(0.0, 50.0, …)`` — which
+# Spark 4.0 infers as ``ARRAY<DECIMAL>``.  This is deliberately the path that
+# was broken before the RST_Isoband.inputTypes fix.  Both tiers must produce
+# non-null results so that this test guards the regression.
 _SQL = (
     "SELECT gbx_rst_isoband("
     "  gbx_rst_fromcontent(tile, 'GTiff'),"
-    "  breaks"
+    "  array(0.0, 50.0, 100.0, 150.0, 200.0)"
     ") AS r "
     "FROM {view}"
 )
@@ -243,8 +236,8 @@ def _run_light_isoband(spark, raster_bytes):
     prx.register(spark)
 
     df = spark.createDataFrame(
-        [(bytearray(raster_bytes), _BREAKS_5)],
-        _ISOBAND_INPUT_SCHEMA,
+        [(bytearray(raster_bytes),)],
+        "tile binary",
     )
     df.createOrReplaceTempView("_isoband_parity_light")
     return spark.sql(_SQL.format(view="_isoband_parity_light")).collect()
@@ -260,8 +253,8 @@ def _run_heavy_isoband(spark, raster_bytes):
     hx.register(spark)
 
     df = spark.createDataFrame(
-        [(bytearray(raster_bytes), _BREAKS_5)],
-        _ISOBAND_INPUT_SCHEMA,
+        [(bytearray(raster_bytes),)],
+        "tile binary",
     )
     df.createOrReplaceTempView("_isoband_parity_heavy")
     return spark.sql(_SQL.format(view="_isoband_parity_heavy")).collect()
@@ -298,8 +291,8 @@ def test_isoband_four_quadrant_parity(spark_with_jar):
     light_rows = _run_light_isoband(spark, raster)
     heavy_rows = _run_heavy_isoband(spark, raster)
 
-    light_structs = _collect_isoband_structs(light_rows)
-    heavy_structs = _collect_isoband_structs(heavy_rows)
+    light_structs = _collect_isoband_structs(light_rows, tier="light")
+    heavy_structs = _collect_isoband_structs(heavy_rows, tier="heavy")
 
     # Sanity: four patches expected (one per quadrant).
     assert len(light_structs) == 4, (
@@ -338,8 +331,8 @@ def test_isoband_nodata_exclusion_parity(spark_with_jar):
     light_rows = _run_light_isoband(spark, raster)
     heavy_rows = _run_heavy_isoband(spark, raster)
 
-    light_structs = _collect_isoband_structs(light_rows)
-    heavy_structs = _collect_isoband_structs(heavy_rows)
+    light_structs = _collect_isoband_structs(light_rows, tier="light")
+    heavy_structs = _collect_isoband_structs(heavy_rows, tier="heavy")
 
     # All patches must be band 0 [0, 50).
     for b, lo, hi, _ in light_structs:
@@ -422,8 +415,8 @@ def test_isoband_disjoint_patches_parity(spark_with_jar):
     light_rows = _run_light_isoband(spark, raster)
     heavy_rows = _run_heavy_isoband(spark, raster)
 
-    light_structs = _collect_isoband_structs(light_rows)
-    heavy_structs = _collect_isoband_structs(heavy_rows)
+    light_structs = _collect_isoband_structs(light_rows, tier="light")
+    heavy_structs = _collect_isoband_structs(heavy_rows, tier="heavy")
 
     _assert_isoband_parity(light_structs, heavy_structs, label="disjoint-patches")
 

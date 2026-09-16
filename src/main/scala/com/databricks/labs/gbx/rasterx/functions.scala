@@ -198,6 +198,7 @@ object functions extends Serializable {
         rd.register(RST_ResampleToRes)
         rd.register(RST_GridFromPoints)
         rd.register(RST_GridFromPointsAgg)
+        rd.register(RST_BinPoints)
 
         // Pixel ops + extraction (thin GDAL wrappers)
         rd.register(RST_Band)
@@ -850,6 +851,21 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_GridFromPoints.name, Seq(
             points, values, xmin, ymin, xmax, ymax, widthPx, heightPx, out_srid, power, maxPts
         ))
+
+    // Bin parallel x/y/z arrays into a Float32 raster — non-aggregator form
+    def rst_binpoints(
+        xArray: Column, yArray: Column, zArray: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        widthPx: Column, heightPx: Column, srid: Column
+    ): Column =
+        ColumnAdapter(RST_BinPoints.name, Seq(xArray, yArray, zArray, xmin, ymin, xmax, ymax, widthPx, heightPx, srid))
+    def rst_binpoints(
+        xArray: Column, yArray: Column, zArray: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        widthPx: Column, heightPx: Column, srid: Column,
+        statistic: Column
+    ): Column =
+        ColumnAdapter(RST_BinPoints.name, Seq(xArray, yArray, zArray, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, statistic))
 
     // IDW interpolation - aggregator (one point/value per row)
     def rst_gridfrompoints_agg(

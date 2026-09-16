@@ -2837,6 +2837,63 @@ def rst_gridfrompoints_agg(
     )
 
 
+def rst_binpoints(
+    x_array: ColLike,
+    y_array: ColLike,
+    z_array: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Bin parallel x/y/z ``ARRAY<DOUBLE>`` columns into a Float32 raster tile.
+
+    Non-aggregator (scalar) form — all three arrays live in a single row.
+    For the grouped-agg form use :func:`rst_binpoints_agg`.
+
+    Output is a single-band Float32 GTiff tile of shape
+    ``width_px x height_px`` covering ``(xmin, ymin) -> (xmax, ymax)`` in the
+    given SRID. Empty cells (no points) carry NoData (``-9999.0``).
+
+    Args:
+        x_array: Column of ``ARRAY<DOUBLE>`` x-coordinates.
+        y_array: Column of ``ARRAY<DOUBLE>`` y-coordinates.
+        z_array: Column of ``ARRAY<DOUBLE>`` z-values to reduce per cell.
+        xmin: Minimum X of the output raster extent.
+        ymin: Minimum Y of the output raster extent.
+        xmax: Maximum X of the output raster extent.
+        ymax: Maximum Y of the output raster extent.
+        width_px: Output raster width in pixels.
+        height_px: Output raster height in pixels.
+        srid: EPSG SRID of the output raster.
+        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
+            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
+            (e.g. ``"percentile:90"``).
+
+    Returns:
+        Raster tile column (single-band Float32 GTiff).
+    """
+    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return f.call_function(
+        "gbx_rst_binpoints",
+        _col(x_array),
+        _col(y_array),
+        _col(z_array),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width_px),
+        _col(height_px),
+        _col(srid),
+        stat_col,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Delaunay-TIN Digital Terrain Model (DTM) interpolation
 #

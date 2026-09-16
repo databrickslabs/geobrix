@@ -2894,6 +2894,60 @@ def rst_binpoints(
     )
 
 
+def rst_binpoints_agg(
+    x: ColLike,
+    y: ColLike,
+    z: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Bin one ``(x, y, z)`` point per row into a Float32 raster tile (aggregator).
+
+    Aggregator counterpart of :func:`rst_binpoints`. Group rows by an extent
+    key and pass one scalar ``x`` / ``y`` / ``z`` per row together with
+    per-group literal extent parameters.
+
+    Args:
+        x: Column of X-coordinates (DOUBLE).
+        y: Column of Y-coordinates (DOUBLE).
+        z: Column of Z-values to bin (DOUBLE).
+        xmin: Minimum X of the output raster extent (per-group literal).
+        ymin: Minimum Y of the output raster extent.
+        xmax: Maximum X of the output raster extent.
+        ymax: Maximum Y of the output raster extent.
+        width_px: Output raster width in pixels.
+        height_px: Output raster height in pixels.
+        srid: EPSG SRID of the output raster.
+        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
+            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
+            (e.g. ``"percentile:90"``).
+
+    Returns:
+        Raster tile column (single-band Float32 GTiff).
+    """
+    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return f.call_function(
+        "gbx_rst_binpoints_agg",
+        _col(x),
+        _col(y),
+        _col(z),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width_px),
+        _col(height_px),
+        _col(srid),
+        stat_col,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Delaunay-TIN Digital Terrain Model (DTM) interpolation
 #

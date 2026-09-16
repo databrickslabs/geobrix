@@ -1523,6 +1523,13 @@ Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL requi
 Compute a **Canopy Height Model (CHM)** from a Digital Surface Model (DSM) tile and a
 Digital Elevation Model (DEM) tile: `CHM = clamp(align(DSM → DEM grid) − DEM, min=0)`.
 
+**What it computes.** The DSM holds the height of the *top* surface in each cell (canopy,
+rooftops) and the DEM holds bare-earth ground elevation, so subtracting one from the other
+leaves the height of whatever stands above the ground — canopy or object height — in the
+DEM's units. It is a per-cell **subtraction**, not an aggregation: taking the max z per cell
+is how you build the DSM upstream (e.g. `rst_binpoints` over LiDAR returns), and `rst_chm`
+then differences that surface against the DEM.
+
 The DSM is warped onto the DEM's grid (CRS, extent, width, height) via
 nearest-neighbour resampling before subtraction. Negative differences (where the DSM
 dips below the DEM due to noise) are clamped to 0. NoData in either input propagates

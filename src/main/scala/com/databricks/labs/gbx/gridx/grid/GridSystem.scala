@@ -88,6 +88,26 @@ trait GridSystem extends Serializable {
    * Defaults to false so a new grid must opt in explicitly after proving exactness.
    */
   def coveringFastPathExact: Boolean = false
+
+  /**
+   * Cell edge length at `resolution` in the grid's native CRS units.
+   *
+   * Used as the sampling step in the lazy O(perimeter) boundary-cell tracing (density guard:
+   * step ≤ cellStep guarantees no boundary cell is skipped).  Mirrors the `cell_step` hook
+   * in the light tier's `_qb_hooks` / `_bng_hooks` / `_custom_hooks`.
+   *
+   * Concrete values:
+   *   Quadbin : 360.0 / 2^z degrees (longitude width of one tile at zoom z)
+   *   BNG     : getEdgeSize(resolution) metres
+   *   Custom  : min(getCellWidth(resolution), getCellHeight(resolution)) in CRS units
+   *
+   * H3 does not have a heavy geometry-aware tier, so it does not implement this and will
+   * throw `UnsupportedOperationException` if accidentally called.
+   */
+  def cellStep(resolution: Int): Double =
+    throw new UnsupportedOperationException(
+      s"cellStep not implemented for grid '${name}'; override in concrete GridSystem"
+    )
 }
 
 object GridSystem {

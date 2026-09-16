@@ -51,6 +51,10 @@ object BNG extends GridSystem {
       * draws, so the covering interior fast-path is bit-exact. */
     override def coveringFastPathExact: Boolean = true
 
+    /** Cell edge length (metres) at `resolution`: the standard BNG edge size for that resolution.
+      * Mirrors light `_bng_hooks` `cell_step = float(get_edge_size(res))`. */
+    override def cellStep(resolution: Int): Double = getEdgeSize(resolution).toDouble
+
     /**
       * Quadrant encodings. The order is determined in a way that preserves
       * similarity to space filling curves.

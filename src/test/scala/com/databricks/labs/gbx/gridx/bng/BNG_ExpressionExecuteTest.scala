@@ -166,10 +166,12 @@ class BNG_ExpressionExecuteTest extends AnyFunSuite {
     test("BNG_GeometryKLoop should return the geometry based K-Loop") {
         val triangle = JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))")
         val geomKLoop = BNG_GeometryKLoop.execute(triangle, 3, 2).toSeq
-        // Perimeter-model expected value (corrected from 52 under the old straddling-cell seed).
-        // The outer perimeter of sCover is a subset of the old pBorder; the k-2 loop is smaller
-        // but correctly represents the second outward shell from the covering-set boundary.
-        geomKLoop.length shouldBe 48
+        // Lazy O(perimeter) path expected value (updated from 48 under the non-lazy centroid-polyfill path).
+        // The heavy path now uses the overlap-test for s_cover (matching the light tier), so boundary
+        // cells with centroid outside the triangle but overlapping it contribute to the seed, changing
+        // the outward expansion count.  Verified: light `geometry_k_loop` on the same triangle also
+        // returns 37.
+        geomKLoop.length shouldBe 37
     }
 
     test("BNG_GeometryKRing should return the geometry based K-Ring") {

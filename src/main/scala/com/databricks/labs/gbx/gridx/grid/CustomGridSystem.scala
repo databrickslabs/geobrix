@@ -24,6 +24,11 @@ case class CustomGridSystem(conf: GridConf) extends GridSystem {
       * draws, so the covering interior fast-path is bit-exact. */
     override def coveringFastPathExact: Boolean = true
 
+    /** Cell edge length (CRS units) at `resolution`: min(cellWidth, cellHeight).
+      * Mirrors light `_custom_hooks` `cs = min(cell_width(conf, res), cell_height(conf, res))`. */
+    override def cellStep(resolution: Int): Double =
+      math.min(getCellWidth(resolution), getCellHeight(resolution))
+
     def getResolutionStr(resolution: Int): String = resolution.toString
 
     def format(id: Long): String = id.toString

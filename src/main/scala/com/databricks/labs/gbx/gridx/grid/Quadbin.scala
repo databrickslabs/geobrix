@@ -152,6 +152,10 @@ object Quadbin extends GridSystem {
       * `cellIdToGeometry` draws, so the covering interior fast-path is bit-exact. */
     override def coveringFastPathExact: Boolean = true
 
+    /** Cell edge length (longitude degrees) at zoom `z`: 360 / 2^z.
+      * Mirrors light `_qb_hooks` `cell_step = 360.0 / float(1 << z)`. */
+    override def cellStep(resolution: Int): Double = 360.0 / (1L << resolution).toDouble
+
     /** SRID for quadbin cell geometries (WGS84 lon/lat). */
     def crsSrid: Int = 4326
 

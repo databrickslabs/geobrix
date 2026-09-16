@@ -61,7 +61,7 @@ PYTHON_REGISTERED = {
     "gbx_h3_geomkringexplode",
     "gbx_h3_geomkloopexplode",
     # LiDAR / point-cloud DSM functions — light-only (pure pyrx, no JVM equivalent).
-    "gbx_rst_binpoints",
+    # gbx_rst_binpoints is now both-tier (heavy Scala registered in Phase 2).
     "gbx_rst_binpoints_agg",
 }
 

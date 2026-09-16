@@ -64,7 +64,6 @@ PYTHON_REGISTERED = {
     "gbx_rst_binpoints",
     "gbx_rst_binpoints_agg",
     "gbx_rst_isoband",
-    "gbx_rst_chm",
 }
 
 # `override def name: String = "gbx_..."` — the canonical SQL name a companion registers under.

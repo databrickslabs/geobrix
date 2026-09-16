@@ -85,7 +85,7 @@ CARDS_LEFT = [
         fns=[
             "rst_combineavg_agg", "rst_derivedband_agg", "rst_merge_agg",
             "rst_frombands_agg", "rst_rasterize_agg",
-            "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg",
+            "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg", "rst_binpoints_agg",
             "rst_h3_rasterize_agg",
             "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg",
             "rst_custom_rasterize_agg",
@@ -98,7 +98,7 @@ CARDS_LEFT = [
         fns=[
             "rst_slope", "rst_aspect", "rst_hillshade",
             "rst_tri", "rst_tpi", "rst_roughness",
-            "rst_color_relief", "rst_viewshed",
+            "rst_color_relief", "rst_viewshed", "rst_chm",
         ],
     ),
     Card(
@@ -170,8 +170,8 @@ CARDS_RIGHT = [
         subtitle="Convert between vector geometries and raster tiles",
         color="#6B48A8", tint="#EEE8F8",
         fns=[
-            "rst_rasterize", "rst_polygonize",
-            "rst_dtmfromgeoms", "rst_gridfrompoints",
+            "rst_rasterize", "rst_polygonize", "rst_isoband",
+            "rst_dtmfromgeoms", "rst_gridfrompoints", "rst_binpoints",
         ],
     ),
     Card(

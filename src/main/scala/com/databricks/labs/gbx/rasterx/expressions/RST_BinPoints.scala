@@ -118,19 +118,21 @@ object RST_BinPoints extends WithExpressionInfo {
         statistic: UTF8String,
         conf: UTF8String
     ): InternalRow =
-        Option(
+        // Empty/null input is a valid case — return null quietly, bypassing safeEval
+        // so no NonLocalReturnControl is thrown and no spurious WARN is logged.
+        if (xData == null || xData.numElements() == 0) null
+        else Option(
             RST_ErrorHandler.safeEval(
                 () => {
                     val exprConf = ExpressionConfig.fromB64(conf.toString)
                     RST_ExpressionUtil.init(exprConf)
-                    if (xData == null || xData.numElements() == 0) return null
-                    val x    = xData.toDoubleArray()
-                    val y    = yData.toDoubleArray()
-                    val z    = zData.toDoubleArray()
-                    val stat = if (statistic == null) DefaultStatistic else statistic.toString
+                    val x     = xData.toDoubleArray()
+                    val y     = yData.toDoubleArray()
+                    val z     = zData.toDoubleArray()
+                    val stat  = if (statistic == null) DefaultStatistic else statistic.toString
                     val bytes = execute(x, y, z, xmin, ymin, xmax, ymax, widthPx, heightPx, srid, stat)
-                    if (bytes == null) return null
-                    tileRow(bytes)
+                    // bytes is null only when x.isEmpty, already guarded above; return tileRow.
+                    if (bytes == null) null else tileRow(bytes)
                 },
                 null,
                 BinaryType,

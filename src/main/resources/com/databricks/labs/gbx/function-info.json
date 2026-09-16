@@ -77,6 +77,7 @@
     },
     "gbx_rst_binpoints_agg": {
       "examples": "Examples:\n      > SELECT tile_id, gbx_rst_binpoints_agg(x, y, z, 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max') AS dsm FROM ( VALUES (1, 550100.0, 180100.0, 42.5), (1, 550200.0, 180200.0, 45.1), (1, 550300.0, 180500.0, 38.7) ) AS t(tile_id, x, y, z) GROUP BY tile_id;",
+      "usage_args": "x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic]",
       "bindings": [
         "sql"
       ],

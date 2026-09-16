@@ -1470,7 +1470,7 @@ points into other surfaces.
 
 ### rst_binpoints_agg {#rst_binpoints_agg}
 
-<Tier light/>
+<Tier both/> <Impl groupedAgg/>
 
 Aggregator variant of [`rst_binpoints`](#rst_binpoints): stream **one scalar (x, y, z) point
 per row** into a DSM tile via `groupBy(...).agg(rx.rst_binpoints_agg(...))`. The

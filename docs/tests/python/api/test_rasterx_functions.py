@@ -663,6 +663,48 @@ def test_rst_combineavg_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_combineavg")
 
 
+def test_rst_combinecount_python_heavy_example(spark):
+    """rst_combinecount returns a non-null tile struct (pixel-count raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinecount_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinecount")
+
+
+def test_rst_combinemax_python_heavy_example(spark):
+    """rst_combinemax returns a non-null tile struct (per-pixel maximum raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinemax_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinemax")
+
+
+def test_rst_combinemedian_python_heavy_example(spark):
+    """rst_combinemedian returns a non-null tile struct (per-pixel median raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinemedian_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinemedian")
+
+
+def test_rst_combinemin_python_heavy_example(spark):
+    """rst_combinemin returns a non-null tile struct (per-pixel minimum raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinemin_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinemin")
+
+
+def test_rst_combinestddev_python_heavy_example(spark):
+    """rst_combinestddev returns a non-null tile struct (per-pixel std-dev raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinestddev_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinestddev")
+
+
+def test_rst_combinesum_python_heavy_example(spark):
+    """rst_combinesum returns a non-null tile struct (per-pixel sum raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinesum_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinesum")
+
+
 def test_rst_derivedband_python_heavy_example(spark):
     """rst_derivedband returns a non-null tile struct (derived from Python UDF)."""
     assert rasterx_functions is not None

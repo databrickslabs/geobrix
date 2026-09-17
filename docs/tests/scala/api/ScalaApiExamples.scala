@@ -1828,6 +1828,162 @@ result.show(truncate = false)
 (averaged combined raster)
 """.trim
 
+  val rst_combinecount_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val multiband = spark.table("multiband_rasters")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_combinecount(collect_list("tile")).alias("combined"))
+result.show(truncate = false)
+""".trim
+
+  val rst_combinecount_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|combined                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(pixel-count raster: 3 valid inputs per pixel)
+""".trim
+
+  val rst_combinemax_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val multiband = spark.table("multiband_rasters")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_combinemax(collect_list("tile")).alias("combined"))
+result.show(truncate = false)
+""".trim
+
+  val rst_combinemax_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|combined                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(per-pixel maximum raster from 3 input tiles)
+""".trim
+
+  val rst_combinemedian_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val multiband = spark.table("multiband_rasters")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_combinemedian(collect_list("tile")).alias("combined"))
+result.show(truncate = false)
+""".trim
+
+  val rst_combinemedian_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|combined                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(per-pixel median raster from 3 input tiles)
+""".trim
+
+  val rst_combinemin_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val multiband = spark.table("multiband_rasters")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_combinemin(collect_list("tile")).alias("combined"))
+result.show(truncate = false)
+""".trim
+
+  val rst_combinemin_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|combined                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(per-pixel minimum raster from 3 input tiles)
+""".trim
+
+  val rst_combinestddev_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val multiband = spark.table("multiband_rasters")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_combinestddev(collect_list("tile")).alias("combined"))
+result.show(truncate = false)
+""".trim
+
+  val rst_combinestddev_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|combined                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(per-pixel population std-dev raster from 3 input tiles)
+""".trim
+
+  val rst_combinesum_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+// Multi-row fixture: 3 single-band tiles (one per band from multiband GeoTIFF)
+val multiband = spark.table("multiband_rasters")
+val b1 = multiband.select(rx.rst_band(col("tile"), lit(1)).alias("tile")).withColumn("band_index", lit(1))
+val b2 = multiband.select(rx.rst_band(col("tile"), lit(2)).alias("tile")).withColumn("band_index", lit(2))
+val b3 = multiband.select(rx.rst_band(col("tile"), lit(3)).alias("tile")).withColumn("band_index", lit(3))
+val bands = b1.union(b2).union(b3).withColumn("region", lit("R1"))
+val result = bands.groupBy("region").agg(rx.rst_combinesum(collect_list("tile")).alias("combined"))
+result.show(truncate = false)
+""".trim
+
+  val rst_combinesum_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|combined                                                   |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(per-pixel sum raster from 3 input tiles)
+""".trim
+
   val rst_derivedband_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

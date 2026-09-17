@@ -1833,6 +1833,78 @@ def rst_combineavg(tiles: ColLike) -> Column:
     return f.call_function("gbx_rst_combineavg", _col(tiles))
 
 
+def rst_combinecount(tiles: ColLike) -> Column:
+    """Count valid (non-NoData) inputs per pixel across aligned tiles.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the count of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinecount", _col(tiles))
+
+
+def rst_combinemax(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by taking the per-pixel maximum.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the maximum of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinemax", _col(tiles))
+
+
+def rst_combinemedian(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by taking the per-pixel median.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the median of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinemedian", _col(tiles))
+
+
+def rst_combinemin(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by taking the per-pixel minimum.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the minimum of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinemin", _col(tiles))
+
+
+def rst_combinestddev(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by computing per-pixel population std-dev.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the population std-dev of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinestddev", _col(tiles))
+
+
+def rst_combinesum(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by summing per pixel.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the sum of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinesum", _col(tiles))
+
+
 def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
     """Apply a convolution kernel to the raster.
 

@@ -32,7 +32,7 @@ except ImportError:
 
 
 def _get_multi_band_tiles_df(spark):
-    from _fixtures import multi_band_tiles_df  # noqa: PLC0415
+    from ._fixtures import multi_band_tiles_df  # noqa: PLC0415
 
     return multi_band_tiles_df(spark)
 

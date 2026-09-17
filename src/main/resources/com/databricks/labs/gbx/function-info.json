@@ -285,7 +285,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinecount(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -293,7 +296,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinemax(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -301,7 +307,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinemedian(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -309,7 +318,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinemin(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -317,7 +329,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinestddev(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -325,7 +340,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinesum(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },

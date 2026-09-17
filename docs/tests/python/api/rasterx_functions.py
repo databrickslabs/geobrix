@@ -2441,6 +2441,210 @@ rst_combineavg_python_heavy_example_output = """
 
 
 # ---------------------------------------------------------------------------
+# rst_combinecount -- count valid inputs per pixel
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (pixel-count raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinecount_python_heavy_example(spark):
+    """Count valid (non-NoData) inputs per pixel across aligned tiles."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinecount(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinecount_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(pixel-count raster: 3 valid inputs per pixel from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinemax -- per-pixel maximum
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinemax_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel maximum."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinemax(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinemax_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel maximum raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinemedian -- per-pixel median
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinemedian_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel median."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinemedian(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinemedian_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel median raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinemin -- per-pixel minimum
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinemin_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel minimum."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinemin(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinemin_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel minimum raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinestddev -- per-pixel population std-dev
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinestddev_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel population std-dev."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinestddev(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinestddev_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel population std-dev raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinesum -- per-pixel sum
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinesum_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by summing per pixel."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinesum(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinesum_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel sum raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
 # rst_derivedband -- apply Python UDF to produce derived band
 # Fixture: multiband_tile_df_heavy(spark) (3 bands)
 # Output: tile struct (raster with derived band)

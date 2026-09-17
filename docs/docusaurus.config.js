@@ -145,6 +145,13 @@ const config = {
       },
       footer: {
         style: 'dark',
+        logo: {
+          alt: 'Databricks Labs',
+          src: 'img/databricks-labs-logo.png',
+          href: 'https://www.databricks.com/learn/labs',
+          width: 56,
+          height: 56,
+        },
         links: [
           {
             title: 'Docs',

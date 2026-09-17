@@ -825,3 +825,83 @@ def test_h3_geomkloopexplode_python_light_example(spark):
     result = light_examples.h3_geomkloopexplode_python_light_example(spark)
     assert result is not None, "h3_geomkloopexplode should return non-null rows"
     assert len(result) > 0, "h3_geomkloopexplode must return at least one row"
+
+
+# ============================================================================
+# Batch E: cellfill + kloop + distance
+# ============================================================================
+
+
+def test_bng_cellfill_python_light_example(spark):
+    """bng_cellfill (light) returns non-null BINARY after filling a NULL center cell."""
+    assert light_examples is not None
+    result = light_examples.bng_cellfill_python_light_example(spark)
+    assert result is not None, "bng_cellfill should return non-null result"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected BINARY (bytes), got {type(result)}"
+    assert len(result) > 0, "bng_cellfill BINARY result should be non-empty"
+
+
+def test_quadbin_cellfill_python_light_example(spark):
+    """quadbin_cellfill (light) returns non-null BINARY after filling a NULL center cell."""
+    assert light_examples is not None
+    result = light_examples.quadbin_cellfill_python_light_example(spark)
+    assert result is not None, "quadbin_cellfill should return non-null result"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected BINARY (bytes), got {type(result)}"
+    assert len(result) > 0, "quadbin_cellfill BINARY result should be non-empty"
+
+
+def test_h3_cellfill_python_light_example(spark):
+    """h3_cellfill (light) returns non-null BINARY after filling a NULL H3 center cell."""
+    assert light_examples is not None
+    result = light_examples.h3_cellfill_python_light_example(spark)
+    assert result is not None, "h3_cellfill should return non-null result"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected BINARY (bytes), got {type(result)}"
+    assert len(result) > 0, "h3_cellfill BINARY result should be non-empty"
+
+
+def test_custom_cellfill_python_light_example(spark):
+    """custom_cellfill (light) returns non-null BINARY after filling a NULL custom cell."""
+    assert light_examples is not None
+    result = light_examples.custom_cellfill_python_light_example(spark)
+    assert result is not None, "custom_cellfill should return non-null result"
+    assert isinstance(
+        result, (bytes, bytearray)
+    ), f"Expected BINARY (bytes), got {type(result)}"
+    assert len(result) > 0, "custom_cellfill BINARY result should be non-empty"
+
+
+def test_quadbin_kloop_python_light_example(spark):
+    """quadbin_kloop (light) returns 8 cells for the SF z10 cell at k=1 (hollow ring)."""
+    assert light_examples is not None
+    result = light_examples.quadbin_kloop_python_light_example(spark)
+    assert result is not None, "quadbin_kloop should return a non-null array"
+    assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
+    assert len(result) == 8, f"Expected 8 cells for k=1 hollow ring, got {len(result)}"
+    assert 5233961839712272383 not in result, "Center cell must NOT be in the k=1 loop"
+
+
+def test_custom_kloop_python_light_example(spark):
+    """custom_kloop (light) returns 8 cells for k=1 around cell 360287970373976640."""
+    assert light_examples is not None
+    result = light_examples.custom_kloop_python_light_example(spark)
+    assert result is not None, "custom_kloop should return a non-null array"
+    assert isinstance(result, list), f"Expected list (ARRAY<BIGINT>), got {type(result)}"
+    assert len(result) == 8, f"Expected 8 cells for k=1 hollow ring, got {len(result)}"
+    assert (
+        360287970373976640 not in result
+    ), "Center cell 360287970373976640 must NOT be in the k=1 loop"
+
+
+def test_custom_distance_python_light_example(spark):
+    """custom_distance (light) returns 1 for two cells 1000m apart at res=0."""
+    assert light_examples is not None
+    result = light_examples.custom_distance_python_light_example(spark)
+    assert result is not None, "custom_distance should return a non-null result"
+    assert isinstance(result, int), f"Expected BIGINT (int), got {type(result)}"
+    assert result == 1, f"Expected Chebyshev distance 1, got {result}"

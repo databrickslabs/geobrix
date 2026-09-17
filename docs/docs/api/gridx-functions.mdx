@@ -1913,6 +1913,46 @@ Heavyweight `gbx_custom_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOU
 
 ---
 
+## H3 Cell Fill
+
+<Tier both/>
+
+`gbx_h3_cellfill` is the grouped aggregator that interpolates missing H3 cell values from valid ring-neighbours, using the same fill algorithm as the BNG, quadbin, and custom-grid variants.
+
+:::warning Return-type divergence
+Heavyweight `gbx_h3_cellfill` returns `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`; the lightweight function returns `BINARY` in both Python and SQL. A PySpark grouped-aggregate `pandas_udf` cannot return a `StructType`, so the lightweight aggregate emits a serialised result. The functional content (cell IDs and filled values) is equivalent.
+:::
+
+### h3_cellfill
+
+<Tier both/>
+
+Fill missing H3 cell values by interpolating from ring-`k` neighbours. Designed to work with data produced by `h3_pointash3` (Databricks product built-in) or any other source of H3 cell IDs at a fixed resolution.
+
+**Signature:** `h3_cellfill(cellid, value, [k], [method], [power])`
+
+**Parameters:**
+- `cellid` — `BIGINT` column of H3 cell IDs
+- `value` — `DOUBLE` value column (`NULL` marks cells to fill)
+- `k` *(optional, default `1`)* — ring radius for neighbour search
+- `method` *(optional, default `'mean'`)* — `'mean'` or `'idw'` (inverse-distance weighting)
+- `power` *(optional, default `2.0`)* — IDW decay exponent; ignored when `method='mean'`
+
+**Returns:**
+- Heavyweight: `ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>`
+- Lightweight: `BINARY`
+
+<FunctionExamples
+  name="h3_cellfill"
+  sql={gridxFunctionsSqlExamples}        sqlSource="docs/tests/python/api/gridx_functions_sql.py"
+  pythonLight={gridxLightCode}           pythonLightSource="docs/tests/python/api/gridx_functions_python_light.py"
+  pythonHeavy={gridxFunctionsExamples}   pythonHeavySource="docs/tests/python/api/gridx_functions.py"
+  scala={scalaApiExamplesCode}           scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_gridx_functions_python_light.py"
+/>
+
+---
+
 ## H3 Geometry-Aware Expansion (Light-Only)
 
 <Tier light/>

@@ -304,6 +304,39 @@ def bng_tessellate(
 # Aggregators
 
 
+def bng_cellfill(
+    cellid: ColLike,
+    value: ColLike,
+    k: ColLike = 1,
+    method: ColLike = "mean",
+    power: ColLike = 2.0,
+) -> Column:
+    """Grouped aggregator: fill NULL BNG cells from valid neighbours (heavy bng tier).
+
+    Use with ``groupBy(...).agg(bx.bng_cellfill(...))`` to interpolate missing
+    values. Returns ``ARRAY<STRUCT<cellid STRING, value DOUBLE>>``.
+
+    Args:
+        cellid: Column of BNG cell-id STRINGs.
+        value: Column of DOUBLE values (NULL marks cells to be filled).
+        k: Neighbour ring radius (default ``1``).
+        method: Interpolation method — ``'mean'`` (default) or ``'idw'``.
+        power: IDW power parameter (default ``2.0``; ignored for ``'mean'``).
+
+    Returns:
+        Column of ``ARRAY<STRUCT<cellid STRING, value DOUBLE>>``.
+    """
+    _method = f.lit(method) if isinstance(method, str) else _col(method)
+    return f.call_function(
+        "gbx_bng_cellfill",
+        _col(cellid),
+        _col(value),
+        _col(k),
+        _method,
+        _col(power),
+    )
+
+
 def bng_cellintersection_agg(input_chip: ColLike) -> Column:
     """Aggregate multiple BNG cell chips into their intersection chip.
 

@@ -46,6 +46,31 @@ object functions extends Serializable {
 
     // ---------- Column API ----------
 
+    // ---------- Scalar / neighbourhood ----------
+
+    def custom_kloop(cell: Column, grid: Column, k: Column): Column =
+        ColumnAdapter(Custom_KLoop.name, Seq(cell, grid, k))
+
+    def custom_kloop(cell: Column, grid: Column, k: Int): Column =
+        custom_kloop(cell, grid, lit(k))
+
+    def custom_distance(cell1: Column, grid: Column, cell2: Column): Column =
+        ColumnAdapter(Custom_Distance.name, Seq(cell1, grid, cell2))
+
+    // ---------- Aggregators ----------
+
+    def custom_cellfill(cellid: Column, value: Column, grid: Column): Column =
+        ColumnAdapter(Custom_CellFill.name, Seq(cellid, value, grid))
+
+    def custom_cellfill(cellid: Column, value: Column, grid: Column, k: Int): Column =
+        ColumnAdapter(Custom_CellFill.name, Seq(cellid, value, grid, lit(k)))
+
+    def custom_cellfill(cellid: Column, value: Column, grid: Column, k: Int, method: String): Column =
+        ColumnAdapter(Custom_CellFill.name, Seq(cellid, value, grid, lit(k), lit(method)))
+
+    def custom_cellfill(cellid: Column, value: Column, grid: Column, k: Int, method: String, power: Double): Column =
+        ColumnAdapter(Custom_CellFill.name, Seq(cellid, value, grid, lit(k), lit(method), lit(power)))
+
     def custom_geomkring(geom: Column, grid: Column, resolution: Column, k: Column): Column =
         ColumnAdapter(Custom_GeometryKRing.name, Seq(geom, grid, resolution, k))
 

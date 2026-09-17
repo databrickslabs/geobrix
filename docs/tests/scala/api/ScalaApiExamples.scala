@@ -4666,4 +4666,189 @@ spark.sql(
 +------------------+
 ... (one BIGINT row per cell in the hollow outer ring at k=1 around the offset 3km polygon; 19 cells)""".trim
 
+  // =========================================================================
+  // Batch E: cellfill (grouped aggregate) + kloop / distance (scalar)
+  // bng_cellfill, quadbin_cellfill, h3_cellfill, custom_cellfill
+  // custom_kloop, quadbin_kloop, custom_distance
+  //
+  // Fixture views: bng_cells (TQ3080), quadbin_cells (SF z10), custom_grids
+  // cellfill inline data: 1 NULL center + ring-1 neighbours at 5.0 → filled=5.0
+  // =========================================================================
+
+  val bng_cellfill_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.bng.{functions => bx}
+import org.apache.spark.sql.functions._
+
+// Inline data: TQ300800 (NULL) + 4 ring-1 neighbours at 5.0 → TQ300800 filled to 5.0
+// Heavy tier returns ARRAY<STRUCT<cellid STRING, value DOUBLE>>
+val df = spark.createDataFrame(Seq(
+  (1, "TQ300800", null.asInstanceOf[java.lang.Double]),
+  (1, "TQ299800", 5.0: java.lang.Double),
+  (1, "TQ301800", 5.0: java.lang.Double),
+  (1, "TQ300799", 5.0: java.lang.Double),
+  (1, "TQ300801", 5.0: java.lang.Double)
+)).toDF("region", "cellid", "value")
+val result = df.groupBy("region")
+  .agg(bx.bng_cellfill(col("cellid"), col("value"), 1, "mean", 2.0).alias("filled"))
+result.show(truncate = false)
+""".trim
+
+  val bng_cellfill_scala_example_output: String =
+    """
++------+---------------------------------------------------+
+|region|filled                                             |
++------+---------------------------------------------------+
+|1     |[{TQ300800, 5.0}, {TQ299800, 5.0}, ...(5 entries)]|
++------+---------------------------------------------------+
+... (ARRAY<STRUCT<cellid STRING, value DOUBLE>> — center TQ300800 filled to 5.0)""".trim
+
+  val quadbin_cellfill_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Inline data: London z10 center (NULL) + 2 ring-1 neighbours at 5.0
+// Heavy tier returns ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>
+val df = spark.createDataFrame(Seq(
+  (1, 5234261469560717311L, null.asInstanceOf[java.lang.Double]),
+  (1, 5234261469560848383L, 5.0: java.lang.Double),
+  (1, 5234261469560586239L, 5.0: java.lang.Double)
+)).toDF("region", "cellid", "value")
+val result = df.groupBy("region")
+  .agg(qx.quadbin_cellfill(col("cellid"), col("value"), 1, "mean", 2.0).alias("filled"))
+result.show(truncate = false)
+""".trim
+
+  val quadbin_cellfill_scala_example_output: String =
+    """
++------+-------------------------------------------------------------+
+|region|filled                                                       |
++------+-------------------------------------------------------------+
+|1     |[{5234261469560717311, 5.0}, {5234261469560848383, 5.0}, ...]|
++------+-------------------------------------------------------------+
+... (ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> — center quadbin cell filled to 5.0)""".trim
+
+  val h3_cellfill_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.h3.{functions => hx}
+import org.apache.spark.sql.functions._
+
+// Inline data: London res-8 H3 center (NULL) + 2 ring-1 neighbours at 5.0
+// Heavy tier returns ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>
+val df = spark.createDataFrame(Seq(
+  (1, 612934495919669247L, null.asInstanceOf[java.lang.Double]),
+  (1, 612934495863046143L, 5.0: java.lang.Double),
+  (1, 612934495900794879L, 5.0: java.lang.Double)
+)).toDF("region", "cellid", "value")
+val result = df.groupBy("region")
+  .agg(hx.h3_cellfill(col("cellid"), col("value"), 1, "mean", 2.0).alias("filled"))
+result.show(truncate = false)
+""".trim
+
+  val h3_cellfill_scala_example_output: String =
+    """
++------+----------------------------------------------------------+
+|region|filled                                                    |
++------+----------------------------------------------------------+
+|1     |[{612934495919669247, 5.0}, {612934495863046143, 5.0}, ...]|
++------+----------------------------------------------------------+
+... (ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> — center H3 cell filled to 5.0)""".trim
+
+  val custom_cellfill_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view for the grid spec; inline cell data
+// Heavy tier returns ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>
+val dfGrid = spark.table("custom_grids")
+val df = spark.createDataFrame(Seq(
+  (1, 216172782113787048L, null.asInstanceOf[java.lang.Double]),
+  (1, 216172782113786967L, 5.0: java.lang.Double),
+  (1, 216172782113787127L, 5.0: java.lang.Double)
+)).toDF("region", "cellid", "value").crossJoin(dfGrid.select("grid"))
+val result = df.groupBy("region")
+  .agg(cx.custom_cellfill(col("cellid"), col("value"), col("grid"), 1, "mean", 2.0).alias("filled"))
+result.show(truncate = false)
+""".trim
+
+  val custom_cellfill_scala_example_output: String =
+    """
++------+---------------------------------------------------------+
+|region|filled                                                   |
++------+---------------------------------------------------------+
+|1     |[{216172782113787048, 5.0}, {216172782113786967, 5.0}, ...]|
++------+---------------------------------------------------------+
+... (ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> — center custom cell filled to 5.0)""".trim
+
+  val quadbin_kloop_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
+import org.apache.spark.sql.functions._
+
+// Reads the quadbin_cells view (cell = 5233961839712272383, SF at zoom 10)
+// At k=1 returns 8 cells: the hollow ring (center excluded)
+val df = spark.table("quadbin_cells")
+val result = df.select(qx.quadbin_kloop(col("cell"), lit(1)).alias("kloop"))
+result.show(truncate = false)
+""".trim
+
+  val quadbin_kloop_scala_example_output: String =
+    """
++-------------------------------+
+|kloop                          |
++-------------------------------+
+|[..., (8 cells at k=1)]        |
++-------------------------------+
+... (8 BIGINT cell IDs — hollow ring at k=1; center cell 5233961839712272383 excluded)""".trim
+
+  val custom_kloop_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view (cell = 360287970373976640 at res=5, grid struct)
+// At k=1 returns 8 cells: the hollow ring (center excluded)
+val df = spark.table("custom_grids")
+val result = df.select(cx.custom_kloop(col("cell"), col("grid"), lit(1)).alias("kloop"))
+result.show(truncate = false)
+""".trim
+
+  val custom_kloop_scala_example_output: String =
+    """
++-----------------------+
+|kloop                  |
++-----------------------+
+|[..., (8 cells at k=1)]|
++-----------------------+
+... (8 BIGINT cell IDs — hollow ring at k=1, center cell 360287970373976640 excluded)""".trim
+
+  val custom_distance_scala_example: String =
+    """
+import com.databricks.labs.gbx.gridx.custom.{functions => cx}
+import org.apache.spark.sql.functions._
+
+// Reads the custom_grids view for the grid spec
+// Two adjacent cells at res=0 (1000m cells) → Chebyshev distance = 1
+val df = spark.table("custom_grids")
+val result = df.select(
+  cx.custom_distance(
+    cx.custom_pointascell(lit("POINT(530000 180000)"), col("grid"), lit(0)),
+    col("grid"),
+    cx.custom_pointascell(lit("POINT(531000 180000)"), col("grid"), lit(0))
+  ).alias("dist")
+)
+result.show()
+""".trim
+
+  val custom_distance_scala_example_output: String =
+    """
++----+
+|dist|
++----+
+|1   |
++----+
+... (Chebyshev grid distance between two cells 1 step apart in X at resolution 0)""".trim
+
 }

@@ -122,6 +122,55 @@ def quadbin_kring(cell: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_quadbin_kring", _col(cell), _col(k))
 
 
+def quadbin_kloop(cell: ColLike, k: ColLike) -> Column:
+    """Return quadbin cells at EXACTLY Chebyshev distance ``k`` (hollow ring).
+
+    At ``k=0`` returns the center cell; at ``k=1`` returns the 8 surrounding
+    cells (center excluded).
+
+    Args:
+        cell: Column of BIGINT quadbin cell ids.
+        k: Loop distance — only the shell at exactly distance ``k`` is returned.
+
+    Returns:
+        Column of ``ARRAY<BIGINT>`` quadbin cell ids.
+    """
+    return f.call_function("gbx_quadbin_kloop", _col(cell), _col(k))
+
+
+def quadbin_cellfill(
+    cellid: ColLike,
+    value: ColLike,
+    k: ColLike = 1,
+    method: ColLike = "mean",
+    power: ColLike = 2.0,
+) -> Column:
+    """Grouped aggregator: fill NULL quadbin cells from valid neighbours.
+
+    Use with ``groupBy(...).agg(qx.quadbin_cellfill(...))`` to interpolate missing
+    values. Returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+
+    Args:
+        cellid: Column of BIGINT quadbin cell ids.
+        value: Column of DOUBLE values (NULL marks cells to be filled).
+        k: Neighbour ring radius (default ``1``).
+        method: Interpolation method — ``'mean'`` (default) or ``'idw'``.
+        power: IDW power parameter (default ``2.0``; ignored for ``'mean'``).
+
+    Returns:
+        Column of ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    """
+    _method = f.lit(method) if isinstance(method, str) else _col(method)
+    return f.call_function(
+        "gbx_quadbin_cellfill",
+        _col(cellid),
+        _col(value),
+        _col(k),
+        _method,
+        _col(power),
+    )
+
+
 def quadbin_tessellate(geom: ColLike, resolution: ColLike) -> Column:
     """Tessellate a geometry into quadbin cells; returns ``ARRAY<struct(cell, geom)>``.
 

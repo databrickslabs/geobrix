@@ -1191,6 +1191,50 @@ custom_cellfill_sql_example_output = """
 
 
 # ============================================================================
+# H3 Cell-Fill (both tiers)
+#
+# gbx_h3_cellfill is a grouped aggregator: interpolates NULL cells from
+# valid ring-k neighbours.  Returns BINARY (light) or
+# ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> (heavy).
+# ============================================================================
+
+
+def h3_cellfill_sql_example():
+    """Fill NULL H3 cells from valid ring-1 neighbours using mean interpolation.
+
+    Inline data: London res-8 center cell 612934495919669247 (NULL, to be
+    filled) plus two ring-1 neighbours each carrying value 5.0.  With k=1
+    and method='mean' the NULL center is filled with the mean of its
+    neighbours (5.0).
+
+    ``gbx_h3_cellfill`` is a grouped aggregator: the call must appear inside a
+    GROUP BY query.  H3 cell IDs are BIGINT.  Returns BINARY (light) or
+    ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> (heavy).
+    """
+    return """
+SELECT region,
+       gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 612934495919669247L, CAST(NULL AS DOUBLE)),
+    (1, 612934495863046143L, 5.0),
+    (1, 612934495900794879L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+h3_cellfill_sql_example_output = """
++------+--------+
+|region|filled  |
++------+--------+
+|1     |[binary]|
++------+--------+
+... (BINARY — decoded: center H3 cell 612934495919669247 filled to 5.0; neighbours unchanged)
+"""
+
+
+# ============================================================================
 # H3 Geometry-Aware K-Ring/K-Loop Functions (light-only)
 #
 # gbx_h3_geomkring / gbx_h3_geomkloop take a geometry directly (WKB BINARY

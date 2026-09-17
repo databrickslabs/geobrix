@@ -185,6 +185,76 @@ def custom_kring(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
     return f.call_function("gbx_custom_kring", _col(cell), _col(grid), _col(k))
 
 
+def custom_kloop(cell: ColLike, grid: ColLike, k: ColLike) -> Column:
+    """Return custom grid cells at EXACTLY Chebyshev distance ``k`` (hollow ring).
+
+    At ``k=0`` returns the center cell; at ``k=1`` returns the 8 surrounding
+    cells (center excluded).
+
+    Args:
+        cell: Column of BIGINT custom grid cell ids.
+        grid: Grid-spec struct column produced by ``custom_grid``.
+        k: Loop distance — only the shell at exactly distance ``k`` is returned.
+
+    Returns:
+        Column of ``ARRAY<BIGINT>`` custom grid cell ids.
+    """
+    return f.call_function("gbx_custom_kloop", _col(cell), _col(grid), _col(k))
+
+
+def custom_distance(cell1: ColLike, grid: ColLike, cell2: ColLike) -> Column:
+    """Chebyshev grid-ring distance between two custom-grid cells.
+
+    Returns ``max(|dx|, |dy|)`` — the minimum number of ring steps needed to
+    travel from ``cell1`` to ``cell2``.
+
+    Args:
+        cell1: Column of BIGINT source cell ids.
+        grid: Grid-spec struct column produced by ``custom_grid``.
+        cell2: Column of BIGINT target cell ids.
+
+    Returns:
+        Column of BIGINT Chebyshev distance.
+    """
+    return f.call_function("gbx_custom_distance", _col(cell1), _col(grid), _col(cell2))
+
+
+def custom_cellfill(
+    cellid: ColLike,
+    value: ColLike,
+    grid: ColLike,
+    k: ColLike = 1,
+    method: ColLike = "mean",
+    power: ColLike = 2.0,
+) -> Column:
+    """Grouped aggregator: fill NULL custom-grid cells from valid neighbours.
+
+    Use with ``groupBy(...).agg(cx.custom_cellfill(...))`` to interpolate missing
+    values. Returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+
+    Args:
+        cellid: Column of BIGINT custom grid cell ids.
+        value: Column of DOUBLE values (NULL marks cells to be filled).
+        grid: Grid-spec struct column produced by ``custom_grid``.
+        k: Neighbour ring radius (default ``1``).
+        method: Interpolation method — ``'mean'`` (default) or ``'idw'``.
+        power: IDW power parameter (default ``2.0``; ignored for ``'mean'``).
+
+    Returns:
+        Column of ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    """
+    _method = f.lit(method) if isinstance(method, str) else _col(method)
+    return f.call_function(
+        "gbx_custom_cellfill",
+        _col(cellid),
+        _col(value),
+        _col(grid),
+        _col(k),
+        _method,
+        _col(power),
+    )
+
+
 def custom_geomkring(
     geom: ColLike,
     grid: ColLike,

@@ -73,6 +73,12 @@ object functions extends Serializable {
     def quadbin_distance(cellA: Column, cellB: Column): Column =
         ColumnAdapter(Quadbin_Distance.name, Seq(cellA, cellB))
 
+    def quadbin_kloop(cell: Column, k: Column): Column =
+        ColumnAdapter(Quadbin_KLoop.name, Seq(cell, k))
+
+    def quadbin_kloop(cell: Column, k: Int): Column =
+        quadbin_kloop(cell, lit(k))
+
     def quadbin_cellfill(cellid: Column, value: Column): Column =
         ColumnAdapter(Quadbin_CellFill.name, Seq(cellid, value))
     def quadbin_cellfill(cellid: Column, value: Column, k: Int): Column =

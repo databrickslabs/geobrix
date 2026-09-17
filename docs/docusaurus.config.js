@@ -112,7 +112,7 @@ const config = {
         title: 'GeoBrix',
         logo: {
           alt: 'GeoBrix Logo',
-          src: 'img/logo.png',
+          src: 'img/geobrix-mark.png',
         },
         items: [
           {

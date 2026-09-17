@@ -3435,7 +3435,11 @@ def rst_custom_rasterize_agg(
 
     def _c(x, default=None):
         if x is None:
-            return f.lit(default).cast("double") if isinstance(default, float) else f.lit(default)
+            return (
+                f.lit(default).cast("double")
+                if isinstance(default, float)
+                else f.lit(default)
+            )
         return _col(x) if not isinstance(x, str) else f.lit(x)
 
     return f.call_function(

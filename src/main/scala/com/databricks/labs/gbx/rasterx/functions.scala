@@ -347,19 +347,19 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
             cellid, lit(null).cast("double"),
             grid,
-            lit(null).cast("int"),   lit(null).cast("double"),
+            lit(null).cast("int"), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
-            lit(null).cast("int"),   lit(null).cast("int"),
+            lit(null).cast("int"), lit(null).cast("int"),
             lit("centroids"), lit(1)
         ))
     def rst_custom_rasterize_agg(cellid: Column, value: Column, grid: Column): Column =
         ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
             cellid, value, grid,
-            lit(null).cast("int"),   lit(null).cast("double"),
+            lit(null).cast("int"), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
             lit(null).cast("double"), lit(null).cast("double"),
-            lit(null).cast("int"),   lit(null).cast("int"),
+            lit(null).cast("int"), lit(null).cast("int"),
             lit("centroids"), lit(1)
         ))
     def rst_custom_rasterize_agg(

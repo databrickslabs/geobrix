@@ -7,7 +7,7 @@
 A self-contained notebook that runs the full DEM-to-H3-raster pipeline:
 download a USGS 3DEP elevation tile, extract distributed isobands with
 `rst_isoband`, index each band using Databricks built-in H3 functions
-(`try_h3_polyfillash3` / `try_h3_coverash3`), burn onto a shared aligned
+(`h3_try_polyfillash3` / `h3_try_coverash3`), burn onto a shared aligned
 canvas, and assemble a multi-band GeoTIFF stack. Visualized throughout with
 the `gbx.vizx` helpers.
 
@@ -58,10 +58,10 @@ coverage-depth composite.
 - **Unity Catalog Volume.** `DemDownloader` stages the tile to
   `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep`.
   The Volume root must already exist; sub-directories are created automatically.
-- **Databricks product H3.** `try_h3_polyfillash3` and `try_h3_coverash3` are
-  Databricks built-in SQL functions available on Databricks Serverless and recent DBR
-  runtimes (a spatial-SQL runtime is required; verified on Serverless) — no additional
-  install is needed.
+- **Databricks product H3.** `h3_try_polyfillash3` and `h3_try_coverash3` are
+  Databricks built-in functions available on **DBR 16.3+ / Serverless**, accessed via
+  the product Python bindings (`from pyspark.databricks.sql import functions as DBF`) —
+  no additional install is needed.
 
 ---
 
@@ -76,7 +76,7 @@ wheel. Cells after the restart are safe to re-run individually once the wheel is
 3. **Download the DEM** — `DemDownloader` fetches the USGS 3DEP 10 m tile for the SF bounding box
    and stages it to the Volume (idempotent; skipped if the file already exists).
 4. **Steps 1–3** — `rst_isoband` extracts 12 bands at 25 m intervals (distributed Spark);
-   `try_h3_polyfillash3` / `try_h3_coverash3` index each band at H3 res 10;
+   `h3_try_polyfillash3` / `h3_try_coverash3` index each band at H3 res 10;
    `rst_h3_gridspec` computes the shared canvas.
 5. **Steps 4–5** — `rst_h3_rasterize_agg` burns each band and materializes to a session temp table;
    `rst_frombands_agg` assembles the multi-band stack.
@@ -91,7 +91,7 @@ DemDownloader  →  USGS 3DEP seamless 10 m  (Planetary Computer STAC → Volume
         ▼  rst_isoband  25 m breaks 0–300 m  (Spark, distributed)
 Elevation isobands: 12 polygon bands, WKB output              [Step 1]
         │
-        ▼  try_h3_polyfillash3 / try_h3_coverash3  @ H3 res 10  (Databricks product)
+        ▼  h3_try_polyfillash3 / h3_try_coverash3  @ H3 res 10  (Databricks product)
 (band_level, cellid) rows                                      [Step 2]
         │
         ▼  rx.rst_h3_gridspec  (Spark)
@@ -117,8 +117,7 @@ Coverage-depth figure: pixel = count of bands covering that location
   pass `dissolve_by="band_level"` to merge each band into one footprint polygon), `grid_as_gdf`
   (shared-canvas rectangle), `plot_mask_layers` (overlay two bands with distinct colours and a
   legend), `plot_raster` (stacked raster as `composite="depth"` coverage map).
-- **Databricks product H3**: `try_h3_polyfillash3` (centroid-in cells at a given resolution),
-  `try_h3_coverash3` (overlap cells at a given resolution). Both accept WKB geometry directly.
+- **Databricks product H3**: `h3_try_polyfillash3` (centroid-in) and `h3_try_coverash3` (overlap), accessed via `from pyspark.databricks.sql import functions as DBF` (DBR 16.3+ / Serverless). Both accept WKB BINARY geometry directly — no `ST_GeomFromWKB` needed.
 - **Full API reference**: [RasterX functions](https://databrickslabs.github.io/geobrix/docs/api/raster-functions) · [Viz helpers](https://databrickslabs.github.io/geobrix/docs/api/vizx).
 
 ---
@@ -131,7 +130,7 @@ Coverage-depth figure: pixel = count of bands covering that location
   ends. If you are on a dedicated/single-user cluster (which does not support temp
   tables), replace the `CREATE TEMP TABLE` block with a managed Delta table write and
   a subsequent `spark.table(...)` read.
-- **Product H3 takes WKB.** `try_h3_polyfillash3` and `try_h3_coverash3` accept WKB
+- **Product H3 takes WKB.** `h3_try_polyfillash3` and `h3_try_coverash3` accept WKB
   geometry — exactly what `rst_isoband` produces. Do not convert to the native
   Databricks `GEOMETRY` type first; these functions require WKB input.
 - **`polyfillash3` vs `coverash3`.** `polyfillash3` uses centroid containment (cells

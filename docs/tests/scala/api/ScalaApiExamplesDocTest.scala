@@ -126,6 +126,7 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_custom_rastertogridvariance_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_custom_rastertogridstddev_scala_example.nonEmpty)
     assert(ScalaApiExamples.rst_custom_tessellate_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rasterize_agg_scala_example.nonEmpty)
   }
 
   test("ScalaApiExamples custom-grid rastertogrid output vals are non-empty") {
@@ -138,6 +139,23 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_custom_rastertogridvariance_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_custom_rastertogridstddev_scala_example_output.nonEmpty)
     assert(ScalaApiExamples.rst_custom_tessellate_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rasterize_agg_scala_example_output.nonEmpty)
+  }
+
+  test("RasterX rst_custom_rasterize_agg Scala signatures compile") {
+    val grid = call_function("gbx_custom_grid",
+      lit(529000), lit(533000), lit(179000), lit(183000),
+      lit(2), lit(4000), lit(4000), lit(27700))
+    val _: Column = rx.rst_custom_rasterize_agg(col("cellid"), grid)
+    val _: Column = rx.rst_custom_rasterize_agg(col("cellid"), col("value"), grid)
+    val _: Column = rx.rst_custom_rasterize_agg(
+      col("cellid"), col("value"), grid,
+      lit(27700), lit(null).cast("double"),
+      lit(null).cast("double"), lit(null).cast("double"),
+      lit(null).cast("double"), lit(null).cast("double"),
+      lit(null).cast("int"), lit(null).cast("int"),
+      lit("centroids"), lit(1))
+    succeed
   }
 
   test("RasterX custom-grid rastertogrid Scala signatures compile") {

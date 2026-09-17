@@ -4503,6 +4503,74 @@ rst_binpoints_agg_python_heavy_example_output = """
 
 
 # ---------------------------------------------------------------------------
+# rst_custom_rasterize_agg -- burn custom-grid cells into one tile per group
+# Fixture: 3 BNG custom-grid cell rows at resolution 1 (2km cells) in a 4km
+#          London extent; each row carries a burn value.
+# Output: tile struct (returns a raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_custom_rasterize_agg_python_heavy_example(spark):
+    """Rasterize custom-grid cell/value rows into one tile per group via the heavy rasterx tier.
+
+    Multi-row fixture: 3 rows of (custom-grid cell id BIGINT, burn value) at
+    resolution 1 (2km cells) inside a 4km London BNG extent
+    [529000-533000 E, 179000-183000 N, EPSG:27700].  Grouped by region, producing
+    1 rasterized GTiff tile in EPSG:27700.  Cell IDs are computed via
+    gbx_custom_pointascell for centroids of 3 of the 4 resolution-1 cells.
+    """
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    rx.register(spark)
+    cx.register(spark)  # registers gbx_custom_pointascell and gbx_custom_grid
+
+    _GRID_SQL = (
+        "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
+    )
+    # Compute three resolution-1 cell IDs via SQL (three of the four 2km cells).
+    # Use SELECT-from-VALUES: UDFs cannot appear directly in VALUES clauses.
+    spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW _custom_rasterize_cells_heavy AS
+        SELECT region,
+               gbx_custom_pointascell(wkt, {_GRID_SQL}, 1) AS cellid,
+               val AS value
+        FROM (VALUES
+            ('R1', 'POINT(530000 180000)', cast(1.0 as double)),
+            ('R1', 'POINT(532000 180000)', cast(2.0 as double)),
+            ('R1', 'POINT(530000 182000)', cast(3.0 as double))
+        ) AS t(region, wkt, val)
+    """)
+    df = spark.table("_custom_rasterize_cells_heavy")
+
+    result = (
+        df.groupBy("region")
+        .agg(
+            rx.rst_custom_rasterize_agg(
+                "cellid", _custom_grid_col(), f.col("value"),
+                out_srid=f.lit(27700),  # heavy tier requires non-null out_srid
+                kring_pad=f.lit(0),     # no padding: avoid expanding outside grid bounds
+            ).alias("tile")
+        )
+        .first()
+    )
+    spark.catalog.dropTempView("_custom_rasterize_cells_heavy")
+    return result["tile"]
+
+
+rst_custom_rasterize_agg_python_heavy_example_output = """
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
+"""
+
+
+# ---------------------------------------------------------------------------
 # rst_align_to — warp a tile onto a reference tile's grid (heavy tier)
 # Fixture: DEM used for both tile and reference_tile (no-op warp)
 # Output: tile struct (warped to reference grid)

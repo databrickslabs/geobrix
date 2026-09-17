@@ -3387,6 +3387,75 @@ def rst_binpoints_agg(
     )
 
 
+def rst_custom_rasterize_agg(
+    cellid: ColLike,
+    grid: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = "centroids",
+    kring_pad: ColLike = 1,
+) -> Column:
+    """Rasterize a group's custom-grid cells into one tile (pixel-centroid burn, heavy tier).
+
+    Aggregator counterpart of :func:`rst_custom_rastertogrid*`: where those functions
+    reduce raster pixels to per-cell statistics, this function reconstructs a raster
+    from per-cell values.
+
+    ``grid`` is a custom-grid STRUCT column produced by ``gbx_custom_grid(...)``.
+    ``value`` omitted or null -> presence mask (1.0). Supply an explicit extent
+    (``xmin`` .. ``height``) for aligned band stacking; else the grid is auto-derived
+    from the cell set per ``mode``/``kring_pad``.
+
+    Output CRS: ``out_srid`` wins; falls back to the grid's own SRID when not supplied.
+    Use inside ``.agg()``::
+
+        df.groupBy(k).agg(rx.rst_custom_rasterize_agg("cellid", "grid").alias("tile"))
+
+    Args:
+        cellid: Column of BIGINT custom-grid cell IDs.
+        grid: Custom-grid STRUCT column from ``gbx_custom_grid(...)``.
+        value: Numeric burn value column (null -> 1.0 presence mask).
+        out_srid: EPSG SRID of the output CRS (null -> grid's SRID).
+        pixel_size: Output pixel size in target CRS units (null -> auto).
+        xmin, ymin, xmax, ymax: Output extent (null -> auto from cell set).
+        width, height: Output dimensions in pixels (null -> auto).
+        mode: ``"centroids"`` (default) or ``"spatial_envelope"``.
+        kring_pad: Neighbourhood expansion for auto-extent (default 1).
+
+    Returns:
+        Raster tile column (single-band GTiff).
+    """
+
+    def _c(x, default=None):
+        if x is None:
+            return f.lit(default).cast("double") if isinstance(default, float) else f.lit(default)
+        return _col(x) if not isinstance(x, str) else f.lit(x)
+
+    return f.call_function(
+        "gbx_rst_custom_rasterize_agg",
+        _col(cellid),
+        f.lit(None).cast("double") if value is None else _col(value),
+        _col(grid),
+        f.lit(None).cast("int") if out_srid is None else _col(out_srid),
+        f.lit(None).cast("double") if pixel_size is None else _col(pixel_size),
+        f.lit(None).cast("double") if xmin is None else _col(xmin),
+        f.lit(None).cast("double") if ymin is None else _col(ymin),
+        f.lit(None).cast("double") if xmax is None else _col(xmax),
+        f.lit(None).cast("double") if ymax is None else _col(ymax),
+        f.lit(None).cast("int") if width is None else _col(width),
+        f.lit(None).cast("int") if height is None else _col(height),
+        f.lit(mode) if isinstance(mode, str) else _col(mode),
+        f.lit(kring_pad) if isinstance(kring_pad, int) else _col(kring_pad),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Delaunay-TIN Digital Terrain Model (DTM) interpolation
 #

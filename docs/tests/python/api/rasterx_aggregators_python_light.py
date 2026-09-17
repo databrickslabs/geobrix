@@ -626,3 +626,72 @@ rst_binpoints_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 (Float32 10x10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
 """
+
+
+# ---------------------------------------------------------------------------
+# rst_custom_rasterize_agg -- burn custom-grid cells into one tile per group
+# Fixture: 3 BNG custom-grid cell rows at resolution 1 (2km cells) in a 4km
+#          London extent; each row carries a burn value.
+# Output: tile struct (returns a raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_custom_rasterize_agg_python_light_example(spark):
+    """Rasterize custom-grid cell/value rows into one tile per group (light pyrx tier).
+
+    Multi-row fixture: 3 rows of (custom-grid cell id BIGINT, burn value) at
+    resolution 1 (2km cells) inside a 4km London BNG extent
+    [529000-533000 E, 179000-183000 N, EPSG:27700].  Grouped by region, producing
+    1 rasterized GTiff tile in EPSG:27700.  Cell IDs are derived via
+    gbx_custom_pointascell for centroids of 3 of the 4 resolution-1 cells.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    rx.register(spark)
+    gx.register(spark)
+
+    # Custom grid: 4km BNG London square, root cell 4000m, splits=2 -> res 1 = four 2km cells.
+    _GRID_SQL = (
+        "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
+    )
+    # Compute cell IDs by calling gbx_custom_pointascell in a SELECT over a VALUES table
+    # (UDFs cannot appear in VALUES clauses directly — use SELECT-from-VALUES instead).
+    spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW _custom_rasterize_cells AS
+        SELECT region,
+               gbx_custom_pointascell(wkt, {_GRID_SQL}, 1) AS cellid,
+               val AS value
+        FROM (VALUES
+            ('R1', 'POINT(530000 180000)', cast(1.0 as double)),
+            ('R1', 'POINT(532000 180000)', cast(2.0 as double)),
+            ('R1', 'POINT(530000 182000)', cast(3.0 as double))
+        ) AS t(region, wkt, val)
+    """)
+    df = spark.table("_custom_rasterize_cells")
+
+    grid_col = f.call_function(
+        "gbx_custom_grid",
+        f.lit(529000), f.lit(533000), f.lit(179000), f.lit(183000),
+        f.lit(2), f.lit(4000), f.lit(4000), f.lit(27700),
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            rx.rst_custom_rasterize_agg("cellid", grid_col, f.col("value")).alias("tile")
+        )
+        .first()
+    )
+    spark.catalog.dropTempView("_custom_rasterize_cells")
+    return result["tile"]
+
+
+rst_custom_rasterize_agg_python_light_example_output = """
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
+"""

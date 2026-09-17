@@ -340,6 +340,39 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
             cellid, value, out_srid, pixelSize, xmin, ymin, xmax, ymax, width, height, mode, kringPad
         ))
 
+    /** UDAF: rasterize a group's custom-grid cells into one tile (pixel-centroid burn).
+     *  Requires a `grid` struct column (produced by `gbx_custom_grid(...)`).
+     *  Auto-derives the extent from the cell set; value omitted -> presence mask (1.0). */
+    def rst_custom_rasterize_agg(cellid: Column, grid: Column): Column =
+        ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
+            cellid, lit(null).cast("double"),
+            grid,
+            lit(null).cast("int"),   lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("int"),   lit(null).cast("int"),
+            lit("centroids"), lit(1)
+        ))
+    def rst_custom_rasterize_agg(cellid: Column, value: Column, grid: Column): Column =
+        ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
+            cellid, value, grid,
+            lit(null).cast("int"),   lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("double"), lit(null).cast("double"),
+            lit(null).cast("int"),   lit(null).cast("int"),
+            lit("centroids"), lit(1)
+        ))
+    def rst_custom_rasterize_agg(
+        cellid: Column, value: Column, grid: Column,
+        outSrid: Column, pixelSize: Column,
+        xmin: Column, ymin: Column, xmax: Column, ymax: Column,
+        width: Column, height: Column, mode: Column, kringPad: Column
+    ): Column =
+        ColumnAdapter(RST_Custom_RasterizeAgg.name, Seq(
+            cellid, value, grid, outSrid, pixelSize,
+            xmin, ymin, xmax, ymax, width, height, mode, kringPad
+        ))
+
     // Constructors
     def rst_fromcontent(content: Column, driver: Column): Column = ColumnAdapter(RST_FromContent.name, Seq(content, driver))
     // rst_fromfile is lightweight-only (Python UDF); no Scala/JVM column helper (see register/#34).

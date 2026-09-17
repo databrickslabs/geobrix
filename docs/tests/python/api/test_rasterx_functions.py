@@ -601,6 +601,13 @@ def test_rst_binpoints_agg_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_binpoints_agg")
 
 
+def test_rst_custom_rasterize_agg_python_heavy_example(spark):
+    """rst_custom_rasterize_agg returns a non-null tile struct from custom-grid cell rows."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_custom_rasterize_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_custom_rasterize_agg")
+
+
 def test_rst_align_to_python_heavy_example(spark):
     """rst_align_to returns a non-null tile struct (warped to reference grid)."""
     assert rasterx_functions is not None

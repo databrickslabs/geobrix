@@ -3329,6 +3329,52 @@ result.getAs[Seq[Seq[Row]]]("custom_grid")
   // Resolution 1 = four 1km cells subdividing the 2km root cell.
   // =========================================================================
 
+  // =========================================================================
+  // rst_custom_rasterize_agg
+  //
+  // Fixture: 3 rows of (region, custom-grid cell id BIGINT, burn value) at
+  // resolution 1 (2km cells) inside a 4km London BNG extent.
+  // Cell IDs are computed via gbx_custom_pointascell for centroids of 3
+  // of the 4 resolution-1 cells.  Grouped by region, producing 1 tile.
+  // =========================================================================
+
+  val rst_custom_rasterize_agg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+rx.register(spark)
+// Custom grid: 4km BNG London square, root cell 4000m, splits=2 -> res 1 = four 2km cells.
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+// Compute three resolution-1 cell IDs (centroids of three 2km cells within the grid).
+val schema = StructType(Seq(
+  StructField("region", StringType()),
+  StructField("cellid", LongType()),
+  StructField("value", DoubleType())))
+val cells = spark.sql(
+  "SELECT 'R1' AS region, gbx_custom_pointascell('POINT(530000 180000)', " +
+  "gbx_custom_grid(529000,533000,179000,183000,2,4000,4000,27700), 1) AS cellid, 1.0 AS value " +
+  "UNION ALL SELECT 'R1', gbx_custom_pointascell('POINT(532000 180000)', " +
+  "gbx_custom_grid(529000,533000,179000,183000,2,4000,4000,27700), 1), 2.0 " +
+  "UNION ALL SELECT 'R1', gbx_custom_pointascell('POINT(530000 182000)', " +
+  "gbx_custom_grid(529000,533000,179000,183000,2,4000,4000,27700), 1), 3.0")
+val result = cells.groupBy("region").agg(
+  rx.rst_custom_rasterize_agg(col("cellid"), col("value"), grid).alias("tile"))
+result.show()
+""".trim
+
+  val rst_custom_rasterize_agg_scala_example_output: String =
+    """
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
+""".trim
+
   val rst_custom_tessellate_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

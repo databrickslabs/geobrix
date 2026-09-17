@@ -14,8 +14,9 @@ stack. Visualized throughout with the `gbx.vizx` helpers.
 ![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/diagrams/h3-rasterize/h3-rasterize.png)
 
 > **Lightweight tier (Serverless) by default.** The notebook uses the lightweight
-> tier — `geobrix[light_env6,vizx]` — pure Python/PySpark bindings with no JAR or GDAL
-> init script required. It runs on Serverless compute or a standard cluster. See
+> tier — `geobrix[light_env5,vizx]` — pure Python/PySpark bindings with no JAR or GDAL
+> init script required. It targets **Serverless environment 5**. (Serverless environment 6
+> works too once a known ipykernel restart bug is resolved.) See
 > [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
 > **Data source: USGS 3DEP seamless 10 m DEM, San Francisco.** `DemDownloader` fetches
@@ -53,13 +54,13 @@ coverage-depth composite.
   used in Step 4 requires Serverless or DBR 18.1+ — it is **not** supported on
   dedicated/single-user clusters.
 - **GeoBrix 0.5.2.** Update the `%pip install` cell to point at your staged
-  `geobrix-0.5.2-py3-none-any.whl`. The `[light_env6,vizx]` extras install rasterio,
+  `geobrix-0.5.2-py3-none-any.whl`. The `[light_env5,vizx]` extras install rasterio,
   geopandas, matplotlib, and mapclassify — no other dependencies assumed pre-staged.
 - **Unity Catalog Volume.** `DemDownloader` stages the tile to
   `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep`.
   The Volume root must already exist; sub-directories are created automatically.
 - **Databricks product H3.** `h3_try_coverash3` is a Databricks built-in function
-  available on **DBR 16.3+ / Serverless**, accessed via the product Python bindings
+  available on **DBR 16.3+ / Serverless** (tested on Serverless env 5), accessed via the product Python bindings
   (`from pyspark.databricks.sql import functions as DBF`) — no additional install is needed.
 
 ---
@@ -70,7 +71,7 @@ This is a single notebook; run all cells top to bottom. The `%pip install` + `%r
 pair at the top restarts the Python kernel — subsequent cells import from the freshly installed
 wheel. Cells after the restart are safe to re-run individually once the wheel is installed.
 
-1. **Install and restart** — `%pip install "geobrix[light_env6,vizx] @ file://…"` + `%restart_python`.
+1. **Install and restart** — `%pip install "geobrix[light_env5,vizx] @ file://…"` + `%restart_python`.
 2. **Imports and registration** — `rx.register(spark)` and `register(spark)` install the SQL UDFs.
 3. **Download the DEM** — `DemDownloader` fetches the USGS 3DEP 10 m tile for the SF bounding box
    and stages it to the Volume (idempotent; skipped if the file already exists).

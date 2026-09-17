@@ -18,8 +18,8 @@ The notebook works through San Francisco: it downloads a USGS 3DEP seamless 10 m
 **[notebooks/examples/h3-rasterize](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/h3-rasterize)** — download `h3_rasterize_isobands.ipynb` and import it into your Databricks workspace to run.
 :::
 
-:::info Runs on the lightweight tier (`geobrix[light_env6,vizx]`)
-The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env6,vizx]` wheel — so it runs on **Serverless** with no JAR or GDAL init script. The per-band rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
+:::info Runs on the lightweight tier (`geobrix[light_env5,vizx]`)
+The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env5,vizx]` wheel — so it runs on **Serverless environment 5** with no JAR or GDAL init script. (Serverless environment 6 works too once a known ipykernel restart bug is resolved.) The per-band rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
 :::
 
 ---
@@ -36,7 +36,7 @@ The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`da
 ## Prerequisites
 
 - **Databricks Runtime 17.3 LTS / 18.1+ or Serverless** (Spark 4 / Python 3.12). Lightweight default runs on Serverless. Session temp tables (Step 4) require Serverless or DBR 18.1+; they are not available on dedicated / single-user clusters.
-- **GeoBrix** (version 0.5.2). The `%pip install` cell installs the `geobrix[light_env6,vizx]` wheel, which pulls in `rasterio`, `matplotlib`, `geopandas`, and `mapclassify` (visualization). No JAR or GDAL init script is required.
+- **GeoBrix** (version 0.5.2). The `%pip install` cell installs the `geobrix[light_env5,vizx]` wheel, which pulls in `rasterio`, `matplotlib`, `geopandas`, and `mapclassify` (visualization). No JAR or GDAL init script is required.
 - **Unity Catalog Volume**: `DemDownloader` downloads the USGS 3DEP 10 m tile for the SF bounding box and stages it to `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep`. Update `DEM_DIR` if your Volume layout differs. The Volume root must already exist; staging creates sub-directories automatically.
 - **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.5.2-py3-none-any.whl` if its Volume path differs from the default.
 - **Databricks product H3**: `h3_try_coverash3` is a built-in Databricks function available on **DBR 16.3+ / Serverless**, accessed via the product Python bindings (`from pyspark.databricks.sql import functions as DBF`) — no extra install is needed.
@@ -45,7 +45,7 @@ The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`da
 
 ## Run order
 
-1. **Install and restart** — the `%pip install` cell installs `geobrix[light_env6,vizx]` and is followed immediately by `%restart_python`; run cells in order without skipping the restart.
+1. **Install and restart** — the `%pip install` cell installs `geobrix[light_env5,vizx]` and is followed immediately by `%restart_python`; run cells in order without skipping the restart.
 2. **Imports and registration** — imports `pyrx`, `gbx.vizx` helpers, and calls `rx.register(spark)` + `register(spark)` to install SQL UDFs.
 3. **Download the DEM** — `DemDownloader` fetches the USGS 3DEP seamless 10 m tile for the SF bounding box via Planetary Computer STAC and stages it to the Volume (idempotent; skipped if the file already exists).
 4. **Steps 1–3 (Spark)** — `rst_isoband` extracts twelve 25 m elevation bands as distributed Spark columns; `h3_try_coverash3` indexes each band at H3 res 10 (Databricks product function, accepts WKB directly); `rst_h3_gridspec` computes the shared canvas.
@@ -82,7 +82,7 @@ Coverage-depth composite + per-band footprint overlays
 ## Key GeoBrix / Databricks functions shown
 
 - **`rst_isoband`** — distributed Spark column that extracts isoband polygons (WKB) from a raster tile at a given set of break values; feeds the product-H3 indexing step directly. See [RasterX functions](../api/raster-functions).
-- **[`h3_try_coverash3`](https://docs.databricks.com/aws/en/sql/language-manual/functions/h3_try_coverash3)** — Databricks built-in H3 function, accessed via the product Python bindings (`from pyspark.databricks.sql import functions as DBF`; available DBR 16.3+ / Serverless). Returns all H3 cells that overlap the polygon — solid, gap-free bands. Accepts WKB BINARY geometry directly — no `ST_GeomFromWKB` needed. The `h3_try_*` prefix returns `NULL` instead of raising on invalid input.
+- **[`h3_try_coverash3`](https://docs.databricks.com/aws/en/sql/language-manual/functions/h3_try_coverash3)** — Databricks built-in H3 function, accessed via the product Python bindings (`from pyspark.databricks.sql import functions as DBF`; available DBR 16.3+ / Serverless, tested on Serverless env 5). Returns all H3 cells that overlap the polygon — solid, gap-free bands. Accepts WKB BINARY geometry directly — no `ST_GeomFromWKB` needed. The `h3_try_*` prefix returns `NULL` instead of raising on invalid input.
 - **`rst_h3_gridspec`** — computes a pixel-snapped bounding box and pixel dimensions spanning all H3 cells across all band levels; used without a grouping column here to produce a single shared canvas. See [H3 Grid](../api/raster-functions#h3-grid).
 - **`rst_h3_rasterize_agg`** — aggregator that burns a group's H3 cells onto the shared canvas (supplied explicitly via `xmin`/`ymin`/`xmax`/`ymax`/`width`/`height` columns), producing a single-band presence mask per band level. See [H3 Grid](../api/raster-functions#h3-grid).
 - **`rst_frombands_agg`** — aggregator that assembles per-band single-band tiles into one multi-band GeoTIFF, ordered by a user-supplied `band_index` column.

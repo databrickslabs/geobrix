@@ -552,9 +552,12 @@ def bng_geomkring_python_light_example(spark):
     """Polyfill a BNG geometry then expand by k ring steps (light pygx tier).
 
     Reads the ``bng_polygons`` setup view (3km × 3km polygon in EPSG:27700).
-    At res=3 (1km) the polyfill covers 9 cells; k=1 expands by one ring →
-    25 cells total.  Returns ARRAY<STRING>.  Identical to the heavyweight output
-    (AGREE).  Geometry MUST be in EPSG:27700; WGS84 yields an empty array.
+    At res=3 (1km) the default ``boundary-out`` mode takes the geometry's
+    boundary band (8 cells for this grid-aligned 3×3) and expands it by one
+    ring outward → 24 cells (the 5×5 envelope minus the untouched interior
+    centre — boundary-out does not fill the interior).  Returns ARRAY<STRING>.
+    Identical to the heavyweight output (AGREE).  Geometry MUST be in
+    EPSG:27700; WGS84 yields an empty array.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
@@ -572,7 +575,7 @@ bng_geomkring_python_light_example_output = """
 +-----------------------------+
 |[TQ2878, TQ2879, TQ2880, ...]|
 +-----------------------------+
-... (25 cells: polyfill of BNG polygon expanded by k=1 ring)
+... (24 cells: boundary band expanded by k=1 ring; interior centre not filled)
 """
 
 
@@ -840,7 +843,7 @@ def bng_geomkringexplode_python_light_example(spark):
     calling it as a Column expression raises ``NotImplementedError``.  Use
     SQL ``LATERAL`` via ``spark.sql(…)``.  Geometry MUST be in EPSG:27700
     (BNG eastings/northings) — WGS84 lon/lat yields empty results.
-    At res=3 (1km), k=1: the 9-cell polyfill expands to 25 cells.
+    At res=3 (1km), k=1: the boundary-out band expands by one ring to 24 cells.
     Each row carries a single ``cellid STRING`` column.
     Identical to the heavyweight SQL output (AGREE).
     """
@@ -862,7 +865,7 @@ bng_geomkringexplode_python_light_example_output = """
 |TQ2880|
 |...   |
 +------+
-... (25 rows: polyfill of BNG polygon at res=3 expanded by k=1 ring)
+... (24 rows: boundary band at res=3 expanded by k=1 ring; interior centre not filled)
 """
 
 
@@ -1600,7 +1603,7 @@ quadbin_geomkloopexplode_python_light_example_output = """
 #   custom_grids — grid struct + cell + point; uses the BNG-like 1km grid.
 #
 # Geometry: 3km × 3km BNG polygon centred on London (EPSG:27700 coordinates).
-# At resolution 3 (1km cells), the polyfill covers 9 cells; k=1 expands to 25.
+# At resolution 3 (1km cells), the polyfill covers 9 cells; boundary-out k=1 → 24.
 # All four tabs share ONE example per function (AGREE — no tier divergence).
 # ---------------------------------------------------------------------------
 
@@ -1635,9 +1638,9 @@ custom_geomkring_python_light_example_output = """
 +-------------------------------------------+
 |kring                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (55 cells at k=1)]|
+|[72057594038779906, ..., (56 cells at k=1)]|
 +-------------------------------------------+
-... (55 BIGINT cell IDs — covering cells of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
+... (56 BIGINT cell IDs — boundary band of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
 """
 
 
@@ -1663,9 +1666,9 @@ custom_geomkloop_python_light_example_output = """
 +-------------------------------------------+
 |kloop                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (19 cells at k=1)]|
+|[72057594038779906, ..., (32 cells at k=1)]|
 +-------------------------------------------+
-... (19 BIGINT cell IDs — outer ring at k=1 around the offset polygon at res=1 (500m))
+... (32 BIGINT cell IDs — hollow outer band at k=1 around the offset polygon at res=1 (500m))
 """
 
 

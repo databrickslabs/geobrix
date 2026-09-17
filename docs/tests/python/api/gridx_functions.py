@@ -716,9 +716,12 @@ def bng_geomkring_python_heavy_example(spark):
     """Polyfill a BNG geometry then expand by k ring steps (heavy bng tier).
 
     Reads the ``bng_polygons`` setup view (3km × 3km polygon in EPSG:27700).
-    At res=3 (1km) the polyfill covers 9 cells; k=1 expands by one ring →
-    25 cells total.  Returns ARRAY<STRING>.  Identical to the lightweight output
-    (AGREE).  Geometry MUST be in EPSG:27700; WGS84 yields an empty array.
+    At res=3 (1km) the default ``boundary-out`` mode takes the geometry's
+    boundary band (8 cells for this grid-aligned 3×3) and expands it by one
+    ring outward → 24 cells (the 5×5 envelope minus the untouched interior
+    centre — boundary-out does not fill the interior).  Returns ARRAY<STRING>.
+    Identical to the lightweight output (AGREE).  Geometry MUST be in
+    EPSG:27700; WGS84 yields an empty array.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
@@ -736,7 +739,7 @@ bng_geomkring_python_heavy_example_output = """
 +-----------------------------+
 |[TQ2878, TQ2879, TQ2880, ...]|
 +-----------------------------+
-... (25 cells: polyfill of BNG polygon expanded by k=1 ring)
+... (24 cells: boundary band expanded by k=1 ring; interior centre not filled)
 """
 
 
@@ -1598,9 +1601,9 @@ custom_geomkring_python_heavy_example_output = """
 +-------------------------------------------+
 |kring                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (55 cells at k=1)]|
+|[72057594038779906, ..., (56 cells at k=1)]|
 +-------------------------------------------+
-... (55 BIGINT cell IDs — covering cells of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
+... (56 BIGINT cell IDs — boundary band of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
 """
 
 
@@ -1626,9 +1629,9 @@ custom_geomkloop_python_heavy_example_output = """
 +-------------------------------------------+
 |kloop                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (19 cells at k=1)]|
+|[72057594038779906, ..., (32 cells at k=1)]|
 +-------------------------------------------+
-... (19 BIGINT cell IDs — outer ring at k=1 around the offset polygon at res=1 (500m))
+... (32 BIGINT cell IDs — hollow outer band at k=1 around the offset polygon at res=1 (500m))
 """
 
 

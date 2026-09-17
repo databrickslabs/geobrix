@@ -411,7 +411,7 @@ def test_bng_kloop_python_heavy_example(bng_heavy_setup):
 
 
 def test_bng_geomkring_python_heavy_example(bng_heavy_setup):
-    """bng_geomkring (heavy) returns 25 cells for the BNG polygon at res=3, k=1."""
+    """bng_geomkring (heavy) returns 24 cells for the BNG polygon at res=3, k=1 (boundary band + 1 ring out)."""
     spark = bng_heavy_setup
     result = gridx_functions.bng_geomkring_python_heavy_example(spark)
     assert result is not None, "bng_geomkring (heavy) should return non-null list"
@@ -419,8 +419,8 @@ def test_bng_geomkring_python_heavy_example(bng_heavy_setup):
         result, list
     ), f"Expected list (ARRAY<STRING>), got {type(result)}"
     assert (
-        len(result) == 25
-    ), f"Expected 25 cells for geomkring(BNG polygon, res=3, k=1), got {len(result)}"
+        len(result) == 24
+    ), f"Expected 24 cells for geomkring(BNG polygon, res=3, k=1), got {len(result)}"
 
 
 def test_bng_geomkloop_python_heavy_example(bng_heavy_setup):

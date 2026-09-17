@@ -601,6 +601,32 @@ def test_rst_binpoints_agg_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_binpoints_agg")
 
 
+def test_rst_align_to_python_heavy_example(spark):
+    """rst_align_to returns a non-null tile struct (warped to reference grid)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_align_to_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_align_to")
+
+
+def test_rst_chm_python_heavy_example(spark):
+    """rst_chm returns a non-null Float32 CHM tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_chm_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_chm")
+
+
+def test_rst_isoband_python_heavy_example(spark):
+    """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
+    assert rasterx_functions is not None
+    patches = rasterx_functions.rst_isoband_python_heavy_example(spark)
+    assert isinstance(patches, list), "rst_isoband must return a list of patches"
+    assert len(patches) > 0, "rst_isoband must return at least one patch for a DEM with real elevation"
+    patch = patches[0]
+    assert patch["geom_wkb"] is not None, "patch geom_wkb must be non-null"
+    assert patch["band"] is not None, "patch band must be non-null"
+    assert hasattr(rasterx_functions, "rst_isoband_python_heavy_example_output")
+
+
 # ---------------------------------------------------------------------------
 # Band-math examples (tabbed docs: 10 functions)
 # All heavy band-math fns currently hit the GDAL null-output-dataset bug:

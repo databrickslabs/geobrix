@@ -1905,6 +1905,59 @@ def rst_combinesum(tiles: ColLike) -> Column:
     return f.call_function("gbx_rst_combinesum", _col(tiles))
 
 
+def rst_align_to(tile: ColLike, reference_tile: ColLike) -> Column:
+    """Warp a tile to match the grid of a reference tile.
+
+    Output has exactly the same CRS, extent, width, height, and geotransform as
+    the reference tile. Uses nearest-neighbour resampling.
+
+    Args:
+        tile: The raster tile to warp.
+        reference_tile: Reference tile whose grid defines the output grid.
+
+    Returns:
+        Column of warped raster tile aligned to the reference grid.
+    """
+    return f.call_function("gbx_rst_align_to", _col(tile), _col(reference_tile))
+
+
+def rst_chm(dsm_tile: ColLike, dem_tile: ColLike) -> Column:
+    """Compute Canopy Height Model from DSM and DEM tiles.
+
+    Returns ``clamp(align(DSM→DEM) - DEM, min=0)``. The DSM is warped onto the
+    DEM's grid (CRS, extent, width, height) via nearest-neighbour resampling
+    before subtraction. Negative differences are clamped to 0. NoData in either
+    input propagates to the output.
+
+    Args:
+        dsm_tile: Digital Surface Model tile (surface heights).
+        dem_tile: Digital Elevation Model tile (bare-earth reference; also defines
+            the output grid).
+
+    Returns:
+        Column of Float32 CHM tile (NoData -9999).
+    """
+    return f.call_function("gbx_rst_chm", _col(dsm_tile), _col(dem_tile))
+
+
+def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
+    """Reclassify a raster band into value bins and return contour polygons.
+
+    Returns ``ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>`` —
+    one entry per contiguous region in the same break interval. NoData pixels are
+    excluded. Bins are half-open ``[breaks[i], breaks[i+1])``.
+
+    Args:
+        tile: Raster tile column.
+        breaks: ``ARRAY<DOUBLE>`` of N+1 strictly-ascending boundary values
+            defining N bands.
+
+    Returns:
+        Column of ``ARRAY<struct>`` — one polygon per contiguous patch.
+    """
+    return f.call_function("gbx_rst_isoband", _col(tile), _col(breaks))
+
+
 def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
     """Apply a convolution kernel to the raster.
 

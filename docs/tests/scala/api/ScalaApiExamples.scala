@@ -1984,6 +1984,75 @@ result.show(truncate = false)
 (per-pixel sum raster from 3 input tiles)
 """.trim
 
+  val rst_align_to_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+// Warp each tile to match its paired reference tile's grid (same CRS, extent, pixel size).
+// Aligning tiles to a common reference satisfies the precondition for rst_combine*.
+val paired = spark.table("paired_rasters")
+val result = paired.select(rx.rst_align_to(col("tile"), col("reference_tile")).alias("aligned"))
+result.show(truncate = false)
+""".trim
+
+  val rst_align_to_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|aligned                                                    |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(tile warped to reference grid; output has reference tile's CRS, extent, width, height)
+""".trim
+
+  val rst_chm_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+// Compute CHM = clamp(align(DSM -> DEM) - DEM, min=0).
+// Using the same tile for both is a degenerate (all-zero) but valid example.
+// In production: pass a LiDAR-derived DSM (rst_binpoints over LiDAR returns)
+// and a matching DEM tile to produce real canopy heights.
+val dem = spark.table("dem_rasters")
+val result = dem.select(rx.rst_chm(col("tile"), col("tile")).alias("chm"))
+result.show(truncate = false)
+""".trim
+
+  val rst_chm_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|chm                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 CHM tile: clamp(DSM - DEM, min=0); NoData propagates from either input)
+""".trim
+
+  val rst_isoband_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+// Reclassify DEM elevation into five 50-metre bands [0,50),[50,100),...,[200,311).
+// Returns ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>.
+val dem = spark.table("dem_rasters")
+val breaks = array(lit(0.0), lit(50.0), lit(100.0), lit(150.0), lit(200.0), lit(311.0))
+val result = dem.select(rx.rst_isoband(col("tile"), breaks).alias("patches"))
+result.show(truncate = false)
+""".trim
+
+  val rst_isoband_scala_example_output: String =
+    """
++-----------------------------------------------------------+
+|patches                                                    |
++-----------------------------------------------------------+
+|[{[BINARY], 0, 0.0, 50.0}, {[BINARY], 1, 50.0, 100.0}, ...]|
++-----------------------------------------------------------+
+(ARRAY of per-patch structs: geom_wkb WKB polygon, band index, lower/upper break values)
+""".trim
+
   val rst_derivedband_scala_example: String =
     """
 import com.databricks.labs.gbx.rasterx.{functions => rx}

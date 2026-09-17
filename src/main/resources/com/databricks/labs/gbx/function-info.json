@@ -5,7 +5,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_align_to(tile, reference_tile) AS aligned FROM paired_rasters;",
       "usage_args": "tile, reference_tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -222,7 +225,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_chm(tile, tile) AS chm FROM dem_rasters;",
       "usage_args": "dsm_tile, dem_tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.2"
     },
@@ -825,7 +831,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_isoband(tile, array(0.0, 50.0, 100.0, 150.0, 200.0)) AS patches FROM dem_rasters;",
       "usage_args": "tile, breaks",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.2"
     },

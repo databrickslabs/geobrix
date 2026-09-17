@@ -138,7 +138,7 @@ End-to-end worked examples live in [`notebooks/examples/`](./notebooks/examples/
 
 | Notebook | Series | What it shows |
 |---|---|---|
-| [`h3-rasterize`](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize) | Part 1 of the DEM → LiDAR → CHM series | Downloads a USGS 3DEP seamless 10 m DEM for San Francisco, extracts twelve 25 m elevation bands with `rst_isoband`, indexes them with Databricks product H3 (`try_h3_polyfillash3` / `try_h3_coverash3`) at resolution 10, and assembles a multi-band raster stack with the H3 gridspec and rasterize aggregators. |
+| [`h3-rasterize`](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize) | Part 1 of the DEM → LiDAR → CHM series | Downloads a USGS 3DEP LiDAR-DTM (≈2 m) for San Francisco via `DemDownloader.lidar_dtm()`, tiles it into distributed virtual tiles with the `raster_gbx` reader, clips each tile to a land mask from Overture Maps (`rst_clip`), extracts twelve 25 m elevation bands with `rst_isoband`, indexes them with Databricks product H3 (`h3_try_coverash3`) at resolution 10, assembles a multi-band raster stack, and dissolves per-group polygons on Spark via the product `st_union_agg` in `cells_as_gdf`. |
 
 ## Known limitations
 

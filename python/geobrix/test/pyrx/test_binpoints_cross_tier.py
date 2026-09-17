@@ -176,9 +176,9 @@ def _run_light(spark, stat):
     spark.range(1).createOrReplaceTempView("_bp_parity_light")
     sql = _SQL_TEMPLATE.format(stat=stat, view="_bp_parity_light")
     row = spark.sql(sql).collect()[0]["r"]
-    assert row is not None, (
-        f"light gbx_rst_binpoints(stat='{stat}') returned null — unexpected"
-    )
+    assert (
+        row is not None
+    ), f"light gbx_rst_binpoints(stat='{stat}') returned null — unexpected"
     return _read_band(row)
 
 
@@ -226,15 +226,15 @@ def _assert_parity(light_arr, heavy_arr, light_nd, heavy_nd, label=""):
     """
     prefix = f"[{label}] " if label else ""
 
-    assert light_arr.shape == heavy_arr.shape, (
-        f"{prefix}shape mismatch: light={light_arr.shape} heavy={heavy_arr.shape}"
-    )
-    assert light_nd == pytest.approx(_NODATA), (
-        f"{prefix}light nodata sentinel must be {_NODATA}, got {light_nd}"
-    )
-    assert heavy_nd == pytest.approx(_NODATA), (
-        f"{prefix}heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
-    )
+    assert (
+        light_arr.shape == heavy_arr.shape
+    ), f"{prefix}shape mismatch: light={light_arr.shape} heavy={heavy_arr.shape}"
+    assert light_nd == pytest.approx(
+        _NODATA
+    ), f"{prefix}light nodata sentinel must be {_NODATA}, got {light_nd}"
+    assert heavy_nd == pytest.approx(
+        _NODATA
+    ), f"{prefix}heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
 
     light_mask = light_arr == _NODATA
     heavy_mask = heavy_arr == _NODATA
@@ -288,7 +288,7 @@ def test_binpoints_max_parity(spark_with_jar):
     assert light_arr.shape == (2, 2), f"output must be 2×2, got {light_arr.shape}"
     assert light_arr[0, 0] == pytest.approx(25.0), "arr[0,0]=max(10,25)=25"
     assert light_arr[0, 1] == pytest.approx(30.0), "arr[0,1]=max(5,15,30)=30"
-    assert light_arr[1, 0] == pytest.approx(7.0),  "arr[1,0]=max(7)=7"
+    assert light_arr[1, 0] == pytest.approx(7.0), "arr[1,0]=max(7)=7"
     assert light_arr[1, 1] == pytest.approx(_NODATA), "arr[1,1]=empty→NoData"
 
 
@@ -312,8 +312,8 @@ def test_binpoints_min_parity(spark_with_jar):
     _assert_parity(light_arr, heavy_arr, light_nd, heavy_nd, label="min")
 
     assert light_arr[0, 0] == pytest.approx(10.0), "arr[0,0]=min(10,25)=10"
-    assert light_arr[0, 1] == pytest.approx(5.0),  "arr[0,1]=min(5,15,30)=5"
-    assert light_arr[1, 0] == pytest.approx(7.0),  "arr[1,0]=min(7)=7"
+    assert light_arr[0, 1] == pytest.approx(5.0), "arr[0,1]=min(5,15,30)=5"
+    assert light_arr[1, 0] == pytest.approx(7.0), "arr[1,0]=min(7)=7"
     assert light_arr[1, 1] == pytest.approx(_NODATA), "arr[1,1]=empty→NoData"
 
 
@@ -336,12 +336,10 @@ def test_binpoints_mean_parity(spark_with_jar):
 
     _assert_parity(light_arr, heavy_arr, light_nd, heavy_nd, label="mean")
 
-    assert light_arr[0, 0] == pytest.approx(17.5, abs=1e-4), (
-        "arr[0,0]=mean(10,25)=17.5"
-    )
-    assert light_arr[0, 1] == pytest.approx(50.0 / 3, abs=1e-4), (
-        "arr[0,1]=mean(5,15,30)=50/3"
-    )
+    assert light_arr[0, 0] == pytest.approx(17.5, abs=1e-4), "arr[0,0]=mean(10,25)=17.5"
+    assert light_arr[0, 1] == pytest.approx(
+        50.0 / 3, abs=1e-4
+    ), "arr[0,1]=mean(5,15,30)=50/3"
     assert light_arr[1, 0] == pytest.approx(7.0, abs=1e-4), "arr[1,0]=mean(7)=7"
     assert light_arr[1, 1] == pytest.approx(_NODATA), "arr[1,1]=empty→NoData"
 
@@ -403,12 +401,12 @@ def test_binpoints_median_parity(spark_with_jar):
 
     _assert_parity(light_arr, heavy_arr, light_nd, heavy_nd, label="median")
 
-    assert light_arr[0, 0] == pytest.approx(17.5, abs=1e-4), (
-        "arr[0,0]=median([10,25])=17.5 (linear interp)"
-    )
-    assert light_arr[0, 1] == pytest.approx(15.0, abs=1e-4), (
-        "arr[0,1]=median([5,15,30])=15.0 (exact middle)"
-    )
+    assert light_arr[0, 0] == pytest.approx(
+        17.5, abs=1e-4
+    ), "arr[0,0]=median([10,25])=17.5 (linear interp)"
+    assert light_arr[0, 1] == pytest.approx(
+        15.0, abs=1e-4
+    ), "arr[0,1]=median([5,15,30])=15.0 (exact middle)"
     assert light_arr[1, 0] == pytest.approx(7.0, abs=1e-4), "arr[1,0]=median([7])=7"
     assert light_arr[1, 1] == pytest.approx(_NODATA), "arr[1,1]=empty→NoData"
 
@@ -444,6 +442,7 @@ def test_binpoints_half_open_edge_parity(spark_with_jar):
     )
 
     from databricks.labs.gbx.pyrx import functions as prx
+
     prx.register(spark)
     spark.range(1).createOrReplaceTempView("_bp_edge_light")
     light_row = spark.sql(edge_sql.format(view="_bp_edge_light")).collect()[0]["r"]
@@ -451,6 +450,7 @@ def test_binpoints_half_open_edge_parity(spark_with_jar):
     light_arr, light_nd = _read_band(light_row)
 
     from databricks.labs.gbx.rasterx import functions as hx
+
     hx.register(spark)
     spark.range(1).createOrReplaceTempView("_bp_edge_heavy")
     heavy_row = spark.sql(edge_sql.format(view="_bp_edge_heavy")).collect()[0]["r"]
@@ -468,9 +468,9 @@ def test_binpoints_half_open_edge_parity(spark_with_jar):
         )
 
     # Valid point (x=0.5, y=1.5, z=42) must land in arr[0,0].
-    assert light_arr[0, 0] == pytest.approx(42.0), (
-        f"light arr[0,0] must be 42.0 (valid point), got {light_arr[0, 0]}"
-    )
-    assert heavy_arr[0, 0] == pytest.approx(42.0), (
-        f"heavy arr[0,0] must be 42.0 (valid point), got {heavy_arr[0, 0]}"
-    )
+    assert light_arr[0, 0] == pytest.approx(
+        42.0
+    ), f"light arr[0,0] must be 42.0 (valid point), got {light_arr[0, 0]}"
+    assert heavy_arr[0, 0] == pytest.approx(
+        42.0
+    ), f"heavy arr[0,0] must be 42.0 (valid point), got {heavy_arr[0, 0]}"

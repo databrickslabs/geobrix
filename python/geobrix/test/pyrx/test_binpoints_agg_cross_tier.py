@@ -81,10 +81,10 @@ _POINT_ROWS = [
     # (grp, x,   y,   z)
     ("g1", 0.5, 1.5, 10.0),
     ("g1", 0.5, 1.5, 25.0),
-    ("g1", 1.5, 1.5,  5.0),
+    ("g1", 1.5, 1.5, 5.0),
     ("g1", 1.5, 1.5, 15.0),
     ("g1", 1.5, 1.5, 30.0),
-    ("g1", 0.5, 0.5,  7.0),
+    ("g1", 0.5, 0.5, 7.0),
 ]
 
 
@@ -200,13 +200,13 @@ def _run_light(spark, stat):
 
     sql = _SQL_TEMPLATE.format(stat=stat, view="_bpa_parity_light")
     rows = spark.sql(sql).collect()
-    assert len(rows) == 1, (
-        f"light GROUP BY must return exactly 1 group row; got {len(rows)}"
-    )
+    assert (
+        len(rows) == 1
+    ), f"light GROUP BY must return exactly 1 group row; got {len(rows)}"
     raw = rows[0]["r"]
-    assert raw is not None, (
-        f"light gbx_rst_binpoints_agg(stat='{stat}') returned null — unexpected"
-    )
+    assert (
+        raw is not None
+    ), f"light gbx_rst_binpoints_agg(stat='{stat}') returned null — unexpected"
     return _read_band_from_binary(raw)
 
 
@@ -235,9 +235,9 @@ def _run_heavy(spark, stat):
 
     sql = _SQL_TEMPLATE.format(stat=stat, view="_bpa_parity_heavy")
     rows = spark.sql(sql).collect()
-    assert len(rows) == 1, (
-        f"heavy GROUP BY must return exactly 1 group row; got {len(rows)}"
-    )
+    assert (
+        len(rows) == 1
+    ), f"heavy GROUP BY must return exactly 1 group row; got {len(rows)}"
     tile_struct = rows[0]["r"]
     assert tile_struct is not None, (
         f"heavy gbx_rst_binpoints_agg(stat='{stat}') returned null — "
@@ -270,15 +270,15 @@ def _assert_parity(light_arr, heavy_arr, light_nd, heavy_nd, label=""):
     """
     prefix = f"[{label}] " if label else ""
 
-    assert light_arr.shape == heavy_arr.shape, (
-        f"{prefix}shape mismatch: light={light_arr.shape} heavy={heavy_arr.shape}"
-    )
-    assert light_nd == pytest.approx(_NODATA), (
-        f"{prefix}light nodata sentinel must be {_NODATA}, got {light_nd}"
-    )
-    assert heavy_nd == pytest.approx(_NODATA), (
-        f"{prefix}heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
-    )
+    assert (
+        light_arr.shape == heavy_arr.shape
+    ), f"{prefix}shape mismatch: light={light_arr.shape} heavy={heavy_arr.shape}"
+    assert light_nd == pytest.approx(
+        _NODATA
+    ), f"{prefix}light nodata sentinel must be {_NODATA}, got {light_nd}"
+    assert heavy_nd == pytest.approx(
+        _NODATA
+    ), f"{prefix}heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
 
     light_mask = light_arr == _NODATA
     heavy_mask = heavy_arr == _NODATA
@@ -326,7 +326,7 @@ def test_binpoints_agg_max_parity(spark_with_jar):
     assert light_arr.shape == (2, 2), f"output must be 2×2, got {light_arr.shape}"
     assert light_arr[0, 0] == pytest.approx(25.0), "arr[0,0]=max(10,25)=25"
     assert light_arr[0, 1] == pytest.approx(30.0), "arr[0,1]=max(5,15,30)=30"
-    assert light_arr[1, 0] == pytest.approx(7.0),  "arr[1,0]=max(7)=7"
+    assert light_arr[1, 0] == pytest.approx(7.0), "arr[1,0]=max(7)=7"
     assert light_arr[1, 1] == pytest.approx(_NODATA), "arr[1,1]=empty→NoData"
 
 
@@ -349,12 +349,10 @@ def test_binpoints_agg_mean_parity(spark_with_jar):
 
     _assert_parity(light_arr, heavy_arr, light_nd, heavy_nd, label="mean")
 
-    assert light_arr[0, 0] == pytest.approx(17.5, abs=1e-4), (
-        "arr[0,0]=mean(10,25)=17.5"
-    )
-    assert light_arr[0, 1] == pytest.approx(50.0 / 3, abs=1e-4), (
-        "arr[0,1]=mean(5,15,30)=50/3"
-    )
+    assert light_arr[0, 0] == pytest.approx(17.5, abs=1e-4), "arr[0,0]=mean(10,25)=17.5"
+    assert light_arr[0, 1] == pytest.approx(
+        50.0 / 3, abs=1e-4
+    ), "arr[0,1]=mean(5,15,30)=50/3"
     assert light_arr[1, 0] == pytest.approx(7.0, abs=1e-4), "arr[1,0]=mean(7)=7"
     assert light_arr[1, 1] == pytest.approx(_NODATA), "arr[1,1]=empty→NoData"
 
@@ -407,11 +405,11 @@ def test_binpoints_agg_median_parity(spark_with_jar):
 
     _assert_parity(light_arr, heavy_arr, light_nd, heavy_nd, label="median")
 
-    assert light_arr[0, 0] == pytest.approx(17.5, abs=1e-4), (
-        "arr[0,0]=median([10,25])=17.5 (linear interp)"
-    )
-    assert light_arr[0, 1] == pytest.approx(15.0, abs=1e-4), (
-        "arr[0,1]=median([5,15,30])=15.0 (exact middle)"
-    )
+    assert light_arr[0, 0] == pytest.approx(
+        17.5, abs=1e-4
+    ), "arr[0,0]=median([10,25])=17.5 (linear interp)"
+    assert light_arr[0, 1] == pytest.approx(
+        15.0, abs=1e-4
+    ), "arr[0,1]=median([5,15,30])=15.0 (exact middle)"
     assert light_arr[1, 0] == pytest.approx(7.0, abs=1e-4), "arr[1,0]=median([7])=7"
     assert light_arr[1, 1] == pytest.approx(_NODATA), "arr[1,1]=empty→NoData"

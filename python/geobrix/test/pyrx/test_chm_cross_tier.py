@@ -215,26 +215,22 @@ def test_chm_same_grid_parity(spark_with_jar):
     """
     spark = spark_with_jar
 
-    dsm = _make_geotiff_bytes(
-        np.array([[10.0, 20.0], [5.0, 8.0]], dtype="float32")
-    )
-    dem = _make_geotiff_bytes(
-        np.array([[10.0, 15.0], [7.0, 8.0]], dtype="float32")
-    )
+    dsm = _make_geotiff_bytes(np.array([[10.0, 20.0], [5.0, 8.0]], dtype="float32"))
+    dem = _make_geotiff_bytes(np.array([[10.0, 15.0], [7.0, 8.0]], dtype="float32"))
 
     # Collect LIGHT first; heavy registration overwrites the SQL name next.
     light_arr, light_nd = _run_light_chm(spark, dsm, dem)
     heavy_arr, heavy_nd = _run_heavy_chm(spark, dsm, dem)
 
-    assert light_arr.shape == heavy_arr.shape, (
-        f"same-grid: shape mismatch light={light_arr.shape} heavy={heavy_arr.shape}"
-    )
-    assert light_nd == pytest.approx(_NODATA), (
-        f"light nodata sentinel must be {_NODATA}, got {light_nd}"
-    )
-    assert heavy_nd == pytest.approx(_NODATA), (
-        f"heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
-    )
+    assert (
+        light_arr.shape == heavy_arr.shape
+    ), f"same-grid: shape mismatch light={light_arr.shape} heavy={heavy_arr.shape}"
+    assert light_nd == pytest.approx(
+        _NODATA
+    ), f"light nodata sentinel must be {_NODATA}, got {light_nd}"
+    assert heavy_nd == pytest.approx(
+        _NODATA
+    ), f"heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
 
     ln = _nodata_to_nan(light_arr, light_nd)
     hn = _nodata_to_nan(heavy_arr, heavy_nd)
@@ -245,12 +241,12 @@ def test_chm_same_grid_parity(spark_with_jar):
     )
 
     # Spot-check computed values (clamp means no negatives anywhere).
-    assert np.all(light_arr[light_arr != _NODATA] >= 0.0), (
-        "light CHM has negative values (clamping broken)"
-    )
-    assert np.all(heavy_arr[heavy_arr != _NODATA] >= 0.0), (
-        "heavy CHM has negative values (clamping broken)"
-    )
+    assert np.all(
+        light_arr[light_arr != _NODATA] >= 0.0
+    ), "light CHM has negative values (clamping broken)"
+    assert np.all(
+        heavy_arr[heavy_arr != _NODATA] >= 0.0
+    ), "heavy CHM has negative values (clamping broken)"
 
 
 # ---------------------------------------------------------------------------
@@ -295,26 +291,28 @@ def test_chm_padded_below_datum_parity(spark_with_jar):
     light_arr, light_nd = _run_light_chm(spark, dsm, dem)
     heavy_arr, heavy_nd = _run_heavy_chm(spark, dsm, dem)
 
-    assert light_arr.shape == (4, 4), (
-        f"below-datum: light output must be 4×4 (DEM grid), got {light_arr.shape}"
-    )
-    assert heavy_arr.shape == (4, 4), (
-        f"below-datum: heavy output must be 4×4 (DEM grid), got {heavy_arr.shape}"
-    )
-    assert light_nd == pytest.approx(_NODATA), (
-        f"light nodata sentinel must be {_NODATA}, got {light_nd}"
-    )
-    assert heavy_nd == pytest.approx(_NODATA), (
-        f"heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
-    )
+    assert light_arr.shape == (
+        4,
+        4,
+    ), f"below-datum: light output must be 4×4 (DEM grid), got {light_arr.shape}"
+    assert heavy_arr.shape == (
+        4,
+        4,
+    ), f"below-datum: heavy output must be 4×4 (DEM grid), got {heavy_arr.shape}"
+    assert light_nd == pytest.approx(
+        _NODATA
+    ), f"light nodata sentinel must be {_NODATA}, got {light_nd}"
+    assert heavy_nd == pytest.approx(
+        _NODATA
+    ), f"heavy nodata sentinel must be {_NODATA}, got {heavy_nd}"
 
     # Covered top-left pixels: clamp(5 - (-20), 0) = 25 in BOTH tiers.
-    assert light_arr[0, 0] == pytest.approx(25.0), (
-        f"light covered [0,0] must be 25 (5-(-20)); got {light_arr[0, 0]}"
-    )
-    assert heavy_arr[0, 0] == pytest.approx(25.0), (
-        f"heavy covered [0,0] must be 25 (5-(-20)); got {heavy_arr[0, 0]}"
-    )
+    assert light_arr[0, 0] == pytest.approx(
+        25.0
+    ), f"light covered [0,0] must be 25 (5-(-20)); got {light_arr[0, 0]}"
+    assert heavy_arr[0, 0] == pytest.approx(
+        25.0
+    ), f"heavy covered [0,0] must be 25 (5-(-20)); got {heavy_arr[0, 0]}"
 
     # Uncovered pixels must be NoData (-9999), not the spurious 20 m canopy.
     assert light_arr[3, 3] == pytest.approx(_NODATA), (

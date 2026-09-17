@@ -107,14 +107,14 @@ final case class RST_BinPointsAgg(
             RST_ExpressionUtil.init(exprConf)
         }
         val emptyRow = InternalRow.empty
-        val xmin    = evalDouble(xminExpr,     emptyRow, "xmin")
-        val ymin    = evalDouble(yminExpr,     emptyRow, "ymin")
-        val xmax    = evalDouble(xmaxExpr,     emptyRow, "xmax")
-        val ymax    = evalDouble(ymaxExpr,     emptyRow, "ymax")
-        val widthPx = evalInt   (widthPxExpr,  emptyRow, "width_px")
-        val heightPx = evalInt  (heightPxExpr, emptyRow, "height_px")
-        val srid    = evalInt   (sridExpr,     emptyRow, "srid")
-        val stat    = evalString(statisticExpr, emptyRow, RST_BinPoints.DefaultStatistic)
+        val xmin = evalDouble(xminExpr, emptyRow, "xmin")
+        val ymin = evalDouble(yminExpr, emptyRow, "ymin")
+        val xmax = evalDouble(xmaxExpr, emptyRow, "xmax")
+        val ymax = evalDouble(ymaxExpr, emptyRow, "ymax")
+        val widthPx = evalInt(widthPxExpr, emptyRow, "width_px")
+        val heightPx = evalInt(heightPxExpr, emptyRow, "height_px")
+        val srid = evalInt(sridExpr, emptyRow, "srid")
+        val stat = evalString(statisticExpr, emptyRow, RST_BinPoints.DefaultStatistic)
         val x = buffer.points.map(_._1).toArray
         val y = buffer.points.map(_._2).toArray
         val z = buffer.points.map(_._3).toArray

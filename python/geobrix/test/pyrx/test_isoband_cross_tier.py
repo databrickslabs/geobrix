@@ -158,7 +158,9 @@ def _collect_isoband_structs(rows, tier="?"):
     structs = []
     for s in result:
         geom = shapely.wkb.loads(bytes(s["geom_wkb"]))
-        structs.append((int(s["band"]), float(s["lower"]), float(s["upper"]), geom.area))
+        structs.append(
+            (int(s["band"]), float(s["lower"]), float(s["upper"]), geom.area)
+        )
     return structs
 
 
@@ -198,9 +200,9 @@ def _assert_isoband_parity(light_structs, heavy_structs, label=""):
         b, lo, hi = key
         l_areas = sorted(a for bb, ll, uu, a in light_structs if (bb, ll, uu) == key)
         h_areas = sorted(a for bb, ll, uu, a in heavy_structs if (bb, ll, uu) == key)
-        assert len(l_areas) == len(h_areas), (
-            f"{prefix}band({b},{lo},{hi}) patch count: light={len(l_areas)} heavy={len(h_areas)}"
-        )
+        assert len(l_areas) == len(
+            h_areas
+        ), f"{prefix}band({b},{lo},{hi}) patch count: light={len(l_areas)} heavy={len(h_areas)}"
         for i, (la, ha) in enumerate(zip(l_areas, h_areas)):
             assert la == pytest.approx(ha, abs=1e-5), (
                 f"{prefix}band({b},{lo},{hi}) patch[{i}] area mismatch: "
@@ -280,8 +282,8 @@ def test_isoband_four_quadrant_parity(spark_with_jar):
     spark = spark_with_jar
 
     data = np.zeros((6, 6), dtype="float32")
-    data[0:3, 0:3] = 25.0   # band 0 [0,  50)
-    data[0:3, 3:6] = 75.0   # band 1 [50, 100)
+    data[0:3, 0:3] = 25.0  # band 0 [0,  50)
+    data[0:3, 3:6] = 75.0  # band 1 [50, 100)
     data[3:6, 0:3] = 125.0  # band 2 [100, 150)
     data[3:6, 3:6] = 175.0  # band 3 [150, 200)
 
@@ -295,12 +297,12 @@ def test_isoband_four_quadrant_parity(spark_with_jar):
     heavy_structs = _collect_isoband_structs(heavy_rows, tier="heavy")
 
     # Sanity: four patches expected (one per quadrant).
-    assert len(light_structs) == 4, (
-        f"light: expected 4 patches, got {len(light_structs)}: {light_structs}"
-    )
-    assert len(heavy_structs) == 4, (
-        f"heavy: expected 4 patches, got {len(heavy_structs)}: {heavy_structs}"
-    )
+    assert (
+        len(light_structs) == 4
+    ), f"light: expected 4 patches, got {len(light_structs)}: {light_structs}"
+    assert (
+        len(heavy_structs) == 4
+    ), f"heavy: expected 4 patches, got {len(heavy_structs)}: {heavy_structs}"
 
     _assert_isoband_parity(light_structs, heavy_structs, label="four-quadrant")
 
@@ -336,13 +338,17 @@ def test_isoband_nodata_exclusion_parity(spark_with_jar):
 
     # All patches must be band 0 [0, 50).
     for b, lo, hi, _ in light_structs:
-        assert (b, lo, hi) == (0, 0.0, 50.0), (
-            f"light: unexpected (band,lower,upper)=({b},{lo},{hi})"
-        )
+        assert (b, lo, hi) == (
+            0,
+            0.0,
+            50.0,
+        ), f"light: unexpected (band,lower,upper)=({b},{lo},{hi})"
     for b, lo, hi, _ in heavy_structs:
-        assert (b, lo, hi) == (0, 0.0, 50.0), (
-            f"heavy: unexpected (band,lower,upper)=({b},{lo},{hi})"
-        )
+        assert (b, lo, hi) == (
+            0,
+            0.0,
+            50.0,
+        ), f"heavy: unexpected (band,lower,upper)=({b},{lo},{hi})"
 
     # Cross-tier: same total area (sum over all patches).
     light_total_area = sum(a for _, _, _, a in light_structs)
@@ -384,8 +390,12 @@ def test_isoband_out_of_range_parity(spark_with_jar):
     light_empty = light_result is None or len(light_result) == 0
     heavy_empty = heavy_result is None or len(heavy_result) == 0
 
-    assert light_empty, f"light: expected empty result for all-out-of-range, got {light_result}"
-    assert heavy_empty, f"heavy: expected empty result for all-out-of-range, got {heavy_result}"
+    assert (
+        light_empty
+    ), f"light: expected empty result for all-out-of-range, got {light_result}"
+    assert (
+        heavy_empty
+    ), f"heavy: expected empty result for all-out-of-range, got {heavy_result}"
 
 
 # ---------------------------------------------------------------------------

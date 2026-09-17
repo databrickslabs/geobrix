@@ -132,6 +132,14 @@ Single-file vector writes are lightweight-only; the **sharded GeoJSONL** writer 
 
 Light vector readers/writers exchange geometry as **WKB/WKT** with companion `*_srid` columns — convert to/from Databricks `GEOMETRY` with `st_geomfromwkb` / `st_aswkb` (see [Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
 
+## Example notebooks
+
+End-to-end worked examples live in [`notebooks/examples/`](./notebooks/examples/), with a docs page for each one.
+
+| Notebook | Series | What it shows |
+|---|---|---|
+| [`h3-rasterize`](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize) | Part 1 of the DEM → LiDAR → CHM series | Downloads a USGS 3DEP seamless 10 m DEM for San Francisco, extracts twelve 25 m elevation bands with `rst_isoband`, indexes them with Databricks product H3 (`try_h3_polyfillash3` / `try_h3_coverash3`) at resolution 10, and assembles a multi-band raster stack with the H3 gridspec and rasterize aggregators. |
+
 ## Known limitations
 
 - Native Databricks `GEOMETRY`/`GEOGRAPHY` are not produced directly yet — geometries are exchanged as **WKB/WKT** (+ `*_srid`); convert with the native ST functions ([Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).

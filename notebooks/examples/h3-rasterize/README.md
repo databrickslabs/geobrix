@@ -31,8 +31,8 @@ the `gbx.vizx` helpers.
 
 Five pipeline steps — DEM download, distributed isoband extraction with `rst_isoband`,
 product-H3 indexing, shared-canvas computation, per-band rasterize, and multi-band stacking
-— producing a multi-band GeoTIFF that stacks twelve 25 m elevation bands (0–300 m) over the
-San Francisco Peninsula. Visualization appears after each major step: the raw DEM, per-cell
+— producing a multi-band GeoTIFF that stacks twelve 25 m elevation bands (0–300 m) over
+San Francisco. Visualization appears after each major step: the raw DEM, per-cell
 H3 footprints on the shared canvas, selected mid-elevation band shapes, and a final
 coverage-depth composite.
 
@@ -56,11 +56,12 @@ coverage-depth composite.
   `geobrix-0.5.2-py3-none-any.whl`. The `[light_env6,vizx]` extras install rasterio,
   geopandas, matplotlib, and mapclassify — no other dependencies assumed pre-staged.
 - **Unity Catalog Volume.** `DemDownloader` stages the tile to
-  `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation/`.
+  `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep`.
   The Volume root must already exist; sub-directories are created automatically.
 - **Databricks product H3.** `try_h3_polyfillash3` and `try_h3_coverash3` are
-  Databricks built-in SQL functions (DBR 13.3+ / Serverless) — no additional install
-  is needed.
+  Databricks built-in SQL functions available on Databricks Serverless and recent DBR
+  runtimes (a spatial-SQL runtime is required; verified on Serverless) — no additional
+  install is needed.
 
 ---
 
@@ -111,7 +112,7 @@ Coverage-depth figure: pixel = count of bands covering that location
 ## Key GeoBrix / Databricks functions shown
 
 - **GeoBrix RasterX** (`rx.*`): `rst_isoband`, `rst_h3_gridspec`, `rst_h3_rasterize_agg`, `rst_frombands_agg`.
-- **GeoBrix viz** (`gbx.vizx`): `plot_file` (raw DEM render), `plot_static` (per-cell H3 footprints),
+- **GeoBrix viz** (`gbx.vizx`): `plot_raster` (raw DEM render), `plot_static` (per-cell H3 footprints),
   `plot_interactive` (interactive multi-layer map), `cells_as_gdf` (H3 footprints as a GeoDataFrame;
   pass `dissolve_by="band_level"` to merge each band into one footprint polygon), `grid_as_gdf`
   (shared-canvas rectangle), `plot_mask_layers` (overlay two bands with distinct colours and a
@@ -141,8 +142,9 @@ Coverage-depth figure: pixel = count of bands covering that location
   distributed Spark columns — no driver-side loop is needed. For production pipelines
   ingesting many tiles, load them via `spark.read.format("gtiff_gbx")` and pass the
   whole DataFrame through; the pipeline scales without modification.
-- **Volume I/O is sequential.** The DEM staging cell writes via `shutil.copy` from a
-  node-local temp directory — FUSE-safe. Do not use `seek` on Volume paths.
+- **Volume write is serverless-safe.** `DemDownloader` stages AOI-windowed 3DEP GeoTIFFs
+  to the Unity Catalog Volume using sequential I/O — idempotent and safe on Serverless.
+  Do not use `seek` on Volume paths.
 
 ---
 

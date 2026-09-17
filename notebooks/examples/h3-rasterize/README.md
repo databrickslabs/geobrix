@@ -112,7 +112,7 @@ Coverage-depth figure: pixel = count of bands covering that location
 ## Key GeoBrix / Databricks functions shown
 
 - **GeoBrix RasterX** (`rx.*`): `rst_isoband`, `rst_h3_gridspec`, `rst_h3_rasterize_agg`, `rst_frombands_agg`.
-- **GeoBrix viz** (`gbx.vizx`): `plot_raster` (raw DEM render), `plot_static` (per-cell H3 footprints),
+- **GeoBrix viz** (`gbx.vizx`): `plot_file` (staged DEM GeoTIFF — virtual tiles are not materialized, so the file is plotted directly), `plot_static` (per-cell H3 footprints),
   `plot_interactive` (interactive multi-layer map), `cells_as_gdf` (H3 footprints as a GeoDataFrame;
   pass `dissolve_by="band_level"` to merge each band into one footprint polygon), `grid_as_gdf`
   (shared-canvas rectangle), `plot_mask_layers` (overlay two bands with distinct colours and a

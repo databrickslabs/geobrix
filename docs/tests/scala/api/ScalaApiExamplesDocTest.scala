@@ -116,6 +116,46 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_isoband_scala_example_output.nonEmpty)
   }
 
+  test("ScalaApiExamples custom-grid rastertogrid snippet vals are non-empty") {
+    assert(ScalaApiExamples.rst_custom_rastertogridavg_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridcount_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridmax_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridmin_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridmedian_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridsum_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridvariance_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridstddev_scala_example.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_tessellate_scala_example.nonEmpty)
+  }
+
+  test("ScalaApiExamples custom-grid rastertogrid output vals are non-empty") {
+    assert(ScalaApiExamples.rst_custom_rastertogridavg_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridcount_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridmax_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridmin_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridmedian_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridsum_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridvariance_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_rastertogridstddev_scala_example_output.nonEmpty)
+    assert(ScalaApiExamples.rst_custom_tessellate_scala_example_output.nonEmpty)
+  }
+
+  test("RasterX custom-grid rastertogrid Scala signatures compile") {
+    val grid = call_function("gbx_custom_grid",
+      lit(2.0), lit(2.01), lit(55.0), lit(55.01),
+      lit(2), lit(0.01), lit(0.01), lit(4326))
+    val _: Column = rx.rst_custom_rastertogridavg(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_rastertogridcount(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_rastertogridmax(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_rastertogridmin(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_rastertogridmedian(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_rastertogridsum(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_rastertogridvariance(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_rastertogridstddev(col("tile"), grid, lit(0))
+    val _: Column = rx.rst_custom_tessellate(col("tile"), grid, lit(0))
+    succeed
+  }
+
   test("RasterX rst_align_to rst_chm rst_isoband signatures compile") {
     val _: Column = rx.rst_align_to(col("tile"), col("reference_tile"))
     val _: Column = rx.rst_chm(col("dsm_tile"), col("dem_tile"))

@@ -98,3 +98,18 @@ def test_rst_quadbin_tessellate_python_light_example(spark):
     rows = transforms_examples.rst_quadbin_tessellate_python_light_example(spark)
     assert isinstance(rows, list) and len(rows) >= 1
     assert "cellid" in rows[0].asDict() and rows[0]["raster"] is not None
+
+
+def test_rst_custom_tessellate_python_light_example(spark):
+    """rst_custom_tessellate (UDTF via LATERAL) yields chip rows for a synthetic BNG raster.
+
+    Synthesizes a 2km London raster (EPSG:27700) and tessellates it into four
+    1km custom-grid cells. Expects at least one chip row with [cellid, raster].
+    """
+    rows = transforms_examples.rst_custom_tessellate_python_light_example(spark)
+    assert isinstance(rows, list) and len(rows) >= 1, (
+        "rst_custom_tessellate should yield >=1 chip row for a 2km London raster at res=1"
+    )
+    first = rows[0].asDict()
+    assert "cellid" in first, "rst_custom_tessellate result must have 'cellid' column"
+    assert first["raster"] is not None, "chip raster must be non-null"

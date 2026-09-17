@@ -357,3 +357,56 @@ rst_quadbin_tessellate_python_light_example_output = """
 +-------------------+-----------------------------------------------------------+
 (one v2-Tile row per quadbin cell, cellid = the quadbin index)
 """
+
+
+def rst_custom_tessellate_python_light_example(spark):
+    """Tessellate a raster into custom-grid cells (light tier UDTF via LATERAL).
+
+    rst_custom_tessellate is a Python UDTF — invoke it as a SQL LATERAL table
+    function. The raster must already be in the custom grid's native CRS — no
+    automatic reprojection is performed. We synthesize a 2km x 2km raster over
+    central London in EPSG:27700 (BNG), and use a matching custom grid with the
+    same CRS and extent so tessellation produces real chip rows.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    rx.register(spark)
+    gx.register(spark)
+    # A 2km x 2km square over central London, in EPSG:27700 metres.
+    london_wkt = (
+        "POLYGON((529000 179000, 531000 179000, "
+        "531000 181000, 529000 181000, 529000 179000))"
+    )
+    london = spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(london_wkt),
+            f.lit(1.0),
+            f.lit(529000.0),
+            f.lit(179000.0),
+            f.lit(531000.0),
+            f.lit(181000.0),
+            f.lit(200),
+            f.lit(200),
+            f.lit(27700),
+        ).alias("tile")
+    )
+    london.createOrReplaceTempView("london_rasters")
+    # Custom grid exactly covering the raster extent in EPSG:27700, resolution 1
+    # (four 1km cells subdividing the 2km root cell).
+    custom_grid_sql = "gbx_custom_grid(529000, 531000, 179000, 181000, 2, 2000, 2000, 27700)"
+    return spark.sql(
+        f"SELECT t.* FROM london_rasters, "
+        f"LATERAL gbx_rst_custom_tessellate(tile, {custom_grid_sql}, 1) t"
+    ).take(3)
+
+
+rst_custom_tessellate_python_light_example_output = """
++--------------------+-----------------------------------------------------------+
+|cellid              |raster                                                     |
++--------------------+-----------------------------------------------------------+
+|<custom cell bigint>|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++--------------------+-----------------------------------------------------------+
+(one v2-Tile row per custom-grid cell; cellid is BIGINT encoding the custom cell)
+"""

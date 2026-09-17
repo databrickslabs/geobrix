@@ -398,7 +398,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridavg( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -406,7 +409,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridcount( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -414,7 +420,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmax( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -422,7 +431,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmedian( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -430,7 +442,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmin( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -438,7 +453,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridstddev( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -446,7 +464,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridsum( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -454,7 +475,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridvariance( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -462,7 +486,10 @@
       "examples": "Examples:\n      > SELECT t.* FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [assignment], [coverage]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },

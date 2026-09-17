@@ -363,6 +363,12 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_BNG_Tessellate.name, Seq(tile, resolution, lit(assignment)))
     def rst_bng_tessellate(tile: Column, resolution: Column, assignment: String, coverage: String): Column =
         ColumnAdapter(RST_BNG_Tessellate.name, Seq(tile, resolution, lit(assignment), lit(coverage)))
+    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution))
+    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column, assignment: String): Column =
+        ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution, lit(assignment)))
+    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Column, assignment: String, coverage: String): Column =
+        ColumnAdapter(RST_Custom_Tessellate.name, Seq(tile, grid, resolution, lit(assignment), lit(coverage)))
     def rst_maketiles(tile: Column, sizeInMB: Column): Column =
         ColumnAdapter(RST_MakeTiles.name, Seq(tile, sizeInMB))
     def rst_retile(tile: Column, tileWidth: Column, tileHeight: Column): Column =
@@ -516,6 +522,54 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ColumnAdapter(RST_BNG_RasterToGridStddev.name, Seq(tile, resolution, lit(coverage)))
     def rst_bng_rastertogridstddev(tile: Column, resolution: Column, coverage: String, assignment: String): Column =
         ColumnAdapter(RST_BNG_RasterToGridStddev.name, Seq(tile, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridavg(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridAvg.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridavg(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridAvg.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridavg(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridAvg.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridcount(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridCount.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridcount(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridCount.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridcount(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridCount.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridmax(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMax.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridmax(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMax.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridmax(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMax.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridmin(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMin.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridmin(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMin.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridmin(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMin.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridmedian(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMedian.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridmedian(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMedian.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridmedian(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridMedian.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridsum(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridSum.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridsum(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridSum.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridsum(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridSum.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridvariance(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridVariance.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridvariance(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridVariance.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridvariance(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridVariance.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
+    def rst_custom_rastertogridstddev(tile: Column, grid: Column, resolution: Column): Column =
+        ColumnAdapter(RST_Custom_RasterToGridStddev.name, Seq(tile, grid, resolution))
+    def rst_custom_rastertogridstddev(tile: Column, grid: Column, resolution: Column, coverage: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridStddev.name, Seq(tile, grid, resolution, lit(coverage)))
+    def rst_custom_rastertogridstddev(tile: Column, grid: Column, resolution: Column, coverage: String, assignment: String): Column =
+        ColumnAdapter(RST_Custom_RasterToGridStddev.name, Seq(tile, grid, resolution, lit(coverage), lit(assignment)))
 
     /** Bounding box STRUCT<xmin,ymin,xmax,ymax> of one H3 cell in the output CRS
      *  (`srid`, an EPSG or ESRI code; or an `outCrs` string that wins over it). */
@@ -644,6 +698,20 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
     def rst_bng_rastertogridsum(tile: Column, resolution: String): Column = rst_bng_rastertogridsum(tile, lit(resolution))
     def rst_bng_rastertogridvariance(tile: Column, resolution: String): Column = rst_bng_rastertogridvariance(tile, lit(resolution))
     def rst_bng_rastertogridstddev(tile: Column, resolution: String): Column = rst_bng_rastertogridstddev(tile, lit(resolution))
+    // Custom-grid reducer resolution is an Int in [0, conf.max_resolution].
+    def rst_custom_rastertogridavg(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridavg(tile, grid, lit(resolution))
+    def rst_custom_rastertogridcount(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridcount(tile, grid, lit(resolution))
+    def rst_custom_rastertogridmax(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridmax(tile, grid, lit(resolution))
+    def rst_custom_rastertogridmin(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridmin(tile, grid, lit(resolution))
+    def rst_custom_rastertogridmedian(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridmedian(tile, grid, lit(resolution))
+    def rst_custom_rastertogridsum(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridsum(tile, grid, lit(resolution))
+    def rst_custom_rastertogridvariance(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridvariance(tile, grid, lit(resolution))
+    def rst_custom_rastertogridstddev(tile: Column, grid: Column, resolution: Int): Column = rst_custom_rastertogridstddev(tile, grid, lit(resolution))
+    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int): Column = rst_custom_tessellate(tile, grid, lit(resolution))
+    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int, assignment: String): Column =
+        rst_custom_tessellate(tile, grid, lit(resolution), assignment)
+    def rst_custom_tessellate(tile: Column, grid: Column, resolution: Int, assignment: String, coverage: String): Column =
+        rst_custom_tessellate(tile, grid, lit(resolution), assignment, coverage)
     def rst_asformat(tile: Column, newFormat: String): Column = rst_asformat(tile, lit(newFormat))
     def rst_clip(tile: Column, clip: Column, cutlineAllTouched: Boolean): Column =
         rst_clip(tile, clip, lit(cutlineAllTouched))

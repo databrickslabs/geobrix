@@ -645,3 +645,214 @@ h3_cell_bbox_python_light_example_output = """
 +------------------+------------------------------+
 (STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
 """
+
+
+# ============================================================================
+# Custom-Grid Rastertogrid Functions — Light Tier (UDTF via LATERAL)
+#
+# Each function takes a raster tile, a custom-grid spec struct (produced by
+# gbx_custom_grid), and a resolution integer. The custom grid requires INTEGER
+# coordinates (all bounds and cell sizes are truncated to int internally).
+#
+# Fixture: a synthetic single-band raster synthesized with rst_rasterize over a
+# 4km × 4km London BNG square (529000-533000 E / 179000-183000 N, EPSG:27700),
+# matching the custom grid exactly so all pixel centroids fall within the grid.
+# Resolution 0 = one root 4km cell; resolution 1 = four 2km cells.
+#
+# Registering pygx alongside pyrx makes gbx_custom_grid available in SQL.
+# ============================================================================
+
+# SQL inline form of the custom grid (matches the raster extent exactly)
+_CUSTOM_GRID_SQL = (
+    "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
+)
+
+# WKT polygon for the 4km London square in EPSG:27700 (BNG metres)
+_LONDON_4KM_WKT = (
+    "POLYGON((529000 179000, 533000 179000, "
+    "533000 183000, 529000 183000, 529000 179000))"
+)
+
+
+def _setup_custom_raster_view(spark):
+    """Register pyrx + pygx; create a synthetic BNG raster temp view for custom-grid tests."""
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    rx.register(spark)
+    gx.register(spark)
+    # Synthesize a small single-band raster over the 4km London BNG square.
+    # rst_rasterize produces a raster in EPSG:27700 with integer metre coordinates
+    # that exactly match the custom grid bounds below.
+    df = spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(_LONDON_4KM_WKT),
+            f.lit(1.0),
+            f.lit(529000.0),
+            f.lit(179000.0),
+            f.lit(533000.0),
+            f.lit(183000.0),
+            f.lit(40),
+            f.lit(40),
+            f.lit(27700),
+        ).alias("tile")
+    )
+    df.createOrReplaceTempView("custom_rasters")
+
+
+def rst_custom_rastertogridavg_python_light_example(spark):
+    """Aggregate raster values to custom-grid cells using average (light tier UDTF).
+
+    Synthesizes a single-band BNG raster (EPSG:27700) over a 4km London square
+    and aggregates to one 4km root cell (resolution 0). The raster CRS matches
+    the custom grid's native CRS so no reprojection is needed.
+    """
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridavg(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridavg_python_light_example_output = """
++----+--------------------+-------+
+|band|cellID              |measure|
++----+--------------------+-------+
+|1   |<custom cell bigint>|1.0    |
++----+--------------------+-------+
+(one row per band × custom-grid cell; cellID is BIGINT, measure is DOUBLE mean)
+"""
+
+
+def rst_custom_rastertogridcount_python_light_example(spark):
+    """Count pixels per custom-grid cell (light tier UDTF)."""
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridcount(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridcount_python_light_example_output = """
++----+--------------------+-------+
+|band|cellID              |measure|
++----+--------------------+-------+
+|1   |<custom cell bigint>|1600.0 |
++----+--------------------+-------+
+(pixel count per band × custom-grid cell; measure is DOUBLE)
+"""
+
+
+def rst_custom_rastertogridmax_python_light_example(spark):
+    """Get maximum values per custom-grid cell (light tier UDTF)."""
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridmax(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridmax_python_light_example_output = """
++----+--------------------+-------+
+|band|cellID              |measure|
++----+--------------------+-------+
+|1   |<custom cell bigint>|1.0    |
++----+--------------------+-------+
+(max pixel value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridmin_python_light_example(spark):
+    """Get minimum values per custom-grid cell (light tier UDTF)."""
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridmin(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridmin_python_light_example_output = """
++----+--------------------+-------+
+|band|cellID              |measure|
++----+--------------------+-------+
+|1   |<custom cell bigint>|1.0    |
++----+--------------------+-------+
+(min pixel value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridmedian_python_light_example(spark):
+    """Get median values per custom-grid cell (light tier UDTF)."""
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridmedian(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridmedian_python_light_example_output = """
++----+--------------------+--------+
+|band|cellID              |measure |
++----+--------------------+--------+
+|1   |<custom cell bigint>|1.0     |
++----+--------------------+--------+
+(median pixel value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridsum_python_light_example(spark):
+    """Sum pixel values per custom-grid cell (light tier UDTF)."""
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridsum(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridsum_python_light_example_output = """
++----+--------------------+--------+
+|band|cellID              |measure |
++----+--------------------+--------+
+|1   |<custom cell bigint>|1600.0  |
++----+--------------------+--------+
+(sum of pixel values per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridvariance_python_light_example(spark):
+    """Get population variance per custom-grid cell (light tier UDTF)."""
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridvariance(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridvariance_python_light_example_output = """
++----+--------------------+----------+
+|band|cellID              |measure   |
++----+--------------------+----------+
+|1   |<custom cell bigint>|0.0       |
++----+--------------------+----------+
+(population variance per band × custom-grid cell; 0.0 when all pixels equal)
+"""
+
+
+def rst_custom_rastertogridstddev_python_light_example(spark):
+    """Get population standard deviation per custom-grid cell (light tier UDTF)."""
+    _setup_custom_raster_view(spark)
+    return spark.sql(
+        f"SELECT t.* FROM custom_rasters, "
+        f"LATERAL gbx_rst_custom_rastertogridstddev(tile, {_CUSTOM_GRID_SQL}, 0) t"
+    ).take(5)
+
+
+rst_custom_rastertogridstddev_python_light_example_output = """
++----+--------------------+--------+
+|band|cellID              |measure |
++----+--------------------+--------+
+|1   |<custom cell bigint>|0.0     |
++----+--------------------+--------+
+(population standard deviation per band × custom-grid cell; 0.0 when all pixels equal)
+"""

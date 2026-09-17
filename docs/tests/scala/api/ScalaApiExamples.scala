@@ -3150,6 +3150,209 @@ result.getAs[Seq[Seq[Row]]]("bng_grid")
 (Seq[Seq[Row]] — outer per band, inner per BNG cell; cellID is a STRING grid-square label)"""
 
   // =========================================================================
+  // Custom-Grid RasterToGrid Functions
+  //
+  // gbx_custom_grid requires INTEGER coordinates (bounds, cell sizes, srid).
+  // Fixture: synthesize a single-band BNG (EPSG:27700) raster via rst_rasterize
+  // over a 4km London square (529000-533000 E / 179000-183000 N) with value 1.0
+  // per pixel. Custom grid covers the same EPSG:27700 extent at resolution 0
+  // (one 4km root cell). Raster CRS matches the grid so no reprojection needed.
+  // gbx_custom_grid is registered by rasterx registration (via shared JAR).
+  // =========================================================================
+
+  val rst_custom_rastertogridavg_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+// Custom grid with INTEGER BNG metre coordinates covering the same 4km extent.
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridavg(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridavg_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 1.0)))
+(Seq[Seq[Row]] — outer per band, inner per custom cell; cellID is BIGINT, measure is DOUBLE mean)"""
+
+  val rst_custom_rastertogridcount_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridcount(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridcount_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 1600.0)))
+(pixel count per band × custom cell; measure is DOUBLE)"""
+
+  val rst_custom_rastertogridmax_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridmax(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridmax_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 1.0)))
+(max value per band × custom cell)"""
+
+  val rst_custom_rastertogridmin_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridmin(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridmin_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 1.0)))
+(min value per band × custom cell)"""
+
+  val rst_custom_rastertogridmedian_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridmedian(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridmedian_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 1.0)))
+(median value per band × custom cell)"""
+
+  val rst_custom_rastertogridsum_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridsum(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridsum_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 1600.0)))
+(sum of pixel values per band × custom cell)"""
+
+  val rst_custom_rastertogridvariance_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridvariance(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridvariance_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 0.0)))
+(population variance per band × custom cell; 0.0 when all pixels equal)"""
+
+  val rst_custom_rastertogridstddev_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+val londonWkt = "POLYGON((529000 179000, 533000 179000, 533000 183000, 529000 183000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(533000.0), lit(183000.0),
+    lit(40), lit(40), lit(27700)).alias("tile"))
+val grid = call_function("gbx_custom_grid",
+  lit(529000), lit(533000), lit(179000), lit(183000), lit(2), lit(4000), lit(4000), lit(27700))
+val result = raster.select(rx.rst_custom_rastertogridstddev(col("tile"), grid, lit(0)).alias("custom_grid")).first()
+result.getAs[Seq[Seq[Row]]]("custom_grid")
+""".trim
+
+  val rst_custom_rastertogridstddev_scala_example_output: String =
+    """Vector(Vector(Row(<bigint>, 0.0)))
+(population standard deviation per band × custom cell; 0.0 when all pixels equal)"""
+
+  // =========================================================================
+  // rst_custom_tessellate
+  //
+  // Fixture: synthesize a 2km × 2km raster in EPSG:27700 (BNG) over central
+  // London, then tessellate with a matching custom grid (same CRS and extent).
+  // Resolution 1 = four 1km cells subdividing the 2km root cell.
+  // =========================================================================
+
+  val rst_custom_tessellate_scala_example: String =
+    """
+import com.databricks.labs.gbx.rasterx.{functions => rx}
+import org.apache.spark.sql.functions._
+
+rx.register(spark)
+// Synthetic 2km London raster (EPSG:27700); custom grid with the same CRS and extent.
+val londonWkt = "POLYGON((529000 179000, 531000 179000, 531000 181000, 529000 181000, 529000 179000))"
+val raster = spark.range(1).select(
+  rx.rst_rasterize(lit(londonWkt), lit(1.0),
+    lit(529000.0), lit(179000.0), lit(531000.0), lit(181000.0),
+    lit(200), lit(200), lit(27700)).alias("tile"))
+// Custom grid covering the same EPSG:27700 extent as the raster.
+val customGrid = call_function("gbx_custom_grid",
+  lit(529000), lit(531000), lit(179000), lit(181000), lit(2), lit(2000), lit(2000), lit(27700))
+val result = raster.select(rx.rst_custom_tessellate(col("tile"), customGrid, lit(1)).alias("chips"))
+result.show(truncate = false)
+""".trim
+
+  val rst_custom_tessellate_scala_example_output: String =
+    """[Row(cellid=<bigint>, raster=Row(...)), ...]
+(one v2-Tile Row per custom-grid cell; cellid is BIGINT encoding the custom cell)"""
+
+  // =========================================================================
   // VectorX vector-tile family — st_asmvt, st_asmvt_pyramid
   //
   // st_asmvt: Fixture ``mvt_features`` view — 2 tile-local WKB POINTs in (z=0,x=0,y=0)

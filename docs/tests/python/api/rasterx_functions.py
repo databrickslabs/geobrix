@@ -3456,6 +3456,50 @@ rst_quadbin_tessellate_python_heavy_example_output = """
 """
 
 
+def rst_custom_tessellate_python_heavy_example(spark):
+    """Tessellate a raster into custom-grid cells (heavy tier LATERAL generator).
+
+    NOTE: The raster must already be in the custom grid's native CRS — no
+    automatic reprojection. Synthesizes a single-band BNG raster (EPSG:27700)
+    over a 4km London square and tessellates into four 2km custom-grid cells
+    (resolution 1). The custom grid has integer BNG metre coordinates.
+    """
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    _LONDON_4KM_WKT = (
+        "POLYGON((529000 179000, 533000 179000, "
+        "533000 183000, 529000 183000, 529000 179000))"
+    )
+    df = spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(_LONDON_4KM_WKT),
+            f.lit(1.0),
+            f.lit(529000.0), f.lit(179000.0),
+            f.lit(533000.0), f.lit(183000.0),
+            f.lit(40), f.lit(40), f.lit(27700),
+        ).alias("tile")
+    )
+    df.createOrReplaceTempView("bng_london_rasters")
+    # Custom grid covering the same 4km BNG extent; resolution 1 = four 2km cells.
+    custom_grid_sql = "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
+    return spark.sql(
+        f"SELECT t.* FROM bng_london_rasters, "
+        f"LATERAL gbx_rst_custom_tessellate(tile, {custom_grid_sql}, 1) t"
+    ).take(3)
+
+
+rst_custom_tessellate_python_heavy_example_output = """
++--------------------+-----------------------------------------------------------+
+|cellid              |raster                                                     |
++--------------------+-----------------------------------------------------------+
+|<custom cell bigint>|{0, <raster bytes>, null, {driver -> GTiff, ...}}          |
++--------------------+-----------------------------------------------------------+
+(one v2-Tile row per custom-grid cell; cellid is BIGINT encoding the custom cell)
+"""
+
+
 # ============================================================================
 # Generator Functions (Heavy Tier)
 # ============================================================================
@@ -4124,6 +4168,190 @@ rst_bng_rastertogridstddev_python_heavy_example_output = """
  [...],  # band 2
  [...]]  # band 3
 (ARRAY<ARRAY<struct(cellID STRING, measure)>> — outer per band, inner per BNG cell)
+"""
+
+
+# ============================================================================
+# Custom-Grid Rastertogrid Functions — Heavy Tier
+#
+# The heavy tier returns ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+# Each inner array is one band's results; each struct carries a BIGINT custom
+# cell id and a DOUBLE aggregate measure.
+#
+# The custom grid requires INTEGER coordinates (all bounds and cell sizes are
+# truncated to int). We use a 4km London BNG square (EPSG:27700 metres) and
+# synthesize a matching raster via rst_rasterize so raster coordinates fall
+# within the grid bounds (no reprojection needed — both are EPSG:27700).
+# gbx_custom_grid is registered by the heavy test fixture via gx.register(spark).
+# ============================================================================
+
+_LONDON_4KM_WKT_HEAVY = (
+    "POLYGON((529000 179000, 533000 179000, "
+    "533000 183000, 529000 183000, 529000 179000))"
+)
+
+
+def _custom_grid_col():
+    """Return a Column expression for the 4km London BNG custom grid spec."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    return f.call_function(
+        "gbx_custom_grid",
+        f.lit(529000), f.lit(533000), f.lit(179000), f.lit(183000),
+        f.lit(2), f.lit(4000), f.lit(4000), f.lit(27700),
+    )
+
+
+def _custom_raster_df(spark):
+    """Synthesize a single-band BNG raster over the 4km London custom grid."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    return spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(_LONDON_4KM_WKT_HEAVY),
+            f.lit(1.0),
+            f.lit(529000.0), f.lit(179000.0),
+            f.lit(533000.0), f.lit(183000.0),
+            f.lit(40), f.lit(40), f.lit(27700),
+        ).alias("tile")
+    )
+
+
+def rst_custom_rastertogridavg_python_heavy_example(spark):
+    """Aggregate raster values to custom-grid cells using average (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridavg("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridavg_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>> — outer per band, inner per custom cell)
+"""
+
+
+def rst_custom_rastertogridcount_python_heavy_example(spark):
+    """Count pixels per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridcount("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridcount_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1600.0), ...]]
+(pixel count per band × custom-grid cell; measure is DOUBLE)
+"""
+
+
+def rst_custom_rastertogridmax_python_heavy_example(spark):
+    """Get maximum values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridmax("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridmax_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(max value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridmin_python_heavy_example(spark):
+    """Get minimum values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridmin("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridmin_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(min value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridmedian_python_heavy_example(spark):
+    """Get median values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridmedian("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridmedian_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(median value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridsum_python_heavy_example(spark):
+    """Sum pixel values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridsum("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridsum_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1600.0), ...]]
+(sum of pixel values per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridvariance_python_heavy_example(spark):
+    """Get population variance per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridvariance("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridvariance_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=0.0), ...]]
+(population variance per band × custom-grid cell; 0.0 when all pixels equal)
+"""
+
+
+def rst_custom_rastertogridstddev_python_heavy_example(spark):
+    """Get population standard deviation per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridstddev("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridstddev_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=0.0), ...]]
+(population standard deviation per band × custom-grid cell; 0.0 when all pixels equal)
 """
 
 

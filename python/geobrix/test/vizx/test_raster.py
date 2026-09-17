@@ -954,3 +954,203 @@ def test_plot_raster_fixed_range_uint8_renders():
         f"(got {colored_count} colored px)"
     )
     plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Virtual tile rendering
+# ---------------------------------------------------------------------------
+
+
+def _make_disk_gtiff(tmp_path, name="test.tif", width=8, height=8, count=1):
+    """Write a single-band float32 GTiff to tmp_path and return the path string."""
+    tif_path = tmp_path / name
+    data_arr = np.arange(width * height, dtype="float32").reshape(height, width)
+    transform = from_origin(10.0, 50.0, 0.5, 0.5)
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=count,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=transform,
+    )
+    with rasterio.open(str(tif_path), "w", **profile) as ds:
+        for b in range(1, count + 1):
+            ds.write(data_arr, b)
+    return str(tif_path)
+
+
+def _virtual_tile_dict(path, *, col_off=0, row_off=0, width=8, height=8, window=True):
+    """Build a tile struct dict with raster=None (virtual tile)."""
+    win = (
+        {"col_off": col_off, "row_off": row_off, "width": width, "height": height}
+        if window
+        else None
+    )
+    return {
+        "cellid": 1,
+        "raster": None,
+        "path": path,
+        "path_mode": "external",
+        "window": win,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {},
+    }
+
+
+def test_plot_raster_virtual_tile_renders(tmp_path):
+    """plot_raster accepts a virtual tile dict (raster=None, path+window) and renders."""
+    path = _make_disk_gtiff(tmp_path, "vtile.tif")
+    tile = _virtual_tile_dict(path)
+    plt.close("all")
+    plot_raster(tile)
+    assert len(plt.get_fignums()) == 1, "virtual tile should produce exactly one figure"
+    plt.close("all")
+
+
+def test_plot_raster_virtual_tile_windowed_renders(tmp_path):
+    """Virtual tile with a sub-region window renders only that window."""
+    path = _make_disk_gtiff(tmp_path, "vtile_win.tif", width=16, height=16)
+    tile = _virtual_tile_dict(path, col_off=4, row_off=4, width=4, height=4)
+    plt.close("all")
+    plot_raster(tile)
+    fig = plt.gcf()
+    ax = fig.axes[0]
+    images = ax.get_images()
+    assert images, "windowed virtual tile should produce an image on the axes"
+    # Shape check: window is 4x4, no decimation (max_pixels=2000 >> 4)
+    arr = np.asarray(images[0].get_array())
+    assert arr.shape[:2] == (4, 4), (
+        f"rendered image shape {arr.shape} should match the 4x4 window"
+    )
+    plt.close("all")
+
+
+def test_plot_raster_virtual_tile_no_window_renders(tmp_path):
+    """Virtual tile with window=None renders the whole file."""
+    path = _make_disk_gtiff(tmp_path, "vtile_nowin.tif")
+    tile = _virtual_tile_dict(path, window=False)
+    plt.close("all")
+    plot_raster(tile)
+    assert len(plt.get_fignums()) == 1, "windowless virtual tile should produce a figure"
+    plt.close("all")
+
+
+def test_plot_raster_materialized_tile_struct_still_works():
+    """A tile struct dict with raster bytes (raster != None) renders as before."""
+    tile = {
+        "cellid": 2,
+        "raster": make_geotiff_bytes(width=8, height=8, count=1),
+        "path": None,
+        "path_mode": None,
+        "window": None,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {},
+    }
+    plt.close("all")
+    plot_raster(tile)
+    assert len(plt.get_fignums()) == 1, "materialized tile struct should produce a figure"
+    plt.close("all")
+
+
+def test_plot_raster_virtual_tile_data_matches_direct_read(tmp_path):
+    """Data rendered from a windowed virtual tile matches a direct windowed rasterio read."""
+    path = _make_disk_gtiff(tmp_path, "match.tif", width=16, height=16)
+    # Window: bottom-right 4x4 quadrant
+    col_off, row_off, win_w, win_h = 12, 12, 4, 4
+    tile = _virtual_tile_dict(path, col_off=col_off, row_off=row_off, width=win_w, height=win_h)
+
+    plt.close("all")
+    plot_raster(tile)
+    fig = plt.gcf()
+    ax = fig.axes[0]
+    images = ax.get_images()
+    assert images, "virtual tile should produce an image on axes"
+
+    # Direct read of the same window
+    import rasterio as _rio
+    from rasterio.windows import Window as _Window
+
+    with _rio.open(path) as src:
+        expected, _, _ = _raster._read_windowed(
+            src, 2000, window=_Window(col_off, row_off, win_w, win_h)
+        )
+    expected_band = np.asarray(expected[0])
+    rendered = np.asarray(images[0].get_array())
+    assert rendered.shape == expected_band.shape, (
+        f"rendered shape {rendered.shape} != expected {expected_band.shape}"
+    )
+    assert np.allclose(rendered, expected_band, atol=0.01), (
+        "rendered virtual tile values should match the direct windowed rasterio read"
+    )
+    plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# cmap parameter
+# ---------------------------------------------------------------------------
+
+
+def test_plot_raster_cmap_terrain_sets_colormap():
+    """plot_raster(cmap='terrain') renders with the terrain colormap for single-band."""
+    plt.close("all")
+    plot_raster(make_geotiff_bytes(width=8, height=8, count=1), cmap="terrain")
+    fig = plt.gcf()
+    ax = fig.axes[0]
+    images = ax.get_images()
+    assert images, "should have drawn an image"
+    assert images[0].get_cmap().name == "terrain", (
+        f"expected terrain colormap, got {images[0].get_cmap().name!r}"
+    )
+    plt.close("all")
+
+
+def test_plot_raster_cmap_default_is_viridis():
+    """plot_raster with no cmap defaults to viridis (backward compat)."""
+    plt.close("all")
+    plot_raster(make_geotiff_bytes(width=8, height=8, count=1))
+    fig = plt.gcf()
+    ax = fig.axes[0]
+    images = ax.get_images()
+    assert images, "should have drawn an image"
+    assert images[0].get_cmap().name == "viridis", (
+        f"expected viridis colormap, got {images[0].get_cmap().name!r}"
+    )
+    plt.close("all")
+
+
+def test_plot_file_cmap_terrain_sets_colormap(tmp_path):
+    """plot_file(cmap='terrain') renders with the terrain colormap for single-band."""
+    p = tmp_path / "cmap_test.tif"
+    p.write_bytes(make_geotiff_bytes(width=8, height=8, count=1))
+    plt.close("all")
+    plot_file(str(p), cmap="terrain")
+    fig = plt.gcf()
+    ax = fig.axes[0]
+    images = ax.get_images()
+    assert images, "should have drawn an image"
+    assert images[0].get_cmap().name == "terrain", (
+        f"expected terrain colormap, got {images[0].get_cmap().name!r}"
+    )
+    plt.close("all")
+
+
+def test_plot_raster_cmap_virtual_tile_terrain(tmp_path):
+    """cmap='terrain' is honored when rendering a virtual tile."""
+    path = _make_disk_gtiff(tmp_path, "cmap_vtile.tif")
+    tile = _virtual_tile_dict(path)
+    plt.close("all")
+    plot_raster(tile, cmap="terrain")
+    fig = plt.gcf()
+    ax = fig.axes[0]
+    images = ax.get_images()
+    assert images, "should have drawn an image"
+    assert images[0].get_cmap().name == "terrain", (
+        f"expected terrain colormap for virtual tile, got {images[0].get_cmap().name!r}"
+    )
+    plt.close("all")

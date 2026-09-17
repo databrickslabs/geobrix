@@ -399,6 +399,7 @@ def _render(  # noqa: C901
     bands=None,
     stretch="perband",
     fill=None,
+    cmap=None,
 ):
     """Stretch when needed, then plot via rasterio.plot.show (Agg-safe).
 
@@ -417,6 +418,8 @@ def _render(  # noqa: C901
                    (lo, hi) tuple/list — fixed-range stretch [lo, hi].
         fill:      None (default), or scalar fill value to treat as NoData for display.
                    Excluded from stretch percentiles and rendered transparent.
+        cmap:      Colormap name for single-band renders (default ``None`` → viridis
+                   from the emphasis setting). Has no effect on RGB composites.
     """
     import sys
 
@@ -433,7 +436,9 @@ def _render(  # noqa: C901
     from matplotlib import pyplot
     from rasterio.plot import show
 
-    em = _RASTER_EMPHASIS[emphasis]
+    em = dict(_RASTER_EMPHASIS[emphasis])  # copy so we don't mutate the global
+    if cmap is not None:
+        em["cmap"] = cmap
     _owns_fig = ax is None  # True when we create our own figure
 
     # FIX 4: Raise error if composite="depth" + any new kwargs
@@ -458,7 +463,7 @@ def _render(  # noqa: C901
         )
         if _owns_fig:
             fig, ax = pyplot.subplots(1, figsize=(fig_w, fig_h))
-        show(depth_masked, ax=ax, transform=transform, cmap="viridis")
+        show(depth_masked, ax=ax, transform=transform, cmap=em["cmap"])
         ax.set_title(full_title)
         if _owns_fig:
             pyplot.show()
@@ -552,8 +557,43 @@ def _render(  # noqa: C901
     return ax
 
 
+def _resolve_tile_input(raster):
+    """Accept bytes, a VirtualTile, or a tile Row/dict.
+
+    Returns (raster_bytes_or_none, path_or_none, rasterio_window_or_none).
+
+    - bytes/bytearray/memoryview → (raster, None, None)
+    - VirtualTile or tile dict/Row with raster set → (raster_bytes, None, None)
+    - tile dict/Row with raster=None → (None, path, Window or None)
+    """
+    if isinstance(raster, (bytes, bytearray, memoryview)):
+        return (raster, None, None)
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    if isinstance(raster, VirtualTile):
+        vt = raster
+    else:
+        vt = VirtualTile.from_row(raster)
+
+    if vt.raster is not None:
+        return (vt.raster, None, None)
+
+    if vt.path is None:
+        raise ValueError("tile struct has neither raster bytes nor a path")
+
+    rasterio_window = None
+    if vt.window is not None:
+        import rasterio
+
+        col_off, row_off, width, height = vt.window
+        rasterio_window = rasterio.windows.Window(col_off, row_off, width, height)
+
+    return (None, vt.path, rasterio_window)
+
+
 def plot_raster(
-    raster_bytes,
+    raster,
     *,
     fig_w=10,
     fig_h=10,
@@ -564,38 +604,55 @@ def plot_raster(
     bands=None,
     stretch="perband",
     fill=None,
+    cmap=None,
 ):
-    """Render a raster from in-memory bytes (e.g. a tile's `raster` field).
+    """Render a raster from in-memory bytes, a tile struct, or a virtual tile.
+
+    Accepts three input forms:
+
+    - **bytes / bytearray** — the existing path; e.g. a materialized tile's
+      ``raster`` field.
+    - **tile struct dict or Spark Row** — a v2 tile struct.  When the ``raster``
+      field is set, its bytes are used directly (materialized).  When ``raster``
+      is ``None`` and ``path`` is set, the file is opened on-the-fly and the
+      ``window`` sub-struct (``col_off``, ``row_off``, ``width``, ``height``) is
+      used to read the tile's region.  Passing ``window=None`` reads the whole
+      file.  This is the memory-efficient **virtual tile** path.
 
     Auto-decimates above max_pixels; integer rasters whose values exceed 255
     (typical EO UInt16) get a per-band 2-98% percentile stretch. Single-band ->
-    viridis; multi-band -> RGB. ``emphasis="data"`` renders the raster
-    vivid at full opacity; ``"blend"`` (default) keeps the prior softer render.
-    ``debug_mode`` (``0`` silent, ``1`` default, ``2`` diagnostics) mirrors the
-    other entrypoints. Requires the [vizx] extra.
+    viridis (or the colormap set by ``cmap``); multi-band -> RGB.
+    ``emphasis="data"`` renders the raster vivid at full opacity; ``"blend"``
+    (default) keeps the prior softer render. ``debug_mode`` (``0`` silent, ``1``
+    default, ``2`` diagnostics) mirrors the other entrypoints. Requires the
+    [vizx] extra.
 
     Args:
-        composite: ``"auto"`` (default) — 1 band → viridis; 3+ → RGB.
-                   ``"depth"`` — render per-pixel coverage depth (count of bands
-                   covering each pixel) as a viridis gradient; uncovered pixels
-                   are masked transparent.  Useful for multi-band presence masks
-                   where an RGB composite would appear mostly black.
+        raster:    Raster bytes, a v2 tile struct dict/Row, or a VirtualTile.
+        composite: ``"auto"`` (default) — 1 band → colormap; 3+ → RGB.
+                   ``"depth"`` — render per-pixel coverage depth as a colormap
+                   gradient; uncovered pixels are masked transparent.  Useful for
+                   multi-band presence masks where an RGB composite would appear
+                   mostly black.
         bands:     None (default, all bands), or tuple of 1-based band indices
                    to select/reorder (e.g., ``(3, 1, 2)``). Single band renders
-                   as viridis; 3+ as RGB. Length-2 raises ValueError (ambiguous).
+                   with the colormap; 3+ as RGB. Length-2 raises ValueError
+                   (ambiguous).
         stretch:   "perband" (default) — independent per-band percentile stretch.
                    "shared" — pooled percentile across all selected bands.
                    (lo, hi) tuple/list — fixed-range stretch [lo, hi].
         fill:      None (default), or scalar fill value to treat as NoData for
                    display. Excluded from stretch percentiles and rendered
                    transparent over the background.
+        cmap:      Colormap name for single-band renders (default ``None`` →
+                   viridis). E.g. ``"terrain"`` for a DEM, ``"gray"`` for
+                   panchromatic. Has no effect on RGB composites.
     """
     from databricks.labs.gbx.vizx._env import assert_viz_available
     from databricks.labs.gbx.vizx._maplibre import _emit
 
     _validate_emphasis(emphasis)
     assert_viz_available()
-    from rasterio.io import MemoryFile
 
     em = _RASTER_EMPHASIS[emphasis]
     _emit(
@@ -604,9 +661,36 @@ def plot_raster(
         debug_mode=debug_mode,
     )
 
-    with MemoryFile(bytes(raster_bytes)) as mf:
-        with mf.open() as src:
-            data, transform, scale = _decimated_read(src, max_pixels)
+    raster_bytes, path, window = _resolve_tile_input(raster)
+
+    if raster_bytes is not None:
+        # Materialized path: bytes in RAM via MemoryFile
+        from rasterio.io import MemoryFile
+
+        with MemoryFile(bytes(raster_bytes)) as mf:
+            with mf.open() as src:
+                data, transform, scale = _decimated_read(src, max_pixels)
+                _render(
+                    data,
+                    transform,
+                    title="tile.raster",
+                    fig_w=fig_w,
+                    fig_h=fig_h,
+                    scale=scale,
+                    composite=composite,
+                    nodata=src.nodata,
+                    emphasis=emphasis,
+                    bands=bands,
+                    stretch=stretch,
+                    fill=fill,
+                    cmap=cmap,
+                )
+    else:
+        # Virtual tile path: open the file on-the-fly and read the window
+        import rasterio
+
+        with rasterio.open(path) as src:
+            data, transform, scale = _read_windowed(src, max_pixels, window=window)
             _render(
                 data,
                 transform,
@@ -620,6 +704,7 @@ def plot_raster(
                 bands=bands,
                 stretch=stretch,
                 fill=fill,
+                cmap=cmap,
             )
 
 
@@ -699,16 +784,19 @@ def plot_file(
     bands=None,
     stretch="perband",
     fill=None,
+    cmap=None,
 ):
     """Render a raster from disk (TIF, VRT, ...) with the plot_raster pipeline.
 
     Args:
-        composite: ``"auto"`` (default) — 1 band → viridis; 3+ → RGB.
-                   ``"depth"`` — per-pixel coverage depth rendered as viridis.
+        composite: ``"auto"`` (default) — 1 band → colormap; 3+ → RGB.
+                   ``"depth"`` — per-pixel coverage depth rendered as a colormap.
         bands:     None (default, all bands), or tuple of 1-based band indices
-                   to select/reorder. Single band → viridis; 3+ → RGB.
+                   to select/reorder. Single band → colormap; 3+ → RGB.
         stretch:   "perband" (default), "shared", or (lo, hi) tuple.
         fill:      None (default), or scalar fill value to treat as NoData.
+        cmap:      Colormap name for single-band renders (default ``None`` →
+                   viridis). E.g. ``"terrain"`` for a DEM.
     """
     from databricks.labs.gbx.vizx._env import assert_viz_available
 
@@ -742,6 +830,7 @@ def plot_file(
             bands=bands,
             stretch=stretch,
             fill=fill,
+            cmap=cmap,
         )
 
 

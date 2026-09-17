@@ -1,4 +1,7 @@
-<img src="resources/images/brand/GeoBriX.png" width="50%" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="resources/images/brand/GeoBriX_reverse.png" width="50%" />
+  <img src="resources/images/brand/GeoBriX.png" width="50%" alt="GeoBriX" />
+</picture>
 
 [![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
 [![documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://databrickslabs.github.io/geobrix/)

@@ -183,7 +183,10 @@ gdf.explore()   # interactive folium map (needs the [vizx] extra)
 ### `cells_as_gdf`
 
 ```python
-cells_as_gdf(df, cell_col="cellid", extra_cols=(), *, max_rows=10_000, dissolve_by=None)
+cells_as_gdf(
+    df, cell_col="cellid", extra_cols=(), *,
+    max_rows=10_000, dissolve_by=None, dissolve_engine="auto", sample_seed=None,
+)
 ```
 
 Convert a DataFrame of H3 cell ids into a `GeoDataFrame` of cell-boundary polygons (boundaries computed with the `h3` library). Carry through attribute columns with `extra_cols`.
@@ -195,8 +198,26 @@ Convert a DataFrame of H3 cell ids into a `GeoDataFrame` of cell-boundary polygo
 | `df` | `DataFrame` | — | Spark DataFrame with an H3 cell-id column. |
 | `cell_col` | `str` | `"cellid"` | Name of the column containing H3 cell ids (bigint). |
 | `extra_cols` | `tuple` or `list` | `()` | Additional columns to carry through to the GeoDataFrame. |
-| `max_rows` | `int` or `None` | `10_000` | Row cap before the collect; `None` collects all rows. |
-| `dissolve_by` | `str` or `None` | `None` | When set, dissolve cell polygons by this column, returning one footprint polygon per distinct value instead of one row per cell. Must be in `extra_cols`. |
+| `max_rows` | `int` or `None` | `10_000` | Row cap for driver-side collects; `None` collects all rows. Not applied on the product-dissolve path (see `dissolve_engine`). |
+| `dissolve_by` | `str` or `None` | `None` | When set, dissolve cell polygons by this column, returning one footprint polygon per distinct value. Must be in `extra_cols`. |
+| `dissolve_engine` | `str` | `"auto"` | Controls how the dissolve is performed when `dissolve_by` is set. See the engine table below. |
+| `sample_seed` | `int` or `None` | `None` | `None` (default) takes the first `max_rows` rows (first-N, not a representative sample). An int draws a reproducible random sample via `DataFrame.sample` at the cost of one extra `count()` job. |
+
+**`dissolve_engine` values:**
+
+| Value | Behaviour |
+|---|---|
+| `"auto"` (default) | Attempt the Spark-side product dissolve; if the product functions are not available (local Spark, older runtime), fall back to the geopandas driver-side dissolve automatically. |
+| `"product"` | Product dissolve only — uses `h3_boundaryaswkb`, `st_geomfromwkb`, `st_union_agg`, and `st_asbinary` built into Databricks Runtime (DBR 11.3+ / Serverless). Raises if the functions are not available; no silent fallback. |
+| `"geopandas"` | Driver-side geopandas dissolve — collects up to `max_rows` cells, builds per-cell polygons via the `h3` library, then dissolves with `GeoDataFrame.dissolve`. Works everywhere. |
+
+**Product dissolve path** (`dissolve_engine="auto"` or `"product"`): the aggregation executes as a Spark SQL expression,
+```sql
+st_asbinary(st_union_agg(st_geomfromwkb(h3_boundaryaswkb({cell_col}))))
+```
+grouped by `dissolve_by`. This pushes the geometry union into the cluster, so only one small row per group is collected to the driver. The `max_rows` cap does not apply on this path.
+
+**Oversize guard**: on any driver-collect path (non-dissolve or `dissolve_engine="geopandas"`) where `max_rows` was not supplied explicitly, if the frame count exceeds 500,000 cells a `ValueError` is raised before the collect. Pass `max_rows=<n>`, `sample_seed=<int>`, or `dissolve_by=<col>` to proceed.
 
 Without `dissolve_by`, each row represents one cell (useful for per-cell tooltips in `.explore()`). With `dissolve_by`, rows are merged per group into a single union footprint — far fewer geometries for large cell sets:
 
@@ -207,7 +228,8 @@ from databricks.labs.gbx.vizx import cells_as_gdf
 gdf = cells_as_gdf(df_cells, cell_col="cellid", extra_cols=["count"])
 gdf.explore(column="count")   # choropleth (needs mapclassify, bundled in [vizx])
 
-# Dissolve to one footprint polygon per category:
+# Dissolve to one footprint polygon per category — uses product ST on DBR,
+# falls back to geopandas on local Spark (dissolve_engine="auto" by default):
 gdf_dissolved = cells_as_gdf(
     df_cells,
     cell_col="cellid",
@@ -215,6 +237,14 @@ gdf_dissolved = cells_as_gdf(
     dissolve_by="category",
 )
 gdf_dissolved.explore()
+
+# Force geopandas dissolve (no product functions required):
+gdf_local = cells_as_gdf(
+    df_cells,
+    extra_cols=["category"],
+    dissolve_by="category",
+    dissolve_engine="geopandas",
+)
 ```
 
 ### `grid_as_gdf`

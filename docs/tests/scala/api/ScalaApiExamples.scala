@@ -4851,4 +4851,41 @@ result.show()
 +----+
 ... (Chebyshev grid distance between two cells 1 step apart in X at resolution 0)""".trim
 
+  // ===========================================================================
+  // PMTiles family (Scala)
+  // ===========================================================================
+
+  val pmtiles_agg_scala_example: String =
+    """
+import com.databricks.labs.gbx.pmtiles.{functions => px}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
+
+px.register(spark)
+// 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2]).
+val rows = Seq(
+  (2,0,0,"t00".getBytes),(2,0,1,"t01".getBytes),(2,0,2,"t02".getBytes),
+  (2,1,0,"t10".getBytes),(2,1,1,"t11".getBytes),(2,1,2,"t12".getBytes),
+  (2,2,0,"t20".getBytes),(2,2,1,"t21".getBytes),(2,2,2,"t22".getBytes))
+val schema = StructType(Seq(
+  StructField("z", IntegerType()), StructField("x", IntegerType()),
+  StructField("y", IntegerType()), StructField("tile_bytes", BinaryType())))
+val df = spark.createDataFrame(
+  spark.sparkContext.parallelize(rows.map(r => org.apache.spark.sql.Row(r._1, r._2, r._3, r._4))),
+  schema)
+val result = df.agg(
+  px.pmtiles_agg(col("tile_bytes"), col("z"), col("x"), col("y"),
+    lit("{\"name\":\"my_tileset\"}")).alias("pmt"))
+result.show()
+""".trim
+
+  val pmtiles_agg_scala_example_output: String =
+    """
++------------------------------------------+
+|pmt                                       |
++------------------------------------------+
+|[50 4D 54 69 6C 65 73 03 ...]             |
++------------------------------------------+
+(BINARY: PMTiles v3 archive containing 9 synthetic tiles at zoom 2)""".trim
+
 }

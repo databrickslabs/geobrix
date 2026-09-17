@@ -4684,3 +4684,53 @@ rst_isoband_python_heavy_example_output = """
 +-----------------------------------------------------------+
 (ARRAY of per-patch structs: geom_wkb WKB polygon in raster CRS, band index, lower/upper break values)
 """
+
+
+# ---------------------------------------------------------------------------
+# pmtiles_agg -- fold (z, x, y, bytes) tile rows into a PMTiles v3 archive (heavy tier)
+# Fixture: 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2])
+# Output: BINARY (PMTiles v3 archive bytes)
+# ---------------------------------------------------------------------------
+
+
+def pmtiles_agg_python_heavy_example(spark):
+    """Aggregate (z, x, y, bytes) tile rows into a PMTiles v3 BINARY blob using the heavy pmtiles tier.
+
+    Multi-row fixture: 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2]).
+    Each tile payload is a short ASCII byte string.  The heavy tier UDAF is registered
+    via ``px.register(spark)`` and runs as a native Scala GROUPED_AGG expression.
+    Returns BINARY containing the full PMTile v3 archive with magic bytes b'PMTiles'.
+    """
+    from databricks.labs.gbx.pmtiles import functions as px  # noqa: PLC0415
+
+    px.register(spark)
+
+    test_data = [
+        (2, x, y, f"tile_{x}_{y}".encode("utf-8"))
+        for x in range(3)
+        for y in range(3)
+    ]
+    df = spark.createDataFrame(test_data, ["z", "x", "y", "tile_bytes"])
+    result = (
+        df.agg(
+            px.pmtiles_agg(
+                "tile_bytes",
+                "z",
+                "x",
+                "y",
+                '{"name":"my_tileset"}',
+            ).alias("pmt")
+        )
+        .first()
+    )
+    return result["pmt"]
+
+
+pmtiles_agg_python_heavy_example_output = """
++------------------------------------------+
+|pmt                                       |
++------------------------------------------+
+|[50 4D 54 69 6C 65 73 03 ...]             |
++------------------------------------------+
+(BINARY: PMTiles v3 archive — starts with magic bytes b'PMTiles' + version byte 3; contains 9 synthetic tiles at zoom 2)
+"""

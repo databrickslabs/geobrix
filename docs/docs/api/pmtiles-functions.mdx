@@ -3,7 +3,11 @@ sidebar_position: 9
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
+import FunctionExamples from '@site/src/components/FunctionExamples';
 import pmtilesSqlCode from '!!raw-loader!../../tests/python/api/pmtiles_functions_sql.py';
+import pmtilesLightCode from '!!raw-loader!../../tests/python/api/pmtiles_functions_python_light.py';
+import rasterxCode from '!!raw-loader!../../tests/python/api/rasterx_functions.py';
+import scalaApiExamplesCode from '!!raw-loader!../../tests/scala/api/ScalaApiExamples.scala';
 import Tier from '@site/src/components/Tier';
 import { Impl } from '@site/src/components/Tier';
 
@@ -171,9 +175,14 @@ Aggregate a per-tile `(z, x, y, bytes)` row set into a single PMTile v3 archive 
 **Returns:**
 - Binary blob containing the full PMTile v3 archive.
 
-**SQL:**
-
-<CodeFromTest code={pmtilesSqlCode} functionName="pmtiles_agg_sql_example" language="sql" source="docs/tests/python/api/pmtiles_functions_sql.py" testFile="docs/tests/python/api/test_pmtiles_functions_sql.py" />
+<FunctionExamples
+  name="pmtiles_agg"
+  sql={pmtilesSqlCode}           sqlSource="docs/tests/python/api/pmtiles_functions_sql.py"
+  pythonLight={pmtilesLightCode} pythonLightSource="docs/tests/python/api/pmtiles_functions_python_light.py"
+  pythonHeavy={rasterxCode}      pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}   scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_pmtiles_functions_python_light.py"
+/>
 
 The 4-argument form omits the metadata JSON (defaults to `'{}'`):
 

@@ -116,6 +116,23 @@ class ScalaApiExamplesDocTest extends AnyFunSuite {
     assert(ScalaApiExamples.rst_isoband_scala_example_output.nonEmpty)
   }
 
+  test("ScalaApiExamples Batch F pmtiles_agg snippet vals are non-empty") {
+    assert(ScalaApiExamples.pmtiles_agg_scala_example.nonEmpty)
+  }
+
+  test("ScalaApiExamples Batch F pmtiles_agg output vals are non-empty") {
+    assert(ScalaApiExamples.pmtiles_agg_scala_example_output.nonEmpty)
+  }
+
+  test("PMTiles pmtiles_agg Scala signatures compile") {
+    import com.databricks.labs.gbx.pmtiles.{functions => px}
+    import org.apache.spark.sql.functions._
+    val _: Column = px.pmtiles_agg(col("bytes"), col("z"), col("x"), col("y"))
+    val _: Column = px.pmtiles_agg(col("bytes"), col("z"), col("x"), col("y"), lit("{}"))
+    val _: Column = px.pmtiles_agg(col("bytes"), col("z"), col("x"), col("y"), col("meta"))
+    succeed
+  }
+
   test("ScalaApiExamples Batch E cellfill + kloop + distance snippet vals are non-empty") {
     assert(ScalaApiExamples.bng_cellfill_scala_example.nonEmpty)
     assert(ScalaApiExamples.quadbin_cellfill_scala_example.nonEmpty)

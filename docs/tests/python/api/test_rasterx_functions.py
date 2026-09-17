@@ -1153,3 +1153,18 @@ def test_h3_cell_bbox_python_heavy_example(spark):
         assert bbox is not None
         assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
     assert hasattr(rasterx_functions, "h3_cell_bbox_python_heavy_example_output")
+
+
+def test_pmtiles_agg_python_heavy_example(spark):
+    """pmtiles_agg (heavy tier) returns a valid PMTile v3 BINARY blob with 9 tiles."""
+    import struct  # noqa: PLC0415
+
+    assert rasterx_functions is not None
+    result = rasterx_functions.pmtiles_agg_python_heavy_example(spark)
+    assert result is not None, "pmtiles_agg (heavy): result is None"
+    data = bytes(result)
+    assert data[:7] == b"PMTiles", f"pmtiles_agg (heavy): bad magic: {data[:8]!r}"
+    assert data[7] == 3, f"pmtiles_agg (heavy): bad version byte: {data[7]}"
+    addressed = struct.unpack_from("<Q", data, 72)[0]
+    assert addressed == 9, f"pmtiles_agg (heavy): expected 9 addressed tiles; got {addressed}"
+    assert hasattr(rasterx_functions, "pmtiles_agg_python_heavy_example_output")

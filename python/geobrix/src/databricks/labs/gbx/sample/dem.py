@@ -24,6 +24,12 @@ if TYPE_CHECKING:
 from databricks.labs.gbx.stac import PLANETARY_COMPUTER  # canonical STAC catalog root
 
 DEM_COLLECTION = "3dep-seamless"
+# 3DEP lidar-derived bare-earth DTM: finer than seamless (2 m today across the US on
+# Planetary Computer; 1 m where a survey provides it). Unlike seamless it exposes NO
+# ``gsd`` property — grid resolution is encoded in the item id ("-dtm-<N>m-"), which
+# ``_resolution_col`` parses. True 1 m for an arbitrary AOI otherwise comes from binning
+# the raw lidar point cloud (LidarDownloader + rst_binpoints), not this raster catalog.
+DEM_LIDAR_DTM_COLLECTION = "3dep-lidar-dtm"
 # 3DEP-seamless exposes its DEM raster under the "data" asset (not "image").
 _DEM_ASSET = "data"
 # 3dep-seamless is a mosaic; a wide datetime bracket avoids guessing vintages.
@@ -75,6 +81,18 @@ class DemDownloader:
         self.asset = asset
         self._stac_client = _stac_client
 
+    @classmethod
+    def lidar_dtm(cls, **kw) -> "DemDownloader":
+        """DemDownloader configured for the 3DEP lidar-derived bare-earth DTM
+        collection (``3dep-lidar-dtm``) — finer than seamless (2 m across the US
+        today; 1 m where a survey provides it). Resolution selection is identical
+        (``resolution="finest"`` or an int in metres), driven off the id-parsed
+        grid resolution. Extra kwargs (catalog, sign, _stac_client) pass through.
+        """
+        kw.setdefault("collection", DEM_LIDAR_DTM_COLLECTION)
+        kw.setdefault("asset", _DEM_ASSET)
+        return cls(**kw)
+
     def _get_stac_client(self):
         if self._stac_client is not None:
             return self._stac_client
@@ -88,12 +106,26 @@ class DemDownloader:
         spark = spark or SparkSession.getActiveSession()
         return spark.createDataFrame([(_bbox_to_geojson_polygon(bbox),)], ["geojson"])
 
-    def _gsd_col(self):
-        """Column expr: item_properties['gsd'] as an int (nullable)."""
+    def _resolution_col(self):
+        """Column expr: resolution in metres, as an int (nullable).
+
+        Uses ``item_properties['gsd']`` when the collection exposes it (3dep-seamless:
+        10/30). Falls back to parsing the item id's ``-dtm-<N>m-`` token, which is how
+        3dep-lidar-dtm carries its grid resolution (that collection has no gsd
+        property). A non-matching id yields NULL, so ``"finest"`` still degrades
+        gracefully to "keep all" when neither source provides a resolution.
+        """
         from pyspark.sql import functions as F
         from pyspark.sql.types import IntegerType
 
-        return F.col("item_properties")["gsd"].cast(IntegerType())
+        gsd = F.col("item_properties")["gsd"].cast(IntegerType())
+        # regexp_extract yields "" on no match; under ANSI mode casting "" -> int
+        # throws, so map the no-match case to NULL before the cast.
+        parsed = F.regexp_extract(F.col("item_id"), r"-dtm-(\d+)m", 1)
+        from_id = F.when(parsed == "", F.lit(None).cast(IntegerType())).otherwise(
+            parsed.cast(IntegerType())
+        )
+        return F.coalesce(gsd, from_id)
 
     def discover(
         self, bbox: Sequence[float], resolution: Optional[int] = None, spark=None
@@ -119,7 +151,7 @@ class DemDownloader:
         )
         img = raw.filter(F.col("asset_name") == self.asset)
         out = (
-            img.withColumn("gsd", self._gsd_col())
+            img.withColumn("gsd", self._resolution_col())
             .select("item_id", "gsd", "item_bbox", "href")
             .distinct()
         )
@@ -159,7 +191,7 @@ class DemDownloader:
             datetime=_DEM_DATETIME,
         )
         img = raw.filter(F.col("asset_name") == self.asset).withColumn(
-            "_gsd", self._gsd_col()
+            "_gsd", self._resolution_col()
         )
 
         if resolution == "finest":

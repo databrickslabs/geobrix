@@ -26,6 +26,11 @@ const config = {
 
   onBrokenLinks: 'warn',
 
+  // Re-scroll to the URL hash after fonts/layout settle, so deep anchors on very
+  // long reference pages (e.g. api/raster-functions) land on their section instead
+  // of short. See the module for details.
+  clientModules: ['./src/clientModules/scrollToHashOnLoad.js'],
+
   // Markdown configuration
   markdown: {
     hooks: {

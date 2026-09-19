@@ -1,16 +1,16 @@
 ---
-sidebar_position: 3
-title: "H3 Rasterize — Part 1: DEM"
-sidebar_label: H3 Rasterize (Part 1)
+sidebar_position: 4
+title: "H3 Rasterize — DEM extra"
+sidebar_label: H3 Rasterize (DEM)
 ---
 
-# H3 Rasterize — Part 1: DEM Isobands to a Multi-Band H3 Raster Stack
+# H3 Rasterize — DEM Elevation Contours to a Multi-Band H3 Raster Stack
 
-> **Part 1 of 3** in the DEM → LiDAR → CHM series. Part 2 covers LiDAR point clouds with `rst_binpoints`; Part 3 assembles a Canopy Height Model with `rst_chm`.
+> **A DEM extra in the [Wireless Coverage](./wireless-coverage) series.** The main notebooks build elevation surfaces from a raw LiDAR point cloud; this one takes the complementary path — a ready-made **10 m seamless DEM** — through the full raster→H3 pipeline. It stands alone: no LiDAR required.
 
 An end-to-end example showing how to convert USGS elevation data into a pixel-aligned, multi-band H3 raster stack using GeoBrix RasterX and the `gbx.vizx` helpers — with H3 indexing done entirely via Databricks built-in product functions.
 
-The notebook works through San Francisco: it downloads the **USGS 3DEP LiDAR-DTM (≈2 m)** bare-earth dataset via `DemDownloader.lidar_dtm()` (Planetary Computer STAC) and stages the tiles to a Unity Catalog Volume, then downloads an **Overture Maps** `base/water` layer via `OvertureClient` to build a land multipolygon. The `raster_gbx` reader with `tileSize=512` splits each GeoTIFF into 512×512-px **virtual tiles** (bytes-free path + window, the memory-efficient default), one Spark row per tile. Because the LiDAR-DTM tiles are in UTM zone 10N, `rst_transform` reprojects each to EPSG:4326 first. `rst_clip` then masks each tile to the land polygon (`cutline_all_touched=True`), setting Bay and Pacific pixels to NoData at the source. `rst_isoband` then extracts twelve 25 m elevation bands (0–300 m) as distributed Spark columns, and the **Databricks product H3** function `h3_try_coverash3` indexes each band at **H3 resolution 10**. The pipeline computes a shared pixel canvas with `rst_h3_gridspec`, burns each band with `rst_h3_rasterize_agg`, and assembles the multi-band GeoTIFF with `rst_frombands_agg`. `cells_as_gdf` dissolves per-group polygons on Spark via the Databricks product `st_union_agg` before bringing them to the driver. A coverage-depth composite rendered by `plot_raster` closes the loop.
+The notebook works over the San Francisco Bay Area: it downloads the **USGS 3DEP seamless (10 m)** DEM via `DemDownloader()` (Planetary Computer STAC) and stages the tiles to a Unity Catalog Volume, then downloads an **Overture Maps** `base/water` layer via `OvertureClient` to build a land multipolygon. The `raster_gbx` reader with `tileSize=512` splits each GeoTIFF into 512×512-px **virtual tiles** (bytes-free path + window, the memory-efficient default), one Spark row per tile. The seamless product is delivered in EPSG:4326, so no reprojection is needed. `rst_clip` masks each tile to the land polygon (`cutline_all_touched=True`), setting Bay and Pacific pixels to NoData at the source — essential over a water-heavy AOI. `rst_isoband` then extracts twelve 60 m elevation bands (0–720 m) as distributed Spark columns, and the **Databricks product H3** function `h3_try_coverash3` indexes each band at **H3 resolution 9**. The pipeline computes a shared pixel canvas with `rst_h3_gridspec`, burns each band with `rst_h3_rasterize_agg`, and assembles the multi-band GeoTIFF with `rst_frombands_agg`. `cells_as_gdf` dissolves per-group polygons on Spark via the Databricks product `st_union_agg` before bringing them to the driver. A coverage-depth composite rendered by `plot_raster` closes the loop.
 
 ![H3 Rasterize — DEM isobands to a multi-band H3 raster stack](../../../resources/images/diagrams/h3-rasterize/h3-rasterize.png)
 
@@ -19,7 +19,7 @@ The notebook works through San Francisco: it downloads the **USGS 3DEP LiDAR-DTM
 :::
 
 :::info Runs on the lightweight tier (`geobrix[light_env5,stac,vizx,overture]`)
-The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env5,stac,vizx,overture]` wheel — so it runs on **Serverless environment 5** with no JAR or GDAL init script. The per-band rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
+The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env5,stac,vizx,overture]` wheel — so it runs on **Serverless environment 5** with no JAR or GDAL init script. The per-tier rasterize result is materialized into a **session-scoped temporary table** (`CREATE TEMP TABLE`) so that the stacking step reads cached bytes instead of recomputing the burn. Session temp tables require **Serverless or DBR 18.1+**; they are not supported on dedicated / single-user clusters. See [Execution Tiers](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers) for the trade-offs between lightweight and heavyweight.
 :::
 
 ---
@@ -37,7 +37,7 @@ The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`da
 
 - **Databricks Runtime 17.3 LTS / 18.1+ or Serverless** (Spark 4 / Python 3.12). Lightweight default runs on Serverless. Session temp tables (Step 4) require Serverless or DBR 18.1+; they are not available on dedicated / single-user clusters.
 - **GeoBrix** (version 0.5.2). The `%pip install` cell installs the `geobrix[light_env5,stac,vizx,overture]` wheel, which pulls in `rasterio`, `matplotlib`, `geopandas`, `mapclassify` (visualization), planetary-computer STAC client (`stac`), and Overture Maps helpers (`overture`). No JAR or GDAL init script is required.
-- **Unity Catalog Volumes**: `DemDownloader.lidar_dtm()` stages USGS 3DEP LiDAR-DTM (≈2 m) GeoTIFFs to `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep-lidar/dem_2m`; `OvertureClient` stages the Overture water layer to `.../sf/overture-water`. Update `DEM_DIR` and `LAND_DIR` if your Volume layout differs. The Volume root must already exist; staging creates sub-directories automatically.
+- **Unity Catalog Volumes**: `DemDownloader()` stages the USGS 3DEP seamless (10 m) GeoTIFFs to `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep/dem_10m`; `OvertureClient` stages the Overture water layer to `.../sf/overture-water-bay`. Update `DEM_DIR` and `LAND_DIR` if your Volume layout differs. The Volume root must already exist; staging creates sub-directories automatically.
 - **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.5.2-py3-none-any.whl` if its Volume path differs from the default.
 - **Databricks product H3**: `h3_try_coverash3` is a built-in Databricks function available on **DBR 16.3+ / Serverless**, accessed via the product Python bindings (`from pyspark.databricks.sql import functions as DBF`) — no extra install is needed.
 
@@ -47,38 +47,36 @@ The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`da
 
 1. **Install and restart** — the `%pip install` cell installs `geobrix[light_env5,stac,vizx,overture]` and is followed immediately by `%restart_python`; run cells in order without skipping the restart.
 2. **Imports and registration** — imports `pyrx`, `pygx`, `gbx.vizx` helpers, and calls `rx.register(spark)` + `gx.register(spark)` + `register(spark)` to install SQL UDFs.
-3. **Download DEM and land mask** — `DemDownloader.lidar_dtm().download(…)` fetches USGS 3DEP LiDAR-DTM (≈2 m) tiles via Planetary Computer STAC and stages them (idempotent); `OvertureClient` fetches Overture Maps `base/water` features and builds a land multipolygon by subtracting water from the AOI box.
-4. **Steps 1–3 (Spark)** — the `raster_gbx` reader with `tileSize=512` splits the DEM into virtual tiles; `rst_clip` masks each tile to the land polygon; `rst_isoband` extracts twelve 25 m elevation bands; `h3_try_coverash3` indexes each band at H3 res 10 (Databricks product function, accepts WKB directly); `rst_h3_gridspec` computes the shared canvas.
-5. **Steps 4–5 (Spark)** — `rst_h3_rasterize_agg` burns each band onto the shared canvas and materializes results into a session-scoped temp table; `rst_frombands_agg` assembles the multi-band stack.
+3. **Download DEM and land mask** — `DemDownloader().download(…)` fetches USGS 3DEP seamless (10 m) tiles via Planetary Computer STAC and stages them (idempotent); `OvertureClient` fetches Overture Maps `base/water` features and builds a land multipolygon by subtracting water from the AOI box.
+4. **Steps 1–3 (Spark)** — the `raster_gbx` reader with `tileSize=512` splits the DEM into virtual tiles (already EPSG:4326 — no reprojection); `rst_clip` masks each tile to the land polygon; `rst_isoband` extracts twelve 60 m elevation bands; `h3_try_coverash3` indexes each band at H3 res 9 (Databricks product function, accepts WKB directly); `rst_h3_gridspec` computes the shared canvas.
+5. **Steps 4–5 (Spark)** — `rst_h3_rasterize_agg` burns each tier onto the shared canvas and materializes results into a session-scoped temp table; `rst_frombands_agg` assembles the multi-band stack.
 
 ---
 
 ## Data flow
 
 ```text
-DemDownloader.lidar_dtm()  →  USGS 3DEP LiDAR-DTM (≈2 m)  (Planetary Computer STAC → UC Volume)
-OvertureClient             →  base/water features → land multipolygon (EPSG:4326)
+DemDownloader()  →  USGS 3DEP seamless (10 m)  (Planetary Computer STAC → UC Volume, EPSG:4326)
+OvertureClient   →  base/water features → land multipolygon (EPSG:4326)
         │
         ▼  raster_gbx reader (tileSize=512)  →  virtual tiles (bytes-free path + window, distributed)
-        │
-        ▼  rst_transform → EPSG:4326  (lidar-dtm is UTM zone 10N; align for the 4326 clip + lon/lat H3)
         │
         ▼  rst_clip (land polygon, cutline_all_touched=True)  (Spark, distributed)
 Land-clipped virtual tiles  (Bay/Pacific → NoData)
         │
-        ▼  rst_isoband  (25 m breaks: 0, 25, … 300 m)  (Spark, distributed)
+        ▼  rst_isoband  (60 m breaks: 0, 60, … 720 m)  (Spark, distributed)
 Elevation isobands  (12 polygon bands, WKB output)
         │
-        ▼  h3_try_coverash3 @ H3 res 10  (Databricks product H3)
+        ▼  h3_try_coverash3 @ H3 res 9  (Databricks product H3)
 (band_level, cellid) DataFrame
         │
         ▼  rx.rst_h3_gridspec (Spark)
 Shared grid spec  (xmin/ymin/xmax/ymax/width/height, single canvas for all bands)
         │
-        ▼  rx.rst_h3_rasterize_agg grouped by band_level (Spark) → TEMP TABLE
-Per-band presence tiles  (12 single-band tiles, NoData = not covered)
+        ▼  rx.rst_h3_rasterize_agg grouped by tier (Spark) → TEMP TABLE
+Per-tier presence tiles  (12 single-band tiles, NoData = not covered)
         │
-        ▼  rx.rst_frombands_agg ordered by band_level (Spark)
+        ▼  rx.rst_frombands_agg ordered by tier (Spark)
 Multi-band GeoTIFF stack  (1 tile, 12 bands, EPSG:4326)
         │
         ▼  plot_raster(composite="depth") + plot_mask_layers / cells_as_gdf (dissolve via product st_union_agg) / grid_as_gdf
@@ -89,19 +87,18 @@ Coverage-depth composite + per-band footprint overlays
 
 ## Key GeoBrix / Databricks functions shown
 
-- **`DemDownloader.lidar_dtm()`** — selects the USGS **3DEP LiDAR-DTM (≈2 m)** product; `.download(bbox, path, resolution="finest")` queries the Planetary Computer STAC for tiles intersecting the bounding box and writes GeoTIFFs to a UC Volume (idempotent). See [DEM downloader](../sample-data/dem-downloader).
+- **`DemDownloader()`** — the default downloader selects the USGS **3DEP seamless** product; `.download(bbox, path, resolution="finest")` queries the Planetary Computer STAC for the finest seamless tier (10 m) intersecting the bounding box and writes GeoTIFFs to a UC Volume (idempotent). The seamless product is delivered in EPSG:4326. See [DEM downloader](../sample-data/dem-downloader).
 - **`OvertureClient`** — fetches Overture Maps features for an AOI; `.discover(bbox, themes=["base"])` + `.download(assets, path)` + `.read(path, theme, type)` retrieve and parse `base/water` geometries. The union subtracted from the AOI box yields a land multipolygon used as the `rst_clip` cutline.
-- **`raster_gbx` reader with `tileSize`** — the `spark.read.format("raster_gbx").option("tileSize","512").load(path)` call splits each GeoTIFF into 512×512-px **virtual tiles**: bytes-free structs (path + window) read lazily. One Spark row per tile; the ≈2 m DEM is processed in parallel across executors.
-- **`rst_transform`** — reprojects each tile to a target EPSG. The 3DEP LiDAR-DTM tiles are in a projected CRS (UTM zone 10N over SF), so `rx.rst_transform("tile", 4326)` brings them to lon/lat — required for the EPSG:4326 land cutline and product H3 (which indexes lon/lat). Identity (already 4326, e.g. the seamless product) is a no-op passthrough. See [RasterX functions](../api/raster-functions).
-- **`rst_clip`** — masks each tile to a vector cutline (WKB polygon), setting all pixels outside the cutline to NoData. `cutline_all_touched=True` keeps pixels the boundary touches; `clip_crs` defaults to the raster CRS (here EPSG:4326 after the reproject). See [RasterX functions](../api/raster-functions).
+- **`raster_gbx` reader with `tileSize`** — the `spark.read.format("raster_gbx").option("tileSize","512").load(path)` call splits each GeoTIFF into 512×512-px **virtual tiles**: bytes-free structs (path + window) read lazily. One Spark row per tile; the DEM is processed in parallel across executors.
+- **`rst_clip`** — masks each tile to a vector cutline (WKB polygon), setting all pixels outside the cutline to NoData. `cutline_all_touched=True` keeps pixels the boundary touches; `clip_crs` defaults to the raster CRS (here EPSG:4326, matching the seamless DEM and the land cutline). See [RasterX functions](../api/raster-functions).
 - **`rst_isoband`** — distributed Spark column that extracts isoband polygons (WKB) from a raster tile at a given set of break values; feeds the product-H3 indexing step directly. See [RasterX functions](../api/raster-functions).
 - **[`h3_try_coverash3`](https://docs.databricks.com/aws/en/sql/language-manual/functions/h3_try_coverash3)** — Databricks built-in H3 function, accessed via the product Python bindings (`from pyspark.databricks.sql import functions as DBF`; available DBR 16.3+ / Serverless, tested on Serverless env 5). Returns all H3 cells that overlap the polygon — solid, gap-free bands. Accepts WKB BINARY geometry directly — no `ST_GeomFromWKB` needed. The `h3_try_*` prefix returns `NULL` instead of raising on invalid input.
 - **`rst_h3_gridspec`** — computes a pixel-snapped bounding box and pixel dimensions spanning all H3 cells across all band levels; used without a grouping column here to produce a single shared canvas. See [H3 Grid](../api/raster-functions#h3-grid).
-- **`rst_h3_rasterize_agg`** — aggregator that burns a group's H3 cells onto the shared canvas (supplied explicitly via `xmin`/`ymin`/`xmax`/`ymax`/`width`/`height` columns), producing a single-band presence mask per band level. See [H3 Grid](../api/raster-functions#h3-grid).
-- **`rst_frombands_agg`** — aggregator that assembles per-band single-band tiles into one multi-band GeoTIFF, ordered by a user-supplied `band_index` column.
+- **`rst_h3_rasterize_agg`** — aggregator that burns a group's H3 cells onto the shared canvas (supplied explicitly via `xmin`/`ymin`/`xmax`/`ymax`/`width`/`height` columns), producing a single-band presence mask per tier. See [H3 Grid](../api/raster-functions#h3-grid).
+- **`rst_frombands_agg`** — aggregator that assembles per-tier single-band tiles into one multi-band GeoTIFF, ordered by a user-supplied `band_index` column.
 - **`gbx.vizx` helpers** ([Visualization API](../api/vizx)):
-  - `plot_mask_layers` — overlays two or more named binary masks on a single figure, each in a distinct colour with a legend, for side-by-side band coverage comparison.
-  - `plot_raster(composite="depth")` — renders the stacked tile as a coverage-depth heatmap: per-pixel count of bands that cover that location, transparent where no band covers.
+  - `plot_mask_layers` — overlays two or more named binary masks on a single figure, each in a distinct colour with a legend, for side-by-side tier coverage comparison.
+  - `plot_raster(composite="depth")` — renders the stacked tile as a coverage-depth heatmap: per-pixel count of tiers that cover that location, transparent where no tier covers.
   - `grid_as_gdf` — converts the `grid` struct from `rst_h3_gridspec` into a single-row GeoDataFrame for map overlays.
   - `cells_as_gdf` — converts a `(cellid, ...)` DataFrame into a GeoDataFrame; with `dissolve_by=` and `dissolve_engine="product"` it dissolves per-group polygons on Spark via the Databricks product `st_union_agg` before bringing merged footprints to the driver.
 
@@ -109,8 +106,10 @@ Coverage-depth composite + per-band footprint overlays
 
 ## Gotchas
 
-- **Session temp table requires Serverless or DBR 18.1+**: the notebook materializes per-band tiles with `CREATE OR REPLACE TEMP TABLE` (via a temp view bridge) to avoid recomputing the burn in the stacking step. On Serverless `.cache()` / `.persist()` are unavailable; a session temp table is the idiomatic alternative. This syntax is not supported on dedicated or single-user clusters — if you must run there, remove the temp-table step and pass `bands_df` directly into `rst_frombands_agg` (at the cost of recomputing the rasterize).
+- **Land clip is load-bearing over water.** Two-thirds of the Bay Area AOI is land; the rest is Bay and Pacific. Without the Overture land cutline the flat water surface floods the lowest elevation band with millions of H3 cells. `rst_clip` masks the water to NoData at the source so `rst_isoband` never emits water bands.
+- **Match the top break to the terrain.** `rst_isoband` bands only the intervals between consecutive breaks — pixels above the highest break are dropped (they become holes). The Bay Area reaches ≈685 m, so the breaks run to 720 m; if you retarget the AOI, raise the top break above the DEM's maximum or the peaks disappear from the stack.
+- **Session temp table requires Serverless or DBR 18.1+**: the notebook materializes per-tier tiles with `CREATE OR REPLACE TEMP TABLE` (via a temp view bridge) to avoid recomputing the burn in the stacking step. On Serverless `.cache()` / `.persist()` are unavailable; a session temp table is the idiomatic alternative. This syntax is not supported on dedicated or single-user clusters — if you must run there, remove the temp-table step and pass the tier tiles directly into `rst_frombands_agg` (at the cost of recomputing the rasterize).
 - **Product H3 takes WKB, not `GEOMETRY`**: `h3_try_coverash3` accepts WKB (binary) geometry — exactly what `rst_isoband` produces. Do not convert to the native Databricks `GEOMETRY` type before passing to this function; it requires WKB input.
 - **Virtual tiles are read directly by compute**: the `raster_gbx` reader emits bytes-free path + window structs; `rst_clip` and `rst_isoband` read each tile's pixels on the executor, so no raster bytes are shipped from the driver. `rst_isoband` and the product H3 functions run as distributed Spark columns — no driver-side loop is needed. For a production pipeline ingesting many DEM tiles, load them all with `spark.read.format("raster_gbx").option("tileSize","512").load(path)` and pass the whole DataFrame through; the pipeline scales without modification.
-- **Shared canvas is required for stacking**: all per-band tiles passed to `rst_frombands_agg` must have identical pixel dimensions (width × height) and spatial extent. Broadcasting the `xmin`/`ymin`/`xmax`/`ymax`/`width`/`height` literals from `rst_h3_gridspec` to every row before grouping ensures this. Mismatched extents produce a corrupt or truncated stack.
-- **Volume write is serverless-safe**: `DemDownloader.lidar_dtm()` stages AOI-windowed 3DEP GeoTIFFs and `OvertureClient` stages Overture Parquet files directly to Unity Catalog Volume paths using sequential I/O — no `seek` and no unbounded in-memory buffering. Both operations are idempotent and safe on Serverless compute.
+- **Shared canvas is required for stacking**: all per-tier tiles passed to `rst_frombands_agg` must have identical pixel dimensions (width × height) and spatial extent. Broadcasting the `xmin`/`ymin`/`xmax`/`ymax`/`width`/`height` literals from `rst_h3_gridspec` to every row before grouping ensures this. Mismatched extents produce a corrupt or truncated stack.
+- **Volume write is serverless-safe**: `DemDownloader()` stages AOI-windowed 3DEP GeoTIFFs and `OvertureClient` stages Overture Parquet files directly to Unity Catalog Volume paths using sequential I/O — no `seek` and no unbounded in-memory buffering. Both operations are idempotent and safe on Serverless compute.

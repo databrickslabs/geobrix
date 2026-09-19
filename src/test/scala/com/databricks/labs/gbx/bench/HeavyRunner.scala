@@ -461,6 +461,28 @@ object HeavyRunner {
             val rows = cells.zip(vals).map { case (c, v) => Row(c, v) }
             spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
         }
+      } else if (fn == "rst_binpoints_agg") {
+        // rst_binpoints_agg is a SCALAR (x, y, z) aggregator (unlike the geometry-input
+        // aggregators below). Decode the fixed zpoint set to (x, y, z) DOUBLE columns in
+        // the driver (once) via JTS so the timed groupBy times ONLY the binning --
+        // matching the light tier, which decodes the SAME zpoints to x/y/z. WKBReader
+        // reads the 3D coordinate; getZ yields the z of each POINT Z.
+        import org.apache.spark.sql.Row
+        import org.apache.spark.sql.types.{DoubleType, StructField, StructType}
+        val gset = geomCorpus.flatMap(_.setFor(arrayRoot, pool.tiles.headOption.map(_.srid).getOrElse(0)))
+          .getOrElse(throw new IllegalStateException(
+            s"no geometry set for $arrayRoot; geometry.json missing or stale"))
+        ext = withVolumeDataset(resolve(corpusRoot, arrayRoot))(extentOf)
+        val reader = new org.locationtech.jts.io.WKBReader()
+        val rows = gset.zpointWkbs.map { b =>
+          val c = reader.read(b).getCoordinate
+          Row(c.x, c.y, c.getZ)
+        }
+        val schema = StructType(Seq(
+          StructField("x", DoubleType, nullable = false),
+          StructField("y", DoubleType, nullable = false),
+          StructField("z", DoubleType, nullable = false)))
+        spark.createDataFrame(spark.sparkContext.parallelize(rows), schema)
       } else {
         // geometry aggregate: rows of (geom_wkb, value) from the per-tile GeometrySet.
         val gset = geomCorpus.flatMap(_.setFor(arrayRoot, pool.tiles.headOption.map(_.srid).getOrElse(0)))

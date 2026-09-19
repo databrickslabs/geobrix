@@ -3968,13 +3968,16 @@ REGISTRY: Dict[str, FnSpec] = {
         "lidar",
         ("spark-path",),
         {"statistic": "max"},
-        # col_fn receives (geom_col, value_col, extent_tuple, args) but for
-        # binpoints_agg we extract x, y, z from the geometry WKBs and aggregate
-        # them per-group.
-        col_fn=lambda g, v, ext, a: prx.rst_binpoints_agg(
-            F.array(),
-            F.array(),
-            F.array(),
+        # rst_binpoints_agg is a SCALAR (x, y, z) aggregator (not geometry-input like
+        # the other geom aggregators). The harness feeds decoded (x, y, z) DOUBLE
+        # columns (from the fixed zpoint set), so col_fn receives (x, y, z, extent,
+        # args) and calls the real public rst_binpoints_agg -- the SAME function shape
+        # the heavy tier runs (col("x"), col("y"), col("z"), ...), so the timed
+        # groupBy times only the binning and the two tiers compare like-for-like.
+        col_fn=lambda x, y, z, ext, a: prx.rst_binpoints_agg(
+            x,
+            y,
+            z,
             F.lit(ext[0]),
             F.lit(ext[1]),
             F.lit(ext[2]),
@@ -4019,7 +4022,10 @@ REGISTRY: Dict[str, FnSpec] = {
             if dss
             else None
         ),
-        col_fn=lambda arr, a: prx.rst_chm(arr[0], arr[1] if len(arr) > 1 else arr[0]),
+        col_fn=lambda arr, a: prx.rst_chm(
+            F.element_at(arr, 1),
+            F.coalesce(F.element_at(arr, 2), F.element_at(arr, 1)),
+        ),
         sources=_CHM_LIGHT + (_HEAVY + "RST_Chm.scala",),
         core=False,
         input_kind="tile_array",

@@ -1369,10 +1369,13 @@ object BenchDispatch {
         rst_gridfrompoints_agg(col("geom_wkb"), col("value"),
           lit(xmin), lit(ymin), lit(xmax), lit(ymax), lit(w), lit(h), lit(srid),
           lit(argD(a, "power", 2.0)), lit(argI(a, "max_pts", 1000000)))
-      // rst_binpoints_agg: stream (geom_wkb 3D point, value) rows -> bin z values by statistic
-      // (max/min/mean/median/count) into a DSM tile. Extent/size/srid are per-group constants.
+      // rst_binpoints_agg is a SCALAR (x, y, z) aggregator (unlike the geometry-input
+      // aggregators): stream one (x, y, z) point per row -> bin z values by statistic
+      // (max/min/mean/median/count) into a DSM tile. The corpus supplies x/y/z DOUBLE
+      // columns decoded from the SAME zpoints the light tier bins, so both tiers run
+      // the identical function shape. Extent/size/srid are per-group constants.
       case "rst_binpoints_agg" =>
-        rst_binpoints_agg(col("geom_wkb"), col("value"),
+        rst_binpoints_agg(col("x"), col("y"), col("z"),
           lit(xmin), lit(ymin), lit(xmax), lit(ymax), lit(w), lit(h), lit(srid),
           lit(argS(a, "statistic", RST_BinPoints.DefaultStatistic)))
       // dtmfromgeoms_agg: breaklines NULL ARRAY<BINARY>; tolerances 0.0 (unconstrained

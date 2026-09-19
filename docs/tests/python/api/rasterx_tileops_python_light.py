@@ -703,3 +703,160 @@ rst_updatetype_python_light_example_output = """
 +-----------------------------------------------------------+
 (type-converted tile; use rst_type to confirm the new data type; light tier returns a materialized v2 Tile)
 """
+
+
+# ---------------------------------------------------------------------------
+# rst_binpoints — bin parallel x/y/z arrays into a Float32 raster tile (constructor)
+# Fixture: inline 3-point BNG (EPSG:27700) set, 10×10 pixel grid over 1 km extent
+# Output: tile struct (returns a Float32 raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_binpoints_python_light_example(spark):
+    """Bin per-row ARRAY<DOUBLE> x/y/z columns into a Float32 raster tile using the light pyrx tier.
+
+    Uses a tiny 3-point inline BNG (EPSG:27700) set covering a 1 km extent at 10×10 pixels
+    (100 m ground resolution). Each output pixel carries the max z-value of points whose centre
+    falls in that pixel; empty pixels carry NoData (-9999.0). No external raster file needed.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = spark.range(1).select(
+        f.array(f.lit(550100.0), f.lit(550200.0), f.lit(550300.0)).alias("x"),
+        f.array(f.lit(180100.0), f.lit(180200.0), f.lit(180500.0)).alias("y"),
+        f.array(f.lit(42.5), f.lit(45.1), f.lit(38.7)).alias("z"),
+    )
+    result = df.select(
+        rx.rst_binpoints(
+            "x", "y", "z",
+            f.lit(550000.0), f.lit(180000.0),
+            f.lit(551000.0), f.lit(181000.0),
+            f.lit(10), f.lit(10),
+            f.lit(27700),
+        ).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_binpoints_python_light_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0; light tier returns a materialized v2 Tile)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_align_to — warp a tile onto a reference tile's grid
+# Fixture: DEM (dem_small.tif) used for both tile and reference_tile (no-op warp)
+# Output: tile struct (warped to reference grid)
+# ---------------------------------------------------------------------------
+
+
+def rst_align_to_python_light_example(spark):
+    """Warp a tile to match a reference tile's grid using the light pyrx tier.
+
+    Loads the DEM fixture (64×64 Float32, EPSG:32618) and uses it as both the
+    input tile and the reference grid — a no-op warp that demonstrates the API.
+    In production, pass two tiles on different grids; the output will have the
+    reference tile's exact CRS, extent, and pixel dimensions.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from ._fixtures import dem_path  # noqa: PLC0415
+
+    dem = str(dem_path())
+    df = spark.read.format("binaryFile").load(dem).select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"),
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("reference_tile"),
+    )
+    result = df.select(rx.rst_align_to("tile", "reference_tile").alias("tile")).first()
+    return result["tile"]
+
+
+rst_align_to_python_light_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(tile warped to reference grid; output has reference tile's CRS, extent, width, height; light tier returns a materialized v2 Tile)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_chm — Canopy Height Model = clamp(align(DSM→DEM) - DEM, min=0)
+# Fixture: DEM (dem_small.tif) used as both DSM and DEM (degenerate CHM = 0 everywhere)
+# Output: tile struct (Float32 CHM tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_chm_python_light_example(spark):
+    """Compute Canopy Height Model from DSM and DEM tiles using the light pyrx tier.
+
+    Uses the DEM fixture (64×64 Float32, EPSG:32618) as both DSM and DEM — a
+    degenerate case where CHM = clamp(DSM - DEM, min=0) = 0 everywhere, but
+    demonstrates the API. In production, pass a LiDAR-derived DSM (e.g. from
+    ``rst_binpoints``) and a matching DEM tile to compute real canopy heights.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from ._fixtures import dem_tile_df  # noqa: PLC0415
+
+    df = dem_tile_df(spark)
+    result = df.select(rx.rst_chm("tile", "tile").alias("chm")).first()
+    return result["chm"]
+
+
+rst_chm_python_light_example_output = """
++-----------------------------------------------------------+
+|chm                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 CHM tile: clamp(DSM - DEM, min=0); NoData propagates from either input; light tier returns a materialized v2 Tile)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_isoband — reclassify a raster band into elevation bands → contour polygons
+# Fixture: DEM (dem_small.tif, 0–311 m elevation range, EPSG:32618)
+# Output: ARRAY<struct(geom_wkb, band, lower, upper)>
+# ---------------------------------------------------------------------------
+
+
+def rst_isoband_python_light_example(spark):
+    """Reclassify a DEM tile into elevation bands and return contour polygons (light pyrx tier).
+
+    Uses the DEM fixture (64×64 Float32, EPSG:32618, 0–311 m elevation range).
+    Five half-open break intervals [0,50), [50,100), [100,150), [150,200), [200,311)
+    cover the full elevation range. Returns ARRAY<struct(geom_wkb, band, lower, upper)>
+    — one struct per contiguous patch of pixels in the same elevation band.
+    """
+    from databricks.labs.gbx.pyrx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from ._fixtures import dem_tile_df  # noqa: PLC0415
+
+    df = dem_tile_df(spark)
+    result = df.select(
+        rx.rst_isoband(
+            "tile",
+            f.array(
+                f.lit(0.0), f.lit(50.0), f.lit(100.0),
+                f.lit(150.0), f.lit(200.0), f.lit(311.0),
+            ),
+        ).alias("patches")
+    ).first()
+    return result["patches"]
+
+
+rst_isoband_python_light_example_output = """
++-----------------------------------------------------------+
+|patches                                                    |
++-----------------------------------------------------------+
+|[{[BINARY], 0, 0.0, 50.0}, {[BINARY], 1, 50.0, 100.0}, ...]|
++-----------------------------------------------------------+
+(ARRAY of per-patch structs: geom_wkb WKB polygon in raster CRS, band index, lower/upper break values)
+"""

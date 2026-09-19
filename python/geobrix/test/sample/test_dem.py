@@ -328,6 +328,78 @@ def test_download_finest_no_gsd_keeps_all(spark, tmp_path):
     assert mock.download_calls[0]["item_ids"] == ["dep_nogsd"]
 
 
+# --- 3dep-lidar-dtm (2 m today; 1 m where available): resolution lives in the item
+#     id ("-dtm-<N>m-"), not a gsd property (gsd is null for this collection). ---
+_FAKE_LIDAR_DTM = [
+    # 1 m item (QL1) — proves "finest" can reach 1 m where a survey provides it
+    {
+        "id": "USGS_LPC_AreaX_QL1_2020-dtm-1m-1-2",
+        "bbox": [-100.05, 40.00, -100.00, 40.05],
+        "properties": {"start_datetime": "2020-01-01T00:00:00Z"},  # NO gsd, NO datetime
+        "assets": {
+            "data": {"href": "file:///fake/x_1m.tif"},
+            "rendered_preview": {"href": "file:///fake/x_prev.png"},
+        },
+    },
+    # 2 m item (what SF actually offers today)
+    {
+        "id": "USGS_LPC_CA_Wildfires_QL1_2018-dtm-2m-6-0",
+        "bbox": [-100.05, 40.00, -100.00, 40.05],
+        "properties": {"start_datetime": "2018-01-01T00:00:00Z"},  # NO gsd
+        "assets": {"data": {"href": "file:///fake/x_2m.tif"}},
+    },
+]
+
+_LIDAR_BBOX = (-100.05, 40.00, -100.00, 40.05)
+
+
+# --- LD1: discover() derives gsd (metres) from the item id when no gsd property ---
+def test_lidar_dtm_discover_parses_resolution_from_id(spark):
+    from databricks.labs.gbx.sample.dem import DEM_LIDAR_DTM_COLLECTION
+
+    mock = _MockStacClient(_make_search_df(spark, _FAKE_LIDAR_DTM))
+    dd = DemDownloader(collection=DEM_LIDAR_DTM_COLLECTION, _stac_client=mock)
+    rows = dd.discover(_LIDAR_BBOX, spark=spark).collect()
+    gsd_by_id = {r["item_id"]: r["gsd"] for r in rows}
+    assert gsd_by_id["USGS_LPC_AreaX_QL1_2020-dtm-1m-1-2"] == 1
+    assert gsd_by_id["USGS_LPC_CA_Wildfires_QL1_2018-dtm-2m-6-0"] == 2
+
+
+# --- LD2: resolution filter works off the id-parsed metres ---
+def test_lidar_dtm_resolution_filter(spark):
+    from databricks.labs.gbx.sample.dem import DEM_LIDAR_DTM_COLLECTION
+
+    mock = _MockStacClient(_make_search_df(spark, _FAKE_LIDAR_DTM))
+    dd = DemDownloader(collection=DEM_LIDAR_DTM_COLLECTION, _stac_client=mock)
+    r1 = dd.discover(_LIDAR_BBOX, resolution=1, spark=spark).collect()
+    assert {r["item_id"] for r in r1} == {"USGS_LPC_AreaX_QL1_2020-dtm-1m-1-2"}
+    r2 = dd.discover(_LIDAR_BBOX, resolution=2, spark=spark).collect()
+    assert {r["item_id"] for r in r2} == {"USGS_LPC_CA_Wildfires_QL1_2018-dtm-2m-6-0"}
+
+
+# --- LD3: download(finest) picks the minimum id-parsed resolution (1 m) ---
+def test_lidar_dtm_download_finest_picks_1m(spark, tmp_path):
+    from databricks.labs.gbx.sample.dem import DEM_LIDAR_DTM_COLLECTION
+
+    mock = _MockStacClient(
+        _make_search_df(spark, _FAKE_LIDAR_DTM),
+        _make_download_df(spark, ["USGS_LPC_AreaX_QL1_2020-dtm-1m-1-2"]),
+    )
+    dd = DemDownloader(collection=DEM_LIDAR_DTM_COLLECTION, _stac_client=mock)
+    dd.download(_LIDAR_BBOX, str(tmp_path / "o"), resolution="finest", spark=spark)
+    assert mock.download_calls[0]["item_ids"] == ["USGS_LPC_AreaX_QL1_2020-dtm-1m-1-2"]
+
+
+# --- LD4: lidar_dtm() convenience + collection constant ---
+def test_lidar_dtm_convenience_and_constant():
+    from databricks.labs.gbx.sample.dem import DEM_LIDAR_DTM_COLLECTION, DemDownloader
+
+    assert DEM_LIDAR_DTM_COLLECTION == "3dep-lidar-dtm"
+    dd = DemDownloader.lidar_dtm()
+    assert dd.collection == DEM_LIDAR_DTM_COLLECTION
+    assert dd.asset == "data"
+
+
 # --- E1 ---
 def test_export_dem_downloader_from_sample_init():
     from databricks.labs.gbx.sample import DemDownloader as DD

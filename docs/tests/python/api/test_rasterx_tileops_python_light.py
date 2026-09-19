@@ -225,3 +225,36 @@ def test_rst_fromfile_python_light_example(spark):
     assert tile["raster"] is None, "virtual tile must have raster=None (bytes-free)"
     assert tile["path"] is not None, "virtual tile must carry the source path"
     assert tile["window"] is not None, "virtual tile must carry the whole-file window"
+
+
+def test_rst_binpoints_python_light_example(spark):
+    """rst_binpoints returns a materialized Float32 tile from inline point arrays."""
+    assert tileops_examples is not None
+    result = tileops_examples.rst_binpoints_python_light_example(spark)
+    _assert_materialized_tile(result, "rst_binpoints")
+
+
+def test_rst_align_to_python_light_example(spark):
+    """rst_align_to returns a materialized tile warped to the reference grid."""
+    assert tileops_examples is not None
+    result = tileops_examples.rst_align_to_python_light_example(spark)
+    _assert_materialized_tile(result, "rst_align_to")
+
+
+def test_rst_chm_python_light_example(spark):
+    """rst_chm returns a materialized Float32 CHM tile (same-tile input yields all-zero CHM)."""
+    assert tileops_examples is not None
+    result = tileops_examples.rst_chm_python_light_example(spark)
+    _assert_materialized_tile(result, "rst_chm")
+
+
+def test_rst_isoband_python_light_example(spark):
+    """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
+    assert tileops_examples is not None
+    patches = tileops_examples.rst_isoband_python_light_example(spark)
+    assert isinstance(patches, list), "rst_isoband must return a list of patches"
+    assert len(patches) > 0, "rst_isoband must return at least one patch for a DEM with real elevation"
+    patch = patches[0]
+    assert patch["geom_wkb"] is not None, "patch geom_wkb must be non-null"
+    assert patch["band"] is not None, "patch band must be non-null"
+    assert hasattr(tileops_examples, "rst_isoband_python_light_example_output")

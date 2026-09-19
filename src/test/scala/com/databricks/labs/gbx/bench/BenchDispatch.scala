@@ -38,6 +38,10 @@ import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Polygonize
 import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Rasterize
 import com.databricks.labs.gbx.rasterx.expressions.grid.RST_GridFromPoints
 import com.databricks.labs.gbx.rasterx.expressions.RST_DTMFromGeoms
+import com.databricks.labs.gbx.rasterx.expressions.RST_BinPoints
+import com.databricks.labs.gbx.rasterx.expressions.RST_BinPointsAgg
+import com.databricks.labs.gbx.rasterx.expressions.RST_Chm
+import com.databricks.labs.gbx.rasterx.expressions.vector.RST_Isoband
 import com.databricks.labs.gbx.gridx.grid.{BNG, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.expressions.dem._
 import com.databricks.labs.gbx.rasterx.expressions.spectral._
@@ -208,6 +212,9 @@ object BenchDispatch {
     "rst_quadbin_rasterize_agg" -> DGGS, "rst_bng_rasterize_agg" -> DGGS,
     // bucket B, group B-vec: vector-out fns (contour LINES, polygonize POLYGONS)
     "rst_contour" -> VECTOR, "rst_polygonize" -> VECTOR,
+    // LiDAR functions: binpoints/isoband are geometry/vector; chm is tile-array format.
+    "rst_binpoints" -> VECTOR, "rst_isoband" -> VECTOR,
+    "rst_chm" -> FMT,
     // bucket D: geometry-in constructors (burn/interpolate a geometry set into a
     // new raster). Categorized vector (they bridge vector geometry -> raster).
     "rst_rasterize" -> VECTOR, "rst_gridfrompoints" -> VECTOR,
@@ -218,7 +225,7 @@ object BenchDispatch {
     "rst_combineavg_agg" -> FMT, "rst_merge_agg" -> FMT,
     "rst_frombands_agg" -> FMT, "rst_derivedband_agg" -> FMT,
     "rst_rasterize_agg" -> VECTOR, "rst_gridfrompoints_agg" -> VECTOR,
-    "rst_dtmfromgeoms_agg" -> VECTOR,
+    "rst_dtmfromgeoms_agg" -> VECTOR, "rst_binpoints_agg" -> VECTOR,
     // rst_h3_rasterize_agg: a GRID aggregator (cellid,value rows -> one tile,
     // pixel-centroid burn). dggs, like the other H3 fns.
     "rst_h3_rasterize_agg" -> DGGS,
@@ -248,12 +255,12 @@ object BenchDispatch {
   private val tileArrayInput: Set[String] = Set(
     "rst_frombands", "rst_combineavg", "rst_merge",
     "rst_combinemin", "rst_combinemax", "rst_combinemedian",
-    "rst_combinesum", "rst_combinestddev", "rst_combinecount")
+    "rst_combinesum", "rst_combinestddev", "rst_combinecount", "rst_chm")
   // bucket D: geometry-in fns are handed the open tile PLUS the tile's
   // GeometrySet (boxes/points/zpoints WKB, in the tile CRS) read from
   // geometry.json -- the SAME bytes the pyrx tier reads (write-once-read-both).
   private val geometryInput: Set[String] =
-    Set("rst_rasterize", "rst_gridfrompoints", "rst_dtmfromgeoms")
+    Set("rst_rasterize", "rst_gridfrompoints", "rst_dtmfromgeoms", "rst_binpoints")
   // bucket A: the 7 *_agg aggregators reduce a GROUP of rows to ONE tile via a real
   // df.groupBy(key).agg(...). The 4 tile aggregators build their fixed consistency
   // group from synthesized tiles (write-once-read-both); the 3 geometry aggregators
@@ -263,7 +270,7 @@ object BenchDispatch {
   private val tileAggregate: Set[String] =
     Set("rst_combineavg_agg", "rst_merge_agg", "rst_frombands_agg", "rst_derivedband_agg")
   private val geometryAggregate: Set[String] =
-    Set("rst_rasterize_agg", "rst_gridfrompoints_agg", "rst_dtmfromgeoms_agg")
+    Set("rst_rasterize_agg", "rst_gridfrompoints_agg", "rst_dtmfromgeoms_agg", "rst_binpoints_agg")
   // The grid rasterize aggregators reduce a GROUP of (cellid, value) rows to ONE
   // tile, burning each grid cell's centroid pixel onto an EXPLICIT, hardcoded
   // grid. Their fixed consistency group is a deterministic cell set generated
@@ -419,6 +426,7 @@ object BenchDispatch {
   // bench.synth recipe name for a tile_array fn (mirrors spec.synth_recipe).
   // The 6 Stage-3 combine-stats functions all reuse the "combineavg" synth input
   // (2 aligned copies of the corpus tile) — same recipe as rst_combineavg.
+  // rst_chm also uses "combineavg" (two aligned DSM/DEM copies).
   def synthRecipe(fn: String): String = fn match {
     case "rst_frombands"     => "frombands"
     case "rst_combineavg"    => "combineavg"
@@ -429,6 +437,7 @@ object BenchDispatch {
     case "rst_combinestddev" => "combineavg"
     case "rst_combinecount"  => "combineavg"
     case "rst_merge"         => "merge"
+    case "rst_chm"           => "combineavg"
     case other               => throw new IllegalArgumentException(s"no synth recipe for: $other")
   }
 
@@ -442,6 +451,7 @@ object BenchDispatch {
     case "rst_derivedband_agg" => "frombands"
     case other => throw new IllegalArgumentException(s"no agg synth recipe for: $other")
   }
+
 
   def all: Seq[String] = cats.keys.toSeq.sorted
   def category(fn: String): String = cats(fn)
@@ -785,6 +795,12 @@ object BenchDispatch {
     case "rst_polygonize" =>
       fpVector(RST_Polygonize.execute(
         ds, argI(a, "band", 1), argI(a, "connectedness", 4)))
+    // rst_isoband: reclassify into half-open bins and return one polygon per
+    // contiguous same-bin region. Defaults match the pyrx FnSpec. Output struct
+    // is (geom_wkb, band, lower, upper); fingerprint over geoms and band indices.
+    case "rst_isoband" =>
+      fpIsoband(RST_Isoband.execute(
+        ds, argDoubleArray(a, "breaks", Array(0.2, 0.4, 0.6, 0.8))))
     case other            => throw new IllegalArgumentException(s"unknown bench fn: $other")
     }
   }
@@ -799,6 +815,19 @@ object BenchDispatch {
       val wkb = row.getBinary(0)
       val v = row.getDouble(1)
       (JTS.fromWKB(wkb), v)
+    }
+    BenchFingerprint.ofVector(features)
+  }
+
+  /** Decode isoband output (struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE))
+    * into (JTS Geometry, band_index) pairs and fingerprint as vector (feature count +
+    * total polygon area + agg over band indices). */
+  private def fpIsoband(arr: ArrayData): String = {
+    val features = (0 until arr.numElements()).map { i =>
+      val row = arr.getStruct(i, 4)
+      val wkb = row.getBinary(0)
+      val band = row.getInt(1).toDouble  // Use band index as the measure
+      (JTS.fromWKB(wkb), band)
     }
     BenchFingerprint.ofVector(features)
   }
@@ -928,6 +957,15 @@ object BenchDispatch {
       case "rst_merge" =>
         val (out, _) = RST_Merge.execute(dss, Map.empty[String, String])
         try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
+      // rst_chm: compute CHM from DSM + DEM tiles (or DSM alone if only one input).
+      case "rst_chm" =>
+        if (dss.length == 0) BenchFingerprint.empty
+        else {
+          val dsmDs = dss(0)
+          val demDs = if (dss.length > 1) dss(1) else dss(0)
+          val (out, _) = RST_Chm.execute(dsmDs, demDs, Map.empty[String, String])
+          try BenchFingerprint.ofDataset(out) finally RasterDriver.releaseDataset(out)
+        }
       case other => throw new IllegalArgumentException(s"unknown bench tile_array fn: $other")
     }
   }
@@ -989,6 +1027,22 @@ object BenchDispatch {
       case "rst_gridfrompoints" =>
         RST_GridFromPoints.execute(geom.pointPairs, xmin, ymin, xmax, ymax, w, h, srid,
           argD(a, "power", 2.0), argI(a, "max_pts", 1000000))
+      // ARRAY of 3D points: bin (x,y,z) into a DSM tile by statistic (max/min/mean/median/count).
+      case "rst_binpoints" =>
+        if (geom.zpointWkbs.isEmpty) null
+        else {
+          val xyz = geom.zpointWkbs.map { wkb =>
+            val geomPt = JTS.fromWKB(wkb)
+            val coord = geomPt.getCoordinate
+            (coord.x, coord.y, coord.getZ)
+          }
+          val x = xyz.map(_._1).toArray
+          val y = xyz.map(_._2).toArray
+          val z = xyz.map(_._3).toArray
+          val bytes = RST_BinPoints.execute(x, y, z, xmin, ymin, xmax, ymax, w, h, srid,
+            argS(a, "statistic", RST_BinPoints.DefaultStatistic))
+          if (bytes == null) null else RST_BinPoints.tileRow(bytes)
+        }
       // ARRAY of 3D points: Delaunay DTM over all corpus zpoints; breaklines empty,
       // tolerances 0.0 (no scipy analogue on the light side either).
       case "rst_dtmfromgeoms" =>
@@ -1194,6 +1248,13 @@ object BenchDispatch {
       case "rst_combinestddev" => rst_combinestddev(tile)
       case "rst_combinecount" => rst_combinecount(tile)
       case "rst_merge"        => rst_merge(tile)
+      // rst_chm: compute CHM from DSM + DEM (ARRAY form takes two tiles [DSM, DEM] or one tile used twice).
+      case "rst_chm" =>
+        import org.apache.spark.sql.functions.{element_at, when, size}
+        // Extract DSM from arr[0] and DEM from arr[1] (or arr[0] if only one tile).
+        val dsmTile = element_at(tile, 1)
+        val demTile = when(size(tile) > 1, element_at(tile, 2)).otherwise(dsmTile)
+        rst_chm(dsmTile, demTile)
       // rst_align_to: two-tile fn; bench passes same tile as both source + reference.
       // Python spec modes=("pure-core",) so spark-path is timing-only; column form
       // here keeps the match exhaustive (spark-path runner still invokes it when --modes=both).
@@ -1250,12 +1311,17 @@ object BenchDispatch {
       case "rst_polygonize" =>
         rst_polygonize(tile, org.apache.spark.sql.functions.lit(argI(a, "band", 1)),
           org.apache.spark.sql.functions.lit(argI(a, "connectedness", 4)))
+      // rst_isoband: vector-out fn. Defaults match the pyrx FnSpec.
+      case "rst_isoband" =>
+        val breaks = argDoubleArray(a, "breaks", Array(0.2, 0.4, 0.6, 0.8))
+        rst_isoband(tile, org.apache.spark.sql.functions.array(
+          breaks.map(org.apache.spark.sql.functions.lit): _*))
       // bucket D: geometry-in constructors are pure-core-only (the spark-path tile
       // DataFrame carries no geometry column, and they are fingerprinted via the
       // geometry adapter, not the column path). The spark-path runner filters by
       // modes, so column() is never invoked for them; guard explicitly rather than
       // synthesize a meaningless geometry Column.
-      case "rst_rasterize" | "rst_gridfrompoints" | "rst_dtmfromgeoms" =>
+      case "rst_rasterize" | "rst_gridfrompoints" | "rst_dtmfromgeoms" | "rst_binpoints" =>
         throw new IllegalArgumentException(
           s"$fn is geometry-in / pure-core-only; no spark-path column form")
       // bucket A aggregators have no scalar column form; they are aggregate
@@ -1303,6 +1369,15 @@ object BenchDispatch {
         rst_gridfrompoints_agg(col("geom_wkb"), col("value"),
           lit(xmin), lit(ymin), lit(xmax), lit(ymax), lit(w), lit(h), lit(srid),
           lit(argD(a, "power", 2.0)), lit(argI(a, "max_pts", 1000000)))
+      // rst_binpoints_agg is a SCALAR (x, y, z) aggregator (unlike the geometry-input
+      // aggregators): stream one (x, y, z) point per row -> bin z values by statistic
+      // (max/min/mean/median/count) into a DSM tile. The corpus supplies x/y/z DOUBLE
+      // columns decoded from the SAME zpoints the light tier bins, so both tiers run
+      // the identical function shape. Extent/size/srid are per-group constants.
+      case "rst_binpoints_agg" =>
+        rst_binpoints_agg(col("x"), col("y"), col("z"),
+          lit(xmin), lit(ymin), lit(xmax), lit(ymax), lit(w), lit(h), lit(srid),
+          lit(argS(a, "statistic", RST_BinPoints.DefaultStatistic)))
       // dtmfromgeoms_agg: breaklines NULL ARRAY<BINARY>; tolerances 0.0 (unconstrained
       // Delaunay, mirrored on the light side); no_data -9999.
       case "rst_dtmfromgeoms_agg" =>

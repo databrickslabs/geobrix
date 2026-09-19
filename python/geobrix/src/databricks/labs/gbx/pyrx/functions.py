@@ -30,7 +30,9 @@ from databricks.labs.gbx.pyrx._udf import ColLike, _col, _crs_col
 from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
+from databricks.labs.gbx.pyrx.core import binning
 from databricks.labs.gbx.pyrx.core import cellraster as cellraster_core
+from databricks.labs.gbx.pyrx.core import chm as chm_core
 from databricks.labs.gbx.pyrx.core import coords
 from databricks.labs.gbx.pyrx.core import derivedband as derivedband_core
 from databricks.labs.gbx.pyrx.core import edit, features, focal, gridagg, indices
@@ -1592,6 +1594,53 @@ def rst_align_to(
     return _align_to_udf(_col(tile), _col(reference))
 
 
+# rst_chm: Canopy Height Model = clamp(align(DSM->DEM) - DEM, min=0).
+# DSM is warped onto the DEM's grid; negative differences clamp to 0.
+# NoData in either input propagates to the output.
+# ---------------------------------------------------------------------------
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _chm_udf(dsm_tile, dem_tile):
+    if _tile_is_empty(dsm_tile) or _tile_is_empty(dem_tile):
+        return None
+    vt_dsm = ot._to_virtual_tile(dsm_tile)
+    dsm_bytes = (
+        ot.materialize_to_bytes(vt_dsm).raster
+        if vt_dsm.is_virtual()
+        else bytes(vt_dsm.raster)
+    )
+    vt_dem = ot._to_virtual_tile(dem_tile)
+    dem_bytes = (
+        ot.materialize_to_bytes(vt_dem).raster
+        if vt_dem.is_virtual()
+        else bytes(vt_dem.raster)
+    )
+    new_bytes = chm_core.chm(dsm_bytes, dem_bytes)
+    if new_bytes is None:
+        return None
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(dsm_tile))
+
+
+def rst_chm(dsm_tile: ColLike, dem_tile: ColLike) -> Column:
+    """Compute Canopy Height Model from DSM and DEM tiles.
+
+    Returns ``clamp(align(DSM->DEM) - DEM, min=0)``.  The DSM is warped onto
+    the DEM's grid (CRS, transform, width, height) via nearest-neighbour
+    resampling before subtraction.  Negative differences are clamped to 0.
+    NoData in either input propagates to the output.
+
+    Args:
+        dsm_tile: Digital Surface Model tile.
+        dem_tile:  Digital Elevation Model tile (defines the output grid).
+
+    Returns:
+        Tile with CHM values (Float32 GTiff; nodata -9999), or NULL if either
+        input is NULL.
+    """
+    return _chm_udf(_col(dsm_tile), _col(dem_tile))
+
+
 # rst_frombands: single ARRAY<single-band tile> arg -> multi-band tile.
 # Mirrors gbx_rst_frombands: array ORDER is band order (element 0 -> band 1).
 # Reuses core.agg.frombands_tiles by pairing each element with its 0-based
@@ -3003,6 +3052,58 @@ def _contour_udf(tile, levels, interval, base, attr_field):
     attr = "elev" if attr_field is None else str(attr_field)
     with ot._open(tile) as ds:
         return analysis_core.contour(ds, lvls, iv, bs, attr)
+
+
+# rst_isoband: tile + breaks (ARRAY<DOUBLE>) ->
+# ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>
+_ISOBAND_SCHEMA = ArrayType(
+    StructType(
+        [
+            StructField("geom_wkb", BinaryType(), nullable=True),
+            StructField("band", IntegerType(), nullable=True),
+            StructField("lower", DoubleType(), nullable=True),
+            StructField("upper", DoubleType(), nullable=True),
+        ]
+    )
+)
+
+
+@f.udf(_ISOBAND_SCHEMA)
+def _isoband_udf(tile, breaks):
+    if _tile_is_empty(tile):
+        return None
+    if not breaks:
+        return None
+    with ot._open(tile) as ds:
+        return features.isoband(ds, breaks)
+
+
+def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
+    """Reclassify a raster band into value bins and return one polygon per contiguous patch.
+
+    Mirrors ``gbx_rst_isoband``. Implemented with ``numpy.digitize`` +
+    ``rasterio.features.shapes`` (light tier, no GDAL required).
+
+    Each output element covers a contiguous run of pixels that fell in the same
+    break interval ``[breaks[i], breaks[i+1])``. NoData pixels are excluded.
+
+    Args:
+        tile:   Tile struct column.
+        breaks: ``ARRAY<DOUBLE>`` of N+1 strictly-ascending boundary values
+                defining N bands (e.g. ``f.array(f.lit(0.0), f.lit(5.0),
+                f.lit(10.0))`` → bands [0, 5) and [5, 10)).
+                Values below ``breaks[0]`` or >= ``breaks[-1]`` are dropped.
+
+    Returns:
+        ``ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>``
+        — one struct per contiguous polygon, tagged with its zero-based band index
+        and the ``[lower, upper)`` interval boundaries. ``geom_wkb`` is a WKB
+        Polygon in the raster's CRS.
+
+    Raises:
+        ValueError: if ``breaks`` is not strictly ascending.
+    """
+    return _isoband_udf(_col(tile), _col(breaks))
 
 
 def _viewshed_bytes(
@@ -4568,6 +4669,86 @@ def rst_gridfrompoints(
         p,
         m,
         f.lit(out_crs) if out_crs is not None else f.lit(None),
+    )
+
+
+# --- Tier 1e4: point-cloud binning (array -> tile) ---------------------------
+@f.udf(V2_TILE_SCHEMA)
+def _binpoints_udf(x_arr, y_arr, z_arr, xmin, ymin, xmax, ymax, w, h, srid, statistic):
+    """Scalar: bin parallel ARRAY<DOUBLE> columns into a single-band GTiff tile.
+
+    Produces one tile per row. Extent/size/srid/statistic are scalar args.
+    Empty or null input arrays return None.
+    """
+    if not x_arr:
+        return None
+    b = binning.bin_points(
+        x_arr,
+        y_arr,
+        z_arr,
+        float(xmin),
+        float(ymin),
+        float(xmax),
+        float(ymax),
+        int(w),
+        int(h),
+        int(srid),
+        str(statistic) if statistic is not None else "max",
+    )
+    return _serde.build_tile(b, "GTiff", 0)
+
+
+def rst_binpoints(
+    x_array: ColLike,
+    y_array: ColLike,
+    z_array: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Bin a per-row ARRAY of (x, y, z) points into a single-band raster tile.
+
+    ``x_array``, ``y_array``, ``z_array`` are parallel ``ARRAY<DOUBLE>`` columns.
+    Each output pixel carries the ``statistic`` reduction of all points whose
+    centre falls in that pixel's cell. Empty cells carry NoData (-9999.0).
+
+    Half-open interval: a point exactly on ``xmax`` (or ``ymin``) is dropped to
+    prevent cross-tile double-counting when DSMs are assembled from adjacent tiles.
+
+    Args:
+        x_array:          ARRAY<DOUBLE> of point x-coordinates (in CRS of srid).
+        y_array:          ARRAY<DOUBLE> of point y-coordinates, parallel to x.
+        z_array:          ARRAY<DOUBLE> of point z-values, parallel to x.
+        xmin, ymin,
+        xmax, ymax:       Spatial extent of the output raster in CRS units.
+        width_px,
+        height_px:        Output raster dimensions in pixels.
+        srid:             EPSG code for the output CRS.
+        statistic:        One of ``"max"`` (default), ``"min"``, ``"mean"``,
+                          ``"median"``, ``"count"``, or ``"percentile:<p>"``
+                          (e.g. ``"percentile:90"``).
+
+    Returns:
+        Single-band Float32 tile struct (cellid 0).
+    """
+    stat = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return _binpoints_udf(
+        _col(x_array),
+        _col(y_array),
+        _col(z_array),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width_px),
+        _col(height_px),
+        _col(srid),
+        stat,
     )
 
 
@@ -8051,6 +8232,51 @@ def _gridfrompoints_agg_udf(
 
 
 @pandas_udf(BinaryType())
+def _binpoints_agg_udf(
+    x: pd.Series,
+    y: pd.Series,
+    z: pd.Series,
+    xmin: pd.Series,
+    ymin: pd.Series,
+    xmax: pd.Series,
+    ymax: pd.Series,
+    w: pd.Series,
+    h: pd.Series,
+    srid: pd.Series,
+    statistic: pd.Series,
+) -> bytes:
+    """Grouped-agg: stream one (x, y, z) scalar point per row into one raster.
+
+    Returns raw GTiff bytes (BINARY). SQL callers wrap via
+    gbx_rst_fromcontent(<agg>, 'GTiff') to recover a tile struct; the Python
+    public function rst_binpoints_agg wraps automatically via _as_tile_udf.
+
+    Extent/size/srid/statistic are per-group constants; only the first row's
+    value is read.  Returns None for an empty group.
+    """
+    if len(x) == 0:
+        return None
+    stat = (
+        str(statistic.iloc[0])
+        if len(statistic) > 0 and statistic.iloc[0] is not None
+        else "max"
+    )
+    return binning.bin_points(
+        x.to_numpy(dtype="float64"),
+        y.to_numpy(dtype="float64"),
+        z.to_numpy(dtype="float64"),
+        float(xmin.iloc[0]),
+        float(ymin.iloc[0]),
+        float(xmax.iloc[0]),
+        float(ymax.iloc[0]),
+        int(w.iloc[0]),
+        int(h.iloc[0]),
+        int(srid.iloc[0]),
+        stat,
+    )
+
+
+@pandas_udf(BinaryType())
 def _dtmfromgeoms_agg_udf(
     point: pd.Series,
     breaklines: pd.Series,
@@ -8641,6 +8867,145 @@ def rst_gridfrompoints_agg(
     )
 
 
+def rst_binpoints_agg(
+    x: ColLike,
+    y: ColLike,
+    z: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Stream one scalar (x, y, z) point per row into a single-band raster tile.
+
+    Groups the stream by the enclosing ``groupBy`` key and bins each group's
+    points into a ``width_px × height_px`` raster over the given extent.
+    ``xmin``/``ymin``/``xmax``/``ymax``/``width_px``/``height_px``/``srid``/
+    ``statistic`` are per-group constants. Equal to running ``rst_binpoints``
+    on a pre-collected ARRAY column.
+
+    Use inside ``.agg()``::
+
+        df.groupBy(k).agg(
+            prx.rst_binpoints_agg(
+                "x", "y", "z", xmin, ymin, xmax, ymax, w, h, srid
+            ).alias("dsm")
+        )
+
+    Returns a tile struct (cellid 0). The raw BINARY form is available through
+    the SQL aggregate ``gbx_rst_binpoints_agg``; wrap it with
+    ``gbx_rst_fromcontent(<agg>, 'GTiff')`` to recover a tile struct.
+
+    Args:
+        x, y:       Scalar DOUBLE columns of point coordinates in CRS of srid.
+        z:          Scalar DOUBLE column of point z-values.
+        xmin, ymin,
+        xmax, ymax: Spatial extent of the output raster in CRS units (constants).
+        width_px,
+        height_px:  Output raster dimensions in pixels (constants).
+        srid:       EPSG code for the output CRS (constant).
+        statistic:  One of ``"max"`` (default), ``"min"``, ``"mean"``,
+                    ``"median"``, ``"count"``, or ``"percentile:<p>"``.
+
+    Returns:
+        Single-band Float32 tile struct (cellid 0).
+    """
+    stat = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return _as_tile_udf(
+        _binpoints_agg_udf(
+            _col(x),
+            _col(y),
+            _col(z),
+            _col(xmin),
+            _col(ymin),
+            _col(xmax),
+            _col(ymax),
+            _col(width_px),
+            _col(height_px),
+            _col(srid),
+            stat,
+        )
+    )
+
+
+def bin_points_tiled(
+    df, *, x, y, z, by, xmin, ymin, xmax, ymax, width, height, srid, stat="max"
+):
+    """Bounded-memory tiled point binning — memory is the raster grid (W×H), not the
+    point count. Two-stage native pre-aggregation: per-point pixel index -> native
+    groupBy(tile, cell).agg(stat) -> place the <=W*H per-cell values via
+    rst_binpoints_agg. Output matches df.groupBy(by).agg(rst_binpoints_agg(x,y,z,...,
+    stat)) for max/min/mean/count. median/percentile delegate to that buffered
+    aggregator (memory-heavy; use decimate or smaller tiles). Returns [*by, 'tile']."""
+    from pyspark.sql import functions as F
+
+    if isinstance(by, str):
+        by = [by]
+    w, h, sid, st = int(width), int(height), int(srid), str(stat).lower()
+
+    if st == "median" or st.startswith("percentile"):
+        return df.groupBy(*by).agg(
+            rst_binpoints_agg(
+                x, y, z, xmin, ymin, xmax, ymax, F.lit(w), F.lit(h), F.lit(sid), stat
+            ).alias("tile")
+        )
+
+    xr = F.col(xmax) - F.col(xmin)
+    yr = F.col(ymax) - F.col(ymin)
+    col = F.floor((F.col(x) - F.col(xmin)) / xr * F.lit(w)).cast("int")
+    row = F.floor((F.col(ymax) - F.col(y)) / yr * F.lit(h)).cast("int")
+    celled = (
+        df.withColumn("_col", col)
+        .withColumn("_row", row)
+        .where(
+            (F.col("_col") >= 0)
+            & (F.col("_col") < F.lit(w))
+            & (F.col("_row") >= 0)
+            & (F.col("_row") < F.lit(h))
+        )
+        .withColumn("_cx", F.col(xmin) + (F.col("_col") + F.lit(0.5)) * xr / F.lit(w))
+        .withColumn("_cy", F.col(ymax) - (F.col("_row") + F.lit(0.5)) * yr / F.lit(h))
+    )
+
+    # NULL-z parity with the reference (rst_binpoints / binning.py): count includes
+    # every in-bounds point regardless of z, and a NULL z contaminates the cell's
+    # mean to NoData (emit NaN, which the placement's fmax skips -> the cell stays
+    # NoData). max/min already match — Spark max/min ignore NULL like the reference.
+    reducer = {
+        "max": F.max(F.col(z)),
+        "min": F.min(F.col(z)),
+        "mean": F.when(
+            F.max(F.col(z).isNull().cast("int")) == 1, F.lit(float("nan"))
+        ).otherwise(F.avg(F.col(z))),
+        "count": F.count(F.lit(1)).cast("double"),
+    }
+    if st not in reducer:
+        raise ValueError(f"bin_points_tiled: unsupported statistic {stat!r}")
+    per_cell = celled.groupBy(*by, xmin, ymin, xmax, ymax, "_cx", "_cy").agg(
+        reducer[st].alias("_v")
+    )
+
+    return per_cell.groupBy(*by).agg(
+        rst_binpoints_agg(
+            "_cx",
+            "_cy",
+            "_v",
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            F.lit(w),
+            F.lit(h),
+            F.lit(sid),
+            "max",
+        ).alias("tile")
+    )
+
+
 def rst_dtmfromgeoms_agg(
     point: ColLike,
     breaklines: ColLike,
@@ -9186,6 +9551,7 @@ _sql_tile_ops = {
     "gbx_rst_combinemedian": _combinemedian_udf,
     "gbx_rst_combinestddev": _combinestddev_udf,
     "gbx_rst_align_to": _align_to_udf,
+    "gbx_rst_chm": _chm_udf,
     "gbx_rst_frombands": _frombands_udf,
     "gbx_rst_transform": _transform_udf,
     "gbx_rst_to_webmercator": _to_webmercator_udf,
@@ -9205,12 +9571,14 @@ _sql_tile_ops = {
     "gbx_rst_sample": _sample_udf,
     "gbx_rst_proximity": _proximity_udf,
     "gbx_rst_contour": _contour_udf,
+    "gbx_rst_isoband": _isoband_udf,
     "gbx_rst_viewshed": _viewshed_udf,
     "gbx_rst_cog_convert": _cog_convert_udf,
     "gbx_rst_fillnodata": _fillnodata_udf,
     "gbx_rst_rasterize": _rasterize_udf,
     "gbx_rst_gridfrompoints": _gridfrompoints_udf,
     "gbx_rst_dtmfromgeoms": _dtmfromgeoms_udf,
+    "gbx_rst_binpoints": _binpoints_udf,
     # gbx_rst_polygonize is a UDTF registered separately in register() via
     # spark.udtf.register — UDTFs cannot go through spark.udf.register.
     # gbx_rst_{h3,quadbin}_rastertogrid* are UDTFs registered separately in
@@ -9252,6 +9620,7 @@ _sql_aggregators = {
     "gbx_rst_derivedband_agg": _derivedband_agg_udf,
     "gbx_rst_gridfrompoints_agg": _gridfrompoints_agg_udf,
     "gbx_rst_dtmfromgeoms_agg": _dtmfromgeoms_agg_udf,
+    "gbx_rst_binpoints_agg": _binpoints_agg_udf,
     "gbx_rst_h3_rasterize_agg": _rst_h3_rasterize_agg_udf,
     "gbx_rst_quadbin_rasterize_agg": _rst_quadbin_rasterize_agg_udf,
     "gbx_rst_bng_rasterize_agg": _rst_bng_rasterize_agg_udf,

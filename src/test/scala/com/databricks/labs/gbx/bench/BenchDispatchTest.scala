@@ -44,7 +44,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     //   is a pyrx-tier timing-only fn, not counted here) -> 128 + 3 = 131
     // + 6 Stage-3 combine-stats fns (combinemin/max/median/sum/stddev/count) -> 131 + 6 = 137.
     // + 1 rst_align_to (timing-only two-tile warp, format category) -> 137 + 1 = 138.
-    assert(BenchDispatch.all.size == 138)
+    // + 4 LiDAR-DSM fns: rst_binpoints + rst_isoband (vector), rst_chm (format),
+    //   rst_binpoints_agg (vector aggregator) -> 138 + 4 = 142.
+    assert(BenchDispatch.all.size == 142)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")

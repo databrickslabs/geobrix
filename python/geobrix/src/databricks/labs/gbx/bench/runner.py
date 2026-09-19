@@ -657,6 +657,23 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
             int(ds.height),
             int(epsg) if epsg is not None else 0,
         )
+    if fs.name == "rst_binpoints_agg":
+        # rst_binpoints_agg is a SCALAR (x, y, z) aggregator (unlike the geometry-input
+        # aggregators below). Decode the fixed zpoint set to (x, y, z) DOUBLE columns in
+        # the driver (once, untimed) so the timed groupBy times ONLY the binning --
+        # matching the heavy tier, which decodes the SAME zpoints to x/y/z via JTS.
+        from databricks.labs.gbx.pyrx.core import tin
+
+        xyz = tin.points_xyz_from_wkb(gset.zpoints)  # (n, 3) float64
+        rows = [(float(x), float(y), float(z)) for x, y, z in xyz]
+        xyz_schema = StructType(
+            [
+                StructField("x", DoubleType(), False),
+                StructField("y", DoubleType(), False),
+                StructField("z", DoubleType(), False),
+            ]
+        )
+        return spark.createDataFrame(rows, schema=xyz_schema), extent
     if fs.name == "rst_dtmfromgeoms_agg":
         pairs = [(bytes(wkb), 0.0) for wkb in gset.zpoints]
     elif fs.name == "rst_gridfrompoints_agg":
@@ -945,6 +962,9 @@ def _run_aggregate(  # noqa: C901
             # in args; quadbin/BNG (grid_aggregate) auto-derive the grid from the
             # streamed cell set, so args is empty -- both take the same 3-arg col_fn.
             return fs.col_fn(df["cellid"], df["value"], fs.args)
+        if fs.name == "rst_binpoints_agg":
+            # scalar (x, y, z) aggregator: 5-arg col_fn (x, y, z, extent, args)
+            return fs.col_fn(df["x"], df["y"], df["z"], extent, fs.args)
         # geometry aggregate: (geom_wkb, value, extent_tuple, args)
         return fs.col_fn(df["geom_wkb"], df["value"], extent, fs.args)
 

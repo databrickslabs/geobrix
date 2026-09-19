@@ -34,6 +34,7 @@ const sidebars = {
           items: [
             'notebooks/eo-series',
             'notebooks/xview',
+            'notebooks/wireless-coverage',
             'notebooks/h3-rasterize',
             'notebooks/helios',
             'notebooks/vapor-eyes',
@@ -82,7 +83,7 @@ const sidebars = {
           items: [
             'readers/overview',
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
-            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb'] },
+            { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb', 'readers/lidar'] },
             'readers/file',
           ],
         },

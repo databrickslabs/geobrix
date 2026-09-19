@@ -1237,6 +1237,46 @@ Throughput scales ~linearly at volume: **100,000 building footprints expand to 3
 
 </Tabs>
 
+### LiDAR DSM — `rst_binpoints` / `rst_binpoints_agg` / `rst_isoband` / `rst_chm` {#lidar-dsm}
+
+These four functions ship in **both tiers** (lightweight `pyrx` and heavyweight RasterX),
+so they take part in the same heavy-vs-light parity comparison as the rest of the raster
+family. They belong to the **point-cloud-to-raster** shape family: binning scattered xyz
+points onto a pixel grid (`rst_binpoints`/`rst_binpoints_agg`), polygon-extraction per value
+band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
+
+> **Shape** (performance.mdx taxonomy): `rst_binpoints*` are geometry-input constructors
+> (no tile DataFrame input — similar to `rst_gridfrompoints`); `rst_isoband` is a
+> tile-to-feature-array transformer (similar to `rst_polygonize` and `rst_contour`);
+> `rst_chm` is a two-tile combiner (similar to `rst_combineavg`).
+
+**Heavy vs light, cluster-measured** (DBR 18 · 512²·4-band·`float32`·EPSG:4326 tile · corpus pool 1,000 tiles).
+
+*Pure-core — one tile, algorithm in isolation:*
+
+| Function | Heavy | Light | Result | Consistency |
+|---|---|---|---|---|
+| `rst_chm` | 601 ms | 108 ms | **5.6× lightweight** | exact |
+| `rst_isoband` | 108 ms | 1,114 ms | **10× heavyweight** | within_tol |
+| `rst_binpoints` | 0.04 ms † | 5.9 ms | — | timing-only |
+
+<sub>† Heavy `rst_binpoints` pure-core hit a NoData short-circuit on the corpus tile, so its single-tile time is not a representative binning cost — read its at-scale spark-path row below instead. `rst_binpoints_agg` is an aggregator and has no single-tile pure-core form.</sub>
+
+*Spark-path at scale — amortized per-tile cost (ms) over an N-tile distributed job:*
+
+| Function | Heavy @1,000 | Light @1,000 | @100 (hw / lw) | @10 (hw / lw) |
+|---|---|---|---|---|
+| `rst_binpoints_agg` | **0.46** | 3.14 | 2.54 / 14.4 | 26.0 / 196 |
+| `rst_isoband` | **6.76** | 30.0 | 83.1 / 68.7 | 597 / 456 |
+| `rst_chm` | **4.20** | 30.6 | 31.5 / 60.6 | 382 / 404 |
+| `rst_binpoints` (light-only ‡) | — | 1.16 | — / 9.39 | — / 136 |
+
+<sub>‡ `rst_binpoints` is a geometry-input constructor (like `rst_gridfrompoints`): the spark-path tile DataFrame carries no geometry column, so only the lightweight tier — which streams points through its own path — has a spark-path form here; the heavyweight tier is pure-core-only for it.</sub>
+
+**How to read these.** `rst_chm` is the textbook pure-core-vs-scale crossover: the lightweight NumPy subtract-and-clip wins **5.6×** on a single tile, but serializing every tile's bytes across the JVM↔Python boundary on each row flips it at scale — the heavyweight tier is **~7.3× faster over a 1,000-tile job**. `rst_isoband` favors the heavyweight tier both in isolation (**10×** — GDAL's C-backed polygon extraction) and at the largest scale (**~4.4×**); the two tiers trade places only at small row counts, where fixed job overhead dominates the per-tile average. `rst_binpoints_agg` favors the heavyweight tier at every scale (**up to ~6.8×**): accumulating one `(x, y, z)` triple per row in the JVM beats collecting a Python array per group. Output stays consistent across tiers where it can be fingerprinted — `rst_chm` **exact**, `rst_isoband` **within tolerance**; `rst_binpoints_agg` returns an aggregate tile that is timing-only in this run. The numbers are one cluster snapshot (absolute timings are environment-dependent); the relative picture and the consistency outcome are the stable takeaways. See [How the benchmark works](#how-the-benchmark-works--how-to-run-it).
+
+---
+
 ## How the benchmark works & how to run it
 
 ### What it measures

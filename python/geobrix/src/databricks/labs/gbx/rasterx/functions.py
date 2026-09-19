@@ -1561,6 +1561,278 @@ def rst_bng_rastertogridstddev(
     )
 
 
+def rst_custom_rastertogridavg(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute average pixel value per custom-grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridavg",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
+def rst_custom_rastertogridcount(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute pixel count per custom-grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridcount",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
+def rst_custom_rastertogridmax(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute maximum pixel value per custom-grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridmax",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
+def rst_custom_rastertogridmin(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute minimum pixel value per custom-grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridmin",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
+def rst_custom_rastertogridmedian(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute median pixel value per custom-grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridmedian",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
+def rst_custom_rastertogridsum(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute the sum of pixel values per custom-grid cell at the given resolution.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridsum",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
+def rst_custom_rastertogridvariance(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute the population variance of pixel values per custom-grid cell.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridvariance",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
+def rst_custom_rastertogridstddev(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    coverage: ColLike = "complete",
+    assignment: ColLike = "centroid",
+) -> Column:
+    """Compute the population standard deviation of pixel values per custom-grid cell.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        coverage: ``"complete"`` (default) or ``"sparse"``.
+        assignment: ``"centroid"`` (default) or ``"covering"``.
+
+    Returns:
+        Column ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+        Output cell ids are BIGINT encoded by the custom-grid layout.
+    """
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    return f.call_function(
+        "gbx_rst_custom_rastertogridstddev",
+        _col(tile),
+        _col(grid),
+        _col(resolution),
+        coverage_col,
+        assignment_col,
+    )
+
+
 def rst_quadbin_tessellate(
     tile: ColLike,
     resolution: ColLike,
@@ -1628,6 +1900,48 @@ def rst_bng_tessellate(
     return f.call_function(
         "gbx_rst_bng_tessellate",
         _col(tile),
+        _col(resolution),
+        assignment_col,
+        coverage_col,
+    )
+
+
+def rst_custom_tessellate(
+    tile: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    assignment: ColLike = "centroid",
+    coverage: ColLike = "complete",
+) -> Column:
+    """Tessellate the raster into user-defined custom-grid cells.
+
+    One chip per overlapping cell, each clipped to that cell's extent. The
+    raster must already be in the custom grid's native CRS — no automatic
+    reprojection is performed (use ``rst_transform`` upstream if needed). Cell
+    IDs are BIGINT encoded by the custom-grid layout.
+
+    Args:
+        tile: Raster tile column.
+        grid: Custom-grid spec struct (from ``gbx_custom_grid(...)``).
+        resolution: Custom-grid resolution int ``[0, conf.max_resolution]``.
+        assignment: ``"centroid"`` (default) — each pixel assigned to one cell
+            by its centroid; ``"covering"`` — every cell overlapping the raster
+            bbox receives a chip. String literals are auto-wrapped in ``f.lit``.
+        coverage: ``"complete"`` (default) emits a chip for every candidate cell;
+            ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
+            in ``f.lit``; pass a ``Column`` to defer.
+
+    Returns:
+        Column of (cellid BIGINT, raster TILE_STRUCT) pairs — one row per chip.
+    """
+    assignment_col = (
+        f.lit(assignment) if isinstance(assignment, str) else _col(assignment)
+    )
+    coverage_col = f.lit(coverage) if isinstance(coverage, str) else _col(coverage)
+    return f.call_function(
+        "gbx_rst_custom_tessellate",
+        _col(tile),
+        _col(grid),
         _col(resolution),
         assignment_col,
         coverage_col,
@@ -1831,6 +2145,131 @@ def rst_combineavg(tiles: ColLike) -> Column:
         Column of combined raster tile.
     """
     return f.call_function("gbx_rst_combineavg", _col(tiles))
+
+
+def rst_combinecount(tiles: ColLike) -> Column:
+    """Count valid (non-NoData) inputs per pixel across aligned tiles.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the count of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinecount", _col(tiles))
+
+
+def rst_combinemax(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by taking the per-pixel maximum.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the maximum of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinemax", _col(tiles))
+
+
+def rst_combinemedian(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by taking the per-pixel median.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the median of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinemedian", _col(tiles))
+
+
+def rst_combinemin(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by taking the per-pixel minimum.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the minimum of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinemin", _col(tiles))
+
+
+def rst_combinestddev(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by computing per-pixel population std-dev.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the population std-dev of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinestddev", _col(tiles))
+
+
+def rst_combinesum(tiles: ColLike) -> Column:
+    """Combine multiple raster tiles by summing per pixel.
+
+    Args:
+        tiles: Column of array of raster tiles (same extent/cellsize/CRS).
+
+    Returns:
+        Column of combined raster tile where each pixel is the sum of valid inputs.
+    """
+    return f.call_function("gbx_rst_combinesum", _col(tiles))
+
+
+def rst_align_to(tile: ColLike, reference_tile: ColLike) -> Column:
+    """Warp a tile to match the grid of a reference tile.
+
+    Output has exactly the same CRS, extent, width, height, and geotransform as
+    the reference tile. Uses nearest-neighbour resampling.
+
+    Args:
+        tile: The raster tile to warp.
+        reference_tile: Reference tile whose grid defines the output grid.
+
+    Returns:
+        Column of warped raster tile aligned to the reference grid.
+    """
+    return f.call_function("gbx_rst_align_to", _col(tile), _col(reference_tile))
+
+
+def rst_chm(dsm_tile: ColLike, dem_tile: ColLike) -> Column:
+    """Compute Canopy Height Model from DSM and DEM tiles.
+
+    Returns ``clamp(align(DSM→DEM) - DEM, min=0)``. The DSM is warped onto the
+    DEM's grid (CRS, extent, width, height) via nearest-neighbour resampling
+    before subtraction. Negative differences are clamped to 0. NoData in either
+    input propagates to the output.
+
+    Args:
+        dsm_tile: Digital Surface Model tile (surface heights).
+        dem_tile: Digital Elevation Model tile (bare-earth reference; also defines
+            the output grid).
+
+    Returns:
+        Column of Float32 CHM tile (NoData -9999).
+    """
+    return f.call_function("gbx_rst_chm", _col(dsm_tile), _col(dem_tile))
+
+
+def rst_isoband(tile: ColLike, breaks: ColLike) -> Column:
+    """Reclassify a raster band into value bins and return contour polygons.
+
+    Returns ``ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>`` —
+    one entry per contiguous region in the same break interval. NoData pixels are
+    excluded. Bins are half-open ``[breaks[i], breaks[i+1])``.
+
+    Args:
+        tile: Raster tile column.
+        breaks: ``ARRAY<DOUBLE>`` of N+1 strictly-ascending boundary values
+            defining N bands.
+
+    Returns:
+        Column of ``ARRAY<struct>`` — one polygon per contiguous patch.
+    """
+    return f.call_function("gbx_rst_isoband", _col(tile), _col(breaks))
 
 
 def rst_convolve(tile: ColLike, kernel: ColLike) -> Column:
@@ -2834,6 +3273,181 @@ def rst_gridfrompoints_agg(
         _col(out_srid),
         power_col,
         max_pts_col,
+    )
+
+
+def rst_binpoints(
+    x_array: ColLike,
+    y_array: ColLike,
+    z_array: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Bin parallel x/y/z ``ARRAY<DOUBLE>`` columns into a Float32 raster tile.
+
+    Non-aggregator (scalar) form — all three arrays live in a single row.
+    For the grouped-agg form use :func:`rst_binpoints_agg`.
+
+    Output is a single-band Float32 GTiff tile of shape
+    ``width_px x height_px`` covering ``(xmin, ymin) -> (xmax, ymax)`` in the
+    given SRID. Empty cells (no points) carry NoData (``-9999.0``).
+
+    Args:
+        x_array: Column of ``ARRAY<DOUBLE>`` x-coordinates.
+        y_array: Column of ``ARRAY<DOUBLE>`` y-coordinates.
+        z_array: Column of ``ARRAY<DOUBLE>`` z-values to reduce per cell.
+        xmin: Minimum X of the output raster extent.
+        ymin: Minimum Y of the output raster extent.
+        xmax: Maximum X of the output raster extent.
+        ymax: Maximum Y of the output raster extent.
+        width_px: Output raster width in pixels.
+        height_px: Output raster height in pixels.
+        srid: EPSG SRID of the output raster.
+        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
+            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
+            (e.g. ``"percentile:90"``).
+
+    Returns:
+        Raster tile column (single-band Float32 GTiff).
+    """
+    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return f.call_function(
+        "gbx_rst_binpoints",
+        _col(x_array),
+        _col(y_array),
+        _col(z_array),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width_px),
+        _col(height_px),
+        _col(srid),
+        stat_col,
+    )
+
+
+def rst_binpoints_agg(
+    x: ColLike,
+    y: ColLike,
+    z: ColLike,
+    xmin: ColLike,
+    ymin: ColLike,
+    xmax: ColLike,
+    ymax: ColLike,
+    width_px: ColLike,
+    height_px: ColLike,
+    srid: ColLike,
+    statistic: ColLike = "max",
+) -> Column:
+    """Bin one ``(x, y, z)`` point per row into a Float32 raster tile (aggregator).
+
+    Aggregator counterpart of :func:`rst_binpoints`. Group rows by an extent
+    key and pass one scalar ``x`` / ``y`` / ``z`` per row together with
+    per-group literal extent parameters.
+
+    Args:
+        x: Column of X-coordinates (DOUBLE).
+        y: Column of Y-coordinates (DOUBLE).
+        z: Column of Z-values to bin (DOUBLE).
+        xmin: Minimum X of the output raster extent (per-group literal).
+        ymin: Minimum Y of the output raster extent.
+        xmax: Maximum X of the output raster extent.
+        ymax: Maximum Y of the output raster extent.
+        width_px: Output raster width in pixels.
+        height_px: Output raster height in pixels.
+        srid: EPSG SRID of the output raster.
+        statistic: Reduction statistic — one of ``"max"`` (default), ``"min"``,
+            ``"mean"``, ``"median"``, ``"count"``, or ``"percentile:<p>"``
+            (e.g. ``"percentile:90"``).
+
+    Returns:
+        Raster tile column (single-band Float32 GTiff).
+    """
+    stat_col = f.lit(statistic) if isinstance(statistic, str) else _col(statistic)
+    return f.call_function(
+        "gbx_rst_binpoints_agg",
+        _col(x),
+        _col(y),
+        _col(z),
+        _col(xmin),
+        _col(ymin),
+        _col(xmax),
+        _col(ymax),
+        _col(width_px),
+        _col(height_px),
+        _col(srid),
+        stat_col,
+    )
+
+
+def rst_custom_rasterize_agg(
+    cellid: ColLike,
+    grid: ColLike,
+    value: ColLike = None,
+    out_srid: ColLike = None,
+    pixel_size: ColLike = None,
+    xmin: ColLike = None,
+    ymin: ColLike = None,
+    xmax: ColLike = None,
+    ymax: ColLike = None,
+    width: ColLike = None,
+    height: ColLike = None,
+    mode: ColLike = "centroids",
+    kring_pad: ColLike = 1,
+) -> Column:
+    """Rasterize a group's custom-grid cells into one tile (pixel-centroid burn, heavy tier).
+
+    Aggregator counterpart of :func:`rst_custom_rastertogrid*`: where those functions
+    reduce raster pixels to per-cell statistics, this function reconstructs a raster
+    from per-cell values.
+
+    ``grid`` is a custom-grid STRUCT column produced by ``gbx_custom_grid(...)``.
+    ``value`` omitted or null -> presence mask (1.0). Supply an explicit extent
+    (``xmin`` .. ``height``) for aligned band stacking; else the grid is auto-derived
+    from the cell set per ``mode``/``kring_pad``.
+
+    Output CRS: ``out_srid`` wins; falls back to the grid's own SRID when not supplied.
+    Use inside ``.agg()``::
+
+        df.groupBy(k).agg(rx.rst_custom_rasterize_agg("cellid", "grid").alias("tile"))
+
+    Args:
+        cellid: Column of BIGINT custom-grid cell IDs.
+        grid: Custom-grid STRUCT column from ``gbx_custom_grid(...)``.
+        value: Numeric burn value column (null -> 1.0 presence mask).
+        out_srid: EPSG SRID of the output CRS (null -> grid's SRID).
+        pixel_size: Output pixel size in target CRS units (null -> auto).
+        xmin, ymin, xmax, ymax: Output extent (null -> auto from cell set).
+        width, height: Output dimensions in pixels (null -> auto).
+        mode: ``"centroids"`` (default) or ``"spatial_envelope"``.
+        kring_pad: Neighbourhood expansion for auto-extent (default 1).
+
+    Returns:
+        Raster tile column (single-band GTiff).
+    """
+
+    return f.call_function(
+        "gbx_rst_custom_rasterize_agg",
+        _col(cellid),
+        f.lit(None).cast("double") if value is None else _col(value),
+        _col(grid),
+        f.lit(None).cast("int") if out_srid is None else _col(out_srid),
+        f.lit(None).cast("double") if pixel_size is None else _col(pixel_size),
+        f.lit(None).cast("double") if xmin is None else _col(xmin),
+        f.lit(None).cast("double") if ymin is None else _col(ymin),
+        f.lit(None).cast("double") if xmax is None else _col(xmax),
+        f.lit(None).cast("double") if ymax is None else _col(ymax),
+        f.lit(None).cast("int") if width is None else _col(width),
+        f.lit(None).cast("int") if height is None else _col(height),
+        f.lit(mode) if isinstance(mode, str) else _col(mode),
+        f.lit(kring_pad) if isinstance(kring_pad, int) else _col(kring_pad),
     )
 
 

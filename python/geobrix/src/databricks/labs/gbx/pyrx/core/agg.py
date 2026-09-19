@@ -694,7 +694,7 @@ def combine_stddev_tiles(rasters: List[bytes]) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes) -> bytes:
+def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> bytes:
     """Warp ``tile_bytes`` onto ``ref_bytes``'s grid (GTiff bytes).
 
     Mirrors ``gbx_rst_align_to``: the output has exactly the same CRS, width,
@@ -703,6 +703,13 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes) -> bytes:
 
     This is the explicit fix for the alignment precondition of the combine
     family: align each tile to a common reference, then combine.
+
+    When the reference grid extends beyond the tile's footprint, the uncovered
+    destination pixels are filled with the destination NoData value. By default
+    that is the tile's own NoData (so a NoData-less tile leaves them at GDAL's
+    fill of 0). Pass ``dst_nodata`` to force a sentinel for those uncovered
+    pixels — this is what a NoData-less tile needs so padding is distinguishable
+    from real values; the sentinel is also written as the output's NoData tag.
 
     Returns ``None`` when either input is missing/empty.
     """
@@ -719,6 +726,7 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes) -> bytes:
                     dst_height = ref.height
 
             src_nodata = src.nodata
+            effective_dst_nodata = src_nodata if dst_nodata is None else dst_nodata
             out_dtype = src.dtypes[0]
             decoded_bytes = (
                 src.count * dst_width * dst_height * np.dtype(out_dtype).itemsize
@@ -737,6 +745,8 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes) -> bytes:
                     out_dtype, decoded_bytes=decoded_bytes, compress="auto"
                 )
             )
+            if dst_nodata is not None:
+                profile.update(nodata=dst_nodata)
 
             with MemoryFile() as out_mf:
                 with out_mf.open(**profile) as dst:
@@ -749,7 +759,7 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes) -> bytes:
                             dst_transform=dst_transform,
                             dst_crs=dst_crs,
                             src_nodata=src_nodata,
-                            dst_nodata=src_nodata,
+                            dst_nodata=effective_dst_nodata,
                             resampling=Resampling.nearest,
                         )
                 return out_mf.read()

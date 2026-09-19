@@ -1089,6 +1089,70 @@ def test_rst_quadbin_rasterize_agg_sql_example(spark):
     )
 
 
+# ============================================================================
+# LiDAR / Point-Cloud DSM SQL Examples
+# ============================================================================
+
+
+def test_rst_binpoints_sql_example(spark):
+    """binpoints SQL example executes and returns a non-null tile."""
+    sql = rasterx_functions_sql.rst_binpoints_sql_example()
+    assert isinstance(sql, str) and len(sql) > 0
+    assert "gbx_rst_binpoints" in sql
+    assert "SELECT" in sql.upper()
+    assert hasattr(rasterx_functions_sql, "rst_binpoints_sql_example_output")
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    result = spark.sql(sql.strip()).collect()
+    assert len(result) == 1
+    assert result[0]["dsm"] is not None, "binpoints must produce a non-null tile"
+
+
+def test_rst_binpoints_agg_sql_example(spark):
+    """binpoints_agg SQL example string exists, is valid SQL, and references the function."""
+    sql = rasterx_functions_sql.rst_binpoints_agg_sql_example()
+    assert isinstance(sql, str) and len(sql) > 0
+    assert "gbx_rst_binpoints_agg" in sql
+    assert "SELECT" in sql.upper()
+    assert hasattr(rasterx_functions_sql, "rst_binpoints_agg_sql_example_output")
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    result = spark.sql(sql).collect()
+    assert len(result) == 1
+    assert result[0]["dsm"] is not None, "binpoints_agg must produce a non-null BINARY result"
+
+
+def test_rst_isoband_sql_example(spark, dem_rasters_view):
+    """isoband SQL example string exists, is valid SQL, and executes on dem_rasters."""
+    sql = rasterx_functions_sql.rst_isoband_sql_example()
+    assert isinstance(sql, str) and len(sql) > 0
+    assert "gbx_rst_isoband" in sql
+    assert "SELECT" in sql.upper()
+    assert hasattr(rasterx_functions_sql, "rst_isoband_sql_example_output")
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    result = spark.sql(sql.strip()).collect()
+    assert len(result) > 0
+
+
+def test_rst_chm_sql_example(spark, dem_rasters_view):
+    """chm SQL example string exists, is valid SQL, and executes on dem_rasters."""
+    sql = rasterx_functions_sql.rst_chm_sql_example()
+    assert isinstance(sql, str) and len(sql) > 0
+    assert "gbx_rst_chm" in sql
+    assert "SELECT" in sql.upper()
+    assert hasattr(rasterx_functions_sql, "rst_chm_sql_example_output")
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    result = spark.sql(sql.strip()).collect()
+    assert len(result) > 0
+    assert result[0]["chm"] is not None, "chm must produce a non-null tile"
+
+
 def test_rst_bng_rasterize_agg_sql_example(spark):
     """bng rasterize_agg burns a group of STRING BNG cells into one non-null tile."""
     from databricks.labs.gbx.gridx.bng import functions as bngx

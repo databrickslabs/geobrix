@@ -295,3 +295,212 @@ def test_cells_as_gdf_dissolve_by_not_in_extra_cols_raises(spark):
     df = spark.createDataFrame([(cell_int, 7)], ["cellid", "count"])
     with pytest.raises(ValueError, match="dissolve_by"):
         cells_as_gdf(df, extra_cols=["count"], dissolve_by="band_level")
+
+
+# ---------------------------------------------------------------------------
+# TDD: dissolve_engine selector, oversize guard, product/geopandas seams
+# ---------------------------------------------------------------------------
+
+
+def test_cells_as_gdf_dissolve_geopandas_engine(spark):
+    """dissolve_engine='geopandas' produces one dissolved polygon per group."""
+    import h3
+
+    from databricks.labs.gbx.vizx import cells_as_gdf
+
+    def _cell_ints(lat, lng, res=5):
+        centre = h3.latlng_to_cell(lat, lng, res)
+        return [h3.str_to_int(c) for c in h3.grid_disk(centre, 1)]
+
+    group1 = [(c, 1) for c in _cell_ints(0.0, 0.0)]
+    group2 = [(c, 2) for c in _cell_ints(10.0, 10.0)]
+    df = spark.createDataFrame(group1 + group2, ["cellid", "band_level"])
+
+    gdf = cells_as_gdf(
+        df,
+        extra_cols=["band_level"],
+        dissolve_by="band_level",
+        dissolve_engine="geopandas",
+    )
+
+    assert len(gdf) == 2
+    assert set(gdf["band_level"]) == {1, 2}
+    assert all(gdf.geometry.is_valid)
+    assert all(not g.is_empty for g in gdf.geometry)
+
+
+def test_cells_as_gdf_auto_falls_back_when_product_raises():
+    """auto engine: when product raises, geopandas fallback produces the result."""
+    from unittest.mock import patch
+
+    import geopandas as gpd
+    import h3
+    import pandas as pd
+    from shapely.geometry import Polygon
+
+    import databricks.labs.gbx.vizx._vector as _v
+    from databricks.labs.gbx.vizx import cells_as_gdf
+
+    cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
+    pdf = pd.DataFrame({"cellid": [cell, cell], "band_level": [1, 2]})
+    fake = _FakeSparkDF(pdf, count=2, columns=["cellid", "band_level"])
+
+    geopandas_calls = []
+
+    def _fake_geopandas(df, cell_col, extra_cols, dissolve_by, max_rows, sample_seed):
+        geopandas_calls.append(True)
+        ring = h3.cell_to_boundary(h3.int_to_str(int(cell)))
+        geom = Polygon([(lng, lat) for lat, lng in ring])
+        return (
+            gpd.GeoDataFrame({"band_level": [1, 2]}, geometry=[geom, geom], crs=4326)
+            .dissolve(by="band_level")
+            .reset_index()
+        )
+
+    with patch.object(_v, "_dissolve_product", side_effect=RuntimeError("no product")):
+        with patch.object(_v, "_dissolve_geopandas", side_effect=_fake_geopandas):
+            result = cells_as_gdf(
+                fake,
+                extra_cols=["band_level"],
+                dissolve_by="band_level",
+                dissolve_engine="auto",
+            )
+
+    assert len(geopandas_calls) == 1, "geopandas fallback must be called exactly once"
+    assert len(result) == 2
+
+
+def test_cells_as_gdf_product_success_no_geopandas():
+    """When product succeeds, geopandas dissolve is NOT called."""
+    from unittest.mock import patch
+
+    import geopandas as gpd
+    import h3
+    import pandas as pd
+    from shapely.geometry import Polygon
+
+    import databricks.labs.gbx.vizx._vector as _v
+    from databricks.labs.gbx.vizx import cells_as_gdf
+
+    cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
+    pdf = pd.DataFrame({"cellid": [cell], "band_level": [1]})
+    fake = _FakeSparkDF(pdf, count=1, columns=["cellid", "band_level"])
+
+    ring = h3.cell_to_boundary(h3.int_to_str(int(cell)))
+    geom = Polygon([(lng, lat) for lat, lng in ring])
+    fake_gdf = gpd.GeoDataFrame({"band_level": [1]}, geometry=[geom], crs=4326)
+
+    geopandas_calls = []
+
+    with patch.object(_v, "_dissolve_product", return_value=fake_gdf) as mock_prod:
+        with patch.object(
+            _v,
+            "_dissolve_geopandas",
+            side_effect=lambda *a, **k: geopandas_calls.append(True) or fake_gdf,
+        ):
+            result = cells_as_gdf(
+                fake,
+                extra_cols=["band_level"],
+                dissolve_by="band_level",
+                dissolve_engine="auto",
+            )
+
+    assert mock_prod.called, "_dissolve_product must be attempted"
+    assert (
+        len(geopandas_calls) == 0
+    ), "_dissolve_geopandas must NOT be called on product success"
+    assert result is fake_gdf
+
+
+def test_cells_as_gdf_oversize_guard_raises_with_remedies():
+    """Default max_rows + count > _DRIVER_SAFE_CELLS raises ValueError naming remedies."""
+    import h3
+    import pandas as pd
+
+    from databricks.labs.gbx.vizx import cells_as_gdf
+    from databricks.labs.gbx.vizx._vector import _DRIVER_SAFE_CELLS
+
+    cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
+    pdf = pd.DataFrame({"cellid": [cell], "count": [1]})
+    # count exceeds the guard threshold
+    fake = _FakeSparkDF(pdf, count=_DRIVER_SAFE_CELLS + 1, columns=["cellid", "count"])
+
+    with pytest.raises(ValueError) as exc_info:
+        cells_as_gdf(fake, extra_cols=["count"])  # no explicit max_rows
+
+    msg = str(exc_info.value)
+    assert "max_rows=" in msg
+    assert "sample_seed=" in msg
+    assert "dissolve_by=" in msg
+
+
+def test_cells_as_gdf_explicit_max_rows_skips_guard():
+    """Explicit max_rows (even large) does NOT trigger the oversize guard."""
+    import h3
+    import pandas as pd
+
+    from databricks.labs.gbx.vizx import cells_as_gdf
+    from databricks.labs.gbx.vizx._vector import _DRIVER_SAFE_CELLS
+
+    cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
+    pdf = pd.DataFrame({"cellid": [cell], "count": [1]})
+    fake = _FakeSparkDF(pdf, count=_DRIVER_SAFE_CELLS + 1, columns=["cellid", "count"])
+
+    # Should NOT raise — explicit max_rows bypasses the guard
+    gdf = cells_as_gdf(fake, extra_cols=["count"], max_rows=1)
+    assert len(gdf) == 1
+
+
+def test_cells_as_gdf_product_engine_no_fallback():
+    """dissolve_engine='product' does NOT fall back; raises on product failure."""
+    from unittest.mock import patch
+
+    import h3
+    import pandas as pd
+
+    import databricks.labs.gbx.vizx._vector as _v
+    from databricks.labs.gbx.vizx import cells_as_gdf
+
+    cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
+    pdf = pd.DataFrame({"cellid": [cell], "band_level": [1]})
+    fake = _FakeSparkDF(pdf, count=1, columns=["cellid", "band_level"])
+
+    geopandas_calls = []
+
+    with patch.object(_v, "_dissolve_product", side_effect=RuntimeError("no product")):
+        with patch.object(
+            _v,
+            "_dissolve_geopandas",
+            side_effect=lambda *a, **k: geopandas_calls.append(True),
+        ):
+            with pytest.raises(RuntimeError):
+                cells_as_gdf(
+                    fake,
+                    extra_cols=["band_level"],
+                    dissolve_by="band_level",
+                    dissolve_engine="product",
+                )
+
+    assert (
+        len(geopandas_calls) == 0
+    ), "_dissolve_geopandas must NOT be called when engine='product'"
+
+
+def test_cells_as_gdf_invalid_dissolve_engine_raises():
+    """An unrecognised dissolve_engine value raises ValueError immediately."""
+    import h3
+    import pandas as pd
+
+    from databricks.labs.gbx.vizx import cells_as_gdf
+
+    cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
+    pdf = pd.DataFrame({"cellid": [cell], "count": [1]})
+    fake = _FakeSparkDF(pdf, count=1, columns=["cellid", "count"])
+
+    with pytest.raises(ValueError, match="dissolve_engine"):
+        cells_as_gdf(
+            fake,
+            extra_cols=["count"],
+            dissolve_by="count",
+            dissolve_engine="spark",  # invalid
+        )

@@ -960,6 +960,21 @@ _Multi-row fixture: 4 Z-valued WKB POINT rows (elevation 100–250 m) over a `[0
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
+:::note Memory & scale — thin the points that feed a TIN
+
+A Delaunay TIN must hold **all** of a group's points in memory to triangulate, so peak memory is
+**proportional to the points per group** — and, unlike [`rst_binpoints_agg`](#rst_binpoints_agg),
+a triangulation is inherently global and **cannot** be made grid-bounded the way
+[`bin_points_tiled`](#rst_binpoints_agg) bounds binning. At full LiDAR density a single tile's ground
+returns (hundreds of thousands to millions of points) can exhaust worker RAM.
+
+A bare-earth TIN is near-identical from a **representative subset**, so thin the input points before
+the aggregate — `df.sample(fraction=…)` down to a bounded per-group count (e.g. ~150 k), or use
+smaller tiles. This is standard LiDAR TIN practice and keeps memory bounded regardless of source
+density. See the [LiDAR reader](../readers/lidar) and [Performance](./performance).
+
+:::
+
 ### rst_frombands_agg
 
 <Tier both/> <Impl groupedAgg/>
@@ -1431,6 +1446,160 @@ The lightweight **Python** binding accepts an optional trailing `out_crs` (strin
   pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
+/>
+
+---
+
+## LiDAR / Point-Cloud DSM {#lidar-dsm}
+
+Four functions for building raster products from LiDAR point clouds. Available on **both tiers** (`pyrx` lightweight and `rasterx` heavyweight). Load point clouds with the [`lidar_gbx` reader](../readers/lidar).
+
+### rst_binpoints {#rst_binpoints}
+
+<Tier both/>
+
+Bin a **per-row `ARRAY<DOUBLE>`** of (x, y, z) coordinate triples into a single-band
+Float32 raster tile. Each pixel carries the reduction of all points whose centroid falls
+within the pixel cell. Empty cells carry NoData (−9999). The bounding box uses a
+half-open interval on the upper x/y edges to prevent double-counting when DSM tiles
+are assembled from adjacent strips.
+
+**What it computes.** This is the point-cloud→raster (DSM-building) step: every input
+point is dropped into the grid cell its (x, y) falls in, and the pixel value is the chosen
+reduction of the z-values that landed there. With the default `"max"` that is the *tallest*
+return per cell — a surface model (DSM), exactly the input [`rst_chm`](#rst_chm) differences
+against a DEM; `"min"`/`"mean"`/`"median"`/`"count"`/`"percentile:<p>"` reduce the same
+points into other surfaces.
+
+**Signature:** `rst_binpoints(x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])`
+
+**Parameters:** `x_array`, `y_array`, `z_array` — parallel `ARRAY<DOUBLE>` columns of point coordinates and z-values; `xmin`/`ymin`/`xmax`/`ymax` — extent in CRS units; `width_px`/`height_px` — output pixel dimensions; `srid` — EPSG code; `statistic` — one of `"max"` (default, highest return for DSMs), `"min"`, `"mean"`, `"median"`, `"count"`, or `"percentile:<p>"` (e.g. `"percentile:90"`).
+
+<FunctionExamples
+  name="rst_binpoints"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
+---
+
+### rst_binpoints_agg {#rst_binpoints_agg}
+
+<Tier both/> <Impl groupedAgg/>
+
+Aggregator variant of [`rst_binpoints`](#rst_binpoints): stream **one scalar (x, y, z) point
+per row** into a DSM tile via `groupBy(...).agg(rx.rst_binpoints_agg(...))`. The
+`xmin`/`ymin`/`xmax`/`ymax`/`width_px`/`height_px`/`srid`/`statistic` arguments are
+per-group constants. The per-cell binning is identical to [`rst_binpoints`](#rst_binpoints) —
+see **What it computes** there for the reduction semantics and statistic modes — it just
+streams one point per row instead of a per-row array.
+
+The lightweight SQL aggregate returns **`BINARY`** (raster bytes). Wrap with
+`gbx_rst_fromcontent(<agg>, 'GTiff')` to rebuild a tile struct. The lightweight Python
+wrapper `rx.rst_binpoints_agg(...)` returns the full tile struct.
+
+**Signature:** `rst_binpoints_agg(x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic])`
+
+**Parameters:** `x`, `y` — scalar `DOUBLE` columns of point coordinates; `z` — scalar `DOUBLE` z-value; remaining parameters match [`rst_binpoints`](#rst_binpoints).
+
+<FunctionExamples
+  name="rst_binpoints_agg"
+  sql={rasterxSqlCode}                     sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}                pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}             scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
+/>
+
+:::note Memory & scale — binning full-density LiDAR
+
+Both `rst_binpoints_agg` (grouped — realizes a whole group's points in the worker) and
+`rst_binpoints` (scalar — realizes a row's point arrays) hold memory **proportional to the
+points per group**. That is fine at moderate density, but a full-resolution tile (millions of
+returns — e.g. a 1 km tile of 1 m LiDAR) can exhaust worker RAM.
+
+For large or full-density point clouds, use the bounded light-tier helper
+**`rx.bin_points_tiled(df, x, y, z, by=[…], xmin=…, ymin=…, xmax=…, ymax=…, width, height, srid, stat)`**.
+It runs a **two-stage native aggregation** — per-point pixel index → native `groupBy(tile, cell)`
+reduction → placement — so peak memory is the **raster grid (W×H)**, independent of point count.
+It returns the same tile struct (drops straight into `rst_chm`), and its output is **identical** to
+`groupBy(by).agg(rst_binpoints_agg(…))` for `max`/`min`/`mean`/`count`. `median`/`percentile` (which
+need every value in a cell) delegate to the buffered aggregator — decimate or use smaller tiles for
+those. Prefer `bin_points_tiled` over a `collect_list(all points) → rst_binpoints` pattern, which
+buffers the whole cloud. See [Performance](./performance) and the [LiDAR reader](../readers/lidar).
+
+:::
+
+---
+
+### rst_isoband {#rst_isoband}
+
+<Tier both/>
+
+Reclassify a raster band into value bins defined by a `breaks` array and return one
+polygon per **contiguous patch** of pixels in the same bin. Useful for producing
+height-band polygons from a CHM or DSM, or elevation isobands from a DEM.
+
+Returns `ARRAY<STRUCT<geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE>>` — one
+entry per contiguous region. `geom_wkb` is a WKB Polygon in the raster's own CRS.
+NoData pixels are excluded. Pixels below `breaks[0]` or `>= breaks[-1]` are dropped.
+
+Each bin is **half-open — `[breaks[i], breaks[i+1])`** — closed on the lower bound and
+open on the upper, so a value equal to a break belongs to the band that break *opens*.
+For example, with `breaks = array(0, 50, 100, 150, 200)`, a value of `55.0` — and `50.0`
+itself — falls in the `[50.0, 100.0)` band (`band` index 1), while `100.0` moves up to
+the `[100.0, 150.0)` band and `200.0` (equal to `breaks[-1]`) is dropped.
+
+Implemented with `numpy.digitize` + `rasterio.features.shapes` — no GDAL required.
+
+**Signature:** `rst_isoband(tile, breaks)`
+
+**Parameters:** `tile` — tile struct column; `breaks` — `ARRAY<DOUBLE>` of N+1 strictly-ascending boundary values defining N bands.
+
+<FunctionExamples
+  name="rst_isoband"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
+---
+
+### rst_chm {#rst_chm}
+
+<Tier both/>
+
+Compute a **Canopy Height Model (CHM)** from a Digital Surface Model (DSM) tile and a
+Digital Elevation Model (DEM) tile: `CHM = clamp(align(DSM → DEM grid) − DEM, min=0)`.
+
+**What it computes.** The DSM holds the height of the *top* surface in each cell (canopy,
+rooftops) and the DEM holds bare-earth ground elevation, so subtracting one from the other
+leaves the height of whatever stands above the ground — canopy or object height — in the
+DEM's units. It is a per-cell **subtraction**, not an aggregation: taking the max z per cell
+is how you build the DSM upstream (e.g. `rst_binpoints` over LiDAR returns), and `rst_chm`
+then differences that surface against the DEM.
+
+The DSM is warped onto the DEM's grid (CRS, extent, width, height) via
+nearest-neighbour resampling before subtraction. Negative differences (where the DSM
+dips below the DEM due to noise) are clamped to 0. NoData in either input propagates
+to the output. Output is a Float32 GeoTIFF tile with NoData −9999.
+
+**Signature:** `rst_chm(dsm_tile, dem_tile)`
+
+**Parameters:** `dsm_tile` — Digital Surface Model tile (defines the surface heights); `dem_tile` — Digital Elevation Model tile (defines the bare-earth reference; also defines the output grid).
+
+<FunctionExamples
+  name="rst_chm"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ---
@@ -2598,6 +2767,8 @@ Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoDa
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
 
+Per-pixel mean across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the mean of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use for temporal/ensemble composites such as cloud-reduced mean reflectance.
+
 **Signature:** `rst_combineavg(tiles: Column): Column` — Average multiple tiles (e.g. temporal composite).
 
 <FunctionExamples
@@ -2617,7 +2788,7 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns a tile where each pixel is the count of valid (non-NoData) inputs across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output (never 0 for an all-NoData pixel). Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles. Use alongside the other `rst_combine*` reducers to build multi-statistic temporal or ensemble composites.
+Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the number of inputs whose value at that location is valid; a location that is NoData in *every* input yields NoData (never 0). Use alongside the other `rst_combine*` reducers to build multi-statistic temporal or ensemble composites.
 
 **Signature:** `rst_combinecount(tiles: Column): Column` — Count of valid pixels per location.
 
@@ -2638,7 +2809,7 @@ Per-pixel count of valid (non-NoData) inputs across an `ARRAY` of aligned tiles.
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel maximum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel maximum across an `ARRAY` of aligned tiles. Use to build cloud-free maximum-NDVI composites or storm-peak accumulations.
+Per-pixel maximum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the largest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to build cloud-free maximum-NDVI composites or storm-peak accumulations.
 
 **Signature:** `rst_combinemax(tiles: Column): Column` — Maximum pixel value per location.
 
@@ -2659,7 +2830,7 @@ Per-pixel maximum across an `ARRAY` of aligned tiles. Use to build cloud-free ma
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel median; input tiles must share the same grid (shape/extent/CRS). Even-count median uses the mean of the two middle values (`numpy np.ma.median` convention). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel median across an `ARRAY` of aligned tiles. Robust to outliers — useful for seasonal median composites from time-series imagery.
+Per-pixel median across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the median of that location's valid (non-NoData) values across the stack (even counts average the two middle values; a pixel that is NoData in *every* input stays NoData). Robust to outliers — useful for seasonal median composites from time-series imagery.
 
 **Signature:** `rst_combinemedian(tiles: Column): Column` — Median pixel value per location.
 
@@ -2680,7 +2851,7 @@ Per-pixel median across an `ARRAY` of aligned tiles. Robust to outliers — usef
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel minimum; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel minimum across an `ARRAY` of aligned tiles. Use to extract the lowest-cloud-probability pixel from a time stack or to track cumulative minimum temperatures.
+Per-pixel minimum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the smallest of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to extract the lowest-cloud-probability pixel from a time stack or to track cumulative minimum temperatures.
 
 **Signature:** `rst_combinemin(tiles: Column): Column` — Minimum pixel value per location.
 
@@ -2701,7 +2872,7 @@ Per-pixel minimum across an `ARRAY` of aligned tiles. Use to extract the lowest-
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel population standard deviation (ddof=0) across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel population standard deviation across an `ARRAY` of aligned tiles. Quantifies variability in a time-series or multi-scene ensemble — high values indicate heterogeneous pixels.
+Per-pixel population standard deviation across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the population standard deviation (ddof=0) of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Quantifies variability in a time-series or multi-scene ensemble — high values indicate heterogeneous pixels.
 
 **Signature:** `rst_combinestddev(tiles: Column): Column` — Population standard deviation of pixel values per location.
 
@@ -2722,7 +2893,7 @@ Per-pixel population standard deviation across an `ARRAY` of aligned tiles. Quan
 Powered by **rasterio** + **NumPy**. Takes an `ARRAY<tile>` and returns the NoData-aware per-pixel sum across the stack; input tiles must share the same grid (shape/extent/CRS). All-NoData pixels yield NoData in the output. Align tiles with `gbx_rst_align_to` before combining.
 :::
 
-Per-pixel sum across an `ARRAY` of aligned tiles. Use to accumulate total precipitation from a daily time-series or to sum spectral flux across dates.
+Per-pixel sum across an `ARRAY` of aligned tiles. **On invocation** the tiles are read as a pixel-aligned stack — they must share grid, extent, and CRS, so align them with `rst_align_to` first — and each output pixel is the sum of that location's valid (non-NoData) values across the stack (a pixel that is NoData in *every* input stays NoData). Use to accumulate total precipitation from a daily time-series or to sum spectral flux across dates.
 
 **Signature:** `rst_combinesum(tiles: Column): Column` — Sum of pixel values per location.
 

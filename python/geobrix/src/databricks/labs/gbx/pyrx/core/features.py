@@ -123,6 +123,51 @@ def polygonize(ds, band: int = 1, connectedness: int = 4):
     return out
 
 
+def isoband(ds, breaks, band=1):
+    """Reclassify a band into value bins ``[breaks[i], breaks[i+1])`` and return one
+    ``(geom_wkb, band_index, lower, upper)`` tuple per CONTIGUOUS patch.
+
+    NoData pixels are excluded via the band mask. *breaks* must be strictly
+    ascending; values below ``breaks[0]`` or >= ``breaks[-1]`` are dropped.
+
+    Args:
+        ds:     Open rasterio DatasetReader.
+        breaks: 1-D sequence of N+1 strictly-ascending boundary values that
+                define N bands. ``[0, 5, 10]`` creates bands [0,5) and [5,10).
+        band:   1-based band index to read (default 1).
+
+    Returns:
+        List of ``(geom_wkb: bytes, band_index: int, lower: float, upper: float)``
+        — one entry per contiguous equal-band polygon. ``geom_wkb`` is a WKB
+        Polygon (2-D, raster CRS).
+    """
+    brk = np.asarray(breaks, dtype="float64")
+    if not np.all(np.diff(brk) > 0):
+        raise ValueError("breaks must be strictly ascending")
+    arr = ds.read(int(band))
+    msk = ds.read_masks(int(band))  # 0 where NoData
+    # np.digitize(right=False) maps a value v to index i such that breaks[i-1] <= v < breaks[i].
+    # Subtract 1 → band index in [0, len(brk)-2] for in-range values; 0 maps below-range → -1,
+    # and len(brk)-1 maps >= breaks[-1] → len(brk)-2+1 = out-of-range.
+    idx = np.digitize(arr, brk, right=False) - 1
+    valid = (idx >= 0) & (idx <= len(brk) - 2) & (msk != 0)
+    idx = np.where(valid, idx, -1).astype("int32")
+    out = []
+    for geom_dict, v in _shapes(
+        idx, mask=(idx >= 0), connectivity=4, transform=ds.transform
+    ):
+        bi = int(v)
+        out.append(
+            (
+                shapely.wkb.dumps(_shape(geom_dict)),
+                bi,
+                float(brk[bi]),
+                float(brk[bi + 1]),
+            )
+        )
+    return out
+
+
 def fill_nodata(ds, max_search_dist=None, smoothing_iter=None) -> bytes:
     """Interpolate across NoData gaps in a raster dataset.
 

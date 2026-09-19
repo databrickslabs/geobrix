@@ -478,6 +478,22 @@ def classify(conf: CustomGridConf, geom, resolution: int):
     )
 
 
+def _custom_hooks(conf: CustomGridConf, resolution: int) -> tuple:
+    """Build the (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step) hooks tuple
+    for a custom grid at the given resolution.
+
+    cell_step = min(cell_width, cell_height) at this resolution (density guard).
+    """
+    res = int(resolution)
+    cs = min(cell_width(conf, res), cell_height(conf, res))
+    return (
+        lambda x, y: point_to_cell_id_or_none(conf, x, y, res),
+        lambda c: _cell_geom(conf, c),
+        lambda c: k_loop(conf, c, 1),
+        cs,
+    )
+
+
 def geometry_k_ring(
     conf: CustomGridConf,
     geom,
@@ -492,12 +508,29 @@ def geometry_k_ring(
     that all custom-grid functions require.  ``coverage`` ∈
     {"coveras","polyfill","core"} selects the belongs-to basis.
 
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs; line, point, and GeometryCollection inputs
+    use the full O(area) classify + geom_expand path.
+
     geom: WKB bytes, WKT string, or Shapely geometry.
     Returns a sorted list of int (BIGINT) cell ids.
     """
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
         return []
+    if mode in _dilate._LAZY_MODES and parsed.geom_type in ("Polygon", "MultiPolygon"):
+        return sorted(
+            _dilate.geom_expand_lazy(
+                "ring",
+                int(k),
+                mode,
+                parsed,
+                int(resolution),
+                _custom_hooks(conf, int(resolution)),
+                coverage,
+            )
+        )
     cls = classify(conf, parsed, int(resolution))
     return sorted(
         _dilate.geom_expand(
@@ -518,10 +551,27 @@ def geometry_k_loop(
 
     ``coverage`` ∈ {"coveras","polyfill","core"} selects the belongs-to basis.
     Returns a sorted list of int (BIGINT) cell ids.
+
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs; line, point, and GeometryCollection inputs
+    use the full O(area) classify + geom_expand path.
     """
     parsed = parse_geom(geom)
     if parsed is None or parsed.is_empty:
         return []
+    if mode in _dilate._LAZY_MODES and parsed.geom_type in ("Polygon", "MultiPolygon"):
+        return sorted(
+            _dilate.geom_expand_lazy(
+                "loop",
+                int(k),
+                mode,
+                parsed,
+                int(resolution),
+                _custom_hooks(conf, int(resolution)),
+                coverage,
+            )
+        )
     cls = classify(conf, parsed, int(resolution))
     return sorted(
         _dilate.geom_expand(

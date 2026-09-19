@@ -6,7 +6,7 @@ sidebar_label: Intro
 import CodeFromTest from '@site/src/components/CodeFromTest';
 import GeoBrixLogo from '../../resources/images/brand/GeoBriX.png';
 
-# Introduction to GeoBrix
+# Introduction
 
 GeoBrix is a high-performance spatial processing library for Databricks. It ships two **interchangeable execution tiers** — a **lightweight** pure-Python/PySpark tier (no JAR, no init script, no native GDAL; runs on Serverless, standard/shared, Lakeflow, and ARM compute) and a **heavyweight** Scala/GDAL tier (GDAL on Apache Spark, for distributed processing on classic x86 clusters). Both register the **same function names**, so moving between them is a one-line import swap — and GeoBrix is progressively bringing the lightweight tier to full parity with the heavyweight one. Today the lightweight tier covers all of **RasterX**, all of **VectorX** (MVT, TIN surfaces, legacy-geometry migration), and all of **GridX** (CARTO quadbin, British National Grid (BNG), and custom grids). RasterX's lightweight tier is, in large part, [distributed rasterio](./api/rasterio-distributed) — the familiar rasterio/NumPy raster stack run as Spark UDFs across the cluster. See [Choosing an Execution Tier](./api/execution-tiers).
 
@@ -38,11 +38,11 @@ GeoBrix is a high-performance spatial processing library for Databricks. It ship
     background: 'var(--ifm-card-background-color, var(--ifm-background-surface-color))',
   }}>
     <img src={GeoBrixLogo} alt="GeoBrix" style={{maxWidth: '100%', maxHeight: '64px', objectFit: 'contain', marginBottom: '0.75rem'}} />
-    <div style={{fontSize: '2.75rem', fontWeight: 800, lineHeight: 1, color: '#2e7d32'}}>228</div>
+    <div style={{fontSize: '2.75rem', fontWeight: 800, lineHeight: 1, color: '#2e7d32'}}>232</div>
     <div style={{marginTop: '0.5rem', fontSize: '0.85rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--ifm-color-emphasis-700)'}}>Functions</div>
   </div>
   {[
-    {n: '146', label: 'RasterX'},
+    {n: '150', label: 'RasterX'},
     {n: '60', label: 'GridX'},
     {n: '21', label: 'VectorX'},
     {n: '1', label: 'PMTiles'},

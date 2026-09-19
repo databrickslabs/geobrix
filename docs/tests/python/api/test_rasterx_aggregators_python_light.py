@@ -122,3 +122,17 @@ def test_rst_bng_rasterize_agg_python_light_example(spark):
     assert agg_examples is not None
     result = agg_examples.rst_bng_rasterize_agg_python_light_example(spark)
     _assert_tile(result, "rst_bng_rasterize_agg")
+
+
+def test_rst_binpoints_agg_python_light_example(spark):
+    """rst_binpoints_agg returns a non-null Float32 tile struct from scalar point rows."""
+    assert agg_examples is not None
+    result = agg_examples.rst_binpoints_agg_python_light_example(spark)
+    _assert_tile(result, "rst_binpoints_agg")
+
+
+def test_rst_custom_rasterize_agg_python_light_example(spark):
+    """rst_custom_rasterize_agg returns a non-null tile struct from custom-grid cell rows."""
+    assert agg_examples is not None
+    result = agg_examples.rst_custom_rasterize_agg_python_light_example(spark)
+    _assert_tile(result, "rst_custom_rasterize_agg")

@@ -137,7 +137,9 @@ def bng_geomkring_sql_example():
     """Polyfill a geometry at given BNG resolution then expand by k ring steps.
     Returns ARRAY<STRING> — all cells within Chebyshev distance k of the polyfill.
     Geometry must be in EPSG:27700 (BNG eastings/northings); WGS84 yields empty arrays.
-    At res=3 (1km), k=1: polyfill 9 cells + 16 outer cells → 25 cells.
+    At res=3 (1km), k=1: the boundary band (8 cells for this grid-aligned 3×3)
+    plus the 16-cell outer ring → 24 cells; boundary-out does not fill the
+    interior centre.
     The optional mode parameter controls how boundary cells are classified;
     'boundary-out' (default) expands outward from the geometry edge.
     """
@@ -169,8 +171,8 @@ def bng_geomkringexplode_sql_example():
 
     SQL LATERAL is the canonical invocation for both tiers.  Geometry
     MUST be in EPSG:27700 (BNG eastings/northings) — WGS84 lon/lat yields
-    empty results.  At res=3 (1km) with k=1, the 9-cell polyfill of the
-    3km × 3km polygon expands to 25 cells.
+    empty results.  At res=3 (1km) with k=1, the boundary-out band of the
+    3km × 3km polygon expands by one ring to 24 cells (interior centre not filled).
     The optional mode parameter controls boundary classification (default 'boundary-out').
     """
     return """
@@ -453,7 +455,7 @@ bng_geomkring_sql_example_output = """
 +-----------------------------+
 |[TQ2878, TQ2879, TQ2880, ...]|
 +-----------------------------+
-... (25 cells: polyfill of BNG polygon expanded by k=1 ring)
+... (24 cells: boundary band expanded by k=1 ring; interior centre not filled)
 """
 
 bng_geomkloop_sql_example_output = """
@@ -1187,6 +1189,50 @@ custom_cellfill_sql_example_output = """
 |1     |[binary]|
 +------+--------+
 ... (BINARY — decoded: center cell 216172782113787048 filled to 5.0; neighbours unchanged)
+"""
+
+
+# ============================================================================
+# H3 Cell-Fill (both tiers)
+#
+# gbx_h3_cellfill is a grouped aggregator: interpolates NULL cells from
+# valid ring-k neighbours.  Returns BINARY (light) or
+# ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> (heavy).
+# ============================================================================
+
+
+def h3_cellfill_sql_example():
+    """Fill NULL H3 cells from valid ring-1 neighbours using mean interpolation.
+
+    Inline data: London res-8 center cell 612934495919669247 (NULL, to be
+    filled) plus two ring-1 neighbours each carrying value 5.0.  With k=1
+    and method='mean' the NULL center is filled with the mean of its
+    neighbours (5.0).
+
+    ``gbx_h3_cellfill`` is a grouped aggregator: the call must appear inside a
+    GROUP BY query.  H3 cell IDs are BIGINT.  Returns BINARY (light) or
+    ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> (heavy).
+    """
+    return """
+SELECT region,
+       gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) AS filled
+FROM (
+  VALUES
+    (1, 612934495919669247L, CAST(NULL AS DOUBLE)),
+    (1, 612934495863046143L, 5.0),
+    (1, 612934495900794879L, 5.0)
+) AS t(region, cellid, value)
+GROUP BY region;
+"""
+
+
+h3_cellfill_sql_example_output = """
++------+--------+
+|region|filled  |
++------+--------+
+|1     |[binary]|
++------+--------+
+... (BINARY — decoded: center H3 cell 612934495919669247 filled to 5.0; neighbours unchanged)
 """
 
 

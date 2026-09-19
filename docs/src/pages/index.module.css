@@ -9,13 +9,17 @@
   color: #ffffff;
 }
 
+.heroTitle {
+  margin: 0 0 1.5rem;
+  line-height: 0;
+}
+
 .heroLogo {
   display: block;
-  width: 88px;
-  height: 88px;
-  margin: 0 auto 1.25rem;
-  border-radius: 16px;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.28);
+  width: 100%;
+  max-width: 480px;
+  height: auto;
+  margin: 0 auto;
 }
 
 .buttons {

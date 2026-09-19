@@ -587,6 +587,53 @@ def test_rst_bng_rasterize_agg_python_heavy_example(spark):
     _assert_heavy_tile(result, "rst_bng_rasterize_agg")
 
 
+def test_rst_binpoints_python_heavy_example(spark):
+    """rst_binpoints returns a non-null Float32 tile struct from inline point arrays."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_binpoints_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_binpoints")
+
+
+def test_rst_binpoints_agg_python_heavy_example(spark):
+    """rst_binpoints_agg returns a non-null Float32 tile struct from scalar point rows."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_binpoints_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_binpoints_agg")
+
+
+def test_rst_custom_rasterize_agg_python_heavy_example(spark):
+    """rst_custom_rasterize_agg returns a non-null tile struct from custom-grid cell rows."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_custom_rasterize_agg_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_custom_rasterize_agg")
+
+
+def test_rst_align_to_python_heavy_example(spark):
+    """rst_align_to returns a non-null tile struct (warped to reference grid)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_align_to_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_align_to")
+
+
+def test_rst_chm_python_heavy_example(spark):
+    """rst_chm returns a non-null Float32 CHM tile struct."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_chm_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_chm")
+
+
+def test_rst_isoband_python_heavy_example(spark):
+    """rst_isoband returns a non-empty list of polygon patches from a DEM tile."""
+    assert rasterx_functions is not None
+    patches = rasterx_functions.rst_isoband_python_heavy_example(spark)
+    assert isinstance(patches, list), "rst_isoband must return a list of patches"
+    assert len(patches) > 0, "rst_isoband must return at least one patch for a DEM with real elevation"
+    patch = patches[0]
+    assert patch["geom_wkb"] is not None, "patch geom_wkb must be non-null"
+    assert patch["band"] is not None, "patch band must be non-null"
+    assert hasattr(rasterx_functions, "rst_isoband_python_heavy_example_output")
+
+
 # ---------------------------------------------------------------------------
 # Band-math examples (tabbed docs: 10 functions)
 # All heavy band-math fns currently hit the GDAL null-output-dataset bug:
@@ -647,6 +694,48 @@ def test_rst_combineavg_python_heavy_example(spark):
     assert rasterx_functions is not None
     result = rasterx_functions.rst_combineavg_python_heavy_example(spark)
     _assert_heavy_tile(result, "rst_combineavg")
+
+
+def test_rst_combinecount_python_heavy_example(spark):
+    """rst_combinecount returns a non-null tile struct (pixel-count raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinecount_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinecount")
+
+
+def test_rst_combinemax_python_heavy_example(spark):
+    """rst_combinemax returns a non-null tile struct (per-pixel maximum raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinemax_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinemax")
+
+
+def test_rst_combinemedian_python_heavy_example(spark):
+    """rst_combinemedian returns a non-null tile struct (per-pixel median raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinemedian_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinemedian")
+
+
+def test_rst_combinemin_python_heavy_example(spark):
+    """rst_combinemin returns a non-null tile struct (per-pixel minimum raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinemin_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinemin")
+
+
+def test_rst_combinestddev_python_heavy_example(spark):
+    """rst_combinestddev returns a non-null tile struct (per-pixel std-dev raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinestddev_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinestddev")
+
+
+def test_rst_combinesum_python_heavy_example(spark):
+    """rst_combinesum returns a non-null tile struct (per-pixel sum raster)."""
+    assert rasterx_functions is not None
+    result = rasterx_functions.rst_combinesum_python_heavy_example(spark)
+    _assert_heavy_tile(result, "rst_combinesum")
 
 
 def test_rst_derivedband_python_heavy_example(spark):
@@ -1064,3 +1153,18 @@ def test_h3_cell_bbox_python_heavy_example(spark):
         assert bbox is not None
         assert bbox["xmin"] <= bbox["xmax"] and bbox["ymin"] <= bbox["ymax"]
     assert hasattr(rasterx_functions, "h3_cell_bbox_python_heavy_example_output")
+
+
+def test_pmtiles_agg_python_heavy_example(spark):
+    """pmtiles_agg (heavy tier) returns a valid PMTile v3 BINARY blob with 9 tiles."""
+    import struct  # noqa: PLC0415
+
+    assert rasterx_functions is not None
+    result = rasterx_functions.pmtiles_agg_python_heavy_example(spark)
+    assert result is not None, "pmtiles_agg (heavy): result is None"
+    data = bytes(result)
+    assert data[:7] == b"PMTiles", f"pmtiles_agg (heavy): bad magic: {data[:8]!r}"
+    assert data[7] == 3, f"pmtiles_agg (heavy): bad version byte: {data[7]}"
+    addressed = struct.unpack_from("<Q", data, 72)[0]
+    assert addressed == 9, f"pmtiles_agg (heavy): expected 9 addressed tiles; got {addressed}"
+    assert hasattr(rasterx_functions, "pmtiles_agg_python_heavy_example_output")

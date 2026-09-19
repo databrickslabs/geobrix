@@ -1,25 +1,29 @@
-"""H3 geometry-aware kring/kloop — light-tier public API.
+"""H3 geometry-aware kring/kloop and H3 aggregators — GridX H3 public API.
 
-h3 is light-tier only (no Scala/heavy equivalent), but it now behaves exactly
-like the other grids: a single geom-taking function does the whole job in pure
-Python via the ``h3`` library (polyfill + neighbour walk), so it needs no
-Databricks product functions and runs anywhere (local + Serverless + classic).
+The geometry-aware functions (geomkring/geomkloop) are light-tier only: they run
+in pure Python via the ``h3`` library and have no Scala/heavy equivalent.
+
+``h3_cellfill`` is a grouped aggregator available on both tiers. The heavy Scala
+tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``; the lightweight
+pygx tier returns ``BINARY`` (see :func:`h3_cellfill` for the divergence note).
+
+    from databricks.labs.gbx.gridx.h3 import functions as hx
+
+    hx.register(spark)  # registers heavy H3_CellFill from the JAR
+    df.groupBy("region").agg(hx.h3_cellfill("cellid", "value"))
+
+For geometry-aware kring/kloop, ``register`` (pygx) is sufficient::
 
     from databricks.labs.gbx.pygx.functions import register
-    from databricks.labs.gbx.gridx.h3.functions import geomkring, geomkloop
+    from databricks.labs.gbx.gridx.h3.functions import geomkring
 
     register(spark)
     df.withColumn("kring", geomkring("geom_col", resolution=9, k=1))
-
-These are thin aliases of the registered ``gbx_h3_geomkring`` / ``gbx_h3_geomkloop``
-UDFs — the same functions SQL calls — so the Python and SQL surfaces are one and
-the same. The explode variants are SQL-``LATERAL`` table functions with no Column
-form (see pygx.functions.h3_geomkringexplode).
 """
 
 from typing import Union
 
-from pyspark.sql import Column
+from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as F
 
 from databricks.labs.gbx.pygx import functions as _pygx
@@ -27,9 +31,64 @@ from databricks.labs.gbx.pygx import functions as _pygx
 ColLike = Union[Column, str, bool, int, float, bytes]
 
 
+def register(_spark: SparkSession) -> None:
+    """Register GeoBrix H3 functions (heavy tier) with the Spark session.
+
+    Loads ``gbx_h3_cellfill`` from the GeoBrix JAR. Call once per session
+    before using :func:`h3_cellfill` with the heavy tier.
+
+    Args:
+        _spark: Active Spark session.
+    """
+    _spark = SparkSession.builder.getOrCreate()
+    _spark.read.format("register_ds").option("functions", "gridx.h3").load().collect()
+
+
 def _geom(x: Union[str, Column]) -> Column:
     """A bare string is a column NAME here (per the documented usage); wrap it."""
     return F.col(x) if isinstance(x, str) else x
+
+
+def _col(x: ColLike) -> Column:
+    """Auto-promote scalars via F.lit(); strings stay as column references."""
+    if isinstance(x, Column):
+        return x
+    if isinstance(x, str):
+        return F.col(x)
+    return F.lit(x)
+
+
+def h3_cellfill(
+    cellid: ColLike,
+    value: ColLike,
+    k: ColLike = 1,
+    method: ColLike = "mean",
+    power: ColLike = 2.0,
+) -> Column:
+    """Grouped aggregator: fill NULL H3 cells from valid neighbours (heavy h3 tier).
+
+    Use with ``groupBy(...).agg(hx.h3_cellfill(...))`` to interpolate missing
+    values. Returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+
+    Args:
+        cellid: Column of BIGINT H3 cell ids.
+        value: Column of DOUBLE values (NULL marks cells to be filled).
+        k: Neighbour ring radius (default ``1``).
+        method: Interpolation method — ``'mean'`` (default) or ``'idw'``.
+        power: IDW power parameter (default ``2.0``; ignored for ``'mean'``).
+
+    Returns:
+        Column of ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    """
+    _method = F.lit(method) if isinstance(method, str) else _col(method)
+    return F.call_function(
+        "gbx_h3_cellfill",
+        _col(cellid),
+        _col(value),
+        _col(k),
+        _method,
+        _col(power),
+    )
 
 
 def geomkring(

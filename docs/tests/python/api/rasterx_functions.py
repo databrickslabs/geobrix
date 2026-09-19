@@ -2441,6 +2441,210 @@ rst_combineavg_python_heavy_example_output = """
 
 
 # ---------------------------------------------------------------------------
+# rst_combinecount -- count valid inputs per pixel
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (pixel-count raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinecount_python_heavy_example(spark):
+    """Count valid (non-NoData) inputs per pixel across aligned tiles."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinecount(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinecount_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(pixel-count raster: 3 valid inputs per pixel from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinemax -- per-pixel maximum
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinemax_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel maximum."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinemax(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinemax_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel maximum raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinemedian -- per-pixel median
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinemedian_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel median."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinemedian(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinemedian_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel median raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinemin -- per-pixel minimum
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinemin_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel minimum."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinemin(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinemin_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel minimum raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinestddev -- per-pixel population std-dev
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinestddev_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by taking per-pixel population std-dev."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinestddev(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinestddev_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel population std-dev raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_combinesum -- per-pixel sum
+# Fixture: multi_band_tiles_df_heavy(spark) (3 rows: one per band)
+# Output: tile struct (merged raster)
+# ---------------------------------------------------------------------------
+
+
+def rst_combinesum_python_heavy_example(spark):
+    """Combine 3 aligned band tiles by summing per pixel."""
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    rx.register(spark)
+    from ._fixtures import multi_band_tiles_df_heavy  # noqa: PLC0415
+
+    df = multi_band_tiles_df_heavy(spark)
+    result = (
+        df.groupBy("region")
+        .agg(rx.rst_combinesum(f.collect_list("tile")).alias("tile"))
+        .first()
+    )
+    return result["tile"]
+
+
+rst_combinesum_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(per-pixel sum raster from 3 input tiles)
+"""
+
+
+# ---------------------------------------------------------------------------
 # rst_derivedband -- apply Python UDF to produce derived band
 # Fixture: multiband_tile_df_heavy(spark) (3 bands)
 # Output: tile struct (raster with derived band)
@@ -3252,6 +3456,50 @@ rst_quadbin_tessellate_python_heavy_example_output = """
 """
 
 
+def rst_custom_tessellate_python_heavy_example(spark):
+    """Tessellate a raster into custom-grid cells (heavy tier LATERAL generator).
+
+    NOTE: The raster must already be in the custom grid's native CRS — no
+    automatic reprojection. Synthesizes a single-band BNG raster (EPSG:27700)
+    over a 4km London square and tessellates into four 2km custom-grid cells
+    (resolution 1). The custom grid has integer BNG metre coordinates.
+    """
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    _LONDON_4KM_WKT = (
+        "POLYGON((529000 179000, 533000 179000, "
+        "533000 183000, 529000 183000, 529000 179000))"
+    )
+    df = spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(_LONDON_4KM_WKT),
+            f.lit(1.0),
+            f.lit(529000.0), f.lit(179000.0),
+            f.lit(533000.0), f.lit(183000.0),
+            f.lit(40), f.lit(40), f.lit(27700),
+        ).alias("tile")
+    )
+    df.createOrReplaceTempView("bng_london_rasters")
+    # Custom grid covering the same 4km BNG extent; resolution 1 = four 2km cells.
+    custom_grid_sql = "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
+    return spark.sql(
+        f"SELECT t.* FROM bng_london_rasters, "
+        f"LATERAL gbx_rst_custom_tessellate(tile, {custom_grid_sql}, 1) t"
+    ).take(3)
+
+
+rst_custom_tessellate_python_heavy_example_output = """
++--------------------+-----------------------------------------------------------+
+|cellid              |raster                                                     |
++--------------------+-----------------------------------------------------------+
+|<custom cell bigint>|{0, <raster bytes>, null, {driver -> GTiff, ...}}          |
++--------------------+-----------------------------------------------------------+
+(one v2-Tile row per custom-grid cell; cellid is BIGINT encoding the custom cell)
+"""
+
+
 # ============================================================================
 # Generator Functions (Heavy Tier)
 # ============================================================================
@@ -3923,6 +4171,190 @@ rst_bng_rastertogridstddev_python_heavy_example_output = """
 """
 
 
+# ============================================================================
+# Custom-Grid Rastertogrid Functions — Heavy Tier
+#
+# The heavy tier returns ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>>.
+# Each inner array is one band's results; each struct carries a BIGINT custom
+# cell id and a DOUBLE aggregate measure.
+#
+# The custom grid requires INTEGER coordinates (all bounds and cell sizes are
+# truncated to int). We use a 4km London BNG square (EPSG:27700 metres) and
+# synthesize a matching raster via rst_rasterize so raster coordinates fall
+# within the grid bounds (no reprojection needed — both are EPSG:27700).
+# gbx_custom_grid is registered by the heavy test fixture via gx.register(spark).
+# ============================================================================
+
+_LONDON_4KM_WKT_HEAVY = (
+    "POLYGON((529000 179000, 533000 179000, "
+    "533000 183000, 529000 183000, 529000 179000))"
+)
+
+
+def _custom_grid_col():
+    """Return a Column expression for the 4km London BNG custom grid spec."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    return f.call_function(
+        "gbx_custom_grid",
+        f.lit(529000), f.lit(533000), f.lit(179000), f.lit(183000),
+        f.lit(2), f.lit(4000), f.lit(4000), f.lit(27700),
+    )
+
+
+def _custom_raster_df(spark):
+    """Synthesize a single-band BNG raster over the 4km London custom grid."""
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    return spark.range(1).select(
+        rx.rst_rasterize(
+            f.lit(_LONDON_4KM_WKT_HEAVY),
+            f.lit(1.0),
+            f.lit(529000.0), f.lit(179000.0),
+            f.lit(533000.0), f.lit(183000.0),
+            f.lit(40), f.lit(40), f.lit(27700),
+        ).alias("tile")
+    )
+
+
+def rst_custom_rastertogridavg_python_heavy_example(spark):
+    """Aggregate raster values to custom-grid cells using average (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridavg("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridavg_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(ARRAY<ARRAY<struct(cellID BIGINT, measure DOUBLE)>> — outer per band, inner per custom cell)
+"""
+
+
+def rst_custom_rastertogridcount_python_heavy_example(spark):
+    """Count pixels per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridcount("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridcount_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1600.0), ...]]
+(pixel count per band × custom-grid cell; measure is DOUBLE)
+"""
+
+
+def rst_custom_rastertogridmax_python_heavy_example(spark):
+    """Get maximum values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridmax("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridmax_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(max value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridmin_python_heavy_example(spark):
+    """Get minimum values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridmin("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridmin_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(min value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridmedian_python_heavy_example(spark):
+    """Get median values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridmedian("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridmedian_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1.0), ...]]
+(median value per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridsum_python_heavy_example(spark):
+    """Sum pixel values per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridsum("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridsum_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=1600.0), ...]]
+(sum of pixel values per band × custom-grid cell)
+"""
+
+
+def rst_custom_rastertogridvariance_python_heavy_example(spark):
+    """Get population variance per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridvariance("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridvariance_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=0.0), ...]]
+(population variance per band × custom-grid cell; 0.0 when all pixels equal)
+"""
+
+
+def rst_custom_rastertogridstddev_python_heavy_example(spark):
+    """Get population standard deviation per custom-grid cell (heavy tier)."""
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    df = _custom_raster_df(spark)
+    result = df.select(
+        rx.rst_custom_rastertogridstddev("tile", _custom_grid_col(), f.lit(0)).alias("custom_grid")
+    ).first()["custom_grid"]
+    return result
+
+
+rst_custom_rastertogridstddev_python_heavy_example_output = """
+[[Row(cellID=<bigint>, measure=0.0), ...]]
+(population standard deviation per band × custom-grid cell; 0.0 when all pixels equal)
+"""
+
+
 def h3_cell_bbox_python_heavy_example(spark):
     """Bounding box STRUCT for H3 cells in a given CRS (heavy tier scalar).
 
@@ -3954,4 +4386,351 @@ h3_cell_bbox_python_heavy_example_output = """
 |617733151020810239|{-74.02, 40.70, -74.01, 40.71}|
 +------------------+------------------------------+
 (STRUCT<xmin, ymin, xmax, ymax> per H3 cell, in EPSG:4326)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_binpoints — bin parallel x/y/z arrays into a Float32 raster tile (heavy tier)
+# Fixture: inline 3-point BNG (EPSG:27700) set, 10×10 pixel grid over 1 km extent
+# Output: tile struct (returns a Float32 raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_binpoints_python_heavy_example(spark):
+    """Bin per-row ARRAY<DOUBLE> x/y/z columns into a Float32 raster tile via the heavy rasterx tier.
+
+    Uses a tiny 3-point inline BNG (EPSG:27700) set covering a 1 km extent at 10×10 pixels
+    (100 m ground resolution). Each output pixel carries the max z-value of points whose centre
+    falls in that pixel; empty pixels carry NoData (-9999.0). No external raster file needed.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx
+    from pyspark.sql import functions as f
+
+    df = spark.range(1).select(
+        f.array(f.lit(550100.0), f.lit(550200.0), f.lit(550300.0)).alias("x"),
+        f.array(f.lit(180100.0), f.lit(180200.0), f.lit(180500.0)).alias("y"),
+        f.array(f.lit(42.5), f.lit(45.1), f.lit(38.7)).alias("z"),
+    )
+    result = df.select(
+        rx.rst_binpoints(
+            "x", "y", "z",
+            f.lit(550000.0), f.lit(180000.0),
+            f.lit(551000.0), f.lit(181000.0),
+            f.lit(10), f.lit(10),
+            f.lit(27700),
+        ).alias("tile")
+    ).first()
+    return result["tile"]
+
+
+rst_binpoints_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 10×10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_binpoints_agg -- bin one scalar (x, y, z) point per row into a tile
+# Fixture: synthesized 3 BNG (EPSG:27700) scalar rows over a 1 km extent
+# Output: tile struct (returns a Float32 raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_binpoints_agg_python_heavy_example(spark):
+    """Bin one scalar (x, y, z) point per row into a Float32 raster tile per group via the heavy rasterx tier.
+
+    Multi-row fixture: 3 rows of scalar BNG (EPSG:27700) x/y/z coordinates over
+    a 1 km extent [550000, 180000, 551000, 181000] at 10×10 pixels.
+    Grouped by region, producing 1 Float32 tile row where each pixel holds the
+    max z-value of points falling in that pixel; empty pixels carry NoData (-9999.0).
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from pyspark.sql.types import (
+        DoubleType,
+        StringType,
+        StructField,
+        StructType,
+    )  # noqa: PLC0415
+
+    rows = [
+        ("R1", 550100.0, 180100.0, 42.5),
+        ("R1", 550200.0, 180200.0, 45.1),
+        ("R1", 550300.0, 180500.0, 38.7),
+    ]
+    schema = StructType(
+        [
+            StructField("region", StringType()),
+            StructField("x", DoubleType()),
+            StructField("y", DoubleType()),
+            StructField("z", DoubleType()),
+        ]
+    )
+    df = spark.createDataFrame(rows, schema)
+    result = (
+        df.groupBy("region")
+        .agg(
+            rx.rst_binpoints_agg(
+                "x",
+                "y",
+                "z",
+                f.lit(550000.0),
+                f.lit(180000.0),
+                f.lit(551000.0),
+                f.lit(181000.0),
+                f.lit(10),
+                f.lit(10),
+                f.lit(27700),
+            ).alias("tile")
+        )
+        .first()
+    )
+    return result["tile"]
+
+
+rst_binpoints_agg_python_heavy_example_output = """
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_custom_rasterize_agg -- burn custom-grid cells into one tile per group
+# Fixture: 3 BNG custom-grid cell rows at resolution 1 (2km cells) in a 4km
+#          London extent; each row carries a burn value.
+# Output: tile struct (returns a raster tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_custom_rasterize_agg_python_heavy_example(spark):
+    """Rasterize custom-grid cell/value rows into one tile per group via the heavy rasterx tier.
+
+    Multi-row fixture: 3 rows of (custom-grid cell id BIGINT, burn value) at
+    resolution 1 (2km cells) inside a 4km London BNG extent
+    [529000-533000 E, 179000-183000 N, EPSG:27700].  Grouped by region, producing
+    1 rasterized GTiff tile in EPSG:27700.  Cell IDs are computed via
+    gbx_custom_pointascell for centroids of 3 of the 4 resolution-1 cells.
+    """
+    if rx is None:
+        raise ImportError("rasterx not installed")
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+
+    rx.register(spark)
+    cx.register(spark)  # registers gbx_custom_pointascell and gbx_custom_grid
+
+    _GRID_SQL = (
+        "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
+    )
+    # Compute three resolution-1 cell IDs via SQL (three of the four 2km cells).
+    # Use SELECT-from-VALUES: UDFs cannot appear directly in VALUES clauses.
+    spark.sql(f"""
+        CREATE OR REPLACE TEMP VIEW _custom_rasterize_cells_heavy AS
+        SELECT region,
+               gbx_custom_pointascell(wkt, {_GRID_SQL}, 1) AS cellid,
+               val AS value
+        FROM (VALUES
+            ('R1', 'POINT(530000 180000)', cast(1.0 as double)),
+            ('R1', 'POINT(532000 180000)', cast(2.0 as double)),
+            ('R1', 'POINT(530000 182000)', cast(3.0 as double))
+        ) AS t(region, wkt, val)
+    """)
+    df = spark.table("_custom_rasterize_cells_heavy")
+
+    result = (
+        df.groupBy("region")
+        .agg(
+            rx.rst_custom_rasterize_agg(
+                "cellid", _custom_grid_col(), f.col("value"),
+                out_srid=f.lit(27700),  # heavy tier requires non-null out_srid
+                kring_pad=f.lit(0),     # no padding: avoid expanding outside grid bounds
+            ).alias("tile")
+        )
+        .first()
+    )
+    spark.catalog.dropTempView("_custom_rasterize_cells_heavy")
+    return result["tile"]
+
+
+rst_custom_rasterize_agg_python_heavy_example_output = """
++------+-----------------------------------------------------------+
+|region|tile                                                       |
++------+-----------------------------------------------------------+
+|R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++------+-----------------------------------------------------------+
+(one v2 Tile per group — raster bytes populated, path null; three 2km custom-grid cells burned)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_align_to — warp a tile onto a reference tile's grid (heavy tier)
+# Fixture: DEM used for both tile and reference_tile (no-op warp)
+# Output: tile struct (warped to reference grid)
+# ---------------------------------------------------------------------------
+
+
+def rst_align_to_python_heavy_example(spark):
+    """Warp a tile to match a reference tile's grid via the heavy rasterx tier.
+
+    Loads the DEM fixture (64×64 Float32, EPSG:32618) and uses it as both the
+    input tile and the reference grid — a no-op warp that demonstrates the API.
+    In production, pass two tiles on different grids; the output will have the
+    reference tile's exact CRS, extent, and pixel dimensions.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from ._fixtures import dem_path  # noqa: PLC0415
+
+    rx.register(spark)
+    dem = str(dem_path())
+    df = spark.read.format("binaryFile").load(dem).select(
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile"),
+        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("reference_tile"),
+    )
+    result = df.select(rx.rst_align_to("tile", "reference_tile").alias("tile")).first()
+    return result["tile"]
+
+
+rst_align_to_python_heavy_example_output = """
++-----------------------------------------------------------+
+|tile                                                       |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(tile warped to reference grid; output has reference tile's CRS, extent, width, height)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_chm — Canopy Height Model = clamp(align(DSM→DEM) - DEM, min=0) (heavy tier)
+# Fixture: DEM used as both DSM and DEM (degenerate CHM = 0 everywhere)
+# Output: tile struct (Float32 CHM tile)
+# ---------------------------------------------------------------------------
+
+
+def rst_chm_python_heavy_example(spark):
+    """Compute Canopy Height Model from DSM and DEM tiles via the heavy rasterx tier.
+
+    Uses the DEM fixture (64×64 Float32, EPSG:32618) as both DSM and DEM — a
+    degenerate case where CHM = clamp(DSM - DEM, min=0) = 0 everywhere, but
+    demonstrates the API. In production, pass a LiDAR-derived DSM (e.g. from
+    ``rst_binpoints``) and a matching DEM tile to compute real canopy heights.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from ._fixtures import dem_tile_df_heavy  # noqa: PLC0415
+
+    rx.register(spark)
+    df = dem_tile_df_heavy(spark)
+    result = df.select(rx.rst_chm("tile", "tile").alias("chm")).first()
+    return result["chm"]
+
+
+rst_chm_python_heavy_example_output = """
++-----------------------------------------------------------+
+|chm                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 CHM tile: clamp(DSM - DEM, min=0); NoData propagates from either input)
+"""
+
+
+# ---------------------------------------------------------------------------
+# rst_isoband — reclassify a raster band into elevation bands → polygons (heavy tier)
+# Fixture: DEM (dem_small.tif, 0–311 m elevation range, EPSG:32618)
+# Output: ARRAY<struct(geom_wkb, band, lower, upper)>
+# ---------------------------------------------------------------------------
+
+
+def rst_isoband_python_heavy_example(spark):
+    """Reclassify a DEM tile into elevation bands and return contour polygons (heavy tier).
+
+    Uses the DEM fixture (64×64 Float32, EPSG:32618, 0–311 m elevation range).
+    Five half-open break intervals [0,50), [50,100), [100,150), [150,200), [200,311)
+    cover the full elevation range. Returns ARRAY<struct(geom_wkb, band, lower, upper)>
+    — one struct per contiguous patch of pixels in the same elevation band.
+    """
+    from databricks.labs.gbx.rasterx import functions as rx  # noqa: PLC0415
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from ._fixtures import dem_tile_df_heavy  # noqa: PLC0415
+
+    rx.register(spark)
+    df = dem_tile_df_heavy(spark)
+    result = df.select(
+        rx.rst_isoband(
+            "tile",
+            f.array(
+                f.lit(0.0), f.lit(50.0), f.lit(100.0),
+                f.lit(150.0), f.lit(200.0), f.lit(311.0),
+            ),
+        ).alias("patches")
+    ).first()
+    return result["patches"]
+
+
+rst_isoband_python_heavy_example_output = """
++-----------------------------------------------------------+
+|patches                                                    |
++-----------------------------------------------------------+
+|[{[BINARY], 0, 0.0, 50.0}, {[BINARY], 1, 50.0, 100.0}, ...]|
++-----------------------------------------------------------+
+(ARRAY of per-patch structs: geom_wkb WKB polygon in raster CRS, band index, lower/upper break values)
+"""
+
+
+# ---------------------------------------------------------------------------
+# pmtiles_agg -- fold (z, x, y, bytes) tile rows into a PMTiles v3 archive (heavy tier)
+# Fixture: 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2])
+# Output: BINARY (PMTiles v3 archive bytes)
+# ---------------------------------------------------------------------------
+
+
+def pmtiles_agg_python_heavy_example(spark):
+    """Aggregate (z, x, y, bytes) tile rows into a PMTiles v3 BINARY blob using the heavy pmtiles tier.
+
+    Multi-row fixture: 9 synthetic tiles at zoom level 2 (x in [0,2], y in [0,2]).
+    Each tile payload is a short ASCII byte string.  The heavy tier UDAF is registered
+    via ``px.register(spark)`` and runs as a native Scala GROUPED_AGG expression.
+    Returns BINARY containing the full PMTile v3 archive with magic bytes b'PMTiles'.
+    """
+    from databricks.labs.gbx.pmtiles import functions as px  # noqa: PLC0415
+
+    px.register(spark)
+
+    test_data = [
+        (2, x, y, f"tile_{x}_{y}".encode("utf-8"))
+        for x in range(3)
+        for y in range(3)
+    ]
+    df = spark.createDataFrame(test_data, ["z", "x", "y", "tile_bytes"])
+    result = (
+        df.agg(
+            px.pmtiles_agg(
+                "tile_bytes",
+                "z",
+                "x",
+                "y",
+                '{"name":"my_tileset"}',
+            ).alias("pmt")
+        )
+        .first()
+    )
+    return result["pmt"]
+
+
+pmtiles_agg_python_heavy_example_output = """
++------------------------------------------+
+|pmt                                       |
++------------------------------------------+
+|[50 4D 54 69 6C 65 73 03 ...]             |
++------------------------------------------+
+(BINARY: PMTiles v3 archive — starts with magic bytes b'PMTiles' + version byte 3; contains 9 synthetic tiles at zoom 2)
 """

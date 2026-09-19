@@ -20,7 +20,7 @@ fed to the shared ``_dilate`` engine. h3 uses (lat, lng) order; shapely uses
 
 import h3
 from shapely import from_wkb, from_wkt
-from shapely.geometry import MultiPolygon
+from shapely.geometry import MultiLineString, MultiPoint, MultiPolygon
 
 from databricks.labs.gbx.pygx import _dilate
 
@@ -129,9 +129,27 @@ def classify(geom, res):
     empty since no polygon cell has its centre inside — or is contained by — a point
     or line).
 
+    For GeometryCollection inputs (mixed-dimension), members are flattened and grouped
+    by dimension into Multi* geometries, each group is classified via the corresponding
+    path, and the results are unioned.  This mirrors _dilate.classify's GC handling.
+
     Three bases are built for the polygon path via the h3 native containment modes:
     'overlap' → cover, 'center' → centroid (the "polyfill" coverage), 'full' → core.
     """
+    if geom.geom_type == "GeometryCollection":
+        members = list(_dilate._flatten_members(geom))
+        if not members:
+            return _dilate.Classification(*(set() for _ in range(6)))
+        polys, lines, points = _dilate._group_by_dimension(members)
+        groups = []
+        if polys:
+            groups.append(MultiPolygon(polys) if len(polys) > 1 else polys[0])
+        if lines:
+            groups.append(MultiLineString(lines) if len(lines) > 1 else lines[0])
+        if points:
+            groups.append(MultiPoint(points) if len(points) > 1 else points[0])
+        return _dilate._union_classifications(classify(g, res) for g in groups)
+
     dim = _dilate._geom_dimension(geom)
 
     if dim != 2:

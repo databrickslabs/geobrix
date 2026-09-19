@@ -552,9 +552,12 @@ def bng_geomkring_python_light_example(spark):
     """Polyfill a BNG geometry then expand by k ring steps (light pygx tier).
 
     Reads the ``bng_polygons`` setup view (3km × 3km polygon in EPSG:27700).
-    At res=3 (1km) the polyfill covers 9 cells; k=1 expands by one ring →
-    25 cells total.  Returns ARRAY<STRING>.  Identical to the heavyweight output
-    (AGREE).  Geometry MUST be in EPSG:27700; WGS84 yields an empty array.
+    At res=3 (1km) the default ``boundary-out`` mode takes the geometry's
+    boundary band (8 cells for this grid-aligned 3×3) and expands it by one
+    ring outward → 24 cells (the 5×5 envelope minus the untouched interior
+    centre — boundary-out does not fill the interior).  Returns ARRAY<STRING>.
+    Identical to the heavyweight output (AGREE).  Geometry MUST be in
+    EPSG:27700; WGS84 yields an empty array.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
@@ -572,7 +575,7 @@ bng_geomkring_python_light_example_output = """
 +-----------------------------+
 |[TQ2878, TQ2879, TQ2880, ...]|
 +-----------------------------+
-... (25 cells: polyfill of BNG polygon expanded by k=1 ring)
+... (24 cells: boundary band expanded by k=1 ring; interior centre not filled)
 """
 
 
@@ -840,7 +843,7 @@ def bng_geomkringexplode_python_light_example(spark):
     calling it as a Column expression raises ``NotImplementedError``.  Use
     SQL ``LATERAL`` via ``spark.sql(…)``.  Geometry MUST be in EPSG:27700
     (BNG eastings/northings) — WGS84 lon/lat yields empty results.
-    At res=3 (1km), k=1: the 9-cell polyfill expands to 25 cells.
+    At res=3 (1km), k=1: the boundary-out band expands by one ring to 24 cells.
     Each row carries a single ``cellid STRING`` column.
     Identical to the heavyweight SQL output (AGREE).
     """
@@ -862,7 +865,7 @@ bng_geomkringexplode_python_light_example_output = """
 |TQ2880|
 |...   |
 +------+
-... (25 rows: polyfill of BNG polygon at res=3 expanded by k=1 ring)
+... (24 rows: boundary band at res=3 expanded by k=1 ring; interior centre not filled)
 """
 
 
@@ -1600,7 +1603,7 @@ quadbin_geomkloopexplode_python_light_example_output = """
 #   custom_grids — grid struct + cell + point; uses the BNG-like 1km grid.
 #
 # Geometry: 3km × 3km BNG polygon centred on London (EPSG:27700 coordinates).
-# At resolution 3 (1km cells), the polyfill covers 9 cells; k=1 expands to 25.
+# At resolution 3 (1km cells), the polyfill covers 9 cells; boundary-out k=1 → 24.
 # All four tabs share ONE example per function (AGREE — no tier divergence).
 # ---------------------------------------------------------------------------
 
@@ -1635,9 +1638,9 @@ custom_geomkring_python_light_example_output = """
 +-------------------------------------------+
 |kring                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (55 cells at k=1)]|
+|[72057594038779906, ..., (56 cells at k=1)]|
 +-------------------------------------------+
-... (55 BIGINT cell IDs — covering cells of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
+... (56 BIGINT cell IDs — boundary band of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
 """
 
 
@@ -1663,9 +1666,9 @@ custom_geomkloop_python_light_example_output = """
 +-------------------------------------------+
 |kloop                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (19 cells at k=1)]|
+|[72057594038779906, ..., (32 cells at k=1)]|
 +-------------------------------------------+
-... (19 BIGINT cell IDs — outer ring at k=1 around the offset polygon at res=1 (500m))
+... (32 BIGINT cell IDs — hollow outer band at k=1 around the offset polygon at res=1 (500m))
 """
 
 
@@ -1880,4 +1883,326 @@ h3_geomkloopexplode_python_light_example_output = """
 |...               |
 +------------------+
 ... (one BIGINT row per H3 cell in the outer ring at k=1, interior cells excluded)
+"""
+
+
+# ---------------------------------------------------------------------------
+# Batch E: cellfill (grouped aggregate) + kloop / distance (scalar)
+#
+# bng_cellfill, custom_cellfill, h3_cellfill, quadbin_cellfill — aggregators
+# custom_kloop, quadbin_kloop — hollow-ring scalar (ARRAY<BIGINT>)
+# custom_distance — Chebyshev cell-to-cell distance (BIGINT)
+#
+# cellfill examples use inline DataFrames (group-by requires ≥2 rows per group)
+# rather than single-row fixture views.  One NULL center cell surrounded by
+# ring-1 neighbours carrying value 5.0; after fill the center is 5.0 (mean).
+#
+# Light tier returns BINARY; heavy tier returns ARRAY<STRUCT<cellid, value>>.
+# ---------------------------------------------------------------------------
+
+
+# -- BNG cellfill ------------------------------------------------------------
+
+
+def bng_cellfill_python_light_example(spark):
+    """Grouped aggregate: fill a NULL BNG cell from ring-1 neighbours (light pygx tier).
+
+    Inline data: London 100m cell ``TQ300800`` (NULL) surrounded by four ring-1
+    neighbours each with value 5.0.  Groups under ``region=1``.  With ``k=1``
+    and ``method='mean'`` the NULL center is filled with the unweighted mean of
+    its neighbours (5.0).
+
+    The **light** tier returns **BINARY** (serialised fill result).
+    The heavy tier returns ``ARRAY<STRUCT<cellid STRING, value DOUBLE>>``.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    gx.register(spark)
+    df = spark.createDataFrame(
+        [
+            (1, "TQ300800", None),
+            (1, "TQ299800", 5.0),
+            (1, "TQ301800", 5.0),
+            (1, "TQ300799", 5.0),
+            (1, "TQ300801", 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            gx.bng_cellfill(
+                f.col("cellid"), f.col("value"), f.lit(1), f.lit("mean"), f.lit(2.0)
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+bng_cellfill_python_light_example_output = """
++------+--------+
+|region|filled  |
++------+--------+
+|1     |[binary]|
++------+--------+
+... (BINARY — decoded: TQ300800 filled to 5.0; ring-1 neighbours unchanged)
+"""
+
+
+# -- Quadbin cellfill --------------------------------------------------------
+
+
+def quadbin_cellfill_python_light_example(spark):
+    """Grouped aggregate: fill a NULL quadbin cell from ring-1 neighbours (light pygx tier).
+
+    Inline data: London z=10 center cell ``5234261469560717311`` (NULL) plus
+    two ring-1 neighbours each with value 5.0.  After fill the center equals
+    the mean of its neighbours (5.0).
+
+    The **light** tier returns **BINARY**.
+    The heavy tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    gx.register(spark)
+    # Hardcoded London z10 cell and two neighbours; tier-agnostic.
+    df = spark.createDataFrame(
+        [
+            (1, 5234261469560717311, None),
+            (1, 5234261469560848383, 5.0),
+            (1, 5234261469560586239, 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            gx.quadbin_cellfill(
+                f.col("cellid"), f.col("value"), f.lit(1), f.lit("mean"), f.lit(2.0)
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+quadbin_cellfill_python_light_example_output = """
++------+--------+
+|region|filled  |
++------+--------+
+|1     |[binary]|
++------+--------+
+... (BINARY — decoded: London z10 center cell filled to 5.0; ring-1 neighbours unchanged)
+"""
+
+
+# -- H3 cellfill -------------------------------------------------------------
+
+
+def h3_cellfill_python_light_example(spark):
+    """Grouped aggregate: fill a NULL H3 cell from ring-1 neighbours (light pygx tier).
+
+    Inline data: London res-8 center H3 cell ``612934495919669247`` (NULL) plus two
+    ring-1 neighbours each with value 5.0.  After fill the center equals the mean
+    of its neighbours (5.0).
+
+    The **light** tier returns **BINARY**.
+    The heavy tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    gx.register(spark)
+    df = spark.createDataFrame(
+        [
+            (1, 612934495919669247, None),
+            (1, 612934495863046143, 5.0),
+            (1, 612934495900794879, 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            gx.h3_cellfill(
+                f.col("cellid"), f.col("value"), f.lit(1), f.lit("mean"), f.lit(2.0)
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+h3_cellfill_python_light_example_output = """
++------+--------+
+|region|filled  |
++------+--------+
+|1     |[binary]|
++------+--------+
+... (BINARY — decoded: H3 center cell 612934495919669247 filled to 5.0; neighbours unchanged)
+"""
+
+
+# -- Custom cellfill ---------------------------------------------------------
+
+
+def custom_cellfill_python_light_example(spark):
+    """Grouped aggregate: fill a NULL custom-grid cell from ring-1 neighbours (light pygx tier).
+
+    Reads the ``custom_grids`` setup view for the grid spec and uses
+    ``custom_pointascell`` at resolution 0 to derive a center cell at
+    POINT(530000 180000) and two ring-1 neighbour cells (east and north-east).
+    Inline values: center = NULL; neighbours = 5.0.  After fill the center equals
+    5.0 (mean).
+
+    The **light** tier returns **BINARY**.
+    The heavy tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    df_grid = _get_custom_grid_df(spark)
+    # Derive valid cell IDs from the fixture grid at resolution 0 (1000m cells)
+    center_row = df_grid.select(
+        gx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)).alias("center"),
+        gx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)).alias("nbr1"),
+        gx.custom_pointascell(f.lit("POINT(531000 181000)"), f.col("grid"), f.lit(0)).alias("nbr2"),
+        f.col("grid"),
+    ).first()
+    center_id = center_row["center"]
+    nbr1_id = center_row["nbr1"]
+    nbr2_id = center_row["nbr2"]
+
+    df = spark.createDataFrame(
+        [
+            (1, center_id, None),
+            (1, nbr1_id, 5.0),
+            (1, nbr2_id, 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    df = df.crossJoin(df_grid.select("grid"))
+    result = (
+        df.groupBy("region")
+        .agg(
+            gx.custom_cellfill(
+                f.col("cellid"),
+                f.col("value"),
+                f.col("grid"),
+                f.lit(1),
+                f.lit("mean"),
+                f.lit(2.0),
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+custom_cellfill_python_light_example_output = """
++------+--------+
+|region|filled  |
++------+--------+
+|1     |[binary]|
++------+--------+
+... (BINARY — decoded: center cell 216172782113787048 filled to 5.0; neighbours unchanged)
+"""
+
+
+# -- Quadbin kloop -----------------------------------------------------------
+
+
+def quadbin_kloop_python_light_example(spark):
+    """Return the 8-cell hollow ring at exactly k=1 around a quadbin cell (light pygx tier).
+
+    Reads the ``quadbin_cells`` setup view (cell = 5233961839712272383, SF at z10).
+    At k=1 returns the 8 surrounding cells (center excluded).  Returns
+    ``ARRAY<BIGINT>``.  Identical to the heavyweight output (AGREE).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    df = _get_quadbin_cells_df(spark)
+    result = df.select(
+        gx.quadbin_kloop(f.col("cell"), f.lit(1)).alias("kloop")
+    ).first()
+    return result["kloop"]
+
+
+quadbin_kloop_python_light_example_output = """
++-------------------------------+
+|kloop                          |
++-------------------------------+
+|[..., (8 cells at k=1)]        |
++-------------------------------+
+... (8 BIGINT cell IDs — hollow ring at k=1; center cell 5233961839712272383 excluded)
+"""
+
+
+# -- Custom kloop ------------------------------------------------------------
+
+
+def custom_kloop_python_light_example(spark):
+    """Return the 8-cell hollow ring at exactly k=1 around a custom-grid cell (light pygx tier).
+
+    Reads the ``custom_grids`` setup view (``cell = 360287970373976640`` at res=5,
+    ``grid`` struct).  At k=1 the hollow ring contains 8 cells (center excluded).
+    Returns ``ARRAY<BIGINT>``.  Identical to the heavyweight output (AGREE).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    df = _get_custom_grid_df(spark)
+    result = df.select(
+        gx.custom_kloop(f.col("cell"), f.col("grid"), f.lit(1)).alias("kloop")
+    ).first()
+    return result["kloop"]
+
+
+custom_kloop_python_light_example_output = """
++-----------------------+
+|kloop                  |
++-----------------------+
+|[..., (8 cells at k=1)]|
++-----------------------+
+... (8 BIGINT cell IDs — hollow ring at k=1, center cell excluded)
+"""
+
+
+# -- Custom distance ---------------------------------------------------------
+
+
+def custom_distance_python_light_example(spark):
+    """Chebyshev distance between two custom-grid cells (light pygx tier).
+
+    Reads the ``custom_grids`` setup view for the grid spec.  Computes two
+    adjacent cells at resolution 0 (cell width = 1000 m) using
+    ``custom_pointascell``: one at POINT(530000 180000) and one 1000 m east at
+    POINT(531000 180000).  The Chebyshev distance is 1 grid step.
+    Identical to the heavyweight output (AGREE).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.pygx import functions as gx  # noqa: PLC0415
+
+    df = _get_custom_grid_df(spark)
+    result = df.select(
+        gx.custom_distance(
+            gx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)),
+            f.col("grid"),
+            gx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)),
+        ).alias("dist")
+    ).first()
+    return result["dist"]
+
+
+custom_distance_python_light_example_output = """
++----+
+|dist|
++----+
+|1   |
++----+
+... (Chebyshev grid distance between two cells 1 step apart in X at resolution 0)
 """

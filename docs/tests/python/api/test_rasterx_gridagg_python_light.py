@@ -58,13 +58,23 @@ except (ModuleNotFoundError, ImportError):
         ("rst_bng_rastertogridsum_python_light_example", "bng", "sum"),
         ("rst_bng_rastertogridvariance_python_light_example", "bng", "variance"),
         ("rst_bng_rastertogridstddev_python_light_example", "bng", "stddev"),
+        # Custom-grid functions (fixture matches grid CRS → expect >=1 row per function)
+        ("rst_custom_rastertogridavg_python_light_example", "custom", "avg"),
+        ("rst_custom_rastertogridcount_python_light_example", "custom", "count"),
+        ("rst_custom_rastertogridmax_python_light_example", "custom", "max"),
+        ("rst_custom_rastertogridmin_python_light_example", "custom", "min"),
+        ("rst_custom_rastertogridmedian_python_light_example", "custom", "median"),
+        ("rst_custom_rastertogridsum_python_light_example", "custom", "sum"),
+        ("rst_custom_rastertogridvariance_python_light_example", "custom", "variance"),
+        ("rst_custom_rastertogridstddev_python_light_example", "custom", "stddev"),
     ],
 )
 def test_rastertogrid_python_light_example(spark, example_fn, grid_type, aggregator):
     """Each rastertogrid function returns rows with [band, cellID, measure] columns.
 
     Light tier yields 0 rows for BNG over non-GB fixture (expected).
-    Light tier yields >=1 rows for H3/Quadbin over any raster.
+    Light tier yields >=1 rows for H3/Quadbin/custom over any raster that overlaps
+    the grid's extent.
     """
     assert light_examples is not None
 
@@ -78,10 +88,10 @@ def test_rastertogrid_python_light_example(spark, example_fn, grid_type, aggrega
         # BNG fixture over non-GB area yields 0 cells (expected)
         assert len(result) >= 0, f"{example_fn} over non-GB BNG should yield >=0 cells"
     else:
-        # H3 and Quadbin should yield at least 1 cell (3 bands × multiple cells)
+        # H3, Quadbin, and custom should yield at least 1 cell
         assert (
             len(result) > 0
-        ), f"{example_fn} should yield >0 cells over multiband fixture"
+        ), f"{example_fn} should yield >0 cells over matching fixture"
 
     # Verify column schema if rows exist
     if len(result) > 0:

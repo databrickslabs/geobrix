@@ -26,6 +26,11 @@ const config = {
 
   onBrokenLinks: 'warn',
 
+  // Re-scroll to the URL hash after fonts/layout settle, so deep anchors on very
+  // long reference pages (e.g. api/raster-functions) land on their section instead
+  // of short. See the module for details.
+  clientModules: ['./src/clientModules/scrollToHashOnLoad.js'],
+
   // Markdown configuration
   markdown: {
     hooks: {
@@ -112,7 +117,7 @@ const config = {
         title: 'GeoBrix',
         logo: {
           alt: 'GeoBrix Logo',
-          src: 'img/logo.png',
+          src: 'img/geobrix-mark.png',
         },
         items: [
           {
@@ -145,6 +150,13 @@ const config = {
       },
       footer: {
         style: 'dark',
+        logo: {
+          alt: 'Databricks Labs',
+          src: 'img/databricks-labs-logo.png',
+          href: 'https://www.databricks.com/learn/labs',
+          width: 56,
+          height: 56,
+        },
         links: [
           {
             title: 'Docs',

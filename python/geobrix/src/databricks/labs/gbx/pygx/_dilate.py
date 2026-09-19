@@ -6,7 +6,13 @@ See .superpowers/specs/2026-09-11-geom-aware-kring-kloop-design.md §4/§5.
 
 from dataclasses import dataclass, field
 
-from shapely.geometry import Polygon
+from shapely.geometry import (
+    LineString,
+    MultiLineString,
+    MultiPoint,
+    MultiPolygon,
+    Polygon,
+)
 
 MODES = (
     "boundary-out",
@@ -59,6 +65,111 @@ def outer_perimeter(s_cover, neighbors):
     - Non-empty whenever s_cover is non-empty.
     """
     return frozenset(c for c in s_cover if any(n not in s_cover for n in neighbors(c)))
+
+
+def _classify_cell(c, cell_geom_fn, geom, S, H, dim):
+    """Membership bits for ONE cell, identical to classify()'s loop body.
+
+    Returns a dict with the 9 boolean keys:
+        p_cover, p_centroid, p_core,
+        s_cover, s_centroid, s_core,
+        h_cover, h_centroid, h_core
+
+    Parameters mirror classify(): geom is the original geometry (may have holes),
+    S is the hole-filled solid, H is the union of holes (or None), dim is the
+    topological dimension (0=point, 1=line, 2=surface).
+    """
+    g = cell_geom_fn(c)
+    cen = g.centroid
+    if dim == 0:
+        p_in = geom.intersects(g)
+        s_in = S.intersects(g)
+    elif dim == 1:
+        p_in = geom.intersects(g) and geom.intersection(g).length > 0
+        s_in = S.intersects(g) and S.intersection(g).length > 0
+    else:
+        p_in = geom.intersects(g) and geom.intersection(g).area > 0
+        s_in = S.intersects(g) and S.intersection(g).area > 0
+    is_2d = dim == 2
+    m = dict(
+        p_cover=False,
+        p_centroid=False,
+        p_core=False,
+        s_cover=False,
+        s_centroid=False,
+        s_core=False,
+        h_cover=False,
+        h_centroid=False,
+        h_core=False,
+    )
+    if p_in:
+        m["p_cover"] = True
+        m["p_centroid"] = is_2d and geom.contains(cen)
+        m["p_core"] = is_2d and geom.contains(g)
+    if s_in:
+        m["s_cover"] = True
+        m["s_centroid"] = is_2d and S.contains(cen)
+        m["s_core"] = is_2d and S.contains(g)
+    if H is not None and H.intersects(g) and H.intersection(g).area > 0:
+        m["h_cover"] = True
+        m["h_centroid"] = is_2d and H.contains(cen)
+        m["h_core"] = is_2d and H.contains(g)
+    return m
+
+
+def _boundary_cells(rings, point_to_cell_fn, cell_step):
+    """Cells a set of boundary LineStrings pass through (O(perimeter)).
+
+    ``cell_step`` = the grid's cell edge length at the target resolution; the
+    sampling step along each ring segment is ≤ cell_step, guaranteeing no
+    boundary cell is skipped (the density guard).
+
+    Parameters
+    ----------
+    rings : iterable of shapely LinearRing / LineString
+        Exterior and/or interior rings of the polygon boundary to trace.
+    point_to_cell_fn : callable(x, y) -> cell_id | None
+        Per-grid hook that maps a coordinate pair to its containing cell.
+    cell_step : float
+        Cell edge length at the target resolution (e.g. 1 000 m for BNG res-3).
+    """
+    cells = set()
+    for ring in rings:
+        coords = list(ring.coords)
+        for i in range(len(coords) - 1):
+            (x0, y0), (x1, y1) = coords[i], coords[i + 1]
+            seg = LineString([(x0, y0), (x1, y1)])
+            n = max(1, int(seg.length / cell_step) + 1)
+            for j in range(n + 1):
+                pt = seg.interpolate(j / n, normalized=True)
+                try:
+                    c = point_to_cell_fn(pt.x, pt.y)
+                    if c is not None:
+                        cells.add(c)
+                except Exception:
+                    pass
+    return cells
+
+
+def _local_perimeter(band, neighbors, in_region):
+    """Cells in the band's neighbourhood that are in-region and have an out-of-region neighbour.
+
+    Formally: {c ∈ C : in_region(c) and ∃ n ∈ neighbors(c) with not in_region(n)}
+    where C = band ∪ {neighbors of each c ∈ band}.
+
+    This is the O(perimeter) lazy analogue of outer_perimeter().  When ``band``
+    is the output of _boundary_cells() for a polygon's exterior ring and
+    ``in_region`` tests membership in s_cover, the result equals
+    outer_perimeter(s_cover, neighbors) for both non-aligned and grid-aligned
+    polygons — the key alignment invariant that the boundary-as-line refactor
+    preserves.
+    """
+    C = set(band)
+    for c in band:
+        C.update(neighbors(c))
+    return frozenset(
+        c for c in C if in_region(c) and any(not in_region(n) for n in neighbors(c))
+    )
 
 
 def dilate(frontier0, visited0, neighbors, admit):
@@ -185,6 +296,93 @@ def _sample_coords(geom, n_samples: int = 16):
                 yield (pt.x, pt.y)
 
 
+def _flatten_members(geom):
+    """Yield non-empty, non-collection leaf members of a GeometryCollection,
+    recursing into nested collections. A Multi* member is yielded as-is (it is
+    homogeneous and expanded later by _group_by_dimension)."""
+    for g in geom.geoms:
+        if g.is_empty:
+            continue
+        if g.geom_type == "GeometryCollection":
+            yield from _flatten_members(g)
+        else:
+            yield g
+
+
+def _group_by_dimension(members):
+    """Group leaf members into (polygons, lines, points) single-geometry lists,
+    expanding Multi* parts so each group is flat."""
+    polys, lines, points = [], [], []
+    for g in members:
+        t = g.geom_type
+        if t == "Polygon":
+            polys.append(g)
+        elif t == "MultiPolygon":
+            polys.extend(g.geoms)
+        elif t in ("LineString", "LinearRing"):
+            lines.append(g)
+        elif t == "MultiLineString":
+            lines.extend(g.geoms)
+        elif t == "Point":
+            points.append(g)
+        elif t == "MultiPoint":
+            points.extend(g.geoms)
+    return polys, lines, points
+
+
+def _union_classifications(classifications):
+    """Union the nine cell-sets across an iterable of Classifications."""
+    fields = (
+        "p_cover",
+        "p_core",
+        "s_cover",
+        "s_core",
+        "h_cover",
+        "h_core",
+        "p_centroid",
+        "s_centroid",
+        "h_centroid",
+    )
+    acc = {f: set() for f in fields}
+    for c in classifications:
+        for f in fields:
+            acc[f] |= getattr(c, f)
+    return Classification(
+        acc["p_cover"],
+        acc["p_core"],
+        acc["s_cover"],
+        acc["s_core"],
+        acc["h_cover"],
+        acc["h_core"],
+        p_centroid=acc["p_centroid"],
+        s_centroid=acc["s_centroid"],
+        h_centroid=acc["h_centroid"],
+    )
+
+
+def _classify_collection(geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn):
+    """Classify a GeometryCollection by decomposing into per-dimension groups.
+
+    Nested collections flatten; empty collection returns an empty Classification.
+    Each homogeneous group (Multi* or single geometry) is classified via the
+    standard single-dimension path and the results are unioned.
+    """
+    members = list(_flatten_members(geom))
+    if not members:
+        return Classification(*(set() for _ in range(6)))
+    polys, lines, points = _group_by_dimension(members)
+    groups = []
+    if polys:
+        groups.append(MultiPolygon(polys) if len(polys) > 1 else polys[0])
+    if lines:
+        groups.append(MultiLineString(lines) if len(lines) > 1 else lines[0])
+    if points:
+        groups.append(MultiPoint(points) if len(points) > 1 else points[0])
+    return _union_classifications(
+        classify(g, res, polyfill_fn, cell_geom_fn, point_to_cell_fn) for g in groups
+    )
+
+
 def classify(geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn=None):
     """Partition polyfill candidate cells vs P (geom), S (solid), H (holes).
 
@@ -219,6 +417,14 @@ def classify(geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn=None):
     almost never lies exactly on a 0D/1D geometry) — so polyfill/core coverage of a
     point or line is naturally empty, which is the intended behaviour.
     """
+    # GeometryCollection: mixed-dimension, so a single (S, dim) cannot represent it.
+    # Decompose via helper; MultiPolygon/MultiLineString/MultiPoint are NOT collections
+    # and take the path below.
+    if geom.geom_type == "GeometryCollection":
+        return _classify_collection(
+            geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn
+        )
+
     S, H = _solid_and_holes(geom)
     dim = _geom_dimension(geom)
 
@@ -249,45 +455,24 @@ def classify(geom, res, polyfill_fn, cell_geom_fn, point_to_cell_fn=None):
     p_centroid, s_centroid, h_centroid = set(), set(), set()
 
     for c in cands:
-        g = cell_geom_fn(c)
-        cen = g.centroid  # cell centroid — the "polyfill" (centroid) basis probe
-
-        # Dimension-aware coverage test for P (the original geometry, may have holes)
-        # and S (the hole-filled solid, always a polygon when dim==2).
-        if dim == 0:
-            p_in_cover = geom.intersects(g)
-            s_in_cover = S.intersects(g)  # S == geom for non-polygon
-        elif dim == 1:
-            ix_p = geom.intersection(g)
-            p_in_cover = geom.intersects(g) and ix_p.length > 0
-            ix_s = S.intersection(g)
-            s_in_cover = S.intersects(g) and ix_s.length > 0
-        else:
-            p_in_cover = geom.intersects(g) and geom.intersection(g).area > 0
-            s_in_cover = S.intersects(g) and S.intersection(g).area > 0
-
-        # The centroid basis (and core basis) is 2D-only.  For a point/line region a
-        # cell centroid is "inside" only by measure-zero coincidence (e.g. a point
-        # placed exactly at a cell centre) — which is not a meaningful polyfill hit,
-        # so polyfill/core coverage of a 0/1-dim geom is empty by construction.
-        is_2d = dim == 2
-        if p_in_cover:
+        m = _classify_cell(c, cell_geom_fn, geom, S, H, dim)
+        if m["p_cover"]:
             p_cover.add(c)
-            if is_2d and geom.contains(cen):
+            if m["p_centroid"]:
                 p_centroid.add(c)
-            if is_2d and geom.contains(g):
+            if m["p_core"]:
                 p_core.add(c)
-        if s_in_cover:
+        if m["s_cover"]:
             s_cover.add(c)
-            if is_2d and S.contains(cen):
+            if m["s_centroid"]:
                 s_centroid.add(c)
-            if is_2d and S.contains(g):
+            if m["s_core"]:
                 s_core.add(c)
-        if H is not None and H.intersects(g) and H.intersection(g).area > 0:
+        if m["h_cover"]:
             h_cover.add(c)
-            if is_2d and H.contains(cen):
+            if m["h_centroid"]:
                 h_centroid.add(c)
-            if is_2d and H.contains(g):
+            if m["h_core"]:
                 h_core.add(c)
 
     return Classification(
@@ -405,6 +590,304 @@ def geom_expand(kind, k, mode, cls, neighbors, coverage=DEFAULT_COVERAGE):
         return set(k0)
     acc = set(k0) if kind == "ring" else set()
     shell_k = set()
+    for kk, shell in dilate(frontier0, visited0, neighbors, admit):
+        if kk > k:
+            break
+        if kind == "ring":
+            acc |= shell
+        if kk == k:
+            shell_k = shell
+            break
+    return acc if kind == "ring" else shell_k
+
+
+_LAZY_MODES = frozenset(
+    {
+        "boundary-out",
+        "boundary-in",
+        "boundary-in-ignore-holes",
+        "hole-in",
+        "hole-out",
+        "hole-out-ignore-geom",
+    }
+)
+
+
+def _lazy_boundary_in(mode, geom, res, hooks, coverage):
+    """Lazy O(perimeter) seed builder for boundary-in / boundary-in-ignore-holes.
+
+    Returns ``(frontier0, visited0, admit, k0)`` matching :func:`mode_setup`'s
+    boundary-in or boundary-in-ignore-holes branch, using on-demand
+    :func:`_classify_cell` calls instead of a pre-built :class:`Classification`.
+
+    Both modes share the same seed: the outer perimeter via the lazy
+    local-perimeter path.  They differ only in the admit/k0 predicate:
+      boundary-in:              admit/k0 check ``p_<basis>`` (respects holes)
+      boundary-in-ignore-holes: admit/k0 check ``s_<basis>`` (marches across holes)
+
+    Parameters
+    ----------
+    mode : "boundary-in" | "boundary-in-ignore-holes"
+    geom : shapely geometry (already parsed; not WKB)
+    res  : resolution (passed through to hooks, unused here; kept for API symmetry)
+    hooks : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    if coverage not in _COVERAGE_BASIS:
+        raise ValueError(f"unknown coverage {coverage!r}; expected one of {COVERAGE}")
+    point_to_cell, cell_geom, neighbors, cell_step = hooks
+    S, H = _solid_and_holes(geom)
+    dim = _geom_dimension(geom)
+    basis = _COVERAGE_BASIS[coverage]
+
+    ext_rings = (
+        [S.exterior] if S.geom_type == "Polygon" else [g.exterior for g in S.geoms]
+    )
+    band = _boundary_cells(ext_rings, point_to_cell, cell_step)
+
+    # Memoize _classify_cell per cell id (same pattern as _lazy_boundary_out)
+    _cache: dict = {}
+
+    def _m(c):
+        if c not in _cache:
+            _cache[c] = _classify_cell(c, cell_geom, geom, S, H, dim)
+        return _cache[c]
+
+    def s_cover(c):
+        return _m(c)["s_cover"]
+
+    # Lazy outer perimeter: s_cover cells near the boundary ring with out-of-region neighbors
+    op = _local_perimeter(band, neighbors, s_cover)
+
+    # admit/k0 key: "p_<basis>" for boundary-in, "s_<basis>" for boundary-in-ignore-holes
+    admit_key = ("p_" if mode == "boundary-in" else "s_") + basis
+
+    admit = lambda n: _m(n)[admit_key]  # noqa: E731
+    k0 = frozenset(c for c in op if _m(c)[admit_key])
+    return op, op, admit, k0
+
+
+def _lazy_boundary_out(geom, res, hooks, coverage):
+    """Lazy O(perimeter) seed builder for boundary-out mode.
+
+    Returns ``(frontier0, visited0, admit, k0)`` matching :func:`mode_setup`'s
+    boundary-out branch, but using on-demand :func:`_classify_cell` calls instead
+    of a pre-built :class:`Classification`.  Avoids the O(area) polyfill by tracing
+    the exterior boundary ring to find the straddling-band seed.
+
+    ``admit = lambda n: not s_cover(n)`` replaces the original
+    ``visited0 = s_cov`` (pre-visiting the full solid): BFS never expands into
+    the solid cover, which is provably equivalent to the original for all k >= 1.
+
+    Parameters
+    ----------
+    geom : shapely geometry (already parsed; not WKB)
+    res  : resolution (passed through to hooks, unused here; kept for API symmetry)
+    hooks : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+        point_to_cell_fn : (x, y) -> cell_id | None
+        cell_geom_fn     : cell_id -> shapely polygon
+        neighbors_fn     : cell_id -> list[cell_id]
+        cell_step        : cell edge length at `res` (density guard for ring sampling)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    point_to_cell, cell_geom, neighbors, cell_step = hooks
+    S, H = _solid_and_holes(geom)
+    dim = _geom_dimension(geom)
+
+    ext_rings = (
+        [S.exterior] if S.geom_type == "Polygon" else [g.exterior for g in S.geoms]
+    )
+    band = _boundary_cells(ext_rings, point_to_cell, cell_step)
+
+    # Memoize _classify_cell per cell id (same cell probed multiple times)
+    _cache: dict = {}
+
+    def _m(c):
+        if c not in _cache:
+            _cache[c] = _classify_cell(c, cell_geom, geom, S, H, dim)
+        return _cache[c]
+
+    def s_cover(c):
+        return _m(c)["s_cover"]
+
+    def s_core(c):
+        return _m(c)["s_core"]
+
+    def s_centroid(c):
+        return _m(c)["s_centroid"]
+
+    # Band neighbourhood C = band ∪ {neighbors of each band cell}
+    C: set = set(band)
+    for c in band:
+        C.update(neighbors(c))
+
+    # Straddling band: cells that overlap S but are not fully inside
+    full_band = frozenset(c for c in C if s_cover(c) and not s_core(c))
+
+    # Alignment fallback: outer perimeter via the lazy local-perimeter
+    op = _local_perimeter(band, neighbors, s_cover)
+
+    frontier = full_band if full_band else op
+
+    if coverage == "polyfill":
+        # centroid-out cells: overlap S but centroid outside S
+        centroid_out = frozenset(c for c in C if s_cover(c) and not s_centroid(c))
+        k0 = centroid_out if centroid_out else op
+    else:
+        k0 = frontier
+
+    # admit replaces visited0 = s_cov: BFS never expands into the solid cover
+    admit = lambda n: not s_cover(n)  # noqa: E731
+    return frontier, set(frontier), admit, k0
+
+
+def _lazy_hole(mode, geom, res, hooks, coverage):
+    """Lazy O(hole-perimeter) seed builder for hole-in / hole-out / hole-out-ignore-geom.
+
+    Returns ``(frontier0, visited0, admit, k0)`` matching :func:`mode_setup`'s
+    hole-* branches, but using on-demand :func:`_classify_cell` calls instead of
+    a pre-built :class:`Classification`.
+
+    Seeds come from the INTERIOR rings of the polygon (O(hole perimeter)):
+        hole_band  = _boundary_cells(interior_rings, point_to_cell, cell_step)
+        C          = hole_band ∪ neighbors(hole_band)
+        void_edge  = { c ∈ C : h_cover(c) and ∃ n, not h_cover(n) }
+        solid_edge = { c ∈ C : p_cover(c) and ∃ n, h_cover(n) }
+
+    For geometries with no holes (H is None), returns (empty, empty, reject_all, empty).
+
+    visited0 equivalence for hole-out / hole-out-ignore-geom:
+        ``mode_setup`` uses ``visited0 = h_cov ∪ solid_edge`` (O(hole area)).
+        Here we use ``visited0 = solid_edge`` alone, because:
+          - hole-out:             admit = p_x; deep hole cells are not in P → blocked.
+          - hole-out-ignore-geom: admit = not h_x; hole cells are in H_x → blocked.
+        Pre-visiting the entire hole interior is redundant; hole-in keeps
+        visited0 = void_edge unchanged.
+
+    Parameters
+    ----------
+    mode     : "hole-in" | "hole-out" | "hole-out-ignore-geom"
+    geom     : shapely Polygon or MultiPolygon
+    res      : resolution (unused here; kept for API symmetry with other lazy builders)
+    hooks    : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    if coverage not in _COVERAGE_BASIS:
+        raise ValueError(f"unknown coverage {coverage!r}; expected one of {COVERAGE}")
+    point_to_cell, cell_geom, neighbors, cell_step = hooks
+    S, H = _solid_and_holes(geom)
+    dim = _geom_dimension(geom)
+    basis = _COVERAGE_BASIS[coverage]
+
+    # No holes → all hole-* modes return empty
+    if H is None:
+        empty: frozenset = frozenset()
+        return empty, empty, (lambda n: False), empty  # noqa: E731
+
+    # Interior rings from the original geometry (S has holes filled, so S.interiors is empty)
+    _polys = list(geom.geoms) if isinstance(geom, MultiPolygon) else [geom]
+    int_rings = [r for p in _polys if p.geom_type == "Polygon" for r in p.interiors]
+    if not int_rings:
+        empty = frozenset()
+        return empty, empty, (lambda n: False), empty  # noqa: E731
+
+    hole_band = _boundary_cells(int_rings, point_to_cell, cell_step)
+    if not hole_band:
+        empty = frozenset()
+        return empty, empty, (lambda n: False), empty  # noqa: E731
+
+    # Memoize _classify_cell per cell id
+    _cache: dict = {}
+
+    def _m(c):
+        if c not in _cache:
+            _cache[c] = _classify_cell(c, cell_geom, geom, S, H, dim)
+        return _cache[c]
+
+    # Build C = hole_band ∪ {neighbors of each band cell}
+    C: set = set(hole_band)
+    for c in hole_band:
+        C.update(neighbors(c))
+
+    # void_edge: h_cover cells in C with at least one non-h_cover neighbor
+    void_edge = frozenset(
+        c
+        for c in C
+        if _m(c)["h_cover"] and any(not _m(n)["h_cover"] for n in neighbors(c))
+    )
+    # solid_edge: p_cover cells in C with at least one h_cover neighbor
+    solid_edge = frozenset(
+        c for c in C if _m(c)["p_cover"] and any(_m(n)["h_cover"] for n in neighbors(c))
+    )
+
+    h_key = "h_" + basis  # e.g. "h_cover", "h_centroid", "h_core"
+    p_key = "p_" + basis  # e.g. "p_cover", "p_centroid", "p_core"
+
+    if mode == "hole-in":
+        # Seed void-side; expand into the hole (admit H_basis).
+        # visited0 = void_edge (identical to mode_setup).
+        admit = lambda n: _m(n)[h_key]  # noqa: E731
+        k0 = frozenset(c for c in void_edge if _m(c)[h_key])
+        return void_edge, void_edge, admit, k0
+
+    if mode == "hole-out":
+        # Seed solid-side; expand into the solid (admit P_basis).
+        # visited0 = solid_edge: admit rejects deep hole cells (not in P) so
+        # pre-visiting all of h_cov is unnecessary.
+        admit = lambda n: _m(n)[p_key]  # noqa: E731
+        k0 = frozenset(c for c in solid_edge if _m(c)[p_key])
+        return solid_edge, frozenset(solid_edge), admit, k0
+
+    # hole-out-ignore-geom: solid-side seed, expand away from hole (admit not H_basis).
+    # visited0 = solid_edge: admit rejects H_basis cells, so pre-visiting h_cov is unnecessary.
+    admit = lambda n: not _m(n)[h_key]  # noqa: E731
+    return solid_edge, frozenset(solid_edge), admit, frozenset(solid_edge)
+
+
+def geom_expand_lazy(kind, k, mode, geom, res, hooks, coverage=DEFAULT_COVERAGE):
+    """Geometry-aware expand using lazy O(perimeter) seed paths for all polygon modes.
+
+    Drop-in replacement for
+    ``geom_expand(kind, k, mode, classify(...), neighbors, coverage)``
+    that avoids the full O(area) polyfill+classification by tracing the geometry
+    boundary ring instead.
+
+    Handles all modes in ``_LAZY_MODES`` (boundary-out, boundary-in,
+    boundary-in-ignore-holes, hole-in, hole-out, hole-out-ignore-geom);
+    raises :exc:`ValueError` for other modes.
+
+    Parameters
+    ----------
+    kind     : "ring" or "loop"
+    k        : integer >= 0
+    mode     : one of the modes in ``_LAZY_MODES``
+    geom     : shapely geometry (already parsed; not WKB/WKT)
+    res      : resolution (passed through to hooks)
+    hooks    : (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step)
+    coverage : "coveras" | "polyfill" | "core"
+    """
+    if mode not in _LAZY_MODES:
+        raise ValueError(
+            f"geom_expand_lazy only handles {sorted(_LAZY_MODES)}; got {mode!r}"
+        )
+    if kind not in ("ring", "loop"):
+        raise ValueError(f"kind must be 'ring' or 'loop'; got {kind!r}")
+
+    _, _, neighbors, _ = hooks
+    if mode == "boundary-out":
+        frontier0, visited0, admit, k0 = _lazy_boundary_out(geom, res, hooks, coverage)
+    elif mode in ("boundary-in", "boundary-in-ignore-holes"):
+        frontier0, visited0, admit, k0 = _lazy_boundary_in(
+            mode, geom, res, hooks, coverage
+        )
+    else:
+        # hole-in, hole-out, hole-out-ignore-geom
+        frontier0, visited0, admit, k0 = _lazy_hole(mode, geom, res, hooks, coverage)
+
+    if k == 0:
+        return set(k0)
+    acc = set(k0) if kind == "ring" else set()
+    shell_k: set = set()
     for kk, shell in dilate(frontier0, visited0, neighbors, admit):
         if kk > k:
             break

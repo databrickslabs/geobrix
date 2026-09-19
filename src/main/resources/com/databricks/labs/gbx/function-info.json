@@ -5,7 +5,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_align_to(tile, reference_tile) AS aligned FROM paired_rasters;",
       "usage_args": "tile, reference_tile",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -63,6 +66,28 @@
         "scala"
       ],
       "since": "0.2.0"
+    },
+    "gbx_rst_binpoints": {
+      "examples": "Examples:\n      > SELECT gbx_rst_binpoints( array(550100.0, 550200.0, 550300.0), array(180100.0, 180200.0, 180500.0), array(42.5, 45.1, 38.7), 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max' ) AS dsm;",
+      "usage_args": "x_array, y_array, z_array, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic]",
+      "bindings": [
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
+      ],
+      "since": "0.5.2"
+    },
+    "gbx_rst_binpoints_agg": {
+      "examples": "Examples:\n      > SELECT tile_id, gbx_rst_binpoints_agg(x, y, z, 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max') AS dsm FROM ( VALUES (1, 550100.0, 180100.0, 42.5), (1, 550200.0, 180200.0, 45.1), (1, 550300.0, 180500.0, 38.7) ) AS t(tile_id, x, y, z) GROUP BY tile_id;",
+      "usage_args": "x, y, z, xmin, ymin, xmax, ymax, width_px, height_px, srid, [statistic]",
+      "bindings": [
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_bng_rasterize_agg": {
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_bng_rasterize_agg( cellid, burn_value, 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(0 as int) ) AS tile FROM bng_cell_values GROUP BY region_id;",
@@ -196,6 +221,17 @@
       ],
       "since": "0.4.0"
     },
+    "gbx_rst_chm": {
+      "examples": "Examples:\n      > SELECT gbx_rst_chm(tile, tile) AS chm FROM dem_rasters;",
+      "usage_args": "dsm_tile, dem_tile",
+      "bindings": [
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
+      ],
+      "since": "0.5.2"
+    },
     "gbx_rst_clip": {
       "examples": "Examples:\n      > SELECT path, gbx_rst_clip( tile, 'POLYGON((-122 37, -122 38, -121 38, -121 37, -122 37))', true ) as clipped FROM rasters;",
       "usage_args": "tile, geom, cutline_all_touched, [clip_crs]",
@@ -255,7 +291,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinecount(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -263,7 +302,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinemax(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -271,7 +313,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinemedian(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -279,7 +324,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinemin(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -287,7 +335,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinestddev(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -295,7 +346,10 @@
       "examples": "Examples:\n      > SELECT gbx_rst_combinesum(array(tile)) AS combined FROM multiband_rasters;",
       "usage_args": "tiles",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -336,7 +390,10 @@
       "examples": "Examples:\n      > SELECT region_id, gbx_rst_custom_rasterize_agg( cellid, burn_value, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 27700, cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as double), cast(null as int), cast(null as int), 'centroids', cast(1 as int) ) AS tile FROM custom_cell_values GROUP BY region_id;",
       "usage_args": "cellid, value, grid, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -344,7 +401,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridavg( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -352,7 +412,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridcount( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -360,7 +423,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmax( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -368,7 +434,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmedian( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -376,7 +445,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmin( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -384,7 +456,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridstddev( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -392,7 +467,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridsum( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -400,7 +478,10 @@
       "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridvariance( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -408,7 +489,10 @@
       "examples": "Examples:\n      > SELECT t.* FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
       "usage_args": "tile, grid, resolution, [assignment], [coverage]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -772,6 +856,17 @@
         "scala"
       ],
       "since": "0.2.0"
+    },
+    "gbx_rst_isoband": {
+      "examples": "Examples:\n      > SELECT gbx_rst_isoband(tile, array(0.0, 50.0, 100.0, 150.0, 200.0)) AS patches FROM dem_rasters;",
+      "usage_args": "tile, breaks",
+      "bindings": [
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
+      ],
+      "since": "0.5.2"
     },
     "gbx_rst_maketiles": {
       "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_maketiles(tile, 4) t;",
@@ -1570,7 +1665,10 @@
       "examples": "Examples:\n      > SELECT region, gbx_h3_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 612934495919669247L, CAST(NULL AS DOUBLE)), (1, 612934495863046143L, 5.0), (1, 612934495900794879L, 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cellid, value, [k], [method], [power]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -1644,7 +1742,10 @@
       "examples": "Examples:\n      > SELECT region, gbx_bng_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 'TQ300800', CAST(NULL AS DOUBLE)), (1, 'TQ299800', 5.0), (1, 'TQ301800', 5.0), (1, 'TQ300799', 5.0), (1, 'TQ300801', 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cellid, value, [k], [method], [power]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -1885,7 +1986,10 @@
       "examples": "Examples:\n      > SELECT region, gbx_custom_cellfill(cellid, value, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 100000, 100000, 27700), 1, 'mean', 2.0) AS filled FROM ( VALUES (1, 216172782113787048L, CAST(NULL AS DOUBLE)), (1, 216172782113786967L, 5.0), (1, 216172782113787127L, 5.0) ) AS t(region, cellid, value) GROUP BY region;",
       "usage_args": "cellid, value, grid, [k], [method], [power]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -1904,7 +2008,10 @@
       "examples": "Examples:\n      > SELECT gbx_custom_distance( gbx_custom_pointascell('POINT(530000 180000)', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 0), gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), gbx_custom_pointascell('POINT(531000 180000)', gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 0) ) AS dist;",
       "usage_args": "cellid1, grid, cellid2",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -1967,7 +2074,10 @@
       "examples": "Examples:\n      > SELECT gbx_custom_kloop(360287970373976640, gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700), 1) AS kloop;",
       "usage_args": "cell, grid, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -2203,7 +2313,10 @@
     "gbx_pmtiles_agg": {
       "examples": "Examples:\n      > SELECT gbx_pmtiles_agg(bytes, z, x, y, '{\"name\":\"my_tileset\"}') AS pmt FROM tiles_z2;",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.4.0"
     },
@@ -2223,7 +2336,10 @@
       "examples": "Examples:\n      > SELECT region, gbx_quadbin_cellfill(cellid, value, 1, 'mean', 2.0) AS filled FROM ( SELECT 1 AS region, gbx_quadbin_pointascell(-0.1, 51.5, 10) AS cellid, CAST(NULL AS DOUBLE) AS value UNION ALL SELECT 1 AS region, cell AS cellid, 5.0 AS value FROM ( SELECT explode(gbx_quadbin_kring(gbx_quadbin_pointascell(-0.1, 51.5, 10), 1)) AS cell ) ) t GROUP BY region;",
       "usage_args": "cellid, value, [k], [method], [power]",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },
@@ -2319,7 +2435,10 @@
       "examples": "Examples:\n      > SELECT gbx_quadbin_kloop(gbx_quadbin_pointascell(-122.4194, 37.7749, 10), 1) AS kloop;",
       "usage_args": "cell, k",
       "bindings": [
-        "sql"
+        "sql",
+        "python-light",
+        "python-heavy",
+        "scala"
       ],
       "since": "0.5.1"
     },

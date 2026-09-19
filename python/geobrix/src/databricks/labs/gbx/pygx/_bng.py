@@ -887,6 +887,22 @@ def classify_bng(geometry, resolution):
     )
 
 
+def _bng_hooks(resolution: int) -> tuple:
+    """Build the (point_to_cell_fn, cell_geom_fn, neighbors_fn, cell_step) hooks tuple
+    for BNG at the given resolution.
+
+    cell_step = edge size in metres (density guard).
+    """
+    res = int(resolution)
+    cell_step = float(get_edge_size(res))
+    return (
+        lambda x, y: point_to_cell_id(x, y, res),
+        _bng_cell_geom,
+        lambda c: k_loop(c, 1),
+        cell_step,
+    )
+
+
 def geometry_k_ring(
     geometry,
     resolution: int,
@@ -896,13 +912,29 @@ def geometry_k_ring(
 ) -> set:
     """k-ring of cell ids covering ``geometry`` (BNG.geometryKRing, BNG.scala L639).
 
-    All modes — including the default ``boundary-out`` — route through the shared
-    :mod:`_dilate` engine using the region-X perimeter model.  ``coverage`` ∈
-    {"coveras","polyfill","core"} selects the belongs-to basis.  The old
-    ``get_chips`` straddling-border fast-path is retired: it produced empty results
-    on grid-aligned geometries (s_border empty) and diverged from heavy's
-    perimeter-based definition after commit b61ad384.
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs.  Line, point, and GeometryCollection inputs
+    fall back to the full O(area) classify + geom_expand path.  ``coverage`` ∈
+    {"coveras","polyfill","core"} selects the belongs-to basis.
     """
+    if mode in _dilate._LAZY_MODES and geometry.geom_type in (
+        "Polygon",
+        "MultiPolygon",
+    ):
+        return {
+            c
+            for c in _dilate.geom_expand_lazy(
+                "ring",
+                int(k),
+                mode,
+                geometry,
+                int(resolution),
+                _bng_hooks(int(resolution)),
+                coverage,
+            )
+            if is_valid(c)
+        }
     cls = classify_bng(geometry, resolution)
     return {
         c
@@ -922,10 +954,29 @@ def geometry_k_loop(
 ) -> set:
     """Hollow k-loop of cell ids around ``geometry`` (BNG.geometryKLoop, L619).
 
-    All modes route through the shared :mod:`_dilate` engine.  ``coverage`` selects
-    the belongs-to basis.  Under the LOCKED design, boundary-out has k0 = ∅ (the
-    covering set is EXCLUDED — only the outward band is returned).
+    All polygon geom-aware modes (boundary-out, boundary-in, boundary-in-ignore-holes,
+    hole-in, hole-out, hole-out-ignore-geom) route through the lazy O(perimeter) seed
+    path for Polygon/MultiPolygon inputs.  Line, point, and GeometryCollection inputs
+    fall back to the full O(area) classify + geom_expand path.  ``coverage`` selects
+    the belongs-to basis.
     """
+    if mode in _dilate._LAZY_MODES and geometry.geom_type in (
+        "Polygon",
+        "MultiPolygon",
+    ):
+        return {
+            c
+            for c in _dilate.geom_expand_lazy(
+                "loop",
+                int(k),
+                mode,
+                geometry,
+                int(resolution),
+                _bng_hooks(int(resolution)),
+                coverage,
+            )
+            if is_valid(c)
+        }
     cls = classify_bng(geometry, resolution)
     return {
         c

@@ -23,25 +23,39 @@ The `composite` parameter controls how bands are combined into a single image:
 ### `plot_raster`
 
 ```python
-plot_raster(raster_bytes, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto")
+plot_raster(raster, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto",
+            bands=None, stretch="perband", fill=None, cmap=None)
 ```
 
-Render a raster from its in-memory bytes — e.g. a tile's `raster` field collected from a GeoBrix DataFrame:
+Render a raster from in-memory bytes **or a tile struct** (materialized or virtual):
+
+- **bytes / bytearray** — the classic path; pass a tile's `raster` field directly.
+- **v2 tile struct** (dict or Spark Row) — when `raster` is set, its bytes are used.  When `raster` is `None` and `path` is set, the file is opened on-the-fly and the tile's `window` (`col_off`, `row_off`, `width`, `height`) is used to read only that region.  This is the memory-efficient **virtual tile** path — no bytes are loaded until rendering.  `window=None` reads the whole file.
 
 ```python
 from databricks.labs.gbx.vizx import plot_raster
 
+# Classic: pass raster bytes
 row = df.select("tile").first()
 plot_raster(row["tile"]["raster"])
 
-# For a multi-band presence-mask stack, show how many bands cover each pixel:
+# Virtual tile: pass the whole tile struct — bytes stay on disk
+plot_raster(row["tile"])
+
+# Coverage-depth view of a multi-band presence-mask stack:
 plot_raster(row["tile"]["raster"], composite="depth")
+
+# DEM with terrain colormap:
+plot_raster(row["tile"], cmap="terrain")
 ```
+
+The `cmap` parameter sets the colormap for single-band renders (default `None` → viridis). It has no effect on RGB composites.
 
 ### `plot_file`
 
 ```python
-plot_file(path, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto")
+plot_file(path, *, fig_w=10, fig_h=10, max_pixels=2000, composite="auto",
+          bands=None, stretch="perband", fill=None, cmap=None)
 ```
 
 Render a raster from disk (GeoTIFF, VRT, …) with the same decimation + stretch pipeline. A leading `dbfs:` or `file:` scheme is stripped automatically, so scheme-qualified Databricks paths (`dbfs:/Volumes/…`, `file:///Volumes/…`) work as well as the bare FUSE path:
@@ -51,9 +65,14 @@ from databricks.labs.gbx.vizx import plot_file
 
 plot_file("/Volumes/main/geobrix_samples/geobrix-examples/nyc/dem.tif")
 
+# DEM with terrain colormap:
+plot_file("/Volumes/main/geobrix_samples/geobrix-examples/nyc/dem.tif", cmap="terrain")
+
 # Coverage-depth view of a multi-band stack on disk:
 plot_file("/Volumes/main/my_schema/my_vol/sentinel_stack.tif", composite="depth")
 ```
+
+The `cmap` parameter sets the colormap for single-band renders (default `None` → viridis).
 
 ### `plot_mosaic`
 

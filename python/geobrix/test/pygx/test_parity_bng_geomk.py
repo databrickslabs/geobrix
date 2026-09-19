@@ -25,7 +25,7 @@ from pathlib import Path
 
 import pytest
 from shapely import to_wkb
-from shapely.geometry import box
+from shapely.geometry import GeometryCollection, LineString, Point, box
 from shapely.geometry.polygon import Polygon
 
 pytestmark = pytest.mark.integration
@@ -259,6 +259,204 @@ def test_parity_bng_geomkloop_holed_all_modes(spark_with_jar, coverage):
         light = light_results[mode]
         assert light == heavy, (
             f"geomkloop holed mode={mode} coverage={coverage}: "
+            f"light={sorted(light)[:5]}... heavy={sorted(heavy)[:5]}... "
+            f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+        )
+
+
+# --- aligned + large fixtures (boundary-out guard for lazy seed switch) ---
+
+# aligned: 4km × 4km box with corners on exact 1km cell boundaries at res 3.
+# No straddling cells → exercises the _local_perimeter alignment fallback.
+_BNG_ALIGNED_GEOM = box(530000.0, 180000.0, 534000.0, 184000.0)
+_RES_ALIGNED = 3  # 1 km cells
+
+# large: ~100km × 100km box at res 2 (10km cells) — exercises perimeter efficiency
+_BNG_LARGE_GEOM = box(480000.0, 140000.0, 580000.0, 240000.0)
+_RES_LARGE = 2  # 10 km cells
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_bng_geomkring_boundary_out_aligned(spark_with_jar, coverage):
+    """Light vs heavy geomkring boundary-out × 3 coverages, aligned BNG polygon."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+    gx.register(spark)
+    light = _collect_light(_BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage)
+    hx.register(spark)
+    heavy = _collect_heavy(
+        spark,
+        _BNG_ALIGNED_GEOM,
+        _RES_ALIGNED,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkring",
+        coverage,
+    )
+    assert light == heavy, (
+        f"geomkring aligned boundary-out coverage={coverage}: "
+        f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+    )
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_bng_geomkloop_boundary_out_aligned(spark_with_jar, coverage):
+    """Light vs heavy geomkloop boundary-out × 3 coverages, aligned BNG polygon."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+    gx.register(spark)
+    light = _collect_light_loop(
+        _BNG_ALIGNED_GEOM, _RES_ALIGNED, 1, "boundary-out", coverage
+    )
+    hx.register(spark)
+    heavy = _collect_heavy(
+        spark,
+        _BNG_ALIGNED_GEOM,
+        _RES_ALIGNED,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkloop",
+        coverage,
+    )
+    assert light == heavy, (
+        f"geomkloop aligned boundary-out coverage={coverage}: "
+        f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+    )
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_bng_geomkring_boundary_out_large(spark_with_jar, coverage):
+    """Light vs heavy geomkring boundary-out × 3 coverages, large BNG polygon (res 2)."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+    gx.register(spark)
+    light = _collect_light(_BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage)
+    hx.register(spark)
+    heavy = _collect_heavy(
+        spark,
+        _BNG_LARGE_GEOM,
+        _RES_LARGE,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkring",
+        coverage,
+    )
+    assert light == heavy, (
+        f"geomkring large boundary-out coverage={coverage}: "
+        f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+    )
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_bng_geomkloop_boundary_out_large(spark_with_jar, coverage):
+    """Light vs heavy geomkloop boundary-out × 3 coverages, large BNG polygon (res 2)."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+    gx.register(spark)
+    light = _collect_light_loop(
+        _BNG_LARGE_GEOM, _RES_LARGE, 1, "boundary-out", coverage
+    )
+    hx.register(spark)
+    heavy = _collect_heavy(
+        spark,
+        _BNG_LARGE_GEOM,
+        _RES_LARGE,
+        1,
+        "boundary-out",
+        "gbx_bng_geomkloop",
+        coverage,
+    )
+    assert light == heavy, (
+        f"geomkloop large boundary-out coverage={coverage}: "
+        f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+    )
+
+
+# --- GeometryCollection fixture ---
+
+# Mixed GC: holed BNG polygon (~6km×6km London area, EPSG:27700) + a short line + a point.
+# At res 3 (1km cells) the outer polygon spans ~6 cells; the hole is ~1.5km×2km (1-2 cells).
+# Exercises member-union decomposition across polygon, line, and point types.
+_GC_MIXED = GeometryCollection(
+    [
+        Polygon(
+            [
+                (528000.0, 178000.0),
+                (534000.0, 178000.0),
+                (534000.0, 184000.0),
+                (528000.0, 184000.0),
+            ],
+            [
+                [
+                    (529500.0, 180000.0),
+                    (531000.0, 180000.0),
+                    (531000.0, 182000.0),
+                    (529500.0, 182000.0),
+                ]
+            ],
+        ),
+        LineString([(534500.0, 183000.0), (536000.0, 183000.0)]),
+        Point(537000.0, 185000.0),
+    ]
+)
+_RES_GC = 3  # Same resolution as existing BNG fixtures (1km cells).
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_bng_geomkring_gc_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkring over all 6 modes × 3 coverages, mixed GeometryCollection (BNG)."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+
+    gx.register(spark)
+    light_results = {}
+    for mode in _MODES:
+        light_results[mode] = _collect_light(_GC_MIXED, _RES_GC, 1, mode, coverage)
+
+    hx.register(spark)
+    for mode in _MODES:
+        heavy = _collect_heavy(
+            spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_bng_geomkring", coverage
+        )
+        light = light_results[mode]
+        assert light == heavy, (
+            f"geomkring gc mode={mode} coverage={coverage}: "
+            f"light={sorted(light)[:5]}... heavy={sorted(heavy)[:5]}... "
+            f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
+        )
+
+
+@pytest.mark.parametrize("coverage", _COVERAGES)
+def test_parity_bng_geomkloop_gc_all_modes(spark_with_jar, coverage):
+    """Light vs heavy geomkloop over all 6 modes × 3 coverages, mixed GeometryCollection (BNG)."""
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+
+    gx.register(spark)
+    light_results = {}
+    for mode in _MODES:
+        light_results[mode] = _collect_light_loop(_GC_MIXED, _RES_GC, 1, mode, coverage)
+
+    hx.register(spark)
+    for mode in _MODES:
+        heavy = _collect_heavy(
+            spark, _GC_MIXED, _RES_GC, 1, mode, "gbx_bng_geomkloop", coverage
+        )
+        light = light_results[mode]
+        assert light == heavy, (
+            f"geomkloop gc mode={mode} coverage={coverage}: "
             f"light={sorted(light)[:5]}... heavy={sorted(heavy)[:5]}... "
             f"diff={sorted(light.symmetric_difference(heavy))[:5]}"
         )

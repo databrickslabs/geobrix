@@ -716,9 +716,12 @@ def bng_geomkring_python_heavy_example(spark):
     """Polyfill a BNG geometry then expand by k ring steps (heavy bng tier).
 
     Reads the ``bng_polygons`` setup view (3km × 3km polygon in EPSG:27700).
-    At res=3 (1km) the polyfill covers 9 cells; k=1 expands by one ring →
-    25 cells total.  Returns ARRAY<STRING>.  Identical to the lightweight output
-    (AGREE).  Geometry MUST be in EPSG:27700; WGS84 yields an empty array.
+    At res=3 (1km) the default ``boundary-out`` mode takes the geometry's
+    boundary band (8 cells for this grid-aligned 3×3) and expands it by one
+    ring outward → 24 cells (the 5×5 envelope minus the untouched interior
+    centre — boundary-out does not fill the interior).  Returns ARRAY<STRING>.
+    Identical to the lightweight output (AGREE).  Geometry MUST be in
+    EPSG:27700; WGS84 yields an empty array.
     """
     from pyspark.sql import functions as f  # noqa: PLC0415
     from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
@@ -736,7 +739,7 @@ bng_geomkring_python_heavy_example_output = """
 +-----------------------------+
 |[TQ2878, TQ2879, TQ2880, ...]|
 +-----------------------------+
-... (25 cells: polyfill of BNG polygon expanded by k=1 ring)
+... (24 cells: boundary band expanded by k=1 ring; interior centre not filled)
 """
 
 
@@ -1598,9 +1601,9 @@ custom_geomkring_python_heavy_example_output = """
 +-------------------------------------------+
 |kring                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (55 cells at k=1)]|
+|[72057594038779906, ..., (56 cells at k=1)]|
 +-------------------------------------------+
-... (55 BIGINT cell IDs — covering cells of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
+... (56 BIGINT cell IDs — boundary band of the offset 3km polygon at res=1 (500m) expanded by k=1 ring)
 """
 
 
@@ -1626,9 +1629,9 @@ custom_geomkloop_python_heavy_example_output = """
 +-------------------------------------------+
 |kloop                                      |
 +-------------------------------------------+
-|[72057594038779906, ..., (19 cells at k=1)]|
+|[72057594038779906, ..., (32 cells at k=1)]|
 +-------------------------------------------+
-... (19 BIGINT cell IDs — outer ring at k=1 around the offset polygon at res=1 (500m))
+... (32 BIGINT cell IDs — hollow outer band at k=1 around the offset polygon at res=1 (500m))
 """
 
 
@@ -1683,4 +1686,298 @@ custom_geomkloopexplode_python_heavy_example_output = """
 |...               |
 +------------------+
 ... (one BIGINT row per cell in the hollow outer ring at k=1 around the offset 3km polygon at res=1 (500m))
+"""
+
+
+# ---------------------------------------------------------------------------
+# Batch E: cellfill (grouped aggregate) + kloop / distance (scalar)
+#
+# bng_cellfill, quadbin_cellfill, h3_cellfill, custom_cellfill — aggregators
+# custom_kloop, quadbin_kloop — hollow-ring scalars (ARRAY<BIGINT>)
+# custom_distance — Chebyshev cell-to-cell distance (BIGINT)
+#
+# Heavy tier cellfill returns ARRAY<STRUCT<cellid, value>> — diverges from
+# light (BINARY).  Quadbin/custom/h3 cellfill: same divergence as BNG.
+# ---------------------------------------------------------------------------
+
+
+def bng_cellfill_python_heavy_example(spark):
+    """Grouped aggregate: fill a NULL BNG cell from ring-1 neighbours (heavy bng tier).
+
+    Inline data: London 100m cell ``TQ300800`` (NULL) surrounded by four ring-1
+    neighbours each with value 5.0.  After fill the center equals 5.0 (mean).
+
+    The **heavy** tier returns ``ARRAY<STRUCT<cellid STRING, value DOUBLE>>``.
+    The light tier returns BINARY — a genuine divergence.
+
+    Note: ``bx.register(spark)`` is called explicitly to ensure the heavy
+    STRUCT-returning tier is active (pygx would register the BINARY variant).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.bng import functions as bx  # noqa: PLC0415
+
+    bx.register(spark)
+    df = spark.createDataFrame(
+        [
+            (1, "TQ300800", None),
+            (1, "TQ299800", 5.0),
+            (1, "TQ301800", 5.0),
+            (1, "TQ300799", 5.0),
+            (1, "TQ300801", 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            bx.bng_cellfill(f.col("cellid"), f.col("value"), 1, "mean", 2.0).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+bng_cellfill_python_heavy_example_output = """
++------+---------------------------------------------------+
+|region|filled                                             |
++------+---------------------------------------------------+
+|1     |[{TQ300800, 5.0}, {TQ299800, 5.0}, ...(5 entries)]|
++------+---------------------------------------------------+
+... (ARRAY<STRUCT<cellid STRING, value DOUBLE>> — heavy tier; center TQ300800 filled to 5.0)
+"""
+
+
+def quadbin_cellfill_python_heavy_example(spark):
+    """Grouped aggregate: fill a NULL quadbin cell from ring-1 neighbours (heavy quadbin tier).
+
+    Inline data: London z=10 center cell (NULL) plus two ring-1 neighbours with value 5.0.
+    After fill the center equals 5.0 (mean).
+
+    The **heavy** tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    The light tier returns BINARY — a genuine divergence.
+
+    Note: ``qx.register(spark)`` is called to ensure the heavy tier is active.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
+
+    qx.register(spark)
+    df = spark.createDataFrame(
+        [
+            (1, 5234261469560717311, None),
+            (1, 5234261469560848383, 5.0),
+            (1, 5234261469560586239, 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            qx.quadbin_cellfill(f.col("cellid"), f.col("value"), 1, "mean", 2.0).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+quadbin_cellfill_python_heavy_example_output = """
++------+-------------------------------------------------------------+
+|region|filled                                                       |
++------+-------------------------------------------------------------+
+|1     |[{5234261469560717311, 5.0}, {5234261469560848383, 5.0}, ...]|
++------+-------------------------------------------------------------+
+... (ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> — heavy tier; center cell filled to 5.0)
+"""
+
+
+def h3_cellfill_python_heavy_example(spark):
+    """Grouped aggregate: fill a NULL H3 cell from ring-1 neighbours (heavy h3 tier).
+
+    Inline data: London res-8 center H3 cell ``612934495919669247`` (NULL) plus two
+    ring-1 neighbours with value 5.0.  After fill the center equals 5.0 (mean).
+
+    The **heavy** tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    The light tier returns BINARY — a genuine divergence.
+
+    Note: ``hx.register(spark)`` is called to load the Scala ``H3_CellFill``
+    implementation (registers the heavy STRUCT-returning UDF).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.h3 import functions as hx  # noqa: PLC0415
+
+    hx.register(spark)
+    df = spark.createDataFrame(
+        [
+            (1, 612934495919669247, None),
+            (1, 612934495863046143, 5.0),
+            (1, 612934495900794879, 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    result = (
+        df.groupBy("region")
+        .agg(
+            hx.h3_cellfill(f.col("cellid"), f.col("value"), 1, "mean", 2.0).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+h3_cellfill_python_heavy_example_output = """
++------+----------------------------------------------------------+
+|region|filled                                                    |
++------+----------------------------------------------------------+
+|1     |[{612934495919669247, 5.0}, {612934495863046143, 5.0}, ...]|
++------+----------------------------------------------------------+
+... (ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> — heavy tier; center H3 cell filled to 5.0)
+"""
+
+
+def custom_cellfill_python_heavy_example(spark):
+    """Grouped aggregate: fill a NULL custom-grid cell from ring-1 neighbours (heavy custom tier).
+
+    Reads the ``custom_grids`` setup view for the grid spec.  Uses
+    ``custom_pointascell`` at resolution 0 to derive valid cell IDs for the
+    center (NULL) and two ring-1 neighbours (value 5.0).  After fill the center
+    equals 5.0 (mean).
+
+    The **heavy** tier returns ``ARRAY<STRUCT<cellid BIGINT, value DOUBLE>>``.
+    The light tier returns BINARY — a genuine divergence.
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+
+    cx.register(spark)
+    df_grid = spark.table("custom_grids")
+    center_row = df_grid.select(
+        cx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)).alias("center"),
+        cx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)).alias("nbr1"),
+        cx.custom_pointascell(f.lit("POINT(531000 181000)"), f.col("grid"), f.lit(0)).alias("nbr2"),
+        f.col("grid"),
+    ).first()
+    center_id = center_row["center"]
+    nbr1_id = center_row["nbr1"]
+    nbr2_id = center_row["nbr2"]
+
+    df = spark.createDataFrame(
+        [
+            (1, center_id, None),
+            (1, nbr1_id, 5.0),
+            (1, nbr2_id, 5.0),
+        ],
+        ["region", "cellid", "value"],
+    )
+    df = df.crossJoin(df_grid.select("grid"))
+    result = (
+        df.groupBy("region")
+        .agg(
+            cx.custom_cellfill(
+                f.col("cellid"),
+                f.col("value"),
+                f.col("grid"),
+                1,
+                "mean",
+                2.0,
+            ).alias("filled")
+        )
+        .first()
+    )
+    return result["filled"]
+
+
+custom_cellfill_python_heavy_example_output = """
++------+---------------------------------------------------------+
+|region|filled                                                   |
++------+---------------------------------------------------------+
+|1     |[{216172782113787048, 5.0}, {216172782113786967, 5.0}, ...]|
++------+---------------------------------------------------------+
+... (ARRAY<STRUCT<cellid BIGINT, value DOUBLE>> — heavy tier; center cell filled to 5.0)
+"""
+
+
+def quadbin_kloop_python_heavy_example(spark):
+    """Return the 8-cell hollow ring at exactly k=1 around a quadbin cell (heavy quadbin tier).
+
+    Reads the ``quadbin_cells`` setup view (cell = 5233961839712272383, SF at z10).
+    At k=1 returns the 8 surrounding cells (center excluded).  Returns
+    ``ARRAY<BIGINT>``.  Identical to the lightweight output (AGREE).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
+
+    df = spark.table("quadbin_cells")
+    result = df.select(
+        qx.quadbin_kloop(f.col("cell"), f.lit(1)).alias("kloop")
+    ).first()
+    return result["kloop"]
+
+
+quadbin_kloop_python_heavy_example_output = """
++-------------------------------+
+|kloop                          |
++-------------------------------+
+|[..., (8 cells at k=1)]        |
++-------------------------------+
+... (8 BIGINT cell IDs — hollow ring at k=1; center cell 5233961839712272383 excluded)
+"""
+
+
+def custom_kloop_python_heavy_example(spark):
+    """Return the 8-cell hollow ring at exactly k=1 around a custom-grid cell (heavy custom tier).
+
+    Reads the ``custom_grids`` setup view (``cell = 360287970373976640`` at res=5,
+    ``grid`` struct).  At k=1 the hollow ring contains 8 cells (center excluded).
+    Returns ``ARRAY<BIGINT>``.  Identical to the lightweight output (AGREE).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+
+    df = spark.table("custom_grids")
+    result = df.select(
+        cx.custom_kloop(f.col("cell"), f.col("grid"), f.lit(1)).alias("kloop")
+    ).first()
+    return result["kloop"]
+
+
+custom_kloop_python_heavy_example_output = """
++-----------------------+
+|kloop                  |
++-----------------------+
+|[..., (8 cells at k=1)]|
++-----------------------+
+... (8 BIGINT cell IDs — hollow ring at k=1, center cell excluded)
+"""
+
+
+def custom_distance_python_heavy_example(spark):
+    """Chebyshev distance between two custom-grid cells (heavy custom tier).
+
+    Reads the ``custom_grids`` setup view for the grid spec.  Computes two
+    adjacent cells at resolution 0 (cell width = 1000 m): one at
+    POINT(530000 180000) and one 1000 m east at POINT(531000 180000).
+    The Chebyshev distance between them is 1 grid step.
+    Identical to the lightweight output (AGREE).
+    """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+
+    df = spark.table("custom_grids")
+    result = df.select(
+        cx.custom_distance(
+            cx.custom_pointascell(f.lit("POINT(530000 180000)"), f.col("grid"), f.lit(0)),
+            f.col("grid"),
+            cx.custom_pointascell(f.lit("POINT(531000 180000)"), f.col("grid"), f.lit(0)),
+        ).alias("dist")
+    ).first()
+    return result["dist"]
+
+
+custom_distance_python_heavy_example_output = """
++----+
+|dist|
++----+
+|1   |
++----+
+... (Chebyshev grid distance between two cells 1 step apart in X at resolution 0)
 """

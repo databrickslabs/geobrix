@@ -28,7 +28,7 @@ Rasterize landscape PNG (for slides / 16:9 decks):
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-# --- Data: 146 functions, organized by category --------------------------------
+# --- Data: 150 functions, organized by category --------------------------------
 
 @dataclass
 class Section:
@@ -85,7 +85,7 @@ CARDS_LEFT = [
         fns=[
             "rst_combineavg_agg", "rst_derivedband_agg", "rst_merge_agg",
             "rst_frombands_agg", "rst_rasterize_agg",
-            "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg",
+            "rst_dtmfromgeoms_agg", "rst_gridfrompoints_agg", "rst_binpoints_agg",
             "rst_h3_rasterize_agg",
             "rst_quadbin_rasterize_agg", "rst_bng_rasterize_agg",
             "rst_custom_rasterize_agg",
@@ -98,7 +98,7 @@ CARDS_LEFT = [
         fns=[
             "rst_slope", "rst_aspect", "rst_hillshade",
             "rst_tri", "rst_tpi", "rst_roughness",
-            "rst_color_relief", "rst_viewshed",
+            "rst_color_relief", "rst_viewshed", "rst_chm",
         ],
     ),
     Card(
@@ -170,8 +170,8 @@ CARDS_RIGHT = [
         subtitle="Convert between vector geometries and raster tiles",
         color="#6B48A8", tint="#EEE8F8",
         fns=[
-            "rst_rasterize", "rst_polygonize",
-            "rst_dtmfromgeoms", "rst_gridfrompoints",
+            "rst_rasterize", "rst_polygonize", "rst_isoband",
+            "rst_dtmfromgeoms", "rst_gridfrompoints", "rst_binpoints",
         ],
     ),
     Card(
@@ -406,7 +406,7 @@ def render():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'146 SQL functions for raster data on Spark &#8212; registered as '
+        f'150 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -415,7 +415,7 @@ def render():
         f'</text>'
     )
     # Version pill (top-right)
-    pill_text = "v0.5.1"
+    pill_text = "v0.5.2"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{CANVAS_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '
@@ -515,7 +515,7 @@ def render_landscape():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'146 SQL functions for raster data on Spark &#8212; registered as '
+        f'150 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -524,7 +524,7 @@ def render_landscape():
         f'</text>'
     )
     # Version pill (top-right)
-    pill_text = "v0.5.1"
+    pill_text = "v0.5.2"
     pw = int(len(pill_text) * 6.8) + 24
     parts.append(
         f'<rect x="{LANDSCAPE_W - PAD - pw}" y="{PAD + 8}" rx="13" ry="13" '

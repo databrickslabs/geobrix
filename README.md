@@ -1,4 +1,7 @@
-<img src="resources/images/brand/GeoBriX.png" width="50%" />
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="resources/images/brand/GeoBriX_reverse.png" width="50%" />
+  <img src="resources/images/brand/GeoBriX.png" width="50%" alt="GeoBriX" />
+</picture>
 
 [![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
 [![documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://databrickslabs.github.io/geobrix/)
@@ -15,8 +18,8 @@
   python/geobrix/src/databricks/labs/gbx/vizx/__init__.py __all__, and is excluded from the total.
   Update these badges if functions are added or removed.
 -->
-![Functions](https://img.shields.io/badge/functions-228-2e7d32)
-![RasterX](https://img.shields.io/badge/RasterX-146-1565c0)
+![Functions](https://img.shields.io/badge/functions-232-2e7d32)
+![RasterX](https://img.shields.io/badge/RasterX-150-1565c0)
 ![GridX](https://img.shields.io/badge/GridX-60-1565c0)
 ![VectorX](https://img.shields.io/badge/VectorX-21-1565c0)
 ![VizX](https://img.shields.io/badge/VizX-20-6a1b9a)
@@ -128,6 +131,15 @@ Single-file vector writes are lightweight-only; the **sharded GeoJSONL** writer 
 ¹ `file_gdb_gbx` write is a **hybrid**: it encodes the `.gdb` via the native GDAL (`osgeo`) from the heavyweight GDAL init script, because pyogrio's bundled GDAL ships a read-only OpenFileGDB driver. On compute with those natives it writes natively; otherwise it raises a clear error (use `gpkg_gbx` / `geojson_gbx`). FileGDB *reading* is lightweight-only.
 
 Light vector readers/writers exchange geometry as **WKB/WKT** with companion `*_srid` columns — convert to/from Databricks `GEOMETRY` with `st_geomfromwkb` / `st_aswkb` (see [Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
+
+## Example notebooks
+
+End-to-end worked examples live in [`notebooks/examples/`](./notebooks/examples/), with a docs page for each one.
+
+| Notebook | Series | What it shows |
+|---|---|---|
+| [`wireless-coverage`](https://databrickslabs.github.io/geobrix/docs/notebooks/wireless-coverage) | LiDAR surface foundations | Builds the elevation/surface data foundation for wireless-coverage analysis from a USGS 3DEP **LiDAR point cloud** over San Francisco: reads `.laz` with the `lidar_gbx` reader, bins returns into 1 m rasters **per spatial tile** with `rst_binpoints_agg` (ground → bare-earth DTM, all returns → DSM), differences them into a Canopy Height Model with `rst_chm`, and (Part 2) writes DSM/DTM/CHM GeoTIFF products plus a binned-vs-TIN bare earth (`rst_dtmfromgeoms_agg`). |
+| [`h3-rasterize`](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize) | DEM extra (Wireless Coverage series) | Downloads a USGS 3DEP **seamless (10 m)** DEM for the San Francisco Bay Area via `DemDownloader()`, tiles it into distributed virtual tiles with the `raster_gbx` reader, clips each tile to a land mask from Overture Maps (`rst_clip`), extracts twelve 60 m elevation bands with `rst_isoband`, indexes them with Databricks product H3 (`h3_try_coverash3`) at resolution 9, assembles a multi-band raster stack, and dissolves per-group polygons on Spark via the product `st_union_agg` in `cells_as_gdf`. |
 
 ## Known limitations
 

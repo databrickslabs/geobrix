@@ -1,0 +1,220 @@
+---
+sidebar_position: 9
+sidebar_label: LiDAR (lidar_gbx)
+---
+
+# LiDAR Reader — `lidar_gbx`
+
+_Since:_ lightweight `lidar_gbx` **v0.5.2** · _(light-only — no heavyweight tier)_
+
+Read LAS and LAZ point-cloud files into a Spark DataFrame. The `lidar_gbx` reader
+is a lightweight pure-Python DataSource; it requires no JAR and runs on Serverless,
+standard (shared), and ARM clusters.
+
+To turn the loaded points into raster products — DSM binning, CHM, and isobands — see the
+[LiDAR / Point-Cloud DSM functions](../api/raster-functions#lidar-dsm).
+
+:::note Lightweight only
+`lidar_gbx` is a Python DataSource with no heavyweight GDAL/JVM counterpart. Register
+it with `register(spark)` before use.
+:::
+
+## Format name
+
+`lidar_gbx`
+
+## Supported files
+
+`.las` and `.laz` point clouds. Both compressed (LAZ) and uncompressed (LAS) files are
+supported. Pass a single file path or a directory; a directory is enumerated
+recursively and one partition per file is planned.
+
+## Modes
+
+`lidar_gbx` exposes two read modes, selected via the `mode` option (default: `"points"`):
+
+| Mode | Description | Output schema |
+|---|---|---|
+| `metadata` | One row per file — header-level statistics only; never loads points. Cheap on large archives. | See [Metadata schema](#metadata-schema) |
+| `points` | One row per point, chunk-iterated. Supports class/return/decimation filters. | See [Points schema](#points-schema) |
+
+## Options
+
+| Option | Default | Applies to | Description |
+|---|---|---|---|
+| `mode` | `"points"` | both | Read mode: `"metadata"` or `"points"`. |
+| `classFilter` | _none_ | `points` | Comma-separated LAS classification codes to keep (e.g. `"2"` for ground, `"2,3,4,5"` for ground + low/medium/high vegetation). Points not matching the filter are dropped. Absent = keep all. |
+| `returnFilter` | _none_ | `points` | Integer return number to keep (1-based: `1` = first return, `2` = second, …). Absent = keep all returns. |
+| `decimate` | `"1"` | `points` | Keep every N-th point (e.g. `"10"` = 10 % density). `1` = no decimation. |
+| `chunkSize` | `"1000000"` | `points` | Points read per internal batch (controls per-task memory, not partition count). |
+| `dimensions` | _all_ | `points` | Comma-separated subset of the base point columns to return (e.g. `"x,y,z,classification"`), emitted in schema order. The reader reads only the requested dimensions — plus any needed by `classFilter`/`returnFilter` — so projecting to what you need cuts per-point I/O and memory. Absent = all base columns; an unknown name errors. |
+
+:::tip Project columns for large point clouds
+For big reads, request only the dimensions you need — e.g. `.option("dimensions", "x,y,z,classification")` — so the reader skips the rest at the source. That is cheaper than loading all base columns and pruning with `.select(...)` afterwards.
+:::
+
+## Register
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+```
+
+## Output schemas
+
+### Metadata schema {#metadata-schema}
+
+```
+root
+ |-- path:              string    — full file path
+ |-- name:              string    — filename
+ |-- point_count:       long      — total points in the file
+ |-- x_min:             double
+ |-- x_max:             double
+ |-- y_min:             double
+ |-- y_max:             double
+ |-- z_min:             double
+ |-- z_max:             double
+ |-- crs:               string    — authority string (e.g. EPSG:27700) or WKT
+ |-- point_format:      integer   — LAS point data format ID (0-10)
+ |-- dimensions:        array<string> — dimension names present in this file
+ |-- scale:             array<double> — [x_scale, y_scale, z_scale]
+ |-- offset:            array<double> — [x_offset, y_offset, z_offset]
+ |-- return_histogram:  array<long>   — point count per return number
+ |-- density:           double    — average point density (pts / m²)
+ |-- version:           string    — LAS spec version (e.g. "1.4")
+ |-- size:              long      — file size in bytes
+ |-- modificationTime:  timestamp
+```
+
+### Points schema {#points-schema}
+
+```
+root
+ |-- x:                 double    — coordinate in the file's CRS
+ |-- y:                 double
+ |-- z:                 double
+ |-- intensity:         integer
+ |-- return_number:     integer
+ |-- number_of_returns: integer
+ |-- classification:    integer   — LAS classification code
+ |-- gps_time:          double
+```
+
+## Examples
+
+### Metadata mode
+
+```python
+from databricks.labs.gbx.ds.register import register
+
+register(spark)
+
+meta = (
+    spark.read
+    .format("lidar_gbx")
+    .option("mode", "metadata")
+    .load("/Volumes/main/geobrix_samples/geobrix-examples/london/lidar/")
+)
+meta.select("name", "point_count", "z_min", "z_max", "crs").show()
+```
+
+```
++---------------------+-----------+------+------+----------+
+|name                 |point_count|z_min |z_max |crs       |
++---------------------+-----------+------+------+----------+
+|tile_TQ3080_5m.laz   |2183440    |2.14  |118.9 |EPSG:27700|
++---------------------+-----------+------+------+----------+
+```
+
+### Points mode — ground returns only (classFilter + returnFilter)
+
+```python
+register(spark)
+
+ground = (
+    spark.read
+    .format("lidar_gbx")
+    .option("mode", "points")
+    .option("classFilter", "2")      # LAS class 2 = ground
+    .option("returnFilter", "1")     # first return only
+    .load("/Volumes/main/geobrix_samples/geobrix-examples/london/lidar/")
+)
+ground.select("x", "y", "z").show(5)
+```
+
+### Building a DSM tile via `gbx_rst_binpoints_agg`
+
+Combine `lidar_gbx` with the `gbx_rst_binpoints_agg` aggregator to grid ground or
+first-return points into a Digital Surface Model:
+
+:::tip Full-density LiDAR? Use the bounded `rx.bin_points_tiled`
+`rst_binpoints_agg` realizes a group's points in the worker, so a full-resolution tile of
+millions of returns can exhaust RAM. For that, bin with **`rx.bin_points_tiled(df, x, y, z,
+by=[…], xmin=…, …, width, height, srid, stat)`** — a two-stage native aggregation whose memory
+is the raster grid (W×H), not the point count. Same output for `max`/`min`/`mean`/`count`. See
+[RasterX › Memory & scale](../api/raster-functions#rst_binpoints_agg) and [Performance](../api/performance).
+:::
+
+```python
+from pyspark.sql import functions as F
+from databricks.labs.gbx.pyrx import functions as prx
+from databricks.labs.gbx.ds.register import register
+
+register(spark)
+prx.register(spark)
+
+pts = (
+    spark.read
+    .format("lidar_gbx")
+    .option("classFilter", "2")      # ground class
+    .load("/Volumes/main/geobrix_samples/geobrix-examples/london/lidar/")
+)
+
+dsm_bytes = pts.groupBy(F.lit(1).alias("tile_id")).agg(
+    prx.rst_binpoints_agg(
+        "x", "y", "z",
+        F.lit(530000.0), F.lit(180000.0),   # xmin, ymin (BNG)
+        F.lit(532000.0), F.lit(182000.0),   # xmax, ymax
+        F.lit(200), F.lit(200),             # 200×200 px (10 m cells)
+        F.lit(27700),                       # EPSG:27700
+        F.lit("max"),
+    ).alias("dsm_bytes")
+)
+
+dsm = dsm_bytes.select(
+    prx.rst_fromcontent("dsm_bytes", F.lit("GTiff")).alias("dsm")
+)
+```
+
+## Scale, memory, and robustness
+
+`lidar_gbx` is built to process large point clouds — hundreds of millions of returns — on
+Serverless:
+
+- **Columnar reads.** Points mode reads each file in vectorized chunks and hands Spark
+  **Arrow record batches** — never one Python object per point — so a full-resolution read
+  (`decimate=1`) avoids per-row conversion overhead that would otherwise stall the session.
+  Metadata mode is columnar too.
+- **Bounded per-task memory.** Points are streamed `chunkSize` at a time (default
+  `1000000`), so peak memory per task is a single batch — independent of the total file
+  size. Lower `chunkSize` for very large files or tighter memory; raise it to trade memory
+  for throughput.
+- **Filters and decimation apply in the reader**, vectorized, before points reach Spark, so
+  `classFilter` / `returnFilter` / `decimate` cut shuffle and downstream cost. `decimate`
+  reads every point but emits every N-th — use it for a fast coarse pass, then drop to
+  `decimate=1` for the full-resolution product.
+- **Bad nodes are skipped, not fatal.** A 0-byte or unreadable `.las`/`.laz` (for example an
+  empty Entwine Point Tile node from an interrupted download) is skipped with a warning, so
+  one corrupt file cannot fail a distributed read over a whole archive.
+- **Parallelism is per file** — one InputPartition per file. A directory of many tiles
+  parallelizes naturally across executors; a handful of very large files limits parallelism
+  to the file count, so split or tile upstream if you need more executors engaged.
+- **Spark Connect–safe.** The reader makes no `_jvm` / `sparkContext` / `.rdd` calls and is
+  session-free, so it runs unchanged on Serverless, standard, and ARM clusters.
+
+## Next Steps
+
+- [RasterX Functions — `gbx_rst_binpoints` / `gbx_rst_binpoints_agg`](../api/raster-functions#rst_binpoints)
+- [RasterX Functions — `gbx_rst_chm`](../api/raster-functions#rst_chm)
+- [RasterX Functions — `gbx_rst_isoband`](../api/raster-functions#rst_isoband)

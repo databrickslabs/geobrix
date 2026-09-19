@@ -2730,6 +2730,7 @@ rst_align_to_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(tile warped to reference grid; output has reference tile's CRS, extent, width, height)
 """
 
 
@@ -3617,6 +3618,111 @@ rst_custom_tessellate_sql_example_output = """
 |<Long cell id>|{<Long>, <raster bytes>, null, {driver -> GTiff, ...}}|
 +--------------+------------------------------------------------------+
 (one v2 tile struct per cell; cellid is BIGINT encoding the custom cell)
+"""
+
+
+# ============================================================================
+# LiDAR / Point-Cloud DSM Functions (light tier only)
+# ============================================================================
+
+
+def rst_binpoints_sql_example():
+    """Bin a row of parallel x/y/z arrays into a single-band DSM tile.
+
+    Each output pixel carries the 'max' (highest return) of all points
+    whose centroid lands in that pixel. Empty cells carry NoData (-9999).
+    Coordinates are in BNG (EPSG:27700) for this example.
+    """
+    return """
+SELECT gbx_rst_binpoints(
+    array(550100.0, 550200.0, 550300.0),
+    array(180100.0, 180200.0, 180500.0),
+    array(42.5, 45.1, 38.7),
+    550000.0, 180000.0, 551000.0, 181000.0,
+    10, 10, 27700, 'max'
+) AS dsm;
+"""
+
+
+rst_binpoints_sql_example_output = """
++-----------------------------------------------------------+
+|dsm                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band Float32 DSM tile: max-z per 100 m cell over the 1 km extent)
+"""
+
+
+def rst_binpoints_agg_sql_example():
+    """Stream one (x, y, z) scalar point per row into a DSM tile via a grouped aggregation.
+
+    The aggregator collects all points per group and bins them into a
+    Float32 raster. Wrap the BINARY result with gbx_rst_fromcontent to
+    get a full tile struct. Coordinates are in BNG (EPSG:27700).
+    """
+    return """
+SELECT tile_id,
+    gbx_rst_binpoints_agg(x, y, z, 550000.0, 180000.0, 551000.0, 181000.0, 10, 10, 27700, 'max') AS dsm
+FROM (
+  VALUES (1, 550100.0, 180100.0, 42.5), (1, 550200.0, 180200.0, 45.1), (1, 550300.0, 180500.0, 38.7)
+) AS t(tile_id, x, y, z)
+GROUP BY tile_id;
+"""
+
+
+rst_binpoints_agg_sql_example_output = """
++-------+--------------+
+|tile_id|dsm           |
++-------+--------------+
+|1      |<raster bytes>|
++-------+--------------+
+(BINARY raster bytes — wrap with gbx_rst_fromcontent(dsm, 'GTiff') to rebuild a tile struct)
+"""
+
+
+def rst_isoband_sql_example():
+    """Reclassify a raster band into value bins and return one polygon per contiguous patch.
+
+    Returns ARRAY<struct(geom_wkb BINARY, band INT, lower DOUBLE, upper DOUBLE)>:
+    one entry per contiguous region in the same break interval.
+    Uses the dem_rasters view (SRTM elevation, ~0-200 m range).
+    """
+    return """
+SELECT gbx_rst_isoband(tile, array(0.0, 50.0, 100.0, 150.0, 200.0)) AS patches
+FROM dem_rasters;
+"""
+
+
+rst_isoband_sql_example_output = """
++-----------------------------------------------------------+
+|patches                                                    |
++-----------------------------------------------------------+
+|[{[BINARY], 0, 0.0, 50.0}, {[BINARY], 1, 50.0, 100.0}, ...]|
++-----------------------------------------------------------+
+(array of per-patch structs: geom_wkb WKB polygon in raster CRS, band index, lower/upper break values)
+"""
+
+
+def rst_chm_sql_example():
+    """Compute Canopy Height Model from a DSM and a DEM tile.
+
+    The DSM is warped onto the DEM grid, then CHM = clamp(DSM - DEM, min=0).
+    NoData in either input propagates. Using the same tile for both is a
+    degenerate (all-zero) but valid example.
+    """
+    return """
+SELECT gbx_rst_chm(tile, tile) AS chm FROM dem_rasters;
+"""
+
+
+rst_chm_sql_example_output = """
++-----------------------------------------------------------+
+|chm                                                        |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(Float32 CHM tile: clamp(DSM - DEM, min=0); NoData propagates from either input)
 """
 
 

@@ -152,6 +152,30 @@ object Quadbin extends GridSystem {
       * `cellIdToGeometry` draws, so the covering interior fast-path is bit-exact. */
     override def coveringFastPathExact: Boolean = true
 
+    /** Cell edge length (longitude degrees) at zoom `z`: 360 / 2^z.
+      * Mirrors light `_qb_hooks` `cell_step = 360.0 / float(1 << z)`.
+      * This is the BASELINE (longitude-only) step; use `geomCellStep` for boundary sampling. */
+    override def cellStep(resolution: Int): Double = 360.0 / (1L << resolution).toDouble
+
+    /** Latitude-aware boundary-sampling step for the quadbin grid.
+      *
+      * Web-mercator tile latitude height ≈ cos(lat) * (360/2^z). Using only the longitude step
+      * (360/2^z) would sample near-vertical boundary segments at high latitudes too coarsely —
+      * the tile latitude-height shrinks toward the poles, so the longitude step can exceed 1 tile
+      * height beyond ~±70°, silently skipping boundary cells between sampled points.
+      *
+      * Fix: multiply the longitude step by cos(maxAbsLat), where maxAbsLat = max(|yMin|, |yMax|)
+      * from the geometry envelope. A floor of cos(89°) prevents a near-zero step at the poles.
+      * Mirrors light `_qb_lat_step` in `_quadbin.py`.
+      */
+    override def geomCellStep(geom: Geometry, resolution: Int): Double = {
+      val lonStep = cellStep(resolution)
+      val env     = geom.getEnvelopeInternal
+      val maxAbsLat = math.max(math.abs(env.getMinY), math.abs(env.getMaxY))
+      val cosFloor  = math.cos(math.toRadians(89.0))
+      lonStep * math.max(math.cos(math.toRadians(maxAbsLat)), cosFloor)
+    }
+
     /** SRID for quadbin cell geometries (WGS84 lon/lat). */
     def crsSrid: Int = 4326
 

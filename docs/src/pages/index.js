@@ -11,12 +11,13 @@ function HomepageHeader() {
   return (
     <header className={clsx('hero hero--primary', styles.heroBanner)}>
       <div className="container">
-        <img
-          src={useBaseUrl('/img/databricks-labs-logo.png')}
-          alt="Databricks Labs"
-          className={styles.heroLogo}
-        />
-        <h1 className="hero__title">{siteConfig.title}</h1>
+        <h1 className={clsx('hero__title', styles.heroTitle)}>
+          <img
+            src={useBaseUrl('/img/geobrix-reverse.png')}
+            alt={siteConfig.title}
+            className={styles.heroLogo}
+          />
+        </h1>
         <p className="hero__subtitle">{siteConfig.tagline}</p>
         <div className={styles.buttons}>
           <Link

@@ -1,8 +1,8 @@
 """Register the light DataSources with a Spark session.
 
 Mirrors pyrx.functions.register: call once, consciously. The format strings
-raster_gbx / gtiff_gbx / pmtiles_gbx do not collide with the Scala-registered
-gdal / gtiff_gdal, so both tiers coexist.
+raster_gbx / gtiff_gbx / pmtiles_gbx / lidar_gbx do not collide with the
+Scala-registered gdal / gtiff_gdal, so both tiers coexist.
 """
 
 from __future__ import annotations
@@ -15,6 +15,7 @@ from databricks.labs.gbx import _register
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
 from databricks.labs.gbx.ds.file import FileGbxDataSource
 from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
+from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
 from databricks.labs.gbx.ds.netcdf import NetcdfGbxDataSource
 from databricks.labs.gbx.ds.pmtiles import PMTilesGbxDataSource
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource
@@ -40,6 +41,7 @@ _SOURCES = (
     GeoJSONLGbxDataSource,
     GpkgGbxDataSource,
     FileGdbGbxDataSource,
+    LidarGbxDataSource,
 )
 
 
@@ -51,7 +53,7 @@ def register(
 
     Args:
         spark: Spark session (active session if not provided).
-        only: Optional list of format names to register (instead of all 9).
+        only: Optional list of format names to register (instead of all 13).
             Accepts the format name with or without the ``_gbx`` suffix
             (``raster`` or ``raster_gbx``), case-insensitively. ``None`` registers
             everything; ``[]`` registers nothing. An unrecognized format raises

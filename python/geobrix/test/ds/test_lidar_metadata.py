@@ -23,6 +23,26 @@ def _write_tiny_las(tmp_path, n=100, crs_epsg=None):
     return str(p)
 
 
+def test_metadata_skips_empty_and_corrupt(spark, tmp_path):
+    """Metadata mode skips 0-byte / unreadable .laz among good files (no crash)."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    d = tmp_path / "mixed"
+    d.mkdir()
+    _write_tiny_las(d, n=50)  # valid tiny.las
+    (d / "empty.laz").write_bytes(b"")  # 0-byte node
+    (d / "corrupt.laz").write_bytes(b"xxxx")  # unreadable
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    rows = (
+        spark.read.format("lidar_gbx").option("mode", "metadata").load(str(d)).collect()
+    )
+    assert len(rows) == 1  # only the valid file
+    assert rows[0]["point_count"] == 50
+
+
 def test_metadata_header_fields(spark, tmp_path):
     from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
 

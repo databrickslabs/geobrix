@@ -68,6 +68,30 @@ def test_points_decimate(spark, tmp_path):
     assert df.count() == 10  # every 10th of 100
 
 
+def test_points_decimate_across_chunks(spark, tmp_path):
+    """Decimation uses a 1-based counter continuous ACROSS chunk boundaries.
+
+    100 points read in 10-point chunks with decimate=7 keeps emitted #7,14,…,98
+    = 14 points. A per-chunk reset would keep #7 of each chunk = 10. The columnar
+    (Arrow) reader must match the continuous count.
+    """
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    path = _write_tiny_las(tmp_path, n=100)
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    df = (
+        spark.read.format("lidar_gbx")
+        .option("mode", "points")
+        .option("decimate", "7")
+        .option("chunkSize", "10")
+        .load(path)
+    )
+    assert df.count() == 14
+
+
 def test_points_class_filter(spark, tmp_path):
     from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
 
@@ -106,6 +130,27 @@ def test_points_return_filter(spark, tmp_path):
     assert df.count() == 30
     rn_vals = {r["return_number"] for r in df.select("return_number").collect()}
     assert rn_vals == {1}
+
+
+def test_points_skips_empty_and_corrupt(spark, tmp_path):
+    """A 0-byte or corrupt .laz among good files is skipped, not fatal.
+
+    The USGS EPT downloader stages some nodes as 0-byte files; a single one
+    must not kill a distributed point read.
+    """
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    d = tmp_path / "mixed"
+    d.mkdir()
+    _write_tiny_las(d, n=120)  # valid tiny.las in the dir
+    (d / "empty.laz").write_bytes(b"")  # 0-byte node (as staged by EPT)
+    (d / "corrupt.laz").write_bytes(b"not a real laz header")  # unreadable
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    df = spark.read.format("lidar_gbx").option("mode", "points").load(str(d))
+    assert df.count() == 120  # empties/corrupt skipped; valid points intact
 
 
 def test_points_laz_parity(spark, tmp_path):

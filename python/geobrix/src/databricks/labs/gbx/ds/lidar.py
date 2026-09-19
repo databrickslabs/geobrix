@@ -8,7 +8,8 @@ Uses no forbidden Spark internal APIs — safe on Spark Connect / Serverless.
 """
 
 import os
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple
+import warnings
+from typing import TYPE_CHECKING, Dict, Iterator, List, Optional, Sequence
 
 import numpy as np
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
@@ -25,6 +26,9 @@ from pyspark.sql.types import (
 
 from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.file_gbx import list_local_files
+
+if TYPE_CHECKING:
+    import pyarrow as pa
 
 LIDAR_META_SCHEMA = StructType(
     [
@@ -80,9 +84,12 @@ class _LidarFilePartition(InputPartition):
 
 class LidarGbxReader(DataSourceReader):
     def __init__(self, options: Dict[str, str]):
-        self.path = options.get("path")
-        if not self.path:
+        raw_path = options.get("path")
+        if not raw_path:
             raise ValueError("lidar_gbx requires a 'path' (e.g. .load(path)).")
+        # Normalise once (strip any file:/dbfs: scheme) so list_local_files and the
+        # per-file reads all see a bare local path — matches the vector reader.
+        self.path = _listing.to_local_path(raw_path)
         self.mode = (options.get("mode") or "points").lower()
         # Points-mode options
         self.class_filter: Optional[List[int]] = _parse_int_list(
@@ -99,63 +106,126 @@ class LidarGbxReader(DataSourceReader):
         files = list_local_files(self.path, extensions=_LIDAR_EXTS)
         return [_LidarFilePartition(f) for f in files]
 
-    def read(self, partition: "_LidarFilePartition") -> Iterator[Tuple]:
+    def read(self, partition: "_LidarFilePartition") -> Iterator["pa.RecordBatch"]:
         if self.mode == "metadata":
             yield from self._read_metadata(partition.file_path)
         else:
             yield from self._read_points(partition.file_path)
 
-    def _read_points(self, file_path: str) -> Iterator[Tuple]:
+    def _read_points(self, file_path: str) -> Iterator["pa.RecordBatch"]:
         import laspy
+        import pyarrow as pa
+        from pyspark.sql.pandas.types import to_arrow_type
 
         local = _listing.to_local_path(file_path)
-        with laspy.open(local) as reader:
-            emitted = 0
+        # Tolerate bad nodes without dropping healthy ones: retry transient UC Volume
+        # FUSE misses (eventual-consistency lag) so a transient miss is never mistaken
+        # for a bad node, then skip only a genuinely empty (0-byte) or unreadable /
+        # corrupt file — a single bad .laz must not fail a distributed read (mirrors the
+        # downloader's "skip nodes that never came back").
+        try:
+            st = _listing._retry_transient(lambda: os.stat(local))
+            if st.st_size == 0:
+                warnings.warn(
+                    f"lidar_gbx: skipping empty file {local!r} (0 bytes)",
+                    stacklevel=2,
+                )
+                return
+            opener = _listing._retry_transient(lambda: laspy.open(local))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — corrupt/truncated or persistently missing
+            warnings.warn(
+                f"lidar_gbx: skipping unreadable file {local!r}: {exc}",
+                stacklevel=2,
+            )
+            return
+        # Columnar (Arrow) output: one RecordBatch per chunk, gathered with vectorised
+        # numpy — never one Python tuple per point. A full-resolution read (decimate=1)
+        # over hundreds of millions of returns would otherwise stall or kill the Spark
+        # session on per-row conversion. The batch schema matches LIDAR_POINTS_SCHEMA
+        # field-for-field (IntegerType -> int32, DoubleType -> float64).
+        arrow_schema = pa.schema(
+            [
+                pa.field(f.name, to_arrow_type(f.dataType))
+                for f in LIDAR_POINTS_SCHEMA.fields
+            ]
+        )
+        with opener as reader:
+            seen = 0  # filter-passing points seen in this file (decimate parity)
             for chunk in reader.chunk_iterator(self.chunk_size):
-                xs = np.asarray(chunk.x)
-                ys = np.asarray(chunk.y)
-                zs = np.asarray(chunk.z)
+                xs = np.asarray(chunk.x, dtype=np.float64)
+                ys = np.asarray(chunk.y, dtype=np.float64)
+                zs = np.asarray(chunk.z, dtype=np.float64)
                 cls = np.asarray(chunk.classification)
                 rn = np.asarray(chunk.return_number)
                 nr = np.asarray(chunk.number_of_returns)
                 inten = np.asarray(chunk.intensity)
                 if "gps_time" in chunk.point_format.dimension_names:
-                    gt = np.asarray(chunk.gps_time)
+                    gt = np.asarray(chunk.gps_time, dtype=np.float64)
                 else:
-                    gt = np.full(len(xs), np.nan)
-                mask = np.ones(len(xs), dtype=bool)
-                if self.class_filter is not None:
-                    mask &= np.isin(cls, self.class_filter)
-                if self.return_filter is not None:
-                    mask &= rn == self.return_filter
-                idx = np.nonzero(mask)[0]
-                for i in idx:
-                    emitted += 1
-                    if self.decimate > 1 and (emitted % self.decimate) != 0:
-                        continue
-                    yield (
-                        float(xs[i]),
-                        float(ys[i]),
-                        float(zs[i]),
-                        int(inten[i]),
-                        int(rn[i]),
-                        int(nr[i]),
-                        int(cls[i]),
-                        float(gt[i]),
-                    )
+                    gt = np.full(len(xs), np.nan, dtype=np.float64)
 
-    def _read_metadata(self, file_path: str) -> Iterator[Tuple]:
+                keep = np.ones(len(xs), dtype=bool)
+                if self.class_filter is not None:
+                    keep &= np.isin(cls, self.class_filter)
+                if self.return_filter is not None:
+                    keep &= rn == self.return_filter
+
+                if self.decimate > 1:
+                    # Keep every Nth filter-passing point via a 1-based counter that
+                    # runs continuously across chunks (identical selection to the
+                    # row-wise reader this replaces).
+                    masked_idx = np.nonzero(keep)[0]
+                    emit_no = seen + np.arange(1, masked_idx.size + 1)
+                    keep[masked_idx[emit_no % self.decimate != 0]] = False
+                    seen += masked_idx.size
+
+                if not keep.any():
+                    continue
+                yield pa.record_batch(
+                    [
+                        pa.array(xs[keep], type=pa.float64()),
+                        pa.array(ys[keep], type=pa.float64()),
+                        pa.array(zs[keep], type=pa.float64()),
+                        pa.array(inten[keep].astype(np.int32), type=pa.int32()),
+                        pa.array(rn[keep].astype(np.int32), type=pa.int32()),
+                        pa.array(nr[keep].astype(np.int32), type=pa.int32()),
+                        pa.array(cls[keep].astype(np.int32), type=pa.int32()),
+                        pa.array(gt[keep], type=pa.float64()),
+                    ],
+                    schema=arrow_schema,
+                )
+
+    def _read_metadata(self, file_path: str) -> Iterator["pa.RecordBatch"]:
         import datetime as _dt
 
         import laspy
+        import pyarrow as pa
+        from pyspark.sql.pandas.types import to_arrow_schema
 
         local = _listing.to_local_path(file_path)
-        # UC Volume FUSE can transiently raise FileNotFoundError (eventual-
-        # consistency lag); retry up to 10x before re-raising.
-        st = _listing._retry_transient(lambda: os.stat(local))
         source = _listing.to_spark_uri(file_path)
         name = os.path.basename(local)
-        with laspy.open(local) as reader:
+        # Same bad-node tolerance as _read_points: retry transient UC Volume FUSE
+        # misses (eventual-consistency lag), then skip only a genuinely empty or
+        # unreadable / corrupt file so one bad node can't fail a directory scan.
+        try:
+            st = _listing._retry_transient(lambda: os.stat(local))
+            if st.st_size == 0:
+                warnings.warn(
+                    f"lidar_gbx: skipping empty file {local!r} (0 bytes)", stacklevel=2
+                )
+                return
+            opener = _listing._retry_transient(lambda: laspy.open(local))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 — corrupt/truncated or persistently missing
+            warnings.warn(
+                f"lidar_gbx: skipping unreadable file {local!r}: {exc}", stacklevel=2
+            )
+            return
+        with opener as reader:
             h = reader.header
             mins = h.mins
             maxs = h.maxs
@@ -174,26 +244,32 @@ class LidarGbxReader(DataSourceReader):
             )
             area = float((maxs[0] - mins[0]) * (maxs[1] - mins[1]))
             density = (float(h.point_count) / area) if area > 0 else None
-            yield (
-                source,
-                name,
-                int(h.point_count),
-                float(mins[0]),
-                float(maxs[0]),
-                float(mins[1]),
-                float(maxs[1]),
-                float(mins[2]),
-                float(maxs[2]),
-                crs,
-                int(h.point_format.id),
-                dims,
-                [float(s) for s in h.scales],
-                [float(o) for o in h.offsets],
-                rh,
-                density,
-                str(h.version),
-                int(st.st_size),
-                _dt.datetime.fromtimestamp(st.st_mtime),
+            # One row per file, emitted columnar (Arrow) for output consistency with
+            # points mode. Build a single-row batch from Python values against the
+            # declared schema so nested-list and timestamp types resolve exactly.
+            row = {
+                "path": source,
+                "name": name,
+                "point_count": int(h.point_count),
+                "x_min": float(mins[0]),
+                "x_max": float(maxs[0]),
+                "y_min": float(mins[1]),
+                "y_max": float(maxs[1]),
+                "z_min": float(mins[2]),
+                "z_max": float(maxs[2]),
+                "crs": crs,
+                "point_format": int(h.point_format.id),
+                "dimensions": dims,
+                "scale": [float(s) for s in h.scales],
+                "offset": [float(o) for o in h.offsets],
+                "return_histogram": rh,
+                "density": density,
+                "version": str(h.version),
+                "size": int(st.st_size),
+                "modificationTime": _dt.datetime.fromtimestamp(st.st_mtime),
+            }
+            yield pa.RecordBatch.from_pylist(
+                [row], schema=to_arrow_schema(LIDAR_META_SCHEMA)
             )
 
 

@@ -33,7 +33,11 @@ Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
   full-density (`decimate=1`) point clouds read without stalling. See
   [LiDAR Reader](./readers/lidar).
 
-### Point-cloud DSM functions (new, lightweight tier)
+### Point-cloud DSM functions (new)
+
+The four registered functions below ship in **both tiers** — heavyweight RasterX and
+lightweight `pyrx` — so they take part in the same heavy-vs-light parity comparison as the
+rest of the raster family; `rx.bin_points_tiled` is a lightweight-tier Python helper.
 
 - **`gbx_rst_binpoints`** — bin parallel `ARRAY<DOUBLE>` x/y/z columns into a Float32
   DSM raster. Each pixel carries a configurable statistic (`max`, `min`, `mean`,

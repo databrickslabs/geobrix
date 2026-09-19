@@ -1,0 +1,166 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 720" width="1480" height="720" style="font-family: Inter, -apple-system, system-ui, sans-serif;">
+<defs>
+  <filter id="card-shadow" x="-5%" y="-5%" width="110%" height="115%">
+    <feDropShadow dx="0" dy="2" stdDeviation="6"
+                  flood-color="#0F1B2A" flood-opacity="0.08"/>
+  </filter>
+  <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+    <stop offset="0" stop-color="#FAFBFC"/>
+    <stop offset="1" stop-color="#F1F4F8"/>
+  </linearGradient>
+</defs>
+
+<rect x="0" y="0" width="1480" height="720" fill="url(#bg)"/>
+
+<!-- Header -->
+<rect x="36" y="40" rx="14" ry="14" width="60" height="60" fill="#2F8F4E"/>
+<text x="66.0" y="75.0" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="15" font-weight="900" fill="#FFFFFF">LiDAR</text>
+<text x="114" y="68" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="28" font-weight="800" fill="#0F1B2A" text-anchor="start">LiDAR point cloud &#x2192; surface models</text>
+<text x="114" y="94" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="14" font-weight="400" fill="#3F4D5E" text-anchor="start">Classified 3DEP returns &#x2192; DSM &#xB7; bare-earth DTM &#xB7; Canopy Height Model</text>
+<rect x="1247" y="48" rx="13" ry="13" width="197" height="26" fill="#0F1B2A"/>
+<text x="1345.5" y="66" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">Wireless Coverage &#xB7; LiDAR</text>
+
+<!-- ═══════════ CARD 1: 3DEP LiDAR point cloud ═══════════ -->
+<rect x="36" y="160" rx="14" ry="14" width="310" height="380" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 36 174 A 14 14 0 0 1 50 160 H 332 A 14 14 0 0 1 346 174 V 165 H 36 Z" fill="#2F8F4E"/>
+
+<!-- Point cloud visual: ground line + scattered dots at three height levels -->
+<line x1="70" y1="355" x2="316" y2="355" stroke="#2F8F4E" stroke-width="1.5" stroke-opacity="0.35"/>
+<!-- Ground class (low) -->
+<circle cx="80" cy="348" r="3" fill="#2F8F4E" fill-opacity="0.35"/>
+<circle cx="100" cy="351" r="3" fill="#2F8F4E" fill-opacity="0.30"/>
+<circle cx="124" cy="344" r="3" fill="#2F8F4E" fill-opacity="0.38"/>
+<circle cx="148" cy="350" r="3" fill="#2F8F4E" fill-opacity="0.32"/>
+<circle cx="170" cy="347" r="3" fill="#2F8F4E" fill-opacity="0.30"/>
+<circle cx="194" cy="352" r="3" fill="#2F8F4E" fill-opacity="0.35"/>
+<circle cx="216" cy="345" r="3" fill="#2F8F4E" fill-opacity="0.30"/>
+<circle cx="240" cy="350" r="3" fill="#2F8F4E" fill-opacity="0.33"/>
+<circle cx="264" cy="347" r="3" fill="#2F8F4E" fill-opacity="0.28"/>
+<circle cx="286" cy="349" r="3" fill="#2F8F4E" fill-opacity="0.32"/>
+<circle cx="308" cy="344" r="3" fill="#2F8F4E" fill-opacity="0.30"/>
+<!-- Mid-height returns -->
+<circle cx="88" cy="322" r="3" fill="#2F8F4E" fill-opacity="0.55"/>
+<circle cx="112" cy="315" r="3" fill="#2F8F4E" fill-opacity="0.50"/>
+<circle cx="138" cy="320" r="3" fill="#2F8F4E" fill-opacity="0.60"/>
+<circle cx="162" cy="313" r="3" fill="#2F8F4E" fill-opacity="0.52"/>
+<circle cx="188" cy="318" r="3" fill="#2F8F4E" fill-opacity="0.48"/>
+<circle cx="214" cy="323" r="3" fill="#2F8F4E" fill-opacity="0.55"/>
+<circle cx="238" cy="316" r="3" fill="#2F8F4E" fill-opacity="0.58"/>
+<circle cx="264" cy="310" r="3" fill="#2F8F4E" fill-opacity="0.52"/>
+<circle cx="288" cy="320" r="3" fill="#2F8F4E" fill-opacity="0.50"/>
+<!-- High returns cluster (trees/buildings, right-center) -->
+<circle cx="205" cy="245" r="3.5" fill="#2F8F4E" fill-opacity="0.85"/>
+<circle cx="217" cy="237" r="3.5" fill="#2F8F4E" fill-opacity="0.92"/>
+<circle cx="228" cy="250" r="3.5" fill="#2F8F4E" fill-opacity="0.80"/>
+<circle cx="240" cy="241" r="3.5" fill="#2F8F4E" fill-opacity="0.88"/>
+<circle cx="224" cy="260" r="3.5" fill="#2F8F4E" fill-opacity="0.78"/>
+<circle cx="244" cy="254" r="3.5" fill="#2F8F4E" fill-opacity="0.85"/>
+<circle cx="256" cy="244" r="3.5" fill="#2F8F4E" fill-opacity="0.82"/>
+<circle cx="212" cy="268" r="3" fill="#2F8F4E" fill-opacity="0.72"/>
+<circle cx="260" cy="262" r="3" fill="#2F8F4E" fill-opacity="0.75"/>
+<!-- Small building cluster (left) -->
+<circle cx="83" cy="284" r="3" fill="#2F8F4E" fill-opacity="0.65"/>
+<circle cx="93" cy="276" r="3" fill="#2F8F4E" fill-opacity="0.70"/>
+<circle cx="103" cy="282" r="3" fill="#2F8F4E" fill-opacity="0.62"/>
+
+<text x="191.0" y="396" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="middle">3DEP LiDAR point cloud</text>
+<g transform="translate(150, 410)"><rect x="0" y="0" rx="11" ry="11" width="82" height="22" fill="#DCEFE0"/><text x="41" y="15.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">lidar_gbx</text></g>
+<text x="191.0" y="458" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">Classified returns (ground vs. above-ground),</text>
+<text x="191.0" y="474" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">one Spark row per point &#xB7; EPSG:3857</text>
+
+<!-- Arrow 1 -->
+<line x1="354" y1="320.0" x2="384" y2="320.0" stroke="#2F8F4E" stroke-width="2.5" stroke-linecap="round"/>
+<polygon points="394,320.0 384,313.333 384,326.667" fill="#2F8F4E"/>
+
+<!-- ═══════════ CARD 2: Tile-binned surfaces ═══════════ -->
+<rect x="402" y="160" rx="14" ry="14" width="310" height="380" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 402 174 A 14 14 0 0 1 416 160 H 698 A 14 14 0 0 1 712 174 V 165 H 402 Z" fill="#2F8F4E"/>
+
+<!-- Binned surfaces: 7x6 grid of 12px cells, top-left (515,244) -->
+<rect x="515" y="244" width="12" height="12" fill="#2F8F4E" fill-opacity="0.72"/><rect x="527" y="244" width="12" height="12" fill="#2F8F4E" fill-opacity="0.78"/><rect x="539" y="244" width="12" height="12" fill="#2F8F4E" fill-opacity="0.82"/><rect x="551" y="244" width="12" height="12" fill="#2F8F4E" fill-opacity="0.80"/><rect x="563" y="244" width="12" height="12" fill="#2F8F4E" fill-opacity="0.74"/><rect x="575" y="244" width="12" height="12" fill="#2F8F4E" fill-opacity="0.65"/><rect x="587" y="244" width="12" height="12" fill="#2F8F4E" fill-opacity="0.58"/>
+<rect x="515" y="256" width="12" height="12" fill="#2F8F4E" fill-opacity="0.65"/><rect x="527" y="256" width="12" height="12" fill="#2F8F4E" fill-opacity="0.74"/><rect x="539" y="256" width="12" height="12" fill="#2F8F4E" fill-opacity="0.80"/><rect x="551" y="256" width="12" height="12" fill="#2F8F4E" fill-opacity="0.82"/><rect x="563" y="256" width="12" height="12" fill="#2F8F4E" fill-opacity="0.76"/><rect x="575" y="256" width="12" height="12" fill="#2F8F4E" fill-opacity="0.68"/><rect x="587" y="256" width="12" height="12" fill="#2F8F4E" fill-opacity="0.52"/>
+<rect x="515" y="268" width="12" height="12" fill="#2F8F4E" fill-opacity="0.55"/><rect x="527" y="268" width="12" height="12" fill="#2F8F4E" fill-opacity="0.65"/><rect x="539" y="268" width="12" height="12" fill="#2F8F4E" fill-opacity="0.74"/><rect x="551" y="268" width="12" height="12" fill="#2F8F4E" fill-opacity="0.78"/><rect x="563" y="268" width="12" height="12" fill="#2F8F4E" fill-opacity="0.72"/><rect x="575" y="268" width="12" height="12" fill="#2F8F4E" fill-opacity="0.60"/><rect x="587" y="268" width="12" height="12" fill="#2F8F4E" fill-opacity="0.47"/>
+<rect x="515" y="280" width="12" height="12" fill="#2F8F4E" fill-opacity="0.48"/><rect x="527" y="280" width="12" height="12" fill="#2F8F4E" fill-opacity="0.58"/><rect x="539" y="280" width="12" height="12" fill="#2F8F4E" fill-opacity="0.66"/><rect x="551" y="280" width="12" height="12" fill="#2F8F4E" fill-opacity="0.72"/><rect x="563" y="280" width="12" height="12" fill="#2F8F4E" fill-opacity="0.66"/><rect x="575" y="280" width="12" height="12" fill="#2F8F4E" fill-opacity="0.54"/><rect x="587" y="280" width="12" height="12" fill="#2F8F4E" fill-opacity="0.42"/>
+<rect x="515" y="292" width="12" height="12" fill="#2F8F4E" fill-opacity="0.38"/><rect x="527" y="292" width="12" height="12" fill="#2F8F4E" fill-opacity="0.48"/><rect x="539" y="292" width="12" height="12" fill="#2F8F4E" fill-opacity="0.58"/><rect x="551" y="292" width="12" height="12" fill="#2F8F4E" fill-opacity="0.64"/><rect x="563" y="292" width="12" height="12" fill="#2F8F4E" fill-opacity="0.58"/><rect x="575" y="292" width="12" height="12" fill="#2F8F4E" fill-opacity="0.48"/><rect x="587" y="292" width="12" height="12" fill="#2F8F4E" fill-opacity="0.36"/>
+<rect x="515" y="304" width="12" height="12" fill="#2F8F4E" fill-opacity="0.32"/><rect x="527" y="304" width="12" height="12" fill="#2F8F4E" fill-opacity="0.40"/><rect x="539" y="304" width="12" height="12" fill="#2F8F4E" fill-opacity="0.50"/><rect x="551" y="304" width="12" height="12" fill="#2F8F4E" fill-opacity="0.56"/><rect x="563" y="304" width="12" height="12" fill="#2F8F4E" fill-opacity="0.50"/><rect x="575" y="304" width="12" height="12" fill="#2F8F4E" fill-opacity="0.42"/><rect x="587" y="304" width="12" height="12" fill="#2F8F4E" fill-opacity="0.30"/>
+<!-- Grid lines card 2 -->
+<line x1="527" y1="244" x2="527" y2="316" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="515" y1="256" x2="599" y2="256" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="539" y1="244" x2="539" y2="316" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="515" y1="268" x2="599" y2="268" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="551" y1="244" x2="551" y2="316" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="515" y1="280" x2="599" y2="280" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="563" y1="244" x2="563" y2="316" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="515" y1="292" x2="599" y2="292" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="575" y1="244" x2="575" y2="316" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="515" y1="304" x2="599" y2="304" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="587" y1="244" x2="587" y2="316" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+
+<text x="557.0" y="396" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="middle">Tile-binned surfaces</text>
+<g transform="translate(483, 410)"><rect x="0" y="0" rx="11" ry="11" width="148" height="22" fill="#DCEFE0"/><text x="74" y="15.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">bin_points_tiled</text></g>
+<text x="557.0" y="458" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">Per-tile groupBy &#x2192; DSM (all returns, max)</text>
+<text x="557.0" y="474" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">and bare-earth DTM (ground class 2, min)</text>
+
+<!-- Arrow 2 -->
+<line x1="720" y1="320.0" x2="750" y2="320.0" stroke="#2F8F4E" stroke-width="2.5" stroke-linecap="round"/>
+<polygon points="760,320.0 750,313.333 750,326.667" fill="#2F8F4E"/>
+
+<!-- ═══════════ CARD 3: Canopy height ═══════════ -->
+<rect x="768" y="160" rx="14" ry="14" width="310" height="380" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 768 174 A 14 14 0 0 1 782 160 H 1064 A 14 14 0 0 1 1078 174 V 165 H 768 Z" fill="#2F8F4E"/>
+
+<!-- CHM heatmap: 5x5 cells of 13px, top-left (880,240) with diagonal opacity ramp -->
+<rect x="880" y="240" width="13" height="13" fill="#2F8F4E" fill-opacity="0.18"/><rect x="893" y="240" width="13" height="13" fill="#2F8F4E" fill-opacity="0.28"/><rect x="906" y="240" width="13" height="13" fill="#2F8F4E" fill-opacity="0.42"/><rect x="919" y="240" width="13" height="13" fill="#2F8F4E" fill-opacity="0.60"/><rect x="932" y="240" width="13" height="13" fill="#2F8F4E" fill-opacity="0.78"/>
+<rect x="880" y="253" width="13" height="13" fill="#2F8F4E" fill-opacity="0.22"/><rect x="893" y="253" width="13" height="13" fill="#2F8F4E" fill-opacity="0.35"/><rect x="906" y="253" width="13" height="13" fill="#2F8F4E" fill-opacity="0.52"/><rect x="919" y="253" width="13" height="13" fill="#2F8F4E" fill-opacity="0.70"/><rect x="932" y="253" width="13" height="13" fill="#2F8F4E" fill-opacity="0.85"/>
+<rect x="880" y="266" width="13" height="13" fill="#2F8F4E" fill-opacity="0.28"/><rect x="893" y="266" width="13" height="13" fill="#2F8F4E" fill-opacity="0.42"/><rect x="906" y="266" width="13" height="13" fill="#2F8F4E" fill-opacity="0.60"/><rect x="919" y="266" width="13" height="13" fill="#2F8F4E" fill-opacity="0.76"/><rect x="932" y="266" width="13" height="13" fill="#2F8F4E" fill-opacity="0.88"/>
+<rect x="880" y="279" width="13" height="13" fill="#2F8F4E" fill-opacity="0.20"/><rect x="893" y="279" width="13" height="13" fill="#2F8F4E" fill-opacity="0.35"/><rect x="906" y="279" width="13" height="13" fill="#2F8F4E" fill-opacity="0.50"/><rect x="919" y="279" width="13" height="13" fill="#2F8F4E" fill-opacity="0.65"/><rect x="932" y="279" width="13" height="13" fill="#2F8F4E" fill-opacity="0.75"/>
+<rect x="880" y="292" width="13" height="13" fill="#2F8F4E" fill-opacity="0.15"/><rect x="893" y="292" width="13" height="13" fill="#2F8F4E" fill-opacity="0.28"/><rect x="906" y="292" width="13" height="13" fill="#2F8F4E" fill-opacity="0.42"/><rect x="919" y="292" width="13" height="13" fill="#2F8F4E" fill-opacity="0.55"/><rect x="932" y="292" width="13" height="13" fill="#2F8F4E" fill-opacity="0.65"/>
+<!-- CHM grid lines -->
+<line x1="893" y1="240" x2="893" y2="305" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="880" y1="253" x2="945" y2="253" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="906" y1="240" x2="906" y2="305" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="880" y1="266" x2="945" y2="266" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="919" y1="240" x2="919" y2="305" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="880" y1="279" x2="945" y2="279" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<line x1="932" y1="240" x2="932" y2="305" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/><line x1="880" y1="292" x2="945" y2="292" stroke="#FFFFFF" stroke-width="0.8" stroke-opacity="0.45"/>
+<!-- DSM-DTM gap indicator -->
+<rect x="958" y="248" rx="2" ry="2" width="10" height="26" fill="#2F8F4E" fill-opacity="0.72"/>
+<text x="971" y="263" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9" font-weight="700" fill="#2F8F4E">DSM</text>
+<line x1="963" y1="276" x2="963" y2="289" stroke="#2F8F4E" stroke-width="1" stroke-dasharray="2,2" stroke-opacity="0.60"/>
+<text x="971" y="285" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9" font-weight="700" fill="#2F8F4E">CHM</text>
+<rect x="958" y="291" rx="2" ry="2" width="10" height="18" fill="#2F8F4E" fill-opacity="0.45"/>
+<text x="971" y="304" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="9" font-weight="700" fill="#2F8F4E">DTM</text>
+
+<text x="923.0" y="396" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="middle">Canopy height</text>
+<g transform="translate(888, 410)"><rect x="0" y="0" rx="11" ry="11" width="70" height="22" fill="#DCEFE0"/><text x="35" y="15.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">rst_chm</text></g>
+<text x="923.0" y="458" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">CHM = DSM &#x2212; DTM, clamped &#x2265; 0</text>
+<text x="923.0" y="474" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">vegetation height per pixel</text>
+
+<!-- Arrow 3 -->
+<line x1="1086" y1="320.0" x2="1116" y2="320.0" stroke="#2F8F4E" stroke-width="2.5" stroke-linecap="round"/>
+<polygon points="1126,320.0 1116,313.333 1116,326.667" fill="#2F8F4E"/>
+
+<!-- ═══════════ CARD 4: Surface products ═══════════ -->
+<rect x="1134" y="160" rx="14" ry="14" width="310" height="380" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<path d="M 1134 174 A 14 14 0 0 1 1148 160 H 1430 A 14 14 0 0 1 1444 174 V 165 H 1134 Z" fill="#2F8F4E"/>
+
+<!-- Stacked offset tiles: DTM (back), DSM (mid), CHM (front) -->
+<rect x="1256" y="237" rx="4" ry="4" width="120" height="82" fill="#2F8F4E" fill-opacity="0.18" stroke="#2F8F4E" stroke-width="2"/>
+<text x="1266" y="253" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#2F8F4E">DTM</text>
+<rect x="1244" y="225" rx="4" ry="4" width="120" height="82" fill="#2F8F4E" fill-opacity="0.38" stroke="#2F8F4E" stroke-width="2"/>
+<text x="1254" y="241" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#2F8F4E">DSM</text>
+<rect x="1232" y="213" rx="4" ry="4" width="120" height="82" fill="#2F8F4E" fill-opacity="0.62" stroke="#2F8F4E" stroke-width="2"/>
+<text x="1242" y="229" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="11" font-weight="700" fill="#2F8F4E">CHM</text>
+
+<text x="1289.0" y="396" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="16" font-weight="800" fill="#0F1B2A" text-anchor="middle">Surface products</text>
+<g transform="translate(1248, 410)"><rect x="0" y="0" rx="11" ry="11" width="82" height="22" fill="#DCEFE0"/><text x="41" y="15.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">gtiff_gbx</text></g>
+<text x="1289.0" y="458" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">DSM / DTM / CHM GeoTIFF tiles on the Volume;</text>
+<text x="1289.0" y="474" text-anchor="middle" font-family="Inter, sans-serif" font-size="12" fill="#3F4D5E">TIN bare earth (rst_dtmfromgeoms_agg) fills gaps</text>
+
+<!-- KEY FUNCTIONS strip -->
+<text x="36" y="650" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="10" font-weight="700" fill="#7A8794" text-anchor="start" letter-spacing="1.6">KEY FUNCTIONS</text>
+<rect x="166" y="640" rx="12" ry="12" width="84" height="24" fill="#DCEFE0"/>
+<text x="208.0" y="656.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">lidar_gbx</text>
+<rect x="258" y="640" rx="12" ry="12" width="148" height="24" fill="#DCEFE0"/>
+<text x="332.0" y="656.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">bin_points_tiled</text>
+<rect x="414" y="640" rx="12" ry="12" width="70" height="24" fill="#DCEFE0"/>
+<text x="449.0" y="656.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">rst_chm</text>
+<rect x="492" y="640" rx="12" ry="12" width="164" height="24" fill="#DCEFE0"/>
+<text x="574.0" y="656.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">rst_dtmfromgeoms_agg</text>
+<rect x="664" y="640" rx="12" ry="12" width="84" height="24" fill="#DCEFE0"/>
+<text x="706.0" y="656.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="12" font-weight="700" fill="#2F8F4E">gtiff_gbx</text>
+<text x="1444" y="650" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="11" font-weight="400" fill="#7A8794" text-anchor="end">databrickslabs/geobrix &#xB7; 3DEP &#xB7; LiDAR DSM/DTM/CHM</text>
+
+</svg>

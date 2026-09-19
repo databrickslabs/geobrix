@@ -8932,6 +8932,74 @@ def rst_binpoints_agg(
     )
 
 
+def bin_points_tiled(
+    df, *, x, y, z, by, xmin, ymin, xmax, ymax, width, height, srid, stat="max"
+):
+    """Bounded-memory tiled point binning — memory is the raster grid (W×H), not the
+    point count. Two-stage native pre-aggregation: per-point pixel index -> native
+    groupBy(tile, cell).agg(stat) -> place the <=W*H per-cell values via
+    rst_binpoints_agg. Output matches df.groupBy(by).agg(rst_binpoints_agg(x,y,z,...,
+    stat)) for max/min/mean/count. median/percentile delegate to that buffered
+    aggregator (memory-heavy; use decimate or smaller tiles). Returns [*by, 'tile']."""
+    from pyspark.sql import functions as F
+
+    if isinstance(by, str):
+        by = [by]
+    w, h, sid, st = int(width), int(height), int(srid), str(stat).lower()
+
+    if st == "median" or st.startswith("percentile"):
+        return df.groupBy(*by).agg(
+            rst_binpoints_agg(
+                x, y, z, xmin, ymin, xmax, ymax, F.lit(w), F.lit(h), F.lit(sid), stat
+            ).alias("tile")
+        )
+
+    xr = F.col(xmax) - F.col(xmin)
+    yr = F.col(ymax) - F.col(ymin)
+    col = F.floor((F.col(x) - F.col(xmin)) / xr * F.lit(w)).cast("int")
+    row = F.floor((F.col(ymax) - F.col(y)) / yr * F.lit(h)).cast("int")
+    celled = (
+        df.withColumn("_col", col)
+        .withColumn("_row", row)
+        .where(
+            (F.col("_col") >= 0)
+            & (F.col("_col") < F.lit(w))
+            & (F.col("_row") >= 0)
+            & (F.col("_row") < F.lit(h))
+        )
+        .withColumn("_cx", F.col(xmin) + (F.col("_col") + F.lit(0.5)) * xr / F.lit(w))
+        .withColumn("_cy", F.col(ymax) - (F.col("_row") + F.lit(0.5)) * yr / F.lit(h))
+    )
+
+    reducer = {
+        "max": F.max(F.col(z)),
+        "min": F.min(F.col(z)),
+        "mean": F.avg(F.col(z)),
+        "count": F.count(F.col(z)).cast("double"),
+    }
+    if st not in reducer:
+        raise ValueError(f"bin_points_tiled: unsupported statistic {stat!r}")
+    per_cell = celled.groupBy(*by, xmin, ymin, xmax, ymax, "_cx", "_cy").agg(
+        reducer[st].alias("_v")
+    )
+
+    return per_cell.groupBy(*by).agg(
+        rst_binpoints_agg(
+            "_cx",
+            "_cy",
+            "_v",
+            xmin,
+            ymin,
+            xmax,
+            ymax,
+            F.lit(w),
+            F.lit(h),
+            F.lit(sid),
+            "max",
+        ).alias("tile")
+    )
+
+
 def rst_dtmfromgeoms_agg(
     point: ColLike,
     breaklines: ColLike,

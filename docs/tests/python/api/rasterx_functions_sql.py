@@ -3671,11 +3671,11 @@ GROUP BY tile_id;
 
 
 rst_binpoints_agg_sql_example_output = """
-+-------+---------------+
-|tile_id|dsm            |
-+-------+---------------+
-|1      |[B@... (BINARY)|
-+-------+---------------+
++-------+--------------+
+|tile_id|dsm           |
++-------+--------------+
+|1      |<raster bytes>|
++-------+--------------+
 (BINARY raster bytes — wrap with gbx_rst_fromcontent(dsm, 'GTiff') to rebuild a tile struct)
 """
 
@@ -3699,7 +3699,7 @@ rst_isoband_sql_example_output = """
 +-----------------------------------------------------------+
 |[{[BINARY], 0, 0.0, 50.0}, {[BINARY], 1, 50.0, 100.0}, ...]|
 +-----------------------------------------------------------+
-(array of per-patch structs: geom_wkb WKB polygon, band index, lower/upper break values)
+(array of per-patch structs: geom_wkb WKB polygon in raster CRS, band index, lower/upper break values)
 """
 
 

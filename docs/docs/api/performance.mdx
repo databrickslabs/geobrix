@@ -128,6 +128,12 @@ A **grouped-aggregate `pandas_udf`** operates on one group at a time: Spark shuf
 
 Arrow-backed via `pandas_udf(BinaryType())`, these aggregators sit inside a standard `.groupBy(...).agg(...)` call: the same API the heavyweight Scala aggregators (`TypedImperativeAggregate`) use, so the Python call pattern is identical.
 
+:::note Memory scales with group size — for point binning at scale, prefer the bounded path
+
+A grouped aggregate realizes its whole group in the worker, so memory is proportional to the **rows per group**. For most tile aggregators that is a few tiles per key — bounded. But **point binning** (`rst_binpoints_agg`, and the scalar `rst_binpoints` over point arrays) takes one row *per point*, so a full-resolution LiDAR tile (millions of returns) can exhaust worker RAM. The light-tier `rx.bin_points_tiled(...)` avoids this with a **two-stage native** aggregation — per-point pixel index → native per-cell reduction → placement — so peak memory is the **raster grid (W×H)**, not the point count (identical output for `max`/`min`/`mean`/`count`). See [RasterX › rst_binpoints_agg](./raster-functions#rst_binpoints_agg) and [Serverless & Memory](../serverless-and-memory).
+
+:::
+
 ### Arrow scalar UDFs
 
 A **vectorized Arrow scalar `pandas_udf`** receives an Arrow batch of rows as a `pd.Series`, calls the function once per batch, and returns a `pd.Series`. The JVM–Python boundary is crossed **once per batch**, not once per row — the primary serialization saving over a plain `@udf`.
@@ -257,6 +263,7 @@ These functions are Arrow-backed `pandas_udf(BinaryType())` aggregators used ins
 | `gbx_rst_rasterize_agg` | `rst_rasterize_agg` | Burn vector geometries onto a raster |
 | `gbx_rst_derivedband_agg` | `rst_derivedband_agg` | Apply a user-supplied Python expression across a tile group |
 | `gbx_rst_gridfrompoints_agg` | `rst_gridfrompoints_agg` | Interpolate a raster from point observations |
+| `gbx_rst_binpoints_agg` | `rst_binpoints_agg` | Bin `(x, y, z)` points into a single-band raster (max/min/mean/count/median/percentile per cell). For full-density LiDAR, use the bounded `rx.bin_points_tiled(...)` (memory ∝ grid, not points) |
 | `gbx_rst_dtmfromgeoms_agg` | `rst_dtmfromgeoms_agg` | Build a DTM raster from elevation geometries |
 | `gbx_rst_h3_rasterize_agg` | `rst_h3_rasterize_agg` | Burn a group of H3 cells onto one raster (presence mask, or per-cell value) |
 

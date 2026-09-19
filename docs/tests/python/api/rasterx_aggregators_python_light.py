@@ -624,7 +624,7 @@ rst_binpoints_agg_python_light_example_output = """
 +------+-----------------------------------------------------------+
 |R1    |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +------+-----------------------------------------------------------+
-(Float32 10x10 BNG tile; three points binned by max z-value, empty cells = NoData -9999.0)
+(Float32 10x10 BNG tile; three scalar points binned by max z-value, empty cells = NoData -9999.0)
 """
 
 

@@ -960,6 +960,21 @@ _Multi-row fixture: 4 Z-valued WKB POINT rows (elevation 100–250 m) over a `[0
   testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
 
+:::note Memory & scale — thin the points that feed a TIN
+
+A Delaunay TIN must hold **all** of a group's points in memory to triangulate, so peak memory is
+**proportional to the points per group** — and, unlike [`rst_binpoints_agg`](#rst_binpoints_agg),
+a triangulation is inherently global and **cannot** be made grid-bounded the way
+[`bin_points_tiled`](#rst_binpoints_agg) bounds binning. At full LiDAR density a single tile's ground
+returns (hundreds of thousands to millions of points) can exhaust worker RAM.
+
+A bare-earth TIN is near-identical from a **representative subset**, so thin the input points before
+the aggregate — `df.sample(fraction=…)` down to a bounded per-group count (e.g. ~150 k), or use
+smaller tiles. This is standard LiDAR TIN practice and keeps memory bounded regardless of source
+density. See the [LiDAR reader](../readers/lidar) and [Performance](./performance).
+
+:::
+
 ### rst_frombands_agg
 
 <Tier both/> <Impl groupedAgg/>
@@ -1437,8 +1452,7 @@ The lightweight **Python** binding accepts an optional trailing `out_crs` (strin
 
 ## LiDAR / Point-Cloud DSM {#lidar-dsm}
 
-Four functions for building raster products from LiDAR point clouds. Available on the
-**lightweight tier only** (`pyrx`). Load point clouds with the [`lidar_gbx` reader](../readers/lidar).
+Four functions for building raster products from LiDAR point clouds. Available on **both tiers** (`pyrx` lightweight and `rasterx` heavyweight). Load point clouds with the [`lidar_gbx` reader](../readers/lidar).
 
 ### rst_binpoints {#rst_binpoints}
 
@@ -1463,7 +1477,11 @@ points into other surfaces.
 
 <FunctionExamples
   name="rst_binpoints"
-  sql={rasterxSqlCode}  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
 ---
@@ -1489,8 +1507,31 @@ wrapper `rx.rst_binpoints_agg(...)` returns the full tile struct.
 
 <FunctionExamples
   name="rst_binpoints_agg"
-  sql={rasterxSqlCode}  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  sql={rasterxSqlCode}                     sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxAggregatorsLightCode} pythonLightSource="docs/tests/python/api/rasterx_aggregators_python_light.py"
+  pythonHeavy={rasterxCode}                pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}             scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_aggregators_python_light.py"
 />
+
+:::note Memory & scale — binning full-density LiDAR
+
+Both `rst_binpoints_agg` (grouped — realizes a whole group's points in the worker) and
+`rst_binpoints` (scalar — realizes a row's point arrays) hold memory **proportional to the
+points per group**. That is fine at moderate density, but a full-resolution tile (millions of
+returns — e.g. a 1 km tile of 1 m LiDAR) can exhaust worker RAM.
+
+For large or full-density point clouds, use the bounded light-tier helper
+**`rx.bin_points_tiled(df, x, y, z, by=[…], xmin=…, ymin=…, xmax=…, ymax=…, width, height, srid, stat)`**.
+It runs a **two-stage native aggregation** — per-point pixel index → native `groupBy(tile, cell)`
+reduction → placement — so peak memory is the **raster grid (W×H)**, independent of point count.
+It returns the same tile struct (drops straight into `rst_chm`), and its output is **identical** to
+`groupBy(by).agg(rst_binpoints_agg(…))` for `max`/`min`/`mean`/`count`. `median`/`percentile` (which
+need every value in a cell) delegate to the buffered aggregator — decimate or use smaller tiles for
+those. Prefer `bin_points_tiled` over a `collect_list(all points) → rst_binpoints` pattern, which
+buffers the whole cloud. See [Performance](./performance) and the [LiDAR reader](../readers/lidar).
+
+:::
 
 ---
 

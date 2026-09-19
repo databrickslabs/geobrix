@@ -18,7 +18,7 @@ dtm = DemDownloader.lidar_dtm()
 dtm.download(SF_BBOX, VOLUME, resolution="finest")   # 2 m over San Francisco
 ```
 
-For **true 1 m** (or finer, e.g. to match H3 resolution 13–15), the raster catalogs are not enough — derive elevation from the raw LiDAR point cloud via `LidarDownloader` + `rst_binpoints`. See the LiDAR reader and the DEM → LiDAR → CHM notebook series.
+For **true 1 m** (or finer, e.g. to match H3 resolution 13–15), the raster catalogs are not enough — derive elevation from the raw LiDAR point cloud via `LidarDownloader` + `rst_binpoints_agg`. See the [LiDAR reader](../readers/lidar) and the [Wireless Coverage](../notebooks/wireless-coverage) notebook series.
 
 :::note Prerequisites
 - GeoBrix installed (wheel includes `databricks.labs.gbx.sample`)

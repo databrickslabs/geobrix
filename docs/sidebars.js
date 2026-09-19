@@ -34,6 +34,7 @@ const sidebars = {
           items: [
             'notebooks/eo-series',
             'notebooks/xview',
+            'notebooks/wireless-coverage',
             'notebooks/h3-rasterize',
             'notebooks/helios',
             'notebooks/vapor-eyes',

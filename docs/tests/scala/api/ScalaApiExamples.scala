@@ -2050,7 +2050,7 @@ result.show(truncate = false)
 +-----------------------------------------------------------+
 |[{[BINARY], 0, 0.0, 50.0}, {[BINARY], 1, 50.0, 100.0}, ...]|
 +-----------------------------------------------------------+
-(ARRAY of per-patch structs: geom_wkb WKB polygon, band index, lower/upper break values)
+(ARRAY of per-patch structs: geom_wkb WKB polygon in raster CRS, band index, lower/upper break values)
 """.trim
 
   val rst_derivedband_scala_example: String =

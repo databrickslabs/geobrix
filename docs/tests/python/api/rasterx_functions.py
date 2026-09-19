@@ -4639,7 +4639,7 @@ rst_chm_python_heavy_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
-(Float32 CHM tile: clamp(DSM - DEM, min=0); same-tile input yields all-zero CHM)
+(Float32 CHM tile: clamp(DSM - DEM, min=0); NoData propagates from either input)
 """
 
 

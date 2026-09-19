@@ -149,6 +149,14 @@ ground.select("x", "y", "z").show(5)
 Combine `lidar_gbx` with the `gbx_rst_binpoints_agg` aggregator to grid ground or
 first-return points into a Digital Surface Model:
 
+:::tip Full-density LiDAR? Use the bounded `rx.bin_points_tiled`
+`rst_binpoints_agg` realizes a group's points in the worker, so a full-resolution tile of
+millions of returns can exhaust RAM. For that, bin with **`rx.bin_points_tiled(df, x, y, z,
+by=[…], xmin=…, …, width, height, srid, stat)`** — a two-stage native aggregation whose memory
+is the raster grid (W×H), not the point count. Same output for `max`/`min`/`mean`/`count`. See
+[RasterX › Memory & scale](../api/raster-functions#rst_binpoints_agg) and [Performance](../api/performance).
+:::
+
 ```python
 from pyspark.sql import functions as F
 from databricks.labs.gbx.pyrx import functions as prx
@@ -180,15 +188,31 @@ dsm = dsm_bytes.select(
 )
 ```
 
-## Serverless notes
+## Scale, memory, and robustness
 
-- One InputPartition per file: Serverless parallelism is via partition count
-  (one executor per file). For large archives, ensure files are small enough
-  that each partition fits within the per-task memory budget (~1 GB).
-- The reader never makes Spark `_jvm` / `sparkContext` / `.rdd` calls; it is
-  fully Spark Connect–compatible.
-- `classFilter` and `decimate` reduce per-task memory before the points reach
-  Spark; apply them whenever you do not need all classifications or full density.
+`lidar_gbx` is built to process large point clouds — hundreds of millions of returns — on
+Serverless:
+
+- **Columnar reads.** Points mode reads each file in vectorized chunks and hands Spark
+  **Arrow record batches** — never one Python object per point — so a full-resolution read
+  (`decimate=1`) avoids per-row conversion overhead that would otherwise stall the session.
+  Metadata mode is columnar too.
+- **Bounded per-task memory.** Points are streamed `chunkSize` at a time (default
+  `1000000`), so peak memory per task is a single batch — independent of the total file
+  size. Lower `chunkSize` for very large files or tighter memory; raise it to trade memory
+  for throughput.
+- **Filters and decimation apply in the reader**, vectorized, before points reach Spark, so
+  `classFilter` / `returnFilter` / `decimate` cut shuffle and downstream cost. `decimate`
+  reads every point but emits every N-th — use it for a fast coarse pass, then drop to
+  `decimate=1` for the full-resolution product.
+- **Bad nodes are skipped, not fatal.** A 0-byte or unreadable `.las`/`.laz` (for example an
+  empty Entwine Point Tile node from an interrupted download) is skipped with a warning, so
+  one corrupt file cannot fail a distributed read over a whole archive.
+- **Parallelism is per file** — one InputPartition per file. A directory of many tiles
+  parallelizes naturally across executors; a handful of very large files limits parallelism
+  to the file count, so split or tile upstream if you need more executors engaged.
+- **Spark Connect–safe.** The reader makes no `_jvm` / `sparkContext` / `.rdd` calls and is
+  session-free, so it runs unchanged on Serverless, standard, and ARM clusters.
 
 ## Next Steps
 

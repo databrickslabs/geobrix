@@ -174,3 +174,66 @@ def test_bin_points_tiled_median_delegates(spark):
     np.testing.assert_allclose(
         np.nan_to_num(got, nan=-9999.0), np.nan_to_num(ref, nan=-9999.0), rtol=1e-6
     )
+
+
+def test_bin_points_tiled_null_z_parity(spark):
+    # A NULL z in a cell must behave like the reference rst_binpoints_agg:
+    # count includes the point (counts every in-bounds point), and mean is
+    # contaminated to NoData; max/min ignore the null.
+    rx.register(spark)
+    rows = [
+        (0.5, 0.5, 10.0),
+        (0.6, 0.6, None),  # null z, same cell as (0.5, 0.5)
+        (1.5, 1.5, 9.0),
+    ]
+    df = (
+        spark.createDataFrame(rows, "x double, y double, z double")
+        .withColumn("tk", F.lit(1))
+        .withColumn("xmin", F.lit(0.0))
+        .withColumn("ymin", F.lit(0.0))
+        .withColumn("xmax", F.lit(2.0))
+        .withColumn("ymax", F.lit(2.0))
+    )
+    for s in ("count", "mean", "max", "min"):
+        got = _pixels(
+            rx.bin_points_tiled(
+                df,
+                x="x",
+                y="y",
+                z="z",
+                by=["tk"],
+                xmin="xmin",
+                ymin="ymin",
+                xmax="xmax",
+                ymax="ymax",
+                width=2,
+                height=2,
+                srid=2227,
+                stat=s,
+            ).first()
+        )
+        ref = _pixels(
+            df.groupBy("tk")
+            .agg(
+                rx.rst_binpoints_agg(
+                    "x",
+                    "y",
+                    "z",
+                    "xmin",
+                    "ymin",
+                    "xmax",
+                    "ymax",
+                    F.lit(2),
+                    F.lit(2),
+                    F.lit(2227),
+                    s,
+                ).alias("tile")
+            )
+            .first()
+        )
+        np.testing.assert_allclose(
+            np.nan_to_num(got, nan=-9999.0),
+            np.nan_to_num(ref, nan=-9999.0),
+            rtol=1e-6,
+            err_msg=f"null-z parity stat={s}",
+        )

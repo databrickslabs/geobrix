@@ -8971,11 +8971,17 @@ def bin_points_tiled(
         .withColumn("_cy", F.col(ymax) - (F.col("_row") + F.lit(0.5)) * yr / F.lit(h))
     )
 
+    # NULL-z parity with the reference (rst_binpoints / binning.py): count includes
+    # every in-bounds point regardless of z, and a NULL z contaminates the cell's
+    # mean to NoData (emit NaN, which the placement's fmax skips -> the cell stays
+    # NoData). max/min already match — Spark max/min ignore NULL like the reference.
     reducer = {
         "max": F.max(F.col(z)),
         "min": F.min(F.col(z)),
-        "mean": F.avg(F.col(z)),
-        "count": F.count(F.col(z)).cast("double"),
+        "mean": F.when(
+            F.max(F.col(z).isNull().cast("int")) == 1, F.lit(float("nan"))
+        ).otherwise(F.avg(F.col(z))),
+        "count": F.count(F.lit(1)).cast("double"),
     }
     if st not in reducer:
         raise ValueError(f"bin_points_tiled: unsupported statistic {stat!r}")

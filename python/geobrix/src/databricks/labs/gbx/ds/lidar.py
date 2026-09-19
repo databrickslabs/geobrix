@@ -77,6 +77,36 @@ def _parse_int_list(value: Optional[str]) -> Optional[List[int]]:
     return [int(v.strip()) for v in value.split(",") if v.strip()]
 
 
+_POINT_FIELD_NAMES = tuple(f.name for f in LIDAR_POINTS_SCHEMA.fields)
+
+
+def _select_point_dimensions(value: Optional[str]) -> Optional[List[str]]:
+    """Parse the ``dimensions`` points-mode option: a comma-separated subset of the
+    base point columns to return. Returns the subset in canonical schema order
+    (de-duplicated); ``None`` / absent / empty -> all columns. An unknown name raises
+    ``ValueError`` listing the allowed names."""
+    if value is None:
+        return None
+    requested = {v.strip() for v in value.split(",") if v.strip()}
+    if not requested:
+        return None
+    unknown = sorted(d for d in requested if d not in _POINT_FIELD_NAMES)
+    if unknown:
+        raise ValueError(
+            f"lidar_gbx: unknown dimension(s) {unknown}; "
+            f"allowed: {list(_POINT_FIELD_NAMES)}"
+        )
+    return [n for n in _POINT_FIELD_NAMES if n in requested]
+
+
+def _points_schema(dims: Optional[List[str]]) -> StructType:
+    """Points schema restricted to *dims* (schema order); all columns if ``None``."""
+    if dims is None:
+        return LIDAR_POINTS_SCHEMA
+    keep = set(dims)
+    return StructType([f for f in LIDAR_POINTS_SCHEMA.fields if f.name in keep])
+
+
 class _LidarFilePartition(InputPartition):
     def __init__(self, file_path: str):
         self.file_path = file_path
@@ -101,6 +131,11 @@ class LidarGbxReader(DataSourceReader):
         )
         self.decimate: int = int(options.get("decimate", "1"))
         self.chunk_size: int = int(options.get("chunkSize", "1000000"))
+        # Optional column projection: comma-separated subset of the base point
+        # columns to return (schema order). None = all columns.
+        self.dimensions: Optional[List[str]] = _select_point_dimensions(
+            options.get("dimensions")
+        )
 
     def partitions(self) -> Sequence[InputPartition]:
         files = list_local_files(self.path, extensions=_LIDAR_EXTS)
@@ -143,34 +178,48 @@ class LidarGbxReader(DataSourceReader):
         # Columnar (Arrow) output: one RecordBatch per chunk, gathered with vectorised
         # numpy — never one Python tuple per point. A full-resolution read (decimate=1)
         # over hundreds of millions of returns would otherwise stall or kill the Spark
-        # session on per-row conversion. The batch schema matches LIDAR_POINTS_SCHEMA
-        # field-for-field (IntegerType -> int32, DoubleType -> float64).
+        # session on per-row conversion. The `dimensions` option restricts the emitted
+        # columns; only the requested dimensions (plus any a filter needs) are read.
+        # Arrow types match LIDAR_POINTS_SCHEMA (IntegerType -> int32, DoubleType ->
+        # float64).
+        out_fields = self.dimensions or list(_POINT_FIELD_NAMES)
+        out_set = set(out_fields)
         arrow_schema = pa.schema(
             [
                 pa.field(f.name, to_arrow_type(f.dataType))
                 for f in LIDAR_POINTS_SCHEMA.fields
+                if f.name in out_set
             ]
         )
+        # Read the emitted dimensions plus any a filter needs: classification for
+        # classFilter, return_number for returnFilter — these feed the keep mask but
+        # are not emitted unless also requested.
+        need = set(out_fields)
+        if self.class_filter is not None:
+            need.add("classification")
+        if self.return_filter is not None:
+            need.add("return_number")
+
+        def _read_dim(chunk, name: str, n: int) -> np.ndarray:
+            if name in ("x", "y", "z"):
+                return np.asarray(getattr(chunk, name), dtype=np.float64)
+            if name == "gps_time":
+                if "gps_time" in chunk.point_format.dimension_names:
+                    return np.asarray(chunk.gps_time, dtype=np.float64)
+                return np.full(n, np.nan, dtype=np.float64)
+            return np.asarray(getattr(chunk, name))
+
         with opener as reader:
             seen = 0  # filter-passing points seen in this file (decimate parity)
             for chunk in reader.chunk_iterator(self.chunk_size):
-                xs = np.asarray(chunk.x, dtype=np.float64)
-                ys = np.asarray(chunk.y, dtype=np.float64)
-                zs = np.asarray(chunk.z, dtype=np.float64)
-                cls = np.asarray(chunk.classification)
-                rn = np.asarray(chunk.return_number)
-                nr = np.asarray(chunk.number_of_returns)
-                inten = np.asarray(chunk.intensity)
-                if "gps_time" in chunk.point_format.dimension_names:
-                    gt = np.asarray(chunk.gps_time, dtype=np.float64)
-                else:
-                    gt = np.full(len(xs), np.nan, dtype=np.float64)
+                n = len(chunk)
+                cols = {name: _read_dim(chunk, name, n) for name in need}
 
-                keep = np.ones(len(xs), dtype=bool)
+                keep = np.ones(n, dtype=bool)
                 if self.class_filter is not None:
-                    keep &= np.isin(cls, self.class_filter)
+                    keep &= np.isin(cols["classification"], self.class_filter)
                 if self.return_filter is not None:
-                    keep &= rn == self.return_filter
+                    keep &= cols["return_number"] == self.return_filter
 
                 if self.decimate > 1:
                     # Keep every Nth filter-passing point via a 1-based counter that
@@ -183,19 +232,16 @@ class LidarGbxReader(DataSourceReader):
 
                 if not keep.any():
                     continue
-                yield pa.record_batch(
-                    [
-                        pa.array(xs[keep], type=pa.float64()),
-                        pa.array(ys[keep], type=pa.float64()),
-                        pa.array(zs[keep], type=pa.float64()),
-                        pa.array(inten[keep].astype(np.int32), type=pa.int32()),
-                        pa.array(rn[keep].astype(np.int32), type=pa.int32()),
-                        pa.array(nr[keep].astype(np.int32), type=pa.int32()),
-                        pa.array(cls[keep].astype(np.int32), type=pa.int32()),
-                        pa.array(gt[keep], type=pa.float64()),
-                    ],
-                    schema=arrow_schema,
-                )
+                arrays = []
+                for f in LIDAR_POINTS_SCHEMA.fields:
+                    if f.name not in out_set:
+                        continue
+                    at = to_arrow_type(f.dataType)
+                    a = cols[f.name][keep]
+                    if pa.types.is_integer(at):
+                        a = a.astype(np.int32)
+                    arrays.append(pa.array(a, type=at))
+                yield pa.record_batch(arrays, schema=arrow_schema)
 
     def _read_metadata(self, file_path: str) -> Iterator["pa.RecordBatch"]:
         import datetime as _dt
@@ -282,7 +328,7 @@ class LidarGbxDataSource(DataSource):
         mode = (self.options.get("mode") or "points").lower()
         if mode == "metadata":
             return LIDAR_META_SCHEMA
-        return LIDAR_POINTS_SCHEMA
+        return _points_schema(_select_point_dimensions(self.options.get("dimensions")))
 
     def reader(self, schema: StructType) -> DataSourceReader:
         return LidarGbxReader(self.options)

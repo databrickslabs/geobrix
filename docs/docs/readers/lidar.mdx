@@ -47,11 +47,10 @@ recursively and one partition per file is planned.
 | `returnFilter` | _none_ | `points` | Integer return number to keep (1-based: `1` = first return, `2` = second, …). Absent = keep all returns. |
 | `decimate` | `"1"` | `points` | Keep every N-th point (e.g. `"10"` = 10 % density). `1` = no decimation. |
 | `chunkSize` | `"1000000"` | `points` | Points read per internal batch (controls per-task memory, not partition count). |
+| `dimensions` | _all_ | `points` | Comma-separated subset of the base point columns to return (e.g. `"x,y,z,classification"`), emitted in schema order. The reader reads only the requested dimensions — plus any needed by `classFilter`/`returnFilter` — so projecting to what you need cuts per-point I/O and memory. Absent = all base columns; an unknown name errors. |
 
-:::info `dimensions` option not available
-A `dimensions` option to restrict the columns returned by points mode is not supported
-in this release. Points mode always returns the base columns listed in the schema below.
-Use `.select(...)` after loading to prune columns you do not need.
+:::tip Project columns for large point clouds
+For big reads, request only the dimensions you need — e.g. `.option("dimensions", "x,y,z,classification")` — so the reader skips the rest at the source. That is cheaper than loading all base columns and pruning with `.select(...)` afterwards.
 :::
 
 ## Register

@@ -5,6 +5,7 @@ class/return/decimate filters and .las/.laz parity.
 """
 
 import numpy as np
+import pytest
 
 from .test_lidar_metadata import _write_tiny_las
 
@@ -203,3 +204,64 @@ def test_points_laz_parity(spark, tmp_path):
     assert (
         cls_las == cls_laz
     ), "classification values differ between .las and .laz reads"
+
+
+def test_points_dimensions_default_all(spark, tmp_path):
+    """No `dimensions` option -> all 8 base columns (unchanged default)."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    path = _write_tiny_las(tmp_path, n=30)
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    df = spark.read.format("lidar_gbx").option("mode", "points").load(path)
+    assert len(df.columns) == 8
+
+
+def test_points_dimensions_subset(spark, tmp_path):
+    """`dimensions` returns only the requested base columns, in schema order."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    path = _write_tiny_las(tmp_path, n=60)
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    df = (
+        spark.read.format("lidar_gbx")
+        .option("mode", "points")
+        .option("dimensions", "z,x,y")  # requested out of order
+        .load(path)
+    )
+    assert df.columns == ["x", "y", "z"]  # canonical schema order
+    assert df.count() == 60
+
+
+def test_points_dimensions_with_filter(spark, tmp_path):
+    """A filter still works when its column is excluded from `dimensions`:
+    classification is read for the classFilter mask but not emitted."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    path = _write_classified_las(tmp_path, classes=(2, 6, 9), n_each=20)
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    df = (
+        spark.read.format("lidar_gbx")
+        .option("mode", "points")
+        .option("dimensions", "x,y,z")
+        .option("classFilter", "2")
+        .load(path)
+    )
+    assert df.columns == ["x", "y", "z"]  # classification not emitted
+    assert df.count() == 20  # ...but the class-2 filter still applied
+
+
+def test_points_dimensions_unknown_raises():
+    """An unknown dimension name is rejected with a clear error."""
+    from databricks.labs.gbx.ds.lidar import _select_point_dimensions
+
+    with pytest.raises(ValueError, match="unknown dimension"):
+        _select_point_dimensions("x,y,foo")

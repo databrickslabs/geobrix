@@ -27,7 +27,8 @@ Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
   Spark DataFrame. Two modes: `metadata` (one row per file, header-level statistics,
   cheap on large archives) and `points` (one row per point). Options: `classFilter`
   (keep specific LAS classification codes), `returnFilter` (keep a specific return
-  number), `decimate` (keep every N-th point), `chunkSize`. Lightweight only;
+  number), `decimate` (keep every N-th point), `dimensions` (return only a subset of
+  the point columns, read at the source), `chunkSize`. Lightweight only;
   Serverless-safe. Point reads are columnar and skip empty or unreadable files, so
   full-density (`decimate=1`) point clouds read without stalling. See
   [LiDAR Reader](./readers/lidar).

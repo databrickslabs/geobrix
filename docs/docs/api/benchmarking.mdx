@@ -1250,17 +1250,20 @@ band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
 > tile-to-feature-array transformer (similar to `rst_polygonize` and `rst_contour`);
 > `rst_chm` is a two-tile combiner (similar to `rst_combineavg`).
 
-**Expected performance characteristics** (local, single-tile, illustrative):
+**Lightweight pure-core throughput** (measured, single 512²/4-band tile):
 
-| Function | Notes |
-|---|---|
-| `rst_binpoints` | NumPy 2D histogram (`np.histogram2d`); dominated by array allocation at low-density clouds, I/O at high density. |
-| `rst_binpoints_agg` | Same kernel as `rst_binpoints` — collects ARRAY per group then calls the same histogram path. Aggregator overhead is negligible relative to the binning kernel. |
-| `rst_isoband` | `numpy.digitize` + `rasterio.features.shapes` per band. Rasterio `shapes` is C-backed; cost grows with polygon complexity, not raster area. |
-| `rst_chm` | `rasterio.warp.reproject` (nearest-neighbour) + NumPy subtraction + clip-to-zero. Cost dominated by the warp (tiles with identical grids take only the subtract + clip). |
+| Function | Pure-core (light) | Notes |
+|---|---|---|
+| `rst_binpoints` | ~741 Mpix/s | NumPy 2D histogram (`np.histogram2d`); dominated by array allocation at low-density clouds, I/O at high density. |
+| `rst_binpoints_agg` | aggregator — same kernel as `rst_binpoints` (spark-path only) | Collects an ARRAY per group then calls the same histogram path. Aggregator overhead is negligible relative to the binning kernel. |
+| `rst_isoband` | ~3.3 Mpix/s | `numpy.digitize` + `rasterio.features.shapes` per band. Rasterio `shapes` is C-backed; cost grows with polygon complexity, not raster area. |
+| `rst_chm` | ~22 Mpix/s | `rasterio.warp.reproject` (nearest-neighbour) + NumPy subtraction + clip-to-zero. Cost dominated by the warp (tiles with identical grids take only the subtract + clip). |
 
-No Databricks cluster benchmarks have been run for this family. Add your own timings and
-contribute them back as a PR; follow the methodology in the [How the benchmark works](#how-the-benchmark-works--how-to-run-it) section below.
+A Databricks cluster pass (DBR 18) confirmed the lightweight throughput above and the heavy-tier
+`rst_binpoints` pure-core path. Full heavy-vs-light parity for `rst_chm` / `rst_isoband` /
+`rst_binpoints_agg`, and the spark-path row ladder, are pending: the bench cluster's product JAR
+must be refreshed to 0.5.2 (it currently carries the older build, so those heavy classes are
+absent) plus a few bench-dispatch fixes. See [How the benchmark works](#how-the-benchmark-works--how-to-run-it).
 
 ---
 

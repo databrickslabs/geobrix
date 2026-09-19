@@ -387,17 +387,12 @@ def test_lidar_dtm_download_finest_picks_1m(spark, tmp_path):
     )
     dd = DemDownloader(collection=DEM_LIDAR_DTM_COLLECTION, _stac_client=mock)
     dd.download(_LIDAR_BBOX, str(tmp_path / "o"), resolution="finest", spark=spark)
-    assert mock.download_calls[0]["item_ids"] == [
-        "USGS_LPC_AreaX_QL1_2020-dtm-1m-1-2"
-    ]
+    assert mock.download_calls[0]["item_ids"] == ["USGS_LPC_AreaX_QL1_2020-dtm-1m-1-2"]
 
 
 # --- LD4: lidar_dtm() convenience + collection constant ---
 def test_lidar_dtm_convenience_and_constant():
-    from databricks.labs.gbx.sample.dem import (
-        DEM_LIDAR_DTM_COLLECTION,
-        DemDownloader,
-    )
+    from databricks.labs.gbx.sample.dem import DEM_LIDAR_DTM_COLLECTION, DemDownloader
 
     assert DEM_LIDAR_DTM_COLLECTION == "3dep-lidar-dtm"
     dd = DemDownloader.lidar_dtm()

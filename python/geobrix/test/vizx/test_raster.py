@@ -1023,9 +1023,10 @@ def test_plot_raster_virtual_tile_windowed_renders(tmp_path):
     assert images, "windowed virtual tile should produce an image on the axes"
     # Shape check: window is 4x4, no decimation (max_pixels=2000 >> 4)
     arr = np.asarray(images[0].get_array())
-    assert arr.shape[:2] == (4, 4), (
-        f"rendered image shape {arr.shape} should match the 4x4 window"
-    )
+    assert arr.shape[:2] == (
+        4,
+        4,
+    ), f"rendered image shape {arr.shape} should match the 4x4 window"
     plt.close("all")
 
 
@@ -1035,7 +1036,9 @@ def test_plot_raster_virtual_tile_no_window_renders(tmp_path):
     tile = _virtual_tile_dict(path, window=False)
     plt.close("all")
     plot_raster(tile)
-    assert len(plt.get_fignums()) == 1, "windowless virtual tile should produce a figure"
+    assert (
+        len(plt.get_fignums()) == 1
+    ), "windowless virtual tile should produce a figure"
     plt.close("all")
 
 
@@ -1054,7 +1057,9 @@ def test_plot_raster_materialized_tile_struct_still_works():
     }
     plt.close("all")
     plot_raster(tile)
-    assert len(plt.get_fignums()) == 1, "materialized tile struct should produce a figure"
+    assert (
+        len(plt.get_fignums()) == 1
+    ), "materialized tile struct should produce a figure"
     plt.close("all")
 
 
@@ -1063,7 +1068,9 @@ def test_plot_raster_virtual_tile_data_matches_direct_read(tmp_path):
     path = _make_disk_gtiff(tmp_path, "match.tif", width=16, height=16)
     # Window: bottom-right 4x4 quadrant
     col_off, row_off, win_w, win_h = 12, 12, 4, 4
-    tile = _virtual_tile_dict(path, col_off=col_off, row_off=row_off, width=win_w, height=win_h)
+    tile = _virtual_tile_dict(
+        path, col_off=col_off, row_off=row_off, width=win_w, height=win_h
+    )
 
     plt.close("all")
     plot_raster(tile)
@@ -1082,12 +1089,12 @@ def test_plot_raster_virtual_tile_data_matches_direct_read(tmp_path):
         )
     expected_band = np.asarray(expected[0])
     rendered = np.asarray(images[0].get_array())
-    assert rendered.shape == expected_band.shape, (
-        f"rendered shape {rendered.shape} != expected {expected_band.shape}"
-    )
-    assert np.allclose(rendered, expected_band, atol=0.01), (
-        "rendered virtual tile values should match the direct windowed rasterio read"
-    )
+    assert (
+        rendered.shape == expected_band.shape
+    ), f"rendered shape {rendered.shape} != expected {expected_band.shape}"
+    assert np.allclose(
+        rendered, expected_band, atol=0.01
+    ), "rendered virtual tile values should match the direct windowed rasterio read"
     plt.close("all")
 
 
@@ -1104,9 +1111,9 @@ def test_plot_raster_cmap_terrain_sets_colormap():
     ax = fig.axes[0]
     images = ax.get_images()
     assert images, "should have drawn an image"
-    assert images[0].get_cmap().name == "terrain", (
-        f"expected terrain colormap, got {images[0].get_cmap().name!r}"
-    )
+    assert (
+        images[0].get_cmap().name == "terrain"
+    ), f"expected terrain colormap, got {images[0].get_cmap().name!r}"
     plt.close("all")
 
 
@@ -1118,9 +1125,9 @@ def test_plot_raster_cmap_default_is_viridis():
     ax = fig.axes[0]
     images = ax.get_images()
     assert images, "should have drawn an image"
-    assert images[0].get_cmap().name == "viridis", (
-        f"expected viridis colormap, got {images[0].get_cmap().name!r}"
-    )
+    assert (
+        images[0].get_cmap().name == "viridis"
+    ), f"expected viridis colormap, got {images[0].get_cmap().name!r}"
     plt.close("all")
 
 
@@ -1134,9 +1141,9 @@ def test_plot_file_cmap_terrain_sets_colormap(tmp_path):
     ax = fig.axes[0]
     images = ax.get_images()
     assert images, "should have drawn an image"
-    assert images[0].get_cmap().name == "terrain", (
-        f"expected terrain colormap, got {images[0].get_cmap().name!r}"
-    )
+    assert (
+        images[0].get_cmap().name == "terrain"
+    ), f"expected terrain colormap, got {images[0].get_cmap().name!r}"
     plt.close("all")
 
 
@@ -1150,7 +1157,7 @@ def test_plot_raster_cmap_virtual_tile_terrain(tmp_path):
     ax = fig.axes[0]
     images = ax.get_images()
     assert images, "should have drawn an image"
-    assert images[0].get_cmap().name == "terrain", (
-        f"expected terrain colormap for virtual tile, got {images[0].get_cmap().name!r}"
-    )
+    assert (
+        images[0].get_cmap().name == "terrain"
+    ), f"expected terrain colormap for virtual tile, got {images[0].get_cmap().name!r}"
     plt.close("all")

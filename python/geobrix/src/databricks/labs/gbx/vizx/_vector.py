@@ -178,10 +178,9 @@ def _dissolve_product(df, cell_col, dissolve_by):
     Raises on any failure (AnalysisException, Py4JJavaError, etc.); the caller
     decides whether to fall back.
     """
-    from pyspark.sql import functions as F
-
     import geopandas as gpd
     import shapely.wkb
+    from pyspark.sql import functions as F
 
     agg_expr = F.expr(
         f"st_asbinary(st_union_agg(st_geomfromwkb("
@@ -191,9 +190,7 @@ def _dissolve_product(df, cell_col, dissolve_by):
     pdf = dissolved.toPandas()
 
     geoms = [shapely.wkb.loads(bytes(b)) for b in pdf["_geom_wkb"]]
-    return gpd.GeoDataFrame(
-        pdf.drop(columns=["_geom_wkb"]), geometry=geoms, crs=4326
-    )
+    return gpd.GeoDataFrame(pdf.drop(columns=["_geom_wkb"]), geometry=geoms, crs=4326)
 
 
 def _dissolve_geopandas(df, cell_col, extra_cols, dissolve_by, max_rows, sample_seed):

@@ -331,13 +331,14 @@ def test_cells_as_gdf_dissolve_geopandas_engine(spark):
 
 def test_cells_as_gdf_auto_falls_back_when_product_raises():
     """auto engine: when product raises, geopandas fallback produces the result."""
+    from unittest.mock import patch
+
     import geopandas as gpd
     import h3
     import pandas as pd
     from shapely.geometry import Polygon
-    from unittest.mock import patch
-    import databricks.labs.gbx.vizx._vector as _v
 
+    import databricks.labs.gbx.vizx._vector as _v
     from databricks.labs.gbx.vizx import cells_as_gdf
 
     cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
@@ -350,9 +351,11 @@ def test_cells_as_gdf_auto_falls_back_when_product_raises():
         geopandas_calls.append(True)
         ring = h3.cell_to_boundary(h3.int_to_str(int(cell)))
         geom = Polygon([(lng, lat) for lat, lng in ring])
-        return gpd.GeoDataFrame(
-            {"band_level": [1, 2]}, geometry=[geom, geom], crs=4326
-        ).dissolve(by="band_level").reset_index()
+        return (
+            gpd.GeoDataFrame({"band_level": [1, 2]}, geometry=[geom, geom], crs=4326)
+            .dissolve(by="band_level")
+            .reset_index()
+        )
 
     with patch.object(_v, "_dissolve_product", side_effect=RuntimeError("no product")):
         with patch.object(_v, "_dissolve_geopandas", side_effect=_fake_geopandas):
@@ -369,13 +372,14 @@ def test_cells_as_gdf_auto_falls_back_when_product_raises():
 
 def test_cells_as_gdf_product_success_no_geopandas():
     """When product succeeds, geopandas dissolve is NOT called."""
+    from unittest.mock import patch
+
     import geopandas as gpd
     import h3
     import pandas as pd
     from shapely.geometry import Polygon
-    from unittest.mock import patch
-    import databricks.labs.gbx.vizx._vector as _v
 
+    import databricks.labs.gbx.vizx._vector as _v
     from databricks.labs.gbx.vizx import cells_as_gdf
 
     cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
@@ -402,7 +406,9 @@ def test_cells_as_gdf_product_success_no_geopandas():
             )
 
     assert mock_prod.called, "_dissolve_product must be attempted"
-    assert len(geopandas_calls) == 0, "_dissolve_geopandas must NOT be called on product success"
+    assert (
+        len(geopandas_calls) == 0
+    ), "_dissolve_geopandas must NOT be called on product success"
     assert result is fake_gdf
 
 
@@ -447,11 +453,12 @@ def test_cells_as_gdf_explicit_max_rows_skips_guard():
 
 def test_cells_as_gdf_product_engine_no_fallback():
     """dissolve_engine='product' does NOT fall back; raises on product failure."""
+    from unittest.mock import patch
+
     import h3
     import pandas as pd
-    from unittest.mock import patch
-    import databricks.labs.gbx.vizx._vector as _v
 
+    import databricks.labs.gbx.vizx._vector as _v
     from databricks.labs.gbx.vizx import cells_as_gdf
 
     cell = h3.str_to_int(h3.latlng_to_cell(0.0, 0.0, 5))
@@ -474,7 +481,9 @@ def test_cells_as_gdf_product_engine_no_fallback():
                     dissolve_engine="product",
                 )
 
-    assert len(geopandas_calls) == 0, "_dissolve_geopandas must NOT be called when engine='product'"
+    assert (
+        len(geopandas_calls) == 0
+    ), "_dissolve_geopandas must NOT be called when engine='product'"
 
 
 def test_cells_as_gdf_invalid_dissolve_engine_raises():

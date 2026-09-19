@@ -27,6 +27,8 @@ from databricks.labs.gbx.pyrx.core import accessors
 from databricks.labs.gbx.pyrx.core import agg as agg_core
 from databricks.labs.gbx.pyrx.core import analysis as analysis_core
 from databricks.labs.gbx.pyrx.core import (
+    binning,
+    chm,
     coords,
     derivedband,
     edit,
@@ -388,6 +390,9 @@ _TESSELLATE_LIGHT = (_PYRX + "tessellate.py", _PYRX + "edit.py")
 # H3 rasterize aggregator (cellid,value rows -> one tile, pixel-centroid burn).
 # Light burn math + gridspec port live in core/cellraster.py.
 _CELLRASTER_LIGHT = (_PYRX + "cellraster.py",)
+# LiDAR functions: binning (binpoints/binpoints_agg), isoband, chm.
+_BINNING_LIGHT = (_PYRX + "binning.py",)
+_CHM_LIGHT = (_PYRX + "chm.py",)
 
 # --- cellfill grouped aggregators (gbx_<grid>_cellfill) source paths ----------
 # The four gbx_<grid>_cellfill aggregators share one fill core across tiers:
@@ -3923,6 +3928,102 @@ REGISTRY: Dict[str, FnSpec] = {
         geometry_set="st_coverage",
         sources=_PYVX_COVERAGE_LIGHT,
     ),
+    # --- LiDAR functions (both-tier) ---
+    "rst_binpoints": FnSpec(
+        "rst_binpoints",
+        "gbx_rst_binpoints",
+        "lidar",
+        _BOTH,
+        {"statistic": "max"},
+        core_fn=lambda ds, a, g: (
+            binning.bin_points(
+                *tin.points_xyz_from_wkb(g.zpoints).T,
+                *_tile_extent_size_srid(ds),
+                a["statistic"],
+            )
+            if g.zpoints
+            else None
+        ),
+        col_fn=lambda t, a: prx.rst_binpoints(
+            F.array(),
+            F.array(),
+            F.array(),
+            F.lit(0.0),
+            F.lit(0.0),
+            F.lit(1.0),
+            F.lit(1.0),
+            F.lit(1),
+            F.lit(1),
+            F.lit(4326),
+            a["statistic"],
+        ),
+        input_kind="geometry",
+        sources=_BINNING_LIGHT + (_HEAVY + "RST_BinPoints.scala",),
+        core=False,
+        geometry_set="srid_4326",
+    ),
+    "rst_binpoints_agg": FnSpec(
+        "rst_binpoints_agg",
+        "gbx_rst_binpoints_agg",
+        "lidar",
+        ("spark-path",),
+        {"statistic": "max"},
+        # col_fn receives (geom_col, value_col, extent_tuple, args) but for
+        # binpoints_agg we extract x, y, z from the geometry WKBs and aggregate
+        # them per-group.
+        col_fn=lambda g, v, ext, a: prx.rst_binpoints_agg(
+            F.array(),
+            F.array(),
+            F.array(),
+            F.lit(ext[0]),
+            F.lit(ext[1]),
+            F.lit(ext[2]),
+            F.lit(ext[3]),
+            F.lit(ext[4]),
+            F.lit(ext[5]),
+            F.lit(int(ext[6])),
+            a["statistic"],
+        ),
+        core_fn=lambda t, a: t,  # spark-path-only; no pure-core analogue
+        input_kind="geometry_aggregate",
+        sources=_BINNING_LIGHT + (_HEAVY + "RST_BinPointsAgg.scala",),
+        core=False,
+        geometry_set="srid_4326",
+    ),
+    "rst_isoband": FnSpec(
+        "rst_isoband",
+        "gbx_rst_isoband",
+        "lidar",
+        _BOTH,
+        {"breaks": [0.2, 0.4, 0.6, 0.8]},
+        core_fn=lambda ds, a: features.isoband(ds, a["breaks"]),
+        col_fn=lambda t, a: prx.rst_isoband(
+            t, F.array(*[F.lit(float(v)) for v in a["breaks"]])
+        ),
+        fingerprint_kind="vector",
+        virtual_disposition="materialized",
+        sources=_FEATURES_LIGHT + (_HEAVY + "vector/RST_Isoband.scala",),
+        core=False,
+    ),
+    "rst_chm": FnSpec(
+        "rst_chm",
+        "gbx_rst_chm",
+        "lidar",
+        _BOTH,
+        {},
+        core_fn=lambda dss, a: (
+            chm.chm(
+                _ds_to_gtiff_bytes(dss[0]),
+                _ds_to_gtiff_bytes(dss[1] if len(dss) > 1 else dss[0]),
+            )
+            if dss
+            else None
+        ),
+        col_fn=lambda arr, a: prx.rst_chm(arr[0], arr[1] if len(arr) > 1 else arr[0]),
+        sources=_CHM_LIGHT + (_HEAVY + "RST_Chm.scala",),
+        core=False,
+        input_kind="tile_array",
+    ),
 }
 
 # Maps each tile-aggregator FnSpec to the bench.synth recipe whose tiles form its
@@ -3957,6 +4058,7 @@ _SYNTH_RECIPE: Dict[str, str] = {
     "rst_combinestddev": "combineavg",
     "rst_combinecount": "combineavg",
     "rst_merge": "merge",
+    "rst_chm": "combineavg",
 }
 
 

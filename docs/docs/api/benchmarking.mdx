@@ -1239,10 +1239,11 @@ Throughput scales ~linearly at volume: **100,000 building footprints expand to 3
 
 ### LiDAR DSM — `rst_binpoints` / `rst_binpoints_agg` / `rst_isoband` / `rst_chm` {#lidar-dsm}
 
-These four functions are **lightweight-only** (no heavyweight counterpart) and do not
-appear in the parity comparison tables. They belong to the **point-cloud-to-raster**
-shape family: binning scattered xyz points onto a pixel grid (`rst_binpoints`/`rst_binpoints_agg`),
-polygon-extraction per value band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
+These four functions ship in **both tiers** (lightweight `pyrx` and heavyweight RasterX),
+so they take part in the same heavy-vs-light parity comparison as the rest of the raster
+family. They belong to the **point-cloud-to-raster** shape family: binning scattered xyz
+points onto a pixel grid (`rst_binpoints`/`rst_binpoints_agg`), polygon-extraction per value
+band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
 
 > **Shape** (performance.mdx taxonomy): `rst_binpoints*` are geometry-input constructors
 > (no tile DataFrame input — similar to `rst_gridfrompoints`); `rst_isoband` is a

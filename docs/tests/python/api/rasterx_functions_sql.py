@@ -2730,6 +2730,7 @@ rst_align_to_sql_example_output = """
 +-----------------------------------------------------------+
 |{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
 +-----------------------------------------------------------+
+(tile warped to reference grid; output has reference tile's CRS, extent, width, height)
 """
 
 

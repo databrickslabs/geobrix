@@ -3946,7 +3946,7 @@ result.show(truncate = false)
 +-----------------------------+
 |[TQ2878, TQ2879, TQ2880, ...]|
 +-----------------------------+
-... (25 cells: polyfill of BNG polygon expanded by k=1 ring)""".trim
+... (24 cells: boundary band expanded by k=1 ring; interior centre not filled)""".trim
 
   val bng_geomkloop_scala_example: String =
     """
@@ -4822,7 +4822,7 @@ result.show(truncate = false)
 +-----------------------+
 |[..., (8 cells at k=1)]|
 +-----------------------+
-... (8 BIGINT cell IDs — hollow ring at k=1, center cell 360287970373976640 excluded)""".trim
+... (8 BIGINT cell IDs — hollow ring at k=1, center cell excluded)""".trim
 
   val custom_distance_scala_example: String =
     """
@@ -4886,6 +4886,6 @@ result.show()
 +------------------------------------------+
 |[50 4D 54 69 6C 65 73 03 ...]             |
 +------------------------------------------+
-(BINARY: PMTiles v3 archive containing 9 synthetic tiles at zoom 2)""".trim
+(BINARY: PMTiles v3 archive — starts with magic bytes b'PMTiles' + version byte 3; contains 9 synthetic tiles at zoom 2)""".trim
 
 }

@@ -2168,7 +2168,7 @@ custom_kloop_python_light_example_output = """
 +-----------------------+
 |[..., (8 cells at k=1)]|
 +-----------------------+
-... (8 BIGINT cell IDs — hollow ring at k=1, center cell 360287970373976640 excluded)
+... (8 BIGINT cell IDs — hollow ring at k=1, center cell excluded)
 """
 
 

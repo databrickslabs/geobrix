@@ -107,22 +107,44 @@ def exif_jpeg(tmp_path):
     Coordinates: 37.75 N, 122.45 W, 30 m altitude.
     Focal length: 1733.30 (173330/100 rational).
     Camera: GoPro HERO5, image 4000x3000.
+
+    Uses Pillow's native ``Image.Exif`` / ``IFDRational`` API — no piexif dep.
+    EXIF IFD tag numbers follow the TIFF/EXIF spec directly:
+      0th IFD  271=Make, 272=Model
+      GPS IFD  1=LatRef, 2=Lat(DMS), 3=LonRef, 4=Lon(DMS), 5=AltRef, 6=Alt
+      Exif IFD 37386=FocalLength
     """
-    import piexif
     from PIL import Image
+    from PIL.TiffImagePlugin import IFDRational
 
     p = tmp_path / "GOPR0001.JPG"
-    Image.new("RGB", (4000, 3000), (128, 128, 128)).save(p, "jpeg")
-    # 37.75N, 122.45W, 30m alt; focal 1733.30 (35mm-equiv units as in source)
-    gps = {
-        piexif.GPSIFD.GPSLatitudeRef: b"N",
-        piexif.GPSIFD.GPSLatitude: [(3775, 100), (0, 1), (0, 1)],
-        piexif.GPSIFD.GPSLongitudeRef: b"W",
-        piexif.GPSIFD.GPSLongitude: [(12245, 100), (0, 1), (0, 1)],
-        piexif.GPSIFD.GPSAltitudeRef: 0,
-        piexif.GPSIFD.GPSAltitude: (30, 1),
-    }
-    zeroth = {piexif.ImageIFD.Make: b"GoPro", piexif.ImageIFD.Model: b"HERO5"}
-    exif = {piexif.ExifIFD.FocalLength: (173330, 100)}
-    piexif.insert(piexif.dump({"0th": zeroth, "Exif": exif, "GPS": gps}), str(p))
+    img = Image.new("RGB", (4000, 3000), (128, 128, 128))
+    exif = img.getexif()
+
+    # 0th IFD — camera identity
+    exif[271] = "GoPro"  # Make
+    exif[272] = "HERO5"  # Model
+
+    # GPS IFD (tag 34853): 37.75 N, 122.45 W, 30 m above sea level
+    gps_ifd = exif.get_ifd(34853)
+    gps_ifd[1] = "N"  # GPSLatitudeRef
+    gps_ifd[2] = (  # GPSLatitude: degrees=37.75, minutes=0, seconds=0
+        IFDRational(3775, 100),
+        IFDRational(0, 1),
+        IFDRational(0, 1),
+    )
+    gps_ifd[3] = "W"  # GPSLongitudeRef
+    gps_ifd[4] = (  # GPSLongitude: degrees=122.45, minutes=0, seconds=0
+        IFDRational(12245, 100),
+        IFDRational(0, 1),
+        IFDRational(0, 1),
+    )
+    gps_ifd[5] = b"\x00"  # GPSAltitudeRef: 0 = above sea level (BYTE)
+    gps_ifd[6] = IFDRational(30, 1)  # GPSAltitude: 30 m
+
+    # Exif IFD (tag 34665): focal length 173330/100 = 1733.30 mm
+    exif_ifd = exif.get_ifd(34665)
+    exif_ifd[37386] = IFDRational(173330, 100)  # FocalLength
+
+    img.save(str(p), "jpeg", exif=exif.tobytes())
     return p

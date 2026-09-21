@@ -83,6 +83,11 @@ pytest-asyncio==1.3.0
 nest-asyncio==1.6.0
 testbook==0.4.2
 
+# --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
+# Matches the [light-base] pyproject.toml pin so the dev container exercises the same
+# version as the light CI environments (requirements-light-env{5,6}-ci.in).
+exifread>=3.0,<4
+
 # --- Jupyter (final stage only) ---
 ipython==8.30.0
 ipykernel==6.29.5

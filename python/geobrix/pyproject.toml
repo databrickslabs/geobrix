@@ -105,6 +105,10 @@ light-base = [
     # --- LiDAR point-cloud reading (lidar_gbx DataSource; lazrs = pure-Rust LAZ backend) ---
     "laspy>=2.5,<2.6",
     "lazrs>=0.6,<0.7",
+    # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
+    # Pure-Python; no native dep. Available without the [photogrammetry] extra so
+    # any light_* install can read EXIF tags without pulling the full SfM stack.
+    "exifread>=3.0,<4",
 ]
 # ---------------------------------------------------------------------------
 # protobuf-5 regime — classic DBR 17.3, DBR 18, Serverless env 5
@@ -268,6 +272,28 @@ vizx = [
     "contextily>=1.5,<2",
     "anywidget>=0.9,<1",
     "tippecanoe>=2.45,<3",
+]
+# Photogrammetry (example-only): COLMAP SfM + ortho render deps. Not pulled by base light.
+# CPU wheel runs on Serverless CPU env5/6 + classic; GPU variant is Phase 2.
+photogrammetry = [
+    "pycolmap==4.2.0",
+    "rasterio>=1.3",
+    "rio-cogeo>=3.5",
+    "folium",
+    "pymbtiles",
+    "mercantile",
+    "pmtiles",
+]
+# GPU is env5-only on purpose: Serverless GPU AI Runtime env5 = CUDA 12 (matches pycolmap-cuda12).
+# env6 = CUDA 13 and no pycolmap-cuda13 wheel exists on the proxy -> no photogrammetry_gpu_env6 until it does.
+photogrammetry_gpu_env5 = [
+    "pycolmap-cuda12==4.2.0",
+    "rasterio>=1.3",
+    "rio-cogeo>=3.5",
+    "folium",
+    "pymbtiles",
+    "mercantile",
+    "pmtiles",
 ]
 
 [tool.coverage.run]

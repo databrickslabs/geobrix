@@ -136,5 +136,9 @@ ipython==8.30.0
 laspy==2.5.4
 lazrs==0.6.3
 
+# --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
+# Pure-Python; no native dep. Part of [light-base]; available without [photogrammetry].
+exifread>=3.0,<4
+
 # --- test runner ---
 pytest==8.4.2

@@ -98,3 +98,31 @@ def spark():
         .getOrCreate()
     )
     yield session
+
+
+@pytest.fixture
+def exif_jpeg(tmp_path):
+    """Synthesize a JPEG with known EXIF GPS/focal data for exif_gbx tests.
+
+    Coordinates: 37.75 N, 122.45 W, 30 m altitude.
+    Focal length: 1733.30 (173330/100 rational).
+    Camera: GoPro HERO5, image 4000x3000.
+    """
+    import piexif
+    from PIL import Image
+
+    p = tmp_path / "GOPR0001.JPG"
+    Image.new("RGB", (4000, 3000), (128, 128, 128)).save(p, "jpeg")
+    # 37.75N, 122.45W, 30m alt; focal 1733.30 (35mm-equiv units as in source)
+    gps = {
+        piexif.GPSIFD.GPSLatitudeRef: b"N",
+        piexif.GPSIFD.GPSLatitude: [(3775, 100), (0, 1), (0, 1)],
+        piexif.GPSIFD.GPSLongitudeRef: b"W",
+        piexif.GPSIFD.GPSLongitude: [(12245, 100), (0, 1), (0, 1)],
+        piexif.GPSIFD.GPSAltitudeRef: 0,
+        piexif.GPSIFD.GPSAltitude: (30, 1),
+    }
+    zeroth = {piexif.ImageIFD.Make: b"GoPro", piexif.ImageIFD.Model: b"HERO5"}
+    exif = {piexif.ExifIFD.FocalLength: (173330, 100)}
+    piexif.insert(piexif.dump({"0th": zeroth, "Exif": exif, "GPS": gps}), str(p))
+    return p

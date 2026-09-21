@@ -104,6 +104,7 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | PMTiles | `pmtiles_gbx` | — (light-only) |
 | File lister | `file_gbx` | — (light-only) |
 | LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
+| EXIF/GPS (images) | `exif_gbx` | — (light-only) |
 | Vector (generic) | `vector_gbx` | `ogr` |
 | Shapefile | `shapefile_gbx` | `shapefile_ogr` |
 | GeoJSON | `geojson_gbx` | `geojson_ogr` |
@@ -149,6 +150,7 @@ End-to-end worked examples live in [`notebooks/examples/`](./notebooks/examples/
 | [`h3-rasterize`](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize) | DEM extra (Wireless Coverage series) | Downloads a USGS 3DEP **seamless (10 m)** DEM for the San Francisco Bay Area via `DemDownloader()`, tiles it into distributed virtual tiles with the `raster_gbx` reader, clips each tile to a land mask from Overture Maps (`rst_clip`), extracts twelve 60 m elevation bands with `rst_isoband`, indexes them with Databricks product H3 (`h3_try_coverash3`) at resolution 9, assembles a multi-band raster stack, and dissolves per-group polygons on Spark via the product `st_union_agg` in `cells_as_gdf`. |
 | [`helios`](https://databrickslabs.github.io/geobrix/docs/notebooks/helios) | Tiling to PMTiles | A four-notebook solar site-selection series that turns one San Francisco bounding box into self-contained [PMTiles](https://protomaps.com/docs/pmtiles) archives — candidate rooftops (vector), aerial basemap (raster), and terrain slope/aspect/hillshade scoring (elevation) — then reshards a layer into a distributed multi-archive PMTiles mosaic + catalog for web-scale delivery, viewable in a single browser tab with no tile server. |
 | [`vapor-eyes`](https://databrickslabs.github.io/geobrix/docs/notebooks/vapor-eyes) | Methane monitoring | Works a satellite methane signal over the Permian Basin — from a wide-area screen down to the operator whose well pad is leaking — reading Sentinel-5P (TROPOMI) swaths as points with the `netcdf_gbx` reader alongside EMIT plume data. Ships in two flavors: a production-ready Lakeflow pipeline and an interactive notebook series. |
+| [`orthomosaic`](https://databrickslabs.github.io/geobrix/docs/notebooks/orthomosaic) | Photogrammetry | Extracts per-image EXIF/GPS telemetry with `exif_gbx`, computes GSD, screens images by sharpness, and runs CPU sparse SfM with `pycolmap` on Serverless env 5 to produce a georeferenced orthomosaic GeoTIFF — then converts to a COG and packages as PMTiles for browser preview. |
 
 ### Apps
 

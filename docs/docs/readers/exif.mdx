@@ -1,0 +1,157 @@
+---
+sidebar_position: 10
+sidebar_label: EXIF/GPS (exif_gbx)
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import exifExamples from '!!raw-loader!../../tests/python/readers/exif_reader_example.py';
+
+# EXIF/GPS Reader — `exif_gbx`
+
+_Since:_ lightweight `exif_gbx` **v0.5.2** · _(light-only — no heavyweight tier)_
+
+Read per-image EXIF/GPS telemetry from drone and camera JPEG/TIFF images into a Spark
+DataFrame. The `exif_gbx` reader is a lightweight pure-Python DataSource; it requires no
+JAR and runs on Serverless, standard (shared), and ARM clusters.
+
+One row per image file. In the default `metadata` mode the reader extracts EXIF tags from
+the file header only — no pixels are decoded. The opt-in `qc` mode additionally reads the
+image bytes to compute sharpness and brightness metrics.
+
+:::note Lightweight only
+`exif_gbx` is a Python DataSource with no heavyweight GDAL/JVM counterpart. Register
+it with `register(spark)` before use.
+:::
+
+## Format name
+
+`exif_gbx`
+
+## Supported files
+
+`.jpg`, `.jpeg`, `.tif`, and `.tiff` images. Pass a single file path or a directory;
+a directory is enumerated recursively and one partition per file is planned.
+
+## Modes
+
+`exif_gbx` exposes two read modes, selected via the `mode` option (default: `"metadata"`):
+
+| Mode | Description | Output schema |
+|---|---|---|
+| `metadata` | One row per file — header-only EXIF/GPS extraction; never decodes pixels. Cheap on large image archives. | [Metadata schema](#output-schema) |
+| `qc` | One row per file — metadata columns plus `sharpness` and `brightness` derived from the image pixels. Opt-in; requires reading the full image bytes. | [QC schema](#qc-mode) |
+
+## Options
+
+| Option | Default | Applies to | Description |
+|---|---|---|---|
+| `mode` | `"metadata"` | both | Read mode: `"metadata"` or `"qc"`. |
+| `filterRegex` | _none_ | both | Restrict the file listing to paths matching this regular expression. Absent = keep all recognized image files. |
+| `sensorWidthMm` | _none_ | both | Override sensor width in mm. Injects the value into the `sensor_width_mm` output column for cameras that do not write a `SensorWidth` EXIF tag. Useful for DJI and GoPro models with absent or imprecise calibration tags. |
+| `focalLengthMm` | _none_ | both | Override focal length in mm. Takes precedence over the EXIF `FocalLength` tag when set. Useful when the on-camera focal length is 35 mm equivalent rather than actual. |
+
+## Register
+
+```python
+from databricks.labs.gbx.ds.register import register
+register(spark)
+```
+
+## Output schema
+
+### Metadata schema
+
+```
+root
+ |-- path:             string    — full file path (original URI or /Volumes path)
+ |-- camera_make:      string    — EXIF Make tag (e.g. "GoPro", "DJI")
+ |-- camera_model:     string    — EXIF Model tag (e.g. "HERO5", "FC300X")
+ |-- timestamp:        timestamp — DateTimeOriginal or DateTime parsed from EXIF
+ |-- latitude:         double    — decimal degrees (negative = South)
+ |-- longitude:        double    — decimal degrees (negative = West)
+ |-- altitude:         double    — GPS altitude in metres above sea level
+ |-- focal_length_mm:  double    — focal length in mm (from tag or focalLengthMm override)
+ |-- sensor_width_mm:  double    — sensor width in mm (from sensorWidthMm option; null if absent)
+ |-- image_width:      integer   — pixel width
+ |-- image_height:     integer   — pixel height
+ |-- geom_wkb:         binary    — `POINT(longitude latitude)` in WKB (OGC, SRID 4326); null when GPS absent
+ |-- geom_srid:        integer   — 4326 when geom_wkb is set; null otherwise
+```
+
+### QC mode
+
+QC mode extends the metadata schema with two additional columns:
+
+```
+ |-- sharpness:        double    — Laplacian variance of a grayscale thumbnail (higher = sharper)
+ |-- brightness:       double    — mean pixel intensity [0–255] of a grayscale thumbnail
+```
+
+:::note Serverless memory guard
+In `qc` mode each image is fully materialized into executor RAM to compute pixel
+metrics. The reader checks the file size against the connect-aware materialize cap
+(64 MiB on Serverless / Spark Connect; 256 MiB on classic) and skips oversized
+images with a warning rather than OOMing the task. Use a classic cluster for
+high-resolution (> 64 MiB) images in QC mode.
+:::
+
+## Examples
+
+### Metadata mode — header-only telemetry
+
+<CodeFromTest code={exifExamples} language="python" functionName="EXIF_METADATA_MODE"
+  source="docs/tests/python/readers/exif_reader_example.py"
+  testFile="docs/tests/python/readers/test_exif_reader_example.py" />
+
+### QC mode — add sharpness and brightness
+
+<CodeFromTest code={exifExamples} language="python" functionName="EXIF_QC_MODE"
+  source="docs/tests/python/readers/exif_reader_example.py"
+  testFile="docs/tests/python/readers/test_exif_reader_example.py" />
+
+### Filter to JPEG files only
+
+<CodeFromTest code={exifExamples} language="python" functionName="EXIF_FILTER_REGEX"
+  source="docs/tests/python/readers/exif_reader_example.py" />
+
+### Override sensor/focal-length for cameras without calibration tags
+
+<CodeFromTest code={exifExamples} language="python" functionName="EXIF_SENSOR_OVERRIDE"
+  source="docs/tests/python/readers/exif_reader_example.py" />
+
+## Using the geometry column
+
+`geom_wkb` is a standard OGC WKB `POINT(longitude latitude)` in SRID 4326. Convert it to a
+Databricks `GEOMETRY` column for use with the built-in spatial SQL functions:
+
+```python
+from pyspark.sql import functions as F
+
+telemetry = spark.read.format("exif_gbx").load(path)
+with_geom = telemetry.withColumn(
+    "geom",
+    F.expr("st_geomfromwkb(geom_wkb)")
+)
+with_geom.select("path", "geom").show()
+```
+
+## Scale and robustness
+
+- **One partition per file.** A directory of N images plans N partitions — parallelism
+  scales naturally with executor count. No batching or chunk logic is applied to metadata
+  mode; QC mode processes each image as a single task.
+- **Bad files are skipped, not fatal.** A 0-byte or unreadable image, or one with no
+  recognizable EXIF, is skipped with a warning. One corrupt file cannot fail a distributed
+  read over a whole archive.
+- **Serverless-safe.** The reader makes no `_jvm` / `sparkContext` / `.rdd` calls and
+  holds no SparkSession reference, so it runs unchanged on Serverless, standard, and ARM clusters.
+
+## Next Steps
+
+- [Orthomosaic example](../notebooks/orthomosaic) — an end-to-end photogrammetry pipeline
+  that reads EXIF telemetry with `exif_gbx`, computes GSD, runs sparse SfM, and produces
+  a georeferenced orthomosaic GeoTIFF.
+- [RasterX functions](../api/raster-functions) — tile-based raster processing for the
+  orthomosaic outputs (`rst_cog_convert`, `rst_clip`, `gbx_rst_xyzpyramid`).
+- [PMTiles writer](../writers/pmtiles) — turn the orthomosaic COG into a self-contained
+  PMTiles archive for browser-based preview.

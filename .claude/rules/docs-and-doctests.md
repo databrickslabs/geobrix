@@ -25,8 +25,8 @@ Anything under `docs/docs/` is read by end users. Never leak internal release-pl
 
 | ❌ Don't write | ✅ Write instead |
 |---|---|
-| "Composes with `gbx_pmtiles_agg` (Wave 6)" | "Composes with `gbx_pmtiles_agg`" |
-| "the Wave 1 aggregator" | "the aggregator" or `gbx_st_asmvt` |
+| "Composes with `gbx_pmtiles_agg` (Wave N)" | "Composes with `gbx_pmtiles_agg`" |
+| "the Wave N aggregator" | "the aggregator" or `gbx_st_asmvt` |
 | references to internal subagents or dispatch sequencing | reference behavior, not the process |
 
 **Wave numbers** are legitimate only in: `.superpowers/prompts/features/*.md`, dispatch prompts, git commit messages, `.superpowers/input/` (all internal/gitignored).

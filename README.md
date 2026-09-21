@@ -3,7 +3,7 @@
   <img src="resources/images/brand/GeoBriX.png" width="50%" alt="GeoBriX" />
 </picture>
 
-[![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
+[![build](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml/badge.svg?branch=main)](https://github.com/databrickslabs/geobrix/actions/workflows/build_main.yml)
 [![documentation](https://img.shields.io/badge/docs-latest-brightgreen.svg)](https://databrickslabs.github.io/geobrix/)
 [![scala](https://img.shields.io/badge/scala-2.13-red.svg)](https://www.scala-lang.org/)
 [![python](https://img.shields.io/badge/python-3.12+-blue.svg)](https://www.python.org/)
@@ -25,7 +25,7 @@
 ![VizX](https://img.shields.io/badge/VizX-20-6a1b9a)
 ![PMTiles](https://img.shields.io/badge/PMTiles-1-1565c0)
 
-**GeoBrix** is a high-performance spatial library for Databricks that delivers the next generation of *product-augmenting* capabilities — raster, discrete global grids, and vector format I/O — and is built to drive you *deeper* into Databricks-native [`GEOMETRY`/`GEOGRAPHY` and ST/H3 functions](https://databrickslabs.github.io/geobrix/docs/databricks-spatial), not replace them. It is the modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/) (now in maintenance).
+**GeoBrix** is a high-performance [Databricks Labs](https://www.databricks.com/learn/labs) spatial library that delivers the next generation of *product-augmenting* capabilities — raster, discrete global grids, and vector format I/O — and is built to drive you *deeper* into Databricks-native [`GEOMETRY`/`GEOGRAPHY` and ST/H3 functions](https://databrickslabs.github.io/geobrix/docs/databricks-spatial), not replace them. It is the modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/) (now in maintenance).
 
 > **Full docs:** **https://databrickslabs.github.io/geobrix/** — this README is the 2-minute tour.
 
@@ -103,6 +103,7 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | NetCDF | `netcdf_gbx` | `netcdf_gdal` / `netcdf_ogr` |
 | PMTiles | `pmtiles_gbx` | — (light-only) |
 | File lister | `file_gbx` | — (light-only) |
+| LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
 | Vector (generic) | `vector_gbx` | `ogr` |
 | Shapefile | `shapefile_gbx` | `shapefile_ogr` |
 | GeoJSON | `geojson_gbx` | `geojson_ogr` |
@@ -132,19 +133,33 @@ Single-file vector writes are lightweight-only; the **sharded GeoJSONL** writer 
 
 Light vector readers/writers exchange geometry as **WKB/WKT** with companion `*_srid` columns — convert to/from Databricks `GEOMETRY` with `st_geomfromwkb` / `st_aswkb` (see [Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
 
-## Example notebooks
+## Examples
+
+End-to-end worked examples — runnable **notebook series** and **app** examples. See the [Examples overview](https://databrickslabs.github.io/geobrix/docs/examples/overview) for the full catalog.
+
+### Notebooks
 
 End-to-end worked examples live in [`notebooks/examples/`](./notebooks/examples/), with a docs page for each one.
 
 | Notebook | Series | What it shows |
 |---|---|---|
+| [`eo-series`](https://databrickslabs.github.io/geobrix/docs/notebooks/eo-series) | Earth Observation (STAC) | A four-notebook Earth Observation series over Sentinel-2 L2A (Alaska), moving from a vector area-of-interest → STAC discovery (Microsoft Planetary Computer) → band download → gridded (H3) raster tables → multi-band stacking and clipping, on the lightweight tier (Serverless). |
+| [`xview`](https://databrickslabs.github.io/geobrix/docs/notebooks/xview) | Per-object clipping | Loads high-resolution aerial GeoTIFFs from the [xView Detection Challenge](https://challenge.xviewdataset.org/) into Lakehouse tables and clips rasters to labeled GeoJSON objects: raw TGZ → `gtiff` raster table → GeoJSON object table (EWKT + SRID) → per-object clipped tiles written back to a Volume, using RasterX with the built-in Spatial SQL functions. |
 | [`wireless-coverage`](https://databrickslabs.github.io/geobrix/docs/notebooks/wireless-coverage) | LiDAR surface foundations | Builds the elevation/surface data foundation for wireless-coverage analysis from a USGS 3DEP **LiDAR point cloud** over San Francisco: reads `.laz` with the `lidar_gbx` reader, bins returns into 1 m rasters **per spatial tile** with `rst_binpoints_agg` (ground → bare-earth DTM, all returns → DSM), differences them into a Canopy Height Model with `rst_chm`, and (Part 2) writes DSM/DTM/CHM GeoTIFF products plus a binned-vs-TIN bare earth (`rst_dtmfromgeoms_agg`). |
 | [`h3-rasterize`](https://databrickslabs.github.io/geobrix/docs/notebooks/h3-rasterize) | DEM extra (Wireless Coverage series) | Downloads a USGS 3DEP **seamless (10 m)** DEM for the San Francisco Bay Area via `DemDownloader()`, tiles it into distributed virtual tiles with the `raster_gbx` reader, clips each tile to a land mask from Overture Maps (`rst_clip`), extracts twelve 60 m elevation bands with `rst_isoband`, indexes them with Databricks product H3 (`h3_try_coverash3`) at resolution 9, assembles a multi-band raster stack, and dissolves per-group polygons on Spark via the product `st_union_agg` in `cells_as_gdf`. |
+| [`helios`](https://databrickslabs.github.io/geobrix/docs/notebooks/helios) | Tiling to PMTiles | A four-notebook solar site-selection series that turns one San Francisco bounding box into self-contained [PMTiles](https://protomaps.com/docs/pmtiles) archives — candidate rooftops (vector), aerial basemap (raster), and terrain slope/aspect/hillshade scoring (elevation) — then reshards a layer into a distributed multi-archive PMTiles mosaic + catalog for web-scale delivery, viewable in a single browser tab with no tile server. |
+| [`vapor-eyes`](https://databrickslabs.github.io/geobrix/docs/notebooks/vapor-eyes) | Methane monitoring | Works a satellite methane signal over the Permian Basin — from a wide-area screen down to the operator whose well pad is leaking — reading Sentinel-5P (TROPOMI) swaths as points with the `netcdf_gbx` reader alongside EMIT plume data. Ships in two flavors: a production-ready Lakeflow pipeline and an interactive notebook series. |
+
+### Apps
+
+| App | What it does |
+|---|---|
+| [Genie Map](https://databrickslabs.github.io/geobrix/docs/examples/genie-map) | Databricks App (React + kepler.gl) that turns Vapor-Eyes methane gold data into an interactive map you can query by natural language. |
 
 ## Known limitations
 
 - Native Databricks `GEOMETRY`/`GEOGRAPHY` are not produced directly yet — geometries are exchanged as **WKB/WKT** (+ `*_srid`); convert with the native ST functions ([Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
-- Spatial KNN is not yet ported; nor is H3 for geometry-based k-ring / k-loop.
+- Spatial KNN is not yet ported.
 
 ## Building, deploying, releasing
 

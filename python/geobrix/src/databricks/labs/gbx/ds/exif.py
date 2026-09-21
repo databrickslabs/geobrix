@@ -1,7 +1,7 @@
 """Light Spark Python DataSource for EXIF/GPS metadata from drone/camera images (exif_gbx).
 
 mode="metadata" (default): one row per file, header-only (cheap; never loads pixels).
-mode="qc":                  [Task 3] one row per image with frame-pair overlap stats.
+mode="qc":                  appends sharpness + brightness pixel metrics (opt-in).
 
 Serverless-safe: session-free partitions()/read(); one InputPartition per file.
 Uses no forbidden Spark internal APIs — safe on Spark Connect / Serverless.
@@ -48,6 +48,15 @@ EXIF_META_SCHEMA = StructType(
         StructField("image_height", IntegerType(), True),
         StructField("geom_wkb", BinaryType(), True),
         StructField("geom_srid", IntegerType(), True),
+    ]
+)
+
+# QC mode extends metadata schema with pixel-derived metrics.
+EXIF_QC_SCHEMA = StructType(
+    EXIF_META_SCHEMA.fields
+    + [
+        StructField("sharpness", DoubleType(), True),
+        StructField("brightness", DoubleType(), True),
     ]
 )
 
@@ -206,6 +215,14 @@ class ExifGbxReader(DataSourceReader):
         self.focal_length_mm_override: Optional[float] = (
             float(_fl) if _fl is not None else None
         )
+        # Pre-bake the connect-aware materialize cap (driver-side) so that
+        # _read_qc() workers can use it without resolving a session on the executor.
+        if self.mode == "qc":
+            from databricks.labs.gbx.ds.file_gbx import report_detected_cap
+
+            self._qc_cap_bytes: Optional[int] = report_detected_cap()
+        else:
+            self._qc_cap_bytes = None
 
     def partitions(self) -> Sequence[InputPartition]:
         import re as _re
@@ -219,10 +236,12 @@ class ExifGbxReader(DataSourceReader):
     def read(self, partition: "_ExifFilePartition") -> Iterator["pa.RecordBatch"]:
         if self.mode == "metadata":
             yield from self._read_metadata(partition.file_path)
+        elif self.mode == "qc":
+            yield from self._read_qc(partition.file_path)
         else:
             warnings.warn(
                 f"exif_gbx: mode={self.mode!r} is not implemented; "
-                "only 'metadata' is available in this version",
+                "supported modes are 'metadata' and 'qc'",
                 stacklevel=2,
             )
 
@@ -260,19 +279,8 @@ class ExifGbxReader(DataSourceReader):
             )
             return None, None
 
-    def _read_metadata(self, file_path: str) -> Iterator["pa.RecordBatch"]:
-        """Emit one Arrow RecordBatch row per file (header-only; no pixel decode)."""
-        # metadata mode yields 1 row per file — chunkSize has no effect here.
-        import pyarrow as pa
-        from pyspark.sql.pandas.types import to_arrow_schema
-
-        local = _listing.to_local_path(file_path)
-        source = _listing.to_spark_uri(file_path)
-
-        _, tags = self._open_file(local)
-        if tags is None:
-            return
-
+    def _build_metadata_row(self, local: str, source: str, tags) -> dict:
+        """Parse EXIF tags into a dict matching EXIF_META_SCHEMA (no pixel decode)."""
         # --- camera make / model ---
         camera_make = str(tags["Image Make"]) if "Image Make" in tags else None
         camera_model = str(tags["Image Model"]) if "Image Model" in tags else None
@@ -313,7 +321,7 @@ class ExifGbxReader(DataSourceReader):
             geom_wkb = _encode_point_wkb(lon, lat)
             geom_srid = 4326
 
-        row = {
+        return {
             "path": source,
             "camera_make": camera_make,
             "camera_model": camera_model,
@@ -328,9 +336,71 @@ class ExifGbxReader(DataSourceReader):
             "geom_wkb": geom_wkb,
             "geom_srid": geom_srid,
         }
+
+    def _read_metadata(self, file_path: str) -> Iterator["pa.RecordBatch"]:
+        """Emit one Arrow RecordBatch row per file (header-only; no pixel decode)."""
+        # metadata mode yields 1 row per file — chunkSize has no effect here.
+        import pyarrow as pa
+        from pyspark.sql.pandas.types import to_arrow_schema
+
+        local = _listing.to_local_path(file_path)
+        source = _listing.to_spark_uri(file_path)
+
+        _, tags = self._open_file(local)
+        if tags is None:
+            return
+
+        row = self._build_metadata_row(local, source, tags)
         yield pa.RecordBatch.from_pylist(
             [row], schema=to_arrow_schema(EXIF_META_SCHEMA)
         )
+
+    def _read_qc(self, file_path: str) -> Iterator["pa.RecordBatch"]:
+        """Emit one row per file: metadata columns + sharpness + brightness."""
+        import pyarrow as pa
+        from pyspark.sql.pandas.types import to_arrow_schema
+
+        from databricks.labs.gbx.ds.file_gbx import materialize_decision
+        from databricks.labs.gbx.pyrx.imagery import image_brightness, image_sharpness
+
+        local = _listing.to_local_path(file_path)
+        source = _listing.to_spark_uri(file_path)
+
+        st, tags = self._open_file(local)
+        if tags is None:
+            return
+
+        # Serverless-safe materialize gate: reject files too large for executor RAM.
+        # Cap was pre-baked on the driver (self._qc_cap_bytes) to avoid session-less
+        # fallback to the classic 256 MiB cap on Serverless workers.
+        decision = materialize_decision(
+            st.st_size, kind="read", cap_bytes=self._qc_cap_bytes
+        )
+        if decision != "stream":
+            warnings.warn(
+                f"exif_gbx qc: skipping {local!r} — file size {st.st_size} bytes "
+                "exceeds the Serverless materialize cap; use a classic cluster "
+                "for large images",
+                stacklevel=2,
+            )
+            return
+
+        # Read full bytes once for pixel metric computation.
+        try:
+            fh = _listing._retry_transient(lambda: open(local, "rb"))  # noqa: WPS515
+            with fh:
+                raw = fh.read()
+        except Exception as exc:  # noqa: BLE001
+            warnings.warn(
+                f"exif_gbx qc: skipping {local!r} — cannot read bytes: {exc}",
+                stacklevel=2,
+            )
+            return
+
+        row = self._build_metadata_row(local, source, tags)
+        row["sharpness"] = image_sharpness(raw)
+        row["brightness"] = image_brightness(raw)
+        yield pa.RecordBatch.from_pylist([row], schema=to_arrow_schema(EXIF_QC_SCHEMA))
 
 
 # ---------------------------------------------------------------------------
@@ -349,8 +419,10 @@ class ExifGbxDataSource(DataSource):
         mode = (self.options.get("mode") or "metadata").lower()
         if mode == "metadata":
             return EXIF_META_SCHEMA
+        if mode == "qc":
+            return EXIF_QC_SCHEMA
         raise ValueError(
-            f"exif_gbx: unknown mode={mode!r}; only 'metadata' is supported in this version"
+            f"exif_gbx: unknown mode={mode!r}; supported modes are 'metadata' and 'qc'"
         )
 
     def reader(self, schema: StructType) -> DataSourceReader:

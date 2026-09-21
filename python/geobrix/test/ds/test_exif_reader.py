@@ -89,3 +89,15 @@ def test_exif_gbx_serverless_safe():
     src = inspect.getsource(exif)
     for forbidden in ("sparkContext", "_jvm", ".rdd", "_jsc"):
         assert forbidden not in src, f"forbidden API {forbidden!r} found in exif.py"
+
+
+def test_exif_gbx_qc_mode_adds_metrics(spark, exif_jpeg):
+    """qc mode appends sharpness and brightness; brightness ~128 on solid-gray fixture."""
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark, only=["exif_gbx"])
+    df = spark.read.format("exif_gbx").option("mode", "qc").load(str(exif_jpeg.parent))
+    r = df.collect()[0]
+    assert r.sharpness is not None and r.brightness is not None
+    assert 0.0 <= r.brightness <= 255.0
+    assert abs(r.brightness - 128.0) < 5.0  # solid gray fixture

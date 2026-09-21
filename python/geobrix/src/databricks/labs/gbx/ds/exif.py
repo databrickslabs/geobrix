@@ -246,8 +246,13 @@ class ExifGbxReader(DataSourceReader):
         try:
             import exifread
 
-            with open(local, "rb") as f:
-                return st, exifread.process_file(f, details=False)
+            # Retry the open() separately from stat() — a transient FUSE
+            # FileNotFoundError on /Volumes would otherwise be swallowed by the
+            # broad except below, silently dropping files during eventually-consistent
+            # UC Volume reads.  Mirrors ds/lidar.py's two-level retry pattern.
+            fh = _listing._retry_transient(lambda: open(local, "rb"))  # noqa: WPS515
+            with fh:
+                return st, exifread.process_file(fh, details=False)
         except Exception as exc:  # noqa: BLE001
             warnings.warn(
                 f"exif_gbx: skipping file with unreadable EXIF {local!r}: {exc}",
@@ -257,6 +262,7 @@ class ExifGbxReader(DataSourceReader):
 
     def _read_metadata(self, file_path: str) -> Iterator["pa.RecordBatch"]:
         """Emit one Arrow RecordBatch row per file (header-only; no pixel decode)."""
+        # metadata mode yields 1 row per file — chunkSize has no effect here.
         import pyarrow as pa
         from pyspark.sql.pandas.types import to_arrow_schema
 

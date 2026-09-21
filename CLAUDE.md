@@ -1,6 +1,10 @@
 # CLAUDE.md
 
-This file is the entry point for any Claude (or Cursor) session in this repo. User-global preferences live at `~/.claude/CLAUDE.md`; this file adds geobrix-specific facts and translates the user-global patterns into what they mean *here*.
+Entry point for any Claude (or Cursor) session in this repo. User-global preferences live at
+`~/.claude/CLAUDE.md`; this file adds geobrix-specific facts and translates those patterns into
+what they mean *here*. **Deep, task-specific conventions are split into `.claude/rules/*.md`**
+(path-scoped — they load automatically when you touch matching files); this file is the always-on
+core. The index of those rules is at the bottom.
 
 ## Project
 
@@ -8,20 +12,21 @@ This file is the entry point for any Claude (or Cursor) session in this repo. Us
 
 Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
 
-Current branch: `beta/0.5.0`. Repo: `databrickslabs/geobrix`.
+Current branch: `beta/0.5.0`. Repo: `databrickslabs/geobrix`. Release fixes land on `beta/*` first; the user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `beta/*`.
 
 ## Working patterns in this repo
 
-These are the geobrix-specific translations of user-global preferences (`~/.claude/CLAUDE.md`):
+Geobrix-specific translations of user-global preferences:
 
-- **`gbx:*` commands are authoritative.** They are the canonical entry points for tests, coverage, docs, lint, Docker, data, CI, and security in this repo. If a `gbx:*` command doesn't do what you need, **fix the command** — don't work around it with ad-hoc shell, and don't paper over it by augmenting with extra inline logic. The "Adding or fixing a `gbx:*` command" section below has the procedure. The whole point of the palette is that everyone (you, me, future contributors, CI) runs the same code path.
-- **Orchestrator-master + per-task subagents** — Never run a `gbx:*` command inline if it touches the docker container, Maven, or the doc-test suite. Dispatch a Task subagent with the full task text and let it handle the long-running work in isolation. Test suites often take minutes; running inline blocks the main session. **Orient every subagent with the "Subagent orientation" section below** — an un-oriented subagent burns a run rediscovering repo basics, or reports a repo invariant as if it were a finding.
-- **Check Databricks auth BEFORE dispatching, not after a browser tab appears.** The main agent owns auth readiness. Run `bash ~/.claude/hooks/databricks-auth-status.sh PreDispatch` (read-only, never opens a browser) before each dispatch block, and confirm the profiles the work needs are `VALID`. Most geobrix work is local (Docker/Maven/pytest/docs/git) and needs **no** profile — don't ask the user to re-auth a profile the work doesn't touch. Subagents must never fix auth; a `databricks auth login` is hook-blocked and only the user can run it.
-- **Skills first** — Useful for adjacent work: `databricks-query` for SQL against the workspace, `databricks-workspace-files` for browsing notebooks, `databricks-lakeview-dashboard` for visualization, `databricks-authentication` before any databricks operation. The Field Engineering skills (`fevm`, `sage-context-catalog`) are unrelated to geobrix and shouldn't be invoked here.
-- **Runtime judge** — Has already learned the common `gbx:*` scripts (`gbx-test-scala.sh`, `gbx-test-python.sh`, `gbx-docker-exec.sh`, etc.) from prior sessions. New patterns pay a 10-20s warmup; learned patterns are instant. Don't disable.
-- **QC judge** — Project config at `.claude/qc-judge/config.json`. Wave-number regex (`wave\s*\d+`) blocks any user-facing doc that leaks the internal planning vocabulary (see "User-facing docs voice" below). `release_notes_path` points at `docs/docs/release-notes.mdx` for the release-notes-current check.
-- **gh account switch** — `gh auth switch --user mjohns-databricks` before **any** push, PR creation, PR comment, or `gh api` write to `databrickslabs/geobrix`. The default `mjohns_data` returns 403 for write operations on this repo.
-- **Progress feedback on long-running ops** — Scala test suites, Maven builds, full doc tests, and coverage runs routinely take 1-10+ minutes. When you dispatch one of these, give the user a one-line progress update roughly every 30 seconds (tail the log, report the suite/file currently running). Don't go silent for minutes.
+- **`gbx:*` commands are authoritative.** Canonical entry points for tests, coverage, docs, lint, Docker, data, CI, security. If a `gbx:*` command doesn't do what you need, **fix the command** — don't work around it with ad-hoc shell or extra inline logic. See `.claude/rules/gbx-commands.md`.
+- **Orchestrator-master + per-task subagents** — Never run a `gbx:*` command inline if it touches the Docker container, Maven, or the doc-test suite. Dispatch a Task subagent with the full task text. Test suites take minutes; inline blocks the main session. **Orient every subagent** with the "Subagent orientation" section below.
+- **Check Databricks auth BEFORE dispatching, not after a browser tab appears.** The main agent owns auth readiness. Run `bash ~/.claude/hooks/databricks-auth-status.sh PreDispatch` (read-only, never opens a browser) before each dispatch block, and confirm the profiles the work needs are `VALID`. Most geobrix work is local (Docker/Maven/pytest/docs/git) and needs **no** profile. Subagents must never fix auth; `databricks auth login` is hook-blocked and only the user can run it.
+- **Skills first** — For adjacent work: `databricks-query` (SQL against the workspace), `databricks-workspace-files` (notebooks), `databricks-lakeview-dashboard`, `databricks-authentication`. The Field Engineering skills (`fevm`, `sage-context-catalog`) are unrelated to geobrix.
+- **Runtime judge** — Has learned the common `gbx:*` scripts. New patterns pay a 10-20s warmup; learned patterns are instant. Don't disable.
+- **QC judge** — Project config at `.claude/qc-judge/config.json`. Gates `git push`. When it blocks, read `~/.claude/qc-judge/reports/<latest>.md` and address findings — don't reflexively `QC_OVERRIDE=1` (and if you do, it must be *exported*, not an inline prefix). It runs binding-parity, doc-coverage, internals-leak (wave-number regex), python lint, secrets, and commit-message hygiene (subjects ≤72 chars + a WHY body).
+- **gh account switch** — `gh auth switch --user mjohns-databricks` before **any** push, PR creation, PR comment, or `gh api` write to `databrickslabs/geobrix`. The default `mjohns_data` returns 403 for writes.
+- **Progress feedback on long-running ops** — Scala suites, Maven builds, full doc tests, and coverage runs take 1-10+ min. Give a one-line progress update (tail the log) roughly every 30 seconds. Don't go silent for minutes.
+- **Verify before reporting; hold pushes and batch.** Push on the user's go or at a clear stopping point, not per commit. Before pushing, `git status` for user hand-edits and commit them.
 
 ## Architecture
 
@@ -35,368 +40,68 @@ Three API packages, each with its own SQL prefix:
 
 Each package exposes `functions` with `register(spark)` to install SQL UDFs. Shared primitives (`expressions`, `ds`, `util`) live under `com.databricks.labs.gbx`. Spark data source registrations are in `src/main/resources/META-INF/services/org.apache.spark.sql.sources.DataSourceRegister`.
 
-**Readers** are namespace-suffixed:
-- Raster (GDAL): `gdal`, `gtiff_gdal`, `netcdf_gdal`
-- Vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`, `netcdf_ogr`
+**Readers** are namespace-suffixed (`<format>_<engine>`), e.g. raster (GDAL): `gdal`, `gtiff_gdal`, `netcdf_gdal`; vector (OGR): `ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`, `netcdf_ogr`. Light readers use the `*_gbx` suffix (pure Python, no JAR). Named readers extend generic readers and preset driver options via `dsExtraMap`; generic readers (`ogr`, `gdal`) stay clean.
 
-Named readers extend generic readers and preset driver options via `dsExtraMap`. Pattern: `<format>_<engine>`. Generic readers (`ogr`, `gdal`) remain clean for flexibility.
-
-Scala 2.13.16, Spark 4.0.0, Java 17. Python 3.12+.
+Scala 2.13.16, Spark 4.0.0, Java 17. Python 3.12+. A **single wheel + single JAR** runs on DBR 17.3/18/19.
 
 ## Development environment
 
-All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker container**:
+All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker container** (project root at `/root/geobrix`, `sample-data/Volumes` at `/Volumes`, persistent Maven repo at `scripts/docker/m2/`, `MAVEN_OPTS=-Xmx4G -XX:+UseG1GC`).
 
-- Project root mounted at `/root/geobrix`
-- `sample-data/Volumes` mounted at `/Volumes`
-- Maven uses a persistent local repo at `scripts/docker/m2/` (gitignored) to avoid re-downloading deps on restart
-- Container commands set `MAVEN_OPTS=-Xmx4G -XX:+UseG1GC`
-
-Use `gbx:docker:start` / `gbx:docker:exec` rather than `docker run` directly. The container has the corp-proxied Maven mirror (`db-maven-proxy`) configured via `scripts/docker/m2/settings.xml`; if proxy is missing, re-run `docker_maven_setup.sh` inside the container.
-
-**`gbx:docker:start` is the canonical (re)create path** — it runs `scripts/docker/start_docker.sh` *and then* `docker_maven_setup.sh`, which copies the `db-maven-proxy` settings into the container's Maven conf. Recreating the container by calling `start_docker.sh` directly skips that step, so the fresh container falls back to blocked Maven Central and the first build dies on plugin resolution (`Connect to repo.maven.apache.org … Connection refused`). If you ever recreate it by hand, run `docker_maven_setup.sh` inside the container afterward. `start_docker.sh` itself resolves the bind mount from `git rev-parse --show-toplevel` (not `$PWD`) and refuses to mount a `.claude/worktrees/*` path — those get auto-cleaned and dangle the mount, making every `docker exec` fail with "current working directory is outside of container mount namespace root".
-
-Default Maven profile is **`skipScoverage`** for fast compile/test (`mvn clean package -DskipTests`). Coverage commands explicitly trigger the `standard` profile.
-
-## Running notebooks on Databricks (staging, install, runners) — READ BEFORE hand-rolling anything
-
-These facts have been painfully rediscovered by multiple agents. Follow them; don't reinvent.
-
-- **Use the canonical commands — do NOT hand-roll `jobs.submit`/`workspace.upload` drivers.**
-  - `gbx:test:notebooks-serverless` — imports a local `.ipynb` to the workspace, **strips `%pip`/`%restart_python` cells** (they fail in Serverless JOB compute), injects deps via the **Serverless environment spec** (`--extras`, `--wheel`, `--env-version`, `--profile`), submits via `jobs.submit`, polls. This sidesteps the whole notebook-install saga.
-  - `gbx:test:notebooks` — runs notebooks **cell-by-cell inside the `geobrix-dev` Docker container** (fully local, `/Volumes` mounted, no workspace). Best for a quick "does it render/run" check.
-  - If a command lacks a capability, **fix the command** (add an option) — don't write a one-off script.
-- **Staging on dogfood** (a non-account-admin identity is assumed): wheels/data → the Volume **`/Volumes/geospatial_docs/geobrix/sample-data/`** via SDK `files.upload` (streaming). The configured `GBX_ARTIFACT_VOLUME` default (`…/gdal_artifacts/noble/geobrix`) **does not exist on dogfood** and returns a *misleading* `PermissionDenied: … not account admin` — that's a missing-schema error, not a real block. Notebooks → WSFS **`/Users/<you>/GeoBrix/<fresh dated subfolder>`** (dogfood aggressively GCs old notebooks). **Import a notebook with `w.workspace.import_(path, format=ImportFormat.JUPYTER, content=base64(nb_bytes), overwrite=True)` after `w.workspace.mkdirs(parent)`** — this classic `/api/2.0/workspace/import` endpoint WORKS for a non-admin (it errors `ResourceDoesNotExist` if the parent folder is absent — hence the mkdirs). Do **NOT** use the `w.workspace.upload()` SDK mixin — *that* routes through the gated path and returns the misleading "not account admin" error (the mistake that made past sessions conclude "import is impossible"). `gbx:test:notebooks-serverless` already does the `import_` for you. `files.download`/`files.list` are gated — read job results via `jobs.get_run_output(task_run_id).notebook_output.result`, never `files.download`.
-- **Notebook `%pip` install of the wheel** — ALWAYS `@ file:///Volumes/…/geobrix-<ver>-py3-none-any.whl` **with the extra** (`light_env6` for Serverless env 6 / `light_env5` for Serverless env 5; `light_dbr17` / `light_dbr18` / `light_dbr19` for classic DBR 17.3 / 18 / 19):
-  - **INTERACTIVE** (refresh a live session) — two steps: `--no-deps --force-reinstall "geobrix[EXTRA] @ file://…"` then the same line with no flags, then `restartPython()`. (`--force-reinstall` is needed to swap fresh bytes of an already-installed *same-version* wheel — `--no-cache-dir` alone won't; `--no-deps` is what keeps force-reinstall from touching pyspark/preinstalled deps.)
-  - **JOB** (non-interactive, fresh kernel) — a single **plain** install, NO flags.
-  - **Never `--force-reinstall` WITHOUT `--no-deps`** — that reinstalls pyspark/other preinstalled packages (serverless hard-fails `violate preinstalled package pyspark==…`; classic `Failure starting repl`). **Never a bare `geobrix[EXTRA]`** without `@ file://` — it resolves from PyPI and downgrades idna/protobuf → the kernel won't restart.
-- **Don't auto-retry a failed job.** Report `result_state` / `state_message` / `run_page_url` and stop; a failure is almost always structural.
-- **h3 mosaic rendering (`plot_mosaic`):** match `gridResolution` to the scene scale or the hexes render mostly empty (a 2 km scene at res-5 ≈ 8.5 km hexes → one ~1%-filled hex; res-8 ≈ 0.46 km edge suits a ~4 km scene; edge lengths res-6≈3.7 km, 7≈1.2 km, 8≈0.46 km, 9≈0.17 km). `plot_mosaic` is a **static** matplotlib render — pan/zoom is `plot_interactive`/`plot_cog`.
-- **Sample raster data:** the usable one under `sample-data/Volumes/.../london/` is `sentinel2/london_sentinel2_red.tif` (388×385 @10 m, EPSG:32630); `elevation/srtm_n51w001.tif` is a degenerate 2×3-px placeholder. No NYC *raster*. For bigger/fresher scenes use `gbx:data:download`, the STAC light API, or the DEM-3DEP / NAIP / NASANEX / TROPOMI / EMIT downloaders.
+- **`gbx:docker:start` is the canonical (re)create path** — it runs `start_docker.sh` *and then* `docker_maven_setup.sh`, which copies the `db-maven-proxy` settings into the container's Maven conf. Recreating by calling `start_docker.sh` directly skips that step, so the first build dies on plugin resolution (Maven Central blocked). If you recreate by hand, run `docker_maven_setup.sh` inside the container afterward.
+- `start_docker.sh` resolves the bind mount from `git rev-parse --show-toplevel` and refuses to mount a `.claude/worktrees/*` path — those dangle the mount and make every `docker exec` fail with "current working directory is outside of container mount namespace root".
+- Use `gbx:docker:start` / `gbx:docker:exec` rather than `docker run` directly.
+- Default Maven profile is **`skipScoverage`** for fast compile/test (`mvn clean package -DskipTests`). Coverage commands explicitly trigger the `standard` profile.
+- Corpus/doc tests skip unless the container was started with the sample-data mounts; heavy needs a built JAR.
 
 ## Commands (the `gbx:*` palette)
 
-The repo has **50 `gbx:*` commands** in `scripts/commands/` (each is a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`), and profile selection. Originally registered for Cursor's command palette (hence the `.md` files), they're now invoked directly from any shell or via the Task tool.
+**50 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
 
-**If a command fails, fix the command** — do not work around it. The commands are the canonical entry points; ad-hoc shell invocations diverge over time.
-
-Most-used commands by category:
-
-- **Tests**: `gbx:test:scala`, `gbx:test:python`, `gbx:test:scala-docs`, `gbx:test:python-docs`, `gbx:test:sql-docs`, `gbx:test:docs` (all), `gbx:test:function-info`, `gbx:test:notebooks`, `gbx:test:bindings`
+- **Tests**: `gbx:test:scala`, `gbx:test:python`, `gbx:test:scala-docs`, `gbx:test:python-docs`, `gbx:test:sql-docs`, `gbx:test:docs`, `gbx:test:function-info`, `gbx:test:notebooks`, `gbx:test:bindings`
   - Single Scala suite: `gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'` or `--suites 'A,B'`
   - Single Python path: `gbx:test:python --path python/geobrix/test/rasterx/`
-- **Coverage**: `gbx:coverage:scala-package <pkg>` (1–3 min, use during dev), `gbx:coverage:gaps` (fast, uses existing data), `gbx:coverage:baseline` (weekly, ~10 min). Full `gbx:coverage:scala` runs ~10 min — use `--parallel` or `--report-only` to speed up.
-- **Docs**: `gbx:docs:dev` (hot reload, port 3000), `gbx:docs:start` / `gbx:docs:stop`, `gbx:docs:function-info` (regenerate `function-info.json`)
-- **Lint**: `gbx:lint:scalastyle` (matches CI — run before push), `gbx:lint:python` (isort/black/flake8; `--fix` on host)
+  - Cross-tier parity tests SKIP on plain `gbx:test:python` — re-run `--with-integration` after a JAR change.
+- **Coverage**: `gbx:coverage:scala-package <pkg>` (1–3 min), `gbx:coverage:gaps` (fast), `gbx:coverage:baseline` (~10 min). Full `gbx:coverage:scala` ~10 min — use `--parallel` or `--report-only`.
+- **Docs**: `gbx:docs:dev` (hot reload, port 3000 — reserved for the user; agents use `--port 3001`), `gbx:docs:start` / `gbx:docs:stop`, `gbx:docs:function-info` (regenerate `function-info.json` — in Docker, or it leaks host paths).
+- **Lint**: `gbx:lint:scalastyle` (matches CI — run before push), `gbx:lint:python` (isort/black/flake8; `--fix` on host). Pre-push includes `gbx:lint:python --check`, not just scalastyle.
 - **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:push-wheel`, `gbx:data:push-jar`
-- **CI**: `gbx:ci:push`, `gbx:ci:status`, `gbx:ci:watch`, `gbx:ci:logs`, `gbx:ci:docs`
+- **CI**: `gbx:ci:push`, `gbx:ci:status`, `gbx:ci:watch`, `gbx:ci:logs`, `gbx:ci:docs`. Dev-branch CI is **not a gate** — batch and push; don't chase red→green on it.
 - **Docker**: `gbx:docker:start`, `gbx:docker:exec "<cmd>"`, `gbx:docker:attach`
-- **Security**: `gbx:security:codeql`
-
-**Log file paths**: `--log filename` resolves to `test-logs/filename`; relative paths resolve under `test-logs/`; absolute paths are used as-is. `test-logs/` is gitignored.
-
-## Conventions
-
-### Cross-language naming consistency
-
-Maintain consistent naming between Scala implementations and Python bindings. Typos across languages silently break bindings.
-
-```
-Scala Class:      Component_OperationName     (e.g. BNG_EastNorthAsBNG)
-Scala API:        component_operationname     (e.g. bng_eastnorthasbng)
-SQL (registered): gbx_<scala-api>             (e.g. gbx_bng_eastnorthasbng)
-Python API:       same as Scala API           (e.g. bng_eastnorthasbng)
-Test function:    test_<component>_<op>       (e.g. test_bng_eastnorthasbng)
-```
-
-- SQL keeps the `gbx_` prefix; the rest mirrors Scala.
-- Use `_geom` not `_geometry` (e.g. `bng_geomkring`, not `bng_geometrykring`).
-- Keep `_agg` suffix for aggregators (aligns with Databricks geospatial docs).
-- Quick check: `grep -r "def bng_" python/geobrix/src/` should match `grep -r "gbx_bng_" src/main/scala/.../register`.
-- **Binding parity is enforced.** `gbx:test:bindings` (→ `docs/scripts/check-binding-parity.py`) asserts every name in `registered_functions.txt` exists as a Scala `override def name` literal, a Python `functions.py` binding, and a `function-info.json` key — a function missing from any binding fails (it would surface at runtime as `UNRESOLVED_ROUTINE`). The QC judge runs this on every push via the `binding-parity` command check in `.claude/qc-judge/config.json`. When adding a function, add all three bindings, not just the canonical list.
-
-### BNG resolution
-
-Only **integer indices ±1..±6** (1=100km, 2=10km, 3=1km, 4=100m, 5=10m, 6=1m; negatives = quadrants) or string keys from `BNG.resolutionMap` (e.g. `"1km"`, `"100m"`).
-
-**Never** treat metres-as-Int (e.g. `1000`) as a resolution — that interpretation is not supported by `BNG.getResolution`.
-
-`bng_pointascell` expects BNG eastings/northings (EPSG:27700), not WGS84 lon/lat. Use BNG coords in examples (e.g. `POINT(530000 180000)` for London). `gbx_bng_cellarea` returns **square kilometres**, not square metres.
-
-### GDAL resource management
-
-- **Serverless-safe materialize policy (REQUIRED):** any new code that reads a whole file or tile into executor RAM (a materialize) MUST route through `materialize_decision` in `ds/file_gbx.py` — never a raw unbounded `.read()` or `materialize_to_bytes` without it (Serverless per-task RAM ~1 GB; a mis-sized read silently OOMs).
-- **Prefer `rst_fromcontent` with `binaryFile` reader** over `rst_fromfile` when you already have bytes — avoids temp-file races on executors.
-- `GetNoDataValue` requires an output array (returns void otherwise).
-- `GetStatistics` only works on the MDArray, **not on `Band` directly**.
-- Always release Dataset/Band resources via `RasterDriver.releaseDataset(ds)` in a `try/finally`.
-- For tests that work with non-EPSG projections (e.g. ESRI:54008), mix in `SilenceProjError` to suppress expected PROJ warnings.
-- **Thread-safety (REQUIRED): register GDAL/OGR only via the synchronized `GDALManager` guards** — `GDALManager.init(config)` for GDAL drivers, `GDALManager.initOgr()` for OGR drivers. NEVER call raw `gdal.AllRegister()` / `ogr.RegisterAll()` per task, and never set process-global `gdal.SetConfigOption` outside `GDALManager`'s guarded paths. The GDAL Java bindings hold process-global registry/config state; concurrent Spark tasks in one executor JVM that race registration get a null `GetDriverByName` (NPE) or a native SIGSEGV that kills the executor.
-
-### Unity Catalog Volumes
-
-On a Databricks cluster, `/Volumes/<catalog>/<schema>/<volume>/...` is **FUSE-mounted** — use `pathlib`/`os`, not the Databricks Files SDK.
-
-- The Volume root **must pre-exist**; only paths under it can be created.
-- `os.makedirs(volume_root, exist_ok=True)` is a no-op (idempotent).
-- Avoid `seek` on volume files; use sequential I/O.
-- For writes, prefer `shutil.copy` from a temp file.
-- Sanitize env-derived strings (strip BOM/invisible Unicode) before building volume paths.
-
-Env vars: `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME`. Volume name must match Data Explorer exactly (hyphen vs underscore matters).
-
-### Function-info / DESCRIBE FUNCTION
-
-Single-source pattern: doc SQL examples in `docs/tests/python/api/{rasterx,gridx,vectorx}_functions_sql.py` (functions named `*_sql_example()`) feed `docs/scripts/generate-function-info.py`, which writes `src/main/resources/com/databricks/labs/gbx/function-info.json`. The canonical registered-function list is `docs/tests-function-info/registered_functions.txt`.
-
-- **No aliases.** Beta = we break API to stabilize. Fix upstream (Scala registration + `registered_functions.txt`) to a single canonical name.
-- Run regeneration via `gbx:docs:function-info` or `gbx:test:function-info` (which also runs pytest).
-- Tests assert every function in `registered_functions.txt` has a non-empty example in `function-info.json`. If coverage fails, fix upstream — never add placeholder/empty usage.
-
-#### Code examples are GENERATED — never hand-edit the JSON
-
-`function-info.json` is a **build artifact**. Hand-editing it works until the next
-`gbx:docs:function-info`, which silently overwrites your change. To fix what
-`DESCRIBE FUNCTION EXTENDED` prints, edit the **source**, then regenerate:
-
-| To change... | Edit this | Not this |
-|---|---|---|
-| the `Examples:` block | `docs/tests/python/api/*_functions_sql.py` → the function's `*_sql_example()` | ❌ `function-info.json` |
-| `Usage:` / `Extended Usage:` | see "signature metadata" below | ❌ `function-info.json` |
-
-How the example is extracted (`docs/scripts/generate-function-info.py`) — these
-mechanics surprise people, so check them before wondering why your text vanished:
-
-- Only the **first SQL statement** containing the package prefix is taken
-  (`first_statement_containing`). A second query in the same `*_sql_example()` is
-  ignored by `DESCRIBE FUNCTION` (it still renders in the docs page).
-- `--` comments are **stripped**. Explanatory comments in the example never reach
-  `DESCRIBE FUNCTION`; put that prose in the description metadata instead.
-- One example can fill **several** functions: every registered name appearing in the
-  statement inherits it, EXCEPT a name that has its own dedicated `*_sql_example()`
-  (so `gbx_st_asmvt` and `gbx_st_asmvt_pyramid` don't cross-contaminate).
-- Keys beginning `_` (e.g. `_package_rasterx`) are section markers, not functions.
-
-#### Canonical `usageArgs` style
-
-`DESCRIBE FUNCTION` prints `name(<usageArgs>) - <description>`, describing the **SQL** surface.
-
-- **Optional arguments use Style B: `[param]`** — brackets wrap only the parameter name, the
-  comma stays outside. `geom, attrs_struct, min_z, max_z, layer_name, [extent]`. Multiple
-  trailing optionals: `a, b, [c], [d]`. Do **not** use `geom, target_crs [, source_crs]`
-  (comma inside) — that form is being retired.
-- **Parameter names are snake_case**, matching SQL — `geom`, `resolution`, `size_in_mb`. Not
-  the Scala camelCase (`geomWkb`, `cellId`) and not the internal `*Expr` field names.
-  **Exception — `cellid`/`cellid1`/`cellid2`**: bare cell-id parameters use the single
-  lowercase token `cellid` (not `cell_id`). This matches the chip-struct internal field,
-  Databricks product naming, and Mosaic convention, and is intentional. Chip-struct
-  parameters remain `left_chip`/`right_chip`/`input_chip` (snake_case, not affected by
-  this exception).
-- An argument is optional exactly when `builder()` has a shorter `case N =>` branch that
-  injects a `Literal(...)` default. **34 functions** have optional args; rendering one as
-  required is a bug, not a style nit.
-- Don't parse the docs `**Signature:**` lines as truth — 63 of 173 use camelCase and at least
-  one function has two conflicting lines. Validate against `builder()` arity instead.
-
-#### Signature metadata derivation (automated from Scala)
-
-As of v0.5.0, `usageArgs` and `description` are **derived from Scala case-class fields and builder
-arity patterns**, not hand-maintained in `function-info.json`. This eliminates drift: parameter
-names stay in sync with the actual Scala source, and optional parameter detection is validated
-against real `builder()` branches.
-
-**How it works:**
-
-1. **`docs/scripts/extend-function-metadata.py`** (the parser):
-   - Reads all Scala expression files under `src/main/scala/com/databricks/labs/gbx/{rasterx,vectorx,gridx}`.
-   - For each function's case class, extracts field names and filters out internal state (e.g., `exprConfExpr`, aggregation buffer offsets).
-   - Strips the `Expr` suffix from each field and converts to snake_case.
-   - Inspects the `builder()` method: if `case N =>` and `case N+K =>` branches exist with `Literal(...)` defaults in the longer branch, marks args N+1…N+K as optional.
-   - Outputs parsed metadata as JSON.
-
-2. **`docs/scripts/generate-function-info.py`** (the generator):
-   - Calls the parser to fetch `usage_args` for each function.
-   - Merges parsed metadata into the JSON alongside examples (from `*_sql_example()` in docs).
-   - Writes `src/main/resources/com/databricks/labs/gbx/function-info.json`.
-
-3. **`WithExpressionInfo`** (the Scala consumer):
-   - `getUsageArgs()` and `getDescription()` prefer JSON values (via `FunctionInfoLoader.get(name)`).
-   - Fall back to Scala `usageArgs` / `description` overrides only if JSON is absent.
-   - This allows legacy Scala overrides to coexist with generated metadata during migration.
-
-**When adding or changing a function:**
-
-- Update the **Scala case class** field names and `builder()` arity — the parser feeds from there.
-- Run `gbx:docs:function-info` to regenerate the JSON (no manual edits needed).
-- No Scala `usageArgs` override is normally required (it is derived). `description` still is — see below.
-- If you must override (e.g., a builder arity is too irregular to parse), add `override def usageArgs` or `override def description` in the companion — the JSON loader respects it as a fallback, and the no-regression check will hold the derived value to it.
-
-**Guardrails (these exist and are mutation-verified):**
-
-- The parser **fails loudly** — it raises `SystemExit` rather than warning, and
-  `generate-function-info.py` treats a parser failure as fatal instead of writing `{}`. A silent
-  fallback is how an optional argument got published as required.
-- **No-regression check** — a derived `usage_args` is compared against every hand-written
-  `override def usageArgs`. Losing a bracket, or dropping a parameter the override listed, is a
-  hard failure. Verified by mutating the bracket logic: the check caught all 5 override-backed
-  functions and exited non-zero.
-- **Multi-companion files are reported, not guessed.** When several companions share one SQL name
-  (`ST_TransformCrs` + `ST_TransformCrs3` both register `gbx_st_transformcrs`), the parser
-  describes the WIDEST case class so trailing optionals stay visible, and prints a note.
-- Brace style must not matter: both `=> c.length match {` and `=> {` newline `c.length match {`
-  are in use and parse identically.
-
-Not yet wired: `gbx:test:function-info` does not assert usage coverage, and no lint checks bracket
-syntax. `check-binding-parity.py` still compares **names only** — it cannot see a parameter list.
-
-Currently **177 of 180** registered functions have derived `usage_args`. The 3 without
-(`gbx_rst_fromfile`, `gbx_st_legacyaswkb`, `gbx_pmtiles_agg`) have irregular shapes and are left
-absent so the Scala fallback applies. **`description` is still empty for all 180** — `DESCRIBE
-FUNCTION` currently renders `name(args) - ` with a trailing dash. Populating descriptions, and
-resolving whether derived parameter names should be published while R1/N9 naming debt is open
-(the parser faithfully emits `points_array` where the docs say `points_geom`), are deferred.
-
-#### Signature metadata (`usageArgs` / `description`) — a known drift area
-
-`Usage:` is assembled in `WithExpressionInfo` as `name(usageArgs) - description`.
-Historically each companion overrode these, but the convention was dropped along the
-way: for a long stretch only 8 of ~179 companions had them, so most functions printed
-`gbx_rst_foo() - ` — empty parens, no description. Treat blank metadata as a bug, not
-a default. See `.superpowers/prompts/refactoring/2026-08-06-describe-function-metadata-drift-inventory.md`.
-
-**A signature change must move every surface together.** Changing arity or a parameter's
-meaning touches up to seven places, and the ones that fail *silently* are the dangerous
-ones — SQL binds **positionally**, so a wrapper passing an arg the `builder()` doesn't
-accept is discarded with no error (this is exactly how `rst_maketiles` advertised
-`(tile, tileWidth, tileHeight)` while really taking `(tile, sizeInMB)` — callers set a
-megabyte budget believing they set pixel dimensions):
-
-1. the expression case-class fields + `builder()` arity
-2. the public Scala wrapper overloads in `<pkg>/functions.scala` — **arg count must match `builder()`**
-3. the heavy Python shim (`python/geobrix/src/databricks/labs/gbx/<pkg>/functions.py`)
-4. the light Python binding (`.../pyrx|pyvx|pygx/functions.py`) + its registered UDF arity
-5. the `**Signature:**` line in `docs/docs/api/*-functions.mdx`
-6. the doc-test `*_sql_example()` (the generated example) — and its expected-output constant
-7. signature metadata (`usageArgs`/`description`), then regenerate
-
-Cross-check before declaring done: wrapper arg count vs `builder()` accepted range, and
-whether each wrapper param name still denotes the quantity of the field it lands on
-positionally. `check-binding-parity.py` compares **names only** and cannot see parameter
-lists, so none of this is caught by CI today.
-
-### Doc tests are the documentation source (single source of truth)
-
-Tests ARE the documentation source, not validators of it. Docs import code from tests via webpack raw-loader.
-
-- Code lives in `docs/tests/python/` and `docs/tests/scala/`.
-- MDX imports via: `import code from '!!raw-loader!../../tests/python/module/file.py';` (from `docs/docs/<subdir>/`).
-- Tests **must execute real code with real assertions** — not just check structure or compilation. Use real sample data from `/Volumes/main/geobrix_samples/geobrix-examples/{nyc,london}/`.
-- Run doc tests in Docker via `gbx:test:*-docs` commands. Doc tests **only run in Docker** (need full env + sample data).
-- Do not mock Spark, GeoBrix, or file I/O. Mock only external APIs / very expensive ops / flaky deps.
-- Doc-test iteration: **run per-package with its own log, narrow to failing test node IDs, rerun only those until green** — don't retest passing packages.
-
-### User-facing docs voice (no internal vocabulary)
-
-Anything under `docs/docs/` is read by end users — release notes, package pages, notebook walkthroughs, security/installation, etc. Never leak internal release-planning vocabulary into user-facing docs.
-
-| ❌ Don't write | ✅ Write instead |
-|---|---|
-| "Composes with `gbx_pmtiles_agg` (Wave 6)" | "Composes with `gbx_pmtiles_agg`" |
-| "the Wave 1 aggregator" | "the aggregator" or `gbx_st_asmvt` |
-| references to internal subagents or dispatch sequencing | reference behavior, not the process |
-
-**Wave numbers** are legitimate only in: `.superpowers/prompts/features/*.md` (internal plans), dispatch prompts (internal), git commit messages (internal), `.superpowers/input/` scoping drafts (gitignored).
-
-Quick check before merging: `grep -rn -iE "wave [0-9]+|wave-[0-9]+" docs/docs/ 2>/dev/null` should print nothing. The QC judge enforces this automatically via the `internals-leak` check.
+- **Review / Security**: `gbx:review:round` (Isaac — scope it; a full branch-vs-main run silently exits 0/0 findings), `gbx:security:codeql`
 
 ## Subagent orientation (paste the relevant parts into every dispatch)
 
-A subagent starts with no repo knowledge. Left un-oriented it will rediscover basics on
-your budget, work around a `gbx:*` command instead of fixing it, or — worst — report a
-**repo invariant as a finding**. Include the applicable items below in the dispatch prompt
-itself; don't tell an agent to "go read CLAUDE.md" when you can hand it the slice.
+A subagent starts with no repo knowledge. Left un-oriented it rediscovers basics, works around a
+`gbx:*` command, or — worst — reports a **repo invariant as a finding**. Hand it the slice; don't
+say "go read CLAUDE.md." The deep conventions in `.claude/rules/*.md` load for a subagent when it
+edits matching files, but paste the relevant rule into the dispatch when the work needs it up front.
 
-**Facts that are NOT findings.** Every one of these has been reported as a discovery by
-some agent. State the relevant ones up front so the agent doesn't burn a run on them:
+**Facts that are NOT findings** (each has been reported as a "discovery"):
 
-- **The heavy tier needs a built, staged JAR.** `mvn ... -DskipTests` leaves `target/classes/`
-  but **no `*.jar`** unless `package` ran. If no JAR is present, heavy SQL registration
-  cannot work and integration/parity tests fail with mass `UNRESOLVED_ROUTINE`. That is a
-  missing build artifact, **not** a code defect — build/stage first, then test.
-- **The light tier is pure Python and needs no JAR.** `pyrx`/`pyvx`/`pygx` never require the
-  JAR; the wheel is always JAR-less.
-- **Both tiers register the same `gbx_*` SQL names** and the last registration wins. Function
-  metadata + builder are written to the registry as one atomic triple, so implementation and
-  metadata cannot desync.
-- **SQL binds positionally.** Heavy expressions register as plain Catalyst expressions with no
-  named-argument support, so an extra wrapper argument is silently dropped rather than erroring.
-- **Doc tests only run in Docker** (they need the full env + sample data under `/Volumes`).
-  Corpus tests skip unless the container was started with the sample-data mounts.
-- **`.superpowers/` is gitignored** scratch — all internal planning (specs, plans, prompts, input, SDD ledgers); the public representation of decisions lives in `docs/docs/`.
-- Non-EPSG / authority-less CRS may render as different-but-equivalent strings across tiers.
-  Parity means CRS-equivalence, not string equality.
+- **The heavy tier needs a built, staged JAR.** `mvn ... -DskipTests` leaves `target/classes/` but **no `*.jar`** unless `package` ran. No JAR ⇒ heavy SQL registration can't work ⇒ mass `UNRESOLVED_ROUTINE`. That's a missing artifact, **not** a code defect — build/stage first.
+- **The light tier is pure Python and needs no JAR.** `pyrx`/`pyvx`/`pygx` never require it; the wheel is JAR-less.
+- **Both tiers register the same `gbx_*` SQL names** and the last registration wins. Metadata + builder write as one atomic triple — implementation and metadata cannot desync. One geobrix JAR per cluster (pkg + `gbx_*` collision).
+- **SQL binds positionally** — an extra wrapper argument is silently dropped, not errored.
+- **Doc tests only run in Docker** (full env + sample data under `/Volumes`).
+- **`.superpowers/` is gitignored** scratch — all internal planning. The public representation of decisions lives in `docs/docs/`.
+- Non-EPSG / authority-less CRS may render as different-but-equivalent strings across tiers. Parity means CRS-equivalence, not string equality.
 
 **Standing instructions for any implementation subagent:**
 
-1. Use `gbx:*` commands, never ad-hoc `docker`/`mvn`/`pytest`. If a command is broken, **fix
-   the command** and say how it broke — never route around it.
+1. Use `gbx:*` commands, never ad-hoc `docker`/`mvn`/`pytest`. If a command is broken, **fix the command** and say how it broke.
 2. Run **only the affected suites**; a full run is the orchestrator's call.
 3. Never run `databricks auth login` (hook-blocked) and never try to fix auth.
 4. Don't commit unless explicitly told to.
-5. **Verify before reporting.** Read the source behind every claim. Regex sweeps over Scala
-   produce false positives (`case Seq(...)`, `c.head`, overload chains that delegate) — mark
-   findings CONFIRMED vs SUSPECTED and quote real source, never paraphrase a signature from
-   memory. A fabricated parameter list is worse than no report.
-6. If a precondition for a **scoped** check is missing (no JAR, no sample data, stale staged
-   artifact), emit **one clear line** — `PRECONDITION MISSING: <what>; <check> not run` — and
-   stop that check. Do **not** report the consequence as a defect, do not silently substitute a
-   weaker test, and do **not** narrate a confusing half-state (e.g. "CANNOT VERIFY (no JAR)")
-   about a tier — either it was in scope (then it's a clean PRECONDITION-MISSING line) or it was
-   never in scope (then don't mention it at all).
-7. Exclude build artifacts from every search: `docs/build-static-zip/`,
-   `docs/tests/coverage-report/`, `docs/tests/.pytest_cache/`, `target/`, `scripts/docker/m2/`,
-   `*.pyc`. A naive grep for a Scala symbol otherwise hits minified JS in the docs build.
+5. **Verify before reporting.** Read the source behind every claim; mark findings CONFIRMED vs SUSPECTED and quote real source. Regex sweeps over Scala produce false positives — a fabricated parameter list is worse than no report.
+6. If a precondition for a scoped check is missing (no JAR, no sample data, stale artifact), emit **one line** — `PRECONDITION MISSING: <what>; <check> not run` — and stop that check. Don't report the consequence as a defect.
+7. Exclude build artifacts from every search: `docs/build-static-zip/`, `docs/tests/coverage-report/`, `docs/tests/.pytest_cache/`, `target/`, `scripts/docker/m2/`, `*.pyc`.
 
-**Lead-agent responsibility (do NOT push this onto the subagent):** decide the tier/JAR
-strategy *before* dispatching and state it in the prompt. Check `ls target/*.jar` yourself; a
-pyrx/package-source-only change usually means there is **no fresh JAR**. Then the dispatch must
-say, explicitly: which tiers to exercise, whether a staged JAR exists, and what to do if a
-precondition is absent. When heavy verification is wanted but no fresh JAR is staged, either
-(a) build+stage the JAR first, or (b) hand the subagent a **JAR-free isolation path** — e.g.
-"register the pyrx UDF directly via `spark.udf.register(name, _pyrx_udf)`; do NOT call
-`rasterx.register()` (it loads the JAR via `register_ds` and will wall you)." If neither is
-possible, tell the subagent heavy is **out of scope** for this run. A subagent hitting a missing
-precondition it was never briefed on is a dispatch failure, not a subagent failure.
-
-**Package-source changes need the unit suite, not just doc-tests.** A change to
-`python/geobrix/src/.../{pyrx,pyvx,pygx}/functions.py` (or any package source) must be verified
-with `gbx:test:pyrx` (etc.) on the affected `python/geobrix/test/**` files. Doc-tests exercise
-the example surface, not the committed unit tests — a behavior change can leave the doc-tests
-green while breaking `test/pyrx/*`.
-
-## Adding or fixing a `gbx:*` command
-
-When adding a new `gbx:<category>:<action>` command (or fixing an existing one — don't work around failures, fix the command):
-
-1. **Pick category and action.** Categories in use: `test`, `coverage`, `data`, `docs`, `docker`, `ci`, `lint`, `security`, `versions`, `prompt`. Confirm no duplicate exists in `scripts/commands/`.
-2. **Create the pair** under `scripts/commands/`:
-   - `gbx-<category>-<action>.md` — short title, 1-2 sentence description, usage `bash scripts/commands/gbx-<category>-<action>.sh [OPTIONS]`, options (including `--log <path>` and `--help`), 1-2 example invocations.
-   - `gbx-<category>-<action>.sh` — bash implementation. Source `common.sh` for `check_docker`, `resolve_log_path`, `setup_log_file`, `show_banner`. Resolve `SCRIPT_DIR` and `PROJECT_ROOT` (see existing commands).
-3. **Conventions for the .sh:**
-   - Support `--help` / `-h` and exit 0 after printing usage.
-   - Support `--log <path>` via `resolve_log_path` (filename → `test-logs/<name>`, relative → `test-logs/<path>`, absolute → as-is).
-   - If the command needs the dev container, call `check_docker` early so the user gets a clear error.
-   - No placeholders or TODOs — implement real behavior.
-   - Exit with a non-zero code on failure; let it propagate from Docker/Maven/pytest.
-4. **Make executable**: `chmod +x scripts/commands/gbx-<category>-<action>.sh`.
-5. **Fixing a broken command**: reproduce the failure, fix the script (or its `.md`), re-run to confirm, commit. Don't add fallback ad-hoc shell invocations elsewhere.
+**Lead-agent responsibility (do NOT push onto the subagent):** decide the tier/JAR strategy *before* dispatching and state it in the prompt. Check `ls target/*.jar` yourself. Say explicitly which tiers to exercise, whether a staged JAR exists, and what to do if a precondition is absent. When heavy verification is wanted but no fresh JAR is staged, either (a) build+stage first, or (b) hand a JAR-free isolation path (register the pyrx UDF directly via `spark.udf.register`; do NOT call `rasterx.register()` — it loads the JAR). If neither is possible, tell the subagent heavy is out of scope.
 
 ## Databricks authentication
 
-Work that touches a workspace (staging the wheel/JAR to a Volume, running Serverless jobs, `databricks-query`) needs a valid profile. **Never auto-select one** — pass `--profile <name>` explicitly and let the user choose. In Claude Code each Bash call is a separate shell, so `export DATABRICKS_CONFIG_PROFILE=…` on its own line does NOT carry to the next command; use `--profile`, or chain with `&&`.
-
-Profiles in `~/.databrickscfg` (check live status with `databricks auth profiles`):
+Work that touches a workspace (staging to a Volume, Serverless jobs, `databricks-query`) needs a valid profile. **Never auto-select one** — pass `--profile <name>` and let the user choose. Each Bash call is a separate shell, so `export DATABRICKS_CONFIG_PROFILE=…` on its own line does NOT carry forward; use `--profile` or chain with `&&`.
 
 | Profile | Workspace | Use for |
 |---|---|---|
@@ -404,38 +109,34 @@ Profiles in `~/.databrickscfg` (check live status with `databricks auth profiles
 | `logfood` | `adb-2548836972759138` (Azure) | Internal metrics/logfood queries |
 | `oauth` | `fevm-serverless-stable-vqr02h` | FEVM serverless workspace |
 | `genie-map-env` | `fevm-serverless-stable-genie-map` | Genie Map app workspace |
-| `DEFAULT` | `e2-demo-field-eng` | PAT-based; prefer `oauth-fe` instead |
+| `DEFAULT` | `e2-demo-field-eng` | PAT-based; prefer `oauth-fe` |
 
-**Why you get re-prompted, and what actually helps.** All the `oauth*` profiles use `auth_type = databricks-cli` — U2M OAuth. Access tokens last ~1 hour, but the CLI holds a **refresh token** and renews silently, so an expired access token is normal and not by itself a reason to log in again. Repeated browser prompts almost always mean one of:
-
-- **The refresh token itself expired** (idle too long for that workspace). Fix: `databricks auth login --host <url> --profile <name>` for that ONE profile. Re-authenticating every profile is unnecessary.
-- **A `DATABRICKS_HOST` / `DATABRICKS_TOKEN` env var is shadowing the profile** — these take precedence over `--profile` and silently bypass cached OAuth. Check with `env | grep -i databricks`.
-- **Genuinely idle-aged credentials across many workspaces.** Only fix the profile you need.
-
-**Do not diagnose from `~/.databricks/token-cache.json`.** On macOS, CLI v1.10.0 keeps OAuth tokens in the **system keychain**; that JSON file is a stale leftover from an older CLI. Its timestamps do not update on login and reading them will tell you a profile is expired when it is actually valid. `databricks auth profiles` (the `Valid` column) plus a real call like `databricks current-user me --profile <name>` are the only trustworthy signals.
-
-Token lifetimes are workspace/account-level policy and are **not** configurable per-profile from the CLI, so there is no local setting that extends them. Diagnose before re-authenticating: `databricks auth profiles` shows `Valid YES/NO` per profile, and only the `NO` ones need attention. A `Valid NO` on a profile you aren't using is harmless — don't fix it preemptively.
-
-For unattended/CI work, U2M is the wrong credential: use an OAuth **M2M service principal** (client ID + secret, no browser). That's a separate identity, so it needs its own UC grants on the geobrix catalogs/Volumes/warehouses, and the secret belongs in a secrets manager or env var — never in `~/.databrickscfg` and never committed. Don't use PATs: they expire (~90 days) and are long-lived plaintext bearer secrets.
+- The `oauth*` profiles use U2M OAuth: access tokens last ~1 h but the CLI refreshes silently, so an expired access token is normal and not by itself a reason to re-login. Repeated browser prompts mean the *refresh* token expired (`databricks auth login --host <url> --profile <name>` for that ONE profile), a `DATABRICKS_HOST`/`DATABRICKS_TOKEN` env var is shadowing the profile, or genuinely idle-aged creds.
+- **Do not diagnose from `~/.databricks/token-cache.json`** — on macOS CLI v1.10+ tokens live in the keychain; that JSON is stale. Trust `databricks auth profiles` (the `Valid` column) and a real `databricks current-user me --profile <name>`.
+- A `Valid NO` on a profile you aren't using is harmless — don't fix it preemptively. Don't auto-run CLI/SDK/MCP on OAuth profiles unless asked (fires browser tabs).
+- For unattended/CI, use an OAuth **M2M service principal** (its own UC grants; secret in a manager, never in `~/.databrickscfg`). Don't use PATs.
 
 ## Session artifacts
 
-All internal planning artifacts live under the **gitignored `.superpowers/` tree** — consolidated here to keep the project root uncluttered and internal planning out of the public repo. The public representation of decisions is `docs/docs/` (release notes, package pages), not the planning tree. By class:
+All internal planning lives under the **gitignored `.superpowers/` tree** (this **overrides** the brainstorming/writing-plans skills' default `docs/superpowers/` location):
 
-- **Design specs** (brainstorming-skill output, the `*-design.md` files) → `.superpowers/specs/YYYY-MM-DD-<kebab-topic>-design.md`.
-- **Implementation plans** (writing-plans-skill output) → `.superpowers/plans/YYYY-MM-DD-<kebab-topic>.md`.
-- **Everything else** (session summaries, analyses, progress notes) → `.superpowers/prompts/<category>/YYYY-MM-DD-<kebab-topic>.md`. Categories include `features/`, `documentation/`, `refactoring/`, `testing/`, `bugfixes/`.
-- **Scoping drafts / raw input** → `.superpowers/input/`. **SDD ledgers/workspaces** → `.superpowers/sdd/<plan-basename>/`.
+- **Design specs** → `.superpowers/specs/YYYY-MM-DD-<kebab-topic>-design.md`
+- **Implementation plans** → `.superpowers/plans/YYYY-MM-DD-<kebab-topic>.md`
+- **Everything else** (summaries, analyses, notes) → `.superpowers/prompts/<category>/YYYY-MM-DD-<kebab-topic>.md` (`features/`, `documentation/`, `refactoring/`, `testing/`, `bugfixes/`)
+- **Scoping drafts / raw input** → `.superpowers/input/`. **SDD ledgers** → `.superpowers/sdd/<plan-basename>/`.
 
-This **overrides the brainstorming/writing-plans skills' default `docs/superpowers/` location** — write specs/plans under `.superpowers/` instead. The whole tree is gitignored (kept locally across sessions, never committed).
+The project was originally driven through Cursor; that tree is retired. `.cursor/commands/` → **moved to `scripts/commands/`** (same path math via `$SCRIPT_DIR/../..`); `.cursor/rules|agents|skills` → **removed**, surviving content folded into this file and `.claude/rules/`. Old references to `.cursor/commands/...` are historical — substitute `scripts/commands/...`.
 
-## What used to live under `.cursor/`
+## Deep-dive rules (`.claude/rules/`)
 
-The project was originally driven through Cursor. That tree has been retired:
+Path-scoped — each loads automatically when you edit a matching file. Read the relevant one before doing that class of work; paste it into a subagent dispatch when the work needs it up front.
 
-- `.cursor/rules/*.mdc` → **removed**; surviving content is in the "Conventions" section above.
-- `.cursor/agents/*.md` → **removed**; Claude doesn't use Cursor's agent persona model. Dispatch via `Task` tool with `general-purpose` subagent and the relevant section of this file as context.
-- `.cursor/skills/` → **removed**; the surviving procedure (add/fix a `gbx:*` command) is in the section of the same name above.
-- `.cursor/commands/` → **moved to `scripts/commands/`** (same files, same path math via `$SCRIPT_DIR/../..`). Cursor's command-palette discovery no longer fires for these; invoke from any shell or via Task.
-
-If you see old commit history, prompt files, or external references using `.cursor/commands/...`, treat them as historical — substitute `scripts/commands/...`.
+| Rule file | Loads when you touch | Covers |
+|---|---|---|
+| `functions-authoring.md` | Scala expressions, `functions.py`, `docs/docs/api/*.mdx`, `function-info.json`, `registered_functions.txt` | Cross-language naming, the 7-surface signature change, function-info/DESCRIBE generation, `usageArgs` style, param-name distinctions |
+| `gdal-resources.md` | rasterx/ds Scala, `ds`/`pyrx` Python | GDAL/OGR `GDALManager` guards, resource release, materialize policy, pyrx Serverless constraints |
+| `bng-resolution.md` | gridx Scala/Python | BNG resolution indices, `bng_pointascell` CRS, grid tessellation & geom-aware kring/kloop |
+| `uc-volumes.md` | package Python, notebooks | UC Volume FUSE semantics, bare-path heavy reads, Serverless parallelism |
+| `docs-and-doctests.md` | `docs/**` | Doc-tests-as-source, user-facing voice (no wave numbers), MDX/sidebar/deploy gotchas |
+| `notebooks-on-databricks.md` | `notebooks/**`, notebook runner commands | Staging on dogfood, `%pip` wheel-install incantations, canonical runners, viz |
+| `gbx-commands.md` | `scripts/commands/**` | How to add or fix a `gbx:*` command |

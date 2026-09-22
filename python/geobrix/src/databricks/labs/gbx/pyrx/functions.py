@@ -39,7 +39,7 @@ from databricks.labs.gbx.pyrx.core import edit, features, focal, gridagg, indice
 from databricks.labs.gbx.pyrx.core import mapalgebra as mapalgebra_core
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import ops as ops_core
-from databricks.labs.gbx.pyrx.core import resample, terrain
+from databricks.labs.gbx.pyrx.core import resample, stretch, terrain
 from databricks.labs.gbx.pyrx.core import tessellate as tessellate_core
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core import tin as tin_core
@@ -4442,6 +4442,60 @@ def rst_evi(  # noqa: E741
         virtualize_prefix,
         materialize,
     )
+
+
+def _percentile_stretch_bytes(tile, lo_pct, hi_pct):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return stretch.percentile_stretch(ds, float(lo_pct), float(hi_pct))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _percentile_stretch_udf(tile, lo_pct, hi_pct):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _percentile_stretch_bytes(tile, lo_pct, hi_pct)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _percentile_stretch_v2_udf(
+    tile, lo_pct, hi_pct, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _percentile_stretch_bytes(tile, lo_pct, hi_pct)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_percentile_stretch(
+    tile: ColLike,
+    lo_pct: ColLike,
+    hi_pct: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-band percentile contrast stretch to uint8 [0,255].
+
+    For each band, computes lo_pct and hi_pct percentiles over valid pixels,
+    clips to that range, and linearly rescales to [0,255]. NoData preserved as 0.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _percentile_stretch_v2_udf(
+            _col(tile),
+            _col(lo_pct),
+            _col(hi_pct),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
+    return _percentile_stretch_udf(_col(tile), _col(lo_pct), _col(hi_pct))
 
 
 # --- Tier 1e: constructor + fill UDFs (vector bridge) -----------------------
@@ -9588,6 +9642,7 @@ _sql_tile_ops = {
     "gbx_rst_nbr": _nbr_udf,
     "gbx_rst_savi": _savi_udf,
     "gbx_rst_evi": _evi_udf,
+    "gbx_rst_percentile_stretch": _percentile_stretch_udf,
     "gbx_rst_slope": _slope_udf,
     "gbx_rst_aspect": _aspect_udf,
     "gbx_rst_hillshade": _hillshade_udf,

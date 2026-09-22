@@ -206,6 +206,7 @@ object functions extends Serializable {
         rd.register(RST_BuildOverviews)
         rd.register(RST_FillNodata)
         rd.register(RST_Histogram)
+        rd.register(RST_PercentileStretch)
         rd.register(RST_Sample)
         rd.register(RST_SetSrid)
         rd.register(RST_SetCrs)
@@ -1054,6 +1055,11 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
         ))
     def rst_histogram(tile: Column, nBuckets: Int): Column =
         rst_histogram(tile, lit(nBuckets))
+
+    def rst_percentile_stretch(tile: Column, loPct: Column, hiPct: Column): Column =
+        ColumnAdapter(RST_PercentileStretch.name, Seq(tile, loPct, hiPct))
+    def rst_percentile_stretch(tile: Column, loPct: Double, hiPct: Double): Column =
+        rst_percentile_stretch(tile, lit(loPct), lit(hiPct))
 
     def rst_threshold(tile: Column, op: Column, value: Column): Column =
         ColumnAdapter(RST_Threshold.name, Seq(tile, op, value))

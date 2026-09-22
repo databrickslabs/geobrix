@@ -3740,6 +3740,24 @@ def rst_threshold(
     return f.call_function("gbx_rst_threshold", _col(tile), op_col, _col(value))
 
 
+def rst_percentile_stretch(tile: ColLike, lo_pct: ColLike, hi_pct: ColLike) -> Column:
+    """Per-band percentile contrast stretch to uint8 [0,255].
+
+    For each band, computes lo_pct and hi_pct percentiles over valid (non-NoData)
+    pixels, clips to that range, and linearly rescales to [0,255]. Output is uint8.
+    NoData pixels are preserved as 0.
+
+    Args:
+        tile: Raster tile column (any number of bands).
+        lo_pct: Lower percentile threshold (0-100), e.g., 2.0 for 2nd percentile.
+        hi_pct: Upper percentile threshold (0-100), e.g., 98.0 for 98th percentile.
+
+    Returns:
+        Multi-band uint8 GTiff tile column (same number of bands as input).
+    """
+    return f.call_function("gbx_rst_percentile_stretch", _col(tile), _col(lo_pct), _col(hi_pct))
+
+
 def rst_buildoverviews(
     tile: ColLike,
     levels: ColLike,

@@ -133,6 +133,7 @@ gbx_rst_sample
 gbx_rst_setsrid
 gbx_rst_setcrs
 gbx_rst_threshold
+gbx_rst_percentile_stretch
 gbx_rst_cog_convert
 gbx_rst_contour
 gbx_rst_proximity

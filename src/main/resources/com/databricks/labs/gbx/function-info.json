@@ -1011,6 +1011,13 @@
       ],
       "since": "0.2.0"
     },
+    "gbx_rst_percentile_stretch": {
+      "examples": "Examples:\n      > SELECT gbx_rst_percentile_stretch(tile, 2.0, 98.0) AS stretched FROM multiband_rasters;",
+      "usage_args": "tile, lo_pct, hi_pct",
+      "bindings": [
+        "sql"
+      ]
+    },
     "gbx_rst_pixelcount": {
       "examples": "Examples:\n      > SELECT gbx_rst_pixelcount(tile) AS pixel_count FROM multiband_rasters;",
       "usage_args": "tile",

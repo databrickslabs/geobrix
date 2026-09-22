@@ -2755,6 +2755,29 @@ _Example clip geometry: a WKT polygon in the raster's native CRS (EPSG:32618, no
   testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
 />
 
+### rst_percentile_stretch
+
+<Tier both/>
+
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **NumPy**. Computes per-band percentiles over valid pixels, clips to that range, and linearly rescales to [0,255]. Each band is stretched independently.
+:::
+
+:::note Lightweight Python — virtual-tile force-output
+The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+:::
+
+**Signature:** `rst_percentile_stretch(tile: Column, lo_pct: Column, hi_pct: Column): Column` — Per-band percentile contrast stretch to uint8. For each band, `lo_pct` and `hi_pct` (percentiles in 0–100) define the stretch range: pixels at the lower percentile map to 0, at the upper percentile map to 255, and intermediate pixels are linearly rescaled. NoData pixels remain 0 in the output. Typical values: `lo_pct=2.0, hi_pct=98.0` (trim outliers and stretch to full uint8 range). Output is a uint8 GTiff with the same bands, extent, and CRS as the input.
+
+<FunctionExamples
+  name="rst_percentile_stretch"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={rasterxTileopsLightCode}  pythonLightSource="docs/tests/python/api/rasterx_tileops_python_light.py"
+  pythonHeavy={rasterxCode}             pythonHeavySource="docs/tests/python/api/rasterx_functions.py"
+  scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
+  testFile="docs/tests/python/api/test_rasterx_tileops_python_light.py"
+/>
+
 ### rst_combineavg {#multi-raster}
 
 <Tier both/>

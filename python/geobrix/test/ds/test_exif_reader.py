@@ -91,6 +91,36 @@ def test_exif_gbx_serverless_safe():
         assert forbidden not in src, f"forbidden API {forbidden!r} found in exif.py"
 
 
+def test_exif_arrow_schema_needs_no_session_timezone():
+    """Regression: reader arrow schema must build without a Spark session timezone.
+
+    On Spark-Connect / Serverless DataSource workers there is no session timezone,
+    so ``to_arrow_schema`` raises ``AssertionError`` on the ``timestamp`` field.
+    ``_exif_arrow_schema`` must map ``TimestampType`` to a fixed UTC arrow type and
+    round-trip a naive EXIF datetime without a session. This reproduces the env5
+    failure caught by the Serverless validation run.
+    """
+    import datetime
+
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds.exif import (
+        EXIF_META_SCHEMA,
+        EXIF_QC_SCHEMA,
+        _exif_arrow_schema,
+    )
+
+    for schema in (EXIF_META_SCHEMA, EXIF_QC_SCHEMA):
+        aschema = _exif_arrow_schema(schema)
+        ts = aschema.field("timestamp").type
+        assert pa.types.is_timestamp(ts) and ts.tz == "UTC"
+        row = {f.name: None for f in schema.fields}
+        row["path"] = "/x/GOPR0001.JPG"
+        row["timestamp"] = datetime.datetime(2017, 7, 22, 10, 0, 0)  # naive, like EXIF
+        batch = pa.RecordBatch.from_pylist([row], schema=aschema)
+        assert batch.num_rows == 1
+
+
 def test_exif_gbx_qc_mode_adds_metrics(spark, exif_jpeg):
     """qc mode appends sharpness and brightness; brightness ~128 on solid-gray fixture."""
     from databricks.labs.gbx.ds.register import register

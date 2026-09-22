@@ -64,6 +64,30 @@ EXIF_QC_SCHEMA = StructType(
 _EXIF_EXTS = (".jpg", ".jpeg", ".tif", ".tiff")
 
 
+def _exif_arrow_schema(spark_schema: StructType) -> "pa.Schema":
+    """Build a pyarrow schema from a Spark ``StructType`` without a session timezone.
+
+    ``pyspark.sql.pandas.types.to_arrow_schema`` funnels ``TimestampType`` through
+    ``to_arrow_type``, which asserts a non-null session timezone — unset on
+    Spark-Connect / Serverless DataSource workers, so it raises ``AssertionError``
+    there. This reader plans session-free, so we map ``TimestampType`` to a fixed
+    UTC arrow type ourselves (matching ``timestamp_utc=True`` semantics; naive EXIF
+    datetimes are treated as UTC wall-clock) and defer every other field to
+    ``to_arrow_type`` (which needs no timezone).
+    """
+    import pyarrow as pa
+    from pyspark.sql.pandas.types import to_arrow_type
+
+    fields = []
+    for f in spark_schema.fields:
+        if isinstance(f.dataType, TimestampType):
+            arrow_type = pa.timestamp("us", tz="UTC")
+        else:
+            arrow_type = to_arrow_type(f.dataType)
+        fields.append(pa.field(f.name, arrow_type, nullable=f.nullable))
+    return pa.schema(fields)
+
+
 # ---------------------------------------------------------------------------
 # EXIF parsing helpers
 # ---------------------------------------------------------------------------
@@ -341,7 +365,6 @@ class ExifGbxReader(DataSourceReader):
         """Emit one Arrow RecordBatch row per file (header-only; no pixel decode)."""
         # metadata mode yields 1 row per file — chunkSize has no effect here.
         import pyarrow as pa
-        from pyspark.sql.pandas.types import to_arrow_schema
 
         local = _listing.to_local_path(file_path)
         source = _listing.to_spark_uri(file_path)
@@ -352,13 +375,12 @@ class ExifGbxReader(DataSourceReader):
 
         row = self._build_metadata_row(local, source, tags)
         yield pa.RecordBatch.from_pylist(
-            [row], schema=to_arrow_schema(EXIF_META_SCHEMA)
+            [row], schema=_exif_arrow_schema(EXIF_META_SCHEMA)
         )
 
     def _read_qc(self, file_path: str) -> Iterator["pa.RecordBatch"]:
         """Emit one row per file: metadata columns + sharpness + brightness."""
         import pyarrow as pa
-        from pyspark.sql.pandas.types import to_arrow_schema
 
         from databricks.labs.gbx.ds.file_gbx import materialize_decision
         from databricks.labs.gbx.pyrx.imagery import image_brightness, image_sharpness
@@ -400,7 +422,7 @@ class ExifGbxReader(DataSourceReader):
         row = self._build_metadata_row(local, source, tags)
         row["sharpness"] = image_sharpness(raw)
         row["brightness"] = image_brightness(raw)
-        yield pa.RecordBatch.from_pylist([row], schema=to_arrow_schema(EXIF_QC_SCHEMA))
+        yield pa.RecordBatch.from_pylist([row], schema=_exif_arrow_schema(EXIF_QC_SCHEMA))
 
 
 # ---------------------------------------------------------------------------

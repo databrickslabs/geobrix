@@ -19,6 +19,7 @@ Serverless-safe: no ``spark``, no ``sparkContext``, no ``_jvm``, no ``.rdd``.
 from __future__ import annotations
 
 import io
+import math
 
 import numpy as np
 import pandas as pd
@@ -105,6 +106,169 @@ def image_brightness(img_bytes: bytes) -> float:
     img = Image.open(io.BytesIO(img_bytes)).convert("L")
     arr = np.asarray(img, dtype=np.float32)
     return float(np.mean(arr))
+
+
+# ---------------------------------------------------------------------------
+# GPS clustering for memory-bounded photogrammetry
+# ---------------------------------------------------------------------------
+
+
+def cluster_by_gps(
+    df: pd.DataFrame,
+    *,
+    target_cluster_images: int = 55,
+    overlap_frac: float = 0.30,
+    min_cluster_images: int = 8,
+    lat_col: str = "latitude",
+    lon_col: str = "longitude",
+) -> pd.DataFrame:
+    """Partition images into spatially-contiguous, RAM-bounded GPS clusters.
+
+    Monolithic SfM (``pycolmap.incremental_mapping``) is single-node and its peak
+    RAM scales with image count, so a large survey OOMs the driver. This function
+    partitions images by GPS proximity into clusters small enough to reconstruct
+    within a bounded memory budget, with an **overlap ring** of shared boundary
+    images so adjacent clusters can be georeferenced into a common frame and
+    blended into one orthomosaic without hard seams.
+
+    The partition is built by recursive median bisection of the camera positions
+    (each leaf cell has at most ``target_cluster_images`` "home" images), then an
+    overlap ring adds boundary images from neighbouring cells (capped so a
+    cluster never materially exceeds the target), then clusters smaller than
+    ``min_cluster_images`` are merged into their nearest neighbour.
+
+    Parameters
+    ----------
+    df:
+        Per-image rows including ``lat_col`` and ``lon_col`` (decimal degrees) and
+        any identifier columns (e.g. ``source``). Returned rows preserve all input
+        columns.
+    target_cluster_images:
+        Target home-image count per cluster (the RAM knob). Lower it if a cluster
+        still exceeds the driver's memory during reconstruction.
+    overlap_frac:
+        Fraction of a cell's extent used as the overlap ring on each side. ``0``
+        yields a strict partition (no shared images); ``0.3`` shares ~30% boundary
+        bands with neighbours.
+    min_cluster_images:
+        Clusters smaller than this are merged into the nearest cluster (too-small
+        clusters fail to reconstruct).
+    lat_col, lon_col:
+        Column names for latitude / longitude.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The input rows plus an integer ``_cluster`` column, with boundary images
+        **duplicated** once per cluster they belong to (so ``len(result) >=
+        len(df)``). Cluster ids are contiguous from 0. Every input image appears
+        in at least one cluster.
+
+    Notes
+    -----
+    Pure NumPy/pandas; no Spark session access (Serverless-safe). Intended to run
+    driver-side on the (small) per-image telemetry table, then joined back to the
+    image set for per-cluster reconstruction.
+    """
+    if target_cluster_images < 1:
+        raise ValueError("target_cluster_images must be >= 1")
+
+    work = df.reset_index(drop=True)
+    n = len(work)
+    lat = work[lat_col].to_numpy(dtype=float)
+    lon = work[lon_col].to_numpy(dtype=float)
+
+    finite = np.isfinite(lat) & np.isfinite(lon)
+    has_spread = finite.any() and (
+        np.ptp(lat[finite]) > 0 or np.ptp(lon[finite]) > 0
+    )
+    if n <= target_cluster_images or not has_spread:
+        out = work.copy()
+        out["_cluster"] = 0
+        return out
+
+    # Project lon/lat to a local metric plane (equirectangular about the centroid).
+    lat0 = float(np.nanmean(lat))
+    lon0 = float(np.nanmean(lon))
+    x = (lon - lon0) * 111320.0 * math.cos(math.radians(lat0))
+    y = (lat - lat0) * 110540.0
+    x = np.where(np.isfinite(x), x, 0.0)
+    y = np.where(np.isfinite(y), y, 0.0)
+
+    # 1) Recursive median bisection: leaf cells with <= target home images.
+    leaves = []  # list of (idx_array, (x0, x1, y0, y1))
+    stack = [np.arange(n)]
+    while stack:
+        idx = stack.pop()
+        if len(idx) <= target_cluster_images:
+            leaves.append(
+                (idx, (x[idx].min(), x[idx].max(), y[idx].min(), y[idx].max()))
+            )
+            continue
+        coord = x[idx] if np.ptp(x[idx]) >= np.ptp(y[idx]) else y[idx]
+        med = np.median(coord)
+        left, right = idx[coord <= med], idx[coord > med]
+        if len(left) == 0 or len(right) == 0:  # degenerate median (ties)
+            order = idx[np.argsort(coord, kind="stable")]
+            half = len(order) // 2
+            left, right = order[:half], order[half:]
+        stack.extend((left, right))
+
+    # 2) Home cluster per point.
+    home = np.empty(n, dtype=int)
+    cell_bounds = []
+    for cid, (idx, bounds) in enumerate(leaves):
+        home[idx] = cid
+        cell_bounds.append(bounds)
+    members = {cid: set(np.where(home == cid)[0].tolist()) for cid in range(len(leaves))}
+
+    # 3) Overlap ring (capped so a cluster never materially exceeds the target).
+    if overlap_frac > 0:
+        cap = math.ceil(target_cluster_images * (1 + 2 * overlap_frac))
+        for cid, (x0, x1, y0, y1) in enumerate(cell_bounds):
+            rx = overlap_frac * max(x1 - x0, 1e-9)
+            ry = overlap_frac * max(y1 - y0, 1e-9)
+            cand = np.where((x >= x0 - rx) & (x <= x1 + rx) & (y >= y0 - ry) & (y <= y1 + ry))[0]
+            members[cid].update(int(p) for p in cand)
+            if len(members[cid]) > cap:
+                cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
+                home_pts = set(np.where(home == cid)[0].tolist())
+                ring = sorted(
+                    (p for p in members[cid] if p not in home_pts),
+                    key=lambda p: (x[p] - cx) ** 2 + (y[p] - cy) ** 2,
+                )
+                members[cid] = home_pts | set(ring[: max(0, cap - len(home_pts))])
+
+    # 4) Merge clusters smaller than min into their nearest neighbour.
+    def _centroid(cid):
+        pts = np.fromiter(members[cid], dtype=int)
+        return x[pts].mean(), y[pts].mean()
+
+    while True:
+        active = [cid for cid in members if members[cid]]
+        if len(active) <= 1:
+            break
+        smalls = [cid for cid in active if len(members[cid]) < min_cluster_images]
+        if not smalls:
+            break
+        tiny = min(smalls, key=lambda c: len(members[c]))
+        tcx, tcy = _centroid(tiny)
+        nearest = min(
+            (c for c in active if c != tiny),
+            key=lambda c: (lambda cx, cy: (cx - tcx) ** 2 + (cy - tcy) ** 2)(*_centroid(c)),
+        )
+        members[nearest] |= members[tiny]
+        members[tiny] = set()
+
+    # 5) Relabel contiguous from 0 and emit exploded rows.
+    active = [cid for cid in sorted(members) if members[cid]]
+    relabel = {cid: k for k, cid in enumerate(active)}
+    frames = []
+    for cid in active:
+        sub = work.iloc[sorted(members[cid])].copy()
+        sub["_cluster"] = relabel[cid]
+        frames.append(sub)
+    return pd.concat(frames, ignore_index=True)
 
 
 # ---------------------------------------------------------------------------

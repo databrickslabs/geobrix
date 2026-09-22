@@ -14,6 +14,10 @@ standard (shared), and ARM clusters.
 To turn the loaded points into raster products — DSM binning, CHM, and isobands — see the
 [LiDAR / Point-Cloud DSM functions](../api/raster-functions#lidar-dsm).
 
+For an end-to-end walkthrough — reading `.laz`, binning ground and all-return points into
+DTM and DSM rasters, and differencing them into a Canopy Height Model — see the
+[Wireless Coverage example](../notebooks/wireless-coverage).
+
 :::note Lightweight only
 `lidar_gbx` is a Python DataSource with no heavyweight GDAL/JVM counterpart. Register
 it with `register(spark)` before use.

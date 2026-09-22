@@ -1,6 +1,8 @@
 #!/bin/bash
 # gbx:data:push-wheel - build JAR first (mvn clean package -DskipTests in Docker), then
 # python3 -m build, and upload wheel + JARs to GBX_ARTIFACT_VOLUME/ (overwrite if exists).
+# Set GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step entirely (no Maven build) — for
+# light-tier-only wheel changes (pyrx/pyvx/pygx); the staged JAR is left untouched.
 # Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR locally but skip Databricks upload.
 # Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel locally but skip Databricks upload.
 # Both flags together = full local build with no Databricks calls (no auth required).
@@ -39,6 +41,8 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "  --help, -h     Show this help"
     echo ""
     echo "Environment:"
+    echo "  GBX_BUNDLE_SKIP_JAR=1           Skip the JAR step ENTIRELY (no Maven build,"
+    echo "                                  no upload) — light-tier-only wheel changes"
     echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1    Build JAR locally; skip Databricks upload"
     echo "  GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1  Build wheel locally; skip Databricks upload"
     echo "  Both together = full local build, no auth required"

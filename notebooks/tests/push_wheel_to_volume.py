@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """
-Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 which builds but skips upload),
-then build the GeoBrix Python wheel (python3 -m build) and upload to
+Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 which builds but skips upload,
+or GBX_BUNDLE_SKIP_JAR=1 which skips the JAR build+upload ENTIRELY for light-tier-only
+wheel changes), then build the GeoBrix Python wheel (python3 -m build) and upload to
 GBX_ARTIFACT_VOLUME/<whl_filename>. Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel
 locally but skip the Databricks upload. Loads config from databricks_cluster_config.env.
 Overwrites if file already exists.
@@ -63,14 +64,21 @@ def main() -> int:
 
     # JAR first so the wheel build can include it if needed. Always run — push_jar_to_volume.py
     # respects GBX_BUNDLE_SKIP_JAR_UPLOAD internally (build only vs build+upload).
+    # GBX_BUNDLE_SKIP_JAR skips the JAR step entirely (no Maven build) for light-tier-only
+    # wheel changes; the wheel is JAR-less (setuptools bundles no lib/*.jar), so the staged
+    # JAR is unaffected and heavy consumers keep the separately-staged JAR.
+    skip_jar_build = os.environ.get("GBX_BUNDLE_SKIP_JAR", "").strip().lower() in ("1", "true", "yes")
     lib_dir = pkg_dir / "lib"
     if lib_dir.exists():
         shutil.rmtree(lib_dir)
     lib_dir.mkdir(parents=True)
-    print("Running push_jar_to_volume (JAR before wheel)...")
-    rc = subprocess.run([sys.executable, str(TESTS_DIR / "push_jar_to_volume.py")], cwd=project_root)
-    if rc.returncode != 0:
-        return rc.returncode
+    if skip_jar_build:
+        print("GBX_BUNDLE_SKIP_JAR=1: skipping JAR build; wheel-only stage (JAR-less light tier).")
+    else:
+        print("Running push_jar_to_volume (JAR before wheel)...")
+        rc = subprocess.run([sys.executable, str(TESTS_DIR / "push_jar_to_volume.py")], cwd=project_root)
+        if rc.returncode != 0:
+            return rc.returncode
 
     if dist.exists():
         shutil.rmtree(dist)

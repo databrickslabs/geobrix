@@ -3,13 +3,12 @@
 TDD: tests written BEFORE implementation (RED -> GREEN).
 """
 
+import os
 import struct
 import tempfile
-import os
 
 import numpy as np
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -200,9 +199,7 @@ def test_read_fused_ply_rejects_ascii():
         "1.0 2.0 3.0 255 0 0\n"
     )
 
-    with tempfile.NamedTemporaryFile(
-        suffix=".ply", delete=False, mode="wb"
-    ) as fh:
+    with tempfile.NamedTemporaryFile(suffix=".ply", delete=False, mode="wb") as fh:
         fh.write(header.encode("ascii"))
         tmp = fh.name
 

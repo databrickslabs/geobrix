@@ -568,7 +568,9 @@ def write_xyzrgb_laz(
             from pyproj import CRS as ProjCRS
 
             proj_crs = (
-                ProjCRS.from_epsg(crs) if isinstance(crs, int) else ProjCRS.from_wkt(str(crs))
+                ProjCRS.from_epsg(crs)
+                if isinstance(crs, int)
+                else ProjCRS.from_wkt(str(crs))
             )
             hdr.add_crs(proj_crs)
         except Exception as _crs_err:

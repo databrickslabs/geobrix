@@ -605,6 +605,8 @@ def plot_raster(
     stretch="perband",
     fill=None,
     cmap=None,
+    title=None,
+    ax=None,
 ):
     """Render a raster from in-memory bytes, a tile struct, or a virtual tile.
 
@@ -670,10 +672,11 @@ def plot_raster(
         with MemoryFile(bytes(raster_bytes)) as mf:
             with mf.open() as src:
                 data, transform, scale = _decimated_read(src, max_pixels)
-                _render(
+                return _render(
                     data,
                     transform,
-                    title="tile.raster",
+                    title=title if title is not None else "tile.raster",
+                    ax=ax,
                     fig_w=fig_w,
                     fig_h=fig_h,
                     scale=scale,
@@ -691,10 +694,11 @@ def plot_raster(
 
         with rasterio.open(path) as src:
             data, transform, scale = _read_windowed(src, max_pixels, window=window)
-            _render(
+            return _render(
                 data,
                 transform,
-                title="tile.raster",
+                title=title if title is not None else "tile.raster",
+                ax=ax,
                 fig_w=fig_w,
                 fig_h=fig_h,
                 scale=scale,
@@ -785,6 +789,8 @@ def plot_file(
     stretch="perband",
     fill=None,
     cmap=None,
+    title=None,
+    ax=None,
 ):
     """Render a raster from disk (TIF, VRT, ...) with the plot_raster pipeline.
 
@@ -818,10 +824,11 @@ def plot_file(
 
     with rasterio.open(path) as src:
         data, transform, scale = _decimated_read(src, max_pixels)
-        _render(
+        return _render(
             data,
             transform,
-            title=f"File: {str(path).split('/')[-1]}",
+            title=(title if title is not None else f"File: {str(path).split('/')[-1]}"),
+            ax=ax,
             fig_w=fig_w,
             fig_h=fig_h,
             scale=scale,

@@ -179,9 +179,7 @@ def cluster_by_gps(
     lon = work[lon_col].to_numpy(dtype=float)
 
     finite = np.isfinite(lat) & np.isfinite(lon)
-    has_spread = finite.any() and (
-        np.ptp(lat[finite]) > 0 or np.ptp(lon[finite]) > 0
-    )
+    has_spread = finite.any() and (np.ptp(lat[finite]) > 0 or np.ptp(lon[finite]) > 0)
     if n <= target_cluster_images or not has_spread:
         out = work.copy()
         out["_cluster"] = 0
@@ -220,7 +218,9 @@ def cluster_by_gps(
     for cid, (idx, bounds) in enumerate(leaves):
         home[idx] = cid
         cell_bounds.append(bounds)
-    members = {cid: set(np.where(home == cid)[0].tolist()) for cid in range(len(leaves))}
+    members = {
+        cid: set(np.where(home == cid)[0].tolist()) for cid in range(len(leaves))
+    }
 
     # 3) Overlap ring (capped so a cluster never materially exceeds the target).
     if overlap_frac > 0:
@@ -228,7 +228,9 @@ def cluster_by_gps(
         for cid, (x0, x1, y0, y1) in enumerate(cell_bounds):
             rx = overlap_frac * max(x1 - x0, 1e-9)
             ry = overlap_frac * max(y1 - y0, 1e-9)
-            cand = np.where((x >= x0 - rx) & (x <= x1 + rx) & (y >= y0 - ry) & (y <= y1 + ry))[0]
+            cand = np.where(
+                (x >= x0 - rx) & (x <= x1 + rx) & (y >= y0 - ry) & (y <= y1 + ry)
+            )[0]
             members[cid].update(int(p) for p in cand)
             if len(members[cid]) > cap:
                 cx, cy = 0.5 * (x0 + x1), 0.5 * (y0 + y1)
@@ -255,7 +257,9 @@ def cluster_by_gps(
         tcx, tcy = _centroid(tiny)
         nearest = min(
             (c for c in active if c != tiny),
-            key=lambda c: (lambda cx, cy: (cx - tcx) ** 2 + (cy - tcy) ** 2)(*_centroid(c)),
+            key=lambda c: (lambda cx, cy: (cx - tcx) ** 2 + (cy - tcy) ** 2)(
+                *_centroid(c)
+            ),
         )
         members[nearest] |= members[tiny]
         members[tiny] = set()

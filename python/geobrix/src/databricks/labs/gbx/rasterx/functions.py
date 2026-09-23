@@ -3755,7 +3755,9 @@ def rst_percentile_stretch(tile: ColLike, lo_pct: ColLike, hi_pct: ColLike) -> C
     Returns:
         Multi-band uint8 GTiff tile column (same number of bands as input).
     """
-    return f.call_function("gbx_rst_percentile_stretch", _col(tile), _col(lo_pct), _col(hi_pct))
+    return f.call_function(
+        "gbx_rst_percentile_stretch", _col(tile), _col(lo_pct), _col(hi_pct)
+    )
 
 
 def rst_buildoverviews(

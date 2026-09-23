@@ -34,9 +34,13 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
     lo_pct = float(lo_pct)
     hi_pct = float(hi_pct)
     if not (0 <= lo_pct <= 100) or not (0 <= hi_pct <= 100):
-        raise ValueError(f"percentiles must be in [0, 100], got lo={lo_pct}, hi={hi_pct}")
+        raise ValueError(
+            f"percentiles must be in [0, 100], got lo={lo_pct}, hi={hi_pct}"
+        )
     if lo_pct >= hi_pct:
-        raise ValueError(f"lo_pct must be < hi_pct, got lo_pct={lo_pct}, hi_pct={hi_pct}")
+        raise ValueError(
+            f"lo_pct must be < hi_pct, got lo_pct={lo_pct}, hi_pct={hi_pct}"
+        )
 
     count = ds.count
 
@@ -72,7 +76,10 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
                 del vv
                 if hi_val <= lo_val:
                     out = np.zeros(data.shape, dtype="uint8")
-                elif np.issubdtype(data.dtype, np.unsignedinteger) and data.dtype.itemsize <= 2:
+                elif (
+                    np.issubdtype(data.dtype, np.unsignedinteger)
+                    and data.dtype.itemsize <= 2
+                ):
                     # uint8/uint16 raster: map each possible value once
                     # via a LUT, then a single uint8 gather — no full-array float
                     # temp. clip((v - lo) / (hi - lo) * 255, 0, 255).

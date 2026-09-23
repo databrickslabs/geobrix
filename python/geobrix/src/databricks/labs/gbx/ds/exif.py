@@ -422,7 +422,9 @@ class ExifGbxReader(DataSourceReader):
         row = self._build_metadata_row(local, source, tags)
         row["sharpness"] = image_sharpness(raw)
         row["brightness"] = image_brightness(raw)
-        yield pa.RecordBatch.from_pylist([row], schema=_exif_arrow_schema(EXIF_QC_SCHEMA))
+        yield pa.RecordBatch.from_pylist(
+            [row], schema=_exif_arrow_schema(EXIF_QC_SCHEMA)
+        )
 
 
 # ---------------------------------------------------------------------------

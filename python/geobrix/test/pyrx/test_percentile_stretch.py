@@ -19,7 +19,9 @@ def _two_band_tif(nodata_zero=True):
         b1[0, 0] = 0
         b2[0, 0] = 0
     mf = MemoryFile()
-    with mf.open(driver="GTiff", height=10, width=10, count=2, dtype="uint16", nodata=0) as ds:
+    with mf.open(
+        driver="GTiff", height=10, width=10, count=2, dtype="uint16", nodata=0
+    ) as ds:
         ds.write(b1, 1)
         ds.write(b2, 2)
     return mf

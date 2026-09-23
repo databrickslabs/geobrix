@@ -63,6 +63,15 @@ rest of the raster family; `rx.bin_points_tiled` is a lightweight-tier Python he
 - **`gbx_rst_chm`** — compute a Canopy Height Model: warp the DSM onto the DEM grid,
   subtract, and clamp negatives to zero. NoData propagates from either input.
 
+### Contrast stretch — `gbx_rst_percentile_stretch` (new)
+
+- **`gbx_rst_percentile_stretch`** — per-band percentile contrast stretch. For each band,
+  clip pixel values to the `[lo_pct, hi_pct]` percentiles over valid (non-NoData) pixels and
+  linearly rescale to 8-bit `[0, 255]`; pixels that are NoData in every band are preserved.
+  `gbx_rst_percentile_stretch(tile, 2.0, 98.0)` is a common contrast-enhancement and
+  display-prep step — for example before a COG or tile export. Available on both the
+  heavyweight and lightweight tiers. See [Raster Functions](./api/raster-functions).
+
 ### Geom-aware grid functions — GeometryCollection inputs
 
 - **GeometryCollection inputs** to the geom-aware grid functions

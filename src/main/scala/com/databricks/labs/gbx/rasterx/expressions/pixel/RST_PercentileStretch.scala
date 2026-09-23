@@ -37,7 +37,11 @@ case class RST_PercentileStretch(
     override def inputTypes: Seq[DataType] = Seq(
         tile.dataType, DoubleType, DoubleType, StringType
     )
-    override def dataType: DataType = BinaryType
+    // Tile-returning pixel op: the result is a tile struct (raster field stays BINARY,
+    // passed as `dt` to rowToTile/tileToRow below), NOT a bare BINARY column — mirrors
+    // RST_Clip/RST_Filter/RST_Threshold. Declaring BinaryType made Spark read the struct
+    // result via getBinary → ClassCastException on any real tile input.
+    override def dataType: DataType = RST_ExpressionUtil.tileDataType(tile)
     override def nullable: Boolean = true
     override def prettyName: String = RST_PercentileStretch.name
     override def replacement: Expression = invoke(RST_PercentileStretch)

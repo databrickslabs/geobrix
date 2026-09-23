@@ -24,6 +24,13 @@ def test_plot_tiles_exported():
     assert callable(vizx.plot_tiles), "plot_tiles is not callable"
 
 
+def test_plot_gallery_exported():
+    """plot_gallery is importable from databricks.labs.gbx.vizx and in __all__."""
+    assert hasattr(vizx, "plot_gallery"), "plot_gallery missing from vizx"
+    assert "plot_gallery" in vizx.__all__, "plot_gallery not in __all__"
+    assert callable(vizx.plot_gallery), "plot_gallery is not callable"
+
+
 def test_sri_hashes_are_real():
     """SRI hash constants are real sha384 values — no placeholder remains."""
     from databricks.labs.gbx.vizx import _maplibre as m

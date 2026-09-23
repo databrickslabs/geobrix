@@ -9,6 +9,7 @@ with ``pip install 'geobrix[vizx]'``.
 """
 
 from databricks.labs.gbx.vizx._cog import plot_cog, plot_tile
+from databricks.labs.gbx.vizx._gallery import plot_gallery
 from databricks.labs.gbx.vizx._interactive import plot_interactive
 from databricks.labs.gbx.vizx._layers import (
     grid_layer,
@@ -47,6 +48,7 @@ def __getattr__(name):
 
 __all__ = [
     "plot_tiles",
+    "plot_gallery",
     "plot_raster",
     "plot_file",
     "plot_mask_layers",

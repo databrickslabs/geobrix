@@ -285,10 +285,10 @@ def run_one(
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS.
 
-    When ``hardware_accelerator`` is set (e.g. ``GPU_1xA10`` / ``GPU_8xH100``), the
-    task requests Serverless GPU AI Runtime compute — the notebook then installs its
-    own deps via ``%pip`` (pass ``--no-strip-pip``), since GPU jobs install deps
-    programmatically in the notebook rather than via the environment spec.
+    When ``hardware_accelerator`` is set (e.g. ``GPU_1xH100`` / ``GPU_8xH100``), the
+    task requests Serverless GPU AI Runtime compute. Deps still come from the
+    environment spec (``%pip`` is stripped for jobs, CPU and GPU alike) — pass the
+    GPU wheel extra via ``--extras`` (e.g. ``photogrammetry_gpu_env5``).
     """
     from databricks.sdk.service import compute, jobs
 
@@ -312,10 +312,10 @@ def run_one(
                 environment_key=ENV_KEY,
                 spec=compute.Environment(
                     environment_version=env_version,
-                    # GPU (AI Runtime) jobs install deps in-notebook via %pip; keep the
-                    # environment spec dependency-free there. CPU serverless injects deps
-                    # here because %pip is stripped for CPU jobs.
-                    dependencies=[] if hardware_accelerator else deps,
+                    # Both CPU and GPU serverless jobs install deps from the environment
+                    # spec (%pip is stripped for jobs). For GPU, pass the GPU wheel extra
+                    # (e.g. photogrammetry_gpu_env5) via --extras.
+                    dependencies=deps,
                 ),
             )
         ],
@@ -490,9 +490,9 @@ def main() -> int:
         default=None,
         help=(
             "Request Serverless GPU AI Runtime compute for the task, e.g. "
-            "'GPU_1xA10' or 'GPU_8xH100'. Omit for CPU serverless. With GPU, pass "
-            "--no-strip-pip so the notebook installs deps via %%pip (GPU jobs install "
-            "deps in-notebook, not via the environment spec)."
+            "'GPU_1xH100', 'GPU_8xH100', or 'GPU_1xA10'. Omit for CPU serverless. "
+            "Deps come from the environment spec as usual (%%pip stripped) — pass the "
+            "GPU wheel extra via --extras (e.g. photogrammetry_gpu_env5)."
         ),
     )
     parser.add_argument(

@@ -23,6 +23,7 @@ import math
 
 import numpy as np
 import pandas as pd
+from affine import Affine
 from PIL import Image
 from pyspark.sql.functions import pandas_udf
 from pyspark.sql.types import DoubleType
@@ -106,6 +107,117 @@ def image_brightness(img_bytes: bytes) -> float:
     img = Image.open(io.BytesIO(img_bytes)).convert("L")
     arr = np.asarray(img, dtype=np.float32)
     return float(np.mean(arr))
+
+
+def zbuffer_ortho(
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    r: np.ndarray,
+    g: np.ndarray,
+    b: np.ndarray,
+    *,
+    xmin: float,
+    ymin: float,
+    xmax: float,
+    ymax: float,
+    px: float,
+) -> tuple[np.ndarray, np.ndarray, Affine]:
+    """Top-surface z-buffer rasterization of a colored point cloud.
+
+    Returns ``(rgb, dsm, transform)``:
+
+    rgb:
+        ``uint8`` ndarray ``(3, H, W)`` — per cell, the RGB of the max-z
+        point; ``(0, 0, 0)`` where empty.
+    dsm:
+        ``float32`` ndarray ``(H, W)`` — per cell, the max z; ``NaN``
+        where empty.
+    transform:
+        An :class:`affine.Affine` (north-up) for the grid so callers can
+        georeference the output.
+
+    Grid dimensions:
+        ``W = ceil((xmax - xmin) / px)``,
+        ``H = ceil((ymax - ymin) / px)``.
+        Row 0 is the TOP row (corresponds to ``y`` near ``ymax``);
+        standard north-up orientation (y decreases with row index).
+
+    Points outside ``[xmin, xmax) × [ymin, ymax)`` are silently dropped.
+    When multiple points fall in the same cell, the one with the highest
+    ``z`` value contributes its RGB and z to that cell.  The algorithm is
+    fully vectorised (no per-point Python loop): points are sorted by ``z``
+    ascending and written via flat-index assignment so the last (highest-z)
+    write wins each cell.
+
+    Parameters
+    ----------
+    x, y, z:
+        1-D float arrays of the same length (point coordinates).
+    r, g, b:
+        1-D ``uint8`` arrays of the same length (point colours).
+    xmin, ymin, xmax, ymax:
+        Spatial extent of the output grid.
+    px:
+        Cell size (same units as x/y).
+    """
+    W = math.ceil((xmax - xmin) / px)
+    H = math.ceil((ymax - ymin) / px)
+
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    r = np.asarray(r, dtype=np.uint8)
+    g = np.asarray(g, dtype=np.uint8)
+    b = np.asarray(b, dtype=np.uint8)
+
+    # Compute column and row indices (north-up: row 0 = top = max y).
+    col = np.floor((x - xmin) / px).astype(np.intp)
+    row = np.floor((ymax - y) / px).astype(np.intp)
+
+    # Drop out-of-bounds points.
+    mask = (col >= 0) & (col < W) & (row >= 0) & (row < H)
+    col = col[mask]
+    row = row[mask]
+    z = z[mask]
+    r = r[mask]
+    g = g[mask]
+    b = b[mask]
+
+    # Sort ascending by z so the last (highest-z) flat-index write wins.
+    order = np.argsort(z, kind="stable")
+    col = col[order]
+    row = row[order]
+    z = z[order]
+    r = r[order]
+    g = g[order]
+    b = b[order]
+
+    flat_idx = row * W + col
+
+    # Initialise outputs: DSM as NaN, RGB as 0.
+    dsm = np.full(H * W, np.nan, dtype=np.float32)
+    r_out = np.zeros(H * W, dtype=np.uint8)
+    g_out = np.zeros(H * W, dtype=np.uint8)
+    b_out = np.zeros(H * W, dtype=np.uint8)
+
+    # Vectorised z-buffer write: ascending sort + direct assignment means
+    # the last write per duplicate flat_idx is the highest-z point.
+    dsm[flat_idx] = z.astype(np.float32)
+    r_out[flat_idx] = r
+    g_out[flat_idx] = g
+    b_out[flat_idx] = b
+
+    dsm = dsm.reshape(H, W)
+    rgb = np.stack(
+        [r_out.reshape(H, W), g_out.reshape(H, W), b_out.reshape(H, W)],
+        axis=0,
+    )
+
+    # North-up affine: pixel (col, row) → (xmin + col*px, ymax - row*px).
+    transform = Affine(px, 0.0, float(xmin), 0.0, -px, float(ymax))
+
+    return rgb, dsm, transform
 
 
 # ---------------------------------------------------------------------------

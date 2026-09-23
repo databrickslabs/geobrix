@@ -47,7 +47,7 @@ Shared imports, pipeline parameters (`GSD_CM`, `MAX_ORTHO_WORKERS`, `GROUP_KEY_C
 and the SfM helper functions used by the numbered notebooks. Import once; the numbered
 notebooks run `%run ./config_nb`.
 
-### `01_sfm_orthomosaic` — telemetry → SfM → orthomosaic
+### `01a_sfm_orthomosaic` — telemetry → SfM → orthomosaic
 
 The core pipeline:
 
@@ -90,7 +90,7 @@ server.
 ### `monitor` (optional) — live SfM progress
 
 An optional utility notebook that polls the SfM working directory and prints incremental
-reconstruction statistics (registered images, 3-D points) while `01_sfm_orthomosaic` runs.
+reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomosaic` runs.
 
 ---
 

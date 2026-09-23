@@ -146,6 +146,31 @@ with_geom.select("path", "geom").show()
 - **Serverless-safe.** The reader makes no `_jvm` / `sparkContext` / `.rdd` calls and
   holds no SparkSession reference, so it runs unchanged on Serverless, standard, and ARM clusters.
 
+## Profiling a collection — `build_exif_common_opts`
+
+When you point `exif_gbx` at a new collection, `build_exif_common_opts` inspects a sample of
+the images and reports which camera intrinsics are **common** (uniform across the set, and
+therefore safe to pin), which are **present but variable**, and which are **missing** — most
+notably `sensor_width_mm`, which EXIF never carries yet is required to convert focal length
+to pixels. It returns a splat-ready overrides dict plus a report; a built-in camera-model →
+sensor-width table resolves the sensor width for common drones and action cameras (a manual
+`sensorWidthMm` override always wins).
+
+```python
+from databricks.labs.gbx.ds.exif import build_exif_common_opts, eval_exif_opts
+
+# opts is ready to splat into the reader; report explains common / variable / missing.
+opts, report = build_exif_common_opts(img_dir, mode="sample", limit=24)
+df = spark.read.format("exif_gbx").options(mode="qc", **opts).load(img_dir)
+
+# Human-readable evaluation (common / present-but-variable / missing + suggestions):
+print(eval_exif_opts(img_dir))
+```
+
+`mode` chooses how many files to inspect: `"sample"` (evenly spaced — the default, and the
+most representative for "truly common"), `"limit"` (first N), or `"all"`.
+`report["needs_supply"]` lists the fields you must provide when they cannot be auto-resolved.
+
 ## Next Steps
 
 - [Orthomosaic example](../notebooks/orthomosaic) — an end-to-end photogrammetry pipeline

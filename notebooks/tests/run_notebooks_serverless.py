@@ -252,6 +252,26 @@ def _import_notebook(
     return ws_path
 
 
+def _accelerator_type(value: str):
+    """Serverless GPU accelerator for ``jobs.Compute.hardware_accelerator``.
+
+    Prefer the SDK enum, but fall back to a ``.value``-bearing shim for platform values
+    the installed SDK's ``HardwareAcceleratorType`` enum doesn't list yet — e.g.
+    ``GPU_1xH100`` on databricks-sdk 0.115.0, whose enum has only ``GPU_1xA10`` /
+    ``GPU_8xH100``. ``as_dict()`` reads ``.value``, so the shim serializes to the exact
+    string the Jobs API expects (verified: the API accepts the ``hardware_accelerator``
+    string the SDK emits).
+    """
+    from types import SimpleNamespace
+
+    from databricks.sdk.service import compute
+
+    try:
+        return compute.HardwareAcceleratorType(value)
+    except ValueError:
+        return SimpleNamespace(value=value)
+
+
 def run_one(
     w,
     local_path: pathlib.Path,
@@ -261,15 +281,29 @@ def run_one(
     poll_secs: int,
     strip_pip: bool,
     set_vars: list[str] | None = None,
+    hardware_accelerator: str | None = None,
 ) -> bool:
-    """Import and run one notebook on Serverless. Returns True on SUCCESS."""
+    """Import and run one notebook on Serverless. Returns True on SUCCESS.
+
+    When ``hardware_accelerator`` is set (e.g. ``GPU_1xA10`` / ``GPU_8xH100``), the
+    task requests Serverless GPU AI Runtime compute — the notebook then installs its
+    own deps via ``%pip`` (pass ``--no-strip-pip``), since GPU jobs install deps
+    programmatically in the notebook rather than via the environment spec.
+    """
     from databricks.sdk.service import compute, jobs
 
-    print(f"\n=== SUBMIT (serverless): {local_path.name} ===", flush=True)
+    tag = f" [{hardware_accelerator}]" if hardware_accelerator else ""
+    print(f"\n=== SUBMIT (serverless{tag}): {local_path.name} ===", flush=True)
 
     ws_path = _import_notebook(w, local_path, ws_dir, strip_pip, set_vars=set_vars)
 
     task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
+
+    gpu_compute = (
+        jobs.Compute(hardware_accelerator=_accelerator_type(hardware_accelerator))
+        if hardware_accelerator
+        else None
+    )
 
     waiter = w.jobs.submit(
         run_name=f"gbx-nb:{task_key}",
@@ -278,7 +312,10 @@ def run_one(
                 environment_key=ENV_KEY,
                 spec=compute.Environment(
                     environment_version=env_version,
-                    dependencies=deps,
+                    # GPU (AI Runtime) jobs install deps in-notebook via %pip; keep the
+                    # environment spec dependency-free there. CPU serverless injects deps
+                    # here because %pip is stripped for CPU jobs.
+                    dependencies=[] if hardware_accelerator else deps,
                 ),
             )
         ],
@@ -286,6 +323,7 @@ def run_one(
             jobs.SubmitTask(
                 task_key=task_key,
                 environment_key=ENV_KEY,
+                compute=gpu_compute,
                 notebook_task=jobs.NotebookTask(notebook_path=ws_path),
                 # Run exactly once — do not retry a failed validation run (a retry
                 # just re-burns compute on the same failure and doubles the child
@@ -447,6 +485,17 @@ def main() -> int:
         help=f"Serverless environment version (default: {DEFAULT_ENV_VERSION!r}).",
     )
     parser.add_argument(
+        "--hardware-accelerator",
+        metavar="ACCEL",
+        default=None,
+        help=(
+            "Request Serverless GPU AI Runtime compute for the task, e.g. "
+            "'GPU_1xA10' or 'GPU_8xH100'. Omit for CPU serverless. With GPU, pass "
+            "--no-strip-pip so the notebook installs deps via %%pip (GPU jobs install "
+            "deps in-notebook, not via the environment spec)."
+        ),
+    )
+    parser.add_argument(
         "--profile",
         metavar="PROFILE",
         default=os.environ.get("DATABRICKS_CONFIG_PROFILE", "oauth-fe"),
@@ -530,6 +579,8 @@ def main() -> int:
     print(f"Deps     : {len(deps)} entries (wheel + {len(deps) - 1} packages)", flush=True)
     print(f"Notebooks: {len(notebooks)}", flush=True)
     print(f"Strip %%pip: {args.strip_pip}", flush=True)
+    if args.hardware_accelerator:
+        print(f"Accelerator: {args.hardware_accelerator}", flush=True)
     if args.set_vars:
         print(f"Override vars: {', '.join(args.set_vars)}", flush=True)
     print("", flush=True)
@@ -553,6 +604,7 @@ def main() -> int:
             poll_secs=args.poll_secs,
             strip_pip=args.strip_pip,
             set_vars=args.set_vars,
+            hardware_accelerator=args.hardware_accelerator,
         )
         if not ok:
             return 1

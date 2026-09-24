@@ -57,3 +57,40 @@ def test_alloc_no_gpu_raises():
     with pytest.raises(RuntimeError):
         recommend_dense_allocation([50], infra={"gpu_count": 0, "host_ram_mb": 1000,
                                                 "host_ram_available_mb": 1000, "cores": 4, "per_gpu_vram_mb": 0})
+
+
+# --- dense_mvs_pool tests ---
+
+import threading
+from databricks.labs.gbx.pyrx.mvs import dense_mvs_pool
+
+
+def test_pool_runs_all_clusters_on_slots():
+    specs = [{"cluster_id": i} for i in range(20)]
+    alloc = {"concurrency": 8, "gpus_per_task": 1,
+             "gpu_index_per_slot": [str(i) for i in range(8)], "cache_size_gb": 32.0}
+    seen_gpu = {}
+    lock = threading.Lock()
+    def runner(spec, gpu_index):
+        with lock:
+            seen_gpu[spec["cluster_id"]] = gpu_index
+        return f"/tmp/{spec['cluster_id']}.ply"
+    out = dense_mvs_pool(specs, allocation=alloc, runner=runner)
+    assert len(out) == 20
+    assert all(v["status"] == "ok" for v in out.values())
+    assert set(seen_gpu.values()) <= {str(i) for i in range(8)}  # only assigned slots used
+
+
+def test_pool_isolates_failures_and_retries():
+    calls = {"c1": 0}
+    def runner(spec, gpu_index):
+        if spec["cluster_id"] == "c1":
+            calls["c1"] += 1
+            raise RuntimeError("boom")
+        return "ok.ply"
+    specs = [{"cluster_id": "c0"}, {"cluster_id": "c1"}, {"cluster_id": "c2"}]
+    alloc = {"concurrency": 2, "gpus_per_task": 1, "gpu_index_per_slot": ["0", "1"], "cache_size_gb": 32.0}
+    out = dense_mvs_pool(specs, allocation=alloc, runner=runner, max_retries=1)
+    assert out["c0"]["status"] == "ok" and out["c2"]["status"] == "ok"
+    assert out["c1"]["status"] == "error"
+    assert calls["c1"] == 2  # initial + 1 retry

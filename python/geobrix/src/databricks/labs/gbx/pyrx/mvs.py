@@ -119,3 +119,49 @@ def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
         list(ex.map(_do, cluster_specs))
     return results
+
+
+def _resolve_model_dir(sparse_dir):
+    """Pick the COLMAP model dir: sparse_dir itself if it holds cameras.bin/.txt,
+    else the largest numbered subdir (sparse/0, sparse/1, ...) that does."""
+    from pathlib import Path
+    sp = Path(sparse_dir)
+    if (sp / "cameras.bin").exists() or (sp / "cameras.txt").exists():
+        return sp
+    cands = [d for d in sorted(sp.iterdir()) if d.is_dir()
+             and ((d / "cameras.bin").exists() or (d / "cameras.txt").exists())]
+    if not cands:
+        raise RuntimeError(f"_resolve_model_dir: no COLMAP model under {sparse_dir}")
+    return max(cands, key=lambda d: (d / "images.bin").stat().st_size
+               if (d / "images.bin").exists() else 0)
+
+
+def dense_undistort(sparse_dir, image_dir, work_dir):
+    """CPU: undistort a cluster's images against its sparse model into a dense workspace."""
+    import pycolmap
+    from pathlib import Path
+    work = Path(work_dir); work.mkdir(parents=True, exist_ok=True)
+    model_dir = _resolve_model_dir(sparse_dir)
+    pycolmap.undistort_images(output_path=str(work), input_path=str(model_dir), image_path=str(image_dir))
+    return str(work)
+
+
+def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None):
+    """GPU: patch-match stereo on a prepared dense workspace. gpu_index pins the GPU(s)."""
+    import pycolmap
+    pm = pycolmap.PatchMatchOptions()
+    pm.gpu_index = str(gpu_index)
+    if max_image_size:
+        pm.max_image_size = int(max_image_size)
+    pycolmap.patch_match_stereo(str(work_dir), options=pm)
+    return str(work_dir)
+
+
+def dense_fuse(work_dir, out_ply):
+    """CPU-side: fuse depth maps into a colored dense point cloud (binary PLY)."""
+    import pycolmap
+    from pathlib import Path
+    pycolmap.stereo_fusion(output_path=str(out_ply), workspace_path=str(work_dir), output_type="PLY")
+    if not Path(out_ply).exists():
+        raise RuntimeError(f"dense_fuse: stereo_fusion produced no PLY at {out_ply}")
+    return str(out_ply)

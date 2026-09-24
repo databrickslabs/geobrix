@@ -94,3 +94,21 @@ def test_pool_isolates_failures_and_retries():
     assert out["c0"]["status"] == "ok" and out["c2"]["status"] == "ok"
     assert out["c1"]["status"] == "error"
     assert calls["c1"] == 2  # initial + 1 retry
+
+
+# --- _resolve_model_dir tests ---
+
+from pathlib import Path
+from databricks.labs.gbx.pyrx.mvs import _resolve_model_dir
+
+
+def test_resolve_model_dir_numbered(tmp_path):
+    (tmp_path / "0").mkdir()
+    (tmp_path / "0" / "cameras.bin").write_bytes(b"x")
+    (tmp_path / "0" / "images.bin").write_bytes(b"y" * 10)
+    assert _resolve_model_dir(tmp_path) == tmp_path / "0"
+
+
+def test_resolve_model_dir_flat(tmp_path):
+    (tmp_path / "cameras.bin").write_bytes(b"x")
+    assert _resolve_model_dir(tmp_path) == tmp_path

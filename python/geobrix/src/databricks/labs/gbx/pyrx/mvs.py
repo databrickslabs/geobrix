@@ -165,7 +165,8 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
     small self-consistent model); this undistorts the whole loaded model.
     """
     import pycolmap
-    work = Path(work_dir); work.mkdir(parents=True, exist_ok=True)
+    work = Path(work_dir)
+    work.mkdir(parents=True, exist_ok=True)
     model_dir = _resolve_model_dir(sparse_dir)
     _kw = {}
     if num_src_images:

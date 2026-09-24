@@ -47,7 +47,7 @@ defusedxml==0.7.1
 # scipy pinned to the DBR 19 / Serverless env 6 installed version. numexpr is NOT in DBR's
 # library set, so it is pinned independently (safe math-expression evaluator for
 # rst_mapalgebra — no arbitrary-code exec).
-scipy==1.16.3
+scipy==1.15.3
 numexpr==2.11.0
 
 # --- web-mercator XYZ tiling (rio-tiler bundles morecantile + color-operations) ---

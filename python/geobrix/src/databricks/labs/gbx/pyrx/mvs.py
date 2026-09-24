@@ -56,7 +56,7 @@ def gpu_infra() -> dict:
 
 
 def recommend_dense_allocation(cluster_sizes, *, dense_max_image_size=None,
-                               infra=None, per_task_host_gb=32.0):
+                               infra=None, per_task_host_gb=32.0, reserve_host_gb=6.0):
     infra = infra or gpu_infra()
     n_gpu = int(infra.get("gpu_count", 0))
     if n_gpu < 1:
@@ -76,12 +76,18 @@ def recommend_dense_allocation(cluster_sizes, *, dense_max_image_size=None,
         ids = [str(gpu + k) for k in range(gpus_per_task) if gpu + k < n_gpu]
         slots.append(",".join(ids))
         gpu += gpus_per_task
-    # Host patch-match cache must fit node RAM — the COLMAP default (32GB) OOM-kills small
-    # GPU nodes with a SIGABRT (e.g. a 16GB g4dn/T4). Give each concurrent task ~50% of its
-    # RAM share, capped to [2, per_task_host_gb].
-    cache_size_gb = round(max(2.0, min(per_task_host_gb, (ram_avail_gb / max(1, concurrency)) * 0.5)), 1)
-    reason = (f"{n_clusters} clusters, {n_gpu} GPUs, ~{ram_avail_gb:.0f}GB RAM "
-              f"-> {concurrency} concurrent x {gpus_per_task} GPU(s), cache {cache_size_gb}GB/task")
+    # Host patch-match cache must fit node RAM ALONGSIDE the Spark/JVM heap, the Python
+    # process, the loaded images, and GPU host-pinned buffers — the COLMAP default (32GB)
+    # OOM-kills small GPU nodes with a SIGABRT (e.g. a 16GB g4dn/T4). Reserve a fixed
+    # baseline (reserve_host_gb) for that non-cache usage, split the remaining available
+    # RAM across concurrent tasks, and cap to [2, per_task_host_gb]. This is more precise
+    # than a flat percentage: on big nodes per_task_host_gb caps it; on small nodes the
+    # reserve dominates.
+    usable_gb = max(0.0, ram_avail_gb - reserve_host_gb)
+    cache_size_gb = round(max(2.0, min(per_task_host_gb, usable_gb / max(1, concurrency))), 1)
+    reason = (f"{n_clusters} clusters, {n_gpu} GPUs, ~{ram_avail_gb:.0f}GB avail RAM "
+              f"(reserve {reserve_host_gb:.0f}GB) -> {concurrency} concurrent x {gpus_per_task} "
+              f"GPU(s), cache {cache_size_gb}GB/task")
     return {"concurrency": concurrency, "gpus_per_task": gpus_per_task,
             "gpu_index_per_slot": slots, "cache_size_gb": cache_size_gb, "reason": reason}
 

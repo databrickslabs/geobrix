@@ -151,18 +151,18 @@ def _resolve_model_dir(sparse_dir):
                if (d / "images.bin").exists() else 0)
 
 
-def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None, max_images=None):
+def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
     """CPU: undistort a cluster's images against its sparse model into a dense workspace.
 
     num_src_images caps how many source images each reference is patch-matched against
     (COLMAP num_patch_match_src_images; default = all). A small cap (e.g. 2-4) makes
     patch-match dramatically faster with modest quality cost - the main dev-speed lever.
 
-    max_images caps the TOTAL images densified (the dev-loop lever): undistort is
-    restricted (via pycolmap undistort_images' image_names) to the first max_images
-    registered images, ordered by image name to mirror nb1a's DEV_MAX_IMAGES cap, so
-    undistort AND patch_match only process that many views rather than the full
-    persisted cluster.
+    Do NOT subset the images here to shrink the workload: undistorting only a subset
+    leaves patch_match referencing the cluster's other images as covisibility sources
+    with no undistorted map ("Missing image or map dependency" -> kernel death). The
+    dev-size cap belongs upstream at the SPARSE stage (nb1a's DEV_MAX_IMAGES builds a
+    small self-consistent model); this undistorts the whole loaded model.
     """
     import pycolmap
     work = Path(work_dir); work.mkdir(parents=True, exist_ok=True)
@@ -170,11 +170,6 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None, max
     _kw = {}
     if num_src_images:
         _kw["num_patch_match_src_images"] = int(num_src_images)
-    if max_images:
-        rec = pycolmap.Reconstruction(str(model_dir))
-        names = sorted(rec.images[_iid].name for _iid in rec.reg_image_ids())
-        if len(names) > int(max_images):
-            _kw["image_names"] = names[: int(max_images)]
     pycolmap.undistort_images(output_path=str(work), input_path=str(model_dir),
                               image_path=str(image_dir), **_kw)
     return str(work)

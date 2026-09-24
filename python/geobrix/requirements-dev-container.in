@@ -58,7 +58,7 @@ rio-cogeo==7.0.2
 h3==4.4.2
 quadbin==0.2.2
 pmtiles==3.7.0
-pyogrio==0.12.1
+pyogrio==0.13.0
 pyproj==3.7.2
 contextily==1.6.2
 # vizx interactive maps: mapclassify (the [vizx] extra).

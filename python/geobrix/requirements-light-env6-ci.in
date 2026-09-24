@@ -60,7 +60,7 @@ rio-cogeo==7.0.2
 pmtiles==3.7.0
 
 # --- OGR-free vector reading (light *_gbx vector DataSources) ---
-pyogrio==0.12.1
+pyogrio==0.13.0
 pyproj==3.7.2
 
 # --- MVT (light pyvx) decode oracle used in test/pyvx/ ---

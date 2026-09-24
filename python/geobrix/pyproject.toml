@@ -79,7 +79,7 @@ light-base = [
     "pmtiles>=3.4,<4",
     # OGR-free vector reading for the light *_gbx vector DataSources. pyogrio
     # bundles its own libgdal; pyproj (pulled by pyogrio) maps CRS->srid/proj4.
-    "pyogrio>=0.12,<1",
+    "pyogrio>=0.13.0,<1",
     # Cap pyproj: a floor-only, native-PROJ-tied dep that floats to "latest" on
     # Serverless (not held by the immutable base) — same float-and-break risk as
     # rio-tiler 9.3.0. No 4.x exists yet, so <4 is a no-op today but future-proofs.

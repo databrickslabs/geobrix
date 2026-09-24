@@ -1,5 +1,7 @@
 """Dense MVS + GPU infra/scheduler helpers (pyrx, light tier; lazy pycolmap)."""
+
 from __future__ import annotations
+
 import subprocess
 import threading
 from pathlib import Path
@@ -42,7 +44,14 @@ def _parse_gpu_infra(*, gpu_query_csv: str, meminfo: str, nproc: str) -> dict:
 
 def gpu_infra() -> dict:
     import re
-    q = _run(["nvidia-smi", "--query-gpu=index,name,memory.total,memory.free", "--format=csv,noheader"])
+
+    q = _run(
+        [
+            "nvidia-smi",
+            "--query-gpu=index,name,memory.total,memory.free",
+            "--format=csv,noheader",
+        ]
+    )
     try:
         meminfo = open("/proc/meminfo").read()
     except OSError:
@@ -55,15 +64,27 @@ def gpu_infra() -> dict:
     return info
 
 
-def recommend_dense_allocation(cluster_sizes, *, dense_max_image_size=None,
-                               infra=None, per_task_host_gb=32.0, reserve_host_gb=6.0):
+def recommend_dense_allocation(
+    cluster_sizes,
+    *,
+    dense_max_image_size=None,
+    infra=None,
+    per_task_host_gb=32.0,
+    reserve_host_gb=6.0,
+):
     infra = infra or gpu_infra()
     n_gpu = int(infra.get("gpu_count", 0))
     if n_gpu < 1:
-        raise RuntimeError("recommend_dense_allocation: no GPU visible (dense MVS needs a GPU driver node)")
+        raise RuntimeError(
+            "recommend_dense_allocation: no GPU visible (dense MVS needs a GPU driver node)"
+        )
     n_clusters = max(1, len(cluster_sizes))
-    ram_avail_gb = infra.get("host_ram_available_mb", infra.get("host_ram_mb", 0)) / 1024.0
-    ram_slots = max(1, int(ram_avail_gb // per_task_host_gb)) if per_task_host_gb > 0 else n_gpu
+    ram_avail_gb = (
+        infra.get("host_ram_available_mb", infra.get("host_ram_mb", 0)) / 1024.0
+    )
+    ram_slots = (
+        max(1, int(ram_avail_gb // per_task_host_gb)) if per_task_host_gb > 0 else n_gpu
+    )
     concurrency = min(n_gpu, n_clusters, ram_slots)
     gpus_per_task = max(1, n_gpu // concurrency) if concurrency <= n_clusters else 1
     # only hand extra GPUs to tasks when there are fewer clusters than GPUs
@@ -84,25 +105,41 @@ def recommend_dense_allocation(cluster_sizes, *, dense_max_image_size=None,
     # than a flat percentage: on big nodes per_task_host_gb caps it; on small nodes the
     # reserve dominates.
     usable_gb = max(0.0, ram_avail_gb - reserve_host_gb)
-    cache_size_gb = round(max(2.0, min(per_task_host_gb, usable_gb / max(1, concurrency))), 1)
-    reason = (f"{n_clusters} clusters, {n_gpu} GPUs, ~{ram_avail_gb:.0f}GB avail RAM "
-              f"(reserve {reserve_host_gb:.0f}GB) -> {concurrency} concurrent x {gpus_per_task} "
-              f"GPU(s), cache {cache_size_gb}GB/task")
-    return {"concurrency": concurrency, "gpus_per_task": gpus_per_task,
-            "gpu_index_per_slot": slots, "cache_size_gb": cache_size_gb, "reason": reason}
+    cache_size_gb = round(
+        max(2.0, min(per_task_host_gb, usable_gb / max(1, concurrency))), 1
+    )
+    reason = (
+        f"{n_clusters} clusters, {n_gpu} GPUs, ~{ram_avail_gb:.0f}GB avail RAM "
+        f"(reserve {reserve_host_gb:.0f}GB) -> {concurrency} concurrent x {gpus_per_task} "
+        f"GPU(s), cache {cache_size_gb}GB/task"
+    )
+    return {
+        "concurrency": concurrency,
+        "gpus_per_task": gpus_per_task,
+        "gpu_index_per_slot": slots,
+        "cache_size_gb": cache_size_gb,
+        "reason": reason,
+    }
 
 
 def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1):
-    from concurrent.futures import ThreadPoolExecutor
     import queue as _q
+    from concurrent.futures import ThreadPoolExecutor
+
     if runner is None:
         runner = lambda spec, gpu_index: dense_patch_match(  # noqa: E731
-            spec["work_dir"], gpu_index=gpu_index, max_image_size=spec.get("max_image_size"),
+            spec["work_dir"],
+            gpu_index=gpu_index,
+            max_image_size=spec.get("max_image_size"),
             geom_consistency=spec.get("geom_consistency", True),
-            num_iterations=spec.get("num_iterations"), window_step=spec.get("window_step"),
-            cache_size_gb=spec.get("cache_size_gb"))
+            num_iterations=spec.get("num_iterations"),
+            window_step=spec.get("window_step"),
+            cache_size_gb=spec.get("cache_size_gb"),
+        )
     if allocation is None:
-        allocation = recommend_dense_allocation([s.get("n_images", 1) for s in cluster_specs])
+        allocation = recommend_dense_allocation(
+            [s.get("n_images", 1) for s in cluster_specs]
+        )
     slots = allocation["gpu_index_per_slot"]
     concurrency = max(1, allocation["concurrency"])
     free = _q.Queue()
@@ -125,7 +162,10 @@ def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1
                 except Exception as e:  # noqa: BLE001
                     if attempt > max_retries:
                         with lock:
-                            results[spec["cluster_id"]] = {"status": "error", "error": str(e)[:400]}
+                            results[spec["cluster_id"]] = {
+                                "status": "error",
+                                "error": str(e)[:400],
+                            }
                         return
         finally:
             free.put(gi)
@@ -143,12 +183,19 @@ def _resolve_model_dir(sparse_dir):
     sp = Path(sparse_dir)
     if (sp / "cameras.bin").exists() or (sp / "cameras.txt").exists():
         return sp
-    cands = [d for d in sorted(sp.iterdir()) if d.is_dir()
-             and ((d / "cameras.bin").exists() or (d / "cameras.txt").exists())]
+    cands = [
+        d
+        for d in sorted(sp.iterdir())
+        if d.is_dir() and ((d / "cameras.bin").exists() or (d / "cameras.txt").exists())
+    ]
     if not cands:
         raise RuntimeError(f"_resolve_model_dir: no COLMAP model under {sparse_dir}")
-    return max(cands, key=lambda d: (d / "images.bin").stat().st_size
-               if (d / "images.bin").exists() else 0)
+    return max(
+        cands,
+        key=lambda d: (
+            (d / "images.bin").stat().st_size if (d / "images.bin").exists() else 0
+        ),
+    )
 
 
 def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
@@ -165,20 +212,32 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
     small self-consistent model); this undistorts the whole loaded model.
     """
     import pycolmap
+
     work = Path(work_dir)
     work.mkdir(parents=True, exist_ok=True)
     model_dir = _resolve_model_dir(sparse_dir)
     _kw = {}
     if num_src_images:
         _kw["num_patch_match_src_images"] = int(num_src_images)
-    pycolmap.undistort_images(output_path=str(work), input_path=str(model_dir),
-                              image_path=str(image_dir), **_kw)
+    pycolmap.undistort_images(
+        output_path=str(work),
+        input_path=str(model_dir),
+        image_path=str(image_dir),
+        **_kw,
+    )
     return str(work)
 
 
-def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None,
-                      geom_consistency=True, num_iterations=None, window_step=None,
-                      cache_size_gb=None):
+def dense_patch_match(
+    work_dir,
+    *,
+    gpu_index="-1",
+    max_image_size=None,
+    geom_consistency=True,
+    num_iterations=None,
+    window_step=None,
+    cache_size_gb=None,
+):
     """GPU: patch-match stereo on a prepared dense workspace. gpu_index pins the GPU(s).
 
     Speed knobs (quality tradeoff): geom_consistency=False skips the second (geometric)
@@ -192,6 +251,7 @@ def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None,
     derives a RAM-aware value; pass it through so patch_match never over-allocates.
     """
     import pycolmap
+
     pm = pycolmap.PatchMatchOptions()
     pm.gpu_index = str(gpu_index)
     if max_image_size:
@@ -210,7 +270,10 @@ def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None,
 def dense_fuse(work_dir, out_ply):
     """CPU-side: fuse depth maps into a colored dense point cloud (binary PLY)."""
     import pycolmap
-    pycolmap.stereo_fusion(output_path=str(out_ply), workspace_path=str(work_dir), output_type="PLY")
+
+    pycolmap.stereo_fusion(
+        output_path=str(out_ply), workspace_path=str(work_dir), output_type="PLY"
+    )
     if not Path(out_ply).exists():
         raise RuntimeError(f"dense_fuse: stereo_fusion produced no PLY at {out_ply}")
     return str(out_ply)

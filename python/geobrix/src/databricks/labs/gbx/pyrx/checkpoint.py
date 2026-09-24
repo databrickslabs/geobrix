@@ -10,6 +10,7 @@ unit for per-cluster stages (dense); the group is the unit for whole-group stage
 Serverless-safe: stdlib only, no Spark. Volume-safe: the manifest is written to a
 LOCAL temp then copied to the (FUSE) Volume path — never renamed across FUSE.
 """
+
 import hashlib
 import json
 import os

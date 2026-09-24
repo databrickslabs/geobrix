@@ -87,7 +87,9 @@ def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1
     import queue as _q
     if runner is None:
         runner = lambda spec, gpu_index: dense_patch_match(  # noqa: E731
-            spec["work_dir"], gpu_index=gpu_index, max_image_size=spec.get("max_image_size"))
+            spec["work_dir"], gpu_index=gpu_index, max_image_size=spec.get("max_image_size"),
+            geom_consistency=spec.get("geom_consistency", True),
+            num_iterations=spec.get("num_iterations"), window_step=spec.get("window_step"))
     if allocation is None:
         allocation = recommend_dense_allocation([s.get("n_images", 1) for s in cluster_specs])
     slots = allocation["gpu_index_per_slot"]
@@ -138,22 +140,43 @@ def _resolve_model_dir(sparse_dir):
                if (d / "images.bin").exists() else 0)
 
 
-def dense_undistort(sparse_dir, image_dir, work_dir):
-    """CPU: undistort a cluster's images against its sparse model into a dense workspace."""
+def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None):
+    """CPU: undistort a cluster's images against its sparse model into a dense workspace.
+
+    num_src_images caps how many source images each reference is patch-matched against
+    (COLMAP num_patch_match_src_images; default = all). A small cap (e.g. 2-4) makes
+    patch-match dramatically faster with modest quality cost - the main dev-speed lever.
+    """
     import pycolmap
     work = Path(work_dir); work.mkdir(parents=True, exist_ok=True)
     model_dir = _resolve_model_dir(sparse_dir)
-    pycolmap.undistort_images(output_path=str(work), input_path=str(model_dir), image_path=str(image_dir))
+    _kw = {}
+    if num_src_images:
+        _kw["num_patch_match_src_images"] = int(num_src_images)
+    pycolmap.undistort_images(output_path=str(work), input_path=str(model_dir),
+                              image_path=str(image_dir), **_kw)
     return str(work)
 
 
-def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None):
-    """GPU: patch-match stereo on a prepared dense workspace. gpu_index pins the GPU(s)."""
+def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None,
+                      geom_consistency=True, num_iterations=None, window_step=None):
+    """GPU: patch-match stereo on a prepared dense workspace. gpu_index pins the GPU(s).
+
+    Speed knobs (quality tradeoff): geom_consistency=False skips the second (geometric)
+    pass (~2x faster); lower num_iterations / higher window_step cut the sweep cost.
+    With dense_undistort(num_src_images=...) + a small max_image_size these make a dev
+    reconstruction fast.
+    """
     import pycolmap
     pm = pycolmap.PatchMatchOptions()
     pm.gpu_index = str(gpu_index)
     if max_image_size:
         pm.max_image_size = int(max_image_size)
+    pm.geom_consistency = bool(geom_consistency)
+    if num_iterations:
+        pm.num_iterations = int(num_iterations)
+    if window_step:
+        pm.window_step = int(window_step)
     pycolmap.patch_match_stereo(str(work_dir), options=pm)
     return str(work_dir)
 

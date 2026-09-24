@@ -20,7 +20,7 @@ pip==25.0.1
 setuptools==74.0.0
 wheel==0.45.1
 cython==3.0.12
-build==1.4.4
+build==1.6.1
 
 # --- DBR-aligned runtime / numeric stack ---
 # numpy / pandas / pyarrow pinned to DBR 17.3 LTS installed versions:

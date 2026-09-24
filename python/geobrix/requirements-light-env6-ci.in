@@ -18,7 +18,7 @@
 # (requirements-dev-container.in) where applicable; bump in lockstep and regenerate.
 
 # --- build backend (for `python -m build` lightweight wheel) ---
-build==1.4.4
+build==1.6.1
 setuptools==80.9.0
 wheel==0.45.1
 

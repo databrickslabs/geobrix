@@ -112,7 +112,7 @@ botocore<1.41.0
 # the stac/ suite stubs). geopandas/pyarrow for parquet read are already pinned above.
 # pystac>=1.9 is the floor set by rio-tiler (already in this lock); <2 matches the
 # [overture] pyproject.toml extra ceiling. ---
-pystac>=1.9,<2
+pystac>=1.15.2,<2
 
 # --- visualization ([vizx] extra): gbx.vizx raster rendering + GeoDataFrame map
 # adapters + interactive MapLibre GL viewer (anywidget) + tile simplification

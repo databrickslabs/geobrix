@@ -232,7 +232,7 @@ databricks = [
 # opt-in downloader kept OUT of _all — like [earthdata]. Users who need Overture
 # install geobrix[light_env6,overture] and accept the click bump.
 overture = [
-    "pystac>=1.9,<2",
+    "pystac>=1.15.2,<2",
     "overturemaps>=1.0,<2",
 ]
 # STAC catalog client (lightweight): distributed search + resilient download + repair.

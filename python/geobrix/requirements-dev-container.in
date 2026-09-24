@@ -46,7 +46,7 @@ botocore>=1.40.45,<1.41.0
 # static-catalog reader used directly by OvertureClient._open_catalog; pystac-client
 # (above) pulls it transitively, but listing it here pins it explicitly so any bump
 # of pystac-client doesn't silently float pystac. Range matches [overture] extra.
-pystac>=1.9,<2
+pystac>=1.15.2,<2
 rasterio==1.5.0
 rioxarray==0.22.0
 # NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P, ERA5).

@@ -147,29 +147,23 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None, max
     (COLMAP num_patch_match_src_images; default = all). A small cap (e.g. 2-4) makes
     patch-match dramatically faster with modest quality cost - the main dev-speed lever.
 
-    max_images caps the TOTAL registered images densified (the dev-loop lever): the
-    sparse model is subset to its first max_images registered images (ordered by image
-    name, mirroring nb1a's DEV_MAX_IMAGES cap) before undistort, so undistort AND
-    patch_match only process that many views rather than the full persisted cluster.
+    max_images caps the TOTAL images densified (the dev-loop lever): undistort is
+    restricted (via pycolmap undistort_images' image_names) to the first max_images
+    registered images, ordered by image name to mirror nb1a's DEV_MAX_IMAGES cap, so
+    undistort AND patch_match only process that many views rather than the full
+    persisted cluster.
     """
     import pycolmap
     work = Path(work_dir); work.mkdir(parents=True, exist_ok=True)
     model_dir = _resolve_model_dir(sparse_dir)
-    if max_images:
-        rec = pycolmap.Reconstruction(str(model_dir))
-        reg = sorted(rec.reg_image_ids(), key=lambda _iid: rec.images[_iid].name)
-        if len(reg) > int(max_images):
-            keep = set(reg[: int(max_images)])
-            for _iid in list(rec.reg_image_ids()):
-                if _iid not in keep:
-                    rec.deregister_image(_iid)
-            reduced = work / "_sparse_dev"
-            reduced.mkdir(parents=True, exist_ok=True)
-            rec.write(str(reduced))
-            model_dir = reduced
     _kw = {}
     if num_src_images:
         _kw["num_patch_match_src_images"] = int(num_src_images)
+    if max_images:
+        rec = pycolmap.Reconstruction(str(model_dir))
+        names = sorted(rec.images[_iid].name for _iid in rec.reg_image_ids())
+        if len(names) > int(max_images):
+            _kw["image_names"] = names[: int(max_images)]
     pycolmap.undistort_images(output_path=str(work), input_path=str(model_dir),
                               image_path=str(image_dir), **_kw)
     return str(work)

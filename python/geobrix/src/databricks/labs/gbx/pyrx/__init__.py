@@ -9,6 +9,11 @@ one-line upgrade/downgrade:
 """
 
 from databricks.labs.gbx.pyrx._env import assert_rasterio_available, configure_gdal_env
+from databricks.labs.gbx.pyrx.checkpoint import (
+    Manifest,
+    checkpoint_skip,
+    input_signature,
+)
 from databricks.labs.gbx.pyrx.mvs import (
     dense_fuse,
     dense_mvs_pool,
@@ -24,11 +29,14 @@ configure_gdal_env()
 
 __all__ = [
     "assert_rasterio_available",
+    "checkpoint_skip",
     "configure_gdal_env",
     "dense_fuse",
     "dense_mvs_pool",
     "dense_patch_match",
     "dense_undistort",
     "gpu_infra",
+    "input_signature",
+    "Manifest",
     "recommend_dense_allocation",
 ]

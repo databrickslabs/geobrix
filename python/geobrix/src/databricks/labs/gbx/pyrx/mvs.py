@@ -76,10 +76,14 @@ def recommend_dense_allocation(cluster_sizes, *, dense_max_image_size=None,
         ids = [str(gpu + k) for k in range(gpus_per_task) if gpu + k < n_gpu]
         slots.append(",".join(ids))
         gpu += gpus_per_task
+    # Host patch-match cache must fit node RAM — the COLMAP default (32GB) OOM-kills small
+    # GPU nodes with a SIGABRT (e.g. a 16GB g4dn/T4). Give each concurrent task ~50% of its
+    # RAM share, capped to [2, per_task_host_gb].
+    cache_size_gb = round(max(2.0, min(per_task_host_gb, (ram_avail_gb / max(1, concurrency)) * 0.5)), 1)
     reason = (f"{n_clusters} clusters, {n_gpu} GPUs, ~{ram_avail_gb:.0f}GB RAM "
-              f"({per_task_host_gb:.0f}GB/task) -> {concurrency} concurrent x {gpus_per_task} GPU(s)")
+              f"-> {concurrency} concurrent x {gpus_per_task} GPU(s), cache {cache_size_gb}GB/task")
     return {"concurrency": concurrency, "gpus_per_task": gpus_per_task,
-            "gpu_index_per_slot": slots, "cache_size_gb": per_task_host_gb, "reason": reason}
+            "gpu_index_per_slot": slots, "cache_size_gb": cache_size_gb, "reason": reason}
 
 
 def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1):
@@ -89,7 +93,8 @@ def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1
         runner = lambda spec, gpu_index: dense_patch_match(  # noqa: E731
             spec["work_dir"], gpu_index=gpu_index, max_image_size=spec.get("max_image_size"),
             geom_consistency=spec.get("geom_consistency", True),
-            num_iterations=spec.get("num_iterations"), window_step=spec.get("window_step"))
+            num_iterations=spec.get("num_iterations"), window_step=spec.get("window_step"),
+            cache_size_gb=spec.get("cache_size_gb"))
     if allocation is None:
         allocation = recommend_dense_allocation([s.get("n_images", 1) for s in cluster_specs])
     slots = allocation["gpu_index_per_slot"]
@@ -170,13 +175,19 @@ def dense_undistort(sparse_dir, image_dir, work_dir, *, num_src_images=None, max
 
 
 def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None,
-                      geom_consistency=True, num_iterations=None, window_step=None):
+                      geom_consistency=True, num_iterations=None, window_step=None,
+                      cache_size_gb=None):
     """GPU: patch-match stereo on a prepared dense workspace. gpu_index pins the GPU(s).
 
     Speed knobs (quality tradeoff): geom_consistency=False skips the second (geometric)
     pass (~2x faster); lower num_iterations / higher window_step cut the sweep cost.
     With dense_undistort(num_src_images=...) + a small max_image_size these make a dev
     reconstruction fast.
+
+    cache_size_gb caps COLMAP's host-side patch-match cache (PatchMatchOptions.cache_size,
+    GB). It MUST stay below the node's host RAM: the default is 32 GB, which OOM-kills the
+    Python process (SIGABRT) on small GPU nodes (e.g. a 16 GB g4dn). recommend_dense_allocation
+    derives a RAM-aware value; pass it through so patch_match never over-allocates.
     """
     import pycolmap
     pm = pycolmap.PatchMatchOptions()
@@ -188,6 +199,8 @@ def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None,
         pm.num_iterations = int(num_iterations)
     if window_step:
         pm.window_step = int(window_step)
+    if cache_size_gb:
+        pm.cache_size = float(cache_size_gb)
     pycolmap.patch_match_stereo(str(work_dir), options=pm)
     return str(work_dir)
 

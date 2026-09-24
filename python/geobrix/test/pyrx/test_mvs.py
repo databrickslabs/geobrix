@@ -112,3 +112,10 @@ def test_resolve_model_dir_numbered(tmp_path):
 def test_resolve_model_dir_flat(tmp_path):
     (tmp_path / "cameras.bin").write_bytes(b"x")
     assert _resolve_model_dir(tmp_path) == tmp_path
+
+
+def test_pyrx_exports_mvs():
+    from databricks.labs.gbx import pyrx
+    for n in ["gpu_infra", "recommend_dense_allocation", "dense_mvs_pool",
+              "dense_undistort", "dense_patch_match", "dense_fuse"]:
+        assert hasattr(pyrx, n), f"pyrx missing export: {n}"

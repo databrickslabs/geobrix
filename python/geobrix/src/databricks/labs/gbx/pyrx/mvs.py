@@ -2,6 +2,7 @@
 from __future__ import annotations
 import subprocess
 import threading
+from pathlib import Path
 
 
 def _run(args: list[str], timeout: int = 60) -> str:
@@ -123,8 +124,9 @@ def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1
 
 def _resolve_model_dir(sparse_dir):
     """Pick the COLMAP model dir: sparse_dir itself if it holds cameras.bin/.txt,
-    else the largest numbered subdir (sparse/0, sparse/1, ...) that does."""
-    from pathlib import Path
+    else the largest reconstruction among numbered subdirs (sparse/0, sparse/1, ...),
+    where 'largest' means greatest images.bin size — COLMAP may emit several models
+    and we want the biggest reconstruction, not the highest-numbered dir."""
     sp = Path(sparse_dir)
     if (sp / "cameras.bin").exists() or (sp / "cameras.txt").exists():
         return sp
@@ -139,7 +141,6 @@ def _resolve_model_dir(sparse_dir):
 def dense_undistort(sparse_dir, image_dir, work_dir):
     """CPU: undistort a cluster's images against its sparse model into a dense workspace."""
     import pycolmap
-    from pathlib import Path
     work = Path(work_dir); work.mkdir(parents=True, exist_ok=True)
     model_dir = _resolve_model_dir(sparse_dir)
     pycolmap.undistort_images(output_path=str(work), input_path=str(model_dir), image_path=str(image_dir))
@@ -160,7 +161,6 @@ def dense_patch_match(work_dir, *, gpu_index="-1", max_image_size=None):
 def dense_fuse(work_dir, out_ply):
     """CPU-side: fuse depth maps into a colored dense point cloud (binary PLY)."""
     import pycolmap
-    from pathlib import Path
     pycolmap.stereo_fusion(output_path=str(out_ply), workspace_path=str(work_dir), output_type="PLY")
     if not Path(out_ply).exists():
         raise RuntimeError(f"dense_fuse: stereo_fusion produced no PLY at {out_ply}")

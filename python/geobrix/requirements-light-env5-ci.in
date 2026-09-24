@@ -71,7 +71,7 @@ pyproj==3.7.2
 mapbox-vector-tile==2.1.0
 
 # --- discrete global grids: raster->H3/quadbin aggregation ---
-h3==4.4.2
+h3==4.5.0
 quadbin==0.2.2
 
 # --- contour (scikit-image) + viewshed (xarray-spatial) ---

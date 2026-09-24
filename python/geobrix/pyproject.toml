@@ -72,7 +72,7 @@ light-base = [
     "scipy>=1.11.0",
     "numexpr>=2.8.0",
     "rio-cogeo>=7.0,<8",
-    "h3>=4.1,<5",
+    "h3>=4.5.0,<5",
     "quadbin>=0.2,<0.3",
     # Protomaps PMTiles archive writer/reader (pure-Python) for the pmtiles_gbx
     # tiled-output backend. Writer needs ascending tileid; Reader used in tests.

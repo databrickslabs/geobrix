@@ -55,7 +55,7 @@ netcdf4==1.7.2
 pdal==3.5.3
 rio-tiler==9.0.6
 rio-cogeo==7.0.2
-h3==4.4.2
+h3==4.5.0
 quadbin==0.2.2
 pmtiles==3.7.0
 pyogrio==0.12.1

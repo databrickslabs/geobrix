@@ -21,7 +21,7 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
-    TimestampType,
+    TimestampNTZType,
 )
 
 from databricks.labs.gbx.ds import _listing
@@ -50,7 +50,7 @@ LIDAR_META_SCHEMA = StructType(
         StructField("density", DoubleType(), True),
         StructField("version", StringType(), True),
         StructField("size", LongType(), True),
-        StructField("modificationTime", TimestampType(), True),
+        StructField("modificationTime", TimestampNTZType(), True),
     ]
 )
 

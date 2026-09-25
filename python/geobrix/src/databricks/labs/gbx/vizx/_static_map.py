@@ -463,7 +463,9 @@ def plot_static(
             try:
                 import contextily as cx
 
-                source = basemap_source or cx.providers.CartoDB.Positron
+                # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
+                # pass basemap_source=... to use CartoDB/another provider.
+                source = basemap_source or cx.providers.OpenStreetMap.Mapnik
                 cx.add_basemap(ax, source=source, crs="EPSG:3857")
             except Exception as exc:  # noqa: BLE001
                 warnings.warn(
@@ -544,7 +546,9 @@ def plot_static(
         try:
             import contextily as cx
 
-            source = basemap_source or cx.providers.CartoDB.Positron
+            # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
+            # pass basemap_source=... to use CartoDB/another provider.
+            source = basemap_source or cx.providers.OpenStreetMap.Mapnik
             cx.add_basemap(ax, source=source, crs=plot_gdf.crs)
         except Exception as exc:  # noqa: BLE001 — offline/no-egress/missing -> fallback
             warnings.warn(

@@ -113,7 +113,9 @@ def _render_cog(
         try:
             import contextily as cx
 
-            source = basemap_source or cx.providers.CartoDB.Positron
+            # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
+            # pass basemap_source=... to use CartoDB/another provider.
+            source = basemap_source or cx.providers.OpenStreetMap.Mapnik
             cx.add_basemap(ax, source=source, crs=crs, zorder=1)
         except Exception as exc:  # noqa: BLE001 — offline/no-egress -> warn + skip
             warnings.warn(
@@ -221,7 +223,9 @@ def plot_tile(
         try:
             import contextily as cx
 
-            source = basemap_source or cx.providers.CartoDB.Positron
+            # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
+            # pass basemap_source=... to use CartoDB/another provider.
+            source = basemap_source or cx.providers.OpenStreetMap.Mapnik
             cx.add_basemap(ax, source=source, crs=crs, zorder=1)
         except Exception as exc:  # noqa: BLE001 — offline/no-egress -> warn + skip
             warnings.warn(

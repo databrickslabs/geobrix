@@ -69,7 +69,11 @@ light-base = [
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "pyarrow>=11.0.0",
-    "scipy>=1.11.0",
+    # Cap <2 to guard against a future scipy 2.x major at resolve time (no 2.x
+    # exists yet — a no-op today, like the pyproj<4 / rio-tiler<9.3 pins). scipy is
+    # floor-only elsewhere and floats to latest on the dev-container / transitive
+    # path, so bound it like the other runtime-sensitive deps rather than leave it open.
+    "scipy>=1.11.0,<2",
     "numexpr>=2.8.0",
     "rio-cogeo>=7.0,<8",
     "h3>=4.1,<5",

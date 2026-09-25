@@ -1,14 +1,16 @@
 # Orthomosaic Photogrammetry Example Series
 
-CPU/sparse SfM on Serverless environment 5 — produces a georeferenced RGB orthomosaic
-GeoTIFF (+ COG + PMTiles) from a drone image dataset.
+Drone imagery → georeferenced RGB orthomosaic (+ COG + PMTiles). Sparse SfM runs on
+Serverless environment 5 (CPU); an optional dense MVS pass (`01b`) runs on the Serverless
+GPU AI Runtime.
 
 ## Chain
 
 | Notebook | Input | Output | Purpose |
 |---|---|---|---|
 | `config_nb` | — | functions, config | Shared imports, parameters, SfM helpers |
-| `01a_sfm_orthomosaic` | GitHub JPEGs | `orthomosaic.tif` | Download → exif_gbx → QC → SfM → ortho |
+| `01a_sfm_orthomosaic` | GitHub JPEGs | `orthomosaic.tif` | Download → exif_gbx → QC → sparse SfM → ortho |
+| `01b_sfm_orthomosaic_gpu` (optional) | `01a` sparse model | `orthomosaic_dense.tif`, `dsm_dense.tif`, `dense.laz` | GPU dense MVS: patch_match_stereo → fusion → georef |
 | `02_publish` | `orthomosaic.tif` | `orthomosaic_corrected.tif`, `orthomosaic_cog.tif`, `orthomosaic.pmtiles` | Publish: color correction → COG (`cog_gbx`) → PMTiles (`gbx_rst_xyzpyramid` + `pmtiles_gbx`) |
 | `monitor` | `output_dir/sparse/` | — | Optional live SfM progress watcher |
 
@@ -42,17 +44,18 @@ The wheel is fetched from:
 
 Adjust `MAX_ORTHO_WORKERS` and `GSD_CM` (config) to trade speed against resolution.
 
-## Sparse SfM — Phase 1 caveat
+## Sparse vs dense reconstruction
 
-This series uses **sparse SfM only** (pycolmap `incremental_mapping`): features, matches,
-and camera poses are recovered but no dense point cloud or mesh is computed.  The
-orthomosaic is assembled by back-projecting each registered JPEG onto the estimated ground
-plane and blending overlapping contributions.
+`01a` runs **sparse SfM** (pycolmap `incremental_mapping`): features, matches, and camera
+poses are recovered, and the orthomosaic is assembled by back-projecting each registered
+JPEG onto the estimated ground plane and blending overlapping contributions.
 
-Dense reconstruction (MVS depth maps → textured mesh → true-ortho) is **Phase 2** and
-requires GPU compute (CUDA-enabled classic cluster).  The sparse Phase 1 ortho is suitable
-for GSD estimation, visual inspection, and georeferenced tile serving; Phase 2 adds
-metric accuracy for measurement workflows.
+`01b` (optional) adds **dense MVS** — COLMAP `patch_match_stereo` + stereo fusion on the
+**Serverless GPU AI Runtime** (`pycolmap-cuda12`, CUDA 12), scheduled across the node's
+GPUs by `dense_mvs_pool` — producing a dense orthomosaic, DSM, and LAZ point cloud
+(per-cluster and merged). `02_publish` uses the dense orthomosaic when present, else the
+sparse one. The sparse ortho suits GSD estimation, visual inspection, and tile serving;
+the dense pass adds fidelity for measurement workflows.
 
 ## Group-key seam
 

@@ -7,15 +7,17 @@ sidebar_label: Orthomosaic
 # Orthomosaic Photogrammetry — Drone Survey to Georeferenced Map
 
 A notebook series that takes a **raw drone image dataset** end-to-end through
-EXIF/GPS telemetry extraction, quality screening, sparse Structure-from-Motion (SfM)
+EXIF/GPS telemetry extraction, quality screening, Structure-from-Motion (SfM)
 reconstruction, and georeferenced orthomosaic production — from individual JPEGs to a
-cloud-optimised GeoTIFF ready for tile serving.
+cloud-optimised GeoTIFF ready for tile serving. Sparse reconstruction runs on CPU; an
+optional dense pass runs on GPU.
 
 The pipeline reads EXIF metadata and GPS telemetry per-image with the GeoBrix `exif_gbx`
 reader, computes per-image GSD and (optionally) sharpness metrics, then runs incremental
-SfM with `pycolmap` on a **Serverless environment 5 (CPU)** cluster. The orthomosaic
-output is written as a GeoTIFF, converted to a COG with the `cog_gbx` writer, and packaged as
-a PMTiles archive for interactive map preview.
+SfM with `pycolmap` on a **Serverless environment 5 (CPU)** cluster (`01a`). An optional
+GPU notebook (`01b`) adds dense MVS for a higher-fidelity orthomosaic. The orthomosaic is
+written as a GeoTIFF, converted to a COG with the `cog_gbx` writer, and packaged as a
+PMTiles archive for interactive map preview.
 
 :::tip View on GitHub
 **[notebooks/examples/orthomosaic](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/orthomosaic)** — download the folder and import the numbered notebooks into your Databricks workspace to run.
@@ -31,10 +33,12 @@ geobrix[light_env5,photogrammetry,vizx] @ file:///Volumes/.../geobrix-0.5.2-py3-
 The `photogrammetry` extra brings `pycolmap >= 4.0.0`, `rasterio`, `rio-cogeo`, and the
 PMTiles toolchain. No JAR or GDAL init script is needed.
 
-**Phase 1 = sparse SfM (CPU).** Dense reconstruction (MVS depth maps → textured mesh →
-true-ortho) requires GPU compute (CUDA-enabled classic cluster) and is a later phase. The
-Phase 1 sparse ortho is suitable for GSD estimation, visual inspection, and georeferenced
-tile serving.
+**`01a` runs sparse SfM on CPU.** An optional dense pass (`01b`) runs COLMAP
+`patch_match_stereo` on the **Serverless GPU AI Runtime** (`pycolmap-cuda12`, CUDA 12),
+producing a dense orthomosaic, DSM, and LAZ point cloud. The sparse ortho alone is
+suitable for GSD estimation, visual inspection, and georeferenced tile serving; the dense
+pass adds fidelity for measurement workflows. `02_publish` uses whichever orthomosaic is
+present (dense if `01b` ran, else sparse).
 :::
 
 ---
@@ -67,6 +71,17 @@ The core pipeline:
 7. **Orthomosaic projection** — each registered image is back-projected onto the estimated
    ground plane; contributions are blended by overlap count into a georeferenced RGB
    GeoTIFF (`orthomosaic.tif`).
+
+### `01b_sfm_orthomosaic_gpu` (optional) — dense MVS on GPU
+
+An optional GPU notebook that upgrades the sparse result to a **dense** reconstruction. It
+loads the persisted sparse model from `01a`, undistorts each GPS cluster, and runs COLMAP
+`patch_match_stereo` across the node's GPUs via `dense_mvs_pool` (a driver-side GPU-slot
+scheduler sized by `recommend_dense_allocation`), then fuses the depth maps and
+georeferences the result into a dense RGB orthomosaic, DSM, and LAZ point cloud
+(per-cluster and merged). Runs on the **Serverless GPU AI Runtime** (environment 5,
+`pycolmap-cuda12`, CUDA 12); `01a` is the CPU peer that produces the sparse model it
+consumes. `02_publish` automatically uses the dense orthomosaic when present.
 
 ### `02_publish` — color correction → COG → PMTiles
 
@@ -133,7 +148,9 @@ Drone JPEGs (local or Volume)
         │
         ▼  orthomosaic projection (back-project + blend) — orthomosaic.tif (GeoTIFF, EPSG:4326)
         │
-        ▼  cog_gbx writer — orthomosaic_cog.tif (COG layout)
+        ▼  (optional, GPU · 01b) dense MVS — patch_match_stereo + fusion → dense ortho / DSM / LAZ
+        │
+        ▼  cog_gbx writer — orthomosaic_cog.tif (COG layout)   [dense if present, else sparse]
         │
         ▼  pmtiles_gbx writer — orthomosaic.pmtiles (browser-ready)
 ```
@@ -149,11 +166,11 @@ Drone JPEGs (local or Volume)
   distributed — all matched pairs are collected to the driver before reconstruction. For
   large datasets (thousands of images), collect only the matched pair list, not the image
   bytes.
-- **Phase 1 sparse SfM vs. Phase 2 dense**. Sparse SfM recovers camera poses and a thin
-  point cloud via feature matching only. The orthomosaic is assembled by back-projecting
-  each registered image onto a planar ground estimate, not a true surface model. For
-  sub-centimetre accuracy workflows, Phase 2 dense reconstruction (GPU cluster) will add
-  MVS depth maps and a textured mesh.
+- **Sparse vs. dense**. `01a` sparse SfM recovers camera poses and a thin point cloud via
+  feature matching only, and assembles the orthomosaic by back-projecting each registered
+  image onto a planar ground estimate — not a true surface model. For higher-fidelity
+  workflows, the optional `01b` dense pass adds MVS depth maps (`patch_match_stereo`) and
+  fused point clouds on the Serverless GPU AI Runtime, yielding a dense ortho, DSM, and LAZ.
 - **`exif_gbx` QC materialize cap**. In `qc` mode, each image is fully read into executor
   RAM. Images larger than the Serverless materialize cap (64 MiB) are skipped with a
   warning. Typical 12–24 MP JPEGs well within this limit; RAW or large TIFF sources may

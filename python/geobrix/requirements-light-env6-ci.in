@@ -18,7 +18,7 @@
 # (requirements-dev-container.in) where applicable; bump in lockstep and regenerate.
 
 # --- build backend (for `python -m build` lightweight wheel) ---
-build==1.4.4
+build==1.6.1
 setuptools==80.9.0
 wheel==0.45.1
 
@@ -60,7 +60,7 @@ rio-cogeo==7.0.2
 pmtiles==3.7.0
 
 # --- OGR-free vector reading (light *_gbx vector DataSources) ---
-pyogrio==0.12.1
+pyogrio==0.13.0
 pyproj==3.7.2
 
 # --- MVT (light pyvx) decode oracle used in test/pyvx/ ---
@@ -69,7 +69,7 @@ pyproj==3.7.2
 mapbox-vector-tile==2.2.0
 
 # --- discrete global grids: raster->H3/quadbin aggregation ---
-h3==4.4.2
+h3==4.5.0
 quadbin==0.2.2
 
 # --- contour (scikit-image) + viewshed (xarray-spatial) ---

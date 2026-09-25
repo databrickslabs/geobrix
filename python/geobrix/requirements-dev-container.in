@@ -20,7 +20,7 @@ pip==25.0.1
 setuptools==74.0.0
 wheel==0.45.1
 cython==3.0.12
-build==1.4.4
+build==1.6.1
 
 # --- DBR-aligned runtime / numeric stack ---
 # numpy / pandas / pyarrow pinned to DBR 17.3 LTS installed versions:
@@ -55,10 +55,10 @@ netcdf4==1.7.2
 pdal==3.5.3
 rio-tiler==9.0.6
 rio-cogeo==7.0.2
-h3==4.4.2
+h3==4.5.0
 quadbin==0.2.2
 pmtiles==3.7.0
-pyogrio==0.12.1
+pyogrio==0.13.0
 pyproj==3.7.2
 contextily==1.6.2
 # vizx interactive maps: mapclassify (the [vizx] extra).

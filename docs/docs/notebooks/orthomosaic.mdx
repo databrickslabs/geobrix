@@ -14,7 +14,7 @@ cloud-optimised GeoTIFF ready for tile serving.
 The pipeline reads EXIF metadata and GPS telemetry per-image with the GeoBrix `exif_gbx`
 reader, computes per-image GSD and (optionally) sharpness metrics, then runs incremental
 SfM with `pycolmap` on a **Serverless environment 5 (CPU)** cluster. The orthomosaic
-output is written as a GeoTIFF, converted to a COG with `rst_cog_convert`, and packaged as
+output is written as a GeoTIFF, converted to a COG with the `cog_gbx` writer, and packaged as
 a PMTiles archive for interactive map preview.
 
 :::tip View on GitHub
@@ -68,24 +68,23 @@ The core pipeline:
    ground plane; contributions are blended by overlap count into a georeferenced RGB
    GeoTIFF (`orthomosaic.tif`).
 
-### `02_color_correction` — per-channel percentile stretch
+### `02_publish` — color correction → COG → PMTiles
 
-Reads `orthomosaic.tif` and applies a per-channel percentile stretch (configurable
-low/high clip percentiles) to produce `orthomosaic_corrected.tif` with balanced contrast.
+A single publish notebook that turns `orthomosaic.tif` into web-ready deliverables in
+three checkpointed stages:
 
-### `03_cog` — cloud-optimised layout
+1. **Color correction** — a per-channel percentile stretch (configurable low/high clip
+   percentiles) produces `orthomosaic_corrected.tif` with balanced contrast, persisted so
+   the served COG and PMTiles carry it.
+2. **Cloud-optimised GeoTIFF** — the `cog_gbx` writer converts the corrected raster to a
+   COG with internal tiling and overview levels, producing `orthomosaic_cog.tif` for
+   efficient range-request reads downstream.
+3. **PMTiles** — the COG is warped onto the WebMercatorQuad grid with `gbx_rst_xyzpyramid`
+   and encoded into a self-contained `orthomosaic.pmtiles` archive by the `pmtiles_gbx`
+   writer, previewable in a browser (PMTiles + MapLibre GL or Leaflet) with no tile server.
 
-Converts `orthomosaic_corrected.tif` to a Cloud-Optimised GeoTIFF with internal tiling
-and overview levels via `rst_cog_convert`, producing `orthomosaic_cog.tif`. The COG
-layout enables efficient range-request reads downstream and is the input to the PMTiles
-step.
-
-### `04_pmtiles` — PMTiles for browser preview
-
-Reads `orthomosaic_cog.tif` and encodes it as a self-contained PMTiles archive
-(`orthomosaic.pmtiles`) using the GeoBrix PMTiles writer. The resulting archive can be
-previewed interactively in a browser tab (PMTiles + MapLibre GL or Leaflet) with no tile
-server.
+Each stage is checkpointed per group; set `FORCE_CORRECTED` / `FORCE_COG` /
+`FORCE_PMTILES` in `config_nb` to recompute a stage.
 
 ### `monitor` (optional) — live SfM progress
 
@@ -103,9 +102,9 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
 - **`pyrx.gsd_from_telemetry`** — `gsd_from_telemetry(focal_length_mm, altitude, image_width,
   sensor_width_mm)` returns ground sampling distance in cm/pixel. Used to confirm the dataset
   meets the target GSD before reconstruction.
-- **`rst_cog_convert`** — `rst_cog_convert(tile)` converts a materialized raster tile to
-  COG layout (internal tiling + overviews) in a single Spark expression. See
-  [RasterX functions](../api/raster-functions).
+- **`cog_gbx` writer** — converts the corrected orthomosaic to Cloud-Optimised GeoTIFF
+  layout (internal tiling + overviews) via GDAL's `driver="COG"` path. See
+  [COG writer](../writers/cog).
 - **`pmtiles_gbx` writer** — encodes the COG orthomosaic into a PMTiles archive for
   browser-based preview. See [PMTiles writer](../writers/pmtiles).
 - **`gbx.vizx` helpers** — `plot_raster` renders the orthomosaic tile in the notebook
@@ -134,7 +133,7 @@ Drone JPEGs (local or Volume)
         │
         ▼  orthomosaic projection (back-project + blend) — orthomosaic.tif (GeoTIFF, EPSG:4326)
         │
-        ▼  rst_cog_convert — orthomosaic_cog.tif (COG layout)
+        ▼  cog_gbx writer — orthomosaic_cog.tif (COG layout)
         │
         ▼  pmtiles_gbx writer — orthomosaic.pmtiles (browser-ready)
 ```

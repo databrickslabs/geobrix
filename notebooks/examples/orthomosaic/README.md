@@ -9,9 +9,7 @@ GeoTIFF (+ COG + PMTiles) from a drone image dataset.
 |---|---|---|---|
 | `config_nb` | — | functions, config | Shared imports, parameters, SfM helpers |
 | `01a_sfm_orthomosaic` | GitHub JPEGs | `orthomosaic.tif` | Download → exif_gbx → QC → SfM → ortho |
-| `02_color_correction` | `orthomosaic.tif` | `orthomosaic_corrected.tif` | Per-channel percentile stretch |
-| `03_cog` | `orthomosaic_corrected.tif` | `orthomosaic_cog.tif` | COG layout via `rst_cog_convert` |
-| `04_pmtiles` | `orthomosaic_cog.tif` | `orthomosaic.pmtiles` | PMTiles for interactive map serving |
+| `02_publish` | `orthomosaic.tif` | `orthomosaic_corrected.tif`, `orthomosaic_cog.tif`, `orthomosaic.pmtiles` | Publish: color correction → COG (`cog_gbx`) → PMTiles (`gbx_rst_xyzpyramid` + `pmtiles_gbx`) |
 | `monitor` | `output_dir/sparse/` | — | Optional live SfM progress watcher |
 
 ## Dependencies

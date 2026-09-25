@@ -10,20 +10,25 @@ Mirrors the heavyweight rasterx ``RST_TileXYZ`` / ``RST_XYZPyramid`` semantics:
   * ``pyramid`` enumerates every intersecting (z, x, y) tile across a zoom range
     and renders each, returning a list of ``{"z","x","y","bytes"}`` dicts.
 
-rio-tiler handles on-the-fly reprojection: the source raster may be in any CRS;
-``Reader.tile`` warps to the EPSG:3857 tile grid internally.
+Primary backend: rio-tiler (lazy import, checked at call time via
+``_riotiler_available``).  Fallback backend: rasterio warp + GDAL CreateCopy
+(always available; handles the Databricks Serverless env where rio-tiler 9.3.0
+re-resolves and fails to import under py3.12).  Public API is identical for
+both backends.
 """
 
 import morecantile
 import numpy as np
 from rasterio.warp import transform_bounds
 
-# NOTE: rio_tiler is imported LAZILY (inside transparent_png / render_tile), not at
-# module top. rio-tiler 9.x defines TypedDict(extra_items=...) (PEP 728), which fails
-# to import under Databricks Serverless %pip (its immutable constraints hold
-# typing_extensions back). Keeping the import lazy means `import pyrx` — and every
-# rst_* function that does NOT use XYZ tiling — works on Serverless; only rst_tilexyz
-# / rst_xyzpyramid require rio-tiler at call time. See pyproject [light-base] rio-tiler pin.
+# NOTE: rio_tiler is imported LAZILY (inside _transparent_png_riotiler /
+# _render_tile_riotiler), not at module top. rio-tiler 9.x defines
+# TypedDict(extra_items=...) (PEP 728), which fails to import under Databricks
+# Serverless %pip (its immutable constraints hold typing_extensions back).
+# Keeping the import lazy means `import pyrx` — and every rst_* function that
+# does NOT use XYZ tiling — works on Serverless; only rst_tilexyz /
+# rst_xyzpyramid require a working backend at call time.  See pyproject
+# [light-base] rio-tiler pin.
 
 # --- constants (mirror heavyweight) -----------------------------------------
 MAX_ZOOM = 20
@@ -51,17 +56,117 @@ _TMS = morecantile.tms.get("WebMercatorQuad")
 
 # Sentinel: iter_pyramid uses this to distinguish "no rescale by design (mode=none)"
 # from "in_range not yet computed (None)". render_tile maps it back to None so that
-# no in_range parameter is passed to img.post_process.
+# no in_range parameter is passed to img.post_process / _to_uint8.
 _NO_RESCALE = object()
 
+# --- backend availability probe ---------------------------------------------
 
-def transparent_png(size: int) -> bytes:
-    """Return a fully transparent RGBA PNG of ``size`` x ``size`` (alpha=0)."""
+_RIOTILER_OK = None  # module-level cache; None = not yet checked
+
+
+def _riotiler_available() -> bool:
+    """True if rio-tiler imports cleanly (primary backend). Cached. Any import
+    failure — ImportError OR the 9.3.0 py3.12 TypedDict TypeError — selects the
+    rasterio fallback."""
+    global _RIOTILER_OK
+    if _RIOTILER_OK is None:
+        try:
+            import rio_tiler.io  # noqa: F401
+            import rio_tiler.models  # noqa: F401
+
+            _RIOTILER_OK = True
+        except Exception:
+            _RIOTILER_OK = False
+    return _RIOTILER_OK
+
+
+# --- rasterio fallback helpers ----------------------------------------------
+
+
+def _to_uint8(dst, in_range):
+    """Scale ``dst`` (nb, s, s) to uint8 per the resolved ``in_range``.
+
+    - ``in_range is None`` and dtype uint8 → pass through unchanged.
+    - ``in_range is None`` and integer dtype → linear map ``[0, dtype_max] → [0, 255]``
+      (matches "rescale=none" full-range-mapped / crushed behavior).
+    - ``in_range is None`` and float dtype → per-band data ``[min, max] → [0, 255]``.
+    - ``in_range`` list of ``(lo, hi)`` → per-band clip-linear map.
+    """
+    dtype = dst.dtype
+    if in_range is None:
+        if dtype == np.uint8:
+            return dst
+        nb = dst.shape[0]
+        out = np.zeros_like(dst, dtype="uint8")
+        for i in range(nb):
+            band = dst[i].astype("float64")
+            if np.issubdtype(dtype, np.integer):
+                lo, hi = 0.0, float(np.iinfo(dtype).max)
+            else:
+                lo = float(band.min())
+                hi = float(band.max())
+                if lo == hi:
+                    hi = lo + 1.0
+            out[i] = np.clip((band - lo) / (hi - lo) * 255, 0, 255).astype("uint8")
+        return out
+    # in_range is a list of (lo, hi) per band
+    nb = dst.shape[0]
+    out = np.zeros_like(dst, dtype="uint8")
+    for i in range(nb):
+        band = dst[i].astype("float64")
+        lo, hi = float(in_range[i][0]), float(in_range[i][1])
+        out[i] = np.clip((band - lo) / (hi - lo) * 255, 0, 255).astype("uint8")
+    return out
+
+
+def _encode(arr_u8, driver):
+    """Encode ``arr_u8`` (bands, height, width) uint8 to bytes via GDAL CreateCopy.
+
+    CreateCopy is the version-safe path for drivers that only support that mode
+    (e.g. JPEG, WEBP on some GDAL builds).
+    """
+    import rasterio.shutil as rasterio_shutil
+    from rasterio.io import MemoryFile
+
+    n = arr_u8.shape[0]
+    with MemoryFile() as src_m:
+        with src_m.open(
+            driver="GTiff",
+            width=arr_u8.shape[2],
+            height=arr_u8.shape[1],
+            count=n,
+            dtype="uint8",
+        ) as src:
+            src.write(arr_u8)
+        with src_m.open() as src_ds, MemoryFile(ext="." + driver.lower()) as dst_m:
+            rasterio_shutil.copy(src_ds, dst_m.name, driver=driver)
+            return dst_m.read()
+
+
+# --- transparent PNG (two backends) -----------------------------------------
+
+
+def _transparent_png_riotiler(size: int) -> bytes:
+    """Transparent RGBA PNG via rio-tiler (primary backend)."""
     from rio_tiler.models import ImageData  # lazy: see module-top note
 
     s = int(size)
     arr = np.zeros((4, s, s), dtype="uint8")
     return ImageData(arr).render(add_mask=False, img_format="PNG")
+
+
+def _transparent_png_rasterio(size: int) -> bytes:
+    """Transparent RGBA PNG via rasterio (fallback backend, no rio-tiler)."""
+    s = int(size)
+    arr = np.zeros((4, s, s), dtype="uint8")
+    return _encode(arr, "PNG")
+
+
+def transparent_png(size: int) -> bytes:
+    """Return a fully transparent RGBA PNG of ``size`` x ``size`` (alpha=0)."""
+    if _riotiler_available():
+        return _transparent_png_riotiler(size)
+    return _transparent_png_rasterio(size)
 
 
 def _validate(fmt: str, size: int, resampling: str) -> tuple:
@@ -145,6 +250,95 @@ def _resolve_in_range(ds, rescale):
     return out
 
 
+# --- render_tile (two backends) ---------------------------------------------
+
+
+def _render_tile_riotiler(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes:
+    """Render a single XYZ tile via rio-tiler (primary backend).
+
+    Receives already-validated args; does NOT re-validate. Returns
+    ``transparent_png(s)`` on out-of-extent or any hard failure.
+    """
+    from rio_tiler.errors import TileOutsideBounds  # lazy: see module-top note
+    from rio_tiler.io import Reader
+
+    try:
+        with Reader(None, dataset=ds) as cog:
+            img = cog.tile(
+                int(x), int(y), int(z), tilesize=s, resampling_method=resamp_name
+            )
+            if in_range is not None:
+                img = img.post_process(in_range=in_range)
+            out = img.render(img_format=fmt_u)
+        if not out:
+            return transparent_png(s)
+        return out
+    except TileOutsideBounds:
+        return transparent_png(s)
+    except Exception:
+        # Slippy-map servers need a non-null 200 body even on failure.
+        return transparent_png(s)
+
+
+def _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes:
+    """Render a single XYZ tile via rasterio warp (fallback backend, no rio-tiler).
+
+    Receives already-validated args; does NOT re-validate. Returns
+    ``transparent_png(s)`` on out-of-extent or any hard failure.
+    """
+    from rasterio.enums import Resampling
+    from rasterio.transform import from_bounds
+    from rasterio.warp import reproject
+
+    try:
+        tile = morecantile.Tile(int(x), int(y), int(z))
+        west, south, east, north = _TMS.xy_bounds(tile)  # EPSG:3857 metres
+        dst_transform = from_bounds(west, south, east, north, s, s)
+        nb = ds.count
+        # Coverage mask: reproject an all-valid sentinel band; 0 where no source
+        # pixel maps into this tile.
+        cov = np.zeros((1, s, s), dtype="uint8")
+        reproject(
+            source=np.full((1, ds.height, ds.width), 255, "uint8"),
+            destination=cov,
+            src_transform=ds.transform,
+            src_crs=ds.crs,
+            dst_transform=dst_transform,
+            dst_crs="EPSG:3857",
+            resampling=Resampling.nearest,
+        )
+        if int(cov.max()) == 0:
+            return transparent_png(s)  # out-of-extent: no source pixels map here
+        # Data: reproject in native dtype with the requested resampling.
+        dst = np.zeros((nb, s, s), dtype=ds.dtypes[0])
+        reproject(
+            source=ds.read(),
+            destination=dst,
+            src_transform=ds.transform,
+            src_crs=ds.crs,
+            dst_transform=dst_transform,
+            dst_crs="EPSG:3857",
+            resampling=Resampling[resamp_name],
+        )
+        u8 = _to_uint8(dst, in_range)
+        alpha = cov[0]
+        # PNG / WEBP: append coverage mask as alpha channel (add_mask=True parity).
+        # JPEG: colour bands only (no alpha in JPEG).
+        if fmt_u == "JPEG":
+            out_arr = u8[: min(nb, 3)]
+        elif nb == 1:
+            out_arr = np.stack([u8[0], alpha], axis=0)  # GA
+        elif nb == 3:
+            out_arr = np.concatenate([u8, alpha[np.newaxis]], axis=0)  # RGBA
+        else:
+            out_arr = u8  # nb == 4: already carries an alpha channel
+        driver = {"JPEG": "JPEG", "WEBP": "WEBP"}.get(fmt_u, "PNG")
+        return _encode(out_arr, driver)
+    except Exception:
+        # Slippy-map servers need a non-null 200 body even on failure.
+        return transparent_png(s)
+
+
 def render_tile(
     ds,
     z,
@@ -168,33 +362,20 @@ def render_tile(
     pair sets explicit bounds. ``in_range`` (internal) lets the pyramid path pass a
     precomputed per-band range so stats are read once, not per tile; when given it
     overrides ``rescale``.
-    """
-    from rio_tiler.errors import TileOutsideBounds  # lazy: see module-top note
-    from rio_tiler.io import Reader
 
+    Dispatches to ``_render_tile_riotiler`` (primary) or ``_render_tile_rasterio``
+    (fallback when rio-tiler is unavailable/broken on this executor).
+    """
     fmt_u, s, resamp_name = _validate(fmt, size, resampling)
     if in_range is None:
         in_range = _resolve_in_range(ds, rescale)  # may raise ValueError on bad rescale
     # _NO_RESCALE sentinel: iter_pyramid passes this to signal "rescale=none, no scaling".
-    # Map it back to None here so img.post_process is never called.
+    # Map it back to None here so neither post_process nor _to_uint8 sees it.
     if in_range is _NO_RESCALE:
         in_range = None
-    try:
-        with Reader(None, dataset=ds) as cog:
-            img = cog.tile(
-                int(x), int(y), int(z), tilesize=s, resampling_method=resamp_name
-            )
-            if in_range is not None:
-                img = img.post_process(in_range=in_range)
-            out = img.render(img_format=fmt_u)
-        if not out:
-            return transparent_png(s)
-        return out
-    except TileOutsideBounds:
-        return transparent_png(s)
-    except Exception:
-        # Slippy-map servers need a non-null 200 body even on failure.
-        return transparent_png(s)
+    if _riotiler_available():
+        return _render_tile_riotiler(ds, z, x, y, fmt_u, s, resamp_name, in_range)
+    return _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range)
 
 
 def _wgs84_bounds(ds) -> tuple:

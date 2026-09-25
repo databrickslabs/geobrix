@@ -69,6 +69,21 @@ exception — it uses rasterio's bundled-GDAL binary wheel, which is hash-pinned
 in `requirements-light-env6-ci.txt` like every other dependency (no native GDAL, no
 JAR).
 
+### Controlled dependency updates
+
+Version bumps are proposed automatically (Dependabot) but never land on the bump alone.
+Each is accepted only after its `uv pip compile --generate-hashes` lockfiles are
+regenerated across every install path we control — CI, the development container, and the
+notebook test harness — so the new sha256 for each wheel is recorded and re-verified before
+anything installs it. A bump that edits a version constraint without refreshing the hashed
+lockfile is rejected, keeping the two in lock-step.
+
+All of this resolution flows through a single controlled artifact mirror: `uv` and `pip`
+use it as their index, Maven and npm as their proxy. Neither a routine build nor a
+dependency update ever fetches from a public registry directly, so the mirror is the one
+place trust is anchored — and the `--generate-hashes` / `--require-hashes` chain above means
+even the mirror cannot serve same-version-but-different-bytes without failing closed.
+
 ### Pinned GDAL native + multi-layer trust chain
 
 As of v0.3.0, the GDAL native install path is **pre-built in CI and

@@ -265,6 +265,60 @@ def test_dispatch_transparent_png_routes_to_fallback(monkeypatch):
     assert arr[3].max() == 0
 
 
+# --- _render_tile_rasterio: NoData transparency -----------------------------
+
+
+def _make_rgb_nodata(width=64, height=64, epsg=4326, ulx=10.0, uly=50.0, res=0.03125):
+    """An RGB GTiff with nodata=0 and a zero-valued outer border ring.
+
+    The centre area has non-zero pixel values (data); the 1-pixel outer ring is 0
+    (nodata). After windowed-read + read_masks, the fallback backend must render
+    the border pixels as transparent (alpha==0) and the centre as opaque (alpha==255).
+    """
+    transform = from_origin(ulx, uly, res, res)
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=3,
+        dtype="uint8",
+        crs=f"EPSG:{epsg}",
+        transform=transform,
+        nodata=0,
+    )
+    data = np.full((height, width), 128, dtype="uint8")
+    # Outer border ring set to nodata value (0).
+    data[0, :] = 0
+    data[-1, :] = 0
+    data[:, 0] = 0
+    data[:, -1] = 0
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            for b in range(1, 4):
+                ds.write(data, b)
+        return mf.read()
+
+
+def test_render_tile_rasterio_nodata_border_transparent():
+    """NoData border pixels render transparent; data pixels render opaque."""
+    raster = _make_rgb_nodata()
+    mf, ds = _open(raster)
+    try:
+        z, x, y = _center_tile_zxy(ds)
+        out = xyz._render_tile_rasterio(ds, z, x, y, "PNG", 256, "bilinear", None)
+    finally:
+        ds.close()
+        mf.close()
+    assert out[:4] == b"\x89PNG"
+    arr = _decode(out)
+    assert arr.shape == (4, 256, 256)
+    alpha = arr[3]
+    # The reprojected tile must contain BOTH transparent (nodata border) and
+    # opaque (data interior) pixels — the border is not all-opaque any more.
+    assert alpha.min() == 0, "expected some transparent (nodata) pixels"
+    assert alpha.max() == 255, "expected some opaque (data) pixels"
+
+
 # --- cross-backend sanity (optional) ----------------------------------------
 
 

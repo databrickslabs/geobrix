@@ -283,59 +283,73 @@ def _render_tile_riotiler(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes
 def _render_tile_rasterio(ds, z, x, y, fmt_u, s, resamp_name, in_range) -> bytes:
     """Render a single XYZ tile via rasterio warp (fallback backend, no rio-tiler).
 
-    Receives already-validated args; does NOT re-validate. Returns
-    ``transparent_png(s)`` on out-of-extent or any hard failure.
+    Reads only the source window intersecting the tile (not the whole raster) and derives
+    alpha from the source validity mask, so NoData renders transparent — matching the
+    rio-tiler backend. Receives already-validated args. Any failure / no coverage →
+    ``transparent_png(s)``.
     """
     from rasterio.enums import Resampling
     from rasterio.transform import from_bounds
-    from rasterio.warp import reproject
+    from rasterio.warp import reproject, transform_bounds
+    from rasterio.windows import Window
+    from rasterio.windows import from_bounds as window_from_bounds
 
     try:
         tile = morecantile.Tile(int(x), int(y), int(z))
         west, south, east, north = _TMS.xy_bounds(tile)  # EPSG:3857 metres
         dst_transform = from_bounds(west, south, east, north, s, s)
         nb = ds.count
-        # Coverage mask: reproject an all-valid sentinel band; 0 where no source
-        # pixel maps into this tile.
-        cov = np.zeros((1, s, s), dtype="uint8")
-        reproject(
-            source=np.full((1, ds.height, ds.width), 255, "uint8"),
-            destination=cov,
-            src_transform=ds.transform,
-            src_crs=ds.crs,
-            dst_transform=dst_transform,
-            dst_crs="EPSG:3857",
-            resampling=Resampling.nearest,
-        )
-        if int(cov.max()) == 0:
-            return transparent_png(s)  # out-of-extent: no source pixels map here
-        # Data: reproject in native dtype with the requested resampling.
+        # Source window intersecting this tile (windowed read — not the full raster).
+        sw, ss, se, sn = transform_bounds("EPSG:3857", ds.crs, west, south, east, north)
+        win = window_from_bounds(sw, ss, se, sn, ds.transform)
+        # Round outward + a 1-px halo (resampling support), then clip to the raster.
+        col = max(0, int(np.floor(win.col_off)) - 1)
+        row = max(0, int(np.floor(win.row_off)) - 1)
+        wid = min(int(np.ceil(win.width)) + 2, ds.width - col)
+        hei = min(int(np.ceil(win.height)) + 2, ds.height - row)
+        if wid <= 0 or hei <= 0:
+            return transparent_png(s)  # tile misses the source
+        window = Window(col, row, wid, hei)
+        src = ds.read(window=window)  # (nb, hei, wid) — windowed
+        src_mask = ds.read_masks(window=window)  # 255 valid / 0 nodata, per band
+        src_transform = ds.window_transform(window)
         dst = np.zeros((nb, s, s), dtype=ds.dtypes[0])
         reproject(
-            source=ds.read(),
+            source=src,
             destination=dst,
-            src_transform=ds.transform,
+            src_transform=src_transform,
             src_crs=ds.crs,
             dst_transform=dst_transform,
             dst_crs="EPSG:3857",
             resampling=Resampling[resamp_name],
         )
+        # Alpha = reprojected validity mask (all-bands-valid = opaque; NoData -> 0).
+        valid = src_mask.min(axis=0).astype("uint8")[np.newaxis]  # (1, hei, wid)
+        alpha = np.zeros((1, s, s), dtype="uint8")
+        reproject(
+            source=valid,
+            destination=alpha,
+            src_transform=src_transform,
+            src_crs=ds.crs,
+            dst_transform=dst_transform,
+            dst_crs="EPSG:3857",
+            resampling=Resampling.nearest,
+        )
+        if int(alpha.max()) == 0:
+            return transparent_png(s)  # no valid source pixels here
         u8 = _to_uint8(dst, in_range)
-        alpha = cov[0]
-        # PNG / WEBP: append coverage mask as alpha channel (add_mask=True parity).
-        # JPEG: colour bands only (no alpha in JPEG).
+        a = alpha[0]
         if fmt_u == "JPEG":
             out_arr = u8[: min(nb, 3)]
         elif nb == 1:
-            out_arr = np.stack([u8[0], alpha], axis=0)  # GA
+            out_arr = np.stack([u8[0], a], axis=0)  # GA
         elif nb == 3:
-            out_arr = np.concatenate([u8, alpha[np.newaxis]], axis=0)  # RGBA
+            out_arr = np.concatenate([u8, a[np.newaxis]], axis=0)  # RGBA
         else:
-            out_arr = u8  # nb == 4: already carries an alpha channel
+            out_arr = u8  # already carries alpha
         driver = {"JPEG": "JPEG", "WEBP": "WEBP"}.get(fmt_u, "PNG")
         return _encode(out_arr, driver)
     except Exception:
-        # Slippy-map servers need a non-null 200 body even on failure.
         return transparent_png(s)
 
 

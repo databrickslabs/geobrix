@@ -119,8 +119,9 @@ def _plot_tiles_mosaic(
 
     # Decimate the merged array via MemoryFile + _decimated_read so the
     # transform is scaled correctly (reuses the tested decimation path).
-    from rasterio.crs import CRS
     from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.core.crs import resolve_crs
 
     bands, height, width = mosaic.shape
     dtype = mosaic.dtype.name
@@ -132,7 +133,7 @@ def _plot_tiles_mosaic(
             "height": height,
             "width": width,
             "dtype": dtype,
-            "crs": CRS.from_string(crs_str) if crs_str else None,
+            "crs": resolve_crs(crs_str) if crs_str else None,
             "transform": transform,
         }
         if nodata is not None:

@@ -859,12 +859,11 @@ def _overlay_h3_cells(ax, vrt_path, crs):
     import h3
     from matplotlib.patches import Polygon as MplPolygon
 
+    from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
     from databricks.labs.gbx.ds.raster import _parse_vrt_members, _read_gbx_member_tags
 
     reproj = None
-    if crs is not None and crs.to_epsg() != 4326:
-        from databricks.labs.gbx.core.crs import get_transformer
-
+    if crs is not None and authority_srid_of(crs) != 4326:
         reproj = get_transformer("EPSG:4326", crs)
 
     # Preserve the image (data-envelope) extent: hex outlines reach the full hex

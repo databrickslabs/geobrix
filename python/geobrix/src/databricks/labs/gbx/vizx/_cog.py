@@ -33,7 +33,7 @@ def _resolve_plot_crs(ds_crs, crs_override=None):
 
     if ds_crs is not None:
         try:
-            return crs_to_canonical(resolve_crs(ds_crs.to_wkt()))
+            return crs_to_canonical(ds_crs)
         except Exception:
             return crs_to_canonical(resolve_crs(str(ds_crs)))
     if crs_override is not None:

@@ -12,6 +12,7 @@ production edit were reverted:
 - test_binning_resolves_esri_srid: calls bin_points() with srid=54008; old
   CRS.from_epsg(54008) raises CRSError (EPSG 54008 does not exist).
 """
+
 import json
 
 import numpy as np
@@ -92,9 +93,9 @@ def test_summary_epsg_field_esri_aware(crs_str, expected_srid):
         with mf.open() as ds:
             info = json.loads(accessors.summary(ds))
     cs = info["coordinateSystem"]
-    assert cs["epsg"] == expected_srid, (
-        f"Expected coordinateSystem.epsg={expected_srid!r}, got {cs['epsg']!r}"
-    )
+    assert (
+        cs["epsg"] == expected_srid
+    ), f"Expected coordinateSystem.epsg={expected_srid!r}, got {cs['epsg']!r}"
 
 
 # ---------------------------------------------------------------------------

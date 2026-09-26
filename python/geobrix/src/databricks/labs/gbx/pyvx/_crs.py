@@ -576,14 +576,9 @@ def st_transformcrs(
     # Convert via the authority tuple when available (preserves the registry bounds); fall
     # back to from_wkt otherwise (area_of_use will be None -> skip).
     try:
-        import pyproj as _pyproj
+        from databricks.labs.gbx.core.crs import to_pyproj_crs
 
-        _auth = tgt.to_authority(confidence_threshold=100)
-        _tgt_pyproj = (
-            _pyproj.CRS.from_authority(*_auth)
-            if _auth
-            else _pyproj.CRS.from_wkt(tgt.to_wkt())
-        )
+        _tgt_pyproj = to_pyproj_crs(tgt)
     except Exception:
         _tgt_pyproj = tgt  # fallback: area_of_use absent -> skip
 

@@ -180,8 +180,9 @@ def _clip_geom_from_source(src_path):
         crs = ds.crs
         crs_str = None
         if crs is not None:
-            epsg = crs.to_epsg()
-            crs_str = f"EPSG:{epsg}" if epsg is not None else crs.to_wkt()
+            from databricks.labs.gbx.core.crs import crs_to_canonical
+
+            crs_str = crs_to_canonical(crs)
     poly = box(b.left, b.bottom, b.right, b.top)
     return poly.wkb, crs_str
 

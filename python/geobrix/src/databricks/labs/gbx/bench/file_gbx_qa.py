@@ -54,8 +54,9 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
 
     import numpy as np
     import rasterio
-    from rasterio.crs import CRS
     from rasterio.transform import from_bounds
+
+    from databricks.labs.gbx.core.crs import resolve_crs
 
     data = np.random.default_rng(42).random((1, px, px)).astype("float32")
     transform = from_bounds(-1.0, -1.0, 1.0, 1.0, px, px)
@@ -65,7 +66,7 @@ def _make_tiny_cog(out_path: str, px: int = 64) -> None:
         width=px,
         height=px,
         count=1,
-        crs=CRS.from_epsg(4326),
+        crs=resolve_crs(4326),
         transform=transform,
         compress="DEFLATE",
     )
@@ -294,7 +295,9 @@ def _build_raster_tile_df(spark, raster_path: str):
     with rasterio.open(raster_path) as ds:
         w, h = ds.width, ds.height
         crs = ds.crs
-        crs_str = f"EPSG:{crs.to_epsg()}" if (crs and crs.to_epsg()) else None
+        from databricks.labs.gbx.core.crs import crs_to_canonical
+
+        crs_str = crs_to_canonical(crs) if crs else None
 
     # Build a 1-row virtual tile struct pointing at the raster
     window_struct_type = StructType(

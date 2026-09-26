@@ -7003,9 +7003,10 @@ def _make_synthetic_geotiff(
     import io as _io
 
     import numpy as np
-    from rasterio.crs import CRS
     from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
+
+    from databricks.labs.gbx.core.crs import resolve_crs
 
     def _one_band(seed: float) -> "np.ndarray":
         arr = np.zeros((size, size), dtype=np.float32)
@@ -7033,7 +7034,7 @@ def _make_synthetic_geotiff(
 
     minx, miny, maxx, maxy = bounds
     transform = from_bounds(minx, miny, maxx, maxy, size, size)
-    crs = CRS.from_epsg(4326)
+    crs = resolve_crs(4326)
 
     buf = _io.BytesIO()
     with MemoryFile() as mf:

@@ -168,8 +168,10 @@ def _tile_extent_size_srid(ds) -> tuple:
     tile, so the two grids are pixel-comparable). ``srid`` falls back to 0 when the
     tile carries no EPSG (none of the corpus tiles do, but stay defensive).
     """
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
     left, bottom, right, top = ds.bounds
-    epsg = ds.crs.to_epsg() if ds.crs is not None else None
+    epsg = authority_srid_of(ds.crs)
     return (
         float(left),
         float(bottom),

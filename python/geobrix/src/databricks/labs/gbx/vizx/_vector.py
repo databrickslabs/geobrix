@@ -138,14 +138,9 @@ def grid_as_gdf(grid, srid=None):
     if int(srid) != 4326:
         from shapely.ops import transform
 
-        try:
-            import pyproj
-        except ImportError as exc:
-            raise ImportError(
-                "grid_as_gdf: pyproj is required for CRS reprojection. "
-                "Install with: pip install pyproj"
-            ) from exc
-        transformer = pyproj.Transformer.from_crs(int(srid), 4326, always_xy=True)
+        from databricks.labs.gbx.core.crs import get_transformer
+
+        transformer = get_transformer(int(srid), 4326)
         geom = transform(transformer.transform, geom)
 
     row = {"geometry": geom}

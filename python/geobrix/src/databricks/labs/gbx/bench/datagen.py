@@ -96,13 +96,15 @@ def make_tile_bytes(
         for bi in range(bands):
             data[bi][mask] = nodata
 
+    from databricks.labs.gbx.core.crs import resolve_crs
+
     profile = {
         "driver": "GTiff",
         "width": tile_px,
         "height": tile_px,
         "count": bands,
         "dtype": dtype,
-        "crs": rasterio.crs.CRS.from_epsg(srid),
+        "crs": resolve_crs(srid),
         "transform": transform,
         "nodata": nodata,
     }
@@ -813,12 +815,14 @@ def write_large_raster_streamed(
         lo, hi = _DTYPE_RANGE.get(dtype, (0, 255))
         return (lo + rng.random((n_bands, bh, bw)) * (hi - lo)).astype(dtype)
 
+    from databricks.labs.gbx.core.crs import resolve_crs
+
     common_profile: dict = dict(
         width=width,
         height=height,
         count=bands,
         dtype=dtype,
-        crs=rasterio.crs.CRS.from_epsg(srid),
+        crs=resolve_crs(srid),
         transform=transform,
     )
     if nodata_val is not None:

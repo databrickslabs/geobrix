@@ -65,7 +65,9 @@ def test_crs_epsg_raster_other():
 def test_crs_esri_raster():
     """ESRI:54008 MODIS raster -> srid() == 54008 (Task 4 fix); crs() == 'ESRI:54008'."""
     with _ds_from_file(_MODIS_TIF) as ds:
-        assert accessors.srid(ds) == 54008, "srid must return 54008 for ESRI:54008 (not None)"
+        assert (
+            accessors.srid(ds) == 54008
+        ), "srid must return 54008 for ESRI:54008 (not None)"
         crs_str = accessors.crs(ds)
         assert crs_str is not None, "crs() must not return None for ESRI:54008"
         assert "ESRI" in crs_str, f"Expected 'ESRI' in crs string, got: {crs_str!r}"

@@ -23,6 +23,32 @@ The lazy path is a **memory-safety mechanism**, not a performance optimization. 
 
 This cap governs **raster-tile materialization only**. Vector reads have a different memory profile — see the next section.
 
+## Driver-side memory budgets (Serverless GC vs AIR vs classic)
+
+The connect-aware cap above governs **per-task/worker** materialization — a worker cannot measure
+its own ~1 GB quota, so that decision is a fixed Serverless-vs-classic threshold. **Driver-side**
+operations that hold a whole dataset in memory (for example the `lidar_gbx` writer's `merge` /
+`singleFile` fold) are budgeted differently: they are sized to the node's **actual available RAM**,
+which varies enormously by compute:
+
+| Compute | Typical driver RAM | Merge budget |
+|---|---|---|
+| Serverless GC (CPU) | modest | proportional to its RAM |
+| Serverless AIR (GPU, e.g. A10 / H100 / 8×H100) | large | large — merges big clouds |
+| Classic (GPU or CPU) | driver-dependent | proportional to driver RAM |
+
+The budget is `(available RAM − reserve) / 2` (the `/2` covers the ~2× peak of a concat + encode;
+the reserve is larger on GPU/AIR nodes). It is read once on the driver via the host RAM/GPU probe.
+**Driver-only:** these budgets are never computed on a Spark worker — `/proc/meminfo` there reports
+the node's total RAM, not the task quota, so a worker-side call would over-budget and OOM; the
+budget authority raises if invoked from a task context.
+
+**Overriding.** Every budget-using reader/writer/function honors an explicit override with the
+precedence **option/arg → environment variable → computed default**. For the `lidar_gbx` merge the
+option is `mergeMaxMB` (MiB); the environment override is `GBX_LIDAR_MERGE_MAX_MB` / `GBX_MERGE_MAX_MB`.
+Raising a *worker_read* budget above the Serverless cap is at your own risk (OOM); driver-side
+overrides are safe (the driver has the RAM).
+
 ## Vector memory profile
 
 Vector reads are not governed by the raster connect-aware cap. The `vector_gbx` reader assigns **one Spark task per source file** and reads the entire file in a single pyogrio pass. For large files this can approach the ~1 GB Serverless per-task memory limit. Three mitigations address this:

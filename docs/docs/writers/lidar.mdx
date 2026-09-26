@@ -119,6 +119,10 @@ merge already-written parts after the fact with `merge`.
   validated and durably written — a failed or partial merge always leaves every
   part intact. Set `keepParts="true"` to keep parts alongside the merged file.
 
+The merge is sized by the **`driver_merge`** memory budget (the node's available RAM) — see
+[Serverless & Memory](../serverless-and-memory). Override it with `mergeMaxMB` (MiB) or the
+`GBX_LIDAR_MERGE_MAX_MB` environment variable.
+
 ## Options
 
 | Option | Default | Description |

@@ -175,10 +175,23 @@ def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> in
     merged bounds, write ONE .laz at tmp_path via the write_xyz(rgb)_laz path.
     Returns the merged point count. Driver-side (holds all points in RAM — gated
     by caller via _gate_merge / _gate_merge_paths).
+
+    When crs is None the CRS is inferred from the first input part's header so
+    the merged file always preserves the parts' projected CRS.
     """
     import laspy
 
     from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+
+    # Infer CRS from the first part when the caller did not supply one.
+    if crs is None and inputs:
+        try:
+            _parsed = laspy.read(inputs[0]).header.parse_crs()
+            if _parsed is not None:
+                _epsg = _parsed.to_epsg()
+                crs = _epsg if _epsg is not None else _parsed.to_wkt()
+        except Exception:  # noqa: BLE001
+            pass
 
     xs: list = []
     ys: list = []
@@ -240,7 +253,17 @@ class LidarGbxWriter(DataSourceWriter):
         self.name_col = roles["name_col"]
         self.path = to_local_path(options.get("path"))
         self.overwrite = overwrite
-        self.crs = options.get("crs")
+        # DataSource options are always strings; convert a numeric EPSG string
+        # to int so write_xyz(rgb)_laz routes to ProjCRS.from_epsg() rather
+        # than from_wkt(), which would fail silently for bare EPSG codes.
+        _crs_raw = options.get("crs")
+        if isinstance(_crs_raw, str):
+            try:
+                self.crs = int(_crs_raw)
+            except (ValueError, TypeError):
+                self.crs = _crs_raw  # WKT / authority string — pass through
+        else:
+            self.crs = _crs_raw
         self.single_file = str(options.get("singleFile", "false")).lower() == "true"
         self.keep_parts = str(options.get("keepParts", "false")).lower() == "true"
         self.file_name = options.get("fileName")
@@ -296,42 +319,63 @@ class LidarGbxWriter(DataSourceWriter):
             return self._write_single(iterator)
 
         os.makedirs(self.path, exist_ok=True)
-        xs: list = []
-        ys: list = []
-        zs: list = []
-        rs: list = []
-        gs: list = []
-        bs: list = []
-        stem: Optional[str] = None
+        # Group rows by their resolved stem within this partition.
+        # repartitionByRange is sampling-based and does NOT guarantee one
+        # (group,cluster) per partition, so multiple keys may arrive together.
+        # Bucketing by stem here gives deterministic per-key naming regardless
+        # of the partitioner.
+        buckets: dict = {}  # stem -> {xs, ys, zs, rs, gs, bs}
         for row in iterator:
-            if stem is None:
-                stem = self._stem(row)
-            xs.append(row["x"])
-            ys.append(row["y"])
-            zs.append(row["z"])
+            stem = self._stem(row)
+            if stem not in buckets:
+                buckets[stem] = {
+                    "xs": [],
+                    "ys": [],
+                    "zs": [],
+                    "rs": [],
+                    "gs": [],
+                    "bs": [],
+                }
+            b = buckets[stem]
+            b["xs"].append(row["x"])
+            b["ys"].append(row["y"])
+            b["zs"].append(row["z"])
             if self.has_rgb:
-                rs.append(row["r"])
-                gs.append(row["g"])
-                bs.append(row["b"])
-        if not xs:
+                b["rs"].append(row["r"])
+                b["gs"].append(row["g"])
+                b["bs"].append(row["b"])
+        if not buckets:
             return LidarCommitMessage(paths=[], frag_path="")
-        # local-temp -> shutil.copyfile (FUSE: laspy seeks the header).
-        tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
-        tmp.close()
-        written_tmp: Optional[str] = None
-        try:
-            written_tmp = self._encode_part(tmp.name, xs, ys, zs, rs, gs, bs)
-            ext = os.path.splitext(written_tmp)[1]  # .laz or .las fallback
-            out = os.path.join(self.path, f"{stem}{ext}")
-            shutil.copyfile(written_tmp, out)
-        finally:
-            for p in {tmp.name, written_tmp}:
-                if p and os.path.exists(p):
-                    try:
-                        os.unlink(p)
-                    except OSError:
-                        pass
-        return LidarCommitMessage(paths=[out])
+        # Write one .laz per distinct stem; local-temp -> shutil.copyfile (FUSE).
+        written_paths: list = []
+        for stem, b in buckets.items():
+            if not b["xs"]:
+                continue
+            tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
+            tmp.close()
+            written_tmp: Optional[str] = None
+            try:
+                written_tmp = self._encode_part(
+                    tmp.name,
+                    b["xs"],
+                    b["ys"],
+                    b["zs"],
+                    b["rs"],
+                    b["gs"],
+                    b["bs"],
+                )
+                ext = os.path.splitext(written_tmp)[1]  # .laz or .las fallback
+                out = os.path.join(self.path, f"{stem}{ext}")
+                shutil.copyfile(written_tmp, out)
+                written_paths.append(out)
+            finally:
+                for p in {tmp.name, written_tmp}:
+                    if p and os.path.exists(p):
+                        try:
+                            os.unlink(p)
+                        except OSError:
+                            pass
+        return LidarCommitMessage(paths=written_paths)
 
     # ------------------------------------------------------------------
     # singleFile mode: executor captures fragment, driver merges

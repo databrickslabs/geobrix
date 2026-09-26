@@ -379,6 +379,129 @@ def test_writer_merge_under_budget_succeeds(spark, tmp_path):
     assert back.count() == 30
 
 
+# ---------------------------------------------------------------------------
+# Finding 1 (Isaac): CRS preserved through merge when caller passes crs=None
+# ---------------------------------------------------------------------------
+
+
+def test_merge_preserves_crs_from_parts(spark, tmp_path):
+    """Parts written with EPSG:32611; merge with no crs= option must infer it
+    from the first part's header and tag the merged file identically.
+    TDD: verifies _merge_laz_parts CRS-inference path (Finding 1)."""
+    import glob as _g
+    import os as _os
+
+    import laspy
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+
+    out = str(tmp_path / "crs_merge")
+    rng = np.random.default_rng(42)
+    rows = [
+        {
+            "x": float(rng.uniform(300000, 400000)),
+            "y": float(rng.uniform(3600000, 3700000)),
+            "z": float(rng.uniform(0, 50)),
+        }
+        for _ in range(20)
+    ]
+    df = spark.createDataFrame(rows)
+    # Write 2 sharded parts WITH a known projected CRS (EPSG:32611, UTM 11N).
+    df.repartition(2).write.format("lidar_gbx").option("crs", "32611").mode(
+        "overwrite"
+    ).save(out)
+
+    # Post-hoc merge WITHOUT passing crs= — the writer must infer it from parts.
+    (
+        spark.createDataFrame([(1,)], ["_"])
+        .write.format("lidar_gbx")
+        .option("merge", "true")
+        .option("keepParts", "true")
+        .option("fileName", "merged")
+        .mode("append")
+        .save(out)
+    )
+
+    merged = _g.glob(_os.path.join(out, "merged.la*"))
+    assert len(merged) == 1, f"expected 1 merged file, got {len(merged)}"
+    parsed = laspy.read(merged[0]).header.parse_crs()
+    assert parsed is not None, "merged file lost its CRS (crs=None after merge)"
+    assert (
+        parsed.to_epsg() == 32611
+    ), f"expected EPSG:32611 on merged file but got {parsed.to_epsg()}"
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 (Isaac): stem-bucketing within a single partition
+# ---------------------------------------------------------------------------
+
+
+def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
+    """Multiple (group,cluster) keys forced into ONE partition via repartition(1)
+    must each produce a distinct, correctly-named .laz with the right point count.
+    TDD: verifies Finding 3 stem-bucketing within a partition."""
+    import glob as _g
+    import os as _os
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+
+    out = str(tmp_path / "bucket")
+    # Build rows with predictable per-key point counts for verification.
+    expected_counts = {"A_0": 5, "B_1": 3, "A_1": 7, "B_0": 4}
+    rows = []
+    rng = np.random.default_rng(55)
+    for stem, n in sorted(expected_counts.items()):
+        grp, clu = stem.split("_")
+        for _ in range(n):
+            rows.append(
+                {
+                    "x": float(rng.uniform(0, 100)),
+                    "y": float(rng.uniform(0, 100)),
+                    "z": float(rng.uniform(0, 50)),
+                    "group": grp,
+                    "cluster": int(clu),
+                }
+            )
+    df = spark.createDataFrame(rows)
+    # repartition(1) forces all 4 distinct (group,cluster) keys into ONE partition.
+    (
+        df.repartition(1)
+        .write.format("lidar_gbx")
+        .option("groupCol", "group")
+        .option("clusterCol", "cluster")
+        .mode("overwrite")
+        .save(out)
+    )
+
+    part_files = sorted(_g.glob(_os.path.join(out, "*.la*")))
+    n_distinct = len(expected_counts)
+    assert len(part_files) == n_distinct, (
+        f"expected {n_distinct} part files (one per key) but got "
+        f"{len(part_files)}: {[_os.path.basename(p) for p in part_files]}"
+    )
+    # Verify each file's point count matches the expected count for that key.
+    for pf in part_files:
+        stem = _os.path.splitext(_os.path.basename(pf))[0]
+        n, _, _, _, _ = _decode_laz(pf)
+        assert (
+            n == expected_counts[stem]
+        ), f"{stem}: expected {expected_counts[stem]} points but got {n}"
+    # Total must round-trip.
+    total = sum(expected_counts.values())
+    actual_total = sum(_decode_laz(p)[0] for p in _g.glob(_os.path.join(out, "*.la*")))
+    assert actual_total == total, f"total {actual_total} != {total}"
+
+
 def test_writer_singlefile_over_budget_raises(spark, tmp_path):
     """singleFile + mergeMaxMB=0 → _gate_merge raises with a compute-aware message."""
     from databricks.labs.gbx.ds.lidar import LidarGbxDataSource

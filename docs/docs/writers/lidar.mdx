@@ -1,0 +1,162 @@
+---
+sidebar_position: 10
+sidebar_label: LiDAR
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import lidarWrite from '!!raw-loader!../../tests/python/writers/lidar_gbx_write_examples.py';
+
+# LiDAR Writer
+
+_Since:_ lightweight `lidar_gbx` **v0.5.2** · _(light-only — no heavyweight tier)_
+
+Write LAS/LAZ point-cloud files from a Spark DataFrame — the inverse of the
+[`lidar_gbx` reader](../readers/lidar). `df.write.format("lidar_gbx")` writes
+a points DataFrame (`x`, `y`, `z` plus optional `r`, `g`, `b`) as sharded
+`.laz` files, one per Spark partition, with a deterministic
+`*_<group>_<cluster>` shard name when `groupCol` / `clusterCol` options are set.
+
+`lidar_gbx` is **light-only**: there is no heavyweight JAR counterpart. The
+writer runs on **Serverless, standard (shared), ARM, and classic** compute —
+any environment where `laspy` and `lazrs-python` are available.
+
+:::note Register first
+The lightweight Python DataSources are **not** auto-registered — call
+`register(spark)` once per session before using the `lidar_gbx` writer.
+
+<CodeFromTest code={lidarWrite} language="python" functionName="REGISTER"
+  source="docs/tests/python/writers/lidar_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_lidar_gbx_write_examples.py" />
+:::
+
+## Schema
+
+The writer requires columns `x`, `y`, `z` (floating-point coordinates in the
+point cloud's CRS). RGB color is optional but all-or-nothing: include all of
+`r`, `g`, `b` (integers 0–255) or none — a partial RGB set raises an error.
+
+| Column | Required | Type | Description |
+|--------|----------|------|-------------|
+| `x` | Yes | `double` | Easting / longitude in the point cloud's CRS. |
+| `y` | Yes | `double` | Northing / latitude. |
+| `z` | Yes | `double` | Elevation or height. |
+| `r` | Optional | `integer` | Red channel (0–255). Requires `g` and `b`. |
+| `g` | Optional | `integer` | Green channel (0–255). Requires `r` and `b`. |
+| `b` | Optional | `integer` | Blue channel (0–255). Requires `r` and `g`. |
+
+Naming columns (`groupCol`, `clusterCol`, `nameCol`) are read as options and
+are **not** written to the `.laz` output.
+
+:::note v1 column scope
+The v1 writer supports `x`, `y`, `z` and optional `r`, `g`, `b` only.
+Extended per-point attributes such as `intensity`, `classification`,
+`return_number`, and `gps_time` are planned for v2; any such column in the
+DataFrame raises an error that directs you to drop it before writing.
+:::
+
+## Output
+
+**Parts mode (default):** one `.laz` per Spark partition, named
+`*_<group>_<cluster>.laz` when `groupCol` and `clusterCol` are both set,
+or `<partPrefix>-<uuid>.laz` otherwise.
+
+**`singleFile="true"`:** all partitions are captured as intermediate feather
+fragments on executors; the driver merges them into a single `.laz`. This
+funnels through driver RAM — keep the default sharded parts for very large
+point clouds.
+
+**`merge="true"`:** post-hoc fold of existing `.laz` / `.las` files already
+in the output directory into one `.laz`, without re-reading the DataFrame.
+
+:::note Save modes
+`.mode("overwrite")` clears the target directory's `.laz` / `.las` files
+before writing; `.mode("append")` writes new shards alongside existing ones.
+With `singleFile`, both modes write the resolved single file fresh from the
+current DataFrame — `append` does **not** add points to a pre-existing file.
+`merge` requires `.mode("append")` since it never deletes its inputs beforehand.
+:::
+
+## Parts mode (default)
+
+Each Spark partition produces one `.laz` file. When `groupCol` and `clusterCol`
+are set, the shard name is derived from the first row's values in that partition
+(`*_<group>_<cluster>`), giving deterministic, collision-free names across
+repartitioned point clouds. Without naming columns, a UUID stem is used
+(`<partPrefix>-<uuid>.laz`).
+
+<CodeFromTest code={lidarWrite} language="python" functionName="WRITE_SHARDED"
+  source="docs/tests/python/writers/lidar_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_lidar_gbx_write_examples.py" />
+
+## Single-file & directory merge
+
+By default the writer shards output into one `.laz` per partition — safe at
+any scale. To consolidate into **one** `.laz`, opt in with `singleFile`, or
+merge already-written parts after the fact with `merge`.
+
+<CodeFromTest code={lidarWrite} language="python" functionName="WRITE_SINGLEFILE"
+  source="docs/tests/python/writers/lidar_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_lidar_gbx_write_examples.py" />
+
+<CodeFromTest code={lidarWrite} language="python" functionName="WRITE_MERGE"
+  source="docs/tests/python/writers/lidar_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_lidar_gbx_write_examples.py" />
+
+- **`singleFile`** captures each partition's points as a feather fragment on
+  the executor, then the driver concatenates all fragments into one `.laz`.
+  Bound by driver RAM — use on point clouds that fit comfortably in memory;
+  otherwise keep the default sharded parts.
+- **`merge`** folds the `.laz` / `.las` files already in the output directory
+  into one `.laz` without recomputing the source DataFrame (the rows are
+  ignored). Merging an empty directory raises. `merge` implies single output
+  and overrides `singleFile` if both are set.
+- **`keepParts`** (default `false`) controls the source parts after a
+  successful merge. Parts are deleted only **after** the merged output is
+  validated and durably written — a failed or partial merge always leaves every
+  part intact. Set `keepParts="true"` to keep parts alongside the merged file.
+
+## Options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `groupCol` | — | Column supplying the group segment of the shard name (`*_<group>_<cluster>`). Both `groupCol` and `clusterCol` must be set for deterministic naming. |
+| `clusterCol` | — | Column supplying the cluster segment of the shard name. Paired with `groupCol`. |
+| `nameCol` | — | Column supplying the full output filename stem per partition (used when `groupCol` / `clusterCol` are not set). |
+| `partPrefix` | `"part"` | Stem prefix for UUID-named shards (`<partPrefix>-<uuid>.laz`) when no naming columns are provided. |
+| `fileName` | — (derived) | Output filename stem for `singleFile` / `merge` output. Absent → derived. |
+| `crs` | — | EPSG code (integer or string, e.g. `"32611"`) to embed in the `.laz` CRS field. Absent → no CRS recorded. |
+| `singleFile` | `"false"` | Write **one** `.laz` instead of sharded parts. See [Single-file & directory merge](#single-file--directory-merge). |
+| `merge` | `"false"` | Post-hoc: merge the `.laz` / `.las` files **already present** in the output directory into one file, without re-running the source DataFrame. Requires `.mode("append")`. |
+| `keepParts` | `"false"` | Meaningful only with `singleFile` / `merge`. When `false` (default), source part files are deleted after the merged output is validated and durably written; set to `"true"` to keep them. A failed or partial merge never deletes parts. |
+
+### Planned (v2)
+
+The options below are parsed but **rejected** in v1 (they raise an error that
+names the planned v2 feature). They will enable point-cloud unification in a
+future release.
+
+| Option | Planned behaviour |
+|--------|-------------------|
+| `overlap` | Overlap-point handling: `"drop"` removes duplicates from overlapping flight strips; `"keep"` (the v1 no-op default) retains them. |
+| `voxelSize` | Voxel size for spatial thinning — deduplicate points within a regular grid. |
+| `dedupeExact` | Exact-coordinate deduplication across strips. |
+
+## Round-trip
+
+Reading a `.laz` file with the `lidar_gbx` reader (points mode) and writing it
+back with `lidar_gbx` reproduces `x`, `y`, `z` coordinates within the LAS
+scale-factor precision, and RGB channels when present. The writer re-computes
+the header bounds from the written points.
+
+:::note Coordinate precision
+LAS files store coordinates as scaled integers — the `scale` values in the
+header control quantisation. A round-trip may introduce sub-scale precision
+differences (typically sub-millimetre for survey-grade data).
+:::
+
+## Next Steps
+
+- [LiDAR Reader](../readers/lidar) — the corresponding read paths (metadata mode, points mode, class/return filters).
+- [LiDAR DSM functions](../api/raster-functions#lidar-dsm) — bin point clouds into DSM, CHM, and isoband rasters.
+- [Writers Overview](./overview) — all writer formats and the tier split.
+- [NetCDF Writer](./netcdf) — another pure-Python DataSource writer following the same pattern.

@@ -129,3 +129,111 @@ def plan_layout(
         )
     per_row_bytes = width * bytes_per_px
     return _row_bands(width, height, per_row_bytes, budget_bytes, max_tiles)
+
+
+# ---------------------------------------------------------------------------
+# Budget authority — driver_merge intent (Phase 1)
+# ---------------------------------------------------------------------------
+
+_MERGE_FALLBACK_BYTES = 512 * _MIB  # conservative floor if the RAM probe fails
+
+
+@dataclass(frozen=True)
+class BudgetDecision:
+    """Result of budget_for: action + the budget that applied + a log/error reason."""
+
+    action: str  # "stream" | "fuse" | "driver" | "error" | "ok"
+    budget_bytes: int
+    reason: str = ""
+
+
+def _import_task_context():
+    """Return pyspark.TaskContext (or None if pyspark absent). Seam for tests."""
+    try:
+        from pyspark import TaskContext
+
+        return TaskContext
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _assert_driver(intent: str) -> None:
+    """RAM-measured intents are DRIVER-ONLY: /proc/meminfo on a Spark worker reports
+    node-total RAM (not the ~1 GB task quota), so a worker-side budget would be
+    dangerously large. Fail loud rather than risk OOM."""
+    tc = _import_task_context()
+    if tc is not None and tc.get() is not None:
+        raise RuntimeError(
+            f"budget_for({intent!r}) is driver-only: /proc/meminfo on a Spark worker "
+            f"reports node-total RAM, not the task quota. Call it from the driver "
+            f"(e.g. DataSource commit()), never from write()/a UDF."
+        )
+
+
+def _probe_infra():
+    """(host_ram_available_mb, gpu_count) via gpu_infra(); (0, 0) on any failure.
+    DRIVER-ONLY (see _assert_driver)."""
+    try:
+        from databricks.labs.gbx.pyrx.mvs import gpu_infra
+
+        infra = gpu_infra()
+        avail = int(infra.get("host_ram_available_mb") or infra.get("host_ram_mb") or 0)
+        return avail, int(infra.get("gpu_count", 0))
+    except Exception:  # noqa: BLE001
+        return 0, 0
+
+
+def _driver_merge_budget(override_mb):
+    """Returns (budget_bytes, avail_mb, gpu). Budget = (avail - reserve)/2 (2x merge
+    peak); reserve 6 GiB if GPU else 2 GiB; floor _MERGE_FALLBACK_BYTES; override wins.
+    """
+    override = (
+        override_mb
+        or os.environ.get("GBX_LIDAR_MERGE_MAX_MB")
+        or os.environ.get("GBX_MERGE_MAX_MB")
+    )
+    if override:
+        return max(int(float(override) * _MIB), 0), 0, 0
+    avail_mb, gpu = _probe_infra()
+    if avail_mb <= 0:
+        return _MERGE_FALLBACK_BYTES, avail_mb, gpu
+    reserve_mb = (6 if gpu > 0 else 2) * 1024
+    usable_mb = max(0, avail_mb - reserve_mb)
+    return max((usable_mb * _MIB) // 2, _MERGE_FALLBACK_BYTES), avail_mb, gpu
+
+
+def budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=None):
+    """Single memory-budget authority. Phase 1 implements 'driver_merge' (RAM-measured,
+    driver-only); other intents (worker_read/cog_write/dense_alloc/tile_split) arrive
+    in Phase 2. Returns a BudgetDecision."""
+    if intent == "driver_merge":
+        _assert_driver(intent)
+        budget, avail_mb, gpu = _driver_merge_budget(override_mb)
+        ctx = (
+            f"{gpu}xGPU detected, RAM avail {avail_mb} MiB"
+            if avail_mb
+            else "RAM probe unavailable -> floor"
+        )
+        if est_bytes is not None and est_bytes > budget:
+            remedy = (
+                "increase mergeMaxMB or run on a node with more RAM"
+                if override_mb
+                else "use mergeMaxMB=<MiB> to override or run on a node with more RAM"
+            )
+            return BudgetDecision(
+                "error",
+                budget,
+                f"lidar_gbx merge: estimated {est_bytes / 1e6:.0f} MB exceeds the "
+                f"compute-aware budget of {budget / 1e6:.0f} MB (host-RAM-based; {ctx}); "
+                f"{remedy}.",
+            )
+        merging = f", merging {est_bytes / 1e6:.0f} MB" if est_bytes is not None else ""
+        return BudgetDecision(
+            "ok",
+            budget,
+            f"{gpu}xGPU · RAM avail {avail_mb} MiB → budget {budget / 1e6:.0f} MB{merging}",
+        )
+    raise ValueError(
+        f"budget_for: intent {intent!r} not implemented in Phase 1 "
+        f"(only 'driver_merge'); worker_read/cog_write/dense_alloc/tile_split land in Phase 2."
+    )

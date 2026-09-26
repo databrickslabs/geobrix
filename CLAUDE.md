@@ -136,7 +136,11 @@ Path-scoped — each loads automatically when you edit a matching file. Read the
 | `functions-authoring.md` | Scala expressions, `functions.py`, `docs/docs/api/*.mdx`, `function-info.json`, `registered_functions.txt` | Cross-language naming, the 7-surface signature change, function-info/DESCRIBE generation, `usageArgs` style, param-name distinctions |
 | `gdal-resources.md` | rasterx/ds Scala, `ds`/`pyrx` Python | GDAL/OGR `GDALManager` guards, resource release, materialize policy, pyrx Serverless constraints |
 | `bng-resolution.md` | gridx Scala/Python | BNG resolution indices, `bng_pointascell` CRS, grid tessellation & geom-aware kring/kloop |
-| `uc-volumes.md` | package Python, notebooks | UC Volume FUSE semantics, bare-path heavy reads, Serverless parallelism |
+| `uc-volumes.md` | package Python, notebooks | UC Volume FUSE semantics, bare-path heavy reads, Serverless parallelism; source-file listing & path normalization via `ds/_listing` (readers, writers, functions, bench, `preparer.py`) |
+| `crs-resolution.md` | `python/geobrix/src/databricks/labs/gbx/**`, `notebooks/**` | Canonical `resolve_crs`/`crs_to_canonical`/`authority_srid_of`; avoid bare `ProjCRS.from_*/CRS.from_*/parse_crs().to_wkt()` outside `crs.py` |
+| `compression.md` | `python/geobrix/src/databricks/labs/gbx/**` | Canonical `creation_opts`/`predictor_for`; avoid bespoke GTiff profile dicts and duplicate helpers outside `compression.py` |
+| `memory-budget.md` | `python/geobrix/src/databricks/labs/gbx/ds/**`, `python/geobrix/src/databricks/labs/gbx/pyrx/**` | Canonical `budget_for`/`materialize_decision`; avoid raw `/proc/meminfo`, `SPARK_*_MEMORY` env sniffing, hardcoded caps outside `budget.py`/`file_gbx.py`/`mvs.py` |
+| `writer-scaffolding.md` | `python/geobrix/src/databricks/labs/gbx/ds/**` | Reuse `_publish_merged`/`_glob_merge_inputs`/`_safe_name`/`assert_write_schema` + `new_scratch_dir`/`remove_scratch_dir`; avoid `tempfile.mkdtemp` in writers |
 | `docs-and-doctests.md` | `docs/**` | Doc-tests-as-source, user-facing voice (no wave numbers), MDX/sidebar/deploy gotchas |
 | `notebooks-on-databricks.md` | `notebooks/**`, notebook runner commands | Staging on dogfood, `%pip` wheel-install incantations, canonical runners, viz |
 | `gbx-commands.md` | `scripts/commands/**` | How to add or fix a `gbx:*` command |

@@ -25,3 +25,32 @@ worker `/Volumes` LARGE reads can intermittently `FileNotFound` (eventual consis
 
 Light-tier Serverless parallelism comes ONLY via `repartition(N, column)` (fan-out by column).
 Serverless forbids `sparkContext` / `.rdd` / `_jvm` / `_jsc`; guard any `spark.conf` mutation.
+
+## Source-file listing & path normalization
+
+Use `ds/_listing` for **every** consumer that enumerates source files or normalizes a path —
+readers, writers, functions, bench, and `preparer.py`:
+
+```python
+from databricks.labs.gbx.ds._listing import list_files, to_local_path, to_spark_uri
+```
+
+- `list_files(root, pattern)` — walks a Volume root with the `_retry_transient` guard (Serverless
+  eventual-consistency: `FileNotFound` on large reads retried ~10×). Returns absolute local paths.
+- `to_local_path(uri)` — strips `dbfs:` / `file:` schemes and returns a bare `/Volumes/...` path
+  suitable for `pathlib` / `os`.
+- `to_spark_uri(path)` — converts a bare Volume path to the `dbfs:` URI Spark readers expect.
+
+### Patterns to avoid
+
+The `centralized-primitives` QC check (`file-listing` row) flags these outside `_listing.py`:
+
+```python
+os.walk(path)          # misses the Serverless retry guard
+glob.glob(pattern)     # same
+path.replace("dbfs:", "")    # manual scheme-stripping — fragile, misses edge cases
+path.lstrip("file:")         # same
+```
+
+Bare `os.walk` / `glob.glob` over a Volume path silently drops files when Serverless FUSE hasn't
+fully propagated a large write. Always route source-file enumeration through `list_files`.

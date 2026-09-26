@@ -1,6 +1,6 @@
 """Task 3 (SP2-CRS): round-trip regression for writers: _write_lidar, cog_writer, gridagg, vector, _write_netcdf."""
+
 import pytest
-from rasterio.crs import CRS
 
 from databricks.labs.gbx.core.crs import (
     authority_srid_of,
@@ -74,6 +74,6 @@ def test_netcdf_writer_epsg_extraction(src, expected):
     if src == "EPSG:4326":
         assert epsg == 4326
     elif src == "ESRI:54008":
-        assert epsg == 54008   # was None under old to_epsg()
+        assert epsg == 54008  # was None under old to_epsg()
     else:  # OGC:CRS84
-        assert epsg is None    # non-integer authority code — correct
+        assert epsg is None  # non-integer authority code — correct

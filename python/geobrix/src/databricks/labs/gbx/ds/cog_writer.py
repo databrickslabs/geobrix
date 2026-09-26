@@ -318,6 +318,7 @@ def _build_mosaic_vrt(
     # SRS (WKT)
     srs_el = ET.SubElement(root, "SRS")
     from databricks.labs.gbx.core.crs import crs_to_canonical
+
     srs_el.text = crs_to_canonical(crs) if crs else ""
 
     # GeoTransform: x_origin, pixel_x, rot_x, y_origin, rot_y, pixel_y
@@ -1170,7 +1171,6 @@ class CogGbxWriter(DataSourceWriter):
         """
         import numpy as np
         import rasterio
-        from rasterio.crs import CRS
         from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
@@ -1187,6 +1187,7 @@ class CogGbxWriter(DataSourceWriter):
         opts = self.mosaic_opts
         prune_empty = opts.prune_empty
         from databricks.labs.gbx.core.crs import resolve_crs
+
         dst_crs = resolve_crs(3857)
 
         os.makedirs(self.out_dir, exist_ok=True)
@@ -1360,7 +1361,6 @@ class CogGbxWriter(DataSourceWriter):
         import h3
         import numpy as np
         import rasterio
-        from rasterio.crs import CRS
         from rasterio.features import geometry_mask
         from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
@@ -1378,6 +1378,7 @@ class CogGbxWriter(DataSourceWriter):
         opts = self.mosaic_opts
         prune_empty = opts.prune_empty
         from databricks.labs.gbx.core.crs import resolve_crs
+
         dst_crs = resolve_crs(4326)
 
         os.makedirs(self.out_dir, exist_ok=True)
@@ -1581,7 +1582,6 @@ class CogGbxWriter(DataSourceWriter):
         """
         import numpy as np
         import rasterio
-        from rasterio.crs import CRS
         from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
@@ -1598,6 +1598,7 @@ class CogGbxWriter(DataSourceWriter):
         opts = self.mosaic_opts
         prune_empty = opts.prune_empty
         from databricks.labs.gbx.core.crs import resolve_crs
+
         dst_crs = resolve_crs(27700)
 
         os.makedirs(self.out_dir, exist_ok=True)

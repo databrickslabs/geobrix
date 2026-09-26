@@ -201,7 +201,10 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
                 if cc is not None:
                     crs_canonical = str(cc)
                     try:
-                        from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
+                        from databricks.labs.gbx.core.crs import (
+                            authority_srid_of,
+                            resolve_crs,
+                        )
 
                         epsg = authority_srid_of(resolve_crs(crs_canonical))
                     except Exception:
@@ -212,7 +215,10 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
                     if wkt is not None:
                         crs_canonical = str(wkt)
                         try:
-                            from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
+                            from databricks.labs.gbx.core.crs import (
+                                authority_srid_of,
+                                resolve_crs,
+                            )
 
                             epsg = authority_srid_of(resolve_crs(crs_canonical))
                         except Exception:
@@ -612,7 +618,10 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 _epsg: Optional[int] = None
                 if crs_canonical:
                     try:
-                        from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
+                        from databricks.labs.gbx.core.crs import (
+                            authority_srid_of,
+                            resolve_crs,
+                        )
 
                         _epsg = authority_srid_of(resolve_crs(crs_canonical))
                     except Exception:

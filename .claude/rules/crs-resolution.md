@@ -23,6 +23,7 @@ The `centralized-primitives` QC check flags any of these outside the canonical f
 
 ```python
 ProjCRS.from_epsg(...)        # pyproj private API; loses ESRI authority
+ProjCRS.from_wkt(...)         # same — bypasses authority round-trip
 CRS.from_epsg(...)            # same
 CRS.from_authority(...)       # bypasses classify step
 parse_crs().to_wkt()          # drops authority on ESRI CRS round-trip

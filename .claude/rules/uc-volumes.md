@@ -48,9 +48,11 @@ The `centralized-primitives` QC check (`file-listing` row) flags these outside `
 ```python
 os.walk(path)          # misses the Serverless retry guard
 glob.glob(pattern)     # same
-path.replace("dbfs:", "")    # manual scheme-stripping — fragile, misses edge cases
-path.lstrip("file:")         # same
 ```
+
+Also avoid manual scheme-stripping (`path.replace("dbfs:", "")`, `path.lstrip("file:")`) — use
+`to_local_path(uri)` instead. The QC check does not flag these directly, but they are equally
+fragile and miss the same edge cases.
 
 Bare `os.walk` / `glob.glob` over a Volume path silently drops files when Serverless FUSE hasn't
 fully propagated a large write. Always route source-file enumeration through `list_files`.

@@ -25,7 +25,8 @@ The `centralized-primitives` QC check flags any of these outside the allowed fil
 open("/proc/meminfo").read()        # raw proc read — not shared, not cached
 os.environ["SPARK_WORKER_MEMORY"]   # not populated on Serverless
 os.environ["SPARK_EXECUTOR_MEMORY"] # same
-STREAM_CAP = 512 * 1024 * 1024      # hardcoded cap — skips intent-based sizing
 ```
 
-Hardcoded caps and ad-hoc memory probes produce behavior that diverges from `budget_for` on Serverless (where `/proc/meminfo` reflects the container, not the task allocation). Route every cap through `budget_for`; route every materialize decision through `materialize_decision`.
+Also avoid hardcoded stream caps (e.g. `STREAM_CAP = 512 * 1024 * 1024`) — route every cap through `budget_for`; the QC check does not flag these directly, but they produce the same divergence on Serverless.
+
+Ad-hoc memory probes and hardcoded caps diverge from `budget_for` on Serverless (where `/proc/meminfo` reflects the container, not the task allocation). Route every cap through `budget_for`; route every materialize decision through `materialize_decision`.

@@ -184,15 +184,16 @@ def _crs_to_srid_proj(crs) -> Tuple[str, str]:
     if not crs:
         return "0", ""
     try:
-        from pyproj import CRS
+        from databricks.labs.gbx.core.crs import (
+            authority_srid_of,
+            crs_to_proj4,
+            resolve_crs,
+        )
 
-        c = CRS.from_user_input(crs)
-        auth = c.to_authority()
-        srid = auth[1] if auth else "0"
-        try:
-            proj4 = c.to_proj4() or ""
-        except Exception:
-            proj4 = ""
+        c = resolve_crs(crs)
+        srid_int = authority_srid_of(c)
+        srid = str(srid_int) if srid_int is not None else "0"
+        proj4 = crs_to_proj4(c) or ""
         return srid, proj4
     except Exception:
         return "0", ""
@@ -1387,10 +1388,7 @@ class VectorGbxWriter(DataSourceWriter):
         srs = None
         if crs:
             srs = osr.SpatialReference()
-            if str(crs).upper().startswith("EPSG:"):
-                srs.ImportFromEPSG(int(str(crs).split(":")[1]))
-            else:
-                srs.ImportFromProj4(str(crs))
+            srs.SetFromUserInput(str(crs))
 
         def _ogr_type(t):
             if pa.types.is_floating(t):

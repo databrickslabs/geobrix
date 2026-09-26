@@ -146,8 +146,9 @@ def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> in
         try:
             _parsed = laspy.read(inputs[0]).header.parse_crs()
             if _parsed is not None:
-                _epsg = _parsed.to_epsg()
-                crs = _epsg if _epsg is not None else _parsed.to_wkt()
+                from databricks.labs.gbx.core.crs import crs_to_canonical, resolve_crs
+
+                crs = crs_to_canonical(resolve_crs(_parsed.to_wkt()))
         except Exception:  # noqa: BLE001
             pass
 

@@ -62,11 +62,11 @@ def _write_crs_var(nc, crs_canonical: Optional[str]) -> None:
     crs_var.crs_canonical = crs_canonical
     # Also store the WKT via rasterio so readers that look for crs_wkt find it.
     try:
-        from rasterio.crs import CRS
+        from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
 
-        rio_crs = CRS.from_user_input(crs_canonical)
+        rio_crs = resolve_crs(crs_canonical)
         crs_var.crs_wkt = rio_crs.to_wkt()
-        epsg = rio_crs.to_epsg()
+        epsg = authority_srid_of(rio_crs)
         if epsg is not None:
             crs_var.spatial_epsg = int(epsg)
     except Exception:
@@ -201,9 +201,9 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
                 if cc is not None:
                     crs_canonical = str(cc)
                     try:
-                        from rasterio.crs import CRS as _CRS
+                        from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
 
-                        epsg = _CRS.from_user_input(crs_canonical).to_epsg()
+                        epsg = authority_srid_of(resolve_crs(crs_canonical))
                     except Exception:
                         pass
                 else:
@@ -212,9 +212,9 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
                     if wkt is not None:
                         crs_canonical = str(wkt)
                         try:
-                            from rasterio.crs import CRS as _CRS
+                            from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
 
-                            epsg = _CRS.from_wkt(crs_canonical).to_epsg()
+                            epsg = authority_srid_of(resolve_crs(crs_canonical))
                         except Exception:
                             pass
                     else:
@@ -612,9 +612,9 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 _epsg: Optional[int] = None
                 if crs_canonical:
                     try:
-                        from rasterio.crs import CRS as _CRS
+                        from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
 
-                        _epsg = _CRS.from_user_input(crs_canonical).to_epsg()
+                        _epsg = authority_srid_of(resolve_crs(crs_canonical))
                     except Exception:
                         pass
                 nodata = ds.nodata

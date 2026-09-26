@@ -317,7 +317,8 @@ def _build_mosaic_vrt(
 
     # SRS (WKT)
     srs_el = ET.SubElement(root, "SRS")
-    srs_el.text = crs.to_wkt() if crs else ""
+    from databricks.labs.gbx.core.crs import crs_to_canonical
+    srs_el.text = crs_to_canonical(crs) if crs else ""
 
     # GeoTransform: x_origin, pixel_x, rot_x, y_origin, rot_y, pixel_y
     gt_text = (
@@ -1185,7 +1186,8 @@ class CogGbxWriter(DataSourceWriter):
 
         opts = self.mosaic_opts
         prune_empty = opts.prune_empty
-        dst_crs = CRS.from_epsg(3857)
+        from databricks.labs.gbx.core.crs import resolve_crs
+        dst_crs = resolve_crs(3857)
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
@@ -1375,7 +1377,8 @@ class CogGbxWriter(DataSourceWriter):
 
         opts = self.mosaic_opts
         prune_empty = opts.prune_empty
-        dst_crs = CRS.from_epsg(4326)
+        from databricks.labs.gbx.core.crs import resolve_crs
+        dst_crs = resolve_crs(4326)
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []
@@ -1594,7 +1597,8 @@ class CogGbxWriter(DataSourceWriter):
 
         opts = self.mosaic_opts
         prune_empty = opts.prune_empty
-        dst_crs = CRS.from_epsg(27700)
+        from databricks.labs.gbx.core.crs import resolve_crs
+        dst_crs = resolve_crs(27700)
 
         os.makedirs(self.out_dir, exist_ok=True)
         written: List[str] = []

@@ -549,13 +549,9 @@ def _write_las(
 
     if crs is not None:
         try:
-            from pyproj import CRS as ProjCRS
+            from databricks.labs.gbx.core.crs import resolve_crs, to_pyproj_crs
 
-            proj_crs = (
-                ProjCRS.from_epsg(crs)
-                if isinstance(crs, int)
-                else ProjCRS.from_wkt(str(crs))
-            )
+            proj_crs = to_pyproj_crs(resolve_crs(crs))
             hdr.add_crs(proj_crs)
         except Exception as _crs_err:
             import warnings

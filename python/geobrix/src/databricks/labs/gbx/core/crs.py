@@ -155,7 +155,7 @@ def crs_to_canonical(crs: Optional[CRS]) -> Optional[str]:
     return crs.to_wkt()
 
 
-def to_pyproj_crs(crs) -> "pyproj.CRS":
+def to_pyproj_crs(crs) -> "pyproj.CRS":  # noqa: F821
     """Bridge rasterio CRS / authority string / WKT / int to a **pyproj** CRS.
 
     Uses ``from_authority`` at 100 % confidence when an authority is recognized,

@@ -24,6 +24,7 @@ from pyspark.sql.types import (
     TimestampNTZType,
 )
 
+from databricks.labs.gbx.core.crs import crs_to_canonical, resolve_crs
 from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.file_gbx import list_local_files
 
@@ -277,7 +278,11 @@ class LidarGbxReader(DataSourceReader):
             maxs = h.maxs
             try:
                 crs_obj = h.parse_crs()
-                crs = crs_obj.to_wkt() if crs_obj is not None else None
+                crs = (
+                    crs_to_canonical(resolve_crs(crs_obj.to_wkt()))
+                    if crs_obj is not None
+                    else None
+                )
             except Exception:  # noqa: BLE001
                 crs = None
             dims = [d.name for d in h.point_format.dimensions]

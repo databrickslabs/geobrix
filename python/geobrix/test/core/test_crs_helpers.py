@@ -1,12 +1,11 @@
 """Task 1 (SP2-CRS): new core/crs.py helpers — to_pyproj_crs, crs_equal, crs_to_proj4, shim."""
+
 import warnings
 
 import pyproj
-import pytest
 from rasterio.crs import CRS
 
-from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
-
+from databricks.labs.gbx.core.crs import resolve_crs
 
 # ---------------------------------------------------------------------------
 # to_pyproj_crs
@@ -147,7 +146,8 @@ def test_crs_to_proj4_suppresses_deprecation_warning():
         warnings.simplefilter("always")
         crs_to_proj4(resolve_crs(4326))
     leaked = [
-        w for w in caught
+        w
+        for w in caught
         if issubclass(w.category, UserWarning) and "proj4" in str(w.message).lower()
     ]
     assert len(leaked) == 0, f"Unexpected PROJ4 warnings: {leaked}"

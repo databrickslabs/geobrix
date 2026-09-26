@@ -501,6 +501,140 @@ def read_fused_ply(path: str) -> dict[str, np.ndarray]:
     }
 
 
+def _write_las(
+    path: str,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    rgb: np.ndarray | None = None,
+    *,
+    crs: int | str | None = None,
+) -> str:
+    """Shared LAS/LAZ encoder for XYZ-only (format 0) and XYZ+RGB (format 2).
+
+    Uses LAS point format 2 when *rgb* is a ``(3, n)`` uint8 array; format 0
+    (XYZ only) when *rgb* is ``None``.  Header scales and offsets are derived
+    from the data bounds.  Optional CRS tag via pyproj.  Falls back to ``.las``
+    when the LAZ backend is absent.
+
+    Parameters
+    ----------
+    path:
+        Output path.  Writes ``.laz`` (requires lazrs/laszip) or ``.las``.
+    x, y, z:
+        1-D float64 arrays (point coordinates, already coerced by caller).
+    rgb:
+        ``(3, n)`` uint8 array ``[r, g, b]`` for format 2; ``None`` for format 0.
+    crs:
+        EPSG int or WKT string for the LAS header CRS tag (optional).
+
+    Returns
+    -------
+    str
+        The path actually written (may differ from *path* on LAZ fallback).
+    """
+    import laspy
+
+    point_format = 2 if rgb is not None else 0
+    hdr = laspy.LasHeader(point_format=point_format)
+
+    if len(x) > 0:
+        hdr.offsets = np.array([float(x.min()), float(y.min()), float(z.min())])
+        # Scale so that the full range fits in ~1e7 integer steps (sub-mm).
+        ranges = np.array([np.ptp(x), np.ptp(y), np.ptp(z)])
+        hdr.scales = np.maximum(ranges / 1e7, 1e-6)
+    else:
+        hdr.offsets = np.zeros(3)
+        hdr.scales = np.full(3, 1e-6)
+
+    if crs is not None:
+        try:
+            from pyproj import CRS as ProjCRS
+
+            proj_crs = (
+                ProjCRS.from_epsg(crs)
+                if isinstance(crs, int)
+                else ProjCRS.from_wkt(str(crs))
+            )
+            hdr.add_crs(proj_crs)
+        except Exception as _crs_err:
+            import warnings
+
+            warnings.warn(
+                f"Could not tag CRS on LAS header ({_crs_err!r}); writing without CRS.",
+                stacklevel=2,
+            )
+
+    las = laspy.LasData(header=hdr)
+    las.x = x
+    las.y = y
+    las.z = z
+    if rgb is not None:
+        # Scale uint8 [0..255] to 16-bit [0..0xFF00] so 255 → 0xFF00.
+        las.red = rgb[0].astype(np.uint16) << 8
+        las.green = rgb[1].astype(np.uint16) << 8
+        las.blue = rgb[2].astype(np.uint16) << 8
+
+    out_path = str(path)
+    try:
+        las.write(out_path)
+    except Exception as laz_err:
+        if out_path.lower().endswith(".laz"):
+            las_path = out_path[:-4] + ".las"
+            import warnings
+
+            warnings.warn(
+                f"LAZ write failed ({laz_err!r}); falling back to {las_path}.",
+                stacklevel=2,
+            )
+            las.write(las_path)
+            return las_path
+        raise
+    return out_path
+
+
+def write_xyz_laz(
+    path: str,
+    x: np.ndarray,
+    y: np.ndarray,
+    z: np.ndarray,
+    *,
+    crs: int | str | None = None,
+) -> str:
+    """Write an XYZ-only point cloud to LAS point format 0 (no RGB, no GPS time).
+
+    Mirrors write_xyzrgb_laz: data-bounds header scales/offsets, optional CRS tag,
+    .laz backend with a .las fallback. Returns the written path.
+
+    Parameters
+    ----------
+    path:
+        Output file path.  Writes ``.laz`` when the path ends in ``.laz``
+        (requires a lazrs or laszip backend); otherwise writes ``.las``.
+        If the LAZ backend is absent, falls back to ``.las`` with a warning
+        and returns the fallback path.
+    x, y, z:
+        1-D float arrays of the same length (point coordinates).
+    crs:
+        Optional EPSG integer or WKT string to tag the file header.
+        Requires ``pyproj``; silently skipped with a warning if unavailable
+        or if the CRS cannot be resolved.
+
+    Returns
+    -------
+    str
+        The path actually written (may differ from *path* on LAZ fallback).
+    """
+    return _write_las(
+        str(path),
+        np.asarray(x, dtype=np.float64),
+        np.asarray(y, dtype=np.float64),
+        np.asarray(z, dtype=np.float64),
+        rgb=None,
+        crs=crs,
+    )
+
+
 def write_xyzrgb_laz(
     path: str,
     x: np.ndarray,
@@ -543,69 +677,22 @@ def write_xyzrgb_laz(
     str
         The path actually written (may differ from *path* on LAZ fallback).
     """
-    import laspy
-
-    x = np.asarray(x, dtype=np.float64)
-    y = np.asarray(y, dtype=np.float64)
-    z = np.asarray(z, dtype=np.float64)
-    r = np.asarray(r, dtype=np.uint8)
-    g = np.asarray(g, dtype=np.uint8)
-    b = np.asarray(b, dtype=np.uint8)
-
-    hdr = laspy.LasHeader(point_format=2)
-
-    if len(x) > 0:
-        hdr.offsets = np.array([float(x.min()), float(y.min()), float(z.min())])
-        # Scale so that the full range fits in ~1e7 integer steps (sub-mm).
-        ranges = np.array([np.ptp(x), np.ptp(y), np.ptp(z)])
-        hdr.scales = np.maximum(ranges / 1e7, 1e-6)
-    else:
-        hdr.offsets = np.zeros(3)
-        hdr.scales = np.full(3, 1e-6)
-
-    if crs is not None:
-        try:
-            from pyproj import CRS as ProjCRS
-
-            proj_crs = (
-                ProjCRS.from_epsg(crs)
-                if isinstance(crs, int)
-                else ProjCRS.from_wkt(str(crs))
-            )
-            hdr.add_crs(proj_crs)
-        except Exception as _crs_err:
-            import warnings
-
-            warnings.warn(
-                f"Could not tag CRS on LAS header ({_crs_err!r}); writing without CRS.",
-                stacklevel=2,
-            )
-
-    las = laspy.LasData(header=hdr)
-    las.x = x
-    las.y = y
-    las.z = z
-    # Scale uint8 [0..255] to 16-bit [0..0xFF00] so 255 → 0xFF00.
-    las.red = r.astype(np.uint16) << 8
-    las.green = g.astype(np.uint16) << 8
-    las.blue = b.astype(np.uint16) << 8
-
-    out_path = str(path)
-    try:
-        las.write(out_path)
-    except Exception as laz_err:
-        if out_path.lower().endswith(".laz"):
-            las_path = out_path[:-4] + ".las"
-            import warnings
-
-            warnings.warn(
-                f"LAZ write failed ({laz_err!r}); falling back to {las_path}.",
-                stacklevel=2,
-            )
-            las.write(las_path)
-            return las_path
-        raise
-    return out_path
+    rgb = np.stack(
+        [
+            np.asarray(r, dtype=np.uint8),
+            np.asarray(g, dtype=np.uint8),
+            np.asarray(b, dtype=np.uint8),
+        ],
+        axis=0,
+    )  # (3, n) uint8
+    return _write_las(
+        str(path),
+        np.asarray(x, dtype=np.float64),
+        np.asarray(y, dtype=np.float64),
+        np.asarray(z, dtype=np.float64),
+        rgb=rgb,
+        crs=crs,
+    )
 
 
 # ---------------------------------------------------------------------------

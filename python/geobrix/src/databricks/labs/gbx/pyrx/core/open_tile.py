@@ -325,7 +325,9 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
             else:
                 c, r, w, h = tile.window
                 window = Window(c, r, w, h)
-            src_epsg = src.crs.to_epsg() if src.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(src.crs)
             want = _epsg_of(tile.crs) if tile.crs else None
             # When pending_srid relabels the CRS, use the relabeled EPSG as the
             # "current" CRS for the warp skip-decision.  Without this, a tile
@@ -736,7 +738,9 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
 
             # Detect whether reprojection is needed.  Warp and clip cannot be
             # done block-by-block (they need full-window context), so fall back.
-            src_epsg = src.crs.to_epsg() if src.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(src.crs)
             want = _epsg_of(tile.crs) if tile.crs else None
             effective_src_epsg = srid if srid is not None else src_epsg
             needs_warp = (want is not None and want != effective_src_epsg) or (
@@ -853,7 +857,9 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
             else:
                 c, r, w, h = vt.window
                 window = Window(c, r, w, h)
-            src_epsg = src.crs.to_epsg() if src.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(src.crs)
             want = _epsg_of(vt.crs) if vt.crs else None
             effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
             if want is not None and want != effective_src_epsg:

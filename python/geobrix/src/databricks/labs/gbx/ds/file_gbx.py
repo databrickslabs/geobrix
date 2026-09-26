@@ -1100,7 +1100,9 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
             # warp — raise FileRefReadError to degrade to the local-file path.
             if tile_crs is not None:
                 _, _, pending_srid, _ = pending
-                src_epsg = src.crs.to_epsg() if src.crs else None
+                from databricks.labs.gbx.core.crs import authority_srid_of
+
+                src_epsg = authority_srid_of(src.crs)
                 effective_src_epsg = (
                     pending_srid if pending_srid is not None else src_epsg
                 )

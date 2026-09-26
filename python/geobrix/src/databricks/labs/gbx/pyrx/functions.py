@@ -1832,7 +1832,9 @@ def _transform_bytes(tile, target_srid, file_ref=None):
     if not vt.is_virtual() and vt.raster is not None:
         target_srid_int = int(target_srid)
         with ot._open(tile, file_ref=file_ref) as ds:
-            src_epsg = ds.crs.to_epsg() if ds.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(ds.crs)
             if src_epsg is not None and src_epsg == target_srid_int:
                 # Identity on a materialized tile: original bytes, sort key intact.
                 return bytes(vt.raster)
@@ -9452,7 +9454,9 @@ def rst_h3_gridspec(
     _out_spec = out_crs if out_crs is not None else out_srid
     _resolved = cellraster_core._norm_out_crs(_out_spec)
     _is_geo = bool(_resolved.is_geographic)
-    _epsg = _resolved.to_epsg()
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    _epsg = authority_srid_of(_resolved)
     _srid_field = int(_epsg) if _epsg is not None else int(out_srid)
     # Sample one cell on the driver to obtain the H3 resolution for auto pixel_size.
     # An empty input is always an error: there is nothing to rasterize onto.

@@ -8,7 +8,7 @@ Pure Python (Serverless).
 Split strategy (``splitStrategy`` option, default ``none``):
   - ``none``       — no split; one tile per file (default — halo mode).
   - ``auto``       — resolves to ``serverless`` or ``classic`` by env probe.
-  - ``serverless`` — 128 MiB decoded budget per tile (opt-in split).
+  - ``serverless`` — 64 MiB decoded budget per tile (opt-in split).
   - ``classic``    — 1 536 MiB decoded budget per tile (opt-in split).
 
 **Halo mode** (recommended for large rasters): prepare a master COG via

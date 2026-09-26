@@ -8510,8 +8510,9 @@ _LARGE_RASTER_CLUSTER_DEFAULTS = {
     "dtype": "float32",
     # Strategy sweep — the key variable under test.
     "split_strategies": ("none", "serverless", "classic", "auto"),
-    # Serverless decoded budget (~512 MiB decoded) expressed as sizeInMB for the
-    # legacy pure-local path that still takes a sizeInMB arg.
+    # Explicit sizeInMB override for the throughput bench's legacy pure-local path
+    # (NOT the automatic strategy="serverless" budget, which is 64 MiB — see
+    # pyrx/core/budget.py). Chosen larger here to exercise fewer, bigger tiles.
     "size_mib_serverless": 512,
     "size_mib_classic": 1536,
 }

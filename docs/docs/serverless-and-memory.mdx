@@ -39,6 +39,10 @@ which varies enormously by compute:
 
 The budget is `(available RAM − reserve) / 2` (the `/2` covers the ~2× peak of a concat + encode;
 the reserve is larger on GPU/AIR nodes). It is read once on the driver via the host RAM/GPU probe.
+This sizing is the single authority `budget_for(intent, est_bytes, *, override_mb=…)`, which returns a
+`BudgetDecision` carrying its `action`, `budget_bytes`, and `reason`. Every driver-side reader, writer,
+and function routes its merge/fold sizing through `budget_for` (naming its `intent`, e.g. `driver_merge`)
+rather than measuring RAM ad-hoc, so the policy lives in one place.
 **Driver-only:** these budgets are never computed on a Spark worker — `/proc/meminfo` there reports
 the node's total RAM, not the task quota, so a worker-side call would over-budget and OOM; the
 budget authority raises if invoked from a task context.

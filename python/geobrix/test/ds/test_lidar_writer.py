@@ -377,3 +377,37 @@ def test_writer_merge_under_budget_succeeds(spark, tmp_path):
     assert len(merged) == 1
     back = spark.read.format("lidar_gbx").option("mode", "points").load(merged[0])
     assert back.count() == 30
+
+
+def test_writer_singlefile_over_budget_raises(spark, tmp_path):
+    """singleFile + mergeMaxMB=0 → _gate_merge raises with a compute-aware message."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    out = str(tmp_path / "sf_over")
+    rng = np.random.default_rng(9)
+    rows = [
+        {
+            "x": float(rng.uniform(0, 100)),
+            "y": float(rng.uniform(0, 100)),
+            "z": float(rng.uniform(0, 50)),
+        }
+        for _ in range(30)
+    ]
+    df = spark.createDataFrame(rows)
+    with pytest.raises(Exception) as ei:
+        (
+            df.repartition(2)
+            .write.format("lidar_gbx")
+            .option("singleFile", "true")
+            .option("mergeMaxMB", "0")
+            .option("fileName", "sf_merged")
+            .mode("overwrite")
+            .save(out)
+        )
+    msg = str(ei.value).lower()
+    assert "budget" in msg
+    assert "compute-aware" in msg or "host-ram" in msg or "mergemaxmb" in msg.lower()

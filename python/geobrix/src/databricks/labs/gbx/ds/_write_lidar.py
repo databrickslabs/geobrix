@@ -129,8 +129,6 @@ def _merge_budget_bytes(merge_max_mb) -> int:
     holds GPU/host buffers) but its large RAM still yields a big budget. An explicit
     mergeMaxMB option or GBX_LIDAR_MERGE_MAX_MB env var overrides. Probe failure ->
     conservative floor."""
-    import os
-
     override = merge_max_mb or os.environ.get("GBX_LIDAR_MERGE_MAX_MB")
     if override:
         return max(int(float(override) * 1024**2), 0)
@@ -399,11 +397,16 @@ class LidarGbxWriter(DataSourceWriter):
         budget = _merge_budget_bytes(self.merge_max_mb)
         avail_mb, gpu = _probe_infra()
         if est > budget:
+            remedy = (
+                "increase mergeMaxMB or run on a node with more RAM"
+                if self.merge_max_mb
+                else "use mergeMaxMB=<MiB> to override or run on a node with more RAM"
+            )
             raise ValueError(
                 f"lidar_gbx merge: estimated {est / 1e6:.0f} MB exceeds the "
                 f"compute-aware budget of {budget / 1e6:.0f} MB "
-                f"(host-RAM-based; {gpu}xGPU detected, RAM avail {avail_mb} MiB). "
-                f"Use mergeMaxMB=<MB> to override or run on a node with more RAM."
+                f"(host-RAM-based; {gpu}xGPU detected, RAM avail {avail_mb} MiB); "
+                f"{remedy}."
             )
         print(
             f"[merge] {gpu}xGPU · RAM avail {avail_mb} MiB → "
@@ -427,11 +430,16 @@ class LidarGbxWriter(DataSourceWriter):
         budget = _merge_budget_bytes(self.merge_max_mb)
         avail_mb, gpu = _probe_infra()
         if est > budget:
+            remedy = (
+                "increase mergeMaxMB or run on a node with more RAM"
+                if self.merge_max_mb
+                else "use mergeMaxMB=<MiB> to override or run on a node with more RAM"
+            )
             raise ValueError(
                 f"lidar_gbx merge: estimated {est / 1e6:.0f} MB exceeds the "
                 f"compute-aware budget of {budget / 1e6:.0f} MB "
-                f"(host-RAM-based; {gpu}xGPU detected, RAM avail {avail_mb} MiB). "
-                f"Use mergeMaxMB=<MB> to override or run on a node with more RAM."
+                f"(host-RAM-based; {gpu}xGPU detected, RAM avail {avail_mb} MiB); "
+                f"{remedy}."
             )
         print(
             f"[merge] {gpu}xGPU · RAM avail {avail_mb} MiB → "

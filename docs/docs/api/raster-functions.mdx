@@ -55,6 +55,10 @@ RasterX is GeoBrix's raster data processing package, providing comprehensive too
 - **Virtual Tiles**: Bytes-free windowed reads — process multi-gigabyte rasters without materializing them into executor memory
 - **COG Preparation & VRT Mosaics**: `file_gbx` + `cog_gbx` prepare spec-valid Cloud-Optimized GeoTIFFs and portable VRT mosaics for cheap windowed reads
 
+:::note Coordinate reference systems
+Many RasterX functions accept CRS parameters. Use `srid` / `out_srid` (integer EPSG or ESRI code) or `crs` / `out_crs` (CRS string — EPSG, ESRI, OGC, WKT, PROJ4) to declare or project CRS. Functions that consume a clip polygon or sample geometry accept `clip_crs` / `crs` as a source-CRS fallback. `rst_srid` returns the stored SRID integer; `rst_crs` returns the canonical CRS string and always returns a value. See [Coordinate reference systems](./coordinate-reference-systems) for the full model, the EPSG→ESRI resolution order, and the ESRI/OGC authority-preservation behavior.
+:::
+
 ## Function Categories
 
 RasterX exposes 129 SQL functions (registered as `gbx_rst_*`; available in Python and Scala as `rst_*`), organized into the following categories (see [rasterx/functions.scala](https://github.com/databrickslabs/geobrix/blob/main/src/main/scala/com/databricks/labs/gbx/rasterx/functions.scala)):

@@ -102,6 +102,29 @@ rest of the raster family; `rx.bin_points_tiled` is a lightweight-tier Python he
   heavyweight tier now uses the same boundary-tracing seed as the lightweight tier,
   so the two tiers produce identical cell sets for all polygon shapes.
 
+### CRS authority preserved for ESRI and OGC coordinate systems
+
+Readers, writers, and raster accessors previously dropped the ESRI or OGC
+authority from non-EPSG coordinate reference systems.  For example, a raster
+with `ESRI:54008` (Sinusoidal projection) would produce `None` from `srid()`,
+an authority-less WKT in the `crs` output column, and an incorrectly labeled
+`EPSG:54008` tag in a LAS/LAZ header.
+
+These sites are now fixed: the canonical `ESRI:54008` or `OGC:CRS84` string
+is preserved end-to-end.  `authority_srid_of` is the correct function to
+extract the integer SRID — it returns `None` only for CRSes with no integer
+authority code (such as `OGC:CRS84`, whose code `CRS84` is a string).
+
+**Parity contract:** CRS equivalence is semantic, not string equality.
+A raster emitted as `ESRI:102008` and one as the equivalent WKT are the same
+CRS; `crs_equal(a, b)` is the right comparison.
+
+**Honest limits:**
+
+- **LiDAR writer (`lidar_gbx`):** The LAS/LAZ format can only encode EPSG codes in a LAS header CRS record.  ESRI and OGC CRS are not representable in a LAS header.  They survive in the `lidar_gbx` **reader** `crs` column, but are correctly dropped (not mislabeled) when writing a `.laz` file.  Pass an equivalent EPSG code via the `crs` writer option if the format requires one.
+- **NetCDF `spatial_epsg` attribute:** For a non-EPSG CRS the NetCDF writer now stores the ESRI code in the legacy `spatial_epsg` grid-mapping attribute (whose name implies EPSG).  The authoritative CRS is in `crs_canonical` / `crs_wkt` — take the authority from `crs_canonical`, not `spatial_epsg`, for non-EPSG CRS.
+- **ESRI-identity reproject:** Raster operations now short-circuit an identity reproject when the source and target CRS are both ESRI-authored and equal.  Output is content-equivalent, but callers that depended on receiving byte-identical output from an ESRI-identity `rst_transform` call may observe a different bytes path (ZSTD re-encode vs. warp pipeline) for that specific case.
+
 ---
 
 ## What's new in v0.5.1

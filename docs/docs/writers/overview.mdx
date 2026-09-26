@@ -298,6 +298,10 @@ Per-format timing results — the PMTiles writer and the sharded GeoJSONL writer
 published on the [Benchmarking](../api/benchmarking) page, alongside the full methodology
 and raster-function results.
 
+:::note Coordinate reference systems
+Every vector writer reads the CRS from the `geom_0_srid` column (EPSG/ESRI/OGC authority code) and passes it to the OGR driver via `srs.SetFromUserInput`; when `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 column is the fallback. Raster writers preserve the CRS from each tile's spatial reference metadata. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full SRID-vs-CRS-string model and the ESRI/OGC authority-preservation behavior.
+:::
+
 ## Next Steps
 
 - [Raster Writer](./raster) — full details, options, and examples for raster output.

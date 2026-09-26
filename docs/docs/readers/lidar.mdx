@@ -217,6 +217,10 @@ Serverless:
 - **Spark Connect–safe.** The reader makes no `_jvm` / `sparkContext` / `.rdd` calls and is
   session-free, so it runs unchanged on Serverless, standard, and ARM clusters.
 
+:::note Coordinate reference systems
+The reader extracts the CRS from the LAS/LAZ header using `parse_crs()` and stores it as a canonical string in the `crs` output column (e.g. `"EPSG:27700"`, `"ESRI:54008"`, or WKT for authority-less CRSes). The `srid` column, where present, holds the numeric SRID — `None` when the CRS has no integer authority code. ESRI and OGC authorities are preserved exactly as read from the header. See [Coordinate reference systems](../api/coordinate-reference-systems) for the SRID-vs-CRS-string model.
+:::
+
 ## Next Steps
 
 - [RasterX Functions — `gbx_rst_binpoints` / `gbx_rst_binpoints_agg`](../api/raster-functions#rst_binpoints)

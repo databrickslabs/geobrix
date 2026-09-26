@@ -291,6 +291,10 @@ DataFrames (the default raster mode) or from point DataFrames (vector mode), wit
 page for the full write options, single-file/merge semantics, and round-trip
 guarantees.
 
+:::note Coordinate reference systems
+The lightweight `netcdf_gbx` reader reads the CRS from CF `crs_wkt` (or `crs_canonical`) grid-mapping attributes and stores it as a canonical string in `tile.metadata` and `tile.crs`. The `spatial_epsg` attribute is also read, but for non-EPSG CRS the authoritative form is `crs_canonical` — `spatial_epsg` may carry an ESRI code in its value (since its name implies EPSG) so always prefer `crs_canonical` for non-EPSG CRSes. ESRI and OGC authorities are preserved. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 ## Next Steps
 
 - [GeoTIFF Reader](./geotiff) — for COG/GeoTIFF rasters (e.g. Sentinel-2, EMIT CH4).

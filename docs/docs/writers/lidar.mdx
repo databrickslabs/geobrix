@@ -164,6 +164,10 @@ header control quantisation. A round-trip may introduce sub-scale precision
 differences (typically sub-millimetre for survey-grade data).
 :::
 
+:::note Coordinate reference systems
+The `crs` option accepts an EPSG code (integer or string, e.g. `"27700"`) to embed in the LAS/LAZ header. **The LAS format can only encode EPSG codes in its header** — ESRI and OGC CRS are not embeddable in the LAS CRS record. If your point cloud's CRS is non-EPSG (e.g. `ESRI:54008`), pass its EPSG equivalent if one exists, or leave `crs` unset and track the CRS externally. ESRI/OGC CRS information is preserved in the `lidar_gbx` **reader** `crs` column, but it cannot round-trip through the LAS header itself. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 ## Next Steps
 
 - [LiDAR Reader](../readers/lidar) — the corresponding read paths (metadata mode, points mode, class/return filters).

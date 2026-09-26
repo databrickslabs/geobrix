@@ -504,6 +504,10 @@ re-sorting an already-ordered scan.
 `OPTIMIZE` required. It works well for tables that are built once. Use `layout="cluster"` when
 the table is updated incrementally and you run periodic `OPTIMIZE` as part of maintenance.
 
+:::note Coordinate reference systems
+Raster readers extract the CRS from each file's spatial reference metadata and store it as a canonical string in `tile.metadata` and the `tile.crs` field (e.g. `"EPSG:4326"`, `"ESRI:54008"`) — ESRI and OGC authorities are preserved. The `clipCrs` option declares the CRS of a plain WKT/WKB clip polygon; an embedded SRID in an EWKT/EWKB polygon always takes precedence. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 ## Next Steps
 
 - [GeoTIFF Reader](./geotiff) - Named reader for GeoTIFF format

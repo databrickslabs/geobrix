@@ -502,6 +502,67 @@ def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
     assert actual_total == total, f"total {actual_total} != {total}"
 
 
+# ---------------------------------------------------------------------------
+# Finding 4 (Isaac): heterogeneous point formats in merge directory
+# ---------------------------------------------------------------------------
+
+
+def test_writer_merge_rejects_heterogeneous_formats(spark, tmp_path):
+    """A directory mixing RGB (fmt 2) and XYZ-only (fmt 0) parts must raise a
+    clear ValueError naming the conflicting formats.
+    TDD: verifies Finding 4 homogeneity check in _commit_merge."""
+    import glob as _g
+    import os as _os
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+
+    import os as _os2
+
+    out = str(tmp_path / "het_merge")
+    _os2.makedirs(out, exist_ok=True)
+
+    rng = np.random.default_rng(77)
+
+    def _pts(n):
+        return (
+            np.array([rng.uniform(0, 100) for _ in range(n)]),
+            np.array([rng.uniform(0, 100) for _ in range(n)]),
+            np.array([rng.uniform(0, 50) for _ in range(n)]),
+        )
+
+    # Write one XYZ-only .laz (format 0) directly via write_xyz_laz.
+    x, y, z = _pts(10)
+    write_xyz_laz(_os2.path.join(out, "part_xyz.laz"), x, y, z)
+    # Write one RGB .laz (format 2) directly via write_xyzrgb_laz.
+    x2, y2, z2 = _pts(10)
+    r2 = np.full(10, 128, dtype=np.uint8)
+    g2 = np.full(10, 64, dtype=np.uint8)
+    b2 = np.full(10, 32, dtype=np.uint8)
+    write_xyzrgb_laz(_os2.path.join(out, "part_rgb.laz"), x2, y2, z2, r2, g2, b2)
+
+    assert len(_g.glob(_os.path.join(out, "*.la*"))) == 2
+
+    with pytest.raises(Exception) as ei:
+        (
+            spark.createDataFrame([(1,)], ["_"])
+            .write.format("lidar_gbx")
+            .option("merge", "true")
+            .option("fileName", "het_merged")
+            .mode("append")
+            .save(out)
+        )
+    msg = str(ei.value).lower()
+    assert (
+        "heterogeneous" in msg or "point format" in msg or "rgb" in msg
+    ), f"expected heterogeneous/format message but got: {ei.value}"
+
+
 def test_writer_singlefile_over_budget_raises(spark, tmp_path):
     """singleFile + mergeMaxMB=0 → _gate_merge raises with a compute-aware message."""
     from databricks.labs.gbx.ds.lidar import LidarGbxDataSource

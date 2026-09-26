@@ -603,9 +603,25 @@ class LidarGbxWriter(DataSourceWriter):
                 f"lidar_gbx merge: no .laz/.las files under {self.path} to merge."
             )
 
-        # Infer RGB from the first part's point format.
-        with laspy.open(parts[0]) as r0:
-            has_rgb = r0.header.point_format.id in (2, 3, 5, 7, 8, 10)
+        # Scan every part's point format to detect heterogeneous RGB/XYZ mixes.
+        # A merged LAS has a single point format; mixing RGB and XYZ-only parts
+        # either raises AttributeError (las.red on XYZ-only) or silently drops
+        # color — both wrong. Fail loud with a clear message instead.
+        _RGB_FORMATS = frozenset((2, 3, 5, 7, 8, 10))
+        fmt_ids: list = []
+        for p in parts:
+            with laspy.open(p) as _r:
+                fmt_ids.append(_r.header.point_format.id)
+        rgb_flags = [fid in _RGB_FORMATS for fid in fmt_ids]
+        if any(rgb_flags) and not all(rgb_flags):
+            _rgb_fmts = sorted({fmt_ids[i] for i, f in enumerate(rgb_flags) if f})
+            _xyz_fmts = sorted({fmt_ids[i] for i, f in enumerate(rgb_flags) if not f})
+            raise ValueError(
+                f"lidar_gbx merge: parts have heterogeneous point formats "
+                f"(RGB fmt {_rgb_fmts} and XYZ-only fmt {_xyz_fmts}); "
+                "merge requires a homogeneous set — merge RGB and XYZ parts separately."
+            )
+        has_rgb = all(rgb_flags)
 
         self._gate_merge_paths(parts, has_rgb=has_rgb)
         expected = sum(_laz_point_count(p) for p in parts)

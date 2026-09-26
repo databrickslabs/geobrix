@@ -82,15 +82,25 @@ def test_crs_equal_epsg_esri_unequal():
     assert crs_equal(resolve_crs(4326), resolve_crs(54008)) is False
 
 
-def test_crs_equal_proj4_near_neighbour_does_not_raise():
-    """PROJ4 near-neighbour (UTM zone 33) is semantically distinct from EPSG:32633.
-    Contract: crs_equal never raises; result is bool."""
+def test_crs_equal_proj4_near_neighbour_is_false():
+    """Dutch-RD PROJ4 with null towgs84 shift is NOT equal to EPSG:28992.
+
+    The string ``+proj=sterea ... +towgs84=0,0,0,0,0,0,0`` canonicalizes to
+    EPSG:28992 at ~70% confidence but carries a NULL datum shift — making it a
+    genuinely distinct CRS (roughly 177 m off the correct Bessel 1841 → WGS84
+    transformation). ``crs_equal`` delegates to ``pyproj.CRS.equals()``, which
+    distinguishes the null-shift variant from the authoritative EPSG:28992 and
+    correctly returns ``False``.
+    """
     from databricks.labs.gbx.core.crs import crs_equal
 
-    proj4_crs = CRS.from_proj4("+proj=utm +zone=33 +datum=WGS84 +units=m +no_defs")
-    epsg_crs = resolve_crs(32633)
-    result = crs_equal(proj4_crs, epsg_crs)
-    assert isinstance(result, bool)
+    dutch_rd_null_shift = CRS.from_proj4(
+        "+proj=sterea +lat_0=52.15616055555555 +lon_0=5.38763888888889"
+        " +k=0.9999079 +x_0=155000 +y_0=463000 +ellps=bessel"
+        " +towgs84=0,0,0,0,0,0,0 +units=m +no_defs"
+    )
+    epsg28992 = resolve_crs(28992)
+    assert crs_equal(dutch_rd_null_shift, epsg28992) is False
 
 
 def test_crs_equal_none_none():

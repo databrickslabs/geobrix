@@ -27,7 +27,6 @@ Single-band output in every case:
 import math
 
 import numpy as np
-import pyproj
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx.core._nodata import emit, propagate_invalid, read_masked

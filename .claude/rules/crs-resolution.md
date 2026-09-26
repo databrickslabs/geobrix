@@ -30,7 +30,7 @@ from databricks.labs.gbx.core.crs import (
 
 ## Patterns the QC check flags outside `crs.py`
 
-The `centralized-primitives` QC check (level: warn — pending resolution of false-positive hits; see note below) flags any of these outside the canonical files:
+The `centralized-primitives` QC check (level: FAIL) flags any of these outside the canonical files:
 
 ```python
 ProjCRS.from_epsg(...)          # loses ESRI authority
@@ -42,8 +42,6 @@ CRS.from_string(...)            # same
 CRS.from_authority(...)         # bypasses classify step
 parse_crs().to_wkt()            # drops authority on ESRI CRS round-trip
 ```
-
-Note on known false positives (level stays warn until resolved): the `CRS\.from_user_input` pattern also matches docstring text that describes rasterio's parameter type (in `pyrx/core/edit.py` and `pyrx/functions.py`); the `\.from_wkt\(` pattern also matches `gpd.GeoSeries.from_wkt()` geometry-parsing calls (in `vizx/_simplify.py` and `vizx/_vector.py`). Neither is ad-hoc CRS construction. The gate will flip to FAIL once the regex is narrowed or those docstring/GeoSeries hits are resolved.
 
 Use the canonical functions above instead; they handle the ESRI authority edge-cases and are the single authority tested for non-EPSG CRS equivalence.
 

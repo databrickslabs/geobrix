@@ -228,8 +228,8 @@ class LidarGbxWriter(DataSourceWriter):
         self.path = to_local_path(options.get("path"))
         self.overwrite = overwrite
         # DataSource options are always strings; convert a numeric EPSG string
-        # to int so write_xyz(rgb)_laz routes to ProjCRS.from_epsg() rather
-        # than from_wkt(), which would fail silently for bare EPSG codes.
+        # to int so write_xyz(rgb)_laz reaches the integer EPSG constructor rather
+        # than the WKT path, which fails silently for bare EPSG codes.
         _crs_raw = options.get("crs")
         if isinstance(_crs_raw, str):
             try:

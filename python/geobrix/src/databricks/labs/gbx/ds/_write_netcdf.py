@@ -20,6 +20,10 @@ from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import _scratch
+from databricks.labs.gbx.ds.writer import (  # noqa: F401
+    _glob_merge_inputs,
+    _publish_merged,
+)
 
 
 def _crs_canonical_str(rasterio_crs) -> Optional[str]:
@@ -102,67 +106,28 @@ _MERGE_POINTER = (
 _FLOAT_NP_DTYPES = ("f4", "f8")
 
 
-def _glob_merge_inputs(path: str, target: str) -> List[str]:
-    """Glob ``<path>/*.nc`` excluding the resolved output file.
-
-    ``glob`` is non-recursive so it never descends into the hidden
-    ``.gbx_scratch`` container; we additionally exclude the resolved merge
-    output name so a re-merge does not fold a prior merged file into itself.
-    """
-    target_name = os.path.basename(target)
-    return sorted(
-        p
-        for p in glob.glob(os.path.join(path, "*.nc"))
-        if os.path.basename(p) != target_name
-    )
-
-
-def _publish_merged(tmp_path: str, target: str, expected_count: int, count_fn) -> None:
-    """Data-safe publish of a merged temp .nc to ``target``.
-
-    Order (never lose parts to a failed merge): (1) the merge already wrote
-    ``tmp_path``; (2) VALIDATE — reopen cleanly via netCDF4 AND element count
-    (via ``count_fn``) == ``expected_count``; (3) ``shutil.copyfile`` temp ->
-    target; (4) VERIFY target exists and byte size == temp size. Any failure
-    raises BEFORE the caller deletes any source part.
-    """
-    import netCDF4
-
-    # (2) validate: reopen + element count.
-    with netCDF4.Dataset(tmp_path, "r") as nc:
-        actual = count_fn(nc)
-    if actual != expected_count:
-        raise ValueError(
-            f"netcdf_gbx merge: validation failed — merged file has {actual} "
-            f"elements but {expected_count} were expected; source parts left intact."
-        )
-    # (3) copy temp -> target (FUSE-safe: content only, no chmod).
-    shutil.copyfile(tmp_path, target)
-    # (4) verify target exists + byte size matches. On any verify failure, remove
-    # the partial target (best-effort) BEFORE raising so a truncated FUSE copy
-    # does not leave a corrupt-but-valid-looking output; source parts stay intact
-    # because the caller only deletes them AFTER this returns cleanly.
-    if not os.path.exists(target):
-        raise ValueError(
-            f"netcdf_gbx merge: target {target} missing after copy; parts intact."
-        )
-    if os.path.getsize(target) != os.path.getsize(tmp_path):
-        if os.path.exists(target):
-            try:
-                os.remove(target)
-            except OSError:
-                pass
-        raise ValueError(
-            f"netcdf_gbx merge: target {target} size mismatch after copy; parts intact."
-        )
-
-
 def _count_raster_data_vars(nc) -> int:
     return len([v for v in nc.variables if v not in ("lat", "lon", "crs")])
 
 
 def _count_vector_obs(nc) -> int:
     return int(nc.dimensions["obs"].size)
+
+
+def _count_raster_data_vars_path(path: str) -> int:
+    """Path-based count_fn for _publish_merged: count raster data variables."""
+    import netCDF4
+
+    with netCDF4.Dataset(path, "r") as nc:
+        return _count_raster_data_vars(nc)
+
+
+def _count_vector_obs_path(path: str) -> int:
+    """Path-based count_fn for _publish_merged: count observation records."""
+    import netCDF4
+
+    with netCDF4.Dataset(path, "r") as nc:
+        return _count_vector_obs(nc)
 
 
 # ---- Raster grid records --------------------------------------------------
@@ -708,7 +673,9 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
             tmp.close()
             try:
                 expected = _merge_raster_grids(records, tmp.name)
-                _publish_merged(tmp.name, target, expected, _count_raster_data_vars)
+                _publish_merged(
+                    tmp.name, target, expected, _count_raster_data_vars_path
+                )
             finally:
                 os.unlink(tmp.name)
         finally:
@@ -732,7 +699,7 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
         tmp.close()
         try:
             expected = _merge_raster_grids(records, tmp.name)
-            _publish_merged(tmp.name, target, expected, _count_raster_data_vars)
+            _publish_merged(tmp.name, target, expected, _count_raster_data_vars_path)
         finally:
             os.unlink(tmp.name)
         # DATA-SAFETY: only delete parts AFTER validate+copy+verify all passed.
@@ -1052,7 +1019,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             tmp.close()
             try:
                 _merge_vector_points(batches, tmp.name, attr_specs, resolved_srid)
-                _publish_merged(tmp.name, target, expected, _count_vector_obs)
+                _publish_merged(tmp.name, target, expected, _count_vector_obs_path)
             finally:
                 os.unlink(tmp.name)
         finally:
@@ -1085,7 +1052,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         try:
             batches = _vector_batches_from_ncs(parts, attr_cols)
             _merge_vector_points(batches, tmp.name, attr_specs, resolved_srid)
-            _publish_merged(tmp.name, target, expected, _count_vector_obs)
+            _publish_merged(tmp.name, target, expected, _count_vector_obs_path)
         finally:
             os.unlink(tmp.name)
         # DATA-SAFETY: only delete parts AFTER validate+copy+verify all passed.

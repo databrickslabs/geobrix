@@ -4,6 +4,14 @@ Points DataFrame (x,y,z + optional r,g,b) -> sharded LAS/LAZ, one .laz per
 Spark partition (one per cluster). Serverless-safe: write(iterator) encodes to a
 worker-local temp then shutil.copyfile to the FUSE path (laspy seeks to backfill
 the header, so a direct Volume write fails). Mirrors NetcdfRasterGbxWriter.
+
+Modes
+-----
+parts (default)  One .laz per Spark partition, written on executors.
+singleFile       Executors capture x,y,z[,r,g,b] as feather fragments; the driver
+                 merges all fragments into a single .laz.
+merge            Post-hoc: folds existing .laz/.las part files in the directory
+                 into one .laz without re-reading the DataFrame.
 """
 
 from __future__ import annotations
@@ -91,6 +99,84 @@ def _resolve_write_cols(schema: StructType, options: dict) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# Module-level helpers (merge core)
+# ---------------------------------------------------------------------------
+
+
+def _laz_point_count(path: str) -> int:
+    """Open a LAS/LAZ file and return its header point count."""
+    import laspy
+
+    with laspy.open(path) as r:
+        return int(r.header.point_count)
+
+
+def _laz_written_path(path: str) -> str:
+    """Return path if it exists, else the .las sibling (LAZ-write fallback)."""
+    if os.path.exists(path):
+        return path
+    las = path[:-4] + ".las"
+    if os.path.exists(las):
+        return las
+    return path  # neither exists; caller will fail on the missing file
+
+
+def _swap_ext(target: str, real: str) -> str:
+    """Return target with real's file extension (.laz or .las on fallback)."""
+    ext = os.path.splitext(real)[1]
+    return os.path.splitext(target)[0] + ext
+
+
+def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> int:
+    """Concatenate x/y/z(/RGB) from part .laz/.las files, recompute header from
+    merged bounds, write ONE .laz at tmp_path via the write_xyz(rgb)_laz path.
+    Returns the merged point count. Driver-side (holds all points in RAM — gated
+    by caller via _gate_merge / _gate_merge_paths).
+    """
+    import laspy
+
+    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+
+    xs: list = []
+    ys: list = []
+    zs: list = []
+    rs: list = []
+    gs: list = []
+    bs: list = []
+    for p in inputs:
+        las = laspy.read(p)
+        xs.append(np.asarray(las.x))
+        ys.append(np.asarray(las.y))
+        zs.append(np.asarray(las.z))
+        if has_rgb:
+            rs.append((np.asarray(las.red) >> 8).astype(np.uint8))
+            gs.append((np.asarray(las.green) >> 8).astype(np.uint8))
+            bs.append((np.asarray(las.blue) >> 8).astype(np.uint8))
+    x = np.concatenate(xs)
+    y = np.concatenate(ys)
+    z = np.concatenate(zs)
+    if has_rgb:
+        write_xyzrgb_laz(
+            tmp_path,
+            x,
+            y,
+            z,
+            np.concatenate(rs),
+            np.concatenate(gs),
+            np.concatenate(bs),
+            crs=crs,
+        )
+    else:
+        write_xyz_laz(tmp_path, x, y, z, crs=crs)
+    return int(len(x))
+
+
+# ---------------------------------------------------------------------------
+# Writer class
+# ---------------------------------------------------------------------------
+
+
 class LidarGbxWriter(DataSourceWriter):
     def __init__(self, options: dict, schema: StructType, overwrite: bool):
         from databricks.labs.gbx.ds._listing import to_local_path
@@ -164,7 +250,7 @@ class LidarGbxWriter(DataSourceWriter):
         if self.merge:
             return LidarCommitMessage(paths=[], frag_path="")
         if self.single_file:
-            return self._write_single(iterator)  # Task 3
+            return self._write_single(iterator)
 
         os.makedirs(self.path, exist_ok=True)
         xs: list = []
@@ -204,12 +290,255 @@ class LidarGbxWriter(DataSourceWriter):
                         pass
         return LidarCommitMessage(paths=[out])
 
+    # ------------------------------------------------------------------
+    # singleFile mode: executor captures fragment, driver merges
+    # ------------------------------------------------------------------
+
     def _write_single(self, iterator: Iterator) -> WriterCommitMessage:
-        """Placeholder for Task 3 singleFile mode."""
-        return LidarCommitMessage(paths=[], frag_path="")
+        """Per partition, capture x,y,z[,r,g,b] as a feather fragment in scratch.
+
+        The driver's _commit_single collects all fragments and merges them into
+        one .laz via _merge_laz_parts.
+        """
+        import pyarrow as pa
+        import pyarrow.feather as feather
+
+        os.makedirs(self.scratch_dir, exist_ok=True)
+        xs: list = []
+        ys: list = []
+        zs: list = []
+        rs: list = []
+        gs: list = []
+        bs: list = []
+        for row in iterator:
+            xs.append(row["x"])
+            ys.append(row["y"])
+            zs.append(row["z"])
+            if self.has_rgb:
+                rs.append(row["r"])
+                gs.append(row["g"])
+                bs.append(row["b"])
+
+        if not xs:
+            return LidarCommitMessage(paths=[], frag_path="")
+
+        cols = {
+            "x": pa.array(xs, type=pa.float64()),
+            "y": pa.array(ys, type=pa.float64()),
+            "z": pa.array(zs, type=pa.float64()),
+        }
+        if self.has_rgb:
+            cols["r"] = pa.array(rs, type=pa.uint8())
+            cols["g"] = pa.array(gs, type=pa.uint8())
+            cols["b"] = pa.array(bs, type=pa.uint8())
+
+        tbl = pa.table(cols)
+        frag = os.path.join(self.scratch_dir, f"frag-{uuid.uuid4().hex}.arrow")
+        feather.write_feather(tbl, frag)
+        return LidarCommitMessage(frag_path=frag)
+
+    def _gate_merge(self, frags: List[str]) -> None:
+        """Refuse a driver merge on feather fragments that would exceed the RAM cap.
+
+        Estimates bytes as total feather rows * bytes/point (32 XYZ+RGB, 24 XYZ).
+        Raises ValueError when the estimated size exceeds the connect-aware cap.
+        """
+        import pyarrow.feather as feather
+
+        from databricks.labs.gbx.ds.file_gbx import (
+            _connect_aware_lru_sizing,
+            _resolve_session_for_cap,
+            materialize_decision,
+        )
+
+        total_rows = sum(
+            feather.read_table(frag, columns=["x"]).num_rows for frag in frags
+        )
+        bpp = 32 if self.has_rgb else 24
+        est = total_rows * bpp
+        cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
+        if materialize_decision(est, "write", cap_bytes=cap) == "fuse":
+            raise ValueError(
+                f"lidar_gbx merge: estimated {est / 1e6:.0f} MB exceeds the "
+                f"per-task RAM cap; run the merge on a classic cluster, or keep "
+                f"the sharded parts."
+            )
+
+    def _gate_merge_paths(
+        self, parts: List[str], has_rgb: Optional[bool] = None
+    ) -> None:
+        """Refuse a driver merge on on-disk .laz/.las files that would exceed RAM.
+
+        Estimates bytes as summed point_count * bytes/point (32 XYZ+RGB, 24 XYZ).
+        has_rgb overrides self.has_rgb (needed when self.has_rgb is False in merge
+        mode but the on-disk files actually contain RGB).
+        """
+        from databricks.labs.gbx.ds.file_gbx import (
+            _connect_aware_lru_sizing,
+            _resolve_session_for_cap,
+            materialize_decision,
+        )
+
+        _has_rgb = has_rgb if has_rgb is not None else self.has_rgb
+        bpp = 32 if _has_rgb else 24
+        est = sum(_laz_point_count(p) for p in parts) * bpp
+        cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
+        if materialize_decision(est, "write", cap_bytes=cap) == "fuse":
+            raise ValueError(
+                f"lidar_gbx merge: estimated {est / 1e6:.0f} MB exceeds the "
+                f"per-task RAM cap; run the merge on a classic cluster, or keep "
+                f"the sharded parts."
+            )
+
+    def _frags_to_temp_laz(self, frags: List[str]) -> List[str]:
+        """Decode each feather fragment (x,y,z[,r,g,b]) into a temp .laz file.
+
+        Returns the list of written paths (may be .las on LAZ-fallback).
+        Cleans up any already-created temps on failure before re-raising.
+        """
+        import pyarrow.feather as feather
+
+        tmps: List[str] = []
+        try:
+            for frag in frags:
+                tbl = feather.read_table(frag)
+                names = set(tbl.schema.names)
+                xs = tbl.column("x").to_pylist()
+                ys = tbl.column("y").to_pylist()
+                zs = tbl.column("z").to_pylist()
+                if self.has_rgb and "r" in names:
+                    rs = tbl.column("r").to_pylist()
+                    gs = tbl.column("g").to_pylist()
+                    bs = tbl.column("b").to_pylist()
+                else:
+                    rs, gs, bs = [], [], []
+
+                tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
+                tmp.close()
+                written = self._encode_part(tmp.name, xs, ys, zs, rs, gs, bs)
+                # If laspy fell back to .las, the .laz placeholder is empty; remove it.
+                if written != tmp.name and os.path.exists(tmp.name):
+                    try:
+                        os.unlink(tmp.name)
+                    except OSError:
+                        pass
+                tmps.append(written)
+        except Exception:
+            for p in tmps:
+                if os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+            raise
+        return tmps
+
+    def _commit_single(self, messages: list) -> None:
+        """Driver-side singleFile merge: decode fragments -> merge -> publish."""
+        from databricks.labs.gbx.ds.vector import _resolve_single_file_output
+        from databricks.labs.gbx.ds.writer import _publish_merged
+
+        frags = [
+            m.frag_path
+            for m in messages
+            if isinstance(m, LidarCommitMessage) and m.frag_path
+        ]
+        if not frags:
+            _scratch.remove_scratch_dir(self.scratch_dir)
+            return None
+
+        target = _resolve_single_file_output(self.path, self.file_name, ".laz")
+        temp_laz_inputs: List[str] = []
+        tmp_merged: Optional[str] = None
+        try:
+            self._gate_merge(frags)
+            temp_laz_inputs = self._frags_to_temp_laz(frags)
+            expected = sum(_laz_point_count(p) for p in temp_laz_inputs)
+
+            merged_tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
+            merged_tmp.close()
+            tmp_merged = merged_tmp.name
+
+            _merge_laz_parts(temp_laz_inputs, tmp_merged, self.has_rgb, self.crs)
+            real = _laz_written_path(tmp_merged)
+            _publish_merged(real, _swap_ext(target, real), expected, _laz_point_count)
+        finally:
+            # Clean up temp per-fragment .laz files.
+            for p in temp_laz_inputs:
+                if os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+            # Clean up merged temp (both .laz and possible .las fallback).
+            if tmp_merged:
+                for p in {tmp_merged, tmp_merged[:-4] + ".las"}:
+                    if os.path.exists(p):
+                        try:
+                            os.unlink(p)
+                        except OSError:
+                            pass
+            _scratch.remove_scratch_dir(self.scratch_dir)
+        return None
+
+    def _commit_merge(self) -> None:
+        """Post-hoc directory merge: fold existing .laz/.las parts into one .laz."""
+        import laspy
+
+        from databricks.labs.gbx.ds.vector import _resolve_single_file_output
+        from databricks.labs.gbx.ds.writer import _glob_merge_inputs, _publish_merged
+
+        target = _resolve_single_file_output(self.path, self.file_name, ".laz")
+        target_las = os.path.splitext(target)[0] + ".las"
+
+        # Search for both .laz and .las parts, excluding both target variants.
+        parts = sorted(
+            set(
+                _glob_merge_inputs(self.path, target, "laz")
+                + _glob_merge_inputs(self.path, target_las, "las")
+            )
+        )
+        if not parts:
+            raise ValueError(
+                f"lidar_gbx merge: no .laz/.las files under {self.path} to merge."
+            )
+
+        # Infer RGB from the first part's point format.
+        with laspy.open(parts[0]) as r0:
+            has_rgb = r0.header.point_format.id in (2, 3, 5, 7, 8, 10)
+
+        self._gate_merge_paths(parts, has_rgb=has_rgb)
+        expected = sum(_laz_point_count(p) for p in parts)
+
+        tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
+        tmp.close()
+        tmp_merged = tmp.name
+        try:
+            _merge_laz_parts(parts, tmp_merged, has_rgb, self.crs)
+            real = _laz_written_path(tmp_merged)
+            _publish_merged(real, _swap_ext(target, real), expected, _laz_point_count)
+        finally:
+            for p in {tmp_merged, tmp_merged[:-4] + ".las"}:
+                if os.path.exists(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+
+        # DATA-SAFETY: only delete parts AFTER validate+copy+verify all passed.
+        if not self.keep_parts:
+            for p in parts:
+                try:
+                    os.remove(p)
+                except OSError:
+                    pass
 
     def commit(self, messages: list) -> None:
-        return None  # parts mode: executors already wrote the files (Task 3 adds modes)
+        if self.merge:
+            return self._commit_merge()
+        if self.single_file:
+            return self._commit_single(messages)
+        return None
 
     def abort(self, messages: list) -> None:
         for msg in messages:

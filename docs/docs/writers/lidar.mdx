@@ -104,12 +104,16 @@ merge already-written parts after the fact with `merge`.
 
 - **`singleFile`** captures each partition's points as a feather fragment on
   the executor, then the driver concatenates all fragments into one `.laz`.
-  Bound by driver RAM — use on point clouds that fit comfortably in memory;
-  otherwise keep the default sharded parts.
+  The merge budget is sized to the node's available RAM (compute-aware): a
+  GPU/AIR node with large host RAM merges large clouds; a minimal CPU node
+  falls back to a conservative 512 MiB floor. Override with `mergeMaxMB`.
+  Otherwise keep the default sharded parts for very large point clouds.
 - **`merge`** folds the `.laz` / `.las` files already in the output directory
   into one `.laz` without recomputing the source DataFrame (the rows are
   ignored). Merging an empty directory raises. `merge` implies single output
-  and overrides `singleFile` if both are set.
+  and overrides `singleFile` if both are set. The merge budget is
+  compute-aware (host-RAM-based): a GPU or high-RAM node handles large
+  clouds; override with `mergeMaxMB` when needed.
 - **`keepParts`** (default `false`) controls the source parts after a
   successful merge. Parts are deleted only **after** the merged output is
   validated and durably written — a failed or partial merge always leaves every
@@ -128,6 +132,7 @@ merge already-written parts after the fact with `merge`.
 | `singleFile` | `"false"` | Write **one** `.laz` instead of sharded parts. See [Single-file & directory merge](#single-file--directory-merge). |
 | `merge` | `"false"` | Post-hoc: merge the `.laz` / `.las` files **already present** in the output directory into one file, without re-running the source DataFrame. Requires `.mode("append")`. |
 | `keepParts` | `"false"` | Meaningful only with `singleFile` / `merge`. When `false` (default), source part files are deleted after the merged output is validated and durably written; set to `"true"` to keep them. A failed or partial merge never deletes parts. |
+| `mergeMaxMB` | — | Override the compute-aware merge budget (in MiB). When set, the driver-side merge is allowed up to this many MiB of concatenated point bytes, regardless of the node's detected RAM. Use `GBX_LIDAR_MERGE_MAX_MB` as an environment-variable equivalent. |
 
 ### Planned (v2)
 

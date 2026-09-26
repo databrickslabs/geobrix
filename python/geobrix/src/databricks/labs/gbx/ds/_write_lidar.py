@@ -100,6 +100,50 @@ def _resolve_write_cols(schema: StructType, options: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Compute-aware merge budget helpers
+# ---------------------------------------------------------------------------
+
+_MERGE_FALLBACK_BYTES = 512 * 1024**2  # conservative floor if the RAM probe fails
+
+
+def _probe_infra():
+    """Return (avail_mb, gpu_count) from gpu_infra(); (0, 0) on any probe failure."""
+    try:
+        from databricks.labs.gbx.pyrx.mvs import gpu_infra
+
+        infra = gpu_infra()
+        avail_mb = int(
+            infra.get("host_ram_available_mb") or infra.get("host_ram_mb") or 0
+        )
+        gpu = int(infra.get("gpu_count", 0))
+        return avail_mb, gpu
+    except Exception:  # noqa: BLE001
+        return 0, 0
+
+
+def _merge_budget_bytes(merge_max_mb) -> int:
+    """Max single-copy point bytes allowed for a driver-side merge, sized to the
+    executing compute's ACTUAL available RAM (gpu_infra host_ram_available_mb).
+    The merge peak is ~2x the concatenated point bytes, so the point-byte budget
+    is (available - reserve) / 2. AIR (gpu_count>0) reserves more headroom (it also
+    holds GPU/host buffers) but its large RAM still yields a big budget. An explicit
+    mergeMaxMB option or GBX_LIDAR_MERGE_MAX_MB env var overrides. Probe failure ->
+    conservative floor."""
+    import os
+
+    override = merge_max_mb or os.environ.get("GBX_LIDAR_MERGE_MAX_MB")
+    if override:
+        return max(int(float(override) * 1024**2), 0)
+    avail_mb, gpu = _probe_infra()
+    if avail_mb <= 0:
+        return _MERGE_FALLBACK_BYTES
+    reserve_mb = (6 if gpu > 0 else 2) * 1024  # 6 GiB AIR, 2 GiB GC/classic
+    usable_mb = max(0, avail_mb - reserve_mb)
+    budget = (usable_mb * 1024**2) // 2  # /2 for the ~2x merge peak
+    return max(budget, _MERGE_FALLBACK_BYTES)  # never below the safe floor
+
+
+# ---------------------------------------------------------------------------
 # Module-level helpers (merge core)
 # ---------------------------------------------------------------------------
 
@@ -203,6 +247,7 @@ class LidarGbxWriter(DataSourceWriter):
         self.keep_parts = str(options.get("keepParts", "false")).lower() == "true"
         self.file_name = options.get("fileName")
         self.part_prefix = options.get("partPrefix") or "part"
+        self.merge_max_mb = options.get("mergeMaxMB")
         if self.merge:
             self.single_file = False
         if not self.merge and overwrite and os.path.isdir(self.path):
@@ -338,31 +383,32 @@ class LidarGbxWriter(DataSourceWriter):
         return LidarCommitMessage(frag_path=frag)
 
     def _gate_merge(self, frags: List[str]) -> None:
-        """Refuse a driver merge on feather fragments that would exceed the RAM cap.
+        """Refuse a driver merge on feather fragments that would exceed the RAM budget.
 
         Estimates bytes as total feather rows * bytes/point (32 XYZ+RGB, 24 XYZ).
-        Raises ValueError when the estimated size exceeds the connect-aware cap.
+        Budget is compute-aware (sized from the node's actual available RAM via
+        gpu_infra). mergeMaxMB option or GBX_LIDAR_MERGE_MAX_MB env var overrides.
         """
         import pyarrow.feather as feather
-
-        from databricks.labs.gbx.ds.file_gbx import (
-            _connect_aware_lru_sizing,
-            _resolve_session_for_cap,
-            materialize_decision,
-        )
 
         total_rows = sum(
             feather.read_table(frag, columns=["x"]).num_rows for frag in frags
         )
         bpp = 32 if self.has_rgb else 24
         est = total_rows * bpp
-        cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
-        if materialize_decision(est, "write", cap_bytes=cap) == "fuse":
+        budget = _merge_budget_bytes(self.merge_max_mb)
+        avail_mb, gpu = _probe_infra()
+        if est > budget:
             raise ValueError(
                 f"lidar_gbx merge: estimated {est / 1e6:.0f} MB exceeds the "
-                f"per-task RAM cap; run the merge on a classic cluster, or keep "
-                f"the sharded parts."
+                f"compute-aware budget of {budget / 1e6:.0f} MB "
+                f"(host-RAM-based; {gpu}xGPU detected, RAM avail {avail_mb} MiB). "
+                f"Use mergeMaxMB=<MB> to override or run on a node with more RAM."
             )
+        print(
+            f"[merge] {gpu}xGPU · RAM avail {avail_mb} MiB → "
+            f"budget {budget / 1e6:.0f} MB, merging {est / 1e6:.0f} MB"
+        )
 
     def _gate_merge_paths(
         self, parts: List[str], has_rgb: Optional[bool] = None
@@ -371,24 +417,26 @@ class LidarGbxWriter(DataSourceWriter):
 
         Estimates bytes as summed point_count * bytes/point (32 XYZ+RGB, 24 XYZ).
         has_rgb overrides self.has_rgb (needed when self.has_rgb is False in merge
-        mode but the on-disk files actually contain RGB).
+        mode but the on-disk files actually contain RGB). Budget is compute-aware
+        (sized from the node's actual available RAM via gpu_infra). mergeMaxMB
+        option or GBX_LIDAR_MERGE_MAX_MB env var overrides.
         """
-        from databricks.labs.gbx.ds.file_gbx import (
-            _connect_aware_lru_sizing,
-            _resolve_session_for_cap,
-            materialize_decision,
-        )
-
         _has_rgb = has_rgb if has_rgb is not None else self.has_rgb
         bpp = 32 if _has_rgb else 24
         est = sum(_laz_point_count(p) for p in parts) * bpp
-        cap = _connect_aware_lru_sizing(_resolve_session_for_cap())[0]
-        if materialize_decision(est, "write", cap_bytes=cap) == "fuse":
+        budget = _merge_budget_bytes(self.merge_max_mb)
+        avail_mb, gpu = _probe_infra()
+        if est > budget:
             raise ValueError(
                 f"lidar_gbx merge: estimated {est / 1e6:.0f} MB exceeds the "
-                f"per-task RAM cap; run the merge on a classic cluster, or keep "
-                f"the sharded parts."
+                f"compute-aware budget of {budget / 1e6:.0f} MB "
+                f"(host-RAM-based; {gpu}xGPU detected, RAM avail {avail_mb} MiB). "
+                f"Use mergeMaxMB=<MB> to override or run on a node with more RAM."
             )
+        print(
+            f"[merge] {gpu}xGPU · RAM avail {avail_mb} MiB → "
+            f"budget {budget / 1e6:.0f} MB, merging {est / 1e6:.0f} MB"
+        )
 
     def _frags_to_temp_laz(self, frags: List[str]) -> List[str]:
         """Decode each feather fragment (x,y,z[,r,g,b]) into a temp .laz file.

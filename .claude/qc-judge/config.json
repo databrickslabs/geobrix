@@ -92,6 +92,15 @@
       "cmd": "[ -f docs/scripts/check-lockfile-registry.py ] || { echo 'absent; skip'; exit 0; }; python3 docs/scripts/check-lockfile-registry.py",
       "expect_exit": 0,
       "timeout_seconds": 20
+    },
+    "centralized-primitives": {
+      "name": "No ad-hoc reimplementation of centralizing primitives",
+      "type": "command",
+      "severity": "critical",
+      "enabled": true,
+      "cmd": "[ -f docs/scripts/check-centralized-primitives.py ] || { echo 'absent; skip'; exit 0; }; python3 docs/scripts/check-centralized-primitives.py",
+      "expect_exit": 0,
+      "timeout_seconds": 30
     }
   }
 }

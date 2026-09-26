@@ -10,7 +10,7 @@ GPU AI Runtime.
 |---|---|---|---|
 | `config_nb` | — | functions, config | Shared imports, parameters, SfM helpers |
 | `01a_sfm_orthomosaic` | GitHub JPEGs | `orthomosaic.tif` | Download → exif_gbx → QC → sparse SfM → ortho |
-| `01b_sfm_orthomosaic_gpu` (optional) | `01a` sparse model | `orthomosaic_dense.tif`, `dsm_dense.tif`, `dense.laz` | GPU dense MVS: patch_match_stereo → fusion → georef |
+| `01b_sfm_orthomosaic_gpu` (optional) | `01a` sparse model | `orthomosaic_dense.tif`, `dsm_dense.tif`, `dense_merged.laz` (+ sharded `dense_<grp>_<cid>.laz` parts) | GPU dense MVS: patch_match_stereo → fusion → georef |
 | `02_publish` | `orthomosaic.tif` | `orthomosaic_corrected.tif`, `orthomosaic_cog.tif`, `orthomosaic.pmtiles` | Publish: color correction → COG (`cog_gbx`) → PMTiles (`gbx_rst_xyzpyramid` + `pmtiles_gbx`) |
 | `monitor` | `output_dir/sparse/` | — | Optional live SfM progress watcher |
 

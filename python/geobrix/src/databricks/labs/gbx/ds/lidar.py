@@ -332,3 +332,10 @@ class LidarGbxDataSource(DataSource):
 
     def reader(self, schema: StructType) -> DataSourceReader:
         return LidarGbxReader(self.options)
+
+    def writer(self, schema: StructType, overwrite: bool):
+        from databricks.labs.gbx.ds._write_lidar import LidarGbxWriter
+
+        if not self.options.get("path"):
+            raise ValueError("lidar_gbx writer requires an output path (.save(path)).")
+        return LidarGbxWriter(self.options, schema, overwrite)

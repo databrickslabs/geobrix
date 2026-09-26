@@ -14,8 +14,12 @@ from databricks.labs.gbx.core.crs import (  # noqa: F401
     _esri_codes,
     _is_intlike,
     _transformer_cache,
+    authority_srid_of,
+    crs_equal,
     crs_to_canonical,
+    crs_to_proj4,
     get_transformer,
     resolve_crs,
     resolve_source_crs,
+    to_pyproj_crs,
 )

@@ -155,6 +155,65 @@ def crs_to_canonical(crs: Optional[CRS]) -> Optional[str]:
     return crs.to_wkt()
 
 
+def to_pyproj_crs(crs) -> "pyproj.CRS":
+    """Bridge rasterio CRS / authority string / WKT / int to a **pyproj** CRS.
+
+    Uses ``from_authority`` at 100 % confidence when an authority is recognized,
+    falling back to ``from_wkt``.  This is the proven pattern from
+    ``pyvx/_crs.py:581-585``, promoted to a canonical helper.
+
+    **Never for storage** — use :func:`crs_to_canonical` for provenance strings.
+    Consumers that need pyproj-only properties (``is_geographic``, ``ellipsoid``,
+    ``area_of_use``, ``laspy`` header CRS) call this.
+    """
+    import pyproj as _pyproj
+
+    rio = _as_crs(crs)
+    _auth = rio.to_authority(confidence_threshold=100)
+    if _auth:
+        return _pyproj.CRS.from_authority(*_auth)
+    return _pyproj.CRS.from_wkt(rio.to_wkt())
+
+
+def crs_equal(a, b) -> bool:
+    """Semantic CRS equality: normalize both via :func:`to_pyproj_crs`, compare with pyproj ``.equals()``.
+
+    None-safe: two ``None`` values are equal; ``None`` vs any CRS is ``False``.
+    Replaces the inline ``_ProjCRS.from_user_input(a).equals(b)`` pattern
+    (e.g. ``pyrx/core/agg.py:485-487``).
+    """
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    try:
+        return to_pyproj_crs(a).equals(to_pyproj_crs(b))
+    except Exception:
+        return str(a) == str(b)
+
+
+def crs_to_proj4(crs: Optional[CRS]) -> Optional[str]:
+    """OGR-parity PROJ4 string for output columns — **never for storage**.
+
+    Routes rasterio CRS → pyproj via :func:`to_pyproj_crs` and calls
+    ``.to_proj4()``.  The pyproj PROJ4 deprecation ``UserWarning`` is
+    suppressed centrally here so callers never see it.
+
+    For canonical storage / provenance strings use :func:`crs_to_canonical`.
+    """
+    if crs is None:
+        return None
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result = to_pyproj_crs(crs).to_proj4()
+        return result or None
+    except Exception:
+        return None
+
+
 def _transformer_key(crs: CRS) -> str:
     """Cache key that identifies a CRS EXACTLY — never a fuzzy-matched near-neighbour.
 

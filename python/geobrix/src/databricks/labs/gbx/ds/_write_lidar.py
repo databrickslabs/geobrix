@@ -128,6 +128,28 @@ def _swap_ext(target: str, real: str) -> str:
     return os.path.splitext(target)[0] + ext
 
 
+def _infer_crs_from_parts(inputs: List[str]) -> Optional[str]:
+    """Return the canonical CRS string inferred from the first input file's header.
+
+    Reads the LAS/LAZ VLR CRS, routes it through ``resolve_crs`` + ``crs_to_canonical``
+    so ESRI/OGC authorities are preserved (e.g. ESRI:54008 stays 'ESRI:54008' rather
+    than falling back to a raw WKT blob). Returns None when no CRS can be inferred.
+    """
+    if not inputs:
+        return None
+    try:
+        import laspy
+
+        from databricks.labs.gbx.core.crs import crs_to_canonical, resolve_crs
+
+        _parsed = laspy.read(inputs[0]).header.parse_crs()
+        if _parsed is not None:
+            return crs_to_canonical(resolve_crs(_parsed.to_wkt()))
+    except Exception:  # noqa: BLE001
+        pass
+    return None
+
+
 def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> int:
     """Concatenate x/y/z(/RGB) from part .laz/.las files, recompute header from
     merged bounds, write ONE .laz at tmp_path via the write_xyz(rgb)_laz path.
@@ -143,14 +165,7 @@ def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> in
 
     # Infer CRS from the first part when the caller did not supply one.
     if crs is None and inputs:
-        try:
-            _parsed = laspy.read(inputs[0]).header.parse_crs()
-            if _parsed is not None:
-                from databricks.labs.gbx.core.crs import crs_to_canonical, resolve_crs
-
-                crs = crs_to_canonical(resolve_crs(_parsed.to_wkt()))
-        except Exception:  # noqa: BLE001
-            pass
+        crs = _infer_crs_from_parts(inputs)
 
     xs: list = []
     ys: list = []

@@ -199,6 +199,26 @@ def _crs_to_srid_proj(crs) -> Tuple[str, str]:
         return "0", ""
 
 
+def _make_layer_srs(crs):
+    """Return an OSR SpatialReference for the given CRS string, or None.
+
+    Uses ``SetFromUserInput`` so EPSG:, ESRI:, OGC:, WKT, and PROJ4 strings
+    are all handled uniformly.  The old inline code used ``ImportFromEPSG`` for
+    EPSG-prefixed strings and ``ImportFromProj4`` for everything else —
+    ``ImportFromProj4("ESRI:54008")`` / ``ImportFromProj4("OGC:CRS84")`` both
+    fail silently and produce a null SRS.
+
+    Returns None when ``crs`` is falsy.
+    """
+    if not crs:
+        return None
+    from osgeo import osr
+
+    srs = osr.SpatialReference()
+    srs.SetFromUserInput(str(crs))
+    return srs
+
+
 def _zip_vsi(path: str) -> str:
     """Map a zipped vector source to a GDAL /vsizip/ path."""
     if path.lower().endswith(".zip"):
@@ -1359,7 +1379,7 @@ class VectorGbxWriter(DataSourceWriter):
         (committed every _GDB_TX_BATCH rows), which eliminates the per-feature
         auto-commit overhead that otherwise makes large writes O(n) slow."""
         try:
-            from osgeo import ogr, osr
+            from osgeo import ogr
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(
                 "file_gdb_gbx writing requires the native GDAL Python bindings (osgeo) "
@@ -1385,10 +1405,7 @@ class VectorGbxWriter(DataSourceWriter):
             "MultiPolygon": ogr.wkbMultiPolygon,
             "GeometryCollection": ogr.wkbGeometryCollection,
         }
-        srs = None
-        if crs:
-            srs = osr.SpatialReference()
-            srs.SetFromUserInput(str(crs))
+        srs = _make_layer_srs(crs)
 
         def _ogr_type(t):
             if pa.types.is_floating(t):

@@ -32,7 +32,7 @@ from databricks.labs.gbx.ds._scratch import new_scratch_dir, remove_scratch_dir
 The `centralized-primitives` QC check flags this outside the canonical file:
 
 ```python
-tempfile.mkdtemp(...)   # untracked — leaked on failure; the `scratch` check FAILs on it
+tempfile.mkdtemp(...)   # untracked — leaked on failure; the `scratch` check flags it as an advisory (warn) until the writer-scaffolding consolidation pass clears the debt and flips scratch to FAIL
 ```
 
 Also avoid bespoke merge loops, glob patterns, and output-name sanitizers — they diverge from `_publish_merged` / `_glob_merge_inputs` / `_safe_name` on edge cases (Unicode names, sparse part counts). Reuse the shared helpers.

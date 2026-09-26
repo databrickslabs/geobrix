@@ -7,10 +7,11 @@ paths:
 # CRS resolution
 
 All CRS classification, normalization, and round-trip operations belong in
-`databricks.labs.gbx.pyrx.core.crs`.
+`databricks.labs.gbx.core.crs` (the tier-neutral canonical module; the
+`pyrx.core.crs` shim re-exports a subset for backward compatibility).
 
 ```python
-from databricks.labs.gbx.pyrx.core.crs import resolve_crs, crs_to_canonical, authority_srid_of
+from databricks.labs.gbx.core.crs import resolve_crs, crs_to_canonical, authority_srid_of
 ```
 
 - `resolve_crs(src)` — classify user or file input into a `CRSSource` (EPSG, ESRI authority, WKT, proj-string).

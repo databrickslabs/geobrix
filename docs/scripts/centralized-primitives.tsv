@@ -1,6 +1,6 @@
 primitive	signature	allow	level	rule
 crs	(ProjCRS\.from_|CRS\.from_epsg|CRS\.from_authority|parse_crs\(\)\.to_wkt|CRS\.from_user_input\(|CRS\.from_string\(|CRS\.from_wkt\()	python/geobrix/src/databricks/labs/gbx/pyrx/core/crs.py,python/geobrix/src/databricks/labs/gbx/core/crs.py,python/geobrix/test/*,docs/tests/*,notebooks/*	fail	.claude/rules/crs-resolution.md
 memory-budget	(/proc/meminfo|SPARK_(WORKER|EXECUTOR)_MEMORY)	python/geobrix/src/databricks/labs/gbx/pyrx/core/budget.py,python/geobrix/src/databricks/labs/gbx/ds/file_gbx.py,python/geobrix/src/databricks/labs/gbx/pyrx/mvs.py	warn	.claude/rules/memory-budget.md
-file-listing	\b(os\.walk|glob\.glob)\(	python/geobrix/src/databricks/labs/gbx/ds/_listing.py	warn	.claude/rules/uc-volumes.md
+file-listing	\b(os\.walk|glob\.glob)\(	python/geobrix/src/databricks/labs/gbx/ds/_listing.py,python/geobrix/test/*,docs/tests/*	warn	.claude/rules/uc-volumes.md
 compression	(def predictor_for|def _creation_opts|profile\["(compress|zlevel|predictor|zstd_level)"\]|"COMPRESS"\s*:)	python/geobrix/src/databricks/labs/gbx/pyrx/core/compression.py,python/geobrix/test/*	fail	.claude/rules/compression.md
 scratch	\btempfile\.mkdtemp\(	python/geobrix/src/databricks/labs/gbx/ds/_scratch.py	warn	.claude/rules/writer-scaffolding.md

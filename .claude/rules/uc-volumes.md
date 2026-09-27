@@ -28,31 +28,44 @@ Serverless forbids `sparkContext` / `.rdd` / `_jvm` / `_jsc`; guard any `spark.c
 
 ## Source-file listing & path normalization
 
-Use `ds/_listing` for **every** consumer that enumerates source files or normalizes a path —
-readers, writers, functions, bench, and `preparer.py`:
+Use `ds/_listing` for consumers that **enumerate source files** on UC Volumes —
+readers, bench corpus listings, and `preparer.py`:
 
 ```python
 from databricks.labs.gbx.ds._listing import list_files, to_local_path, to_spark_uri
 ```
 
-- `list_files(root, pattern)` — walks a Volume root with the `_retry_transient` guard (Serverless
-  eventual-consistency: `FileNotFound` on large reads retried ~10×). Returns absolute local paths.
+- `list_files(root, pattern, recursive=True, raise_on_empty=True)` — enumerates a Volume root
+  with the `_retry_transient` guard built in (Serverless eventual-consistency: transient
+  `FileNotFound`/`OSError` retried ~10×). Returns sorted absolute local paths.
+  - `recursive=False` for flat (top-level only) listings.
+  - `raise_on_empty=False` for existence checks (returns `[]` instead of raising).
 - `to_local_path(uri)` — strips `dbfs:` / `file:` schemes and returns a bare `/Volumes/...` path
   suitable for `pathlib` / `os`.
 - `to_spark_uri(path)` — converts a bare Volume path to the `dbfs:` URI Spark readers expect.
 
-### Patterns to avoid
+**Scope:** `list_files` targets **Volume source enumeration** (reading input files).
+Do NOT route through it: writer stale-cleanup (deletion), scratch/temp-dir operations,
+target-exists / copy-tree / path-type checks, or `tmp_path`-based tests.  Those sites use
+`glob.glob` / `os.listdir` legitimately and carry no retry obligation.
 
-The `centralized-primitives` QC check (`file-listing` row) flags these outside `_listing.py`:
+### Patterns to avoid in Volume source enumeration
+
+The `centralized-primitives` QC check (`file-listing` row, **warn** level — advisory) flags
+these outside `_listing.py`:
 
 ```python
-os.walk(path)          # misses the Serverless retry guard
+os.walk(path)          # misses the Serverless retry guard when listing source files
 glob.glob(pattern)     # same
 ```
 
-Also avoid manual scheme-stripping (`path.replace("dbfs:", "")`, `path.lstrip("file:")`) — use
-`to_local_path(uri)` instead. The QC check does not flag these directly, but they are equally
-fragile and miss the same edge cases.
+The check is **advisory (warn), not blocking (fail)** — `os.walk` and `glob.glob` are
+general Python idioms used pervasively for legitimate non-Volume operations (deletion,
+scratch dirs, tests), so a hard gate would require a large, fragile allow-list.  The check
+flags candidates for human review; it does not block CI.
 
-Bare `os.walk` / `glob.glob` over a Volume path silently drops files when Serverless FUSE hasn't
-fully propagated a large write. Always route source-file enumeration through `list_files`.
+Also avoid manual scheme-stripping (`path.replace("dbfs:", "")`, `path.lstrip("file:")`) — use
+`to_local_path(uri)` instead.
+
+Known advisory blind spots (documented, not chased): aliased `import glob as _glob` (regex
+misses it), `iglob`, `rglob`, and `os.listdir`.

@@ -49,8 +49,10 @@ def _make_geotiff_bytes(crs_str: str, width: int = 4, height: int = 4) -> bytes:
 @pytest.mark.parametrize(
     "crs_str,expected_srid",
     [
-        ("EPSG:4326", 4326),
-        ("ESRI:54008", 54008),  # old to_epsg() returned None; now returns 54008
+        (
+            "ESRI:54008",
+            54008,
+        ),  # fail-on-revert (old to_epsg()->None); matrix in test_crs_helpers
     ],
 )
 def test_srid_accessor_returns_esri_aware_code(crs_str, expected_srid):
@@ -76,8 +78,10 @@ def test_srid_accessor_returns_esri_aware_code(crs_str, expected_srid):
 @pytest.mark.parametrize(
     "crs_str,expected_srid",
     [
-        ("EPSG:4326", 4326),
-        ("ESRI:54008", 54008),  # old to_epsg() in summary returned None
+        (
+            "ESRI:54008",
+            54008,
+        ),  # fail-on-revert (old summary to_epsg()->None); matrix central
     ],
 )
 def test_summary_epsg_field_esri_aware(crs_str, expected_srid):

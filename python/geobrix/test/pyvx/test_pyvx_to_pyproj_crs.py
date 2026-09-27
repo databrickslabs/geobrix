@@ -12,19 +12,5 @@ def test_to_pyproj_crs_used_for_area_of_use():
     pc = to_pyproj_crs(tgt)
     assert isinstance(pc, pyproj.CRS)
     assert pc.to_authority(min_confidence=100) == ("ESRI", "54008")
-
-
-def test_to_pyproj_crs_wkt_fallback():
-    """Custom WKT with no authority uses from_wkt fallback."""
-    import pyproj as _pyproj
-
-    custom_crs = _pyproj.CRS.from_wkt(
-        'GEOGCS["WGS 84",DATUM["WGS_1984",'
-        'SPHEROID["WGS 84",6378137,298.257223563]],PRIMEM["Greenwich",0],'
-        'UNIT["degree",0.0174532925199433]]'
-    )
-    from rasterio.crs import CRS
-
-    rio_crs = CRS.from_wkt(custom_crs.to_wkt())
-    pc = to_pyproj_crs(rio_crs)
-    assert isinstance(pc, pyproj.CRS)
+    # to_pyproj_crs's own behavior (from_authority/from_wkt paths, WKT fallback) is
+    # covered centrally in test/core/test_crs_helpers.py — not re-tested per consumer.

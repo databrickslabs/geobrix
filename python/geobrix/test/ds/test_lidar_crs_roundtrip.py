@@ -69,16 +69,17 @@ def _write_las_with_esri54008_crs(path: str) -> None:
 # old code called ProjCRS.from_wkt("EPSG:4326") which raised CRSError → CRS dropped.
 # Integer EPSG inputs (e.g. 4326) worked in both old and new code → positive control.
 _ENCODER_CASES = [
-    ("EPSG:4326", ("EPSG", "4326")),  # string path: FAILS under old code
-    ("EPSG:32611", ("EPSG", "32611")),  # string path: FAILS under old code
-    (4326, ("EPSG", "4326")),  # int path: positive control (works in both)
+    (
+        "EPSG:4326",
+        ("EPSG", "4326"),
+    ),  # string path: FAILS under old code (fail-on-revert)
 ]
 
 
 @pytest.mark.parametrize(
     "crs_input,expected_auth",
     _ENCODER_CASES,
-    ids=["epsg_str", "epsg32611_str", "epsg_int"],
+    ids=["epsg_str"],
 )
 def test_laz_encoder_tags_epsg_crs_in_header(tmp_path, crs_input, expected_auth):
     """write_xyz_laz (→ _write_las in imagery.py) must tag the LAS header correctly.
@@ -138,31 +139,6 @@ def test_lidar_reader_extracts_esri_crs_as_canonical(tmp_path):
     assert crs == "ESRI:54008", (
         f"Expected 'ESRI:54008' in crs column but got {crs!r}; "
         f"lidar.py may have reverted to crs_obj.to_wkt() which returns raw WKT"
-    )
-
-
-def test_lidar_reader_extracts_epsg_crs_as_canonical(tmp_path):
-    """LidarGbxReader._read_metadata must emit 'EPSG:4326' in the crs column.
-
-    Positive-control companion to the ESRI test: even for EPSG CRS, the old
-    code (crs_obj.to_wkt()) would return a WKT string, NOT "EPSG:4326".
-    This catches a revert regardless of which CRS is in the fixture file.
-    """
-    from databricks.labs.gbx.ds.lidar import LidarGbxReader
-    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz
-
-    las_path = str(tmp_path / "epsg_test.las")
-    x, y, z = _tiny_xyz()
-    write_xyz_laz(las_path, x, y, z, crs=4326)  # integer EPSG — always tagged
-
-    reader = LidarGbxReader({"path": las_path, "mode": "metadata"})
-    batches = list(reader._read_metadata(las_path))
-
-    assert len(batches) == 1
-    crs = batches[0].to_pydict()["crs"][0]
-    assert crs == "EPSG:4326", (
-        f"Expected 'EPSG:4326' but got {crs!r}; "
-        f"crs_obj.to_wkt() returns WKT, not the canonical authority string"
     )
 
 

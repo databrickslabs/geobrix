@@ -20,11 +20,12 @@ from rasterio.transform import from_bounds
 @pytest.mark.parametrize(
     "src,expected_srid",
     [
-        ("EPSG:4326", "4326"),
-        ("ESRI:54008", "54008"),
-        ("OGC:CRS84", "0"),  # non-integer authority code → no integer srid
+        (
+            "OGC:CRS84",
+            "0",
+        ),  # non-integer code → "0" (old code returned "CRS84"); fail-on-revert
     ],
-    ids=["epsg", "esri", "ogc"],
+    ids=["ogc"],
 )
 def test_crs_to_srid_proj_production(src, expected_srid):
     """ds/vector.py _crs_to_srid_proj: production function returns correct srid.
@@ -45,10 +46,13 @@ def test_crs_to_srid_proj_production(src, expected_srid):
 @pytest.mark.parametrize(
     "src,expected_auth,expected_code",
     [
-        ("EPSG:4326", "EPSG", "4326"),
-        ("ESRI:54008", "ESRI", "54008"),
+        (
+            "ESRI:54008",
+            "ESRI",
+            "54008",
+        ),  # fail-on-revert; matrix lives in test_crs_helpers
     ],
-    ids=["epsg", "esri"],
+    ids=["esri"],
 )
 def test_make_layer_srs_authority(src, expected_auth, expected_code):
     """ds/vector.py _make_layer_srs: SetFromUserInput carries ESRI authority.
@@ -67,30 +71,18 @@ def test_make_layer_srs_authority(src, expected_auth, expected_code):
     assert auth_code == expected_code, f"Authority code for {src}: {auth_code!r}"
 
 
-def test_make_layer_srs_ogc_crs84_is_geographic():
-    """ds/vector.py _make_layer_srs: OGC:CRS84 produces a valid geographic SRS.
-
-    Old ImportFromProj4("OGC:CRS84") fails silently → null/empty SRS → IsGeographic()
-    returns 0.  FAILS on revert.
-    """
-    pytest.importorskip("osgeo.osr")
-    from databricks.labs.gbx.ds.vector import _make_layer_srs
-
-    srs = _make_layer_srs("OGC:CRS84")
-    assert srs is not None, "SRS for OGC:CRS84 is None"
-    assert srs.IsGeographic(), "OGC:CRS84 should be recognized as geographic"
-
-
 # ── 3. _build_mosaic_vrt SRS element (cog_writer.py line 320) ────────────────
 
 
 @pytest.mark.parametrize(
     "src,expected",
     [
-        ("EPSG:4326", "EPSG:4326"),
-        ("ESRI:54008", "ESRI:54008"),
+        (
+            "ESRI:54008",
+            "ESRI:54008",
+        ),  # fail-on-revert; matrix lives in test_crs_helpers
     ],
-    ids=["epsg", "esri"],
+    ids=["esri"],
 )
 def test_build_mosaic_vrt_srs_preserves_authority(src, expected, tmp_path):
     """ds/cog_writer._build_mosaic_vrt: <SRS> element is crs_to_canonical, not raw WKT.

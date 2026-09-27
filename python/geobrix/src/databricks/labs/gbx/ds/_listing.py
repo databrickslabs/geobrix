@@ -131,8 +131,33 @@ def to_local_path(path: str) -> str:
     return path
 
 
-def list_files(path: str, filter_regex: str = ".*") -> List[str]:
-    """Return sorted absolute file paths under ``path`` whose full path matches ``filter_regex``."""
+def list_files(
+    path: str,
+    filter_regex: str = ".*",
+    recursive: bool = True,
+    raise_on_empty: bool = True,
+) -> List[str]:
+    """Return sorted absolute file paths under ``path`` whose full path matches ``filter_regex``.
+
+    Args:
+        path:           Root directory or single file; accepts ``dbfs:``/``file:`` schemes.
+        filter_regex:   Full-path regex applied via ``re.match`` (anchored at start; use
+                        ``$`` to anchor at end, e.g. ``r".*\\.tif$"``). Default ``".*"``
+                        matches everything.
+        recursive:      When True (default) descend into subdirectories via ``os.walk``.
+                        When False, enumerate only the top-level entries of *path* via
+                        ``os.listdir``.
+        raise_on_empty: When True (default) raise :class:`FileNotFoundError` if no files
+                        match.  When False return an empty list instead (callers that want
+                        to check emptiness themselves, e.g. existence checks).
+
+    Both the recursive and non-recursive traversal paths are wrapped in
+    :func:`_retry_transient` so UC Volume FUSE eventual-consistency
+    ``FileNotFoundError``/``OSError`` transients are retried automatically.
+
+    Returns:
+        Sorted list of absolute local paths whose full path matches *filter_regex*.
+    """
     pattern = re.compile(filter_regex)
     # Input may arrive scheme-qualified (a column stores dbfs:/Volumes/...); strip
     # back to the bare FUSE path before any os.* listing call resolves it.
@@ -140,16 +165,34 @@ def list_files(path: str, filter_regex: str = ".*") -> List[str]:
 
     if os.path.isfile(abspath):
         candidates = [abspath] if pattern.match(abspath) else []
+    elif recursive:
+
+        def _walk() -> List[str]:
+            result: List[str] = []
+            for root, _dirs, names in os.walk(abspath):
+                for name in names:
+                    full = os.path.join(root, name)
+                    if pattern.match(full):
+                        result.append(full)
+            return result
+
+        candidates = _retry_transient(_walk)
     else:
-        candidates = []
-        for root, _dirs, names in os.walk(abspath):
-            for name in names:
-                full = os.path.join(root, name)
-                if pattern.match(full):
-                    candidates.append(full)
+
+        def _listdir() -> List[str]:
+            result: List[str] = []
+            for name in os.listdir(abspath):
+                full = os.path.join(abspath, name)
+                if os.path.isfile(full) and pattern.match(full):
+                    result.append(full)
+            return result
+
+        candidates = _retry_transient(_listdir)
 
     if not candidates:
-        raise FileNotFoundError(
-            f"No files under {path!r} matched filterRegex {filter_regex!r}"
-        )
+        if raise_on_empty:
+            raise FileNotFoundError(
+                f"No files under {path!r} matched filterRegex {filter_regex!r}"
+            )
+        return []
     return sorted(candidates)

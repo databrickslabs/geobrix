@@ -14,9 +14,10 @@ from databricks.labs.gbx.pyrx.core.compression import creation_opts, predictor_f
 - `creation_opts(compress, dtype, ...)` — returns the complete GTiff creation-option dict for a given codec and data type (handles `predictor`, `zlevel`, `zstd_level`, tile/strip layout).
 - `predictor_for(dtype)` — maps a NumPy dtype to the correct PREDICTOR value (1 / 2 / 3).
 
-## Patterns to avoid outside `compression.py`
+## Patterns the QC check flags outside `compression.py` (level: warn; pending _write.py rename)
 
-The `centralized-primitives` QC check flags any of these outside the canonical file:
+The `centralized-primitives` QC check flags any of these outside
+`compression.py` and the sanctioned test directory:
 
 ```python
 def predictor_for(...):        # duplicate — correctness diverges silently
@@ -24,6 +25,21 @@ def _creation_opts(...):       # duplicate — same risk
 profile["compress"] = ...
 profile["zlevel"] = ...
 profile["predictor"] = ...
+profile["zstd_level"] = ...    # added SP3 — catches bespoke level-key dicts
+"COMPRESS": ...                # added SP3 — catches uppercase bespoke COG dicts
 ```
 
-Bespoke profile dicts and local copies of `predictor_for` / `_creation_opts` accumulate inconsistencies across codecs. Call `creation_opts` once and use its return value.
+All 16 production modules route through `creation_opts`.  `ds/_write.py` was
+folded in SP3 (compression/predictor logic delegates to canonical) but the
+wrapper function retains the name `_creation_opts`, which still trips the
+regex — rename to a non-matching name to clear the advisory and allow the gate
+to flip to FAIL.
+
+The bench consumers `compression_sweep.py` and `datagen.py` were folded in SP3.
+
+## Also avoid outside `compression.py` (advisory — not checked by QC)
+
+Dict-literal forms such as `{"compress": ..., "zlevel": ..., "predictor": ...}` outside
+`creation_opts` carry the same divergence risk as the flagged patterns above but are not
+individually caught by the regex (a dict spread over multiple lines can evade the pattern).
+Call `creation_opts` once and spread its return value into the profile.

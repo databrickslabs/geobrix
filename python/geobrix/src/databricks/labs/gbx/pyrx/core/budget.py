@@ -216,9 +216,14 @@ def _driver_merge_budget(override_mb, infra=None):
 
 
 def budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=None):
-    """Single memory-budget authority. Phase 1 implements 'driver_merge'; Phase 2 adds
-    'dense_alloc'. Both are RAM-measured, driver-only (_assert_driver). Other intents
-    (worker_read/cog_write/tile_split) are deferred. Returns a BudgetDecision."""
+    """Driver-side RAM-measured budget authority (driver_merge, dense_alloc only).
+
+    worker_read and cog_write are intentionally NOT budget_for intents: a Serverless
+    worker cannot RAM-probe its ~1 GB task quota (/proc/meminfo reports node total),
+    so those use the empirically bisected binary cap in materialize_decision (file_gbx.py).
+    tile_split uses decoded_budget_bytes(strategy) in this module instead.
+
+    Both implemented intents are _assert_driver-guarded. Returns a BudgetDecision."""
     if intent == "driver_merge":
         _assert_driver(intent)
         budget, avail_mb, gpu = _driver_merge_budget(override_mb, infra=infra)
@@ -267,6 +272,8 @@ def budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=
             f"dense_alloc: {usable_bytes / 1e9:.1f} GB usable ({ctx})",
         )
     raise ValueError(
-        f"budget_for: intent {intent!r} not implemented "
-        f"(implemented: driver_merge, dense_alloc); worker_read/cog_write/tile_split deferred."
+        f"budget_for: unknown intent {intent!r}. "
+        f"RAM-measured driver intents: driver_merge, dense_alloc. "
+        f"Worker-side binary caps: use materialize_decision (file_gbx.py) for "
+        f"worker_read/cog_write. Tile splitting: use decoded_budget_bytes(strategy)."
     )

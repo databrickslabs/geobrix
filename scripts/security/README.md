@@ -208,3 +208,62 @@ Intentionally NOT hash-pinned (per maintainer policy):
 - `%pip install` cells inside `notebooks/examples/**/*.ipynb` — customer-facing content.
 - Code examples in `docs/docs/**/*.mdx` — illustrative for customers.
 - The published wheel's loose `pyspark>=4.0.0` in `python/geobrix/pyproject.toml` — downstream consumers need flexibility.
+
+## Base-pinned runtime packages and CVE triage
+
+### Policy
+
+geobrix pins runtime-sensitive core packages (`urllib3`, `pandas`, `numpy`, `idna`) to
+the preinstalled version of each DBR/Serverless base so a cluster `%pip install
+geobrix[light_dbrNN]` stays silent (no "a core Python package changed" notice) and the
+installed versions remain base-compatible.  geobrix **never** ships a version newer than
+the base.
+
+Per-regime base versions verified 2026-09-03:
+
+| Regime | urllib3 base | pyproject cap |
+|---|---|---|
+| DBR 17.3 / DBR 18 / Serverless env 5 | 2.3.0 | `urllib3<2.4` |
+| DBR 19 / Serverless env 6 | 2.5.0 | `urllib3<2.6` |
+
+`pandas` and `numpy` are capped similarly (`<2.3`/`<2.2` for pb5 regimes, `<2.4`/`<2.4`
+for pb6); `idna` is capped at `<3.8` (pb5) and `<3.12` (pb6).
+
+### Consequence for Dependabot triage
+
+CVEs in a base-pinned runtime package are **inherited from the DBR base image** — geobrix
+did not introduce the vulnerable version and cannot fix it by bumping the wheel pin (a
+bump past the base triggers the "core package changed" cluster notice and breaks
+base-version fidelity).  These CVEs are resolved when Databricks ships a patched DBR base.
+
+**Specific cases (as of 2026-09-27):**
+
+- **urllib3 — 16 HIGH alerts** across the four light-regime CI lockfiles (env5/env6
+  canonical + _all variants).  Fix requires 2.6.0+; both pinned bases (2.3.0 and 2.5.0)
+  are below the fix.  Every DBR base itself ships a vulnerable urllib3.  In geobrix the
+  affected code path is the `[stac]` / `[earthdata]` HTTP optional extras (requests →
+  urllib3) against attacker-controlled HTTP responses; the base wheel with no extras
+  makes no outbound HTTP calls.  A user who must patch can override the cap at their own
+  risk (`pip install geobrix[light_env6] "urllib3>=2.6"`) accepting the changed-package
+  cluster notice.
+
+- **pyarrow — 2 HIGH alerts** in the CI lockfiles (env5: 19.0.1, env6: 21.0.0 — both
+  vulnerable; fix: 23.0.1).  `pyproject.toml` sets no upper bound on pyarrow, so geobrix
+  does not prevent the fix.  The CI lockfiles are pinned to the DBR base-image version
+  for test fidelity; upgrading them past the base triggers the "core package changed"
+  cluster notice on DBR.  Patching is a CI-health action, not a 0.5.x release gate.
+
+- **jackson-databind — 2 HIGH alerts** in `pom.xml` (scope `provided`).  The
+  `jar-with-dependencies` assembly excludes provided-scope artifacts; Spark/DBR ships its
+  own `jackson-databind` at runtime.  geobrix's JAR does not bundle it.
+
+### Standing triage stance
+
+Base-pinned-runtime CVEs and dev/docs/CI alerts (docs-npm, dev-container, notebook test
+harness) are **tracked and deferred to the DBR base image**, not re-assessed per geobrix
+release.
+
+As of **2026-09-27**: 0 hard blockers for the 0.5.2 release.  274 of 353 open Dependabot
+alerts (78%) are in three pure-noise manifests (`apps/genie_map/pnpm-lock.yaml`,
+`requirements-dev-container.txt`, `docs/package-lock.json`) — none shipped in the wheel
+or JAR.

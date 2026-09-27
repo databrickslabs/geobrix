@@ -83,6 +83,8 @@ def main() -> int:
         for a in advisories[:40]:
             prim = a.split("\t", 1)[0]
             print(f"    {a}    → see {rule_by.get(prim,'')}")
+        if len(advisories) > 40:
+            print(f"    … and {len(advisories) - 40} more advisory hit(s)")
     if violations:
         print(f"[VIOLATION] {len(violations)} fail-level hit(s) — reinvented a centralized primitive:")
         for v in violations:

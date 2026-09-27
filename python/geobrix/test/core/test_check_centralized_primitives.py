@@ -70,3 +70,38 @@ def test_main_exit_zero_when_only_warn(monkeypatch, tmp_path):
         m, "_gather_files", lambda: {"a.py": "ProjCRS.from_epsg(4326)\n"}
     )
     assert m.main() == 0  # warn-only → non-blocking
+
+
+def test_advisory_truncation_notice(monkeypatch, capsys):
+    """When advisories exceed the print cap (40), a '… and N more' line must appear.
+
+    TDD: this test was written failing-first against the original advisories[:40] truncation
+    that produced no notice for the hidden hits.  The fix adds a trailing notice line.
+    """
+    m = _load()
+    n_hits = 45  # more than the 40-item cap
+    monkeypatch.setattr(
+        m,
+        "_load_registry",
+        lambda: [
+            {
+                "primitive": f"dummy{i}",
+                "signature": rf"\bdummy_{i}_call\(",
+                "allow": "",
+                "level": "warn",
+                "rule": "some-rule.md",
+            }
+            for i in range(n_hits)
+        ],
+    )
+    monkeypatch.setattr(
+        m,
+        "_gather_files",
+        lambda: {f"file{i}.py": f"dummy_{i}_call()\n" for i in range(n_hits)},
+    )
+    assert m.main() == 0  # warn-only → non-blocking
+    captured = capsys.readouterr()
+    # The header must report the true total
+    assert f"{n_hits} warn-level hit(s)" in captured.out
+    # The truncation notice must appear for the 5 hidden hits
+    assert f"… and {n_hits - 40} more advisory hit(s)" in captured.out

@@ -136,6 +136,9 @@ def plan_layout(
 # ---------------------------------------------------------------------------
 
 _MERGE_FALLBACK_BYTES = 512 * _MIB  # conservative floor if the RAM probe fails
+_DENSE_RESERVE_MB = (
+    6 * 1024
+)  # 6 GiB — GPU dense-alloc node baseline (= mvs.recommend_dense_allocation default)
 
 
 @dataclass(frozen=True)
@@ -183,7 +186,17 @@ def _probe_infra():
         return 0, 0
 
 
-def _driver_merge_budget(override_mb):
+def _resolve_avail(infra=None):
+    """(avail_mb, gpu_count) from an injected infra dict, or probe live via _probe_infra().
+    When infra is provided (hermetic tests, or callers that already ran gpu_infra()), no
+    shell-out occurs. Otherwise delegates to _probe_infra() -> gpu_infra()."""
+    if infra is not None:
+        avail = int(infra.get("host_ram_available_mb") or infra.get("host_ram_mb") or 0)
+        return avail, int(infra.get("gpu_count", 0))
+    return _probe_infra()
+
+
+def _driver_merge_budget(override_mb, infra=None):
     """Returns (budget_bytes, avail_mb, gpu). Budget = (avail - reserve)/2 (2x merge
     peak); reserve 6 GiB if GPU else 2 GiB; floor _MERGE_FALLBACK_BYTES; override wins.
     """
@@ -194,7 +207,7 @@ def _driver_merge_budget(override_mb):
     )
     if override:
         return max(int(float(override) * _MIB), 0), 0, 0
-    avail_mb, gpu = _probe_infra()
+    avail_mb, gpu = _resolve_avail(infra)
     if avail_mb <= 0:
         return _MERGE_FALLBACK_BYTES, avail_mb, gpu
     reserve_mb = (6 if gpu > 0 else 2) * 1024
@@ -203,12 +216,12 @@ def _driver_merge_budget(override_mb):
 
 
 def budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=None):
-    """Single memory-budget authority. Phase 1 implements 'driver_merge' (RAM-measured,
-    driver-only); other intents (worker_read/cog_write/dense_alloc/tile_split) arrive
-    in Phase 2. Returns a BudgetDecision."""
+    """Single memory-budget authority. Phase 1 implements 'driver_merge'; Phase 2 adds
+    'dense_alloc'. Both are RAM-measured, driver-only (_assert_driver). Other intents
+    (worker_read/cog_write/tile_split) are deferred. Returns a BudgetDecision."""
     if intent == "driver_merge":
         _assert_driver(intent)
-        budget, avail_mb, gpu = _driver_merge_budget(override_mb)
+        budget, avail_mb, gpu = _driver_merge_budget(override_mb, infra=infra)
         ctx = (
             f"{gpu}xGPU detected, RAM avail {avail_mb} MiB"
             if avail_mb
@@ -233,7 +246,27 @@ def budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=
             budget,
             f"{gpu}xGPU · RAM avail {avail_mb} MiB → budget {budget / 1e6:.0f} MB{merging}",
         )
+    if intent == "dense_alloc":
+        _assert_driver(intent)
+        override = override_mb or os.environ.get("GBX_DENSE_ALLOC_MAX_MB")
+        if override:
+            usable_bytes = max(int(float(override) * _MIB), 0)
+            return BudgetDecision(
+                "ok", usable_bytes, f"dense_alloc: override {override} MiB"
+            )
+        avail_mb, gpu = _resolve_avail(infra)
+        usable_bytes = max(0, avail_mb - _DENSE_RESERVE_MB) * _MIB
+        ctx = (
+            f"{gpu}xGPU detected, RAM avail {avail_mb} MiB"
+            if avail_mb
+            else "RAM probe unavailable"
+        )
+        return BudgetDecision(
+            "ok",
+            usable_bytes,
+            f"dense_alloc: {usable_bytes / 1e9:.1f} GB usable ({ctx})",
+        )
     raise ValueError(
-        f"budget_for: intent {intent!r} not implemented in Phase 1 "
-        f"(only 'driver_merge'); worker_read/cog_write/dense_alloc/tile_split land in Phase 2."
+        f"budget_for: intent {intent!r} not implemented "
+        f"(implemented: driver_merge, dense_alloc); worker_read/cog_write/tile_split deferred."
     )

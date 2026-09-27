@@ -87,3 +87,50 @@ def test_unknown_intent_raises():
 
     with pytest.raises(ValueError):
         budget_for("worker_read", 0)  # Phase 2 intent — not implemented in Phase 1
+
+
+# --- dense_alloc intent (Task 1) ---
+
+_INFRA_GPU1 = {
+    "host_ram_available_mb": 30 * 1024,  # 30 GiB available
+    "host_ram_mb": 32 * 1024,
+    "gpu_count": 1,
+    "per_gpu_vram_mb": 24000,
+    "cores": 16,
+}
+
+
+def test_dense_alloc_injected_infra():
+    from databricks.labs.gbx.pyrx.core.budget import budget_for
+
+    d = budget_for("dense_alloc", infra=_INFRA_GPU1)
+    # usable = max(0, 30*1024 - 6*1024) MiB = 24*1024 MiB
+    assert d.action == "ok"
+    assert d.budget_bytes == (30 * 1024 - 6 * 1024) * _MIB
+
+
+def test_dense_alloc_driver_guard(monkeypatch):
+    from databricks.labs.gbx.pyrx.core import budget as _b
+
+    class _FakeTaskContext:
+        @staticmethod
+        def get():
+            return object()  # non-None → simulate executor
+
+    monkeypatch.setattr(_b, "_import_task_context", lambda: _FakeTaskContext)
+    with pytest.raises(RuntimeError) as ei:
+        _b.budget_for("dense_alloc", infra=_INFRA_GPU1)
+    assert "driver-only" in str(ei.value)
+
+
+def test_dense_alloc_override_mb_wins(monkeypatch):
+    from databricks.labs.gbx.pyrx.core.budget import budget_for
+
+    # override_mb must win without touching the infra probe
+    monkeypatch.setattr(
+        "databricks.labs.gbx.pyrx.mvs.gpu_infra",
+        lambda: (_ for _ in ()).throw(RuntimeError("probe must not be called")),
+    )
+    d = budget_for("dense_alloc", override_mb="200")
+    assert d.budget_bytes == 200 * _MIB
+    assert d.action == "ok"

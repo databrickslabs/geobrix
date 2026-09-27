@@ -99,11 +99,11 @@ def recommend_dense_allocation(
         gpu += gpus_per_task
     # Host patch-match cache must fit node RAM ALONGSIDE the Spark/JVM heap, the Python
     # process, the loaded images, and GPU host-pinned buffers — the COLMAP default (32GB)
-    # OOM-kills small GPU nodes with a SIGABRT (e.g. a 16GB g4dn/T4). Reserve a fixed
-    # baseline (reserve_host_gb) for that non-cache usage, split the remaining available
-    # RAM across concurrent tasks, and cap to [2, per_task_host_gb]. This is more precise
-    # than a flat percentage: on big nodes per_task_host_gb caps it; on small nodes the
-    # reserve dominates.
+    # OOM-kills small GPU nodes with a SIGABRT (e.g. a 16GB g4dn/T4).
+    # The usable-RAM reserve is computed by budget_for("dense_alloc") (a fixed 6 GiB
+    # via budget.py _DENSE_RESERVE_MB); the result is split across concurrent tasks and
+    # capped to [2, per_task_host_gb]. Note: the reserve_host_gb parameter now only
+    # labels the reason string — it no longer governs cache_size_gb.
     from databricks.labs.gbx.pyrx.core import budget as _budget
 
     usable_gb = _budget.budget_for("dense_alloc", infra=infra).budget_bytes / (1024**3)

@@ -92,6 +92,14 @@ setup_log_file "$LOG_PATH"
 # Python tests run against the assembly JAR (spark.jars); warn if it predates Scala sources.
 warn_if_jar_stale "$PROJECT_ROOT"
 
+# Ensure geobrix is importable in Spark worker processes. pytest's pythonpath= in
+# pyproject.toml covers the driver (pytest) process only; UDF workers start with the
+# system sys.path, so without an editable install every @f.udf test fails with
+# ModuleNotFoundError. The pip show check is idempotent — near-zero cost when present.
+docker exec geobrix-dev /bin/bash -c \
+    "pip show geobrix >/dev/null 2>&1 || \
+     pip3 install -e /root/geobrix/python/geobrix --no-deps --break-system-packages --quiet"
+
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
 if [ -n "$MARKERS" ]; then
     echo -e "${CYAN}🏷️  Markers: ${YELLOW}$MARKERS${NC}"

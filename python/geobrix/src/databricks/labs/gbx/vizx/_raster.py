@@ -900,11 +900,11 @@ def _overlay_h3_cells(ax, vrt_path, crs):
 
 def _resolve_vrt_path(vrt):
     """Return a `.vrt` path from a direct path or a directory containing one."""
-    import glob
+    from databricks.labs.gbx.ds._listing import list_files
 
     p = str(vrt)
     if os.path.isdir(p):
-        hits = sorted(glob.glob(os.path.join(p, "*.vrt")))
+        hits = list_files(p, r".*\.vrt$", recursive=False, raise_on_empty=False)
         if len(hits) == 0:
             raise ValueError(f"plot_mosaic: no .vrt found in directory {p}")
         if len(hits) > 1:

@@ -208,7 +208,9 @@ def _resolve_sources(
     extension-filtered; an explicitly-named file bypasses the filter. Scheme-
     qualified inputs (dbfs:/..., file:/...) are stripped via ds._listing.to_local_path.
     """
-    from databricks.labs.gbx.ds._listing import to_local_path
+    import re as _re
+
+    from databricks.labs.gbx.ds._listing import list_files, to_local_path
 
     # Normalize to a list of items. A lone str/PathLike is one item.
     if isinstance(sources, (str, os.PathLike)):
@@ -230,17 +232,12 @@ def _resolve_sources(
         if os.path.isfile(local):
             _add(local, None)  # explicit file — no extension filter
         elif os.path.isdir(local):
-            if recursive:
-                for root, _dirs, names in os.walk(local):
-                    for name in sorted(names):
-                        full = os.path.join(root, name)
-                        if _has_ext(full, extensions):
-                            _add(full, None)
-            else:
-                for name in sorted(os.listdir(local)):
-                    full = os.path.join(local, name)
-                    if os.path.isfile(full) and _has_ext(full, extensions):
-                        _add(full, None)
+            _ext = "|".join(_re.escape(e.lstrip(".")) for e in extensions)
+            _ext_regex = f"(?i).*\\.({_ext})$"
+            for full in list_files(
+                local, _ext_regex, recursive=recursive, raise_on_empty=False
+            ):
+                _add(full, None)
         else:
             _add(local, "not-found")
 

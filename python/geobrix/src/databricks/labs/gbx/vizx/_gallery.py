@@ -49,15 +49,12 @@ def _resolve_sources(source, extensions):
         return [_clean(p) for p in source]
 
     source = _clean(source)
-    exts = {e.lower() for e in extensions}
 
     if os.path.isdir(source):
-        hits = []
-        for root, _, files in os.walk(source):
-            for f in files:
-                if os.path.splitext(f)[1].lower() in exts:
-                    hits.append(os.path.join(root, f))
-        return sorted(hits)
+        from databricks.labs.gbx.ds._listing import list_files
+
+        ext_regex = "(?i).*\\.(" + "|".join(e.lstrip(".") for e in extensions) + ")$"
+        return list_files(source, ext_regex, recursive=True, raise_on_empty=False)
 
     # Single file
     return [source]

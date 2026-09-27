@@ -381,3 +381,23 @@ def test_plot_gallery_auto_title_n_of_m():
         assert "5" in text
     finally:
         plt.close("all")
+
+
+# ---------------------------------------------------------------------------
+# Task 2 wiring test: _resolve_sources delegates to list_files (fail-on-revert)
+# ---------------------------------------------------------------------------
+
+
+def test_gallery_resolve_sources_dir_calls_list_files(tmp_path):
+    """_resolve_sources delegates recursive dir walk to list_files (fail-on-revert)."""
+    from unittest.mock import patch
+
+    (tmp_path / "a.tif").write_bytes(b"x")
+    from databricks.labs.gbx.vizx._gallery import _resolve_sources
+
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.return_value = []
+        _resolve_sources(str(tmp_path), (".tif",))
+    mock_lf.assert_called_once()
+    _args, kw = mock_lf.call_args
+    assert kw.get("recursive", True) is True

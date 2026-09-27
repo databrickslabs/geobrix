@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+from unittest.mock import patch
 
 import numpy as np
 import pytest
@@ -249,3 +250,26 @@ def test_exports_from_sample():
 
     assert EmitDownloader is not None
     assert callable(download_emit_aoi)
+
+
+# ---------------------------------------------------------------------------
+# Task 2 wiring test: load_plume_metadata routes through list_files (fail-on-revert)
+# ---------------------------------------------------------------------------
+
+
+def test_load_plume_metadata_calls_list_files_nonrecursive(tmp_path):
+    """load_plume_metadata routes CH4 JSON listing through list_files (fail-on-revert)."""
+    meta = tmp_path / "scene_CH4PLMMETA_v01.json"
+    meta.write_text(json.dumps({"type": "FeatureCollection", "features": []}))
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.return_value = [str(meta)]
+        ed = EmitDownloader.__new__(EmitDownloader)
+        # After routing, read_plumes calls list_files(..., recursive=False, ...)
+        # We verify by checking the mock was called with recursive=False.
+        try:
+            ed.read_plumes(str(tmp_path))
+        except Exception:
+            pass  # Spark not available; listing call already happened
+    mock_lf.assert_called()
+    _args, kw = mock_lf.call_args
+    assert kw.get("recursive", True) is False

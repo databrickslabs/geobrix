@@ -147,13 +147,18 @@ class EmitDownloader:
         divergence from the "NA" quirk above, which the multi-file reader rejects),
         normalized to clean typed columns, and unioned. ``plume_geom`` is the
         outline polygon as WKB (native ST-ready)."""
-        import glob
-
         from pyspark.sql import SparkSession
         from pyspark.sql import functions as F
 
+        from databricks.labs.gbx.ds._listing import list_files
+
         spark = spark or SparkSession.getActiveSession()
-        files = sorted(glob.glob(os.path.join(out_dir, "*CH4PLMMETA*.json")))
+        files = list_files(
+            out_dir,
+            r".*/[^/]*CH4PLMMETA[^/]*\.json$",
+            recursive=False,
+            raise_on_empty=False,
+        )
         if not files:
             raise FileNotFoundError(
                 f"no EMIT CH4 plume-metadata GeoJSON (*CH4PLMMETA*.json) under {out_dir}"

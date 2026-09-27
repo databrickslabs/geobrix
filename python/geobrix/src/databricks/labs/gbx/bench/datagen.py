@@ -16,6 +16,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.bench import manifest as m
+from databricks.labs.gbx.pyrx.core.compression import creation_opts as _comp_opts
 
 # CRS -> (origin_x, origin_y, pixel_size in CRS units) for a consistent affine.
 _CRS_GEO = {
@@ -859,7 +860,7 @@ def write_large_raster_streamed(
                 **common_profile,
                 "driver": "COG",
                 "BLOCKSIZE": block_size,
-                "COMPRESS": compress,
+                **_comp_opts(dtype, compress=compress.lower(), driver="COG"),
             }
             with rasterio.open(tmp_tif) as src:
                 with rasterio.open(tmp_cog, "w", **cog_profile) as dst:
@@ -883,7 +884,7 @@ def write_large_raster_streamed(
             strip_profile = {
                 **common_profile,
                 "driver": "GTiff",
-                "compress": compress,
+                **_comp_opts(dtype, compress=compress.lower()),
             }
             with rasterio.open(tmp_tif, "w", **strip_profile) as dst:
                 for y_off in range(0, height, strip_rows):

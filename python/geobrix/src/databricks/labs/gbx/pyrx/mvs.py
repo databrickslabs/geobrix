@@ -104,7 +104,9 @@ def recommend_dense_allocation(
     # RAM across concurrent tasks, and cap to [2, per_task_host_gb]. This is more precise
     # than a flat percentage: on big nodes per_task_host_gb caps it; on small nodes the
     # reserve dominates.
-    usable_gb = max(0.0, ram_avail_gb - reserve_host_gb)
+    from databricks.labs.gbx.pyrx.core import budget as _budget
+
+    usable_gb = _budget.budget_for("dense_alloc", infra=infra).budget_bytes / (1024**3)
     cache_size_gb = round(
         max(2.0, min(per_task_host_gb, usable_gb / max(1, concurrency))), 1
     )

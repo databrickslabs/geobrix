@@ -95,6 +95,50 @@ def test_alloc_no_gpu_raises():
         )
 
 
+def test_recommend_dense_allocation_routes_budget_for(monkeypatch):
+    """Fail-on-revert + behavior-preserving wiring test.
+
+    Fail-on-revert: asserts recommend_dense_allocation routes its RAM budget
+    through budget_for('dense_alloc'). Fails if reverted to direct gpu_infra().
+
+    Behavior-preserving: on the _8XH100 representative snapshot with 20 clusters,
+    the post-migration output matches the pre-migration formula exactly.
+    """
+    import databricks.labs.gbx.pyrx.core.budget as _budget_mod
+    from databricks.labs.gbx.pyrx.mvs import recommend_dense_allocation
+
+    # Pre-migration formula (independent computation, pinning expected values):
+    # ram_avail_gb = 2018981 / 1024.0 = 1971.665...
+    # reserve_host_gb = 6.0 (default)
+    # usable_gb = max(0.0, 1971.665 - 6.0) = 1965.665...
+    # ram_slots = max(1, int(1971.665 // 32.0)) = 61
+    # concurrency = min(8 GPUs, 20 clusters, 61 ram_slots) = 8
+    # cache_size_gb = round(max(2.0, min(32.0, 1965.665 / 8)), 1) = round(32.0, 1) = 32.0
+    _EXPECTED_CONCURRENCY = 8
+    _EXPECTED_CACHE_GB = 32.0
+
+    # Spy: records all budget_for intent calls without changing behavior.
+    calls = []
+    orig = _budget_mod.budget_for
+
+    def _spy(intent, *args, **kwargs):
+        calls.append(intent)
+        return orig(intent, *args, **kwargs)
+
+    monkeypatch.setattr(_budget_mod, "budget_for", _spy)
+
+    result = recommend_dense_allocation([50] * 20, infra=_8XH100)
+
+    assert "dense_alloc" in calls, (
+        "recommend_dense_allocation must route through budget_for('dense_alloc'); "
+        "revert to direct gpu_infra() detected"
+    )
+    assert result["concurrency"] == _EXPECTED_CONCURRENCY
+    assert (
+        result["cache_size_gb"] == _EXPECTED_CACHE_GB
+    ), f"behavior not preserved: got {result['cache_size_gb']}, expected {_EXPECTED_CACHE_GB}"
+
+
 # --- dense_mvs_pool tests ---
 
 

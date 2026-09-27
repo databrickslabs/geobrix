@@ -14,9 +14,9 @@ from databricks.labs.gbx.pyrx.core.compression import creation_opts, predictor_f
 - `creation_opts(compress, dtype, ...)` — returns the complete GTiff creation-option dict for a given codec and data type (handles `predictor`, `zlevel`, `zstd_level`, tile/strip layout).
 - `predictor_for(dtype)` — maps a NumPy dtype to the correct PREDICTOR value (1 / 2 / 3).
 
-## Patterns the QC check flags outside `compression.py` (level: warn; pending _write.py rename)
+## Patterns the QC check flags outside `compression.py` (level: FAIL after SP3)
 
-The `centralized-primitives` QC check flags any of these outside
+The `centralized-primitives` QC check (level: FAIL) flags any of these outside
 `compression.py` and the sanctioned test directory:
 
 ```python
@@ -29,12 +29,7 @@ profile["zstd_level"] = ...    # added SP3 — catches bespoke level-key dicts
 "COMPRESS": ...                # added SP3 — catches uppercase bespoke COG dicts
 ```
 
-All 16 production modules route through `creation_opts`.  `ds/_write.py` was
-folded in SP3 (compression/predictor logic delegates to canonical) but the
-wrapper function retains the name `_creation_opts`, which still trips the
-regex — rename to a non-matching name to clear the advisory and allow the gate
-to flip to FAIL.
-
+All 16 production modules + `ds/_write.py` (folded SP3) route through `creation_opts`.
 The bench consumers `compression_sweep.py` and `datagen.py` were folded in SP3.
 
 ## Also avoid outside `compression.py` (advisory — not checked by QC)

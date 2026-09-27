@@ -24,7 +24,7 @@ from databricks.labs.gbx.pyrx.core.compression import (
 )
 
 
-def _creation_opts(
+def _tile_creation_opts(
     driver: str, meta: Dict[str, str], dtype: str, width: int, height: int
 ) -> Dict[str, str]:
     """GTiff/COG creation options from tile metadata, mirroring OperatorOptions.appendOptions.
@@ -77,7 +77,7 @@ def tile_to_bytes(
         profile = src.profile.copy()
         profile["driver"] = driver
         profile.update(
-            _creation_opts(driver, metadata, src.dtypes[0], src.width, src.height)
+            _tile_creation_opts(driver, metadata, src.dtypes[0], src.width, src.height)
         )
         with MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:

@@ -190,12 +190,6 @@ def prepare_cog_measured(
 DEFAULT_RASTER_EXTS = (".tif", ".tiff", ".cog", ".nc", ".h5", ".hdf")
 
 
-def _has_ext(path: str, extensions) -> bool:
-    if not extensions:
-        return True
-    return os.path.splitext(path)[1].lower() in {e.lower() for e in extensions}
-
-
 def _resolve_sources(
     sources,
     recursive: bool = True,

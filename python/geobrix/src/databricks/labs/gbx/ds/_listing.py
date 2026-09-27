@@ -178,16 +178,25 @@ def list_files(
 
         candidates = _retry_transient(_walk)
     else:
+        # Short-circuit before _retry_transient: a *genuinely* missing directory should
+        # not burn 22 s of linear backoff retries (those are for transient FUSE misses on
+        # an *existing* dir).  Checking isdir() once here costs an OS call, but it is
+        # equivalent to what os.walk does implicitly (yields nothing for a missing path).
+        # A missing dir yields no candidates; the existing empty-check + raise_on_empty
+        # logic below applies uniformly, so raise_on_empty=False returns [] immediately.
+        if not os.path.isdir(abspath):
+            candidates = []
+        else:
 
-        def _listdir() -> List[str]:
-            result: List[str] = []
-            for name in os.listdir(abspath):
-                full = os.path.join(abspath, name)
-                if os.path.isfile(full) and pattern.match(full):
-                    result.append(full)
-            return result
+            def _listdir() -> List[str]:
+                result: List[str] = []
+                for name in os.listdir(abspath):
+                    full = os.path.join(abspath, name)
+                    if os.path.isfile(full) and pattern.match(full):
+                        result.append(full)
+                return result
 
-        candidates = _retry_transient(_listdir)
+            candidates = _retry_transient(_listdir)
 
     if not candidates:
         if raise_on_empty:

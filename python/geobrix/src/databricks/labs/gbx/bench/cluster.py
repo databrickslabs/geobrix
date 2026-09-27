@@ -862,7 +862,6 @@ _CELL_NETCDF = """# NetCDF RASTER reader benchmark: heavy netcdf_gdal vs light n
 # bit-parity gate (cross-tier parity uses a small gridded fixture -- see docs/api/benchmarking.mdx).
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
-import glob as _glob
 _netcdf_dir = f"{CORPUS}/netcdf"
 # GUARD: the NASA-NEX grid corpus is staged separately (download-and-stop at stage time).
 # When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
@@ -1071,7 +1070,6 @@ _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both
 from databricks.labs.gbx.bench import readers as _rd
 from pmtiles.reader import MemorySource, Reader as _PMReader
 import pmtiles.reader as _pmr
-import glob as _glob
 import gzip as _gz
 import os as _os
 import shutil as _sh
@@ -2928,7 +2926,6 @@ _CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across w
 # external/managed targets are catalog table names (schema.table). "cluster" layout runs
 # OPTIMIZE on the FILE table. na_by_design is returned for external/managed on FUSE-only tiers.
 # Each ResultRow is _sink'd immediately (serialized).
-import glob as _glob
 import os as _os
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv

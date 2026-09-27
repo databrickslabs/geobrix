@@ -35,7 +35,7 @@ readers, bench corpus listings, and `preparer.py`:
 from databricks.labs.gbx.ds._listing import list_files, to_local_path, to_spark_uri
 ```
 
-- `list_files(root, pattern, recursive=True, raise_on_empty=True)` — enumerates a Volume root
+- `list_files(path, filter_regex=".*", recursive=True, raise_on_empty=True)` — enumerates a Volume root
   with the `_retry_transient` guard built in (Serverless eventual-consistency: transient
   `FileNotFound`/`OSError` retried ~10×). Returns sorted absolute local paths.
   - `recursive=False` for flat (top-level only) listings.

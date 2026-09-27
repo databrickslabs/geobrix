@@ -281,3 +281,84 @@ def test_creation_opts_lzw_uint8_predictor_1():
     o = C.creation_opts("uint8", compress="lzw")
     assert o["compress"] == "lzw"
     assert o["predictor"] == "1"
+
+
+# ---------------------------------------------------------------------------
+# COG predictor hygiene (GDAL 3.12 COG driver — predictor=1 is the default
+# "no prediction"; passing it explicitly is redundant and may trigger a
+# CPLE_NotSupported warning on future GDAL versions.  Omit it for COG only.
+# ---------------------------------------------------------------------------
+
+
+def test_cog_predictor_hygiene_uint8_auto_omits_predictor():
+    """COG + uint8 auto path: predictor key must be absent (pred=1 is COG default).
+
+    GDAL 3.12's COG driver accepts numeric predictor=1 without warning but
+    silently drops it (it does not appear in gdalinfo output).  Omitting the
+    key avoids passing a redundant option and is behaviour-equivalent.
+
+    This is the canonical red->green TDD test for the COG predictor hygiene fix.
+    """
+    o = C.creation_opts(
+        "uint8", compress="auto", driver="COG", decoded_bytes=1 * 1024**2
+    )
+    assert o["compress"] == "zstd"
+    assert (
+        "predictor" not in o
+    ), f"COG driver: predictor=1 must be omitted, got predictor={o.get('predictor')!r}"
+
+
+def test_cog_predictor_hygiene_uint8_explicit_zstd_omits_predictor():
+    """COG + uint8 explicit zstd: predictor key must be absent."""
+    o = C.creation_opts("uint8", compress="zstd", driver="COG")
+    assert o["compress"] == "zstd"
+    assert "predictor" not in o
+
+
+def test_cog_predictor_hygiene_uint8_explicit_deflate_omits_predictor():
+    """COG + uint8 explicit deflate: predictor key must be absent."""
+    o = C.creation_opts("uint8", compress="deflate", driver="COG")
+    assert o["compress"] == "deflate"
+    assert "predictor" not in o
+
+
+def test_cog_predictor_hygiene_int8_auto_omits_predictor():
+    """COG + int8 auto path: predictor key must be absent (same pred=1 as uint8)."""
+    o = C.creation_opts(
+        "int8", compress="auto", driver="COG", decoded_bytes=1 * 1024**2
+    )
+    assert "predictor" not in o
+
+
+def test_cog_predictor_hygiene_float32_preserves_predictor_3():
+    """DIV-1 guard: COG + float32 must still emit predictor=3.
+
+    This is the SP3 DIV-1 regression guard.  The hygiene fix must not affect
+    the floating-point predictor case.
+    """
+    o = C.creation_opts(
+        "float32", compress="auto", driver="COG", decoded_bytes=1 * 1024**2
+    )
+    assert o["compress"] == "zstd"
+    assert (
+        o.get("predictor") == "3"
+    ), f"DIV-1 guard: COG float32 must have predictor='3', got {o.get('predictor')!r}"
+
+
+def test_cog_predictor_hygiene_int16_preserves_predictor_2():
+    """COG + int16 must still emit predictor=2 (integer delta encoding)."""
+    o = C.creation_opts(
+        "int16", compress="auto", driver="COG", decoded_bytes=1 * 1024**2
+    )
+    assert o.get("predictor") == "2"
+
+
+def test_cog_predictor_hygiene_gtiff_uint8_unaffected():
+    """Regression guard: GTiff + uint8 must still emit predictor=1 (unchanged).
+
+    The COG hygiene fix must not affect the GTiff driver path.
+    """
+    o = C.creation_opts(
+        "uint8", compress="auto", driver="GTiff", decoded_bytes=1 * 1024**2
+    )
+    assert o.get("predictor") == "1"

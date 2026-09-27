@@ -185,10 +185,14 @@ def creation_opts(
                 stacklevel=2,
             )
         auto_lev = str(auto_level(decoded_bytes))
-        opts = {
-            "compress": "zstd",
-            "predictor": str(predictor_for(dtype)),
-        }
+        auto_pred = predictor_for(dtype)
+        opts: dict = {"compress": "zstd"}
+        # predictor=1 (no prediction) is the COG driver default; omitting it is
+        # behaviour-equivalent and avoids a CPLE_NotSupported warning on GDAL
+        # versions that reject numeric predictor values for the COG driver.
+        # GTiff always receives the numeric predictor (including "1").
+        if not (is_cog and auto_pred == 1):
+            opts["predictor"] = str(auto_pred)
         # COG driver uses LEVEL; GTiff uses zstd_level
         opts["LEVEL" if is_cog else "zstd_level"] = auto_lev
         return opts
@@ -198,27 +202,25 @@ def creation_opts(
         return {}  # no compression keys
 
     if c == "zstd":
-        opts = {
-            "compress": "zstd",
-            "predictor": str(pred),
-        }
+        opts = {"compress": "zstd"}
+        if not (is_cog and pred == 1):
+            opts["predictor"] = str(pred)
         # COG driver uses LEVEL; GTiff uses zstd_level
         opts["LEVEL" if is_cog else "zstd_level"] = str(
             level if level is not None else _AUTO_DEFAULT_LEVEL
         )
         return opts
     if c == "deflate":
-        opts = {
-            "compress": "deflate",
-            "predictor": str(pred),
-        }
+        opts = {"compress": "deflate"}
+        if not (is_cog and pred == 1):
+            opts["predictor"] = str(pred)
         # COG driver uses LEVEL; GTiff uses zlevel
         opts["LEVEL" if is_cog else "zlevel"] = str(level if level is not None else 6)
         return opts
     if c == "lzw":
-        return {
-            "compress": "lzw",
-            "predictor": str(pred),
-        }
+        opts = {"compress": "lzw"}
+        if not (is_cog and pred == 1):
+            opts["predictor"] = str(pred)
+        return opts
     # GDAL-supported name passed through; no predictor assumption for unknown codecs
     return {"compress": c}

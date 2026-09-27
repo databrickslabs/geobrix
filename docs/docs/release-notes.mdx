@@ -125,6 +125,26 @@ CRS; `crs_equal(a, b)` is the right comparison.
 - **NetCDF `spatial_epsg` attribute:** For a non-EPSG CRS the NetCDF writer now stores the ESRI code in the legacy `spatial_epsg` grid-mapping attribute (whose name implies EPSG).  The authoritative CRS is in `crs_canonical` / `crs_wkt` — take the authority from `crs_canonical`, not `spatial_epsg`, for non-EPSG CRS.
 - **ESRI-identity reproject:** Raster operations now short-circuit an identity reproject when the source and target CRS are both ESRI-authored and equal.  Output is content-equivalent, but callers that depended on receiving byte-identical output from an ESRI-identity `rst_transform` call may observe a different bytes path (ZSTD re-encode vs. warp pipeline) for that specific case.
 
+### Light-tier ZSTD compression: horizontal-differencing predictor now applied
+
+Light-tier COG and GTiff re-encodes that use ZSTD compression now apply the
+horizontal-differencing predictor consistent with the heavyweight tier:
+`float32`/`float64` tiles receive predictor 3 (floating-point differencing),
+`uint8`/`int8` tiles receive predictor 1 (no predictor — byte data gains
+nothing from differencing), and all other integer types receive predictor 2
+(integer differencing).
+
+Previously the light-tier `tile_to_bytes` re-encode path omitted the predictor
+for ZSTD entirely, and for `uint8`/`int8` data applied predictor 2 instead of
+predictor 1 under DEFLATE and LZW.
+
+**Impact on existing files:** Any COG or GTiff file re-encoded by the light tier
+with ZSTD compression will produce different (typically smaller) output bytes
+when regenerated.  Decoded pixel values are unchanged — this is a pure
+compression improvement with no data loss.  Downstream checks that compare
+compressed bytes byte-for-byte against a stored reference will observe a
+difference and must refresh their reference outputs.
+
 ---
 
 ## What's new in v0.5.1

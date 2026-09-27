@@ -222,3 +222,62 @@ def test_creation_opts_gtiff_deflate_uses_zlevel():
     assert o["compress"] == "deflate"
     assert o["zlevel"] == "9"
     assert "LEVEL" not in o
+
+
+# ---------------------------------------------------------------------------
+# Missing matrix: explicit ZSTD predictor for float32/uint8; full LZW matrix
+# (T3 completeness additions — these test canonical which is already correct;
+# they are regression guards, not red→green drivers)
+# ---------------------------------------------------------------------------
+
+
+def test_creation_opts_explicit_zstd_float32_predictor_3():
+    """Explicit compress='zstd' + float32 must derive predictor=3 from dtype.
+
+    test_creation_opts_auto_zstd_with_predictor covers the auto path.  This covers
+    the explicit codec path (different code branch in creation_opts).
+    """
+    o = C.creation_opts("float32", compress="zstd", level=9)
+    assert o["compress"] == "zstd"
+    assert o["predictor"] == "3"
+    assert o["zstd_level"] == "9"
+
+
+def test_creation_opts_explicit_zstd_uint8_predictor_1():
+    """Explicit compress='zstd' + uint8 must derive predictor=1 (no predictor for byte data)."""
+    o = C.creation_opts("uint8", compress="zstd", level=6)
+    assert o["compress"] == "zstd"
+    assert o["predictor"] == "1"
+
+
+def test_creation_opts_explicit_deflate_uint8_predictor_1():
+    """Explicit compress='deflate' + uint8 must derive predictor=1.
+
+    DIV-2 guard: pre-fold _write.py used '3 if _is_float else 2', returning 2 for uint8.
+    Canonical creation_opts must return predictor=1 (matching heavy OperatorOptions).
+    """
+    o = C.creation_opts("uint8", compress="deflate", level=6)
+    assert o["compress"] == "deflate"
+    assert o["predictor"] == "1"
+    assert o["zlevel"] == "6"
+
+
+def test_creation_opts_lzw_float32():
+    """LZW + float32 must carry predictor=3 (floating-point horizontal differencing)."""
+    o = C.creation_opts("float32", compress="lzw")
+    assert o["compress"] == "lzw"
+    assert o["predictor"] == "3"
+
+
+def test_creation_opts_lzw_int16():
+    """LZW + int16 must carry predictor=2 (integer horizontal differencing)."""
+    o = C.creation_opts("int16", compress="lzw")
+    assert o["compress"] == "lzw"
+    assert o["predictor"] == "2"
+
+
+def test_creation_opts_lzw_uint8_predictor_1():
+    """LZW + uint8 must carry predictor=1 (no predictor for byte data)."""
+    o = C.creation_opts("uint8", compress="lzw")
+    assert o["compress"] == "lzw"
+    assert o["predictor"] == "1"

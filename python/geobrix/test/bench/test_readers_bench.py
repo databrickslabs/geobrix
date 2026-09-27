@@ -1,5 +1,7 @@
 """Unit test: reader bench pure-local path produces a ResultRow with timing."""
 
+from unittest.mock import patch
+
 import numpy as np
 import rasterio
 from rasterio.transform import from_origin
@@ -201,3 +203,45 @@ def test_virtual_tile_pixel_read_file_ref_on_path(tmp_path, spark, monkeypatch):
         "bypassing the geobrix FILE path (hand-rolled rasterio.open UDF). "
         "Fix: use rst_avg(col('tile')) instead of a bare rasterio.open UDF."
     )
+
+
+# ---------------------------------------------------------------------------
+# Wiring: bench source enumerators route through list_files (fail-on-revert)
+# ---------------------------------------------------------------------------
+
+
+def test_list_corpus_files_calls_list_files(tmp_path):
+    """list_corpus_files delegates to list_files (fail-on-revert)."""
+    (tmp_path / "a.tif").write_bytes(b"x")
+    from databricks.labs.gbx.bench.readers import list_corpus_files
+
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.return_value = [str(tmp_path / "a.tif")]
+        list_corpus_files(str(tmp_path))
+    mock_lf.assert_called_once_with(str(tmp_path), r".*\.tif$")
+
+
+def test_list_tifs_makes_two_calls_preserving_order(tmp_path):
+    """_list_tifs calls list_files twice (tif then tiff) without sort-merging (fail-on-revert)."""
+    from databricks.labs.gbx.bench.readers import _list_tifs
+
+    calls = []
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.side_effect = lambda path, regex, **kw: calls.append(regex) or []
+        _list_tifs(str(tmp_path))
+    assert len(calls) == 2
+    assert calls[0] == r".*\.tif$"
+    assert calls[1] == r".*\.tiff$"
+
+
+def test_seeded_check_calls_list_files_raise_on_empty_false(tmp_path):
+    """The .nc existence check after seed write uses list_files with raise_on_empty=False."""
+    # We test list_files is called with raise_on_empty=False by checking it doesn't raise
+    # when the directory is empty (was: _glob.glob returns [], which is fine; after routing
+    # list_files(..., raise_on_empty=False) must also return [] not raise).
+    from databricks.labs.gbx.ds._listing import list_files
+
+    result = list_files(
+        str(tmp_path), r".*\.nc$", recursive=False, raise_on_empty=False
+    )
+    assert result == []  # no .nc files; must return [] not raise

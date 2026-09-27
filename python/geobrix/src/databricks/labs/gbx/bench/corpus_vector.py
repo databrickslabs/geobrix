@@ -64,11 +64,17 @@ def _zip_shapefile(seed_dir: str, stem: str) -> str:
     are object storage, and ``zipfile.close()`` seeks back to write the central directory,
     which fails on a FUSE mount (``OSError: [Errno 5]``).  Removes the loose component files
     after.  Returns the zip path."""
+    import re as _re
+
+    from databricks.labs.gbx.ds._listing import list_files
+
     zip_path = os.path.join(seed_dir, f"{stem}.shp.zip")
+    _sidecar_regex = r".*/" + _re.escape(stem) + r"\..+(?<!\.zip)$"
     components = [
-        n
-        for n in os.listdir(seed_dir)
-        if n.startswith(stem + ".") and not n.endswith(".zip")
+        os.path.basename(f)
+        for f in list_files(
+            seed_dir, _sidecar_regex, recursive=False, raise_on_empty=False
+        )
     ]
     local_dir = tempfile.mkdtemp(prefix="gbx_zipshp_")
     try:

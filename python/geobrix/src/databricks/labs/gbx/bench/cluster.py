@@ -1126,7 +1126,8 @@ if LIGHTWEIGHT and HEAVYWEIGHT and _pl and _ph:
         if _os2.path.isfile(path):
             files = [path]
         else:
-            files = sorted(_glob.glob(_os2.path.join(path, "**", "*.pmtiles"), recursive=True))
+            from databricks.labs.gbx.ds._listing import list_files
+            files = list_files(path, r".*\\.pmtiles$", raise_on_empty=False)
         tiles = {}
         for _pf in files:
             with open(_pf, "rb") as _fh:
@@ -2961,7 +2962,8 @@ _ls_gpkg_dirs = _cv.stage_gpkg_bench_corpus(
 _ls_gpkg_dir = _ls_gpkg_dirs.get(80) or next(iter(_ls_gpkg_dirs.values()), None)
 _ls_gpkg_src = None
 if _ls_gpkg_dir:
-    _ls_gpkg_files = sorted(_glob.glob(_os.path.join(_ls_gpkg_dir, "*.gpkg")))
+    from databricks.labs.gbx.ds._listing import list_files
+    _ls_gpkg_files = list_files(_ls_gpkg_dir, r".*\\.gpkg$", recursive=False, raise_on_empty=False)
     _ls_gpkg_src = _ls_gpkg_files[0] if _ls_gpkg_files else None
 # Mode sweep: fuse always runs; external/managed require a provisioned FILE_FILESPACE.
 _ls_modes = ("fuse", "external", "managed") if FILE_FILESPACE else ("fuse",)

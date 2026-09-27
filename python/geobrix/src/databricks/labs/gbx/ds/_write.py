@@ -19,24 +19,35 @@ from __future__ import annotations
 
 from typing import Dict, Optional
 
-
-def _is_float(dtype: str) -> bool:
-    return str(dtype).startswith("float")
+from databricks.labs.gbx.pyrx.core.compression import (
+    creation_opts as _canonical_creation_opts,
+)
 
 
 def _creation_opts(
     driver: str, meta: Dict[str, str], dtype: str, width: int, height: int
 ) -> Dict[str, str]:
-    """GTiff/COG creation options from tile metadata, mirroring OperatorOptions.appendOptions."""
-    compression = str(meta.get("compression", "DEFLATE")).upper()
-    opts: Dict[str, str] = {"compress": compression}
-    if compression == "DEFLATE":
-        opts["zlevel"] = str(meta.get("zlevel", "6"))
-        opts["predictor"] = "3" if _is_float(dtype) else "2"
-    elif compression == "ZSTD":
-        opts["zstd_level"] = str(meta.get("zstd_level", "9"))
-    elif compression == "LZW":
-        opts["predictor"] = "3" if _is_float(dtype) else "2"
+    """GTiff/COG creation options from tile metadata, mirroring OperatorOptions.appendOptions.
+
+    Compression and predictor are delegated to canonical creation_opts
+    (pyrx/core/compression.py), which mirrors heavy OperatorOptions.appendOptions.
+    ZSTD default level 9 matches heavy OperatorOptions :77; DEFLATE default 6
+    matches heavy :86.  Blocksize (GAP-1 / D2 — stays here; canonical does not
+    compute blocksize).
+    """
+    compress = str(meta.get("compression", "DEFLATE")).lower()
+    try:
+        level: Optional[int] = (
+            int(meta.get("zstd_level", 9))
+            if compress == "zstd"
+            else int(meta.get("zlevel", 6)) if compress == "deflate" else None
+        )
+    except (ValueError, TypeError):
+        level = None
+    opts: Dict[str, str] = dict(
+        _canonical_creation_opts(dtype, compress=compress, level=level, driver=driver)
+    )
+    # Blocksize: tile-dimension-aware clamping (D2 — stays at this call site).
     try:
         blk = int(meta.get("blocksize", "512"))
     except ValueError:

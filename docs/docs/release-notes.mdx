@@ -19,7 +19,29 @@ This page tracks **API and naming changes** across GeoBrix releases — the sing
 v0.5.2 is under active development — the functions and documentation on this page may change before release.
 :::
 
-Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
+Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions, and a new
+model-backed inference package for GPU object segmentation.
+
+### Geospatial Models (GeoSAM) — new `gbx.models` package
+
+- **New `gbx.models` package — model-backed raster inference, light-only.** The first
+  capability is **GeoSAM**, an automatic-mask object-segmentation backend built on
+  [segment-geospatial](https://samgeo.gishub.org/) (SamGeo). `load_geosam(...)` loads a
+  handle (torch / `segment-geospatial` import lazily, so the package stays importable
+  with no GPU deps); `segment_raster(tile_or_path, gpus="all", tile_px=1024, overlap=64,
+  min_area=10.0)` chips a raster, fans inference across one or many GPU device slots,
+  vectorizes each chip's label mask, and merges polygon fragments across tile seams into
+  one polygon per real-world object — a `pandas.DataFrame` of `label` / `geom` (WKB) /
+  `score` back. GPU workloads target the Serverless **GPU AI Runtime environment 5**
+  (`torch==2.10.0`, CUDA 12) via the new `geobrix[models_gpu_env5]` extra. See
+  [Geospatial Models](./models/overview) and [GeoSAM](./models/geosam).
+- **Unity Catalog registration and GPU Model Serving for GeoSAM.**
+  `build_geosam_pyfunc` wraps `segment_raster` in an MLflow `PythonModel`;
+  `register_to_unity_gateway` logs and registers it to the Unity Catalog model registry
+  with `pip_requirements` that include the GeoBrix light wheel — a deliberate
+  usage-affiliation choice, so the served model's environment carries GeoBrix;
+  `create_endpoint` stands up a GPU Model Serving endpoint (`scale_to_zero` by default);
+  `query` calls it. See [Serving](./models/serving).
 
 ### LiDAR reader — `lidar_gbx` (new)
 

@@ -1,0 +1,149 @@
+---
+sidebar_position: 2
+title: GeoSAM Segmentation
+---
+
+# GeoSAM Segmentation
+
+GeoSAM wraps [segment-geospatial](https://samgeo.gishub.org/) (SamGeo) as a `gbx.models`
+backend: load a handle once, then segment a whole raster — of any size — into
+georeferenced object polygons with `segment_raster`. Today GeoSAM runs in **automatic-mask
+mode** (segment everything, no prompt); text-prompt-guided segmentation (segment only
+objects matching a text description) is a natural follow-on, not yet implemented.
+
+## Loading a handle
+
+```python
+from databricks.labs.gbx.models import load_geosam
+
+handle = load_geosam(model_type="vit_h", weights=None, device="cuda")
+```
+
+`load_geosam(*, model_type="vit_h", weights=None, device="cuda")` builds a SamGeo backend
+in automatic-mask mode and returns a `GeoSamHandle`. `torch` and `segment-geospatial` are
+imported lazily inside this call, not at module import time — a caller without the GPU
+deps installed gets a clear `ModelDepsMissing` error:
+
+```
+GeoSAM requires the model deps — install geobrix[models_gpu_env5]
+```
+
+- `model_type` — the SAM model variant (default `"vit_h"`).
+- `weights` — optional path to a local checkpoint; `None` uses SamGeo's default download.
+- `device` — `"cuda"` (default) or `"cpu"`.
+
+## Segmenting a single image
+
+`segment(handle, image)` is the low-level per-image call: given an `HxWx3` uint8 array, it
+returns an `HxW` int32 label mask (`0` = background, `1..N` = distinct objects). Most
+callers use `segment_raster` instead, which handles chipping, georeferencing, and
+polygonization on top of this call.
+
+## Segmenting a raster — `segment_raster`
+
+```python
+from databricks.labs.gbx.models import segment_raster
+
+df = segment_raster(
+    "/Volumes/catalog/schema/volume/orthomosaic.tif",
+    gpus="all",
+    tile_px=1024,
+    overlap=64,
+    min_area=10.0,
+)
+# df: pandas.DataFrame with columns label (int), geom (WKB bytes), score (float)
+```
+
+`segment_raster` is the single call a notebook makes to go from a raster to a set of
+georeferenced object polygons — chip → infer → stitch → polygonize:
+
+1. **Chip** — the input is split into an overlapping grid of `tile_px` × `tile_px`
+   windows via the same overlap-percentage window planner GeoBrix uses for
+   `gbx_rst_tooverlappingtiles`.
+2. **Infer** — each chip is segmented by GeoSAM (or an injected `segmenter`), fanned across
+   1..N GPU device slots.
+3. **Stitch** — each chip's label mask is vectorized into georeferenced WKB polygons using
+   its own true per-window transform, and fragments that straddle a seam are merged by
+   geometric intersection into one polygon per real-world object.
+4. **Polygonize / filter** — merged polygons smaller than `min_area` are dropped.
+
+### Signature
+
+```python
+segment_raster(
+    tile_or_path,
+    *,
+    segmenter=None,
+    model: str = "geosam",
+    gpus="all",
+    tile_px: int = 1024,
+    overlap: int = 64,
+    min_area: float = 10.0,
+) -> pandas.DataFrame
+```
+
+| Parameter | Type | Default | Meaning |
+|---|---|---|---|
+| `tile_or_path` | dataset / bytes / path | — | An open `rasterio` dataset, raw GeoTIFF bytes, or a file path. |
+| `segmenter` | callable | `None` | Injectable `(image: HxWx3 uint8) -> mask: HxW int`. Defaults to a GeoSAM handle when `None`. |
+| `model` | `str` | `"geosam"` | Which built-in backend to use when `segmenter` is `None`. Only `"geosam"` is implemented today; pass `segmenter=` explicitly for anything else. |
+| `gpus` | `"all"` or `int` | `"all"` | `"all"` probes `torch.cuda.device_count()` (lazy `torch` import); a positive `int` passes through untouched and **never** imports `torch`. |
+| `tile_px` | `int` | `1024` | Square tile size in pixels. |
+| `overlap` | `int` | `64` | Seam overlap as a **percentage** of `tile_px` (matches `rst_tooverlappingtiles`) — not a pixel count. |
+| `min_area` | `float` | `10.0` | Polygons smaller than this, after seam-merge, are dropped. |
+
+Returns a `pandas.DataFrame` with columns `label` (`int`), `geom` (`bytes`, WKB), and
+`score` (`float`). `score` is currently a constant `1.0` — a bare label mask carries no
+per-object confidence; it will carry a real score once a confidence-scored backend is
+wired up.
+
+### Choosing `gpus`
+
+- `gpus="all"` (default) — probe every visible GPU and fan chips across all of them.
+- `gpus=1` — force single-GPU (or CPU-adjacent single-device) execution. Passing an
+  explicit `int` never imports `torch`, so this path stays usable even without a CUDA
+  build installed.
+- `gpus=<N>` — cap the fan-out to `N` device slots.
+
+The single-GPU and multi-GPU paths recombine every chip's polygons into the same result
+set — scheduling more chips across more devices changes throughput, not output.
+
+### Why seam-merging just works
+
+`segment_raster` relies on real georeferencing, not bookkeeping, to merge an object split
+across a tile seam. When `overlap > 0`, an object split by a seam is captured by two (or
+more) neighboring windows; because each window's fragment is vectorized with its own true
+per-window transform, the two fragments land at their real-world footprint — which
+necessarily overlaps wherever the windows themselves overlap. Grouping fragments by plain
+geometric intersection and unioning each group is therefore enough; no separate
+distance-based "touch within overlap" heuristic is needed on top of correct per-tile
+georeferencing.
+
+## Automatic-mask mode (today) vs. text-prompt mode (follow-on)
+
+GeoSAM runs SamGeo's **automatic-mask** mode: it segments every distinct object it finds
+in a chip, with no guidance about what to look for. This is the mode `load_geosam` /
+`segment_raster` use today.
+
+SamGeo also supports **text-prompt-guided** segmentation (return only objects matching a
+description, e.g. `"building"` or `"tree"`), which is a natural extension of this backend
+but is **not implemented** in the current `gbx.models` package — it is a follow-on
+capability, not something to invoke today.
+
+## Installation
+
+```
+pip install "geobrix[models_gpu_env5] @ file:///Volumes/.../geobrix-0.5.2-py3-none-any.whl"
+```
+
+`geobrix[models_gpu_env5]` pins `torch==2.10.0` / `torchvision==0.25.0` (CUDA 12) plus
+`segment-geospatial`, matching the Serverless **GPU AI Runtime environment 5**. The
+lighter `geobrix[models]` extra installs `segment-geospatial` with its own default
+torch/torchvision resolution — fine for a quick CPU-importable install, but not
+CUDA-version-pinned to a specific GPU runtime. See [Geospatial Models
+overview](./overview#installation).
+
+## See also
+
+- **[Serving](./serving)** — register a GeoSAM model to Unity Catalog and serve it behind
+  a GPU Model Serving endpoint.

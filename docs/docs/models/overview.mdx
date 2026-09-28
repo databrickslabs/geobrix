@@ -1,0 +1,83 @@
+---
+sidebar_position: 1
+title: Geospatial Models
+---
+
+# Geospatial Models
+
+`gbx.models` is GeoBrix's model-backed inference package: run a computer-vision model over a
+raster and get back georeferenced results. The first backend is **GeoSAM** — automatic
+object segmentation via [segment-geospatial](https://samgeo.gishub.org/) (SamGeo) — with
+Unity Catalog model registration and GPU Model Serving on top.
+
+`gbx.models` is a **Python API**, not a SQL function family — there is no `gbx_*` SQL
+surface here, and no Scala/heavyweight tier. It is **light-only**: importing
+`databricks.labs.gbx.models` (or any of its submodules) never requires `torch` or
+`segment-geospatial` — those import lazily, only when a model is actually loaded or served,
+so the base light wheel stays importable with no GPU dependencies installed.
+
+## Three tenets
+
+`gbx.models` is built around three ideas:
+
+1. **GeoBrix owns single- and multi-GPU execution.** `segment_raster` chips a raster,
+   fans inference across 1..N GPU device slots itself (via `pyrx.core.gpu_pool.gpu_pool_map`),
+   and stitches the per-chip results back into whole-object polygons. A caller passes
+   `gpus="all"` (or an explicit device count) and gets one call — not a hand-rolled
+   device loop per notebook.
+2. **Notebooks stay thin.** The chip → infer → stitch → polygonize pipeline lives in
+   GeoBrix, not in notebook cells. A notebook that segments a raster is, in essence, one
+   call to `segment_raster(...)`.
+3. **The served model imports GeoBrix.** When a GeoSAM model is registered for serving,
+   its `pip_requirements` include the GeoBrix light wheel alongside `segment-geospatial` —
+   the deployed model's runtime environment carries GeoBrix, not just the raw
+   segmentation backend. See [Serving](./serving).
+
+## The model lifecycle
+
+`gbx.models` follows the same load → run → serve shape regardless of backend:
+
+### Load
+
+`load_geosam(...)` builds a `GeoSamHandle` wrapping a SamGeo backend in automatic-mask
+mode. torch and `segment-geospatial` import lazily inside this call — a caller without
+those installed gets a clear `ModelDepsMissing` error with an install hint, rather than a
+raw `ImportError` at package-import time.
+
+### Run — single raster or distributed
+
+`segment_raster(tile_or_path, ...)` is the single call a notebook makes: it chips the
+input into an overlapping grid, runs the segmenter across one or many GPUs, vectorizes
+each chip's label mask into georeferenced polygons, and merges fragments that straddle a
+tile seam into one polygon per real-world object. See [GeoSAM](./geosam) for the full
+parameter reference.
+
+### Serve
+
+`build_geosam_pyfunc` wraps `segment_raster` in an MLflow `PythonModel`;
+`register_to_unity_gateway` logs and registers it to the Unity Catalog model registry;
+`create_endpoint` stands up a GPU Model Serving endpoint; `query` calls it. See
+[Serving](./serving).
+
+## Installation
+
+`gbx.models` ships two extras:
+
+- **`geobrix[models]`** — adds `segment-geospatial`, which pulls its own default
+  torch/torchvision/segment-anything stack. Good for a quick, CPU-importable install;
+  the resolved torch build may not match a specific GPU runtime's CUDA version.
+- **`geobrix[models_gpu_env5]`** — pins `torch==2.10.0` and `torchvision==0.25.0`
+  (CUDA 12) alongside `segment-geospatial`, matching the Serverless **GPU AI Runtime
+  environment 5**. This is the extra to install for an actual GPU run on Databricks.
+
+Both extras are CPU-importable at the package level — `import databricks.labs.gbx.models`
+never touches torch. GPU deps load only inside `load_geosam`.
+
+GeoSAM segmentation is the model behind the object-segmentation step in the
+[orthomosaic photogrammetry](../notebooks/orthomosaic) capstone — turning a published
+orthomosaic into per-object polygons.
+
+## Next steps
+
+- **[GeoSAM](./geosam)** — `load_geosam` + `segment_raster`, automatic-mask mode, parameters.
+- **[Serving](./serving)** — register to Unity Catalog, stand up a GPU endpoint, query it.

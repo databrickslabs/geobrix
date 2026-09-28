@@ -168,6 +168,17 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Geospatial Models',
+      collapsed: true,
+      link: { type: 'doc', id: 'models/overview' },
+      items: [
+        'models/overview',
+        'models/geosam',
+        'models/serving',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Advanced Usage',
       collapsed: true,
       items: [

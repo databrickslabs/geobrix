@@ -72,3 +72,37 @@ def _straddling_object(image):
     notion of chip offsets, only pixel content, so this mirrors that contract."""
     red = np.all(image == [255, 0, 0], axis=-1)
     return red.astype(np.int32)
+
+
+@pytest.fixture
+def multi_chip_rgb_tile():
+    """96x32 RGB tile -- a tile_px=32, overlap=0 grid plans exactly THREE non-touching
+    chips over it (col 0..32, 32..64, 64..96; see plan_grid_windows). A red marker
+    object sits well inside chip 0 (x:[4,10) y:[4,10)), chip 1 (x:[32,64)) is pure
+    background (no object), and a green marker object sits well inside chip 2
+    (x:[70,80) y:[10,20)) -- far from every tile edge, so neither object touches a
+    seam and no seam-merge is involved. Exercises the genuinely-multi-chip,
+    multi-object aggregation path (see _two_color_objects), which a single-chip
+    fixture (e.g. synthetic_rgb_tile at tile_px==its own size) cannot: gpu_pool_map
+    must fan >1 chip across >1 device slot and segment_raster must still recombine
+    all of them, in the same result, regardless of gpus."""
+    data = np.zeros((3, 32, 96), dtype="uint8")
+    data[0, 4:10, 4:10] = 255  # red channel -> object A, inside chip 0
+    data[1, 10:20, 70:80] = 255  # green channel -> object B, inside chip 2
+    mf = _open_rgb(96, 32, data)
+    with mf:
+        with mf.open() as ds:
+            yield ds
+
+
+def _two_color_objects(image):
+    """Fake segmenter: label 1 wherever a pixel matches the red marker color, label 2
+    wherever it matches the green marker color (multi_chip_rgb_tile), else 0.
+    Content-based, like _straddling_object -- deterministic and chip-position-blind,
+    so it faithfully exercises real per-chip inference: a chip with neither color
+    (e.g. the middle chip) yields an all-zero mask, same as a real segmenter would on
+    an empty crop."""
+    m = np.zeros(image.shape[:2], np.int32)
+    m[np.all(image == [255, 0, 0], axis=-1)] = 1
+    m[np.all(image == [0, 255, 0], axis=-1)] = 2
+    return m

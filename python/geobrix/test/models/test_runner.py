@@ -2,7 +2,7 @@ import numpy as np
 
 from databricks.labs.gbx.models import runner
 
-from .conftest import _straddling_object
+from .conftest import _straddling_object, _two_color_objects
 
 
 def _fake_two_boxes(image):
@@ -49,11 +49,20 @@ def test_seam_overlap_merges_split_object(wide_rgb_tile):
     assert len(df) == 1  # Review Focus: seam double-count
 
 
-def test_single_and_distributed_agree(synthetic_rgb_tile):
+def test_single_and_distributed_agree(multi_chip_rgb_tile):
+    # multi_chip_rgb_tile + tile_px=32/overlap=0 plans THREE chips (see conftest), with
+    # objects in chip 0 and chip 2 and nothing in chip 1 -- this is the multi-chip,
+    # multi-GPU aggregation property the Review Focus calls out: gpus=1 (all chips on
+    # device 0) and gpus=4 (chips fanned across up to 4 device slots) must recombine
+    # every chip's result into the SAME set of polygons, not just the same count.
     a = runner.segment_raster(
-        synthetic_rgb_tile, segmenter=_fake_two_boxes, gpus=1, tile_px=64, overlap=0
+        multi_chip_rgb_tile, segmenter=_two_color_objects, gpus=1, tile_px=32, overlap=0
     )
     b = runner.segment_raster(
-        synthetic_rgb_tile, segmenter=_fake_two_boxes, gpus=4, tile_px=64, overlap=0
+        multi_chip_rgb_tile, segmenter=_two_color_objects, gpus=4, tile_px=32, overlap=0
     )
-    assert len(a) == len(b)  # Review Focus: scheduling != different results
+    assert len(a) == len(b) == 2  # both objects present, from two different chips
+    # Review Focus: scheduling != different results -- compare the actual resulting
+    # geometries (sorted, since row order is not a documented guarantee), not just a
+    # count that a dropped-and-duplicated pair of chips could coincidentally match.
+    assert sorted(a["geom"].tolist()) == sorted(b["geom"].tolist())

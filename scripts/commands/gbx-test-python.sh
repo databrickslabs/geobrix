@@ -100,20 +100,27 @@ docker exec geobrix-dev /bin/bash -c \
     "pip show geobrix >/dev/null 2>&1 || \
      pip3 install -e /root/geobrix/python/geobrix --no-deps --break-system-packages --quiet"
 
-# STOPGAP: optional pyrx deps (rio-cogeo → COG write, scikit-image → contour/isoband,
-# xarray-spatial → terrain/viewshed) that the current ~4-month-old geobrix-dev image predates.
-# All three ARE pinned in python/geobrix/requirements-dev-container.txt (Sep 25), so a fresh
-# image build bakes them in — but a local rebuild is blocked by the rolling dev proxy pruning an
-# unrelated locked pin (botocore==1.40.70), and no CI path rebuilds this local-only dev image.
-# Until the image is rebuilt against the full-retention db-pypi mirror, this targeted (NOT
-# hash-locked) install keeps the local pyrx loop green. One import probe gates one install of all
-# three (versions match the lockfile); near-zero cost when present, and transitive deps resolve
-# cleanly off the dev proxy without drifting the numpy/pandas/urllib3 pins. Remove once the image
-# ships these. See scripts/docker/build_smart.sh and the dev-image-rebuild-is-ci-operation note.
+# STOPGAP: optional test deps that the current ~4-month-old geobrix-dev image predates.
+# Covers: rio-cogeo (COG write), scikit-image (contour/isoband), xarray-spatial
+# (terrain/viewshed), pmtiles, h3, pyarrow, netCDF4, quadbin, numexpr, laspy/lazrs (LiDAR),
+# rio-tiler, mapbox-vector-tile, exifread, tenacity, contextily, anywidget.
+# All are pinned in requirements-dev-container.txt or the env5/env6-all CI lockfiles; a fresh
+# image build bakes them in — but a local rebuild is blocked (no JFrog token; CI-only path;
+# see dev-image-rebuild-is-ci-operation note in MEMORY.md).  Until the image is rebuilt, this
+# targeted (NOT hash-locked) install keeps local suites collecting + running from the dev proxy.
+# One import probe gates one install of all packages (versions match the lockfile); near-zero
+# cost when present; transitive deps resolve off the dev proxy without drifting numpy/pandas pins.
+# Remove once the image ships these.
+# NOTE: tippecanoe is intentionally excluded — it installs but segfaults natively in-container
+# (exit 139); a pip install cannot fix a native crash.
 docker exec geobrix-dev /bin/bash -c \
-    "python3 -c 'import rio_cogeo, skimage, xrspatial' >/dev/null 2>&1 || \
+    "python3 -c 'import rio_cogeo, skimage, xrspatial, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget' >/dev/null 2>&1 || \
      pip3 install --break-system-packages --quiet \
-       rio-cogeo==7.0.2 scikit-image==0.26.0 xarray-spatial==0.9.9"
+       rio-cogeo==7.0.2 scikit-image==0.26.0 xarray-spatial==0.9.9 \
+       pmtiles==3.7.0 h3==4.5.0 pyarrow==19.0.1 netCDF4==1.7.2 \
+       quadbin==0.2.2 numexpr==2.14.1 laspy==2.5.4 rio-tiler==9.0.6 \
+       lazrs==0.6.3 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
+       tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"
 
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
 if [ -n "$MARKERS" ]; then

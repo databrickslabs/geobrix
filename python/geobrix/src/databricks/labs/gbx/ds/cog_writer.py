@@ -64,7 +64,6 @@ import math
 import os
 import re
 import shutil
-import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterator, List, Optional
 
@@ -78,6 +77,7 @@ from databricks.labs.gbx.ds.file_gbx import (
     _connect_aware_lru_sizing,
     materialize_decision,
 )
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 _logger = logging.getLogger(__name__)
 
@@ -962,8 +962,7 @@ class CogGbxWriter(DataSourceWriter):
             # rasterio.shutil.copy driver="COG") reads the source natively
             # block-by-block — no Python-heap copy of the whole file. Only the
             # COG output (local temp → copyfile) touches the Python heap.
-            fd, tmp = tempfile.mkstemp(suffix=f".{self.ext}")
-            os.close(fd)
+            tmp = new_local_temp_file(suffix=f".{self.ext}")
             try:
                 cog_convert_file(
                     conv_src,
@@ -1787,10 +1786,8 @@ class CogGbxWriter(DataSourceWriter):
         """Convert in-memory raster bytes to a COG at *out_path* (FUSE-safe)."""
         from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 
-        fd, tmp_src = tempfile.mkstemp(suffix=f".{self.ext}")
-        os.close(fd)
-        fd2, tmp_out = tempfile.mkstemp(suffix=f".{self.ext}")
-        os.close(fd2)
+        tmp_src = new_local_temp_file(suffix=f".{self.ext}")
+        tmp_out = new_local_temp_file(suffix=f".{self.ext}")
         try:
             with open(tmp_src, "wb") as fh:
                 fh.write(raster_bytes)
@@ -1839,8 +1836,7 @@ class CogGbxWriter(DataSourceWriter):
                 # PATH-DIRECT: GDAL reads the source natively block-by-block; no
                 # pixels touch the Python heap (same as the file_gbx path).
                 src_local = _listing.to_local_path(str(vt.path))
-                fd, tmp = tempfile.mkstemp(suffix=f".{self.ext}")
-                os.close(fd)
+                tmp = new_local_temp_file(suffix=f".{self.ext}")
                 try:
                     cog_convert_file(
                         src_local,

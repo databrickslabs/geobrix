@@ -19,7 +19,6 @@ from __future__ import annotations
 import glob
 import os
 import shutil
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
@@ -29,6 +28,7 @@ from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import _scratch
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 _REQUIRED = ("x", "y", "z")
 _RGB = ("r", "g", "b")
@@ -325,12 +325,11 @@ class LidarGbxWriter(DataSourceWriter):
         for stem, b in buckets.items():
             if not b["xs"]:
                 continue
-            tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
-            tmp.close()
+            tmp = new_local_temp_file(suffix=".laz")
             written_tmp: Optional[str] = None
             try:
                 written_tmp = self._encode_part(
-                    tmp.name,
+                    tmp,
                     b["xs"],
                     b["ys"],
                     b["zs"],
@@ -343,7 +342,7 @@ class LidarGbxWriter(DataSourceWriter):
                 shutil.copyfile(written_tmp, out)
                 written_paths.append(out)
             finally:
-                for p in {tmp.name, written_tmp}:
+                for p in {tmp, written_tmp}:
                     if p and os.path.exists(p):
                         try:
                             os.unlink(p)
@@ -461,13 +460,12 @@ class LidarGbxWriter(DataSourceWriter):
                 else:
                     rs, gs, bs = [], [], []
 
-                tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
-                tmp.close()
-                written = self._encode_part(tmp.name, xs, ys, zs, rs, gs, bs)
+                tmp = new_local_temp_file(suffix=".laz")
+                written = self._encode_part(tmp, xs, ys, zs, rs, gs, bs)
                 # If laspy fell back to .las, the .laz placeholder is empty; remove it.
-                if written != tmp.name and os.path.exists(tmp.name):
+                if written != tmp and os.path.exists(tmp):
                     try:
-                        os.unlink(tmp.name)
+                        os.unlink(tmp)
                     except OSError:
                         pass
                 tmps.append(written)
@@ -503,9 +501,7 @@ class LidarGbxWriter(DataSourceWriter):
             temp_laz_inputs = self._frags_to_temp_laz(frags)
             expected = sum(_laz_point_count(p) for p in temp_laz_inputs)
 
-            merged_tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
-            merged_tmp.close()
-            tmp_merged = merged_tmp.name
+            tmp_merged = new_local_temp_file(suffix=".laz")
 
             _merge_laz_parts(temp_laz_inputs, tmp_merged, self.has_rgb, self.crs)
             real = _laz_written_path(tmp_merged)
@@ -574,9 +570,7 @@ class LidarGbxWriter(DataSourceWriter):
         self._gate_merge_paths(parts, has_rgb=has_rgb)
         expected = sum(_laz_point_count(p) for p in parts)
 
-        tmp = tempfile.NamedTemporaryFile(suffix=".laz", delete=False)
-        tmp.close()
-        tmp_merged = tmp.name
+        tmp_merged = new_local_temp_file(suffix=".laz")
         try:
             _merge_laz_parts(parts, tmp_merged, has_rgb, self.crs)
             real = _laz_written_path(tmp_merged)

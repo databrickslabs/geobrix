@@ -64,7 +64,6 @@ import json
 import logging
 import os
 import shutil
-import tempfile
 import threading
 from typing import Dict, Iterator, Optional, Sequence, Tuple
 
@@ -74,6 +73,7 @@ from pyspark.sql.types import StringType, StructField, StructType
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import budget
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +97,7 @@ _STAGE_DIR: Optional[str] = None
 def _ensure_stage_dir() -> str:
     global _STAGE_DIR
     if _STAGE_DIR is None:
-        _STAGE_DIR = tempfile.mkdtemp(prefix="gbx_stage_")
+        _STAGE_DIR = new_local_temp_dir("gbx_stage_")
         atexit.register(_cleanup_stage_dir)
     return _STAGE_DIR
 
@@ -1483,7 +1483,7 @@ class RasterGbxReader(DataSourceReader):
             blockxsize = ds.profile.get("blockxsize")
             blockysize = ds.profile.get("blockysize")
 
-        staged_dir = tempfile.mkdtemp(prefix="gbx_raster_")
+        staged_dir = new_local_temp_dir("gbx_raster_")
         try:
             local_path = os.path.join(
                 staged_dir,

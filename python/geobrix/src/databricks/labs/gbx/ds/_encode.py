@@ -10,7 +10,6 @@ authority (``pyrx.core.compression``) for ZSTD + dtype-predictor output.
 from __future__ import annotations
 
 import os
-import tempfile
 from typing import Dict, Tuple
 
 import numpy as np
@@ -20,6 +19,7 @@ from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx.core import cog as _cog
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 CELLID_FRESH = -1  # GDAL_Reader.scala:30 writes -1L for un-tessellated tiles
 
@@ -109,17 +109,16 @@ def encode_tile(
         # Merge authority options (codec + level + predictor)
         profile.update(_comp_opts)
 
-        tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
-        tmp.close()
+        tmp = new_local_temp_file(suffix=".tif")
         try:
-            with rasterio.open(tmp.name, "w", **profile) as out:
+            with rasterio.open(tmp, "w", **profile) as out:
                 out.write(data)
             # Free the decoded array before reading bytes back.
             del data
-            with open(tmp.name, "rb") as fh:
+            with open(tmp, "rb") as fh:
                 raster_bytes = fh.read()
         finally:
-            os.unlink(tmp.name)
+            os.unlink(tmp)
     else:
         # GTiff path: in-memory encode via the compression authority.
         profile = ds.profile.copy()

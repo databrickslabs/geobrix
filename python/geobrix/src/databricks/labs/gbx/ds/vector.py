@@ -8,7 +8,6 @@ import atexit
 import contextlib
 import os
 import shutil
-import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
@@ -36,6 +35,7 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx.ds import _scratch
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 # ---------------------------------------------------------------------------
 # Worker-local staging cache (module-level, process-global)
@@ -53,7 +53,7 @@ def _ensure_vec_stage_dir() -> str:
     """Return (creating if needed) the process-wide stage directory. Must be called while holding `_VEC_STAGE_LOCK`."""
     global _VEC_STAGE_DIR
     if _VEC_STAGE_DIR is None:
-        _VEC_STAGE_DIR = tempfile.mkdtemp(prefix="gbx_vecstage_")
+        _VEC_STAGE_DIR = new_local_temp_dir("gbx_vecstage_")
         atexit.register(_cleanup_vec_stage_dir)
     return _VEC_STAGE_DIR
 
@@ -1153,7 +1153,7 @@ class VectorGbxWriter(DataSourceWriter):
             # Write to driver-local disk first (supports random I/O for SQLite/
             # FileGDB/Shapefile sidecars), then copy to the Volume target with
             # sequential byte copies (FUSE-safe). Mirrors the PMTiles writer.
-            local_dir = tempfile.mkdtemp(prefix="gbx_vecout_")
+            local_dir = new_local_temp_dir("gbx_vecout_")
             # Writer is FUSE-only: base local_out on the resolved FUSE path.
             local_out = os.path.join(local_dir, os.path.basename(self.path.rstrip("/")))
             if self.zip:
@@ -1680,7 +1680,7 @@ class GeoJSONLGbxWriter(DataSourceWriter):
         bounds = list(range(0, nrows, chunk))
 
         os.makedirs(self.path, exist_ok=True)
-        local_dir = tempfile.mkdtemp(prefix="gbx_geojsonl_")
+        local_dir = new_local_temp_dir("gbx_geojsonl_")
         written: List[str] = []
         try:
             for start in bounds:

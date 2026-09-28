@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import threading
 from pathlib import Path
 
 
@@ -125,8 +124,7 @@ def recommend_dense_allocation(
 
 
 def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1):
-    import queue as _q
-    from concurrent.futures import ThreadPoolExecutor
+    from databricks.labs.gbx.pyrx.core.gpu_pool import gpu_pool_map
 
     if runner is None:
         runner = lambda spec, gpu_index: dense_patch_match(  # noqa: E731
@@ -144,37 +142,29 @@ def dense_mvs_pool(cluster_specs, *, allocation=None, runner=None, max_retries=1
         )
     slots = allocation["gpu_index_per_slot"]
     concurrency = max(1, allocation["concurrency"])
-    free = _q.Queue()
-    for gi in slots:
-        free.put(gi)
-    results = {}
-    lock = threading.Lock()
 
-    def _do(spec):
-        gi = free.get()
-        try:
-            attempt = 0
-            while True:
-                attempt += 1
-                try:
-                    res = runner(spec, gi)
-                    with lock:
-                        results[spec["cluster_id"]] = {"status": "ok", "result": res}
-                    return
-                except Exception as e:  # noqa: BLE001
-                    if attempt > max_retries:
-                        with lock:
-                            results[spec["cluster_id"]] = {
-                                "status": "error",
-                                "error": str(e)[:400],
-                            }
-                        return
-        finally:
-            free.put(gi)
+    def _run_one(spec, slot_id):
+        # gpu_pool_map hands us a device-SLOT index (0..concurrency-1); resolve it to
+        # this allocation's physical gpu index string (may be multi-GPU, e.g. "0,1,2,3").
+        gi = slots[slot_id]
+        # Retry + failure isolation happen HERE (not delegated to gpu_pool_map's own
+        # max_retries) so a permanently-failing cluster never raises out of the pool and
+        # cannot discard other clusters' results — matching dense_mvs_pool's pre-existing
+        # per-cluster isolate-and-continue behavior exactly.
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                res = runner(spec, gi)
+                return {"status": "ok", "result": res}
+            except Exception as e:  # noqa: BLE001
+                if attempt > max_retries:
+                    return {"status": "error", "error": str(e)[:400]}
 
-    with ThreadPoolExecutor(max_workers=concurrency) as ex:
-        list(ex.map(_do, cluster_specs))
-    return results
+    outcomes = gpu_pool_map(cluster_specs, _run_one, gpus=concurrency, max_retries=0)
+    return {
+        spec["cluster_id"]: outcome for spec, outcome in zip(cluster_specs, outcomes)
+    }
 
 
 def _resolve_model_dir(sparse_dir):

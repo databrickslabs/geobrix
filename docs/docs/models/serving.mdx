@@ -81,11 +81,16 @@ endpoint = serving.create_endpoint(
 ```
 
 `create_endpoint(name, model_version, *, profile, endpoint_name, workload_type="GPU_MEDIUM", scale_to_zero=True)`
-assembles a served-entity/traffic config for UC model `name`@`model_version` and creates
-(or updates) a Model Serving endpoint named `endpoint_name`. It polls until the endpoint
-is genuinely ready — both `state.ready == "READY"` **and** `state.config_update ==
-"NOT_UPDATING"` — since `state.ready` alone can read `READY` mid version-swap while the
-previous version is still the one actually serving traffic.
+assembles a served-entity/traffic config for UC model `name`@`model_version` and creates a
+Model Serving endpoint named `endpoint_name`. It polls until the endpoint is genuinely
+ready — both `state.ready == "READY"` **and** `state.config_update == "NOT_UPDATING"` —
+since `state.ready` alone can read `READY` mid version-swap while the previous version is
+still the one actually serving traffic.
+
+`create_endpoint` is **create-only** — it calls the deployment client's create API, not
+an update. Rolling a new `model_version` onto an endpoint that already exists needs a
+separate update call (not implemented in this module); calling `create_endpoint` again
+against an existing `endpoint_name` is not the way to deploy a new version.
 
 ### Scale-to-zero vs. provisioned
 

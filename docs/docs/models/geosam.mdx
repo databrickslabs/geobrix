@@ -29,7 +29,9 @@ GeoSAM requires the model deps — install geobrix[models_gpu_env5]
 ```
 
 - `model_type` — the SAM model variant (default `"vit_h"`).
-- `weights` — optional path to a local checkpoint; `None` uses SamGeo's default download.
+- `weights` — optional path to a local checkpoint; `None` defers to SamGeo's default
+  weight resolution (the exact download behavior is finalized when the GeoSAM backend is
+  wired against `segment-geospatial`).
 - `device` — `"cuda"` (default) or `"cpu"`.
 
 ## Segmenting a single image

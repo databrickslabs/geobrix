@@ -16,10 +16,12 @@ from databricks.labs.gbx.pyrx.core.budget import budget_for, decoded_budget_byte
 from databricks.labs.gbx.ds.file_gbx import materialize_decision
 ```
 
-- `budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=None)` — **driver-side,
+- `budget_for(intent, est_bytes=None, *, override_mb=None, infra=None)` — **driver-side,
   RAM-measured** (`/proc/meminfo` via `_probe_infra`). All intents are `_assert_driver`-guarded
   (calling from a Spark worker raises `RuntimeError` because `/proc/meminfo` on a worker
-  reports node-total RAM, not the ~1 GB task quota).
+  reports node-total RAM, not the ~1 GB task quota). `session`/`kind`/`override_bytes` are
+  intentionally absent — they would only serve the deferred worker/cog facade; add them with it,
+  not speculatively.
   - `"driver_merge"` — lidar merge RAM budget; reserve 6 GiB (GPU) / 2 GiB (CPU);
     floor 512 MiB; `override_mb` / `GBX_LIDAR_MERGE_MAX_MB` / `GBX_MERGE_MAX_MB` wins.
   - `"dense_alloc"` — GPU dense MVS RAM budget; reserve 6 GiB (always GPU context);

@@ -215,7 +215,7 @@ def _driver_merge_budget(override_mb, infra=None):
     return max((usable_mb * _MIB) // 2, _MERGE_FALLBACK_BYTES), avail_mb, gpu
 
 
-def budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=None):
+def budget_for(intent, est_bytes=None, *, override_mb=None, infra=None):
     """Driver-side RAM-measured budget authority (driver_merge, dense_alloc only).
 
     worker_read and cog_write are intentionally NOT budget_for intents: a Serverless
@@ -223,7 +223,11 @@ def budget_for(intent, est_bytes=None, *, override_mb=None, session=None, infra=
     so those use the empirically bisected binary cap in materialize_decision (file_gbx.py).
     tile_split uses decoded_budget_bytes(strategy) in this module instead.
 
-    Both implemented intents are _assert_driver-guarded. Returns a BudgetDecision."""
+    Both implemented intents are _assert_driver-guarded. Returns a BudgetDecision.
+
+    session/kind/override_bytes are intentionally NOT parameters: they would only
+    serve the deferred worker/cog facade over materialize_decision/decoded_budget_bytes.
+    Add them alongside that facade if it is ever built, not speculatively (phase2 spec)."""
     if intent == "driver_merge":
         _assert_driver(intent)
         budget, avail_mb, gpu = _driver_merge_budget(override_mb, infra=infra)

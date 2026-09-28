@@ -35,7 +35,10 @@ def local_temp_root() -> str:
     """Resolve the base dir for geobrix local-disk temp.
 
     `GBX_LOCAL_TEMP_DIR` (sanitized) if set and usable, else `tempfile.gettempdir()`.
-    A set-but-unusable value warns once and falls back (never breaks temp I/O).
+    A set-but-unusable value warns and falls back (never breaks temp I/O).
+
+    Re-resolved per call (not cached) so a runtime env change takes effect; the
+    makedirs(exist_ok) on an existing dir is a cheap stat.
     """
     raw = os.environ.get(_ENV)
     if not raw:

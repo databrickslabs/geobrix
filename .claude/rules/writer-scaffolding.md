@@ -36,24 +36,26 @@ from databricks.labs.gbx.ds._scratch import new_scratch_dir, remove_scratch_dir
   now-empty `.gbx_scratch` container (only succeeds when no sibling writes are in-flight). Never
   raises. No tracking registry involved.
 
-**Local-disk temp is a separate, legitimate pattern.** The product sites that call
-`tempfile.mkdtemp` create local driver-side temp dirs for FUSE-safe copies, executor staging,
-rasterio seek buffers, and CLI/HTTP download caches. They cannot use `new_scratch_dir` (which
-is Volume-parent-based). These sites are correct as long as each one cleans up in
-`try/finally: shutil.rmtree(...)`. Do NOT replace them with `new_scratch_dir` and do NOT add
-new `tempfile.mkdtemp` sites without a `try/finally` guard.
+## Local-disk temp (canonical: pyrx/core/local_temp.py)
+
+Product `src/` code creates local-disk temp ONLY via the canonical helpers:
+
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        local_temp_root, new_local_temp_dir, new_local_temp_file,
+    )
+
+- `new_local_temp_dir(prefix)` / `new_local_temp_file(suffix, prefix)` — atomic create
+  under `local_temp_root()` (env-tunable via `GBX_LOCAL_TEMP_DIR`; defaults to the system
+  temp dir). Keep the existing `try/finally` cleanup.
+- Manual temp paths use `local_temp_root()` as the base, not `tempfile.gettempdir()`.
+- A self-cleaning `tempfile.TemporaryDirectory(dir=local_temp_root())` is allowed.
+
+The `centralized-primitives` `scratch` row is **FAIL** (blocking) for the create forms
+`tempfile.mkdtemp|mkstemp|NamedTemporaryFile` outside the allow-list (the canonical module;
+`bench/`, tests, and notebooks are exempt). This is distinct from the Volume-parent scratch
+(`new_scratch_dir`) which stays in `ds/_scratch.py`.
 
 ## Patterns to avoid in writers
-
-The `centralized-primitives` QC check (`scratch` row, **warn — advisory, not a FAIL gate**) flags
-this outside `_scratch.py`:
-
-```python
-tempfile.mkdtemp(...)   # outside _scratch.py → advisory (warn); legitimate for local-disk temp with try/finally
-```
-
-The check is non-blocking: `scratch` stays `level=warn` because the remaining `tempfile.mkdtemp`
-calls are a legitimate stdlib pattern for local-disk temp, not hand-rolled Volume-scratch.
 
 Also avoid bespoke merge loops, glob patterns, and output-name sanitizers — they diverge from
 `_publish_merged` / `_glob_merge_inputs` / `_safe_name` on edge cases (Unicode names, sparse

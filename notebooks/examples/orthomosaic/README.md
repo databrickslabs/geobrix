@@ -12,6 +12,7 @@ GPU AI Runtime.
 | `01a_sfm_orthomosaic` | GitHub JPEGs | `orthomosaic.tif` | Download → exif_gbx → QC → sparse SfM → ortho |
 | `01b_sfm_orthomosaic_gpu` (optional) | `01a` sparse model | `orthomosaic_dense.tif`, `dsm_dense.tif`, `dense_merged.laz` (+ sharded `dense_<grp>_<cid>.laz` parts) | GPU dense MVS: patch_match_stereo → fusion → georef |
 | `02_publish` | `orthomosaic.tif` | `orthomosaic_corrected.tif`, `orthomosaic_cog.tif`, `orthomosaic.pmtiles` | Publish: color correction → COG (`cog_gbx`) → PMTiles (`gbx_rst_xyzpyramid` + `pmtiles_gbx`) |
+| `03_segment` (optional) | `orthomosaic_cog.tif` | polygon `DataFrame` (`label`, `geom` WKB, `score`); a served Unity Gateway endpoint | GeoSAM segmentation via `gbx.models`: in-notebook GPU `segment_raster`, then upsize to a served GPU Model Serving endpoint |
 | `monitor` | `output_dir/sparse/` | — | Optional live SfM progress watcher |
 
 ## Dependencies
@@ -29,6 +30,10 @@ The wheel is fetched from:
 ```
 /Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl
 ```
+
+`03_segment` is standalone (no `%run ./config_nb`) and installs its own extras —
+`geobrix[light_env5,models_gpu_env5,vizx]` — since it needs the GeoSAM GPU model deps
+(`torch`, `segment-geospatial`), not `photogrammetry`.
 
 ## Runtime
 

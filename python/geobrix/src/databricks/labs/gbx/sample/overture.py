@@ -17,9 +17,10 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
+
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 if TYPE_CHECKING:
     from pyspark.sql import DataFrame
@@ -381,7 +382,7 @@ class OvertureClient:
                 )
                 continue
 
-            tmpdir = tempfile.mkdtemp(prefix="gbx_overture_cli_")
+            tmpdir = new_local_temp_dir("gbx_overture_cli_")
             try:
                 local_out = os.path.join(tmpdir, f"{type_}.parquet")
                 _run_overture_download(
@@ -423,8 +424,8 @@ class OvertureClient:
         Returns the same metadata schema as the distributed path."""
         import os
         import shutil
-        import tempfile
 
+        from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
         from pyspark.sql import functions as F
         from pyspark.sql.types import (
             ArrayType,
@@ -467,7 +468,7 @@ class OvertureClient:
                 sz = os.path.getsize(outpath)
                 return (theme, type_, outpath, sz, True, asset_bbox, release, href)
             for _ in range(max(1, max_tries)):
-                tmpd = tempfile.mkdtemp(prefix="gbx_overture_")
+                tmpd = new_local_temp_dir("gbx_overture_")
                 try:
                     local = os.path.join(tmpd, basename)
                     resp = getter(href, timeout=100, stream=True)

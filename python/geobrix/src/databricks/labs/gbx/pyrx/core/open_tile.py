@@ -18,7 +18,6 @@ a nested ``with`` that has already closed.
 
 import os
 import shutil
-import tempfile
 from contextlib import ExitStack, contextmanager
 from typing import Iterator, Optional, Tuple
 
@@ -34,6 +33,7 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.edit import _nodata_fits_dtype
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
@@ -965,9 +965,8 @@ def shape_output(
         out_path = os.path.join(virtualize_dir, base)
 
         # FUSE-safe write: write to a local temp, then copy into place.
-        fd, tmp = tempfile.mkstemp(suffix=".tif")
+        tmp = new_local_temp_file(suffix=".tif")
         try:
-            os.close(fd)
             with open(tmp, "wb") as f:
                 f.write(vt.raster)
             shutil.copyfile(tmp, out_path)

@@ -15,10 +15,11 @@ import hashlib
 import json
 import os
 import shutil
-import tempfile
 import threading
 import time
 from pathlib import Path
+
+from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
 
 def input_signature(*parts) -> str:
@@ -79,7 +80,7 @@ class Manifest:
     def _save(self):
         # FUSE-safe: write a LOCAL temp then copy to the Volume path (no rename).
         Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        tmp = Path(tempfile.gettempdir()) / f"{Path(self.path).name}.{os.getpid()}.tmp"
+        tmp = Path(local_temp_root()) / f"{Path(self.path).name}.{os.getpid()}.tmp"
         with open(tmp, "w") as f:
             json.dump(self._data, f, indent=1)
         shutil.copy(str(tmp), self.path)

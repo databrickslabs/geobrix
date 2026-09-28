@@ -13,7 +13,6 @@ import os
 import resource
 import shutil
 import sys
-import tempfile
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -21,6 +20,7 @@ from databricks.labs.gbx.ds.file_gbx import StageTooLargeError  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _is_fuse_path  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _probe_direct_open  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 
 def cog_output_name(source_basename: str) -> str:
@@ -118,8 +118,7 @@ def prepare_cog(
     src = _subdataset_uri(path, subdataset)
     try:
         os.makedirs(out_dir, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(suffix=".cog")
-        os.close(fd)
+        tmp = new_local_temp_file(suffix=".cog")
         try:
             cog_convert_file(
                 src,

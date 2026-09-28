@@ -38,8 +38,8 @@ CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
      even if the heavy env drifts (gains rasterio) or a caller targets a light dir
      directly.
 Light test dirs so far: pyrx, pyvx, pygx, pmtiles_light, stac, earthdata, vizx,
-sample, plus bench + ds + core (the tier-neutral gbx.core.crs resolver imports
-rasterio, so test/core is light-tier too).
+sample, models, plus bench + ds + core (the tier-neutral gbx.core.crs resolver
+imports rasterio, so test/core is light-tier too).
 
 ``bench`` is a light dir (its modules import rasterio/shapely/h3/quadbin via the
 bench harness) and satisfies all three conditions: (1) it is in ``_LIGHT_TEST_DIRS``
@@ -66,6 +66,7 @@ _LIGHT_TEST_DIRS = [
     "earthdata",
     "vizx",
     "sample",
+    "models",
 ]
 
 # Skip the light-tier suites when their dependencies are not installed.

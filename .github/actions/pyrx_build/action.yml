@@ -67,6 +67,9 @@ runs:
         # listed: pyrx, ds, pyvx, pygx (light GridX), pmtiles_light (light
         # pmtiles_agg), stac (light STAC client, [stac] extra),
         # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra),
+        # models (gbx.models GeoSAM/runner/serving -- torch/segment-geospatial/mlflow
+        # are lazy-imported, so no [models] extra install is needed here; GPU/weight
+        # tests are marked `integration` and skip via `-m "not integration"` below).
         # test/bench (bench-harness unit tests) is TEMPORARILY de-scoped from the
         # light CI run: on the Linux CI runner, rasterio / pyproj / pyogrio each
         # bundle their own GDAL/PROJ, and rasterio.crs.CRS.from_epsg fails with
@@ -75,4 +78,4 @@ runs:
         # PROJ-data resolution is fixed (tracked separately). bench stays in
         # test/conftest.py _LIGHT_TEST_DIRS + the heavy LIGHT_IGNORES, so the heavy
         # phase still skips it; only the light RUN list drops it here.
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core -m "not integration" -v
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models -m "not integration" -v

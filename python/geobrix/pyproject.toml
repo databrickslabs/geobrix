@@ -299,6 +299,39 @@ photogrammetry_gpu_env5 = [
     "mercantile",
     "pmtiles",
 ]
+# Model-backed raster inference (gbx.models): GeoSAM (segment-geospatial / SamGeo)
+# segmentation + Unity Catalog model serving. CPU-importable surface only -- torch and
+# segment-geospatial are imported lazily inside gbx.models (see geosam.py/__init__.py),
+# so importing the package never requires a GPU-capable torch build. The plain
+# `segment-geospatial` PyPI wheel already pulls its own default
+# torch/torchvision/segment-anything/rasterio/shapely closure; use
+# [models_gpu_env5] for a CUDA-12-pinned runtime install instead.
+models = [
+    "segment-geospatial",
+]
+# GPU is env5-only on purpose, mirroring [photogrammetry_gpu_env5]: Serverless GPU AI
+# Runtime env5 = CUDA 12, env6 = CUDA 13. torch's default PyPI Linux wheel bundles
+# CUDA 12.8 (nvidia-cuda-runtime-cu12 / nvidia-cublas-cu12) through torch==2.10.0;
+# torch==2.11.0 switched its default Linux wheel to CUDA 13 (nvidia-*-cu13,
+# cuda-toolkit==13.0.2) -- confirmed by inspecting each release's wheel METADATA on
+# the PyPI mirror at impl time (2026-09-28). torchvision pins its torch dependency
+# EXACTLY per release (torchvision==0.25.0 -> torch==2.10.0), so both are pinned
+# explicitly here rather than left to the resolver. No models_gpu_env6 until a
+# CUDA-13 torch pairing is verified, same as photogrammetry_gpu_env5/env6.
+models_gpu_env5 = [
+    "torch==2.10.0",
+    "torchvision==0.25.0",
+    "segment-geospatial",
+]
+# Generic GPU umbrella (env5-only): composes the GPU-requiring extras on top of a
+# separately-installed light_env5 base (mirrors how photogrammetry_gpu_env5 is used
+# today) -- deliberately does NOT include light_env5_all. The runner installs it via
+# `--extras gpu_env5_all` alongside `light_env5`, e.g.
+# geobrix[light_env5,gpu_env5_all,vizx] = light base + vizx + both GPU stacks.
+gpu_env5_all = [
+    "geobrix[photogrammetry_gpu_env5]",
+    "geobrix[models_gpu_env5]",
+]
 
 [tool.coverage.run]
 # Exclude sample-data bundle from coverage total so reported % reflects main library (gridx, rasterx, vectorx)

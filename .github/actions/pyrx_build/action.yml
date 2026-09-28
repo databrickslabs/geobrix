@@ -68,8 +68,12 @@ runs:
         # pmtiles_agg), stac (light STAC client, [stac] extra),
         # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra),
         # models (gbx.models GeoSAM/runner/serving -- torch/segment-geospatial/mlflow
-        # are lazy-imported, so no [models] extra install is needed here; GPU/weight
-        # tests are marked `integration` and skip via `-m "not integration"` below).
+        # are lazy-imported at function scope, so no [models] extra install is needed
+        # here. No test in test/models is GPU-bound or marked `integration`: GeoSAM/
+        # segmenter backends are monkeypatch-injected fakes (test_geosam.py,
+        # test_runner.py), and the mlflow-dependent serving tests are individually
+        # guarded with `pytest.importorskip("mlflow")` (test_serving.py) rather than
+        # excluded via the `-m "not integration"` filter below).
         # test/bench (bench-harness unit tests) is TEMPORARILY de-scoped from the
         # light CI run: on the Linux CI runner, rasterio / pyproj / pyogrio each
         # bundle their own GDAL/PROJ, and rasterio.crs.CRS.from_epsg fails with

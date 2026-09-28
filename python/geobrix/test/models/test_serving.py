@@ -15,7 +15,6 @@ module itself always imports cleanly. These tests split the same way:
 """
 
 import base64
-import io
 import json
 
 import numpy as np
@@ -23,18 +22,35 @@ import pandas as pd
 import pytest
 import shapely.geometry
 import shapely.wkb
+from rasterio.io import MemoryFile
+from rasterio.transform import from_origin
 
 from databricks.labs.gbx.models import serving
 
 _FAKE_GEOM_WKB = shapely.wkb.dumps(shapely.geometry.box(0, 0, 1, 1))
 
 
-def _png_b64(arr):
-    import imageio.v3 as iio
-
-    buf = io.BytesIO()
-    iio.imwrite(buf, arr, extension=".png")
-    return base64.b64encode(buf.getvalue()).decode()
+def _image_b64(arr):
+    """Base64-encode ``arr`` (HxWx3 uint8) as GTiff bytes via rasterio's MemoryFile --
+    the same construction ``conftest.py``'s ``_open_rgb`` uses for the runner fixtures
+    -- so this test depends only on deps the models tests already own, not the
+    transitive-only ``imageio``. These tests monkeypatch ``runner.segment_raster``, so
+    the bytes are never actually decoded as a raster; only base64 round-tripping and
+    the mlflow-free predict-logic contract are exercised."""
+    height, width = arr.shape[:2]
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:32633",
+        transform=from_origin(0, height, 1, 1),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(np.moveaxis(arr, -1, 0))
+        return base64.b64encode(mf.read()).decode()
 
 
 def _fake_segment_raster(*_a, **_k):
@@ -50,7 +66,7 @@ def test_predict_geojson_returns_feature_collection(monkeypatch):
         "databricks.labs.gbx.models.runner.segment_raster", _fake_segment_raster
     )
     out = serving._predict_geojson(
-        {"image_b64": _png_b64(np.zeros((8, 8, 3), np.uint8))}
+        {"image_b64": _image_b64(np.zeros((8, 8, 3), np.uint8))}
     )
     fc = json.loads(out["geojson"])
     assert fc["type"] == "FeatureCollection"
@@ -64,7 +80,9 @@ def test_predict_geojson_accepts_dataframe_input(monkeypatch):
     monkeypatch.setattr(
         "databricks.labs.gbx.models.runner.segment_raster", _fake_segment_raster
     )
-    model_input = pd.DataFrame({"image_b64": [_png_b64(np.zeros((8, 8, 3), np.uint8))]})
+    model_input = pd.DataFrame(
+        {"image_b64": [_image_b64(np.zeros((8, 8, 3), np.uint8))]}
+    )
     out = serving._predict_geojson(model_input)
     fc = json.loads(out["geojson"])
     assert fc["type"] == "FeatureCollection"
@@ -84,7 +102,7 @@ def test_pyfunc_predict_returns_geojson(monkeypatch):
         "databricks.labs.gbx.models.runner.segment_raster", _fake_segment_raster
     )
     pf = serving.build_geosam_pyfunc()
-    out = pf.predict(None, {"image_b64": _png_b64(np.zeros((8, 8, 3), np.uint8))})
+    out = pf.predict(None, {"image_b64": _image_b64(np.zeros((8, 8, 3), np.uint8))})
     fc = json.loads(out["geojson"])
     assert fc["type"] == "FeatureCollection"
 

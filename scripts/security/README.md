@@ -253,6 +253,27 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   for test fidelity; upgrading them past the base triggers the "core package changed"
   cluster notice on DBR.  Patching is a CI-health action, not a 0.5.x release gate.
 
+- **httpx2 / httpcore2 — 4 HIGH+MED alerts** in the two `_all` umbrella locks
+  (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2.x
+  (the newest admitted by the `rio-tiler>=9.0,<9.3` cap) replaced its classic
+  `httpx` client with the `httpx2` distribution.  The patched `httpx2`
+  (`>=2.11` for the MED multipart/header CVEs, `>=2.12` for HIGH
+  CVE-2026-84382 decompression-amplification, plus the paired `httpcore2>=2.10`
+  for HIGH CVE-2026-84381) **requires `idna>=3.18`**, which the base-pinned idna
+  caps (`<3.8` env5 / `<3.12` env6, above) forbid — so the resolver backtracks
+  `httpx2` to 2.3.0 (its last release compatible with an unbounded idna).  rio-tiler
+  9.2.x itself admits any `httpx2`; the wall is idna.  These CVEs are therefore
+  **inherited transitively from the same base-pinned idna constraint as the
+  urllib3/idna cases above** and clear only when the DBR/Serverless base advances
+  idna to `>=3.18` (letting the geobrix idna cap rise), not by a wheel bump.  The
+  classic-`httpx` explicit locks (`env5-ci` / `env6-ci`, pinned to rio-tiler
+  9.0.6) carry `httpx==0.28.1` with no open alert; `httpx2` appears only in the
+  `_all` resolution.  Exposure is the remote-HTTP raster-read path (rio-tiler
+  fetching COG/tiles over HTTPS); reads from trusted UC Volumes / cloud storage do
+  not traverse it.  Confirmed via `uv pip compile` on 2026-09-28: forcing
+  `httpx2>=2.11` fails with *"httpx2>=2.11.0 depends on idna>=3.18 … and
+  geobrix[light-env6-all] depends on idna<3.12"*.
+
 - **jackson-databind — 2 HIGH alerts** in `pom.xml` (scope `provided`).  The
   `jar-with-dependencies` assembly excludes provided-scope artifacts; Spark/DBR ships its
   own `jackson-databind` at runtime.  geobrix's JAR does not bundle it.
@@ -267,3 +288,14 @@ As of **2026-09-27**: 0 hard blockers for the 0.5.2 release.  274 of 353 open De
 alerts (78%) are in three pure-noise manifests (`apps/genie_map/pnpm-lock.yaml`,
 `requirements-dev-container.txt`, `docs/package-lock.json`) — none shipped in the wheel
 or JAR.
+
+**2026-09-28 light-CI recompile.**  The two explicit light-CI locks
+(`requirements-light-env5-ci.txt` / `-env6-ci.txt`) were recompiled to clear the 9
+genuinely-clearable stale HIGH/MED alerts by bumping their non-base-pinned pins:
+`wheel` 0.45.1→0.46.2 (HIGH), `setuptools` 80.9.0→83.0.0 (MED), `pytest` 8.4.2→9.0.3
+(MED, CVE-2025-71176), and `requests` →2.33.0 (MED; 2.33.0's `urllib3<3,>=1.26` /
+`idna<4,>=2.5` deps stay inside the base caps so the pinned urllib3/idna are undisturbed).
+The two `_all` umbrella locks were **not** recompiled: their only outstanding alerts are the
+base-pinned `urllib3`/`idna` and the idna-blocked `httpx2`/`httpcore2` cases above (0
+clearable), so a recompile would clear nothing and only float unrelated transitives.  The
+remaining light-lock alerts are all base-pinned/idna-blocked and deferred per the cases above.

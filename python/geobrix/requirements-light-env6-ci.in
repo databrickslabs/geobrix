@@ -19,8 +19,8 @@
 
 # --- build backend (for `python -m build` lightweight wheel) ---
 build==1.6.1
-setuptools==80.9.0
-wheel==0.45.1
+setuptools==83.0.0
+wheel==0.46.2
 
 # --- runtime: pyspark local mode + pandas_udf (Arrow) ---
 # base pyspark pulls neither pandas nor pyarrow; pandas_udf needs both.
@@ -86,9 +86,11 @@ netcdf4==1.7.2
 # (stac/_download.py, module top) + tenacity (stac/_search.py search_one retry,
 # exercised by test_search). pystac-client / planetary-computer are NOT needed --
 # the suite stubs them (test/stac/_fake_catalog.py + an addPyFile pystac_client
-# stub + monkeypatch), which is why they stay out of this light lock. Versions
-# match requirements-dev-container.in. ---
-requests==2.32.5
+# stub + monkeypatch), which is why they stay out of this light lock. tenacity
+# matches requirements-dev-container.in; requests is bumped ABOVE the dev-container
+# pin to clear its CVE (fix 2.33.0). 2.33.0's deps (urllib3<3,>=1.26 / idna<4,>=2.5)
+# stay within the env6 base caps, so this does not disturb the pinned urllib3/idna. ---
+requests==2.33.0
 tenacity==9.1.4
 # MUST match pyproject [light_env6] (alias of [light_dbr19]): idna<3.12
 # Serverless env 6 / DBR 19 base is idna 3.11; cap <3.12 silences the
@@ -139,5 +141,6 @@ lazrs==0.6.3
 # Pure-Python; no native dep. Part of [light-base]; available without [photogrammetry].
 exifread>=3.0,<4
 
-# --- test runner ---
-pytest==8.4.2
+# --- test runner (light-CI only; dev-container / notebooks harness stay on 8.4.2
+# until a coordinated all-manifests bump). 9.0.3 clears CVE-2025-71176 (tmpdir). ---
+pytest==9.0.3

@@ -425,7 +425,6 @@ class OvertureClient:
         import os
         import shutil
 
-        from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
         from pyspark.sql import functions as F
         from pyspark.sql.types import (
             ArrayType,
@@ -436,6 +435,8 @@ class OvertureClient:
             StructField,
             StructType,
         )
+
+        from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
         get_fn = self._get_fn  # None in production; injectable for tests
 

@@ -59,7 +59,8 @@ def local_temp_root() -> str:
 
 def new_local_temp_dir(prefix: str) -> str:
     """Atomically create and return a unique local-disk temp DIR under local_temp_root().
-    Caller owns cleanup (try/finally: shutil.rmtree; gc_stale_local_temp for orphans)."""
+    Caller owns cleanup (try/finally: shutil.rmtree; gc_stale_local_temp for orphans).
+    """
     return tempfile.mkdtemp(prefix=prefix, dir=local_temp_root())
 
 
@@ -71,7 +72,9 @@ def new_local_temp_file(suffix: str = "", prefix: str = "gbx_") -> str:
     return path
 
 
-def gc_stale_local_temp(prefix: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS) -> None:
+def gc_stale_local_temp(
+    prefix: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS
+) -> None:
     """Best-effort GC of stale prefixed local-temp dirs under local_temp_root().
     Age-based; never raises. (Relocated from ds/_scratch.py; now follows the base.)"""
     root = local_temp_root()

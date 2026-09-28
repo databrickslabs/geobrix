@@ -5,10 +5,10 @@ from pathlib import Path
 import pytest
 
 from databricks.labs.gbx.pyrx.core.local_temp import (
+    gc_stale_local_temp,
     local_temp_root,
     new_local_temp_dir,
     new_local_temp_file,
-    gc_stale_local_temp,
 )
 
 

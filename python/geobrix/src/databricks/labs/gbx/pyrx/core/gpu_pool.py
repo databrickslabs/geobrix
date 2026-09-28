@@ -1,6 +1,7 @@
 """Model-agnostic GPU pool scheduler: run a callback over units across N device slots."""
 
 from concurrent.futures import ThreadPoolExecutor
+from queue import Queue
 from typing import Any, Callable, List, TypeVar
 
 T = TypeVar("T")
@@ -16,12 +17,25 @@ def gpu_pool_map(
     if gpus <= 1:
         return [_attempt(run_one, u, 0, max_retries) for u in units]
     results: List[Any] = [None] * len(units)
-    # round-robin device assignment; ThreadPoolExecutor bounded to `gpus`
+    # Device-id queue seeded with 0..gpus-1: a unit only starts once a device is free,
+    # and holds it exclusively (across all of its retry attempts) until it finishes —
+    # this guarantees at most one unit ever runs on a given device at a time, even under
+    # uneven per-unit durations. A static `i % gpus` assignment does NOT guarantee that:
+    # a fast unit can free its worker before a slow same-device unit finishes, letting
+    # the freed worker pick up a later unit pre-assigned to that still-busy device.
+    devices: Queue = Queue()
+    for dev in range(gpus):
+        devices.put(dev)
+
+    def _run(unit):
+        dev = devices.get()
+        try:
+            return _attempt(run_one, unit, dev, max_retries)
+        finally:
+            devices.put(dev)
+
     with ThreadPoolExecutor(max_workers=gpus) as ex:
-        futs = {
-            ex.submit(_attempt, run_one, u, i % gpus, max_retries): i
-            for i, u in enumerate(units)
-        }
+        futs = {ex.submit(_run, u): i for i, u in enumerate(units)}
         for fut in futs:
             results[futs[fut]] = fut.result()
     return results

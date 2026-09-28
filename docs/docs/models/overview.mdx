@@ -22,9 +22,11 @@ so the base light wheel stays importable with no GPU dependencies installed.
 
 1. **GeoBrix owns single- and multi-GPU execution.** `segment_raster` chips a raster,
    fans inference across 1..N GPU device slots itself (via `pyrx.core.gpu_pool.gpu_pool_map`),
-   and stitches the per-chip results back into whole-object polygons. A caller passes
-   `gpus="all"` (or an explicit device count) and gets one call — not a hand-rolled
-   device loop per notebook.
+   and stitches the per-chip results back into whole-object polygons. With the default
+   GeoSAM backend, each device slot gets its own model handle — bound to that device and
+   cached across the chips it processes, never a single handle shared across devices. A
+   caller passes `gpus="all"` (or an explicit device count) and gets one call — not a
+   hand-rolled device loop per notebook.
 2. **Notebooks stay thin.** The chip → infer → stitch → polygonize pipeline lives in
    GeoBrix, not in notebook cells. A notebook that segments a raster is, in essence, one
    call to `segment_raster(...)`.

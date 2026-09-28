@@ -28,11 +28,12 @@ model-backed inference package for GPU object segmentation.
   capability is **GeoSAM**, an automatic-mask object-segmentation backend built on
   [segment-geospatial](https://samgeo.gishub.org/) (SamGeo). `load_geosam(...)` loads a
   handle (torch / `segment-geospatial` import lazily, so the package stays importable
-  with no GPU deps); `segment_raster(tile_or_path, gpus="all", tile_px=1024, overlap=64,
-  min_area=10.0)` chips a raster, fans inference across one or many GPU device slots,
-  vectorizes each chip's label mask, and merges polygon fragments across tile seams into
-  one polygon per real-world object — a `pandas.DataFrame` of `label` / `geom` (WKB) /
-  `score` back. GPU workloads target the Serverless **GPU AI Runtime environment 5**
+  with no GPU deps); `segment_raster(tile_or_path, gpus="all", tile_px=1024, overlap=6,
+  min_area=10.0)` chips a raster, fans inference across one or many GPU device slots —
+  each slot holding its own cached, device-bound handle — vectorizes each chip's label
+  mask, and merges polygon fragments across tile seams into one polygon per real-world
+  object — a `pandas.DataFrame` of `label` / `geom` (WKB) / `score` back. GPU workloads
+  target the Serverless **GPU AI Runtime environment 5**
   (`torch==2.10.0`, CUDA 12) via the new `geobrix[models_gpu_env5]` extra. See
   [Geospatial Models](./models/overview) and [GeoSAM](./models/geosam).
 - **Unity Catalog registration and GPU Model Serving for GeoSAM.**

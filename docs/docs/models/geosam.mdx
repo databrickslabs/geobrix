@@ -50,7 +50,7 @@ df = segment_raster(
     "/Volumes/catalog/schema/volume/orthomosaic.tif",
     gpus="all",
     tile_px=1024,
-    overlap=64,
+    overlap=6,
     min_area=10.0,
 )
 # df: pandas.DataFrame with columns label (int), geom (WKB bytes), score (float)
@@ -63,7 +63,9 @@ georeferenced object polygons — chip → infer → stitch → polygonize:
    windows via the same overlap-percentage window planner GeoBrix uses for
    `gbx_rst_tooverlappingtiles`.
 2. **Infer** — each chip is segmented by GeoSAM (or an injected `segmenter`), fanned across
-   1..N GPU device slots.
+   1..N GPU device slots. With the default GeoSAM backend, each device gets its own
+   handle — bound to that device and cached across every chip it processes, never shared
+   with another device and never rebuilt per chip.
 3. **Stitch** — each chip's label mask is vectorized into georeferenced WKB polygons using
    its own true per-window transform, and fragments that straddle a seam are merged by
    geometric intersection into one polygon per real-world object.
@@ -79,7 +81,7 @@ segment_raster(
     model: str = "geosam",
     gpus="all",
     tile_px: int = 1024,
-    overlap: int = 64,
+    overlap: int = 6,
     min_area: float = 10.0,
 ) -> pandas.DataFrame
 ```
@@ -91,7 +93,7 @@ segment_raster(
 | `model` | `str` | `"geosam"` | Which built-in backend to use when `segmenter` is `None`. Only `"geosam"` is implemented today; pass `segmenter=` explicitly for anything else. |
 | `gpus` | `"all"` or `int` | `"all"` | `"all"` probes `torch.cuda.device_count()` (lazy `torch` import); a positive `int` passes through untouched and **never** imports `torch`. |
 | `tile_px` | `int` | `1024` | Square tile size in pixels. |
-| `overlap` | `int` | `64` | Seam overlap as a **percentage** of `tile_px` (matches `rst_tooverlappingtiles`) — not a pixel count. |
+| `overlap` | `int` | `6` | Seam overlap as a **percentage of tile size** (`0`-`100`; matches `rst_tooverlappingtiles`) — not a pixel count. E.g. `overlap=6` on `tile_px=1024` is a ~61px seam. |
 | `min_area` | `float` | `10.0` | Polygons smaller than this, after seam-merge, are dropped. |
 
 Returns a `pandas.DataFrame` with columns `label` (`int`), `geom` (`bytes`, WKB), and

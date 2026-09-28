@@ -23,6 +23,7 @@ so this module stays importable (and Serverless-safe: no ``spark.conf``/``_jvm``
 """
 
 from contextlib import contextmanager
+from threading import Lock
 
 import numpy as np
 import pandas as pd
@@ -171,6 +172,41 @@ def _merge_seams(frags, min_area):
     return rows
 
 
+def _default_geosam_factory(gpu_id: int):
+    """Per-device GeoSAM handle builder -- the default (``segmenter is None``)
+    ``segment_raster`` factory. Binds inference to device ``gpu_id`` (``torch.cuda.
+    set_device`` + ``load_geosam(device=f"cuda:{gpu_id}")``) and returns a
+    ``(image) -> mask`` callable closed over that device-bound handle.
+
+    ``segment_raster`` calls this at most ONCE per distinct ``gpu_id`` (caches the
+    returned callable in a per-call dict), so a device's SamGeo predictor -- which is
+    stateful and not safe to call concurrently -- is never shared across devices and
+    never rebuilt per chip. ``gpu_pool_map`` already guarantees at most one chip runs
+    on a given device at a time, so a per-device handle is never invoked concurrently
+    either.
+
+    A module-level function (rather than a closure inside ``segment_raster``) so tests
+    can ``monkeypatch.setattr(runner, "_default_geosam_factory", fake)`` to exercise the
+    per-device plumbing without torch/GPU installed.
+
+    torch is imported lazily here, inside the default factory -- which only ever runs
+    on a GPU worker taking the ``segmenter=None`` path -- so the light wheel stays
+    importable with no torch installed.
+    """
+    import torch
+
+    from databricks.labs.gbx.models.geosam import load_geosam
+    from databricks.labs.gbx.models.geosam import segment as _geosam_segment
+
+    torch.cuda.set_device(gpu_id)
+    handle = load_geosam(device=f"cuda:{gpu_id}")
+
+    def _segment(image):
+        return _geosam_segment(handle, image)
+
+    return _segment
+
+
 def segment_raster(
     tile_or_path,
     *,
@@ -178,7 +214,7 @@ def segment_raster(
     model: str = "geosam",
     gpus="all",
     tile_px: int = 1024,
-    overlap: int = 64,
+    overlap: int = 6,
     min_area: float = 10.0,
 ) -> pd.DataFrame:
     """Chip -> infer -> stitch -> polygonize: the single GeoBrix call the
@@ -195,16 +231,17 @@ def segment_raster(
     Args:
         tile_or_path: an open rasterio dataset, raw GTiff bytes, or a file path.
         segmenter: injectable ``(image: HxWx3 uint8) -> mask: HxW int`` callable.
-            Defaults to a GeoSAM handle (``model="geosam"``, the only backend wired up
-            so far) when ``None``. Tests inject a fake.
+            Device-agnostic -- every chip, on every GPU device slot, calls the SAME
+            ``segmenter``. Defaults to a per-device GeoSAM handle (``model="geosam"``,
+            the only backend wired up so far) when ``None``. Tests inject a fake.
         model: which built-in backend to default to when ``segmenter`` is ``None``.
             Only ``"geosam"`` is implemented today.
         gpus: ``"all"`` probes ``torch.cuda.device_count()`` (lazy import); an int
             passes through untouched and never imports torch.
         tile_px: square tile size in pixels.
-        overlap: seam overlap as a PERCENTAGE of ``tile_px`` (matches
-            ``tiling.plan_grid_windows`` / heavy ``rst_tooverlappingtiles``) -- not a
-            pixel count.
+        overlap: seam overlap as a PERCENTAGE of ``tile_px`` -- 0-100, matching
+            ``tiling.plan_grid_windows`` / heavy ``rst_tooverlappingtiles`` -- not a
+            pixel count. E.g. ``overlap=6`` on ``tile_px=1024`` is a ~61px seam.
         min_area: polygons (post seam-merge) smaller than this are dropped.
 
     Returns:
@@ -219,13 +256,14 @@ def segment_raster(
                 f"segment_raster: unsupported model {model!r}; only 'geosam' has a "
                 "built-in segmenter today -- pass segmenter= explicitly for anything else"
             )
-        from databricks.labs.gbx.models.geosam import load_geosam
-        from databricks.labs.gbx.models.geosam import segment as _geosam_segment
-
-        handle = load_geosam()
-
-        def segmenter(image):
-            return _geosam_segment(handle, image)
+        # Per-device factory: segment_raster (below) calls this at most once per
+        # distinct gpu_id and caches the result, so the default path binds inference to
+        # the chip's actual assigned device instead of one shared cuda:0 handle.
+        factory = _default_geosam_factory
+    else:
+        # Injected segmenter is device-agnostic: every gpu_id gets the same callable.
+        def factory(_gpu_id):
+            return segmenter
 
     n_gpus = _resolve_gpus(gpus)
 
@@ -233,10 +271,24 @@ def segment_raster(
         crs = ds.crs
         chips = list(_iter_chips(ds, tile_px, overlap))
 
-    def _run_one(chip, _gpu_id):
+    # Per-gpu_id handle cache: gpu_pool_map guarantees at most one chip runs on a given
+    # device at a time, so a cached per-device handle (e.g. a stateful SamGeo predictor)
+    # is never invoked concurrently. The lock guards only the check-and-build of a new
+    # cache entry (paid once per distinct device, never per chip) -- the inference call
+    # itself (`fn(image)`) runs outside the lock, so once every device's handle is
+    # built, chips on different devices still run concurrently.
+    handles: dict = {}
+    handles_lock = Lock()
+
+    def _run_one(chip, gpu_id):
         arr, transform = chip
         image = np.moveaxis(arr, 0, -1)
-        mask = segmenter(image)
+        with handles_lock:
+            fn = handles.get(gpu_id)
+            if fn is None:
+                fn = factory(gpu_id)
+                handles[gpu_id] = fn
+        mask = fn(image)
         return _polygonize_mask(mask, transform, crs)
 
     per_chip = gpu_pool_map(chips, _run_one, gpus=max(1, n_gpus))

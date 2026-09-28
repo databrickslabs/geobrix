@@ -66,3 +66,41 @@ def test_single_and_distributed_agree(multi_chip_rgb_tile):
     # geometries (sorted, since row order is not a documented guarantee), not just a
     # count that a dropped-and-duplicated pair of chips could coincidentally match.
     assert sorted(a["geom"].tolist()) == sorted(b["geom"].tolist())
+
+
+def test_default_segmenter_binds_per_device(monkeypatch, multi_chip_rgb_tile):
+    """FIX: the default (segmenter=None) path must bind each chip's inference to its
+    OWN assigned gpu_id -- a per-device handle, cached (not rebuilt per chip), never
+    one handle shared across every device. Patches the module-level
+    `_default_geosam_factory` seam (no torch/GPU needed) and runs the multi_chip
+    fixture (3 chips) at gpus=2 -- fewer devices than chips, so at least one device
+    must be reused across more than one chip, which is what exercises caching.
+    """
+    builds = []  # gpu_id at each factory (handle-build) call
+    usages = []  # gpu_id at each per-chip inference call
+
+    def fake_factory(gpu_id):
+        builds.append(gpu_id)
+
+        def _segment(image):
+            usages.append(gpu_id)
+            return _two_color_objects(image)
+
+        return _segment
+
+    monkeypatch.setattr(runner, "_default_geosam_factory", fake_factory)
+
+    df = runner.segment_raster(multi_chip_rgb_tile, gpus=2, tile_px=32, overlap=0)
+
+    assert len(usages) == 3  # one inference call per chip
+    # (a) the factory is invoked once per DISTINCT gpu_id, never twice for the same one
+    assert len(builds) == len(set(builds))
+    # (b) _run_one threaded the REAL per-chip gpu_id through -- not a constant device
+    assert len(set(builds)) > 1
+    # caching: fewer builds than inference calls means a device handle was reused
+    # across chips instead of being rebuilt every time
+    assert len(builds) < len(usages)
+    # every inference call's gpu_id is one the factory actually built a handle for
+    assert set(usages) <= set(builds)
+    # (c) per-device fan-out still recombines into the same two real-world objects
+    assert len(df) == 2

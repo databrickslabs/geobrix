@@ -227,7 +227,8 @@ def budget_for(intent, est_bytes=None, *, override_mb=None, infra=None):
 
     session/kind/override_bytes are intentionally NOT parameters: they would only
     serve the deferred worker/cog facade over materialize_decision/decoded_budget_bytes.
-    Add them alongside that facade if it is ever built, not speculatively (phase2 spec)."""
+    Add them alongside that facade if it is ever built, not speculatively (phase2 spec).
+    """
     if intent == "driver_merge":
         _assert_driver(intent)
         budget, avail_mb, gpu = _driver_merge_budget(override_mb, infra=infra)

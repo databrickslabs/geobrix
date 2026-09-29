@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import glob
 import os
+import re
 import shutil
 import uuid
 from dataclasses import dataclass, field
@@ -149,6 +150,52 @@ def _infer_crs_from_parts(inputs: List[str]) -> Optional[str]:
     except Exception:  # noqa: BLE001
         pass
     return None
+
+
+_UUID_PART_RE = re.compile(r"-[0-9a-f]{8}$")  # part-<8hex> uuid fallback stem
+
+
+def _cluster_id_of(path: str, part_prefix: str = "part") -> Optional[str]:
+    """Cluster id = the last '_'-token of the stem (from *_<group>_<cluster>.laz).
+    None when the part is not cluster-identifiable (uuid fallback / no token)."""
+    stem = os.path.splitext(os.path.basename(path))[0]
+    if stem.startswith(part_prefix + "-") or _UUID_PART_RE.search(stem):
+        return None
+    if "_" not in stem:
+        return None
+    return stem.rsplit("_", 1)[-1]
+
+
+def _part_cluster_meta(parts: List[str], part_prefix: str = "part") -> dict:
+    """Map parts -> cluster id, and aggregate per-cluster header center + bbox.
+    Header-only (laspy.open .mins/.maxs) — no point read. Raises when any part
+    is not cluster-identifiable (overlap=drop cannot assign ownership)."""
+    import laspy
+
+    per_part: dict = {}
+    center: dict = {}
+    bbox: dict = {}  # cid -> [xmin, xmax, ymin, ymax]
+    for p in parts:
+        cid = _cluster_id_of(p, part_prefix)
+        if cid is None:
+            raise ValueError(
+                f"lidar_gbx overlap=drop: part {os.path.basename(p)!r} is not "
+                "cluster-identifiable (needs *_<group>_<cluster>.laz naming); "
+                "cannot assign seam ownership."
+            )
+        per_part[p] = cid
+        with laspy.open(p) as r:
+            mins, maxs = r.header.mins, r.header.maxs
+        if cid not in bbox:
+            bbox[cid] = [mins[0], maxs[0], mins[1], maxs[1]]
+        else:  # union when >1 part shares a cluster id
+            b = bbox[cid]
+            b[0], b[1] = min(b[0], mins[0]), max(b[1], maxs[0])
+            b[2], b[3] = min(b[2], mins[1]), max(b[3], maxs[1])
+    for cid, b in bbox.items():
+        center[cid] = ((b[0] + b[1]) / 2.0, (b[2] + b[3]) / 2.0)
+        bbox[cid] = (b[0], b[1], b[2], b[3])
+    return {"per_part": per_part, "center": center, "bbox": bbox}
 
 
 def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> int:

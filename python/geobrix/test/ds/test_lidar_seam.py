@@ -39,3 +39,37 @@ def test_merge_mode_parses_seam_options():
         overwrite=True,
     )
     assert w.overlap == "drop" and w.dedupe_exact is True and w.voxel_size == 0.5
+
+
+def _write_laz(path, xs, ys, zs):
+    import laspy
+    import numpy as np
+
+    h = laspy.LasHeader(point_format=0)
+    h.offsets = [min(xs), min(ys), min(zs)]
+    h.scales = [0.001, 0.001, 0.001]
+    d = laspy.LasData(h)
+    d.x, d.y, d.z = np.array(xs), np.array(ys), np.array(zs)
+    d.write(str(path))
+
+
+def test_part_cluster_meta_from_names_and_headers(tmp_path):
+    from databricks.labs.gbx.ds._write_lidar import _part_cluster_meta
+
+    p0 = tmp_path / "dense_all_0.las"
+    _write_laz(p0, [0, 1], [0, 1], [0, 0])
+    p1 = tmp_path / "dense_all_1.las"
+    _write_laz(p1, [10, 11], [0, 1], [0, 0])
+    meta = _part_cluster_meta([str(p0), str(p1)])
+    assert meta["per_part"][str(p0)] == "0"
+    assert meta["center"]["1"][0] == pytest.approx(10.5, abs=0.01)
+    assert meta["bbox"]["0"][1] == pytest.approx(1.0, abs=0.01)  # x_max
+
+
+def test_part_cluster_meta_rejects_uuid_parts(tmp_path):
+    from databricks.labs.gbx.ds._write_lidar import _part_cluster_meta
+
+    p = tmp_path / "part-a1b2c3d4.las"
+    _write_laz(p, [0], [0], [0])
+    with pytest.raises(ValueError, match="cluster-identifiable"):
+        _part_cluster_meta([str(p)])

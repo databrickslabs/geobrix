@@ -163,11 +163,21 @@ already in the output directory, not on a fresh DataFrame write.
   rather than by discarding one side's file wholesale: each point is assigned
   to exactly one cluster — the nearest cluster center among every cluster
   whose bounding box covers that point — so the union comes out
-  non-redundant without a hard tile edge. This needs the parts to be
-  **cluster-identifiable**: filenames must follow the `*_<group>_<cluster>.laz`
-  pattern produced by writing with `groupCol` / `clusterCol` set. Parts named
-  by `nameCol` or the UUID fallback (`<partPrefix>-<uuid>.laz`) have no
-  cluster to own a seam with, and merging them with `overlap="drop"` raises.
+  non-redundant without a hard tile edge. Ownership is a proxy: it's decided
+  from each cluster's axis-aligned header bounding box and center, not from
+  where that cluster actually has points. In a region where two clusters'
+  bounding boxes overlap but only one of them has real points there, a point
+  can be assigned to the cluster with no data at that location, thinning the
+  seam. For compact clusters that both genuinely densify the shared seam —
+  the typical case — this is benign. `overlap="drop"` also needs the parts to
+  be **cluster-identifiable**: filenames must follow the
+  `*_<group>_<cluster>.laz` pattern produced by writing with `groupCol` /
+  `clusterCol` set — use those options, not `nameCol`, when merging with
+  `overlap="drop"`. A UUID-fallback stem (`<partPrefix>-<uuid>.laz`) or a stem
+  with no underscore has no cluster id and raises; an arbitrary `nameCol`
+  basename is **not** validated as a cluster id — if it happens to contain an
+  underscore, its last `_`-token is taken as the cluster id as-is, which can
+  silently mis-assign ownership rather than raising.
 - **`dedupeExact="true"`** drops points that are exact duplicates on `x`,
   `y`, `z` — and on `r`, `g`, `b` too when the parts carry RGB — after
   rounding to millimetre precision. Two points with the same coordinates but
@@ -197,10 +207,14 @@ resolves ownership as each part streams in, ahead of both.
 ```
 
 The merge streams parts one at a time rather than concatenating every part
-into memory up front, so peak memory tracks the size of the unified output,
-not the sum of the input parts — the same [Serverless & Memory](../serverless-and-memory)
-budget that governs a plain `merge` still applies, and `mergeMaxMB` /
-`GBX_LIDAR_MERGE_MAX_MB` still override it.
+into memory up front: each part is fully read, filtered, and released before
+the next one is read, while kept points accumulate in memory as they're
+emitted. Peak memory is therefore roughly the largest single part plus the
+growing output-sized accumulators — bounded, and far below the sum of every
+input part, though not literally just the size of the unified output. The
+same [Serverless & Memory](../serverless-and-memory) budget that governs a
+plain `merge` still applies, and `mergeMaxMB` / `GBX_LIDAR_MERGE_MAX_MB`
+still override it.
 
 :::note Column parity still deferred
 `overlap`, `dedupeExact`, and `voxelSize` unify `x`, `y`, `z`, and RGB.

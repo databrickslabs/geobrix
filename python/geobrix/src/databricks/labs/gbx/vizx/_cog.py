@@ -254,6 +254,7 @@ def plot_cog(
     emphasis="blend",
     debug_mode=1,
     crs=None,
+    to_crs=None,
     **kw,
 ):
     """Render a Cloud-Optimized GeoTIFF inline over a contextily basemap.
@@ -264,7 +265,13 @@ def plot_cog(
     prefixes are stripped. ``emphasis="data"`` renders the raster vivid
     at full opacity so it pops against the full-strength basemap; ``"blend"``
     keeps the prior softer render. ``debug_mode`` (``0`` silent, ``1`` default,
-    ``2`` diagnostics) mirrors the other entrypoints. Requires the [vizx] extra
+    ``2`` diagnostics) mirrors the other entrypoints. ``to_crs`` (e.g.
+    ``"EPSG:3857"``) reprojects the read on the fly through a
+    ``rasterio.vrt.WarpedVRT`` when the source has a CRS that differs from
+    ``to_crs`` (compared via ``crs_equal``) -- lets a composite caller (e.g.
+    ``plot_static``) align this raster with layers already in a different CRS
+    (a source with no CRS, or already matching ``to_crs``, is left untouched:
+    byte-identical to the ``to_crs=None`` behavior). Requires the [vizx] extra
     plus rasterio.
     """
     from databricks.labs.gbx.vizx._env import assert_viz_available
@@ -272,7 +279,10 @@ def plot_cog(
 
     _validate_emphasis(emphasis)
     assert_viz_available()
+    import contextlib
+
     import rasterio
+    from rasterio.vrt import WarpedVRT
 
     em = _COG_EMPHASIS[emphasis]
     _emit(
@@ -285,23 +295,40 @@ def plot_cog(
 
     p = _strip_scheme(str(path))
     with rasterio.open(p) as src:
-        if band is not None:
-            scale = max(src.width, src.height) / max_pixels
-            out_h = max(1, int(src.height // scale)) if scale > 1 else src.height
-            out_w = max(1, int(src.width // scale)) if scale > 1 else src.width
-            data = src.read(
-                indexes=[band],
-                out_shape=(1, out_h, out_w),
-                resampling=rasterio.enums.Resampling.bilinear,
-                masked=True,
-            )
-            transform = src.transform * src.transform.scale(
-                src.width / out_w, src.height / out_h
-            )
-        else:
-            data, transform, _ = _decimated_read(src, max_pixels)
-        # Group G: canonical CRS for the basemap; `crs` overrides a CRS-less source.
-        crs = _resolve_plot_crs(src.crs, crs)
+        warp_crs = None
+        if to_crs is not None and src.crs is not None:
+            from databricks.labs.gbx.core.crs import crs_equal, resolve_crs
+
+            target_crs = resolve_crs(to_crs)
+            if not crs_equal(src.crs, target_crs):
+                warp_crs = target_crs
+        vrt_ctx = (
+            WarpedVRT(src, crs=warp_crs)
+            if warp_crs is not None
+            else contextlib.nullcontext(src)
+        )
+        with vrt_ctx as reader:
+            if band is not None:
+                scale = max(reader.width, reader.height) / max_pixels
+                out_h = (
+                    max(1, int(reader.height // scale)) if scale > 1 else reader.height
+                )
+                out_w = (
+                    max(1, int(reader.width // scale)) if scale > 1 else reader.width
+                )
+                data = reader.read(
+                    indexes=[band],
+                    out_shape=(1, out_h, out_w),
+                    resampling=rasterio.enums.Resampling.bilinear,
+                    masked=True,
+                )
+                transform = reader.transform * reader.transform.scale(
+                    reader.width / out_w, reader.height / out_h
+                )
+            else:
+                data, transform, _ = _decimated_read(reader, max_pixels)
+            # Group G: canonical CRS for the basemap; `crs` overrides a CRS-less source.
+            crs = _resolve_plot_crs(reader.crs, crs)
     return _render_cog(
         data,
         transform,

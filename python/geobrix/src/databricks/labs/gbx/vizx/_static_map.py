@@ -251,7 +251,10 @@ def _draw_one_layer(
 
     Dispatches by lyr.kind:
     - 'vector' / 'grid': resolve via _resolve_gdf, reproject to 3857, plot.
-    - 'raster': delegate to plot_cog (Task 2) with basemap=False.
+    - 'raster': delegate to plot_cog (Task 2) with basemap=False and
+      to_crs="EPSG:3857" (a georeferenced path/dataset warps to match the
+      vector branch's 3857; a decoded ndarray tile is drawn as-is in pixel
+      space -- it has no CRS to warp).
 
     ``emphasis`` sets the per-layer styling defaults: ``"data"`` pops the layer
     (dark outline, firmer alpha, full raster strength); ``"blend"`` (default) keeps the
@@ -299,6 +302,12 @@ def _draw_one_layer(
             kwargs["markersize"] = em["markersize"]
         if not lyr.fill:
             kwargs["facecolor"] = "none"
+        # Vectors are overlays: composite them ABOVE any raster layer. plot_cog draws a
+        # raster at zorder=2 (so it sits above a basemap at zorder=1); without a higher
+        # zorder here, a raster layer would occlude the vectors entirely (they otherwise
+        # take geopandas' lower default zorder), rendering a raster+vector composite as
+        # raster-only.
+        kwargs.setdefault("zorder", 3)
         plot_gdf.plot(**kwargs)
     elif lyr.kind == "raster":
         import numpy as np
@@ -314,7 +323,19 @@ def _draw_one_layer(
         else:
             from databricks.labs.gbx.vizx._cog import plot_cog
 
-            plot_cog(lyr.data, band=lyr.band, basemap=False, ax=ax, emphasis=emphasis)
+            # Warp to the SAME CRS the vector branch above already reprojects
+            # to (Web Mercator) so a composite raster+vector render aligns --
+            # otherwise a geographic-CRS raster draws at degree-scale
+            # coordinates while the vector draws at mercator-meters, and both
+            # collapse to sub-pixel specks (a near-blank composite).
+            plot_cog(
+                lyr.data,
+                band=lyr.band,
+                basemap=False,
+                ax=ax,
+                emphasis=emphasis,
+                to_crs="EPSG:3857",
+            )
     elif lyr.kind == "pmtiles":
         warnings.warn(
             "plot_static: 'pmtiles' layers are not rendered by the static compositor "

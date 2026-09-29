@@ -245,3 +245,28 @@ def test_dedupe_exact_rgb_key_distinguishes_color(tmp_path):
         if round(float(x), 1) == 1.0
     }
     assert colors_at_1_0_0 == {(255, 0, 0), (0, 255, 0)}
+
+
+def test_voxel_keeps_one_real_point_per_cell(tmp_path):
+    import laspy
+
+    from databricks.labs.gbx.ds._write_lidar import _merge_laz_parts_seam
+
+    # 3 points inside one 10m cell + 1 in another cell -> 2 kept, both REAL inputs.
+    a = tmp_path / "a_all_0.las"
+    _write_laz_rgb(a, [1.0, 2.0, 3.0, 25.0], [1.0, 1.0, 1.0, 1.0], [0, 0, 0, 0])
+    out = tmp_path / "m.laz"
+    kept = _merge_laz_parts_seam(
+        [str(a)],
+        str(out),
+        False,
+        None,
+        overlap_drop=False,
+        dedupe_exact=False,
+        voxel_size=10.0,
+    )
+    assert kept == 2
+    xs = set(round(v, 3) for v in laspy.read(str(out)).x)
+    assert xs <= {1.0, 2.0, 3.0, 25.0}  # every kept point is a REAL input point
+    # cell [0,10) center x=5 -> nearest of {1,2,3} is 3.0
+    assert 3.0 in xs and 25.0 in xs

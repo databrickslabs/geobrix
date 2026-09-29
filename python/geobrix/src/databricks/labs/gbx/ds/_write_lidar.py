@@ -281,10 +281,12 @@ def _merge_laz_parts_seam(
     """Streaming seam-aware merge. Processes one part at a time; keeps a bounded
     working set; writes one .laz via write_xyz(rgb)_laz; returns the kept count.
 
-    Implements ``overlap_drop`` (seam-point ownership via ``_nearest_owner``) and
-    ``dedupe_exact`` (millimetre-rounded exact-key dedup, gating ``_emit``).
-    ``voxel_size`` is accepted for signature stability but is pass-through
-    (wired in Task 5).
+    Implements ``overlap_drop`` (seam-point ownership via ``_nearest_owner``),
+    ``dedupe_exact`` (millimetre-rounded exact-key dedup, gating ``_emit``), and
+    ``voxel_size`` (keeps one real point per cubic voxel cell — the input point
+    nearest the cell's geometric center; never a synthesized average). The three
+    stages compose in order: dedupe's ``seen`` gate runs first, then the voxel
+    cell routing.
     """
     import laspy
 
@@ -295,10 +297,13 @@ def _merge_laz_parts_seam(
 
     meta = _part_cluster_meta(inputs, part_prefix) if overlap_drop else None
 
-    # Kept-point accumulators (Task 5 replaces the plain list with a dict for voxel_size).
+    # Kept-point accumulators (voxel_size routes through `cells` instead; see below).
     kx, ky, kz, kr, kg, kb = [], [], [], [], [], []
 
     seen = set() if dedupe_exact else None
+
+    v = voxel_size
+    cells = {} if v else None  # cell -> (dist2_to_center, (x,y,z,r,g,b))
 
     def _emit(x, y, z, r, g, b):
         if seen is not None:
@@ -310,6 +315,16 @@ def _merge_laz_parts_seam(
             if key in seen:
                 return
             seen.add(key)
+        if cells is not None:
+            cx = (x // v + 0.5) * v
+            cy = (y // v + 0.5) * v
+            cz = (z // v + 0.5) * v
+            d2 = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2
+            cell = (int(x // v), int(y // v), int(z // v))
+            cur = cells.get(cell)
+            if cur is None or d2 < cur[0]:
+                cells[cell] = (d2, (x, y, z, r, g, b))
+            return
         kx.append(x)
         ky.append(y)
         kz.append(z)
@@ -339,7 +354,16 @@ def _merge_laz_parts_seam(
             b = int(bs[i]) if has_rgb else 0
             _emit(x, y, z, r, g, b)
 
-    # (Task 5 inserts the cells->kx materialization here, before the guard.)
+    if cells is not None:
+        for _d2, (x, y, z, r, g, b) in cells.values():
+            kx.append(x)
+            ky.append(y)
+            kz.append(z)
+            if has_rgb:
+                kr.append(r)
+                kg.append(g)
+                kb.append(b)
+
     if not kx:
         return 0  # nothing survived; caller (Task 6) retains parts, skips publish
     if has_rgb:

@@ -43,6 +43,9 @@ show_help() {
     echo -e "  ${GREEN}--extra-deps CSV${NC}      Additional pip requirements (comma-separated)."
     echo -e "  ${GREEN}--wheel VOLPATH${NC}       Volume path to the geobrix wheel."
     echo -e "  ${GREEN}--env-version VER${NC}     Serverless environment version (default: 6)."
+    echo -e "  ${GREEN}--hardware-accelerator VALUE${NC} Serverless GPU AI Runtime accelerator"
+    echo -e "                        (e.g. GPU_1xA10, GPU_1xH100). Omit for CPU Serverless"
+    echo -e "                        (default). Pair with a GPU wheel extra via --extras."
     echo -e "  ${GREEN}--profile PROFILE${NC}     Databricks config profile (default: oauth-fe or"
     echo -e "                        DATABRICKS_CONFIG_PROFILE env var)."
     echo -e "  ${GREEN}--poll-secs N${NC}         Polling interval in seconds (default: 20)."
@@ -60,6 +63,9 @@ show_help() {
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
     echo -e "    ${YELLOW}--notebook 'notebooks/examples/helios/01. Vector Engine (MVT).ipynb' \\${NC}"
     echo -e "    ${YELLOW}--extras light_env6${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
+    echo -e "    ${YELLOW}--notebook notebooks/examples/orthomosaic/03_segment.ipynb \\${NC}"
+    echo -e "    ${YELLOW}--env-version 5 --extras models_gpu_env5 --hardware-accelerator GPU_1xA10${NC}"
     echo ""
 }
 
@@ -82,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --notebook|--dir)
             HAS_NOTEBOOK_OR_DIR=true
+            RUNNER_ARGS+=("$1" "$2")
+            shift 2
+            ;;
+        --hardware-accelerator)
             RUNNER_ARGS+=("$1" "$2")
             shift 2
             ;;

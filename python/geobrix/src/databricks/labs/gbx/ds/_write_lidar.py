@@ -40,7 +40,8 @@ _V2_DATA_COLS = (
     "classification",
     "gps_time",
 )
-_V2_OPTIONS = ("overlap", "voxelSize", "thinOverlap", "dedupeExact")
+_V2_OPTIONS = ("thinOverlap",)  # still deferred
+_GRADUATED = ("overlap", "voxelSize", "dedupeExact")  # v2 seam-unification (merge mode)
 
 
 @dataclass
@@ -51,14 +52,14 @@ class LidarCommitMessage(WriterCommitMessage):
 
 def _reject_v2_options(options: dict) -> None:
     for opt in _V2_OPTIONS:
-        val = options.get(opt)
-        if val is None:
-            continue
-        if opt == "overlap" and str(val).lower() == "keep":
-            continue  # keep is the v1 default (no-op)
+        if options.get(opt) is not None:
+            raise ValueError(
+                f"lidar_gbx writer: option {opt!r} is deferred (not in v2 seam scope)."
+            )
+    ov = options.get("overlap")
+    if ov is not None and str(ov).lower() not in ("keep", "drop"):
         raise ValueError(
-            f"lidar_gbx writer: option {opt!r}={val!r} is point-cloud unification "
-            f"deferred to v2; v1 supports x,y,z + optional r,g,b only."
+            f"lidar_gbx writer: overlap={ov!r} invalid; use 'keep' (default) or 'drop'."
         )
 
 
@@ -212,6 +213,18 @@ class LidarGbxWriter(DataSourceWriter):
 
         self.merge = str(options.get("merge", "false")).lower() == "true"
         _reject_v2_options(options)
+        self.overlap = str(options.get("overlap", "keep")).lower()
+        self.dedupe_exact = str(options.get("dedupeExact", "false")).lower() == "true"
+        _vs = options.get("voxelSize")
+        self.voxel_size = float(_vs) if _vs not in (None, "") else None
+        self._seam = (
+            self.overlap == "drop" or self.dedupe_exact or self.voxel_size is not None
+        )
+        if self._seam and not self.merge:
+            raise ValueError(
+                "lidar_gbx writer: overlap=drop / dedupeExact / voxelSize requires merge "
+                "mode (.option('merge','true')) — they unify existing named .laz parts."
+            )
         if not self.merge:
             roles = _resolve_write_cols(schema, options)
         else:

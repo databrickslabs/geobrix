@@ -36,6 +36,7 @@ from databricks.labs.gbx.pyrx.core import chm as chm_core
 from databricks.labs.gbx.pyrx.core import coords
 from databricks.labs.gbx.pyrx.core import derivedband as derivedband_core
 from databricks.labs.gbx.pyrx.core import edit, features, focal, gridagg, indices
+from databricks.labs.gbx.pyrx.core import land_cover as land_cover_core
 from databricks.labs.gbx.pyrx.core import mapalgebra as mapalgebra_core
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import ops as ops_core
@@ -4440,6 +4441,90 @@ def rst_evi(  # noqa: E741
         _evi_v2_udf,
         tile,
         (_col(red_idx), _col(nir_idx), _col(blue_idx), l_col, c1_col, c2_col, g_col),
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
+
+
+def _land_cover_bytes(tile, method, n_clusters, smooth):
+    from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx.core._nodata import emit
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        arr = ds.read().transpose(1, 2, 0)  # (bands,H,W) -> HxWxbands
+        labels, _names = land_cover_core.classify(
+            arr, method=str(method), n_clusters=int(n_clusters), smooth=int(smooth)
+        )
+        return emit(ds, labels, -1, labels == -1, "int32")
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _land_cover_udf(tile, method, n_clusters, smooth):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _land_cover_bytes(tile, method, n_clusters, smooth)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _land_cover_v2_udf(
+    tile, method, n_clusters, smooth, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _land_cover_bytes(tile, method, n_clusters, smooth)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_land_cover(
+    tile: ColLike,
+    *,
+    method: ColLike = "hybrid",
+    classes: Optional[List[str]] = None,
+    n_clusters: ColLike = 6,
+    smooth: ColLike = 3,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Classify a tile into land-cover class ids; single-band Int32 tile.
+
+    Reads the tile as an HxWxbands array (RGB, optionally +NIR; needs >= 3
+    bands) and runs ``land_cover.classify`` on it. The output pixel value is
+    the index into the class scheme (``land_cover.DEFAULT_CLASSES`` by
+    default) -- callers map id -> name with that fixed list (e.g.
+    ``DEFAULT_CLASSES[value]``). NoData/unclassified pixels are ``-1``, which
+    is also the output tile's NoData value.
+
+    ``method``: ``"spectral"`` (threshold-based), ``"kmeans"``, or
+    ``"hybrid"`` (default) -- see ``land_cover.classify``.
+    ``n_clusters``: k-means cluster count (``kmeans``/``hybrid`` only).
+    ``smooth``: de-speckle window size (``0`` disables).
+    ``classes``: not yet wired through the columnar UDF -- phase-1 only
+    supports the built-in default class scheme; a non-None value raises.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
+    if classes is not None:
+        raise NotImplementedError(
+            "rst_land_cover(classes=...) is not supported yet; only the "
+            "built-in default class scheme (land_cover.DEFAULT_CLASSES) is "
+            "available in this phase."
+        )
+    method_col = f.lit(method) if isinstance(method, str) else _col(method)
+    n_clusters_col = (
+        f.lit(n_clusters) if isinstance(n_clusters, int) else _col(n_clusters)
+    )
+    smooth_col = f.lit(smooth) if isinstance(smooth, int) else _col(smooth)
+    return _index_family_wrapper(
+        _land_cover_udf,
+        _land_cover_v2_udf,
+        tile,
+        (method_col, n_clusters_col, smooth_col),
         virtualize_dir,
         virtualize_prefix,
         materialize,

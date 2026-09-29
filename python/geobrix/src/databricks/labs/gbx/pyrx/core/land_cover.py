@@ -56,26 +56,22 @@ def _spectral(f, names):
     return lab
 
 
-def _label_cluster(cf, names):
-    """Label a k-means cluster centroid via the spectral thresholds:
-    greenest -> vegetation, brightest -> bare, darkest -> dark, else ->
-    impervious. ``cf`` is a dict of centroid feature scalars (``exg``,
-    ``brightness``)."""
-    if cf["exg"] > 6:
-        return names.index("vegetation")
-    if cf["brightness"] >= 150:
-        return names.index("bare")
-    if cf["brightness"] < 55:
-        return names.index("dark")
-    return names.index("impervious")
-
-
 def _kmeans(arr, f, names, n_clusters):
     """K-means partition (RGB + exg + brightness features) via
-    ``scipy.cluster.vq.kmeans2``, with clusters labeled by spectral
-    thresholds on their centroids. Guards the degenerate case where there
-    are fewer distinct colors than ``n_clusters`` so ``kmeans2`` doesn't
-    crash or emit empty clusters."""
+    ``scipy.cluster.vq.kmeans2``, then label each cluster by the MAJORITY
+    per-pixel spectral class of its members (not its centroid).
+
+    Two deliberate choices vs. a naive centroid-label:
+    - **Standardized features** (z-score) so no single axis dominates the
+      Euclidean distance -- excess-green (~+-510) would otherwise swamp the
+      0-255 bands and brightness, distorting the clusters.
+    - **Majority-vote labeling**: a cluster inherits the dominant per-pixel
+      spectral class of its members, so a mixed / marginal region (e.g. a
+      mowed field whose mean excess-green straddles the vegetation threshold)
+      takes its majority class instead of flipping on the cluster mean.
+
+    Guards the degenerate case (fewer distinct colors than ``n_clusters``) so
+    ``kmeans2`` doesn't crash or emit empty clusters."""
     R, G, B = [arr[..., i].astype("float32") for i in range(3)]
     feats = np.stack([R, G, B, f["exg"], f["brightness"]], -1)  # HxWx5
     valid = ~f["nodata"]
@@ -83,12 +79,21 @@ def _kmeans(arr, f, names, n_clusters):
     lab = np.full(arr.shape[:2], -1, np.int32)
     if X.shape[0] == 0:
         return lab
-    k = min(n_clusters, max(1, np.unique(X, axis=0).shape[0]))  # guard degenerate
-    cent, assign = kmeans2(X, k, minit="++", seed=0)
-    flat = np.full(valid.sum(), -1, np.int32)
+    # Standardize (z-score) each feature so exg's large range doesn't dominate.
+    std = X.std(axis=0)
+    std[std == 0] = 1.0
+    Xz = (X - X.mean(axis=0)) / std
+    k = min(n_clusters, max(1, np.unique(Xz, axis=0).shape[0]))  # guard degenerate
+    _, assign = kmeans2(Xz, k, minit="++", seed=0)
+    # Label each cluster by the majority per-pixel spectral class of its members.
+    px = _spectral(f, names)[valid]  # per-pixel spectral labels (>= 0 for valid pixels)
+    flat = np.full(X.shape[0], -1, np.int32)
     for cid in range(k):
-        cf = {"exg": cent[cid][3], "brightness": cent[cid][4]}
-        flat[assign == cid] = _label_cluster(cf, names)
+        members = assign == cid
+        cls = px[members]
+        cls = cls[cls >= 0]
+        if cls.size:
+            flat[members] = int(np.bincount(cls).argmax())  # majority class
     lab[valid] = flat
     return lab
 

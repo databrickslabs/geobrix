@@ -9,6 +9,8 @@ GPU deps. Callers that invoke ``load_geosam`` without those deps installed get a
 from dataclasses import dataclass
 from typing import Any
 
+import numpy as np
+
 
 class ModelDepsMissing(ImportError):
     """Raised by load_geosam when torch/segment-geospatial are not installed."""
@@ -23,10 +25,15 @@ class GeoSamHandle:
 def _import_backend(model_type: str, weights: str | None, device: str):
     from samgeo import SamGeo  # segment-geospatial
 
-    # NOTE (confirm exact SamGeo kwargs against segment-geospatial docs at impl time):
-    return SamGeo(
-        model_type=model_type, checkpoint=weights, device=device, automatic=True
-    )
+    # Real SamGeo.__init__(model_type, automatic, device, checkpoint_dir, sam_kwargs,
+    # **kwargs) has NO formal `checkpoint` param -- a specific checkpoint only reaches
+    # it via **kwargs, and the real code does `os.path.exists(checkpoint)` on it. A
+    # bare `checkpoint=None` (the old bug) makes that a TypeError before download can
+    # even run. When `weights` is None, omit the kwarg entirely so SamGeo falls
+    # through to its own checkpoint_dir-based auto-download; when `weights` is a real
+    # path, `os.path.exists` succeeds and that exact file is used as-is.
+    kwargs = {"checkpoint": weights} if weights is not None else {}
+    return SamGeo(model_type=model_type, device=device, automatic=True, **kwargs)
 
 
 def load_geosam(
@@ -46,5 +53,19 @@ def load_geosam(
 
 
 def segment(handle: GeoSamHandle, image):
-    """HxWx3 uint8 -> HxW int32 label mask (0=background)."""
-    return handle.backend.generate(image)
+    """HxWx3 uint8 -> HxW int32 label mask (0=background).
+
+    The real ``SamGeo.generate(source, ...)`` performs automatic mask generation but
+    RETURNS None -- results land on the instance, not the return value.
+    ``generate`` accepts ``source`` as either a file path or an in-memory HxWxC uint8
+    array (``isinstance(source, np.ndarray)`` is handled directly, via
+    ``prepare_image_for_sam`` with its default HWC ``channel_axis=-1``) -- so the
+    already-in-memory ``image`` this function receives is passed straight through,
+    no temp file needed. With ``output=None`` (the default) it skips writing to disk
+    and leaves the per-object label mask on ``handle.backend.objects``: a 2D array
+    (dtype sized to the object count) with 0=background and a unique positive
+    integer per object when ``unique=True`` (the default) -- exactly the label-mask
+    contract this function returns.
+    """
+    handle.backend.generate(image, foreground=True, unique=True)
+    return np.asarray(handle.backend.objects).astype("int32")

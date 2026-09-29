@@ -10,14 +10,22 @@ def test_module_imports_without_model_deps():
 
 def test_segment_uses_injected_backend(monkeypatch):
     class FakeSam:
-        def generate(self, arr):
+        """Mirrors the real SamGeo.generate contract: it performs automatic mask
+        generation but RETURNS None, storing the label mask on self.objects (a 2D
+        array, 0=background, unique positive int per object) -- not the return
+        value. segment() must read handle.backend.objects, not generate()'s
+        return, or this test would pass against the old (wrong) implementation."""
+
+        def generate(self, arr, **kwargs):
             m = np.zeros(arr.shape[:2], np.int32)
             m[0:2, 0:2] = 1
-            return m
+            self.objects = m
+            return None
 
     h = geosam.GeoSamHandle(backend=FakeSam(), model_type="vit_b")
     out = geosam.segment(h, np.zeros((4, 4, 3), np.uint8))
     assert out.shape == (4, 4) and out.max() == 1
+    assert out.dtype == np.int32
 
 
 def test_load_without_deps_raises_clear_error(monkeypatch):

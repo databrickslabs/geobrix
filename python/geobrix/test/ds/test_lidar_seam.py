@@ -97,3 +97,98 @@ def test_part_cluster_meta_rejects_no_underscore_token(tmp_path):
     _write_laz(p, [0], [0], [0])
     with pytest.raises(ValueError, match="cluster-identifiable"):
         _part_cluster_meta([str(p)])
+
+
+def _write_laz_rgb(path, xs, ys, zs, rgb=None):
+    import laspy
+    import numpy as np
+
+    fmt = 2 if rgb is not None else 0
+    h = laspy.LasHeader(point_format=fmt)
+    h.offsets = [min(xs), min(ys), min(zs)]
+    h.scales = [0.001, 0.001, 0.001]
+    d = laspy.LasData(h)
+    d.x, d.y, d.z = np.array(xs, float), np.array(ys, float), np.array(zs, float)
+    if rgb is not None:
+        r, g, b = rgb
+        d.red = np.array(r, np.uint16) << 8
+        d.green = np.array(g, np.uint16) << 8
+        d.blue = np.array(b, np.uint16) << 8
+    d.write(str(path))
+
+
+def test_overlap_drop_owns_seam_once_and_keeps_interior(tmp_path):
+    import laspy
+
+    from databricks.labs.gbx.ds._write_lidar import _merge_laz_parts_seam
+
+    # cluster 0: x in [0,10]; cluster 1: x in [8,18]; seam strip x in [8,10].
+    # A seam point at x=9 is in both parts (both bboxes) -> kept once (nearest center).
+    # An interior point x=1 (only cluster 0) survives. A point x=9.9 only in cluster 0
+    # but nearer cluster 1's center (13) yet OUTSIDE cluster 1's data — still in c1 bbox
+    # [8,18], so c1 owns it and it's dropped from c0's copy; provide it in c1 too.
+    c0 = tmp_path / "d_all_0.las"
+    _write_laz_rgb(c0, [1, 9], [0, 0], [0, 0])
+    c1 = tmp_path / "d_all_1.las"
+    _write_laz_rgb(c1, [9, 17], [0, 0], [0, 0])
+    out = tmp_path / "merged.laz"
+    kept = _merge_laz_parts_seam(
+        [str(c0), str(c1)],
+        str(out),
+        has_rgb=False,
+        crs=None,
+        overlap_drop=True,
+        dedupe_exact=False,
+        voxel_size=None,
+    )
+    # 4 input points, the x=9 seam point double-covered -> owned by exactly one -> 3 kept.
+    assert kept == 3
+    xs = sorted(round(v, 1) for v in laspy.read(str(out)).x)
+    assert xs == [1.0, 9.0, 17.0]
+
+
+def test_overlap_drop_no_hole_for_own_only_point(tmp_path):
+    from databricks.labs.gbx.ds._write_lidar import _merge_laz_parts_seam
+
+    # cluster 0 bbox x[0,2]; cluster 1 bbox x[10,12]; a point x=1 only in c0 and
+    # outside c1's bbox -> c0 is its sole candidate -> kept (no drop-hole).
+    c0 = tmp_path / "d_all_0.las"
+    _write_laz_rgb(c0, [1], [0], [0])
+    c1 = tmp_path / "d_all_1.las"
+    _write_laz_rgb(c1, [11], [0], [0])
+    out = tmp_path / "m.laz"
+    kept = _merge_laz_parts_seam(
+        [str(c0), str(c1)],
+        str(out),
+        False,
+        None,
+        overlap_drop=True,
+        dedupe_exact=False,
+        voxel_size=None,
+    )
+    assert kept == 2
+
+
+def test_overlap_drop_preserves_rgb(tmp_path):
+    import laspy
+
+    from databricks.labs.gbx.ds._write_lidar import _merge_laz_parts_seam
+
+    c0 = tmp_path / "d_all_0.las"
+    _write_laz_rgb(c0, [1, 9], [0, 0], [0, 0], rgb=([10, 20], [30, 40], [50, 60]))
+    c1 = tmp_path / "d_all_1.las"
+    _write_laz_rgb(c1, [9, 17], [0, 0], [0, 0], rgb=([21, 70], [41, 80], [61, 90]))
+    out = tmp_path / "m.laz"
+    kept = _merge_laz_parts_seam(
+        [str(c0), str(c1)],
+        str(out),
+        has_rgb=True,
+        crs=None,
+        overlap_drop=True,
+        dedupe_exact=False,
+        voxel_size=None,
+    )
+    assert kept == 3
+    las = laspy.read(str(out))
+    reds = {round(float(x), 1): int(r) >> 8 for x, r in zip(las.x, las.red)}
+    assert reds[1.0] == 10  # interior point keeps its real color through the merge

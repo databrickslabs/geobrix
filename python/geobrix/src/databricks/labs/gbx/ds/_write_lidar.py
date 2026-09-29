@@ -249,6 +249,103 @@ def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> in
     return int(len(x))
 
 
+def _nearest_owner(x: float, y: float, centers: dict, bboxes: dict) -> str:
+    """Cluster id owning point (x,y): nearest center among clusters whose bbox
+    covers (x,y). Ties -> lowest id (string-sorted). Covering set is never empty
+    (the point's own cluster bbox always contains it)."""
+    cand = [
+        cid
+        for cid, (xmin, xmax, ymin, ymax) in bboxes.items()
+        if xmin <= x <= xmax and ymin <= y <= ymax
+    ]
+    best, best_d = None, None
+    for cid in sorted(cand):
+        cx, cy = centers[cid]
+        d = (x - cx) ** 2 + (y - cy) ** 2
+        if best_d is None or d < best_d:
+            best, best_d = cid, d
+    return best
+
+
+def _merge_laz_parts_seam(
+    inputs: List[str],
+    tmp_path: str,
+    has_rgb: bool,
+    crs,
+    *,
+    overlap_drop: bool,
+    dedupe_exact: bool,
+    voxel_size,
+    part_prefix: str = "part",
+) -> int:
+    """Streaming seam-aware merge. Processes one part at a time; keeps a bounded
+    working set; writes one .laz via write_xyz(rgb)_laz; returns the kept count.
+
+    This task implements ``overlap_drop`` (seam-point ownership via
+    ``_nearest_owner``). ``dedupe_exact`` and ``voxel_size`` are accepted for
+    signature stability but are pass-through (wired in Tasks 4/5).
+    """
+    import laspy
+
+    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+
+    if crs is None and inputs:
+        crs = _infer_crs_from_parts(inputs)
+
+    meta = _part_cluster_meta(inputs, part_prefix) if overlap_drop else None
+
+    # Kept-point accumulators (Tasks 4/5 replace the plain list with set/dict).
+    kx, ky, kz, kr, kg, kb = [], [], [], [], [], []
+
+    def _emit(x, y, z, r, g, b):
+        kx.append(x)
+        ky.append(y)
+        kz.append(z)
+        if has_rgb:
+            kr.append(r)
+            kg.append(g)
+            kb.append(b)
+
+    for p in inputs:
+        las = laspy.read(p)
+        xs = np.asarray(las.x)
+        ys = np.asarray(las.y)
+        zs = np.asarray(las.z)
+        if has_rgb:
+            rs = (np.asarray(las.red) >> 8).astype(np.uint8)
+            gs = (np.asarray(las.green) >> 8).astype(np.uint8)
+            bs = (np.asarray(las.blue) >> 8).astype(np.uint8)
+        cid_p = meta["per_part"][p] if overlap_drop else None
+        for i in range(len(xs)):
+            x, y, z = float(xs[i]), float(ys[i]), float(zs[i])
+            if overlap_drop:
+                owner = _nearest_owner(x, y, meta["center"], meta["bbox"])
+                if owner != cid_p:
+                    continue  # another cluster owns this seam point
+            r = int(rs[i]) if has_rgb else 0
+            g = int(gs[i]) if has_rgb else 0
+            b = int(bs[i]) if has_rgb else 0
+            _emit(x, y, z, r, g, b)
+
+    # (Task 5 inserts the cells->kx materialization here, before the guard.)
+    if not kx:
+        return 0  # nothing survived; caller (Task 6) retains parts, skips publish
+    if has_rgb:
+        write_xyzrgb_laz(
+            tmp_path,
+            np.asarray(kx),
+            np.asarray(ky),
+            np.asarray(kz),
+            np.asarray(kr, np.uint8),
+            np.asarray(kg, np.uint8),
+            np.asarray(kb, np.uint8),
+            crs=crs,
+        )
+    else:
+        write_xyz_laz(tmp_path, np.asarray(kx), np.asarray(ky), np.asarray(kz), crs=crs)
+    return len(kx)
+
+
 # ---------------------------------------------------------------------------
 # Writer class
 # ---------------------------------------------------------------------------

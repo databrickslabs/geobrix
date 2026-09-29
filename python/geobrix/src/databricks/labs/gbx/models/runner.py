@@ -33,6 +33,7 @@ from rasterio.io import MemoryFile
 from rasterio.windows import Window
 from shapely.ops import unary_union
 
+from databricks.labs.gbx.core.crs import area_m2 as _area_m2
 from databricks.labs.gbx.pyrx.core import features, tiling
 from databricks.labs.gbx.pyrx.core.gpu_pool import gpu_pool_map
 
@@ -132,36 +133,10 @@ def _polygonize_mask(mask, transform, crs):
     return [(wkb, value) for wkb, value in frags if value != 0]
 
 
-def _area_m2(geom, crs) -> float:
-    """Area of ``geom`` in SQUARE METERS, whatever ``crs`` it is expressed in.
-
-    ``segment_raster``'s polygons carry the source raster's CRS. For an orthomosaic COG
-    that CRS is frequently GEOGRAPHIC (e.g. EPSG:4326), where ``geom.area`` is in square
-    DEGREES -- ~10 orders of magnitude off the square-meter scale ``min_area`` is
-    expressed in, so a metric ``min_area`` compared against a raw ``.area`` would
-    silently drop EVERY polygon (a whole drone orthomosaic spans ~1e-5 sq degrees, far
-    under a 10 m^2 threshold). So: for a geographic CRS take the geodesic area on the
-    CRS's own ellipsoid (pyproj ``Geod.geometry_area_perimeter``); for a projected CRS
-    take the planar ``geom.area`` scaled by the CRS's linear-unit-to-meter factor (1.0
-    for the meter-based UTM / planar CRS geobrix emits). ``crs=None`` -> planar area
-    as-is. Uses the canonical ``core.crs.to_pyproj_crs`` bridge (never bare CRS.from_*).
-    """
-    if crs is None:
-        return geom.area
-    from databricks.labs.gbx.core.crs import to_pyproj_crs
-
-    pcrs = to_pyproj_crs(crs)
-    if pcrs.is_geographic:
-        geod = pcrs.get_geod()
-        if geod is not None:
-            area, _ = geod.geometry_area_perimeter(geom)
-            return abs(area)
-        return geom.area
-    try:
-        factor = pcrs.axis_info[0].unit_conversion_factor or 1.0
-    except (IndexError, AttributeError):
-        factor = 1.0
-    return geom.area * (factor**2)
+# _area_m2: thin re-export of core.crs.area_m2 (imported above), kept as a private
+# name here so existing call sites and tests in this module are unchanged. The
+# geodesic/planar area helper now lives in core.crs, shared with rst_land_cover's
+# metric coverage/min_area needs.
 
 
 def _merge_seams(frags, min_area, crs):

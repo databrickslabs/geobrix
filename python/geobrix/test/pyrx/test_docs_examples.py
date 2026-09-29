@@ -73,7 +73,7 @@ def test_land_cover_example(spark):
     """pyrx_land_cover_example classifies >=2 classes and polygonizes >=2 regions."""
     rows, class_names, kept = pyrx_doc_examples.pyrx_land_cover_example(spark)
     assert len(rows) >= 2
-    distinct_values = {r["v"] for r in rows}
+    distinct_values = {int(r["v"]) for r in rows}  # polygonize value is a float
     assert len(distinct_values) >= 2
     # Every traced value is a valid index into the fixed DEFAULT_CLASSES scheme.
     for value in distinct_values:

@@ -761,11 +761,34 @@ class LidarGbxWriter(DataSourceWriter):
         has_rgb = all(rgb_flags)
 
         self._gate_merge_paths(parts, has_rgb=has_rgb)
-        expected = sum(_laz_point_count(p) for p in parts)
+        sum_parts = sum(_laz_point_count(p) for p in parts)
 
         tmp_merged = new_local_temp_file(suffix=".laz")
         try:
-            _merge_laz_parts(parts, tmp_merged, has_rgb, self.crs)
+            if self._seam:
+                kept = _merge_laz_parts_seam(
+                    parts,
+                    tmp_merged,
+                    has_rgb,
+                    self.crs,
+                    overlap_drop=self.overlap == "drop",
+                    dedupe_exact=self.dedupe_exact,
+                    voxel_size=self.voxel_size,
+                    part_prefix=self.part_prefix,
+                )
+                if kept <= 0:
+                    raise ValueError(
+                        "lidar_gbx merge: seam unification kept 0 points; "
+                        "parts retained."
+                    )
+                if kept > sum_parts:
+                    raise ValueError(
+                        f"lidar_gbx merge: kept {kept} > input {sum_parts} (bug)."
+                    )
+                expected = kept
+            else:
+                expected = sum_parts
+                _merge_laz_parts(parts, tmp_merged, has_rgb, self.crs)
             real = _laz_written_path(tmp_merged)
             _publish_merged(real, _swap_ext(target, real), expected, _laz_point_count)
         finally:

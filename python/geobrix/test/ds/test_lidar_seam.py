@@ -270,3 +270,78 @@ def test_voxel_keeps_one_real_point_per_cell(tmp_path):
     assert xs <= {1.0, 2.0, 3.0, 25.0}  # every kept point is a REAL input point
     # cell [0,10) center x=5 -> nearest of {1,2,3} is 3.0
     assert 3.0 in xs and 25.0 in xs
+
+
+def test_commit_merge_overlap_drop_end_to_end(tmp_path):
+    from databricks.labs.gbx.ds._write_lidar import LidarGbxWriter
+
+    c0 = tmp_path / "d_all_0.las"
+    _write_laz_rgb(c0, [1, 9], [0, 0], [0, 0])
+    c1 = tmp_path / "d_all_1.las"
+    _write_laz_rgb(c1, [9, 17], [0, 0], [0, 0])
+    w = LidarGbxWriter(
+        {
+            "path": str(tmp_path),
+            "merge": "true",
+            "overlap": "drop",
+            "fileName": "merged",
+            "keepParts": "true",
+        },
+        StructType([StructField(c, DoubleType()) for c in ("x", "y", "z")]),
+        overwrite=False,
+    )
+    w.commit([])
+    import laspy
+
+    merged = tmp_path / "merged.laz"
+    real = merged if merged.exists() else tmp_path / "merged.las"
+    assert real.exists()
+    assert int(laspy.open(str(real)).header.point_count) == 3  # seam point once
+    assert (c0).exists() and (c1).exists()  # keepParts retained
+
+
+def test_commit_merge_empty_unify_does_not_publish(tmp_path, monkeypatch):
+    # If a unify drops everything, publish must not emit a 0-point file; parts kept.
+    from databricks.labs.gbx.ds import _write_lidar as W
+
+    c0 = tmp_path / "d_all_0.las"
+    _write_laz_rgb(c0, [1], [0], [0])
+    w = W.LidarGbxWriter(
+        {"path": str(tmp_path), "merge": "true", "voxelSize": "1.0", "fileName": "m"},
+        StructType([StructField(c, DoubleType()) for c in ("x", "y", "z")]),
+        overwrite=False,
+    )
+    monkeypatch.setattr(W, "_merge_laz_parts_seam", lambda *a, **k: 0)
+    with pytest.raises(ValueError, match="0 points|empty"):
+        w.commit([])
+    assert c0.exists()
+
+
+def test_commit_merge_overlap_and_voxel_roundtrips(spark, tmp_path):
+    from databricks.labs.gbx.ds._write_lidar import LidarGbxWriter
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    c0 = tmp_path / "d_all_0.las"
+    _write_laz_rgb(c0, [1.0, 1.2, 9.0], [0, 0, 0], [0, 0, 0])
+    c1 = tmp_path / "d_all_1.las"
+    _write_laz_rgb(c1, [9.0, 17.0], [0, 0], [0, 0])
+    w = LidarGbxWriter(
+        {
+            "path": str(tmp_path),
+            "merge": "true",
+            "overlap": "drop",
+            "voxelSize": "0.5",
+            "fileName": "u",
+        },
+        StructType([StructField(c, DoubleType()) for c in ("x", "y", "z")]),
+        overwrite=False,
+    )
+    w.commit([])
+    real = tmp_path / "u.laz"
+    real = real if real.exists() else tmp_path / "u.las"
+    df = spark.read.format("lidar_gbx").option("mode", "metadata").load(str(real))
+    assert df.collect()[0]["point_count"] >= 1

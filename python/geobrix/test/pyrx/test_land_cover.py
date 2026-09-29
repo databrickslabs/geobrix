@@ -24,3 +24,15 @@ def test_spectral_runs_without_nir():
     assert (
         labels.shape == (32, 32) and labels.dtype == np.int32
     )  # Review Focus: RGB-only
+
+
+def test_kmeans_partitions_and_labels(_rgb=_rgb):
+    labels, names = lc.classify(_rgb(), method="kmeans", n_clusters=4, smooth=0)
+    assert set(np.unique(labels)) - {-1}  # some classes assigned
+    assert (labels[:, :16] == names.index("vegetation")).mean() > 0.6
+
+
+def test_kmeans_degenerate_fewer_colors_than_clusters():
+    flat = np.full((16, 16, 3), (120, 120, 120), np.uint8)  # one color
+    labels, _ = lc.classify(flat, method="kmeans", n_clusters=6, smooth=0)
+    assert labels.shape == (16, 16)  # Review Focus: no crash on empty clusters

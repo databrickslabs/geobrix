@@ -1,9 +1,10 @@
 """Spark-free land-cover classification (NumPy band math). Classifies an
-HxWxbands RGB(+NIR) array into land-cover labels. Phase 1 (this module)
-implements spectral-threshold features + the ``spectral`` classify branch;
-``kmeans``/``hybrid`` branches land in later tasks."""
+HxWxbands RGB(+NIR) array into land-cover labels. Implements spectral-threshold
+features + the ``spectral`` classify branch, plus ``kmeans``/``hybrid``
+branches via ``scipy.cluster.vq.kmeans2`` with spectral cluster-labeling."""
 
 import numpy as np
+from scipy.cluster.vq import kmeans2
 
 # Class scheme: index = class id; -1 = nodata/unclassified.
 DEFAULT_CLASSES = ["vegetation", "bare", "impervious", "dark"]
@@ -49,16 +50,56 @@ def _spectral(f, names):
     return lab
 
 
+def _label_cluster(cf, names):
+    """Label a k-means cluster centroid via the spectral thresholds:
+    greenest -> vegetation, brightest -> bare, darkest -> dark, else ->
+    impervious. ``cf`` is a dict of centroid feature scalars (``exg``,
+    ``brightness``)."""
+    if cf["exg"] > 6:
+        return names.index("vegetation")
+    if cf["brightness"] >= 150:
+        return names.index("bare")
+    if cf["brightness"] < 55:
+        return names.index("dark")
+    return names.index("impervious")
+
+
+def _kmeans(arr, f, names, n_clusters):
+    """K-means partition (RGB + exg + brightness features) via
+    ``scipy.cluster.vq.kmeans2``, with clusters labeled by spectral
+    thresholds on their centroids. Guards the degenerate case where there
+    are fewer distinct colors than ``n_clusters`` so ``kmeans2`` doesn't
+    crash or emit empty clusters."""
+    R, G, B = [arr[..., i].astype("float32") for i in range(3)]
+    feats = np.stack([R, G, B, f["exg"], f["brightness"]], -1)  # HxWx5
+    valid = ~f["nodata"]
+    X = feats[valid]
+    lab = np.full(arr.shape[:2], -1, np.int32)
+    if X.shape[0] == 0:
+        return lab
+    k = min(n_clusters, max(1, np.unique(X, axis=0).shape[0]))  # guard degenerate
+    cent, assign = kmeans2(X, k, minit="++", seed=0)
+    flat = np.full(valid.sum(), -1, np.int32)
+    for cid in range(k):
+        cf = {"exg": cent[cid][3], "brightness": cent[cid][4]}
+        flat[assign == cid] = _label_cluster(cf, names)
+    lab[valid] = flat
+    return lab
+
+
 def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
     """Classify an HxWxbands array into land-cover labels.
 
     Args:
         arr:        HxWxbands uint8/float array (RGB, optionally +NIR).
-        method:     ``"spectral"`` (implemented here); ``"kmeans"``/``"hybrid"``
-                    are later tasks and raise ``NotImplementedError``.
+        method:     ``"spectral"`` (threshold-based); ``"kmeans"`` (scipy
+                    k-means partition + spectral cluster-labeling);
+                    ``"hybrid"`` (k-means partition + spectral
+                    cluster-labeling; same as ``"kmeans"`` today, kept as a
+                    distinct branch so a later phase can diverge it).
         classes:    Optional override of the class-name scheme; defaults to
                     ``DEFAULT_CLASSES``.
-        n_clusters: Reserved for the ``kmeans``/``hybrid`` branches.
+        n_clusters: Number of k-means clusters (``kmeans``/``hybrid`` only).
         smooth:     Reserved for the ``kmeans``/``hybrid`` branches.
 
     Returns:
@@ -70,6 +111,10 @@ def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
     f = features(arr)
     if method == "spectral":
         lab = _spectral(f, names)
+    elif method == "kmeans":
+        lab = _kmeans(arr, f, names, n_clusters)
+    elif method == "hybrid":
+        lab = _kmeans(arr, f, names, n_clusters)  # k-means partition, spectral labeling
     else:
-        raise NotImplementedError(method)  # kmeans/hybrid in Task 3
+        raise NotImplementedError(method)
     return lab.astype(np.int32), names

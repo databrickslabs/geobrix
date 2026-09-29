@@ -29,6 +29,7 @@ Each constructor returns a `Layer` object. Pass a list of them to `plot_static` 
 | `raster_layer(data)` | COG/raster file path, `numpy.ndarray`, or tile struct | Path → rasterio; ndarray → unit-square corners. |
 | `grid_layer(data, grid_system=)` | DataFrame of H3 / BNG / Quadbin cell ids | Requires `grid_system='h3'`, `'bng'`, `'quadbin'`, or `'custom'`. |
 | `pmtiles_layer(data)` | `.pmtiles` bytes, local path, or `https://` URL | URL mode streams from the remote server with zero embed cost. |
+| `point_cloud_layer(data)` | LAS/LAZ file path, GeoDataFrame of Points, or DataFrame with `x`/`y`/`z` | Decimated 2D scatter, colored by elevation (or a `column`). `plot_static` only. |
 
 ```python
 from databricks.labs.gbx.vizx import (
@@ -36,10 +37,27 @@ from databricks.labs.gbx.vizx import (
     raster_layer,
     grid_layer,
     pmtiles_layer,
+    point_cloud_layer,
     plot_static,
     plot_interactive,
 )
 ```
+
+### Point clouds
+
+`point_cloud_layer` renders a LiDAR/point cloud as a decimated 2D scatter through the static compositor — the way to *see* a LAS/LAZ cloud (e.g. a dense-photogrammetry `.laz`) as points rather than only as a derived DSM/CHM raster. Points are colored by elevation `z` by default (a continuous `cmap` + colorbar), or by a `column` — pass `category_colors` for a categorical attribute like classification. Clouds larger than `max_points` (default 150k) are randomly decimated so the render stays in memory, and points reproject to Web Mercator so a cloud composes over a raster/vector layer.
+
+```python
+from databricks.labs.gbx.vizx import plot_static, raster_layer, point_cloud_layer
+
+# Dense point cloud over the orthomosaic, colored by elevation
+plot_static([
+    raster_layer(ortho_cog_path),
+    point_cloud_layer("dense_merged.laz", cmap="terrain", opacity=0.6),
+], basemap=False)
+```
+
+Interactive and true-3D point-cloud rendering are a planned follow-on; today point clouds render in `plot_static` only.
 
 Each constructor exposes a `label=` argument used in audit output and map legends.
 

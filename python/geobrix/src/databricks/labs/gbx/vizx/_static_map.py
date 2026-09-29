@@ -240,6 +240,21 @@ def _resolve_gdf(
 _CATEGORY_FALLBACK_COLOR = "#bbbbbb"
 
 
+def _add_category_legend(ax, color_map, present, fallback=_CATEGORY_FALLBACK_COLOR):
+    """Add a discrete Patch legend for the present categories, ordered by the
+    ``color_map``'s insertion order (unmapped-but-present categories appended so
+    they still show, in a neutral fallback color)."""
+    from matplotlib.patches import Patch
+
+    ordered = [c for c in color_map if c in present]
+    ordered += [c for c in present if c not in color_map]
+    handles = [
+        Patch(facecolor=color_map.get(c, fallback), edgecolor="none", label=str(c))
+        for c in ordered
+    ]
+    ax.legend(handles=handles, loc="upper right", framealpha=0.9)
+
+
 def _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend):
     """Draw a vector layer with an explicit ``{category: color}`` map.
 
@@ -250,8 +265,6 @@ def _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend):
     (unmapped-but-present categories appended), so the legend reads as authored
     rather than alphabetically.
     """
-    from matplotlib.patches import Patch
-
     color_map = lyr.category_colors
     col = plot_gdf[lyr.column]
     row_colors = [color_map.get(v, _CATEGORY_FALLBACK_COLOR) for v in col]
@@ -265,17 +278,62 @@ def _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend):
 
     if legend:
         present = list(dict.fromkeys(col.dropna().tolist()))
-        ordered = [c for c in color_map if c in present]
-        ordered += [c for c in present if c not in color_map]
-        handles = [
-            Patch(
-                facecolor=color_map.get(c, _CATEGORY_FALLBACK_COLOR),
-                edgecolor="none",
-                label=str(c),
-            )
-            for c in ordered
+        _add_category_legend(ax, color_map, present)
+
+
+def _draw_point_cloud(lyr, ax, legend):
+    """Draw a LiDAR/point-cloud layer as a decimated 2D scatter.
+
+    Normalizes the source to x/y/z + color values (see ``_pointcloud``),
+    reprojects to Web Mercator so the cloud composes over raster/vector layers
+    (a CRS-less source draws in native coordinates), and scatters colored by
+    elevation (continuous ``cmap`` + colorbar) or by an explicit
+    ``category_colors`` map (discrete legend).
+    """
+    import numpy as np
+
+    from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
+
+    x, y, _z, values, src_crs = load_point_cloud(
+        lyr.data,
+        column=lyr.column,
+        max_points=lyr.max_points or 150_000,
+        crs=lyr.crs,
+    )
+    if src_crs is not None:
+        from pyproj import Transformer
+
+        tx, ty = Transformer.from_crs(src_crs, "EPSG:3857", always_xy=True).transform(
+            x, y
+        )
+        x, y = np.asarray(tx), np.asarray(ty)
+
+    alpha = lyr.opacity if lyr.opacity is not None else 0.9
+    size = lyr.point_size if lyr.point_size is not None else 2.0
+    # zorder=3 mirrors the vector branch: composite the cloud ABOVE any raster.
+    if lyr.category_colors is not None and lyr.column is not None:
+        row_colors = [
+            lyr.category_colors.get(v, _CATEGORY_FALLBACK_COLOR) for v in values
         ]
-        ax.legend(handles=handles, loc="upper right", framealpha=0.9)
+        ax.scatter(x, y, c=row_colors, s=size, alpha=alpha, linewidths=0, zorder=3)
+        if legend:
+            present = list(dict.fromkeys(values.tolist()))
+            _add_category_legend(ax, lyr.category_colors, present)
+    else:
+        sc = ax.scatter(
+            x,
+            y,
+            c=np.asarray(values, dtype="float64"),
+            cmap=lyr.cmap,
+            s=size,
+            alpha=alpha,
+            linewidths=0,
+            zorder=3,
+        )
+        if legend:
+            ax.figure.colorbar(
+                sc, ax=ax, shrink=0.6, pad=0.02, label=lyr.column or "elevation"
+            )
 
 
 def _draw_one_layer(
@@ -380,6 +438,8 @@ def _draw_one_layer(
                 emphasis=emphasis,
                 to_crs="EPSG:3857",
             )
+    elif lyr.kind == "point_cloud":
+        _draw_point_cloud(lyr, ax, legend)
     elif lyr.kind == "pmtiles":
         warnings.warn(
             "plot_static: 'pmtiles' layers are not rendered by the static compositor "

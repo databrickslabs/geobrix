@@ -210,3 +210,38 @@ def test_dedupe_exact_drops_identical(tmp_path):
         voxel_size=None,
     )
     assert kept == 2  # (1,0,5) duplicated -> once; (2,0,6) once
+
+
+def test_dedupe_exact_rgb_key_distinguishes_color(tmp_path):
+    import laspy
+
+    from databricks.labs.gbx.ds._write_lidar import _merge_laz_parts_seam
+
+    # Same xyz (1,0,0) but different colors -> both kept (color is part of the key).
+    # Identical xyz+color at (2,0,0) -> collapses to one.
+    a = tmp_path / "a_all_0.las"
+    _write_laz_rgb(
+        a,
+        [1, 1, 2, 2],
+        [0, 0, 0, 0],
+        [0, 0, 0, 0],
+        rgb=([255, 0, 0, 0], [0, 255, 0, 0], [0, 0, 255, 255]),
+    )
+    out = tmp_path / "m.laz"
+    kept = _merge_laz_parts_seam(
+        [str(a)],
+        str(out),
+        has_rgb=True,
+        crs=None,
+        overlap_drop=False,
+        dedupe_exact=True,
+        voxel_size=None,
+    )
+    assert kept == 3
+    las = laspy.read(str(out))
+    colors_at_1_0_0 = {
+        (int(r) >> 8, int(g) >> 8, int(b) >> 8)
+        for x, r, g, b in zip(las.x, las.red, las.green, las.blue)
+        if round(float(x), 1) == 1.0
+    }
+    assert colors_at_1_0_0 == {(255, 0, 0), (0, 255, 0)}

@@ -281,9 +281,10 @@ def _merge_laz_parts_seam(
     """Streaming seam-aware merge. Processes one part at a time; keeps a bounded
     working set; writes one .laz via write_xyz(rgb)_laz; returns the kept count.
 
-    This task implements ``overlap_drop`` (seam-point ownership via
-    ``_nearest_owner``). ``dedupe_exact`` and ``voxel_size`` are accepted for
-    signature stability but are pass-through (wired in Tasks 4/5).
+    Implements ``overlap_drop`` (seam-point ownership via ``_nearest_owner``) and
+    ``dedupe_exact`` (millimetre-rounded exact-key dedup, gating ``_emit``).
+    ``voxel_size`` is accepted for signature stability but is pass-through
+    (wired in Task 5).
     """
     import laspy
 
@@ -294,10 +295,21 @@ def _merge_laz_parts_seam(
 
     meta = _part_cluster_meta(inputs, part_prefix) if overlap_drop else None
 
-    # Kept-point accumulators (Tasks 4/5 replace the plain list with set/dict).
+    # Kept-point accumulators (Task 5 replaces the plain list with a dict for voxel_size).
     kx, ky, kz, kr, kg, kb = [], [], [], [], [], []
 
+    seen = set() if dedupe_exact else None
+
     def _emit(x, y, z, r, g, b):
+        if seen is not None:
+            key = (
+                (round(x, 3), round(y, 3), round(z, 3), r, g, b)
+                if has_rgb
+                else (round(x, 3), round(y, 3), round(z, 3))
+            )
+            if key in seen:
+                return
+            seen.add(key)
         kx.append(x)
         ky.append(y)
         kz.append(z)

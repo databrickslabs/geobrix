@@ -192,3 +192,21 @@ def test_overlap_drop_preserves_rgb(tmp_path):
     las = laspy.read(str(out))
     reds = {round(float(x), 1): int(r) >> 8 for x, r in zip(las.x, las.red)}
     assert reds[1.0] == 10  # interior point keeps its real color through the merge
+
+
+def test_dedupe_exact_drops_identical(tmp_path):
+    from databricks.labs.gbx.ds._write_lidar import _merge_laz_parts_seam
+
+    a = tmp_path / "a_all_0.las"
+    _write_laz_rgb(a, [1, 1, 2], [0, 0, 0], [5, 5, 6])
+    out = tmp_path / "m.laz"
+    kept = _merge_laz_parts_seam(
+        [str(a)],
+        str(out),
+        False,
+        None,
+        overlap_drop=False,
+        dedupe_exact=True,
+        voxel_size=None,
+    )
+    assert kept == 2  # (1,0,5) duplicated -> once; (2,0,6) once

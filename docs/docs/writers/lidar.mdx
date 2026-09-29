@@ -137,19 +137,78 @@ The merge is sized by the **`driver_merge`** memory budget (the node's available
 | `merge` | `"false"` | Post-hoc: merge the `.laz` / `.las` files **already present** in the output directory into one file, without re-running the source DataFrame. Requires `.mode("append")`. |
 | `keepParts` | `"false"` | Meaningful only with `singleFile` / `merge`. When `false` (default), source part files are deleted after the merged output is validated and durably written; set to `"true"` to keep them. A failed or partial merge never deletes parts. |
 | `mergeMaxMB` | — | Override the compute-aware merge budget in MiB (binary; 1 unit = 1,048,576 bytes). When set, the driver-side merge is allowed up to this many MiB of concatenated point bytes, regardless of the node's detected RAM. Use `GBX_LIDAR_MERGE_MAX_MB` as an environment-variable equivalent. |
+| `overlap` | `"keep"` | Seam handling for overlapping flight strips, **merge mode only**: `"keep"` (default) retains every point; `"drop"` gives each seam point to exactly one owning cluster — see [Seam unification](#seam-unification). |
+| `dedupeExact` | `"false"` | **Merge mode only.** Drop points that are exact duplicates on `x`, `y`, `z` (and RGB, when present) across the merged parts. See [Seam unification](#seam-unification). |
+| `voxelSize` | — | **Merge mode only.** Cell size, in metres, for voxel-grid thinning — keeps one representative point per cell. See [Seam unification](#seam-unification). |
 
-### Planned (v2)
+### Planned
 
-The options below are parsed but **rejected** in v1 (they raise an error that
-names the planned v2 feature). They will enable point-cloud unification in a
-future release.
+The option below is parsed but **rejected** — it raises an error naming the
+planned feature — and is not yet implemented:
 
 | Option | Planned behaviour |
 |--------|-------------------|
-| `overlap` | Overlap-point handling: `"drop"` removes duplicates from overlapping flight strips; `"keep"` (the v1 no-op default) retains them. |
-| `thinOverlap` | Overlap-strip thinning — spatial reduction of overlapping flight-strip points prior to merge. |
-| `voxelSize` | Voxel size for spatial thinning — deduplicate points within a regular grid. |
-| `dedupeExact` | Exact-coordinate deduplication across strips. |
+| `thinOverlap` | Overlap-strip thinning ahead of merge — spatial reduction of overlapping flight-strip points before the [seam-unification](#seam-unification) stages run. |
+
+## Seam unification
+
+Point clouds assembled from overlapping flight strips or tiles often carry
+duplicate or near-duplicate points along the seams where two parts cover the
+same ground. Three `merge`-mode options unify those seams into one clean
+point set: `overlap`, `dedupeExact`, and `voxelSize`. All three require
+`.option("merge", "true")` — they operate on the `.laz` / `.las` parts
+already in the output directory, not on a fresh DataFrame write.
+
+- **`overlap="drop"`** resolves double-covered seam points by ownership
+  rather than by discarding one side's file wholesale: each point is assigned
+  to exactly one cluster — the nearest cluster center among every cluster
+  whose bounding box covers that point — so the union comes out
+  non-redundant without a hard tile edge. This needs the parts to be
+  **cluster-identifiable**: filenames must follow the `*_<group>_<cluster>.laz`
+  pattern produced by writing with `groupCol` / `clusterCol` set. Parts named
+  by `nameCol` or the UUID fallback (`<partPrefix>-<uuid>.laz`) have no
+  cluster to own a seam with, and merging them with `overlap="drop"` raises.
+- **`dedupeExact="true"`** drops points that are exact duplicates on `x`,
+  `y`, `z` — and on `r`, `g`, `b` too when the parts carry RGB — after
+  rounding to millimetre precision. Two points with the same coordinates but
+  different colors are treated as distinct and both kept.
+- **`voxelSize`** (metres) buckets points into a regular 3D grid and keeps
+  exactly one point per occupied cell: the **real** input point nearest that
+  cell's geometric center. It never synthesizes an averaged point, so
+  elevation and any RGB values in the output always come from an actual
+  scan return.
+
+The three compose in a fixed order when combined: `dedupeExact` removes
+exact duplicates first, then `voxelSize` thins what remains. `overlap="drop"`
+resolves ownership as each part streams in, ahead of both.
+
+```python
+# Post-hoc: unify the .laz/.las parts already in the directory (source rows
+# are ignored, same as a plain merge="true").
+(spark.range(1).write
+    .format("lidar_gbx")
+    .mode("append")
+    .option("merge", "true")
+    .option("overlap", "drop")
+    .option("dedupeExact", "true")
+    .option("voxelSize", "0.5")
+    .option("fileName", "unified")
+    .save("/Volumes/main/geobrix_samples/lidar/output"))
+```
+
+The merge streams parts one at a time rather than concatenating every part
+into memory up front, so peak memory tracks the size of the unified output,
+not the sum of the input parts — the same [Serverless & Memory](../serverless-and-memory)
+budget that governs a plain `merge` still applies, and `mergeMaxMB` /
+`GBX_LIDAR_MERGE_MAX_MB` still override it.
+
+:::note Column parity still deferred
+`overlap`, `dedupeExact`, and `voxelSize` unify `x`, `y`, `z`, and RGB.
+Per-point attribute columns — `intensity`, `return_number`,
+`number_of_returns`, `classification`, and `gps_time` — remain out of scope
+for the writer (see [v1 column scope](#schema)) and are not carried through
+a seam-unification merge.
+:::
 
 ## Round-trip
 

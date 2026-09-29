@@ -1,4 +1,5 @@
 import numpy as np
+from shapely.geometry import box
 
 from databricks.labs.gbx.models import runner
 
@@ -66,6 +67,38 @@ def test_single_and_distributed_agree(multi_chip_rgb_tile):
     # geometries (sorted, since row order is not a documented guarantee), not just a
     # count that a dropped-and-duplicated pair of chips could coincidentally match.
     assert sorted(a["geom"].tolist()) == sorted(b["geom"].tolist())
+
+
+def test_area_m2_geographic_is_metric_not_degrees(geographic_rgb_tile):
+    """_area_m2 on a geographic (EPSG:4326) polygon returns SQUARE METERS (geodesic),
+    NOT the ~1e-7 square-DEGREE value geom.area gives -- the bug that silently dropped
+    every polygon from a 4326 orthomosaic under a metric min_area."""
+    crs = geographic_rgb_tile.crs  # EPSG:4326 (fixture CRS -- no bare CRS.from_*)
+    poly = box(-77.968, 43.233, -77.968 + 3e-4, 43.233 + 3e-4)  # ~30px @ 1e-5 deg
+    assert poly.area < 1e-6  # raw degrees: astronomically under any metric threshold
+    assert 500 < runner._area_m2(poly, crs) < 1500  # metric: hundreds of m^2 at lat 43
+
+
+def test_area_m2_projected_matches_planar(synthetic_rgb_tile):
+    """Projected CRS (meter-based EPSG:32633) -> planar .area unchanged, so the
+    projected fixtures/tests keep their exact meaning under the metric-area fix."""
+    crs = synthetic_rgb_tile.crs  # EPSG:32633
+    assert runner._area_m2(box(0, 0, 10, 10), crs) == 100.0
+
+
+def test_min_area_metric_keeps_geographic_object(geographic_rgb_tile):
+    """Integration regression: a several-hundred-m^2 object in a 4326 tile survives
+    min_area=10.0 (m^2). Under the old CRS-unit filter its ~1e-7 sq-degree area was
+    < 10 and it was dropped -- the 0-objects bug on the real orthomosaic COG."""
+    df = runner.segment_raster(
+        geographic_rgb_tile,
+        segmenter=_straddling_object,
+        gpus=1,
+        tile_px=64,
+        overlap=0,
+        min_area=10.0,
+    )
+    assert len(df) == 1
 
 
 def test_default_segmenter_binds_per_device(monkeypatch, multi_chip_rgb_tile):

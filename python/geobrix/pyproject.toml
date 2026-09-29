@@ -322,6 +322,14 @@ models_gpu_env5 = [
     "torch==2.10.0",
     "torchvision==0.25.0",
     "segment-geospatial",
+    # segment-geospatial pulls opencv-python-headless UNPINNED, so it inherits the GPU
+    # AI Runtime base env's opencv-python-headless 5.0.0.93. OpenCV *5.x*'s bundled libs
+    # trip an OpenSSL FIPS self-test abort (crypto/fips/fips.c:154 -> SIGABRT) the moment
+    # `import cv2` runs on the GPU node -- killing `segment_raster` before it starts
+    # (verified env5+A10 and env5+H100, 2026-09-29). Pinning back to the latest OpenCV
+    # 4.x avoids the defect (verified: env5+H100 with this pin runs GeoSAM end to end).
+    # See memory: check-actual-gpu-env-packages.
+    "opencv-python-headless==4.11.0.86",
 ]
 # Generic GPU umbrella (env5-only): composes the GPU-requiring extras on top of a
 # separately-installed light_env5 base (mirrors how photogrammetry_gpu_env5 is used

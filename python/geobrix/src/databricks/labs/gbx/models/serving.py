@@ -54,6 +54,37 @@ DEFAULT_PIP_REQS = (
 )
 
 
+def _in_databricks_runtime() -> bool:
+    """True when executing inside a Databricks runtime -- notebook, job, Serverless, or
+    model-serving. There, MLflow and the deploy client authenticate AMBIENTLY (the
+    runtime injects credentials and the ``databricks``/``databricks-uc`` URIs resolve
+    without a named profile), so a ``~/.databrickscfg`` profile is neither present nor
+    needed. Off-cluster (local dev) this is False and the caller's profile is applied to
+    reach the remote workspace. Env-var based so this module stays mlflow-free (R4) and
+    unit-testable. ``DATABRICKS_RUNTIME_VERSION`` is set on classic DBR and Serverless
+    alike (e.g. ``client.*``); ``DB_IS_DRIVER`` is a secondary signal."""
+    import os
+
+    return bool(
+        os.environ.get("DATABRICKS_RUNTIME_VERSION") or os.environ.get("DB_IS_DRIVER")
+    )
+
+
+def _apply_profile_auth(profile) -> None:
+    """Point MLflow / the deploy client at ``profile`` ONLY when running off-cluster.
+
+    On-cluster, setting ``DATABRICKS_CONFIG_PROFILE`` to a dev profile name (e.g.
+    ``oauth-fe``) makes MLflow look up a ``~/.databrickscfg`` entry that does not exist in
+    the job container and fail with 'Reading Databricks credential configuration failed'
+    -- the observed nb3 ``register_to_unity_gateway`` crash on Serverless GPU. So we leave
+    ambient auth untouched on-cluster and honor the caller's profile only off-cluster.
+    ``profile=None`` is always a no-op."""
+    import os
+
+    if profile is not None and not _in_databricks_runtime():
+        os.environ["DATABRICKS_CONFIG_PROFILE"] = profile
+
+
 def _image_b64_from_input(model_input) -> str:
     """``model_input`` is either a plain dict (direct calls, unit tests) or a
     single-row pandas DataFrame -- the shape mlflow hands a ``PythonModel.predict`` for
@@ -172,12 +203,10 @@ def _mlflow_log_and_register(*, pyfunc, name, profile, signature, pip_reqs) -> s
 
     Mocked by tests -- never exercised without mlflow/network installed in CI.
     """
-    import os
-
     import mlflow
     import mlflow.pyfunc
 
-    os.environ["DATABRICKS_CONFIG_PROFILE"] = profile
+    _apply_profile_auth(profile)
     mlflow.set_registry_uri("databricks-uc")
     if signature is None:
         signature = geosam_signature()
@@ -199,11 +228,16 @@ def create_endpoint(
     profile,
     endpoint_name,
     workload_type="GPU_MEDIUM",
+    workload_size="Small",
     scale_to_zero=True,
 ) -> dict:
     """Create a GPU serving endpoint for UC model ``name``@``model_version``. Thin
     wrapper: assembles the served-entity/traffic config; the actual client call +
     readiness poll live in ``_serving_create``, seamed so tests never hit the network.
+
+    ``workload_type`` selects the GPU class (e.g. ``GPU_MEDIUM`` = A10G); ``workload_size``
+    (``Small``/``Medium``/``Large``) sets concurrency and is REQUIRED by the Serving API --
+    omitting it fails endpoint creation with ``400 workloadSizeId is undefined``.
     """
     served_model_name = f"{name.split('.')[-1]}-{model_version}"
     config = {
@@ -212,6 +246,7 @@ def create_endpoint(
                 "entity_name": name,
                 "entity_version": str(model_version),
                 "workload_type": workload_type,
+                "workload_size": workload_size,
                 "scale_to_zero_enabled": scale_to_zero,
             }
         ],
@@ -231,12 +266,11 @@ def _serving_create(endpoint_name, config, *, profile) -> dict:
     version-swap while the old version still serves). Mocked by tests -- never
     exercised without mlflow/network in CI.
     """
-    import os
     import time
 
     from mlflow.deployments import get_deploy_client
 
-    os.environ["DATABRICKS_CONFIG_PROFILE"] = profile
+    _apply_profile_auth(profile)
     client = get_deploy_client("databricks")
     client.create_endpoint(name=endpoint_name, config=config)
     while True:
@@ -263,11 +297,9 @@ def query(endpoint_name, image, *, profile) -> dict:
 def _serving_query(endpoint_name, image_b64, *, profile) -> dict:
     """Real seam: mlflow deployments client ``predict()`` against a running endpoint.
     Mocked by tests -- never exercised without mlflow/network in CI."""
-    import os
-
     from mlflow.deployments import get_deploy_client
 
-    os.environ["DATABRICKS_CONFIG_PROFILE"] = profile
+    _apply_profile_auth(profile)
     client = get_deploy_client("databricks")
     return client.predict(
         endpoint=endpoint_name,

@@ -132,10 +132,43 @@ def _polygonize_mask(mask, transform, crs):
     return [(wkb, value) for wkb, value in frags if value != 0]
 
 
-def _merge_seams(frags, min_area):
+def _area_m2(geom, crs) -> float:
+    """Area of ``geom`` in SQUARE METERS, whatever ``crs`` it is expressed in.
+
+    ``segment_raster``'s polygons carry the source raster's CRS. For an orthomosaic COG
+    that CRS is frequently GEOGRAPHIC (e.g. EPSG:4326), where ``geom.area`` is in square
+    DEGREES -- ~10 orders of magnitude off the square-meter scale ``min_area`` is
+    expressed in, so a metric ``min_area`` compared against a raw ``.area`` would
+    silently drop EVERY polygon (a whole drone orthomosaic spans ~1e-5 sq degrees, far
+    under a 10 m^2 threshold). So: for a geographic CRS take the geodesic area on the
+    CRS's own ellipsoid (pyproj ``Geod.geometry_area_perimeter``); for a projected CRS
+    take the planar ``geom.area`` scaled by the CRS's linear-unit-to-meter factor (1.0
+    for the meter-based UTM / planar CRS geobrix emits). ``crs=None`` -> planar area
+    as-is. Uses the canonical ``core.crs.to_pyproj_crs`` bridge (never bare CRS.from_*).
+    """
+    if crs is None:
+        return geom.area
+    from databricks.labs.gbx.core.crs import to_pyproj_crs
+
+    pcrs = to_pyproj_crs(crs)
+    if pcrs.is_geographic:
+        geod = pcrs.get_geod()
+        if geod is not None:
+            area, _ = geod.geometry_area_perimeter(geom)
+            return abs(area)
+        return geom.area
+    try:
+        factor = pcrs.axis_info[0].unit_conversion_factor or 1.0
+    except (IndexError, AttributeError):
+        factor = 1.0
+    return geom.area * (factor**2)
+
+
+def _merge_seams(frags, min_area, crs):
     """Union polygon fragments that geometrically touch/overlap into one polygon per
     connected group (see module docstring for why plain geometric intersection is a
-    sufficient seam-merge criterion here), then drop groups whose merged area is under
+    sufficient seam-merge criterion here), then drop groups whose merged area (in
+    SQUARE METERS -- see ``_area_m2``; the polygons are in ``crs``) is under
     ``min_area``. Returns a list of ``{"label", "geom", "score"}`` row dicts.
     """
     geoms = [shapely.wkb.loads(bytes(wkb)) for wkb, _ in frags]
@@ -165,7 +198,7 @@ def _merge_seams(frags, min_area):
     label = 0
     for group_geoms in groups.values():
         merged = group_geoms[0] if len(group_geoms) == 1 else unary_union(group_geoms)
-        if merged.area < min_area:
+        if _area_m2(merged, crs) < min_area:
             continue
         rows.append({"label": label, "geom": shapely.wkb.dumps(merged), "score": 1.0})
         label += 1
@@ -242,7 +275,11 @@ def segment_raster(
         overlap: seam overlap as a PERCENTAGE of ``tile_px`` -- 0-100, matching
             ``tiling.plan_grid_windows`` / heavy ``rst_tooverlappingtiles`` -- not a
             pixel count. E.g. ``overlap=6`` on ``tile_px=1024`` is a ~61px seam.
-        min_area: polygons (post seam-merge) smaller than this are dropped.
+        min_area: minimum object area, in SQUARE METERS -- polygons (post seam-merge)
+            smaller than this are dropped. Measured metrically regardless of the source
+            raster's CRS (geodesic area for a geographic CRS such as EPSG:4326, planar
+            for a projected one -- see ``_area_m2``), so the threshold means the same
+            real-world size whether the COG is in degrees or meters.
 
     Returns:
         ``pandas.DataFrame`` with columns ``label:int``, ``geom:bytes`` (WKB),
@@ -293,5 +330,5 @@ def segment_raster(
 
     per_chip = gpu_pool_map(chips, _run_one, gpus=max(1, n_gpus))
     all_frags = [frag for chip_frags in per_chip for frag in chip_frags]
-    rows = _merge_seams(all_frags, min_area)
+    rows = _merge_seams(all_frags, min_area, crs)
     return pd.DataFrame(rows, columns=["label", "geom", "score"])

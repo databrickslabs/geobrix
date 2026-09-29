@@ -16,6 +16,7 @@ module itself always imports cleanly. These tests split the same way:
 
 import base64
 import json
+import os
 
 import numpy as np
 import pandas as pd
@@ -117,6 +118,36 @@ def test_signature_matches_predict_output_keys():
     assert "image_b64" in [c["name"] for c in sig.inputs.to_dict()]
 
 
+def test_profile_auth_skipped_in_databricks_runtime(monkeypatch):
+    """On-cluster (notebook/job/Serverless/model-serving) auth is AMBIENT:
+    _apply_profile_auth must NOT set DATABRICKS_CONFIG_PROFILE. Setting it to a dev
+    profile name points MLflow/the deploy client at a ~/.databrickscfg entry that does
+    not exist in the job container -- the real cause of the nb3 register_to_unity_gateway
+    crash on Serverless GPU ('Reading Databricks credential configuration failed')."""
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.2")
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    serving._apply_profile_auth("oauth-fe")
+    assert "DATABRICKS_CONFIG_PROFILE" not in os.environ
+
+
+def test_profile_auth_applied_off_cluster(monkeypatch):
+    """Off-cluster (local dev registering to a remote workspace) the caller's profile IS
+    applied so MLflow/the deploy client can authenticate to that workspace."""
+    monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+    monkeypatch.delenv("DB_IS_DRIVER", raising=False)
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    serving._apply_profile_auth("oauth-fe")
+    assert os.environ["DATABRICKS_CONFIG_PROFILE"] == "oauth-fe"
+
+
+def test_profile_auth_noop_when_profile_none(monkeypatch):
+    """profile=None (on-cluster caller that omits it entirely) never mutates the env."""
+    monkeypatch.delenv("DATABRICKS_RUNTIME_VERSION", raising=False)
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    serving._apply_profile_auth(None)
+    assert "DATABRICKS_CONFIG_PROFILE" not in os.environ
+
+
 def test_register_uses_uc_registry(monkeypatch):
     calls = {}
     monkeypatch.setattr(
@@ -149,6 +180,9 @@ def test_create_endpoint_uses_serving_seam(monkeypatch):
     assert entity["entity_name"] == "cat.sch.geosam"
     assert entity["entity_version"] == "3"
     assert entity["workload_type"] == "GPU_MEDIUM"
+    # workload_size (workloadSizeId) is REQUIRED by the Serving API -- omitting it fails
+    # create with '400 workloadSizeId is undefined' (observed on the nb3 GPU run).
+    assert entity["workload_size"] == "Small"
     assert entity["scale_to_zero_enabled"] is True
 
 

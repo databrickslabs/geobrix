@@ -95,6 +95,34 @@ def multi_chip_rgb_tile():
             yield ds
 
 
+@pytest.fixture
+def geographic_rgb_tile():
+    """64x64 RGB tile in a GEOGRAPHIC CRS (EPSG:4326) with a red marker object at
+    x:[10,40) y:[10,40). Pixel size is 1e-5 deg (~1 m near lat 43), so the object is a
+    few hundred SQUARE METERS but only ~1e-7 square DEGREES. This is the case that
+    exposes the min_area-in-CRS-units bug: measured in degrees the object is far under
+    any metric min_area and gets dropped (the real 0-objects failure on the 4326
+    orthomosaic COG); measured metrically it survives. The projected fixtures above
+    never catch it because EPSG:32633's .area is already in m^2."""
+    data = np.zeros((3, 64, 64), dtype="uint8")
+    data[0, 10:40, 10:40] = 255  # red marker object -> _straddling_object labels it
+    profile = dict(
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(-77.968, 43.233, 1e-5, 1e-5),
+    )
+    mf = MemoryFile()
+    with mf.open(**profile) as dst:
+        dst.write(data)
+    with mf:
+        with mf.open() as ds:
+            yield ds
+
+
 def _two_color_objects(image):
     """Fake segmenter: label 1 wherever a pixel matches the red marker color, label 2
     wherever it matches the green marker color (multi_chip_rgb_tile), else 0.

@@ -69,7 +69,8 @@ georeferenced object polygons — chip → infer → stitch → polygonize:
 3. **Stitch** — each chip's label mask is vectorized into georeferenced WKB polygons using
    its own true per-window transform, and fragments that straddle a seam are merged by
    geometric intersection into one polygon per real-world object.
-4. **Polygonize / filter** — merged polygons smaller than `min_area` are dropped.
+4. **Polygonize / filter** — merged polygons smaller than `min_area` (in square meters)
+   are dropped.
 
 ### Signature
 
@@ -94,7 +95,7 @@ segment_raster(
 | `gpus` | `"all"` or `int` | `"all"` | `"all"` probes `torch.cuda.device_count()` (lazy `torch` import); a positive `int` passes through untouched and **never** imports `torch`. |
 | `tile_px` | `int` | `1024` | Square tile size in pixels. |
 | `overlap` | `int` | `6` | Seam overlap as a **percentage of tile size** (`0`-`100`; matches `rst_tooverlappingtiles`) — not a pixel count. E.g. `overlap=6` on `tile_px=1024` is a ~61px seam. |
-| `min_area` | `float` | `10.0` | Polygons smaller than this, after seam-merge, are dropped. |
+| `min_area` | `float` | `10.0` | Minimum object area in **square meters** — polygons smaller than this (after seam-merge) are dropped. Measured metrically whatever the source CRS: geodesic area for a geographic CRS (e.g. EPSG:4326), planar for a projected one. |
 
 Returns a `pandas.DataFrame` with columns `label` (`int`), `geom` (`bytes`, WKB), and
 `score` (`float`). `score` is currently a constant `1.0` — a bare label mask carries no

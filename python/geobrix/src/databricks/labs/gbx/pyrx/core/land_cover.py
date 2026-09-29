@@ -29,6 +29,10 @@ def features(arr) -> dict:
     }
     if a.shape[-1] >= 4:  # NIR present
         nir = a[..., 3]
+        # NOTE: computed but not yet consumed by any classifier -- greenness
+        # is always ExG (RGB-only) in phase-1. Reserved for a phase-2
+        # NIR-aware greenness signal; wiring it in now would change
+        # classification behavior without NIR test data to validate it.
         f["ndvi"] = (nir - R) / np.clip(nir + R, 1e-6, None)
     return f
 
@@ -117,7 +121,17 @@ def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
                     ``"hybrid"`` (k-means partition + spectral
                     cluster-labeling; same as ``"kmeans"`` today, kept as a
                     distinct branch so a later phase can diverge it).
-        classes:    Optional override of the class-name scheme; defaults to
+        classes:    Optional class-name list to use instead of
+                    ``DEFAULT_CLASSES`` (``["vegetation", "bare",
+                    "impervious", "dark"]``). Every classifier resolves ids
+                    by literal name lookup (``names.index("vegetation")``,
+                    ``names.index("bare")``, etc.), so any ``classes`` list
+                    must contain those four exact (case-sensitive) strings
+                    -- reordering them is safe, since ids track position --
+                    but renaming, translating, or dropping any of the four
+                    canonical identities raises ``ValueError`` (e.g.
+                    ``'vegetation' is not in list``). Arbitrary/renamed-away
+                    class schemes are unsupported in phase-1. Defaults to
                     ``DEFAULT_CLASSES``.
         n_clusters: Number of k-means clusters (``kmeans``/``hybrid`` only).
         smooth:     De-speckle window size. When ``> 0``, a binary-opening
@@ -131,6 +145,10 @@ def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
         (``-1`` = nodata/unclassified) and ``class_names`` is the list of
         class names indexed by label.
     """
+    if arr.shape[-1] < 3:
+        raise ValueError(
+            f"land_cover requires a >=3-band (RGB) tile, got {arr.shape[-1]}"
+        )
     names = list(classes) if classes else list(DEFAULT_CLASSES)
     f = features(arr)
     if method == "spectral":

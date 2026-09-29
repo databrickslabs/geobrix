@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from rasterio import features as rfeat
 
 from databricks.labs.gbx.pyrx.core import land_cover as lc
@@ -74,3 +75,9 @@ def test_all_nodata_tile_all_unclassified():
     black = np.zeros((16, 16, 3), np.uint8)
     labels, _ = lc.classify(black, method="hybrid", smooth=3)
     assert (labels == -1).all()  # Review Focus: nodata
+
+
+def test_classify_raises_clear_error_on_too_few_bands():
+    single_band = np.zeros((16, 16, 1), np.uint8)
+    with pytest.raises(ValueError, match="requires a >=3-band"):
+        lc.classify(single_band, method="spectral", smooth=0)

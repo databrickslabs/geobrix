@@ -1,8 +1,9 @@
 # Orthomosaic Photogrammetry Example Series
 
-Drone imagery → georeferenced RGB orthomosaic (+ COG + PMTiles). Sparse SfM runs on
-Serverless environment 5 (CPU); an optional dense MVS pass (`01b`) runs on the Serverless
-GPU AI Runtime.
+Drone imagery → georeferenced RGB orthomosaic (+ COG + PMTiles) → segmented object
+polygons. Sparse SfM runs on Serverless environment 5 (CPU); an optional dense MVS pass
+(`01b`) and the GeoSAM segmentation capstone (`03_segment`) run on the Serverless GPU AI
+Runtime.
 
 ## Chain
 
@@ -37,7 +38,11 @@ The wheel is fetched from:
 
 ## Runtime
 
-**Serverless environment 5** (CPU only). Compute-intensive steps:
+**Serverless environment 5.** `config_nb`, `01a_sfm_orthomosaic`, `02_publish`, and
+`monitor` run on the **CPU** flavor. The optional `01b_sfm_orthomosaic_gpu` (dense MVS)
+and `03_segment` (GeoSAM) steps run on the **Serverless GPU AI Runtime** (same
+environment number, GPU-attached; `pycolmap-cuda12` for `01b`, `torch`/CUDA 12 for
+`03_segment`). Compute-intensive steps on the CPU path:
 
 | Step | Typical runtime (Old Orchard, ~170 images) |
 |---|---|

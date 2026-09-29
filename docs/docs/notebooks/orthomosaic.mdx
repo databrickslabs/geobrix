@@ -8,16 +8,21 @@ sidebar_label: Orthomosaic
 
 A notebook series that takes a **raw drone image dataset** end-to-end through
 EXIF/GPS telemetry extraction, quality screening, Structure-from-Motion (SfM)
-reconstruction, and georeferenced orthomosaic production — from individual JPEGs to a
-cloud-optimised GeoTIFF ready for tile serving. Sparse reconstruction runs on CPU; an
-optional dense pass runs on GPU.
+reconstruction, georeferenced orthomosaic production, and object segmentation — from
+individual JPEGs to a cloud-optimised GeoTIFF ready for tile serving, and on to
+georeferenced object polygons. Sparse reconstruction runs on CPU; an optional dense pass
+and the segmentation capstone run on GPU.
 
 The pipeline reads EXIF metadata and GPS telemetry per-image with the GeoBrix `exif_gbx`
 reader, computes per-image GSD and (optionally) sharpness metrics, then runs incremental
 SfM with `pycolmap` on a **Serverless environment 5 (CPU)** cluster (`01a`). An optional
 GPU notebook (`01b`) adds dense MVS for a higher-fidelity orthomosaic. The orthomosaic is
 written as a GeoTIFF, converted to a COG with the `cog_gbx` writer, and packaged as a
-PMTiles archive for interactive map preview.
+PMTiles archive for interactive map preview. An optional capstone notebook (`03_segment`)
+then segments the published COG into georeferenced object polygons with GeoSAM
+(`gbx.models`) — in-notebook across 1..N GPUs, or behind a served Unity Gateway GPU
+Model Serving endpoint. See [Geospatial Models](../models/overview) and
+[GeoSAM](../models/geosam).
 
 :::tip View on GitHub
 **[notebooks/examples/orthomosaic](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/orthomosaic)** — download the folder and import the numbered notebooks into your Databricks workspace to run.
@@ -39,6 +44,13 @@ producing a dense orthomosaic, DSM, and LAZ point cloud. The sparse ortho alone 
 suitable for GSD estimation, visual inspection, and georeferenced tile serving; the dense
 pass adds fidelity for measurement workflows. `02_publish` uses whichever orthomosaic is
 present (dense if `01b` ran, else sparse).
+
+**`03_segment` (optional, GPU) turns the published COG into object polygons.** It also
+runs on the **Serverless GPU AI Runtime** (environment 5), but installs its own extras —
+`geobrix[light_env5,models_gpu_env5,vizx]` — rather than `photogrammetry`, since GeoSAM
+needs `torch`/`segment-geospatial`, not `pycolmap`. It is standalone (no `%run
+./config_nb`) and can run any time after `02_publish` has written
+`orthomosaic_cog.tif`.
 :::
 
 ---
@@ -101,6 +113,29 @@ three checkpointed stages:
 Each stage is checkpointed per group; set `FORCE_CORRECTED` / `FORCE_COG` /
 `FORCE_PMTILES` in `config_nb` to recompute a stage.
 
+### `03_segment` (optional) — GeoSAM segmentation capstone
+
+A capstone notebook that turns `02_publish`'s orthomosaic COG into georeferenced object
+polygons with GeoBrix's [`gbx.models`](../models/overview) package. It runs no new
+photogrammetry — it reads `orthomosaic_cog.tif` and demonstrates two ways to run
+inference over it:
+
+1. **In-notebook GPU segmentation** — a single [`segment_raster`](../models/geosam) call
+   chips the COG into an overlapping grid, runs GeoSAM's automatic-mask segmenter across
+   the node's GPU(s) (`gpus="all"`), stitches each chip's label mask into whole-object
+   polygons using its own true per-window georeferencing, and returns a `pandas.DataFrame`
+   of `label` (int), `geom` (WKB bytes), and `score` (float).
+2. **Served endpoint** — the same GeoSAM backend wrapped as an MLflow pyfunc
+   (`build_geosam_pyfunc`), registered to the Unity Catalog model registry
+   (`register_to_unity_gateway`), and stood up behind a GPU [Model Serving
+   endpoint](../models/serving) (`create_endpoint`, `scale_to_zero=True` by default) for
+   programmatic, notebook-free access.
+
+Runs on the **Serverless GPU AI Runtime** (environment 5); GeoSAM's SAM backbone is
+CUDA-bound, so the in-notebook section needs a GPU cluster, while the serving section
+(registration, endpoint creation, querying) is API calls that can run from any cluster
+with `mlflow` installed.
+
 ### `monitor` (optional) — live SfM progress
 
 An optional utility notebook that polls the SfM working directory and prints incremental
@@ -125,6 +160,13 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
 - **`gbx.vizx` helpers** — `plot_raster` renders the orthomosaic tile in the notebook
   (auto-decimation + percentile stretch, `bands=(1,2,3)` for true-colour). See
   [Visualization API](../api/vizx).
+- **`gbx.models.runner.segment_raster`** — chips a raster, fans GeoSAM inference across
+  1..N GPUs, and stitches georeferenced object polygons back together. Used by
+  `03_segment` to turn `orthomosaic_cog.tif` into a `label`/`geom`/`score` DataFrame. See
+  [GeoSAM](../models/geosam).
+- **`gbx.models.serving`** — `build_geosam_pyfunc`, `register_to_unity_gateway`, and
+  `create_endpoint` take the same GeoSAM backend from a notebook call to a queryable GPU
+  Model Serving endpoint. See [Serving](../models/serving).
 
 ---
 
@@ -152,7 +194,11 @@ Drone JPEGs (local or Volume)
         │
         ▼  cog_gbx writer — orthomosaic_cog.tif (COG layout)   [dense if present, else sparse]
         │
-        ▼  pmtiles_gbx writer — orthomosaic.pmtiles (browser-ready)
+        ├──▶ pmtiles_gbx writer — orthomosaic.pmtiles (browser-ready)
+        │
+        └──▶ (optional, GPU · 03_segment) GeoSAM segment_raster — chip → infer → stitch →
+             polygonize → georeferenced object polygons (label / geom WKB / score);
+             optional Unity Gateway GPU Model Serving endpoint
 ```
 
 ---
@@ -178,6 +224,11 @@ Drone JPEGs (local or Volume)
 - **Serverless-safe throughout**. No `spark.conf.set`, `_jvm`, `.rdd`, or `.cache()` /
   `.persist()` calls. Intermediate outputs are written to a Unity Catalog Volume; the
   pipeline re-reads them by path across cells.
+- **Model Serving's request size limit**. Base64-encoding inflates a payload by roughly
+  4/3, so posting a whole published COG to the `03_segment` served endpoint can exceed
+  the endpoint's request limit — a real orthomosaic COG can already be close to it.
+  Production callers should tile a large raster and query per-tile, as `03_segment`
+  itself does when it crops a representative window before calling `serving.query`.
 
 ---
 
@@ -187,6 +238,12 @@ Drone JPEGs (local or Volume)
 - **[RasterX functions](../api/raster-functions)** — `rst_cog_convert`, `rst_clip`,
   `gbx_rst_xyzpyramid` for post-processing the orthomosaic.
 - **[PMTiles writer](../writers/pmtiles)** — encode the COG output for browser-based delivery.
+- **[Geospatial Models overview](../models/overview)** — the `gbx.models` load → run →
+  serve lifecycle behind `03_segment`'s GeoSAM step.
+- **[GeoSAM](../models/geosam)** — `load_geosam` / `segment_raster` parameter reference
+  used by `03_segment`.
+- **[Serving](../models/serving)** — register a GeoSAM model to Unity Catalog and serve
+  it behind a GPU Model Serving endpoint, as `03_segment`'s upsize step does.
 - **[LiDAR / Wireless Coverage](../notebooks/wireless-coverage)** — the complementary
   elevation-first workflow: `lidar_gbx` + `rst_binpoints_agg` → DSM / DTM / CHM from a
   LiDAR point cloud.

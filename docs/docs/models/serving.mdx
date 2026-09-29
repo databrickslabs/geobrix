@@ -140,3 +140,6 @@ prediction response (an MLflow deployments-client dict), with the `geojson` stri
 
 - **[GeoSAM](./geosam)** — `load_geosam` + `segment_raster`, the model this page serves.
 - **[Geospatial Models overview](./overview)** — the load → run → serve lifecycle.
+- **[Orthomosaic example](../notebooks/orthomosaic)** — `03_segment`'s upsize step
+  registers and serves GeoSAM this same way, then queries the endpoint with a cropped
+  window of the published orthomosaic COG.

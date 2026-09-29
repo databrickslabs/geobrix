@@ -43,6 +43,10 @@ model-backed inference package for GPU object segmentation.
   usage-affiliation choice, so the served model's environment carries GeoBrix;
   `create_endpoint` stands up a GPU Model Serving endpoint (`scale_to_zero` by default);
   `query` calls it. See [Serving](./models/serving).
+- **New segmentation capstone on the Orthomosaic Photogrammetry example.** The
+  `03_segment` notebook turns that series' published orthomosaic COG into georeferenced
+  object polygons with GeoSAM — in-notebook across 1..N GPUs, or behind a served Unity
+  Gateway endpoint. See [Orthomosaic Photogrammetry](./notebooks/orthomosaic).
 
 ### LiDAR reader — `lidar_gbx` (new)
 

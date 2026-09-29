@@ -54,6 +54,27 @@ Each constructor exposes a `label=` argument used in audit output and map legend
 
 Linear normalization crushes a skewed distribution into one end of the ramp: if most cells hold a small value with a few large outliers (e.g. roof counts of 1–25 in a 1–128 range), nearly every cell renders as the same pale color. `"quantile"` spreads the dense range across the full ramp so those cells stay distinguishable; the legend gains a median tick to keep the (non-linear) mapping honest.
 
+### Explicit category colors
+
+For a **categorical** column — where the values are class names, not a numeric scale — a colormap assigns colors in arbitrary (alphabetical) order, so `vegetation` might land on a colormap's red while `impervious` gets its green. Pass `vector_layer(category_colors=…)` with a `{value: color}` map to fix each category to a meaningful color; the discrete legend then lists the categories present in the map's order. A value present in the data but absent from the map falls back to a neutral gray and is appended to the legend.
+
+```python
+from databricks.labs.gbx.vizx import plot_static, raster_layer, vector_layer
+
+# Land-cover regions over an orthomosaic — vegetation green, impervious gray, ...
+plot_static([
+    raster_layer(ortho_cog_path),
+    vector_layer(
+        land_cover_gdf, column="class",
+        category_colors={
+            "vegetation": "#2ca02c", "bare": "#c2a878",
+            "impervious": "#9a9a9a", "dark": "#2c2c54",
+        },
+        opacity=0.55,
+    ),
+], basemap=False, legend=True)
+```
+
 ```python
 from databricks.labs.gbx.vizx import grid_layer, plot_interactive
 

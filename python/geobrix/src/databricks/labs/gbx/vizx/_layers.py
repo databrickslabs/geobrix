@@ -16,6 +16,7 @@ class Layer:
     grid_system: Optional[str] = None
     grid_conf: Optional[dict] = None
     cmap: str = "viridis"
+    category_colors: Optional[dict] = None
     scale: str = "linear"
     opacity: Optional[float] = None
     color: Optional[str] = None
@@ -37,6 +38,7 @@ def vector_layer(
     geom_col=None,
     column=None,
     cmap="viridis",
+    category_colors=None,
     scale="linear",
     fill=True,
     color=None,
@@ -45,12 +47,23 @@ def vector_layer(
     simplify=None,
     label=None,
 ):
+    """A vector layer colored by ``column`` (through ``cmap``) or a single ``color``.
+
+    ``category_colors`` (with ``column``) overrides ``cmap`` with an explicit
+    ``{category_value: color}`` map, so each category renders in its own stable,
+    meaningful color and the legend lists the present categories in the map's
+    order -- e.g. a land-cover map reading ``{"vegetation": "green",
+    "impervious": "gray", ...}`` instead of a colormap's arbitrary (alphabetical)
+    assignment. Categories present in the data but absent from the map fall back
+    to a neutral gray and are appended to the legend.
+    """
     return Layer(
         "vector",
         data,
         geom_col=geom_col,
         column=column,
         cmap=cmap,
+        category_colors=category_colors,
         scale=scale,
         fill=fill,
         color=color,

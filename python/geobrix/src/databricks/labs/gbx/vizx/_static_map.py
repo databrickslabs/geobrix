@@ -237,6 +237,47 @@ def _resolve_gdf(
     return gpd.GeoDataFrame(pdf, geometry=geoms, crs=(srid or 4326))
 
 
+_CATEGORY_FALLBACK_COLOR = "#bbbbbb"
+
+
+def _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend):
+    """Draw a vector layer with an explicit ``{category: color}`` map.
+
+    Colors each row by its category's mapped color (a category present in the
+    data but absent from the map falls back to a neutral gray), bypassing the
+    colormap so categories keep stable, meaningful colors. Builds a discrete
+    legend listing the present categories in the map's insertion order
+    (unmapped-but-present categories appended), so the legend reads as authored
+    rather than alphabetically.
+    """
+    from matplotlib.patches import Patch
+
+    color_map = lyr.category_colors
+    col = plot_gdf[lyr.column]
+    row_colors = [color_map.get(v, _CATEGORY_FALLBACK_COLOR) for v in col]
+
+    draw_kwargs = dict(kwargs)
+    # Per-row explicit colors replace colormap / column-driven coloring.
+    for k in ("cmap", "column", "legend"):
+        draw_kwargs.pop(k, None)
+    draw_kwargs["color"] = row_colors
+    plot_gdf.plot(**draw_kwargs)
+
+    if legend:
+        present = list(dict.fromkeys(col.dropna().tolist()))
+        ordered = [c for c in color_map if c in present]
+        ordered += [c for c in present if c not in color_map]
+        handles = [
+            Patch(
+                facecolor=color_map.get(c, _CATEGORY_FALLBACK_COLOR),
+                edgecolor="none",
+                label=str(c),
+            )
+            for c in ordered
+        ]
+        ax.legend(handles=handles, loc="upper right", framealpha=0.9)
+
+
 def _draw_one_layer(
     lyr,
     ax,
@@ -308,6 +349,9 @@ def _draw_one_layer(
         # take geopandas' lower default zorder), rendering a raster+vector composite as
         # raster-only.
         kwargs.setdefault("zorder", 3)
+        if lyr.category_colors is not None and lyr.column is not None:
+            _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend)
+            return
         plot_gdf.plot(**kwargs)
     elif lyr.kind == "raster":
         import numpy as np

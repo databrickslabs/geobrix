@@ -139,6 +139,72 @@ def test_raster_and_vector_composite_is_not_blank(tmp_path):
     ), f"composite is near-blank (std={std}); raster/vector CRS misaligned"
 
 
+def test_vector_layer_category_colors_maps_each_class():
+    # An explicit category->color map colors each category by its mapped color
+    # (not a colormap's arbitrary/alphabetical order), so a land-cover legend can
+    # read vegetation=green / impervious=gray instead of tab10's backwards order.
+    from matplotlib.colors import to_rgb
+    from shapely.geometry import box
+
+    gdf = gpd.GeoDataFrame(
+        {"class": ["vegetation", "impervious"]},
+        geometry=[box(-122.5, 37.7, -122.4, 37.8), box(-122.4, 37.7, -122.3, 37.8)],
+        crs="EPSG:4326",
+    )
+    cc = {
+        "vegetation": "#2ca02c",
+        "bare": "#c2a878",
+        "impervious": "#808080",
+        "dark": "#2c2c54",
+    }
+    ax = plot_static(
+        [vector_layer(gdf, column="class", category_colors=cc, opacity=1.0)],
+        basemap=False,
+        legend=True,
+    )
+    # The drawn polygon collection carries one facecolor per row, matching the map.
+    fcs = ax.collections[-1].get_facecolors()
+    assert len(fcs) == 2
+    got = {tuple(round(x, 3) for x in fc[:3]) for fc in fcs}
+    want = {
+        tuple(round(x, 3) for x in to_rgb(cc[c])) for c in ("vegetation", "impervious")
+    }
+    assert got == want, f"facecolors {got} != mapped {want}"
+    # A discrete legend labels only the categories present, colored by the map.
+    leg = ax.get_legend()
+    assert leg is not None
+    assert {t.get_text() for t in leg.get_texts()} == {"vegetation", "impervious"}
+
+
+def test_vector_layer_category_colors_legend_order_follows_map():
+    # Legend order follows the category_colors map insertion order (filtered to
+    # present categories), not the data/alphabetical order -- so a land-cover
+    # legend reads vegetation, bare, impervious, dark as authored.
+    from shapely.geometry import box
+
+    gdf = gpd.GeoDataFrame(
+        {"class": ["impervious", "vegetation", "bare"]},
+        geometry=[
+            box(-122.5, 37.7, -122.4, 37.8),
+            box(-122.4, 37.7, -122.3, 37.8),
+            box(-122.3, 37.7, -122.2, 37.8),
+        ],
+        crs="EPSG:4326",
+    )
+    cc = {
+        "vegetation": "#2ca02c",
+        "bare": "#c2a878",
+        "impervious": "#808080",
+        "dark": "#2c2c54",
+    }
+    ax = plot_static(
+        [vector_layer(gdf, column="class", category_colors=cc, opacity=1.0)],
+        basemap=False,
+    )
+    labels = [t.get_text() for t in ax.get_legend().get_texts()]
+    assert labels == ["vegetation", "bare", "impervious"]  # map order, "dark" absent
+
+
 def test_vector_layer_renders_above_raster(tmp_path):
     # plot_cog draws a raster at zorder=2 (so it sits above a basemap at zorder=1); a
     # vector layer must composite ABOVE the raster or the raster occludes it entirely

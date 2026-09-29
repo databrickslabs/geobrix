@@ -4,7 +4,9 @@ features + the ``spectral`` classify branch, plus ``kmeans``/``hybrid``
 branches via ``scipy.cluster.vq.kmeans2`` with spectral cluster-labeling."""
 
 import numpy as np
+from scipy import ndimage as ndi
 from scipy.cluster.vq import kmeans2
+from skimage.morphology import disk
 
 # Class scheme: index = class id; -1 = nodata/unclassified.
 DEFAULT_CLASSES = ["vegetation", "bare", "impervious", "dark"]
@@ -87,6 +89,24 @@ def _kmeans(arr, f, names, n_clusters):
     return lab
 
 
+def _despeckle(lab, window):
+    """Drop small connected specks of each class by binary-opening its mask.
+
+    Pixels removed from a class's mask by the opening are reset to ``-1``
+    (unclassified) rather than reassigned, so class semantics are preserved
+    and only isolated noise pixels are dropped. ``window <= 0`` is a no-op.
+    """
+    if window <= 0:
+        return lab
+    out = lab.copy()
+    for c in np.unique(lab):
+        if c < 0:
+            continue
+        m = ndi.binary_opening(lab == c, structure=disk(max(1, window // 2)))
+        out[(lab == c) & ~m] = -1  # drop specks of class c
+    return out
+
+
 def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
     """Classify an HxWxbands array into land-cover labels.
 
@@ -100,7 +120,11 @@ def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
         classes:    Optional override of the class-name scheme; defaults to
                     ``DEFAULT_CLASSES``.
         n_clusters: Number of k-means clusters (``kmeans``/``hybrid`` only).
-        smooth:     Reserved for the ``kmeans``/``hybrid`` branches.
+        smooth:     De-speckle window size. When ``> 0``, a binary-opening
+                    de-speckle pass (see ``_despeckle``) is applied to the
+                    label array before the final nodata re-mask, dropping
+                    isolated salt-and-pepper specks of each class. ``0``
+                    leaves labels unchanged.
 
     Returns:
         ``(labels, class_names)`` where ``labels`` is an HxW int32 array
@@ -117,4 +141,7 @@ def classify(arr, *, method="hybrid", classes=None, n_clusters=6, smooth=3):
         lab = _kmeans(arr, f, names, n_clusters)  # k-means partition, spectral labeling
     else:
         raise NotImplementedError(method)
+    if smooth > 0:
+        lab = _despeckle(lab, smooth)
+        lab[f["nodata"]] = -1  # re-mask nodata after de-speckle
     return lab.astype(np.int32), names

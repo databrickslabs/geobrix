@@ -3772,6 +3772,51 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 ---
 
+### rst_land_cover
+
+<Tier light/>
+
+:::note Python-only — no SQL registration yet
+`rst_land_cover` is a **Python-only** columnar function: it is not registered as
+`gbx_rst_land_cover` in SQL (light or heavy), so it is called from Python only — e.g.
+`rx.rst_land_cover(...)` where `rx` is `databricks.labs.gbx.pyrx.functions`. A SQL surface is
+deferred to a later release. The single-band **Int32** class-mask tile it returns is a normal
+tile, so it composes with any other `rst_*` function from there — including the registered
+streaming UDTF `gbx_rst_polygonize` — so class regions can still be traced to vector polygons
+from SQL once the class-mask tile exists.
+:::
+
+**Signature:** `rst_land_cover(tile: Column, *, method: str = "hybrid", classes: List[str] = None, n_clusters: int = 6, smooth: int = 3): Column` — Classify an RGB(+NIR) tile into land-cover class ids; single-band Int32 tile.
+
+**Parameters:** `method` — `"spectral"` (fixed excess-green / brightness thresholds), `"kmeans"` (a `scipy` k-means partition over RGB + excess-green + brightness features, with clusters labeled by the same spectral thresholds), or `"hybrid"` (default; same k-means partition as `"kmeans"` today, kept as a distinct branch so a later release can diverge it); `classes` — not yet wired through the columnar UDF: only the built-in default class scheme is supported, and a non-`None` value raises `NotImplementedError`; `n_clusters` — k-means cluster count (`"kmeans"`/`"hybrid"` only); `smooth` — de-speckle window in pixels (a binary-opening pass drops isolated salt-and-pepper specks of each class back to NoData; `0` disables it)
+
+Requires a **3+ band** tile (RGB, optionally +NIR — a 4th band is read but not yet consumed by
+any classifier). Each output pixel is an index into the class scheme —
+`land_cover.DEFAULT_CLASSES` (`["vegetation", "bare", "impervious", "dark"]`) by default — so
+map id to name with `DEFAULT_CLASSES[value]`. NoData / unclassified pixels are `-1`, which is
+also the output tile's NoData value.
+
+:::tip Tracing class regions to polygons, with a metric min-area filter
+Because the output is an ordinary single-band tile, trace its class regions to polygons the
+same way as any other `rst_*` result — via the registered
+[`gbx_rst_polygonize(tile, band, connectedness)`](#rst_polygonize) streaming UDTF.
+`rst_polygonize` has no `min_area` parameter, so filter out small regions **after**
+polygonizing, in metric square meters, via `core.crs.area_m2(geom, crs)` — it takes the
+geodesic area on the CRS's own ellipsoid for a geographic CRS (e.g. EPSG:4326), instead of a
+raw `geom.area` in square degrees that would silently drop every region against a metric
+threshold.
+:::
+
+<CodeFromTest
+  language="python"
+  title="Classify land cover, then trace class regions to polygons"
+  source="docs/tests/python/api/pyrx_functions.py"
+  testFile="python/geobrix/test/pyrx/test_docs_examples.py"
+  functionName="pyrx_land_cover_example"
+  outputConstant="pyrx_land_cover_example_output"
+  code={pyrxCode}
+/>
+
 ### rst_nbr
 
 <Tier both/>

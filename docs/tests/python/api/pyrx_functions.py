@@ -247,6 +247,95 @@ pyrx_polygonize_example_output = """
 
 
 # ---------------------------------------------------------------------------
+# Land-cover classification example
+# ---------------------------------------------------------------------------
+
+
+def pyrx_land_cover_example(spark):
+    """Classify an RGB tile into land-cover classes, then trace each class
+    region to polygons.
+
+    ``rst_land_cover`` assigns each pixel a class id -- an index into
+    ``land_cover.DEFAULT_CLASSES`` (``["vegetation", "bare", "impervious",
+    "dark"]``); NoData/unclassified pixels are ``-1``. The class-mask tile it
+    returns is single-band Int32, so it composes with ``rst_polygonize`` (a
+    streaming Python UDTF) exactly like any other single-band tile --
+    ``rst_land_cover`` itself has no SQL registration (no ``gbx_rst_land_cover``).
+    """
+    import numpy as np
+    import shapely.wkb
+    from pyspark.sql import functions as f
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+    from databricks.labs.gbx.core.crs import area_m2
+    from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.pyrx.core.land_cover import DEFAULT_CLASSES
+
+    # Build a 32 x 32, 3-band (RGB) uint8 raster with two regions: left half
+    # green (-> vegetation), right half bright/gray (-> bare).
+    h, w = 32, 32
+    a = np.zeros((3, h, w), np.uint8)
+    a[0, :, : w // 2] = 30  # left half: green
+    a[1, :, : w // 2] = 200
+    a[2, :, : w // 2] = 40
+    a[0, :, w // 2 :] = 210  # right half: bright/gray
+    a[1, :, w // 2 :] = 205
+    a[2, :, w // 2 :] = 200
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, h, 1, 1),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(a)
+        raster_bytes = mf.read()
+
+    df = spark.createDataFrame([(raster_bytes,)], ["raster"])
+    tile_df = df.select(rx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile"))
+    lc_df = tile_df.select(
+        rx.rst_land_cover("tile", method="spectral", smooth=0).alias("lc")
+    )
+
+    # rst_land_cover is Python-only (no gbx_rst_land_cover SQL name); the
+    # resulting class-mask tile still composes with the registered streaming
+    # UDTF gbx_rst_polygonize, invoked via SQL LATERAL.
+    rx.register(spark)
+    lc_df.createOrReplaceTempView("_pyrx_land_cover_demo")
+    rows = spark.sql(
+        "SELECT t.geom_wkb AS g, t.value AS v FROM _pyrx_land_cover_demo, "
+        "LATERAL gbx_rst_polygonize(lc, 1, 4) t"
+    ).collect()
+
+    # value -> class name via the fixed DEFAULT_CLASSES scheme.
+    class_names = {int(r["v"]): DEFAULT_CLASSES[int(r["v"])] for r in rows}
+
+    # min_area is not an rst_polygonize / rst_land_cover parameter -- apply it
+    # as a post-polygonize filter, in metric square meters, via
+    # core.crs.area_m2 (geodesic here, since this tile's CRS is geographic
+    # EPSG:4326).
+    min_area = 0.0  # demo threshold
+    kept = [
+        r
+        for r in rows
+        if area_m2(shapely.wkb.loads(bytes(r["g"])), "EPSG:4326") >= min_area
+    ]
+
+    return rows, class_names, kept
+
+
+pyrx_land_cover_example_output = """
+Two contiguous regions traced from the class-mask tile, e.g.:
+[Row(g=<wkb bytes>, v=0), Row(g=<wkb bytes>, v=1)]
+class_names -> {0: "vegetation", 1: "bare"}  (id -> DEFAULT_CLASSES[id])
+"""
+
+
+# ---------------------------------------------------------------------------
 # SQL example
 # ---------------------------------------------------------------------------
 

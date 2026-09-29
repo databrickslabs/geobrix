@@ -8,10 +8,11 @@ sidebar_label: Orthomosaic
 
 A notebook series that takes a **raw drone image dataset** end-to-end through
 EXIF/GPS telemetry extraction, quality screening, Structure-from-Motion (SfM)
-reconstruction, georeferenced orthomosaic production, and object segmentation — from
-individual JPEGs to a cloud-optimised GeoTIFF ready for tile serving, and on to
-georeferenced object polygons. Sparse reconstruction runs on CPU; an optional dense pass
-and the segmentation capstone run on GPU.
+reconstruction, georeferenced orthomosaic production, and object + land-cover
+classification — from individual JPEGs to a cloud-optimised GeoTIFF ready for tile
+serving, and on to georeferenced object polygons and a land-cover region map. Sparse
+reconstruction runs on CPU; an optional dense pass and the object-segmentation part of
+the capstone run on GPU (land cover runs on CPU).
 
 The pipeline reads EXIF metadata and GPS telemetry per-image with the GeoBrix `exif_gbx`
 reader, computes per-image GSD and (optionally) sharpness metrics, then runs incremental
@@ -19,10 +20,11 @@ SfM with `pycolmap` on a **Serverless environment 5 (CPU)** cluster (`01a`). An 
 GPU notebook (`01b`) adds dense MVS for a higher-fidelity orthomosaic. The orthomosaic is
 written as a GeoTIFF, converted to a COG with the `cog_gbx` writer, and packaged as a
 PMTiles archive for interactive map preview. An optional capstone notebook (`03_segment`)
-then segments the published COG into georeferenced object polygons with GeoSAM
-(`gbx.models`) — in-notebook across 1..N GPUs, or behind a served Unity Gateway GPU
-Model Serving endpoint. See [Geospatial Models](../models/overview) and
-[GeoSAM](../models/geosam).
+then derives two complementary views of the published COG: georeferenced **object**
+polygons with GeoSAM (`gbx.models`) — in-notebook across 1..N GPUs, or behind a served
+Unity Gateway GPU Model Serving endpoint — and a **land-cover** region map with RasterX's
+`rst_land_cover`, entirely on CPU. See [Geospatial Models](../models/overview),
+[GeoSAM](../models/geosam), and [RasterX functions](../api/raster-functions#rst_land_cover).
 
 :::tip View on GitHub
 **[notebooks/examples/orthomosaic](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/orthomosaic)** — download the folder and import the numbered notebooks into your Databricks workspace to run.
@@ -45,12 +47,13 @@ suitable for GSD estimation, visual inspection, and georeferenced tile serving; 
 pass adds fidelity for measurement workflows. `02_publish` uses whichever orthomosaic is
 present (dense if `01b` ran, else sparse).
 
-**`03_segment` (optional, GPU) turns the published COG into object polygons.** It also
-runs on the **Serverless GPU AI Runtime** (environment 5), but installs its own extras —
-`geobrix[light_env5,models_gpu_env5,vizx]` — rather than `photogrammetry`, since GeoSAM
-needs `torch`/`segment-geospatial`, not `pycolmap`. It is standalone (no `%run
-./config_nb`) and can run any time after `02_publish` has written
-`orthomosaic_cog.tif`.
+**`03_segment` (optional) turns the published COG into objects AND a land-cover map.** It
+installs its own extras — `geobrix[light_env5,models_gpu_env5,vizx]` — rather than
+`photogrammetry`, since its **instance-objects** section needs GeoSAM's
+`torch`/`segment-geospatial`, not `pycolmap`, and runs on the **Serverless GPU AI Runtime**
+(environment 5). Its **land-cover** section is plain RasterX (`rst_land_cover`, CPU-only) and
+needs no GPU. The notebook is standalone (no `%run ./config_nb`) and can run any time after
+`02_publish` has written `orthomosaic_cog.tif`.
 :::
 
 ---
@@ -113,26 +116,37 @@ three checkpointed stages:
 Each stage is checkpointed per group; set `FORCE_CORRECTED` / `FORCE_COG` /
 `FORCE_PMTILES` in `config_nb` to recompute a stage.
 
-### `03_segment` (optional) — GeoSAM segmentation capstone
+### `03_segment` (optional) — objects + land cover capstone
 
-A capstone notebook that turns `02_publish`'s orthomosaic COG into georeferenced object
-polygons with GeoBrix's [`gbx.models`](../models/overview) package. It runs no new
-photogrammetry — it reads `orthomosaic_cog.tif` and demonstrates two ways to run
-inference over it:
+A capstone notebook that derives two complementary views of `02_publish`'s orthomosaic
+COG — discrete **objects** and a **land-cover** region map — then serves the object model.
+It runs no new photogrammetry; it only reads `orthomosaic_cog.tif`.
 
-1. **In-notebook GPU segmentation** — a single [`segment_raster`](../models/geosam) call
-   chips the COG into an overlapping grid, runs GeoSAM's automatic-mask segmenter across
-   the node's GPU(s) (`gpus="all"`), stitches each chip's label mask into whole-object
-   polygons using its own true per-window georeferencing, and returns a `pandas.DataFrame`
-   of `label` (int), `geom` (WKB bytes), and `score` (float).
-2. **Served endpoint** — the same GeoSAM backend wrapped as an MLflow pyfunc
+1. **Instance objects (GPU)** — a single [`segment_raster`](../models/geosam) call chips
+   the COG into an overlapping grid, runs GeoSAM's automatic-mask segmenter across the
+   node's GPU(s) (`gpus="all"`), stitches each chip's label mask into whole-object polygons
+   using its own true per-window georeferencing, and returns a `pandas.DataFrame` of
+   `label` (int), `geom` (WKB bytes), and `score` (float). Automatic-mask GeoSAM is
+   class-agnostic (instance segmentation) — each object gets an id, not a semantic type —
+   so the preview colors objects by instance id with a legend.
+2. **Land cover (CPU)** — the complementary view: partition the *whole scene* into
+   contiguous region classes (vegetation / bare / impervious / dark) with RasterX's
+   [`rst_land_cover`](../api/raster-functions#rst_land_cover), composed from the existing
+   `rst_*` family — `rst_fromfile` → `rst_resample` (downsample so a single tile fits
+   worker memory) → `rst_land_cover` (an Int32 class-mask tile) → `gbx_rst_polygonize` →
+   labeled polygons, filtered to regions at or above a metric minimum area via
+   `core.crs.area_m2`. The notebook runs both `method="spectral"` (fixed thresholds) and
+   `method="kmeans"` (adaptive clustering) side by side so the two can be compared —
+   `method="hybrid"` (`rst_land_cover`'s default) is the pragmatic blend of the two.
+3. **Served endpoint** — the same GeoSAM backend wrapped as an MLflow pyfunc
    (`build_geosam_pyfunc`), registered to the Unity Catalog model registry
    (`register_to_unity_gateway`), and stood up behind a GPU [Model Serving
    endpoint](../models/serving) (`create_endpoint`, `scale_to_zero=True` by default) for
    programmatic, notebook-free access.
 
-Runs on the **Serverless GPU AI Runtime** (environment 5); GeoSAM's SAM backbone is
-CUDA-bound, so the in-notebook section needs a GPU cluster, while the serving section
+The **instance-objects** section needs a GPU cluster — GeoSAM's SAM backbone is
+CUDA-bound — so it runs on the **Serverless GPU AI Runtime** (environment 5). The
+**land-cover** section is CPU-only RasterX and needs no GPU. The serving section
 (registration, endpoint creation, querying) is API calls that can run from any cluster
 with `mlflow` installed.
 
@@ -164,6 +178,13 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
   1..N GPUs, and stitches georeferenced object polygons back together. Used by
   `03_segment` to turn `orthomosaic_cog.tif` into a `label`/`geom`/`score` DataFrame. See
   [GeoSAM](../models/geosam).
+- **`pyrx.rst_land_cover`** — classifies an RGB(+NIR) tile into land-cover class ids
+  (`method="spectral"` / `"kmeans"` / `"hybrid"`), returning a single-band Int32
+  class-mask tile; each pixel is an index into `land_cover.DEFAULT_CLASSES`
+  (`["vegetation", "bare", "impervious", "dark"]`). Used by `03_segment` together with
+  `rst_fromfile` → `rst_resample` → `gbx_rst_polygonize` to turn `orthomosaic_cog.tif`
+  into a labeled region `GeoDataFrame`. Python-only — no `gbx_rst_land_cover` SQL name yet.
+  See [RasterX functions](../api/raster-functions#rst_land_cover).
 - **`gbx.models.serving`** — `build_geosam_pyfunc`, `register_to_unity_gateway`, and
   `create_endpoint` take the same GeoSAM backend from a notebook call to a queryable GPU
   Model Serving endpoint. See [Serving](../models/serving).
@@ -196,9 +217,13 @@ Drone JPEGs (local or Volume)
         │
         ├──▶ pmtiles_gbx writer — orthomosaic.pmtiles (browser-ready)
         │
-        └──▶ (optional, GPU · 03_segment) GeoSAM segment_raster — chip → infer → stitch →
-             polygonize → georeferenced object polygons (label / geom WKB / score);
-             optional Unity Gateway GPU Model Serving endpoint
+        ├──▶ (optional, GPU · 03_segment) GeoSAM segment_raster — chip → infer → stitch →
+        │    polygonize → georeferenced object polygons (label / geom WKB / score);
+        │    optional Unity Gateway GPU Model Serving endpoint
+        │
+        └──▶ (optional, CPU · 03_segment) rst_fromfile → rst_resample → rst_land_cover →
+             gbx_rst_polygonize → min-area filter (core.crs.area_m2) → labeled land-cover
+             regions (spectral vs kmeans)
 ```
 
 ---
@@ -229,6 +254,15 @@ Drone JPEGs (local or Volume)
   the endpoint's request limit — a real orthomosaic COG can already be close to it.
   Production callers should tile a large raster and query per-tile, as `03_segment`
   itself does when it crops a representative window before calling `serving.query`.
+- **Land cover classifies one downsampled tile**. `rst_land_cover` is columnar — Spark can
+  apply it per tile across a grid — but `03_segment`'s example runs it as a single call
+  over an `rst_resample`-downsampled tile, sized to fit worker memory and appropriate for a
+  map-preview scale. Full-resolution, tiled fan-out over a large scene (e.g. a whole city)
+  is a follow-on, not what the notebook demonstrates.
+- **`min_area` is not an `rst_land_cover` / `rst_polygonize` parameter**. Filter small
+  land-cover regions *after* polygonizing, in metric square meters, via
+  `core.crs.area_m2(geom, crs)` — a raw `geom.area` on the COG's geographic CRS is in square
+  degrees and would silently drop every region against a metric threshold.
 
 ---
 
@@ -236,7 +270,10 @@ Drone JPEGs (local or Volume)
 
 - **[EXIF/GPS reader](../readers/exif)** — `exif_gbx` reference: modes, options, schema.
 - **[RasterX functions](../api/raster-functions)** — `rst_cog_convert`, `rst_clip`,
-  `gbx_rst_xyzpyramid` for post-processing the orthomosaic.
+  `gbx_rst_xyzpyramid` for post-processing the orthomosaic, and
+  [`rst_land_cover`](../api/raster-functions#rst_land_cover) /
+  [`rst_polygonize`](../api/raster-functions#rst_polygonize) for `03_segment`'s land-cover
+  step.
 - **[PMTiles writer](../writers/pmtiles)** — encode the COG output for browser-based delivery.
 - **[Geospatial Models overview](../models/overview)** — the `gbx.models` load → run →
   serve lifecycle behind `03_segment`'s GeoSAM step.

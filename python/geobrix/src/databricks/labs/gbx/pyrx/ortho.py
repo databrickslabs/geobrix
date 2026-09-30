@@ -78,20 +78,26 @@ def rasterize_enu_ortho(
     """Top-surface-rasterize an ENU-metre colored point cloud into a georeferenced
     ortho + DSM (EPSG:4326 GeoTIFFs).
 
-    ``ref_lat``/``ref_lon`` anchor the ENU origin used to convert the raster's
-    top-left corner back to lon/lat via
-    :func:`databricks.labs.gbx.core.crs.enu_to_lonlat` — the tier-neutral
-    equirectangular (local-tangent-plane) approximation, the same one
-    ``accumulate_orthomosaic`` uses. ``ref_alt`` and ``gps_tf`` are accepted for
-    call-site compatibility with callers that carry a ``pycolmap.GPSTransform``
-    (e.g. ``place_clusters_shared_enu``'s return value) but are unused here:
-    georeferencing never touches pycolmap, so ``gps_tf=None`` runs this
-    function with no optional dependency at all.
+    Georeferencing anchors the raster's top-left corner two ways, matching
+    ``_rasterize_enu_ortho`` in ``config_nb`` cell ``1ee46ad5`` exactly:
+
+    - ``gps_tf`` given (a ``pycolmap.GPSTransform``, e.g. from
+      ``place_clusters_shared_enu``): the corner is ``gps_tf.enu_to_ellipsoid``
+      — the ellipsoidal conversion, for fidelity. This is the path real
+      callers use and requires pycolmap (supplied by the caller; this module
+      never imports it).
+    - ``gps_tf=None``: the corner falls back to
+      :func:`databricks.labs.gbx.core.crs.enu_to_lonlat` — the tier-neutral
+      equirectangular (local-tangent-plane) approximation — so this function
+      runs with no optional dependency at all. This is an approximation, not
+      equivalent to the ``gps_tf`` path; it exists for local testability.
+
+    Either way, the per-pixel GSD scale (``dpm_lat``/``dpm_lon``) uses the same
+    naive equirectangular constant (``1/111320``, ``1/(111320*cos(ref_lat))``)
+    as the source — only the anchor corner differs between the two paths.
 
     Returns ``(ortho_path, dsm_path)``.
     """
-    del ref_alt, gps_tf  # accepted for call-site compatibility only; see docstring
-
     # Robust to a thin/degenerate cloud: drop non-finite points, require a usable
     # count, and if the ground band (±20 m of median z) removes everything, fall
     # back to all finite points instead of raising on an empty array.
@@ -137,20 +143,24 @@ def rasterize_enu_ortho(
         px=gsd_m,
     )
 
-    # Georeference: same equirectangular approximation as accumulate_orthomosaic,
-    # sourced entirely from the tier-neutral core.crs helper (one east/north pair
-    # for the top-left corner, one more one-pixel-diagonal step for pixel size) —
-    # no inline 111320/cos(lat) math and no pycolmap.
-    lons, lats = enu_to_lonlat(
-        np.array([e_min, e_min + gsd_m]),
-        np.array([n_max, n_max - gsd_m]),
-        ref_lat,
-        ref_lon,
-    )
-    lon_tl, lat_tl = float(lons[0]), float(lats[0])
-    px_dlon = float(lons[1] - lons[0])
-    px_dlat = float(lats[0] - lats[1])
-    geo_tf = from_origin(lon_tl, lat_tl, px_dlon, px_dlat)
+    # Georeference. Per-pixel GSD scale: naive equirectangular constant, same in
+    # both branches (matches the source; this is a coarse fixed scale, not the
+    # fidelity-sensitive part).
+    dpm_lat = 1.0 / 111320.0
+    dpm_lon = 1.0 / (111320.0 * np.cos(np.radians(ref_lat)))
+    # Anchor corner: gps_tf's ellipsoidal enu_to_ellipsoid (fidelity — matches
+    # _rasterize_enu_ortho verbatim) when a pycolmap GPSTransform is supplied;
+    # core.crs.enu_to_lonlat (equirectangular approximation, pycolmap-free) only
+    # as the gps_tf=None fallback. These are NOT equivalent — do not merge them.
+    if gps_tf is not None:
+        tl = gps_tf.enu_to_ellipsoid(
+            np.array([[e_min, n_max, z_med]]), ref_lat, ref_lon, ref_alt
+        )[0]
+        lon_tl, lat_tl = float(tl[1]), float(tl[0])
+    else:
+        lon_tl_arr, lat_tl_arr = enu_to_lonlat(e_min, n_max, ref_lat, ref_lon)
+        lon_tl, lat_tl = float(lon_tl_arr), float(lat_tl_arr)
+    geo_tf = from_origin(lon_tl, lat_tl, gsd_m * dpm_lon, gsd_m * dpm_lat)
 
     H, W = dsm.shape
     Path(out_ortho).parent.mkdir(parents=True, exist_ok=True)

@@ -111,7 +111,17 @@ def test_rasterize_enu_ortho_writes_geotiffs(tmp_path):
         out_dsm=str(dp),
         gsd_cm=50.0,
     )
+    # Coarse georef sanity: the cloud is centred near the ENU origin (+-10 m),
+    # so the raster's top-left (west, north) bound must land within a few
+    # hundred metres of ref_lon/ref_lat -- catches gross formula/sign bugs
+    # (e.g. degrees-as-metres, swapped axes, wrong hemisphere) without
+    # asserting exact fidelity (that needs the gps_tf ellipsoidal path, which
+    # is untestable here without pycolmap).
+    tol_deg = 0.005  # ~550 m at this latitude
     with rasterio.open(ortho) as ds:
         assert ds.count >= 3 and ds.crs is not None
+        left, _bottom, _right, top = ds.bounds
+        assert abs(left - (-122.4)) < tol_deg
+        assert abs(top - 37.8) < tol_deg
     with rasterio.open(dsm) as ds:
         assert ds.count == 1

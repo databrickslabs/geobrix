@@ -54,7 +54,10 @@ def _match(src1, src2, n):
 
 def test_assemble_colmap_db(tmp_path):
     db = tmp_path / "master.db"
-    con = sqlite3.connect(db); con.executescript(_SCHEMA); con.commit(); con.close()
+    con = sqlite3.connect(db)
+    con.executescript(_SCHEMA)
+    con.commit()
+    con.close()
     # a.jpg has valid GPS, b.jpg has NaN GPS (skipped), c.jpg has no GPS
     features = [
         _feat("a.jpg", [1.0, 2.0, 3.0]),

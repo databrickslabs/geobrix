@@ -92,11 +92,14 @@ The core pipeline:
 An optional GPU notebook that upgrades the sparse result to a **dense** reconstruction. It
 loads the persisted sparse model from `01a`, undistorts each GPS cluster, and runs COLMAP
 `patch_match_stereo` across the node's GPUs via `dense_mvs_pool` (a driver-side GPU-slot
-scheduler sized by `recommend_dense_allocation`), then fuses the depth maps and
+scheduler sized by `recommend_dense_allocation`), then fuses the depth maps into a
+per-cluster `fused.ply`. From there it calls the tested library module `pyrx.ortho` —
+`ortho.dense_clusters_to_products` places every cluster in one shared ENU frame and
 georeferences the result into a dense RGB orthomosaic, DSM, and LAZ point cloud
-(per-cluster and merged). Runs on the **Serverless GPU AI Runtime** (environment 5,
-`pycolmap-cuda12`, CUDA 12); `01a` is the CPU peer that produces the sparse model it
-consumes. `02_publish` automatically uses the dense orthomosaic when present.
+(per-cluster and merged); see the `pyrx.ortho` module reference further down this page for
+its full API. Runs on the **Serverless GPU AI Runtime** (environment 5, `pycolmap-cuda12`,
+CUDA 12); `01a` is the CPU peer that produces the sparse model it consumes. `02_publish`
+automatically uses the dense orthomosaic when present.
 
 ### `02_publish` — color correction → COG → PMTiles
 
@@ -188,6 +191,123 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
 - **`gbx.models.serving`** — `build_geosam_pyfunc`, `register_to_unity_gateway`, and
   `create_endpoint` take the same GeoSAM backend from a notebook call to a queryable GPU
   Model Serving endpoint. See [Serving](../models/serving).
+
+---
+
+## The `pyrx.ortho` module
+
+`01b`'s dense pass is not bespoke notebook code — the shared-frame alignment, cloud
+rasterization, and per-cluster/merged product export live in
+`databricks.labs.gbx.pyrx.ortho`, a tested library module. The module splits cleanly by
+dependency: the pure math (`umeyama_sim3`, `apply_sim3`, and `rasterize_enu_ortho` when
+called with `gps_tf=None`) is plain NumPy and imports with no optional dependency. The
+orchestration functions that actually drive a dense reconstruction
+(`place_clusters_shared_enu`, `dense_clusters_to_products`) import `pycolmap` lazily inside
+their own bodies and raise a clear `ImportError` when it is missing — install the
+`photogrammetry` extra to use them.
+
+### `dense_clusters_to_products` — the dense entry point
+
+```python
+from databricks.labs.gbx.pyrx import ortho
+
+used_cids, merged_laz_path = ortho.dense_clusters_to_products(
+    spark,
+    cluster_models,        # {cid: (sparse_dir, gps_json)}
+    dense_plys,             # {cid: fused.ply path}
+    merged_ortho=...,
+    merged_dsm=...,
+    merged_laz=...,
+    cluster_paths=...,      # {cid: {"ortho": ..., "dsm": ...}}
+    gsd_cm=3.0,
+    group="all",
+)
+```
+
+This is what `01b` calls once per group, after fusing every cluster's depth maps into a
+`fused.ply`. It:
+
+1. places every cluster's dense point cloud into **one shared ENU frame** via
+   `place_clusters_shared_enu`, so per-cluster clouds line up rather than merely
+   overlapping visually;
+2. writes a **per-cluster** ortho + DSM GeoTIFF pair for each entry in `cluster_paths`;
+3. writes **sharded per-cluster LAZ parts** through the `lidar_gbx` DataSource writer, then
+   folds them into one **`dense_merged.laz`** with `overlap="drop"` — a seam-de-duplicated
+   union, not a raw concatenation that double-counts points in the overlap band; and
+4. writes one **merged, co-registered** ortho + DSM over all clusters
+   (`merged_ortho`/`merged_dsm`).
+
+It returns the list of cluster ids that produced usable points and the path to the merged
+LAZ — or, if the merge step is skipped because the cloud exceeds the merge memory budget,
+the directory of sharded parts (still readable through the `lidar_gbx` reader as a
+directory of parts). `spark` is an explicit parameter, not a notebook global, so the
+function can be called from any context holding a session. Requires the `photogrammetry`
+extra (`pycolmap`).
+
+### `place_clusters_shared_enu` — shared-frame alignment
+
+```python
+placement = ortho.place_clusters_shared_enu(cluster_models)  # {cid: (sparse_dir, gps_json)}
+# placement: {"T": {cid: (scale, R, t)}, "ref_lat", "ref_lon", "ref_alt", "gps_tf",
+#             "aligned", "n_tied", "anchor", "centers", "gps", "sizes"}
+```
+
+Aligns every GPS cluster's COLMAP reconstruction into one shared ENU (east-north-up,
+metres) frame. The largest cluster becomes the anchor — georeferenced to its own GPS
+priors via a least-squares Sim(3) fit (`umeyama_sim3`). Each remaining cluster is then tied
+to the already-placed set through cameras it **shares** with them (matching image names)
+rather than fit to GPS independently, so neighboring clusters agree in the overlap band; a
+cluster with no shared cameras falls back to its own GPS fit. A single-cluster input
+degenerates to the anchor-only case, matching a direct GPS fit of that one cluster.
+Requires `pycolmap`.
+
+### `rasterize_enu_ortho` — ENU cloud to ortho + DSM
+
+```python
+ortho_path, dsm_path = ortho.rasterize_enu_ortho(
+    xe, ye, ze, r, g, b,          # ENU-metre points + per-point color
+    ref_lat, ref_lon, ref_alt,    # shared ENU reference (from place_clusters_shared_enu)
+    gps_tf,                       # a pycolmap.GPSTransform, or None
+    out_ortho, out_dsm,
+    gsd_cm=3.0,
+)
+```
+
+Top-surface-rasterizes a colored ENU point cloud into a georeferenced RGB ortho and DSM
+(both EPSG:4326 GeoTIFFs). The corner used to anchor the raster's georeferencing depends on
+`gps_tf`:
+
+- **a `pycolmap.GPSTransform`** (the path `dense_clusters_to_products` uses) — the corner
+  comes from `gps_tf.enu_to_ellipsoid`, an ellipsoidal conversion, for fidelity;
+- **`None`** — the corner falls back to `core.crs.enu_to_lonlat`, a tier-neutral
+  equirectangular (local-tangent-plane) approximation, so the function runs with **no
+  optional dependency at all**. This is an approximation, not equivalent to the `gps_tf`
+  path — it exists for local testability, not as an interchangeable alternative.
+
+### Pure Sim(3) primitives
+
+`umeyama_sim3(src, dst)` fits a least-squares similarity transform — scale, rotation, and
+translation — mapping one `(N, 3)` point set onto another (Umeyama, 1991), returning
+`(scale, R, t)`; it raises if fewer than 3 non-degenerate point pairs are given.
+`apply_sim3(T, pts)` applies that `(scale, R, t)` tuple to an `(N, 3)` point array. Both are
+plain NumPy — no `pycolmap` dependency — and are the building blocks
+`place_clusters_shared_enu` composes into a multi-cluster alignment.
+
+### Geodesy primitives (`core.crs`)
+
+Two tier-neutral helpers in `databricks.labs.gbx.core.crs` support the ENU workflow above
+and are usable on their own:
+
+- `utm_epsg_for(lon, lat)` — the WGS84 UTM zone EPSG code (`326zz` north / `327zz` south)
+  for a representative lon/lat. `dense_clusters_to_products` uses it to pick the metric
+  projected CRS for the exported LAZ, so the point cloud carries real metre units instead
+  of a geographic CRS forcing a coarse LAS scale in degrees.
+- `enu_to_lonlat(east, north, ref_lat, ref_lon)` / `lonlat_to_enu(lon, lat, ref_lat,
+  ref_lon)` — the equirectangular (local-tangent-plane) approximation converting between
+  ENU metres and lon/lat around a reference point. Take scalars or NumPy arrays. This is a
+  linearized approximation, not a geodesically exact projection — see
+  [Coordinate Reference Systems](../api/coordinate-reference-systems) for GeoBrix's
+  general CRS handling.
 
 ---
 

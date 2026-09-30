@@ -30,6 +30,7 @@ Light-only, Serverless-safe: no ``spark.conf``/``_jvm``/``.rdd``/``sparkContext`
 
 import base64
 import json
+import time
 
 import shapely.geometry
 import shapely.wkb
@@ -259,29 +260,48 @@ def create_endpoint(
     return _serving_create(endpoint_name, config, profile=profile)
 
 
-def _serving_create(endpoint_name, config, *, profile) -> dict:
-    """Real seam: mlflow deployments client ``create_endpoint`` + poll BOTH
-    ``state.ready == "READY"`` and ``state.config_update == "NOT_UPDATING"`` (per the
-    databricks-model-serving skill: ``state.ready`` alone can read READY mid a
-    version-swap while the old version still serves). Mocked by tests -- never
-    exercised without mlflow/network in CI.
-    """
-    import time
+def _await_ready(
+    get_info, *, timeout_s=1800.0, poll_s=10.0, _sleep=time.sleep, _clock=time.monotonic
+) -> dict:
+    """Poll ``get_info()`` until the serving endpoint is ready, or raise.
 
+    READY == ``state.ready == "READY"`` AND ``state.config_update == "NOT_UPDATING"``
+    (per the databricks-model-serving skill: ``state.ready`` alone can read READY mid
+    a version-swap while the old version still serves). Raises ``RuntimeError`` on a
+    terminal ``config_update`` state (``UPDATE_FAILED`` / ``UPDATE_CANCELED``), and
+    ``TimeoutError`` once ``timeout_s`` elapses without becoming ready. ``_sleep``/
+    ``_clock`` are injectable seams so tests can drive this without a real sleep or
+    wall-clock wait.
+    """
+    start = _clock()
+    while True:
+        info = get_info()
+        state = info.get("state", {})
+        cu = state.get("config_update")
+        if state.get("ready") == "READY" and cu == "NOT_UPDATING":
+            return info
+        if cu in ("UPDATE_FAILED", "UPDATE_CANCELED"):
+            raise RuntimeError(
+                f"serving endpoint entered terminal state: config_update={cu}"
+            )
+        if _clock() - start > timeout_s:
+            raise TimeoutError(
+                f"serving endpoint not ready after {timeout_s:.0f}s (last config_update={cu})"
+            )
+        _sleep(poll_s)
+
+
+def _serving_create(endpoint_name, config, *, profile) -> dict:
+    """Real seam: mlflow deployments client ``create_endpoint`` + bounded readiness
+    poll via ``_await_ready`` (30 min default timeout -- the GPU/provisioned-throughput
+    serving ceiling). Mocked by tests -- never exercised without mlflow/network in CI.
+    """
     from mlflow.deployments import get_deploy_client
 
     _apply_profile_auth(profile)
     client = get_deploy_client("databricks")
     client.create_endpoint(name=endpoint_name, config=config)
-    while True:
-        info = client.get_endpoint(endpoint=endpoint_name)
-        state = info.get("state", {})
-        if (
-            state.get("ready") == "READY"
-            and state.get("config_update") == "NOT_UPDATING"
-        ):
-            return info
-        time.sleep(10)
+    return _await_ready(lambda: client.get_endpoint(endpoint=endpoint_name))
 
 
 def query(endpoint_name, image, *, profile) -> dict:

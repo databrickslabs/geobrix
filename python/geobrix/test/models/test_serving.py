@@ -186,6 +186,55 @@ def test_create_endpoint_uses_serving_seam(monkeypatch):
     assert entity["scale_to_zero_enabled"] is True
 
 
+def test_await_ready_returns_final_info_once_ready():
+    """A get_info that reports NOT_READY/IN_PROGRESS a couple times, then
+    READY+NOT_UPDATING, must return that final info. No real sleep -- _sleep is a
+    no-op seam."""
+    responses = [
+        {"state": {"ready": "NOT_READY", "config_update": "IN_PROGRESS"}},
+        {"state": {"ready": "NOT_READY", "config_update": "IN_PROGRESS"}},
+        {"state": {"ready": "READY", "config_update": "NOT_UPDATING"}},
+    ]
+    calls = {"n": 0}
+
+    def _get_info():
+        info = responses[calls["n"]]
+        calls["n"] += 1
+        return info
+
+    out = serving._await_ready(_get_info, _sleep=lambda s: None)
+    assert out == {"state": {"ready": "READY", "config_update": "NOT_UPDATING"}}
+    assert calls["n"] == 3
+
+
+def test_await_ready_raises_on_terminal_failure():
+    def _get_info():
+        return {"state": {"ready": "NOT_READY", "config_update": "UPDATE_FAILED"}}
+
+    with pytest.raises(RuntimeError):
+        serving._await_ready(_get_info, _sleep=lambda s: None)
+
+
+def test_await_ready_raises_on_timeout():
+    """A get_info that never becomes ready must raise TimeoutError once timeout_s
+    elapses -- driven by a fake _clock so the test does not actually sleep."""
+    clock = {"t": 0.0}
+
+    def _get_info():
+        return {"state": {"ready": "NOT_READY", "config_update": "IN_PROGRESS"}}
+
+    def _sleep(s):
+        clock["t"] += s
+
+    def _clock():
+        return clock["t"]
+
+    with pytest.raises(TimeoutError):
+        serving._await_ready(
+            _get_info, timeout_s=5.0, poll_s=10.0, _sleep=_sleep, _clock=_clock
+        )
+
+
 def test_query_uses_serving_seam(monkeypatch):
     calls = {}
 

@@ -2,6 +2,7 @@ import sqlite3
 from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from databricks.labs.gbx.pyrx.sfm import _assemble_colmap_db, image_ids_to_pair_id
 
@@ -77,3 +78,19 @@ def test_assemble_colmap_db(tmp_path):
     con.close()
     assert has_gps is True
     assert (b1, b2) == (1, 3)   # best init = the 5-match pair, sorted
+
+
+def test_extract_features_udf_smoke(tmp_path):
+    pytest.importorskip("pycolmap")
+    import pandas as pd
+    from pathlib import Path
+    from databricks.labs.gbx.pyrx.sfm import _extract_features_to_df
+
+    # Use a checked-in fixture image if present; else skip (SIFT needs real texture).
+    fixtures = list((Path(__file__).parent / "data").glob("*.jpg"))
+    if not fixtures:
+        pytest.skip("no fixture JPEG for SIFT extraction")
+    pdf = pd.DataFrame({"source": [str(fixtures[0])]})
+    out = pd.concat(list(_extract_features_to_df(iter([pdf]))), ignore_index=True)
+    assert list(out.columns)[:2] == ["source", "keypoints"]
+    assert {"descriptors", "cam_model", "cam_w", "cam_h", "gps_pos"} <= set(out.columns)

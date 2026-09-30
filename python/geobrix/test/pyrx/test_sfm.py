@@ -103,3 +103,22 @@ def test_find_geo_pairs_requires_dbr():
     from databricks.labs.gbx.pyrx import sfm
     assert callable(sfm._find_geo_pairs)
     pytest.skip("ST_DistanceSphere is DBR-native; _find_geo_pairs validated on-cluster (nb1a)")
+
+
+def test_module_imports_without_pycolmap():
+    # pyrx.sfm must import on the light tier; run_sfm exists and is keyword-strict.
+    import inspect
+    from databricks.labs.gbx.pyrx import sfm
+    sig = inspect.signature(sfm.run_sfm)
+    params = sig.parameters
+    assert list(params)[0] == "spark"
+    # feature_table / match_table / max_pair_dist_m are REQUIRED keyword-only (no default)
+    assert params["feature_table"].default is inspect.Parameter.empty
+    assert params["match_table"].default is inspect.Parameter.empty
+    assert params["max_pair_dist_m"].default is inspect.Parameter.empty
+    assert params["feature_table"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["match_table"].kind is inspect.Parameter.KEYWORD_ONLY
+    assert params["max_pair_dist_m"].kind is inspect.Parameter.KEYWORD_ONLY
+    # force_* replaced do_overwrite_*
+    assert {"force_features", "force_matches", "force_master"} <= set(params)
+    assert not any(p.startswith("do_overwrite") for p in params)

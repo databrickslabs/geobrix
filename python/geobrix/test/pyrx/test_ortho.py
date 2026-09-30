@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from databricks.labs.gbx.pyrx.ortho import apply_sim3, umeyama_sim3
+from databricks.labs.gbx.pyrx.ortho import apply_sim3, rasterize_enu_ortho, umeyama_sim3
 
 
 def test_umeyama_recovers_known_transform():
@@ -80,3 +80,38 @@ def test_place_clusters_shared_enu_available(_):
     # against, and this environment has no pycolmap install to check it with.
     # This asserts the gated symbol exists and the module imported without
     # pycolmap at top level (see test_module_imports_without_pycolmap).
+
+
+def test_rasterize_enu_ortho_writes_geotiffs(tmp_path):
+    # gps_tf=None -- the equirectangular path must run with no pycolmap.
+    import rasterio
+
+    rng = np.random.default_rng(0)
+    n = 2000
+    xe = rng.uniform(-10, 10, n)
+    ye = rng.uniform(-10, 10, n)
+    ze = rng.uniform(0, 5, n)
+    r = rng.integers(0, 255, n).astype("uint8")
+    g = r.copy()
+    b = r.copy()
+    op = tmp_path / "o.tif"
+    dp = tmp_path / "d.tif"
+    ortho, dsm = rasterize_enu_ortho(
+        xe,
+        ye,
+        ze,
+        r,
+        g,
+        b,
+        ref_lat=37.8,
+        ref_lon=-122.4,
+        ref_alt=0.0,
+        gps_tf=None,
+        out_ortho=str(op),
+        out_dsm=str(dp),
+        gsd_cm=50.0,
+    )
+    with rasterio.open(ortho) as ds:
+        assert ds.count >= 3 and ds.crs is not None
+    with rasterio.open(dsm) as ds:
+        assert ds.count == 1

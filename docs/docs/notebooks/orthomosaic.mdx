@@ -90,16 +90,15 @@ The core pipeline:
 ### `01b_sfm_orthomosaic_gpu` (optional) — dense MVS on GPU
 
 An optional GPU notebook that upgrades the sparse result to a **dense** reconstruction. It
-loads the persisted sparse model from `01a`, undistorts each GPS cluster, and runs COLMAP
-`patch_match_stereo` across the node's GPUs via `dense_mvs_pool` (a driver-side GPU-slot
-scheduler sized by `recommend_dense_allocation`), then fuses the depth maps into a
-per-cluster `fused.ply`. From there it calls the tested library module `pyrx.ortho` —
-`ortho.dense_clusters_to_products` places every cluster in one shared ENU frame and
-georeferences the result into a dense RGB orthomosaic, DSM, and LAZ point cloud
-(per-cluster and merged); see the `pyrx.ortho` module reference further down this page for
-its full API. Runs on the **Serverless GPU AI Runtime** (environment 5, `pycolmap-cuda12`,
-CUDA 12); `01a` is the CPU peer that produces the sparse model it consumes. `02_publish`
-automatically uses the dense orthomosaic when present.
+loads the persisted sparse model from `01a` and, per group, makes one call —
+`ortho.dense_orthomosaic` — that reconstructs every GPS cluster (undistort, COLMAP
+`patch_match_stereo` across the node's GPUs via a driver-side GPU-slot scheduler sized by
+`recommend_dense_allocation`, and fuse to a per-cluster `fused.ply`, with per-cluster
+checkpointing) and then georeferences the result into a dense RGB orthomosaic, DSM, and
+LAZ point cloud (per-cluster and merged); see the `pyrx.ortho` module reference further
+down this page for its full API. Runs on the **Serverless GPU AI Runtime** (environment 5,
+`pycolmap-cuda12`, CUDA 12); `01a` is the CPU peer that produces the sparse model it
+consumes. `02_publish` automatically uses the dense orthomosaic when present.
 
 ### `02_publish` — color correction → COG → PMTiles
 
@@ -202,9 +201,88 @@ rasterization, and per-cluster/merged product export live in
 dependency: the pure math (`umeyama_sim3`, `apply_sim3`, and `rasterize_enu_ortho` when
 called with `gps_tf=None`) is plain NumPy and imports with no optional dependency. The
 orchestration functions that actually drive a dense reconstruction
-(`place_clusters_shared_enu`, `dense_clusters_to_products`) import `pycolmap` lazily inside
-their own bodies and raise a clear `ImportError` when it is missing — install the
-`photogrammetry` extra to use them.
+(`place_clusters_shared_enu`, `dense_clusters_to_products`, `dense_reconstruct_clusters`,
+`dense_orthomosaic`) import `pycolmap` lazily — directly, or through the primitives they
+call — and raise a clear `ImportError` when it is missing — install the `photogrammetry`
+extra to use them.
+
+### `dense_orthomosaic` — dense orthomosaic in one call
+
+```python
+from databricks.labs.gbx import pyrx as rx
+from databricks.labs.gbx.pyrx import ortho
+
+used_cids, merged_laz_path = ortho.dense_orthomosaic(
+    spark,
+    cluster_models,        # {cid: (sparse_dir, gps_json)}
+    image_dir,
+    merged_ortho="/Volumes/.../orthomosaic_dense.tif",
+    merged_dsm="/Volumes/.../dsm_dense.tif",
+    merged_laz="/Volumes/.../dense_merged.laz",
+    cluster_paths={              # {cid: {"ortho": ..., "dsm": ...}}
+        cid: {"ortho": f"/Volumes/.../ortho_dense_{cid}.tif",
+              "dsm": f"/Volumes/.../dsm_dense_{cid}.tif"}
+        for cid in cluster_models
+    },
+    work_root="/local_disk0/tmp/dense",
+    ply_root="/Volumes/.../dense",
+    checkpoint=rx.Manifest("/Volumes/.../checkpoint.json"),
+    gsd_cm=3.0,
+    max_image_size=1600,
+    geom_consistency=True,
+)
+```
+
+`dense_orthomosaic` is the one-call entry point for dense MVS on **net-new data**:
+reconstruct every GPS cluster — undistort, patch-match stereo across the node's GPUs,
+fuse to a point cloud — then georeference and export the ortho/DSM/LAZ products, all in
+one call. It composes two library functions: the mid-level `dense_reconstruct_clusters`
+(below) for reconstruction, then `dense_clusters_to_products` (above) for shared-ENU
+placement and product export.
+
+It takes every output path (`merged_ortho`, `merged_dsm`, `merged_laz`, `cluster_paths`)
+and an optional checkpoint `Manifest` as explicit arguments, and `spark` is an explicit
+parameter rather than a notebook global — so, unlike a hand-wired notebook cell, it has no
+dependency on notebook-specific config helpers and can be called from any context holding
+a session. `checkpoint=None` disables skip/resume (always recomputes); `ply_root=None`
+keeps fused point clouds local under `work_root` with no Volume copy; `force=True` bypasses
+the checkpoint. It raises `RuntimeError` when every cluster's reconstruction failed (no
+points to place) rather than calling `dense_clusters_to_products` with nothing. Returns
+`(used_cids, path_to_dense_merged_laz)` — the same shape as `dense_clusters_to_products`.
+Requires the `photogrammetry` extra (`pycolmap`).
+
+### `dense_reconstruct_clusters` — reconstruction only
+
+For callers who want to drive reconstruction and georeferencing/products separately — for
+example, reconstructing once and rasterizing at more than one `gsd_cm`, or reconstructing
+now and deferring products to a later step — the mid-level `dense_reconstruct_clusters`
+(re-exported directly on `pyrx`, not `pyrx.ortho`) does just the reconstruction half that
+`dense_orthomosaic` composes:
+
+```python
+plys = rx.dense_reconstruct_clusters(
+    cluster_models,        # {cid: (sparse_dir, gps_json)}
+    image_dir,
+    work_root="/local_disk0/tmp/dense",
+    ply_root="/Volumes/.../dense",
+    checkpoint=rx.Manifest("/Volumes/.../checkpoint.json"),
+    geom_consistency=True,
+)
+# plys: {cid: fused.ply path}
+
+used_cids, merged_laz_path = ortho.dense_clusters_to_products(
+    spark, cluster_models, plys,
+    merged_ortho=..., merged_dsm=..., merged_laz=..., cluster_paths=..., gsd_cm=3.0,
+)
+```
+
+For each cluster it undistorts against the sparse model, runs one
+`recommend_dense_allocation` plus a patch-match pool over the to-do set, and fuses to
+`fused.ply` — skipping clusters already checkpointed (unless `force=True`) and dropping
+clusters whose patch-match failed (reported through `on_event`, when given). `geom_consistency`
+threads to both the patch-match pass and the fuse step. Returns `{cid: fused.ply path}`,
+including checkpointed clusters — exactly what `dense_orthomosaic` calls internally before
+handing the result to `dense_clusters_to_products`.
 
 ### `dense_clusters_to_products` — the dense entry point
 

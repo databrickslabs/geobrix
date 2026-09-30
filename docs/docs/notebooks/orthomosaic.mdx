@@ -325,6 +325,118 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
 
 ---
 
+## The `pyrx.sfm` module
+
+`01a`'s SIFT extraction → GPS pair discovery → matching → mapping pipeline is, like the
+dense pass, not bespoke notebook code — it lives in `databricks.labs.gbx.pyrx.sfm`, a
+tested library module. The module imports on the light tier with **no optional
+dependency** at all; `pycolmap` is imported lazily, inside `run_sfm`'s master-DB-assembly
+and mapping stage only, and raises a clear `ImportError` there if missing — install the
+`photogrammetry` extra to actually run reconstruction.
+
+### `run_sfm` — distributed sparse SfM for one group of images
+
+```python
+from databricks.labs.gbx.pyrx import sfm
+
+result = sfm.run_sfm(
+    spark,
+    df_qc=df_cluster,          # Spark DataFrame: 'source' column (image paths) + GPS geometry
+    image_dir=img_path,
+    output_dir="/local_disk0/tmp/sfm/cluster_0",
+    group_key="grp_c0",
+    feature_table=f"{catalog}.{schema}.extracted_features_grp_c0",
+    match_table=f"{catalog}.{schema}.verified_matches_grp_c0",
+    max_pair_dist_m=50.0,
+    force_features=False,
+    force_matches=False,
+    force_master=False,
+    persist_dir="/Volumes/.../sfm_persist/cluster_0",
+    serialize_extract=False,
+)
+# result: {"sparse_dir", "gps_json", "models", "registered"}  (or "reused": True)
+```
+
+`run_sfm` runs sparse SfM for one group (typically one GPS cluster) of drone images
+end-to-end, in five stages:
+
+1. **Distributed feature extraction** — SIFT features are extracted per-image as a Spark
+   `mapInPandas` map (one task per image, fanned out via `repartition(n, "source")`) and
+   written to the caller-supplied `feature_table`.
+2. **GPS pair discovery** — `ST_DistanceSphere` (a Databricks-runtime built-in) filters
+   candidate image pairs to those within `max_pair_dist_m` metres of each other, keeping
+   pair count linear in image count instead of the exhaustive, quadratic alternative.
+3. **Distributed matching** — each candidate pair is matched with `pycolmap`'s CPU matcher
+   as a further `mapInPandas` map, and verified two-view geometries are written to
+   `match_table`.
+4. **COLMAP master-DB assembly** — the extracted features and verified matches are
+   collected to the driver and assembled into one COLMAP SQLite database, including
+   GPS-prior encoding and best-init-pair selection.
+5. **Incremental mapping** — `pycolmap.incremental_mapping` runs on the driver over the
+   assembled database, recovering camera poses and a sparse 3-D point cloud.
+
+Parameters:
+
+- **`spark`** — the `SparkSession`, an explicit argument rather than a notebook global.
+- **`df_qc`** — a Spark DataFrame with a `source` column (full path to each JPEG) and,
+  typically, a GPS geometry column as produced by the `exif_gbx` reader.
+- **`image_dir`** — the POSIX path to the JPEG directory backing `df_qc`.
+- **`output_dir`** — the persistent storage root for this run's SfM artifacts (the COLMAP
+  master DB, the `sparse` model directory, and the GPS-prior JSON).
+- **`group_key`** (optional) — a string label used only for the `master_sfm` database
+  filename and log lines; pass a per-cluster id when calling `run_sfm` once per GPS
+  cluster.
+- **`feature_table`, `match_table`** (required, keyword-only) — caller-controlled,
+  fully-qualified Delta table names (e.g. `catalog.schema.extracted_features_grp_c0`) that
+  back the extracted-feature and verified-match caches. `run_sfm` reuses a non-empty table
+  across calls unless the matching `force_*` flag is set; `feature_table` additionally
+  treats an existing-but-empty table as stale and rebuilds it automatically, rather than
+  silently producing zero matches downstream.
+- **`max_pair_dist_m`** (required, keyword-only) — the GPS pairing radius, in metres, used
+  by the `ST_DistanceSphere` pair-discovery query.
+- **`force_features`, `force_matches`, `force_master`** — force re-extraction,
+  re-matching, or re-assembly/re-mapping even when the corresponding table or artifact
+  already exists.
+- **`persist_dir`** (optional) — a durable storage root (typically a Unity Catalog Volume)
+  for cross-run reuse of a finished sparse model. When a prior run's `sparse` directory and
+  GPS-prior JSON already exist there and `force_master=False`, `run_sfm` copies them in and
+  returns immediately (`reused: True`) instead of re-running mapping. The COLMAP master
+  SQLite database itself cannot live on a Volume, and local scratch is ephemeral per job —
+  this is the cross-run reuse path.
+- **`serialize_extract`** — forces single-partition (`coalesce(1)`) feature extraction, an
+  out-of-memory fallback that runs one SIFT extraction at a time instead of fanning out, at
+  the cost of wall-clock time.
+
+Returns a `dict` with `sparse_dir` (the COLMAP sparse-model directory path), `gps_json`
+(the path to the persisted GPS-prior JSON), `models` (the number of reconstructions
+`incremental_mapping` produced, `None` on the reuse and pre-existing-database paths), and
+`registered` (the number of images registered into the model, likewise `None` on those
+paths) — plus `reused: True` when the result came from the `persist_dir` short-circuit.
+Raises `RuntimeError` if feature extraction yields zero images or matching yields zero
+verified pairs.
+
+`run_sfm` imports cleanly on the light (`pyrx`) tier with no `pycolmap` installed — only
+reaching the master-DB-assembly/mapping stage requires it, and that import is lazy and
+gated. `01a` calls `run_sfm` once per GPS cluster with per-cluster `feature_table` /
+`match_table` names and a per-cluster `persist_dir` subdirectory, retrying with
+`serialize_extract=True` after repeated worker out-of-memory errors.
+
+### `image_ids_to_pair_id` — the COLMAP pair-id primitive
+
+```python
+from databricks.labs.gbx.pyrx.sfm import image_ids_to_pair_id
+
+pair_id = image_ids_to_pair_id(image_id1, image_id2)
+```
+
+Encodes two COLMAP image ids into the single integer pair id that COLMAP's
+`two_view_geometries` table keys on, matching COLMAP's own convention: the smaller id is
+always ordered first (the two ids are swapped beforehand if needed), and the result is
+`2147483647 * id1 + id2`. Pure integer arithmetic with no `pycolmap` dependency —
+`run_sfm` uses it internally when assembling the master database's verified-match rows.
+
+---
+
 ## The `pyrx.ortho` module
 
 `01b`'s dense pass is not bespoke notebook code — the shared-frame alignment, cloud

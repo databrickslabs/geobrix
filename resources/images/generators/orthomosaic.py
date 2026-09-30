@@ -377,7 +377,7 @@ def g_percentile_stretch(cx, cy, color, tint, *, scale=1.0):
     return "".join(out)
 
 def g_cog_file(cx, cy, color, tint, *, scale=1.0):
-    """A single dog-eared COG file icon — cloud-optimised GeoTIFF glyph."""
+    """A single dog-eared COG file icon — cloud-optimized GeoTIFF glyph."""
     w, h = 76 * scale, 96 * scale
     x, y = cx - w / 2, cy - h / 2
     ear = 16 * scale
@@ -719,14 +719,14 @@ NOTEBOOKS = {
     "02": {
         "badge": "02", "series_pill": "Orthomosaic Series  ·  02_publish",
         "title": "Publish: color correction to PMTiles",
-        "subtitle": "percentile stretch → cloud-optimised GeoTIFF → XYZ pyramid → PMTiles archive",
+        "subtitle": "percentile stretch → cloud-optimized GeoTIFF → XYZ pyramid → PMTiles archive",
         "compute_badge": None,
         "stages": [
             Stage(title="Color correction",
                   subtitle="rst_percentile_stretch applies a per-channel percentile clip, producing orthomosaic_corrected.tif with balanced contrast",
                   glyph=g_percentile_stretch,
                   chip_text="rst_percentile_stretch"),
-            Stage(title="Cloud-optimised GeoTIFF",
+            Stage(title="Cloud-optimized GeoTIFF",
                   subtitle="cog_gbx writer converts the corrected raster to a COG with internal tiling and overview levels — orthomosaic_cog.tif",
                   glyph=g_cog_file,
                   chip_text="cog_gbx"),

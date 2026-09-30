@@ -12,7 +12,7 @@ import TabItem from '@theme/TabItem';
 A notebook series that takes a **raw drone image dataset** end-to-end through
 EXIF/GPS telemetry extraction, quality screening, Structure-from-Motion (SfM)
 reconstruction, georeferenced orthomosaic production, and object + land-cover
-classification — from individual JPEGs to a cloud-optimised GeoTIFF ready for tile
+classification — from individual JPEGs to a cloud-optimized GeoTIFF ready for tile
 serving, and on to georeferenced object polygons and a land-cover region map. Sparse
 reconstruction runs on CPU; an optional dense pass and the object-segmentation part of
 the capstone run on GPU (land cover runs on CPU).
@@ -111,7 +111,7 @@ consumes. `02_publish` automatically uses the dense orthomosaic when present.
 
 ### `02_publish` — color correction → COG → PMTiles
 
-![Notebook 02 — rst_percentile_stretch color correction, cog_gbx to a Cloud-Optimised GeoTIFF, gbx_rst_xyzpyramid tiling, and pmtiles_gbx to a PMTiles archive](../../../resources/images/diagrams/orthomosaic/orthomosaic-02.png)
+![Notebook 02 — rst_percentile_stretch color correction, cog_gbx to a Cloud-Optimized GeoTIFF, gbx_rst_xyzpyramid tiling, and pmtiles_gbx to a PMTiles archive](../../../resources/images/diagrams/orthomosaic/orthomosaic-02.png)
 
 A single publish notebook that turns `orthomosaic.tif` into web-ready deliverables in
 three checkpointed stages:
@@ -119,7 +119,7 @@ three checkpointed stages:
 1. **Color correction** — a per-channel percentile stretch (configurable low/high clip
    percentiles) produces `orthomosaic_corrected.tif` with balanced contrast, persisted so
    the served COG and PMTiles carry it.
-2. **Cloud-optimised GeoTIFF** — the `cog_gbx` writer converts the corrected raster to a
+2. **Cloud-optimized GeoTIFF** — the `cog_gbx` writer converts the corrected raster to a
    COG with internal tiling and overview levels, producing `orthomosaic_cog.tif` for
    efficient range-request reads downstream.
 3. **PMTiles** — the COG is warped onto the WebMercatorQuad grid with `gbx_rst_xyzpyramid`
@@ -300,13 +300,13 @@ reconstruction statistics (registered images, 3-D points) while `01a_sfm_orthomo
 - **`pyrx.gsd_from_telemetry`** — `gsd_from_telemetry(focal_length_mm, altitude, image_width,
   sensor_width_mm)` returns ground sampling distance in cm/pixel. Used to confirm the dataset
   meets the target GSD before reconstruction.
-- **`cog_gbx` writer** — converts the corrected orthomosaic to Cloud-Optimised GeoTIFF
+- **`cog_gbx` writer** — converts the corrected orthomosaic to Cloud-Optimized GeoTIFF
   layout (internal tiling + overviews) via GDAL's `driver="COG"` path. See
   [COG writer](../writers/cog).
 - **`pmtiles_gbx` writer** — encodes the COG orthomosaic into a PMTiles archive for
   browser-based preview. See [PMTiles writer](../writers/pmtiles).
 - **`gbx.vizx` helpers** — `plot_raster` renders the orthomosaic tile in the notebook
-  (auto-decimation + percentile stretch, `bands=(1,2,3)` for true-colour). See
+  (auto-decimation + percentile stretch, `bands=(1,2,3)` for true-color). See
   [Visualization API](../api/vizx).
 - **`gbx.models.runner.segment_raster`** — chips a raster, fans GeoSAM inference across
   1..N GPUs, and stitches georeferenced object polygons back together. Used by

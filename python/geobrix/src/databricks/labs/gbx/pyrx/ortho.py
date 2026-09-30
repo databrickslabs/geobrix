@@ -20,9 +20,9 @@ import numpy as np
 import rasterio
 from rasterio.transform import from_origin
 
-from databricks.labs.gbx.core.crs import enu_to_lonlat, resolve_crs
+from databricks.labs.gbx.core.crs import enu_to_lonlat, resolve_crs, utm_epsg_for
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
-from databricks.labs.gbx.pyrx.imagery import zbuffer_ortho
+from databricks.labs.gbx.pyrx.imagery import read_fused_ply, zbuffer_ortho
 
 
 def umeyama_sim3(src, dst):
@@ -397,3 +397,242 @@ def place_clusters_shared_enu(cluster_models):
         "gps": gps,
         "sizes": sizes,
     }
+
+
+def _enu_to_utm(xe, ye, ze, ref_lat, ref_lon):
+    """Reproject shared-ENU-metre points to the local UTM zone so the exported LAZ
+    carries a real *metric* projected CRS (a geographic CRS would force a coarse
+    LAS scale in degrees). ENU->lon/lat uses the same equirectangular
+    linearisation as the ortho georeferencing; lon/lat->UTM via pyproj.
+
+    UTM zone selection is :func:`databricks.labs.gbx.core.crs.utm_epsg_for`
+    (Task 1) rather than inline zone arithmetic — this is the one adaptation
+    from ``_enu_to_utm`` in ``config_nb`` cell ``1ee46ad5``; the reprojection
+    itself (``pyproj.Transformer.from_crs(4326, epsg, always_xy=True)``) is
+    unchanged. Returns ``(easting, northing, up, epsg)``.
+    """
+    import pyproj
+
+    xe = np.asarray(xe, dtype="float64")
+    ye = np.asarray(ye, dtype="float64")
+    dpm_lat = 1.0 / 111320.0
+    dpm_lon = 1.0 / (111320.0 * np.cos(np.radians(ref_lat)))
+    lon = ref_lon + xe * dpm_lon
+    lat = ref_lat + ye * dpm_lat
+    epsg = utm_epsg_for(ref_lon, ref_lat)
+    tf = pyproj.Transformer.from_crs(4326, epsg, always_xy=True)
+    east, north = tf.transform(lon, lat)
+    return np.asarray(east), np.asarray(north), np.asarray(ze, dtype="float64"), epsg
+
+
+def _write_dense_laz_dataset(spark, cluster_points, out_dir, crs=None):
+    """cluster_points: list of (group, cluster, xe, ye, ze, r, g, b) numpy tuples.
+    Assemble a points DataFrame, repartitionByRange by (group, cluster) to
+    guarantee exactly one (group,cluster) key per partition, and write sharded
+    *_<group>_<cluster>.laz via lidar_gbx. Per-cluster numpy arrays are
+    concatenated into a single pandas DataFrame (Arrow-backed), avoiding a
+    monolithic per-point Row list that OOMs the driver for large clouds."""
+    import numpy as _np
+    import pandas as _pd
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    n_parts = max(1, len(cluster_points))
+    per_cluster = []
+    for group, cluster, xe, ye, ze, r, g, b in cluster_points:
+        n = len(xe)
+        if n == 0:
+            continue
+        per_cluster.append(
+            _pd.DataFrame(
+                {
+                    "x": _np.asarray(xe, dtype=_np.float64),
+                    "y": _np.asarray(ye, dtype=_np.float64),
+                    "z": _np.asarray(ze, dtype=_np.float64),
+                    "r": _np.asarray(r, dtype=_np.int32),
+                    "g": _np.asarray(g, dtype=_np.int32),
+                    "b": _np.asarray(b, dtype=_np.int32),
+                    "group": _np.full(n, str(group)),
+                    "cluster": _np.full(n, int(cluster), dtype=_np.int64),
+                }
+            )
+        )
+    if not per_cluster:
+        return out_dir
+    pdf = _pd.concat(per_cluster, ignore_index=True)
+    df = spark.createDataFrame(pdf)
+    writer = (
+        df.repartitionByRange(n_parts, "group", "cluster")
+        .write.format("lidar_gbx")
+        .option("groupCol", "group")
+        .option("clusterCol", "cluster")
+        .option("fileName", "dense")
+        .mode("overwrite")
+    )
+    if crs is not None:
+        writer = writer.option("crs", str(crs))
+    writer.save(out_dir)
+    return out_dir
+
+
+def _merge_dense_laz(spark, out_dir, file_name="dense_merged", crs=None):
+    """Phase 2: fold the sharded *_<group>_<cluster>.laz parts under out_dir into
+    one merged <file_name>.laz, KEEPING the per-cluster parts (keepParts). merge
+    ignores the DataFrame rows (it folds the on-disk parts). overlap="drop"
+    makes the merge seam-de-duplicated: the writer assigns each seam point to
+    exactly one owning cluster (nearest-cluster ownership) instead of a raw
+    concatenation that duplicates overlap-band points under overlap="keep" (the
+    writer default) — so the merged cloud is a non-redundant union. The merge
+    budget is sized to the executing node's available RAM (compute-aware): an
+    AIR or classic-GPU node with large host RAM handles large clouds; a
+    minimal CPU node falls back to a conservative 512 MiB floor. The merge only
+    skips gracefully (sharded parts remain the canonical artifact) if the cloud
+    exceeds even that measured budget. Pass crs= to tag the merged file
+    (belt-and-suspenders over the writer-side CRS inference from the first part
+    header)."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    writer = (
+        spark.createDataFrame([(1,)], ["_"])  # merge ignores rows; folds parts
+        .write.format("lidar_gbx")
+        .option("merge", "true")
+        .option("keepParts", "true")
+        .option("overlap", "drop")  # seam-de-duplicated union (v2 seam-unification)
+        .option("fileName", file_name)
+        .mode("append")
+    )
+    if crs is not None:
+        writer = writer.option("crs", str(crs))
+    writer.save(out_dir)
+    return out_dir
+
+
+def dense_clusters_to_products(
+    spark,
+    cluster_models,
+    dense_plys,
+    *,
+    merged_ortho,
+    merged_dsm,
+    merged_laz,
+    cluster_paths,
+    gsd_cm=3.0,
+    group="all",
+):
+    """Place every cluster's fused.ply in ONE shared ENU frame (anchor GPS +
+    shared-camera ties, mirroring accumulate_orthomosaic), then write:
+      * per-cluster ortho/DSM  (cluster_paths[cid] -> {'ortho', 'dsm'})
+      * sharded per-cluster LAZ parts via lidar_gbx (phase 1)
+      * dense_merged.laz merged from all parts via lidar_gbx (phase 2,
+        keepParts, overlap="drop" — seam-de-duplicated non-redundant union)
+      * one MERGED, co-registered ortho/DSM over all clusters (merged_ortho/dsm).
+
+    Rasters are EPSG:4326; LAZ clouds are reprojected to the shared local UTM
+    zone (metric CRS) and written via the lidar_gbx DataSource writer.
+    cluster_models: {cid: (sparse_dir, gps_json)}; dense_plys: {cid: fused.ply}.
+    ``spark`` is an explicit parameter (it was a notebook global in
+    ``config_nb`` cell ``1ee46ad5``) and is threaded to the LAZ-writer helpers.
+    Returns ``(used_cids, path_to_dense_merged_laz)``.
+    """
+    placement = place_clusters_shared_enu(cluster_models)
+    ref_lat = placement["ref_lat"]
+    ref_lon = placement["ref_lon"]
+    ref_alt = placement["ref_alt"]
+    gps_tf = placement["gps_tf"]
+
+    agg = {k: [] for k in ("x", "y", "z", "r", "g", "b")}
+    used = []
+    used_points = []  # (group, cluster, ux, uy, uz, r, g, b) for phase-1 write
+    last_epsg = None
+    for cid in placement["aligned"]:
+        ply = dense_plys.get(cid)
+        if not ply or not Path(ply).exists():
+            print(f"[dense-merge] cluster {cid}: no fused.ply — skipped", flush=True)
+            continue
+        try:
+            cloud = read_fused_ply(str(ply))
+            pts = apply_sim3(
+                placement["T"][cid],
+                np.column_stack([cloud["x"], cloud["y"], cloud["z"]]),
+            )
+            xe, ye, ze = pts[:, 0], pts[:, 1], pts[:, 2]
+            r, g, b = cloud["r"], cloud["g"], cloud["b"]
+            cp = cluster_paths[cid]
+            rasterize_enu_ortho(
+                xe,
+                ye,
+                ze,
+                r,
+                g,
+                b,
+                ref_lat,
+                ref_lon,
+                ref_alt,
+                gps_tf,
+                cp["ortho"],
+                cp["dsm"],
+                gsd_cm,
+            )
+            ux, uy, uz, epsg = _enu_to_utm(xe, ye, ze, ref_lat, ref_lon)
+            last_epsg = epsg
+            used_points.append((group, int(cid), ux, uy, uz, r, g, b))
+            for k, v in zip(("x", "y", "z", "r", "g", "b"), (xe, ye, ze, r, g, b)):
+                agg[k].append(v)
+            used.append(cid)
+        except Exception as e:
+            print(f"[dense][skip] cluster {cid}: {e}", flush=True)
+            continue
+    if not used:
+        raise RuntimeError("dense_clusters_to_products: no cluster produced points")
+
+    X, Y, Z = (np.concatenate(agg[k]) for k in ("x", "y", "z"))
+    R, G, B = (np.concatenate(agg[k]) for k in ("r", "g", "b"))
+    print(
+        f"[dense-merge] merging {len(used)} clusters -> {len(X):,} points", flush=True
+    )
+    rasterize_enu_ortho(
+        X,
+        Y,
+        Z,
+        R,
+        G,
+        B,
+        ref_lat,
+        ref_lon,
+        ref_alt,
+        gps_tf,
+        merged_ortho,
+        merged_dsm,
+        gsd_cm,
+    )
+    # Phase 1: assemble all clusters' UTM points into a Spark DataFrame and write
+    # sharded *_<group>_<cluster>.laz via the lidar_gbx DataSource writer.
+    # repartitionByRange on (group, cluster) gives deterministic one-partition-
+    # per-cluster isolation over the fixed key-set, so each shard carries
+    # exactly one cluster's points and the filename is guaranteed correct.
+    dense_laz_dir = str(Path(merged_laz).parent)
+    _write_dense_laz_dataset(spark, used_points, dense_laz_dir, crs=last_epsg)
+    # Phase 2 (best-effort): fold the sharded parts into dense_merged.laz with
+    # overlap="drop" (seam-de-duplicated, non-redundant union). The merge gate
+    # raises when the estimated cloud exceeds driver RAM (~256 MiB); on failure
+    # the sharded parts (phase 1) are already written and remain readable as a
+    # directory of parts via the lidar_gbx reader.
+    try:
+        _merge_dense_laz(spark, dense_laz_dir, crs=last_epsg)
+        merged = str(Path(dense_laz_dir) / "dense_merged.laz")
+    except Exception as e:
+        print(
+            f"[dense] phase-2 merge skipped ({e}); sharded parts remain the "
+            "canonical artifact",
+            flush=True,
+        )
+        merged = dense_laz_dir  # directory of parts — lidar_gbx reader accepts this
+    return used, merged

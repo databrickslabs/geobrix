@@ -82,6 +82,20 @@ def test_place_clusters_shared_enu_available(_):
     # pycolmap at top level (see test_module_imports_without_pycolmap).
 
 
+def test_dense_clusters_to_products_available():
+    pytest.importorskip("pycolmap")
+    import inspect
+
+    from databricks.labs.gbx.pyrx.ortho import dense_clusters_to_products
+
+    sig = inspect.signature(dense_clusters_to_products)
+    # spark is now an EXPLICIT first parameter (was a notebook global).
+    assert list(sig.parameters)[0] == "spark"
+    # A full run needs a tiny fused .ply + pycolmap models + a spark session; where
+    # those are available, assert it returns (used_cids, merged_laz_path) and the
+    # merged LAZ round-trips through the lidar_gbx reader.
+
+
 def test_rasterize_enu_ortho_writes_geotiffs(tmp_path):
     # gps_tf=None -- the equirectangular path must run with no pycolmap.
     import rasterio

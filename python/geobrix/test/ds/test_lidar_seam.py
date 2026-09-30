@@ -1,3 +1,6 @@
+import itertools
+
+import numpy as np
 import pytest
 from pyspark.sql.types import DoubleType, StructField, StructType
 
@@ -5,6 +8,7 @@ from databricks.labs.gbx.ds._write_lidar import (
     LidarGbxWriter,
     _part_cluster_meta,
     _reject_v2_options,
+    _seam_select,
 )
 
 _XYZ = StructType([StructField(c, DoubleType()) for c in ("x", "y", "z")])
@@ -345,3 +349,262 @@ def test_commit_merge_overlap_and_voxel_roundtrips(spark, tmp_path):
     real = real if real.exists() else tmp_path / "u.las"
     df = spark.read.format("lidar_gbx").option("mode", "metadata").load(str(real))
     assert df.collect()[0]["point_count"] >= 1
+
+
+# ---------------------------------------------------------------------------
+# _seam_select vectorization: oracle-equivalence + constructed-tie tests
+# ---------------------------------------------------------------------------
+
+
+def _ref_nearest_owner(x: float, y: float, centers: dict, bboxes: dict) -> str:
+    """Faithful copy of the (removed) scalar `_nearest_owner` reference."""
+    cand = [
+        cid
+        for cid, (xmin, xmax, ymin, ymax) in bboxes.items()
+        if xmin <= x <= xmax and ymin <= y <= ymax
+    ]
+    best, best_d = None, None
+    for cid in sorted(cand):
+        cx, cy = centers[cid]
+        d = (x - cx) ** 2 + (y - cy) ** 2
+        if best_d is None or d < best_d:
+            best, best_d = cid, d
+    return best
+
+
+def _ref_seam_select(
+    x, y, z, r, g, b, part_ids, meta, *, overlap_drop, dedupe_exact, voxel_size, has_rgb
+):
+    """Faithful scalar reimplementation of the ORIGINAL per-point loop in
+    `_merge_laz_parts_seam` (before vectorization) — the oracle for equivalence
+    testing. Operates on in-memory arrays instead of re-reading LAZ parts."""
+    n = len(x)
+    kx, ky, kz, kr, kg, kb = [], [], [], [], [], []
+    seen = set() if dedupe_exact else None
+    v = voxel_size
+    cells = {} if v else None  # cell -> (dist2_to_center, (x,y,z,r,g,b))
+
+    def _emit(xx, yy, zz, rr, gg, bb):
+        if seen is not None:
+            key = (
+                (round(xx, 3), round(yy, 3), round(zz, 3), rr, gg, bb)
+                if has_rgb
+                else (round(xx, 3), round(yy, 3), round(zz, 3))
+            )
+            if key in seen:
+                return
+            seen.add(key)
+        if cells is not None:
+            cx = (xx // v + 0.5) * v
+            cy = (yy // v + 0.5) * v
+            cz = (zz // v + 0.5) * v
+            d2 = (xx - cx) ** 2 + (yy - cy) ** 2 + (zz - cz) ** 2
+            cell = (int(xx // v), int(yy // v), int(zz // v))
+            cur = cells.get(cell)
+            if cur is None or d2 < cur[0]:
+                cells[cell] = (d2, (xx, yy, zz, rr, gg, bb))
+            return
+        kx.append(xx)
+        ky.append(yy)
+        kz.append(zz)
+        if has_rgb:
+            kr.append(rr)
+            kg.append(gg)
+            kb.append(bb)
+
+    for i in range(n):
+        xx, yy, zz = float(x[i]), float(y[i]), float(z[i])
+        if overlap_drop:
+            owner = _ref_nearest_owner(xx, yy, meta["center"], meta["bbox"])
+            if owner != part_ids[i]:
+                continue  # another cluster owns this seam point
+        rr = int(r[i]) if has_rgb else 0
+        gg = int(g[i]) if has_rgb else 0
+        bb = int(b[i]) if has_rgb else 0
+        _emit(xx, yy, zz, rr, gg, bb)
+
+    if cells is not None:
+        for _d2, (xx, yy, zz, rr, gg, bb) in cells.values():
+            kx.append(xx)
+            ky.append(yy)
+            kz.append(zz)
+            if has_rgb:
+                kr.append(rr)
+                kg.append(gg)
+                kb.append(bb)
+
+    return (
+        np.asarray(kx, dtype=np.float64),
+        np.asarray(ky, dtype=np.float64),
+        np.asarray(kz, dtype=np.float64),
+        np.asarray(kr, dtype=np.uint8),
+        np.asarray(kg, dtype=np.uint8),
+        np.asarray(kb, dtype=np.uint8),
+    )
+
+
+def _canon_rows(x, y, z, r, g, b, has_rgb):
+    """Canonical row ordering (lexsort) for set-equality comparison of kept points."""
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    if has_rgb:
+        r = np.asarray(r, dtype=np.int64)
+        g = np.asarray(g, dtype=np.int64)
+        b = np.asarray(b, dtype=np.int64)
+        order = np.lexsort((b, g, r, z, y, x))
+        return np.stack(
+            [x[order], y[order], z[order], r[order], g[order], b[order]], axis=1
+        )
+    order = np.lexsort((z, y, x))
+    return np.stack([x[order], y[order], z[order]], axis=1)
+
+
+def _make_random_case(rng, overlap_drop, has_rgb):
+    """Random points + (when overlap_drop) a consistent meta/part_ids: bboxes that
+    cover each part's own points, with deliberate seam overlap between neighbors."""
+    n = int(rng.integers(150, 300))
+    x = rng.uniform(0.0, 6.0, n)
+    y = rng.uniform(0.0, 3.0, n)
+    z = rng.uniform(0.0, 2.0, n)
+    if has_rgb:
+        r = rng.integers(0, 256, n).astype(np.uint8)
+        g = rng.integers(0, 256, n).astype(np.uint8)
+        b = rng.integers(0, 256, n).astype(np.uint8)
+    else:
+        r = np.zeros(n, dtype=np.uint8)
+        g = np.zeros(n, dtype=np.uint8)
+        b = np.zeros(n, dtype=np.uint8)
+
+    # Force some exact mm-rounded duplicate keys so dedupe has real work to do.
+    dup_n = min(20, n // 4)
+    if dup_n:
+        src = rng.integers(0, n, dup_n)
+        dst = rng.integers(0, n, dup_n)
+        x[dst] = np.round(x[src], 3)
+        y[dst] = np.round(y[src], 3)
+        z[dst] = np.round(z[src], 3)
+        if has_rgb:
+            r[dst] = r[src]
+            g[dst] = g[src]
+            b[dst] = b[src]
+
+    meta = None
+    part_ids = None
+    if overlap_drop:
+        ncluster = int(rng.integers(2, 6))
+        width = 6.0 / ncluster
+        margin = width * 0.3  # deliberate seam overlap between neighbor bboxes
+        cids = [str(i) for i in range(ncluster)]
+        bbox = {}
+        center = {}
+        for i, cid in enumerate(cids):
+            xmin, xmax = i * width - margin, (i + 1) * width + margin
+            bbox[cid] = (xmin, xmax, -1.0, 4.0)
+            center[cid] = ((xmin + xmax) / 2.0, 1.5)
+        meta = {"center": center, "bbox": bbox}
+        home = np.clip((x // width).astype(int), 0, ncluster - 1)
+        part_ids = np.array([cids[h] for h in home], dtype=object)
+
+    return x, y, z, r, g, b, part_ids, meta
+
+
+def test_seam_select_oracle_equivalence():
+    combos = list(
+        itertools.product((False, True), (False, True), (None, 0.5), (False, True))
+    )
+    for overlap_drop, dedupe_exact, voxel_size, has_rgb in combos:
+        for seed in range(25):
+            rng = np.random.default_rng(
+                seed * 1000 + hash((overlap_drop, dedupe_exact, has_rgb)) % 997
+            )
+            x, y, z, r, g, b, part_ids, meta = _make_random_case(
+                rng, overlap_drop, has_rgb
+            )
+            prod = _seam_select(
+                x,
+                y,
+                z,
+                r,
+                g,
+                b,
+                part_ids,
+                meta,
+                overlap_drop=overlap_drop,
+                dedupe_exact=dedupe_exact,
+                voxel_size=voxel_size,
+                has_rgb=has_rgb,
+            )
+            ref = _ref_seam_select(
+                x,
+                y,
+                z,
+                r,
+                g,
+                b,
+                part_ids,
+                meta,
+                overlap_drop=overlap_drop,
+                dedupe_exact=dedupe_exact,
+                voxel_size=voxel_size,
+                has_rgb=has_rgb,
+            )
+            ctx = (
+                f"overlap_drop={overlap_drop} dedupe_exact={dedupe_exact} "
+                f"voxel_size={voxel_size} has_rgb={has_rgb} seed={seed}"
+            )
+            assert len(prod[0]) == len(ref[0]), f"kept-count mismatch: {ctx}"
+            prod_rows = _canon_rows(*prod, has_rgb=has_rgb)
+            ref_rows = _canon_rows(*ref, has_rgb=has_rgb)
+            assert np.array_equal(prod_rows, ref_rows), f"kept-set mismatch: {ctx}"
+
+
+def test_seam_select_dedupe_keeps_first_of_near_duplicate():
+    # Both round(_, 3) to 1.000 but have different unrounded coords -> kept point
+    # must be the FIRST occurrence's real (unrounded) coords.
+    x = np.array([1.0001, 1.0004])
+    y = np.array([2.0, 2.0])
+    z = np.array([3.0, 3.0])
+    zeros = np.zeros(2, dtype=np.uint8)
+    kx, ky, kz, kr, kg, kb = _seam_select(
+        x,
+        y,
+        z,
+        zeros,
+        zeros,
+        zeros,
+        None,
+        None,
+        overlap_drop=False,
+        dedupe_exact=True,
+        voxel_size=None,
+        has_rgb=False,
+    )
+    assert len(kx) == 1
+    assert kx[0] == pytest.approx(1.0001, abs=1e-12)
+
+
+def test_seam_select_voxel_tie_keeps_earliest():
+    # Two points in the same 1.0 voxel cell [0,1)^3, exactly equidistant from the
+    # cell center (0.5,0.5,0.5) -> strict "<" in the original loop means the
+    # EARLIEST stream-index point wins the tie.
+    x = np.array([0.4, 0.6])
+    y = np.array([0.5, 0.5])
+    z = np.array([0.5, 0.5])
+    zeros = np.zeros(2, dtype=np.uint8)
+    kx, ky, kz, kr, kg, kb = _seam_select(
+        x,
+        y,
+        z,
+        zeros,
+        zeros,
+        zeros,
+        None,
+        None,
+        overlap_drop=False,
+        dedupe_exact=False,
+        voxel_size=1.0,
+        has_rgb=False,
+    )
+    assert len(kx) == 1
+    assert kx[0] == pytest.approx(0.4)

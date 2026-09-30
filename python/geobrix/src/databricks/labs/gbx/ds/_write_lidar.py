@@ -249,22 +249,155 @@ def _merge_laz_parts(inputs: List[str], tmp_path: str, has_rgb: bool, crs) -> in
     return int(len(x))
 
 
-def _nearest_owner(x: float, y: float, centers: dict, bboxes: dict) -> str:
-    """Cluster id owning point (x,y): nearest center among clusters whose bbox
-    covers (x,y). Ties -> lowest id (string-sorted). Covering set is never empty
-    (the point's own cluster bbox always contains it)."""
-    cand = [
-        cid
-        for cid, (xmin, xmax, ymin, ymax) in bboxes.items()
-        if xmin <= x <= xmax and ymin <= y <= ymax
-    ]
-    best, best_d = None, None
-    for cid in sorted(cand):
-        cx, cy = centers[cid]
-        d = (x - cx) ** 2 + (y - cy) ** 2
-        if best_d is None or d < best_d:
-            best, best_d = cid, d
-    return best
+_OVERLAP_CHUNK = 262_144  # bounds the (block x K) working set for the overlap filter
+
+
+def _seam_select(
+    x,
+    y,
+    z,
+    r,
+    g,
+    b,
+    part_ids,
+    meta,
+    *,
+    overlap_drop: bool,
+    dedupe_exact: bool,
+    voxel_size,
+    has_rgb: bool,
+):
+    """Vectorized seam selection. x,y,z: float64 (N,); r,g,b: uint8 (N,) (zeros
+    when not has_rgb); part_ids: (N,) array of the per-point owning-part cid
+    (object/str dtype), only used when overlap_drop; meta: the
+    ``_part_cluster_meta`` dict (or None). Returns the kept arrays
+    (kx,ky,kz,kr,kg,kb) — preserving the exact kept-point SET the original
+    per-point loop produced. Stages compose in order: overlap filter -> dedupe
+    first-occurrence -> voxel nearest-center (tie -> earliest index).
+    """
+    x = np.asarray(x, dtype=np.float64)
+    y = np.asarray(y, dtype=np.float64)
+    z = np.asarray(z, dtype=np.float64)
+    n = x.shape[0]
+    if has_rgb:
+        r = np.asarray(r, dtype=np.uint8)
+        g = np.asarray(g, dtype=np.uint8)
+        b = np.asarray(b, dtype=np.uint8)
+    else:
+        r = np.zeros(n, dtype=np.uint8)
+        g = np.zeros(n, dtype=np.uint8)
+        b = np.zeros(n, dtype=np.uint8)
+
+    # Tracks each surviving row's ABSOLUTE position in the original stream
+    # (input order); this is the tie-break key the voxel stage needs, since
+    # only survivors of stages 1-2 ever reach voxel routing.
+    idx = np.arange(n)
+
+    # --- Stage 1: overlap filter (owner cid must equal the point's own part) ---
+    if overlap_drop and n:
+        cids = sorted(meta["bbox"])
+        cids_arr = np.array(cids, dtype=object)
+        centers = np.array([meta["center"][c] for c in cids], dtype=np.float64)
+        bboxes = np.array([meta["bbox"][c] for c in cids], dtype=np.float64)
+        pid_arr = np.asarray(part_ids, dtype=object)
+        keep = np.zeros(n, dtype=bool)
+        for start in range(0, n, _OVERLAP_CHUNK):
+            end = min(start + _OVERLAP_CHUNK, n)
+            xb = x[start:end, None]
+            yb = y[start:end, None]
+            cover = (
+                (xb >= bboxes[:, 0])
+                & (xb <= bboxes[:, 1])
+                & (yb >= bboxes[:, 2])
+                & (yb <= bboxes[:, 3])
+            )
+            d2 = (xb - centers[:, 0]) ** 2 + (yb - centers[:, 1]) ** 2
+            d2 = np.where(cover, d2, np.inf)
+            # argmin returns the FIRST index of the minimum -> lowest sorted cid
+            # wins ties, matching the scalar reference's `sorted(cand)` + strict `<`.
+            owner_idx = np.argmin(d2, axis=1)
+            keep[start:end] = cids_arr[owner_idx] == pid_arr[start:end]
+        x, y, z, r, g, b, idx = (
+            x[keep],
+            y[keep],
+            z[keep],
+            r[keep],
+            g[keep],
+            b[keep],
+            idx[keep],
+        )
+        n = x.shape[0]
+
+    # --- Stage 2: dedupe first-occurrence (mm-rounded key) ---
+    if dedupe_exact and n:
+        xr, yr, zr = np.round(x, 3), np.round(y, 3), np.round(z, 3)
+        if has_rgb:
+            keys = np.empty(
+                n,
+                dtype=[
+                    ("x", "f8"),
+                    ("y", "f8"),
+                    ("z", "f8"),
+                    ("r", "u1"),
+                    ("g", "u1"),
+                    ("b", "u1"),
+                ],
+            )
+            keys["r"], keys["g"], keys["b"] = r, g, b
+        else:
+            keys = np.empty(n, dtype=[("x", "f8"), ("y", "f8"), ("z", "f8")])
+        keys["x"], keys["y"], keys["z"] = xr, yr, zr
+        # np.unique(return_index=True) uses a stable sort internally, so the
+        # returned indices are the FIRST occurrence of each unique key.
+        _, first = np.unique(keys, return_index=True)
+        first = np.sort(first)  # restore stream order among survivors
+        x, y, z, r, g, b, idx = (
+            x[first],
+            y[first],
+            z[first],
+            r[first],
+            g[first],
+            b[first],
+            idx[first],
+        )
+        n = x.shape[0]
+
+    # --- Stage 3: voxel nearest-center routing (tie -> earliest stream index) ---
+    if voxel_size is not None and n:
+        v = float(voxel_size)
+        cx = np.floor(x / v)
+        cy = np.floor(y / v)
+        cz = np.floor(z / v)
+        d2 = (
+            (x - (cx + 0.5) * v) ** 2
+            + (y - (cy + 0.5) * v) ** 2
+            + (z - (cz + 0.5) * v) ** 2
+        )
+        cxi, cyi, czi = cx.astype(np.int64), cy.astype(np.int64), cz.astype(np.int64)
+        # Primary key = cell (cxi,cyi,czi); secondary = d2 ascending; tertiary =
+        # original stream index ascending (earliest wins strict-< ties in d2).
+        # lexsort's LAST key is primary, so list least- to most-significant.
+        order = np.lexsort((idx, d2, czi, cyi, cxi))
+        cxi_s, cyi_s, czi_s = cxi[order], cyi[order], czi[order]
+        new_group = np.ones(n, dtype=bool)
+        if n > 1:
+            new_group[1:] = (
+                (cxi_s[1:] != cxi_s[:-1])
+                | (cyi_s[1:] != cyi_s[:-1])
+                | (czi_s[1:] != czi_s[:-1])
+            )
+        keep_pos = np.sort(order[new_group])  # restore stream order among kept cells
+        x, y, z, r, g, b, idx = (
+            x[keep_pos],
+            y[keep_pos],
+            z[keep_pos],
+            r[keep_pos],
+            g[keep_pos],
+            b[keep_pos],
+            idx[keep_pos],
+        )
+
+    return x, y, z, r, g, b
 
 
 def _merge_laz_parts_seam(
@@ -278,107 +411,83 @@ def _merge_laz_parts_seam(
     voxel_size,
     part_prefix: str = "part",
 ) -> int:
-    """Streaming seam-aware merge. Processes one part at a time; keeps a bounded
-    working set; writes one .laz via write_xyz(rgb)_laz; returns the kept count.
+    """Vectorized seam-aware merge. Reads each part, concatenates x/y/z(/RGB) in
+    ``inputs`` order, hands the concatenated arrays to ``_seam_select`` (the
+    vectorized computational core), and writes one .laz via write_xyz(rgb)_laz.
+    Returns the kept count.
 
-    Implements ``overlap_drop`` (seam-point ownership via ``_nearest_owner``),
-    ``dedupe_exact`` (millimetre-rounded exact-key dedup, gating ``_emit``), and
-    ``voxel_size`` (keeps one real point per cubic voxel cell — the input point
-    nearest the cell's geometric center; never a synthesized average). The three
-    stages compose in order: dedupe's ``seen`` gate runs first, then the voxel
-    cell routing.
+    Implements ``overlap_drop`` (seam-point ownership: nearest cluster center
+    among clusters whose bbox covers the point), ``dedupe_exact`` (millimetre-
+    rounded exact-key dedup, first-occurrence wins), and ``voxel_size`` (keeps
+    one real point per cubic voxel cell — the input point nearest the cell's
+    geometric center; never a synthesized average). The three stages compose in
+    order: overlap filter -> dedupe gate -> voxel cell routing.
     """
     import laspy
 
     from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
 
-    if crs is None and inputs:
+    if not inputs:
+        return 0
+
+    if crs is None:
         crs = _infer_crs_from_parts(inputs)
 
     meta = _part_cluster_meta(inputs, part_prefix) if overlap_drop else None
 
-    # Kept-point accumulators (voxel_size routes through `cells` instead; see below).
-    kx, ky, kz, kr, kg, kb = [], [], [], [], [], []
-
-    seen = set() if dedupe_exact else None
-
-    v = voxel_size
-    cells = {} if v else None  # cell -> (dist2_to_center, (x,y,z,r,g,b))
-
-    def _emit(x, y, z, r, g, b):
-        if seen is not None:
-            key = (
-                (round(x, 3), round(y, 3), round(z, 3), r, g, b)
-                if has_rgb
-                else (round(x, 3), round(y, 3), round(z, 3))
-            )
-            if key in seen:
-                return
-            seen.add(key)
-        if cells is not None:
-            cx = (x // v + 0.5) * v
-            cy = (y // v + 0.5) * v
-            cz = (z // v + 0.5) * v
-            d2 = (x - cx) ** 2 + (y - cy) ** 2 + (z - cz) ** 2
-            cell = (int(x // v), int(y // v), int(z // v))
-            cur = cells.get(cell)
-            if cur is None or d2 < cur[0]:
-                cells[cell] = (d2, (x, y, z, r, g, b))
-            return
-        kx.append(x)
-        ky.append(y)
-        kz.append(z)
-        if has_rgb:
-            kr.append(r)
-            kg.append(g)
-            kb.append(b)
-
+    xs_all, ys_all, zs_all, rs_all, gs_all, bs_all, pid_all = [], [], [], [], [], [], []
     for p in inputs:
         las = laspy.read(p)
-        xs = np.asarray(las.x)
-        ys = np.asarray(las.y)
-        zs = np.asarray(las.z)
+        xs = np.asarray(las.x, dtype=np.float64)
+        xs_all.append(xs)
+        ys_all.append(np.asarray(las.y, dtype=np.float64))
+        zs_all.append(np.asarray(las.z, dtype=np.float64))
         if has_rgb:
-            rs = (np.asarray(las.red) >> 8).astype(np.uint8)
-            gs = (np.asarray(las.green) >> 8).astype(np.uint8)
-            bs = (np.asarray(las.blue) >> 8).astype(np.uint8)
-        cid_p = meta["per_part"][p] if overlap_drop else None
-        for i in range(len(xs)):
-            x, y, z = float(xs[i]), float(ys[i]), float(zs[i])
-            if overlap_drop:
-                owner = _nearest_owner(x, y, meta["center"], meta["bbox"])
-                if owner != cid_p:
-                    continue  # another cluster owns this seam point
-            r = int(rs[i]) if has_rgb else 0
-            g = int(gs[i]) if has_rgb else 0
-            b = int(bs[i]) if has_rgb else 0
-            _emit(x, y, z, r, g, b)
+            rs_all.append((np.asarray(las.red) >> 8).astype(np.uint8))
+            gs_all.append((np.asarray(las.green) >> 8).astype(np.uint8))
+            bs_all.append((np.asarray(las.blue) >> 8).astype(np.uint8))
+        if overlap_drop:
+            pid_all.append(np.full(len(xs), meta["per_part"][p], dtype=object))
 
-    if cells is not None:
-        for _d2, (x, y, z, r, g, b) in cells.values():
-            kx.append(x)
-            ky.append(y)
-            kz.append(z)
-            if has_rgb:
-                kr.append(r)
-                kg.append(g)
-                kb.append(b)
+    x = np.concatenate(xs_all)
+    y = np.concatenate(ys_all)
+    z = np.concatenate(zs_all)
+    n = len(x)
+    r = np.concatenate(rs_all) if has_rgb else np.zeros(n, dtype=np.uint8)
+    g = np.concatenate(gs_all) if has_rgb else np.zeros(n, dtype=np.uint8)
+    b = np.concatenate(bs_all) if has_rgb else np.zeros(n, dtype=np.uint8)
+    part_ids = np.concatenate(pid_all) if overlap_drop else None
 
-    if not kx:
+    kx, ky, kz, kr, kg, kb = _seam_select(
+        x,
+        y,
+        z,
+        r,
+        g,
+        b,
+        part_ids,
+        meta,
+        overlap_drop=overlap_drop,
+        dedupe_exact=dedupe_exact,
+        voxel_size=voxel_size,
+        has_rgb=has_rgb,
+    )
+
+    if len(kx) == 0:
         return 0  # nothing survived; caller (Task 6) retains parts, skips publish
     if has_rgb:
         write_xyzrgb_laz(
             tmp_path,
-            np.asarray(kx),
-            np.asarray(ky),
-            np.asarray(kz),
+            kx,
+            ky,
+            kz,
             np.asarray(kr, np.uint8),
             np.asarray(kg, np.uint8),
             np.asarray(kb, np.uint8),
             crs=crs,
         )
     else:
-        write_xyz_laz(tmp_path, np.asarray(kx), np.asarray(ky), np.asarray(kz), crs=crs)
+        write_xyz_laz(tmp_path, kx, ky, kz, crs=crs)
     return len(kx)
 
 

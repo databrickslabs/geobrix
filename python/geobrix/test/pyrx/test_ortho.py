@@ -45,3 +45,38 @@ def test_module_imports_without_pycolmap():
 
     m = importlib.import_module("databricks.labs.gbx.pyrx.ortho")
     assert hasattr(m, "umeyama_sim3") and hasattr(m, "apply_sim3")
+
+
+def test_place_clusters_shared_enu_requires_pycolmap_with_clear_message():
+    # No pycolmap installed locally -> the lazy import must raise a clear,
+    # actionable ImportError rather than a bare ModuleNotFoundError. Import
+    # directly (not via sys.modules, which another test may have populated)
+    # to decide whether this environment can even exercise the failure path.
+    import importlib
+
+    try:
+        importlib.import_module("pycolmap")
+    except ImportError:
+        pass
+    else:
+        pytest.skip("pycolmap is importable in this environment")
+
+    m = importlib.import_module("databricks.labs.gbx.pyrx.ortho")
+    with pytest.raises(ImportError, match="place_clusters_shared_enu"):
+        m.place_clusters_shared_enu(
+            {0: ("/nonexistent/sparse", "/nonexistent/gps.json")}
+        )
+
+
+@pytest.mark.parametrize("_", [0])
+def test_place_clusters_shared_enu_available(_):
+    pytest.importorskip("pycolmap")
+    from databricks.labs.gbx.pyrx.ortho import place_clusters_shared_enu
+
+    assert callable(place_clusters_shared_enu)
+    # A full functional test needs a synthetic pycolmap Reconstruction; building
+    # one (cameras + posed images + an on-disk sparse model pycolmap can load)
+    # is not cheaply feasible without pycolmap available to author and verify it
+    # against, and this environment has no pycolmap install to check it with.
+    # This asserts the gated symbol exists and the module imported without
+    # pycolmap at top level (see test_module_imports_without_pycolmap).

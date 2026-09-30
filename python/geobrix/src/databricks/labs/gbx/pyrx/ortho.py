@@ -580,13 +580,19 @@ def sparse_orthomosaic(
             zc = float(np.median(pe[:, 2]))
             ground = pe[np.abs(pe[:, 2] - zc) < 20]
         else:
-            cen = apply_sim3(Tc, np.array([im.projection_center()
-                                            for _, im in rec.images.items() if im.has_pose]))
+            cen = apply_sim3(
+                Tc,
+                np.array(
+                    [im.projection_center() for _, im in rec.images.items() if im.has_pose]
+                ),
+            )
             zc = float(cen[:, 2].mean() - 250)
             ground = cen
         cluster_z[cid] = zc
-        e_min = min(e_min, ground[:, 0].min()); e_max = max(e_max, ground[:, 0].max())
-        n_min = min(n_min, ground[:, 1].min()); n_max = max(n_max, ground[:, 1].max())
+        e_min = min(e_min, ground[:, 0].min())
+        e_max = max(e_max, ground[:, 0].max())
+        n_min = min(n_min, ground[:, 1].min())
+        n_max = max(n_max, ground[:, 1].max())
         del rec
         gc.collect()
 
@@ -620,7 +626,8 @@ def sparse_orthomosaic(
             t_cw = cfw.translation
             C_enu = apply_sim3(T_cid, image.projection_center())
             with PILImage.open(ip) as pim:
-                pim.draft("RGB", (cw, ch)); pim.load()
+                pim.draft("RGB", (cw, ch))
+                pim.load()
                 if pim.width != cw or pim.height != ch:
                     pim = pim.resize((cw, ch), PILImage.BILINEAR)
                 src_rgb = np.array(pim.convert("RGB"), dtype=np.float32)

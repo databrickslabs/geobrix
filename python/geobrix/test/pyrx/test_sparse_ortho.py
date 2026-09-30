@@ -16,8 +16,9 @@ def _nadir_case(height_m=40.0, cam_w=64, cam_h=48, f=50.0):
     # canvas: 2 m span around the footprint, 5 cm px
     gsd_m = 0.05
     e_min, e_max, n_min, n_max = -1.0, 1.0, -1.0, 1.0
-    out_w = int((e_max - e_min) / gsd_m); out_h = int((n_max - n_min) / gsd_m)
-    return dict(src_rgb=src, cam_f=f, cam_cx=cam_w/2, cam_cy=cam_h/2, cam_w=cam_w, cam_h=cam_h,
+    out_w = int((e_max - e_min) / gsd_m)
+    out_h = int((n_max - n_min) / gsd_m)
+    return dict(src_rgb=src, cam_f=f, cam_cx=cam_w / 2, cam_cy=cam_h / 2, cam_w=cam_w, cam_h=cam_h,
                 R_cw=R_cw, t_cw=t_cw, T_cid=T_cid, C_enu=C_enu, z_med=0.0,
                 e_min=e_min, n_max=n_max, gsd_m=gsd_m, out_w=out_w, out_h=out_h, blend_gamma=4.0)
 

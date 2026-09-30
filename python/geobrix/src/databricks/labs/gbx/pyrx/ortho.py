@@ -1,5 +1,6 @@
 """pyrx.ortho — dense-photogrammetry orchestration (Sim(3) alignment, shared-ENU
-cluster placement, dense-cloud -> ortho/DSM/LAZ products).
+cluster placement, dense-cloud -> ortho/DSM/LAZ products), plus the lighter-weight
+``sparse_orthomosaic`` blender that skips the dense point cloud entirely.
 
 The Sim(3) primitives (``umeyama_sim3``, ``apply_sim3``) and the ENU-cloud
 rasterizer (``rasterize_enu_ortho``) are pure numpy and import cleanly with no

@@ -160,6 +160,60 @@ def test_register_uses_uc_registry(monkeypatch):
     assert "geobrix" in " ".join(calls["pip_reqs"])  # geobrix rides into the served env
 
 
+def test_register_bundles_wheel_via_code_paths(monkeypatch):
+    """mlflow's private-wheel pattern (the fix): code_paths=[wheel_path] bundles the
+    wheel INTO the model (mlflow copies it to code/<basename> -- no subdirs), and
+    pip_requirements must reference that BUNDLED path, not the original
+    file:///Volumes/... URI, which the Model Serving container build cannot reach --
+    that unreachable-URI install is the bug this fixes."""
+    calls = {}
+    monkeypatch.setattr(
+        serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
+    )
+    serving.register_to_unity_gateway(object(), "cat.sch.geosam", profile="oauth-fe")
+    assert calls["code_paths"] == [serving.DEFAULT_WHEEL_PATH]
+    pip_reqs_str = " ".join(calls["pip_reqs"])
+    assert "code/geobrix-0.5.2-py3-none-any.whl[models_gpu_env5]" in pip_reqs_str
+    assert "segment-geospatial" in pip_reqs_str
+    assert "file:///Volumes" not in pip_reqs_str
+
+
+def test_register_wheel_path_override_changes_pip_reqs(monkeypatch):
+    """A caller-supplied wheel_path (e.g. a different staged version) must flow through
+    to BOTH code_paths and the bundled-basename pip requirement -- not just one."""
+    calls = {}
+    monkeypatch.setattr(
+        serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
+    )
+    serving.register_to_unity_gateway(
+        object(),
+        "cat.sch.geosam",
+        profile="oauth-fe",
+        wheel_path="/Volumes/x/y/geobrix-9.9.9-py3-none-any.whl",
+    )
+    assert calls["code_paths"] == ["/Volumes/x/y/geobrix-9.9.9-py3-none-any.whl"]
+    assert "code/geobrix-9.9.9-py3-none-any.whl[models_gpu_env5]" in " ".join(
+        calls["pip_reqs"]
+    )
+
+
+def test_register_pip_reqs_override_still_passes_code_paths(monkeypatch):
+    """An explicit pip_reqs= override replaces the computed default, but code_paths
+    (the wheel bundling itself) is always passed regardless."""
+    calls = {}
+    monkeypatch.setattr(
+        serving, "_mlflow_log_and_register", lambda **k: calls.update(k) or "3"
+    )
+    serving.register_to_unity_gateway(
+        object(),
+        "cat.sch.geosam",
+        profile="oauth-fe",
+        pip_reqs=["some-other-pkg"],
+    )
+    assert calls["pip_reqs"] == ["some-other-pkg"]
+    assert calls["code_paths"] == [serving.DEFAULT_WHEEL_PATH]
+
+
 def test_create_endpoint_uses_serving_seam(monkeypatch):
     calls = {}
 

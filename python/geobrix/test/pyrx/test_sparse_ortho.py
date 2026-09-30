@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 
 from databricks.labs.gbx.pyrx.ortho import _backproject_image
 
@@ -67,3 +68,13 @@ def test_sparse_orthomosaic_signature_light_import():
     assert p["gsd_cm"].default == 3.0 and p["max_workers"].default == 8 and p["blend_gamma"].default == 4.0
     for kw in ("gsd_cm", "max_workers", "blend_gamma"):
         assert p[kw].kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_sparse_orthomosaic_end_to_end(tmp_path):
+    pytest.importorskip("pycolmap")
+    # A meaningful end-to-end needs a real posed reconstruction + overlapping imagery,
+    # which is impractical to synthesize minimally. Assert the callable + contract here
+    # and defer the true end-to-end to the on-cluster nb1a run (documented integration gate).
+    from databricks.labs.gbx.pyrx import ortho
+    assert callable(ortho.sparse_orthomosaic)
+    pytest.skip("sparse_orthomosaic end-to-end needs a real reconstruction; validated on-cluster (nb1a)")

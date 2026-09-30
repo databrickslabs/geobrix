@@ -23,6 +23,7 @@ from rasterio.transform import from_origin
 from databricks.labs.gbx.core.crs import enu_to_lonlat, resolve_crs, utm_epsg_for
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.imagery import read_fused_ply, zbuffer_ortho
+from databricks.labs.gbx.pyrx.mvs import dense_reconstruct_clusters
 
 
 def umeyama_sim3(src, dst):
@@ -636,3 +637,70 @@ def dense_clusters_to_products(
         )
         merged = dense_laz_dir  # directory of parts — lidar_gbx reader accepts this
     return used, merged
+
+
+def dense_orthomosaic(
+    spark,
+    cluster_models,
+    image_dir,
+    *,
+    merged_ortho,
+    merged_dsm,
+    merged_laz,
+    cluster_paths,
+    work_root,
+    ply_root=None,
+    checkpoint=None,
+    force=False,
+    gsd_cm=3.0,
+    group="all",
+    max_image_size=1600,
+    src_images=None,
+    geom_consistency=False,
+    num_iterations=None,
+    window_step=None,
+    allocation=None,
+    on_event=None,
+):
+    """One-call dense orthomosaic: reconstruct (``dense_reconstruct_clusters``)
+    then georef + products (``dense_clusters_to_products``). Collapses nb1b
+    cell ``127b9903``'s hand-wired per-cluster reconstruction + fuse + georef
+    loop into a single call for net-new data.
+
+    ``cluster_models`` is ``{cid: (sparse_dir, gps_json)}``. ``spark`` is an
+    explicit parameter (never a notebook global, matching
+    ``dense_clusters_to_products``) and is threaded only to that function —
+    the reconstruction half needs no Spark session. Raises ``RuntimeError``
+    when every cluster's patch_match failed (no plys produced) rather than
+    calling ``dense_clusters_to_products`` with an empty set. Returns
+    ``(used_cids, path_to_dense_merged_laz)`` — the same shape as
+    ``dense_clusters_to_products``.
+    """
+    plys = dense_reconstruct_clusters(
+        cluster_models,
+        image_dir,
+        work_root=work_root,
+        ply_root=ply_root,
+        checkpoint=checkpoint,
+        force=force,
+        max_image_size=max_image_size,
+        src_images=src_images,
+        geom_consistency=geom_consistency,
+        num_iterations=num_iterations,
+        window_step=window_step,
+        allocation=allocation,
+        on_event=on_event,
+    )
+    if not plys:
+        raise RuntimeError("dense_orthomosaic: no cluster produced points")
+    return dense_clusters_to_products(
+        spark,
+        {cid: cluster_models[cid] for cid in plys},
+        plys,
+        merged_ortho=merged_ortho,
+        merged_dsm=merged_dsm,
+        merged_laz=merged_laz,
+        cluster_paths=cluster_paths,
+        gsd_cm=gsd_cm,
+        group=group,
+    )

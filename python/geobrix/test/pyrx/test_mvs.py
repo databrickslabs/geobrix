@@ -528,3 +528,115 @@ def test_reconstruct_force_ignores_checkpoint(tmp_path, monkeypatch):
     assert calls["fuse"] == 1
     assert result == {0: str(persisted)}
     assert Path(persisted).read_bytes() == b"new"
+
+
+def test_reconstruct_recompute_no_ply_root_returns_local_path(tmp_path, monkeypatch):
+    """Review Focus (b): ply_root=None keeps a recomputed cluster's fused ply
+    LOCAL (under work_root), not a Volume path."""
+    from databricks.labs.gbx.pyrx import mvs
+
+    sparse_dir = tmp_path / "sparse"
+    sparse_dir.mkdir()
+
+    def fake_undistort(sparse, image_dir, work_dir, *, num_src_images=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        return work_dir
+
+    def fake_pool(specs, *, allocation=None, runner=None, max_retries=1):
+        return {s["cluster_id"]: {"status": "ok"} for s in specs}
+
+    def fake_fuse(work_dir, out_ply, *, geom_consistency=True):
+        Path(out_ply).write_bytes(b"ply")
+        return out_ply
+
+    monkeypatch.setattr(mvs, "dense_undistort", fake_undistort)
+    monkeypatch.setattr(mvs, "dense_mvs_pool", fake_pool)
+    monkeypatch.setattr(mvs, "dense_fuse", fake_fuse)
+    monkeypatch.setattr(
+        mvs, "recommend_dense_allocation", lambda *a, **k: {"cache_size_gb": 8.0}
+    )
+
+    work_root = str(tmp_path / "work")
+    result = mvs.dense_reconstruct_clusters(
+        {0: (str(sparse_dir), None)},
+        str(tmp_path / "images"),
+        work_root=work_root,
+    )
+
+    assert result == {0: f"{work_root}/dense_c0/fused.ply"}
+
+
+def test_reconstruct_skip_uses_manifest_output_not_this_run_ply_root(
+    tmp_path, monkeypatch
+):
+    """FIX A regression guard: the checkpoint-skip branch must return the REAL
+    persisted path recorded in the manifest (via Manifest.get_output), not a
+    work_dir path derived from THIS run's (possibly absent/different) ply_root.
+    Run 1 persists under ply_root; run 2 reuses the same manifest with a
+    DIFFERENT work_root and ply_root=None, and must still (a) skip without
+    calling dense_undistort/dense_mvs_pool and (b) return run 1's persisted
+    Volume path — not f'{work_dir}/fused.ply' for a work_dir that was never
+    populated this run."""
+    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+
+    sparse_dir = tmp_path / "sparse"
+    sparse_dir.mkdir()
+    (sparse_dir / "images.bin").write_bytes(b"x" * 10)
+
+    def fake_undistort(sparse, image_dir, work_dir, *, num_src_images=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        return work_dir
+
+    def fake_pool(specs, *, allocation=None, runner=None, max_retries=1):
+        return {s["cluster_id"]: {"status": "ok"} for s in specs}
+
+    def fake_fuse(work_dir, out_ply, *, geom_consistency=True):
+        Path(out_ply).write_bytes(b"ply")
+        return out_ply
+
+    monkeypatch.setattr(mvs, "dense_undistort", fake_undistort)
+    monkeypatch.setattr(mvs, "dense_mvs_pool", fake_pool)
+    monkeypatch.setattr(mvs, "dense_fuse", fake_fuse)
+    monkeypatch.setattr(
+        mvs, "recommend_dense_allocation", lambda *a, **k: {"cache_size_gb": 8.0}
+    )
+
+    mani = Manifest(str(tmp_path / "manifest.json"))
+    ply_root = tmp_path / "plys"
+
+    # Run 1: ply_root given -> persists + marks done.
+    result1 = mvs.dense_reconstruct_clusters(
+        {0: (str(sparse_dir), None)},
+        str(tmp_path / "images"),
+        work_root=str(tmp_path / "work1"),
+        ply_root=str(ply_root),
+        checkpoint=mani,
+    )
+    persisted_path = str(ply_root / "cluster_0" / "fused.ply")
+    assert result1 == {0: persisted_path}
+
+    calls = {"undistort": 0, "pool": 0}
+    monkeypatch.setattr(
+        mvs,
+        "dense_undistort",
+        lambda *a, **k: calls.__setitem__("undistort", calls["undistort"] + 1),
+    )
+    monkeypatch.setattr(
+        mvs,
+        "dense_mvs_pool",
+        lambda *a, **k: (calls.__setitem__("pool", calls["pool"] + 1), {})[1],
+    )
+
+    # Run 2: same cid/knobs (same sig), different work_root, ply_root=None.
+    result2 = mvs.dense_reconstruct_clusters(
+        {0: (str(sparse_dir), None)},
+        str(tmp_path / "images"),
+        work_root=str(tmp_path / "work2"),
+        ply_root=None,
+        checkpoint=mani,
+    )
+
+    assert result2 == {0: persisted_path}
+    assert calls["undistort"] == 0
+    assert calls["pool"] == 0

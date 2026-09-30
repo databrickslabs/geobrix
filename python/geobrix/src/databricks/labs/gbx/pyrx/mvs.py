@@ -369,8 +369,9 @@ def dense_reconstruct_clusters(
         if checkpoint is not None and checkpoint_skip(
             checkpoint, "dense", cid, sig, force=force
         ):
-            emit(f"[dense][skip] cluster {cid} — checkpointed ({ply_vol})")
-            done_plys[cid] = ply_vol if ply_vol else f"{work_dir}/fused.ply"
+            persisted = checkpoint.get_output("dense", cid)
+            emit(f"[dense][skip] cluster {cid} — checkpointed ({persisted})")
+            done_plys[cid] = persisted if persisted else ply_vol
             continue
         # Warm cluster: /tmp persists across runs; clear a stale dense workspace
         # or patch_match can hit a resolution/dependency mismatch.

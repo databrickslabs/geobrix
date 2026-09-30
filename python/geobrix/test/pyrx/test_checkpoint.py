@@ -67,6 +67,19 @@ def test_manifest_preserves_other_stages(tmp_path):
     assert m.is_done("mosaic", "g", "s1") and m.is_done("cog", "g", "s2")
 
 
+def test_get_output_mirrors_get_sig(tmp_path):
+    out = tmp_path / "fused.ply"
+    out.write_text("x")
+    m = Manifest(str(tmp_path / "_checkpoint.json"))
+    assert m.get_output("dense", "g::0") is None  # no entry yet
+    m.mark_done("dense", "g::0", "sig1", str(out))
+    assert m.get_output("dense", "g::0") == str(out)
+    # a fresh Manifest reloads from disk and sees the same output
+    assert Manifest(str(tmp_path / "_checkpoint.json")).get_output(
+        "dense", "g::0"
+    ) == str(out)
+
+
 def test_missing_manifest_loads_empty(tmp_path):
     m = Manifest(str(tmp_path / "does_not_exist.json"))
     assert m.is_done("dense", "g::0", "s") is False  # no crash

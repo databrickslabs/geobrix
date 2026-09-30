@@ -60,6 +60,16 @@ class Manifest:
         entry = self._data.get(stage, {}).get(str(key))
         return entry.get("sig") if entry else None
 
+    def get_output(self, stage, key):
+        """The persisted output path recorded for (stage, key), or None if absent.
+
+        Recovers the REAL path a prior run persisted to, independent of the
+        current run's own output-path knobs (e.g. a caller's ``ply_root``) —
+        callers must not reconstruct a fresh path on skip.
+        """
+        entry = self._data.get(stage, {}).get(str(key))
+        return entry.get("output") if entry else None
+
     def is_done(self, stage, key, sig) -> bool:
         entry = self._data.get(stage, {}).get(str(key))
         if not entry or entry.get("sig") != sig:

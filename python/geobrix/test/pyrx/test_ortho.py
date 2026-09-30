@@ -83,14 +83,17 @@ def test_place_clusters_shared_enu_available(_):
 
 
 def test_dense_clusters_to_products_available():
-    pytest.importorskip("pycolmap")
     import inspect
 
     from databricks.labs.gbx.pyrx.ortho import dense_clusters_to_products
 
+    # Importing dense_clusters_to_products does not require pycolmap, so this
+    # structural assertion runs unconditionally (light venv + CI too) -- spark
+    # is an EXPLICIT first parameter (was a notebook global).
     sig = inspect.signature(dense_clusters_to_products)
-    # spark is now an EXPLICIT first parameter (was a notebook global).
     assert list(sig.parameters)[0] == "spark"
+
+    pytest.importorskip("pycolmap")
     # A full run needs a tiny fused .ply + pycolmap models + a spark session; where
     # those are available, assert it returns (used_cids, merged_laz_path) and the
     # merged LAZ round-trips through the lidar_gbx reader.

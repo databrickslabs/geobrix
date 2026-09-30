@@ -259,12 +259,23 @@ def dense_patch_match(
     return str(work_dir)
 
 
-def dense_fuse(work_dir, out_ply):
-    """CPU-side: fuse depth maps into a colored dense point cloud (binary PLY)."""
+def dense_fuse(work_dir, out_ply, *, geom_consistency=True):
+    """CPU-side: fuse depth maps into a colored dense point cloud (binary PLY).
+
+    ``stereo_fusion`` defaults to fusing GEOMETRIC depth maps, but patch_match only
+    writes geometric maps when it ran with geom_consistency=True. If patch_match ran
+    with geom_consistency=False (photometric maps only), fusing "geometric" finds no
+    maps and silently emits an EMPTY cloud (a header-only PLY). So input_type MUST
+    match the patch_match pass: pass the SAME geom_consistency used for
+    ``dense_patch_match`` here.
+    """
     import pycolmap
 
     pycolmap.stereo_fusion(
-        output_path=str(out_ply), workspace_path=str(work_dir), output_type="PLY"
+        output_path=str(out_ply),
+        workspace_path=str(work_dir),
+        input_type="geometric" if geom_consistency else "photometric",
+        output_type="PLY",
     )
     if not Path(out_ply).exists():
         raise RuntimeError(f"dense_fuse: stereo_fusion produced no PLY at {out_ply}")

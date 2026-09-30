@@ -188,6 +188,61 @@ def test_pool_isolates_failures_and_retries():
     assert calls["c1"] == 2  # initial + 1 retry
 
 
+# --- dense_fuse tests ---
+
+
+def _fake_pycolmap(recorder):
+    """A stand-in pycolmap whose stereo_fusion records its input_type and writes a
+    (non-empty) PLY so dense_fuse's existence check passes. pycolmap is GPU-only and
+    absent from the light test venv, so dense_fuse's lazy import is satisfied here."""
+    import sys
+    import types
+
+    m = types.ModuleType("pycolmap")
+
+    def stereo_fusion(*, output_path, workspace_path, input_type, output_type):
+        recorder["input_type"] = input_type
+        with open(output_path, "wb") as f:
+            f.write(b"ply\n")  # any bytes so Path(out_ply).exists() is True
+
+    m.stereo_fusion = stereo_fusion
+    sys.modules["pycolmap"] = m
+    return m
+
+
+@pytest.mark.parametrize(
+    "geom_consistency,expected",
+    [(True, "geometric"), (False, "photometric")],
+)
+def test_dense_fuse_input_type_matches_geom_consistency(
+    tmp_path, monkeypatch, geom_consistency, expected
+):
+    """REGRESSION GUARD: stereo_fusion defaults input_type='geometric', but
+    patch_match only writes geometric maps when geom_consistency=True. Fusing
+    'geometric' after a photometric-only (geom_consistency=False) pass finds no maps
+    and silently produces an EMPTY cloud. dense_fuse MUST select input_type to match
+    the patch_match pass, or the fast (geom_consistency=False) path yields 0 points."""
+    from databricks.labs.gbx.pyrx import mvs
+
+    rec = {}
+    _fake_pycolmap(rec)
+    out = tmp_path / "fused.ply"
+    mvs.dense_fuse(str(tmp_path), str(out), geom_consistency=geom_consistency)
+    assert rec["input_type"] == expected
+    assert out.exists()
+
+
+def test_dense_fuse_defaults_geometric(tmp_path):
+    """Default (no arg) fuses geometric — the caller wiring passes the same
+    geom_consistency it gave dense_patch_match."""
+    from databricks.labs.gbx.pyrx import mvs
+
+    rec = {}
+    _fake_pycolmap(rec)
+    mvs.dense_fuse(str(tmp_path), str(tmp_path / "f.ply"))
+    assert rec["input_type"] == "geometric"
+
+
 # --- _resolve_model_dir tests ---
 
 

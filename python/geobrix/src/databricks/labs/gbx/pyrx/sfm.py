@@ -9,6 +9,9 @@ import numpy as np
 import pandas as pd
 from pyspark.sql import functions as F
 
+# GPS-spatial pair search radius (meters); pairs closer than this are candidates for matching.
+MAX_PAIR_DIST_M = 500
+
 
 def image_ids_to_pair_id(image_id1, image_id2):
     if image_id1 > image_id2:
@@ -370,3 +373,23 @@ def _assemble_colmap_db(db_path, features, matches, *, camera_defaults=None):
     conn.commit()
     conn.close()
     return best_init_id1, best_init_id2, has_gps
+
+
+def _find_geo_pairs(spark, df_qc):
+    """Geospatial pair discovery via ST_DistanceSphere (Databricks built-in).
+
+    Databricks advantage: ``ST_DistanceSphere`` pair filtering keeps pair count
+    linear in image count — exhaustive matching would be O(n^2).
+    """
+    df_qc.createOrReplaceTempView("drone_metadata")
+    pairs_df = spark.sql(f"""
+        SELECT
+            a.source AS src1,
+            b.source AS src2,
+            ST_DistanceSphere(a.gps_geom, b.gps_geom) AS dist
+        FROM drone_metadata a
+        JOIN drone_metadata b ON a.source < b.source
+        WHERE ST_DistanceSphere(a.gps_geom, b.gps_geom) < {MAX_PAIR_DIST_M}
+    """)
+    print(f"Geospatial filtering reduced pairs to: {pairs_df.count()}")
+    return pairs_df

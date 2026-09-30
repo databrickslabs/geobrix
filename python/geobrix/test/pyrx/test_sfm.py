@@ -94,3 +94,12 @@ def test_extract_features_udf_smoke(tmp_path):
     out = pd.concat(list(_extract_features_to_df(iter([pdf]))), ignore_index=True)
     assert list(out.columns)[:2] == ["source", "keypoints"]
     assert {"descriptors", "cam_model", "cam_w", "cam_h", "gps_pos"} <= set(out.columns)
+
+
+def test_find_geo_pairs_requires_dbr():
+    # ST_DistanceSphere is a Databricks-runtime built-in, absent from OSS Spark,
+    # so _find_geo_pairs cannot be unit-tested locally. Assert it imports and is
+    # callable; real coverage is the on-cluster nb1a run. (Documented skip.)
+    from databricks.labs.gbx.pyrx import sfm
+    assert callable(sfm._find_geo_pairs)
+    pytest.skip("ST_DistanceSphere is DBR-native; _find_geo_pairs validated on-cluster (nb1a)")

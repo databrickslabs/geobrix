@@ -12,6 +12,7 @@ from collections import OrderedDict
 from functools import lru_cache
 from typing import Optional, Union
 
+import numpy as np
 from rasterio.crs import CRS
 
 # 120 WGS84 UTM zones (EPSG 326xx N + 327xx S) + 4326/27700/3857 + headroom.
@@ -354,3 +355,35 @@ def resolve_source_crs(embedded_srid, srid=None, crs=None) -> Optional[CRS]:
     if srid is not None:
         return resolve_crs(srid)
     return None
+
+
+def utm_epsg_for(lon: float, lat: float) -> int:
+    """WGS84 UTM zone EPSG code for a representative lon/lat.
+
+    Returns 326zz (northern hemisphere) or 327zz (southern), where zz is the
+    UTM zone 1-60. Used to reproject a local scene to its metric UTM zone.
+    """
+    zone = int((float(lon) + 180.0) / 6.0) + 1
+    zone = max(1, min(60, zone))
+    return (32600 if float(lat) >= 0.0 else 32700) + zone
+
+
+# Equirectangular local-tangent-plane approximation of degrees-latitude in metres.
+_M_PER_DEG_LAT = 111320.0
+
+
+def lonlat_to_enu(lon, lat, ref_lat, ref_lon):
+    """Local-tangent-plane (equirectangular) ENU east/north metres from lon/lat,
+    relative to (ref_lat, ref_lon). Scalars or numpy arrays."""
+    cos_ref = np.cos(np.radians(ref_lat))
+    east = (np.asarray(lon, dtype="float64") - ref_lon) * _M_PER_DEG_LAT * cos_ref
+    north = (np.asarray(lat, dtype="float64") - ref_lat) * _M_PER_DEG_LAT
+    return east, north
+
+
+def enu_to_lonlat(east, north, ref_lat, ref_lon):
+    """Inverse of lonlat_to_enu."""
+    cos_ref = np.cos(np.radians(ref_lat))
+    lon = ref_lon + np.asarray(east, dtype="float64") / (_M_PER_DEG_LAT * cos_ref)
+    lat = ref_lat + np.asarray(north, dtype="float64") / _M_PER_DEG_LAT
+    return lon, lat

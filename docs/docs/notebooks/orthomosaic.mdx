@@ -4,6 +4,9 @@ title: Orthomosaic Photogrammetry
 sidebar_label: Orthomosaic
 ---
 
+import Tabs from '@theme/Tabs';
+import TabItem from '@theme/TabItem';
+
 # Orthomosaic Photogrammetry — Drone Survey to Georeferenced Map
 
 A notebook series that takes a **raw drone image dataset** end-to-end through
@@ -151,6 +154,125 @@ CUDA-bound — so it runs on the **Serverless GPU AI Runtime** (environment 5). 
 **land-cover** section is CPU-only RasterX and needs no GPU. The serving section
 (registration, endpoint creation, querying) is API calls that can run from any cluster
 with `mlflow` installed.
+
+### Calling the served endpoint — four ways
+
+Once registered to Unity Catalog and served behind the Unity Gateway, the endpoint is a
+standard **[Databricks Model Serving](https://docs.databricks.com/aws/en/machine-learning/model-serving)**
+REST endpoint — callable from a notebook, an app, a job, or SQL with no GeoBrix package
+and no GPU attached on the calling side. All four forms below hit the same
+`.../serving-endpoints/geosam-ortho-endpoint/invocations` URL with the same `image_b64`
+input and get back the same shape:
+
+```json
+{"predictions": {"geojson": "{\"type\": \"FeatureCollection\", \"features\": [{\"type\": \"Feature\", \"geometry\": {\"type\": \"Polygon\", \"coordinates\": [[[-121.9744, 36.9744], ...]]}, \"properties\": {\"label\": 0, \"score\": 1.0}}]}"}}
+```
+
+`predictions` is a **dict** `{"geojson": ...}`, not a list. The decoded `geojson` value
+is a GeoJSON `FeatureCollection` string with one `Polygon` **Feature** per detected
+object, carrying `properties.label` (int) and `properties.score` (float).
+
+<Tabs groupId="gbx-serving-call">
+<TabItem value="curl" label="curl">
+
+```bash
+curl \
+  -u token:$DATABRICKS_TOKEN \
+  -X POST \
+  -H "Content-Type: application/json" \
+  -d@data.json \
+  https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints/geosam-ortho-endpoint/invocations
+```
+
+`data.json` holds the request body, e.g.
+`{"dataframe_records": [{"image_b64": "<base64 GeoTIFF tile>"}]}`. The quickest smoke
+test for the endpoint, and it works from any language that can shell out to `curl`.
+
+</TabItem>
+<TabItem value="python-json" label="Python (JSON)">
+
+```python
+import os
+import requests
+import numpy as np
+import pandas as pd
+import json
+
+def create_tf_serving_json(data):
+    return {'inputs': {name: data[name].tolist() for name in data.keys()} if isinstance(data, dict) else data.tolist()}
+
+def score_model(dataset):
+    url = 'https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints/geosam-ortho-endpoint/invocations'
+    headers = {'Authorization': f'Bearer {os.environ.get("DATABRICKS_TOKEN")}', 'Content-Type': 'application/json'}
+    ds_dict = {'dataframe_split': dataset.to_dict(orient='split')} if isinstance(dataset, pd.DataFrame) else create_tf_serving_json(dataset)
+    data_json = json.dumps(ds_dict, allow_nan=True)
+    response = requests.request(method='POST', headers=headers, url=url, data=data_json)
+    if response.status_code != 200:
+        raise Exception(f'Request failed with status {response.status_code}, {response.text}')
+    return response.json()
+```
+
+The `dataframe_split` record shape most services call Model Serving with. GeoBrix wraps
+exactly this — base64-encoding the tile and posting the request — as
+[`serving.query`](../models/serving#querying-the-endpoint), so most notebook/job callers
+reach for that instead of re-deriving this.
+
+</TabItem>
+<TabItem value="python-protobuf" label="Python (protobuf)">
+
+```python
+import os
+import requests
+import numpy as np
+from tritonclient.grpc.service_pb2 import ModelInferRequest, ModelInferResponse  # KServe v2 ModelInferRequest/Response
+from tritonclient.utils import np_to_triton_dtype, triton_to_np_dtype  # numpy<->KServe v2 dtype helpers
+
+def create_kserve_request(data):
+    tensors = data if isinstance(data, dict) else {'input': data}
+    request = ModelInferRequest()
+    for name, array in tensors.items():
+        array = np.ascontiguousarray(array)
+        request.inputs.add(name=name, datatype=np_to_triton_dtype(array.dtype), shape=array.shape)
+        request.raw_input_contents.append(array.tobytes())
+    return request
+
+def score_model(dataset):
+    url = 'https://e2-demo-field-eng.cloud.databricks.com/serving-endpoints/geosam-ortho-endpoint/invocations'
+    headers = {'Authorization': f'Bearer {os.environ.get("DATABRICKS_TOKEN")}', 'Content-Type': 'application/x-protobuf'}
+    request = create_kserve_request(dataset)
+    response = requests.request(method='POST', headers=headers, url=url, data=request.SerializeToString())
+    if response.status_code != 200:
+        raise Exception(f'Request failed with status {response.status_code}, {response.text}')
+    result = ModelInferResponse()
+    result.ParseFromString(response.content)
+    return {output.name: np.frombuffer(result.raw_output_contents[i], dtype=triton_to_np_dtype(output.datatype)).reshape(output.shape) for i, output in enumerate(result.outputs)}
+```
+
+The KServe v2 binary protocol (`application/x-protobuf`) — lower-overhead than JSON for
+large tensor payloads.
+
+</TabItem>
+<TabItem value="sql" label="SQL">
+
+```sql
+SELECT ai_query('geosam-ortho-endpoint',
+    request => named_struct('image_b64', <value>))
+```
+
+Calls the endpoint inline from SQL or a Lakeflow pipeline via
+**[`ai_query`](https://docs.databricks.com/aws/en/sql/language-manual/functions/ai_query)**
+— the columnar, at-scale path: fan segmentation out over a whole **table** of image
+tiles with one query, no notebook or Python client involved.
+
+</TabItem>
+</Tabs>
+
+See the
+**[Unity Catalog model lifecycle](https://docs.databricks.com/aws/en/machine-learning/manage-model-lifecycle/)**
+docs for how a registered, versioned model like this one is governed, and the
+[Serving](../models/serving) reference page for GeoBrix's own wrappers —
+`serving.query`, `register_to_unity_gateway`, `build_geosam_pyfunc`, and
+`geosam_signature` — that `03_segment` uses to get here.
 
 ### `monitor` (optional) — live SfM progress
 

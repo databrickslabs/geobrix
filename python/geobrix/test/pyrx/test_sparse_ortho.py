@@ -55,3 +55,15 @@ def test_ortho_canvas_dims_tiny_nonzero():
     from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
     _, _, _, _, w, h = _ortho_canvas_dims(0.0, 0.0, 0.0, 0.0, gsd_cm=5.0)
     assert w >= 1 and h >= 1
+
+
+def test_sparse_orthomosaic_signature_light_import():
+    import inspect
+    from databricks.labs.gbx.pyrx import ortho
+    sig = inspect.signature(ortho.sparse_orthomosaic)
+    p = sig.parameters
+    assert list(p)[:3] == ["cluster_models", "image_dir", "out_tiff"]
+    assert "spark" not in p  # driver-side, no Spark
+    assert p["gsd_cm"].default == 3.0 and p["max_workers"].default == 8 and p["blend_gamma"].default == 4.0
+    for kw in ("gsd_cm", "max_workers", "blend_gamma"):
+        assert p[kw].kind is inspect.Parameter.KEYWORD_ONLY

@@ -14,10 +14,12 @@ from __future__ import annotations
 import gc
 import os
 import shutil
+import time
 from pathlib import Path
 
 import numpy as np
 import rasterio
+from PIL import Image as PILImage
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.core.crs import enu_to_lonlat, resolve_crs, utm_epsg_for
@@ -525,6 +527,162 @@ def place_clusters_shared_enu(cluster_models):
         "gps": gps,
         "sizes": sizes,
     }
+
+
+def sparse_orthomosaic(
+    cluster_models, image_dir, out_tiff, *, gsd_cm=3.0, max_workers=8, blend_gamma=4.0
+):
+    """Blend per-cluster sparse reconstructions into ONE georeferenced orthomosaic
+    GeoTIFF.
+
+    Clusters are placed in a single shared ENU frame via
+    :func:`place_clusters_shared_enu`: the largest cluster is georeferenced to GPS
+    (Umeyama), and each remaining cluster is tied to the already-placed set through
+    its SHARED overlap cameras (same image names) via a similarity fit on their
+    projection centres — restoring cross-cluster consistency without a monolithic
+    global bundle adjustment. Clusters with no shared-camera tie fall back to their
+    own GPS fit. Each cluster projects onto its own local ground plane (z_med). One
+    cluster reconstruction is held at a time; peak RAM = largest cluster + the canvas.
+
+    Driver-side (no ``spark`` param). ``pycolmap`` is imported only lazily — via
+    :func:`_load_largest_model` and the ``place_clusters_shared_enu`` reconstruction
+    reloads below — this module itself never imports it at top level. The per-camera
+    numeric core is :func:`_backproject_image`; the canvas sizing is
+    :func:`_ortho_canvas_dims`.
+
+    ``cluster_models``: ``{cid: (sparse_dir, gps_json)}``. Returns the written
+    ``out_tiff`` path (as ``str``).
+    """
+    import threading
+    from concurrent.futures import ThreadPoolExecutor
+
+    t0 = time.perf_counter()
+    image_dir = Path(image_dir)
+    out_tiff = Path(out_tiff)
+
+    # ---- Pass A+B: place every cluster in ONE shared ENU frame ----
+    placement = place_clusters_shared_enu(cluster_models)
+    T = placement["T"]  # cid -> (scale, R, t): COLMAP frame -> shared ENU
+    aligned = placement["aligned"]  # cids placed, largest first
+    ref_lat, ref_lon = placement["ref_lat"], placement["ref_lon"]
+
+    # ---- Pass C: union ground extent + per-cluster z_med (one reload per cluster) ----
+    cluster_z = {}
+    e_min = n_min = np.inf
+    e_max = n_max = -np.inf
+    for cid in aligned:
+        rec = _load_largest_model(cluster_models[cid][0])
+        if rec is None:
+            continue
+        Tc = T[cid]
+        if rec.points3D:
+            pe = apply_sim3(Tc, np.array([p.xyz for p in rec.points3D.values()]))
+            zc = float(np.median(pe[:, 2]))
+            ground = pe[np.abs(pe[:, 2] - zc) < 20]
+        else:
+            cen = apply_sim3(Tc, np.array([im.projection_center()
+                                            for _, im in rec.images.items() if im.has_pose]))
+            zc = float(cen[:, 2].mean() - 250)
+            ground = cen
+        cluster_z[cid] = zc
+        e_min = min(e_min, ground[:, 0].min()); e_max = max(e_max, ground[:, 0].max())
+        n_min = min(n_min, ground[:, 1].min()); n_max = max(n_max, ground[:, 1].max())
+        del rec
+        gc.collect()
+
+    e_min, e_max, n_min, n_max, out_w, out_h = _ortho_canvas_dims(
+        e_min, e_max, n_min, n_max, gsd_cm
+    )
+    gsd_m = gsd_cm / 100.0
+    _canvas_gb = (out_h * out_w * 3 * 2 + out_h * out_w * 2) / 1024 ** 3
+    if _canvas_gb > 4.0:
+        print(f"[WARN] Canvas {_canvas_gb:.1f} GB > 4 GB — raise GSD_CM to reduce.", flush=True)
+    print(f"Canvas: {out_w}x{out_h}px @ {gsd_cm:.1f}cm ({_canvas_gb:.2f} GB float16) "
+          f"from {len(aligned)} cluster(s)", flush=True)
+
+    canvas = np.zeros((out_h, out_w, 3), dtype=np.float16)
+    weights = np.zeros((out_h, out_w), dtype=np.float16)
+    _lock = threading.Lock()
+    n_proj = [0]
+
+    def _project_cluster(rec, T_cid, z_med):
+        def _one(kv):
+            _, image = kv
+            if not image.has_pose:
+                return
+            ip = image_dir / image.name
+            if not ip.exists():
+                return
+            cam = rec.cameras[image.camera_id]
+            cw, ch = cam.width, cam.height
+            cfw = image.cam_from_world()
+            R_cw = cfw.rotation.matrix()
+            t_cw = cfw.translation
+            C_enu = apply_sim3(T_cid, image.projection_center())
+            with PILImage.open(ip) as pim:
+                pim.draft("RGB", (cw, ch)); pim.load()
+                if pim.width != cw or pim.height != ch:
+                    pim = pim.resize((cw, ch), PILImage.BILINEAR)
+                src_rgb = np.array(pim.convert("RGB"), dtype=np.float32)
+            result = _backproject_image(
+                src_rgb,
+                cam_f=cam.params[0], cam_cx=cam.params[1], cam_cy=cam.params[2],
+                cam_w=cw, cam_h=ch,
+                R_cw=R_cw, t_cw=t_cw,
+                T_cid=T_cid, C_enu=C_enu, z_med=z_med,
+                e_min=e_min, n_max=n_max, gsd_m=gsd_m,
+                out_w=out_w, out_h=out_h, blend_gamma=blend_gamma,
+            )
+            if result is None:
+                return
+            px0, px1, py0, py1, colors, w = result
+            with _lock:
+                canvas[py0:py1, px0:px1] += (colors * w[..., None]).astype(np.float16)
+                weights[py0:py1, px0:px1] += w.astype(np.float16)
+                n_proj[0] += 1
+
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            list(pool.map(_one, sorted(rec.images.items(), key=lambda kv: kv[1].name)))
+
+    # ---- Pass D: reload each cluster and project into the shared canvas ----
+    for cid in aligned:
+        rec = _load_largest_model(cluster_models[cid][0])
+        if rec is None:
+            continue
+        _project_cluster(rec, T[cid], cluster_z[cid])
+        del rec
+        gc.collect()
+        print(f"[ortho] cluster {cid}: projected ({n_proj[0]} images total)", flush=True)
+
+    has = weights > 0
+    ortho = np.zeros((out_h, out_w, 3), dtype=np.uint8)
+    ortho[has] = np.clip(canvas[has] / weights[has, None], 0, 255).astype(np.uint8)
+    print(f"Coverage: {100.0 * has.sum() / (out_h * out_w):.1f}% ({n_proj[0]} images projected)")
+
+    # ---- Georef: equirectangular corner + per-pixel degree size, both via core.crs
+    # (single consistent source — replaces the notebook's separate inline dpm_lat/
+    # dpm_lon scale + gps_tf.enu_to_ellipsoid corner). ----
+    lon_tl_arr, lat_tl_arr = enu_to_lonlat(e_min, n_max, ref_lat, ref_lon)
+    lon_tl, lat_tl = float(lon_tl_arr), float(lat_tl_arr)
+    dlon_px = float(enu_to_lonlat(gsd_m, 0.0, ref_lat, ref_lon)[0]) - ref_lon
+    dlat_px = float(enu_to_lonlat(0.0, gsd_m, ref_lat, ref_lon)[1]) - ref_lat
+    transform = from_origin(lon_tl, lat_tl, dlon_px, dlat_px)
+
+    out_tiff.parent.mkdir(parents=True, exist_ok=True)
+    local_tif = new_local_temp_file(suffix=".tif")
+    try:
+        with rasterio.open(
+            local_tif, "w", driver="GTiff", height=out_h, width=out_w, count=3,
+            dtype="uint8", crs=resolve_crs(4326), transform=transform, compress="lzw",
+        ) as dst:
+            for b in range(3):
+                dst.write(ortho[:, :, b], b + 1)
+        shutil.copy(local_tif, str(out_tiff))
+    finally:
+        if os.path.exists(local_tif):
+            os.remove(local_tif)
+    print(f"Orthomosaic written: {out_tiff} ({time.perf_counter() - t0:.0f}s)")
+    return str(out_tiff)
 
 
 def _enu_to_utm(xe, ye, ze, ref_lat, ref_lon):

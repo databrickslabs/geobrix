@@ -17,6 +17,8 @@ serving, and on to georeferenced object polygons and a land-cover region map. Sp
 reconstruction runs on CPU; an optional dense pass and the object-segmentation part of
 the capstone run on GPU (land cover runs on CPU).
 
+![Orthomosaic series overview — config_nb shared setup, 01a CPU sparse SfM (with the monitor progress watcher off to the side), optional 01b GPU dense MVS, 02_publish color correct to COG/PMTiles, and optional 03_segment objects + land cover + served endpoint](../../../resources/images/diagrams/orthomosaic/orthomosaic-overview.png)
+
 The pipeline reads EXIF metadata and GPS telemetry per-image with the GeoBrix `exif_gbx`
 reader, computes per-image GSD and (optionally) sharpness metrics, then runs incremental
 SfM with `pycolmap` on a **Serverless environment 5 (CPU)** cluster (`01a`). An optional
@@ -71,6 +73,8 @@ notebooks run `%run ./config_nb`.
 
 ### `01a_sfm_orthomosaic` — telemetry → SfM → orthomosaic
 
+![Notebook 01a — EXIF/GPS QC via exif_gbx, distributed feature matching with run_spark_sfm, pycolmap incremental mapping, and accumulate_orthomosaic to a sparse orthomosaic](../../../resources/images/diagrams/orthomosaic/orthomosaic-01a.png)
+
 The core pipeline:
 
 1. **EXIF extraction** — `exif_gbx` reader scans the image directory, emitting one row
@@ -92,6 +96,8 @@ The core pipeline:
 
 ### `01b_sfm_orthomosaic_gpu` (optional) — dense MVS on GPU
 
+![Notebook 01b — loading the persisted sparse model, one call to ortho.dense_orthomosaic (dense_reconstruct_clusters + dense_mvs_pool patch-match on GPU), then a dense point cloud written via lidar_gbx](../../../resources/images/diagrams/orthomosaic/orthomosaic-01b.png)
+
 An optional GPU notebook that upgrades the sparse result to a **dense** reconstruction. It
 loads the persisted sparse model from `01a` and, per group, makes one call —
 `ortho.dense_orthomosaic` — that reconstructs every GPS cluster (undistort, COLMAP
@@ -104,6 +110,8 @@ down this page for its full API. Runs on the **Serverless GPU AI Runtime** (envi
 consumes. `02_publish` automatically uses the dense orthomosaic when present.
 
 ### `02_publish` — color correction → COG → PMTiles
+
+![Notebook 02 — rst_percentile_stretch color correction, cog_gbx to a Cloud-Optimised GeoTIFF, gbx_rst_xyzpyramid tiling, and pmtiles_gbx to a PMTiles archive](../../../resources/images/diagrams/orthomosaic/orthomosaic-02.png)
 
 A single publish notebook that turns `orthomosaic.tif` into web-ready deliverables in
 three checkpointed stages:
@@ -122,6 +130,8 @@ Each stage is checkpointed per group; set `FORCE_CORRECTED` / `FORCE_COG` /
 `FORCE_PMTILES` in `config_nb` to recompute a stage.
 
 ### `03_segment` (optional) — objects + land cover capstone
+
+![Notebook 03 — the published COG feeding GPU segment_raster for GeoSAM instance objects and CPU rst_land_cover for land-cover regions, then register_to_unity_gateway serving the object model](../../../resources/images/diagrams/orthomosaic/orthomosaic-03.png)
 
 A capstone notebook that derives two complementary views of `02_publish`'s orthomosaic
 COG — discrete **objects** and a **land-cover** region map — then serves the object model.

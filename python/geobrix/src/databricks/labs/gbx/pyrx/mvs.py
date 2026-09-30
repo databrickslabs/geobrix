@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
+
+from databricks.labs.gbx.pyrx.checkpoint import checkpoint_skip, input_signature
 
 
 def _run(args: list[str], timeout: int = 60) -> str:
@@ -280,3 +283,144 @@ def dense_fuse(work_dir, out_ply, *, geom_consistency=True):
     if not Path(out_ply).exists():
         raise RuntimeError(f"dense_fuse: stereo_fusion produced no PLY at {out_ply}")
     return str(out_ply)
+
+
+def _dense_sig(
+    cid,
+    sparse_dir,
+    *,
+    max_image_size,
+    src_images,
+    geom_consistency,
+    num_iterations,
+    window_step,
+):
+    """Checkpoint signature for a cluster's dense output: sparse-model identity +
+    the dense reconstruction knobs. Mirrors nb1b's (now-removed) local ``_dense_sig``.
+    """
+    bin_path = Path(sparse_dir) / "images.bin"
+    bin_size = bin_path.stat().st_size if bin_path.exists() else 0
+    return input_signature(
+        {"cid": str(cid), "sparse_bin_size": bin_size},
+        {
+            "max_image_size": max_image_size,
+            "src_images": src_images,
+            "geom_consistency": geom_consistency,
+            "iters": num_iterations,
+            "window_step": window_step,
+        },
+    )
+
+
+def dense_reconstruct_clusters(
+    cluster_models,
+    image_dir,
+    *,
+    work_root,
+    ply_root=None,
+    checkpoint=None,
+    force=False,
+    max_image_size=1600,
+    src_images=None,
+    geom_consistency=False,
+    num_iterations=None,
+    window_step=None,
+    allocation=None,
+    on_event=None,
+):
+    """Reconstruct dense point clouds for a set of clusters (undistort -> allocate
+    -> patch_match -> fuse), with optional Volume-backed checkpointing.
+
+    Mirrors nb1b cell 127b9903's per-cluster dense loop, collapsed into one call.
+    ``cluster_models`` is ``{cid: (sparse_dir, gps_json)}`` (``gps_json`` is unused
+    here; kept for symmetry with ``ortho.*``). All GPU/pycolmap work stays behind
+    the lazy imports inside ``dense_undistort``/``dense_mvs_pool``/``dense_fuse``,
+    so this orchestration itself needs no GPU.
+
+    ``checkpoint=None`` disables skip/resume (always recomputes). ``ply_root=None``
+    keeps fused plys local under ``work_root`` (no Volume copy). A fused ply is
+    copied to ``ply_root`` and marked done only when BOTH ``ply_root`` and
+    ``checkpoint`` are given. ``force=True`` bypasses the checkpoint (recomputes
+    even a checkpointed cluster). ``geom_consistency`` threads to BOTH the
+    patch_match spec and ``dense_fuse`` (the ``193ded76`` fix — a miss here
+    reintroduces the empty-PLY bug). Clusters whose patch_match fails (pool status
+    != "ok") are dropped from the result; failures and skips are reported via
+    ``on_event(str)`` when given (a no-op otherwise).
+
+    Returns ``{cid: fused.ply path}``, including checkpointed clusters.
+    """
+    emit = on_event if on_event is not None else lambda *_a, **_k: None
+
+    done_plys = {}
+    todo = []
+    for cid, model in cluster_models.items():
+        sparse_dir = model[0]
+        work_dir = f"{work_root}/dense_c{cid}"
+        ply_vol = f"{ply_root}/cluster_{cid}/fused.ply" if ply_root else None
+        sig = _dense_sig(
+            cid,
+            sparse_dir,
+            max_image_size=max_image_size,
+            src_images=src_images,
+            geom_consistency=geom_consistency,
+            num_iterations=num_iterations,
+            window_step=window_step,
+        )
+        if checkpoint is not None and checkpoint_skip(
+            checkpoint, "dense", cid, sig, force=force
+        ):
+            emit(f"[dense][skip] cluster {cid} — checkpointed ({ply_vol})")
+            done_plys[cid] = ply_vol if ply_vol else f"{work_dir}/fused.ply"
+            continue
+        # Warm cluster: /tmp persists across runs; clear a stale dense workspace
+        # or patch_match can hit a resolution/dependency mismatch.
+        shutil.rmtree(work_dir, ignore_errors=True)
+        dense_undistort(sparse_dir, image_dir, work_dir, num_src_images=src_images)
+        todo.append(
+            {
+                "cluster_id": cid,
+                "work_dir": work_dir,
+                "ply_vol": ply_vol,
+                "sig": sig,
+                "max_image_size": max_image_size,
+                "geom_consistency": geom_consistency,
+                "num_iterations": num_iterations,
+                "window_step": window_step,
+            }
+        )
+
+    pool = {}
+    if todo:
+        alloc = allocation
+        if alloc is None:
+            alloc = recommend_dense_allocation(
+                [1] * len(todo), dense_max_image_size=max_image_size
+            )
+        for spec in todo:
+            spec["cache_size_gb"] = alloc.get("cache_size_gb")
+        pool = dense_mvs_pool(todo, allocation=alloc)
+
+    plys = dict(done_plys)
+    for spec in todo:
+        cid = spec["cluster_id"]
+        status = pool.get(cid, {})
+        if status.get("status") != "ok":
+            emit(
+                f"  [DROP] cluster {cid} patch_match failed: "
+                f"{str(status.get('error', ''))[:160]}"
+            )
+            continue
+        local_ply = dense_fuse(
+            spec["work_dir"],
+            f'{spec["work_dir"]}/fused.ply',
+            geom_consistency=geom_consistency,
+        )
+        out_ply = local_ply
+        if spec["ply_vol"] and checkpoint is not None:
+            Path(spec["ply_vol"]).parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy(local_ply, spec["ply_vol"])
+            checkpoint.mark_done("dense", cid, spec["sig"], spec["ply_vol"])
+            out_ply = spec["ply_vol"]
+        plys[cid] = out_ply
+
+    return plys

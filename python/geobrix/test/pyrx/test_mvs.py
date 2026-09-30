@@ -1,4 +1,5 @@
 import threading
+from pathlib import Path
 
 import pytest
 
@@ -268,5 +269,262 @@ def test_pyrx_exports_mvs():
         "dense_undistort",
         "dense_patch_match",
         "dense_fuse",
+        "dense_reconstruct_clusters",
     ]:
         assert hasattr(pyrx, n), f"pyrx missing export: {n}"
+
+
+# --- dense_reconstruct_clusters tests ---
+
+
+def _dense_sig_args(**overrides):
+    args = dict(
+        max_image_size=1600,
+        src_images=None,
+        geom_consistency=False,
+        num_iterations=None,
+        window_step=None,
+    )
+    args.update(overrides)
+    return args
+
+
+def test_reconstruct_skips_checkpointed(tmp_path, monkeypatch):
+    """A cluster already checkpointed (matching sig + a persisted, existing ply)
+    is skipped WITHOUT calling dense_undistort/dense_mvs_pool for it."""
+    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+
+    sparse_dir = tmp_path / "sparse"
+    sparse_dir.mkdir()
+    (sparse_dir / "images.bin").write_bytes(b"x" * 42)
+
+    ply_root = tmp_path / "plys"
+    persisted = ply_root / "cluster_0" / "fused.ply"
+    persisted.parent.mkdir(parents=True)
+    persisted.write_bytes(b"ply")
+
+    mani = Manifest(str(tmp_path / "manifest.json"))
+    sig = mvs._dense_sig(0, str(sparse_dir), **_dense_sig_args())
+    mani.mark_done("dense", 0, sig, str(persisted))
+
+    calls = {"undistort": 0, "pool": 0}
+    monkeypatch.setattr(
+        mvs,
+        "dense_undistort",
+        lambda *a, **k: calls.__setitem__("undistort", calls["undistort"] + 1),
+    )
+    monkeypatch.setattr(
+        mvs,
+        "dense_mvs_pool",
+        lambda *a, **k: (calls.__setitem__("pool", calls["pool"] + 1), {})[1],
+    )
+
+    result = mvs.dense_reconstruct_clusters(
+        {0: (str(sparse_dir), "gps.json")},
+        str(tmp_path / "images"),
+        work_root=str(tmp_path / "work"),
+        ply_root=str(ply_root),
+        checkpoint=mani,
+    )
+
+    assert result == {0: str(persisted)}
+    assert calls["undistort"] == 0
+    assert calls["pool"] == 0
+
+
+def test_reconstruct_recomputes_and_persists(tmp_path, monkeypatch):
+    """No checkpoint entry -> undistort/pool/fuse run; ply is copied under
+    ply_root and the checkpoint records it as done."""
+    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+
+    sparse_dir = tmp_path / "sparse"
+    sparse_dir.mkdir()
+    (sparse_dir / "images.bin").write_bytes(b"x" * 10)
+
+    calls = {"undistort": [], "fuse": []}
+
+    def fake_undistort(sparse, image_dir, work_dir, *, num_src_images=None):
+        calls["undistort"].append((sparse, image_dir, work_dir, num_src_images))
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        return work_dir
+
+    def fake_pool(specs, *, allocation=None, runner=None, max_retries=1):
+        return {s["cluster_id"]: {"status": "ok"} for s in specs}
+
+    def fake_fuse(work_dir, out_ply, *, geom_consistency=True):
+        calls["fuse"].append((work_dir, out_ply, geom_consistency))
+        Path(out_ply).write_bytes(b"ply")
+        return out_ply
+
+    monkeypatch.setattr(mvs, "dense_undistort", fake_undistort)
+    monkeypatch.setattr(mvs, "dense_mvs_pool", fake_pool)
+    monkeypatch.setattr(mvs, "dense_fuse", fake_fuse)
+    monkeypatch.setattr(
+        mvs, "recommend_dense_allocation", lambda *a, **k: {"cache_size_gb": 8.0}
+    )
+
+    ply_root = tmp_path / "plys"
+    mani = Manifest(str(tmp_path / "manifest.json"))
+
+    result = mvs.dense_reconstruct_clusters(
+        {0: (str(sparse_dir), "gps.json")},
+        str(tmp_path / "images"),
+        work_root=str(tmp_path / "work"),
+        ply_root=str(ply_root),
+        checkpoint=mani,
+    )
+
+    assert len(calls["undistort"]) == 1
+    assert len(calls["fuse"]) == 1
+    expected_ply = str(ply_root / "cluster_0" / "fused.ply")
+    assert result == {0: expected_ply}
+    assert Path(expected_ply).exists()
+
+    sig = mvs._dense_sig(0, str(sparse_dir), **_dense_sig_args())
+    assert mani.is_done("dense", 0, sig) is True
+
+
+@pytest.mark.parametrize("geom_consistency", [True, False])
+def test_reconstruct_threads_geom_consistency(tmp_path, monkeypatch, geom_consistency):
+    """geom_consistency must reach BOTH the patch_match spec (pool) AND dense_fuse
+    (a miss here reintroduces the empty-PLY bug fixed in 193ded76)."""
+    from databricks.labs.gbx.pyrx import mvs
+
+    sparse_dir = tmp_path / "sparse"
+    sparse_dir.mkdir()
+
+    captured = {}
+
+    def fake_undistort(sparse, image_dir, work_dir, *, num_src_images=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        return work_dir
+
+    def fake_pool(specs, *, allocation=None, runner=None, max_retries=1):
+        captured["pool_geom"] = [s["geom_consistency"] for s in specs]
+        return {s["cluster_id"]: {"status": "ok"} for s in specs}
+
+    def fake_fuse(work_dir, out_ply, *, geom_consistency=True):
+        captured["fuse_geom"] = geom_consistency
+        Path(out_ply).write_bytes(b"ply")
+        return out_ply
+
+    monkeypatch.setattr(mvs, "dense_undistort", fake_undistort)
+    monkeypatch.setattr(mvs, "dense_mvs_pool", fake_pool)
+    monkeypatch.setattr(mvs, "dense_fuse", fake_fuse)
+    monkeypatch.setattr(
+        mvs, "recommend_dense_allocation", lambda *a, **k: {"cache_size_gb": 8.0}
+    )
+
+    mvs.dense_reconstruct_clusters(
+        {0: (str(sparse_dir), None)},
+        str(tmp_path / "images"),
+        work_root=str(tmp_path / "work"),
+        geom_consistency=geom_consistency,
+    )
+
+    assert captured["pool_geom"] == [geom_consistency]
+    assert captured["fuse_geom"] == geom_consistency
+
+
+def test_reconstruct_drops_patch_match_failure(tmp_path, monkeypatch):
+    """A cluster whose patch_match pool status != 'ok' is dropped from the
+    result (and reported via on_event); other clusters still succeed."""
+    from databricks.labs.gbx.pyrx import mvs
+
+    sparse0 = tmp_path / "sparse0"
+    sparse0.mkdir()
+    sparse1 = tmp_path / "sparse1"
+    sparse1.mkdir()
+
+    def fake_undistort(sparse, image_dir, work_dir, *, num_src_images=None):
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        return work_dir
+
+    def fake_pool(specs, *, allocation=None, runner=None, max_retries=1):
+        out = {}
+        for s in specs:
+            if s["cluster_id"] == 0:
+                out[s["cluster_id"]] = {"status": "error", "error": "boom"}
+            else:
+                out[s["cluster_id"]] = {"status": "ok"}
+        return out
+
+    def fake_fuse(work_dir, out_ply, *, geom_consistency=True):
+        Path(out_ply).write_bytes(b"ply")
+        return out_ply
+
+    monkeypatch.setattr(mvs, "dense_undistort", fake_undistort)
+    monkeypatch.setattr(mvs, "dense_mvs_pool", fake_pool)
+    monkeypatch.setattr(mvs, "dense_fuse", fake_fuse)
+    monkeypatch.setattr(
+        mvs, "recommend_dense_allocation", lambda *a, **k: {"cache_size_gb": 8.0}
+    )
+
+    events = []
+    result = mvs.dense_reconstruct_clusters(
+        {0: (str(sparse0), None), 1: (str(sparse1), None)},
+        str(tmp_path / "images"),
+        work_root=str(tmp_path / "work"),
+        on_event=events.append,
+    )
+
+    assert 0 not in result
+    assert 1 in result
+    assert any("[DROP]" in e for e in events)
+
+
+def test_reconstruct_force_ignores_checkpoint(tmp_path, monkeypatch):
+    """force=True bypasses an existing checkpoint entry and recomputes."""
+    from databricks.labs.gbx.pyrx import mvs
+    from databricks.labs.gbx.pyrx.checkpoint import Manifest
+
+    sparse_dir = tmp_path / "sparse"
+    sparse_dir.mkdir()
+    (sparse_dir / "images.bin").write_bytes(b"x" * 7)
+
+    ply_root = tmp_path / "plys"
+    persisted = ply_root / "cluster_0" / "fused.ply"
+    persisted.parent.mkdir(parents=True)
+    persisted.write_bytes(b"old")
+
+    mani = Manifest(str(tmp_path / "manifest.json"))
+    sig = mvs._dense_sig(0, str(sparse_dir), **_dense_sig_args())
+    mani.mark_done("dense", 0, sig, str(persisted))
+
+    calls = {"undistort": 0, "fuse": 0}
+
+    def fake_undistort(sparse, image_dir, work_dir, *, num_src_images=None):
+        calls["undistort"] += 1
+        Path(work_dir).mkdir(parents=True, exist_ok=True)
+        return work_dir
+
+    def fake_pool(specs, *, allocation=None, runner=None, max_retries=1):
+        return {s["cluster_id"]: {"status": "ok"} for s in specs}
+
+    def fake_fuse(work_dir, out_ply, *, geom_consistency=True):
+        calls["fuse"] += 1
+        Path(out_ply).write_bytes(b"new")
+        return out_ply
+
+    monkeypatch.setattr(mvs, "dense_undistort", fake_undistort)
+    monkeypatch.setattr(mvs, "dense_mvs_pool", fake_pool)
+    monkeypatch.setattr(mvs, "dense_fuse", fake_fuse)
+    monkeypatch.setattr(
+        mvs, "recommend_dense_allocation", lambda *a, **k: {"cache_size_gb": 8.0}
+    )
+
+    result = mvs.dense_reconstruct_clusters(
+        {0: (str(sparse_dir), None)},
+        str(tmp_path / "images"),
+        work_root=str(tmp_path / "work"),
+        ply_root=str(ply_root),
+        checkpoint=mani,
+        force=True,
+    )
+
+    assert calls["undistort"] == 1
+    assert calls["fuse"] == 1
+    assert result == {0: str(persisted)}
+    assert Path(persisted).read_bytes() == b"new"

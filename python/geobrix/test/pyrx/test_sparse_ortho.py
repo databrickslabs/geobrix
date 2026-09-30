@@ -40,3 +40,18 @@ def test_backproject_returns_none_when_too_low():
     # camera only 0.5 m above the ground plane -> h_above < 1.0 -> skip
     case = _nadir_case(height_m=0.5)
     assert _backproject_image(**case) is None
+
+
+def test_ortho_canvas_dims():
+    from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+    e0, e1, n0, n1, w, h = _ortho_canvas_dims(0.0, 100.0, 0.0, 50.0, gsd_cm=5.0)
+    # 5% margin each side
+    assert e0 == -5.0 and e1 == 105.0 and n0 == -2.5 and n1 == 52.5
+    # (110 m / 0.05) = 2200 px wide; (55 m / 0.05) = 1100 px tall
+    assert w == 2200 and h == 1100
+
+
+def test_ortho_canvas_dims_tiny_nonzero():
+    from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+    _, _, _, _, w, h = _ortho_canvas_dims(0.0, 0.0, 0.0, 0.0, gsd_cm=5.0)
+    assert w >= 1 and h >= 1

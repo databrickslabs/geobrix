@@ -211,6 +211,36 @@ def rasterize_enu_ortho(
     return str(out_ortho), str(out_dsm)
 
 
+def _ortho_canvas_dims(e_min, e_max, n_min, n_max, gsd_cm):
+    """Pure extent→canvas-size math: apply 5% margin to union ground extent,
+    compute pixel dimensions from GSD.
+
+    Used by sparse orthomosaic to size the shared canvas before projection.
+    Returns ``(e_min_margined, e_max_margined, n_min_margined, n_max_margined,
+    out_w, out_h)`` where ``out_w``/``out_h`` ≥ 1 even for degenerate zero
+    extents.
+
+    Args:
+        e_min, e_max: easting bounds (metres).
+        n_min, n_max: northing bounds (metres).
+        gsd_cm: ground-sample distance in centimetres.
+
+    Returns:
+        Tuple of (e_min_margined, e_max_margined, n_min_margined, n_max_margined,
+        out_w, out_h) where out_w and out_h are ints ≥ 1.
+    """
+    me = (e_max - e_min) * 0.05
+    mn = (n_max - n_min) * 0.05
+    e_min -= me
+    e_max += me
+    n_min -= mn
+    n_max += mn
+    gsd_m = gsd_cm / 100.0
+    out_w = max(1, int((e_max - e_min) / gsd_m))
+    out_h = max(1, int((n_max - n_min) / gsd_m))
+    return e_min, e_max, n_min, n_max, out_w, out_h
+
+
 def _backproject_image(
     src_rgb,
     *,

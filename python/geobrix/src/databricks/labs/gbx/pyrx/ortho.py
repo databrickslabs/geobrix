@@ -211,6 +211,103 @@ def rasterize_enu_ortho(
     return str(out_ortho), str(out_dsm)
 
 
+def _backproject_image(
+    src_rgb,
+    *,
+    cam_f,
+    cam_cx,
+    cam_cy,
+    cam_w,
+    cam_h,
+    R_cw,
+    t_cw,
+    T_cid,
+    C_enu,
+    z_med,
+    e_min,
+    n_max,
+    gsd_m,
+    out_w,
+    out_h,
+    blend_gamma,
+):
+    """Pure-numpy per-camera back-projection core of the sparse orthomosaic:
+    project one camera's already-decoded RGB image onto the shared ENU ground
+    plane ``z=z_med`` and radially weight the result.
+
+    This is the numeric body of ``accumulate_orthomosaic``'s
+    ``_project_cluster._one`` (config_nb cell ``9e68917e``), carved out
+    verbatim so it is unit-testable with a synthetic camera and no pycolmap.
+    The caller (a pycolmap-aware wrapper) reads ``cam_f``/``cam_cx``/``cam_cy``/
+    ``cam_w``/``cam_h`` off the COLMAP camera, ``R_cw``/``t_cw`` off
+    ``image.cam_from_world()``, and ``C_enu`` via ``apply_sim3(T_cid,
+    image.projection_center())`` — this function itself never imports
+    pycolmap.
+
+    ``T_cid = (scale, R(3,3), t(3,))`` is the cluster's Sim(3) COLMAP-frame ->
+    shared-ENU transform (from ``place_clusters_shared_enu``); ``R_cw``(3,3) /
+    ``t_cw``(3,) are the COLMAP ``cam_from_world`` pose for this image.
+
+    Returns ``(px0, px1, py0, py1, colors, weights)`` — ``colors`` is
+    ``float32`` ``(py1-py0, px1-px0, 3)``, ``weights`` is ``float32``
+    ``(py1-py0, px1-px0)`` — or ``None`` when the camera is <1 m above the
+    ground plane (``C_enu[2]-z_med < 1.0``) or its footprint bbox is
+    empty/off-canvas (``px0>=px1 or py0>=py1``).
+    """
+
+    def _to_colmap(pe):
+        s, R, t = T_cid
+        return ((R.T @ (np.atleast_2d(pe) - t).T) / s).T
+
+    f = cam_f
+    cx = cam_cx
+    cy = cam_cy
+    cw = cam_w
+    ch = cam_h
+    h_above = float(C_enu[2] - z_med)
+    if h_above < 1.0:
+        return None
+    hep = int(h_above * (cw / 2) / f / gsd_m) + 4
+    hnp = int(h_above * (ch / 2) / f / gsd_m) + 4
+    fc_px = (C_enu[0] - e_min) / gsd_m
+    fc_py = (n_max - C_enu[1]) / gsd_m
+    px0 = max(0, int(fc_px - hep))
+    px1 = min(out_w, int(fc_px + hep))
+    py0 = max(0, int(fc_py - hnp))
+    py1 = min(out_h, int(fc_py + hnp))
+    if px0 >= px1 or py0 >= py1:
+        return None
+    src = src_rgb
+    out_e = (e_min + (np.arange(px0, px1) + 0.5) * gsd_m).astype(np.float32)
+    out_n = (n_max - (np.arange(py0, py1) + 0.5) * gsd_m).astype(np.float32)
+    ge, gn = np.meshgrid(out_e, out_n)
+    ht, wt = ge.shape
+    P_enu = np.column_stack([ge.ravel(), gn.ravel(), np.full(ht * wt, z_med, np.float32)])
+    P_cam = (
+        R_cw.astype(np.float32) @ _to_colmap(P_enu).astype(np.float32).T
+        + t_cw.astype(np.float32)[:, None]
+    ).T
+    valid = P_cam[:, 2] > 1e-6
+    dz = np.where(valid, P_cam[:, 2], 1.0)
+    u = np.where(valid, f * P_cam[:, 0] / dz + cx, -1.0).reshape(ht, wt)
+    v = np.where(valid, f * P_cam[:, 1] / dz + cy, -1.0).reshape(ht, wt)
+    in_img = (u >= 0) & (u < cw - 1) & (v >= 0) & (v < ch - 1)
+    u0 = np.clip(u.astype(np.int32), 0, cw - 2)
+    v0 = np.clip(v.astype(np.int32), 0, ch - 2)
+    uf = (u - u0).clip(0, 1)
+    vf = (v - v0).clip(0, 1)
+    colors = (
+        src[v0, u0] * ((1 - uf) * (1 - vf))[..., None]
+        + src[v0, u0 + 1] * (uf * (1 - vf))[..., None]
+        + src[v0 + 1, u0] * ((1 - uf) * vf)[..., None]
+        + src[v0 + 1, u0 + 1] * (uf * vf)[..., None]
+    )
+    de = (u - cx) / (cw / 2)
+    dn = (v - cy) / (ch / 2)
+    w = np.maximum(0.0, 1.0 - np.sqrt(de**2 + dn**2)) ** blend_gamma * in_img
+    return px0, px1, py0, py1, colors.astype(np.float32), w.astype(np.float32)
+
+
 def _import_pycolmap():
     """Lazily import pycolmap, raising a clear error when the photogrammetry
     extra is not installed. Never imported at module top — this module must

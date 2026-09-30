@@ -28,6 +28,24 @@ def test_segment_uses_injected_backend(monkeypatch):
     assert out.dtype == np.int32
 
 
+def test_segment_all_background_when_objects_none(monkeypatch):
+    """On an all-background chip, SamGeo may leave handle.backend.objects as None
+    instead of a 2D label mask. segment() must treat that as an all-background
+    result -- an HxW int32 zeros mask sized from the INPUT image -- rather than
+    letting np.asarray(None).astype("int32") produce an invalid 0-d array."""
+
+    class FakeSam:
+        def generate(self, arr, **kwargs):
+            self.objects = None
+            return None
+
+    h = geosam.GeoSamHandle(backend=FakeSam(), model_type="vit_b")
+    out = geosam.segment(h, np.zeros((5, 7, 3), np.uint8))
+    assert out.shape == (5, 7)
+    assert out.dtype == np.int32
+    assert out.max() == 0
+
+
 def test_load_without_deps_raises_clear_error(monkeypatch):
     monkeypatch.setattr(
         geosam,

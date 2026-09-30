@@ -66,6 +66,18 @@ def segment(handle: GeoSamHandle, image):
     (dtype sized to the object count) with 0=background and a unique positive
     integer per object when ``unique=True`` (the default) -- exactly the label-mask
     contract this function returns.
+
+    On an all-background chip (common when chipping a large orthomosaic) SamGeo may
+    leave ``handle.backend.objects`` as None, or an empty/non-2D array, instead of a
+    proper HxW label mask. Treat that as all-background: return an HxW int32 zeros
+    mask sized from the INPUT image, rather than letting
+    ``np.asarray(None).astype("int32")`` produce an invalid 0-d array.
     """
     handle.backend.generate(image, foreground=True, unique=True)
-    return np.asarray(handle.backend.objects).astype("int32")
+    objs = handle.backend.objects
+    if objs is None:
+        return np.zeros(image.shape[:2], dtype=np.int32)
+    arr = np.asarray(objs)
+    if arr.ndim != 2 or arr.size == 0:
+        return np.zeros(image.shape[:2], dtype=np.int32)
+    return arr.astype("int32")

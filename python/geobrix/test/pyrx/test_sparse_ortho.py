@@ -12,15 +12,33 @@ def _nadir_case(height_m=40.0, cam_w=64, cam_h=48, f=50.0):
     # world->cam: X_cam=+X, Y_cam=-Y, Z_cam=-Z (camera looks down +Z_cam == -Z_world)
     R_cw = np.array([[1.0, 0, 0], [0, -1.0, 0], [0, 0, -1.0]])
     t_cw = -R_cw @ C_enu
-    src = np.full((cam_h, cam_w, 3), (200.0, 40.0, 40.0), dtype=np.float32)  # uniform red-ish
+    src = np.full(
+        (cam_h, cam_w, 3), (200.0, 40.0, 40.0), dtype=np.float32
+    )  # uniform red-ish
     # canvas: 2 m span around the footprint, 5 cm px
     gsd_m = 0.05
     e_min, e_max, n_min, n_max = -1.0, 1.0, -1.0, 1.0
     out_w = int((e_max - e_min) / gsd_m)
     out_h = int((n_max - n_min) / gsd_m)
-    return dict(src_rgb=src, cam_f=f, cam_cx=cam_w / 2, cam_cy=cam_h / 2, cam_w=cam_w, cam_h=cam_h,
-                R_cw=R_cw, t_cw=t_cw, T_cid=T_cid, C_enu=C_enu, z_med=0.0,
-                e_min=e_min, n_max=n_max, gsd_m=gsd_m, out_w=out_w, out_h=out_h, blend_gamma=4.0)
+    return dict(
+        src_rgb=src,
+        cam_f=f,
+        cam_cx=cam_w / 2,
+        cam_cy=cam_h / 2,
+        cam_w=cam_w,
+        cam_h=cam_h,
+        R_cw=R_cw,
+        t_cw=t_cw,
+        T_cid=T_cid,
+        C_enu=C_enu,
+        z_med=0.0,
+        e_min=e_min,
+        n_max=n_max,
+        gsd_m=gsd_m,
+        out_w=out_w,
+        out_h=out_h,
+        blend_gamma=4.0,
+    )
 
 
 def test_backproject_covers_and_preserves_uniform_color():
@@ -150,6 +168,7 @@ def test_backproject_returns_none_when_too_low():
 
 def test_ortho_canvas_dims():
     from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+
     e0, e1, n0, n1, w, h = _ortho_canvas_dims(0.0, 100.0, 0.0, 50.0, gsd_cm=5.0)
     # 5% margin each side
     assert e0 == -5.0 and e1 == 105.0 and n0 == -2.5 and n1 == 52.5
@@ -159,18 +178,25 @@ def test_ortho_canvas_dims():
 
 def test_ortho_canvas_dims_tiny_nonzero():
     from databricks.labs.gbx.pyrx.ortho import _ortho_canvas_dims
+
     _, _, _, _, w, h = _ortho_canvas_dims(0.0, 0.0, 0.0, 0.0, gsd_cm=5.0)
     assert w >= 1 and h >= 1
 
 
 def test_sparse_orthomosaic_signature_light_import():
     import inspect
+
     from databricks.labs.gbx.pyrx import ortho
+
     sig = inspect.signature(ortho.sparse_orthomosaic)
     p = sig.parameters
     assert list(p)[:3] == ["cluster_models", "image_dir", "out_tiff"]
     assert "spark" not in p  # driver-side, no Spark
-    assert p["gsd_cm"].default == 3.0 and p["max_workers"].default == 8 and p["blend_gamma"].default == 4.0
+    assert (
+        p["gsd_cm"].default == 3.0
+        and p["max_workers"].default == 8
+        and p["blend_gamma"].default == 4.0
+    )
     for kw in ("gsd_cm", "max_workers", "blend_gamma"):
         assert p[kw].kind is inspect.Parameter.KEYWORD_ONLY
 
@@ -181,5 +207,8 @@ def test_sparse_orthomosaic_end_to_end(tmp_path):
     # which is impractical to synthesize minimally. Assert the callable + contract here
     # and defer the true end-to-end to the on-cluster nb1a run (documented integration gate).
     from databricks.labs.gbx.pyrx import ortho
+
     assert callable(ortho.sparse_orthomosaic)
-    pytest.skip("sparse_orthomosaic end-to-end needs a real reconstruction; validated on-cluster (nb1a)")
+    pytest.skip(
+        "sparse_orthomosaic end-to-end needs a real reconstruction; validated on-cluster (nb1a)"
+    )

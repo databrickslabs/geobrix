@@ -92,10 +92,18 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
                     # Isolate the native SIFT extraction in a child process so its
                     # memory is fully reclaimed when the child exits.
                     proc = subprocess.run(
-                        [sys.executable, child_script, img_path,
-                         str(worker_db), str(worker_dir), str(MAX_IMAGE_SIZE),
-                         str(int(False))],
-                        capture_output=True, text=True, timeout=300,
+                        [
+                            sys.executable,
+                            child_script,
+                            img_path,
+                            str(worker_db),
+                            str(worker_dir),
+                            str(MAX_IMAGE_SIZE),
+                            str(int(False)),
+                        ],
+                        capture_output=True,
+                        text=True,
+                        timeout=300,
                     )
                     if proc.returncode != 0 or not worker_db.exists():
                         print(
@@ -105,7 +113,9 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
                         )
                         continue
                     conn = sqlite3.connect(worker_db)
-                    kp_data = conn.execute("SELECT rows, cols, data FROM keypoints").fetchone()
+                    kp_data = conn.execute(
+                        "SELECT rows, cols, data FROM keypoints"
+                    ).fetchone()
                     desc_data = conn.execute("SELECT data FROM descriptors").fetchone()
                     gps_row = conn.execute(
                         "SELECT position, coordinate_system, position_covariance, gravity "
@@ -113,7 +123,9 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
                     ).fetchone()
                     if gps_row and gps_row[0]:
                         _pos = np.frombuffer(gps_row[0], dtype=np.float64)
-                        gps_pos = bytes(gps_row[0]) if np.all(np.isfinite(_pos)) else None
+                        gps_pos = (
+                            bytes(gps_row[0]) if np.all(np.isfinite(_pos)) else None
+                        )
                         gps_cs = int(gps_row[1]) if gps_pos is not None else 0
                         gps_cov = bytes(gps_row[2]) if gps_row[2] is not None else None
                         gps_grav = bytes(gps_row[3]) if gps_row[3] is not None else None
@@ -138,23 +150,27 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
                     if kp_data and desc_data:
                         with Image.open(img_path) as img:
                             w, h = img.size
-                        yield pd.DataFrame([{
-                            "source": row["source"],
-                            "keypoints": kp_data[2],
-                            "kp_rows": kp_data[0],
-                            "kp_cols": kp_data[1],
-                            "descriptors": desc_data[0],
-                            "width": w,
-                            "height": h,
-                            "gps_pos": gps_pos,
-                            "gps_cs": gps_cs,
-                            "gps_cov": gps_cov,
-                            "gps_grav": gps_grav,
-                            "cam_model": cam_model_val,
-                            "cam_w": cam_w_val,
-                            "cam_h": cam_h_val,
-                            "cam_params": cam_params_val,
-                        }])
+                        yield pd.DataFrame(
+                            [
+                                {
+                                    "source": row["source"],
+                                    "keypoints": kp_data[2],
+                                    "kp_rows": kp_data[0],
+                                    "kp_cols": kp_data[1],
+                                    "descriptors": desc_data[0],
+                                    "width": w,
+                                    "height": h,
+                                    "gps_pos": gps_pos,
+                                    "gps_cs": gps_cs,
+                                    "gps_cov": gps_cov,
+                                    "gps_grav": gps_grav,
+                                    "cam_model": cam_model_val,
+                                    "cam_w": cam_w_val,
+                                    "cam_h": cam_h_val,
+                                    "cam_params": cam_params_val,
+                                }
+                            ]
+                        )
                     conn.close()
                 finally:
                     if worker_db.exists():
@@ -177,11 +193,11 @@ def _match_pairs_dist(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame
     emits verified two-view geometries with >=10 inlier matches.
     """
     import sqlite3
+    from pathlib import Path
 
     import numpy as np
     import pandas as pd
     import pycolmap
-    from pathlib import Path
 
     for pdf in iterator:
         results = []
@@ -196,47 +212,71 @@ def _match_pairs_dist(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.DataFrame
                 pycolmap.extract_features(db_path, dummy)
                 conn = sqlite3.connect(db_path)
                 cursor = conn.cursor()
-                for t in ["cameras", "images", "keypoints", "descriptors", "two_view_geometries"]:
+                for t in [
+                    "cameras",
+                    "images",
+                    "keypoints",
+                    "descriptors",
+                    "two_view_geometries",
+                ]:
                     cursor.execute(f"DELETE FROM {t}")
                 _cm = int(row["cam_model"]) if row.get("cam_model") is not None else 2
                 _cw = int(row["cam_w"]) if row.get("cam_w") is not None else 4000
                 _ch = int(row["cam_h"]) if row.get("cam_h") is not None else 3000
-                _cp = bytes(row["cam_params"]) if row.get("cam_params") is not None else \
-                    np.array([1733.30, _cw / 2, _ch / 2, 0.0], dtype=np.float64).tobytes()
+                _cp = (
+                    bytes(row["cam_params"])
+                    if row.get("cam_params") is not None
+                    else np.array(
+                        [1733.30, _cw / 2, _ch / 2, 0.0], dtype=np.float64
+                    ).tobytes()
+                )
                 cursor.execute(
                     "INSERT INTO cameras (camera_id, model, width, height, params, prior_focal_length) "
-                    "VALUES (1, ?, ?, ?, ?, 1)", (_cm, _cw, _ch, _cp))
+                    "VALUES (1, ?, ?, ?, ?, 1)",
+                    (_cm, _cw, _ch, _cp),
+                )
                 cursor.execute(
-                    "INSERT INTO images (image_id, name, camera_id) VALUES (1, 'img1', 1), (2, 'img2', 1)")
+                    "INSERT INTO images (image_id, name, camera_id) VALUES (1, 'img1', 1), (2, 'img2', 1)"
+                )
                 cursor.execute(
                     "INSERT INTO keypoints (image_id, rows, cols, data) VALUES (?, ?, ?, ?)",
-                    (1, int(row["kp_rows_1"]), int(row["kp_cols_1"]), row["kp1"]))
+                    (1, int(row["kp_rows_1"]), int(row["kp_cols_1"]), row["kp1"]),
+                )
                 cursor.execute(
                     "INSERT INTO keypoints (image_id, rows, cols, data) VALUES (?, ?, ?, ?)",
-                    (2, int(row["kp_rows_2"]), int(row["kp_cols_2"]), row["kp2"]))
+                    (2, int(row["kp_rows_2"]), int(row["kp_cols_2"]), row["kp2"]),
+                )
                 d1_rows = len(row["desc1"]) // 128
                 d2_rows = len(row["desc2"]) // 128
                 cursor.execute(
                     "INSERT INTO descriptors (image_id, rows, cols, data, type) VALUES (?, ?, 128, ?, 0)",
-                    (1, d1_rows, row["desc1"]))
+                    (1, d1_rows, row["desc1"]),
+                )
                 cursor.execute(
                     "INSERT INTO descriptors (image_id, rows, cols, data, type) VALUES (?, ?, 128, ?, 0)",
-                    (2, d2_rows, row["desc2"]))
+                    (2, d2_rows, row["desc2"]),
+                )
                 conn.commit()
                 conn.close()
                 m_opts = pycolmap.FeatureMatchingOptions()
                 m_opts.sift.max_ratio = 0.85
-                pycolmap.match_exhaustive(database_path=db_path, matching_options=m_opts)
+                pycolmap.match_exhaustive(
+                    database_path=db_path, matching_options=m_opts
+                )
                 conn = sqlite3.connect(db_path)
                 match_row = conn.execute(
                     "SELECT rows, data, config FROM two_view_geometries LIMIT 1"
                 ).fetchone()
                 conn.close()
                 if match_row and match_row[0] >= 10:
-                    results.append({
-                        "src1": row["src1"], "src2": row["src2"],
-                        "matches": match_row[1], "match_config": match_row[2],
-                    })
+                    results.append(
+                        {
+                            "src1": row["src1"],
+                            "src2": row["src2"],
+                            "matches": match_row[1],
+                            "match_config": match_row[2],
+                        }
+                    )
             except Exception as e:
                 print(f"[match_pairs_dist] FAILED {row['src1']} <-> {row['src2']}: {e}")
             finally:
@@ -411,10 +451,13 @@ def _gps_from_master(db):
     (cell b07bd8e1, Stage 4-5) — a module-private helper for `run_sfm`.
     """
     import sqlite3 as __sq
+
     _c = __sq.connect(str(db))
     _o = {}
-    for _n, _p in _c.execute("SELECT i.name, p.position FROM images i "
-                             "JOIN pose_priors p ON p.pose_prior_id = i.image_id"):
+    for _n, _p in _c.execute(
+        "SELECT i.name, p.position FROM images i "
+        "JOIN pose_priors p ON p.pose_prior_id = i.image_id"
+    ):
         _o[_n] = np.frombuffer(_p, dtype=np.float64).tolist()
     _c.close()
     return _o
@@ -504,7 +547,9 @@ def run_sfm(  # noqa: C901
         _reuse = _table_ok and _cached_n > 0 and not force_features
         if _reuse:
             df_features = spark.table(feature_table)
-            print(f"[Stage 1] reusing cached features: {_cached_n} images (FORCE_RELOAD=False)")
+            print(
+                f"[Stage 1] reusing cached features: {_cached_n} images (FORCE_RELOAD=False)"
+            )
         else:
             if _table_ok and _cached_n == 0 and not force_features:
                 print("[Stage 1] cached features empty - rebuilding (extracting fresh)")
@@ -522,22 +567,28 @@ def run_sfm(  # noqa: C901
             # fan-out (one task per image, keyed on the unique source path) and
             # coalesce(1) to force a single partition for the serialized fallback.
             if serialize_extract:
-                print("[Stage 1] serialized extraction (coalesce 1) - memory-bounded OOM fallback")
+                print(
+                    "[Stage 1] serialized extraction (coalesce 1) - memory-bounded OOM fallback"
+                )
             _extract_df = (
                 df_qc.select("source").coalesce(1)
                 if serialize_extract
                 else df_qc.select("source").repartition(num_partitions, "source")
             )
             (
-                _extract_df
-                .mapInPandas(_extract_features_to_df, schema=feature_schema)
-                .write.mode("overwrite").option("overwriteSchema", "true")
+                _extract_df.mapInPandas(_extract_features_to_df, schema=feature_schema)
+                .write.mode("overwrite")
+                .option("overwriteSchema", "true")
                 .saveAsTable(feature_table)
             )
             df_features = spark.table(feature_table)
-            print(f"[Stage 1] extracted features: {time.perf_counter() - t1:.1f}s | {df_features.count()} images")
+            print(
+                f"[Stage 1] extracted features: {time.perf_counter() - t1:.1f}s | {df_features.count()} images"
+            )
     except Exception as e:
-        print(f"[ERROR Stage 1] Feature extraction failed after {time.perf_counter() - t1:.1f}s: {e}")
+        print(
+            f"[ERROR Stage 1] Feature extraction failed after {time.perf_counter() - t1:.1f}s: {e}"
+        )
         raise RuntimeError(f"[Stage 1 extract] {e}") from e
 
     # ── Stage 2–3: Spatial pair discovery + distributed matching ─────────
@@ -548,11 +599,13 @@ def run_sfm(  # noqa: C901
         if not spark.catalog.tableExists(match_table) or force_matches:
             df_pairs = _find_geo_pairs(spark, df_qc, max_pair_dist_m=max_pair_dist_m)
             (
-                df_pairs
-                .join(df_features.alias("f1"), df_pairs.src1 == F.col("f1.source"))
+                df_pairs.join(
+                    df_features.alias("f1"), df_pairs.src1 == F.col("f1.source")
+                )
                 .join(df_features.alias("f2"), df_pairs.src2 == F.col("f2.source"))
                 .select(
-                    "src1", "src2",
+                    "src1",
+                    "src2",
                     F.col("f1.keypoints").alias("kp1"),
                     F.col("f1.kp_rows").alias("kp_rows_1"),
                     F.col("f1.kp_cols").alias("kp_cols_1"),
@@ -571,14 +624,19 @@ def run_sfm(  # noqa: C901
                     _match_pairs_dist,
                     schema="src1 string, src2 string, matches binary, match_config int",
                 )
-                .write.mode("overwrite").option("overwriteSchema", "true")
+                .write.mode("overwrite")
+                .option("overwriteSchema", "true")
                 .saveAsTable(match_table)
             )
         df_verified_matches = spark.table(match_table)
         match_count = df_verified_matches.count()
-        print(f"[Stage 2-3] Pair matching: {time.perf_counter() - t2:.1f}s | {match_count} verified pairs")
+        print(
+            f"[Stage 2-3] Pair matching: {time.perf_counter() - t2:.1f}s | {match_count} verified pairs"
+        )
     except Exception as e:
-        print(f"[ERROR Stage 2-3] Matching failed after {time.perf_counter() - t2:.1f}s: {e}")
+        print(
+            f"[ERROR Stage 2-3] Matching failed after {time.perf_counter() - t2:.1f}s: {e}"
+        )
         raise RuntimeError(f"[Stage 2-3 match] {e}") from e
 
     if match_count == 0:
@@ -621,16 +679,27 @@ def run_sfm(  # noqa: C901
         _pgps = Path(persist_dir) / "gps_priors.json" if persist_dir else None
         _gps_local = Path(output_dir) / "gps_priors.json"
 
-        if (not force_master and _psparse is not None
-                and _psparse.exists() and _pgps.exists()):
+        if (
+            not force_master
+            and _psparse is not None
+            and _psparse.exists()
+            and _pgps.exists()
+        ):
             if sparse_dir.exists():
                 shutil.rmtree(sparse_dir)
             shutil.copytree(_psparse, sparse_dir)
             shutil.copy2(_pgps, _gps_local)
-            print(f"[Stage 4-5] Reusing persisted SfM (FORCE_RELOAD=False) ← {persist_dir} "
-                  f"({time.perf_counter() - t0:.0f}s)")
-            return {"sparse_dir": str(sparse_dir), "gps_json": str(_gps_local),
-                    "models": None, "registered": None, "reused": True}
+            print(
+                f"[Stage 4-5] Reusing persisted SfM (FORCE_RELOAD=False) ← {persist_dir} "
+                f"({time.perf_counter() - t0:.0f}s)"
+            )
+            return {
+                "sparse_dir": str(sparse_dir),
+                "gps_json": str(_gps_local),
+                "models": None,
+                "registered": None,
+                "reused": True,
+            }
 
         if not master_db.exists() or force_master:
             import pycolmap
@@ -641,7 +710,9 @@ def run_sfm(  # noqa: C901
             with tempfile.TemporaryDirectory() as _init_tmp:
                 _schema_opts = pycolmap.FeatureExtractionOptions()
                 _schema_opts.num_threads = 1
-                pycolmap.extract_features(master_db, Path(_init_tmp), extraction_options=_schema_opts)
+                pycolmap.extract_features(
+                    master_db, Path(_init_tmp), extraction_options=_schema_opts
+                )
 
             local_features = df_features.collect()
             local_matches = df_verified_matches.collect()
@@ -649,9 +720,13 @@ def run_sfm(  # noqa: C901
             best_init_id1, best_init_id2, has_gps = _assemble_colmap_db(
                 master_db, local_features, local_matches
             )
-            local_features_sorted = sorted(local_features, key=lambda r: Path(r.source).name)
-            print(f"  Master DB: {len(local_features_sorted)} images, "
-                  f"GPS={has_gps}, best init pair: {best_init_id1}/{best_init_id2}")
+            local_features_sorted = sorted(
+                local_features, key=lambda r: Path(r.source).name
+            )
+            print(
+                f"  Master DB: {len(local_features_sorted)} images, "
+                f"GPS={has_gps}, best init pair: {best_init_id1}/{best_init_id2}"
+            )
 
             # Incremental mapping
             local_map_db = Path("/tmp/master_sfm_map.db")
@@ -682,19 +757,28 @@ def run_sfm(  # noqa: C901
             mapper_opts.use_robust_loss_on_prior_position = has_gps
             mapper_opts.init_image_id1 = best_init_id1
             mapper_opts.init_image_id2 = best_init_id2
-            mapper_opts.image_names = [Path(r.source).name for r in local_features_sorted]
+            mapper_opts.image_names = [
+                Path(r.source).name for r in local_features_sorted
+            ]
 
             _registered = [0]
             _t_map = [time.perf_counter()]
 
             def _on_init():
-                print("[Mapping] Initial pair found — registering remaining images...", flush=True)
+                print(
+                    "[Mapping] Initial pair found — registering remaining images...",
+                    flush=True,
+                )
 
             def _on_next():
                 _registered[0] += 1
                 elapsed = time.perf_counter() - _t_map[0]
                 rate = _registered[0] / elapsed if elapsed > 0 else 0
-                eta = (len(local_features_sorted) - _registered[0]) / rate if rate > 0 else float("inf")
+                eta = (
+                    (len(local_features_sorted) - _registered[0]) / rate
+                    if rate > 0
+                    else float("inf")
+                )
                 print(
                     f"[Mapping] {_registered[0]}/{len(local_features_sorted)} images "
                     f"({100 * _registered[0] / len(local_features_sorted):.0f}%) | "
@@ -702,7 +786,10 @@ def run_sfm(  # noqa: C901
                     flush=True,
                 )
 
-            print(f"Running incremental mapping ({len(local_features_sorted)} images)...", flush=True)
+            print(
+                f"Running incremental mapping ({len(local_features_sorted)} images)...",
+                flush=True,
+            )
             reconstructions = pycolmap.incremental_mapping(
                 database_path=local_map_db,
                 image_path=Path(image_dir),
@@ -727,7 +814,9 @@ def run_sfm(  # noqa: C901
                     shutil.rmtree(_psparse)
                 shutil.copytree(sparse_dir, _psparse)
                 shutil.copy2(_gps_local, _pgps)
-                print(f"[Stage 4-5] Persisted SfM → {persist_dir} (reusable on FORCE_RELOAD=False)")
+                print(
+                    f"[Stage 4-5] Persisted SfM → {persist_dir} (reusable on FORCE_RELOAD=False)"
+                )
             return {
                 "sparse_dir": str(sparse_dir),
                 "gps_json": str(_gps_local),
@@ -735,11 +824,20 @@ def run_sfm(  # noqa: C901
                 "registered": _registered[0],
             }
         elapsed_total = time.perf_counter() - t0
-        print(f"[Stage 4-5] Pre-existing master DB (force_master=False). "
-              f"Run monitor notebook for status. ({elapsed_total:.0f}s)")
+        print(
+            f"[Stage 4-5] Pre-existing master DB (force_master=False). "
+            f"Run monitor notebook for status. ({elapsed_total:.0f}s)"
+        )
         with open(_gps_local, "w") as _f:
             json.dump(_gps_from_master(master_db), _f)
-        return {"sparse_dir": str(sparse_dir), "gps_json": str(_gps_local), "models": None, "registered": None}
+        return {
+            "sparse_dir": str(sparse_dir),
+            "gps_json": str(_gps_local),
+            "models": None,
+            "registered": None,
+        }
     except Exception as e:
-        print(f"[ERROR Stage 4-5] SfM failed after {time.perf_counter() - t4:.1f}s: {e}")
+        print(
+            f"[ERROR Stage 4-5] SfM failed after {time.perf_counter() - t4:.1f}s: {e}"
+        )
         raise

@@ -315,7 +315,9 @@ def _backproject_image(
     out_n = (n_max - (np.arange(py0, py1) + 0.5) * gsd_m).astype(np.float32)
     ge, gn = np.meshgrid(out_e, out_n)
     ht, wt = ge.shape
-    P_enu = np.column_stack([ge.ravel(), gn.ravel(), np.full(ht * wt, z_med, np.float32)])
+    P_enu = np.column_stack(
+        [ge.ravel(), gn.ravel(), np.full(ht * wt, z_med, np.float32)]
+    )
     P_cam = (
         R_cw.astype(np.float32) @ _to_colmap(P_enu).astype(np.float32).T
         + t_cw.astype(np.float32)[:, None]
@@ -584,7 +586,11 @@ def sparse_orthomosaic(
             cen = apply_sim3(
                 Tc,
                 np.array(
-                    [im.projection_center() for _, im in rec.images.items() if im.has_pose]
+                    [
+                        im.projection_center()
+                        for _, im in rec.images.items()
+                        if im.has_pose
+                    ]
                 ),
             )
             zc = float(cen[:, 2].mean() - 250)
@@ -601,11 +607,17 @@ def sparse_orthomosaic(
         e_min, e_max, n_min, n_max, gsd_cm
     )
     gsd_m = gsd_cm / 100.0
-    _canvas_gb = (out_h * out_w * 3 * 2 + out_h * out_w * 2) / 1024 ** 3
+    _canvas_gb = (out_h * out_w * 3 * 2 + out_h * out_w * 2) / 1024**3
     if _canvas_gb > 4.0:
-        print(f"[WARN] Canvas {_canvas_gb:.1f} GB > 4 GB — raise GSD_CM to reduce.", flush=True)
-    print(f"Canvas: {out_w}x{out_h}px @ {gsd_cm:.1f}cm ({_canvas_gb:.2f} GB float16) "
-          f"from {len(aligned)} cluster(s)", flush=True)
+        print(
+            f"[WARN] Canvas {_canvas_gb:.1f} GB > 4 GB — raise GSD_CM to reduce.",
+            flush=True,
+        )
+    print(
+        f"Canvas: {out_w}x{out_h}px @ {gsd_cm:.1f}cm ({_canvas_gb:.2f} GB float16) "
+        f"from {len(aligned)} cluster(s)",
+        flush=True,
+    )
 
     canvas = np.zeros((out_h, out_w, 3), dtype=np.float16)
     weights = np.zeros((out_h, out_w), dtype=np.float16)
@@ -634,12 +646,22 @@ def sparse_orthomosaic(
                 src_rgb = np.array(pim.convert("RGB"), dtype=np.float32)
             result = _backproject_image(
                 src_rgb,
-                cam_f=cam.params[0], cam_cx=cam.params[1], cam_cy=cam.params[2],
-                cam_w=cw, cam_h=ch,
-                R_cw=R_cw, t_cw=t_cw,
-                T_cid=T_cid, C_enu=C_enu, z_med=z_med,
-                e_min=e_min, n_max=n_max, gsd_m=gsd_m,
-                out_w=out_w, out_h=out_h, blend_gamma=blend_gamma,
+                cam_f=cam.params[0],
+                cam_cx=cam.params[1],
+                cam_cy=cam.params[2],
+                cam_w=cw,
+                cam_h=ch,
+                R_cw=R_cw,
+                t_cw=t_cw,
+                T_cid=T_cid,
+                C_enu=C_enu,
+                z_med=z_med,
+                e_min=e_min,
+                n_max=n_max,
+                gsd_m=gsd_m,
+                out_w=out_w,
+                out_h=out_h,
+                blend_gamma=blend_gamma,
             )
             if result is None:
                 return
@@ -660,12 +682,16 @@ def sparse_orthomosaic(
         _project_cluster(rec, T[cid], cluster_z[cid])
         del rec
         gc.collect()
-        print(f"[ortho] cluster {cid}: projected ({n_proj[0]} images total)", flush=True)
+        print(
+            f"[ortho] cluster {cid}: projected ({n_proj[0]} images total)", flush=True
+        )
 
     has = weights > 0
     ortho = np.zeros((out_h, out_w, 3), dtype=np.uint8)
     ortho[has] = np.clip(canvas[has] / weights[has, None], 0, 255).astype(np.uint8)
-    print(f"Coverage: {100.0 * has.sum() / (out_h * out_w):.1f}% ({n_proj[0]} images projected)")
+    print(
+        f"Coverage: {100.0 * has.sum() / (out_h * out_w):.1f}% ({n_proj[0]} images projected)"
+    )
 
     # ---- Georef: equirectangular corner + per-pixel degree size, both via core.crs
     # (single consistent source — replaces the notebook's separate inline dpm_lat/
@@ -680,8 +706,16 @@ def sparse_orthomosaic(
     local_tif = new_local_temp_file(suffix=".tif")
     try:
         with rasterio.open(
-            local_tif, "w", driver="GTiff", height=out_h, width=out_w, count=3,
-            dtype="uint8", crs=resolve_crs(4326), transform=transform, compress="lzw",
+            local_tif,
+            "w",
+            driver="GTiff",
+            height=out_h,
+            width=out_w,
+            count=3,
+            dtype="uint8",
+            crs=resolve_crs(4326),
+            transform=transform,
+            compress="lzw",
         ) as dst:
             for b in range(3):
                 dst.write(ortho[:, :, b], b + 1)

@@ -77,7 +77,9 @@ def build_pointcloud_html(
     Returns the HTML string. Does not call ``displayHTML`` -- the caller
     (``plot_point_cloud``) decides notebook-display vs. returning the string.
     """
-    point_size = float(point_size)  # coerce once; a non-numeric caller value raises here
+    point_size = float(
+        point_size
+    )  # coerce once; a non-numeric caller value raises here
     if not _SAFE_BACKGROUND_RE.match(str(background)):
         background = "#111111"
 

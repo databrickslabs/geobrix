@@ -41,9 +41,19 @@ def _feat(name, gps=None):
     desc = np.zeros(10 * 128, dtype=np.uint8).tobytes()
     gps_pos = np.array(gps, dtype=np.float64).tobytes() if gps is not None else None
     return SimpleNamespace(
-        source=f"/imgs/{name}", keypoints=kp, kp_rows=10, kp_cols=4, descriptors=desc,
-        gps_pos=gps_pos, gps_cs=1, gps_cov=None, gps_grav=None,
-        cam_model=2, cam_w=4000, cam_h=3000, cam_params=None,
+        source=f"/imgs/{name}",
+        keypoints=kp,
+        kp_rows=10,
+        kp_cols=4,
+        descriptors=desc,
+        gps_pos=gps_pos,
+        gps_cs=1,
+        gps_cov=None,
+        gps_grav=None,
+        cam_model=2,
+        cam_w=4000,
+        cam_h=3000,
+        cam_params=None,
     )
 
 
@@ -65,8 +75,10 @@ def test_assemble_colmap_db(tmp_path):
         _feat("c.jpg", None),
     ]
     # sorted by basename => a=1, b=2, c=3. Strongest pair is a<->c (5 matches).
-    matches = [_match("/imgs/a.jpg", "/imgs/b.jpg", 2),
-               _match("/imgs/c.jpg", "/imgs/a.jpg", 5)]  # src1 id(3) > src2 id(1): swap path
+    matches = [
+        _match("/imgs/a.jpg", "/imgs/b.jpg", 2),
+        _match("/imgs/c.jpg", "/imgs/a.jpg", 5),
+    ]  # src1 id(3) > src2 id(1): swap path
 
     b1, b2, has_gps = _assemble_colmap_db(db, features, matches)
 
@@ -80,13 +92,15 @@ def test_assemble_colmap_db(tmp_path):
     assert pids == {image_ids_to_pair_id(1, 2), image_ids_to_pair_id(1, 3)}
     con.close()
     assert has_gps is True
-    assert (b1, b2) == (1, 3)   # best init = the 5-match pair, sorted
+    assert (b1, b2) == (1, 3)  # best init = the 5-match pair, sorted
 
 
 def test_extract_features_udf_smoke(tmp_path):
     pytest.importorskip("pycolmap")
-    import pandas as pd
     from pathlib import Path
+
+    import pandas as pd
+
     from databricks.labs.gbx.pyrx.sfm import _extract_features_to_df
 
     # Use a checked-in fixture image if present; else skip (SIFT needs real texture).
@@ -104,14 +118,19 @@ def test_find_geo_pairs_requires_dbr():
     # so _find_geo_pairs cannot be unit-tested locally. Assert it imports and is
     # callable; real coverage is the on-cluster nb1a run. (Documented skip.)
     from databricks.labs.gbx.pyrx import sfm
+
     assert callable(sfm._find_geo_pairs)
-    pytest.skip("ST_DistanceSphere is DBR-native; _find_geo_pairs validated on-cluster (nb1a)")
+    pytest.skip(
+        "ST_DistanceSphere is DBR-native; _find_geo_pairs validated on-cluster (nb1a)"
+    )
 
 
 def test_module_imports_without_pycolmap():
     # pyrx.sfm must import on the light tier; run_sfm exists and is keyword-strict.
     import inspect
+
     from databricks.labs.gbx.pyrx import sfm
+
     sig = inspect.signature(sfm.run_sfm)
     params = sig.parameters
     assert list(params)[0] == "spark"

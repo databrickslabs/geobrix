@@ -261,7 +261,7 @@ stac = [
     "pystac-client>=0.7,<1",
     "planetary-computer>=1.0,<2",
     "tenacity>=8,<10",
-    "requests>=2.25",
+    "requests>=2.34.2",
 ]
 # NASA Earthdata / LP DAAC client (gbx.earthdata) + the EMIT CH4 sample downloader
 # (gbx.sample.emit). Opt-in and NOT part of any *_all umbrella: earthaccess pulls
@@ -272,9 +272,9 @@ stac = [
 # explicitly and accept the churn.
 earthdata = [
     "earthaccess>=0.11,<1",
-    # earthaccess -> s3fs -> aiobotocore -> botocore. Ceiling <1.41.0 spans supported
+    # earthaccess -> s3fs -> aiobotocore -> botocore. Ceiling <1.44.0 spans supported
     # bases without forcing botocore above the pre-installed boto3's own floor.
-    "botocore<1.41.0",
+    "botocore<1.44.0",
 ]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based
@@ -283,7 +283,7 @@ earthdata = [
 # module level; anywidget, tippecanoe, and mapclassify are optional at call time.
 vizx = [
     "matplotlib>=3.7,<4",
-    "geopandas>=1.0,<2",
+    "geopandas>=1.1.4,<2",
     "mapclassify>=2.6,<3",
     "contextily>=1.5,<2",
     "anywidget>=0.9,<1",

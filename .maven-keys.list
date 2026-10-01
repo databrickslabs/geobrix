@@ -1116,6 +1116,48 @@ org.codehaus.plexus:plexus-compiler-javac:pom:2.16.2                            
 org.codehaus.plexus:plexus-compiler-manager:jar:2.16.2                                     = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
 org.codehaus.plexus:plexus-compiler-manager:pom:2.16.2                                     = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
 
+# --- 2026-10-01: Dependabot dependency bumps (PRs #104/#105/#107 + transitives) ---
+#
+# proj4j-epsg 1.4.3 (#104, runtime JAR dependency) is now SIGNED (1.3.0 was noSig).
+# maven-jar-plugin 3.5.1 (#107) + build-helper-maven-plugin 3.6.2 (#105) and the
+# transitive plexus-compiler-* / plexus-utils bumps (pulled by maven-compiler-plugin
+# 3.16.0, #106) are signed by keys ALREADY trusted elsewhere in this keysmap.
+# maven-compiler-plugin 3.16.0 itself verifies against the general 0x84789D24 entry.
+#
+# Trust verification (2026-10-01):
+#
+#   0x21C69D5001D89593B30B028B4404968560D6F9E6   (NEW to this keysmap)
+#       uid: Grigory Pomadchin <gr.pomadchin@gmail.com>
+#       #1 contributor to github.com/locationtech/proj4j (lead maintainer and
+#       Maven Central publisher); org.locationtech.proj4j is a verified namespace.
+#
+#   0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20   (NEW to this keysmap; build-time only)
+#       uid: Jean-Pierre Lerbscher <jean-pierre.lerbscher@jperf.com>
+#       #3 contributor to github.com/javaparser/javaparser; current release signer
+#       (ed25519, created 2024-06-03). javaparser-core is a build-time-only
+#       transitive of maven-compiler-plugin; it does not ship in the GeoBrix JAR.
+#
+#   0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA  (Sylwester Lachiewicz) and
+#   0x88BE34F94BDB2B5357044E2E3A387D43964143E3  (Apache Maven general signer for
+#       maven-deploy/-install/enforcer) are already trusted above / elsewhere here.
+
+org.locationtech.proj4j:proj4j-epsg:jar:1.4.3                                              = 0x21C69D5001D89593B30B028B4404968560D6F9E6
+org.locationtech.proj4j:proj4j-epsg:pom:1.4.3                                              = 0x21C69D5001D89593B30B028B4404968560D6F9E6
+org.codehaus.mojo:build-helper-maven-plugin:jar:3.6.2                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.mojo:build-helper-maven-plugin:pom:3.6.2                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.apache.maven.plugins:maven-jar-plugin:jar:3.5.1                                        = 0x88BE34F94BDB2B5357044E2E3A387D43964143E3
+org.apache.maven.plugins:maven-jar-plugin:pom:3.5.1                                        = 0x88BE34F94BDB2B5357044E2E3A387D43964143E3
+org.codehaus.plexus:plexus-compiler-api:jar:2.17.0                                         = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.plexus:plexus-compiler-api:pom:2.17.0                                         = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.plexus:plexus-compiler-javac:jar:2.17.0                                       = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.plexus:plexus-compiler-javac:pom:2.17.0                                       = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.plexus:plexus-compiler-manager:jar:2.17.0                                     = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.plexus:plexus-compiler-manager:pom:2.17.0                                     = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.plexus:plexus-utils:jar:4.1.0                                                 = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+org.codehaus.plexus:plexus-utils:pom:4.1.0                                                 = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
+com.github.javaparser:javaparser-core:jar:3.28.2                                           = 0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20
+com.github.javaparser:javaparser-core:pom:3.28.2                                           = 0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20
+
 # --- badSig overrides for POMs byte-mutated by db-maven JFrog mirror -----
 #
 # These six .pom files fail pgpverify-maven-plugin with "PGP Signature

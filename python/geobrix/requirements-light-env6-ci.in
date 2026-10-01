@@ -135,7 +135,7 @@ ipython==9.7.0
 
 # --- LiDAR point-cloud reading (laspy + pure-Rust LAZ backend) ---
 laspy==2.5.4
-lazrs==0.6.3
+lazrs==0.8.2
 
 # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
 # Pure-Python; no native dep. Part of [light-base]; available without [photogrammetry].

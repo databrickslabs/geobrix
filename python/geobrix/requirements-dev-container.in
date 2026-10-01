@@ -30,7 +30,7 @@ pandas==2.2.3
 pyarrow==19.0.1
 pyspark==4.0.0
 py4j==0.10.9.9
-requests==2.32.3
+requests==2.34.2
 
 # --- geospatial dev stack (not in DBR) ---
 geopandas==1.1.3

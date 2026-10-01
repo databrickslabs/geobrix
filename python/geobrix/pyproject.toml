@@ -261,7 +261,7 @@ stac = [
     "pystac-client>=0.7,<1",
     "planetary-computer>=1.0,<2",
     "tenacity>=8,<10",
-    "requests>=2.25",
+    "requests>=2.34.2",
 ]
 # NASA Earthdata / LP DAAC client (gbx.earthdata) + the EMIT CH4 sample downloader
 # (gbx.sample.emit). Opt-in and NOT part of any *_all umbrella: earthaccess pulls

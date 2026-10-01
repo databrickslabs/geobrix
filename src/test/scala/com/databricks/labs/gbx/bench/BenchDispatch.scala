@@ -52,6 +52,7 @@ import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Sample
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetSrid
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_SetCrs
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Threshold
+import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_PercentileStretch
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_Resample
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToRes
 import com.databricks.labs.gbx.rasterx.expressions.resample.RST_ResampleToSize
@@ -159,6 +160,7 @@ object BenchDispatch {
     // tile-out transforms with scalar / fixed args (Task 5)
     "rst_band" -> EDIT, "rst_threshold" -> EDIT, "rst_initnodata" -> EDIT,
     "rst_setsrid" -> EDIT, "rst_setcrs" -> EDIT, "rst_updatetype" -> EDIT, "rst_fillnodata" -> FEAT,
+    "rst_percentile_stretch" -> EDIT,
     "rst_filter" -> FOCAL, "rst_convolve" -> FOCAL,
     "rst_asformat" -> FMT, "rst_cog_convert" -> FMT,
     "rst_resample" -> RES, "rst_resample_to_res" -> RES, "rst_resample_to_size" -> RES,
@@ -550,6 +552,8 @@ object BenchDispatch {
     // rst_setcrs: string-CRS relabel (int-cast rule); no reproject, pixels unchanged.
     case "rst_setcrs"      => fpDerived(RST_SetCrs.execute(ds, Map.empty, argS(a, "crs", "4326")))
     case "rst_updatetype"  => fpDerived(RST_UpdateType.execute(ds, Map.empty, argS(a, "new_type", "Float64")))
+    case "rst_percentile_stretch" =>
+      fpDerived(RST_PercentileStretch.execute(ds, Map.empty, argD(a, "lo_pct", 2.0), argD(a, "hi_pct", 98.0)))
     case "rst_fillnodata"  =>
       fpDerived(RST_FillNodata.execute(ds, Map.empty, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0)))
     // KernelFilter accepts {avg, min, max, median, mode} -- NOT "mean" (which
@@ -1169,6 +1173,8 @@ object BenchDispatch {
       case "rst_setsrid"     => rst_setsrid(tile, argI(a, "srid", 4326))
       case "rst_setcrs"      => rst_setcrs(tile, argS(a, "crs", "4326"))
       case "rst_updatetype"  => rst_updatetype(tile, argS(a, "new_type", "Float64"))
+      case "rst_percentile_stretch" =>
+        rst_percentile_stretch(tile, argD(a, "lo_pct", 2.0), argD(a, "hi_pct", 98.0))
       case "rst_fillnodata"  =>
         rst_fillnodata(tile, argD(a, "max_search_dist", 10.0), argI(a, "smoothing_iter", 0))
       case "rst_filter"      => rst_filter(tile, argI(a, "kernel_size", 3), argS(a, "operation", "median"))

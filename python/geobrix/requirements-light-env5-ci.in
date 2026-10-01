@@ -106,7 +106,7 @@ earthaccess==0.18.0
 # to below the base boto3 cap so [earthdata] doesn't upgrade botocore past the pre-installed
 # boto3. Holds aiobotocore on 2.x; s3fs/fsspec are unaffected.
 # Mirror of the [earthdata] pyproject extra cap (floor dropped — single-side cap only).
-botocore<1.41.0
+botocore<1.44.0
 
 # --- Overture static-STAC catalog traversal (gbx.sample.overture). pystac is the
 # static-catalog reader (distinct from pystac-client, which is the search-API client

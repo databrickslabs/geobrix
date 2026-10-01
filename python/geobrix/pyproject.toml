@@ -254,7 +254,7 @@ earthdata = [
     "earthaccess>=0.11,<1",
     # earthaccess -> s3fs -> aiobotocore -> botocore. Ceiling <1.41.0 spans supported
     # bases without forcing botocore above the pre-installed boto3's own floor.
-    "botocore<1.41.0",
+    "botocore<1.44.0",
 ]
 # Visualization helpers (gbx.vizx): matplotlib raster rendering + geopandas map
 # adapters, interactive MapLibre GL viewer (anywidget), and tippecanoe-based

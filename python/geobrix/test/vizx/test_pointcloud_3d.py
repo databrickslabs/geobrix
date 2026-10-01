@@ -98,3 +98,68 @@ def test_plot_point_cloud_rgb_fallback_warns():
     with pytest.warns(UserWarning):
         out = vz.plot_point_cloud(df, color="rgb", max_embed_mb=0)
     import matplotlib.figure; assert isinstance(out, matplotlib.figure.Figure)
+
+
+def test_plot_point_cloud_color_gates_rgb_vs_cmap(monkeypatch):
+    """color='z' (or a named column) must not render true-color even when the
+    source carries RGB -- load_point_cloud returns rgb unconditionally, so
+    plot_point_cloud must gate it on `color` before handing it to the backend.
+    """
+    from databricks.labs.gbx.vizx import _pointcloud_html as pch
+
+    captured = {}
+
+    def _fake_build_pointcloud_html(x, y, z, *, rgb=None, values=None, **kw):
+        captured["rgb"] = rgb
+        return "<div>PointCloudLayer</div>"
+
+    monkeypatch.setattr(pch, "build_pointcloud_html", _fake_build_pointcloud_html)
+
+    from databricks.labs.gbx import vizx as vz
+
+    df = pd.DataFrame(
+        {
+            "x": [0, 1, 2.0],
+            "y": [0, 1, 2.0],
+            "z": [0, 0, 0.0],
+            "r": [1, 2, 3],
+            "g": [4, 5, 6],
+            "b": [7, 8, 9],
+        }
+    )
+    vz.plot_point_cloud(df, color="rgb")
+    assert captured["rgb"] is not None
+
+    vz.plot_point_cloud(df, color="z")
+    assert captured["rgb"] is None
+
+
+def test_plot_point_cloud_static_forwards_max_points_and_seed(monkeypatch):
+    """The forced-static fallback must forward max_points/seed to
+    render_point_cloud_3d, not silently re-decimate at its own defaults.
+    """
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    captured = {}
+
+    def _fake_render_point_cloud_3d(x, y, z, **kw):
+        captured.update(kw)
+        return object()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render_point_cloud_3d)
+
+    from databricks.labs.gbx import vizx as vz
+
+    df = pd.DataFrame(
+        {
+            "x": [0, 1, 2.0],
+            "y": [0, 1, 2.0],
+            "z": [0, 0, 0.0],
+            "r": [1, 2, 3],
+            "g": [4, 5, 6],
+            "b": [7, 8, 9],
+        }
+    )
+    vz.plot_point_cloud(df, max_embed_mb=0, max_points=777, seed=5)
+    assert captured["max_points"] == 777
+    assert captured["seed"] == 5

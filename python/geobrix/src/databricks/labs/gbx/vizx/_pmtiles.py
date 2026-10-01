@@ -266,7 +266,12 @@ def plot_point_cloud(
         data, column=column, max_points=max_points, crs=crs, seed=seed
     )
 
-    if color == "rgb" and rgb is None:
+    # load_point_cloud returns rgb whenever the source carries red/green/blue,
+    # regardless of `color` -- gate it so only color="rgb" actually uses true
+    # color; "z" / a named column must fall through to values+cmap as documented.
+    if color != "rgb":
+        rgb = None
+    elif rgb is None:
         warnings.warn(
             "plot_point_cloud: no RGB in source; falling back to elevation cmap",
             stacklevel=2,
@@ -285,6 +290,8 @@ def plot_point_cloud(
             azim=azim,
             background=background,
             title=title,
+            max_points=max_points,
+            seed=seed,
         )
 
     max_embed_mb = _resolve_embed_budget(max_embed_mb, True)

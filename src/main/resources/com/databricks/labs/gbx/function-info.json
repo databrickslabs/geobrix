@@ -868,6 +868,12 @@
       ],
       "since": "0.5.2"
     },
+    "gbx_rst_land_cover": {
+      "examples": "Examples:\n      > SELECT gbx_rst_land_cover(tile, 'spectral', 6, 0) AS lc FROM multiband_rasters;",
+      "bindings": [
+        "sql"
+      ]
+    },
     "gbx_rst_maketiles": {
       "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_maketiles(tile, 4) t;",
       "usage_args": "tile, size_in_mb",

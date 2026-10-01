@@ -9732,6 +9732,8 @@ _sql_tile_ops = {
     "gbx_rst_savi": _savi_udf,
     "gbx_rst_evi": _evi_udf,
     "gbx_rst_percentile_stretch": _percentile_stretch_udf,
+    # light-only classifier (rst_ pixel classification; no Scala/heavy equivalent)
+    "gbx_rst_land_cover": _land_cover_udf,
     "gbx_rst_slope": _slope_udf,
     "gbx_rst_aspect": _aspect_udf,
     "gbx_rst_hillshade": _hillshade_udf,

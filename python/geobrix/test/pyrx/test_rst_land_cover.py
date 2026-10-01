@@ -70,3 +70,18 @@ def test_rst_land_cover_then_polygonize(spark, two_region_rgb_tile_df):
     vals = {r["v"] for r in rows}
     assert len(rows) >= 2
     assert len(vals) >= 2
+
+
+def test_gbx_rst_land_cover_sql_registration(spark, two_region_rgb_tile_df):
+    """SQL round-trip: gbx_rst_land_cover is registered by prx.register(spark)
+    and can be called from Spark SQL with positional args (tile, method, n_clusters, smooth)."""
+    two_region_rgb_tile_df.createOrReplaceTempView("_lc_sql_test")
+    prx.register(spark)
+    row = spark.sql(
+        "SELECT gbx_rst_land_cover(tile, 'spectral', 6, 0) AS lc FROM _lc_sql_test"
+    ).select(
+        prx.rst_numbands("lc").alias("n"),
+        prx.rst_type("lc").alias("ty"),
+    ).first()
+    assert row["n"] == 1
+    assert row["ty"][0] == "Int32"

@@ -105,6 +105,36 @@ def test_writer_sharded_roundtrips_via_reader(spark, tmp_path):
     assert back.count() == 40
 
 
+def test_writer_no_naming_cols_one_file_per_partition(spark, tmp_path):
+    """Regression: with no groupCol/clusterCol/nameCol, the writer emits ONE
+    .laz per partition, NOT one per row. A per-row uuid stem previously
+    exploded a points DataFrame into one tiny .laz per point (catastrophic on
+    a UC Volume -- one FUSE copy per point)."""
+    import glob
+    import os
+
+    from pyspark.sql import Row
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    n = 200
+    rows = [Row(x=float(i), y=float(i), z=float(i % 7)) for i in range(n)]
+    df = spark.createDataFrame(rows).repartition(3)
+    out = str(tmp_path / "noname")
+    df.write.format("lidar_gbx").mode("overwrite").save(out)
+    parts = glob.glob(os.path.join(out, "*.la*"))
+    assert parts, "no part files written"
+    # One .laz per partition (<= 3), never one per row.
+    assert len(parts) <= 3, f"expected <=3 files (one per partition), got {len(parts)}"
+    assert len(parts) < n, f"writer exploded to {len(parts)} files for {n} rows"
+    back = spark.read.format("lidar_gbx").option("mode", "points").load(out)
+    assert back.count() == n
+
+
 def test_writer_rejects_v1_unsupported_columns(spark, tmp_path):
     from pyspark.sql import Row
 

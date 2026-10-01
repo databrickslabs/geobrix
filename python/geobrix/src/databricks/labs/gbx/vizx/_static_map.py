@@ -294,7 +294,7 @@ def _draw_point_cloud(lyr, ax, legend):
 
     from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
 
-    x, y, _z, values, src_crs = load_point_cloud(
+    x, y, _z, values, _rgb, src_crs = load_point_cloud(
         lyr.data,
         column=lyr.column,
         max_points=lyr.max_points or 150_000,

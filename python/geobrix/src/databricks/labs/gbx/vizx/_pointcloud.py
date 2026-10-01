@@ -1,7 +1,7 @@
 """Point-cloud loading for VizX static rendering.
 
 Normalizes a LAS/LAZ path or an in-memory points structure to decimated
-``(x, y, z, values, src_crs)`` arrays for the ``point_cloud`` layer branch of
+``(x, y, z, values, rgb, src_crs)`` arrays for the ``point_cloud`` layer branch of
 ``plot_static``. Kept separate from ``_static_map`` so the laspy/geopandas
 handling stays testable and the compositor branch stays thin.
 """
@@ -12,16 +12,20 @@ import numpy as np
 
 
 def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0):
-    """Return ``(x, y, z, values, src_crs)`` for a point cloud, decimated to max_points.
+    """Return ``(x, y, z, values, rgb, src_crs)`` for a point cloud, decimated to max_points.
 
     ``data`` is a LAS/LAZ path (read via ``laspy``), a GeoDataFrame of Points
     (elevation from 3D geometry or a ``z`` column), or a pandas DataFrame with
     ``x``/``y``/``z`` columns. ``values`` is the per-point color array: ``column``
     if given (kept in its native dtype so a categorical column stays categorical),
-    else elevation ``z``. ``src_crs`` is the override ``crs`` when provided, else the
-    source's own CRS (LAZ header / GeoDataFrame ``.crs``), else ``None``.
+    else elevation ``z``. ``rgb`` is an ``(N, 3) uint8`` array of per-point true
+    color when the source carries red/green/blue (LAZ color dims, or
+    ``red``/``green``/``blue``/``r``/``g``/``b`` columns), else ``None``. ``src_crs``
+    is the override ``crs`` when provided, else the source's own CRS (LAZ header /
+    GeoDataFrame ``.crs``), else ``None``.
     """
     src_crs = crs
+    rgb = None
     if isinstance(data, str):
         import laspy
 
@@ -36,6 +40,12 @@ def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0)
             except Exception:  # noqa: BLE001
                 src_crs = None
         values = np.asarray(getattr(las, column)) if column else z
+        has_rgb = all(
+            d in las.point_format.dimension_names for d in ("red", "green", "blue")
+        )
+        if has_rgb:
+            arr = np.vstack([las.red, las.green, las.blue]).T.astype("uint32")
+            rgb = (arr >> 8).astype("uint8") if arr.max() > 255 else arr.astype("uint8")
     else:
         try:
             import geopandas as gpd
@@ -58,21 +68,33 @@ def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0)
             if src_crs is None:
                 src_crs = data.crs
             values = np.asarray(data[column]) if column else z
+            rgb = _rgb_from_columns(data)
         else:
             # pandas DataFrame / dict-like with x, y, z keys.
             x = np.asarray(data["x"], dtype="float64")
             y = np.asarray(data["y"], dtype="float64")
             z = np.asarray(data["z"], dtype="float64")
             values = np.asarray(data[column]) if column else z
+            rgb = _rgb_from_columns(data)
 
     n = x.shape[0]
     if max_points and n > max_points:
         idx = np.random.default_rng(seed).choice(n, size=max_points, replace=False)
         idx.sort()
         x, y, z, values = x[idx], y[idx], z[idx], values[idx]
+        if rgb is not None:
+            rgb = rgb[idx]
         warnings.warn(
             f"point_cloud_layer: {n} points decimated to {max_points} "
             f"(raise max_points to render more).",
             stacklevel=2,
         )
-    return x, y, z, values, src_crs
+    return x, y, z, values, rgb, src_crs
+
+
+def _rgb_from_columns(data):
+    """Return ``(N, 3) uint8`` RGB from red/green/blue or r/g/b columns, else ``None``."""
+    for cols in (("red", "green", "blue"), ("r", "g", "b")):
+        if all(c in data for c in cols):
+            return np.vstack([data[c] for c in cols]).T.astype("uint8")
+    return None

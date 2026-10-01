@@ -48,7 +48,7 @@ model-backed inference package for GPU object segmentation.
   object polygons with GeoSAM — in-notebook across 1..N GPUs, or behind a served Unity
   Gateway endpoint. See [Orthomosaic Photogrammetry](./notebooks/orthomosaic).
 
-### LiDAR reader — `lidar_gbx` (new)
+### LiDAR reader and writer — `lidar_gbx` (new)
 
 - **New `lidar_gbx` Spark DataSource** reads LAS and LAZ point-cloud files into a
   Spark DataFrame. Two modes: `metadata` (one row per file, header-level statistics,
@@ -59,6 +59,27 @@ model-backed inference package for GPU object segmentation.
   Serverless-safe. Point reads are columnar and skip empty or unreadable files, so
   full-density (`decimate=1`) point clouds read without stalling. See
   [LiDAR Reader](./readers/lidar).
+
+- **New `lidar_gbx` writer** outputs point DataFrames as LAS/LAZ — the inverse of the reader.
+  `df.write.format("lidar_gbx")` writes `x`/`y`/`z` (plus optional `r`/`g`/`b`) as sharded
+  `.laz` files, one per Spark partition, with deterministic `*_<group>_<cluster>` shard names
+  when `groupCol`/`clusterCol` are set. `singleFile="true"` merges all partitions into one
+  `.laz` on the driver; `merge="true"` folds `.laz`/`.las` files already in the output
+  directory into one, without re-reading the DataFrame. v1 writes `x`/`y`/`z` + `r`/`g`/`b`
+  only (extended per-point attributes such as `intensity` / `classification` are planned for
+  v2). Lightweight only; register the DataSources with `register(spark)` first. See
+  [LiDAR Writer](./writers/lidar).
+
+### EXIF/GPS reader — `exif_gbx` (new)
+
+- **New `exif_gbx` Spark DataSource** reads per-image EXIF/GPS telemetry from drone and camera
+  JPEG/TIFF files into a Spark DataFrame — one row per image, with GPS location (`geom_wkb` as
+  a `POINT(longitude latitude)` in WKB, SRID 4326), altitude, camera model, and orientation.
+  Two modes via the `mode` option: `metadata` (default — header-only tag extraction, never
+  decodes pixels, cheap on large image archives) and `qc` (adds `sharpness` and `brightness`
+  computed from the image pixels, materializing each image under the Serverless memory guard).
+  The `sensorWidthMm` option injects a sensor width for cameras (DJI, GoPro) that omit the
+  `SensorWidth` EXIF tag. Lightweight only; Serverless-safe. See [EXIF Reader](./readers/exif).
 
 ### Point-cloud DSM functions (new)
 
@@ -98,6 +119,20 @@ rest of the raster family; `rx.bin_points_tiled` is a lightweight-tier Python he
   `gbx_rst_percentile_stretch(tile, 2.0, 98.0)` is a common contrast-enhancement and
   display-prep step — for example before a COG or tile export. Available on both the
   heavyweight and lightweight tiers. See [Raster Functions](./api/raster-functions).
+
+### Land-cover classification — `rst_land_cover` (new, Python-only)
+
+- **`rst_land_cover`** classifies an RGB(+NIR) tile into land-cover class ids and returns a
+  single-band `Int32` class-mask tile. Three methods: `"spectral"` (fixed excess-green /
+  brightness thresholds), `"kmeans"` (a SciPy k-means partition over RGB + excess-green +
+  brightness features, labeled by the same spectral thresholds), and `"hybrid"` (default).
+  Each pixel is an index into the class scheme — `["vegetation", "bare", "impervious",
+  "dark"]` by default — and NoData / unclassified pixels are `-1`. It is a **Python-only**
+  lightweight-tier function, called as
+  `rx.rst_land_cover(tile, method=..., n_clusters=..., smooth=...)`; a SQL surface is deferred
+  to a later release. Because the output is an ordinary tile, class regions trace to vector
+  polygons via the registered `gbx_rst_polygonize` streaming UDTF. See
+  [Raster Functions](./api/raster-functions).
 
 ### Geom-aware grid functions — GeometryCollection inputs
 

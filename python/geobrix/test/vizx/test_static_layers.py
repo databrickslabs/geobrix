@@ -205,6 +205,71 @@ def test_vector_layer_category_colors_legend_order_follows_map():
     assert labels == ["vegetation", "bare", "impervious"]  # map order, "dark" absent
 
 
+def _make_inmem_gtiff_bytes(bands=1, size=32, crs="EPSG:3857"):
+    """Return in-memory GeoTIFF bytes as a tiny single- or multi-band raster.
+
+    Uses EPSG:3857 (Web Mercator) by default — matching the CRS of Databricks
+    surface tiles (DSM/DTM/CHM) so the in-memory raster_layer path can composite
+    against vector layers already projected to 3857.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+
+    # Small tile near Golden Gate Park in Web Mercator meters
+    bounds = (-13_633_000, 4_545_000, -13_632_000, 4_546_000)
+    transform = from_bounds(*bounds, size, size)
+    rng = np.random.default_rng(42)
+    data = rng.integers(30, 220, size=(bands, size, size), dtype="uint8")
+    buf = MemoryFile()
+    with buf.open(
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=bands,
+        dtype="uint8",
+        crs=crs,
+        transform=transform,
+    ) as dst:
+        dst.write(data)
+    return buf.read()  # raw GeoTIFF bytes
+
+
+# --- in-memory raster_layer (bytes / tile-Row): regression for plot_cog path ---
+
+
+def test_plot_static_raster_layer_in_memory_bytes():
+    """raster_layer with raw GeoTIFF bytes must render via MemoryFile, not plot_cog.
+
+    Regression guard for the CPLE_OpenFailedError that occurred when plot_static's
+    raster branch passed a tile Row (or bytes) to plot_cog, which calls
+    rasterio.open(str(data)) and misinterprets the Row repr as a file path.
+    Also guards the 'band=' vs 'bands=' typo that would raise TypeError on the
+    plot_raster call (which only surfaces on a cluster run otherwise).
+    """
+    tiff_bytes = _make_inmem_gtiff_bytes(bands=1)
+    ax = plot_static([raster_layer(tiff_bytes, band=1, opacity=0.7)], basemap=False)
+    images = ax.get_images()
+    assert len(images) > 0, "raster_layer(bytes) did not render any image"
+    # opacity was applied via AxesImage.set_alpha after plot_raster
+    assert images[0].get_alpha() == pytest.approx(0.7, abs=0.01)
+
+
+def test_plot_static_raster_layer_tile_row():
+    """raster_layer with a tile Row dict (cellid + raster bytes) must render correctly.
+
+    Covers the _resolve_tile_input detection branch: a dict with 'cellid' and
+    'raster' fields is treated as an in-memory tile struct and routed through
+    plot_raster (MemoryFile), not plot_cog.
+    """
+    tiff_bytes = _make_inmem_gtiff_bytes(bands=1)
+    tile_row = {"cellid": 0, "raster": tiff_bytes}
+    ax = plot_static([raster_layer(tile_row, band=1)], basemap=False)
+    images = ax.get_images()
+    assert len(images) > 0, "raster_layer(tile_row) did not render any image"
+
+
 def test_vector_layer_renders_above_raster(tmp_path):
     # plot_cog draws a raster at zorder=2 (so it sits above a basemap at zorder=1); a
     # vector layer must composite ABOVE the raster or the raster occludes it entirely

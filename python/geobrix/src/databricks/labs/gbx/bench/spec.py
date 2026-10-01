@@ -39,6 +39,7 @@ from databricks.labs.gbx.pyrx.core import (
     mapalgebra,
     ops,
     resample,
+    stretch,
     terrain,
     tessellate,
     tiling,
@@ -371,6 +372,7 @@ _XYZ_LIGHT = (_PYRX + "xyz.py",)
 _OPS_LIGHT = (_PYRX + "ops.py",)
 _ANALYSIS_LIGHT = (_PYRX + "analysis.py",)
 _RESAMPLE_LIGHT = (_PYRX + "resample.py",)
+_STRETCH_LIGHT = (_PYRX + "stretch.py", _NODATA)
 _DERIVEDBAND_LIGHT = (_PYRX + "derivedband.py",)
 # multi-tile reducers (bucket C, group C3) live in core/agg.py; it does NOT
 # import _nodata (grep-confirmed).
@@ -1317,6 +1319,18 @@ REGISTRY: Dict[str, FnSpec] = {
         # as a column in spark-path. Numeric args may stay raw.
         col_fn=lambda t, a: prx.rst_updatetype(t, F.lit(a["new_type"])),
         sources=_EDIT_LIGHT + (_HEAVY + "RST_UpdateType.scala",),
+        core=False,
+    ),
+    # --- stretch (stretch.py) ---
+    "rst_percentile_stretch": FnSpec(
+        "rst_percentile_stretch",
+        "gbx_rst_percentile_stretch",
+        "edit",
+        _BOTH,
+        {"lo_pct": 2.0, "hi_pct": 98.0},
+        core_fn=lambda ds, a: stretch.percentile_stretch(ds, a["lo_pct"], a["hi_pct"]),
+        col_fn=lambda t, a: prx.rst_percentile_stretch(t, a["lo_pct"], a["hi_pct"]),
+        sources=_STRETCH_LIGHT + (_HEAVY + "pixel/RST_PercentileStretch.scala",),
         core=False,
     ),
     # --- features (features.py) ---

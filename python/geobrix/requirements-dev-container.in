@@ -33,7 +33,7 @@ py4j==0.10.9.9
 requests==2.32.3
 
 # --- geospatial dev stack (not in DBR) ---
-geopandas==1.1.3
+geopandas==1.1.4
 keplergl==0.3.2
 pystac-client==0.9.0
 planetary-computer==1.0.0

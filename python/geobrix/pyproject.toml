@@ -283,7 +283,7 @@ earthdata = [
 # module level; anywidget, tippecanoe, and mapclassify are optional at call time.
 vizx = [
     "matplotlib>=3.7,<4",
-    "geopandas>=1.0,<2",
+    "geopandas>=1.1.4,<2",
     "mapclassify>=2.6,<3",
     "contextily>=1.5,<2",
     "anywidget>=0.9,<1",

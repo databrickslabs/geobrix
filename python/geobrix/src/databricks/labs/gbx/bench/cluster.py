@@ -1102,7 +1102,7 @@ else:
     # Synthetic corpus (tiny, 3 .laz): stage in-cell then read. stage_lidar_corpus writes
     # to a local temp dir then copies to the Volume (UC Volumes reject seek-on-write).
     print(f"Staging synthetic LiDAR corpus to {_lidar_dir}...", flush=True)
-    _rd.stage_lidar_corpus(_lidar_dir)
+    _rd.stage_lidar_corpus(_lidar_dir, num_files=100, num_points=50000)
     _laz_files = _rd.list_corpus_files(_lidar_dir, r".*\\.laz$")
 if _laz_files:
     print(f"LIDAR BENCH (light-only): {len(_laz_files)} .laz file(s) under {_lidar_dir}", flush=True)
@@ -1168,7 +1168,7 @@ else:
     # Synthetic corpus (tiny, 5 JPEGs): stage in-cell then read. stage_exif_corpus writes
     # to a local temp dir then copies to the Volume (UC Volumes reject seek-on-write).
     print(f"Staging synthetic EXIF corpus to {_exif_dir}...", flush=True)
-    _rd.stage_exif_corpus(_exif_dir)
+    _rd.stage_exif_corpus(_exif_dir, num_files=100)
     _jpg_files = _rd.list_corpus_files(_exif_dir, r".*\\.(jpg|jpeg)$")
 if _jpg_files:
     print(f"EXIF BENCH (light-only): {len(_jpg_files)} JPEG file(s) under {_exif_dir}", flush=True)

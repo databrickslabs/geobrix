@@ -1275,6 +1275,38 @@ band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
 
 **How to read these.** `rst_chm` is the textbook pure-core-vs-scale crossover: the lightweight NumPy subtract-and-clip wins **5.6×** on a single tile, but serializing every tile's bytes across the JVM↔Python boundary on each row flips it at scale — the heavyweight tier is **~7.3× faster over a 1,000-tile job**. `rst_isoband` favors the heavyweight tier both in isolation (**10×** — GDAL's C-backed polygon extraction) and at the largest scale (**~4.4×**); the two tiers trade places only at small row counts, where fixed job overhead dominates the per-tile average. `rst_binpoints_agg` favors the heavyweight tier at every scale (**up to ~6.8×**): accumulating one `(x, y, z)` triple per row in the JVM beats collecting a Python array per group. Output stays consistent across tiers where it can be fingerprinted — `rst_chm` **exact**, `rst_isoband` **within tolerance**; `rst_binpoints_agg` returns an aggregate tile that is timing-only in this run. The numbers are one cluster snapshot (absolute timings are environment-dependent); the relative picture and the consistency outcome are the stable takeaways. See [How the benchmark works](#how-the-benchmark-works--how-to-run-it).
 
+### LiDAR & EXIF readers and the LiDAR writer (lightweight) {#lidar-exif-io}
+
+The `lidar_gbx` (LAS/LAZ point clouds) and `exif_gbx` (image EXIF/GPS) Spark DataSources are
+**lightweight-only** — there is no heavyweight tier — so these are single-tier spark-path
+timings: read cost per file (header-only `metadata`), per point (`lidar_gbx points`), and with
+pixel decode (`exif_gbx qc`). The `lidar_gbx` writer is timed in its two output modes.
+
+> **Environment:** Databricks · DBR 18.x · classic (rd-fleet.xlarge) · lightweight tier ·
+> synthetic corpus (100 `.laz` × 50,000 points; 100 JPEGs). Spark-path median of the measured
+> iterations after warmup. Run with `gbx:bench:cluster --benchmark-lidar --benchmark-exif`.
+
+| Reader | Mode | Items | Median | Per item |
+|---|---|---|---|---|
+| `lidar_gbx` | `metadata` (header-only) | 100 files | 0.84 s | 8.4 ms / file |
+| `lidar_gbx` | `points` | 5,000,000 points | 1.09 s | ~0.22 µs / point |
+| `exif_gbx` | `metadata` (header-only) | 100 files | 0.79 s | 7.9 ms / file |
+| `exif_gbx` | `qc` (decodes pixels) | 100 files | 1.66 s | 16.6 ms / file |
+
+Header-only `metadata` is the fast path for both readers (no point/pixel decode), and the two
+sit at parity per file (~8 ms). `lidar_gbx points` streams point rows columnar (Arrow), so 5M
+points read in ~1.1 s; `exif_gbx qc` adds Laplacian-variance sharpness and brightness from the
+decoded image, ~2× the metadata cost.
+
+| Writer (`lidar_gbx`, light-only) | Points | Median |
+|---|---|---|
+| `parts` (one `.laz` per partition) | 5,000,000 | 6.3 s |
+| `singleFile` (driver-merged to one `.laz`) | 5,000,000 | 31.6 s |
+
+Sharded **`parts`** is **~5× faster** than **`singleFile`** at 5M points: `singleFile` funnels
+every partition through a driver-side merge, so prefer `parts` for large point clouds and
+reserve `singleFile` for small outputs that must land as one file.
+
 ---
 
 ## How the benchmark works & how to run it

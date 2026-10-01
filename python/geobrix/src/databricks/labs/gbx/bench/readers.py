@@ -691,19 +691,24 @@ def run_format_write(
             for k, v in _setup_opts.items():
                 sw = sw.option(k, str(v))
             sw.save(out_path)
-            # Verify the seed actually landed parts: the timed merge folds the .nc
+            # Verify the seed actually landed parts: the timed merge folds the part
             # files already on disk, so a seed that wrote nothing would surface as a
-            # cryptic "no .nc files to merge" from the timed job. Fail loud here with
-            # the setup context instead (a stale wheel without this seed path, or a
-            # writer that dropped no files, is the usual cause).
+            # cryptic "nothing to merge" from the timed job. Fail loud here with the
+            # setup context instead. The part extension is write-format-specific
+            # (netcdf_gbx -> .nc, lidar_gbx -> .laz/.las), so key off write_fmt rather
+            # than hardcoding .nc (which silently found no lidar parts).
             from databricks.labs.gbx.ds._listing import list_files
 
+            _part_ext = {
+                "netcdf_gbx": r".*\.nc$",
+                "lidar_gbx": r".*\.la[sz]$",
+            }.get(write_fmt, r".*\.[^.]+$")
             _seeded = list_files(
-                out_path, r".*\.nc$", recursive=False, raise_on_empty=False
+                out_path, _part_ext, recursive=False, raise_on_empty=False
             )
             if not _seeded:
                 raise ValueError(
-                    f"merge setup-parts write produced no .nc files under {out_path} "
+                    f"merge setup-parts write produced no part files under {out_path} "
                     f"(write_fmt={write_fmt}, setup_opts={_setup_opts}); the timed merge "
                     f"would have nothing to fold. Check the writer staged parts (and that "
                     f"the deployed wheel includes the merge-setup path)."

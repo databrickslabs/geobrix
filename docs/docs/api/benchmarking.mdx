@@ -816,6 +816,29 @@ The combine family's ~9–12× light gap is dominated by per-tile Python GDAL de
 
 `rst_align_to` was benchmarked in the same run (timing-only; no cross-tier output fingerprint — the output geometry varies by reference tile and CRS).
 
+#### `rst_percentile_stretch` — per-band 2–98% contrast stretch (both tiers) {#percentile-stretch-bench}
+
+`rst_percentile_stretch` clips each band's histogram to its 2nd and 98th percentiles and rescales the valid range to uint8. The lightweight tier computes percentile bounds and the linear rescale in-process with NumPy; the heavyweight tier shells to GDAL.
+
+> **Environment:** Databricks · DBR 18.x (Photon) · classic cluster · bench-corpus 1024² tiles · run `v052-ps-c3`.
+
+*Pure-core (single tile, algorithm in isolation):*
+
+| Tier | ms/tile | Speedup |
+|---|---|---|
+| Lightweight | 22.1 | **~18× faster** |
+| Heavyweight | 406 | — |
+
+*Spark-path amortized per tile (median of one N-tile iteration ÷ N):*
+
+| N tiles | Light/tile (ms) | Heavy/tile (ms) | Light speedup |
+|---|---|---|---|
+| 10 | 163.9 | 1,334.5 | ~8× |
+| 100 | 34.6 | 135.0 | ~3.9× |
+| **1,000** | **4.08** | **14.03** | **~3.4×** |
+
+**Lightweight wins on both axes.** Unlike terrain and warp functions — where the serialization boundary tax at scale erodes a pure-core win — `rst_percentile_stretch` retains a ~3.4× lightweight edge at 1,000 tiles: NumPy percentile in-process is fast enough that the Python path beats GDAL both at the algorithm level and after amortizing the byte-boundary cost.
+
 #### Repartition strategy
 
 The spark-path numbers above are wall-clock for a whole distributed job, so they're sensitive to how evenly the 1,000 tiles spread across the cluster's task slots. The benchmark harness tunes the partitioning so the comparison reflects the engines, not a straggler tail:
@@ -1306,6 +1329,19 @@ decoded image, ~2× the metadata cost.
 Sharded **`parts`** is **~5× faster** than **`singleFile`** at 5M points: `singleFile` funnels
 every partition through a driver-side merge, so prefer `parts` for large point clouds and
 reserve `singleFile` for small outputs that must land as one file.
+
+### Land-cover classification — `rst_land_cover` (lightweight) {#land-cover-bench}
+
+`rst_land_cover` classifies a ≥3-band RGB tile into per-pixel land-cover class IDs. It is **lightweight-only** — there is no heavyweight tier — so the numbers below are single-tier absolute throughputs rather than a cross-tier ratio.
+
+> **Environment:** lightweight pure-core, synthetic RGB tile, `n_clusters=6`, `smooth=3`, measured locally in the pyrx venv.
+
+| Method | 256² (ms) | 512² (ms) | 1024² (ms) | Throughput |
+|---|---|---|---|---|
+| `spectral` | 5.3 | 19.3 | 74.1 | ~14 Mpix/s |
+| `hybrid` (default) | 64.6 | 276.6 | 1,238.7 | ~1 Mpix/s |
+
+**Cost is strongly method-dependent.** `spectral` — a fast threshold-based deterministic pass — runs ~15× faster than the default `hybrid` at 1024² (74 ms vs 1,239 ms): `hybrid` adds a k-means refinement step that improves class boundary quality at the cost of speed. Choose `spectral` when throughput matters; choose `hybrid` when class quality takes priority.
 
 ---
 

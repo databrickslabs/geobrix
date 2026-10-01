@@ -423,21 +423,55 @@ def _draw_one_layer(
             ax.imshow(lyr.data, alpha=ras_alpha)
             ax.set_axis_off()
         else:
-            from databricks.labs.gbx.vizx._cog import plot_cog
+            # Detect in-memory bytes or tile Row/dict (the ``raster`` field is bytes
+            # inside the Spark tile struct) vs a file path string.  plot_cog only
+            # handles file paths (it calls ``rasterio.open(str(path))``); in-memory
+            # inputs must go through plot_raster which uses a MemoryFile.
+            _is_inmem = isinstance(lyr.data, (bytes, bytearray, memoryview))
+            if not _is_inmem and not isinstance(lyr.data, str):
+                # Possibly a tile Row/dict — resolve to check for embedded raster bytes.
+                try:
+                    from databricks.labs.gbx.vizx._raster import _resolve_tile_input
 
-            # Warp to the SAME CRS the vector branch above already reprojects
-            # to (Web Mercator) so a composite raster+vector render aligns --
-            # otherwise a geographic-CRS raster draws at degree-scale
-            # coordinates while the vector draws at mercator-meters, and both
-            # collapse to sub-pixel specks (a near-blank composite).
-            plot_cog(
-                lyr.data,
-                band=lyr.band,
-                basemap=False,
-                ax=ax,
-                emphasis=emphasis,
-                to_crs="EPSG:3857",
-            )
+                    _rb, _, _ = _resolve_tile_input(lyr.data)
+                    _is_inmem = _rb is not None
+                except Exception:
+                    pass
+            if _is_inmem:
+                # In-memory path: use plot_raster (MemoryFile-based, handles bytes and
+                # tile Row/VirtualTile).  The tile is already in its source CRS; if it
+                # matches the vector layers (EPSG:3857 for Databricks surface tiles) the
+                # composite aligns without reprojection.  Apply layer opacity afterwards
+                # by adjusting the alpha of AxesImage objects added to the axes.
+                _imgs_before = len(ax.get_images())
+                from databricks.labs.gbx.vizx._raster import plot_raster
+
+                plot_raster(
+                    lyr.data,
+                    bands=lyr.band,
+                    ax=ax,
+                    cmap=lyr.cmap or None,
+                    emphasis=emphasis,
+                )
+                if lyr.opacity is not None:
+                    for _img in ax.get_images()[_imgs_before:]:
+                        _img.set_alpha(lyr.opacity)
+            else:
+                from databricks.labs.gbx.vizx._cog import plot_cog
+
+                # Warp to the SAME CRS the vector branch above already reprojects
+                # to (Web Mercator) so a composite raster+vector render aligns --
+                # otherwise a geographic-CRS raster draws at degree-scale
+                # coordinates while the vector draws at mercator-meters, and both
+                # collapse to sub-pixel specks (a near-blank composite).
+                plot_cog(
+                    lyr.data,
+                    band=lyr.band,
+                    basemap=False,
+                    ax=ax,
+                    emphasis=emphasis,
+                    to_crs="EPSG:3857",
+                )
     elif lyr.kind == "point_cloud":
         _draw_point_cloud(lyr, ax, legend)
     elif lyr.kind == "pmtiles":

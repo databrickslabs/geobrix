@@ -67,7 +67,7 @@ def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0)
                 z = np.asarray(geom.z, dtype="float64")
             else:
                 raise ValueError(
-                    "point_cloud_layer: GeoDataFrame needs 3D (z) geometry or a 'z' column"
+                    "load_point_cloud: GeoDataFrame needs 3D (z) geometry or a 'z' column"
                 )
             if src_crs is None:
                 src_crs = data.crs
@@ -89,7 +89,7 @@ def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0)
         if rgb is not None:
             rgb = rgb[idx]
         warnings.warn(
-            f"point_cloud_layer: {n} points decimated to {max_points} "
+            f"load_point_cloud: {n} points decimated to {max_points} "
             f"(raise max_points to render more).",
             stacklevel=2,
         )

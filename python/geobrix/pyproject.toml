@@ -92,16 +92,6 @@ light-base = [
     # protobuf-6 floor (light_dbr19/env6) live in the per-regime variant deltas below.
     "mapbox-vector-tile>=2.1",
     "scikit-image>=0.22,<1",
-    # scikit-image does `import lazy_loader` at import time, so the rst_land_cover worker
-    # needs lazy_loader in whatever env scikit-image runs from. scikit-image only requires
-    # lazy_loader>=0.4 and the Serverless base ships exactly 0.4 — so `%pip install
-    # geobrix[...]` resolves scikit-image into the notebook-scoped env but, seeing the
-    # base's 0.4 as satisfying >=0.4, does NOT copy lazy_loader into that env; the worker
-    # runs from the notebook-scoped env (which can't see the base copy) and dies on
-    # `from skimage.morphology import disk` → ModuleNotFoundError. Pin ABOVE the base
-    # (>=0.5) so %pip is forced to install lazy_loader into the notebook-scoped env
-    # alongside scikit-image. (Revisit if the Serverless base ever ships >=0.5.)
-    "lazy_loader>=0.5",
     "xarray-spatial>=0.4,<1",
     # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
     # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
@@ -320,17 +310,22 @@ models = [
     "segment-geospatial",
 ]
 # GPU is env5-only on purpose, mirroring [photogrammetry_gpu_env5]: Serverless GPU AI
-# Runtime env5 = CUDA 12, env6 = CUDA 13. torch's default PyPI Linux wheel bundles
-# CUDA 12.8 (nvidia-cuda-runtime-cu12 / nvidia-cublas-cu12) through torch==2.10.0;
-# torch==2.11.0 switched its default Linux wheel to CUDA 13 (nvidia-*-cu13,
-# cuda-toolkit==13.0.2) -- confirmed by inspecting each release's wheel METADATA on
-# the PyPI mirror at impl time (2026-09-28). torchvision pins its torch dependency
-# EXACTLY per release (torchvision==0.25.0 -> torch==2.10.0), so both are pinned
-# explicitly here rather than left to the resolver. No models_gpu_env6 until a
-# CUDA-13 torch pairing is verified, same as photogrammetry_gpu_env5/env6.
+# Runtime env5 = CUDA 12, env6 = CUDA 13, and GeoBrix standardizes its whole GPU stack on
+# CUDA 12 (pycolmap-cuda12 has no CUDA-13 build -- see nb1b / Part 1b). torch's default PyPI
+# Linux wheel bundles CUDA 12 through torch 2.10.x; torch==2.11.0 flips the default wheel to
+# CUDA 13 (nvidia-*-cu13 / cuda-toolkit==13.0.2 -- confirmed via each release's wheel METADATA
+# on the PyPI mirror, 2026-09-28). So torch MUST stay pinned below 2.11 to remain CUDA-12,
+# else segment-geospatial floats it to a CUDA-13 build. Pin to the env5 BASE's torch
+# (2.9.0 / torchvision 0.24.0 -- itself CUDA-12, cu129) rather than the newest CUDA-12 release
+# (2.10.0): both honor the CUDA-12 requirement, but matching the base means pip does NOT
+# upgrade the base torch -- a 2.10.0 upgrade otherwise collides with the base's
+# torch==2.9.0-pinned torchaudio / vllm / xformers and prints noisy pip "ERROR" conflict lines
+# (ugly in a public example). torchvision pins its torch exactly per release (0.24.0 -> 2.9.0),
+# so both are pinned. No models_gpu_env6 until a CUDA-13 torch pairing is verified, same as
+# photogrammetry_gpu_env5/env6.
 models_gpu_env5 = [
-    "torch==2.10.0",
-    "torchvision==0.25.0",
+    "torch==2.9.0",
+    "torchvision==0.24.0",
     "segment-geospatial",
     # segment-geospatial pulls opencv-python-headless UNPINNED, so it inherits the GPU
     # AI Runtime base env's opencv-python-headless 5.0.0.93. OpenCV *5.x*'s bundled libs

@@ -37,6 +37,10 @@ def __getattr__(name):
         from databricks.labs.gbx.vizx._pmtiles import plot_pmtiles
 
         return plot_pmtiles
+    if name == "plot_point_cloud":
+        from databricks.labs.gbx.vizx._pmtiles import plot_point_cloud
+
+        return plot_point_cloud
     if name == "simplify_tiles_from_source":
         from databricks.labs.gbx.vizx._simplify import simplify_tiles_from_source
 
@@ -59,6 +63,7 @@ __all__ = [
     "plot_interactive",
     "plot_interactive_dynamic",
     "plot_pmtiles",
+    "plot_point_cloud",
     "plot_cog",
     "plot_tile",
     "as_gdf",

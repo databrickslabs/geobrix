@@ -74,3 +74,27 @@ def test_build_pointcloud_html():
     assert "atob" in html   # binary buffer decode in JS
     # point count embedded
     assert "50" in html
+
+def test_plot_point_cloud_static_when_embed_zero():
+    import matplotlib; matplotlib.use("Agg")
+    import matplotlib.figure
+    from databricks.labs.gbx import vizx as vz
+    df = pd.DataFrame({"x":np.arange(100.), "y":np.arange(100.), "z":np.zeros(100),
+                       "r":np.full(100,10,"int"), "g":np.full(100,20,"int"), "b":np.full(100,30,"int")})
+    out = vz.plot_point_cloud(df, color="rgb", max_embed_mb=0)   # force static
+    assert isinstance(out, matplotlib.figure.Figure)
+
+def test_plot_point_cloud_html_outside_notebook():
+    from databricks.labs.gbx import vizx as vz
+    df = pd.DataFrame({"x":np.arange(100.), "y":np.arange(100.), "z":np.zeros(100),
+                       "r":np.full(100,10,"int"), "g":np.full(100,20,"int"), "b":np.full(100,30,"int")})
+    out = vz.plot_point_cloud(df, color="rgb")   # default budget; outside a notebook -> HTML string
+    assert isinstance(out, str) and "PointCloudLayer" in out
+
+def test_plot_point_cloud_rgb_fallback_warns():
+    import matplotlib; matplotlib.use("Agg")
+    from databricks.labs.gbx import vizx as vz
+    df = pd.DataFrame({"x":[0,1.], "y":[0,1.], "z":[0,0.]})  # no color
+    with pytest.warns(UserWarning):
+        out = vz.plot_point_cloud(df, color="rgb", max_embed_mb=0)
+    import matplotlib.figure; assert isinstance(out, matplotlib.figure.Figure)

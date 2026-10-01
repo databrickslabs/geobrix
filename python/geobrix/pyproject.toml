@@ -92,6 +92,18 @@ light-base = [
     # protobuf-6 floor (light_dbr19/env6) live in the per-regime variant deltas below.
     "mapbox-vector-tile>=2.1",
     "scikit-image>=0.22,<1",
+    # scikit-image does `import lazy_loader` at import time. On Serverless, %pip installs
+    # scikit-image into the notebook-scoped env but does NOT pull its transitive lazy_loader
+    # there: the base ships lazy_loader 0.4, which already satisfies scikit-image's >=0.4, so
+    # pip never copies it into the notebook env — and the rst_land_cover worker runs FROM that
+    # env (can't see the base copy), dying on `from skimage.morphology import disk`
+    # (ModuleNotFoundError: lazy_loader). Pin ABOVE the base's 0.4 so pip is FORCED to install
+    # lazy_loader into the notebook-scoped env. Empirically required (verified on Serverless
+    # env5): drop this pin and rst_land_cover fails; with >=0.5 it works. NB: the example
+    # notebooks' `%pip --no-deps --force-reinstall` line must install bare `geobrix` WITHOUT
+    # [extras] — otherwise this pin gets expanded on that line and fails the install against the
+    # base pins; the real dep install (with extras) happens on the following plain %pip line.
+    "lazy_loader>=0.5",
     "xarray-spatial>=0.4,<1",
     # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
     # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling

@@ -39,3 +39,24 @@ def test_rgb_decimation_aligned():
     x, *_1, rgb, _2 = load_point_cloud(df, max_points=100, seed=0)
     assert len(x) == 100 and rgb.shape == (100, 3)
     assert (rgb[:, 0] == (x.astype(int) % 256)).all()  # rgb row i corresponds to x row i
+
+def test_render_3d_rgb_returns_figure():
+    import matplotlib; matplotlib.use("Agg")
+    from databricks.labs.gbx.vizx._pointcloud_static import render_point_cloud_3d
+    n = 500
+    x = np.random.default_rng(0).random(n); y = np.random.default_rng(1).random(n); z = np.random.default_rng(2).random(n)
+    rgb = np.random.default_rng(3).integers(0, 256, size=(n, 3), dtype=np.uint8)
+    fig = render_point_cloud_3d(x, y, z, rgb=rgb, point_size=1.5, title="t")
+    import matplotlib.figure
+    assert isinstance(fig, matplotlib.figure.Figure)
+    ax = fig.axes[0]
+    assert ax.name == "3d"  # Axes3D
+    assert len(ax.collections) >= 1  # the scatter
+
+def test_render_3d_cmap_path_and_singleton():
+    import matplotlib; matplotlib.use("Agg")
+    from databricks.labs.gbx.vizx._pointcloud_static import render_point_cloud_3d
+    # cmap-on-z path (no rgb) + a 1-point cloud must not raise
+    fig = render_point_cloud_3d(np.array([0.0]), np.array([0.0]), np.array([0.0]),
+                                values=np.array([0.0]), cmap="viridis")
+    assert fig.axes[0].name == "3d"

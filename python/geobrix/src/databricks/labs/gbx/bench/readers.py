@@ -292,7 +292,7 @@ def run_virtual_tile_pixel_read(
     1. Confirm ``bench-corpus-reader-10k`` exists at
        ``/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-reader-10k``
        (10,000 tiny 256px / 1-band / float32 tiles; generated separately).
-    2. Stage the wheel: ``gbx:data:push-wheel``.
+    2. Stage the wheel: ``gbx:data:stage-wheel``.
     3. Run FILE-on (no env override).  Pass ``SPARK_WARMUP, SPARK_MEASURED`` (0/1)
        from the notebook globals — this is a spark-path leg, not a pure-core microbench::
 

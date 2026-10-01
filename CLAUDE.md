@@ -65,7 +65,7 @@ All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker containe
 - **Coverage**: `gbx:coverage:scala-package <pkg>` (1–3 min), `gbx:coverage:gaps` (fast), `gbx:coverage:baseline` (~10 min). Full `gbx:coverage:scala` ~10 min — use `--parallel` or `--report-only`.
 - **Docs**: `gbx:docs:dev` (hot reload, port 3000 — reserved for the user; agents use `--port 3001`), `gbx:docs:start` / `gbx:docs:stop`, `gbx:docs:function-info` (regenerate `function-info.json` — in Docker, or it leaks host paths).
 - **Lint**: `gbx:lint:scalastyle` (matches CI — run before push), `gbx:lint:python` (isort/black/flake8; `--fix` on host). Pre-push includes `gbx:lint:python --check`, not just scalastyle.
-- **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:push-wheel`, `gbx:data:push-jar`
+- **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:stage-wheel`, `gbx:data:stage-jar`
 - **CI**: `gbx:ci:push`, `gbx:ci:status`, `gbx:ci:watch`, `gbx:ci:logs`, `gbx:ci:docs`. Dev-branch CI is **not a gate** — batch and push; don't chase red→green on it.
 - **Docker**: `gbx:docker:start`, `gbx:docker:exec "<cmd>"`, `gbx:docker:attach`
 - **Review / Security**: `gbx:review:round` (Isaac — scope it; a full branch-vs-main run silently exits 0/0 findings), `gbx:security:codeql`

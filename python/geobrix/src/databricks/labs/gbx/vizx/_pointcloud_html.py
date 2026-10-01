@@ -18,10 +18,18 @@ class names, buffer-decode marker, point count).
 from __future__ import annotations
 
 import base64
+import re
 
 import numpy as np
 
 from databricks.labs.gbx.vizx._maplibre import _json_for_script
+
+# Safe background values: a hex color (#rgb/#rgba/#rrggbb/#rrggbbaa), a plain CSS
+# color keyword, or an rgb()/rgba() function call. Anything else falls back to the
+# default -- `background` is caller-supplied and interpolated into a style attribute.
+_SAFE_BACKGROUND_RE = re.compile(
+    r"^(#[0-9a-fA-F]{3,4}|#[0-9a-fA-F]{6}|#[0-9a-fA-F]{8}|[a-zA-Z]+|rgba?\([^)]*\))$"
+)
 
 # ---------------------------------------------------------------------------
 # SRI-pinned CDN constants -- mirrors _maplibre's _MAPLIBRE_JS/_MAPLIBRE_JS_SRI
@@ -69,6 +77,10 @@ def build_pointcloud_html(
     Returns the HTML string. Does not call ``displayHTML`` -- the caller
     (``plot_point_cloud``) decides notebook-display vs. returning the string.
     """
+    point_size = float(point_size)  # coerce once; a non-numeric caller value raises here
+    if not _SAFE_BACKGROUND_RE.match(str(background)):
+        background = "#111111"
+
     x = np.asarray(x, dtype="float64")
     y = np.asarray(y, dtype="float64")
     z = np.asarray(z, dtype="float64")
@@ -78,6 +90,20 @@ def build_pointcloud_html(
         x = x - x.mean()
         y = y - y.mean()
         z = z - z.mean()
+
+    import math
+
+    if n > 0:
+        _span = float(max(np.ptp(x), np.ptp(y), np.ptp(z)))
+    else:
+        _span = 0.0
+    # OrbitView scale ~= 2^zoom px/world-unit; frame the span to ~90% of a nominal
+    # ~600px viewport. Scale-invariant: a UTM-meter cloud and a unit cloud both open framed.
+    if _span > 0:
+        _zoom = math.log2(0.9 * 600.0 / _span)
+        _zoom = max(-20.0, min(24.0, _zoom))
+    else:
+        _zoom = 3.0  # degenerate (single point / all-identical) -> old default
 
     positions = np.column_stack([x, y, z]).astype("float32")
 
@@ -111,7 +137,9 @@ def build_pointcloud_html(
             f"{_html.escape(str(title))}</div>"
         )
 
-    container = "pc"
+    import uuid
+
+    container = f"gbx-pc-{uuid.uuid4().hex[:8]}"
     return f"""\
 <div style="position:relative">
 <div id="{container}" style="height:600px;background:{background}"></div>
@@ -130,7 +158,7 @@ def build_pointcloud_html(
     container: "{container}",
     views: [new deck.OrbitView({{}})],
     controller: true,
-    initialViewState: {{target: [0, 0, 0], rotationX: 30, rotationOrbit: 30, zoom: 3}},
+    initialViewState: {{target: [0, 0, 0], rotationX: 30, rotationOrbit: 30, zoom: {_zoom}}},
     layers: [new deck.PointCloudLayer({{
       id: "pc",
       data: {{

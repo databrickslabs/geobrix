@@ -1,3 +1,6 @@
+import math
+import re
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -187,3 +190,118 @@ def test_plot_point_cloud_static_forwards_max_points_and_seed(monkeypatch):
     vz.plot_point_cloud(df, max_embed_mb=0, max_points=777, seed=5)
     assert captured["max_points"] == 777
     assert captured["seed"] == 5
+
+
+def test_plot_point_cloud_embed_raises_output_cap(monkeypatch):
+    """plot_point_cloud's embed branch must raise the Serverless cell-output cap
+    before handing the HTML to displayHTML -- mirrors plot_interactive. The 6MB
+    embed budget plot_point_cloud resolves is only safe when the cell-output cap
+    is raised to 20MB; otherwise displayHTML's ~2-3x inflation truncates/blanks it.
+    """
+    import databricks.labs.gbx.vizx._interactive as itx
+
+    calls = []
+    captured = {}
+    monkeypatch.setattr(
+        itx, "_raise_cell_output_cap", lambda: (calls.append(1) or True)
+    )
+
+    def _fake_dh(html):
+        captured["html"] = html
+
+    monkeypatch.setattr(itx, "_notebook_display_html", lambda: _fake_dh)
+
+    from databricks.labs.gbx import vizx as vz
+
+    df = pd.DataFrame(
+        {
+            "x": [0, 1, 2.0],
+            "y": [0, 1, 2.0],
+            "z": [0, 0, 0.0],
+            "r": [1, 2, 3],
+            "g": [4, 5, 6],
+            "b": [7, 8, 9],
+        }
+    )
+    out = vz.plot_point_cloud(df, color="rgb")
+    assert out is None
+    assert calls == [1], "cap-raise helper must be called on the embed path"
+    assert "html" in captured and "PointCloudLayer" in captured["html"]
+
+
+def test_pointcloud_html_zoom_fits_extent():
+    """The opening zoom must be derived from the cloud's own extent (scale-invariant),
+    not a hardcoded constant -- a UTM-meter cloud (hundreds of units) and a small
+    cloud (tens of units) must open at different, framed zoom levels.
+    """
+    from databricks.labs.gbx.vizx._pointcloud_html import build_pointcloud_html
+
+    n = 50
+    x = np.linspace(0, 10, n)
+    y = np.linspace(0, 5, n)
+    z = np.linspace(0, 2, n)
+    rgb = np.full((n, 3), 128, dtype=np.uint8)
+
+    html_small = build_pointcloud_html(x, y, z, rgb=rgb)
+    html_big = build_pointcloud_html(x * 100, y * 100, z * 100, rgb=rgb)
+
+    def _zoom(html):
+        m = re.search(r"zoom:\s*([-\d.]+)", html)
+        assert m, "no `zoom:` found in HTML"
+        return float(m.group(1))
+
+    zoom_small = _zoom(html_small)
+    zoom_big = _zoom(html_big)
+    assert zoom_big < zoom_small, "a bigger cloud must open at a smaller zoom"
+    assert math.isfinite(zoom_small) and math.isfinite(zoom_big)
+    assert -20.0 <= zoom_small <= 24.0
+    assert -20.0 <= zoom_big <= 24.0
+
+
+def test_load_laz_empty_rgb_no_crash(tmp_path):
+    """A 0-point LAZ in an RGB point format must not crash in the arr.max() reduction."""
+    p = tmp_path / "empty.laz"
+    _write_laz(p, n=0, with_rgb=True)
+    x, y, z, values, rgb, _ = load_point_cloud(str(p), max_points=0)
+    assert x.shape[0] == 0
+    assert rgb is None or rgb.shape == (0, 3)
+
+
+def test_load_df_rgb_16bit_downscaled():
+    """DataFrame r/g/b carrying 16-bit color (0..65535) must downscale to 0..255,
+    not wrap mod 256 (2560 must become 10, not 0).
+    """
+    df = pd.DataFrame(
+        {
+            "x": [0, 1, 2.0],
+            "y": [0, 1, 2.0],
+            "z": [0, 0, 0.0],
+            "r": [2560, 2560, 2560],
+            "g": [5120, 5120, 5120],
+            "b": [7680, 7680, 7680],
+        }
+    )
+    *_, rgb, _ = load_point_cloud(df, max_points=0)
+    assert rgb is not None and rgb.shape == (3, 3)
+    assert list(rgb[0]) == [10, 20, 30]
+
+
+def test_pointcloud_html_unique_container_id():
+    """Two embedded clouds in one document must not collide on getElementById."""
+    from databricks.labs.gbx.vizx._pointcloud_html import build_pointcloud_html
+
+    n = 10
+    x = np.arange(n, dtype="float64")
+    y = np.arange(n, dtype="float64")
+    z = np.zeros(n)
+    rgb = np.full((n, 3), 1, dtype=np.uint8)
+
+    html1 = build_pointcloud_html(x, y, z, rgb=rgb)
+    html2 = build_pointcloud_html(x, y, z, rgb=rgb)
+
+    def _container_id(html):
+        m = re.search(r'<div id="([^"]+)"', html)
+        assert m, "no container <div id=...> found"
+        return m.group(1)
+
+    assert _container_id(html1) != _container_id(html2)

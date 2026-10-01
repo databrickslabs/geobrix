@@ -243,6 +243,11 @@ def plot_point_cloud(
     budget, ``0`` forces the static render, and a built HTML page over budget
     falls back to static automatically.
 
+    ``crs`` is forwarded to :func:`load_point_cloud` (and may be used to resolve
+    the source CRS for metadata), but the 3D render itself is a centered local
+    scene frame -- ``crs`` does NOT reproject the 3D view and there is no
+    basemap or geographic framing.
+
     Returns:
         In a Databricks/IPython notebook, on the interactive path: calls
         ``displayHTML`` and returns ``None``. Outside a notebook: returns the
@@ -255,6 +260,7 @@ def plot_point_cloud(
     from databricks.labs.gbx.vizx._interactive import (
         _format_audit_line,
         _notebook_display_html,
+        _raise_cell_output_cap,
     )
     from databricks.labs.gbx.vizx._maplibre import _emit, _resolve_embed_budget
     from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
@@ -324,6 +330,7 @@ def plot_point_cloud(
 
     dh = _notebook_display_html()
     if dh is not None:
+        _raise_cell_output_cap()  # 6MB budget assumes the 20MB cap; raise it to match
         dh(html)
         return None
     return html

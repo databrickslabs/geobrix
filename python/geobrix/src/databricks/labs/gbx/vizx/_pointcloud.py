@@ -45,7 +45,11 @@ def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0)
         )
         if has_rgb:
             arr = np.vstack([las.red, las.green, las.blue]).T.astype("uint32")
-            rgb = (arr >> 8).astype("uint8") if arr.max() > 255 else arr.astype("uint8")
+            rgb = (
+                (arr >> 8).astype("uint8")
+                if (arr.size and arr.max() > 255)
+                else arr.astype("uint8")
+            )
     else:
         try:
             import geopandas as gpd
@@ -93,8 +97,14 @@ def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0)
 
 
 def _rgb_from_columns(data):
-    """Return ``(N, 3) uint8`` RGB from red/green/blue or r/g/b columns, else ``None``."""
+    """Return ``(N, 3) uint8`` RGB from red/green/blue or r/g/b columns, else ``None``.
+
+    Downscales 16-bit (0..65535) color the same way the LAZ path does, rather
+    than silently wrapping it mod 256.
+    """
     for cols in (("red", "green", "blue"), ("r", "g", "b")):
         if all(c in data for c in cols):
-            return np.vstack([data[c] for c in cols]).T.astype("uint8")
+            arr = np.vstack([data[c] for c in cols]).T.astype("uint32")
+            arr = arr >> 8 if (arr.size and arr.max() > 255) else arr
+            return arr.astype("uint8")
     return None

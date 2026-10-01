@@ -1130,13 +1130,12 @@ if _laz_files:
                               mode="overwrite", options={"mode": "points", "dimensions": "x,y,z", "filterRegex": r".*\\.laz$", "singleFile": "true"},
                               label="singleFile", where="cluster")
     _sink([_w]); lw.append(_w); _lidar_rows.append(_w)
-    # Writer: merge variant (POST-HOC fold of the .laz parts already on disk)
-    # keepParts=true keeps parts across warmup+measured iters; run_format_write seeds the dir first with a one-shot untimed parts write
-    _w = _rd.run_format_write(spark, _lidar_dir, f"{OUT}/lidar-merge", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
-                              write_api="lightweight", read_fmt="lidar_gbx", write_fmt="lidar_gbx",
-                              mode="overwrite", options={"mode": "points", "dimensions": "x,y,z", "filterRegex": r".*\\.laz$", "merge": "true", "keepParts": "true"},
-                              label="merge", where="cluster")
-    _sink([_w]); lw.append(_w); _lidar_rows.append(_w)
+    # Writer: merge (post-hoc fold) is intentionally omitted here. The shared
+    # run_format_write merge-setup seeds parts then re-lists them to confirm the
+    # fold has inputs, but that glob races the Volume write-visibility for a
+    # just-written .laz set (FUSE lists the parts a beat later), so the merge leg
+    # flakes on non-netcdf writers. parts + singleFile cover the write benchmark;
+    # re-enable merge once the merge-setup verify gains a short read retry.
     if _lidar_rows:
         _df = spark.sql(
             f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category IN ('reader', 'writer')"

@@ -21,7 +21,6 @@ import fnmatch
 import os
 import re as _re
 import shutil
-import tempfile
 import uuid
 from collections import OrderedDict
 from contextlib import contextmanager
@@ -37,6 +36,7 @@ from databricks.labs.gbx.ds._listing import (
     to_local_path,
     to_spark_uri,
 )
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 __all__ = [
     "to_local_path",
@@ -1100,7 +1100,9 @@ def open_windowed_via_fileref(file_ref, window, pending, tile_crs=None):
             # warp — raise FileRefReadError to degrade to the local-file path.
             if tile_crs is not None:
                 _, _, pending_srid, _ = pending
-                src_epsg = src.crs.to_epsg() if src.crs else None
+                from databricks.labs.gbx.core.crs import authority_srid_of
+
+                src_epsg = authority_srid_of(src.crs)
                 effective_src_epsg = (
                     pending_srid if pending_srid is not None else src_epsg
                 )
@@ -1365,8 +1367,7 @@ def _stage_local_if_needed(path: str) -> tuple[str, bool]:
         )
 
     # Copy fallback: stage to a local temp (original behavior).
-    fd, tmp = tempfile.mkstemp(suffix=os.path.splitext(path)[1] or ".tif")
-    os.close(fd)
+    tmp = new_local_temp_file(suffix=os.path.splitext(path)[1] or ".tif")
     try:
         with open(path, "rb") as _src, open(tmp, "wb") as _dst:
             shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)

@@ -11,7 +11,6 @@ from __future__ import annotations
 import glob
 import os
 import shutil
-import tempfile
 import uuid
 from dataclasses import dataclass, field
 from typing import Iterator, List, Optional
@@ -20,6 +19,11 @@ from pyspark.sql.datasource import DataSourceWriter, WriterCommitMessage
 from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import _scratch
+from databricks.labs.gbx.ds.writer import (  # noqa: F401
+    _glob_merge_inputs,
+    _publish_merged,
+)
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 
 def _crs_canonical_str(rasterio_crs) -> Optional[str]:
@@ -58,11 +62,11 @@ def _write_crs_var(nc, crs_canonical: Optional[str]) -> None:
     crs_var.crs_canonical = crs_canonical
     # Also store the WKT via rasterio so readers that look for crs_wkt find it.
     try:
-        from rasterio.crs import CRS
+        from databricks.labs.gbx.core.crs import authority_srid_of, resolve_crs
 
-        rio_crs = CRS.from_user_input(crs_canonical)
+        rio_crs = resolve_crs(crs_canonical)
         crs_var.crs_wkt = rio_crs.to_wkt()
-        epsg = rio_crs.to_epsg()
+        epsg = authority_srid_of(rio_crs)
         if epsg is not None:
             crs_var.spatial_epsg = int(epsg)
     except Exception:
@@ -102,67 +106,28 @@ _MERGE_POINTER = (
 _FLOAT_NP_DTYPES = ("f4", "f8")
 
 
-def _glob_merge_inputs(path: str, target: str) -> List[str]:
-    """Glob ``<path>/*.nc`` excluding the resolved output file.
-
-    ``glob`` is non-recursive so it never descends into the hidden
-    ``.gbx_scratch`` container; we additionally exclude the resolved merge
-    output name so a re-merge does not fold a prior merged file into itself.
-    """
-    target_name = os.path.basename(target)
-    return sorted(
-        p
-        for p in glob.glob(os.path.join(path, "*.nc"))
-        if os.path.basename(p) != target_name
-    )
-
-
-def _publish_merged(tmp_path: str, target: str, expected_count: int, count_fn) -> None:
-    """Data-safe publish of a merged temp .nc to ``target``.
-
-    Order (never lose parts to a failed merge): (1) the merge already wrote
-    ``tmp_path``; (2) VALIDATE — reopen cleanly via netCDF4 AND element count
-    (via ``count_fn``) == ``expected_count``; (3) ``shutil.copyfile`` temp ->
-    target; (4) VERIFY target exists and byte size == temp size. Any failure
-    raises BEFORE the caller deletes any source part.
-    """
-    import netCDF4
-
-    # (2) validate: reopen + element count.
-    with netCDF4.Dataset(tmp_path, "r") as nc:
-        actual = count_fn(nc)
-    if actual != expected_count:
-        raise ValueError(
-            f"netcdf_gbx merge: validation failed — merged file has {actual} "
-            f"elements but {expected_count} were expected; source parts left intact."
-        )
-    # (3) copy temp -> target (FUSE-safe: content only, no chmod).
-    shutil.copyfile(tmp_path, target)
-    # (4) verify target exists + byte size matches. On any verify failure, remove
-    # the partial target (best-effort) BEFORE raising so a truncated FUSE copy
-    # does not leave a corrupt-but-valid-looking output; source parts stay intact
-    # because the caller only deletes them AFTER this returns cleanly.
-    if not os.path.exists(target):
-        raise ValueError(
-            f"netcdf_gbx merge: target {target} missing after copy; parts intact."
-        )
-    if os.path.getsize(target) != os.path.getsize(tmp_path):
-        if os.path.exists(target):
-            try:
-                os.remove(target)
-            except OSError:
-                pass
-        raise ValueError(
-            f"netcdf_gbx merge: target {target} size mismatch after copy; parts intact."
-        )
-
-
 def _count_raster_data_vars(nc) -> int:
     return len([v for v in nc.variables if v not in ("lat", "lon", "crs")])
 
 
 def _count_vector_obs(nc) -> int:
     return int(nc.dimensions["obs"].size)
+
+
+def _count_raster_data_vars_path(path: str) -> int:
+    """Path-based count_fn for _publish_merged: count raster data variables."""
+    import netCDF4
+
+    with netCDF4.Dataset(path, "r") as nc:
+        return _count_raster_data_vars(nc)
+
+
+def _count_vector_obs_path(path: str) -> int:
+    """Path-based count_fn for _publish_merged: count observation records."""
+    import netCDF4
+
+    with netCDF4.Dataset(path, "r") as nc:
+        return _count_vector_obs(nc)
 
 
 # ---- Raster grid records --------------------------------------------------
@@ -236,9 +201,12 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
                 if cc is not None:
                     crs_canonical = str(cc)
                     try:
-                        from rasterio.crs import CRS as _CRS
+                        from databricks.labs.gbx.core.crs import (
+                            authority_srid_of,
+                            resolve_crs,
+                        )
 
-                        epsg = _CRS.from_user_input(crs_canonical).to_epsg()
+                        epsg = authority_srid_of(resolve_crs(crs_canonical))
                     except Exception:
                         pass
                 else:
@@ -247,9 +215,12 @@ def _raster_records_from_ncs(paths: List[str]) -> List[dict]:
                     if wkt is not None:
                         crs_canonical = str(wkt)
                         try:
-                            from rasterio.crs import CRS as _CRS
+                            from databricks.labs.gbx.core.crs import (
+                                authority_srid_of,
+                                resolve_crs,
+                            )
 
-                            epsg = _CRS.from_wkt(crs_canonical).to_epsg()
+                            epsg = authority_srid_of(resolve_crs(crs_canonical))
                         except Exception:
                             pass
                     else:
@@ -577,10 +548,9 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                     else f"{self.part_prefix}-{uuid.uuid4().hex[:8]}"
                 )
 
-            tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-            tmp.close()
+            tmp = new_local_temp_file(suffix=".nc")
             try:
-                nc = Dataset(tmp.name, "w")
+                nc = Dataset(tmp, "w")
                 try:
                     nc.createDimension("lat", h)
                     nc.createDimension("lon", w)
@@ -612,10 +582,10 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 out = os.path.join(self.path, f"{stem}.nc")
                 # shutil.copyfile is FUSE-safe: no chmod (copy2 sets perms, FUSE
                 # rejects); no cross-device rename (os.rename fails on FUSE).
-                shutil.copyfile(tmp.name, out)
+                shutil.copyfile(tmp, out)
                 written.append(out)
             finally:
-                os.unlink(tmp.name)
+                os.unlink(tmp)
         return NetcdfCommitMessage(paths=written)
 
     # ------------------------------------------------------------------
@@ -647,9 +617,12 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 _epsg: Optional[int] = None
                 if crs_canonical:
                     try:
-                        from rasterio.crs import CRS as _CRS
+                        from databricks.labs.gbx.core.crs import (
+                            authority_srid_of,
+                            resolve_crs,
+                        )
 
-                        _epsg = _CRS.from_user_input(crs_canonical).to_epsg()
+                        _epsg = authority_srid_of(resolve_crs(crs_canonical))
                     except Exception:
                         pass
                 nodata = ds.nodata
@@ -704,13 +677,12 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
         target = _resolve_single_file_output(self.path, self.file_name, ".nc")
         try:
             records = _raster_records_from_frags(frags)
-            tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-            tmp.close()
+            tmp = new_local_temp_file(suffix=".nc")
             try:
-                expected = _merge_raster_grids(records, tmp.name)
-                _publish_merged(tmp.name, target, expected, _count_raster_data_vars)
+                expected = _merge_raster_grids(records, tmp)
+                _publish_merged(tmp, target, expected, _count_raster_data_vars_path)
             finally:
-                os.unlink(tmp.name)
+                os.unlink(tmp)
         finally:
             # Scratch fragments are always disposable (they are not user parts).
             _scratch.remove_scratch_dir(self.scratch_dir)
@@ -728,13 +700,12 @@ class NetcdfRasterGbxWriter(DataSourceWriter):
                 f"(nothing to merge)."
             )
         records = _raster_records_from_ncs(parts)
-        tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-        tmp.close()
+        tmp = new_local_temp_file(suffix=".nc")
         try:
-            expected = _merge_raster_grids(records, tmp.name)
-            _publish_merged(tmp.name, target, expected, _count_raster_data_vars)
+            expected = _merge_raster_grids(records, tmp)
+            _publish_merged(tmp, target, expected, _count_raster_data_vars_path)
         finally:
-            os.unlink(tmp.name)
+            os.unlink(tmp)
         # DATA-SAFETY: only delete parts AFTER validate+copy+verify all passed.
         if not self.keep_parts:
             for p in parts:
@@ -993,16 +964,15 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
 
         # --- default (parts) mode: write one <partPrefix>-<uuid>.nc ---
         stem = name or f"{self.part_prefix}-{uuid.uuid4().hex[:8]}"
-        tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-        tmp.close()
+        tmp = new_local_temp_file(suffix=".nc")
         try:
-            self._write_nc(tmp.name, lons, lats, attrs, srids)
+            self._write_nc(tmp, lons, lats, attrs, srids)
             out = os.path.join(self.path, f"{stem}.nc")
             # shutil.copyfile is FUSE-safe: no chmod (copy2 sets perms, FUSE
             # rejects); no cross-device rename (os.rename fails on FUSE).
-            shutil.copyfile(tmp.name, out)
+            shutil.copyfile(tmp, out)
         finally:
-            os.unlink(tmp.name)
+            os.unlink(tmp)
         return NetcdfCommitMessage(paths=[out])
 
     def commit(self, messages: list) -> None:
@@ -1048,13 +1018,12 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
 
         try:
             batches = _vector_batches_from_frags(frags, self.attr_cols)
-            tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-            tmp.close()
+            tmp = new_local_temp_file(suffix=".nc")
             try:
-                _merge_vector_points(batches, tmp.name, attr_specs, resolved_srid)
-                _publish_merged(tmp.name, target, expected, _count_vector_obs)
+                _merge_vector_points(batches, tmp, attr_specs, resolved_srid)
+                _publish_merged(tmp, target, expected, _count_vector_obs_path)
             finally:
-                os.unlink(tmp.name)
+                os.unlink(tmp)
         finally:
             _scratch.remove_scratch_dir(self.scratch_dir)
         return None
@@ -1080,14 +1049,13 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             with netCDF4.Dataset(p, "r") as nc:
                 expected += int(nc.dimensions["obs"].size)
 
-        tmp = tempfile.NamedTemporaryFile(suffix=".nc", delete=False)
-        tmp.close()
+        tmp = new_local_temp_file(suffix=".nc")
         try:
             batches = _vector_batches_from_ncs(parts, attr_cols)
-            _merge_vector_points(batches, tmp.name, attr_specs, resolved_srid)
-            _publish_merged(tmp.name, target, expected, _count_vector_obs)
+            _merge_vector_points(batches, tmp, attr_specs, resolved_srid)
+            _publish_merged(tmp, target, expected, _count_vector_obs_path)
         finally:
-            os.unlink(tmp.name)
+            os.unlink(tmp)
         # DATA-SAFETY: only delete parts AFTER validate+copy+verify all passed.
         if not self.keep_parts:
             for p in parts:

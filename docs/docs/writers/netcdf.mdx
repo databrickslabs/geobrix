@@ -184,6 +184,10 @@ would be mislabeled as degrees.
 
 ## Next Steps
 
+:::note Coordinate reference systems
+The writer stores the tile CRS in two CF grid-mapping attributes: `crs_wkt` (the full WKT, authoritative for any CRS) and `spatial_epsg` (the numeric EPSG code for EPSG CRSes). For a non-EPSG CRS — such as `ESRI:54008` — the writer stores the ESRI code in `spatial_epsg` as its integer value (the attribute name implies EPSG, but the value is the ESRI code). Readers should always prefer `crs_canonical` or `crs_wkt` as the authoritative source; `spatial_epsg` is a legacy interoperability field and may carry an ESRI code for non-EPSG CRSes. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 - [NetCDF Reader](../readers/netcdf) — the corresponding read paths (raster, vector, heavyweight).
 - [GeoTIFF Writer](./geotiff) — for COG/GeoTIFF raster output.
 - [Writers Overview](./overview) — all writer formats and the tier split.

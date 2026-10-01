@@ -23,11 +23,11 @@ from __future__ import annotations
 import logging
 import os
 import shutil
-import tempfile
 from contextlib import contextmanager
 from typing import Iterator, List, Optional
 
 from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 __all__ = ["mint_vrt", "minted_vrt"]
 
@@ -55,8 +55,10 @@ def mint_vrt(tile_paths: List[str], out: Optional[str] = None) -> str:
         assumptions as :func:`~databricks.labs.gbx.ds.cog_writer._build_mosaic_vrt`).
     out:
         Optional destination path for the VRT.  When omitted the VRT is
-        placed in a ``tempfile.mkdtemp()`` directory.  The caller is
-        responsible for cleanup when the file is no longer needed.
+        placed in a local temp directory (see
+        :func:`~databricks.labs.gbx.pyrx.core.local_temp.new_local_temp_dir`).
+        The caller is responsible for cleanup when the file is no longer
+        needed.
 
     Returns
     -------
@@ -71,7 +73,7 @@ def mint_vrt(tile_paths: List[str], out: Optional[str] = None) -> str:
 
     if out is not None:
         # Caller supplied a destination — write into a temp dir first, then move.
-        tmp_dir = tempfile.mkdtemp(suffix="_gbx_mint_vrt")
+        tmp_dir = new_local_temp_dir("gbx_mint_")
         try:
             built = _build_mosaic_vrt(abs_paths, tmp_dir, vrt_paths="absolute")
             dest_dir = os.path.dirname(os.path.abspath(out))
@@ -85,7 +87,7 @@ def mint_vrt(tile_paths: List[str], out: Optional[str] = None) -> str:
 
     # Transient: write into a private temp dir.  The VRT references tiles by
     # absolute path, so the temp dir location is irrelevant to rasterio.
-    tmp_dir = tempfile.mkdtemp(suffix="_gbx_mint_vrt")
+    tmp_dir = new_local_temp_dir("gbx_mint_")
     vrt_path = _build_mosaic_vrt(abs_paths, tmp_dir, vrt_paths="absolute")
     _logger.debug(
         "mint_vrt: wrote %d-tile transient VRT to %s", len(abs_paths), vrt_path

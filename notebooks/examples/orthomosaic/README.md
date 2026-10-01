@@ -1,0 +1,74 @@
+# Orthomosaic Photogrammetry Example Series
+
+Drone imagery → georeferenced RGB orthomosaic (+ COG + PMTiles) → segmented object
+polygons. Sparse SfM runs on Serverless environment 5 (CPU); an optional dense MVS pass
+(`01b`) and the GeoSAM segmentation capstone (`03_segment`) run on the Serverless GPU AI
+Runtime.
+
+## Chain
+
+| Notebook | Input | Output | Purpose |
+|---|---|---|---|
+| `config_nb` | — | functions, config | Shared imports, parameters, SfM helpers |
+| `01a_sfm_orthomosaic` | GitHub JPEGs | `orthomosaic.tif` | Download → exif_gbx → QC → sparse SfM → ortho |
+| `01b_sfm_orthomosaic_gpu` (optional) | `01a` sparse model | `orthomosaic_dense.tif`, `dsm_dense.tif`, `dense_merged.laz` (+ sharded `dense_<grp>_<cid>.laz` parts) | GPU dense MVS: patch_match_stereo → fusion → georef |
+| `02_publish` | `orthomosaic.tif` | `orthomosaic_corrected.tif`, `orthomosaic_cog.tif`, `orthomosaic.pmtiles` | Publish: color correction → COG (`cog_gbx`) → PMTiles (`gbx_rst_xyzpyramid` + `pmtiles_gbx`) |
+| `03_segment` (optional) | `orthomosaic_cog.tif` | polygon `DataFrame` (`label`, `geom` WKB, `score`); a served Unity Gateway endpoint | GeoSAM segmentation via `gbx.models`: in-notebook GPU `segment_raster`, then upsize to a served GPU Model Serving endpoint |
+| `monitor` | `output_dir/sparse/` | — | Optional live SfM progress watcher |
+
+## Dependencies
+
+Installed by the `config_nb` `%pip` cell:
+
+```
+geobrix[light_env5,photogrammetry,vizx]
+```
+
+The `photogrammetry` extra bundles: `pycolmap>=4.0.0`, `rasterio>=1.3`, `rio-cogeo>=3.5`,
+`folium`, `pymbtiles`, `mercantile`, `pmtiles`.
+
+The wheel is fetched from:
+```
+/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl
+```
+
+`03_segment` is standalone (no `%run ./config_nb`) and installs its own extras —
+`geobrix[light_env5,models_gpu_env5,vizx]` — since it needs the GeoSAM GPU model deps
+(`torch`, `segment-geospatial`), not `photogrammetry`.
+
+## Runtime
+
+**Serverless environment 5.** `config_nb`, `01a_sfm_orthomosaic`, `02_publish`, and
+`monitor` run on the **CPU** flavor. The optional `01b_sfm_orthomosaic_gpu` (dense MVS)
+and `03_segment` (GeoSAM) steps run on the **Serverless GPU AI Runtime** (same
+environment number, GPU-attached; `pycolmap-cuda12` for `01b`, `torch`/CUDA 12 for
+`03_segment`). Compute-intensive steps on the CPU path:
+
+| Step | Typical runtime (Old Orchard, ~170 images) |
+|---|---|
+| `exif_gbx` extraction | < 1 min |
+| Distributed feature extraction | 5–10 min |
+| Distributed pair matching | 3–8 min |
+| Incremental mapping (pycolmap) | 10–20 min |
+| Orthomosaic projection | 2–5 min |
+
+Adjust `MAX_ORTHO_WORKERS` and `GSD_CM` (config) to trade speed against resolution.
+
+## Sparse vs dense reconstruction
+
+`01a` runs **sparse SfM** (pycolmap `incremental_mapping`): features, matches, and camera
+poses are recovered, and the orthomosaic is assembled by back-projecting each registered
+JPEG onto the estimated ground plane and blending overlapping contributions.
+
+`01b` (optional) adds **dense MVS** — COLMAP `patch_match_stereo` + stereo fusion on the
+**Serverless GPU AI Runtime** (`pycolmap-cuda12`, CUDA 12), scheduled across the node's
+GPUs by `dense_mvs_pool` — producing a dense orthomosaic, DSM, and LAZ point cloud
+(per-cluster and merged). `02_publish` uses the dense orthomosaic when present, else the
+sparse one. The sparse ortho suits GSD estimation, visual inspection, and tile serving;
+the dense pass adds fidelity for measurement workflows.
+
+## Group-key seam
+
+`config_nb` exposes `GROUP_KEY_COL` (default `"_group"`, constant single group).  Change
+it to a real metadata column (e.g. a `"flight_date"` column derived from `timestamp`) to
+run the SfM + ortho pipeline once per flight automatically.

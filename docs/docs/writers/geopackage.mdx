@@ -126,6 +126,10 @@ primitives. The table below shows which are active in this writer and which are 
 | `gbx_file_write` / FILE-tier write | Not in the DataSource | The DataSource writer (`df.write.format("gpkg_gbx")`) is session-less on Connect and commits via FUSE. FILE-tier writes use `vector_file_write` at the function layer instead. |
 | `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for vector data go through `vector_file_read` at the function layer. |
 
+:::note Coordinate reference systems
+The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and registers it in the GPKG `gpkg_spatial_ref_sys` table via `srs.SetFromUserInput`. An EPSG, ESRI, or OGC authority string is accepted; if `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 fallback is used. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 :::note Shared file-access layer
 Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::

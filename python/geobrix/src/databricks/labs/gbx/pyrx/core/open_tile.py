@@ -18,7 +18,6 @@ a nested ``with`` that has already closed.
 
 import os
 import shutil
-import tempfile
 from contextlib import ExitStack, contextmanager
 from typing import Iterator, Optional, Tuple
 
@@ -34,6 +33,7 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.edit import _nodata_fits_dtype
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
@@ -325,7 +325,9 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
             else:
                 c, r, w, h = tile.window
                 window = Window(c, r, w, h)
-            src_epsg = src.crs.to_epsg() if src.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(src.crs)
             want = _epsg_of(tile.crs) if tile.crs else None
             # When pending_srid relabels the CRS, use the relabeled EPSG as the
             # "current" CRS for the warp skip-decision.  Without this, a tile
@@ -736,7 +738,9 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
 
             # Detect whether reprojection is needed.  Warp and clip cannot be
             # done block-by-block (they need full-window context), so fall back.
-            src_epsg = src.crs.to_epsg() if src.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(src.crs)
             want = _epsg_of(tile.crs) if tile.crs else None
             effective_src_epsg = srid if srid is not None else src_epsg
             needs_warp = (want is not None and want != effective_src_epsg) or (
@@ -853,7 +857,9 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
             else:
                 c, r, w, h = vt.window
                 window = Window(c, r, w, h)
-            src_epsg = src.crs.to_epsg() if src.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(src.crs)
             want = _epsg_of(vt.crs) if vt.crs else None
             effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
             if want is not None and want != effective_src_epsg:
@@ -959,9 +965,8 @@ def shape_output(
         out_path = os.path.join(virtualize_dir, base)
 
         # FUSE-safe write: write to a local temp, then copy into place.
-        fd, tmp = tempfile.mkstemp(suffix=".tif")
+        tmp = new_local_temp_file(suffix=".tif")
         try:
-            os.close(fd)
             with open(tmp, "wb") as f:
                 f.write(vt.raster)
             shutil.copyfile(tmp, out_path)

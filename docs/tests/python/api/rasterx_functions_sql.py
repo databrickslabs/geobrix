@@ -3023,6 +3023,24 @@ rst_threshold_sql_example_output = """
 """
 
 
+def rst_percentile_stretch_sql_example():
+    """Per-band percentile contrast stretch to uint8 [0,255]."""
+    return """
+SELECT gbx_rst_percentile_stretch(tile, 2.0, 98.0) AS stretched
+FROM multiband_rasters;
+"""
+
+
+rst_percentile_stretch_sql_example_output = """
++-----------------------------------------------------------+
+|stretched                                                  |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(multiband uint8: each band stretched independently to [0,255])
+"""
+
+
 def rst_buildoverviews_sql_example():
     """Build internal overviews (image pyramid) on a raster tile."""
     return """

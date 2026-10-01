@@ -248,6 +248,10 @@ GeoBrix reads compressed GeoTIFFs transparently. The compression format is autom
 </TabItem>
 </Tabs>
 
+:::note Coordinate reference systems
+GeoTIFF readers extract the CRS from the GTiff SRS tag and store it as a canonical string in `tile.metadata` and the `tile.crs` field (e.g. `"EPSG:4326"`, `"ESRI:54008"`) — ESRI and OGC authorities are preserved. The `clipCrs` option declares the CRS for a plain WKT/WKB clip polygon; an embedded SRID in an EWKT/EWKB polygon takes precedence. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 ## Next Steps
 
 - [GDAL Reader](./raster) - Generic raster reader for all GDAL formats

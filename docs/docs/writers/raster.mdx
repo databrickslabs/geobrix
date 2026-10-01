@@ -119,6 +119,8 @@ full explanation.
 
 The driver / `compression` / `blocksize` / `zlevel` / `zstd_level` are read from
 `tile.metadata` (same as the heavy [`gdal`](./raster?tier=heavyweight) writer).
+See [Materialized Compression](../api/materialized-compression) for the codec,
+level, and dtype-matched predictor details.
 
 The lightweight writer passes whole-file GeoTIFF tiles through **verbatim**, while the
 heavyweight writer re-encodes every tile (decoded pixels are identical either way). The
@@ -212,7 +214,7 @@ produced (e.g. via `RST_AsFormat`); the writer honors them on serialization.
 | Metadata key | Default | Effect |
 |--------------|---------|--------|
 | `driver` / `format` | `GTiff` | GDAL output driver. |
-| `compression` | `DEFLATE` | `DEFLATE` / `ZSTD` / `LZW` / … creation compression. |
+| `compression` | `DEFLATE` | `DEFLATE` / `ZSTD` / `LZW` / … creation compression. See [Materialized Compression](../api/materialized-compression). |
 | `blocksize` | `512` | Tile/block size in pixels (floored to a multiple of 16, clamped to the raster size). |
 | `zlevel` | `6` | DEFLATE level. |
 | `zstd_level` | `9` | ZSTD level. |

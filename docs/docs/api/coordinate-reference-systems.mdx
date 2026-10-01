@@ -10,6 +10,39 @@ import crsGridCode from '!!raw-loader!../../tests/python/api/crs_grid_registrati
 
 A **coordinate reference system (CRS)** ties a raster's or geometry's coordinates to a place on Earth. GeoBrix supports CRS handling **across all three packages** — RasterX, GridX, and VectorX — and across **both raster execution tiers** (lightweight `pyrx` and heavyweight `rasterx`). This page explains the two ways GeoBrix names a CRS — the integer **SRID** and the **CRS string** — when to use each, and how a non-EPSG CRS (an ESRI code, WKT, or PROJ4 definition) survives a full read → operate → write round trip.
 
+## Canonical CRS helpers
+
+Six Python helpers in `databricks.labs.gbx.crs` are the shared foundation for CRS handling across every reader, writer, and spatial function. You can call them directly whenever you need to inspect or convert a CRS outside a Spark pipeline.
+
+| Helper | What it answers |
+|---|---|
+| `resolve_crs(value)` | Given an `int` or `str`, return a `pyproj.CRS`. An integer is resolved EPSG → ESRI; a string is parsed as an authority code (`EPSG:*`, `ESRI:*`, `OGC:*`), WKT, or PROJ4. |
+| `crs_to_canonical(crs)` | Given a `pyproj.CRS`, return `"AUTHORITY:CODE"` when the CRS carries one (EPSG, ESRI, or OGC), else the full WKT. Preserves the authority — `ESRI:54008` in, `ESRI:54008` out; `OGC:CRS84` in, `OGC:CRS84` out. |
+| `authority_srid_of(crs_or_str)` | Return the **integer** SRID when the CRS has a numeric authority code (e.g. `4326`, `54008`), else `None`. `OGC:CRS84` uses the string code `CRS84` — it correctly returns `None`. |
+| `to_pyproj_crs(crs_or_str)` | Convenience alias for `resolve_crs` — always returns a `pyproj.CRS`. |
+| `crs_equal(a, b)` | Return `True` when two CRS values are semantically equal (same datum, projection, and axes) regardless of their string form. Use this for cross-tier parity checks instead of string comparison. |
+| `crs_to_proj4(crs_or_str)` | Return the OGR-parity PROJ4 string. Primarily for interoperability with tools that only accept PROJ4; prefer `crs_to_canonical` for everything else. |
+
+```python
+from databricks.labs.gbx.crs import resolve_crs, crs_to_canonical, authority_srid_of
+
+# Integer SRID: EPSG first, then ESRI
+crs_to_canonical(resolve_crs(4326))    # "EPSG:4326"
+crs_to_canonical(resolve_crs(54008))   # "ESRI:54008"  (54008 is in ESRI, not EPSG)
+
+# String: EPSG, ESRI, and OGC authority codes all work
+crs_to_canonical(resolve_crs("OGC:CRS84"))  # "OGC:CRS84"
+
+# OGC codes are strings, not integers — authority_srid_of returns None
+authority_srid_of("OGC:CRS84")   # None
+authority_srid_of("EPSG:4326")   # 4326
+authority_srid_of("ESRI:54008")  # 54008
+```
+
+:::note Integer SRID resolution order: EPSG first, then ESRI
+When `resolve_crs` is called with an integer: (1) if the code is in the EPSG registry → `EPSG:n`; (2) else if in the ESRI registry → `ESRI:n`. **OGC defines no integer codes** — its identifiers are strings (`CRS84`, `CRS83`, `CRS27`, `CRS84h`); pass an OGC CRS as the string `"OGC:<code>"`. A few codes exist in both EPSG and ESRI; GeoBrix resolves those as **EPSG first**. To use the ESRI variant of a colliding code, pass `"ESRI:<n>"` explicitly.
+:::
+
 ## SRID vs CRS string
 
 GeoBrix names a CRS two ways, and both are first-class:
@@ -71,7 +104,7 @@ WKT and PROJ4 are how a CRS **without** an authority code (so no SRID) is named 
 Everywhere GeoBrix accepts a CRS *string*, one rule decides how it is interpreted, and it lives in a single shared helper per tier (`pyrx.core.crs.resolve_crs` in the lightweight tier, `SpatialRefOps.resolveCrs` in the heavyweight tier):
 
 - A string that **casts cleanly to an integer** — `"4326"`, `" 32633 "` — is treated as an **EPSG SRID**. So `rst_setcrs(tile, '4326')` behaves exactly like `rst_setsrid(tile, 4326)`.
-- **Otherwise** the string is parsed as a universal CRS definition — an authority code (`EPSG:4326`, `ESRI:54008`), WKT, or PROJ4 (`+proj=longlat +datum=WGS84 +no_defs`).
+- **Otherwise** the string is parsed as a universal CRS definition — an authority code (`EPSG:4326`, `ESRI:54008`, `OGC:CRS84`), WKT, or PROJ4 (`+proj=longlat +datum=WGS84 +no_defs`).
 
 This is how ESRI codes, WKT, and PROJ4 definitions all flow through the same string-taking API.
 
@@ -95,6 +128,10 @@ When GeoBrix emits a CRS string — from `rst_crs`, in the tile struct's `crs` f
 
 :::note Compare CRS meaning, not the exact string
 For a CRS that has an authority code (e.g. `ESRI:54008`), both tiers emit the identical authority string. For an **authority-less** CRS — one carrying only embedded WKT with no code — the two tiers can emit **different but equivalent** WKT serializations (GDAL's WKT flavor on the heavyweight tier, pyproj's on the lightweight tier). They describe the **same** CRS and compare equal as CRS objects; only the text differs. So compare CRS **meaning** (reproject/round-trip, or `SpatialReference.IsSame` / a pyproj CRS-equality check), not raw string equality. To pin a stable, identical string across tiers, stamp the CRS explicitly with `rst_setcrs` (e.g. `rst_setcrs(tile, 'ESRI:54008')`).
+:::
+
+:::tip ESRI and OGC authority is preserved on round-trips
+Readers, writers, and raster accessors preserve the ESRI or OGC authority end-to-end. A raster tagged `ESRI:54008` produces `ESRI:54008` from `rst_crs`, in the reader `crs` column, and from `crs_to_canonical` — and writers tag the output accordingly where the format supports it (GTiff SRS element, OGR `.prj`, GPKG `spatial_ref_sys`). Use `authority_srid_of` to extract the numeric SRID: it returns `54008` for `ESRI:54008` and `None` for `OGC:CRS84` (whose code `CRS84` is a string, not an integer). The **parity contract** is semantic: `crs_equal(a, b)` is the right comparison across tiers — a raster emitted as `ESRI:102008` and one as the equivalent WKT are the same CRS.
 :::
 
 ## Source CRS vs output CRS

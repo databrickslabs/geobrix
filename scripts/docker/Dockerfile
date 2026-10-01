@@ -256,12 +256,15 @@ ENV UV_INDEX_URL=${PIP_INDEX_URL}
 # 1. Upgrade pip itself to a known version BEFORE consuming the hash-pinned
 #    lockfile. Bootstrap is hash-pinned too (chicken-and-egg: a compromised
 #    pip could otherwise ignore --require-hashes on the bulk install below).
-#    --ignore-installed bypasses the Debian RECORD error. Hashes match the
-#    pip==$PIP_VERSION entry in requirements-dev-container.txt.
-RUN python3 -m pip install --upgrade --ignore-installed --break-system-packages \
-        pip==$PIP_VERSION \
-        --hash=sha256:88f96547ea48b940a3a385494e181e29fb8637898f88d88737c5049780f196ea \
-        --hash=sha256:c46efd13b6aa8279f33f2864459c8ce587ea6a1a59ee20de055868d8f7688f7f
+#    --ignore-installed bypasses the Debian RECORD error. pip's --hash is only
+#    valid for a requirement given via a file (newer bundled pip on a fresh
+#    ubuntu:24.04 base rejects command-line --hash with "no such option:
+#    --hash"), so materialize a one-line requirements file and install with
+#    --require-hashes. Hashes match the pip==$PIP_VERSION entry in
+#    requirements-dev-container.txt.
+RUN printf 'pip==%s --hash=sha256:88f96547ea48b940a3a385494e181e29fb8637898f88d88737c5049780f196ea --hash=sha256:c46efd13b6aa8279f33f2864459c8ce587ea6a1a59ee20de055868d8f7688f7f\n' "$PIP_VERSION" > /tmp/pip-bootstrap.txt \
+ && python3 -m pip install --upgrade --ignore-installed --break-system-packages \
+        --require-hashes -r /tmp/pip-bootstrap.txt
 
 # 2. Copy the lockfile (and its .in source for in-container regen if needed).
 COPY --link python/geobrix/requirements-dev-container.in python/geobrix/requirements-dev-container.txt /tmp/

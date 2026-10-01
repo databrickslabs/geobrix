@@ -356,3 +356,95 @@ def test_proximity_is_zstd(tmp_path):
     with rasterio.open(p) as ds:
         result = proximity(ds, None, "PIXEL", None)
     _assert_zstd(result, context="analysis.proximity")
+
+
+# ---------------------------------------------------------------------------
+# tile_to_bytes wiring (T1 fail-on-revert: DIV-1 and DIV-2 guards)
+# ---------------------------------------------------------------------------
+
+
+def _make_src_bytes_write(dtype: str, sz: int = 32) -> bytes:
+    """Write a tiny single-band GTiff into memory and return raw bytes."""
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+
+    rng = np.random.default_rng(42)
+    arr = (rng.random((sz, sz)).astype("float64") * 100).astype(dtype)
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            height=sz,
+            width=sz,
+            count=1,
+            dtype=dtype,
+            crs="EPSG:4326",
+            transform=from_bounds(0, 0, 1, 1, sz, sz),
+        ) as ds:
+            ds.write(arr, 1)
+        return mf.read()
+
+
+def test_tile_to_bytes_cog_zstd_float32_predictor_3():
+    """T1 / DIV-1 fail-on-revert: COG+ZSTD float32 must carry predictor=3.
+
+    Before the fold, _write.py::_creation_opts omitted predictor for ZSTD entirely
+    (lines 36-38: only opts["zstd_level"] was set).  After the fold, creation_opts
+    derives predictor=3 from float32 dtype.  Reverting the fold drops the predictor.
+    """
+    from rasterio.enums import Compression
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.ds._write import tile_to_bytes
+
+    src = _make_src_bytes_write("float32")
+    meta = {"compression": "ZSTD", "zstd_level": "9"}
+    out = tile_to_bytes(cellid=0, raster_bytes=src, metadata=meta, force_driver="COG")
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert (
+            ds.compression == Compression.zstd
+        ), f"Expected ZSTD, got {ds.compression}"
+        pred = ds.profile.get("predictor") or ds.tags(ns="IMAGE_STRUCTURE").get(
+            "PREDICTOR"
+        )
+        assert pred is not None and int(pred) == 3, (
+            f"DIV-1 guard: expected predictor=3 for float32 ZSTD COG, got {pred!r}. "
+            "Reverting the _write.py fold removes this predictor."
+        )
+
+
+def test_tile_to_bytes_cog_deflate_uint8_predictor_1():
+    """T1 / DIV-2 fail-on-revert: COG+DEFLATE uint8 must not carry predictor=2.
+
+    Before the fold, _write.py used `'3' if _is_float(dtype) else '2'` which
+    returned 2 for uint8.  Canonical predictor_for('uint8') returns 1.
+    After the fold, creation_opts derives predictor=1.  Reverting returns 2.
+
+    Note on None: GDAL COG's DEFLATE PREDICTOR option is a string-select
+    (YES/NO/STANDARD/FLOATING_POINT) that rejects the numeric value "1".
+    When predictor=1 is passed, GDAL emits a CPLE_NotSupported warning and
+    omits the predictor tag entirely — i.e. pred is None, which means "no
+    prediction", the correct semantics for uint8.  The fail-on-revert property
+    is preserved: reverting the fold restores predictor=2 which is wrong.
+    """
+    from rasterio.enums import Compression
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.ds._write import tile_to_bytes
+
+    src = _make_src_bytes_write("uint8")
+    meta = {"compression": "DEFLATE", "zlevel": "6"}
+    out = tile_to_bytes(cellid=0, raster_bytes=src, metadata=meta, force_driver="COG")
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert (
+            ds.compression == Compression.deflate
+        ), f"Expected DEFLATE, got {ds.compression}"
+        pred = ds.profile.get("predictor") or ds.tags(ns="IMAGE_STRUCTURE").get(
+            "PREDICTOR"
+        )
+        # pred is None means no prediction (GDAL default), which is correct for uint8.
+        # pred == "2" means STANDARD differencing, which is wrong for uint8 (DIV-2 guard).
+        assert pred is None or int(pred) == 1, (
+            f"DIV-2 guard: expected predictor=1 or None (no prediction) for uint8 DEFLATE COG, "
+            f"got {pred!r}. Pre-fold code returned 2 for uint8 (non-float non-small-int branch)."
+        )

@@ -696,9 +696,11 @@ def run_format_write(
             # cryptic "no .nc files to merge" from the timed job. Fail loud here with
             # the setup context instead (a stale wheel without this seed path, or a
             # writer that dropped no files, is the usual cause).
-            import glob as _glob
+            from databricks.labs.gbx.ds._listing import list_files
 
-            _seeded = _glob.glob(os.path.join(out_path, "*.nc"))
+            _seeded = list_files(
+                out_path, r".*\.nc$", recursive=False, raise_on_empty=False
+            )
             if not _seeded:
                 raise ValueError(
                     f"merge setup-parts write produced no .nc files under {out_path} "
@@ -7003,9 +7005,10 @@ def _make_synthetic_geotiff(
     import io as _io
 
     import numpy as np
-    from rasterio.crs import CRS
     from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
+
+    from databricks.labs.gbx.core.crs import resolve_crs
 
     def _one_band(seed: float) -> "np.ndarray":
         arr = np.zeros((size, size), dtype=np.float32)
@@ -7033,7 +7036,7 @@ def _make_synthetic_geotiff(
 
     minx, miny, maxx, maxy = bounds
     transform = from_bounds(minx, miny, maxx, maxy, size, size)
-    crs = CRS.from_epsg(4326)
+    crs = resolve_crs(4326)
 
     buf = _io.BytesIO()
     with MemoryFile() as mf:
@@ -8249,22 +8252,22 @@ def run_fanout_udtf(
 
 
 def list_corpus_files(corpus_dir: str, filter_regex: str = r".*\.tif$") -> List[str]:
-    """Return all files under corpus_dir whose basename matches ``filter_regex``.
+    """Return all files under corpus_dir whose full path matches ``filter_regex``.
 
     The reader bench is format-parameterized: GeoTIFF pools filter on the default
     ``.*\\.tif$`` while a NetCDF pool passes ``.*\\.nc$``. Mirrors the
     ``filterRegex`` option honored by both the light (netcdf_gbx) and heavy
     (netcdf_gdal / gdal) directory readers so the host-side listing and the
     on-cluster reader see the SAME set of files. Recurses into subdirectories.
-    """
-    import glob
-    import re
 
-    pat = re.compile(filter_regex)
-    all_files = sorted(glob.glob(os.path.join(corpus_dir, "**", "*"), recursive=True))
-    return [
-        f for f in all_files if os.path.isfile(f) and pat.match(os.path.basename(f))
-    ]
+    ``filter_regex`` is matched against the full absolute path (not basename only).
+    For the standard patterns ``r".*\\.tif$"`` and ``r".*\\.nc$"`` the behaviour is
+    identical to the previous basename-match (the ``.*`` prefix absorbs the directory
+    portion).  Gains the Serverless ``_retry_transient`` guard.
+    """
+    from databricks.labs.gbx.ds._listing import list_files
+
+    return list_files(corpus_dir, filter_regex)
 
 
 def _list_tifs(corpus_dir: str) -> List[str]:
@@ -8272,11 +8275,13 @@ def _list_tifs(corpus_dir: str) -> List[str]:
 
     Preserves the original tif-then-tiff ordering exactly so the GeoTIFF bench is
     byte-for-byte unchanged; NetCDF and other formats use ``list_corpus_files``.
+    Two sequential ``list_files`` calls concatenated (not sort-merged) preserve the
+    tif-first / tiff-second ordering guarantee.
     """
-    import glob
+    from databricks.labs.gbx.ds._listing import list_files
 
-    tifs = sorted(glob.glob(os.path.join(corpus_dir, "**", "*.tif"), recursive=True))
-    tifs += sorted(glob.glob(os.path.join(corpus_dir, "**", "*.tiff"), recursive=True))
+    tifs = list_files(corpus_dir, r".*\.tif$", raise_on_empty=False)
+    tifs += list_files(corpus_dir, r".*\.tiff$", raise_on_empty=False)
     return tifs
 
 
@@ -8510,8 +8515,9 @@ _LARGE_RASTER_CLUSTER_DEFAULTS = {
     "dtype": "float32",
     # Strategy sweep — the key variable under test.
     "split_strategies": ("none", "serverless", "classic", "auto"),
-    # Serverless decoded budget (~512 MiB decoded) expressed as sizeInMB for the
-    # legacy pure-local path that still takes a sizeInMB arg.
+    # Explicit sizeInMB override for the throughput bench's legacy pure-local path
+    # (NOT the automatic strategy="serverless" budget, which is 64 MiB — see
+    # pyrx/core/budget.py). Chosen larger here to exercise fewer, bigger tiles.
     "size_mib_serverless": 512,
     "size_mib_classic": 1536,
 }

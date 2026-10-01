@@ -164,6 +164,10 @@ primitives. The table below shows which are active in this reader and which are 
 Lightweight readers use the shared [`file_gbx` file-access base](../readers-writers#file-gbx) for FILE / FUSE routing and enumeration — capability tiers, the no-gating rule, and layout options are described there.
 :::
 
+:::note Coordinate reference systems
+The reader opens each COG via rasterio and reports its CRS in `tile.metadata` and the `tile.crs` field as a canonical string (e.g. `"EPSG:4326"`, `"ESRI:54008"`) — ESRI and OGC authorities are preserved. The `clipCrs` option declares the CRS of a plain WKT/WKB clip polygon; the embedded SRID in an EWKT/EWKB polygon always takes precedence. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 ## Next steps
 
 - [File Lister](./file) — list source files before preparation

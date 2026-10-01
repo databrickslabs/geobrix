@@ -12,6 +12,7 @@ from collections import OrderedDict
 from functools import lru_cache
 from typing import Optional, Union
 
+import numpy as np
 from rasterio.crs import CRS
 
 # 120 WGS84 UTM zones (EPSG 326xx N + 327xx S) + 4326/27700/3857 + headroom.
@@ -155,6 +156,95 @@ def crs_to_canonical(crs: Optional[CRS]) -> Optional[str]:
     return crs.to_wkt()
 
 
+def to_pyproj_crs(crs) -> "pyproj.CRS":  # noqa: F821
+    """Bridge rasterio CRS / authority string / WKT / int to a **pyproj** CRS.
+
+    Uses ``from_authority`` at 100 % confidence when an authority is recognized,
+    falling back to ``from_wkt``.  This is the proven pattern from
+    ``pyvx/_crs.py:581-585``, promoted to a canonical helper.
+
+    **Never for storage** — use :func:`crs_to_canonical` for provenance strings.
+    Consumers that need pyproj-only properties (``is_geographic``, ``ellipsoid``,
+    ``area_of_use``, ``laspy`` header CRS) call this.
+    """
+    import pyproj as _pyproj
+
+    rio = _as_crs(crs)
+    _auth = rio.to_authority(confidence_threshold=100)
+    if _auth:
+        return _pyproj.CRS.from_authority(*_auth)
+    return _pyproj.CRS.from_wkt(rio.to_wkt())
+
+
+def area_m2(geom, crs) -> float:
+    """Area of ``geom`` in SQUARE METERS, whatever ``crs`` it is expressed in.
+
+    ``segment_raster``'s polygons carry the source raster's CRS. For an orthomosaic COG
+    that CRS is frequently GEOGRAPHIC (e.g. EPSG:4326), where ``geom.area`` is in square
+    DEGREES -- ~10 orders of magnitude off the square-meter scale ``min_area`` is
+    expressed in, so a metric ``min_area`` compared against a raw ``.area`` would
+    silently drop EVERY polygon (a whole drone orthomosaic spans ~1e-5 sq degrees, far
+    under a 10 m^2 threshold). So: for a geographic CRS take the geodesic area on the
+    CRS's own ellipsoid (pyproj ``Geod.geometry_area_perimeter``); for a projected CRS
+    take the planar ``geom.area`` scaled by the CRS's linear-unit-to-meter factor (1.0
+    for the meter-based UTM / planar CRS geobrix emits). ``crs=None`` -> planar area
+    as-is. Uses the canonical ``core.crs.to_pyproj_crs`` bridge (never bare CRS.from_*).
+    """
+    if crs is None:
+        return geom.area
+    pcrs = to_pyproj_crs(crs)
+    if pcrs.is_geographic:
+        geod = pcrs.get_geod()
+        if geod is not None:
+            area, _ = geod.geometry_area_perimeter(geom)
+            return abs(area)
+        return geom.area
+    try:
+        factor = pcrs.axis_info[0].unit_conversion_factor or 1.0
+    except (IndexError, AttributeError):
+        factor = 1.0
+    return geom.area * (factor**2)
+
+
+def crs_equal(a, b) -> bool:
+    """Semantic CRS equality: normalize both via :func:`to_pyproj_crs`, compare with pyproj ``.equals()``.
+
+    None-safe: two ``None`` values are equal; ``None`` vs any CRS is ``False``.
+    Replaces the inline ``_ProjCRS.from_user_input(a).equals(b)`` pattern
+    (e.g. ``pyrx/core/agg.py:485-487``).
+    """
+    if a is None and b is None:
+        return True
+    if a is None or b is None:
+        return False
+    try:
+        return to_pyproj_crs(a).equals(to_pyproj_crs(b))
+    except Exception:
+        return str(a) == str(b)
+
+
+def crs_to_proj4(crs: Optional[CRS]) -> Optional[str]:
+    """OGR-parity PROJ4 string for output columns — **never for storage**.
+
+    Routes rasterio CRS → pyproj via :func:`to_pyproj_crs` and calls
+    ``.to_proj4()``.  The pyproj PROJ4 deprecation ``UserWarning`` is
+    suppressed centrally here so callers never see it.
+
+    For canonical storage / provenance strings use :func:`crs_to_canonical`.
+    """
+    if crs is None:
+        return None
+    import warnings
+
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            result = to_pyproj_crs(crs).to_proj4()
+        return result or None
+    except Exception:
+        return None
+
+
 def _transformer_key(crs: CRS) -> str:
     """Cache key that identifies a CRS EXACTLY — never a fuzzy-matched near-neighbour.
 
@@ -265,3 +355,35 @@ def resolve_source_crs(embedded_srid, srid=None, crs=None) -> Optional[CRS]:
     if srid is not None:
         return resolve_crs(srid)
     return None
+
+
+def utm_epsg_for(lon: float, lat: float) -> int:
+    """WGS84 UTM zone EPSG code for a representative lon/lat.
+
+    Returns 326zz (northern hemisphere) or 327zz (southern), where zz is the
+    UTM zone 1-60. Used to reproject a local scene to its metric UTM zone.
+    """
+    zone = int((float(lon) + 180.0) / 6.0) + 1
+    zone = max(1, min(60, zone))
+    return (32600 if float(lat) >= 0.0 else 32700) + zone
+
+
+# Equirectangular local-tangent-plane approximation of degrees-latitude in metres.
+_M_PER_DEG_LAT = 111320.0
+
+
+def lonlat_to_enu(lon, lat, ref_lat, ref_lon):
+    """Local-tangent-plane (equirectangular) ENU east/north metres from lon/lat,
+    relative to (ref_lat, ref_lon). Scalars or numpy arrays."""
+    cos_ref = np.cos(np.radians(ref_lat))
+    east = (np.asarray(lon, dtype="float64") - ref_lon) * _M_PER_DEG_LAT * cos_ref
+    north = (np.asarray(lat, dtype="float64") - ref_lat) * _M_PER_DEG_LAT
+    return east, north
+
+
+def enu_to_lonlat(east, north, ref_lat, ref_lon):
+    """Inverse of lonlat_to_enu."""
+    cos_ref = np.cos(np.radians(ref_lat))
+    lon = ref_lon + np.asarray(east, dtype="float64") / (_M_PER_DEG_LAT * cos_ref)
+    lat = ref_lat + np.asarray(north, dtype="float64") / _M_PER_DEG_LAT
+    return lon, lat

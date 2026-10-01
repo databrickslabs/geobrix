@@ -2,7 +2,8 @@
 """
 Build the GeoBrix JAR (mvn clean package -DskipTests) and upload *-jar-with-dependencies.jar
 to GBX_ARTIFACT_VOLUME/<jar_filename>. Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR
-locally but skip the Databricks upload. Loads config from notebooks/tests/databricks_cluster_config.env.
+locally but skip the Databricks upload; set GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step
+ENTIRELY (no build, no upload). Loads config from notebooks/tests/databricks_cluster_config.env.
 Overwrites if file already exists.
 """
 from __future__ import annotations
@@ -26,6 +27,13 @@ if _env_file.exists():
 
 
 def main() -> int:
+    # GBX_BUNDLE_SKIP_JAR: skip the JAR step ENTIRELY (no Maven build, no upload) —
+    # for light-tier-only changes (pyrx/pyvx/pygx wheel) where the staged JAR is
+    # unchanged. Distinct from GBX_BUNDLE_SKIP_JAR_UPLOAD, which still builds the JAR.
+    if os.environ.get("GBX_BUNDLE_SKIP_JAR", "").strip().lower() in ("1", "true", "yes"):
+        print("GBX_BUNDLE_SKIP_JAR=1: skipping JAR build + upload (wheel-only stage).")
+        return 0
+
     skip_jar_upload = os.environ.get("GBX_BUNDLE_SKIP_JAR_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent

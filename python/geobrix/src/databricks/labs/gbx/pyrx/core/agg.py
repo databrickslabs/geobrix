@@ -105,12 +105,14 @@ def _pick_ref_crs(datasets):
     code present. This makes every band's merge of the SAME cell agree on one CRS, so a
     later frombands can np.stack them. Same-CRS groups return that single CRS unchanged
     (fast path, no reprojection). Falls back to the first dataset's CRS."""
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
     best, best_epsg = None, None
     for ds in datasets:
         c = ds.crs
         if c is None:
             continue
-        e = c.to_epsg()
+        e = authority_srid_of(c)
         if e is None:
             best = best or c
             continue
@@ -482,9 +484,9 @@ def _crs_equal(a_crs, b_crs) -> bool:
     if str(a_crs) == str(b_crs):
         return True
     try:
-        from pyproj import CRS as _ProjCRS
+        from databricks.labs.gbx.core.crs import crs_equal
 
-        return _ProjCRS.from_user_input(a_crs).equals(_ProjCRS.from_user_input(b_crs))
+        return crs_equal(a_crs, b_crs)
     except Exception:
         return str(a_crs) == str(b_crs)
 

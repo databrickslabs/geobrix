@@ -16,6 +16,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.bench import manifest as m
+from databricks.labs.gbx.pyrx.core.compression import creation_opts as _comp_opts
 
 # CRS -> (origin_x, origin_y, pixel_size in CRS units) for a consistent affine.
 _CRS_GEO = {
@@ -96,13 +97,15 @@ def make_tile_bytes(
         for bi in range(bands):
             data[bi][mask] = nodata
 
+    from databricks.labs.gbx.core.crs import resolve_crs
+
     profile = {
         "driver": "GTiff",
         "width": tile_px,
         "height": tile_px,
         "count": bands,
         "dtype": dtype,
-        "crs": rasterio.crs.CRS.from_epsg(srid),
+        "crs": resolve_crs(srid),
         "transform": transform,
         "nodata": nodata,
     }
@@ -813,12 +816,14 @@ def write_large_raster_streamed(
         lo, hi = _DTYPE_RANGE.get(dtype, (0, 255))
         return (lo + rng.random((n_bands, bh, bw)) * (hi - lo)).astype(dtype)
 
+    from databricks.labs.gbx.core.crs import resolve_crs
+
     common_profile: dict = dict(
         width=width,
         height=height,
         count=bands,
         dtype=dtype,
-        crs=rasterio.crs.CRS.from_epsg(srid),
+        crs=resolve_crs(srid),
         transform=transform,
     )
     if nodata_val is not None:
@@ -855,7 +860,7 @@ def write_large_raster_streamed(
                 **common_profile,
                 "driver": "COG",
                 "BLOCKSIZE": block_size,
-                "COMPRESS": compress,
+                **_comp_opts(dtype, compress=compress.lower(), driver="COG"),
             }
             with rasterio.open(tmp_tif) as src:
                 with rasterio.open(tmp_cog, "w", **cog_profile) as dst:
@@ -879,7 +884,7 @@ def write_large_raster_streamed(
             strip_profile = {
                 **common_profile,
                 "driver": "GTiff",
-                "compress": compress,
+                **_comp_opts(dtype, compress=compress.lower()),
             }
             with rasterio.open(tmp_tif, "w", **strip_profile) as dst:
                 for y_off in range(0, height, strip_rows):

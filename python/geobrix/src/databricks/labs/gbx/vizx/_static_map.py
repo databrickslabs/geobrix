@@ -237,6 +237,105 @@ def _resolve_gdf(
     return gpd.GeoDataFrame(pdf, geometry=geoms, crs=(srid or 4326))
 
 
+_CATEGORY_FALLBACK_COLOR = "#bbbbbb"
+
+
+def _add_category_legend(ax, color_map, present, fallback=_CATEGORY_FALLBACK_COLOR):
+    """Add a discrete Patch legend for the present categories, ordered by the
+    ``color_map``'s insertion order (unmapped-but-present categories appended so
+    they still show, in a neutral fallback color)."""
+    from matplotlib.patches import Patch
+
+    ordered = [c for c in color_map if c in present]
+    ordered += [c for c in present if c not in color_map]
+    handles = [
+        Patch(facecolor=color_map.get(c, fallback), edgecolor="none", label=str(c))
+        for c in ordered
+    ]
+    ax.legend(handles=handles, loc="upper right", framealpha=0.9)
+
+
+def _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend):
+    """Draw a vector layer with an explicit ``{category: color}`` map.
+
+    Colors each row by its category's mapped color (a category present in the
+    data but absent from the map falls back to a neutral gray), bypassing the
+    colormap so categories keep stable, meaningful colors. Builds a discrete
+    legend listing the present categories in the map's insertion order
+    (unmapped-but-present categories appended), so the legend reads as authored
+    rather than alphabetically.
+    """
+    color_map = lyr.category_colors
+    col = plot_gdf[lyr.column]
+    row_colors = [color_map.get(v, _CATEGORY_FALLBACK_COLOR) for v in col]
+
+    draw_kwargs = dict(kwargs)
+    # Per-row explicit colors replace colormap / column-driven coloring.
+    for k in ("cmap", "column", "legend"):
+        draw_kwargs.pop(k, None)
+    draw_kwargs["color"] = row_colors
+    plot_gdf.plot(**draw_kwargs)
+
+    if legend:
+        present = list(dict.fromkeys(col.dropna().tolist()))
+        _add_category_legend(ax, color_map, present)
+
+
+def _draw_point_cloud(lyr, ax, legend):
+    """Draw a LiDAR/point-cloud layer as a decimated 2D scatter.
+
+    Normalizes the source to x/y/z + color values (see ``_pointcloud``),
+    reprojects to Web Mercator so the cloud composes over raster/vector layers
+    (a CRS-less source draws in native coordinates), and scatters colored by
+    elevation (continuous ``cmap`` + colorbar) or by an explicit
+    ``category_colors`` map (discrete legend).
+    """
+    import numpy as np
+
+    from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
+
+    x, y, _z, values, _rgb, src_crs = load_point_cloud(
+        lyr.data,
+        column=lyr.column,
+        max_points=lyr.max_points or 150_000,
+        crs=lyr.crs,
+    )
+    if src_crs is not None:
+        from pyproj import Transformer
+
+        tx, ty = Transformer.from_crs(src_crs, "EPSG:3857", always_xy=True).transform(
+            x, y
+        )
+        x, y = np.asarray(tx), np.asarray(ty)
+
+    alpha = lyr.opacity if lyr.opacity is not None else 0.9
+    size = lyr.point_size if lyr.point_size is not None else 2.0
+    # zorder=3 mirrors the vector branch: composite the cloud ABOVE any raster.
+    if lyr.category_colors is not None and lyr.column is not None:
+        row_colors = [
+            lyr.category_colors.get(v, _CATEGORY_FALLBACK_COLOR) for v in values
+        ]
+        ax.scatter(x, y, c=row_colors, s=size, alpha=alpha, linewidths=0, zorder=3)
+        if legend:
+            present = list(dict.fromkeys(values.tolist()))
+            _add_category_legend(ax, lyr.category_colors, present)
+    else:
+        sc = ax.scatter(
+            x,
+            y,
+            c=np.asarray(values, dtype="float64"),
+            cmap=lyr.cmap,
+            s=size,
+            alpha=alpha,
+            linewidths=0,
+            zorder=3,
+        )
+        if legend:
+            ax.figure.colorbar(
+                sc, ax=ax, shrink=0.6, pad=0.02, label=lyr.column or "elevation"
+            )
+
+
 def _draw_one_layer(
     lyr,
     ax,
@@ -251,7 +350,10 @@ def _draw_one_layer(
 
     Dispatches by lyr.kind:
     - 'vector' / 'grid': resolve via _resolve_gdf, reproject to 3857, plot.
-    - 'raster': delegate to plot_cog (Task 2) with basemap=False.
+    - 'raster': delegate to plot_cog (Task 2) with basemap=False and
+      to_crs="EPSG:3857" (a georeferenced path/dataset warps to match the
+      vector branch's 3857; a decoded ndarray tile is drawn as-is in pixel
+      space -- it has no CRS to warp).
 
     ``emphasis`` sets the per-layer styling defaults: ``"data"`` pops the layer
     (dark outline, firmer alpha, full raster strength); ``"blend"`` (default) keeps the
@@ -299,6 +401,15 @@ def _draw_one_layer(
             kwargs["markersize"] = em["markersize"]
         if not lyr.fill:
             kwargs["facecolor"] = "none"
+        # Vectors are overlays: composite them ABOVE any raster layer. plot_cog draws a
+        # raster at zorder=2 (so it sits above a basemap at zorder=1); without a higher
+        # zorder here, a raster layer would occlude the vectors entirely (they otherwise
+        # take geopandas' lower default zorder), rendering a raster+vector composite as
+        # raster-only.
+        kwargs.setdefault("zorder", 3)
+        if lyr.category_colors is not None and lyr.column is not None:
+            _draw_category_colors(plot_gdf, lyr, ax, kwargs, legend)
+            return
         plot_gdf.plot(**kwargs)
     elif lyr.kind == "raster":
         import numpy as np
@@ -314,7 +425,21 @@ def _draw_one_layer(
         else:
             from databricks.labs.gbx.vizx._cog import plot_cog
 
-            plot_cog(lyr.data, band=lyr.band, basemap=False, ax=ax, emphasis=emphasis)
+            # Warp to the SAME CRS the vector branch above already reprojects
+            # to (Web Mercator) so a composite raster+vector render aligns --
+            # otherwise a geographic-CRS raster draws at degree-scale
+            # coordinates while the vector draws at mercator-meters, and both
+            # collapse to sub-pixel specks (a near-blank composite).
+            plot_cog(
+                lyr.data,
+                band=lyr.band,
+                basemap=False,
+                ax=ax,
+                emphasis=emphasis,
+                to_crs="EPSG:3857",
+            )
+    elif lyr.kind == "point_cloud":
+        _draw_point_cloud(lyr, ax, legend)
     elif lyr.kind == "pmtiles":
         warnings.warn(
             "plot_static: 'pmtiles' layers are not rendered by the static compositor "
@@ -463,7 +588,9 @@ def plot_static(
             try:
                 import contextily as cx
 
-                source = basemap_source or cx.providers.CartoDB.Positron
+                # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
+                # pass basemap_source=... to use CartoDB/another provider.
+                source = basemap_source or cx.providers.OpenStreetMap.Mapnik
                 cx.add_basemap(ax, source=source, crs="EPSG:3857")
             except Exception as exc:  # noqa: BLE001
                 warnings.warn(
@@ -544,7 +671,9 @@ def plot_static(
         try:
             import contextily as cx
 
-            source = basemap_source or cx.providers.CartoDB.Positron
+            # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
+            # pass basemap_source=... to use CartoDB/another provider.
+            source = basemap_source or cx.providers.OpenStreetMap.Mapnik
             cx.add_basemap(ax, source=source, crs=plot_gdf.crs)
         except Exception as exc:  # noqa: BLE001 — offline/no-egress/missing -> fallback
             warnings.warn(

@@ -22,6 +22,7 @@ contract follow below.
 | [COG](./cog) | `cog_gbx` | — (light-only) |
 | [PMTiles](./pmtiles) | `pmtiles_gbx` | `pmtiles` |
 | [NetCDF](./netcdf) | `netcdf_gbx` | — (light-only) |
+| [LiDAR (LAS/LAZ)](./lidar) | `lidar_gbx` | — (light-only) |
 | [Vector (generic)](./vector) | `vector_gbx` | — (light-only) |
 | [Shapefile](./shapefile) | `shapefile_gbx` | — (light-only) |
 | [GeoJSON](./geojson) | `geojson_gbx` | — (light-only) |
@@ -227,6 +228,7 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 | [GeoPackage Writer](./geopackage) | `gpkg_gbx` | Pure-Python GeoPackage writer (OGR driver: `GPKG`). |
 | [GeoDatabase Writer](./filegdb) | `file_gdb_gbx` | **Hybrid** File Geodatabase writer (OGR driver: `OpenFileGDB`) — requires the native GDAL libraries (e.g. as provided by the heavyweight tier), not pure-Python. |
 | [NetCDF Writer](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF writer — CF grids (raster) or CF-DSG points (vector), with `singleFile` / `merge` consolidation. Light-only (no heavyweight NetCDF writer). |
+| [LiDAR Writer](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud writer — one `.laz` per Spark partition by default, with `singleFile` / `merge` consolidation and `keepParts` control. Light-only (no heavyweight LiDAR writer). |
 
 See the [Raster Writer](./raster) page for full usage, options, and the `nameCol` / `ext` controls.
 
@@ -297,6 +299,10 @@ is a hard gate — a mismatch fails the run immediately.
 Per-format timing results — the PMTiles writer and the sharded GeoJSONL writer — are
 published on the [Benchmarking](../api/benchmarking) page, alongside the full methodology
 and raster-function results.
+
+:::note Coordinate reference systems
+Every vector writer reads the CRS from the `geom_0_srid` column (EPSG/ESRI/OGC authority code) and passes it to the OGR driver via `srs.SetFromUserInput`; when `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 column is the fallback. Raster writers preserve the CRS from each tile's spatial reference metadata. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full SRID-vs-CRS-string model and the ESRI/OGC authority-preservation behavior.
+:::
 
 ## Next Steps
 

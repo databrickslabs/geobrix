@@ -22,6 +22,8 @@ The default compression in GeoBrix is **ZSTD** paired with a **dtype-matched pre
 - **int16 / uint16 / int32 / uint32**: predictor 2 (delta encoding for integer data)
 - **uint8 / int8**: predictor 1 (byte data; predictor adds negligible benefit)
 
+All light-tier raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply uniformly across every writer — no writer skips the predictor or applies a dtype-mismatched value.
+
 The `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**: levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit, and L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
 
 | Decoded tile size | ZSTD level | Why |

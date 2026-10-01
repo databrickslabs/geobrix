@@ -2,7 +2,7 @@
 
 Tests:
 - accessors.crs() returns canonical CRS string (EPSG:x or ESRI:54008).
-- accessors.srid() is UNCHANGED (still int / None).
+- accessors.srid() returns ESRI-aware int code (Task 4 fix: ESRI:54008 → 54008, not None).
 - accessors.summary() JSON includes 'coordinateSystem.crs' string.
 - rst_crs Spark Column UDF returns StringType result.
 
@@ -63,9 +63,11 @@ def test_crs_epsg_raster_other():
 
 @pytest.mark.skipif(not os.path.exists(_MODIS_TIF), reason="MODIS TIF not built yet")
 def test_crs_esri_raster():
-    """ESRI:54008 MODIS raster -> srid() == None (unchanged); crs() == 'ESRI:54008'."""
+    """ESRI:54008 MODIS raster -> srid() == 54008 (Task 4 fix); crs() == 'ESRI:54008'."""
     with _ds_from_file(_MODIS_TIF) as ds:
-        assert accessors.srid(ds) is None, "srid must remain None for non-EPSG CRS"
+        assert (
+            accessors.srid(ds) == 54008
+        ), "srid must return 54008 for ESRI:54008 (not None)"
         crs_str = accessors.crs(ds)
         assert crs_str is not None, "crs() must not return None for ESRI:54008"
         assert "ESRI" in crs_str, f"Expected 'ESRI' in crs string, got: {crs_str!r}"
@@ -90,11 +92,11 @@ def test_summary_epsg_includes_crs_key():
 
 @pytest.mark.skipif(not os.path.exists(_MODIS_TIF), reason="MODIS TIF not built yet")
 def test_summary_esri_includes_crs_key():
-    """summary JSON coordinateSystem.crs is non-null for ESRI:54008; epsg is null."""
+    """summary JSON coordinateSystem.crs is non-null for ESRI:54008; epsg == 54008 (Task 4 fix)."""
     with _ds_from_file(_MODIS_TIF) as ds:
         info = json.loads(accessors.summary(ds))
     cs = info["coordinateSystem"]
-    assert cs["epsg"] is None, "epsg must remain null for ESRI:54008"
+    assert cs["epsg"] == 54008, "epsg must return 54008 for ESRI:54008 (not None)"
     crs_str = cs["crs"]
     assert crs_str is not None, "coordinateSystem.crs must be non-null for ESRI:54008"
     assert "ESRI" in crs_str and "54008" in crs_str, f"Got: {crs_str!r}"
@@ -147,4 +149,4 @@ def test_rst_crs_spark_esri(spark):
     crs_str = row["c"]
     assert crs_str is not None
     assert "ESRI" in crs_str and "54008" in crs_str, f"Got: {crs_str!r}"
-    assert row["s"] is None, "rst_srid must remain null for ESRI:54008"
+    assert row["s"] == 54008, "rst_srid must return 54008 for ESRI:54008 (not None)"

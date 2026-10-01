@@ -13,7 +13,6 @@ import os
 import resource
 import shutil
 import sys
-import tempfile
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -21,6 +20,7 @@ from databricks.labs.gbx.ds.file_gbx import StageTooLargeError  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _is_fuse_path  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _probe_direct_open  # noqa: F401
 from databricks.labs.gbx.ds.file_gbx import _stage_local_if_needed
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 
 def cog_output_name(source_basename: str) -> str:
@@ -118,8 +118,7 @@ def prepare_cog(
     src = _subdataset_uri(path, subdataset)
     try:
         os.makedirs(out_dir, exist_ok=True)
-        fd, tmp = tempfile.mkstemp(suffix=".cog")
-        os.close(fd)
+        tmp = new_local_temp_file(suffix=".cog")
         try:
             cog_convert_file(
                 src,
@@ -190,12 +189,6 @@ def prepare_cog_measured(
 DEFAULT_RASTER_EXTS = (".tif", ".tiff", ".cog", ".nc", ".h5", ".hdf")
 
 
-def _has_ext(path: str, extensions) -> bool:
-    if not extensions:
-        return True
-    return os.path.splitext(path)[1].lower() in {e.lower() for e in extensions}
-
-
 def _resolve_sources(
     sources,
     recursive: bool = True,
@@ -208,7 +201,9 @@ def _resolve_sources(
     extension-filtered; an explicitly-named file bypasses the filter. Scheme-
     qualified inputs (dbfs:/..., file:/...) are stripped via ds._listing.to_local_path.
     """
-    from databricks.labs.gbx.ds._listing import to_local_path
+    import re as _re
+
+    from databricks.labs.gbx.ds._listing import list_files, to_local_path
 
     # Normalize to a list of items. A lone str/PathLike is one item.
     if isinstance(sources, (str, os.PathLike)):
@@ -230,17 +225,12 @@ def _resolve_sources(
         if os.path.isfile(local):
             _add(local, None)  # explicit file — no extension filter
         elif os.path.isdir(local):
-            if recursive:
-                for root, _dirs, names in os.walk(local):
-                    for name in sorted(names):
-                        full = os.path.join(root, name)
-                        if _has_ext(full, extensions):
-                            _add(full, None)
-            else:
-                for name in sorted(os.listdir(local)):
-                    full = os.path.join(local, name)
-                    if os.path.isfile(full) and _has_ext(full, extensions):
-                        _add(full, None)
+            _ext = "|".join(_re.escape(e.lstrip(".")) for e in extensions)
+            _ext_regex = f"(?i).*\\.({_ext})$"
+            for full in list_files(
+                local, _ext_regex, recursive=recursive, raise_on_empty=False
+            ):
+                _add(full, None)
         else:
             _add(local, "not-found")
 

@@ -40,6 +40,10 @@ As of v0.5.0 it covers:
 - **Geometry input encodings** — every `gbx_st_*` geometry input accepts **WKB, EWKB, WKT, and EWKT** interchangeably. WKB/WKT carry no SRID; EWKB/EWKT carry one. Pass whichever encoding your upstream produces — no separate conversion step is required.
 :::
 
+:::note Coordinate reference systems
+`gbx_st_crs(geom)` returns the geometry's canonical CRS string (e.g. `"EPSG:4326"`, `"ESRI:54008"`) or `NULL` for a geometry with no SRID. `gbx_st_setcrs(geom, crs)` stamps a CRS as a label-only change (raises for authority-less CRS — a geometry can only carry an integer SRID). `gbx_st_transformcrs(geom, target_crs[, source_crs])` reprojects; an authority-less target reprojects and clears the stale SRID. All three accept WKB/EWKB/WKT/EWKT input and return `BINARY` (`gbx_st_crs` returns `STRING`). See [Coordinate reference systems](./coordinate-reference-systems) for the SRID-vs-CRS-string model, EPSG→ESRI resolution order, and ESRI/OGC authority-preservation behavior.
+:::
+
 ## Tier availability
 
 | Function | Lightweight (pyvx) | Heavyweight (vectorx) |

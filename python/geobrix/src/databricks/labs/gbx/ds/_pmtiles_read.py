@@ -92,9 +92,9 @@ class PMtilesRasterReader(DataSourceReader):
     def read(self, partition: "_TilesPartition") -> Iterator[Tuple]:
         import os
         import shutil
-        import tempfile
 
         from databricks.labs.gbx.pyrx import _env
+        from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
         _env.configure_gdal_env()
         # FUSE-safe + vsimem-bug-safe: sequentially copy each source's bytes to a
@@ -103,7 +103,7 @@ class PMtilesRasterReader(DataSourceReader):
         # render_tile takes paths (NOT open datasets): on rasterio 1.5.0 / rio-tiler
         # 9.0.6, passing open in-memory MemoryFile datasets to mosaic_reader corrupts a
         # sibling dataset's vsimem bytes (TIFFReadDirectory failure) — Task 1 confirmed.
-        tmpdir = tempfile.mkdtemp(prefix="gbx_pmtiles_src_")
+        tmpdir = new_local_temp_dir("gbx_pmtiles_src_")
         local_paths: List[str] = []
         try:
             for i, p in enumerate(partition.sources):

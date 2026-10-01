@@ -1,4 +1,5 @@
 import os
+from unittest.mock import patch
 
 import numpy as np
 import rasterio
@@ -443,3 +444,37 @@ def test_stage_local_respects_max_bytes(monkeypatch, tmp_path):
 
     with pytest.raises(m.StageTooLargeError):
         m._stage_local_if_needed(str(big))
+
+
+# ---------------------------------------------------------------------------
+# Task 2 wiring tests: _collect_sources delegates to list_files (fail-on-revert)
+# ---------------------------------------------------------------------------
+
+
+def test_collect_sources_recursive_calls_list_files(tmp_path):
+    """_resolve_sources recursive branch delegates to list_files (fail-on-revert)."""
+    src = tmp_path / "sub" / "scene.tif"
+    src.parent.mkdir()
+    src.write_bytes(b"x")
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.return_value = [str(src)]
+        from databricks.labs.gbx.pyrx.core.preparer import _resolve_sources
+
+        _resolve_sources(str(tmp_path), recursive=True)
+    mock_lf.assert_called()
+    _args, kw = mock_lf.call_args
+    assert kw.get("recursive", True) is True
+
+
+def test_collect_sources_nonrecursive_calls_list_files_with_recursive_false(tmp_path):
+    """_resolve_sources non-recursive branch passes recursive=False (fail-on-revert)."""
+    src = tmp_path / "flat.tif"
+    src.write_bytes(b"x")
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.return_value = [str(src)]
+        from databricks.labs.gbx.pyrx.core.preparer import _resolve_sources
+
+        _resolve_sources(str(tmp_path), recursive=False)
+    mock_lf.assert_called()
+    _args, kw = mock_lf.call_args
+    assert kw.get("recursive", True) is False

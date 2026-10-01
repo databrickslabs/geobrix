@@ -16,9 +16,10 @@ import io
 import os
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
+
+from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
 
 try:
     import requests
@@ -79,7 +80,7 @@ def get_temp_dir(temp_dir: Optional[str] = None) -> Path:
         except OSError:
             pass  # Volume path must already exist (e.g. Databricks)
         return p
-    p = Path(tempfile.gettempdir()) / "geobrix_bundle_build"
+    p = Path(local_temp_root()) / "geobrix_bundle_build"
     p.mkdir(parents=True, exist_ok=True)
     return p
 

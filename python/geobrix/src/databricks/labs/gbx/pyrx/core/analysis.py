@@ -20,12 +20,12 @@ expressions, implemented without the JAR:
 
 import math
 import os
-import tempfile
 
 import numpy as np
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 # NoData sentinel for the proximity output — mirrors the heavyweight, which sets
 # NODATA=-1.0 so beyond-max / unreachable pixels are distinguishable from
@@ -241,18 +241,17 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
     # Merge authority options (codec + level + predictor); RAW path emits empty dict.
     profile.update(_comp_opts)
 
-    tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
-    tmp.close()
+    tmp = new_local_temp_file(suffix=".tif")
     try:
-        with rasterio.open(tmp.name, "w", **profile) as dst:
+        with rasterio.open(tmp, "w", **profile) as dst:
             dst.write(data)
         # Free the decoded array before reading the output bytes back so
         # the peak is capped at max(data, cog_file_bytes), not their sum.
         del data
-        with open(tmp.name, "rb") as fh:
+        with open(tmp, "rb") as fh:
             return fh.read()
     finally:
-        os.unlink(tmp.name)
+        os.unlink(tmp)
 
 
 # Allowed BIGTIFF creation-option values (GDAL). Default YES: every GeoBrix

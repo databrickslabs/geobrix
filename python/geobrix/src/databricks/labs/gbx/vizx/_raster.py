@@ -605,6 +605,8 @@ def plot_raster(
     stretch="perband",
     fill=None,
     cmap=None,
+    title=None,
+    ax=None,
 ):
     """Render a raster from in-memory bytes, a tile struct, or a virtual tile.
 
@@ -670,10 +672,11 @@ def plot_raster(
         with MemoryFile(bytes(raster_bytes)) as mf:
             with mf.open() as src:
                 data, transform, scale = _decimated_read(src, max_pixels)
-                _render(
+                return _render(
                     data,
                     transform,
-                    title="tile.raster",
+                    title=title if title is not None else "tile.raster",
+                    ax=ax,
                     fig_w=fig_w,
                     fig_h=fig_h,
                     scale=scale,
@@ -691,10 +694,11 @@ def plot_raster(
 
         with rasterio.open(path) as src:
             data, transform, scale = _read_windowed(src, max_pixels, window=window)
-            _render(
+            return _render(
                 data,
                 transform,
-                title="tile.raster",
+                title=title if title is not None else "tile.raster",
+                ax=ax,
                 fig_w=fig_w,
                 fig_h=fig_h,
                 scale=scale,
@@ -785,6 +789,8 @@ def plot_file(
     stretch="perband",
     fill=None,
     cmap=None,
+    title=None,
+    ax=None,
 ):
     """Render a raster from disk (TIF, VRT, ...) with the plot_raster pipeline.
 
@@ -818,10 +824,11 @@ def plot_file(
 
     with rasterio.open(path) as src:
         data, transform, scale = _decimated_read(src, max_pixels)
-        _render(
+        return _render(
             data,
             transform,
-            title=f"File: {str(path).split('/')[-1]}",
+            title=(title if title is not None else f"File: {str(path).split('/')[-1]}"),
+            ax=ax,
             fig_w=fig_w,
             fig_h=fig_h,
             scale=scale,
@@ -852,12 +859,11 @@ def _overlay_h3_cells(ax, vrt_path, crs):
     import h3
     from matplotlib.patches import Polygon as MplPolygon
 
+    from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
     from databricks.labs.gbx.ds.raster import _parse_vrt_members, _read_gbx_member_tags
 
     reproj = None
-    if crs is not None and crs.to_epsg() != 4326:
-        from databricks.labs.gbx.core.crs import get_transformer
-
+    if crs is not None and authority_srid_of(crs) != 4326:
         reproj = get_transformer("EPSG:4326", crs)
 
     # Preserve the image (data-envelope) extent: hex outlines reach the full hex
@@ -894,11 +900,11 @@ def _overlay_h3_cells(ax, vrt_path, crs):
 
 def _resolve_vrt_path(vrt):
     """Return a `.vrt` path from a direct path or a directory containing one."""
-    import glob
+    from databricks.labs.gbx.ds._listing import list_files
 
     p = str(vrt)
     if os.path.isdir(p):
-        hits = sorted(glob.glob(os.path.join(p, "*.vrt")))
+        hits = list_files(p, r".*\.vrt$", recursive=False, raise_on_empty=False)
         if len(hits) == 0:
             raise ValueError(f"plot_mosaic: no .vrt found in directory {p}")
         if len(hits) > 1:

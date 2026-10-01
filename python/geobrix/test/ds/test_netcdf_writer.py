@@ -1277,6 +1277,10 @@ def test_publish_merged_verify_failure_removes_partial_target(tmp_path, monkeypa
     Force ``shutil.copyfile`` to truncate the copied target so the byte-size
     verify fails AFTER the copy, then assert the corrupt target is removed and
     the raise still fires (so a caller with real parts would keep them intact).
+
+    After the hoist, ``_publish_merged`` lives in ``ds/writer.py`` and uses
+    ``writer.shutil.copyfile`` (not ``_write_netcdf.shutil``).  The count_fn
+    must now take a path (str) and return an int.
     """
     import os
     import shutil as _shutil
@@ -1284,7 +1288,9 @@ def test_publish_merged_verify_failure_removes_partial_target(tmp_path, monkeypa
     import numpy as np
     from netCDF4 import Dataset
 
-    from databricks.labs.gbx.ds import _write_netcdf
+    from databricks.labs.gbx.ds import writer as _writer_mod
+    from databricks.labs.gbx.ds._write_netcdf import _count_raster_data_vars_path
+    from databricks.labs.gbx.ds.writer import _publish_merged
 
     # Build a minimal valid CF grid at tmp_path (what the merge core would emit).
     tmp_nc = str(tmp_path / "merged_tmp.nc")
@@ -1308,12 +1314,11 @@ def test_publish_merged_verify_failure_removes_partial_target(tmp_path, monkeypa
             fh.truncate(0)
         return dst
 
-    monkeypatch.setattr(_write_netcdf.shutil, "copyfile", truncating_copyfile)
+    # _publish_merged lives in writer.py — patch its shutil, not _write_netcdf's.
+    monkeypatch.setattr(_writer_mod.shutil, "copyfile", truncating_copyfile)
 
     with pytest.raises(ValueError) as e:
-        _write_netcdf._publish_merged(
-            tmp_nc, target, 1, _write_netcdf._count_raster_data_vars
-        )
+        _publish_merged(tmp_nc, target, 1, _count_raster_data_vars_path)
     assert "size mismatch" in str(e.value)
     # No partial-but-valid-looking target left behind.
     assert not os.path.exists(target)

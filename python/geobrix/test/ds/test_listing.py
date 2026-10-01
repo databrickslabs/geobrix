@@ -113,3 +113,92 @@ def test_list_files_strips_file_scheme(tree):
     bare = _listing.list_files(str(tree), filter_regex=r".*\.tif$")
     qualified = _listing.list_files("file:" + str(tree), filter_regex=r".*\.tif$")
     assert qualified == bare
+
+
+# ---------------------------------------------------------------------------
+# T1 additions: recursive=False, raise_on_empty=False, internal retry, multi-ext
+# ---------------------------------------------------------------------------
+
+
+def test_nonrecursive_lists_only_top_level(tree):
+    """recursive=False must NOT descend into subdirs (tree has a/one.tif, a/two.tif, b/three.tif
+    at depth 2; top level has no .tif files directly, so result is empty-ok)."""
+    root_tif = tree / "top.tif"
+    root_tif.write_bytes(b"x")
+    files = _listing.list_files(str(tree), filter_regex=r".*\.tif$", recursive=False)
+    assert files == [str(root_tif)]  # only top-level; a/one.tif etc. NOT included
+
+
+def test_raise_on_empty_false_returns_empty_list(tree):
+    """raise_on_empty=False returns [] when nothing matches, instead of raising."""
+    result = _listing.list_files(
+        str(tree), filter_regex=r".*\.nope$", raise_on_empty=False
+    )
+    assert result == []
+
+
+def test_raise_on_empty_true_is_the_default(tree):
+    """raise_on_empty=True is the default; existing no-match behaviour preserved."""
+    with pytest.raises(FileNotFoundError):
+        _listing.list_files(str(tree), filter_regex=r".*\.nope$")
+
+
+def test_list_files_retries_transient_walk_error(tree, monkeypatch):
+    """A transient FileNotFoundError inside os.walk is retried (not propagated)."""
+    real_walk = os.walk
+    calls = []
+
+    def _flaky_walk(path, *a, **kw):
+        calls.append(1)
+        if len(calls) == 1:
+            raise FileNotFoundError("transient FUSE miss")
+        return real_walk(path, *a, **kw)
+
+    monkeypatch.setattr(_listing.os, "walk", _flaky_walk)
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    files = _listing.list_files(str(tree), filter_regex=r".*\.tif$")
+    assert len(files) == 3  # a/one.tif, a/two.tif, b/three.tif
+    assert len(calls) == 2  # failed once, succeeded on retry
+
+
+def test_multi_extension_alternation_regex(tree):
+    """An alternation regex r".*\\.(tif|tiff)$" matches both extensions."""
+    (tree / "a" / "four.tiff").write_bytes(b"x")
+    files = _listing.list_files(str(tree), filter_regex=r".*\.(tif|tiff)$")
+    assert all(f.endswith(".tif") or f.endswith(".tiff") for f in files)
+    assert len(files) == 4  # one.tif, two.tif, three.tif, four.tiff
+
+
+# ---------------------------------------------------------------------------
+# Item 1 (SP4 final-fix): non-recursive call on a genuinely missing directory
+# ---------------------------------------------------------------------------
+# Before this fix, the non-recursive branch called os.listdir(missing) which raised
+# FileNotFoundError, and _retry_transient caught it and retried 10× (~22 s of linear
+# backoff) before re-raising.  raise_on_empty=False was NOT honoured — it re-raised
+# instead of returning [].
+#
+# After the fix, a missing directory is detected with os.path.isdir BEFORE the retry
+# wrapper, yielding no candidates immediately.  The existing empty-check then applies:
+# raise_on_empty=False → return [];  raise_on_empty=True → raise FileNotFoundError.
+
+
+def test_nonrecursive_missing_dir_raise_on_empty_false(tmp_path):
+    """Non-recursive call on a missing dir returns [] fast when raise_on_empty=False."""
+    missing = str(tmp_path / "does_not_exist")
+    # Must not raise and must return an empty list.
+    result = _listing.list_files(
+        missing, filter_regex=".*", recursive=False, raise_on_empty=False
+    )
+    assert result == []
+
+
+def test_nonrecursive_missing_dir_raise_on_empty_true(tmp_path):
+    """Non-recursive call on a missing dir raises FileNotFoundError promptly
+    (no 22-second retry loop) when raise_on_empty=True."""
+    missing = str(tmp_path / "does_not_exist")
+    # Must raise FileNotFoundError — and since os.path.isdir short-circuits before
+    # _retry_transient, this should be near-instant (no sleep).
+    with pytest.raises(FileNotFoundError):
+        _listing.list_files(
+            missing, filter_regex=".*", recursive=False, raise_on_empty=True
+        )

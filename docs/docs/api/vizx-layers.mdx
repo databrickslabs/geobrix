@@ -29,6 +29,7 @@ Each constructor returns a `Layer` object. Pass a list of them to `plot_static` 
 | `raster_layer(data)` | COG/raster file path, `numpy.ndarray`, or tile struct | Path → rasterio; ndarray → unit-square corners. |
 | `grid_layer(data, grid_system=)` | DataFrame of H3 / BNG / Quadbin cell ids | Requires `grid_system='h3'`, `'bng'`, `'quadbin'`, or `'custom'`. |
 | `pmtiles_layer(data)` | `.pmtiles` bytes, local path, or `https://` URL | URL mode streams from the remote server with zero embed cost. |
+| `point_cloud_layer(data)` | LAS/LAZ file path, GeoDataFrame of Points, or DataFrame with `x`/`y`/`z` | Decimated 2D scatter, colored by elevation (or a `column`). `plot_static` only. |
 
 ```python
 from databricks.labs.gbx.vizx import (
@@ -36,8 +37,75 @@ from databricks.labs.gbx.vizx import (
     raster_layer,
     grid_layer,
     pmtiles_layer,
+    point_cloud_layer,
     plot_static,
     plot_interactive,
+)
+```
+
+### Point clouds
+
+`point_cloud_layer` renders a LiDAR/point cloud as a decimated 2D scatter through the static compositor — the way to *see* a LAS/LAZ cloud (e.g. a dense-photogrammetry `.laz`) as points rather than only as a derived DSM/CHM raster. Points are colored by elevation `z` by default (a continuous `cmap` + colorbar), or by a `column` — pass `category_colors` for a categorical attribute like classification. Clouds larger than `max_points` (default 150k) are randomly decimated so the render stays in memory, and points reproject to Web Mercator so a cloud composes over a raster/vector layer.
+
+```python
+from databricks.labs.gbx.vizx import plot_static, raster_layer, point_cloud_layer
+
+# Dense point cloud over the orthomosaic, colored by elevation
+plot_static([
+    raster_layer(ortho_cog_path),
+    point_cloud_layer("dense_merged.laz", cmap="terrain", opacity=0.6),
+], basemap=False)
+```
+
+For an interactive view, or a true-3D render, use `plot_point_cloud` below — a standalone renderer distinct from `point_cloud_layer` above (which stays a 2D elevation scatter inside the `plot_static` compositor).
+
+### `plot_point_cloud`
+
+```python
+plot_point_cloud(
+    data, *, color="rgb", cmap="viridis", point_size=2.0,
+    max_points=300_000, max_embed_mb=None, elev=30.0, azim=-60.0,
+    background="#111111", title=None, crs=None, seed=0,
+)
+```
+
+`plot_point_cloud` renders a true-color **3-D** point cloud, standalone from the `plot_static`/`plot_interactive` compositors above and with its own interactive/static duality. It accepts the same inputs as `point_cloud_layer`: a LAS/LAZ file path, a GeoDataFrame of Points, or a DataFrame with `x`/`y`/`z` (+ optional `red`/`green`/`blue` or `r`/`g`/`b`).
+
+**Interactive path (default, `max_embed_mb=None`):** a deck.gl `PointCloudLayer` under an `OrbitView`, embedded as a self-contained HTML string — the same `displayHTML` convention as `plot_interactive`/`plot_pmtiles` (deck.gl loaded from CDN, not an anywidget). Budget-checked the same way; a built page over budget falls back to the static path automatically.
+
+**Static path (`max_embed_mb=0`, or over budget):** a matplotlib `Axes3D` RGB scatter, returned as a `Figure` — GitHub-renderable, the same `max_embed_mb=0` idiom `plot_pmtiles` uses for notebooks where interactive HTML renders blank.
+
+**Parameters:**
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `data` | path, GeoDataFrame, or DataFrame | — | LAS/LAZ file path, GeoDataFrame of Points, or DataFrame with `x`/`y`/`z` (+ optional `red`/`green`/`blue` or `r`/`g`/`b`) — same inputs as `point_cloud_layer`. |
+| `color` | `str` | `"rgb"` | `"rgb"` uses true per-point color from the source, falling back to elevation `cmap` (with a warning) when the source carries no color; `"z"` colors by elevation via `cmap`; any other value names a column in `data` to color by via `cmap`. |
+| `cmap` | `str` | `"viridis"` | Matplotlib colormap used whenever `color` isn't `"rgb"` (or `"rgb"` falls back). |
+| `point_size` | `float` | `2.0` | Marker size. |
+| `max_points` | `int` | `300_000` | Clouds larger than this are randomly decimated (seeded by `seed`) so the render stays in memory. |
+| `max_embed_mb` | `float` or `None` | `None` | `None` resolves to the standard embed budget (interactive, falling back to static if the built page is over budget); `0` always renders static — the same idiom as `plot_pmtiles`. |
+| `elev` / `azim` | `float` | `30.0` / `-60.0` | Static-path camera elevation/azimuth in degrees; ignored on the interactive path. |
+| `background` | `str` | `"#111111"` | Background color for both render paths. |
+| `title` | `str` or `None` | `None` | Plot title. |
+| `crs` | `str` or `None` | `None` | Source CRS override, for inputs that don't already carry one. |
+| `seed` | `int` | `0` | Random seed for the `max_points` decimation. |
+
+In a Databricks/Jupyter notebook, the interactive path calls `displayHTML` and returns `None`; outside a notebook it returns the HTML string. The static path always returns the matplotlib `Figure`.
+
+```python
+from databricks.labs.gbx.vizx import plot_point_cloud
+
+INTERACTIVE = False  # True for a live deck.gl orbit in a notebook; False for a static PNG
+
+# Dense reconstruction as true-color 3-D points -- the same call the orthomosaic
+# series (nb1b) uses to render its merged dense cloud
+plot_point_cloud(
+    "dense_merged.laz",
+    color="rgb",
+    point_size=1.0,
+    max_embed_mb=(None if INTERACTIVE else 0),
+    title="Dense point cloud (RGB 3-D)",
 )
 ```
 
@@ -53,6 +121,27 @@ Each constructor exposes a `label=` argument used in audit output and map legend
 | `"quantile"` | Ramp position = the value's **percentile rank** | Values are **skewed** — a dense low range with a long tail. |
 
 Linear normalization crushes a skewed distribution into one end of the ramp: if most cells hold a small value with a few large outliers (e.g. roof counts of 1–25 in a 1–128 range), nearly every cell renders as the same pale color. `"quantile"` spreads the dense range across the full ramp so those cells stay distinguishable; the legend gains a median tick to keep the (non-linear) mapping honest.
+
+### Explicit category colors
+
+For a **categorical** column — where the values are class names, not a numeric scale — a colormap assigns colors in arbitrary (alphabetical) order, so `vegetation` might land on a colormap's red while `impervious` gets its green. Pass `vector_layer(category_colors=…)` with a `{value: color}` map to fix each category to a meaningful color; the discrete legend then lists the categories present in the map's order. A value present in the data but absent from the map falls back to a neutral gray and is appended to the legend.
+
+```python
+from databricks.labs.gbx.vizx import plot_static, raster_layer, vector_layer
+
+# Land-cover regions over an orthomosaic — vegetation green, impervious gray, ...
+plot_static([
+    raster_layer(ortho_cog_path),
+    vector_layer(
+        land_cover_gdf, column="class",
+        category_colors={
+            "vegetation": "#2ca02c", "bare": "#c2a878",
+            "impervious": "#9a9a9a", "dark": "#2c2c54",
+        },
+        opacity=0.55,
+    ),
+], basemap=False, legend=True)
+```
 
 ```python
 from databricks.labs.gbx.vizx import grid_layer, plot_interactive

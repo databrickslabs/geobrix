@@ -14,9 +14,12 @@ CDN pins and SRI hashes live in ``_maplibre.py`` (the single source of truth).
 
 from __future__ import annotations
 
-from typing import Union
+from typing import TYPE_CHECKING, Union
 
 from pmtiles.reader import MemorySource, all_tiles  # noqa: F401
+
+if TYPE_CHECKING:
+    import matplotlib.figure
 
 _RASTER_TYPES = frozenset({"png", "jpeg", "webp", "avif"})
 
@@ -201,3 +204,133 @@ def plot_pmtiles(
         emphasis=emphasis,
         **kw,
     )
+
+
+def plot_point_cloud(
+    data,
+    *,
+    color="rgb",
+    cmap="viridis",
+    point_size=2.0,
+    max_points=300_000,
+    max_embed_mb=None,
+    elev=30.0,
+    azim=-60.0,
+    background="#111111",
+    title=None,
+    crs=None,
+    seed=0,
+) -> "str | None | matplotlib.figure.Figure":
+    """Render a point cloud as an interactive deck.gl orbit view or a static 3D scatter.
+
+    Thin composer over :func:`~databricks.labs.gbx.vizx._pointcloud.load_point_cloud`
+    (normalizes ``data`` -- a LAS/LAZ path, GeoDataFrame, or x/y/z DataFrame -- to
+    decimated ``x, y, z, values, rgb, src_crs`` arrays), then routes to one of two
+    render backends via the same embed-budget machinery as
+    :func:`~databricks.labs.gbx.vizx._interactive.plot_interactive`:
+    :func:`~databricks.labs.gbx.vizx._pointcloud_html.build_pointcloud_html`
+    (interactive deck.gl ``PointCloudLayer``) or
+    :func:`~databricks.labs.gbx.vizx._pointcloud_static.render_point_cloud_3d`
+    (static matplotlib ``Axes3D`` scatter).
+
+    ``color`` selects the per-point color source: ``"rgb"`` (default) uses true
+    color from the source when present -- falling back to ``cmap`` on elevation
+    (with a warning) when it isn't; ``"z"`` colors by elevation via ``cmap``; any
+    other value names a column in ``data`` to color by via ``cmap``.
+
+    ``max_embed_mb`` controls the interactive/static split exactly as in
+    ``plot_interactive``: ``None`` (default) resolves to the standard embed
+    budget, ``0`` forces the static render, and a built HTML page over budget
+    falls back to static automatically.
+
+    ``crs`` is forwarded to :func:`load_point_cloud` (and may be used to resolve
+    the source CRS for metadata), but the 3D render itself is a centered local
+    scene frame -- ``crs`` does NOT reproject the 3D view and there is no
+    basemap or geographic framing.
+
+    Returns:
+        In a Databricks/IPython notebook, on the interactive path: calls
+        ``displayHTML`` and returns ``None``. Outside a notebook: returns the
+        HTML string. On the static path (``max_embed_mb=0`` or over budget):
+        returns the :class:`matplotlib.figure.Figure` from
+        ``render_point_cloud_3d``.
+    """
+    import warnings
+
+    from databricks.labs.gbx.vizx._interactive import (
+        _format_audit_line,
+        _notebook_display_html,
+        _raise_cell_output_cap,
+    )
+    from databricks.labs.gbx.vizx._maplibre import _emit, _resolve_embed_budget
+    from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
+    from databricks.labs.gbx.vizx._pointcloud_html import build_pointcloud_html
+    from databricks.labs.gbx.vizx._pointcloud_static import render_point_cloud_3d
+
+    column = None if color in ("rgb", "z") else color
+    x, y, z, values, rgb, _src_crs = load_point_cloud(
+        data, column=column, max_points=max_points, crs=crs, seed=seed
+    )
+
+    # load_point_cloud returns rgb whenever the source carries red/green/blue,
+    # regardless of `color` -- gate it so only color="rgb" actually uses true
+    # color; "z" / a named column must fall through to values+cmap as documented.
+    if color != "rgb":
+        rgb = None
+    elif rgb is None:
+        warnings.warn(
+            "plot_point_cloud: no RGB in source; falling back to elevation cmap",
+            stacklevel=2,
+        )
+
+    def _static():
+        return render_point_cloud_3d(
+            x,
+            y,
+            z,
+            rgb=rgb,
+            values=values,
+            cmap=cmap,
+            point_size=point_size,
+            elev=elev,
+            azim=azim,
+            background=background,
+            title=title,
+            max_points=max_points,
+            seed=seed,
+        )
+
+    max_embed_mb = _resolve_embed_budget(max_embed_mb, True)
+    if max_embed_mb == 0:
+        return _static()
+
+    html = build_pointcloud_html(
+        x,
+        y,
+        z,
+        rgb=rgb,
+        values=values,
+        cmap=cmap,
+        point_size=point_size,
+        background=background,
+        title=title,
+    )
+    embed_bytes = len(html.encode("utf-8"))
+    fits = embed_bytes <= max_embed_mb * 1_048_576
+    audit = {
+        "layers": [{"label": "point_cloud", "embed_bytes": embed_bytes}],
+        "total_embed_bytes": embed_bytes,
+        "fits": fits,
+        "verdict": "embed" if fits else "static",
+    }
+    _emit(_format_audit_line(audit, max_embed_mb), level=1)
+
+    if not fits:
+        return _static()
+
+    dh = _notebook_display_html()
+    if dh is not None:
+        _raise_cell_output_cap()  # 6MB budget assumes the 20MB cap; raise it to match
+        dh(html)
+        return None
+    return html

@@ -36,10 +36,11 @@ from databricks.labs.gbx.pyrx.core import chm as chm_core
 from databricks.labs.gbx.pyrx.core import coords
 from databricks.labs.gbx.pyrx.core import derivedband as derivedband_core
 from databricks.labs.gbx.pyrx.core import edit, features, focal, gridagg, indices
+from databricks.labs.gbx.pyrx.core import land_cover as land_cover_core
 from databricks.labs.gbx.pyrx.core import mapalgebra as mapalgebra_core
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import ops as ops_core
-from databricks.labs.gbx.pyrx.core import resample, terrain
+from databricks.labs.gbx.pyrx.core import resample, stretch, terrain
 from databricks.labs.gbx.pyrx.core import tessellate as tessellate_core
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core import tin as tin_core
@@ -1832,7 +1833,9 @@ def _transform_bytes(tile, target_srid, file_ref=None):
     if not vt.is_virtual() and vt.raster is not None:
         target_srid_int = int(target_srid)
         with ot._open(tile, file_ref=file_ref) as ds:
-            src_epsg = ds.crs.to_epsg() if ds.crs else None
+            from databricks.labs.gbx.core.crs import authority_srid_of
+
+            src_epsg = authority_srid_of(ds.crs)
             if src_epsg is not None and src_epsg == target_srid_int:
                 # Identity on a materialized tile: original bytes, sort key intact.
                 return bytes(vt.raster)
@@ -4442,6 +4445,144 @@ def rst_evi(  # noqa: E741
         virtualize_prefix,
         materialize,
     )
+
+
+def _land_cover_bytes(tile, method, n_clusters, smooth):
+    from databricks.labs.gbx.pyrx import _env
+    from databricks.labs.gbx.pyrx.core._nodata import emit
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        arr = ds.read().transpose(1, 2, 0)  # (bands,H,W) -> HxWxbands
+        labels, _names = land_cover_core.classify(
+            arr, method=str(method), n_clusters=int(n_clusters), smooth=int(smooth)
+        )
+        return emit(ds, labels, -1, labels == -1, "int32")
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _land_cover_udf(tile, method, n_clusters, smooth):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _land_cover_bytes(tile, method, n_clusters, smooth)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _land_cover_v2_udf(
+    tile, method, n_clusters, smooth, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _land_cover_bytes(tile, method, n_clusters, smooth)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_land_cover(
+    tile: ColLike,
+    *,
+    method: ColLike = "hybrid",
+    classes: Optional[List[str]] = None,
+    n_clusters: ColLike = 6,
+    smooth: ColLike = 3,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Classify a tile into land-cover class ids; single-band Int32 tile.
+
+    Reads the tile as an HxWxbands array (RGB, optionally +NIR; needs >= 3
+    bands) and runs ``land_cover.classify`` on it. The output pixel value is
+    the index into the class scheme (``land_cover.DEFAULT_CLASSES`` by
+    default) -- callers map id -> name with that fixed list (e.g.
+    ``DEFAULT_CLASSES[value]``). NoData/unclassified pixels are ``-1``, which
+    is also the output tile's NoData value.
+
+    ``method``: ``"spectral"`` (threshold-based), ``"kmeans"``, or
+    ``"hybrid"`` (default) -- see ``land_cover.classify``.
+    ``n_clusters``: k-means cluster count (``kmeans``/``hybrid`` only).
+    ``smooth``: de-speckle window size (``0`` disables).
+    ``classes``: not yet wired through the columnar UDF -- phase-1 only
+    supports the built-in default class scheme; a non-None value raises.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
+    if classes is not None:
+        raise NotImplementedError(
+            "rst_land_cover(classes=...) is not supported yet; only the "
+            "built-in default class scheme (land_cover.DEFAULT_CLASSES) is "
+            "available in this phase."
+        )
+    method_col = f.lit(method) if isinstance(method, str) else _col(method)
+    n_clusters_col = (
+        f.lit(n_clusters) if isinstance(n_clusters, int) else _col(n_clusters)
+    )
+    smooth_col = f.lit(smooth) if isinstance(smooth, int) else _col(smooth)
+    return _index_family_wrapper(
+        _land_cover_udf,
+        _land_cover_v2_udf,
+        tile,
+        (method_col, n_clusters_col, smooth_col),
+        virtualize_dir,
+        virtualize_prefix,
+        materialize,
+    )
+
+
+def _percentile_stretch_bytes(tile, lo_pct, hi_pct):
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    with ot._open(tile) as ds:
+        return stretch.percentile_stretch(ds, float(lo_pct), float(hi_pct))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _percentile_stretch_udf(tile, lo_pct, hi_pct):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _percentile_stretch_bytes(tile, lo_pct, hi_pct)
+    return _serde.build_tile(new_bytes, "GTiff", _tile_cellid(tile))
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _percentile_stretch_v2_udf(
+    tile, lo_pct, hi_pct, virtualize_dir, virtualize_prefix, materialize
+):
+    if _tile_is_empty(tile):
+        return None
+    new_bytes = _percentile_stretch_bytes(tile, lo_pct, hi_pct)
+    return _shaped_result_row(
+        new_bytes, _tile_cellid(tile), virtualize_dir, virtualize_prefix, materialize
+    )
+
+
+def rst_percentile_stretch(
+    tile: ColLike,
+    lo_pct: ColLike,
+    hi_pct: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+    materialize: Optional[bool] = None,
+) -> Column:
+    """Per-band percentile contrast stretch to uint8 [0,255].
+
+    For each band, computes lo_pct and hi_pct percentiles over valid pixels,
+    clips to that range, and linearly rescales to [0,255]. NoData preserved as 0.
+
+    Force-output (light-tier, Python API only): ``virtualize_dir`` / ``materialize``.
+    """
+    if _force_output_requested(virtualize_dir, virtualize_prefix, materialize):
+        _validate_force_output(virtualize_dir, materialize)
+        return _percentile_stretch_v2_udf(
+            _col(tile),
+            _col(lo_pct),
+            _col(hi_pct),
+            *_force_output_lits(virtualize_dir, virtualize_prefix, materialize),
+        )
+    return _percentile_stretch_udf(_col(tile), _col(lo_pct), _col(hi_pct))
 
 
 # --- Tier 1e: constructor + fill UDFs (vector bridge) -----------------------
@@ -9398,7 +9539,9 @@ def rst_h3_gridspec(
     _out_spec = out_crs if out_crs is not None else out_srid
     _resolved = cellraster_core._norm_out_crs(_out_spec)
     _is_geo = bool(_resolved.is_geographic)
-    _epsg = _resolved.to_epsg()
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    _epsg = authority_srid_of(_resolved)
     _srid_field = int(_epsg) if _epsg is not None else int(out_srid)
     # Sample one cell on the driver to obtain the H3 resolution for auto pixel_size.
     # An empty input is always an error: there is nothing to rasterize onto.
@@ -9588,6 +9731,7 @@ _sql_tile_ops = {
     "gbx_rst_nbr": _nbr_udf,
     "gbx_rst_savi": _savi_udf,
     "gbx_rst_evi": _evi_udf,
+    "gbx_rst_percentile_stretch": _percentile_stretch_udf,
     "gbx_rst_slope": _slope_udf,
     "gbx_rst_aspect": _aspect_udf,
     "gbx_rst_hillshade": _hillshade_udf,

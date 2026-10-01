@@ -14,6 +14,10 @@ import Tier from '@site/src/components/Tier';
 
 GeoBrix covers this with [`rst_sample`](./raster-functions#rst_sample), available in both execution tiers.
 
+:::note Coordinate reference systems
+Sampling functions accept a `crs` parameter (source role) to declare the CRS of a plain WKB/WKT point; an EWKB/EWKT embedded SRID always takes precedence. The point is reprojected to the raster's CRS before the pixel lookup. `out_srid` / `out_crs` parameters on related functions (such as `rst_gridfrompoints`) control the output CRS. See [Coordinate reference systems](./coordinate-reference-systems) for the full source-vs-output CRS model.
+:::
+
 ## Value at a point — `rst_sample`
 
 <Tier both/>

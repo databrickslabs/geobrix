@@ -12,9 +12,10 @@ This module is intentionally Spark-free: no pyspark import. Task 6 wraps
 from __future__ import annotations
 
 import numpy as np
-from rasterio.crs import CRS
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
+
+from databricks.labs.gbx.core.crs import resolve_crs
 
 _NODATA: float = -9999.0
 
@@ -150,7 +151,7 @@ def bin_points(
         width=w,
         count=1,
         dtype="float32",
-        crs=CRS.from_epsg(int(srid)),
+        crs=resolve_crs(int(srid)),
         transform=transform,
         nodata=_NODATA,
     )

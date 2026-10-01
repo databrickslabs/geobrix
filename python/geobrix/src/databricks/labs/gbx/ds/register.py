@@ -13,6 +13,7 @@ from pyspark.sql import SparkSession
 
 from databricks.labs.gbx import _register
 from databricks.labs.gbx.ds.cog import CogGbxDataSource
+from databricks.labs.gbx.ds.exif import ExifGbxDataSource
 from databricks.labs.gbx.ds.file import FileGbxDataSource
 from databricks.labs.gbx.ds.gtiff import GTiffGbxDataSource
 from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
@@ -42,18 +43,20 @@ _SOURCES = (
     GpkgGbxDataSource,
     FileGdbGbxDataSource,
     LidarGbxDataSource,
+    ExifGbxDataSource,
 )
 
 
 def register(
     spark: Optional[SparkSession] = None, only: Optional[List[str]] = None
 ) -> None:
-    """Register the light DataSources (raster_gbx, gtiff_gbx, pmtiles_gbx, and the
-    vector readers/writers). Uses the active session if not given.
+    """Register the light DataSources (raster_gbx, gtiff_gbx, pmtiles_gbx, the
+    vector readers/writers, lidar_gbx, and exif_gbx). Uses the active session if
+    not given.
 
     Args:
         spark: Spark session (active session if not provided).
-        only: Optional list of format names to register (instead of all 13).
+        only: Optional list of format names to register (instead of all 14).
             Accepts the format name with or without the ``_gbx`` suffix
             (``raster`` or ``raster_gbx``), case-insensitively. ``None`` registers
             everything; ``[]`` registers nothing. An unrecognized format raises

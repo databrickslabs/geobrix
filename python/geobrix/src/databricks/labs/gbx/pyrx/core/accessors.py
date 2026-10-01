@@ -12,6 +12,7 @@ import numpy as np
 from shapely import wkb as _wkb
 from shapely.geometry import box
 
+from databricks.labs.gbx.core.crs import authority_srid_of
 from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
 # Rasterio/numpy dtype string -> GDAL data-type name (mirrors heavyweight rst_type).
@@ -40,7 +41,7 @@ def numbands(ds) -> int:
 
 
 def srid(ds) -> Optional[int]:
-    return ds.crs.to_epsg() if ds.crs is not None else None
+    return authority_srid_of(ds.crs)
 
 
 def crs(ds) -> Optional[str]:
@@ -300,7 +301,7 @@ def summary(ds) -> str:
         "driverShortName": ds.driver,
         "size": [int(ds.width), int(ds.height)],
         "coordinateSystem": {
-            "epsg": ds.crs.to_epsg() if ds.crs is not None else None,
+            "epsg": authority_srid_of(ds.crs),
             "crs": crs_to_canonical(ds.crs),
         },
         "geoTransform": list(_gdal_gt(ds)),

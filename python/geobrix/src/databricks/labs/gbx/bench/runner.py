@@ -645,9 +645,11 @@ def _geometry_aggregate_df(spark, root, corpus, fs):
         )
     # The representative source tile supplies extent.
     src_rel = gset.source_tile
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
     with rasterio.open(root / src_rel) as ds:
         left, bottom, right, top = ds.bounds
-        epsg = ds.crs.to_epsg() if ds.crs is not None else None
+        epsg = authority_srid_of(ds.crs)
         extent = (
             float(left),
             float(bottom),

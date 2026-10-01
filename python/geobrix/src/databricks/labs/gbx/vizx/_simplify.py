@@ -13,6 +13,8 @@ import tempfile
 from pathlib import Path
 from typing import Union
 
+from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
+
 log = logging.getLogger(__name__)
 
 # 1 MB in bytes
@@ -323,7 +325,7 @@ def _simplify_vector(
     """Vector branch: GeoDataFrame / path / Spark DF → PMTiles bytes or path."""
     bin_path = _ensure_tippecanoe()
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(dir=local_temp_root()) as tmp_dir:
         # Resolve source → GeoDataFrame or GeoJSON path
         if _is_spark_dataframe(source):
             gdf = _spark_df_to_gdf(source, geom_col)
@@ -391,7 +393,7 @@ def _simplify_raster(source, spec: dict, out_path: str | None) -> Union[bytes, s
 
     raster_max_px = spec["raster_max_px"]
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
+    with tempfile.TemporaryDirectory(dir=local_temp_root()) as tmp_dir:
         out_cog = str(Path(tmp_dir) / "out.tif")
 
         if isinstance(source, np.ndarray):

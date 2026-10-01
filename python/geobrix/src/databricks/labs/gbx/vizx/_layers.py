@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Any, Optional
 
-_VALID = {"vector", "raster", "grid", "pmtiles"}
+_VALID = {"vector", "raster", "grid", "pmtiles", "point_cloud"}
 
 
 @dataclass
@@ -16,6 +16,7 @@ class Layer:
     grid_system: Optional[str] = None
     grid_conf: Optional[dict] = None
     cmap: str = "viridis"
+    category_colors: Optional[dict] = None
     scale: str = "linear"
     opacity: Optional[float] = None
     color: Optional[str] = None
@@ -25,6 +26,9 @@ class Layer:
     style: Optional[dict] = None
     simplify: Optional[dict] = None
     label: Optional[str] = None
+    max_points: Optional[int] = None
+    point_size: Optional[float] = None
+    crs: Any = None
 
     def __post_init__(self):
         if self.kind not in _VALID:
@@ -37,6 +41,7 @@ def vector_layer(
     geom_col=None,
     column=None,
     cmap="viridis",
+    category_colors=None,
     scale="linear",
     fill=True,
     color=None,
@@ -45,12 +50,23 @@ def vector_layer(
     simplify=None,
     label=None,
 ):
+    """A vector layer colored by ``column`` (through ``cmap``) or a single ``color``.
+
+    ``category_colors`` (with ``column``) overrides ``cmap`` with an explicit
+    ``{category_value: color}`` map, so each category renders in its own stable,
+    meaningful color and the legend lists the present categories in the map's
+    order -- e.g. a land-cover map reading ``{"vegetation": "green",
+    "impervious": "gray", ...}`` instead of a colormap's arbitrary (alphabetical)
+    assignment. Categories present in the data but absent from the map fall back
+    to a neutral gray and are appended to the legend.
+    """
     return Layer(
         "vector",
         data,
         geom_col=geom_col,
         column=column,
         cmap=cmap,
+        category_colors=category_colors,
         scale=scale,
         fill=fill,
         color=color,
@@ -63,6 +79,47 @@ def vector_layer(
 
 def raster_layer(data, *, band=None, cmap="viridis", opacity=1.0, label=None):
     return Layer("raster", data, band=band, cmap=cmap, opacity=opacity, label=label)
+
+
+def point_cloud_layer(
+    data,
+    *,
+    column=None,
+    cmap="viridis",
+    category_colors=None,
+    max_points=150_000,
+    point_size=2.0,
+    opacity=None,
+    crs=None,
+    label=None,
+):
+    """A LiDAR/point-cloud layer rendered as a decimated 2D scatter (static compositor).
+
+    ``data`` is a LAS/LAZ file path (read via ``laspy``), a GeoDataFrame of Points
+    (elevation from 3D geometry or a ``z`` column), or a pandas DataFrame with
+    ``x``/``y``/``z`` columns. Points are colored by ``column`` if given, else by
+    elevation ``z`` (a continuous ``cmap``); pass ``category_colors`` with a
+    categorical ``column`` (e.g. classification) for explicit per-class colors and a
+    discrete legend. Clouds larger than ``max_points`` are randomly decimated (seeded)
+    so the render stays in memory. ``crs`` overrides the source CRS (the LAZ header /
+    GeoDataFrame ``.crs``); points reproject to Web Mercator to compose over raster /
+    vector layers, or draw in native coordinates when no CRS is known.
+
+    Point-cloud layers render only in the static compositor (``plot_static``);
+    interactive and 3D rendering are a planned follow-on.
+    """
+    return Layer(
+        "point_cloud",
+        data,
+        column=column,
+        cmap=cmap,
+        category_colors=category_colors,
+        max_points=max_points,
+        point_size=point_size,
+        opacity=opacity,
+        crs=crs,
+        label=label,
+    )
 
 
 def grid_layer(
@@ -141,6 +198,10 @@ def as_layers(obj) -> list:
         return list(obj)
     if _looks_pmtiles(obj):
         return [pmtiles_layer(obj)]
+    # bare point cloud: a LAS/LAZ path -> point_cloud (else it would wrongly fall
+    # through to vector_layer, which cannot read a point-cloud file).
+    if isinstance(obj, str) and obj.lower().endswith((".laz", ".las")):
+        return [point_cloud_layer(obj)]
     # bare raster: a path to a known raster ext, ndarray, or tile struct -> raster; else vector.
     if isinstance(obj, str) and obj.lower().endswith((".tif", ".tiff", ".cog")):
         return [raster_layer(obj)]

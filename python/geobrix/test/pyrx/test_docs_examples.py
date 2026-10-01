@@ -15,6 +15,8 @@ parents index verification (from python/geobrix/test/pyrx/test_docs_examples.py)
 import importlib.util
 from pathlib import Path
 
+from databricks.labs.gbx.pyrx.core.land_cover import DEFAULT_CLASSES
+
 _EX = Path(__file__).resolve().parents[4] / "docs/tests/python/api/pyrx_functions.py"
 _spec = importlib.util.spec_from_file_location("pyrx_doc_examples", _EX)
 pyrx_doc_examples = importlib.util.module_from_spec(_spec)
@@ -67,6 +69,19 @@ def test_sql_example(spark):
     assert row["srid"] == 4326
 
 
+def test_land_cover_example(spark):
+    """pyrx_land_cover_example classifies >=2 classes and polygonizes >=2 regions."""
+    rows, class_names, kept = pyrx_doc_examples.pyrx_land_cover_example(spark)
+    assert len(rows) >= 2
+    distinct_values = {int(r["v"]) for r in rows}  # polygonize value is a float
+    assert len(distinct_values) >= 2
+    # Every traced value is a valid index into the fixed DEFAULT_CLASSES scheme.
+    for value in distinct_values:
+        assert 0 <= value < len(DEFAULT_CLASSES)
+    assert class_names == {v: DEFAULT_CLASSES[v] for v in distinct_values}
+    assert isinstance(kept, list)
+
+
 def test_output_constants_present():
     """Each example has a matching _output string constant."""
     for name in [
@@ -76,6 +91,7 @@ def test_output_constants_present():
         "pyrx_clip_example_output",
         "pyrx_polygonize_example_output",
         "pyrx_sql_example_output",
+        "pyrx_land_cover_example_output",
     ]:
         val = getattr(pyrx_doc_examples, name, None)
         assert val is not None, f"Missing constant: {name}"

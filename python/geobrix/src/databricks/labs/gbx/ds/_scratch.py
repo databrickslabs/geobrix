@@ -28,20 +28,18 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 import time
 import uuid
 
+# gc_stale_local_temp relocated to the tier-neutral canonical module; re-exported
+# so existing callers (ds.vector) keep working. DEFAULT_STALE_TTL_SECONDS lives there now.
+from databricks.labs.gbx.pyrx.core.local_temp import (  # noqa: F401
+    DEFAULT_STALE_TTL_SECONDS,
+    gc_stale_local_temp,
+)
+
 #: Hidden container directory holding all per-write scratch subdirs.
 SCRATCH_CONTAINER = ".gbx_scratch"
-
-#: A write that has not committed within this window is presumed dead; its
-#: scratch is reclaimable. The floor is the longest *static* phase of a live
-#: write -- the driver-merge step, during which no new fragments are added so the
-#: scratch dir's mtime stops advancing (file_gdb 782k merges for ~8 min). One
-#: hour leaves a wide margin above that yet reclaims hard-killed orphans
-#: promptly. Do not drop below ~30 min.
-DEFAULT_STALE_TTL_SECONDS = 60 * 60
 
 
 def new_scratch_dir(parent: str) -> str:
@@ -96,31 +94,5 @@ def gc_stale_scratch(parent: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS) 
         try:
             if os.path.isdir(sub) and (now - os.path.getmtime(sub)) > ttl_seconds:
                 shutil.rmtree(sub, ignore_errors=True)
-        except OSError:
-            continue
-
-
-def gc_stale_local_temp(
-    prefix: str, ttl_seconds: int = DEFAULT_STALE_TTL_SECONDS
-) -> None:
-    """Best-effort GC of stale driver-local ``mkdtemp`` dirs (e.g. ``gbx_vecout_*``)
-    left in the system temp root by hard-killed writes.
-
-    Age-based; never raises. Driver-local temp is also reclaimed by a cluster
-    restart, so this is the same-session safety net.
-    """
-    root = tempfile.gettempdir()
-    now = time.time()
-    try:
-        names = os.listdir(root)
-    except OSError:
-        return
-    for name in names:
-        if not name.startswith(prefix):
-            continue
-        p = os.path.join(root, name)
-        try:
-            if os.path.isdir(p) and (now - os.path.getmtime(p)) > ttl_seconds:
-                shutil.rmtree(p, ignore_errors=True)
         except OSError:
             continue

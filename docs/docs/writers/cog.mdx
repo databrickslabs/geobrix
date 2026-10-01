@@ -252,6 +252,10 @@ primitives. The table below shows which are active in this writer and which are 
 Lightweight writers commit via the shared [`file_gbx` file-access base](../readers-writers#file-gbx) — `file_mode`, `layout`, and the no-gating rule are described there. See also [`file_gbx` Writer](./file) for the write API.
 :::
 
+:::note Coordinate reference systems
+The COG writer preserves the CRS from each source tile's SRS metadata. It is written into the output COG as the GDAL SRS element. ESRI and OGC authorities are preserved where the format supports them (GTiff stores the full authority string in the SRS element). See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+:::
+
 ## Next steps
 
 - [Large Rasters](../api/large-rasters) — formats, BigTIFF, the memory model, and `prepare_cogs`

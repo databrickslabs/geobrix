@@ -21,9 +21,10 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
-    TimestampType,
+    TimestampNTZType,
 )
 
+from databricks.labs.gbx.core.crs import crs_to_canonical, resolve_crs
 from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.file_gbx import list_local_files
 
@@ -50,7 +51,7 @@ LIDAR_META_SCHEMA = StructType(
         StructField("density", DoubleType(), True),
         StructField("version", StringType(), True),
         StructField("size", LongType(), True),
-        StructField("modificationTime", TimestampType(), True),
+        StructField("modificationTime", TimestampNTZType(), True),
     ]
 )
 
@@ -277,7 +278,11 @@ class LidarGbxReader(DataSourceReader):
             maxs = h.maxs
             try:
                 crs_obj = h.parse_crs()
-                crs = crs_obj.to_wkt() if crs_obj is not None else None
+                crs = (
+                    crs_to_canonical(resolve_crs(crs_obj.to_wkt()))
+                    if crs_obj is not None
+                    else None
+                )
             except Exception:  # noqa: BLE001
                 crs = None
             dims = [d.name for d in h.point_format.dimensions]
@@ -332,3 +337,10 @@ class LidarGbxDataSource(DataSource):
 
     def reader(self, schema: StructType) -> DataSourceReader:
         return LidarGbxReader(self.options)
+
+    def writer(self, schema: StructType, overwrite: bool):
+        from databricks.labs.gbx.ds._write_lidar import LidarGbxWriter
+
+        if not self.options.get("path"):
+            raise ValueError("lidar_gbx writer requires an output path (.save(path)).")
+        return LidarGbxWriter(self.options, schema, overwrite)

@@ -10,6 +10,7 @@ from __future__ import annotations
 import glob
 import hashlib
 import os
+import shutil
 import uuid
 from dataclasses import dataclass
 from typing import Iterator, List, Optional
@@ -20,6 +21,73 @@ from pyspark.sql.types import StructType
 from databricks.labs.gbx.ds import _write
 from databricks.labs.gbx.ds.raster import reader_schema, reader_schema_v2
 from databricks.labs.gbx.pyrx.core import compression as _comp
+
+# ---------------------------------------------------------------------------
+# Shared merge helpers (format-agnostic; used by netcdf_gbx, lidar_gbx, …)
+# ---------------------------------------------------------------------------
+
+
+def _glob_merge_inputs(path: str, target: str, ext: str = "nc") -> List[str]:
+    """Glob ``<path>/*.{ext}`` excluding the resolved output file.
+
+    Non-recursive, so it never descends into the hidden ``.gbx_scratch``
+    container.  We also exclude the resolved merge output name so a re-merge
+    does not fold a prior merged file into itself.
+
+    Parameters
+    ----------
+    path:   directory to search.
+    target: the would-be output path (its basename is excluded from results).
+    ext:    file extension WITHOUT the leading dot (default ``"nc"``).
+            Pass ``"laz"`` or ``"las"`` for LiDAR callers.
+    """
+    target_name = os.path.basename(target)
+    return sorted(
+        p
+        for p in glob.glob(os.path.join(path, f"*.{ext}"))
+        if os.path.basename(p) != target_name
+    )
+
+
+def _publish_merged(tmp_path: str, target: str, expected_count: int, count_fn) -> None:
+    """Data-safe publish of a merged temp file to ``target``.
+
+    ``count_fn(path: str) -> int`` opens *path* and returns its element count.
+    This keeps the function format-agnostic — callers supply a path-based
+    count function (e.g. ``_laz_point_count``, ``_count_raster_data_vars_path``).
+
+    Order (never lose parts to a failed merge):
+    (1) the merge already wrote ``tmp_path``;
+    (2) VALIDATE — element count via ``count_fn(tmp_path)`` == ``expected_count``;
+    (3) ``shutil.copyfile`` temp → target (FUSE-safe: no chmod);
+    (4) VERIFY target exists and byte size == temp size.
+    Any failure raises BEFORE the caller deletes any source part.
+    """
+    # (2) validate: element count.
+    actual = count_fn(tmp_path)
+    if actual != expected_count:
+        raise ValueError(
+            f"merge: validation failed — merged file has {actual} "
+            f"elements but {expected_count} were expected; "
+            f"source parts left intact."
+        )
+    # (3) copy temp -> target (FUSE-safe: content only, no chmod).
+    shutil.copyfile(tmp_path, target)
+    # (4) verify target exists + byte size matches.  On any verify failure,
+    # remove the partial target BEFORE raising so a truncated FUSE copy does
+    # not leave a corrupt-but-valid-looking output.  Source parts stay intact
+    # because the caller only deletes them AFTER this returns cleanly.
+    if not os.path.exists(target):
+        raise ValueError(f"merge: target {target} missing after copy; parts intact.")
+    if os.path.getsize(target) != os.path.getsize(tmp_path):
+        if os.path.exists(target):
+            try:
+                os.remove(target)
+            except OSError:
+                pass
+        raise ValueError(
+            f"merge: target {target} size mismatch after copy; parts intact."
+        )
 
 
 def _raster_bytes_compression(raster_bytes: bytes) -> "Optional[str]":

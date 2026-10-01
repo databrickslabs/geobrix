@@ -77,8 +77,10 @@ def reproject_to_srid(ds, target_srid: int, resampling: str = "nearest") -> byte
     preserves the raw-bytes sort key that ``agg_core.merge_tiles`` relies on for
     heavy-parity overlap resolution.
     """
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
     target_srid = int(target_srid)
-    src_epsg = ds.crs.to_epsg() if ds.crs else None
+    src_epsg = authority_srid_of(ds.crs)
     if src_epsg is not None and src_epsg == target_srid:
         # Identity: emit the source bytes re-encoded with ZSTD baseline.
         data = ds.read()

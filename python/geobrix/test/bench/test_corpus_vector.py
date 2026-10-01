@@ -1,5 +1,6 @@
 import os
 import zipfile
+from unittest.mock import patch
 
 from shapely import from_wkb
 
@@ -106,3 +107,32 @@ def test_build_vector_corpus(spark, tmp_path):
             ".shp.zip"
         ), f"expected .shp.zip copy, got {copy_path}"
         assert os.path.exists(copy_path)
+
+
+# ---------------------------------------------------------------------------
+# Wiring: bench source enumerators route through list_files (fail-on-revert)
+# ---------------------------------------------------------------------------
+
+
+def test_zip_shapefile_calls_list_files_for_sidecars(tmp_path):
+    """_zip_shapefile routes sidecar listing through list_files (fail-on-revert)."""
+    stem = "roads"
+    # Create minimal sidecar files
+    for ext in (".shp", ".dbf", ".shx"):
+        (tmp_path / f"{stem}{ext}").write_bytes(b"x")
+    from databricks.labs.gbx.bench.corpus_vector import _zip_shapefile
+
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.return_value = [
+            str(tmp_path / f"{stem}.shp"),
+            str(tmp_path / f"{stem}.dbf"),
+            str(tmp_path / f"{stem}.shx"),
+        ]
+        try:
+            _zip_shapefile(str(tmp_path), stem)
+        except Exception:
+            pass  # zip write may fail in test env; listing call already captured
+    mock_lf.assert_called()
+    _args, kw = mock_lf.call_args
+    assert kw.get("recursive", True) is False
+    assert kw.get("raise_on_empty", True) is False

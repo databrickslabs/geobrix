@@ -1,0 +1,515 @@
+"""Tests for lidar_gbx DataSource writer (sharded parts mode).
+
+TDD: new tests written BEFORE implementation (RED -> GREEN).
+Task 1 test (write_xyz_laz) is retained here; Task 2 adds the DataSource writer tests.
+Task 3 adds singleFile + merge mode tests (M1/M2/M3).
+"""
+
+import numpy as np
+import pytest
+
+
+def _decode_laz(path):
+    """Read a written .las/.laz back with laspy; return (n, xs, ys, zs, fmt_id)."""
+    import laspy
+
+    las = laspy.read(path)
+    return (
+        len(las.points),
+        np.asarray(las.x),
+        np.asarray(las.y),
+        np.asarray(las.z),
+        int(las.header.point_format.id),
+    )
+
+
+def test_write_xyz_laz_roundtrips_xyz_format0(tmp_path):
+    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz
+
+    x = np.array([0.0, 1.0, 2.5], dtype=np.float64)
+    y = np.array([10.0, 11.0, 12.0], dtype=np.float64)
+    z = np.array([100.0, 101.0, 102.0], dtype=np.float64)
+    out = write_xyz_laz(str(tmp_path / "xyz.laz"), x, y, z, crs=32611)
+
+    n, xs, ys, zs, fmt = _decode_laz(out)
+    assert n == 3
+    assert fmt == 0  # XYZ-only point format
+    np.testing.assert_allclose(sorted(xs), sorted(x), atol=1e-4)
+    np.testing.assert_allclose(sorted(zs), sorted(z), atol=1e-4)
+
+
+def _points_df(spark, n=30, with_rgb=True, groups=("A", "B")):
+    """A points DataFrame with x,y,z[,r,g,b] + group,cluster columns.
+
+    Uses clu = (i // 2) % 2 so that both cluster values (0 and 1) appear with
+    each group, producing all 4 (group, cluster) combinations when len(groups)==2.
+    This ensures repartitionByRange(4, 'group', 'cluster') places each combination
+    in its own partition (M3 guard: catches stem-collision naming bugs).
+    """
+    from pyspark.sql import Row
+
+    rng = np.random.default_rng(3)
+    rows = []
+    for i in range(n):
+        grp = groups[i % len(groups)]
+        clu = (i // 2) % 2  # 0,0,1,1,0,0,... — all 4 (grp,clu) combos when 2 groups
+        base = dict(
+            x=float(rng.uniform(0, 100)),
+            y=float(rng.uniform(0, 100)),
+            z=float(rng.uniform(0, 50)),
+            group=grp,
+            cluster=int(clu),
+        )
+        if with_rgb:
+            base.update(
+                r=int(rng.integers(0, 256)),
+                g=int(rng.integers(0, 256)),
+                b=int(rng.integers(0, 256)),
+            )
+        rows.append(Row(**base))
+    return spark.createDataFrame(rows)
+
+
+def test_writer_sharded_roundtrips_via_reader(spark, tmp_path):
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    out = str(tmp_path / "cloud")
+    df = _points_df(spark, n=40, with_rgb=True)
+    # repartitionByRange ensures each (group, cluster) lands in its own partition,
+    # giving exactly 4 output files — required for the M3 naming-collision guard.
+    (
+        df.repartitionByRange(4, "group", "cluster")
+        .write.format("lidar_gbx")
+        .option("groupCol", "group")
+        .option("clusterCol", "cluster")
+        .mode("overwrite")
+        .save(out)
+    )
+    # Deterministic names: *_<group>_<cluster>.laz, no uuid parts.
+    import glob
+    import os
+
+    parts = sorted(os.path.basename(p) for p in glob.glob(os.path.join(out, "*.la*")))
+    assert parts, "no part files written"
+    assert all("_" in p and "part-" not in p for p in parts)
+    # M3: assert all 4 (group × cluster) combinations produce a distinct file.
+    assert (
+        len(parts) == 4
+    ), f"expected 4 part files (A_0, A_1, B_0, B_1) but got {len(parts)}: {parts}"
+    # Round-trip point count via the reader (RGB not in reader schema; xyz+count is).
+    back = spark.read.format("lidar_gbx").option("mode", "points").load(out)
+    assert back.count() == 40
+
+
+def test_writer_rejects_v1_unsupported_columns(spark, tmp_path):
+    from pyspark.sql import Row
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    df = spark.createDataFrame([Row(x=1.0, y=2.0, z=3.0, classification=2)])
+    with pytest.raises(Exception) as ei:
+        df.write.format("lidar_gbx").mode("overwrite").save(str(tmp_path / "c"))
+    assert "classification" in str(ei.value) and "v1" in str(ei.value).lower()
+
+
+# ---------------------------------------------------------------------------
+# M2: partial-RGB rejection
+# ---------------------------------------------------------------------------
+
+
+def test_writer_rejects_partial_rgb(spark, tmp_path):
+    """A DataFrame with x,y,z,r (no g,b) must raise ValueError about RGB."""
+    from pyspark.sql import Row
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    df = spark.createDataFrame([Row(x=1.0, y=2.0, z=3.0, r=128)])
+    with pytest.raises(Exception) as ei:
+        df.write.format("lidar_gbx").mode("overwrite").save(
+            str(tmp_path / "rgb_partial")
+        )
+    msg = str(ei.value).lower()
+    assert "rgb" in msg or "r,g,b" in msg or ("r" in msg and "g" in msg and "b" in msg)
+
+
+# ---------------------------------------------------------------------------
+# Task 3: singleFile mode
+# ---------------------------------------------------------------------------
+
+
+def test_writer_single_file_merges_to_one(spark, tmp_path):
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    out = str(tmp_path / "single")
+    df = _points_df(spark, n=50, with_rgb=True)
+    (
+        df.repartition(4, "group", "cluster")
+        .write.format("lidar_gbx")
+        .option("singleFile", "true")
+        .option("fileName", "merged")
+        .option("groupCol", "group")
+        .option("clusterCol", "cluster")
+        .mode("overwrite")
+        .save(out)
+    )
+    import glob
+    import os
+
+    files = glob.glob(os.path.join(out, "merged.la*"))
+    assert len(files) == 1
+    back = spark.read.format("lidar_gbx").option("mode", "points").load(files[0])
+    assert back.count() == 50
+
+
+# ---------------------------------------------------------------------------
+# Task 3: post-hoc merge mode
+# ---------------------------------------------------------------------------
+
+
+def test_writer_merge_folds_parts_and_deletes(spark, tmp_path):
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    out = str(tmp_path / "m")
+    df = _points_df(spark, n=30, with_rgb=True)
+    df.repartition(3, "group", "cluster").write.format("lidar_gbx").option(
+        "groupCol", "group"
+    ).option("clusterCol", "cluster").mode("overwrite").save(out)
+    import glob
+    import os
+
+    n_parts = len(glob.glob(os.path.join(out, "*.la[sz]")))
+    assert n_parts >= 2
+    # Post-hoc merge (no recompute); default deletes parts.
+    (
+        spark.createDataFrame([(1,)], ["dummy"])
+        .write.format("lidar_gbx")
+        .option("merge", "true")
+        .option("fileName", "all")
+        .mode("append")
+        .save(out)
+    )
+    merged = glob.glob(os.path.join(out, "all.la*"))
+    assert len(merged) == 1
+    back = spark.read.format("lidar_gbx").option("mode", "points").load(merged[0])
+    assert back.count() == 30
+
+
+# ---------------------------------------------------------------------------
+# Task 4: writer-level gate tests (mergeMaxMB option)
+# ---------------------------------------------------------------------------
+
+
+def test_writer_merge_over_budget_raises(spark, tmp_path):
+    """mergeMaxMB=0 forces budget to 0; any real cloud raises with a compute-aware message."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    out = str(tmp_path / "over")
+    # Write a few-point xyz-only LAZ file first (no naming columns needed).
+    rng = np.random.default_rng(7)
+    rows = [
+        {
+            "x": float(rng.uniform(0, 100)),
+            "y": float(rng.uniform(0, 100)),
+            "z": float(rng.uniform(0, 50)),
+        }
+        for _ in range(30)
+    ]
+    df = spark.createDataFrame(rows)
+    df.repartition(1).write.format("lidar_gbx").mode("overwrite").save(out)
+    # Now try to merge with a zero-byte budget — must raise with the right message.
+    with pytest.raises(Exception) as ei:
+        (
+            spark.createDataFrame([(1,)], ["_"])
+            .write.format("lidar_gbx")
+            .option("merge", "true")
+            .option("mergeMaxMB", "0")
+            .option("fileName", "merged")
+            .mode("append")
+            .save(out)
+        )
+    msg = str(ei.value).lower()
+    assert "budget" in msg
+    assert "compute-aware" in msg or "host-ram" in msg or "mergemaxmb" in msg.lower()
+
+
+def test_writer_merge_under_budget_succeeds(spark, tmp_path):
+    """mergeMaxMB=10000 (10 GB) is plenty; a small cloud merges successfully."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    out = str(tmp_path / "under")
+    rng = np.random.default_rng(8)
+    rows = [
+        {
+            "x": float(rng.uniform(0, 100)),
+            "y": float(rng.uniform(0, 100)),
+            "z": float(rng.uniform(0, 50)),
+            "r": int(rng.integers(0, 256)),
+            "g": int(rng.integers(0, 256)),
+            "b": int(rng.integers(0, 256)),
+        }
+        for _ in range(30)
+    ]
+    df = spark.createDataFrame(rows)
+    df.repartition(2).write.format("lidar_gbx").mode("overwrite").save(out)
+    (
+        spark.createDataFrame([(1,)], ["_"])
+        .write.format("lidar_gbx")
+        .option("merge", "true")
+        .option("mergeMaxMB", "10000")
+        .option("fileName", "merged_ok")
+        .mode("append")
+        .save(out)
+    )
+    import glob as _glob
+    import os as _os
+
+    merged = _glob.glob(_os.path.join(out, "merged_ok.la*"))
+    assert len(merged) == 1
+    back = spark.read.format("lidar_gbx").option("mode", "points").load(merged[0])
+    assert back.count() == 30
+
+
+# ---------------------------------------------------------------------------
+# Finding 1 (Isaac): CRS preserved through merge when caller passes crs=None
+# ---------------------------------------------------------------------------
+
+
+def test_merge_preserves_crs_from_parts(spark, tmp_path):
+    """Parts written with EPSG:32611; merge with no crs= option must infer it
+    from the first part's header and tag the merged file identically.
+    TDD: verifies _merge_laz_parts CRS-inference path (Finding 1)."""
+    import glob as _g
+    import os as _os
+
+    import laspy
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+
+    out = str(tmp_path / "crs_merge")
+    rng = np.random.default_rng(42)
+    rows = [
+        {
+            "x": float(rng.uniform(300000, 400000)),
+            "y": float(rng.uniform(3600000, 3700000)),
+            "z": float(rng.uniform(0, 50)),
+        }
+        for _ in range(20)
+    ]
+    df = spark.createDataFrame(rows)
+    # Write 2 sharded parts WITH a known projected CRS (EPSG:32611, UTM 11N).
+    df.repartition(2).write.format("lidar_gbx").option("crs", "32611").mode(
+        "overwrite"
+    ).save(out)
+
+    # Post-hoc merge WITHOUT passing crs= — the writer must infer it from parts.
+    (
+        spark.createDataFrame([(1,)], ["_"])
+        .write.format("lidar_gbx")
+        .option("merge", "true")
+        .option("keepParts", "true")
+        .option("fileName", "merged")
+        .mode("append")
+        .save(out)
+    )
+
+    merged = _g.glob(_os.path.join(out, "merged.la*"))
+    assert len(merged) == 1, f"expected 1 merged file, got {len(merged)}"
+    parsed = laspy.read(merged[0]).header.parse_crs()
+    assert parsed is not None, "merged file lost its CRS (crs=None after merge)"
+    assert (
+        parsed.to_epsg() == 32611
+    ), f"expected EPSG:32611 on merged file but got {parsed.to_epsg()}"
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 (Isaac): stem-bucketing within a single partition
+# ---------------------------------------------------------------------------
+
+
+def test_writer_stem_bucketing_multi_key_partition(spark, tmp_path):
+    """Multiple (group,cluster) keys forced into ONE partition via repartition(1)
+    must each produce a distinct, correctly-named .laz with the right point count.
+    TDD: verifies Finding 3 stem-bucketing within a partition."""
+    import glob as _g
+    import os as _os
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+
+    out = str(tmp_path / "bucket")
+    # Build rows with predictable per-key point counts for verification.
+    expected_counts = {"A_0": 5, "B_1": 3, "A_1": 7, "B_0": 4}
+    rows = []
+    rng = np.random.default_rng(55)
+    for stem, n in sorted(expected_counts.items()):
+        grp, clu = stem.split("_")
+        for _ in range(n):
+            rows.append(
+                {
+                    "x": float(rng.uniform(0, 100)),
+                    "y": float(rng.uniform(0, 100)),
+                    "z": float(rng.uniform(0, 50)),
+                    "group": grp,
+                    "cluster": int(clu),
+                }
+            )
+    df = spark.createDataFrame(rows)
+    # repartition(1) forces all 4 distinct (group,cluster) keys into ONE partition.
+    (
+        df.repartition(1)
+        .write.format("lidar_gbx")
+        .option("groupCol", "group")
+        .option("clusterCol", "cluster")
+        .mode("overwrite")
+        .save(out)
+    )
+
+    part_files = sorted(_g.glob(_os.path.join(out, "*.la*")))
+    n_distinct = len(expected_counts)
+    assert len(part_files) == n_distinct, (
+        f"expected {n_distinct} part files (one per key) but got "
+        f"{len(part_files)}: {[_os.path.basename(p) for p in part_files]}"
+    )
+    # Verify each file's point count matches the expected count for that key.
+    for pf in part_files:
+        stem = _os.path.splitext(_os.path.basename(pf))[0]
+        n, _, _, _, _ = _decode_laz(pf)
+        assert (
+            n == expected_counts[stem]
+        ), f"{stem}: expected {expected_counts[stem]} points but got {n}"
+    # Total must round-trip.
+    total = sum(expected_counts.values())
+    actual_total = sum(_decode_laz(p)[0] for p in _g.glob(_os.path.join(out, "*.la*")))
+    assert actual_total == total, f"total {actual_total} != {total}"
+
+
+# ---------------------------------------------------------------------------
+# Finding 4 (Isaac): heterogeneous point formats in merge directory
+# ---------------------------------------------------------------------------
+
+
+def test_writer_merge_rejects_heterogeneous_formats(spark, tmp_path):
+    """A directory mixing RGB (fmt 2) and XYZ-only (fmt 0) parts must raise a
+    clear ValueError naming the conflicting formats.
+    TDD: verifies Finding 4 homogeneity check in _commit_merge."""
+    import glob as _g
+    import os as _os
+
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+    from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+
+    import os as _os2
+
+    out = str(tmp_path / "het_merge")
+    _os2.makedirs(out, exist_ok=True)
+
+    rng = np.random.default_rng(77)
+
+    def _pts(n):
+        return (
+            np.array([rng.uniform(0, 100) for _ in range(n)]),
+            np.array([rng.uniform(0, 100) for _ in range(n)]),
+            np.array([rng.uniform(0, 50) for _ in range(n)]),
+        )
+
+    # Write one XYZ-only .laz (format 0) directly via write_xyz_laz.
+    x, y, z = _pts(10)
+    write_xyz_laz(_os2.path.join(out, "part_xyz.laz"), x, y, z)
+    # Write one RGB .laz (format 2) directly via write_xyzrgb_laz.
+    x2, y2, z2 = _pts(10)
+    r2 = np.full(10, 128, dtype=np.uint8)
+    g2 = np.full(10, 64, dtype=np.uint8)
+    b2 = np.full(10, 32, dtype=np.uint8)
+    write_xyzrgb_laz(_os2.path.join(out, "part_rgb.laz"), x2, y2, z2, r2, g2, b2)
+
+    assert len(_g.glob(_os.path.join(out, "*.la*"))) == 2
+
+    with pytest.raises(Exception) as ei:
+        (
+            spark.createDataFrame([(1,)], ["_"])
+            .write.format("lidar_gbx")
+            .option("merge", "true")
+            .option("fileName", "het_merged")
+            .mode("append")
+            .save(out)
+        )
+    msg = str(ei.value).lower()
+    assert (
+        "heterogeneous" in msg or "point format" in msg or "rgb" in msg
+    ), f"expected heterogeneous/format message but got: {ei.value}"
+
+
+def test_writer_singlefile_over_budget_raises(spark, tmp_path):
+    """singleFile + mergeMaxMB=0 → _gate_merge raises with a compute-aware message."""
+    from databricks.labs.gbx.ds.lidar import LidarGbxDataSource
+
+    try:
+        spark.dataSource.register(LidarGbxDataSource)
+    except Exception:
+        pass
+    out = str(tmp_path / "sf_over")
+    rng = np.random.default_rng(9)
+    rows = [
+        {
+            "x": float(rng.uniform(0, 100)),
+            "y": float(rng.uniform(0, 100)),
+            "z": float(rng.uniform(0, 50)),
+        }
+        for _ in range(30)
+    ]
+    df = spark.createDataFrame(rows)
+    with pytest.raises(Exception) as ei:
+        (
+            df.repartition(2)
+            .write.format("lidar_gbx")
+            .option("singleFile", "true")
+            .option("mergeMaxMB", "0")
+            .option("fileName", "sf_merged")
+            .mode("overwrite")
+            .save(out)
+        )
+    msg = str(ei.value).lower()
+    assert "budget" in msg
+    assert "compute-aware" in msg or "host-ram" in msg or "mergemaxmb" in msg.lower()

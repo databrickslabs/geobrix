@@ -19,9 +19,36 @@ This page tracks **API and naming changes** across GeoBrix releases — the sing
 v0.5.2 is under active development — the functions and documentation on this page may change before release.
 :::
 
-Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
+Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions, and a new
+model-backed inference package for GPU object segmentation.
 
-### LiDAR reader — `lidar_gbx` (new)
+### Geospatial Models (GeoSAM) — new `gbx.models` package
+
+- **New `gbx.models` package — model-backed raster inference, light-only.** The first
+  capability is **GeoSAM**, an automatic-mask object-segmentation backend built on
+  [segment-geospatial](https://samgeo.gishub.org/) (SamGeo). `load_geosam(...)` loads a
+  handle (torch / `segment-geospatial` import lazily, so the package stays importable
+  with no GPU deps); `segment_raster(tile_or_path, gpus="all", tile_px=1024, overlap=6,
+  min_area=10.0)` chips a raster, fans inference across one or many GPU device slots —
+  each slot holding its own cached, device-bound handle — vectorizes each chip's label
+  mask, and merges polygon fragments across tile seams into one polygon per real-world
+  object — a `pandas.DataFrame` of `label` / `geom` (WKB) / `score` back. GPU workloads
+  target the Serverless **GPU AI Runtime environment 5**
+  (`torch==2.10.0`, CUDA 12) via the new `geobrix[models_gpu_env5]` extra. See
+  [Geospatial Models](./models/overview) and [GeoSAM](./models/geosam).
+- **Unity Catalog registration and GPU Model Serving for GeoSAM.**
+  `build_geosam_pyfunc` wraps `segment_raster` in an MLflow `PythonModel`;
+  `register_to_unity_gateway` logs and registers it to the Unity Catalog model registry
+  with `pip_requirements` that include the GeoBrix light wheel — a deliberate
+  usage-affiliation choice, so the served model's environment carries GeoBrix;
+  `create_endpoint` stands up a GPU Model Serving endpoint (`scale_to_zero` by default);
+  `query` calls it. See [Serving](./models/serving).
+- **New segmentation capstone on the Orthomosaic Photogrammetry example.** The
+  `03_segment` notebook turns that series' published orthomosaic COG into georeferenced
+  object polygons with GeoSAM — in-notebook across 1..N GPUs, or behind a served Unity
+  Gateway endpoint. See [Orthomosaic Photogrammetry](./notebooks/orthomosaic).
+
+### LiDAR reader and writer — `lidar_gbx` (new)
 
 - **New `lidar_gbx` Spark DataSource** reads LAS and LAZ point-cloud files into a
   Spark DataFrame. Two modes: `metadata` (one row per file, header-level statistics,
@@ -32,6 +59,27 @@ Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions.
   Serverless-safe. Point reads are columnar and skip empty or unreadable files, so
   full-density (`decimate=1`) point clouds read without stalling. See
   [LiDAR Reader](./readers/lidar).
+
+- **New `lidar_gbx` writer** outputs point DataFrames as LAS/LAZ — the inverse of the reader.
+  `df.write.format("lidar_gbx")` writes `x`/`y`/`z` (plus optional `r`/`g`/`b`) as sharded
+  `.laz` files, one per Spark partition, with deterministic `*_<group>_<cluster>` shard names
+  when `groupCol`/`clusterCol` are set. `singleFile="true"` merges all partitions into one
+  `.laz` on the driver; `merge="true"` folds `.laz`/`.las` files already in the output
+  directory into one, without re-reading the DataFrame. v1 writes `x`/`y`/`z` + `r`/`g`/`b`
+  only (extended per-point attributes such as `intensity` / `classification` are planned for
+  v2). Lightweight only; register the DataSources with `register(spark)` first. See
+  [LiDAR Writer](./writers/lidar).
+
+### EXIF/GPS reader — `exif_gbx` (new)
+
+- **New `exif_gbx` Spark DataSource** reads per-image EXIF/GPS telemetry from drone and camera
+  JPEG/TIFF files into a Spark DataFrame — one row per image, with GPS location (`geom_wkb` as
+  a `POINT(longitude latitude)` in WKB, SRID 4326), altitude, camera model, and orientation.
+  Two modes via the `mode` option: `metadata` (default — header-only tag extraction, never
+  decodes pixels, cheap on large image archives) and `qc` (adds `sharpness` and `brightness`
+  computed from the image pixels, materializing each image under the Serverless memory guard).
+  The `sensorWidthMm` option injects a sensor width for cameras (DJI, GoPro) that omit the
+  `SensorWidth` EXIF tag. Lightweight only; Serverless-safe. See [EXIF Reader](./readers/exif).
 
 ### Point-cloud DSM functions (new)
 
@@ -63,6 +111,29 @@ rest of the raster family; `rx.bin_points_tiled` is a lightweight-tier Python he
 - **`gbx_rst_chm`** — compute a Canopy Height Model: warp the DSM onto the DEM grid,
   subtract, and clamp negatives to zero. NoData propagates from either input.
 
+### Contrast stretch — `gbx_rst_percentile_stretch` (new)
+
+- **`gbx_rst_percentile_stretch`** — per-band percentile contrast stretch. For each band,
+  clip pixel values to the `[lo_pct, hi_pct]` percentiles over valid (non-NoData) pixels and
+  linearly rescale to 8-bit `[0, 255]`; pixels that are NoData in every band are preserved.
+  `gbx_rst_percentile_stretch(tile, 2.0, 98.0)` is a common contrast-enhancement and
+  display-prep step — for example before a COG or tile export. Available on both the
+  heavyweight and lightweight tiers. See [Raster Functions](./api/raster-functions).
+
+### Land-cover classification — `rst_land_cover` (new, Python-only)
+
+- **`rst_land_cover`** classifies an RGB(+NIR) tile into land-cover class ids and returns a
+  single-band `Int32` class-mask tile. Three methods: `"spectral"` (fixed excess-green /
+  brightness thresholds), `"kmeans"` (a SciPy k-means partition over RGB + excess-green +
+  brightness features, labeled by the same spectral thresholds), and `"hybrid"` (default).
+  Each pixel is an index into the class scheme — `["vegetation", "bare", "impervious",
+  "dark"]` by default — and NoData / unclassified pixels are `-1`. It is a **Python-only**
+  lightweight-tier function, called as
+  `rx.rst_land_cover(tile, method=..., n_clusters=..., smooth=...)`; a SQL surface is deferred
+  to a later release. Because the output is an ordinary tile, class regions trace to vector
+  polygons via the registered `gbx_rst_polygonize` streaming UDTF. See
+  [Raster Functions](./api/raster-functions).
+
 ### Geom-aware grid functions — GeometryCollection inputs
 
 - **GeometryCollection inputs** to the geom-aware grid functions
@@ -92,6 +163,49 @@ rest of the raster family; `rx.bin_points_tiled` is a lightweight-tier Python he
   lightweight tier due to an over-count in the outer-perimeter seed calculation. The
   heavyweight tier now uses the same boundary-tracing seed as the lightweight tier,
   so the two tiers produce identical cell sets for all polygon shapes.
+
+### CRS authority preserved for ESRI and OGC coordinate systems
+
+Readers, writers, and raster accessors previously dropped the ESRI or OGC
+authority from non-EPSG coordinate reference systems.  For example, a raster
+with `ESRI:54008` (Sinusoidal projection) would produce `None` from `srid()`,
+an authority-less WKT in the `crs` output column, and an incorrectly labeled
+`EPSG:54008` tag in a LAS/LAZ header.
+
+These sites are now fixed: the canonical `ESRI:54008` or `OGC:CRS84` string
+is preserved end-to-end.  `authority_srid_of` is the correct function to
+extract the integer SRID — it returns `None` only for CRSes with no integer
+authority code (such as `OGC:CRS84`, whose code `CRS84` is a string).
+
+**Parity contract:** CRS equivalence is semantic, not string equality.
+A raster emitted as `ESRI:102008` and one as the equivalent WKT are the same
+CRS; `crs_equal(a, b)` is the right comparison.
+
+**Honest limits:**
+
+- **LiDAR writer (`lidar_gbx`):** The LAS/LAZ format can only encode EPSG codes in a LAS header CRS record.  ESRI and OGC CRS are not representable in a LAS header.  They survive in the `lidar_gbx` **reader** `crs` column, but are correctly dropped (not mislabeled) when writing a `.laz` file.  Pass an equivalent EPSG code via the `crs` writer option if the format requires one.
+- **NetCDF `spatial_epsg` attribute:** For a non-EPSG CRS the NetCDF writer now stores the ESRI code in the legacy `spatial_epsg` grid-mapping attribute (whose name implies EPSG).  The authoritative CRS is in `crs_canonical` / `crs_wkt` — take the authority from `crs_canonical`, not `spatial_epsg`, for non-EPSG CRS.
+- **ESRI-identity reproject:** Raster operations now short-circuit an identity reproject when the source and target CRS are both ESRI-authored and equal.  Output is content-equivalent, but callers that depended on receiving byte-identical output from an ESRI-identity `rst_transform` call may observe a different bytes path (ZSTD re-encode vs. warp pipeline) for that specific case.
+
+### Light-tier ZSTD compression: horizontal-differencing predictor now applied
+
+Light-tier COG and GTiff re-encodes that use ZSTD compression now apply the
+horizontal-differencing predictor consistent with the heavyweight tier:
+`float32`/`float64` tiles receive predictor 3 (floating-point differencing),
+`uint8`/`int8` tiles receive predictor 1 (no predictor — byte data gains
+nothing from differencing), and all other integer types receive predictor 2
+(integer differencing).
+
+Previously the light-tier `tile_to_bytes` re-encode path omitted the predictor
+for ZSTD entirely, and for `uint8`/`int8` data applied predictor 2 instead of
+predictor 1 under DEFLATE and LZW.
+
+**Impact on existing files:** Any COG or GTiff file re-encoded by the light tier
+with ZSTD compression will produce different (typically smaller) output bytes
+when regenerated.  Decoded pixel values are unchanged — this is a pure
+compression improvement with no data loss.  Downstream checks that compare
+compressed bytes byte-for-byte against a stored reference will observe a
+difference and must refresh their reference outputs.
 
 ---
 

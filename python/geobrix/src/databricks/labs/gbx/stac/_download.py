@@ -12,13 +12,13 @@ import logging
 import math
 import os
 import shutil
-import tempfile
 import time
 from typing import Callable, Optional
 
 import requests
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 _log = logging.getLogger(__name__)
 
@@ -192,7 +192,7 @@ def fetch_validate_publish(
 
     _last_exc: Optional[BaseException] = None
     for attempt in range(max_tries):
-        tmpd = tempfile.mkdtemp(prefix="gbx_stac_dl_")
+        tmpd = new_local_temp_dir("gbx_stac_dl_")
         try:
             local = os.path.join(tmpd, safe_filename)
             if bbox is not None:

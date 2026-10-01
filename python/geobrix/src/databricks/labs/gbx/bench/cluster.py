@@ -862,7 +862,6 @@ _CELL_NETCDF = """# NetCDF RASTER reader benchmark: heavy netcdf_gdal vs light n
 # bit-parity gate (cross-tier parity uses a small gridded fixture -- see docs/api/benchmarking.mdx).
 from databricks.labs.gbx.bench import readers as _rd
 import os as _os
-import glob as _glob
 _netcdf_dir = f"{CORPUS}/netcdf"
 # GUARD: the NASA-NEX grid corpus is staged separately (download-and-stop at stage time).
 # When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
@@ -1071,7 +1070,6 @@ _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both
 from databricks.labs.gbx.bench import readers as _rd
 from pmtiles.reader import MemorySource, Reader as _PMReader
 import pmtiles.reader as _pmr
-import glob as _glob
 import gzip as _gz
 import os as _os
 import shutil as _sh
@@ -1126,7 +1124,8 @@ if LIGHTWEIGHT and HEAVYWEIGHT and _pl and _ph:
         if _os2.path.isfile(path):
             files = [path]
         else:
-            files = sorted(_glob.glob(_os2.path.join(path, "**", "*.pmtiles"), recursive=True))
+            from databricks.labs.gbx.ds._listing import list_files
+            files = list_files(path, r".*\\.pmtiles$", raise_on_empty=False)
         tiles = {}
         for _pf in files:
             with open(_pf, "rb") as _fh:
@@ -2927,7 +2926,6 @@ _CELL_LAYOUT_SWEEP = """# FILE write layout sweep: GeoTIFF + GeoPackage across w
 # external/managed targets are catalog table names (schema.table). "cluster" layout runs
 # OPTIMIZE on the FILE table. na_by_design is returned for external/managed on FUSE-only tiers.
 # Each ResultRow is _sink'd immediately (serialized).
-import glob as _glob
 import os as _os
 from databricks.labs.gbx.bench import readers as _rd
 from databricks.labs.gbx.bench import corpus_vector as _cv
@@ -2961,7 +2959,8 @@ _ls_gpkg_dirs = _cv.stage_gpkg_bench_corpus(
 _ls_gpkg_dir = _ls_gpkg_dirs.get(80) or next(iter(_ls_gpkg_dirs.values()), None)
 _ls_gpkg_src = None
 if _ls_gpkg_dir:
-    _ls_gpkg_files = sorted(_glob.glob(_os.path.join(_ls_gpkg_dir, "*.gpkg")))
+    from databricks.labs.gbx.ds._listing import list_files
+    _ls_gpkg_files = list_files(_ls_gpkg_dir, r".*\\.gpkg$", recursive=False, raise_on_empty=False)
     _ls_gpkg_src = _ls_gpkg_files[0] if _ls_gpkg_files else None
 # Mode sweep: fuse always runs; external/managed require a provisioned FILE_FILESPACE.
 _ls_modes = ("fuse", "external", "managed") if FILE_FILESPACE else ("fuse",)

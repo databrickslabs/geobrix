@@ -44,7 +44,7 @@ dev = [
     "black==26.3.1",
     "flake8==7.3.0",
     "flake8-pyproject==1.2.4",
-    "build==1.4.4",
+    "build==1.6.1",
 ]
 test = [
     "pytest>=7.0",
@@ -69,7 +69,11 @@ light-base = [
     "numpy>=1.24.0",
     "pandas>=2.0.0",
     "pyarrow>=11.0.0",
-    "scipy>=1.11.0",
+    # Cap <2 to guard against a future scipy 2.x major at resolve time (no 2.x
+    # exists yet — a no-op today, like the pyproj<4 / rio-tiler<9.3 pins). scipy is
+    # floor-only elsewhere and floats to latest on the dev-container / transitive
+    # path, so bound it like the other runtime-sensitive deps rather than leave it open.
+    "scipy>=1.11.0,<2",
     "numexpr>=2.8.0",
     "rio-cogeo>=7.0,<8",
     "h3>=4.1,<5",
@@ -88,6 +92,18 @@ light-base = [
     # protobuf-6 floor (light_dbr19/env6) live in the per-regime variant deltas below.
     "mapbox-vector-tile>=2.1",
     "scikit-image>=0.22,<1",
+    # scikit-image does `import lazy_loader` at import time. On Serverless, %pip installs
+    # scikit-image into the notebook-scoped env but does NOT pull its transitive lazy_loader
+    # there: the base ships lazy_loader 0.4, which already satisfies scikit-image's >=0.4, so
+    # pip never copies it into the notebook env — and the rst_land_cover worker runs FROM that
+    # env (can't see the base copy), dying on `from skimage.morphology import disk`
+    # (ModuleNotFoundError: lazy_loader). Pin ABOVE the base's 0.4 so pip is FORCED to install
+    # lazy_loader into the notebook-scoped env. Empirically required (verified on Serverless
+    # env5): drop this pin and rst_land_cover fails; with >=0.5 it works. NB: the example
+    # notebooks' `%pip --no-deps --force-reinstall` line must install bare `geobrix` WITHOUT
+    # [extras] — otherwise this pin gets expanded on that line and fails the install against the
+    # base pins; the real dep install (with extras) happens on the following plain %pip line.
+    "lazy_loader>=0.5",
     "xarray-spatial>=0.4,<1",
     # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
     # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
@@ -105,6 +121,10 @@ light-base = [
     # --- LiDAR point-cloud reading (lidar_gbx DataSource; lazrs = pure-Rust LAZ backend) ---
     "laspy>=2.5,<2.6",
     "lazrs>=0.6,<0.7",
+    # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
+    # Pure-Python; no native dep. Available without the [photogrammetry] extra so
+    # any light_* install can read EXIF tags without pulling the full SfM stack.
+    "exifread>=3.0,<4",
 ]
 # ---------------------------------------------------------------------------
 # protobuf-5 regime — classic DBR 17.3, DBR 18, Serverless env 5
@@ -268,6 +288,74 @@ vizx = [
     "contextily>=1.5,<2",
     "anywidget>=0.9,<1",
     "tippecanoe>=2.45,<3",
+]
+# Photogrammetry (example-only): COLMAP SfM + ortho render deps. Not pulled by base light.
+# CPU wheel runs on Serverless CPU env5/6 + classic; GPU variant is Phase 2.
+photogrammetry = [
+    "pycolmap==4.2.0",
+    "rasterio>=1.3",
+    "rio-cogeo>=3.5",
+    "folium",
+    "pymbtiles",
+    "mercantile",
+    "pmtiles",
+]
+# GPU is env5-only on purpose: Serverless GPU AI Runtime env5 = CUDA 12 (matches pycolmap-cuda12).
+# env6 = CUDA 13 and no pycolmap-cuda13 wheel exists on the proxy -> no photogrammetry_gpu_env6 until it does.
+photogrammetry_gpu_env5 = [
+    "pycolmap-cuda12==4.2.0",
+    "rasterio>=1.3",
+    "rio-cogeo>=3.5",
+    "folium",
+    "pymbtiles",
+    "mercantile",
+    "pmtiles",
+]
+# Model-backed raster inference (gbx.models): GeoSAM (segment-geospatial / SamGeo)
+# segmentation + Unity Catalog model serving. CPU-importable surface only -- torch and
+# segment-geospatial are imported lazily inside gbx.models (see geosam.py/__init__.py),
+# so importing the package never requires a GPU-capable torch build. The plain
+# `segment-geospatial` PyPI wheel already pulls its own default
+# torch/torchvision/segment-anything/rasterio/shapely closure; use
+# [models_gpu_env5] for a CUDA-12-pinned runtime install instead.
+models = [
+    "segment-geospatial",
+]
+# GPU is env5-only on purpose, mirroring [photogrammetry_gpu_env5]: Serverless GPU AI
+# Runtime env5 = CUDA 12, env6 = CUDA 13, and GeoBrix standardizes its whole GPU stack on
+# CUDA 12 (pycolmap-cuda12 has no CUDA-13 build -- see nb1b / Part 1b). torch's default PyPI
+# Linux wheel bundles CUDA 12 through torch 2.10.x; torch==2.11.0 flips the default wheel to
+# CUDA 13 (nvidia-*-cu13 / cuda-toolkit==13.0.2 -- confirmed via each release's wheel METADATA
+# on the PyPI mirror, 2026-09-28). So torch MUST stay pinned below 2.11 to remain CUDA-12,
+# else segment-geospatial floats it to a CUDA-13 build. Pin to the env5 BASE's torch
+# (2.9.0 / torchvision 0.24.0 -- itself CUDA-12, cu129) rather than the newest CUDA-12 release
+# (2.10.0): both honor the CUDA-12 requirement, but matching the base means pip does NOT
+# upgrade the base torch -- a 2.10.0 upgrade otherwise collides with the base's
+# torch==2.9.0-pinned torchaudio / vllm / xformers and prints noisy pip "ERROR" conflict lines
+# (ugly in a public example). torchvision pins its torch exactly per release (0.24.0 -> 2.9.0),
+# so both are pinned. No models_gpu_env6 until a CUDA-13 torch pairing is verified, same as
+# photogrammetry_gpu_env5/env6.
+models_gpu_env5 = [
+    "torch==2.9.0",
+    "torchvision==0.24.0",
+    "segment-geospatial",
+    # segment-geospatial pulls opencv-python-headless UNPINNED, so it inherits the GPU
+    # AI Runtime base env's opencv-python-headless 5.0.0.93. OpenCV *5.x*'s bundled libs
+    # trip an OpenSSL FIPS self-test abort (crypto/fips/fips.c:154 -> SIGABRT) the moment
+    # `import cv2` runs on the GPU node -- killing `segment_raster` before it starts
+    # (verified env5+A10 and env5+H100, 2026-09-29). Pinning back to the latest OpenCV
+    # 4.x avoids the defect (verified: env5+H100 with this pin runs GeoSAM end to end).
+    # See memory: check-actual-gpu-env-packages.
+    "opencv-python-headless==4.11.0.86",
+]
+# Generic GPU umbrella (env5-only): composes the GPU-requiring extras on top of a
+# separately-installed light_env5 base (mirrors how photogrammetry_gpu_env5 is used
+# today) -- deliberately does NOT include light_env5_all. The runner installs it via
+# `--extras gpu_env5_all` alongside `light_env5`, e.g.
+# geobrix[light_env5,gpu_env5_all,vizx] = light base + vizx + both GPU stacks.
+gpu_env5_all = [
+    "geobrix[photogrammetry_gpu_env5]",
+    "geobrix[models_gpu_env5]",
 ]
 
 [tool.coverage.run]

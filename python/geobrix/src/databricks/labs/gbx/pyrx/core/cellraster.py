@@ -54,13 +54,13 @@ def _reproject(xs, ys, src, dst):
     # authoritative rule — a bare int like 54008 is ESRI, NOT EPSG:54008 which
     # pyproj's lenient from_user_input would reject). The identity short-circuit
     # survives across spellings (4326 == "EPSG:4326" == CRS(4326)).
-    from pyproj import Transformer
+    from databricks.labs.gbx.core.crs import get_transformer
 
     s = _norm_out_crs(src)
     d = _norm_out_crs(dst)
     if s == d:
         return np.asarray(xs, dtype="float64"), np.asarray(ys, dtype="float64")
-    tr = Transformer.from_crs(s, d, always_xy=True)
+    tr = get_transformer(s, d)
     x2, y2 = tr.transform(np.asarray(xs), np.asarray(ys))
     return np.asarray(x2, dtype="float64"), np.asarray(y2, dtype="float64")
 

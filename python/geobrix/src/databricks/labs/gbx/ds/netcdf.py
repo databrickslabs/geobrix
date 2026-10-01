@@ -22,7 +22,8 @@ from databricks.labs.gbx.ds import _encode, _listing, _netcdf
 from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
 
 # Estimated decoded-bytes ceiling for bandDim stacking before a soft-warn is emitted.
-# Set to the Serverless practical ceiling (~256 MiB decoded per task).
+# 256 MiB is a conservative per-band-stack warn threshold; it is NOT the Serverless
+# materialize cap (the Connect per-tile cap is 64 MiB via _connect_aware_lru_sizing).
 # This constant is module-level so tests can lower it via monkeypatch.
 _BANDDIM_WARN_BYTES: int = 256 * 1024 * 1024
 

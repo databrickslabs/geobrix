@@ -31,6 +31,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
 
+from databricks.labs.gbx.pyrx.core.compression import predictor_for
+
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
@@ -43,7 +45,6 @@ EXTENDED_SIZES_MIB: List[int] = [512, 1024]
 
 # Predictor by dtype group.
 _FLOAT_DTYPES = {"float32", "float64"}
-_SMALL_INT_DTYPES = {"uint8", "int8"}
 
 ZSTD_LEVELS: List[int] = [3, 6, 9, 12, 16, 19, 22]
 
@@ -61,15 +62,6 @@ _RSS_DIVISOR = (1024 * 1024) if platform.system() == "Darwin" else 1024
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-
-
-def predictor_for(dtype: str) -> int:
-    """Return GDAL predictor tag appropriate for *dtype*."""
-    if dtype in _FLOAT_DTYPES:
-        return 3
-    if dtype in _SMALL_INT_DTYPES:
-        return 1
-    return 2  # int16/uint16/int32/uint32
 
 
 def _available_ram_bytes() -> int:
@@ -172,22 +164,18 @@ def _encode_worker(
         "transform": from_bounds(0, 0, 1, 1, w, h),
     }
 
-    if compress == "none":
-        pass  # no compression keys
-    elif compress == "lzw":
-        profile["compress"] = "lzw"
-        if predictor is not None:
-            profile["predictor"] = str(predictor)
-    elif compress == "deflate":
-        profile["compress"] = "deflate"
-        profile["zlevel"] = str(level or 6)
-        if predictor is not None:
-            profile["predictor"] = str(predictor)
-    elif compress == "zstd":
-        profile["compress"] = "zstd"
-        profile["zstd_level"] = str(level or 9)
-        if predictor is not None:
-            profile["predictor"] = str(predictor)
+    # Route through canonical creation_opts.  Import is local: _encode_worker runs
+    # in a subprocess and all imports must be inside the function body.
+    from databricks.labs.gbx.pyrx.core.compression import (
+        creation_opts as _creation_opts_fn,
+    )
+
+    if compress != "none":
+        profile.update(
+            _creation_opts_fn(
+                dtype, compress=compress, level=level, predictor=predictor
+            )
+        )
 
     rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
     t0 = _time.perf_counter()

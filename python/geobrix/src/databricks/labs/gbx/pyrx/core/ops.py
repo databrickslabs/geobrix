@@ -6,7 +6,6 @@ Faithful ports of the heavyweight ``gbx_rst_tryopen`` / ``gbx_rst_asformat`` /
 rasterio's bundled GDAL (no JAR)."""
 
 import os
-import tempfile
 
 import rasterio
 import shapely.wkb
@@ -15,6 +14,7 @@ from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 # Heavyweight gdaladdo resampling name -> rasterio.enums.Resampling name.
 # Mirrors the AllowedResampling set in RST_BuildOverviews.scala; "near" is the
@@ -119,18 +119,17 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
     # mints a fresh vsimem path that does not see the just-written bytes. A
     # round-trip through a real temp file keeps the path stable, so overviews
     # embed internally; then read the bytes (with their .ovr) back.
-    tmp = tempfile.NamedTemporaryFile(suffix=".tif", delete=False)
-    tmp.close()
+    tmp = new_local_temp_file(suffix=".tif")
     try:
-        with rasterio.open(tmp.name, "w", **profile) as dst:
+        with rasterio.open(tmp, "w", **profile) as dst:
             dst.write(data)
-        with rasterio.open(tmp.name, "r+") as dst:
+        with rasterio.open(tmp, "r+") as dst:
             dst.build_overviews(levels, resampling_enum)
             dst.update_tags(ns="rio_overview", resampling=key)
-        with open(tmp.name, "rb") as fh:
+        with open(tmp, "rb") as fh:
             return fh.read()
     finally:
-        os.unlink(tmp.name)
+        os.unlink(tmp)
 
 
 def sample(ds, geom, geom_crs=None) -> list:

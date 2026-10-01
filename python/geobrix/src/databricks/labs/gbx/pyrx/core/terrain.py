@@ -27,7 +27,6 @@ Single-band output in every case:
 import math
 
 import numpy as np
-import pyproj
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx.core._nodata import emit, propagate_invalid, read_masked
@@ -77,7 +76,9 @@ def _gdaldem_scale(ds) -> tuple:
     if crs is None:
         return 1.0, 1.0
     try:
-        pcrs = pyproj.CRS.from_user_input(crs)
+        from databricks.labs.gbx.core.crs import to_pyproj_crs
+
+        pcrs = to_pyproj_crs(crs)
     except Exception:
         return 1.0, 1.0
     zunit = 1.0  # vertical unit; GDAL assumes metre when band UnitType is unset

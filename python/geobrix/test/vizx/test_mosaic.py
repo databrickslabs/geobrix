@@ -283,3 +283,24 @@ def test_plot_mosaic_bad_emphasis_raises():
     """plot_mosaic raises ValueError immediately for an invalid emphasis."""
     with pytest.raises(ValueError, match="emphasis"):
         plot_mosaic("no-such.vrt", emphasis="vivid")
+
+
+# ---------------------------------------------------------------------------
+# Task 2 wiring test: _resolve_vrt_path delegates to list_files (fail-on-revert)
+# ---------------------------------------------------------------------------
+
+
+def test_resolve_vrt_path_dir_calls_list_files_nonrecursive(tmp_path):
+    """_resolve_vrt_path delegates directory VRT discovery to list_files (fail-on-revert)."""
+    from unittest.mock import patch
+
+    vrt = tmp_path / "mosaic.vrt"
+    vrt.write_bytes(b"<VRTDataset/>")
+    from databricks.labs.gbx.vizx._raster import _resolve_vrt_path
+
+    with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
+        mock_lf.return_value = [str(vrt)]
+        _resolve_vrt_path(str(tmp_path))
+    mock_lf.assert_called_once()
+    _args, kw = mock_lf.call_args
+    assert kw.get("recursive", True) is False  # top-level VRT only

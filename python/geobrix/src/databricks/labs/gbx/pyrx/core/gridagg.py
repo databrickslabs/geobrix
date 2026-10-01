@@ -490,13 +490,12 @@ def _warp_to_4326_if_needed(ds, crs):
 
     The embedded raster CRS wins as the source; else the ``crs`` override (int
     SRID or CRS string) for a CRS-less raster; else None (never errors)."""
-    from rasterio.crs import CRS as _RioCRS
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core import warp
     from databricks.labs.gbx.pyrx.core.crs import resolve_crs
 
-    _WGS84 = _RioCRS.from_epsg(4326)
+    _WGS84 = resolve_crs(4326)
 
     if ds.crs is not None:
         if ds.crs == _WGS84:
@@ -697,7 +696,9 @@ def _raster_to_bng(
     # Reproject to EPSG:27700 (nearest) unless already there. epsg may be None
     # for an undefined CRS -> warp (rasterio treats an unset src crs as an error
     # anyway; matching heavy, we assume a georeferenced source).
-    already_bng = ds.crs is not None and ds.crs.to_epsg() == 27700
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    already_bng = ds.crs is not None and authority_srid_of(ds.crs) == 27700
 
     def _run(work_ds):
         gt = work_ds.transform.to_gdal()

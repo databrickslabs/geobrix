@@ -252,6 +252,26 @@ def _import_notebook(
     return ws_path
 
 
+def _accelerator_type(value: str):
+    """Serverless GPU accelerator for ``jobs.Compute.hardware_accelerator``.
+
+    Prefer the SDK enum, but fall back to a ``.value``-bearing shim for platform values
+    the installed SDK's ``HardwareAcceleratorType`` enum doesn't list yet — e.g.
+    ``GPU_1xH100`` on databricks-sdk 0.115.0, whose enum has only ``GPU_1xA10`` /
+    ``GPU_8xH100``. ``as_dict()`` reads ``.value``, so the shim serializes to the exact
+    string the Jobs API expects (verified: the API accepts the ``hardware_accelerator``
+    string the SDK emits).
+    """
+    from types import SimpleNamespace
+
+    from databricks.sdk.service import compute
+
+    try:
+        return compute.HardwareAcceleratorType(value)
+    except ValueError:
+        return SimpleNamespace(value=value)
+
+
 def run_one(
     w,
     local_path: pathlib.Path,
@@ -261,45 +281,83 @@ def run_one(
     poll_secs: int,
     strip_pip: bool,
     set_vars: list[str] | None = None,
+    hardware_accelerator: str | None = None,
+    existing_cluster_id: str | None = None,
 ) -> bool:
-    """Import and run one notebook on Serverless. Returns True on SUCCESS."""
+    """Import and run one notebook on Serverless. Returns True on SUCCESS.
+
+    When ``hardware_accelerator`` is set (e.g. ``GPU_1xH100`` / ``GPU_8xH100``), the
+    task requests Serverless GPU AI Runtime compute. Deps still come from the
+    environment spec (``%pip`` is stripped for jobs, CPU and GPU alike) — pass the
+    GPU wheel extra via ``--extras`` (e.g. ``photogrammetry_gpu_env5``).
+    """
     from databricks.sdk.service import compute, jobs
 
-    print(f"\n=== SUBMIT (serverless): {local_path.name} ===", flush=True)
+    _mode = f"cluster {existing_cluster_id}" if existing_cluster_id else "serverless"
+    tag = f" [{hardware_accelerator}]" if hardware_accelerator else ""
+    print(f"\n=== SUBMIT ({_mode}{tag}): {local_path.name} ===", flush=True)
 
     ws_path = _import_notebook(w, local_path, ws_dir, strip_pip, set_vars=set_vars)
 
     task_key = "".join(c if c.isalnum() else "_" for c in local_path.stem)[:90]
 
-    waiter = w.jobs.submit(
-        run_name=f"gbx-nb:{task_key}",
-        environments=[
-            jobs.JobEnvironment(
-                environment_key=ENV_KEY,
-                spec=compute.Environment(
-                    environment_version=env_version,
-                    dependencies=deps,
-                ),
-            )
-        ],
-        tasks=[
-            jobs.SubmitTask(
-                task_key=task_key,
-                environment_key=ENV_KEY,
-                notebook_task=jobs.NotebookTask(notebook_path=ws_path),
-                # Run exactly once — do not retry a failed validation run (a retry
-                # just re-burns compute on the same failure and doubles the child
-                # runs to sift through).
-                max_retries=0,
-                # max_retries alone does NOT stop serverless auto-optimization
-                # retries (the "Enable serverless auto-optimization (may include
-                # additional retries)" box, on by default). That is what produced
-                # a duplicate child run on INTERNAL_ERROR. disable_auto_optimization
-                # is the API equivalent of unchecking it → truly at-most-once.
-                disable_auto_optimization=True,
-            )
-        ],
-    )
+    if existing_cluster_id:
+        # Warm interactive cluster: reuse the running cluster (no serverless cold
+        # start). Deps install via the notebook's own %pip (kept, not stripped —
+        # classic clusters support %pip), so there is no environment spec or GPU
+        # compute request here; --extras/--wheel/--env-version/--hardware-accelerator
+        # do not apply in this mode.
+        waiter = w.jobs.submit(
+            run_name=f"gbx-nb:{task_key}",
+            tasks=[
+                jobs.SubmitTask(
+                    task_key=task_key,
+                    existing_cluster_id=existing_cluster_id,
+                    notebook_task=jobs.NotebookTask(notebook_path=ws_path),
+                    max_retries=0,  # run exactly once — never retry a failed run
+                )
+            ],
+        )
+    else:
+        gpu_compute = (
+            jobs.Compute(hardware_accelerator=_accelerator_type(hardware_accelerator))
+            if hardware_accelerator
+            else None
+        )
+
+        waiter = w.jobs.submit(
+            run_name=f"gbx-nb:{task_key}",
+            environments=[
+                jobs.JobEnvironment(
+                    environment_key=ENV_KEY,
+                    spec=compute.Environment(
+                        environment_version=env_version,
+                        # Both CPU and GPU serverless jobs install deps from the environment
+                        # spec (%pip is stripped for jobs). For GPU, pass the GPU wheel extra
+                        # (e.g. photogrammetry_gpu_env5) via --extras.
+                        dependencies=deps,
+                    ),
+                )
+            ],
+            tasks=[
+                jobs.SubmitTask(
+                    task_key=task_key,
+                    environment_key=ENV_KEY,
+                    compute=gpu_compute,
+                    notebook_task=jobs.NotebookTask(notebook_path=ws_path),
+                    # Run exactly once — do not retry a failed validation run (a retry
+                    # just re-burns compute on the same failure and doubles the child
+                    # runs to sift through).
+                    max_retries=0,
+                    # max_retries alone does NOT stop serverless auto-optimization
+                    # retries (the "Enable serverless auto-optimization (may include
+                    # additional retries)" box, on by default). That is what produced
+                    # a duplicate child run on INTERNAL_ERROR. disable_auto_optimization
+                    # is the API equivalent of unchecking it → truly at-most-once.
+                    disable_auto_optimization=True,
+                )
+            ],
+        )
 
     run_id = waiter.run_id
     info = w.jobs.get_run(run_id=run_id)
@@ -447,6 +505,28 @@ def main() -> int:
         help=f"Serverless environment version (default: {DEFAULT_ENV_VERSION!r}).",
     )
     parser.add_argument(
+        "--hardware-accelerator",
+        metavar="ACCEL",
+        default=None,
+        help=(
+            "Request Serverless GPU AI Runtime compute for the task, e.g. "
+            "'GPU_1xH100', 'GPU_8xH100', or 'GPU_1xA10'. Omit for CPU serverless. "
+            "Deps come from the environment spec as usual (%%pip stripped) — pass the "
+            "GPU wheel extra via --extras (e.g. photogrammetry_gpu_env5)."
+        ),
+    )
+    parser.add_argument(
+        "--existing-cluster-id",
+        metavar="CLUSTER_ID",
+        default=None,
+        help=(
+            "Run on an existing (warm) interactive cluster by ID instead of Serverless. "
+            "Reuses the running cluster (no cold start); deps install via the notebook's "
+            "own %%pip (kept, not stripped). --extras/--wheel/--env-version/"
+            "--hardware-accelerator are ignored in this mode."
+        ),
+    )
+    parser.add_argument(
         "--profile",
         metavar="PROFILE",
         default=os.environ.get("DATABRICKS_CONFIG_PROFILE", "oauth-fe"),
@@ -518,6 +598,11 @@ def main() -> int:
 
     w = WorkspaceClient(profile=args.profile)
 
+    # Warm-cluster mode keeps %pip cells (classic clusters install via %pip, unlike
+    # Serverless JOB compute where they fail and are stripped).
+    if args.existing_cluster_id:
+        args.strip_pip = False
+
     # Resolve default ws-dir using the current user
     ws_dir = args.ws_dir
     if not ws_dir:
@@ -530,6 +615,10 @@ def main() -> int:
     print(f"Deps     : {len(deps)} entries (wheel + {len(deps) - 1} packages)", flush=True)
     print(f"Notebooks: {len(notebooks)}", flush=True)
     print(f"Strip %%pip: {args.strip_pip}", flush=True)
+    if args.hardware_accelerator:
+        print(f"Accelerator: {args.hardware_accelerator}", flush=True)
+    if args.existing_cluster_id:
+        print(f"Cluster  : {args.existing_cluster_id} (warm; %pip kept, env spec skipped)", flush=True)
     if args.set_vars:
         print(f"Override vars: {', '.join(args.set_vars)}", flush=True)
     print("", flush=True)
@@ -553,6 +642,8 @@ def main() -> int:
             poll_secs=args.poll_secs,
             strip_pip=args.strip_pip,
             set_vars=args.set_vars,
+            hardware_accelerator=args.hardware_accelerator,
+            existing_cluster_id=args.existing_cluster_id,
         )
         if not ok:
             return 1

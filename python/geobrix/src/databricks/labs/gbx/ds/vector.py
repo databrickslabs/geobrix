@@ -8,7 +8,6 @@ import atexit
 import contextlib
 import os
 import shutil
-import tempfile
 import threading
 import uuid
 from dataclasses import dataclass
@@ -36,6 +35,7 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx.ds import _scratch
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 # ---------------------------------------------------------------------------
 # Worker-local staging cache (module-level, process-global)
@@ -53,7 +53,7 @@ def _ensure_vec_stage_dir() -> str:
     """Return (creating if needed) the process-wide stage directory. Must be called while holding `_VEC_STAGE_LOCK`."""
     global _VEC_STAGE_DIR
     if _VEC_STAGE_DIR is None:
-        _VEC_STAGE_DIR = tempfile.mkdtemp(prefix="gbx_vecstage_")
+        _VEC_STAGE_DIR = new_local_temp_dir("gbx_vecstage_")
         atexit.register(_cleanup_vec_stage_dir)
     return _VEC_STAGE_DIR
 
@@ -184,18 +184,39 @@ def _crs_to_srid_proj(crs) -> Tuple[str, str]:
     if not crs:
         return "0", ""
     try:
-        from pyproj import CRS
+        from databricks.labs.gbx.core.crs import (
+            authority_srid_of,
+            crs_to_proj4,
+            resolve_crs,
+        )
 
-        c = CRS.from_user_input(crs)
-        auth = c.to_authority()
-        srid = auth[1] if auth else "0"
-        try:
-            proj4 = c.to_proj4() or ""
-        except Exception:
-            proj4 = ""
+        c = resolve_crs(crs)
+        srid_int = authority_srid_of(c)
+        srid = str(srid_int) if srid_int is not None else "0"
+        proj4 = crs_to_proj4(c) or ""
         return srid, proj4
     except Exception:
         return "0", ""
+
+
+def _make_layer_srs(crs):
+    """Return an OSR SpatialReference for the given CRS string, or None.
+
+    Uses ``SetFromUserInput`` so EPSG:, ESRI:, OGC:, WKT, and PROJ4 strings
+    are all handled uniformly.  The old inline code used ``ImportFromEPSG`` for
+    EPSG-prefixed strings and ``ImportFromProj4`` for everything else —
+    ``ImportFromProj4("ESRI:54008")`` / ``ImportFromProj4("OGC:CRS84")`` both
+    fail silently and produce a null SRS.
+
+    Returns None when ``crs`` is falsy.
+    """
+    if not crs:
+        return None
+    from osgeo import osr
+
+    srs = osr.SpatialReference()
+    srs.SetFromUserInput(str(crs))
+    return srs
 
 
 def _zip_vsi(path: str) -> str:
@@ -1132,7 +1153,7 @@ class VectorGbxWriter(DataSourceWriter):
             # Write to driver-local disk first (supports random I/O for SQLite/
             # FileGDB/Shapefile sidecars), then copy to the Volume target with
             # sequential byte copies (FUSE-safe). Mirrors the PMTiles writer.
-            local_dir = tempfile.mkdtemp(prefix="gbx_vecout_")
+            local_dir = new_local_temp_dir("gbx_vecout_")
             # Writer is FUSE-only: base local_out on the resolved FUSE path.
             local_out = os.path.join(local_dir, os.path.basename(self.path.rstrip("/")))
             if self.zip:
@@ -1358,7 +1379,7 @@ class VectorGbxWriter(DataSourceWriter):
         (committed every _GDB_TX_BATCH rows), which eliminates the per-feature
         auto-commit overhead that otherwise makes large writes O(n) slow."""
         try:
-            from osgeo import ogr, osr
+            from osgeo import ogr
         except Exception as e:  # noqa: BLE001
             raise RuntimeError(
                 "file_gdb_gbx writing requires the native GDAL Python bindings (osgeo) "
@@ -1384,13 +1405,7 @@ class VectorGbxWriter(DataSourceWriter):
             "MultiPolygon": ogr.wkbMultiPolygon,
             "GeometryCollection": ogr.wkbGeometryCollection,
         }
-        srs = None
-        if crs:
-            srs = osr.SpatialReference()
-            if str(crs).upper().startswith("EPSG:"):
-                srs.ImportFromEPSG(int(str(crs).split(":")[1]))
-            else:
-                srs.ImportFromProj4(str(crs))
+        srs = _make_layer_srs(crs)
 
         def _ogr_type(t):
             if pa.types.is_floating(t):
@@ -1665,7 +1680,7 @@ class GeoJSONLGbxWriter(DataSourceWriter):
         bounds = list(range(0, nrows, chunk))
 
         os.makedirs(self.path, exist_ok=True)
-        local_dir = tempfile.mkdtemp(prefix="gbx_geojsonl_")
+        local_dir = new_local_temp_dir("gbx_geojsonl_")
         written: List[str] = []
         try:
             for start in bounds:

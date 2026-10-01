@@ -31,6 +31,7 @@ PARITY_FILES=(
     "python/geobrix/test/pygx/test_parity_quadbin.py"
     "python/geobrix/test/pygx/test_parity_custom.py"
     "python/geobrix/test/pyrx/test_parity_custom_raster.py"
+    "python/geobrix/test/pyrx/test_parity_percentile_stretch.py"
 )
 
 show_help() {

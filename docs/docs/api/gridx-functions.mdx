@@ -47,6 +47,10 @@ Use `RegisterBatch` with `functions=gridx.quadbin` or `functions=gridx.bng` to r
 - **Polyfill and Tessellation**: Cover geometries with cells; tessellation returns per-cell clipped chip geometries
 - **Custom Grids**: Define your own regional or equal-area grid systems (cell math, polyfill, tessellation)
 
+:::note Coordinate reference systems
+GridX functions operate in their grid's fixed native CRS and do not take an explicit CRS parameter for cell operations. **BNG** (`gbx_bng_*`) functions work in EPSG:27700 (OSGB36); output geometries are plain WKB in EPSG:27700 — assign the SRID when reading them back (e.g. `ST_GeomFromWKB(bng_geom, 27700)`). **H3** and **quadbin** functions work in EPSG:4326 (WGS84 lon/lat). Raster-to-grid functions (`gbx_rst_*_rastertogrid*`) auto-reproject the input raster to the grid's native CRS when the raster carries a different CRS. See [Coordinate reference systems](./coordinate-reference-systems) for the full CRS model.
+:::
+
 ## Setup {#setup}
 
 With GeoBrix already [installed](../installation), register GridX in your session before running any example.

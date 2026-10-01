@@ -68,7 +68,7 @@ pyproj==3.7.2
 # --- MVT (light pyvx) decode oracle used in test/pyvx/ ---
 # MUST match pyproject [light_env5] (alias of [light_dbr17]): mapbox-vector-tile>=2.1,<2.2
 # (protobuf-5 cap; 2.2 pulls protobuf>=6.31.1 which conflicts with classic DBR 17.3/18/env5).
-mapbox-vector-tile==2.1.0
+mapbox-vector-tile==2.2.0
 
 # --- discrete global grids: raster->H3/quadbin aggregation ---
 h3==4.5.0

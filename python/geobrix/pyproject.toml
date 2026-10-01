@@ -55,7 +55,7 @@ test = [
     # oracle. Pinned to 2.1.x — see the [light_dbr17] extra for why (protobuf <6
     # on classic DBR 17.3/18; [light_env5] and [light_dbr17/18] are protobuf-5).
     # 2.1.0 still has the 2.x native-typed-attribute encode API.
-    "mapbox-vector-tile>=2.1,<2.2",
+    "mapbox-vector-tile>=2.2.0,<2.3",
 ]
 # Internal composition extra — NOT for direct user installation.
 # Intentionally named `light-base` (not a runtime extra) to distinguish it from
@@ -90,7 +90,7 @@ light-base = [
     "pyproj>=3.6,<4",
     # Functional floor only; the protobuf-5 cap (light_dbr17/18/env5) and the
     # protobuf-6 floor (light_dbr19/env6) live in the per-regime variant deltas below.
-    "mapbox-vector-tile>=2.1",
+    "mapbox-vector-tile>=2.2.0",
     "scikit-image>=0.22,<1",
     # scikit-image does `import lazy_loader` at import time. On Serverless, %pip installs
     # scikit-image into the notebook-scoped env but does NOT pull its transitive lazy_loader
@@ -148,7 +148,7 @@ light_dbr17 = [
     "rio-tiler>=9.0,<9.3",
     "httpcore>=1.0.9",
     "idna<3.8",                     # DBR 17.3/18/env5 protobuf-5 base idna 3.7
-    "mapbox-vector-tile>=2.1,<2.2", # protobuf-5 cap (2.2 would pull protobuf 6)
+    "mapbox-vector-tile>=2.2.0,<2.3", # protobuf-5 cap (2.2 would pull protobuf 6)
 ]
 # Classic DBR 18 — identical package set to DBR 17.3 (protobuf-5 regime).
 # Aliases the canonical protobuf-5 extra [light_dbr17].
@@ -186,7 +186,7 @@ light_dbr19 = [
     # light_dbr19 also runs on dogfood Serverless env 6 — the notice applies there.
     "idna<3.12",
     # Protobuf-6 floor: require >=2.2 (drops the protobuf-5-era <2.2 cap).
-    "mapbox-vector-tile>=2.2",
+    "mapbox-vector-tile>=2.2.0",
 ]
 # Serverless env 6 — protobuf-6 regime, RECOMMENDED on Serverless.
 # Aliases the canonical protobuf-6 extra [light_dbr19].

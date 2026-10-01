@@ -60,3 +60,17 @@ def test_render_3d_cmap_path_and_singleton():
     fig = render_point_cloud_3d(np.array([0.0]), np.array([0.0]), np.array([0.0]),
                                 values=np.array([0.0]), cmap="viridis")
     assert fig.axes[0].name == "3d"
+
+def test_build_pointcloud_html():
+    from databricks.labs.gbx.vizx._pointcloud_html import build_pointcloud_html
+    n = 50
+    x = np.linspace(0, 10, n); y = np.linspace(0, 5, n); z = np.linspace(0, 2, n)
+    rgb = np.full((n, 3), 128, dtype=np.uint8)
+    html = build_pointcloud_html(x, y, z, rgb=rgb, point_size=3.0)
+    assert isinstance(html, str)
+    assert "unpkg.com/deck.gl@9.0.0" in html            # pinned CDN (matches _maplibre host)
+    assert 'integrity="sha384-' in html and 'crossorigin="anonymous"' in html  # SRI (security hook + convention)
+    assert "PointCloudLayer" in html and "OrbitView" in html
+    assert "atob" in html   # binary buffer decode in JS
+    # point count embedded
+    assert "50" in html

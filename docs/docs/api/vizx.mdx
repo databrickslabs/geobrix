@@ -23,6 +23,7 @@ These are driver-side, single-node helpers for inspecting results in a notebook 
 - **VRT mosaic rendering** — `plot_mosaic` renders a whole mini-COG VRT mosaic (from the `cog_gbx` `vrtMosaic` writer) as one memory-safe georeferenced image, with a bbox viewport and an optional h3 cell overlay
 - **DataFrame → GeoPandas adapters** — `as_gdf` / `cells_as_gdf` / `grid_as_gdf` turn Spark geometry, H3-cell, and gridspec DataFrames into GeoDataFrames for `.plot()` / `.explore()`
 - **Multi-layer compositor** — `plot_static` / `plot_interactive` overlay vector, raster, grid, and PMTiles layers in a single map
+- **3-D point-cloud viewer** — `plot_point_cloud` renders a LAS/LAZ or point DataFrame as a true-color 3-D view: an interactive deck.gl orbit in a notebook, a static matplotlib PNG for GitHub
 - **PMTiles & COG viewers** — `plot_pmtiles`, `plot_cog`, and `pmtiles_info` inspect and render archives inline
 - **Tier-agnostic, Python-only** — works with `pyrx` or `rasterx` tiles; a driver-side notebook helper, not a SQL/Spark package
 
@@ -49,6 +50,7 @@ from databricks.labs.gbx.vizx import (
     plot_interactive,
     plot_pmtiles,
     plot_cog,
+    plot_point_cloud,
     plot_mosaic,
     as_gdf,
     cells_as_gdf,

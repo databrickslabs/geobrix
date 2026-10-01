@@ -22,7 +22,7 @@
 ![RasterX](https://img.shields.io/badge/RasterX-150-1565c0)
 ![GridX](https://img.shields.io/badge/GridX-60-1565c0)
 ![VectorX](https://img.shields.io/badge/VectorX-21-1565c0)
-![VizX](https://img.shields.io/badge/VizX-20-6a1b9a)
+![VizX](https://img.shields.io/badge/VizX-23-6a1b9a)
 ![PMTiles](https://img.shields.io/badge/PMTiles-1-1565c0)
 
 **GeoBrix** is a high-performance [Databricks Labs](https://www.databricks.com/learn/labs) spatial library that delivers the next generation of *product-augmenting* capabilities — raster, discrete global grids, and vector format I/O — and is built to drive you *deeper* into Databricks-native [`GEOMETRY`/`GEOGRAPHY` and ST/H3 functions](https://databrickslabs.github.io/geobrix/docs/databricks-spatial), not replace them. It is the modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/) (now in maintenance).

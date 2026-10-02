@@ -238,53 +238,6 @@ def g_three_h3_output_tables(cx, cy, color, tint):
     return "".join(out)
 
 
-def g_cellfill_idw(cx, cy, color, tint):
-    """Dense hex grid with some cells shown as gap-filled (hatched → solid)."""
-    out = []
-    R = 17
-    dx_h = R * math.sqrt(3)
-    dy_h = R * 1.5
-    rows, cols = 4, 5
-    x0 = cx - (cols - 1) * dx_h / 2 - dx_h / 4 - 4
-    y0 = cy - (rows - 1) * dy_h / 2 - 8
-    # Cells that are "filled-in" (gap → IDW)
-    filled_cells = {(1, 2), (2, 1), (2, 3), (1, 0)}
-    for r in range(rows):
-        for c in range(cols):
-            x = x0 + c * dx_h + (dx_h / 2 if r % 2 else 0)
-            y = y0 + r * dy_h
-            pts = []
-            for i in range(6):
-                a = math.radians(60 * i - 90)
-                pts.append(f"{x + R*math.cos(a):.1f},{y + R*math.sin(a):.1f}")
-            is_filled = (r, c) in filled_cells
-            fill_op = 0.55 if is_filled else (0.1 + 0.6 * abs(math.sin(r + c)))
-            fill_clr = color if not is_filled else ACCENT_2
-            out.append(
-                f'<polygon points="{" ".join(pts)}" '
-                f'fill="{fill_clr}" fill-opacity="{fill_op:.2f}" '
-                f'stroke="{color}" stroke-width="1.2"/>'
-            )
-            # dashed inner ring on filled cells (visual marker for IDW-interpolated)
-            if is_filled:
-                pts2 = [f"{x + (R-4)*math.cos(math.radians(60*j-90)):.1f},"
-                        f"{y + (R-4)*math.sin(math.radians(60*j-90)):.1f}"
-                        for j in range(6)]
-                out.append(
-                    f'<polygon points="{" ".join(pts2)}" fill="none" '
-                    f'stroke="#FFFFFF" stroke-width="1" stroke-opacity="0.65" '
-                    f'stroke-dasharray="3 2"/>'
-                )
-    # Small IDW label
-    out.append(
-        f'<rect x="{cx - 22}" y="{cy + 50}" width="44" height="18" rx="5" fill="{color}"/>'
-        f'<text x="{cx}" y="{cy + 63}" text-anchor="middle" '
-        f'font-family="ui-monospace, Menlo, monospace" font-size="9" '
-        f'font-weight="800" fill="#FFFFFF">IDW</text>'
-    )
-    return "".join(out)
-
-
 # --- Header / footer -----------------------------------------------------------
 
 def render_header(badge, title, subtitle, accent, series_text):
@@ -393,7 +346,7 @@ NB3 = dict(
         (ACCENT, TINT),      # rst_isoband — GeoBrix
         (ACCENT_2, TINT_2),  # h3_try_coverash3 — product built-in
         (ACCENT, TINT),      # gbx_rst_h3_rastertogridmax — GeoBrix
-        (ACCENT, TINT),      # h3_kring — GeoBrix
+        (ACCENT_2, TINT_2),  # h3_kring — product built-in
         (ACCENT, TINT),      # h3_cellfill — GeoBrix
     ],
     note="databrickslabs/geobrix  ·  3DEP LiDAR  ·  H3 res-9",

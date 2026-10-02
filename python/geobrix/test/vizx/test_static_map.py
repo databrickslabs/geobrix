@@ -397,3 +397,40 @@ def test_plot_static_skips_basemap_when_no_crs(spark):
     assert ax is not None
     assert any("no CRS" in str(w.message) for w in caught)
     plt.close("all")
+
+
+def test_plot_static_enables_tile_cache(spark, monkeypatch):
+    """plot_static(basemap=True) must call cx.set_cache_dir before add_basemap.
+
+    The tile cache prevents re-fetching the same OSM/provider tiles across
+    multiple renders of the same AOI (access-blocked tile grids on the second+
+    render).  set_cache_dir is session-global, so the flag should flip once and
+    every subsequent call should be a no-op (idempotent).
+    """
+    import contextily
+
+    from databricks.labs.gbx.vizx import _basemap, plot_static
+
+    # Reset the session flag so the call actually fires for this test.
+    monkeypatch.setattr(_basemap, "_tile_cache_enabled", False)
+
+    set_cache_calls = []
+    monkeypatch.setattr(contextily, "set_cache_dir", lambda p: set_cache_calls.append(p))
+    monkeypatch.setattr(contextily, "add_basemap", lambda *a, **k: None)
+
+    df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
+    plt.close("all")
+    plot_static(df, basemap=True)
+    plt.close("all")
+
+    assert set_cache_calls, (
+        "cx.set_cache_dir was not called — tile cache was not enabled before add_basemap"
+    )
+
+    # Idempotence: a second plot_static call must NOT call set_cache_dir again.
+    set_cache_calls.clear()
+    plot_static(df, basemap=True)
+    plt.close("all")
+    assert not set_cache_calls, (
+        "cx.set_cache_dir called twice — _enable_tile_cache is not idempotent"
+    )

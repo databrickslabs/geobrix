@@ -622,10 +622,20 @@ def plot_static(
             try:
                 import contextily as cx
 
-                # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
-                # pass basemap_source=... to use CartoDB/another provider.
+                from databricks.labs.gbx.vizx._basemap import (
+                    _TILE_USER_AGENT,
+                    _enable_tile_cache,
+                )
+
+                # Enable disk cache once per session (prevents re-fetching the same
+                # tiles on every render of the same AOI → avoids rate-limit blocks).
+                _enable_tile_cache()
+                # OpenStreetMap.Mapnik needs no API key; pass basemap_source= to
+                # override.  User-Agent is required by OSM tile usage policy.
                 source = basemap_source or cx.providers.OpenStreetMap.Mapnik
-                cx.add_basemap(ax, source=source, crs="EPSG:3857")
+                cx.add_basemap(
+                    ax, source=source, crs="EPSG:3857", headers=_TILE_USER_AGENT
+                )
             except Exception as exc:  # noqa: BLE001
                 warnings.warn(
                     f"plot_static: basemap unavailable ({type(exc).__name__}: {exc}); "
@@ -705,10 +715,20 @@ def plot_static(
         try:
             import contextily as cx
 
-            # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
-            # pass basemap_source=... to use CartoDB/another provider.
+            from databricks.labs.gbx.vizx._basemap import (
+                _TILE_USER_AGENT,
+                _enable_tile_cache,
+            )
+
+            # Enable disk cache once per session (prevents re-fetching the same
+            # tiles on every render of the same AOI → avoids rate-limit blocks).
+            _enable_tile_cache()
+            # OpenStreetMap.Mapnik needs no API key; pass basemap_source= to
+            # override.  User-Agent is required by OSM tile usage policy.
             source = basemap_source or cx.providers.OpenStreetMap.Mapnik
-            cx.add_basemap(ax, source=source, crs=plot_gdf.crs)
+            cx.add_basemap(
+                ax, source=source, crs=plot_gdf.crs, headers=_TILE_USER_AGENT
+            )
         except Exception as exc:  # noqa: BLE001 — offline/no-egress/missing -> fallback
             warnings.warn(
                 f"plot_static: basemap unavailable ({type(exc).__name__}: {exc}); "

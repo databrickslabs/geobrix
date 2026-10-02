@@ -1,3 +1,4 @@
+import inspect
 import logging
 import warnings
 
@@ -399,6 +400,30 @@ def test_plot_static_skips_basemap_when_no_crs(spark):
     plt.close("all")
 
 
+def test_contextily_add_basemap_accepts_headers():
+    """contextily.add_basemap must accept a headers= kwarg (added in 1.7.0).
+
+    The _basemap module passes _TILE_USER_AGENT via headers= on every
+    cx.add_basemap call to satisfy OSM's UA policy.  This test hits the real
+    contextily signature (not a mock) so a future contextily API change that
+    removes the parameter is caught immediately rather than silently swallowed
+    at render time.  Skipped on contextily < 1.7 (dev-container pin) where the
+    parameter did not yet exist.
+    """
+    contextily = pytest.importorskip("contextily")
+    ver = tuple(int(x) for x in contextily.__version__.split(".")[:2])
+    if ver < (1, 7):
+        pytest.skip(
+            f"contextily {contextily.__version__} < 1.7 — headers= not yet present; "
+            "CI lock uses 1.7.1 which is the correct minimum."
+        )
+    sig = inspect.signature(contextily.add_basemap)
+    assert "headers" in sig.parameters, (
+        "contextily.add_basemap no longer accepts headers=; "
+        "update _basemap._TILE_USER_AGENT wiring."
+    )
+
+
 def test_plot_static_enables_tile_cache(spark, monkeypatch):
     """plot_static(basemap=True) must call cx.set_cache_dir before add_basemap.
 
@@ -415,7 +440,9 @@ def test_plot_static_enables_tile_cache(spark, monkeypatch):
     monkeypatch.setattr(_basemap, "_tile_cache_enabled", False)
 
     set_cache_calls = []
-    monkeypatch.setattr(contextily, "set_cache_dir", lambda p: set_cache_calls.append(p))
+    monkeypatch.setattr(
+        contextily, "set_cache_dir", lambda p: set_cache_calls.append(p)
+    )
     monkeypatch.setattr(contextily, "add_basemap", lambda *a, **k: None)
 
     df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
@@ -423,14 +450,14 @@ def test_plot_static_enables_tile_cache(spark, monkeypatch):
     plot_static(df, basemap=True)
     plt.close("all")
 
-    assert set_cache_calls, (
-        "cx.set_cache_dir was not called — tile cache was not enabled before add_basemap"
-    )
+    assert (
+        set_cache_calls
+    ), "cx.set_cache_dir was not called — tile cache was not enabled before add_basemap"
 
     # Idempotence: a second plot_static call must NOT call set_cache_dir again.
     set_cache_calls.clear()
     plot_static(df, basemap=True)
     plt.close("all")
-    assert not set_cache_calls, (
-        "cx.set_cache_dir called twice — _enable_tile_cache is not idempotent"
-    )
+    assert (
+        not set_cache_calls
+    ), "cx.set_cache_dir called twice — _enable_tile_cache is not idempotent"

@@ -26,6 +26,7 @@ Usage (in _static_map.py / _cog.py)::
 from __future__ import annotations
 
 import os
+import warnings
 
 # ---------------------------------------------------------------------------
 # Public constants
@@ -75,16 +76,22 @@ def _enable_tile_cache(cache_dir: str | None = None) -> None:
     global _tile_cache_enabled
     if _tile_cache_enabled:
         return
-    target = (
-        cache_dir
-        or os.environ.get("GBX_TILE_CACHE_DIR")
-        or _DEFAULT_TILE_CACHE
-    )
+    target = cache_dir or os.environ.get("GBX_TILE_CACHE_DIR") or _DEFAULT_TILE_CACHE
     try:
         import contextily as cx
 
         os.makedirs(target, exist_ok=True)
         cx.set_cache_dir(target)
         _tile_cache_enabled = True
-    except Exception:  # noqa: BLE001 — contextily absent or path not writable
+    except (ImportError, OSError, PermissionError):
+        # contextily absent or cache directory not writable — silently skip;
+        # the basemap will render uncached and the call-site try/except handles
+        # provider failures.
         pass
+    except Exception as exc:  # noqa: BLE001
+        warnings.warn(
+            f"_enable_tile_cache: unexpected error setting contextily cache "
+            f"({type(exc).__name__}: {exc}) — tile caching disabled for this session.",
+            RuntimeWarning,
+            stacklevel=2,
+        )

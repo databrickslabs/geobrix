@@ -20,6 +20,7 @@ from databricks.labs.gbx.vizx._layers import (
     vector_layer,
 )
 from databricks.labs.gbx.vizx._maplibre import audit_layers
+from databricks.labs.gbx.vizx._pointcloud_flythrough import plot_point_cloud_flythrough
 from databricks.labs.gbx.vizx._pointcloud_pdf import poses_to_pdf
 from databricks.labs.gbx.vizx._pointcloud_poses import plot_point_cloud_poses
 from databricks.labs.gbx.vizx._raster import (
@@ -67,6 +68,7 @@ __all__ = [
     "plot_pmtiles",
     "plot_point_cloud",
     "plot_point_cloud_poses",
+    "plot_point_cloud_flythrough",
     "poses_to_pdf",
     "plot_cog",
     "plot_tile",

@@ -143,19 +143,14 @@ def _write_gif(frames: List[np.ndarray], path: pathlib.Path, fps: float) -> None
 def _write_mp4(frames: List[np.ndarray], path: pathlib.Path, fps: float) -> None:
     """Write an MP4 via imageio-ffmpeg.
 
-    Uses ``imageio.get_writer`` with ``format='ffmpeg'`` to explicitly route
-    through imageio-ffmpeg rather than relying on extension-based dispatch
-    (which can route to TiffWriter on some imageio versions).
-    ``macro_block_size=None`` keeps the original frame resolution without
-    width/height padding.
+    Requires ``imageio-ffmpeg`` (declared in the ``[vizx]`` extra).
+    Uses ``imageio.mimwrite`` which passes all frames at once so the
+    ffmpeg backend can compute frame dimensions before opening the
+    encoder.  ``macro_block_size=None`` keeps the original resolution.
     """
     import imageio
 
-    with imageio.get_writer(
-        str(path), format="ffmpeg", fps=float(fps), macro_block_size=None
-    ) as writer:
-        for frame in frames:
-            writer.append_data(frame)
+    imageio.mimwrite(str(path), frames, fps=float(fps), macro_block_size=None)
 
 
 # ---------------------------------------------------------------------------

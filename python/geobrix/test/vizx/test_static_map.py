@@ -506,3 +506,81 @@ def test_basemap_add_kwargs_returns_empty_when_unsupported(monkeypatch):
     assert (
         result == {}
     ), f"Expected empty dict for old contextily signature, got {result!r}"
+
+
+# --- _resolve_basemap_source ---
+
+
+def test_resolve_basemap_source_none_returns_world_street_map(monkeypatch):
+    """_resolve_basemap_source(None) returns Esri.WorldStreetMap (the default)."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    # Reset the cached presets so this test always populates them fresh.
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    result = _resolve_basemap_source(None)
+    assert result == cx.providers.Esri.WorldStreetMap, (
+        f"Expected Esri.WorldStreetMap for None, got {result!r}"
+    )
+
+
+def test_resolve_basemap_source_imagery_returns_world_imagery(monkeypatch):
+    """_resolve_basemap_source('imagery') returns Esri.WorldImagery."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    result = _resolve_basemap_source("imagery")
+    assert result == cx.providers.Esri.WorldImagery, (
+        f"Expected Esri.WorldImagery for 'imagery', got {result!r}"
+    )
+
+
+def test_resolve_basemap_source_topo_returns_world_topo_map(monkeypatch):
+    """_resolve_basemap_source('topo') returns Esri.WorldTopoMap."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    result = _resolve_basemap_source("topo")
+    assert result == cx.providers.Esri.WorldTopoMap, (
+        f"Expected Esri.WorldTopoMap for 'topo', got {result!r}"
+    )
+
+
+def test_resolve_basemap_source_unknown_string_raises_value_error(monkeypatch):
+    """_resolve_basemap_source raises ValueError for an unknown preset string."""
+    import contextily as cx  # noqa: F401 — ensure cx available so presets load
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    with pytest.raises(ValueError, match="Unknown basemap_source preset"):
+        _resolve_basemap_source("not_a_real_preset")
+
+
+def test_resolve_basemap_source_provider_object_passthrough(monkeypatch):
+    """_resolve_basemap_source passes through a contextily provider object unchanged."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    provider = cx.providers.Esri.WorldImagery
+    result = _resolve_basemap_source(provider)
+    assert result is provider, (
+        f"Expected passthrough of provider object, got {result!r}"
+    )

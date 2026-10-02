@@ -116,10 +116,14 @@ def _render_cog(
             from databricks.labs.gbx.vizx._basemap import (
                 _basemap_add_kwargs,
                 _enable_tile_cache,
+                _resolve_basemap_source,
             )
 
             _enable_tile_cache()
-            source = basemap_source or cx.providers.OpenStreetMap.Mapnik
+            # Default is Esri.WorldStreetMap — keyless from Databricks egress.
+            # OSM/CartoDB are blocked/key-gated from datacenter IPs.
+            # Override with basemap_source="imagery"|"topo" or any cx provider.
+            source = _resolve_basemap_source(basemap_source)
             cx.add_basemap(
                 ax, source=source, crs=crs, zorder=1, **_basemap_add_kwargs()
             )
@@ -232,10 +236,14 @@ def plot_tile(
             from databricks.labs.gbx.vizx._basemap import (
                 _basemap_add_kwargs,
                 _enable_tile_cache,
+                _resolve_basemap_source,
             )
 
             _enable_tile_cache()
-            source = basemap_source or cx.providers.OpenStreetMap.Mapnik
+            # Default is Esri.WorldStreetMap — keyless from Databricks egress.
+            # OSM/CartoDB are blocked/key-gated from datacenter IPs.
+            # Override with basemap_source="imagery"|"topo" or any cx provider.
+            source = _resolve_basemap_source(basemap_source)
             cx.add_basemap(
                 ax, source=source, crs=crs, zorder=1, **_basemap_add_kwargs()
             )

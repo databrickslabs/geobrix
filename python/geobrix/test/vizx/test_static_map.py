@@ -522,9 +522,9 @@ def test_resolve_basemap_source_none_returns_world_street_map(monkeypatch):
     monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
 
     result = _resolve_basemap_source(None)
-    assert result == cx.providers.Esri.WorldStreetMap, (
-        f"Expected Esri.WorldStreetMap for None, got {result!r}"
-    )
+    assert (
+        result == cx.providers.Esri.WorldStreetMap
+    ), f"Expected Esri.WorldStreetMap for None, got {result!r}"
 
 
 def test_resolve_basemap_source_imagery_returns_world_imagery(monkeypatch):
@@ -537,9 +537,9 @@ def test_resolve_basemap_source_imagery_returns_world_imagery(monkeypatch):
     monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
 
     result = _resolve_basemap_source("imagery")
-    assert result == cx.providers.Esri.WorldImagery, (
-        f"Expected Esri.WorldImagery for 'imagery', got {result!r}"
-    )
+    assert (
+        result == cx.providers.Esri.WorldImagery
+    ), f"Expected Esri.WorldImagery for 'imagery', got {result!r}"
 
 
 def test_resolve_basemap_source_topo_returns_world_topo_map(monkeypatch):
@@ -552,9 +552,9 @@ def test_resolve_basemap_source_topo_returns_world_topo_map(monkeypatch):
     monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
 
     result = _resolve_basemap_source("topo")
-    assert result == cx.providers.Esri.WorldTopoMap, (
-        f"Expected Esri.WorldTopoMap for 'topo', got {result!r}"
-    )
+    assert (
+        result == cx.providers.Esri.WorldTopoMap
+    ), f"Expected Esri.WorldTopoMap for 'topo', got {result!r}"
 
 
 def test_resolve_basemap_source_unknown_string_raises_value_error(monkeypatch):
@@ -581,6 +581,6 @@ def test_resolve_basemap_source_provider_object_passthrough(monkeypatch):
 
     provider = cx.providers.Esri.WorldImagery
     result = _resolve_basemap_source(provider)
-    assert result is provider, (
-        f"Expected passthrough of provider object, got {result!r}"
-    )
+    assert (
+        result is provider
+    ), f"Expected passthrough of provider object, got {result!r}"

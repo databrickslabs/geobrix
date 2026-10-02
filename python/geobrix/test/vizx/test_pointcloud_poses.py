@@ -368,6 +368,201 @@ def test_render_3d_default_figsize_unchanged():
 
 
 # ---------------------------------------------------------------------------
+# render_point_cloud_3d — z_exaggeration
+# ---------------------------------------------------------------------------
+
+
+def test_render_3d_z_exaggeration_explicit_scales_box_z():
+    """z_exaggeration=5.0 multiplies the box-aspect z by 5× vs z_exaggeration=1.0."""
+    from databricks.labs.gbx.vizx._pointcloud_static import render_point_cloud_3d
+
+    # Build a flat cloud: wide XY, narrow Z (mirrors terrain LiDAR)
+    rng = np.random.default_rng(0)
+    x = rng.uniform(0, 1000.0, 200)
+    y = rng.uniform(0, 1000.0, 200)
+    z = rng.uniform(0, 10.0, 200)  # Z is 100× smaller than XY
+
+    fig1 = render_point_cloud_3d(x, y, z, z_exaggeration=1.0)
+    fig5 = render_point_cloud_3d(x, y, z, z_exaggeration=5.0)
+
+    ax1 = fig1.axes[0]
+    ax5 = fig5.axes[0]
+    # Box aspect is (x, y, z) — z component of 5× run must be ≥ 5× of 1× run
+    box1 = ax1.get_box_aspect()
+    box5 = ax5.get_box_aspect()
+    assert box5[2] / box1[2] == pytest.approx(5.0, abs=0.05)
+
+
+def test_render_3d_z_exaggeration_auto_makes_z_visible():
+    """Auto z_exaggeration (None) must produce z box-aspect > true-scale for flat cloud."""
+    from databricks.labs.gbx.vizx._pointcloud_static import render_point_cloud_3d
+
+    rng = np.random.default_rng(1)
+    x = rng.uniform(0, 1000.0, 200)
+    y = rng.uniform(0, 1000.0, 200)
+    z = rng.uniform(0, 5.0, 200)  # very flat
+
+    fig_auto = render_point_cloud_3d(x, y, z, z_exaggeration=None)
+    fig_true = render_point_cloud_3d(x, y, z, z_exaggeration=1.0)
+
+    box_auto = fig_auto.axes[0].get_box_aspect()
+    box_true = fig_true.axes[0].get_box_aspect()
+    # Auto must exaggerate Z more than true scale
+    assert box_auto[2] > box_true[2]
+
+
+def test_render_3d_z_exaggeration_one_equals_true_scale():
+    """z_exaggeration=1.0 must match unexaggerated box aspect."""
+    from databricks.labs.gbx.vizx._pointcloud_static import render_point_cloud_3d
+
+    rng = np.random.default_rng(2)
+    x = rng.uniform(0, 100.0, 100)
+    y = rng.uniform(0, 100.0, 100)
+    z = rng.uniform(0, 100.0, 100)  # isotropic cloud — auto ≈ true scale
+
+    fig = render_point_cloud_3d(x, y, z, z_exaggeration=1.0)
+    box = fig.axes[0].get_box_aspect()
+    # With z_exaggeration=1.0, z component = ptp(z) (no scaling)
+    ptp_z = np.ptp(z - z.mean())
+    ptp_x = np.ptp(x - x.mean())
+    assert box[2] / box[0] == pytest.approx(ptp_z / ptp_x, abs=0.05)
+
+
+def test_plot_point_cloud_poses_forwards_z_exaggeration(monkeypatch):
+    """plot_point_cloud_poses forwards z_exaggeration to render_point_cloud_3d."""
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    captured = {}
+
+    def _fake_render(x, y, z, **kw):
+        captured["z_exaggeration"] = kw.get("z_exaggeration")
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+
+    df = _synthetic_df()
+    pcp.plot_point_cloud_poses(df, poses=["iso"], z_exaggeration=7.0)
+    assert captured["z_exaggeration"] == 7.0
+
+
+def test_plot_point_cloud_poses_z_exaggeration_default_none(monkeypatch):
+    """Default z_exaggeration=None (auto) is forwarded as None to render_point_cloud_3d."""
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    captured = {}
+
+    def _fake_render(x, y, z, **kw):
+        captured["z_exaggeration"] = kw.get("z_exaggeration")
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+
+    df = _synthetic_df()
+    pcp.plot_point_cloud_poses(df, poses=["top"])
+    assert captured["z_exaggeration"] is None  # default → auto in renderer
+
+
+# ---------------------------------------------------------------------------
+# Coloring: rgb vs cmap selection
+# ---------------------------------------------------------------------------
+
+
+def test_coloring_rgb_used_when_present(monkeypatch):
+    """When color='rgb' and source has RGB, rgb is forwarded to render_point_cloud_3d."""
+    import pandas as pd
+
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    captured = {}
+
+    def _fake_render(x, y, z, **kw):
+        captured["rgb"] = kw.get("rgb")
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+
+    # DataFrame WITH RGB columns
+    rng = np.random.default_rng(0)
+    n = 50
+    df = pd.DataFrame(
+        {
+            "x": rng.uniform(0, 1, n),
+            "y": rng.uniform(0, 1, n),
+            "z": rng.uniform(0, 1, n),
+            "r": rng.integers(0, 255, n),
+            "g": rng.integers(0, 255, n),
+            "b": rng.integers(0, 255, n),
+        }
+    )
+    pcp.plot_point_cloud_poses(df, poses=["iso"], color="rgb")
+    assert (
+        captured["rgb"] is not None
+    ), "RGB array must be forwarded when source has color"
+
+
+def test_coloring_rgb_none_when_color_z(monkeypatch):
+    """When color='z', rgb is set to None even if source has RGB columns."""
+    import pandas as pd
+
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    captured = {}
+
+    def _fake_render(x, y, z, **kw):
+        captured["rgb"] = kw.get("rgb")
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+
+    rng = np.random.default_rng(0)
+    n = 50
+    df = pd.DataFrame(
+        {
+            "x": rng.uniform(0, 1, n),
+            "y": rng.uniform(0, 1, n),
+            "z": rng.uniform(0, 1, n),
+            "r": rng.integers(0, 255, n),
+            "g": rng.integers(0, 255, n),
+            "b": rng.integers(0, 255, n),
+        }
+    )
+    pcp.plot_point_cloud_poses(df, poses=["iso"], color="z")
+    assert (
+        captured["rgb"] is None
+    ), "rgb must be None when color='z', even if source has RGB"
+
+
+def test_coloring_fallback_warns_when_rgb_absent(monkeypatch):
+    """color='rgb' with no RGB in source issues UserWarning (elevation fallback)."""
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    def _fake_render(x, y, z, **kw):
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+
+    # DataFrame WITHOUT RGB columns
+    df = _synthetic_df(50)
+    with pytest.warns(UserWarning, match="no RGB"):
+        pcp.plot_point_cloud_poses(df, poses=["iso"], color="rgb")
+
+
+# ---------------------------------------------------------------------------
 # poses_to_pdf — multi-page PDF
 # ---------------------------------------------------------------------------
 

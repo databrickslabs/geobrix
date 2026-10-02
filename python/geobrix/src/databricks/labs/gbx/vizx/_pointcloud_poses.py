@@ -94,6 +94,7 @@ def plot_point_cloud_poses(
     point_size: float = 1.5,
     figsize: Optional[tuple] = None,
     dpi: Optional[int] = None,
+    z_exaggeration=None,
     out_dir: Optional[str] = None,
     show: Optional[str] = "gallery",
     title: Optional[str] = None,
@@ -137,6 +138,12 @@ def plot_point_cloud_poses(
     dpi:
         Figure resolution in dots per inch, e.g. ``200`` for print-quality.
         ``None`` (default) → matplotlib rcParams default.
+    z_exaggeration:
+        Vertical exaggeration factor for the Z axis. ``None`` (default) →
+        auto-computed so that the Z extent occupies ≈ 30 % of the larger XY
+        extent, clamped to ≥ 1.0.  Pass ``1.0`` for true geographic scale or
+        a float > 1.0 for explicit exaggeration. Forwarded to
+        ``render_point_cloud_3d`` per pose.
     out_dir:
         Directory path to save a PNG for each pose
         (``<out_dir>/<pose_name>.png``). Works for local paths, FUSE-mounted
@@ -210,6 +217,7 @@ def plot_point_cloud_poses(
             seed=seed,
             figsize=figsize,
             dpi=dpi,
+            z_exaggeration=z_exaggeration,
         )
         figs[name] = fig
 

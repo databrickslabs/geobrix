@@ -27,6 +27,7 @@ def render_point_cloud_3d(
     seed=0,
     figsize=None,
     dpi=None,
+    z_exaggeration=None,
 ):
     """Render a decimated, centered point cloud as a static 3D matplotlib Figure.
 
@@ -47,6 +48,13 @@ def render_point_cloud_3d(
     sets the figure resolution in dots-per-inch; defaults to
     ``rcParams["figure.dpi"]`` when ``None``. Both are useful for print-quality
     stills (e.g. ``figsize=(12, 9), dpi=300``).
+
+    ``z_exaggeration`` scales the Z axis visually so terrain structure is
+    visible when the vertical range is small relative to the XY extent (common
+    for airborne LiDAR over wide scenes). ``None`` (default) auto-computes a
+    factor so that the Z extent occupies ≈ 30 % of the larger XY extent,
+    clamped to a minimum of 1.0 (never squashes Z). Pass ``1.0`` for true
+    geographic scale, or a positive float to set an explicit multiplier.
 
     Does not call ``pyplot.show()`` -- the caller displays the returned
     Figure, consistent with ``plot_static``.
@@ -108,7 +116,17 @@ def render_point_cloud_3d(
     )
 
     ax.view_init(elev=elev, azim=azim)
-    ax.set_box_aspect((np.ptp(x) or 1, np.ptp(y) or 1, np.ptp(z) or 1))
+
+    ptp_x = np.ptp(x) or 1
+    ptp_y = np.ptp(y) or 1
+    ptp_z = np.ptp(z) or 1
+    if z_exaggeration is None:
+        # Auto: scale Z so it occupies ~30% of the larger XY extent.
+        target_z = max(ptp_x, ptp_y) * 0.3
+        z_exag = max(1.0, target_z / ptp_z)
+    else:
+        z_exag = float(z_exaggeration)
+    ax.set_box_aspect((ptp_x, ptp_y, ptp_z * z_exag))
 
     # Clean look: hide panes/ticks so the background reads as a plain canvas.
     ax.xaxis.pane.set_visible(False)

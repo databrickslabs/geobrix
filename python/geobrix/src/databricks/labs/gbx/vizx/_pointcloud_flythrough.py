@@ -141,17 +141,15 @@ def _write_gif(frames: List[np.ndarray], path: pathlib.Path, fps: float) -> None
 
 
 def _write_mp4(frames: List[np.ndarray], path: pathlib.Path, fps: float) -> None:
-    """Write an MP4 via imageio + imageio-ffmpeg (libx264)."""
-    import imageio.v3 as iio
+    """Write an MP4 via imageio-ffmpeg.
 
-    iio.imwrite(
-        str(path),
-        frames,
-        fps=float(fps),
-        codec="libx264",
-        quality=8,
-        plugin="pyav",
-    )
+    Uses ``imageio.mimwrite`` (v2 API) with the ffmpeg back-end, which is
+    the stable path on Databricks env6.  ``macro_block_size=None`` keeps
+    the original frame resolution without padding.
+    """
+    import imageio
+
+    imageio.mimwrite(str(path), frames, fps=float(fps), macro_block_size=None)
 
 
 # ---------------------------------------------------------------------------

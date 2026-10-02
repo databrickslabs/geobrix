@@ -13,8 +13,9 @@ site needs:
 
 2. **User-Agent** — OSM's tile usage policy requires an identifying
    ``User-Agent`` header.  Blank / generic UAs from cloud datacenter IPs
-   are a common block trigger.  Pass ``headers=_TILE_USER_AGENT`` to every
-   ``cx.add_basemap`` call to identify the client.
+   are a common block trigger.  Spread ``**_basemap_add_kwargs()`` into every
+   ``cx.add_basemap`` call — it supplies ``headers=_TILE_USER_AGENT`` only when
+   the installed contextily accepts it, so older versions degrade gracefully.
 
 Usage (in _static_map.py / _cog.py)::
 

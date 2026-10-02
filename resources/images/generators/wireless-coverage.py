@@ -186,6 +186,58 @@ def g_three_path_h3(cx, cy, color, tint):
     return "".join(out)
 
 
+def g_three_h3_output_tables(cx, cy, color, tint):
+    """Three stacked Delta-table icons for the H3 output tables (DEM / DSM / CHM).
+
+    Mirrors g_three_surface_tables (Stage 1 inputs) so the diagram reads
+    symmetrically: Delta tables in → pipeline → Delta tables out.
+    A small hex badge on each header marks them as H3 cell tables.
+    """
+    labels = ["DEM", "DSM", "CHM"]
+    w, h = 100, 60
+    out = []
+    offsets = [(16, 16), (8, 8), (0, 0)]
+    opacities = [0.45, 0.65, 1.0]
+    for i, (dx, dy) in enumerate(offsets):
+        x = cx - w / 2 + dx
+        y = cy - h / 2 + dy - 16
+        op = opacities[i]
+        fill = "#FFFFFF" if i == 2 else tint
+        lbl = labels[i]
+        out.append(
+            f'<rect x="{x}" y="{y}" rx="7" ry="7" width="{w}" height="{h}" '
+            f'fill="{fill}" fill-opacity="{op}" stroke="{color}" stroke-width="1.8"/>'
+        )
+        out.append(
+            f'<rect x="{x}" y="{y}" width="{w}" height="18" rx="7" ry="7" '
+            f'fill="{color}" fill-opacity="{op}"/>'
+            f'<rect x="{x}" y="{y + 10}" width="{w}" height="8" '
+            f'fill="{color}" fill-opacity="{op}"/>'
+            f'<text x="{x + w/2}" y="{y + 13}" text-anchor="middle" '
+            f'font-family="ui-monospace, Menlo, monospace" font-size="9" '
+            f'font-weight="800" fill="#FFFFFF" fill-opacity="1">wc_h3_{lbl.lower()}</text>'
+        )
+        # Data rows
+        for r in range(2):
+            ry = y + 28 + r * 12
+            out.append(
+                f'<line x1="{x + 8}" y1="{ry}" x2="{x + w - 8}" y2="{ry}" '
+                f'stroke="{color}" stroke-opacity="0.35" stroke-width="1.2"/>'
+            )
+        # Hex badge (top-right corner) — marks this as an H3 cell table
+        hx, hy, hr = x + w - 2, y - 2, 7
+        hex_pts = " ".join(
+            f"{hx + hr*math.cos(math.radians(60*k-90)):.1f},"
+            f"{hy + hr*math.sin(math.radians(60*k-90)):.1f}"
+            for k in range(6)
+        )
+        out.append(
+            f'<polygon points="{hex_pts}" fill="{color}" fill-opacity="{op}" '
+            f'stroke="#FFFFFF" stroke-width="0.8"/>'
+        )
+    return "".join(out)
+
+
 def g_cellfill_idw(cx, cy, color, tint):
     """Dense hex grid with some cells shown as gap-filled (hatched → solid)."""
     out = []
@@ -213,13 +265,11 @@ def g_cellfill_idw(cx, cy, color, tint):
                 f'fill="{fill_clr}" fill-opacity="{fill_op:.2f}" '
                 f'stroke="{color}" stroke-width="1.2"/>'
             )
-            # dashed ring on filled cells (visual marker for IDW-interpolated)
+            # dashed inner ring on filled cells (visual marker for IDW-interpolated)
             if is_filled:
-                for i in range(6):
-                    a = math.radians(60 * i - 90)
-                    pts2 = [f"{x + (R-4)*math.cos(math.radians(60*j-90)):.1f},"
-                            f"{y + (R-4)*math.sin(math.radians(60*j-90)):.1f}"
-                            for j in range(6)]
+                pts2 = [f"{x + (R-4)*math.cos(math.radians(60*j-90)):.1f},"
+                        f"{y + (R-4)*math.sin(math.radians(60*j-90)):.1f}"
+                        for j in range(6)]
                 out.append(
                     f'<polygon points="{" ".join(pts2)}" fill="none" '
                     f'stroke="#FFFFFF" stroke-width="1" stroke-opacity="0.65" '
@@ -287,7 +337,7 @@ NB3 = dict(
         "Three parallel paths: DEM/DSM isobands → H3, CHM max-z → H3, "
         "then IDW gap-fill"
     ),
-    series_pill="Wireless Coverage  ·  Notebook 3 of 4",
+    series_pill="Wireless Coverage  ·  Notebook 3 of 5",
     stages=[
         Stage(
             title="Surface rasters in",
@@ -323,7 +373,7 @@ NB3 = dict(
                 "h3_kring(k=1) identifies neighbors of populated H3 cells; "
                 "h3_cellfill(IDW) interpolates remaining gaps → wc_h3_dem, wc_h3_dsm, wc_h3_chm"
             ),
-            glyph=g_cellfill_idw,
+            glyph=g_three_h3_output_tables,
             chip_text="h3_kring · h3_cellfill",
         ),
     ],
@@ -334,15 +384,17 @@ NB3 = dict(
         "rst_isoband",
         "h3_try_coverash3",
         "gbx_rst_h3_rastertogridmax",
+        "h3_kring",
         "h3_cellfill",
     ],
     footer_chip_colors=[
-        (ACCENT, TINT),    # rst_transform — GeoBrix
-        (ACCENT, TINT),    # rst_clip — GeoBrix
-        (ACCENT, TINT),    # rst_isoband — GeoBrix
+        (ACCENT, TINT),      # rst_transform — GeoBrix
+        (ACCENT, TINT),      # rst_clip — GeoBrix
+        (ACCENT, TINT),      # rst_isoband — GeoBrix
         (ACCENT_2, TINT_2),  # h3_try_coverash3 — product built-in
-        (ACCENT, TINT),    # gbx_rst_h3_rastertogridmax — GeoBrix
-        (ACCENT, TINT),    # h3_cellfill — GeoBrix
+        (ACCENT, TINT),      # gbx_rst_h3_rastertogridmax — GeoBrix
+        (ACCENT, TINT),      # h3_kring — GeoBrix
+        (ACCENT, TINT),      # h3_cellfill — GeoBrix
     ],
     note="databrickslabs/geobrix  ·  3DEP LiDAR  ·  H3 res-9",
 )
@@ -407,6 +459,7 @@ def main():
     path = os.path.join(out_dir, "wireless-coverage-03.svg")
     with open(path, "w") as f:
         f.write(render_diagram())
+        f.write("\n")
     print(f"wrote {path}")
 
 

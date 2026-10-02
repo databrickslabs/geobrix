@@ -623,7 +623,7 @@ def plot_static(
                 import contextily as cx
 
                 from databricks.labs.gbx.vizx._basemap import (
-                    _TILE_USER_AGENT,
+                    _basemap_add_kwargs,
                     _enable_tile_cache,
                 )
 
@@ -634,7 +634,10 @@ def plot_static(
                 # override.  User-Agent is required by OSM tile usage policy.
                 source = basemap_source or cx.providers.OpenStreetMap.Mapnik
                 cx.add_basemap(
-                    ax, source=source, crs="EPSG:3857", headers=_TILE_USER_AGENT
+                    ax,
+                    source=source,
+                    crs="EPSG:3857",
+                    **_basemap_add_kwargs(),
                 )
             except Exception as exc:  # noqa: BLE001
                 warnings.warn(
@@ -716,7 +719,7 @@ def plot_static(
             import contextily as cx
 
             from databricks.labs.gbx.vizx._basemap import (
-                _TILE_USER_AGENT,
+                _basemap_add_kwargs,
                 _enable_tile_cache,
             )
 
@@ -727,7 +730,10 @@ def plot_static(
             # override.  User-Agent is required by OSM tile usage policy.
             source = basemap_source or cx.providers.OpenStreetMap.Mapnik
             cx.add_basemap(
-                ax, source=source, crs=plot_gdf.crs, headers=_TILE_USER_AGENT
+                ax,
+                source=source,
+                crs=plot_gdf.crs,
+                **_basemap_add_kwargs(),
             )
         except Exception as exc:  # noqa: BLE001 — offline/no-egress/missing -> fallback
             warnings.warn(

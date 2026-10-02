@@ -461,3 +461,48 @@ def test_plot_static_enables_tile_cache(spark, monkeypatch):
     assert (
         not set_cache_calls
     ), "cx.set_cache_dir called twice — _enable_tile_cache is not idempotent"
+
+
+# --- _basemap_add_kwargs: both branches ---
+
+
+def _fake_add_basemap_with_headers(ax, source, crs, headers=None, **kwargs):
+    """Fake add_basemap that accepts headers= (simulates contextily >= 1.7)."""
+
+
+def _fake_add_basemap_without_headers(ax, source, crs):
+    """Fake add_basemap that does NOT accept headers= (simulates contextily < 1.7)."""
+
+
+def test_basemap_add_kwargs_returns_headers_when_supported(monkeypatch):
+    """_basemap_add_kwargs returns {'headers': _TILE_USER_AGENT} when the installed
+    contextily.add_basemap signature includes a headers= parameter.
+
+    Monkeypatches cx.add_basemap with a fake that accepts headers= so both code
+    paths are exercised without depending on the installed contextily version.
+    """
+    import contextily
+
+    from databricks.labs.gbx.vizx._basemap import _TILE_USER_AGENT, _basemap_add_kwargs
+
+    monkeypatch.setattr(contextily, "add_basemap", _fake_add_basemap_with_headers)
+    result = _basemap_add_kwargs()
+    assert result == {
+        "headers": _TILE_USER_AGENT
+    }, f"Expected {{'headers': _TILE_USER_AGENT}}, got {result!r}"
+
+
+def test_basemap_add_kwargs_returns_empty_when_unsupported(monkeypatch):
+    """_basemap_add_kwargs returns {} when the installed contextily.add_basemap
+    signature does NOT include headers=, so the call degrades gracefully instead
+    of raising TypeError on older cluster contextily versions.
+    """
+    import contextily
+
+    from databricks.labs.gbx.vizx._basemap import _basemap_add_kwargs
+
+    monkeypatch.setattr(contextily, "add_basemap", _fake_add_basemap_without_headers)
+    result = _basemap_add_kwargs()
+    assert (
+        result == {}
+    ), f"Expected empty dict for old contextily signature, got {result!r}"

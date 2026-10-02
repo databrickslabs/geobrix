@@ -18,9 +18,12 @@ site needs:
 
 Usage (in _static_map.py / _cog.py)::
 
-    from databricks.labs.gbx.vizx._basemap import _enable_tile_cache, _TILE_USER_AGENT
+    from databricks.labs.gbx.vizx._basemap import (
+        _basemap_add_kwargs,
+        _enable_tile_cache,
+    )
     _enable_tile_cache()
-    cx.add_basemap(ax, source=source, crs=crs, headers=_TILE_USER_AGENT)
+    cx.add_basemap(ax, source=source, crs=crs, **_basemap_add_kwargs())
 """
 
 from __future__ import annotations
@@ -95,3 +98,25 @@ def _enable_tile_cache(cache_dir: str | None = None) -> None:
             RuntimeWarning,
             stacklevel=2,
         )
+
+
+def _basemap_add_kwargs() -> dict:
+    """Extra kwargs for ``cx.add_basemap``: pass the identifying User-Agent only
+    if the installed contextily supports ``headers=`` (added in a later release),
+    so older cluster contextily degrades to an unheadered (but still cached) render
+    rather than raising ``TypeError: add_basemap() got an unexpected keyword argument``.
+
+    Returns:
+        ``{"headers": _TILE_USER_AGENT}`` when the installed contextily accepts
+        ``headers=``, otherwise ``{}``..
+    """
+    try:
+        import inspect
+
+        import contextily as cx
+
+        if "headers" in inspect.signature(cx.add_basemap).parameters:
+            return {"headers": _TILE_USER_AGENT}
+    except Exception:  # noqa: BLE001 — contextily absent or signature inspection failed
+        pass
+    return {}

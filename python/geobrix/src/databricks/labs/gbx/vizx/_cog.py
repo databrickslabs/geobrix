@@ -114,14 +114,14 @@ def _render_cog(
             import contextily as cx
 
             from databricks.labs.gbx.vizx._basemap import (
-                _TILE_USER_AGENT,
+                _basemap_add_kwargs,
                 _enable_tile_cache,
             )
 
             _enable_tile_cache()
             source = basemap_source or cx.providers.OpenStreetMap.Mapnik
             cx.add_basemap(
-                ax, source=source, crs=crs, zorder=1, headers=_TILE_USER_AGENT
+                ax, source=source, crs=crs, zorder=1, **_basemap_add_kwargs()
             )
         except Exception as exc:  # noqa: BLE001 — offline/no-egress -> warn + skip
             warnings.warn(
@@ -230,14 +230,14 @@ def plot_tile(
             import contextily as cx
 
             from databricks.labs.gbx.vizx._basemap import (
-                _TILE_USER_AGENT,
+                _basemap_add_kwargs,
                 _enable_tile_cache,
             )
 
             _enable_tile_cache()
             source = basemap_source or cx.providers.OpenStreetMap.Mapnik
             cx.add_basemap(
-                ax, source=source, crs=crs, zorder=1, headers=_TILE_USER_AGENT
+                ax, source=source, crs=crs, zorder=1, **_basemap_add_kwargs()
             )
         except Exception as exc:  # noqa: BLE001 — offline/no-egress -> warn + skip
             warnings.warn(

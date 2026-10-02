@@ -78,45 +78,95 @@ def test_n_frames_fractional_seconds():
 # ---------------------------------------------------------------------------
 
 
-def test_orbit_path_length():
-    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+# --- _build_flat_orbit_path: plain 360° sweep (path='orbit_flat') ---
 
-    path = _build_orbit_path(n_frames=36)
+
+def test_flat_orbit_path_length():
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_flat_orbit_path
+
+    path = _build_flat_orbit_path(n_frames=36)
     assert len(path) == 36
 
 
-def test_orbit_azimuth_monotonically_increasing():
-    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+def test_flat_orbit_azimuth_monotonically_increasing():
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_flat_orbit_path
 
-    path = _build_orbit_path(n_frames=36)
+    path = _build_flat_orbit_path(n_frames=36)
     azimuths = [az for _, az in path]
     for a0, a1 in zip(azimuths, azimuths[1:]):
         assert a1 > a0, f"azimuth not monotonic: {a0} -> {a1}"
 
 
-def test_orbit_azimuth_starts_at_zero():
-    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+def test_flat_orbit_azimuth_starts_at_zero():
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_flat_orbit_path
 
-    path = _build_orbit_path(n_frames=36)
+    path = _build_flat_orbit_path(n_frames=36)
     assert path[0][1] == pytest.approx(0.0, abs=0.01)
 
 
-def test_orbit_azimuth_covers_full_circle():
+def test_flat_orbit_azimuth_covers_full_circle():
     """Last azimuth must be < 360 (endpoint=False) and close to 360."""
-    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_flat_orbit_path
 
-    path = _build_orbit_path(n_frames=36)
+    path = _build_flat_orbit_path(n_frames=36)
     last_az = path[-1][1]
     assert last_az < 360.0
-    assert last_az >= 350.0  # close to closing the loop (36 frames → 350.0 exactly)
+    assert last_az >= 350.0  # 36 frames → 350.0 exactly
 
 
-def test_orbit_elev_constant():
-    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+def test_flat_orbit_elev_constant():
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_flat_orbit_path
 
-    path = _build_orbit_path(n_frames=20, elev=45.0)
+    path = _build_flat_orbit_path(n_frames=20, elev=45.0)
     elevs = [el for el, _ in path]
     assert all(abs(e - 45.0) < 0.01 for e in elevs)
+
+
+# --- _build_orbit_path: new default orbit→top→loop ---
+
+
+def test_orbit_path_length():
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+
+    path = _build_orbit_path(n_frames=80)
+    assert len(path) == 80
+
+
+def test_orbit_path_starts_at_oblique_elev():
+    """First frame must be at the oblique elevation."""
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+
+    path = _build_orbit_path(n_frames=80, elev_oblique=30.0, elev_top=90.0)
+    assert path[0][0] == pytest.approx(30.0, abs=1.0)
+
+
+def test_orbit_path_reaches_top():
+    """Some frame in the rise/hold phase must be at or near elev_top."""
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+
+    path = _build_orbit_path(n_frames=80, elev_oblique=30.0, elev_top=90.0)
+    elevs = [el for el, _ in path]
+    assert max(elevs) >= 88.0, "orbit path never reached top elevation"
+
+
+def test_orbit_path_phase1_azimuth_monotonic():
+    """First 70% of frames (orbit phase) should have increasing azimuth."""
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+
+    n = 80
+    path = _build_orbit_path(n_frames=n, elev_oblique=30.0, elev_top=90.0)
+    orbit_end = round(0.70 * n)
+    azimuths = [az for _, az in path[:orbit_end]]
+    for a0, a1 in zip(azimuths, azimuths[1:]):
+        assert a1 >= a0, f"phase-1 azimuth not non-decreasing: {a0} -> {a1}"
+
+
+def test_orbit_path_ends_near_oblique():
+    """Last frame must ease back down to oblique elevation for clean GIF loop."""
+    from databricks.labs.gbx.vizx._pointcloud_flythrough import _build_orbit_path
+
+    path = _build_orbit_path(n_frames=80, elev_oblique=30.0, elev_top=90.0)
+    assert path[-1][0] == pytest.approx(30.0, abs=5.0)
 
 
 # ---------------------------------------------------------------------------
@@ -256,7 +306,7 @@ def test_gif_has_multiple_frames(tmp_path):
 
 
 def test_mp4_written_to_path(tmp_path, monkeypatch):
-    imageio = pytest.importorskip("imageio")
+    pytest.importorskip("imageio")
     pytest.importorskip("imageio_ffmpeg")
 
     from databricks.labs.gbx.vizx import _pointcloud_flythrough as pft
@@ -268,7 +318,7 @@ def test_mp4_written_to_path(tmp_path, monkeypatch):
     df = _synthetic_df()
     pft.plot_point_cloud_flythrough(
         df,
-        path="orbit",
+        path="orbit_flat",
         fps=5,
         seconds=1.0,
         max_points=50,
@@ -279,7 +329,59 @@ def test_mp4_written_to_path(tmp_path, monkeypatch):
     )
     mp4 = tmp_path / "orbit.mp4"
     assert mp4.exists(), "MP4 file not created"
-    assert mp4.stat().st_size > 0
+    assert (
+        mp4.stat().st_size > 1000
+    ), f"MP4 is only {mp4.stat().st_size} bytes — looks like an empty container"
+
+
+def test_mp4_is_decodable_not_empty_container(tmp_path, monkeypatch):
+    """MP4 must be decodable (≥1 readable frame), not an 8-byte stub.
+
+    This test asserts the artifact itself, not a success counter.
+    """
+    pytest.importorskip("imageio")
+    pytest.importorskip("imageio_ffmpeg")
+
+    from databricks.labs.gbx.vizx import _pointcloud_flythrough as pft
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    # Use tiny but real-content figures (bigger than 20×20 to avoid PIL quantization)
+    def _content_fig():
+        import matplotlib.pyplot as plt
+
+        fig = plt.figure(figsize=(0.5, 0.5), dpi=100)
+        ax = fig.add_subplot(111)
+        ax.set_facecolor("blue")
+        ax.scatter([1, 2, 3], [1, 2, 3], c="red")
+        return fig
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", lambda *a, **kw: _content_fig())
+
+    out_stem = str(tmp_path / "test")
+    df = _synthetic_df()
+    pft.plot_point_cloud_flythrough(
+        df,
+        path="orbit_flat",
+        fps=5,
+        seconds=1.0,
+        max_points=50,
+        out_path=out_stem,
+        formats=("mp4",),
+        figsize=(0.5, 0.5),
+        dpi=100,
+    )
+    mp4 = tmp_path / "test.mp4"
+    assert (
+        mp4.stat().st_size > 1000
+    ), f"MP4 size {mp4.stat().st_size} bytes — empty container"
+
+    # Read back at least 1 frame to confirm it's decodable
+    import imageio
+
+    reader = imageio.get_reader(str(mp4))
+    frame_count = reader.count_frames()
+    reader.close()
+    assert frame_count >= 1, f"MP4 has {frame_count} readable frames (expected ≥1)"
 
 
 def test_both_formats_written(tmp_path, monkeypatch):
@@ -341,8 +443,8 @@ def test_returns_none_paths_when_no_out_path(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_render_called_per_frame_with_orbit_angles(monkeypatch):
-    """render_point_cloud_3d is called once per frame with the orbit angles."""
+def test_render_called_per_frame_with_orbit_flat_angles(monkeypatch):
+    """render_point_cloud_3d is called once per frame with monotonic orbit_flat azimuths."""
     from databricks.labs.gbx.vizx import _pointcloud_flythrough as pft
     from databricks.labs.gbx.vizx import _pointcloud_static as pcs
 
@@ -357,7 +459,7 @@ def test_render_called_per_frame_with_orbit_angles(monkeypatch):
     df = _synthetic_df()
     pft.plot_point_cloud_flythrough(
         df,
-        path="orbit",
+        path="orbit_flat",
         fps=5,
         seconds=1.0,
         max_points=50,
@@ -369,7 +471,35 @@ def test_render_called_per_frame_with_orbit_angles(monkeypatch):
     assert len(call_args) == 5  # fps=5, seconds=1.0
     azimuths = [c["azim"] for c in call_args]
     for a0, a1 in zip(azimuths, azimuths[1:]):
-        assert a1 > a0, "orbit azimuths not monotonic"
+        assert a1 > a0, "orbit_flat azimuths not monotonic"
+
+
+def test_render_called_per_frame_orbit_top_reaches_high_elev(monkeypatch):
+    """Default orbit path (orbit→top) must raise elev above 80° at some frame."""
+    from databricks.labs.gbx.vizx import _pointcloud_flythrough as pft
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    elevs = []
+
+    def _spy(x, y, z, **kw):
+        elevs.append(kw.get("elev", 0))
+        return _tiny_fig()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _spy)
+
+    df = _synthetic_df()
+    pft.plot_point_cloud_flythrough(
+        df,
+        path="orbit",
+        fps=5,
+        seconds=4.0,  # enough frames to reach top phase
+        max_points=50,
+        out_path=None,
+        formats=("gif",),
+        figsize=(0.2, 0.2),
+        dpi=100,
+    )
+    assert max(elevs) >= 80.0, f"orbit path never reached high elev; max={max(elevs)}"
 
 
 def test_load_point_cloud_called_once_in_flythrough(monkeypatch):

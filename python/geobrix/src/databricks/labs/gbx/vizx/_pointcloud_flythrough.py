@@ -33,15 +33,66 @@ def _n_frames(fps: float, seconds: float, frames: Optional[int]) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _build_orbit_path(n_frames: int, elev: float = 30.0) -> List[Tuple[float, float]]:
-    """Return ``n_frames`` (elev, azim) pairs covering a full 360° orbit.
+def _build_flat_orbit_path(
+    n_frames: int, elev: float = 30.0
+) -> List[Tuple[float, float]]:
+    """Return ``n_frames`` (elev, azim) pairs for a plain 360° azimuth orbit.
 
     Azimuth sweeps 0 → 360 with ``endpoint=False`` so the last frame
     smoothly connects back to the first when looped.  Elevation is
-    constant at ``elev``.
+    constant at ``elev``.  Use ``path='orbit_flat'`` to select this path.
     """
     azimuths = np.linspace(0.0, 360.0, n_frames, endpoint=False)
     return [(float(elev), float(az)) for az in azimuths]
+
+
+def _build_orbit_path(
+    n_frames: int,
+    elev_oblique: float = 30.0,
+    elev_top: float = 90.0,
+) -> List[Tuple[float, float]]:
+    """Build the **default** orbit path: oblique rotation → top view → loop back.
+
+    Four phases:
+
+    1. **Orbit** (70 %): full 360° azimuth sweep at ``elev_oblique``.
+    2. **Rise** (12 %): cosine-eased elevation from oblique up to ``elev_top``.
+    3. **Hold** (10 %): stationary top-down view at ``elev_top``.
+    4. **Ease back** (8 %): cosine-eased elevation back to ``elev_oblique``,
+       reconnecting cleanly to frame 0 for GIF loop.
+
+    The last frame connects visually to the first (same elev, azim≈360→0)
+    so ``loop=0`` (infinite repeat) plays smoothly.
+    """
+    f_orbit = round(0.70 * n_frames)
+    f_rise = round(0.12 * n_frames)
+    f_top = round(0.10 * n_frames)
+    f_fall = max(1, n_frames - f_orbit - f_rise - f_top)
+
+    path: List[Tuple[float, float]] = []
+
+    # Phase 1: orbit at oblique elevation
+    for i in range(f_orbit):
+        az = 360.0 * i / max(f_orbit, 1)
+        path.append((elev_oblique, az))
+
+    # Phase 2: ease up to top-down while azimuth stays at 360
+    for i in range(f_rise):
+        t = i / max(f_rise - 1, 1)
+        elev = elev_oblique + (elev_top - elev_oblique) * _ease_cos(t)
+        path.append((elev, 360.0))
+
+    # Phase 3: hold at top-down
+    for _ in range(f_top):
+        path.append((elev_top, 360.0))
+
+    # Phase 4: ease back down to oblique (clean loop)
+    for i in range(f_fall):
+        t = i / max(f_fall - 1, 1)
+        elev = elev_top + (elev_oblique - elev_top) * _ease_cos(t)
+        path.append((elev, 360.0))
+
+    return path[:n_frames]
 
 
 def _ease_cos(t: float) -> float:
@@ -144,13 +195,26 @@ def _write_mp4(frames: List[np.ndarray], path: pathlib.Path, fps: float) -> None
     """Write an MP4 via imageio-ffmpeg.
 
     Requires ``imageio-ffmpeg`` (declared in the ``[vizx]`` extra).
-    Uses ``imageio.mimwrite`` which passes all frames at once so the
-    ffmpeg backend can compute frame dimensions before opening the
-    encoder.  ``macro_block_size=None`` keeps the original resolution.
+
+    Writes to a local temp file first, then copies to the target path.
+    Direct writes to FUSE-mounted UC Volumes (``/Volumes/...``) silently
+    produce empty containers because imageio-ffmpeg's muxer seeks back to
+    update the MP4 header after encoding — a seek that FUSE does not
+    support.  The temp-then-copy pattern (per the uc-volumes rule)
+    avoids this.
     """
+    import shutil
+    import tempfile
+
     import imageio
 
-    imageio.mimwrite(str(path), frames, fps=float(fps), macro_block_size=None)
+    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
+        tmp = pathlib.Path(f.name)
+    try:
+        imageio.mimwrite(str(tmp), frames, fps=float(fps), macro_block_size=None)
+        shutil.copy(str(tmp), str(path))
+    finally:
+        tmp.unlink(missing_ok=True)
 
 
 # ---------------------------------------------------------------------------
@@ -164,8 +228,8 @@ def plot_point_cloud_flythrough(
     path: Union[str, List[str]] = "orbit",
     elev: float = 30.0,
     z_exaggeration=None,
-    fps: float = 24.0,
-    seconds: float = 6.0,
+    fps: float = 10.0,
+    seconds: float = 8.0,
     frames: Optional[int] = None,
     max_points: int = 200_000,
     out_path: Optional[str] = None,
@@ -193,20 +257,30 @@ def plot_point_cloud_flythrough(
         A LAS/LAZ path, pandas DataFrame with x/y/z columns, or GeoDataFrame —
         anything accepted by ``load_point_cloud``.
     path:
-        Camera-path recipe.  ``"orbit"`` (default) — full 360° azimuth sweep
-        at a fixed ``elev``.  A list of pose names (from
-        :data:`~databricks.labs.gbx.vizx._pointcloud_poses._POSES`) — eased
-        interpolation through those keyframes, looping back to the first.
+        Camera-path recipe.
+
+        - ``"orbit"`` (default) — oblique 360° orbit, then ease up to a
+          top-down view, hold briefly, ease back down, and loop cleanly.
+          Use ``elev`` to set the oblique elevation (default 30°).
+        - ``"orbit_flat"`` — plain 360° azimuth sweep at a fixed
+          elevation (the original orbit; useful for comparison or when
+          the top-view is not wanted).
+        - A list of pose names (from
+          :data:`~databricks.labs.gbx.vizx._pointcloud_poses._POSES`) —
+          eased interpolation through those keyframes, looping back.
     elev:
-        Camera elevation in degrees for the ``"orbit"`` path (default 30°).
-        Ignored for a named-pose path.
+        Camera elevation in degrees for the ``"orbit"`` and
+        ``"orbit_flat"`` paths (default 30°).  Ignored for pose paths.
     z_exaggeration:
         Vertical exaggeration forwarded to ``render_point_cloud_3d``; ``None``
         (default) → auto-scale so Z fills ≈ 30 % of the larger XY extent.
     fps:
-        Frame rate (default 24).
+        Frame rate in frames-per-second (default **10**).  Controls GIF
+        inter-frame duration (``1000 / fps`` ms) and MP4 playback speed.
+        Lower values → slower playback; the frame count stays the same,
+        so GIF file size is unchanged by fps alone.
     seconds:
-        Duration in seconds (default 6.0).  Ignored when ``frames`` is given.
+        Duration in seconds (default 8.0).  Ignored when ``frames`` is given.
     frames:
         Explicit frame count; overrides ``seconds``.
     max_points:
@@ -272,11 +346,16 @@ def plot_point_cloud_flythrough(
 
     # ---- Resolve camera path ----
     if path == "orbit":
-        camera_path = _build_orbit_path(n_frames=n, elev=elev)
+        camera_path = _build_orbit_path(n_frames=n, elev_oblique=elev)
+    elif path == "orbit_flat":
+        camera_path = _build_flat_orbit_path(n_frames=n, elev=elev)
     elif isinstance(path, (list, tuple)):
         camera_path = _build_pose_path(list(path), n_frames=n)
     else:
-        raise ValueError(f"path must be 'orbit' or a list of pose names; got {path!r}")
+        raise ValueError(
+            f"path must be 'orbit', 'orbit_flat', or a list of pose names; "
+            f"got {path!r}"
+        )
 
     # ---- Load point cloud once ----
     column = None if color in ("rgb", "z") else color

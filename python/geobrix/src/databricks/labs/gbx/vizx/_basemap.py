@@ -64,7 +64,7 @@ _BASEMAP_PRESETS: dict | None = None
 _TILE_USER_AGENT: dict[str, str] = {
     "User-Agent": (
         "GeoBrix/0.5.2 (github.com/databrickslabs/geobrix; "
-        "tile requests — see OSM tile usage policy)"
+        "tile requests - see OSM tile usage policy)"
     )
 }
 """HTTP User-Agent header for tile requests.

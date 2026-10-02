@@ -288,6 +288,8 @@ vizx = [
     "contextily>=1.5,<2",
     "anywidget>=0.9,<1",
     "tippecanoe>=2.45,<3",
+    "imageio>=2.28,<3",
+    "imageio-ffmpeg>=0.4,<2",
 ]
 # Photogrammetry (example-only): COLMAP SfM + ortho render deps. Not pulled by base light.
 # CPU wheel runs on Serverless CPU env5/6 + classic; GPU variant is Phase 2.

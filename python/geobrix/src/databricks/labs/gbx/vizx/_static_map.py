@@ -441,8 +441,13 @@ def _draw_one_layer(
                 # In-memory path: use plot_raster (MemoryFile-based, handles bytes and
                 # tile Row/VirtualTile).  The tile is already in its source CRS; if it
                 # matches the vector layers (EPSG:3857 for Databricks surface tiles) the
-                # composite aligns without reprojection.  Apply layer opacity afterwards
-                # by adjusting the alpha of AxesImage objects added to the axes.
+                # composite aligns without reprojection.
+                #
+                # zorder: matplotlib's ax.imshow default is 0; the basemap is added
+                # AFTER this layer via cx.add_basemap at zorder=1.  Without an explicit
+                # zorder=2 here the basemap (drawn later, same z-plane) occludes the
+                # raster entirely — only the basemap shows.  Match plot_cog's convention
+                # (zorder=2 raster, zorder=1 basemap, zorder=3 vectors).
                 _imgs_before = len(ax.get_images())
                 from databricks.labs.gbx.vizx._raster import plot_raster
 
@@ -453,8 +458,10 @@ def _draw_one_layer(
                     cmap=lyr.cmap or None,
                     emphasis=emphasis,
                 )
-                if lyr.opacity is not None:
-                    for _img in ax.get_images()[_imgs_before:]:
+                # Lift above basemap and apply opacity in one pass over new images.
+                for _img in ax.get_images()[_imgs_before:]:
+                    _img.set_zorder(2)
+                    if lyr.opacity is not None:
                         _img.set_alpha(lyr.opacity)
             else:
                 from databricks.labs.gbx.vizx._cog import plot_cog

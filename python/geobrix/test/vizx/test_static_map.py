@@ -584,3 +584,68 @@ def test_resolve_basemap_source_provider_object_passthrough(monkeypatch):
     assert (
         result is provider
     ), f"Expected passthrough of provider object, got {result!r}"
+
+
+# --- raster_layer zorder: in-memory bytes path draws above basemap ---
+
+
+def test_raster_layer_inmem_zorder_is_2(monkeypatch):
+    """In-memory raster_layer renders at zorder=2, above the basemap (zorder=1).
+
+    Root cause of cmd23 bug: plot_raster's ax.imshow uses the default zorder=0;
+    cx.add_basemap is called AFTER the raster (also at zorder=0 but added later),
+    so the basemap covers the raster entirely — only basemap shows.
+
+    Fix: _draw_one_layer sets zorder=2 on all AxesImage objects added by
+    plot_raster, matching plot_cog's convention.
+    """
+    import io
+
+    import matplotlib
+    import numpy as np
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    import databricks.labs.gbx.vizx._static_map as sm
+
+    # Build a tiny 4×4 float32 GeoTIFF in EPSG:3857
+    width, height = 4, 4
+    data = np.linspace(0.0, 100.0, width * height, dtype=np.float32).reshape(
+        1, height, width
+    )
+    transform = from_bounds(-100.0, -100.0, 100.0, 100.0, width, height)
+    buf = io.BytesIO()
+    with rasterio.open(
+        buf,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=1,
+        dtype=np.float32,
+        crs="EPSG:3857",
+        transform=transform,
+    ) as dst:
+        dst.write(data)
+    tile_bytes = buf.getvalue()
+
+    from databricks.labs.gbx.vizx._layers import raster_layer
+
+    lyr = raster_layer(tile_bytes, band=1, cmap="viridis")
+
+    plt.close("all")
+    _, ax = plt.subplots()
+    sm._draw_one_layer(lyr, ax, max_rows=5000, sample_seed=0, srid=3857, legend=False, emphasis="blend")
+
+    images = ax.get_images()
+    assert images, "No AxesImage added by _draw_one_layer for raster_layer"
+    for img in images:
+        assert img.get_zorder() == 2, (
+            f"Raster image zorder is {img.get_zorder()}, expected 2 "
+            "(must be above basemap at zorder=1)"
+        )
+    plt.close("all")

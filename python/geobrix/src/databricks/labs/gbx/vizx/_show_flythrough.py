@@ -281,6 +281,7 @@ def show_flythrough(
     name: Optional[str] = None,
     overwrite: bool = False,
     persist: bool = True,
+    display: bool = True,
     mp4: bool = False,
     mp4_volume_dir: Optional[str] = None,
     preview_mp4: bool = False,
@@ -343,6 +344,13 @@ def show_flythrough(
         collapsible ``<details>`` block.  Silently capped at ``cap_mb``
         (a :class:`UserWarning` is emitted for oversized files).
         Implies ``mp4=True``.
+    display :
+        ``True`` (default) — inline-display the GIF (and optional MP4 preview)
+        in the current notebook cell.  ``False`` — generate and write the GIF
+        without displaying it; the ``%md`` cell that follows (which references
+        the committed GIF asset) becomes the single render point, avoiding
+        double-display.  The returned ``dict`` and ``md_snippet`` are
+        unchanged regardless of this flag.
     cap_mb :
         Inline base64 ceiling in megabytes (default 7.5).  Files larger
         than this value are not inlined; a :class:`UserWarning` is issued.
@@ -400,18 +408,19 @@ def show_flythrough(
         )
         try:
             vol_mp4 = _maybe_copy_to_volume(tmp_mp4, mp4_volume_dir, resolved_name)
-            html_parts, preview_html = _build_display_html(
-                tmp_gif,
-                tmp_mp4,
-                vol_mp4,
-                mp4_volume_dir,
-                preview_mp4,
-                cap_mb,
-                resolved_name,
-                None,
-            )
-            if html_parts:
-                _try_display_html("\n".join(html_parts))
+            if display:
+                html_parts, preview_html = _build_display_html(
+                    tmp_gif,
+                    tmp_mp4,
+                    vol_mp4,
+                    mp4_volume_dir,
+                    preview_mp4,
+                    cap_mb,
+                    resolved_name,
+                    None,
+                )
+                if html_parts:
+                    _try_display_html("\n".join(html_parts))
         finally:
             shutil.rmtree(str(tmp_dir), ignore_errors=True)
         return {
@@ -448,18 +457,20 @@ def show_flythrough(
     vol_mp4_p = _maybe_copy_to_volume(result_mp4, mp4_volume_dir, resolved_name)
     md_snippet: Optional[str] = f"![flythrough]({out_dir}/{resolved_name}.gif)"
 
-    html_parts_p, preview_html_p = _build_display_html(
-        gif_path,
-        result_mp4,
-        vol_mp4_p,
-        mp4_volume_dir,
-        preview_mp4,
-        cap_mb,
-        resolved_name,
-        md_snippet,
-    )
-    if html_parts_p:
-        _try_display_html("\n".join(html_parts_p))
+    preview_html_p: Optional[str] = None
+    if display:
+        html_parts_p, preview_html_p = _build_display_html(
+            gif_path,
+            result_mp4,
+            vol_mp4_p,
+            mp4_volume_dir,
+            preview_mp4,
+            cap_mb,
+            resolved_name,
+            md_snippet,
+        )
+        if html_parts_p:
+            _try_display_html("\n".join(html_parts_p))
     print(f"md_snippet: {md_snippet}")
 
     return {

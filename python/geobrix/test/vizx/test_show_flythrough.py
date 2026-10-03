@@ -433,6 +433,36 @@ def test_show_flythrough_exported_from_vizx():
 # ---------------------------------------------------------------------------
 
 
+def test_display_false_skips_display_but_writes_file_and_returns_snippet(tmp_path, monkeypatch):
+    """display=False: GIF is written, md_snippet is returned, nothing is displayed.
+
+    When display=False, the %md cell is the sole render point; the code cell
+    must not also display the GIF (which would cause double-display).
+    """
+    import databricks.labs.gbx.vizx._pointcloud_flythrough as pft_mod
+    import databricks.labs.gbx.vizx._show_flythrough as sft_mod
+
+    monkeypatch.setattr(pft_mod, "plot_point_cloud_flythrough", _mock_flythrough(gif_frames=4))
+
+    display_gif_calls: list = []
+    display_html_calls: list = []
+    monkeypatch.setattr(sft_mod, "_try_display_gif", lambda path: display_gif_calls.append(str(path)))
+    monkeypatch.setattr(sft_mod, "_try_display_html", lambda html: display_html_calls.append(html))
+
+    from databricks.labs.gbx.vizx._show_flythrough import show_flythrough
+
+    result = show_flythrough(None, out_dir=str(tmp_path), name="test_no_display", display=False)
+
+    # File written
+    assert (tmp_path / "test_no_display.gif").exists(), "GIF must be written even when display=False"
+    # md_snippet returned
+    assert result["md_snippet"] is not None, "md_snippet must be returned even when display=False"
+    assert "test_no_display.gif" in result["md_snippet"]
+    # Nothing displayed
+    assert not display_gif_calls, "_try_display_gif must NOT be called when display=False"
+    assert not display_html_calls, "_try_display_html must NOT be called when display=False"
+
+
 def test_gif_displayed_via_ipy_image_not_html(tmp_path, monkeypatch):
     """GIF display uses _try_display_gif (image/gif), not displayHTML base64 <img>.
 

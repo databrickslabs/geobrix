@@ -473,8 +473,12 @@ def _render(  # noqa: C901
     using_new_path = bands is not None or stretch != "perband" or fill is not None
 
     if not using_new_path:
-        # EXISTING CODE PATH (unchanged for back-compat)
-        if _needs_percentile_stretch(data):
+        # EXISTING CODE PATH
+        # Use _needs_display_scaling (handles both int > 255 AND float outside
+        # [0, 1]) instead of the narrower _needs_percentile_stretch (int only).
+        # Float raster tiles — e.g. CHM/DSM/DTM in metres — are outside [0, 1],
+        # so without this stretch they auto-scale to a nearly-uniform colour.
+        if _needs_display_scaling(data):
             data = _percentile_stretch(data)
         if _owns_fig:
             fig, ax = pyplot.subplots(1, figsize=(fig_w, fig_h))

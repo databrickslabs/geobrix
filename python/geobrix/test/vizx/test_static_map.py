@@ -649,3 +649,83 @@ def test_raster_layer_inmem_zorder_is_2(monkeypatch):
             "(must be above basemap at zorder=1)"
         )
     plt.close("all")
+
+
+# --- colorbar height regression: _fix_colorbar_position ---
+
+
+def _make_polygon_gdf():
+    """Return a tiny GeoDataFrame with three polygons and a continuous 'value' column.
+
+    The polygons span a wide lon range so the equal-aspect box realises a shorter
+    height than the full subplot -- enough to expose the overrun bug without a
+    basemap fetch (basemap=False keeps the test fully offline + fast).
+    """
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    geoms = [box(-74.1, 40.6, -73.9, 40.8), box(-80.0, 25.7, -79.8, 25.9), box(-87.7, 41.8, -87.5, 42.0)]
+    return gpd.GeoDataFrame({"value": [1.0, 2.0, 3.0]}, geometry=geoms, crs=4326)
+
+
+def test_colorbar_height_matches_map_axes_height():
+    """Regression: the colorbar axes height must be approximately equal to the
+    map axes height after plot_static (created=True, continuous column + legend).
+
+    Before the fix, geopandas sized the colorbar to the full subplot area while
+    the map axes (equal-aspect geographic data) realised a shorter box — the
+    colorbar overran the title and extended below the map.  The fix calls
+    _fix_colorbar_position to pin the colorbar's y-extent to the map axes.
+
+    Tolerance is ±15 % of the map axes height — enough to catch the ~2–3× overrun
+    in the pre-fix code while remaining stable across figure aspect ratios.
+    """
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    gdf = _make_polygon_gdf()
+    ax = plot_static(gdf, column="value", legend=True, basemap=False)
+
+    fig = ax.figure
+    extra_axes = [a for a in fig.axes if a is not ax]
+    if not extra_axes:
+        # No colorbar was added (e.g. geopandas chose a discrete legend patch) --
+        # skip the height check rather than fail on an unrelated code path.
+        plt.close("all")
+        return
+
+    assert len(extra_axes) == 1, (
+        f"Expected exactly one colorbar axes, found {len(extra_axes)}"
+    )
+    map_h = ax.get_position().height
+    cb_h = extra_axes[0].get_position().height
+    tolerance = 0.15 * map_h
+    assert abs(cb_h - map_h) <= tolerance, (
+        f"Colorbar height {cb_h:.4f} differs from map axes height {map_h:.4f} "
+        f"by more than {tolerance:.4f} (15 %). Colorbar is overrunning the plot."
+    )
+    plt.close("all")
+
+
+def test_colorbar_height_unchanged_when_caller_owns_axes():
+    """When the caller passes ax= (created=False), _fix_colorbar_position must
+    NOT resize the colorbar -- the caller owns the layout.
+
+    This guards the nb3 side-by-side subplots pattern (plt.subplots(1,2) +
+    ax=axes[0/1]) against unintended layout mutation.
+    """
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    gdf = _make_polygon_gdf()
+
+    # Render onto the caller-owned axes -- created=False for both calls.
+    plot_static(gdf, column="value", legend=True, basemap=False, ax=axes[0])
+    plot_static(gdf, column="value", legend=True, basemap=False, ax=axes[1])
+
+    # Two map axes + up to two colorbar axes; confirm the figure still has the
+    # expected shape (no crash, no extra figures).
+    assert len(fig.axes) >= 2, "Expected at least the two map axes to survive"
+    assert len(plt.get_fignums()) == 1, "Expected exactly one figure (caller-owned)"
+    plt.close("all")

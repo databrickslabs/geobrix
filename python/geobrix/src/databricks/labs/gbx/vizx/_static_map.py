@@ -490,6 +490,38 @@ def _draw_one_layer(
         )
 
 
+def _fix_colorbar_position(ax, created):
+    """Resize a single colorbar axes to match the map axes height.
+
+    When ``plot_static`` creates the figure itself (``created=True``) and exactly
+    one colorbar axes exists, the colorbar can overrun the map area because
+    geopandas sizes it to the full subplot area while the map axes (equal-aspect,
+    geographic data) realises a shorter box.  Force a canvas draw so that the
+    equal-aspect constraint recomputes the axes box, then pin the colorbar's
+    y-position and height to match the map axes.
+
+    Only acts when: (a) ``created=True`` — caller-owned layouts are untouched;
+    (b) exactly one colorbar axes is found — conservative; zero or more than one
+    are left alone.  Wrapped in try/except so a layout edge-case never breaks a
+    render.
+    """
+    if not created:
+        return
+    try:
+        fig = ax.figure
+        fig.canvas.draw()
+        _cbars = [a for a in fig.axes if a is not ax and a.get_label() == "<colorbar>"]
+        # Fall back to "any extra axes" if the label isn't set, but be conservative.
+        if not _cbars:
+            _cbars = [a for a in fig.axes if a is not ax]
+        if len(_cbars) == 1:
+            mb = ax.get_position()
+            cb = _cbars[0].get_position()
+            _cbars[0].set_position([cb.x0, mb.y0, cb.width, mb.height])
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _resolve_static_style(plot_gdf, em, *, cmap, alpha, edgecolor, markersize):
     """Resolve effective matplotlib draw style: an explicit (non-_UNSET) kwarg wins,
     else the emphasis profile ``em`` keyed by geometry kind. Returns
@@ -658,6 +690,7 @@ def plot_static(
         # default ("COG") never leaks onto the composite.
         ax.set_title(title or "")
         ax.set_axis_off()
+        _fix_colorbar_position(ax, created)
         return ax
 
     # --- Legacy single-data path (Spark DataFrame / GeoDataFrame / bare) ---
@@ -757,6 +790,7 @@ def plot_static(
     if title:
         ax.set_title(title)
     ax.set_axis_off()
+    _fix_colorbar_position(ax, created)
 
     # No pyplot.show(): the inline/Databricks backend auto-displays the figure at
     # cell end with all overlaid layers; calling show() on the creating call

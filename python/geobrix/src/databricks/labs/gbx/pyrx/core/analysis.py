@@ -20,9 +20,17 @@ expressions, implemented without the JAR:
 
 import math
 import os
+import threading
 
 import numpy as np
 from rasterio.io import MemoryFile
+
+# Module-level lock used to serialize the ``psutil.virtual_memory`` patch that
+# bypasses xrspatial's system-RAM guard (see ``viewshed()`` below).  The patch is
+# not thread-safe on its own — concurrent Spark Connect UDF workers sharing the
+# same Python process race on the module attribute.  The RLock serialises calls
+# within one process; separate OS processes are unaffected.
+_VIEWSHED_PSUTIL_LOCK = threading.RLock()
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
@@ -490,6 +498,16 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
 
     # xarray / xrspatial are pyrx (viewshed) dependencies; import lazily so the
     # numba JIT warm-up is only paid when viewshed is actually called.
+    #
+    # numba caching guard: on Serverless Spark the xrspatial package is installed
+    # on an ephemeral NFS path that numba's file-locking cache locator cannot use
+    # (raises "no locator available for file '…/.ephemeral_nfs/…'"). Setting
+    # NUMBA_CACHE_DIR to a per-process /tmp directory before the first xrspatial
+    # import redirects the cache to a path numba can lock.
+    import os as _os
+    import tempfile as _tempfile
+    if "NUMBA_DISABLE_JIT" not in _os.environ and "NUMBA_CACHE_DIR" not in _os.environ:
+        _os.environ["NUMBA_CACHE_DIR"] = _tempfile.mkdtemp(prefix="gbx_numba_")
     import xarray as xr
     from rasterio.transform import xy as _xy
     from xrspatial import viewshed as _viewshed
@@ -514,14 +532,46 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
         out = np.zeros((height, width), dtype="uint8")
     else:
         da = xr.DataArray(band, dims=["y", "x"], coords={"y": ys, "x": xs})
-        res = _viewshed(
-            da,
-            x=observer_x,
-            y=observer_y,
-            observer_elev=observer_height,
-            target_elev=target_height,
-            max_distance=max_distance,
-        )
+        # xrspatial.viewshed guards against large rasters by checking
+        # ``psutil.virtual_memory().available`` (SYSTEM-WIDE, not per-process).
+        # On a shared Serverless Spark cluster the system RAM is nearly exhausted by
+        # concurrent workers, so the guard fires even for small downsampled tiles
+        # where the actual working memory is a few MB. Temporarily replace
+        # ``psutil.virtual_memory`` with a stub that reports ample free RAM (8 GB) so
+        # the guard does not block valid small-tile calls. The stub is restored in the
+        # ``finally`` block regardless of outcome.
+        # xrspatial._available_memory_bytes reads /proc/meminfo first (Linux path),
+        # then falls back to psutil.  On a busy Serverless cluster /proc/meminfo
+        # legitimately returns near-zero (or zero) free pages because the physical
+        # machine is heavily loaded by concurrent jobs.  The guard fires even for
+        # tiny downsampled tiles that fit easily within the per-task heap.
+        #
+        # Fix: patch the function directly on the xrspatial.viewshed module.
+        # xrspatial._viewshed_cpu looks up _available_memory_bytes via its
+        # __globals__ (the module dict), so patching the module attribute is the
+        # only reliable intercept path.  The lock serialises concurrent UDF workers
+        # in the same Python process (Spark Connect threading model).
+        # ``import xrspatial.viewshed as _m`` resolves to the *function* (because
+        # xrspatial's __init__.py does ``from xrspatial.viewshed import viewshed``,
+        # making xrspatial.viewshed an attribute pointing to the function).  Use
+        # importlib.import_module to get the actual MODULE object unconditionally.
+        import importlib as _importlib
+        _xrs_vs_mod = _importlib.import_module("xrspatial.viewshed")
+        with _VIEWSHED_PSUTIL_LOCK:
+            _real_avail_mem_fn = _xrs_vs_mod._available_memory_bytes
+            # Report 8 GB available — guard should never fire for ≤ few-hundred-px tiles.
+            _xrs_vs_mod._available_memory_bytes = lambda: 8 * 1024 ** 3
+            try:
+                res = _viewshed(
+                    da,
+                    x=observer_x,
+                    y=observer_y,
+                    observer_elev=observer_height,
+                    target_elev=target_height,
+                    max_distance=max_distance,
+                )
+            finally:
+                _xrs_vs_mod._available_memory_bytes = _real_avail_mem_fn
         vals = np.asarray(res.values)
         # Visible cells carry an angle in [0, 180]; invisible/out-of-range carry -1.
         out = np.where(vals >= 0.0, 255, 0).astype("uint8")

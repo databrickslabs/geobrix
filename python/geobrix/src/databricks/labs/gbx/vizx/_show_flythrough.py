@@ -35,6 +35,28 @@ from databricks.labs.gbx.vizx import _pointcloud_flythrough as _pft_module
 # ---------------------------------------------------------------------------
 
 
+def _derive_name(source) -> str:
+    """Derive a meaningful file-stem from a path-like source.
+
+    Returns the ``pathlib.Path.stem`` of ``source`` when it is a string,
+    :class:`pathlib.Path`, or any :class:`os.PathLike`.
+
+    Raises
+    ------
+    ValueError
+        When ``source`` has no derivable basename (e.g. a loaded
+        ``DataFrame`` or in-memory array).  The caller should pass an
+        explicit ``name=`` in this case.
+    """
+    if isinstance(source, (str, pathlib.Path, os.PathLike)):
+        stem = pathlib.Path(str(source)).stem
+        if stem:
+            return stem
+    raise ValueError(
+        "show_flythrough: pass an explicit name=; cannot derive one from the source"
+    )
+
+
 def _try_display_html(html: str) -> None:
     """Emit an HTML string via IPython.display.HTML (no-op outside a notebook)."""
     try:
@@ -239,7 +261,7 @@ def show_flythrough(
     *,
     kind: str = "point_cloud",
     out_dir: str = "./resources/geobrix",
-    name: str = "flythrough",
+    name: Optional[str] = None,
     overwrite: bool = False,
     persist: bool = True,
     mp4: bool = False,
@@ -274,6 +296,14 @@ def show_flythrough(
         does not exist.  Unused when ``persist=False``.
     name :
         File-stem for output files: ``<name>.gif``, ``<name>.mp4``.
+        Defaults to the **basename of the source path** when ``source`` is
+        a string, :class:`pathlib.Path`, or :class:`os.PathLike`
+        (e.g. ``goldengate.laz`` → ``goldengate``).  When the source has no
+        derivable basename (a loaded ``DataFrame`` or in-memory array),
+        ``name`` is **required** — a clear :class:`ValueError` is raised if
+        omitted.  Using meaningful names (the LAZ stem) enables
+        ``overwrite=False`` idempotency across multiple sections of the same
+        notebook that write to the same ``out_dir``.
     overwrite :
         ``False`` (default) — skip re-rendering if all requested outputs
         already exist in ``out_dir``.  ``True`` — always re-render.
@@ -323,7 +353,8 @@ def show_flythrough(
     Raises
     ------
     ValueError
-        If ``kind`` is not ``"point_cloud"``.
+        If ``kind`` is not ``"point_cloud"``, or if ``name`` is omitted
+        and cannot be derived from ``source``.
     """
     # kind guard
     if kind != "point_cloud":
@@ -331,6 +362,9 @@ def show_flythrough(
             f"show_flythrough currently supports kind='point_cloud' only; "
             f"{kind!r} is not supported yet."
         )
+
+    # name resolution: derive from source path when not supplied
+    resolved_name: str = name if name is not None else _derive_name(source)
 
     need_mp4 = mp4 or preview_mp4 or (mp4_volume_dir is not None)
 
@@ -345,10 +379,10 @@ def show_flythrough(
         vol_mp4: Optional[pathlib.Path] = None
         preview_html: Optional[str] = None
         tmp_gif, tmp_mp4, tmp_dir = _render_to_temp(
-            source, name, need_mp4, flythrough_kwargs
+            source, resolved_name, need_mp4, flythrough_kwargs
         )
         try:
-            vol_mp4 = _maybe_copy_to_volume(tmp_mp4, mp4_volume_dir, name)
+            vol_mp4 = _maybe_copy_to_volume(tmp_mp4, mp4_volume_dir, resolved_name)
             html_parts, preview_html = _build_display_html(
                 tmp_gif,
                 tmp_mp4,
@@ -356,7 +390,7 @@ def show_flythrough(
                 mp4_volume_dir,
                 preview_mp4,
                 cap_mb,
-                name,
+                resolved_name,
                 None,
             )
             if html_parts:
@@ -375,13 +409,13 @@ def show_flythrough(
     # ------------------------------------------------------------------ #
     out_dir_path = pathlib.Path(out_dir)
     out_dir_path.mkdir(parents=True, exist_ok=True)
-    gif_path = out_dir_path / f"{name}.gif"
-    local_mp4_path = out_dir_path / f"{name}.mp4"
+    gif_path = out_dir_path / f"{resolved_name}.gif"
+    local_mp4_path = out_dir_path / f"{resolved_name}.mp4"
 
     all_exist = gif_path.exists() and (not need_mp4 or local_mp4_path.exists())
     if not (all_exist and not overwrite):
         tmp_gif_p, tmp_mp4_p, tmp_dir_p = _render_to_temp(
-            source, name, need_mp4, flythrough_kwargs
+            source, resolved_name, need_mp4, flythrough_kwargs
         )
         try:
             if tmp_gif_p.exists():
@@ -394,8 +428,8 @@ def show_flythrough(
     result_mp4: Optional[pathlib.Path] = (
         local_mp4_path if (need_mp4 and local_mp4_path.exists()) else None
     )
-    vol_mp4_p = _maybe_copy_to_volume(result_mp4, mp4_volume_dir, name)
-    md_snippet: Optional[str] = f"![flythrough]({out_dir}/{name}.gif)"
+    vol_mp4_p = _maybe_copy_to_volume(result_mp4, mp4_volume_dir, resolved_name)
+    md_snippet: Optional[str] = f"![flythrough]({out_dir}/{resolved_name}.gif)"
 
     html_parts_p, preview_html_p = _build_display_html(
         gif_path,
@@ -404,7 +438,7 @@ def show_flythrough(
         mp4_volume_dir,
         preview_mp4,
         cap_mb,
-        name,
+        resolved_name,
         md_snippet,
     )
     if html_parts_p:

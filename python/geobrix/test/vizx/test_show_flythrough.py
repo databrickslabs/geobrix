@@ -369,6 +369,53 @@ def test_persist_false_mp4_none_without_volume_dir(tmp_path, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# name derivation
+# ---------------------------------------------------------------------------
+
+
+def test_name_derived_from_path_source(tmp_path, monkeypatch):
+    """When source is a path string, name is auto-derived from its stem."""
+    import databricks.labs.gbx.vizx._pointcloud_flythrough as pft_mod
+
+    monkeypatch.setattr(pft_mod, "plot_point_cloud_flythrough", _mock_flythrough())
+
+    from databricks.labs.gbx.vizx._show_flythrough import show_flythrough
+
+    # source is a path-like string; no name= supplied
+    result = show_flythrough("/data/lidar/goldengate.laz", out_dir=str(tmp_path))
+
+    assert result["gif"] is not None
+    assert (
+        result["gif"].name == "goldengate.gif"
+    ), f"expected goldengate.gif, got {result['gif'].name}"
+
+
+def test_name_required_for_non_path_source_raises():
+    """Non-path source (DataFrame / None) without name= raises a clear ValueError."""
+    from databricks.labs.gbx.vizx._show_flythrough import show_flythrough
+
+    with pytest.raises(ValueError, match="cannot derive one from the source"):
+        show_flythrough(None)  # no name= and source is not a path
+
+
+def test_explicit_name_overrides_path_source_basename(tmp_path, monkeypatch):
+    """An explicit name= takes precedence over the source path's stem."""
+    import databricks.labs.gbx.vizx._pointcloud_flythrough as pft_mod
+
+    monkeypatch.setattr(pft_mod, "plot_point_cloud_flythrough", _mock_flythrough())
+
+    from databricks.labs.gbx.vizx._show_flythrough import show_flythrough
+
+    result = show_flythrough(
+        "/data/lidar/goldengate.laz", out_dir=str(tmp_path), name="custom_stem"
+    )
+
+    assert (
+        result["gif"].name == "custom_stem.gif"
+    ), f"expected custom_stem.gif, got {result['gif'].name}"
+
+
+# ---------------------------------------------------------------------------
 # Public API export
 # ---------------------------------------------------------------------------
 

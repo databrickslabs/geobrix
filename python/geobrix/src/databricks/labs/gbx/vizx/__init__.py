@@ -29,6 +29,7 @@ from databricks.labs.gbx.vizx._raster import (
     plot_mosaic,
     plot_raster,
 )
+from databricks.labs.gbx.vizx._show_flythrough import show_flythrough
 from databricks.labs.gbx.vizx._static_map import plot_static
 from databricks.labs.gbx.vizx._tiles import plot_tiles
 from databricks.labs.gbx.vizx._vector import as_gdf, cells_as_gdf, grid_as_gdf
@@ -69,6 +70,7 @@ __all__ = [
     "plot_point_cloud",
     "plot_point_cloud_poses",
     "plot_point_cloud_flythrough",
+    "show_flythrough",
     "poses_to_pdf",
     "plot_cog",
     "plot_tile",

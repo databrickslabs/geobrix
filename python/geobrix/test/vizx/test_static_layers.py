@@ -213,7 +213,6 @@ def _make_inmem_gtiff_bytes(bands=1, size=32, crs="EPSG:3857"):
     against vector layers already projected to 3857.
     """
     import numpy as np
-    import rasterio
     from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
 

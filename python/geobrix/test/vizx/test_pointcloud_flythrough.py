@@ -205,7 +205,6 @@ def test_pose_path_cosine_easing_not_linear():
     # The path loops: front → back → front (2 segments of 10 each)
     # In the first segment (frames 0–9), midpoint is frame ~5
     seg_frames = 10
-    mid_idx = seg_frames // 2
 
     from databricks.labs.gbx.vizx._pointcloud_poses import _POSES
 

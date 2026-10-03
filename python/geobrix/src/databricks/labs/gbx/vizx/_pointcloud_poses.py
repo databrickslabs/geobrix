@@ -13,6 +13,8 @@ renderers — each is called once per resolved pose.
 from __future__ import annotations
 
 import pathlib
+import shutil
+import tempfile
 from typing import Dict, List, Optional, Union
 
 import matplotlib.figure
@@ -221,24 +223,51 @@ def plot_point_cloud_poses(
         )
         figs[name] = fig
 
-    # Save PNGs
-    if out_dir is not None:
+    # ------------------------------------------------------------------ #
+    # show='gallery' — always compose a single contact-sheet grid.       #
+    # Save PNGs to out_dir (if provided) or a /tmp temp dir, then call   #
+    # plot_gallery once for the grid.  plt.close() each individual figure #
+    # so it does NOT auto-render as a vertical list of 10 stills.        #
+    # ------------------------------------------------------------------ #
+    if show == "gallery":
+        import matplotlib.pyplot as plt
+
+        if out_dir is not None:
+            png_dir: pathlib.Path = pathlib.Path(out_dir)
+            _tmp_dir: Optional[str] = None
+        else:
+            _tmp_dir = tempfile.mkdtemp(prefix="gbx_poses_")
+            png_dir = pathlib.Path(_tmp_dir)
+
+        png_dir.mkdir(parents=True, exist_ok=True)
+        for pose_name, fig in figs.items():
+            png_path = png_dir / f"{pose_name}.png"
+            save_kw: dict = {}
+            if dpi is not None:
+                save_kw["dpi"] = dpi
+            fig.savefig(str(png_path), bbox_inches="tight", **save_kw)
+            plt.close(fig)  # prevent auto-rendering each pose as a list item
+
+        try:
+            from databricks.labs.gbx.vizx._gallery import plot_gallery
+
+            plot_gallery(png_dir, mode="all", renderer="photo")
+        except Exception:  # noqa: BLE001
+            # Gallery is best-effort; don't fail the main function
+            pass
+        finally:
+            if _tmp_dir is not None:
+                shutil.rmtree(_tmp_dir, ignore_errors=True)
+
+    elif out_dir is not None:
+        # show != 'gallery' but out_dir provided — save PNGs without gallery
         out = pathlib.Path(out_dir)
         out.mkdir(parents=True, exist_ok=True)
-        for name, fig in figs.items():
-            png_path = out / f"{name}.png"
+        for pose_name, fig in figs.items():
+            png_path = out / f"{pose_name}.png"
             save_kw = {}
             if dpi is not None:
                 save_kw["dpi"] = dpi
             fig.savefig(str(png_path), bbox_inches="tight", **save_kw)
-
-        if show == "gallery":
-            try:
-                from databricks.labs.gbx.vizx._gallery import plot_gallery
-
-                plot_gallery(out, mode="all", renderer="photo")
-            except Exception:  # noqa: BLE001
-                # Gallery is best-effort; don't fail the main function
-                pass
 
     return figs

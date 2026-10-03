@@ -426,3 +426,38 @@ def test_show_flythrough_exported_from_vizx():
 
     assert hasattr(vz, "show_flythrough"), "show_flythrough missing from vizx"
     assert callable(vz.show_flythrough)
+
+
+# ---------------------------------------------------------------------------
+# GIF display: IPython.display.Image (image/gif) not displayHTML
+# ---------------------------------------------------------------------------
+
+
+def test_gif_displayed_via_ipy_image_not_html(tmp_path, monkeypatch):
+    """GIF display uses _try_display_gif (image/gif), not displayHTML base64 <img>.
+
+    GitHub's notebook renderer sanitizes text/html data-URIs; image/gif renders
+    natively.  Verify that _try_display_gif is called, and _try_display_html is
+    NOT called with GIF HTML content, when the GIF is under the cap.
+    """
+    import databricks.labs.gbx.vizx._pointcloud_flythrough as pft_mod
+    import databricks.labs.gbx.vizx._show_flythrough as sft_mod
+
+    monkeypatch.setattr(pft_mod, "plot_point_cloud_flythrough", _mock_flythrough(gif_frames=4))
+
+    gif_display_calls: list = []
+    html_display_calls: list = []
+
+    monkeypatch.setattr(sft_mod, "_try_display_gif", lambda path: gif_display_calls.append(str(path)))
+    monkeypatch.setattr(sft_mod, "_try_display_html", lambda html: html_display_calls.append(html))
+
+    from databricks.labs.gbx.vizx._show_flythrough import show_flythrough
+
+    show_flythrough(None, out_dir=str(tmp_path), name="testfly", cap_mb=100)
+
+    assert len(gif_display_calls) == 1, "_try_display_gif must be called once for GIF"
+    # No GIF base64 should appear in any HTML display call
+    for html in html_display_calls:
+        assert "data:image/gif;base64," not in html, (
+            "GIF must not be embedded as data-URI HTML (GitHub sanitizes it)"
+        )

@@ -670,3 +670,113 @@ def test_poses_to_pdf_exported():
 
     assert hasattr(vz, "poses_to_pdf")
     assert callable(vz.poses_to_pdf)
+
+
+# ---------------------------------------------------------------------------
+# show='gallery' — always composes a grid regardless of out_dir
+# ---------------------------------------------------------------------------
+
+
+def test_show_gallery_without_out_dir_calls_plot_gallery(monkeypatch):
+    """show='gallery' with no out_dir still calls plot_gallery (not a vertical list)."""
+    from databricks.labs.gbx.vizx import _gallery as gal
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    gallery_calls: list = []
+
+    def _fake_gallery(path, **kw):
+        gallery_calls.append(str(path))
+
+    def _fake_render(x, y, z, **kw):
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+    monkeypatch.setattr(gal, "plot_gallery", _fake_gallery)
+
+    df = _synthetic_df()
+    pcp.plot_point_cloud_poses(df, poses=["iso", "top"], show="gallery")
+
+    assert len(gallery_calls) == 1, "plot_gallery must be called exactly once"
+
+
+def test_show_gallery_with_out_dir_calls_plot_gallery(monkeypatch, tmp_path):
+    """show='gallery' with out_dir saves PNGs and still calls plot_gallery."""
+    from databricks.labs.gbx.vizx import _gallery as gal
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    gallery_calls: list = []
+
+    def _fake_gallery(path, **kw):
+        gallery_calls.append(str(path))
+
+    def _fake_render(x, y, z, **kw):
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+    monkeypatch.setattr(gal, "plot_gallery", _fake_gallery)
+
+    df = _synthetic_df()
+    pcp.plot_point_cloud_poses(df, poses=["iso", "top"], show="gallery", out_dir=str(tmp_path))
+
+    assert len(gallery_calls) == 1, "plot_gallery must be called exactly once"
+    # PNGs must also be written to the permanent out_dir
+    assert (tmp_path / "iso.png").exists()
+    assert (tmp_path / "top.png").exists()
+
+
+def test_show_gallery_closes_individual_figures(monkeypatch):
+    """show='gallery' plt.close()s individual pose figures so they don't auto-render."""
+    import matplotlib.pyplot as plt
+
+    from databricks.labs.gbx.vizx import _gallery as gal
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    def _fake_render(x, y, z, **kw):
+        return plt.figure()
+
+    def _fake_gallery(path, **kw):
+        pass
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+    monkeypatch.setattr(gal, "plot_gallery", _fake_gallery)
+
+    df = _synthetic_df()
+    result = pcp.plot_point_cloud_poses(df, poses=["iso", "front"], show="gallery")
+
+    for pose_name, fig in result.items():
+        assert not plt.fignum_exists(fig.number), (
+            f"Figure for pose '{pose_name}' was not closed — "
+            "it will auto-render as a list item in a notebook"
+        )
+
+
+def test_show_none_does_not_call_plot_gallery(monkeypatch):
+    """show=None skips gallery composition even when out_dir is provided."""
+    from databricks.labs.gbx.vizx import _gallery as gal
+    from databricks.labs.gbx.vizx import _pointcloud_poses as pcp
+    from databricks.labs.gbx.vizx import _pointcloud_static as pcs
+
+    gallery_calls: list = []
+
+    def _fake_gallery(path, **kw):
+        gallery_calls.append(str(path))
+
+    def _fake_render(x, y, z, **kw):
+        import matplotlib.pyplot as plt
+
+        return plt.figure()
+
+    monkeypatch.setattr(pcs, "render_point_cloud_3d", _fake_render)
+    monkeypatch.setattr(gal, "plot_gallery", _fake_gallery)
+
+    df = _synthetic_df()
+    pcp.plot_point_cloud_poses(df, poses=["iso"], show=None)
+
+    assert len(gallery_calls) == 0, "plot_gallery must NOT be called when show=None"

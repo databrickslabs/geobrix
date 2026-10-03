@@ -67,6 +67,21 @@ def _try_display_html(html: str) -> None:
         pass
 
 
+def _try_display_gif(gif_path: pathlib.Path) -> None:
+    """Emit a GIF via IPython.display.Image (image/gif — GitHub-safe).
+
+    Produces a ``image/gif`` cell output that GitHub's notebook renderer
+    renders natively, unlike a ``text/html`` data-URI which is sanitized.
+    Falls back silently outside a notebook environment.
+    """
+    try:
+        from IPython.display import Image, display
+
+        display(Image(filename=str(gif_path), format="gif"))
+    except Exception:  # noqa: BLE001
+        pass
+
+
 def _file_mb(path: pathlib.Path) -> float:
     """Return file size in megabytes."""
     return path.stat().st_size / (1024 * 1024)
@@ -194,6 +209,10 @@ def _build_display_html(
 ) -> tuple:
     """Build HTML display parts and the optional preview-video snippet.
 
+    The GIF is displayed via ``IPython.display.Image`` (``image/gif``), which
+    GitHub's notebook renderer renders natively.  Only the MP4 preview uses
+    ``text/html`` (data-URI ``<video>``); that path is explicitly live-only.
+
     Returns ``(html_parts: list[str], preview_html: str | None)``.
 
     Emits :class:`UserWarning` when GIF or MP4 exceeds ``cap_mb``.
@@ -201,15 +220,12 @@ def _build_display_html(
     html_parts: list[str] = []
     preview_html: Optional[str] = None
 
-    # GIF inline (base64 <img>)
+    # GIF inline via IPython.display.Image — produces image/gif (GitHub-safe).
+    # displayHTML base64 <img> is sanitized by GitHub's notebook renderer.
     if gif_path is not None and gif_path.exists():
         gif_mb = _file_mb(gif_path)
         if gif_mb <= cap_mb:
-            b64 = _base64_file(gif_path)
-            html_parts.append(
-                f'<img src="data:image/gif;base64,{b64}" '
-                f'alt="{name} fly-through" style="max-width:100%;border-radius:4px"/>'
-            )
+            _try_display_gif(gif_path)
         else:
             suffix = f" — embed via the md_snippet: {md_snippet}" if md_snippet else ""
             warnings.warn(
@@ -229,7 +245,8 @@ def _build_display_html(
         else:
             html_parts.append(f"<p>MP4 written to: <code>{link}</code></p>")
 
-    # MP4 inline preview (base64 <video>) behind <details>
+    # MP4 inline preview (base64 <video> behind <details>) — live Databricks only.
+    # text/html data-URI is sanitized by GitHub; this cell is explicitly opt-in.
     if preview_mp4 and mp4_path is not None and mp4_path.exists():
         mp4_mb = _file_mb(mp4_path)
         if mp4_mb <= cap_mb:

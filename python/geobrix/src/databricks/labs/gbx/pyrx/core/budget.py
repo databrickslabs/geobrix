@@ -14,18 +14,60 @@ from dataclasses import dataclass
 from typing import List, Optional, Tuple
 
 _MIB = 1024 * 1024
-# serverless: 64 MiB decoded/tile. The Serverless PySpark UDF has a hard 1 GB
-# memory cap. With one-tile-per-partition each task encodes exactly ONE tile, so
-# the constraint is the single-tile encode PEAK plus Serverless worker overhead
-# (Spark/Arrow/GDAL working set, ~350+ MiB) — NOT tile count or concurrency.
-# Empirically bisected on an 8-core Serverless worker (0.5 GiB striped source):
-# 96 MiB/tile passes, 128 MiB fails. 64 MiB is chosen for ~50% margin under the
-# proven-safe 96, absorbing multiband/dtype/worker-size and encode-peak variation.
-# classic has no UDF cap (bounded by executor memory); its larger budget is fine
-# on typical instances — very large tiles carry a ~10x encode-peak multiplier, so
-# small classic executors may need a smaller sizeInMB override.
+# serverless: 64 MiB decoded/tile fallback (when no cgroup limit is detectable).
+# The Serverless PySpark UDF has a hard 1 GB memory cap. With one-tile-per-partition
+# each task encodes exactly ONE tile, so the constraint is the single-tile encode PEAK
+# plus Serverless worker overhead (Spark/Arrow/GDAL working set, ~350+ MiB) — NOT tile
+# count or concurrency.  Empirically bisected on an 8-core Serverless worker (0.5 GiB
+# striped source): 96 MiB/tile passes, 128 MiB fails.  64 MiB is chosen for ~50% margin
+# under the proven-safe 96, absorbing multiband/dtype/worker-size and encode-peak
+# variation.  When the cgroup memory limit is readable (K8s pods), 15% of the pod limit
+# is used instead (floor: 32 MiB).
+# classic has no UDF cap (bounded by executor memory); its larger budget is fine on
+# typical instances — very large tiles carry a ~10x encode-peak multiplier, so small
+# classic executors may need a smaller sizeInMB override.
 _BUDGETS = {"serverless": 64 * _MIB, "classic": 1536 * _MIB, "none": 0}
 _MAX_TILES = 512
+
+# cgroup memory-limit paths (worker-safe: readable from any Spark task on Linux)
+_CGROUP_V2_MEM = "/sys/fs/cgroup/memory.max"
+_CGROUP_V1_MEM = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+_1_TIB = 1024 * _MIB * 1024  # treat > 1 TiB as "unlimited"
+
+
+def _read_cgroup_file(path: str) -> str:
+    """Read and return the stripped contents of a cgroup file. Seam for tests."""
+    with open(path) as fh:
+        return fh.read().strip()
+
+
+def _cgroup_task_limit_bytes() -> Optional[int]:
+    """Return the cgroup memory limit for this task (worker-safe).
+
+    Does NOT call _assert_driver; does NOT read /proc/meminfo.
+    Tries cgroup v2 (/sys/fs/cgroup/memory.max) first, then cgroup v1
+    (/sys/fs/cgroup/memory/memory.limit_in_bytes).  Returns None when the
+    limit is effectively unlimited or all cgroup files are unreadable.
+    Never raises.
+    """
+    for path in (_CGROUP_V2_MEM, _CGROUP_V1_MEM):
+        try:
+            raw = _read_cgroup_file(path)
+        except OSError:
+            continue
+        if raw == "max":
+            # cgroup v2 unlimited sentinel
+            return None
+        try:
+            val = int(raw)
+        except ValueError:
+            continue
+        # cgroup v1 uses 2^63-ish (~9.2e18) as the unlimited sentinel;
+        # also treat any value above 1 TiB as effectively unlimited.
+        if val > _1_TIB:
+            return None
+        return val
+    return None
 
 
 def runtime_kind() -> str:
@@ -50,7 +92,13 @@ def resolve_strategy(strategy: str) -> str:
 
 
 def decoded_budget_bytes(strategy: str) -> int:
-    return _BUDGETS[resolve_strategy(strategy)]
+    s = resolve_strategy(strategy)
+    if s == "serverless":
+        limit = _cgroup_task_limit_bytes()
+        if limit is not None:
+            return max(int(limit * 0.15), 32 * _MIB)
+        return _BUDGETS["serverless"]
+    return _BUDGETS[s]
 
 
 @dataclass(frozen=True)

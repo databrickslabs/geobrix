@@ -8110,6 +8110,12 @@ _as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(_as_tile_cellid_envelope_ud
 
 
 # --- grouped-agg pandas_udf(BinaryType()) reducers --------------------------
+# Magic marker used by the v2 force-output agg UDF to smuggle a file path
+# through the BinaryType() return channel.  GTiff files always start with
+# b"II" or b"MM", so a leading null byte unambiguously signals a path payload.
+_VTPATH_MAGIC = b"\x00GBXVT:"
+
+
 @pandas_udf(BinaryType())
 def _merge_agg_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
@@ -8133,6 +8139,73 @@ def _merge_agg_udf(tile: pd.Series) -> bytes:
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     return agg_core.merge_tiles(rasters)
+
+
+@pandas_udf(BinaryType())
+def _merge_agg_v2_udf(
+    tile: pd.Series,
+    virtualize_dir: pd.Series,
+    virtualize_prefix: pd.Series,
+) -> bytes:
+    """Force-output variant of _merge_agg_udf (Python API only).
+
+    Merges the group's tile rasters exactly like ``_merge_agg_udf``, then
+    writes the result to ``<virtualize_dir>/<prefix_>*.tif`` via
+    ``open_tile.shape_output`` (FUSE-safe local-temp→copyfile).  Returns the
+    destination path encoded as ``_VTPATH_MAGIC + path.encode("utf-8")``; the
+    companion scalar UDF ``_as_virtual_tile_from_path_udf`` decodes this back
+    into a V2 tile struct with ``raster=None``.
+
+    Every row in a group carries the same broadcast literal for
+    ``virtualize_dir`` and ``virtualize_prefix``; we take ``iloc[0]``.
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    vdir = virtualize_dir.iloc[0] if len(virtualize_dir) > 0 else None
+    vprefix = virtualize_prefix.iloc[0] if len(virtualize_prefix) > 0 else None
+
+    rasters = []
+    for r in tile:
+        candidate = _tile_raster_bytes(r)
+        if candidate is None:
+            continue
+        try:
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            continue
+    if not rasters:
+        return None
+
+    merged_bytes = agg_core.merge_tiles(rasters)
+    vt = VirtualTile(cellid=0, raster=bytes(merged_bytes))
+    shaped = ot.shape_output(vt, virtualize_dir=vdir, virtualize_prefix=vprefix)
+    # Encode the path into the BinaryType return channel.
+    return _VTPATH_MAGIC + shaped.path.encode("utf-8")
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _as_virtual_tile_from_path_udf(encoded):
+    """Decode a ``_merge_agg_v2_udf`` BinaryType result into a V2 tile struct.
+
+    When the bytes start with ``_VTPATH_MAGIC`` the payload is a file path
+    and the result is a path-only (bytes-free) virtual tile.  Any other
+    non-null payload is treated as raw GTiff bytes (fallback, same as
+    ``_as_tile_udf``).
+    """
+    if encoded is None:
+        return None
+    eb = bytes(encoded)
+    if eb.startswith(_VTPATH_MAGIC):
+        path = eb[len(_VTPATH_MAGIC) :].decode("utf-8")
+        vt = VirtualTile(cellid=0, path=path)
+        return vt.to_row()
+    # Fallback: plain raster bytes.
+    if len(eb) == 0:
+        return None
+    return _serde.build_tile(eb, "GTiff", 0)
 
 
 @pandas_udf(BinaryType())
@@ -8848,7 +8921,11 @@ def _rst_custom_rasterize_agg_udf(
 
 
 # --- public Column wrappers (compose grouped-agg BINARY + scalar as_tile) ----
-def rst_merge_agg(tile: ColLike) -> Column:
+def rst_merge_agg(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+) -> Column:
     """Merge a group's tile rasters into one spatial mosaic tile.
 
     Use inside ``.agg()``::
@@ -8862,8 +8939,25 @@ def rst_merge_agg(tile: ColLike) -> Column:
     treats every tile as EXTERNAL.  Using ``try_to_file`` here would inject a
     nondeterministic expression into the aggregate, which Spark 4 rejects with
     ``AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION``.
+
+    Args:
+        tile:              Column of tile structs to merge.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            merged result to a durable path and return a light virtual tile
+            (``raster=None``, ``path`` set).  Avoids materialising the full
+            merged mosaic as Arrow bytes — essential for large mosaics on
+            Serverless where the per-task Arrow budget is ~64 MiB.
+        virtualize_prefix: Optional filename prefix inside ``virtualize_dir``.
+
+    Returns:
+        Tile struct spanning the union extent, or NULL on an empty group.
+        With ``virtualize_dir`` the tile is path-only (bytes-free).
     """
     tc = _col(tile)
+    if virtualize_dir is not None:
+        return _as_virtual_tile_from_path_udf(
+            _merge_agg_v2_udf(tc, f.lit(virtualize_dir), f.lit(virtualize_prefix))
+        )
     return _as_tile_udf(_merge_agg_udf(tc))
 
 

@@ -620,3 +620,112 @@ class TestAggPublicFunctionsParity:
             got = ds.read(1)
         # pixel-wise mean: [[3, 6], [8, 10]]
         assert np.allclose(got, [[3.0, 6.0], [8.0, 10.0]])
+
+
+# ---------------------------------------------------------------------------
+# rst_merge_agg force-output (virtualize_dir) path
+# ---------------------------------------------------------------------------
+
+
+class TestMergeAggVirtualizeDir:
+    """rst_merge_agg(tile, virtualize_dir=...) writes merged tile to disk and
+    returns a path-only virtual tile — avoids Arrow serialisation of the full
+    mosaic bytes (OOM guard for large DSMs on Serverless)."""
+
+    def test_virtualize_dir_returns_path_only_tile(self, spark, tmp_path):
+        """Merged tile is path-only (raster=None, path set); file exists on disk."""
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        out_dir = str(tmp_path / "magg_vout")
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        result = df.groupBy("g").agg(
+            prx.rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged")
+        )
+        rows = result.collect()
+        assert rows, "no rows returned"
+        merged = rows[0]["merged"]
+        assert merged is not None, "merged tile must be non-null"
+
+        # Path-only: raster bytes must be absent.
+        assert merged["raster"] is None, "raster bytes must be None for a virtual tile"
+        path = merged["path"]
+        assert path is not None and path.endswith(".tif"), f"expected .tif path, got {path!r}"
+
+        # The file must exist on disk.
+        import os
+        assert os.path.exists(path), f"written file not found: {path}"
+        assert os.path.getsize(path) > 0, "written file is empty"
+
+    def test_virtualize_dir_reopens_to_correct_extent(self, spark, tmp_path):
+        """Re-opening the written file yields the correct merged extent/dims."""
+        import databricks.labs.gbx.pyrx.functions as prx
+        from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+        out_dir = str(tmp_path / "magg_extent")
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+
+        # Materialized reference for extent comparison.
+        ref_rows = (
+            df.groupBy("g")
+            .agg(prx.rst_merge_agg("tile").alias("merged"))
+            .collect()
+        )
+        ref_merged = ref_rows[0]["merged"]
+        with _serde.open_tile(bytes(ref_merged["raster"])) as ds_ref:
+            exp_w, exp_h = ds_ref.width, ds_ref.height
+            exp_left, exp_right = ds_ref.bounds.left, ds_ref.bounds.right
+
+        # Virtualized result.
+        virt_rows = (
+            df.groupBy("g")
+            .agg(prx.rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged"))
+            .collect()
+        )
+        merged = virt_rows[0]["merged"]
+        with ot._open(merged.asDict()) as ds:
+            assert ds.width == exp_w
+            assert ds.height == exp_h
+            assert ds.bounds.left == pytest.approx(exp_left)
+            assert ds.bounds.right == pytest.approx(exp_right)
+
+    def test_default_path_still_materializes(self, spark):
+        """Default (no virtualize_dir) still returns an in-memory merged tile — unchanged."""
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        result = df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged"))
+        rows = result.collect()
+        merged = rows[0]["merged"]
+        assert merged is not None
+        raster_bytes = merged["raster"]
+        assert raster_bytes is not None and len(raster_bytes) > 0, (
+            "default path must return in-memory raster bytes"
+        )
+
+    def test_virtualize_prefix_is_used_in_filename(self, spark, tmp_path):
+        """When virtualize_prefix is set the written filename begins with that prefix."""
+        import os
+
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        out_dir = str(tmp_path / "magg_prefix")
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        result = df.groupBy("g").agg(
+            prx.rst_merge_agg("tile", virtualize_dir=out_dir, virtualize_prefix="run42").alias(
+                "merged"
+            )
+        )
+        rows = result.collect()
+        path = rows[0]["merged"]["path"]
+        assert path is not None
+        assert os.path.basename(path).startswith("run42_"), (
+            f"filename does not start with prefix: {os.path.basename(path)!r}"
+        )

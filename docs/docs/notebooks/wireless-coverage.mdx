@@ -11,7 +11,7 @@ import TabItem from '@theme/TabItem';
 <TabItem value="lakeflow" label="Lakeflow SDP" default>
 
 A production-ready Lakeflow Declarative Pipeline (SDP) for the Wireless Coverage workflow
-is planned for a future release. It will productionize the surface-building (Parts 1–2) and
+is planned for a future release. It will productionize the surface-building (Parts 1–2a and 2b) and
 H3-gridding (Part 3) steps into a scheduled medallion pipeline — surfaces → H3 grids →
 coverage analysis — packaged as a Databricks Asset Bundle.
 
@@ -22,12 +22,12 @@ coverage analysis — packaged as a Databricks Asset Bundle.
 
 A notebook series that builds the **elevation and surface data foundation** for wireless-coverage analysis directly from a USGS 3DEP **LiDAR point cloud** — data first, analytics later. The surfaces produced here (Canopy Height Model, Digital Surface Model, bare-earth Digital Terrain Model) are the inputs that later parts consume for antenna siting and line-of-sight with [`rst_viewshed`](../api/raster-functions).
 
-Both notebooks work over **all of San Francisco** (`SF_AOI = (-122.55, 37.70, -122.35, 37.85)`), reading the staged 3DEP LiDAR (`.laz` Entwine Point Tile nodes) with the GeoBrix `lidar_gbx` reader and binning returns into 1 m rasters **per spatial tile**. A single 1 m raster over SF is ~460 M pixels, so binning is tiled and **bounded** — `rx.bin_points_tiled` bins each tile with memory proportional to the raster grid (W×H), not the point count, so a full-resolution (`DECIMATE=1`) tile never OOMs. The binned surfaces are persisted to **permanent tables** you own (a `CATALOG.SCHEMA` you set) and read back downstream.
+The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (-122.55, 37.70, -122.35, 37.85)`), reading the staged 3DEP LiDAR (`.laz` Entwine Point Tile nodes) with the GeoBrix `lidar_gbx` reader and binning returns into 1 m rasters **per spatial tile**. A single 1 m raster over SF is ~460 M pixels, so binning is tiled and **bounded** — `rx.bin_points_tiled` bins each tile with memory proportional to the raster grid (W×H), not the point count, so a full-resolution (`DECIMATE=1`) tile never OOMs. The binned surfaces are persisted to **permanent tables** you own (a `CATALOG.SCHEMA` you set) and read back downstream.
 
 ![Wireless Coverage — LiDAR point cloud to DSM / DTM / CHM](../../../resources/images/diagrams/wireless-coverage/wireless-coverage.png)
 
 :::tip View on GitHub
-**[notebooks/examples/wireless-coverage](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage)** — download the folder and import the two numbered notebooks into your Databricks workspace to run.
+**[notebooks/examples/wireless-coverage](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage)** — download the folder and import the notebooks (Parts 1, 2a, 2b, 3, and 4) into your Databricks workspace to run.
 :::
 
 :::info Runs on the lightweight tier (Serverless) by default
@@ -52,18 +52,24 @@ A classified LiDAR point cloud already carries everything a Canopy Height Model 
 
 Part 1 is the shortest path from returns to canopy: it keeps only the CHM.
 
-### Part 2 — Surfaces: DSM + DTM → CHM (`02_surfaces_dsm_dtm_chm.ipynb`)
+### Part 2a — Surfaces: DSM + DTM → CHM (`02a_surfaces_dsm_dtm_chm.ipynb`)
 
-Downstream coverage analytics consume **surface rasters**, not point clouds, so Part 2 persists the DSM and bare-earth DTM as reusable **permanent tables** you own (a governed Delta table of tiles in a `CATALOG.SCHEMA` you set; optional GeoTIFF export via `gtiff_gbx`), then derives the CHM from them. It also contrasts two bare-earth grounds on a sample tile:
+The main arc. Builds directly on the LiDAR point cloud from Part 1 and persists the complete surface stack as reusable **permanent tables** you own (a governed Delta table of tiles in a `CATALOG.SCHEMA` you set; optional GeoTIFF export via `gtiff_gbx`). The production bare-earth DTM is a **TIN surface** — a Delaunay triangulation of the classified ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free raster. Because it works directly from the point cloud's own classification, it is a beyond-pixels surface: terrain reconstructed from the actual ground returns rather than approximated from raster values. The binned-`min` DTM is shown alongside for comparison:
 
-- **Binned DTM** — `min` z of ground returns per pixel (fast; can leave tiny gaps where no ground return landed).
-- **TIN DTM** — a Delaunay triangulation of the ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free bare earth. The input points are built product-natively with `st_makepoint(x, y, z)`, so Z is carried through the WKB into the triangulation.
+- **TIN DTM** — a Delaunay triangulation of the ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free bare earth. Points are built with `st_makepoint(x, y, z)`, so Z carries through the WKB into the triangulation. This is the production terrain.
+- **Binned DTM** — `min` z of ground returns per pixel (fast; can leave tiny gaps where no ground return landed). Shown for comparison.
+
+Writes the canonical `wc_surface_{dsm,dtm,chm}` tables and `OUT_DIR` GeoTIFFs that Parts 3 and 4 consume.
+
+### Part 2b — Surfaces from a DSM Raster (`02b_surfaces_from_dsm.ipynb`)
+
+An alternative on-ramp for when a LiDAR point cloud is not available. Starting from a DSM raster only, it approximates the bare-earth DTM by applying a morphological opening to the DSM — `rst_filter` min then max — and then deriving the CHM with `rst_chm`. The result is a **pixel-only approximation**: without ground-classified returns, the bare earth is estimated from the surface shape rather than reconstructed from the point cloud. The Parts 1–2a LiDAR path produces a more accurate terrain for production use; when no point cloud is available, a published terrain product such as USGS 3DEP is the recommended production alternative. Part 2b lands the same canonical `wc_surface_{dsm,dtm,chm}` tables as Part 2a, so Parts 3 and 4 work unchanged either way.
 
 ### Part 3 — H3 Gridding (`03_h3_gridding.ipynb`)
 
 ![Wireless Coverage Part 3 — DEM/DSM/CHM surfaces to H3-indexed tables](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-03.png)
 
-Takes the surface tables from Parts 1–2 and prepares them for global-grid analysis by
+Takes the surface tables from Parts 1–2a (or 2b) and prepares them for global-grid analysis by
 H3-indexing each surface at a parameterized resolution (default: H3 resolution 9, ≈174 m
 edge). DEM and DSM elevation bands are extracted as contiguous isoband polygons via
 `rst_isoband` and indexed to H3 cells with the Databricks product `h3_try_coverash3`;
@@ -99,8 +105,9 @@ Staged 3DEP LiDAR (.laz EPT nodes)  →  lidar_gbx reader  →  one row per retu
         ▼  rst_chm(DSM, DTM)  (Spark, per tile)
 Canopy Height Model tiles  (Float32, NoData = −9999)
         │
-        ▼  (Part 2) _persist  →  DSM / DTM / CHM permanent tables (CATALOG.SCHEMA); optional gtiff_gbx GeoTIFF export
-        ▼  (Part 2) rst_dtmfromgeoms_agg on st_makepoint(x, y, z) ground points  →  TIN bare earth (gap-free)
+        ▼  (Part 2a) _persist  →  DSM / DTM / CHM permanent tables (CATALOG.SCHEMA); optional gtiff_gbx GeoTIFF export
+        ▼  (Part 2a) rst_dtmfromgeoms_agg on st_makepoint(x, y, z) ground points  →  TIN bare earth (gap-free)
+        ▼  (Part 2b, alt) DSM raster in  →  rst_filter(min→max) morphological open  →  approximate bare earth; rst_chm  →  same surface tables (pixel-only path)
         │
         ▼  (Part 3) rst_isoband → h3_try_coverash3  →  wc_h3_dem / wc_h3_dsm elevation-tier grids
         ▼  (Part 3) gbx_rst_h3_rastertogridmax  →  wc_h3_chm max-canopy grid
@@ -114,7 +121,7 @@ Canopy Height Model tiles  (Float32, NoData = −9999)
 - **Bin per tile, bounded.** A single 1 m raster over all of San Francisco is ~460 M pixels — far too large for one tile. `rx.bin_points_tiled` assigns per-tile extents and bins each tile with memory bounded by the grid (W×H), not the point count, so full-density (`DECIMATE=1`) binning never OOMs. (Calling `rst_binpoints_agg` directly realizes a whole tile's points and can exhaust RAM at full density — see [Memory & scale](../api/raster-functions#rst_binpoints_agg).)
 - **Ground is ASPRS class 2.** The bare-earth DTM bins only classification 2 (ground); the DSM bins all returns. Filtering the point DataFrame to class 2 before the `min` bin is what makes the DTM "bare earth."
 - **Z must survive to the TIN.** `rst_dtmfromgeoms_agg` needs `POINT Z` geometry. Build points with the product `st_makepoint(x, y, z)` and pass `st_asbinary(...)` — the WKB carries Z, so the triangulation interpolates real elevations rather than collapsing to 2D.
-- **Thin the points that feed the TIN.** A Delaunay TIN holds **all** its points in memory to triangulate — unlike the binned DTM (memory bounded by the raster grid), a triangulation is inherently global and can't be grid-bounded. At `DECIMATE=1` a single tile's ground returns can exhaust a worker, so Part 2 samples them to a bounded count (`TIN_MAX_PTS`) before triangulating; a bare-earth TIN is near-identical from a representative subset. See [RasterX › Memory & scale](../api/raster-functions#rst_dtmfromgeoms_agg).
+- **Thin the points that feed the TIN.** A Delaunay TIN holds **all** its points in memory to triangulate — unlike the binned DTM (memory bounded by the raster grid), a triangulation is inherently global and can't be grid-bounded. At `DECIMATE=1` a single tile's ground returns can exhaust a worker, so Part 2a samples them to a bounded count (`TIN_MAX_PTS`) before triangulating; a bare-earth TIN is near-identical from a representative subset. See [RasterX › Memory & scale](../api/raster-functions#rst_dtmfromgeoms_agg).
 - **Empty / corrupt point-cloud nodes are skipped.** The `lidar_gbx` reader skips 0-byte or unreadable `.laz` files with a warning instead of failing the whole distributed read, so one bad EPT node can't take down the job.
 - **Serverless-safe throughout.** No `spark.conf.set`, `_jvm`, `.rdd`, `.cache()` / `.persist()`. Surfaces are persisted to **permanent tables** you own (`CATALOG.SCHEMA`) — a governed Delta table of tiles, reused across cells and sessions rather than a session temp table. An optional `gtiff_gbx` export writes GeoTIFF files to a Volume.
 

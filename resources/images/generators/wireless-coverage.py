@@ -290,7 +290,7 @@ NB3 = dict(
         "Three parallel paths: DEM/DSM isobands → H3, CHM max-z → H3, "
         "then IDW gap-fill"
     ),
-    series_pill="Wireless Coverage  ·  Notebook 3 of 5",
+    series_pill="Wireless Coverage  ·  Part 3",
     stages=[
         Stage(
             title="Surface rasters in",

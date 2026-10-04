@@ -544,3 +544,168 @@ def test_viewshed_nonpositive_max_distance_raises():
             analysis.viewshed(ds, ox, oy, 1.0, 0.0, 0.0)
         with pytest.raises(ValueError):
             analysis.viewshed(ds, ox, oy, 1.0, 0.0, -10.0)
+
+
+# --- ctypes GDALViewshedGenerate engine -------------------------------------
+
+
+def _dem_ctypes_wall_bytes():
+    """9x9 flat DEM (elev 0) with a tall wall at column 5 (one east of centre col 4).
+
+    EPSG:3857, 1 m pixels, origin (0, 9).  Centre pixel (col=4, row=4) has
+    world coords (4.5, 4.5).
+    """
+    h, w = 9, 9
+    dem = np.zeros((h, w), dtype="float64")
+    dem[:, 5] = 100.0
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="float64",
+        crs="EPSG:3857",
+        transform=from_origin(0.0, float(h), 1.0, 1.0),
+        nodata=None,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(dem, 1)
+        return mf.read()
+
+
+def test_viewshed_gdal_ctypes_occlusion():
+    """ctypes engine: observer at centre, wall one column east.
+
+    Visible: observer cell and cells west of the wall.
+    Invisible: cells east of (behind) the wall.
+    """
+    src = _dem_ctypes_wall_bytes()
+    with _serde.open_tile(src) as ds:
+        from rasterio.transform import xy as _xy
+
+        ox, oy = _xy(ds.transform, 4, 4, offset="center")
+        out_arr = analysis._viewshed_gdal_ctypes(ds, float(ox), float(oy), 2.0, 0.0, None)
+
+    assert out_arr.dtype == np.dtype("uint8"), f"expected uint8, got {out_arr.dtype}"
+    unique = set(np.unique(out_arr).tolist())
+    assert unique.issubset({0, 255}), f"unexpected pixel values: {unique}"
+    assert out_arr[4, 4] == 255, "observer cell should be visible (255)"
+    assert out_arr[4, 3] == 255, "cell just west of observer (col 3) should be visible"
+    assert out_arr[4, 6] == 0, "cell east of wall (col 6) should be invisible (0)"
+
+
+def test_viewshed_engines_agree_small():
+    """ctypes and xrspatial engines agree on interior cells of a small DEM."""
+    pytest.importorskip("xrspatial")
+
+    src = _dem_with_wall_bytes()
+    with _serde.open_tile(src) as ds:
+        ox, oy = _observer_world_xy(ds, col=0, row=3)
+        ctypes_arr = analysis._viewshed_gdal_ctypes(ds, ox, oy, 1.0, 0.0, None)
+        xrs_arr = analysis._viewshed_xrspatial(ds, ox, oy, 1.0, 0.0, None)
+
+    # Trim 1-pixel border to allow edge-handling differences.
+    interior_c = ctypes_arr[1:-1, 1:-1]
+    interior_x = xrs_arr[1:-1, 1:-1]
+
+    mismatches = int(np.sum(interior_c != interior_x))
+    total = interior_c.size
+    mismatch_frac = mismatches / total if total > 0 else 0.0
+
+    assert mismatch_frac < 0.15, (
+        f"ctypes and xrspatial disagree on {mismatches}/{total} interior cells "
+        f"({mismatch_frac:.1%}); expected < 15% mismatch"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Child-process script for test_viewshed_gdal_bounds_peak_rss.
+# Runs in a fresh subprocess so ru_maxrss is not pre-inflated by pytest imports.
+# ---------------------------------------------------------------------------
+_VIEWSHED_RSS_CHILD = """
+import gc, os, platform, resource, sys, tempfile
+
+# Cap GDAL block cache before rasterio initialises GDAL.
+os.environ.setdefault("GDAL_CACHEMAX", "4")
+
+import numpy as np
+import rasterio
+import rasterio.windows
+from rasterio.transform import from_origin, xy as _xy
+from databricks.labs.gbx.pyrx.core.analysis import _viewshed_gdal_ctypes
+
+H, W = 4000, 4000
+# Write the DEM block-by-block so the full band never lives as one Python array.
+dem_fd, dem_file = tempfile.mkstemp(suffix=".tif")
+os.close(dem_fd)
+try:
+    profile = dict(
+        driver="GTiff", width=W, height=H, count=1, dtype="float32",
+        crs="EPSG:3857", transform=from_origin(0.0, float(H), 1.0, 1.0),
+    )
+    block_h = 256
+    with rasterio.open(dem_file, "w", **profile) as dst:
+        for row_off in range(0, H, block_h):
+            bh = min(block_h, H - row_off)
+            blk = np.zeros((bh, W), dtype="float32")
+            win = rasterio.windows.Window(0, row_off, W, bh)
+            dst.write(blk, 1, window=win)
+            del blk
+
+    # Baseline: DEM on disk, no large array in Python memory.
+    gc.collect()
+    _scale = 1024 if platform.system() == "Linux" else 1
+    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _scale
+
+    with rasterio.open(dem_file) as ds:
+        ox, oy = _xy(ds.transform, H // 2, W // 2, offset="center")
+        _viewshed_gdal_ctypes(ds, float(ox), float(oy), 2.0, 0.0, None)
+
+    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _scale
+    print(rss_after - rss_before, flush=True)
+finally:
+    try:
+        os.unlink(dem_file)
+    except OSError:
+        pass
+"""
+
+
+def test_viewshed_gdal_bounds_peak_rss():
+    """ctypes engine peak RSS delta stays below the decoded DEM size (subprocess proof).
+
+    Runs in a fresh child process so ``ru_maxrss`` starts from a clean high-water
+    mark, not pre-inflated by numba/xarray/earlier-test imports.  The DEM is
+    block-written so the baseline is free of any full-band Python allocation.
+
+    A streaming engine must not materialise the full band as a Python array;
+    peak RSS delta should stay below the decoded DEM size (4000×4000 float32 = 64 MB).
+    Calling ``ds.read(1)`` in the engine would add ~64 MB on top of the output
+    array and FAIL this threshold — that is the intended failure mode for Fix A.
+    """
+    import subprocess
+
+    try:
+        import resource  # noqa: F401 — availability check only
+    except ImportError:
+        pytest.skip("resource module unavailable")
+
+    proc = subprocess.run(
+        [__import__("sys").executable, "-c", _VIEWSHED_RSS_CHILD],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        pytest.fail(
+            f"viewshed RSS child exited {proc.returncode}:\n{proc.stderr[-2000:]}"
+        )
+
+    delta_bytes = int(proc.stdout.strip())
+    # 4000×4000 float32 = 64 MB; streaming engine should not allocate a full DEM array.
+    decoded_dem_bytes = 4000 * 4000 * np.dtype("float32").itemsize
+    assert delta_bytes < decoded_dem_bytes, (
+        f"peak RSS delta {delta_bytes / 1e6:.1f} MB ≥ decoded DEM "
+        f"{decoded_dem_bytes / 1e6:.0f} MB — engine may be loading the full band"
+    )

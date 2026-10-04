@@ -15,7 +15,10 @@ expressions, implemented without the JAR:
     1 GB Python UDF cap.
   * ``contour`` uses ``skimage.measure.find_contours`` instead of GDAL's
     ContourGenerateEx.
-  * ``viewshed`` uses ``xrspatial.viewshed`` instead of GDAL's ViewshedGenerate.
+  * ``viewshed`` uses ``GDALViewshedGenerate`` (via ctypes against the bundled
+    libgdal) for large DEMs, and ``xrspatial.viewshed`` for small ones.  The
+    ctypes engine streams block-by-block (peak RSS ≈ GDAL cache, independent of
+    DEM size); xrspatial is kept for small tiles to avoid ctypes/file overhead.
 """
 
 import math
@@ -33,7 +36,8 @@ from rasterio.io import MemoryFile
 _VIEWSHED_PSUTIL_LOCK = threading.RLock()
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.budget import _cgroup_task_limit_bytes, decoded_budget_bytes
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir, new_local_temp_file
 
 # NoData sentinel for the proximity output — mirrors the heavyweight, which sets
 # NODATA=-1.0 so beyond-max / unreachable pixels are distinguishable from
@@ -434,17 +438,200 @@ def contour(ds, levels, interval, base, attr_field):
     return out
 
 
+# ---------------------------------------------------------------------------
+# Viewshed helpers
+# ---------------------------------------------------------------------------
+
+
+def _load_libgdal():
+    """Locate and return the bundled libgdal CDLL (no osgeo, light-tier safe)."""
+    import ctypes
+    import glob as _glob
+    import os as _os
+
+    import rasterio
+
+    rp = _os.path.dirname(rasterio.__file__)
+    sp = _os.path.dirname(rp)
+    for d in (_os.path.join(rp, ".dylibs"), _os.path.join(sp, "rasterio.libs")):
+        if _os.path.isdir(d):
+            hits = _glob.glob(_os.path.join(d, "*gdal*"))
+            if hits:
+                return ctypes.CDLL(hits[0])
+    # last resort: symbol may be global after rasterio dlopened libgdal
+    lib = ctypes.CDLL(None)
+    if hasattr(lib, "GDALViewshedGenerate"):
+        return lib
+    raise RuntimeError("rst_viewshed: GDALViewshedGenerate not found in bundled libgdal")
+
+
+def _viewshed_xrspatial(ds, observer_x, observer_y, observer_height, target_height, max_distance):
+    """xrspatial engine for small DEMs.  Returns a uint8 numpy array (255 visible / 0 invisible).
+
+    Moves the xrspatial imports, NUMBA_CACHE_DIR guard, and _available_memory_bytes
+    patch inside this helper so it can be independently tested and so the ctypes path
+    never pays the numba warm-up cost.
+    """
+    import importlib as _importlib
+    import os as _os
+    import tempfile as _tempfile
+
+    if "NUMBA_DISABLE_JIT" not in _os.environ and "NUMBA_CACHE_DIR" not in _os.environ:
+        _os.environ["NUMBA_CACHE_DIR"] = _tempfile.mkdtemp(prefix="gbx_numba_")
+    import xarray as xr
+    from rasterio.transform import xy as _xy
+    from xrspatial import viewshed as _viewshed
+
+    band = ds.read(1).astype("float64")
+    height, width = band.shape
+    xs, _ = _xy(ds.transform, np.zeros(width), np.arange(width), offset="center")
+    _, ys = _xy(ds.transform, np.arange(height), np.zeros(height), offset="center")
+    xs = np.asarray(xs, dtype="float64")
+    ys = np.asarray(ys, dtype="float64")
+
+    da = xr.DataArray(band, dims=["y", "x"], coords={"y": ys, "x": xs})
+    # xrspatial.viewshed guards against large rasters by checking available RAM.
+    # On a shared Serverless cluster the system-wide RAM probe fires even for tiny
+    # tiles.  Replace the guard with the honest per-task cgroup limit (or 1 GiB
+    # fallback) so it reflects the actual task quota rather than node-total RAM.
+    _xrs_vs_mod = _importlib.import_module("xrspatial.viewshed")
+    with _VIEWSHED_PSUTIL_LOCK:
+        _real_avail_mem_fn = _xrs_vs_mod._available_memory_bytes
+        _xrs_vs_mod._available_memory_bytes = (
+            lambda: _cgroup_task_limit_bytes() or (1024**3)
+        )
+        try:
+            res = _viewshed(
+                da,
+                x=observer_x,
+                y=observer_y,
+                observer_elev=observer_height,
+                target_elev=target_height,
+                max_distance=max_distance,
+            )
+        finally:
+            _xrs_vs_mod._available_memory_bytes = _real_avail_mem_fn
+    vals = np.asarray(res.values)
+    # Visible cells carry an angle in [0, 180]; invisible/out-of-range carry -1.
+    return np.where(vals >= 0.0, 255, 0).astype("uint8")
+
+
+def _viewshed_gdal_ctypes(ds, observer_x, observer_y, observer_height, target_height, max_distance):
+    """GDALViewshedGenerate ctypes engine for large DEMs.
+
+    Writes the DEM to a local scratch file, calls GDALViewshedGenerate via ctypes
+    against the bundled libgdal, reads the binary 0/255 output, and returns a
+    uint8 numpy array.  Peak RSS ≈ GDAL block cache (independent of DEM size).
+
+    The scratch dir is cleaned up unconditionally in a finally block.
+    """
+    import ctypes
+    import os as _os
+
+    import rasterio as _rasterio
+
+    scratch = new_local_temp_dir(prefix="gbx_viewshed_")
+    try:
+        dem_path = _os.path.join(scratch, "dem.tif")
+        out_path = _os.path.join(scratch, "viewshed.tif")
+
+        # Stage the DEM to a local scratch file without loading the whole band into
+        # Python memory.  Preferred path: rasterio.shutil.copy streams GDAL-to-GDAL
+        # (block-by-block internally, no numpy array).  ds.name is the GDAL-native
+        # path: "/vsimem/..." for MemoryFile-backed tiles, or a real path for
+        # file-backed datasets — both are valid GDAL source identifiers.
+        # Fallback: windowed block copy (O(block_size) peak RAM) for the rare case
+        # where ds.name is empty or the copy fails (e.g., unusual source format).
+        import rasterio.shutil as _rio_shutil
+
+        dem_profile = {
+            "driver": "GTiff",
+            "width": ds.width,
+            "height": ds.height,
+            "count": 1,
+            "dtype": ds.dtypes[0],
+            "crs": ds.crs,
+            "transform": ds.transform,
+        }
+        if ds.nodata is not None:
+            dem_profile["nodata"] = ds.nodata
+
+        src_name = getattr(ds, "name", None) or ""
+        if src_name:
+            try:
+                _rio_shutil.copy(src_name, dem_path, driver="GTiff")
+                src_name = dem_path  # success — dem_path is ready
+            except Exception:
+                src_name = ""
+        if not src_name:
+            # Windowed block copy: each read is bounded by ds.block_shapes[0].
+            with _rasterio.open(dem_path, "w", **dem_profile) as wdst:
+                for _, window in ds.block_windows(1):
+                    wdst.write(ds.read(1, window=window), 1, window=window)
+
+        gdal = _load_libgdal()
+
+        c_vp = ctypes.c_void_p
+        c_cp = ctypes.c_char_p
+        c_d = ctypes.c_double
+        c_i = ctypes.c_int
+
+        gdal.GDALAllRegister.restype = None
+        gdal.GDALOpen.argtypes = [c_cp, c_i]
+        gdal.GDALOpen.restype = c_vp
+        gdal.GDALGetRasterBand.argtypes = [c_vp, c_i]
+        gdal.GDALGetRasterBand.restype = c_vp
+        gdal.GDALClose.argtypes = [c_vp]
+        gdal.GDALViewshedGenerate.restype = c_vp
+        gdal.GDALViewshedGenerate.argtypes = [
+            c_vp, c_cp, c_cp, c_vp,  # hBand, driver, targetRasterName, creationOpts(NULL)
+            c_d, c_d, c_d, c_d,       # obsX, obsY, obsHeight, targetHeight
+            c_d, c_d, c_d, c_d, c_d,  # visibleVal, invisibleVal, outOfRangeVal, nodataVal, curvCoeff
+            c_i,                       # eMode  (GVM_Max = 3)
+            c_d,                       # maxDistance (0 = unlimited)
+            c_vp, c_vp,                # pfnProgress(NULL), pProgressArg(NULL)
+            c_i,                       # heightMode (GVOT_NORMAL = 0)
+            c_vp,                      # extraOptions(NULL)
+        ]
+
+        gdal.GDALAllRegister()
+        ds_h = gdal.GDALOpen(dem_path.encode(), 0)  # GA_ReadOnly = 0
+        band_h = gdal.GDALGetRasterBand(ds_h, 1)
+        out_h = gdal.GDALViewshedGenerate(
+            band_h, b"GTiff", out_path.encode(), None,
+            float(observer_x), float(observer_y),
+            float(observer_height), float(target_height),
+            255.0, 0.0, 0.0, 0.0, 0.85714,
+            3,                                                  # GVM_Max
+            float(max_distance) if max_distance is not None else 0.0,
+            None, None,
+            0,                                                  # GVOT_NORMAL -> binary 0/255 mask
+            None,
+        )
+        if not out_h:
+            raise RuntimeError("rst_viewshed: GDALViewshedGenerate returned NULL")
+        gdal.GDALClose(out_h)
+        gdal.GDALClose(ds_h)
+
+        # The output is already uint8 0/255 (GVOT_NORMAL); no remap needed.
+        with _rasterio.open(out_path) as result_ds:
+            return result_ds.read(1).astype("uint8")
+    finally:
+        import shutil as _shutil
+
+        _shutil.rmtree(scratch, ignore_errors=True)
+
+
 def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_distance):
     """Compute a binary viewshed (255 visible / 0 invisible) from band 1.
 
     Mirrors the heavyweight ``gbx_rst_viewshed`` (``gdal.ViewshedGenerate``,
-    GVOT_NORMAL binary 0/255 mask), implemented with ``xrspatial.viewshed``.
+    GVOT_NORMAL binary 0/255 mask).
 
-    ``xrspatial.viewshed`` returns, for each cell, the vertical viewing angle in
-    ``[0, 180]`` when the cell is visible from the observer, and ``-1`` when it
-    is invisible (blocked by terrain or beyond ``max_distance``). We map
-    ``value >= 0 -> 255`` (visible) and ``value < 0 -> 0`` (invisible), matching
-    the heavyweight's GVOT_NORMAL binary mask.
+    For small DEMs (decoded size ≤ the Serverless per-task budget) the
+    ``xrspatial.viewshed`` engine is used; for large DEMs ``GDALViewshedGenerate``
+    is called via ctypes against the bundled libgdal, which streams the DEM
+    block-by-block (peak RSS ≈ GDAL cache, independent of DEM size).
 
     The result is a single-band Byte (uint8) GTiff at the same extent / CRS as
     ``ds`` (no NoData; 0 = invisible).
@@ -463,9 +650,10 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
         Single-band uint8 GTiff bytes (255 visible / 0 invisible).
 
     Note:
-        The first viewshed call in a Python process compiles the underlying
-        numba kernels -- a one-time cost of several seconds, amortized across all
-        subsequent calls in that process. Steady-state cost scales with tile size.
+        When the xrspatial engine is selected, the first call in a Python process
+        compiles the underlying numba kernels — a one-time cost of several seconds,
+        amortised across subsequent calls.  The ctypes (GDAL) engine has no such
+        warm-up cost.
     """
     observer_height = float(observer_height)
     target_height = float(target_height)
@@ -496,24 +684,9 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
                 f"rst_viewshed: max_distance must be > 0 and finite; got {max_distance}"
             )
 
-    # xarray / xrspatial are pyrx (viewshed) dependencies; import lazily so the
-    # numba JIT warm-up is only paid when viewshed is actually called.
-    #
-    # numba caching guard: on Serverless Spark the xrspatial package is installed
-    # on an ephemeral NFS path that numba's file-locking cache locator cannot use
-    # (raises "no locator available for file '…/.ephemeral_nfs/…'"). Setting
-    # NUMBA_CACHE_DIR to a per-process /tmp directory before the first xrspatial
-    # import redirects the cache to a path numba can lock.
-    import os as _os
-    import tempfile as _tempfile
-    if "NUMBA_DISABLE_JIT" not in _os.environ and "NUMBA_CACHE_DIR" not in _os.environ:
-        _os.environ["NUMBA_CACHE_DIR"] = _tempfile.mkdtemp(prefix="gbx_numba_")
-    import xarray as xr
     from rasterio.transform import xy as _xy
-    from xrspatial import viewshed as _viewshed
 
-    band = ds.read(1).astype("float64")
-    height, width = band.shape
+    height, width = ds.height, ds.width
 
     # Pixel-center world coordinates along each axis (north-up: y descends).
     xs, _ = _xy(ds.transform, np.zeros(width), np.arange(width), offset="center")
@@ -522,59 +695,26 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
     ys = np.asarray(ys, dtype="float64")
 
     # Graceful out-of-bounds: an observer outside the raster extent has no valid
-    # line-of-sight origin. xrspatial would error (or clamp) on such input; heavy
-    # GDAL ViewshedGenerate likewise produces no visibility. Mirror that with an
-    # all-invisible (0) raster rather than crashing the job. Bounds are the
+    # line-of-sight origin. Both engines produce no visibility in that case. Mirror
+    # with an all-invisible (0) raster rather than crashing the job. Bounds are the
     # min/max pixel-center coords (north-up: ys descends, so use min/max).
     x_lo, x_hi = float(min(xs[0], xs[-1])), float(max(xs[0], xs[-1]))
     y_lo, y_hi = float(min(ys[0], ys[-1])), float(max(ys[0], ys[-1]))
     if not (x_lo <= observer_x <= x_hi and y_lo <= observer_y <= y_hi):
         out = np.zeros((height, width), dtype="uint8")
     else:
-        da = xr.DataArray(band, dims=["y", "x"], coords={"y": ys, "x": xs})
-        # xrspatial.viewshed guards against large rasters by checking
-        # ``psutil.virtual_memory().available`` (SYSTEM-WIDE, not per-process).
-        # On a shared Serverless Spark cluster the system RAM is nearly exhausted by
-        # concurrent workers, so the guard fires even for small downsampled tiles
-        # where the actual working memory is a few MB. Temporarily replace
-        # ``psutil.virtual_memory`` with a stub that reports ample free RAM (8 GB) so
-        # the guard does not block valid small-tile calls. The stub is restored in the
-        # ``finally`` block regardless of outcome.
-        # xrspatial._available_memory_bytes reads /proc/meminfo first (Linux path),
-        # then falls back to psutil.  On a busy Serverless cluster /proc/meminfo
-        # legitimately returns near-zero (or zero) free pages because the physical
-        # machine is heavily loaded by concurrent jobs.  The guard fires even for
-        # tiny downsampled tiles that fit easily within the per-task heap.
-        #
-        # Fix: patch the function directly on the xrspatial.viewshed module.
-        # xrspatial._viewshed_cpu looks up _available_memory_bytes via its
-        # __globals__ (the module dict), so patching the module attribute is the
-        # only reliable intercept path.  The lock serialises concurrent UDF workers
-        # in the same Python process (Spark Connect threading model).
-        # ``import xrspatial.viewshed as _m`` resolves to the *function* (because
-        # xrspatial's __init__.py does ``from xrspatial.viewshed import viewshed``,
-        # making xrspatial.viewshed an attribute pointing to the function).  Use
-        # importlib.import_module to get the actual MODULE object unconditionally.
-        import importlib as _importlib
-        _xrs_vs_mod = _importlib.import_module("xrspatial.viewshed")
-        with _VIEWSHED_PSUTIL_LOCK:
-            _real_avail_mem_fn = _xrs_vs_mod._available_memory_bytes
-            # Report 8 GB available — guard should never fire for ≤ few-hundred-px tiles.
-            _xrs_vs_mod._available_memory_bytes = lambda: 8 * 1024 ** 3
-            try:
-                res = _viewshed(
-                    da,
-                    x=observer_x,
-                    y=observer_y,
-                    observer_elev=observer_height,
-                    target_elev=target_height,
-                    max_distance=max_distance,
-                )
-            finally:
-                _xrs_vs_mod._available_memory_bytes = _real_avail_mem_fn
-        vals = np.asarray(res.values)
-        # Visible cells carry an angle in [0, 180]; invisible/out-of-range carry -1.
-        out = np.where(vals >= 0.0, 255, 0).astype("uint8")
+        # Gate on decoded DEM size: use xrspatial for small DEMs (avoids ctypes /
+        # file-write overhead), ctypes GDALViewshedGenerate for large DEMs (bounded
+        # peak RSS regardless of DEM size).
+        decoded = ds.count * ds.width * ds.height * np.dtype(ds.dtypes[0]).itemsize
+        if decoded <= decoded_budget_bytes("serverless"):
+            out = _viewshed_xrspatial(
+                ds, observer_x, observer_y, observer_height, target_height, max_distance
+            )
+        else:
+            out = _viewshed_gdal_ctypes(
+                ds, observer_x, observer_y, observer_height, target_height, max_distance
+            )
 
     decoded_bytes = out.nbytes
     profile = ds.profile.copy()

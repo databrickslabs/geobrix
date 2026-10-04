@@ -173,65 +173,91 @@ def test_merge_streaming_matches_in_ram(monkeypatch):
             )
 
 
-def test_merge_streaming_bounds_peak_rss(monkeypatch):
-    """Peak RSS during the streaming merge stays well under the full-mosaic uncompressed size.
+# ---------------------------------------------------------------------------
+# Child-process script for test_merge_streaming_bounds_peak_rss.
+# Runs in a fresh subprocess so ru_maxrss is not pre-inflated by pytest imports.
+# ---------------------------------------------------------------------------
+_MERGE_RSS_CHILD = """
+import gc, platform, resource, sys
 
-    Four float32 tiles arranged 2×2 (each 3000×3000 px) form a 6000×6000 union
-    (≈ 144 MB uncompressed float32).  The streaming path must not allocate a full
-    decoded mosaic array; peak RSS delta must stay below 60% of the union size.
+import numpy as np
+from rasterio.io import MemoryFile
+from rasterio.transform import from_origin
+from databricks.labs.gbx.pyrx.core import agg
 
-    RSS measurement uses ``resource.getrusage(RUSAGE_SELF).ru_maxrss``.
-    macOS reports bytes; Linux reports KiB.  If the measurement is unreliable
-    (e.g. delta is negative due to GC, or ``resource`` is unavailable), the test
-    skips cleanly rather than hard-failing.
+# Force the streaming path regardless of the runtime cgroup budget.
+agg.decoded_budget_bytes = lambda s: 1
+
+W, H = 3000, 3000
+tile_bytes_list = []
+for row in range(2):
+    for col in range(2):
+        ulx = float(col * W)
+        uly = float((row + 1) * H)
+        val = float(row * 2 + col + 1)
+        data = np.full((H, W), val, dtype="float32")
+        profile = dict(
+            driver="GTiff", width=W, height=H, count=1, dtype="float32",
+            crs="EPSG:32633",
+            transform=from_origin(ulx, uly, 1.0, 1.0),
+            nodata=-9999.0,
+        )
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(data[None])
+            b = mf.read()
+        tile_bytes_list.append(b)
+        del data
+        gc.collect()
+
+# tile_bytes_list holds 4 compressed GTiff blobs (small); all large arrays freed.
+gc.collect()
+_scale = 1024 if platform.system() == "Linux" else 1
+rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _scale
+
+result = agg.merge_tiles(tile_bytes_list)
+
+rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _scale
+assert result is not None and len(result) > 0, "merge_tiles returned empty"
+print(rss_after - rss_before, flush=True)
+"""
+
+
+def test_merge_streaming_bounds_peak_rss():
+    """Streaming merge peak RSS delta stays below 60% of the full-mosaic size (subprocess proof).
+
+    Runs in a fresh child process so ``ru_maxrss`` is not pre-inflated by pytest
+    imports.  Four 3000×3000 float32 tiles form a 6000×6000 union (144 MB
+    uncompressed).  With the budget forced to 1 byte, the streaming path must not
+    allocate a full-mosaic array; peak RSS delta must stay below 60% of that union.
+
+    A ``rasterio.merge``-style full-mosaic in-RAM merge would allocate ~144 MB and
+    FAIL this threshold — that is the intended failure mode for a regression.
     """
-    import sys
+    import subprocess
 
     try:
-        import resource
+        import resource  # noqa: F401 — availability check only
     except ImportError:
         pytest.skip("resource module not available on this platform")
 
-    W, H = 3000, 3000
-    px = 1.0
-    tile_bytes_list = []
-    for row in range(2):
-        for col in range(2):
-            ulx = float(col * W)
-            uly = float((row + 1) * H)  # north-up: upper-left y-coord
-            val = float(row * 2 + col + 1)
-            data = np.full((H, W), val, dtype="float32")
-            b = _ras(data, ulx=ulx, uly=uly, px=px)
-            del data
-            tile_bytes_list.append(b)
-
-    # Union decoded size: 6000×6000 × 1 band × 4 bytes = 144 MB.
-    union_uncompressed = (2 * W) * (2 * H) * 1 * np.dtype("float32").itemsize
-
-    # Force streaming path.
-    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
-
-    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-    result = agg.merge_tiles(tile_bytes_list)
-    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-
-    assert result is not None, "streaming merge returned None"
-    assert len(result) > 0, "streaming merge returned empty bytes"
-
-    # Normalize to bytes (macOS = bytes, Linux = KiB).
-    if sys.platform == "darwin":
-        delta_bytes = rss_after - rss_before
-    else:
-        delta_bytes = (rss_after - rss_before) * 1024
-
-    if delta_bytes < 0:
-        pytest.skip(
-            f"RSS delta is negative ({delta_bytes}); OS returned pages, measurement unreliable"
+    proc = subprocess.run(
+        [__import__("sys").executable, "-c", _MERGE_RSS_CHILD],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        pytest.fail(
+            f"merge RSS child exited {proc.returncode}:\n{proc.stderr[-2000:]}"
         )
 
+    delta_bytes = int(proc.stdout.strip())
+    # Union decoded: 6000×6000 × 1 band × 4 bytes = 144 MB.
+    union_uncompressed = (2 * 3000) * (2 * 3000) * 1 * np.dtype("float32").itemsize
     assert delta_bytes < 0.6 * union_uncompressed, (
-        f"Peak RSS delta {delta_bytes / 1e6:.1f} MB exceeds 60% of union uncompressed "
-        f"{union_uncompressed / 1e6:.1f} MB — possible full-mosaic allocation in streaming path"
+        f"peak RSS delta {delta_bytes / 1e6:.1f} MB ≥ 60% of union "
+        f"{union_uncompressed / 1e6:.0f} MB — possible full-mosaic allocation"
     )
 
 

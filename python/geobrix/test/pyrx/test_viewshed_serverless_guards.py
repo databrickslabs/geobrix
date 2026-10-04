@@ -1,8 +1,8 @@
-"""Regression guards for the three Serverless-safety fixes in ``analysis.viewshed()``.
+"""Regression guards for the Serverless-safety fixes in ``analysis.viewshed()``.
 
-Each group pins one specific behaviour introduced in commit 458d62d6 so a future
-refactor cannot silently drop it.  Tests are pure-Python, mock the heavy
-xrspatial computation, and require no cluster, no Serverless, and no JAR.
+Each group pins one specific behaviour so a future refactor cannot silently drop it.
+Tests are pure-Python, mock the heavy xrspatial computation, and require no cluster,
+no Serverless, and no JAR.
 
   1. ``NUMBA_CACHE_DIR`` guard — set to a ``/tmp/gbx_numba_*`` directory when the
      environment variable is absent (numba cannot cache to the read-only NFS path
@@ -14,9 +14,10 @@ xrspatial computation, and require no cluster, no Serverless, and no JAR.
      the *function* (not the module) due to xrspatial's ``__init__`` re-export.
 
   3. ``_available_memory_bytes`` monkeypatch — the function is patched to a stub
-     that returns 8 GiB during the call and restored in a ``finally`` block
-     regardless of outcome; a module-level ``threading.RLock`` serialises
-     concurrent patches within the same process.
+     that reports the honest per-task cgroup limit (``_cgroup_task_limit_bytes() or
+     1 GiB``) during the call and restored in a ``finally`` block regardless of
+     outcome; a module-level ``threading.RLock`` serialises concurrent patches
+     within the same process.
 """
 
 import importlib
@@ -227,11 +228,13 @@ def test_importlib_import_module_returns_module_with_available_memory_fn():
 # ---------------------------------------------------------------------------
 # Fix 3 — _available_memory_bytes monkeypatch + finally restore + RLock
 # ---------------------------------------------------------------------------
-# Exact code in analysis.viewshed() (lines 560-574):
+# Exact code in analysis._viewshed_xrspatial() (inner with block):
 #
 #     with _VIEWSHED_PSUTIL_LOCK:
 #         _real_avail_mem_fn = _xrs_vs_mod._available_memory_bytes
-#         _xrs_vs_mod._available_memory_bytes = lambda: 8 * 1024 ** 3
+#         _xrs_vs_mod._available_memory_bytes = (
+#             lambda: _cgroup_task_limit_bytes() or (1024 ** 3)
+#         )
 #         try:
 #             res = _viewshed(...)
 #         finally:
@@ -286,14 +289,16 @@ def test_available_memory_bytes_restored_after_viewshed_exception(monkeypatch):
     )
 
 
-def test_stub_returns_8_gib_during_call(monkeypatch):
-    """During the call, ``_available_memory_bytes`` is replaced by a stub that
-    returns exactly 8 GiB (8 * 1024**3 bytes), bypassing the system-RAM guard."""
+def test_stub_returns_cgroup_limit_when_available(monkeypatch):
+    """During the xrspatial call, ``_available_memory_bytes`` reports the cgroup
+    task limit when ``_cgroup_task_limit_bytes()`` returns a value."""
     xrs_vs_mod = importlib.import_module("xrspatial.viewshed")
     observed: list = []
 
+    _known_limit = 4 * 1024**3  # inject a known cgroup limit
+    monkeypatch.setattr(analysis, "_cgroup_task_limit_bytes", lambda: _known_limit)
+
     def _capture_viewshed(da, **kw):
-        # Sample the patched function while we are inside the locked region.
         observed.append(xrs_vs_mod._available_memory_bytes())
         return _FakeViewshedResult(da.values.shape)
 
@@ -308,9 +313,37 @@ def test_stub_returns_8_gib_during_call(monkeypatch):
         analysis.viewshed(ds, ox, oy, 1.0, 0.0, None)
 
     assert len(observed) == 1, f"expected one viewshed call, got {len(observed)}"
-    expected_bytes = 8 * 1024**3
-    assert observed[0] == expected_bytes, (
-        f"stub should report 8 GiB ({expected_bytes} bytes), got {observed[0]}"
+    assert observed[0] == _known_limit, (
+        f"stub should report cgroup limit ({_known_limit} bytes), got {observed[0]}"
+    )
+
+
+def test_stub_falls_back_to_1gib_when_no_cgroup_limit(monkeypatch):
+    """When ``_cgroup_task_limit_bytes()`` returns None, the stub falls back to
+    1 GiB rather than the old hardcoded 8 GiB figure."""
+    xrs_vs_mod = importlib.import_module("xrspatial.viewshed")
+    observed: list = []
+
+    monkeypatch.setattr(analysis, "_cgroup_task_limit_bytes", lambda: None)
+
+    def _capture_viewshed(da, **kw):
+        observed.append(xrs_vs_mod._available_memory_bytes())
+        return _FakeViewshedResult(da.values.shape)
+
+    import xrspatial
+
+    monkeypatch.setattr(xrspatial, "viewshed", _capture_viewshed)
+    monkeypatch.delitem(os.environ, "NUMBA_CACHE_DIR", raising=False)
+    monkeypatch.delitem(os.environ, "NUMBA_DISABLE_JIT", raising=False)
+
+    with _serde.open_tile(_flat_dem_bytes()) as ds:
+        ox, oy = _center_xy(ds, col=3, row=3)
+        analysis.viewshed(ds, ox, oy, 1.0, 0.0, None)
+
+    assert len(observed) == 1, f"expected one viewshed call, got {len(observed)}"
+    expected_fallback = 1024**3  # 1 GiB
+    assert observed[0] == expected_fallback, (
+        f"stub should fall back to 1 GiB ({expected_fallback} bytes), got {observed[0]}"
     )
 
 

@@ -4,6 +4,8 @@ asformat, buildoverviews, sample."""
 import numpy as np
 import pytest
 import shapely.wkb
+from rasterio.io import MemoryFile
+from rasterio.transform import from_origin
 from shapely.geometry import LineString, Point
 
 from databricks.labs.gbx.pyrx import _serde
@@ -167,6 +169,38 @@ def test_sample_returns_per_band_pixel_values():
     with _serde.open_tile(src) as ds:
         vals = ops_core.sample(ds, pt)
     assert vals == [1.0, 101.0]
+
+
+def test_sample_returns_null_for_nodata_pixel():
+    """In-extent nodata pixels must return None, not the raw fill value."""
+    nodata_val = -9999.0
+    transform = from_origin(10.0, 50.0, 0.5, 0.5)
+    # 1 row x 2 cols: col=0 is nodata, col=1 is a real value (42.0)
+    data = np.array([[nodata_val, 42.0]], dtype="float32")
+    with MemoryFile() as mf:
+        with mf.open(
+            driver="GTiff",
+            width=2,
+            height=1,
+            count=1,
+            dtype="float32",
+            crs="EPSG:4326",
+            transform=transform,
+            nodata=nodata_val,
+        ) as ds_write:
+            ds_write.write(data, 1)
+        src = mf.read()
+
+    # Centre of pixel (col=0, row=0) → nodata; (col=1, row=0) → 42.0
+    pt_nodata = shapely.wkb.dumps(Point(10.25, 49.75))
+    pt_valid = shapely.wkb.dumps(Point(10.75, 49.75))
+
+    with _serde.open_tile(src) as ds:
+        nodata_result = ops_core.sample(ds, pt_nodata)
+        valid_result = ops_core.sample(ds, pt_valid)
+
+    assert nodata_result == [None], f"expected [None] for nodata pixel, got {nodata_result}"
+    assert valid_result == [42.0], f"expected [42.0] for valid pixel, got {valid_result}"
 
 
 def test_sample_non_point_raises():

@@ -31,7 +31,7 @@ The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (
 :::
 
 :::info Runs on the lightweight tier (Serverless) by default
-The series uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env5,vizx]` wheel — so it runs on **Serverless environment 5** with no JAR or GDAL init script. The `laspy` / `lazrs` readers the point cloud needs ship with the light base. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Execution Tiers](../api/execution-tiers).
+The series uses the **lightweight tier** — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`) plus the `geobrix[light_env6,vizx]` wheel — so it runs on **Serverless environment 6** with no JAR or GDAL init script. The `laspy` / `lazrs` readers the point cloud needs ship with the light base. Visualization helpers come from `databricks.labs.gbx.vizx`. See [Execution Tiers](../api/execution-tiers).
 :::
 
 :::note Big-data by default
@@ -70,7 +70,7 @@ An alternative on-ramp for when a LiDAR point cloud is not available. Starting f
 ![Wireless Coverage Part 3 — DEM/DSM/CHM surfaces to H3-indexed tables](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-03.png)
 
 Takes the surface tables from Parts 1–2a (or 2b) and prepares them for global-grid analysis by
-H3-indexing each surface at a parameterized resolution (default: H3 resolution 9, ≈174 m
+H3-indexing each surface at a parameterized resolution (default: H3 resolution 10, ≈65 m
 edge). DEM and DSM elevation bands are extracted as contiguous isoband polygons via
 `rst_isoband` and indexed to H3 cells with the Databricks product `h3_try_coverash3`;
 cumulative elevation tiers give each cell a coverage-depth value. The Canopy Height Model

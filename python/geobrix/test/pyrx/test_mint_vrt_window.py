@@ -45,3 +45,24 @@ def test_mint_vrt_unions_adjacent_tiles(tmp_path):
         a = ds.read(1)
         assert a[0, 0] == 10.0      # left tile
         assert a[0, 500] == 20.0    # right tile
+
+
+def test_mint_vrt_out_survives_denied_utime(tmp_path, monkeypatch):
+    # Regression: minting to a UC Volume FUSE path failed because shutil.move fell back
+    # to copy2 -> copystat -> os.utime(), which the FUSE mount rejects with
+    # "Operation not permitted". mint_vrt(out=...) must write content only (no utime),
+    # so it still succeeds when utime is denied.
+    _write_tile(str(tmp_path / "t0.tif"), 0.0, 256.0, 10.0)
+    _write_tile(str(tmp_path / "t1.tif"), 256.0, 256.0, 20.0)
+
+    def _deny_utime(*args, **kwargs):
+        raise PermissionError("[Errno 1] Operation not permitted")
+
+    monkeypatch.setattr(os, "utime", _deny_utime)
+    out = mint_vrt(
+        [str(tmp_path / "t0.tif"), str(tmp_path / "t1.tif")],
+        out=str(tmp_path / "win.vrt"),
+    )
+    with rasterio.open(out) as ds:
+        assert (ds.width, ds.height) == (512, 256)
+        assert ds.read(1)[0, 500] == 20.0

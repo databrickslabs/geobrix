@@ -79,7 +79,11 @@ def mint_vrt(tile_paths: List[str], out: Optional[str] = None) -> str:
             dest_dir = os.path.dirname(os.path.abspath(out))
             if dest_dir:
                 os.makedirs(dest_dir, exist_ok=True)
-            shutil.move(built, out)
+            # Content-only copy, NOT shutil.move/copy2: the destination may be a UC
+            # Volume FUSE mount, where copy2's copystat -> utime() raises
+            # "Operation not permitted". copyfile writes bytes only (no stat/mode/mtime),
+            # and the VRT references tiles by absolute path so its location is irrelevant.
+            shutil.copyfile(built, out)
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
         _logger.debug("mint_vrt: wrote %d-tile VRT to %s", len(abs_paths), out)

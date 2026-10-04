@@ -261,6 +261,116 @@ def test_merge_streaming_bounds_peak_rss():
     )
 
 
+def test_merge_streaming_error_propagates(monkeypatch):
+    """Streaming path errors must propagate as the original exception, not IndexError.
+
+    Pre-fix: ``_merge_tiles_streaming`` was called inside the size-gate's
+    ``try/except Exception``, so any streaming failure (VRT build, cog_convert_file,
+    disk-full) was caught, mislogged as "size-gate computation failed", and then fell
+    through to the in-RAM path with empty ``datasets`` → ``IndexError`` at
+    ``merge_ds[0]``, masking the real error.
+
+    Post-fix: the try/except is scoped to size-estimation math only; the streaming
+    return is outside the except so a streaming exception propagates to the caller.
+    """
+    tile_a = _ras(np.full((2, 2), 1.0), ulx=0.0, uly=2.0, px=1.0)
+    tile_b = _ras(np.full((2, 2), 2.0), ulx=2.0, uly=2.0, px=1.0)
+
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agg, "cog_convert_file", boom)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        agg.merge_tiles([tile_a, tile_b])
+
+
+def test_reproject_dataset_target_res_honored():
+    """_reproject_dataset with target_res produces output at the specified pixel size.
+
+    Without target_res the output uses the natural transform resolution (which varies
+    by CRS).  With target_res the output pixel size must snap exactly to the requested
+    value — used by _merge_tiles_streaming to align CRS-mismatched tiles to the same
+    grid.
+    """
+    data = np.ones((10, 10), dtype="float32")
+    profile = dict(
+        driver="GTiff",
+        width=10,
+        height=10,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32633",
+        transform=from_origin(500000.0, 5500000.0, 1000.0, 1000.0),
+        nodata=None,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data, 1)
+        tile_bytes = mf.read()
+
+    with MemoryFile(tile_bytes) as mf:
+        with mf.open() as src:
+            # Without target_res: EPSG:32633 → EPSG:4326 gives natural ~deg resolution
+            rep_mf_nat, rep_ds_nat = agg._reproject_dataset(src, "EPSG:4326")
+            natural_xres = abs(rep_ds_nat.transform.a)
+            rep_ds_nat.close()
+            rep_mf_nat.close()
+
+            # With target_res=(0.01, 0.01): output must use exactly 0.01 deg pixels
+            rep_mf_snp, rep_ds_snp = agg._reproject_dataset(
+                src, "EPSG:4326", target_res=(0.01, 0.01)
+            )
+            snapped_xres = abs(rep_ds_snp.transform.a)
+            rep_ds_snp.close()
+            rep_mf_snp.close()
+
+    # Snapped pixel must be exactly the requested 0.01 deg.
+    assert snapped_xres == pytest.approx(0.01, rel=1e-5)
+    # Natural resolution (1000m UTM → deg ≈ 0.009 deg at 50°N) differs from 0.01.
+    assert abs(natural_xres - 0.01) > 1e-4
+
+
+def test_merge_streaming_multicrs_produces_valid_output(monkeypatch):
+    """Streaming merge with CRS-mismatched tiles returns valid single-CRS output.
+
+    Two tiles with different CRS metadata are force-streamed.  The output must be
+    non-empty, have a CRS, and contain at least some valid (non-nodata) pixels.
+    This exercises the _reproject_dataset(target_res=...) code path added in Fix 5.
+    """
+    tile_a = _ras(np.full((5, 5), 1.0), ulx=0.0, uly=5.0, px=1.0, epsg=32633)
+
+    data_b = np.full((5, 5), 2.0, dtype="float32")
+    profile_b = dict(
+        driver="GTiff",
+        width=5,
+        height=5,
+        count=1,
+        dtype="float32",
+        crs="EPSG:3857",
+        transform=from_origin(5.0, 5.0, 1.0, 1.0),
+        nodata=-9999.0,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile_b) as dst:
+            dst.write(data_b, 1)
+        tile_b = mf.read()
+
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    result = agg.merge_tiles([tile_a, tile_b])
+
+    assert result is not None and len(result) > 0, "streaming merge must return bytes"
+    with MemoryFile(result) as mf:
+        with mf.open() as ds:
+            assert ds.crs is not None, "output must have a CRS"
+            arr = ds.read(1)
+            nd = ds.nodata
+            valid_pixels = arr[arr != nd] if nd is not None else arr.ravel()
+            assert len(valid_pixels) > 0, "output must contain valid pixels"
+
+
 def test_merge_small_unchanged():
     """Small 2-tile merge uses the in-RAM path (default budget) and returns the correct mosaic.
 

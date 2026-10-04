@@ -68,19 +68,30 @@ def _close_all(memfiles, datasets):
         mf.close()
 
 
-def _reproject_dataset(src, dst_crs):
+def _reproject_dataset(src, dst_crs, target_res=None):
     """Reproject an open rasterio dataset to ``dst_crs``; return (memfile, dataset).
 
     Used by merge_tiles to reconcile a group whose tiles span multiple CRSs (e.g. a
     UTM zone boundary) before rasterio.merge, which requires a single CRS. Nearest
     resampling preserves the source values; the source NoData is carried through.
     Caller MUST close the returned dataset then memfile.
+
+    Args:
+        src:        Open rasterio DatasetReader to reproject.
+        dst_crs:    Target CRS (rasterio CRS or any rasterio-accepted form).
+        target_res: Optional ``(xres, yres)`` pixel size for the output.  When
+                    provided, the reprojected tile is forced onto this pixel grid so
+                    that tiles reprojected from different sources all share the same
+                    pixel boundaries (fixing sub-pixel drift in the streaming merge
+                    path).  ``None`` lets ``calculate_default_transform`` choose the
+                    natural resolution.
     """
     import rasterio
     from rasterio.warp import Resampling, calculate_default_transform, reproject
 
+    _res_kwarg = {"resolution": target_res} if target_res is not None else {}
     transform, width, height = calculate_default_transform(
-        src.crs, dst_crs, src.width, src.height, *src.bounds
+        src.crs, dst_crs, src.width, src.height, *src.bounds, **_res_kwarg
     )
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
@@ -139,10 +150,9 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     as bytes and returns them.
 
     DETERMINISM: ``sorted_rasters`` arrives already sorted by raw GTiff bytes (identical
-    sort key to the in-RAM path).  ``_build_mosaic_vrt`` emits SimpleSources in input
-    order and GDAL's VRT default overlap resolution is last-source-wins, so the last
-    tile (highest bytes) wins overlapping pixels — identical to ``method="last"`` in
-    the in-RAM path.
+    sort key to the in-RAM path).  ``_build_mosaic_vrt`` emits ComplexSource entries (with
+    ``<NODATA>`` masking) in input order; GDAL's last-valid-source-wins resolution matches
+    ``method="last"`` nodata handling in the in-RAM path.
 
     MEMORY: peak RSS ≈ one tile's encoded bytes + GDAL's COG cache (≤200 MiB);
     the full decoded mosaic array is NEVER allocated.
@@ -150,12 +160,18 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     scratch = new_local_temp_dir("gbx_merge")
     try:
         # Pass 1: brief header-only open to determine ref_crs and per-tile CRS.
+        # Also capture the reference tile's pixel size so CRS-mismatched tiles can
+        # be reprojected onto the same pixel grid (fixing sub-pixel drift).
         # MemoryFile wraps the compressed bytes only (no pixel decode), so peak
         # memory here is O(sum of encoded bytes), NOT O(decoded mosaic).
         memfiles, datasets = _open_all(sorted_rasters)
         try:
             ref_crs = _pick_ref_crs(datasets)
             tile_crses = [ds.crs for ds in datasets]
+            _ref0 = datasets[0]
+            _rx = abs(_ref0.transform.a)
+            _ry = abs(_ref0.transform.e)
+            ref_pixel_res = (_rx, _ry) if _rx > 0 and _ry > 0 else None
         finally:
             _close_all(memfiles, datasets)
 
@@ -169,11 +185,13 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                 and tile_crs != ref_crs
             )
             if needs_reproject:
-                # Reproject to ref_crs (mirrors _reproject_dataset: nearest resampling,
-                # carry nodata) then write to disk. One tile decoded at a time.
+                # Reproject to ref_crs, snapping to the reference pixel grid via
+                # target_res so all tiles share the same pixel boundaries and the
+                # VRT mosaic has no sub-pixel placement drift.  Nearest resampling
+                # preserves source values; nodata is carried through.
                 with MemoryFile(rb) as src_mf:
                     with src_mf.open() as src:
-                        rep_mf, rep_ds = _reproject_dataset(src, ref_crs)
+                        rep_mf, rep_ds = _reproject_dataset(src, ref_crs, target_res=ref_pixel_res)
                         try:
                             profile = rep_ds.profile.copy()
                             profile.update(driver="GTiff")
@@ -189,8 +207,9 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
             tile_paths.append(tile_path)
 
         # Build a GDAL VRT mosaic index (pure rasterio + ElementTree, no osgeo).
-        # VRT emits SimpleSources in tile_paths order; GDAL last-source-wins on
-        # overlapping pixels, matching method="last" in the in-RAM path.
+        # VRT emits ComplexSource entries (with <NODATA> masking) in tile_paths order;
+        # GDAL last-valid-source-wins on overlapping pixels (ComplexSource skips nodata
+        # values), matching method="last" nodata handling in the in-RAM path.
         vrt_path = _build_mosaic_vrt(tile_paths, scratch)
 
         # Stream-convert the VRT to a COG (bounded GDAL cache; never decodes
@@ -244,6 +263,7 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # read). If it exceeds the per-task memory budget, stream the merge out-of-core
         # via a VRT + COG instead of building a full numpy array. Any failure in the
         # gate computation falls back to the in-RAM path rather than crashing.
+        _over_budget = False
         try:
             _budget = decoded_budget_bytes("serverless")
             _ref = datasets[0]
@@ -257,17 +277,19 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
                 _mw = int(round((_lrx - _ulx) / _px_x))
                 _mh = int(round((_uly - _lry) / _px_y))
                 _decoded = _mw * _mh * _ref.count * np.dtype(_ref.dtypes[0]).itemsize
-                if _decoded > _budget:
-                    # Delegate to the streaming path; close local resources first so
-                    # the streaming function opens fresh handles independently.
-                    _close_all(memfiles, datasets)
-                    memfiles, datasets = [], []
-                    return _merge_tiles_streaming(rasters)
+                _over_budget = _decoded > _budget
         except Exception:
             _log.debug(
                 "merge_tiles: size-gate computation failed; falling back to in-RAM path",
                 exc_info=True,
             )
+            _over_budget = False
+        if _over_budget:
+            # Delegate to the streaming path; close local resources first so
+            # the streaming function opens fresh handles independently.
+            _close_all(memfiles, datasets)
+            memfiles, datasets = [], []
+            return _merge_tiles_streaming(rasters)
         # Reconcile CRS before merging: real AOIs that straddle a UTM zone boundary
         # (e.g. Sentinel-2 over SE Alaska -> EPSG:32608 + 32609) yield groups whose
         # tiles span multiple CRSs, but rasterio.merge requires one. Reproject any

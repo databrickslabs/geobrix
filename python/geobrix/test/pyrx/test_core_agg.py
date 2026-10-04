@@ -130,6 +130,130 @@ def test_merge_tiles_same_origin_overlap_winner_order_invariant():
     assert np.all(arr == winner)
 
 
+# --- merge_tiles streaming path (Task 3) ------------------------------------
+
+
+def test_merge_streaming_matches_in_ram(monkeypatch):
+    """Streaming path produces same extent, band count, and pixel values as in-RAM path.
+
+    Forces the streaming path via a monkeypatched budget of 1 byte, then compares
+    the result with the default in-RAM result: extent (within pixel tolerance),
+    band count, and per-pixel values must all match.  Includes one overlapping tile
+    pair to exercise last-wins determinism on both paths.
+    """
+    # Three adjacent tiles; tile_b overlaps tile_a at x=[1,2].
+    # After byte-sorting the overlap winner is deterministic on both paths.
+    tile_a = _ras(np.full((2, 2), 1.0), ulx=0.0, uly=2.0, px=1.0)
+    tile_b = _ras(np.full((2, 2), 2.0), ulx=1.0, uly=2.0, px=1.0)
+    tile_c = _ras(np.full((2, 2), 3.0), ulx=3.0, uly=2.0, px=1.0)
+    tiles = [tile_a, tile_b, tile_c]
+
+    # In-RAM path (default budget).
+    in_ram_bytes = agg.merge_tiles(tiles)
+
+    # Streaming path (monkeypatch budget to 1 → always streams).
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    streaming_bytes = agg.merge_tiles(tiles)
+
+    assert streaming_bytes is not None, "streaming merge returned None"
+
+    with MemoryFile(in_ram_bytes) as mf1, mf1.open() as ds1:
+        with MemoryFile(streaming_bytes) as mf2, mf2.open() as ds2:
+            assert ds1.count == ds2.count, "band count must match"
+            # Extent must agree within one-pixel tolerance (COG may round the envelope).
+            assert ds1.bounds.left == pytest.approx(ds2.bounds.left, abs=1.0)
+            assert ds1.bounds.right == pytest.approx(ds2.bounds.right, abs=1.0)
+            assert ds1.bounds.top == pytest.approx(ds2.bounds.top, abs=1.0)
+            assert ds1.bounds.bottom == pytest.approx(ds2.bounds.bottom, abs=1.0)
+            arr1 = ds1.read(1)
+            arr2 = ds2.read(1)
+            assert arr1.shape == arr2.shape, f"shape mismatch: {arr1.shape} vs {arr2.shape}"
+            assert np.allclose(arr1, arr2, equal_nan=True), (
+                "pixel values differ between in-RAM and streaming paths"
+            )
+
+
+def test_merge_streaming_bounds_peak_rss(monkeypatch):
+    """Peak RSS during the streaming merge stays well under the full-mosaic uncompressed size.
+
+    Four float32 tiles arranged 2×2 (each 3000×3000 px) form a 6000×6000 union
+    (≈ 144 MB uncompressed float32).  The streaming path must not allocate a full
+    decoded mosaic array; peak RSS delta must stay below 60% of the union size.
+
+    RSS measurement uses ``resource.getrusage(RUSAGE_SELF).ru_maxrss``.
+    macOS reports bytes; Linux reports KiB.  If the measurement is unreliable
+    (e.g. delta is negative due to GC, or ``resource`` is unavailable), the test
+    skips cleanly rather than hard-failing.
+    """
+    import sys
+
+    try:
+        import resource
+    except ImportError:
+        pytest.skip("resource module not available on this platform")
+
+    W, H = 3000, 3000
+    px = 1.0
+    tile_bytes_list = []
+    for row in range(2):
+        for col in range(2):
+            ulx = float(col * W)
+            uly = float((row + 1) * H)  # north-up: upper-left y-coord
+            val = float(row * 2 + col + 1)
+            data = np.full((H, W), val, dtype="float32")
+            b = _ras(data, ulx=ulx, uly=uly, px=px)
+            del data
+            tile_bytes_list.append(b)
+
+    # Union decoded size: 6000×6000 × 1 band × 4 bytes = 144 MB.
+    union_uncompressed = (2 * W) * (2 * H) * 1 * np.dtype("float32").itemsize
+
+    # Force streaming path.
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+
+    rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    result = agg.merge_tiles(tile_bytes_list)
+    rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+
+    assert result is not None, "streaming merge returned None"
+    assert len(result) > 0, "streaming merge returned empty bytes"
+
+    # Normalize to bytes (macOS = bytes, Linux = KiB).
+    if sys.platform == "darwin":
+        delta_bytes = rss_after - rss_before
+    else:
+        delta_bytes = (rss_after - rss_before) * 1024
+
+    if delta_bytes < 0:
+        pytest.skip(
+            f"RSS delta is negative ({delta_bytes}); OS returned pages, measurement unreliable"
+        )
+
+    assert delta_bytes < 0.6 * union_uncompressed, (
+        f"Peak RSS delta {delta_bytes / 1e6:.1f} MB exceeds 60% of union uncompressed "
+        f"{union_uncompressed / 1e6:.1f} MB — possible full-mosaic allocation in streaming path"
+    )
+
+
+def test_merge_small_unchanged():
+    """Small 2-tile merge uses the in-RAM path (default budget) and returns the correct mosaic.
+
+    Regression guard: the size gate must not break small merges.
+    """
+    left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+    right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+    out = agg.merge_tiles([left, right])
+    assert out is not None
+    with MemoryFile(out) as mf:
+        with mf.open() as ds:
+            assert ds.width == 4
+            assert ds.height == 2
+            arr = ds.read(1)
+            # Left half should be left tile values; right half should be right tile values.
+            assert np.allclose(arr[:, 0:2], [[1.0, 2.0], [3.0, 4.0]])
+            assert np.allclose(arr[:, 2:4], [[5.0, 6.0], [7.0, 8.0]])
+
+
 # --- combineavg_tiles -------------------------------------------------------
 def test_combineavg_tiles_mean():
     a = _ras(np.array([[2.0, 4.0], [6.0, 8.0]]))

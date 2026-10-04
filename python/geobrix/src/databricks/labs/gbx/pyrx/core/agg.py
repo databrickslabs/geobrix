@@ -13,6 +13,9 @@ These mirror the heavyweight operations:
   * ``align_to_tiles``        -> gbx_rst_align_to (warp tile to reference grid)
 """
 
+import logging
+import os
+import shutil
 from typing import List, Tuple
 
 import numpy as np
@@ -24,9 +27,14 @@ from rasterio.merge import merge as _rio_merge
 from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
 
+from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
+from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
+_log = logging.getLogger(__name__)
 _NODATA = -9999.0
 
 
@@ -121,6 +129,82 @@ def _pick_ref_crs(datasets):
     return best if best is not None else datasets[0].crs
 
 
+def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
+    """Out-of-core merge path: stream tiles through a VRT to a COG file.
+
+    Used when the union mosaic decoded size exceeds ``decoded_budget_bytes("serverless")``.
+    Writes each tile to a local scratch dir ONE AT A TIME (reprojecting to the reference
+    CRS when needed), builds a GDAL VRT mosaic index, then runs ``cog_convert_file``
+    (bounded GDAL cache, block-by-block) to produce the final COG.  Reads the COG back
+    as bytes and returns them.
+
+    DETERMINISM: ``sorted_rasters`` arrives already sorted by raw GTiff bytes (identical
+    sort key to the in-RAM path).  ``_build_mosaic_vrt`` emits SimpleSources in input
+    order and GDAL's VRT default overlap resolution is last-source-wins, so the last
+    tile (highest bytes) wins overlapping pixels — identical to ``method="last"`` in
+    the in-RAM path.
+
+    MEMORY: peak RSS ≈ one tile's encoded bytes + GDAL's COG cache (≤200 MiB);
+    the full decoded mosaic array is NEVER allocated.
+    """
+    scratch = new_local_temp_dir("gbx_merge")
+    try:
+        # Pass 1: brief header-only open to determine ref_crs and per-tile CRS.
+        # MemoryFile wraps the compressed bytes only (no pixel decode), so peak
+        # memory here is O(sum of encoded bytes), NOT O(decoded mosaic).
+        memfiles, datasets = _open_all(sorted_rasters)
+        try:
+            ref_crs = _pick_ref_crs(datasets)
+            tile_crses = [ds.crs for ds in datasets]
+        finally:
+            _close_all(memfiles, datasets)
+
+        # Pass 2: write tiles one-at-a-time to the scratch dir.
+        tile_paths = []
+        for i, (rb, tile_crs) in enumerate(zip(sorted_rasters, tile_crses)):
+            tile_path = os.path.join(scratch, f"tile_{i}.tif")
+            needs_reproject = (
+                ref_crs is not None
+                and tile_crs is not None
+                and tile_crs != ref_crs
+            )
+            if needs_reproject:
+                # Reproject to ref_crs (mirrors _reproject_dataset: nearest resampling,
+                # carry nodata) then write to disk. One tile decoded at a time.
+                with MemoryFile(rb) as src_mf:
+                    with src_mf.open() as src:
+                        rep_mf, rep_ds = _reproject_dataset(src, ref_crs)
+                        try:
+                            profile = rep_ds.profile.copy()
+                            profile.update(driver="GTiff")
+                            with rasterio.open(tile_path, "w", **profile) as dst:
+                                dst.write(rep_ds.read())
+                        finally:
+                            rep_ds.close()
+                            rep_mf.close()
+            else:
+                # Same CRS (or no CRS): write raw GTiff bytes straight to disk.
+                with open(tile_path, "wb") as fh:
+                    fh.write(rb)
+            tile_paths.append(tile_path)
+
+        # Build a GDAL VRT mosaic index (pure rasterio + ElementTree, no osgeo).
+        # VRT emits SimpleSources in tile_paths order; GDAL last-source-wins on
+        # overlapping pixels, matching method="last" in the in-RAM path.
+        vrt_path = _build_mosaic_vrt(tile_paths, scratch)
+
+        # Stream-convert the VRT to a COG (bounded GDAL cache; never decodes
+        # the full mosaic into a numpy array).
+        cog_path = os.path.join(scratch, "mosaic.tif")
+        cog_convert_file(vrt_path, cog_path)
+
+        # Read the COG back as bytes and return.
+        with open(cog_path, "rb") as fh:
+            return fh.read()
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+
+
 def merge_tiles(rasters: List[bytes]) -> bytes:
     """Merge the group's tile rasters into one spatial mosaic (GTiff bytes).
 
@@ -155,6 +239,35 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     extra = []  # (memfile, dataset) pairs for reprojected sources, closed in finally
     try:
         ref_crs = _pick_ref_crs(datasets)
+        # --- SIZE GATE ---
+        # Estimate the union-extent decoded mosaic size from tile headers (no pixel
+        # read). If it exceeds the per-task memory budget, stream the merge out-of-core
+        # via a VRT + COG instead of building a full numpy array. Any failure in the
+        # gate computation falls back to the in-RAM path rather than crashing.
+        try:
+            _budget = decoded_budget_bytes("serverless")
+            _ref = datasets[0]
+            _px_x = abs(_ref.transform.a)
+            _px_y = abs(_ref.transform.e)
+            if _px_x > 0 and _px_y > 0:
+                _ulx = min(ds.bounds.left for ds in datasets)
+                _uly = max(ds.bounds.top for ds in datasets)
+                _lrx = max(ds.bounds.right for ds in datasets)
+                _lry = min(ds.bounds.bottom for ds in datasets)
+                _mw = int(round((_lrx - _ulx) / _px_x))
+                _mh = int(round((_uly - _lry) / _px_y))
+                _decoded = _mw * _mh * _ref.count * np.dtype(_ref.dtypes[0]).itemsize
+                if _decoded > _budget:
+                    # Delegate to the streaming path; close local resources first so
+                    # the streaming function opens fresh handles independently.
+                    _close_all(memfiles, datasets)
+                    memfiles, datasets = [], []
+                    return _merge_tiles_streaming(rasters)
+        except Exception:
+            _log.debug(
+                "merge_tiles: size-gate computation failed; falling back to in-RAM path",
+                exc_info=True,
+            )
         # Reconcile CRS before merging: real AOIs that straddle a UTM zone boundary
         # (e.g. Sentinel-2 over SE Alaska -> EPSG:32608 + 32609) yield groups whose
         # tiles span multiple CRSs, but rasterio.merge requires one. Reproject any

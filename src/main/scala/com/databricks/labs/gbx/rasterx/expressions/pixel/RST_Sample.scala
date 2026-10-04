@@ -129,7 +129,7 @@ object RST_Sample extends WithExpressionInfo {
       * the world coordinate is already CRS-aligned. (Callers wanting CRS
       * reprojection can wrap this in `gbx_rst_clip`-style preprocessing.)
       */
-    def execute(ds: Dataset, x: Double, y: Double): Array[Double] = {
+    def execute(ds: Dataset, x: Double, y: Double): Array[java.lang.Double] = {
         require(ds != null, "RST_Sample.execute: source Dataset is null")
         val w = ds.GetRasterXSize
         val h = ds.GetRasterYSize
@@ -145,13 +145,19 @@ object RST_Sample extends WithExpressionInfo {
         val row = ((-gt(4) * dx + gt(1) * dy) / det).toInt
         if (col < 0 || col >= w || row < 0 || row >= h) return null
         val nBands = ds.GetRasterCount
-        val out = new Array[Double](nBands)
+        val out = new Array[java.lang.Double](nBands)
         var b = 1
         while (b <= nBands) {
             val band = ds.GetRasterBand(b)
             val buf = new Array[Double](1)
             band.ReadRaster(col, row, 1, 1, buf)
-            out(b - 1) = buf(0)
+            // Per-band nodata check: GetNoDataValue sets ndArr(0) to the nodata value,
+            // or leaves it null if no nodata is declared on the band (GDAL JNI pattern
+            // from BandAccessors / WindowedExtract). Matches light-tier ops.sample which
+            // returns None when float(v) == float(nodata).
+            val ndArr = new Array[java.lang.Double](1)
+            band.GetNoDataValue(ndArr)
+            out(b - 1) = if (ndArr(0) != null && buf(0) == ndArr(0).doubleValue()) null else buf(0)
             b += 1
         }
         out

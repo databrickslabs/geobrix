@@ -149,11 +149,33 @@ class PixelOpsTest extends AnyFunSuite with BeforeAndAfterAll {
             val res = RST_Sample.execute(src, 500003.5, 4999996.5)
             res should not be null
             res.length shouldBe 1
-            res(0) shouldBe 42.0 +- 1e-6
+            res(0).doubleValue() shouldBe 42.0 +- 1e-6
 
             // Out-of-extent point should return null.
             val outside = RST_Sample.execute(src, 600000.0, 4900000.0)
             outside shouldBe null
+        } finally {
+            src.delete()
+        }
+    }
+
+    test("RST_Sample returns null element at nodata pixels and value at valid pixels") {
+        // Band nodata = -9999.0; pixel at (col=5, row=5) holds the nodata fill.
+        // GeoTransform: origin (500000, 5000000), 1 m pixel, top-down.
+        // Centre of (col=5, row=5) → world (500005.5, 4999994.5).
+        val nd = -9999.0
+        val src = buildRaster(10, 10, (c, r) => if (c == 5 && r == 5) nd.toFloat else 42.0f,
+            nodata = Some(nd))
+        try {
+            val nodataRes = RST_Sample.execute(src, 500005.5, 4999994.5)
+            nodataRes should not be null
+            nodataRes.length shouldBe 1
+            nodataRes(0) should be (null) // nodata pixel → null element (parity with light ops.sample)
+
+            val validRes = RST_Sample.execute(src, 500003.5, 4999996.5) // col=3, row=3 = 42.0
+            validRes should not be null
+            validRes.length shouldBe 1
+            validRes(0).doubleValue() shouldBe 42.0 +- 1e-6
         } finally {
             src.delete()
         }

@@ -199,8 +199,12 @@ def test_sample_returns_null_for_nodata_pixel():
         nodata_result = ops_core.sample(ds, pt_nodata)
         valid_result = ops_core.sample(ds, pt_valid)
 
-    assert nodata_result == [None], f"expected [None] for nodata pixel, got {nodata_result}"
-    assert valid_result == [42.0], f"expected [42.0] for valid pixel, got {valid_result}"
+    assert nodata_result == [
+        None
+    ], f"expected [None] for nodata pixel, got {nodata_result}"
+    assert valid_result == [
+        42.0
+    ], f"expected [42.0] for valid pixel, got {valid_result}"
 
 
 def test_sample_non_point_raises():

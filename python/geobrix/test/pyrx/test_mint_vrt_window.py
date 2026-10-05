@@ -22,8 +22,13 @@ def _write_tile(path, origin_x, origin_y, val, n=256, px=1.0):
     """Write an n×n single-band float32 GeoTIFF at (origin_x, origin_y) in EPSG:3857."""
     tr = from_origin(origin_x, origin_y, px, px)
     profile = dict(
-        driver="GTiff", height=n, width=n, count=1, dtype="float32",
-        crs="EPSG:3857", transform=tr,
+        driver="GTiff",
+        height=n,
+        width=n,
+        count=1,
+        dtype="float32",
+        crs="EPSG:3857",
+        transform=tr,
     )
     with rasterio.open(path, "w", **profile) as dst:
         dst.write(np.full((n, n), val, "float32"), 1)
@@ -43,8 +48,8 @@ def test_mint_vrt_unions_adjacent_tiles(tmp_path):
         assert (ds.width, ds.height) == (512, 256)
         assert ds.crs.to_epsg() == 3857
         a = ds.read(1)
-        assert a[0, 0] == 10.0      # left tile
-        assert a[0, 500] == 20.0    # right tile
+        assert a[0, 0] == 10.0  # left tile
+        assert a[0, 500] == 20.0  # right tile
 
 
 def test_mint_vrt_out_survives_denied_utime(tmp_path, monkeypatch):

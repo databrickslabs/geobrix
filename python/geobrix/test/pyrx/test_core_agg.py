@@ -167,10 +167,12 @@ def test_merge_streaming_matches_in_ram(monkeypatch):
             assert ds1.bounds.bottom == pytest.approx(ds2.bounds.bottom, abs=1.0)
             arr1 = ds1.read(1)
             arr2 = ds2.read(1)
-            assert arr1.shape == arr2.shape, f"shape mismatch: {arr1.shape} vs {arr2.shape}"
-            assert np.allclose(arr1, arr2, equal_nan=True), (
-                "pixel values differ between in-RAM and streaming paths"
-            )
+            assert (
+                arr1.shape == arr2.shape
+            ), f"shape mismatch: {arr1.shape} vs {arr2.shape}"
+            assert np.allclose(
+                arr1, arr2, equal_nan=True
+            ), "pixel values differ between in-RAM and streaming paths"
 
 
 # ---------------------------------------------------------------------------
@@ -248,9 +250,7 @@ def test_merge_streaming_bounds_peak_rss():
         timeout=180,
     )
     if proc.returncode != 0:
-        pytest.fail(
-            f"merge RSS child exited {proc.returncode}:\n{proc.stderr[-2000:]}"
-        )
+        pytest.fail(f"merge RSS child exited {proc.returncode}:\n{proc.stderr[-2000:]}")
 
     delta_bytes = int(proc.stdout.strip())
     # Union decoded: 6000×6000 × 1 band × 4 bytes = 144 MB.
@@ -911,10 +911,13 @@ class TestMergeAggVirtualizeDir:
         # Path-only: raster bytes must be absent.
         assert merged["raster"] is None, "raster bytes must be None for a virtual tile"
         path = merged["path"]
-        assert path is not None and path.endswith(".tif"), f"expected .tif path, got {path!r}"
+        assert path is not None and path.endswith(
+            ".tif"
+        ), f"expected .tif path, got {path!r}"
 
         # The file must exist on disk.
         import os
+
         assert os.path.exists(path), f"written file not found: {path}"
         assert os.path.getsize(path) > 0, "written file is empty"
 
@@ -930,9 +933,7 @@ class TestMergeAggVirtualizeDir:
 
         # Materialized reference for extent comparison.
         ref_rows = (
-            df.groupBy("g")
-            .agg(prx.rst_merge_agg("tile").alias("merged"))
-            .collect()
+            df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged")).collect()
         )
         ref_merged = ref_rows[0]["merged"]
         with _serde.open_tile(bytes(ref_merged["raster"])) as ds_ref:
@@ -964,9 +965,9 @@ class TestMergeAggVirtualizeDir:
         merged = rows[0]["merged"]
         assert merged is not None
         raster_bytes = merged["raster"]
-        assert raster_bytes is not None and len(raster_bytes) > 0, (
-            "default path must return in-memory raster bytes"
-        )
+        assert (
+            raster_bytes is not None and len(raster_bytes) > 0
+        ), "default path must return in-memory raster bytes"
 
     def test_virtualize_prefix_is_used_in_filename(self, spark, tmp_path):
         """When virtualize_prefix is set the written filename begins with that prefix."""
@@ -979,13 +980,13 @@ class TestMergeAggVirtualizeDir:
         right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
         df = _spark_tile_df_raw(spark, [left, right])
         result = df.groupBy("g").agg(
-            prx.rst_merge_agg("tile", virtualize_dir=out_dir, virtualize_prefix="run42").alias(
-                "merged"
-            )
+            prx.rst_merge_agg(
+                "tile", virtualize_dir=out_dir, virtualize_prefix="run42"
+            ).alias("merged")
         )
         rows = result.collect()
         path = rows[0]["merged"]["path"]
         assert path is not None
-        assert os.path.basename(path).startswith("run42_"), (
-            f"filename does not start with prefix: {os.path.basename(path)!r}"
-        )
+        assert os.path.basename(path).startswith(
+            "run42_"
+        ), f"filename does not start with prefix: {os.path.basename(path)!r}"

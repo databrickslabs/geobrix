@@ -648,7 +648,9 @@ def test_viewshed_gdal_ctypes_occlusion():
         from rasterio.transform import xy as _xy
 
         ox, oy = _xy(ds.transform, 4, 4, offset="center")
-        out_arr = analysis._viewshed_gdal_ctypes(ds, float(ox), float(oy), 2.0, 0.0, None)
+        out_arr = analysis._viewshed_gdal_ctypes(
+            ds, float(ox), float(oy), 2.0, 0.0, None
+        )
 
     assert out_arr.dtype == np.dtype("uint8"), f"expected uint8, got {out_arr.dtype}"
     unique = set(np.unique(out_arr).tolist())

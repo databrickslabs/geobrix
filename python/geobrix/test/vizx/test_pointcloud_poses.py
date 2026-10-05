@@ -722,7 +722,9 @@ def test_show_gallery_with_out_dir_calls_plot_gallery(monkeypatch, tmp_path):
     monkeypatch.setattr(gal, "plot_gallery", _fake_gallery)
 
     df = _synthetic_df()
-    pcp.plot_point_cloud_poses(df, poses=["iso", "top"], show="gallery", out_dir=str(tmp_path))
+    pcp.plot_point_cloud_poses(
+        df, poses=["iso", "top"], show="gallery", out_dir=str(tmp_path)
+    )
 
     assert len(gallery_calls) == 1, "plot_gallery must be called exactly once"
     # PNGs must also be written to the permanent out_dir

@@ -180,9 +180,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         for i, (rb, tile_crs) in enumerate(zip(sorted_rasters, tile_crses)):
             tile_path = os.path.join(scratch, f"tile_{i}.tif")
             needs_reproject = (
-                ref_crs is not None
-                and tile_crs is not None
-                and tile_crs != ref_crs
+                ref_crs is not None and tile_crs is not None and tile_crs != ref_crs
             )
             if needs_reproject:
                 # Reproject to ref_crs, snapping to the reference pixel grid via
@@ -191,7 +189,9 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                 # preserves source values; nodata is carried through.
                 with MemoryFile(rb) as src_mf:
                     with src_mf.open() as src:
-                        rep_mf, rep_ds = _reproject_dataset(src, ref_crs, target_res=ref_pixel_res)
+                        rep_mf, rep_ds = _reproject_dataset(
+                            src, ref_crs, target_res=ref_pixel_res
+                        )
                         try:
                             profile = rep_ds.profile.copy()
                             profile.update(driver="GTiff")

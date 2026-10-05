@@ -22,7 +22,6 @@ no Serverless, and no JAR.
 
 import importlib
 import os
-import threading
 import types
 
 import numpy as np
@@ -36,7 +35,6 @@ pytest.importorskip("xrspatial")
 
 from databricks.labs.gbx.pyrx import _serde  # noqa: E402 – after importorskip
 from databricks.labs.gbx.pyrx.core import analysis  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Shared fixtures / helpers
@@ -131,13 +129,13 @@ def test_numba_cache_dir_set_to_tmp_gbx_prefix_when_absent(monkeypatch):
         ox, oy = _center_xy(ds, col=3, row=3)
         analysis.viewshed(ds, ox, oy, 1.0, 0.0, None)
 
-    assert "NUMBA_CACHE_DIR" in os.environ, (
-        "NUMBA_CACHE_DIR was not set; the numba caching guard is missing"
-    )
+    assert (
+        "NUMBA_CACHE_DIR" in os.environ
+    ), "NUMBA_CACHE_DIR was not set; the numba caching guard is missing"
     val = os.environ["NUMBA_CACHE_DIR"]
-    assert val.startswith("/tmp/gbx_numba_"), (
-        f"expected a /tmp/gbx_numba_* path, got {val!r}"
-    )
+    assert val.startswith(
+        "/tmp/gbx_numba_"
+    ), f"expected a /tmp/gbx_numba_* path, got {val!r}"
 
 
 def test_numba_cache_dir_not_overridden_when_already_present(monkeypatch):
@@ -154,9 +152,9 @@ def test_numba_cache_dir_not_overridden_when_already_present(monkeypatch):
         ox, oy = _center_xy(ds, col=3, row=3)
         analysis.viewshed(ds, ox, oy, 1.0, 0.0, None)
 
-    assert os.environ["NUMBA_CACHE_DIR"] == "/pre/existing/cache", (
-        "NUMBA_CACHE_DIR was overridden; guard must honour an existing value"
-    )
+    assert (
+        os.environ["NUMBA_CACHE_DIR"] == "/pre/existing/cache"
+    ), "NUMBA_CACHE_DIR was overridden; guard must honour an existing value"
 
 
 def test_numba_cache_dir_not_set_when_numba_disable_jit_is_present(monkeypatch):
@@ -200,9 +198,9 @@ def test_xrspatial_viewshed_package_attr_is_function_not_module():
     to expose ``_available_memory_bytes``, motivating the importlib path."""
     import xrspatial
 
-    assert callable(xrspatial.viewshed), (
-        "xrspatial.viewshed is expected to be callable (the function)"
-    )
+    assert callable(
+        xrspatial.viewshed
+    ), "xrspatial.viewshed is expected to be callable (the function)"
     assert not isinstance(xrspatial.viewshed, types.ModuleType), (
         "xrspatial.viewshed is a module — the importlib workaround may be obsolete; "
         "review whether the direct patch still works"
@@ -213,16 +211,16 @@ def test_importlib_import_module_returns_module_with_available_memory_fn():
     """``importlib.import_module('xrspatial.viewshed')`` returns the MODULE object
     that has ``_available_memory_bytes`` — the attribute patched by the guard."""
     mod = importlib.import_module("xrspatial.viewshed")
-    assert isinstance(mod, types.ModuleType), (
-        "importlib.import_module('xrspatial.viewshed') did not return a module"
-    )
+    assert isinstance(
+        mod, types.ModuleType
+    ), "importlib.import_module('xrspatial.viewshed') did not return a module"
     assert hasattr(mod, "_available_memory_bytes"), (
         "xrspatial.viewshed module is missing _available_memory_bytes; "
         "the monkeypatch in analysis.viewshed() would have no effect"
     )
-    assert callable(mod._available_memory_bytes), (
-        "_available_memory_bytes is not callable"
-    )
+    assert callable(
+        mod._available_memory_bytes
+    ), "_available_memory_bytes is not callable"
 
 
 # ---------------------------------------------------------------------------
@@ -313,9 +311,9 @@ def test_stub_returns_cgroup_limit_when_available(monkeypatch):
         analysis.viewshed(ds, ox, oy, 1.0, 0.0, None)
 
     assert len(observed) == 1, f"expected one viewshed call, got {len(observed)}"
-    assert observed[0] == _known_limit, (
-        f"stub should report cgroup limit ({_known_limit} bytes), got {observed[0]}"
-    )
+    assert (
+        observed[0] == _known_limit
+    ), f"stub should report cgroup limit ({_known_limit} bytes), got {observed[0]}"
 
 
 def test_stub_falls_back_to_1gib_when_no_cgroup_limit(monkeypatch):
@@ -342,9 +340,9 @@ def test_stub_falls_back_to_1gib_when_no_cgroup_limit(monkeypatch):
 
     assert len(observed) == 1, f"expected one viewshed call, got {len(observed)}"
     expected_fallback = 1024**3  # 1 GiB
-    assert observed[0] == expected_fallback, (
-        f"stub should fall back to 1 GiB ({expected_fallback} bytes), got {observed[0]}"
-    )
+    assert (
+        observed[0] == expected_fallback
+    ), f"stub should fall back to 1 GiB ({expected_fallback} bytes), got {observed[0]}"
 
 
 def test_viewshed_psutil_lock_is_reentrant_rlock():

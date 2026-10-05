@@ -182,7 +182,9 @@ def classify(geom, res):
     )
 
 
-def h3_los_visible(tower, observer_z, targets, surface_z, ground_z, target_height, eps=1.0):
+def h3_los_visible(
+    tower, observer_z, targets, surface_z, ground_z, target_height, eps=1.0
+):
     """Exact H3 line-of-sight. blocker = surface_z; target base = ground_z + target_height.
     Surface-relative model: call with ground_z = surface_z (target is above the surface).
     NoData-safe: None/missing surface is transparent; a target with no base is skipped.
@@ -205,20 +207,23 @@ def h3_los_visible(tower, observer_z, targets, surface_z, ground_z, target_heigh
     visible = set()
     for c in targets:
         if c == tower:
-            visible.add(c); continue
+            visible.add(c)
+            continue
         g = ground_z.get(c)
         if g is None:
             continue
         path = h3.grid_path_cells(tower, c)
         n = len(path) - 1
         if n <= 0:
-            visible.add(c); continue
+            visible.add(c)
+            continue
         z_t = g + target_height
         blocked = False
         for i in range(1, n):
             s = surface_z.get(path[i])
             if s is not None and s > observer_z + (z_t - observer_z) * (i / n) + eps:
-                blocked = True; break
+                blocked = True
+                break
         if not blocked:
             visible.add(c)
     return visible

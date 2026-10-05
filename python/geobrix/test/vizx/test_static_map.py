@@ -604,7 +604,6 @@ def test_raster_layer_inmem_zorder_is_2(monkeypatch):
     import matplotlib
     import numpy as np
     import rasterio
-    from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
 
     matplotlib.use("Agg")
@@ -639,7 +638,9 @@ def test_raster_layer_inmem_zorder_is_2(monkeypatch):
 
     plt.close("all")
     _, ax = plt.subplots()
-    sm._draw_one_layer(lyr, ax, max_rows=5000, sample_seed=0, srid=3857, legend=False, emphasis="blend")
+    sm._draw_one_layer(
+        lyr, ax, max_rows=5000, sample_seed=0, srid=3857, legend=False, emphasis="blend"
+    )
 
     images = ax.get_images()
     assert images, "No AxesImage added by _draw_one_layer for raster_layer"
@@ -664,7 +665,11 @@ def _make_polygon_gdf():
     import geopandas as gpd
     from shapely.geometry import box
 
-    geoms = [box(-74.1, 40.6, -73.9, 40.8), box(-80.0, 25.7, -79.8, 25.9), box(-87.7, 41.8, -87.5, 42.0)]
+    geoms = [
+        box(-74.1, 40.6, -73.9, 40.8),
+        box(-80.0, 25.7, -79.8, 25.9),
+        box(-87.7, 41.8, -87.5, 42.0),
+    ]
     return gpd.GeoDataFrame({"value": [1.0, 2.0, 3.0]}, geometry=geoms, crs=4326)
 
 
@@ -694,9 +699,9 @@ def test_colorbar_height_matches_map_axes_height():
         plt.close("all")
         return
 
-    assert len(extra_axes) == 1, (
-        f"Expected exactly one colorbar axes, found {len(extra_axes)}"
-    )
+    assert (
+        len(extra_axes) == 1
+    ), f"Expected exactly one colorbar axes, found {len(extra_axes)}"
     map_h = ax.get_position().height
     cb_h = extra_axes[0].get_position().height
     tolerance = 0.15 * map_h

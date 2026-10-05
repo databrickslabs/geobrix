@@ -132,7 +132,9 @@ def test_canopy_near_target_occludes_ground_receiver():
     # Sanity: placing the target on the canopy top (ground_z = 40 m) would be
     # visible — confirms the ground-based model is what causes the occlusion.
     ground_on_canopy = {**ground, far: 40.0}
-    vis_canopy = h3_los_visible(_TOWER, 30.0, {far}, surf, ground_on_canopy, target_height=1.6)
+    vis_canopy = h3_los_visible(
+        _TOWER, 30.0, {far}, surf, ground_on_canopy, target_height=1.6
+    )
     assert far in vis_canopy, "target placed on canopy top should be visible (sanity)"
 
 
@@ -160,7 +162,9 @@ def test_missing_surface_is_transparent():
     surf_none[mid] = None  # explicit NoData -> transparent
     ground = _flat_ground(path)
     vis_none = h3_los_visible(_TOWER, 30.0, {far}, surf_none, ground, target_height=2.0)
-    assert far in vis_none, "None surface at intermediate -> target must still be visible"
+    assert (
+        far in vis_none
+    ), "None surface at intermediate -> target must still be visible"
 
 
 # ---------------------------------------------------------------------------

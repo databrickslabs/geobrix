@@ -548,8 +548,12 @@ def g_pixel_vs_hex_contrast(cx, cy, color, tint, *, scale=1.0):
                 f'<rect x="{px0 + c*ps}" y="{py0 + r*ps}" width="{ps}" height="{ps}" '
                 f'fill="{color}" fill-opacity="{v:.2f}" stroke="white" stroke-width="1"/>'
             )
+    # "1 m pixels" centred under the pixel block.  Use an explicit cx-relative
+    # offset (not derived from px0+half_width) so the two sub-labels never
+    # collide regardless of scale: pixel-block centre ≈ cx-32, hex-block ≈ cx+42.
+    lbl_y = int(cy + cells_per * ps // 2 + 14 * scale)
     out.append(
-        f'<text x="{px0 + cells_per * ps // 2}" y="{int(cy + cells_per * ps // 2 + 14 * scale)}" '
+        f'<text x="{cx - int(32 * scale)}" y="{lbl_y}" '
         f'text-anchor="middle" font-family="ui-monospace,Menlo,monospace" '
         f'font-size="{int(9*scale)}" font-weight="700" fill="{color}">1 m pixels</text>'
     )
@@ -576,8 +580,10 @@ def g_pixel_vs_hex_contrast(cx, cy, color, tint, *, scale=1.0):
                 f'fill="{color}" fill-opacity="{intensity:.2f}" '
                 f'stroke="white" stroke-width="{1.2*scale:.1f}"/>'
             )
+    # "H3 cells" centred under the hex block — cx+42 keeps at least 14 px
+    # clearance from the right edge of the "1 m pixels" label at all scales.
     out.append(
-        f'<text x="{hx0 + dx_h // 2}" y="{int(cy + cells_per * ps // 2 + 14 * scale)}" '
+        f'<text x="{cx + int(42 * scale)}" y="{lbl_y}" '
         f'text-anchor="middle" font-family="ui-monospace,Menlo,monospace" '
         f'font-size="{int(9*scale)}" font-weight="700" fill="{color}">H3 cells</text>'
     )
@@ -687,9 +693,9 @@ def g_h3_los_compare(cx, cy, color, tint, *, scale=1.0):
             f'text-anchor="middle" font-family="ui-monospace,Menlo,monospace" '
             f'font-size="{int(8*scale)}" font-weight="800" fill="white">{h}</text>'
         )
-    # Two data rows
-    for ri, (v1, v2, v3) in enumerate([("px-exact", "optimistic", "~1.3×"),
-                                        ("1 task/tower", "LOS cheap", "10×")]):
+    # Two data rows — values kept to ≤8 chars so they fit the 43 px column width
+    for ri, (v1, v2, v3) in enumerate([("px-exact", "optimist.", "~1.3×"),
+                                        ("1/tower", "LOS fast", "10×")]):
         ry = ty0 + th + ri * th
         for ci, val in enumerate([v1, v2, v3]):
             bg_op = "0.06" if ri % 2 == 0 else "0.12"

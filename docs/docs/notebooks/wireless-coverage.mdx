@@ -24,7 +24,7 @@ A notebook series that builds the **elevation and surface data foundation** for 
 
 The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (-122.55, 37.70, -122.35, 37.85)`), reading the staged 3DEP LiDAR (`.laz` Entwine Point Tile nodes) with the GeoBrix `lidar_gbx` reader and binning returns into 1 m rasters **per spatial tile**. A single 1 m raster over SF is ~460 M pixels, so binning is tiled and **bounded** — `rx.bin_points_tiled` bins each tile with memory proportional to the raster grid (W×H), not the point count, so a full-resolution (`DECIMATE=1`) tile never OOMs. The binned surfaces are persisted to **permanent tables** you own (a `CATALOG.SCHEMA` you set) and read back downstream.
 
-![Wireless Coverage — LiDAR point cloud to DSM / DTM / CHM](../../../resources/images/diagrams/wireless-coverage/wireless-coverage.png)
+![Wireless Coverage series — config_nb → 01 → 02a/02b → 03a → 03b → 04](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-overview.png)
 
 :::tip View on GitHub
 **[notebooks/examples/wireless-coverage](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage)** — download the folder and import the notebooks (Parts 1, 2a, 2b, 3a, 3b, and 4) into your Databricks workspace to run.
@@ -44,6 +44,8 @@ The series uses the **lightweight tier** — pure Python/PySpark bindings (`data
 
 ### Part 1 — Pure LiDAR → CHM (`01_pure_lidar_chm.ipynb`)
 
+![Wireless Coverage Part 1 — pure LiDAR point cloud to CHM](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-01.png)
+
 A classified LiDAR point cloud already carries everything a Canopy Height Model needs: every return is classified (ground vs. above-ground) and georeferenced. So the CHM is a couple of binning ops away — **no external DEM, no coverage gaps**:
 
 - **DTM (bare earth)** — bin the **ground** returns (ASPRS class 2) → `min` elevation per pixel.
@@ -54,6 +56,8 @@ Part 1 is the shortest path from returns to canopy: it keeps only the CHM.
 
 ### Part 2a — Surfaces: DSM + DTM → CHM (`02a_surfaces_dsm_dtm_chm.ipynb`)
 
+![Wireless Coverage Part 2a — LiDAR point cloud to DSM + TIN DTM + CHM permanent tables](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-02a.png)
+
 The main arc. Builds directly on the LiDAR point cloud from Part 1 and persists the complete surface stack as reusable **permanent tables** you own (a governed Delta table of tiles in a `CATALOG.SCHEMA` you set; optional GeoTIFF export via `gtiff_gbx`). The production bare-earth DTM is a **TIN surface** — a Delaunay triangulation of the classified ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free raster. Because it works directly from the point cloud's own classification, it is a beyond-pixels surface: terrain reconstructed from the actual ground returns rather than approximated from raster values. The binned-`min` DTM is shown alongside for comparison:
 
 - **TIN DTM** — a Delaunay triangulation of the ground returns (`rst_dtmfromgeoms_agg`), barycentrically interpolated to a gap-free bare earth. Points are built with `st_makepoint(x, y, z)`, so Z carries through the WKB into the triangulation. This is the production terrain.
@@ -63,11 +67,13 @@ Writes the canonical `wc_surface_{dsm,dtm,chm}` tables and `OUT_DIR` GeoTIFFs th
 
 ### Part 2b — Surfaces from a DSM Raster (`02b_surfaces_from_dsm.ipynb`)
 
+![Wireless Coverage Part 2b — DSM raster to approximate DTM + CHM via morphological opening](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-02b.png)
+
 An alternative on-ramp for when a LiDAR point cloud is not available. Starting from a DSM raster only, it approximates the bare-earth DTM by applying a morphological opening to the DSM — `rst_filter` min then max — and then deriving the CHM with `rst_chm`. The result is a **pixel-only approximation**: without ground-classified returns, the bare earth is estimated from the surface shape rather than reconstructed from the point cloud. The Parts 1–2a LiDAR path produces a more accurate terrain for production use; when no point cloud is available, a published terrain product such as USGS 3DEP is the recommended production alternative. Part 2b lands the same canonical `wc_surface_{dsm,dtm,chm}` tables as Part 2a, so Parts 3 and 4 work unchanged either way.
 
 ### Part 3a — H3 Gridding (`03a_h3_gridding.ipynb`)
 
-![Wireless Coverage Part 3 — DEM/DSM/CHM surfaces to H3-indexed tables](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-03.png)
+![Wireless Coverage Part 3a — DEM/DSM/CHM surfaces to H3-indexed tables](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-03a.png)
 
 Takes the surface tables from Parts 1–2a (or 2b) and prepares them for global-grid analysis by
 H3-indexing each surface at a parameterized resolution (default: H3 resolution 10, ≈65 m
@@ -77,7 +83,11 @@ cumulative elevation tiers give each cell a coverage-depth value. The Canopy Hei
 is aggregated to the maximum canopy height per H3 cell via `gbx_rst_h3_rastertogridmax`.
 Interior gaps are filled with `h3_cellfill` (k=1, IDW, land mask re-applied after fill).
 All three H3 tables — `wc_h3_dem`, `wc_h3_dsm`, `wc_h3_chm` — are prepared for
-downstream analysis in Part 4.
+downstream analysis in Part 4. Each H3-cell output table carries a stable res-9 rollup join
+key — `parent_cellid` (the `h3_toparent` of each cell at res 9) and `parent_cellid_res` —
+so they join in one column to any external grid keyed at H3 resolution 9 (coverage, demand,
+population). This key is present on the Part 3a `wc_h3_*` tables, Part 4's
+`wc_h3_coverage*` tables, and Part 3b's `wc_rpx_h3_coverage` table.
 
 H3 resolution is a choice, not a ceiling. Part 1 stored one res-15 cell per LiDAR return
 (`cellid_r15`, ≈0.9 m² — sub-metre, finer than a 1 m pixel). `h3_toparent` rolls any
@@ -85,6 +95,8 @@ res-15 cell to any coarser resolution in a GROUP BY, so the same underlying data
 res-10 visualisation grids and res-12 viewshed buffers alike.
 
 ### Part 3b — Raster-Pixel Surfaces (`03b_raster_pixel_surfaces.ipynb`)
+
+![Wireless Coverage Part 3b — raster-pixel contrast: 1 m DSM vs H3 cells, raster and H3 viewshed](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-03b.png)
 
 The honest counterpoint to Part 3a. Where Part 3a takes the LiDAR surfaces *beyond pixels*
 into an H3 discrete global grid, Part 3b holds the **native 1 m raster** representation up
@@ -98,12 +110,15 @@ resolution via `h3_toparent`. The res-15 cells stored in Part 1 (≈0.9 m² per 
 than a 1 m pixel) roll to resolution 10, 12, or any other target with a GROUP BY, so H3's
 resolution is a dial, not a ceiling.
 
-**Part B — viewshed foil.** The same candidate towers from Part 4 are scored with the
-raster per-tower viewshed (`rst_viewshed_towers`) alongside Part 4's H3 line-of-sight
-results. `rst_viewshed_towers` selects the in-radius 1 m DSM tiles for each tower, mints
-a bytes-free VRT, runs one pixel-level viewshed, and histograms in-radius coverage — one
-tower per Spark task, the natural fan-out unit at full San Francisco scale. No raster bytes
-cross a shuffle.
+**Part B — viewshed foil.** An independent spread of candidate towers over the DSM footprint
+is scored with the per-tower raster viewshed (`rst_viewshed_towers`) and, inline, the same
+res-12 H3 line-of-sight model (`h3_los_visible`) — so Part 3b runs standalone and the two
+engines are compared head-to-head. The candidate lattice regenerates Part 4's res-9 centroid
+pattern independently — Part 3b reads only the Part 2 DSM, Part 3a's H3 grids, and
+`config_nb`; it never touches a Part 4 table. `rst_viewshed_towers` selects the in-radius
+1 m DSM tiles for each tower, mints a bytes-free VRT, runs one pixel-level viewshed, and
+histograms in-radius coverage — one tower per Spark task, the natural fan-out unit at full
+San Francisco scale. No raster bytes cross a shuffle.
 
 The trade-off is stated honestly: Part 4's H3 viewshed bins one max-height per ~17 m
 res-12 cell, which smooths fine blockers that a 1 m raster line-of-sight respects. That
@@ -118,6 +133,8 @@ not a defect in either approach.
 | Table | Contents |
 |---|---|
 | `wc_rpx_raster_viewshed_demo` | Per-tower raster coverage counts (`visible_px`, `total_px`, viewshed geometry) |
+| `wc_rpx_h3_viewshed_demo` | Per-tower H3 line-of-sight cell counts (the H3-engine viewshed) |
+| `wc_rpx_h3_coverage_demo` | Per-cell H3 LOS coverage depth for the demo towers |
 | `wc_rpx_comparison_demo` | Raster vs H3 coverage area on the shared 2.5 km-disk metric |
 
 **Maps** — the strongest demo tower's exact 1 m-pixel viewshed next to Part 4's H3-cell
@@ -217,7 +234,9 @@ Canopy Height Model tiles  (Float32, NoData = −9999)
         ▼  (Part 3a) gbx_rst_h3_rastertogridmax  →  wc_h3_chm max-canopy grid
         ▼  (Part 3a) h3_cellfill (k=1, IDW, land mask)  →  gap-filled H3 tables
         │
-        ▼  (Part 3b) rst_viewshed_towers (per-tower, 1 m raster)  →  wc_rpx_raster_viewshed_demo / wc_rpx_comparison_demo
+        ▼  (Part 3b) independent candidate lattice  →  rst_viewshed_towers (per-tower, 1 m raster)  →  wc_rpx_raster_viewshed_demo
+        ▼  (Part 3b) h3_los_visible (inline, res-12, self-contained)  →  wc_rpx_h3_viewshed_demo / wc_rpx_h3_coverage_demo
+        ▼  (Part 3b) raster vs H3 comparison  →  wc_rpx_comparison_demo
         │
         ▼  (Part 4) H3 res-9 centroid lattice  →  quick-pass rule-out (res-10, 30% threshold)
         ▼  (Part 4) h3_los_visible (res-12, 2.5 km buffer)  →  wc_h3_candidate_sites

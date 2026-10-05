@@ -14,6 +14,7 @@ from databricks.labs.gbx.pyrx.checkpoint import (
     checkpoint_skip,
     input_signature,
 )
+from databricks.labs.gbx.pyrx.core.tiling import tile_range
 from databricks.labs.gbx.pyrx.mvs import (
     dense_fuse,
     dense_mvs_pool,
@@ -41,4 +42,5 @@ __all__ = [
     "input_signature",
     "Manifest",
     "recommend_dense_allocation",
+    "tile_range",
 ]

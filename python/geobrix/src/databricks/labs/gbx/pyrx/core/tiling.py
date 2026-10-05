@@ -10,6 +10,28 @@ from rasterio.windows import Window
 from databricks.labs.gbx.pyrx.core import compression as _comp
 
 
+def tile_range(coord_m: float, origin_m: float, radius_m: float, tile_m: float) -> tuple:
+    """Return the inclusive ``(lo, hi)`` tile indices whose extents overlap
+    ``[coord_m - radius_m, coord_m + radius_m]``.
+
+    Tile ``i`` covers ``[origin_m + i*tile_m, origin_m + (i+1)*tile_m)``.  The
+    returned pair is the smallest closed index range such that every point in the
+    window is contained in at least one tile.
+
+    Args:
+        coord_m:   Centre of the analysis window in projected metres.
+        origin_m:  Tile-grid origin in the same coordinate system.
+        radius_m:  Half-width of the analysis window (metres).
+        tile_m:    Tile width in metres (must be > 0).
+
+    Returns:
+        ``(lo, hi)`` — inclusive tile index range (both ends included).
+    """
+    lo = math.floor((coord_m - radius_m - origin_m) / tile_m)
+    hi = math.floor((coord_m + radius_m - origin_m) / tile_m)
+    return (lo, hi)
+
+
 def _write(profile, data) -> bytes:
     dtype = profile.get("dtype", str(np.asarray(data).dtype))
     decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None

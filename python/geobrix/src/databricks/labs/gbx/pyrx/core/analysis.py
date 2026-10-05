@@ -741,3 +741,57 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
         with mf.open(**profile) as dst:
             dst.write(out, 1)
         return mf.read()
+
+
+# --- per-tower viewshed pipeline guards ------------------------------------
+# These back the public ``rst_viewshed_towers`` DataFrame pipeline in
+# ``pyrx/functions.py``. They are pure driver-side helpers (no raster I/O): the
+# validation guard raises before any Spark work is scheduled, and the
+# observer-height resolver turns the scalar-or-column argument into a Column.
+
+
+def _validate_towers_inputs(tiles_cols, radius_m):
+    """Validate the DSM-tiles frame and analysis radius for ``rst_viewshed_towers``.
+
+    Args:
+        tiles_cols: Column names of the DSM-tiles DataFrame.
+        radius_m:   Viewshed analysis radius in projected metres.
+
+    Raises:
+        ValueError: when the DSM-tiles frame lacks a ``path`` column (the remedy
+            names the DSM COG directory, because a *materialized* DSM STRUCT
+            table carries a NULL ``.path`` and would silently yield no tiles),
+            lacks the ``tx``/``ty`` grid-index columns, or when ``radius_m`` is
+            not strictly positive.
+    """
+    cols = set(tiles_cols)
+    if "path" not in cols:
+        raise ValueError(
+            "dsm_tiles_df must have a 'path' column of absolute DSM COG file "
+            "paths. A materialized DSM STRUCT table (e.g. wc_surface_dsm*) "
+            "carries a NULL .path, so path-based windowing would read nothing; "
+            "point dsm_tiles_df at the DSM COG directory instead (e.g. "
+            "/Volumes/.../lidar-surfaces/dsm with dsm_<tx>_<ty>.tif tiles) and "
+            "parse tx/ty from the basenames."
+        )
+    missing = [c for c in ("tx", "ty") if c not in cols]
+    if missing:
+        raise ValueError(
+            "dsm_tiles_df must have integer grid-index columns "
+            f"{missing} (used to select the in-radius tiles for each tower)."
+        )
+    if radius_m is None or radius_m <= 0:
+        raise ValueError(f"radius_m must be > 0 (got {radius_m!r}).")
+
+
+def _observer_height_col(observer_height):
+    """Resolve ``observer_height`` (a column-name str, or a scalar int/float) to a Column.
+
+    A ``str`` names a per-tower height column; a number is a constant mast
+    height applied to every tower. Returns a ``pyspark.sql.Column`` either way.
+    """
+    from pyspark.sql import functions as _F
+
+    if isinstance(observer_height, str):
+        return _F.col(observer_height)
+    return _F.lit(float(observer_height))

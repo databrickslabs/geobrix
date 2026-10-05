@@ -15,6 +15,7 @@ from databricks.labs.gbx.pyrx.checkpoint import (
     input_signature,
 )
 from databricks.labs.gbx.pyrx.core.tiling import tile_range
+from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
 from databricks.labs.gbx.pyrx.mvs import (
     dense_fuse,
     dense_mvs_pool,
@@ -42,5 +43,6 @@ __all__ = [
     "input_signature",
     "Manifest",
     "recommend_dense_allocation",
+    "rst_viewshed_towers",
     "tile_range",
 ]

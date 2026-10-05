@@ -28,7 +28,7 @@ Rasterize landscape PNG (for slides / 16:9 decks):
 from dataclasses import dataclass, field
 from textwrap import dedent
 
-# --- Data: 151 functions, organized by category --------------------------------
+# --- Data: 152 functions, organized by category --------------------------------
 
 @dataclass
 class Section:
@@ -105,7 +105,7 @@ CARDS_LEFT = [
         title="Spectral Indices",
         subtitle="Band-math indices for vegetation, water, and fire",
         color="#2E8B57", tint="#E0F4EA",
-        fns=["rst_ndvi", "rst_evi", "rst_savi", "rst_ndwi", "rst_nbr", "rst_index"],
+        fns=["rst_ndvi", "rst_evi", "rst_savi", "rst_ndwi", "rst_nbr", "rst_index", "rst_land_cover"],
     ),
     Card(
         title="H3 Grid",
@@ -407,7 +407,7 @@ def render():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'151 SQL functions for raster data on Spark &#8212; registered as '
+        f'152 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '
@@ -516,7 +516,7 @@ def render_landscape():
     )
     parts.append(
         f'<text x="{PAD}" y="{PAD + 56}" font-size="15" fill="#3F4D5E">'
-        f'151 SQL functions for raster data on Spark &#8212; registered as '
+        f'152 SQL functions for raster data on Spark &#8212; registered as '
         f'<tspan font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
         f'font-weight="700" fill="#0F1B2A">gbx_rst_*</tspan>'
         f' &#183; also available in Python &amp; Scala as '

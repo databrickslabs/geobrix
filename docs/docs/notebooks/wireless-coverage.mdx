@@ -20,7 +20,7 @@ coverage analysis — packaged as a Databricks Asset Bundle.
 
 # Wireless Coverage — LiDAR Surface Foundations
 
-A notebook series that builds the **elevation and surface data foundation** for wireless-coverage analysis directly from a USGS 3DEP **LiDAR point cloud** — data first, analytics later. The surfaces produced here (Canopy Height Model, Digital Surface Model, bare-earth Digital Terrain Model) are the inputs that later parts consume for antenna siting and line-of-sight with [`rst_viewshed`](../api/raster-functions).
+A notebook series that builds the **elevation and surface data foundation** for wireless-coverage analysis directly from a USGS 3DEP **LiDAR point cloud** — data first, analytics later. The surfaces produced here (Canopy Height Model, Digital Surface Model, bare-earth Digital Terrain Model) are the inputs that later parts consume for antenna siting via H3-native line-of-sight analysis.
 
 The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (-122.55, 37.70, -122.35, 37.85)`), reading the staged 3DEP LiDAR (`.laz` Entwine Point Tile nodes) with the GeoBrix `lidar_gbx` reader and binning returns into 1 m rasters **per spatial tile**. A single 1 m raster over SF is ~460 M pixels, so binning is tiled and **bounded** — `rx.bin_points_tiled` bins each tile with memory proportional to the raster grid (W×H), not the point count, so a full-resolution (`DECIMATE=1`) tile never OOMs. The binned surfaces are persisted to **permanent tables** you own (a `CATALOG.SCHEMA` you set) and read back downstream.
 
@@ -79,6 +79,66 @@ Interior gaps are filled with `h3_cellfill` (k=1, IDW, land mask re-applied afte
 All three H3 tables — `wc_h3_dem`, `wc_h3_dsm`, `wc_h3_chm` — are prepared for
 downstream analysis in Part 4.
 
+### Part 4 — Naive H3-Native Tower Siting (`04_tower_viewsheds.ipynb`)
+
+![Wireless Coverage Part 4 — naive H3-native tower siting pipeline](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-04.png)
+
+With the LiDAR surfaces from Parts 2a/2b and the H3 grids from Part 3 in hand, Part 4 asks the
+siting question: which candidate tower locations are worth the detailed analysis? The approach is
+deliberately **naive** — a baseline screen, not a final plan — and stays entirely in the H3 domain
+rather than operating on pixels.
+
+**Candidate lattice.** One tower candidate is placed at the centroid of every H3 resolution-9 cell
+(≈170 m edge) that falls within the area of interest. No land-cover constraints, no placement
+optimisation — just a dense, regular lattice that covers the whole AOI.
+
+**Quick-pass rule-out.** Before paying for any detailed line-of-sight work, each candidate gets a
+cheap coarse viewshed at H3 resolution 10 (≈65 m). A site that cannot achieve at least 30% coverage
+of its buffer at that coarse resolution is ruled out immediately. In the Golden Gate Park demo, this
+reduces 176 candidates to 62 survivors (~65% discarded) before any fine-resolution work begins.
+
+**Exact H3 line-of-sight.** Each surviving candidate is evaluated with the library function
+`h3_los_visible` (from `databricks.labs.gbx.pygx`) — a pure-Python H3 primitive that runs an exact
+ray-march test for every cell in the buffer. The observer sits at the DSM surface height plus a 10 m
+antenna clearance; the target is the ground surface (DTM) plus a 1.6 m receiver height. The buffer
+radius is 2.5 km. The line-of-sight test uses the binned H3 surface as both the blocker map and the
+ground reference, so it is a surface-relative check — the only shortcut is the H3 binning resolution,
+not the line-of-sight geometry.
+
+**Two-factor scoring.** Each site is scored on two independent factors kept as separate columns:
+
+- **`required_mast`** — the mast height the site needs to clear its own local surface and provide
+  the 10 m antenna clearance (`CHM + antenna_clearance`; lower is cheaper to build).
+- **`viewshed_cells`** — the number of H3 cells the site has line of sight to (higher is better
+  coverage).
+
+Sites are ranked by `viewshed_cells` descending, then `required_mast` ascending (nulls last).
+Combining the two into a single score — balancing cost against coverage — is a decision left to
+the analyst.
+
+**Nearest-ground fallback.** Where a cell has a DSM surface value but no bare-earth DTM value
+(typical at water bodies or dense-canopy edges), the ground height for `required_mast` is filled
+from the mean of the nearest populated H3 ring (expanding up to 3 rings). A site with no ground
+anywhere in those rings keeps `required_mast` as NULL — honestly uncostable rather than guessed.
+
+**Outputs** (all gated on `FORCE_RELOAD`; once the tables exist a re-run loads them and skips the
+per-tower viewsheds):
+
+| Table | Contents |
+|---|---|
+| `wc_h3_quickpass` | Every candidate's coarse coverage fraction (pre-rule-out score) |
+| `wc_h3_candidate_sites` | Ranked survivors: `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z` |
+| `wc_h3_coverage` | Per-cell LOS depth: how many sited towers can see each H3 cell |
+| `wc_h3_coverage_top10` | Same, aggregated over only the top-10 sites by coverage |
+
+**Four maps** trace the rule-out funnel: (A) all candidates coloured by coarse coverage fraction;
+(B) survivors that cleared the quick-pass; (C) per-cell coverage depth with all sited towers and
+their 2.5 km buffers overlaid; (D) the ten best sites with their viewsheds and buffers.
+
+**Next.** A forthcoming `land_cover` notebook adds the demand side — weighting coverage by where
+people and buildings are, excluding water, parks, and no-build zones — and optimises placement
+within each cell, turning this naive screen into a smarter siting tool.
+
 ---
 
 ## Key GeoBrix functions shown
@@ -112,6 +172,10 @@ Canopy Height Model tiles  (Float32, NoData = −9999)
         ▼  (Part 3) rst_isoband → h3_try_coverash3  →  wc_h3_dem / wc_h3_dsm elevation-tier grids
         ▼  (Part 3) gbx_rst_h3_rastertogridmax  →  wc_h3_chm max-canopy grid
         ▼  (Part 3) h3_cellfill (k=1, IDW, land mask)  →  gap-filled H3 tables
+        │
+        ▼  (Part 4) H3 res-9 centroid lattice  →  quick-pass rule-out (res-10, 30% threshold)
+        ▼  (Part 4) h3_los_visible (res-12, 2.5 km buffer)  →  wc_h3_candidate_sites
+        ▼  (Part 4) per-cell LOS depth aggregation  →  wc_h3_coverage / wc_h3_coverage_top10
 ```
 
 ---

@@ -1578,11 +1578,6 @@ OV_STAGES = [
      "subtitle": "rst_isoband + h3_try_coverash3 + gbx_rst_h3_rastertogridmax",
      "glyph": g_three_path_h3,
      "optional": False},
-    {"key": "03b",
-     "title": "03b — pixel foil",
-     "subtitle": "rst_viewshed_towers vs h3_los_visible — raster pixel counterpoint",
-     "glyph": g_raster_viewshed_fan,
-     "optional": False},
     {"key": "04",
      "title": "04 — tower siting",
      "subtitle": "candidate lattice → quick-pass → h3_los_visible → ranked sites",
@@ -1696,7 +1691,7 @@ def render_overview():
     parts.append(text(tx, OV_PAD + 30, "Wireless Coverage Series — LiDAR to H3 tower viewsheds",
                       size=26, weight=800, fill=C_INK))
     parts.append(text(tx, OV_PAD + 54,
-                      "config_nb → 01 (LiDAR) → 02a/02b (surfaces) → 03a (H3) → 03b (raster foil) → 04 (siting)",
+                      "config_nb → 01 → 02a → 03a → 04 (main)   ·   02b / 03b raster lane (optional)",
                       size=13, fill=C_MUTED))
     parts.append(
         f'<rect x="{OV_CANVAS_W - OV_PAD - pw}" y="{OV_PAD + 12}" rx="13" '
@@ -1715,6 +1710,7 @@ def render_overview():
 
     cur_x = OV_PAD
     ov2a_anchor = None  # center-bottom of 02a stage, for the 02b branch connector
+    ov3a_anchor = None  # center-bottom of 03a stage, for the 03b branch connector
 
     for i, stg in enumerate(OV_STAGES):
         key = stg["key"]
@@ -1729,6 +1725,8 @@ def render_overview():
                                            dashed=stg.get("optional", False)))
         if key == "02a":
             ov2a_anchor = (cur_x + stage_w // 2, stage_y + OV_STAGE_H)
+        if key == "03a":
+            ov3a_anchor = (cur_x + stage_w // 2, stage_y + OV_STAGE_H)
 
         cur_x += stage_w
         if i < n - 1:
@@ -1736,39 +1734,80 @@ def render_overview():
                                cur_x + OV_ARROW_W - 5, color=C_MUTED_3))
             cur_x += OV_ARROW_W
 
-    # 02b side branch (alternative path — dashed card below 02a)
+    # Raster optional lane — dashed cards below 02a (02b) and 03a (03b),
+    # connected by a horizontal through-line 02b → 03b.
+    branch_y = stage_y + OV_STAGE_H + OV_BRANCH_GAP
+    bw, bh = stage_w, OV_BRANCH_H  # same width as main stages for clean alignment
+
     if ov2a_anchor:
-        bx_center, by_top = ov2a_anchor
-        branch_y = stage_y + OV_STAGE_H + OV_BRANCH_GAP
-        bw, bh = int(stage_w * 1.15), OV_BRANCH_H
-        bx0 = bx_center - bw // 2
+        bx2_center, by2_top = ov2a_anchor
         acc_2b = THEMES["02b"]["accent"]
-        tint_2b = THEMES["02b"]["tint"]
-        parts.append(arrow_xy(bx_center, by_top + 4, bx_center, branch_y - 6,
+        bx2_0 = bx2_center - bw // 2
+        parts.append(arrow_xy(bx2_center, by2_top + 4, bx2_center, branch_y - 6,
                               color=acc_2b, dash="5 4", width=2))
-        parts.append(_card(bx0, branch_y, bw, bh, dash="5 4", shadow=False, stroke=acc_2b))
-        parts.append(top_stripe(bx0, branch_y, bw, acc_2b, h=4))
-        # Small DSM raster icon
+        parts.append(_card(bx2_0, branch_y, bw, bh, dash="5 4", shadow=False, stroke=acc_2b))
+        parts.append(top_stripe(bx2_0, branch_y, bw, acc_2b, h=4))
         parts.append(
-            f'<text x="{bx_center}" y="{branch_y + 20}" text-anchor="middle" '
+            f'<text x="{bx2_center}" y="{branch_y + 20}" text-anchor="middle" '
             f'font-family="Inter,sans-serif" font-size="12" font-weight="800" '
             f'fill="{acc_2b}">02b — DSM raster alternative</text>'
         )
         parts.append(
-            f'<text x="{bx_center}" y="{branch_y + 38}" text-anchor="middle" '
+            f'<text x="{bx2_center}" y="{branch_y + 38}" text-anchor="middle" '
             f'font-family="Inter,sans-serif" font-size="10.5" fill="{C_MUTED}">'
             f'rst_filter (morph. opening) → rst_chm</text>'
         )
         parts.append(
-            f'<text x="{bx_center}" y="{branch_y + 55}" text-anchor="middle" '
+            f'<text x="{bx2_center}" y="{branch_y + 55}" text-anchor="middle" '
             f'font-family="Inter,sans-serif" font-size="10" font-weight="600" '
             f'fill="{acc_2b}">same wc_surface_* output as 02a</text>'
         )
         parts.append(
-            f'<text x="{bx_center}" y="{branch_y + bh - 8}" text-anchor="middle" '
+            f'<text x="{bx2_center}" y="{branch_y + bh - 8}" text-anchor="middle" '
             f'font-family="Inter,sans-serif" font-size="9.5" font-weight="700" '
             f'fill="{C_MUTED_3}" letter-spacing="0.8">alternative</text>'
         )
+
+    if ov3a_anchor:
+        bx3_center, by3_top = ov3a_anchor
+        acc_3b = THEMES["03b"]["accent"]
+        tint_3b = THEMES["03b"]["tint"]
+        bx3_0 = bx3_center - bw // 2
+        parts.append(arrow_xy(bx3_center, by3_top + 4, bx3_center, branch_y - 6,
+                              color=acc_3b, dash="5 4", width=2))
+        parts.append(_card(bx3_0, branch_y, bw, bh, dash="5 4", shadow=False, stroke=acc_3b))
+        parts.append(top_stripe(bx3_0, branch_y, bw, acc_3b, h=4))
+        parts.append(
+            f'<text x="{bx3_center}" y="{branch_y + 20}" text-anchor="middle" '
+            f'font-family="Inter,sans-serif" font-size="12" font-weight="800" '
+            f'fill="{acc_3b}">03b — raster-pixel counterpoint</text>'
+        )
+        parts.append(
+            f'<text x="{bx3_center}" y="{branch_y + 38}" text-anchor="middle" '
+            f'font-family="Inter,sans-serif" font-size="10.5" fill="{C_MUTED}">'
+            f'rst_viewshed_towers vs h3_los_visible</text>'
+        )
+        parts.append(
+            f'<text x="{bx3_center}" y="{branch_y + 55}" text-anchor="middle" '
+            f'font-family="Inter,sans-serif" font-size="10" font-weight="600" '
+            f'fill="{acc_3b}">raster vs H3 viewshed comparison</text>'
+        )
+        parts.append(
+            f'<text x="{bx3_center}" y="{branch_y + bh - 8}" text-anchor="middle" '
+            f'font-family="Inter,sans-serif" font-size="9.5" font-weight="700" '
+            f'fill="{C_MUTED_3}" letter-spacing="0.8">optional</text>'
+        )
+
+    # Horizontal dashed arrow 02b → 03b through-line
+    if ov2a_anchor and ov3a_anchor:
+        bx2_right = ov2a_anchor[0] + bw // 2
+        bx3_left  = ov3a_anchor[0] - bw // 2
+        arrow_y   = branch_y + bh // 2
+        parts.append(arrow_xy(bx2_right + 4, arrow_y, bx3_left - 4, arrow_y,
+                              color=C_MUTED_3, dash="5 4", width=1.8))
+        # Lane label at the left of the branch row
+        parts.append(text(OV_PAD, arrow_y + 4, "raster — optional",
+                          size=9, weight=700, fill=C_MUTED_3, letter_spacing="0.8"))
 
     # Footer
     fy = OV_CANVAS_H - OV_PAD - OV_FOOTER_H

@@ -939,7 +939,7 @@ def g_candidate_lattice_and_quickpass(cx, cy, color, tint, *, scale=1.0):
         f'stroke="{color}" stroke-width="{1.8*scale:.1f}" stroke-linejoin="round"/>'
         f'<text x="{cx}" y="{fy0 + fh2//2 + int(5*scale)}" text-anchor="middle" '
         f'font-family="ui-monospace,Menlo,monospace" font-size="{int(9*scale)}" '
-        f'font-weight="700" fill="{color}">&ge; 30%</text>'
+        f'font-weight="700" fill="{color}">≥ 30%</text>'
     )
     for dx2 in [-int(9*scale), 0, int(9*scale)]:
         out.append(
@@ -1092,9 +1092,8 @@ NB1 = dict(
         Stage(
             title="Stage LiDAR from EPT",
             subtitle=(
-                "LidarDownloader walks the public AWS 3DEP EPT octree for San Francisco, "
-                "keeps nodes intersecting the AOI, and writes each as a .laz to the Volume "
-                "(idempotent — skips on FORCE_DOWNLOAD=False)"
+                "LidarDownloader walks the AWS 3DEP EPT octree for the AOI and writes each "
+                "node as a .laz tile to the Volume."
             ),
             glyph=g_ept_nodes,
             chip_text="LidarDownloader",
@@ -1102,9 +1101,8 @@ NB1 = dict(
         Stage(
             title="Load & tile point cloud",
             subtitle=(
-                "lidar_gbx format reader loads every .laz under LAZ_DIR in one pass; "
-                "each return gets a 1024 m tile stamp (tx, ty) and a res-15 H3 cell id "
-                "(h3_longlatash3) → persisted as wc_lidar_pts"
+                "lidar_gbx reads every .laz in LAZ_DIR; each return gets a tile key (tx, ty) "
+                "and H3 res-15 cell id, saved as wc_lidar_pts."
             ),
             glyph=g_lidar_tile_stamp,
             chip_text="lidar_gbx · h3_longlatash3",
@@ -1112,9 +1110,8 @@ NB1 = dict(
         Stage(
             title="Bin to DSM / DTM per tile",
             subtitle=(
-                "bin_points_tiled bins each 1024 m tile to TPX×TPX grids: "
-                "max(z) of all returns = DSM; min(z) of ground returns (class 2) = DTM. "
-                "Memory is bounded by the raster grid, not the point count"
+                "bin_points_tiled grids each 1024 m tile: all-return max(z) = DSM, "
+                "ground-return (class 2) min(z) = DTM."
             ),
             glyph=g_bin_rasters,
             chip_text="bin_points_tiled",
@@ -1122,9 +1119,8 @@ NB1 = dict(
         Stage(
             title="CHM + write GeoTIFF surfaces",
             subtitle=(
-                "rst_chm(DSM, DTM) warps the DSM onto the DTM grid and differences them "
-                "(clamped ≥ 0) → canopy height per pixel; gtiff_gbx writes DSM, DTM, CHM "
-                "tiles to OUT_DIR for downstream notebooks"
+                "rst_chm subtracts DTM from DSM (clamped ≥ 0) → canopy height per pixel; "
+                "gtiff_gbx writes DSM, DTM, CHM tiles to OUT_DIR."
             ),
             glyph=g_chm_output,
             chip_text="rst_chm · gtiff_gbx",
@@ -1161,9 +1157,8 @@ NB2A = dict(
         Stage(
             title="Read Part 1 tables",
             subtitle=(
-                "Reads wc_lidar_pts (classified returns) and wc_lidar_dsm "
-                "(max-z surface from Part 1) from Delta — no .laz re-scan. "
-                "The Part 1 DSM is carried forward unchanged as the canonical surface"
+                "Reads wc_lidar_pts and wc_lidar_dsm from Delta — no .laz re-scan; "
+                "the Part 1 max-z DSM carries forward unchanged."
             ),
             glyph=g_two_delta_tables,
             chip_text="wc_lidar_pts / dsm",
@@ -1171,9 +1166,8 @@ NB2A = dict(
         Stage(
             title="TIN bare-earth DTM",
             subtitle=(
-                "Ground returns (ASPRS class 2) only, capped at TIN_MAX_PTS per tile for "
-                "memory safety; rst_dtmfromgeoms_agg triangulates one Delaunay TIN per "
-                "(tx, ty) → continuous, gap-free bare-earth DTM"
+                "Ground returns (class 2) only; rst_dtmfromgeoms_agg builds a Delaunay TIN "
+                "per tile → continuous bare-earth DTM."
             ),
             glyph=g_tin_mesh,
             chip_text="rst_dtmfromgeoms_agg",
@@ -1181,9 +1175,8 @@ NB2A = dict(
         Stage(
             title="CHM = DSM − TIN DTM",
             subtitle=(
-                "rst_chm joins DSM and TIN DTM on the tile key, warps the DSM to the DTM grid, "
-                "and differences them (clamped ≥ 0) → canopy/structure height per pixel. "
-                "Persisted as wc_surface_chm"
+                "rst_chm joins DSM and TIN DTM on the tile key, warps DSM to DTM grid, "
+                "and subtracts (clamped ≥ 0) → wc_surface_chm."
             ),
             glyph=g_raster_diff,
             chip_text="rst_chm",
@@ -1191,9 +1184,8 @@ NB2A = dict(
         Stage(
             title="Write canonical surfaces",
             subtitle=(
-                "gtiff_gbx writes DSM, TIN DTM, and CHM as path-backed GeoTIFF tile dirs "
-                "under OUT_DIR; also persisted as wc_surface_{dsm,dtm,chm} Delta tables. "
-                "Parts 3a, 3b, and 4 read these identical outputs"
+                "gtiff_gbx writes DSM, TIN DTM, and CHM to OUT_DIR; also persisted as "
+                "wc_surface_* Delta tables for Parts 3–4."
             ),
             glyph=g_surface_outputs,
             chip_text="gtiff_gbx",
@@ -1226,9 +1218,8 @@ NB2B = dict(
         Stage(
             title="Read DSM GeoTIFF tiles",
             subtitle=(
-                "rst_fromfile reads path-backed DSM GeoTIFF tiles from DSM_IN_DIR; "
-                "tile indices (tx, ty) are recovered from the dsm_<tx>_<ty>.tif filename. "
-                "DEMO scopes to the Golden Gate Park ±2 tile window"
+                "rst_fromfile reads DSM GeoTIFF tiles from DSM_IN_DIR; "
+                "tile indices (tx, ty) are parsed from the filename."
             ),
             glyph=g_dsm_raster_input,
             chip_text="rst_fromfile",
@@ -1236,9 +1227,8 @@ NB2B = dict(
         Stage(
             title="Approximate bare earth",
             subtitle=(
-                "Morphological opening: rst_filter(DSM, K, 'min') erodes above-ground objects; "
-                "then rst_filter(eroded, K, 'max') restores terrain form. "
-                "Larger K removes larger structures but smooths real terrain"
+                "rst_filter(DSM, K, 'min') erodes structures; "
+                "rst_filter(eroded, K, 'max') restores terrain — DTM approximation."
             ),
             glyph=g_morph_opening,
             chip_text="rst_filter (min → max)",
@@ -1246,9 +1236,8 @@ NB2B = dict(
         Stage(
             title="CHM = DSM − approx DTM",
             subtitle=(
-                "rst_chm differences the input DSM and the morphological DTM (clamped ≥ 0) — "
-                "the 'white top-hat' of the DSM — giving canopy/structure height. "
-                "Persisted as wc_surface_chm"
+                "rst_chm subtracts the morphological DTM from DSM (clamped ≥ 0) → "
+                "canopy/structure height as wc_surface_chm."
             ),
             glyph=g_raster_diff,
             chip_text="rst_chm",
@@ -1256,9 +1245,8 @@ NB2B = dict(
         Stage(
             title="Write canonical surfaces",
             subtitle=(
-                "gtiff_gbx writes DSM, morphological DTM, and CHM to OUT_DIR; also persisted "
-                "as wc_surface_{dsm,dtm,chm} Delta tables. Same canonical outputs as Part 2a — "
-                "Parts 3a, 3b, and 4 are identical either way"
+                "gtiff_gbx writes DSM, morphological DTM, and CHM to OUT_DIR as wc_surface_* "
+                "— same outputs as Part 2a."
             ),
             glyph=g_surface_outputs,
             chip_text="gtiff_gbx",
@@ -1293,8 +1281,8 @@ NB3A = dict(
         Stage(
             title="Surface rasters in",
             subtitle=(
-                "wc_surface_dtm, wc_surface_dsm, and wc_surface_chm — canonical Delta tables "
-                "from Part 2a/2b (bare-earth DTM, first-return DSM, canopy-height CHM)"
+                "wc_surface_dtm, wc_surface_dsm, and wc_surface_chm — canonical Delta "
+                "surfaces from Part 2a/2b."
             ),
             glyph=g_three_surface_tables,
             chip_text="wc_surface_dtm / dsm / chm",
@@ -1302,8 +1290,8 @@ NB3A = dict(
         Stage(
             title="Reproject + clip",
             subtitle=(
-                "rst_transform(3857→4326) aligns each surface raster to H3's "
-                "lon/lat grid; rst_clip(land) masks ocean tiles and no-data borders"
+                "rst_transform reprojects to 4326 to align with H3's lon/lat grid; "
+                "rst_clip masks ocean tiles and no-data edges."
             ),
             glyph=g_reproject_clip,
             chip_text="rst_transform · rst_clip",
@@ -1311,18 +1299,17 @@ NB3A = dict(
         Stage(
             title="H3 gridding — 3 paths",
             subtitle=(
-                "DTM/DSM: rst_isoband(breaks) → h3_try_coverash3 + explode → "
-                "F.sequence cumulative tiers.  "
-                "CHM: gbx_rst_h3_rastertogridmax → max-z per H3 cell"
+                "DTM/DSM: rst_isoband isobands → h3_try_coverash3 cumulative tiers; "
+                "CHM: gbx_rst_h3_rastertogridmax max-z per cell."
             ),
             glyph=g_three_path_h3,
-            chip_text="rst_isoband · h3_try_coverash3 · gbx_rst_h3_rastertogridmax",
+            chip_text="rst_isoband · h3_try_coverash3",
         ),
         Stage(
             title="IDW gap fill + output",
             subtitle=(
-                "h3_kring(k=1) identifies neighbors of populated H3 cells; "
-                "h3_cellfill(IDW) interpolates remaining gaps → wc_h3_dem, wc_h3_dsm, wc_h3_chm"
+                "h3_kring(k=1) finds cell neighbors; h3_cellfill(IDW) fills remaining "
+                "gaps → wc_h3_dem, wc_h3_dsm, wc_h3_chm."
             ),
             glyph=g_three_h3_output_tables,
             chip_text="h3_kring · h3_cellfill",
@@ -1363,9 +1350,8 @@ NB3B = dict(
         Stage(
             title="Representation contrast",
             subtitle=(
-                "The same Golden Gate Park window as millions of 1 m pixels (DSM raster) "
-                "and as hundreds of H3 cells at res 10 — H3 is a resolution dial, "
-                "not a ceiling: a res-15 cell is ~0.9 m² (finer than a 1 m pixel)"
+                "Same area as 1 m pixel raster vs H3 cells at res 10. "
+                "H3 is a resolution dial: res-15 cells are ~0.9 m²."
             ),
             glyph=g_pixel_vs_hex_contrast,
             chip_text="h3_try_coverash3 · h3_toparent",
@@ -1373,9 +1359,8 @@ NB3B = dict(
         Stage(
             title="Candidate towers (spread pool)",
             subtitle=(
-                "Regenerates Part 4's res-9 centroid lattice over the DSM COG footprint; "
-                "spatially spread across the window so candidates span clearings and "
-                "elevated terrain, not just the centre"
+                "Res-9 centroid lattice over the DSM footprint, spread to cover clearings "
+                "and elevated terrain across the window."
             ),
             glyph=g_spread_candidates,
             chip_text="h3_try_coverash3",
@@ -1383,9 +1368,8 @@ NB3B = dict(
         Stage(
             title="Raster viewshed per tower",
             subtitle=(
-                "rst_viewshed_towers mints one bytes-free VRT window per tower, runs a "
-                "pixel-level GDAL viewshed (observer = DSM + 10 m, target + 1.6 m, "
-                "radius 2.5 km), and returns visible_px; one tower per Serverless task"
+                "rst_viewshed_towers runs a GDAL viewshed per tower "
+                "(observer +10 m, target +1.6 m, 2.5 km radius) → visible_px."
             ),
             glyph=g_raster_viewshed_fan,
             chip_text="rst_viewshed_towers",
@@ -1393,9 +1377,8 @@ NB3B = dict(
         Stage(
             title="H3 viewshed + comparison",
             subtitle=(
-                "Inline h3_los_visible bins DSM to res-12 H3 and runs the same LOS model "
-                "over the demo towers; raster vs H3 coverage area compared on a shared "
-                "2.5 km-disk metric — same towers, same assumptions"
+                "h3_los_visible bins DSM to res-12 H3 and runs LOS; raster vs H3 viewshed "
+                "coverage compared on a 2.5 km-disk metric."
             ),
             glyph=g_h3_los_compare,
             chip_text="h3_los_visible",
@@ -1432,8 +1415,8 @@ NB4 = dict(
         Stage(
             title="H3 surfaces in",
             subtitle=(
-                "wc_h3_dem, wc_h3_dsm, and wc_h3_chm — the H3-gridded surface "
-                "tables from Part 3a (bare-earth DTM, first-return DSM, canopy CHM)"
+                "wc_h3_dem, wc_h3_dsm, and wc_h3_chm — H3-gridded surface tables "
+                "from Part 3a."
             ),
             glyph=g_h3_input_tables,
             chip_text="wc_h3_dem / dsm / chm",
@@ -1441,19 +1424,17 @@ NB4 = dict(
         Stage(
             title="Candidate lattice + quick pass",
             subtitle=(
-                "One tower per H3 res-9 centroid over the AOI. Cheap coarse viewshed "
-                "(res-10) rules out sites below 30% coverage before any fine-res work "
-                "(176 → 62 survivors in the demo)"
+                "One tower per H3 res-9 centroid over the AOI; coarse viewshed (res-10) "
+                "rules out sites below 30% coverage."
             ),
             glyph=g_candidate_lattice_and_quickpass,
-            chip_text="h3_try_coverash3 · h3_los_visible (coarse)",
+            chip_text="h3_try_coverash3 · h3_los_visible",
         ),
         Stage(
             title="Exact H3 line-of-sight",
             subtitle=(
-                "h3_los_visible (pygx): observer = DSM + 10 m antenna; "
-                "target = DTM + 1.6 m receiver; 2.5 km buffer. "
-                "Nearest-ground fallback for DTM-less cells"
+                "h3_los_visible (pygx) reads DSM at +10 m and DTM at +1.6 m across "
+                "a 2.5 km radius; DTM-less cells use nearest-ground."
             ),
             glyph=g_los_viewshed,
             chip_text="h3_los_visible",
@@ -1461,9 +1442,8 @@ NB4 = dict(
         Stage(
             title="Ranked sites + coverage",
             subtitle=(
-                "Two-factor table: required_mast (CHM + clearance; lower = cheaper) "
-                "and viewshed_cells (coverage; higher = better). "
-                "wc_h3_coverage: per-cell LOS depth over all/top-10 sites"
+                "Two-factor rank: required_mast (CHM + clearance) and viewshed_cells "
+                "(coverage). wc_h3_coverage: per-cell LOS depth."
             ),
             glyph=g_coverage_output_tables,
             chip_text="wc_h3_candidate_sites · wc_h3_coverage",

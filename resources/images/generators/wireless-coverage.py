@@ -512,7 +512,7 @@ def g_morph_opening(cx, cy, color, tint, *, scale=1.0):
     )
     # Output: smoothed bare-earth (building removed)
     bx0 = cx - span // 2
-    by0 = int(cy + 18 * scale)
+    by0 = int(cy + 2 * scale)
     for r in range(cells):
         for c in range(cells):
             v = 0.15 + 0.30 * ((math.sin(r * 0.9 + c * 1.0) + 1) / 2)
@@ -523,7 +523,7 @@ def g_morph_opening(cx, cy, color, tint, *, scale=1.0):
     out.append(
         f'<rect x="{bx0}" y="{by0}" width="{span}" height="{span}" '
         f'fill="none" stroke="{color}" stroke-width="{1.6*scale:.1f}" rx="{int(4*scale)}"/>'
-        f'<text x="{cx}" y="{by0 + span + int(12*scale)}" text-anchor="middle" '
+        f'<text x="{cx}" y="{by0 + span + int(6*scale)}" text-anchor="middle" '
         f'font-family="ui-monospace,Menlo,monospace" font-size="{int(8*scale)}" '
         f'font-weight="700" fill="{color}">DTM out</text>'
     )
@@ -1270,7 +1270,7 @@ NB2B = dict(
 # ── NB3A ────────────────────────────────────────────────────────────────────
 _A3A, _T3A = THEMES["03a"]["accent"], THEMES["03a"]["tint"]
 NB3A = dict(
-    badge="03",
+    badge="3a",
     series_pill="Wireless Coverage  ·  Part 3a",
     title="H3-gridded signal surfaces",
     subtitle=(

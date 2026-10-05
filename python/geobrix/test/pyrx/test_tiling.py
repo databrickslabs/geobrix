@@ -1,4 +1,3 @@
-import pytest
 from databricks.labs.gbx.pyrx import tile_range  # adjust import to chosen export
 
 

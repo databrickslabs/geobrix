@@ -10,7 +10,9 @@ from rasterio.windows import Window
 from databricks.labs.gbx.pyrx.core import compression as _comp
 
 
-def tile_range(coord_m: float, origin_m: float, radius_m: float, tile_m: float) -> tuple:
+def tile_range(
+    coord_m: float, origin_m: float, radius_m: float, tile_m: float
+) -> tuple[int, int]:
     """Return the inclusive ``(lo, hi)`` tile indices whose extents overlap
     ``[coord_m - radius_m, coord_m + radius_m]``.
 

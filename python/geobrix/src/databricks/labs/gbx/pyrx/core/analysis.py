@@ -28,16 +28,22 @@ import threading
 import numpy as np
 from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.budget import (
+    _cgroup_task_limit_bytes,
+    decoded_budget_bytes,
+)
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    new_local_temp_dir,
+    new_local_temp_file,
+)
+
 # Module-level lock used to serialize the ``psutil.virtual_memory`` patch that
 # bypasses xrspatial's system-RAM guard (see ``viewshed()`` below).  The patch is
 # not thread-safe on its own — concurrent Spark Connect UDF workers sharing the
 # same Python process race on the module attribute.  The RLock serialises calls
 # within one process; separate OS processes are unaffected.
 _VIEWSHED_PSUTIL_LOCK = threading.RLock()
-
-from databricks.labs.gbx.pyrx.core import compression as _comp
-from databricks.labs.gbx.pyrx.core.budget import _cgroup_task_limit_bytes, decoded_budget_bytes
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir, new_local_temp_file
 
 # NoData sentinel for the proximity output — mirrors the heavyweight, which sets
 # NODATA=-1.0 so beyond-max / unreachable pixels are distinguishable from
@@ -467,10 +473,14 @@ def _load_libgdal():
     lib = ctypes.CDLL(None)
     if hasattr(lib, "GDALViewshedGenerate"):
         return lib
-    raise RuntimeError("rst_viewshed: GDALViewshedGenerate not found in bundled libgdal")
+    raise RuntimeError(
+        "rst_viewshed: GDALViewshedGenerate not found in bundled libgdal"
+    )
 
 
-def _viewshed_xrspatial(ds, observer_x, observer_y, observer_height, target_height, max_distance):
+def _viewshed_xrspatial(
+    ds, observer_x, observer_y, observer_height, target_height, max_distance
+):
     """xrspatial engine for small DEMs.  Returns a uint8 numpy array (255 visible / 0 invisible).
 
     Moves the xrspatial imports, NUMBA_CACHE_DIR guard, and _available_memory_bytes
@@ -502,8 +512,8 @@ def _viewshed_xrspatial(ds, observer_x, observer_y, observer_height, target_heig
     _xrs_vs_mod = _importlib.import_module("xrspatial.viewshed")
     with _VIEWSHED_PSUTIL_LOCK:
         _real_avail_mem_fn = _xrs_vs_mod._available_memory_bytes
-        _xrs_vs_mod._available_memory_bytes = (
-            lambda: _cgroup_task_limit_bytes() or (1024**3)
+        _xrs_vs_mod._available_memory_bytes = lambda: _cgroup_task_limit_bytes() or (
+            1024**3
         )
         try:
             res = _viewshed(
@@ -521,7 +531,9 @@ def _viewshed_xrspatial(ds, observer_x, observer_y, observer_height, target_heig
     return np.where(vals >= 0.0, 255, 0).astype("uint8")
 
 
-def _viewshed_gdal_ctypes(ds, observer_x, observer_y, observer_height, target_height, max_distance):
+def _viewshed_gdal_ctypes(
+    ds, observer_x, observer_y, observer_height, target_height, max_distance
+):
     """GDALViewshedGenerate ctypes engine for large DEMs.
 
     Writes the DEM to a local scratch file, calls GDALViewshedGenerate via ctypes
@@ -589,14 +601,25 @@ def _viewshed_gdal_ctypes(ds, observer_x, observer_y, observer_height, target_he
         gdal.GDALClose.argtypes = [c_vp]
         gdal.GDALViewshedGenerate.restype = c_vp
         gdal.GDALViewshedGenerate.argtypes = [
-            c_vp, c_cp, c_cp, c_vp,  # hBand, driver, targetRasterName, creationOpts(NULL)
-            c_d, c_d, c_d, c_d,       # obsX, obsY, obsHeight, targetHeight
-            c_d, c_d, c_d, c_d, c_d,  # visibleVal, invisibleVal, outOfRangeVal, nodataVal, curvCoeff
-            c_i,                       # eMode  (GVM_Max = 3)
-            c_d,                       # maxDistance (0 = unlimited)
-            c_vp, c_vp,                # pfnProgress(NULL), pProgressArg(NULL)
-            c_i,                       # heightMode (GVOT_NORMAL = 1)
-            c_vp,                      # extraOptions(NULL)
+            c_vp,
+            c_cp,
+            c_cp,
+            c_vp,  # hBand, driver, targetRasterName, creationOpts(NULL)
+            c_d,
+            c_d,
+            c_d,
+            c_d,  # obsX, obsY, obsHeight, targetHeight
+            c_d,
+            c_d,
+            c_d,
+            c_d,
+            c_d,  # visibleVal, invisibleVal, outOfRangeVal, nodataVal, curvCoeff
+            c_i,  # eMode  (GVM_Max = 3)
+            c_d,  # maxDistance (0 = unlimited)
+            c_vp,
+            c_vp,  # pfnProgress(NULL), pProgressArg(NULL)
+            c_i,  # heightMode (GVOT_NORMAL = 1)
+            c_vp,  # extraOptions(NULL)
         ]
 
         gdal.GDALAllRegister()
@@ -605,14 +628,24 @@ def _viewshed_gdal_ctypes(ds, observer_x, observer_y, observer_height, target_he
         try:
             band_h = gdal.GDALGetRasterBand(ds_h, 1)
             out_h = gdal.GDALViewshedGenerate(
-                band_h, b"GTiff", out_path.encode(), None,
-                float(observer_x), float(observer_y),
-                float(observer_height), float(target_height),
-                255.0, 0.0, 0.0, 0.0, 0.85714,
-                3,                                                  # GVM_Max
+                band_h,
+                b"GTiff",
+                out_path.encode(),
+                None,
+                float(observer_x),
+                float(observer_y),
+                float(observer_height),
+                float(target_height),
+                255.0,
+                0.0,
+                0.0,
+                0.0,
+                0.85714,
+                3,  # GVM_Max
                 float(max_distance) if max_distance is not None else 0.0,
-                None, None,
-                1,                                                  # GVOT_NORMAL = 1 -> binary 0/255 mask
+                None,
+                None,
+                1,  # GVOT_NORMAL = 1 -> binary 0/255 mask
                 None,
             )
             if not out_h:
@@ -717,14 +750,26 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
         # DEMs to xrspatial, which then raises MemoryError internally. Gate on
         # _XRSPATIAL_BYTES_PER_PX so only genuinely small tiles take the xrspatial
         # path; keep a MemoryError fallback as a belt-and-suspenders safety net.
-        if _XRSPATIAL_BYTES_PER_PX * ds.height * ds.width <= decoded_budget_bytes("serverless"):
+        if _XRSPATIAL_BYTES_PER_PX * ds.height * ds.width <= decoded_budget_bytes(
+            "serverless"
+        ):
             try:
                 out = _viewshed_xrspatial(
-                    ds, observer_x, observer_y, observer_height, target_height, max_distance
+                    ds,
+                    observer_x,
+                    observer_y,
+                    observer_height,
+                    target_height,
+                    max_distance,
                 )
             except MemoryError:
                 out = _viewshed_gdal_ctypes(
-                    ds, observer_x, observer_y, observer_height, target_height, max_distance
+                    ds,
+                    observer_x,
+                    observer_y,
+                    observer_height,
+                    target_height,
+                    max_distance,
                 )
         else:
             out = _viewshed_gdal_ctypes(

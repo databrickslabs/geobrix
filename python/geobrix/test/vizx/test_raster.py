@@ -1092,9 +1092,15 @@ def test_plot_raster_virtual_tile_data_matches_direct_read(tmp_path):
     assert (
         rendered.shape == expected_band.shape
     ), f"rendered shape {rendered.shape} != expected {expected_band.shape}"
+    # plot_raster applies _percentile_stretch (2–98th pct → [0,1]) to float
+    # data outside [0,1] before passing it to imshow.  Both mpl 3.10 and 3.11
+    # return these already-stretched values from get_array(), so comparing
+    # rendered against the same stretch applied to the raw read is
+    # version-stable and correctly reflects the display pipeline.
+    expected_stretched = np.asarray(_raster._percentile_stretch(expected)[0])
     assert np.allclose(
-        rendered, expected_band, atol=0.01
-    ), "rendered virtual tile values should match the direct windowed rasterio read"
+        rendered, expected_stretched, atol=0.01
+    ), "rendered virtual tile values should match the direct windowed read (after display normalization)"
     plt.close("all")
 
 

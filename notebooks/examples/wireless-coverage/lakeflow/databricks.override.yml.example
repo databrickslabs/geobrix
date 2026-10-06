@@ -20,6 +20,9 @@ targets:
       # schema: my_wireless_coverage_lf
       # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.5.2-py3-none-any.whl
 
-      # To SHARE the notebook series' already-staged LiDAR (skip a second ~830 MB download):
-      # laz_dir: /Volumes/geospatial_docs/wireless_coverage/data/lidar/sf/laz
+      # Reuse the notebook series' already-staged LiDAR instead of re-downloading
+      # the ~830 M-point SF point cloud. This is the standard staged location, so
+      # the `land` task finds it present and skips the download:
+      laz_dir: /Volumes/geospatial_docs/wireless_coverage/data/lidar/sf/laz
+      # Optionally also reuse the staged Overture water mask (else `land` fetches it):
       # water_mask_dir: /Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/overture-water-bay

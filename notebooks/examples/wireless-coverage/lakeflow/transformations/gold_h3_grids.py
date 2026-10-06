@@ -58,13 +58,6 @@ _MAX_CHM_M = 350.0
 # first removes the spill without changing which cells are produced.
 _SIMPLIFY_TOL_DEG = 3e-5
 
-# TEMPORARY comparison window (tile-grid x/y) -- the small DSM sub-window on which
-# the exact (no-simplify) branch completes without OOM, for the exact-vs-simplified
-# comparison. Delete together with the _cmp_* MVs at the bottom of this file.
-_CMP_WIN_TX = (3, 4)  # TEMP comparison window (tile x)
-_CMP_WIN_TY = (1,)  # TEMP comparison window (tile y)
-
-
 def _land_wkb(bbox, water_dir):
     """AOI box minus Overture water -> EPSG:4326 land multipolygon WKB.
 
@@ -286,57 +279,3 @@ def wc_h3_chm_res10():
         .select("cellid", "res", "max_chm_z")
     )
     return _with_join_parent(chm_h3, c["join_res"])
-
-
-# ===========================================================================
-# TEMPORARY COMPARISON MVs -- DELETE AFTER THE SIMPLIFY COMPARISON.
-# Exact (no-simplify) vs simplified DSM H3 grid on a SMALL tile window, so the
-# user can measure how much spatial info the simplify step drops -- apples-to-
-# apples on the same cells. The full-window exact build OOMs the driver on the
-# 471K-vertex polygons, so BOTH compare MVs filter wc_surface_dsm to
-# _CMP_WIN_TX / _CMP_WIN_TY first. Same schema + parent key as wc_h3_dsm_res10.
-# Selective-refresh ONLY these two, read the comparison, then remove them (plus
-# the _CMP_WIN_* constants). The 3 real gold MVs are untouched.
-# ===========================================================================
-@dp.materialized_view(
-    name="_cmp_dsm_exact",
-    comment="TEMP comparison -- windowed DSM H3 grid WITHOUT simplify (exact baseline); delete after the simplify comparison",
-)
-@dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
-def _cmp_dsm_exact():
-    spark = SparkSession.getActiveSession()
-    register_gbx(spark)
-    c = cfg(spark)
-    p = paths(spark)
-    # Exact (simplify_geom=False) over the small comparison window.
-    dsm = spark.read.table("wc_surface_dsm").where(
-        F.col("tx").isin(*_CMP_WIN_TX) & F.col("ty").isin(*_CMP_WIN_TY)
-    )
-    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
-    land_wkb = _land_wkb(c["bbox"], p["water"])
-    cells = _surface_to_h3_cells(
-        dsm, "dsm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=False
-    )
-    return _with_join_parent(cells, c["join_res"])
-
-
-@dp.materialized_view(
-    name="_cmp_dsm_simp",
-    comment="TEMP comparison -- windowed DSM H3 grid WITH simplify (same window as _cmp_dsm_exact); delete after the simplify comparison",
-)
-@dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
-def _cmp_dsm_simp():
-    spark = SparkSession.getActiveSession()
-    register_gbx(spark)
-    c = cfg(spark)
-    p = paths(spark)
-    # Simplified (simplify_geom=True -> product st_simplify) over the SAME window.
-    dsm = spark.read.table("wc_surface_dsm").where(
-        F.col("tx").isin(*_CMP_WIN_TX) & F.col("ty").isin(*_CMP_WIN_TY)
-    )
-    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
-    land_wkb = _land_wkb(c["bbox"], p["water"])
-    cells = _surface_to_h3_cells(
-        dsm, "dsm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=True
-    )
-    return _with_join_parent(cells, c["join_res"])

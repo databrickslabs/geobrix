@@ -50,7 +50,7 @@ from _config import cfg, paths, register_gbx  # correct under the pipeline root_
 # 03a's MAX_CHM_M constant (a fixed physical ceiling, not a cfg knob).
 _MAX_CHM_M = 350.0
 
-# Douglas-Peucker tolerance (DEGREES) for isoband polygons before H3 covering.
+# Simplify tolerance (DEGREES) for isoband polygons before H3 covering.
 # ~3e-5 deg ~= 3 m, FAR below the ~65 m res-10 H3 cell edge, so the covered-cell
 # set is unchanged while the dense 1 m pixel-staircase vertex rings collapse. The
 # DSM chain spilled ~1 TB covering ~400K isoband polygons of up to ~471K vertices
@@ -94,10 +94,10 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
 
     Ports ``config_nb._surface_to_h3_cells``: reproject 3857 -> 4326
     (``h3_try_coverash3`` needs lon/lat WKB), ``rst_clip`` to the land polygon
-    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands, ``st_simplify`` the
-    pixel-staircase band polygons (see ``_SIMPLIFY_TOL_DEG`` -- << the res-10 cell
-    edge, so covered cells are unchanged), then ``h3_try_coverash3`` + explode ->
-    solid, gap-free H3 cells per band. Returns
+    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands, ``st_simplify`` on
+    the pixel-staircase band polygons (see ``_SIMPLIFY_TOL_DEG`` -- << the res-10
+    cell edge, so covered cells are unchanged), then ``h3_try_coverash3`` +
+    explode -> solid, gap-free H3 cells per band. Returns
     (cellid LONG, res INT, band_level INT, elev_lo DOUBLE, elev_hi DOUBLE).
     """
     from databricks.labs.gbx.pyrx import functions as rx
@@ -127,16 +127,18 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
         F.col("p.upper").alias("elev_hi"),
     )
     # Collapse the 1 m pixel-staircase isoband rings before H3 covering: this is
-    # what kept the DSM chain from spilling ~1 TB. st_makevalid first (simplify
-    # can self-intersect these complex polygons), simplify at a sub-cell
-    # tolerance, then drop any still-invalid geom so h3_try_coverash3 never chokes.
+    # what kept the DSM chain from spilling ~1 TB (~400K polygons up to ~471K
+    # vertices each). Product st_simplify resolves on DBR 18.3 serverless. No
+    # validity guard needed: st_simplify can occasionally self-intersect, but
+    # h3_try_coverash3 is the try_ variant (NULL on a bad geom) and the existing
+    # cellid-not-null filter drops it -- a rare bad polygon just loses its tiny
+    # cell contribution.
     patches = patches.withColumn(
         "geom_wkb",
         F.expr(
-            "st_asbinary(st_simplify(st_makevalid(st_geomfromwkb(geom_wkb)), "
-            f"{_SIMPLIFY_TOL_DEG}))"
+            f"st_asbinary(st_simplify(st_geomfromwkb(geom_wkb), {_SIMPLIFY_TOL_DEG}))"
         ),
-    ).where(F.expr("st_isvalid(st_geomfromwkb(geom_wkb))"))
+    )
     cells = (
         patches.select(
             "band_level",

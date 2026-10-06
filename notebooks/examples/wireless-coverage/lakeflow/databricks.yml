@@ -32,14 +32,14 @@ resources:
             include: transformations/**
       environment:
         dependencies:
-          # Install the geobrix wheel WITH its light_env6/vizx extras in ONE pip
-          # resolution (mirrors the notebook's `%pip install geobrix[light_env6,vizx]
-          # @ wheel`). Lakeflow runs one `%pip install` per dependency entry, so
-          # enumerating the extras separately defeats pip's resolver — installing
-          # rio-tiler after rasterio was already pinned forces a source rebuild
-          # (ENVIRONMENT_PIP_INSTALL_ERROR). pip's `wheel[extras]` path form keeps it
-          # a single pass and passes DAB path-normalization (no file:// colon).
-          - ${var.gbx_wheel}[light_env6,vizx]
+          # The Lakeflow SDP pipeline runs on the DLT runtime channel — currently
+          # DBR 18.3.x (protobuf-5) — so it uses the DBR-language [light_dbr18] extra,
+          # NOT [light_env6] (the protobuf-6 / DBR-19 regime). Installed WITH vizx in
+          # ONE pip resolution: Lakeflow runs one `%pip install` per dependency entry,
+          # so splitting the extras defeats pip's resolver (rio-tiler after a pinned
+          # rasterio forces a source rebuild / ENVIRONMENT_PIP_INSTALL_ERROR). The
+          # `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
+          - ${var.gbx_wheel}[light_dbr18,vizx]
       configuration:
         wireless_coverage.catalog: ${var.catalog}
         wireless_coverage.schema: ${var.schema}
@@ -99,16 +99,16 @@ resources:
       environments:
         - environment_key: wc_env
           spec:
-            # Env 6 = the protobuf-6 Serverless base that the [light_env6] extra pins
-            # for (idna 3.11, typing_extensions 4.13+); matches the notebook series,
-            # which runs on Serverless environment 6. Keep this in lockstep with the
-            # [light_env6] extra below — an env-5 base with env-6-pinned deps trips the
-            # "core package versions changed" notebook/job failure.
-            environment_version: "6"
+            # Serverless job tasks use Environment-language versioning. Env 5 is the
+            # protobuf-5 base equivalent to the Lakeflow pipeline's DBR 18.3 runtime
+            # (DBR 18 <-> Env 5), so the extra is [light_env5] (= light_dbr18). Keep
+            # the env version and the extra in lockstep — a mismatched base + extra
+            # trips the "core package versions changed" job failure.
+            environment_version: "5"
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
-              - ${var.gbx_wheel}[light_env6,vizx]
+              - ${var.gbx_wheel}[light_env5,vizx]
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"
         timezone_id: "America/Chicago"

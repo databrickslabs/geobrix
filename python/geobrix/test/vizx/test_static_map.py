@@ -1,3 +1,4 @@
+import inspect
 import logging
 import warnings
 
@@ -396,4 +397,340 @@ def test_plot_static_skips_basemap_when_no_crs(spark):
         ax = plot_static(df, grid_system="custom", grid_conf=grid, basemap=True)
     assert ax is not None
     assert any("no CRS" in str(w.message) for w in caught)
+    plt.close("all")
+
+
+def test_contextily_add_basemap_accepts_headers():
+    """contextily.add_basemap must accept a headers= kwarg (added in 1.7.0).
+
+    The _basemap module passes _TILE_USER_AGENT via headers= on every
+    cx.add_basemap call to satisfy OSM's UA policy.  This test hits the real
+    contextily signature (not a mock) so a future contextily API change that
+    removes the parameter is caught immediately rather than silently swallowed
+    at render time.  Skipped on contextily < 1.7 (dev-container pin) where the
+    parameter did not yet exist.
+    """
+    contextily = pytest.importorskip("contextily")
+    ver = tuple(int(x) for x in contextily.__version__.split(".")[:2])
+    if ver < (1, 7):
+        pytest.skip(
+            f"contextily {contextily.__version__} < 1.7 — headers= not yet present; "
+            "CI lock uses 1.7.1 which is the correct minimum."
+        )
+    sig = inspect.signature(contextily.add_basemap)
+    assert "headers" in sig.parameters, (
+        "contextily.add_basemap no longer accepts headers=; "
+        "update _basemap._TILE_USER_AGENT wiring."
+    )
+
+
+def test_plot_static_enables_tile_cache(spark, monkeypatch):
+    """plot_static(basemap=True) must call cx.set_cache_dir before add_basemap.
+
+    The tile cache prevents re-fetching the same OSM/provider tiles across
+    multiple renders of the same AOI (access-blocked tile grids on the second+
+    render).  set_cache_dir is session-global, so the flag should flip once and
+    every subsequent call should be a no-op (idempotent).
+    """
+    import contextily
+
+    from databricks.labs.gbx.vizx import _basemap, plot_static
+
+    # Reset the session flag so the call actually fires for this test.
+    monkeypatch.setattr(_basemap, "_tile_cache_enabled", False)
+
+    set_cache_calls = []
+    monkeypatch.setattr(
+        contextily, "set_cache_dir", lambda p: set_cache_calls.append(p)
+    )
+    monkeypatch.setattr(contextily, "add_basemap", lambda *a, **k: None)
+
+    df = spark.createDataFrame([("POINT (1 2)",)], ["wkt"])
+    plt.close("all")
+    plot_static(df, basemap=True)
+    plt.close("all")
+
+    assert (
+        set_cache_calls
+    ), "cx.set_cache_dir was not called — tile cache was not enabled before add_basemap"
+
+    # Idempotence: a second plot_static call must NOT call set_cache_dir again.
+    set_cache_calls.clear()
+    plot_static(df, basemap=True)
+    plt.close("all")
+    assert (
+        not set_cache_calls
+    ), "cx.set_cache_dir called twice — _enable_tile_cache is not idempotent"
+
+
+# --- _basemap_add_kwargs: both branches ---
+
+
+def _fake_add_basemap_with_headers(ax, source, crs, headers=None, **kwargs):
+    """Fake add_basemap that accepts headers= (simulates contextily >= 1.7)."""
+
+
+def _fake_add_basemap_without_headers(ax, source, crs):
+    """Fake add_basemap that does NOT accept headers= (simulates contextily < 1.7)."""
+
+
+def test_basemap_add_kwargs_returns_headers_when_supported(monkeypatch):
+    """_basemap_add_kwargs returns {'headers': _TILE_USER_AGENT} when the installed
+    contextily.add_basemap signature includes a headers= parameter.
+
+    Monkeypatches cx.add_basemap with a fake that accepts headers= so both code
+    paths are exercised without depending on the installed contextily version.
+    """
+    import contextily
+
+    from databricks.labs.gbx.vizx._basemap import _TILE_USER_AGENT, _basemap_add_kwargs
+
+    monkeypatch.setattr(contextily, "add_basemap", _fake_add_basemap_with_headers)
+    result = _basemap_add_kwargs()
+    assert result == {
+        "headers": _TILE_USER_AGENT
+    }, f"Expected {{'headers': _TILE_USER_AGENT}}, got {result!r}"
+
+
+def test_basemap_add_kwargs_returns_empty_when_unsupported(monkeypatch):
+    """_basemap_add_kwargs returns {} when the installed contextily.add_basemap
+    signature does NOT include headers=, so the call degrades gracefully instead
+    of raising TypeError on older cluster contextily versions.
+    """
+    import contextily
+
+    from databricks.labs.gbx.vizx._basemap import _basemap_add_kwargs
+
+    monkeypatch.setattr(contextily, "add_basemap", _fake_add_basemap_without_headers)
+    result = _basemap_add_kwargs()
+    assert (
+        result == {}
+    ), f"Expected empty dict for old contextily signature, got {result!r}"
+
+
+# --- _resolve_basemap_source ---
+
+
+def test_resolve_basemap_source_none_returns_world_street_map(monkeypatch):
+    """_resolve_basemap_source(None) returns Esri.WorldStreetMap (the default)."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    # Reset the cached presets so this test always populates them fresh.
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    result = _resolve_basemap_source(None)
+    assert (
+        result == cx.providers.Esri.WorldStreetMap
+    ), f"Expected Esri.WorldStreetMap for None, got {result!r}"
+
+
+def test_resolve_basemap_source_imagery_returns_world_imagery(monkeypatch):
+    """_resolve_basemap_source('imagery') returns Esri.WorldImagery."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    result = _resolve_basemap_source("imagery")
+    assert (
+        result == cx.providers.Esri.WorldImagery
+    ), f"Expected Esri.WorldImagery for 'imagery', got {result!r}"
+
+
+def test_resolve_basemap_source_topo_returns_world_topo_map(monkeypatch):
+    """_resolve_basemap_source('topo') returns Esri.WorldTopoMap."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    result = _resolve_basemap_source("topo")
+    assert (
+        result == cx.providers.Esri.WorldTopoMap
+    ), f"Expected Esri.WorldTopoMap for 'topo', got {result!r}"
+
+
+def test_resolve_basemap_source_unknown_string_raises_value_error(monkeypatch):
+    """_resolve_basemap_source raises ValueError for an unknown preset string."""
+    import contextily as cx  # noqa: F401 — ensure cx available so presets load
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    with pytest.raises(ValueError, match="Unknown basemap_source preset"):
+        _resolve_basemap_source("not_a_real_preset")
+
+
+def test_resolve_basemap_source_provider_object_passthrough(monkeypatch):
+    """_resolve_basemap_source passes through a contextily provider object unchanged."""
+    import contextily as cx
+
+    from databricks.labs.gbx.vizx import _basemap
+    from databricks.labs.gbx.vizx._basemap import _resolve_basemap_source
+
+    monkeypatch.setattr(_basemap, "_BASEMAP_PRESETS", None)
+
+    provider = cx.providers.Esri.WorldImagery
+    result = _resolve_basemap_source(provider)
+    assert (
+        result is provider
+    ), f"Expected passthrough of provider object, got {result!r}"
+
+
+# --- raster_layer zorder: in-memory bytes path draws above basemap ---
+
+
+def test_raster_layer_inmem_zorder_is_2(monkeypatch):
+    """In-memory raster_layer renders at zorder=2, above the basemap (zorder=1).
+
+    Root cause of cmd23 bug: plot_raster's ax.imshow uses the default zorder=0;
+    cx.add_basemap is called AFTER the raster (also at zorder=0 but added later),
+    so the basemap covers the raster entirely — only basemap shows.
+
+    Fix: _draw_one_layer sets zorder=2 on all AxesImage objects added by
+    plot_raster, matching plot_cog's convention.
+    """
+    import io
+
+    import matplotlib
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    import databricks.labs.gbx.vizx._static_map as sm
+
+    # Build a tiny 4×4 float32 GeoTIFF in EPSG:3857
+    width, height = 4, 4
+    data = np.linspace(0.0, 100.0, width * height, dtype=np.float32).reshape(
+        1, height, width
+    )
+    transform = from_bounds(-100.0, -100.0, 100.0, 100.0, width, height)
+    buf = io.BytesIO()
+    with rasterio.open(
+        buf,
+        "w",
+        driver="GTiff",
+        height=height,
+        width=width,
+        count=1,
+        dtype=np.float32,
+        crs="EPSG:3857",
+        transform=transform,
+    ) as dst:
+        dst.write(data)
+    tile_bytes = buf.getvalue()
+
+    from databricks.labs.gbx.vizx._layers import raster_layer
+
+    lyr = raster_layer(tile_bytes, band=1, cmap="viridis")
+
+    plt.close("all")
+    _, ax = plt.subplots()
+    sm._draw_one_layer(
+        lyr, ax, max_rows=5000, sample_seed=0, srid=3857, legend=False, emphasis="blend"
+    )
+
+    images = ax.get_images()
+    assert images, "No AxesImage added by _draw_one_layer for raster_layer"
+    for img in images:
+        assert img.get_zorder() == 2, (
+            f"Raster image zorder is {img.get_zorder()}, expected 2 "
+            "(must be above basemap at zorder=1)"
+        )
+    plt.close("all")
+
+
+# --- colorbar height regression: _fix_colorbar_position ---
+
+
+def _make_polygon_gdf():
+    """Return a tiny GeoDataFrame with three polygons and a continuous 'value' column.
+
+    The polygons span a wide lon range so the equal-aspect box realises a shorter
+    height than the full subplot -- enough to expose the overrun bug without a
+    basemap fetch (basemap=False keeps the test fully offline + fast).
+    """
+    import geopandas as gpd
+    from shapely.geometry import box
+
+    geoms = [
+        box(-74.1, 40.6, -73.9, 40.8),
+        box(-80.0, 25.7, -79.8, 25.9),
+        box(-87.7, 41.8, -87.5, 42.0),
+    ]
+    return gpd.GeoDataFrame({"value": [1.0, 2.0, 3.0]}, geometry=geoms, crs=4326)
+
+
+def test_colorbar_height_matches_map_axes_height():
+    """Regression: the colorbar axes height must be approximately equal to the
+    map axes height after plot_static (created=True, continuous column + legend).
+
+    Before the fix, geopandas sized the colorbar to the full subplot area while
+    the map axes (equal-aspect geographic data) realised a shorter box — the
+    colorbar overran the title and extended below the map.  The fix calls
+    _fix_colorbar_position to pin the colorbar's y-extent to the map axes.
+
+    Tolerance is ±15 % of the map axes height — enough to catch the ~2–3× overrun
+    in the pre-fix code while remaining stable across figure aspect ratios.
+    """
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    gdf = _make_polygon_gdf()
+    ax = plot_static(gdf, column="value", legend=True, basemap=False)
+
+    fig = ax.figure
+    extra_axes = [a for a in fig.axes if a is not ax]
+    if not extra_axes:
+        # No colorbar was added (e.g. geopandas chose a discrete legend patch) --
+        # skip the height check rather than fail on an unrelated code path.
+        plt.close("all")
+        return
+
+    assert (
+        len(extra_axes) == 1
+    ), f"Expected exactly one colorbar axes, found {len(extra_axes)}"
+    map_h = ax.get_position().height
+    cb_h = extra_axes[0].get_position().height
+    tolerance = 0.15 * map_h
+    assert abs(cb_h - map_h) <= tolerance, (
+        f"Colorbar height {cb_h:.4f} differs from map axes height {map_h:.4f} "
+        f"by more than {tolerance:.4f} (15 %). Colorbar is overrunning the plot."
+    )
+    plt.close("all")
+
+
+def test_colorbar_height_unchanged_when_caller_owns_axes():
+    """When the caller passes ax= (created=False), _fix_colorbar_position must
+    NOT resize the colorbar -- the caller owns the layout.
+
+    This guards the nb3 side-by-side subplots pattern (plt.subplots(1,2) +
+    ax=axes[0/1]) against unintended layout mutation.
+    """
+    from databricks.labs.gbx.vizx import plot_static
+
+    plt.close("all")
+    fig, axes = plt.subplots(1, 2, figsize=(14, 6))
+    gdf = _make_polygon_gdf()
+
+    # Render onto the caller-owned axes -- created=False for both calls.
+    plot_static(gdf, column="value", legend=True, basemap=False, ax=axes[0])
+    plot_static(gdf, column="value", legend=True, basemap=False, ax=axes[1])
+
+    # Two map axes + up to two colorbar axes; confirm the figure still has the
+    # expected shape (no crash, no extra figures).
+    assert len(fig.axes) >= 2, "Expected at least the two map axes to survive"
+    assert len(plt.get_fignums()) == 1, "Expected exactly one figure (caller-owned)"
     plt.close("all")

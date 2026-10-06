@@ -260,7 +260,7 @@ def pyrx_land_cover_example(spark):
     "dark"]``); NoData/unclassified pixels are ``-1``. The class-mask tile it
     returns is single-band Int32, so it composes with ``rst_polygonize`` (a
     streaming Python UDTF) exactly like any other single-band tile --
-    ``rst_land_cover`` itself has no SQL registration (no ``gbx_rst_land_cover``).
+    ``rst_land_cover`` is also registered as ``gbx_rst_land_cover`` in SQL.
     """
     import numpy as np
     import shapely.wkb
@@ -301,8 +301,8 @@ def pyrx_land_cover_example(spark):
         rx.rst_land_cover("tile", method="spectral", smooth=0).alias("lc")
     )
 
-    # rst_land_cover is Python-only (no gbx_rst_land_cover SQL name); the
-    # resulting class-mask tile still composes with the registered streaming
+    # rst_land_cover is also registered as gbx_rst_land_cover in SQL; the
+    # resulting class-mask tile further composes with the registered streaming
     # UDTF gbx_rst_polygonize, invoked via SQL LATERAL.
     rx.register(spark)
     lc_df.createOrReplaceTempView("_pyrx_land_cover_demo")

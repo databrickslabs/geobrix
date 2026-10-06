@@ -179,10 +179,23 @@ def _capture_and_call(fs, input_kind, raster, tile_path, synth_paths, geom=None)
     same input_kind: "bytes" (raw raster bytes), "path" (corpus file path),
     "tile_array" (a list of open datasets from the synthesized multi-tile input),
     "geometry" (the open tile PLUS the tile's GeometrySet from the geometry
-    corpus, as core_fn(ds, args, geom)), or "tile" (the default: a single opened
+    corpus, as core_fn(ds, args, geom)), "synthetic_rgb_tile" (a synthetic 3-band
+    RGB tile for land-cover classification), or "tile" (the default: a single opened
     DatasetReader).
     """
-    if input_kind == "geometry":
+    if input_kind == "synthetic_rgb_tile":
+
+        def _run_synthetic_rgb(_fs=fs, _b=raster):
+            from databricks.labs.gbx.bench import spec as _spec_module
+
+            with _serde.open_tile(_b) as ds_orig:
+                rgb_bytes = _spec_module._synthetic_rgb_tile(ds_orig)
+            with _serde.open_tile(rgb_bytes) as ds_rgb:
+                return _fs.core_fn(ds_rgb, _fs.args)
+
+        feed = None
+        call = _run_synthetic_rgb
+    elif input_kind == "geometry":
 
         def _run_geometry(_fs=fs, _b=raster, _g=geom):
             with _serde.open_tile(_b) as ds:

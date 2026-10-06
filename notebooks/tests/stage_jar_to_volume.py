@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """
 Build the GeoBrix JAR (mvn clean package -DskipTests) and upload *-jar-with-dependencies.jar
-to GBX_ARTIFACT_VOLUME/<jar_filename>. Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR
-locally but skip the Databricks upload; set GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step
-ENTIRELY (no build, no upload). Loads config from notebooks/tests/databricks_cluster_config.env.
-Overwrites if file already exists.
+to GBX_ARTIFACT_VOLUME/<jar_filename>. The init-script dir (GBX_ARTIFACT_VOLUME) must hold
+exactly one geobrix-*-jar-with-dependencies.jar: any stale other-version product JAR in that
+dir is removed before the new one is uploaded (tests.jar and non-geobrix files are untouched).
+Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR locally but skip the Databricks upload;
+set GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step ENTIRELY (no build, no upload). Loads config
+from notebooks/tests/databricks_cluster_config.env. Overwrites if file already exists.
 """
 from __future__ import annotations
 
@@ -86,13 +88,31 @@ def main() -> int:
         print("GBX_BUNDLE_SKIP_JAR_UPLOAD=1: JAR built locally; skipping Databricks upload.")
         return 0
 
-    volume_path = f"{artifact_volume}/{jar_path.name}"
-
     w = WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)
     try:
         w.files.create_directory(artifact_volume)
     except Exception:
         pass
+
+    # Init-script dir: keep exactly one geobrix-*-jar-with-dependencies.jar.
+    # Delete any other-version product JAR before uploading the new one.
+    # Never touch geobrix-*-tests.jar, geobrix-gdal-init.sh, or platform tarballs.
+    try:
+        for entry in w.files.list(artifact_volume):
+            if entry.is_directory:
+                continue
+            filename = Path(entry.name).name
+            if (
+                filename.startswith("geobrix-")
+                and filename.endswith("-jar-with-dependencies.jar")
+                and filename != jar_path.name
+            ):
+                print(f"Removing stale product JAR: {entry.name}")
+                w.files.delete(entry.name)
+    except Exception as e:
+        print(f"Warning: could not list/clean artifact volume: {e}", file=sys.stderr)
+
+    volume_path = f"{artifact_volume}/{jar_path.name}"
     print("Uploading product jar to %s (overwrite if exists)..." % volume_path)
     w.files.upload_from(
         file_path=volume_path,

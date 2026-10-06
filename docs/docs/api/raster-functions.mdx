@@ -3776,17 +3776,17 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 
 <Tier light/>
 
-:::note Python-only — no SQL registration yet
-`rst_land_cover` is a **Python-only** columnar function: it is not registered as
-`gbx_rst_land_cover` in SQL (light or heavy), so it is called from Python only — e.g.
-`rx.rst_land_cover(...)` where `rx` is `databricks.labs.gbx.pyrx.functions`. A SQL surface is
-deferred to a later release. The single-band **Int32** class-mask tile it returns is a normal
-tile, so it composes with any other `rst_*` function from there — including the registered
-streaming UDTF `gbx_rst_polygonize` — so class regions can still be traced to vector polygons
-from SQL once the class-mask tile exists.
+:::note Lightweight tier (pyrx)
+Powered by **rasterio** + **NumPy** + **SciPy**. Classifies a multi-band RGB(+NIR) tile into land-cover class ids using spectral thresholds, k-means clustering, or a hybrid approach. Registered as `gbx_rst_land_cover` in SQL (light-only; no heavyweight Scala equivalent).
 :::
 
-**Signature:** `rst_land_cover(tile: Column, *, method: str = "hybrid", classes: List[str] = None, n_clusters: int = 6, smooth: int = 3): Column` — Classify an RGB(+NIR) tile into land-cover class ids; single-band Int32 tile.
+:::note Lightweight Python — virtual-tile force-output
+The lightweight **Python** binding accepts three optional keyword arguments the SQL tier does not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
+:::
+
+**SQL signature:** `gbx_rst_land_cover(tile, method, n_clusters, smooth)` — Classify an RGB(+NIR) tile into land-cover class ids; single-band Int32 tile. Positional args after `tile`: `method` (string), `n_clusters` (int), `smooth` (int).
+
+**Python signature:** `rst_land_cover(tile: Column, *, method: str = "hybrid", classes: List[str] = None, n_clusters: int = 6, smooth: int = 3): Column` — Classify an RGB(+NIR) tile into land-cover class ids; single-band Int32 tile.
 
 **Parameters:** `method` — `"spectral"` (fixed excess-green / brightness thresholds), `"kmeans"` (a `scipy` k-means partition over RGB + excess-green + brightness features, with clusters labeled by the same spectral thresholds), or `"hybrid"` (default; same k-means partition as `"kmeans"` today, kept as a distinct branch so a later release can diverge it); `classes` — not yet wired through the columnar UDF: only the built-in default class scheme is supported, and a non-`None` value raises `NotImplementedError`; `n_clusters` — k-means cluster count (`"kmeans"`/`"hybrid"` only); `smooth` — de-speckle window in pixels (a binary-opening pass drops isolated salt-and-pepper specks of each class back to NoData; `0` disables it)
 
@@ -3806,6 +3806,13 @@ geodesic area on the CRS's own ellipsoid for a geographic CRS (e.g. EPSG:4326), 
 raw `geom.area` in square degrees that would silently drop every region against a metric
 threshold.
 :::
+
+<FunctionExamples
+  name="rst_land_cover"
+  sql={rasterxSqlCode}                  sqlSource="docs/tests/python/api/rasterx_functions_sql.py"
+  pythonLight={pyrxCode}                pythonLightSource="docs/tests/python/api/pyrx_functions.py"
+  testFile="python/geobrix/test/pyrx/test_docs_examples.py"
+/>
 
 <CodeFromTest
   language="python"
@@ -4172,6 +4179,68 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
   scala={scalaApiExamplesCode}          scalaSource="docs/tests/scala/api/ScalaApiExamples.scala"
   testFile="docs/tests/python/api/test_rasterx_terrain_python_light.py"
 />
+
+### rst_viewshed_towers (Python / DataFrame helper)
+
+:::note Lightweight (pyrx) Python helper only
+`rst_viewshed_towers` is **not registered as a SQL function** and is **not available in the
+heavyweight tier**. It is a pure-Python / PySpark DataFrame pipeline function in the `pyrx`
+package. Light tier; Serverless-safe; no JAR required.
+:::
+
+`rst_viewshed_towers` runs a per-tower raster viewshed over a tiled DSM and returns one scalar
+row per tower. For each tower it selects the in-radius DSM tiles via the `tile_range` windowing
+helper (using an EPSG:3857 grid origin + tile size that the `tx`/`ty` indices in `dsm_tiles_df`
+reference), mints one bytes-free VRT over those tiles, runs a single `rst_viewshed` (materialized
+once, in-memory), and derives coverage counts from a histogram. No raster bytes cross a shuffle —
+each tower row carries a ~100-byte VRT path — so there is no FUSE read-back and no whole-AOI
+merge. Powers the Wireless Coverage series Part 3b viewshed analysis.
+
+**Signature:**
+```python
+from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
+
+result_df = rst_viewshed_towers(
+    towers_df, dsm_tiles_df, radius_m, observer_height,
+    x0=x0, y0=y0, tile_m=tile_m,
+    target_height=1.6, to_crs=None, vrt_dir=None,
+    tower_id_col="tower_cellid", x_col="x", y_col="y",
+    num_partitions=None,
+)
+```
+
+**Parameters:**
+
+- `towers_df` — DataFrame of tower sites; must carry `tower_id_col` plus the projected observer
+  coordinate columns `x_col`/`y_col` (EPSG:3857 metres, matching the DSM grid). When
+  `observer_height` is a column name, that column must also be present.
+- `dsm_tiles_df` — bytes-free DSM tile manifest; must have columns `path` (absolute COG path),
+  `tx` and `ty` (integer grid indices). Collected once on the driver.
+- `radius_m` — viewshed analysis radius in projected metres (> 0); also caps the DSM window and
+  the `rst_viewshed` max-distance.
+- `observer_height` — observer/mast height above the DSM surface — a scalar applied to every
+  tower, or a column name for per-tower heights.
+- `x0`, `y0` — EPSG:3857 tile-grid origin that the `tx`/`ty` indices in `dsm_tiles_df`
+  reference.
+- `tile_m` — tile size in metres (> 0).
+- `target_height` — receiver height above the DSM at each tested cell; defaults to `1.6`.
+- `to_crs` — optional EPSG code to reproject the viewshed into (`rst_transform`, materialized
+  once); when set, the result gains `visible_px_reproj` and `total_px_reproj`.
+- `vrt_dir` — optional durable, worker-readable directory (e.g. a UC Volume path) for the
+  per-tower VRTs. When omitted, VRTs are minted transiently on the worker and read within the
+  same task.
+- `tower_id_col` / `x_col` / `y_col` — tower identity and coordinate column names; defaults
+  `"tower_cellid"` / `"x"` / `"y"`.
+- `num_partitions` — fan-out for the per-tower stage (`repartition` by `tower_id_col`); defaults
+  to the distinct tower count (~one tower per task).
+
+**Returns:** DataFrame with one row per tower that has in-radius DSM coverage: `tower_id_col`,
+`observer_x`, `observer_y`, `visible_px` (long), `total_px` (long), `frac` (double,
+visible/total), and — when `to_crs` is set — `visible_px_reproj` and `total_px_reproj`.
+
+The `tile_range` helper (in `pyrx.core.tiling`) computes the index window covering a circle of
+`radius_m` around a projected coordinate; `rst_viewshed_towers` uses it to select the tiles each
+tower needs before minting the per-tower VRT.
 
 ---
 

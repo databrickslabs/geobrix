@@ -30,18 +30,18 @@ pandas==2.2.3
 pyarrow==19.0.1
 pyspark==4.0.0
 py4j==0.10.9.9
-requests==2.32.3
+requests==2.34.2
 
 # --- geospatial dev stack (not in DBR) ---
-geopandas==1.1.3
+geopandas==1.1.4
 keplergl==0.3.2
 pystac-client==0.9.0
 planetary-computer==1.0.0
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
 earthaccess==0.18.0
 # Constrain the transitive botocore (earthaccess -> s3fs -> aiobotocore -> botocore)
-# to the Serverless base boto3 range (<1.41,>=1.40.45). Mirror in [stac] + light-ci.in.
-botocore>=1.40.45,<1.41.0
+# to the Serverless base boto3 range (<1.44,>=1.43.101). Mirror in [stac] + light-ci.in.
+botocore>=1.43.101,<1.44.0
 # Overture static-STAC catalog traversal (gbx.sample.overture). pystac is the
 # static-catalog reader used directly by OvertureClient._open_catalog; pystac-client
 # (above) pulls it transitively, but listing it here pins it explicitly so any bump

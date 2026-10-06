@@ -182,6 +182,53 @@ def classify(geom, res):
     )
 
 
+def h3_los_visible(
+    tower, observer_z, targets, surface_z, ground_z, target_height, eps=1.0
+):
+    """Exact H3 line-of-sight. blocker = surface_z; target base = ground_z + target_height.
+    Surface-relative model: call with ground_z = surface_z (target is above the surface).
+    NoData-safe: None/missing surface is transparent; a target with no base is skipped.
+
+    Args:
+        tower:         H3 cell string of the observer.
+        observer_z:    observer elevation in metres (e.g. DTM@tower + tower_height).
+        targets:       iterable of H3 cell strings to test.
+        surface_z:     ``{cell_str: float|None}`` — blocker surface elevation (DSM/CHM).
+                       Missing or None entries are transparent (no blocker at that cell).
+        ground_z:      ``{cell_str: float|None}`` — bare-earth base elevation (DTM).
+                       A target with None or missing ground_z is skipped (not fabricated).
+        target_height: height of the target receiver above the ground, metres.
+        eps:           sight-line tolerance in metres; a cell does not block its own
+                       grazing ray (default 1.0 m).
+
+    Returns:
+        ``set`` of visible H3 cell strings (subset of *targets*).
+    """
+    visible = set()
+    for c in targets:
+        if c == tower:
+            visible.add(c)
+            continue
+        g = ground_z.get(c)
+        if g is None:
+            continue
+        path = h3.grid_path_cells(tower, c)
+        n = len(path) - 1
+        if n <= 0:
+            visible.add(c)
+            continue
+        z_t = g + target_height
+        blocked = False
+        for i in range(1, n):
+            s = surface_z.get(path[i])
+            if s is not None and s > observer_z + (z_t - observer_z) * (i / n) + eps:
+                blocked = True
+                break
+        if not blocked:
+            visible.add(c)
+    return visible
+
+
 def _neighbors(c):
     """6 (or 5) H3 neighbours of integer cell id c (grid_disk topology, ring 1)."""
     c_str = h3.int_to_str(c)

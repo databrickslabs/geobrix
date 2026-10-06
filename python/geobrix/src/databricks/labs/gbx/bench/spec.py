@@ -39,6 +39,7 @@ from databricks.labs.gbx.pyrx.core import (
     mapalgebra,
     ops,
     resample,
+    stretch,
     terrain,
     tessellate,
     tiling,
@@ -138,6 +139,49 @@ _VIEWSHED_OBSERVER_WKB = shapely.geometry.Point(0.0, 0.0).wkb
 # fingerprint=False); the path below is a documented placeholder for the args dict
 # and is created on demand by the core_fn.
 _COLOR_RAMP_TEXT = "nv 0 0 0\n0% 0 0 255\n50% 0 255 0\n100% 255 0 0\n"
+
+
+def _synthetic_rgb_tile(ds) -> bytes:
+    """Generate a synthetic 3-band RGB GTiff tile matching the input tile's grid.
+
+    Used for benchmarking rst_land_cover, which requires >=3 bands. Creates a
+    deterministic RGB (uint8) tile with the same geotransform and bounds as the
+    input dataset, suitable for land-cover classification testing.
+    """
+    import numpy as np
+    from rasterio.io import MemoryFile
+
+    # Create deterministic synthetic RGB data: H x W x 3
+    h, w = ds.height, ds.width
+    # Seed RNG with tile bounds for reproducibility
+    seed = hash((int(ds.bounds.left), int(ds.bounds.bottom))) % (2**31)
+    rng = np.random.RandomState(seed)
+    rgb = (rng.rand(h, w, 3) * 255).astype(np.uint8)
+
+    # Build a 3-band GTiff with the input tile's geotransform and CRS
+    profile = ds.profile.copy()
+    profile.update(driver="GTiff", count=3, dtype="uint8")
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            for i in range(3):
+                dst.write(rgb[:, :, i], i + 1)
+        return mf.read()
+
+
+def _land_cover_classify_bytes(ds, method, n_clusters, smooth) -> bytes:
+    """Classify an open rasterio DatasetReader into land-cover labels (bytes).
+
+    The core_fn for rst_land_cover: reads the tile, transposes to HxWxbands,
+    calls land_cover.classify, and emits the int32 label raster as GTiff bytes.
+    """
+    from databricks.labs.gbx.pyrx.core import land_cover as land_cover_core
+    from databricks.labs.gbx.pyrx.core._nodata import emit
+
+    arr = ds.read().transpose(1, 2, 0)  # (bands,H,W) -> HxWxbands
+    labels, _names = land_cover_core.classify(
+        arr, method=str(method), n_clusters=int(n_clusters), smooth=int(smooth)
+    )
+    return emit(ds, labels, -1, labels == -1, "int32")
 
 
 def _ds_to_gtiff_bytes(ds) -> bytes:
@@ -371,6 +415,7 @@ _XYZ_LIGHT = (_PYRX + "xyz.py",)
 _OPS_LIGHT = (_PYRX + "ops.py",)
 _ANALYSIS_LIGHT = (_PYRX + "analysis.py",)
 _RESAMPLE_LIGHT = (_PYRX + "resample.py",)
+_STRETCH_LIGHT = (_PYRX + "stretch.py", _NODATA)
 _DERIVEDBAND_LIGHT = (_PYRX + "derivedband.py",)
 # multi-tile reducers (bucket C, group C3) live in core/agg.py; it does NOT
 # import _nodata (grep-confirmed).
@@ -1317,6 +1362,18 @@ REGISTRY: Dict[str, FnSpec] = {
         # as a column in spark-path. Numeric args may stay raw.
         col_fn=lambda t, a: prx.rst_updatetype(t, F.lit(a["new_type"])),
         sources=_EDIT_LIGHT + (_HEAVY + "RST_UpdateType.scala",),
+        core=False,
+    ),
+    # --- stretch (stretch.py) ---
+    "rst_percentile_stretch": FnSpec(
+        "rst_percentile_stretch",
+        "gbx_rst_percentile_stretch",
+        "edit",
+        _BOTH,
+        {"lo_pct": 2.0, "hi_pct": 98.0},
+        core_fn=lambda ds, a: stretch.percentile_stretch(ds, a["lo_pct"], a["hi_pct"]),
+        col_fn=lambda t, a: prx.rst_percentile_stretch(t, a["lo_pct"], a["hi_pct"]),
+        sources=_STRETCH_LIGHT + (_HEAVY + "pixel/RST_PercentileStretch.scala",),
         core=False,
     ),
     # --- features (features.py) ---
@@ -4031,6 +4088,28 @@ REGISTRY: Dict[str, FnSpec] = {
         sources=_CHM_LIGHT + (_HEAVY + "RST_Chm.scala",),
         core=False,
         input_kind="tile_array",
+    ),
+    # --- classification (light-only) ---
+    # rst_land_cover is a light-tier SQL UDF (gbx_rst_land_cover), still no heavy
+    # tier. It classifies a >=3-band RGB(+NIR) tile into land-cover labels. The
+    # corpus tiles are 1-2 band, so for benchmarking we inject a synthetic 3-band
+    # RGB tile. The runner detects input_kind=="synthetic_rgb_tile" and generates
+    # it on-the-fly. Benched pure-core only (no spark-path leg).
+    "rst_land_cover": FnSpec(
+        "rst_land_cover",
+        "gbx_rst_land_cover",
+        "classification",
+        ("pure-core",),
+        {"method": "hybrid", "n_clusters": 6, "smooth": 3},
+        core_fn=lambda ds, a: (
+            _land_cover_classify_bytes(ds, a["method"], a["n_clusters"], a["smooth"])
+        ),
+        col_fn=lambda t, a: prx.rst_land_cover(
+            t, a["method"], a["n_clusters"], a["smooth"]
+        ),
+        sources=(_PYRX + "land_cover.py", _PYRX + "_nodata.py"),
+        core=False,
+        input_kind="synthetic_rgb_tile",
     ),
 }
 

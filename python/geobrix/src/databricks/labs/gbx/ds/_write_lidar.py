@@ -557,8 +557,10 @@ class LidarGbxWriter(DataSourceWriter):
             _scratch.new_scratch_dir(self.path) if self.single_file else ""
         )
 
-    def _stem(self, row) -> str:
-        """Deterministic <group>_<cluster>, else nameCol basename, else uuid."""
+    def _stem(self, row, fallback: str) -> str:
+        """Deterministic <group>_<cluster>, else nameCol basename, else the
+        per-partition ``fallback`` stem (ONE .laz per partition; a fresh uuid
+        per row would explode to one tiny .laz per point)."""
         if self.group_col and self.cluster_col:
             g = row[self.group_col]
             c = row[self.cluster_col]
@@ -567,7 +569,7 @@ class LidarGbxWriter(DataSourceWriter):
                 return f"{pre}{g}_{c}"
         if self.name_col and row[self.name_col] is not None:
             return os.path.basename(str(row[self.name_col]))
-        return f"{self.part_prefix}-{uuid.uuid4().hex[:8]}"
+        return fallback
 
     def _encode_part(self, tmp_path: str, xs, ys, zs, rs, gs, bs) -> str:
         from databricks.labs.gbx.pyrx.imagery import write_xyz_laz, write_xyzrgb_laz
@@ -600,9 +602,13 @@ class LidarGbxWriter(DataSourceWriter):
         # (group,cluster) per partition, so multiple keys may arrive together.
         # Bucketing by stem here gives deterministic per-key naming regardless
         # of the partitioner.
+        # One fallback stem PER PARTITION (not per row): rows with no naming
+        # columns all land in a single .laz for this partition. A fresh uuid
+        # per row previously produced one tiny .laz per point.
+        _fallback = f"{self.part_prefix}-{uuid.uuid4().hex[:8]}"
         buckets: dict = {}  # stem -> {xs, ys, zs, rs, gs, bs}
         for row in iterator:
-            stem = self._stem(row)
+            stem = self._stem(row, _fallback)
             if stem not in buckets:
                 buckets[stem] = {
                     "xs": [],

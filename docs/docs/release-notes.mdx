@@ -134,6 +134,23 @@ rest of the raster family; `rx.bin_points_tiled` is a lightweight-tier Python he
   polygons via the registered `gbx_rst_polygonize` streaming UDTF. See
   [Raster Functions](./api/raster-functions).
 
+### Viewshed pipeline — `rst_viewshed_towers` (new, Python-only)
+
+- **`rst_viewshed_towers`** runs a per-tower raster viewshed over a tiled DSM and returns one
+  scalar row per tower. For each tower it selects the in-radius DSM tiles via the new
+  `tile_range` windowing helper (using an EPSG:3857 grid origin `x0`/`y0` and tile size `tile_m`
+  that the `tx`/`ty` indices in `dsm_tiles_df` reference), mints one bytes-free VRT over them,
+  runs a single `rst_viewshed` (materialized once, in-memory), and derives coverage counts from
+  a histogram. No raster bytes cross a shuffle — each tower row carries a ~100-byte VRT path —
+  so there is no FUSE read-back and no whole-AOI merge. Returns one row per tower with
+  `visible_px` (long), `total_px` (long), and `frac` (double, visible/total); when `to_crs` is
+  set it also emits `visible_px_reproj` and `total_px_reproj` from a reprojected viewshed.
+  `observer_height` may be a per-tower column name or a scalar applied to every tower.
+  It is a **Python-only** lightweight-tier pipeline function, called as
+  `rx.rst_viewshed_towers(towers_df, dsm_tiles_df, radius_m, observer_height, x0=..., y0=..., tile_m=...)`;
+  no SQL surface is provided. Powers the Wireless Coverage Part 3b viewshed analysis. See
+  [Raster Functions](./api/raster-functions).
+
 ### Geom-aware grid functions — GeometryCollection inputs
 
 - **GeometryCollection inputs** to the geom-aware grid functions

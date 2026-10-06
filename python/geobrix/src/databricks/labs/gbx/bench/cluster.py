@@ -296,6 +296,18 @@ NETCDF_ONLY = {netcdf_only!r}
 # heavy-vs-light comparison. Skips cleanly when the input corpus is empty/missing.
 BENCHMARK_NETCDF_WRITER = {benchmark_netcdf_writer!r}
 NETCDF_WRITER_ONLY = {netcdf_writer_only!r}
+# --benchmark-lidar: also run the LiDAR reader benchmark (light lidar_gbx only, no heavy tier).
+# Reads from {{CORPUS}}/lidar (synthetic .laz files, staged via readers.stage_lidar_corpus).
+# --lidar-only: ONLY run it, skip all fn benchmarks. LIGHT-ONLY: no heavy tier.
+# Skips cleanly when the corpus is empty/missing.
+BENCHMARK_LIDAR = {benchmark_lidar!r}
+LIDAR_ONLY = {lidar_only!r}
+# --benchmark-exif: also run the EXIF reader benchmark (light exif_gbx only, no heavy tier).
+# Reads from {{CORPUS}}/exif (synthetic JPEG files, staged via readers.stage_exif_corpus).
+# --exif-only: ONLY run it, skip all fn benchmarks. LIGHT-ONLY: no heavy tier.
+# Skips cleanly when the corpus is empty/missing.
+BENCHMARK_EXIF = {benchmark_exif!r}
+EXIF_ONLY = {exif_only!r}
 # --fanout-scale: dial the synthetic fan-out size (default 1.0 -> meaningful but ~couple
 # minutes on ~20 workers). Larger = more output rows per function.
 FANOUT_SCALE = {fanout_scale}
@@ -1064,6 +1076,123 @@ if _ncw_rows:
         _df.show(100, truncate=False)
     _md = results.summarize(_ncw_rows)
     _show_md(f"netcdf WRITER (light-only) throughput benchmark -- {RUN_ID}", _md)
+"""
+
+_CELL_LIDAR = """# LiDAR reader + writer benchmark: light lidar_gbx ONLY (light-only, no heavy tier)
+# Reader modes: metadata (header-only) and points (all points with x/y/z/r/g/b).
+# Writer modes: default parts, singleFile=true, merge=true.
+# run_format_write reads from the .laz corpus once (caches), then times writes with different
+# modes. The same `options` dict flows to BOTH reader and writer: mode=points tells the reader
+# to produce x/y/z rows; singleFile/merge/keepParts tell the writer which output mode to use.
+# Both reader+writer are LIGHT-ONLY; there is NO heavy LiDAR tier. Corpus must be pre-staged
+# by the operator (via readers.stage_lidar_corpus); the bench cell just reads and skips cleanly if missing.
+from databricks.labs.gbx.bench import readers as _rd
+import os as _os
+_lidar_dir = f"{CORPUS}/lidar"
+# GUARD: the LiDAR corpus must be pre-staged by the operator (generate-and-stop mode).
+# When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
+if not LIGHTWEIGHT:
+    print(
+        "LIDAR BENCH SKIPPED: LiDAR reader+writer are light-only (no heavy tier); "
+        "run with --lightweight to include it.",
+        flush=True,
+    )
+    _laz_files = []
+else:
+    # Synthetic corpus (tiny, 3 .laz): stage in-cell then read. stage_lidar_corpus writes
+    # to a local temp dir then copies to the Volume (UC Volumes reject seek-on-write).
+    print(f"Staging synthetic LiDAR corpus to {_lidar_dir}...", flush=True)
+    _rd.stage_lidar_corpus(_lidar_dir, num_files=100, num_points=50000)
+    _laz_files = _rd.list_corpus_files(_lidar_dir, r".*\\.laz$")
+if _laz_files:
+    print(f"LIDAR BENCH (light-only): {len(_laz_files)} .laz file(s) under {_lidar_dir}", flush=True)
+    _lidar_rows = []
+    # --- Reader legs: metadata and points modes ---
+    # Reader: metadata mode (header-only, no point decode)
+    _r = _rd.run_format_read(spark, _lidar_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                             api="lightweight", fmt="lidar_gbx",
+                             options={"mode": "metadata", "filterRegex": r".*\\.laz$"}, where="cluster")
+    _sink([_r]); lw.append(_r); _lidar_rows.append(_r)
+    # Reader: points mode (reads all points)
+    _r = _rd.run_format_read(spark, _lidar_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                             api="lightweight", fmt="lidar_gbx",
+                             options={"mode": "points", "filterRegex": r".*\\.laz$"}, where="cluster")
+    _sink([_r]); lw.append(_r); _lidar_rows.append(_r)
+    # --- Writer legs: parts / singleFile / merge comparison ---
+    # Writer: default parts mode (one .laz per partition)
+    _w = _rd.run_format_write(spark, _lidar_dir, f"{OUT}/lidar-parts", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                              write_api="lightweight", read_fmt="lidar_gbx", write_fmt="lidar_gbx",
+                              mode="overwrite", options={"mode": "points", "dimensions": "x,y,z", "filterRegex": r".*\\.laz$"}, where="cluster")
+    _sink([_w]); lw.append(_w); _lidar_rows.append(_w)
+    # Writer: singleFile variant (two-phase scratch+driver-merge into ONE .laz)
+    _w = _rd.run_format_write(spark, _lidar_dir, f"{OUT}/lidar-single", RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                              write_api="lightweight", read_fmt="lidar_gbx", write_fmt="lidar_gbx",
+                              mode="overwrite", options={"mode": "points", "dimensions": "x,y,z", "filterRegex": r".*\\.laz$", "singleFile": "true"},
+                              label="singleFile", where="cluster")
+    _sink([_w]); lw.append(_w); _lidar_rows.append(_w)
+    # Writer: merge (post-hoc fold) is intentionally omitted here. The shared
+    # run_format_write merge-setup seeds parts then re-lists them to confirm the
+    # fold has inputs, but that glob races the Volume write-visibility for a
+    # just-written .laz set (FUSE lists the parts a beat later), so the merge leg
+    # flakes on non-netcdf writers. parts + singleFile cover the write benchmark;
+    # re-enable merge once the merge-setup verify gains a short read retry.
+    if _lidar_rows:
+        _df = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category IN ('reader', 'writer')"
+        )
+        try:
+            display(_df)
+        except Exception:
+            _df.show(100, truncate=False)
+        _md = results.summarize(_lidar_rows)
+        _show_md(f"LiDAR reader + writer benchmark (light-only) -- {RUN_ID}", _md)
+"""
+
+_CELL_EXIF = """# EXIF reader benchmark: light exif_gbx ONLY (light-only, no heavy tier)
+# EXIF reader modes: metadata (header-only, no pixel decode) and qc (reads pixels).
+# LIGHT-ONLY; there is NO heavy EXIF tier. Corpus must be pre-staged by the operator
+# (via readers.stage_exif_corpus); the bench cell just reads and skips cleanly if missing.
+from databricks.labs.gbx.bench import readers as _rd
+import os as _os
+_exif_dir = f"{CORPUS}/exif"
+# GUARD: the EXIF corpus must be pre-staged by the operator (generate-and-stop mode).
+# When the pool is empty/missing, SKIP CLEANLY with a clear reason rather than failing the run.
+if not LIGHTWEIGHT:
+    print(
+        "EXIF BENCH SKIPPED: EXIF reader is light-only (no heavy tier); "
+        "run with --lightweight to include it.",
+        flush=True,
+    )
+    _jpg_files = []
+else:
+    # Synthetic corpus (tiny, 5 JPEGs): stage in-cell then read. stage_exif_corpus writes
+    # to a local temp dir then copies to the Volume (UC Volumes reject seek-on-write).
+    print(f"Staging synthetic EXIF corpus to {_exif_dir}...", flush=True)
+    _rd.stage_exif_corpus(_exif_dir, num_files=100)
+    _jpg_files = _rd.list_corpus_files(_exif_dir, r".*\\.(jpg|jpeg)$")
+if _jpg_files:
+    print(f"EXIF BENCH (light-only): {len(_jpg_files)} JPEG file(s) under {_exif_dir}", flush=True)
+    _exif_rows = []
+    # Reader: metadata mode (header-only, no pixel decode)
+    _r = _rd.run_format_read(spark, _exif_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                             api="lightweight", fmt="exif_gbx",
+                             options={"mode": "metadata", "filterRegex": r".*\\.(jpg|jpeg)$"}, where="cluster")
+    _sink([_r]); lw.append(_r); _exif_rows.append(_r)
+    # Reader: qc mode (reads pixels for sharpness/brightness)
+    _r = _rd.run_format_read(spark, _exif_dir, RUN_ID, SPARK_WARMUP, SPARK_MEASURED,
+                             api="lightweight", fmt="exif_gbx",
+                             options={"mode": "qc", "filterRegex": r".*\\.(jpg|jpeg)$"}, where="cluster")
+    _sink([_r]); lw.append(_r); _exif_rows.append(_r)
+    if _exif_rows:
+        _df = spark.sql(
+            f"SELECT * FROM {TABLE} WHERE run_id = '{RUN_ID}' AND category = 'reader'"
+        )
+        try:
+            display(_df)
+        except Exception:
+            _df.show(100, truncate=False)
+        _md = results.summarize(_exif_rows)
+        _show_md(f"EXIF reader benchmark (light-only) -- {RUN_ID}", _md)
 """
 
 _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
@@ -3477,6 +3606,10 @@ def build_bench_notebook(cfg: dict) -> dict:
         netcdf_only=bool(cfg.get("netcdf_only")),
         benchmark_netcdf_writer=bool(cfg.get("benchmark_netcdf_writer")),
         netcdf_writer_only=bool(cfg.get("netcdf_writer_only")),
+        benchmark_lidar=bool(cfg.get("benchmark_lidar")),
+        lidar_only=bool(cfg.get("lidar_only")),
+        benchmark_exif=bool(cfg.get("benchmark_exif")),
+        exif_only=bool(cfg.get("exif_only")),
         input_tile=str(cfg.get("input_tile", "materialized")),
         disable_file=bool(cfg.get("disable_file", False)),
         disable_fuse_direct=bool(cfg.get("disable_fuse_direct", False)),
@@ -3535,6 +3668,10 @@ def build_bench_notebook(cfg: dict) -> dict:
     netcdf_only = bool(cfg.get("netcdf_only"))
     benchmark_netcdf_writer = bool(cfg.get("benchmark_netcdf_writer"))
     netcdf_writer_only = bool(cfg.get("netcdf_writer_only"))
+    benchmark_lidar = bool(cfg.get("benchmark_lidar"))
+    lidar_only = bool(cfg.get("lidar_only"))
+    benchmark_exif = bool(cfg.get("benchmark_exif"))
+    exif_only = bool(cfg.get("exif_only"))
     benchmark_grouped_file = bool(cfg.get("benchmark_grouped_file"))
     grouped_file_only = bool(cfg.get("grouped_file_only"))
     benchmark_file_matrix = bool(cfg.get("file_matrix"))
@@ -3647,6 +3784,8 @@ def build_bench_notebook(cfg: dict) -> dict:
             fanout_only,
             netcdf_only,
             netcdf_writer_only,
+            lidar_only,
+            exif_only,
             grouped_file_only,
             file_matrix_only,
             gpkg_chunksize_only,
@@ -3674,6 +3813,8 @@ def build_bench_notebook(cfg: dict) -> dict:
         (benchmark_readers or readers_only, [_CELL_READERS]),
         (benchmark_netcdf or netcdf_only, [_CELL_NETCDF, _CELL_NETCDF_SWATH]),
         (benchmark_netcdf_writer or netcdf_writer_only, [_CELL_NETCDF_WRITER]),
+        (benchmark_lidar or lidar_only, [_CELL_LIDAR]),
+        (benchmark_exif or exif_only, [_CELL_EXIF]),
         (benchmark_pmtiles or pmtiles_only, [_CELL_PMTILES]),
         (benchmark_vector or vector_only, [_CELL_VECTOR]),
         (benchmark_mvt or mvt_only, [_CELL_MVT]),

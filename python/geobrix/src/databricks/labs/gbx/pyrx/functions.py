@@ -8,7 +8,7 @@ Swap-compatible with ``databricks.labs.gbx.rasterx.functions``:
 from typing import List, Optional
 
 import pandas as pd
-from pyspark.sql import Column, SparkSession
+from pyspark.sql import Column, DataFrame, SparkSession
 from pyspark.sql import functions as f
 from pyspark.sql.functions import pandas_udf, udtf
 from pyspark.sql.types import (
@@ -3691,6 +3691,202 @@ def rst_viewshed(
     if crs is None:
         return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md)
     return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md, crs_col)
+
+
+def rst_viewshed_towers(
+    towers_df: DataFrame,
+    dsm_tiles_df: DataFrame,
+    radius_m: float,
+    observer_height,
+    *,
+    x0: float,
+    y0: float,
+    tile_m: float,
+    target_height: float = 1.6,
+    to_crs: Optional[int] = None,
+    vrt_dir: Optional[str] = None,
+    tower_id_col: str = "tower_cellid",
+    x_col: str = "x",
+    y_col: str = "y",
+    num_partitions: Optional[int] = None,
+) -> DataFrame:
+    """Per-tower raster viewshed over a tiled DSM — one scalar row per tower.
+
+    Packages the failure-avoiding pipeline validated on Databricks Serverless
+    light: for each tower it selects the in-radius DSM tiles, mints ONE
+    bytes-free VRT over them, runs a single pixel-level :func:`rst_viewshed`
+    (materialized once, in-memory), and derives coverage counts from a
+    histogram. No raster bytes ever cross a shuffle — each tower row carries a
+    ~100-byte VRT path — so there is no FUSE read-back and no whole-AOI merge.
+
+    The tile window is computed per tower with :func:`tile_range` (``x0``/``y0``
+    grid origin, ``tile_m`` tile size — the grid the ``tx``/``ty`` indices in
+    ``dsm_tiles_df`` reference), then the viewshed, histogram, georeference and
+    optional reproject are chained as Spark ``withColumn`` steps that stay in a
+    single post-``repartition`` stage so the mint and the DEM read run in the
+    same task (the minted VRT is read before any further shuffle).
+
+    Args:
+        towers_df:    DataFrame of tower sites. Must carry ``tower_id_col`` plus
+                      the projected observer coordinate columns ``x_col``/``y_col``
+                      (EPSG:3857 metres, matching the DSM grid). When
+                      ``observer_height`` is a column name, that column too.
+        dsm_tiles_df: DSM tile manifest; must have columns ``path`` (absolute COG
+                      path), ``tx`` and ``ty`` (integer grid indices). This is a
+                      bytes-free manifest (paths, not raster bytes) and is
+                      collected once on the driver.
+        radius_m:     Viewshed analysis radius in projected metres (> 0). Also
+                      caps the DSM window and the ``rst_viewshed`` max-distance.
+        observer_height: Observer/mast height above the DSM surface — a scalar
+                      (applied to every tower) or a column name (per-tower).
+        x0, y0:       EPSG:3857 tile-grid origin (the ``tx``/``ty`` reference).
+        tile_m:       Tile size in metres (> 0).
+        target_height: Receiver height above the DSM at each tested cell.
+                      Defaults to 1.6.
+        to_crs:       Optional EPSG code to additionally reproject the viewshed
+                      into (``rst_transform``, materialized once); when set, the
+                      result gains ``visible_px_reproj`` / ``total_px_reproj``.
+        vrt_dir:      Optional durable, worker-readable directory (e.g. a UC
+                      Volume) for the per-tower VRTs (``tower_<id>.vrt``). When
+                      omitted the VRTs are minted transiently on the worker and
+                      read within the same task.
+        tower_id_col: Tower identity column name. Defaults to "tower_cellid".
+        x_col, y_col: Observer coordinate column names. Default "x" / "y".
+        num_partitions: Fan-out for the heavy per-tower stage (``repartition`` by
+                      ``tower_id_col``). Defaults to the distinct tower count
+                      (~one tower per task).
+
+    Returns:
+        DataFrame with one row per tower that has in-radius DSM coverage:
+        ``tower_id_col``, ``observer_x``, ``observer_y``, ``visible_px`` (long),
+        ``total_px`` (long), ``frac`` (double, visible/total), and — when
+        ``to_crs`` is set — ``visible_px_reproj`` and ``total_px_reproj``.
+    """
+    analysis_core._validate_towers_inputs(dsm_tiles_df.columns, radius_m)
+    if tile_m is None or tile_m <= 0:
+        raise ValueError(f"tile_m must be > 0 (got {tile_m!r}).")
+
+    # Bytes-free tile manifest -> {(tx, ty): path}. Only tile index + path
+    # strings reach the driver (never raster bytes), so this is Connect/Serverless
+    # safe and bounded by the DSM tile count, not the pixel volume.
+    tile_rows = dsm_tiles_df.select("tx", "ty", "path").collect()
+    tile_map = {(int(r["tx"]), int(r["ty"])): r["path"] for r in tile_rows if r["path"]}
+    if not tile_map:
+        raise ValueError(
+            "dsm_tiles_df yielded no (tx, ty) -> path entries; every path is NULL "
+            "(a materialized DSM STRUCT table?) — point dsm_tiles_df at the DSM "
+            "COG directory with dsm_<tx>_<ty>.tif tiles."
+        )
+
+    _x0, _y0, _tile_m = float(x0), float(y0), float(tile_m)
+    _radius = float(radius_m)
+    _vrt_dir = vrt_dir
+
+    @f.udf("string")
+    def _mint_window_vrt(tower_id, obs_x, obs_y):
+        # Worker-side: pick the in-radius tiles via tile_range and mint ONE VRT
+        # over their paths (bytes-free: the VRT is tiny XML referencing the COGs
+        # by absolute path). Runs in the same task as the downstream DEM read.
+        import os
+
+        from databricks.labs.gbx.ds._mosaic import mint_vrt
+        from databricks.labs.gbx.pyrx.core.tiling import tile_range
+
+        if obs_x is None or obs_y is None:
+            return None
+        tx_lo, tx_hi = tile_range(float(obs_x), _x0, _radius, _tile_m)
+        ty_lo, ty_hi = tile_range(float(obs_y), _y0, _radius, _tile_m)
+        paths = [
+            tile_map[(tx, ty)]
+            for tx in range(tx_lo, tx_hi + 1)
+            for ty in range(ty_lo, ty_hi + 1)
+            if (tx, ty) in tile_map
+        ]
+        if not paths:
+            return None
+        paths = sorted(set(paths))
+        if _vrt_dir:
+            os.makedirs(_vrt_dir, exist_ok=True)
+            return mint_vrt(paths, out=os.path.join(_vrt_dir, f"tower_{tower_id}.vrt"))
+        return mint_vrt(paths)
+
+    base = towers_df.select(
+        f.col(tower_id_col).alias("tower_id"),
+        f.col(x_col).cast(DoubleType()).alias("observer_x"),
+        f.col(y_col).cast(DoubleType()).alias("observer_y"),
+        analysis_core._observer_height_col(observer_height).alias("observer_height"),
+    )
+
+    # One tower per task: an explicit repartition by tower id is the only fan-out
+    # Serverless AQE cannot coalesce. Repartition BEFORE the mint so the mint and
+    # the DEM read share a task (no shuffle between them -> the local/Volume VRT
+    # is readable where it was written).
+    if num_partitions is None:
+        num_partitions = max(base.select("tower_id").distinct().count(), 1)
+    base = base.repartition(int(num_partitions), "tower_id")
+
+    # Fixed-point WKT POINT (never scientific notation) in the raster CRS.
+    observer_wkt = f.format_string(
+        "POINT (%.6f %.6f)", f.col("observer_x"), f.col("observer_y")
+    )
+
+    piped = (
+        base.withColumn(
+            "_vrt", _mint_window_vrt("tower_id", "observer_x", "observer_y")
+        )
+        .where(f.col("_vrt").isNotNull())
+        .withColumn("_dem", rst_fromfile("_vrt", materialize=False))
+        .withColumn(
+            "_vs",
+            rst_viewshed(
+                "_dem",
+                observer_wkt,
+                f.col("observer_height"),
+                f.lit(float(target_height)),
+                f.lit(_radius),
+                materialize=True,
+            ),
+        )
+        .withColumn(
+            "_hist",
+            rst_histogram("_vs", f.lit(2), f.lit(0.0), f.lit(256.0), f.lit(False)),
+        )
+    )
+
+    # Histogram bucket 1 = [128, 256) = the visible class (255); bucket 0 = invisible (0).
+    vis = f.col("_hist")["band_1"].getItem(1)
+    invis = f.col("_hist")["band_1"].getItem(0)
+    out_cols = [
+        f.col("tower_id").alias(tower_id_col),
+        f.col("observer_x"),
+        f.col("observer_y"),
+        f.coalesce(vis, f.lit(0)).cast("long").alias("visible_px"),
+        f.coalesce(invis + vis, f.lit(0)).cast("long").alias("total_px"),
+    ]
+
+    if to_crs is not None:
+        piped = piped.withColumn(
+            "_vs_reproj", rst_transform("_vs", f.lit(int(to_crs)), materialize=True)
+        ).withColumn(
+            "_hist_reproj",
+            rst_histogram(
+                "_vs_reproj", f.lit(2), f.lit(0.0), f.lit(256.0), f.lit(False)
+            ),
+        )
+        vis_r = f.col("_hist_reproj")["band_1"].getItem(1)
+        invis_r = f.col("_hist_reproj")["band_1"].getItem(0)
+        out_cols += [
+            f.coalesce(vis_r, f.lit(0)).cast("long").alias("visible_px_reproj"),
+            f.coalesce(invis_r + vis_r, f.lit(0)).cast("long").alias("total_px_reproj"),
+        ]
+
+    out = piped.select(*out_cols)
+    return out.withColumn(
+        "frac",
+        f.when(
+            f.col("total_px") > 0, f.col("visible_px") / f.col("total_px")
+        ).otherwise(f.lit(0.0)),
+    )
 
 
 def rst_sample(tile: ColLike, geom: ColLike, crs: ColLike = None) -> Column:
@@ -8110,6 +8306,12 @@ _as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(_as_tile_cellid_envelope_ud
 
 
 # --- grouped-agg pandas_udf(BinaryType()) reducers --------------------------
+# Magic marker used by the v2 force-output agg UDF to smuggle a file path
+# through the BinaryType() return channel.  GTiff files always start with
+# b"II" or b"MM", so a leading null byte unambiguously signals a path payload.
+_VTPATH_MAGIC = b"\x00GBXVT:"
+
+
 @pandas_udf(BinaryType())
 def _merge_agg_udf(tile: pd.Series) -> bytes:
     from databricks.labs.gbx.pyrx import _env
@@ -8133,6 +8335,73 @@ def _merge_agg_udf(tile: pd.Series) -> bytes:
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     return agg_core.merge_tiles(rasters)
+
+
+@pandas_udf(BinaryType())
+def _merge_agg_v2_udf(
+    tile: pd.Series,
+    virtualize_dir: pd.Series,
+    virtualize_prefix: pd.Series,
+) -> bytes:
+    """Force-output variant of _merge_agg_udf (Python API only).
+
+    Merges the group's tile rasters exactly like ``_merge_agg_udf``, then
+    writes the result to ``<virtualize_dir>/<prefix_>*.tif`` via
+    ``open_tile.shape_output`` (FUSE-safe local-temp→copyfile).  Returns the
+    destination path encoded as ``_VTPATH_MAGIC + path.encode("utf-8")``; the
+    companion scalar UDF ``_as_virtual_tile_from_path_udf`` decodes this back
+    into a V2 tile struct with ``raster=None``.
+
+    Every row in a group carries the same broadcast literal for
+    ``virtualize_dir`` and ``virtualize_prefix``; we take ``iloc[0]``.
+    """
+    from databricks.labs.gbx.pyrx import _env
+
+    _env.configure_gdal_env()
+    vdir = virtualize_dir.iloc[0] if len(virtualize_dir) > 0 else None
+    vprefix = virtualize_prefix.iloc[0] if len(virtualize_prefix) > 0 else None
+
+    rasters = []
+    for r in tile:
+        candidate = _tile_raster_bytes(r)
+        if candidate is None:
+            continue
+        try:
+            with _serde.open_tile(candidate):
+                pass
+            rasters.append(candidate)
+        except Exception:  # noqa: BLE001
+            continue
+    if not rasters:
+        return None
+
+    merged_bytes = agg_core.merge_tiles(rasters)
+    vt = VirtualTile(cellid=0, raster=bytes(merged_bytes))
+    shaped = ot.shape_output(vt, virtualize_dir=vdir, virtualize_prefix=vprefix)
+    # Encode the path into the BinaryType return channel.
+    return _VTPATH_MAGIC + shaped.path.encode("utf-8")
+
+
+@f.udf(V2_TILE_SCHEMA)
+def _as_virtual_tile_from_path_udf(encoded):
+    """Decode a ``_merge_agg_v2_udf`` BinaryType result into a V2 tile struct.
+
+    When the bytes start with ``_VTPATH_MAGIC`` the payload is a file path
+    and the result is a path-only (bytes-free) virtual tile.  Any other
+    non-null payload is treated as raw GTiff bytes (fallback, same as
+    ``_as_tile_udf``).
+    """
+    if encoded is None:
+        return None
+    eb = bytes(encoded)
+    if eb.startswith(_VTPATH_MAGIC):
+        path = eb[len(_VTPATH_MAGIC) :].decode("utf-8")
+        vt = VirtualTile(cellid=0, path=path)
+        return vt.to_row()
+    # Fallback: plain raster bytes.
+    if len(eb) == 0:
+        return None
+    return _serde.build_tile(eb, "GTiff", 0)
 
 
 @pandas_udf(BinaryType())
@@ -8848,7 +9117,11 @@ def _rst_custom_rasterize_agg_udf(
 
 
 # --- public Column wrappers (compose grouped-agg BINARY + scalar as_tile) ----
-def rst_merge_agg(tile: ColLike) -> Column:
+def rst_merge_agg(
+    tile: ColLike,
+    virtualize_dir: Optional[str] = None,
+    virtualize_prefix: Optional[str] = None,
+) -> Column:
     """Merge a group's tile rasters into one spatial mosaic tile.
 
     Use inside ``.agg()``::
@@ -8862,8 +9135,25 @@ def rst_merge_agg(tile: ColLike) -> Column:
     treats every tile as EXTERNAL.  Using ``try_to_file`` here would inject a
     nondeterministic expression into the aggregate, which Spark 4 rejects with
     ``AGGREGATE_FUNCTION_WITH_NONDETERMINISTIC_EXPRESSION``.
+
+    Args:
+        tile:              Column of tile structs to merge.
+        virtualize_dir:    Force-output (light-tier, Python API only): write the
+            merged result to a durable path and return a light virtual tile
+            (``raster=None``, ``path`` set).  Avoids materialising the full
+            merged mosaic as Arrow bytes — essential for large mosaics on
+            Serverless where the per-task Arrow budget is ~64 MiB.
+        virtualize_prefix: Optional filename prefix inside ``virtualize_dir``.
+
+    Returns:
+        Tile struct spanning the union extent, or NULL on an empty group.
+        With ``virtualize_dir`` the tile is path-only (bytes-free).
     """
     tc = _col(tile)
+    if virtualize_dir is not None:
+        return _as_virtual_tile_from_path_udf(
+            _merge_agg_v2_udf(tc, f.lit(virtualize_dir), f.lit(virtualize_prefix))
+        )
     return _as_tile_udf(_merge_agg_udf(tc))
 
 
@@ -9732,6 +10022,8 @@ _sql_tile_ops = {
     "gbx_rst_savi": _savi_udf,
     "gbx_rst_evi": _evi_udf,
     "gbx_rst_percentile_stretch": _percentile_stretch_udf,
+    # light-only classifier (rst_ pixel classification; no Scala/heavy equivalent)
+    "gbx_rst_land_cover": _land_cover_udf,
     "gbx_rst_slope": _slope_udf,
     "gbx_rst_aspect": _aspect_udf,
     "gbx_rst_hillshade": _hillshade_udf,

@@ -218,7 +218,7 @@ def test_list_corpus_files_calls_list_files(tmp_path):
     with patch("databricks.labs.gbx.ds._listing.list_files") as mock_lf:
         mock_lf.return_value = [str(tmp_path / "a.tif")]
         list_corpus_files(str(tmp_path))
-    mock_lf.assert_called_once_with(str(tmp_path), r".*\.tif$")
+    mock_lf.assert_called_once_with(str(tmp_path), r".*\.tif$", raise_on_empty=True)
 
 
 def test_list_tifs_makes_two_calls_preserving_order(tmp_path):
@@ -245,3 +245,31 @@ def test_seeded_check_calls_list_files_raise_on_empty_false(tmp_path):
         str(tmp_path), r".*\.nc$", recursive=False, raise_on_empty=False
     )
     assert result == []  # no .nc files; must return [] not raise
+
+
+def test_stage_lidar_corpus_writes_readable_laz(tmp_path):
+    """stage_lidar_corpus writes N deterministic .laz files, each readable with the
+    requested point count (bench corpus generator -- validated here, not just on-cluster).
+    """
+    import laspy
+
+    out = tmp_path / "lidar"
+    paths = readers.stage_lidar_corpus(str(out), num_files=2, num_points=500)
+    assert len(paths) == 2
+    laz = sorted(out.glob("*.laz"))
+    assert len(laz) == 2
+    las = laspy.read(str(laz[0]))
+    assert len(las.points) == 500
+
+
+def test_stage_exif_corpus_writes_readable_jpegs(tmp_path):
+    """stage_exif_corpus writes N JPEGs with EXIF metadata, each openable."""
+    from PIL import Image
+
+    out = tmp_path / "exif"
+    paths = readers.stage_exif_corpus(str(out), num_files=3)
+    assert len(paths) == 3
+    jpgs = sorted(out.glob("*.jpg")) + sorted(out.glob("*.jpeg"))
+    assert len(jpgs) == 3
+    with Image.open(str(jpgs[0])) as img:
+        assert img.size[0] > 0 and img.size[1] > 0

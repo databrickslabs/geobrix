@@ -3041,6 +3041,24 @@ rst_percentile_stretch_sql_example_output = """
 """
 
 
+def rst_land_cover_sql_example():
+    """Classify an RGB(+NIR) tile into land-cover class ids; single-band Int32 tile."""
+    return """
+SELECT gbx_rst_land_cover(tile, 'spectral', 6, 0) AS lc
+FROM multiband_rasters;
+"""
+
+
+rst_land_cover_sql_example_output = """
++-----------------------------------------------------------+
+|lc                                                         |
++-----------------------------------------------------------+
+|{0, <raster bytes>, <virtual path>, {driver -> GTiff, ...}}|
++-----------------------------------------------------------+
+(single-band Int32: each pixel is a land-cover class id index)
+"""
+
+
 def rst_buildoverviews_sql_example():
     """Build internal overviews (image pyramid) on a raster tile."""
     return """

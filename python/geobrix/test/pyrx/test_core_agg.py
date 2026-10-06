@@ -130,6 +130,266 @@ def test_merge_tiles_same_origin_overlap_winner_order_invariant():
     assert np.all(arr == winner)
 
 
+# --- merge_tiles streaming path (Task 3) ------------------------------------
+
+
+def test_merge_streaming_matches_in_ram(monkeypatch):
+    """Streaming path produces same extent, band count, and pixel values as in-RAM path.
+
+    Forces the streaming path via a monkeypatched budget of 1 byte, then compares
+    the result with the default in-RAM result: extent (within pixel tolerance),
+    band count, and per-pixel values must all match.  Includes one overlapping tile
+    pair to exercise last-wins determinism on both paths.
+    """
+    # Three adjacent tiles; tile_b overlaps tile_a at x=[1,2].
+    # After byte-sorting the overlap winner is deterministic on both paths.
+    tile_a = _ras(np.full((2, 2), 1.0), ulx=0.0, uly=2.0, px=1.0)
+    tile_b = _ras(np.full((2, 2), 2.0), ulx=1.0, uly=2.0, px=1.0)
+    tile_c = _ras(np.full((2, 2), 3.0), ulx=3.0, uly=2.0, px=1.0)
+    tiles = [tile_a, tile_b, tile_c]
+
+    # In-RAM path (default budget).
+    in_ram_bytes = agg.merge_tiles(tiles)
+
+    # Streaming path (monkeypatch budget to 1 → always streams).
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    streaming_bytes = agg.merge_tiles(tiles)
+
+    assert streaming_bytes is not None, "streaming merge returned None"
+
+    with MemoryFile(in_ram_bytes) as mf1, mf1.open() as ds1:
+        with MemoryFile(streaming_bytes) as mf2, mf2.open() as ds2:
+            assert ds1.count == ds2.count, "band count must match"
+            # Extent must agree within one-pixel tolerance (COG may round the envelope).
+            assert ds1.bounds.left == pytest.approx(ds2.bounds.left, abs=1.0)
+            assert ds1.bounds.right == pytest.approx(ds2.bounds.right, abs=1.0)
+            assert ds1.bounds.top == pytest.approx(ds2.bounds.top, abs=1.0)
+            assert ds1.bounds.bottom == pytest.approx(ds2.bounds.bottom, abs=1.0)
+            arr1 = ds1.read(1)
+            arr2 = ds2.read(1)
+            assert (
+                arr1.shape == arr2.shape
+            ), f"shape mismatch: {arr1.shape} vs {arr2.shape}"
+            assert np.allclose(
+                arr1, arr2, equal_nan=True
+            ), "pixel values differ between in-RAM and streaming paths"
+
+
+# ---------------------------------------------------------------------------
+# Child-process script for test_merge_streaming_bounds_peak_rss.
+# Runs in a fresh subprocess so ru_maxrss is not pre-inflated by pytest imports.
+# ---------------------------------------------------------------------------
+_MERGE_RSS_CHILD = """
+import gc, platform, resource, sys
+
+import numpy as np
+from rasterio.io import MemoryFile
+from rasterio.transform import from_origin
+from databricks.labs.gbx.pyrx.core import agg
+
+# Force the streaming path regardless of the runtime cgroup budget.
+agg.decoded_budget_bytes = lambda s: 1
+
+W, H = 3000, 3000
+tile_bytes_list = []
+for row in range(2):
+    for col in range(2):
+        ulx = float(col * W)
+        uly = float((row + 1) * H)
+        val = float(row * 2 + col + 1)
+        data = np.full((H, W), val, dtype="float32")
+        profile = dict(
+            driver="GTiff", width=W, height=H, count=1, dtype="float32",
+            crs="EPSG:32633",
+            transform=from_origin(ulx, uly, 1.0, 1.0),
+            nodata=-9999.0,
+        )
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(data[None])
+            b = mf.read()
+        tile_bytes_list.append(b)
+        del data
+        gc.collect()
+
+# tile_bytes_list holds 4 compressed GTiff blobs (small); all large arrays freed.
+gc.collect()
+_scale = 1024 if platform.system() == "Linux" else 1
+rss_before = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _scale
+
+result = agg.merge_tiles(tile_bytes_list)
+
+rss_after = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss * _scale
+assert result is not None and len(result) > 0, "merge_tiles returned empty"
+print(rss_after - rss_before, flush=True)
+"""
+
+
+def test_merge_streaming_bounds_peak_rss():
+    """Streaming merge peak RSS delta stays below 60% of the full-mosaic size (subprocess proof).
+
+    Runs in a fresh child process so ``ru_maxrss`` is not pre-inflated by pytest
+    imports.  Four 3000×3000 float32 tiles form a 6000×6000 union (144 MB
+    uncompressed).  With the budget forced to 1 byte, the streaming path must not
+    allocate a full-mosaic array; peak RSS delta must stay below 60% of that union.
+
+    A ``rasterio.merge``-style full-mosaic in-RAM merge would allocate ~144 MB and
+    FAIL this threshold — that is the intended failure mode for a regression.
+    """
+    import subprocess
+
+    try:
+        import resource  # noqa: F401 — availability check only
+    except ImportError:
+        pytest.skip("resource module not available on this platform")
+
+    proc = subprocess.run(
+        [__import__("sys").executable, "-c", _MERGE_RSS_CHILD],
+        capture_output=True,
+        text=True,
+        timeout=180,
+    )
+    if proc.returncode != 0:
+        pytest.fail(f"merge RSS child exited {proc.returncode}:\n{proc.stderr[-2000:]}")
+
+    delta_bytes = int(proc.stdout.strip())
+    # Union decoded: 6000×6000 × 1 band × 4 bytes = 144 MB.
+    union_uncompressed = (2 * 3000) * (2 * 3000) * 1 * np.dtype("float32").itemsize
+    assert delta_bytes < 0.6 * union_uncompressed, (
+        f"peak RSS delta {delta_bytes / 1e6:.1f} MB ≥ 60% of union "
+        f"{union_uncompressed / 1e6:.0f} MB — possible full-mosaic allocation"
+    )
+
+
+def test_merge_streaming_error_propagates(monkeypatch):
+    """Streaming path errors must propagate as the original exception, not IndexError.
+
+    Pre-fix: ``_merge_tiles_streaming`` was called inside the size-gate's
+    ``try/except Exception``, so any streaming failure (VRT build, cog_convert_file,
+    disk-full) was caught, mislogged as "size-gate computation failed", and then fell
+    through to the in-RAM path with empty ``datasets`` → ``IndexError`` at
+    ``merge_ds[0]``, masking the real error.
+
+    Post-fix: the try/except is scoped to size-estimation math only; the streaming
+    return is outside the except so a streaming exception propagates to the caller.
+    """
+    tile_a = _ras(np.full((2, 2), 1.0), ulx=0.0, uly=2.0, px=1.0)
+    tile_b = _ras(np.full((2, 2), 2.0), ulx=2.0, uly=2.0, px=1.0)
+
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+
+    def boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(agg, "cog_convert_file", boom)
+
+    with pytest.raises(RuntimeError, match="boom"):
+        agg.merge_tiles([tile_a, tile_b])
+
+
+def test_reproject_dataset_target_res_honored():
+    """_reproject_dataset with target_res produces output at the specified pixel size.
+
+    Without target_res the output uses the natural transform resolution (which varies
+    by CRS).  With target_res the output pixel size must snap exactly to the requested
+    value — used by _merge_tiles_streaming to align CRS-mismatched tiles to the same
+    grid.
+    """
+    data = np.ones((10, 10), dtype="float32")
+    profile = dict(
+        driver="GTiff",
+        width=10,
+        height=10,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32633",
+        transform=from_origin(500000.0, 5500000.0, 1000.0, 1000.0),
+        nodata=None,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data, 1)
+        tile_bytes = mf.read()
+
+    with MemoryFile(tile_bytes) as mf:
+        with mf.open() as src:
+            # Without target_res: EPSG:32633 → EPSG:4326 gives natural ~deg resolution
+            rep_mf_nat, rep_ds_nat = agg._reproject_dataset(src, "EPSG:4326")
+            natural_xres = abs(rep_ds_nat.transform.a)
+            rep_ds_nat.close()
+            rep_mf_nat.close()
+
+            # With target_res=(0.01, 0.01): output must use exactly 0.01 deg pixels
+            rep_mf_snp, rep_ds_snp = agg._reproject_dataset(
+                src, "EPSG:4326", target_res=(0.01, 0.01)
+            )
+            snapped_xres = abs(rep_ds_snp.transform.a)
+            rep_ds_snp.close()
+            rep_mf_snp.close()
+
+    # Snapped pixel must be exactly the requested 0.01 deg.
+    assert snapped_xres == pytest.approx(0.01, rel=1e-5)
+    # Natural resolution (1000m UTM → deg ≈ 0.009 deg at 50°N) differs from 0.01.
+    assert abs(natural_xres - 0.01) > 1e-4
+
+
+def test_merge_streaming_multicrs_produces_valid_output(monkeypatch):
+    """Streaming merge with CRS-mismatched tiles returns valid single-CRS output.
+
+    Two tiles with different CRS metadata are force-streamed.  The output must be
+    non-empty, have a CRS, and contain at least some valid (non-nodata) pixels.
+    This exercises the _reproject_dataset(target_res=...) code path added in Fix 5.
+    """
+    tile_a = _ras(np.full((5, 5), 1.0), ulx=0.0, uly=5.0, px=1.0, epsg=32633)
+
+    data_b = np.full((5, 5), 2.0, dtype="float32")
+    profile_b = dict(
+        driver="GTiff",
+        width=5,
+        height=5,
+        count=1,
+        dtype="float32",
+        crs="EPSG:3857",
+        transform=from_origin(5.0, 5.0, 1.0, 1.0),
+        nodata=-9999.0,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile_b) as dst:
+            dst.write(data_b, 1)
+        tile_b = mf.read()
+
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    result = agg.merge_tiles([tile_a, tile_b])
+
+    assert result is not None and len(result) > 0, "streaming merge must return bytes"
+    with MemoryFile(result) as mf:
+        with mf.open() as ds:
+            assert ds.crs is not None, "output must have a CRS"
+            arr = ds.read(1)
+            nd = ds.nodata
+            valid_pixels = arr[arr != nd] if nd is not None else arr.ravel()
+            assert len(valid_pixels) > 0, "output must contain valid pixels"
+
+
+def test_merge_small_unchanged():
+    """Small 2-tile merge uses the in-RAM path (default budget) and returns the correct mosaic.
+
+    Regression guard: the size gate must not break small merges.
+    """
+    left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+    right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+    out = agg.merge_tiles([left, right])
+    assert out is not None
+    with MemoryFile(out) as mf:
+        with mf.open() as ds:
+            assert ds.width == 4
+            assert ds.height == 2
+            arr = ds.read(1)
+            # Left half should be left tile values; right half should be right tile values.
+            assert np.allclose(arr[:, 0:2], [[1.0, 2.0], [3.0, 4.0]])
+            assert np.allclose(arr[:, 2:4], [[5.0, 6.0], [7.0, 8.0]])
+
+
 # --- combineavg_tiles -------------------------------------------------------
 def test_combineavg_tiles_mean():
     a = _ras(np.array([[2.0, 4.0], [6.0, 8.0]]))
@@ -620,3 +880,113 @@ class TestAggPublicFunctionsParity:
             got = ds.read(1)
         # pixel-wise mean: [[3, 6], [8, 10]]
         assert np.allclose(got, [[3.0, 6.0], [8.0, 10.0]])
+
+
+# ---------------------------------------------------------------------------
+# rst_merge_agg force-output (virtualize_dir) path
+# ---------------------------------------------------------------------------
+
+
+class TestMergeAggVirtualizeDir:
+    """rst_merge_agg(tile, virtualize_dir=...) writes merged tile to disk and
+    returns a path-only virtual tile — avoids Arrow serialisation of the full
+    mosaic bytes (OOM guard for large DSMs on Serverless)."""
+
+    def test_virtualize_dir_returns_path_only_tile(self, spark, tmp_path):
+        """Merged tile is path-only (raster=None, path set); file exists on disk."""
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        out_dir = str(tmp_path / "magg_vout")
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        result = df.groupBy("g").agg(
+            prx.rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged")
+        )
+        rows = result.collect()
+        assert rows, "no rows returned"
+        merged = rows[0]["merged"]
+        assert merged is not None, "merged tile must be non-null"
+
+        # Path-only: raster bytes must be absent.
+        assert merged["raster"] is None, "raster bytes must be None for a virtual tile"
+        path = merged["path"]
+        assert path is not None and path.endswith(
+            ".tif"
+        ), f"expected .tif path, got {path!r}"
+
+        # The file must exist on disk.
+        import os
+
+        assert os.path.exists(path), f"written file not found: {path}"
+        assert os.path.getsize(path) > 0, "written file is empty"
+
+    def test_virtualize_dir_reopens_to_correct_extent(self, spark, tmp_path):
+        """Re-opening the written file yields the correct merged extent/dims."""
+        import databricks.labs.gbx.pyrx.functions as prx
+        from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+        out_dir = str(tmp_path / "magg_extent")
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+
+        # Materialized reference for extent comparison.
+        ref_rows = (
+            df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged")).collect()
+        )
+        ref_merged = ref_rows[0]["merged"]
+        with _serde.open_tile(bytes(ref_merged["raster"])) as ds_ref:
+            exp_w, exp_h = ds_ref.width, ds_ref.height
+            exp_left, exp_right = ds_ref.bounds.left, ds_ref.bounds.right
+
+        # Virtualized result.
+        virt_rows = (
+            df.groupBy("g")
+            .agg(prx.rst_merge_agg("tile", virtualize_dir=out_dir).alias("merged"))
+            .collect()
+        )
+        merged = virt_rows[0]["merged"]
+        with ot._open(merged.asDict()) as ds:
+            assert ds.width == exp_w
+            assert ds.height == exp_h
+            assert ds.bounds.left == pytest.approx(exp_left)
+            assert ds.bounds.right == pytest.approx(exp_right)
+
+    def test_default_path_still_materializes(self, spark):
+        """Default (no virtualize_dir) still returns an in-memory merged tile — unchanged."""
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        result = df.groupBy("g").agg(prx.rst_merge_agg("tile").alias("merged"))
+        rows = result.collect()
+        merged = rows[0]["merged"]
+        assert merged is not None
+        raster_bytes = merged["raster"]
+        assert (
+            raster_bytes is not None and len(raster_bytes) > 0
+        ), "default path must return in-memory raster bytes"
+
+    def test_virtualize_prefix_is_used_in_filename(self, spark, tmp_path):
+        """When virtualize_prefix is set the written filename begins with that prefix."""
+        import os
+
+        import databricks.labs.gbx.pyrx.functions as prx
+
+        out_dir = str(tmp_path / "magg_prefix")
+        left = _ras(np.array([[1.0, 2.0], [3.0, 4.0]]), ulx=0.0, uly=2.0, px=1.0)
+        right = _ras(np.array([[5.0, 6.0], [7.0, 8.0]]), ulx=2.0, uly=2.0, px=1.0)
+        df = _spark_tile_df_raw(spark, [left, right])
+        result = df.groupBy("g").agg(
+            prx.rst_merge_agg(
+                "tile", virtualize_dir=out_dir, virtualize_prefix="run42"
+            ).alias("merged")
+        )
+        rows = result.collect()
+        path = rows[0]["merged"]["path"]
+        assert path is not None
+        assert os.path.basename(path).startswith(
+            "run42_"
+        ), f"filename does not start with prefix: {os.path.basename(path)!r}"

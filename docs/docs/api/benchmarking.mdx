@@ -816,6 +816,29 @@ The combine family's ~9–12× light gap is dominated by per-tile Python GDAL de
 
 `rst_align_to` was benchmarked in the same run (timing-only; no cross-tier output fingerprint — the output geometry varies by reference tile and CRS).
 
+#### `rst_percentile_stretch` — per-band 2–98% contrast stretch (both tiers) {#percentile-stretch-bench}
+
+`rst_percentile_stretch` clips each band's histogram to its 2nd and 98th percentiles and rescales the valid range to uint8. The lightweight tier computes percentile bounds and the linear rescale in-process with NumPy; the heavyweight tier shells to GDAL.
+
+> **Environment:** Databricks · DBR 18.x (Photon) · classic cluster · bench-corpus 1024² tiles · run `v052-ps-c3`.
+
+*Pure-core (single tile, algorithm in isolation):*
+
+| Tier | ms/tile | Speedup |
+|---|---|---|
+| Lightweight | 22.1 | **~18× faster** |
+| Heavyweight | 406 | — |
+
+*Spark-path amortized per tile (median of one N-tile iteration ÷ N):*
+
+| N tiles | Light/tile (ms) | Heavy/tile (ms) | Light speedup |
+|---|---|---|---|
+| 10 | 163.9 | 1,334.5 | ~8× |
+| 100 | 34.6 | 135.0 | ~3.9× |
+| **1,000** | **4.08** | **14.03** | **~3.4×** |
+
+**Lightweight wins on both axes.** Unlike terrain and warp functions — where the serialization boundary tax at scale erodes a pure-core win — `rst_percentile_stretch` retains a ~3.4× lightweight edge at 1,000 tiles: NumPy percentile in-process is fast enough that the Python path beats GDAL both at the algorithm level and after amortizing the byte-boundary cost.
+
 #### Repartition strategy
 
 The spark-path numbers above are wall-clock for a whole distributed job, so they're sensitive to how evenly the 1,000 tiles spread across the cluster's task slots. The benchmark harness tunes the partitioning so the comparison reflects the engines, not a straggler tail:
@@ -1274,6 +1297,51 @@ band (`rst_isoband`), and DSM/DEM subtraction (`rst_chm`).
 <sub>‡ `rst_binpoints` is a geometry-input constructor (like `rst_gridfrompoints`): the spark-path tile DataFrame carries no geometry column, so only the lightweight tier — which streams points through its own path — has a spark-path form here; the heavyweight tier is pure-core-only for it.</sub>
 
 **How to read these.** `rst_chm` is the textbook pure-core-vs-scale crossover: the lightweight NumPy subtract-and-clip wins **5.6×** on a single tile, but serializing every tile's bytes across the JVM↔Python boundary on each row flips it at scale — the heavyweight tier is **~7.3× faster over a 1,000-tile job**. `rst_isoband` favors the heavyweight tier both in isolation (**10×** — GDAL's C-backed polygon extraction) and at the largest scale (**~4.4×**); the two tiers trade places only at small row counts, where fixed job overhead dominates the per-tile average. `rst_binpoints_agg` favors the heavyweight tier at every scale (**up to ~6.8×**): accumulating one `(x, y, z)` triple per row in the JVM beats collecting a Python array per group. Output stays consistent across tiers where it can be fingerprinted — `rst_chm` **exact**, `rst_isoband` **within tolerance**; `rst_binpoints_agg` returns an aggregate tile that is timing-only in this run. The numbers are one cluster snapshot (absolute timings are environment-dependent); the relative picture and the consistency outcome are the stable takeaways. See [How the benchmark works](#how-the-benchmark-works--how-to-run-it).
+
+### LiDAR & EXIF readers and the LiDAR writer (lightweight) {#lidar-exif-io}
+
+The `lidar_gbx` (LAS/LAZ point clouds) and `exif_gbx` (image EXIF/GPS) Spark DataSources are
+**lightweight-only** — there is no heavyweight tier — so these are single-tier spark-path
+timings: read cost per file (header-only `metadata`), per point (`lidar_gbx points`), and with
+pixel decode (`exif_gbx qc`). The `lidar_gbx` writer is timed in its two output modes.
+
+> **Environment:** Databricks · DBR 18.x · classic (rd-fleet.xlarge) · lightweight tier ·
+> synthetic corpus (100 `.laz` × 50,000 points; 100 JPEGs). Spark-path median of the measured
+> iterations after warmup. Run with `gbx:bench:cluster --benchmark-lidar --benchmark-exif`.
+
+| Reader | Mode | Items | Median | Per item |
+|---|---|---|---|---|
+| `lidar_gbx` | `metadata` (header-only) | 100 files | 0.84 s | 8.4 ms / file |
+| `lidar_gbx` | `points` | 5,000,000 points | 1.09 s | ~0.22 µs / point |
+| `exif_gbx` | `metadata` (header-only) | 100 files | 0.79 s | 7.9 ms / file |
+| `exif_gbx` | `qc` (decodes pixels) | 100 files | 1.66 s | 16.6 ms / file |
+
+Header-only `metadata` is the fast path for both readers (no point/pixel decode), and the two
+sit at parity per file (~8 ms). `lidar_gbx points` streams point rows columnar (Arrow), so 5M
+points read in ~1.1 s; `exif_gbx qc` adds Laplacian-variance sharpness and brightness from the
+decoded image, ~2× the metadata cost.
+
+| Writer (`lidar_gbx`, light-only) | Points | Median |
+|---|---|---|
+| `parts` (one `.laz` per partition) | 5,000,000 | 6.3 s |
+| `singleFile` (driver-merged to one `.laz`) | 5,000,000 | 31.6 s |
+
+Sharded **`parts`** is **~5× faster** than **`singleFile`** at 5M points: `singleFile` funnels
+every partition through a driver-side merge, so prefer `parts` for large point clouds and
+reserve `singleFile` for small outputs that must land as one file.
+
+### Land-cover classification — `rst_land_cover` (lightweight) {#land-cover-bench}
+
+`rst_land_cover` classifies a ≥3-band RGB tile into per-pixel land-cover class IDs. It is **lightweight-only** — there is no heavyweight tier — so the numbers below are single-tier absolute throughputs rather than a cross-tier ratio.
+
+> **Environment:** lightweight pure-core, synthetic RGB tile, `n_clusters=6`, `smooth=3`, measured locally in the pyrx venv.
+
+| Method | 256² (ms) | 512² (ms) | 1024² (ms) | Throughput |
+|---|---|---|---|---|
+| `spectral` | 5.3 | 19.3 | 74.1 | ~14 Mpix/s |
+| `hybrid` (default) | 64.6 | 276.6 | 1,238.7 | ~1 Mpix/s |
+
+**Cost is strongly method-dependent.** `spectral` — a fast threshold-based deterministic pass — runs ~15× faster than the default `hybrid` at 1024² (74 ms vs 1,239 ms): `hybrid` adds a k-means refinement step that improves class boundary quality at the cost of speed. Choose `spectral` when throughput matters; choose `hybrid` when class quality takes priority.
 
 ---
 

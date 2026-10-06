@@ -48,7 +48,7 @@ _PYPROJECT_PATH = PROJECT_ROOT / "python" / "geobrix" / "pyproject.toml"
 # ---------------------------------------------------------------------------
 ENV_KEY = "ser6"
 DEFAULT_WHEEL = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.0-py3-none-any.whl"
+    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl"
 )
 DEFAULT_EXTRAS = "light_env6,stac,vizx,overture"
 DEFAULT_ENV_VERSION = "6"

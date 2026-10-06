@@ -60,6 +60,8 @@ PYTHON_REGISTERED = {
     "gbx_h3_geomkloop",
     "gbx_h3_geomkringexplode",
     "gbx_h3_geomkloopexplode",
+    # rst_ light-only classifier (no Scala/heavy equivalent)
+    "gbx_rst_land_cover",
 }
 
 # `override def name: String = "gbx_..."` — the canonical SQL name a companion registers under.

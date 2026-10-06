@@ -292,7 +292,7 @@ def run_virtual_tile_pixel_read(
     1. Confirm ``bench-corpus-reader-10k`` exists at
        ``/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-reader-10k``
        (10,000 tiny 256px / 1-band / float32 tiles; generated separately).
-    2. Stage the wheel: ``gbx:data:push-wheel``.
+    2. Stage the wheel: ``gbx:data:stage-wheel``.
     3. Run FILE-on (no env override).  Pass ``SPARK_WARMUP, SPARK_MEASURED`` (0/1)
        from the notebook globals — this is a spark-path leg, not a pure-core microbench::
 
@@ -691,19 +691,24 @@ def run_format_write(
             for k, v in _setup_opts.items():
                 sw = sw.option(k, str(v))
             sw.save(out_path)
-            # Verify the seed actually landed parts: the timed merge folds the .nc
+            # Verify the seed actually landed parts: the timed merge folds the part
             # files already on disk, so a seed that wrote nothing would surface as a
-            # cryptic "no .nc files to merge" from the timed job. Fail loud here with
-            # the setup context instead (a stale wheel without this seed path, or a
-            # writer that dropped no files, is the usual cause).
+            # cryptic "nothing to merge" from the timed job. Fail loud here with the
+            # setup context instead. The part extension is write-format-specific
+            # (netcdf_gbx -> .nc, lidar_gbx -> .laz/.las), so key off write_fmt rather
+            # than hardcoding .nc (which silently found no lidar parts).
             from databricks.labs.gbx.ds._listing import list_files
 
+            _part_ext = {
+                "netcdf_gbx": r".*\.nc$",
+                "lidar_gbx": r".*\.la[sz]$",
+            }.get(write_fmt, r".*\.[^.]+$")
             _seeded = list_files(
-                out_path, r".*\.nc$", recursive=False, raise_on_empty=False
+                out_path, _part_ext, recursive=False, raise_on_empty=False
             )
             if not _seeded:
                 raise ValueError(
-                    f"merge setup-parts write produced no .nc files under {out_path} "
+                    f"merge setup-parts write produced no part files under {out_path} "
                     f"(write_fmt={write_fmt}, setup_opts={_setup_opts}); the timed merge "
                     f"would have nothing to fold. Check the writer staged parts (and that "
                     f"the deployed wheel includes the merge-setup path)."
@@ -8251,7 +8256,9 @@ def run_fanout_udtf(
         )
 
 
-def list_corpus_files(corpus_dir: str, filter_regex: str = r".*\.tif$") -> List[str]:
+def list_corpus_files(
+    corpus_dir: str, filter_regex: str = r".*\.tif$", raise_on_empty: bool = True
+) -> List[str]:
     """Return all files under corpus_dir whose full path matches ``filter_regex``.
 
     The reader bench is format-parameterized: GeoTIFF pools filter on the default
@@ -8267,7 +8274,7 @@ def list_corpus_files(corpus_dir: str, filter_regex: str = r".*\.tif$") -> List[
     """
     from databricks.labs.gbx.ds._listing import list_files
 
-    return list_files(corpus_dir, filter_regex)
+    return list_files(corpus_dir, filter_regex, raise_on_empty=raise_on_empty)
 
 
 def _list_tifs(corpus_dir: str) -> List[str]:
@@ -8402,6 +8409,162 @@ def stage_nasanex_corpus(
         flush=True,
     )
     return manifest
+
+
+def stage_lidar_corpus(
+    corpus_dir: str,
+    num_files: int = 3,
+    num_points: int = 10000,
+    seed: int = 42,
+) -> List[str]:
+    """Stage deterministic synthetic LiDAR .laz files into ``corpus_dir`` for the
+    lidar_gbx reader bench (generate-and-stop mode).
+
+    Bench-only helper -- NOT product code and NOT run at import time. The human
+    invokes it once (interactively / from a staging notebook) to populate the
+    ``{CORPUS}/lidar`` pool that the LiDAR reader-bench leg reads.
+
+    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool, so
+    the generation happens at stage time only, while the bench itself does not.
+
+    Generates ``num_files`` .laz files, each with ``num_points`` x/y/z + rgb points,
+    using a fixed seed for reproducibility. Returns the list of generated file paths.
+    Prints the file count so a missing/empty corpus is never silent.
+
+    Writes .laz files to local temp storage first (laspy uses seekable write mode),
+    then copies to the Volume corpus_dir to avoid UC Volume FUSE seek() errors.
+    """
+    import shutil
+    import tempfile
+
+    import laspy
+    import numpy as np
+
+    os.makedirs(corpus_dir, exist_ok=True)
+
+    # Use fixed seed for reproducibility.
+    rng = np.random.RandomState(seed)
+
+    # Write to local temp first (laspy.LasData.write uses seekable mode; UC Volumes reject seek).
+    # Then copy to the Volume to avoid FUSE I/O errors (per .claude/rules/uc-volumes.md).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        staged = []
+        for i in range(num_files):
+            # Generate synthetic points: x in [-180, 180], y in [-90, 90], z in [0, 100].
+            las = laspy.create()
+            las.x = rng.uniform(-180, 180, num_points)
+            las.y = rng.uniform(-90, 90, num_points)
+            las.z = rng.uniform(0, 100, num_points)
+            las.red = rng.randint(0, 65536, num_points, dtype=np.uint16)
+            las.green = rng.randint(0, 65536, num_points, dtype=np.uint16)
+            las.blue = rng.randint(0, 65536, num_points, dtype=np.uint16)
+
+            # Write locally first
+            local_path = os.path.join(tmpdir, f"synthetic_{i:03d}.laz")
+            las.write(local_path)
+
+            # Copy to Volume
+            output_path = f"{corpus_dir}/synthetic_{i:03d}.laz"
+            shutil.copy(local_path, output_path)
+            staged.append(output_path)
+
+    print(
+        f"stage_lidar_corpus: {len(staged)} .laz file(s) staged under {corpus_dir} "
+        f"({num_points} points each, seed={seed})",
+        flush=True,
+    )
+    return staged
+
+
+def stage_exif_corpus(
+    corpus_dir: str,
+    num_files: int = 5,
+    seed: int = 42,
+) -> List[str]:
+    """Stage synthetic JPEG files with EXIF/GPS metadata into ``corpus_dir`` for the
+    exif_gbx reader bench (generate-and-stop mode).
+
+    Bench-only helper -- NOT product code and NOT run at import time. The human
+    invokes it once (interactively / from a staging notebook) to populate the
+    ``{CORPUS}/exif`` pool that the EXIF reader-bench leg reads.
+
+    Staging is DECOUPLED from ``read()``: the bench cell only globs the pool, so
+    the generation happens at stage time only, while the bench itself does not.
+
+    Generates ``num_files`` JPEGs with synthetic EXIF/GPS metadata using a fixed
+    seed for reproducibility. Returns the list of generated file paths. Prints the
+    file count so a missing/empty corpus is never silent.
+
+    Writes JPEGs to local temp storage first (PIL uses seekable write mode; UC Volumes
+    reject seek), then copies to the Volume corpus_dir to avoid FUSE I/O errors.
+    """
+    import shutil
+    import tempfile
+    from pathlib import Path
+
+    import numpy as np
+    from PIL import Image
+    from PIL.TiffImagePlugin import IFDRational
+
+    os.makedirs(corpus_dir, exist_ok=True)
+
+    # Use fixed seed for reproducibility.
+    rng = np.random.RandomState(seed)
+
+    # Write to local temp first (PIL.Image.save uses seekable mode; UC Volumes reject seek).
+    # Then copy to the Volume to avoid FUSE I/O errors (per .claude/rules/uc-volumes.md).
+    with tempfile.TemporaryDirectory() as tmpdir:
+        staged = []
+        for i in range(num_files):
+            # Create a synthetic JPEG with EXIF/GPS metadata.
+            local_p = Path(tmpdir) / f"image_{i:03d}.jpg"
+            img = Image.new("RGB", (4000, 3000), (128, 128, 128))
+            exif = img.getexif()
+
+            # 0th IFD — camera identity (Make=271, Model=272)
+            exif[271] = "TestCamera"
+            exif[272] = f"Model{i}"
+
+            # GPS IFD (tag 34853): random lat/lon in reasonable bounds, altitude 0-100 m.
+            lat = rng.uniform(20.0, 80.0)
+            lon = rng.uniform(-180.0, 180.0)
+            alt = rng.uniform(0, 100)
+
+            gps = exif.get_ifd(34853)
+            lat_abs = abs(lat)
+            lon_abs = abs(lon)
+            gps[1] = "N" if lat >= 0 else "S"
+            gps[2] = (
+                IFDRational(int(lat_abs * 100), 100),
+                IFDRational(0, 1),
+                IFDRational(0, 1),
+            )
+            gps[3] = "E" if lon >= 0 else "W"
+            gps[4] = (
+                IFDRational(int(lon_abs * 100), 100),
+                IFDRational(0, 1),
+                IFDRational(0, 1),
+            )
+            gps[5] = b"\x00"  # AltitudeRef: 0 = above sea level
+            gps[6] = IFDRational(int(alt * 10), 10)  # Altitude
+
+            # Exif IFD (tag 34665): focal length
+            exif.get_ifd(34665)[37386] = IFDRational(173330, 100)
+
+            # Write locally first
+            img.save(str(local_p), "jpeg", exif=exif.tobytes())
+
+            # Copy to Volume
+            output_p = f"{corpus_dir}/image_{i:03d}.jpg"
+            shutil.copy(str(local_p), output_p)
+            staged.append(output_p)
+
+    print(
+        f"stage_exif_corpus: {len(staged)} JPEG file(s) with EXIF/GPS staged under "
+        f"{corpus_dir} (seed={seed})",
+        flush=True,
+    )
+    return staged
 
 
 def _write_striped_gtiff(

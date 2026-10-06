@@ -181,4 +181,14 @@ def sample(ds, geom, geom_crs=None) -> list:
     if not (0 <= row < ds.height and 0 <= col < ds.width):
         return None
     values = list(ds.sample([(x, y)]))[0]
+    nodata = ds.nodata
+    if nodata is not None:
+        return [
+            (
+                None
+                if (v is not None and float(v) == float(nodata))
+                else (float(v) if v is not None else None)
+            )
+            for v in values
+        ]
     return [float(v) for v in values]

@@ -1,7 +1,8 @@
 #!/bin/bash
-# gbx:data:push-wheel - build JAR first (mvn clean package -DskipTests in Docker), then
-# python3 -m build, and upload wheel + JARs to GBX_ARTIFACT_VOLUME/ (overwrite if exists).
-# Set GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step entirely (no Maven build) — for
+# gbx:data:stage-wheel - build JAR first (mvn clean package -DskipTests in Docker), then
+# python3 -m build, and stage wheel to BOTH locations: GBX_ARTIFACT_VOLUME/ (init-script
+# dir; dedupes to one geobrix-*.whl) and the bundle volroot (bundle/%pip path). Set
+# GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step entirely (no Maven build) — for
 # light-tier-only wheel changes (pyrx/pyvx/pygx); the staged JAR is left untouched.
 # Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR locally but skip Databricks upload.
 # Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel locally but skip Databricks upload.
@@ -32,9 +33,13 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ "$SHOW_HELP" == "1" ]]; then
-    echo "Usage: bash scripts/commands/gbx-data-push-wheel.sh [OPTIONS]"
+    echo "Usage: bash scripts/commands/gbx-data-stage-wheel.sh [OPTIONS]"
     echo ""
-    echo "Build the GeoBrix JAR (in Docker) and Python wheel, then upload to Databricks."
+    echo "Build the GeoBrix JAR (in Docker) and Python wheel, then stage to Databricks."
+    echo ""
+    echo "Destinations:"
+    echo "  GBX_ARTIFACT_VOLUME/   (init-script dir; dedupes to a single geobrix-*.whl)"
+    echo "  bundle volroot/        (bundle/%pip path; overwrite in place)"
     echo ""
     echo "Options:"
     echo "  --log <path>   Write output to this log file (filename → test-logs/<name>)"
@@ -48,8 +53,8 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo "  Both together = full local build, no auth required"
     echo ""
     echo "Examples:"
-    echo "  bash scripts/commands/gbx-data-push-wheel.sh"
-    echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1 GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 bash scripts/commands/gbx-data-push-wheel.sh --log my-build.log"
+    echo "  bash scripts/commands/gbx-data-stage-wheel.sh"
+    echo "  GBX_BUNDLE_SKIP_JAR_UPLOAD=1 GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 bash scripts/commands/gbx-data-stage-wheel.sh --log my-build.log"
     exit 0
 fi
 
@@ -57,9 +62,9 @@ cd "$PROJECT_ROOT" || exit 1
 
 if [[ -n "$LOG_FILE" ]]; then
     mkdir -p "$(dirname "$LOG_FILE")"
-    python3 notebooks/tests/push_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
+    python3 notebooks/tests/stage_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
     exit "${PIPESTATUS[0]}"
 else
-    python3 notebooks/tests/push_wheel_to_volume.py
+    python3 notebooks/tests/stage_wheel_to_volume.py
     exit $?
 fi

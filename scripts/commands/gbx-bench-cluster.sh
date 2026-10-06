@@ -33,6 +33,10 @@ Options:
   --vector-only         Run ONLY the vector reader benchmark (no fn benchmarks)
   --benchmark-netcdf    Also run NetCDF reader benchmark (light netcdf_gbx vs heavy netcdf_gdal)
   --netcdf-only         Run ONLY the NetCDF reader benchmark (no fn benchmarks)
+  --benchmark-lidar     Also run LiDAR reader+writer benchmark (light lidar_gbx only)
+  --lidar-only          Run ONLY the LiDAR reader+writer benchmark (no fn benchmarks)
+  --benchmark-exif      Also run EXIF reader benchmark (light exif_gbx only)
+  --exif-only           Run ONLY the EXIF reader benchmark (no fn benchmarks)
   --input-tile <mode>   Input tile for the light spark-path leg: materialized (default) or virtual
   --disable-file        Set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg; use with --input-tile virtual)
   --grouped-file        Also run the grouped FILE-amortization benchmark (rst_clip_grouped +

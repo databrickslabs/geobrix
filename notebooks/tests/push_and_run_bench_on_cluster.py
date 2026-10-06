@@ -314,6 +314,18 @@ def main() -> int:
     # LIGHT-ONLY: there is no heavy NetCDF writer.
     benchmark_netcdf_writer = "--benchmark-netcdf-writer" in sys.argv
     netcdf_writer_only = "--netcdf-writer-only" in sys.argv
+    # --benchmark-lidar: also run the LiDAR reader+writer benchmark (light lidar_gbx only,
+    #   staged .laz pool at {CORPUS}/lidar).
+    # --lidar-only: ONLY run the LiDAR reader+writer benchmark, skip all fn benchmarks.
+    # LIGHT-ONLY: there is no heavy LiDAR tier.
+    benchmark_lidar = "--benchmark-lidar" in sys.argv
+    lidar_only = "--lidar-only" in sys.argv
+    # --benchmark-exif: also run the EXIF reader benchmark (light exif_gbx only,
+    #   staged JPEG pool at {CORPUS}/exif).
+    # --exif-only: ONLY run the EXIF reader benchmark, skip all fn benchmarks.
+    # LIGHT-ONLY: there is no heavy EXIF tier.
+    benchmark_exif = "--benchmark-exif" in sys.argv
+    exif_only = "--exif-only" in sys.argv
     # --fanout-scale F: dial the synthetic fan-out size for each function (default 1.0 ->
     #   meaningful but ~couple minutes on ~20 workers). Larger = more output rows.
     fanout_scale = float(_arg("--fanout-scale", "1.0"))
@@ -621,6 +633,14 @@ def main() -> int:
         benchmark_netcdf_writer=benchmark_netcdf_writer,
         #  --netcdf-writer-only: ONLY run the NetCDF writer benchmark, skip fn benchmarks.
         netcdf_writer_only=netcdf_writer_only,
+        #  --benchmark-lidar: also run LiDAR reader+writer benchmark (light lidar_gbx only).
+        benchmark_lidar=benchmark_lidar,
+        #  --lidar-only: ONLY run the LiDAR reader+writer benchmark, skip fn benchmarks.
+        lidar_only=lidar_only,
+        #  --benchmark-exif: also run EXIF reader benchmark (light exif_gbx only).
+        benchmark_exif=benchmark_exif,
+        #  --exif-only: ONLY run the EXIF reader benchmark, skip fn benchmarks.
+        exif_only=exif_only,
         #  --input-tile materialized|virtual: input tile mode for the light spark-path leg.
         input_tile=input_tile,
         #  --disable-file: set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg).
@@ -697,6 +717,12 @@ def main() -> int:
         cfg["modes"] = "spark-path"
     if netcdf_writer_only:
         # NetCDF writer benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if lidar_only:
+        # LiDAR reader+writer benchmark is spark-path only; skip pure-core sections.
+        cfg["modes"] = "spark-path"
+    if exif_only:
+        # EXIF reader benchmark is spark-path only; skip pure-core sections.
         cfg["modes"] = "spark-path"
     if grouped_file_only:
         # Grouped FILE-amortization benchmark is spark-path only; skip pure-core sections.

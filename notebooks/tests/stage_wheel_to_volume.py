@@ -2,10 +2,15 @@
 """
 Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 which builds but skips upload,
 or GBX_BUNDLE_SKIP_JAR=1 which skips the JAR build+upload ENTIRELY for light-tier-only
-wheel changes), then build the GeoBrix Python wheel (python3 -m build) and upload to
-GBX_ARTIFACT_VOLUME/<whl_filename>. Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel
-locally but skip the Databricks upload. Loads config from databricks_cluster_config.env.
-Overwrites if file already exists.
+wheel changes), then build the GeoBrix Python wheel (python3 -m build) and stage it to TWO
+locations:
+  1. GBX_ARTIFACT_VOLUME/<whl_filename>  — init-script dir; dedupes to exactly one
+     geobrix-*.whl (any stale other-version wheel in that dir is removed before upload).
+  2. bundle volroot/<whl_filename>       — /Volumes/<GBX_BUNDLE_VOLUME_CATALOG>/
+     <GBX_BUNDLE_VOLUME_SCHEMA>/<GBX_BUNDLE_VOLUME_NAME>/ — the bundle/%pip path used by
+     notebooks and the bench launcher; overwrite in place.
+Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel locally but skip both Databricks
+uploads. Loads config from databricks_cluster_config.env. Overwrites if file already exists.
 """
 from __future__ import annotations
 
@@ -31,7 +36,7 @@ if _env_file.exists():
 def main() -> int:
     skip_wheel_upload = os.environ.get("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", "").strip().lower() in ("1", "true", "yes")
     # skip_jar is checked here only to decide whether the wheel upload also needs auth;
-    # push_jar_to_volume.py handles its own upload-skip logic internally.
+    # stage_jar_to_volume.py handles its own upload-skip logic internally.
     skip_jar = os.environ.get("GBX_BUNDLE_SKIP_JAR_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent
@@ -62,7 +67,7 @@ def main() -> int:
 
         w = WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)
 
-    # JAR first so the wheel build can include it if needed. Always run — push_jar_to_volume.py
+    # JAR first so the wheel build can include it if needed. Always run — stage_jar_to_volume.py
     # respects GBX_BUNDLE_SKIP_JAR_UPLOAD internally (build only vs build+upload).
     # GBX_BUNDLE_SKIP_JAR skips the JAR step entirely (no Maven build) for light-tier-only
     # wheel changes; the wheel is JAR-less (setuptools bundles no lib/*.jar), so the staged
@@ -75,8 +80,8 @@ def main() -> int:
     if skip_jar_build:
         print("GBX_BUNDLE_SKIP_JAR=1: skipping JAR build; wheel-only stage (JAR-less light tier).")
     else:
-        print("Running push_jar_to_volume (JAR before wheel)...")
-        rc = subprocess.run([sys.executable, str(TESTS_DIR / "push_jar_to_volume.py")], cwd=project_root)
+        print("Running stage_jar_to_volume (JAR before wheel)...")
+        rc = subprocess.run([sys.executable, str(TESTS_DIR / "stage_jar_to_volume.py")], cwd=project_root)
         if rc.returncode != 0:
             return rc.returncode
 
@@ -113,11 +118,29 @@ def main() -> int:
         print("GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1: wheel built locally (%s); skipping Databricks upload." % whl.name)
         return 0
 
-    volume_path = f"{artifact_volume}/{whl.name}"
+    # ── Destination 1: init-script dir (GBX_ARTIFACT_VOLUME) ──────────────────────────
+    # Keep exactly one geobrix-*.whl in this dir; remove any stale other-version wheel
+    # before uploading. Never touch geobrix-gdal-init.sh or platform tarballs.
     try:
         w.files.create_directory(artifact_volume)
     except Exception:
         pass
+    try:
+        for entry in w.files.list(artifact_volume):
+            if entry.is_directory:
+                continue
+            filename = Path(entry.name).name
+            if (
+                filename.startswith("geobrix-")
+                and filename.endswith(".whl")
+                and filename != whl.name
+            ):
+                print(f"Removing stale wheel: {entry.name}")
+                w.files.delete(entry.name)
+    except Exception as e:
+        print(f"Warning: could not list/clean artifact volume: {e}", file=sys.stderr)
+
+    volume_path = f"{artifact_volume}/{whl.name}"
     print("Uploading to %s (overwrite if exists)..." % volume_path)
     # Use files.upload (streaming PUT) — NOT files.upload_from. upload_from hits
     # an admin-gated bulk API that PermissionDenies non-account-admins on some
@@ -146,6 +169,41 @@ def main() -> int:
         )
         return 1
     print("Done: %s" % volume_path)
+
+    # ── Destination 2: bundle volroot (bundle/%pip path) ──────────────────────────────
+    # The notebook %pip install and the bench launcher both resolve the wheel from the
+    # bundle volroot. Mirror the same resolution used by stage_jar_to_volume for the
+    # tests.jar (GBX_BUNDLE_VOLUME_* env vars). Overwrite in place.
+    b_cat = (os.environ.get("GBX_BUNDLE_VOLUME_CATALOG") or "main").strip()
+    b_sch = (os.environ.get("GBX_BUNDLE_VOLUME_SCHEMA") or "default").strip()
+    b_vol = (os.environ.get("GBX_BUNDLE_VOLUME_NAME") or "geobrix_samples").strip()
+    b_root = f"/Volumes/{b_cat}/{b_sch}/{b_vol}"
+    bundle_whl_path = f"{b_root}/{whl.name}"
+    try:
+        w.files.create_directory(b_root)
+    except Exception:
+        pass
+    print("Uploading to %s (overwrite if exists)..." % bundle_whl_path)
+    with open(whl.resolve(), "rb") as _fh:
+        w.files.upload(bundle_whl_path, _fh, overwrite=True)
+    try:
+        remote_metadata = w.files.get_metadata(bundle_whl_path)
+        remote_size = remote_metadata.content_length
+        if remote_size != local_size:
+            print(
+                f"Error: bundle upload verification failed. Local size: {local_size}, "
+                f"remote size: {remote_size}. Bytes may not have landed correctly.",
+                file=sys.stderr,
+            )
+            return 1
+    except Exception as e:
+        print(
+            f"Error: failed to verify bundle upload. Could not read remote metadata for "
+            f"{bundle_whl_path}: {e}",
+            file=sys.stderr,
+        )
+        return 1
+    print("Done: %s" % bundle_whl_path)
     return 0
 
 

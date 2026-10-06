@@ -423,21 +423,62 @@ def _draw_one_layer(
             ax.imshow(lyr.data, alpha=ras_alpha)
             ax.set_axis_off()
         else:
-            from databricks.labs.gbx.vizx._cog import plot_cog
+            # Detect in-memory bytes or tile Row/dict (the ``raster`` field is bytes
+            # inside the Spark tile struct) vs a file path string.  plot_cog only
+            # handles file paths (it calls ``rasterio.open(str(path))``); in-memory
+            # inputs must go through plot_raster which uses a MemoryFile.
+            _is_inmem = isinstance(lyr.data, (bytes, bytearray, memoryview))
+            if not _is_inmem and not isinstance(lyr.data, str):
+                # Possibly a tile Row/dict — resolve to check for embedded raster bytes.
+                try:
+                    from databricks.labs.gbx.vizx._raster import _resolve_tile_input
 
-            # Warp to the SAME CRS the vector branch above already reprojects
-            # to (Web Mercator) so a composite raster+vector render aligns --
-            # otherwise a geographic-CRS raster draws at degree-scale
-            # coordinates while the vector draws at mercator-meters, and both
-            # collapse to sub-pixel specks (a near-blank composite).
-            plot_cog(
-                lyr.data,
-                band=lyr.band,
-                basemap=False,
-                ax=ax,
-                emphasis=emphasis,
-                to_crs="EPSG:3857",
-            )
+                    _rb, _, _ = _resolve_tile_input(lyr.data)
+                    _is_inmem = _rb is not None
+                except Exception:
+                    pass
+            if _is_inmem:
+                # In-memory path: use plot_raster (MemoryFile-based, handles bytes and
+                # tile Row/VirtualTile).  The tile is already in its source CRS; if it
+                # matches the vector layers (EPSG:3857 for Databricks surface tiles) the
+                # composite aligns without reprojection.
+                #
+                # zorder: matplotlib's ax.imshow default is 0; the basemap is added
+                # AFTER this layer via cx.add_basemap at zorder=1.  Without an explicit
+                # zorder=2 here the basemap (drawn later, same z-plane) occludes the
+                # raster entirely — only the basemap shows.  Match plot_cog's convention
+                # (zorder=2 raster, zorder=1 basemap, zorder=3 vectors).
+                _imgs_before = len(ax.get_images())
+                from databricks.labs.gbx.vizx._raster import plot_raster
+
+                plot_raster(
+                    lyr.data,
+                    bands=lyr.band,
+                    ax=ax,
+                    cmap=lyr.cmap or None,
+                    emphasis=emphasis,
+                )
+                # Lift above basemap and apply opacity in one pass over new images.
+                for _img in ax.get_images()[_imgs_before:]:
+                    _img.set_zorder(2)
+                    if lyr.opacity is not None:
+                        _img.set_alpha(lyr.opacity)
+            else:
+                from databricks.labs.gbx.vizx._cog import plot_cog
+
+                # Warp to the SAME CRS the vector branch above already reprojects
+                # to (Web Mercator) so a composite raster+vector render aligns --
+                # otherwise a geographic-CRS raster draws at degree-scale
+                # coordinates while the vector draws at mercator-meters, and both
+                # collapse to sub-pixel specks (a near-blank composite).
+                plot_cog(
+                    lyr.data,
+                    band=lyr.band,
+                    basemap=False,
+                    ax=ax,
+                    emphasis=emphasis,
+                    to_crs="EPSG:3857",
+                )
     elif lyr.kind == "point_cloud":
         _draw_point_cloud(lyr, ax, legend)
     elif lyr.kind == "pmtiles":
@@ -447,6 +488,38 @@ def _draw_one_layer(
             ">64MB static fallback decode them to a raster first.",
             stacklevel=2,
         )
+
+
+def _fix_colorbar_position(ax, created):
+    """Resize a single colorbar axes to match the map axes height.
+
+    When ``plot_static`` creates the figure itself (``created=True``) and exactly
+    one colorbar axes exists, the colorbar can overrun the map area because
+    geopandas sizes it to the full subplot area while the map axes (equal-aspect,
+    geographic data) realises a shorter box.  Force a canvas draw so that the
+    equal-aspect constraint recomputes the axes box, then pin the colorbar's
+    y-position and height to match the map axes.
+
+    Only acts when: (a) ``created=True`` — caller-owned layouts are untouched;
+    (b) exactly one colorbar axes is found — conservative; zero or more than one
+    are left alone.  Wrapped in try/except so a layout edge-case never breaks a
+    render.
+    """
+    if not created:
+        return
+    try:
+        fig = ax.figure
+        fig.canvas.draw()
+        _cbars = [a for a in fig.axes if a is not ax and a.get_label() == "<colorbar>"]
+        # Fall back to "any extra axes" if the label isn't set, but be conservative.
+        if not _cbars:
+            _cbars = [a for a in fig.axes if a is not ax]
+        if len(_cbars) == 1:
+            mb = ax.get_position()
+            cb = _cbars[0].get_position()
+            _cbars[0].set_position([cb.x0, mb.y0, cb.width, mb.height])
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _resolve_static_style(plot_gdf, em, *, cmap, alpha, edgecolor, markersize):
@@ -588,10 +661,25 @@ def plot_static(
             try:
                 import contextily as cx
 
-                # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
-                # pass basemap_source=... to use CartoDB/another provider.
-                source = basemap_source or cx.providers.OpenStreetMap.Mapnik
-                cx.add_basemap(ax, source=source, crs="EPSG:3857")
+                from databricks.labs.gbx.vizx._basemap import (
+                    _basemap_add_kwargs,
+                    _enable_tile_cache,
+                    _resolve_basemap_source,
+                )
+
+                # Enable disk cache once per session (prevents re-fetching the same
+                # tiles on every render of the same AOI → avoids rate-limit blocks).
+                _enable_tile_cache()
+                # Default is Esri.WorldStreetMap — keyless from Databricks egress.
+                # OSM/CartoDB are blocked/key-gated from datacenter IPs.
+                # Override with basemap_source="imagery"|"topo" or any cx provider.
+                source = _resolve_basemap_source(basemap_source)
+                cx.add_basemap(
+                    ax,
+                    source=source,
+                    crs="EPSG:3857",
+                    **_basemap_add_kwargs(),
+                )
             except Exception as exc:  # noqa: BLE001
                 warnings.warn(
                     f"plot_static: basemap unavailable ({type(exc).__name__}: {exc}); "
@@ -602,6 +690,7 @@ def plot_static(
         # default ("COG") never leaks onto the composite.
         ax.set_title(title or "")
         ax.set_axis_off()
+        _fix_colorbar_position(ax, created)
         return ax
 
     # --- Legacy single-data path (Spark DataFrame / GeoDataFrame / bare) ---
@@ -671,10 +760,25 @@ def plot_static(
         try:
             import contextily as cx
 
-            # OpenStreetMap.Mapnik needs no API key (CartoDB now requires one);
-            # pass basemap_source=... to use CartoDB/another provider.
-            source = basemap_source or cx.providers.OpenStreetMap.Mapnik
-            cx.add_basemap(ax, source=source, crs=plot_gdf.crs)
+            from databricks.labs.gbx.vizx._basemap import (
+                _basemap_add_kwargs,
+                _enable_tile_cache,
+                _resolve_basemap_source,
+            )
+
+            # Enable disk cache once per session (prevents re-fetching the same
+            # tiles on every render of the same AOI → avoids rate-limit blocks).
+            _enable_tile_cache()
+            # Default is Esri.WorldStreetMap — keyless from Databricks egress.
+            # OSM/CartoDB are blocked/key-gated from datacenter IPs.
+            # Override with basemap_source="imagery"|"topo" or any cx provider.
+            source = _resolve_basemap_source(basemap_source)
+            cx.add_basemap(
+                ax,
+                source=source,
+                crs=plot_gdf.crs,
+                **_basemap_add_kwargs(),
+            )
         except Exception as exc:  # noqa: BLE001 — offline/no-egress/missing -> fallback
             warnings.warn(
                 f"plot_static: basemap unavailable ({type(exc).__name__}: {exc}); "
@@ -686,6 +790,7 @@ def plot_static(
     if title:
         ax.set_title(title)
     ax.set_axis_off()
+    _fix_colorbar_position(ax, created)
 
     # No pyplot.show(): the inline/Databricks backend auto-displays the figure at
     # cell end with all overlaid layers; calling show() on the creating call

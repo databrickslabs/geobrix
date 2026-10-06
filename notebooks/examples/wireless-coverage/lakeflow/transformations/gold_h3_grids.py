@@ -197,7 +197,9 @@ def wc_h3_dem_res10():
     dtm = spark.read.table("wc_surface_dtm")
     breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
     land_wkb = _land_wkb(c["bbox"], p["water"])
-    cells = _surface_to_h3_cells(dtm, "dtm", breaks_arr, c["h3_res"], land_wkb)
+    cells = _surface_to_h3_cells(
+        dtm, "dtm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=c["simplify"]
+    )
     return _with_join_parent(cells, c["join_res"])
 
 
@@ -215,7 +217,9 @@ def wc_h3_dsm_res10():
     dsm = spark.read.table("wc_surface_dsm")
     breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
     land_wkb = _land_wkb(c["bbox"], p["water"])
-    cells = _surface_to_h3_cells(dsm, "dsm", breaks_arr, c["h3_res"], land_wkb)
+    cells = _surface_to_h3_cells(
+        dsm, "dsm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=c["simplify"]
+    )
     return _with_join_parent(cells, c["join_res"])
 
 
@@ -246,12 +250,18 @@ def wc_h3_chm_res10():
     # UDTF is invoked via spark.sql. Verified schema (band INT, cellID LONG,
     # measure DOUBLE); band=1 is the single CHM band. Multiple tiles may map the
     # same cellid at tile boundaries -> take the max across tiles.
-    chm_cells = spark.sql(f"""
+    chm_cells = (
+        spark.sql(
+            f"""
         SELECT t.cellID AS cellid, t.measure AS chm_z
         FROM   _wc_chm_4326_tiles,
                LATERAL gbx_rst_h3_rastertogridmax(chm_4326, {h3_res}) t
         WHERE  t.band = 1
-        """).groupBy("cellid").agg(F.max("chm_z").alias("max_chm_z"))
+        """
+        )
+        .groupBy("cellid")
+        .agg(F.max("chm_z").alias("max_chm_z"))
+    )
 
     # Drop non-physical CHM outliers (> MAX_CHM_M): LiDAR artifacts (multi-path
     # reflections, flying objects, DTM underestimates) above any real structure.

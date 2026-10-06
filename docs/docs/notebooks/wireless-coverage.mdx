@@ -100,6 +100,7 @@ Bundle variables (set in `databricks.yml`; override per-workspace in `databricks
 | `schema` | `wireless_coverage_lf` | UC schema; all pipeline and siting tables land here. |
 | `volume` | `data` | UC volume; raw data lands under `{volume}/wireless-coverage-lf/`. |
 | `full_aoi` | `true` | `true` for the full San Francisco AOI; `false` for the Golden Gate Park demo window. |
+| `simplify` | `true` | Apply product `st_simplify` to isobands before H3 covering (default True = fast, no coverage loss, needed for full-SF performance; False = exact isobands, heavy/slow). |
 | `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
 | `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
@@ -116,6 +117,7 @@ Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys i
 | `max_dist_m` | `2500` | Line-of-sight buffer radius in metres. |
 | `antenna_above_surface_m` | `10` | Observer height above the DSM surface in metres. |
 | `quick_thresh_frac` | `0.30` | Minimum quick-pass coverage fraction to survive rule-out. |
+| `simplify` | `true` | Simplify isoband geometry via product `st_simplify` before H3 covering (default True; set False for exact isobands at the cost of heavy performance at full scale). |
 
 ## Prerequisites
 

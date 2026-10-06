@@ -20,6 +20,10 @@ targets:
       # schema: my_wireless_coverage_lf
       # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.5.2-py3-none-any.whl
 
+      # Simplify isoband geometry before H3 covering (default: true). True = apply product st_simplify
+      # (fast, no coverage loss, needed for full SF performance); False = exact isobands (heavy/slow).
+      # simplify: "false"
+
       # Reuse the notebook series' already-staged LiDAR instead of re-downloading
       # the ~830 M-point SF point cloud. This is the standard staged location, so
       # the `land` task finds it present and skips the download:

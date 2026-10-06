@@ -12,11 +12,13 @@ def _g(spark, key, default):
 
 def cfg(spark):
     full = str(_g(spark, "full_aoi", "true")).lower() == "true"
+    simplify = str(_g(spark, "simplify", "true")).lower() == "true"
     return {
         "catalog": _g(spark, "catalog", "geospatial_docs"),
         "schema": _g(spark, "schema", "wireless_coverage_lf"),
         "volume": _g(spark, "volume", "data"),
         "full_aoi": full,
+        "simplify": simplify,
         "bbox": _FULL_SF if full else _DEMO_GGP,
         "laz_dir": _g(spark, "laz_dir", ""),
         "water_mask_dir": _g(spark, "water_mask_dir", ""),
@@ -25,7 +27,12 @@ def cfg(spark):
         "srid": int(_g(spark, "srid", "3857")),
         "h3_res": int(_g(spark, "h3_res", "10")),
         "join_res": int(_g(spark, "join_res", "9")),
-        "breaks_m": [float(x) for x in _g(spark, "breaks_m", "0,30,60,90,120,150,180,210,240,270,300").split(",")],
+        "breaks_m": [
+            float(x)
+            for x in _g(
+                spark, "breaks_m", "0,30,60,90,120,150,180,210,240,270,300"
+            ).split(",")
+        ],
         "tin_max_pts": int(_g(spark, "tin_max_pts", "150000")),
         "tower_res": int(_g(spark, "tower_res", "9")),
         "quickpass_res": int(_g(spark, "quickpass_res", "10")),
@@ -52,6 +59,7 @@ def register_gbx(spark):
     from databricks.labs.gbx.pygx import functions as gx
     from databricks.labs.gbx.pyvx import functions as vx
     from databricks.labs.gbx.ds.register import register as register_ds
+
     rx.register(spark)
     gx.register(spark)
     vx.register(spark)  # gbx_st_simplifypreservetopology (geobrix-registered)

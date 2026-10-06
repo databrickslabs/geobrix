@@ -134,6 +134,7 @@ The override file is layered in automatically via `include: ["*.override.yml"]`.
 | `schema` | `wireless_coverage_lf` | UC schema; all pipeline and siting tables land here. |
 | `volume` | `data` | UC volume; raw data lands under `{volume}/wireless-coverage-lf/`. |
 | `full_aoi` | `true` | `true` for the full San Francisco AOI; `false` for the Golden Gate Park demo window. |
+| `simplify` | `true` | `true` to apply product `st_simplify` to isobands before H3 covering (fast, no coverage loss); `false` for exact isobands (heavy/slow at full scale). |
 | `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
 | `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl` | Path to the staged GeoBrix wheel. |

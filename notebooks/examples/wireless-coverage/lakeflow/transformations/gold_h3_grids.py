@@ -233,10 +233,13 @@ def wc_h3_chm_res10():
     land_wkb = _land_wkb(c["bbox"], p["water"])
 
     # rst_h3_rastertogridmax (all H3 UDTFs) require lon/lat EPSG:4326 tiles.
-    # Serverless: repartition(N, column) for fan-out parallelism.
+    # Serverless fan-out is repartition(N, column). Fan out by (tx, ty) so each
+    # task gets ONE tile through the Python UDTF -- repartition(64, "tx") grouped a
+    # whole tx-strip (~16 tiles at full SF) into one task and OOM'd the worker.
+    # Match the DEM/DSM per-tile fan-out.
     chm_4326 = chm.select(
         "tx", "ty", rx.rst_transform("chm", F.lit(4326)).alias("chm_4326")
-    ).repartition(64, "tx")
+    ).repartition(512, "tx", "ty")
     chm_4326.createOrReplaceTempView("_wc_chm_4326_tiles")
 
     # SQL ANSI LATERAL UDTF: the Python wrapper raises NotImplementedError, so the

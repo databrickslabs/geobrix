@@ -14,8 +14,6 @@ from databricks.labs.gbx.pyrx.checkpoint import (
     checkpoint_skip,
     input_signature,
 )
-from databricks.labs.gbx.pyrx.core.tiling import tile_range
-from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
 from databricks.labs.gbx.pyrx.mvs import (
     dense_fuse,
     dense_mvs_pool,
@@ -29,6 +27,27 @@ from databricks.labs.gbx.pyrx.mvs import (
 # Configure the bundled GDAL/PROJ env on import (driver side). Worker processes
 # call configure_gdal_env() again inside each UDF body.
 configure_gdal_env()
+
+
+def __getattr__(name: str):
+    """Lazy exports for symbols whose transitive imports pull rasterio.
+
+    ``tile_range`` and ``rst_viewshed_towers`` are advertised in ``__all__`` and
+    fully usable via ``pyrx.tile_range`` / ``from … pyrx import tile_range``, but
+    their modules are NOT imported until first access.  This keeps a bare
+    ``import databricks.labs.gbx.pyrx`` (and any pyrx submodule import) free of
+    the rasterio dependency, which is absent in the heavy-tier build environment.
+    """
+    if name == "tile_range":
+        from databricks.labs.gbx.pyrx.core.tiling import tile_range
+
+        return tile_range
+    if name == "rst_viewshed_towers":
+        from databricks.labs.gbx.pyrx.functions import rst_viewshed_towers
+
+        return rst_viewshed_towers
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
 
 __all__ = [
     "assert_rasterio_available",

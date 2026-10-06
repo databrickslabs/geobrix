@@ -10,8 +10,7 @@ pipeline, config-driven via ``_config.cfg``:
                    -- 03a's ``_surface_to_h3_cells`` over ``wc_surface_dsm``.
   wc_h3_chm_res10  Max canopy/structure height per H3 cell -- 03a's
                    ``gbx_rst_h3_rastertogridmax`` path over ``wc_surface_chm``,
-                   clamped to MAX_CHM_M, gap-filled (``h3_cellfill`` k=1 IDW),
-                   and land-masked.
+                   clamped to MAX_CHM_M and land-masked.
 
 Every H3 table carries a stable res-``join_res`` parent-cell join key
 (``parent_cellid`` / ``parent_cellid_res``) so the Part-4 tower analysis joins on
@@ -20,16 +19,21 @@ one column; ``@dp.expect_or_fail`` guards it non-null on all three.
 ``register_gbx(spark)`` is called INSIDE each dataset body (never at import); the
 upstream reads use ``spark.read.table`` so the pipeline sees the dependency edges
 on the silver surfaces. The helper chain (``_surface_to_h3_cells``,
-``_cellfill_depth``, ``_with_join_parent``, ``_land_wkb``) reproduces
-``config_nb``'s helpers, which the pipeline cannot ``%run``-import. Params
-(``breaks_m``, ``h3_res``, ``join_res``, ``bbox``) and the water-mask dir come
-from ``cfg``/``paths``; full-vs-demo is the ``full_aoi`` config toggle.
+``_with_join_parent``, ``_land_wkb``) reproduces ``config_nb``'s helpers, which
+the pipeline cannot ``%run``-import. Params (``breaks_m``, ``h3_res``,
+``join_res``, ``bbox``) and the water-mask dir come from ``cfg``/``paths``;
+full-vs-demo is the ``full_aoi`` config toggle.
 
-Note on gap-fill: 03a gap-fills ONLY the CHM. DEM/DSM come from
-``rst_isoband`` -> ``h3_try_coverash3``, which yields solid, gap-free cells per
-band and multiple rows per cellid -- a shape ``_cellfill_depth`` (which requires a
-unique cellid) cannot consume. DEM/DSM are land-masked instead via ``rst_clip``
-inside ``_surface_to_h3_cells``, matching the notebook exactly.
+Note: none of the three MVs is gap-filled, and no MV does an eager action on
+UPSTREAM pipeline data, so declarative flow analysis against empty upstreams does
+not crash. (``_land_wkb`` does read the staged water file on the driver -- but
+that is a staged EXTERNAL reference, present during flow analysis, which is why
+the DEM/DSM MVs that also call it analyze fine.) DEM/DSM H3 band cells are
+gap-free by construction (``rst_isoband`` -> ``h3_try_coverash3`` tessellates each
+elevation band solidly) and land-masked via ``rst_clip``; CHM is
+max-canopy-per-cell, clamped and land-masked. 03a's optional k=1 IDW cell
+gap-fill is dropped here because it pulled an empty upstream aggregate to the
+driver, which does not belong in a ``@dp.materialized_view`` body.
 """
 
 from pyspark import pipelines as dp
@@ -128,45 +132,6 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
     return cells.select("cellid", "res", "band_level", "elev_lo", "elev_hi")
 
 
-def _cellfill_depth(cells_df, value_col, k=1):
-    """Fill NULL-valued gap cells (k-ring IDW) from valid H3 neighbours.
-
-    Ports ``config_nb._cellfill_depth``: builds the k-ring gap candidates
-    (``DBF.h3_kring`` + left-anti), runs ``gx.h3_cellfill`` (IDW power=2), and
-    decodes the packed payload. Bounded at res-10 (~thousands of cells), so the
-    ``collect``/``createDataFrame`` round-trip is acceptable and Serverless-safe
-    (no ``sparkContext`` / ``.rdd`` / ``_jvm``). ``cells_df`` must have
-    (cellid LONG, <value_col> DOUBLE) with a unique cellid per row. Returns a
-    DataFrame with the same schema including the filled cells.
-    """
-    from databricks.labs.gbx.pygx import _cellfill
-    from databricks.labs.gbx.pygx import functions as gx
-
-    spark = SparkSession.getActiveSession()
-    gap = (
-        cells_df.select(
-            F.explode(DBF.h3_kring(F.col("cellid"), F.lit(k))).alias("cellid")
-        )
-        .distinct()
-        .join(cells_df.select("cellid"), on="cellid", how="left_anti")
-        .withColumn(value_col, F.lit(None).cast("double"))
-    )
-    fill_in = (
-        cells_df.select("cellid", value_col).unionByName(gap).withColumn("_g", F.lit(1))
-    )
-    payload = (
-        fill_in.groupBy("_g")
-        .agg(
-            gx.h3_cellfill(
-                "cellid", value_col, F.lit(k), F.lit("idw"), F.lit(2.0)
-            ).alias("p")
-        )
-        .first()["p"]
-    )
-    rows = [(int(cid), v) for cid, v in _cellfill.decode(payload) if v is not None]
-    return spark.createDataFrame(rows, f"cellid long, {value_col} double")
-
-
 def _with_join_parent(df, join_res, cell_col="cellid"):
     """Add the stable res-``join_res`` parent-cell join key (ports ``with_join_parent``).
 
@@ -219,7 +184,7 @@ def wc_h3_dsm_res10():
 
 @dp.materialized_view(
     name="wc_h3_chm_res10",
-    comment="CHM max canopy/structure height per H3 cell (res 10): clamped, gap-filled, land-masked, with parent join key.",
+    comment="CHM max canopy/structure height per H3 cell (res 10): clamped and land-masked, with parent join key.",
 )
 @dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
 def wc_h3_chm_res10():
@@ -251,15 +216,15 @@ def wc_h3_chm_res10():
         WHERE  t.band = 1
         """).groupBy("cellid").agg(F.max("chm_z").alias("max_chm_z"))
 
-    # Drop non-physical CHM outliers (> MAX_CHM_M) BEFORE gap-fill, so the fill
-    # propagates from valid neighbours rather than from artifact values.
+    # Drop non-physical CHM outliers (> MAX_CHM_M): LiDAR artifacts (multi-path
+    # reflections, flying objects, DTM underestimates) above any real structure.
     chm_clean = chm_cells.where(F.col("max_chm_z") <= F.lit(_MAX_CHM_M))
 
-    # Gap-fill interior NoData (h3_cellfill k=1 IDW) on the unique (cellid, value)
-    # surface, then re-apply the land mask so no ocean-adjacent cell is populated.
-    chm_filled = _cellfill_depth(chm_clean.select("cellid", "max_chm_z"), "max_chm_z")
+    # Land mask: keep only cells inside the land polygon (drops Bay/Pacific-
+    # adjacent cells). spark.range(1) seeds the array explode lazily -- a
+    # driver-free seed, so the MV stays lazy for declarative flow analysis.
     land_cells = (
-        spark.createDataFrame([(1,)], "g int")
+        spark.range(1)
         .select(
             F.explode(DBF.h3_try_coverash3(F.lit(land_wkb), F.lit(h3_res))).alias(
                 "cellid"
@@ -269,7 +234,7 @@ def wc_h3_chm_res10():
         .select("cellid")
     )
     chm_h3 = (
-        chm_filled.join(land_cells, "cellid", "inner")
+        chm_clean.join(land_cells, "cellid", "inner")
         .withColumn("res", F.lit(h3_res))
         .select("cellid", "res", "max_chm_z")
     )

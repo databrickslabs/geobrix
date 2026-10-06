@@ -19,7 +19,7 @@ This is the production counterpart to the notebook series (see the other tab) �
 :::
 
 :::info Runs on the lightweight tier (Serverless)
-The pipeline and its `land` and `siting` tasks all install `geobrix[light_env6,vizx]` from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. See [Execution Tiers](../api/execution-tiers).
+The pipeline and its `land` and `siting` tasks install the GeoBrix wheel with the extra that matches the Lakeflow runtime — **as of this example DBR 18.3**, so `geobrix[light_dbr18,vizx]` (pipeline) and `geobrix[light_env5,vizx]` (serverless job tasks), both the protobuf-5 regime — as a single pip dependency entry; pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. Lakeflow pins compute by a runtime channel: check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch the extra to match if it has moved (e.g. DBR 19 → `[light_dbr19]`/`[light_env6]`). See [Execution Tiers](../api/execution-tiers).
 :::
 
 ## How it works: from staged LiDAR to ranked tower sites

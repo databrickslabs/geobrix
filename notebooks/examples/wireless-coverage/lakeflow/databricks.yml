@@ -32,13 +32,16 @@ resources:
             include: transformations/**
       environment:
         dependencies:
-          # The Lakeflow SDP pipeline runs on the DLT runtime channel — currently
-          # DBR 18.3.x (protobuf-5) — so it uses the DBR-language [light_dbr18] extra,
-          # NOT [light_env6] (the protobuf-6 / DBR-19 regime). Installed WITH vizx in
-          # ONE pip resolution: Lakeflow runs one `%pip install` per dependency entry,
-          # so splitting the extras defeats pip's resolver (rio-tiler after a pinned
-          # rasterio forces a source rebuild / ENVIRONMENT_PIP_INSTALL_ERROR). The
-          # `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
+          # The Lakeflow SDP pipeline runs on the DLT runtime channel. As of this
+          # example that channel is DBR 18.3.x (protobuf-5), so it uses the DBR-language
+          # [light_dbr18] extra, NOT [light_env6] (the protobuf-6 / DBR-19 regime).
+          # >>> Before you deploy, check the current Lakeflow runtime channel at
+          # https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions
+          # and switch to the matching GeoBrix extra (e.g. a DBR 19 channel -> [light_dbr19]).
+          # Installed WITH vizx in ONE pip resolution: Lakeflow runs one `%pip install`
+          # per dependency entry, so splitting the extras defeats pip's resolver
+          # (rio-tiler after a pinned rasterio forces a rebuild / ENVIRONMENT_PIP_INSTALL_ERROR).
+          # The `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
           - ${var.gbx_wheel}[light_dbr18,vizx]
       configuration:
         wireless_coverage.catalog: ${var.catalog}
@@ -99,11 +102,13 @@ resources:
       environments:
         - environment_key: wc_env
           spec:
-            # Serverless job tasks use Environment-language versioning. Env 5 is the
-            # protobuf-5 base equivalent to the Lakeflow pipeline's DBR 18.3 runtime
-            # (DBR 18 <-> Env 5), so the extra is [light_env5] (= light_dbr18). Keep
-            # the env version and the extra in lockstep — a mismatched base + extra
-            # trips the "core package versions changed" job failure.
+            # Serverless job tasks use Environment-language versioning. As of this
+            # example the equivalent of the Lakeflow DBR 18.3 runtime is Env 5
+            # (DBR 18 <-> Env 5, protobuf-5), so env version "5" + the [light_env5]
+            # extra (= light_dbr18). Re-check the current channel (see the pipeline
+            # dependencies note above) and keep the env version + extra in lockstep
+            # with it — a mismatched base + extra trips the "core package versions
+            # changed" job failure.
             environment_version: "5"
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline

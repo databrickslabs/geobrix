@@ -2,7 +2,7 @@
 
 A production-ready **Wireless Coverage pipeline**: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task, built as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
-> **Requires GeoBrix 0.5.2+.** Both the pipeline and the siting task install `geobrix[light_env6,vizx]` from a staged wheel. The `gbx_wheel` variable must point at `geobrix-0.5.2-py3-none-any.whl` or newer, staged on a Unity Catalog Volume.
+> **Requires GeoBrix 0.5.2+.** The pipeline installs `geobrix[light_dbr18,vizx]` and the serverless job tasks install `geobrix[light_env5,vizx]` — the protobuf-5 extras that match the Lakeflow runtime **as of this example (DBR 18.3)**. Lakeflow pins its compute by a runtime channel; **check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch to the matching GeoBrix extra** if it has moved (e.g. a DBR 19 channel → `[light_dbr19]` / `[light_env6]`) — the extra and the compute runtime must agree. The `gbx_wheel` variable must point at `geobrix-0.5.2-py3-none-any.whl` or newer, staged on a Unity Catalog Volume.
 
 This is the production counterpart to the [Wireless Coverage notebook series](../README.md). It runs the same San Francisco AOI and USGS 3DEP LiDAR data, but as a **scheduled medallion pipeline** rather than one-off notebook outputs: a `land` downloader task stages the raw data, the Lakeflow pipeline cascades it bronze → silver → gold, a `siting` task runs the H3-native tower analysis at scale, and a `validate` notebook confirms all outputs.
 
@@ -42,7 +42,7 @@ databricks bundle  →  wireless_coverage_lf_job
                               validate/validate_wc_lf.ipynb — confirms all outputs
 ```
 
-**Task 2 — `pipeline`**: the Lakeflow Declarative Pipeline (`wireless_coverage_lf_pipeline`, `serverless: true`), rooted at `./transformations`. Its environment installs `${var.gbx_wheel}[light_env6,vizx]` as a **single pip dependency entry** (keeping pip's resolver in one pass).
+**Task 2 — `pipeline`**: the Lakeflow Declarative Pipeline (`wireless_coverage_lf_pipeline`, `serverless: true`), rooted at `./transformations`. Its environment installs `${var.gbx_wheel}[light_dbr18,vizx]` (the extra matching the Lakeflow DBR-18.3 runtime channel — see the note at the top) as a **single pip dependency entry** (keeping pip's resolver in one pass).
 
 **Task 3 — `siting`**: reads `wc_surface_dsm` and `wc_surface_dtm` from the pipeline, bins them to H3 at multiple resolutions, builds the naive res-9 candidate lattice, rules out weak sites with a coarse quick-pass, then runs exact res-12 H3 line-of-sight viewsheds on survivors via `h3_viewshed_towers` (distributed — one tower per Spark task). Writes six regular Delta tables overwritten each run.
 
@@ -169,7 +169,7 @@ resources:
 ## Prerequisites
 
 - **Unity Catalog**: a catalog and schema (defaults `geospatial_docs.wireless_coverage_lf`) and a Volume named `data` under it. The pipeline creates sub-directories inside the Volume but not the Volume itself.
-- **GeoBrix wheel** staged at the `gbx_wheel` path (default: `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl`). The pipeline and all job tasks install `${gbx_wheel}[light_env6,vizx]` from this path.
+- **GeoBrix wheel** staged at the `gbx_wheel` path (default: `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl`). The pipeline installs `${gbx_wheel}[light_dbr18,vizx]` and the job tasks `${gbx_wheel}[light_env5,vizx]` — the DBR-18 / Env-5 (protobuf-5) extras matching the Lakeflow runtime **as of this example**. Re-check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) at deploy time and switch the extra (and the job `environment_version`) to match the live channel.
 - **Network access**: the `land` task fetches from USGS 3DEP and Overture Maps over HTTPS — Serverless has outbound internet by default.
 
 ---

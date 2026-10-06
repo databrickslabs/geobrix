@@ -58,6 +58,12 @@ _MAX_CHM_M = 350.0
 # first removes the spill without changing which cells are produced.
 _SIMPLIFY_TOL_DEG = 3e-5
 
+# TEMPORARY comparison window (tile-grid x/y) -- the small DSM sub-window on which
+# the exact (no-simplify) branch completes without OOM, for the exact-vs-simplified
+# comparison. Delete together with the _cmp_* MVs at the bottom of this file.
+_CMP_WIN_TX = (3, 4)  # TEMP comparison window (tile x)
+_CMP_WIN_TY = (1,)  # TEMP comparison window (tile y)
+
 
 def _land_wkb(bbox, water_dir):
     """AOI box minus Overture water -> EPSG:4326 land multipolygon WKB.
@@ -97,11 +103,11 @@ def _surface_to_h3_cells(
     Ports ``config_nb._surface_to_h3_cells``: reproject 3857 -> 4326
     (``h3_try_coverash3`` needs lon/lat WKB), ``rst_clip`` to the land polygon
     (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands, then (when
-    ``simplify_geom``, the default) ``gbx_st_simplifypreservetopology`` on the
-    pixel-staircase band polygons (see ``_SIMPLIFY_TOL_DEG`` -- << the res-10 cell
-    edge, so covered cells are unchanged), then ``h3_try_coverash3`` + explode ->
-    solid, gap-free H3 cells per band. Pass ``simplify_geom=False`` for the exact
-    (unsimplified) isoband geometry -- the no-simplify baseline. Returns
+    ``simplify_geom``, the default) product ``st_simplify`` on the pixel-staircase
+    band polygons (see ``_SIMPLIFY_TOL_DEG`` -- << the res-10 cell edge, so covered
+    cells are unchanged), then ``h3_try_coverash3`` + explode -> solid, gap-free
+    H3 cells per band. Pass ``simplify_geom=False`` for the exact (unsimplified)
+    isoband geometry -- the no-simplify baseline. Returns
     (cellid LONG, res INT, band_level INT, elev_lo DOUBLE, elev_hi DOUBLE).
     """
     from databricks.labs.gbx.pyrx import functions as rx
@@ -132,18 +138,20 @@ def _surface_to_h3_cells(
     )
     # Collapse the 1 m pixel-staircase isoband rings before H3 covering: this is
     # what kept the DSM chain from spilling ~1 TB (~400K polygons up to ~471K
-    # vertices each). gbx_st_simplifypreservetopology takes WKB and returns valid
-    # simplified WKB (shapely, preserve_topology=True), so no makevalid/isvalid
-    # guard is needed. The plain product simplify is NOT topology-preserving -- it
-    # self-intersected ~8% of polygons, which h3_try_coverash3 returned NULL for
-    # and the cellid-not-null filter then dropped (1864 -> 1715 cells); this
-    # geobrix fallback keeps the geometry valid and recovers those cells.
+    # vertices each). Product st_simplify resolves on DBR 18.3 serverless and runs
+    # in Photon (no per-polygon Python). It is NOT topology-preserving, so it can
+    # self-intersect a small fraction of polygons -> h3_try_coverash3 returns NULL
+    # and the cellid-not-null filter drops them (a tiny cell loss). The geobrix
+    # topology-preserving fallback (a shapely UDF) was tried but OOMs the driver on
+    # the 471K-vertex polygons, so product st_simplify is the chosen path.
     # simplify_geom=False skips this to materialize the exact (unsimplified)
     # baseline for the simplify-vs-exact comparison.
     if simplify_geom:
         patches = patches.withColumn(
             "geom_wkb",
-            F.expr(f"gbx_st_simplifypreservetopology(geom_wkb, {_SIMPLIFY_TOL_DEG})"),
+            F.expr(
+                f"st_asbinary(st_simplify(st_geomfromwkb(geom_wkb), {_SIMPLIFY_TOL_DEG}))"
+            ),
         )
     cells = (
         patches.select(
@@ -271,18 +279,18 @@ def wc_h3_chm_res10():
 
 
 # ===========================================================================
-# TEMPORARY COMPARISON MV -- DELETE AFTER THE SIMPLIFY COMPARISON.
-# An exact (NO-simplify) copy of the DSM H3 grid, so the user can measure how
-# much spatial information the simplify step drops vs the simplified
-# wc_h3_dsm_res10. MVs are not time-travelable and the exact 1864-cell build was
-# overwritten, so this re-materializes it with simplify_geom=False. It reproduces
-# exactly what wc_h3_dsm_res10 does (schema matches) but skips the simplify.
-# Selective-refresh ONLY this MV, read the comparison, then remove it (the
-# simplify path in wc_h3_dsm_res10, which OOMs, is not exercised here).
+# TEMPORARY COMPARISON MVs -- DELETE AFTER THE SIMPLIFY COMPARISON.
+# Exact (no-simplify) vs simplified DSM H3 grid on a SMALL tile window, so the
+# user can measure how much spatial info the simplify step drops -- apples-to-
+# apples on the same cells. The full-window exact build OOMs the driver on the
+# 471K-vertex polygons, so BOTH compare MVs filter wc_surface_dsm to
+# _CMP_WIN_TX / _CMP_WIN_TY first. Same schema + parent key as wc_h3_dsm_res10.
+# Selective-refresh ONLY these two, read the comparison, then remove them (plus
+# the _CMP_WIN_* constants). The 3 real gold MVs are untouched.
 # ===========================================================================
 @dp.materialized_view(
     name="_cmp_dsm_exact",
-    comment="TEMP comparison -- DSM H3 grid WITHOUT simplify (exact baseline); delete after the simplify comparison",
+    comment="TEMP comparison -- windowed DSM H3 grid WITHOUT simplify (exact baseline); delete after the simplify comparison",
 )
 @dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
 def _cmp_dsm_exact():
@@ -290,11 +298,35 @@ def _cmp_dsm_exact():
     register_gbx(spark)
     c = cfg(spark)
     p = paths(spark)
-    # Identical to wc_h3_dsm_res10 but simplify_geom=False (exact baseline).
-    dsm = spark.read.table("wc_surface_dsm")
+    # Exact (simplify_geom=False) over the small comparison window.
+    dsm = spark.read.table("wc_surface_dsm").where(
+        F.col("tx").isin(*_CMP_WIN_TX) & F.col("ty").isin(*_CMP_WIN_TY)
+    )
     breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
     land_wkb = _land_wkb(c["bbox"], p["water"])
     cells = _surface_to_h3_cells(
         dsm, "dsm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=False
+    )
+    return _with_join_parent(cells, c["join_res"])
+
+
+@dp.materialized_view(
+    name="_cmp_dsm_simp",
+    comment="TEMP comparison -- windowed DSM H3 grid WITH simplify (same window as _cmp_dsm_exact); delete after the simplify comparison",
+)
+@dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
+def _cmp_dsm_simp():
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    c = cfg(spark)
+    p = paths(spark)
+    # Simplified (simplify_geom=True -> product st_simplify) over the SAME window.
+    dsm = spark.read.table("wc_surface_dsm").where(
+        F.col("tx").isin(*_CMP_WIN_TX) & F.col("ty").isin(*_CMP_WIN_TY)
+    )
+    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
+    land_wkb = _land_wkb(c["bbox"], p["water"])
+    cells = _surface_to_h3_cells(
+        dsm, "dsm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=True
     )
     return _with_join_parent(cells, c["join_res"])

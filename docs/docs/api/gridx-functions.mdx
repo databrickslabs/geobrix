@@ -2066,6 +2066,73 @@ Streaming UDTF version of `h3_geomkloop` — one row per cell at exactly `k` ste
 
 ---
 
+## H3 Viewshed (Light-Only)
+
+<Tier light/>
+
+:::note Lightweight (pygx) Python helper only
+`h3_viewshed_towers` is **not registered as a SQL function** and is **not available in the
+heavyweight tier**. It is a pure-Python / PySpark DataFrame function in the `pygx` package.
+Light tier; Serverless-safe; no JAR required.
+:::
+
+### h3_viewshed_towers
+
+<Tier light/>
+
+`h3_viewshed_towers` runs a per-tower line-of-sight viewshed entirely in H3 cell space and
+returns one row per `(tower, visible cell)`. It is the H3-native sibling of the raster
+`rst_viewshed_towers`: for each tower it tests the in-buffer H3 cells with the exact
+`h3_los_visible` line of sight — the blocker is the surface map (DSM, or DSM + canopy), the
+observer sits at the tower-top absolute elevation, and each target receiver is the ground
+(DTM) elevation plus `target_height`. The two surface/ground maps are collected once to the
+driver (bounded at `viewshed_res`) and the per-tower work is fanned one-tower-per-task with
+`mapInPandas` over the towers frame repartitioned by `tower_id_col`, so the same code path runs
+on Databricks Serverless and on classic clusters. This is the mechanism that lets the Wireless
+Coverage tower siting scale across Spark. H3 cell ids flow as `BIGINT` (the integer H3
+representation) in every column, matching the Databricks product H3 convention.
+
+**Signature:**
+```python
+from databricks.labs.gbx.pygx import h3_viewshed_towers
+
+result_df = h3_viewshed_towers(
+    towers_df, surface_df, ground_df,
+    radius_m=2500, viewshed_res=12, target_height=1.6,
+    tower_id_col="tower_cellid", observer_z_col="observer_z",
+    cell_col="cellid", surface_z_col="z", ground_z_col="z",
+    num_partitions=None,
+)
+```
+
+**Parameters:**
+
+- `towers_df` — DataFrame of towers; must carry `tower_id_col` (`BIGINT` H3 cell) and
+  `observer_z_col` (observer-top absolute elevation in metres, e.g. DTM at the tower plus the
+  mast height).
+- `surface_df` — blocker-surface (DSM, or DSM + canopy) map at `viewshed_res`; must carry
+  `cell_col` (`BIGINT` H3 cell) and `surface_z_col` (metres). A missing or NULL surface is
+  transparent (no blocker at that cell).
+- `ground_df` — bare-earth (DTM) map at `viewshed_res`; must carry `cell_col` and
+  `ground_z_col` (metres). A target whose ground is NULL or missing is skipped, not fabricated.
+- `radius_m` — analysis radius in metres (> 0); sizes the per-tower H3 `grid_disk` buffer. The
+  line of sight is still bounded by the surface/ground maps.
+- `viewshed_res` — H3 resolution of the surface/ground maps and the output cells.
+- `target_height` — receiver height above the ground at each tested cell, in metres; defaults
+  to `1.6`.
+- `tower_id_col` / `observer_z_col` — tower identity and observer-elevation column names;
+  defaults `"tower_cellid"` / `"observer_z"`.
+- `cell_col` — cell-id column shared by `surface_df` / `ground_df`; defaults `"cellid"`.
+- `surface_z_col` / `ground_z_col` — elevation column names of the two maps; both default to
+  `"z"`.
+- `num_partitions` — fan-out for the per-tower stage (`repartition` by `tower_id_col`); defaults
+  to the distinct tower count (~one tower per task).
+
+**Returns:** DataFrame with one row per `(tower, visible cell)`: `tower_id_col` (`BIGINT`) and
+`cell_col` (`BIGINT` H3 cell visible from the tower top).
+
+---
+
 ## Performance Tips
 
 ### 1. Use Appropriate Resolution

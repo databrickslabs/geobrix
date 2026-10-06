@@ -229,6 +229,134 @@ def h3_los_visible(
     return visible
 
 
+def h3_viewshed_towers(
+    towers_df,
+    surface_df,
+    ground_df,
+    *,
+    radius_m,
+    viewshed_res,
+    target_height=1.6,
+    tower_id_col="tower_cellid",
+    observer_z_col="observer_z",
+    cell_col="cellid",
+    surface_z_col="z",
+    ground_z_col="z",
+    num_partitions=None,
+):
+    """Per-tower H3 line-of-sight viewshed — the H3 sibling of ``rst_viewshed_towers``.
+
+    For each tower, returns the subset of in-buffer H3 cells visible from the
+    tower top, computed with the exact :func:`h3_los_visible` line-of-sight
+    (blocker = surface/DSM, observer = tower-top absolute elevation, target =
+    ground/DTM + ``target_height``). This is the distributed sibling of the
+    raster ``rst_viewshed_towers``: it lets the Wireless Coverage tower siting
+    scale across Spark while staying entirely in H3 cell space.
+
+    Non-columnar DataFrame function (no SQL binding): two surface/ground maps and
+    a towers frame in, one row per ``(tower, visible cell)`` out. The two maps are
+    collected once to driver dicts (bounded at ``viewshed_res``) and the per-tower
+    line-of-sight is fanned one-tower-per-task with ``mapInPandas`` over the
+    towers frame repartitioned by ``tower_id_col``. That path uses no
+    ``sparkContext`` / ``.rdd`` / ``_jvm``, so it runs on Databricks Serverless
+    Connect as well as on classic clusters and ``local`` test sessions.
+
+    H3 cell ids flow as ``BIGINT`` (the integer H3 representation) in every
+    column — matching the Databricks product H3 convention — and are converted to
+    and from the ``h3`` string form internally.
+
+    Args:
+        towers_df:     DataFrame of towers; must carry ``tower_id_col`` (``BIGINT``
+                       H3 cell) and ``observer_z_col`` (observer-top absolute
+                       elevation in metres, e.g. DTM@tower + mast height).
+        surface_df:    Blocker-surface (DSM / DSM+CHM) map at ``viewshed_res``;
+                       must carry ``cell_col`` (``BIGINT`` H3 cell) and
+                       ``surface_z_col`` (metres). Missing or NULL surface is
+                       transparent (no blocker at that cell).
+        ground_df:     Bare-earth (DTM) map at ``viewshed_res``; must carry
+                       ``cell_col`` and ``ground_z_col`` (metres). A target with a
+                       NULL/missing ground is skipped, not fabricated.
+        radius_m:      Analysis radius in metres (> 0). Sizes the per-tower H3
+                       ``grid_disk`` buffer; the line-of-sight is still bounded by
+                       the surface/ground maps.
+        viewshed_res:  H3 resolution of the surface/ground maps and the output
+                       cells.
+        target_height: Receiver height above the ground at each tested cell,
+                       metres. Defaults to 1.6.
+        tower_id_col:  Tower identity column. Defaults to "tower_cellid".
+        observer_z_col: Observer-elevation column. Defaults to "observer_z".
+        cell_col:      Cell-id column shared by ``surface_df`` / ``ground_df``.
+                       Defaults to "cellid".
+        surface_z_col: Surface-elevation column of ``surface_df``. Defaults to "z".
+        ground_z_col:  Ground-elevation column of ``ground_df``. Defaults to "z".
+        num_partitions: Fan-out for the per-tower stage (``repartition`` by
+                       ``tower_id_col``). Defaults to the distinct tower count
+                       (~one tower per task).
+
+    Returns:
+        DataFrame with one row per ``(tower, visible cell)``: ``tower_id_col``
+        (``BIGINT``) and ``cell_col`` (``BIGINT`` H3 cell visible from the tower).
+    """
+    import math
+
+    # Collect the two bounded viewshed-res maps to driver dicts keyed by the h3
+    # string cell (the h3 library is string-native). At viewshed_res over a city
+    # these are bounded (hundreds of thousands of cells) and small enough to
+    # serialize into the mapInPandas closure. NULL/None elevations are preserved:
+    # a None surface is a transparent blocker, a None ground skips that target.
+    surf = {
+        h3.int_to_str(int(r[cell_col])): (
+            None if r[surface_z_col] is None else float(r[surface_z_col])
+        )
+        for r in surface_df.select(cell_col, surface_z_col).collect()
+    }
+    grnd = {
+        h3.int_to_str(int(r[cell_col])): (
+            None if r[ground_z_col] is None else float(r[ground_z_col])
+        )
+        for r in ground_df.select(cell_col, ground_z_col).collect()
+    }
+
+    # Buffer radius in ring steps. Hex centres are ~sqrt(3)*edge (~1.73*edge)
+    # apart, so dividing by 1.5 (< 1.73) yields a safe over-estimate of k — the
+    # buffer always covers radius_m; the line-of-sight stays bounded by the map,
+    # so an over-large k only widens the (cheap) grid_disk membership test.
+    edge_m = h3.average_hexagon_edge_length(int(viewshed_res), unit="m")
+    k = max(1, int(math.ceil(float(radius_m) / edge_m / 1.5)))
+    th = float(target_height)
+
+    def _fan(batches):
+        # Worker-side: one tower per task. Closes over the two bounded maps, k,
+        # and target_height (serialized with the UDF). No sparkContext / .rdd.
+        import pandas as pd
+
+        for pdf in batches:
+            towers_out, cells_out = [], []
+            for raw_tower, raw_oz in zip(pdf[tower_id_col], pdf[observer_z_col]):
+                if raw_tower is None or raw_oz is None:
+                    continue
+                tcell = int(raw_tower)
+                t_str = h3.int_to_str(tcell)
+                targets = [c for c in h3.grid_disk(t_str, k) if c in surf]
+                for vc in h3_los_visible(
+                    t_str, float(raw_oz), targets, surf, grnd, target_height=th
+                ):
+                    towers_out.append(tcell)
+                    cells_out.append(int(vc, 16))
+            yield pd.DataFrame(
+                {
+                    tower_id_col: pd.Series(towers_out, dtype="int64"),
+                    cell_col: pd.Series(cells_out, dtype="int64"),
+                }
+            )
+
+    n = num_partitions or towers_df.select(tower_id_col).distinct().count() or 1
+    fanned = towers_df.select(tower_id_col, observer_z_col).repartition(
+        int(n), tower_id_col
+    )
+    return fanned.mapInPandas(_fan, schema=f"{tower_id_col} long, {cell_col} long")
+
+
 def _neighbors(c):
     """6 (or 5) H3 neighbours of integer cell id c (grid_disk topology, ring 1)."""
     c_str = h3.int_to_str(c)

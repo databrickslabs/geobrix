@@ -23,6 +23,12 @@ resources:
   pipelines:
     wireless_coverage_lf_pipeline:
       name: wireless_coverage_lf_pipeline
+      # Defaults to Serverless (simplest; runs the whole medallion). For heavier
+      # runs -- notably full-SF (full_aoi=true), where the LiDAR binning/TIN/H3 is
+      # large -- you can switch to CLASSIC compute for dedicated, sized memory and
+      # throughput: set `serverless: false` and add a `clusters:` block (node_type
+      # + autoscale). Match the cluster DBR to the GeoBrix extra (e.g. DBR 19 ->
+      # [light_dbr19]). See https://docs.databricks.com/aws/en/dlt/configure-compute
       serverless: true
       catalog: ${var.catalog}
       schema: ${var.schema}

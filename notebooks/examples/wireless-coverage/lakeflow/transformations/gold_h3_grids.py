@@ -247,17 +247,28 @@ def wc_h3_chm_res10():
     chm_4326.createOrReplaceTempView("_wc_chm_4326_tiles")
 
     # SQL ANSI LATERAL UDTFs (Python wrappers raise NotImplementedError, so invoke
-    # via spark.sql). rst_retile emits V2_TILE_SCHEMA rows (t.*); re-nest with
-    # struct(t.*) to pass each sub-tile to rst_h3_rastertogridmax. Verified H3
-    # schema (band INT, cellID LONG, measure DOUBLE); band=1 is the single CHM
-    # band. Multiple (sub)tiles may map the same cellid at boundaries -> max.
+    # via spark.sql). rst_retile emits flat V2_TILE_SCHEMA rows (t.*); re-nest the
+    # sub-tile columns into a single tile struct (a star cannot be a table-function
+    # argument, so do it in a separate step) before rst_h3_rastertogridmax.
+    sub = spark.sql(
+        """
+        SELECT t.*
+        FROM   _wc_chm_4326_tiles,
+               LATERAL gbx_rst_retile(chm_4326, 256, 256) AS t
+        """
+    )
+    tile_struct = F.struct(*[F.col(c) for c in sub.columns]).alias("tile")
+    sub.select(tile_struct).createOrReplaceTempView("_wc_chm_subtiles")
+
+    # Verified H3 schema (band INT, cellID LONG, measure DOUBLE); band=1 is the
+    # single CHM band. Multiple (sub)tiles may map the same cellid at boundaries
+    # -> take the max across them.
     chm_cells = (
         spark.sql(
             f"""
         SELECT g.cellID AS cellid, g.measure AS chm_z
-        FROM   _wc_chm_4326_tiles,
-               LATERAL gbx_rst_retile(chm_4326, 256, 256) AS t,
-               LATERAL gbx_rst_h3_rastertogridmax(struct(t.*), {h3_res}) AS g
+        FROM   _wc_chm_subtiles,
+               LATERAL gbx_rst_h3_rastertogridmax(tile, {h3_res}) AS g
         WHERE  g.band = 1
         """
         )

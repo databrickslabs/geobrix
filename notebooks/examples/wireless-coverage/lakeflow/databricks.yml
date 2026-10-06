@@ -59,12 +59,19 @@ resources:
         wireless_coverage.laz_dir: ${var.laz_dir}
         wireless_coverage.water_mask_dir: ${var.water_mask_dir}
         # (all other wireless_coverage.* keys use _config.py inline defaults)
-        # Keep the gold H3 per-tile fan-out (repartition(512, tx, ty)) intact. The
-        # silver surfaces are a few hundred rows of inlined multi-MB rasters, so AQE
-        # judges the shuffle tiny by row count and would coalesce it back to a few
-        # partitions -- piling many full-tile raster bands onto one worker and OOMing
-        # the Python raster->H3 UDTF at full-SF density. Disabling coalescing makes
-        # the fan-out one-tile-per-task hold so each task's memory stays bounded.
+        # Keep the gold H3 per-tile fan-out (repartition(512, tx, ty)) effective so
+        # the Python raster->H3 UDTF processes one tile's band per task. Without the
+        # settings below, a full-SF run OOMs the UDTF worker:
+        #  - excludedRules drops InferFiltersFromGenerate. Otherwise the optimizer
+        #    pushes the expensive LATERAL-UDTF generate down into the SCAN task,
+        #    BEFORE the repartition -- so every tile's UDTF work piles into the scan
+        #    stage and the fan-out never isolates it. Excluding the rule runs the
+        #    UDTF AFTER the repartition (ref: Databricks ES-2236400).
+        #  - coalescePartitions off keeps AQE from merging the fanned-out shuffle
+        #    partitions back together (the silver surfaces are only a few hundred
+        #    rows of inlined multi-MB rasters, so AQE judges the shuffle tiny by row
+        #    count).
+        spark.sql.optimizer.excludedRules: "org.apache.spark.sql.catalyst.optimizer.InferFiltersFromGenerate"
         spark.sql.adaptive.coalescePartitions.enabled: "false"
 
   jobs:

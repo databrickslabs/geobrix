@@ -233,14 +233,15 @@ def wc_h3_chm_res10():
     land_wkb = _land_wkb(c["bbox"], p["water"])
 
     # rst_h3_rastertogridmax (an H3 UDTF) requires lon/lat EPSG:4326 tiles. It is a
-    # Python UDTF that loads a tile's full band into memory per call, so the tiles
-    # MUST be fanned out one-per-task. repartition(512, tx, ty) does that -- but it
-    # only holds with AQE partition-coalescing OFF. The silver surfaces are only a
-    # few hundred ROWS (each an inlined multi-MB raster), so by row count AQE judges
-    # the shuffle tiny and coalesces it back to a handful of partitions, piling
-    # dozens of full-tile bands onto one worker -> OOM at full-SF density. The
-    # pipeline sets spark.sql.adaptive.coalescePartitions.enabled=false
-    # (databricks.yml) so this per-tile fan-out is respected.
+    # Python UDTF that loads a tile's full band into memory per call, so tiles MUST
+    # be fanned out one-per-task: repartition(512, tx, ty) does that. For the
+    # fan-out to actually isolate the UDTF at full-SF scale the pipeline sets two
+    # optimizer configs (databricks.yml): spark.sql.optimizer.excludedRules drops
+    # InferFiltersFromGenerate (else the LATERAL-UDTF generate is pushed into the
+    # scan BEFORE the repartition -- ref Databricks ES-2236400), and AQE
+    # coalescePartitions is off (else the fanned-out shuffle is merged back by the
+    # small inlined-raster row count). Without both, every tile's band piles onto
+    # one worker -> OOM.
     chm_4326 = chm.select(
         "tx", "ty", rx.rst_transform("chm", F.lit(4326)).alias("chm_4326")
     ).repartition(512, "tx", "ty")

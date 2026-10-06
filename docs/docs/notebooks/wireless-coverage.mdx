@@ -10,10 +10,122 @@ import TabItem from '@theme/TabItem';
 <Tabs groupId="wireless-coverage-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP" default>
 
-A production-ready Lakeflow Declarative Pipeline (SDP) for the Wireless Coverage workflow
-is planned for a future release. It will productionize the surface-building (Parts 1–2a and 2b) and
-H3-gridding (Parts 3a and 3b) steps into a scheduled medallion pipeline — surfaces → H3 grids →
-coverage analysis — packaged as a Databricks Asset Bundle.
+A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task, packaged as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
+
+This is the production counterpart to the notebook series (see the other tab) — same San Francisco AOI and USGS 3DEP LiDAR sources, but running as a scheduled medallion pipeline instead of one-off notebook outputs: a `land` downloader task stages the data, then the pipeline cascades bronze → silver → gold through declared table-to-table dependencies, a `siting` task runs the H3-native tower analysis, and a `validate` notebook confirms all outputs.
+
+:::tip View on GitHub
+**[notebooks/examples/wireless-coverage/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage/lakeflow)** — the bundle, pipeline transformations, siting task, validation notebook, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage/lakeflow/README.md) for deploy/run steps, prerequisites, and configuration notes.
+:::
+
+:::info Runs on the lightweight tier (Serverless)
+The pipeline and its `land` and `siting` tasks all install `geobrix[light_env6,vizx]` from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. See [Execution Tiers](../api/execution-tiers).
+:::
+
+## How it works: from staged LiDAR to ranked tower sites
+
+![Wireless Coverage series — config_nb → 01 → 02a/02b → 03a → 03b → 04](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-overview.png)
+
+A scheduled run takes raw USGS 3DEP LiDAR `.laz` files through six stages:
+
+1. **Land** — a downloader task stages USGS 3DEP LiDAR EPT nodes and Overture water polygons onto a Unity Catalog Volume. Nothing is interpreted yet — data just arrives.
+2. **Bronze — inventory** — Auto Loader records one row per `.laz` file as it appears, so re-runs pick up only newly staged data.
+3. **Silver — surface stack** — classified returns are tile-indexed and binned into 1 m DSM and TIN DTM rasters per tile; `rst_chm` derives the Canopy Height Model.
+4. **Gold — H3 grids** — the surfaces are reprojected to EPSG:4326, isobanded, and indexed to H3 cells at resolution 10. Each table carries a stable res-9 join key so downstream consumers join on one column.
+5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis: a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors (distributed via `h3_viewshed_towers` — one tower per Spark task).
+6. **Validate** — a final notebook task confirms all output tables are populated and spot-checks quality assertions.
+
+Each stage reads only the one before it — declared as table-to-table dependencies — so Lakeflow builds the lineage graph, runs stages in order, and recomputes only what changed.
+
+## Table catalog
+
+All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_coverage_lf`).
+
+### Bronze
+
+| Table | Description |
+|---|---|
+| `laz_inventory` | Auto Loader streaming table — one row per staged `.laz` EPT file (`path`, `file_size`, `_ingested_at`). |
+
+### Silver
+
+| Table | Description |
+|---|---|
+| `wc_lidar_pts` | Classified LiDAR returns, tile-indexed with a res-15 H3 cell ID (EPSG:3857). |
+| `wc_surface_dsm` | DSM — max elevation of all returns per 1 m tile. |
+| `wc_surface_dtm` | DTM — Delaunay-TIN bare earth over class-2 ground returns (gap-free). |
+| `wc_surface_chm` | CHM — `rst_chm(DSM, DTM)`: canopy/structure height in metres, clamped ≥ 0. |
+
+### Gold
+
+| Table | Description |
+|---|---|
+| `wc_h3_dem_res10` | Bare-earth elevation-band H3 cells (res 10), land-masked, with res-9 parent join key. |
+| `wc_h3_dsm_res10` | Surface elevation-band H3 cells (res 10), land-masked, with res-9 parent join key. |
+| `wc_h3_chm_res10` | Max canopy/structure height per H3 cell (res 10), gap-filled, land-masked, with res-9 parent join key. |
+
+### Siting
+
+The siting tables are regular Delta tables, overwritten each run. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
+
+| Table | Description |
+|---|---|
+| `wc_h3_surf_r13` | H3 res-13 surface bin (DSM max elevation per cell) — finest-resolution blocker surface. |
+| `wc_h3_grnd_r13` | H3 res-13 ground bin (DTM min elevation per cell) — finest-resolution bare-earth base. |
+| `wc_h3_quickpass_res9` | Every res-9 candidate's coarse quick-pass coverage fraction (pre-rule-out screen). |
+| `wc_h3_candidate_sites_res9` | Ranked tower survivors: `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z`. |
+| `wc_h3_coverage_res12` | Per-cell line-of-sight depth at res 12 — how many sited towers can see each cell. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key. |
+| `wc_h3_coverage_top10_res12` | Same, aggregated over only the top-10 sites by coverage. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key. |
+
+## Deploy and run
+
+```bash
+databricks bundle deploy
+databricks bundle run wireless_coverage_lf_job
+```
+
+The bundle validates and deploys with the committed defaults in `databricks.yml` out of the box. To point it at your own workspace, copy `databricks.override.yml.example` to `databricks.override.yml` (git-ignored) and fill in your CLI profile; it is layered in automatically via `include: ["*.override.yml"]`. A fresh clone with no override file still validates/deploys.
+
+- **Schedule**: the job ships paused (`pause_status: PAUSED`, daily at `0 0 7 * * ?` America/Chicago) — unpause it in the workspace once you've confirmed a manual run.
+- **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~830 MB download. See `databricks.override.yml.example` for the exact paths.
+- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.5.2-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
+
+## Configuration
+
+Bundle variables (set in `databricks.yml`; override per-workspace in `databricks.override.yml`):
+
+| Variable | Default | Description |
+|---|---|---|
+| `catalog` | `geospatial_docs` | Unity Catalog catalog name. |
+| `schema` | `wireless_coverage_lf` | UC schema; all pipeline and siting tables land here. |
+| `volume` | `data` | UC volume; raw data lands under `{volume}/wireless-coverage-lf/`. |
+| `full_aoi` | `true` | `true` for the full San Francisco AOI; `false` for the Golden Gate Park demo window. |
+| `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. |
+| `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
+| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
+
+Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys in the pipeline `configuration` block. Key defaults:
+
+| Key | Default | Description |
+|---|---|---|
+| `h3_res` | `10` | H3 resolution for the gold elevation/canopy grids. |
+| `tower_res` | `9` | H3 resolution for the naive candidate-tower lattice. |
+| `quickpass_res` | `10` | Coarse quick-pass screen resolution. |
+| `viewshed_res` | `12` | Exact H3 line-of-sight resolution (coverage output). |
+| `surface_bin_res` | `13` | Finest H3 "pixel" bin resolution for siting surfaces. |
+| `max_dist_m` | `2500` | Line-of-sight buffer radius in metres. |
+| `antenna_above_surface_m` | `10` | Observer height above the DSM surface in metres. |
+| `quick_thresh_frac` | `0.30` | Minimum quick-pass coverage fraction to survive rule-out. |
+
+## Prerequisites
+
+- **Unity Catalog**: a catalog and schema (defaults `geospatial_docs.wireless_coverage_lf`) and a Volume named `data` under it. The pipeline creates sub-directories inside the Volume, not the Volume itself.
+- **GeoBrix wheel** staged at the `gbx_wheel` path. See [Execution Tiers](../api/execution-tiers).
+- **Network access**: the `land` task fetches USGS 3DEP and Overture Maps data over HTTPS — Serverless has outbound internet by default.
+
+## Validation notebook
+
+The `validate` task (`validate/validate_wc_lf.ipynb`) runs after the siting task completes, reads all output tables, confirms each is non-empty, and prints summary statistics. Run it manually from the workspace as a quick sanity check after a fresh deploy or configuration change.
 
 </TabItem>
 <TabItem value="notebooks" label="Notebook Series">

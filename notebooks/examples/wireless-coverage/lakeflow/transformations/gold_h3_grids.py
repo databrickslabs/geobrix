@@ -239,3 +239,66 @@ def wc_h3_chm_res10():
         .select("cellid", "res", "max_chm_z")
     )
     return _with_join_parent(chm_h3, c["join_res"])
+
+
+# ===========================================================================
+# TEMPORARY DIAGNOSTIC -- DELETE AFTER TUNING.
+# Probes why wc_h3_dsm_res10 spills ~1 TB to produce ~1864 cells by measuring
+# the gold-chain amplification (H3 cells per isoband polygon) BEFORE the
+# explode + distinct. Reproduces the EXACT reproject -> clip -> isoband stages of
+# _surface_to_h3_cells for the DSM, then counts per polygon instead of exploding.
+# Selective-refresh this MV, read the per-band numbers, then remove it.
+# ===========================================================================
+@dp.materialized_view(
+    name="_diag_dsm_amp",
+    comment="TEMP diagnostic -- DSM gold-chain amplification per band; delete after tuning",
+)
+def _diag_dsm_amp():
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    c = cfg(spark)
+    p = paths(spark)
+    from databricks.labs.gbx.pyrx import functions as rx
+
+    h3_res = c["h3_res"]
+    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
+    land_wkb = _land_wkb(c["bbox"], p["water"])
+
+    # EXACT reproject -> clip -> isoband stages of _surface_to_h3_cells (DSM):
+    # same repartition(512), rst_transform(4326), rst_clip(land_wkb), rst_isoband.
+    dsm = spark.read.table("wc_surface_dsm").repartition(512, "tx", "ty")
+    t4326 = dsm.select(
+        "tx", "ty", rx.rst_transform("dsm", F.lit(4326)).alias("tile_4326")
+    )
+    clipped = t4326.select(
+        "tx",
+        "ty",
+        rx.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile"),
+    )
+    patches = clipped.select(
+        "tx", "ty", F.explode(rx.rst_isoband("tile", breaks_arr)).alias("p")
+    ).select(
+        "tx",
+        "ty",
+        F.col("p.band").alias("band"),
+        F.col("p.geom_wkb").alias("geom_wkb"),
+    )
+
+    # Per-polygon measures -- NO row explode. n_cells is the array SIZE of
+    # h3_try_coverash3 (pre-explode, pre-distinct); st_npoints is the product
+    # vertex-count fn (not st_numpoints); st_area on a 4326 geometry is deg^2.
+    probe = patches.select(
+        "tx",
+        "ty",
+        "band",
+        F.size(DBF.h3_try_coverash3(F.col("geom_wkb"), F.lit(h3_res))).alias("n_cells"),
+        F.expr("st_npoints(st_geomfromwkb(geom_wkb))").alias("n_vertices"),
+        F.expr("st_area(st_geomfromwkb(geom_wkb))").alias("area_deg"),
+    )
+    return probe.groupBy("band").agg(
+        F.count("*").alias("n_polygons"),
+        F.sum("n_cells").alias("cells_pre_distinct"),
+        F.max("n_cells").alias("max_cells_one_polygon"),
+        F.max("n_vertices").alias("max_vertices"),
+        F.max("area_deg").alias("max_poly_area_deg2"),
+    )

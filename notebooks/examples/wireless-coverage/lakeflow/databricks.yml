@@ -99,7 +99,7 @@ resources:
       environments:
         - environment_key: wc_env
           spec:
-            environment_version: "2"
+            environment_version: "5"
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
@@ -110,8 +110,11 @@ resources:
         pause_status: PAUSED
 
 targets:
+  # No `mode: development` on purpose: dev mode force-prefixes every resource with
+  # "[dev <user>]" and ignores an empty name_prefix override, which we don't want for
+  # a demo/showcase. Omitting mode deploys with clean, unprefixed resource names.
+  # The pipeline's catalog/schema are fully explicit via vars, so published tables
+  # are unaffected regardless of target.
   dev:
-    mode: development
     default: true
   prod:
-    mode: production

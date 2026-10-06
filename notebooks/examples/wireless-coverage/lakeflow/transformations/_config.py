@@ -50,7 +50,9 @@ def paths(spark):
 def register_gbx(spark):
     from databricks.labs.gbx.pyrx import functions as rx
     from databricks.labs.gbx.pygx import functions as gx
+    from databricks.labs.gbx.pyvx import functions as vx
     from databricks.labs.gbx.ds.register import register as register_ds
     rx.register(spark)
     gx.register(spark)
+    vx.register(spark)  # gbx_st_simplifypreservetopology (geobrix-registered)
     register_ds(spark)

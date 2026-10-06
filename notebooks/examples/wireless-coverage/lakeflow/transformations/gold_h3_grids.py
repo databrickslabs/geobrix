@@ -94,10 +94,11 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
 
     Ports ``config_nb._surface_to_h3_cells``: reproject 3857 -> 4326
     (``h3_try_coverash3`` needs lon/lat WKB), ``rst_clip`` to the land polygon
-    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands, ``st_simplify`` on
-    the pixel-staircase band polygons (see ``_SIMPLIFY_TOL_DEG`` -- << the res-10
-    cell edge, so covered cells are unchanged), then ``h3_try_coverash3`` +
-    explode -> solid, gap-free H3 cells per band. Returns
+    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands,
+    ``gbx_st_simplifypreservetopology`` on the pixel-staircase band polygons (see
+    ``_SIMPLIFY_TOL_DEG`` -- << the res-10 cell edge, so covered cells are
+    unchanged), then ``h3_try_coverash3`` + explode -> solid, gap-free H3 cells
+    per band. Returns
     (cellid LONG, res INT, band_level INT, elev_lo DOUBLE, elev_hi DOUBLE).
     """
     from databricks.labs.gbx.pyrx import functions as rx
@@ -128,16 +129,15 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
     )
     # Collapse the 1 m pixel-staircase isoband rings before H3 covering: this is
     # what kept the DSM chain from spilling ~1 TB (~400K polygons up to ~471K
-    # vertices each). Product st_simplify resolves on DBR 18.3 serverless. No
-    # validity guard needed: st_simplify can occasionally self-intersect, but
-    # h3_try_coverash3 is the try_ variant (NULL on a bad geom) and the existing
-    # cellid-not-null filter drops it -- a rare bad polygon just loses its tiny
-    # cell contribution.
+    # vertices each). gbx_st_simplifypreservetopology takes WKB and returns valid
+    # simplified WKB (shapely, preserve_topology=True), so no makevalid/isvalid
+    # guard is needed. The plain product simplify is NOT topology-preserving -- it
+    # self-intersected ~8% of polygons, which h3_try_coverash3 returned NULL for
+    # and the cellid-not-null filter then dropped (1864 -> 1715 cells); this
+    # geobrix fallback keeps the geometry valid and recovers those cells.
     patches = patches.withColumn(
         "geom_wkb",
-        F.expr(
-            f"st_asbinary(st_simplify(st_geomfromwkb(geom_wkb), {_SIMPLIFY_TOL_DEG}))"
-        ),
+        F.expr(f"gbx_st_simplifypreservetopology(geom_wkb, {_SIMPLIFY_TOL_DEG})"),
     )
     cells = (
         patches.select(

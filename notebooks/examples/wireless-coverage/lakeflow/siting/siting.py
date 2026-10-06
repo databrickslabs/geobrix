@@ -263,6 +263,7 @@ def main(argv=None):
     from databricks.labs.gbx.pygx import functions as gx
     from databricks.labs.gbx.pygx import h3_los_visible, h3_viewshed_towers
     from databricks.labs.gbx.pyrx import functions as rx
+    from databricks.labs.gbx.pyvx import functions as vx
     from pyspark.databricks.sql import functions as DBF
     from pyspark.sql import SparkSession
     from pyspark.sql import functions as F
@@ -272,9 +273,10 @@ def main(argv=None):
     # Install GeoBrix light SQL (gbx_rst_h3_rastertogrid*) + readers inline. A
     # spark_python_task runs the file via exec() with no module path defined, so
     # the sibling transformations/_config import is unavailable; this mirrors
-    # that module's register_gbx().
+    # that module's register_gbx() (keep the two register blocks in sync).
     rx.register(spark)
     gx.register(spark)
+    vx.register(spark)  # gbx_st_simplifypreservetopology (keep in sync w/ _config)
     register_ds(spark)
 
     cat, sch = args.catalog, args.schema

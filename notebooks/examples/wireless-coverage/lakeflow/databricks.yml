@@ -94,7 +94,7 @@ resources:
           depends_on:
             - task_key: siting
           notebook_task:
-            notebook_path: ./validate/validate_wc_lf.py
+            notebook_path: ./validate/validate_wc_lf.ipynb
           environment_key: wc_env
       environments:
         - environment_key: wc_env

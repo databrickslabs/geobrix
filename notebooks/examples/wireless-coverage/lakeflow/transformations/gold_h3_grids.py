@@ -50,6 +50,14 @@ from _config import cfg, paths, register_gbx  # correct under the pipeline root_
 # 03a's MAX_CHM_M constant (a fixed physical ceiling, not a cfg knob).
 _MAX_CHM_M = 350.0
 
+# Douglas-Peucker tolerance (DEGREES) for isoband polygons before H3 covering.
+# ~3e-5 deg ~= 3 m, FAR below the ~65 m res-10 H3 cell edge, so the covered-cell
+# set is unchanged while the dense 1 m pixel-staircase vertex rings collapse. The
+# DSM chain spilled ~1 TB covering ~400K isoband polygons of up to ~471K vertices
+# each (geometry VOLUME, not an h3-cover explosion); simplifying the polygons
+# first removes the spill without changing which cells are produced.
+_SIMPLIFY_TOL_DEG = 3e-5
+
 
 def _land_wkb(bbox, water_dir):
     """AOI box minus Overture water -> EPSG:4326 land multipolygon WKB.
@@ -86,8 +94,10 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
 
     Ports ``config_nb._surface_to_h3_cells``: reproject 3857 -> 4326
     (``h3_try_coverash3`` needs lon/lat WKB), ``rst_clip`` to the land polygon
-    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands, then
-    ``h3_try_coverash3`` + explode -> solid, gap-free H3 cells per band. Returns
+    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands, ``st_simplify`` the
+    pixel-staircase band polygons (see ``_SIMPLIFY_TOL_DEG`` -- << the res-10 cell
+    edge, so covered cells are unchanged), then ``h3_try_coverash3`` + explode ->
+    solid, gap-free H3 cells per band. Returns
     (cellid LONG, res INT, band_level INT, elev_lo DOUBLE, elev_hi DOUBLE).
     """
     from databricks.labs.gbx.pyrx import functions as rx
@@ -116,6 +126,17 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
         F.col("p.lower").alias("elev_lo"),
         F.col("p.upper").alias("elev_hi"),
     )
+    # Collapse the 1 m pixel-staircase isoband rings before H3 covering: this is
+    # what kept the DSM chain from spilling ~1 TB. st_makevalid first (simplify
+    # can self-intersect these complex polygons), simplify at a sub-cell
+    # tolerance, then drop any still-invalid geom so h3_try_coverash3 never chokes.
+    patches = patches.withColumn(
+        "geom_wkb",
+        F.expr(
+            "st_asbinary(st_simplify(st_makevalid(st_geomfromwkb(geom_wkb)), "
+            f"{_SIMPLIFY_TOL_DEG}))"
+        ),
+    ).where(F.expr("st_isvalid(st_geomfromwkb(geom_wkb))"))
     cells = (
         patches.select(
             "band_level",
@@ -239,66 +260,3 @@ def wc_h3_chm_res10():
         .select("cellid", "res", "max_chm_z")
     )
     return _with_join_parent(chm_h3, c["join_res"])
-
-
-# ===========================================================================
-# TEMPORARY DIAGNOSTIC -- DELETE AFTER TUNING.
-# Probes why wc_h3_dsm_res10 spills ~1 TB to produce ~1864 cells by measuring
-# the gold-chain amplification (H3 cells per isoband polygon) BEFORE the
-# explode + distinct. Reproduces the EXACT reproject -> clip -> isoband stages of
-# _surface_to_h3_cells for the DSM, then counts per polygon instead of exploding.
-# Selective-refresh this MV, read the per-band numbers, then remove it.
-# ===========================================================================
-@dp.materialized_view(
-    name="_diag_dsm_amp",
-    comment="TEMP diagnostic -- DSM gold-chain amplification per band; delete after tuning",
-)
-def _diag_dsm_amp():
-    spark = SparkSession.getActiveSession()
-    register_gbx(spark)
-    c = cfg(spark)
-    p = paths(spark)
-    from databricks.labs.gbx.pyrx import functions as rx
-
-    h3_res = c["h3_res"]
-    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
-    land_wkb = _land_wkb(c["bbox"], p["water"])
-
-    # EXACT reproject -> clip -> isoband stages of _surface_to_h3_cells (DSM):
-    # same repartition(512), rst_transform(4326), rst_clip(land_wkb), rst_isoband.
-    dsm = spark.read.table("wc_surface_dsm").repartition(512, "tx", "ty")
-    t4326 = dsm.select(
-        "tx", "ty", rx.rst_transform("dsm", F.lit(4326)).alias("tile_4326")
-    )
-    clipped = t4326.select(
-        "tx",
-        "ty",
-        rx.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile"),
-    )
-    patches = clipped.select(
-        "tx", "ty", F.explode(rx.rst_isoband("tile", breaks_arr)).alias("p")
-    ).select(
-        "tx",
-        "ty",
-        F.col("p.band").alias("band"),
-        F.col("p.geom_wkb").alias("geom_wkb"),
-    )
-
-    # Per-polygon measures -- NO row explode. n_cells is the array SIZE of
-    # h3_try_coverash3 (pre-explode, pre-distinct); st_npoints is the product
-    # vertex-count fn (not st_numpoints); st_area on a 4326 geometry is deg^2.
-    probe = patches.select(
-        "tx",
-        "ty",
-        "band",
-        F.size(DBF.h3_try_coverash3(F.col("geom_wkb"), F.lit(h3_res))).alias("n_cells"),
-        F.expr("st_npoints(st_geomfromwkb(geom_wkb))").alias("n_vertices"),
-        F.expr("st_area(st_geomfromwkb(geom_wkb))").alias("area_deg"),
-    )
-    return probe.groupBy("band").agg(
-        F.count("*").alias("n_polygons"),
-        F.sum("n_cells").alias("cells_pre_distinct"),
-        F.max("n_cells").alias("max_cells_one_polygon"),
-        F.max("n_vertices").alias("max_vertices"),
-        F.max("area_deg").alias("max_poly_area_deg2"),
-    )

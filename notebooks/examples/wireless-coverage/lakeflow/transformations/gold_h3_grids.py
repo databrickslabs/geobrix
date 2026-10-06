@@ -232,44 +232,31 @@ def wc_h3_chm_res10():
     h3_res = c["h3_res"]
     land_wkb = _land_wkb(c["bbox"], p["water"])
 
-    # rst_h3_rastertogridmax (all H3 UDTFs) require lon/lat EPSG:4326 tiles.
-    # The UDTF loads a tile's full band into a float64 numpy array per call, so a
-    # dense full-SF 1024px tile exhausts the ~1 GB Serverless Python worker
-    # (sparse GGP demo tiles slip under it, which is why demo scale never showed
-    # it). Bound it: rst_retile windows each tile into fixed 256px sub-tiles, and
-    # the chained LATERAL feeds the H3 UDTF ONE small sub-tile at a time, so peak
-    # per-task memory is small and constant regardless of AOI size or pixel
-    # density. Max-per-cell is associative, so the groupBy max over sub-tiles is
-    # identical to processing the whole tile. Fan out parent tiles by (tx, ty).
+    # rst_h3_rastertogridmax (an H3 UDTF) requires lon/lat EPSG:4326 tiles. It is a
+    # Python UDTF that loads a tile's full band into memory per call, so the tiles
+    # MUST be fanned out one-per-task. repartition(512, tx, ty) does that -- but it
+    # only holds with AQE partition-coalescing OFF. The silver surfaces are only a
+    # few hundred ROWS (each an inlined multi-MB raster), so by row count AQE judges
+    # the shuffle tiny and coalesces it back to a handful of partitions, piling
+    # dozens of full-tile bands onto one worker -> OOM at full-SF density. The
+    # pipeline sets spark.sql.adaptive.coalescePartitions.enabled=false
+    # (databricks.yml) so this per-tile fan-out is respected.
     chm_4326 = chm.select(
         "tx", "ty", rx.rst_transform("chm", F.lit(4326)).alias("chm_4326")
     ).repartition(512, "tx", "ty")
     chm_4326.createOrReplaceTempView("_wc_chm_4326_tiles")
 
-    # SQL ANSI LATERAL UDTFs (Python wrappers raise NotImplementedError, so invoke
-    # via spark.sql). rst_retile emits flat V2_TILE_SCHEMA rows (t.*); re-nest the
-    # sub-tile columns into a single tile struct (a star cannot be a table-function
-    # argument, so do it in a separate step) before rst_h3_rastertogridmax.
-    sub = spark.sql(
-        """
-        SELECT t.*
-        FROM   _wc_chm_4326_tiles,
-               LATERAL gbx_rst_retile(chm_4326, 256, 256) AS t
-        """
-    )
-    tile_struct = F.struct(*[F.col(c) for c in sub.columns]).alias("tile")
-    sub.select(tile_struct).createOrReplaceTempView("_wc_chm_subtiles")
-
-    # Verified H3 schema (band INT, cellID LONG, measure DOUBLE); band=1 is the
-    # single CHM band. Multiple (sub)tiles may map the same cellid at boundaries
-    # -> take the max across them.
+    # SQL ANSI LATERAL UDTF (the Python wrapper raises NotImplementedError, so
+    # invoke via spark.sql). Verified schema (band INT, cellID LONG, measure
+    # DOUBLE); band=1 is the single CHM band. Multiple tiles may map the same
+    # cellid at tile boundaries -> take the max across tiles.
     chm_cells = (
         spark.sql(
             f"""
-        SELECT g.cellID AS cellid, g.measure AS chm_z
-        FROM   _wc_chm_subtiles,
-               LATERAL gbx_rst_h3_rastertogridmax(tile, {h3_res}) AS g
-        WHERE  g.band = 1
+        SELECT t.cellID AS cellid, t.measure AS chm_z
+        FROM   _wc_chm_4326_tiles,
+               LATERAL gbx_rst_h3_rastertogridmax(chm_4326, {h3_res}) t
+        WHERE  t.band = 1
         """
         )
         .groupBy("cellid")

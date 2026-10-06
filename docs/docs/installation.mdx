@@ -32,7 +32,7 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[li
 **Force-reload on Serverless without touching dependencies.** To swap in fresh wheel bytes during an interactive session, run this in a cell towards the top of your notebook:
 
 ```python
-%pip install --force-reinstall --no-deps "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
 %pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
 dbutils.library.restartPython()
 ```

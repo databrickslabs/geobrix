@@ -83,7 +83,7 @@ def parse_args(argv):
 
 
 def _resolve_aoi(args):
-    """Resolve the AOI bbox from --full-aoi, mirroring _config.cfg()."""
+    """Resolve the AOI bbox from --full-aoi, mirroring the _config defaults."""
     full = str(args.full_aoi).lower() == "true"
     return _FULL_SF if full else _DEMO_GGP
 
@@ -255,42 +255,43 @@ def _write(df, catalog, schema, name):
 
 def main(argv=None):
     """Run the Part-4 siting pipeline and write the six output tables."""
-    import os
-
     if argv is None:
         argv = sys.argv[1:]
     args = parse_args(argv)
 
-    # transformations/_config lives one directory up (sibling of siting/); make it
-    # importable for the spark_python_task (tests add it via conftest too).
-    _lakeflow_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    if _lakeflow_dir not in sys.path:
-        sys.path.insert(0, _lakeflow_dir)
-
+    from databricks.labs.gbx.ds.register import register as register_ds
+    from databricks.labs.gbx.pygx import functions as gx
     from databricks.labs.gbx.pygx import h3_los_visible, h3_viewshed_towers
+    from databricks.labs.gbx.pyrx import functions as rx
     from pyspark.databricks.sql import functions as DBF
     from pyspark.sql import SparkSession
     from pyspark.sql import functions as F
     from shapely.geometry import box as _box
 
-    from transformations._config import cfg, register_gbx
-
     spark = SparkSession.builder.appName("wc-siting").getOrCreate()
-    register_gbx(spark)  # install GeoBrix light SQL (gbx_rst_h3_rastertogrid*) + rx
+    # Install GeoBrix light SQL (gbx_rst_h3_rastertogrid*) + readers inline. A
+    # spark_python_task runs the file via exec() with no module path defined, so
+    # the sibling transformations/_config import is unavailable; this mirrors
+    # that module's register_gbx().
+    rx.register(spark)
+    gx.register(spark)
+    register_ds(spark)
 
-    c = cfg(spark)  # algorithm/resolution params (job task -> _config defaults)
     cat, sch = args.catalog, args.schema
     bbox = _resolve_aoi(args)
-    surface_bin_res = c["surface_bin_res"]  # 13 -- finest H3 "pixel" bin
-    viewshed_res = c["viewshed_res"]  # 12 -- exact viewshed + coverage output
-    quickpass_res = c["quickpass_res"]  # 10 -- coarse quick-pass screen
-    tower_res = c["tower_res"]  # 9  -- naive candidate lattice
-    join_res = c["join_res"]  # 9  -- coverage parent-cell join key
-    max_dist = c["max_dist_m"]
-    antenna = c["antenna_above_surface_m"]
-    target_h = c["target_h"]
-    quick_thresh = c["quick_thresh_frac"]
-    ground_fill_k = c["ground_fill_k"]
+    # Algorithm/resolution params: mirror the transformations/_config defaults
+    # -- keep in sync. A job task never carries the pipeline's spark.conf block,
+    # so a config read would have returned exactly these defaults anyway.
+    surface_bin_res = 13  # finest H3 "pixel" bin
+    viewshed_res = 12  # exact viewshed + coverage output
+    quickpass_res = 10  # coarse quick-pass screen
+    tower_res = 9  # naive candidate lattice
+    join_res = 9  # coverage parent-cell join key
+    max_dist = 2500.0
+    antenna = 10.0
+    target_h = 1.6
+    quick_thresh = 0.30
+    ground_fill_k = 3
 
     # --- Bin the surfaces to H3 and build the resolution pyramid (nb04 cell
     #     "Bin the surfaces to H3 pixels"). The silver surfaces are already AOI-

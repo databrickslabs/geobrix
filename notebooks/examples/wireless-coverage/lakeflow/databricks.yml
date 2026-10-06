@@ -99,7 +99,12 @@ resources:
       environments:
         - environment_key: wc_env
           spec:
-            environment_version: "5"
+            # Env 6 = the protobuf-6 Serverless base that the [light_env6] extra pins
+            # for (idna 3.11, typing_extensions 4.13+); matches the notebook series,
+            # which runs on Serverless environment 6. Keep this in lockstep with the
+            # [light_env6] extra below — an env-5 base with env-6-pinned deps trips the
+            # "core package versions changed" notebook/job failure.
+            environment_version: "6"
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).

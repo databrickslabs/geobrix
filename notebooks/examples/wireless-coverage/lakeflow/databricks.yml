@@ -1,0 +1,117 @@
+bundle:
+  name: wireless_coverage_lf
+
+# Layer in a git-ignored databricks.override.yml (workspace profile, any local
+# variable overrides) when present. The glob tolerates its absence, so a fresh
+# clone validates/deploys with the committed defaults below.
+# See databricks.override.yml.example.
+include:
+  - "*.override.yml"
+
+variables:
+  catalog: {default: geospatial_docs}
+  schema: {default: wireless_coverage_lf}
+  volume: {default: data}
+  full_aoi: {default: "true"}
+  # empty → derived under the LDP volume; set to the series path to share
+  # already-staged LiDAR and skip a second ~830 MB download.
+  laz_dir: {default: ""}
+  water_mask_dir: {default: ""}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl"}
+
+resources:
+  pipelines:
+    wireless_coverage_lf_pipeline:
+      name: wireless_coverage_lf_pipeline
+      serverless: true
+      catalog: ${var.catalog}
+      schema: ${var.schema}
+      root_path: ./transformations
+      libraries:
+        - glob:
+            include: transformations/**
+      environment:
+        dependencies:
+          # Install the geobrix wheel WITH its light_env6/vizx extras in ONE pip
+          # resolution (mirrors the notebook's `%pip install geobrix[light_env6,vizx]
+          # @ wheel`). Lakeflow runs one `%pip install` per dependency entry, so
+          # enumerating the extras separately defeats pip's resolver — installing
+          # rio-tiler after rasterio was already pinned forces a source rebuild
+          # (ENVIRONMENT_PIP_INSTALL_ERROR). pip's `wheel[extras]` path form keeps it
+          # a single pass and passes DAB path-normalization (no file:// colon).
+          - ${var.gbx_wheel}[light_env6,vizx]
+      configuration:
+        wireless_coverage.catalog: ${var.catalog}
+        wireless_coverage.schema: ${var.schema}
+        wireless_coverage.volume: ${var.volume}
+        wireless_coverage.full_aoi: ${var.full_aoi}
+        wireless_coverage.laz_dir: ${var.laz_dir}
+        wireless_coverage.water_mask_dir: ${var.water_mask_dir}
+        # (all other wireless_coverage.* keys use _config.py inline defaults)
+
+  jobs:
+    wireless_coverage_lf_job:
+      name: wireless_coverage_lf_job
+      tasks:
+        - task_key: land
+          spark_python_task:
+            python_file: ./land/land.py
+            parameters:
+              - "--catalog"
+              - ${var.catalog}
+              - "--schema"
+              - ${var.schema}
+              - "--volume"
+              - ${var.volume}
+              - "--full-aoi"
+              - ${var.full_aoi}
+              - "--laz-dir"
+              - ${var.laz_dir}
+              - "--water-mask-dir"
+              - ${var.water_mask_dir}
+          environment_key: wc_env
+        - task_key: pipeline
+          depends_on:
+            - task_key: land
+          pipeline_task:
+            pipeline_id: ${resources.pipelines.wireless_coverage_lf_pipeline.id}
+        - task_key: siting
+          depends_on:
+            - task_key: pipeline
+          spark_python_task:
+            python_file: ./siting/siting.py
+            parameters:
+              - "--catalog"
+              - ${var.catalog}
+              - "--schema"
+              - ${var.schema}
+              - "--volume"
+              - ${var.volume}
+              - "--full-aoi"
+              - ${var.full_aoi}
+          environment_key: wc_env
+        - task_key: validate
+          depends_on:
+            - task_key: siting
+          notebook_task:
+            notebook_path: ./validate/validate_wc_lf.py
+          environment_key: wc_env
+      environments:
+        - environment_key: wc_env
+          spec:
+            environment_version: "2"
+            dependencies:
+              # Single-pass wheel+extras install, same rationale as the pipeline
+              # environment above (avoids per-dep %pip resolver churn).
+              - ${var.gbx_wheel}[light_env6,vizx]
+      schedule:
+        quartz_cron_expression: "0 0 7 * * ?"
+        timezone_id: "America/Chicago"
+        pause_status: PAUSED
+
+targets:
+  dev:
+    mode: development
+    default: true
+  prod:
+    mode: production

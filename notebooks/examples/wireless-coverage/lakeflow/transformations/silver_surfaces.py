@@ -180,6 +180,15 @@ def wc_surface_chm():
     dtm = spark.read.table("wc_surface_dtm")
     # rst_chm warps the DSM onto the DTM grid, differences them (DSM - DTM), and
     # clamps negatives to 0 -> canopy/structure height in metres.
-    return dsm.join(dtm, ["tx", "ty"]).select(
-        "tx", "ty", rx.rst_chm("dsm", "dtm").alias("chm")
+    #
+    # Per-tile fan-out (Serverless-safe): the dsm x dtm join is small enough that
+    # Spark would broadcast it (no (tx,ty) shuffle), piling every tile into one
+    # task -- that task then holds all tiles' raster bytes AND runs every rst_chm
+    # warp, OOMing a light Serverless worker. repartition by (tx,ty) forces one
+    # tile per task (a bounded ~tens-of-MB warp each), and scales to full SF
+    # (more tiles -> more tasks) without a bigger worker. Mirrors the gold step.
+    return (
+        dsm.join(dtm, ["tx", "ty"])
+        .repartition(512, "tx", "ty")
+        .select("tx", "ty", rx.rst_chm("dsm", "dtm").alias("chm"))
     )

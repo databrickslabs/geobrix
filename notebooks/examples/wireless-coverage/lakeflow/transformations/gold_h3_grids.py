@@ -89,16 +89,19 @@ def _land_wkb(bbox, water_dir):
     return land.wkb
 
 
-def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
+def _surface_to_h3_cells(
+    surface_df, tile_col, breaks_array, h3_res, land_wkb, simplify_geom: bool = True
+):
     """EPSG:3857 surface tiles -> elevation isobands -> H3 cells (EPSG:4326).
 
     Ports ``config_nb._surface_to_h3_cells``: reproject 3857 -> 4326
     (``h3_try_coverash3`` needs lon/lat WKB), ``rst_clip`` to the land polygon
-    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands,
-    ``gbx_st_simplifypreservetopology`` on the pixel-staircase band polygons (see
-    ``_SIMPLIFY_TOL_DEG`` -- << the res-10 cell edge, so covered cells are
-    unchanged), then ``h3_try_coverash3`` + explode -> solid, gap-free H3 cells
-    per band. Returns
+    (Bay/Pacific -> NoData), ``rst_isoband`` elevation bands, then (when
+    ``simplify_geom``, the default) ``gbx_st_simplifypreservetopology`` on the
+    pixel-staircase band polygons (see ``_SIMPLIFY_TOL_DEG`` -- << the res-10 cell
+    edge, so covered cells are unchanged), then ``h3_try_coverash3`` + explode ->
+    solid, gap-free H3 cells per band. Pass ``simplify_geom=False`` for the exact
+    (unsimplified) isoband geometry -- the no-simplify baseline. Returns
     (cellid LONG, res INT, band_level INT, elev_lo DOUBLE, elev_hi DOUBLE).
     """
     from databricks.labs.gbx.pyrx import functions as rx
@@ -135,10 +138,13 @@ def _surface_to_h3_cells(surface_df, tile_col, breaks_array, h3_res, land_wkb):
     # self-intersected ~8% of polygons, which h3_try_coverash3 returned NULL for
     # and the cellid-not-null filter then dropped (1864 -> 1715 cells); this
     # geobrix fallback keeps the geometry valid and recovers those cells.
-    patches = patches.withColumn(
-        "geom_wkb",
-        F.expr(f"gbx_st_simplifypreservetopology(geom_wkb, {_SIMPLIFY_TOL_DEG})"),
-    )
+    # simplify_geom=False skips this to materialize the exact (unsimplified)
+    # baseline for the simplify-vs-exact comparison.
+    if simplify_geom:
+        patches = patches.withColumn(
+            "geom_wkb",
+            F.expr(f"gbx_st_simplifypreservetopology(geom_wkb, {_SIMPLIFY_TOL_DEG})"),
+        )
     cells = (
         patches.select(
             "band_level",
@@ -262,3 +268,33 @@ def wc_h3_chm_res10():
         .select("cellid", "res", "max_chm_z")
     )
     return _with_join_parent(chm_h3, c["join_res"])
+
+
+# ===========================================================================
+# TEMPORARY COMPARISON MV -- DELETE AFTER THE SIMPLIFY COMPARISON.
+# An exact (NO-simplify) copy of the DSM H3 grid, so the user can measure how
+# much spatial information the simplify step drops vs the simplified
+# wc_h3_dsm_res10. MVs are not time-travelable and the exact 1864-cell build was
+# overwritten, so this re-materializes it with simplify_geom=False. It reproduces
+# exactly what wc_h3_dsm_res10 does (schema matches) but skips the simplify.
+# Selective-refresh ONLY this MV, read the comparison, then remove it (the
+# simplify path in wc_h3_dsm_res10, which OOMs, is not exercised here).
+# ===========================================================================
+@dp.materialized_view(
+    name="_cmp_dsm_exact",
+    comment="TEMP comparison -- DSM H3 grid WITHOUT simplify (exact baseline); delete after the simplify comparison",
+)
+@dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
+def _cmp_dsm_exact():
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    c = cfg(spark)
+    p = paths(spark)
+    # Identical to wc_h3_dsm_res10 but simplify_geom=False (exact baseline).
+    dsm = spark.read.table("wc_surface_dsm")
+    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
+    land_wkb = _land_wkb(c["bbox"], p["water"])
+    cells = _surface_to_h3_cells(
+        dsm, "dsm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=False
+    )
+    return _with_join_parent(cells, c["join_res"])

@@ -185,6 +185,67 @@ def _with_join_parent(df, join_res, cell_col="cellid"):
     ).withColumn("parent_cellid_res", F.lit(join_res))
 
 
+# The DEM is a Delaunay-TIN surface, and its isoband geometry crashes native ops
+# when the whole chain is fused in one MV: transform+isoband alone runs clean, but
+# adding ANY third native op -- the GDAL land-clip OR the H3 cover -- SIGABRTs on
+# the TIN's messy geometry at full-SF scale (the binned DSM is clean and does not
+# hit this). Split the DEM into materialized stages so a Delta write/read boundary
+# sits between the native ops: each runs in its own task, no fused native crash,
+# and the interims are restartable + inspectable. The DSM path stays a single MV.
+# clip and simplify are both KEPT: clip masks water + cuts polygon count before
+# isoband; simplify de-densifies the 1 m pixel-staircase rings (~471K verts) so the
+# cover does not spill, and is verified not to change the covered-cell set.
+@dp.materialized_view(
+    name="wc_dem_clipped",
+    comment="DEM stage 1 (interim): DTM reprojected to EPSG:4326 and land-clipped raster tiles.",
+)
+def wc_dem_clipped():
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    from databricks.labs.gbx.pyrx import functions as rx
+
+    c = cfg(spark)
+    p = paths(spark)
+    dtm = spark.read.table("wc_surface_dtm").repartition(512, "tx", "ty")
+    land_wkb = _land_wkb(c["bbox"], p["water"])
+    t4326 = dtm.select(
+        "tx", "ty", rx.rst_transform("dtm", F.lit(4326)).alias("tile_4326")
+    )
+    return t4326.select(
+        "tx", "ty", rx.rst_clip("tile_4326", F.lit(land_wkb), F.lit(True)).alias("tile")
+    )
+
+
+@dp.materialized_view(
+    name="wc_dem_isobands",
+    comment="DEM stage 2 (interim): simplified elevation-band polygons from the clipped DTM.",
+)
+def wc_dem_isobands():
+    spark = SparkSession.getActiveSession()
+    register_gbx(spark)
+    from databricks.labs.gbx.pyrx import functions as rx
+
+    c = cfg(spark)
+    clipped = spark.read.table("wc_dem_clipped").repartition(512, "tx", "ty")
+    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
+    patches = clipped.select(
+        F.explode(rx.rst_isoband("tile", breaks_arr)).alias("p")
+    ).select(
+        F.col("p.band").alias("band_level"),
+        F.col("p.geom_wkb").alias("geom_wkb"),
+        F.col("p.lower").alias("elev_lo"),
+        F.col("p.upper").alias("elev_hi"),
+    )
+    if c["simplify"]:
+        patches = patches.withColumn(
+            "geom_wkb",
+            F.expr(
+                f"st_asbinary(st_simplify(st_geomfromwkb(geom_wkb), {_SIMPLIFY_TOL_DEG}))"
+            ),
+        )
+    return patches
+
+
 @dp.materialized_view(
     name="wc_h3_dem_res10",
     comment="DEM (bare-earth) elevation-band H3 cells (res 10), land-masked, with parent join key.",
@@ -192,38 +253,22 @@ def _with_join_parent(df, join_res, cell_col="cellid"):
 @dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
 def wc_h3_dem_res10():
     spark = SparkSession.getActiveSession()
-    register_gbx(spark)
     c = cfg(spark)
-    p = paths(spark)
-    # DEM = bare-earth DTM elevation bands.
-    dtm = spark.read.table("wc_surface_dtm")
-    breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
-    land_wkb = _land_wkb(c["bbox"], p["water"])
-    # The DTM is a Delaunay TIN: rst_clip SIGABRTs natively on its grid at full-SF
-    # scale (the binned DSM clips fine). Skip the raster clip (clip=False) and mask
-    # land in H3 space with an inner-join instead -- the TIN already leaves water as
-    # NoData (out-of-hull), so the isoband is land-only and the join just trims any
-    # stray non-land cells. Same land-mask approach as the CHM MV.
-    cells = _surface_to_h3_cells(
-        dtm,
-        "dtm",
-        breaks_arr,
-        c["h3_res"],
-        land_wkb,
-        simplify_geom=c["simplify"],
-        clip=False,
-    )
-    land_cells = (
-        spark.range(1)
-        .select(
-            F.explode(DBF.h3_try_coverash3(F.lit(land_wkb), F.lit(c["h3_res"]))).alias(
-                "cellid"
-            )
+    bands = spark.read.table("wc_dem_isobands")
+    cells = (
+        bands.select(
+            "band_level",
+            "elev_lo",
+            "elev_hi",
+            F.explode(
+                DBF.h3_try_coverash3(F.col("geom_wkb"), F.lit(c["h3_res"]))
+            ).alias("cellid"),
         )
         .where(F.col("cellid").isNotNull())
-        .select("cellid")
+        .distinct()
+        .withColumn("res", F.lit(c["h3_res"]))
+        .select("cellid", "res", "band_level", "elev_lo", "elev_hi")
     )
-    cells = cells.join(land_cells, "cellid", "inner")
     return _with_join_parent(cells, c["join_res"])
 
 

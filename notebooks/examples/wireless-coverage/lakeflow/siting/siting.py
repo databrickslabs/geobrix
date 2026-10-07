@@ -157,7 +157,7 @@ def _buffer_k(radius_m, res):
 
     Mirrors the buffer sizing inside ``pygx.h3_viewshed_towers`` so the quick-pass
     screen and the viewshed-fraction denominator (``n_targets``) count the same
-    neighbourhood the primitive actually tests. Hex centres are ~1.73*edge apart;
+    neighborhood the primitive actually tests. Hex centers are ~1.73*edge apart;
     dividing by 1.5 (< 1.73) is a safe over-estimate of k.
     """
     edge_m = h3.average_hexagon_edge_length(int(res), unit="m")
@@ -342,7 +342,7 @@ def main(argv=None):
     #     clear quick_thresh (nb04 cell "Quick pass -- rule out weak sites").
     #     Driver-side by design (coarse -> cheap). Deviation from nb04: the target
     #     buffer is the primitive's H3 grid_disk, not a 3857 euclidean disk, so the
-    #     screen and the exact pass share the same neighbourhood definition. ---
+    #     screen and the exact pass share the same neighborhood definition. ---
     k_quick = _buffer_k(max_dist, quickpass_res)
     scored = []
     for (lat, lon) in cand_latlng:

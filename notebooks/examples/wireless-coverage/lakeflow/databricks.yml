@@ -49,7 +49,7 @@ resources:
           # per dependency entry, so splitting the extras defeats pip's resolver
           # (rio-tiler after a pinned rasterio forces a rebuild / ENVIRONMENT_PIP_INSTALL_ERROR).
           # The `wheel[extras]` path form keeps it a single pass + DAB-path-safe.
-          - ${var.gbx_wheel}[light_dbr18,vizx]
+          - ${var.gbx_wheel}[light_dbr18,vizx,stac,overture]
       configuration:
         wireless_coverage.catalog: ${var.catalog}
         wireless_coverage.schema: ${var.schema}
@@ -141,7 +141,7 @@ resources:
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
-              - ${var.gbx_wheel}[light_env5,vizx]
+              - ${var.gbx_wheel}[light_env5,vizx,stac,overture]
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"
         timezone_id: "America/Chicago"

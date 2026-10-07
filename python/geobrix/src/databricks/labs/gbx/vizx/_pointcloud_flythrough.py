@@ -204,12 +204,12 @@ def _write_mp4(frames: List[np.ndarray], path: pathlib.Path, fps: float) -> None
     avoids this.
     """
     import shutil
-    import tempfile
 
     import imageio
 
-    with tempfile.NamedTemporaryFile(suffix=".mp4", delete=False) as f:
-        tmp = pathlib.Path(f.name)
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+
+    tmp = pathlib.Path(new_local_temp_file(suffix=".mp4"))
     try:
         imageio.mimwrite(str(tmp), frames, fps=float(fps), macro_block_size=None)
         shutil.copy(str(tmp), str(path))

@@ -38,11 +38,12 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
     import sqlite3
     import subprocess
     import sys
-    import tempfile
 
     import numpy as np
     import pandas as pd
     from PIL import Image
+
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
     MAX_IMAGE_SIZE = 2000  # SIFT input cap (quality knob; unchanged)
 
@@ -52,10 +53,8 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
     # extraction in a short-lived child process lets the OS reclaim ALL native
     # memory on process exit, keeping worker RSS flat regardless of image count.
     # Full quality is preserved (identical FeatureExtractionOptions).
-    _child = tempfile.NamedTemporaryFile(
-        mode="w", suffix="_extract_child.py", delete=False
-    )
-    _child.write(
+    child_script = new_local_temp_file(suffix="_extract_child.py")
+    Path(child_script).write_text(
         "import os, sys\n"
         "os.environ['OMP_NUM_THREADS'] = '1'\n"
         "os.environ['MKL_NUM_THREADS'] = '1'\n"
@@ -75,8 +74,6 @@ def _extract_features_to_df(iterator: Iterator[pd.DataFrame]) -> Iterator[pd.Dat
         "opts.use_gpu = bool(int(use_gpu))\n"
         "pycolmap.extract_features(db, work, extraction_options=opts)\n"
     )
-    _child.close()
-    child_script = _child.name
 
     try:
         for pdf in iterator:

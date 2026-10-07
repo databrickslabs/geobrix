@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import pathlib
 import shutil
-import tempfile
 from typing import Dict, List, Optional, Union
 
 import matplotlib.figure
@@ -236,7 +235,9 @@ def plot_point_cloud_poses(
             png_dir: pathlib.Path = pathlib.Path(out_dir)
             _tmp_dir: Optional[str] = None
         else:
-            _tmp_dir = tempfile.mkdtemp(prefix="gbx_poses_")
+            from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+
+            _tmp_dir = new_local_temp_dir(prefix="gbx_poses_")
             png_dir = pathlib.Path(_tmp_dir)
 
         png_dir.mkdir(parents=True, exist_ok=True)

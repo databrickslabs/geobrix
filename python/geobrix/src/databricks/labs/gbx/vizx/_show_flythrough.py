@@ -23,7 +23,6 @@ import base64
 import os
 import pathlib
 import shutil
-import tempfile
 import warnings
 from typing import Optional
 from urllib.parse import quote as urlquote
@@ -165,7 +164,9 @@ def _render_to_temp(
     Returns ``(tmp_gif, tmp_mp4_or_None, tmp_dir)`` — the caller owns the
     temp directory and must call ``shutil.rmtree(tmp_dir)`` after use.
     """
-    tmp_dir = pathlib.Path(tempfile.mkdtemp(prefix="gbx_flythrough_", dir="/tmp"))
+    from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+
+    tmp_dir = pathlib.Path(new_local_temp_dir(prefix="gbx_flythrough_"))
     formats = tuple(["gif"] + (["mp4"] if need_mp4 else []))
     _pft_module.plot_point_cloud_flythrough(
         source,

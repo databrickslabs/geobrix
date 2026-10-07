@@ -121,6 +121,7 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | COG | `cog_gbx` | — (light-only) |
 | PMTiles | `pmtiles_gbx` | `pmtiles` |
 | NetCDF | `netcdf_gbx` | — (light-only) |
+| LiDAR (LAS/LAZ) | `lidar_gbx` | — (light-only) |
 | Vector (generic) | `vector_gbx` | — (light-only) |
 | Shapefile | `shapefile_gbx` | — (light-only) |
 | GeoJSON | `geojson_gbx` | — (light-only) |

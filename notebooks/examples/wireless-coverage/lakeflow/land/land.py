@@ -91,6 +91,27 @@ def _download_lidar(
     df.count()
 
 
+def _download_water(
+    bbox: Tuple[float, float, float, float],
+    out_dir: str,
+    spark,
+) -> None:
+    """Discover + download the Overture water mask; seam for offline tests.
+
+    ``OvertureClient`` needs the ``stac`` + ``overture`` geobrix extras (declared
+    on the pipeline/job environments). Discovers the base theme, filters to
+    water, and downloads with an AOI bbox pushdown.
+    """
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.sample.overture import OvertureClient
+
+    client = OvertureClient()
+    assets = client.discover(bbox, themes=["base"])
+    water_assets = assets.filter(F.col("type") == "water")
+    client.download(water_assets, out_dir, bbox=bbox)
+
+
 # ---------------------------------------------------------------------------
 # Public staging functions
 # ---------------------------------------------------------------------------
@@ -119,22 +140,14 @@ def stage_water(
 ) -> None:
     """Stage Overture base/water GeoParquet to *out_dir* unless already present.
 
-    Discovers Overture base-theme assets, filters to type == 'water', and
-    downloads with an AOI bbox pushdown.  Idempotent: skips when any .parquet
-    file is already present under out_dir.
+    Delegates to ``_download_water``; tests monkeypatch that seam to avoid live
+    network access.  Idempotent: skips when any .parquet file is already present
+    under out_dir.
     """
     existing = glob.glob(os.path.join(out_dir, "**", "*.parquet"), recursive=True)
     if existing:
         return
-
-    from pyspark.sql import functions as F
-
-    from databricks.labs.gbx.sample.overture import OvertureClient
-
-    client = OvertureClient()
-    assets = client.discover(bbox, themes=["base"])
-    water_assets = assets.filter(F.col("type") == "water")
-    client.download(water_assets, out_dir, bbox=bbox)
+    _download_water(bbox, out_dir, spark)
 
 
 # ---------------------------------------------------------------------------

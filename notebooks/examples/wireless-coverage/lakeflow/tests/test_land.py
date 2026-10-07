@@ -43,3 +43,32 @@ def test_already_staged_skips(tmp_path, monkeypatch):
     monkeypatch.setattr(m, "_download_lidar", _boom)
     m.stage_lidar(aoi=(-122.55, 37.70, -122.35, 37.85), out_dir=str(laz), spark=None)
     assert called["n"] == 0  # files present → no download
+
+
+def test_water_already_staged_skips(tmp_path, monkeypatch):
+    m = _load()
+    water = tmp_path / "water"
+    water.mkdir()
+    (water / "water.parquet").write_bytes(b"x")
+    called = {"n": 0}
+
+    def _boom(*a, **k):
+        called["n"] += 1
+
+    monkeypatch.setattr(m, "_download_water", _boom)
+    m.stage_water(bbox=(-122.55, 37.70, -122.35, 37.85), out_dir=str(water), spark=None)
+    assert called["n"] == 0  # files present → no download
+
+
+def test_water_downloads_when_empty(tmp_path, monkeypatch):
+    m = _load()
+    water = tmp_path / "water"
+    water.mkdir()
+    called = {"n": 0}
+
+    def _rec(bbox, out_dir, spark):
+        called["n"] += 1
+
+    monkeypatch.setattr(m, "_download_water", _rec)
+    m.stage_water(bbox=(-122.55, 37.70, -122.35, 37.85), out_dir=str(water), spark=None)
+    assert called["n"] == 1  # empty dir → download invoked

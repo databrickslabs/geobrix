@@ -243,6 +243,12 @@ def wc_dem_isobands():
                 f"st_asbinary(st_simplify(st_geomfromwkb(geom_wkb), {_SIMPLIFY_TOL_DEG}))"
             ),
         )
+        # st_simplify is non-topology-preserving and self-intersects a few band
+        # polygons; h3_try_coverash3's polyfill then overflows (SafeInt / div-by-
+        # zero) on them in the cover stage, and its "try" does not catch that
+        # internal math error. Repair to OGC validity here -- cheap now that the
+        # geoms are de-densified -- so the materialized isobands are all valid.
+        patches = patches.withColumn("geom_wkb", F.expr("gbx_st_makevalid(geom_wkb)"))
     return patches
 
 

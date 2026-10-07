@@ -359,8 +359,14 @@ def delaunay_dtm(
                 bary = np.column_stack([b01, b2])  # (m, 3)
                 vert = tri.simplices[s]  # (m, 3) vertex indices
                 zvals = (bary * z[vert]).sum(axis=1)
+                # Ill-conditioned sliver triangles can yield a non-finite
+                # barycentric transform -> NaN/Inf zvals. Writing those as pixel
+                # values would leave genuine NaN in-hull (distinct from no_data),
+                # which crashes downstream GDAL warp/isoband. Keep such cells as
+                # no_data, mirroring the finiteness guard in the IDW paths above.
+                finite = np.isfinite(zvals)
                 flat = np.where(inside)[0]
-                out[flat] = zvals
+                out[flat[finite]] = zvals[finite]
 
     out = out.reshape(height_px, width_px)
     return _write_float64_grid(

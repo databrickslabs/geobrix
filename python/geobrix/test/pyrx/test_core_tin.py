@@ -265,6 +265,31 @@ def test_delaunay_dtm_breaklines_accepted_not_enforced():
     assert np.allclose(aw[valid], an[valid], atol=1e-6)
 
 
+def test_delaunay_dtm_never_emits_nan_or_inf():
+    # Invariant: the DTM must only ever contain finite values or no_data -- never
+    # raw NaN/Inf. Ill-conditioned sliver triangles (near-collinear points over an
+    # extreme aspect ratio) can hand scipy a non-finite barycentric transform;
+    # before the finiteness guard those NaNs were written into in-hull cells and
+    # crashed downstream GDAL warp/isoband. A degenerate interpolation must fall
+    # back to no_data instead.
+    pts = [
+        (0.0, 0.0, 1.0),
+        (1000.0, 1e-6, 2.0),
+        (2000.0, 0.0, 3.0),
+        (1500.0, 2e-6, 5.0),
+        (1000.0, 400.0, 4.0),
+    ]
+    xyz = np.array(pts, dtype="float64")
+    out = tin.delaunay_dtm(xyz, None, 0.0, 0.0, 2000.0, 400.0, 80, 16, 32633)
+    with _serde.open_tile(out) as ds:
+        arr = ds.read(1)
+        nodata = ds.nodata
+    assert not np.isnan(arr).any(), "DTM must never contain raw NaN"
+    assert not np.isinf(arr).any(), "DTM must never contain Inf"
+    # Every non-nodata cell is a finite interpolated elevation.
+    assert np.all(np.isfinite(arr[arr != nodata]))
+
+
 # --- WKB decode helpers -----------------------------------------------------
 def test_points_xy_from_wkb_roundtrip():
     wkbs = [shapely.wkb.dumps(Point(1.0, 2.0)), shapely.wkb.dumps(Point(3.0, 4.0))]

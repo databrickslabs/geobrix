@@ -84,7 +84,11 @@ def _download_lidar(
     """Thin wrapper around LidarDownloader; seam for offline tests."""
     from databricks.labs.gbx.sample.lidar import LidarDownloader
 
-    LidarDownloader().download(aoi_lonlat=aoi, out_dir=out_dir, spark=spark)
+    df = LidarDownloader().download(aoi_lonlat=aoi, out_dir=out_dir, spark=spark)
+    # download(spark=...) returns a LAZY mapInPandas DataFrame; each node's .laz is
+    # written only as a side effect of its execution. Force an action so the LAZ
+    # actually stages -- without it the task silently succeeds with an empty dir.
+    df.count()
 
 
 # ---------------------------------------------------------------------------

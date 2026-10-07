@@ -48,6 +48,21 @@ model-backed inference package for GPU object segmentation.
   object polygons with GeoSAM — in-notebook across 1..N GPUs, or behind a served Unity
   Gateway endpoint. See [Orthomosaic Photogrammetry](./notebooks/orthomosaic).
 
+### Wireless Coverage example — LiDAR to tower siting (new)
+
+- **New Wireless Coverage example — a LiDAR-to-tower-siting walkthrough over San
+  Francisco, in two flavors.** It takes USGS 3DEP LiDAR `.laz` through a DSM / TIN-DTM /
+  CHM surface stack, indexes the surfaces to H3 at resolution 10, and ranks candidate
+  tower sites with distributed H3 line-of-sight viewsheds (`h3_viewshed_towers`, fanned
+  one tower per Spark task). It ships as a **notebook series** (`config_nb` shared setup
+  → `01` CHM → `02a`/`02b` surfaces → `03a` H3 grids → `03b` viewshed → `04` siting) and
+  as a **production Lakeflow Declarative Pipeline (SDP) flavor** — a `land → pipeline →
+  siting → validate` Databricks Asset Bundle that cascades bronze → silver → gold through
+  declared table-to-table dependencies. Both run on the lightweight tier over Serverless
+  (no JAR), dogfooding `lidar_gbx`, the point-cloud DSM functions, `rst_chm`, the
+  raster-to-H3 grid family, and `h3_viewshed_towers`. See
+  [Wireless Coverage](./notebooks/wireless-coverage).
+
 ### LiDAR reader and writer — `lidar_gbx` (new)
 
 - **New `lidar_gbx` Spark DataSource** reads LAS and LAZ point-cloud files into a

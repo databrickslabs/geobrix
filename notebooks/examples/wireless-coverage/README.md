@@ -50,6 +50,12 @@ San Francisco AOI. See [Execution Tiers](https://databrickslabs.github.io/geobri
 
 ## Related
 
+- **Production pipeline (Lakeflow SDP)** — [`./lakeflow`](./lakeflow/README.md) is the
+  production counterpart to this notebook series: the same San Francisco AOI and USGS 3DEP
+  LiDAR sources, packaged as a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/)
+  plus a tower-siting job in a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/)
+  (`land → pipeline → siting → validate`), running the medallion bronze → silver → gold on
+  Serverless. See its [README](./lakeflow/README.md) for deploy and run steps.
 - **DEM extra** — [`../h3-rasterize`](../h3-rasterize) takes the complementary path: a
   ready-made **10 m seamless DEM** over the Bay Area through the full raster→H3 pipeline
   (`rst_clip` → `rst_isoband` → product H3 → `rst_h3_rasterize_agg` → `rst_frombands_agg`).

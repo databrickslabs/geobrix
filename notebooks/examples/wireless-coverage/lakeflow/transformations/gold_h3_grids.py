@@ -232,19 +232,20 @@ def wc_h3_chm_res10():
     h3_res = c["h3_res"]
     land_wkb = _land_wkb(c["bbox"], p["water"])
 
-    # rst_h3_rastertogridmax (an H3 UDTF) requires lon/lat EPSG:4326 tiles. It is a
-    # Python UDTF that loads a tile's full band into memory per call, so tiles MUST
-    # be fanned out one-per-task: repartition(512, tx, ty) does that. For the
-    # fan-out to actually isolate the UDTF at full-SF scale the pipeline sets two
-    # optimizer configs (databricks.yml): spark.sql.optimizer.excludedRules drops
-    # InferFiltersFromGenerate (else the LATERAL-UDTF generate is pushed into the
-    # scan BEFORE the repartition -- ref Databricks ES-2236400), and AQE
-    # coalescePartitions is off (else the fanned-out shuffle is merged back by the
-    # small inlined-raster row count). Without both, every tile's band piles onto
-    # one worker -> OOM.
-    chm_4326 = chm.select(
+    # rst_h3_rastertogridmax (an H3 UDTF) requires lon/lat EPSG:4326 tiles. Both it
+    # and rst_transform are Python ops that load a tile's full band, so tiles MUST
+    # be fanned out one-per-task. Repartition the RAW tiles FIRST, THEN reproject,
+    # so the transform runs post-shuffle (one tile/task) -- matching the DEM/DSM
+    # path in _surface_to_h3_cells; doing the transform inside the pre-repartition
+    # select leaves it in the scan stage, reprojecting many tiles per task -> OOM.
+    # The pipeline also excludes the InferFiltersFromGenerate optimizer rule (else
+    # the LATERAL-UDTF generate is pushed into the scan ahead of the repartition --
+    # ref Databricks ES-2236400) and turns AQE coalescePartitions off (else the
+    # fanned-out shuffle is merged back by the small inlined-raster row count). See
+    # databricks.yml.
+    chm_4326 = chm.repartition(512, "tx", "ty").select(
         "tx", "ty", rx.rst_transform("chm", F.lit(4326)).alias("chm_4326")
-    ).repartition(512, "tx", "ty")
+    )
     chm_4326.createOrReplaceTempView("_wc_chm_4326_tiles")
 
     # SQL ANSI LATERAL UDTF (the Python wrapper raises NotImplementedError, so

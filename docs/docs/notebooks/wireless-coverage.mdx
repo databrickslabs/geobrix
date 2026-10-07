@@ -157,7 +157,8 @@ The series uses the **lightweight tier** — pure Python/PySpark bindings (`data
 ## Executed output — full San Francisco
 
 The series runs end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks
-ship the smaller Golden Gate Park demo (`DEMO=True`). A few renders from the executed notebooks.
+ship the smaller Golden Gate Park demo (`DEMO=True`). A few renders from the executed notebooks — the
+full-SF surfaces first, then the Golden Gate Park detail where the per-pixel and siting views are legible.
 
 First, the surface stack over all of San Francisco — bare earth (DEM) beside the full surface (DSM), so buildings and canopy read as the difference between them:
 
@@ -167,7 +168,7 @@ Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully 
 
 ![Golden Gate Park detail — the 1 m-pixel CHM raster beneath the H3-gridded maximum canopy height, same window and colormap, so a hex reads as the color of the pixels it summarizes (Part 3a).](../../../resources/images/screenshots/wireless-coverage/wc-full-chm-pixel-vs-h3.png)
 
-Those H3 surfaces then drive the tower siting — each candidate is scored by how many res-12 cells it can see, so the best sites rise to the top:
+Finally — zooming to the Golden Gate Park demo, where the ranked sites are legible — Part 4 scores each candidate by how many res-12 cells it can see, so the best sites rise to the top:
 
 ![Top-10 tower sites by coverage over Golden Gate Park — each site's res-12 H3 line-of-sight viewshed and 2.5 km buffer, with the sited towers marked (Part 4).](../../../resources/images/screenshots/wireless-coverage/wc-top10-tower-viewsheds.png)
 
@@ -333,7 +334,7 @@ within each cell, turning this naive screen into a smarter siting tool.
 
 ---
 
-## Table catalog
+## Table catalog {#table-catalog-notebooks}
 
 All notebook-series tables land in `{CATALOG}.{SCHEMA}` (defaults: `geospatial_docs.geobrix`). A demo run
 (`DEMO=True`) appends a `_demo` suffix so it never collides with a full-SF run; H3 tables append `_res{n}`.
@@ -349,7 +350,7 @@ contrasts the two flavors.
 | `wc_surface_dsm` | 02a / 02b | DSM — max elevation of all returns per 1 m tile. | Shared (LDP Silver) |
 | `wc_surface_dtm` | 02a / 02b | DTM — Delaunay-TIN bare earth (02a) or morphological-opening approximation (02b). | Shared (LDP Silver; the LDP uses the TIN path) |
 | `wc_surface_chm` | 02a / 02b | CHM — `rst_chm(DSM, DTM)`, clamped ≥ 0. | Shared (LDP Silver) |
-| `wc_h3_dem_res10` / `wc_h3_dsm_res10` / `wc_h3_chm_res10` | 03a | Elevation-band (DEM/DSM) and max-canopy (CHM) H3 cells at res 10, land-masked, with a res-9 parent join key. | Shared (LDP Gold) |
+| `wc_h3_dem_res10` / `wc_h3_dsm_res10` / `wc_h3_chm_res10` | 03a | Land-masked elevation-band DEM/DSM and the raw max-canopy (CHM) grid — H3 cells at res 10 with a res-9 parent join key. nb3a clamps, gap-fills, and land-masks the CHM in-notebook for the rendered/analysis surface. | Shared (LDP Gold) |
 | `wc_rpx_raster_viewshed` / `wc_rpx_h3_viewshed` / `wc_rpx_h3_coverage` / `wc_rpx_comparison` | 03b | Raster-pixel vs H3 viewshed comparison — 1 m-pixel `rst_viewshed_towers` vs res-12 `h3_los_visible`, head-to-head on the same towers. | Notebook-only (no raster-pixel stage in the LDP) |
 | `wc_h3_surf_r13` / `wc_h3_grnd_r13` | 04 | Res-13 surface (DSM max) and ground (DTM min) bins — the finest blocker/base for line-of-sight. | Shared (LDP Siting) |
 | `wc_h3_quickpass_res9` | 04 | Every res-9 candidate's coarse quick-pass coverage fraction (pre-rule-out screen). | Shared (LDP Siting) |

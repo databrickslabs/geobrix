@@ -19,7 +19,8 @@ you own (a `CATALOG.SCHEMA` you set) and read back downstream.
 ## Executed output — full San Francisco
 
 The series runs end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks ship
-the smaller Golden Gate Park demo (`DEMO=True`). A few renders from the executed notebooks.
+the smaller Golden Gate Park demo (`DEMO=True`). A few renders from the executed notebooks — the full-SF
+surfaces first, then the Golden Gate Park detail where the per-pixel and siting views are legible.
 
 First, the surface stack over all of San Francisco — bare earth (DEM) beside the full surface (DSM), so buildings and canopy read as the difference between them:
 
@@ -29,7 +30,7 @@ Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully 
 
 ![Golden Gate Park detail — the 1 m-pixel CHM raster beneath the H3-gridded maximum canopy height, same window and colormap (Part 3a)](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/wireless-coverage/wc-full-chm-pixel-vs-h3.png)
 
-Those H3 surfaces then drive the tower siting — each candidate is scored by how many res-12 cells it can see, so the best sites rise to the top:
+Finally — zooming to the Golden Gate Park demo, where the ranked sites are legible — Part 4 scores each candidate by how many res-12 cells it can see, so the best sites rise to the top:
 
 ![Top-10 tower sites by coverage over Golden Gate Park — each site's res-12 H3 line-of-sight viewshed and 2.5 km buffer (Part 4)](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/wireless-coverage/wc-top10-tower-viewsheds.png)
 

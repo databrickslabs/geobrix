@@ -89,7 +89,13 @@ def _land_wkb(bbox, water_dir):
 
 
 def _surface_to_h3_cells(
-    surface_df, tile_col, breaks_array, h3_res, land_wkb, simplify_geom: bool = True
+    surface_df,
+    tile_col,
+    breaks_array,
+    h3_res,
+    land_wkb,
+    simplify_geom: bool = True,
+    clip: bool = True,
 ):
     """EPSG:3857 surface tiles -> elevation isobands -> H3 cells (EPSG:4326).
 
@@ -113,7 +119,10 @@ def _surface_to_h3_cells(
         "ty",
         rx.rst_transform(tile_col, F.lit(4326)).alias("tile_4326"),
     )
-    if land_wkb is not None:
+    # clip=False skips the raster land-clip (rst_clip SIGABRTs natively on the TIN
+    # DTM grid at full-SF scale); callers that skip it mask land in H3 space after
+    # covering instead. The DSM path keeps clip=True (works + masks before isoband).
+    if clip and land_wkb is not None:
         clipped = t4326.select(
             "tx",
             "ty",
@@ -190,9 +199,31 @@ def wc_h3_dem_res10():
     dtm = spark.read.table("wc_surface_dtm")
     breaks_arr = F.array(*[F.lit(b) for b in c["breaks_m"]])
     land_wkb = _land_wkb(c["bbox"], p["water"])
+    # The DTM is a Delaunay TIN: rst_clip SIGABRTs natively on its grid at full-SF
+    # scale (the binned DSM clips fine). Skip the raster clip (clip=False) and mask
+    # land in H3 space with an inner-join instead -- the TIN already leaves water as
+    # NoData (out-of-hull), so the isoband is land-only and the join just trims any
+    # stray non-land cells. Same land-mask approach as the CHM MV.
     cells = _surface_to_h3_cells(
-        dtm, "dtm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=c["simplify"]
+        dtm,
+        "dtm",
+        breaks_arr,
+        c["h3_res"],
+        land_wkb,
+        simplify_geom=c["simplify"],
+        clip=False,
     )
+    land_cells = (
+        spark.range(1)
+        .select(
+            F.explode(DBF.h3_try_coverash3(F.lit(land_wkb), F.lit(c["h3_res"]))).alias(
+                "cellid"
+            )
+        )
+        .where(F.col("cellid").isNotNull())
+        .select("cellid")
+    )
+    cells = cells.join(land_cells, "cellid", "inner")
     return _with_join_parent(cells, c["join_res"])
 
 

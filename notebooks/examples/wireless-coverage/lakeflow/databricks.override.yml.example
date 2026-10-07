@@ -1,0 +1,32 @@
+# --- databricks.override.yml.example -------------------------------------
+# Copy this file to `databricks.override.yml` (git-ignored) and fill in the
+# actual values for YOUR workspace. The committed `databricks.yml` is a
+# portable template with defaults; this override supplies the workspace-specific
+# bits (CLI profile and any variable you want to change) and is layered in
+# automatically via the `include: ["*.override.yml"]` glob.
+#
+# A fresh clone with NO databricks.override.yml still validates/deploys using
+# the committed defaults; create this file only to point the bundle at your
+# own profile or to share already-staged data.
+# -------------------------------------------------------------------------
+targets:
+  dev:
+    workspace:
+      # Databricks CLI profile authorized for your workspace (see ~/.databrickscfg).
+      profile: YOUR_CLI_PROFILE
+    variables:
+      # Override any other databricks.yml variable here, e.g.:
+      # catalog: my_catalog
+      # schema: my_wireless_coverage_lf
+      # gbx_wheel: /Volumes/my_catalog/my_schema/vol/geobrix-0.5.2-py3-none-any.whl
+
+      # Simplify isoband geometry before H3 covering (default: true). True = apply product st_simplify
+      # (fast, no coverage loss, needed for full SF performance); False = exact isobands (heavy/slow).
+      # simplify: "false"
+
+      # Reuse the notebook series' already-staged LiDAR instead of re-downloading
+      # the ~830 M-point SF point cloud. This is the standard staged location, so
+      # the `land` task finds it present and skips the download:
+      laz_dir: /Volumes/geospatial_docs/wireless_coverage/data/lidar/sf/laz
+      # Optionally also reuse the staged Overture water mask (else `land` fetches it):
+      # water_mask_dir: /Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/overture-water-bay

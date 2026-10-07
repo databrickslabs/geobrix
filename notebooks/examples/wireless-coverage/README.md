@@ -16,6 +16,23 @@ so full-density `DECIMATE=1` never OOMs). Part 2b covers the same SF area but st
 DSM raster rather than a point cloud. Binned surfaces are persisted to **permanent tables**
 you own (a `CATALOG.SCHEMA` you set) and read back downstream.
 
+## Executed output — full San Francisco
+
+The series runs end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks ship
+the smaller Golden Gate Park demo (`DEMO=True`). A few renders from the executed notebooks.
+
+First, the surface stack over all of San Francisco — bare earth (DEM) beside the full surface (DSM), so buildings and canopy read as the difference between them:
+
+![Full San Francisco — DEM (bare earth) vs DSM (surface: buildings + canopy) elevation bands at H3 resolution 10, side by side (Part 3a)](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/wireless-coverage/wc-full-dem-vs-dsm.png)
+
+Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully summarizes the underlying 1 m pixels — a hex reads as the color of the pixels beneath it:
+
+![Golden Gate Park detail — the 1 m-pixel CHM raster beneath the H3-gridded maximum canopy height, same window and colormap (Part 3a)](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/wireless-coverage/wc-full-chm-pixel-vs-h3.png)
+
+Those H3 surfaces then drive the tower siting — each candidate is scored by how many res-12 cells it can see, so the best sites rise to the top:
+
+![Top-10 tower sites by coverage over Golden Gate Park — each site's res-12 H3 line-of-sight viewshed and 2.5 km buffer (Part 4)](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/screenshots/wireless-coverage/wc-top10-tower-viewsheds.png)
+
 ## Chain
 
 | Notebook | Input | Output | Purpose |
@@ -25,7 +42,7 @@ you own (a `CATALOG.SCHEMA` you set) and read back downstream.
 | `02a_surfaces_dsm_dtm_chm` | Staged `.laz` EPT nodes | `wc_surface_{dsm,dtm,chm}` permanent tables + `OUT_DIR` GeoTIFFs | Main arc. Promotes a TIN bare-earth DTM (`rst_dtmfromgeoms_agg`) as the production terrain — gap-free from ground-classified returns. Writes the canonical surface tables Parts 3 and 4 consume. |
 | `02b_surfaces_from_dsm` | DSM raster (no point cloud) | `wc_surface_{dsm,dtm,chm}` permanent tables | DSM-raster alternative. Approximates bare earth via morphological opening (`rst_filter` min→max). Lands the same canonical surface tables as Part 2a so Parts 3 and 4 work unchanged. |
 | `03a_h3_gridding` | `wc_surface_{dsm,dtm,chm}` | `wc_h3_{dem,dsm,chm}_res10` + `parent_cellid` join key | H3 gridding. `rst_isoband` → `h3_try_coverash3` → elevation-tier grids; `gbx_rst_h3_rastertogridmax` → max-canopy; `h3_cellfill` (k=1, IDW) fills gaps. Adds a res-9 `parent_cellid` join key to every output table. |
-| `03b_raster_pixel_surfaces` | `wc_surface_dsm`, Part 3a H3 grids | `wc_rpx_{raster_viewshed,h3_viewshed,h3_coverage,comparison}_demo` | Raster-pixel counterpoint. Visualises 1 m-pixel DSM vs H3 cells over Golden Gate Park; then independently regenerates a candidate tower lattice and runs both `rst_viewshed_towers` (1 m raster) and `h3_los_visible` (res-12 H3) — two engines, same towers, head-to-head. |
+| `03b_raster_pixel_surfaces` | `wc_surface_dsm`, Part 3a H3 grids | `wc_rpx_{raster_viewshed,h3_viewshed,h3_coverage,comparison}_demo` | Raster-pixel counterpoint. Visualizes 1 m-pixel DSM vs H3 cells over Golden Gate Park; then independently regenerates a candidate tower lattice and runs both `rst_viewshed_towers` (1 m raster) and `h3_los_visible` (res-12 H3) — two engines, same towers, head-to-head. |
 | `04_tower_viewsheds` | `wc_surface_{dsm,dtm,chm}`, `wc_h3_{dem,dsm,chm}` | `wc_h3_{quickpass,candidate_sites,coverage,coverage_top10}` | Naive H3 tower siting. Res-9 centroid lattice → quick-pass rule-out (res-10, 30% threshold) → `h3_los_visible` exact viewshed (res-12, 2.5 km) → two-factor scoring (mast height, viewshed cells). |
 
 ## Data

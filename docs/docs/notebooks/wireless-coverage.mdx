@@ -154,6 +154,23 @@ The series uses the **lightweight tier** — pure Python/PySpark bindings (`data
 
 ---
 
+## Executed output — full San Francisco
+
+The series runs end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks
+ship the smaller Golden Gate Park demo (`DEMO=True`). A few renders from the executed notebooks.
+
+First, the surface stack over all of San Francisco — bare earth (DEM) beside the full surface (DSM), so buildings and canopy read as the difference between them:
+
+![Full San Francisco — DEM (bare earth) vs DSM (surface: buildings + canopy) elevation bands at H3 resolution 10, side by side (Part 3a). The surface model rises above bare earth over downtown and the ridgelines.](../../../resources/images/screenshots/wireless-coverage/wc-full-dem-vs-dsm.png)
+
+Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully summarizes the underlying 1 m pixels — a hex reads as the color of the pixels beneath it:
+
+![Golden Gate Park detail — the 1 m-pixel CHM raster beneath the H3-gridded maximum canopy height, same window and colormap, so a hex reads as the color of the pixels it summarizes (Part 3a).](../../../resources/images/screenshots/wireless-coverage/wc-full-chm-pixel-vs-h3.png)
+
+Those H3 surfaces then drive the tower siting — each candidate is scored by how many res-12 cells it can see, so the best sites rise to the top:
+
+![Top-10 tower sites by coverage over Golden Gate Park — each site's res-12 H3 line-of-sight viewshed and 2.5 km buffer, with the sited towers marked (Part 4).](../../../resources/images/screenshots/wireless-coverage/wc-top10-tower-viewsheds.png)
+
 ## The notebooks
 
 ### Part 1 — Pure LiDAR → CHM (`01_pure_lidar_chm.ipynb`)
@@ -206,7 +223,7 @@ population). This key is present on the Part 3a `wc_h3_*` tables, Part 4's
 H3 resolution is a choice, not a ceiling. Part 1 stored one res-15 cell per LiDAR return
 (`cellid_r15`, ≈0.9 m² — sub-metre, finer than a 1 m pixel). `h3_toparent` rolls any
 res-15 cell to any coarser resolution in a GROUP BY, so the same underlying data feeds
-res-10 visualisation grids and res-12 viewshed buffers alike.
+res-10 visualization grids and res-12 viewshed buffers alike.
 
 ### Part 3b — Raster-Pixel Surfaces (`03b_raster_pixel_surfaces.ipynb`)
 
@@ -265,7 +282,7 @@ rather than operating on pixels.
 
 **Candidate lattice.** One tower candidate is placed at the centroid of every H3 resolution-9 cell
 (≈170 m edge) that falls within the area of interest. No land-cover constraints, no placement
-optimisation — just a dense, regular lattice that covers the whole AOI.
+optimization — just a dense, regular lattice that covers the whole AOI.
 
 **Quick-pass rule-out.** Before paying for any detailed line-of-sight work, each candidate gets a
 cheap coarse viewshed at H3 resolution 10 (≈65 m). A site that cannot achieve at least 30% coverage
@@ -306,15 +323,39 @@ per-tower viewsheds):
 | `wc_h3_coverage` | Per-cell LOS depth: how many sited towers can see each H3 cell |
 | `wc_h3_coverage_top10` | Same, aggregated over only the top-10 sites by coverage |
 
-**Four maps** trace the rule-out funnel: (A) all candidates coloured by coarse coverage fraction;
+**Four maps** trace the rule-out funnel: (A) all candidates colored by coarse coverage fraction;
 (B) survivors that cleared the quick-pass; (C) per-cell coverage depth with all sited towers and
 their 2.5 km buffers overlaid; (D) the ten best sites with their viewsheds and buffers.
 
 **Next.** A forthcoming `land_cover` notebook adds the demand side — weighting coverage by where
-people and buildings are, excluding water, parks, and no-build zones — and optimises placement
+people and buildings are, excluding water, parks, and no-build zones — and optimizes placement
 within each cell, turning this naive screen into a smarter siting tool.
 
 ---
+
+## Table catalog
+
+All notebook-series tables land in `{CATALOG}.{SCHEMA}` (defaults: `geospatial_docs.geobrix`). A demo run
+(`DEMO=True`) appends a `_demo` suffix so it never collides with a full-SF run; H3 tables append `_res{n}`.
+
+The series shares most of its outputs with the **[Lakeflow SDP flavor](?flavor=lakeflow#table-catalog)** — the
+same table names, but written to a different schema (`geospatial_docs.wireless_coverage_lf`). The last column
+contrasts the two flavors.
+
+| Table | From | Description | Lakeflow (LDP) flavor |
+|---|---|---|---|
+| `wc_lidar_pts` | 01 | Classified LiDAR returns, tile-indexed with a res-15 H3 cell ID (EPSG:3857). | Shared (LDP Silver) |
+| `wc_lidar_dsm` / `wc_lidar_dtm` / `wc_lidar_chm` | 01 | Part 1's shortest-path DSM / bin-min DTM / CHM surfaces, kept for the pure-LiDAR walkthrough. | Notebook-only (LDP builds `wc_surface_*` instead) |
+| `wc_surface_dsm` | 02a / 02b | DSM — max elevation of all returns per 1 m tile. | Shared (LDP Silver) |
+| `wc_surface_dtm` | 02a / 02b | DTM — Delaunay-TIN bare earth (02a) or morphological-opening approximation (02b). | Shared (LDP Silver; the LDP uses the TIN path) |
+| `wc_surface_chm` | 02a / 02b | CHM — `rst_chm(DSM, DTM)`, clamped ≥ 0. | Shared (LDP Silver) |
+| `wc_h3_dem_res10` / `wc_h3_dsm_res10` / `wc_h3_chm_res10` | 03a | Elevation-band (DEM/DSM) and max-canopy (CHM) H3 cells at res 10, land-masked, with a res-9 parent join key. | Shared (LDP Gold) |
+| `wc_rpx_raster_viewshed` / `wc_rpx_h3_viewshed` / `wc_rpx_h3_coverage` / `wc_rpx_comparison` | 03b | Raster-pixel vs H3 viewshed comparison — 1 m-pixel `rst_viewshed_towers` vs res-12 `h3_los_visible`, head-to-head on the same towers. | Notebook-only (no raster-pixel stage in the LDP) |
+| `wc_h3_surf_r13` / `wc_h3_grnd_r13` | 04 | Res-13 surface (DSM max) and ground (DTM min) bins — the finest blocker/base for line-of-sight. | Shared (LDP Siting) |
+| `wc_h3_quickpass_res9` | 04 | Every res-9 candidate's coarse quick-pass coverage fraction (pre-rule-out screen). | Shared (LDP Siting) |
+| `wc_h3_candidate_sites_res9` | 04 | Ranked tower survivors: `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z`. | Shared (LDP Siting) |
+| `wc_h3_coverage_res12` / `wc_h3_coverage_top10_res12` | 04 | Per-cell line-of-sight depth at res 12 (all sites / top-10), H3-indexed, with the res-9 parent join key. | Shared (LDP Siting) |
+| `laz_inventory` | — | *(not generated by the notebook series)* | Lakeflow-only — a Bronze Auto Loader stream; the notebooks read the staged `.laz` directly via `lidar_gbx`. |
 
 ## Key GeoBrix functions shown
 

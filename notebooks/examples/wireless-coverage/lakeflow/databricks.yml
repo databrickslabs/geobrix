@@ -73,9 +73,12 @@ resources:
         #    count).
         spark.sql.optimizer.excludedRules: "org.apache.spark.sql.catalyst.optimizer.InferFiltersFromGenerate"
         spark.sql.adaptive.coalescePartitions.enabled: "false"
-        # Fail fast while iterating: cap full-update retries so a failed update does
-        # not silently burn repeated retry passes.
+        # Fail fast: cap retries so a failed flow/update does not silently burn
+        # repeated retry passes. numUpdateRetryAttempts caps whole-update retries;
+        # maxFlowRetryAttempts caps per-flow retries (the ones that otherwise show
+        # as a flow "failed more than N times").
         pipelines.numUpdateRetryAttempts: "1"
+        pipelines.maxFlowRetryAttempts: "0"
 
   jobs:
     wireless_coverage_lf_job:

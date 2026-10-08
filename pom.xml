@@ -471,7 +471,7 @@
                 </property>
             </activation>
             <properties>
-                <scala.version>2.13.16</scala.version>
+                <scala.version>2.13.18</scala.version>
                 <scala.compat.version>2.13</scala.compat.version>
                 <spark.version>4.0.0</spark.version>
             </properties>

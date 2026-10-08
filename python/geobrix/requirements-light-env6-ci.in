@@ -134,7 +134,7 @@ tippecanoe==2.45.0
 ipython==9.7.0
 
 # --- LiDAR point-cloud reading (laspy + pure-Rust LAZ backend) ---
-laspy==2.5.4
+laspy==2.7.0
 lazrs==0.6.3
 
 # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---

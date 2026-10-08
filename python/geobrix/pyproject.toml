@@ -119,7 +119,7 @@ light-base = [
     # future-proofs (no 1.x exists today).
     "defusedxml>=0.7,<1",
     # --- LiDAR point-cloud reading (lidar_gbx DataSource; lazrs = pure-Rust LAZ backend) ---
-    "laspy>=2.5,<2.6",
+    "laspy>=2.7.0,<2.8",
     "lazrs>=0.6,<0.7",
     # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
     # Pure-Python; no native dep. Available without the [photogrammetry] extra so

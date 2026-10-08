@@ -339,7 +339,7 @@ models = [
 # photogrammetry_gpu_env5/env6.
 models_gpu_env5 = [
     "torch==2.9.0",
-    "torchvision==0.24.0",
+    "torchvision==0.29.1",
     "segment-geospatial",
     # segment-geospatial pulls opencv-python-headless UNPINNED, so it inherits the GPU
     # AI Runtime base env's opencv-python-headless 5.0.0.93. OpenCV *5.x*'s bundled libs

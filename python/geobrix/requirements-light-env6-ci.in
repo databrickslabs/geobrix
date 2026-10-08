@@ -80,7 +80,7 @@ xarray-spatial==0.9.9
 # ERA5). xarray comes transitively via xarray-spatial; netcdf4 is the one new
 # engine (single wheel bundling netcdf-c + HDF5). Pulls cftime. Keep in lockstep
 # with the pyproject [light-base] floor and requirements-dev-container.in. ---
-netcdf4==1.7.2
+netcdf4==1.7.4
 
 # --- STAC light client deps the test/stac suite actually imports: requests
 # (stac/_download.py, module top) + tenacity (stac/_search.py search_one retry,

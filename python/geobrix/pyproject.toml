@@ -111,7 +111,7 @@ light-base = [
     # Folded into [light-base] so any geobrix[light_*] reads NetCDF out of the box.
     # Floor pinned; add a ceiling if a future release floats/breaks on py3.12,
     # same discipline as the rio-tiler / mapbox-vector-tile pins above.
-    "netcdf4>=1.6,<2",
+    "netcdf4>=1.7.4,<2",
     # Entity-hardened XML parsing for external-origin GDAL .vrt mosaic indexes
     # (raster_gbx VRT expansion). The stdlib xml.etree parser is vulnerable to
     # XXE / billion-laughs on an untrusted .vrt; defusedxml is the safe parser

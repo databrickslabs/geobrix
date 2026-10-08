@@ -144,4 +144,4 @@ exifread>=3.0,<4
 
 # --- test runner (light-CI only; dev-container / notebooks harness stay on 8.4.2
 # until a coordinated all-manifests bump). 9.0.3 clears CVE-2025-71176 (tmpdir). ---
-pytest==9.0.3
+pytest==9.1.1

@@ -34,7 +34,7 @@ Source of truth (priority order):
 1. **DBR LTS release notes** — for any package shipped with the runtime:
    - Core build/runtime: `pip`, `setuptools`, `wheel`, `cython`, `numpy`, `pandas`, `pyspark`/`spark`, `requests`, `python`.
    - Jupyter / notebook stack (dev container): `ipython`, `ipykernel`, `ipywidgets`, `jupyterlab`, `jupyter_server`, `jupyter_core`, `jupyter_client`, `tornado`, `nbformat`, `nbconvert`.
-2. **Current PyPI stable** — for tools NOT in DBR: `build`, `pytest-cov`, `geopandas` (pinned to be compatible with DBR's pandas 2.2.x), `keplergl` (last stable; requires `ipywidgets >= 7`).
+2. **Current PyPI stable** — for tools NOT in DBR: `build`, `pytest-cov`, `geopandas` (pinned to be compatible with DBR's pandas 2.2.x).
 3. **CI matrix** — for tools intentionally divergent from DBR: `pytest 8.4.2` (kept ahead of DBR 8.3.5 because tests don't run in DBR).
 4. **System apt + ubuntugis PPA** — for GDAL native + Python bindings; auto-detected from `gdal-config --version`.
 5. **Intentional DBR divergence** — `pyzmq 25.1.1` (Dockerfile only). DBR has 26.2.0 but our Jupyter ZMQ workaround requires the older pin. Re-evaluate on next DBR LTS bump.

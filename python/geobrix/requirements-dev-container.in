@@ -34,7 +34,6 @@ requests==2.34.2
 
 # --- geospatial dev stack (not in DBR) ---
 geopandas==1.1.4
-keplergl==0.3.2
 pystac-client==0.9.0
 planetary-computer==1.0.0
 # NASA EMIT (CH4) fetch for the sample EmitDownloader (Earthdata-Login auth).
@@ -92,6 +91,8 @@ exifread>=3.0,<4
 ipython==8.30.0
 ipykernel==6.29.5
 ipywidgets==7.8.1
+# jupyterlab is not used directly, but ipywidgets 7 -> widgetsnbextension -> notebook
+# requires it; pinned here so it stays explicit and version-audited.
 jupyterlab==4.3.4
 jupyter_server==2.14.1
 jupyter_core==5.7.2

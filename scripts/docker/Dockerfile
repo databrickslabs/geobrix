@@ -181,7 +181,7 @@ ENV PANDAS_VERSION=2.2.3
 ENV SETUPTOOLS_VERSION=74.0.0
 ENV PIP_VERSION=25.0.1
 ENV WHEEL_VERSION=0.45.1
-ENV REQUESTS_VERSION=2.32.3
+ENV REQUESTS_VERSION=2.34.2
 ENV IPYTHON_VERSION=8.30.0
 ENV IPYKERNEL_VERSION=6.29.5
 ENV IPYWIDGETS_VERSION=7.8.1
@@ -198,12 +198,7 @@ ENV NBCONVERT_VERSION=7.16.4
 ENV BUILD_VERSION=1.4.4
 ENV PYTEST_VERSION=8.4.2
 ENV PYTEST_COV_VERSION=7.1.0
-ENV GEOPANDAS_VERSION=1.1.3
-# keplergl 0.3.4+ requires ipywidgets>=8.1.5, which conflicts with DBR's ipywidgets==7.8.1.
-# 0.3.3 was never published on PyPI (gap between 0.3.2 stable and 0.3.4 alphas), so 0.3.2
-# is the last keplergl compatible with the ipywidgets 7.x line. We prefer DBR alignment
-# for ipywidgets over latest keplergl in the dev container.
-ENV KEPLERGL_VERSION=0.3.2
+ENV GEOPANDAS_VERSION=1.1.4
 # Intentional DBR divergence — DBR has pyzmq 26.2.0 but our Jupyter ZMQ workaround
 # requires the older 25.1.1 (see "ZMQ fixes" section below). Re-evaluate on next bump.
 ENV PYZMQ_VERSION=25.1.1

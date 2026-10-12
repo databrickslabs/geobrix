@@ -48,8 +48,11 @@ def _lines(text: str) -> list[str]:
     return text.splitlines(keepends=True)
 
 
+SUPPORTED = ("ansi", "mimeBundle")
+
+
 def to_outputs(results: dict | None) -> list[dict]:
-    """Convert a command's ``results`` to nbformat v4 outputs."""
+    """Convert a command's ``results`` to nbformat v4 outputs (``SUPPORTED`` item types)."""
     outs = []
     for item in (results or {}).get("data") or []:
         kind = item.get("type")
@@ -70,7 +73,9 @@ def to_outputs(results: dict | None) -> list[dict]:
 def apply_outputs(nb: dict, model: dict) -> tuple[int, list[int]]:
     """Set outputs on local code cells matched (by source) to executed commands.
 
-    Returns ``(n_updated, unmatched_local_code_cell_indices)``.
+    A cell whose results include an item type ``to_outputs`` can't convert (e.g. a
+    ``display()`` table) is left untouched rather than losing that output.
+    Returns ``(n_updated, indices_of_local_code_cells_not_updated)``.
     """
     executed = {}
     for cmd in sorted(model.get("commands", []), key=lambda c: c.get("position", 0)):
@@ -85,7 +90,8 @@ def apply_outputs(nb: dict, model: dict) -> tuple[int, list[int]]:
         if key.startswith(("%pip", "%restart_python", "%run")):
             continue
         cmd = executed.pop(key, None)
-        if cmd is None:
+        items = ((cmd or {}).get("results") or {}).get("data") or []
+        if cmd is None or any(it.get("type") not in SUPPORTED for it in items):
             unmatched.append(i)
             continue
         cell["outputs"] = to_outputs(cmd.get("results"))

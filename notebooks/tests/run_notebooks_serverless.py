@@ -156,11 +156,10 @@ def _inject_override_cell(nb_bytes: bytes, assignments: list[str]) -> bytes:
     cell (e.g. ``FORCE_REBUILD=True``) into the UPLOADED copy only — the
     committed notebook keeps its safe defaults.
 
-    Placement: immediately AFTER the last code cell that assigns one of the
-    target names at top level (``NAME = ...``), so the override also wins over a
-    series notebook's own parameter cell that re-assigns it after ``%run``.
-    Otherwise after the last ``%run`` cell (the shared config include), else
-    after the first code cell, else prepended.
+    Placement: immediately AFTER the later of (a) the last code cell that assigns
+    one of the target names at top level (``NAME = ...``) and (b) the last ``%run``
+    cell (the shared config include), so neither can re-assign the name after the
+    override. With neither present, after the first code cell, else prepended.
     """
     if not assignments:
         return nb_bytes
@@ -174,11 +173,13 @@ def _inject_override_cell(nb_bytes: bytes, assignments: list[str]) -> bytes:
     names = "|".join(re.escape(a.split("=", 1)[0].strip()) for a in assignments)
     assigns = re.compile(rf"^(?:{names})\s*=(?!=)", re.M)
     code = [i for i, c in enumerate(cells) if c.get("cell_type") == "code"]
-    insert_after = next(
-        (i for i in reversed(code) if assigns.search(_src(cells[i]))),
-        next((i for i in reversed(code) if re.search(r"^\s*%run", _src(cells[i]), re.M)),
-             code[0] if code else -1),
-    )
+    last_assign = max((i for i in code if assigns.search(_src(cells[i]))), default=-1)
+    last_run = max((i for i in code if re.search(r"^\s*%run", _src(cells[i]), re.M)), default=-1)
+    # After whichever comes last, so neither the notebook's own assignment nor a later
+    # %run config include can re-assign the name after the override.
+    insert_after = max(last_assign, last_run)
+    if insert_after < 0:
+        insert_after = code[0] if code else -1
 
     body = ["# --- validation override (injected by runner; NOT in the committed notebook) ---\n"]
     body += [f"{a}\n" for a in assignments]
@@ -413,7 +414,8 @@ def run_one(
             print(f"!!! STOP — output harvest failed ({e.__class__.__name__}: {e})", flush=True)
             return False
         print(f"    harvested outputs into {n} cell(s) of {local_path}"
-              + (f"; unmatched local code cells: {unmatched}" if unmatched else ""), flush=True)
+              + (f"; NOT updated (no match or unsupported result type): code cells {unmatched}"
+                 if unmatched else ""), flush=True)
     return ok
 
 

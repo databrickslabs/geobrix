@@ -63,6 +63,14 @@ def test_apply_outputs_aligns_by_source_skipping_stripped_injected_and_inlined_c
     assert nb["cells"][4]["execution_count"] == 0 and nb["cells"][5]["execution_count"] is None
 
 
+def test_apply_outputs_keeps_cells_with_unsupported_result_types():
+    kept = [{"output_type": "stream", "name": "stdout", "text": ["old\n"]}]
+    nb = {"cells": [_code("display(df)", kept)]}
+    model = {"commands": [_cmd(1, "display(df)", {"type": "table", "data": [[1]]})]}
+    assert apply_outputs(nb, model) == (0, [0])
+    assert nb["cells"][0]["outputs"] == kept
+
+
 def test_dump_like_preserves_serialization():
     nb = {"cells": [_code("x = '—'")], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}
     for ensure_ascii in (False, True):
@@ -76,6 +84,12 @@ def test_set_var_override_lands_after_the_notebooks_own_assignment():
     out = json.loads(_inject_override_cell(json.dumps({"cells": cells}).encode(), ["FORCE_RELOAD=True"]))
     srcs = ["".join(c["source"]) for c in out["cells"]]
     assert srcs[2].endswith("FORCE_RELOAD=True\n") and srcs[3] == "use(FORCE_RELOAD)"
+
+
+def test_set_var_override_lands_after_a_later_run_include():
+    cells = [_code("FORCE_RELOAD = False"), _code("%run ./config_nb"), _code("use(FORCE_RELOAD)")]
+    out = json.loads(_inject_override_cell(json.dumps({"cells": cells}).encode(), ["FORCE_RELOAD=True"]))
+    assert "FORCE_RELOAD=True" in "".join(out["cells"][2]["source"])
 
 
 def test_set_var_override_falls_back_to_after_run_cell():

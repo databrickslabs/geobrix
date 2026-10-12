@@ -5,8 +5,11 @@ Pure (no workspace, no Spark). Run: gbx:test:notebooks --path test_harvest_noteb
 
 import base64
 import json
+import subprocess
 import urllib.parse
 
+import harvest_notebook_outputs as hno
+import pytest
 from harvest_notebook_outputs import _dump_like, apply_outputs, decode_model, to_outputs
 from run_notebooks_serverless import _inject_override_cell
 
@@ -77,6 +80,48 @@ def test_dump_like_preserves_serialization():
         for tail in ("", "\n"):
             original = json.dumps(nb, indent=1, ensure_ascii=ensure_ascii) + tail
             assert _dump_like(json.loads(original), original) == original
+
+
+def _export_stdout(model, view_type="NOTEBOOK"):
+    blob = base64.b64encode(urllib.parse.quote(json.dumps(model)).encode()).decode()
+    html = f"<script>__DATABRICKS_NOTEBOOK_MODEL = '{blob}';</script>"
+    return json.dumps({"views": [{"type": view_type, "name": "x", "content": html}]})
+
+
+def _fake_cli(monkeypatch, *stdouts):
+    calls = []
+
+    def run(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdouts[min(len(calls), len(stdouts)) - 1], "")
+
+    monkeypatch.setattr(hno.subprocess, "run", run)
+    return calls
+
+
+def test_export_model_reads_the_notebook_view(monkeypatch):
+    model = {"commands": [_cmd(1, "x = 1", ANSI)]}
+    calls = _fake_cli(monkeypatch, _export_stdout(model))
+    assert hno._export_model(123, "p") == model
+    assert calls[0][:4] == ["databricks", "jobs", "export-run", "123"] and "p" in calls[0]
+
+
+def test_export_model_raises_without_a_notebook_view(monkeypatch):
+    _fake_cli(monkeypatch, _export_stdout({"commands": []}, view_type="DASHBOARD"))
+    with pytest.raises(RuntimeError, match="no NOTEBOOK view"):
+        hno._export_model(123, "p")
+
+
+def test_harvest_re_exports_until_results_stop_growing(monkeypatch, tmp_path):
+    early = {"commands": [_cmd(1, "plot()")]}            # export taken too early: no results yet
+    late = {"commands": [_cmd(1, "plot()", PNG)]}
+    calls = _fake_cli(monkeypatch, _export_stdout(early), _export_stdout(late), _export_stdout(late))
+    monkeypatch.setattr(hno.time, "sleep", lambda s: None)
+    nb_path = tmp_path / "nb.ipynb"
+    nb_path.write_text(json.dumps({"cells": [_code("plot()")], "metadata": {}}, indent=1))
+    assert hno.harvest_run_outputs(7, "p", nb_path) == (1, [])
+    assert json.loads(nb_path.read_text())["cells"][0]["outputs"][0]["output_type"] == "display_data"
+    assert len(calls) == 3
 
 
 def test_set_var_override_lands_after_the_notebooks_own_assignment():

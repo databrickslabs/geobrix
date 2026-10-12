@@ -277,52 +277,29 @@ def _fqn(catalog, schema, name):
 
 
 def _write(df, catalog, schema, name):
-    """Overwrite-write ``df`` to a quoted table FQN with H3 clustering.
+    """Overwrite-write ``df`` to the quoted table ``catalog.schema.name``.
 
-    Automatically detects primary H3 cell columns (BIGINT, ends with "cellid",
-    not "parent_cellid"), adds STRING h3 twins right after each cell column,
-    and liquid-clusters on the detected cell columns. Tables without cell columns
-    are written unclusttered. Runs OPTIMIZE after clustering.
-
-    Args:
-        df: Spark DataFrame to write.
-        catalog: Catalog name.
-        schema: Schema name.
-        name: Table name.
+    H3 tables (primary BIGINT cell columns, see ``_h3_cell_cols``) get a STRING twin
+    right after each cell column (``cellid`` -> ``h3``, ``site_cellid`` -> ``site_h3``),
+    are liquid-clustered on the BIGINT cell column(s), and are OPTIMIZEd.
     """
     from pyspark.databricks.sql import functions as DBF
     from pyspark.sql import functions as F
 
     fqn = _fqn(catalog, schema, name)
-
-    # Detect primary H3 cell columns
     cell_cols = _h3_cell_cols(df.schema)
-
+    cols = []
+    for c in df.columns:
+        cols.append(F.col(c))
+        twin = c.replace("cellid", "h3")
+        if c in cell_cols and twin not in df.columns:
+            cols.append(DBF.h3_h3tostring(F.col(c)).alias(twin))
+    writer = df.select(cols).write.mode("overwrite").option("overwriteSchema", "true")
     if cell_cols:
-        # H3 table: add string H3 twins and cluster
-        df_with_h3 = df
-        for cell_col in cell_cols:
-            h3_col_name = cell_col.replace("cellid", "h3")
-            existing_cols = [f.name for f in df_with_h3.schema.fields]
-            if h3_col_name not in existing_cols:
-                df_with_h3 = df_with_h3.withColumn(h3_col_name, DBF.h3_h3tostring(F.col(cell_col)))
-                # Reorder: place h3 col right after cellid
-                cols = [f.name for f in df_with_h3.schema.fields]
-                cellid_idx = cols.index(cell_col)
-                h3_idx = cols.index(h3_col_name)
-                if h3_idx != cellid_idx + 1:
-                    cols.pop(h3_idx)
-                    cols.insert(cellid_idx + 1, h3_col_name)
-                    df_with_h3 = df_with_h3.select(cols)
-
-        # Liquid cluster by BIGINT cell columns; OPTIMIZE to finalize
-        df_with_h3.write.clusterBy(*cell_cols).mode("overwrite") \
-            .option("overwriteSchema", "true").saveAsTable(fqn)
-        df_with_h3.sparkSession.sql(f"OPTIMIZE {fqn}")
-    else:
-        # Non-H3 table: standard write (no clustering)
-        df.write.mode("overwrite") \
-            .option("overwriteSchema", "true").saveAsTable(fqn)
+        writer = writer.clusterBy(*cell_cols)
+    writer.saveAsTable(fqn)
+    if cell_cols:
+        df.sparkSession.sql(f"OPTIMIZE {fqn}")
 
 
 # --------------------------------------------------------------------------- #
@@ -437,7 +414,7 @@ def main(argv=None):
     quickpass_df = spark.createDataFrame(
         scored, "lon double, lat double, quick_frac double"
     )
-    _write(quickpass_df, cat, sch, _T_QUICKPASS)  # no clustering (no H3 cell column)
+    _write(quickpass_df, cat, sch, _T_QUICKPASS)
 
     survivors = quick_survivors(scored, quick_thresh)
 

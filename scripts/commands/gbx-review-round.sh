@@ -23,6 +23,7 @@ FULL=0
 RULE=""
 LOG_PATH=""
 ALLOW_LARGE=0
+KEEP_OUTPUTS=0
 PASSTHRU=()
 
 show_help() {
@@ -40,6 +41,8 @@ show_help() {
     echo -e "  ${GREEN}--full${NC}           Ignore Isaac's incremental session cache (re-review all)."
     echo -e "  ${GREEN}--rule <set>${NC}     Run a specific rule set / rule (isaac --run-rule)."
     echo -e "  ${GREEN}--allow-large${NC}    Proceed even if the scope exceeds ${LARGE_THRESHOLD} files."
+    echo -e "  ${GREEN}--keep-outputs${NC}   Review .ipynb files WITH their stored outputs (default strips"
+    echo -e "                   them: embedded plots overflow isaac's context and aren't code)."
     echo -e "  ${GREEN}--log <path>${NC}     Tee output to a log (filename -> test-logs/<name>)."
     echo -e "  ${GREEN}-h, --help${NC}       Show this help."
     echo ""
@@ -64,6 +67,7 @@ while [[ $# -gt 0 ]]; do
         --full) FULL=1; shift ;;
         --rule) RULE="$2"; shift 2 ;;
         --allow-large) ALLOW_LARGE=1; shift ;;
+        --keep-outputs) KEEP_OUTPUTS=1; shift ;;
         --log) LOG_PATH="$(resolve_log_path "$2")"; shift 2 ;;
         --) shift; while [[ $# -gt 0 ]]; do PASSTHRU+=("$1"); shift; done ;;
         *) PASSTHRU+=("$1"); shift ;;
@@ -116,6 +120,51 @@ if [[ "$FILE_COUNT" -gt "$LARGE_THRESHOLD" && "$ALLOW_LARGE" -ne 1 ]]; then
 fi
 
 ISAAC_ARGS=(review --base "$BASE")
+REVIEW_DIR="$PROJECT_ROOT"
+
+# Notebook outputs (base64 plots, multi-MB) are not reviewable code, and isaac loads
+# every changed file in full, so one executed notebook can overflow the context window
+# on its own. Unless --keep-outputs: review the same change in a scratch worktree where
+# every changed .ipynb has its outputs stripped on BOTH sides. The stripped base is a
+# local detached commit there (never pushed; it goes through the normal git hooks) and
+# HEAD's versions are left uncommitted for `isaac review --uncommitted`. Sources and
+# every non-notebook file are reviewed unchanged.
+NOTEBOOKS=()
+while IFS= read -r f; do [[ -n "$f" ]] && NOTEBOOKS+=("$f"); done \
+    < <(git diff --name-only "$MERGE_BASE" HEAD -- '*.ipynb')
+strip_outputs() {  # strip_outputs <dir> <paths...>: clear outputs/execution_count in place
+    python3 -I - "$@" <<'PY'
+import json, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for rel in sys.argv[2:]:
+    p = root / rel
+    if not p.exists():
+        continue
+    nb = json.loads(p.read_text(encoding="utf-8"))
+    for c in nb.get("cells", []):
+        if c.get("cell_type") == "code":
+            c["outputs"], c["execution_count"] = [], None
+    p.write_text(json.dumps(nb, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
+PY
+}
+if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
+    HEAD_SHA="$(git rev-parse HEAD)"  # this checkout's HEAD; inside the worktree HEAD is the scratch base
+    REVIEW_DIR="$(mktemp -d -t gbx-review-wt.XXXXXX)"
+    trap 'git -C "$PROJECT_ROOT" worktree remove --force "$REVIEW_DIR" >/dev/null 2>&1' EXIT
+    git worktree add --quiet --detach "$REVIEW_DIR" "$MERGE_BASE" || exit 2
+    strip_outputs "$REVIEW_DIR" "${NOTEBOOKS[@]}"
+    git -C "$REVIEW_DIR" commit -q -a --allow-empty \
+        -m "chore(review): scratch base with notebook outputs stripped" \
+        -m "Local and detached, never pushed: lets isaac review without multi-MB outputs." \
+        >/dev/null || exit 2
+    while IFS=$'\t' read -r status path; do
+        if [[ "$status" == D ]]; then git -C "$REVIEW_DIR" rm -q -- "$path"
+        else git -C "$REVIEW_DIR" checkout "$HEAD_SHA" -- "$path" || exit 2; fi
+    done < <(git diff --name-status --no-renames "$MERGE_BASE" HEAD)
+    strip_outputs "$REVIEW_DIR" "${NOTEBOOKS[@]}"
+    ISAAC_ARGS=(review --uncommitted)
+    echo -e "${CYAN}Notebook outputs stripped${NC} for review (${#NOTEBOOKS[@]} .ipynb; --keep-outputs to include them)."
+fi
 [[ "$FULL" -eq 1 ]] && ISAAC_ARGS+=(--full)
 [[ -n "$RULE" ]] && ISAAC_ARGS+=(--run-rule "$RULE")
 [[ ${#PASSTHRU[@]} -gt 0 ]] && ISAAC_ARGS+=("${PASSTHRU[@]}")
@@ -128,8 +177,20 @@ show_separator
 # overflows the context window -> {"is_error":true,...,"result":"Prompt is too long"}).
 # A context-overflow "0 findings" is not a clean review — fail loudly instead.
 SCAN_FILE="$(mktemp -t gbx-review-round.XXXXXX)"
-dbexec repo run isaac "${ISAAC_ARGS[@]}" 2>&1 | tee "$SCAN_FILE"
+(cd "$REVIEW_DIR" && dbexec repo run isaac "${ISAAC_ARGS[@]}") 2>&1 | tee "$SCAN_FILE"
 rc=${PIPESTATUS[0]}
+
+if grep -qE 'CERTIFICATE_EXPIRED|Missing/Expired Certificate' "$SCAN_FILE"; then
+    echo -e "${YELLOW}Note:${NC} the Databricks client certificate is missing or expired (isaac's flag fetch failed);" >&2
+    echo -e "run ${GREEN}dbcert${NC} on your laptop if the review below errored." >&2
+fi
+
+if grep -q 'No changes found' "$SCAN_FILE"; then
+    rm -f "$SCAN_FILE"
+    echo "" >&2
+    echo -e "${RED}Isaac Review reviewed nothing:${NC} it found no changes, but the scope has ${FILE_COUNT} file(s)." >&2
+    exit 4
+fi
 
 if grep -qE '"is_error"[[:space:]]*:[[:space:]]*true|Prompt is too long' "$SCAN_FILE"; then
     rm -f "$SCAN_FILE"

@@ -63,6 +63,29 @@ needs no GPU. The notebook is standalone (no `%run ./config_nb`) and can run any
 
 ---
 
+## Executed output — Old Orchard drone survey
+
+These screenshots are pulled from the executed notebook series, run over the Old Orchard GoPro survey
+(~170 overlapping, GPS-tagged frames) that the committed notebooks download by default.
+
+The raw inputs: an evenly spaced contact sheet of the unstitched frames that SfM must align and stitch:
+
+![Contact sheet of 24 evenly spaced raw drone frames from the Old Orchard survey: unstitched, GPS-only, with a pink color cast (Part 1a).](../../../resources/images/screenshots/orthomosaic/ortho-raw-inputs.png)
+
+After reconstruction, Part 2 color-corrects the orthomosaic with a per-band percentile stretch, uncorrected on the left and corrected on the right:
+
+![Before and after color correction of the georeferenced orthomosaic: the uncorrected mosaic carries the cameras' pink cast; the percentile-stretched mosaic shows natural field, orchard-row, and road contrast (Part 2).](../../../resources/images/screenshots/orthomosaic/ortho-color-before-after.png)
+
+The published PMTiles archive rendered in the notebook, the same tiles a web map serves:
+
+![In-notebook preview of the published PMTiles orthomosaic: a top-down view of the field, orchard rows, buildings, and road (Part 2).](../../../resources/images/screenshots/orthomosaic/ortho-pmtiles-preview.png)
+
+Finally, the capstone classifies the whole scene into contiguous land-cover regions (vegetation, bare, impervious, dark) with `rst_land_cover`, spectral thresholds beside k-means:
+
+![Land cover over the orthomosaic: spectral fixed-threshold classification (87 regions) beside k-means classification (53 regions), with a vegetation / bare / impervious / dark legend (Part 3).](../../../resources/images/screenshots/orthomosaic/ortho-land-cover.png)
+
+---
+
 ## The notebooks
 
 ### `config_nb` — shared configuration and helpers

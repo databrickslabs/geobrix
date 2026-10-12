@@ -7,6 +7,24 @@ sidebar_label: Wireless Coverage
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+## Executed output — full San Francisco
+
+These screenshots are pulled from the executed [Notebook Series](?flavor=notebooks) run end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks ship the smaller Golden Gate Park demo (`DEMO=True`).
+
+First, the surface stack over all of San Francisco — bare earth (DEM) beside the full surface (DSM), so buildings and canopy read as the difference between them:
+
+![Full San Francisco — DEM (bare earth) vs DSM (surface: buildings + canopy) elevation bands at H3 resolution 10, side by side (Part 3a). The surface model rises above bare earth over downtown and the ridgelines.](../../../resources/images/screenshots/wireless-coverage/wc-full-dem-vs-dsm.png)
+
+Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully summarizes the underlying 1 m pixels — a hex reads as the color of the pixels beneath it:
+
+![Golden Gate Park detail — the 1 m-pixel CHM raster beneath the H3-gridded maximum canopy height, same window and colormap, so a hex reads as the color of the pixels it summarizes (Part 3a).](../../../resources/images/screenshots/wireless-coverage/wc-full-chm-pixel-vs-h3.png)
+
+Finally — zooming to the Golden Gate Park demo, where the ranked sites are legible — Part 4 scores each candidate by how many res-12 cells it can see, so the best sites rise to the top:
+
+![Top-10 tower sites by coverage over Golden Gate Park — each site's res-12 H3 line-of-sight viewshed and 2.5 km buffer, with the sited towers marked (Part 4).](../../../resources/images/screenshots/wireless-coverage/wc-top10-tower-viewsheds.png)
+
+---
+
 <Tabs groupId="wireless-coverage-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP" default>
 
@@ -151,26 +169,6 @@ The series uses the **lightweight tier** — pure Python/PySpark bindings (`data
 :::note Big-data by default
 `DECIMATE=1` keeps **every** LiDAR return (~830 M over San Francisco) — an honest big-data run. Raise `DECIMATE` (e.g. 10) for a fast coarse pass while iterating on the visualization cells; the pipeline is identical either way.
 :::
-
----
-
-## Executed output — full San Francisco
-
-The series runs end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks
-ship the smaller Golden Gate Park demo (`DEMO=True`). A few renders from the executed notebooks — the
-full-SF surfaces first, then the Golden Gate Park detail where the per-pixel and siting views are legible.
-
-First, the surface stack over all of San Francisco — bare earth (DEM) beside the full surface (DSM), so buildings and canopy read as the difference between them:
-
-![Full San Francisco — DEM (bare earth) vs DSM (surface: buildings + canopy) elevation bands at H3 resolution 10, side by side (Part 3a). The surface model rises above bare earth over downtown and the ridgelines.](../../../resources/images/screenshots/wireless-coverage/wc-full-dem-vs-dsm.png)
-
-Zooming into one neighborhood, Part 3a cross-checks that the H3 grid faithfully summarizes the underlying 1 m pixels — a hex reads as the color of the pixels beneath it:
-
-![Golden Gate Park detail — the 1 m-pixel CHM raster beneath the H3-gridded maximum canopy height, same window and colormap, so a hex reads as the color of the pixels it summarizes (Part 3a).](../../../resources/images/screenshots/wireless-coverage/wc-full-chm-pixel-vs-h3.png)
-
-Finally — zooming to the Golden Gate Park demo, where the ranked sites are legible — Part 4 scores each candidate by how many res-12 cells it can see, so the best sites rise to the top:
-
-![Top-10 tower sites by coverage over Golden Gate Park — each site's res-12 H3 line-of-sight viewshed and 2.5 km buffer, with the sited towers marked (Part 4).](../../../resources/images/screenshots/wireless-coverage/wc-top10-tower-viewsheds.png)
 
 ## The notebooks
 

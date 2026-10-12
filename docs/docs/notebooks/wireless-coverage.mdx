@@ -84,16 +84,17 @@ All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_cov
 
 ### Siting
 
-The siting tables are regular Delta tables, overwritten each run. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
+The siting tables are regular Delta tables, overwritten each run. H3-indexed tables (`*_res*`) carry both a BIGINT `cellid` column and a STRING `h3` column (for map tools that query string H3 keys) and are liquid-clustered on the BIGINT cell column for fast spatial queries. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
 
 | Table | Description |
 |---|---|
-| `wc_h3_surf_r13` | H3 res-13 surface bin (DSM max elevation per cell) — finest-resolution blocker surface. |
-| `wc_h3_grnd_r13` | H3 res-13 ground bin (DTM min elevation per cell) — finest-resolution bare-earth base. |
+| `wc_h3_surf_r13` | H3 res-13 surface bin (DSM max elevation per cell) — finest-resolution blocker surface. Columns: `cellid` BIGINT, `h3` STRING, `z` DOUBLE; liquid-clustered on `cellid`. |
+| `wc_h3_grnd_r13` | H3 res-13 ground bin (DTM min elevation per cell) — finest-resolution bare-earth base. Columns: `cellid` BIGINT, `h3` STRING, `z` DOUBLE; liquid-clustered on `cellid`. |
 | `wc_h3_quickpass_res9` | Every res-9 candidate's coarse quick-pass coverage fraction (pre-rule-out screen). |
-| `wc_h3_candidate_sites_res9` | Ranked tower survivors: `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z`. |
-| `wc_h3_coverage_res12` | Per-cell line-of-sight depth at res 12 — how many sited towers can see each cell. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key. |
-| `wc_h3_coverage_top10_res12` | Same, aggregated over only the top-10 sites by coverage. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key. |
+| `wc_h3_candidate_sites_res9` | Ranked tower survivors: `cellid` BIGINT, `h3` STRING, `lon`, `lat`, `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z`; liquid-clustered on `cellid`. |
+| `wc_h3_coverage_res12` | Per-cell line-of-sight depth at res 12 — how many sited towers can see each cell. Columns: `cellid` BIGINT, `h3` STRING, `tower_los_count` LONG, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `cellid`. Suitable for external H3 map layers. |
+| `wc_h3_coverage_top10_res12` | Same, aggregated over only the top-10 sites by coverage. Columns: `cellid` BIGINT, `h3` STRING, `tower_los_count` LONG, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `cellid`. |
+| `wc_h3_site_viewshed_res12` | Per-site fine-resolution viewshed: one row per sited tower + visible cell pair. Columns: `site_cellid` BIGINT, `site_h3` STRING, `cellid` BIGINT, `h3` STRING, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `(site_cellid, cellid)` for per-site lookups and per-cell map tiles. |
 
 ## Deploy and run
 
@@ -109,6 +110,10 @@ The bundle validates and deploys with the committed defaults in `databricks.yml`
 - **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.5.2-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
 
 ## Configuration
+
+:::info Catalog and schema names with hyphens
+Unity Catalog catalog and schema names can include hyphens (e.g. `solutions-catalog-default`, `sdsc-nyc-workshop-2026`). Both the notebook series and the Lakeflow bundle properly quote all identifiers with backticks, so hyphenated names work without issue. If you encounter errors like "invalid identifier," check that your catalog/schema parameters are spelled correctly (case-sensitive).
+:::
 
 Bundle variables (set in `databricks.yml`; override per-workspace in `databricks.override.yml`):
 
@@ -352,8 +357,9 @@ contrasts the two flavors.
 | `wc_rpx_raster_viewshed` / `wc_rpx_h3_viewshed` / `wc_rpx_h3_coverage` / `wc_rpx_comparison` | 03b | Raster-pixel vs H3 viewshed comparison — 1 m-pixel `rst_viewshed_towers` vs res-12 `h3_los_visible`, head-to-head on the same towers. | Notebook-only (no raster-pixel stage in the LDP) |
 | `wc_h3_surf_r13` / `wc_h3_grnd_r13` | 04 | Res-13 surface (DSM max) and ground (DTM min) bins — the finest blocker/base for line-of-sight. | Shared (LDP Siting) |
 | `wc_h3_quickpass_res9` | 04 | Every res-9 candidate's coarse quick-pass coverage fraction (pre-rule-out screen). | Shared (LDP Siting) |
-| `wc_h3_candidate_sites_res9` | 04 | Ranked tower survivors: `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z`. | Shared (LDP Siting) |
-| `wc_h3_coverage_res12` / `wc_h3_coverage_top10_res12` | 04 | Per-cell line-of-sight depth at res 12 (all sites / top-10), H3-indexed, with the res-9 parent join key. | Shared (LDP Siting) |
+| `wc_h3_candidate_sites_res9` | 04 | Ranked tower survivors: `cellid` BIGINT, `h3` STRING, `lon`, `lat`, `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z` (liquid-clustered on `cellid`). | Shared (LDP Siting) |
+| `wc_h3_coverage_res12` / `wc_h3_coverage_top10_res12` | 04 | Per-cell line-of-sight depth at res 12 (all sites / top-10), H3-indexed with `cellid` BIGINT, `h3` STRING columns (liquid-clustered on `cellid`), and the res-9 parent join key. | Shared (LDP Siting) |
+| `wc_h3_site_viewshed_res12` | 04 | Per-site fine-resolution viewshed: one row per sited tower + visible cell pair. Columns: `site_cellid` BIGINT, `site_h3` STRING, `cellid` BIGINT, `h3` STRING (liquid-clustered on `(site_cellid, cellid)` for per-site lookups and per-cell map tiles). | Shared (LDP Siting) |
 | `laz_inventory` | — | *(not generated by the notebook series)* | Lakeflow-only — a Bronze Auto Loader stream; the notebooks read the staged `.laz` directly via `lidar_gbx`. |
 
 ## Key GeoBrix functions shown

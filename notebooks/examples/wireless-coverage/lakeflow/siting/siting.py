@@ -58,6 +58,7 @@ _T_QUICKPASS = "wc_h3_quickpass_res9"
 _T_CANDIDATES = "wc_h3_candidate_sites_res9"
 _T_COVERAGE = "wc_h3_coverage_res12"
 _T_COVERAGE_TOP10 = "wc_h3_coverage_top10_res12"
+_T_SITE_VIEWSHED = "wc_h3_site_viewshed_res12"
 
 
 # --------------------------------------------------------------------------- #
@@ -224,6 +225,26 @@ def _zmap(df):
     }
 
 
+def _h3_cell_cols(schema):
+    """Detect primary H3 cell columns from a schema.
+
+    Returns a list of column names that are:
+    - BIGINT (LongType)
+    - End with "cellid"
+    - Not "parent_cellid"
+
+    Pure function for testing; no Spark session required.
+    """
+    from pyspark.sql.types import LongType
+
+    return [
+        f.name for f in schema.fields
+        if isinstance(f.dataType, LongType)
+        and f.name.endswith("cellid")
+        and f.name != "parent_cellid"
+    ]
+
+
 def _with_join_parent(df, join_res):
     """Add the stable res-join_res parent-cell join key (ports with_join_parent).
 
@@ -239,13 +260,69 @@ def _with_join_parent(df, join_res):
     ).withColumn("parent_cellid_res", F.lit(join_res))
 
 
+def _quote_identifier(name):
+    """Quote an identifier for Spark SQL (escape embedded backticks by doubling)."""
+    if name is None:
+        return None
+    escaped = name.replace("`", "``")
+    return f"`{escaped}`"
+
+
+def _fqn(catalog, schema, name):
+    """Build a fully-qualified table name with properly quoted identifiers."""
+    cat_q = _quote_identifier(catalog)
+    sch_q = _quote_identifier(schema)
+    tbl_q = _quote_identifier(name)
+    return f"{cat_q}.{sch_q}.{tbl_q}"
+
+
 def _write(df, catalog, schema, name):
-    """Overwrite-write ``df`` to the regular table ``catalog.schema.name``."""
-    (
-        df.write.mode("overwrite")
-        .option("overwriteSchema", "true")
-        .saveAsTable(f"{catalog}.{schema}.{name}")
-    )
+    """Overwrite-write ``df`` to a quoted table FQN with H3 clustering.
+
+    Automatically detects primary H3 cell columns (BIGINT, ends with "cellid",
+    not "parent_cellid"), adds STRING h3 twins right after each cell column,
+    and liquid-clusters on the detected cell columns. Tables without cell columns
+    are written unclusttered. Runs OPTIMIZE after clustering.
+
+    Args:
+        df: Spark DataFrame to write.
+        catalog: Catalog name.
+        schema: Schema name.
+        name: Table name.
+    """
+    from pyspark.databricks.sql import functions as DBF
+    from pyspark.sql import functions as F
+
+    fqn = _fqn(catalog, schema, name)
+
+    # Detect primary H3 cell columns
+    cell_cols = _h3_cell_cols(df.schema)
+
+    if cell_cols:
+        # H3 table: add string H3 twins and cluster
+        df_with_h3 = df
+        for cell_col in cell_cols:
+            h3_col_name = cell_col.replace("cellid", "h3")
+            existing_cols = [f.name for f in df_with_h3.schema.fields]
+            if h3_col_name not in existing_cols:
+                df_with_h3 = df_with_h3.withColumn(h3_col_name, DBF.h3_h3tostring(F.col(cell_col)))
+                # Reorder: place h3 col right after cellid
+                cols = [f.name for f in df_with_h3.schema.fields]
+                cellid_idx = cols.index(cell_col)
+                h3_idx = cols.index(h3_col_name)
+                if h3_idx != cellid_idx + 1:
+                    cols.pop(h3_idx)
+                    cols.insert(cellid_idx + 1, h3_col_name)
+                    df_with_h3 = df_with_h3.select(cols)
+
+        # Liquid cluster by BIGINT cell columns; OPTIMIZE to finalize
+        df_with_h3.write.clusterBy(*cell_cols).mode("overwrite") \
+            .option("overwriteSchema", "true").saveAsTable(fqn)
+        df_with_h3.sparkSession.sql(f"OPTIMIZE {fqn}")
+    else:
+        # Non-H3 table: standard write (no clustering)
+        df.write.mode("overwrite") \
+            .option("overwriteSchema", "true").saveAsTable(fqn)
 
 
 # --------------------------------------------------------------------------- #
@@ -298,16 +375,16 @@ def main(argv=None):
     # --- Bin the surfaces to H3 and build the resolution pyramid (nb04 cell
     #     "Bin the surfaces to H3 pixels"). The silver surfaces are already AOI-
     #     scoped by the pipeline (full_aoi), so no tile-window filter is needed. ---
-    dsm = spark.read.table(f"{cat}.{sch}.wc_surface_dsm")
-    dtm = spark.read.table(f"{cat}.{sch}.wc_surface_dtm")
+    dsm = spark.read.table(_fqn(cat, sch, "wc_surface_dsm"))
+    dtm = spark.read.table(_fqn(cat, sch, "wc_surface_dtm"))
 
     surf_r13 = _bin_h3(spark, dsm, "dsm", surface_bin_res, "max")
     _write(surf_r13, cat, sch, _T_SURF_R13)
-    surf_r13 = spark.table(f"{cat}.{sch}.{_T_SURF_R13}")  # materialize bin once
+    surf_r13 = spark.table(_fqn(cat, sch, _T_SURF_R13))  # materialize bin once
 
     grnd_r13 = _bin_h3(spark, dtm, "dtm", surface_bin_res, "min")
     _write(grnd_r13, cat, sch, _T_GRND_R13)
-    grnd_r13 = spark.table(f"{cat}.{sch}.{_T_GRND_R13}")
+    grnd_r13 = spark.table(_fqn(cat, sch, _T_GRND_R13))
 
     # Pyramid: res-13 -> viewshed_res (12) and -> quickpass_res (10), max for the
     # surface blocker, min for the bare-earth base. surf12/grnd12 feed the exact
@@ -360,7 +437,7 @@ def main(argv=None):
     quickpass_df = spark.createDataFrame(
         scored, "lon double, lat double, quick_frac double"
     )
-    _write(quickpass_df, cat, sch, _T_QUICKPASS)
+    _write(quickpass_df, cat, sch, _T_QUICKPASS)  # no clustering (no H3 cell column)
 
     survivors = quick_survivors(scored, quick_thresh)
 
@@ -469,6 +546,19 @@ def main(argv=None):
         .withColumn("res", F.lit(viewshed_res))
     )
     _write(_with_join_parent(cov_top10, join_res), cat, sch, _T_COVERAGE_TOP10)
+
+    # --- Per-site viewshed: one row per sited tower + visible cell pair at fine resolution.
+    #     Each sited tower's full viewshed; useful for interactive drill-downs on a per-tower
+    #     basis. Clusters by site_cellid then cellid for per-site lookups and per-cell map tiles. ---
+    site_viewshed_rows = visible.select("tower_cellid", "cellid").distinct()
+    site_viewshed_df = (
+        site_viewshed_rows
+        .withColumnRenamed("tower_cellid", "site_cellid")
+        .withColumn("res", F.lit(viewshed_res))
+    )
+    # Add the parent join key for consistency with other H3 output tables (keyed by visible cellid)
+    site_viewshed_df = _with_join_parent(site_viewshed_df, join_res)
+    _write(site_viewshed_df, cat, sch, _T_SITE_VIEWSHED)
 
 
 if __name__ == "__main__":

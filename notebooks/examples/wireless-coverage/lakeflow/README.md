@@ -71,24 +71,27 @@ All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_cov
 
 ### Gold
 
+H3-indexed tables carry both BIGINT `cellid` and STRING `h3` columns (for map tools that query string H3 keys) and are liquid-clustered on the BIGINT cell column. All carry the res-9 parent join key (`parent_cellid`, `parent_cellid_res`).
+
 | Table | Description |
 |---|---|
-| `wc_h3_dem_res10` | Bare-earth elevation-band H3 cells (res 10), land-masked, with res-9 parent join key. |
-| `wc_h3_dsm_res10` | Surface elevation-band H3 cells (res 10), land-masked, with res-9 parent join key. |
-| `wc_h3_chm_res10` | Max canopy/structure height per H3 cell (res 10), gap-filled, land-masked, with res-9 parent join key. |
+| `wc_h3_dem_res10` | Bare-earth elevation-band H3 cells (res 10), land-masked. Columns: `cellid` BIGINT, `h3` STRING, `band_level`, `elev_lo`, `elev_hi`, `parent_cellid`, `parent_cellid_res`. |
+| `wc_h3_dsm_res10` | Surface elevation-band H3 cells (res 10), land-masked. Columns: `cellid` BIGINT, `h3` STRING, `band_level`, `elev_lo`, `elev_hi`, `parent_cellid`, `parent_cellid_res`. |
+| `wc_h3_chm_res10` | Max canopy/structure height per H3 cell (res 10), gap-filled, land-masked. Columns: `cellid` BIGINT, `h3` STRING, `max_chm_z`, `parent_cellid`, `parent_cellid_res`. |
 
 ### Siting
 
-Regular Delta tables, overwritten each run. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
+Regular Delta tables, overwritten each run. H3-indexed tables carry both BIGINT `cellid` and STRING `h3` columns and are liquid-clustered on the BIGINT cell column(s) for fast spatial queries. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
 
 | Table | Description |
 |---|---|
-| `wc_h3_surf_r13` | H3 res-13 surface bin (DSM max elevation per cell) — finest-resolution blocker surface for the siting algorithm. |
-| `wc_h3_grnd_r13` | H3 res-13 ground bin (DTM min elevation per cell) — finest-resolution bare-earth base. |
+| `wc_h3_surf_r13` | H3 res-13 surface bin (DSM max elevation per cell) — finest-resolution blocker surface for the siting algorithm. Columns: `cellid` BIGINT, `h3` STRING, `z` DOUBLE; liquid-clustered on `cellid`. |
+| `wc_h3_grnd_r13` | H3 res-13 ground bin (DTM min elevation per cell) — finest-resolution bare-earth base. Columns: `cellid` BIGINT, `h3` STRING, `z` DOUBLE; liquid-clustered on `cellid`. |
 | `wc_h3_quickpass_res9` | Every res-9 candidate's coarse quick-pass coverage fraction (pre-rule-out screen). |
-| `wc_h3_candidate_sites_res9` | Ranked tower survivors: `required_mast` (m), `viewshed_cells`, `viewshed_pct`, `observer_z`, `lon`, `lat`. |
-| `wc_h3_coverage_res12` | Per-cell line-of-sight depth at res 12 (`tower_los_count`) — how many sited towers can see each cell. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key (`parent_cellid`, `parent_cellid_res`). |
-| `wc_h3_coverage_top10_res12` | Same as `wc_h3_coverage_res12`, aggregated over only the top-10 sites by coverage. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key. |
+| `wc_h3_candidate_sites_res9` | Ranked tower survivors: `cellid` BIGINT, `h3` STRING, `lon`, `lat`, `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z`; liquid-clustered on `cellid`. |
+| `wc_h3_coverage_res12` | Per-cell line-of-sight depth at res 12 (`tower_los_count`) — how many sited towers can see each cell. Columns: `cellid` BIGINT, `h3` STRING, `tower_los_count` LONG, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `cellid`. Suitable for external H3 map layers. |
+| `wc_h3_coverage_top10_res12` | Same, aggregated over only the top-10 sites by coverage. Columns: `cellid` BIGINT, `h3` STRING, `tower_los_count` LONG, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `cellid`. Suitable for external H3 map layers. |
+| `wc_h3_site_viewshed_res12` | Per-site fine-resolution viewshed: one row per sited tower + visible cell pair. Columns: `site_cellid` BIGINT, `site_h3` STRING, `cellid` BIGINT, `h3` STRING, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `(site_cellid, cellid)` for per-site lookups and per-cell map tiles. |
 
 ---
 

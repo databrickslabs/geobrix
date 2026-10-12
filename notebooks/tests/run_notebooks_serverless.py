@@ -31,6 +31,7 @@ import base64
 import json
 import os
 import pathlib
+import re
 import sys
 import time
 import tomllib
@@ -155,35 +156,29 @@ def _inject_override_cell(nb_bytes: bytes, assignments: list[str]) -> bytes:
     cell (e.g. ``FORCE_REBUILD=True``) into the UPLOADED copy only — the
     committed notebook keeps its safe defaults.
 
-    Placement: immediately AFTER the last cell that runs ``%run`` (the shared
-    config / user-settings cell), so the override wins over the config's
-    default. If no ``%run`` cell exists, the override is inserted after the
-    first code cell. The assignments are plain ``NAME = VALUE`` Python lines,
-    so they override module-level names regardless of which notebook or series
-    this is (works for lakeflow config cells too).
+    Placement: immediately AFTER the last code cell that assigns one of the
+    target names at top level (``NAME = ...``), so the override also wins over a
+    series notebook's own parameter cell that re-assigns it after ``%run``.
+    Otherwise after the last ``%run`` cell (the shared config include), else
+    after the first code cell, else prepended.
     """
     if not assignments:
         return nb_bytes
     nb = json.loads(nb_bytes)
     cells = nb.get("cells", [])
 
-    # Find the last %run cell (config include); else the first code cell.
-    insert_after = None
-    for idx, cell in enumerate(cells):
-        if cell.get("cell_type") != "code":
-            continue
-        src = cell.get("source", [])
-        if isinstance(src, str):
-            src = src.splitlines(keepends=True)
-        if any(line.lstrip().startswith("%run") for line in src):
-            insert_after = idx
-    if insert_after is None:
-        for idx, cell in enumerate(cells):
-            if cell.get("cell_type") == "code":
-                insert_after = idx
-                break
-    if insert_after is None:
-        insert_after = -1  # empty / markdown-only notebook -> prepend
+    def _src(cell):
+        s = cell.get("source", "")
+        return s if isinstance(s, str) else "".join(s)
+
+    names = "|".join(re.escape(a.split("=", 1)[0].strip()) for a in assignments)
+    assigns = re.compile(rf"^(?:{names})\s*=(?!=)", re.M)
+    code = [i for i, c in enumerate(cells) if c.get("cell_type") == "code"]
+    insert_after = next(
+        (i for i in reversed(code) if assigns.search(_src(cells[i]))),
+        next((i for i in reversed(code) if re.search(r"^\s*%run", _src(cells[i]), re.M)),
+             code[0] if code else -1),
+    )
 
     body = ["# --- validation override (injected by runner; NOT in the committed notebook) ---\n"]
     body += [f"{a}\n" for a in assignments]
@@ -283,6 +278,8 @@ def run_one(
     set_vars: list[str] | None = None,
     hardware_accelerator: str | None = None,
     existing_cluster_id: str | None = None,
+    harvest_outputs: bool = False,
+    profile: str | None = None,
 ) -> bool:
     """Import and run one notebook on Serverless. Returns True on SUCCESS.
 
@@ -290,6 +287,9 @@ def run_one(
     task requests Serverless GPU AI Runtime compute. Deps still come from the
     environment spec (``%pip`` is stripped for jobs, CPU and GPU alike) — pass the
     GPU wheel extra via ``--extras`` (e.g. ``photogrammetry_gpu_env5``).
+
+    If ``harvest_outputs`` is True and the run succeeds, exports the run and harvests
+    cell outputs back into the local .ipynb file.
     """
     from databricks.sdk.service import compute, jobs
 
@@ -404,6 +404,16 @@ def run_one(
     ok = (result == RunResultState.SUCCESS)
     if not ok:
         print(f"!!! STOP — {local_path.name} did not SUCCEED ({result}).", flush=True)
+    elif harvest_outputs:
+        from harvest_notebook_outputs import harvest_run_outputs  # same dir as this script
+
+        try:
+            n, unmatched = harvest_run_outputs(run_id, profile or "oauth-fe", local_path)
+        except Exception as e:  # a requested harvest that fails must fail the run
+            print(f"!!! STOP — output harvest failed ({e.__class__.__name__}: {e})", flush=True)
+            return False
+        print(f"    harvested outputs into {n} cell(s) of {local_path}"
+              + (f"; unmatched local code cells: {unmatched}" if unmatched else ""), flush=True)
     return ok
 
 
@@ -575,6 +585,17 @@ def main() -> int:
             "literal. Repeatable. Applies to every submitted notebook."
         ),
     )
+    parser.add_argument(
+        "--harvest-outputs",
+        dest="harvest_outputs",
+        action="store_true",
+        default=False,
+        help=(
+            "After each successful run, export the run and harvest cell outputs "
+            "back into the local .ipynb file (aligning by source code, not cell index). "
+            "Strips injected %pip cells and override cells; preserves local serialization."
+        ),
+    )
 
     args = parser.parse_args()
 
@@ -644,6 +665,8 @@ def main() -> int:
             set_vars=args.set_vars,
             hardware_accelerator=args.hardware_accelerator,
             existing_cluster_id=args.existing_cluster_id,
+            harvest_outputs=args.harvest_outputs,
+            profile=args.profile,
         )
         if not ok:
             return 1

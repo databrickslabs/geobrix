@@ -26,6 +26,12 @@ bash scripts/commands/gbx-review-round.sh [OPTIONS] [-- <extra isaac args>]
   contents of every changed file, so a review overflows the 200k context window at roughly
   ~150–200 changed files — verified 2026-08-25. Larger scopes tend to fail with "Prompt is
   too long"; the command detects that silent failure and exits non-zero.)
+- `--keep-outputs` — Review changed `.ipynb` files with their stored outputs. By default
+  the command strips them: isaac loads every changed file in full, and one executed
+  notebook's embedded plots (multi-MB base64) can overflow the context window on its own,
+  while outputs aren't reviewable code. Stripping happens in a scratch worktree (outputs
+  cleared on both the base and HEAD side, reviewed with `isaac review --uncommitted`);
+  your checkout is untouched.
 - `--log <path>` — Tee output to a log (`filename` → `test-logs/<name>`).
 - `-h`, `--help` — Show help.
 

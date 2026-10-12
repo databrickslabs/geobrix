@@ -21,6 +21,90 @@ def _load():
 
 
 # --------------------------------------------------------------------------- #
+# Identifier quoting
+# --------------------------------------------------------------------------- #
+
+
+def test_quote_identifier_simple():
+    """Simple identifiers remain unchanged under backticks."""
+    m = _load()
+    assert m._quote_identifier("catalog") == "`catalog`"
+    assert m._quote_identifier("my_schema") == "`my_schema`"
+
+
+def test_quote_identifier_with_hyphen():
+    """Hyphens in names are preserved."""
+    m = _load()
+    assert m._quote_identifier("my-catalog") == "`my-catalog`"
+    assert m._quote_identifier("my-schema-name") == "`my-schema-name`"
+
+
+def test_quote_identifier_escape_backtick():
+    """Embedded backticks are escaped by doubling."""
+    m = _load()
+    assert m._quote_identifier("schema`with`backtick") == "`schema``with``backtick`"
+
+
+def test_fqn_quoting():
+    """FQN properly quotes all three components."""
+    m = _load()
+    fqn = m._fqn("my-catalog", "my-schema", "my-table")
+    # Expected: `my-catalog`.`my-schema`.`my-table`
+    assert fqn == "`my-catalog`.`my-schema`.`my-table`"
+
+
+def test_fqn_with_embedded_backtick():
+    """FQN escapes embedded backticks."""
+    m = _load()
+    fqn = m._fqn("cat`alog", "sch`ema", "tab`le")
+    # Expected: `cat``alog`.`sch``ema`.`tab``le`
+    assert fqn == "`cat``alog`.`sch``ema`.`tab``le`"
+
+
+# --------------------------------------------------------------------------- #
+# H3 cell column detection
+# --------------------------------------------------------------------------- #
+
+
+def test_h3_cell_cols_detects_primary_columns():
+    """Detect primary H3 cellid columns (BIGINT, ends with 'cellid', not 'parent_cellid')."""
+    pytest = __import__("pytest")
+    try:
+        from pyspark.sql.types import StructType, StructField, LongType, DoubleType
+    except ImportError:
+        pytest.skip("pyspark not available")
+
+    m = _load()
+    schema = StructType([
+        StructField("cellid", LongType(), True),
+        StructField("h3", DoubleType(), True),
+        StructField("tower_cellid", LongType(), True),
+        StructField("parent_cellid", LongType(), True),
+        StructField("res", LongType(), True),
+    ])
+    cols = m._h3_cell_cols(schema)
+    # Should detect cellid and tower_cellid, but NOT parent_cellid
+    assert sorted(cols) == ["cellid", "tower_cellid"]
+
+
+def test_h3_cell_cols_excludes_non_long():
+    """Exclude columns that are not LongType even if they end with 'cellid'."""
+    pytest = __import__("pytest")
+    try:
+        from pyspark.sql.types import StructType, StructField, LongType, StringType
+    except ImportError:
+        pytest.skip("pyspark not available")
+
+    m = _load()
+    schema = StructType([
+        StructField("cellid", LongType(), True),
+        StructField("h3", StringType(), True),
+    ])
+    cols = m._h3_cell_cols(schema)
+    assert cols == ["cellid"]
+
+
+# --------------------------------------------------------------------------- #
 # parse_args
 # --------------------------------------------------------------------------- #
 

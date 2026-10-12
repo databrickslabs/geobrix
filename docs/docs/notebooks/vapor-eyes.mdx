@@ -35,7 +35,13 @@ The pipeline and its `land` downloader task both install `geobrix[light_env6,sta
 
 ## How it works: from a raw satellite signal to a leaderboard
 
-![Vapor-Eyes Lakeflow pipeline — five raw sources land on a Volume, become bronze inventory, cascade through silver detection and attribution into gold ranked map-ready tables, and serve an AI/BI dashboard plus a shareable PMTiles map](../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-flow.png)
+The bundle deploys one job, `vapor_eyes_lf_job`, with two tasks: `land` downloads the period's raw files, then `pipeline` refreshes the Lakeflow pipeline over them:
+
+![The vapor_eyes_lf_job run graph in Databricks: the land Python task followed by the vapor_eyes_lf_pipeline pipeline task.](../../../resources/images/screenshots/vapor-eyes/ve-lf-job-run.png)
+
+Opening the pipeline shows the lineage graph Lakeflow derived from the table-to-table dependencies, 34 tables in all. The streaming tables across the top (`s5p_granules`, `wells_raw`, `s2_swir_assets`, `emit_scenes`, `cm_scenes`) are the bronze inventory of what landed; the materialized views below them do the silver detection and attribution and finish in the gold tables the dashboard reads, such as `plume_leaderboard_latest`, `operator_emissions_leaderboard`, and `cm_monitoring_status`, with the PMTiles branch (`portfolio_mvt_tiles` → `pmtiles_shards`) alongside:
+
+![A completed vapor_eyes_lf_pipeline run: streaming bronze tables at the top feeding silver materialized views (s5p_hotspots, emit_plumes, plume_quant, cm_detections, cm_plume_attributed) and gold tables at the bottom, each node with its duration, output record count, expectations, and full-recompute or incremental refresh.](../../../resources/images/screenshots/vapor-eyes/ve-lf-pipeline-run.png)
 
 Every scheduled run turns raw satellite files into one ranked, map-ready answer — *who is leaking methane in the Permian, and where* — through five stages:
 
@@ -46,6 +52,8 @@ Every scheduled run turns raw satellite files into one ranked, map-ready answer 
 5. **Serve** — gold feeds the four-page AI/BI dashboard; a parallel branch folds the same findings into a self-contained PMTiles map you can drop into an app.
 
 Each stage reads only the one before it — declared as table-to-table dependencies, so Lakeflow builds the lineage graph, orders the stages, and recomputes only what changed.
+
+![Vapor-Eyes Lakeflow pipeline — five raw sources land on a Volume, become bronze inventory, cascade through silver detection and attribution into gold ranked map-ready tables, and serve an AI/BI dashboard plus a shareable PMTiles map](../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-flow.png)
 
 ## Spatial functions used
 

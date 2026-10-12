@@ -20,10 +20,20 @@ A scheduled run moves raw `.laz` files through six stages:
 2. **Bronze — inventory** — Auto Loader records one row per `.laz` file as it appears (`laz_inventory`), so re-runs pick up only newly staged data.
 3. **Silver — surface stack** — classified returns are tile-indexed (`wc_lidar_pts`) and binned into 1 m DSM and TIN DTM rasters per tile (`wc_surface_dsm`, `wc_surface_dtm`); `rst_chm` derives the Canopy Height Model (`wc_surface_chm`).
 4. **Gold — H3 grids** — the surfaces are reprojected to EPSG:4326, isobanded, and indexed to H3 cells at resolution 10 (`wc_h3_dem_res10`, `wc_h3_dsm_res10`, `wc_h3_chm_res10`). Each table carries a stable res-9 join key so downstream consumers join on one column.
-5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis: a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors (distributed via `h3_viewshed_towers` — one tower per Spark task, Serverless fan-out). Writes six regular Delta tables.
-6. **Validate** — a final notebook task confirms all six tables are populated and spot-checks key quality assertions.
+5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis: a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors (distributed via `h3_viewshed_towers` — one tower per Spark task, Serverless fan-out). Writes seven regular Delta tables.
+6. **Validate** — a final notebook task confirms all output tables are populated and spot-checks key quality assertions.
 
 Each stage reads only the one before it — declared as table-to-table dependencies — so Lakeflow builds the lineage graph, orders the stages, and recomputes only what changed.
+
+## What a run looks like
+
+The bundle deploys one job, `wireless_coverage_lf_job`, whose four tasks run in sequence — `land` stages the data, `pipeline` refreshes the Lakeflow pipeline, `siting` ranks the tower sites, and `validate` checks the outputs:
+
+![The wireless_coverage_lf_job run graph in Databricks: the land, pipeline, siting, and validate tasks chained left to right, all on Serverless.](../../../../resources/images/screenshots/wireless-coverage/wc-lf-job-run.png)
+
+Opening the `pipeline` task shows the medallion lineage Lakeflow derived from the table-to-table dependencies. On a full San Francisco run, ~817 M classified LiDAR returns (`wc_lidar_pts`) bin into a few hundred 1 m DSM / DTM / CHM surface tiles, which roll up into the res-10 H3 gold grids:
+
+![A full San Francisco wireless_coverage_lf_pipeline run: wc_lidar_pts (817 M records) feeding wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands, and the gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids, each materialized view with its duration, output record count, and expectations.](../../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
 
 ---
 
@@ -46,7 +56,7 @@ databricks bundle  →  wireless_coverage_lf_job
 
 **Task 2 — `pipeline`**: the Lakeflow Declarative Pipeline (`wireless_coverage_lf_pipeline`, `serverless: true`), rooted at `./transformations`. Its environment installs `${var.gbx_wheel}[light_dbr18,vizx]` (the extra matching the Lakeflow DBR-18.3 runtime channel — see the note at the top) as a **single pip dependency entry** (keeping pip's resolver in one pass).
 
-**Task 3 — `siting`**: reads `wc_surface_dsm` and `wc_surface_dtm` from the pipeline, bins them to H3 at multiple resolutions, builds the naive res-9 candidate lattice, rules out weak sites with a coarse quick-pass, then runs exact res-12 H3 line-of-sight viewsheds on survivors via `h3_viewshed_towers` (distributed — one tower per Spark task). Writes six regular Delta tables overwritten each run.
+**Task 3 — `siting`**: reads `wc_surface_dsm` and `wc_surface_dtm` from the pipeline, bins them to H3 at multiple resolutions, builds the naive res-9 candidate lattice, rules out weak sites with a coarse quick-pass, then runs exact res-12 H3 line-of-sight viewsheds on survivors via `h3_viewshed_towers` (distributed — one tower per Spark task). Writes seven regular Delta tables overwritten each run.
 
 ---
 
@@ -71,24 +81,27 @@ All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_cov
 
 ### Gold
 
+H3-indexed tables carry both BIGINT `cellid` and STRING `h3` columns (for map tools that query string H3 keys) and are liquid-clustered on the BIGINT cell column. All carry the res-9 parent join key (`parent_cellid`, `parent_cellid_res`).
+
 | Table | Description |
 |---|---|
-| `wc_h3_dem_res10` | Bare-earth elevation-band H3 cells (res 10), land-masked, with res-9 parent join key. |
-| `wc_h3_dsm_res10` | Surface elevation-band H3 cells (res 10), land-masked, with res-9 parent join key. |
-| `wc_h3_chm_res10` | Max canopy/structure height per H3 cell (res 10), gap-filled, land-masked, with res-9 parent join key. |
+| `wc_h3_dem_res10` | Bare-earth elevation-band H3 cells (res 10), land-masked. Columns: `cellid` BIGINT, `h3` STRING, `band_level`, `elev_lo`, `elev_hi`, `parent_cellid`, `parent_cellid_res`. |
+| `wc_h3_dsm_res10` | Surface elevation-band H3 cells (res 10), land-masked. Columns: `cellid` BIGINT, `h3` STRING, `band_level`, `elev_lo`, `elev_hi`, `parent_cellid`, `parent_cellid_res`. |
+| `wc_h3_chm_res10` | Max canopy/structure height per H3 cell (res 10), gap-filled, land-masked. Columns: `cellid` BIGINT, `h3` STRING, `max_chm_z`, `parent_cellid`, `parent_cellid_res`. |
 
 ### Siting
 
-Regular Delta tables, overwritten each run. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
+Regular Delta tables, overwritten each run. H3-indexed tables carry both BIGINT `cellid` and STRING `h3` columns and are liquid-clustered on the BIGINT cell column(s) for fast spatial queries. Coverage outputs are H3-indexed at resolution 12 and carry the res-9 parent join key.
 
 | Table | Description |
 |---|---|
-| `wc_h3_surf_r13` | H3 res-13 surface bin (DSM max elevation per cell) — finest-resolution blocker surface for the siting algorithm. |
-| `wc_h3_grnd_r13` | H3 res-13 ground bin (DTM min elevation per cell) — finest-resolution bare-earth base. |
+| `wc_h3_surf_r13` | H3 res-13 surface bin (DSM max elevation per cell) — finest-resolution blocker surface for the siting algorithm. Columns: `cellid` BIGINT, `h3` STRING, `z` DOUBLE; liquid-clustered on `cellid`. |
+| `wc_h3_grnd_r13` | H3 res-13 ground bin (DTM min elevation per cell) — finest-resolution bare-earth base. Columns: `cellid` BIGINT, `h3` STRING, `z` DOUBLE; liquid-clustered on `cellid`. |
 | `wc_h3_quickpass_res9` | Every res-9 candidate's coarse quick-pass coverage fraction (pre-rule-out screen). |
-| `wc_h3_candidate_sites_res9` | Ranked tower survivors: `required_mast` (m), `viewshed_cells`, `viewshed_pct`, `observer_z`, `lon`, `lat`. |
-| `wc_h3_coverage_res12` | Per-cell line-of-sight depth at res 12 (`tower_los_count`) — how many sited towers can see each cell. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key (`parent_cellid`, `parent_cellid_res`). |
-| `wc_h3_coverage_top10_res12` | Same as `wc_h3_coverage_res12`, aggregated over only the top-10 sites by coverage. H3-indexed output suitable for external H3 map layers. Carries the res-9 parent join key. |
+| `wc_h3_candidate_sites_res9` | Ranked tower survivors: `cellid` BIGINT, `h3` STRING, `lon`, `lat`, `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z`; liquid-clustered on `cellid`. |
+| `wc_h3_coverage_res12` | Per-cell line-of-sight depth at res 12 (`tower_los_count`) — how many sited towers can see each cell. Columns: `cellid` BIGINT, `h3` STRING, `tower_los_count` LONG, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `cellid`. Suitable for external H3 map layers. |
+| `wc_h3_coverage_top10_res12` | Same, aggregated over only the top-10 sites by coverage. Columns: `cellid` BIGINT, `h3` STRING, `tower_los_count` LONG, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `cellid`. Suitable for external H3 map layers. |
+| `wc_h3_site_viewshed_res12` | Per-site fine-resolution viewshed: one row per sited tower + visible cell pair. Columns: `site_cellid` BIGINT, `site_h3` STRING, `cellid` BIGINT, `h3` STRING, `res` INT, `parent_cellid`, `parent_cellid_res`; liquid-clustered on `(site_cellid, cellid)` for per-site lookups and per-cell map tiles. |
 
 ---
 
@@ -179,7 +192,7 @@ resources:
 
 ## Validation notebook
 
-`validate/validate_wc_lf.ipynb` runs as the final job task after the siting task completes. It reads all six siting output tables, confirms each is non-empty, and prints summary statistics. You can also run it manually from the workspace at any point as a quick sanity check after a fresh deploy or configuration change.
+`validate/validate_wc_lf.ipynb` runs as the final job task after the siting task completes. It reads the pipeline and siting output tables, confirms each is non-empty, checks the H3 tables' `h3` columns and clustering, and prints summary statistics. You can also run it manually from the workspace at any point as a quick sanity check after a fresh deploy or configuration change.
 
 ---
 
@@ -194,6 +207,6 @@ resources:
 | `transformations/bronze_lidar.py` | Auto Loader bronze streaming table (`laz_inventory`). |
 | `transformations/silver_surfaces.py` | Silver materialized views: `wc_lidar_pts`, `wc_surface_dsm`, `wc_surface_dtm`, `wc_surface_chm`. |
 | `transformations/gold_h3_grids.py` | Gold materialized views: `wc_h3_dem_res10`, `wc_h3_dsm_res10`, `wc_h3_chm_res10`. |
-| `siting/siting.py` | Siting task entry point — Part-4 tower viewsheds at scale. Writes all six siting tables. |
+| `siting/siting.py` | Siting task entry point — Part-4 tower viewsheds at scale. Writes all seven siting tables. |
 | `validate/validate_wc_lf.ipynb` | Validation notebook — confirms all output tables are populated. |
 | `tests/` | Unit tests for the siting policy helpers (`quick_survivors`, `required_mast`, `rank_candidates`). |

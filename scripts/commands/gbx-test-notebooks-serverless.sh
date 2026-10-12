@@ -50,6 +50,9 @@ show_help() {
     echo -e "                        DATABRICKS_CONFIG_PROFILE env var)."
     echo -e "  ${GREEN}--poll-secs N${NC}         Polling interval in seconds (default: 20)."
     echo -e "  ${GREEN}--no-strip-pip${NC}        Do NOT strip %%pip/%%restart_python cells."
+    echo -e "  ${GREEN}--harvest-outputs${NC}     After each SUCCESS, export and harvest cell outputs"
+    echo -e "                        back into the local .ipynb (aligns by source, preserves"
+    echo -e "                        serialization, strips injected cells)."
     echo -e "  ${GREEN}--log <path>${NC}          Write output to log (filename → test-logs/<name>)."
     echo -e "  ${GREEN}--help${NC}                This help."
     echo ""
@@ -94,6 +97,10 @@ while [[ $# -gt 0 ]]; do
         --hardware-accelerator)
             RUNNER_ARGS+=("$1" "$2")
             shift 2
+            ;;
+        --harvest-outputs)
+            RUNNER_ARGS+=("$1")
+            shift
             ;;
         *)
             RUNNER_ARGS+=("$1")

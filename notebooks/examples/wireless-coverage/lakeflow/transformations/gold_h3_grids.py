@@ -255,6 +255,7 @@ def wc_dem_isobands():
 @dp.materialized_view(
     name="wc_h3_dem_res10",
     comment="DEM (bare-earth) elevation-band H3 cells (res 10), land-masked, with parent join key.",
+    cluster_by=["cellid"],
 )
 @dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
 def wc_h3_dem_res10():
@@ -273,7 +274,8 @@ def wc_h3_dem_res10():
         .where(F.col("cellid").isNotNull())
         .distinct()
         .withColumn("res", F.lit(c["h3_res"]))
-        .select("cellid", "res", "band_level", "elev_lo", "elev_hi")
+        .withColumn("h3", DBF.h3_h3tostring(F.col("cellid")))
+        .select("cellid", "h3", "res", "band_level", "elev_lo", "elev_hi")
     )
     return _with_join_parent(cells, c["join_res"])
 
@@ -281,6 +283,7 @@ def wc_h3_dem_res10():
 @dp.materialized_view(
     name="wc_h3_dsm_res10",
     comment="DSM (surface incl. buildings/canopy) elevation-band H3 cells (res 10), land-masked, with parent join key.",
+    cluster_by=["cellid"],
 )
 @dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
 def wc_h3_dsm_res10():
@@ -295,12 +298,15 @@ def wc_h3_dsm_res10():
     cells = _surface_to_h3_cells(
         dsm, "dsm", breaks_arr, c["h3_res"], land_wkb, simplify_geom=c["simplify"]
     )
-    return _with_join_parent(cells, c["join_res"])
+    cells_with_h3 = cells.withColumn("h3", DBF.h3_h3tostring(F.col("cellid"))) \
+        .select("cellid", "h3", "res", "band_level", "elev_lo", "elev_hi")
+    return _with_join_parent(cells_with_h3, c["join_res"])
 
 
 @dp.materialized_view(
     name="wc_h3_chm_res10",
     comment="CHM max canopy/structure height per H3 cell (res 10): clamped and land-masked, with parent join key.",
+    cluster_by=["cellid"],
 )
 @dp.expect_or_fail("parent_key", "parent_cellid IS NOT NULL")
 def wc_h3_chm_res10():
@@ -367,6 +373,7 @@ def wc_h3_chm_res10():
     chm_h3 = (
         chm_clean.join(land_cells, "cellid", "inner")
         .withColumn("res", F.lit(h3_res))
-        .select("cellid", "res", "max_chm_z")
+        .withColumn("h3", DBF.h3_h3tostring(F.col("cellid")))
+        .select("cellid", "h3", "res", "max_chm_z")
     )
     return _with_join_parent(chm_h3, c["join_res"])

@@ -7,6 +7,21 @@ sidebar_label: Wireless Coverage
 import Tabs from '@theme/Tabs';
 import TabItem from '@theme/TabItem';
 
+# Wireless Coverage — LiDAR to Tower Siting
+
+Wireless Coverage turns a USGS 3DEP LiDAR point cloud over San Francisco into ranked candidate
+cell-tower sites, using [GeoBrix](https://databrickslabs.github.io/geobrix/) on Databricks: LiDAR
+returns become DSM / DTM / CHM surfaces, the surfaces are indexed to H3, and exact H3
+line-of-sight viewsheds score each candidate site. It comes in two flavors: a **production-ready
+Lakeflow pipeline** that runs the whole flow as a scheduled job, and an **interactive notebook
+series** that walks through each step and the GeoBrix functions behind it.
+
+:::note Requires GeoBrix 0.5.2+
+Both flavors depend on capabilities introduced in the **0.5.2** release — the `lidar_gbx` reader,
+the point-cloud surface functions (`rst_binpoints`, `rst_chm`, `rst_isoband`), and
+`h3_viewshed_towers` — so install GeoBrix **0.5.2 or newer**.
+:::
+
 ## Executed output — full San Francisco
 
 These screenshots are pulled from the executed [Notebook Series](?flavor=notebooks) run end to end over the whole San Francisco AOI (`DEMO=False`); the committed notebooks ship the smaller Golden Gate Park demo (`DEMO=True`).
@@ -54,6 +69,16 @@ A scheduled run takes raw USGS 3DEP LiDAR `.laz` files through six stages:
 6. **Validate** — a final notebook task confirms all output tables are populated and spot-checks quality assertions.
 
 Each stage reads only the one before it — declared as table-to-table dependencies — so Lakeflow builds the lineage graph, runs stages in order, and recomputes only what changed.
+
+## What a run looks like
+
+The bundle deploys one job, `wireless_coverage_lf_job`, whose four tasks run in sequence — `land` stages the data, `pipeline` refreshes the Lakeflow pipeline, `siting` ranks the tower sites, and `validate` checks the outputs:
+
+![The wireless_coverage_lf_job run graph in Databricks: the land, pipeline, siting, and validate tasks chained left to right, all on Serverless.](../../../resources/images/screenshots/wireless-coverage/wc-lf-job-run.png)
+
+Opening the `pipeline` task shows the medallion lineage Lakeflow derived from the table-to-table dependencies. On a full San Francisco run, ~817 M classified LiDAR returns (`wc_lidar_pts`) bin into a few hundred 1 m DSM / DTM / CHM surface tiles, which roll up into the res-10 H3 gold grids:
+
+![A full San Francisco wireless_coverage_lf_pipeline run: wc_lidar_pts (817 M records) feeding wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands, and the gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids, each materialized view with its duration, output record count, and expectations.](../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
 
 ## Table catalog
 

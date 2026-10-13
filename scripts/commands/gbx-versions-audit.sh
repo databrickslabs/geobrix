@@ -96,9 +96,8 @@ PACKAGES=(
     "nbformat:::nbformat(==|_VERSION=|>=):::DBR LTS"
     "nbconvert:::nbconvert(==|_VERSION=|>=):::DBR LTS"
     "pyzmq:::pyzmq(==|_VERSION=):::INTENTIONAL DBR DIVERGENCE — see Dockerfile ZMQ fixes"
-    # Geospatial — geopandas/keplergl not in DBR; geopandas pinned to be pandas-2.2 compatible
+    # Geospatial — geopandas not in DBR; pinned to be pandas-2.2 compatible
     "geopandas:::geopandas(==|_VERSION=):::current stable, compatible with DBR pandas 2.2"
-    "keplergl:::keplergl(==|_VERSION=):::last stable; requires ipywidgets>=7"
 )
 
 print_package() {

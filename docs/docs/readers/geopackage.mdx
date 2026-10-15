@@ -31,7 +31,7 @@ GeoPackage files can contain multiple layers; both tiers (lightweight `gpkg_gbx`
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `chunkSize` | `"10000"` | Records per read batch — Arrow in-memory batching on the single per-file read, not partition splitting. |
+| `chunkSize` | `"10000"` | Features per unit of work. Lightweight: the layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. Heavyweight: each partition reads this many features, so a large file is read in parallel. |
 | `layerNumber` / `layerN` | `"0"` | Layer index to read (0-based) — `layerNumber` (lightweight) / `layerN` (heavyweight). |
 | `layerName` | `""` | Layer name to read; takes precedence over the layer index when set. |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |

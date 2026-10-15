@@ -611,3 +611,107 @@ def test_vector_members_via_shared_core(tmp_path):
     r = vec._GeoJSONReader({"path": str(tmp_path)})
     members = r._members()
     assert members == [str(tmp_path / "a.geojson"), str(tmp_path / "b.json")]
+
+
+# ---------------------------------------------------------------------------
+# Streaming reads + byte-bounded batches (#127)
+# ---------------------------------------------------------------------------
+
+
+def _points_gpkg(path, n):
+    import geopandas as gpd
+    import shapely
+
+    gpd.GeoDataFrame(
+        {"id": list(range(n)), "name": [f"n{i}" for i in range(n)]},
+        geometry=[shapely.Point(i, i) for i in range(n)],
+        crs=4326,
+    ).to_file(path, driver="GPKG")
+    return path
+
+
+def _read_batches(rdr):
+    return [b for p in rdr.partitions() for b in rdr.read(p)]
+
+
+def test_vector_stream_reads_layer_in_chunksize_batches(tmp_path, monkeypatch):
+    """read() streams the layer via pyogrio.open_arrow in chunkSize batches (never a
+    whole-layer read_arrow) and the rows equal a single-batch read."""
+    import pyarrow as pa
+    import pyogrio
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 25)
+    whole = pa.Table.from_batches(_read_batches(vec._GpkgReader({"path": path})))
+
+    def _no_read_arrow(*a, **k):
+        raise AssertionError("read() must stream with open_arrow, not read_arrow")
+
+    monkeypatch.setattr(pyogrio, "read_arrow", _no_read_arrow)
+    batches = _read_batches(vec._GpkgReader({"path": path, "chunkSize": "4"}))
+    assert len(batches) == 7 and all(b.num_rows <= 4 for b in batches)
+    assert pa.Table.from_batches(batches).equals(whole)
+
+
+def test_vector_stream_byte_budget_slices_batches(tmp_path, monkeypatch):
+    """A batch whose variable-width bytes exceed the budget is yielded as several
+    slices: each holds at most the budget (or is a single larger row), rows in order."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 20)
+    whole = pa.Table.from_batches(_read_batches(vec._GpkgReader({"path": path})))
+    monkeypatch.setattr(vec, "_ARROW_BATCH_BYTES_LIMIT", 200)
+    batches = _read_batches(vec._GpkgReader({"path": path}))
+    assert len(batches) > 1
+    for b in batches:
+        var_bytes = sum(
+            pc.sum(pc.binary_length(b.column(c))).as_py() for c in ("name", "geom")
+        )
+        assert b.num_rows == 1 or var_bytes <= 200
+    assert pa.Table.from_batches(batches).equals(whole)
+
+
+def test_vector_stream_byte_budget_applies_in_wkt_mode(tmp_path, monkeypatch):
+    """WKT output is larger than its WKB source, so WKT mode slices on a smaller
+    budget; the decoded geometries match the single-batch read."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 20)
+    opts = {"path": path, "asWKB": "false"}
+    whole = pa.Table.from_batches(_read_batches(vec._GpkgReader(opts)))
+    monkeypatch.setattr(vec, "_ARROW_BATCH_BYTES_LIMIT", 800)
+    batches = _read_batches(vec._GpkgReader(opts))
+    assert len(batches) > 1
+    assert pa.Table.from_batches(batches).equals(whole)
+
+
+def test_vector_stream_value_over_offset_limit_raises(tmp_path, monkeypatch):
+    """A single value too large for a Spark binary/string row fails with a clear
+    error naming the layer, the column and the feature -- before Spark sees it."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 5)
+    monkeypatch.setattr(vec, "_ARROW_OFFSET_LIMIT", 10)
+    with pytest.raises(
+        ValueError, match=r"Feature 0 in layer .* over the 10-byte limit"
+    ):
+        _read_batches(vec._GpkgReader({"path": path}))
+
+
+def test_vector_stream_empty_layer_yields_declared_schema(tmp_path):
+    """An empty layer yields one empty batch carrying the declared schema."""
+    from pyspark.sql.pandas.types import to_arrow_schema
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 3)
+    rdr = vec._GpkgReader({"path": path, "where": "id < 0"})
+    batches = _read_batches(rdr)
+    assert len(batches) == 1 and batches[0].num_rows == 0
+    assert batches[0].schema.names == to_arrow_schema(rdr.schema()).names

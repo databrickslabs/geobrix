@@ -34,7 +34,7 @@ The driver (`GeoJSON`) is preset; there is no `multi` switch — `geojson_gbx` r
 | Option | Default | Description |
 |--------|---------|-------------|
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
-| `chunkSize` | `"10000"` | Arrow batch size for the per-file read; controls in-memory batching, not partition splitting. |
+| `chunkSize` | `"10000"` | Features per streamed batch: the layer is read in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. |
 | `layerNumber` | `"0"` | Layer index to read (0-based). |
 | `layerName` | `""` | Layer name to read; takes precedence over `layerNumber` when set. |
 

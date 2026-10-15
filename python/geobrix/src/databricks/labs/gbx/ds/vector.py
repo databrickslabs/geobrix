@@ -403,6 +403,15 @@ def _geometry_type_of(wkb: bytes) -> str:
 
 _OGR_DOMAIN_META = b"GDAL:OGR:domain_name"
 
+# Arrow Binary/String arrays use 32-bit offsets: one array holds at most this many bytes,
+# and Spark reads every light-reader batch through those types.
+_ARROW_OFFSET_LIMIT = 2**31 - 1
+# Byte budget for the variable-width columns of each yielded batch -- half the offset limit,
+# so a slice never approaches it. WKT output is several times larger than its WKB source, so
+# in WKT mode the budget is divided by _WKT_EXPANSION (measured on the WKB read from the file).
+_ARROW_BATCH_BYTES_LIMIT = 1024**3
+_WKT_EXPANSION = 4
+
 
 def _field_domain_names(arrow_schema) -> Dict[str, str]:
     """{field: domain name} from the ``GDAL:OGR:domain_name`` field metadata that
@@ -562,6 +571,48 @@ def _decode_coded_domain_column(col, coded_domains_mode: str = "code", domain=No
     if domain is not None:
         return _map_codes_to_descriptions(codes, domain)
     return col.dictionary_decode() if is_dict else col
+
+
+def _byte_bounded_slices(batch, budget: int, layer: str, first_feature: int = 0):
+    """Zero-copy row slices of ``batch`` whose variable-width (binary/string) columns
+    together hold at most ``budget`` bytes; a single row larger than the budget gets
+    a slice of its own. Raises ValueError for a value over Arrow's 32-bit offset
+    limit, which no Spark row can hold."""
+    import numpy as np
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    row_bytes = np.zeros(batch.num_rows, dtype=np.int64)
+    for name, col in zip(batch.schema.names, batch.columns):
+        t = col.type
+        if not (
+            pa.types.is_binary(t)
+            or pa.types.is_large_binary(t)
+            or pa.types.is_string(t)
+            or pa.types.is_large_string(t)
+        ):
+            continue
+        lens = pc.binary_length(col).fill_null(0).to_numpy(zero_copy_only=False)
+        over = np.flatnonzero(lens > _ARROW_OFFSET_LIMIT)
+        if over.size:
+            i = int(over[0])
+            raise ValueError(
+                f"Feature {first_feature + i} in layer {layer!r}: column {name!r} holds "
+                f"{int(lens[i]):,} bytes, over the {_ARROW_OFFSET_LIMIT:,}-byte limit of a "
+                "single Spark binary/string value, so it cannot be read."
+            )
+        row_bytes += lens.astype(np.int64)
+
+    if int(row_bytes.sum()) <= budget:
+        yield batch
+        return
+    start, acc = 0, 0
+    for i, b in enumerate(row_bytes.tolist()):
+        if i > start and acc + b > budget:
+            yield batch.slice(start, i - start)
+            start, acc = i, 0
+        acc += b
+    yield batch.slice(start)
 
 
 def _srid_to_crs(srid: str, proj4: str):
@@ -1075,9 +1126,17 @@ class VectorGbxReader(DataSourceReader):
         # single file into feature-offset chunks is counterproductive for these formats:
         # OGR's GeoJSON driver re-parses the ENTIRE FeatureCollection into memory on every
         # open, so N chunks = N full parses (~O(features * chunks) -- this was the dominant
-        # cost). Parallelism comes from reading many files concurrently (one task per file);
-        # within a single read, chunk_size only bounds the Arrow batch size on the yield, not
-        # the parse. Random-access formats (GPKG/FileGDB) are staged to local temp + read whole.
+        # cost). Parallelism comes from reading many files concurrently (one task per file).
+        #
+        # chunkSize semantics (as of fix #127): features per batch during streaming via
+        # pyogrio.open_arrow(batch_size=chunkSize). The layer is streamed in batches, not
+        # loaded whole, so memory per task scales with chunkSize (not layer size). The parse
+        # happens once, incrementally, as batches are consumed. See read() for byte-guard
+        # enforcement (variable-width columns per batch stay <1 GiB).
+        #
+        # Random-access formats (GPKG/FileGDB) are staged to worker-local temp first so GDAL
+        # can seek; the stream happens on the local copy. Streaming bounds memory even for
+        # very large layers (>2 GiB WKB now succeeds with appropriate chunkSize).
         #
         # Layout convention (T8): _members() returns paths sorted alphabetically so
         # partitions are emitted in source-path order. When a worker pulls consecutive
@@ -1102,11 +1161,11 @@ class VectorGbxReader(DataSourceReader):
         ]
 
     def read(self, partition: "_ChunkPartition"):
-        """Arrow-native read: transform the pyogrio Arrow table in Arrow (rename the
-        geometry column, vectorized WKB/WKT, constant srid/proj columns, cast to the
-        declared StructType) and yield pyarrow.RecordBatch objects. No per-row Python
-        tuple construction -- that per-row loop made large reads ~10x slower than the
-        JVM reader.
+        """Arrow-native streaming read: pyogrio.open_arrow yields the layer in batches of
+        ``chunkSize`` features; each batch is cut into byte-bounded slices
+        (_byte_bounded_slices) and each slice transformed on its own (_transform_batch) --
+        the layer is never held whole, so memory scales with chunkSize and no column
+        overflows Arrow's 32-bit offsets. No per-row Python tuple construction.
 
         FILE access mode (``self.access``):
         - ``"auto"`` / ``"fuse"``: reads via FUSE (to_local_path).
@@ -1115,9 +1174,7 @@ class VectorGbxReader(DataSourceReader):
         """
         # managed/external are rejected in __init__; read() always takes the FUSE path.
 
-        import numpy as np
         import pyarrow as pa
-        import shapely
         from pyspark.sql.pandas.types import to_arrow_schema
 
         self._gdal_readonly_safe()
@@ -1125,13 +1182,12 @@ class VectorGbxReader(DataSourceReader):
 
         kw: Dict = {
             "layer": partition.layer,
+            "batch_size": self.chunk_size,  # stream in chunk_size-sized batches
             "skip_features": partition.skip,
             "read_geometry": True,
             "datetime_as_string": False,
+            "use_pyarrow": True,
         }
-        # One partition per file reads the whole member (count==0); max_features is left
-        # unset so OGR parses the file once. (A non-zero count would cap features, but the
-        # planner no longer splits a file into offset chunks -- see partitions().)
         if partition.count:
             kw["max_features"] = partition.count
         if partition.driver:
@@ -1141,85 +1197,108 @@ class VectorGbxReader(DataSourceReader):
             kw["bbox"] = partition.bbox
         if partition.where:
             kw["where"] = partition.where
+
         with self._staged(partition.path) as _p:
-            meta, tbl = pyogrio.read_arrow(_zip_vsi(_p), **kw)
+            # Stream RecordBatches from pyogrio.open_arrow instead of loading the whole
+            # layer into memory with read_arrow. Each batch is processed independently.
+            with pyogrio.open_arrow(_zip_vsi(_p), **kw) as (meta, reader):
+                # With use_pyarrow=True, reader is a pyarrow.RecordBatchReader
 
-        # Arrow table uses 'wkb_geometry' when geometry_name is empty; the declared
-        # schema names the geometry column geometry_name or 'geom_0' (see _geom_name).
-        gcol = meta.get("geometry_name") or "wkb_geometry"
-        out_gname = meta.get("geometry_name") or "geom_0"
-        srid, proj4 = _crs_to_srid_proj(meta.get("crs"))
-        n = tbl.num_rows
+                # Geometry column: Arrow table uses 'wkb_geometry' when geometry_name is empty;
+                # the declared schema names the geometry column geometry_name or 'geom_0'.
+                gcol = meta.get("geometry_name") or "wkb_geometry"
+                out_gname = meta.get("geometry_name") or "geom_0"
+                srid, proj4 = _crs_to_srid_proj(meta.get("crs"))
 
-        # Build the declared output Spark schema from THIS table's field types (so we do
-        # not re-open the file just to compute it): attrs preserved, geom typed by asWKB,
-        # srid/proj string columns -- column NAMES/ORDER match _vector_schema/schema().
-        attr_cols = [c for c in tbl.column_names if c != gcol]
-        # Description mode: every coded field becomes StringType -- the same set
-        # schema() declares (see _description_fields).
-        desc = (
-            self._description_fields(partition.path, tbl.schema)
-            if self.coded_domains == "description"
-            else {}
-        )
-        fields: List[StructField] = [
-            StructField(
-                c,
-                (
-                    StringType()
-                    if c in desc
-                    else _arrow_to_spark(tbl.schema.field(c).type, self.coded_domains)
-                ),
-                True,
+                # Description mode: the coded fields (from the stream schema's domain
+                # metadata) -- computed once, reused for every batch.
+                desc = (
+                    self._description_fields(partition.path, reader.schema)
+                    if self.coded_domains == "description"
+                    else {}
+                )
+
+                # Build the target Spark schema. Use the reader schema to infer attribute
+                # column types, so they match what read() will emit.
+                attr_cols = [c for c in reader.schema.names if c != gcol]
+                fields: List[StructField] = [
+                    StructField(
+                        c,
+                        (
+                            StringType()
+                            if c in desc
+                            else _arrow_to_spark(
+                                reader.schema.field(c).type, self.coded_domains
+                            )
+                        ),
+                        True,
+                    )
+                    for c in attr_cols
+                ]
+                geom_spark = BinaryType() if partition.as_wkb else StringType()
+                fields.append(StructField(out_gname, geom_spark, True))
+                fields.append(StructField(out_gname + "_srid", StringType(), True))
+                fields.append(StructField(out_gname + "_srid_proj", StringType(), True))
+                target = to_arrow_schema(StructType(fields))
+
+                # Stream: each RecordBatch (<= chunkSize features) is cut into byte-bounded
+                # slices BEFORE any transform/cast, so no array -- WKB in, WKT or WKB out --
+                # approaches Arrow's 32-bit offset limit and memory scales with chunkSize.
+                budget = _ARROW_BATCH_BYTES_LIMIT // (
+                    1 if partition.as_wkb else _WKT_EXPANSION
+                )
+                layer_label = partition.layer or str(partition.path)
+                seen = 0
+                yielded = False
+                for batch in reader:
+                    for sl in _byte_bounded_slices(batch, budget, layer_label, seen):
+                        if sl.num_rows:
+                            yield self._transform_batch(
+                                sl,
+                                gcol,
+                                attr_cols,
+                                desc,
+                                target,
+                                partition,
+                                srid,
+                                proj4,
+                            )
+                            yielded = True
+                    seen += batch.num_rows
+                if (
+                    not yielded
+                ):  # empty layer / no matches: one empty batch, declared schema
+                    yield pa.RecordBatch.from_pylist([], schema=target)
+
+    def _transform_batch(
+        self, batch, gcol, attr_cols, desc, target, partition, srid, proj4
+    ):
+        """One streamed slice -> the declared output batch: coded-domain decode, geometry
+        as WKB or WKT (shapely 2.x, vectorized), constant srid/proj columns, cast to the
+        declared Arrow schema."""
+        import numpy as np
+        import pyarrow as pa
+        import shapely
+
+        n = batch.num_rows
+        wkb = batch.column(gcol)
+        if partition.as_wkb:
+            geom_out = wkb.cast(pa.binary())
+        else:
+            wkt = shapely.to_wkt(shapely.from_wkb(wkb.to_numpy(zero_copy_only=False)))
+            geom_out = pa.array(np.asarray(wkt, dtype=object), type=pa.string())
+        cols = [
+            _decode_coded_domain_column(
+                batch.column(c), self.coded_domains, desc.get(c)
             )
             for c in attr_cols
+        ] + [
+            geom_out,
+            pa.array([srid] * n, type=pa.string()),
+            pa.array([proj4] * n, type=pa.string()),
         ]
-        geom_spark = BinaryType() if partition.as_wkb else StringType()
-        fields.append(StructField(out_gname, geom_spark, True))
-        fields.append(StructField(out_gname + "_srid", StringType(), True))
-        fields.append(StructField(out_gname + "_srid_proj", StringType(), True))
-        target = to_arrow_schema(StructType(fields))
-
-        if n == 0:
-            for batch in target.empty_table().to_batches():
-                yield batch
-            return
-
-        # Geometry column: keep WKB binary, or vectorized WKB->WKT (shapely 2.x).
-        wkb_arr = tbl.column(gcol).combine_chunks()
-        if partition.as_wkb:
-            geom_out = wkb_arr.cast(pa.binary())
-        else:
-            geoms = shapely.from_wkb(wkb_arr.to_numpy(zero_copy_only=False))
-            wkt = shapely.to_wkt(geoms)  # None -> None preserved
-            geom_out = pa.array(np.asarray(wkt, dtype=object), type=pa.string())
-
-        srid_out = pa.array([srid] * n, type=pa.string())
-        proj_out = pa.array([proj4] * n, type=pa.string())
-
-        # Decode any dictionary-encoded columns (from coded-value domains)
-        out_cols = [
-            _decode_coded_domain_column(tbl.column(c), self.coded_domains, desc.get(c))
-            for c in attr_cols
-        ] + [geom_out, srid_out, proj_out]
-        out_names = attr_cols + [
-            out_gname,
-            out_gname + "_srid",
-            out_gname + "_srid_proj",
-        ]
-        out_table = pa.Table.from_arrays(
-            [
-                c.combine_chunks() if isinstance(c, pa.ChunkedArray) else c
-                for c in out_cols
-            ],
-            names=out_names,
-        )
-        # Cast to the declared schema's Arrow types for guaranteed PySpark alignment.
-        out = out_table.cast(target, safe=False)
-        # Yield in chunk_size-bounded batches: the file is parsed once (above); chunk_size
-        # only bounds the per-batch row count handed to Spark (memory), not the parse.
-        for batch in out.to_batches(max_chunksize=self.chunk_size):
-            yield batch
+        out = pa.Table.from_arrays(cols, names=target.names).cast(target, safe=False)
+        return out.combine_chunks().to_batches()[0]
 
 
 class VectorGbxDataSource(DataSource):

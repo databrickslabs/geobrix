@@ -190,3 +190,37 @@ def test_custom_kring(spark, custom_registered):
     ring = row["ring"]
     assert ring is not None
     assert len(ring) >= 1
+
+
+def test_custom_geomkringexplode(spark, custom_registered):
+    """custom_geomkringexplode should return a Column."""
+    cx = custom_registered
+    poly_wkb = _polygon_wkb(0.0, 0.0, 30.0, 30.0)
+    grid_df = _make_grid(cx, spark)
+    grid_val = grid_df.first()["grid"]
+
+    df = spark.createDataFrame([(poly_wkb, grid_val)], ["geom", "grid"])
+    # Test that the function returns a Column (can be used in select)
+    result = df.select(
+        cx.custom_geomkringexplode(
+            f.col("geom").cast("binary"), f.col("grid"), 0, 1
+        ).alias("cells")
+    ).collect()
+    assert len(result) >= 0  # Should not error
+
+
+def test_custom_geomkloopexplode(spark, custom_registered):
+    """custom_geomkloopexplode should return a Column."""
+    cx = custom_registered
+    poly_wkb = _polygon_wkb(0.0, 0.0, 30.0, 30.0)
+    grid_df = _make_grid(cx, spark)
+    grid_val = grid_df.first()["grid"]
+
+    df = spark.createDataFrame([(poly_wkb, grid_val)], ["geom", "grid"])
+    # Test that the function returns a Column (can be used in select)
+    result = df.select(
+        cx.custom_geomkloopexplode(
+            f.col("geom").cast("binary"), f.col("grid"), 0, 1
+        ).alias("cells")
+    ).collect()
+    assert len(result) >= 0  # Should not error

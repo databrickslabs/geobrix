@@ -381,3 +381,15 @@ def st_interpolateelevationgeom(
         _col(cell_size_y),
         _mode_col(mode),
     )
+
+
+def st_legacyaswkb(geom: ColLike) -> Column:
+    """Decode a legacy Mosaic geometry struct to ISO WKB (Z + holes preserved).
+
+    Args:
+        geom: Legacy internal-row geometry struct column.
+
+    Returns:
+        Column of BINARY (WKB bytes).
+    """
+    return f.call_function("gbx_st_legacyaswkb", _col(geom))

@@ -322,19 +322,93 @@ def custom_geomkloop(
     )
 
 
-def custom_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_custom_geomkringexplode(geom, grid, res, k). No Column form."""
-    raise NotImplementedError(
-        "Light custom_geomkringexplode is a streaming table function (registered UDTF "
-        "gbx_custom_geomkringexplode): invoke via SQL LATERAL, e.g. "
-        "SELECT t.* FROM <df>, LATERAL gbx_custom_geomkringexplode(...) t."
+def custom_geomkringexplode(
+    geom: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: Optional[ColLike] = None,
+) -> Column:
+    """Generator: explodes geometry-aware k-ring for custom grid into one row per cell.
+
+    Returns all cells reachable from the geometry's covering set in at most ``k``
+    Chebyshev steps, yielding one row per cell with schema ``STRUCT<cellid BIGINT>``.
+
+    Args:
+        geom: Geometry column (WKB bytes or WKT string, native grid CRS).
+        grid: Grid-spec struct column produced by ``custom_grid``.
+        resolution: Resolution level.
+        k: Dilation distance (0 = covering set only).
+        mode: Dilation mode (default ``"boundary-out"``).
+        coverage: Coverage mode (default ``None``; uses Scala default).
+
+    Returns:
+        Generator Column yielding one row per cell.
+    """
+    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    if coverage is None:
+        return f.call_function(
+            "gbx_custom_geomkringexplode",
+            _col(geom),
+            _col(grid),
+            _col(resolution),
+            _col(k),
+            mode_arg,
+        )
+    coverage_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
+    return f.call_function(
+        "gbx_custom_geomkringexplode",
+        _col(geom),
+        _col(grid),
+        _col(resolution),
+        _col(k),
+        mode_arg,
+        coverage_arg,
     )
 
 
-def custom_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_custom_geomkloopexplode(geom, grid, res, k). No Column form."""
-    raise NotImplementedError(
-        "Light custom_geomkloopexplode is a streaming table function (registered UDTF "
-        "gbx_custom_geomkloopexplode): invoke via SQL LATERAL, e.g. "
-        "SELECT t.* FROM <df>, LATERAL gbx_custom_geomkloopexplode(...) t."
+def custom_geomkloopexplode(
+    geom: ColLike,
+    grid: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: Optional[ColLike] = None,
+) -> Column:
+    """Generator: explodes geometry-aware k-loop (hollow ring) for custom grid into one row per cell.
+
+    Returns cells at EXACTLY ``k`` Chebyshev steps from the geometry's covering set,
+    yielding one row per cell with schema ``STRUCT<cellid BIGINT>``.
+
+    Args:
+        geom: Geometry column (WKB bytes or WKT string, native grid CRS).
+        grid: Grid-spec struct column produced by ``custom_grid``.
+        resolution: Resolution level.
+        k: Dilation distance.
+        mode: Dilation mode (default ``"boundary-out"``).
+        coverage: Coverage mode (default ``None``; uses Scala default).
+
+    Returns:
+        Generator Column yielding one row per cell.
+    """
+    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    if coverage is None:
+        return f.call_function(
+            "gbx_custom_geomkloopexplode",
+            _col(geom),
+            _col(grid),
+            _col(resolution),
+            _col(k),
+            mode_arg,
+        )
+    coverage_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
+    return f.call_function(
+        "gbx_custom_geomkloopexplode",
+        _col(geom),
+        _col(grid),
+        _col(resolution),
+        _col(k),
+        mode_arg,
+        coverage_arg,
     )

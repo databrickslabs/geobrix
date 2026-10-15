@@ -151,3 +151,27 @@ def test_quadbin_distance(spark, quadbin_registered):
     ).first()
     assert row["d0"] == 0
     assert row["d1"] == 1
+
+
+def test_quadbin_geomkringexplode(spark, quadbin_registered):
+    """quadbin_geomkringexplode should return a Column."""
+    qx = quadbin_registered
+    wkt = "POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))"
+    df = spark.createDataFrame([(wkt,)], ["geom"])
+    # Test that the function returns a Column (can be used in select)
+    result = df.select(
+        qx.quadbin_geomkringexplode(f.col("geom"), 5, 1).alias("cells")
+    ).collect()
+    assert len(result) >= 0  # Should not error
+
+
+def test_quadbin_geomkloopexplode(spark, quadbin_registered):
+    """quadbin_geomkloopexplode should return a Column."""
+    qx = quadbin_registered
+    wkt = "POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))"
+    df = spark.createDataFrame([(wkt,)], ["geom"])
+    # Test that the function returns a Column (can be used in select)
+    result = df.select(
+        qx.quadbin_geomkloopexplode(f.col("geom"), 5, 1).alias("cells")
+    ).collect()
+    assert len(result) >= 0  # Should not error

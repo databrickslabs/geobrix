@@ -12,7 +12,7 @@ lat, 10)`` or ``quadbin_kring(cell, 1)`` instead of wrapping in ``f.lit``.
 Strings and ``Column`` values pass through unchanged.
 """
 
-from typing import Union
+from typing import Optional, Union
 
 from pyspark.sql import Column, SparkSession
 from pyspark.sql import functions as f
@@ -273,19 +273,85 @@ def quadbin_geomkloop(
     )
 
 
-def quadbin_geomkringexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_quadbin_geomkringexplode(geom, res, k). No Column form."""
-    raise NotImplementedError(
-        "Light quadbin_geomkringexplode is a streaming table function (registered UDTF "
-        "gbx_quadbin_geomkringexplode): invoke via SQL LATERAL, e.g. "
-        "SELECT t.* FROM <df>, LATERAL gbx_quadbin_geomkringexplode(...) t."
+def quadbin_geomkringexplode(
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: Optional[ColLike] = None,
+) -> Column:
+    """Generator: explodes geometry-aware k-ring for quadbin into one row per cell.
+
+    Returns all cells reachable from the geometry's covering set in at most ``k``
+    Chebyshev steps, yielding one row per cell with schema ``STRUCT<cellid BIGINT>``.
+
+    Args:
+        geom: Geometry column (WKT or WKB).
+        resolution: Quadbin zoom level, integer in ``[0, 20]``.
+        k: Ring distance (0 = covering set only).
+        mode: Dilation mode (default ``"boundary-out"``).
+        coverage: Coverage mode (default ``None``; uses Scala default).
+
+    Returns:
+        Generator Column yielding one row per cell.
+    """
+    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    if coverage is None:
+        return f.call_function(
+            "gbx_quadbin_geomkringexplode",
+            _col(geom),
+            _col(resolution),
+            _col(k),
+            mode_arg,
+        )
+    coverage_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
+    return f.call_function(
+        "gbx_quadbin_geomkringexplode",
+        _col(geom),
+        _col(resolution),
+        _col(k),
+        mode_arg,
+        coverage_arg,
     )
 
 
-def quadbin_geomkloopexplode(*args, **kwargs) -> Column:
-    """Streaming UDTF (SQL-LATERAL): SELECT cellid FROM gbx_quadbin_geomkloopexplode(geom, res, k). No Column form."""
-    raise NotImplementedError(
-        "Light quadbin_geomkloopexplode is a streaming table function (registered UDTF "
-        "gbx_quadbin_geomkloopexplode): invoke via SQL LATERAL, e.g. "
-        "SELECT t.* FROM <df>, LATERAL gbx_quadbin_geomkloopexplode(...) t."
+def quadbin_geomkloopexplode(
+    geom: ColLike,
+    resolution: ColLike,
+    k: ColLike,
+    mode: ColLike = "boundary-out",
+    coverage: Optional[ColLike] = None,
+) -> Column:
+    """Generator: explodes geometry-aware k-loop (hollow ring) for quadbin into one row per cell.
+
+    Returns cells at EXACTLY ``k`` Chebyshev steps from the geometry's covering set,
+    yielding one row per cell with schema ``STRUCT<cellid BIGINT>``.
+
+    Args:
+        geom: Geometry column (WKT or WKB).
+        resolution: Quadbin zoom level, integer in ``[0, 20]``.
+        k: Ring distance.
+        mode: Dilation mode (default ``"boundary-out"``). See :func:`quadbin_geomkring`.
+        coverage: Coverage mode (default ``None``; uses Scala default).
+
+    Returns:
+        Generator Column yielding one row per cell.
+    """
+    mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
+    if coverage is None:
+        return f.call_function(
+            "gbx_quadbin_geomkloopexplode",
+            _col(geom),
+            _col(resolution),
+            _col(k),
+            mode_arg,
+        )
+    coverage_arg = coverage if isinstance(coverage, Column) else f.lit(coverage)
+    return f.call_function(
+        "gbx_quadbin_geomkloopexplode",
+        _col(geom),
+        _col(resolution),
+        _col(k),
+        mode_arg,
+        coverage_arg,
     )

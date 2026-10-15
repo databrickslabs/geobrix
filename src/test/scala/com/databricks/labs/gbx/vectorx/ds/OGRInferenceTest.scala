@@ -41,19 +41,57 @@ class OGRInferenceTest extends AnyFunSuite {
         OGR_SchemaInference.getType("Unknown") shouldBe StringType
     }
 
-    test("OGR_SchemaInference should coerce types") {
-        OGR_SchemaInference.coerceTypeList(Seq(IntegerType, LongType)) shouldBe LongType
-        OGR_SchemaInference.coerceTypeList(Seq(IntegerType, DoubleType)) shouldBe DoubleType
-        OGR_SchemaInference.coerceTypeList(Seq(StringType, DoubleType)) shouldBe StringType
-        OGR_SchemaInference.coerceTypeList(Seq(IntegerType, FloatType)) shouldBe FloatType
-        OGR_SchemaInference.coerceTypeList(Seq(ShortType, IntegerType)) shouldBe IntegerType
-        OGR_SchemaInference.coerceTypeList(Seq(ShortType, ShortType)) shouldBe ShortType
-        OGR_SchemaInference.coerceTypeList(Seq(BinaryType, ByteType)) shouldBe BinaryType
-        OGR_SchemaInference.coerceTypeList(Seq(ByteType, ByteType)) shouldBe ByteType
-        OGR_SchemaInference.coerceTypeList(Seq(BooleanType)) shouldBe BooleanType
-        OGR_SchemaInference.coerceTypeList(Seq(DateType, TimestampType)) shouldBe TimestampType
-        OGR_SchemaInference.coerceTypeList(Seq(DateType)) shouldBe DateType
-        OGR_SchemaInference.coerceTypeList(Seq()) shouldBe StringType
+    test("OGR_SchemaInference should declare the OGR field types, not value-inferred ones") {
+        GDALManager.loadSharedObjects(Seq.empty)
+        GDALManager.configureGDAL("/tmp", "/tmp")
+        ogr.RegisterAll()
+
+        // A GeoPackage, so inferSchemaImpl opens it like any reader source. The String
+        // field holds numeric-looking text and the Integer field small values: both
+        // keep their declared types (no string-to-number or int-to-long coercion).
+        val path = java.nio.file.Files.createTempDirectory("ogr_types").resolve("t.gpkg").toString
+        val ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
+        val srs = new SpatialReference(); srs.ImportFromEPSG(4326)
+        val lyr = ds.CreateLayer("t", srs, ogrConstants.wkbPoint)
+        lyr.CreateField(new FieldDefn("code", ogrConstants.OFTString))
+        lyr.CreateField(new FieldDefn("n", ogrConstants.OFTInteger))
+        lyr.CreateField(new FieldDefn("big", ogrConstants.OFTInteger64))
+        for (i <- 0 until 3) {
+            val f = new Feature(lyr.GetLayerDefn())
+            f.SetField(0, s"${100 + i}")
+            f.SetField(1, i)
+            f.SetField(2, i.toLong)
+            f.SetGeometry(ogr.CreateGeometryFromWkt(s"POINT ($i $i)"))
+            lyr.CreateFeature(f)
+        }
+        ds.delete()
+
+        val schema = OGR_SchemaInference.inferSchemaImpl("GPKG", path, Map.empty).get
+        schema("code").dataType shouldBe StringType
+        schema("n").dataType shouldBe IntegerType
+        schema("big").dataType shouldBe LongType
+    }
+
+    test("OGR_SchemaInference should return null for unset and null fields") {
+        GDALManager.loadSharedObjects(Seq.empty)
+        GDALManager.configureGDAL("/tmp", "/tmp")
+        ogr.RegisterAll()
+
+        val lyr = ogr.GetDriverByName("Memory").CreateDataSource("mem_null")
+            .CreateLayer("t", null, ogrConstants.wkbPoint)
+        val types = Seq(
+          ogrConstants.OFTInteger -> IntegerType,
+          ogrConstants.OFTInteger64 -> LongType,
+          ogrConstants.OFTReal -> DoubleType,
+          ogrConstants.OFTString -> StringType,
+          ogrConstants.OFTDate -> DateType
+        )
+        types.zipWithIndex.foreach { case ((t, _), j) => lyr.CreateField(new FieldDefn(s"f$j", t)) }
+        val f = new Feature(lyr.GetLayerDefn())
+        f.SetFieldNull(0) // explicitly NULL; the others are simply unset
+        types.zipWithIndex.foreach { case ((_, dt), j) =>
+            OGR_SchemaInference.getValue(f, j, dt) shouldBe (null: Any)
+        }
     }
 
     test("OGR_SchemaInference should get a field value") {

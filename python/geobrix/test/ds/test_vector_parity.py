@@ -22,11 +22,18 @@ SAMPLE = (
     + "/geobrix-examples"
 )
 
+# (light, heavy, path, heavy options). geojson_ogr defaults to GeoJSONSeq (multi=true);
+# a standard FeatureCollection is read with multi=false, as the reader docs prescribe.
 _CASES = [
-    ("geojson_gbx", "geojson_ogr", f"{SAMPLE}/nyc/boroughs/nyc_boroughs.geojson"),
-    ("shapefile_gbx", "shapefile_ogr", f"{SAMPLE}/nyc/subway/nyc_subway.shp.zip"),
-    ("gpkg_gbx", "gpkg_ogr", f"{SAMPLE}/nyc/geopackage/nyc_complete.gpkg"),
-    ("file_gdb_gbx", "file_gdb_ogr", f"{SAMPLE}/nyc/filegdb/NYC_Sample.gdb.zip"),
+    (
+        "geojson_gbx",
+        "geojson_ogr",
+        f"{SAMPLE}/nyc/boroughs/nyc_boroughs.geojson",
+        {"multi": "false"},
+    ),
+    ("shapefile_gbx", "shapefile_ogr", f"{SAMPLE}/nyc/subway/nyc_subway.shp.zip", {}),
+    ("gpkg_gbx", "gpkg_ogr", f"{SAMPLE}/nyc/geopackage/nyc_complete.gpkg", {}),
+    ("file_gdb_gbx", "file_gdb_ogr", f"{SAMPLE}/nyc/filegdb/NYC_Sample.gdb.zip", {}),
 ]
 
 
@@ -54,13 +61,13 @@ def spark_with_jar():
     yield s
 
 
-@pytest.mark.parametrize("light_fmt,heavy_fmt,path", _CASES)
-def test_vector_reader_parity(spark_with_jar, light_fmt, heavy_fmt, path):
+@pytest.mark.parametrize("light_fmt,heavy_fmt,path,heavy_opts", _CASES)
+def test_vector_reader_parity(spark_with_jar, light_fmt, heavy_fmt, path, heavy_opts):
     if not os.path.exists(path):
         pytest.skip(f"sample not mounted: {path}")
     spark = spark_with_jar
     light = spark.read.format(light_fmt).load(path)
-    heavy = spark.read.format(heavy_fmt).load(path)
+    heavy = spark.read.format(heavy_fmt).options(**heavy_opts).load(path)
     assert [(f.name, f.dataType.simpleString()) for f in light.schema.fields] == [
         (f.name, f.dataType.simpleString()) for f in heavy.schema.fields
     ]
@@ -102,11 +109,6 @@ def test_vector_coded_domain_parity(
     heavy = spark.read.format(heavy_fmt).load(path)
     lrows = [tuple(r) for r in light.select(*_CODED_COLS).collect()]
     hrows = [tuple(r) for r in heavy.select(*_CODED_COLS).collect()]
-    assert len(lrows) == len(hrows)
-    # Compared where the light value is present: the heavy reader currently
-    # returns NULL fields as 0 / "" and OGR Integer as bigint for every integer
-    # field (domain or not) -- a separate cross-tier difference, not domain handling.
-    for lrow, hrow in zip(lrows, hrows):
-        for col, lv, hv in zip(_CODED_COLS, lrow, hrow):
-            if lv is not None:
-                assert lv == hv, (col, lrow, hrow)
+    assert lrows == hrows
+    types = lambda df: [(c, df.schema[c].dataType.simpleString()) for c in _CODED_COLS]
+    assert types(light) == types(heavy)

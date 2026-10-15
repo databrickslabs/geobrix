@@ -1,9 +1,7 @@
 package com.databricks.labs.gbx.vectorx.ds.ogr
 
-import org.apache.spark.sql.catalyst.analysis.TypeCoercion
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types._
-import org.apache.spark.unsafe.types.UTF8String
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.gdal.ogr._
 
@@ -50,52 +48,10 @@ object OGR_SchemaInference extends Serializable {
             case _                => StringType
         }
 
-    /** Infers Spark type from feature field value; coerces to reported OGR type when not String. */
-    private def inferType(feature: Feature, j: Int): DataType = {
-        val field = feature.GetFieldDefnRef(j)
-        val reportedType = getType(field.GetFieldTypeName(field.GetFieldType))
-        val value = feature.GetFieldAsString(j)
-
-        if (value == "") {
-            reportedType
-        } else {
-            val coerceables = Seq(
-              (Try(value.toInt).toOption, IntegerType),
-              (Try(value.toDouble).toOption, DoubleType),
-              (Try(value.toBoolean).toOption, BooleanType),
-              (Try(value.toLong).toOption, LongType),
-              (Try(value.toFloat).toOption, FloatType),
-              (Try(value.toShort).toOption, ShortType),
-              (Try(value.toByte).toOption, ByteType),
-              (Try(DateTimeUtils.stringToDate(UTF8String.fromString(value)).get).toOption, DateType),
-              (Try(DateTimeUtils.stringToTimestampWithoutTimeZone(UTF8String.fromString(value)).get).toOption, TimestampType)
-            ).filter(_._1.isDefined).map(_._2)
-
-            val inferredType = coerceTypeList(coerceables)
-            if (reportedType == StringType && inferredType != StringType) inferredType
-            else TypeCoercion.findTightestCommonType(reportedType, inferredType).getOrElse(StringType)
-        }
-    }
-
-    /** Picks single DataType from list (precedence: String > Long > Double > ... > Date > String fallback). */
-    private[ds] def coerceTypeList(coerceables: Seq[DataType]): DataType = {
-        if (coerceables.isEmpty) StringType
-        else if (coerceables.contains(StringType)) StringType
-        else if (coerceables.contains(LongType)) LongType
-        else if (coerceables.contains(DoubleType)) DoubleType
-        else if (coerceables.contains(FloatType)) FloatType
-        else if (coerceables.contains(IntegerType)) IntegerType
-        else if (coerceables.contains(ShortType)) ShortType
-        else if (coerceables.contains(BinaryType)) BinaryType
-        else if (coerceables.contains(ByteType)) ByteType
-        else if (coerceables.contains(BooleanType)) BooleanType
-        else if (coerceables.contains(TimestampType)) TimestampType
-        else if (coerceables.contains(DateType)) DateType
-        else StringType
-    }
-
-    /** Extracts feature field j as Spark type (dataType); dates/timestamps via getDate/getDateTime. */
+    /** Extracts feature field j as Spark type (dataType); dates/timestamps via getDate/getDateTime.
+      * Unset and NULL fields are null (OGR's GetFieldAs* would return 0 / "" for them). */
     def getValue(feature: Feature, j: Int, dataType: DataType): Any = {
+        if (!feature.IsFieldSetAndNotNull(j)) return null
         dataType match {
             case IntegerType               => feature.GetFieldAsInteger(j)
             case LongType                  => feature.GetFieldAsInteger64(j)
@@ -185,7 +141,7 @@ object OGR_SchemaInference extends Serializable {
         DateTimeUtils.fromJavaTimestamp(datetime)
     }
 
-    /** Builds StructType from feature fields (inferType) plus geom fields (WKT/WKB + srid + proj4). */
+    /** Builds StructType from the declared OGR field types plus geom fields (WKT/WKB + srid + proj4). */
     private def getFeatureSchema(feature: Feature, asWKB: Boolean): StructType = {
         val geomDataType = if (asWKB) BinaryType else StringType
         val fields = (0 until feature.GetFieldCount())
@@ -193,7 +149,7 @@ object OGR_SchemaInference extends Serializable {
                 val field = feature.GetFieldDefnRef(j)
                 val name = field.GetNameRef
                 val fieldName = if (name.isEmpty) f"field_$j" else name
-                StructField(fieldName, inferType(feature, j))
+                StructField(fieldName, getType(field.GetFieldTypeName(field.GetFieldType)))
             }) ++ (0 until feature.GetGeomFieldCount())
             .flatMap(j => {
                 val field = feature.GetGeomFieldDefnRef(j)
@@ -236,7 +192,8 @@ object OGR_SchemaInference extends Serializable {
         values.toArray
     }
 
-    /** Opens layer at path with driverName and options; returns Some(schema) from first feature or None. */
+    /** Opens layer at path with driverName and options; returns Some(schema) from the first feature's
+      * declared field types, or None for an empty layer. */
     def inferSchemaImpl(
         driverName: String,
         path: String,
@@ -245,7 +202,6 @@ object OGR_SchemaInference extends Serializable {
         GDALManager.initOgr()
         val layerN = options.getOrElse("layerNumber", "0").toInt
         val layerName = options.getOrElse("layerName", "")
-        val inferenceLimit = options.getOrElse("inferenceLimit", "100").toInt
         val asWKB = options.getOrElse("asWKB", "true").toBoolean
 
         val dataset = OGR_Driver.open(path, driverName)
@@ -271,32 +227,8 @@ object OGR_SchemaInference extends Serializable {
             return None
         }
 
-        val headSchemaFields = getFeatureSchema(headFeature, asWKB).fields
-        val n = math.min(inferenceLimit, layer.GetFeatureCount()).toInt
-
-        // start from 1 since 1 feature was read already
-        val layerSchema = (1 until n).foldLeft(headSchemaFields) { (schema, _) =>
-            val feature = layer.GetNextFeature()
-
-            // Skip null features (shouldn't happen but defensive programming)
-            if (feature == null) {
-                schema
-            } else {
-                val featureSchema = getFeatureSchema(feature, asWKB)
-                schema.zip(featureSchema.fields).map { case (s, f) =>
-                    (s, f) match {
-                        case (StructField(name, StringType, _, _), StructField(_, dataType, _, _)) =>
-                            StructField(name, dataType, nullable = true)
-                        case (StructField(name, dataType, _, _), StructField(_, StringType, _, _)) =>
-                            StructField(name, dataType, nullable = true)
-                        case (StructField(name, dataType, _, _), StructField(_, dataType2, _, _))  =>
-                            StructField(name, TypeCoercion.findTightestCommonType(dataType2, dataType).getOrElse(StringType), nullable = true)
-                    }
-                }
-            }
-        }
-
-        Some(StructType(layerSchema))
+        // Field types are the layer's declared OGR types, identical for every feature.
+        Some(getFeatureSchema(headFeature, asWKB))
 
     }
 

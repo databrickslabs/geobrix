@@ -2250,7 +2250,7 @@ def run_gpkg_chunksize_sweep(
     """Sweep ``chunkSize`` across GeoPackage FILE reads and confirm fanout-invariance.
 
     GeoPackage is one staged file per partition; ``chunkSize`` + the
-    per-partition ``_VEC_STAGED_FILES`` LRU amortize one open/stage across many
+    per-partition ``_VEC_STAGE`` cache amortize one open/stage across many
     chunk reads — the vector analog of raster multi-window amortization.
     Partition count is file-count bound; it does **not** grow with chunkSize
     (chunkSize is within-task amortization, not a fanout lever).

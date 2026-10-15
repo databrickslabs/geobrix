@@ -4,11 +4,9 @@ typed attributes). Pure-Python / Serverless-safe (no JVM)."""
 
 from __future__ import annotations
 
-import atexit
 import contextlib
 import os
 import shutil
-import threading
 import uuid
 from dataclasses import dataclass
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
@@ -35,72 +33,24 @@ from pyspark.sql.types import (
 )
 
 from databricks.labs.gbx.ds import _scratch
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+from databricks.labs.gbx.pyrx.core.local_temp import StageCache, new_local_temp_dir
 
 # ---------------------------------------------------------------------------
-# Worker-local staging cache (module-level, process-global)
+# Worker-local staging cache (process-global; see local_temp.StageCache)
 # ---------------------------------------------------------------------------
-# Mirrors raster._STAGED_FILES: key = original source path, value = locally-staged path.
-# Guarded by _VEC_STAGE_LOCK for thread safety (multiple Spark tasks in one worker).
-# Staged copies are held for the process lifetime and removed at exit via atexit.
-# This amortizes the staging cost: N partitions of the same source file share one copy.
-_VEC_STAGED_FILES: Dict[str, str] = {}
-_VEC_STAGE_LOCK = threading.Lock()
-_VEC_STAGE_DIR: Optional[str] = None
 
 
-def _ensure_vec_stage_dir() -> str:
-    """Return (creating if needed) the process-wide stage directory. Must be called while holding `_VEC_STAGE_LOCK`."""
-    global _VEC_STAGE_DIR
-    if _VEC_STAGE_DIR is None:
-        _VEC_STAGE_DIR = new_local_temp_dir("gbx_vecstage_")
-        atexit.register(_cleanup_vec_stage_dir)
-    return _VEC_STAGE_DIR
+def _copy_vec_source(source_path: str, local: str) -> None:
+    """Sequential (FUSE-safe) copy of a source file, or a whole ``.gdb`` directory."""
+    if os.path.isdir(source_path):
+        shutil.copytree(source_path, local)
+    else:
+        shutil.copy(source_path, local)
 
 
-def _cleanup_vec_stage_dir() -> None:
-    global _VEC_STAGE_DIR
-    if _VEC_STAGE_DIR and os.path.isdir(_VEC_STAGE_DIR):
-        shutil.rmtree(_VEC_STAGE_DIR, ignore_errors=True)
-        _VEC_STAGE_DIR = None
-
-
-def _get_or_stage_vec(source_path: str) -> str:
-    """Return a worker-local path for *source_path*, staging it if not yet cached.
-
-    For directories (e.g. ``.gdb``), copies the entire directory tree.
-    For regular files, copies the single file.
-
-    The result is cached by source path: multiple partitions targeting the same
-    source file on the same worker process share one staged copy, paying the
-    sequential-copy cost only once.
-
-    Args:
-        source_path: FUSE path to the source file or directory.
-
-    Returns:
-        Absolute local path to the staged copy (file or directory).
-    """
-    with _VEC_STAGE_LOCK:
-        if source_path in _VEC_STAGED_FILES:
-            return _VEC_STAGED_FILES[source_path]
-
-        stage_dir = _ensure_vec_stage_dir()
-        # Use uuid4 to guarantee a collision-free on-disk name even when two
-        # different source paths share the same basename.  The cache key remains
-        # source_path, so a repeat call for the same path returns the cached
-        # entry above and never reaches this branch.
-        basename = os.path.basename(source_path.rstrip("/")) or "vector_src"
-        safe_name = f"{uuid.uuid4().hex}_{basename}"
-        local = os.path.join(stage_dir, safe_name)
-
-        if os.path.isdir(source_path):
-            shutil.copytree(source_path, local)
-        else:
-            shutil.copy(source_path, local)  # sequential read — FUSE-safe
-
-        _VEC_STAGED_FILES[source_path] = local
-        return local
+# GPKG/FileGDB sources need seeked I/O: each is copied to worker-local disk once
+# and shared by every partition of it on the worker, within a bounded cache.
+_VEC_STAGE = StageCache("gbx_vecstage_", _copy_vec_source)
 
 
 # OGR field type (+ subtype) -> Spark type, matching heavy OGR_SchemaInference.getType.
@@ -995,9 +945,9 @@ class VectorGbxReader(DataSourceReader):
 
         For random-access drivers (GPKG, FileGDB), the source is copied to worker-local
         temp via a sequential read (FUSE-safe) so GDAL can do seeked I/O on local disk.
-        The copy is **cached per (process, source path)** via the module-level
-        ``_VEC_STAGED_FILES`` dict: N partitions of the same file share one staged copy,
-        paying the copy cost only once (open amortization).
+        The copy is **cached per (process, source path)** in ``_VEC_STAGE`` (a bounded
+        ``StageCache``): N partitions of the same file share one staged copy, paying
+        the copy cost only once (open amortization).
 
         For sequential drivers (GeoJSON/Shapefile/GeoJSONSeq), the source is yielded
         in-place — no copy is made or cached.
@@ -1005,8 +955,8 @@ class VectorGbxReader(DataSourceReader):
         if not self._needs_stage():
             yield path
             return
-        local = _get_or_stage_vec(path)
-        yield local
+        with _VEC_STAGE.use(path) as local:
+            yield local
 
     def _info_for(self, path: str):
         """Read pyogrio metadata for the given path. Random-access formats are staged
@@ -1135,7 +1085,7 @@ class VectorGbxReader(DataSourceReader):
         #
         # Layout convention (T8): _members() returns paths sorted alphabetically so
         # partitions are emitted in source-path order. When a worker pulls consecutive
-        # tasks from the same source file the per-worker staged-file cache (_VEC_STAGED_FILES)
+        # tasks from the same source file the per-worker staged-file cache (_VEC_STAGE)
         # is reused, paying the copy cost only once per source.
         # To control task parallelism or re-align after a join, use
         #   df.repartition(n, 'path').sortWithinPartitions('path')

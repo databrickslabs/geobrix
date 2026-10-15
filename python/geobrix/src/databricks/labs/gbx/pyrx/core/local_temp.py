@@ -6,12 +6,18 @@ scratch in `ds/_scratch.py` (which stages under a UC Volume). See
 `.claude/rules/writer-scaffolding.md` and the local-temp standardization spec.
 """
 
+import atexit
 import os
 import shutil
 import tempfile
+import threading
 import time
 import unicodedata
+import uuid
 import warnings
+from collections import OrderedDict
+from contextlib import contextmanager
+from typing import Callable, Dict, Optional
 
 #: A write that has not committed within this window is presumed dead; its temp is
 #: reclaimable. The floor is the longest *static* phase of a live write -- the
@@ -95,3 +101,153 @@ def gc_stale_local_temp(
                 shutil.rmtree(p, ignore_errors=True)
         except OSError:
             continue
+
+
+# ---------------------------------------------------------------------------
+# Worker-local staging cache (light readers that need a seekable local copy)
+# ---------------------------------------------------------------------------
+
+_STAGE_CAP_ENV = "GBX_STAGE_CACHE_MB"
+
+
+def _stage_cap_bytes(cache_dir: str, cached_bytes: int) -> int:
+    """Byte cap for one process's staging cache: ``GBX_STAGE_CACHE_MB`` if set,
+    else half the disk space available to the cache (free + already cached)."""
+    raw = os.environ.get(_STAGE_CAP_ENV, "").strip()
+    if raw:
+        return int(float(raw) * 1024 * 1024)
+    return (shutil.disk_usage(cache_dir).free + cached_bytes) // 2
+
+
+def _pid_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except OSError:  # e.g. PermissionError: exists, owned by another user
+        return True
+    return True
+
+
+def _path_bytes(path: str) -> int:
+    if os.path.isdir(path):
+        return sum(
+            os.path.getsize(os.path.join(d, f))
+            for d, _, fs in os.walk(path)
+            for f in fs
+        )
+    return os.path.getsize(path)
+
+
+class StageCache:
+    """Process-wide cache of worker-local copies of source files.
+
+    Readers whose formats need seeked I/O copy each source to local disk once
+    (``copy_fn(src, dst)``, a sequential FUSE-safe copy) and reuse it for every
+    task on the same worker process. Two guards keep the copies from filling the
+    disk:
+
+    - The cache directory is named ``<prefix><pid>_...``. PySpark ends its worker
+      processes with ``os._exit``, so the ``atexit`` cleanup does not run; the first
+      use in each process therefore removes ``<prefix>`` directories whose owner
+      process no longer exists (and unowned ones older than
+      ``DEFAULT_STALE_TTL_SECONDS``).
+    - Cached bytes are capped (``_stage_cap_bytes``): before a new copy is made,
+      the least recently used copies not currently in use are evicted until it
+      fits. A copy in use is never evicted; a source larger than the cap is still
+      staged, alone.
+    """
+
+    def __init__(self, prefix: str, copy_fn: Callable[[str, str], None]):
+        self._prefix = prefix
+        self._copy = copy_fn
+        self._lock = threading.Lock()
+        self._dir: Optional[str] = None
+        self._entries: "OrderedDict[str, str]" = (
+            OrderedDict()
+        )  # source -> local (LRU order)
+        self._sizes: Dict[str, int] = {}
+        self._in_use: Dict[str, int] = {}
+
+    @contextmanager
+    def use(self, source_path: str):
+        """Yield a local copy of ``source_path``; it is not evicted while in use."""
+        with self._lock:
+            local = self._get_or_stage(source_path)
+            self._in_use[source_path] = self._in_use.get(source_path, 0) + 1
+        try:
+            yield local
+        finally:
+            with self._lock:
+                self._in_use[source_path] -= 1
+
+    def _get_or_stage(self, source_path: str) -> str:
+        if source_path in self._entries:
+            self._entries.move_to_end(source_path)
+            return self._entries[source_path]
+        cache_dir = self._ensure_dir()
+        need = _path_bytes(source_path)
+        self._evict_for(need, cache_dir)
+        basename = os.path.basename(source_path.rstrip("/")) or "source"
+        # uuid keeps two sources that share a basename apart on disk.
+        local = os.path.join(cache_dir, f"{uuid.uuid4().hex}_{basename}")
+        self._copy(source_path, local)
+        self._entries[source_path] = local
+        self._sizes[source_path] = need
+        return local
+
+    def _evict_for(self, need: int, cache_dir: str) -> None:
+        cached = sum(self._sizes.values())
+        cap = _stage_cap_bytes(cache_dir, cached)
+        for src in list(self._entries):  # least recently used first
+            if cached + need <= cap:
+                return
+            if self._in_use.get(src, 0):
+                continue
+            local = self._entries.pop(src)
+            cached -= self._sizes.pop(src)
+            self._in_use.pop(src, None)
+            if os.path.isdir(local):
+                shutil.rmtree(local, ignore_errors=True)
+            else:
+                try:
+                    os.remove(local)
+                except OSError:
+                    pass
+
+    def _ensure_dir(self) -> str:
+        if self._dir is None:
+            self._sweep_orphans()
+            self._dir = new_local_temp_dir(f"{self._prefix}{os.getpid()}_")
+            atexit.register(self._cleanup)
+        return self._dir
+
+    def _sweep_orphans(self) -> None:
+        root = local_temp_root()
+        try:
+            names = os.listdir(root)
+        except OSError:
+            return
+        now = time.time()
+        for name in names:
+            if not name.startswith(self._prefix):
+                continue
+            path = os.path.join(root, name)
+            owner = name[len(self._prefix) :].split("_", 1)[0]
+            try:
+                if owner.isdigit():
+                    stale = int(owner) != os.getpid() and not _pid_alive(int(owner))
+                else:
+                    stale = (now - os.path.getmtime(path)) > DEFAULT_STALE_TTL_SECONDS
+                if stale and os.path.isdir(path):
+                    shutil.rmtree(path, ignore_errors=True)
+            except OSError:
+                continue
+
+    def _cleanup(self) -> None:
+        if self._dir and os.path.isdir(self._dir):
+            shutil.rmtree(self._dir, ignore_errors=True)
+        self._dir = None
+        self._entries.clear()
+        self._sizes.clear()
+        self._in_use.clear()

@@ -1,4 +1,5 @@
 import os
+import shutil
 import tempfile
 from pathlib import Path
 
@@ -83,3 +84,99 @@ def test_gc_stale_local_temp_missing_root_no_raise(monkeypatch, tmp_path):
     root = local_temp_root()
     os.rmdir(root)
     gc_stale_local_temp("gbx_gc_")  # no raise
+
+
+# ---------------------------------------------------------------------------
+# StageCache: worker-local copies of source files (light readers)
+# ---------------------------------------------------------------------------
+
+
+def _src(tmp_path, name, nbytes):
+    p = tmp_path / "src" / name
+    p.parent.mkdir(exist_ok=True)
+    p.write_bytes(b"x" * nbytes)
+    return str(p)
+
+
+def _cache(monkeypatch, tmp_path, cap_bytes=None):
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
+    if cap_bytes is not None:
+        monkeypatch.setattr(lt, "_stage_cap_bytes", lambda cache_dir, cached: cap_bytes)
+    copies = []
+
+    def copy(src, dst):
+        copies.append(src)
+        shutil.copy(src, dst)
+
+    return lt.StageCache("gbx_test_stage_", copy), copies
+
+
+def test_stage_cache_reuses_copy_per_source(monkeypatch, tmp_path):
+    cache, copies = _cache(monkeypatch, tmp_path)
+    a = _src(tmp_path, "a.gpkg", 10)
+    with cache.use(a) as p1:
+        assert Path(p1).read_bytes() == b"x" * 10
+    with cache.use(a) as p2:
+        pass
+    assert p1 == p2 and copies == [a]
+
+
+def test_stage_cache_dir_names_owner_and_sweeps_dead_owners(monkeypatch, tmp_path):
+    """The cache dir carries the owning pid; first use removes dirs of the same
+    prefix whose owner process is gone (PySpark ends workers with os._exit, so
+    atexit cleanup never runs) and keeps those of live processes."""
+    root = tmp_path / "root"
+    root.mkdir()
+    dead = root / "gbx_test_stage_999999999_old"
+    live = root / f"gbx_test_stage_{os.getppid()}_other"
+    dead.mkdir()
+    live.mkdir()
+    cache, _ = _cache(monkeypatch, tmp_path)
+    with cache.use(_src(tmp_path, "a.gpkg", 1)) as p:
+        assert os.path.basename(os.path.dirname(p)).startswith(
+            f"gbx_test_stage_{os.getpid()}_"
+        )
+    assert not dead.exists() and live.exists()
+
+
+def test_stage_cache_evicts_least_recently_used_idle_copies(monkeypatch, tmp_path):
+    cache, copies = _cache(monkeypatch, tmp_path, cap_bytes=25)
+    a, b, c = (_src(tmp_path, f"{n}.gpkg", 10) for n in "abc")
+    with cache.use(a) as pa:
+        pass
+    with cache.use(b):
+        pass
+    with cache.use(a):  # a is now most recently used
+        pass
+    with cache.use(c):  # 30 > 25: evict the LRU idle copy (b)
+        pass
+    assert os.path.exists(pa)
+    with cache.use(b):  # b was evicted -> copied again
+        pass
+    assert copies.count(b) == 2 and copies.count(a) == 1
+
+
+def test_stage_cache_never_evicts_a_copy_in_use(monkeypatch, tmp_path):
+    cache, _ = _cache(monkeypatch, tmp_path, cap_bytes=15)
+    a, b = _src(tmp_path, "a.gpkg", 10), _src(tmp_path, "b.gpkg", 10)
+    with cache.use(a) as pa:
+        with cache.use(b) as pb:  # over the cap, but a is in use
+            assert os.path.exists(pa) and os.path.exists(pb)
+
+
+def test_stage_cache_stages_a_source_larger_than_the_cap(monkeypatch, tmp_path):
+    cache, _ = _cache(monkeypatch, tmp_path, cap_bytes=5)
+    with cache.use(_src(tmp_path, "big.gpkg", 50)) as p:
+        assert os.path.getsize(p) == 50
+
+
+def test_stage_cap_honors_env(monkeypatch, tmp_path):
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_STAGE_CACHE_MB", "3")
+    assert lt._stage_cap_bytes(str(tmp_path), 0) == 3 * 1024 * 1024
+    monkeypatch.delenv("GBX_STAGE_CACHE_MB")
+    free = shutil.disk_usage(str(tmp_path)).free
+    assert lt._stage_cap_bytes(str(tmp_path), 100) == (free + 100) // 2

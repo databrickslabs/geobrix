@@ -59,12 +59,10 @@ reader; tracked as a follow-up.
 
 from __future__ import annotations
 
-import atexit
 import json
 import logging
 import os
 import shutil
-import threading
 from typing import Dict, Iterator, Optional, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
@@ -73,7 +71,7 @@ from pyspark.sql.types import StringType, StructField, StructType
 from databricks.labs.gbx.ds import _encode, _listing
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import budget
-from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
+from databricks.labs.gbx.pyrx.core.local_temp import StageCache, new_local_temp_dir
 
 logger = logging.getLogger(__name__)
 
@@ -84,61 +82,28 @@ logger = logging.getLogger(__name__)
 _MAX_TILE_BYTES = 1932735283  # ~1.8 GiB
 
 # ---------------------------------------------------------------------------
-# Worker-local staging cache (module-level, process-global)
+# Worker-local staging cache (process-global; see local_temp.StageCache)
 # ---------------------------------------------------------------------------
-# Key: original source file_path.  Value: absolute local path of the staged copy.
-# Guarded by _STAGE_LOCK for thread safety (multiple Spark tasks in one worker).
-_STAGED_FILES: Dict[str, str] = {}
-_STAGE_LOCK = threading.Lock()
-# Directory holding all staged files for this process — cleaned at exit.
-_STAGE_DIR: Optional[str] = None
 
 
-def _ensure_stage_dir() -> str:
-    global _STAGE_DIR
-    if _STAGE_DIR is None:
-        _STAGE_DIR = new_local_temp_dir("gbx_stage_")
-        atexit.register(_cleanup_stage_dir)
-    return _STAGE_DIR
+def _copy_raster_source(file_path: str, local_path: str) -> None:
+    """Single sequential copy (FUSE-safe: UC Volumes don't support per-window
+    seeks). UC Volume FUSE can transiently raise FileNotFoundError even when the
+    file exists (eventual-consistency lag after write), so retry up to 10x."""
+
+    def _do_stage() -> None:
+        with (
+            open(file_path, "rb") as _src,
+            open(local_path, "wb") as _dst,
+        ):
+            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
+
+    _listing._retry_transient(_do_stage)
 
 
-def _cleanup_stage_dir() -> None:
-    global _STAGE_DIR
-    if _STAGE_DIR and os.path.isdir(_STAGE_DIR):
-        shutil.rmtree(_STAGE_DIR, ignore_errors=True)
-        _STAGE_DIR = None
-
-
-def _get_or_stage_file(file_path: str) -> str:
-    """Return worker-local path for *file_path*, staging it if not yet cached.
-
-    Staging is a single sequential ``shutil.copyfileobj`` pass (FUSE-safe on
-    Databricks UC Volumes which don't support per-window seeks).  The local copy
-    is reused by all tile tasks for the same source on the same worker process.
-    """
-    with _STAGE_LOCK:
-        if file_path in _STAGED_FILES:
-            return _STAGED_FILES[file_path]
-
-        stage_dir = _ensure_stage_dir()
-        # Disambiguate in case two different dirs share a basename.
-        basename = os.path.basename(file_path) or "raster.tif"
-        safe_name = f"{abs(hash(file_path)):x}_{basename}"
-        local_path = os.path.join(stage_dir, safe_name)
-
-        # UC Volume FUSE can transiently raise FileNotFoundError even when the
-        # file exists (eventual-consistency lag after write). Retry up to 10×.
-        def _do_stage() -> None:
-            with (
-                open(file_path, "rb") as _src,
-                open(local_path, "wb") as _dst,
-            ):
-                shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-
-        _listing._retry_transient(_do_stage)
-
-        _STAGED_FILES[file_path] = local_path
-        return local_path
+# Each source is staged once and shared by every tile task for it on the worker,
+# within a bounded cache.
+_RASTER_STAGE = StageCache("gbx_stage_", _copy_raster_source)
 
 
 def _numpy_itemsize(dtype: str) -> int:
@@ -1313,17 +1278,17 @@ class RasterGbxReader(DataSourceReader):
             from databricks.labs.gbx.pyrx.core import _clip
             from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-            local_path = _get_or_stage_file(partition.file_path)
-            with rasterio.Env(GDAL_CACHEMAX=128):
-                with rasterio.open(local_path) as ds:
-                    tile_crs = crs_to_canonical(ds.crs)
-                    _cellid, win_bytes, meta = _encode.encode_tile(
-                        ds,
-                        window=partition.window,
-                        source_path=partition.file_path,
-                        all_parents=partition.all_parents,
-                        tile_format="gtiff",
-                    )
+            with _RASTER_STAGE.use(partition.file_path) as local_path:
+                with rasterio.Env(GDAL_CACHEMAX=128):
+                    with rasterio.open(local_path) as ds:
+                        tile_crs = crs_to_canonical(ds.crs)
+                        _cellid, win_bytes, meta = _encode.encode_tile(
+                            ds,
+                            window=partition.window,
+                            source_path=partition.file_path,
+                            all_parents=partition.all_parents,
+                            tile_format="gtiff",
+                        )
             with MemoryFile(win_bytes) as mf, mf.open() as wds:
                 clipped = _clip.clip_dataset(
                     wds, partition.clip_polygon, partition.clip_crs
@@ -1395,20 +1360,19 @@ class RasterGbxReader(DataSourceReader):
         # ------------------------------------------------------------------
         from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
-        local_path = _get_or_stage_file(partition.file_path)
-
-        with rasterio.Env(GDAL_CACHEMAX=128):
-            with rasterio.open(local_path) as ds:
-                tile_crs = crs_to_canonical(ds.crs)
-                cellid, raster_bytes, meta = _encode.encode_tile(
-                    ds,
-                    window=partition.window,
-                    source_path=partition.file_path,
-                    all_parents=partition.all_parents,
-                    tile_format=partition.emit_fmt,
-                    cog_blocksize=partition.cog_blocksize,
-                    cog_overview_resampling=partition.cog_overview_resampling,
-                )
+        with _RASTER_STAGE.use(partition.file_path) as local_path:
+            with rasterio.Env(GDAL_CACHEMAX=128):
+                with rasterio.open(local_path) as ds:
+                    tile_crs = crs_to_canonical(ds.crs)
+                    cellid, raster_bytes, meta = _encode.encode_tile(
+                        ds,
+                        window=partition.window,
+                        source_path=partition.file_path,
+                        all_parents=partition.all_parents,
+                        tile_format=partition.emit_fmt,
+                        cog_blocksize=partition.cog_blocksize,
+                        cog_overview_resampling=partition.cog_overview_resampling,
+                    )
         # Add tile_size metadata (materialized raster byte length).
         meta["tile_byte_size"] = str(len(raster_bytes))
         # Propagate VRT member tags (cellid, gridSystem) when present.

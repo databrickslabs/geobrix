@@ -259,56 +259,31 @@ def test_members_generic_read_excludes_shapefile_sidecars(tmp_path):
     assert members == [str(d / "roads.shp")], members
 
 
-def test_vector_staging_amortized_once_per_source(tmp_path):
-    """Multiple partitions targeting the same source file stage it only once.
-
-    Verifies the module-level _VEC_STAGED_FILES cache: calling _staged() repeatedly
-    with the same path triggers shutil.copy only on the first call.
-    """
-    import shutil
-
+def test_vector_staging_amortized_once_per_source(tmp_path, monkeypatch):
+    """Wiring: the reader stages through the shared bounded StageCache, so
+    repeated partitions of one source copy it once (the cache itself is tested
+    centrally in test_local_temp.py)."""
     from databricks.labs.gbx.ds import vector as vec_mod
     from databricks.labs.gbx.ds.vector import VectorGbxReader
+    from databricks.labs.gbx.pyrx.core.local_temp import StageCache
 
     p = _gj_file_path(str(tmp_path))
-
-    # Use a plain GeoJSON reader but force _needs_stage=True to test the caching path
-    # without requiring a real GPKG binary.
-    copy_count = {"n": 0}
-    original_copy = shutil.copy
+    copies = []
 
     def counting_copy(src, dst):
-        copy_count["n"] += 1
-        return original_copy(src, dst)
+        copies.append(src)
+        vec_mod._copy_vec_source(src, dst)
 
-    # Clear the module-level cache before the test.
-    saved = dict(vec_mod._VEC_STAGED_FILES)
-    vec_mod._VEC_STAGED_FILES.clear()
-    try:
-        rdr = VectorGbxReader({"path": p})
-
-        with (
-            patch.object(rdr, "_needs_stage", return_value=True),
-            patch(
-                "databricks.labs.gbx.ds.vector.shutil.copy", side_effect=counting_copy
-            ),
-        ):
-            # First staged call: should copy.
-            with rdr._staged(p) as local_a:
-                pass
-            # Second staged call with same path: should HIT the cache, no copy.
-            with rdr._staged(p) as local_b:
-                pass
-
-        assert (
-            copy_count["n"] == 1
-        ), f"Expected shutil.copy called once (amortization), got {copy_count['n']}"
-        # Both calls yielded the same local path from the cache.
-        assert local_a == local_b
-    finally:
-        # Restore the module-level cache to its prior state.
-        vec_mod._VEC_STAGED_FILES.clear()
-        vec_mod._VEC_STAGED_FILES.update(saved)
+    monkeypatch.setattr(
+        vec_mod, "_VEC_STAGE", StageCache("gbx_vecstage_t_", counting_copy)
+    )
+    rdr = VectorGbxReader({"path": p})
+    with patch.object(rdr, "_needs_stage", return_value=True):
+        with rdr._staged(p) as local_a:
+            pass
+        with rdr._staged(p) as local_b:
+            pass
+    assert copies == [p] and local_a == local_b
 
 
 def test_vector_access_invalid_option_raises():

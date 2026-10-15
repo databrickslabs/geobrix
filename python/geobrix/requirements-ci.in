@@ -13,7 +13,7 @@ build==1.6.1
 cython==3.0.12
 numpy==2.1.3
 pyspark==4.0.0
-pytest==8.4.2
+pytest==9.1.1
 pytest-cov==7.1.0
 setuptools==80.9.0  # >= 77.0.0 required to parse PEP 639 SPDX license strings (GDAL 3.11+ sdist's `license = "MIT"`); 74.0.0 fails GDAL build with `project.license must be valid exactly by one definition`
 wheel==0.45.1

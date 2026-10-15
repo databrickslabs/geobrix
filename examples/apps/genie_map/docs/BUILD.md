@@ -3,7 +3,7 @@
 ## Baseline
 
 This app was seeded from the kepler.gl + Databricks AppKit demo prototype
-(`kepler-demo`), copied into `apps/genie_map/` unmodified. Before any changes,
+(`kepler-demo`), copied into `examples/apps/genie_map/` unmodified. Before any changes,
 the copied source was verified to build cleanly so that later build failures are
 attributable to our changes rather than the starting point.
 

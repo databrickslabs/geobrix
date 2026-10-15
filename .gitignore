@@ -64,7 +64,7 @@ test-logs/bench/
 /.isaac/
 /.tmp
 /scratchpad/
-# pytest cache (appears in repo root and under docs/, python/, notebooks/, etc.)
+# pytest cache (appears in repo root and under docs/, python/, examples/, etc.)
 .pytest_cache/
 # Locally-built docs bundle (only the LFS platform tarball in resources/static/ is committed)
 /resources/static/geobrix-docs-*.zip

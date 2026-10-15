@@ -62,9 +62,9 @@ cd "$PROJECT_ROOT" || exit 1
 
 if [[ -n "$LOG_FILE" ]]; then
     mkdir -p "$(dirname "$LOG_FILE")"
-    python3 notebooks/tests/stage_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
+    python3 examples/tests/stage_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
     exit "${PIPESTATUS[0]}"
 else
-    python3 notebooks/tests/stage_wheel_to_volume.py
+    python3 examples/tests/stage_wheel_to_volume.py
     exit $?
 fi

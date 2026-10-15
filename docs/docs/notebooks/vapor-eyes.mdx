@@ -26,7 +26,7 @@ A standalone, production-grade Permian Basin methane-monitoring pipeline: a [Lak
 This is the production counterpart to the notebook series (see the other tab) — same Permian AOI and satellite sources, but running on a schedule with incremental medallion tables instead of one-off notebook outputs, and a fifth data source that makes it a *current* (through 2026) monitoring view rather than a single historical case study.
 
 :::tip View on GitHub
-**[notebooks/examples/vapor-eyes/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes/lakeflow)** — the bundle, pipeline transformations, dashboard, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes/lakeflow/README.md) for deploy/run steps, prerequisites, and good-citizen usage notes for Carbon Mapper.
+**[examples/notebooks/vapor-eyes/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/vapor-eyes/lakeflow)** — the bundle, pipeline transformations, dashboard, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/vapor-eyes/lakeflow/README.md) for deploy/run steps, prerequisites, and good-citizen usage notes for Carbon Mapper.
 :::
 
 :::info Runs on the lightweight tier (Serverless)
@@ -111,7 +111,7 @@ Carbon Mapper detections rolled up to the Permian's named shale plays (EIA) and 
 
 ## Good-citizen use of Carbon Mapper
 
-Carbon Mapper's plume catalog is public-good data, and this example is built to use it responsibly: every user brings their own free token (BYOT — the pipeline is a client, not a redistributor), the dashboard shows a "Data © Carbon Mapper" attribution wherever Carbon Mapper data appears, and no Carbon Mapper data is ever committed to the repository — it's fetched at runtime straight to your own Unity Catalog Volume. This example is scoped for public-good analytics and demonstration; for commercial or low-latency operational use of Carbon Mapper/Tanager data, contact Planet Labs. See the [lakeflow README](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes/lakeflow/README.md#good-citizen-use--carbon-mapper) for the full terms-of-use notes and token setup.
+Carbon Mapper's plume catalog is public-good data, and this example is built to use it responsibly: every user brings their own free token (BYOT — the pipeline is a client, not a redistributor), the dashboard shows a "Data © Carbon Mapper" attribution wherever Carbon Mapper data appears, and no Carbon Mapper data is ever committed to the repository — it's fetched at runtime straight to your own Unity Catalog Volume. This example is scoped for public-good analytics and demonstration; for commercial or low-latency operational use of Carbon Mapper/Tanager data, contact Planet Labs. See the [lakeflow README](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/vapor-eyes/lakeflow/README.md#good-citizen-use--carbon-mapper) for the full terms-of-use notes and token setup.
 
 </TabItem>
 <TabItem value="notebooks" label="Notebook Series">
@@ -119,7 +119,7 @@ Carbon Mapper's plume catalog is public-good data, and this example is built to 
 A five-notebook series that takes one Permian (Delaware Basin) bounding box and works a satellite methane signal from a wide-area screen down to a named operator's candidate well pads — then packages the whole result as a shareable [PMTiles](https://protomaps.com/docs/pmtiles) map. Each tier narrows and sharpens the last, composing GeoBrix functions with Databricks-native `st_*` / `h3_*` spatial SQL.
 
 :::tip View on GitHub
-**[notebooks/examples/vapor-eyes](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/vapor-eyes)** — the five notebooks, shared `config_nb`, and full prerequisites live here. This is an interactive, historical case study you step through cell by cell; the other tab is the scheduled production version.
+**[examples/notebooks/vapor-eyes](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/vapor-eyes)** — the five notebooks, shared `config_nb`, and full prerequisites live here. This is an interactive, historical case study you step through cell by cell; the other tab is the scheduled production version.
 :::
 
 :::info Lightweight tier (Serverless) by default

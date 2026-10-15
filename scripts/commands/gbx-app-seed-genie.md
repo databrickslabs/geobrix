@@ -2,7 +2,7 @@
 
 Seed the Genie Map app's Genie Space with its curated **instructions** and
 **example SQL queries** from the tracked source of truth
-(`apps/genie_map/docs/GENIE-SPACE.md`, Paste blocks A and B), via the Genie
+(`examples/apps/genie_map/docs/GENIE-SPACE.md`, Paste blocks A and B), via the Genie
 spaces update API — no manual UI pasting.
 
 The DAB `genie_space` resource re-applies only the **table set**

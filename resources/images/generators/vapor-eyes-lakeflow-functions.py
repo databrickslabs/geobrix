@@ -198,7 +198,7 @@ def render():
     parts.append(
         f'<text x="{LANDSCAPE_W - PAD}" y="{canvas_h - 14}" text-anchor="end" '
         f'font-size="11" fill="#7A8794">'
-        f'notebooks/examples/vapor-eyes/lakeflow'
+        f'examples/notebooks/vapor-eyes/lakeflow'
         f'</text>'
     )
 

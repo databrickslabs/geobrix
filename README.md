@@ -141,7 +141,7 @@ End-to-end worked examples — runnable **notebook series** and **app** examples
 
 ### Notebooks
 
-End-to-end worked examples live in [`notebooks/examples/`](./notebooks/examples/), with a docs page for each one.
+End-to-end worked examples live in [`examples/notebooks/`](./examples/notebooks/), with a docs page for each one.
 
 | Notebook | Series | What it shows |
 |---|---|---|

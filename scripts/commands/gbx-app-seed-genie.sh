@@ -9,7 +9,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-APP_DIR="$PROJECT_ROOT/apps/genie_map"
+APP_DIR="$PROJECT_ROOT/examples/apps/genie_map"
 
 # The Genie Space id + warehouse are resolved per-environment from `databricks
 # bundle summary` (the space the bundle actually deployed), so this works for
@@ -28,7 +28,7 @@ show_help() {
 $(print_banner "🌱 GeoBrix: Seed Genie Space")
 
 Seed the Genie Space instructions + example SQL queries from the tracked source
-of truth (apps/genie_map/docs/GENIE-SPACE.md, Paste blocks A and B) via the
+of truth (examples/apps/genie_map/docs/GENIE-SPACE.md, Paste blocks A and B) via the
 Genie spaces update API. Run this AFTER every 'gbx:app:deploy' — the DAB
 genie_space resource re-applies only the table set and wipes the curated
 instructions/examples, and this restores them without manual UI pasting.

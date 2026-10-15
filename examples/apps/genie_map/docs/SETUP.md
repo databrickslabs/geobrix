@@ -14,14 +14,14 @@ a heavy run you trigger).
 - Databricks CLI ≥ 0.229, authenticated: `databricks auth login --host <url> --profile <p>`.
 - Node ≥ 20 + pnpm 10 (only for local dev; the app builds on-compute when deployed).
 - The vapor-eyes gold schema must exist and be populated (the Lakeflow SDP under
-  `notebooks/examples/vapor-eyes/lakeflow/` produces it — see that bundle's README).
+  `examples/notebooks/vapor-eyes/lakeflow/` produces it — see that bundle's README).
 
 ## Configure for your workspace
 
 Copy the override template and fill in your workspace host, profile, and warehouse:
 
 ```bash
-cd apps/genie_map
+cd examples/apps/genie_map
 cp databricks.override.yml.example databricks.override.yml   # git-ignored
 # edit host / profile / warehouse_id
 ```
@@ -36,7 +36,7 @@ If your gold tables live in a catalog/schema other than
 ### 1. 🤖 Deploy the bundle (app + Genie Space + resources)
 
 ```bash
-databricks bundle deploy -p <profile>          # from apps/genie_map/
+databricks bundle deploy -p <profile>          # from examples/apps/genie_map/
 ```
 
 This creates/updates: the **Databricks App**, its **OAuth scopes**

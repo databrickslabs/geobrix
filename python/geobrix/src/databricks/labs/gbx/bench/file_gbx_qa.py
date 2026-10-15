@@ -7,7 +7,7 @@ Purpose: surprise detection, NOT polished docs numbers. Correctness + graceful/e
 + the open-amortization win are what matter. Each check emits PASS/FAIL + verbatim
 exception text; the lead interprets surprises.
 
-Run via notebooks/tests/run_file_gbx_qa.py (submits as a Databricks notebook job on the
+Run via examples/tests/run_file_gbx_qa.py (submits as a Databricks notebook job on the
 gbx-file-probe-dbr19 cluster).  On the cluster, call ``run_qa(spark, ...)`` directly.
 
 Standing bench discipline:

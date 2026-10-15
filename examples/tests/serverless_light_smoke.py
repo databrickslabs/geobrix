@@ -8,13 +8,13 @@ JSON verdict. Lets us iterate on the Serverless "halo" install without a
 cluster.
 
 Workspace config (host, profile, Volume coordinates) is read from the gitignored
-notebooks/tests/databricks_cluster_config.env. Auth mints a bearer token from the
+examples/tests/databricks_cluster_config.env. Auth mints a bearer token from the
 configured CLI profile (the SDK's profile refresh is flaky on some networks) and
 uses WorkspaceClient(host, token). With no --spec, the Volume-staged [light_env6] wheel
 path is derived from GBX_BUNDLE_VOLUME_*.
 
 Usage (run under .venv-pyrx which has databricks-sdk):
-    .venv-pyrx/bin/python notebooks/tests/serverless_light_smoke.py \
+    .venv-pyrx/bin/python examples/tests/serverless_light_smoke.py \
         --spec 'geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix-<version>-py3-none-any.whl' \
         --env-version 5
 """
@@ -30,7 +30,7 @@ from databricks.sdk import WorkspaceClient
 from databricks.sdk.service import compute, jobs, workspace
 
 # All workspace-specific values (profile, Volume coordinates) come from the
-# gitignored notebooks/tests/databricks_cluster_config.env so nothing internal is
+# gitignored examples/tests/databricks_cluster_config.env so nothing internal is
 # baked into this committed file. Same env file the bench launcher uses.
 #
 # IMPORTANT: the profile is captured into PROFILE and passed explicitly to

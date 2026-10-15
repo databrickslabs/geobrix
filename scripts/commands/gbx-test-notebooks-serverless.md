@@ -31,7 +31,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 ## Default behavior
 
 Without `--notebook` or `--dir`, runs all four Helios example notebooks
-(`notebooks/examples/helios/0*.ipynb`) with `extras=light_env6,stac,vizx,overture`
+(`examples/notebooks/helios/0*.ipynb`) with `extras=light_env6,stac,vizx,overture`
 and `--extra-deps rich`.
 
 ## Examples
@@ -42,13 +42,13 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh
 
 # Run a single notebook with only the light_env6 extra
 bash scripts/commands/gbx-test-notebooks-serverless.sh \
-  --notebook 'notebooks/examples/helios/01. Vector Engine (MVT).ipynb' \
+  --notebook 'examples/notebooks/helios/01. Vector Engine (MVT).ipynb' \
   --extras light_env6
 
 # Run nb04 with output harvesting, forcing compute with FORCE_RELOAD=True
 bash scripts/commands/gbx-test-notebooks-serverless.sh \
-  --dep-notebook notebooks/examples/wireless-coverage/config_nb.ipynb \
-  --notebook notebooks/examples/wireless-coverage/04_tower_viewsheds.ipynb \
+  --dep-notebook examples/notebooks/wireless-coverage/config_nb.ipynb \
+  --notebook examples/notebooks/wireless-coverage/04_tower_viewsheds.ipynb \
   --set-var FORCE_RELOAD=True \
   --harvest-outputs \
   --extras light_env6,vizx

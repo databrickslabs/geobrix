@@ -1,6 +1,6 @@
 """Wireless Coverage Lakeflow -- siting task (Part 4).
 
-Ports ``notebooks/examples/wireless-coverage/04_tower_viewsheds.ipynb`` into the
+Ports ``examples/notebooks/wireless-coverage/04_tower_viewsheds.ipynb`` into the
 DAB job's post-pipeline ``spark_python_task``. It reads the silver surfaces the
 pipeline published (``wc_surface_dsm`` / ``wc_surface_dtm``), bins them to H3
 "pixels", builds the naive candidate-tower lattice, rules most sites out with a

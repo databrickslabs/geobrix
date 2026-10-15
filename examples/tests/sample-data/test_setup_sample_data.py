@@ -1,9 +1,9 @@
 """
-Tests for notebooks/sample-data/setup_sample_data.ipynb.
+Tests for examples/sample-data/setup_sample_data.ipynb.
 
 When run via gbx-test-notebooks (GBX_NOTEBOOK_TESTS_DOCKER=1), execution tests use
 cell-by-cell (no kernel). Otherwise they use testbook (requires Jupyter kernel).
-Mirrors the notebook path: notebooks/sample-data/ -> notebooks/tests/sample-data/.
+Mirrors the notebook path: examples/sample-data/ -> examples/tests/sample-data/.
 Run: gbx:test:notebooks --path test_setup_sample_data.py
 Requires: pytest, nbformat; testbook only when not using cell-by-cell.
 """

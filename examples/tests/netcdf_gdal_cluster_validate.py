@@ -10,11 +10,11 @@ NodeFileManager and stage the file itself. This submits a one-off job to an exis
 cluster that reads a .nc staged on a /Volumes path (remote -> forces readRemote on
 executors) via netcdf_gdal, and asserts it enumerates the expected grid variables.
 
-Auth/config from notebooks/tests/databricks_cluster_config.env (DATABRICKS_CONFIG_PROFILE,
+Auth/config from examples/tests/databricks_cluster_config.env (DATABRICKS_CONFIG_PROFILE,
 CLUSTER_ID). The .nc must already be staged on a Volume (see NC_VOLUME_DIR below).
 
 Usage:
-    python notebooks/tests/netcdf_gdal_cluster_validate.py
+    python examples/tests/netcdf_gdal_cluster_validate.py
     (reads CLUSTER_ID + DATABRICKS_CONFIG_PROFILE from env; --no-wait to not block)
 """
 import io

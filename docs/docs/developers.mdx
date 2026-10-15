@@ -19,7 +19,7 @@ GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and too
 | `src/test/scala/` | Scala unit and integration tests |
 | `python/geobrix/` | Python package: PySpark bindings and sample-data bundle |
 | `docs/` | Docusaurus site: `docs/` (content), `src/` (components), tests under `docs/tests/` |
-| `notebooks/` | Sample notebooks (e.g. `sample-data/setup_sample_data.ipynb`) and `notebooks/tests/` |
+| `examples/` | Sample notebooks, apps, and tests (`examples/notebooks/`, `examples/apps/`, `examples/sample-data/`, `examples/tests/`) |
 | `scripts/` | CI, Docker, and one-off scripts |
 | `sample-data/` | Scripts and outputs for sample data (host); in-cluster uses Volumes path |
 | `scripts/commands/` | `gbx:*` palette commands — `.md` registration + `.sh` implementation (see below) |
@@ -36,7 +36,7 @@ GeoBrix is a multi-artifact repo: Scala/JVM core, Python bindings, docs, and too
 
 - **Unit tests**: `src/test/scala/` (Scala), `python/geobrix/test/` (Python).
 - **Documentation tests**: `docs/tests/python/`, `docs/tests/scala/` — validate code examples used in the docs; single source of truth.
-- **Notebook tests**: `notebooks/tests/` mirrors `notebooks/`; run via `gbx:*` commands or CI.
+- **Notebook tests**: `examples/tests/` validates examples under `examples/notebooks/` and `examples/apps/`; run via `gbx:*` commands or CI.
 
 Development and CI use a **Docker** image (`geobrix-dev`) for a consistent environment; most `gbx:*` commands run inside that container.
 
@@ -79,7 +79,7 @@ LFS bandwidth and storage come from the `databrickslabs` GitHub org quota. Each 
 
 You can run the **Essential bundle** and **primitive Volume tests** on a live Databricks cluster so that Volume paths are FUSE-mounted and the bundle uses pathlib/shutil only (no Databricks Files API).
 
-**Config** — Copy `notebooks/tests/databricks_cluster_config.example.env` to `notebooks/tests/databricks_cluster_config.env` and set:
+**Config** — Copy `examples/tests/databricks_cluster_config.example.env` to `examples/tests/databricks_cluster_config.env` and set:
 
 - `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or `DATABRICKS_CONFIG_PROFILE`)
 - `CLUSTER_ID` (existing cluster to run the job)

@@ -58,5 +58,5 @@
 <rect x="806.0" y="498.0" rx="13" ry="13" width="152" height="28" fill="#FAECE3" stroke="#D44E12" stroke-opacity="0.35" stroke-width="1"/><text x="882.0" y="516.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#D44E12" font-weight="600">h3_boundaryaswkb</text>
 <rect x="966.0" y="498.0" rx="13" ry="13" width="136" height="28" fill="#FAECE3" stroke="#D44E12" stroke-opacity="0.35" stroke-width="1"/><text x="1034.0" y="516.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#D44E12" font-weight="600">h3_centeraswkb</text>
 <text x="36" y="696" font-size="11" fill="#7A8794">databrickslabs/geobrix &#183; Lakeflow SDP + AI/BI</text>
-<text x="1220" y="696" text-anchor="end" font-size="11" fill="#7A8794">notebooks/examples/vapor-eyes/lakeflow</text>
+<text x="1220" y="696" text-anchor="end" font-size="11" fill="#7A8794">examples/notebooks/vapor-eyes/lakeflow</text>
 </svg>

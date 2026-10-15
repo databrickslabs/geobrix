@@ -6,14 +6,14 @@
 # and stops on the first failure.
 #
 # Default run (no --notebook or --dir): runs all four Helios notebooks
-# (notebooks/examples/helios/0*.ipynb) with --extra-deps rich.
+# (examples/notebooks/helios/0*.ipynb) with --extra-deps rich.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$SCRIPT_DIR/common.sh"
 
-RUNNER_SCRIPT="$PROJECT_ROOT/notebooks/tests/run_notebooks_serverless.py"
+RUNNER_SCRIPT="$PROJECT_ROOT/examples/tests/run_notebooks_serverless.py"
 
 # Prefer the project pyrx venv; fall back to system python3
 if [[ -x "$PROJECT_ROOT/.venv-pyrx/bin/python" ]]; then
@@ -57,17 +57,17 @@ show_help() {
     echo -e "  ${GREEN}--help${NC}                This help."
     echo ""
     echo -e "${CYAN}Default behavior (no --notebook or --dir):${NC}"
-    echo -e "  Runs all four Helios notebooks (notebooks/examples/helios/0*.ipynb)"
+    echo -e "  Runs all four Helios notebooks (examples/notebooks/helios/0*.ipynb)"
     echo -e "  with extras=light_env6,stac,vizx,overture and --extra-deps rich."
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh --log helios.log${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
-    echo -e "    ${YELLOW}--notebook 'notebooks/examples/helios/01. Vector Engine (MVT).ipynb' \\${NC}"
+    echo -e "    ${YELLOW}--notebook 'examples/notebooks/helios/01. Vector Engine (MVT).ipynb' \\${NC}"
     echo -e "    ${YELLOW}--extras light_env6${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-notebooks-serverless.sh \\${NC}"
-    echo -e "    ${YELLOW}--notebook notebooks/examples/orthomosaic/03_segment.ipynb \\${NC}"
+    echo -e "    ${YELLOW}--notebook examples/notebooks/orthomosaic/03_segment.ipynb \\${NC}"
     echo -e "    ${YELLOW}--env-version 5 --extras models_gpu_env5 --hardware-accelerator GPU_1xA10${NC}"
     echo ""
 }
@@ -113,7 +113,7 @@ done
 # If no --notebook or --dir supplied, default to the four Helios notebooks.
 # ---------------------------------------------------------------------------
 if [[ "$HAS_NOTEBOOK_OR_DIR" == false ]]; then
-    HELIOS_DIR="$PROJECT_ROOT/notebooks/examples/helios"
+    HELIOS_DIR="$PROJECT_ROOT/examples/notebooks/helios"
     for nb in "$HELIOS_DIR"/0*.ipynb; do
         RUNNER_ARGS+=("--notebook" "$nb")
     done

@@ -10,12 +10,12 @@ pyproject.toml via tomllib) + any --extra-deps.
 Usage examples:
   # Run the four Helios notebooks with defaults (extras=light_env6,stac,vizx,overture, rich):
   python run_notebooks_serverless.py \\
-    --dir notebooks/examples/helios \\
+    --dir examples/notebooks/helios \\
     --extra-deps rich
 
   # Run a single notebook with only the light_env6 extra:
   python run_notebooks_serverless.py \\
-    --notebook notebooks/examples/helios/01\\ Vector\\ Engine\\(MVT\\).ipynb \\
+    --notebook examples/notebooks/helios/01\\ Vector\\ Engine\\(MVT\\).ipynb \\
     --extras light_env6
 
   # Explicit workspace folder:
@@ -38,7 +38,7 @@ import tomllib
 from typing import Optional
 
 # ---------------------------------------------------------------------------
-# Resolve PROJECT_ROOT (notebooks/tests/ -> notebooks/ -> project root)
+# Resolve PROJECT_ROOT (examples/tests/ -> examples/ -> project root)
 # ---------------------------------------------------------------------------
 _SCRIPT_DIR = pathlib.Path(__file__).resolve().parent
 PROJECT_ROOT = (_SCRIPT_DIR / ".." / "..").resolve()

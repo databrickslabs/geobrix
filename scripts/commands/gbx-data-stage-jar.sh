@@ -33,5 +33,5 @@ PY="python"
 if [ -x "$PROJECT_ROOT/.venv-pyrx/bin/python" ]; then
   PY="$PROJECT_ROOT/.venv-pyrx/bin/python"
 fi
-"$PY" notebooks/tests/stage_jar_to_volume.py
+"$PY" examples/tests/stage_jar_to_volume.py
 exit $?

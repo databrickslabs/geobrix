@@ -12,7 +12,7 @@ The notebooks follow a solar site-selection narrative: identify candidate roofto
 This series is an on-ramp to Databricks-native spatial: NB01 uses the built-in `st_area` / `st_centroid` and `h3_longlatash3` functions directly on the WKB column for roof metrics and H3 density; NB03 bins slope and aspect into H3 cells via `gbx_rst_h3_rastertogridavg` and joins them with native Databricks SQL to produce a `solar_score` — no format conversion required at any step.
 
 :::tip View on GitHub
-**[notebooks/examples/helios](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/helios)** — download the folder and import `config_nb.ipynb` and the four numbered notebooks into your Databricks workspace to run.
+**[examples/notebooks/helios](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/helios)** — download the folder and import `config_nb.ipynb` and the four numbered notebooks into your Databricks workspace to run.
 :::
 
 :::info Runs on the lightweight tier (Serverless) by default

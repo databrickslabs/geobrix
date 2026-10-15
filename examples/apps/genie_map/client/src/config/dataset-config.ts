@@ -2,8 +2,10 @@
  * Dataset configuration — all values driven by VITE_ environment variables
  * so that switching datasets only requires a .env change + Vite restart.
  *
- * See .env.example and notebooks/data_engineering.ipynb for instructions on
- * how to plug in a different dataset (e.g. NYC taxi trips).
+ * See app.yaml (VITE_GOLD_CATALOG / VITE_GOLD_SCHEMA) and the vapor-eyes
+ * Lakeflow pipeline (examples/notebooks/vapor-eyes/lakeflow/) for the data
+ * producer. To plug in a different dataset (e.g. NYC taxi trips), update
+ * the catalog/schema references and the table names in genie_space.geniespace.json.
  */
 
 /** Fully-qualified Databricks table name (sent as IDENTIFIER() SQL param).

@@ -202,10 +202,10 @@ All non-customer-facing Python installs in the repo are hash-pinned:
 |---|---|---|
 | CI (scala_build, python_build) | `python/geobrix/requirements-ci.in` | `python/geobrix/requirements-ci.txt` |
 | Dev container (geobrix-dev) | `python/geobrix/requirements-dev-container.in` | `python/geobrix/requirements-dev-container.txt` |
-| Notebook test harness (gbx:test:notebooks) | `notebooks/tests/requirements.in` | `notebooks/tests/requirements.txt` |
+| Notebook test harness (gbx:test:notebooks) | `examples/tests/requirements.in` | `examples/tests/requirements.txt` |
 
 Intentionally NOT hash-pinned (per maintainer policy):
-- `%pip install` cells inside `notebooks/examples/**/*.ipynb` — customer-facing content.
+- `%pip install` cells inside `examples/notebooks/**/*.ipynb` — customer-facing content.
 - Code examples in `docs/docs/**/*.mdx` — illustrative for customers.
 - The published wheel's loose `pyspark>=4.0.0` in `python/geobrix/pyproject.toml` — downstream consumers need flexibility.
 
@@ -285,7 +285,7 @@ harness) are **tracked and deferred to the DBR base image**, not re-assessed per
 release.
 
 As of **2026-09-27**: 0 hard blockers for the 0.5.2 release.  274 of 353 open Dependabot
-alerts (78%) are in three pure-noise manifests (`apps/genie_map/pnpm-lock.yaml`,
+alerts (78%) are in three pure-noise manifests (`examples/apps/genie_map/pnpm-lock.yaml`,
 `requirements-dev-container.txt`, `docs/package-lock.json`) — none shipped in the wheel
 or JAR.
 

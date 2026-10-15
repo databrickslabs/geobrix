@@ -21,7 +21,7 @@ show_help() {
     echo -e "  ${GREEN}--debug${NC}    With --local: enable GBX_BUNDLE_DEBUG."
     echo ""
     echo -e "${CYAN}Config:${NC}"
-    echo -e "  Copy ${YELLOW}notebooks/tests/databricks_cluster_config.example.env${NC} to ${YELLOW}notebooks/tests/databricks_cluster_config.env${NC}"
+    echo -e "  Copy ${YELLOW}examples/tests/databricks_cluster_config.example.env${NC} to ${YELLOW}examples/tests/databricks_cluster_config.env${NC}"
     echo -e "  Set: ${GREEN}DATABRICKS_CONFIG_PROFILE${NC} (preferred, e.g. oauth-fe), CLUSTER_ID, GBX_BUNDLE_VOLUME_*"
     echo -e "  ${YELLOW}DATABRICKS_HOST + DATABRICKS_TOKEN also work, but they are global and override${NC}"
     echo -e "  ${YELLOW}any --profile for every SDK/CLI call in the shell — prefer the profile.${NC}"
@@ -61,7 +61,7 @@ done
 cd "$PROJECT_ROOT" || exit 1
 
 if [[ "$MODE" == "cluster" ]]; then
-    python notebooks/tests/push_and_run_bundle_on_cluster.py $NO_WAIT
+    python examples/tests/push_and_run_bundle_on_cluster.py $NO_WAIT
     exit $?
 fi
 
@@ -69,5 +69,5 @@ export GBX_NOTEBOOK_TESTS_ALLOW_HOST=1
 [[ -n "$DEBUG" ]] && export GBX_BUNDLE_DEBUG=1
 PYTEST_OPTS="-s -v"
 [[ -n "$DEBUG" ]] && PYTEST_OPTS="-s -vv"
-python -m pytest notebooks/tests/test_bundle_on_databricks.py $PYTEST_OPTS
+python -m pytest examples/tests/test_bundle_on_databricks.py $PYTEST_OPTS
 exit $?

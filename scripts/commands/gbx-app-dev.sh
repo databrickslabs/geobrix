@@ -8,7 +8,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 # Source common utilities
 source "$SCRIPT_DIR/common.sh"
 
-APP_DIR="$PROJECT_ROOT/apps/genie_map"
+APP_DIR="$PROJECT_ROOT/examples/apps/genie_map"
 ENV_FILE="$APP_DIR/databricks.env"
 
 # Help message
@@ -25,7 +25,7 @@ OPTIONS:
     --help, -h    Display this help message
 
 NOTES:
-    - Requires apps/genie_map/databricks.env (copy from databricks.env.example
+    - Requires examples/apps/genie_map/databricks.env (copy from databricks.env.example
       and fill it in). It is sourced into the shell so Vite's loadEnv('') and
       the server pick up the vars.
     - Runs 'pnpm install' automatically if node_modules is missing.
@@ -54,7 +54,7 @@ done
 cd "$APP_DIR" || exit 1
 
 # Require + source the populated env file
-[ -f "$ENV_FILE" ] || { echo "❌ apps/genie_map/databricks.env missing — copy databricks.env.example and fill it"; exit 1; }
+[ -f "$ENV_FILE" ] || { echo "❌ examples/apps/genie_map/databricks.env missing — copy databricks.env.example and fill it"; exit 1; }
 set -a; source "$ENV_FILE"; set +a
 
 # Install deps if needed

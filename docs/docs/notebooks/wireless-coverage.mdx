@@ -48,7 +48,7 @@ A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline]
 This is the production counterpart to the notebook series (see the other tab) — same San Francisco AOI and USGS 3DEP LiDAR sources, but running as a scheduled medallion pipeline instead of one-off notebook outputs: a `land` downloader task stages the data, then the pipeline cascades bronze → silver → gold through declared table-to-table dependencies, a `siting` task runs the H3-native tower analysis, and a `validate` notebook confirms all outputs.
 
 :::tip View on GitHub
-**[notebooks/examples/wireless-coverage/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage/lakeflow)** — the bundle, pipeline transformations, siting task, validation notebook, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage/lakeflow/README.md) for deploy/run steps, prerequisites, and configuration notes.
+**[examples/notebooks/wireless-coverage/lakeflow](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage/lakeflow)** — the bundle, pipeline transformations, siting task, validation notebook, and full setup instructions live here. See its [README](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage/lakeflow/README.md) for deploy/run steps, prerequisites, and configuration notes.
 :::
 
 :::info Runs on the lightweight tier (Serverless)
@@ -189,7 +189,7 @@ The LiDAR path (Parts 1 and 2a) works over **all of San Francisco** (`SF_AOI = (
 ![Wireless Coverage series — config_nb → 01 → 02a/02b → 03a → 03b → 04](../../../resources/images/diagrams/wireless-coverage/wireless-coverage-overview.png)
 
 :::tip View on GitHub
-**[notebooks/examples/wireless-coverage](https://github.com/databrickslabs/geobrix/tree/main/notebooks/examples/wireless-coverage)** — download the folder and import the notebooks (Parts 1, 2a, 2b, 3a, 3b, and 4) into your Databricks workspace to run.
+**[examples/notebooks/wireless-coverage](https://github.com/databrickslabs/geobrix/tree/main/examples/notebooks/wireless-coverage)** — download the folder and import the notebooks (Parts 1, 2a, 2b, 3a, 3b, and 4) into your Databricks workspace to run.
 :::
 
 :::info Runs on the lightweight tier (Serverless) by default

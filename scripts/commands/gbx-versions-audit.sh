@@ -59,7 +59,7 @@ FILES=(
     "scripts/geobrix-gdal-init.sh"
     "scripts/commands/gbx-lint-python.sh"
     "python/geobrix/pyproject.toml"
-    "notebooks/tests/requirements.txt"
+    "examples/tests/requirements.txt"
 )
 
 # Packages we pin or track. Format: package_name:::grep_pattern:::source-of-truth

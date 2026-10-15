@@ -11,7 +11,7 @@ show_help() {
 Submit the heavy-vs-light benchmark as a one-off notebook job to a Databricks
 cluster (the cluster + artifacts must be provisioned by the operator per the
 installation docs). Results land in the bench_results Delta table + out_dir on
-the configured Volume. Reads notebooks/tests/databricks_cluster_config.env.
+the configured Volume. Reads examples/tests/databricks_cluster_config.env.
 
 Usage: bash scripts/commands/gbx-bench-cluster.sh [options]
 Options:
@@ -84,9 +84,9 @@ esac; done
 cd "$PROJECT_ROOT"
 show_banner "gbx:bench:cluster"
 
-CONFIG="notebooks/tests/databricks_cluster_config.env"
+CONFIG="examples/tests/databricks_cluster_config.env"
 if [[ ! -f "$CONFIG" ]]; then
-    echo "ERROR: $CONFIG not found. Copy notebooks/tests/databricks_cluster_config.example.env and fill it." >&2
+    echo "ERROR: $CONFIG not found. Copy examples/tests/databricks_cluster_config.example.env and fill it." >&2
     exit 1
 fi
 
@@ -98,5 +98,5 @@ PYBIN="python"
 if [[ -x "$PROJECT_ROOT/.venv-pyrx/bin/python" ]]; then
     PYBIN="$PROJECT_ROOT/.venv-pyrx/bin/python"
 fi
-"$PYBIN" notebooks/tests/push_and_run_bench_on_cluster.py "${PASS_ARGS[@]}"
+"$PYBIN" examples/tests/push_and_run_bench_on_cluster.py "${PASS_ARGS[@]}"
 exit $?

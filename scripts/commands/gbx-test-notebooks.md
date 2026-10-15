@@ -1,6 +1,6 @@
 # Run Notebook Tests
 
-Runs notebooks **cell-by-cell** (no Jupyter kernel) by default: discovers `notebooks/tests/fixtures/*.ipynb` and `notebooks/sample-data/*.ipynb`, executes each code cell with `exec()`, and reports per-cell status. **All runs happen inside the `geobrix-dev` Docker container** via `docker exec`.
+Runs notebooks **cell-by-cell** (no Jupyter kernel) by default: discovers `examples/tests/fixtures/*.ipynb` and `examples/sample-data/*.ipynb`, executes each code cell with `exec()`, and reports per-cell status. **All runs happen inside the `geobrix-dev` Docker container** via `docker exec`.
 
 ---
 
@@ -30,7 +30,7 @@ bash scripts/commands/gbx-test-notebooks.sh [OPTIONS]
 
 ## Default behavior
 
-- **Cell-by-cell (no kernel)**: Default run executes notebooks with the runner in `notebooks/tests/run_notebooks_cell_by_cell.py`. `%pip install` cells are run in the isolated venv (same interpreter as subsequent cells). The venv is pre-installed with pystac-client, planetary-computer, and geopandas so notebooks that use Sentinel-2 or other sample-data deps work with or without a %pip cell.
+- **Cell-by-cell (no kernel)**: Default run executes notebooks with the runner in `examples/tests/run_notebooks_cell_by_cell.py`. `%pip install` cells are run in the isolated venv (same interpreter as subsequent cells). The venv is pre-installed with pystac-client, planetary-computer, and geopandas so notebooks that use Sentinel-2 or other sample-data deps work with or without a %pip cell.
 - **Verbosity**: `GBX_NOTEBOOK_VERBOSITY=quiet|truncated|full` (default: `truncated`). Controls how much source/result is printed per cell.
 - **Volumes mount required**: The command checks that `/Volumes` exists in the container. If not, it exits with instructions to start the container using `./scripts/docker/start_docker_with_volumes.sh`.
 - **Pytest when `--path` is a .py file**: e.g. `--path test_notebook_via_script.py` runs pytest for that test file instead of the cell-by-cell runner.
@@ -57,5 +57,5 @@ bash scripts/commands/gbx-test-notebooks.sh --allow-absolute-writes
 
 ## Test location
 
-- **Runner**: `notebooks/tests/run_notebooks_cell_by_cell.py` (discovers and runs notebooks).
-- **Tests**: `notebooks/tests/` (structure mirrors `notebooks/`, e.g. `notebooks/tests/sample-data/` for `notebooks/sample-data/`).
+- **Runner**: `examples/tests/run_notebooks_cell_by_cell.py` (discovers and runs notebooks).
+- **Tests**: `examples/tests/` (structure mirrors `examples/`, e.g. `examples/tests/sample-data/` for `examples/sample-data/`).

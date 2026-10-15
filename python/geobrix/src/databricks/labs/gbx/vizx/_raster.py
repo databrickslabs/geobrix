@@ -1,6 +1,6 @@
 """Raster rendering pipeline for gbx.vizx (decimation + percentile stretch).
 
-Ported from notebooks/examples/eo-series/library.py. matplotlib/rasterio are
+Ported from examples/notebooks/eo-series/library.py. matplotlib/rasterio are
 lazy-imported inside the public plotters (Task 3); the numeric helpers here use
 only numpy and the rasterio dataset passed in.
 """

@@ -1,6 +1,6 @@
 ---
 paths:
-  - "notebooks/**"
+  - "examples/**"
   - "scripts/commands/gbx-test-notebooks*.sh"
   - "docs/docs/notebooks/**"
 ---

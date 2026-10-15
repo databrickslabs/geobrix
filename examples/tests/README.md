@@ -1,14 +1,14 @@
 # Notebook tests
 
-Tests that validate structure and execution of notebooks under `notebooks/`. The folder structure under `notebooks/tests/` mirrors the notebook hierarchy (e.g. `notebooks/sample-data/` → `notebooks/tests/sample-data/`).
+Tests that validate structure and execution of notebooks under `examples/`. The folder structure under `examples/tests/` mirrors the `examples/` hierarchy (e.g. `examples/sample-data/` → `examples/tests/sample-data/`).
 
 ## Default: cell-by-cell (no kernel)
 
-**gbx:test:notebooks** runs notebooks **cell-by-cell** by default (no Jupyter kernel). It discovers `notebooks/tests/fixtures/*.ipynb` and `notebooks/sample-data/*.ipynb`, executes each code cell with `exec()`, and reports per-cell status. Magic-only cells (e.g. `%pip install`) are skipped.
+**gbx:test:notebooks** runs notebooks **cell-by-cell** by default (no Jupyter kernel). It discovers `examples/tests/fixtures/*.ipynb` and `examples/sample-data/*.ipynb`, executes each code cell with `exec()`, and reports per-cell status. Magic-only cells (e.g. `%pip install`) are skipped.
 
 - No `--path`: run all default notebooks (fixtures + sample-data).
-- `--path sample-data`: run only notebooks under `notebooks/sample-data/`.
-- `--path fixtures`: run only `notebooks/tests/fixtures/*.ipynb`.
+- `--path sample-data`: run only notebooks under `examples/sample-data/`.
+- `--path fixtures`: run only `examples/tests/fixtures/*.ipynb`.
 - `--path test_notebook_via_script.py`: run **pytest** for that test file instead.
 
 Verbosity: `GBX_NOTEBOOK_VERBOSITY=quiet|truncated|full` (see table below).
@@ -25,8 +25,8 @@ Verbosity: `GBX_NOTEBOOK_VERBOSITY=quiet|truncated|full` (see table below).
 
 ## Basic testbook example
 
-- **Notebook:** `notebooks/tests/fixtures/minimal.ipynb` (one code cell: `x = 1 + 1`).
-- **Tests:** `notebooks/tests/test_basic_testbook.py`
+- **Notebook:** `examples/tests/fixtures/minimal.ipynb` (one code cell: `x = 1 + 1`).
+- **Tests:** `examples/tests/test_basic_testbook.py`
   - `test_minimal_notebook_exists` — checks the file exists (no kernel).
   - `test_minimal_notebook_executes_with_testbook` — runs the notebook with testbook and asserts `x == 2` (requires working kernel).
 
@@ -38,7 +38,7 @@ bash scripts/commands/gbx-test-notebooks.sh --path test_basic_testbook.py
 
 ## No-kernel option: run notebook as script
 
-**Tests:** `notebooks/tests/test_notebook_via_script.py`
+**Tests:** `examples/tests/test_notebook_via_script.py`
 
 - Converts a notebook to a Python script with nbconvert, then runs it with `python` (no Jupyter kernel).
 - `test_minimal_notebook_runs_as_script` — converts `fixtures/minimal.ipynb` to `.py` and runs it; passes if exit code is 0.
@@ -101,19 +101,19 @@ You can test the Essential sample-data bundle against a **real Databricks worksp
 
 The bundle code runs locally; uploads go to the configured Volume via the Databricks SDK (`WorkspaceClient`). No code runs on a cluster.
 
-1. Copy `notebooks/tests/databricks_cluster_config.example.env` to `notebooks/tests/databricks_cluster_config.env`.
+1. Copy `examples/tests/databricks_cluster_config.example.env` to `examples/tests/databricks_cluster_config.env`.
 2. Set `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or `DATABRICKS_CONFIG_PROFILE`) and `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME`.
 3. Ensure the Volume exists in the workspace. Install: `pip install -e python/geobrix[databricks]` (or `pip install databricks-sdk`). For the full Essential bundle (Sentinel-2, etc.) also install `requests`, `pystac-client`, `planetary-computer`.
-4. Run the test (from repo root, or with `python -m pytest` from `notebooks/tests/`):
+4. Run the test (from repo root, or with `python -m pytest` from `examples/tests/`):
 
    ```bash
-   pytest notebooks/tests/test_bundle_on_databricks.py -v
+   pytest examples/tests/test_bundle_on_databricks.py -v
    ```
 
    Or run the bundle directly:
 
    ```bash
-   python notebooks/tests/test_bundle_on_databricks.py
+   python examples/tests/test_bundle_on_databricks.py
    ```
 
 If the env is not set, the test is **skipped** (no failure).
@@ -127,8 +127,8 @@ Use **push_and_run_bundle_on_cluster.py** to upload a small runner notebook to t
 3. Run:
 
    ```bash
-   python notebooks/tests/push_and_run_bundle_on_cluster.py       # wait for run to finish
-   python notebooks/tests/push_and_run_bundle_on_cluster.py --no-wait   # submit and exit
+   python examples/tests/push_and_run_bundle_on_cluster.py       # wait for run to finish
+   python examples/tests/push_and_run_bundle_on_cluster.py --no-wait   # submit and exit
    ```
 
 This uses the [Databricks SDK](https://docs.databricks.com/en/dev-tools/sdk-python.html) and [Databricks Utilities with Databricks Connect](https://docs.databricks.com/aws/en/dev-tools/databricks-connect/python/databricks-utilities) pattern: workspace upload + one-off job submit.

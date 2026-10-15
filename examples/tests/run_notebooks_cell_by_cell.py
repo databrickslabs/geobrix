@@ -2,7 +2,7 @@
 """
 Run notebooks cell-by-cell (no Jupyter kernel). Used by gbx:test:notebooks.
 
-Discovers notebooks under notebooks/ or runs only those under a given path.
+Discovers notebooks under examples/ or runs only those under a given path.
 Verbosity: GBX_NOTEBOOK_VERBOSITY=quiet|truncated|full (default: truncated).
 
 Isolation (GBX_NOTEBOOK_ISOLATED_ENV=1, default for gbx-test-notebooks):
@@ -28,8 +28,8 @@ from pathlib import Path
 
 # Allow importing from same directory
 TESTS_DIR = Path(__file__).resolve().parent
-NOTEBOOKS_ROOT = TESTS_DIR.parent
-PROJECT_ROOT = NOTEBOOKS_ROOT.parent
+EXAMPLES_ROOT = TESTS_DIR.parent
+PROJECT_ROOT = EXAMPLES_ROOT.parent
 if str(TESTS_DIR) not in sys.path:
     sys.path.insert(0, str(TESTS_DIR))
 
@@ -109,19 +109,19 @@ def discover_notebooks(path_arg: str | None) -> list[Path]:
         # Default: fixtures + sample-data
         notebooks = []
         for sub in ("tests/fixtures", "sample-data"):
-            d = NOTEBOOKS_ROOT / sub
+            d = EXAMPLES_ROOT / sub
             if d.is_dir():
                 notebooks.extend(sorted(d.glob("*.ipynb")))
         return notebooks
 
     # path_arg can be "sample-data", "fixtures", "tests/fixtures", or path to .ipynb
-    p = NOTEBOOKS_ROOT / path_arg
+    p = EXAMPLES_ROOT / path_arg
     if p.is_file() and p.suffix == ".ipynb":
         return [p]
     if p.is_dir():
         return sorted(p.glob("*.ipynb"))
-    # e.g. path_arg "fixtures" -> notebooks/tests/fixtures
-    p2 = NOTEBOOKS_ROOT / "tests" / path_arg
+    # e.g. path_arg "fixtures" -> examples/tests/fixtures
+    p2 = EXAMPLES_ROOT / "tests" / path_arg
     if p2.is_dir():
         return sorted(p2.glob("*.ipynb"))
     return []

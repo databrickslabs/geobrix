@@ -58,7 +58,7 @@ yields WGS84 GeoJSON that kepler renders directly.
 ## How the space is created / curated (what's automated vs manual)
 
 - **Automated by the DAB bundle** (`resources.genie_spaces.vapor_eyes_genie` in
-  `apps/genie_map/databricks.yml`): the space itself, its warehouse, the **table set**
+  `examples/apps/genie_map/databricks.yml`): the space itself, its warehouse, the **table set**
   (from `genie_space.geniespace.json`), and a short **description** carrying the key
   guardrails. `databricks bundle deploy` creates/updates it — no manual space id.
 - **Automated by `gbx:app:seed-genie`** (the rich curation below): the instructions

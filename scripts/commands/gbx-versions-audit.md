@@ -48,7 +48,7 @@ Source of truth (priority order):
 - `scripts/geobrix-gdal-init.sh`
 - `scripts/commands/gbx-lint-python.sh`
 - `python/geobrix/pyproject.toml` (dev/test extras — currently unpinned)
-- `notebooks/tests/requirements.txt` (lower bounds — not pinned)
+- `examples/tests/requirements.txt` (lower bounds — not pinned)
 
 If a new file pins versions, add it to the `FILES` array in `gbx-versions-audit.sh`.
 

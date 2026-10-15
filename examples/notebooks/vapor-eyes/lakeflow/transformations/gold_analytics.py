@@ -576,7 +576,7 @@ def detections_by_county():
 
 
 # ---------------------------------------------------------------------------
-# Genie Map app support (apps/genie_map): the current well inventory as map-ready
+# Genie Map app support (examples/apps/genie_map): the current well inventory as map-ready
 # points, spatially tagged with shale play + authoritative county/state. Feeds
 # BOTH the Genie Map "wells" point layer AND its point-sourced "well_density" H3
 # layer (which aggregates these points on the fly via h3_longlatash3), so no

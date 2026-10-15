@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-# Root of the notebooks tree (parent of tests/)
-NOTEBOOKS_ROOT = Path(__file__).resolve().parent.parent
+# Root of the examples tree (parent of tests/)
+EXAMPLES_ROOT = Path(__file__).resolve().parent.parent
 # Tests root so subdirs can import test modules
 TESTS_ROOT = Path(__file__).resolve().parent
 if str(TESTS_ROOT) not in sys.path:
@@ -26,7 +26,7 @@ def pytest_configure(config):
     # Optional: allow CI or explicit opt-out for host runs (e.g. CI without Docker)
     if os.environ.get("GBX_NOTEBOOK_TESTS_ALLOW_HOST") == "1":
         return
-    # Running outside container (e.g. pytest notebooks/tests/ on host)
+    # Running outside container (e.g. pytest examples/tests/ on host)
     raise pytest.UsageError(
         "Notebook tests must run inside the geobrix-dev Docker container. "
         "Use: bash scripts/commands/gbx-test-notebooks.sh"
@@ -34,12 +34,12 @@ def pytest_configure(config):
 
 
 @pytest.fixture(scope="session")
-def notebooks_root() -> Path:
-    """Root path of the notebooks directory (notebooks/)."""
-    return NOTEBOOKS_ROOT
+def examples_root() -> Path:
+    """Root path of the examples directory (examples/)."""
+    return EXAMPLES_ROOT
 
 
 @pytest.fixture(scope="session")
-def setup_sample_data_notebook_path(notebooks_root: Path) -> Path:
-    """Path to setup_sample_data.ipynb (mirrors notebooks/sample-data/)."""
-    return notebooks_root / "sample-data" / "setup_sample_data.ipynb"
+def setup_sample_data_notebook_path(examples_root: Path) -> Path:
+    """Path to setup_sample_data.ipynb (mirrors examples/sample-data/)."""
+    return examples_root / "sample-data" / "setup_sample_data.ipynb"

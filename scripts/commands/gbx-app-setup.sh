@@ -8,7 +8,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-APP_DIR="$PROJECT_ROOT/apps/genie_map"
+APP_DIR="$PROJECT_ROOT/examples/apps/genie_map"
 
 # Defaults (reference deployment). Override via flags for another workspace.
 PROFILE="genie-map-env"
@@ -105,7 +105,7 @@ The bundle creates the space + table set + a short description, but the rich
 instructions and example SQL must be pasted in the Genie Space editor.
   1. Open the "Vapor-Eyes — Permian Methane (Genie Map)" space.
   2. Instructions tab → paste the "General instructions" block from:
-       apps/genie_map/docs/GENIE-SPACE.md
+       examples/apps/genie_map/docs/GENIE-SPACE.md
   3. Example SQL queries → add each verified example from the same doc.
 See docs/SETUP.md for the full runbook.
 ────────────────────────────────────────────────────────────────────────────

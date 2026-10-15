@@ -20,10 +20,10 @@ bash scripts/commands/gbx-test-bundle-databricks.sh [OPTIONS]
 
 ## Config
 
-1. Copy `notebooks/tests/databricks_cluster_config.example.env` to `notebooks/tests/databricks_cluster_config.env`.
+1. Copy `examples/tests/databricks_cluster_config.example.env` to `examples/tests/databricks_cluster_config.env`.
 2. Set `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or profile), **`CLUSTER_ID`**, `GBX_BUNDLE_VOLUME_CATALOG`, `GBX_BUNDLE_VOLUME_SCHEMA`, `GBX_BUNDLE_VOLUME_NAME`.
 3. Optional: `GBX_BUNDLE_RUNNER_NOTEBOOK_PATH`, `GBX_BUNDLE_WHEEL_VOLUME_PATH`.
 
 The cluster must have GeoBrix installed (or set `GBX_BUNDLE_WHEEL_VOLUME_PATH` so the runner notebook installs it from a wheel on a Volume).
 
-See `notebooks/tests/README.md` (section "Test bundle on a live Databricks cluster") for full details.
+See `examples/tests/README.md` (section "Test bundle on a live Databricks cluster") for full details.

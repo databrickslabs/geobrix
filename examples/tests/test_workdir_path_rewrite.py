@@ -20,9 +20,9 @@ def _use_cell_by_cell() -> bool:
 
 
 @pytest.fixture
-def workdir_path_minimal_notebook(notebooks_root: Path) -> Path:
+def workdir_path_minimal_notebook(examples_root: Path) -> Path:
     """Path to workdir_path_minimal.ipynb (config + run_essential_bundle)."""
-    return notebooks_root / "tests" / "fixtures" / "workdir_path_minimal.ipynb"
+    return examples_root / "tests" / "fixtures" / "workdir_path_minimal.ipynb"
 
 
 def test_workdir_path_rewrite_config_cell_exec_uses_workdir_path():
@@ -59,7 +59,7 @@ print(f"SAMPLE_DATA_PATH = {SAMPLE_DATA_PATH}")
 def test_workdir_path_minimal_notebook_uses_workdir_and_no_already_exists(
     capsys: pytest.CaptureFixture[str],
     workdir_path_minimal_notebook: Path,
-    notebooks_root: Path,
+    examples_root: Path,
 ) -> None:
     """Run minimal notebook (config + run_essential_bundle) with workdir.
     Assert SAMPLE_DATA_PATH in output is under workdir and we do NOT see '(already exists)'
@@ -71,7 +71,7 @@ def test_workdir_path_minimal_notebook_uses_workdir_and_no_already_exists(
 
     from test_notebook_via_script import run_notebook_cell_by_cell
 
-    project_root = notebooks_root.parent
+    project_root = examples_root.parent
     with tempfile.TemporaryDirectory(prefix="nb_work_") as tmp:
         workdir = Path(tmp)
         ok = run_notebook_cell_by_cell(

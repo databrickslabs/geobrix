@@ -46,7 +46,7 @@ gbx:versions:bump --from 0.5.0 --to 0.5.1
 ## What it will NOT touch (reported for you to judge)
 
 - **Historically-scoped prose** — "introduced in `<OLD>`", "Requires GeoBrix `<OLD>`+", "capabilities introduced in `<OLD>`". These state *when* a feature landed and stay true after a bump; bumping them would be factually wrong. Listed under "Residual bare occurrences" for review.
-- **Lock files** (`package-lock.json`, `pnpm-lock.yaml`), the standalone `genie_map` app version (`apps/genie_map/package.json`), and third-party dep pins that happen to share the number — all false positives.
+- **Lock files** (`package-lock.json`, `pnpm-lock.yaml`), the standalone `genie_map` app version (`examples/apps/genie_map/package.json`), and third-party dep pins that happen to share the number — all false positives.
 - **The committed diagram PNGs** — the docs site displays the `.png`, not the `.svg`. After the SVG pill text is bumped, re-render each PNG from its SVG (headless-Chrome screenshot per the generator header). A version bump alone leaves stale PNGs on the site. The command prints this reminder.
 
 ## Verify after applying

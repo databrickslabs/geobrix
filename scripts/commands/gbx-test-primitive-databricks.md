@@ -17,6 +17,6 @@ bash scripts/commands/gbx-test-primitive-databricks.sh [OPTIONS]
 
 ## Config
 
-Same as the bundle: copy `notebooks/tests/databricks_cluster_config.example.env` to `databricks_cluster_config.env`, set `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or profile), **`CLUSTER_ID`**, and `GBX_BUNDLE_VOLUME_*`. Optional: `GBX_RUNNER_DIR`, `GBX_PRIMITIVE_RUNNER_NOTEBOOK` (default: user folder and `geobrix_primitive_runner.ipynb`).
+Same as the bundle: copy `examples/tests/databricks_cluster_config.example.env` to `databricks_cluster_config.env`, set `DATABRICKS_HOST`, `DATABRICKS_TOKEN` (or profile), **`CLUSTER_ID`**, and `GBX_BUNDLE_VOLUME_*`. Optional: `GBX_RUNNER_DIR`, `GBX_PRIMITIVE_RUNNER_NOTEBOOK` (default: user folder and `geobrix_primitive_runner.ipynb`).
 
 No wheel or GeoBrix install is required on the cluster for primitives; the notebook uses only `databricks-sdk`.

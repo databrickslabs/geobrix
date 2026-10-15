@@ -32,5 +32,5 @@ bash scripts/commands/gbx-app-setup.sh --profile genie-map-env
 Automates: the app-SP UC grants (`USE CATALOG` / `USE SCHEMA` / `SELECT`) and a
 secret-existence check. Does **not** automate: creating the UC secret values,
 the pipeline run, or the Genie-Space instruction/example-SQL curation (pasted in
-the UI — see `apps/genie_map/docs/GENIE-SPACE.md`). Full sequence in
-`apps/genie_map/docs/SETUP.md`.
+the UI — see `examples/apps/genie_map/docs/GENIE-SPACE.md`). Full sequence in
+`examples/apps/genie_map/docs/SETUP.md`.

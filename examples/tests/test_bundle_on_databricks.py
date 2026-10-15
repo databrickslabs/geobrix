@@ -14,13 +14,13 @@ where a profile is unavailable (e.g. CI with a service-principal secret).
 
 Setup:
   1. pip install databricks-sdk (and geobrix, requests, pystac-client, planetary-computer for full bundle).
-  2. Copy notebooks/tests/databricks_cluster_config.example.env to databricks_cluster_config.env.
+  2. Copy examples/tests/databricks_cluster_config.example.env to databricks_cluster_config.env.
   3. Set DATABRICKS_CONFIG_PROFILE (preferred) or DATABRICKS_HOST + DATABRICKS_TOKEN, and
      GBX_BUNDLE_VOLUME_* (catalog, schema, volume name).
   4. Ensure the Volume exists in the workspace (create it in Unity Catalog if needed).
 
 Run:
-  pytest notebooks/tests/test_bundle_on_databricks.py -v
+  pytest examples/tests/test_bundle_on_databricks.py -v
   # Or standalone:
   python -m databricks.labs.gbx.sample.run_bundle_on_databricks  # if we add __main__
 """

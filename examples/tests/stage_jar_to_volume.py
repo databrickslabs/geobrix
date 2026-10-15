@@ -6,7 +6,7 @@ exactly one geobrix-*-jar-with-dependencies.jar: any stale other-version product
 dir is removed before the new one is uploaded (tests.jar and non-geobrix files are untouched).
 Set GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to build the JAR locally but skip the Databricks upload;
 set GBX_BUNDLE_SKIP_JAR=1 to skip the JAR step ENTIRELY (no build, no upload). Loads config
-from notebooks/tests/databricks_cluster_config.env. Overwrites if file already exists.
+from examples/tests/databricks_cluster_config.env. Overwrites if file already exists.
 """
 from __future__ import annotations
 

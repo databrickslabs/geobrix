@@ -1,7 +1,8 @@
 -- Top groups by record count within viewport bounds.
 --
--- Canonical column names — produced by notebooks/data_engineering.ipynb.
--- GROUP_FILTER holds the grouping column (e.g. operator name, payment type).
+-- Canonical column names — produced by the vapor-eyes Lakeflow pipeline
+-- (examples/notebooks/vapor-eyes/lakeflow/). GROUP_FILTER holds the grouping
+-- column (e.g. operator name, payment type).
 -- Parameters:
 --   x_min, x_max, y_min, y_max  DOUBLE  WGS84 degrees
 --   table_name                  STRING  IDENTIFIER() — fully-qualified table name

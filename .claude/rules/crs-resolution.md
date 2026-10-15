@@ -1,7 +1,7 @@
 ---
 paths:
   - "python/geobrix/src/databricks/labs/gbx/**"
-  - "notebooks/**"
+  - "examples/**"
 ---
 
 # CRS resolution

@@ -1,16 +1,16 @@
-# Source of truth for the notebooks/tests harness — the cell-by-cell runner
-# under notebooks/tests/run_notebooks_cell_by_cell.py and its fixtures.
+# Source of truth for the examples/tests harness — the cell-by-cell runner
+# under examples/tests/run_notebooks_cell_by_cell.py and its fixtures.
 # Pinned to match scripts/docker/Dockerfile / DBR 17.3 LTS where applicable;
 # update via gbx:versions:audit.
 #
 # Regenerate the hash-pinned lock alongside any edit:
 #   docker exec -it geobrix-dev bash -lc \
-#     'cd /root/geobrix/notebooks/tests && \
+#     'cd /root/geobrix/examples/tests && \
 #      uv pip compile --generate-hashes --python-version 3.12 \
 #         --output-file requirements.txt requirements.in'
 #
 # Then install with --require-hashes to enforce supply-chain integrity:
-#   pip install --require-hashes -r notebooks/tests/requirements.txt
+#   pip install --require-hashes -r examples/tests/requirements.txt
 #
 # pytest is intentionally CI-matrix (8.4.2), not DBR's 8.3.5 — we don't run
 # tests in DBR.

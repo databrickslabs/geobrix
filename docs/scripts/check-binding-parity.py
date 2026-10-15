@@ -75,10 +75,14 @@ PY_NAME_RE = re.compile(r"""["'](gbx_[a-z0-9_]+)["']""")
 # those functions may have no heavy equivalent and are listed in PYTHON_REGISTERED.
 PREFIX_TO_HEAVY_MODULE = {
     "gbx_rst_": PYTHON_ROOT / "databricks/labs/gbx/rasterx/functions.py",
+    # Legacy Mosaic migration ships in its own heavy module (documented import path).
+    "gbx_st_legacy": PYTHON_ROOT / "databricks/labs/gbx/vectorx/jts/legacy/functions.py",
     "gbx_st_": PYTHON_ROOT / "databricks/labs/gbx/vectorx/functions.py",
     "gbx_bng_": PYTHON_ROOT / "databricks/labs/gbx/gridx/bng/functions.py",
     "gbx_custom_": PYTHON_ROOT / "databricks/labs/gbx/gridx/custom/functions.py",
     "gbx_h3_": PYTHON_ROOT / "databricks/labs/gbx/gridx/h3/functions.py",
+    # RasterX grid helper with an h3 name: Scala RST_H3_CellBBox, heavy wrapper in rasterx.
+    "gbx_h3_cell_bbox": PYTHON_ROOT / "databricks/labs/gbx/rasterx/functions.py",
     "gbx_quadbin_": PYTHON_ROOT / "databricks/labs/gbx/gridx/quadbin/functions.py",
     "gbx_pmtiles_": PYTHON_ROOT / "databricks/labs/gbx/pmtiles/functions.py",
 }
@@ -113,38 +117,32 @@ def python_names() -> set[str]:
     return names
 
 
-def heavy_module_names() -> set[str]:
-    """Get gbx_ function names registered in heavy (non-light-only) Python modules."""
-    names = set()
-    for module_path in PREFIX_TO_HEAVY_MODULE.values():
-        if module_path.exists():
-            names.update(PY_NAME_RE.findall(module_path.read_text()))
-    return names
-
-
 def check_heavy_module_coverage(canonical: set[str]) -> dict[str, list[str]]:
-    """Check that each canonical function (except light-only) has a heavy module binding.
+    """Check that each canonical function (except light-only) is wrapped in ITS package's heavy module.
+
+    A name defined only in another module (e.g. the light ``pyrx``/``pyvx`` registration
+    tables) does not count. The longest matching prefix picks the module, so
+    ``gbx_st_legacy*`` resolves to the legacy module rather than ``vectorx``.
 
     Returns a dict mapping each heavy module path to a list of missing function names
     that should be defined there.
     """
-    heavy_names = heavy_module_names()
+    module_names = {
+        path: set(PY_NAME_RE.findall(path.read_text())) if path.exists() else set()
+        for path in PREFIX_TO_HEAVY_MODULE.values()
+    }
     missing_per_module = {}
 
     for name in sorted(canonical):
         # Light-only functions don't need a heavy wrapper
         if name in PYTHON_REGISTERED:
             continue
-
-        # Check if this function is in any heavy module
-        if name not in heavy_names:
-            # Find which module should have defined it
-            for prefix, module_path in PREFIX_TO_HEAVY_MODULE.items():
-                if name.startswith(prefix):
-                    if module_path not in missing_per_module:
-                        missing_per_module[module_path] = []
-                    missing_per_module[module_path].append(name)
-                    break
+        prefixes = [p for p in PREFIX_TO_HEAVY_MODULE if name.startswith(p)]
+        if not prefixes:
+            continue
+        module_path = PREFIX_TO_HEAVY_MODULE[max(prefixes, key=len)]
+        if name not in module_names[module_path]:
+            missing_per_module.setdefault(module_path, []).append(name)
 
     return missing_per_module
 

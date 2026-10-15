@@ -123,21 +123,3 @@ def test_st_transformcrs_3arg_form(spark):
     assert (
         geom_value is not None
     ), "st_transformcrs 3-arg should return a non-null geometry"
-
-
-def test_st_legacyaswkb_returns_binary(spark):
-    """st_legacyaswkb(geom) should return a Column of BINARY type."""
-    from databricks.labs.gbx.vectorx import functions as vx
-
-    # WKB for POINT(0.5 0.5).
-    pt_wkb = bytes.fromhex("0101000000000000000000E03F000000000000E03F")
-    df = spark.createDataFrame([(pt_wkb,)], ["geom"])
-
-    # Test that st_legacyaswkb returns a Column (can be used in select)
-    result = df.select(vx.st_legacyaswkb(col("geom")).alias("wkb_out")).collect()
-    assert len(result) == 1
-    wkb_value = result[0]["wkb_out"]
-    assert wkb_value is not None, "st_legacyaswkb should return non-null BINARY"
-    assert isinstance(
-        wkb_value, (bytes, bytearray)
-    ), "st_legacyaswkb should return bytes"

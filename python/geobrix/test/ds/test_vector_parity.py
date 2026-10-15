@@ -110,5 +110,8 @@ def test_vector_coded_domain_parity(
     lrows = [tuple(r) for r in light.select(*_CODED_COLS).collect()]
     hrows = [tuple(r) for r in heavy.select(*_CODED_COLS).collect()]
     assert lrows == hrows
-    types = lambda df: [(c, df.schema[c].dataType.simpleString()) for c in _CODED_COLS]
-    assert types(light) == types(heavy)
+    assert _coded_types(light) == _coded_types(heavy)
+
+
+def _coded_types(df):
+    return [(c, df.schema[c].dataType.simpleString()) for c in _CODED_COLS]

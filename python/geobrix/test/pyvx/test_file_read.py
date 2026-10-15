@@ -307,3 +307,72 @@ def test_vector_file_read_table_skip_ordering(spark, tmp_path):
         False,
         True,
     ], f"resolve_file_table must be called with skip_ordering forwarded; got {calls}"
+
+
+# ---------------------------------------------------------------------------
+# Streaming decode: a large layer is never held whole (same mechanism as #127)
+# ---------------------------------------------------------------------------
+
+
+def _decode(as_wkb, sources):
+    import pandas as pd
+
+    from databricks.labs.gbx.pyvx.file_read import _make_vector_decode_fn
+
+    fn = _make_vector_decode_fn(as_wkb, 0)
+    return list(fn(iter([pd.DataFrame({"source": sources})])))
+
+
+def test_vector_file_read_decode_streams_without_read_arrow(tmp_path, monkeypatch):
+    """Each source is streamed with pyogrio.open_arrow, never loaded whole."""
+    import pyogrio
+
+    _write_gpkg(tmp_path / "t.gpkg", 25)
+
+    def _no_read_arrow(*a, **k):
+        raise AssertionError("decode must stream with open_arrow, not read_arrow")
+
+    monkeypatch.setattr(pyogrio, "read_arrow", _no_read_arrow)
+    frames = _decode(True, [str(tmp_path / "t.gpkg")])
+    assert sum(len(f) for f in frames) == 25
+
+
+def test_vector_file_read_decode_frames_are_byte_bounded(tmp_path, monkeypatch):
+    """Yielded frames stay within the byte budget (or hold a single row), in
+    source order, with the same geometries as an unbounded decode."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    _write_gpkg(tmp_path / "a.gpkg", 12)
+    _write_gpkg(tmp_path / "b.gpkg", 8)
+    srcs = [str(tmp_path / "a.gpkg"), str(tmp_path / "b.gpkg")]
+    whole = [
+        (r.source, bytes(r.geometry))
+        for f in _decode(True, srcs)
+        for r in f.itertuples()
+    ]
+    monkeypatch.setattr(vec, "_ARROW_BATCH_BYTES_LIMIT", 100)
+    frames = _decode(True, srcs)
+    assert len(frames) > 2
+    for f in frames:
+        assert len(f) == 1 or sum(len(g) for g in f["geometry"]) <= 100
+    assert [
+        (r.source, bytes(r.geometry)) for f in frames for r in f.itertuples()
+    ] == whole
+
+
+def test_vector_file_read_decode_wkt_matches_wkb(tmp_path, monkeypatch):
+    """WKT mode decodes the same geometries, also byte-bounded."""
+    import shapely
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    _write_gpkg(tmp_path / "t.gpkg", 10)
+    src = [str(tmp_path / "t.gpkg")]
+    wkb = [
+        shapely.from_wkb(bytes(g)) for f in _decode(True, src) for g in f["geometry"]
+    ]
+    monkeypatch.setattr(vec, "_ARROW_BATCH_BYTES_LIMIT", 400)
+    frames = _decode(False, src)
+    assert len(frames) > 1
+    wkt = [shapely.from_wkt(g) for f in frames for g in f["geometry"]]
+    assert all(a.equals(b) for a, b in zip(wkb, wkt)) and len(wkt) == len(wkb)

@@ -91,29 +91,41 @@ def _classify_vector_source(source: str, source_type: str) -> str:
     return "table"
 
 
+# Features per streamed batch, the same default as the light vector readers' chunkSize.
+_STREAM_BATCH = 10000
+
+
 def _make_vector_decode_fn(as_wkb: bool, layer):
     """Return a ``mapInPandas`` decode function for pyogrio vector files.
 
-    The returned generator opens each source path via ``pyogrio.read_arrow``
-    and yields a pandas DataFrame with ``{source, geometry}`` rows.
+    The returned generator streams each source path with ``pyogrio.open_arrow``
+    (``_STREAM_BATCH`` features at a time), cuts every batch into byte-bounded
+    slices (the light vector readers' ``_byte_bounded_slices``) and yields one
+    ``{source, geometry}`` pandas DataFrame per slice -- a layer is never held
+    whole, and no yielded frame approaches Arrow's 2 GiB per-column limit.
 
     Works for both the **path mode** (may include a ``_file_ref`` column for
     FILE fast-path) and the **table mode** (plain ``source`` column only —
     falls back to FUSE via ``to_local_path``).  Extracting the decode here
-    keeps both modes DRY: neither duplicates the ``read_arrow`` / WKB / WKT
-    logic.
+    keeps both modes DRY: neither duplicates the streaming / WKB / WKT logic.
     """
     _layer = layer
     _as_wkb = as_wkb
 
     def _map(pdf_iter):
+        import numpy as np
         import pandas as pd
         import pyogrio
+        import shapely
 
+        from databricks.labs.gbx.ds import vector as _vec
+
+        budget = _vec._ARROW_BATCH_BYTES_LIMIT // (
+            1 if _as_wkb else _vec._WKT_EXPANSION
+        )
+        yielded = False
         for pdf in pdf_iter:
             has_fr = "_file_ref" in pdf.columns
-            srcs: list = []
-            geoms: list = []
             for _, row in pdf.iterrows():
                 src = row["source"]
                 local = None
@@ -129,32 +141,36 @@ def _make_vector_decode_fn(as_wkb: bool, layer):
                         local = None
                 if local is None:
                     local = to_local_path(src)
-                # Use read_arrow (pyogrio, no external geometry framework needed). The geometry column is
-                # returned as raw WKB bytes; meta["geometry_name"] names it.
-                # GeoJSON drivers return geometry_name="" and use "wkb_geometry".
-                meta, arrow_table = pyogrio.read_arrow(local, layer=_layer)
-                geom_col = meta.get("geometry_name") or "wkb_geometry"
-                geom_array = arrow_table.column(geom_col)
-                for wkb_scalar in geom_array:
-                    wkb_bytes = wkb_scalar.as_py()
-                    srcs.append(src)
-                    if wkb_bytes is None:
-                        geoms.append(None)
-                    elif _as_wkb:
-                        geoms.append(bytearray(wkb_bytes))
-                    else:
-                        import shapely as _shapely
-
-                        geoms.append(_shapely.from_wkb(bytes(wkb_bytes)).wkt)
-            if srcs:
-                yield pd.DataFrame({"source": srcs, "geometry": geoms})
-            else:
-                yield pd.DataFrame(
-                    {
-                        "source": pd.Series([], dtype="object"),
-                        "geometry": pd.Series([], dtype="object"),
-                    }
-                )
+                # The geometry column is raw WKB; meta["geometry_name"] names it
+                # (GeoJSON drivers return "" and use "wkb_geometry").
+                with pyogrio.open_arrow(
+                    local, layer=_layer, batch_size=_STREAM_BATCH, use_pyarrow=True
+                ) as (meta, reader):
+                    gcol = meta.get("geometry_name") or "wkb_geometry"
+                    seen = 0
+                    for batch in reader:
+                        geom = batch.select([gcol])
+                        for sl in _vec._byte_bounded_slices(geom, budget, src, seen):
+                            wkb = sl.column(0).to_numpy(zero_copy_only=False)
+                            if _as_wkb:
+                                out = wkb
+                            else:
+                                out = shapely.to_wkt(shapely.from_wkb(wkb))
+                            yield pd.DataFrame(
+                                {
+                                    "source": src,
+                                    "geometry": np.asarray(out, dtype=object),
+                                }
+                            )
+                            yielded = True
+                        seen += batch.num_rows
+        if not yielded:
+            yield pd.DataFrame(
+                {
+                    "source": pd.Series([], dtype="object"),
+                    "geometry": pd.Series([], dtype="object"),
+                }
+            )
 
     return _map
 
@@ -176,7 +192,7 @@ def vector_file_read(
 
     - **path** (``source_type='path'`` or ``source_type='auto'`` + path string):
       enumerate files under the Volume path/directory, optionally inject FILE
-      refs, decode each via ``pyogrio.read_arrow`` inside ``mapInPandas``.
+      refs, decode each by streaming it with ``pyogrio.open_arrow`` inside ``mapInPandas``.
       ``driver`` is used to filter listed files by extension; ``access`` gates
       FILE vs FUSE.
 

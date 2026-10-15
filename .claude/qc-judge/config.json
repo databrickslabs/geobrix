@@ -24,7 +24,7 @@
     "binding-parity": {
       "name": "Every registered function exists in all bindings",
       "type": "command",
-      "severity": "warn",
+      "severity": "fail",
       "enabled": true,
       "cmd": "[ -f docs/scripts/check-binding-parity.py ] || { echo 'parity script absent; skip'; exit 0; }; python3 docs/scripts/check-binding-parity.py",
       "expect_exit": 0,

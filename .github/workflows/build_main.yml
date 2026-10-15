@@ -122,6 +122,8 @@ jobs:
           enable_coverage: "true"
       - name: Rebuild doc-snippet-inventory
         run: python3 scripts/ci/inventory-doc-snippets.py
+      - name: Check binding parity
+        run: python3 docs/scripts/check-binding-parity.py
       # Disabled until project launch. Re-enable by restoring the condition below.
       - name: Scala doc tests (main only, after everything else)
         if: false  # Disabled until project launch

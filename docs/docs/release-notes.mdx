@@ -53,6 +53,14 @@ both vector reader tiers.
   `Real` → `double`) and return `NULL` for unset fields, matching the lightweight `*_gbx`
   readers. Cast explicitly where code relied on the old types.
 
+### Raster writers
+
+- **`cog_gbx` writes sources with a non-byte-aligned bit depth.** Rasters whose band is
+  tagged with an `NBITS` such as 15 (common for Sentinel-2 `uint16` products) failed to
+  convert with `PREDICTOR=2 is only supported with 8/16/32/64 bit samples`. The writer now
+  promotes such samples to the data type's full width, a lossless change, and keeps
+  predictor-based compression.
+
 ### Python bindings
 
 - **Heavyweight Python wrappers for the custom-grid and quadbin geometry k-ring/k-loop

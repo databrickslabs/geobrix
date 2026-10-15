@@ -70,6 +70,19 @@ SCALA_NAME_RE = re.compile(r'override\s+def\s+name\s*:\s*String\s*=\s*"(gbx_[a-z
 # fragments like `gbx_rst_*` that would otherwise match a bare token.
 PY_NAME_RE = re.compile(r"""["'](gbx_[a-z0-9_]+)["']""")
 
+# Map each gbx_ function prefix to its heavy (non-light-only) Python module.
+# Light-only modules (pyrx, pyvx, pygx, and vectorx/jts/legacy) are excluded —
+# those functions may have no heavy equivalent and are listed in PYTHON_REGISTERED.
+PREFIX_TO_HEAVY_MODULE = {
+    "gbx_rst_": PYTHON_ROOT / "databricks/labs/gbx/rasterx/functions.py",
+    "gbx_st_": PYTHON_ROOT / "databricks/labs/gbx/vectorx/functions.py",
+    "gbx_bng_": PYTHON_ROOT / "databricks/labs/gbx/gridx/bng/functions.py",
+    "gbx_custom_": PYTHON_ROOT / "databricks/labs/gbx/gridx/custom/functions.py",
+    "gbx_h3_": PYTHON_ROOT / "databricks/labs/gbx/gridx/h3/functions.py",
+    "gbx_quadbin_": PYTHON_ROOT / "databricks/labs/gbx/gridx/quadbin/functions.py",
+    "gbx_pmtiles_": PYTHON_ROOT / "databricks/labs/gbx/pmtiles/functions.py",
+}
+
 
 def canonical_sql() -> set[str]:
     names = set()
@@ -98,6 +111,42 @@ def python_names() -> set[str]:
     for path in PYTHON_ROOT.rglob("functions.py"):
         names.update(PY_NAME_RE.findall(path.read_text()))
     return names
+
+
+def heavy_module_names() -> set[str]:
+    """Get gbx_ function names registered in heavy (non-light-only) Python modules."""
+    names = set()
+    for module_path in PREFIX_TO_HEAVY_MODULE.values():
+        if module_path.exists():
+            names.update(PY_NAME_RE.findall(module_path.read_text()))
+    return names
+
+
+def check_heavy_module_coverage(canonical: set[str]) -> dict[str, list[str]]:
+    """Check that each canonical function (except light-only) has a heavy module binding.
+
+    Returns a dict mapping each heavy module path to a list of missing function names
+    that should be defined there.
+    """
+    heavy_names = heavy_module_names()
+    missing_per_module = {}
+
+    for name in sorted(canonical):
+        # Light-only functions don't need a heavy wrapper
+        if name in PYTHON_REGISTERED:
+            continue
+
+        # Check if this function is in any heavy module
+        if name not in heavy_names:
+            # Find which module should have defined it
+            for prefix, module_path in PREFIX_TO_HEAVY_MODULE.items():
+                if name.startswith(prefix):
+                    if module_path not in missing_per_module:
+                        missing_per_module[module_path] = []
+                    missing_per_module[module_path].append(name)
+                    break
+
+    return missing_per_module
 
 
 def main() -> int:
@@ -132,6 +181,17 @@ def main() -> int:
         failed = True
         print(f"❌ packaged copy drifted from canonical: {packaged.relative_to(REPO_ROOT)} "
               f"!= {REGISTERED_TXT.relative_to(REPO_ROOT)} -- re-copy the canonical file.")
+
+    # Check that each canonical function (except light-only) has a heavy module wrapper
+    heavy_missing = check_heavy_module_coverage(sql)
+    if heavy_missing:
+        failed = True
+        for module_path in sorted(heavy_missing.keys()):
+            missing_names = heavy_missing[module_path]
+            print(f"❌ {len(missing_names)} canonical function(s) missing from heavy module "
+                  f"{module_path.relative_to(REPO_ROOT)}:")
+            for name in sorted(missing_names):
+                print(f"     - {name}")
 
     for label, found in bindings.items():
         # Python-registered functions (e.g. gbx_rst_fromfile) have no Scala expression by design;

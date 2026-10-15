@@ -1128,15 +1128,10 @@ class VectorGbxReader(DataSourceReader):
         # open, so N chunks = N full parses (~O(features * chunks) -- this was the dominant
         # cost). Parallelism comes from reading many files concurrently (one task per file).
         #
-        # chunkSize semantics (as of fix #127): features per batch during streaming via
-        # pyogrio.open_arrow(batch_size=chunkSize). The layer is streamed in batches, not
-        # loaded whole, so memory per task scales with chunkSize (not layer size). The parse
-        # happens once, incrementally, as batches are consumed. See read() for byte-guard
-        # enforcement (variable-width columns per batch stay <1 GiB).
-        #
-        # Random-access formats (GPKG/FileGDB) are staged to worker-local temp first so GDAL
-        # can seek; the stream happens on the local copy. Streaming bounds memory even for
-        # very large layers (>2 GiB WKB now succeeds with appropriate chunkSize).
+        # chunkSize is the streamed batch size (see read()): a file is read once,
+        # incrementally, so per-task memory scales with chunkSize, not file size.
+        # Random-access formats (GPKG/FileGDB) are staged to worker-local temp first so
+        # GDAL can seek; the stream reads the local copy.
         #
         # Layout convention (T8): _members() returns paths sorted alphabetically so
         # partitions are emitted in source-path order. When a worker pulls consecutive

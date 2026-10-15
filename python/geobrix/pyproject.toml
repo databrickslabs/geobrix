@@ -119,8 +119,8 @@ light-base = [
     # future-proofs (no 1.x exists today).
     "defusedxml>=0.7,<1",
     # --- LiDAR point-cloud reading (lidar_gbx DataSource; lazrs = pure-Rust LAZ backend) ---
-    "laspy>=2.5,<2.6",
-    "lazrs>=0.6,<0.7",
+    "laspy>=2.7,<2.8",
+    "lazrs>=0.8,<0.9",
     # --- EXIF metadata reading (exif_gbx DataSource; camera/GPS EXIF from drone imagery) ---
     # Pure-Python; no native dep. Available without the [photogrammetry] extra so
     # any light_* install can read EXIF tags without pulling the full SfM stack.

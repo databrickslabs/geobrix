@@ -27,7 +27,7 @@ the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and meth
 
 ## Options
 
-GeoPackage files can contain multiple layers; both tiers (lightweight `gpkg_gbx`, heavyweight `gpkg_ogr`) preset the GPKG driver and expose a layer selector. They take the same options.
+GeoPackage files can contain multiple layers; both tiers (lightweight `gpkg_gbx`, heavyweight `gpkg_ogr`) preset the GPKG driver and expose a layer selector. They take the same options, except where a row says otherwise.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -35,6 +35,7 @@ GeoPackage files can contain multiple layers; both tiers (lightweight `gpkg_gbx`
 | `layerNumber` / `layerN` | `"0"` | Layer index to read (0-based) — `layerNumber` (lightweight) / `layerN` (heavyweight). |
 | `layerName` | `""` | Layer name to read; takes precedence over the layer index when set. |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
+| `codedDomains` | `"code"` | Lightweight only. Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default — the same values the heavyweight reader returns) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
 
 All other [OGR reader options](./vector#options) (`driverName`, …) are also available.
 

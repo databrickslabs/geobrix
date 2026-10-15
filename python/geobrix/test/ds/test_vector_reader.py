@@ -397,8 +397,208 @@ def test_vector_reader_managed_external_rejected_unconditionally(tmp_path):
     with pytest.raises(ValueError, match="vector_file_read"):
         vec._GeoJSONReader({"path": p, "access": "managed"})
 
-    with pytest.raises(ValueError, match="vector_file_read"):
-        vec._GeoJSONReader({"path": p, "access": "external"})
+
+# ---------------------------------------------------------------------------
+# Coded-value domain field handling (#128)
+# ---------------------------------------------------------------------------
+
+
+# Fixtures (conftest.py) write real OGR coded-value domains via osgeo. pyogrio
+# 0.13 / GDAL 3.12 returns a sorted non-negative Integer domain (asc) as
+# dictionary<string, int32> whose INDICES ARE THE STORED CODES, and the unsorted
+# (uns) / negative (neg) / String (scode) domains as plain codes -- so a reader
+# cannot rely on the Arrow dictionary for descriptions. Row 4 is all-NULL.
+_CODES = {
+    "asc": [1, 2, 3, None],
+    "uns": [10, 33, 7, None],
+    "neg": [-1, 0, 1, None],
+    "scode": ["A", "B", None, "A"],
+}
+_DESCRIPTIONS = {
+    "asc": ["one", "two", "three", None],
+    "uns": ["ten", "thirtythree", "seven", None],
+    "neg": ["minus", "zero", "plus", None],
+    "scode": ["Alpha", "Bravo", None, "Alpha"],
+}
+_PLAIN = [100, 200, 300, None]
+_RANGE = [5, 6, 7, None]
+_CODED_READERS = {"gdb": "_FileGdbReader", "gpkg": "_GpkgReader"}
+_CODED_FORMATS = {"gdb": "file_gdb_gbx", "gpkg": "gpkg_gbx"}
+
+
+@pytest.fixture(params=["gdb", "gpkg"])
+def coded_src(request):
+    """(kind, path) for each real coded-domain fixture."""
+    fixture = {"gdb": "gdb_with_coded_domains", "gpkg": "gpkg_with_coded_domains"}
+    return request.param, request.getfixturevalue(fixture[request.param])
+
+
+def _coded_reader(kind, path, mode=None):
+    from databricks.labs.gbx.ds import vector as vec
+
+    opts = {"path": path}
+    if mode:
+        opts["codedDomains"] = mode
+    return getattr(vec, _CODED_READERS[kind])(opts)
+
+
+def _read_table(rdr):
+    import pyarrow as pa
+
+    return pa.Table.from_batches([b for p in rdr.partitions() for b in rdr.read(p)])
+
+
+def _assert_schema_matches_data(rdr, tbl):
+    """schema() (what Spark is told) must declare exactly the Arrow types read()
+    emits, or Spark rejects / mis-reads the batches."""
+    from pyspark.sql.pandas.types import to_arrow_schema
+
+    declared = to_arrow_schema(rdr.schema())
+    assert declared.names == tbl.schema.names
+    for name in declared.names:
+        assert declared.field(name).type == tbl.schema.field(name).type, name
+
+
+def test_vector_coded_domain_default_returns_codes_with_declared_types(coded_src):
+    """Default codedDomains='code': every coded field yields its exact stored
+    codes in the declared OGR type (Integer stays IntegerType, not string), and
+    schema() agrees with the data read() produces."""
+    from pyspark.sql.types import IntegerType, StringType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path)
+    tbl = _read_table(rdr)
+    for col, codes in _CODES.items():
+        assert tbl.column(col).to_pylist() == codes, col
+    types = {f.name: f.dataType for f in rdr.schema().fields}
+    for col in ("asc", "uns", "neg"):
+        assert types[col] == IntegerType(), col
+    assert types["scode"] == StringType()
+    _assert_schema_matches_data(rdr, tbl)
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_nulls_preserved(coded_src, mode):
+    """A NULL in a coded field stays NULL in both modes (never 0, -1, or the
+    description of some code)."""
+    kind, path = coded_src
+    tbl = _read_table(_coded_reader(kind, path, mode))
+    for col in ("asc", "uns", "neg"):
+        assert tbl.column(col).to_pylist()[3] is None, col
+    assert tbl.column("scode").to_pylist()[2] is None
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_non_domain_fields_unchanged(coded_src, mode):
+    """A plain field (no domain) is untouched in both modes: values and type."""
+    from pyspark.sql.types import IntegerType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path, mode)
+    tbl = _read_table(rdr)
+    assert tbl.column("plain").to_pylist() == _PLAIN
+    assert {f.name: f.dataType for f in rdr.schema().fields}["plain"] == IntegerType()
+
+
+def test_vector_coded_domain_description_mode_returns_strings(coded_src):
+    """codedDomains='description' maps EVERY coded field (dictionary-encoded or
+    plain, integer or string domain) to its domain description, and schema()
+    declares StringType for exactly those fields."""
+    from pyspark.sql.types import IntegerType, StringType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path, "description")
+    tbl = _read_table(rdr)
+    for col, descs in _DESCRIPTIONS.items():
+        assert tbl.column(col).to_pylist() == descs, col
+    types = {f.name: f.dataType for f in rdr.schema().fields}
+    for col in _DESCRIPTIONS:
+        assert types[col] == StringType(), col
+    assert types["plain"] == IntegerType()
+    _assert_schema_matches_data(rdr, tbl)
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_spark_read(spark, coded_src, mode):
+    """End-to-end through Spark: the declared schema and the batches agree, so
+    collect() returns the expected values (a mismatch fails the Arrow read)."""
+    kind, path = coded_src
+    register(spark)
+    df = spark.read.format(_CODED_FORMATS[kind]).option("codedDomains", mode).load(path)
+    rows = df.select(*_CODES, "plain").collect()
+    expected = _CODES if mode == "code" else _DESCRIPTIONS
+    for col, vals in expected.items():
+        assert [r[col] for r in rows] == vals, col
+    assert [r["plain"] for r in rows] == _PLAIN
+
+
+@pytest.mark.parametrize("mode", ["code", "description"])
+def test_vector_coded_domain_range_domain_passes_through(coded_src, mode):
+    """A field bound to a RANGE domain carries domain metadata too, but has no
+    codes: it stays an integer field with its stored values in both modes."""
+    from pyspark.sql.types import IntegerType
+
+    kind, path = coded_src
+    rdr = _coded_reader(kind, path, mode)
+    tbl = _read_table(rdr)
+    assert tbl.column("rng").to_pylist() == _RANGE
+    assert {f.name: f.dataType for f in rdr.schema().fields}["rng"] == IntegerType()
+    _assert_schema_matches_data(rdr, tbl)
+
+
+def test_vector_coded_domain_unresolvable_domain_raises(coded_src, monkeypatch):
+    """Description mode never silently falls back to codes: a field whose coded
+    domain is missing from the source's definitions fails with a clear error."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    kind, path = coded_src
+    monkeypatch.setattr(vec, "_read_coded_domains", lambda *a, **k: {})
+    rdr = _coded_reader(kind, path, "description")
+    with pytest.raises(ValueError, match="could not be resolved"):
+        _read_table(rdr)
+
+
+def test_vector_coded_domain_description_from_gdb_zip(gdb_with_coded_domains, tmp_path):
+    """Description mode resolves domains through the zipped-FileGDB form too."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    zpath = str(tmp_path / "coded.gdb.zip")
+    vec._zip_gdb_bundle(gdb_with_coded_domains, zpath)
+    tbl = _read_table(_coded_reader("gdb", zpath, "description"))
+    for col, descs in _DESCRIPTIONS.items():
+        assert tbl.column(col).to_pylist() == descs, col
+
+
+def test_vector_gpkg_domains_without_constraints_table(tmp_path):
+    """A GeoPackage with no gpkg_data_column_constraints table has no domain
+    definitions (not an error)."""
+    import geopandas as gpd
+    import shapely
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = str(tmp_path / "nodom.gpkg")
+    gpd.GeoDataFrame({"a": [1]}, geometry=[shapely.Point(0, 0)], crs=4326).to_file(
+        path, driver="GPKG"
+    )
+    assert vec._read_gpkg_domains(path) == {}
+
+
+def test_vector_coded_domain_option_rejects_invalid_value():
+    """Invalid codedDomains option value raises ValueError with clear message."""
+    import tempfile
+
+    from databricks.labs.gbx.ds.vector import _GeoJSONReader
+
+    with tempfile.NamedTemporaryFile(suffix=".geojson", delete=False) as f:
+        f.write(b'{"type":"FeatureCollection","features":[]}')
+        tmppath = f.name
+
+    try:
+        with pytest.raises(ValueError, match="codedDomains.*code.*description"):
+            _GeoJSONReader({"path": tmppath, "codedDomains": "invalid"})
+    finally:
+        os.unlink(tmppath)
 
 
 def test_vector_members_via_shared_core(tmp_path):

@@ -123,11 +123,41 @@ _OGR_LIST_TO_SPARK = {
 }
 
 
-def _arrow_to_spark(at):
+def _arrow_to_spark(at, coded_domains_mode: str = "code"):
     """Map a pyarrow attribute-column type to the Spark type the reader declares.
     Mirrors _ogr_to_spark's targets so the per-partition output schema (derived from
-    the pyogrio Arrow table) matches schema()/_vector_schema for the same source."""
+    the pyogrio Arrow table) matches schema()/_vector_schema for the same source.
+
+    Coded-value domain fields (verified pyogrio 0.13 / GDAL 3.12, FileGDB + GPKG):
+    pyogrio returns a dictionary<values=string, indices=intN> ONLY for some domains
+    (e.g. sorted, non-negative integer codes), and there the INDICES ARE THE STORED
+    CODES, not positions (the dictionary is padded so dict[code] == description).
+    Other domains (unsorted / negative codes, String domains) arrive as plain codes.
+    So for a dictionary column:
+    - "code": the codes, typed by the index type (int32 -> IntegerType, else Long)
+    - "description": StringType
+    Description mode for NON-dictionary coded fields is decided by the reader from
+    the domain definitions (see VectorGbxReader._description_fields), not here.
+    """
     import pyarrow as pa
+
+    # Handle dictionary types (coded-value domains from OGR)
+    if pa.types.is_dictionary(at):
+        if coded_domains_mode == "description":
+            # Return descriptions as strings
+            return StringType()
+        else:  # coded_domains_mode == "code" (default)
+            # Return codes as their original OGR field type.
+            # The index type determines the code type.
+            index_type = at.index_type
+            if pa.types.is_int32(index_type) or (
+                pa.types.is_integer(index_type) and index_type.bit_width <= 32
+            ):
+                return IntegerType()
+            if pa.types.is_integer(index_type):
+                return LongType()
+            # Fallback: if index type is unusual, treat as string
+            return StringType()
 
     if pa.types.is_boolean(at):
         return BooleanType()
@@ -144,7 +174,7 @@ def _arrow_to_spark(at):
     if pa.types.is_binary(at) or pa.types.is_large_binary(at):
         return BinaryType()
     if pa.types.is_list(at) or pa.types.is_large_list(at):
-        return ArrayType(_arrow_to_spark(at.value_type))
+        return ArrayType(_arrow_to_spark(at.value_type, coded_domains_mode))
     return StringType()  # string / large_string / anything else
 
 
@@ -369,6 +399,169 @@ def _geometry_type_of(wkb: bytes) -> str:
     from shapely import from_wkb
 
     return from_wkb(bytes(wkb)).geom_type
+
+
+_OGR_DOMAIN_META = b"GDAL:OGR:domain_name"
+
+
+def _field_domain_names(arrow_schema) -> Dict[str, str]:
+    """{field: domain name} from the ``GDAL:OGR:domain_name`` field metadata that
+    pyogrio attaches to every attribute column bound to a field domain."""
+    out: Dict[str, str] = {}
+    for f in arrow_schema:
+        name = (f.metadata or {}).get(_OGR_DOMAIN_META)
+        if name:
+            out[f.name] = name.decode("utf-8")
+    return out
+
+
+def _xml_local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
+
+
+def _read_gdb_items_domains(
+    path: str,
+) -> Dict[str, Optional[List[Tuple[str, Optional[str]]]]]:
+    """Field domains of a FileGDB: {domain: [(code_text, description)]} for coded
+    domains, {domain: None} for range domains (no codes to map).
+
+    Domain definitions live as XML in the GDB_Items system table (one
+    ``*CodedValueDomain*`` / ``*RangeDomain*`` document per domain). Parsed with
+    defusedxml -- the XML comes from an untrusted file."""
+    import pyogrio
+    from defusedxml import ElementTree
+
+    _, tbl = pyogrio.read_arrow(
+        path, sql="SELECT Definition FROM GDB_Items", read_geometry=False
+    )
+    out: Dict[str, Optional[List[Tuple[str, Optional[str]]]]] = {}
+    for xml in tbl.column("Definition").to_pylist():
+        if not xml or "Domain" not in xml[:256]:
+            continue
+        root = ElementTree.fromstring(xml)
+        kind = _xml_local(root.tag)
+        if "CodedValueDomain" not in kind and "RangeDomain" not in kind:
+            continue
+        name = None
+        pairs: List[Tuple[str, Optional[str]]] = []
+        for el in root:
+            tag = _xml_local(el.tag)
+            if tag == "DomainName":
+                name = (el.text or "").strip()
+            elif tag == "CodedValues":
+                for cv in el:
+                    parts = {_xml_local(c.tag): c.text for c in cv}
+                    if parts.get("Code") is not None:
+                        pairs.append((parts["Code"].strip(), parts.get("Name")))
+        if name:
+            out[name] = pairs if "CodedValueDomain" in kind else None
+    return out
+
+
+def _read_gpkg_domains(
+    path: str,
+) -> Dict[str, Optional[List[Tuple[str, Optional[str]]]]]:
+    """Field domains of a GeoPackage: {domain: [(code_text, description)]} for
+    ``enum`` (coded) constraints, {domain: None} for ``range``/``glob`` ones.
+
+    Read through GDAL (pyogrio ``sql=``) like the layer itself, so any path the
+    reader can open works. GDAL also writes a ``_<domain>_domain_description``
+    row per domain (the domain's own description, not a code), which is skipped."""
+    import pyogrio
+
+    try:
+        _, tbl = pyogrio.read_arrow(
+            path,
+            sql="SELECT constraint_name, constraint_type, value, description "
+            "FROM gpkg_data_column_constraints",
+            read_geometry=False,
+        )
+    except (pyogrio.errors.DataSourceError, pyogrio.errors.DataLayerError):
+        return {}  # no constraints table -> no domain definitions
+    out: Dict[str, Optional[List[Tuple[str, Optional[str]]]]] = {}
+    for name, ctype, value, desc in zip(
+        *(tbl.column(c).to_pylist() for c in tbl.column_names)
+    ):
+        if name.startswith("_") and name.endswith("_domain_description"):
+            continue
+        if ctype != "enum":
+            out[name] = None
+        elif value is not None:
+            out.setdefault(name, []).append((str(value), desc))
+    return out
+
+
+def _read_coded_domains(path: str, driver: str):
+    """Field domain definitions for a (locally readable) source -- coded domains
+    map to their (code, description) pairs, non-coded ones to None -- or {} for
+    formats without stored domain definitions."""
+    low = path.lower().rstrip("/")
+    if driver == "OpenFileGDB" or low.endswith((".gdb", ".gdb.zip")):
+        return _read_gdb_items_domains(path)
+    if driver == "GPKG" or low.endswith(".gpkg"):
+        return _read_gpkg_domains(path)
+    return {}
+
+
+def _typed_code(text: str, arrow_type):
+    """Domain code text -> a value comparable with a column of ``arrow_type``."""
+    import pyarrow as pa
+
+    if pa.types.is_integer(arrow_type):
+        try:
+            return int(text)
+        except ValueError:
+            f = float(text)  # e.g. "3.0"; raises for non-numeric -> skipped
+            if not f.is_integer():
+                raise
+            return int(f)
+    if pa.types.is_floating(arrow_type):
+        return float(text)
+    return text
+
+
+def _map_codes_to_descriptions(codes, pairs):
+    """Vectorized code -> description. NULL stays NULL; a code with no domain
+    entry falls back to its string form (never silently dropped)."""
+    import pyarrow as pa
+    import pyarrow.compute as pc
+
+    keys, descs = [], []
+    for code_text, desc in pairs:
+        try:
+            keys.append(_typed_code(code_text, codes.type))
+        except ValueError:
+            continue
+        descs.append(desc if desc is not None else code_text)
+    as_text = pc.cast(codes, pa.string())
+    if not keys:
+        return as_text
+    idx = pc.index_in(codes, value_set=pa.array(keys, type=codes.type))
+    mapped = pc.take(pa.array(descs, type=pa.string()), idx)
+    return pc.coalesce(mapped, as_text)
+
+
+def _decode_coded_domain_column(col, coded_domains_mode: str = "code", domain=None):
+    """Decode a coded-value domain column into codes or descriptions.
+
+    A dictionary column's INDICES ARE THE STORED CODES (see _arrow_to_spark); a
+    non-dictionary coded column already holds the codes. So:
+    - "code": the codes (dictionary indices, or the column as-is); the caller's
+      cast to the declared schema types them.
+    - "description": with ``domain`` ([(code_text, description)], from the
+      source's domain definitions) map every code to its description; without
+      it, fall back to the dictionary's values (or the column unchanged).
+    """
+    import pyarrow as pa
+
+    col = col.combine_chunks() if isinstance(col, pa.ChunkedArray) else col
+    is_dict = pa.types.is_dictionary(col.type)
+    codes = col.indices if is_dict else col
+    if coded_domains_mode != "description":
+        return codes
+    if domain is not None:
+        return _map_codes_to_descriptions(codes, domain)
+    return col.dictionary_decode() if is_dict else col
 
 
 def _srid_to_crs(srid: str, proj4: str):
@@ -674,6 +867,18 @@ class VectorGbxReader(DataSourceReader):
         else:
             self.bbox = None
         self.where = options.get("where") or None
+        # codedDomains option: "code" (default, return stored codes) or "description"
+        # (return domain descriptions as strings). When a field has a coded-value domain,
+        # pyogrio returns a dictionary type; this option controls the decoding.
+        coded_domains_opt = options.get("codedDomains", "code")
+        if coded_domains_opt not in ("code", "description"):
+            raise ValueError(
+                f"codedDomains option must be 'code' or 'description'; got '{coded_domains_opt}'"
+            )
+        self.coded_domains = coded_domains_opt
+        # Per-member coded-domain definitions (description mode only), read once
+        # per member by schema()/read() on this reader instance.
+        self._domain_defs_cache: Dict[str, Dict] = {}
 
         # No in-DataSource FILE-tier probe: a DataSource reader is session-less on
         # Spark Connect (getActiveSession() -> None), so probing here falsely
@@ -778,7 +983,77 @@ class VectorGbxReader(DataSourceReader):
         ogr_types = list(info.get("ogr_types", []))
         return tuple(zip(fields, ogr_types))
 
+    def _domain_defs_for(self, path: str) -> Dict:
+        """Coded-value domain definitions of one member, cached per member."""
+        if path not in self._domain_defs_cache:
+            with self._staged(path) as _p:
+                self._domain_defs_cache[path] = _read_coded_domains(
+                    _zip_vsi(_p), self.driver
+                )
+        return self._domain_defs_cache[path]
+
+    def _description_fields(self, path: str, arrow_schema) -> Dict[str, Optional[list]]:
+        """Description mode: {field: coded pairs or None} for every field that is
+        emitted as StringType descriptions. A field qualifies when its domain is a
+        coded domain in the source's definitions (pairs drive the mapping), or when
+        pyogrio dictionary-encoded it (None -> the dictionary's own values).
+        schema() and read() both call this so the declared and emitted types agree.
+
+        Raises ValueError if a field's domain is declared in metadata but cannot be
+        resolved from the source's domain definitions."""
+        import pyarrow as pa
+
+        names = _field_domain_names(arrow_schema)
+        defs = self._domain_defs_for(path) if names else {}
+        out: Dict[str, Optional[list]] = {}
+        for f in arrow_schema:
+            dom = names.get(f.name)
+            if dom is not None:  # field has a domain_name in metadata
+                if dom in defs:  # domain is defined and readable
+                    if defs[dom] is not None:  # coded; range domains pass through
+                        out[f.name] = defs[dom]
+                elif pa.types.is_dictionary(f.type):  # fallback for dictionary columns
+                    out[f.name] = None
+                else:  # domain in metadata but not readable and not dictionary
+                    raise ValueError(
+                        f"Field {f.name!r} references domain {dom!r} which could not be "
+                        f"resolved from the source. Check that the domain definitions are "
+                        f"readable and complete."
+                    )
+            elif pa.types.is_dictionary(
+                f.type
+            ):  # no metadata, but column is dict-encoded
+                out[f.name] = None
+        return out
+
+    def _description_schema_fields(self, path: str) -> Dict[str, Optional[list]]:
+        """_description_fields for schema(): field domain metadata comes from a
+        zero-feature Arrow read (pyogrio.read_info does not expose it)."""
+        self._gdal_readonly_safe()
+        import pyogrio
+
+        kw: Dict = {"layer": self._layer(), "max_features": 0}
+        if self.driver:
+            kw["driver"] = self.driver
+        with self._staged(path) as _p:
+            _, tbl = pyogrio.read_arrow(_zip_vsi(_p), **kw)
+        return self._description_fields(path, tbl.schema)
+
     def schema(self) -> StructType:
+        out = self._attr_schema()
+        if self.coded_domains != "description":
+            return out
+        desc = self._description_schema_fields(self._members()[0])
+        if not desc:
+            return out
+        return StructType(
+            [
+                StructField(f.name, StringType(), f.nullable) if f.name in desc else f
+                for f in out.fields
+            ]
+        )
+
+    def _attr_schema(self) -> StructType:
         members = self._members()
         first_info = self._info_for(members[0])
         if len(members) > 1:
@@ -880,8 +1155,23 @@ class VectorGbxReader(DataSourceReader):
         # not re-open the file just to compute it): attrs preserved, geom typed by asWKB,
         # srid/proj string columns -- column NAMES/ORDER match _vector_schema/schema().
         attr_cols = [c for c in tbl.column_names if c != gcol]
+        # Description mode: every coded field becomes StringType -- the same set
+        # schema() declares (see _description_fields).
+        desc = (
+            self._description_fields(partition.path, tbl.schema)
+            if self.coded_domains == "description"
+            else {}
+        )
         fields: List[StructField] = [
-            StructField(c, _arrow_to_spark(tbl.schema.field(c).type), True)
+            StructField(
+                c,
+                (
+                    StringType()
+                    if c in desc
+                    else _arrow_to_spark(tbl.schema.field(c).type, self.coded_domains)
+                ),
+                True,
+            )
             for c in attr_cols
         ]
         geom_spark = BinaryType() if partition.as_wkb else StringType()
@@ -907,7 +1197,11 @@ class VectorGbxReader(DataSourceReader):
         srid_out = pa.array([srid] * n, type=pa.string())
         proj_out = pa.array([proj4] * n, type=pa.string())
 
-        out_cols = [tbl.column(c) for c in attr_cols] + [geom_out, srid_out, proj_out]
+        # Decode any dictionary-encoded columns (from coded-value domains)
+        out_cols = [
+            _decode_coded_domain_column(tbl.column(c), self.coded_domains, desc.get(c))
+            for c in attr_cols
+        ] + [geom_out, srid_out, proj_out]
         out_names = attr_cols + [
             out_gname,
             out_gname + "_srid",

@@ -148,3 +148,90 @@ def exif_jpeg(tmp_path):
 
     img.save(str(p), "jpeg", exif=exif.tobytes())
     return p
+
+
+# ---------------------------------------------------------------------------
+# Coded-value domain test fixtures (#128)
+# ---------------------------------------------------------------------------
+
+# Field name -> (OGR field type name, domain name or None). Rows below are in
+# feature order; the 4th row is NULL in every coded field (and in `plain`).
+CODED_DOMAINS = {
+    "asc": ("OFTInteger", {1: "one", 2: "two", 3: "three"}),  # sorted -> dictionary
+    "uns": ("OFTInteger", {10: "ten", 33: "thirtythree", 7: "seven"}),  # unsorted
+    "neg": ("OFTInteger", {-1: "minus", 0: "zero", 1: "plus"}),  # negative codes
+    "strdom": ("OFTString", {"A": "Alpha", "B": "Bravo"}),
+}
+# Range domains are not coded: their fields must pass through unchanged.
+RANGE_DOMAINS = {"rngdom": ("OFTInteger", 0, 1000)}
+CODED_FIELDS = [  # (field, OGR type, domain)
+    ("asc", "OFTInteger", "asc"),
+    ("uns", "OFTInteger", "uns"),
+    ("neg", "OFTInteger", "neg"),
+    ("scode", "OFTString", "strdom"),
+    ("plain", "OFTInteger", None),
+    ("rng", "OFTInteger", "rngdom"),
+]
+CODED_ROWS = [
+    (1, 10, -1, "A", 100, 5),
+    (2, 33, 0, "B", 200, 6),
+    (3, 7, 1, None, 300, 7),
+    (None, None, None, "A", None, None),
+]
+
+
+def _build_coded_domain_source(path: str, driver: str) -> str:
+    """Write a 1-layer point dataset whose fields carry real OGR coded-value
+    domains, via native osgeo (pyogrio's bundled OpenFileGDB is read-only).
+    Return codes are checked rather than flipping the process-global osgeo
+    exception mode, which other tests in the session rely on."""
+    from osgeo import ogr, osr
+
+    ds = ogr.GetDriverByName(driver).CreateDataSource(path)
+    assert ds is not None, f"could not create {driver} at {path}"
+    for name, (ftype, codes) in CODED_DOMAINS.items():
+        dom = ogr.CreateCodedFieldDomain(
+            name, name, getattr(ogr, ftype), ogr.OFSTNone, codes
+        )
+        assert ds.AddFieldDomain(dom), f"AddFieldDomain({name}) failed"
+    for name, (ftype, lo, hi) in RANGE_DOMAINS.items():
+        dom = ogr.CreateRangeFieldDomain(
+            name, name, getattr(ogr, ftype), ogr.OFSTNone, lo, True, hi, True
+        )
+        assert ds.AddFieldDomain(dom), f"AddFieldDomain({name}) failed"
+    srs = osr.SpatialReference()
+    srs.ImportFromEPSG(4326)
+    lyr = ds.CreateLayer("coded", srs, ogr.wkbPoint)
+    for fname, ftype, dname in CODED_FIELDS:
+        fd = ogr.FieldDefn(fname, getattr(ogr, ftype))
+        if dname:
+            fd.SetDomainName(dname)
+        assert lyr.CreateField(fd) == 0, f"CreateField({fname}) failed"
+    names = [f for f, _, _ in CODED_FIELDS]
+    for i, row in enumerate(CODED_ROWS):
+        feat = ogr.Feature(lyr.GetLayerDefn())
+        for k, v in zip(names, row):
+            if v is None:
+                feat.SetFieldNull(k)
+            else:
+                feat.SetField(k, v)
+        feat.SetGeometry(ogr.CreateGeometryFromWkt(f"POINT ({i} {i})"))
+        assert lyr.CreateFeature(feat) == 0
+    ds = None  # flush + close
+    return path
+
+
+@pytest.fixture(scope="module")
+def gdb_with_coded_domains(tmp_path_factory):
+    """FileGDB (.gdb directory) with coded-value domain fields; see CODED_*."""
+    pytest.importorskip("osgeo.ogr", reason="osgeo needed to write a FileGDB")
+    d = tmp_path_factory.mktemp("coded_gdb")
+    return _build_coded_domain_source(str(d / "coded.gdb"), "OpenFileGDB")
+
+
+@pytest.fixture(scope="module")
+def gpkg_with_coded_domains(tmp_path_factory):
+    """GeoPackage with the same coded-value domain fields; see CODED_*."""
+    pytest.importorskip("osgeo.ogr", reason="osgeo needed to write the fixture")
+    d = tmp_path_factory.mktemp("coded_gpkg")
+    return _build_coded_domain_source(str(d / "coded.gpkg"), "GPKG")

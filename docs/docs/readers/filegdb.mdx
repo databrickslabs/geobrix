@@ -27,7 +27,7 @@ the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and meth
 
 ## Options
 
-File Geodatabases contain multiple feature classes (layers); both tiers (lightweight `file_gdb_gbx`, heavyweight `file_gdb_ogr`) preset the OpenFileGDB driver and expose a feature-class selector. They take the same options.
+File Geodatabases contain multiple feature classes (layers); both tiers (lightweight `file_gdb_gbx`, heavyweight `file_gdb_ogr`) preset the OpenFileGDB driver and expose a feature-class selector. They take the same options, except where a row says otherwise.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -35,6 +35,7 @@ File Geodatabases contain multiple feature classes (layers); both tiers (lightwe
 | `layerNumber` / `layerN` | `"0"` | Feature-class index to read (0-based, first feature class) — `layerNumber` (lightweight) / `layerN` (heavyweight). |
 | `layerName` | `""` (first feature class) | Feature-class (layer) name to read; takes precedence over the index when set. |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
+| `codedDomains` | `"code"` | Lightweight only. Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default — the same values the heavyweight reader returns) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
 
 All other [OGR reader options](./vector#options) (`driverName`, …) are also available.
 

@@ -13,7 +13,7 @@ import pytest
 pytestmark = pytest.mark.integration
 
 _HERE = Path(__file__).resolve()
-_JARS = sorted((_HERE.parents[3] / "lib").glob("geobrix-*-jar-with-dependencies.jar"))
+_JARS = sorted((_HERE.parents[2] / "lib").glob("geobrix-*-jar-with-dependencies.jar"))
 SAMPLE = (
     os.environ.get(
         "GBX_SAMPLE_DATA_ROOT",
@@ -73,3 +73,40 @@ def test_vector_reader_parity(spark_with_jar, light_fmt, heavy_fmt, path):
     lg = {bytes(r[geom_col]) for r in light.select(geom_col).collect()}
     hg = {bytes(r[geom_col]) for r in heavy.select(geom_col).collect()}
     assert lg == hg
+
+
+_CODED_COLS = ("asc", "uns", "neg", "scode", "plain", "rng")
+
+
+@pytest.mark.parametrize(
+    "light_fmt,heavy_fmt,fixture",
+    [
+        ("file_gdb_gbx", "file_gdb_ogr", "gdb_with_coded_domains"),
+        ("gpkg_gbx", "gpkg_ogr", "gpkg_with_coded_domains"),
+    ],
+)
+def test_vector_coded_domain_parity(
+    spark_with_jar, request, tmp_path, light_fmt, heavy_fmt, fixture
+):
+    """Coded-value domain fields: the light default returns the same stored codes
+    as the heavy reader, row for row (the heavy tier reads zipped FileGDBs)."""
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = request.getfixturevalue(fixture)
+    if path.endswith(".gdb"):
+        zpath = str(tmp_path / "coded.gdb.zip")
+        vec._zip_gdb_bundle(path, zpath)
+        path = zpath
+    spark = spark_with_jar
+    light = spark.read.format(light_fmt).load(path)
+    heavy = spark.read.format(heavy_fmt).load(path)
+    lrows = [tuple(r) for r in light.select(*_CODED_COLS).collect()]
+    hrows = [tuple(r) for r in heavy.select(*_CODED_COLS).collect()]
+    assert len(lrows) == len(hrows)
+    # Compared where the light value is present: the heavy reader currently
+    # returns NULL fields as 0 / "" and OGR Integer as bigint for every integer
+    # field (domain or not) -- a separate cross-tier difference, not domain handling.
+    for lrow, hrow in zip(lrows, hrows):
+        for col, lv, hv in zip(_CODED_COLS, lrow, hrow):
+            if lv is not None:
+                assert lv == hv, (col, lrow, hrow)

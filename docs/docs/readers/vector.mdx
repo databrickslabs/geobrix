@@ -39,7 +39,7 @@ Driver coverage varies by environment — some formats need extra GDAL drivers/p
 
 ## Options
 
-Both tiers (lightweight `vector_gbx`, heavyweight `ogr`) take the same options; the named format readers preset `driverName`.
+Both tiers (lightweight `vector_gbx`, heavyweight `ogr`) take the same options, except where a row says otherwise; the named format readers preset `driverName`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -48,6 +48,7 @@ Both tiers (lightweight `vector_gbx`, heavyweight `ogr`) take the same options; 
 | `chunkSize` | `"10000"` | Records per read batch (in-memory batching on the single per-file read — not partition splitting). |
 | `layerName` | `""` | Layer name for multi-layer formats (overrides the layer index). |
 | `layerNumber` / `layerN` | `"0"` | Layer index for multi-layer formats (0-based) — `layerNumber` (lightweight) / `layerN` (heavyweight). |
+| `codedDomains` | `"code"` | Lightweight only. Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default — the same values the heavyweight reader returns) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
 
 Example — forcing the driver explicitly:
 

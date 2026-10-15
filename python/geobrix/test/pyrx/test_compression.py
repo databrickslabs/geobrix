@@ -362,3 +362,19 @@ def test_cog_predictor_hygiene_gtiff_uint8_unaffected():
         "uint8", compress="auto", driver="GTiff", decoded_bytes=1 * 1024**2
     )
     assert o.get("predictor") == "1"
+
+
+@pytest.mark.parametrize("compress", ["auto", "zstd", "deflate", "lzw"])
+def test_creation_opts_promotes_odd_nbits_under_predictor_2(compress):
+    """PREDICTOR=2 needs 8/16/32/64-bit samples: a 15-bit source (Sentinel-2 style
+    uint16 with NBITS=15) is promoted to the dtype's full width, losslessly."""
+    opts = C.creation_opts("uint16", compress=compress, driver="COG", nbits=15)
+    assert opts["predictor"] == "2" and opts["nbits"] == "16"
+
+
+def test_creation_opts_leaves_nbits_alone_when_not_needed():
+    """No promotion for byte-aligned depths, unknown depths, or no predictor 2."""
+    for nbits in (None, 16):
+        assert "nbits" not in C.creation_opts("uint16", compress="deflate", nbits=nbits)
+    assert "nbits" not in C.creation_opts("uint8", compress="deflate", nbits=4)
+    assert "nbits" not in C.creation_opts("uint16", compress="none", nbits=15)

@@ -134,6 +134,7 @@ def creation_opts(
     level=None,
     predictor=None,
     driver="GTiff",
+    nbits=None,
 ) -> dict:
     """Return rasterio creation-options for a raster write.
 
@@ -168,10 +169,31 @@ def creation_opts(
         - GTiff ZSTD uses "zstd_level", DEFLATE uses "zlevel"
         - COG ZSTD/DEFLATE both use "LEVEL"
 
+    nbits:
+        Optional source sample depth (the band's ``NBITS`` metadata), e.g. 15 for
+        Sentinel-2 uint16 data. Copying such a band with a horizontal-differencing
+        predictor (2) fails in GDAL, which supports it only for 8/16/32/64-bit
+        samples, so the samples are then promoted to the dtype's full width
+        (``nbits`` = 16 for uint16) -- lossless, since the values already fit.
+
     Returns
     -------
     dict[str, str] suitable for merging into a rasterio profile.
     """
+    opts = _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver)
+    if (
+        nbits is not None
+        and opts.get("predictor") == "2"
+        and int(nbits) not in (8, 16, 32, 64)
+    ):
+        import numpy as np
+
+        opts["nbits"] = str(np.dtype(str(dtype)).itemsize * 8)
+    return opts
+
+
+def _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver) -> dict:
+    """Codec / level / predictor keys for creation_opts (see its docstring)."""
     dtype = str(dtype)
     pred = predictor if predictor is not None else predictor_for(dtype)
     is_cog = str(driver).upper() == "COG"

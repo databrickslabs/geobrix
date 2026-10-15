@@ -334,9 +334,12 @@ def cog_convert_file(
     import rasterio
     import rasterio.shutil as rio_shutil
 
-    # Determine the source dtype so the authority can pick the right predictor.
+    # Source dtype (predictor) and sample depth: a band tagged NBITS (e.g. 15-bit
+    # Sentinel-2 uint16) is carried into the copy, and the authority must account
+    # for it when choosing a predictor.
     with rasterio.open(src_path) as _src:
         _src_dtype = _src.dtypes[0]
+        _src_nbits = _src.tags(1, ns="IMAGE_STRUCTURE").get("NBITS")
 
     # Route compression through the authority for codec/level/predictor.
     # Map "RAW" -> "none" so the authority emits no compression keys.
@@ -350,6 +353,7 @@ def cog_convert_file(
         level=compress_level,
         predictor=predictor,
         driver="COG",
+        nbits=_src_nbits,
     )
 
     creation = dict(

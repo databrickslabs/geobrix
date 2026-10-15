@@ -478,3 +478,36 @@ def test_collect_sources_nonrecursive_calls_list_files_with_recursive_false(tmp_
     mock_lf.assert_called()
     _args, kw = mock_lf.call_args
     assert kw.get("recursive", True) is False
+
+
+def test_cog_convert_file_handles_odd_nbits_source(tmp_path):
+    """A uint16 source tagged NBITS=15 converts to a valid COG with identical
+    pixels (it used to fail: PREDICTOR=2 with a 15-bit sample depth)."""
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_origin
+    from rio_cogeo.cogeo import cog_validate
+
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+    src, dst = str(tmp_path / "s15.tif"), str(tmp_path / "out.tif")
+    data = (np.arange(64 * 64, dtype=np.uint16).reshape(1, 64, 64) % 30000).astype(
+        np.uint16
+    )
+    with rasterio.open(
+        src,
+        "w",
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:32618",
+        transform=from_origin(0, 0, 10, 10),
+        nbits=15,
+    ) as ds:
+        ds.write(data)
+    cog_convert_file(src, dst, compression="DEFLATE")
+    assert cog_validate(dst, strict=False)[0]
+    with rasterio.open(dst) as out:
+        assert np.array_equal(out.read(), data)

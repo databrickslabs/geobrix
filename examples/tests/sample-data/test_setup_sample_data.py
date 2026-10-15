@@ -37,9 +37,12 @@ def test_setup_sample_data_notebook_structure(setup_sample_data_notebook_path: P
     assert len(nb.cells) > 0, "Notebook has no cells"
     code_cells = [c for c in nb.cells if c.cell_type == "code"]
     assert len(code_cells) > 0, "Notebook has no code cells"
-    first_code = "".join(code_cells[0].source)
+    # The config cell is the first non-magic code cell (a leading %pip cell installs deps).
+    python_cells = [c for c in code_cells if not "".join(c.source).lstrip().startswith("%")]
+    assert len(python_cells) > 0, "Notebook has no non-magic code cells"
+    first_code = "".join(python_cells[0].source)
     assert "databricks.labs.gbx.sample" in first_code, (
-        "First code cell should import from databricks.labs.gbx.sample"
+        "First non-magic code cell should import from databricks.labs.gbx.sample"
     )
     assert "get_volumes_path" in first_code
     assert "run_essential_bundle" in first_code

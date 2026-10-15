@@ -23,7 +23,7 @@
 hs_err_pid*.log
 replay_pid*.log
 /.codeql/
-/notebooks/tests/databricks_cluster_config.env
+/examples/tests/databricks_cluster_config.env
 /ci-logs/
 /.cache/
 .ci-pip-cache-key

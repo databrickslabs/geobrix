@@ -68,7 +68,9 @@ df = (spark.read.format("vector_gbx")
 
 Use pushdown whenever you only need a geographic or attribute subset of a large file — it keeps per-task memory well within the Serverless limit.
 
-**2. Staging for random-access formats.** GeoPackage (`.gpkg`) and FileGDB (`.gdb`) rely on seeked I/O. The reader stages these formats to worker-local temp via a sequential copy before opening them, which keeps FUSE reads sequential and lets GDAL seek freely on local disk. The staged copy is cached per (worker process, source path), so multiple partitions of the same file share one copy.
+**2. Staging for random-access formats.** GeoPackage (`.gpkg`) and FileGDB (`.gdb`) rely on seeked I/O. The reader stages these formats to worker-local temp via a sequential copy before opening them, which keeps FUSE reads sequential and lets GDAL seek freely on local disk. The staged copy is cached per (worker process, source path), so multiple partitions of the same file share one copy. The lightweight raster readers stage sources the same way when they decode windows.
+
+The staging cache is bounded so it cannot fill a worker's local disk. When a new copy would exceed the cap, the least recently used copies that no task is reading are removed first; a single source larger than the cap is still staged on its own. The cap defaults to half of the local disk space available to the cache; set `GBX_STAGE_CACHE_MB` in the executor environment to fix it instead. Staged copies left behind by worker processes that have exited are removed the next time a worker stages a file.
 
 **3. FILE-column vector table.** For a directory of vector files that is read repeatedly, store them as a FILE-column Delta table via `vector_file_write` or the `vector_gbx` writer with `file_mode="external"`. Reading from the Delta table resolves FILE references without per-file FUSE opens and enables the same open-amortization as the raster fast path:
 

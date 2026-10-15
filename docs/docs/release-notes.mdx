@@ -53,6 +53,16 @@ both vector reader tiers.
   `Real` → `double`) and return `NULL` for unset fields, matching the lightweight `*_gbx`
   readers. Cast explicitly where code relied on the old types.
 
+### Reader staging cache
+
+- **Staged copies no longer accumulate on worker disks.** The lightweight readers copy
+  GeoPackage, FileGDB and (for windowed decodes) raster sources to worker-local disk before
+  reading them. Those copies were kept for the life of the worker process and were not
+  cleaned up when Spark ended the worker, so long-running clusters could fill local disk.
+  The cache is now bounded — least recently used idle copies are removed, capped at half the
+  available local disk by default or at `GBX_STAGE_CACHE_MB` — and copies left by exited
+  workers are removed. See [Serverless and Memory](./serverless-and-memory).
+
 ### Raster writers
 
 - **`cog_gbx` writes sources with a non-byte-aligned bit depth.** Rasters whose band is

@@ -13,6 +13,63 @@ This page tracks **API and naming changes** across GeoBrix releases — the sing
 
 ---
 
+## What's new in v0.5.3
+
+:::note
+v0.5.3 is under development and not yet released.
+:::
+
+Fixes for very large and domain-coded vector sources, and one field-type mapping shared by
+both vector reader tiers.
+
+### Vector readers — large layers and coded-value domains
+
+- **Lightweight vector readers stream large layers.** `vector_gbx`, `file_gdb_gbx`,
+  `gpkg_gbx`, `shapefile_gbx`, `geojson_gbx` and `geojsonl_gbx` now read a layer in batches
+  of `chunkSize` features instead of loading it whole, and split any batch that would come
+  close to Arrow's 2 GiB per-column limit. Layers with more than 2 GiB of geometry — which
+  previously failed with `ArrowInvalid: offset overflow while concatenating arrays` after
+  parsing the whole layer — now read normally, and memory per task scales with `chunkSize`
+  rather than layer size. A single value too large for any Spark row fails with an error
+  naming the layer, column, and feature. See [Vector Readers](./readers/vector#options).
+- **Coded-value domain fields read correctly.** FileGDB and GeoPackage fields bound to a
+  coded-value domain no longer fail with `Cannot call the method "getInt"`; they return the
+  stored code in the field's declared type — the same values the heavyweight readers return.
+  The new lightweight-only `codedDomains` option (`"code"`, the default, or
+  `"description"`) returns the domain's descriptions as strings instead. See
+  [FileGDB Reader](./readers/filegdb#options) and
+  [GeoPackage Reader](./readers/geopackage#options).
+- **`vector_file_read` streams its sources.** The function-layer FILE read now streams each
+  source layer in bounded batches as well, so very large layers read without exhausting
+  memory or exceeding Arrow's per-column limit.
+
+### Heavyweight vector readers — declared field types and NULLs (breaking behavior change)
+
+- **Heavyweight vector readers return the declared OGR field types and keep NULLs.** The
+  `*_ogr` readers previously inferred each attribute's type from sampled values — OGR
+  `Integer` fields came back as `bigint`, and `String` fields holding numeric-looking text
+  came back as numbers — and returned unset fields as `0` / `""`. They now use each field's
+  declared OGR type (`Integer` → `int`, `Integer64` → `bigint`, `String` → `string`,
+  `Real` → `double`) and return `NULL` for unset fields, matching the lightweight `*_gbx`
+  readers. Cast explicitly where code relied on the old types.
+
+### Python bindings
+
+- **Heavyweight Python wrappers for the custom-grid and quadbin geometry k-ring/k-loop
+  explode functions.** `custom_geomkringexplode` / `custom_geomkloopexplode`
+  (`databricks.labs.gbx.gridx.custom.functions`) and `quadbin_geomkringexplode` /
+  `quadbin_geomkloopexplode` (`databricks.labs.gbx.gridx.quadbin.functions`) were available only
+  through SQL in the heavyweight tier; they are now callable from Python like their BNG and
+  H3 counterparts.
+
+### Dependencies
+
+- **LiDAR stack:** the lightweight extras now take `laspy` 2.7 with `lazrs` 0.8 (bumped
+  together; `laspy` 2.7 requires `lazrs` 0.8).
+- **Photogrammetry extras:** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
+
+---
+
 ## What's new in v0.5.2
 
 Adds LiDAR point-cloud ingestion and DSM/CHM surface-modelling functions, and a new

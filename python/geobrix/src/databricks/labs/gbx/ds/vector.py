@@ -1183,8 +1183,6 @@ class VectorGbxReader(DataSourceReader):
             "datetime_as_string": False,
             "use_pyarrow": True,
         }
-        if partition.count:
-            kw["max_features"] = partition.count
         if partition.driver:
             kw["driver"] = partition.driver
         # Pushdown filters -> only matching features are parsed (Serverless memory).
@@ -1245,7 +1243,15 @@ class VectorGbxReader(DataSourceReader):
                 layer_label = partition.layer or str(partition.path)
                 seen = 0
                 yielded = False
+                # A feature-range partition (count > 0) stops the stream itself:
+                # open_arrow takes skip_features but not max_features.
+                remaining = partition.count or None
                 for batch in reader:
+                    if remaining is not None:
+                        if remaining <= 0:
+                            break
+                        batch = batch.slice(0, remaining)
+                        remaining -= batch.num_rows
                     for sl in _byte_bounded_slices(batch, budget, layer_label, seen):
                         if sl.num_rows:
                             yield self._transform_batch(

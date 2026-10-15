@@ -715,3 +715,18 @@ def test_vector_stream_empty_layer_yields_declared_schema(tmp_path):
     batches = _read_batches(rdr)
     assert len(batches) == 1 and batches[0].num_rows == 0
     assert batches[0].schema.names == to_arrow_schema(rdr.schema()).names
+
+
+def test_vector_stream_partition_feature_range(tmp_path):
+    """A partition with a feature range (skip/count) streams exactly those features
+    -- open_arrow takes no max_features, so the reader stops the stream itself."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    path = _points_gpkg(str(tmp_path / "pts.gpkg"), 25)
+    rdr = vec._GpkgReader({"path": path, "chunkSize": "4"})
+    (p,) = rdr.partitions()
+    part = vec._ChunkPartition(p.path, p.driver, p.layer, p.as_wkb, 5, 7)
+    tbl = pa.Table.from_batches(list(rdr.read(part)))
+    assert tbl.column("id").to_pylist() == list(range(5, 12))

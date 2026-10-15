@@ -119,6 +119,7 @@ def read_large_raster_cog_output(spark, path=None):
         spark.read.format("raster_gbx")
         .option("sizeInMB", "1")
         .option("tileFormat", "cog")
+        .option("virtualTiles", "false")  # encoded tiles; virtual tiles carry no bytes
         .load(path or SAMPLE_RASTER_SINGLE)
     )
     rows = df.collect()

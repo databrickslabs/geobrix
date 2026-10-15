@@ -50,9 +50,16 @@ def read_raster_gbx(spark, path=None):
 
 
 def read_gtiff_gbx(spark, path=None):
-    """Verify READ_GTIFF_GBX: named reader reads a GeoTIFF identically."""
+    """Verify READ_GTIFF_GBX: named reader reads a GeoTIFF identically.
+
+    Materialized tiles (``virtualTiles=false``) carry the GDAL ``driver`` in their
+    metadata; the default virtual tiles are bytes-free references and do not."""
     _register(spark)
-    df = spark.read.format("gtiff_gbx").load(path or SAMPLE_RASTER_PATH)
+    df = (
+        spark.read.format("gtiff_gbx")
+        .option("virtualTiles", "false")
+        .load(path or SAMPLE_RASTER_PATH)
+    )
     assert df.count() >= 1
     assert df.collect()[0]["tile"]["metadata"]["driver"] == "GTiff"
     return df

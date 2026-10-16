@@ -153,25 +153,25 @@ def test_quadbin_distance(spark, quadbin_registered):
     assert row["d1"] == 1
 
 
-def test_quadbin_geomkringexplode(spark, quadbin_registered):
-    """quadbin_geomkringexplode should return a Column."""
-    qx = quadbin_registered
-    wkt = "POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))"
-    df = spark.createDataFrame([(wkt,)], ["geom"])
-    # Test that the function returns a Column (can be used in select)
-    result = df.select(
-        qx.quadbin_geomkringexplode(f.col("geom"), 5, 1).alias("cells")
-    ).collect()
-    assert len(result) >= 0  # Should not error
+def _rows(df):
+    return sorted(tuple(r) for r in df.collect())
 
 
-def test_quadbin_geomkloopexplode(spark, quadbin_registered):
-    """quadbin_geomkloopexplode should return a Column."""
+@pytest.mark.parametrize("name", ["geomkringexplode", "geomkloopexplode"])
+def test_quadbin_geom_explode_wrappers_match_sql(spark, quadbin_registered, name):
+    """The heavy wrappers bind geom/resolution/k[/mode/coverage] in the SQL
+    function's positional order: same rows as the SQL call, with defaults and
+    with an explicit non-default mode + coverage (which change the result)."""
     qx = quadbin_registered
-    wkt = "POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))"
-    df = spark.createDataFrame([(wkt,)], ["geom"])
-    # Test that the function returns a Column (can be used in select)
-    result = df.select(
-        qx.quadbin_geomkloopexplode(f.col("geom"), 5, 1).alias("cells")
-    ).collect()
-    assert len(result) >= 0  # Should not error
+    wrapper = getattr(qx, f"quadbin_{name}")
+    df = spark.createDataFrame(
+        [("POLYGON((-1 -1, 1 -1, 1 1, -1 1, -1 -1))",)], ["geom"]
+    )
+    got = _rows(df.select(wrapper(f.col("geom"), 5, 1)))
+    want = _rows(df.selectExpr(f"gbx_quadbin_{name}(geom, 5, 1)"))
+    assert got and got == want
+    got_in = _rows(df.select(wrapper(f.col("geom"), 5, 1, "boundary-in", "core")))
+    want_in = _rows(
+        df.selectExpr(f"gbx_quadbin_{name}(geom, 5, 1, 'boundary-in', 'core')")
+    )
+    assert got_in == want_in and want_in != want

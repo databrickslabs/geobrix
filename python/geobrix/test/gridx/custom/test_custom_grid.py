@@ -192,35 +192,29 @@ def test_custom_kring(spark, custom_registered):
     assert len(ring) >= 1
 
 
-def test_custom_geomkringexplode(spark, custom_registered):
-    """custom_geomkringexplode should return a Column."""
+def _rows(df):
+    return sorted(tuple(r) for r in df.collect())
+
+
+@pytest.mark.parametrize("name", ["geomkringexplode", "geomkloopexplode"])
+def test_custom_geom_explode_wrappers_match_sql(spark, custom_registered, name):
+    """The heavy wrappers bind geom/grid/resolution/k[/mode/coverage] in the SQL
+    function's positional order: same rows as the SQL call, with defaults and
+    with an explicit non-default mode + coverage (which change the result)."""
     cx = custom_registered
-    poly_wkb = _polygon_wkb(0.0, 0.0, 30.0, 30.0)
-    grid_df = _make_grid(cx, spark)
-    grid_val = grid_df.first()["grid"]
-
-    df = spark.createDataFrame([(poly_wkb, grid_val)], ["geom", "grid"])
-    # Test that the function returns a Column (can be used in select)
-    result = df.select(
-        cx.custom_geomkringexplode(
-            f.col("geom").cast("binary"), f.col("grid"), 0, 1
-        ).alias("cells")
-    ).collect()
-    assert len(result) >= 0  # Should not error
-
-
-def test_custom_geomkloopexplode(spark, custom_registered):
-    """custom_geomkloopexplode should return a Column."""
-    cx = custom_registered
-    poly_wkb = _polygon_wkb(0.0, 0.0, 30.0, 30.0)
-    grid_df = _make_grid(cx, spark)
-    grid_val = grid_df.first()["grid"]
-
-    df = spark.createDataFrame([(poly_wkb, grid_val)], ["geom", "grid"])
-    # Test that the function returns a Column (can be used in select)
-    result = df.select(
-        cx.custom_geomkloopexplode(
-            f.col("geom").cast("binary"), f.col("grid"), 0, 1
-        ).alias("cells")
-    ).collect()
-    assert len(result) >= 0  # Should not error
+    wrapper = getattr(cx, f"custom_{name}")
+    grid_val = _make_grid(cx, spark).first()["grid"]
+    df = spark.createDataFrame(
+        [(_polygon_wkb(0.0, 0.0, 30.0, 30.0), grid_val)], ["geom", "grid"]
+    )
+    geom = f.col("geom").cast("binary")
+    got = _rows(df.select(wrapper(geom, f.col("grid"), 0, 1)))
+    want = _rows(df.selectExpr(f"gbx_custom_{name}(cast(geom as binary), grid, 0, 1)"))
+    assert got and got == want
+    got_in = _rows(df.select(wrapper(geom, f.col("grid"), 0, 1, "boundary-in", "core")))
+    want_in = _rows(
+        df.selectExpr(
+            f"gbx_custom_{name}(cast(geom as binary), grid, 0, 1, 'boundary-in', 'core')"
+        )
+    )
+    assert got_in == want_in and want_in != want

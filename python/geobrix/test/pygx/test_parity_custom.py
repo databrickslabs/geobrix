@@ -361,21 +361,15 @@ def test_custom_pointascell_polyfill_all_four_encodings(spark_with_jar):
 # --- Y-NaN lock-in (Resolved decision 3) ----------------------------------------------------
 
 
-def test_custom_y_nan_rejected_both_tiers(spark_with_jar):
-    """Lock the CG-T8 fix cross-tier: a NaN Y must be REJECTED in BOTH tiers.
+def test_custom_y_nan_degrades_to_null_both_tiers(spark_with_jar):
+    """A NaN coordinate never becomes a cell, and through SQL it is a DATA error:
+    both tiers return NULL for that row instead of failing the query.
 
-    The heavy ``CustomGridSystem.pointToCellID`` previously had a
-    ``require(!x.isNaN && !x.isNaN, ...)`` typo that left a NaN Y unguarded; the
-    light port guards both and the heavy fix (CG-T8) corrects the typo.
-
-    A NaN Y cannot round-trip through standard WKB/WKT cleanly across tiers, so we
-    lock it at each tier's natural boundary:
-      * LIGHT: call the pure-Python core ``_custom.point_to_cell_id`` with a NaN Y
-        and assert it raises ``ValueError`` (the same guard the UDF invokes).
-      * HEAVY: feed a NaN-Y point as a WKT literal (``POINT(530000 NaN)``, which JTS
-        parses to a NaN ordinate) through ``gbx_custom_pointascell`` and assert the
-        query raises (the heavy ``require`` throws ``IllegalStateException``, which
-        Spark surfaces as an analysis/execution exception).
+    The core cell lookups reject NaN in both X and Y (the CG-T8 fix closed a heavy
+    ``!x.isNaN && !x.isNaN`` typo that let a NaN Y through). Since 72097a43 the
+    registered ``gbx_custom_pointascell`` calls the *OrNull lookup on both tiers, so a
+    bad coordinate degrades to NULL while parameter errors (resolution, grid spec)
+    still raise. The light core is checked directly; the heavy core only through SQL.
     """
     spark = spark_with_jar
 
@@ -383,7 +377,6 @@ def test_custom_y_nan_rejected_both_tiers(spark_with_jar):
     from databricks.labs.gbx.pygx import _custom
     from databricks.labs.gbx.pygx import functions as gx
 
-    # LIGHT: the pure-Python guard (the UDF calls straight into this).
     conf = _custom.CustomGridConf(
         bound_x_min=0,
         bound_x_max=1_000_000,
@@ -394,27 +387,18 @@ def test_custom_y_nan_rejected_both_tiers(spark_with_jar):
         root_cell_size_y=1000,
         srid=27700,
     )
-    with pytest.raises(ValueError):
-        _custom.point_to_cell_id(conf, _PX, float("nan"), 0)
-    # Sanity: a NaN X is also rejected (the original guard already covered X).
-    with pytest.raises(ValueError):
-        _custom.point_to_cell_id(conf, float("nan"), _PY, 0)
+    for x, y in ((_PX, float("nan")), (float("nan"), _PY)):
+        with pytest.raises(ValueError):
+            _custom.point_to_cell_id(conf, x, y, 0)
+        assert _custom.point_to_cell_id_or_none(conf, x, y, 0) is None
 
-    # HEAVY: a NaN-Y point through the registered gbx_custom_pointascell must raise.
-    hx.register(spark)  # overwrites the catalog with heavy expressions
-    with pytest.raises(Exception):
-        spark.sql(
-            f"SELECT gbx_custom_pointascell('POINT(530000 NaN)', {_GRID_27700}, 0)"
-        ).collect()
-
-    # Re-register light afterwards so the session's gbx_custom_* names are restored
-    # for any subsequent test in this module (defensive; module fixture is shared).
+    sql = f"SELECT gbx_custom_pointascell('POINT(530000 NaN)', {_GRID_27700}, 0) AS c"
     gx.register(spark)
-    # And confirm the light tier also rejects NaN-Y via the registered UDF path.
-    with pytest.raises(Exception):
-        spark.sql(
-            f"SELECT gbx_custom_pointascell('POINT(530000 NaN)', {_GRID_27700}, 0)"
-        ).collect()
+    light = spark.sql(sql).collect()[0]["c"]
+    hx.register(spark)  # overwrites the catalog with heavy expressions
+    heavy = spark.sql(sql).collect()[0]["c"]
+    gx.register(spark)  # restore light names for later tests in this module
+    assert light is None and heavy is None
 
 
 # --- kloop + distance cross-tier parity (Stage 3 / Task 4) ------------------------------------

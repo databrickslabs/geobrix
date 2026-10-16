@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.2", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "geobrix-lakeflow-connectors"
+version = "0.1.0"
+description = "GeoBrix custom connector for Lakeflow Connect"
+readme = "sources/geobrix_vector/README.md"
+requires-python = ">=3.12"
+license = {text = "Databricks"}
+authors = [
+    {name = "Databricks", email = "geobrix@databricks.com"}
+]
+
+dependencies = [
+    # No hard runtime dependencies: pyspark (provided by Databricks),
+    # lakeflow-community-connectors and geobrix are co-installed by the
+    # pipeline environment, not declared here for the spike.
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.setuptools]
+include-package-data = false
+packages = ["databricks.labs.community_connector.sources.geobrix_vector"]
+
+[tool.setuptools.package-dir]
+"databricks.labs.community_connector.sources.geobrix_vector" = "sources/geobrix_vector"
+
+[tool.setuptools.package-data]
+"*" = ["*.json", "*.md", "*.yaml"]
+
+[tool.black]
+line-length = 88
+target-version = ["py312"]
+include = '\.pyi?$'
+extend-exclude = '/(\.git|__pycache__|dist)/'
+
+[tool.isort]
+multi_line_output = 3
+include_trailing_comma = true
+force_grid_wrap = 0
+use_parentheses = true
+line_length = 88
+known_first_party = ["databricks"]
+default_section = "THIRDPARTY"
+
+[tool.flake8]
+ignore = ["E203", "E266", "E501", "E704", "W503"]
+max-line-length = 88
+max-complexity = 20
+select = ["B", "C", "E", "F", "W", "T4"]
+exclude = [".git", "__pycache__", "dist"]

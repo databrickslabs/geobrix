@@ -1,0 +1,25 @@
+# GeoBrix Vector Lakeflow Connect Specification
+# This file defines the connector specification including connection parameters
+# and external options allowlist.
+
+# ============================================================================
+# Connection Parameters
+# These are provided when creating the Unity Catalog connection.
+# ============================================================================
+display_name: GeoBrix Vector
+connection:
+  parameters:
+    - name: root_path
+      type: string
+      required: false
+      description: >
+        Optional root path in UC Volumes (e.g., /Volumes/catalog/schema/volume/prefix).
+        When provided, enables file discovery and an in-root path guard.
+        When omitted, list_tables() returns an empty list.
+
+# ============================================================================
+# External Options Allowlist
+# These table-specific options must be included in the externalOptionsAllowList
+# parameter of the UC connection to allow them to be passed through.
+# ============================================================================
+external_options_allowlist: "path,format,layer,where,bbox,chunk_size,file_glob"

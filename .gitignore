@@ -49,7 +49,10 @@ __pycache__/
 !/.claude/rules/
 /input/
 .venv-pyrx/
+.venv-connectors/
 test-logs/bench/
+/connectors/lakeflow/*.egg-info/
+/connectors/lakeflow/build/
 
 # Lakeflow DAB local override files (real per-workspace values; template committed as *.override.yml.example)
 *.override.yml

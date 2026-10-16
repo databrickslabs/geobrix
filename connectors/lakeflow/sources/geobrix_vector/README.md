@@ -19,13 +19,16 @@ The pipeline's environment installs three wheels (no GeoBrix install is needed o
 compute that queries the resulting tables):
 
 ```text
-geobrix[light_dbr19] @ file:///Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix-<version>-py3-none-any.whl
+geobrix[light_dbr18]@file:///Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix-<version>-py3-none-any.whl
 /Volumes/<catalog>/<schema>/<volume>/<dir>/lakeflow_community_connectors-<version>-py3-none-any.whl
 /Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix_lakeflow_connectors-<version>-py3-none-any.whl
 ```
 
-Match the GeoBrix extra to the pipeline's runtime channel (`light_dbr19` for a DBR 19
-channel, `light_dbr18` for DBR 18). Keep the wheels in a folder of their own.
+- Write the GeoBrix line **without spaces around `@`** — pipelines install each line with an
+  unquoted `%pip install`, so spaces split the requirement.
+- Match the extra to the pipeline's channel runtime (`light_dbr18` for a DBR 18 channel,
+  `light_dbr19` for DBR 19).
+- Keep the wheels in a folder of their own.
 
 ## Configure
 
@@ -52,6 +55,16 @@ Grant `USE CONNECTION` to the people who build pipelines on it.
 | `file_glob` | Basename filter for folder members, e.g. `zones_*.gpkg` |
 
 The ingestion type is append-only, with `_source_mtime` as the cursor.
+
+## Deploy
+
+Create a **serverless** pipeline whose source is [`pipeline/ingest.py`](pipeline/ingest.py)
+(edit its `pipeline_spec`), with the three wheels above as the environment's dependencies.
+Each pipeline update creates or appends to one streaming table per spec entry.
+
+The Add data UI and the managed-ingestion pipeline API (`ingestion_definition` with
+`source_type: COMMUNITY`) are the other deployment route for community connectors; use the
+source-file pipeline above when that route is not available in your workspace.
 
 ## Behavior
 

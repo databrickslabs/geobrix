@@ -122,7 +122,9 @@ def write_singlefile(spark, out_dir):
     import os
 
     _register(spark)
-    df = _points_df(spark, n=20, with_rgb=True)
+    # Points only: the helper's group/cluster naming columns are for the grouped
+    # example; the v1 writer rejects columns it does not write.
+    df = _points_df(spark, n=20, with_rgb=True).drop("group", "cluster")
     (
         df.repartition(4)
         .write.format("lidar_gbx")

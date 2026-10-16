@@ -18,7 +18,9 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
-import gdal_examples
+# Package-qualified: readers/ also has a gdal_examples module, and a bare import
+# returns whichever was imported first in a whole-suite run.
+from writers import gdal_examples  # noqa: E402
 from path_config import SAMPLE_DATA_BASE
 
 SAMPLE_GTIFF = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"

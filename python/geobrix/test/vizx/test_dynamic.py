@@ -11,6 +11,15 @@ import pytest
 
 anywidget = pytest.importorskip("anywidget")
 
+from databricks.labs.gbx.vizx._simplify import _resolve_tippecanoe_bin  # noqa: E402
+
+# These build simplified overview tiles, which shells out to tippecanoe. CI installs
+# it from the env locks; the dev container deliberately does not (it segfaults
+# natively there), so skip with a clear reason rather than fail.
+_needs_tippecanoe = pytest.mark.skipif(
+    _resolve_tippecanoe_bin() is None, reason="tippecanoe not installed"
+)
+
 import geopandas as gpd  # noqa: E402
 from shapely.geometry import Point  # noqa: E402
 
@@ -166,6 +175,7 @@ def test_prefetch_coalesces_stale():
         worker.shutdown()
 
 
+@_needs_tippecanoe
 def test_builds_widget_with_overview_and_esm():
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")
     w = plot_interactive_dynamic([vector_layer(gdf)], simplify_tiles_spec={"max_z": 8})
@@ -202,6 +212,7 @@ def test_viewport_payload_structure():
     assert result["zoom"] == 12
 
 
+@_needs_tippecanoe
 def test_widget_has_detail_trait():
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")
     w = plot_interactive_dynamic([vector_layer(gdf)], simplify_tiles_spec={"max_z": 8})
@@ -212,6 +223,7 @@ def test_widget_has_detail_trait():
     assert trait_meta.get("sync") is True
 
 
+@_needs_tippecanoe
 def test_widget_esm_registers_change_detail_handler():
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")
     w = plot_interactive_dynamic([vector_layer(gdf)], simplify_tiles_spec={"max_z": 8})
@@ -219,6 +231,7 @@ def test_widget_esm_registers_change_detail_handler():
     assert "change:detail" in w._esm
 
 
+@_needs_tippecanoe
 def test_widget_esm_references_maplibre():
     """The ESM should use MapLibre (the SRI-pinned CDN URL from _maplibre.py)."""
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")
@@ -226,6 +239,7 @@ def test_widget_esm_references_maplibre():
     assert "maplibre" in w._esm.lower() or "maplibregl" in w._esm.lower()
 
 
+@_needs_tippecanoe
 def test_esm_is_synced_to_frontend():
     """_esm must appear in get_state() — i.e. it actually reaches the JS frontend."""
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")
@@ -245,6 +259,7 @@ def test_esm_is_synced_to_frontend():
     assert "detail" in state, "detail trait is not in get_state()"
 
 
+@_needs_tippecanoe
 def test_custom_on_viewport_called():
     """A user-supplied on_viewport callback replaces the default tiler."""
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")
@@ -272,6 +287,7 @@ def test_custom_on_viewport_called():
     assert w.detail != "", "detail trait is empty after on_viewport returned bytes"
 
 
+@_needs_tippecanoe
 def test_custom_on_viewport_below_seam_not_called():
     """on_viewport must NOT be called when zoom <= max_z (seam gate)."""
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")
@@ -290,6 +306,7 @@ def test_custom_on_viewport_below_seam_not_called():
     assert calls == [], "on_viewport must not fire below the seam"
 
 
+@_needs_tippecanoe
 def test_handle_msg_cache_hit_skips_callback():
     """On a _handle_msg cache hit, the user callback is NOT invoked."""
     gdf = gpd.GeoDataFrame({"v": [1]}, geometry=[Point(-122.4, 37.7)], crs="EPSG:4326")

@@ -375,7 +375,8 @@ def write_csv(cells: List[CellCompare], path) -> None:
 def pyrx_implemented() -> "frozenset[str]":
     """Names of every `rst_*` function the lightweight pyrx API implements.
 
-    Derived by parsing `def rst_<name>` definitions out of the pyrx
+    Derived by parsing `def rst_<name>` definitions and module-level
+    `rst_<name> = ...` bindings out of the pyrx
     `functions.py` so the coverage scorecard guards against a regression (a
     registered function losing its pyrx binding). Path resolved relative to the
     repo root, mirroring `spec.registered_rst()`.
@@ -396,7 +397,10 @@ def pyrx_implemented() -> "frozenset[str]":
         from databricks.labs.gbx.pyrx import functions as _prx
 
         src = Path(_prx.__file__).read_text()
+    # `def rst_x(...)` plus module-level `rst_x = _factory(...)` bindings (e.g. the
+    # rst_combine* stats are built by a factory, not written out with `def`).
     names = set(re.findall(r"def (rst_[a-z0-9_]+)", src))
+    names |= set(re.findall(r"^(rst_[a-z0-9_]+)\s*=", src, flags=re.M))
     return frozenset(names)
 
 

@@ -89,6 +89,26 @@ with *"Expected package name at the start of dependency specifier."* The named
 form installs cleanly on **Serverless**, standard/shared, and ARM.
 :::
 
+**Or install straight from the GitHub release.** When your compute can reach github.com, skip the
+download-and-stage steps and point pip at the release asset. Keep the same quoted PEP 508 named
+form, with the extra for your runtime:
+
+```python
+%pip install "geobrix[light_env6] @ https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>-py3-none-any.whl"
+dbutils.library.restartPython()
+```
+
+On a classic cluster, use your runtime's extra instead (for example `geobrix[light_dbr19]`). For a
+Serverless job, or the notebook's **Environment** side panel, add the same requirement as a
+dependency line:
+
+```text
+geobrix[light_env6] @ https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>-py3-none-any.whl
+```
+
+Workspaces that restrict outbound network access (for example, Serverless egress controls) can
+block GitHub — install from a Unity Catalog Volume, as above, in that case.
+
 Then import the package(s) you need and (optionally) register their SQL functions. Each light package exposes the same `functions` / `register(spark)` pattern:
 
 ```python

@@ -42,10 +42,11 @@ sample, models, plus bench + ds + core (the tier-neutral gbx.core.crs resolver
 imports rasterio, so test/core is light-tier too).
 
 ``bench`` is a light dir (its modules import rasterio/shapely/h3/quadbin via the
-bench harness) and satisfies all three conditions: (1) it is in ``_LIGHT_TEST_DIRS``
-below; (2) it RUNS in the light phase -- listed in the pyrx_build action pytest dir
-list; (3) it is skipped in the heavy phase -- present in the heavy action's
-``LIGHT_IGNORES`` (--ignore=test/bench). Its unit tests guard the light bench FnSpec
+bench harness): (1) it is in ``_LIGHT_TEST_DIRS`` below and (3) it is skipped in the
+heavy phase -- present in the heavy action's ``LIGHT_IGNORES`` (--ignore=test/bench).
+(2) is currently NOT met: the pyrx_build light run de-scoped test/bench in 838cc39b
+(a multi-bundled-PROJ "Cannot find proj.db" conflict on the CI runner -- see the
+comment in .github/actions/pyrx_build/action.yml), so it runs only locally for now. Its unit tests guard the light bench FnSpec
 registry and the cross-tier coverage/count invariants (previously CI ran none of
 test/bench, so bench-spec drift went uncaught).
 """

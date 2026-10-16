@@ -115,3 +115,52 @@ def test_vector_coded_domain_parity(
 
 def _coded_types(df):
     return [(c, df.schema[c].dataType.simpleString()) for c in _CODED_COLS]
+
+
+def _time_bool_sources(tmp_path):
+    """A GeoJSON with an OGR Time property and a GPKG with a Boolean-subtype field."""
+    import json
+
+    import geopandas as gpd
+    import shapely
+
+    gj = tmp_path / "t.geojson"
+    gj.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"t": t, "n": i},
+                        "geometry": {"type": "Point", "coordinates": [i, i]},
+                    }
+                    for i, t in enumerate(["12:34:56", "07:08:09.250", None])
+                ],
+            }
+        )
+    )
+    gp = str(tmp_path / "b.gpkg")
+    gpd.GeoDataFrame(
+        {"flag": [True, False, None], "n": [0, 1, 2]},
+        geometry=[shapely.Point(i, i) for i in range(3)],
+        crs=4326,
+    ).to_file(gp, driver="GPKG")
+    return str(gj), gp
+
+
+def test_vector_time_and_boolean_parity(spark_with_jar, tmp_path):
+    """OGR Time reads as GDAL's HH:MM:SS[.sss] text and Boolean subtypes as booleans,
+    identically in both tiers (types and values, NULLs kept)."""
+    gj, gp = _time_bool_sources(tmp_path)
+    spark = spark_with_jar
+    for light_fmt, heavy_fmt, path, col, opts in [
+        ("geojson_gbx", "geojson_ogr", gj, "t", {"multi": "false"}),
+        ("gpkg_gbx", "gpkg_ogr", gp, "flag", {}),
+    ]:
+        light = spark.read.format(light_fmt).load(path)
+        heavy = spark.read.format(heavy_fmt).options(**opts).load(path)
+        assert light.schema[col].dataType == heavy.schema[col].dataType, col
+        lv = [r[col] for r in light.orderBy("n").select(col).collect()]
+        hv = [r[col] for r in heavy.orderBy("n").select(col).collect()]
+        assert lv == hv, (col, lv, hv)

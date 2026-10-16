@@ -705,3 +705,47 @@ def test_vector_stream_partition_feature_range(tmp_path):
     part = vec._ChunkPartition(p.path, p.driver, p.layer, p.as_wkb, 5, 7)
     tbl = pa.Table.from_batches(list(rdr.read(part)))
     assert tbl.column("id").to_pylist() == list(range(5, 12))
+
+
+def test_vector_coded_domain_unknown_code_falls_back_to_its_text():
+    """Description mode never drops a value: a code missing from its domain comes
+    back as the code's text, and NULL stays NULL."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    out = vec._map_codes_to_descriptions(
+        pa.array([1, 99, None], pa.int32()), [("1", "one")]
+    )
+    assert out.to_pylist() == ["one", "99", None]
+
+
+def test_vector_ogr_time_fields_read_as_text(spark, tmp_path):
+    """OGR Time fields (e.g. GeoJSON "12:34:56") read as strings in GDAL's format
+    (HH:MM:SS, plus .sss with milliseconds) -- Spark has no TIME type -- and the
+    declared schema agrees with the data (it used to fail with getLong)."""
+    from pyspark.sql.types import StringType
+
+    from databricks.labs.gbx.ds import vector as vec
+
+    p = tmp_path / "t.geojson"
+    p.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {
+                        "type": "Feature",
+                        "properties": {"t": t},
+                        "geometry": {"type": "Point", "coordinates": [i, i]},
+                    }
+                    for i, t in enumerate(["12:34:56", "07:08:09.250", None])
+                ],
+            }
+        )
+    )
+    rdr = vec._GeoJSONReader({"path": str(p)})
+    assert rdr.schema()["t"].dataType == StringType()
+    register(spark)
+    rows = spark.read.format("geojson_gbx").load(str(p)).select("t").collect()
+    assert [r["t"] for r in rows] == ["12:34:56", "07:08:09.250", None]

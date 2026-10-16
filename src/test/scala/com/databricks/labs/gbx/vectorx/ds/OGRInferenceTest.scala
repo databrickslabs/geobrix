@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.vectorx.ds
 
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
-import com.databricks.labs.gbx.vectorx.ds.ogr.OGR_SchemaInference
+import com.databricks.labs.gbx.vectorx.ds.ogr.{OGR_Driver, OGR_SchemaInference}
 import org.apache.spark.sql.catalyst.util.DateTimeUtils
 import org.apache.spark.sql.types._
 import org.gdal.ogr.{Feature, FieldDefn, ogr, ogrConstants}
@@ -29,7 +29,7 @@ class OGRInferenceTest extends AnyFunSuite {
         OGR_SchemaInference.getType("String") shouldBe StringType
         OGR_SchemaInference.getType("Real") shouldBe DoubleType
         OGR_SchemaInference.getType("Date") shouldBe DateType
-        OGR_SchemaInference.getType("Time") shouldBe TimestampType
+        OGR_SchemaInference.getType("Time") shouldBe StringType // Spark has no TIME type
         OGR_SchemaInference.getType("DateTime") shouldBe TimestampType
         OGR_SchemaInference.getType("Binary") shouldBe BinaryType
         OGR_SchemaInference.getType("IntegerList") shouldBe ArrayType(IntegerType)
@@ -70,6 +70,41 @@ class OGRInferenceTest extends AnyFunSuite {
         schema("code").dataType shouldBe StringType
         schema("n").dataType shouldBe IntegerType
         schema("big").dataType shouldBe LongType
+    }
+
+    test("OGR_SchemaInference should read Boolean subtypes as booleans and Time as GDAL text") {
+        GDALManager.loadSharedObjects(Seq.empty)
+        GDALManager.configureGDAL("/tmp", "/tmp")
+        ogr.RegisterAll()
+
+        val path = java.nio.file.Files.createTempDirectory("ogr_subtypes").resolve("t.gpkg").toString
+        val ds = ogr.GetDriverByName("GPKG").CreateDataSource(path)
+        val srs = new SpatialReference(); srs.ImportFromEPSG(4326)
+        val lyr = ds.CreateLayer("t", srs, ogrConstants.wkbPoint)
+        val flag = new FieldDefn("flag", ogrConstants.OFTInteger)
+        flag.SetSubType(ogrConstants.OFSTBoolean)
+        lyr.CreateField(flag)
+        lyr.CreateField(new FieldDefn("t", ogrConstants.OFTTime))
+        Seq((Some(1), "12:34:56"), (Some(0), "07:08:09.250"), (None, null)).zipWithIndex.foreach {
+            case ((b, tm), i) =>
+                val f = new Feature(lyr.GetLayerDefn())
+                b.foreach(v => f.SetField(0, v))
+                if (tm != null) f.SetField(1, tm)
+                f.SetGeometry(ogr.CreateGeometryFromWkt(s"POINT ($i $i)"))
+                lyr.CreateFeature(f)
+        }
+        ds.delete()
+
+        val schema = OGR_SchemaInference.inferSchemaImpl("GPKG", path, Map.empty).get
+        schema("flag").dataType shouldBe BooleanType
+        schema("t").dataType shouldBe StringType
+        val rd = OGR_Driver.open(path, "GPKG")
+        val layer = rd.GetLayer(0)
+        val rows = (0 until 3).map { _ =>
+            val f = layer.GetNextFeature()
+            (OGR_SchemaInference.getValue(f, 0, BooleanType), OGR_SchemaInference.getValue(f, 1, StringType))
+        }
+        rows shouldBe Seq((true, "12:34:56"), (false, "07:08:09.250"), (null, null))
     }
 
     test("OGR_SchemaInference should return null for unset and null fields") {

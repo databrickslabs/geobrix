@@ -49,8 +49,13 @@ both vector reader tiers.
   `Integer` fields came back as `bigint`, and `String` fields holding numeric-looking text
   came back as numbers — and returned unset fields as `0` / `""`. They now use each field's
   declared OGR type (`Integer` → `int`, `Integer64` → `bigint`, `String` → `string`,
-  `Real` → `double`) and return `NULL` for unset fields, matching the lightweight `*_gbx`
-  readers. Cast explicitly where code relied on the old types.
+  `Real` → `double`, `Integer` with the Boolean subtype → `boolean`) and return `NULL` for
+  unset fields, matching the lightweight `*_gbx` readers. Cast explicitly where code relied
+  on the old types.
+- **OGR `Time` fields read as text in both tiers.** Spark has no time-of-day type, so a
+  `Time` field (for example a GeoJSON property such as `"12:34:56"`) now reads as a
+  `string` in GDAL's `HH:MM:SS` form (`HH:MM:SS.sss` with milliseconds). The lightweight
+  readers previously failed on these fields with `Cannot call the method "getLong"`.
 
 ### Reader staging cache
 

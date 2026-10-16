@@ -61,7 +61,7 @@ _OGR_TO_SPARK = {
     "OFTString": StringType,
     "OFTWideString": StringType,
     "OFTDate": DateType,
-    "OFTTime": TimestampType,
+    "OFTTime": StringType,  # Spark has no TIME type: GDAL's HH:MM:SS[.sss] text
     "OFTDateTime": TimestampType,
     "OFTBinary": BinaryType,
 }
@@ -521,6 +521,26 @@ def _decode_coded_domain_column(col, coded_domains_mode: str = "code", domain=No
     if domain is not None:
         return _map_codes_to_descriptions(codes, domain)
     return col.dictionary_decode() if is_dict else col
+
+
+def _time_text(col):
+    """OGR Time values as GDAL formats them: HH:MM:SS, or HH:MM:SS.sss when the
+    value has milliseconds (Spark has no TIME type)."""
+    import pyarrow as pa
+
+    return pa.array(
+        [
+            (
+                None
+                if v is None
+                else v.isoformat(
+                    timespec="milliseconds" if v.microsecond else "seconds"
+                )
+            )
+            for v in col.to_pylist()
+        ],
+        pa.string(),
+    )
 
 
 def _byte_bounded_slices(batch, budget: int, layer: str, first_feature: int = 0):
@@ -1224,7 +1244,8 @@ class VectorGbxReader(DataSourceReader):
     def _transform_batch(
         self, batch, gcol, attr_cols, desc, target, partition, srid, proj4
     ):
-        """One streamed slice -> the declared output batch: coded-domain decode, geometry
+        """One streamed slice -> the declared output batch: coded-domain decode, Time
+        fields as text, geometry
         as WKB or WKT (shapely 2.x, vectorized), constant srid/proj columns, cast to the
         declared Arrow schema."""
         import numpy as np
@@ -1239,8 +1260,12 @@ class VectorGbxReader(DataSourceReader):
             wkt = shapely.to_wkt(shapely.from_wkb(wkb.to_numpy(zero_copy_only=False)))
             geom_out = pa.array(np.asarray(wkt, dtype=object), type=pa.string())
         cols = [
-            _decode_coded_domain_column(
-                batch.column(c), self.coded_domains, desc.get(c)
+            (
+                _time_text(batch.column(c))
+                if pa.types.is_time(batch.schema.field(c).type)
+                else _decode_coded_domain_column(
+                    batch.column(c), self.coded_domains, desc.get(c)
+                )
             )
             for c in attr_cols
         ] + [

@@ -36,7 +36,7 @@ object OGR_SchemaInference extends Serializable {
             case "String"         => StringType
             case "Real"           => DoubleType
             case "Date"           => DateType
-            case "Time"           => TimestampType
+            case "Time"           => StringType // Spark has no TIME type: GDAL's HH:MM:SS[.sss] text
             case "DateTime"       => TimestampType
             case "Binary"         => BinaryType
             case "IntegerList"    => ArrayType(IntegerType)
@@ -48,11 +48,18 @@ object OGR_SchemaInference extends Serializable {
             case _                => StringType
         }
 
+    /** Spark type of a field: its declared OGR type, with the Boolean subtype read as
+      * booleans (as the lightweight readers do). */
+    def fieldType(field: FieldDefn): DataType =
+        if (field.GetSubType == ogrConstants.OFSTBoolean) BooleanType
+        else getType(field.GetFieldTypeName(field.GetFieldType))
+
     /** Extracts feature field j as Spark type (dataType); dates/timestamps via getDate/getDateTime.
       * Unset and NULL fields are null (OGR's GetFieldAs* would return 0 / "" for them). */
     def getValue(feature: Feature, j: Int, dataType: DataType): Any = {
         if (!feature.IsFieldSetAndNotNull(j)) return null
         dataType match {
+            case BooleanType               => feature.GetFieldAsInteger(j) != 0
             case IntegerType               => feature.GetFieldAsInteger(j)
             case LongType                  => feature.GetFieldAsInteger64(j)
             case StringType                => feature.GetFieldAsString(j)
@@ -149,7 +156,7 @@ object OGR_SchemaInference extends Serializable {
                 val field = feature.GetFieldDefnRef(j)
                 val name = field.GetNameRef
                 val fieldName = if (name.isEmpty) f"field_$j" else name
-                StructField(fieldName, getType(field.GetFieldTypeName(field.GetFieldType)))
+                StructField(fieldName, fieldType(field))
             }) ++ (0 until feature.GetGeomFieldCount())
             .flatMap(j => {
                 val field = feature.GetGeomFieldDefnRef(j)

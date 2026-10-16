@@ -39,6 +39,8 @@ from __future__ import annotations
 import os
 import warnings
 
+from databricks.labs.gbx import __version__
+
 # ---------------------------------------------------------------------------
 # Public constants
 # ---------------------------------------------------------------------------
@@ -63,7 +65,7 @@ _BASEMAP_PRESETS: dict | None = None
 
 _TILE_USER_AGENT: dict[str, str] = {
     "User-Agent": (
-        "GeoBrix/0.5.2 (github.com/databrickslabs/geobrix; "
+        f"GeoBrix/{__version__} (github.com/databrickslabs/geobrix; "
         "tile requests - see OSM tile usage policy)"
     )
 }

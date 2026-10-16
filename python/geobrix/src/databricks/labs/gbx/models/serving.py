@@ -52,7 +52,7 @@ PREDICT_OUTPUT_COLUMNS = [("geojson", "string")]
 # used elsewhere for wheel staging; override wheel_path= with the actual staged
 # wheel's path/version at call time.
 DEFAULT_WHEEL_PATH = (
-    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.2-py3-none-any.whl"
+    "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.3-py3-none-any.whl"
 )
 
 

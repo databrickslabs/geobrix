@@ -152,10 +152,10 @@ class StageCache:
       use in each process therefore removes ``<prefix>`` directories whose owner
       process no longer exists (and unowned ones older than
       ``DEFAULT_STALE_TTL_SECONDS``).
-    - Cached bytes are capped (``_stage_cap_bytes``): before a new copy is made,
-      the least recently used copies not currently in use are evicted until it
-      fits. A copy in use is never evicted; a source larger than the cap is still
-      staged, alone.
+    - Cached bytes are capped (``_stage_cap_bytes``): after a new copy is made,
+      the least recently used copies not currently in use are evicted until the
+      cache fits. A copy in use is never evicted; a source larger than the cap is
+      still staged, alone.
     """
 
     def __init__(self, prefix: str, copy_fn: Callable[[str, str], None]):
@@ -186,23 +186,24 @@ class StageCache:
             self._entries.move_to_end(source_path)
             return self._entries[source_path]
         cache_dir = self._ensure_dir()
-        need = _path_bytes(source_path)
-        self._evict_for(need, cache_dir)
         basename = os.path.basename(source_path.rstrip("/")) or "source"
         # uuid keeps two sources that share a basename apart on disk.
         local = os.path.join(cache_dir, f"{uuid.uuid4().hex}_{basename}")
+        # Only copy_fn touches the source (readers wrap it in their transient
+        # retry); the size comes from the local copy, then idle copies are evicted.
         self._copy(source_path, local)
         self._entries[source_path] = local
-        self._sizes[source_path] = need
+        self._sizes[source_path] = _path_bytes(local)
+        self._evict_to_cap(cache_dir, keep=source_path)
         return local
 
-    def _evict_for(self, need: int, cache_dir: str) -> None:
+    def _evict_to_cap(self, cache_dir: str, keep: str) -> None:
         cached = sum(self._sizes.values())
         cap = _stage_cap_bytes(cache_dir, cached)
         for src in list(self._entries):  # least recently used first
-            if cached + need <= cap:
+            if cached <= cap:
                 return
-            if self._in_use.get(src, 0):
+            if src == keep or self._in_use.get(src, 0):
                 continue
             local = self._entries.pop(src)
             cached -= self._sizes.pop(src)

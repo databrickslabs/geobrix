@@ -180,3 +180,20 @@ def test_stage_cap_honors_env(monkeypatch, tmp_path):
     monkeypatch.delenv("GBX_STAGE_CACHE_MB")
     free = shutil.disk_usage(str(tmp_path)).free
     assert lt._stage_cap_bytes(str(tmp_path), 100) == (free + 100) // 2
+
+
+def test_stage_cache_sizes_the_local_copy_not_the_source(monkeypatch, tmp_path):
+    """Only copy_fn touches the source (readers wrap it in their transient-retry):
+    the cache measures the staged local copy, never the remote source path."""
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
+    real = _src(tmp_path, "real.gpkg", 7)
+
+    def copy(src, dst):  # the "remote" source exists only for copy_fn
+        assert src == "/Volumes/c/s/v/remote.gpkg"
+        shutil.copy(real, dst)
+
+    cache = lt.StageCache("gbx_test_stage_", copy)
+    with cache.use("/Volumes/c/s/v/remote.gpkg") as p:
+        assert os.path.getsize(p) == 7

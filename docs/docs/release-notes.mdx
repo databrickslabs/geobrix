@@ -75,6 +75,14 @@ both vector reader tiers.
   promotes such samples to the data type's full width, a lossless change, and keeps
   predictor-based compression.
 
+### Raster tiling functions
+
+- **Corrupt tiles yield an error row again.** The lightweight `rst_separatebands`,
+  `rst_retile` and `rst_tooverlappingtiles` table functions are meant to emit one error tile
+  (NULL raster, the error in `metadata.last_error`) for an unreadable input. They instead
+  failed the query with `UDTF_RETURN_SCHEMA_MISMATCH`, because the error tile lacked the newer
+  tile-struct fields. They now emit the error row as intended.
+
 ### Python bindings
 
 - **Heavyweight Python wrappers for the custom-grid and quadbin geometry k-ring/k-loop

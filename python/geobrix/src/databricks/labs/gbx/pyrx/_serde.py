@@ -31,7 +31,7 @@ from pyspark.sql.types import (
 )
 from rasterio.io import DatasetReader, MemoryFile
 
-from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
 # Legacy 3-field tile struct — INPUT-ONLY (reader/writer v1 read/load path).
 # NEVER a function output schema: every tile-returning UDF/UDTF emits
@@ -59,12 +59,11 @@ def build_error_tile(last_error: str, cellid: int = -1) -> Dict:
     Signals a swallowed failure that stays diagnosable. Mirrors heavy's
     RST_ErrorHandler error-tile row (raster NULL + errorMetadata).
     """
-    return {
-        "cellid": int(cellid),
-        "raster": None,
-        "metadata": {"last_error": last_error},
-        "path_mode": None,
-    }
+    # Every V2_TILE_SCHEMA field: a UDTF row must supply each column (a
+    # struct-returning UDF tolerates missing keys, a UDTF does not).
+    row: Dict = {f.name: None for f in V2_TILE_SCHEMA.fields}
+    row.update(cellid=int(cellid), metadata={"last_error": last_error})
+    return row
 
 
 def build_tile(

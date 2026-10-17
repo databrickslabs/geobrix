@@ -115,15 +115,15 @@ window size:
 />
 
 By default each raster file is a single whole-file tile; `tileSize` cuts it into a grid of windows
-(see the [Raster Reader](./raster) for its options). The raster `manifest` and `tilesTable` options are rejected by `read_paths`: each input row already names one
-file, and a manifest would be read again for every row. Read those with
-`spark.read.format("gtiff_gbx")` instead. A `.vrt` source reports the `.vrt` file itself as its
-`_source_path`.
+(see the [Raster Reader](./raster) for its options). The raster `manifest` and `tilesTable` options
+are rejected by `read_paths`: each input row already names one file, and a manifest would be read
+again for every row. Read those with `spark.read.format("gtiff_gbx")` instead. A `.vrt` source
+reports the `.vrt` file itself as its `_source_path`.
 
 ## Declare a pipeline flow with `declare_ingest`
 
-In a Lakeflow Spark Declarative Pipeline source file, `declare_ingest` watches a folder with Auto Loader,
-reads each new or changed file with the reader you name, and keeps the rows in a table:
+In a Lakeflow Spark Declarative Pipeline source file, `declare_ingest` watches a folder with Auto
+Loader, reads each new or changed file with the reader you name, and keeps the rows in a table:
 
 <CodeFromTest
   code={ingestExamples}
@@ -156,7 +156,7 @@ declare_ingest(target, source_dir, format, options=None, *,
 | `format` | _required_ | Reader name from the [formats table](#supported-formats). |
 | `options` | `None` | Reader options, as for `read_paths`. |
 | `on_change` | `"scd2"` | What to do when a file is overwritten: `"scd2"`, `"replace"` or `"append"`. |
-| `glob` | `None` | File-name filter for the folder, in Spark `pathGlobFilter` syntax, such as `"zones_*.gpkg"`. By default, the format's [default file pattern](#default-file-patterns). |
+| `glob` | `None` | File-name filter for the folder, in Spark `pathGlobFilter` syntax, such as `"zones_*.gpkg"`. By default, the format's [default file pattern](#default-file-patterns); a `glob` replaces that pattern. |
 | `num_partitions` | `None` | As for `read_paths`. |
 | `schema_path` | `source_dir` | File or folder that defines the table schema; a folder's first file matching `glob` is used. It is read once when the pipeline is declared (at each update), not for every micro-batch. Stage at least one file there before the first update. |
 
@@ -184,6 +184,12 @@ The patterns match the file name as written, so they cover lower- and upper-case
 (`photo.jpg` and `PHOTO.JPG`) but not mixed case such as `.Jpg`. Set `glob` for other names, for
 example `glob="*.jp2"` for another raster format. Deliver a File Geodatabase as a zipped
 `.gdb.zip` file.
+
+A `glob` you set replaces the default pattern rather than narrowing it, so it must still leave out
+the other files of a multi-file dataset. For shapefiles, end it in the data file's extension:
+`glob="zones_*.shp"` delivers only the `.shp` files, while `glob="zones_*"` also delivers each
+shapefile's `.dbf`, `.shx` and `.prj` sidecars as inputs of their own. A backslash escapes a
+pattern character (`\*` matches a literal `*`), as in Spark.
 
 ### Choosing `on_change`
 
@@ -262,19 +268,21 @@ without preserving times when you overwrite a file.
 ### Schema
 
 The table schema comes from one file: `schema_path`, or for a folder its first file matching the
-format's [default file pattern](#default-file-patterns) (or `glob`). No other file is opened to
-resolve it, so a folder that already holds files with other columns still resolves. Every file that
-is read must have the same columns with the same types: a file that differs by column name or type
-fails with an error that names the file. A file whose columns are in a different order is realigned
-by name. A file with no features adds no rows.
+format's [default file pattern](#default-file-patterns) (or `glob`). For `file_gdb_gbx` and
+`vector_gbx`, an unzipped `.gdb` folder inside that folder counts as one file. No other file is
+opened to resolve it, so a folder that already holds files with other columns still resolves.
+Every file that is read must have the same columns with the same types: a file that differs by
+column name or type fails with an error that names the file. A file whose columns are in a
+different order is realigned by name. A file with no features adds no rows.
 
 ### Paths
 
 Paths are Unity Catalog Volume paths: `/Volumes/...`, or `dbfs:/Volumes/...` as Auto Loader and
 `binaryFile` report them. The readers open each file through the Volume's file system, so an
 object-store URI (`s3://`, `abfss://`, `gs://`) or a GDAL virtual path (`/vsis3/...`,
-`/vsizip/...`) fails with an error that names it, rather than being skipped as missing. To ingest from cloud storage, create an external volume over the
-location and use its `/Volumes` path.
+`/vsizip/...`, `/vsimem/...`) fails with an error that names it, rather than being skipped as
+missing. To ingest from cloud storage, create an external volume over the location and use its
+`/Volumes` path.
 
 ### Files deleted before they are read
 
@@ -296,10 +304,14 @@ route for the **Add data** page and managed ingestion pipelines, and it is gover
 Catalog connection: its `root_path` option confines every table to a Volume prefix, and `USE
 CONNECTION` controls who can build pipelines on it.
 
-It reads the same formats with the same code as `read_paths`, so its rows carry the same columns and
-the same `_source_path` and `_source_mtime` lineage columns. The reader comes from the file extension,
-or from the `format` table option; a folder that mixes formats needs `format`. The connector is
-**append only**, with the file modification time as its cursor.
+It reads the same formats with the same code as `read_paths`, so its rows carry the same columns
+and the same `_source_path` and `_source_mtime` lineage columns. The reader comes from the file
+extension, or from the `format` table option, which takes the same reader names as `read_paths`
+(the `_gbx` suffix is optional, so `gpkg` and `gpkg_gbx` are the same reader); a folder that mixes
+formats needs `format`. The table options `layer`, `where`, `bbox` and `chunk_size` apply to the
+vector readers and `mode` to `lidar` and `exif`; set for another reader, an option fails with an
+error that names it. The connector is **append only**, with the file modification time as its
+cursor.
 
 | | Lakeflow connector | `declare_ingest` |
 |---|---|---|

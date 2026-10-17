@@ -43,6 +43,13 @@ shared by both vector reader tiers.
   `geobrix_vector` to `geobrix`, so recreate any connection that used the old name.
 - **A folder that mixes file kinds now needs `format`.** Without the `format` table option such a
   folder fails with an error; it previously fell back to the generic vector reader.
+- **`format` takes a reader name, as `read_paths` does.** The `_gbx` suffix is optional and case
+  is ignored (`gpkg`, `GPKG` and `gpkg_gbx` are the same reader). The File Geodatabase reader is
+  `file_gdb`; `filegdb` is no longer accepted.
+- **Reader options apply only to the readers that take them.** `layer`, `where`, `bbox` and
+  `chunk_size` apply to the vector readers and `mode` to `lidar` and `exif`. Set on a table read
+  with another reader, such an option now fails with an error that names it, instead of being
+  ignored.
 
 ### Vector readers — large layers and coded-value domains
 

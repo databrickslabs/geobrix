@@ -13,7 +13,8 @@ _Since:_ lightweight `read_paths` and `declare_ingest` **v0.5.3** · _(light-onl
 [Auto Loader](https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader/) finds
 new and changed files in a Volume folder and remembers which ones it has already delivered. The
 GeoBrix `*_gbx` readers parse those files. Two functions join them, so a folder of vector files,
-LiDAR point clouds, EXIF photos or rasters becomes a table that keeps up with the folder:
+LiDAR point clouds, EXIF photos, rasters, NetCDF files or PMTiles archives becomes a table that
+keeps up with the folder:
 
 - **`read_paths`** takes a DataFrame of file paths — a batch listing or an Auto Loader stream — and
   reads every file with the reader you name.
@@ -40,6 +41,14 @@ optional and the name is case-insensitive.
 | `lidar_gbx` | [LiDAR](./lidar) | Points |
 | `exif_gbx` | [EXIF/GPS](./exif) | Image metadata |
 | `raster_gbx`, `gtiff_gbx` | [Raster](./raster), [GeoTIFF](./geotiff) | Raster tiles |
+| `cog_gbx` | [COG](./cog) | Raster tiles, split into tile windows the same way as `raster_gbx` (see [Rasters](#rasters)). The Lakeflow connector maps a `.tif` file to `gtiff_gbx`; set `format: cog` there to use the COG reader. |
+| `netcdf_gbx` | [NetCDF](./netcdf) | Set by the `mode` option: `"raster"` (default) gives one `(source, tile)` GeoTIFF tile per grid variable (and per slice with `fanout`); `"vector"` gives one point feature per observation or grid cell. |
+| `pmtiles_gbx` | [PMTiles](./pmtiles) | Set by the `source` option, which is **required** here: `"archive"` gives one `(z, x, y, bytes)` row per tile stored in a `.pmtiles` file; `"raster"` renders `(z, x, y, bytes)` XYZ tiles from a GeoTIFF. Each file is rendered on its own, so a tile that covers two files appears once for each. |
+
+Two kinds of reader are not supported. `file_gbx` only lists files, and the `binaryFile` or Auto
+Loader listing that feeds `read_paths` already gives each file's path, size and modification time.
+The heavyweight readers (`gdal`, `gtiff_gdal`, `*_ogr`) run in the JVM, and these two functions are
+lightweight-tier only.
 
 Each row carries the columns that reader normally returns, plus two lineage columns:
 
@@ -100,10 +109,10 @@ that arrived since the last one. Auto Loader (`cloudFiles`) is a Databricks feat
 
 ### Rasters
 
-Raster files are planned into their tile windows first. The windows are read as separate tasks
-**only when `num_partitions` is set**; without it, a large raster is read by a single task. Set
-`num_partitions` (on Serverless, always) and use the raster reader's `tileSize` option to choose the
-window size:
+Raster files (`raster_gbx`, `gtiff_gbx` and `cog_gbx`) are planned into their tile windows first.
+The windows are read as separate tasks **only when `num_partitions` is set**; without it, a large
+raster is read by a single task. Set `num_partitions` (on Serverless, always) and use the raster
+reader's `tileSize` option to choose the window size:
 
 <CodeFromTest
   code={ingestExamples}
@@ -119,6 +128,11 @@ By default each raster file is a single whole-file tile; `tileSize` cuts it into
 are rejected by `read_paths`: each input row already names one file, and a manifest would be read
 again for every row. Read those with `spark.read.format("gtiff_gbx")` instead. A `.vrt` source
 reports the `.vrt` file itself as its `_source_path`.
+
+PMTiles inputs are planned the same way, in groups of `tilesPerPartition` tiles, for an archive
+(`source="archive"`) and for a GeoTIFF it renders (`source="raster"`). A NetCDF file is read whole
+by one task in both modes, because the reader reads all of a file's variables and slices in one
+pass.
 
 ## Declare a pipeline flow with `declare_ingest`
 
@@ -170,20 +184,28 @@ format's pattern to Auto Loader. The same pattern picks the schema file from a f
 
 | `format` | Default `glob` |
 |----------|----------------|
-| `vector_gbx` | `*.{gpkg,geojson,json,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,GPKG,GEOJSON,JSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}` |
+| `vector_gbx` | `*.{gpkg,geojson,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,GPKG,GEOJSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}` |
 | `shapefile_gbx` | `*.{shp,shz,shp.zip,SHP,SHZ,SHP.ZIP}` |
-| `geojson_gbx` | `*.{geojson,json,GEOJSON,JSON}` |
+| `geojson_gbx` | `*.{geojson,GEOJSON}` |
 | `geojsonl_gbx` | `*.{geojsonl,geojsons,GEOJSONL,GEOJSONS}` |
 | `gpkg_gbx` | `*.{gpkg,GPKG}` |
 | `file_gdb_gbx` | `*.{gdb.zip,GDB.ZIP}` |
 | `lidar_gbx` | `*.{las,laz,LAS,LAZ}` |
 | `exif_gbx` | `*.{jpg,jpeg,JPG,JPEG}` |
-| `raster_gbx`, `gtiff_gbx` | `*.{tif,tiff,TIF,TIFF}` |
+| `raster_gbx`, `gtiff_gbx`, `cog_gbx` | `*.{tif,tiff,TIF,TIFF}` |
+| `netcdf_gbx` | `*.{nc,NC}` |
+| `pmtiles_gbx` with `source="archive"` | `*.{pmtiles,PMTILES}` |
+| `pmtiles_gbx` with `source="raster"` | `*.tif` |
 
 The patterns match the file name as written, so they cover lower- and upper-case extensions
 (`photo.jpg` and `PHOTO.JPG`) but not mixed case such as `.Jpg`. Set `glob` for other names, for
-example `glob="*.jp2"` for another raster format. Deliver a File Geodatabase as a zipped
-`.gdb.zip` file.
+example `glob="*.jp2"` for another raster format or `glob="*.{nc,nc4}"` for NetCDF-4 files named
+`.nc4`. Deliver a File Geodatabase as a zipped `.gdb.zip` file. The `pmtiles_gbx` raster pattern is
+`*.tif` only because that reader's `filterRegex` option keeps `.tif` files by default; to render
+other files, set both `filterRegex` and `glob`.
+
+GeoJSON is matched strictly by its `.geojson` extension, because many `.json` files are not
+GeoJSON. For GeoJSON files named `.json`, pass `glob="*.{geojson,json}"`.
 
 A `glob` you set replaces the default pattern rather than narrowing it, so it must still leave out
 the other files of a multi-file dataset. For shapefiles, end it in the data file's extension:
@@ -268,7 +290,8 @@ without preserving times when you overwrite a file.
 ### Schema
 
 The table schema comes from one file: `schema_path`, or for a folder its first file matching the
-format's [default file pattern](#default-file-patterns) (or `glob`). For `file_gdb_gbx` and
+format's [default file pattern](#default-file-patterns) (or `glob`). Files and folders whose names
+start with `_` or `.` are skipped, as Spark's file sources skip them. For `file_gdb_gbx` and
 `vector_gbx`, an unzipped `.gdb` folder inside that folder counts as one file. No other file is
 opened to resolve it, so a folder that already holds files with other columns still resolves.
 Every file that is read must have the same columns with the same types: a file that differs by
@@ -291,11 +314,11 @@ treated as an error. In a stream, Auto Loader counts such a file as processed.
 
 ### Parallelism
 
-- **Vector, LiDAR and EXIF files are each read whole by a single task.** `num_partitions`
+- **Vector, LiDAR, EXIF and NetCDF files are each read whole by a single task.** `num_partitions`
   repartitions the files across that many tasks.
-- **Raster files are planned into tile windows, and the windows are spread across tasks only when
-  `num_partitions` is set.** Without it a large raster is read by a single task. On Serverless, set
-  `num_partitions`.
+- **Raster files are planned into tile windows, and PMTiles inputs into groups of tiles; these are
+  spread across tasks only when `num_partitions` is set.** Without it a large raster or archive is
+  read by a single task. On Serverless, set `num_partitions`.
 
 ## Compared with the Lakeflow connector
 
@@ -308,10 +331,19 @@ It reads the same formats with the same code as `read_paths`, so its rows carry 
 and the same `_source_path` and `_source_mtime` lineage columns. The reader comes from the file
 extension, or from the `format` table option, which takes the same reader names as `read_paths`
 (the `_gbx` suffix is optional, so `gpkg` and `gpkg_gbx` are the same reader); a folder that mixes
-formats needs `format`. The table options `layer`, `where`, `bbox` and `chunk_size` apply to the
-vector readers and `mode` to `lidar` and `exif`; set for another reader, an option fails with an
-error that names it. The connector is **append only**, with the file modification time as its
-cursor.
+formats needs `format`. By extension a `.tif` file is read with `gtiff_gbx` (set `format: cog` for
+the COG reader), a `.nc` file with `netcdf_gbx` and a `.pmtiles` file with `pmtiles_gbx`, which
+reads the tiles stored in the archive (`source="archive"`). A `.json` file is not taken for
+GeoJSON: set `format: geojson` and a `file_glob` such as `*.{geojson,json}`.
+
+The table options `layer`, `where`, `bbox` and `chunk_size` apply to the vector readers and `mode`
+to `lidar`, `exif` and `netcdf`; set for another reader, an option fails with an error that names
+it. The `file_glob` option uses the same pattern syntax as `declare_ingest`'s `glob` (Spark
+`pathGlobFilter`: case-sensitive, with `{a,b}` groups and `\` escapes). With `format` set it alone
+picks a folder's files, as `glob` does; without `format` it narrows the files with a recognized
+extension. Folders and files whose names start with `_` or `.` are ignored, so use `_archive/` or
+`_staging/` to keep files out of a table. The connector is **append only**, with the file
+modification time as its cursor.
 
 | | Lakeflow connector | `declare_ingest` |
 |---|---|---|
@@ -326,7 +358,8 @@ has delivered), or when a file can be overwritten and you need its latest conten
 
 ## See also
 
-- [Vector Reader](./vector), [LiDAR Reader](./lidar), [EXIF/GPS Reader](./exif) and
-  [Raster Reader](./raster): the readers `read_paths` drives, and their options.
+- [Vector Reader](./vector), [LiDAR Reader](./lidar), [EXIF/GPS Reader](./exif),
+  [Raster Reader](./raster), [COG Reader](./cog), [NetCDF Reader](./netcdf) and
+  [PMTiles Reader](./pmtiles): the readers `read_paths` drives, and their options.
 - [Serverless & Memory](../serverless-and-memory): memory limits and parallelism on Serverless.
 - [Virtual Tiles](../api/virtual-tiles): how raster windows are read lazily.

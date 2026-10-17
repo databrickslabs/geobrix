@@ -8,6 +8,7 @@ import faulthandler
 import inspect
 import math
 import os
+import re
 import shutil
 import signal
 import sys
@@ -219,14 +220,14 @@ def test_object_store_uri_is_rejected(spark):
             read_paths(files, "geojson_gbx", schema_path=uri)
 
 
-def _mdx_section_rows(heading):
+def _mdx_section_rows(heading, level="###"):
     mdx = (
         Path(__file__).resolve().parents[3]
         / "docs"
         / "readers"
         / "incremental-ingestion.mdx"
     ).read_text()
-    section = mdx.split(f"### {heading}\n", 1)[1].split("\n#", 1)[0]
+    section = mdx.split(f"{level} {heading}\n", 1)[1].split("\n#", 1)[0]
     rows = [
         [c.strip() for c in line.strip().strip("|").split("|")]
         for line in section.splitlines()
@@ -236,14 +237,34 @@ def _mdx_section_rows(heading):
 
 
 def test_default_file_patterns_table_matches_the_code():
-    """The page's default-pattern table lists exactly DEFAULT_GLOBS."""
-    from databricks.labs.gbx.ds.paths import DEFAULT_GLOBS
+    """The page's default-pattern table lists exactly DEFAULT_GLOBS, with
+    pmtiles_gbx once per `source` (its pattern follows that option)."""
+    from databricks.labs.gbx.ds.paths import DEFAULT_GLOBS, default_glob
 
     shown = {}
     for formats, glob in _mdx_section_rows("Default file patterns"):
-        for fmt in formats.split(","):
-            shown[fmt.strip().strip("`")] = glob.strip("`")
-    assert shown == DEFAULT_GLOBS
+        source = re.search(r'`source="(\w+)"`', formats)
+        for fmt in re.findall(r"`(\w+_gbx)`", formats):
+            shown[(fmt, source.group(1) if source else None)] = glob.strip("`")
+    sources = ("archive", "raster")
+    want = {(f, None): g for f, g in DEFAULT_GLOBS.items() if f != "pmtiles_gbx"}
+    want.update(
+        {("pmtiles_gbx", s): default_glob("pmtiles", {"source": s}) for s in sources}
+    )
+    assert shown == want
+    assert shown[("pmtiles_gbx", "archive")] == DEFAULT_GLOBS["pmtiles_gbx"]
+
+
+def test_supported_formats_table_lists_every_reader():
+    """The page's formats table names every reader read_paths supports, once."""
+    from databricks.labs.gbx.ds.paths import SUPPORTED_FORMATS
+
+    shown = [
+        fmt
+        for formats, *_ in _mdx_section_rows("Supported formats", level="##")
+        for fmt in re.findall(r"`(\w+_gbx)`", formats)
+    ]
+    assert sorted(shown) == sorted(SUPPORTED_FORMATS)
 
 
 def _calls(snippet, name):

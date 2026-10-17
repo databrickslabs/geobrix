@@ -202,3 +202,35 @@ def test_nonrecursive_missing_dir_raise_on_empty_true(tmp_path):
         _listing.list_files(
             missing, filter_regex=".*", recursive=False, raise_on_empty=True
         )
+
+
+def test_first_file_is_the_first_sorted_match_and_stops_there(tmp_path, monkeypatch):
+    for rel in ("a-b.tif", "a/x.tif", "a/y.txt", "b/z.tif", "_skip/0.tif", ".h.tif"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    want = sorted(
+        f
+        for f in _listing.list_files(str(tmp_path))
+        if "/_skip/" not in f and not os.path.basename(f).startswith(".")
+    )
+    seen = []
+
+    def accept(name):
+        seen.append(name)
+        return name.endswith(".tif")
+
+    # Full-path order puts "a-b.tif" before "a/x.tif" ('-' < '/').
+    assert (
+        _listing.first_file(str(tmp_path), accept)
+        == want[0]
+        == str(tmp_path / "a-b.tif")
+    )
+    assert seen == ["a-b.tif"]  # stopped at the first match
+    assert _listing.first_file(
+        "file:" + str(tmp_path), lambda n: n.endswith(".txt")
+    ) == str(tmp_path / "a" / "y.txt")
+    assert _listing.first_file(str(tmp_path), lambda n: n.endswith(".nc")) is None
+    assert _listing.first_file(str(tmp_path / "missing"), lambda n: True) is None
+    one = str(tmp_path / "b" / "z.tif")
+    assert _listing.first_file(one, lambda n: True) == one

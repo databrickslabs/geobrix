@@ -8,14 +8,19 @@ Raster readers plan in two stages: each file is first planned into its tile
 windows (one row per reader partition), the windows are repartitioned, and each
 window is read on its own, so one large raster spreads across tasks.
 
+Paths are Unity Catalog Volume (FUSE) paths; ``dbfs:`` / ``file:`` prefixes are
+accepted and object-store URIs (``s3://``, ``abfss://``, ...) are rejected.
+
 Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import pickle
+import re
 from typing import Dict, Iterable, Iterator, Optional
 
 import pyarrow as pa
@@ -53,6 +58,30 @@ SUPPORTED_FORMATS = (
 # Readers with many partitions (tile windows) per file: read_paths plans them
 # first, then spreads the windows across tasks.
 TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx")
+
+# Default file pattern per reader, in Spark ``pathGlobFilter`` (Hadoop glob)
+# syntax, matched case-sensitively against the file name. ``declare_ingest`` hands
+# it to Auto Loader, which delivers leaf files: without it, shapefile sidecars or
+# the files inside a ``.gdb`` folder would be read as data. A folder
+# ``schema_path`` takes the schema from its first file matching the same pattern.
+DEFAULT_GLOBS = {
+    "vector_gbx": (
+        "{*.gpkg,*.geojson,*.json,*.geojsonl,*.geojsons,"
+        "*.shp,*.shz,*.shp.zip,*.gdb.zip}"
+    ),
+    "shapefile_gbx": "{*.shp,*.shz,*.shp.zip}",
+    "geojson_gbx": "*.{geojson,json}",
+    "geojsonl_gbx": "*.{geojsonl,geojsons}",
+    "gpkg_gbx": "*.gpkg",
+    "file_gdb_gbx": "*.gdb.zip",
+    "lidar_gbx": "*.{las,laz}",
+    "exif_gbx": "*.{jpg,jpeg}",
+    "raster_gbx": "*.{tif,tiff}",
+    "gtiff_gbx": "*.{tif,tiff}",
+}
+
+# A "<scheme>://" prefix left after to_local_path strips dbfs: / file:.
+_URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
 
 # Plan-stage rows: one per reader partition (a pickled InputPartition). Built
 # explicitly (not from DDL) so workers never need a parser.
@@ -95,6 +124,108 @@ def resolve_format(fmt: str) -> type:
     return _sources()[name]
 
 
+def default_glob(fmt: str) -> str:
+    """The :data:`DEFAULT_GLOBS` pattern for a reader name (alias or any case)."""
+    return DEFAULT_GLOBS[resolve_format(fmt).name()]
+
+
+def _glob_regex(pattern: str) -> str:
+    """Hadoop ``GlobPattern`` (Spark ``pathGlobFilter``) -> Python regex, translated
+    the same way: ``*``, ``?``, ``[...]`` / ``[!...]``, nestable ``{a,b}`` groups and
+    ``\\`` escapes; other regex metacharacters are literal."""
+    out = []
+    in_set = False
+    curly = 0
+    i = 0
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            i += 1
+            if i >= len(pattern):
+                raise ValueError(f"glob {pattern!r}: missing escaped character")
+            out.append(re.escape(pattern[i]))
+        elif c in ".$()|+":
+            out.append("\\" + c)
+        elif c == "*":
+            out.append(".*")
+        elif c == "?":
+            out.append(".")
+        elif c == "{":
+            out.append("(?:")
+            curly += 1
+        elif c == "," and curly:
+            out.append("|")
+        elif c == "}" and curly:
+            out.append(")")
+            curly -= 1
+        elif c == "}":
+            out.append("\\}")
+        elif c == "[":
+            if in_set:
+                raise ValueError(f"glob {pattern!r}: unclosed character class")
+            in_set = True
+            out.append(c)
+        elif c == "^":
+            out.append(c if in_set else "\\^")
+        elif c == "!":
+            out.append("^" if in_set and pattern[i - 1] == "[" else "!")
+        elif c == "]":
+            in_set = False
+            out.append(c)
+        else:
+            out.append(c)
+        i += 1
+    if in_set:
+        raise ValueError(f"glob {pattern!r}: unclosed character class")
+    if curly:
+        raise ValueError(f"glob {pattern!r}: unclosed group")
+    return "".join(out)
+
+
+@functools.lru_cache(maxsize=128)
+def _glob_compiled(pattern: str) -> "re.Pattern":
+    return re.compile(_glob_regex(pattern))
+
+
+def glob_match(name: str, pattern: str) -> bool:
+    """True if the file name ``name`` matches the glob ``pattern`` exactly as Spark's
+    ``pathGlobFilter`` would (Hadoop glob syntax, case-sensitive)."""
+    return _glob_compiled(pattern).fullmatch(name) is not None
+
+
+def _fuse_path(path: str) -> str:
+    """Bare local path for ``path`` (``dbfs:`` / ``file:`` stripped). Object-store
+    URIs are rejected: the readers open files through the Volume FUSE mount, so a
+    stat on ``s3://...`` could only fail (after the transient-miss retries) and the
+    file would be skipped as deleted."""
+    local = _listing.to_local_path(path)
+    if _URI.match(local):
+        raise ValueError(
+            f"read_paths reads Unity Catalog Volume / FUSE paths; got {path}. Read "
+            "object storage through a Volume (for example an external volume over "
+            "the location) instead."
+        )
+    return local
+
+
+def _schema_file(fmt: str, schema_path: str, glob: Optional[str] = None) -> str:
+    """The one file whose reader schema defines the output: ``schema_path`` itself,
+    or for a folder its first file (sorted path order, hidden entries skipped) whose
+    name matches ``glob`` (default: the format's :data:`DEFAULT_GLOBS` pattern). A
+    ``.gdb`` folder is a single dataset and is used as is."""
+    local = _fuse_path(schema_path)
+    if not os.path.isdir(local) or local.lower().rstrip("/").endswith(".gdb"):
+        return local
+    pattern = glob or default_glob(fmt)
+    found = _listing.first_file(local, lambda name: glob_match(name, pattern))
+    if found is None:
+        raise ValueError(
+            f"No file under {schema_path} matches {pattern!r}: stage at least one "
+            f"matching file there, or pass schema_path= a file."
+        )
+    return found
+
+
 def _lineage_fields() -> list:
     return [
         StructField(SOURCE_PATH_COL, StringType(), True),
@@ -111,11 +242,21 @@ def _reader_schema(fmt: str, options: Optional[dict], path: str) -> StructType:
 
 
 def path_schema(
-    fmt: str, options: Optional[dict], schema_path: str, lineage: bool = True
+    fmt: str,
+    options: Optional[dict],
+    schema_path: str,
+    lineage: bool = True,
+    *,
+    glob: Optional[str] = None,
 ) -> StructType:
-    """Output schema: the reader schema of ``schema_path`` (+ lineage columns)."""
-    base = _reader_schema(fmt, options, schema_path)
-    return StructType(list(base.fields) + (_lineage_fields() if lineage else []))
+    """Output schema: the reader schema of ``schema_path`` (+ lineage columns).
+
+    A folder ``schema_path`` opens only its first file whose name matches ``glob``
+    (default: the format's :data:`DEFAULT_GLOBS` pattern), so other files in the
+    folder (drifted, unrelated or not yet complete) never affect the schema.
+    """
+    base = _reader_schema(fmt, options, _schema_file(fmt, schema_path, glob))
+    return _output_schema(base, lineage)
 
 
 def _base(expected: StructType) -> StructType:
@@ -125,6 +266,13 @@ def _base(expected: StructType) -> StructType:
             for f in expected.fields
             if f.name not in (SOURCE_PATH_COL, SOURCE_MTIME_COL)
         ]
+    )
+
+
+def _output_schema(schema: StructType, lineage: bool) -> StructType:
+    """``schema`` without, then (when ``lineage``) with, the lineage columns."""
+    return StructType(
+        list(_base(schema).fields) + (_lineage_fields() if lineage else [])
     )
 
 
@@ -186,7 +334,9 @@ def _as_batches(items: Iterable, schema: StructType) -> Iterator[pa.RecordBatch]
 
 def _exists(local: str) -> bool:
     """True when the file is still there (transient FUSE misses retried); a file
-    deleted since it was listed is logged and skipped by every caller."""
+    deleted since it was listed is logged and skipped by every caller. An
+    object-store URI raises ``ValueError`` before any stat."""
+    _fuse_path(local)
     try:
         _listing._retry_transient(lambda: os.stat(local))
         return True
@@ -235,7 +385,7 @@ def iter_path_batches(
 ) -> Iterator[pa.RecordBatch]:
     """Arrow batches for one file (session-free). A file that no longer exists is
     skipped with a warning; ``expected`` (lineage included or not) is enforced."""
-    local = _listing.to_local_path(path)
+    local = _fuse_path(path)
     if not _exists(local):
         return
     ds = resolve_format(fmt)({**(options or {}), "path": local})
@@ -282,7 +432,7 @@ def _plan_batches(fmt: str, opts: dict, schema: StructType):
                 b.column("path").to_pylist(),
                 b.column("mtime").cast(pa.int64()).to_pylist(),
             ):
-                local = _listing.to_local_path(p)
+                local = _fuse_path(p)
                 if not _exists(local):
                     continue
                 reader = resolve_format(fmt)({**opts, "path": local}).reader(base)
@@ -338,13 +488,20 @@ def read_paths(
     schema_path: Optional[str] = None,
     num_partitions: Optional[int] = None,
     lineage: bool = True,
+    schema: Optional[StructType] = None,
 ):
     """Read every file named in ``df[path_col]`` with a light reader.
 
     ``df`` may be batch or streaming (e.g. Auto Loader ``binaryFile`` projected to
-    ``path, modificationTime``). The output schema comes from ``schema_path``
-    (default: the first path of a batch ``df``; required for a stream). A file
-    deleted before it is read is skipped with a warning.
+    ``path, modificationTime``). Paths are Volume (FUSE) paths; an object-store URI
+    fails the read. The output schema comes from ``schema_path``: a file, or a
+    folder whose first file matching the format's :data:`DEFAULT_GLOBS` pattern is
+    opened (default: the first path of a batch ``df``; required for a stream). A
+    file deleted before it is read is skipped with a warning.
+
+    ``schema`` (internal) is an already resolved schema, as from
+    :func:`path_schema` (lineage columns optional); given, no file is opened to
+    resolve it.
 
     ``num_partitions`` repartitions the work: by file for vector / LiDAR / EXIF,
     and by tile window for raster (``raster_gbx`` / ``gtiff_gbx``), whose files
@@ -363,17 +520,22 @@ def read_paths(
                 f"one file to read, so a manifest or tiles table would be replanned "
                 f"for every row. Read it with spark.read.format({format!r}) instead."
             )
-    if schema_path is None:
-        if df.isStreaming:
-            raise ValueError(
-                "read_paths on a streaming DataFrame needs schema_path= (a file or "
-                "folder whose first file defines the table schema)."
-            )
-        first = df.select(path_col).limit(1).collect()
-        if not first:
-            raise ValueError("read_paths: empty DataFrame and no schema_path given.")
-        schema_path = first[0][0]
-    schema = path_schema(format, options, schema_path, lineage)
+    if schema is not None:
+        schema = _output_schema(schema, lineage)
+    else:
+        if schema_path is None:
+            if df.isStreaming:
+                raise ValueError(
+                    "read_paths on a streaming DataFrame needs schema_path= (a file "
+                    "or folder whose first file defines the table schema)."
+                )
+            first = df.select(path_col).limit(1).collect()
+            if not first:
+                raise ValueError(
+                    "read_paths: empty DataFrame and no schema_path given."
+                )
+            schema_path = first[0][0]
+        schema = path_schema(format, options, schema_path, lineage)
     cols = [F.col(path_col).alias("path")]
     cols.append(
         F.col(mtime_col).cast("timestamp").alias("mtime")

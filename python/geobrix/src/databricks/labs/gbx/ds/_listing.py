@@ -9,7 +9,7 @@ from __future__ import annotations
 import os
 import re
 import time
-from typing import Callable, List, TypeVar
+from typing import Callable, Iterator, List, Optional, TypeVar
 
 _T = TypeVar("_T")
 
@@ -205,3 +205,41 @@ def list_files(
             )
         return []
     return sorted(candidates)
+
+
+def first_file(path: str, accept: Callable[[str], bool]) -> Optional[str]:
+    """First file under ``path`` (recursive, sorted full-path order) whose base name
+    passes ``accept``; ``None`` if there is none.
+
+    Stops at the first match, so a large folder is not listed in full. Entries whose
+    name starts with ``.`` or ``_`` (and everything under such a directory) are
+    skipped, as Spark's file sources do. Each directory read is wrapped in
+    :func:`_retry_transient`.
+    """
+    root = os.path.abspath(to_local_path(path))
+    if os.path.isfile(root):
+        return root if accept(os.path.basename(root)) else None
+
+    def _entries(d: str) -> list:
+        with os.scandir(d) as it:
+            # A directory sorts as "<name>/", so a depth-first walk over sorted
+            # entries visits files in exactly sorted(full path) order.
+            return sorted(
+                ((e.name + "/" if e.is_dir() else e.name), e.path, e.is_dir())
+                for e in it
+                if not e.name.startswith((".", "_"))
+            )
+
+    def _walk(d: str) -> Iterator[str]:
+        for _key, full, is_dir in _retry_transient(lambda: _entries(d)):
+            if is_dir:
+                yield from _walk(full)
+            else:
+                yield full
+
+    if not os.path.isdir(root):
+        return None
+    for f in _walk(root):
+        if accept(os.path.basename(f)):
+            return f
+    return None

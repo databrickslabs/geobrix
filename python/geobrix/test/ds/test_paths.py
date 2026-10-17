@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 
 import pyarrow as pa
 import pytest
+from pyspark.sql.types import StructType
 
 from databricks.labs.gbx.ds import paths as P
 
@@ -460,3 +461,260 @@ def test_read_paths_rejects_manifest_options_for_raster(spark, tmp_path, opt):
     a = _tif(str(tmp_path / "a.tif"))
     with pytest.raises(ValueError, match=f"(?i){opt}"):
         P.read_paths(_paths_df(spark, [a]), "raster_gbx", {opt: "x"})
+
+
+# --- schema file pick (folder schema_path) ----------------------------------
+
+
+def _schema_names(schema):
+    return [f.name for f in schema.fields]
+
+
+def test_path_schema_folder_opens_only_the_first_matching_file(tmp_path, monkeypatch):
+    d = tmp_path / "landing"
+    d.mkdir()
+    (d / "0_notes.txt").write_text("not a vector file")  # sorts first, no match
+    (d / "_hidden.geojson").write_text("{broken")  # hidden: skipped
+    a = _geojson(str(d / "a.geojson"), 1)
+    _geojson(str(d / "b.geojson"), 1, extra_prop="surprise")  # drifted
+    opened = []
+    real = P._reader_schema
+
+    def spy(fmt, options, path):
+        opened.append(path)
+        return real(fmt, options, path)
+
+    monkeypatch.setattr(P, "_reader_schema", spy)
+    schema = P.path_schema("geojson_gbx", None, str(d))
+    assert opened == [a]
+    assert "surprise" not in _schema_names(schema)
+    assert _schema_names(schema)[-2:] == [P.SOURCE_PATH_COL, P.SOURCE_MTIME_COL]
+
+
+def _shapefile(path, cols):
+    import pyogrio
+    import shapely
+
+    tbl = pa.table({"geometry": shapely.to_wkb(shapely.points([0, 1], [0, 1])), **cols})
+    pyogrio.write_arrow(
+        tbl,
+        path,
+        driver="ESRI Shapefile",
+        geometry_name="geometry",
+        geometry_type="Point",
+        crs="EPSG:4326",
+    )
+    return path
+
+
+def test_path_schema_folder_of_shapefiles_with_different_schemas(tmp_path):
+    # The shapefile reader rejects a folder whose members differ; the schema pick
+    # opens only the first .shp, so a later drifted file cannot block it.
+    d = tmp_path / "shp"
+    d.mkdir()
+    _shapefile(str(d / "a.shp"), {"k": [1, 2]})
+    _shapefile(str(d / "b.shp"), {"other": ["x", "y"]})
+    names = _schema_names(P.path_schema("shapefile_gbx", None, str(d)))
+    assert "k" in names and "other" not in names
+
+
+def test_path_schema_folder_honors_glob(tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    _geojson(str(d / "a_old.geojson"), 1, extra_prop="legacy")  # sorts first
+    _geojson(str(d / "b.geojson"), 1)
+    assert "legacy" in _schema_names(P.path_schema("geojson_gbx", None, str(d)))
+    names = _schema_names(P.path_schema("geojson_gbx", None, str(d), glob="b*"))
+    assert "legacy" not in names and "name" in names
+
+
+def test_path_schema_folder_without_a_match_names_the_pattern(tmp_path):
+    (tmp_path / "x.txt").write_text("x")
+    with pytest.raises(ValueError, match=r"\*\.\{geojson,json\}"):
+        P.path_schema("geojson_gbx", None, str(tmp_path))
+
+
+def test_path_schema_gdb_folder_is_one_dataset(tmp_path):
+    import pyogrio
+    import shapely
+
+    gdb = str(tmp_path / "survey.gdb")
+    tbl = pa.table({"SHAPE": shapely.to_wkb(shapely.points([0], [0])), "k": [1]})
+    pyogrio.write_arrow(
+        tbl,
+        gdb,
+        layer="pts",
+        driver="OpenFileGDB",
+        geometry_name="SHAPE",
+        geometry_type="Point",
+        crs="EPSG:4326",
+    )
+    assert "k" in _schema_names(P.path_schema("file_gdb_gbx", None, gdb))
+
+
+def test_read_paths_schema_kwarg_skips_schema_resolution(spark, tmp_path, monkeypatch):
+    a = _geojson(str(tmp_path / "a.geojson"), 2)
+    schema = P.path_schema("geojson_gbx", None, a, lineage=False)
+
+    def boom(*a, **k):
+        raise AssertionError("schema resolved again")
+
+    monkeypatch.setattr(P, "path_schema", boom)
+    monkeypatch.setattr(P, "_reader_schema", boom)
+    got = P.read_paths(_paths_df(spark, [a]), "geojson_gbx", schema=schema)
+    assert got.columns[-2:] == [P.SOURCE_PATH_COL, P.SOURCE_MTIME_COL]
+    assert got.count() == 2
+    off = P.read_paths(
+        _paths_df(spark, [a]), "geojson_gbx", schema=schema, lineage=False
+    )
+    assert off.columns == _schema_names(schema)
+    # A stream needs no schema_path when the schema is given.
+    d = tmp_path / "in"
+    d.mkdir()
+    stream = spark.readStream.format("binaryFile").schema(_BINARY_SCHEMA).load(str(d))
+    full = StructType(list(schema.fields) + P._lineage_fields())
+    assert P.read_paths(stream, "geojson_gbx", schema=full).isStreaming
+
+
+# --- default file patterns (Hadoop glob syntax) ------------------------------
+
+_GLOB_NAMES = [
+    "a.gpkg",
+    "a.gpkg-journal",
+    "a.geojson",
+    "a.json",
+    "a.geojsonl",
+    "a.geojsons",
+    "a.shp",
+    "a.shx",
+    "a.dbf",
+    "a.prj",
+    "a.cpg",
+    "a.shz",
+    "a.shp.zip",
+    "a.zip",
+    "a.gdb.zip",
+    "a00000001.gdbtable",
+    "a.las",
+    "a.laz",
+    "a.jpg",
+    "a.jpeg",
+    "a.JPG",
+    "a.tif",
+    "a.tiff",
+    "a.TIF",
+    "a.tif.aux.xml",
+    "a.ovr",
+    "notes.txt",
+]
+
+
+def test_default_globs_per_format():
+    assert P.DEFAULT_GLOBS == {
+        "vector_gbx": (
+            "{*.gpkg,*.geojson,*.json,*.geojsonl,*.geojsons,"
+            "*.shp,*.shz,*.shp.zip,*.gdb.zip}"
+        ),
+        "shapefile_gbx": "{*.shp,*.shz,*.shp.zip}",
+        "geojson_gbx": "*.{geojson,json}",
+        "geojsonl_gbx": "*.{geojsonl,geojsons}",
+        "gpkg_gbx": "*.gpkg",
+        "file_gdb_gbx": "*.gdb.zip",
+        "lidar_gbx": "*.{las,laz}",
+        "exif_gbx": "*.{jpg,jpeg}",
+        "raster_gbx": "*.{tif,tiff}",
+        "gtiff_gbx": "*.{tif,tiff}",
+    }
+    assert set(P.DEFAULT_GLOBS) == set(P.SUPPORTED_FORMATS)
+    assert P.default_glob("GPKG") == "*.gpkg"
+
+
+def test_vector_glob_is_the_union_of_the_vector_globs():
+    vector = [
+        "shapefile_gbx",
+        "geojson_gbx",
+        "geojsonl_gbx",
+        "gpkg_gbx",
+        "file_gdb_gbx",
+    ]
+    for name in _GLOB_NAMES:
+        assert P.glob_match(name, P.DEFAULT_GLOBS["vector_gbx"]) == any(
+            P.glob_match(name, P.DEFAULT_GLOBS[f]) for f in vector
+        ), name
+
+
+def test_glob_match_agrees_with_spark_path_glob_filter(spark, tmp_path):
+    """The default patterns are Spark pathGlobFilter (Hadoop glob) patterns, and
+    glob_match (the schema-file pick) matches exactly what Spark lists."""
+    for name in _GLOB_NAMES:
+        (tmp_path / name).write_bytes(b"x")
+    expected = {
+        "shapefile_gbx": {"a.shp", "a.shz", "a.shp.zip"},
+        "geojson_gbx": {"a.geojson", "a.json"},
+        "exif_gbx": {"a.jpg", "a.jpeg"},  # case-sensitive: a.JPG is not matched
+        "gtiff_gbx": {"a.tif", "a.tiff"},
+        "file_gdb_gbx": {"a.gdb.zip"},
+    }
+    for fmt, glob in P.DEFAULT_GLOBS.items():
+        listed = {
+            os.path.basename(r[0])
+            for r in spark.read.format("binaryFile")
+            .option("pathGlobFilter", glob)
+            .load(str(tmp_path))
+            .select("path")
+            .collect()
+        }
+        assert listed == {n for n in _GLOB_NAMES if P.glob_match(n, glob)}, fmt
+        assert listed, fmt
+        if fmt in expected:
+            assert listed == expected[fmt], fmt
+
+
+# --- object-store URIs -------------------------------------------------------
+
+_URIS = [
+    "s3://bucket/a.geojson",
+    "abfss://c@acct.dfs.core.windows.net/a.geojson",
+    "gs://b/a.geojson",
+]
+
+
+@pytest.mark.parametrize("uri", _URIS)
+def test_object_store_uris_are_rejected_without_retrying(tmp_path, monkeypatch, uri):
+    tries = []
+    monkeypatch.setattr(P._listing, "_retry_transient", lambda fn: tries.append(1))
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    expected = P.path_schema("geojson_gbx", None, a)
+    msg = "read_paths reads Unity Catalog Volume / FUSE paths; got " + uri
+    with pytest.raises(ValueError, match=msg.replace(".", r"\.")):
+        P._exists(uri)
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        list(P.iter_path_batches(uri, None, "geojson_gbx", None, expected))
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        P.path_schema("geojson_gbx", None, uri)
+    tif = _tif(str(tmp_path / "a.tif"))
+    rschema = P.path_schema("gtiff_gbx", None, tif)
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        list(P._plan_batches("gtiff_gbx", {}, rschema)(iter([_plan_src((uri, 1))])))
+    planned = pa.RecordBatch.from_arrays(
+        [pa.array([uri]), pa.array([1], P._TS), pa.array([b"x"], pa.binary())],
+        names=["path", "mtime", "part"],
+    )
+    with pytest.raises(ValueError, match="Unity Catalog Volume"):
+        list(P._read_planned("gtiff_gbx", {}, rschema, True)(iter([planned])))
+    assert tries == []
+
+
+def test_read_paths_object_store_uri_fails_the_query(spark, tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    df = spark.createDataFrame(
+        [("s3://bucket/b.geojson", None)], "path string, modificationTime timestamp"
+    )
+    with pytest.raises(Exception, match="Unity Catalog Volume / FUSE paths"):
+        P.read_paths(df, "geojson_gbx", schema_path=a).collect()
+
+
+def test_scheme_prefixed_local_paths_are_accepted(tmp_path):
+    a = _geojson(str(tmp_path / "a.geojson"), 1)
+    for p in ("dbfs:" + a, "file:" + a, "file://" + a, a):
+        assert P._exists(P._fuse_path(p))

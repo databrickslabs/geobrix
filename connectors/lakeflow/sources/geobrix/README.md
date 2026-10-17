@@ -5,6 +5,12 @@ Lakeflow Connect ingestion pipeline: vector data (GeoPackage, GeoJSON, GeoJSONSe
 Shapefile, File Geodatabase), LiDAR point clouds, EXIF photo metadata, and GeoTIFF
 rasters. Each run appends only files that are new since the last run.
 
+Use this connector for the **Add data** page and managed ingestion pipelines, with access
+governed by a Unity Catalog connection. For large or fast-growing folders, where Auto Loader
+tracks the files, or when overwritten files must be kept as versions (`scd2`) or replaced
+(`replace`), use the Auto Loader route instead:
+[Incremental ingestion with Auto Loader](https://databrickslabs.github.io/geobrix/docs/readers/incremental-ingestion).
+
 Files are read by the same code as the GeoBrix `*_gbx` readers, so rows carry the same
 columns: attributes, the geometry column (`geom_0`, or the layer's geometry name such as
 `geom` for GeoPackage) with its `*_srid` / `*_srid_proj` companions for vector data, plus
@@ -31,7 +37,7 @@ needs an explicit `format`.
 | `file_gdb_gbx` | `filegdb` | `.gdb`, `.gdb.zip` |
 | `lidar_gbx` | `lidar` | `.las`, `.laz` |
 | `exif_gbx` | `exif` | `.jpg`, `.jpeg` |
-| `raster_gbx` | `raster` | any raster extension below (generic) |
+| `raster_gbx` | `raster` | `.tif`, `.tiff` (another raster file, such as `.jp2`, is read only when `path` names that file and `format` is `raster`) |
 | `gtiff_gbx` | `gtiff` | `.tif`, `.tiff` |
 
 The reader name itself (for example `gpkg_gbx`) is also accepted for `format`.
@@ -79,8 +85,8 @@ Grant `USE CONNECTION` to the people who build pipelines on it.
 | `mode` | Reader mode for `lidar` (default `points`) and `exif` (default `metadata`); passed through to the reader |
 
 The ingestion type is append-only, with `_source_mtime` as the cursor. For `scd2` and
-`replace` ingestion, see the incremental-ingestion docs page; the managed Add data route
-supports append only.
+`replace` ingestion, see [Incremental ingestion with Auto Loader](https://databrickslabs.github.io/geobrix/docs/readers/incremental-ingestion); the managed Add
+data route supports append only.
 
 ## Deploy
 

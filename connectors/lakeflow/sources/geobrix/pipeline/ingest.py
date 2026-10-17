@@ -10,7 +10,7 @@ spark.conf.set("spark.databricks.unityCatalog.connectionDfOptionInjection.enable
 spark.dataSource.register(GeoBrixDataSource)
 
 pipeline_spec = {
-    "connection_name": "geobrix_dev",
+    "connection_name": "<connection_name>",
     "objects": [
         # A dataset discovered under the connection's root_path (file or folder name).
         {"table": {"source_table": "<dataset>", "destination_table": "<table>",

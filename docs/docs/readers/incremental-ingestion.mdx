@@ -73,16 +73,18 @@ read_paths(df, format, options=None, *, path_col="path", mtime_col="modification
 | `df` | _required_ | DataFrame with one row per file. Batch or streaming. |
 | `format` | _required_ | Reader name from the table above. |
 | `options` | `None` | Dict of reader options, exactly as on that reader's page (for example `layerName`, `chunkSize` or `tileSize`). |
-| `path_col` | `"path"` | Column holding the file path. `dbfs:` and `file:` prefixes are accepted. |
+| `path_col` | `"path"` | Column holding the file path, a Unity Catalog Volume path (see [Paths](#paths)). `dbfs:` and `file:` prefixes are accepted. |
 | `mtime_col` | `"modificationTime"` | Column copied to `_source_mtime`. Pass `None` to leave `_source_mtime` NULL. |
-| `schema_path` | `None` | A file or folder whose first file defines the output schema. For a batch DataFrame the default is the first path in `df`. **Required for a streaming DataFrame.** |
+| `schema_path` | `None` | The file whose columns define the output schema, or a folder: then only its first file (in path order) matching the format's [default file pattern](#default-file-patterns) is opened. For a batch DataFrame the default is the first path in `df`. **Required for a streaming DataFrame.** |
 | `num_partitions` | `None` | Spread the work across this many tasks. See [Parallelism](#parallelism). |
 | `lineage` | `True` | Set `False` to leave out `_source_path` and `_source_mtime`. |
 
 ### Stream new files
 
 Pass an Auto Loader stream the same way. Because a stream has no first row to look at, give
-`schema_path` a file or a folder; the output schema comes from the first file there.
+`schema_path` a file or a folder; for a folder, the output schema comes from its first file whose
+name matches the format's [default file pattern](#default-file-patterns). That pattern, not the
+stream's `pathGlobFilter`, picks the file, so point `schema_path` at a file to choose it exactly.
 
 <CodeFromTest
   code={ingestExamples}
@@ -132,7 +134,11 @@ reads each new or changed file with the reader you name, and keeps the rows in a
   validationLevel="compile"
 />
 
-The pipeline's environment needs the GeoBrix light wheel — see [Installation](../installation).
+`declare_ingest` needs a Lakeflow pipeline whose runtime provides `pyspark.pipelines` with
+`foreach_batch_sink` and `create_auto_cdc_flow`; the `CURRENT` channel does. Install the GeoBrix
+light wheel in the pipeline's environment with the extra that matches the channel's Databricks
+Runtime: `geobrix[light_dbr18]` for a DBR 18 channel, `geobrix[light_dbr19]` for DBR 19 (see
+[Installation](../installation)).
 
 ```python
 declare_ingest(target, source_dir, format, options=None, *,
@@ -141,14 +147,38 @@ declare_ingest(target, source_dir, format, options=None, *,
 
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `target` | _required_ | Rows table, a fully qualified `catalog.schema.table` name in the pipeline's catalog and schema. |
-| `source_dir` | _required_ | Folder Auto Loader watches. |
+| `target` | _required_ | Rows table, a fully qualified `catalog.schema.table` name. The other objects are created in the same catalog and schema. |
+| `source_dir` | _required_ | Volume folder Auto Loader watches (see [Paths](#paths)). |
 | `format` | _required_ | Reader name from the [formats table](#supported-formats). |
 | `options` | `None` | Reader options, as for `read_paths`. |
 | `on_change` | `"scd2"` | What to do when a file is overwritten: `"scd2"`, `"replace"` or `"append"`. |
-| `glob` | `None` | File-name filter for the folder, such as `"*.geojson"`. |
+| `glob` | `None` | File-name filter for the folder, in Spark `pathGlobFilter` syntax, such as `"zones_*.gpkg"`. By default, the format's [default file pattern](#default-file-patterns). |
 | `num_partitions` | `None` | As for `read_paths`. |
-| `schema_path` | `source_dir` | File or folder whose first file defines the table schema. Stage at least one file there before the first update. |
+| `schema_path` | `source_dir` | File or folder that defines the table schema; a folder's first file matching `glob` is used. It is read once when the pipeline is declared (at each update), not for every micro-batch. Stage at least one file there before the first update. |
+
+### Default file patterns
+
+Auto Loader delivers every file under `source_dir` separately, so the parts of a multi-file
+dataset (a shapefile's `.shx`, `.dbf` and `.prj` sidecars, or the files inside a `.gdb` folder)
+would otherwise be read as inputs of their own. When `glob` is not set, `declare_ingest` passes the
+format's pattern to Auto Loader. The same pattern picks the schema file from a folder
+`schema_path`, in `read_paths` too.
+
+| `format` | Default `glob` |
+|----------|----------------|
+| `vector_gbx` | `{*.gpkg,*.geojson,*.json,*.geojsonl,*.geojsons,*.shp,*.shz,*.shp.zip,*.gdb.zip}` |
+| `shapefile_gbx` | `{*.shp,*.shz,*.shp.zip}` |
+| `geojson_gbx` | `*.{geojson,json}` |
+| `geojsonl_gbx` | `*.{geojsonl,geojsons}` |
+| `gpkg_gbx` | `*.gpkg` |
+| `file_gdb_gbx` | `*.gdb.zip` |
+| `lidar_gbx` | `*.{las,laz}` |
+| `exif_gbx` | `*.{jpg,jpeg}` |
+| `raster_gbx`, `gtiff_gbx` | `*.{tif,tiff}` |
+
+The patterns match the file name and are case-sensitive. Set `glob` for other names, for example
+`glob="*.{jpg,jpeg,JPG,JPEG}"` for upper-case photo extensions, or `glob="*.jp2"` for another
+raster format. Deliver a File Geodatabase as a zipped `.gdb.zip` file.
 
 ### Choosing `on_change`
 
@@ -168,7 +198,7 @@ Here `<t>` is the last part of `target`. `scd2` and `replace` compare a SHA-256 
 bytes (`_source_hash`) with what is already stored, so a file that is re-delivered without a content
 change is recognized and skipped. `append` does not hash anything.
 
-Each mode declares these objects in the pipeline's catalog and schema:
+Each mode declares these objects in the catalog and schema of `target`:
 
 | Object | `scd2` | `replace` | `append` |
 |--------|:------:|:---------:|:--------:|
@@ -199,6 +229,11 @@ whose interval contains the time:
 file's content was written, not when the pipeline ingested it. `__END_AT` is `NULL` for the
 current version, and an interval includes its start and excludes its end.
 
+"Current" means the version with the newest modification time. A copy that keeps or backdates the
+source's modification time (`cp -p`, `rsync -t`) can give an overwrite an older time than the
+version it replaces; that content is then recorded as history and does not become current. Copy
+without preserving times when you overwrite a file.
+
 ### What a pipeline update does
 
 - **The newest delivery of each file wins** (`scd2` and `replace`). When one micro-batch holds
@@ -206,20 +241,35 @@ current version, and an interval includes its start and excludes its end.
   newest content. Under `scd2` the older deliveries still appear in `<t>_file_versions`, but have
   no rows in the table.
 - **A file modified after it was hashed is skipped** (`scd2` and `replace`) until its newer delivery
-  arrives, so a row's `_source_hash` describes the content it was read from. A file overwritten in
-  the instant between that check and the read can still be stored under the earlier hash; its next
+  arrives, so a row's `_source_hash` describes the content it was read from. Before reading, each
+  file must still have its delivered size and a modification time within one second of the
+  delivered one. A file overwritten in the instant between that check and the read, or rewritten
+  with the same size within that second, can still be stored under the earlier hash; its next
   delivery is written as usual (and under `scd2` recorded as the current version).
 - **A file deleted before it is read is skipped** with a warning (all modes), and Auto Loader counts
-  it as processed. Deleting a file never removes rows that were already written.
+  it as processed. Deleting a file does not remove rows that were already written, with one rare
+  exception: under `replace`, a file deleted in the instant between that check and the read is
+  still part of the micro-batch's `replaceWhere`, so its earlier rows are removed and no new rows
+  are written for it.
 
 ## Behavior
 
 ### Schema
 
-The table schema comes from the first file (`schema_path`). Every later file must have the same
-columns with the same types: a file that differs by column name or type fails with an error that
-names the file. A file whose columns are in a different order is realigned by name. A file with no
-features adds no rows.
+The table schema comes from one file: `schema_path`, or for a folder its first file matching the
+format's [default file pattern](#default-file-patterns) (or `glob`). No other file is opened to
+resolve it, so a folder that already holds files with other columns still resolves. Every file that
+is read must have the same columns with the same types: a file that differs by column name or type
+fails with an error that names the file. A file whose columns are in a different order is realigned
+by name. A file with no features adds no rows.
+
+### Paths
+
+Paths are Unity Catalog Volume paths: `/Volumes/...`, or `dbfs:/Volumes/...` as Auto Loader and
+`binaryFile` report them. The readers open each file through the Volume's file system, so an
+object-store URI (`s3://`, `abfss://`, `gs://`) fails with an error that names it, rather than
+being skipped as missing. To ingest from cloud storage, create an external volume over the
+location and use its `/Volumes` path.
 
 ### Files deleted before they are read
 
@@ -254,7 +304,8 @@ or from the `format` table option; a folder that mixes formats needs `format`. T
 | File version history | No | Yes, with `scd2` |
 
 Use the connector when you want the managed Add data experience and append is enough. Use
-`declare_ingest` when a file can be overwritten and you need its latest content, or its history.
+`declare_ingest` when a folder is large or grows quickly (Auto Loader keeps track of the files it
+has delivered), or when a file can be overwritten and you need its latest content, or its history.
 
 ## See also
 

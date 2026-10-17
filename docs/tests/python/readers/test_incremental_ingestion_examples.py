@@ -39,6 +39,9 @@ def test_read_paths_stream(spark, tmp_path):
     landing = tmp_path / "landing"
     landing.mkdir()
     shutil.copy(f"{ex.SAMPLE_BOROUGHS_DIR}/nyc_boroughs.geojson", landing)
+    # Sorts first but does not match the format's file pattern: the folder
+    # schema_path skips it and takes the schema from the GeoJSON file.
+    (landing / "0_readme.txt").write_text("not a GeoJSON file")
     out = ex.read_paths_stream(spark, str(landing), str(tmp_path / "checkpoint"))
     assert out.count() == _expected_borough_rows(spark)
     assert out.select("_source_path").distinct().count() == 1
@@ -104,6 +107,42 @@ def test_displayed_snippets_name_real_api():
     assert "declare_ingest" in ex.PIPELINE_SCD2
     for mode in ON_CHANGE_MODES:
         assert mode in ex.PIPELINE_SCD2
+
+
+def test_object_store_uri_is_rejected(spark):
+    """Paths section: an object-store URI fails with an error naming it."""
+    from databricks.labs.gbx.ds.paths import read_paths
+
+    files = ex._files(spark, ex.SAMPLE_BOROUGHS_DIR, "*.geojson")
+    with pytest.raises(ValueError, match="Unity Catalog Volume.*s3://bucket/landing"):
+        read_paths(files, "geojson_gbx", schema_path="s3://bucket/landing")
+
+
+def _mdx_section_rows(heading):
+    mdx = (
+        Path(__file__).resolve().parents[3]
+        / "docs"
+        / "readers"
+        / "incremental-ingestion.mdx"
+    ).read_text()
+    section = mdx.split(f"### {heading}\n", 1)[1].split("\n#", 1)[0]
+    rows = [
+        [c.strip() for c in line.strip().strip("|").split("|")]
+        for line in section.splitlines()
+        if line.startswith("|")
+    ]
+    return rows[2:]  # past the header and separator rows
+
+
+def test_default_file_patterns_table_matches_the_code():
+    """The page's default-pattern table lists exactly DEFAULT_GLOBS."""
+    from databricks.labs.gbx.ds.paths import DEFAULT_GLOBS
+
+    shown = {}
+    for formats, glob in _mdx_section_rows("Default file patterns"):
+        for fmt in formats.split(","):
+            shown[fmt.strip().strip("`")] = glob.strip("`")
+    assert shown == DEFAULT_GLOBS
 
 
 def _calls(snippet, name):

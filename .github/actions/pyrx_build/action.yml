@@ -67,6 +67,8 @@ runs:
         # listed: pyrx, ds, pyvx, pygx (light GridX), pmtiles_light (light
         # pmtiles_agg), stac (light STAC client, [stac] extra),
         # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra),
+        # bench (bench-harness spec/compare/fingerprint/runner unit tests -- guards
+        # the light bench FnSpec registry + cross-tier count invariants),
         # models (gbx.models GeoSAM/runner/serving -- torch/segment-geospatial/mlflow
         # are lazy-imported at function scope, so no [models] extra install is needed
         # here. No test in test/models is GPU-bound or marked `integration`: GeoSAM/
@@ -74,12 +76,7 @@ runs:
         # test_runner.py), and the mlflow-dependent serving tests are individually
         # guarded with `pytest.importorskip("mlflow")` (test_serving.py) rather than
         # excluded via the `-m "not integration"` filter below).
-        # test/bench (bench-harness unit tests) is TEMPORARILY de-scoped from the
-        # light CI run: on the Linux CI runner, rasterio / pyproj / pyogrio each
-        # bundle their own GDAL/PROJ, and rasterio.crs.CRS.from_epsg fails with
-        # "Cannot find proj.db" -- a multi-bundled-PROJ data-path conflict in the CI
-        # wheel environment, not a product defect. Re-add test/bench below once the
-        # PROJ-data resolution is fixed (tracked separately). bench stays in
-        # test/conftest.py _LIGHT_TEST_DIRS + the heavy LIGHT_IGNORES, so the heavy
-        # phase still skips it; only the light RUN list drops it here.
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/core test/models -m "not integration" -v
+        # All dirs run in ONE process, so state one dir leaves behind reaches the
+        # next: e.g. test/pyvx registers PROJ grids before test/bench builds rasters
+        # on worker threads (see test/conftest.py for the maintained condition).
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models -m "not integration" -v

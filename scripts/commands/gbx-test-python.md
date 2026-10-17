@@ -25,7 +25,6 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 |---|---|---|
 | `heavy` | `test/` minus every light dir (`pytest test --ignore=test/pyrx ...`) | `LIGHT_IGNORES` in `.github/actions/python_build/action.yml` |
 | `light` | the light dirs in one process (`pytest test/pyrx test/ds ...`) | the `pytest test/... -m ...` line in `.github/actions/pyrx_build/action.yml` |
-| `bench` | `test/bench` on its own | local-only: CI's light run currently excludes `test/bench` (a PROJ data-path conflict on the runner). If bench is re-added to the CI light list, this phase is dropped automatically so it never runs twice. |
 
 - The lists are **read from the CI action files**, not copied into the script, so the command cannot drift from CI. If those lines change shape the command stops with exit 2 and a message (update `load_ci_phases()` in `gbx-test-python.sh`).
 - Each phase runs from `python/geobrix` (like CI) with `-m "not integration"` (unless `--with-integration`/`--markers`), `-k` and `-rfE` (failing test ids are listed in the summary).
@@ -43,7 +42,7 @@ Opt in with `--with-integration` (drops the filter entirely) or `--markers <expr
 ## Examples
 
 ```bash
-# Everything, as CI-style phases (heavy, light, bench) with a per-phase summary
+# Everything, as CI-style phases (heavy, light) with a per-phase summary
 bash scripts/commands/gbx-test-python.sh
 
 # Include integration tests (network downloads)

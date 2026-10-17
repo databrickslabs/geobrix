@@ -23,7 +23,6 @@ show_help() {
     echo -e "  run mirrors CI as separate pytest invocations, each with its own log, and prints a per-phase summary:"
     echo -e "  ${YELLOW}heavy${NC}  test/ minus the light dirs (LIGHT_IGNORES in .github/actions/python_build/action.yml)"
     echo -e "  ${YELLOW}light${NC}  the light dirs (pytest list in .github/actions/pyrx_build/action.yml)"
-    echo -e "  ${YELLOW}bench${NC}  test/bench, run locally on its own while CI's light phase excludes it"
     echo -e "  Exits non-zero if any phase fails. ${YELLOW}--path${NC} bypasses phasing (one process, as given)."
     echo ""
     echo -e "${CYAN}Default marker filter:${NC} ${YELLOW}not integration${NC} (matches CI; opt in with ${GREEN}--with-integration${NC} or override with ${GREEN}--markers${NC})"
@@ -173,7 +172,7 @@ run_single() {
 }
 
 # ---------------------------------------------------------------------------------------
-# Phased run: no --path → mirror CI's two Python phases (+ a local-only bench phase).
+# Phased run: no --path → mirror CI's two Python phases.
 #
 # WHY phases: the heavy tier (Scala JAR / GDAL natives registered in the Spark session) and
 # the light tier (pure Python: pyrx/pyvx/pygx/ds/...) cannot share one pytest process — one
@@ -186,9 +185,6 @@ run_single() {
 #   light: the `pytest test/... -m ...` line in .github/actions/pyrx_build/action.yml
 # Both run from python/geobrix like CI. CI-only extras are skipped locally (the heavy
 # phase's --cov and `python -m build`; the light phase's wheel build and fresh install).
-# bench: CI's light run currently omits test/bench (a PROJ data-path conflict on the runner);
-# locally it still runs, as its own phase. If bench is later re-added to the CI light list
-# the separate phase is dropped automatically (it would otherwise run twice).
 # ---------------------------------------------------------------------------------------
 HEAVY_ACTION="$PROJECT_ROOT/.github/actions/python_build/action.yml"
 LIGHT_ACTION="$PROJECT_ROOT/.github/actions/pyrx_build/action.yml"
@@ -248,10 +244,6 @@ run_phased() {
     local names=() argsets=() codes=() logs=()
     names+=("heavy");  argsets+=("test $LIGHT_IGNORES")
     names+=("light");  argsets+=("$LIGHT_DIRS")
-    case " $LIGHT_DIRS " in
-        *" test/bench "*) ;;
-        *) names+=("bench"); argsets+=("test/bench") ;;
-    esac
 
     echo -e "${CYAN}🧩 Phases (no --path; mirrors CI): ${YELLOW}${names[*]}${NC}"
 

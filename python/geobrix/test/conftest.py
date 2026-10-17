@@ -42,13 +42,14 @@ sample, models, plus bench + ds + core (the tier-neutral gbx.core.crs resolver
 imports rasterio, so test/core is light-tier too).
 
 ``bench`` is a light dir (its modules import rasterio/shapely/h3/quadbin via the
-bench harness): (1) it is in ``_LIGHT_TEST_DIRS`` below and (3) it is skipped in the
-heavy phase -- present in the heavy action's ``LIGHT_IGNORES`` (--ignore=test/bench).
-(2) is currently NOT met: the pyrx_build light run de-scoped test/bench in 838cc39b
-(a multi-bundled-PROJ "Cannot find proj.db" conflict on the CI runner -- see the
-comment in .github/actions/pyrx_build/action.yml), so it runs only locally for now. Its unit tests guard the light bench FnSpec
-registry and the cross-tier coverage/count invariants (previously CI ran none of
-test/bench, so bench-spec drift went uncaught).
+bench harness) and meets all three: it is in ``_LIGHT_TEST_DIRS`` below, in the light
+run list, and in the heavy ``LIGHT_IGNORES``. Its unit tests guard the light bench
+FnSpec registry and the cross-tier coverage/count invariants.
+
+The light phase runs every light dir in ONE pytest process, so process-global state
+a test leaves behind (env vars, registries, GDAL/PROJ search paths) reaches the dirs
+after it. A test that changes such state must restore it (see the ``_isolate`` /
+``_isolate_gdal_env`` fixtures in test/pyvx, test/pyrx and test/ds).
 """
 
 import importlib.util

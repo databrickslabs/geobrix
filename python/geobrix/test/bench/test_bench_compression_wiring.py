@@ -1,7 +1,6 @@
 """T2 fail-on-revert wiring tests for bench compression consumers.
 
-NOTE: test/bench is de-scoped from the light CI suite (_LIGHT_TEST_DIRS in
-.github/actions/pyrx_build does not include test/bench).  Run directly:
+test/bench runs in the light CI phase (.github/actions/pyrx_build). Run directly:
     gbx:test:python --path python/geobrix/test/bench/test_bench_compression_wiring.py
 """
 

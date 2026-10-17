@@ -126,7 +126,10 @@ def test_materialized_reads_stage_through_shared_cache(tmp_path, monkeypatch):
     """Wiring: re-encoded (non-passthrough) reads stage the source through the
     shared bounded StageCache -- two reads of one file copy it once."""
     from databricks.labs.gbx.ds import raster as raster_mod
-    from databricks.labs.gbx.pyrx.core.local_temp import StageCache
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        StageCache,
+        copy_source_sequential,
+    )
 
     p = tmp_path / "s.tif"
     _write_striped(str(p), 256, 256)
@@ -134,7 +137,7 @@ def test_materialized_reads_stage_through_shared_cache(tmp_path, monkeypatch):
 
     def counting_copy(src, dst):
         copies.append(src)
-        raster_mod._copy_raster_source(src, dst)
+        copy_source_sequential(src, dst)
 
     monkeypatch.setattr(
         raster_mod, "_RASTER_STAGE", StageCache("gbx_stage_t_", counting_copy)

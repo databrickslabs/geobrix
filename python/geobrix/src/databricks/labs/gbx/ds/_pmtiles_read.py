@@ -13,14 +13,17 @@ from __future__ import annotations
 import contextlib
 import logging
 import os
-import shutil
 from functools import lru_cache
 from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSourceReader, InputPartition
 
 from databricks.labs.gbx.ds import _listing, _xyz_mosaic
-from databricks.labs.gbx.pyrx.core.local_temp import StageCache, source_signature
+from databricks.labs.gbx.pyrx.core.local_temp import (
+    StageCache,
+    copy_source_sequential,
+    retried_source_signature,
+)
 
 _LOG = logging.getLogger(__name__)
 
@@ -34,28 +37,11 @@ _DIR_CACHE = 8  # deserialized directories kept per partition read
 # ---------------------------------------------------------------------------
 
 
-def _copy_sequential(source_path: str, local_path: str) -> None:
-    """One sequential copy (FUSE-safe), retried on the transient FileNotFound /
-    OSError a UC Volume can raise shortly after a write."""
-
-    def _do() -> None:
-        with open(source_path, "rb") as src, open(local_path, "wb") as dst:
-            shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
-
-    _listing._retry_transient(_do)
-
-
-def _source_signature(path: str) -> tuple:
-    """Size + mtime of a source, so a file replaced at the same path is staged
-    again (same transient retry as the copy)."""
-    return _listing._retry_transient(lambda: source_signature(path))
-
-
 def _stage_render_source(source_path: str, local_path: str) -> None:
     """Stage a source raster render-ready: copy it, then (RGBA imagery) replace
     the copy with its RGB form so tile masks come from the footprint, not an
     alpha band that reads ~0 after decimation (see ``to_render_rgb``)."""
-    _copy_sequential(source_path, local_path)
+    copy_source_sequential(source_path, local_path)
     try:
         rgb = _xyz_mosaic.to_render_rgb(local_path)
         if rgb != local_path:
@@ -69,8 +55,12 @@ def _stage_render_source(source_path: str, local_path: str) -> None:
 
 # Each archive / source raster is copied to local disk once per worker process
 # and shared by every partition read there, within a bounded cache.
-_ARCHIVE_STAGE = StageCache("gbx_pmtiles_arc_", _copy_sequential, _source_signature)
-_RENDER_STAGE = StageCache("gbx_pmtiles_rst_", _stage_render_source, _source_signature)
+_ARCHIVE_STAGE = StageCache(
+    "gbx_pmtiles_arc_", copy_source_sequential, retried_source_signature
+)
+_RENDER_STAGE = StageCache(
+    "gbx_pmtiles_rst_", _stage_render_source, retried_source_signature
+)
 
 
 # ---------------------------------------------------------------------------

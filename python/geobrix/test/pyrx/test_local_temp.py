@@ -264,3 +264,60 @@ def test_source_signature_tracks_directory_contents(tmp_path):
     before = source_signature(str(d))
     _rewrite(str(d / "a0000001.gdbtable"), 10)
     assert source_signature(str(d)) != before
+
+
+# The staging helpers every StageCache reader (raster_gbx, pmtiles_gbx) shares.
+
+
+def _fail_first(monkeypatch, module, name, target, failures):
+    """Make ``module.name(target, ...)`` raise a FUSE-style FileNotFoundError for its
+    first ``failures`` calls; returns the list of calls made for ``target``."""
+    real = getattr(module, name)
+    calls = []
+
+    def flaky(path, *args, **kwargs):
+        if os.fspath(path) == target:
+            calls.append(path)
+            if len(calls) <= failures:
+                raise FileNotFoundError(2, "transient FUSE miss", target)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(module, name, flaky)
+    return calls
+
+
+def test_copy_source_sequential_copies_and_retries_a_transient_miss(
+    monkeypatch, tmp_path
+):
+    import builtins
+    import time
+
+    from databricks.labs.gbx.pyrx.core.local_temp import copy_source_sequential
+
+    monkeypatch.setattr(time, "sleep", lambda _s: None)  # no retry backoff
+    src = tmp_path / "s.bin"
+    src.write_bytes(b"abc" * 1000)
+    dst = tmp_path / "d.bin"
+    calls = _fail_first(monkeypatch, builtins, "open", str(src), failures=2)
+    copy_source_sequential(str(src), str(dst))
+    assert len(calls) == 3
+    assert dst.read_bytes() == src.read_bytes()
+
+
+def test_retried_source_signature_matches_source_signature_after_a_miss(
+    monkeypatch, tmp_path
+):
+    import time
+
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        retried_source_signature,
+        source_signature,
+    )
+
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+    f = tmp_path / "s.bin"
+    f.write_bytes(b"x" * 10)
+    expected = source_signature(str(f))
+    calls = _fail_first(monkeypatch, os, "stat", str(f), failures=3)
+    assert retried_source_signature(str(f)) == expected
+    assert len(calls) > 3

@@ -73,8 +73,9 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import budget
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
+    copy_source_sequential,
     new_local_temp_dir,
-    source_signature,
+    retried_source_signature,
 )
 
 logger = logging.getLogger(__name__)
@@ -90,30 +91,11 @@ _MAX_TILE_BYTES = 1932735283  # ~1.8 GiB
 # ---------------------------------------------------------------------------
 
 
-def _copy_raster_source(file_path: str, local_path: str) -> None:
-    """Single sequential copy (FUSE-safe: UC Volumes don't support per-window
-    seeks). UC Volume FUSE can transiently raise FileNotFoundError even when the
-    file exists (eventual-consistency lag after write), so retry up to 10x."""
-
-    def _do_stage() -> None:
-        with (
-            open(file_path, "rb") as _src,
-            open(local_path, "wb") as _dst,
-        ):
-            shutil.copyfileobj(_src, _dst, length=8 * 1024 * 1024)
-
-    _listing._retry_transient(_do_stage)
-
-
-def _raster_source_signature(file_path: str) -> tuple:
-    """Size + mtime of a source, so a raster replaced at the same path is staged
-    again (same transient retry as the copy)."""
-    return _listing._retry_transient(lambda: source_signature(file_path))
-
-
 # Each source is staged once and shared by every tile task for it on the worker,
 # within a bounded cache.
-_RASTER_STAGE = StageCache("gbx_stage_", _copy_raster_source, _raster_source_signature)
+_RASTER_STAGE = StageCache(
+    "gbx_stage_", copy_source_sequential, retried_source_signature
+)
 
 
 def _numpy_itemsize(dtype: str) -> int:

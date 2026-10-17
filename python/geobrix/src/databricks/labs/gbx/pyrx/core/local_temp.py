@@ -164,6 +164,32 @@ def source_signature(path: str) -> tuple:
     return (st.st_size, st.st_mtime_ns)
 
 
+def copy_source_sequential(source_path: str, local_path: str) -> None:
+    """Copy one file in a single sequential pass (a ``StageCache`` ``copy_fn``).
+
+    FUSE-safe: UC Volumes do not support per-window seeks. UC Volume FUSE can
+    transiently raise FileNotFoundError / OSError even when the file exists
+    (eventual-consistency lag after a write), so the copy is retried up to 10x.
+    """
+    # Lazy: the ds package imports this module.
+    from databricks.labs.gbx.ds import _listing
+
+    def _do_stage() -> None:
+        with open(source_path, "rb") as src, open(local_path, "wb") as dst:
+            shutil.copyfileobj(src, dst, length=8 * 1024 * 1024)
+
+    _listing._retry_transient(_do_stage)
+
+
+def retried_source_signature(path: str) -> tuple:
+    """:func:`source_signature` with the same transient retry as
+    :func:`copy_source_sequential` (a ``StageCache`` ``signature_fn``), so a source
+    replaced at the same path is staged again."""
+    from databricks.labs.gbx.ds import _listing
+
+    return _listing._retry_transient(lambda: source_signature(path))
+
+
 class StageCache:
     """Process-wide cache of worker-local copies of source files.
 
@@ -182,8 +208,7 @@ class StageCache:
       cache fits. A copy in use is never evicted; a source larger than the cap is
       still staged, alone.
 
-    With a ``signature_fn`` (e.g. :func:`source_signature`, wrapped in the reader's
-    transient retry), each use compares the source's signature with the one taken
+    With a ``signature_fn`` (e.g. :func:`retried_source_signature`), each use compares the source's signature with the one taken
     when it was staged; a source replaced at the same path is staged again, and the
     superseded copy is removed once no reader is using it.
     """

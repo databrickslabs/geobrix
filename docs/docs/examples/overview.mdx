@@ -20,6 +20,13 @@ End-to-end, runnable notebook walkthroughs. Each links to the notebook source on
 | [Vapor-Eyes — Permian Methane](../notebooks/vapor-eyes) | Screen a satellite methane signal over the Permian Basin down to the leaking operator. |
 | [Orthomosaic Photogrammetry](../notebooks/orthomosaic) | Build a georeferenced orthomosaic from a drone image dataset: `exif_gbx` telemetry extraction, GSD estimation, sparse SfM, orthomosaic GeoTIFF, COG conversion, and PMTiles packaging — capped off with an optional GeoSAM segmentation step (`gbx.models`) that turns the published orthomosaic into georeferenced object polygons, in-notebook or via a served GPU endpoint. |
 
+:::tip Lakeflow SDP pipelines
+[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow) and
+[Vapor-Eyes](../notebooks/vapor-eyes?flavor=lakeflow) also ship as production Lakeflow SDP
+bundles whose bronze layer is an Auto Loader streaming table over the landed files. To keep your
+own tables in sync with a landing folder, see [Ingestion Pipelines](../ingestion/overview).
+:::
+
 ## Apps
 
 | App | What it does |

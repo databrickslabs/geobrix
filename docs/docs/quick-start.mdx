@@ -159,6 +159,7 @@ Register GridX (BNG) and VectorX the same way:
 ## Reading Data
 
 Paths below assume the [Sample Data](./sample-data/overview) layout (e.g. Essential Bundle). The reader format string is the part that differs by tier: lightweight uses the pure-Python `*_gbx` readers (no GDAL/OGR install); heavyweight uses the GDAL/OGR readers.
+To keep a table in sync with a landing folder rather than read it once, see [Ingestion Pipelines](./ingestion/overview).
 
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight">

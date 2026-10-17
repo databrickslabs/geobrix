@@ -97,7 +97,7 @@ declare_ingest(target, source_dir, format, options=None, *,
 | `num_partitions` | `None` | Spread the reads across this many tasks. See [Parallelism](./read-paths#parallelism). |
 | `schema_path` | `source_dir` | File or folder that defines the table schema; a folder's first file matching `glob` is used. It is read once when the pipeline is declared (at each update), not for every micro-batch. |
 | `on_error` | `"quarantine"` | What to do with data that cannot be read: `"quarantine"` sets it aside in `<t>_bad_records` and writes the rest; `"fail"` fails the update. See [Unreadable data](#unreadable-data). |
-| `scratch_dir` | `source_dir` | Volume folder where `on_error="quarantine"` stages each micro-batch, in a hidden `.gbx_scratch` folder that is removed when the micro-batch ends. The pipeline must be able to write it. Set it when the landing folder is read-only to the pipeline. |
+| `scratch_dir` | `source_dir` | Volume folder (`/Volumes/...`, shared by every node) where `on_error="quarantine"` stages each micro-batch, in a hidden `.gbx_scratch` folder that is removed when the micro-batch ends. The pipeline must be able to write it. Set it when the landing folder is read-only to the pipeline. |
 
 Auto Loader delivers every file under `source_dir` on its own, so the file pattern must leave out
 the other files of a multi-file dataset: a shapefile's sidecars, or the files inside an unzipped
@@ -139,7 +139,8 @@ pipeline manages.
 ## Query the latest content and past content
 
 `<target>_current` returns the rows of each file's latest readable version: the newest version
-whose content has rows in the table. A delivery that could not be read is still recorded as the
+whose content has rows in the table. It is a plain view that scans the rows table, so filter it by
+`_source_path` to look up one file quickly. A delivery that could not be read is still recorded as the
 file's newest version in `<t>_file_versions`, but it does not hide the content that was read before
 it (see [Unreadable data](#unreadable-data)). To read what was current at an earlier time, join the
 rows to the versions table on both `_source_path` and `_source_hash`, and keep the version whose
@@ -183,7 +184,14 @@ A NULL or empty geometry is data, not a bad record: a feature without a location
 (`"geometry": null` in GeoJSON) or a `POINT EMPTY` is written like any other row. GDAL also returns
 NULL for a geometry it cannot decode (an unknown geometry type, unreadable coordinates, a damaged
 GeoPackage or shapefile record), so those rows are written too. To watch for them, query the
-geometry column with `IS NULL` (it is `geom_0` for GeoJSON) and `ST_IsEmpty`.
+geometry column with `IS NULL` (it is `geom_0` for GeoJSON) and `ST_IsEmpty`. Curves and
+surfaces (`CircularString`, `CompoundCurve`, `CurvePolygon`, `MultiCurve`, `MultiSurface`,
+`PolyhedralSurface`, `TIN`, `Triangle`) are data too.
+
+Errors of the environment are not bad data either. Out of memory, a missing module (such as a LAZ
+decompression backend), an I/O error of the Volume (retried first), and an image too large to read
+whole in `exif_gbx` `qc` mode fail the micro-batch, so Spark retries the task or the update fails
+with that error, and no bad record is written for them.
 
 ### Query the bad records
 
@@ -207,7 +215,7 @@ found:
 | `record_index` | `STRING` | Where in the file: `feature=17` (position in the file's read order), `fid=1009` (a GeoPackage feature), `line=11` (GeoJSONSeq), `window=128,64,64,64` (column, row, width, height), `points=2000-2999` or `point=12` (LiDAR), `tile=3/1/2` (z/x/y) or `tiles=3/0/0..3/1/3` (PMTiles), `variable=temp,time=1` (NetCDF). `NULL` for the whole file |
 | `error_class` | `STRING` | The reader's exception class (for example `pyogrio.errors.DataSourceError`), or the check that set the record aside (table below) |
 | `error_message` | `STRING` | The error and the errors that caused it, the warnings and log lines the reader gave while reading, and how many rows of the file were read before the error |
-| `raw` | `STRING` | What can be recovered, as JSON: a feature's other columns (text that is not UTF-8 is escaped), a GeoJSONSeq line, or a LiDAR point's `x`, `y` and `z`. Otherwise `NULL` |
+| `raw` | `STRING` | What can be recovered, as JSON of at most 4096 characters (longer is cut and marked `"truncated": true`): a feature's other columns (text that is not UTF-8 is escaped, a binary value is shown as `<binary, N bytes>`), a GeoJSONSeq line, or a LiDAR point's `x`, `y` and `z`. Otherwise `NULL` |
 | `quarantined_at` | `TIMESTAMP` | When the micro-batch set it aside |
 
 | `error_class` | Set aside because |
@@ -215,11 +223,10 @@ found:
 | `UnreadableGeometry` | The geometry bytes are not valid WKB (for example a polygon ring that is not closed) |
 | `InvalidText` | A text value is not valid UTF-8 |
 | `RecordsNotRead` | The file declares features, points or lines its reader did not return (a dropped `.dbf` record, an unreadable GeoPackage page, a truncated LAS file, a GeoJSONSeq line that is not JSON) |
-| `PointOutOfBounds` | LiDAR points outside the bounds the file's header declares (garbled point records) |
+| `PointOutOfBounds` | LiDAR points outside the bounds the file's header declares, by more than 0.1% of its extent and one scale step (garbled point records) |
 | `ShortTile` | A PMTiles tile is shorter than its directory entry declares (a truncated archive) |
-| `NotJpeg` | A `.jpg` / `.jpeg` file does not start and end with the JPEG markers (not a JPEG, or truncated) |
+| `NotJpeg` | A `.jpg` / `.jpeg` file has no JPEG start marker, or a header that cannot be decoded (a missing end marker only gives a warning: a truncated scan, or a Motion Photo's video after the image) |
 | `UnreadableFile` | An empty file, or a LAS file whose point record length does not fit its data |
-| `FileTooLarge` | An image too large to read whole in `exif_gbx` `qc` mode |
 | `NothingReadable` | No row of the delivery could be read: every record of it was set aside. One per delivery (`record_index` is `NULL`), next to the records that say why |
 
 ### How bad records interact with the tables
@@ -229,7 +236,8 @@ found:
   that were read are written under the new hash, and that version is current. When all of it was
   set aside, the version has no rows, so `<target>_current` keeps showing the file's last readable
   content, and `<t>_bad_records` explains the empty version. Removing the bad file keeps it that
-  way.
+  way. The same holds for a file overwritten with content that has no rows (an emptied file):
+  `<target>_current` keeps showing its previous rows, while `replace` removes them.
 - **`replace` keeps the last readable rows too.** A delivery that is partly readable replaces the
   file's earlier rows with the rows that were read. A delivery set aside entirely (a
   `NothingReadable` record) leaves the file's earlier rows in place.
@@ -237,11 +245,18 @@ found:
   has rows in the table, or when it was set aside entirely: it would be set aside again. A
   re-delivery with new content is read.
 - **Each micro-batch is staged in `scratch_dir`.** The files are read once: the rows go to a
-  hidden `.gbx_scratch` folder under `scratch_dir` (default `source_dir`) while the bad records are
-  collected there. Then the bad records are appended to `<t>_bad_records`, then the rows to the
-  table, and the folder is removed. A bad record already in the table is not appended again, so a
-  micro-batch that fails between the two writes and is retried neither loses nor repeats one. When
-  the pipeline cannot write to `scratch_dir`, the micro-batch fails with an error that says so.
+  hidden `.gbx_scratch` folder under `scratch_dir` (default `source_dir`), in a subfolder of its own
+  for each target table, while the bad records are collected there. Then the bad records are
+  appended to `<t>_bad_records`, then the rows to the table, and the folder is removed. A bad record
+  already in the table is not appended again, so a micro-batch that fails between the two writes
+  and is retried neither loses nor repeats one. A staging folder left by a killed micro-batch is
+  removed a day later, by the next micro-batch of the same table; pipelines that share a
+  `scratch_dir` never touch each other's folders. When the pipeline cannot write to
+  `scratch_dir`, the micro-batch fails with an error that says so.
+- **To read a file that was set aside again**, for example after fixing a reader option, delete
+  its `NothingReadable` rows from `<t>_bad_records` (`DELETE FROM ... WHERE _source_path = '...'
+  AND error_class = 'NothingReadable'`), then touch the file or deliver it again. Until then an
+  identical delivery is skipped.
 - **`append` has no bad-records table.** Its rows table is a plain streaming table, so bad records
   are skipped with a warning in the executor logs, and nothing is staged. Use `scd2` or `replace` to
   keep them.
@@ -278,8 +293,9 @@ always reads this way.
 ## See also
 
 :::tip Production examples
-Two examples run GeoBrix ingestion in production Lakeflow SDP bundles, with Auto Loader streaming
-tables as their bronze layer:
+Two examples are complete Lakeflow SDP pipelines with an Auto Loader streaming-table bronze
+layer. They list their files with a plain `binaryFile` Auto Loader stream, so they don't use
+`declare_ingest`, and show the pipeline setup around it:
 - **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: an Auto Loader
   `laz_inventory` streaming table over staged USGS 3DEP LiDAR feeds DSM, DTM and CHM surfaces and
   H3 tower viewsheds.

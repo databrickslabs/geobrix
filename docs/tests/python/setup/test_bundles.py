@@ -19,7 +19,7 @@ Run these tests:
 import pytest
 import sys
 from pathlib import Path
-from unittest.mock import patch, MagicMock, mock_open, call
+from unittest.mock import patch, MagicMock
 
 # Import the actual code that docs reference
 sys.path.insert(0, str(Path(__file__).parent))
@@ -66,38 +66,58 @@ class TestConfiguration:
 
 
 class TestDownloadFile:
-    """Test download_file function"""
-    
-    @patch('requests.get')
-    @patch('builtins.open', new_callable=mock_open)
-    @patch('pathlib.Path.mkdir')
-    @patch('pathlib.Path.exists')
-    def test_download_file_success(self, mock_exists, mock_mkdir, mock_file, mock_get):
-        """Test successful file download"""
-        # Setup mocks
-        mock_exists.return_value = False
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.iter_content = lambda chunk_size: [b'test data']
-        mock_get.return_value = mock_response
-        mock_response.raise_for_status = MagicMock()
-        
-        # Mock Path.stat() for size calculation
-        with patch('pathlib.Path.stat') as mock_stat:
-            mock_stat.return_value.st_size = 1024 * 1024  # 1 MB
-            
-            # Call function
+    """download_file writes the downloaded bytes under SAMPLE_DATA_PATH.
+
+    Only the HTTP call is mocked (an external API); the write goes to a real
+    temporary directory. Patching ``builtins.open`` / ``Path.exists`` instead is
+    unsafe here: ``download_file`` imports ``bundle_lib`` (and with it
+    ``databricks.labs.gbx``) on its first call, and the import fails while
+    ``Path.exists`` is patched.
+    """
+
+    @staticmethod
+    def _response(chunks):
+        response = MagicMock()
+        response.raise_for_status = MagicMock()
+        response.iter_content = lambda chunk_size: iter(chunks)
+        return response
+
+    def test_download_file_success(self, tmp_path, monkeypatch):
+        """Successful download: the bytes land at SAMPLE_DATA_PATH/<subfolder>/<filename>."""
+        monkeypatch.setattr(essential_bundle, "SAMPLE_DATA_PATH", str(tmp_path))
+        with patch("requests.get", return_value=self._response([b"test ", b"data"])) as mock_get:
             result = essential_bundle.download_file(
-                'http://example.com/test.json',
-                'test-subfolder',
-                'test.json',
-                'Test File'
+                "http://example.com/test.json",
+                "test-subfolder",
+                "test.json",
+                "Test File",
             )
-            
-            # Verify it was called
-            mock_get.assert_called_once()
-            assert result is not None
-    
+
+        mock_get.assert_called_once()
+        assert mock_get.call_args.args[0] == "http://example.com/test.json"
+        expected = tmp_path / "test-subfolder" / "test.json"
+        assert Path(result) == expected
+        assert expected.read_bytes() == b"test data"
+
+    def test_download_file_skips_an_existing_file(self, tmp_path, monkeypatch):
+        """A file that is already there is kept and not downloaded again."""
+        monkeypatch.setattr(essential_bundle, "SAMPLE_DATA_PATH", str(tmp_path))
+        existing = tmp_path / "test-subfolder" / "test.json"
+        existing.parent.mkdir(parents=True)
+        existing.write_bytes(b"already here")
+        with patch("requests.get") as mock_get:
+            result = essential_bundle.download_file(
+                "http://example.com/test.json",
+                "test-subfolder",
+                "test.json",
+                "Test File",
+            )
+
+        mock_get.assert_not_called()
+        assert Path(result) == existing
+        assert existing.read_bytes() == b"already here"
+
+
 class TestDownloadSentinel2:
     """Test Sentinel-2 download function (download_sentinel2 is shown in docs)."""
     

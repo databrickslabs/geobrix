@@ -439,7 +439,7 @@ def test_declare_ingest_validates_before_needing_pipelines():
 def test_hash_batches_rejects_object_store_uri(monkeypatch, uri):
     monkeypatch.setattr(C._listing, "_retry_transient", lambda fn, **k: fn())
     batch = pa.record_batch([pa.array([uri])], names=["path"])
-    with pytest.raises(ValueError, match="Unity Catalog Volume / FUSE paths"):
+    with pytest.raises(ValueError, match="^hash_files reads Unity Catalog Volume"):
         list(C._hash_batches([batch]))
 
 
@@ -465,7 +465,7 @@ def test_delivery_check_rejects_object_store_uri(uri):
     ],
 )
 def test_declare_ingest_rejects_object_store_uris(kw):
-    with pytest.raises(ValueError, match="Unity Catalog Volume / FUSE paths"):
+    with pytest.raises(ValueError, match="^declare_ingest reads Unity Catalog Volume"):
         C.declare_ingest("c.s.t", format="geojson_gbx", **kw)
 
 

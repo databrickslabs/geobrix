@@ -207,13 +207,22 @@ def list_files(
     return sorted(candidates)
 
 
-def first_file(path: str, accept: Callable[[str], bool]) -> Optional[str]:
+def first_file(
+    path: str,
+    accept: Callable[[str], bool],
+    accept_dir: Optional[Callable[[str], bool]] = None,
+) -> Optional[str]:
     """First file under ``path`` (recursive, sorted full-path order) whose base name
     passes ``accept``; ``None`` if there is none.
 
-    Stops at the first match, so a large folder is not listed in full. Entries whose
-    name starts with ``.`` or ``_`` (and everything under such a directory) are
-    skipped, as Spark's file sources do. Each directory read is wrapped in
+    A directory whose base name passes ``accept_dir`` (e.g. a ``.gdb`` dataset
+    folder) is a candidate itself, at its place in that order, and is not walked
+    into.
+
+    Stops at the first match: each directory is still read in full (to sort its
+    entries), but the subtrees after the match are never read. Entries whose name
+    starts with ``.`` or ``_`` (and everything under such a directory) are skipped,
+    as Spark's file sources do. Each directory read is wrapped in
     :func:`_retry_transient`.
     """
     root = os.path.abspath(to_local_path(path))
@@ -230,16 +239,17 @@ def first_file(path: str, accept: Callable[[str], bool]) -> Optional[str]:
                 if not e.name.startswith((".", "_"))
             )
 
-    def _walk(d: str) -> Iterator[str]:
+    def _matches(d: str) -> Iterator[str]:
         for _key, full, is_dir in _retry_transient(lambda: _entries(d)):
-            if is_dir:
-                yield from _walk(full)
-            else:
+            name = os.path.basename(full)
+            if not is_dir:
+                if accept(name):
+                    yield full
+            elif accept_dir is not None and accept_dir(name):
                 yield full
+            else:
+                yield from _matches(full)
 
     if not os.path.isdir(root):
         return None
-    for f in _walk(root):
-        if accept(os.path.basename(f)):
-            return f
-    return None
+    return next(_matches(root), None)

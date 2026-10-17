@@ -71,7 +71,7 @@ def _hash_batches(batches):
     for b in batches:
         digests = []
         for p in b.column("path").to_pylist():
-            local = _fuse_path(p)
+            local = _fuse_path(p, "hash_files")
             try:
                 digests.append(
                     _listing._retry_transient(lambda local=local: _sha256(local))
@@ -392,9 +392,9 @@ def _ingest_setup(target, source_dir, format, on_change, glob, schema_path) -> d
         raise ValueError(
             f"target must be a fully qualified catalog.schema.table name; got {target!r}."
         )
-    _fuse_path(source_dir)
+    _fuse_path(source_dir, "declare_ingest")
     if schema_path:
-        _fuse_path(schema_path)
+        _fuse_path(schema_path, "declare_ingest")
     short = parts[-1]
 
     def qualified(name: str) -> str:

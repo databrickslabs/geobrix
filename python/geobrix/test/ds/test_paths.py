@@ -2,6 +2,7 @@
 
 import json
 import os
+import shutil
 from datetime import datetime, timezone
 
 import pyarrow as pa
@@ -534,22 +535,49 @@ def test_path_schema_folder_without_a_match_names_the_pattern(tmp_path):
         P.path_schema("geojson_gbx", None, str(tmp_path))
 
 
-def test_path_schema_gdb_folder_is_one_dataset(tmp_path):
+def _gdb(path, cols):
+    """An unzipped File Geodatabase folder with one point layer."""
     import pyogrio
     import shapely
 
-    gdb = str(tmp_path / "survey.gdb")
-    tbl = pa.table({"SHAPE": shapely.to_wkb(shapely.points([0], [0])), "k": [1]})
+    tbl = pa.table({"SHAPE": shapely.to_wkb(shapely.points([0], [0])), **cols})
     pyogrio.write_arrow(
         tbl,
-        gdb,
+        path,
         layer="pts",
         driver="OpenFileGDB",
         geometry_name="SHAPE",
         geometry_type="Point",
         crs="EPSG:4326",
     )
+    return path
+
+
+def test_path_schema_gdb_folder_is_one_dataset(tmp_path):
+    gdb = _gdb(str(tmp_path / "survey.gdb"), {"k": [1]})
     assert "k" in _schema_names(P.path_schema("file_gdb_gbx", None, gdb))
+
+
+def test_path_schema_folder_of_gdb_folders_takes_the_first_gdb(tmp_path):
+    """A folder of unzipped .gdb folders: the first .gdb folder (sorted) is the
+    schema dataset for the readers that read one; its files are never matched
+    one by one."""
+    d = tmp_path / "gdbs"
+    d.mkdir()
+    _gdb(str(d / "b.gdb"), {"other": [1]})
+    _gdb(str(d / "a.gdb"), {"k": [1]})
+    _gdb(str(d / "_hidden.gdb"), {"hidden": [1]})
+    for fmt in ("file_gdb_gbx", "vector_gbx"):
+        assert P._schema_file(fmt, str(d)) == str(d / "a.gdb"), fmt
+        names = _schema_names(P.path_schema(fmt, None, str(d)))
+        assert "k" in names and "other" not in names, fmt
+    # A zipped .gdb.zip that sorts first is still taken first.
+    shutil.make_archive(str(d / "0"), "zip", str(d), "b.gdb")
+    os.rename(str(d / "0.zip"), str(d / "0.gdb.zip"))
+    assert P._schema_file("file_gdb_gbx", str(d)) == str(d / "0.gdb.zip")
+    # Other readers do not take a .gdb folder.
+    with pytest.raises(ValueError, match="No file under"):
+        P.path_schema("gpkg_gbx", None, str(d))
 
 
 def test_read_paths_schema_kwarg_skips_schema_resolution(spark, tmp_path, monkeypatch):
@@ -683,6 +711,68 @@ def test_glob_match_agrees_with_spark_path_glob_filter(spark, tmp_path):
         if fmt in expected:
             assert listed == expected[fmt], fmt
 
+    # Backslash escapes: Hadoop copies "\\X" into its regex, so an escaped glob
+    # character is literal and an escaped letter is a regex class.
+    esc = tmp_path / "esc"
+    esc.mkdir()
+    for name in _ESCAPE_NAMES:
+        (esc / name).write_bytes(b"x")
+    for glob, want in _ESCAPE_GLOBS.items():
+        listed = {
+            os.path.basename(r[0])
+            for r in spark.read.format("binaryFile")
+            .option("pathGlobFilter", glob)
+            .load(str(esc))
+            .select("path")
+            .collect()
+        }
+        assert listed == want, glob
+        assert {n for n in _ESCAPE_NAMES if P.glob_match(n, glob)} == want, glob
+
+
+_ESCAPE_NAMES = [
+    "a*.x",
+    "ab.x",
+    "a1.x",
+    "ad.x",
+    "a?.x",
+    "a[1].x",
+    "a{b}.x",
+    "a,b.x",
+    "a b.x",
+    "a.x",
+]
+
+_ESCAPE_GLOBS = {
+    r"a\*.x": {"a*.x"},
+    "a*.x": set(_ESCAPE_NAMES),
+    r"a\?.x": {"a?.x"},
+    "a?.x": {"a*.x", "ab.x", "a1.x", "ad.x", "a?.x"},
+    r"a\[1\].x": {"a[1].x"},
+    "a[1].x": {"a1.x"},
+    r"a\{b\}.x": {"a{b}.x"},
+    r"{a\,b,ab}.x": {"a,b.x", "ab.x"},
+    r"a\.x": {"a.x"},
+    r"a\d.x": {"a1.x"},
+    r"a[\d].x": {"a1.x"},
+    r"a\w.x": {"ab.x", "a1.x", "ad.x"},
+    r"a\sb.x": {"a b.x"},
+}
+
+
+@pytest.mark.parametrize(
+    "glob", [r"a\1", r"a\p{L}", r"\Qa\E", r"a\b", "a\\\u00e9", "a[\\S]"]
+)
+def test_glob_escapes_without_an_exact_python_match_are_rejected(glob):
+    with pytest.raises(ValueError, match="unsupported escape"):
+        P.glob_match("a", glob)
+
+
+@pytest.mark.parametrize("glob", ["a\\", "a[b", "{a,b", "[]"])
+def test_malformed_globs_are_rejected(glob):
+    with pytest.raises(ValueError, match="glob"):
+        P.glob_match("a", glob)
+
 
 # --- object-store URIs -------------------------------------------------------
 
@@ -694,6 +784,8 @@ _URIS = [
     "/vsis3/bucket/a.geojson",
     "/vsizip//Volumes/c/s/v/a.zip/a.geojson",
     "/vsicurl/https://host/a.geojson",
+    # In-memory GDAL files are no file-ingestion input either.
+    "/vsimem/a.geojson",
 ]
 
 
@@ -736,7 +828,6 @@ def test_scheme_prefixed_local_paths_are_accepted(tmp_path):
     a = _geojson(str(tmp_path / "a.geojson"), 1)
     for p in ("dbfs:" + a, "file:" + a, "file://" + a, a):
         assert P._exists(P._fuse_path(p))
-    assert P._fuse_path("/vsimem/x.tif") == "/vsimem/x.tif"  # in-memory: allowed
 
 
 # --- streaming increments and exact batch-reader parity ----------------------

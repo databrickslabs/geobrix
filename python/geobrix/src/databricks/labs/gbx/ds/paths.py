@@ -10,7 +10,7 @@ window is read on its own, so one large raster spreads across tasks.
 
 Paths are Unity Catalog Volume (FUSE) paths; ``dbfs:`` / ``file:`` prefixes are
 accepted; object-store URIs (``s3://``, ``abfss://``, ...) and GDAL ``/vsi...``
-paths (other than ``/vsimem/``) are rejected.
+paths (``/vsimem/`` included) are rejected.
 
 Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 """
@@ -66,7 +66,8 @@ TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx")
 # often ``.JPG`` / ``.TIF``). ``declare_ingest`` hands the pattern to Auto Loader,
 # which delivers leaf files: without it, shapefile sidecars or the files inside a
 # ``.gdb`` folder would be read as data. A folder ``schema_path`` takes the schema
-# from its first file matching the same pattern.
+# from its first file matching the same pattern (or, for the readers in
+# _GDB_DIR_FORMATS, its first unzipped ``.gdb`` folder, whichever sorts first).
 DEFAULT_GLOBS = {
     "vector_gbx": (
         "*.{gpkg,geojson,json,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
@@ -83,10 +84,13 @@ DEFAULT_GLOBS = {
     "gtiff_gbx": "*.{tif,tiff,TIF,TIFF}",
 }
 
+# Readers that read an unzipped ``.gdb`` folder as one dataset.
+_GDB_DIR_FORMATS = ("file_gdb_gbx", "vector_gbx")
+
 # A "<scheme>://" prefix left after to_local_path strips dbfs: / file:, or a GDAL
-# virtual file system path (/vsis3/, /vsizip/, ...; /vsimem/ is allowed).
+# virtual file system path (/vsis3/, /vsizip/, /vsimem/, ...): os.stat sees none.
 _URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
-_VSI = re.compile(r"^/vsi(?!mem/)[A-Za-z0-9_]+/")
+_VSI = re.compile(r"^/vsi[A-Za-z0-9_]+/")
 
 # Plan-stage rows: one per reader partition (a pickled InputPartition). Built
 # explicitly (not from DDL) so workers never need a parser.
@@ -134,10 +138,50 @@ def default_glob(fmt: str) -> str:
     return DEFAULT_GLOBS[resolve_format(fmt).name()]
 
 
+# Hadoop's GlobPattern copies an escape "\X" into its regex (RE2, via re2j)
+# unchanged. An escaped ASCII punctuation character is that character; these
+# escaped letters mean the same in Python's re with re.ASCII (RE2's \s is
+# [\t\n\f\r ], without Python's \v). Every other escape (octal, \p, \Q, \b,
+# non-ASCII, ...) is rejected rather than matched differently.
+_GLOB_ESCAPES = {
+    "a": r"\a",
+    "f": r"\f",
+    "n": r"\n",
+    "r": r"\r",
+    "t": r"\t",
+    "v": r"\v",
+    "x": r"\x",  # \xhh: the two hex digits follow as plain characters
+    "d": r"\d",
+    "D": r"\D",
+    "w": r"\w",
+    "W": r"\W",
+    "s": r"[\t\n\f\r ]",
+    "S": r"[^\t\n\f\r ]",
+}
+# Inside [...]: \s is spelled out; \S has no Python form there.
+_GLOB_SET_ESCAPES = {
+    **{k: v for k, v in _GLOB_ESCAPES.items() if k != "S"},
+    "s": r"\t\n\f\r ",
+}
+
+
+def _glob_escape(pattern: str, ch: str, in_set: bool) -> str:
+    if ch.isascii() and not ch.isalnum():
+        return re.escape(ch)
+    table = _GLOB_SET_ESCAPES if in_set else _GLOB_ESCAPES
+    if ch not in table:
+        raise ValueError(
+            f"glob {pattern!r}: unsupported escape \\{ch} (escape glob characters "
+            f"such as \\*, \\? or \\{{ to match them literally)"
+        )
+    return table[ch]
+
+
 def _glob_regex(pattern: str) -> str:
     """Hadoop ``GlobPattern`` (Spark ``pathGlobFilter``) -> Python regex, translated
     the same way: ``*``, ``?``, ``[...]`` / ``[!...]``, nestable ``{a,b}`` groups and
-    ``\\`` escapes; other regex metacharacters are literal."""
+    ``\\`` escapes (see :data:`_GLOB_ESCAPES`); other regex metacharacters are
+    literal."""
     out = []
     in_set = False
     curly = 0
@@ -148,7 +192,7 @@ def _glob_regex(pattern: str) -> str:
             i += 1
             if i >= len(pattern):
                 raise ValueError(f"glob {pattern!r}: missing escaped character")
-            out.append(re.escape(pattern[i]))
+            out.append(_glob_escape(pattern, pattern[i], in_set))
         elif c in ".$()|+":
             out.append("\\" + c)
         elif c == "*":
@@ -189,41 +233,57 @@ def _glob_regex(pattern: str) -> str:
 
 @functools.lru_cache(maxsize=128)
 def _glob_compiled(pattern: str) -> "re.Pattern":
-    return re.compile(_glob_regex(pattern))
+    # Hadoop compiles with DOTALL; re.ASCII gives \d / \w RE2's ASCII classes.
+    try:
+        return re.compile(_glob_regex(pattern), re.ASCII | re.DOTALL)
+    except re.error as e:
+        raise ValueError(f"glob {pattern!r}: invalid pattern ({e})") from None
 
 
 def glob_match(name: str, pattern: str) -> bool:
     """True if the file name ``name`` matches the glob ``pattern`` exactly as Spark's
-    ``pathGlobFilter`` would (Hadoop glob syntax, case-sensitive)."""
+    ``pathGlobFilter`` would (Hadoop glob syntax, case-sensitive). A pattern Spark
+    rejects, or one whose escapes have no exact Python equivalent, raises
+    ``ValueError``."""
     return _glob_compiled(pattern).fullmatch(name) is not None
 
 
-def _fuse_path(path: str) -> str:
+def _fuse_path(path: str, caller: str = "read_paths") -> str:
     """Bare local path for ``path`` (``dbfs:`` / ``file:`` stripped). Object-store
-    URIs and GDAL ``/vsi...`` paths (other than ``/vsimem/``) are rejected: the
+    URIs and GDAL ``/vsi...`` paths (``/vsimem/`` included) are rejected: the
     readers open files through the Volume FUSE mount, so a stat on ``s3://...`` or
     ``/vsis3/...`` could only fail (after the transient-miss retries) and the file
-    would be skipped as deleted."""
+    would be skipped as deleted. ``caller`` names the function in the error."""
     local = _listing.to_local_path(path)
     if _URI.match(local) or _VSI.match(local):
         raise ValueError(
-            f"read_paths reads Unity Catalog Volume / FUSE paths; got {path}. Read "
+            f"{caller} reads Unity Catalog Volume / FUSE paths; got {path}. Read "
             "object storage through a Volume (for example an external volume over "
             "the location) instead."
         )
     return local
 
 
+def _is_gdb(path: str) -> bool:
+    return path.lower().rstrip("/").endswith(".gdb")
+
+
 def _schema_file(fmt: str, schema_path: str, glob: Optional[str] = None) -> str:
     """The one file whose reader schema defines the output: ``schema_path`` itself,
     or for a folder its first file (sorted path order, hidden entries skipped) whose
     name matches ``glob`` (default: the format's :data:`DEFAULT_GLOBS` pattern). A
-    ``.gdb`` folder is a single dataset and is used as is."""
+    ``.gdb`` folder is a single dataset and is used as is; inside a folder, for the
+    readers in :data:`_GDB_DIR_FORMATS`, a ``.gdb`` folder counts as one file."""
     local = _fuse_path(schema_path)
-    if not os.path.isdir(local) or local.lower().rstrip("/").endswith(".gdb"):
+    if not os.path.isdir(local) or _is_gdb(local):
         return local
     pattern = glob or default_glob(fmt)
-    found = _listing.first_file(local, lambda name: glob_match(name, pattern))
+    gdb_dirs = resolve_format(fmt).name() in _GDB_DIR_FORMATS
+    found = _listing.first_file(
+        local,
+        lambda name: glob_match(name, pattern),
+        accept_dir=_is_gdb if gdb_dirs else None,
+    )
     if found is None:
         raise ValueError(
             f"No file under {schema_path} matches {pattern!r}: stage at least one "

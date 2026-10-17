@@ -234,3 +234,29 @@ def test_first_file_is_the_first_sorted_match_and_stops_there(tmp_path, monkeypa
     assert _listing.first_file(str(tmp_path / "missing"), lambda n: True) is None
     one = str(tmp_path / "b" / "z.tif")
     assert _listing.first_file(one, lambda n: True) == one
+
+
+def test_first_file_takes_an_accepted_directory_as_one_entry(tmp_path):
+    for rel in ("b.gdb/a0.gdbtable", "a.gdb/a0.gdbtable", "_x.gdb/t", "0.txt"):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+
+    def is_gdb(name):
+        return name.endswith(".gdb")
+
+    def none(name):
+        return False
+
+    root = str(tmp_path)
+    assert _listing.first_file(root, none, accept_dir=is_gdb) == str(tmp_path / "a.gdb")
+    # Without accept_dir a directory is only walked into.
+    assert _listing.first_file(root, lambda n: n.endswith(".gdbtable")) == str(
+        tmp_path / "a.gdb" / "a0.gdbtable"
+    )
+    # Files and accepted directories share one sorted order ("a.gdb.zip" sorts
+    # before "a.gdb/").
+    (tmp_path / "a.gdb.zip").write_bytes(b"x")
+    assert _listing.first_file(
+        root, lambda n: n.endswith(".gdb.zip"), accept_dir=is_gdb
+    ) == str(tmp_path / "a.gdb.zip")

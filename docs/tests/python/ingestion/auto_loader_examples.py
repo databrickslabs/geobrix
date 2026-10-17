@@ -19,6 +19,7 @@ declare_ingest(
     "/Volumes/main/geo/landing/boroughs",      # folder Auto Loader watches
     "geojson_gbx",
     on_change="scd2",                          # default; or "replace" / "append"
+    on_error="quarantine",                     # default; or "fail"
 )"""
 
 PIPELINE_RASTER = """# Lakeflow pipeline source file (serverless)
@@ -42,6 +43,18 @@ JOIN main.geo.boroughs_file_versions v
   ON r._source_path = v._source_path AND r._source_hash = v._source_hash
 WHERE v.__START_AT <= TIMESTAMP'2026-10-17 12:00:00'
   AND (v.__END_AT IS NULL OR v.__END_AT > TIMESTAMP'2026-10-17 12:00:00');"""
+
+QUERY_BAD_RECORDS = """-- what was set aside, per file and kind
+SELECT _source_path, error_class, count(*) AS records, max(quarantined_at) AS last_seen
+FROM main.geo.boroughs_bad_records
+GROUP BY _source_path, error_class
+ORDER BY last_seen DESC;
+
+-- the features set aside from one file, with their other columns
+SELECT record_index, error_class, error_message, raw
+FROM main.geo.boroughs_bad_records
+WHERE _source_path = '/Volumes/main/geo/landing/boroughs/boroughs.geojson'
+  AND record_index LIKE 'feature=%';"""
 
 # The landing folder each pipeline snippet watches, and the sample folder that
 # stands in for it when the snippet's inputs are validated.

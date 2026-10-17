@@ -105,7 +105,8 @@ Or straight from the GitHub release, when the pipeline's compute can reach githu
   `append`), and both production examples use one as their bronze layer.
 - **`foreach_batch_sink`.** A sink that runs your own batch code on each micro-batch.
   `declare_ingest` writes its rows table through one (for `scd2` and `replace`), so that table is
-  a regular Delta table and `replace` can swap a file's rows in one atomic `replaceWhere`.
+  a regular Delta table and `replace` can swap a file's rows in one atomic `replaceWhere`. The same
+  sink appends the micro-batch's bad records to `<t>_bad_records` after the rows.
 - **AUTO CDC with SCD type 2.** `create_auto_cdc_flow(..., stored_as_scd_type=2)` keeps one row
   per version of each key, with `__START_AT` and `__END_AT`. `declare_ingest` keys it on
   `_source_path` and tracks history on `_source_hash`, which gives the `<t>_file_versions` table.

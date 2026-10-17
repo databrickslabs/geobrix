@@ -14,7 +14,8 @@ _Since:_ **v0.5.3** · _(light-only — no heavyweight tier)_
 Volume folder, each new or changed file is read with the GeoBrix reader you name, and the rows land
 in a table. `on_change` decides what happens when a file is overwritten: keep every version
 (`scd2`, the default), keep only the latest content (`replace`), or append every delivery
-(`append`).
+(`append`). Data that cannot be read is set aside in a bad-records table, and the rest is written
+(`on_error`).
 
 Set up the pipeline first (channel, GeoBrix extra, Serverless notes): see
 [Lakeflow SDP](./lakeflow-sdp).
@@ -35,7 +36,7 @@ files in a landing folder:
 
 Stage at least one file in the folder before the first pipeline update: the table schema is
 resolved from it when the pipeline is declared. After an update, `main.geo.boroughs` holds the
-rows, `main.geo.boroughs_current` shows each file's latest rows, and
+rows, `main.geo.boroughs_current` shows the rows of each file's latest readable content, and
 `main.geo.boroughs_file_versions` records when each version of a file was current.
 
 Reader options and parallelism go in the same call. Here a raster folder is cut into tile windows
@@ -69,15 +70,18 @@ that are spread across tasks, and only the latest content of each file is kept:
 - **Overwrite files without preserving their modification time.** A copy made with `cp -p` or
   `rsync -t` can give new content an older time than the version it replaces (see
   [Query the latest content](#query-the-latest-content-and-past-content)).
-- **An unreadable file fails the update** until you remove or replace it. See
-  [Unreadable data](#unreadable-data).
+- **Bad data is set aside, not fatal.** By default (`on_error="quarantine"`) a file, a feature, a
+  raster window or a run of LiDAR points that cannot be read goes to `<t>_bad_records`, and the
+  rest of the micro-batch is written. This needs write access to `source_dir` while a file has bad
+  records. See [Unreadable data](#unreadable-data).
 :::
 
 ## `declare_ingest` parameters
 
 ```python
 declare_ingest(target, source_dir, format, options=None, *,
-               on_change="scd2", glob=None, num_partitions=None, schema_path=None)
+               on_change="scd2", glob=None, num_partitions=None, schema_path=None,
+               on_error="quarantine")
 ```
 
 | Parameter | Default | Description |
@@ -90,6 +94,7 @@ declare_ingest(target, source_dir, format, options=None, *,
 | `glob` | `None` | File-name filter for the folder, in Spark `pathGlobFilter` syntax, such as `"zones_*.gpkg"`. By default, the format's [default file pattern](./read-paths#default-file-patterns); a `glob` replaces that pattern. |
 | `num_partitions` | `None` | Spread the reads across this many tasks. See [Parallelism](./read-paths#parallelism). |
 | `schema_path` | `source_dir` | File or folder that defines the table schema; a folder's first file matching `glob` is used. It is read once when the pipeline is declared (at each update), not for every micro-batch. |
+| `on_error` | `"quarantine"` | What to do with data that cannot be read: `"quarantine"` sets it aside in `<t>_bad_records` and writes the rest; `"fail"` fails the update. See [Unreadable data](#unreadable-data). |
 
 Auto Loader delivers every file under `source_dir` on its own, so the file pattern must leave out
 the other files of a multi-file dataset: a shapefile's sidecars, or the files inside an unzipped
@@ -122,6 +127,7 @@ Each mode declares these objects in the catalog and schema of `target`:
 | `<t>_file_events`: one row per delivery with `_source_path`, `_source_mtime`, `_source_hash`, `_source_size` | yes | yes | no |
 | `<t>_file_versions`: one row per content version of a file, with `__START_AT` and `__END_AT` | yes | no | no |
 | `<target>_current`: a view of the rows for each file's latest version | yes | no | no |
+| `<t>_bad_records`: one row per bad record, created when the first one is found | yes | yes | no |
 
 In `scd2` and `replace` the rows table is written by the pipeline's batch sink: it is a regular
 Delta table, created on the first update and clustered by `_source_path`, not a dataset the
@@ -129,9 +135,12 @@ pipeline manages.
 
 ## Query the latest content and past content
 
-`<target>_current` returns each file's latest rows. To read what was current at an earlier time,
-join the rows to the versions table on both `_source_path` and `_source_hash`, and keep the version
-whose interval contains the time:
+`<target>_current` returns the rows of each file's latest readable version: the newest version
+whose content has rows in the table. A delivery that could not be read is still recorded as the
+file's newest version in `<t>_file_versions`, but it does not hide the content that was read before
+it (see [Unreadable data](#unreadable-data)). To read what was current at an earlier time, join the
+rows to the versions table on both `_source_path` and `_source_hash`, and keep the version whose
+interval contains the time:
 
 <CodeFromTest
   code={autoLoaderExamples}
@@ -143,7 +152,8 @@ whose interval contains the time:
 
 `__START_AT` and `__END_AT` are the file's modification times, so the time you ask for is when the
 file's content was written, not when the pipeline ingested it. `__END_AT` is `NULL` for the
-current version, and an interval includes its start and excludes its end.
+current version, and an interval includes its start and excludes its end. For a time when the
+file's content could not be read, the query returns no rows for that file.
 
 "Current" means the version with the newest modification time. A copy that keeps or backdates the
 source's modification time (`cp -p`, `rsync -t`) can give an overwrite an older time than the
@@ -152,22 +162,88 @@ without preserving times when you overwrite a file.
 
 ## Unreadable data
 
-A file that its reader cannot read fails the pipeline update:
+`on_error` decides what a micro-batch does with data its reader cannot read:
 
-- **The update fails with the reader's error.** Nothing from that micro-batch is written to the
-  rows table, and the flow's progress is not saved, so the next update reads the same files again
-  and fails the same way until the file is dealt with.
-- **To recover, remove the file or replace it with a readable copy**, then start an update. A file
-  deleted before it is read is skipped with a warning (see
-  [Files deleted before they are read](./read-paths#files-deleted-before-they-are-read)); a
-  replacement is delivered again and handled like any overwritten file (see
-  [Choosing `on_change`](#choosing-on_change)).
-- **What counts as unreadable depends on the format.** Most readers fail on a corrupt file, but
-  `lidar_gbx` skips it with a warning and `exif_gbx` gives a row of `NULL` metadata, and a raster
-  read as a virtual tile is not opened until a function reads its pixels. See
-  [Unreadable files](./read-paths#unreadable-files) for each format.
-- **A file whose columns differ from the table schema** fails the same way, with an error that
-  names the file. See [Schema](./read-paths#schema).
+| `on_error` | What happens |
+|---|---|
+| `"quarantine"` (default) | Each file is read on its own, and what cannot be read is a **bad record**: it is written to `<t>_bad_records` and the rest of the micro-batch is written to the rows table. The update succeeds. |
+| `"fail"` | The first error fails the update, with an error that names the file. |
+
+A bad record is the smallest part of a file its reader can set aside: a whole file that cannot be
+opened, or whose columns differ from the table schema; a feature with a NULL, unreadable or empty
+geometry; a GeoJSONSeq line that is not JSON; a raster tile window; a run of LiDAR points; a
+PMTiles tile; a NetCDF variable or slice. Rows read from a file before an error stay in the table.
+The [Unreadable files](./read-paths#unreadable-files) reference lists what each format sets aside,
+and the damage no reader can detect.
+
+### Query the bad records
+
+`<t>_bad_records` is created in the catalog and schema of `target` when the first bad record is
+found:
+
+<CodeFromTest
+  code={autoLoaderExamples}
+  language="sql"
+  functionName="QUERY_BAD_RECORDS"
+  source="docs/tests/python/ingestion/auto_loader_examples.py"
+  testFile="docs/tests/python/ingestion/test_auto_loader_examples.py"
+/>
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `_source_path` | `STRING` | The file |
+| `_source_mtime` | `TIMESTAMP` | Its modification time, as delivered |
+| `_source_hash` | `STRING` | SHA-256 of the delivered file, as in `<t>_file_events` |
+| `_source_size` | `BIGINT` | Its size in bytes |
+| `record_index` | `STRING` | Where in the file: `feature=17` (position in the file's read order), `fid=1009` (a GeoPackage feature), `line=11` (GeoJSONSeq), `window=128,64,64,64` (column, row, width, height), `points=2000-2999` or `point=12` (LiDAR), `tile=3/1/2` (z/x/y) or `tiles=3/0/0..3/1/3` (PMTiles), `variable=temp,time=1` (NetCDF). `NULL` for the whole file |
+| `error_class` | `STRING` | The reader's exception class (for example `pyogrio.errors.DataSourceError`), or the check that set the record aside (table below) |
+| `error_message` | `STRING` | The error and the errors that caused it, the warnings and log lines the reader gave while reading, and how many rows of the file were read before the error |
+| `raw` | `STRING` | What can be recovered, as JSON: a feature's other columns (text that is not UTF-8 is escaped), a GeoJSONSeq line, or a LiDAR point's `x`, `y` and `z`. Otherwise `NULL` |
+| `quarantined_at` | `TIMESTAMP` | When the micro-batch set it aside |
+
+| `error_class` | Set aside because |
+|---------------|-------------------|
+| `NullGeometry` | The feature has no geometry, or one the reader could not decode (GDAL returns `NULL` for an unknown geometry type or unreadable coordinates) |
+| `UnreadableGeometry` | The geometry bytes are not valid WKB (for example a polygon ring that is not closed) |
+| `EmptyGeometry` | The geometry is empty |
+| `InvalidText` | A text value is not valid UTF-8 |
+| `RecordsNotRead` | The file declares features, points or lines its reader did not return (a dropped `.dbf` record, an unreadable GeoPackage page, a truncated LAS file, a GeoJSONSeq line that is not JSON) |
+| `PointOutOfBounds` | LiDAR points outside the bounds the file's header declares (garbled point records) |
+| `ShortTile` | A PMTiles tile is shorter than its directory entry declares (a truncated archive) |
+| `NotJpeg` | A `.jpg` / `.jpeg` file does not start and end with the JPEG markers (not a JPEG, or truncated) |
+| `UnreadableFile` | An empty file, or a LAS file whose point record length does not fit its data |
+| `FileTooLarge` | An image too large to read whole in `exif_gbx` `qc` mode |
+
+### How bad records interact with the tables
+
+- **A file with bad records still has its version.** Under `scd2` the delivery is recorded in
+  `<t>_file_versions` like any other. When part of a file's new content was set aside, the rows
+  that were read are written under the new hash, and that version is current. When all of it was
+  set aside, the version has no rows, so `<target>_current` keeps showing the file's last readable
+  content, and `<t>_bad_records` explains the empty version. Removing the bad file keeps it that
+  way. Under `replace` the file's earlier rows are replaced by the rows that could be read, none if
+  all were set aside.
+- **A delivery is read once when its rows are stored.** A re-delivery with the same content is
+  skipped when it has rows in the table. A delivery whose records were all set aside has none, so
+  each re-delivery of it is read and set aside again.
+- **Bad records are staged in `source_dir`.** While a micro-batch is read, its bad records are
+  written to a hidden `.gbx_scratch` folder under `source_dir`, then appended to
+  `<t>_bad_records` after the rows are written, and the folder is removed. A micro-batch without
+  bad records writes nothing there. When the pipeline cannot write to `source_dir`, a micro-batch
+  that has bad records fails with an error that says so.
+- **`append` has no bad-records table.** Its rows table is a plain streaming table, so bad records
+  are skipped with a warning in the executor logs. Use `scd2` or `replace` to keep them.
+
+### With `on_error="fail"`
+
+The update fails with the reader's error, which names the file. Nothing from that micro-batch is
+written to the rows table, and the flow's progress is not saved, so the next update reads the same
+files again and fails the same way until the file is dealt with. To recover, remove the file or
+replace it with a readable copy, then start an update. A file deleted before it is read is skipped
+with a warning (see [Files deleted before they are read](./read-paths#files-deleted-before-they-are-read));
+a replacement is delivered again and handled like any overwritten file (see
+[Choosing `on_change`](#choosing-on_change)). The [Lakeflow connector](./lakeflow-connector)
+always reads this way.
 
 ## What a pipeline update does
 

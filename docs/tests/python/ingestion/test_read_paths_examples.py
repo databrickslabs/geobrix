@@ -4,6 +4,7 @@
 Validates docs/docs/ingestion/read-paths.mdx.
 """
 
+import json
 import math
 import os
 import re
@@ -299,3 +300,113 @@ def test_unreadable_exif_file_gives_a_row_of_null_metadata(spark, tmp_path):
     assert row["_source_path"] == bad
     for column in ("camera_make", "camera_model", "timestamp", "latitude", "longitude"):
         assert row[column] is None
+
+
+# --- on_error="skip": the third column of the unreadable-files table ----------
+
+
+def _feature_collection(path, geometries):
+    feats = [
+        {"type": "Feature", "properties": {"id": i}, "geometry": g}
+        for i, g in enumerate(geometries)
+    ]
+    path.write_text(json.dumps({"type": "FeatureCollection", "features": feats}))
+    return str(path)
+
+
+def _point(i):
+    return {"type": "Point", "coordinates": [i, i]}
+
+
+def _skipped(spark, tmp_path, path, fmt, options=None, schema_path=None):
+    """``(rows, bad records)`` of read_paths(on_error="skip") over one file; the
+    records are written to a folder (as declare_ingest does) to inspect them."""
+    import pyarrow.parquet as pq
+
+    from databricks.labs.gbx.ds.paths import read_paths
+
+    folder = tmp_path / "bad_records"
+    rows = read_paths(
+        _listing(spark, path),
+        fmt,
+        options,
+        schema_path=schema_path or path,
+        on_error="skip",
+        bad_records_dir=str(folder),
+    ).collect()
+    recs = pq.read_table(str(folder)).to_pylist() if folder.exists() else []
+    return rows, [(r["record_index"], r["error_class"]) for r in recs]
+
+
+def test_skip_sets_a_feature_aside(spark, tmp_path):
+    path = _feature_collection(tmp_path / "a.geojson", [_point(0), None, _point(2)])
+    rows, recs = _skipped(spark, tmp_path, path, "geojson_gbx")
+    assert sorted(r["id"] for r in rows) == [0, 2]
+    assert recs == [("feature=1", "NullGeometry")]
+
+
+def test_skip_sets_a_geojson_document_aside_whole(spark, tmp_path):
+    good = _feature_collection(tmp_path / "good.geojson", [_point(0)])
+    bad = tmp_path / "bad.geojson"
+    bad.write_text(open(good).read()[:-10])  # truncated
+    rows, recs = _skipped(spark, tmp_path, str(bad), "geojson_gbx", schema_path=good)
+    assert rows == [] and recs == [(None, "pyogrio.errors.DataSourceError")]
+
+
+def test_geojsonseq_line_that_is_not_json(spark, tmp_path):
+    """fail: the reader drops the line; skip: the line is a bad record."""
+    from databricks.labs.gbx.ds.paths import read_paths
+
+    lines = [
+        json.dumps({"type": "Feature", "properties": {"id": i}, "geometry": _point(i)})
+        for i in range(5)
+    ]
+    lines[2] = "not json"
+    path = tmp_path / "a.geojsonl"
+    path.write_text("\n".join(lines) + "\n")
+    assert len(read_paths(_listing(spark, str(path)), "geojsonl_gbx").collect()) == 4
+    rows, recs = _skipped(spark, tmp_path, str(path), "geojsonl_gbx")
+    assert len(rows) == 4 and recs == [("line=3", "RecordsNotRead")]
+
+
+def test_skip_reads_the_complete_points_of_a_truncated_las_file(spark, tmp_path):
+    path = _cut_las(tmp_path)
+    rows, recs = _skipped(spark, tmp_path, path, "lidar_gbx", schema_path=_good_las(tmp_path))
+    assert len(rows) == 6 and recs == [(None, "RecordsNotRead")]
+
+
+def test_skip_sets_a_file_that_is_not_a_jpeg_aside(spark, tmp_path):
+    """The file that gives a row of NULL metadata with on_error="fail"."""
+    bad = _garbage(tmp_path, "bad.jpg")
+    rows, recs = _skipped(spark, tmp_path, bad, "exif_gbx", schema_path=_good_jpg(tmp_path))
+    assert rows == [] and recs == [(None, "NotJpeg")]
+
+
+def _cut_las(tmp_path, keep=6):
+    import laspy
+
+    las = laspy.LasData(laspy.LasHeader(point_format=3, version="1.2"))
+    las.x, las.y, las.z = [float(i) for i in range(10)], [1.0] * 10, [1.0] * 10
+    path = str(tmp_path / "cut.las")
+    las.write(path)
+    with laspy.open(path) as r:
+        offset, reclen = r.header.offset_to_point_data, r.header.point_format.size
+    with open(path, "r+b") as fh:
+        fh.truncate(offset + keep * reclen + 5)
+    return path
+
+
+def test_truncated_las_fails_in_points_mode_and_gives_its_row_in_metadata_mode(
+    spark, tmp_path
+):
+    cut = _cut_las(tmp_path)
+    with pytest.raises(Exception):
+        _read(spark, cut, "lidar_gbx", schema_path=_good_las(tmp_path))
+    (row,) = _read(spark, cut, "lidar_gbx", {"mode": "metadata"})
+    assert row["point_count"] == 10  # the header's count, not what the file holds
+
+
+def test_empty_exif_file_is_skipped(spark, tmp_path):
+    empty = tmp_path / "empty.jpg"
+    empty.write_bytes(b"")
+    assert _read(spark, str(empty), "exif_gbx", schema_path=_good_jpg(tmp_path)) == []

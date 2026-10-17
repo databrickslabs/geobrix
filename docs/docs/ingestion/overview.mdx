@@ -5,8 +5,8 @@ title: Ingestion Pipelines
 
 # Ingestion Pipelines
 
-Keep tables in sync with landing folders: each update reads only new and changed files and tracks
-what changed.
+Keep tables in sync with landing folders: each update reads only new and changed files, tracks
+what changed, and sets bad records aside.
 
 New files land in a Unity Catalog Volume folder: vector datasets, LiDAR point clouds, drone
 photos, rasters, NetCDF files or PMTiles archives. GeoBrix turns that folder into a table that
@@ -23,7 +23,7 @@ GeoBrix extra each pipeline channel needs, and two production pipelines to start
 | Route | Use it when | Effort |
 |---|---|---|
 | **[Lakeflow connector](./lakeflow-connector)** (`geobrix`) | You want governed, low-code ingestion: an admin creates a Unity Catalog connection to a landing folder, and each table is a name plus options. Append-only. | Install three wheels and create the connection once; then one entry per table in a pipeline source file. |
-| **[Auto Loader ingestion](./auto-loader)** (`declare_ingest`) | Files get overwritten and you need change handling: `scd2` history with a current view (the default), `replace` or `append`. Scales to very large landing folders with Auto Loader. | A few lines of Python in a Lakeflow pipeline source file. |
+| **[Auto Loader ingestion](./auto-loader)** (`declare_ingest`) | Files get overwritten and you need change handling: `scd2` history with a current view (the default), `replace` or `append`. Data that cannot be read is set aside in a bad-records table. Scales to very large landing folders with Auto Loader. | A few lines of Python in a Lakeflow pipeline source file. |
 | **[`read_paths`](./read-paths)** | You want the building block: read any list of files, batch or streaming, in notebooks and jobs. | You write the file listing or stream, and where the rows go. |
 
 ## What every route gives you
@@ -47,6 +47,7 @@ photo metadata, GeoTIFF and COG rasters, NetCDF and PMTiles. See the
 | Access control | Unity Catalog connection (`root_path`, `USE CONNECTION`), plus Volume grants | Volume grants |
 | Overwritten files | Re-read and appended | `scd2`, `replace` or `append` |
 | File version history | No | Yes, with `scd2` |
+| Data that cannot be read | Fails the update | Set aside in `<t>_bad_records` (or fails the update, with `on_error="fail"`) |
 | Finding new files | Lists the table's folder at each update | Auto Loader keeps track of delivered files |
 
 Use the connector when an admin should govern the landing folder and append is enough. Use Auto
@@ -69,7 +70,7 @@ Two examples ship GeoBrix ingestion as complete Lakeflow SDP bundles:
 - [Lakeflow SDP](./lakeflow-sdp): the pipeline environment, Serverless notes, the SDP building
   blocks GeoBrix uses and Asset Bundles.
 - [Auto Loader ingestion](./auto-loader): `declare_ingest`, `on_change`, querying current and past
-  content, and unreadable data.
+  content, and the bad records it sets aside.
 - [Lakeflow connector](./lakeflow-connector): setup, table options, formats and discovery.
 - [`read_paths` and reference](./read-paths): `read_paths`, and the reference every route shares
   (formats, file patterns, schema, paths, unreadable files, parallelism).

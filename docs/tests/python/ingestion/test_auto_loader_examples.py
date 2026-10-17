@@ -40,13 +40,16 @@ def test_displayed_snippets_name_real_api():
 
 
 def test_snippet_calls_bind_to_real_signatures():
-    """Every displayed declare_ingest call binds to the real signature, with a
-    fully qualified target."""
+    """Every displayed declare_ingest call binds to the real signature, names a
+    reader declare_ingest supports, and has a fully qualified target."""
     from databricks.labs.gbx.ds.changes import declare_ingest
+    from databricks.labs.gbx.ds.paths import resolve_format
 
     for snippet in PIPELINES:
         (call,) = mdx_tables.calls(snippet, "declare_ingest")
-        mdx_tables.bind(declare_ingest, call)
+        fmt = mdx_tables.bind(declare_ingest, call).arguments["format"]
+        assert isinstance(fmt, str), "the displayed format is a literal"
+        resolve_format(fmt)  # raises for a name that is not a reader
         target = ast.literal_eval(call.args[0])
         assert len(target.split(".")) == 3  # declare_ingest needs catalog.schema.table
 

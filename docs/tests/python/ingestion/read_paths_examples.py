@@ -10,6 +10,12 @@ from path_config import SAMPLE_DATA_BASE
 SAMPLE_BOROUGHS_DIR = f"{SAMPLE_DATA_BASE}/nyc/boroughs"
 SAMPLE_SENTINEL_DIR = f"{SAMPLE_DATA_BASE}/nyc/sentinel2"
 
+# What the helpers below run. The displayed snippets spell these out again, so the
+# tests hold each snippet to them: what the page shows is what the suite executes.
+BATCH_FORMAT, BATCH_GLOB = "geojson_gbx", "*.geojson"
+RASTER_FORMAT, RASTER_GLOB = "gtiff_gbx", "*.tif"
+RASTER_NUM_PARTITIONS = 8
+
 READ_PATHS_BATCH = """from databricks.labs.gbx.ds.paths import read_paths
 
 files = (spark.read.format("binaryFile")
@@ -77,8 +83,8 @@ def _files(spark, folder, glob):
 def read_paths_batch(spark, folder=None):
     from databricks.labs.gbx.ds.paths import read_paths
 
-    files = _files(spark, folder or SAMPLE_BOROUGHS_DIR, "*.geojson")
-    return read_paths(files, "geojson_gbx")
+    files = _files(spark, folder or SAMPLE_BOROUGHS_DIR, BATCH_GLOB)
+    return read_paths(files, BATCH_FORMAT)
 
 
 # Longest an availableNow stream may run before it is stopped and reported.
@@ -95,11 +101,11 @@ def read_paths_stream(spark, folder, checkpoint, query_name="read_paths_doc"):
     files = (
         spark.readStream.format("binaryFile")
         .schema("path string, modificationTime timestamp, length long, content binary")
-        .option("pathGlobFilter", "*.geojson")
+        .option("pathGlobFilter", BATCH_GLOB)
         .load(folder)
         .select("path", "modificationTime")
     )
-    rows = read_paths(files, "geojson_gbx", schema_path=folder)
+    rows = read_paths(files, BATCH_FORMAT, schema_path=folder)
     query = (
         rows.writeStream.format("memory")
         .queryName(query_name)
@@ -124,7 +130,10 @@ def read_paths_raster(spark, path=None, tile_size="512"):
     folder). ``tile_size`` is 512 as displayed; a test can pass another size."""
     from databricks.labs.gbx.ds.paths import read_paths
 
-    files = _files(spark, path or SAMPLE_SENTINEL_DIR, "*.tif")
+    files = _files(spark, path or SAMPLE_SENTINEL_DIR, RASTER_GLOB)
     return read_paths(
-        files, "gtiff_gbx", options={"tileSize": tile_size}, num_partitions=8
+        files,
+        RASTER_FORMAT,
+        options={"tileSize": tile_size},
+        num_partitions=RASTER_NUM_PARTITIONS,
     )

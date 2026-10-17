@@ -126,14 +126,45 @@ def test_displayed_snippets_name_real_api():
 
 
 def test_snippet_calls_bind_to_real_signatures():
-    """Every displayed read_paths call binds to the real signature."""
-    from databricks.labs.gbx.ds.paths import read_paths
+    """Every displayed read_paths call binds to the real signature, and names a
+    reader read_paths supports."""
+    from databricks.labs.gbx.ds.paths import read_paths, resolve_format
 
     for snippet in (ex.READ_PATHS_BATCH, ex.READ_PATHS_STREAM, ex.READ_PATHS_RASTER):
         calls = mdx_tables.calls(snippet, "read_paths")
         assert calls
         for call in calls:
-            mdx_tables.bind(read_paths, call)
+            fmt = mdx_tables.bind(read_paths, call).arguments["format"]
+            assert isinstance(fmt, str), "the displayed format is a literal"
+            resolve_format(fmt)  # raises for a name that is not a reader
+
+
+def _call_args(snippet):
+    from databricks.labs.gbx.ds.paths import read_paths
+
+    (call,) = mdx_tables.calls(snippet, "read_paths")
+    return mdx_tables.bind(read_paths, call).arguments
+
+
+def _tail(path, n=2):
+    return "/".join(path.rstrip("/").split("/")[-n:])
+
+
+def test_displayed_snippets_run_what_the_helpers_run():
+    """Each snippet spells its format, file pattern, folder and options out again;
+    they must be the ones the helpers (and so the tests above) run."""
+    for snippet, fmt, glob, folder in (
+        (ex.READ_PATHS_BATCH, ex.BATCH_FORMAT, ex.BATCH_GLOB, ex.SAMPLE_BOROUGHS_DIR),
+        (ex.READ_PATHS_STREAM, ex.BATCH_FORMAT, ex.BATCH_GLOB, None),
+        (ex.READ_PATHS_RASTER, ex.RASTER_FORMAT, ex.RASTER_GLOB, ex.SAMPLE_SENTINEL_DIR),
+    ):
+        assert _call_args(snippet)["format"] == fmt
+        assert re.findall(r'\.option\("pathGlobFilter", "([^"]+)"\)', snippet) == [glob]
+        if folder:  # the displayed Volume folder is the sample folder's twin
+            assert _tail(folder) in snippet
+    raster = _call_args(ex.READ_PATHS_RASTER)
+    assert raster["num_partitions"] == ex.RASTER_NUM_PARTITIONS
+    assert raster["options"]["tileSize"] == "512"
 
 
 def test_object_store_uri_is_rejected(spark):
@@ -239,6 +270,32 @@ def _good_nc(tmp_path):
     return str(path)
 
 
+def _good_shp(tmp_path):
+    import pyarrow as pa
+    import pyogrio
+    import shapely
+
+    path = str(tmp_path / "good.shp")
+    pyogrio.write_arrow(
+        pa.table({"geometry": shapely.to_wkb(shapely.points([0.0], [0.0])), "id": [0]}),
+        path,
+        driver="ESRI Shapefile",
+        geometry_name="geometry",
+        geometry_type="Point",
+        crs="EPSG:4326",
+    )
+    return path
+
+
+def _good_geojsonl(tmp_path):
+    path = tmp_path / "good.geojsonl"
+    path.write_text(
+        json.dumps({"type": "Feature", "properties": {"id": 0}, "geometry": _point(0)})
+        + "\n"
+    )
+    return str(path)
+
+
 def _rows_of(spark, path, fmt, options=None, schema_path=None):
     """read_paths over one file. The schema is resolved here, on the driver, so a
     failure of the returned DataFrame's collect() is a failure to read the file."""
@@ -255,26 +312,37 @@ SAMPLE_GPKG = f"{ex.SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
 SAMPLE_TIF = f"{ex.SAMPLE_SENTINEL_DIR}/nyc_sentinel2_red.tif"
 
 
+_NOT_RECOGNIZED = r"not recognized as being in a supported file format"
+_GOOD_FILES = {"good.nc": _good_nc, "good.shp": _good_shp, "good.geojsonl": _good_geojsonl}
+
+
 @pytest.mark.parametrize(
-    "fmt, name, options, schema_file",
+    "fmt, name, options, schema_file, error",
     [
-        ("geojson_gbx", "bad.geojson", None, f"{ex.SAMPLE_BOROUGHS_DIR}/nyc_boroughs.geojson"),
-        ("gpkg_gbx", "bad.gpkg", None, SAMPLE_GPKG),
-        ("netcdf_gbx", "bad.nc", None, "good.nc"),
+        ("geojson_gbx", "bad.geojson", None, f"{ex.SAMPLE_BOROUGHS_DIR}/nyc_boroughs.geojson", rf"DataSourceError.*{_NOT_RECOGNIZED}"),
+        ("geojsonl_gbx", "bad.geojsonl", None, "good.geojsonl", rf"DataSourceError.*{_NOT_RECOGNIZED}"),
+        ("shapefile_gbx", "bad.shp", None, "good.shp", rf"DataSourceError.*{_NOT_RECOGNIZED}"),
+        ("gpkg_gbx", "bad.gpkg", None, SAMPLE_GPKG, rf"DataSourceError.*{_NOT_RECOGNIZED}"),
+        ("netcdf_gbx", "bad.nc", None, "good.nc", r"OSError.*NetCDF: Unknown file format"),
         # PMTiles' schema is fixed, so the bad archive itself can define it.
-        ("pmtiles_gbx", "bad.pmtiles", {"source": "archive"}, None),
-        ("gtiff_gbx", "bad_tiled.tif", {"tileSize": "256"}, SAMPLE_TIF),
-        ("gtiff_gbx", "bad_bytes.tif", {"virtualTiles": "false"}, SAMPLE_TIF),
+        ("pmtiles_gbx", "bad.pmtiles", {"source": "archive"}, None, r"MagicNumberNotFound"),
+        ("gtiff_gbx", "bad_tiled.tif", {"tileSize": "256"}, SAMPLE_TIF, rf"RasterioIOError.*{_NOT_RECOGNIZED}"),
+        ("gtiff_gbx", "bad_bytes.tif", {"virtualTiles": "false"}, SAMPLE_TIF, rf"RasterioIOError.*{_NOT_RECOGNIZED}"),
     ],
+    ids=["geojson", "geojsonl", "shapefile", "gpkg", "netcdf", "pmtiles", "gtiff-tiled", "gtiff-bytes"],
 )
-def test_unreadable_file_fails_the_read(spark, tmp_path, fmt, name, options, schema_file):
-    """Rows that say "Fails the read": reading the file stops the query."""
-    if schema_file == "good.nc":
-        schema_file = _good_nc(tmp_path)
+def test_unreadable_file_fails_the_read(spark, tmp_path, fmt, name, options, schema_file, error):
+    """Rows that say "Fails the read": reading the file stops the query, with the
+    reader's error and the file it was reading."""
+    from pyspark.errors import PythonException
+
+    if schema_file in _GOOD_FILES:
+        schema_file = _GOOD_FILES[schema_file](tmp_path)
     bad = _garbage(tmp_path, name)
     rows = _rows_of(spark, bad, fmt, options, schema_path=schema_file or bad)
-    with pytest.raises(Exception):
+    with pytest.raises(PythonException, match=error) as err:
         rows.collect()
+    assert bad in str(err.value)  # "an error that names the file"
 
 
 def test_unreadable_raster_read_as_a_virtual_tile_is_not_opened(spark, tmp_path):

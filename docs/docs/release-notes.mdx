@@ -108,6 +108,14 @@ shared by both vector reader tiers.
   when a GeoPackage, FileGDB or raster is replaced at the same path. Previously a worker that had
   already staged the old file could keep serving the stale copy.
 
+### PMTiles reader
+
+- **`pmtiles_gbx` no longer reads the whole archive once per partition.** With `source="archive"`,
+  planning now reads only the archive's header and directories, and each worker stages the archive
+  once and reads just the tile ranges of each partition, so the read cost no longer grows with the
+  number of partitions. With `source="raster"`, each source raster is staged once per worker
+  instead of once per partition. See [PMTiles Reader](./readers/pmtiles).
+
 ### Raster writers
 
 - **`cog_gbx` writes sources with a non-byte-aligned bit depth.** Rasters whose band is

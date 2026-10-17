@@ -225,6 +225,9 @@ def _zip_vsi(path: str) -> str:
 # no prefix (GDAL picks them by extension), so _check_driver verifies them instead.
 _DRIVER_PREFIX = {"GeoJSON": "GeoJSON:", "GeoJSONSeq": "GeoJSONSeq:", "GPKG": "GPKG:"}
 
+# Drivers whose fields come from the features (none are declared up front).
+_FIELDS_FROM_FEATURES = ("GeoJSON", "GeoJSONSeq")
+
 
 def _open_path(path: str, driver: str) -> str:
     """The name pyogrio opens for ``path`` read with ``driver``: a zipped source
@@ -1103,6 +1106,18 @@ class VectorGbxReader(DataSourceReader):
                 _open_path(_p, self.driver), layer=self._layer(), max_features=0
             )
         return self._description_fields(path, tbl.schema)
+
+    def declared_schema(self) -> Optional[StructType]:
+        """The schema the source declares before any feature is read (checked per
+        file by read_paths), or None when it declares none: GeoJSON and GeoJSONSeq
+        fields come from the features, so a file with none has no fields. Their
+        first batch is checked instead, which also spares a second parse of the
+        whole file (each open of a GeoJSON parses all of it)."""
+        if self.driver in _FIELDS_FROM_FEATURES:
+            return None
+        if not self.driver and self._info().get("driver") in _FIELDS_FROM_FEATURES:
+            return None
+        return self.schema()
 
     def schema(self) -> StructType:
         out = self._attr_schema()

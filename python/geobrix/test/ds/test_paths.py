@@ -567,6 +567,95 @@ def _gdb(path, cols):
     return path
 
 
+# --- each file's schema is checked up front, also when it has no rows --------
+
+
+def _gpkg(path, cols, geom=None):
+    """A GeoPackage point layer: ``cols`` = {name: Arrow array}; ``geom`` = WKB
+    values (default: one point per row of ``cols``, or none)."""
+    import pyogrio
+    import shapely
+
+    n = len(next(iter(cols.values()))) if cols else 0
+    if geom is None:
+        geom = shapely.to_wkb(shapely.points(list(range(n)), list(range(n))))
+    tbl = pa.table({"geom": pa.array(list(geom), pa.binary()), **cols})
+    pyogrio.write_arrow(
+        tbl,
+        path,
+        layer="pts",
+        driver="GPKG",
+        geometry_name="geom",
+        geometry_type="Point",
+        crs="EPSG:4326",
+    )
+    return path
+
+
+def test_iter_path_batches_checks_an_empty_layer_against_the_schema(tmp_path):
+    """A layer with no features and no fields (what a FileGDB with a garbled table
+    header reads as) yields no batch; the per-file check still catches it."""
+    good = _gpkg(str(tmp_path / "good.gpkg"), {"k": pa.array([1], pa.int64())})
+    empty = _gpkg(str(tmp_path / "empty.gpkg"), {})
+    expected = P.path_schema("gpkg_gbx", None, good)
+    with pytest.raises(ValueError, match=r"empty\.gpkg.*missing \['k'\]"):
+        list(P.iter_path_batches(empty, None, "gpkg_gbx", None, expected))
+
+
+def test_iter_path_batches_zero_feature_layer_with_the_schema_passes(tmp_path):
+    good = _gpkg(str(tmp_path / "good.gpkg"), {"k": pa.array([1], pa.int64())})
+    none = _gpkg(str(tmp_path / "none.gpkg"), {"k": pa.array([], pa.int64())})
+    expected = P.path_schema("gpkg_gbx", None, good)
+    assert list(P.iter_path_batches(none, None, "gpkg_gbx", None, expected)) == []
+
+
+@pytest.mark.parametrize("fmt", ["geojson_gbx", "vector_gbx"])
+def test_iter_path_batches_zero_feature_geojson_has_no_schema_to_check(tmp_path, fmt):
+    """GeoJSON fields come from the features: an empty FeatureCollection declares
+    none, so it passes (no rows) whichever reader opens it."""
+    a = _geojson(str(tmp_path / "a.geojson"), 2)
+    z = _geojson(str(tmp_path / "z.geojson"), 0)
+    expected = P.path_schema(fmt, None, a)
+    assert list(P.iter_path_batches(z, None, fmt, None, expected)) == []
+
+
+def test_iter_path_batches_garbled_gdb_table_header_fails_the_schema_check(tmp_path):
+    """The corrupt-input case: XOR-garbling the feature table header of a FileGDB
+    makes GDAL read the layer as 0 features and 0 fields, silently."""
+    good = _gdb(str(tmp_path / "good.gdb"), {"k": [1]})
+    bad = str(tmp_path / "bad.gdb")
+    shutil.copytree(good, bad)
+    # The layer's table is the one created last (system tables come first).
+    table = max(f for f in os.listdir(bad) if f.endswith(".gdbtable"))
+    with open(os.path.join(bad, table), "r+b") as fh:
+        head = bytes(b ^ 0x5A for b in fh.read(40))
+        fh.seek(0)
+        fh.write(head)
+    expected = P.path_schema("file_gdb_gbx", None, good)
+    with pytest.raises(ValueError, match=r"bad\.gdb.*schema differs"):
+        list(P.iter_path_batches(bad, None, "file_gdb_gbx", None, expected))
+
+
+def test_read_paths_fails_on_an_empty_layer_naming_it(spark, tmp_path):
+    good = _gpkg(str(tmp_path / "good.gpkg"), {"k": pa.array([1], pa.int64())})
+    empty = _gpkg(str(tmp_path / "empty.gpkg"), {})
+    df = _paths_df(spark, [good, empty])
+    with pytest.raises(Exception, match=r"empty\.gpkg.*missing \['k'\]"):
+        P.read_paths(df, "gpkg_gbx", schema_path=good).collect()
+
+
+def test_plan_stage_checks_each_file_schema(tmp_path):
+    """Two-stage readers are checked once per file, when the file is planned."""
+    from pyspark.sql.types import StringType, StructField
+
+    a = _tif(str(tmp_path / "a.tif"))
+    schema = P.path_schema("gtiff_gbx", {"tileSize": "32"}, a)
+    drifted = StructType(list(schema.fields) + [StructField("x", StringType())])
+    plan = P._plan_batches("gtiff_gbx", {"tileSize": "32"}, drifted)
+    with pytest.raises(ValueError, match=r"a\.tif.*missing \['x'\]"):
+        list(plan(iter([_plan_src((a, 1_000_000))])))
+
+
 def test_path_schema_gdb_folder_is_one_dataset(tmp_path):
     gdb = _gdb(str(tmp_path / "survey.gdb"), {"k": [1]})
     assert "k" in _schema_names(P.path_schema("file_gdb_gbx", None, gdb))

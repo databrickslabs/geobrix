@@ -437,6 +437,23 @@ def _check_schema(path: str, got: pa.Schema, want: pa.Schema) -> None:
     )
 
 
+def _check_file_schema(ds, reader, local: str, want: pa.Schema) -> None:
+    """Check the schema a file declares against ``want`` once, before any of its
+    rows is read -- also when it has no rows: an empty layer whose header is
+    garbled declares no features and no fields, yields no batch, and so would
+    pass the per-batch check unseen. A reader's ``declared_schema()`` (the vector
+    readers) returns None for a file that declares no fields (GeoJSON fields come
+    from its features: its first batch is checked, and a file with no features has
+    nothing to check); other readers declare ``ds.schema()``."""
+    declared = getattr(reader, "declared_schema", None)
+    got = declared() if declared is not None else ds.schema()
+    if got is None:
+        return
+    if isinstance(got, str):
+        got = StructType.fromDDL(got)
+    _check_schema(local, _arrow_schema(_base(got)), want)
+
+
 def _arrow_schema(schema: StructType) -> pa.Schema:
     """Spark schema -> Arrow; TIMESTAMP is UTC on every supported PySpark (>= 4.1
     takes ``timezone=``, 4.0 always emits UTC)."""
@@ -494,8 +511,9 @@ def _read_partition(
     realigned to its column order (+ lineage columns)."""
     for batch in _as_batches(reader.read(part), schema):
         if batch.num_rows == 0:
-            # A zero-row batch (e.g. a zero-feature GeoJSON) carries no usable
-            # schema; there is nothing to emit or validate.
+            # Nothing to emit; a zero-row batch (e.g. a zero-feature GeoJSON)
+            # carries no usable schema. The file's declared schema was checked
+            # before reading (_check_file_schema).
             continue
         _check_schema(local, batch.schema, want)
         if batch.schema.names != want.names:
@@ -520,7 +538,8 @@ def iter_path_batches(
     lineage: bool = True,
 ) -> Iterator[pa.RecordBatch]:
     """Arrow batches for one file (session-free). A file that no longer exists is
-    skipped with a warning; ``expected`` (lineage included or not) is enforced."""
+    skipped with a warning; ``expected`` (lineage included or not) is enforced,
+    first on the schema the file declares (even with no rows), then per batch."""
     local = _fuse_path(path)
     if not _exists(local):
         return
@@ -530,6 +549,8 @@ def iter_path_batches(
     )
     want = _arrow_schema(schema)
     reader = ds.reader(schema)
+    if expected is not None:
+        _check_file_schema(ds, reader, local, want)
     for part in reader.partitions():
         yield from _read_partition(reader, part, local, mtime_us, schema, want, lineage)
 
@@ -537,7 +558,8 @@ def iter_path_batches(
 def _plan_batches(fmt: str, opts: dict, schema: StructType):
     """``mapInArrow`` function: ``(path, mtime)`` rows -> one ``(path, mtime,
     part)`` row per reader partition of each file (``part`` = pickled partition).
-    Files that no longer exist are skipped with a warning. Output batches hold at
+    Each file's declared schema is checked against ``schema`` here, once. Files
+    that no longer exist are skipped with a warning. Output batches hold at
     most ``_PLAN_ROWS_PER_BATCH`` rows (read here, on the driver, so the value
     travels with the function)."""
     base = _base(schema)
@@ -545,6 +567,7 @@ def _plan_batches(fmt: str, opts: dict, schema: StructType):
 
     def _plan(batches):
         out = _arrow_schema(_PLAN_SCHEMA)
+        want = _arrow_schema(base)
         paths: list = []
         mtimes: list = []
         parts: list = []
@@ -571,7 +594,9 @@ def _plan_batches(fmt: str, opts: dict, schema: StructType):
                 local = _fuse_path(p)
                 if not _exists(local):
                     continue
-                reader = resolve_format(fmt)({**opts, "path": local}).reader(base)
+                ds = resolve_format(fmt)({**opts, "path": local})
+                reader = ds.reader(base)
+                _check_file_schema(ds, reader, local, want)
                 for part in reader.partitions():
                     paths.append(local)
                     mtimes.append(us)

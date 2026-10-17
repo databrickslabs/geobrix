@@ -63,6 +63,7 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 - `--include-integration` – Include integration tests (excluded by default).
 - `--skip-build` – Skip Maven and Python build.
 - `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use your env or path_config default).
+- `--sample-data-root <dir>` – Container path to use for `GBX_SAMPLE_DATA_ROOT` instead of the minimal bundle, e.g. `/Volumes/main/default/geobrix_samples` to check a test against the complete bundle (`gbx:data:download --bundle complete`). The command fails if `<dir>/geobrix-examples` is missing.
 - `--help` – Help and suite timing.
 
 ## Examples
@@ -82,6 +83,9 @@ bash scripts/commands/gbx-test-python-docs.sh --skip-build --log test-logs/pytho
 
 # Full run (build + all tests; uses in-repo minimal bundle)
 bash scripts/commands/gbx-test-python-docs.sh
+
+# One file against the complete sample bundle instead of the minimal one
+bash scripts/commands/gbx-test-python-docs.sh --path readers/test_incremental_ingestion_examples.py --skip-build --sample-data-root /Volumes/main/default/geobrix_samples
 
 # Include integration tests (DBR / integration env)
 bash scripts/commands/gbx-test-python-docs.sh --include-integration --skip-build

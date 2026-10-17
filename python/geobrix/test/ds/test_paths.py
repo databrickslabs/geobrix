@@ -14,6 +14,19 @@ from databricks.labs.gbx.ds import paths as P
 # Streaming file sources need an explicit schema (binaryFile's fixed layout).
 _BINARY_SCHEMA = "path string, modificationTime timestamp, length long, content binary"
 
+# Longest an availableNow test stream may run before it is stopped and failed.
+_STREAM_TIMEOUT_S = 300
+
+
+def _await(query):
+    """Wait for an availableNow query; it is always stopped, and one still running
+    after _STREAM_TIMEOUT_S fails the test instead of blocking the run."""
+    try:
+        done = query.awaitTermination(_STREAM_TIMEOUT_S)
+        assert done, f"{query.name} still running: {query.status}"
+    finally:
+        query.stop()
+
 
 def _geojson(path, n, extra_prop=None):
     feats = []
@@ -190,7 +203,7 @@ def test_read_paths_streaming_available_now(spark, tmp_path):
         .option("checkpointLocation", str(tmp_path / "ck"))
         .start()
     )
-    q.awaitTermination()
+    _await(q)
     assert spark.table("rp_stream").count() == 3
 
 
@@ -393,7 +406,7 @@ def test_read_paths_raster_streaming_two_stage(spark, tmp_path):
         .option("checkpointLocation", str(tmp_path / "ck"))
         .start()
     )
-    q.awaitTermination()
+    _await(q)
     got = spark.table("rp_raster_stream").collect()
     assert len(got) == 4 and {r[P.SOURCE_PATH_COL] for r in got} == {a}
 
@@ -847,14 +860,13 @@ def test_read_paths_stream_second_run_reads_only_the_new_file(spark, tmp_path):
             .load(str(d))
             .select("path", "modificationTime")
         )
-        (
+        _await(
             P.read_paths(stream, "geojson_gbx", schema_path=a)
             .writeStream.format("parquet")
             .option("path", out)
             .option("checkpointLocation", ck)
             .trigger(availableNow=True)
             .start()
-            .awaitTermination()
         )
         rows = spark.read.parquet(out).select(P.SOURCE_PATH_COL).collect()
         return sorted(r[0] for r in rows)

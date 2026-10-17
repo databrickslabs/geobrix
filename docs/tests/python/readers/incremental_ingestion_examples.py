@@ -69,7 +69,7 @@ PIPELINE_SCD2 = """# Lakeflow pipeline source file (serverless)
 from databricks.labs.gbx.ds.changes import declare_ingest
 
 declare_ingest(
-    "main.geo.boroughs",                       # rows table (pipeline catalog/schema)
+    "main.geo.boroughs",                       # rows table: catalog.schema.table
     "/Volumes/main/geo/landing/boroughs",      # folder Auto Loader watches
     "geojson_gbx",
     glob="*.geojson",
@@ -103,10 +103,15 @@ def read_paths_batch(spark, folder=None):
     return read_paths(files, "geojson_gbx")
 
 
+# Longest an availableNow stream may run before it is stopped and reported.
+STREAM_TIMEOUT_S = 300
+
+
 def read_paths_stream(spark, folder, checkpoint, query_name="incremental_ingestion_doc"):
     """READ_PATHS_STREAM against a local folder: ``binaryFile`` stands in for Auto
     Loader (``cloudFiles``), which only exists on Databricks; a memory sink stands in
-    for ``toTable``."""
+    for ``toTable``. The query is always stopped; one still running after
+    ``STREAM_TIMEOUT_S`` raises instead of blocking."""
     from databricks.labs.gbx.ds.paths import read_paths
 
     files = (
@@ -117,23 +122,31 @@ def read_paths_stream(spark, folder, checkpoint, query_name="incremental_ingesti
         .select("path", "modificationTime")
     )
     rows = read_paths(files, "geojson_gbx", schema_path=folder)
-    (
+    query = (
         rows.writeStream.format("memory")
         .queryName(query_name)
         .option("checkpointLocation", checkpoint)
         .trigger(availableNow=True)
         .start()
-        .awaitTermination()
     )
+    try:
+        # Raises the query's error if it failed; False if still running.
+        if not query.awaitTermination(STREAM_TIMEOUT_S):
+            raise TimeoutError(
+                f"stream {query_name} still running after {STREAM_TIMEOUT_S} s: "
+                f"{query.status}"
+            )
+    finally:
+        query.stop()
     return spark.table(query_name)
 
 
-def read_paths_raster(spark, folder=None, tile_size="512"):
-    """READ_PATHS_RASTER; ``tile_size`` is 512 as displayed, and a test can pass a
-    smaller size to cut the small sample rasters into several windows."""
+def read_paths_raster(spark, path=None, tile_size="512"):
+    """READ_PATHS_RASTER over ``path`` (a folder or one file; default the sample
+    folder). ``tile_size`` is 512 as displayed; a test can pass another size."""
     from databricks.labs.gbx.ds.paths import read_paths
 
-    files = _files(spark, folder or SAMPLE_SENTINEL_DIR, "*.tif")
+    files = _files(spark, path or SAMPLE_SENTINEL_DIR, "*.tif")
     return read_paths(
         files, "gtiff_gbx", options={"tileSize": tile_size}, num_partitions=8
     )

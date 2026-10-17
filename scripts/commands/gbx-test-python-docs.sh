@@ -32,6 +32,8 @@ show_help() {
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
     echo -e "  ${GREEN}--skip-build${NC}            Skip Maven/Python build (use when already built)"
     echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
+    echo -e "  ${GREEN}--sample-data-root <dir>${NC} Container path for GBX_SAMPLE_DATA_ROOT (default /Volumes/main/default/test-data;"
+    echo -e "                           /Volumes/main/default/geobrix_samples runs against the complete bundle)"
     echo -e "  ${GREEN}--help${NC}                 This help"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
@@ -52,6 +54,8 @@ INCLUDE_INTEGRATION=false
 SKIP_BUILD=false
 # Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
 SET_SAMPLE_DATA_ROOT=true
+SAMPLE_DATA_ROOT="/Volumes/main/default/test-data"
+EXPLICIT_SAMPLE_DATA_ROOT=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -109,6 +113,12 @@ while [[ $# -gt 0 ]]; do
         --no-sample-data-root)
             SET_SAMPLE_DATA_ROOT=false
             shift
+            ;;
+        --sample-data-root)
+            SET_SAMPLE_DATA_ROOT=true
+            EXPLICIT_SAMPLE_DATA_ROOT=true
+            SAMPLE_DATA_ROOT="${2%/}"
+            shift 2
             ;;
         --help|-h)
             show_help
@@ -168,7 +178,16 @@ echo ""
 
 # Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
 SAMPLE_DATA_ROOT_EXPORT=""
-[ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data"
+if [ "$SET_SAMPLE_DATA_ROOT" = true ]; then
+    if [ "$EXPLICIT_SAMPLE_DATA_ROOT" = true ]; then
+        if ! docker exec geobrix-dev test -d "$SAMPLE_DATA_ROOT/geobrix-examples" 2>/dev/null; then
+            echo -e "${RED}❌ Sample data root not found in container: $SAMPLE_DATA_ROOT/geobrix-examples${NC}"
+            exit 1
+        fi
+        echo -e "${CYAN}📦 Sample data root: ${YELLOW}$SAMPLE_DATA_ROOT${NC}"
+    fi
+    SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=$SAMPLE_DATA_ROOT"
+fi
 
 # Run pre-steps and pytest inside Docker (single bash -c so env and cwd carry through)
 RUN_CMD="set -e

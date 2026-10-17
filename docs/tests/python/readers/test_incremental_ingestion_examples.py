@@ -4,9 +4,16 @@ Validates docs/docs/readers/incremental-ingestion.mdx.
 """
 
 import ast
+import faulthandler
 import inspect
+import math
+import os
 import shutil
+import signal
 import sys
+import threading
+import time
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -15,6 +22,90 @@ sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import incremental_ingestion_examples as ex  # noqa: E402
+
+# Longest any test here may run (override per test with @_deadline).
+_TEST_TIMEOUT_S = 300
+
+
+def _deadline(seconds):
+    def mark(fn):
+        fn._deadline_s = seconds
+        return fn
+
+    return mark
+
+
+def _on_deadline(name, seconds, capman, main_thread, finished):
+    """Watchdog for a test still running after ``seconds``. If the JVM still answers,
+    the test fails with every Python stack and the JVM thread dump in its captured
+    output. If the JVM does not answer (it has been seen to wedge with every thread
+    blocked under x86-64 emulation on Apple Silicon), every later Spark call would
+    block too, so the run ends here with the stacks on the terminal."""
+    from pyspark import SparkContext
+
+    proc = getattr(SparkContext._gateway, "proc", None)
+    answered = []
+    probe = threading.Thread(
+        target=lambda: answered.append(SparkContext._jvm.java.lang.System.nanoTime()),
+        daemon=True,
+    )
+    probe.start()
+    probe.join(15)
+    if finished.is_set():
+        return
+    if not answered:
+        capman.suspend_global_capture(in_=False)
+        sys.stderr.write(
+            f"\n{name} still running after {seconds} s and the JVM (pid "
+            f"{getattr(proc, 'pid', '?')}) does not respond; ending the run.\n"
+        )
+        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+        sys.stderr.flush()
+        if proc is not None:
+            proc.kill()
+        os._exit(1)
+    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
+    if proc is not None:
+        os.kill(proc.pid, signal.SIGQUIT)  # thread dump to the JVM's stdout
+        time.sleep(2)
+    signal.pthread_kill(main_thread, signal.SIGALRM)
+
+
+@pytest.fixture(autouse=True)
+def _bounded(request, spark):
+    """Per-test deadline, and no streaming query may outlive its test."""
+    name = request.node.name
+    seconds = getattr(request.function, "_deadline_s", _TEST_TIMEOUT_S)
+
+    def _expired(signum, frame):
+        raise TimeoutError(f"{name} still running after {seconds} s")
+
+    previous = signal.signal(signal.SIGALRM, _expired)
+    capman = request.config.pluginmanager.getplugin("capturemanager")
+    finished = threading.Event()
+    timer = threading.Timer(
+        seconds,
+        _on_deadline,
+        (name, seconds, capman, threading.get_ident(), finished),
+    )
+    timer.daemon = True
+    timer.start()
+    try:
+        yield
+    finally:
+        finished.set()
+        timer.cancel()
+        signal.signal(signal.SIGALRM, previous)
+        leaked = spark.streams.active
+        for q in leaked:
+            q.stop()
+    assert not leaked, f"streaming queries left running: {[q.name for q in leaked]}"
+
+
+@_deadline(3)
+def test_a_test_past_its_deadline_fails_instead_of_blocking():
+    with pytest.raises(TimeoutError, match="still running after 3 s"):
+        time.sleep(120)
 
 
 def _expected_borough_rows(spark):
@@ -60,40 +151,48 @@ def test_read_paths_stream_needs_schema_path(spark, tmp_path):
         read_paths(stream, "geojson_gbx")
 
 
-def test_read_paths_raster_windows(spark):
-    """``tileSize`` cuts each raster into a grid of windows, spread over
-    ``num_partitions`` tasks. The sample rasters are small (236 x 161), so a
-    64-pixel grid gives several windows per file; a 512 grid (the displayed value)
-    gives one."""
-    import math
-
+def _dims(path):
     import rasterio
 
-    from databricks.labs.gbx.ds.register import register
+    with rasterio.open(path) as src:
+        return src.width, src.height
 
-    register(spark)
-    tile = 64
-    tiles = ex.read_paths_raster(spark, tile_size=str(tile))
-    assert tiles.rdd.getNumPartitions() == 8  # test-only RDD use
+
+def _grid(path, tile):
+    w, h = _dims(path)
+    return math.ceil(w / tile) * math.ceil(h / tile)
+
+
+def _windows_per_file(tiles):
     rows = tiles.select("tile.window", "_source_path").collect()
-    sources = {r["_source_path"] for r in rows}
-    assert sources and all(p.endswith(".tif") for p in sources)
+    return rows, Counter(r["_source_path"] for r in rows)
 
-    expected = 0
-    for path in sources:
-        with rasterio.open(path) as src:
-            expected += math.ceil(src.width / tile) * math.ceil(src.height / tile)
-    whole = spark.read.format("gtiff_gbx").load(ex.SAMPLE_SENTINEL_DIR).count()
-    assert len(rows) > whole  # more windows than whole-file tiles
-    assert len(rows) == expected  # exactly the grid: sum of ceil(w/64) * ceil(h/64)
-    assert all(
-        0 < r["window"]["width"] <= tile and 0 < r["window"]["height"] <= tile
-        for r in rows
+
+def test_read_paths_raster_windows(spark):
+    """``tileSize`` cuts each raster into a grid of ceil(w/ts) * ceil(h/ts) windows,
+    spread over ``num_partitions`` tasks. Every count comes from the files'
+    dimensions, so this holds on the minimal and the complete sample bundle."""
+    folder = ex.SAMPLE_SENTINEL_DIR
+    files = sorted(os.path.join(folder, n) for n in os.listdir(folder) if n.endswith(".tif"))
+    assert files
+
+    # The displayed size (512) over the whole folder.
+    tiles = ex.read_paths_raster(spark)
+    assert tiles.rdd.getNumPartitions() == 8  # test-only RDD use
+    rows, per_file = _windows_per_file(tiles)
+    assert per_file == {f: _grid(f, 512) for f in files}
+    assert all(0 < r.window.width <= 512 and 0 < r.window.height <= 512 for r in rows)
+
+    # A smaller grid on the smallest raster: several windows (64 px on the sample
+    # rasters), at most 8 x 8 however large the bundle's rasters are.
+    smallest = min(files, key=lambda f: (math.prod(_dims(f)), f))
+    tile = max(64, math.ceil(max(_dims(smallest)) / 8))
+    rows, per_file = _windows_per_file(
+        ex.read_paths_raster(spark, smallest, tile_size=str(tile))
     )
-
-    # The displayed size (512) is larger than these rasters: one window per file.
-    big = ex.read_paths_raster(spark).select("_source_path").collect()
-    assert len(big) == len(sources) == whole
+    assert per_file == {smallest: _grid(smallest, tile)}
+    assert len(rows) > 1
+    assert all(0 < r.window.width <= tile and 0 < r.window.height <= tile for r in rows)
 
 
 def test_displayed_snippets_name_real_api():
@@ -115,7 +214,7 @@ def test_object_store_uri_is_rejected(spark):
     from databricks.labs.gbx.ds.paths import read_paths
 
     files = ex._files(spark, ex.SAMPLE_BOROUGHS_DIR, "*.geojson")
-    for uri in ("s3://bucket/landing", "/vsis3/bucket/landing"):
+    for uri in ("s3://bucket/landing", "/vsis3/bucket/landing", "/vsimem/landing"):
         with pytest.raises(ValueError, match=f"Unity Catalog Volume.*{uri}"):
             read_paths(files, "geojson_gbx", schema_path=uri)
 
@@ -194,11 +293,14 @@ def test_query_current_and_as_of(spark, tmp_path):
     spark.sql(f"DROP TABLE IF EXISTS {rows}")
     spark.sql(f"DROP TABLE IF EXISTS {versions}")
     try:
-        spark.createDataFrame(
-            [("/a.geojson", "h1", 1), ("/a.geojson", "h1", 2)]
-            + [("/a.geojson", "h2", i) for i in (1, 2, 3)],
-            "_source_path string, _source_hash string, id int",
-        ).write.option("path", str(tmp_path / "rows")).saveAsTable(rows)
+        # Built in SQL: no Python workers are needed for these few rows.
+        spark.sql(
+            f"""CREATE TABLE {rows} USING parquet LOCATION '{tmp_path / "rows"}' AS
+            SELECT * FROM VALUES
+                ('/a.geojson', 'h1', 1), ('/a.geojson', 'h1', 2),
+                ('/a.geojson', 'h2', 1), ('/a.geojson', 'h2', 2), ('/a.geojson', 'h2', 3)
+            AS t(_source_path, _source_hash, id)"""
+        )
         spark.sql(
             f"""CREATE TABLE {versions} USING parquet LOCATION '{tmp_path / "versions"}' AS
             SELECT '/a.geojson' _source_path, 'h1' _source_hash,

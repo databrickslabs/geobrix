@@ -54,7 +54,9 @@ def test_reader_options_map_connector_options_and_drop_framework_keys():
 
 
 def test_unknown_format_is_rejected():
-    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import format_for
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
+        format_for,
+    )
 
     with pytest.raises(ValueError, match="does not support"):
         format_for({"format": "kml"}, ["/x/a.kml"])
@@ -108,7 +110,11 @@ def test_schema_of_a_table_with_no_files_yet_is_a_clear_error(root):
 
 def test_metadata_is_append_with_mtime_cursor():
     meta = GeoBrixLakeflowConnect({}).read_table_metadata("t", {})
-    assert meta == {"primary_keys": [], "cursor_field": "_source_mtime", "ingestion_type": "append"}
+    assert meta == {
+        "primary_keys": [],
+        "cursor_field": "_source_mtime",
+        "ingestion_type": "append",
+    }
 
 
 def test_format_aliases_resolve_to_reader_names():
@@ -122,18 +128,24 @@ def test_format_aliases_resolve_to_reader_names():
 
 
 def test_discovery_infers_format_from_extension(tmp_path):
-    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import format_for
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
+        format_for,
+    )
 
     assert format_for({}, [str(tmp_path / "a.gpkg")]) == "gpkg_gbx"
     assert format_for({}, [str(tmp_path / "a.laz")]) == "lidar_gbx"
     assert format_for({}, [str(tmp_path / "a.jpg")]) == "exif_gbx"
     assert format_for({}, [str(tmp_path / "a.tif")]) == "gtiff_gbx"
     assert format_for({}, [str(tmp_path / "a.TIFF")]) == "gtiff_gbx"
-    assert format_for({"format": "geojson"}, [str(tmp_path / "a.json")]) == "geojson_gbx"
+    assert (
+        format_for({"format": "geojson"}, [str(tmp_path / "a.json")]) == "geojson_gbx"
+    )
 
 
 def test_mixed_folder_without_format_errors(tmp_path):
-    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import format_for
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
+        format_for,
+    )
 
     with pytest.raises(ValueError, match="format"):
         format_for({}, [str(tmp_path / "a.gpkg"), str(tmp_path / "b.geojson")])
@@ -141,7 +153,9 @@ def test_mixed_folder_without_format_errors(tmp_path):
 
 def test_connector_reads_through_shared_core(root, monkeypatch):
     """Wiring: member reads go through ds.paths.iter_path_batches."""
-    from databricks.labs.community_connector.sources.geobrix import lakeflow_connect as LC
+    from databricks.labs.community_connector.sources.geobrix import (
+        lakeflow_connect as LC,
+    )
     from databricks.labs.gbx.ds import paths as P
 
     calls = []
@@ -278,7 +292,9 @@ def test_mixed_kinds_without_format_is_a_clear_error(tmp_path):
 
 
 def test_zipped_shapefile_and_gdb_members_map_to_their_readers(tmp_path):
-    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import format_for
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
+        format_for,
+    )
 
     d = tmp_path / "mix"
     d.mkdir()
@@ -293,7 +309,9 @@ def test_zipped_shapefile_and_gdb_members_map_to_their_readers(tmp_path):
 
 
 def test_gdb_table_path_is_a_single_member_read_with_the_filegdb_reader(tmp_path):
-    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import format_for
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
+        format_for,
+    )
 
     gdb = tmp_path / "survey.gdb"
     gdb.mkdir()
@@ -312,7 +330,9 @@ def test_a_later_file_of_another_kind_fails_instead_of_using_another_reader(tmp_
     opts = {"path": "mix"}
     c.get_table_schema("mix", opts)  # pins geojson_gbx for the table
     _las(d / "late.las")
-    with pytest.raises(ValueError, match="lidar_gbx file in a table read with geojson_gbx"):
+    with pytest.raises(
+        ValueError, match="lidar_gbx file in a table read with geojson_gbx"
+    ):
         list(c.iter_member_batches(str(d / "late.las"), 0, opts, table_name="mix"))
 
 
@@ -351,8 +371,15 @@ def test_streaming_offsets_select_only_new_files(root):
     opts = {"path": "nyc_boroughs", "format": "geojson"}
 
     end1 = c.latest_offset("t", opts, {})
-    assert end1 == {"max_mtime_ns": 200_000, "at_max": [str(d / "part_b.geojson"), str(d / "part_c.geojson")]}
-    assert _paths(c.get_partitions("t", opts, {}, end1)) == ["part_a.geojson", "part_b.geojson", "part_c.geojson"]
+    assert end1 == {
+        "max_mtime_ns": 200_000,
+        "at_max": [str(d / "part_b.geojson"), str(d / "part_c.geojson")],
+    }
+    assert _paths(c.get_partitions("t", opts, {}, end1)) == [
+        "part_a.geojson",
+        "part_b.geojson",
+        "part_c.geojson",
+    ]
 
     # Nothing new: next micro-batch is empty.
     assert c.get_partitions("t", opts, end1, c.latest_offset("t", opts, end1)) == []
@@ -383,13 +410,17 @@ def test_file_landing_after_the_end_offset_is_deferred_not_double_read(root):
 def test_batch_partitions_cover_every_file(root):
     _three_files(root)
     c = GeoBrixLakeflowConnect({"root_path": str(root)})
-    assert len(c.get_partitions("t", {"path": "nyc_boroughs", "format": "geojson"})) == 3
+    assert (
+        len(c.get_partitions("t", {"path": "nyc_boroughs", "format": "geojson"})) == 3
+    )
 
 
 def test_file_glob_filters_members(root):
     _three_files(root)
     c = GeoBrixLakeflowConnect({"root_path": str(root)})
-    parts = c.get_partitions("t", {"path": "nyc_boroughs", "format": "geojson", "file_glob": "part_[ab]*"})
+    parts = c.get_partitions(
+        "t", {"path": "nyc_boroughs", "format": "geojson", "file_glob": "part_[ab]*"}
+    )
     assert _paths(parts) == ["part_a.geojson", "part_b.geojson"]
 
 
@@ -401,7 +432,9 @@ def test_read_partition_and_read_table_yield_rows_with_lineage(root):
     rows = list(c.read_partition("t", part, opts))
     assert len(rows) == 5
     assert rows[0]["_source_path"] == part["path"]
-    assert rows[0]["_source_mtime"].timestamp() == pytest.approx(part["mtime_ns"] / 1e9, abs=1e-5)
+    assert rows[0]["_source_mtime"].timestamp() == pytest.approx(
+        part["mtime_ns"] / 1e9, abs=1e-5
+    )
 
     records, end = c.read_table("t", {}, opts)
     assert len(list(records)) == 5
@@ -426,15 +459,29 @@ def test_spark_batch_read_geojson_folder(spark, root):
 
 
 def test_spark_batch_read_gpkg_default_layer_and_named_layer(spark, root):
-    assert _read(spark, tableName="nyc_complete", root_path=str(root), format="gpkg").count() == 5
-    zones = _read(spark, tableName="nyc_complete", root_path=str(root), format="gpkg", layer="taxi_zones")
+    assert (
+        _read(
+            spark, tableName="nyc_complete", root_path=str(root), format="gpkg"
+        ).count()
+        == 5
+    )
+    zones = _read(
+        spark,
+        tableName="nyc_complete",
+        root_path=str(root),
+        format="gpkg",
+        layer="taxi_zones",
+    )
     assert zones.count() == 263
     assert "locationid" in zones.columns
 
 
 def test_spark_where_option_is_applied(spark, root):
     df = _read(
-        spark, tableName="nyc_boroughs", root_path=str(root), format="geojson",
+        spark,
+        tableName="nyc_boroughs",
+        root_path=str(root),
+        format="geojson",
         where="boroname = 'Manhattan'",
     )
     assert [r.boroname for r in df.select("boroname").collect()] == ["Manhattan"]
@@ -449,11 +496,15 @@ def test_spark_framework_metadata_virtual_table(spark, root):
     )
     row = df.first()
     assert (row["tableName"], row["ingestion_type"], row["cursor_field"]) == (
-        "nyc_boroughs", "append", "_source_mtime",
+        "nyc_boroughs",
+        "append",
+        "_source_mtime",
     )
 
 
-def test_spark_streaming_available_now_appends_only_new_files(spark, root, tmp_path_factory):
+def test_spark_streaming_available_now_appends_only_new_files(
+    spark, root, tmp_path_factory
+):
     out = tmp_path_factory.mktemp("sink")
     checkpoint, sink = str(out / "checkpoint"), str(out / "data")
 

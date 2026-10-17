@@ -177,8 +177,12 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
                     names.append(name)
         return names
 
-    def get_table_schema(self, table_name: str, table_options: dict[str, str]) -> StructType:
-        members = self._members(self._resolve_path(table_name, table_options), table_options)
+    def get_table_schema(
+        self, table_name: str, table_options: dict[str, str]
+    ) -> StructType:
+        members = self._members(
+            self._resolve_path(table_name, table_options), table_options
+        )
         if not members:
             raise ValueError(
                 f"Table {table_name!r} has no matching files yet; the schema is taken "
@@ -190,7 +194,9 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
         self._schemas[table_name] = schema
         return schema
 
-    def read_table_metadata(self, table_name: str, table_options: dict[str, str]) -> dict:
+    def read_table_metadata(
+        self, table_name: str, table_options: dict[str, str]
+    ) -> dict:
         return {
             "primary_keys": [],
             "cursor_field": SOURCE_MTIME_COL,
@@ -211,7 +217,10 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
         if not stats:
             return _norm_offset(start_offset)
         max_ns = max(m for _, m in stats)
-        return {"max_mtime_ns": max_ns, "at_max": sorted(p for p, m in stats if m == max_ns)}
+        return {
+            "max_mtime_ns": max_ns,
+            "at_max": sorted(p for p, m in stats if m == max_ns),
+        }
 
     def get_partitions(
         self,
@@ -228,7 +237,9 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
         else:
             start, end = _norm_offset(start_offset), _norm_offset(end_offset)
             selected = [
-                (p, m) for p, m in stats if _after(p, m, start) and _not_after(p, m, end)
+                (p, m)
+                for p, m in stats
+                if _after(p, m, start) and _not_after(p, m, end)
             ]
         return [{"path": p, "mtime_ns": m} for p, m in selected]
 
@@ -305,14 +316,19 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
             self.get_table_schema(table_name, table_options)
         return self._formats[table_name]
 
-    def _table_schema(self, table_name: str, table_options: dict[str, str]) -> StructType:
+    def _table_schema(
+        self, table_name: str, table_options: dict[str, str]
+    ) -> StructType:
         if table_name not in self._schemas:
             self.get_table_schema(table_name, table_options)
         return self._schemas[table_name]
 
     def _guard(self, path: str) -> str:
         path = os.path.normpath(path)
-        if self.root_path and os.path.commonpath([path, self.root_path]) != self.root_path:
+        if (
+            self.root_path
+            and os.path.commonpath([path, self.root_path]) != self.root_path
+        ):
             raise ValueError(f"Path {path!r} is outside root_path {self.root_path!r}.")
         return path
 
@@ -371,7 +387,9 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
         """(path, mtime_ns) per member. A file removed between listing and stat is
         skipped (it no longer exists to ingest); any other error propagates."""
         out = []
-        for member in self._members(self._resolve_path(table_name, table_options), table_options):
+        for member in self._members(
+            self._resolve_path(table_name, table_options), table_options
+        ):
             try:
                 out.append((member, os.stat(member).st_mtime_ns))
             except FileNotFoundError:

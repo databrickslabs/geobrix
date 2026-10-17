@@ -7,8 +7,15 @@ batches per file) instead of the framework's row-at-a-time dict conversion.
 
 import json
 
-from pyspark.sql.datasource import DataSourceReader, DataSourceStreamReader, InputPartition
-from pyspark.sql.streaming.datasource import ReadAllAvailable, SupportsTriggerAvailableNow
+from pyspark.sql.datasource import (
+    DataSourceReader,
+    DataSourceStreamReader,
+    InputPartition,
+)
+from pyspark.sql.streaming.datasource import (
+    ReadAllAvailable,
+    SupportsTriggerAvailableNow,
+)
 from pyspark.sql.types import StructType
 
 from databricks.labs.community_connector.sparkpds.lakeflow_datasource import (
@@ -46,7 +53,9 @@ class _ArrowFileReads:
 
 
 class GeoBrixBatchReader(_ArrowFileReads, DataSourceReader):
-    def __init__(self, options: dict, schema: StructType, connect: GeoBrixLakeflowConnect):
+    def __init__(
+        self, options: dict, schema: StructType, connect: GeoBrixLakeflowConnect
+    ):
         self._init(options, schema, connect)
 
     def partitions(self):
@@ -60,7 +69,9 @@ class GeoBrixStreamReader(
 ):
     """File-level incremental reads: each micro-batch covers files in (start, end]."""
 
-    def __init__(self, options: dict, schema: StructType, connect: GeoBrixLakeflowConnect):
+    def __init__(
+        self, options: dict, schema: StructType, connect: GeoBrixLakeflowConnect
+    ):
         self._init(options, schema, connect)
 
     def initialOffset(self):

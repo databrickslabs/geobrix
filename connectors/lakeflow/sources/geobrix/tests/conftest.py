@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[5]
-NYC = REPO_ROOT / "sample-data/Volumes/main/default/geobrix_samples/geobrix-examples/nyc"
+NYC = (
+    REPO_ROOT / "sample-data/Volumes/main/default/geobrix_samples/geobrix-examples/nyc"
+)
 BOROUGHS = NYC / "boroughs/nyc_boroughs.geojson"
 GPKG = NYC / "geopackage/nyc_complete.gpkg"
 
@@ -18,9 +20,7 @@ def spark():
     os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
     from pyspark.sql import SparkSession
 
-    from databricks.labs.community_connector.sources.geobrix import (
-        GeoBrixDataSource,
-    )
+    from databricks.labs.community_connector.sources.geobrix import GeoBrixDataSource
 
     session = (
         SparkSession.builder.master("local[2]")

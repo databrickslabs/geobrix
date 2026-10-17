@@ -1,7 +1,7 @@
 """GeoBrix Lakeflow Connect Connector."""
 
-from .lakeflow_connect import GeoBrixLakeflowConnect
 from .datasource import GeoBrixDataSource
+from .lakeflow_connect import GeoBrixLakeflowConnect
 
 __all__ = [
     "GeoBrixLakeflowConnect",

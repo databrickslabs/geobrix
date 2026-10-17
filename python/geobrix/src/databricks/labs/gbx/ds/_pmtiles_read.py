@@ -69,11 +69,17 @@ _RENDER_STAGE = StageCache(
 
 
 def _range_source(fh) -> Callable[[int, int], bytes]:
-    """``get_bytes(offset, length)`` over an open binary file (seek + read)."""
+    """``get_bytes(offset, length)`` over an open binary file (seek + read). A
+    range past the end of the file is cut at it (fewer bytes, or none): a
+    garbled header or directory entry can hold any offset and length, and a read
+    of that length would try to allocate it."""
+    size = os.fstat(fh.fileno()).st_size
 
     def get_bytes(offset: int, length: int) -> bytes:
+        if offset < 0 or length <= 0 or offset >= size:
+            return b""
         fh.seek(offset)
-        return fh.read(length)
+        return fh.read(min(length, size - offset))
 
     return get_bytes
 

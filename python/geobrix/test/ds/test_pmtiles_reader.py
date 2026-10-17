@@ -454,3 +454,34 @@ def test_raster_reader_renders_rgba_source_from_rgb(tmp_path):
         np.asarray(Image.open(io.BytesIO(r[3])).convert("RGBA"))[:, :, 3] for r in rows
     ]
     assert max(float(np.mean(a == 255)) for a in alpha) > 0.99
+
+
+def test_pmtiles_range_reads_stop_at_the_end_of_the_file(tmp_path):
+    """A garbled header or directory entry can hold any length: the read is cut
+    at the end of the file instead of allocating it."""
+    from databricks.labs.gbx.ds._pmtiles_read import _range_source
+
+    path = tmp_path / "f.bin"
+    path.write_bytes(b"0123456789")
+    with open(path, "rb") as fh:
+        get = _range_source(fh)
+        assert get(4, 0x5A5A5A5A5A5A) == b"456789"
+        assert get(20, 5) == b"" and get(-1, 5) == b""
+
+
+def test_archive_with_a_garbled_root_length_fails_cleanly(tmp_path):
+    """Planning reads the root directory by the length the header declares; a
+    garbled length (here ~99 TB) fails the read with an error, not a giant
+    allocation that can take the worker down."""
+    import struct
+
+    from databricks.labs.gbx.ds._pmtiles_read import PMtilesArchiveReader
+
+    path = str(tmp_path / "a.pmtiles")
+    _write_multi_partition_archive(path, n=50)
+    with open(path, "r+b") as fh:
+        fh.seek(16)  # v3 header: magic + version (8 bytes), root offset, root length
+        fh.write(struct.pack("<Q", 0x5A5A5A5A5A5A))
+    with pytest.raises(Exception) as info:
+        PMtilesArchiveReader({"path": path}).partitions()
+    assert not isinstance(info.value, MemoryError)

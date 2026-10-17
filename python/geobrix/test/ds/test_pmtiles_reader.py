@@ -5,6 +5,7 @@ InputPartitions, render via _xyz_mosaic core, emit (z, x, y, bytes) rows.
 """
 
 import io
+import os
 
 import numpy as np
 import pytest
@@ -158,3 +159,298 @@ def test_raster_reader_bbox_outside_sources_is_empty(spark, tmp_path):
     )
     assert df.collect() == []
     assert [f.name for f in df.schema.fields] == ["z", "x", "y", "bytes"]
+
+
+# ---------------------------------------------------------------------------
+# Archive reads at scale: range reads, bounded bytes per partition
+# ---------------------------------------------------------------------------
+
+_BIG = "big.pmtiles"
+_TPP = 1500  # tiles per partition for the multi-partition archive tests
+
+
+def _write_multi_partition_archive(path, n=12000, seed=7):
+    """A PMTiles archive with leaf directories, run-length entries and
+    deduplicated (back-referenced) tiles. Sparse random tile ids keep the
+    directory from compressing into the root, so the writer emits leaves; the
+    tile data (~300 bytes each) dominates the file."""
+    import random
+
+    from pmtiles.tile import Compression, TileType, zxy_to_tileid
+    from pmtiles.writer import Writer
+
+    rng = random.Random(seed)
+    cur = zxy_to_tileid(12, 0, 0)
+    tiles = []
+    while len(tiles) < n:
+        cur += rng.randint(2, 1500)
+        if len(tiles) in (_TPP - 4, 3 * _TPP - 2, 6000):
+            # identical consecutive tiles -> one run-length entry that straddles
+            # a partition boundary
+            data = rng.randbytes(300)
+            for _ in range(9):
+                tiles.append((cur, data))
+                cur += 1
+            continue
+        if len(tiles) > 100 and len(tiles) % 97 == 0:
+            data = tiles[len(tiles) - 50][1]  # same bytes as an earlier tile
+        else:
+            data = rng.randbytes(250 + rng.randint(0, 100))
+        tiles.append((cur, data))
+    with open(path, "wb") as fh:
+        w = Writer(fh)
+        for tid, data in tiles:
+            w.write_tile(tid, data)
+        w.finalize(
+            {"tile_type": TileType.PNG, "tile_compression": Compression.NONE}, {}
+        )
+
+
+def _archive_header(path):
+    from pmtiles.tile import deserialize_header
+
+    with open(path, "rb") as fh:
+        return deserialize_header(fh.read(127))
+
+
+def _expected_archive_rows(path):
+    """Every (z, x, y, bytes) of an archive, in tile-id order, read by the
+    pmtiles library's own traversal over the whole file in memory."""
+    from pmtiles.reader import MemorySource, all_tiles
+
+    with open(path, "rb") as fh:
+        raw = fh.read()
+    return [(z, x, y, bytes(d)) for (z, x, y), d in all_tiles(MemorySource(raw))]
+
+
+class _CountingFile:
+    """File-object proxy that tallies the bytes returned by read()/readinto()."""
+
+    def __init__(self, fh, key, tally):
+        self._fh, self._key, self._tally = fh, key, tally
+
+    def read(self, *args):
+        data = self._fh.read(*args)
+        self._tally[self._key] += len(data)
+        return data
+
+    def readinto(self, buf):
+        n = self._fh.readinto(buf)
+        self._tally[self._key] += n or 0
+        return n
+
+    def __getattr__(self, name):
+        return getattr(self._fh, name)
+
+    def __iter__(self):
+        return iter(self._fh)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._fh.close()
+
+
+def _spy_reads(monkeypatch, name_part):
+    """Count bytes read through ``open()`` from every file whose path contains
+    ``name_part`` (the source and any staged copy of it), keyed by path."""
+    import builtins
+    import collections
+
+    tally = collections.Counter()
+    real_open = builtins.open
+
+    def spy_open(file, mode="r", *args, **kwargs):
+        fh = real_open(file, mode, *args, **kwargs)
+        if "r" in mode and name_part in os.fspath(file):
+            return _CountingFile(fh, os.fspath(file), tally)
+        return fh
+
+    monkeypatch.setattr(builtins, "open", spy_open)
+    return tally
+
+
+def test_archive_reader_multi_partition_output_matches_library(tmp_path):
+    """Every partition's rows, concatenated, equal the library's full traversal:
+    same tiles, same order, same bytes -- across leaf directories, run-length
+    entries split by a partition boundary and deduplicated tiles. A pickled
+    partition (the read_paths planning path) reads the same."""
+    import pickle
+
+    from databricks.labs.gbx.ds._pmtiles_read import PMtilesArchiveReader
+
+    p = str(tmp_path / _BIG)
+    _write_multi_partition_archive(p)
+    hdr = _archive_header(p)
+    assert hdr["leaf_directory_length"] > 0  # leaves exercised
+    assert hdr["addressed_tiles_count"] > hdr["tile_entries_count"]  # runs
+    assert hdr["tile_entries_count"] > hdr["tile_contents_count"]  # dedup
+    expected = _expected_archive_rows(p)
+
+    reader = PMtilesArchiveReader({"path": p, "tilesPerPartition": str(_TPP)})
+    parts = reader.partitions()
+    assert len(parts) == -(-len(expected) // _TPP)
+    assert [t for part in parts for t in part.tiles] == [e[:3] for e in expected]
+    got = [row for part in parts for row in reader.read(part)]
+    assert got == expected
+    again = list(reader.read(pickle.loads(pickle.dumps(parts[1]))))
+    assert again == expected[_TPP : 2 * _TPP]
+
+
+def test_archive_reader_reads_bounded_bytes_per_partition(tmp_path, monkeypatch):
+    """Planning reads only the header and directories; the archive is copied to
+    worker-local disk once; each partition then reads only the header, the
+    directories and its own tiles -- never the whole archive per partition."""
+    from databricks.labs.gbx.ds._pmtiles_read import PMtilesArchiveReader
+
+    p = str(tmp_path / _BIG)
+    _write_multi_partition_archive(p)
+    size = os.path.getsize(p)
+    hdr = _archive_header(p)
+    dir_bytes = 127 + hdr["root_length"] + hdr["leaf_directory_length"]
+
+    tally = _spy_reads(monkeypatch, _BIG)
+    reader = PMtilesArchiveReader({"path": p, "tilesPerPartition": str(_TPP)})
+    parts = reader.partitions()
+    planning = tally[p]
+    per_part = []  # (bytes read outside the source, bytes of the partition's tiles)
+    for part in parts:
+        before = dict(tally)
+        rows = list(reader.read(part))
+        other = sum(v - before.get(k, 0) for k, v in tally.items() if k != p)
+        per_part.append((other, sum(len(r[3]) for r in rows)))
+    source_total = tally[p]
+    summary = (
+        f"archive={size} B, dirs={dir_bytes} B, partitions={len(parts)}, "
+        f"planning read {planning} B, source read {source_total} B in total, "
+        f"per-partition local reads {[o for o, _ in per_part]}"
+    )
+    assert len(parts) >= 4, summary
+    assert planning <= dir_bytes, summary
+    assert source_total <= size + dir_bytes, summary
+    for other, tiles in per_part:
+        assert other <= dir_bytes + tiles, summary
+
+
+def test_archive_reader_restages_an_archive_replaced_in_place(tmp_path):
+    """Wiring: the staged copy is checked against the source's size + mtime, so
+    an archive rewritten at the same path is read fresh in the same process."""
+    from databricks.labs.gbx.ds._pmtiles_read import PMtilesArchiveReader
+
+    p = str(tmp_path / "swap.pmtiles")
+
+    def read_all():
+        r = PMtilesArchiveReader({"path": p, "tilesPerPartition": "500"})
+        return [row for part in r.partitions() for row in r.read(part)]
+
+    _write_multi_partition_archive(p, n=1200, seed=1)
+    assert read_all() == _expected_archive_rows(p)
+    st = os.stat(p)
+    _write_multi_partition_archive(p, n=1200, seed=2)
+    os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + 5_000_000_000))
+    assert read_all() == _expected_archive_rows(p)
+
+
+def test_archive_reader_spark_multi_partition(spark, tmp_path):
+    """End to end on Spark workers: a multi-partition archive with leaf
+    directories reads back every tile with its exact bytes."""
+    spark.dataSource.register(PMTilesGbxDataSource)
+    p = str(tmp_path / _BIG)
+    _write_multi_partition_archive(p)
+    df = (
+        spark.read.format("pmtiles_gbx")
+        .option("source", "archive")
+        .option("path", p)
+        .option("tilesPerPartition", str(_TPP))
+        .load()
+    )
+    assert df.rdd.getNumPartitions() >= 4
+    got = sorted((r["z"], r["x"], r["y"], bytes(r["bytes"])) for r in df.collect())
+    assert got == sorted(_expected_archive_rows(p))
+
+
+# ---------------------------------------------------------------------------
+# Raster source mode: each source staged once per worker
+# ---------------------------------------------------------------------------
+
+
+def test_raster_reader_stages_each_source_once(tmp_path, monkeypatch):
+    """Sources are copied to worker-local disk once per worker process and
+    shared by every partition (not re-copied per partition); the rendered tiles
+    equal rendering each tile straight from the sources."""
+    from databricks.labs.gbx.ds import _xyz_mosaic
+
+    src = tmp_path / "src"
+    src.mkdir()
+    _write_cog(str(src / "qa.tif"), -122.50, 37.74, -122.45, 37.79, val=120)
+    _write_cog(str(src / "qb.tif"), -122.45, 37.74, -122.40, 37.79, val=220)
+    sources = sorted(str(f) for f in src.iterdir())
+    reader = PMtilesRasterReader(
+        {
+            "path": str(src),
+            "bbox": "-122.50,37.74,-122.40,37.79",
+            "minZoom": "13",
+            "maxZoom": "14",
+            "tilesPerPartition": "3",
+        }
+    )
+    parts = reader.partitions()
+    assert len(parts) >= 3
+    assert sum(len(part.sources) for part in parts) > len(sources)
+
+    tally = _spy_reads(monkeypatch, str(src))
+    got = [row for part in parts for row in reader.read(part)]
+    reads = {k: v for k, v in tally.items() if k in sources}
+    assert reads == {s: os.path.getsize(s) for s in sources}, dict(tally)
+    monkeypatch.undo()
+
+    expected = []
+    for part in parts:
+        for z, x, y in part.tiles:
+            png = _xyz_mosaic.render_tile(z, x, y, part.sources)
+            if png is not None:
+                expected.append((z, x, y, png))
+    assert got == expected
+
+
+def test_raster_reader_renders_rgba_source_from_rgb(tmp_path):
+    """Wiring: an RGBA source whose alpha reads 0 still renders opaque tiles
+    (the staged copy is render-ready RGB)."""
+    from rasterio.enums import ColorInterp
+
+    p = str(tmp_path / "rgba.tif")
+    data = np.full((4, 256, 256), 200, dtype="uint8")
+    data[3] = 0
+    with rasterio.open(
+        p,
+        "w",
+        driver="GTiff",
+        width=256,
+        height=256,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(-122.50, 37.74, -122.40, 37.80, 256, 256),
+    ) as ds:
+        ds.write(data)
+        ds.colorinterp = [
+            ColorInterp.red,
+            ColorInterp.green,
+            ColorInterp.blue,
+            ColorInterp.alpha,
+        ]
+    reader = PMtilesRasterReader(
+        {
+            "path": str(tmp_path),
+            "bbox": "-122.48,37.76,-122.42,37.78",
+            "minZoom": "14",
+            "maxZoom": "14",
+        }
+    )
+    rows = [row for part in reader.partitions() for row in reader.read(part)]
+    assert rows
+    alpha = [
+        np.asarray(Image.open(io.BytesIO(r[3])).convert("RGBA"))[:, :, 3] for r in rows
+    ]
+    assert max(float(np.mean(a == 255)) for a in alpha) > 0.99

@@ -67,6 +67,14 @@ _PLAN_SCHEMA = StructType(
 # Tuple rows per Arrow batch when a reader yields rows instead of batches.
 _ROWS_PER_BATCH = 256
 
+# Plan rows per Arrow batch: one input batch of files can plan to millions of
+# windows, so the plan stage flushes at this cap instead of buffering them all.
+_PLAN_ROWS_PER_BATCH = 8192
+
+# Raster options that plan from a manifest / table instead of the row's path: in
+# read_paths every input path would replan the whole manifest (duplicate rows).
+_PATHLESS_RASTER_OPTIONS = ("manifest", "tilesTable")
+
 
 def _sources() -> Dict[str, type]:
     from databricks.labs.gbx.ds.register import _SOURCES
@@ -243,13 +251,33 @@ def iter_path_batches(
 def _plan_batches(fmt: str, opts: dict, schema: StructType):
     """``mapInArrow`` function: ``(path, mtime)`` rows -> one ``(path, mtime,
     part)`` row per reader partition of each file (``part`` = pickled partition).
-    Files that no longer exist are skipped with a warning."""
+    Files that no longer exist are skipped with a warning. Output batches hold at
+    most ``_PLAN_ROWS_PER_BATCH`` rows (read here, on the driver, so the value
+    travels with the function)."""
     base = _base(schema)
+    cap = int(_PLAN_ROWS_PER_BATCH)
 
     def _plan(batches):
         out = _arrow_schema(_PLAN_SCHEMA)
+        paths: list = []
+        mtimes: list = []
+        parts: list = []
+
+        def _flush():
+            batch = pa.RecordBatch.from_arrays(
+                [
+                    pa.array(paths, pa.string()),
+                    pa.array(mtimes, _TS),
+                    pa.array(parts, pa.binary()),
+                ],
+                schema=out,
+            )
+            paths.clear()
+            mtimes.clear()
+            parts.clear()
+            return batch
+
         for b in batches:
-            paths, mtimes, parts = [], [], []
             for p, us in zip(
                 b.column("path").to_pylist(),
                 b.column("mtime").cast(pa.int64()).to_pylist(),
@@ -262,15 +290,10 @@ def _plan_batches(fmt: str, opts: dict, schema: StructType):
                     paths.append(local)
                     mtimes.append(us)
                     parts.append(pickle.dumps(part))
-            if parts:
-                yield pa.RecordBatch.from_arrays(
-                    [
-                        pa.array(paths, pa.string()),
-                        pa.array(mtimes, _TS),
-                        pa.array(parts, pa.binary()),
-                    ],
-                    schema=out,
-                )
+                    if len(parts) >= cap:
+                        yield _flush()
+        if parts:
+            yield _flush()
 
     return _plan
 
@@ -331,6 +354,15 @@ def read_paths(
     from pyspark.sql import functions as F
 
     two_stage = resolve_format(format).name() in TWO_STAGE_FORMATS
+    if two_stage:
+        given = {k.lower() for k in (options or {})}
+        bad = [o for o in _PATHLESS_RASTER_OPTIONS if o.lower() in given]
+        if bad:
+            raise ValueError(
+                f"read_paths does not support the {bad} option(s): each row names "
+                f"one file to read, so a manifest or tiles table would be replanned "
+                f"for every row. Read it with spark.read.format({format!r}) instead."
+            )
     if schema_path is None:
         if df.isStreaming:
             raise ValueError(

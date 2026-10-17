@@ -394,3 +394,69 @@ def test_read_paths_raster_streaming_two_stage(spark, tmp_path):
     q.awaitTermination()
     got = spark.table("rp_raster_stream").collect()
     assert len(got) == 4 and {r[P.SOURCE_PATH_COL] for r in got} == {a}
+
+
+def _plan_src(*paths_mtimes):
+    paths, mtimes = zip(*paths_mtimes)
+    return pa.RecordBatch.from_arrays(
+        [pa.array(list(paths)), pa.array(list(mtimes), P._TS)],
+        names=["path", "mtime"],
+    )
+
+
+def test_plan_stage_flushes_at_the_row_cap(spark, tmp_path, monkeypatch):
+    monkeypatch.setattr(P, "_PLAN_ROWS_PER_BATCH", 3)
+    a = _tif(str(tmp_path / "big.tif"), w=2048, h=2048)
+    opts = {"tileSize": "512"}
+    schema = P.path_schema("raster_gbx", opts, a, lineage=False)
+    plan = list(P._plan_batches("raster_gbx", opts, schema)(iter([_plan_src((a, 1))])))
+    assert [b.num_rows for b in plan] == [3, 3, 3, 3, 3, 1]
+    # The cap travels with the plan function, so the Spark read flushes too.
+    got = P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts, num_partitions=4)
+    want = _batch_read(spark, "raster_gbx", a, **opts)
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert got.count() == want.count() == 16
+    assert _set_op_safe(got, cols).exceptAll(_set_op_safe(want, cols)).count() == 0
+
+
+def test_read_paths_raster_lineage_survives_the_shuffle(spark, tmp_path):
+    a = _tif(str(tmp_path / "a.tif"), value=1)
+    b = _tif(str(tmp_path / "b.tif"), value=2)
+    os.utime(a, (1_600_000_000, 1_600_000_000))
+    os.utime(b, (1_700_000_000, 1_700_000_000))
+    got = P.read_paths(
+        _paths_df(spark, [a, b]), "gtiff_gbx", {"tileSize": "32"}, num_partitions=2
+    ).collect()
+    assert len(got) == 8
+    mtime = {a: 1_600_000_000, b: 1_700_000_000}
+    for r in got:
+        assert r[P.SOURCE_PATH_COL] == r["tile"]["path"]
+        assert int(r[P.SOURCE_MTIME_COL].timestamp()) == mtime[r["tile"]["path"]]
+    assert {r[P.SOURCE_PATH_COL] for r in got} == {a, b}
+
+
+def test_read_stage_skips_a_file_deleted_after_planning(tmp_path, caplog, monkeypatch):
+    # One stat attempt: the FUSE retry backoff is not under test here.
+    monkeypatch.setattr(P._listing, "_retry_transient", lambda fn: fn())
+    a = _tif(str(tmp_path / "a.tif"))
+    b = _tif(str(tmp_path / "b.tif"))
+    opts = {"tileSize": "32"}
+    schema = P.path_schema("gtiff_gbx", opts, a)
+    plan = list(
+        P._plan_batches("gtiff_gbx", opts, schema)(
+            iter([_plan_src((a, 1_000_000), (b, 2_000_000))])
+        )
+    )
+    assert sum(x.num_rows for x in plan) == 8
+    os.remove(b)
+    out = list(P._read_planned("gtiff_gbx", opts, schema, True)(iter(plan)))
+    paths = [p for x in out for p in x.column(P.SOURCE_PATH_COL).to_pylist()]
+    assert paths == [a] * 4
+    assert "b.tif" in caplog.text and "no longer exists" in caplog.text
+
+
+@pytest.mark.parametrize("opt", ["manifest", "tilesTable", "TILESTABLE"])
+def test_read_paths_rejects_manifest_options_for_raster(spark, tmp_path, opt):
+    a = _tif(str(tmp_path / "a.tif"))
+    with pytest.raises(ValueError, match=f"(?i){opt}"):
+        P.read_paths(_paths_df(spark, [a]), "raster_gbx", {opt: "x"})

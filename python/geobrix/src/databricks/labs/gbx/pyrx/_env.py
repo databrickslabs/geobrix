@@ -3,10 +3,17 @@
 rasterio's manylinux/macOS wheels ship their own GDAL + PROJ data. We point
 GDAL_DATA / PROJ_DATA at those bundled paths *only if unset*, so pyrx does not
 collide with any cluster-level GDAL installed by the heavyweight init script.
+Registered PROJ grid dirs are merged with the PROJ data into one directory, which
+becomes PROJ_DATA (rasterio reads PROJ_DATA as a single path; see _proj_data_dir).
 """
 
+import hashlib
 import os
-from typing import Optional, Sequence, Tuple
+import shutil
+import stat
+import threading
+import warnings
+from typing import Dict, List, Optional, Sequence, Tuple
 
 
 def _bundled_gdal_data() -> Optional[str]:
@@ -49,14 +56,129 @@ def _bundled_proj_data() -> Optional[str]:
         return None
 
 
-def _prepend_unique(base: str, extra: Sequence[str]) -> str:
-    """os.pathsep-join `extra` dirs ahead of `base`, de-duped, preserving order."""
-    parts = []
+def _search_order(base: str, extra: Sequence[str]) -> List[str]:
+    """`extra` dirs ahead of `base` (either may be os.pathsep-joined), de-duped, in order."""
+    parts: List[str] = []
     for d in list(extra) + ([base] if base else []):
         for seg in d.split(os.pathsep) if d else []:
             if seg and seg not in parts:
                 parts.append(seg)
-    return os.pathsep.join(parts)
+    return parts
+
+
+# One PROJ data directory per (search order) for this process, and the base each was
+# built from, so a later call that finds its own merged dir in PROJ_DATA unwraps it
+# instead of nesting it.
+_PROJ_DATA_DIRS: Dict[Tuple[str, ...], str] = {}
+_PROJ_DATA_BASES: Dict[str, str] = {}
+_PROJ_DATA_LOCK = threading.Lock()
+_MERGED_PREFIX = "gbx_proj_data_"
+
+
+def _usable_merged_dir(path: str, uid: Optional[int]) -> bool:
+    """A real directory (not a symlink) owned by this user: another user's pre-made dir
+    of the same name is never trusted."""
+    try:
+        st = os.lstat(path)
+    except OSError:
+        return False
+    return stat.S_ISDIR(st.st_mode) and (uid is None or st.st_uid == uid)
+
+
+def _build_merged_proj_dir(search: Sequence[str]) -> str:
+    """Create (or reuse) ONE directory of symlinks to every entry of `search`'s dirs.
+
+    The first dir in `search` that holds a name wins it, which is PROJ's own order for a
+    multi-directory search path. Missing or unreadable dirs are skipped. The directory
+    name hashes the search order and its listing, so it is shared by every process of
+    the same user on the node and is rebuilt when a grid dir gains files. It is built
+    under a temp name and renamed into place, so readers never see it half-populated.
+    Raises OSError if it cannot be built (e.g. no symlink support).
+    """
+    from databricks.labs.gbx.pyrx.core.local_temp import (
+        local_temp_root,
+        new_local_temp_dir,
+    )
+
+    entries: Dict[str, str] = {}
+    for d in search:
+        try:
+            names = sorted(os.listdir(d))
+        except OSError:
+            continue
+        for name in names:
+            entries.setdefault(name, os.path.abspath(os.path.join(d, name)))
+
+    uid = os.getuid() if hasattr(os, "getuid") else None
+    key = "\0".join(list(search) + [f"{n}={t}" for n, t in sorted(entries.items())])
+    digest = hashlib.sha256(key.encode("utf-8", "surrogateescape")).hexdigest()[:16]
+    final = os.path.join(local_temp_root(), f"{_MERGED_PREFIX}{uid or 0}_{digest}")
+    if _usable_merged_dir(final, uid):
+        return final
+
+    tmp = new_local_temp_dir(_MERGED_PREFIX + "build_")
+    try:
+        for name, target in entries.items():
+            os.symlink(target, os.path.join(tmp, name))
+        try:
+            os.rename(tmp, final)
+            return final
+        except OSError:
+            # Another process won the rename (reuse its dir), or the name is taken by a
+            # directory this user does not own (keep the private one just built).
+            if _usable_merged_dir(final, uid):
+                shutil.rmtree(tmp, ignore_errors=True)
+                return final
+            return tmp
+    except BaseException:
+        shutil.rmtree(tmp, ignore_errors=True)
+        raise
+
+
+def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
+    """The single directory to export as PROJ_DATA: `extra_proj_dirs` ahead of `base`.
+
+    rasterio hands PROJ_DATA to GDAL as ONE search path (no os.pathsep split) every time
+    a rasterio Env starts, so an os.pathsep-joined value is a directory that does not
+    exist: proj.db is lost for every thread that opens it afterwards ("Cannot find
+    proj.db") and the registered grids are not found either. A merged directory of
+    symlinks gives every reader of PROJ_DATA (rasterio, pyogrio, PROJ) one real path.
+
+    Returns None when `base` is unknown: exporting the grid dirs alone would hide the
+    proj.db PROJ finds on its own. Falls back to `base` if the merged dir cannot be built.
+    """
+    if not base:
+        warnings.warn(
+            "register_proj_grids: the PROJ data directory is unknown (PROJ_DATA/PROJ_LIB "
+            "unset and no bundled rasterio PROJ data found), so the registered grid "
+            "directories are not added to PROJ_DATA for the raster functions.",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+        return None
+    search = _search_order(base, extra_proj_dirs)
+    if len(search) == 1:
+        return search[0]
+    key = tuple(search)
+    with _PROJ_DATA_LOCK:
+        hit = _PROJ_DATA_DIRS.get(key)
+        if hit and (hit == base or os.path.isdir(hit)):
+            return hit
+        try:
+            path = _build_merged_proj_dir(search)
+        except OSError as e:
+            warnings.warn(
+                f"register_proj_grids: could not build a merged PROJ data directory "
+                f"({e}); the raster functions will not see the registered grid "
+                f"directories {list(extra_proj_dirs)}.",
+                RuntimeWarning,
+                stacklevel=3,
+            )
+            path = base  # cached too: per-row callers must not retry the build
+        _PROJ_DATA_DIRS[key] = path
+        if path != base:
+            _PROJ_DATA_BASES[path] = base
+        return path
 
 
 def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
@@ -89,12 +211,13 @@ def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:
 
 
 def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
-    """Idempotently set GDAL_DATA / PROJ_DATA, prepending custom grid dirs.
+    """Idempotently set GDAL_DATA / PROJ_DATA, adding custom grid dirs.
 
     extra_proj_dirs:
       - None  -> read the driver-side registry (correct only on the driver).
       - list  -> use exactly these (what worker UDF closures pass); [] = none.
-    Custom dirs are prepended ahead of the bundled PROJ data so user grids win.
+    Custom dirs are merged ahead of the base PROJ data (so user grids win) into ONE
+    directory exported as PROJ_DATA; see _proj_data_dir for why it is not a joined list.
     Registered dirs are also pushed into pyproj's search path so the light vector
     (pyproj) transform path finds them — the env var alone does not reach pyproj.
     """
@@ -108,14 +231,17 @@ def configure_gdal_env(extra_proj_dirs: Optional[Sequence[str]] = None) -> None:
 
         extra_proj_dirs = proj_grids.get_registered_dirs()
 
-    base = os.environ.get("PROJ_DATA") or os.environ.get("PROJ_LIB") or ""
+    current = os.environ.get("PROJ_DATA") or os.environ.get("PROJ_LIB") or ""
+    base = _PROJ_DATA_BASES.get(current, current)  # unwrap a merged dir set earlier
     if not base:
         p = _bundled_proj_data()
         if p:
             base = p
 
     if extra_proj_dirs:
-        os.environ["PROJ_DATA"] = _prepend_unique(base, extra_proj_dirs)
+        merged = _proj_data_dir(base, extra_proj_dirs)
+        if merged:
+            os.environ["PROJ_DATA"] = merged
         _register_pyproj_search_dirs(extra_proj_dirs)
     elif base and not os.environ.get("PROJ_DATA") and not os.environ.get("PROJ_LIB"):
         os.environ["PROJ_DATA"] = base

@@ -28,6 +28,9 @@ spec = importlib.util.spec_from_file_location("examples", examples_path)
 examples = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(examples)
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+import registered_readers  # noqa: E402
+
 # Sample data paths at runtime (path_config: minimal bundle or GBX_SAMPLE_DATA_ROOT)
 from path_config import (
     SAMPLE_DATA_BASE,
@@ -327,9 +330,14 @@ def test_available_readers_reference():
     
     # Check vector readers
     assert 'ogr' in readers['vector']
-    assert 'shapefile' in readers['vector']
-    assert 'geojson' in readers['vector']
-    assert 'gpkg' in readers['vector']
+    assert 'shapefile_ogr' in readers['vector']
+    assert 'geojson_ogr' in readers['vector']
+    assert 'gpkg_ogr' in readers['vector']
+
+    # Every key is a reader the JAR registers (no bare 'gpkg' / 'shapefile' aliases)
+    heavy = registered_readers.heavy_reader_names()
+    for category in readers.values():
+        assert set(category) <= heavy, sorted(set(category) - heavy)
 
 
 def test_common_options_reference():
@@ -799,9 +807,9 @@ def test_troubleshoot_missing_geojson_properties(spark, sample_nyc_boroughs):
 # ============================================================================
 
 def test_read_geopackage_basic(spark):
-    """Test basic GeoPackage reading (structure check)."""
-    # GeoPackage reader may not be available in all environments
-    assert callable(examples.read_geopackage_basic)
+    """Test basic GeoPackage reading with the registered ``gpkg_ogr`` reader."""
+    result = examples.read_geopackage_basic(spark, f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg")
+    assert result.count() >= 1
 
 
 def test_read_geopackage_with_layer_options(spark):

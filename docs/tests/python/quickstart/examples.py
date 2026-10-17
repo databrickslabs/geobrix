@@ -441,10 +441,10 @@ def read_geopackage(spark, path="/path/to/packages"):
     
     Example:
         >>> # Read GeoPackage files
-        >>> df = spark.read.format("gpkg").load("/path/to/packages")
+        >>> df = spark.read.format("gpkg_ogr").load("/path/to/packages")
         >>> df.show()
     """
-    return spark.read.format("gpkg").load(path)
+    return spark.read.format("gpkg_ogr").load(path)
 
 
 def read_geotiff_files_light(spark, path="/path/to/geotiff/files"):
@@ -696,7 +696,7 @@ def pattern_multi_format_reading(spark):
         >>> geotiffs = spark.read.format("gdal").load("/data/rasters")
         >>> shapefiles = spark.read.format("shapefile_ogr").load("/data/vectors")
         >>> geojson = spark.read.format("geojson_ogr").load("/data/json")
-        >>> geopackage = spark.read.format("gpkg").load("/data/packages")
+        >>> geopackage = spark.read.format("gpkg_ogr").load("/data/packages")
     
     See Also:
         - read_geotiff_files: Read raster data
@@ -708,7 +708,7 @@ def pattern_multi_format_reading(spark):
         "geotiffs": spark.read.format("gdal").load("/data/rasters"),
         "shapefiles": spark.read.format("shapefile_ogr").load("/data/vectors"),
         "geojson": spark.read.format("geojson_ogr").load("/data/json"),
-        "geopackage": spark.read.format("gpkg").load("/data/packages")
+        "geopackage": spark.read.format("gpkg_ogr").load("/data/packages")
     }
 
 

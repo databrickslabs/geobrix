@@ -37,7 +37,7 @@ writers instead:
   [Writers Overview](./overview)).
 - **Lightweight-only** — this single-file writer isn't implemented in the heavyweight tier;
   for output in **both** tiers, use the sharded [**GeoJSONL** writer](./geojsonl)
-  (`geojsonl_gbx` lightweight / `geojsonl` heavyweight).
+  (`geojsonl_gbx` lightweight / `geojsonl_ogr` heavyweight).
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded
   geometry are **not** accepted. Writing from a Databricks `GEOMETRY` / `GEOGRAPHY` column?

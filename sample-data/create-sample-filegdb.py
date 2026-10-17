@@ -248,7 +248,7 @@ def create_filegdb(input_dir: str, output_gdb: str, verbose: bool = True):
                 print(f"  - {fc}")
             print()
             print("Usage in GeoBrix:")
-            print(f'  boroughs = spark.read.format("filegdb") \\')
+            print(f'  boroughs = spark.read.format("file_gdb_ogr") \\')
             print(f'      .option("layerName", "NYC_Boroughs") \\')
             print(f'      .load("{output_path}")')
         else:

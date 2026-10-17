@@ -42,6 +42,7 @@ SAMPLE_NYC_TAXI = f"{SAMPLE_DATA_BASE}/nyc/taxi-zones/nyc_taxi_zones.geojson"
 SAMPLE_NYC_BOROUGHS = f"{SAMPLE_DATA_BASE}/nyc/boroughs/nyc_boroughs.geojson"
 SAMPLE_NYC_RASTER = f"{SAMPLE_DATA_BASE}/nyc/sentinel2/nyc_sentinel2_red.tif"
 SAMPLE_NYC_SUBWAY_SHP = f"{SAMPLE_DATA_BASE}/nyc/subway/nyc_subway.shp.zip"
+SAMPLE_NYC_GPKG = f"{SAMPLE_DATA_BASE}/nyc/geopackage/nyc_complete.gpkg"
 
 
 # Spark fixture provided by conftest.py
@@ -372,6 +373,20 @@ def test_read_shapefiles_returns_dataframe_with_geometry(spark, sample_shapefile
     count = result_df.count()
     assert count >= 1, f"Expected at least 1 borough, got {count}"
     assert count <= 10, f"Expected at most 10 boroughs, got {count}"
+
+
+def test_read_geopackage_uses_the_registered_gpkg_ogr_reader(spark):
+    """
+    The GeoPackage snippet reads through ``gpkg_ogr`` (there is no ``gpkg`` alias).
+
+    Validates:
+    - It reads the sample GeoPackage into a DataFrame with a geometry column
+      (an unregistered reader name fails with DATA_SOURCE_NOT_FOUND)
+    """
+    result_df = examples.read_geopackage(spark, SAMPLE_NYC_GPKG)
+
+    assert result_df.count() >= 1
+    assert "geom" in result_df.columns, result_df.columns
 
 
 # Test: Using Functions

@@ -33,7 +33,7 @@ across all lightweight vector readers and writers.
   format (see the [Writers Overview](./overview)).
 - **Lightweight-only** — this single-file writer isn't implemented in the
   heavyweight tier; for output in **both** tiers, use the sharded [**GeoJSONL**
-  writer](./geojsonl) (`geojsonl_gbx` / `geojsonl`).
+  writer](./geojsonl) (`geojsonl_gbx` / `geojsonl_ogr`).
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text),
   with the CRS in the companion `*_srid` / `*_srid_proj` columns. **EWKB**,
   **EWKT**, and GeoJSON-encoded geometry are **not** accepted. Writing from a

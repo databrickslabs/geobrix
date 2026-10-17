@@ -186,7 +186,7 @@ FROM features
 WHERE st_area(st_geomfromwkb(geom_0)) > 1000;"""
 
 SQL_READ_GEOPACKAGE = """-- Read GeoPackage (note: specify layer in Python/Scala first)
--- gpkg = spark.read.format("gpkg").option("layerName", "buildings").load("/data/city.gpkg")
+-- gpkg = spark.read.format("gpkg_ogr").option("layerName", "buildings").load("/data/city.gpkg")
 -- gpkg.createOrReplaceTempView("buildings")
 
 SELECT

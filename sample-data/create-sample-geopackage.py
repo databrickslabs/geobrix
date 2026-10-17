@@ -132,7 +132,7 @@ def create_geopackage(input_dir: str, output_file: str, verbose: bool = True):
                 print(f"  - {layer}")
             print()
             print("Usage in GeoBrix:")
-            print(f'  boroughs = spark.read.format("gpkg") \\')
+            print(f'  boroughs = spark.read.format("gpkg_ogr") \\')
             print(f'      .option("layerName", "boroughs") \\')
             print(f'      .load("{output_path}")')
         else:

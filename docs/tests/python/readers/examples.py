@@ -142,10 +142,10 @@ def read_geopackage(spark, path="/data/packages"):
     Example:
         ```python
         # Read GeoPackage
-        gpkg = spark.read.format("gpkg").load("/data/packages")
+        gpkg = spark.read.format("gpkg_ogr").load("/data/packages")
         ```
     """
-    gpkg = spark.read.format("gpkg").load(path)
+    gpkg = spark.read.format("gpkg_ogr").load(path)
     return gpkg
 
 
@@ -546,10 +546,10 @@ AVAILABLE_READERS = {
     },
     "vector": {
         "ogr": "Generic OGR vector reader for various formats",
-        "shapefile": "ESRI Shapefile format (.shp, .shz, .shp.zip)",
-        "geojson": "GeoJSON and GeoJSONSeq formats",
-        "gpkg": "OGC GeoPackage format (.gpkg)",
-        "file_gdb": "ESRI File Geodatabase format"
+        "shapefile_ogr": "ESRI Shapefile format (.shp, .shz, .shp.zip)",
+        "geojson_ogr": "GeoJSON and GeoJSONSeq formats",
+        "gpkg_ogr": "OGC GeoPackage format (.gpkg)",
+        "file_gdb_ogr": "ESRI File Geodatabase format"
     }
 }
 
@@ -2289,7 +2289,7 @@ JOIN polygons poly
 
 def read_geopackage_basic(spark, path="/path/to/file.gpkg"):
     """
-    Read GeoPackage file using gpkg reader.
+    Read GeoPackage file using the gpkg_ogr reader.
     
     GeoPackage is a modern SQLite-based geospatial format.
     
@@ -2300,7 +2300,7 @@ def read_geopackage_basic(spark, path="/path/to/file.gpkg"):
     Returns:
         DataFrame with vector features
     """
-    df = spark.read.format("gpkg").load(path)
+    df = spark.read.format("gpkg_ogr").load(path)
     df.show()
     return df
 
@@ -2312,12 +2312,12 @@ def read_geopackage_with_layer_options(spark, path="/path/to/data.gpkg"):
     GeoPackage files can contain multiple layers.
     """
     # Read specific layer by name
-    df = spark.read.format("gpkg") \
+    df = spark.read.format("gpkg_ogr") \
         .option("layerName", "buildings") \
         .load(path)
     
     # Read specific layer by index (0-based)
-    df = spark.read.format("gpkg") \
+    df = spark.read.format("gpkg_ogr") \
         .option("layerN", "1") \
         .load(path)
     
@@ -2330,7 +2330,7 @@ def read_single_layer_geopackage(spark, path="/data/city.gpkg"):
     
     Shows attribute access with shape column.
     """
-    buildings = spark.read.format("gpkg").load(path)
+    buildings = spark.read.format("gpkg_ogr").load(path)
     
     # Show attributes (note: geometry column may be named 'shape')
     buildings.select("building_id", "name", "height", "shape_srid").show()
@@ -2345,17 +2345,17 @@ def read_multiple_layers_from_geopackage(spark, path="/data/city.gpkg"):
     """
     # GeoPackage with multiple layers
     # Read buildings layer
-    buildings = spark.read.format("gpkg") \
+    buildings = spark.read.format("gpkg_ogr") \
         .option("layerName", "buildings") \
         .load(path)
     
     # Read roads layer
-    roads = spark.read.format("gpkg") \
+    roads = spark.read.format("gpkg_ogr") \
         .option("layerName", "roads") \
         .load(path)
     
     # Read parcels layer
-    parcels = spark.read.format("gpkg") \
+    parcels = spark.read.format("gpkg_ogr") \
         .option("layerName", "parcels") \
         .load(path)
     
@@ -2373,7 +2373,7 @@ def convert_geopackage_to_databricks_geometry(spark, path="/data/boundaries.gpkg
     Note: GeoPackage often uses 'shape' column instead of 'geom_0'.
     """
     # Read GeoPackage
-    df = spark.read.format("gpkg").load(path)
+    df = spark.read.format("gpkg_ogr").load(path)
     
     # Convert to GEOMETRY type (check actual column name: might be 'shape' or 'geom_0')
     geometry_df = df.select(
@@ -2400,14 +2400,14 @@ def read_geopackage_from_cloud(spark):
     Supports S3, Azure, and Unity Catalog Volumes.
     """
     # Read from S3
-    s3_gpkg = spark.read.format("gpkg").load("s3://bucket/path/data.gpkg")
+    s3_gpkg = spark.read.format("gpkg_ogr").load("s3://bucket/path/data.gpkg")
     
     # Read from Azure Blob Storage
-    azure_gpkg = spark.read.format("gpkg") \
+    azure_gpkg = spark.read.format("gpkg_ogr") \
         .load("wasbs://container@account.blob.core.windows.net/data.gpkg")
     
     # Read from Unity Catalog Volume
-    volume_gpkg = spark.read.format("gpkg") \
+    volume_gpkg = spark.read.format("gpkg_ogr") \
         .load("/Volumes/catalog/schema/volume/data.gpkg")
     
     s3_gpkg.show()
@@ -2426,7 +2426,7 @@ def read_multiple_geopackages(spark, path="/data/geopackages/*.gpkg"):
         pass
     
     # Read multiple GeoPackage files
-    all_data = spark.read.format("gpkg").load(path)
+    all_data = spark.read.format("gpkg_ogr").load(path)
     
     # Show count from each file
     with_source = all_data.withColumn("source", input_file_name())
@@ -2464,7 +2464,7 @@ def read_all_layers_from_geopackage(spark, path="/data/city.gpkg"):
     # Read each layer
     layers = {}
     for layer_name in layer_names:
-        layers[layer_name] = spark.read.format("gpkg") \
+        layers[layer_name] = spark.read.format("gpkg_ogr") \
             .option("layerName", layer_name) \
             .load(path)
     
@@ -2482,7 +2482,7 @@ def geopackage_to_delta_workflow(spark, source_path="/data/source.gpkg", target_
     Reads GeoPackage, converts to GEOMETRY, saves to Delta, and optimizes.
     """
     # Read GeoPackage layer
-    gpkg_df = spark.read.format("gpkg") \
+    gpkg_df = spark.read.format("gpkg_ogr") \
         .option("layerName", "features") \
         .load(source_path)
     
@@ -2516,12 +2516,12 @@ def multi_layer_processing_workflow(spark, path="/data/city.gpkg"):
         pass
     
     # Read multiple layers and combine
-    buildings = spark.read.format("gpkg") \
+    buildings = spark.read.format("gpkg_ogr") \
         .option("layerName", "buildings") \
         .load(path) \
         .withColumn("layer_type", lit("building"))
     
-    roads = spark.read.format("gpkg") \
+    roads = spark.read.format("gpkg_ogr") \
         .option("layerName", "roads") \
         .load(path) \
         .withColumn("layer_type", lit("road"))
@@ -2555,7 +2555,7 @@ def geopackage_spatial_analysis_workflow(spark, path="/data/city.gpkg"):
     Adds geometry and computes spatial attributes.
     """
     # Read GeoPackage
-    parcels = spark.read.format("gpkg") \
+    parcels = spark.read.format("gpkg_ogr") \
         .option("layerName", "parcels") \
         .load(path)
     
@@ -2585,7 +2585,7 @@ def read_specific_geopackage_layer(spark, path="/data/large.gpkg"):
     
     Don't read default layer if you need a specific one.
     """
-    df = spark.read.format("gpkg") \
+    df = spark.read.format("gpkg_ogr") \
         .option("layerName", "specific_layer") \
         .load(path)
     return df
@@ -2598,7 +2598,7 @@ def adjust_geopackage_chunk_size(spark, path="/data/data.gpkg"):
     Larger chunk size can improve performance.
     """
     # For large layers
-    df = spark.read.format("gpkg") \
+    df = spark.read.format("gpkg_ogr") \
         .option("layerName", "large_layer") \
         .option("chunkSize", "50000") \
         .load(path)
@@ -2612,7 +2612,7 @@ def cache_geopackage_layer(spark, path="/data/data.gpkg"):
     Useful for layers accessed multiple times.
     """
     # Cache layer data
-    layer_df = spark.read.format("gpkg") \
+    layer_df = spark.read.format("gpkg_ogr") \
         .option("layerName", "important_layer") \
         .load(path)
     
@@ -2627,7 +2627,7 @@ def troubleshoot_geopackage_layer_not_found(spark, path="/data/city.gpkg"):
     Check layer name spelling and case sensitivity.
     """
     # Check layer name spelling and case
-    df = spark.read.format("gpkg") \
+    df = spark.read.format("gpkg_ogr") \
         .option("layerName", "Buildings") \
         .load(path)
     return df
@@ -2640,7 +2640,7 @@ def troubleshoot_geopackage_geometry_column(spark, path="/data/file.gpkg"):
     GeoPackage may use 'shape', 'geom', or 'geometry'.
     """
     # GeoPackage may use 'shape', 'geom', or 'geometry' as column name
-    df = spark.read.format("gpkg").load(path)
+    df = spark.read.format("gpkg_ogr").load(path)
     # Check actual column names: df.columns
     
     # Adjust accordingly
@@ -2655,7 +2655,7 @@ def troubleshoot_large_geopackage_performance(spark, path="/data/large.gpkg"):
     Increase chunk size and repartition for better parallelism.
     """
     # Increase chunk size and repartition
-    df = spark.read.format("gpkg") \
+    df = spark.read.format("gpkg_ogr") \
         .option("chunkSize", "100000") \
         .load(path)
     
@@ -2666,7 +2666,7 @@ def troubleshoot_large_geopackage_performance(spark, path="/data/large.gpkg"):
 # SQL Constants for GeoPackage
 SQL_GEOPACKAGE_BASIC = """-- Read GeoPackage
 CREATE OR REPLACE TEMP VIEW features AS
-SELECT * FROM gpkg.`/path/to/file.gpkg`;
+SELECT * FROM gpkg_ogr.`/path/to/file.gpkg`;
 
 SELECT * FROM features;"""
 
@@ -2676,7 +2676,7 @@ CREATE OR REPLACE TEMP VIEW parcels AS
 SELECT
     *,
     st_geomfromwkb(shape) as geometry
-FROM gpkg.`/data/parcels.gpkg`;
+FROM gpkg_ogr.`/data/parcels.gpkg`;
 
 -- Query with spatial functions
 SELECT
@@ -2692,10 +2692,10 @@ SQL_GEOPACKAGE_MULTI_LAYER = """-- Read different layers from same GeoPackage
 -- Note: You need to specify layer in Python/Scala first, then register as views
 
 -- In Python first:
--- buildings = spark.read.format("gpkg").option("layerName", "buildings").load("/data/city.gpkg")
+-- buildings = spark.read.format("gpkg_ogr").option("layerName", "buildings").load("/data/city.gpkg")
 -- buildings.createOrReplaceTempView("buildings")
 -- 
--- roads = spark.read.format("gpkg").option("layerName", "roads").load("/data/city.gpkg")
+-- roads = spark.read.format("gpkg_ogr").option("layerName", "roads").load("/data/city.gpkg")
 -- roads.createOrReplaceTempView("roads")
 
 -- Then in SQL:

@@ -433,7 +433,7 @@ file** (the two-phase writer merges the partition fragments on the driver). Run 
 | Shapefile (single file) | 14M | 152.6 s | ~92k rows/s |
 | GeoPackage (single file) | 14M | 155.9 s | ~90k rows/s |
 | FileGDB (single file) | 14M | 368.3 s | ~38k rows/s |
-| **GeoJSONL (sharded)** — light `geojsonl_gbx` / heavy `geojsonl` | 14M | **16.4 s** / **16.1 s** (80 shards) | **~855k / ~870k rows/s** |
+| **GeoJSONL (sharded)** — light `geojsonl_gbx` / heavy `geojsonl_ogr` | 14M | **16.4 s** / **16.1 s** (80 shards) | **~855k / ~870k rows/s** |
 
 The single-file writers are **driver-bound** — the partition fragments are merged into one
 file on the driver (GeoJSON is slowest: text encoding; FileGDB next: native `osgeo`,

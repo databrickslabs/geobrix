@@ -197,3 +197,70 @@ def test_stage_cache_sizes_the_local_copy_not_the_source(monkeypatch, tmp_path):
     cache = lt.StageCache("gbx_test_stage_", copy)
     with cache.use("/Volumes/c/s/v/remote.gpkg") as p:
         assert os.path.getsize(p) == 7
+
+
+def _rewrite(path, nbytes, fill=b"y"):
+    """Replace a source in place with new bytes and a strictly newer mtime."""
+    st = os.stat(path)
+    Path(path).write_bytes(fill * nbytes)
+    os.utime(path, ns=(st.st_atime_ns, st.st_mtime_ns + 1_000_000_000))
+
+
+def _sig_cache(monkeypatch, tmp_path):
+    from databricks.labs.gbx.pyrx.core import local_temp as lt
+
+    monkeypatch.setenv("GBX_LOCAL_TEMP_DIR", str(tmp_path / "root"))
+    copies = []
+
+    def copy(src, dst):
+        copies.append(src)
+        shutil.copy(src, dst)
+
+    return lt.StageCache("gbx_test_stage_", copy, lt.source_signature), copies
+
+
+def test_stage_cache_restages_a_source_replaced_in_place(monkeypatch, tmp_path):
+    """A source replaced at the same path (new size/mtime) is copied again; the
+    superseded idle copy is removed."""
+    cache, copies = _sig_cache(monkeypatch, tmp_path)
+    a = _src(tmp_path, "a.gpkg", 10)
+    with cache.use(a) as p1:
+        pass
+    _rewrite(a, 4)
+    with cache.use(a) as p2:
+        assert Path(p2).read_bytes() == b"y" * 4
+    assert copies == [a, a] and p1 != p2 and not os.path.exists(p1)
+
+
+def test_stage_cache_reuses_copy_while_source_unchanged(monkeypatch, tmp_path):
+    cache, copies = _sig_cache(monkeypatch, tmp_path)
+    a = _src(tmp_path, "a.gpkg", 10)
+    with cache.use(a) as p1:
+        pass
+    with cache.use(a) as p2:
+        pass
+    assert copies == [a] and p1 == p2
+
+
+def test_stage_cache_keeps_a_superseded_copy_until_released(monkeypatch, tmp_path):
+    cache, _ = _sig_cache(monkeypatch, tmp_path)
+    a = _src(tmp_path, "a.gpkg", 10)
+    with cache.use(a) as old:
+        _rewrite(a, 4)
+        with cache.use(a) as new:
+            assert old != new and os.path.exists(old)
+            assert Path(new).read_bytes() == b"y" * 4
+        assert os.path.exists(old)  # still in use by the outer reader
+    assert not os.path.exists(old)
+
+
+def test_source_signature_tracks_directory_contents(tmp_path):
+    """A .gdb is a directory: a member rewritten in place changes the signature."""
+    from databricks.labs.gbx.pyrx.core.local_temp import source_signature
+
+    d = tmp_path / "x.gdb"
+    d.mkdir()
+    (d / "a0000001.gdbtable").write_bytes(b"x" * 10)
+    before = source_signature(str(d))
+    _rewrite(str(d / "a0000001.gdbtable"), 10)
+    assert source_signature(str(d)) != before

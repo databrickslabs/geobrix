@@ -17,7 +17,7 @@ import uuid
 import warnings
 from collections import OrderedDict
 from contextlib import contextmanager
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Hashable, List, Optional
 
 #: A write that has not committed within this window is presumed dead; its temp is
 #: reclaimable. The floor is the longest *static* phase of a live write -- the
@@ -129,6 +129,16 @@ def _pid_alive(pid: int) -> bool:
     return True
 
 
+def _remove_local(local: str) -> None:
+    if os.path.isdir(local):
+        shutil.rmtree(local, ignore_errors=True)
+    else:
+        try:
+            os.remove(local)
+        except OSError:
+            pass
+
+
 def _path_bytes(path: str) -> int:
     if os.path.isdir(path):
         return sum(
@@ -137,6 +147,21 @@ def _path_bytes(path: str) -> int:
             for f in fs
         )
     return os.path.getsize(path)
+
+
+def source_signature(path: str) -> tuple:
+    """``(size, mtime_ns)`` of a file, or of a directory's contents (total size,
+    newest mtime) -- changes when the source is replaced or rewritten in place."""
+    if os.path.isdir(path):
+        size, newest = 0, os.stat(path).st_mtime_ns
+        for d, _, fs in os.walk(path):
+            for f in fs:
+                st = os.stat(os.path.join(d, f))
+                size += st.st_size
+                newest = max(newest, st.st_mtime_ns)
+        return (size, newest)
+    st = os.stat(path)
+    return (st.st_size, st.st_mtime_ns)
 
 
 class StageCache:
@@ -156,35 +181,56 @@ class StageCache:
       the least recently used copies not currently in use are evicted until the
       cache fits. A copy in use is never evicted; a source larger than the cap is
       still staged, alone.
+
+    With a ``signature_fn`` (e.g. :func:`source_signature`, wrapped in the reader's
+    transient retry), each use compares the source's signature with the one taken
+    when it was staged; a source replaced at the same path is staged again, and the
+    superseded copy is removed once no reader is using it.
     """
 
-    def __init__(self, prefix: str, copy_fn: Callable[[str, str], None]):
+    def __init__(
+        self,
+        prefix: str,
+        copy_fn: Callable[[str, str], None],
+        signature_fn: Optional[Callable[[str], Hashable]] = None,
+    ):
         self._prefix = prefix
         self._copy = copy_fn
+        self._signature = signature_fn
         self._lock = threading.Lock()
         self._dir: Optional[str] = None
         self._entries: "OrderedDict[str, str]" = (
             OrderedDict()
         )  # source -> local (LRU order)
         self._sizes: Dict[str, int] = {}
-        self._in_use: Dict[str, int] = {}
+        self._sigs: Dict[str, Hashable] = {}
+        self._in_use: Dict[str, int] = {}  # local -> active users
+        self._retired: List[str] = []  # superseded copies still in use
 
     @contextmanager
     def use(self, source_path: str):
         """Yield a local copy of ``source_path``; it is not evicted while in use."""
+        sig = self._signature(source_path) if self._signature else None
         with self._lock:
-            local = self._get_or_stage(source_path)
-            self._in_use[source_path] = self._in_use.get(source_path, 0) + 1
+            local = self._get_or_stage(source_path, sig)
+            self._in_use[local] = self._in_use.get(local, 0) + 1
         try:
             yield local
         finally:
             with self._lock:
-                self._in_use[source_path] -= 1
+                self._in_use[local] -= 1
+                if not self._in_use[local]:
+                    del self._in_use[local]
+                    if local in self._retired:
+                        self._retired.remove(local)
+                        _remove_local(local)
 
-    def _get_or_stage(self, source_path: str) -> str:
+    def _get_or_stage(self, source_path: str, sig: Hashable = None) -> str:
         if source_path in self._entries:
-            self._entries.move_to_end(source_path)
-            return self._entries[source_path]
+            if self._sigs.get(source_path) == sig:
+                self._entries.move_to_end(source_path)
+                return self._entries[source_path]
+            self._supersede(source_path)
         cache_dir = self._ensure_dir()
         basename = os.path.basename(source_path.rstrip("/")) or "source"
         # uuid keeps two sources that share a basename apart on disk.
@@ -194,6 +240,7 @@ class StageCache:
         self._copy(source_path, local)
         self._entries[source_path] = local
         self._sizes[source_path] = _path_bytes(local)
+        self._sigs[source_path] = sig
         self._evict_to_cap(cache_dir, keep=source_path)
         return local
 
@@ -203,18 +250,23 @@ class StageCache:
         for src in list(self._entries):  # least recently used first
             if cached <= cap:
                 return
-            if src == keep or self._in_use.get(src, 0):
+            if src == keep or self._in_use.get(self._entries[src], 0):
                 continue
             local = self._entries.pop(src)
             cached -= self._sizes.pop(src)
-            self._in_use.pop(src, None)
-            if os.path.isdir(local):
-                shutil.rmtree(local, ignore_errors=True)
-            else:
-                try:
-                    os.remove(local)
-                except OSError:
-                    pass
+            self._sigs.pop(src, None)
+            _remove_local(local)
+
+    def _supersede(self, source_path: str) -> None:
+        """Drop the cached copy of a source that changed; defer the delete while
+        a reader is still using it."""
+        local = self._entries.pop(source_path)
+        self._sizes.pop(source_path, None)
+        self._sigs.pop(source_path, None)
+        if self._in_use.get(local, 0):
+            self._retired.append(local)
+        else:
+            _remove_local(local)
 
     def _ensure_dir(self) -> str:
         if self._dir is None:
@@ -251,4 +303,6 @@ class StageCache:
         self._dir = None
         self._entries.clear()
         self._sizes.clear()
+        self._sigs.clear()
         self._in_use.clear()
+        self._retired.clear()

@@ -286,6 +286,43 @@ def test_vector_staging_amortized_once_per_source(tmp_path, monkeypatch):
     assert copies == [p] and local_a == local_b
 
 
+def test_vector_reader_restages_a_source_replaced_in_place(tmp_path):
+    """Wiring: the reader's StageCache validates the source signature, so a GPKG
+    replaced at the same path is read fresh in the same worker process."""
+    import pyarrow as pa
+    import pyogrio
+    import shapely
+
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    p = str(tmp_path / "pts.gpkg")
+
+    def write(n, bump_s):
+        if os.path.exists(p):
+            os.remove(p)
+        tbl = pa.table({"geom": shapely.to_wkb(shapely.points(range(n), range(n)))})
+        pyogrio.write_arrow(
+            tbl,
+            p,
+            layer="pts",
+            driver="GPKG",
+            geometry_name="geom",
+            geometry_type="Point",
+            crs="EPSG:4326",
+        )
+        st = os.stat(p)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + bump_s * 1_000_000_000))
+
+    def count():
+        rdr = VectorGbxReader({"path": p, "driverName": "GPKG"})
+        return sum(b.num_rows for part in rdr.partitions() for b in rdr.read(part))
+
+    write(5, 0)
+    assert count() == 5
+    write(3, 5)
+    assert count() == 3
+
+
 def test_vector_access_invalid_option_raises():
     """An unrecognized 'access' option raises ValueError at __init__ time."""
     import tempfile

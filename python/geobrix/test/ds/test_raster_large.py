@@ -146,3 +146,36 @@ def test_materialized_reads_stage_through_shared_cache(tmp_path, monkeypatch):
     part = _TilePartition(file_path=str(p), window=(0, 0, 64, 64))
     assert len(list(r.read(part))) == 1 and len(list(r.read(part))) == 1
     assert copies == [str(p)]
+
+
+def test_materialized_reads_restage_a_source_replaced_in_place(tmp_path):
+    """Wiring: the shared StageCache validates the source signature, so a raster
+    replaced at the same path is decoded fresh in the same worker process."""
+    import os
+
+    from databricks.labs.gbx.ds.raster import _TilePartition
+
+    p = str(tmp_path / "s.tif")
+
+    def write(value, bump_s):
+        profile = dict(
+            driver="GTiff",
+            width=64,
+            height=64,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:4326",
+            transform=rasterio.Affine.identity(),
+        )
+        with rasterio.open(p, "w", **profile) as dst:
+            dst.write(np.full((1, 64, 64), value, dtype="uint8"))
+        st = os.stat(p)
+        os.utime(p, ns=(st.st_atime_ns, st.st_mtime_ns + bump_s * 1_000_000_000))
+
+    r = RasterGbxReader({"path": str(tmp_path), "virtualTiles": "false"})
+    part = _TilePartition(file_path=p, window=(0, 0, 64, 64))
+    write(1, 0)
+    first = list(r.read(part))
+    write(2, 5)
+    second = list(r.read(part))
+    assert len(first) == len(second) == 1 and first != second

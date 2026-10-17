@@ -67,7 +67,7 @@ def _batch_read(spark, fmt, path, **opts):
     return r.load(path)
 
 
-def test_resolve_format_aliases_and_case():
+def test_resolve_format_suffix_optional_any_case():
     assert (
         P.resolve_format("gpkg_gbx")
         is P.resolve_format("GPKG")

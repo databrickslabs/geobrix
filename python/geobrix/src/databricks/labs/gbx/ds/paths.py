@@ -656,9 +656,10 @@ def read_paths(
     ``df`` may be batch or streaming (e.g. Auto Loader ``binaryFile`` projected to
     ``path, modificationTime``). Paths are Volume (FUSE) paths; an object-store URI
     fails the read. The output schema comes from ``schema_path``: a file, or a
-    folder whose first file matching the format's :data:`DEFAULT_GLOBS` pattern is
-    opened (default: the first path of a batch ``df``; required for a stream). A
-    file deleted before it is read is skipped with a warning.
+    folder whose first file matching the :func:`default_glob` pattern of
+    ``format`` and ``options`` is opened (default: the first path of a batch
+    ``df``; required for a stream). A file deleted before it is read is skipped
+    with a warning.
 
     ``schema`` (internal) is an already resolved schema, as from
     :func:`path_schema` (lineage columns optional); given, no file is opened to

@@ -4,7 +4,7 @@ Runs Python documentation tests from `docs/tests/python/` using pytest **inside 
 
 **Isolation from SQL tests:** By default (full suite), the **api/** directory (SQL API Reference tests) is **excluded** so that `gbx:test:python-docs` and `gbx:test:sql-docs` stay isolated. To run SQL/API tests use `gbx:test:sql-docs` or `gbx:test:python-docs --suite api`.
 
-**Full suite takes 10+ minutes.** Use **targeted runs** (e.g. `--suite`, `--test`, `--path`) for day-to-day work and reserve the full suite for pre-commit or CI. See [Test organization and logging](.cursor/rules/test-organization-logging.mdc).
+**Full suite takes 10+ minutes.** Use **targeted runs** (e.g. `--suite`, `--test`, `--path`) for day-to-day work and reserve the full suite for pre-commit or CI. Log-path conventions (`--log`): [Adding or fixing a `gbx:*` command](../../.claude/rules/gbx-commands.md).
 
 ---
 
@@ -16,6 +16,7 @@ Runs Python documentation tests from `docs/tests/python/` using pytest **inside 
 | Quickstart only | `--suite quickstart` | ~1–2 min |
 | API tests only | `--suite api` | ~3–5 min |
 | Readers only | `--suite readers` | ~2–4 min |
+| Ingestion pages only | `--suite ingestion` | ~1–2 min |
 | RasterX only | `--suite rasterx` | ~1–2 min |
 | Advanced only | `--suite advanced` | ~1 min |
 | Setup only | `--suite setup` | ~0.5 min |
@@ -53,7 +54,7 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 **Targeting**
 
 - `--test <nodeid>` – Single test (e.g. `quickstart/test_examples.py::test_exec_sql_read_and_use_snippet`).
-- `--suite <name>` – Subset: `quickstart` | `api` | `readers` | `rasterx` | `advanced` | `setup`.
+- `--suite <name>` – Subset: `quickstart` | `api` | `readers` | `ingestion` | `rasterx` | `advanced` | `setup` | `integration`.
 - `--path <path>` – Directory or file relative to `docs/tests/python/` (overridden by `--test`/`--suite` if both given last).
 
 **Other**

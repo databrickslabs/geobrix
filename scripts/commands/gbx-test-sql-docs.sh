@@ -22,6 +22,8 @@ show_help() {
     echo -e "${CYAN}Common options:${NC}"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (filename → test-logs/<name>)"
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers (e.g. \"not slow\")"
+    echo -e "  ${GREEN}--timeout <seconds>${NC}     Per-test deadline (default 600): a test still running after this many seconds fails with a timeout"
+    echo -e "                           instead of blocking the run (tests marked @pytest.mark.deadline(n) keep their own limit)"
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
     echo -e "  ${GREEN}--skip-build${NC}           Skip Maven and Python build"
     echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
@@ -31,6 +33,7 @@ show_help() {
     echo -e "  ${YELLOW}gbx:test:sql-docs --skip-build${NC}"
     echo -e "  ${YELLOW}gbx:test:sql-docs --test api/test_sql_api.py --skip-build${NC}"
     echo -e "  ${YELLOW}gbx:test:sql-docs --log sql-docs.log${NC}"
+    echo -e "  ${YELLOW}gbx:test:sql-docs --skip-build --timeout 900${NC}   # slow run: 900 s per test"
     echo ""
 }
 
@@ -40,6 +43,8 @@ LOG_PATH=""
 MARKERS="-m 'not integration'"
 INCLUDE_INTEGRATION=false
 SKIP_BUILD=false
+# Per-test deadline for the container's pytest (GBX_DOC_TEST_TIMEOUT_S); empty = its default (600 s)
+DOC_TEST_TIMEOUT_S=""
 # Default: set sample data root so doc tests use minimal bundle (required for remote/CI)
 SET_SAMPLE_DATA_ROOT=true
 
@@ -59,6 +64,14 @@ while [[ $# -gt 0 ]]; do
             ;;
         --markers)
             MARKERS="-m '$2'"
+            shift 2
+            ;;
+        --timeout)
+            if ! [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+                echo -e "${RED}❌ --timeout needs a positive whole number of seconds (got: '${2:-}')${NC}"
+                exit 1
+            fi
+            DOC_TEST_TIMEOUT_S="$2"
             shift 2
             ;;
         --include-integration)
@@ -100,6 +113,12 @@ fi
 
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
 [ "$SKIP_BUILD" = true ] && echo -e "${CYAN}⏭️  Skipping build (--skip-build)${NC}"
+# The container's pytest reads the deadline from this variable (docs/tests/python/deadline_guard.py)
+DOCKER_ENV_ARGS=()
+if [ -n "$DOC_TEST_TIMEOUT_S" ]; then
+    DOCKER_ENV_ARGS=(-e "GBX_DOC_TEST_TIMEOUT_S=$DOC_TEST_TIMEOUT_S")
+    echo -e "${CYAN}⏱️  Per-test deadline: ${YELLOW}${DOC_TEST_TIMEOUT_S} s${NC}"
+fi
 echo ""
 
 # Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
@@ -127,7 +146,7 @@ echo '━━━━━━━━━━━━━━━━━━━━━━━━�
 python3 -m pytest $TEST_PATH -v $MARKERS --tb=short --color=yes
 "
 
-docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
+docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} geobrix-dev /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

@@ -13,13 +13,14 @@ show_help() {
     echo ""
     echo -e "${CYAN}Targeting (run pinpointed tests; full suite is 10+ min):${NC}"
     echo -e "  ${GREEN}--test <nodeid>${NC}        Single test: file::testname (e.g. quickstart/test_examples.py::test_exec_sql_read_and_use_snippet)"
-    echo -e "  ${GREEN}--suite <name>${NC}         Subset: quickstart|api|readers|rasterx|advanced|setup|integration (see table below)"
+    echo -e "  ${GREEN}--suite <name>${NC}         Subset: quickstart|api|readers|ingestion|rasterx|advanced|setup|integration (see table below)"
     echo -e "  ${GREEN}--path <path>${NC}          Directory or file (relative to docs/tests/python/)"
     echo ""
     echo -e "${CYAN}Suites (approx time with --skip-build):${NC}"
     echo -e "  ${YELLOW}quickstart${NC}  ~1–2 min   quickstart/"
     echo -e "  ${YELLOW}api${NC}          ~3–5 min   api/"
     echo -e "  ${YELLOW}readers${NC}      ~2–4 min   readers/"
+    echo -e "  ${YELLOW}ingestion${NC}    ~1–2 min   ingestion/"
     echo -e "  ${YELLOW}rasterx${NC}      ~1–2 min   rasterx/"
     echo -e "  ${YELLOW}advanced${NC}     ~1 min     advanced/"
     echo -e "  ${YELLOW}setup${NC}         ~0.5 min   setup/"
@@ -71,7 +72,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --suite)
             case "$2" in
-                quickstart|api|readers|rasterx|advanced|setup)
+                quickstart|api|readers|ingestion|rasterx|advanced|setup)
                     TEST_PATH="${BASE}/$2/"
                     ;;
                 integration)
@@ -81,7 +82,7 @@ while [[ $# -gt 0 ]]; do
                     ;;
                 *)
                     echo -e "${RED}❌ Invalid suite: $2${NC}"
-                    echo "Must be: quickstart, api, readers, rasterx, advanced, setup, integration"
+                    echo "Must be: quickstart, api, readers, ingestion, rasterx, advanced, setup, integration"
                     exit 1
                     ;;
             esac

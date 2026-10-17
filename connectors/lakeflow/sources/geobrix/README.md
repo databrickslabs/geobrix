@@ -2,8 +2,9 @@
 
 Ingest geospatial files from Unity Catalog Volumes into Unity Catalog tables with a
 Lakeflow Connect ingestion pipeline: vector data (GeoPackage, GeoJSON, GeoJSONSeq,
-Shapefile, File Geodatabase), LiDAR point clouds, EXIF photo metadata, and GeoTIFF
-rasters. Each run appends only files that are new since the last run.
+Shapefile, File Geodatabase), LiDAR point clouds, EXIF photo metadata, GeoTIFF and COG
+rasters, NetCDF files, and the tiles of PMTiles archives. Each run appends only files that
+are new since the last run.
 
 Use this connector for the **Add data** page and managed ingestion pipelines, with access
 governed by a Unity Catalog connection. For large or fast-growing folders, where Auto Loader
@@ -31,17 +32,22 @@ needs an explicit `format`.
 |---|---|
 | `vector` | any vector extension below (generic) |
 | `gpkg` | `.gpkg` |
-| `geojson` | `.geojson`, `.json` |
+| `geojson` | `.geojson` (for GeoJSON files named `.json`, set `format: geojson` and `file_glob: *.{geojson,json}`) |
 | `geojsonl` | `.geojsonl`, `.geojsons` |
 | `shapefile` | `.shp`, `.shz`, `.shp.zip` |
 | `file_gdb` | `.gdb`, `.gdb.zip` |
 | `lidar` | `.las`, `.laz` |
 | `exif` | `.jpg`, `.jpeg` |
-| `raster` | `.tif`, `.tiff` (another raster file, such as `.jp2`, is read only when `path` names that file and `format` is `raster`) |
+| `raster` | `.tif`, `.tiff` (another raster file, such as `.jp2`, is read only when `path` names that file, or `file_glob` names it, and `format` is `raster`) |
 | `gtiff` | `.tif`, `.tiff` |
+| `cog` | `.tif`, `.tiff`, read with the COG reader, which splits rasters into tile windows like `raster`. By extension a `.tif` is a `gtiff` table, so set `format: cog`. |
+| `netcdf` | `.nc`. The `mode` option picks what a file becomes: `raster` (default), one GeoTIFF tile per grid variable; `vector`, one point feature per observation or grid cell. |
+| `pmtiles` | `.pmtiles`: one row per tile stored in the archive (`z`, `x`, `y`, `bytes`; the reader's `source="archive"`). Rendering tiles from GeoTIFFs (`source="raster"`) is not a connector table; use `read_paths` or `declare_ingest`. |
 
 `format` names a reader the same way as `read_paths` does: the `_gbx` suffix is optional
 and case is ignored, so `gpkg`, `GPKG` and `gpkg_gbx` all select the `gpkg_gbx` reader.
+The lightweight `file` reader (it lists files) and the heavyweight JVM readers are not
+connector formats.
 
 ## Install
 
@@ -76,19 +82,31 @@ Grant `USE CONNECTION` to the people who build pipelines on it.
 
 | Option | Meaning |
 |---|---|
-| `path` | File or folder, relative to `root_path` or absolute. A folder is one dataset; its files are read recursively. Optional when the table name matches an entry under `root_path`. |
+| `path` | File or folder, relative to `root_path` or absolute. A folder is one dataset; its files are read recursively, except files and folders whose names start with `_` or `.`. Optional when the table name matches an entry under `root_path`. |
 | `format` | A reader from the table above. Default: inferred from the file extension. |
 | `layer` | Vector only. Layer name for multi-layer sources (default: the first layer) |
 | `where` | Vector only. OGR SQL filter, e.g. `borough = 'Queens'` |
 | `bbox` | Vector only. `xmin,ymin,xmax,ymax` in the layer's CRS |
 | `chunk_size` | Vector only. Features per Arrow batch (default 10000) |
-| `file_glob` | Basename filter for folder members, e.g. `zones_*.gpkg` |
-| `mode` | `lidar` and `exif` only. Reader mode: `points` (default) or `metadata` for LiDAR, `metadata` (default) or `qc` for EXIF |
+| `file_glob` | File-name pattern for folder members, e.g. `zones_*.gpkg`, in Spark `pathGlobFilter` syntax (see below) |
+| `mode` | `lidar`, `exif` and `netcdf` only. Reader mode: `points` (default) or `metadata` for LiDAR, `metadata` (default) or `qc` for EXIF, `raster` (default) or `vector` for NetCDF |
 
 "Vector" means the `vector`, `gpkg`, `geojson`, `geojsonl`, `shapefile` and `file_gdb`
 readers. `path`, `format` and `file_glob` apply to every table; setting one of the other
 options on a table whose reader does not take it fails with an error that names the option
-and the readers it applies to. Raster tables take none of them.
+and the readers it applies to. Raster (`raster`, `gtiff`, `cog`) and `pmtiles` tables take
+none of them.
+
+`file_glob` uses the same syntax as the `glob` of `declare_ingest`: a Spark
+`pathGlobFilter` (Hadoop glob) pattern matched against the file name. It is case-sensitive,
+`{a,b}` matches either alternative, and a backslash escapes a pattern character (`\*`
+matches a literal `*`). With `format` set, `file_glob` alone picks the folder's members, as
+`glob` replaces the default pattern; so for shapefiles end it in `.shp` (`zones_*.shp`),
+because `zones_*` would also pick each shapefile's `.dbf`, `.shx` and `.prj` sidecars.
+Without `format`, it narrows the files that have a recognized extension.
+
+Folders and files whose names start with `_` or `.` are ignored, as Spark's file sources
+ignore them: use `_archive/` or `_staging/` to keep files out of a table.
 
 The ingestion type is append-only, with `_source_mtime` as the cursor. For `scd2` and
 `replace` ingestion, see [Incremental ingestion with Auto Loader](https://databrickslabs.github.io/geobrix/docs/readers/incremental-ingestion); the managed Add

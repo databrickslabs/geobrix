@@ -68,12 +68,14 @@ def test_vector_tables_take_layer_where_bbox_and_chunk_size_but_not_mode(fmt):
         "bbox": "0,0,1,1",
         "chunkSize": "10",
     }
-    with pytest.raises(ValueError, match="`mode` applies to lidar and exif tables"):
+    with pytest.raises(
+        ValueError, match="`mode` applies to lidar, exif and netcdf tables"
+    ):
         c.reader_options({"mode": "points"}, fmt)
 
 
-@pytest.mark.parametrize("fmt", ["lidar", "exif"])
-def test_lidar_and_exif_tables_take_mode_only(fmt):
+@pytest.mark.parametrize("fmt", ["lidar", "exif", "netcdf"])
+def test_lidar_exif_and_netcdf_tables_take_mode_only(fmt):
     c = GeoBrixLakeflowConnect({})
     assert c.reader_options({"mode": "metadata", "file_glob": "*"}, fmt) == {
         "mode": "metadata"
@@ -84,11 +86,13 @@ def test_lidar_and_exif_tables_take_mode_only(fmt):
             c.reader_options({key: "1"}, fmt)
 
 
-@pytest.mark.parametrize("fmt", ["raster", "gtiff"])
-def test_raster_tables_take_none_of_the_reader_options(fmt):
+@pytest.mark.parametrize("fmt", ["raster", "gtiff", "cog", "pmtiles"])
+def test_raster_and_pmtiles_tables_take_none_of_the_reader_options(fmt):
     c = GeoBrixLakeflowConnect({})
     opts = {"path": "p", "format": fmt, "file_glob": "*.tif"}
-    assert c.reader_options(opts, fmt) == {}
+    # A PMTiles table reads the tiles stored in its .pmtiles archives.
+    fixed = {"source": "archive"} if fmt == "pmtiles" else {}
+    assert c.reader_options(opts, fmt) == fixed
     for key in ("layer", "where", "bbox", "chunk_size", "mode"):
         with pytest.raises(ValueError, match=f"`{key}` applies to"):
             c.reader_options({key: "1"}, fmt)
@@ -98,7 +102,7 @@ def test_an_option_for_another_reader_fails_the_table_schema(root):
     c = GeoBrixLakeflowConnect({"root_path": str(root)})
     opts = {"format": "geojson", "mode": "points"}
     with pytest.raises(
-        ValueError, match="`mode` applies to lidar and exif.*geojson_gbx"
+        ValueError, match="`mode` applies to lidar, exif and netcdf.*geojson_gbx"
     ):
         c.get_table_schema("nyc_boroughs", opts)
 
@@ -203,9 +207,17 @@ def test_discovery_infers_format_from_extension(tmp_path):
     assert format_for({}, [str(tmp_path / "a.jpg")]) == "exif_gbx"
     assert format_for({}, [str(tmp_path / "a.tif")]) == "gtiff_gbx"
     assert format_for({}, [str(tmp_path / "a.TIFF")]) == "gtiff_gbx"
+    assert format_for({}, [str(tmp_path / "a.nc")]) == "netcdf_gbx"
+    assert format_for({}, [str(tmp_path / "a.NC")]) == "netcdf_gbx"
+    assert format_for({}, [str(tmp_path / "a.pmtiles")]) == "pmtiles_gbx"
+    # A COG is a .tif: the COG reader is opted into with `format`.
+    assert format_for({"format": "cog"}, [str(tmp_path / "a.tif")]) == "cog_gbx"
+    # .json is not taken for GeoJSON; `format` says what it is.
     assert (
         format_for({"format": "geojson"}, [str(tmp_path / "a.json")]) == "geojson_gbx"
     )
+    with pytest.raises(ValueError, match="no recognized extensions"):
+        format_for({}, [str(tmp_path / "a.json")])
 
 
 def test_mixed_folder_without_format_errors(tmp_path):
@@ -302,7 +314,7 @@ def _jpeg(path):
 
 
 def _mixed_folder(tmp_path):
-    """tmp_path/mix: one .gpkg, one .geojson, one .las, one .jpg, one .tif."""
+    """tmp_path/mix: one .gpkg, .geojson, .las, .jpg, .tif, .nc and .pmtiles."""
     for src in (BOROUGHS, GPKG):
         if not src.exists():
             pytest.skip(f"sample data missing: {src}")
@@ -313,6 +325,8 @@ def _mixed_folder(tmp_path):
     _las(d / "c.las")
     _jpeg(d / "d.jpg")
     (d / "e.tif").write_bytes(b"")  # listed only, never opened
+    (d / "f.nc").write_bytes(b"")
+    (d / "g.pmtiles").write_bytes(b"")
     return d
 
 
@@ -335,6 +349,9 @@ def test_generic_vector_format_excludes_lidar_exif_and_raster(tmp_path):
     assert _members_of(c, {"format": "vector"}) == ["a.gpkg", "b.geojson"]
     assert _members_of(c, {"format": "raster"}) == ["e.tif"]
     assert _members_of(c, {"format": "gtiff"}) == ["e.tif"]
+    assert _members_of(c, {"format": "cog"}) == ["e.tif"]
+    assert _members_of(c, {"format": "netcdf"}) == ["f.nc"]
+    assert _members_of(c, {"format": "pmtiles"}) == ["g.pmtiles"]
     assert c.get_table_schema("mix", {"path": "mix", "format": "vector"}).fieldNames()
 
 
@@ -342,12 +359,29 @@ def test_single_kind_folder_infers_the_reader(tmp_path):
     d = tmp_path / "mix"
     d.mkdir()
     shutil.copy(BOROUGHS, d / "a.geojson")
+    shutil.copy(BOROUGHS, d / "b.json")  # not GeoJSON by extension
+    (d / "notes.txt").write_text("ignored")
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert _members_of(c, {}) == ["a.geojson"]
+    assert _members_of(c, {"format": "geojson"}) == ["a.geojson"]
+    assert "boroname" in c.get_table_schema("mix", {"path": "mix"}).fieldNames()
+    assert c._formats["mix"] == "geojson_gbx"
+
+
+def test_json_files_are_members_when_format_and_file_glob_say_so(tmp_path):
+    d = tmp_path / "mix"
+    d.mkdir()
+    shutil.copy(BOROUGHS, d / "a.geojson")
     shutil.copy(BOROUGHS, d / "b.json")
     (d / "notes.txt").write_text("ignored")
     c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
-    assert _members_of(c, {}) == ["a.geojson", "b.json"]
-    assert "boroname" in c.get_table_schema("mix", {"path": "mix"}).fieldNames()
-    assert c._formats["mix"] == "geojson_gbx"
+    # With `format`, `file_glob` picks the members by name.
+    opts = {"format": "geojson", "file_glob": "*.{geojson,json}"}
+    assert _members_of(c, opts) == ["a.geojson", "b.json"]
+    rows, _ = c.read_table("mix", {}, {"path": "mix", **opts})
+    assert len(list(rows)) == 10
+    # Without `format`, `file_glob` narrows the files with a recognized extension.
+    assert _members_of(c, {"file_glob": "*.{geojson,json}"}) == ["a.geojson"]
 
 
 def test_mixed_kinds_without_format_is_a_clear_error(tmp_path):
@@ -414,6 +448,127 @@ def test_exif_table_reads_through_the_connector(tmp_path):
     assert (rows[0]["camera_make"], rows[0]["camera_model"]) == ("GoPro", "HERO5")
     assert rows[0]["latitude"] == pytest.approx(37.75)
     assert rows[0]["_source_path"] == str(d / "a.jpg")
+
+
+def _nc_points(path, n):
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(str(path), "w") as ds:
+        ds.createDimension("obs", n)
+        lat = ds.createVariable("latitude", "f8", ("obs",))
+        lon = ds.createVariable("longitude", "f8", ("obs",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = np.linspace(50.0, 50.4, n)
+        lon[:] = np.linspace(10.0, 10.4, n)
+        ds.createVariable("ch4", "f4", ("obs",))[:] = np.arange(n, dtype="float32")
+
+
+def _nc_grid(path):
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(str(path), "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        v = ds.createVariable("ch4", "f4", ("lat", "lon"), fill_value=-9999.0)
+        v[:] = np.arange(12, dtype="float32").reshape(3, 4)
+
+
+def test_netcdf_tables_read_in_raster_and_vector_mode(tmp_path):
+    (tmp_path / "grids").mkdir()
+    _nc_grid(tmp_path / "grids" / "a.nc")
+    _nc_grid(tmp_path / "grids" / "b.NC")
+    (tmp_path / "obs").mkdir()
+    _nc_points(tmp_path / "obs" / "a.nc", 5)
+    _nc_points(tmp_path / "obs" / "b.nc", 3)
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert c.list_tables() == ["grids", "obs"]
+    # Raster mode (the default): one (source, tile) row per grid variable.
+    rows = list(c.read_table("grids", {}, {})[0])
+    assert c._formats["grids"] == "netcdf_gbx" and len(rows) == 2
+    assert {r["_source_path"] for r in rows} == {
+        str(tmp_path / "grids" / "a.nc"),
+        str(tmp_path / "grids" / "b.NC"),
+    }
+    assert all(r["tile"]["raster"] for r in rows)
+    # Vector mode: one point feature per observation.
+    rows = list(c.read_table("obs", {}, {"mode": "vector"})[0])
+    assert len(rows) == 8 and rows[0]["geom_0"] and "ch4" in rows[0]
+
+
+def _pmtiles_archive(path, tiles):
+    from pmtiles.tile import Compression, TileType, zxy_to_tileid
+
+    from databricks.labs.gbx.ds.tiles._header import build_header_info
+    from databricks.labs.gbx.ds.tiles.backend import PMTilesBackend
+    from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
+
+    info = build_header_info(
+        [(z, x, y) for z, x, y, _ in tiles],
+        SlippyGrid(),
+        TileType.PNG,
+        Compression.NONE,
+        {},
+    )
+    ordered = sorted((zxy_to_tileid(z, x, y), b) for z, x, y, b in tiles)
+    PMTilesBackend().assemble(iter(ordered), info, str(path))
+
+
+def test_pmtiles_table_reads_the_tiles_of_its_archives(tmp_path):
+    (tmp_path / "basemap").mkdir()
+    _pmtiles_archive(
+        tmp_path / "basemap" / "a.pmtiles",
+        [(14, 2615 + i, 6330, bytes([i]) * 8) for i in range(3)],
+    )
+    _pmtiles_archive(tmp_path / "basemap" / "b.pmtiles", [(3, 1, 2, b"tile")])
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert c.list_tables() == ["basemap"]
+    rows = list(c.read_table("basemap", {}, {})[0])
+    assert c._formats["basemap"] == "pmtiles_gbx"
+    got = {(r["z"], r["x"], r["y"]): bytes(r["bytes"]) for r in rows}
+    assert got == {
+        **{(14, 2615 + i, 6330): bytes([i]) * 8 for i in range(3)},
+        (3, 1, 2): b"tile",
+    }
+    assert {os.path.basename(r["_source_path"]) for r in rows} == {
+        "a.pmtiles",
+        "b.pmtiles",
+    }
+
+
+def test_cog_table_reads_tif_files_with_the_cog_reader(tmp_path):
+    import numpy as np
+    import rasterio
+
+    (tmp_path / "cogs").mkdir()
+    tif = str(tmp_path / "cogs" / "a.tif")
+    profile = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=rasterio.Affine(1, 0, 0, 0, -1, 8),
+    )
+    with rasterio.open(tif, "w", **profile) as dst:
+        dst.write(np.ones((1, 8, 8), dtype="uint8"))
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    rows = list(c.read_table("cogs", {}, {"format": "cog"})[0])
+    assert c._formats["cogs"] == "cog_gbx"
+    assert len(rows) == 1 and rows[0]["tile"]["path"] == tif
+    # By extension the same file is a GeoTIFF table.
+    by_ext = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    by_ext.get_table_schema("cogs", {})
+    assert by_ext._formats["cogs"] == "gtiff_gbx"
 
 
 # ---------------------------------------------------------------- offsets
@@ -488,6 +643,53 @@ def test_file_glob_filters_members(root):
         "t", {"path": "nyc_boroughs", "format": "geojson", "file_glob": "part_[ab]*"}
     )
     assert _paths(parts) == ["part_a.geojson", "part_b.geojson"]
+
+
+@pytest.mark.parametrize("fmt", [{"format": "geojson"}, {}])
+def test_file_glob_is_a_hadoop_glob_like_declare_ingest(root, fmt):
+    """`file_glob` has declare_ingest's `glob` syntax (Spark pathGlobFilter):
+    {a,b} groups, case-sensitive, backslash escapes."""
+    d = _three_files(root)
+    shutil.copy(BOROUGHS, d / "part_D.GEOJSON")
+    c = GeoBrixLakeflowConnect({"root_path": str(root)})
+
+    def members(glob):
+        opts = {"path": "nyc_boroughs", "file_glob": glob, **fmt}
+        return _paths(c.get_partitions("t", opts))
+
+    assert members("part_{a,c}.geojson") == ["part_a.geojson", "part_c.geojson"]
+    assert members("part_{a,{b,D}}.*") == [
+        "part_D.GEOJSON",
+        "part_a.geojson",
+        "part_b.geojson",
+    ]
+    # Case-sensitive, as in Spark: upper case matches only the upper-case file.
+    assert members("PART_*") == []
+    assert members("*.GEOJSON") == ["part_D.GEOJSON"]
+    assert members(r"part\_a.geojson") == ["part_a.geojson"]
+
+
+def test_underscore_and_dot_folders_are_not_members(root):
+    """Folders (and files) whose names start with _ or . are skipped when a table
+    folder is listed, as Spark's file sources do: _archive/ and .tmp/ files are
+    neither members nor the schema file."""
+    d = root / "nyc_boroughs"
+    (d / "_archive").mkdir()
+    (d / ".tmp").mkdir()
+    (d / "sub" / "_old").mkdir(parents=True)
+    drift = json.loads(BOROUGHS.read_text())
+    for f in drift["features"]:
+        f["properties"]["archived"] = "x"
+    for p in (d / "_archive" / "a.geojson", d / ".tmp" / "a.geojson"):
+        p.write_text(json.dumps(drift))
+    (d / "sub" / "_old" / "c.geojson").write_text(json.dumps(drift))
+    shutil.copy(BOROUGHS, d / "sub" / "b.geojson")
+    shutil.copy(BOROUGHS, d / "_skip.geojson")
+    c = GeoBrixLakeflowConnect({"root_path": str(root)})
+    opts = {"path": "nyc_boroughs"}
+    members = c._members(c._resolve_path("t", opts), opts)
+    assert members == [str(d / "part_a.geojson"), str(d / "sub" / "b.geojson")]
+    assert "archived" not in c.get_table_schema("nyc_boroughs", opts).fieldNames()
 
 
 # ---------------------------------------------------------------- dict contract

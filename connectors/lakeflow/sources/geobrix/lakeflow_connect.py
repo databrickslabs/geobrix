@@ -1,12 +1,12 @@
 """GeoBrix connector: the LakeflowConnect side (discovery, schema, offsets).
 
 Files are read by the shared ``ds.paths`` core, so any supported light reader
-(vector, LiDAR, EXIF, raster) works per table. The bulk data path is Arrow-native (see
-``datasource.py``); the dict-row methods here (``read_table`` / ``read_partition``)
-exist so the framework contract is complete, and reuse the same per-file Arrow reads.
+(vector, LiDAR, EXIF, raster, NetCDF, PMTiles) works per table. The bulk data path
+is Arrow-native (see ``datasource.py``); the dict-row methods here (``read_table`` /
+``read_partition``) exist so the framework contract is complete, and reuse the same
+per-file Arrow reads.
 """
 
-import fnmatch
 import os
 import re
 from typing import Iterator, Optional, Sequence
@@ -22,13 +22,16 @@ from databricks.labs.gbx.ds._listing import list_files
 from databricks.labs.gbx.ds.paths import (
     SOURCE_MTIME_COL,
     SUPPORTED_FORMATS,
+    glob_match,
     iter_path_batches,
     path_schema,
     resolve_format,
 )
 
 # Discovery: extension -> reader (longest suffix first, so ".gdb.zip" beats ".zip").
-# Sidecars such as .shx/.dbf/.prj are never members.
+# Sidecars such as .shx/.dbf/.prj are never members. A .json file is not taken for
+# GeoJSON (a .json dataset sets `format: geojson` and a `file_glob`), and a COG is a
+# .tif, read with the COG reader when `format: cog` is set.
 EXT_TO_FORMAT = {
     ".gdb.zip": "file_gdb_gbx",
     ".gdb": "file_gdb_gbx",
@@ -36,7 +39,6 @@ EXT_TO_FORMAT = {
     ".geojsonl": "geojsonl_gbx",
     ".geojsons": "geojsonl_gbx",
     ".geojson": "geojson_gbx",
-    ".json": "geojson_gbx",
     ".shp.zip": "shapefile_gbx",
     ".shp": "shapefile_gbx",
     ".shz": "shapefile_gbx",
@@ -46,13 +48,16 @@ EXT_TO_FORMAT = {
     ".jpeg": "exif_gbx",
     ".tif": "gtiff_gbx",
     ".tiff": "gtiff_gbx",
+    ".nc": "netcdf_gbx",
+    ".pmtiles": "pmtiles_gbx",
 }
 _ALL_EXTS = tuple(sorted(EXT_TO_FORMAT, key=len, reverse=True))
 
-# The generic `raster` reader accepts every raster extension; the generic `vector`
-# reader accepts every vector extension (not LiDAR / EXIF / raster).
-_RASTER = {"raster_gbx", "gtiff_gbx"}
-_NON_VECTOR = {"lidar_gbx", "exif_gbx"} | _RASTER
+# The raster readers (`raster`, `gtiff`, `cog`) accept every raster extension; the
+# generic `vector` reader accepts every vector extension (not LiDAR / EXIF / raster
+# / NetCDF / PMTiles).
+_RASTER = {"raster_gbx", "gtiff_gbx", "cog_gbx"}
+_NON_VECTOR = {"lidar_gbx", "exif_gbx", "netcdf_gbx", "pmtiles_gbx"} | _RASTER
 
 _VECTOR = (
     "vector_gbx",
@@ -72,8 +77,13 @@ _READER_OPTIONS = {
     "where": ("where", _VECTOR),
     "bbox": ("bbox", _VECTOR),
     "chunk_size": ("chunkSize", _VECTOR),
-    "mode": ("mode", ("lidar_gbx", "exif_gbx")),
+    "mode": ("mode", ("lidar_gbx", "exif_gbx", "netcdf_gbx")),
 }
+
+# Reader options a table always gets. A PMTiles table reads the tiles stored in
+# its .pmtiles archives (rendering tiles from GeoTIFFs is a read_paths /
+# declare_ingest use, with `source="raster"`).
+_FIXED_READER_OPTIONS = {"pmtiles_gbx": {"source": "archive"}}
 
 
 def _short(name: str) -> str:
@@ -167,6 +177,7 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
     discovery and confines every table path to it).
     Table options: ``path`` (file or folder; relative to ``root_path``),
     ``format``, ``layer``, ``where``, ``bbox``, ``chunk_size``, ``file_glob``, ``mode``.
+    Files and folders whose names start with ``_`` or ``.`` are never members.
     """
 
     def __init__(self, options: dict[str, str]) -> None:
@@ -326,7 +337,7 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
         named reader sets its own driver). An option that does not apply to
         ``fmt`` is an error naming the readers it applies to."""
         fmt = resolve_format(fmt).name()
-        out = {}
+        out = dict(_FIXED_READER_OPTIONS.get(fmt, {}))
         for key, (name, formats) in _READER_OPTIONS.items():
             value = table_options.get(key)
             if value is None or value == "":
@@ -381,13 +392,27 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
 
     def _members(self, path: str, table_options: dict[str, str]) -> list[str]:
         """Data files for a table path: a file (or a .gdb folder) is one member; a
-        plain folder is listed recursively, keeping the table format's files (or any
-        recognized file when no `format` is set)."""
+        plain folder is listed recursively (skipping files and folders whose names
+        start with ``_`` or ``.``, as Spark does), keeping the table format's files
+        (or any recognized file when no `format` is set).
+
+        `file_glob` is a Spark ``pathGlobFilter`` (Hadoop glob) pattern on the file
+        name, as for ``declare_ingest``. With `format` set it alone picks the
+        members, replacing the extension filter (so `format: geojson` with
+        ``*.{geojson,json}`` reads .json files); without `format` it narrows the
+        recognized files."""
         if os.path.isfile(path) or path.lower().rstrip("/").endswith(".gdb"):
             return [path]
         if not os.path.isdir(path):
             raise ValueError(f"Table path {path!r} does not exist.")
         want = format_for(table_options, []) if table_options.get("format") else None
+        files = list_files(path, recursive=True, raise_on_empty=False, skip_hidden=True)
+        glob = table_options.get("file_glob")
+        if glob:
+            named = [f for f in files if glob_match(os.path.basename(f), glob)]
+            if want is not None:
+                return sorted(named)
+            files = named
 
         def _wanted(f: str) -> bool:
             kind = _format_of(f)
@@ -397,19 +422,11 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
                 return True
             if want == "vector_gbx":
                 return kind not in _NON_VECTOR
-            if want == "raster_gbx":
+            if want in _RASTER:
                 return kind in _RASTER
             return kind == want
 
-        files = [
-            f
-            for f in list_files(path, recursive=True, raise_on_empty=False)
-            if _wanted(f) and not os.path.basename(f).startswith((".", "_"))
-        ]
-        glob = table_options.get("file_glob")
-        if glob:
-            files = [f for f in files if fnmatch.fnmatch(os.path.basename(f), glob)]
-        return sorted(files)
+        return sorted(f for f in files if _wanted(f))
 
     def _stat_members(self, table_name: str, table_options: dict[str, str]) -> list:
         """(path, mtime_ns) per member. A file removed between listing and stat is

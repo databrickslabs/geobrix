@@ -8,8 +8,8 @@
 # ============================================================================
 display_name: GeoBrix
 # Reads geospatial files on Unity Catalog Volumes: vector (GeoPackage, GeoJSON,
-# GeoJSONSeq, Shapefile, File Geodatabase), LiDAR (LAS/LAZ), EXIF (JPEG), and
-# raster (GeoTIFF).
+# GeoJSONSeq, Shapefile, File Geodatabase), LiDAR (LAS/LAZ), EXIF (JPEG), raster
+# (GeoTIFF, COG), NetCDF, and PMTiles archives.
 connection:
   parameters:
     - name: root_path
@@ -29,10 +29,10 @@ connection:
 #   format                       every table; a reader name with the _gbx suffix
 #                                optional, any case: vector, gpkg, geojson,
 #                                geojsonl, shapefile, file_gdb, lidar, exif,
-#                                raster, gtiff
+#                                raster, gtiff, cog, netcdf, pmtiles
 #   layer, where, bbox,          vector, gpkg, geojson, geojsonl, shapefile and
 #   chunk_size                   file_gdb tables only
-#   mode                         lidar and exif tables only
+#   mode                         lidar, exif and netcdf tables only
 #
 # An option set on a table whose reader does not take it fails the table.
 # ============================================================================

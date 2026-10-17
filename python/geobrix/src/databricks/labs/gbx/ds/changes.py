@@ -241,15 +241,16 @@ def _stored_hashes(
     return out
 
 
-def _current_view_sql(target: str, versions: str) -> str:
-    """``<target>_current``: each file's rows of its latest READABLE version, the
-    newest version (by ``__START_AT``) whose content has rows in ``target``. A
-    delivery that could not be read (set aside in ``<t>_bad_records``, or never
-    written) is still the file's latest version in ``<t>_file_versions``, but it
-    does not hide the last content that was read."""
+def _current_view_query(target: str, versions: str) -> str:
+    """The query of ``<target>_current``: each file's rows of its latest READABLE
+    version, the newest version (by ``__START_AT``) whose content has rows in
+    ``target``. A delivery that could not be read (set aside in
+    ``<t>_bad_records``, or never written) is still the file's latest version in
+    ``<t>_file_versions``, but it does not hide the last content that was read.
+    A plain view: it scans the rows table (filter by ``_source_path`` for a
+    fast lookup of one file)."""
     p, h, t = SOURCE_PATH_COL, SOURCE_HASH_COL, _quote(target)
     return (
-        f"CREATE VIEW IF NOT EXISTS {_suffixed(target, '_current')} AS "
         f"WITH readable AS (SELECT v.{p}, v.{h}, v.__START_AT FROM {_quote(versions)} v "
         f"LEFT SEMI JOIN (SELECT DISTINCT {p}, {h} FROM {t}) s "
         f"ON v.{p} = s.{p} AND v.{h} = s.{h}), "
@@ -259,13 +260,41 @@ def _current_view_sql(target: str, versions: str) -> str:
     )
 
 
-def _ensure_current_view(spark, target: str, versions: str) -> None:
-    """Create ``<target>_current`` if missing. Best effort: the versions table may not
-    exist yet (the flows run in parallel); the next batch retries."""
-    if _table_exists(spark, _suffixed(target, "_current")):
-        return
+def _current_view_sql(target: str, versions: str, replace: bool = False) -> str:
+    """DDL of ``<target>_current`` (see :func:`_current_view_query`)."""
+    verb = "CREATE OR REPLACE VIEW" if replace else "CREATE VIEW IF NOT EXISTS"
+    return (
+        f"{verb} {_suffixed(target, '_current')} AS "
+        f"{_current_view_query(target, versions)}"
+    )
+
+
+def _view_text(spark, view: str) -> Optional[str]:
+    """The query a view was created with, or None when it cannot be read."""
     try:
-        spark.sql(_current_view_sql(target, versions))
+        for r in spark.sql(f"DESCRIBE TABLE EXTENDED {view}").collect():
+            if r[0] == "View Text":
+                return r[1]
+    except Exception:  # noqa: BLE001 - best effort: leave the view as it is
+        return None
+    return None
+
+
+def _ensure_current_view(spark, target: str, versions: str) -> None:
+    """Create ``<target>_current`` if missing, or replace it when it was created
+    with another definition (an earlier GeoBrix version). Best effort: the
+    versions table may not exist yet (the flows run in parallel); the next batch
+    retries."""
+    view = _suffixed(target, "_current")
+    replace = False
+    if _table_exists(spark, view):
+        stored = _view_text(spark, view)
+        want = _current_view_query(target, versions)
+        if stored is None or " ".join(stored.split()) == " ".join(want.split()):
+            return
+        replace = True
+    try:
+        spark.sql(_current_view_sql(target, versions, replace=replace))
     except Exception as e:  # noqa: BLE001 - narrowed by the message check
         if "TABLE_OR_VIEW_NOT_FOUND" not in str(e):
             raise
@@ -299,13 +328,27 @@ def _bad_records_table(target: str) -> str:
     return _suffixed(target, "_bad_records")
 
 
-def _new_batch_scratch(scratch_dir: str) -> str:
-    """A fresh hidden folder for one micro-batch, ``<scratch_dir>/.gbx_scratch/
-    <uuid>`` (stale ones of killed batches removed first), created here: the
-    batch stages its rows and its bad records in it."""
+# A micro-batch's staging folder older than this was left by a killed batch.
+# Generous: a batch must never lose its staging folder while it runs.
+_STAGING_TTL_S = 24 * 3600
+
+
+def _staging_namespace(target: str) -> str:
+    """One namespace per rows table (quoting does not matter): sinks that share
+    a scratch_dir never touch each other's batches."""
+    return _scratch.namespace(".".join(_split_ident(target)))
+
+
+def _new_batch_scratch(scratch_dir: str, target: str) -> str:
+    """A fresh hidden folder for one micro-batch of ``target``,
+    ``<scratch_dir>/.gbx_scratch/<target namespace>/<uuid>``, created here: the
+    batch stages its rows and its bad records in it. This target's batch folders
+    older than :data:`_STAGING_TTL_S` (killed batches) are removed first; other
+    targets' are never touched."""
     parent = _fuse_path(scratch_dir, "declare_ingest")
-    _scratch.gc_stale_scratch(parent)
-    scratch = _scratch.new_scratch_dir(parent)
+    ns = _staging_namespace(target)
+    _scratch.gc_stale_scratch(parent, ttl_seconds=_STAGING_TTL_S, namespace=ns)
+    scratch = _scratch.new_scratch_dir(parent, namespace=ns)
     try:
         os.makedirs(scratch)
     except OSError as e:
@@ -333,14 +376,18 @@ def _bad_records_df(spark, scratch: str, files):
         n for n in names if n.endswith(".parquet") and not n.startswith((".", "_"))
     ]:
         return None
-    bad = spark.read.schema(_quarantine.FRAGMENT_DDL).parquet(scratch).dropDuplicates()
+    bad = spark.read.schema(_quarantine.FRAGMENT_DDL).parquet(scratch)
     keyed = files.select(
         F.col("path").alias(SOURCE_PATH_COL),
         F.col("modificationTime").alias(SOURCE_MTIME_COL),
         SOURCE_HASH_COL,
         F.col(SOURCE_SIZE_COL),
     )
-    joined = bad.join(F.broadcast(keyed), [SOURCE_PATH_COL, SOURCE_MTIME_COL], "left")
+    # One record per key: two attempts can describe one record differently (the
+    # rows read before an error, the warnings seen).
+    joined = bad.join(
+        F.broadcast(keyed), [SOURCE_PATH_COL, SOURCE_MTIME_COL], "left"
+    ).dropDuplicates(list(_BAD_RECORD_KEY))
     return joined.select(
         *[
             F.current_timestamp().alias(c) if c == "quarantined_at" else F.col(c)
@@ -417,6 +464,20 @@ def _new_bad_records(bad, existing):
     )
 
 
+def _ensure_target(spark, target: str, schema) -> None:
+    """Create the rows table, empty, with ``schema`` (nullability included)
+    when it does not exist yet; clustered by ``_source_path`` like
+    :func:`_write_rows` creates it."""
+    if _table_exists(spark, target):
+        return
+    (
+        spark.createDataFrame([], schema)
+        .write.mode("append")
+        .clusterBy(SOURCE_PATH_COL)
+        .saveAsTable(_quote(target))
+    )
+
+
 def _append_bad_records(bad_df, table: str) -> None:
     """Append to ``<target>_bad_records`` (a Delta table, created on first use)."""
     bad_df.write.mode("append").saveAsTable(_quote(table))
@@ -462,6 +523,9 @@ def _write_quarantined(spark, rows, files, target, mode, paths, versions, scratc
     ``replaceWhere``."""
     staged_dir = os.path.join(scratch, "rows")
     rows.write.mode("overwrite").parquet(staged_dir)
+    # Parquet reads back all-nullable: create the table from the reader schema
+    # first, so its NOT NULL columns match a fail-mode table.
+    _ensure_target(spark, target, rows.schema)
     staged = spark.read.schema(rows.schema).parquet(staged_dir)
     bad = _bad_records_df(spark, os.path.join(scratch, "bad"), files)
     kept: Set[str] = set()
@@ -593,7 +657,9 @@ def write_batch(
         SOURCE_HASH_COL,
         SOURCE_SIZE_COL,
     )
-    scratch = _new_batch_scratch(scratch_dir) if on_error == "quarantine" else None
+    scratch = (
+        _new_batch_scratch(scratch_dir, target) if on_error == "quarantine" else None
+    )
     try:
         rows = read_paths(
             files,
@@ -650,7 +716,15 @@ def _ingest_setup(
     if schema_path:
         _fuse_path(schema_path, "declare_ingest")
     if scratch_dir:
-        _fuse_path(scratch_dir, "declare_ingest")
+        local = _fuse_path(scratch_dir, "declare_ingest")
+        if not local.startswith("/Volumes/"):
+            # Executors write there and the driver reads it back: a node-local
+            # folder would lose every fragment written on another node.
+            raise ValueError(
+                f"scratch_dir must be a Unity Catalog Volume path (/Volumes/...) "
+                f"that every node shares; got {scratch_dir!r}."
+            )
+        scratch_dir = local
     short = parts[-1]
 
     def qualified(name: str) -> str:

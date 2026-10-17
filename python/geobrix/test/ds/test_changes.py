@@ -327,10 +327,11 @@ def test_write_batch_forwards_num_partitions(spark, tmp_path, delta_mocks, monke
 class _FakeSpark:
     """Just enough session for the table-exists probe and view DDL."""
 
-    def __init__(self, existing=(), sql_error=None):
+    def __init__(self, existing=(), sql_error=None, view_text=None):
         self.existing = set(existing)
         self.sql_error = sql_error
         self.sql_calls = []
+        self.view_text = view_text or {}  # view name -> stored query text
 
     def table(self, name):
         if name not in self.existing:
@@ -341,6 +342,12 @@ class _FakeSpark:
 
     def sql(self, stmt):
         self.sql_calls.append(stmt)
+        if stmt.startswith("DESCRIBE TABLE EXTENDED "):
+            name = stmt[len("DESCRIBE TABLE EXTENDED ") :]
+            rows = (
+                [("View Text", self.view_text[name])] if name in self.view_text else []
+            )
+            return types.SimpleNamespace(collect=lambda: rows)
         if self.sql_error:
             raise self.sql_error
 
@@ -408,9 +415,22 @@ def test_ensure_current_view_creates_when_missing():
 
 
 def test_ensure_current_view_noop_when_present():
-    sp = _FakeSpark(existing={"`my-cat`.`s`.`t_current`"})
+    view = "`my-cat`.`s`.`t_current`"
+    query = C._current_view_query("my-cat.s.t", "my-cat.s.t_file_versions")
+    sp = _FakeSpark(existing={view}, view_text={view: query})
     C._ensure_current_view(sp, "my-cat.s.t", "my-cat.s.t_file_versions")
-    assert sp.sql_calls == []
+    assert [c for c in sp.sql_calls if c.startswith("CREATE")] == []
+
+
+def test_ensure_current_view_replaces_an_older_definition():
+    """A view created by an earlier version (open version only) is replaced, so
+    an existing pipeline gets the latest-readable-version semantics."""
+    view = "`my-cat`.`s`.`t_current`"
+    old = "SELECT r.* FROM `my-cat`.`s`.`t` r JOIN v WHERE v.__END_AT IS NULL"
+    sp = _FakeSpark(existing={view}, view_text={view: old})
+    C._ensure_current_view(sp, "my-cat.s.t", "my-cat.s.t_file_versions")
+    (create,) = [c for c in sp.sql_calls if c.startswith("CREATE")]
+    assert create.startswith(f"CREATE OR REPLACE VIEW {view} AS WITH readable AS")
 
 
 def test_ensure_current_view_tolerates_missing_versions_table():
@@ -886,6 +906,7 @@ class _Tables:
         self.rows = {}  # path -> set of stored hashes
         self.row_writes = []  # (mode, paths, row count) per rows write
         self.bad = []  # appended bad records (dicts)
+        self.created = []  # schemas the rows table was created with
         self.fail_rows = self.fail_bad = 0
 
     def stored_hashes(self, spark, target, paths, mode):
@@ -936,6 +957,12 @@ def tables(spark, monkeypatch):
     monkeypatch.setattr(C, "_existing_bad_records", t.existing_bad)
     monkeypatch.setattr(C, "_append_bad_records", t.append_bad)
     monkeypatch.setattr(C, "_quarantined_hashes", t.quarantined)
+    monkeypatch.setattr(
+        C,
+        "_ensure_target",
+        lambda spark, target, schema: t.created.append(schema),
+        raising=False,
+    )
     return t
 
 
@@ -1085,7 +1112,7 @@ def test_a_scratch_dir_that_cannot_be_written_says_what_to_do(tmp_path):
     blocker = tmp_path / "landing"
     blocker.write_text("a file, not a folder")
     with pytest.raises(PermissionError, match="scratch_dir="):
-        C._new_batch_scratch(str(blocker))
+        C._new_batch_scratch(str(blocker), "c.s.t")
 
 
 def test_write_batch_fail_raises_naming_the_file(spark, tmp_path, tables):
@@ -1203,3 +1230,143 @@ def test_declare_ingest_append_skips_bad_records(
 def test_ingest_setup_names_the_bad_records_table():
     got = C._ingest_setup("`a-b`.s.t", "/V", "gpkg_gbx", "scd2", None, None)
     assert got["bad_records"] == "`a-b`.s.t_bad_records"
+
+
+# --- fix round 2: staging namespace, Volume paths, dedupe, NOT NULL, views ------
+
+
+def test_each_target_stages_in_its_own_namespace(tmp_path):
+    a = C._new_batch_scratch(str(tmp_path), "main.geo.t")
+    b = C._new_batch_scratch(str(tmp_path), "main.geo.u")
+    again = C._new_batch_scratch(str(tmp_path), "`main`.`geo`.`t`")
+    container = tmp_path / ".gbx_scratch"
+    for path in (a, b, again):
+        assert os.path.dirname(os.path.dirname(path)) == str(container)
+    key_a, key_b = os.path.basename(os.path.dirname(a)), os.path.basename(
+        os.path.dirname(b)
+    )
+    assert key_a != key_b and key_a == os.path.basename(os.path.dirname(again))
+    assert key_a.startswith("main.geo.t-") and not key_a.startswith(".")
+
+
+def test_staging_gc_removes_only_its_own_day_old_batches(tmp_path):
+    """Two sinks can share a scratch_dir (the default source_dir, or a shared
+    folder): one never removes the other's batches, and its own only once they
+    are a day old."""
+    import time as _time
+
+    mine = os.path.dirname(C._new_batch_scratch(str(tmp_path), "main.geo.t"))
+    theirs = os.path.dirname(C._new_batch_scratch(str(tmp_path), "main.geo.u"))
+    now = _time.time()
+    made = {}
+    for name, parent, age_h in (
+        ("old", mine, 30),
+        ("recent", mine, 2),
+        ("their_old", theirs, 30),
+        ("writer", str(tmp_path / ".gbx_scratch"), 30),
+    ):
+        d = os.path.join(parent, name)
+        os.makedirs(d)
+        os.utime(d, (now - age_h * 3600, now - age_h * 3600))
+        made[name] = d
+    C._new_batch_scratch(str(tmp_path), "main.geo.t")
+    assert not os.path.exists(made["old"])
+    for name in ("recent", "their_old", "writer"):
+        assert os.path.exists(made[name]), name
+
+
+def test_scratch_dir_must_be_a_volume_path():
+    with pytest.raises(ValueError, match="/Volumes"):
+        C._ingest_setup(
+            "c.s.t",
+            "/Volumes/c/s/v",
+            "gpkg_gbx",
+            "scd2",
+            None,
+            None,
+            None,
+            "quarantine",
+            "/local_disk0/tmp/scratch",
+        )
+    got = C._ingest_setup(
+        "c.s.t",
+        "/Volumes/c/s/v",
+        "gpkg_gbx",
+        "scd2",
+        None,
+        None,
+        None,
+        "quarantine",
+        "dbfs:/Volumes/c/s/w/scratch",
+    )
+    assert got["scratch_dir"] == "/Volumes/c/s/w/scratch"
+
+
+def test_bad_records_df_dedupes_on_the_record_key(spark, tmp_path):
+    """Two attempts can describe the same record differently (the rows read
+    before an error, the warnings seen): it is still one record."""
+    scratch = str(tmp_path / "s")
+    for message in ("lost after 10 rows", "lost after 12 rows"):
+        bad = Q.BadRecords(scratch)
+        bad.add("/v/a.gpkg", 1_000_000, None, "OSError", message, None)
+        bad.close()
+    files = spark.createDataFrame(
+        [("/v/a.gpkg", 1_000_000, "h1", 42)],
+        "path string, us long, _source_hash string, _source_size long",
+    ).selectExpr(
+        "path",
+        "timestamp_micros(us) AS modificationTime",
+        "_source_hash",
+        "_source_size",
+    )
+    assert C._bad_records_df(spark, scratch, files).count() == 1
+
+
+def test_quarantine_creates_the_rows_table_with_the_readers_nullability(
+    spark, tmp_path, tables
+):
+    """The staged copy reads back all-nullable; the table is created from the
+    reader schema first, so a NOT NULL column (lidar metadata ``path``) stays
+    NOT NULL as in fail mode."""
+    import laspy
+
+    landing = tmp_path / "landing"
+    landing.mkdir()
+    las = laspy.LasData(laspy.LasHeader(point_format=3, version="1.2"))
+    las.x, las.y, las.z = [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]
+    path = str(landing / "a.las")
+    las.write(path)
+    C.write_batch(
+        _frozen_events(spark, [path]),
+        "c.s.t",
+        "lidar_gbx",
+        {"mode": "metadata"},
+        "scd2",
+        schema_path=path,
+        on_error="quarantine",
+        scratch_dir=str(landing),
+    )
+    (schema,) = tables.created
+    assert schema["path"].nullable is False
+    assert {"_source_path", "_source_hash"} <= set(schema.fieldNames())
+
+
+def test_ensure_target_creates_an_empty_table_with_the_schema():
+    from unittest import mock
+
+    from pyspark.sql.types import StringType, StructField, StructType
+
+    schema = StructType([StructField("path", StringType(), False)])
+    sp = mock.MagicMock()
+    sp.table.side_effect = RuntimeError("[TABLE_OR_VIEW_NOT_FOUND] c.s.t")
+    C._ensure_target(sp, "c.s.t", schema)
+    sp.createDataFrame.assert_called_once_with([], schema)
+    w = sp.createDataFrame.return_value.write
+    w.mode.assert_called_once_with("append")
+    w.mode.return_value.clusterBy.assert_called_once_with("_source_path")
+    w.mode.return_value.clusterBy.return_value.saveAsTable.assert_called_once_with(
+        "`c`.`s`.`t`"
+    )
+    sp = mock.MagicMock()  # exists: nothing is created
+    C._ensure_target(sp, "c.s.t", schema)
+    sp.createDataFrame.assert_not_called()

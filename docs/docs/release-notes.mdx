@@ -32,12 +32,31 @@ shared by both vector reader tiers.
   tile windows or tile groups that spread across tasks when `num_partitions` is set; a NetCDF
   file is read by one task. `pmtiles_gbx` needs the `source` option: `"archive"` reads the
   tiles stored in `.pmtiles` files and `"raster"` renders tiles from GeoTIFF files, each file on
-  its own. See [Ingestion Pipelines](./ingestion/overview).
+  its own. See [`read_paths`](./ingestion/read-paths).
 - **`declare_ingest` declares an Auto Loader flow in a Lakeflow pipeline**, with `on_change`
   choosing what happens when a file is overwritten: `scd2` (the default; rows are append-only and
   a versions table with a `_current` view records each content version), `replace` (latest content
-  only) or `append` (every delivery). See
-  [Ingestion Pipelines](./ingestion/overview).
+  only) or `append` (every delivery). See [Auto Loader ingestion](./ingestion/auto-loader).
+- **`declare_ingest` sets bad records aside.** With `on_error="quarantine"` (the default), data
+  that cannot be read is written to `<table>_bad_records` (created when the first one is found),
+  with its file, where in the file it was and the reader's error, and the rest is written to the
+  table. A bad record is the smallest part of a file the reader can set aside: a feature, a
+  GeoJSONSeq line, a raster tile window, a run of LiDAR points, a PMTiles tile, a NetCDF variable
+  or slice, or the whole file. `on_error="fail"` fails the update instead. See
+  [Unreadable data](./ingestion/auto-loader#unreadable-data).
+- **Quarantine stages each micro-batch under `source_dir`.** The pipeline stages it in a hidden
+  `.gbx_scratch` folder that is removed when the micro-batch ends, so it must be able to write
+  there. Pass `scratch_dir` to stage it somewhere else when the landing folder is read-only.
+- **`<target>_current` shows each file's newest readable version.** A file whose latest delivery
+  could not be read keeps showing the rows of its last readable version. Under quarantine,
+  `on_change="replace"` likewise keeps a file's last readable rows when its new delivery cannot be
+  read at all.
+- **A NULL or empty geometry is data, not a bad record.** A feature without a location, or a
+  `POINT EMPTY`, is written like any other row. GDAL also returns NULL for a geometry it cannot
+  decode, so such a feature is written with a NULL geometry; query the geometry column with
+  `IS NULL` and `ST_IsEmpty` to watch for them.
+- **`read_paths(on_error="skip")` skips what cannot be read** and logs a warning in the executor
+  logs; the default, `on_error="fail"`, fails the read with an error that names the file.
 - **GeoJSON is matched by its `.geojson` extension only.** The default file pattern for
   `geojson_gbx` (and `vector_gbx`) does not include `.json`; for GeoJSON files with that
   extension pass `glob="*.{geojson,json}"`.
@@ -58,6 +77,9 @@ shared by both vector reader tiers.
 - **`file_glob` uses the same Hadoop glob syntax as `glob`** (case-sensitive, with `{a,b}`
   groups and `\` escapes). Folders and files whose names start with `_` or `.` are ignored, so
   `_archive/` or `_staging/` keeps files out of a table.
+
+See the [Lakeflow connector](./ingestion/lakeflow-connector) page for setup, table options and
+formats.
 
 ### Vector readers — large layers and coded-value domains
 
@@ -85,12 +107,16 @@ shared by both vector reader tiers.
 - **A requested driver is no longer silently ignored.** `vector_gbx` with a `driverName`, and the
   named readers (`geojson_gbx`, `gpkg_gbx`, `shapefile_gbx`, `file_gdb_gbx`), used to let GDAL pick
   whichever driver it detected. `driverName` is now matched without regard to case, and GDAL's
-  equivalent drivers are accepted: the GeoJSON family (including GeoJSONSeq, ESRIJSON and
-  TopoJSON), KML and LIBKML, OpenFileGDB and FileGDB, and GPKG and SQLite. The requested driver is
-  forced only when GDAL detects a different format, such as for a misnamed file. A file of a
-  genuinely different format now fails with an error that names the file and the reader to use,
-  and a `driverName` GDAL does not know fails with the closest matches. See
+  equivalent drivers are accepted: the GeoJSON family (GeoJSON, GeoJSONSeq, ESRIJSON, TopoJSON and
+  JSON-FG), KML and LIBKML, OpenFileGDB and FileGDB, and GPKG and SQLite. A file GDAL would open
+  with a different driver is read with the requested one where GDAL can force it (the GeoJSON
+  family, GPKG and CSV, also when GDAL recognizes nothing). Any other family with a misnamed file
+  fails with an error that names the file, the driver GDAL detected and the reader to use. A
+  `driverName` GDAL does not know fails with the closest matches. See
   [Vector Readers](./readers/vector#options).
+- **Limit: a given schema skips the driver check for native extensions.** When you pass your own
+  `.schema(...)`, a file with an extension GDAL reads by itself is not checked against the
+  requested driver, because pyogrio does not expose the driver when it reads.
 
 ### Heavyweight vector readers — declared field types and NULLs (breaking behavior change)
 
@@ -127,6 +153,18 @@ shared by both vector reader tiers.
   archive once and reads just the tile ranges of each partition, so the read cost no longer grows
   with the number of partitions. With `source="raster"`, each source raster is staged once per
   worker process instead of once per partition. See [PMTiles Reader](./readers/pmtiles).
+- **A damaged PMTiles header can no longer crash a worker.** A header whose length field was
+  garbled made the range read try to allocate that many bytes. Reads now stop at the end of the
+  file, so such an archive fails with an error instead.
+
+### NetCDF reader
+
+- **`group` is honored when a variable is read without decoding (fix).** When xarray cannot apply
+  a variable's CF masks (for example, integer data with an integer `scale_factor`), `netcdf_gbx`
+  reads the raw values instead. That read opened the file's root group, not the `group` you set:
+  a variable of the same name in the root returned the root's values, silently wrong data (this
+  also affected v0.5.2), and a variable only in the group failed with `No variable named …`. Both
+  now read the group.
 
 ### Raster writers
 

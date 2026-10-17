@@ -770,6 +770,10 @@ def test_spark_framework_metadata_virtual_table(spark, root):
     )
 
 
+# Longest an availableNow query may run before the test fails instead of blocking.
+STREAM_TIMEOUT_S = 300
+
+
 def test_spark_streaming_available_now_appends_only_new_files(
     spark, root, tmp_path_factory
 ):
@@ -789,8 +793,12 @@ def test_spark_streaming_available_now_appends_only_new_files(
             .trigger(availableNow=True)
             .start()
         )
-        q.awaitTermination()
-        assert q.exception() is None
+        try:
+            # Raises the query's error if it failed; False if still running.
+            assert q.awaitTermination(STREAM_TIMEOUT_S), f"still running: {q.status}"
+            assert q.exception() is None
+        finally:
+            q.stop()
 
     run_once()
     first = spark.read.parquet(sink)

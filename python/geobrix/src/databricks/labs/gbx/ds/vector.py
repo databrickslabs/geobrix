@@ -5,6 +5,7 @@ typed attributes). Pure-Python / Serverless-safe (no JVM)."""
 from __future__ import annotations
 
 import contextlib
+import functools
 import os
 import shutil
 import uuid
@@ -218,41 +219,154 @@ def _zip_vsi(path: str) -> str:
     return path
 
 
-# GDAL connection-string prefixes that force a vector driver ("GeoJSON:<file>").
-# pyogrio's read functions take no driver argument: a ``driver=`` keyword is passed
-# on as the dataset open option DRIVER, which the drivers reject with a warning on
-# every open and never use to pick the driver. ESRI Shapefile and OpenFileGDB have
-# no prefix (GDAL picks them by extension), so _check_driver verifies them instead.
-_DRIVER_PREFIX = {"GeoJSON": "GeoJSON:", "GeoJSONSeq": "GeoJSONSeq:", "GPKG": "GPKG:"}
+# Drivers that read the same data, so a reader named for one accepts a file GDAL
+# opens with another: GeoJSON / GeoJSONSeq / ESRIJSON / TopoJSON (the GeoJSON
+# reader reads all four), KML / LIBKML, OpenFileGDB / FileGDB, GPKG / SQLite.
+_DRIVER_FAMILIES: Tuple[Tuple[str, ...], ...] = (
+    ("GeoJSON", "GeoJSONSeq", "ESRIJSON", "TopoJSON"),
+    ("GPKG", "SQLite"),
+    ("OpenFileGDB", "FileGDB"),
+    ("KML", "LIBKML"),
+)
+
+# Extensions GDAL reads with a driver of the family by itself (keyed by the
+# family's first driver): such a file is opened as named, with no extra open.
+_FAMILY_EXTS = {
+    "GeoJSON": (".geojson", ".json", ".geojsonl", ".geojsons", ".topojson"),
+    "ESRI Shapefile": (".shp", ".shz", ".shp.zip", ".dbf"),
+    "GPKG": (".gpkg", ".sqlite", ".db"),
+    "OpenFileGDB": (".gdb", ".gdb.zip"),
+    "KML": (".kml", ".kmz"),
+}
+
+# GDAL connection-string prefixes that force a driver ("GeoJSON:<file>"), tried
+# in this order (strictest parser first: GeoJSONSeq reads any JSON object as a
+# feature). pyogrio's read functions take no driver argument -- a ``driver=``
+# keyword becomes the open option DRIVER, which the drivers reject with a warning
+# and never use -- so a prefix is the only way to force one.
+_DRIVER_PREFIX = {
+    "GeoJSON": "GeoJSON:",
+    "TopoJSON": "TopoJSON:",
+    "ESRIJSON": "ESRIJSON:",
+    "GeoJSONSeq": "GeoJSONSeq:",
+    "GPKG": "GPKG:",
+    "CSV": "CSV:",
+}
+
+# The named reader for a family, for error hints.
+_READER_FOR = {
+    "GeoJSON": "geojson_gbx",
+    "ESRI Shapefile": "shapefile_gbx",
+    "GPKG": "gpkg_gbx",
+    "OpenFileGDB": "file_gdb_gbx",
+}
 
 # Drivers whose fields come from the features (none are declared up front).
-_FIELDS_FROM_FEATURES = ("GeoJSON", "GeoJSONSeq")
+_FIELDS_FROM_FEATURES = _DRIVER_FAMILIES[0]
 
 
-def _open_path(path: str, driver: str) -> str:
-    """The name pyogrio opens for ``path`` read with ``driver``: a zipped source
-    as ``/vsizip/``, else prefixed so GDAL uses ``driver`` whatever the file is
-    named. A ``.zip`` is never prefixed: pyogrio wraps any name ending in ``.zip``
-    in ``/vsizip/`` again. GDAL splits ``GPKG:<file>:<table>`` on ':', so the GPKG
-    file name is quoted (a name that itself holds a quote is left to detection)."""
-    vsi = _zip_vsi(path)
-    prefix = _DRIVER_PREFIX.get(driver)
-    if prefix is None or vsi != path:
-        return vsi
-    if driver == "GPKG":
-        return f'{prefix}"{path}"' if '"' not in path else path
+def _family(driver: str) -> Tuple[str, ...]:
+    """The drivers equivalent to ``driver`` (itself first-class), or just it."""
+    for fam in _DRIVER_FAMILIES:
+        if driver in fam:
+            return fam
+    return (driver,)
+
+
+@functools.lru_cache(maxsize=1)
+def _known_drivers() -> Dict[str, str]:
+    """{lower-case name: GDAL name} for every OGR driver (plus the family names,
+    which need not be installed: FileGDB is read with OpenFileGDB)."""
+    import pyogrio
+
+    names = set(pyogrio.list_drivers()) | {d for f in _DRIVER_FAMILIES for d in f}
+    return {n.lower(): n for n in names}
+
+
+def _canonical_driver(name: str) -> str:
+    """GDAL's name for the ``driverName`` option (matched case-insensitively, as
+    GDAL does); "" for none. An unknown name raises with the closest matches."""
+    import difflib
+
+    name = (name or "").strip()
+    if not name:
+        return ""
+    known = _known_drivers()
+    if name.lower() in known:
+        return known[name.lower()]
+    close = difflib.get_close_matches(name.lower(), list(known), n=3, cutoff=0.6)
+    hint = f" Did you mean {', '.join(repr(known[c]) for c in close)}?" if close else ""
+    raise ValueError(
+        f"driverName {name!r} is not an OGR vector driver.{hint} Names match "
+        f"GDAL's driver names, in any case (e.g. 'GeoJSON', 'ESRI Shapefile')."
+    )
+
+
+def _native_ext(path: str, driver: str) -> bool:
+    """True when GDAL reads ``path`` with a driver of ``driver``'s family by its
+    extension alone."""
+    exts = _FAMILY_EXTS.get(_family(driver)[0], ())
+    return path.lower().rstrip("/").endswith(exts) if exts else False
+
+
+def _with_prefix(path: str, prefix: str) -> str:
+    """The name pyogrio opens: a zipped source as ``/vsizip/``, else ``path``
+    behind the driver ``prefix`` ("" = GDAL picks the driver). GDAL splits
+    ``GPKG:<file>:<table>`` on ':', so the GPKG file name is quoted."""
+    if not prefix:
+        return _zip_vsi(path)
+    if prefix == "GPKG:":
+        return f'GPKG:"{path}"'
     return prefix + path
 
 
-def _check_driver(path: str, want: str, got: Optional[str]) -> None:
-    """A reader given a driver reads only that format. The prefixed drivers are
-    forced; for the others a file GDAL opens with another driver is rejected
-    instead of being read as that format."""
-    if want and got and got != want:
-        raise ValueError(
-            f"{path}: GDAL opens this file with the {got} driver, not {want}. "
-            f"Read it with the reader for {got} (or driverName='{got}')."
+def _forcible(driver: str, path: str) -> List[str]:
+    """The prefixes that can force ``driver``'s family onto ``path``, in order.
+    A .zip is never prefixed (pyogrio wraps a name ending in .zip in /vsizip/
+    again), nor a GPKG path holding a quote (it cannot be quoted)."""
+    if _zip_vsi(path) != path:
+        return []
+    fam = _family(driver)
+    out = [p for d, p in _DRIVER_PREFIX.items() if d in fam]
+    return [p for p in out if not (p == "GPKG:" and '"' in path)]
+
+
+def _detect(name: str, layer):
+    """(driver GDAL opens ``name`` with or None, its read_info or None, the open
+    error or None)."""
+    import pyogrio
+    from pyogrio.errors import DataLayerError, DataSourceError
+
+    try:
+        info = pyogrio.read_info(name, layer=layer)
+        return info.get("driver"), info, None
+    except DataLayerError as e:  # opened, but the layer is not there
+        try:
+            return pyogrio.read_info(name).get("driver"), None, e
+        except (DataLayerError, DataSourceError):
+            return None, None, e
+    except DataSourceError as e:
+        return None, None, e
+
+
+def _driver_error(path: str, want: str, got: Optional[str], err=None) -> ValueError:
+    """The error for a file the reader's driver (family) cannot read: the file,
+    the requested driver, what GDAL detected, and the reader to use instead."""
+    fam = _family(want)
+    asked = f"driverName {want!r}" + (
+        f" (or {', '.join(d for d in fam if d != want)})" if len(fam) > 1 else ""
+    )
+    if got:
+        reader = _READER_FOR.get(_family(got)[0])
+        use = f"{reader} or driverName={got!r}" if reader else f"driverName={got!r}"
+        detail = f"GDAL opens it with the {got} driver. Read it with {use}."
+    else:
+        why = f" ({str(err).splitlines()[0]})" if err else ""
+        detail = (
+            f"GDAL does not recognize it as {'/'.join(fam)}{why}. Check the file, "
+            f"or give it its format's extension."
         )
+    return ValueError(f"{path}: cannot read it with {asked}: {detail}")
 
 
 _CANONICAL_EXT = {
@@ -909,7 +1023,8 @@ class VectorGbxReader(DataSourceReader):
         from databricks.labs.gbx.ds._listing import to_local_path
 
         self.path = to_local_path(raw_path)
-        self.driver = options.get("driverName", "") or self._DRIVER
+        # GDAL's own driver name (driverName matches in any case, as in GDAL).
+        self.driver = _canonical_driver(options.get("driverName", "") or self._DRIVER)
         # `multi=true` reads a DIRECTORY of newline-delimited GeoJSONL shards (the
         # output of geojsonl_gbx): switch a GeoJSON reader to the GeoJSONSeq driver so
         # _members() enumerates .geojsonl/.geojsons and each shard is parsed as a
@@ -949,6 +1064,10 @@ class VectorGbxReader(DataSourceReader):
         # Per-member coded-domain definitions (description mode only), read once
         # per member by schema()/read() on this reader instance.
         self._domain_defs_cache: Dict[str, Dict] = {}
+        # Per member: the driver prefix it is opened with ("" = GDAL's pick) and
+        # its read_info, so schema(), the per-file check and read() open it once.
+        self._prefix: Dict[str, str] = {}
+        self._infos: Dict[str, Dict] = {}
 
         # No in-DataSource FILE-tier probe: a DataSource reader is session-less on
         # Spark Connect (getActiveSession() -> None), so probing here falsely
@@ -1006,7 +1125,8 @@ class VectorGbxReader(DataSourceReader):
         Reading these directly from object storage (a UC Volume) does poorly -- FUSE
         does not serve random/seeked I/O well -- or triggers a read-only write attempt.
         Stage the source to worker-local temp first and read it there."""
-        return self.driver in ("GPKG", "OpenFileGDB")
+        fam = _family(self.driver)
+        return "GPKG" in fam or "OpenFileGDB" in fam
 
     @contextlib.contextmanager
     def _staged(self, path: str):
@@ -1027,15 +1147,65 @@ class VectorGbxReader(DataSourceReader):
         with _VEC_STAGE.use(path) as local:
             yield local
 
+    def _source_name(self, path: str, local: str) -> str:
+        """The name pyogrio opens member ``path`` (readable as ``local``) with.
+
+        GDAL picks the driver itself when the file's extension is one its family
+        reads, or when the driver it detects is of the reader's family (GeoJSON
+        reads GeoJSONSeq / ESRIJSON / TopoJSON too). Otherwise -- a GeoJSON or
+        GeoPackage named data.csv, say -- the family's GDAL prefix forces it; a
+        file no driver of the family can open raises, naming what GDAL detected.
+        Decided once per member (an open only for an unrecognized extension)."""
+        if path not in self._prefix:
+            self._prefix[path] = self._resolve_prefix(path, local)
+        return _with_prefix(local, self._prefix[path])
+
+    def _resolve_prefix(self, path: str, local: str) -> str:
+        # A missing file is left to the open, which reports it as missing.
+        if (
+            not self.driver
+            or _native_ext(path, self.driver)
+            or not os.path.exists(local)
+        ):
+            return ""
+        self._gdal_readonly_safe()
+        import pyogrio
+        from pyogrio.errors import DataLayerError, DataSourceError
+
+        got, info, err = _detect(_zip_vsi(local), self._layer())
+        if got in _family(self.driver):
+            if info is not None:
+                self._infos[path] = info
+            return ""
+        last = err
+        for prefix in _forcible(self.driver, local):
+            try:
+                info = pyogrio.read_info(
+                    _with_prefix(local, prefix), layer=self._layer()
+                )
+            except (DataLayerError, DataSourceError) as e:
+                last = e
+                continue
+            self._infos[path] = info
+            return prefix
+        raise _driver_error(path, self.driver, got, err) from last
+
     def _info_for(self, path: str):
-        """Read pyogrio metadata for the given path. Random-access formats are staged
-        to local temp first (see _staged) so the open does not seek over a Volume."""
+        """Read pyogrio metadata for the given path (once per reader). Random-access
+        formats are staged to local temp first (see _staged) so the open does not
+        seek over a Volume. A file whose extension GDAL routes to a driver outside
+        the reader's family is rejected here."""
+        if path in self._infos:
+            return self._infos[path]
         self._gdal_readonly_safe()
         import pyogrio
 
         with self._staged(path) as _p:
-            info = pyogrio.read_info(_open_path(_p, self.driver), layer=self._layer())
-        _check_driver(path, self.driver, info.get("driver"))
+            name = self._source_name(path, _p)
+            info = self._infos.get(path) or pyogrio.read_info(name, layer=self._layer())
+        if self.driver and info.get("driver") not in _family(self.driver):
+            raise _driver_error(path, self.driver, info.get("driver"))
+        self._infos[path] = info
         return info
 
     def _info(self):
@@ -1055,9 +1225,11 @@ class VectorGbxReader(DataSourceReader):
     def _domain_defs_for(self, path: str) -> Dict:
         """Coded-value domain definitions of one member, cached per member."""
         if path not in self._domain_defs_cache:
+            # The family's first driver (GPKG for SQLite, OpenFileGDB for FileGDB)
+            # selects where the definitions are stored.
             with self._staged(path) as _p:
                 self._domain_defs_cache[path] = _read_coded_domains(
-                    _zip_vsi(_p), self.driver
+                    self._source_name(path, _p), _family(self.driver)[0]
                 )
         return self._domain_defs_cache[path]
 
@@ -1103,20 +1275,25 @@ class VectorGbxReader(DataSourceReader):
 
         with self._staged(path) as _p:
             _, tbl = pyogrio.read_arrow(
-                _open_path(_p, self.driver), layer=self._layer(), max_features=0
+                self._source_name(path, _p), layer=self._layer(), max_features=0
             )
         return self._description_fields(path, tbl.schema)
 
     def declared_schema(self) -> Optional[StructType]:
         """The schema the source declares before any feature is read (checked per
-        file by read_paths), or None when it declares none: GeoJSON and GeoJSONSeq
-        fields come from the features, so a file with none has no fields. Their
-        first batch is checked instead, which also spares a second parse of the
-        whole file (each open of a GeoJSON parses all of it)."""
+        file by read_paths), or None when it declares none: GeoJSON-family fields
+        come from the features, so a file with none has no fields. Their first
+        batch is checked instead, which also spares a second parse of the whole
+        file (each open of a GeoJSON parses all of it): for a reader with no
+        driver, a GeoJSON-family extension is enough to tell, without an open."""
         if self.driver in _FIELDS_FROM_FEATURES:
             return None
-        if not self.driver and self._info().get("driver") in _FIELDS_FROM_FEATURES:
-            return None
+        if not self.driver:
+            member = self._members()[0]
+            if _native_ext(member, "GeoJSON"):
+                return None
+            if self._info_for(member).get("driver") in _FIELDS_FROM_FEATURES:
+                return None
         return self.schema()
 
     def schema(self) -> StructType:
@@ -1221,7 +1398,7 @@ class VectorGbxReader(DataSourceReader):
         with self._staged(partition.path) as _p:
             # Stream RecordBatches from pyogrio.open_arrow instead of loading the whole
             # layer into memory with read_arrow. Each batch is processed independently.
-            src = _open_path(_p, partition.driver)
+            src = self._source_name(partition.path, _p)
             with pyogrio.open_arrow(src, **kw) as (meta, reader):
                 # With use_pyarrow=True, reader is a pyarrow.RecordBatchReader
 

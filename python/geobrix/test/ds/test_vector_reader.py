@@ -892,7 +892,9 @@ def test_vector_named_reader_rejects_a_file_of_another_format(tmp_path, fmt, wan
     picks them by extension), so a file GDAL opens with another driver is rejected
     instead of being read as that format."""
     path = _write_layer(str(tmp_path / "pts.geojson"), "GeoJSON")
-    with pytest.raises(ValueError, match=rf"pts\.geojson.*GeoJSON.*{want}"):
+    with pytest.raises(
+        ValueError, match=rf"pts\.geojson.*{want}.*GeoJSON driver.*geojson_gbx"
+    ):
         _source(fmt)({"path": path}).schema()
 
 
@@ -905,3 +907,226 @@ def test_vector_gpkg_path_with_colons_opens(tmp_path):
     ds = _source("gpkg_gbx")({"path": path})
     assert {"id", "name"} <= set(ds.schema().fieldNames())
     assert sum(b.num_rows for b in _read_batches(ds.reader(None))) == 3
+
+
+# --- the GeoJSON family, equivalent drivers, and driver names in any case -----
+
+
+def _features(n=3):
+    return [
+        {
+            "type": "Feature",
+            "properties": {"id": i, "name": f"n{i}"},
+            "geometry": {"type": "Point", "coordinates": [i, i]},
+        }
+        for i in range(n)
+    ]
+
+
+def _esrijson(path, n=3):
+    with open(path, "w") as f:
+        json.dump(
+            {
+                "geometryType": "esriGeometryPoint",
+                "spatialReference": {"wkid": 4326},
+                "fields": [
+                    {"name": "id", "type": "esriFieldTypeInteger"},
+                    {"name": "name", "type": "esriFieldTypeString"},
+                ],
+                "features": [
+                    {
+                        "attributes": {"id": i, "name": f"n{i}"},
+                        "geometry": {"x": i, "y": i},
+                    }
+                    for i in range(n)
+                ],
+            },
+            f,
+        )
+    return path
+
+
+def _topojson(path, n=3):
+    geoms = [
+        {
+            "type": "Point",
+            "coordinates": [i, i],
+            "properties": {"id": i, "name": f"n{i}"},
+        }
+        for i in range(n)
+    ]
+    with open(path, "w") as f:
+        json.dump(
+            {
+                "type": "Topology",
+                "objects": {"pts": {"type": "GeometryCollection", "geometries": geoms}},
+                "arcs": [],
+            },
+            f,
+        )
+    return path
+
+
+def _seq(path, n=3):
+    with open(path, "w") as f:
+        f.write("\n".join(json.dumps(ft) for ft in _features(n)) + "\n")
+    return path
+
+
+def _rows_and_fields(ds):
+    names = set(ds.schema().fieldNames())
+    return sum(b.num_rows for b in _read_batches(ds.reader(None))), names
+
+
+@pytest.mark.parametrize(
+    "fname,make",
+    [
+        ("pts.geojsonl", _seq),  # GeoJSONSeq file, no multi
+        ("seq.geojson", _seq),  # GeoJSONSeq content named .geojson
+        ("esri.json", _esrijson),
+        ("topo.json", _topojson),
+        ("esri.csv", _esrijson),  # misnamed: forced with the family's prefixes
+        ("topo.csv", _topojson),
+        ("seq.csv", _seq),
+    ],
+)
+def test_geojson_reader_reads_the_geojson_family(tmp_path, fname, make):
+    """geojson_gbx reads GeoJSON, GeoJSONSeq, ESRIJSON and TopoJSON: whichever of
+    them GDAL detects, or (for a file named for another format) the first of them
+    whose GDAL prefix opens it."""
+    from databricks.labs.gbx.ds import paths as P
+
+    path = make(str(tmp_path / fname))
+    rows, names = _rows_and_fields(_source("geojson_gbx")({"path": path}))
+    assert rows == 3 and {"id", "name"} <= names
+    expected = P.path_schema("geojson_gbx", None, path)
+    assert (
+        sum(
+            b.num_rows
+            for b in P.iter_path_batches(path, None, "geojson_gbx", None, expected)
+        )
+        == 3
+    )
+
+
+@pytest.mark.parametrize(
+    "driver_name,write_driver,fname",
+    [
+        ("gpkg", "GPKG", "pts.gpkg"),
+        ("geojson", "GeoJSON", "pts.geojson"),
+        ("esri shapefile", "ESRI Shapefile", "pts.shp"),
+        ("SQLite", "GPKG", "pts.gpkg"),  # GDAL picks GPKG: equivalent
+        ("FileGDB", "OpenFileGDB", "pts.gdb"),  # read with OpenFileGDB
+    ],
+)
+def test_vector_driver_name_any_case_and_equivalent_drivers(
+    tmp_path, driver_name, write_driver, fname
+):
+    path = _write_layer(str(tmp_path / fname), write_driver)
+    ds = _source("vector_gbx")({"path": path, "driverName": driver_name})
+    rows, names = _rows_and_fields(ds)
+    assert rows == 3 and {"id", "name"} <= names
+
+
+def test_vector_driver_name_kml_reads_what_libkml_opens(tmp_path):
+    path = tmp_path / "a.kml"
+    path.write_text(
+        '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        "<Placemark><name>a</name><Point><coordinates>1,2</coordinates></Point>"
+        "</Placemark></Document></kml>"
+    )
+    ds = _source("vector_gbx")({"path": str(path), "driverName": "KML"})
+    rows, names = _rows_and_fields(ds)
+    assert rows == 1 and "Name" in names
+
+
+def test_vector_unknown_driver_name_lists_close_matches(tmp_path):
+    ds = _source("vector_gbx")(
+        {"path": str(tmp_path / "a.geojson"), "driverName": "GeoJSN"}
+    )
+    with pytest.raises(
+        ValueError, match=r"'GeoJSN' is not an OGR vector driver.*'GeoJSON'"
+    ):
+        ds.schema()
+
+
+@pytest.mark.parametrize(
+    "fname,content,detected",
+    [
+        ("data.csv", b"id,WKT\n1,POINT (1 1)\n", r"with the CSV driver.*'CSV'"),
+        ("data.bin", bytes(range(256)) * 4, r"not recognize it as GeoJSON/GeoJSONSeq"),
+    ],
+)
+def test_geojson_reader_rejects_a_non_geojson_file_saying_why(
+    tmp_path, fname, content, detected
+):
+    """A file no GeoJSON-family driver opens fails with the file, the requested
+    driver and what GDAL made of it -- not a bare pyogrio error."""
+    path = tmp_path / fname
+    path.write_bytes(content)
+    with pytest.raises(ValueError, match=rf"{fname}.*'GeoJSON'.*{detected}"):
+        _source("geojson_gbx")({"path": str(path)}).schema()
+
+
+@pytest.mark.parametrize("fmt", ["geojson_gbx", "vector_gbx"])
+def test_vector_read_paths_opens_a_geojson_once(tmp_path, monkeypatch, fmt):
+    """The per-file schema check and the read open a GeoJSON once: every open of
+    a GeoJSON parses the whole file."""
+    import pyogrio
+
+    from databricks.labs.gbx.ds import paths as P
+
+    a = _write_layer(str(tmp_path / "a.geojson"), "GeoJSON")
+    b = _write_layer(str(tmp_path / "b.geojson"), "GeoJSON")
+    expected = P.path_schema(fmt, None, a)
+    opens = []
+    for fn in ("read_info", "read_arrow", "open_arrow"):
+
+        def spy(path, *args, _real=getattr(pyogrio, fn), _fn=fn, **kw):
+            opens.append((_fn, str(path)))
+            return _real(path, *args, **kw)
+
+        monkeypatch.setattr(pyogrio, fn, spy)
+    rows = sum(x.num_rows for x in P.iter_path_batches(b, None, fmt, None, expected))
+    assert rows == 3
+    assert [o for o in opens if o[1].endswith("b.geojson")] == [("open_arrow", b)]
+
+
+def test_vector_reader_reads_a_members_info_once(tmp_path, monkeypatch):
+    import pyogrio
+
+    path = _write_layer(str(tmp_path / "pts.gpkg"), "GPKG")
+    rdr = _source("gpkg_gbx")({"path": path}).reader(None)
+    calls = []
+    real = pyogrio.read_info
+    monkeypatch.setattr(
+        pyogrio, "read_info", lambda *a, **k: calls.append(a) or real(*a, **k)
+    )
+    rdr.schema()
+    rdr.declared_schema()
+    assert len(calls) == 1
+
+
+def test_vector_misnamed_gpkg_resolves_coded_domains(gpkg_with_coded_domains, tmp_path):
+    """Description mode reads a misnamed GeoPackage's domain definitions through
+    the same forced driver as its features."""
+    import shutil
+
+    misnamed = str(tmp_path / "data.csv")
+    shutil.copyfile(gpkg_with_coded_domains, misnamed)
+    want = _read_table(_coded_reader("gpkg", gpkg_with_coded_domains, "description"))
+    rdr = _coded_reader("gpkg", misnamed, "description")
+    got = _read_table(rdr)
+    for col in _DESCRIPTIONS:
+        assert got.column(col).to_pylist() == want.column(col).to_pylist(), col
+    _assert_schema_matches_data(rdr, got)
+
+
+@pytest.mark.parametrize("fmt", ["geojson_gbx", "shapefile_gbx", "vector_gbx"])
+def test_vector_missing_file_is_reported_missing(tmp_path, fmt):
+    """A path that does not exist fails as missing, not as a driver mismatch."""
+    from pyogrio.errors import DataSourceError
+
+    opts = {"path": str(tmp_path / "gone"), "driverName": "GeoJSON"}
+    with pytest.raises(DataSourceError, match="No such file"):
+        _source(fmt)(opts if fmt == "vector_gbx" else {"path": opts["path"]}).schema()

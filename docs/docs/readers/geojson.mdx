@@ -29,7 +29,7 @@ the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and meth
 
 ### Lightweight (`geojson_gbx`)
 
-The driver (`GeoJSON`) is preset; there is no `multi` switch — `geojson_gbx` reads both GeoJSON and GeoJSONSeq files.
+The driver (`GeoJSON`) is preset. Each file is read with the GeoJSON-family driver GDAL detects for it — GeoJSON (FeatureCollection), GeoJSONSeq (newline-delimited), ESRIJSON or TopoJSON — so a `.geojsonl` file needs no option. A file named for another format (e.g. `data.csv`) is read with the first of those drivers that opens it; a file none of them opens fails, naming the driver GDAL detected.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -37,6 +37,7 @@ The driver (`GeoJSON`) is preset; there is no `multi` switch — `geojson_gbx` r
 | `chunkSize` | `"10000"` | Features per streamed batch: the layer is read in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. |
 | `layerNumber` | `"0"` | Layer index to read (0-based). |
 | `layerName` | `""` | Layer name to read; takes precedence over `layerNumber` when set. |
+| `multi` | `"false"` | `"true"` reads a folder of GeoJSONSeq shards (`.geojsonl` / `.geojsons`, e.g. written by `geojsonl_gbx`) instead of its `.geojson` / `.json` files. A single file reads the same either way. |
 
 ### Heavyweight (`geojson_ogr`)
 
@@ -62,7 +63,7 @@ Example — reading newline-delimited GeoJSONSeq (the `multi` default):
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight · geojson_gbx">
 
-`geojson_gbx` is the lightweight GeoJSON reader (pyogrio-backed, no JAR). It reads GeoJSON and GeoJSONSeq and emits the same schema as the heavyweight `geojson_ogr` reader.
+`geojson_gbx` is the lightweight GeoJSON reader (pyogrio-backed, no JAR). It reads GeoJSON and GeoJSONSeq (as well as ESRIJSON and TopoJSON) and emits the same schema as the heavyweight `geojson_ogr` reader.
 
 <CodeFromTest code={geojsonGbx} language="python" functionName="READ_GEOJSON_GBX"
   source="docs/tests/python/readers/geojson_gbx_examples.py"

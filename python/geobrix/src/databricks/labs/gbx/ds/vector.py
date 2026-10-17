@@ -228,10 +228,11 @@ _DRIVER_FAMILIES: Tuple[Tuple[str, ...], ...] = (
 # family's first driver): such a file is opened as named, with no extra open.
 _FAMILY_EXTS = {
     "GeoJSON": (".geojson", ".json", ".geojsonl", ".geojsons", ".topojson"),
-    "ESRI Shapefile": (".shp", ".shz", ".shp.zip", ".dbf"),
+    "ESRI Shapefile": (".shp", ".shz", ".zip", ".dbf"),  # .zip: a zipped shapefile
     "GPKG": (".gpkg", ".sqlite", ".db"),
     "OpenFileGDB": (".gdb", ".gdb.zip"),
     "KML": (".kml", ".kmz"),
+    "CSV": (".csv", ".tsv", ".psv"),
 }
 
 # GDAL connection-string prefixes that force a driver ("GeoJSON:<file>"), tried
@@ -301,10 +302,14 @@ def _canonical_driver(name: str) -> str:
 
 
 def _native_ext(path: str, driver: str) -> bool:
-    """True when GDAL reads ``path`` with a driver of ``driver``'s family by its
-    extension alone."""
-    exts = _FAMILY_EXTS.get(_family(driver)[0], ())
-    return path.lower().rstrip("/").endswith(exts) if exts else False
+    """True when ``path`` is opened as named: GDAL reads it with a driver of
+    ``driver``'s family by its extension alone, or the family has no prefix to
+    force it with (and so nothing to decide: FlatGeobuf, GML, MapInfo, ...)."""
+    fam = _family(driver)
+    exts = _FAMILY_EXTS.get(fam[0], ())
+    if exts:
+        return path.lower().rstrip("/").endswith(exts)
+    return not any(d in _DRIVER_PREFIX for d in fam)
 
 
 def _with_prefix(path: str, prefix: str) -> str:
@@ -384,12 +389,19 @@ def _driver_error(
 ) -> ValueError:
     """The error for a file the reader's driver (family) cannot read: the file,
     the requested driver, what GDAL detected, and the reader to use instead.
-    ``empty``: a family driver that opened it but found no features/fields."""
+    ``empty``: a family driver that opened it but found no features/fields; then
+    that is the whole story (what GDAL detected, e.g. CSV for a JSON object named
+    .csv, would be a misleading remedy)."""
     fam = _family(want)
     asked = f"driverName {want!r}" + (
         f" (or {', '.join(d for d in fam if d != want)})" if len(fam) > 1 else ""
     )
-    if got:
+    if empty:
+        detail = (
+            f"no features/fields found in {path}: the {empty} driver opens it, but "
+            f"only as records with no fields and no geometry. Check the file."
+        )
+    elif got:
         reader = _READER_FOR.get(_family(got)[0])
         use = f"{reader} or driverName={got!r}" if reader else f"driverName={got!r}"
         detail = f"GDAL opens it with the {got} driver. Read it with {use}."
@@ -398,10 +410,6 @@ def _driver_error(
         detail = (
             f"GDAL does not recognize it as {'/'.join(fam)}{why}. Check the file, "
             f"or give it its format's extension."
-        )
-    if empty:
-        detail += (
-            f" The {empty} driver opens it, but no features/fields found in {path}."
         )
     return ValueError(f"{path}: cannot read it with {asked}: {detail}")
 
@@ -1106,6 +1114,9 @@ class VectorGbxReader(DataSourceReader):
         self._prefix: Dict[str, str] = {}
         self._probed: Dict[str, Dict] = {}  # read_info taken while choosing it
         self._infos: Dict[str, Dict] = {}  # ... and checked by _info_for
+        # Per opened name: whether it holds nothing but empty records. The check can
+        # parse the whole file, so choosing the driver and _info_for share one result.
+        self._empty: Dict[str, bool] = {}
 
         # No in-DataSource FILE-tier probe: a DataSource reader is session-less on
         # Spark Connect (getActiveSession() -> None), so probing here falsely
@@ -1223,12 +1234,18 @@ class VectorGbxReader(DataSourceReader):
             except (DataLayerError, DataSourceError) as e:
                 last = e
                 continue
-            if _featureless(name, info, self._layer()):
+            if self._is_featureless(name, info):
                 empty = prefix.rstrip(":")
                 continue
             self._probed[path] = info
             return prefix
         raise _driver_error(path, self.driver, got, err, empty) from last
+
+    def _is_featureless(self, name: str, info: Dict) -> bool:
+        """_featureless for ``name``, decided once per reader."""
+        if name not in self._empty:
+            self._empty[name] = _featureless(name, info, self._layer())
+        return self._empty[name]
 
     def _info_for(self, path: str):
         """Read pyogrio metadata for the given path (once per reader). Random-access
@@ -1248,8 +1265,8 @@ class VectorGbxReader(DataSourceReader):
             if self.driver and info.get("driver") not in _family(self.driver):
                 raise _driver_error(path, self.driver, info.get("driver"))
             # A JSON file of plain objects is not a schema: it must not define one.
-            if self.driver in _FIELDS_FROM_FEATURES and _featureless(
-                name, info, self._layer()
+            if self.driver in _FIELDS_FROM_FEATURES and self._is_featureless(
+                name, info
             ):
                 raise _featureless_error(path, info.get("driver"))
         self._infos[path] = info

@@ -1190,3 +1190,112 @@ def test_geojson_reader_reads_features_without_properties(tmp_path):
     )
     rows, names = _rows_and_fields(_source("geojson_gbx")({"path": str(path)}))
     assert rows == 2 and "geom_0" in names
+
+
+def _count_opens(monkeypatch):
+    """Record every pyogrio open (read_info / read_arrow / open_arrow) as (fn, path)."""
+    import pyogrio
+
+    opens = []
+    for fn in ("read_info", "read_arrow", "open_arrow"):
+
+        def spy(path, *args, _real=getattr(pyogrio, fn), _fn=fn, **kw):
+            opens.append((_fn, str(path)))
+            return _real(path, *args, **kw)
+
+        monkeypatch.setattr(pyogrio, fn, spy)
+    return opens
+
+
+def _zipped_shapefile(tmp_path, zip_name):
+    import zipfile
+
+    shp = _write_layer(str(tmp_path / "pts.shp"), "ESRI Shapefile")
+    out = str(tmp_path / zip_name)
+    with zipfile.ZipFile(out, "w") as z:
+        for ext in (".shp", ".shx", ".dbf", ".prj"):
+            z.write(os.path.splitext(shp)[0] + ext, "pts" + ext)
+    return out
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname",
+    [
+        ("vector_gbx", "GML", "a.gml"),
+        ("vector_gbx", "FlatGeobuf", "a.fgb"),
+        ("vector_gbx", "MapInfo File", "a.tab"),
+        ("shapefile_gbx", None, "a.zip"),
+        ("shapefile_gbx", None, "a.shp.zip"),
+    ],
+)
+def test_vector_read_opens_a_file_with_no_detection_open(
+    tmp_path, monkeypatch, fmt, driver, fname
+):
+    """A driver GDAL picks by itself (no prefix to force it with) and a zipped
+    shapefile are opened as named at read time -- no read_info detection open
+    first (for GML that is a full parse)."""
+    if fname.endswith(".zip"):
+        path = _zipped_shapefile(tmp_path, fname)
+    else:
+        path = _write_layer(str(tmp_path / fname), driver)
+    opts = {"path": path, **({"driverName": driver} if driver else {})}
+    rdr = _source(fmt)(opts).reader(None)  # what an executor builds
+    opens = _count_opens(monkeypatch)
+    assert sum(b.num_rows for b in _read_batches(rdr)) == 3
+    assert [fn for fn, _ in opens] == ["open_arrow"]
+
+
+def test_vector_csv_driver_name_opens_a_csv_as_named(tmp_path, monkeypatch):
+    path = tmp_path / "a.csv"
+    path.write_text("id,name\n1,x\n")
+    rdr = _source("vector_gbx")({"path": str(path), "driverName": "CSV"}).reader(None)
+    opens = _count_opens(monkeypatch)
+    assert rdr._source_name(str(path), str(path)) == str(path)
+    assert opens == []
+
+
+def test_vector_csv_driver_name_still_forces_a_misnamed_csv(tmp_path):
+    """The CSV driver reads only .csv/.tsv/.psv by itself: another name needs the
+    CSV: prefix, so the detection open stays for it."""
+    path = tmp_path / "a.txt"
+    path.write_text("id,name\n1,x\n")
+    rdr = _source("vector_gbx")({"path": str(path), "driverName": "CSV"}).reader(None)
+    assert rdr._source_name(str(path), str(path)) == f"CSV:{path}"
+
+
+def test_vector_featureless_check_parses_a_misnamed_file_once(tmp_path, monkeypatch):
+    """Features of mixed geometry and no properties need a sampled read to tell
+    them from empty records; a misnamed file is checked when its driver is forced
+    and again at the schema stage -- one parse, not two."""
+    path = tmp_path / "mixed.csv"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": {}, "geometry": g}
+                    for g in (
+                        {"type": "Point", "coordinates": [0, 0]},
+                        {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+                    )
+                ],
+            }
+        )
+    )
+    rdr = _source("geojson_gbx")({"path": str(path)}).reader(None)
+    opens = _count_opens(monkeypatch)
+    assert "geom_0" in rdr.schema().fieldNames()
+    assert [fn for fn, _ in opens].count("read_arrow") == 1
+
+
+def test_featureless_json_error_leads_with_it_and_drops_the_csv_hint(tmp_path):
+    """A JSON object named .csv is opened by GDAL's CSV driver, but reading it as
+    CSV is no remedy: the error says it holds no features and nothing else."""
+    path = tmp_path / "data.csv"
+    path.write_text('{"a": 1}')
+    with pytest.raises(ValueError) as err:
+        _source("geojson_gbx")({"path": str(path)}).schema()
+    msg = str(err.value)
+    assert "no features/fields found" in msg
+    assert "CSV driver" not in msg and "driverName='CSV'" not in msg
+    assert "Read it with" not in msg

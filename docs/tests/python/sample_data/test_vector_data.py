@@ -59,15 +59,18 @@ def test_vector_output_constant_exists_and_contains_key(const_name, key):
 
 
 _READER = re.compile(r'\.format\("([^"]+)"\)')
-_READ_SNIPPETS = [name for name, _ in _VECTOR_CONSTANTS if name.startswith(("DOWNLOAD_", "USAGE_"))]
+_READ_SNIPPETS = [
+    name for name, _ in _VECTOR_CONSTANTS if name.startswith(("DOWNLOAD_", "USAGE_"))
+]
 
 
 @pytest.mark.parametrize("const_name", _READ_SNIPPETS)
 def test_displayed_reader_names_are_registered(spark, const_name):
-    """Every ``spark.read.format("...")`` on the page names a reader the JAR registers
-    (no aliases: ``filegdb`` and ``gpkg`` are not readers; ``file_gdb_ogr`` and
-    ``gpkg_ogr`` are)."""
-    lookup = spark._jvm.org.apache.spark.sql.execution.datasources.DataSource.lookupDataSource
+    """Every ``spark.read.format("...")`` on the page names a reader the JAR
+    registers (no aliases: ``filegdb`` and ``gpkg`` are not readers;
+    ``file_gdb_ogr`` and ``gpkg_ogr`` are)."""
+    datasources = spark._jvm.org.apache.spark.sql.execution.datasources
+    lookup = datasources.DataSource.lookupDataSource
     conf = spark._jsparkSession.sessionState().conf()
     for name in _READER.findall(getattr(vector_data, const_name)):
         lookup(name, conf)  # raises DATA_SOURCE_NOT_FOUND for an unknown name

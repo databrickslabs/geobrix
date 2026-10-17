@@ -103,18 +103,19 @@ dbutils.library.restartPython()
 ```
 
 On a classic cluster, use your runtime's extra instead (for example `geobrix[light_dbr19]`). For a
-Serverless job, or a Lakeflow pipeline's environment, add the requirement as a dependency line —
-written **without spaces around `@`**:
+Serverless job, add the requirement as a dependency line of the job's environment, written
+**without spaces around `@`**, with the extra for its environment version (`light_env5` for
+version 5, `light_env6` for version 6):
 
 ```text
 geobrix[light_env6]@https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>-py3-none-any.whl
 ```
 
-Lakeflow pipelines install each environment dependency with an unquoted `%pip install`, so spaces
-around `@` split the requirement and the install fails. The no-space form works for jobs and
-pipelines alike. A pipeline's runtime follows its channel, not a Serverless environment version —
-match the extra to the channel's Databricks Runtime (for example `light_dbr18` for a DBR 18
-channel).
+Environment dependencies are installed with an unquoted `%pip install`, so spaces around `@` split
+the requirement and the install fails. A Lakeflow pipeline's dependency lines follow the same rule,
+but the pipeline runs on the Databricks Runtime of its channel, not on a Serverless environment
+version, so it takes the extra for that runtime, not a `light_env` one. See
+[Lakeflow SDP](./ingestion/lakeflow-sdp#environment).
 
 Workspaces that restrict outbound network access (for example, Serverless egress controls) can
 block GitHub — install from a Unity Catalog Volume, as above, in that case.

@@ -704,3 +704,150 @@ def test_banddim_typo_pure_2d_still_silent(tmp_path):
         user_warns == []
     ), f"unexpected UserWarning for pure-2-D + typo'd bandDim: {user_warns}"
     assert len(rows) == 1
+
+
+# ---------------------------------------------------------------------------
+# Slice reads decode only the slice (a bad chunk fails only its slice)
+# ---------------------------------------------------------------------------
+
+_N = 20  # lat / lon size of the per-slice-chunk fixtures
+
+
+def _slice_values(t: int) -> np.ndarray:
+    return np.arange(_N * _N, dtype="float32").reshape(_N, _N) + 1000.0 * t
+
+
+def _write_chunked_slices(path: str, ntime: int = 3) -> None:
+    """(time, lat, lon) 'temp' stored as one zlib chunk per time slice; slice t
+    holds _slice_values(t). Latitude descends, so array_2d returns it as stored."""
+    with Dataset(path, "w", format="NETCDF4") as ds:
+        ds.createDimension("time", ntime)
+        ds.createDimension("lat", _N)
+        ds.createDimension("lon", _N)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = np.linspace(50.0, 49.0, _N)
+        lon[:] = np.linspace(10.0, 11.0, _N)
+        ds.createVariable("time", "f8", ("time",))[:] = np.arange(ntime, dtype="f8")
+        v = ds.createVariable(
+            "temp",
+            "f4",
+            ("time", "lat", "lon"),
+            zlib=True,
+            shuffle=False,
+            chunksizes=(1, _N, _N),
+        )
+        for t in range(ntime):
+            v[t, :, :] = _slice_values(t)
+
+
+def _garble_chunk(path: str, t: int) -> None:
+    """XOR the middle of the zlib stream holding slice t (found by inflating every
+    candidate stream and matching the slice's stored bytes)."""
+    import zlib
+
+    want = _slice_values(t).astype("<f4").tobytes()
+    data = bytearray(open(path, "rb").read())
+    window = 2 * len(want) + 64
+    for i in range(len(data) - 1):
+        if data[i] != 0x78:
+            continue
+        d = zlib.decompressobj()
+        try:
+            out = d.decompress(bytes(data[i : i + window]))
+        except zlib.error:
+            continue
+        if d.eof and out == want:
+            used = min(window, len(data) - i) - len(d.unused_data)
+            for j in range(i + used // 2, i + used // 2 + 8):
+                data[j] ^= 0x5A
+            open(path, "wb").write(bytes(data))
+            return
+    raise AssertionError(f"no zlib chunk for slice {t} in {path}")
+
+
+def test_array_2d_corrupt_chunk_fails_only_its_slice(tmp_path):
+    p = str(tmp_path / "bad.nc")
+    _write_chunked_slices(p)
+    _garble_chunk(p, 1)
+    with _netcdf.open_dataset(p, None) as ds:
+        for t in (0, 2):
+            arr = _netcdf.array_2d(ds, "temp", sel={"time": t})
+            np.testing.assert_array_equal(arr, _slice_values(t))
+        with pytest.raises(RuntimeError, match="HDF"):
+            _netcdf.array_2d(ds, "temp", sel={"time": 1})
+
+
+def test_reader_reads_the_good_slices_of_a_variable_with_a_bad_chunk(tmp_path):
+    p = str(tmp_path / "bad.nc")
+    _write_chunked_slices(p)
+    _garble_chunk(p, 1)
+    (row,) = _read_reader(p, {"dimIndex": "time=2"})
+    assert _tile_mean(row) == pytest.approx(float(_slice_values(2).mean()))
+    # fanout: slice 0 is emitted, then the bad slice fails the read.
+    reader = NetcdfRasterReader({"path": p, "fanout": "time"})
+    rows = []
+    with pytest.raises(RuntimeError, match="HDF"):
+        for r in reader.read(_FilePartition(p, -1)):
+            rows.append(r)
+    assert len(rows) == 1 and _tile_mean(rows[0]) == pytest.approx(
+        float(_slice_values(0).mean())
+    )
+
+
+def test_fanout_reads_one_slice_per_row(tmp_path, monkeypatch):
+    """A fanout read decodes one slice per row, never the whole variable: each of
+    the 3 rows reads one 20 x 20 slice of 'temp' from the file (the first row used
+    to read, decode and hold all 3 x 20 x 20 values, then slice them)."""
+    from xarray.backends import netCDF4_
+
+    read = []
+    real = netCDF4_.NetCDF4ArrayWrapper._getitem
+
+    def spy(self, key):
+        out = real(self, key)
+        if self.variable_name == "temp":
+            read.append(int(np.asarray(out).size))
+        return out
+
+    monkeypatch.setattr(netCDF4_.NetCDF4ArrayWrapper, "_getitem", spy)
+    p = str(tmp_path / "good.nc")
+    _write_chunked_slices(p)
+    rows = _read_reader(p, {"fanout": "time"})
+    assert [_tile_mean(r) for r in rows] == pytest.approx(
+        [float(_slice_values(t).mean()) for t in range(3)]
+    )
+    assert read == [_N * _N] * 3
+
+
+def test_array_2d_undecodable_variable_reads_raw_per_slice(tmp_path):
+    """The raw fallback (an integer variable whose CF mask decode fails, like NOAA
+    coral bleaching_alert_area: uint8, _FillValue 251, integer scale_factor) still
+    returns each slice's raw values with the fill kept."""
+    p = str(tmp_path / "baa.nc")
+    raw = np.array([[[0, 1], [251, 4]], [[2, 251], [3, 0]]], dtype="u1")
+    with Dataset(p, "w", format="NETCDF4") as ds:
+        ds.createDimension("time", 2)
+        ds.createDimension("lat", 2)
+        ds.createDimension("lon", 2)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [1.0, 0.0]
+        lon[:] = [0.0, 1.0]
+        v = ds.createVariable("baa", "u1", ("time", "lat", "lon"), fill_value=251)
+        v.set_auto_maskandscale(False)
+        v.scale_factor = np.int64(1)
+        v.valid_min = np.uint8(0)
+        v.valid_max = np.uint8(4)
+        v[:] = raw
+    with _netcdf.open_dataset(p, None) as ds:
+        with pytest.raises(ValueError):
+            ds["baa"].values  # noqa: B018 - the decode this fallback exists for
+        for t in (0, 1):
+            arr = _netcdf.array_2d(ds, "baa", sel={"time": t})
+            assert arr.dtype == np.uint8
+            np.testing.assert_array_equal(arr, raw[t])

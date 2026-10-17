@@ -182,6 +182,10 @@ def leading_dims(ds, variable: str) -> List[Tuple[str, int]]:
 def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object":
     """The variable's 2-D slice as a north-up numpy array (lat descending).
 
+    Only that slice is read and decoded (``isel`` before ``.values``): a fanout
+    or bandDim read decodes one slice per call, never the whole variable, so
+    memory stays at one slice and a corrupt chunk fails only the slices in it.
+
     Args:
         ds:       Open xarray Dataset.
         variable: Variable name.
@@ -197,7 +201,7 @@ def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object
     if sel is None:
         sel = {}
 
-    da = _decoded_or_raw(ds, variable)
+    da = ds[variable]  # lazy: nothing is read or decoded here
 
     # Early validation: check sel indices are in range for dims present in this var.
     for s_dim, s_idx in sel.items():
@@ -209,54 +213,59 @@ def array_2d(ds, variable: str, sel: Optional[Dict[str, int]] = None) -> "object
                     f"(size={s_size}) for variable {variable!r}."
                 )
 
-    # Squeeze any leading dims until 2-D.
-    # If the dim is in sel, use that index (no warning).
-    # Otherwise fall back to index 0 with a warning when size > 1.
-    while da.ndim > 2:
-        drop_dim = da.dims[0]
+    # Index the leading dims down to 2-D: the index in *sel* (no warning), else
+    # index 0, with a warning when the dim has more than one slice.
+    index: Dict[str, object] = {}
+    for drop_dim in da.dims[: max(da.ndim - 2, 0)]:
         drop_size = int(da.sizes[drop_dim])
         if drop_dim in sel:
-            da = da.isel({drop_dim: sel[drop_dim]})
-        else:
-            if drop_size > 1:
-                _logger.warning(
-                    "netcdf_gbx: variable %r has leading dimension %r of size %d; "
-                    "reading only index 0 and dropping the other %d slice(s). "
-                    "Use the 'fanout' or 'dimIndex' option to read other slices.",
-                    variable,
-                    drop_dim,
-                    drop_size,
-                    drop_size - 1,
-                )
-            da = da.isel({drop_dim: 0})
+            index[drop_dim] = sel[drop_dim]
+            continue
+        if drop_size > 1:
+            _logger.warning(
+                "netcdf_gbx: variable %r has leading dimension %r of size %d; "
+                "reading only index 0 and dropping the other %d slice(s). "
+                "Use the 'fanout' or 'dimIndex' option to read other slices.",
+                variable,
+                drop_dim,
+                drop_size,
+                drop_size - 1,
+            )
+        index[drop_dim] = 0
 
     lat, _ = _find_lat_lon(ds)
     latdim = lat.dims[0]
     # Ensure north-up: descending latitude along the lat dimension.
     latvals = ds[lat.name].values
-    if latdim in da.dims and float(latvals[0]) < float(latvals[-1]):
-        da = da.isel({latdim: slice(None, None, -1)})
-    return np.asarray(da.values)
+    if (
+        latdim in da.dims
+        and latdim not in index
+        and float(latvals[0]) < float(latvals[-1])
+    ):
+        index[latdim] = slice(None, None, -1)
+    return np.asarray(_decoded_or_raw(ds, variable, index))
 
 
-def _decoded_or_raw(ds, variable: str) -> "object":
-    """Return the variable's DataArray, materializing its values.
+def _decoded_or_raw(ds, variable: str, index: Optional[Dict[str, object]] = None):
+    """The variable's values at ``index`` (``isel`` indexers; None = all of it),
+    reading and decoding only that selection.
 
-    Normally the ``mask_and_scale``-decoded array. But some CF integer variables
-    (e.g. NOAA coral ``bleaching_alert_area``: uint8 with ``valid_min/max`` and a
-    fill of 251) trip xarray's masking decode with "cannot convert float NaN to
-    integer". For those we fall back to the RAW (undecoded) values -- which is
-    also what the heavy GDAL reader emits (fill kept as its integer sentinel, no
-    NaN promotion), so it is the parity-correct behavior. The reopen is targeted
-    (only on decode failure) using the variable's own source-file encoding.
+    Normally the ``mask_and_scale``-decoded values. But some CF integer variables
+    (e.g. NOAA coral ``bleaching_alert_area``: uint8 with ``valid_min/max``, an
+    integer ``scale_factor`` and a fill of 251) trip xarray's masking decode with
+    "cannot convert float NaN to integer" -- for any selection, since the failure
+    comes from the variable's attributes. For those we fall back to the RAW
+    (undecoded) values -- which is also what the heavy GDAL reader emits (fill
+    kept as its integer sentinel, no NaN promotion), so it is the parity-correct
+    behavior. The reopen is targeted (only on decode failure) using the
+    variable's own source-file encoding, and reads the same selection only.
     """
     import xarray as xr
 
+    index = index or {}
     da = ds[variable]
     try:
-        # Force the lazy decode now so a masking failure is caught here.
-        da.values  # noqa: B018 - intentional materialization to trigger decode
-        return da
+        return da.isel(index).values
     except ValueError:
         src = da.encoding.get("source") or ds.encoding.get("source")
         if not src:
@@ -265,7 +274,7 @@ def _decoded_or_raw(ds, variable: str) -> "object":
             src, engine="netcdf4", decode_coords="all", mask_and_scale=False
         )
         try:
-            return raw[variable].load()
+            return raw[variable].isel(index).values
         finally:
             raw.close()
 

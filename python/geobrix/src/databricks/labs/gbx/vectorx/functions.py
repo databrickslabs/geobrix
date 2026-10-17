@@ -18,6 +18,11 @@ unchanged — pyspark treats a bare string as a dataframe column reference
 (e.g. ``vx.st_asmvt(geom, attrs, f.lit("roads"))``).
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Union
 
 from pyspark.sql import Column, SparkSession

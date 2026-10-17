@@ -12,6 +12,11 @@ lat, 10)`` or ``quadbin_kring(cell, 1)`` instead of wrapping in ``f.lit``.
 Strings and ``Column`` values pass through unchanged.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Optional, Union
 
 from pyspark.sql import Column, SparkSession

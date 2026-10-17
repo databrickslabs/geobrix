@@ -16,6 +16,11 @@ Grid parameter types:
   underlying Scala expression does not accept floating-point values.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Optional, Union
 
 from pyspark.sql import Column, SparkSession

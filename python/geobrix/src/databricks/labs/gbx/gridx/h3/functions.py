@@ -21,6 +21,11 @@ For geometry-aware kring/kloop, ``register`` (pygx) is sufficient::
     df.withColumn("kring", geomkring("geom_col", resolution=9, k=1))
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Union
 
 from pyspark.sql import Column, SparkSession

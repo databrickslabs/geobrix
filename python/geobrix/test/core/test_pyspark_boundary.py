@@ -1,9 +1,12 @@
-"""Without PySpark, the light tier fails with one clear message -- and stays lazy.
+"""Without PySpark, GeoBrix's Python bindings fail with one clear message -- and
+stay lazy.
 
 PySpark is not a GeoBrix dependency (every Databricks runtime ships its own), so
 a local install without it must say so instead of a bare
-``ModuleNotFoundError: No module named 'pyspark'``. The check runs in a
-subprocess whose import hook reports pyspark as not installed.
+``ModuleNotFoundError: No module named 'pyspark'``. That holds for the light
+tier (pyrx / pyvx / pygx) and for the heavyweight bindings (rasterx / gridx /
+vectorx). The check runs in a subprocess whose import hook reports pyspark as
+not installed.
 """
 
 import json
@@ -44,10 +47,11 @@ def _is_pyspark(missing):
     return missing == "pyspark" or (missing or "").startswith("pyspark.")
 
 
-def _public_modules():
-    """Every public module of the light packages (no ``_``-prefixed segment)."""
-    names = ["databricks.labs.gbx", "databricks.labs.gbx.ds"]
-    for pkg in ("pyrx", "pyvx", "pygx"):
+def _public_modules(packages, names):
+    """``names`` plus every public module of ``packages`` (no ``_``-prefixed
+    segment)."""
+    names = list(names)
+    for pkg in packages:
         for f in sorted((_ROOT / pkg).rglob("*.py")):
             parts = f.relative_to(_ROOT).with_suffix("").parts
             if parts[-1] == "__init__":
@@ -71,18 +75,53 @@ def _import_without_pyspark(names):
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-def test_missing_pyspark_gives_one_clear_error_and_packages_stay_lazy():
-    got = _import_without_pyspark(_public_modules())
-    bare = {
+def _bare_pyspark_errors(got):
+    return {
         name: err[1]
         for name, err in got.items()
         if err and _is_pyspark(err[0]) and _HINT not in err[1]
     }
+
+
+def test_missing_pyspark_gives_one_clear_error_and_packages_stay_lazy():
+    got = _import_without_pyspark(
+        _public_modules(
+            ("pyrx", "pyvx", "pygx"), ["databricks.labs.gbx", "databricks.labs.gbx.ds"]
+        )
+    )
+    bare = _bare_pyspark_errors(got)
     assert bare == {}, f"bare pyspark ModuleNotFoundError from: {sorted(bare)}"
     # The packages themselves never import pyspark ...
     for pkg in ("", ".pyrx", ".pyvx", ".pygx"):
         assert got["databricks.labs.gbx" + pkg] is None, pkg
     # ... while their Spark entry points need it, and say how to get it.
     for name in ("ds", "pyrx.functions", "pyvx.functions", "pygx.functions"):
+        err = got["databricks.labs.gbx." + name]
+        assert err and _is_pyspark(err[0]) and "pyspark>=4.0.0" in err[1], name
+
+
+_HEAVY_PACKAGES = ("rasterx", "gridx", "vectorx")
+_HEAVY_ENTRY_POINTS = (
+    "rasterx.functions",
+    "vectorx.functions",
+    "vectorx.jts.legacy.functions",
+    "gridx.bng.functions",
+    "gridx.custom.functions",
+    "gridx.h3.functions",
+    "gridx.quadbin.functions",
+)
+
+
+def test_missing_pyspark_gives_one_clear_error_in_the_heavyweight_bindings():
+    got = _import_without_pyspark(
+        _public_modules(_HEAVY_PACKAGES, ["databricks.labs.gbx"])
+    )
+    bare = _bare_pyspark_errors(got)
+    assert bare == {}, f"bare pyspark ModuleNotFoundError from: {sorted(bare)}"
+    # The packages stay importable without pyspark ...
+    for pkg in _HEAVY_PACKAGES:
+        assert got["databricks.labs.gbx." + pkg] is None, pkg
+    # ... while their function modules need it, and say how to get it.
+    for name in _HEAVY_ENTRY_POINTS:
         err = got["databricks.labs.gbx." + name]
         assert err and _is_pyspark(err[0]) and "pyspark>=4.0.0" in err[1], name

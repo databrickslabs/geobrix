@@ -14,6 +14,11 @@ dataframe column reference (``f.col("name")``); wrap in ``f.lit(...)`` to pass
 a string literal.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Union
 
 from pyspark.sql import Column, SparkSession

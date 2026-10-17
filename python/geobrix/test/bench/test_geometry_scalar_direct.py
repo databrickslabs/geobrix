@@ -1,19 +1,38 @@
 """Direct verification of geometry_scalar implementation without full bench infrastructure."""
 
-from pathlib import Path
+import pytest
 
+from databricks.labs.gbx.bench import datagen as dg
 from databricks.labs.gbx.bench import runner as rn
 from databricks.labs.gbx.bench import spec as s
 
 
-def test_geometry_sets_loaded_from_corpus():
-    """Verify that geometry sets can be loaded from the local corpus."""
-    # The corpus is at geobrix/sample-data/Volumes/main/default/bench-corpus
-    # We're in geobrix/python/geobrix/test/bench/, so go up 4 levels then to sample-data
-    test_file = Path(__file__)
-    repo_root = test_file.parent.parent.parent.parent.parent  # Up to geobrix repo root
-    corpus_root = repo_root / "sample-data/Volumes/main/default/bench-corpus"
-    print(f"Looking for corpus at: {corpus_root}")
+@pytest.fixture(scope="module")
+def corpus_root(tmp_path_factory):
+    """A small generated bench corpus (corpus.json + geometry.json), as gen-data writes it.
+
+    Generated here rather than read from a local ``sample-data/.../bench-corpus``: that
+    directory is untracked, so a clean checkout (CI) does not have it.
+    """
+    out = tmp_path_factory.mktemp("bench-corpus")
+    dg.generate_corpus(
+        out_dir=out,
+        seed=42,
+        tile_px=[32],
+        bands=[2],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=2,
+        row_dtype="float32",
+    )
+    return out
+
+
+def test_geometry_sets_loaded_from_corpus(corpus_root):
+    """Verify that geometry sets can be loaded from a generated corpus."""
     geom_corpus = rn._load_geometry_corpus(corpus_root)
     assert geom_corpus is not None
     assert len(geom_corpus.sets) > 0
@@ -31,11 +50,8 @@ def test_geometry_sets_loaded_from_corpus():
             print(f"  {set_name}: {len(gset.zpoints)} zpoints")
 
 
-def test_geometry_set_for_lookup():
+def test_geometry_set_for_lookup(corpus_root):
     """Verify _geometry_set_for lookup works."""
-    test_file = Path(__file__)
-    repo_root = test_file.parent.parent.parent.parent.parent  # Up to geobrix repo root
-    corpus_root = repo_root / "sample-data/Volumes/main/default/bench-corpus"
     geom_corpus = rn._load_geometry_corpus(corpus_root)
 
     # Create a mock TileEntry
@@ -92,16 +108,14 @@ def test_st_specs_have_geometry_scalar_kind():
         ), f"{fn.name} should have geometry_set"
 
 
-def test_col_fn_produces_real_output():
+def test_col_fn_produces_real_output(corpus_root):
     """Verify col_fn produces real work by showing geometry transformations."""
     import shapely.geometry
     import shapely.wkb
 
     # Load geometry corpus to show real-world examples
-    test_file = Path(__file__)
-    repo_root = test_file.parent.parent.parent.parent.parent
-    corpus_root = repo_root / "sample-data/Volumes/main/default/bench-corpus"
     geom_corpus = rn._load_geometry_corpus(corpus_root)
+    assert geom_corpus is not None
 
     print("\nGeometry Scalar Transformation Evidence:")
     print("=" * 60)
@@ -162,11 +176,3 @@ def test_col_fn_produces_real_output():
     print("\n" + "=" * 60)
     print("All geometry transformation examples prepared from corpus.")
     print("Real execution would apply col_fn to these geometries.")
-
-
-if __name__ == "__main__":
-    test_geometry_sets_loaded_from_corpus()
-    test_geometry_set_for_lookup()
-    test_st_specs_have_geometry_scalar_kind()
-    test_col_fn_produces_real_output()
-    print("\nAll direct verification tests completed.")

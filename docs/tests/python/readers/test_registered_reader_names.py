@@ -36,10 +36,43 @@ def test_registered_names_are_the_shipped_readers():
         ('spark.read\n    .format(\n        "shapefile")', [("format()", "shapefile")]),
         ('df.write.format("pmtiles").save(p)', [("format()", "pmtiles")]),
         ('spark.read.load(p, format="gpkg")', [("load(format=)", "gpkg")]),
+        (
+            'spark.read.load(os.path.join(a, "b"),\n    format="gpkg")',
+            [("load(format=)", "gpkg")],
+        ),
+        ('df.write.save(p, format="gpkg")', [("save(format=)", "gpkg")]),
+        ('df.write.saveAsTable("t", format="gpkg")', [("saveAsTable(format=)", "gpkg")]),
+        ('img.save(path, "PNG")', []),  # positional: only the keyword names a format
         ("SELECT * FROM gpkg.`/data/a.gpkg`", [("SQL path read", "gpkg")]),
         ("select * from gpkg_ogr.`/data/a.gpkg`", [("SQL path read", "gpkg_ogr")]),
         ("CREATE TABLE t USING gpkg LOCATION '/x'", [("SQL USING", "gpkg")]),
+        ("create table t (a int) using gpkg location '/x'", [("SQL USING", "gpkg")]),
+        ("create or replace temp view v\nusing gpkg_ogr options (path '/x')", [("SQL USING", "gpkg_ogr")]),
         ("a table made using gpkg files", []),
+        ("To create a table using gpkg files", []),
+        # Databricks SQL named argument of read_files
+        ("SELECT * FROM read_files('/x', format => 'gpkg')", [("read_files(format=>)", "gpkg")]),
+        # read_paths / declare_ingest: the positional or keyword format
+        ('read_paths(files, "geojson")', [("read_paths()", "geojson")]),
+        ('read_paths(\n    spark.read.load(p).select("a"),\n    "gtiff_gbx", options={})', [("read_paths()", "gtiff_gbx")]),
+        ('read_paths(df, format="Gpkg")', [("read_paths()", "Gpkg")]),
+        (  # a comment between the arguments may hold commas and quotes
+            'read_paths(df,  # the files, as listed\n    "gpkg",  # it\'s one reader\n    options={})',
+            [("read_paths()", "gpkg")],
+        ),
+        ("read_paths(df, format, options=None)", []),  # a signature, not a name
+        ("read_paths(df, fmt)", []),
+        ('declare_ingest("c.s.t", "/Volumes/x", "gpkg_gbx", on_error="fail")', [("declare_ingest()", "gpkg_gbx")]),
+        ('declare_ingest("c.s.t", "/Volumes/x", format="shapefile")', [("declare_ingest()", "shapefile")]),
+        ('declare_ingest(target, source_dir, "geojson")', [("declare_ingest()", "geojson")]),
+        # the connector's format option
+        ('{"scd_type": "APPEND_ONLY", "format": "geojson"}', [("connector format", "geojson")]),
+        ("set `format: cog` and `file_glob: *.tif`", [("connector format", "cog")]),
+        ("table_configuration:\n  format: gpkg\n  path: x", [("connector format", "gpkg")]),
+        ("format: str,", []),
+        ("| `format` | Extensions |\n|---|---|\n| `gpkg` | `.gpkg` |\n| `file_gdb`, `shapefile` | x |\n\nafter",
+         [("format table", "gpkg"), ("format table", "file_gdb"), ("format table", "shapefile")]),
+        ("| Option | Meaning |\n|---|---|\n| `format` | A reader |\n| `path` | x |", []),
         ('spark.read.format("<reader_name>")', []),
         ('spark.read.format("...")', []),
         ('.format("com.databricks.labs.gbx.ds.whitelist.WhitelistDataSource")', []),
@@ -47,6 +80,36 @@ def test_registered_names_are_the_shipped_readers():
 )
 def test_the_scan_finds_the_names_a_snippet_uses(text, expected):
     assert [(kind, name) for _, kind, name in rr.reader_references(text)] == expected
+
+
+@pytest.mark.parametrize(
+    "kind, name, ok",
+    [
+        # Spark's own format() resolves the exact name only
+        ("format()", "gpkg_gbx", True),
+        ("format()", "gpkg_ogr", True),
+        ("format()", "GPKG_GBX", True),
+        ("format()", "gpkg", False),
+        ("format()", "parquet", True),
+        ("SQL USING", "delta", True),
+        ("save(format=)", "gpkg", False),
+        # read_paths / declare_ingest / the connector: light readers, _gbx optional
+        ("read_paths()", "gpkg", True),
+        ("read_paths()", "GPKG_gbx", True),
+        ("read_paths()", "geojson", True),
+        ("read_paths()", "gpkg_ogr", False),  # a heavyweight reader
+        ("read_paths()", "gpkg_gbxx", False),
+        ("declare_ingest()", "shapefile", True),
+        ("declare_ingest()", "nosuch", False),
+        ("connector format", "cog", True),
+        ("connector format", "file_gdb", True),
+        ("connector format", "gpkg_ogr", False),
+        ("format table", "pmtiles", True),
+        ("format table", "pmtile", False),
+    ],
+)
+def test_a_name_is_registered_the_way_its_context_resolves_it(kind, name, ok):
+    assert rr.is_registered(kind, name) is ok
 
 
 def test_the_scan_reads_notebook_cells(tmp_path):
@@ -85,6 +148,19 @@ def test_the_scan_covers_the_docs_the_examples_and_the_readmes():
     assert "README.md" in files
     references, _ = rr.scan()
     assert len(references) > 300, f"only {len(references)} reader references found"
+    # Every way of naming a reader is still found somewhere (a broken pattern would
+    # scan nothing and pass).
+    kinds = {kind for _, _, kind, _ in references}
+    assert {
+        "format()",
+        "SQL path read",
+        "SQL USING",
+        "read_files(format=>)",
+        "read_paths()",
+        "declare_ingest()",
+        "connector format",
+        "format table",
+    } <= kinds, sorted(kinds)
 
 
 def test_docs_and_examples_name_only_registered_readers():

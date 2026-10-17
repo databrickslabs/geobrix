@@ -5,8 +5,9 @@ read each file in isolation: an error in one file, or in one reader partition of
 it (a raster tile window, a PMTiles tile group), is caught there, rows already
 read are kept, and the rest of the input is read on. Per-row checks and per-file
 count checks set aside the records a reader returns without an error but which
-are not data (a NULL or unreadable geometry, invalid UTF-8, features a file
-declares but the reader never returned). Every such record is a *bad record*.
+are not data (geometry bytes that cannot be decoded, invalid UTF-8, features a
+file declares but the reader never returned; a NULL or empty geometry is data).
+Every such record is a *bad record*.
 
 A :class:`BadRecords` collector receives them on the executors. With a scratch
 folder it writes them to Parquet fragments there (``declare_ingest`` appends
@@ -43,9 +44,8 @@ HOOK = "_gbx_bad_record"
 # Errors that are never a bad record: they stop the read.
 PASS_THROUGH = (KeyboardInterrupt, SystemExit, GeneratorExit)
 
-# error_class of the records a check (not an exception) sets aside.
-NULL_GEOMETRY = "NullGeometry"
-EMPTY_GEOMETRY = "EmptyGeometry"
+# error_class of the records a check (not an exception) sets aside. A NULL or
+# empty geometry is data (an unlocated feature, POINT EMPTY), not a bad record.
 UNREADABLE_GEOMETRY = "UnreadableGeometry"
 INVALID_TEXT = "InvalidText"
 RECORDS_NOT_READ = "RecordsNotRead"
@@ -54,11 +54,11 @@ SHORT_TILE = "ShortTile"
 NOT_JPEG = "NotJpeg"
 UNREADABLE_FILE = "UnreadableFile"
 FILE_TOO_LARGE = "FileTooLarge"
+# declare_ingest: a delivery none of whose rows could be read (one summary record).
+NOTHING_READABLE = "NothingReadable"
 
 #: Every error_class a check can give (exceptions give their class name).
 CHECK_CLASSES = (
-    NULL_GEOMETRY,
-    EMPTY_GEOMETRY,
     UNREADABLE_GEOMETRY,
     INVALID_TEXT,
     RECORDS_NOT_READ,
@@ -67,6 +67,7 @@ CHECK_CLASSES = (
     NOT_JPEG,
     UNREADABLE_FILE,
     FILE_TOO_LARGE,
+    NOTHING_READABLE,
 )
 
 _TS = pa.timestamp("us", tz="UTC")
@@ -432,7 +433,9 @@ def _invalid_text_rows(batch: pa.RecordBatch) -> dict:
 def bad_rows(batch: pa.RecordBatch, geometry: Optional[str]) -> dict:
     """``{row: (error_class, message)}`` for the rows of a reader batch that are
     not data: invalid UTF-8 text (any reader), and for a vector reader
-    (``geometry`` names its column) a NULL, unreadable or empty geometry."""
+    (``geometry`` names its column) a geometry value that is not readable WKB /
+    WKT. A NULL or empty geometry is data (an unlocated feature, ``POINT
+    EMPTY``) and stays."""
     out = _invalid_text_rows(batch)
     if geometry is None or batch.num_rows == 0:
         return out
@@ -443,32 +446,19 @@ def bad_rows(batch: pa.RecordBatch, geometry: Optional[str]) -> dict:
     values = col.to_numpy(zero_copy_only=False)
     is_wkb = pa.types.is_binary(col.type) or pa.types.is_large_binary(col.type)
     parse = shapely.from_wkb if is_wkb else shapely.from_wkt
-    nulls = np.asarray(col.is_null().to_numpy(zero_copy_only=False), dtype=bool)
-    present = ~nulls
+    present = ~np.asarray(col.is_null().to_numpy(zero_copy_only=False), dtype=bool)
+    if not present.any():
+        return out
     geoms = np.full(len(values), None, dtype=object)
-    if present.any():
-        geoms[present] = parse(values[present], on_invalid="ignore")
-    unreadable = present & np.array([g is None for g in geoms], dtype=bool)
-    empty = np.zeros(len(values), dtype=bool)
-    if (present & ~unreadable).any():
-        ok = present & ~unreadable
-        empty[ok] = shapely.is_empty(geoms[ok])
-    kind = "WKB" if is_wkb else "WKT"
-    for i in np.nonzero(nulls)[0]:
-        out.setdefault(
-            int(i),
-            (
-                NULL_GEOMETRY,
-                f"{geometry} is NULL: the feature has no geometry, or one the "
-                "reader could not decode",
-            ),
-        )
+    geoms[present] = parse(values[present], on_invalid="ignore")
+    unreadable = present & np.fromiter(
+        (g is None for g in geoms), dtype=bool, count=len(geoms)
+    )
+    kind = "WKB" if is_wkb else "WKT (its WKB could not be decoded)"
     for i in np.nonzero(unreadable)[0]:
         out.setdefault(
             int(i), (UNREADABLE_GEOMETRY, f"{geometry} is not readable {kind}")
         )
-    for i in np.nonzero(empty)[0]:
-        out.setdefault(int(i), (EMPTY_GEOMETRY, f"{geometry} is empty"))
     return out
 
 

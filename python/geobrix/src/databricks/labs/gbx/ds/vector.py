@@ -1004,6 +1004,18 @@ def _copy_tree_to_fuse(src, dst):
             shutil.copyfile(s, d)
 
 
+# WKT output for a WKB the reader could not decode under read_paths'
+# on_error="skip": not WKT, so the row is set aside as an unreadable geometry.
+_UNREADABLE_WKB = "UNREADABLE WKB"
+
+
+def _is_none(values):
+    """Element-wise ``is None`` over an object array."""
+    import numpy as np
+
+    return np.fromiter((v is None for v in values), dtype=bool, count=len(values))
+
+
 class _ChunkPartition(InputPartition):
     """One contiguous feature slice of one layer (picklable)."""
 
@@ -1557,13 +1569,15 @@ class VectorGbxReader(DataSourceReader):
             geom_out = wkb.cast(pa.binary())
         else:
             # Under read_paths' on_error="skip" (a bad-record hook on the reader) an
-            # unreadable WKB becomes a NULL geometry (set aside), not a failed file.
-            invalid = "ignore" if getattr(self, "_gbx_bad_record", None) else "raise"
-            geoms = shapely.from_wkb(
-                wkb.to_numpy(zero_copy_only=False), on_invalid=invalid
-            )
-            wkt = shapely.to_wkt(geoms)
-            geom_out = pa.array(np.asarray(wkt, dtype=object), type=pa.string())
+            # unreadable WKB becomes text that is not WKT, which read_paths sets
+            # aside as an unreadable geometry, instead of failing the file.
+            hooked = getattr(self, "_gbx_bad_record", None) is not None
+            raw = wkb.to_numpy(zero_copy_only=False)
+            geoms = shapely.from_wkb(raw, on_invalid="ignore" if hooked else "raise")
+            wkt = np.asarray(shapely.to_wkt(geoms), dtype=object)
+            if hooked:
+                wkt[_is_none(geoms) & ~_is_none(raw)] = _UNREADABLE_WKB
+            geom_out = pa.array(wkt, type=pa.string())
         cols = [
             (
                 _time_text(batch.column(c))

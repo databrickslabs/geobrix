@@ -18,6 +18,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
+import shapely
 
 from databricks.labs.gbx.ds import _quarantine as Q
 from databricks.labs.gbx.ds import paths as P
@@ -221,9 +222,10 @@ def test_describe_follows_the_cause_chain():
 
 
 def test_vector_rows_that_are_not_data_are_set_aside(tmp_path):
-    """NULL geometry (no geometry, an unknown type, unreadable coordinates), a
-    geometry WKB cannot hold (an unclosed ring), an empty one and invalid UTF-8
-    text are records of their own; every other feature is read."""
+    """A geometry WKB cannot hold (an unclosed ring) and invalid UTF-8 text are
+    records of their own. A NULL geometry (no geometry, or one GDAL cannot
+    decode: an unknown type, unreadable coordinates) and an empty one are data:
+    they stay in the rows."""
     feats = [_feature(i) for i in range(8)]
     feats[1]["geometry"] = None
     feats[2]["geometry"] = {"type": "Pointy", "coordinates": [1.0, 2.0]}
@@ -236,29 +238,30 @@ def test_vector_rows_that_are_not_data_are_set_aside(tmp_path):
     path.write_bytes(raw)
     good = _geojson(tmp_path / "good.geojson", [_feature(0)])
     rows, recs = _read(tmp_path, str(path), "geojson_gbx", None, good)
-    assert sorted(r["id"] for r in rows) == [0, 7]
+    assert sorted(r["id"] for r in rows) == [0, 1, 2, 3, 5, 7]
+    by_id = {r["id"]: r["geom_0"] for r in rows}
+    assert by_id[1] is None and by_id[2] is None and by_id[3] is None
+    assert shapely.from_wkb(by_id[5]).is_empty
     assert _classes(recs) == [
-        ("feature=1", Q.NULL_GEOMETRY),
-        ("feature=2", Q.NULL_GEOMETRY),
-        ("feature=3", Q.NULL_GEOMETRY),
         ("feature=4", Q.UNREADABLE_GEOMETRY),
-        ("feature=5", Q.EMPTY_GEOMETRY),
         ("feature=6", Q.INVALID_TEXT),
     ]
     # The record keeps the feature's other columns (escaped where not text).
-    assert json.loads(recs[0]["raw"]) == {"id": 1, "name": "f1"}
-    assert json.loads(recs[5]["raw"])["name"] == "f6\\xff\\xfe"
+    assert json.loads(recs[0]["raw"]) == {"id": 4, "name": "f4"}
+    assert json.loads(recs[1]["raw"])["name"] == "f6\\xff\\xfe"
 
 
 def test_wkt_output_sets_an_unreadable_geometry_aside(tmp_path):
     """With asWKB=false the WKB is decoded to WKT inside the reader; an
-    unreadable one is a record, not a failed file."""
-    feats = [_feature(i) for i in range(3)]
+    unreadable one is a record, not a failed file, and a NULL one stays."""
+    feats = [_feature(i) for i in range(4)]
     feats[1]["geometry"] = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0]]]}
+    feats[3]["geometry"] = None
     path = _geojson(tmp_path / "a.geojson", feats)
     rows, recs = _read(tmp_path, path, "geojson_gbx", {"asWKB": "false"})
-    assert sorted(r["id"] for r in rows) == [0, 2]
-    assert _classes(recs) == [("feature=1", Q.NULL_GEOMETRY)]
+    assert sorted(r["id"] for r in rows) == [0, 2, 3]
+    assert [r["geom_0"] for r in rows if r["id"] == 3] == [None]
+    assert _classes(recs) == [("feature=1", Q.UNREADABLE_GEOMETRY)]
 
 
 def test_schema_drift_is_a_record_of_the_file(tmp_path):
@@ -739,7 +742,7 @@ def test_fragments_hold_the_fragment_schema_and_flush_in_bounded_files(
     scratch = str(tmp_path / "s")
     bad = Q.BadRecords(scratch)
     for i in range(5):
-        bad.add("/v/a.gpkg", MTIME_US, f"feature={i}", Q.NULL_GEOMETRY, "x", "{}")
+        bad.add("/v/a.gpkg", MTIME_US, f"feature={i}", Q.UNREADABLE_GEOMETRY, "x", "{}")
     bad.close()
     names = sorted(os.listdir(scratch))
     assert len(names) == 3 and all(n.startswith("local-") for n in names)

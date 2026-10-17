@@ -1157,9 +1157,10 @@ def read_paths(
     ``on_error`` (see :data:`ON_ERROR_MODES`): ``"fail"`` (default) fails the
     read on an error, naming the file. ``"skip"`` reads each file (and each
     raster window or group of PMTiles tiles) on its own: an error, a row that is
-    not data (invalid text; for vector formats a NULL, unreadable or empty
-    geometry) and records a file declares but its reader does not return are
-    logged as warnings and skipped, and everything else is read.
+    not data (invalid text; for vector formats geometry bytes that cannot be
+    decoded -- a NULL or empty geometry is data) and records a file declares but
+    its reader does not return are logged as warnings and skipped, and everything
+    else is read.
 
     ``schema`` (internal) is an already resolved schema, as from
     :func:`path_schema` (lineage columns optional); given, no file is opened to

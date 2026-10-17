@@ -43,7 +43,7 @@ Both tiers (lightweight `vector_gbx`, heavyweight `ogr`) take the same options, 
 
 | Option | Default | Description |
 |--------|---------|-------------|
-| `driverName` | required on `vector_gbx`; auto-detected from the extension on `ogr`; preset on named readers | OGR driver name (e.g. `GPKG`, `ESRI Shapefile`, `GeoJSON`) — forces a specific driver regardless of the file extension. |
+| `driverName` | required on `vector_gbx`; auto-detected from the extension on `ogr`; preset on named readers | OGR driver name (e.g. `GPKG`, `ESRI Shapefile`, `GeoJSON`) — forces a specific driver regardless of the file extension. Lightweight: `GeoJSON`, `GeoJSONSeq` and `GPKG` are forced; GDAL picks other drivers (`ESRI Shapefile`, `OpenFileGDB`, ...) from the file, and a file it opens with a driver other than the one named is rejected. |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
 | `chunkSize` | `"10000"` | Features per unit of work. Lightweight: the layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. Heavyweight: each partition reads this many features, so a large file is read in parallel. |
 | `layerName` | `""` | Layer name for multi-layer formats (overrides the layer index). |

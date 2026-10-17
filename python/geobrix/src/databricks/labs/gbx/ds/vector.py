@@ -218,6 +218,40 @@ def _zip_vsi(path: str) -> str:
     return path
 
 
+# GDAL connection-string prefixes that force a vector driver ("GeoJSON:<file>").
+# pyogrio's read functions take no driver argument: a ``driver=`` keyword is passed
+# on as the dataset open option DRIVER, which the drivers reject with a warning on
+# every open and never use to pick the driver. ESRI Shapefile and OpenFileGDB have
+# no prefix (GDAL picks them by extension), so _check_driver verifies them instead.
+_DRIVER_PREFIX = {"GeoJSON": "GeoJSON:", "GeoJSONSeq": "GeoJSONSeq:", "GPKG": "GPKG:"}
+
+
+def _open_path(path: str, driver: str) -> str:
+    """The name pyogrio opens for ``path`` read with ``driver``: a zipped source
+    as ``/vsizip/``, else prefixed so GDAL uses ``driver`` whatever the file is
+    named. A ``.zip`` is never prefixed: pyogrio wraps any name ending in ``.zip``
+    in ``/vsizip/`` again. GDAL splits ``GPKG:<file>:<table>`` on ':', so the GPKG
+    file name is quoted (a name that itself holds a quote is left to detection)."""
+    vsi = _zip_vsi(path)
+    prefix = _DRIVER_PREFIX.get(driver)
+    if prefix is None or vsi != path:
+        return vsi
+    if driver == "GPKG":
+        return f'{prefix}"{path}"' if '"' not in path else path
+    return prefix + path
+
+
+def _check_driver(path: str, want: str, got: Optional[str]) -> None:
+    """A reader given a driver reads only that format. The prefixed drivers are
+    forced; for the others a file GDAL opens with another driver is rejected
+    instead of being read as that format."""
+    if want and got and got != want:
+        raise ValueError(
+            f"{path}: GDAL opens this file with the {got} driver, not {want}. "
+            f"Read it with the reader for {got} (or driverName='{got}')."
+        )
+
+
 _CANONICAL_EXT = {
     "GPKG": ".gpkg",
     "GeoJSON": ".geojson",
@@ -996,11 +1030,10 @@ class VectorGbxReader(DataSourceReader):
         self._gdal_readonly_safe()
         import pyogrio
 
-        kw: Dict = {"layer": self._layer()}
-        if self.driver:
-            kw["driver"] = self.driver
         with self._staged(path) as _p:
-            return pyogrio.read_info(_zip_vsi(_p), **kw)
+            info = pyogrio.read_info(_open_path(_p, self.driver), layer=self._layer())
+        _check_driver(path, self.driver, info.get("driver"))
+        return info
 
     def _info(self):
         return self._info_for(self._members()[0])
@@ -1065,11 +1098,10 @@ class VectorGbxReader(DataSourceReader):
         self._gdal_readonly_safe()
         import pyogrio
 
-        kw: Dict = {"layer": self._layer(), "max_features": 0}
-        if self.driver:
-            kw["driver"] = self.driver
         with self._staged(path) as _p:
-            _, tbl = pyogrio.read_arrow(_zip_vsi(_p), **kw)
+            _, tbl = pyogrio.read_arrow(
+                _open_path(_p, self.driver), layer=self._layer(), max_features=0
+            )
         return self._description_fields(path, tbl.schema)
 
     def schema(self) -> StructType:
@@ -1165,8 +1197,6 @@ class VectorGbxReader(DataSourceReader):
             "datetime_as_string": False,
             "use_pyarrow": True,
         }
-        if partition.driver:
-            kw["driver"] = partition.driver
         # Pushdown filters -> only matching features are parsed (Serverless memory).
         if partition.bbox:
             kw["bbox"] = partition.bbox
@@ -1176,7 +1206,8 @@ class VectorGbxReader(DataSourceReader):
         with self._staged(partition.path) as _p:
             # Stream RecordBatches from pyogrio.open_arrow instead of loading the whole
             # layer into memory with read_arrow. Each batch is processed independently.
-            with pyogrio.open_arrow(_zip_vsi(_p), **kw) as (meta, reader):
+            src = _open_path(_p, partition.driver)
+            with pyogrio.open_arrow(src, **kw) as (meta, reader):
                 # With use_pyarrow=True, reader is a pyarrow.RecordBatchReader
 
                 # Geometry column: Arrow table uses 'wkb_geometry' when geometry_name is empty;

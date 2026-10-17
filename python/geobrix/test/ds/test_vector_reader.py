@@ -786,3 +786,122 @@ def test_vector_ogr_time_fields_read_as_text(spark, tmp_path):
     register(spark)
     rows = spark.read.format("geojson_gbx").load(str(p)).select("t").collect()
     assert [r["t"] for r in rows] == ["12:34:56", "07:08:09.250", None]
+
+
+# ---------------------------------------------------------------------------
+# The reader's OGR driver: forced, never passed as an open option
+# ---------------------------------------------------------------------------
+
+
+def _write_layer(path, driver, n=3):
+    """A point layer with ``id`` / ``name`` fields, written by pyogrio."""
+    import pyarrow as pa
+    import pyogrio
+    import shapely
+
+    xs = list(range(n))
+    tbl = pa.table(
+        {
+            "geometry": shapely.to_wkb(shapely.points(xs, xs)),
+            "id": xs,
+            "name": [f"n{i}" for i in xs],
+        }
+    )
+    pyogrio.write_arrow(
+        tbl,
+        path,
+        layer="pts",
+        driver=driver,
+        geometry_name="geometry",
+        geometry_type="Point",
+        crs="EPSG:4326",
+    )
+    return path
+
+
+def _gdal_warnings(caught):
+    """GDAL warnings that every clean open used to emit (not a data problem)."""
+    noise = ("open option DRIVER", "non conformant file extension")
+    return [str(w.message) for w in caught if any(n in str(w.message) for n in noise)]
+
+
+_NAMED = [
+    ("shapefile_gbx", "ESRI Shapefile", "pts.shp"),
+    ("geojson_gbx", "GeoJSON", "pts.geojson"),
+    ("geojsonl_gbx", "GeoJSONSeq", "pts.geojsonl"),
+    ("gpkg_gbx", "GPKG", "pts.gpkg"),
+    ("file_gdb_gbx", "OpenFileGDB", "pts.gdb"),
+]
+
+
+def _source(name):
+    from databricks.labs.gbx.ds.register import _SOURCES
+
+    return {s.name(): s for s in _SOURCES}[name]
+
+
+@pytest.mark.parametrize("fmt,driver,fname", _NAMED)
+@pytest.mark.parametrize("domains", ["code", "description"])
+def test_vector_reads_pass_no_driver_open_option(tmp_path, fmt, driver, fname, domains):
+    """pyogrio's read functions take no ``driver`` argument: a ``driver=`` keyword
+    is passed on as the GDAL open option DRIVER, which the drivers reject with a
+    warning on every open and never use to pick the driver. schema() (both coded
+    domain modes) and read() must open without it."""
+    import warnings
+
+    path = _write_layer(str(tmp_path / fname), driver)
+    ds = _source(fmt)({"path": path, "codedDomains": domains})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert {"id", "name"} <= set(ds.schema().fieldNames())
+        assert sum(b.num_rows for b in _read_batches(ds.reader(None))) == 3
+    assert _gdal_warnings(caught) == []
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname",
+    [
+        ("geojson_gbx", "GeoJSON", "src.geojson"),
+        ("geojsonl_gbx", "GeoJSONSeq", "src.geojsonl"),
+        ("gpkg_gbx", "GPKG", "src.gpkg"),
+    ],
+)
+def test_vector_forced_driver_reads_a_misnamed_file(tmp_path, fmt, driver, fname):
+    """The reader's driver is forced, whatever the file is named: GDAL alone picks
+    the CSV driver for a GeoJSON (or GeoJSONSeq) file named data.csv and reads it as
+    a garbled 0-row CSV layer."""
+    import shutil
+    import warnings
+
+    misnamed = str(tmp_path / "data.csv")
+    shutil.copyfile(_write_layer(str(tmp_path / fname), driver), misnamed)
+    ds = _source(fmt)({"path": misnamed})
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        assert {"id", "name"} <= set(ds.schema().fieldNames())
+        batches = _read_batches(ds.reader(None))
+    assert sum(b.num_rows for b in batches) == 3
+    assert _gdal_warnings(caught) == []
+
+
+@pytest.mark.parametrize(
+    "fmt,want", [("shapefile_gbx", "ESRI Shapefile"), ("file_gdb_gbx", "OpenFileGDB")]
+)
+def test_vector_named_reader_rejects_a_file_of_another_format(tmp_path, fmt, want):
+    """ESRI Shapefile and OpenFileGDB have no GDAL prefix that forces them (GDAL
+    picks them by extension), so a file GDAL opens with another driver is rejected
+    instead of being read as that format."""
+    path = _write_layer(str(tmp_path / "pts.geojson"), "GeoJSON")
+    with pytest.raises(ValueError, match=rf"pts\.geojson.*GeoJSON.*{want}"):
+        _source(fmt)({"path": path}).schema()
+
+
+def test_vector_gpkg_path_with_colons_opens(tmp_path):
+    """GDAL's ``GPKG:<file>:<table>`` syntax splits on ':' -- the forced path keeps a
+    file name with colons (a timestamped delivery) whole."""
+    d = tmp_path / "2026-10-17T10:00:00"
+    d.mkdir()
+    path = _write_layer(str(d / "run:1.gpkg"), "GPKG")
+    ds = _source("gpkg_gbx")({"path": path})
+    assert {"id", "name"} <= set(ds.schema().fieldNames())
+    assert sum(b.num_rows for b in _read_batches(ds.reader(None))) == 3

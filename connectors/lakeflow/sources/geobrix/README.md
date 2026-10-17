@@ -6,10 +6,12 @@ Shapefile, File Geodatabase), LiDAR point clouds, EXIF photo metadata, GeoTIFF a
 rasters, NetCDF files, and the tiles of PMTiles archives. Each run appends only files that
 are new since the last run.
 
-Use this connector for the **Add data** page and managed ingestion pipelines, with access
-governed by a Unity Catalog connection. For large or fast-growing folders, where Auto Loader
-tracks the files, or when overwritten files must be kept as versions (`scd2`) or replaced
-(`replace`), use the Auto Loader route instead:
+Use this connector from a **Lakeflow pipeline source file** ([`pipeline/ingest.py`](pipeline/ingest.py)),
+the tested route, with access governed by a Unity Catalog connection. The **Add data** page and
+managed ingestion pipelines are the other route for community connectors, where they are available
+in your workspace. For large or fast-growing folders, where Auto Loader tracks the files, or when
+overwritten files must be kept as versions (`scd2`) or replaced (`replace`), use the Auto Loader
+route instead:
 [Auto Loader ingestion](https://databrickslabs.github.io/geobrix/docs/ingestion/auto-loader).
 
 The published documentation for this connector is
@@ -79,7 +81,16 @@ geobrix[light_dbr18]@file:///Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix-<
 |---|---|---|
 | `sourceName` | yes | `geobrix` |
 | `externalOptionsAllowList` | yes | `path,format,layer,where,bbox,chunk_size,file_glob,mode` |
-| `root_path` | no | Volume prefix. Enables discovery (every file or folder directly under it is a table) and confines every table path to it. Access is still governed by Volume grants. |
+| `root_path` | no | Volume prefix. Enables discovery (every folder, and every file with a recognized extension, directly under it is a table) and confines every table path to it. Access is still governed by Volume grants. |
+
+The allowlist names the table options a pipeline may pass to the connector; the pipeline
+framework's own options, such as `tableName`, don't need to be on it. Databricks describes two ways
+to create the connection of a community connector: the **Create connection** step of the Add data
+flow ([community connectors](https://docs.databricks.com/aws/en/ingestion/community-connectors),
+[custom connectors](https://docs.databricks.com/aws/en/ingestion/custom-connectors)), and the
+`create_connection` command of the
+[Community Connector CLI](https://github.com/databrickslabs/lakeflow-community-connectors/tree/master/tools/community_connector),
+which checks the options against `connector_spec.yaml` and sets the allowlist for you.
 
 Grant `USE CONNECTION` to the people who build pipelines on it.
 

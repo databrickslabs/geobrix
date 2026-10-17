@@ -85,13 +85,16 @@ def test_formats_table_matches_the_readers_and_extensions():
     connector infers is listed on its reader's row."""
     from databricks.labs.gbx.ds.paths import SUPPORTED_FORMATS
 
-    rows = {
-        r[0].strip("`"): r[1] for r in mdx_tables.section_rows(PAGE, "Formats", level="##")
+    table = {
+        r[0].strip("`"): r for r in mdx_tables.section_rows(PAGE, "Formats", level="##")
     }
-    assert sorted(f"{name}_gbx" for name in rows) == sorted(SUPPORTED_FORMATS)
+    assert sorted(f"{name}_gbx" for name in table) == sorted(SUPPORTED_FORMATS)
+    # Each row links its reader's page, as the formats table of read-paths does.
+    for name, (_, reader, _) in table.items():
+        assert re.search(r"\]\(\.\./(readers|writers)/[\w-]+\)", reader), name
     ext_to_format = _module_constant(CONNECTOR / "lakeflow_connect.py", "EXT_TO_FORMAT")
     for ext, fmt in ext_to_format.items():
-        assert f"`{ext}`" in rows[fmt[: -len("_gbx")]], (ext, fmt)
+        assert f"`{ext}`" in table[fmt[: -len("_gbx")]][2], (ext, fmt)
 
 
 def test_pipeline_template_uses_only_allowed_table_options():

@@ -82,7 +82,18 @@ Create a Unity Catalog connection of type `COMMUNITY` (once) with these options:
 |---|---|---|
 | `sourceName` | yes | `geobrix` |
 | `externalOptionsAllowList` | yes | `path,format,layer,where,bbox,chunk_size,file_glob,mode` |
-| `root_path` | no | Volume prefix, such as `/Volumes/main/geo/landing`. Enables discovery (every file or folder directly under it is a table) and confines every table path to it. |
+| `root_path` | no | Volume prefix, such as `/Volumes/main/geo/landing`. Enables discovery (every folder, and every file with a recognized extension, directly under it is a table) and confines every table path to it. |
+
+The allowlist names the [table options](#table-options) a pipeline may pass to the connector. The
+pipeline framework's own options, such as `tableName`, don't need to be on it.
+
+Databricks describes two ways to create the connection of a community connector: the **Create
+connection** step of the Add data flow ([community connectors](https://docs.databricks.com/aws/en/ingestion/community-connectors),
+and [custom connectors](https://docs.databricks.com/aws/en/ingestion/custom-connectors) for one that
+is not in the catalog), and the `create_connection` command of the
+[Community Connector CLI](https://github.com/databrickslabs/lakeflow-community-connectors/tree/master/tools/community_connector),
+which checks the options against the connector's `connector_spec.yaml` (GeoBrix's is in
+`connectors/lakeflow/sources/geobrix`) and sets the allowlist for you.
 
 Grant `USE CONNECTION` on it to the people who build pipelines on it.
 
@@ -105,7 +116,7 @@ dataset discovered under `root_path`, or any name when the entry sets `path`; th
 `table_configuration` are the [table options](#table-options).
 
 :::note
-A pipeline source file, as above, is the verified way to deploy the connector. The Add data page
+A pipeline source file, as above, is the tested route for deploying the connector. The Add data page
 and managed ingestion pipelines (an `ingestion_definition` with `source_type: COMMUNITY`) are the
 other routes for community connectors, where they are available in your workspace.
 :::
@@ -135,30 +146,30 @@ file in the dataset has the same one. `format` takes the same reader names as
 [`read_paths`](./read-paths#supported-formats): the `_gbx` suffix is optional and case is ignored,
 so `gpkg`, `GPKG` and `gpkg_gbx` are the same reader.
 
-| `format` | Extensions |
-|---|---|
-| `vector` | Any vector extension below (generic reader) |
-| `gpkg` | `.gpkg` |
-| `geojson` | `.geojson`. For GeoJSON files named `.json`, set `format: geojson` and `file_glob: *.{geojson,json}`. |
-| `geojsonl` | `.geojsonl`, `.geojsons` |
-| `shapefile` | `.shp`, `.shz`, `.shp.zip` |
-| `file_gdb` | `.gdb`, `.gdb.zip` |
-| `lidar` | `.las`, `.laz` |
-| `exif` | `.jpg`, `.jpeg` |
-| `raster` | `.tif`, `.tiff`. Another raster file, such as `.jp2`, is read only when `path` or `file_glob` names it and `format` is `raster`. |
-| `gtiff` | `.tif`, `.tiff` |
-| `cog` | `.tif`, `.tiff`, read with the COG reader. By extension a `.tif` is a `gtiff` table, so set `format: cog`. |
-| `netcdf` | `.nc`. The `mode` option picks what a file becomes: `raster` (default), one GeoTIFF tile per grid variable; `vector`, one point feature per observation or grid cell. |
-| `pmtiles` | `.pmtiles`: one row per tile stored in the archive (`z`, `x`, `y`, `bytes`). Rendering tiles from GeoTIFFs is not a connector table; use [`read_paths`](./read-paths) or [`declare_ingest`](./auto-loader) with `source="raster"`. |
+| `format` | Reader | Extensions |
+|---|---|---|
+| `vector` | [Vector](../readers/vector) | Any vector extension below (generic reader) |
+| `gpkg` | [GeoPackage](../readers/geopackage) | `.gpkg` |
+| `geojson` | [GeoJSON](../readers/geojson) | `.geojson`. For GeoJSON files named `.json`, set `format: geojson` and `file_glob: *.{geojson,json}`. |
+| `geojsonl` | [GeoJSONL](../writers/geojsonl) | `.geojsonl`, `.geojsons` |
+| `shapefile` | [Shapefile](../readers/shapefile) | `.shp`, `.shz`, `.shp.zip` |
+| `file_gdb` | [File Geodatabase](../readers/filegdb) | `.gdb`, `.gdb.zip` |
+| `lidar` | [LiDAR](../readers/lidar) | `.las`, `.laz` |
+| `exif` | [EXIF/GPS](../readers/exif) | `.jpg`, `.jpeg` |
+| `raster` | [Raster](../readers/raster) | `.tif`, `.tiff`. Another raster file, such as `.jp2`, is read only when `path` or `file_glob` names it and `format` is `raster`. |
+| `gtiff` | [GeoTIFF](../readers/geotiff) | `.tif`, `.tiff` |
+| `cog` | [COG](../readers/cog) | `.tif`, `.tiff`, read with the COG reader. By extension a `.tif` is a `gtiff` table, so set `format: cog`. |
+| `netcdf` | [NetCDF](../readers/netcdf) | `.nc`. The `mode` option picks what a file becomes: `raster` (default), one GeoTIFF tile per grid variable; `vector`, one point feature per observation or grid cell. |
+| `pmtiles` | [PMTiles](../readers/pmtiles) | `.pmtiles`: one row per tile stored in the archive (`z`, `x`, `y`, `bytes`). Rendering tiles from GeoTIFFs is not a connector table; use [`read_paths`](./read-paths) or [`declare_ingest`](./auto-loader) with `source="raster"`. |
 
 Extensions match in any case (`.TIF` is `.tif`). The lightweight `file` reader (it lists files)
 and the heavyweight readers are not connector formats.
 
 ## Discovery
 
-- **With `root_path`, every file or folder directly under it is a table**, named after the entry
-  without its extension (lower case, other characters replaced by `_`). Without `root_path`, each
-  table sets `path` to an absolute path.
+- **With `root_path`, every folder, and every file with a recognized extension, directly under it
+  is a table**, named after the entry without its extension (lower case, other characters replaced
+  by `_`). Without `root_path`, each table sets `path` to an absolute path.
 - **A folder is one dataset**, and its files are read recursively.
 - **`path` is relative to `root_path`, or absolute inside it.** A path outside `root_path` fails.
 - **Folders and files whose names start with `_` or `.` are ignored**, as Spark's file sources

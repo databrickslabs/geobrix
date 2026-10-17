@@ -26,6 +26,10 @@ A **single wheel + single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versi
 
 GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[light]`. On Serverless, use `geobrix[light_env6]` (environment v6, recommended) or `geobrix[light_env5]` (environment v5). On classic clusters, use `geobrix[light_dbr17]`, `geobrix[light_dbr18]`, or `geobrix[light_dbr19]` to match your runtime. See the extras table in the Lightweight tab below.
 
+:::note PySpark comes from the runtime
+On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark. Outside Databricks (for example a local Spark session), install `pyspark>=4.0.0` alongside GeoBrix.
+:::
+
 :::tip On Serverless, use `geobrix[light_env6]`
 **Environment v6 is recommended for Serverless.** Install `geobrix[light_env6]` and set the environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job. For an env 5 Serverless cluster, use `geobrix[light_env5]` instead.
 
@@ -37,7 +41,7 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[li
 dbutils.library.restartPython()
 ```
 
-Keep `--no-deps` alongside `--force-reinstall` — without it, pip reinstalls pyspark and other preinstalled packages and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out.
+Keep `--no-deps` alongside `--force-reinstall` — without it, pip force-reinstalls dependencies that are already preinstalled and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out.
 :::
 
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">

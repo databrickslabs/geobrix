@@ -2,8 +2,8 @@
 
 Ingest geospatial files from Unity Catalog Volumes into Unity Catalog tables with a
 Lakeflow Connect ingestion pipeline: vector data (GeoPackage, GeoJSON, GeoJSONSeq,
-Shapefile, File Geodatabase), LiDAR point clouds, and EXIF photo metadata. Each run
-appends only files that are new since the last run.
+Shapefile, File Geodatabase), LiDAR point clouds, EXIF photo metadata, and GeoTIFF
+rasters. Each run appends only files that are new since the last run.
 
 Files are read by the same code as the GeoBrix `*_gbx` readers, so rows carry the same
 columns: attributes, the geometry column (`geom_0`, or the layer's geometry name such as
@@ -31,6 +31,8 @@ needs an explicit `format`.
 | `file_gdb_gbx` | `filegdb` | `.gdb`, `.gdb.zip` |
 | `lidar_gbx` | `lidar` | `.las`, `.laz` |
 | `exif_gbx` | `exif` | `.jpg`, `.jpeg` |
+| `raster_gbx` | `raster` | any raster extension below (generic) |
+| `gtiff_gbx` | `gtiff` | `.tif`, `.tiff` |
 
 The reader name itself (for example `gpkg_gbx`) is also accepted for `format`.
 

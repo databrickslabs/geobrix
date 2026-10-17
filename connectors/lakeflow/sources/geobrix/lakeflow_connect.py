@@ -1,7 +1,7 @@
 """GeoBrix connector: the LakeflowConnect side (discovery, schema, offsets).
 
 Files are read by the shared ``ds.paths`` core, so any supported light reader
-(vector, LiDAR, EXIF) works per table. The bulk data path is Arrow-native (see
+(vector, LiDAR, EXIF, raster) works per table. The bulk data path is Arrow-native (see
 ``datasource.py``); the dict-row methods here (``read_table`` / ``read_partition``)
 exist so the framework contract is complete, and reuse the same per-file Arrow reads.
 """
@@ -36,6 +36,8 @@ FORMAT_ALIASES = {
     "filegdb": "file_gdb_gbx",
     "lidar": "lidar_gbx",
     "exif": "exif_gbx",
+    "raster": "raster_gbx",
+    "gtiff": "gtiff_gbx",
 }
 
 # Discovery: extension -> reader (longest suffix first, so ".gdb.zip" beats ".zip").
@@ -55,11 +57,15 @@ EXT_TO_FORMAT = {
     ".laz": "lidar_gbx",
     ".jpg": "exif_gbx",
     ".jpeg": "exif_gbx",
+    ".tif": "gtiff_gbx",
+    ".tiff": "gtiff_gbx",
 }
 _ALL_EXTS = tuple(sorted(EXT_TO_FORMAT, key=len, reverse=True))
 
-# The generic `vector` reader accepts every vector extension (not LiDAR / EXIF).
-_NON_VECTOR = {"lidar_gbx", "exif_gbx"}
+# The generic `raster` reader accepts every raster extension; the generic `vector`
+# reader accepts every vector extension (not LiDAR / EXIF / raster).
+_RASTER = {"raster_gbx", "gtiff_gbx"}
+_NON_VECTOR = {"lidar_gbx", "exif_gbx"} | _RASTER
 
 # Table options handed to the reader unchanged. Everything else on the options
 # dict (framework keys, UC connection keys, our own connector options) is either
@@ -347,6 +353,8 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
                 return True
             if want == "vector_gbx":
                 return kind not in _NON_VECTOR
+            if want == "raster_gbx":
+                return kind in _RASTER
             return kind == want
 
         files = [

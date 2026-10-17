@@ -8,7 +8,8 @@
 # ============================================================================
 display_name: GeoBrix
 # Reads geospatial files on Unity Catalog Volumes: vector (GeoPackage, GeoJSON,
-# GeoJSONSeq, Shapefile, File Geodatabase), LiDAR (LAS/LAZ), and EXIF (JPEG).
+# GeoJSONSeq, Shapefile, File Geodatabase), LiDAR (LAS/LAZ), EXIF (JPEG), and
+# raster (GeoTIFF).
 connection:
   parameters:
     - name: root_path

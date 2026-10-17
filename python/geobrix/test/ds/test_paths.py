@@ -275,3 +275,122 @@ def test_check_schema_missing_and_extra_fields():
         P._check_schema("x.geojson", pa.schema([("a", pa.string())]), want)
     with pytest.raises(ValueError, match=r"x\.geojson.*extra \['c'\]"):
         P._check_schema("x.geojson", pa.schema(list(want) + [("c", pa.string())]), want)
+
+
+def _tif(path, w=64, h=64, value=1):
+    import numpy as np
+    import rasterio
+
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=rasterio.Affine(1, 0, 0, 0, -1, h),
+    )
+    with rasterio.open(path, "w", **profile) as dst:
+        dst.write(np.full((1, h, w), value, dtype="uint8"))
+    return path
+
+
+def _set_op_safe(df, cols):
+    """exceptAll rejects MAP columns; compare tile.metadata as sorted entries."""
+    from pyspark.sql import functions as F
+
+    meta = F.array_sort(F.map_entries("tile.metadata"))
+    return df.select(cols).withColumn("tile", F.col("tile").withField("metadata", meta))
+
+
+def test_read_paths_gtiff_matches_batch_reader(spark, tmp_path):
+    a = _tif(str(tmp_path / "a.tif"))
+    got = P.read_paths(_paths_df(spark, [a]), "gtiff_gbx")
+    want = _batch_read(spark, "gtiff_gbx", a)
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert got.count() == want.count()
+    assert _set_op_safe(got, cols).exceptAll(_set_op_safe(want, cols)).count() == 0
+
+
+def test_read_paths_raster_splits_a_large_file_across_partitions(spark, tmp_path):
+    from pyspark.sql import functions as F
+
+    a = _tif(str(tmp_path / "big.tif"), w=2048, h=2048)
+    opts = {"tileSize": "512"}  # 16 deterministic windows from one file
+    want_df = _batch_read(spark, "raster_gbx", a, **opts)
+    want = want_df.count()
+    got = P.read_paths(_paths_df(spark, [a]), "raster_gbx", opts, num_partitions=4)
+    assert want == 16 and got.count() == want
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert _set_op_safe(got, cols).exceptAll(_set_op_safe(want_df, cols)).count() == 0
+    assert got.rdd.getNumPartitions() == 4  # windows spread after the plan stage
+    # One file's windows land in more than one task (not just 4 empty slots).
+    assert got.select(F.spark_partition_id()).distinct().count() > 1
+
+
+def test_iter_path_batches_converts_raster_rows(tmp_path):
+    # The connector path: one file, every window, tuple rows -> Arrow batches.
+    a = _tif(str(tmp_path / "a.tif"))
+    expected = P.path_schema("gtiff_gbx", {"tileSize": "32"}, a)
+    batches = list(
+        P.iter_path_batches(a, 1_000_000, "gtiff_gbx", {"tileSize": "32"}, expected)
+    )
+    assert sum(b.num_rows for b in batches) == 4
+    assert batches[0].schema.names == [f.name for f in expected.fields]
+    tiles = [t for b in batches for t in b.column("tile").to_pylist()]
+    assert {(t["window"]["col_off"], t["window"]["row_off"]) for t in tiles} == {
+        (0, 0),
+        (32, 0),
+        (0, 32),
+        (32, 32),
+    }
+
+
+def test_plan_rows_round_trip_raster_partitions(tmp_path, caplog):
+    import pickle
+
+    a = _tif(str(tmp_path / "a.tif"))
+    gone = str(tmp_path / "gone.tif")
+    src = pa.RecordBatch.from_arrays(
+        [pa.array([a, gone]), pa.array([1_000_000, None], P._TS)],
+        names=["path", "mtime"],
+    )
+    schema = P.path_schema("raster_gbx", None, a, lineage=False)
+    plan = P._plan_batches("raster_gbx", {"tileSize": "32"}, schema)
+    rows = [r for b in plan(iter([src])) for r in b.to_pylist()]
+    assert {r["path"] for r in rows} == {a} and len(rows) == 4
+    assert "gone.tif" in caplog.text
+    parts = [pickle.loads(r["part"]) for r in rows]
+    assert sorted(p.window for p in parts) == [
+        (0, 0, 32, 32),
+        (0, 32, 32, 32),
+        (32, 0, 32, 32),
+        (32, 32, 32, 32),
+    ]
+    assert all(p.file_path == a for p in parts)
+
+
+def test_read_paths_raster_streaming_two_stage(spark, tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    a = _tif(str(d / "a.tif"))
+    stream = (
+        spark.readStream.format("binaryFile")
+        .schema(_BINARY_SCHEMA)
+        .option("pathGlobFilter", "*.tif")
+        .load(str(d))
+        .select("path", "modificationTime")
+    )
+    out = P.read_paths(
+        stream, "gtiff_gbx", {"tileSize": "32"}, schema_path=a, num_partitions=2
+    )
+    q = (
+        out.writeStream.format("memory")
+        .queryName("rp_raster_stream")
+        .trigger(availableNow=True)
+        .option("checkpointLocation", str(tmp_path / "ck"))
+        .start()
+    )
+    q.awaitTermination()
+    got = spark.table("rp_raster_stream").collect()
+    assert len(got) == 4 and {r[P.SOURCE_PATH_COL] for r in got} == {a}

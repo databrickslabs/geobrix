@@ -4,6 +4,10 @@ Each row names one file; the reader's own DataSource contract (``schema()`` ->
 ``reader().partitions()`` -> ``read()``) parses it inside ``mapInArrow``, so the
 same code serves batch reads, Auto Loader streams, and the Lakeflow connector.
 
+Raster readers plan in two stages: each file is first planned into its tile
+windows (one row per reader partition), the windows are repartitioned, and each
+window is read on its own, so one large raster spreads across tasks.
+
 Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 """
 
@@ -11,10 +15,17 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Dict, Iterator, Optional
+import pickle
+from typing import Dict, Iterable, Iterator, Optional
 
 import pyarrow as pa
-from pyspark.sql.types import StringType, StructField, StructType, TimestampType
+from pyspark.sql.types import (
+    BinaryType,
+    StringType,
+    StructField,
+    StructType,
+    TimestampType,
+)
 
 from databricks.labs.gbx.ds import _listing
 
@@ -24,7 +35,8 @@ SOURCE_PATH_COL = "_source_path"
 SOURCE_MTIME_COL = "_source_mtime"
 _TS = pa.timestamp("us", tz="UTC")
 
-# Readers whose read() yields Arrow RecordBatches, one partition per file.
+# Light readers read_paths can drive. Vector / LiDAR / EXIF read() yields Arrow
+# RecordBatches; the raster readers yield row tuples (converted in _as_batches).
 SUPPORTED_FORMATS = (
     "vector_gbx",
     "shapefile_gbx",
@@ -34,7 +46,26 @@ SUPPORTED_FORMATS = (
     "file_gdb_gbx",
     "lidar_gbx",
     "exif_gbx",
+    "raster_gbx",
+    "gtiff_gbx",
 )
+
+# Readers with many partitions (tile windows) per file: read_paths plans them
+# first, then spreads the windows across tasks.
+TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx")
+
+# Plan-stage rows: one per reader partition (a pickled InputPartition). Built
+# explicitly (not from DDL) so workers never need a parser.
+_PLAN_SCHEMA = StructType(
+    [
+        StructField("path", StringType(), True),
+        StructField("mtime", TimestampType(), True),
+        StructField("part", BinaryType(), True),
+    ]
+)
+
+# Tuple rows per Arrow batch when a reader yields rows instead of batches.
+_ROWS_PER_BATCH = 256
 
 
 def _sources() -> Dict[str, type]:
@@ -126,6 +157,66 @@ def _arrow_schema(schema: StructType) -> pa.Schema:
     return to_arrow_schema(schema)
 
 
+def _as_batches(items: Iterable, schema: StructType) -> Iterator[pa.RecordBatch]:
+    """Readers yield RecordBatches or row tuples; normalize to RecordBatches."""
+    from pyspark.sql.conversion import LocalDataToArrowConversion
+
+    rows: list = []
+    for item in items:
+        if isinstance(item, pa.RecordBatch):
+            yield item
+            continue
+        rows.append(item)
+        if len(rows) >= _ROWS_PER_BATCH:
+            yield from LocalDataToArrowConversion.convert(
+                rows, schema, False
+            ).to_batches()
+            rows = []
+    if rows:
+        yield from LocalDataToArrowConversion.convert(rows, schema, False).to_batches()
+
+
+def _exists(local: str) -> bool:
+    """True when the file is still there (transient FUSE misses retried); a file
+    deleted since it was listed is logged and skipped by every caller."""
+    try:
+        _listing._retry_transient(lambda: os.stat(local))
+        return True
+    except FileNotFoundError:
+        _LOG.warning("read_paths: %s no longer exists; skipped", local)
+        return False
+
+
+def _read_partition(
+    reader,
+    part,
+    local: str,
+    mtime_us: Optional[int],
+    schema: StructType,
+    want: pa.Schema,
+    lineage: bool,
+) -> Iterator[pa.RecordBatch]:
+    """Arrow batches for one reader partition, checked against ``want`` and
+    realigned to its column order (+ lineage columns)."""
+    for batch in _as_batches(reader.read(part), schema):
+        if batch.num_rows == 0:
+            # A zero-row batch (e.g. a zero-feature GeoJSON) carries no usable
+            # schema; there is nothing to emit or validate.
+            continue
+        _check_schema(local, batch.schema, want)
+        if batch.schema.names != want.names:
+            # Same columns, different file order: realign to the positional
+            # output schema so values never land in the wrong column.
+            batch = batch.select(want.names)
+        if lineage:
+            n = batch.num_rows
+            batch = batch.append_column(
+                SOURCE_PATH_COL, pa.array([local] * n, pa.string())
+            )
+            batch = batch.append_column(SOURCE_MTIME_COL, pa.array([mtime_us] * n, _TS))
+        yield batch
+
+
 def iter_path_batches(
     path: str,
     mtime_us: Optional[int],
@@ -137,10 +228,7 @@ def iter_path_batches(
     """Arrow batches for one file (session-free). A file that no longer exists is
     skipped with a warning; ``expected`` (lineage included or not) is enforced."""
     local = _listing.to_local_path(path)
-    try:
-        _listing._retry_transient(lambda: os.stat(local))
-    except FileNotFoundError:
-        _LOG.warning("read_paths: %s no longer exists; skipped", local)
+    if not _exists(local):
         return
     ds = resolve_format(fmt)({**(options or {}), "path": local})
     schema = (
@@ -149,25 +237,72 @@ def iter_path_batches(
     want = _arrow_schema(schema)
     reader = ds.reader(schema)
     for part in reader.partitions():
-        for batch in reader.read(part):
-            if batch.num_rows == 0:
-                # A zero-row batch (e.g. a zero-feature GeoJSON) carries no usable
-                # schema; there is nothing to emit or validate.
-                continue
-            _check_schema(local, batch.schema, want)
-            if batch.schema.names != want.names:
-                # Same columns, different file order: realign to the positional
-                # output schema so values never land in the wrong column.
-                batch = batch.select(want.names)
-            if lineage:
-                n = batch.num_rows
-                batch = batch.append_column(
-                    SOURCE_PATH_COL, pa.array([local] * n, pa.string())
+        yield from _read_partition(reader, part, local, mtime_us, schema, want, lineage)
+
+
+def _plan_batches(fmt: str, opts: dict, schema: StructType):
+    """``mapInArrow`` function: ``(path, mtime)`` rows -> one ``(path, mtime,
+    part)`` row per reader partition of each file (``part`` = pickled partition).
+    Files that no longer exist are skipped with a warning."""
+    base = _base(schema)
+
+    def _plan(batches):
+        out = _arrow_schema(_PLAN_SCHEMA)
+        for b in batches:
+            paths, mtimes, parts = [], [], []
+            for p, us in zip(
+                b.column("path").to_pylist(),
+                b.column("mtime").cast(pa.int64()).to_pylist(),
+            ):
+                local = _listing.to_local_path(p)
+                if not _exists(local):
+                    continue
+                reader = resolve_format(fmt)({**opts, "path": local}).reader(base)
+                for part in reader.partitions():
+                    paths.append(local)
+                    mtimes.append(us)
+                    parts.append(pickle.dumps(part))
+            if parts:
+                yield pa.RecordBatch.from_arrays(
+                    [
+                        pa.array(paths, pa.string()),
+                        pa.array(mtimes, _TS),
+                        pa.array(parts, pa.binary()),
+                    ],
+                    schema=out,
                 )
-                batch = batch.append_column(
-                    SOURCE_MTIME_COL, pa.array([mtime_us] * n, _TS)
-                )
-            yield batch
+
+    return _plan
+
+
+def _read_planned(fmt: str, opts: dict, schema: StructType, lineage: bool):
+    """``mapInArrow`` function: planned ``(path, mtime, part)`` rows -> the
+    reader's output for each partition. One reader (and one existence check) per
+    file per task."""
+    base = _base(schema)
+
+    def _read(batches):
+        want = _arrow_schema(base)
+        readers: dict = {}
+        for b in batches:
+            for local, us, blob in zip(
+                b.column("path").to_pylist(),
+                b.column("mtime").cast(pa.int64()).to_pylist(),
+                b.column("part").to_pylist(),
+            ):
+                if local not in readers:
+                    readers[local] = (
+                        resolve_format(fmt)({**opts, "path": local}).reader(base)
+                        if _exists(local)
+                        else None
+                    )
+                reader = readers[local]
+                if reader is None:
+                    continue
+                part = pickle.loads(blob)
+                yield from _read_partition(reader, part, local, us, base, want, lineage)
+
+    return _read
 
 
 def read_paths(
@@ -187,10 +322,15 @@ def read_paths(
     ``path, modificationTime``). The output schema comes from ``schema_path``
     (default: the first path of a batch ``df``; required for a stream). A file
     deleted before it is read is skipped with a warning.
+
+    ``num_partitions`` repartitions the work: by file for vector / LiDAR / EXIF,
+    and by tile window for raster (``raster_gbx`` / ``gtiff_gbx``), whose files
+    are planned into their windows first so one large raster spreads across
+    tasks.
     """
     from pyspark.sql import functions as F
 
-    resolve_format(format)
+    two_stage = resolve_format(format).name() in TWO_STAGE_FORMATS
     if schema_path is None:
         if df.isStreaming:
             raise ValueError(
@@ -209,9 +349,15 @@ def read_paths(
         else F.lit(None).cast("timestamp").alias("mtime")
     )
     src = df.select(*cols)
+    fmt, opts, keep = format, dict(options or {}), lineage
+    if two_stage:
+        planned = src.mapInArrow(_plan_batches(fmt, opts, schema), _PLAN_SCHEMA)
+        if num_partitions:
+            # Hash on the pickled partition: each window of one file is distinct.
+            planned = planned.repartition(int(num_partitions), "part")
+        return planned.mapInArrow(_read_planned(fmt, opts, schema, keep), schema)
     if num_partitions:
         src = src.repartition(int(num_partitions), "path")
-    fmt, opts, keep = format, dict(options or {}), lineage
 
     def _read(batches):
         for b in batches:

@@ -127,6 +127,8 @@ def test_discovery_infers_format_from_extension(tmp_path):
     assert format_for({}, [str(tmp_path / "a.gpkg")]) == "gpkg_gbx"
     assert format_for({}, [str(tmp_path / "a.laz")]) == "lidar_gbx"
     assert format_for({}, [str(tmp_path / "a.jpg")]) == "exif_gbx"
+    assert format_for({}, [str(tmp_path / "a.tif")]) == "gtiff_gbx"
+    assert format_for({}, [str(tmp_path / "a.TIFF")]) == "gtiff_gbx"
     assert format_for({"format": "geojson"}, [str(tmp_path / "a.json")]) == "geojson_gbx"
 
 
@@ -170,6 +172,30 @@ def test_lidar_table_reads(tmp_path):
     assert len(list(rows)) == 4
 
 
+def test_raster_table_reads(tmp_path):
+    import numpy as np
+    import rasterio
+
+    (tmp_path / "tiles").mkdir()
+    tif = str(tmp_path / "tiles" / "a.tif")
+    profile = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:3857",
+        transform=rasterio.Affine(1, 0, 0, 0, -1, 8),
+    )
+    with rasterio.open(tif, "w", **profile) as dst:
+        dst.write(np.ones((1, 8, 8), dtype="uint8"))
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert "tiles" in c.list_tables()
+    rows = list(c.read_table("tiles", {}, {})[0])
+    assert len(rows) == 1 and rows[0]["tile"]["path"] == tif
+    assert rows[0]["_source_path"] == tif
+
+
 def _las(path):
     import laspy
     import numpy as np
@@ -196,7 +222,7 @@ def _jpeg(path):
 
 
 def _mixed_folder(tmp_path):
-    """tmp_path/mix: one .gpkg, one .geojson, one .las, one .jpg."""
+    """tmp_path/mix: one .gpkg, one .geojson, one .las, one .jpg, one .tif."""
     for src in (BOROUGHS, GPKG):
         if not src.exists():
             pytest.skip(f"sample data missing: {src}")
@@ -206,6 +232,7 @@ def _mixed_folder(tmp_path):
     shutil.copy(BOROUGHS, d / "b.geojson")
     _las(d / "c.las")
     _jpeg(d / "d.jpg")
+    (d / "e.tif").write_bytes(b"")  # listed only, never opened
     return d
 
 
@@ -222,10 +249,12 @@ def test_explicit_format_on_a_mixed_folder_keeps_only_that_format(tmp_path):
     assert names[-2:] == ["_source_path", "_source_mtime"] and "geom" in names
 
 
-def test_generic_vector_format_excludes_lidar_and_exif(tmp_path):
+def test_generic_vector_format_excludes_lidar_exif_and_raster(tmp_path):
     _mixed_folder(tmp_path)
     c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
     assert _members_of(c, {"format": "vector"}) == ["a.gpkg", "b.geojson"]
+    assert _members_of(c, {"format": "raster"}) == ["e.tif"]
+    assert _members_of(c, {"format": "gtiff"}) == ["e.tif"]
     assert c.get_table_schema("mix", {"path": "mix", "format": "vector"}).fieldNames()
 
 

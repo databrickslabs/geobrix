@@ -345,11 +345,18 @@ def _module_leaves_process_state_as_found():
     the next rasterio Env)."""
     found = {k: os.environ.get(k) for k in _PROCESS_ENV_KEYS}
     found_dirs = (dict(_env._PROJ_DATA_DIRS), dict(_env._PROJ_DATA_BASES))
+    found_paths = _gdal_proj_search_paths()
     yield
     assert {k: os.environ.get(k) for k in _PROCESS_ENV_KEYS} == found
     assert (dict(_env._PROJ_DATA_DIRS), dict(_env._PROJ_DATA_BASES)) == found_dirs
-    leaked = [p for p in _gdal_proj_search_paths() if _env._MERGED_PREFIX in p]
-    assert not leaked, f"GDAL's PROJ search path still points at {leaked}"
+    # A merged dir this module added, not one it found: a module that ran earlier in
+    # the same pytest process may have left one, and that is not this module's leak.
+    leaked = [
+        p
+        for p in _gdal_proj_search_paths()
+        if _env._MERGED_PREFIX in p and p not in found_paths
+    ]
+    assert not leaked, f"GDAL's PROJ search path now also points at {leaked}"
 
 
 @pytest.fixture

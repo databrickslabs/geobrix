@@ -208,9 +208,10 @@ class StageCache:
       cache fits. A copy in use is never evicted; a source larger than the cap is
       still staged, alone.
 
-    With a ``signature_fn`` (e.g. :func:`retried_source_signature`), each use compares the source's signature with the one taken
-    when it was staged; a source replaced at the same path is staged again, and the
-    superseded copy is removed once no reader is using it.
+    With a ``signature_fn`` (e.g. :func:`retried_source_signature`), each use
+    compares the source's signature with the one taken when it was staged; a source
+    replaced at the same path is staged again, and the superseded copy is removed once
+    no reader is using it.
     """
 
     def __init__(

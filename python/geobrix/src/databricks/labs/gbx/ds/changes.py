@@ -279,9 +279,10 @@ def _delivery_is_current(event: dict) -> bool:
     Auto Loader truncates ``modificationTime`` to milliseconds and some file systems
     keep coarser mtimes than ``stat`` reports, hence the 1 second tolerance. A file
     overwritten since it was hashed (a newer delivery is pending) or deleted is not
-    current. An object-store URI raises ``ValueError``.
+    current. An object-store URI raises ``ValueError`` naming ``declare_ingest``,
+    the function whose flow runs this check.
     """
-    local = _fuse_path(event[SOURCE_PATH_COL])
+    local = _fuse_path(event[SOURCE_PATH_COL], "declare_ingest")
     try:
         st = _listing._retry_transient(lambda: os.stat(local))
     except FileNotFoundError:

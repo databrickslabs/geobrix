@@ -452,7 +452,7 @@ def test_delivery_check_rejects_object_store_uri(uri):
         "_source_size": 1,
         C._MTIME_US: 0,
     }
-    with pytest.raises(ValueError, match="Unity Catalog Volume / FUSE paths"):
+    with pytest.raises(ValueError, match="^declare_ingest reads Unity Catalog Volume"):
         C._delivery_is_current(e)
 
 

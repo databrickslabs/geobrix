@@ -27,29 +27,37 @@ shared by both vector reader tiers.
 - **`read_paths` reads a DataFrame of file paths with any lightweight reader.** Give it a batch
   listing or an Auto Loader stream and the name of a reader (`vector_gbx`, `shapefile_gbx`,
   `geojson_gbx`, `geojsonl_gbx`, `gpkg_gbx`, `file_gdb_gbx`, `lidar_gbx`, `exif_gbx`,
-  `raster_gbx` or `gtiff_gbx`); rows carry the reader's columns plus `_source_path` and
-  `_source_mtime`. Raster files are planned into tile windows that spread across tasks when
-  `num_partitions` is set.
+  `raster_gbx`, `gtiff_gbx`, `cog_gbx`, `netcdf_gbx` or `pmtiles_gbx`); rows carry the reader's
+  columns plus `_source_path` and `_source_mtime`. Raster, COG and PMTiles files are planned into
+  tile windows or tile groups that spread across tasks when `num_partitions` is set; a NetCDF
+  file is read whole by one task. `pmtiles_gbx` needs the `source` option: `"archive"` reads the
+  tiles stored in `.pmtiles` files and `"raster"` renders tiles from GeoTIFF files, each file on
+  its own. See [Incremental ingestion with Auto Loader](./readers/incremental-ingestion).
 - **`declare_ingest` declares an Auto Loader flow in a Lakeflow pipeline**, with `on_change`
   choosing what happens when a file is overwritten: `scd2` (the default; rows are append-only and
   a versions table with a `_current` view records each content version), `replace` (latest content
   only) or `append` (every delivery). See
   [Incremental ingestion with Auto Loader](./readers/incremental-ingestion).
+- **GeoJSON is matched by its `.geojson` extension only.** The default file pattern for
+  `geojson_gbx` (and `vector_gbx`) does not include `.json`; for GeoJSON files with that
+  extension pass `glob="*.{geojson,json}"`.
 
-### Lakeflow connector — one multi-format connector (breaking)
+### Lakeflow connector — one multi-format connector (new)
 
-- **The connector is now `geobrix`, renamed from `geobrix_vector`.** One connector reads vector,
-  LiDAR, EXIF and GeoTIFF files with the same code as `read_paths`. Its `sourceName` changes from
-  `geobrix_vector` to `geobrix`, so recreate any connection that used the old name.
-- **A folder that mixes file kinds now needs `format`.** Without the `format` table option such a
-  folder fails with an error; it previously fell back to the generic vector reader.
+- **The `geobrix` connector reads vector, LiDAR, EXIF, GeoTIFF, COG, NetCDF and PMTiles files**
+  with the same code as `read_paths`. A folder that mixes file kinds needs the `format` table
+  option. A `.tif` file is read as GeoTIFF (set `format: cog` for the COG reader), a `.nc` file as
+  NetCDF, and a `.pmtiles` file reads the tiles stored in the archive. A `.json` file is not taken
+  for GeoJSON: set `format: geojson` and a `file_glob` such as `*.{geojson,json}`.
 - **`format` takes a reader name, as `read_paths` does.** The `_gbx` suffix is optional and case
   is ignored (`gpkg`, `GPKG` and `gpkg_gbx` are the same reader). The File Geodatabase reader is
-  `file_gdb`; `filegdb` is no longer accepted.
-- **Reader options apply only to the readers that take them.** `layer`, `where`, `bbox` and
-  `chunk_size` apply to the vector readers and `mode` to `lidar` and `exif`. Set on a table read
-  with another reader, such an option now fails with an error that names it, instead of being
-  ignored.
+  `file_gdb`.
+- **Table options apply only to the readers that take them.** `layer`, `where`, `bbox` and
+  `chunk_size` apply to the vector readers and `mode` to `lidar`, `exif` and `netcdf`. Set on a
+  table read with another reader, such an option fails with an error that names it.
+- **`file_glob` uses the same Hadoop glob syntax as `glob`** (case-sensitive, with `{a,b}`
+  groups and `\` escapes). Folders and files whose names start with `_` or `.` are ignored, so
+  `_archive/` or `_staging/` keeps files out of a table.
 
 ### Vector readers — large layers and coded-value domains
 
@@ -115,6 +123,14 @@ shared by both vector reader tiers.
   (NULL raster, the error in `metadata.last_error`) for an unreadable input. They instead
   failed the query with `UDTF_RETURN_SCHEMA_MISMATCH`, because the error tile lacked the newer
   tile-struct fields. They now emit the error row as intended.
+
+### Registered PROJ grids and raster CRS transforms
+
+- **Lightweight raster CRS transforms work after `register_proj_grids`.** After you called
+  `gbx.register_proj_grids`, raster transforms such as `rst_transformcrs` could fail on Spark
+  workers with `Cannot find proj.db`, and the registered grids were not applied to them. GeoBrix
+  now points `PROJ_DATA` at a single directory that combines the PROJ data and the registered
+  grids. See [Registering custom grid files](./api/coordinate-reference-systems#registering-custom-grid-files).
 
 ### Python bindings
 

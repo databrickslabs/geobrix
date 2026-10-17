@@ -4,6 +4,8 @@ Tests for Vector Data page code examples (constants = payload only in docs).
 Documentation: docs/docs/sample-data/vector-data.mdx
 Run: pytest docs/tests/python/sample_data/test_vector_data.py -v
 """
+import re
+
 import pytest
 from . import vector_data
 
@@ -26,7 +28,7 @@ _VECTOR_CONSTANTS = [
     ("CREATE_GEOPACKAGE_NYC", "GPKG"),
     ("USAGE_GEOPACKAGE_NYC", "layerName"),
     ("CREATE_FILEGDB_NYC", "CreateLayer"),
-    ("USAGE_FILEGDB_NYC", "filegdb"),
+    ("USAGE_FILEGDB_NYC", "file_gdb_ogr"),
 ]
 
 _OUTPUT_CONSTANTS = [
@@ -54,3 +56,18 @@ def test_vector_output_constant_exists_and_contains_key(const_name, key):
     val = getattr(vector_data, const_name)
     assert isinstance(val, str), f"{const_name} should be str"
     assert key in val, f"{const_name} should contain '{key}'"
+
+
+_READER = re.compile(r'\.format\("([^"]+)"\)')
+_READ_SNIPPETS = [name for name, _ in _VECTOR_CONSTANTS if name.startswith(("DOWNLOAD_", "USAGE_"))]
+
+
+@pytest.mark.parametrize("const_name", _READ_SNIPPETS)
+def test_displayed_reader_names_are_registered(spark, const_name):
+    """Every ``spark.read.format("...")`` on the page names a reader the JAR registers
+    (no aliases: ``filegdb`` and ``gpkg`` are not readers; ``file_gdb_ogr`` and
+    ``gpkg_ogr`` are)."""
+    lookup = spark._jvm.org.apache.spark.sql.execution.datasources.DataSource.lookupDataSource
+    conf = spark._jsparkSession.sessionState().conf()
+    for name in _READER.findall(getattr(vector_data, const_name)):
+        lookup(name, conf)  # raises DATA_SOURCE_NOT_FOUND for an unknown name

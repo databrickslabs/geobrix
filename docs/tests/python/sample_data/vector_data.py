@@ -406,12 +406,12 @@ This combines multiple datasets into one file with separate layers.
 
 USAGE_GEOPACKAGE_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # Read specific layer
-boroughs = spark.read.format("gpkg") \\
+boroughs = spark.read.format("gpkg_ogr") \\
     .option("layerName", "boroughs") \\
     .load(f"{sample_path}/nyc/geopackage/nyc_complete.gpkg")
 
 # Read another layer
-parks = spark.read.format("gpkg") \\
+parks = spark.read.format("gpkg_ogr") \\
     .option("layerName", "parks") \\
     .load(f"{sample_path}/nyc/geopackage/nyc_complete.gpkg")"""
 
@@ -564,18 +564,18 @@ This creates an Esri FileGDB with multiple feature classes.
 
 USAGE_FILEGDB_NYC = """sample_path = "/Volumes/main/default/geobrix_samples/geobrix-examples"
 # Read FileGDB feature classes (created in Complete Bundle)
-boroughs = spark.read.format("filegdb") \\
+boroughs = spark.read.format("file_gdb_ogr") \\
     .option("layerName", "NYC_Boroughs") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")
 
-zones = spark.read.format("filegdb") \\
+zones = spark.read.format("file_gdb_ogr") \\
     .option("layerName", "NYC_TaxiZones") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")
 
-parks = spark.read.format("filegdb") \\
+parks = spark.read.format("file_gdb_ogr") \\
     .option("layerName", "NYC_Parks") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")
 
-subway = spark.read.format("filegdb") \\
+subway = spark.read.format("file_gdb_ogr") \\
     .option("layerName", "NYC_SubwayStations") \\
     .load(f"{sample_path}/nyc/filegdb/NYC_Sample.gdb")"""

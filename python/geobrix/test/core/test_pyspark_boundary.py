@@ -125,3 +125,30 @@ def test_missing_pyspark_gives_one_clear_error_in_the_heavyweight_bindings():
     for name in _HEAVY_ENTRY_POINTS:
         err = got["databricks.labs.gbx." + name]
         assert err and _is_pyspark(err[0]) and "pyspark>=4.0.0" in err[1], name
+
+
+_OTHER_ENTRY_POINTS = (
+    "pmtiles.functions",
+    "pmtiles._agg_light",
+    "earthdata",
+    "earthdata.client",
+)
+
+
+def test_missing_pyspark_gives_one_clear_error_in_pmtiles_and_earthdata():
+    """The PMTiles bindings (heavy and light) and the Earthdata client import PySpark
+    at import time too. ``pmtiles._agg_light`` is private, so it is named here."""
+    got = _import_without_pyspark(
+        _public_modules(
+            ("pmtiles", "earthdata"),
+            ["databricks.labs.gbx", "databricks.labs.gbx.pmtiles._agg_light"],
+        )
+    )
+    # _agg_light also needs the light tier's pandas / pmtiles packages, which the
+    # sweep's bare-pyspark check does not care about (it is only about pyspark).
+    bare = _bare_pyspark_errors(got)
+    assert bare == {}, f"bare pyspark ModuleNotFoundError from: {sorted(bare)}"
+    assert got["databricks.labs.gbx.pmtiles"] is None
+    for name in _OTHER_ENTRY_POINTS:
+        err = got["databricks.labs.gbx." + name]
+        assert err and _is_pyspark(err[0]) and "pyspark>=4.0.0" in err[1], name

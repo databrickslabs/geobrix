@@ -18,6 +18,11 @@ login/search_data/download) for offline unit tests.
 
 from __future__ import annotations
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import os
 from datetime import datetime
 from typing import Callable, List, Optional, Sequence, Tuple

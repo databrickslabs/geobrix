@@ -21,6 +21,11 @@ Register the UDAF once per session before use::
 Spec: https://github.com/protomaps/PMTiles/blob/main/spec/v3/spec.md
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Union
 
 from pyspark.sql import Column, SparkSession

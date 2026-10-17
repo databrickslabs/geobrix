@@ -8,6 +8,11 @@ Column expressions only (no _jvm / spark.conf / rdd).
 
 from __future__ import annotations
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import io
 import json
 from typing import Optional, Sequence

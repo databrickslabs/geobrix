@@ -76,7 +76,7 @@ read -r -d '' LINT_SCRIPT <<'LINT_EOF'
 overall=0
 lint_scope() {
     scope_dir="$1"; shift
-    cd "/root/geobrix/$scope_dir" || return 1
+    cd "/root/geobrix/$scope_dir" || { echo "missing lint scope: $scope_dir"; overall=1; return; }
     echo ''; echo "=== Lint scope: $scope_dir ($*) ==="
     isort_exit=0; black_exit=0; flake8_exit=0
     isort $ISORT_FLAGS "$@" || isort_exit=$?

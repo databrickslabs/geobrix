@@ -11,6 +11,12 @@ re-delivery with unchanged content writes nothing.
 Writes (``write_batch``) run in an SDP ``foreach_batch_sink``; ``declare_ingest``
 wires the pipeline. Paths are Unity Catalog Volume (FUSE) paths; object-store URIs
 are rejected. Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
+
+``on_error`` (``scd2`` / ``replace``): ``quarantine`` (``declare_ingest``'s
+default) reads each file in isolation and sets aside what cannot be read -- a
+whole file, a feature, a raster window, a run of LiDAR points (see
+``ds/_quarantine.py``) -- in ``<table>_bad_records``; the rest is written.
+``fail`` fails the micro-batch on the first error, naming the file.
 """
 
 from __future__ import annotations
@@ -21,7 +27,7 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Dict, List, Optional, Set
 
-from databricks.labs.gbx.ds import _listing
+from databricks.labs.gbx.ds import _listing, _quarantine, _scratch
 from databricks.labs.gbx.ds.paths import (
     SOURCE_MTIME_COL,
     SOURCE_PATH_COL,
@@ -34,6 +40,8 @@ from databricks.labs.gbx.ds.paths import (
 _LOG = logging.getLogger(__name__)
 
 ON_CHANGE_MODES = ("scd2", "replace", "append")
+# declare_ingest / write_batch on_error: set bad data aside, or fail.
+ON_ERROR_MODES = ("quarantine", "fail")
 SOURCE_HASH_COL = "_source_hash"
 SOURCE_SIZE_COL = "_source_size"
 _EVENTS_SCHEMA = (
@@ -51,6 +59,12 @@ def _check_mode(mode: str) -> str:
     if mode not in ON_CHANGE_MODES:
         raise ValueError(f"on_change must be one of {ON_CHANGE_MODES}; got {mode!r}.")
     return mode
+
+
+def _check_on_error(on_error: str) -> str:
+    if on_error not in ON_ERROR_MODES:
+        raise ValueError(f"on_error must be one of {ON_ERROR_MODES}; got {on_error!r}.")
+    return on_error
 
 
 def _sha256(local: str) -> str:
@@ -281,6 +295,56 @@ def _write_rows(
         _ensure_current_view(spark, target, versions)
 
 
+def _bad_records_table(target: str) -> str:
+    return _suffixed(target, "_bad_records")
+
+
+def _new_bad_records_dir(parent: str) -> str:
+    """A fresh hidden scratch folder for one micro-batch's bad records, under
+    ``parent`` (the landing folder; stale ones of killed batches are removed).
+    Not created here: the first executor that finds a bad record creates it, so
+    a batch without bad records never writes to ``parent``."""
+    parent = _fuse_path(parent, "declare_ingest")
+    _scratch.gc_stale_scratch(parent)
+    return _scratch.new_scratch_dir(parent)
+
+
+def _bad_records_df(spark, scratch: str, files):
+    """The bad records the executors wrote to ``scratch``, with each file's hash
+    and size (from ``files``: path, modificationTime, hash, size) and the time
+    they were set aside; None when there are none. A record written twice (a
+    task retry, a speculative task) is kept once."""
+    from pyspark.sql import functions as F
+
+    try:
+        names = os.listdir(scratch)
+    except FileNotFoundError:  # no bad record: never created
+        return None
+    if not [
+        n for n in names if n.endswith(".parquet") and not n.startswith((".", "_"))
+    ]:
+        return None
+    bad = spark.read.schema(_quarantine.FRAGMENT_DDL).parquet(scratch).dropDuplicates()
+    keyed = files.select(
+        F.col("path").alias(SOURCE_PATH_COL),
+        F.col("modificationTime").alias(SOURCE_MTIME_COL),
+        SOURCE_HASH_COL,
+        F.col(SOURCE_SIZE_COL),
+    )
+    joined = bad.join(F.broadcast(keyed), [SOURCE_PATH_COL, SOURCE_MTIME_COL], "left")
+    return joined.select(
+        *[
+            F.current_timestamp().alias(c) if c == "quarantined_at" else F.col(c)
+            for c in _quarantine.BAD_RECORDS_COLUMNS
+        ]
+    )
+
+
+def _write_bad_records(bad_df, table: str) -> None:
+    """Append to ``<target>_bad_records`` (a Delta table, created on first use)."""
+    bad_df.write.mode("append").saveAsTable(_quote(table))
+
+
 def _delivery_is_current(event: dict) -> bool:
     """True if the file on disk still matches the delivery: the same size, and an
     mtime within 1 second of the delivered one.
@@ -321,11 +385,20 @@ def write_batch(
     schema_path=None,
     schema=None,
     num_partitions=None,
+    on_error="fail",
+    bad_records_parent=None,
 ):
     """foreach_batch_sink body: ``batch_df`` = ``hash_files`` rows. Returns files written.
 
     The rows' schema is ``schema`` (internal: resolved once by ``declare_ingest``) or
     else read from ``schema_path``.
+
+    ``on_error``: ``"fail"`` (this function's default) fails on the first error,
+    naming the file. ``"quarantine"`` (``declare_ingest``'s default) needs
+    ``bad_records_parent``, a writable Volume folder (the landing folder): each
+    file is read in isolation, what cannot be read goes to a hidden scratch
+    folder there as it is read and, after the rows are written, is appended to
+    ``<target>_bad_records``; the scratch folder is removed either way.
 
     Before reading, each planned file is stat-ed on the driver (in a small thread
     pool) and skipped (with a warning) if its size or mtime no longer matches the
@@ -340,6 +413,12 @@ def write_batch(
     from pyspark.sql import functions as F
 
     _check_mode(mode)
+    _check_on_error(on_error)
+    if on_error == "quarantine" and not bad_records_parent:
+        raise ValueError(
+            "write_batch on_error='quarantine' needs bad_records_parent (a "
+            "writable Volume folder for the micro-batch's bad records)."
+        )
     spark = batch_df.sparkSession
     events = [
         r.asDict()
@@ -364,38 +443,70 @@ def write_batch(
     # mtimes travel as epoch microseconds (no Python datetime round trip), so the
     # join below matches the rows' _source_mtime exactly.
     files = spark.createDataFrame(
-        [(e[SOURCE_PATH_COL], e[_MTIME_US], e[SOURCE_HASH_COL]) for e in todo],
-        f"path string, {_MTIME_US} long, {SOURCE_HASH_COL} string",
+        [
+            (e[SOURCE_PATH_COL], e[_MTIME_US], e[SOURCE_HASH_COL], e[SOURCE_SIZE_COL])
+            for e in todo
+        ],
+        f"path string, {_MTIME_US} long, {SOURCE_HASH_COL} string, "
+        f"{SOURCE_SIZE_COL} long",
     ).select(
         "path",
         F.timestamp_micros(F.col(_MTIME_US)).alias("modificationTime"),
         SOURCE_HASH_COL,
+        SOURCE_SIZE_COL,
     )
-    rows = read_paths(
-        files,
-        format,
-        options,
-        schema_path=schema_path,
-        schema=schema,
-        num_partitions=num_partitions,
+    scratch = (
+        _new_bad_records_dir(bad_records_parent) if on_error == "quarantine" else None
     )
-    keyed = files.select(
-        F.col("path").alias(SOURCE_PATH_COL),
-        F.col("modificationTime").alias(SOURCE_MTIME_COL),
-        SOURCE_HASH_COL,
-    )
-    rows = rows.join(F.broadcast(keyed), [SOURCE_PATH_COL, SOURCE_MTIME_COL])
-    _write_rows(
-        rows, target, mode, sorted({e[SOURCE_PATH_COL] for e in todo}), versions
-    )
+    try:
+        rows = read_paths(
+            files,
+            format,
+            options,
+            schema_path=schema_path,
+            schema=schema,
+            num_partitions=num_partitions,
+            on_error="skip" if scratch else "fail",
+            bad_records_dir=scratch,
+        )
+        keyed = files.select(
+            F.col("path").alias(SOURCE_PATH_COL),
+            F.col("modificationTime").alias(SOURCE_MTIME_COL),
+            SOURCE_HASH_COL,
+        )
+        rows = rows.join(F.broadcast(keyed), [SOURCE_PATH_COL, SOURCE_MTIME_COL])
+        _write_rows(
+            rows, target, mode, sorted({e[SOURCE_PATH_COL] for e in todo}), versions
+        )
+        if scratch:
+            # The read ran in the rows write: its bad records are complete now.
+            bad = _bad_records_df(spark, scratch, files)
+            if bad is not None:
+                _write_bad_records(bad, _bad_records_table(target))
+                _LOG.warning(
+                    "declare_ingest: bad records of this micro-batch were appended "
+                    "to %s",
+                    _bad_records_table(target),
+                )
+    finally:
+        if scratch:
+            _scratch.remove_scratch_dir(scratch)
     return len(todo)
 
 
 def _ingest_setup(
-    target, source_dir, format, on_change, glob, schema_path, options=None
+    target,
+    source_dir,
+    format,
+    on_change,
+    glob,
+    schema_path,
+    options=None,
+    on_error="quarantine",
 ) -> dict:
     """Validated names and inputs for :func:`declare_ingest` (no session needed)."""
     _check_mode(on_change)
+    _check_on_error(on_error)
     try:
         parts = _split_ident(target)
     except ValueError:
@@ -416,6 +527,7 @@ def _ingest_setup(
         "rows": qualified(short),
         "events": qualified(f"{short}_file_events"),
         "versions": qualified(f"{short}_file_versions"),
+        "bad_records": qualified(f"{short}_bad_records"),
         "versions_flow": f"{short}_versions_flow",
         "sink": f"{short}_rows_sink",
         "rows_flow": f"{short}_rows_flow",
@@ -434,6 +546,7 @@ def declare_ingest(
     glob=None,
     num_partitions=None,
     schema_path=None,
+    on_error="quarantine",
 ):
     """Declare an incremental file-ingestion flow in an SDP pipeline.
 
@@ -443,6 +556,13 @@ def declare_ingest(
     rows land in ``target``. ``append`` declares a plain streaming table ``target``
     instead.
 
+    ``on_error``: ``"quarantine"`` (default) sets aside what cannot be read (a
+    file, or a record of it) in ``t_bad_records`` (created when the first one is
+    found) and writes the rest; it stages them in a hidden folder under
+    ``source_dir``, which must be writable. In ``append`` mode bad records are
+    skipped with a warning instead (no side table). ``"fail"`` fails the update
+    on the first error, naming the file.
+
     Auto Loader delivers the files under ``source_dir`` whose name matches ``glob``
     (default: the format's :func:`~databricks.labs.gbx.ds.paths.default_glob`
     pattern; ``pmtiles_gbx`` needs its ``source`` option). The table schema is
@@ -451,7 +571,7 @@ def declare_ingest(
     and ``schema_path`` are Volume paths.
     """
     setup = _ingest_setup(
-        target, source_dir, format, on_change, glob, schema_path, options
+        target, source_dir, format, on_change, glob, schema_path, options, on_error
     )
     schema = path_schema(format, options, setup["schema_src"], glob=setup["glob"])
 
@@ -481,6 +601,9 @@ def declare_ingest(
                 options,
                 schema=schema,
                 num_partitions=num_partitions,
+                # A streaming table has no side output: bad records are skipped
+                # with a warning.
+                on_error="skip" if on_error == "quarantine" else "fail",
             )
 
         return
@@ -514,6 +637,8 @@ def declare_ingest(
             versions=versions if on_change == "scd2" else None,
             schema=schema,
             num_partitions=num_partitions,
+            on_error=on_error,
+            bad_records_parent=source_dir if on_error == "quarantine" else None,
         )
 
     @dp.append_flow(name=setup["rows_flow"], target=setup["sink"])

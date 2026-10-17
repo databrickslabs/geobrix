@@ -3,12 +3,14 @@
 import hashlib
 import json
 import os
+import re
 import types
 from datetime import datetime, timedelta, timezone
 
 import pyarrow as pa
 import pytest
 
+from databricks.labs.gbx.ds import _quarantine as Q
 from databricks.labs.gbx.ds import changes as C
 
 T0 = datetime(2026, 10, 17, tzinfo=timezone.utc)
@@ -854,3 +856,192 @@ def test_ingest_default_glob_follows_the_pmtiles_source_option():
     assert glob({"source": "raster"}) == "*.tif"
     with pytest.raises(ValueError, match="source"):
         glob(None)
+
+
+# --- on_error: quarantine ------------------------------------------------------
+
+
+def test_on_error_modes_constant():
+    assert C.ON_ERROR_MODES == ("quarantine", "fail")
+
+
+def test_write_batch_checks_on_error(spark, tmp_path, delta_mocks):
+    a = _gj(str(tmp_path / "a.geojson"), 1)
+    events = _frozen_events(spark, [a])
+    with pytest.raises(ValueError, match="on_error must be one of"):
+        C.write_batch(events, "c.s.t", "geojson_gbx", None, "scd2", on_error="skip")
+    with pytest.raises(ValueError, match="needs bad_records_parent"):
+        C.write_batch(
+            events, "c.s.t", "geojson_gbx", None, "scd2", on_error="quarantine"
+        )
+
+
+@pytest.fixture
+def quarantine_mocks(delta_mocks, monkeypatch):
+    """delta_mocks plus the bad-records append, recorded as collected rows."""
+    calls, written = delta_mocks
+    appended = []
+
+    def fake_bad(bad_df, table):
+        appended.append((table, [r.asDict() for r in bad_df.collect()]))
+
+    monkeypatch.setattr(C, "_write_bad_records", fake_bad)
+    return calls, written, appended
+
+
+def _mixed_landing(tmp_path):
+    """good.geojson (3 features), mixed.geojson (feature 1 has no geometry) and
+    bad.geojson (not GeoJSON)."""
+    landing = tmp_path / "landing"
+    landing.mkdir()
+    good = _gj(str(landing / "good.geojson"), 3)
+    mixed = landing / "mixed.geojson"
+    feats = json.loads(open(good).read())
+    feats["features"][1]["geometry"] = None
+    mixed.write_text(json.dumps(feats))
+    bad = landing / "bad.geojson"
+    bad.write_bytes(b"\x00not a geospatial file" * 20)
+    return landing, good, str(mixed), str(bad)
+
+
+@pytest.mark.parametrize("mode", ["scd2", "replace"])
+def test_write_batch_quarantine_writes_the_rows_and_sets_bad_records_aside(
+    spark, tmp_path, quarantine_mocks, mode
+):
+    calls, written, appended = quarantine_mocks
+    landing, good, mixed, bad = _mixed_landing(tmp_path)
+    events = _frozen_events(spark, [good, mixed, bad])
+    by_path = {r["_source_path"]: r for r in events.collect()}
+    n = C.write_batch(
+        events,
+        "c.s.t",
+        "geojson_gbx",
+        None,
+        mode,
+        schema_path=good,
+        on_error="quarantine",
+        bad_records_parent=str(landing),
+    )
+    assert n == 3
+    # The rows: every feature but mixed.geojson's feature 1; bad.geojson has none.
+    assert written["n"] == 3 + 2 and written["paths"] == sorted([good, mixed, bad])
+    ((table, recs),) = appended
+    assert table == "`c`.`s`.`t_bad_records`"
+    recs = sorted(recs, key=lambda r: r["_source_path"])
+    assert [r["_source_path"] for r in recs] == [bad, mixed]
+    assert [r["record_index"] for r in recs] == [None, "feature=1"]
+    assert [r["error_class"] for r in recs] == [
+        "pyogrio.errors.DataSourceError",
+        "NullGeometry",
+    ]
+    for r in recs:  # the delivery's hash and size, joined on the driver
+        assert r["_source_hash"] == by_path[r["_source_path"]]["_source_hash"]
+        assert r["_source_size"] == by_path[r["_source_path"]]["_source_size"]
+        assert r["quarantined_at"] is not None
+    assert list(recs[0]) == list(Q.BAD_RECORDS_COLUMNS)
+    # The micro-batch's scratch folder is gone, and so is its hidden container.
+    assert not os.path.exists(landing / ".gbx_scratch")
+
+
+def test_write_batch_quarantine_without_bad_records_writes_no_side_table(
+    spark, tmp_path, quarantine_mocks
+):
+    calls, written, appended = quarantine_mocks
+    landing, good, _, _ = _mixed_landing(tmp_path)
+    events = _frozen_events(spark, [good])
+    C.write_batch(
+        events,
+        "c.s.t",
+        "geojson_gbx",
+        None,
+        "scd2",
+        schema_path=good,
+        on_error="quarantine",
+        bad_records_parent=str(landing),
+    )
+    assert written["n"] == 3 and appended == []
+    assert sorted(os.listdir(landing)) == [
+        "bad.geojson",
+        "good.geojson",
+        "mixed.geojson",
+    ]
+
+
+def test_write_batch_fail_raises_naming_the_file(spark, tmp_path, quarantine_mocks):
+    calls, _, appended = quarantine_mocks
+    landing, good, _, bad = _mixed_landing(tmp_path)
+    events = _frozen_events(spark, [good, bad])
+    with pytest.raises(Exception, match=re.escape(bad)):
+        C.write_batch(events, "c.s.t", "geojson_gbx", None, "scd2", schema_path=good)
+    assert appended == []
+
+
+def test_bad_records_df_keeps_a_record_written_twice_once(spark, tmp_path):
+    """A task retry writes its records again: the driver keeps one copy."""
+    scratch = str(tmp_path / "s")
+    for _ in range(2):
+        bad = Q.BadRecords(scratch)
+        bad.add("/v/a.gpkg", 1_000_000, "fid=7", "RecordsNotRead", "lost", None)
+        bad.add("/v/a.gpkg", 1_000_000, None, "RecordsNotRead", "1 of 9", None)
+        bad.close()
+    files = spark.createDataFrame(
+        [("/v/a.gpkg", 1_000_000, "h1", 42)],
+        "path string, us long, _source_hash string, _source_size long",
+    ).selectExpr(
+        "path",
+        "timestamp_micros(us) AS modificationTime",
+        "_source_hash",
+        "_source_size",
+    )
+    rows = C._bad_records_df(spark, scratch, files).collect()
+    assert sorted((r["record_index"] or "") for r in rows) == ["", "fid=7"]
+    assert {(r["_source_hash"], r["_source_size"]) for r in rows} == {("h1", 42)}
+    assert C._bad_records_df(spark, str(tmp_path / "never_created"), files) is None
+
+
+def test_declare_ingest_passes_on_error_to_the_sink(
+    tmp_path, monkeypatch, fake_pipeline
+):
+    dp, _ = fake_pipeline
+    _gj(str(tmp_path / "a.geojson"), 1)
+    batches = []
+    monkeypatch.setattr(C, "write_batch", lambda *a, **k: batches.append(k))
+    monkeypatch.setattr(C, "hash_files", lambda df: df)
+
+    C.declare_ingest("main.geo.t", str(tmp_path), "geojson_gbx")  # quarantine
+    dp.fns["t_rows_sink"](object(), 0)
+    C.declare_ingest("main.geo.u", str(tmp_path), "geojson_gbx", on_error="fail")
+    dp.fns["u_rows_sink"](object(), 0)
+    assert [(k["on_error"], k["bad_records_parent"]) for k in batches] == [
+        ("quarantine", str(tmp_path)),
+        ("fail", None),
+    ]
+    with pytest.raises(ValueError, match="on_error must be one of"):
+        C.declare_ingest("main.geo.t", str(tmp_path), "geojson_gbx", on_error="skip")
+
+
+@pytest.mark.parametrize(
+    "on_error, read_mode", [("quarantine", "skip"), ("fail", "fail")]
+)
+def test_declare_ingest_append_skips_bad_records(
+    tmp_path, monkeypatch, fake_pipeline, on_error, read_mode
+):
+    """append is a plain streaming table: no side table, bad records are skipped."""
+    dp, _ = fake_pipeline
+    _gj(str(tmp_path / "a.geojson"), 1)
+    reads = []
+    monkeypatch.setattr(C, "read_paths", lambda *a, **k: reads.append(k))
+    C.declare_ingest(
+        "main.geo.t",
+        str(tmp_path),
+        "geojson_gbx",
+        on_change="append",
+        on_error=on_error,
+    )
+    dp.fns["main.geo.t"]()
+    assert reads[0]["on_error"] == read_mode
+
+
+def test_ingest_setup_names_the_bad_records_table():
+    got = C._ingest_setup("`a-b`.s.t", "/V", "gpkg_gbx", "scd2", None, None)
+    assert got["bad_records"] == "`a-b`.s.t_bad_records"

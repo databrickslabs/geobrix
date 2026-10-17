@@ -24,5 +24,16 @@ connection:
 # External Options Allowlist
 # These table-specific options must be included in the externalOptionsAllowList
 # parameter of the UC connection to allow them to be passed through.
+#
+#   path, file_glob              every table
+#   format                       every table; a reader name with the _gbx suffix
+#                                optional, any case: vector, gpkg, geojson,
+#                                geojsonl, shapefile, file_gdb, lidar, exif,
+#                                raster, gtiff
+#   layer, where, bbox,          vector, gpkg, geojson, geojsonl, shapefile and
+#   chunk_size                   file_gdb tables only
+#   mode                         lidar and exif tables only
+#
+# An option set on a table whose reader does not take it fails the table.
 # ============================================================================
 external_options_allowlist: "path,format,layer,where,bbox,chunk_size,file_glob,mode"

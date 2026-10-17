@@ -21,24 +21,11 @@ from databricks.labs.community_connector.interface import (
 from databricks.labs.gbx.ds._listing import list_files
 from databricks.labs.gbx.ds.paths import (
     SOURCE_MTIME_COL,
+    SUPPORTED_FORMATS,
     iter_path_batches,
     path_schema,
     resolve_format,
 )
-
-# Short table-option values accepted for `format` (any light reader name also works).
-FORMAT_ALIASES = {
-    "vector": "vector_gbx",
-    "gpkg": "gpkg_gbx",
-    "geojson": "geojson_gbx",
-    "geojsonl": "geojsonl_gbx",
-    "shapefile": "shapefile_gbx",
-    "filegdb": "file_gdb_gbx",
-    "lidar": "lidar_gbx",
-    "exif": "exif_gbx",
-    "raster": "raster_gbx",
-    "gtiff": "gtiff_gbx",
-}
 
 # Discovery: extension -> reader (longest suffix first, so ".gdb.zip" beats ".zip").
 # Sidecars such as .shx/.dbf/.prj are never members.
@@ -67,10 +54,35 @@ _ALL_EXTS = tuple(sorted(EXT_TO_FORMAT, key=len, reverse=True))
 _RASTER = {"raster_gbx", "gtiff_gbx"}
 _NON_VECTOR = {"lidar_gbx", "exif_gbx"} | _RASTER
 
-# Table options handed to the reader unchanged. Everything else on the options
-# dict (framework keys, UC connection keys, our own connector options) is either
-# mapped explicitly in reader_options() or never reaches the reader.
-_PASSTHROUGH_READER_KEYS = ("where", "bbox", "mode")
+_VECTOR = (
+    "vector_gbx",
+    "gpkg_gbx",
+    "geojson_gbx",
+    "geojsonl_gbx",
+    "shapefile_gbx",
+    "file_gdb_gbx",
+)
+
+# Table options that become reader options: table option -> (reader option, the
+# readers it applies to). Set for any other reader, it is an error. `path`,
+# `format` and `file_glob` apply to every table and never reach the reader, nor
+# does anything else on the options dict (framework and UC connection keys).
+_READER_OPTIONS = {
+    "layer": ("layerName", _VECTOR),
+    "where": ("where", _VECTOR),
+    "bbox": ("bbox", _VECTOR),
+    "chunk_size": ("chunkSize", _VECTOR),
+    "mode": ("mode", ("lidar_gbx", "exif_gbx")),
+}
+
+
+def _short(name: str) -> str:
+    return name[: -len("_gbx")]
+
+
+def _listed(names) -> str:
+    names = [_short(n) for n in names]
+    return names[0] if len(names) == 1 else ", ".join(names[:-1]) + " and " + names[-1]
 
 
 def _format_of(path: str):
@@ -82,11 +94,19 @@ def _format_of(path: str):
 
 
 def format_for(table_options: dict, members: list) -> str:
-    """Reader for a table: the `format` option (alias or reader name), else the
-    members' extension; a mix of extensions without `format` is an error."""
-    fmt = (table_options.get("format") or "").strip().lower()
+    """Reader for a table: the `format` option, else the members' extension; a mix
+    of extensions without `format` is an error. `format` is a reader name as for
+    ``read_paths``: the `_gbx` suffix is optional and case is ignored."""
+    fmt = (table_options.get("format") or "").strip()
     if fmt:
-        return resolve_format(FORMAT_ALIASES.get(fmt, fmt)).name()
+        try:
+            return resolve_format(fmt).name()
+        except ValueError:
+            raise ValueError(
+                f"The `format` table option does not support {fmt!r}. Supported "
+                f"formats: {', '.join(_short(n) for n in SUPPORTED_FORMATS)} (the "
+                f"`_gbx` suffix is optional and case is ignored)."
+            ) from None
     found = {f for f in (_format_of(m) for m in members) if f}
     if len(found) == 1:
         return found.pop()
@@ -189,7 +209,7 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
                 f"from the first file, so stage at least one file before creating the table."
             )
         fmt = format_for(table_options, members)
-        schema = path_schema(fmt, self.reader_options(table_options), members[0])
+        schema = path_schema(fmt, self.reader_options(table_options, fmt), members[0])
         self._formats[table_name] = fmt
         self._schemas[table_name] = schema
         return schema
@@ -273,7 +293,7 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
             member,
             int(mtime_ns) // 1_000,
             fmt,
-            self.reader_options(table_options),
+            self.reader_options(table_options, fmt),
             expected,
         )
 
@@ -301,14 +321,22 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
         return rows(), end
 
     # ------------------------------------------------------------- helpers
-    def reader_options(self, table_options: dict[str, str]) -> dict:
-        """Map connector table options onto reader options (the named reader sets
-        its own driver)."""
-        out = {k: v for k, v in table_options.items() if k in _PASSTHROUGH_READER_KEYS}
-        if table_options.get("layer"):
-            out["layerName"] = table_options["layer"]
-        if table_options.get("chunk_size"):
-            out["chunkSize"] = str(int(table_options["chunk_size"]))
+    def reader_options(self, table_options: dict[str, str], fmt: str) -> dict:
+        """Map connector table options onto reader options for reader ``fmt`` (the
+        named reader sets its own driver). An option that does not apply to
+        ``fmt`` is an error naming the readers it applies to."""
+        fmt = resolve_format(fmt).name()
+        out = {}
+        for key, (name, formats) in _READER_OPTIONS.items():
+            value = table_options.get(key)
+            if value is None or value == "":
+                continue
+            if fmt not in formats:
+                raise ValueError(
+                    f"The table option `{key}` applies to {_listed(formats)} tables "
+                    f"only; this table is read with {fmt}."
+                )
+            out[name] = str(int(value)) if key == "chunk_size" else value
         return out
 
     def _table_format(self, table_name: str, table_options: dict[str, str]) -> str:

@@ -38,12 +38,14 @@ def test_reader_options_map_connector_options_and_drop_framework_keys():
             "chunk_size": "500",
             "where": "borough = 'Queens'",
             "bbox": "-74.1,40.6,-73.8,40.9",
+            "file_glob": "zones_*.gpkg",
             "tableName": "zones",
             "databricks.connection": "conn",
             "sourceName": "geobrix",
             "root_path": "/Volumes/c/s/v",
             "path": "zones",
-        }
+        },
+        "gpkg_gbx",
     )
     assert opts == {
         "layerName": "taxi_zones",
@@ -53,6 +55,54 @@ def test_reader_options_map_connector_options_and_drop_framework_keys():
     }
 
 
+_VECTOR_FORMATS = ("vector", "gpkg", "geojson", "geojsonl", "shapefile", "file_gdb")
+
+
+@pytest.mark.parametrize("fmt", _VECTOR_FORMATS)
+def test_vector_tables_take_layer_where_bbox_and_chunk_size_but_not_mode(fmt):
+    c = GeoBrixLakeflowConnect({})
+    opts = {"layer": "l", "where": "k = 1", "bbox": "0,0,1,1", "chunk_size": "10"}
+    assert c.reader_options(opts, fmt) == {
+        "layerName": "l",
+        "where": "k = 1",
+        "bbox": "0,0,1,1",
+        "chunkSize": "10",
+    }
+    with pytest.raises(ValueError, match="`mode` applies to lidar and exif tables"):
+        c.reader_options({"mode": "points"}, fmt)
+
+
+@pytest.mark.parametrize("fmt", ["lidar", "exif"])
+def test_lidar_and_exif_tables_take_mode_only(fmt):
+    c = GeoBrixLakeflowConnect({})
+    assert c.reader_options({"mode": "metadata", "file_glob": "*"}, fmt) == {
+        "mode": "metadata"
+    }
+    for key in ("layer", "where", "bbox", "chunk_size"):
+        msg = f"`{key}` applies to vector, gpkg, .*file_gdb tables"
+        with pytest.raises(ValueError, match=msg):
+            c.reader_options({key: "1"}, fmt)
+
+
+@pytest.mark.parametrize("fmt", ["raster", "gtiff"])
+def test_raster_tables_take_none_of_the_reader_options(fmt):
+    c = GeoBrixLakeflowConnect({})
+    opts = {"path": "p", "format": fmt, "file_glob": "*.tif"}
+    assert c.reader_options(opts, fmt) == {}
+    for key in ("layer", "where", "bbox", "chunk_size", "mode"):
+        with pytest.raises(ValueError, match=f"`{key}` applies to"):
+            c.reader_options({key: "1"}, fmt)
+
+
+def test_an_option_for_another_reader_fails_the_table_schema(root):
+    c = GeoBrixLakeflowConnect({"root_path": str(root)})
+    opts = {"format": "geojson", "mode": "points"}
+    with pytest.raises(
+        ValueError, match="`mode` applies to lidar and exif.*geojson_gbx"
+    ):
+        c.get_table_schema("nyc_boroughs", opts)
+
+
 def test_unknown_format_is_rejected():
     from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
         format_for,
@@ -60,6 +110,19 @@ def test_unknown_format_is_rejected():
 
     with pytest.raises(ValueError, match="does not support"):
         format_for({"format": "kml"}, ["/x/a.kml"])
+
+
+def test_filegdb_is_not_a_format_name(tmp_path):
+    """One name per reader: the File Geodatabase reader is `file_gdb` (or
+    `file_gdb_gbx`); `filegdb` fails with the supported formats."""
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
+        format_for,
+    )
+
+    msg = r"'filegdb'\. Supported formats: .*\bfile_gdb\b"
+    with pytest.raises(ValueError, match=msg):
+        format_for({"format": "filegdb"}, [str(tmp_path / "a.gdb.zip")])
+    assert format_for({"format": "file_gdb"}, []) == "file_gdb_gbx"
 
 
 def test_relative_path_resolves_against_root(root):
@@ -117,14 +180,17 @@ def test_metadata_is_append_with_mtime_cursor():
     }
 
 
-def test_format_aliases_resolve_to_reader_names():
+def test_format_takes_reader_names_with_optional_suffix_in_any_case():
+    """The `format` option follows read_paths: a reader name, `_gbx` optional."""
     from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import (
-        FORMAT_ALIASES,
+        format_for,
     )
-    from databricks.labs.gbx.ds.paths import resolve_format
+    from databricks.labs.gbx.ds.paths import SUPPORTED_FORMATS
 
-    for alias, name in FORMAT_ALIASES.items():
-        assert resolve_format(name).name() == name, alias
+    for name in SUPPORTED_FORMATS:
+        short = name[: -len("_gbx")]
+        for value in (short, short.upper(), name, name.upper()):
+            assert format_for({"format": value}, []) == name, value
 
 
 def test_discovery_infers_format_from_extension(tmp_path):
@@ -302,7 +368,7 @@ def test_zipped_shapefile_and_gdb_members_map_to_their_readers(tmp_path):
     (d / "b.gdb.zip").write_bytes(b"")
     c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
     assert _members_of(c, {"format": "shapefile"}) == ["a.shp.zip"]
-    assert _members_of(c, {"format": "filegdb"}) == ["b.gdb.zip"]
+    assert _members_of(c, {"format": "file_gdb"}) == ["b.gdb.zip"]
     assert _members_of(c, {}) == ["a.shp.zip", "b.gdb.zip"]
     assert format_for({}, [str(d / "a.shp.zip")]) == "shapefile_gbx"
     assert format_for({}, [str(d / "b.gdb.zip")]) == "file_gdb_gbx"

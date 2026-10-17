@@ -27,20 +27,21 @@ The reader for a table is the `format` table option, or is inferred from the fil
 extension when every file in the dataset has the same one. A folder that mixes formats
 needs an explicit `format`.
 
-| Reader | `format` aliases | Extensions |
-|---|---|---|
-| `vector_gbx` | `vector` | any vector extension below (generic) |
-| `gpkg_gbx` | `gpkg` | `.gpkg` |
-| `geojson_gbx` | `geojson` | `.geojson`, `.json` |
-| `geojsonl_gbx` | `geojsonl` | `.geojsonl`, `.geojsons` |
-| `shapefile_gbx` | `shapefile` | `.shp`, `.shz`, `.shp.zip` |
-| `file_gdb_gbx` | `filegdb` | `.gdb`, `.gdb.zip` |
-| `lidar_gbx` | `lidar` | `.las`, `.laz` |
-| `exif_gbx` | `exif` | `.jpg`, `.jpeg` |
-| `raster_gbx` | `raster` | `.tif`, `.tiff` (another raster file, such as `.jp2`, is read only when `path` names that file and `format` is `raster`) |
-| `gtiff_gbx` | `gtiff` | `.tif`, `.tiff` |
+| `format` | Extensions |
+|---|---|
+| `vector` | any vector extension below (generic) |
+| `gpkg` | `.gpkg` |
+| `geojson` | `.geojson`, `.json` |
+| `geojsonl` | `.geojsonl`, `.geojsons` |
+| `shapefile` | `.shp`, `.shz`, `.shp.zip` |
+| `file_gdb` | `.gdb`, `.gdb.zip` |
+| `lidar` | `.las`, `.laz` |
+| `exif` | `.jpg`, `.jpeg` |
+| `raster` | `.tif`, `.tiff` (another raster file, such as `.jp2`, is read only when `path` names that file and `format` is `raster`) |
+| `gtiff` | `.tif`, `.tiff` |
 
-The reader name itself (for example `gpkg_gbx`) is also accepted for `format`.
+`format` names a reader the same way as `read_paths` does: the `_gbx` suffix is optional
+and case is ignored, so `gpkg`, `GPKG` and `gpkg_gbx` all select the `gpkg_gbx` reader.
 
 ## Install
 
@@ -76,13 +77,18 @@ Grant `USE CONNECTION` to the people who build pipelines on it.
 | Option | Meaning |
 |---|---|
 | `path` | File or folder, relative to `root_path` or absolute. A folder is one dataset; its files are read recursively. Optional when the table name matches an entry under `root_path`. |
-| `format` | A reader alias or name from the table above. Default: inferred from the file extension. |
-| `layer` | Layer name for multi-layer vector sources (default: the first layer) |
-| `where` | OGR SQL filter, e.g. `borough = 'Queens'` |
-| `bbox` | `xmin,ymin,xmax,ymax` in the layer's CRS |
-| `chunk_size` | Features per Arrow batch (default 10000) |
+| `format` | A reader from the table above. Default: inferred from the file extension. |
+| `layer` | Vector only. Layer name for multi-layer sources (default: the first layer) |
+| `where` | Vector only. OGR SQL filter, e.g. `borough = 'Queens'` |
+| `bbox` | Vector only. `xmin,ymin,xmax,ymax` in the layer's CRS |
+| `chunk_size` | Vector only. Features per Arrow batch (default 10000) |
 | `file_glob` | Basename filter for folder members, e.g. `zones_*.gpkg` |
-| `mode` | Reader mode for `lidar` (default `points`) and `exif` (default `metadata`); passed through to the reader |
+| `mode` | `lidar` and `exif` only. Reader mode: `points` (default) or `metadata` for LiDAR, `metadata` (default) or `qc` for EXIF |
+
+"Vector" means the `vector`, `gpkg`, `geojson`, `geojsonl`, `shapefile` and `file_gdb`
+readers. `path`, `format` and `file_glob` apply to every table; setting one of the other
+options on a table whose reader does not take it fails with an error that names the option
+and the readers it applies to. Raster tables take none of them.
 
 The ingestion type is append-only, with `_source_mtime` as the cursor. For `scd2` and
 `replace` ingestion, see [Incremental ingestion with Auto Loader](https://databrickslabs.github.io/geobrix/docs/readers/incremental-ingestion); the managed Add

@@ -89,6 +89,9 @@ mkdir -p "$WORKSPACE"
 #  - sample-data/Volumes/   (sample-data downloads)
 #  - docs/build/, docs/node_modules/  (docusaurus build/dep dirs)
 #  - node_modules/, staging/, test-logs/, coverage-reports/
+#  - spark-warehouse/, metastore_db/, derby.log  (gitignored local Spark output:
+#    a test run in progress creates and deletes files there, and a file that
+#    vanishes mid-copy makes rsync exit 23 and abort the whole act run)
 # .git/ IS included — scripts called from workflows (e.g.
 # scripts/security/maven-pgp-verify) use `git rev-parse --show-toplevel` to
 # resolve the project root, which fails without a real .git tree.
@@ -108,6 +111,9 @@ rsync -a \
     --exclude='/staging/' \
     --exclude='/test-logs/' \
     --exclude='/coverage-reports/' \
+    --exclude='spark-warehouse/' \
+    --exclude='/metastore_db/' \
+    --exclude='/derby.log' \
     "$PROJECT_ROOT/" "$WORKSPACE/"
 
 # Now drop .github/ in fresh, with stub overlays applied.

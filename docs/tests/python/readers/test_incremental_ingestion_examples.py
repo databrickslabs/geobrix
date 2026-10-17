@@ -4,16 +4,12 @@ Validates docs/docs/readers/incremental-ingestion.mdx.
 """
 
 import ast
-import faulthandler
 import inspect
 import math
 import os
 import re
 import shutil
-import signal
 import sys
-import threading
-import time
 from collections import Counter
 from pathlib import Path
 
@@ -24,89 +20,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import incremental_ingestion_examples as ex  # noqa: E402
 
-# Longest any test here may run (override per test with @_deadline).
-_TEST_TIMEOUT_S = 300
-
-
-def _deadline(seconds):
-    def mark(fn):
-        fn._deadline_s = seconds
-        return fn
-
-    return mark
-
-
-def _on_deadline(name, seconds, capman, main_thread, finished):
-    """Watchdog for a test still running after ``seconds``. If the JVM still answers,
-    the test fails with every Python stack and the JVM thread dump in its captured
-    output. If the JVM does not answer (it has been seen to wedge with every thread
-    blocked under x86-64 emulation on Apple Silicon), every later Spark call would
-    block too, so the run ends here with the stacks on the terminal."""
-    from pyspark import SparkContext
-
-    proc = getattr(SparkContext._gateway, "proc", None)
-    answered = []
-    probe = threading.Thread(
-        target=lambda: answered.append(SparkContext._jvm.java.lang.System.nanoTime()),
-        daemon=True,
-    )
-    probe.start()
-    probe.join(15)
-    if finished.is_set():
-        return
-    if not answered:
-        capman.suspend_global_capture(in_=False)
-        sys.stderr.write(
-            f"\n{name} still running after {seconds} s and the JVM (pid "
-            f"{getattr(proc, 'pid', '?')}) does not respond; ending the run.\n"
-        )
-        faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
-        sys.stderr.flush()
-        if proc is not None:
-            proc.kill()
-        os._exit(1)
-    faulthandler.dump_traceback(file=sys.stderr, all_threads=True)
-    if proc is not None:
-        os.kill(proc.pid, signal.SIGQUIT)  # thread dump to the JVM's stdout
-        time.sleep(2)
-    signal.pthread_kill(main_thread, signal.SIGALRM)
-
-
-@pytest.fixture(autouse=True)
-def _bounded(request, spark):
-    """Per-test deadline, and no streaming query may outlive its test."""
-    name = request.node.name
-    seconds = getattr(request.function, "_deadline_s", _TEST_TIMEOUT_S)
-
-    def _expired(signum, frame):
-        raise TimeoutError(f"{name} still running after {seconds} s")
-
-    previous = signal.signal(signal.SIGALRM, _expired)
-    capman = request.config.pluginmanager.getplugin("capturemanager")
-    finished = threading.Event()
-    timer = threading.Timer(
-        seconds,
-        _on_deadline,
-        (name, seconds, capman, threading.get_ident(), finished),
-    )
-    timer.daemon = True
-    timer.start()
-    try:
-        yield
-    finally:
-        finished.set()
-        timer.cancel()
-        signal.signal(signal.SIGALRM, previous)
-        leaked = spark.streams.active
-        for q in leaked:
-            q.stop()
-    assert not leaked, f"streaming queries left running: {[q.name for q in leaked]}"
-
-
-@_deadline(3)
-def test_a_test_past_its_deadline_fails_instead_of_blocking():
-    with pytest.raises(TimeoutError, match="still running after 3 s"):
-        time.sleep(120)
+pytestmark = pytest.mark.deadline(360)  # past the 300 s limit of the stream helper
 
 
 def _expected_borough_rows(spark):

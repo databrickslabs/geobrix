@@ -16,6 +16,7 @@ GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.5.3-jar-with-dependencies.jar
 
 # Sample data root: from path_config (defaults to test-data minimal bundle at runtime)
 from path_config import SAMPLE_DATA_BASE  # noqa: E402
+from deadline_guard import DEFAULT_DEADLINE_S, DeadlineGuard  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -109,6 +110,40 @@ def pytest_configure(config):
     config.addinivalue_line(
         "markers", "slow: marks tests as slow running"
     )
+    config.addinivalue_line(
+        "markers",
+        "deadline(seconds): fail the test if it is still running after this many "
+        "seconds (default: GBX_DOC_TEST_TIMEOUT_S, else 600)",
+    )
+
+
+# Every test runs under a deadline (see deadline_guard.py); no streaming query may
+# outlive its test. Raise or lower one test's limit with @pytest.mark.deadline(seconds).
+@pytest.fixture(autouse=True)
+def _deadline(request):
+    """Fail a test that outlives its deadline; no streaming query may outlive its test."""
+    marker = request.node.get_closest_marker("deadline")
+    seconds = marker.args[0] if marker else DEFAULT_DEADLINE_S
+    spark_fixture = next(
+        (n for n in ("spark", "spark_with_geobrix") if n in request.fixturenames), None
+    )
+    # Resolved first, so starting Spark does not count against the deadline.
+    spark = request.getfixturevalue(spark_fixture) if spark_fixture else None
+    guard = DeadlineGuard(
+        request.node.name,
+        seconds,
+        request.config.pluginmanager.getplugin("capturemanager"),
+        uses_jvm=spark is not None,
+    )
+    guard.start()
+    try:
+        yield
+    finally:
+        guard.stop()
+        leaked = spark.streams.active if spark is not None else []
+        for q in leaked:
+            q.stop()
+    assert not leaked, f"streaming queries left running: {[q.name for q in leaked]}"
 
 
 def pytest_collection_modifyitems(config, items):

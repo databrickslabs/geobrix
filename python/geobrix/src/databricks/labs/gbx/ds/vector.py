@@ -37,7 +37,7 @@ from databricks.labs.gbx.ds import _scratch
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
     new_local_temp_dir,
-    source_signature,
+    retried_source_signature,
 )
 
 # ---------------------------------------------------------------------------
@@ -53,17 +53,11 @@ def _copy_vec_source(source_path: str, local: str) -> None:
         shutil.copy(source_path, local)
 
 
-def _vec_source_signature(source_path: str) -> tuple:
-    """Size + mtime of a source (or a ``.gdb`` directory's contents), so a source
-    replaced at the same path is staged again."""
-    from databricks.labs.gbx.ds import _listing
-
-    return _listing._retry_transient(lambda: source_signature(source_path))
-
-
 # GPKG/FileGDB sources need seeked I/O: each is copied to worker-local disk once
-# and shared by every partition of it on the worker, within a bounded cache.
-_VEC_STAGE = StageCache("gbx_vecstage_", _copy_vec_source, _vec_source_signature)
+# and shared by every partition of it on the worker, within a bounded cache. The
+# signature (size + mtime of the file, or of a ``.gdb`` directory's contents) is
+# the shared retried one, so a source replaced at the same path is staged again.
+_VEC_STAGE = StageCache("gbx_vecstage_", _copy_vec_source, retried_source_signature)
 
 
 # OGR field type (+ subtype) -> Spark type, matching heavy OGR_SchemaInference.getType.

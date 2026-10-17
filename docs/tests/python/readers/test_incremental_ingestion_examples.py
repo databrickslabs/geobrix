@@ -58,16 +58,39 @@ def test_read_paths_stream_needs_schema_path(spark, tmp_path):
 
 
 def test_read_paths_raster_windows(spark):
-    tiles = ex.read_paths_raster(spark)
+    """``tileSize`` cuts each raster into a grid of windows, spread over
+    ``num_partitions`` tasks. The sample rasters are small (236 x 161), so a
+    64-pixel grid gives several windows per file; a 512 grid (the displayed value)
+    gives one."""
+    import math
+
+    import rasterio
+
+    from databricks.labs.gbx.ds.register import register
+
+    register(spark)
+    tile = 64
+    tiles = ex.read_paths_raster(spark, tile_size=str(tile))
     assert tiles.rdd.getNumPartitions() == 8  # test-only RDD use
     rows = tiles.select("tile.window", "_source_path").collect()
     sources = {r["_source_path"] for r in rows}
     assert sources and all(p.endswith(".tif") for p in sources)
-    from databricks.labs.gbx.ds.register import register
 
-    register(spark)
+    expected = 0
+    for path in sources:
+        with rasterio.open(path) as src:
+            expected += math.ceil(src.width / tile) * math.ceil(src.height / tile)
     whole = spark.read.format("gtiff_gbx").load(ex.SAMPLE_SENTINEL_DIR).count()
-    assert len(rows) >= whole  # tileSize cuts each file into one or more windows
+    assert len(rows) > whole  # more windows than whole-file tiles
+    assert len(rows) == expected  # exactly the grid: sum of ceil(w/64) * ceil(h/64)
+    assert all(
+        0 < r["window"]["width"] <= tile and 0 < r["window"]["height"] <= tile
+        for r in rows
+    )
+
+    # The displayed size (512) is larger than these rasters: one window per file.
+    big = ex.read_paths_raster(spark).select("_source_path").collect()
+    assert len(big) == len(sources) == whole
 
 
 def test_displayed_snippets_name_real_api():

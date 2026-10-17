@@ -18,8 +18,31 @@ This page tracks **API and naming changes** across GeoBrix releases — the sing
 v0.5.3 is under development and not yet released.
 :::
 
-Fixes for very large and domain-coded vector sources, and one field-type mapping shared by
-both vector reader tiers.
+Incremental ingestion of new and changed files with Auto Loader, a multi-format Lakeflow
+connector, and fixes for very large and domain-coded vector sources and one field-type mapping
+shared by both vector reader tiers.
+
+### Incremental ingestion — `read_paths` and `declare_ingest` (new)
+
+- **`read_paths` reads a DataFrame of file paths with any lightweight reader.** Give it a batch
+  listing or an Auto Loader stream and the name of a reader (`vector_gbx`, `shapefile_gbx`,
+  `geojson_gbx`, `geojsonl_gbx`, `gpkg_gbx`, `file_gdb_gbx`, `lidar_gbx`, `exif_gbx`,
+  `raster_gbx` or `gtiff_gbx`); rows carry the reader's columns plus `_source_path` and
+  `_source_mtime`. Raster files are planned into tile windows that spread across tasks when
+  `num_partitions` is set.
+- **`declare_ingest` declares an Auto Loader flow in a Lakeflow pipeline**, with `on_change`
+  choosing what happens when a file is overwritten: `scd2` (the default; rows are append-only and
+  a versions table with a `_current` view records each content version), `replace` (latest content
+  only) or `append` (every delivery). See
+  [Incremental ingestion with Auto Loader](./readers/incremental-ingestion).
+
+### Lakeflow connector — one multi-format connector (breaking)
+
+- **The connector is now `geobrix`, renamed from `geobrix_vector`.** One connector reads vector,
+  LiDAR, EXIF and GeoTIFF files with the same code as `read_paths`. Its `sourceName` changes from
+  `geobrix_vector` to `geobrix`, so recreate any connection that used the old name.
+- **A folder that mixes file kinds now needs `format`.** Without the `format` table option such a
+  folder fails with an error; it previously fell back to the generic vector reader.
 
 ### Vector readers — large layers and coded-value domains
 
@@ -66,6 +89,9 @@ both vector reader tiers.
   The cache is now bounded — least recently used idle copies are removed, capped at half the
   available local disk by default or at `GBX_STAGE_CACHE_MB` — and copies left by exited
   workers are removed. See [Serverless and Memory](./serverless-and-memory).
+- **Files replaced at the same path are re-read.** The lightweight readers now stage a new copy
+  when a GeoPackage, FileGDB or raster is replaced at the same path. Previously a worker that had
+  already staged the old file could keep serving the stale copy.
 
 ### Raster writers
 

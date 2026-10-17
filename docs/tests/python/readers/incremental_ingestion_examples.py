@@ -128,10 +128,12 @@ def read_paths_stream(spark, folder, checkpoint, query_name="incremental_ingesti
     return spark.table(query_name)
 
 
-def read_paths_raster(spark, folder=None):
+def read_paths_raster(spark, folder=None, tile_size="512"):
+    """READ_PATHS_RASTER; ``tile_size`` is 512 as displayed, and a test can pass a
+    smaller size to cut the small sample rasters into several windows."""
     from databricks.labs.gbx.ds.paths import read_paths
 
     files = _files(spark, folder or SAMPLE_SENTINEL_DIR, "*.tif")
     return read_paths(
-        files, "gtiff_gbx", options={"tileSize": "512"}, num_partitions=8
+        files, "gtiff_gbx", options={"tileSize": tile_size}, num_partitions=8
     )

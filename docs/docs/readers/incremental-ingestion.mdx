@@ -90,6 +90,7 @@ Pass an Auto Loader stream the same way. Because a stream has no first row to lo
   functionName="READ_PATHS_STREAM"
   source="docs/tests/python/readers/incremental_ingestion_examples.py"
   testFile="docs/tests/python/readers/test_incremental_ingestion_examples.py"
+  validationLevel="compile"
 />
 
 Auto Loader's checkpoint remembers which files were delivered, so each run reads only the files
@@ -97,10 +98,10 @@ that arrived since the last one. Auto Loader (`cloudFiles`) is a Databricks feat
 
 ### Rasters
 
-Raster files are planned into their tile windows first, and the windows are then read as separate
-tasks, so one large raster does not have to be read by a single task. The windows are spread
-across tasks **only when `num_partitions` is set**, so set it (on Serverless, always). Use the
-raster reader's `tileSize` option to choose the window size:
+Raster files are planned into their tile windows first. The windows are read as separate tasks
+**only when `num_partitions` is set**; without it, a large raster is read by a single task. Set
+`num_partitions` (on Serverless, always) and use the raster reader's `tileSize` option to choose the
+window size:
 
 <CodeFromTest
   code={ingestExamples}
@@ -128,6 +129,7 @@ reads each new or changed file with the reader you name, and keeps the rows in a
   functionName="PIPELINE_SCD2"
   source="docs/tests/python/readers/incremental_ingestion_examples.py"
   testFile="docs/tests/python/readers/test_incremental_ingestion_examples.py"
+  validationLevel="compile"
 />
 
 The pipeline's environment needs the GeoBrix light wheel — see [Installation](../installation).
@@ -175,8 +177,9 @@ Each mode declares these objects in the pipeline's catalog and schema:
 | `<t>_file_versions`: one row per content version of a file, with `__START_AT` and `__END_AT` | yes | no | no |
 | `<target>_current`: a view of the rows for each file's latest version | yes | no | no |
 
-In `scd2` and `replace` the rows table is created on the first update and is clustered by
-`_source_path`.
+In `scd2` and `replace` the rows table is written by the pipeline's batch sink: it is a regular
+Delta table, created on the first update and clustered by `_source_path`, not a dataset the
+pipeline manages.
 
 ### Query the latest content and past content
 
@@ -218,12 +221,17 @@ columns with the same types: a file that differs by column name or type fails wi
 names the file. A file whose columns are in a different order is realigned by name. A file with no
 features adds no rows.
 
+### Files deleted before they are read
+
+A file that is deleted after it was listed but before it is read is skipped with a warning, not
+treated as an error. In a stream, Auto Loader counts such a file as processed.
+
 ### Parallelism
 
-- **Vector, LiDAR and EXIF files are read one file per task.** `num_partitions` repartitions the files
-  across that many tasks.
+- **Vector, LiDAR and EXIF files are each read whole by a single task.** `num_partitions`
+  repartitions the files across that many tasks.
 - **Raster files are planned into tile windows, and the windows are spread across tasks only when
-  `num_partitions` is set.** Without it a large raster is read by few tasks. On Serverless, set
+  `num_partitions` is set.** Without it a large raster is read by a single task. On Serverless, set
   `num_partitions`.
 
 ## Compared with the Lakeflow connector

@@ -1248,15 +1248,23 @@ def test_read_paths_pmtiles_archive_mode_spreads_an_archive(spark, tmp_path):
 
     a = _pmtiles_archive(
         str(tmp_path / "a.pmtiles"),
-        [(14, 2615 + i, 6330, _png(i)) for i in range(6)],
+        [(14, 2615 + i, 6330, _png(i % 8)) for i in range(32)],
     )
     b = _pmtiles_archive(str(tmp_path / "b.pmtiles"), [(3, 1, 2, _png(7))])
     opts = {"source": "archive", "tilesPerPartition": "2"}
+    # Two-stage: the plan stage emits one row per group of 2 tiles.
+    schema = P.path_schema("pmtiles_gbx", opts, a)
+    plan = P._plan_batches("pmtiles_gbx", opts, schema)(
+        iter([_plan_src((a, 1_000_000), (b, 2_000_000))])
+    )
+    planned = [p for x in plan for p in x.column("path").to_pylist()]
+    assert planned.count(a) == 16 and planned.count(b) == 1
     got = P.read_paths(_paths_df(spark, [a, b]), "pmtiles", opts, num_partitions=4)
     want = _union([_batch_read(spark, "pmtiles_gbx", f, **opts) for f in (a, b)])
     _assert_same_rows(got, want)
-    assert got.count() == 7
-    # Two-stage: the archive's three partitions are planned, then spread.
+    assert got.count() == 33
+    # The archive's 16 planned partitions are hashed (on their pickled bytes) over
+    # 4 tasks: all in one task has probability 4 * (1/4)**16, about 1e-9.
     tasks = got.where(F.col(P.SOURCE_PATH_COL) == a).select(F.spark_partition_id())
     assert tasks.distinct().count() > 1
 

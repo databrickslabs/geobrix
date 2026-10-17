@@ -870,49 +870,96 @@ def test_write_batch_checks_on_error(spark, tmp_path, delta_mocks):
     events = _frozen_events(spark, [a])
     with pytest.raises(ValueError, match="on_error must be one of"):
         C.write_batch(events, "c.s.t", "geojson_gbx", None, "scd2", on_error="skip")
-    with pytest.raises(ValueError, match="needs bad_records_parent"):
+    with pytest.raises(ValueError, match="needs scratch_dir"):
         C.write_batch(
             events, "c.s.t", "geojson_gbx", None, "scd2", on_error="quarantine"
         )
 
 
+class _Tables:
+    """The rows table and <t>_bad_records in memory, behind the Delta writers:
+    stored hashes come from what was written, bad records are appended through
+    the real de-duplication, and each writer can be made to fail once."""
+
+    def __init__(self, spark):
+        self.spark = spark
+        self.rows = {}  # path -> set of stored hashes
+        self.row_writes = []  # (mode, paths, row count) per rows write
+        self.bad = []  # appended bad records (dicts)
+        self.fail_rows = self.fail_bad = 0
+
+    def stored_hashes(self, spark, target, paths, mode):
+        return {p: set(self.rows[p]) for p in paths if p in self.rows}
+
+    def write_rows(self, rows_df, target, mode, paths, versions):
+        if self.fail_rows:
+            self.fail_rows -= 1
+            raise RuntimeError("rows write failed")
+        got = rows_df.select("_source_path", "_source_hash").distinct().collect()
+        for p in paths if mode == "replace" else []:
+            self.rows.pop(p, None)
+        for p, h in got:
+            self.rows.setdefault(p, set()).add(h)
+        self.row_writes.append((mode, list(paths), rows_df.count()))
+
+    def existing_bad(self, spark, table, paths):
+        if not self.bad:
+            return None
+        keys = [tuple(r[k] for k in C._BAD_RECORD_KEY) for r in self.bad]
+        return spark.createDataFrame(
+            keys,
+            "_source_path string, _source_hash string, record_index string, "
+            "error_class string",
+        )
+
+    def append_bad(self, bad_df, table):
+        assert table == "`c`.`s`.`t_bad_records`"
+        if self.fail_bad:
+            self.fail_bad -= 1
+            raise RuntimeError("bad-records write failed")
+        self.bad.extend(r.asDict() for r in bad_df.collect())
+
+    def quarantined(self, spark, target, paths):
+        out = {}
+        for r in self.bad:
+            if r["error_class"] == "NothingReadable" and r["_source_path"] in paths:
+                out.setdefault(r["_source_path"], set()).add(r["_source_hash"])
+        return out
+
+
 @pytest.fixture
-def quarantine_mocks(delta_mocks, monkeypatch):
-    """delta_mocks plus the bad-records append, recorded as collected rows."""
-    calls, written = delta_mocks
-    appended = []
+def tables(spark, monkeypatch):
+    monkeypatch.setattr(C._listing, "_retry_transient", lambda fn, **k: fn())
+    t = _Tables(spark)
+    monkeypatch.setattr(C, "_stored_hashes", t.stored_hashes)
+    monkeypatch.setattr(C, "_write_rows", t.write_rows)
+    monkeypatch.setattr(C, "_existing_bad_records", t.existing_bad)
+    monkeypatch.setattr(C, "_append_bad_records", t.append_bad)
+    monkeypatch.setattr(C, "_quarantined_hashes", t.quarantined)
+    return t
 
-    def fake_bad(bad_df, table):
-        appended.append((table, [r.asDict() for r in bad_df.collect()]))
 
-    monkeypatch.setattr(C, "_write_bad_records", fake_bad)
-    return calls, written, appended
+_RING = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0]]]}  # not closed: no WKB
 
 
 def _mixed_landing(tmp_path):
-    """good.geojson (3 features), mixed.geojson (feature 1 has no geometry) and
-    bad.geojson (not GeoJSON)."""
+    """good.geojson (3 features), mixed.geojson (feature 1's ring is not closed:
+    unreadable; feature 2 has no geometry: data) and bad.geojson (not GeoJSON)."""
     landing = tmp_path / "landing"
     landing.mkdir()
     good = _gj(str(landing / "good.geojson"), 3)
     mixed = landing / "mixed.geojson"
     feats = json.loads(open(good).read())
-    feats["features"][1]["geometry"] = None
+    feats["features"][1]["geometry"] = _RING
+    feats["features"][2]["geometry"] = None
     mixed.write_text(json.dumps(feats))
     bad = landing / "bad.geojson"
     bad.write_bytes(b"\x00not a geospatial file" * 20)
     return landing, good, str(mixed), str(bad)
 
 
-@pytest.mark.parametrize("mode", ["scd2", "replace"])
-def test_write_batch_quarantine_writes_the_rows_and_sets_bad_records_aside(
-    spark, tmp_path, quarantine_mocks, mode
-):
-    calls, written, appended = quarantine_mocks
-    landing, good, mixed, bad = _mixed_landing(tmp_path)
-    events = _frozen_events(spark, [good, mixed, bad])
-    by_path = {r["_source_path"]: r for r in events.collect()}
-    n = C.write_batch(
+def _quarantine(events, mode, landing, good, **kw):
+    return C.write_batch(
         events,
         "c.s.t",
         "geojson_gbx",
@@ -920,46 +967,47 @@ def test_write_batch_quarantine_writes_the_rows_and_sets_bad_records_aside(
         mode,
         schema_path=good,
         on_error="quarantine",
-        bad_records_parent=str(landing),
+        scratch_dir=str(landing),
+        **kw,
     )
-    assert n == 3
-    # The rows: every feature but mixed.geojson's feature 1; bad.geojson has none.
-    assert written["n"] == 3 + 2 and written["paths"] == sorted([good, mixed, bad])
-    ((table, recs),) = appended
-    assert table == "`c`.`s`.`t_bad_records`"
-    recs = sorted(recs, key=lambda r: r["_source_path"])
-    assert [r["_source_path"] for r in recs] == [bad, mixed]
-    assert [r["record_index"] for r in recs] == [None, "feature=1"]
-    assert [r["error_class"] for r in recs] == [
-        "pyogrio.errors.DataSourceError",
-        "NullGeometry",
+
+
+@pytest.mark.parametrize("mode", ["scd2", "replace"])
+def test_write_batch_quarantine_writes_the_rows_and_sets_bad_records_aside(
+    spark, tmp_path, tables, mode
+):
+    landing, good, mixed, bad = _mixed_landing(tmp_path)
+    events = _frozen_events(spark, [good, mixed, bad])
+    by_path = {r["_source_path"]: r for r in events.collect()}
+    assert _quarantine(events, mode, landing, good) == 3
+    # The rows: every feature (a NULL geometry is data) but mixed's unreadable one.
+    ((_, paths, n),) = tables.row_writes
+    assert n == 3 + 2
+    # replace keeps bad.geojson's earlier rows: set aside entirely, it is not
+    # replaced; scd2 is append-only.
+    want = [good, mixed] if mode == "replace" else sorted([good, mixed, bad])
+    assert sorted(paths) == sorted(want)
+    recs = sorted(tables.bad, key=lambda r: (r["_source_path"], r["error_class"]))
+    assert [(r["_source_path"], r["record_index"], r["error_class"]) for r in recs] == [
+        (bad, None, "NothingReadable"),
+        (bad, None, "pyogrio.errors.DataSourceError"),
+        (mixed, "feature=1", "UnreadableGeometry"),
     ]
     for r in recs:  # the delivery's hash and size, joined on the driver
         assert r["_source_hash"] == by_path[r["_source_path"]]["_source_hash"]
         assert r["_source_size"] == by_path[r["_source_path"]]["_source_size"]
         assert r["quarantined_at"] is not None
-    assert list(recs[0]) == list(Q.BAD_RECORDS_COLUMNS)
-    # The micro-batch's scratch folder is gone, and so is its hidden container.
+        assert list(r) == list(Q.BAD_RECORDS_COLUMNS)
+    # The micro-batch's staging folder is gone, and so is its hidden container.
     assert not os.path.exists(landing / ".gbx_scratch")
 
 
 def test_write_batch_quarantine_without_bad_records_writes_no_side_table(
-    spark, tmp_path, quarantine_mocks
+    spark, tmp_path, tables
 ):
-    calls, written, appended = quarantine_mocks
     landing, good, _, _ = _mixed_landing(tmp_path)
-    events = _frozen_events(spark, [good])
-    C.write_batch(
-        events,
-        "c.s.t",
-        "geojson_gbx",
-        None,
-        "scd2",
-        schema_path=good,
-        on_error="quarantine",
-        bad_records_parent=str(landing),
-    )
-    assert written["n"] == 3 and appended == []
+    _quarantine(_frozen_events(spark, [good]), "scd2", landing, good)
+    assert tables.row_writes[0][2] == 3 and tables.bad == []
     assert sorted(os.listdir(landing)) == [
         "bad.geojson",
         "good.geojson",
@@ -967,13 +1015,114 @@ def test_write_batch_quarantine_without_bad_records_writes_no_side_table(
     ]
 
 
-def test_write_batch_fail_raises_naming_the_file(spark, tmp_path, quarantine_mocks):
-    calls, _, appended = quarantine_mocks
+@pytest.mark.parametrize("fails", ["bad", "rows"])
+def test_a_retried_batch_loses_and_duplicates_no_bad_record(
+    spark, tmp_path, tables, fails
+):
+    """Bad records are appended before the rows, skipping the ones already
+    there: a failure of either write and the retry leave each bad record once
+    and every row written."""
+    landing, good, mixed, bad = _mixed_landing(tmp_path)
+    events = _frozen_events(spark, [good, mixed, bad])
+    if fails == "bad":
+        tables.fail_bad = 1
+    else:
+        tables.fail_rows = 1
+    with pytest.raises(RuntimeError, match="write failed"):
+        _quarantine(events, "scd2", landing, good)
+    assert tables.row_writes == []  # the rows are written last
+    assert len(tables.bad) == (0 if fails == "bad" else 3)
+    _quarantine(events, "scd2", landing, good)  # the streaming retry
+    keys = [
+        (r["_source_path"], r["record_index"], r["error_class"]) for r in tables.bad
+    ]
+    assert len(keys) == len(set(keys)) == 3
+    assert set(tables.rows) == {good, mixed}
+
+
+def test_an_identical_redelivery_of_a_file_set_aside_entirely_is_skipped(
+    spark, tmp_path, tables
+):
+    landing, good, _, bad = _mixed_landing(tmp_path)
+    events = _frozen_events(spark, [bad])
+    assert _quarantine(events, "scd2", landing, good) == 1
+    assert _quarantine(events, "scd2", landing, good) == 0  # same bytes again
+    assert len(tables.bad) == 2  # its record and NothingReadable, once
+    open(bad, "ab").write(b"more garbage")  # new content: read (and set aside) again
+    assert _quarantine(_frozen_events(spark, [bad]), "scd2", landing, good) == 1
+    assert len(tables.bad) == 4
+
+
+def test_write_batch_stages_in_the_scratch_dir_it_is_given(
+    spark, tmp_path, tables, monkeypatch
+):
+    landing, good, _, bad = _mixed_landing(tmp_path)
+    other = tmp_path / "writable"
+    other.mkdir()
+    seen = {}
+
+    def spy(rows_df, *a):
+        seen["other"] = os.listdir(other / ".gbx_scratch")
+        seen["landing"] = os.path.exists(landing / ".gbx_scratch")
+        tables.write_rows(rows_df, *a)
+
+    monkeypatch.setattr(C, "_write_rows", spy)
+    C.write_batch(
+        _frozen_events(spark, [good, bad]),
+        "c.s.t",
+        "geojson_gbx",
+        None,
+        "scd2",
+        schema_path=good,
+        on_error="quarantine",
+        scratch_dir=str(other),
+    )
+    assert len(seen["other"]) == 1 and seen["landing"] is False
+    assert not os.path.exists(other / ".gbx_scratch")
+
+
+def test_a_scratch_dir_that_cannot_be_written_says_what_to_do(tmp_path):
+    blocker = tmp_path / "landing"
+    blocker.write_text("a file, not a folder")
+    with pytest.raises(PermissionError, match="scratch_dir="):
+        C._new_batch_scratch(str(blocker))
+
+
+def test_write_batch_fail_raises_naming_the_file(spark, tmp_path, tables):
     landing, good, _, bad = _mixed_landing(tmp_path)
     events = _frozen_events(spark, [good, bad])
     with pytest.raises(Exception, match=re.escape(bad)):
         C.write_batch(events, "c.s.t", "geojson_gbx", None, "scd2", schema_path=good)
-    assert appended == []
+    assert tables.bad == [] and tables.row_writes == []
+    assert not os.path.exists(landing / ".gbx_scratch")  # fail mode stages nothing
+
+
+def test_new_bad_records_skips_what_the_table_holds(spark):
+    """The anti-join matches a NULL record_index too."""
+    cols = (
+        "_source_path string, _source_mtime timestamp, _source_hash string, "
+        "_source_size long, record_index string, error_class string, "
+        "error_message string, raw string, quarantined_at timestamp"
+    )
+    bad = spark.createDataFrame(
+        [
+            ("/a", None, "h", 1, None, "E", "m", None, None),
+            ("/a", None, "h", 1, "feature=2", "E", "m", None, None),
+            ("/a", None, "h2", 1, None, "E", "m", None, None),
+        ],
+        cols,
+    )
+    existing = spark.createDataFrame(
+        [("/a", "h", None, "E")],
+        "_source_path string, _source_hash string, record_index string, "
+        "error_class string",
+    )
+    got = C._new_bad_records(bad, existing).collect()
+    assert sorted((r["_source_hash"], r["record_index"] or "") for r in got) == [
+        ("h", "feature=2"),
+        ("h2", ""),
+    ]
+    assert C._new_bad_records(bad, None) is bad
 
 
 def test_bad_records_df_keeps_a_record_written_twice_once(spark, tmp_path):
@@ -1012,12 +1161,21 @@ def test_declare_ingest_passes_on_error_to_the_sink(
     dp.fns["t_rows_sink"](object(), 0)
     C.declare_ingest("main.geo.u", str(tmp_path), "geojson_gbx", on_error="fail")
     dp.fns["u_rows_sink"](object(), 0)
-    assert [(k["on_error"], k["bad_records_parent"]) for k in batches] == [
+    C.declare_ingest(
+        "main.geo.v", str(tmp_path), "geojson_gbx", scratch_dir="/Volumes/c/s/scratch"
+    )
+    dp.fns["v_rows_sink"](object(), 0)
+    assert [(k["on_error"], k["scratch_dir"]) for k in batches] == [
         ("quarantine", str(tmp_path)),
         ("fail", None),
+        ("quarantine", "/Volumes/c/s/scratch"),
     ]
     with pytest.raises(ValueError, match="on_error must be one of"):
         C.declare_ingest("main.geo.t", str(tmp_path), "geojson_gbx", on_error="skip")
+    with pytest.raises(ValueError, match="^declare_ingest reads Unity Catalog Volume"):
+        C.declare_ingest(
+            "main.geo.t", str(tmp_path), "geojson_gbx", scratch_dir="s3://b/scratch"
+        )
 
 
 @pytest.mark.parametrize(

@@ -299,14 +299,23 @@ def _bad_records_table(target: str) -> str:
     return _suffixed(target, "_bad_records")
 
 
-def _new_bad_records_dir(parent: str) -> str:
-    """A fresh hidden scratch folder for one micro-batch's bad records, under
-    ``parent`` (the landing folder; stale ones of killed batches are removed).
-    Not created here: the first executor that finds a bad record creates it, so
-    a batch without bad records never writes to ``parent``."""
-    parent = _fuse_path(parent, "declare_ingest")
+def _new_batch_scratch(scratch_dir: str) -> str:
+    """A fresh hidden folder for one micro-batch, ``<scratch_dir>/.gbx_scratch/
+    <uuid>`` (stale ones of killed batches removed first), created here: the
+    batch stages its rows and its bad records in it."""
+    parent = _fuse_path(scratch_dir, "declare_ingest")
     _scratch.gc_stale_scratch(parent)
-    return _scratch.new_scratch_dir(parent)
+    scratch = _scratch.new_scratch_dir(parent)
+    try:
+        os.makedirs(scratch)
+    except OSError as e:
+        raise PermissionError(
+            f"on_error='quarantine' stages each micro-batch in a hidden folder under "
+            f"{parent} and cannot create {scratch}: {e}. Pass declare_ingest a "
+            "scratch_dir= the pipeline can write (landing folders are often "
+            "read-only to it), or use on_error='fail'."
+        ) from e
+    return scratch
 
 
 def _bad_records_df(spark, scratch: str, files):
@@ -340,9 +349,131 @@ def _bad_records_df(spark, scratch: str, files):
     )
 
 
-def _write_bad_records(bad_df, table: str) -> None:
+_NOTHING_READABLE_MESSAGE = (
+    "no row of this delivery could be read: every record of it was set aside "
+    "(see this file's other bad records with the same _source_hash)"
+)
+
+
+def _with_summaries(bad, staged):
+    """``(bad records + one NothingReadable record per delivery that has bad
+    records and no row in ``staged``, those deliveries' paths)``."""
+    from pyspark.sql import functions as F
+
+    keys = [SOURCE_PATH_COL, SOURCE_MTIME_COL, SOURCE_HASH_COL, SOURCE_SIZE_COL]
+    whole = (
+        bad.select(*keys)
+        .distinct()
+        .join(staged.select(SOURCE_PATH_COL).distinct(), SOURCE_PATH_COL, "left_anti")
+    )
+    paths = {r[0] for r in whole.select(SOURCE_PATH_COL).collect()}
+    if not paths:
+        return bad, paths
+    summary = whole.select(
+        *keys,
+        F.lit(None).cast("string").alias("record_index"),
+        F.lit(_quarantine.NOTHING_READABLE).alias("error_class"),
+        F.lit(_NOTHING_READABLE_MESSAGE).alias("error_message"),
+        F.lit(None).cast("string").alias("raw"),
+        F.current_timestamp().alias("quarantined_at"),
+    )
+    return bad.unionByName(summary), paths
+
+
+# A bad record is the same record when these are (record_index NULL included).
+_BAD_RECORD_KEY = (SOURCE_PATH_COL, SOURCE_HASH_COL, "record_index", "error_class")
+
+
+def _existing_bad_records(spark, table: str, paths: List[str]):
+    """Keys (:data:`_BAD_RECORD_KEY`) of the bad records already in ``table`` for
+    ``paths``, or None when the table does not exist yet."""
+    from pyspark.sql import functions as F
+
+    if not _table_exists(spark, table):
+        return None
+    keys = spark.createDataFrame([(p,) for p in paths], f"{SOURCE_PATH_COL} string")
+    return (
+        spark.table(_quote(table))
+        .select(*_BAD_RECORD_KEY)
+        .join(F.broadcast(keys), SOURCE_PATH_COL, "left_semi")
+        .distinct()
+    )
+
+
+def _new_bad_records(bad, existing):
+    """``bad`` without the records ``existing`` already holds (a retried
+    micro-batch writes each bad record once)."""
+    from pyspark.sql import functions as F
+
+    if existing is None:
+        return bad
+    b, e = bad.alias("b"), existing.alias("e")
+    same = [F.col(f"b.{k}").eqNullSafe(F.col(f"e.{k}")) for k in _BAD_RECORD_KEY]
+    cond = same[0]
+    for c in same[1:]:
+        cond = cond & c
+    return b.join(e, cond, "left_anti").select(
+        *[F.col(f"b.{c}") for c in _quarantine.BAD_RECORDS_COLUMNS]
+    )
+
+
+def _append_bad_records(bad_df, table: str) -> None:
     """Append to ``<target>_bad_records`` (a Delta table, created on first use)."""
     bad_df.write.mode("append").saveAsTable(_quote(table))
+
+
+def _write_bad_records(spark, bad, table: str, paths: List[str]) -> None:
+    """Append the records of ``bad`` that ``table`` does not hold yet."""
+    _append_bad_records(
+        _new_bad_records(bad, _existing_bad_records(spark, table, paths)), table
+    )
+
+
+def _quarantined_hashes(spark, target: str, paths: List[str]) -> Dict[str, Set[str]]:
+    """Per path, the hashes of deliveries set aside entirely (a NothingReadable
+    record in ``<target>_bad_records``): the same bytes would be set aside again,
+    so an identical re-delivery counts as stored."""
+    from pyspark.sql import functions as F
+
+    table = _bad_records_table(target)
+    if not paths or not _table_exists(spark, table):
+        return {}
+    keys = spark.createDataFrame([(p,) for p in paths], f"{SOURCE_PATH_COL} string")
+    out: Dict[str, Set[str]] = {}
+    for r in (
+        spark.table(_quote(table))
+        .where(F.col("error_class") == _quarantine.NOTHING_READABLE)
+        .select(SOURCE_PATH_COL, SOURCE_HASH_COL)
+        .join(F.broadcast(keys), SOURCE_PATH_COL, "left_semi")
+        .distinct()
+        .collect()
+    ):
+        out.setdefault(r[0], set()).add(r[1])
+    return out
+
+
+def _write_quarantined(spark, rows, files, target, mode, paths, versions, scratch):
+    """The quarantine write of one micro-batch: the read (the only read of the
+    files) stages its rows in ``scratch`` while the executors write the bad
+    records there; then the bad records are appended -- before the rows, and
+    idempotently, so a failure between the two loses none and a retry
+    duplicates none -- and then the rows. Under ``replace`` a delivery set aside
+    entirely keeps the file's earlier rows: its path is left out of the
+    ``replaceWhere``."""
+    staged_dir = os.path.join(scratch, "rows")
+    rows.write.mode("overwrite").parquet(staged_dir)
+    staged = spark.read.schema(rows.schema).parquet(staged_dir)
+    bad = _bad_records_df(spark, os.path.join(scratch, "bad"), files)
+    kept: Set[str] = set()
+    if bad is not None:
+        bad, kept = _with_summaries(bad, staged)
+        table = _bad_records_table(target)
+        _write_bad_records(spark, bad, table, paths)
+        _LOG.warning("declare_ingest: bad records of this micro-batch are in %s", table)
+    replaced = [p for p in paths if p not in kept] if mode == "replace" else paths
+    if mode == "replace" and not replaced:
+        return  # every delivery was set aside: nothing to replace
+    _write_rows(staged, target, mode, replaced, versions)
 
 
 def _delivery_is_current(event: dict) -> bool:
@@ -386,7 +517,7 @@ def write_batch(
     schema=None,
     num_partitions=None,
     on_error="fail",
-    bad_records_parent=None,
+    scratch_dir=None,
 ):
     """foreach_batch_sink body: ``batch_df`` = ``hash_files`` rows. Returns files written.
 
@@ -395,10 +526,12 @@ def write_batch(
 
     ``on_error``: ``"fail"`` (this function's default) fails on the first error,
     naming the file. ``"quarantine"`` (``declare_ingest``'s default) needs
-    ``bad_records_parent``, a writable Volume folder (the landing folder): each
-    file is read in isolation, what cannot be read goes to a hidden scratch
-    folder there as it is read and, after the rows are written, is appended to
-    ``<target>_bad_records``; the scratch folder is removed either way.
+    ``scratch_dir``, a Volume folder the pipeline can write: each file is read in
+    isolation and the batch is staged in a hidden folder under it (see
+    :func:`_write_quarantined`); what cannot be read goes to
+    ``<target>_bad_records``. A delivery set aside entirely is recorded there
+    (NothingReadable), and an identical re-delivery of it is skipped like a
+    stored one. The staging folder is removed either way.
 
     Before reading, each planned file is stat-ed on the driver (in a small thread
     pool) and skipped (with a warning) if its size or mtime no longer matches the
@@ -414,10 +547,10 @@ def write_batch(
 
     _check_mode(mode)
     _check_on_error(on_error)
-    if on_error == "quarantine" and not bad_records_parent:
+    if on_error == "quarantine" and not scratch_dir:
         raise ValueError(
-            "write_batch on_error='quarantine' needs bad_records_parent (a "
-            "writable Volume folder for the micro-batch's bad records)."
+            "write_batch on_error='quarantine' needs scratch_dir (a Volume folder "
+            "the pipeline can write, for staging the micro-batch)."
         )
     spark = batch_df.sparkSession
     events = [
@@ -430,6 +563,11 @@ def write_batch(
         return 0
     paths = sorted({e[SOURCE_PATH_COL] for e in events})
     stored = {} if mode == "append" else _stored_hashes(spark, target, paths, mode)
+    if on_error == "quarantine" and mode != "append":
+        seen = {p: set(h) for p, h in stored.items()}
+        for p, hashes in _quarantined_hashes(spark, target, paths).items():
+            seen.setdefault(p, set()).update(hashes)
+        stored = seen
     planned = plan_writes(events, stored, mode)
     if not planned:
         return 0
@@ -455,9 +593,7 @@ def write_batch(
         SOURCE_HASH_COL,
         SOURCE_SIZE_COL,
     )
-    scratch = (
-        _new_bad_records_dir(bad_records_parent) if on_error == "quarantine" else None
-    )
+    scratch = _new_batch_scratch(scratch_dir) if on_error == "quarantine" else None
     try:
         rows = read_paths(
             files,
@@ -467,7 +603,7 @@ def write_batch(
             schema=schema,
             num_partitions=num_partitions,
             on_error="skip" if scratch else "fail",
-            bad_records_dir=scratch,
+            bad_records_dir=os.path.join(scratch, "bad") if scratch else None,
         )
         keyed = files.select(
             F.col("path").alias(SOURCE_PATH_COL),
@@ -475,19 +611,13 @@ def write_batch(
             SOURCE_HASH_COL,
         )
         rows = rows.join(F.broadcast(keyed), [SOURCE_PATH_COL, SOURCE_MTIME_COL])
-        _write_rows(
-            rows, target, mode, sorted({e[SOURCE_PATH_COL] for e in todo}), versions
-        )
+        written = sorted({e[SOURCE_PATH_COL] for e in todo})
         if scratch:
-            # The read ran in the rows write: its bad records are complete now.
-            bad = _bad_records_df(spark, scratch, files)
-            if bad is not None:
-                _write_bad_records(bad, _bad_records_table(target))
-                _LOG.warning(
-                    "declare_ingest: bad records of this micro-batch were appended "
-                    "to %s",
-                    _bad_records_table(target),
-                )
+            _write_quarantined(
+                spark, rows, files, target, mode, written, versions, scratch
+            )
+        else:
+            _write_rows(rows, target, mode, written, versions)
     finally:
         if scratch:
             _scratch.remove_scratch_dir(scratch)
@@ -503,6 +633,7 @@ def _ingest_setup(
     schema_path,
     options=None,
     on_error="quarantine",
+    scratch_dir=None,
 ) -> dict:
     """Validated names and inputs for :func:`declare_ingest` (no session needed)."""
     _check_mode(on_change)
@@ -518,6 +649,8 @@ def _ingest_setup(
     _fuse_path(source_dir, "declare_ingest")
     if schema_path:
         _fuse_path(schema_path, "declare_ingest")
+    if scratch_dir:
+        _fuse_path(scratch_dir, "declare_ingest")
     short = parts[-1]
 
     def qualified(name: str) -> str:
@@ -533,6 +666,7 @@ def _ingest_setup(
         "rows_flow": f"{short}_rows_flow",
         "glob": glob or default_glob(format, options),
         "schema_src": schema_path or source_dir,
+        "scratch_dir": scratch_dir or source_dir,
     }
 
 
@@ -547,6 +681,7 @@ def declare_ingest(
     num_partitions=None,
     schema_path=None,
     on_error="quarantine",
+    scratch_dir=None,
 ):
     """Declare an incremental file-ingestion flow in an SDP pipeline.
 
@@ -558,10 +693,12 @@ def declare_ingest(
 
     ``on_error``: ``"quarantine"`` (default) sets aside what cannot be read (a
     file, or a record of it) in ``t_bad_records`` (created when the first one is
-    found) and writes the rest; it stages them in a hidden folder under
-    ``source_dir``, which must be writable. In ``append`` mode bad records are
-    skipped with a warning instead (no side table). ``"fail"`` fails the update
-    on the first error, naming the file.
+    found) and writes the rest. Each micro-batch is staged in a hidden
+    ``.gbx_scratch`` folder under ``scratch_dir`` (default ``source_dir``), which
+    the pipeline must be able to write: set it when the landing folder is
+    read-only to the pipeline. In ``append`` mode bad records are skipped with a
+    warning instead (no side table, no staging). ``"fail"`` fails the update on
+    the first error, naming the file.
 
     Auto Loader delivers the files under ``source_dir`` whose name matches ``glob``
     (default: the format's :func:`~databricks.labs.gbx.ds.paths.default_glob`
@@ -571,7 +708,15 @@ def declare_ingest(
     and ``schema_path`` are Volume paths.
     """
     setup = _ingest_setup(
-        target, source_dir, format, on_change, glob, schema_path, options, on_error
+        target,
+        source_dir,
+        format,
+        on_change,
+        glob,
+        schema_path,
+        options,
+        on_error,
+        scratch_dir,
     )
     schema = path_schema(format, options, setup["schema_src"], glob=setup["glob"])
 
@@ -638,7 +783,7 @@ def declare_ingest(
             schema=schema,
             num_partitions=num_partitions,
             on_error=on_error,
-            bad_records_parent=source_dir if on_error == "quarantine" else None,
+            scratch_dir=setup["scratch_dir"] if on_error == "quarantine" else None,
         )
 
     @dp.append_flow(name=setup["rows_flow"], target=setup["sink"])

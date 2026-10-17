@@ -435,16 +435,20 @@ def test_declare_ingest_validates_before_needing_pipelines():
 # --- object-store URIs -------------------------------------------------------
 
 
-def test_hash_batches_rejects_object_store_uri(monkeypatch):
+@pytest.mark.parametrize("uri", ["s3://bucket/a.gpkg", "/vsis3/bucket/a.gpkg"])
+def test_hash_batches_rejects_object_store_uri(monkeypatch, uri):
     monkeypatch.setattr(C._listing, "_retry_transient", lambda fn, **k: fn())
-    batch = pa.record_batch([pa.array(["s3://bucket/a.gpkg"])], names=["path"])
+    batch = pa.record_batch([pa.array([uri])], names=["path"])
     with pytest.raises(ValueError, match="Unity Catalog Volume / FUSE paths"):
         list(C._hash_batches([batch]))
 
 
-def test_delivery_check_rejects_object_store_uri():
+@pytest.mark.parametrize(
+    "uri", ["abfss://c@acct.dfs.core.windows.net/a.gpkg", "/vsiaz/c/a.gpkg"]
+)
+def test_delivery_check_rejects_object_store_uri(uri):
     e = {
-        "_source_path": "abfss://c@acct.dfs.core.windows.net/a.gpkg",
+        "_source_path": uri,
         "_source_size": 1,
         C._MTIME_US: 0,
     }
@@ -456,6 +460,7 @@ def test_delivery_check_rejects_object_store_uri():
     "kw",
     [
         {"source_dir": "s3://bucket/landing"},
+        {"source_dir": "/vsigs/bucket/landing"},
         {"source_dir": "/Volumes/c/s/v", "schema_path": "gs://b/a.geojson"},
     ],
 )
@@ -749,14 +754,16 @@ def test_declare_ingest_scd2_uses_qualified_names_and_one_schema(
     assert flow == ("t_rows_flow", {"target": "t_rows_sink"})
 
     dp.fns["main.geo.t_file_events"]()
-    assert ("option", "pathGlobFilter", "*.{geojson,json}") in log
+    assert ("option", "pathGlobFilter", "*.{geojson,json,GEOJSON,JSON}") in log
     assert ("load", str(d)) in log
     dp.fns["t_rows_flow"]()
     assert ("table", "`main`.`geo`.`t_file_events`") in log
 
     for batch_id in range(2):  # every micro-batch reuses the declared schema
         dp.fns["t_rows_sink"](object(), batch_id)
-    assert len(schemas) == 1 and schemas[0][1]["glob"] == "*.{geojson,json}"
+    assert (
+        len(schemas) == 1 and schemas[0][1]["glob"] == "*.{geojson,json,GEOJSON,JSON}"
+    )
     resolved = P_path_schema(a)
     for args, kw in batches:
         assert args[1] == "main.geo.t" and kw["versions"] == "main.geo.t_file_versions"
@@ -790,7 +797,7 @@ def test_ingest_names_and_default_glob():
     got = C._ingest_setup("c.s.t", "/Volumes/c/s/v", "lidar", "replace", None, None)
     assert got["events"] == "c.s.t_file_events"
     assert got["versions"] == "c.s.t_file_versions"
-    assert got["rows"] == "c.s.t" and got["glob"] == "*.{las,laz}"
+    assert got["rows"] == "c.s.t" and got["glob"] == "*.{las,laz,LAS,LAZ}"
     assert got["schema_src"] == "/Volumes/c/s/v"
     odd = C._ingest_setup(
         "`a-b`.s.t", "/V", "gpkg_gbx", "scd2", "x_*.gpkg", "/V/x_1.gpkg"

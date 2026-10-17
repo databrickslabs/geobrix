@@ -110,12 +110,14 @@ def test_displayed_snippets_name_real_api():
 
 
 def test_object_store_uri_is_rejected(spark):
-    """Paths section: an object-store URI fails with an error naming it."""
+    """Paths section: an object-store URI or GDAL virtual path fails with an error
+    naming it."""
     from databricks.labs.gbx.ds.paths import read_paths
 
     files = ex._files(spark, ex.SAMPLE_BOROUGHS_DIR, "*.geojson")
-    with pytest.raises(ValueError, match="Unity Catalog Volume.*s3://bucket/landing"):
-        read_paths(files, "geojson_gbx", schema_path="s3://bucket/landing")
+    for uri in ("s3://bucket/landing", "/vsis3/bucket/landing"):
+        with pytest.raises(ValueError, match=f"Unity Catalog Volume.*{uri}"):
+            read_paths(files, "geojson_gbx", schema_path=uri)
 
 
 def _mdx_section_rows(heading):

@@ -530,7 +530,7 @@ def test_path_schema_folder_honors_glob(tmp_path):
 
 def test_path_schema_folder_without_a_match_names_the_pattern(tmp_path):
     (tmp_path / "x.txt").write_text("x")
-    with pytest.raises(ValueError, match=r"\*\.\{geojson,json\}"):
+    with pytest.raises(ValueError, match=r"\*\.\{geojson,json,GEOJSON,JSON\}"):
         P.path_schema("geojson_gbx", None, str(tmp_path))
 
 
@@ -606,27 +606,38 @@ _GLOB_NAMES = [
     "a.tif.aux.xml",
     "a.ovr",
     "notes.txt",
+    # Upper-case extensions are common (camera / drone imagery); mixed case is not.
+    "b.JPEG",
+    "b.Jpg",
+    "b.TIFF",
+    "b.LAS",
+    "b.LAZ",
+    "b.SHP",
+    "b.SHX",
+    "b.GPKG",
+    "b.GEOJSON",
+    "b.GDB.ZIP",
 ]
 
 
 def test_default_globs_per_format():
     assert P.DEFAULT_GLOBS == {
         "vector_gbx": (
-            "{*.gpkg,*.geojson,*.json,*.geojsonl,*.geojsons,"
-            "*.shp,*.shz,*.shp.zip,*.gdb.zip}"
+            "*.{gpkg,geojson,json,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
+            "GPKG,GEOJSON,JSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}"
         ),
-        "shapefile_gbx": "{*.shp,*.shz,*.shp.zip}",
-        "geojson_gbx": "*.{geojson,json}",
-        "geojsonl_gbx": "*.{geojsonl,geojsons}",
-        "gpkg_gbx": "*.gpkg",
-        "file_gdb_gbx": "*.gdb.zip",
-        "lidar_gbx": "*.{las,laz}",
-        "exif_gbx": "*.{jpg,jpeg}",
-        "raster_gbx": "*.{tif,tiff}",
-        "gtiff_gbx": "*.{tif,tiff}",
+        "shapefile_gbx": "*.{shp,shz,shp.zip,SHP,SHZ,SHP.ZIP}",
+        "geojson_gbx": "*.{geojson,json,GEOJSON,JSON}",
+        "geojsonl_gbx": "*.{geojsonl,geojsons,GEOJSONL,GEOJSONS}",
+        "gpkg_gbx": "*.{gpkg,GPKG}",
+        "file_gdb_gbx": "*.{gdb.zip,GDB.ZIP}",
+        "lidar_gbx": "*.{las,laz,LAS,LAZ}",
+        "exif_gbx": "*.{jpg,jpeg,JPG,JPEG}",
+        "raster_gbx": "*.{tif,tiff,TIF,TIFF}",
+        "gtiff_gbx": "*.{tif,tiff,TIF,TIFF}",
     }
     assert set(P.DEFAULT_GLOBS) == set(P.SUPPORTED_FORMATS)
-    assert P.default_glob("GPKG") == "*.gpkg"
+    assert P.default_glob("GPKG") == "*.{gpkg,GPKG}"
 
 
 def test_vector_glob_is_the_union_of_the_vector_globs():
@@ -649,11 +660,14 @@ def test_glob_match_agrees_with_spark_path_glob_filter(spark, tmp_path):
     for name in _GLOB_NAMES:
         (tmp_path / name).write_bytes(b"x")
     expected = {
-        "shapefile_gbx": {"a.shp", "a.shz", "a.shp.zip"},
-        "geojson_gbx": {"a.geojson", "a.json"},
-        "exif_gbx": {"a.jpg", "a.jpeg"},  # case-sensitive: a.JPG is not matched
-        "gtiff_gbx": {"a.tif", "a.tiff"},
-        "file_gdb_gbx": {"a.gdb.zip"},
+        "shapefile_gbx": {"a.shp", "a.shz", "a.shp.zip", "b.SHP"},
+        "geojson_gbx": {"a.geojson", "a.json", "b.GEOJSON"},
+        # Lower and upper case match; mixed case (b.Jpg) does not.
+        "exif_gbx": {"a.jpg", "a.jpeg", "a.JPG", "b.JPEG"},
+        "gtiff_gbx": {"a.tif", "a.tiff", "a.TIF", "b.TIFF"},
+        "lidar_gbx": {"a.las", "a.laz", "b.LAS", "b.LAZ"},
+        "gpkg_gbx": {"a.gpkg", "b.GPKG"},
+        "file_gdb_gbx": {"a.gdb.zip", "b.GDB.ZIP"},
     }
     for fmt, glob in P.DEFAULT_GLOBS.items():
         listed = {
@@ -676,6 +690,10 @@ _URIS = [
     "s3://bucket/a.geojson",
     "abfss://c@acct.dfs.core.windows.net/a.geojson",
     "gs://b/a.geojson",
+    # GDAL virtual file systems: os.stat cannot see them either.
+    "/vsis3/bucket/a.geojson",
+    "/vsizip//Volumes/c/s/v/a.zip/a.geojson",
+    "/vsicurl/https://host/a.geojson",
 ]
 
 
@@ -718,6 +736,7 @@ def test_scheme_prefixed_local_paths_are_accepted(tmp_path):
     a = _geojson(str(tmp_path / "a.geojson"), 1)
     for p in ("dbfs:" + a, "file:" + a, "file://" + a, a):
         assert P._exists(P._fuse_path(p))
+    assert P._fuse_path("/vsimem/x.tif") == "/vsimem/x.tif"  # in-memory: allowed
 
 
 # --- streaming increments and exact batch-reader parity ----------------------

@@ -9,7 +9,8 @@ windows (one row per reader partition), the windows are repartitioned, and each
 window is read on its own, so one large raster spreads across tasks.
 
 Paths are Unity Catalog Volume (FUSE) paths; ``dbfs:`` / ``file:`` prefixes are
-accepted and object-store URIs (``s3://``, ``abfss://``, ...) are rejected.
+accepted; object-store URIs (``s3://``, ``abfss://``, ...) and GDAL ``/vsi...``
+paths (other than ``/vsimem/``) are rejected.
 
 Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 """
@@ -60,28 +61,32 @@ SUPPORTED_FORMATS = (
 TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx")
 
 # Default file pattern per reader, in Spark ``pathGlobFilter`` (Hadoop glob)
-# syntax, matched case-sensitively against the file name. ``declare_ingest`` hands
-# it to Auto Loader, which delivers leaf files: without it, shapefile sidecars or
-# the files inside a ``.gdb`` folder would be read as data. A folder
-# ``schema_path`` takes the schema from its first file matching the same pattern.
+# syntax, matched against the file name. Hadoop globs are case-sensitive, so each
+# pattern lists the lower- and upper-case extensions (camera and drone imagery is
+# often ``.JPG`` / ``.TIF``). ``declare_ingest`` hands the pattern to Auto Loader,
+# which delivers leaf files: without it, shapefile sidecars or the files inside a
+# ``.gdb`` folder would be read as data. A folder ``schema_path`` takes the schema
+# from its first file matching the same pattern.
 DEFAULT_GLOBS = {
     "vector_gbx": (
-        "{*.gpkg,*.geojson,*.json,*.geojsonl,*.geojsons,"
-        "*.shp,*.shz,*.shp.zip,*.gdb.zip}"
+        "*.{gpkg,geojson,json,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
+        "GPKG,GEOJSON,JSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}"
     ),
-    "shapefile_gbx": "{*.shp,*.shz,*.shp.zip}",
-    "geojson_gbx": "*.{geojson,json}",
-    "geojsonl_gbx": "*.{geojsonl,geojsons}",
-    "gpkg_gbx": "*.gpkg",
-    "file_gdb_gbx": "*.gdb.zip",
-    "lidar_gbx": "*.{las,laz}",
-    "exif_gbx": "*.{jpg,jpeg}",
-    "raster_gbx": "*.{tif,tiff}",
-    "gtiff_gbx": "*.{tif,tiff}",
+    "shapefile_gbx": "*.{shp,shz,shp.zip,SHP,SHZ,SHP.ZIP}",
+    "geojson_gbx": "*.{geojson,json,GEOJSON,JSON}",
+    "geojsonl_gbx": "*.{geojsonl,geojsons,GEOJSONL,GEOJSONS}",
+    "gpkg_gbx": "*.{gpkg,GPKG}",
+    "file_gdb_gbx": "*.{gdb.zip,GDB.ZIP}",
+    "lidar_gbx": "*.{las,laz,LAS,LAZ}",
+    "exif_gbx": "*.{jpg,jpeg,JPG,JPEG}",
+    "raster_gbx": "*.{tif,tiff,TIF,TIFF}",
+    "gtiff_gbx": "*.{tif,tiff,TIF,TIFF}",
 }
 
-# A "<scheme>://" prefix left after to_local_path strips dbfs: / file:.
+# A "<scheme>://" prefix left after to_local_path strips dbfs: / file:, or a GDAL
+# virtual file system path (/vsis3/, /vsizip/, ...; /vsimem/ is allowed).
 _URI = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*://")
+_VSI = re.compile(r"^/vsi(?!mem/)[A-Za-z0-9_]+/")
 
 # Plan-stage rows: one per reader partition (a pickled InputPartition). Built
 # explicitly (not from DDL) so workers never need a parser.
@@ -195,11 +200,12 @@ def glob_match(name: str, pattern: str) -> bool:
 
 def _fuse_path(path: str) -> str:
     """Bare local path for ``path`` (``dbfs:`` / ``file:`` stripped). Object-store
-    URIs are rejected: the readers open files through the Volume FUSE mount, so a
-    stat on ``s3://...`` could only fail (after the transient-miss retries) and the
-    file would be skipped as deleted."""
+    URIs and GDAL ``/vsi...`` paths (other than ``/vsimem/``) are rejected: the
+    readers open files through the Volume FUSE mount, so a stat on ``s3://...`` or
+    ``/vsis3/...`` could only fail (after the transient-miss retries) and the file
+    would be skipped as deleted."""
     local = _listing.to_local_path(path)
-    if _URI.match(local):
+    if _URI.match(local) or _VSI.match(local):
         raise ValueError(
             f"read_paths reads Unity Catalog Volume / FUSE paths; got {path}. Read "
             "object storage through a Volume (for example an external volume over "

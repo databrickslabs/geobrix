@@ -134,6 +134,10 @@ reads each new or changed file with the reader you name, and keeps the rows in a
   validationLevel="compile"
 />
 
+Stage at least one file in `source_dir` (or at `schema_path`) before the first pipeline update:
+the table schema is resolved when the pipeline is declared, so the update fails if no matching
+file is there yet.
+
 `declare_ingest` needs a Lakeflow pipeline whose runtime provides `pyspark.pipelines` with
 `foreach_batch_sink` and `create_auto_cdc_flow`; the `CURRENT` channel does. Install the GeoBrix
 light wheel in the pipeline's environment with the extra that matches the channel's Databricks
@@ -166,19 +170,20 @@ format's pattern to Auto Loader. The same pattern picks the schema file from a f
 
 | `format` | Default `glob` |
 |----------|----------------|
-| `vector_gbx` | `{*.gpkg,*.geojson,*.json,*.geojsonl,*.geojsons,*.shp,*.shz,*.shp.zip,*.gdb.zip}` |
-| `shapefile_gbx` | `{*.shp,*.shz,*.shp.zip}` |
-| `geojson_gbx` | `*.{geojson,json}` |
-| `geojsonl_gbx` | `*.{geojsonl,geojsons}` |
-| `gpkg_gbx` | `*.gpkg` |
-| `file_gdb_gbx` | `*.gdb.zip` |
-| `lidar_gbx` | `*.{las,laz}` |
-| `exif_gbx` | `*.{jpg,jpeg}` |
-| `raster_gbx`, `gtiff_gbx` | `*.{tif,tiff}` |
+| `vector_gbx` | `*.{gpkg,geojson,json,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,GPKG,GEOJSON,JSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}` |
+| `shapefile_gbx` | `*.{shp,shz,shp.zip,SHP,SHZ,SHP.ZIP}` |
+| `geojson_gbx` | `*.{geojson,json,GEOJSON,JSON}` |
+| `geojsonl_gbx` | `*.{geojsonl,geojsons,GEOJSONL,GEOJSONS}` |
+| `gpkg_gbx` | `*.{gpkg,GPKG}` |
+| `file_gdb_gbx` | `*.{gdb.zip,GDB.ZIP}` |
+| `lidar_gbx` | `*.{las,laz,LAS,LAZ}` |
+| `exif_gbx` | `*.{jpg,jpeg,JPG,JPEG}` |
+| `raster_gbx`, `gtiff_gbx` | `*.{tif,tiff,TIF,TIFF}` |
 
-The patterns match the file name and are case-sensitive. Set `glob` for other names, for example
-`glob="*.{jpg,jpeg,JPG,JPEG}"` for upper-case photo extensions, or `glob="*.jp2"` for another
-raster format. Deliver a File Geodatabase as a zipped `.gdb.zip` file.
+The patterns match the file name as written, so they cover lower- and upper-case extensions
+(`photo.jpg` and `PHOTO.JPG`) but not mixed case such as `.Jpg`. Set `glob` for other names, for
+example `glob="*.jp2"` for another raster format. Deliver a File Geodatabase as a zipped
+`.gdb.zip` file.
 
 ### Choosing `on_change`
 
@@ -267,8 +272,8 @@ by name. A file with no features adds no rows.
 
 Paths are Unity Catalog Volume paths: `/Volumes/...`, or `dbfs:/Volumes/...` as Auto Loader and
 `binaryFile` report them. The readers open each file through the Volume's file system, so an
-object-store URI (`s3://`, `abfss://`, `gs://`) fails with an error that names it, rather than
-being skipped as missing. To ingest from cloud storage, create an external volume over the
+object-store URI (`s3://`, `abfss://`, `gs://`) or a GDAL virtual path (`/vsis3/...`,
+`/vsizip/...`) fails with an error that names it, rather than being skipped as missing. To ingest from cloud storage, create an external volume over the
 location and use its `/Volumes` path.
 
 ### Files deleted before they are read

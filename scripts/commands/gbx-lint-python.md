@@ -1,6 +1,11 @@
 # Run Python Lint (isort, black, flake8)
 
-Runs **isort**, **black**, and **flake8** on the Python package (`python/geobrix/src` and `test`). Same tools and config as CI (`pyproject.toml`).
+Runs **isort**, **black**, and **flake8** on two scopes, each with its own `pyproject.toml`:
+
+- the Python package: `python/geobrix` (`src` and `test`)
+- the Lakeflow Connect connector: `connectors/lakeflow` (`sources`)
+
+Same tools, versions, and scopes as CI. Exits non-zero if either scope fails any tool; a per-scope PASS/FAIL table is printed for each.
 
 ## Usage
 
@@ -28,6 +33,6 @@ gbx:lint:python --fix
 
 ## Notes
 
-- **Config**: `python/geobrix/pyproject.toml` ([tool.isort], [tool.black], [tool.flake8]).
-- **CI**: The Python build action (`.github/actions/python_build`) installs the hash-pinned `python/geobrix/requirements-ci.txt` (black 26.3.1, isort 8.0.1, flake8 7.3.0, flake8-pyproject 1.2.4) on **Python 3.12**, then runs `isort --check-only`, `black --check`, and `flake8` on `src test`. The dev container matches those exactly, which is why both `--check` and `--fix` run there. (The `[dev]` extra pins the same lint versions for IDE/direct use — keep it in sync with `requirements-ci.in`.)
+- **Config**: each scope uses its own `pyproject.toml` ([tool.isort], [tool.black], [tool.flake8]) — `python/geobrix/pyproject.toml` and `connectors/lakeflow/pyproject.toml` (the tools are run from the scope's directory so they pick up that file).
+- **CI**: The Python build action (`.github/actions/python_build`) installs the hash-pinned `python/geobrix/requirements-ci.txt` (black 26.3.1, isort 8.0.1, flake8 7.3.0, flake8-pyproject 1.2.4) on **Python 3.12**, then runs `isort --check-only`, `black --check`, and `flake8` on `src test` (in `python/geobrix`) and on `sources` (in `connectors/lakeflow`). Keep the scope list in `gbx-lint-python.sh` and the "Lint Python" step of that action identical. The dev container matches those exactly, which is why both `--check` and `--fix` run there. (The `[dev]` extra pins the same lint versions for IDE/direct use — keep it in sync with `requirements-ci.in`.)
 - **Fix mode**: Use `--fix` during dev to apply isort and black; flake8 remains check-only (no auto-fix). Requires the `geobrix-dev` container (start it with `gbx:docker:start`).

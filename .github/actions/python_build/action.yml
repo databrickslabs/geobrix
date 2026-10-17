@@ -96,10 +96,11 @@ runs:
       if: inputs.run_lint == 'true'
       shell: bash
       run: |
-        cd python/geobrix
-        isort --check-only src test
-        black --check src test
-        flake8 src test
+        # Scopes must stay identical to scripts/commands/gbx-lint-python.sh (the local
+        # gbx:lint:python gate). Each project is linted from its own directory so the
+        # tools read that project's pyproject.toml.
+        (cd python/geobrix && isort --check-only src test && black --check src test && flake8 src test)
+        (cd connectors/lakeflow && isort --check-only sources && black --check sources && flake8 sources)
     - name: Give Python interpreter write access to checkpointing / raster write location
       shell: bash
       run: |

@@ -30,7 +30,7 @@ shared by both vector reader tiers.
   `raster_gbx`, `gtiff_gbx`, `cog_gbx`, `netcdf_gbx` or `pmtiles_gbx`); rows carry the reader's
   columns plus `_source_path` and `_source_mtime`. Raster, COG and PMTiles files are planned into
   tile windows or tile groups that spread across tasks when `num_partitions` is set; a NetCDF
-  file is read whole by one task. `pmtiles_gbx` needs the `source` option: `"archive"` reads the
+  file is read by one task. `pmtiles_gbx` needs the `source` option: `"archive"` reads the
   tiles stored in `.pmtiles` files and `"raster"` renders tiles from GeoTIFF files, each file on
   its own. See [Incremental ingestion with Auto Loader](./readers/incremental-ingestion).
 - **`declare_ingest` declares an Auto Loader flow in a Lakeflow pipeline**, with `on_change`
@@ -80,6 +80,18 @@ shared by both vector reader tiers.
   source layer in bounded batches as well, so very large layers read without exhausting
   memory or exceeding Arrow's per-column limit.
 
+### Vector readers — `driverName` is honored (behavior change)
+
+- **A requested driver is no longer silently ignored.** `vector_gbx` with a `driverName`, and the
+  named readers (`geojson_gbx`, `gpkg_gbx`, `shapefile_gbx`, `file_gdb_gbx`), used to let GDAL pick
+  whichever driver it detected. `driverName` is now matched without regard to case, and GDAL's
+  equivalent drivers are accepted: the GeoJSON family (including GeoJSONSeq, ESRIJSON and
+  TopoJSON), KML and LIBKML, OpenFileGDB and FileGDB, and GPKG and SQLite. The requested driver is
+  forced only when GDAL detects a different format, such as for a misnamed file. A file of a
+  genuinely different format now fails with an error that names the file and the reader to use,
+  and a `driverName` GDAL does not know fails with the closest matches. See
+  [Vector Readers](./readers/vector#options).
+
 ### Heavyweight vector readers — declared field types and NULLs (breaking behavior change)
 
 - **Heavyweight vector readers return the declared OGR field types and keep NULLs.** The
@@ -111,10 +123,10 @@ shared by both vector reader tiers.
 ### PMTiles reader
 
 - **`pmtiles_gbx` no longer reads the whole archive once per partition.** With `source="archive"`,
-  planning now reads only the archive's header and directories, and each worker stages the archive
-  once and reads just the tile ranges of each partition, so the read cost no longer grows with the
-  number of partitions. With `source="raster"`, each source raster is staged once per worker
-  instead of once per partition. See [PMTiles Reader](./readers/pmtiles).
+  planning now reads only the archive's header and directories, and each worker process stages the
+  archive once and reads just the tile ranges of each partition, so the read cost no longer grows
+  with the number of partitions. With `source="raster"`, each source raster is staged once per
+  worker process instead of once per partition. See [PMTiles Reader](./readers/pmtiles).
 
 ### Raster writers
 

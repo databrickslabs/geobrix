@@ -86,7 +86,7 @@ bash scripts/commands/gbx-test-python-docs.sh --skip-build --log test-logs/pytho
 bash scripts/commands/gbx-test-python-docs.sh
 
 # One file against the complete sample bundle instead of the minimal one
-bash scripts/commands/gbx-test-python-docs.sh --path readers/test_incremental_ingestion_examples.py --skip-build --sample-data-root /Volumes/main/default/geobrix_samples
+bash scripts/commands/gbx-test-python-docs.sh --path ingestion/test_read_paths_examples.py --skip-build --sample-data-root /Volumes/main/default/geobrix_samples
 
 # A slow suite: allow each test up to 15 minutes before it is failed as stuck
 bash scripts/commands/gbx-test-python-docs.sh --path readers/ --skip-build --timeout 900

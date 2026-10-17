@@ -1634,7 +1634,7 @@ pyproj==3.7.2 \
     #   morecantile
 pyspark==4.2.0 \
     --hash=sha256:5ad689d53570ee1674193fd4f9bda065f0db3be9363a27d2a3406cc457b70b61
-    # via geobrix
+    # via -r requirements-light-env6-all-ci.in
 pystac==1.15.2 \
     --hash=sha256:4c9a3b2352cad7eb3c226145251c65cbe5c1b04b25d4265b30c015dddf5f391d \
     --hash=sha256:b006833253d7e5acd04d877bb7504e14aa1dc98dd0f0ab12f893595030dda2b3

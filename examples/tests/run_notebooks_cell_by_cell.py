@@ -79,9 +79,21 @@ def _create_venv_and_run(venv_root: Path, path_arg: str | None) -> int:
     )
     # Install deps used by sample-data notebooks (Sentinel-2, London boroughs, etc.) so %pip cells
     # and notebooks without a %pip cell (e.g. workdir_path_minimal) see them in the same venv.
-    print("Installing notebook deps (pystac-client, planetary-computer, geopandas)...", flush=True)
+    # pyspark is installed explicitly: it is not a geobrix base dependency (Databricks provides it),
+    # and `databricks.labs.gbx.sample` imports it at module level.
+    print("Installing notebook deps (pyspark, pystac-client, planetary-computer, geopandas)...", flush=True)
     subprocess.run(
-        [str(venv_python), "-m", "pip", "install", "-q", "pystac-client", "planetary-computer", "geopandas"],
+        [
+            str(venv_python),
+            "-m",
+            "pip",
+            "install",
+            "-q",
+            "pyspark>=4.0.0",
+            "pystac-client",
+            "planetary-computer",
+            "geopandas",
+        ],
         check=True,
         capture_output=True,
         cwd=str(PROJECT_ROOT),

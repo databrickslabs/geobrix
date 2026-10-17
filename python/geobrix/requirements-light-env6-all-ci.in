@@ -18,3 +18,8 @@
 
 # Local package — expands geobrix[light_env6_all] from pyproject.toml
 .[light_env6_all]
+
+# pyspark is NOT a geobrix base dependency (Databricks provides it on every supported
+# runtime; see pyproject.toml). This lock is for local/manual verification off-cluster,
+# so pin it explicitly — same floor the base dependency used to carry.
+pyspark>=4.0.0

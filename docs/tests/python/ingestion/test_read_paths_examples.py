@@ -338,11 +338,19 @@ def _skipped(spark, tmp_path, path, fmt, options=None, schema_path=None):
     return rows, [(r["record_index"], r["error_class"]) for r in recs]
 
 
-def test_skip_sets_a_feature_aside(spark, tmp_path):
-    path = _feature_collection(tmp_path / "a.geojson", [_point(0), None, _point(2)])
+_OPEN_RING = {"type": "Polygon", "coordinates": [[[0, 0], [1, 0]]]}  # no WKB for it
+
+
+def test_skip_sets_a_feature_aside_and_keeps_null_and_empty_geometries(spark, tmp_path):
+    """An unreadable geometry is a bad record; a NULL or empty one is data."""
+    empty = {"type": "MultiPoint", "coordinates": []}
+    path = _feature_collection(
+        tmp_path / "a.geojson", [_point(0), _OPEN_RING, None, empty]
+    )
     rows, recs = _skipped(spark, tmp_path, path, "geojson_gbx")
-    assert sorted(r["id"] for r in rows) == [0, 2]
-    assert recs == [("feature=1", "NullGeometry")]
+    assert sorted(r["id"] for r in rows) == [0, 2, 3]
+    assert [r["geom_0"] for r in rows if r["id"] == 2] == [None]
+    assert recs == [("feature=1", "UnreadableGeometry")]
 
 
 def test_skip_sets_a_geojson_document_aside_whole(spark, tmp_path):

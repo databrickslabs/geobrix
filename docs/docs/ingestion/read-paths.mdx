@@ -221,7 +221,7 @@ the format:
 
 | `format` | With `on_error="fail"` | Also set aside with `skip` / `quarantine` |
 |----------|------------------------|-------------------------------------------|
-| `vector_gbx`, `shapefile_gbx`, `file_gdb_gbx` | Fails the read with the reader's error. | A feature (`feature=<n>`) whose geometry is `NULL`, unreadable or empty, or whose text is not valid UTF-8. Features the file declares but the reader does not return (a dropped `.dbf` record, a truncated table) are one record for the file; records a `.dbf` marks deleted are not data and are not counted. |
+| `vector_gbx`, `shapefile_gbx`, `file_gdb_gbx` | Fails the read with the reader's error. | A feature (`feature=<n>`) whose geometry bytes are not readable WKB, or whose text is not valid UTF-8. Features the file declares but the reader does not return (a dropped `.dbf` record, a truncated table) are one record for the file; records a `.dbf` marks deleted are not data and are not counted. |
 | `geojson_gbx` | Fails the read with the reader's error. | A feature, as for `vector_gbx`. A GeoJSON document is parsed whole, so a syntax error or a truncated file sets the whole file aside. |
 | `geojsonl_gbx` | Fails the read with the reader's error. A line that is not JSON is dropped by the reader. | A feature, as for `vector_gbx`, and each line that is not JSON (`line=<n>`, the line in `raw`). |
 | `gpkg_gbx` | Fails the read with the reader's error. A corrupt page ends the read early, without an error. | A feature, as for `vector_gbx`. When a corrupt page ends the read early, it resumes after the page, and each feature on the page is a record (`fid=<n>`). |
@@ -230,6 +230,12 @@ the format:
 | `raster_gbx`, `gtiff_gbx`, `cog_gbx` | Fails the read when the file is opened: to plan its windows (`tileSize` set) or to load its pixels (`virtualTiles` set to `"false"`). Otherwise the file is not opened while it is ingested: its row is a [virtual tile](../api/virtual-tiles) that refers to the file, and the error comes when a function reads the pixels. | A tile window (`window=<column>,<row>,<width>,<height>`) whose pixels cannot be decoded, when the pixels are loaded (`virtualTiles="false"` with `tileSize`). Virtual tiles are not opened, so they are not checked. |
 | `netcdf_gbx` | Fails the read with the reader's error. | In `raster` mode a variable, or one slice of it (`variable=temp,time=1`), that cannot be read. A NetCDF-3 (classic) file shorter than its header declares, in both modes. |
 | `pmtiles_gbx` | Fails the read with the reader's error. A tile cut short by a truncated archive is returned as it is. | A tile shorter than its directory entry declares (`tile=<z>/<x>/<y>`). A group of tiles that fails to render (`tiles=<first>..<last>`, `source="raster"`). |
+
+A NULL or empty geometry is data in every mode: a feature without a location, or `POINT EMPTY`,
+is read like any other. GDAL also returns NULL for a geometry it cannot decode (an unknown geometry
+type, unreadable coordinates, a damaged GeoPackage or shapefile record), so such a feature is read
+with a NULL geometry. To watch for them, query the geometry column with `IS NULL` and
+`ST_IsEmpty`.
 
 Some damage reads back as plausible values, and no reader can tell it from data: garbled
 coordinates or attribute values within their ranges (a damaged GeoPackage cell can turn `'abc'`

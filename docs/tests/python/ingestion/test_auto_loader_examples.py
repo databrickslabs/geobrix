@@ -195,7 +195,7 @@ def test_query_bad_records(spark, tmp_path):
             f"""CREATE TABLE {table} USING parquet LOCATION '{tmp_path / "bad"}' AS
             SELECT * FROM VALUES
               ('{path}', TIMESTAMP'2026-10-17 10:00:00', 'h1', 10L, 'feature=3',
-               'NullGeometry', 'geom_0 is NULL', '{{"boroname": "Bronx"}}',
+               'UnreadableGeometry', 'geom_0 is not readable WKB', '{{"boroname": "Bronx"}}',
                TIMESTAMP'2026-10-17 10:05:00'),
               ('/Volumes/main/geo/landing/boroughs/bad.geojson',
                TIMESTAMP'2026-10-17 11:00:00', 'h2', 20L, CAST(NULL AS STRING),
@@ -214,6 +214,7 @@ def test_query_bad_records(spark, tmp_path):
             path,
         ]
         (row,) = spark.sql(features).collect()
-        assert row["record_index"] == "feature=3" and row["error_class"] == "NullGeometry"
+        assert row["record_index"] == "feature=3"
+        assert row["error_class"] == "UnreadableGeometry"
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {table}")

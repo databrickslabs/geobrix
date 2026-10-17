@@ -220,10 +220,11 @@ def _zip_vsi(path: str) -> str:
 
 
 # Drivers that read the same data, so a reader named for one accepts a file GDAL
-# opens with another: GeoJSON / GeoJSONSeq / ESRIJSON / TopoJSON (the GeoJSON
-# reader reads all four), KML / LIBKML, OpenFileGDB / FileGDB, GPKG / SQLite.
+# opens with another: GeoJSON / GeoJSONSeq / ESRIJSON / TopoJSON / JSONFG (the
+# GeoJSON reader reads all five; JSON-FG is a GeoJSON superset), KML / LIBKML,
+# OpenFileGDB / FileGDB, GPKG / SQLite.
 _DRIVER_FAMILIES: Tuple[Tuple[str, ...], ...] = (
-    ("GeoJSON", "GeoJSONSeq", "ESRIJSON", "TopoJSON"),
+    ("GeoJSON", "GeoJSONSeq", "ESRIJSON", "TopoJSON", "JSONFG"),
     ("GPKG", "SQLite"),
     ("OpenFileGDB", "FileGDB"),
     ("KML", "LIBKML"),
@@ -240,15 +241,18 @@ _FAMILY_EXTS = {
 }
 
 # GDAL connection-string prefixes that force a driver ("GeoJSON:<file>"), tried
-# in this order (strictest parser first: GeoJSONSeq reads any JSON object as a
-# feature). pyogrio's read functions take no driver argument -- a ``driver=``
-# keyword becomes the open option DRIVER, which the drivers reject with a warning
-# and never use -- so a prefix is the only way to force one.
+# in this order: strictest parser first. GeoJSONSeq reads any JSON object as a
+# feature and JSONFG reads the first line of a sequence as one, so they come last
+# (an open that finds only records with no fields and no geometry is passed over,
+# see _featureless). pyogrio's read functions take no driver argument -- a
+# ``driver=`` keyword becomes the open option DRIVER, which the drivers reject
+# with a warning and never use -- so a prefix is the only way to force one.
 _DRIVER_PREFIX = {
     "GeoJSON": "GeoJSON:",
     "TopoJSON": "TopoJSON:",
     "ESRIJSON": "ESRIJSON:",
     "GeoJSONSeq": "GeoJSONSeq:",
+    "JSONFG": "JSONFG:",
     "GPKG": "GPKG:",
     "CSV": "CSV:",
 }
@@ -349,9 +353,44 @@ def _detect(name: str, layer):
         return None, None, e
 
 
-def _driver_error(path: str, want: str, got: Optional[str], err=None) -> ValueError:
+def _featureless(name: str, info: Dict, layer) -> bool:
+    """True when GDAL reads records from ``name`` that hold nothing -- no fields
+    and no geometry -- as the lenient GeoJSONSeq driver does with a plain JSON
+    object. read_info alone cannot tell such records from features of mixed
+    geometry types without properties (both report no fields and an Unknown
+    geometry type), so then a sample is read: all geometries null = nothing."""
+    if list(info.get("fields", [])) or not info.get("features"):
+        return False
+    if info.get("geometry_type") not in (None, "Unknown"):
+        return False
+    import pyarrow.compute as pc
+    import pyogrio
+    from pyogrio.errors import DataLayerError, DataSourceError
+
+    try:
+        meta, tbl = pyogrio.read_arrow(name, layer=layer, columns=[], max_features=1000)
+    except (DataLayerError, DataSourceError):
+        return True  # it cannot even be read back
+    gcol = meta.get("geometry_name") or "wkb_geometry"
+    if gcol not in tbl.column_names or tbl.num_rows == 0:
+        return True
+    return bool(pc.all(pc.is_null(tbl.column(gcol))).as_py())
+
+
+def _featureless_error(path: str, driver: str) -> ValueError:
+    return ValueError(
+        f"no features/fields found in {path}: GDAL's {driver} driver reads its "
+        f"records with no fields and no geometry, so it is not a GeoJSON-family "
+        f"file. Check the file."
+    )
+
+
+def _driver_error(
+    path: str, want: str, got: Optional[str], err=None, empty: Optional[str] = None
+) -> ValueError:
     """The error for a file the reader's driver (family) cannot read: the file,
-    the requested driver, what GDAL detected, and the reader to use instead."""
+    the requested driver, what GDAL detected, and the reader to use instead.
+    ``empty``: a family driver that opened it but found no features/fields."""
     fam = _family(want)
     asked = f"driverName {want!r}" + (
         f" (or {', '.join(d for d in fam if d != want)})" if len(fam) > 1 else ""
@@ -365,6 +404,10 @@ def _driver_error(path: str, want: str, got: Optional[str], err=None) -> ValueEr
         detail = (
             f"GDAL does not recognize it as {'/'.join(fam)}{why}. Check the file, "
             f"or give it its format's extension."
+        )
+    if empty:
+        detail += (
+            f" The {empty} driver opens it, but no features/fields found in {path}."
         )
     return ValueError(f"{path}: cannot read it with {asked}: {detail}")
 
@@ -1067,7 +1110,8 @@ class VectorGbxReader(DataSourceReader):
         # Per member: the driver prefix it is opened with ("" = GDAL's pick) and
         # its read_info, so schema(), the per-file check and read() open it once.
         self._prefix: Dict[str, str] = {}
-        self._infos: Dict[str, Dict] = {}
+        self._probed: Dict[str, Dict] = {}  # read_info taken while choosing it
+        self._infos: Dict[str, Dict] = {}  # ... and checked by _info_for
 
         # No in-DataSource FILE-tier probe: a DataSource reader is session-less on
         # Spark Connect (getActiveSession() -> None), so probing here falsely
@@ -1175,20 +1219,22 @@ class VectorGbxReader(DataSourceReader):
         got, info, err = _detect(_zip_vsi(local), self._layer())
         if got in _family(self.driver):
             if info is not None:
-                self._infos[path] = info
+                self._probed[path] = info
             return ""
-        last = err
+        last, empty = err, None
         for prefix in _forcible(self.driver, local):
+            name = _with_prefix(local, prefix)
             try:
-                info = pyogrio.read_info(
-                    _with_prefix(local, prefix), layer=self._layer()
-                )
+                info = pyogrio.read_info(name, layer=self._layer())
             except (DataLayerError, DataSourceError) as e:
                 last = e
                 continue
-            self._infos[path] = info
+            if _featureless(name, info, self._layer()):
+                empty = prefix.rstrip(":")
+                continue
+            self._probed[path] = info
             return prefix
-        raise _driver_error(path, self.driver, got, err) from last
+        raise _driver_error(path, self.driver, got, err, empty) from last
 
     def _info_for(self, path: str):
         """Read pyogrio metadata for the given path (once per reader). Random-access
@@ -1202,9 +1248,16 @@ class VectorGbxReader(DataSourceReader):
 
         with self._staged(path) as _p:
             name = self._source_name(path, _p)
-            info = self._infos.get(path) or pyogrio.read_info(name, layer=self._layer())
-        if self.driver and info.get("driver") not in _family(self.driver):
-            raise _driver_error(path, self.driver, info.get("driver"))
+            info = self._probed.get(path) or pyogrio.read_info(
+                name, layer=self._layer()
+            )
+            if self.driver and info.get("driver") not in _family(self.driver):
+                raise _driver_error(path, self.driver, info.get("driver"))
+            # A JSON file of plain objects is not a schema: it must not define one.
+            if self.driver in _FIELDS_FROM_FEATURES and _featureless(
+                name, info, self._layer()
+            ):
+                raise _featureless_error(path, info.get("driver"))
         self._infos[path] = info
         return info
 

@@ -967,6 +967,22 @@ def _topojson(path, n=3):
     return path
 
 
+def _jsonfg(path, n=3):
+    with open(path, "w") as f:
+        json.dump(
+            {
+                "type": "FeatureCollection",
+                "conformsTo": ["http://www.opengis.net/spec/json-fg-1/0.2/conf/core"],
+                "features": [
+                    {**ft, "id": i, "time": None, "place": None}
+                    for i, ft in enumerate(_features(n))
+                ],
+            },
+            f,
+        )
+    return path
+
+
 def _seq(path, n=3):
     with open(path, "w") as f:
         f.write("\n".join(json.dumps(ft) for ft in _features(n)) + "\n")
@@ -988,6 +1004,8 @@ def _rows_and_fields(ds):
         ("esri.csv", _esrijson),  # misnamed: forced with the family's prefixes
         ("topo.csv", _topojson),
         ("seq.csv", _seq),
+        ("fg.json", _jsonfg),  # JSON-FG, a GeoJSON superset (GDAL's JSONFG driver)
+        ("fg.csv", _jsonfg),
     ],
 )
 def test_geojson_reader_reads_the_geojson_family(tmp_path, fname, make):
@@ -1130,3 +1148,45 @@ def test_vector_missing_file_is_reported_missing(tmp_path, fmt):
     opts = {"path": str(tmp_path / "gone"), "driverName": "GeoJSON"}
     with pytest.raises(DataSourceError, match="No such file"):
         _source(fmt)(opts if fmt == "vector_gbx" else {"path": opts["path"]}).schema()
+
+
+@pytest.mark.parametrize(
+    "fname,text,error",
+    [
+        # misnamed: only the lenient GeoJSONSeq prefix opens it, as empty records
+        ("data.csv", '{"a": 1}', r"no features/fields found in .*data\.csv"),
+        # named for the family: GDAL itself rejects it
+        ("obj.geojsonl", '{"a": 1}\n{"a": 2}\n', r"obj\.geojsonl.*not recognized"),
+    ],
+)
+def test_geojson_reader_rejects_json_without_features(tmp_path, fname, text, error):
+    """Plain JSON objects are no GeoJSON: they fail, and never define a schema with
+    no fields (rows with no geometry)."""
+    from databricks.labs.gbx.ds import paths as P
+
+    path = tmp_path / fname
+    path.write_text(text)
+    with pytest.raises(Exception, match=error):
+        P.path_schema("geojson_gbx", None, str(path))
+
+
+def test_geojson_reader_reads_features_without_properties(tmp_path):
+    """Features with mixed geometry types and no properties report no fields and
+    an Unknown geometry type too -- they are still read."""
+    path = tmp_path / "mixed.geojson"
+    path.write_text(
+        json.dumps(
+            {
+                "type": "FeatureCollection",
+                "features": [
+                    {"type": "Feature", "properties": {}, "geometry": g}
+                    for g in (
+                        {"type": "Point", "coordinates": [0, 0]},
+                        {"type": "LineString", "coordinates": [[0, 0], [1, 1]]},
+                    )
+                ],
+            }
+        )
+    )
+    rows, names = _rows_and_fields(_source("geojson_gbx")({"path": str(path)}))
+    assert rows == 2 and "geom_0" in names

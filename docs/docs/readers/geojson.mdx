@@ -29,7 +29,7 @@ the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and meth
 
 ### Lightweight (`geojson_gbx`)
 
-The driver (`GeoJSON`) is preset. Each file is read with the GeoJSON-family driver GDAL detects for it — GeoJSON (FeatureCollection), GeoJSONSeq (newline-delimited), ESRIJSON or TopoJSON — so a `.geojsonl` file needs no option. A file named for another format (e.g. `data.csv`) is read with the first of those drivers that opens it; a file none of them opens fails, naming the driver GDAL detected.
+The driver (`GeoJSON`) is preset. Each file is read with the GeoJSON-family driver GDAL detects for it — GeoJSON (FeatureCollection), GeoJSONSeq (newline-delimited), ESRIJSON, TopoJSON or JSON-FG — so a `.geojsonl` file needs no option. A file named for another format (e.g. `data.csv`) is read with the first of those drivers that opens it; a file none of them opens (or a JSON file with no features) fails, naming the driver GDAL detected.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -63,7 +63,7 @@ Example — reading newline-delimited GeoJSONSeq (the `multi` default):
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight · geojson_gbx">
 
-`geojson_gbx` is the lightweight GeoJSON reader (pyogrio-backed, no JAR). It reads GeoJSON and GeoJSONSeq (as well as ESRIJSON and TopoJSON) and emits the same schema as the heavyweight `geojson_ogr` reader.
+`geojson_gbx` is the lightweight GeoJSON reader (pyogrio-backed, no JAR). It reads GeoJSON and GeoJSONSeq (as well as ESRIJSON, TopoJSON and JSON-FG) and emits the same schema as the heavyweight `geojson_ogr` reader.
 
 <CodeFromTest code={geojsonGbx} language="python" functionName="READ_GEOJSON_GBX"
   source="docs/tests/python/readers/geojson_gbx_examples.py"

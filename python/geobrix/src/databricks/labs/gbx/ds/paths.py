@@ -114,6 +114,18 @@ def _check_schema(path: str, got: pa.Schema, want: pa.Schema) -> None:
     )
 
 
+def _arrow_schema(schema: StructType) -> pa.Schema:
+    """Spark schema -> Arrow; TIMESTAMP is UTC on every supported PySpark (>= 4.1
+    takes ``timezone=``, 4.0 always emits UTC)."""
+    import inspect
+
+    from pyspark.sql.pandas.types import to_arrow_schema
+
+    if "timezone" in inspect.signature(to_arrow_schema).parameters:
+        return to_arrow_schema(schema, timezone="UTC")
+    return to_arrow_schema(schema)
+
+
 def iter_path_batches(
     path: str,
     mtime_us: Optional[int],
@@ -124,8 +136,6 @@ def iter_path_batches(
 ) -> Iterator[pa.RecordBatch]:
     """Arrow batches for one file (session-free). A file that no longer exists is
     skipped with a warning; ``expected`` (lineage included or not) is enforced."""
-    from pyspark.sql.pandas.types import to_arrow_schema
-
     local = _listing.to_local_path(path)
     try:
         _listing._retry_transient(lambda: os.stat(local))
@@ -136,7 +146,7 @@ def iter_path_batches(
     schema = (
         _base(expected) if expected is not None else _reader_schema(fmt, options, local)
     )
-    want = to_arrow_schema(schema)
+    want = _arrow_schema(schema)
     reader = ds.reader(schema)
     for part in reader.partitions():
         for batch in reader.read(part):

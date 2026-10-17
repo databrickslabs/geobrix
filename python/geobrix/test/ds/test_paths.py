@@ -67,6 +67,13 @@ def test_every_supported_format_is_a_registered_reader():
         assert P.resolve_format(name).name() == name
 
 
+def test_iter_path_batches_handles_timestamp_columns(exif_jpeg):
+    # exif_gbx has a TIMESTAMP column; the expected Arrow schema needs a timezone.
+    batches = list(P.iter_path_batches(str(exif_jpeg), 1_000_000, "exif_gbx", {}))
+    assert sum(b.num_rows for b in batches) == 1
+    assert batches[0].schema.field("timestamp").type == pa.timestamp("us", tz="UTC")
+
+
 def test_resolve_format_rejects_unsupported_reader():
     with pytest.raises(ValueError, match="file_gbx"):
         P.resolve_format("file_gbx")

@@ -37,7 +37,11 @@ class _ArrowFileReads:
     def read(self, partition: InputPartition):
         desc = json.loads(partition.value)
         yield from self.connect.iter_member_batches(
-            desc["path"], int(desc["mtime_ns"]), self.table_options, self.schema
+            desc["path"],
+            int(desc["mtime_ns"]),
+            self.table_options,
+            self.schema,
+            self.table_name,
         )
 
 

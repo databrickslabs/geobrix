@@ -5,7 +5,7 @@ import os
 import shutil
 
 import pytest
-from conftest import BOROUGHS, set_mtime
+from conftest import BOROUGHS, GPKG, set_mtime
 
 from databricks.labs.community_connector.sources.geobrix import (
     GeoBrixDataSource,
@@ -154,7 +154,7 @@ def test_connector_reads_through_shared_core(root, monkeypatch):
 
 
 def test_lidar_table_reads(tmp_path):
-    laspy = pytest.importorskip("laspy")
+    import laspy
     import numpy as np
 
     hdr = laspy.LasHeader(point_format=3, version="1.4")
@@ -168,6 +168,137 @@ def test_lidar_table_reads(tmp_path):
     assert "pts" in c.list_tables()
     rows, _ = c.read_table("pts", {}, {})
     assert len(list(rows)) == 4
+
+
+def _las(path):
+    import laspy
+    import numpy as np
+
+    las = laspy.LasData(laspy.LasHeader(point_format=3, version="1.4"))
+    las.x = las.y = las.z = np.arange(4.0)
+    las.write(str(path))
+
+
+def _jpeg(path):
+    from PIL import Image
+    from PIL.TiffImagePlugin import IFDRational
+
+    img = Image.new("RGB", (64, 48), (128, 128, 128))
+    exif = img.getexif()
+    exif[271] = "GoPro"
+    exif[272] = "HERO5"
+    gps = exif.get_ifd(34853)
+    gps[1] = "N"
+    gps[2] = (IFDRational(3775, 100), IFDRational(0, 1), IFDRational(0, 1))
+    gps[3] = "W"
+    gps[4] = (IFDRational(12245, 100), IFDRational(0, 1), IFDRational(0, 1))
+    img.save(str(path), "jpeg", exif=exif.tobytes())
+
+
+def _mixed_folder(tmp_path):
+    """tmp_path/mix: one .gpkg, one .geojson, one .las, one .jpg."""
+    for src in (BOROUGHS, GPKG):
+        if not src.exists():
+            pytest.skip(f"sample data missing: {src}")
+    d = tmp_path / "mix"
+    d.mkdir()
+    shutil.copy(GPKG, d / "a.gpkg")
+    shutil.copy(BOROUGHS, d / "b.geojson")
+    _las(d / "c.las")
+    _jpeg(d / "d.jpg")
+    return d
+
+
+def _members_of(c, opts):
+    return _paths(c.get_partitions("mix", {"path": "mix", **opts}))
+
+
+def test_explicit_format_on_a_mixed_folder_keeps_only_that_format(tmp_path):
+    _mixed_folder(tmp_path)
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    opts = {"path": "mix", "format": "gpkg"}
+    assert _members_of(c, {"format": "gpkg"}) == ["a.gpkg"]
+    names = [f.name for f in c.get_table_schema("mix", opts).fields]
+    assert names[-2:] == ["_source_path", "_source_mtime"] and "geom" in names
+
+
+def test_generic_vector_format_excludes_lidar_and_exif(tmp_path):
+    _mixed_folder(tmp_path)
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert _members_of(c, {"format": "vector"}) == ["a.gpkg", "b.geojson"]
+    assert c.get_table_schema("mix", {"path": "mix", "format": "vector"}).fieldNames()
+
+
+def test_single_kind_folder_infers_the_reader(tmp_path):
+    d = tmp_path / "mix"
+    d.mkdir()
+    shutil.copy(BOROUGHS, d / "a.geojson")
+    shutil.copy(BOROUGHS, d / "b.json")
+    (d / "notes.txt").write_text("ignored")
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert _members_of(c, {}) == ["a.geojson", "b.json"]
+    assert "boroname" in c.get_table_schema("mix", {"path": "mix"}).fieldNames()
+    assert c._formats["mix"] == "geojson_gbx"
+
+
+def test_mixed_kinds_without_format_is_a_clear_error(tmp_path):
+    _mixed_folder(tmp_path)
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    with pytest.raises(ValueError, match="set the `format` table option"):
+        c.get_table_schema("mix", {"path": "mix"})
+
+
+def test_zipped_shapefile_and_gdb_members_map_to_their_readers(tmp_path):
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import format_for
+
+    d = tmp_path / "mix"
+    d.mkdir()
+    (d / "a.shp.zip").write_bytes(b"")
+    (d / "b.gdb.zip").write_bytes(b"")
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert _members_of(c, {"format": "shapefile"}) == ["a.shp.zip"]
+    assert _members_of(c, {"format": "filegdb"}) == ["b.gdb.zip"]
+    assert _members_of(c, {}) == ["a.shp.zip", "b.gdb.zip"]
+    assert format_for({}, [str(d / "a.shp.zip")]) == "shapefile_gbx"
+    assert format_for({}, [str(d / "b.gdb.zip")]) == "file_gdb_gbx"
+
+
+def test_gdb_table_path_is_a_single_member_read_with_the_filegdb_reader(tmp_path):
+    from databricks.labs.community_connector.sources.geobrix.lakeflow_connect import format_for
+
+    gdb = tmp_path / "survey.gdb"
+    gdb.mkdir()
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert c.list_tables() == ["survey"]
+    members = c._members(c._resolve_path("survey", {}), {})
+    assert members == [str(gdb)]
+    assert format_for({}, members) == "file_gdb_gbx"
+
+
+def test_a_later_file_of_another_kind_fails_instead_of_using_another_reader(tmp_path):
+    d = tmp_path / "mix"
+    d.mkdir()
+    shutil.copy(BOROUGHS, d / "a.geojson")
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    opts = {"path": "mix"}
+    c.get_table_schema("mix", opts)  # pins geojson_gbx for the table
+    _las(d / "late.las")
+    with pytest.raises(ValueError, match="lidar_gbx file in a table read with geojson_gbx"):
+        list(c.iter_member_batches(str(d / "late.las"), 0, opts, table_name="mix"))
+
+
+def test_exif_table_reads_through_the_connector(tmp_path):
+    d = tmp_path / "photos"
+    d.mkdir()
+    _jpeg(d / "a.jpg")
+    c = GeoBrixLakeflowConnect({"root_path": str(tmp_path)})
+    assert c.list_tables() == ["photos"]
+    rows, _ = c.read_table("photos", {}, {})
+    rows = list(rows)
+    assert len(rows) == 1
+    assert (rows[0]["camera_make"], rows[0]["camera_model"]) == ("GoPro", "HERO5")
+    assert rows[0]["latitude"] == pytest.approx(37.75)
+    assert rows[0]["_source_path"] == str(d / "a.jpg")
 
 
 # ---------------------------------------------------------------- offsets

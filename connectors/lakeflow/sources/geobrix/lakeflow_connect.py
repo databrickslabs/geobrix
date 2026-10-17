@@ -146,7 +146,10 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
     def __init__(self, options: dict[str, str]) -> None:
         super().__init__(options)
         root = options.get("root_path")
+        # Per-table pins: the reader chosen from all members and the schema of the
+        # first file, so every later file is read (and checked) the same way.
         self._schemas: dict[str, StructType] = {}
+        self._formats: dict[str, str] = {}
         self.root_path = os.path.normpath(root) if root else None
         if self.root_path and not os.path.isabs(self.root_path):
             raise ValueError(f"root_path must be absolute; got {root!r}")
@@ -176,7 +179,10 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
                 f"from the first file, so stage at least one file before creating the table."
             )
         fmt = format_for(table_options, members)
-        return path_schema(fmt, self.reader_options(table_options), members[0])
+        schema = path_schema(fmt, self.reader_options(table_options), members[0])
+        self._formats[table_name] = fmt
+        self._schemas[table_name] = schema
+        return schema
 
     def read_table_metadata(self, table_name: str, table_options: dict[str, str]) -> dict:
         return {
@@ -236,7 +242,16 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
         """
         if expected is None and table_name is not None:
             expected = self._table_schema(table_name, table_options)
-        fmt = format_for(table_options, [member])
+        if table_name is None:
+            fmt = format_for(table_options, [member])
+        else:
+            fmt = self._table_format(table_name, table_options)
+            kind = _format_of(member)
+            if not table_options.get("format") and kind not in (None, fmt):
+                raise ValueError(
+                    f"{member}: a {kind} file in a table read with {fmt}; set the "
+                    f"`format` table option or split the folder."
+                )
         yield from iter_path_batches(
             member,
             int(mtime_ns) // 1_000,
@@ -279,9 +294,14 @@ class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
             out["chunkSize"] = str(int(table_options["chunk_size"]))
         return out
 
+    def _table_format(self, table_name: str, table_options: dict[str, str]) -> str:
+        if table_name not in self._formats:
+            self.get_table_schema(table_name, table_options)
+        return self._formats[table_name]
+
     def _table_schema(self, table_name: str, table_options: dict[str, str]) -> StructType:
         if table_name not in self._schemas:
-            self._schemas[table_name] = self.get_table_schema(table_name, table_options)
+            self.get_table_schema(table_name, table_options)
         return self._schemas[table_name]
 
     def _guard(self, path: str) -> str:

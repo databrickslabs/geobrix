@@ -44,9 +44,11 @@ class NetcdfVectorReader(DataSourceReader):
             )
         fields: List[StructField] = []
         with _netcdf.open_dataset(members[0], self.group) as ds:
+            # The decoded dtype is known without reading the data (``.values`` would
+            # read and decode every selected variable in full just for its type).
             for name in self._variables(ds):
                 fields.append(
-                    StructField(name, _netcdf.np_to_spark(ds[name].values.dtype), True)
+                    StructField(name, _netcdf.np_to_spark(ds[name].dtype), True)
                 )
         fields.append(StructField("geom_0", BinaryType(), True))
         fields.append(StructField("geom_0_srid", StringType(), True))

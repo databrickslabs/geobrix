@@ -164,6 +164,28 @@ def test_vector_schema_columns(tmp_path):
     assert isinstance(schema["geom_0_srid"].dataType, StringType)
 
 
+def test_vector_schema_reads_no_variable_data(tmp_path, monkeypatch):
+    """schema() takes each variable's type from its metadata: it never reads (and
+    decodes) a selected variable's data, which for a large file is all of it."""
+    from xarray.backends import netCDF4_
+
+    from databricks.labs.gbx.ds._netcdf_vector import NetcdfVectorReader
+
+    read = []
+    real = netCDF4_.NetCDF4ArrayWrapper._getitem
+
+    def spy(self, key):
+        read.append(self.variable_name)
+        return real(self, key)
+
+    monkeypatch.setattr(netCDF4_.NetCDF4ArrayWrapper, "_getitem", spy)
+    f = tmp_path / "pts.nc"
+    _write_points(str(f))
+    schema = NetcdfVectorReader({"path": str(f), "variables": "ch4,qa_value"}).schema()
+    assert schema.fieldNames()[:2] == ["ch4", "qa_value"]
+    assert not {"ch4", "qa_value"} & set(read), read
+
+
 def test_vector_read_dsg_points(spark, tmp_path):
     f = tmp_path / "pts.nc"
     _write_points(str(f))

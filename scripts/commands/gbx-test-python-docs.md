@@ -60,6 +60,7 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 
 - `--log <path>` – Log file (filename → `test-logs/<name>`). Prefer timestamped names for tracking.
 - `--markers <markers>` – Pytest markers (e.g. `"not slow"`).
+- `--timeout <seconds>` – Per-test deadline (default 600). A test still running after this many seconds fails with a `TimeoutError` (stacks are dumped first) instead of blocking the run; if the JVM stops responding the run ends with the stacks on the terminal. Sets `GBX_DOC_TEST_TIMEOUT_S` in the container. A test marked `@pytest.mark.deadline(n)` keeps its own limit.
 - `--include-integration` – Include integration tests (excluded by default).
 - `--skip-build` – Skip Maven and Python build.
 - `--no-sample-data-root` – Do **not** set `GBX_SAMPLE_DATA_ROOT` (use your env or path_config default).
@@ -86,6 +87,9 @@ bash scripts/commands/gbx-test-python-docs.sh
 
 # One file against the complete sample bundle instead of the minimal one
 bash scripts/commands/gbx-test-python-docs.sh --path readers/test_incremental_ingestion_examples.py --skip-build --sample-data-root /Volumes/main/default/geobrix_samples
+
+# A slow suite: allow each test up to 15 minutes before it is failed as stuck
+bash scripts/commands/gbx-test-python-docs.sh --path readers/ --skip-build --timeout 900
 
 # Include integration tests (DBR / integration env)
 bash scripts/commands/gbx-test-python-docs.sh --include-integration --skip-build

@@ -29,6 +29,8 @@ show_help() {
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log (use timestamp for tracking: python-docs-\$(date +%Y%m%d-%H%M%S).log)"
     echo -e "  ${GREEN}--markers <marker>${NC}     Pytest markers (e.g. \"not slow\")"
     echo -e "  ${GREEN}--filter <expr>${NC}        Pytest -k expression: run ONLY matching tests (whole dir still collected so api/ _fixtures resolves). Use with --path api/ to test just the changed functions, e.g. --path api/ --filter 'st_triangulate or st_interpolate'"
+    echo -e "  ${GREEN}--timeout <seconds>${NC}     Per-test deadline (default 600): a test still running after this many seconds fails with a timeout"
+    echo -e "                           instead of blocking the run (tests marked @pytest.mark.deadline(n) keep their own limit)"
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
     echo -e "  ${GREEN}--skip-build${NC}            Skip Maven/Python build (use when already built)"
     echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
@@ -40,6 +42,7 @@ show_help() {
     echo -e "  ${YELLOW}gbx:test:python-docs --suite quickstart --skip-build --log quickstart.log${NC}"
     echo -e "  ${YELLOW}gbx:test:python-docs --test quickstart/test_examples.py::test_sql_constants_are_valid_strings --skip-build${NC}"
     echo -e "  ${YELLOW}gbx:test:python-docs --path api/test_rasterx_functions_sql.py --skip-build${NC}"
+    echo -e "  ${YELLOW}gbx:test:python-docs --path readers/ --skip-build --timeout 900${NC}   # slow suite: 900 s per test"
     echo -e "  ${YELLOW}gbx:test:python-docs --log test-logs/python-docs-\$(date +%Y%m%d-%H%M%S).log${NC}   # full suite with timestamped log"
     echo ""
 }
@@ -56,6 +59,8 @@ SKIP_BUILD=false
 SET_SAMPLE_DATA_ROOT=true
 SAMPLE_DATA_ROOT="/Volumes/main/default/test-data"
 EXPLICIT_SAMPLE_DATA_ROOT=false
+# Per-test deadline for the container's pytest (GBX_DOC_TEST_TIMEOUT_S); empty = its default (600 s)
+DOC_TEST_TIMEOUT_S=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -99,6 +104,14 @@ while [[ $# -gt 0 ]]; do
             # whole dir (so the api/ _fixtures sibling import resolves). Use to run only
             # the changed functions, e.g. --path api/ --filter 'st_triangulate or st_interpolate'.
             FILTER="-k '$2'"
+            shift 2
+            ;;
+        --timeout)
+            if ! [[ "${2:-}" =~ ^[1-9][0-9]*$ ]]; then
+                echo -e "${RED}❌ --timeout needs a positive whole number of seconds (got: '${2:-}')${NC}"
+                exit 1
+            fi
+            DOC_TEST_TIMEOUT_S="$2"
             shift 2
             ;;
         --include-integration)
@@ -174,6 +187,12 @@ fi
 if [ "$SKIP_BUILD" = true ]; then
     echo -e "${CYAN}⏭️  Skipping Maven and Python build (--skip-build)${NC}"
 fi
+# The container's pytest reads the deadline from this variable (docs/tests/python/deadline_guard.py)
+DOCKER_ENV_ARGS=()
+if [ -n "$DOC_TEST_TIMEOUT_S" ]; then
+    DOCKER_ENV_ARGS=(-e "GBX_DOC_TEST_TIMEOUT_S=$DOC_TEST_TIMEOUT_S")
+    echo -e "${CYAN}⏱️  Per-test deadline: ${YELLOW}${DOC_TEST_TIMEOUT_S} s${NC}"
+fi
 echo ""
 
 # Use minimal bundle path in container so doc tests pass on remote/CI (unless --no-sample-data-root)
@@ -231,7 +250,7 @@ echo '━━━━━━━━━━━━━━━━━━━━━━━━�
 python3 -m pytest $TEST_PATH -v $MARKERS $FILTER --tb=short --color=yes $IGNORE_API_ARG
 "
 
-docker exec geobrix-dev /bin/bash -c "$RUN_CMD"
+docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} geobrix-dev /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

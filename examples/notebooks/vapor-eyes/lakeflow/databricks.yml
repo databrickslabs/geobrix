@@ -74,14 +74,22 @@ resources:
             include: transformations/**
       environment:
         dependencies:
-          # Install the geobrix wheel WITH its light_env6/stac/vizx extras in ONE pip
-          # resolution (mirrors the notebook's `%pip install geobrix[light_env6,stac,vizx]
-          # @ wheel`). Lakeflow runs one `%pip install` per dependency entry, so
-          # enumerating the extras separately defeats pip's resolver — installing
-          # rio-tiler after rasterio was already pinned forces a source rebuild
-          # (ENVIRONMENT_PIP_INSTALL_ERROR). pip's `wheel[extras]` path form keeps it
-          # a single pass and passes DAB path-normalization (no file:// colon).
-          - ${var.gbx_wheel}[light_env6,stac,vizx]
+          # The pipeline runs on its Lakeflow runtime channel (`channel` is unset, so
+          # the default, CURRENT). As of this example CURRENT is DBR 18 (protobuf-5),
+          # so it uses the DBR-language [light_dbr18] extra, NOT [light_env6] (the
+          # protobuf-6 / DBR-19 regime). A PREVIEW channel (`channel: PREVIEW`) is
+          # DBR 19 -> [light_dbr19]. The extra must follow the channel.
+          # >>> Before you deploy, check the current Lakeflow runtime channel at
+          # https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions
+          # and switch to the matching GeoBrix extra if it has moved.
+          # Install the geobrix wheel WITH its extras in ONE pip resolution (the same
+          # `wheel[extras]` form as the notebook's `%pip install`). Lakeflow runs one
+          # `%pip install` per dependency entry, so enumerating the extras separately
+          # defeats pip's resolver — installing rio-tiler after rasterio was already
+          # pinned forces a source rebuild (ENVIRONMENT_PIP_INSTALL_ERROR). pip's
+          # `wheel[extras]` path form keeps it a single pass and passes DAB
+          # path-normalization (no file:// colon).
+          - ${var.gbx_wheel}[light_dbr18,stac,vizx]
       configuration:
         vapor_eyes.catalog: ${var.catalog}
         vapor_eyes.schema: ${var.schema}
@@ -117,11 +125,15 @@ resources:
       environments:
         - environment_key: land_env
           spec:
+            # Serverless job tasks use Environment-language versioning: Env 5 is the
+            # protobuf-5 regime (DBR 18 <-> Env 5), so env version "5" + the
+            # [light_env5] extra (= light_dbr18). Keep the env version and the extra
+            # in lockstep (Env 6 pairs with [light_env6]).
             environment_version: "5"
             dependencies:
               # Single-pass wheel+extras install, same rationale as the pipeline
               # environment above (avoids per-dep %pip resolver churn).
-              - ${var.gbx_wheel}[light_env6,stac,vizx]
+              - ${var.gbx_wheel}[light_env5,stac,vizx]
       schedule:
         quartz_cron_expression: "0 0 7 * * ?"
         timezone_id: "America/Chicago"

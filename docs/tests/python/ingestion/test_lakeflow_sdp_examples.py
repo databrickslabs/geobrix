@@ -92,13 +92,26 @@ def test_bundle_has_the_shape_of_the_example_bundles():
     assert _requested_extras(dep) == [ex.CHANNEL_EXTRAS[shown["channel"]][1]]
 
 
-def test_wireless_coverage_bundle_uses_the_current_channel_extra():
-    """The production example the page points to installs the CURRENT channel's
-    extra (it runs on the default channel)."""
-    example = _pipeline(EXAMPLE_BUNDLES["wireless-coverage"].read_text())
+@pytest.mark.parametrize("name", EXAMPLE_BUNDLES)
+def test_example_bundles_use_the_current_channel_extra(name):
+    """The production examples the page points to install the CURRENT channel's
+    extra (they run on the default channel)."""
+    example = _pipeline(EXAMPLE_BUNDLES[name].read_text())
     assert "channel" not in example  # the default, CURRENT
     (dep,) = example["environment"]["dependencies"]
     assert ex.CHANNEL_EXTRAS["CURRENT"][1] in _requested_extras(dep)
+
+
+@pytest.mark.parametrize("name", EXAMPLE_BUNDLES)
+def test_example_job_environments_pair_the_env_version_with_its_extra(name):
+    """A Serverless job environment installs the extra of its own environment
+    version (version 5 -> light_env5), not another regime's."""
+    jobs = yaml.safe_load(EXAMPLE_BUNDLES[name].read_text())["resources"]["jobs"]
+    environments = [e["spec"] for job in jobs.values() for e in job["environments"]]
+    assert environments
+    for spec in environments:
+        (dep,) = spec["dependencies"]
+        assert f"light_env{spec['environment_version']}" in _requested_extras(dep)
 
 
 def test_table_exists_in_sink_snippet(spark):

@@ -84,16 +84,25 @@ def _isolate():
 
     * the driver grid registry,
     * geobrix's thread-local pyproj Transformer cache (same CRS pair would
-      otherwise return a cached grid-less transformer), and
-    * pyproj's PROJ search path (restored to its import-time value).
+      otherwise return a cached grid-less transformer),
+    * pyproj's PROJ search path (restored to its import-time value), and
+    * the GDAL_DATA / PROJ_DATA / PROJ_LIB env vars (``st_transformcrs`` calls
+      ``configure_gdal_env``, which points PROJ_DATA at the registered grids).
     """
     orig_datadir = pyproj.datadir.get_data_dir()
     pyproj.network.set_network_enabled(False)
+    env_keys = ("GDAL_DATA", "PROJ_DATA", "PROJ_LIB")
+    orig_env = {k: os.environ.get(k) for k in env_keys}
 
     def _reset():
         proj_grids.set_registered_dirs([], replace=True)
         _corecrs._thread_local.__dict__.pop("transformers", None)
         pyproj.datadir.set_data_dir(orig_datadir)
+        for k, v in orig_env.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
 
     _reset()
     yield

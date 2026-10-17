@@ -45,6 +45,7 @@ def base(monkeypatch, tmp_path):
     monkeypatch.setattr(_env, "_PROJ_DATA_BASES", {})
     monkeypatch.setattr(_env, "_PROJ_DATA_RETRY_AT", {})
     monkeypatch.setattr(_env, "_WARNED_UNLISTABLE", set())
+    monkeypatch.setattr(_env, "_PROJ_DATA_BUILDING", set())
     monkeypatch.setattr(_listing.time, "sleep", lambda _s: None)  # no retry backoff
     return bundled
 
@@ -228,6 +229,78 @@ def test_unlistable_dir_warns_once_and_is_retried_later(monkeypatch, base, tmp_p
     assert recovered != degraded
     assert _resolves_to(recovered, "a.gsb", grids)
     assert _resolves_to(recovered, "proj.db", base)
+
+
+def test_a_dir_already_warned_about_is_listed_once_on_the_next_try(
+    monkeypatch, base, tmp_path
+):
+    """The long retry (every FUSE read gets it) runs for a dir's first failure. A dir
+    already named in the warning is tried once when its retry window comes round, so
+    a permanently missing dir costs a quick miss a minute, not ~20 s of sleeping."""
+    grids = _mkdir_with(tmp_path / "grids", "a.gsb")
+    attempts, _ = _fail_listdir(monkeypatch, grids, failures=None)
+    clock = [1000.0]
+    monkeypatch.setattr(_env, "_now", lambda: clock[0])
+    with pytest.warns(RuntimeWarning, match="grids"):
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    assert len(attempts) == 10  # _retry_transient's default
+    clock[0] += _env._UNLISTABLE_RETRY_S + 1
+    _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    assert len(attempts) == 11  # exactly one more
+
+
+def test_a_second_caller_is_not_blocked_behind_a_slow_relisting(
+    monkeypatch, base, tmp_path
+):
+    """Listing a dir can sit in retries for ~20 s. That must not happen under the
+    process-wide lock: while one caller relists, the others get the build they have."""
+    grids = _mkdir_with(tmp_path / "grids", "a.gsb")
+    attempts, heal = _fail_listdir(monkeypatch, grids, failures=None)
+    clock = [1000.0]
+    monkeypatch.setattr(_env, "_now", lambda: clock[0])
+    with pytest.warns(RuntimeWarning, match="grids"):
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    degraded = os.environ["PROJ_DATA"]
+    heal()
+
+    # Past the window: the next listing of `grids` stalls until released.
+    clock[0] += _env._UNLISTABLE_RETRY_S + 1
+    entered, release = threading.Event(), threading.Event()
+    real = os.listdir
+
+    def _stalled(path="."):
+        if os.fspath(path) == str(grids):
+            entered.set()
+            release.wait(20)
+        return real(path)
+
+    monkeypatch.setattr(os, "listdir", _stalled)
+    seen = {}
+
+    def _relister():
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+
+    def _other():
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+        seen["proj_data"] = os.environ["PROJ_DATA"]
+
+    first = threading.Thread(target=_relister)
+    second = threading.Thread(target=_other)
+    try:
+        first.start()
+        assert entered.wait(10), "the relisting never started"
+        second.start()
+        second.join(5)
+        assert not second.is_alive(), "a caller waited for the relisting"
+        assert seen["proj_data"] == degraded
+    finally:
+        release.set()
+        first.join(20)
+        second.join(20)
+
+    # The relisting published its result: the healed dir's grids are in.
+    _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    assert _resolves_to(os.environ["PROJ_DATA"], "a.gsb", grids)
 
 
 # ---------------------------------------------------------------------------

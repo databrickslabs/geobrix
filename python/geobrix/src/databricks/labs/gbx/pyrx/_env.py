@@ -79,6 +79,10 @@ _PROJ_DATA_BASES: Dict[str, str] = {}
 _PROJ_DATA_RETRY_AT: Dict[Tuple[str, ...], float] = {}
 _UNLISTABLE_RETRY_S = 60.0
 _WARNED_UNLISTABLE: set = set()  # dirs already named in a warning (once per process)
+# Keys whose directory is being (re)built right now; the others keep using the build
+# they have instead of waiting for it. Guarded by the lock below, which is held only to
+# read and publish: listing a dir can sit in retries for ~20 s.
+_PROJ_DATA_BUILDING: set = set()
 _PROJ_DATA_LOCK = threading.Lock()
 _MERGED_PREFIX = "gbx_proj_data_"
 
@@ -102,12 +106,14 @@ def _list_dir(d: str) -> Optional[List[str]]:
     retries every FUSE read gets (a UC Volume can miss for a moment even when healthy).
 
     A dir that stays unlistable is named in one warning per process: its files are then
-    missing from PROJ_DATA, which silently costs accuracy (a grid is not applied).
+    missing from PROJ_DATA, which silently costs accuracy (a grid is not applied). Such a
+    dir is tried once on later rebuilds (a quick miss), not retried for ~20 s again.
     """
     from databricks.labs.gbx.ds import _listing
 
+    once = {"attempts": 1} if d in _WARNED_UNLISTABLE else {}
     try:
-        return sorted(_listing._retry_transient(lambda: os.listdir(d)))
+        return sorted(_listing._retry_transient(lambda: os.listdir(d), **once))
     except OSError as e:
         if d not in _WARNED_UNLISTABLE:
             _WARNED_UNLISTABLE.add(d)
@@ -205,9 +211,16 @@ def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
     with _PROJ_DATA_LOCK:
         hit = _PROJ_DATA_DIRS.get(key)
         retry_at = _PROJ_DATA_RETRY_AT.get(key)
-        if hit and (retry_at is None or _now() < retry_at):
-            if hit == base or os.path.isdir(hit):
-                return hit
+        usable = bool(hit) and (hit == base or os.path.isdir(hit))
+        # Within the retry window, or while another caller relists, keep the build we
+        # have: a degraded one still holds proj.db and every dir that did list.
+        if usable and (
+            retry_at is None or _now() < retry_at or key in _PROJ_DATA_BUILDING
+        ):
+            return hit
+        _PROJ_DATA_BUILDING.add(key)
+    try:
+        # Outside the lock: the listing retries sleep for ~20 s on a dir that is down.
         entries, unlisted = _merged_entries(search)
         try:
             path = _build_merged_proj_dir(search, entries)
@@ -220,6 +233,12 @@ def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
                 stacklevel=3,
             )
             path = base  # cached too: per-row callers must not retry the build
+    except BaseException:
+        with _PROJ_DATA_LOCK:
+            _PROJ_DATA_BUILDING.discard(key)
+        raise
+    with _PROJ_DATA_LOCK:
+        _PROJ_DATA_BUILDING.discard(key)
         _PROJ_DATA_DIRS[key] = path
         if unlisted:
             _PROJ_DATA_RETRY_AT[key] = _now() + _UNLISTABLE_RETRY_S
@@ -227,7 +246,7 @@ def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
             _PROJ_DATA_RETRY_AT.pop(key, None)
         if path != base:
             _PROJ_DATA_BASES[path] = base
-        return path
+    return path
 
 
 def _register_pyproj_search_dirs(extra_proj_dirs: Sequence[str]) -> None:

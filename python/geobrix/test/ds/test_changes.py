@@ -344,10 +344,51 @@ class _FakeSpark:
 
 
 EXPECTED_VIEW_SQL = (
-    "CREATE VIEW IF NOT EXISTS `my-cat`.`s`.`t_current` AS SELECT r.* FROM `my-cat`.`s`.`t` r "
-    "JOIN `my-cat`.`s`.`t_file_versions` v ON r._source_path = v._source_path "
-    "AND r._source_hash = v._source_hash WHERE v.__END_AT IS NULL"
+    "CREATE VIEW IF NOT EXISTS `my-cat`.`s`.`t_current` AS "
+    "WITH readable AS (SELECT v._source_path, v._source_hash, v.__START_AT "
+    "FROM `my-cat`.`s`.`t_file_versions` v "
+    "LEFT SEMI JOIN (SELECT DISTINCT _source_path, _source_hash FROM `my-cat`.`s`.`t`) s "
+    "ON v._source_path = s._source_path AND v._source_hash = s._source_hash), "
+    "latest AS (SELECT _source_path, max_by(_source_hash, __START_AT) AS _source_hash "
+    "FROM readable GROUP BY _source_path) "
+    "SELECT r.* FROM `my-cat`.`s`.`t` r JOIN latest l "
+    "ON r._source_path = l._source_path AND r._source_hash = l._source_hash"
 )
+
+
+def test_current_view_shows_each_files_latest_readable_version(spark, tmp_path):
+    """A version with no rows (its delivery was set aside, or never written) does
+    not hide the file's last readable content; a revert to earlier content is
+    current again; a file whose only version has no rows has none."""
+    rows, versions = "cv_rows", "cv_rows_file_versions"
+    spark.sql(f"DROP VIEW IF EXISTS {rows}_current")
+    for t in (rows, versions):
+        spark.sql(f"DROP TABLE IF EXISTS {t}")
+    try:
+        spark.sql(f"""CREATE TABLE {rows} USING parquet LOCATION '{tmp_path / "r"}' AS
+            SELECT * FROM VALUES
+                ('/a', 'h1', 1), ('/a', 'h2', 2), ('/a', 'h2', 3),
+                ('/b', 'h1', 4), ('/b', 'h2', 5)
+            AS t(_source_path, _source_hash, id)""")
+        spark.sql(
+            f"""CREATE TABLE {versions} USING parquet LOCATION '{tmp_path / "v"}' AS
+            SELECT * FROM VALUES
+                ('/a', 'h1', TIMESTAMP'2026-10-17 10:00:00'),
+                ('/a', 'h2', TIMESTAMP'2026-10-17 11:00:00'),
+                ('/a', 'bad', TIMESTAMP'2026-10-17 12:00:00'),
+                ('/b', 'h1', TIMESTAMP'2026-10-17 10:00:00'),
+                ('/b', 'h2', TIMESTAMP'2026-10-17 11:00:00'),
+                ('/b', 'h1', TIMESTAMP'2026-10-17 12:00:00'),
+                ('/c', 'bad', TIMESTAMP'2026-10-17 12:00:00')
+            AS t(_source_path, _source_hash, __START_AT)"""
+        )
+        C._ensure_current_view(spark, rows, versions)
+        got = sorted(r["id"] for r in spark.table(f"{rows}_current").collect())
+        assert got == [2, 3, 4]
+    finally:
+        spark.sql(f"DROP VIEW IF EXISTS {rows}_current")
+        for t in (rows, versions):
+            spark.sql(f"DROP TABLE IF EXISTS {t}")
 
 
 def test_current_view_sql_quotes_identifiers_and_joins_on_path_and_hash():

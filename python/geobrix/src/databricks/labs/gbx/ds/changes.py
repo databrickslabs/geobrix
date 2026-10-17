@@ -228,11 +228,20 @@ def _stored_hashes(
 
 
 def _current_view_sql(target: str, versions: str) -> str:
+    """``<target>_current``: each file's rows of its latest READABLE version, the
+    newest version (by ``__START_AT``) whose content has rows in ``target``. A
+    delivery that could not be read (set aside in ``<t>_bad_records``, or never
+    written) is still the file's latest version in ``<t>_file_versions``, but it
+    does not hide the last content that was read."""
+    p, h, t = SOURCE_PATH_COL, SOURCE_HASH_COL, _quote(target)
     return (
         f"CREATE VIEW IF NOT EXISTS {_suffixed(target, '_current')} AS "
-        f"SELECT r.* FROM {_quote(target)} r JOIN {_quote(versions)} v "
-        f"ON r.{SOURCE_PATH_COL} = v.{SOURCE_PATH_COL} "
-        f"AND r.{SOURCE_HASH_COL} = v.{SOURCE_HASH_COL} WHERE v.__END_AT IS NULL"
+        f"WITH readable AS (SELECT v.{p}, v.{h}, v.__START_AT FROM {_quote(versions)} v "
+        f"LEFT SEMI JOIN (SELECT DISTINCT {p}, {h} FROM {t}) s "
+        f"ON v.{p} = s.{p} AND v.{h} = s.{h}), "
+        f"latest AS (SELECT {p}, max_by({h}, __START_AT) AS {h} FROM readable "
+        f"GROUP BY {p}) "
+        f"SELECT r.* FROM {t} r JOIN latest l ON r.{p} = l.{p} AND r.{h} = l.{h}"
     )
 
 

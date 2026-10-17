@@ -18,7 +18,7 @@ from typing import Dict, Iterator, List, Tuple
 from pyspark.sql.datasource import DataSource, DataSourceReader
 from pyspark.sql.types import StructType
 
-from databricks.labs.gbx.ds import _encode, _listing, _netcdf
+from databricks.labs.gbx.ds import _encode, _listing, _netcdf, _quarantine
 from databricks.labs.gbx.ds.raster import RasterGbxReader, _FilePartition, reader_schema
 
 # Estimated decoded-bytes ceiling for bandDim stacking before a soft-warn is emitted.
@@ -275,13 +275,33 @@ class NetcdfRasterReader(RasterGbxReader):
                     "a dimension cannot be both stacked (bandDim) and expanded (fanout)."
                 )
 
+        # With read_paths' on_error="skip" (a hook on the reader) a variable, or
+        # one slice of it, that cannot be read is a bad record and the others
+        # are still read; without one it fails the read.
+        hook = _quarantine.hook_of(self)
+
+        def _bad(label: str, exc: BaseException) -> None:
+            if hook is None or isinstance(exc, _quarantine.PASS_THROUGH):
+                raise exc
+            hook(label, _quarantine.error_class(exc), _quarantine.describe(exc))
+
+        if hook is not None:
+            short = _netcdf.classic_truncation(partition.file_path)
+            if short is not None:
+                hook(None, _quarantine.RECORDS_NOT_READ, short)
+                return
+
         with _netcdf.open_dataset(partition.file_path, self.group) as ds:
             variables = _netcdf.select_variables(ds, self.options, "raster")
 
             for var in variables:
-                transform, crs = _netcdf.grid_transform_crs(ds, var)
-                nodata = _netcdf.nodata_of(ds, var)
-                var_ldims = dict(_netcdf.leading_dims(ds, var))
+                try:
+                    transform, crs = _netcdf.grid_transform_crs(ds, var)
+                    nodata = _netcdf.nodata_of(ds, var)
+                    var_ldims = dict(_netcdf.leading_dims(ds, var))
+                except BaseException as exc:  # noqa: BLE001 - see _bad
+                    _bad(f"variable={var}", exc)
+                    continue
 
                 # Per-variable typo warning (includes bandDim in the check).
                 if var_ldims and (dim_index or fanout_dims or band_dim):
@@ -323,29 +343,37 @@ class NetcdfRasterReader(RasterGbxReader):
                     for dname, idx in zip(fanout_names, combo):
                         sel[dname] = idx
 
-                    if band_dim_for_var:
-                        n_bands = var_ldims[band_dim_for_var]
-                        source, tile = _encode_multiband_tile(
-                            ds,
-                            var,
-                            sel,
-                            band_dim_for_var,
-                            n_bands,
-                            transform,
-                            crs,
-                            nodata,
-                            partition.file_path,
+                    try:
+                        if band_dim_for_var:
+                            n_bands = var_ldims[band_dim_for_var]
+                            source, tile = _encode_multiband_tile(
+                                ds,
+                                var,
+                                sel,
+                                band_dim_for_var,
+                                n_bands,
+                                transform,
+                                crs,
+                                nodata,
+                                partition.file_path,
+                            )
+                        else:
+                            source, tile = _encode_single_band_tile(
+                                ds,
+                                var,
+                                sel,
+                                transform,
+                                crs,
+                                nodata,
+                                partition.file_path,
+                            )
+                    except BaseException as exc:  # noqa: BLE001 - see _bad
+                        _bad(
+                            f"variable={var}"
+                            + "".join(f",{d}={i}" for d, i in sorted(sel.items())),
+                            exc,
                         )
-                    else:
-                        source, tile = _encode_single_band_tile(
-                            ds,
-                            var,
-                            sel,
-                            transform,
-                            crs,
-                            nodata,
-                            partition.file_path,
-                        )
+                        continue
 
                     yield (source, tile)
 

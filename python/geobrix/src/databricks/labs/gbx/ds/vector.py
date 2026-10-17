@@ -1556,7 +1556,13 @@ class VectorGbxReader(DataSourceReader):
         if partition.as_wkb:
             geom_out = wkb.cast(pa.binary())
         else:
-            wkt = shapely.to_wkt(shapely.from_wkb(wkb.to_numpy(zero_copy_only=False)))
+            # Under read_paths' on_error="skip" (a bad-record hook on the reader) an
+            # unreadable WKB becomes a NULL geometry (set aside), not a failed file.
+            invalid = "ignore" if getattr(self, "_gbx_bad_record", None) else "raise"
+            geoms = shapely.from_wkb(
+                wkb.to_numpy(zero_copy_only=False), on_invalid=invalid
+            )
+            wkt = shapely.to_wkt(geoms)
             geom_out = pa.array(np.asarray(wkt, dtype=object), type=pa.string())
         cols = [
             (

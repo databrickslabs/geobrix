@@ -18,7 +18,7 @@ from typing import Callable, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from pyspark.sql.datasource import DataSourceReader, InputPartition
 
-from databricks.labs.gbx.ds import _listing, _xyz_mosaic
+from databricks.labs.gbx.ds import _listing, _quarantine, _xyz_mosaic
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
     copy_source_sequential,
@@ -140,6 +140,11 @@ class _TileLookup:
         )
 
     def get(self, z: int, x: int, y: int) -> Optional[bytes]:
+        found = self.lookup(z, x, y)
+        return None if found is None else found[0]
+
+    def lookup(self, z: int, x: int, y: int) -> Optional[Tuple[bytes, int]]:
+        """``(tile bytes, length its directory entry declares)``, or None."""
         from pmtiles.tile import find_tile, zxy_to_tileid
 
         h = self._header
@@ -153,7 +158,8 @@ class _TileLookup:
                 offset = h["leaf_directory_offset"] + entry.offset
                 length = entry.length
                 continue
-            return self._get_bytes(h["tile_data_offset"] + entry.offset, entry.length)
+            data = self._get_bytes(h["tile_data_offset"] + entry.offset, entry.length)
+            return data, entry.length
         return None
 
 
@@ -279,12 +285,26 @@ class PMtilesArchiveReader(DataSourceReader):
         # Range reads on a worker-local copy (staged once per worker process): a
         # partition reads the header, the directories its tiles fall in and its
         # own tiles -- not the whole archive.
+        # With read_paths' on_error="skip" (a hook on the reader) a tile whose
+        # bytes are shorter than its directory entry (a truncated archive) is a
+        # bad record; without one it is returned as read.
+        hook = _quarantine.hook_of(self)
         with (
             _ARCHIVE_STAGE.use(partition.sources[0]) as local,
             open(local, "rb") as fh,
         ):
             tiles = _TileLookup(_range_source(fh))
             for z, x, y in partition.tiles:
-                data = tiles.get(z, x, y)
-                if data is not None:
-                    yield (z, x, y, bytes(data))
+                found = tiles.lookup(z, x, y)
+                if found is None:
+                    continue
+                data, declared = found
+                if hook is not None and len(data) != declared:
+                    hook(
+                        f"tile={z}/{x}/{y}",
+                        _quarantine.SHORT_TILE,
+                        f"tile has {len(data)} of the {declared} bytes its "
+                        "directory entry declares: the archive is truncated",
+                    )
+                    continue
+                yield (z, x, y, bytes(data))

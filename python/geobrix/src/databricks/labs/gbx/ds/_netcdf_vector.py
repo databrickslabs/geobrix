@@ -12,7 +12,7 @@ from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 from pyspark.sql.datasource import DataSourceReader, InputPartition
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
-from databricks.labs.gbx.ds import _listing, _netcdf
+from databricks.labs.gbx.ds import _listing, _netcdf, _quarantine
 
 
 class _NcFilePartition(InputPartition):
@@ -60,6 +60,15 @@ class NetcdfVectorReader(DataSourceReader):
 
     def read(self, partition: "_NcFilePartition") -> Iterator[Tuple]:
         import shapely
+
+        # With read_paths' on_error="skip" (a hook on the reader) a truncated
+        # classic file is a bad record instead of rows of zeros.
+        hook = _quarantine.hook_of(self)
+        if hook is not None:
+            short = _netcdf.classic_truncation(partition.file_path)
+            if short is not None:
+                hook(None, _quarantine.RECORDS_NOT_READ, short)
+                return
 
         with _netcdf.open_dataset(partition.file_path, self.group) as ds:
             variables = self._variables(ds)

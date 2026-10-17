@@ -25,6 +25,31 @@ _LAT_NAMES = {"lat", "latitude", "y"}
 _LON_NAMES = {"lon", "longitude", "x"}
 
 
+def classic_truncation(path: str) -> Optional[str]:
+    """Why a NetCDF classic (``CDF``) file is shorter than the data its header
+    declares, or None (also for NetCDF-4 / HDF5 files, which are not checked
+    here). Classic files carry no checksum: read through netCDF4 the missing data
+    comes back as zeros, so the size check is the only sign. scipy maps the file
+    (no data is read) and fails to shape a variable that runs past its end."""
+    import warnings
+
+    with open(path, "rb") as fh:
+        if fh.read(3) != b"CDF":
+            return None
+    from scipy.io import netcdf_file
+
+    try:
+        f = netcdf_file(path, "r", mmap=True)
+    except ValueError as e:
+        return f"the file is shorter than the data its header declares: {e}"
+    except Exception:  # noqa: BLE001 - not this check's error: the reader reports it
+        return None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # closing a mapped file with live arrays
+        f.close()
+    return None
+
+
 @contextmanager
 def open_dataset(path: str, group: Optional[str]) -> Iterator["object"]:
     """Open a NetCDF file as an xarray.Dataset (netcdf4 engine), optional HDF5 group."""

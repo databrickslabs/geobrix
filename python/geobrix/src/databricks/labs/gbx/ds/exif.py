@@ -23,7 +23,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _listing
+from databricks.labs.gbx.ds import _listing, _quarantine
 from databricks.labs.gbx.ds.file_gbx import list_local_files
 
 if TYPE_CHECKING:
@@ -62,6 +62,9 @@ EXIF_QC_SCHEMA = StructType(
 
 # Extensions recognized as camera images for EXIF extraction.
 _EXIF_EXTS = (".jpg", ".jpeg", ".tif", ".tiff")
+
+# Bytes at the end of a JPEG searched for its end marker (see _jpeg_problem).
+_JPEG_TAIL = 64 * 1024
 
 
 def _exif_arrow_schema(spark_schema: StructType) -> "pa.Schema":
@@ -269,20 +272,31 @@ class ExifGbxReader(DataSourceReader):
                 stacklevel=2,
             )
 
+    def _skip(self, message: str, error_class: str, detail: str) -> None:
+        """A file this reader cannot use: skipped with a warning, or (with a
+        read_paths hook, ``on_error="skip"``) a bad record of the file."""
+        hook = _quarantine.hook_of(self)
+        if hook is not None:
+            hook(None, error_class, detail)
+        else:
+            warnings.warn(message, stacklevel=3)
+
     def _open_file(self, local: str):
         """Return (stat_result, exifread_tags) or raise/warn and return None."""
         try:
             st = _listing._retry_transient(lambda: os.stat(local))
             if st.st_size == 0:
-                warnings.warn(
+                self._skip(
                     f"exif_gbx: skipping empty file {local!r} (0 bytes)",
-                    stacklevel=2,
+                    _quarantine.UNREADABLE_FILE,
+                    "empty file (0 bytes)",
                 )
                 return None, None
         except Exception as exc:  # noqa: BLE001
-            warnings.warn(
+            self._skip(
                 f"exif_gbx: skipping unreadable file {local!r}: {exc}",
-                stacklevel=2,
+                _quarantine.error_class(exc),
+                _quarantine.describe(exc),
             )
             return None, None
 
@@ -297,11 +311,32 @@ class ExifGbxReader(DataSourceReader):
             with fh:
                 return st, exifread.process_file(fh, details=False)
         except Exception as exc:  # noqa: BLE001
-            warnings.warn(
+            self._skip(
                 f"exif_gbx: skipping file with unreadable EXIF {local!r}: {exc}",
-                stacklevel=2,
+                _quarantine.error_class(exc),
+                _quarantine.describe(exc),
             )
             return None, None
+
+    def _jpeg_problem(self, local: str, size: int) -> Optional[str]:
+        """Why a ``.jpg`` / ``.jpeg`` file is not a whole JPEG, or None: it must
+        start with the SOI marker (FFD8) and hold the EOI marker (FFD9) in its
+        last 64 KiB (data some cameras append after the image is allowed). Other
+        extensions (TIFF) are not checked."""
+        if not local.lower().endswith((".jpg", ".jpeg")):
+            return None
+        fh = _listing._retry_transient(lambda: open(local, "rb"))  # noqa: WPS515
+        with fh:
+            head = fh.read(2)
+            if head != b"\xff\xd8":
+                return "no JPEG start marker (FFD8): not a JPEG file"
+            fh.seek(max(2, size - _JPEG_TAIL))
+            if b"\xff\xd9" not in fh.read():
+                return (
+                    "no JPEG end marker (FFD9) at the end of the file: it is "
+                    "truncated"
+                )
+        return None
 
     def _build_metadata_row(self, local: str, source: str, tags) -> dict:
         """Parse EXIF tags into a dict matching EXIF_META_SCHEMA (no pixel decode)."""
@@ -369,9 +404,18 @@ class ExifGbxReader(DataSourceReader):
         local = _listing.to_local_path(file_path)
         source = _listing.to_spark_uri(file_path)
 
-        _, tags = self._open_file(local)
+        st, tags = self._open_file(local)
         if tags is None:
             return
+        hook = _quarantine.hook_of(self)
+        if hook is not None:
+            # Metadata mode reads no pixels, so a truncated or non-JPEG file
+            # still gives a row; with read_paths' on_error="skip" it is a bad
+            # record of the file instead.
+            problem = self._jpeg_problem(local, st.st_size)
+            if problem is not None:
+                hook(None, _quarantine.NOT_JPEG, problem)
+                return
 
         row = self._build_metadata_row(local, source, tags)
         yield pa.RecordBatch.from_pylist(
@@ -399,11 +443,13 @@ class ExifGbxReader(DataSourceReader):
             st.st_size, kind="read", cap_bytes=self._qc_cap_bytes
         )
         if decision != "stream":
-            warnings.warn(
+            self._skip(
                 f"exif_gbx qc: skipping {local!r} — file size {st.st_size} bytes "
                 "exceeds the Serverless materialize cap; use a classic cluster "
                 "for large images",
-                stacklevel=2,
+                _quarantine.FILE_TOO_LARGE,
+                f"file size {st.st_size} bytes exceeds the memory cap for reading "
+                "an image whole (qc mode); use a classic cluster for large images",
             )
             return
 
@@ -413,9 +459,10 @@ class ExifGbxReader(DataSourceReader):
             with fh:
                 raw = fh.read()
         except Exception as exc:  # noqa: BLE001
-            warnings.warn(
+            self._skip(
                 f"exif_gbx qc: skipping {local!r} — cannot read bytes: {exc}",
-                stacklevel=2,
+                _quarantine.error_class(exc),
+                _quarantine.describe(exc),
             )
             return
 

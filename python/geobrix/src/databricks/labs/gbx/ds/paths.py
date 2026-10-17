@@ -13,6 +13,10 @@ Paths are Unity Catalog Volume (FUSE) paths; ``dbfs:`` / ``file:`` prefixes are
 accepted; object-store URIs (``s3://``, ``abfss://``, ...) and GDAL ``/vsi...``
 paths (``/vsimem/`` included) are rejected.
 
+``on_error="skip"`` reads each file, and each reader partition of it, on its
+own and sets bad records aside (see ``ds/_quarantine.py``); ``declare_ingest``
+quarantines them to a table the same way.
+
 Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 """
 
@@ -34,7 +38,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _listing
+from databricks.labs.gbx.ds import _listing, _quarantine
 
 _LOG = logging.getLogger(__name__)
 
@@ -69,6 +73,10 @@ SUPPORTED_FORMATS = (
 # netcdf_gbx is not one: both of its modes read a file as one partition (every
 # variable and slice in one pass), so it is spread by file like the vector readers.
 TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx", "pmtiles_gbx")
+
+# read_paths(on_error=...): "fail" an error fails the read (naming the file);
+# "skip" logs and skips bad records (see _quarantine) and reads everything else.
+ON_ERROR_MODES = ("fail", "skip")
 
 # Default file pattern per reader, in Spark ``pathGlobFilter`` (Hadoop glob)
 # syntax, matched against the file name. Hadoop globs are case-sensitive, so each
@@ -137,6 +145,16 @@ _PLAN_ROWS_PER_BATCH = 8192
 # plans its own per-file partitions and ignores them).
 _PATHLESS_RASTER_OPTIONS = ("manifest", "tilesTable")
 _MANIFEST_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx")
+
+
+def _check_on_error(on_error: str, bad_records_dir: Optional[str] = None) -> str:
+    if on_error not in ON_ERROR_MODES:
+        raise ValueError(
+            f"read_paths on_error must be one of {ON_ERROR_MODES}; got {on_error!r}."
+        )
+    if bad_records_dir is not None and on_error != "skip":
+        raise ValueError("bad_records_dir needs on_error='skip'.")
+    return on_error
 
 
 def _sources() -> Dict[str, type]:
@@ -498,6 +516,41 @@ def _exists(local: str) -> bool:
         return False
 
 
+class _ReadState:
+    """Rows of one reader partition so far: ``seen`` = returned by the reader (a
+    row's position in the file), ``kept`` = emitted."""
+
+    __slots__ = ("seen", "kept")
+
+    def __init__(self):
+        self.seen = 0
+        self.kept = 0
+
+
+def _is_vector(reader) -> bool:
+    from databricks.labs.gbx.ds.vector import VectorGbxReader
+
+    return isinstance(reader, VectorGbxReader)
+
+
+def _set_aside(batch, geometry, bad, local, mtime_us, state) -> pa.RecordBatch:
+    """``batch`` without its bad rows (see :func:`_quarantine.bad_rows`), which go
+    to ``bad`` with their position in the file and their other columns."""
+    offset = state.seen
+    state.seen += batch.num_rows
+    found = _quarantine.bad_rows(batch, geometry)
+    if not found:
+        return batch
+    unit = "feature" if geometry else "row"
+    skip = (geometry, f"{geometry}_srid", f"{geometry}_srid_proj") if geometry else ()
+    for i in sorted(found):
+        cls, msg = found[i]
+        raw = _quarantine.row_json(batch, i, skip)
+        bad.add(local, mtime_us, f"{unit}={offset + i}", cls, msg, raw)
+    keep = pa.array([i not in found for i in range(batch.num_rows)], pa.bool_())
+    return batch.filter(keep)
+
+
 def _read_partition(
     reader,
     part,
@@ -506,9 +559,16 @@ def _read_partition(
     schema: StructType,
     want: pa.Schema,
     lineage: bool,
+    bad=None,
+    state: Optional[_ReadState] = None,
 ) -> Iterator[pa.RecordBatch]:
     """Arrow batches for one reader partition, checked against ``want`` and
-    realigned to its column order (+ lineage columns)."""
+    realigned to its column order (+ lineage columns). With ``bad`` (a
+    :class:`_quarantine.BadRecords`), rows that are not data are set aside."""
+    geometry = None
+    if bad is not None:
+        state = state if state is not None else _ReadState()
+        geometry = _quarantine.geometry_column(want) if _is_vector(reader) else None
     for batch in _as_batches(reader.read(part), schema):
         if batch.num_rows == 0:
             # Nothing to emit; a zero-row batch (e.g. a zero-feature GeoJSON)
@@ -520,6 +580,11 @@ def _read_partition(
             # Same columns, different file order: realign to the positional
             # output schema so values never land in the wrong column.
             batch = batch.select(want.names)
+        if bad is not None:
+            batch = _set_aside(batch, geometry, bad, local, mtime_us, state)
+            if batch.num_rows == 0:
+                continue
+            state.kept += batch.num_rows
         if lineage:
             n = batch.num_rows
             batch = batch.append_column(
@@ -529,20 +594,39 @@ def _read_partition(
         yield batch
 
 
-def iter_path_batches(
-    path: str,
-    mtime_us: Optional[int],
-    fmt: str,
-    options: Optional[dict],
-    expected: Optional[StructType] = None,
-    lineage: bool = True,
-) -> Iterator[pa.RecordBatch]:
-    """Arrow batches for one file (session-free). A file that no longer exists is
-    skipped with a warning; ``expected`` (lineage included or not) is enforced,
-    first on the schema the file declares (even with no rows), then per batch."""
-    local = _fuse_path(path)
-    if not _exists(local):
-        return
+def _bounded(it, bad, local, mtime_us, state, label=None):
+    """Batches of ``it`` with ``it`` as the unit of failure: an error (any
+    exception, a Rust panic included) is recorded with the warnings and log
+    lines seen while reading, rows already emitted stay, and the read goes on
+    with what follows. Returns True when ``it`` completed."""
+    diag = _quarantine.Diagnostics()
+    while True:
+        try:
+            with _quarantine.capture(diag):
+                batch = next(it)
+        except StopIteration:
+            return True
+        except _quarantine.PASS_THROUGH:
+            raise
+        except BaseException as e:  # noqa: BLE001 - recorded as a bad record
+            bad.add_error(local, mtime_us, e, diag, state.kept, label)
+            return False
+        yield batch
+
+
+def _guarded(reader, part, local, mtime_us, schema, want, lineage, bad, state):
+    """:func:`_read_partition` with the partition as the unit of failure (see
+    :func:`_bounded`; ``record_index`` = the partition's place in the file)."""
+    it = _read_partition(
+        reader, part, local, mtime_us, schema, want, lineage, bad, state
+    )
+    label = _quarantine.part_label(part)
+    return (yield from _bounded(it, bad, local, mtime_us, state, label))
+
+
+def _open_file(fmt, options, local, expected):
+    """``(ds, reader, schema, want, partitions)`` for one file, with its declared
+    schema checked against ``expected``."""
     ds = resolve_format(fmt)({**(options or {}), "path": local})
     schema = (
         _base(expected) if expected is not None else _reader_schema(fmt, options, local)
@@ -551,23 +635,98 @@ def iter_path_batches(
     reader = ds.reader(schema)
     if expected is not None:
         _check_file_schema(ds, reader, local, want)
-    for part in reader.partitions():
-        yield from _read_partition(reader, part, local, mtime_us, schema, want, lineage)
+    return ds, reader, schema, want, list(reader.partitions())
 
 
-def _plan_batches(fmt: str, opts: dict, schema: StructType):
+def _open_guarded(bad, local, mtime_us, opener):
+    """``opener()``, or None after recording its error as a whole-file bad record."""
+    diag = _quarantine.Diagnostics()
+    try:
+        with _quarantine.capture(diag):
+            return opener()
+    except _quarantine.PASS_THROUGH:
+        raise
+    except BaseException as e:  # noqa: BLE001 - recorded as a bad record
+        bad.add_error(local, mtime_us, e, diag)
+        return None
+
+
+def iter_path_batches(
+    path: str,
+    mtime_us: Optional[int],
+    fmt: str,
+    options: Optional[dict],
+    expected: Optional[StructType] = None,
+    lineage: bool = True,
+    bad_records=None,
+) -> Iterator[pa.RecordBatch]:
+    """Arrow batches for one file (session-free). A file that no longer exists is
+    skipped with a warning; ``expected`` (lineage included or not) is enforced,
+    first on the schema the file declares (even with no rows), then per batch.
+
+    ``bad_records`` None (``on_error="fail"``): an error fails the read and names
+    the file. A :class:`_quarantine.BadRecords`: errors and rows that are not
+    data are recorded there instead, and the rest of the file is read."""
+    local = _fuse_path(path)
+    if not _exists(local):
+        return
+    if bad_records is None:
+        try:
+            _, reader, schema, want, parts = _open_file(fmt, options, local, expected)
+            for part in parts:
+                yield from _read_partition(
+                    reader, part, local, mtime_us, schema, want, lineage
+                )
+        except Exception as e:
+            _quarantine.name_the_file(e, local)
+            raise
+        return
+    bad = bad_records
+    opened = _open_guarded(
+        bad, local, mtime_us, lambda: _open_file(fmt, options, local, expected)
+    )
+    if opened is None:
+        return
+    _, reader, schema, want, parts = opened
+    setattr(reader, _quarantine.HOOK, bad.hook(local, mtime_us))
+    vector = _is_vector(reader)
+    for part in parts:
+        state = _ReadState()
+        done = yield from _guarded(
+            reader, part, local, mtime_us, schema, want, lineage, bad, state
+        )
+        if done and vector:
+            checked = _reconcile_vector(
+                reader, part, local, mtime_us, schema, want, lineage, bad, state
+            )
+            yield from _bounded(checked, bad, local, mtime_us, state)
+
+
+def _collector(on_error: str, bad_records_dir: Optional[str]):
+    return _quarantine.BadRecords(bad_records_dir) if on_error == "skip" else None
+
+
+def _plan_batches(
+    fmt: str,
+    opts: dict,
+    schema: StructType,
+    on_error: str = "fail",
+    bad_records_dir: Optional[str] = None,
+):
     """``mapInArrow`` function: ``(path, mtime)`` rows -> one ``(path, mtime,
     part)`` row per reader partition of each file (``part`` = pickled partition).
     Each file's declared schema is checked against ``schema`` here, once. Files
-    that no longer exist are skipped with a warning. Output batches hold at
-    most ``_PLAN_ROWS_PER_BATCH`` rows (read here, on the driver, so the value
-    travels with the function)."""
+    that no longer exist are skipped with a warning; with ``on_error="skip"`` a
+    file that cannot be planned is a bad record. Output batches hold at most
+    ``_PLAN_ROWS_PER_BATCH`` rows (read here, on the driver, so the value travels
+    with the function)."""
     base = _base(schema)
     cap = int(_PLAN_ROWS_PER_BATCH)
 
     def _plan(batches):
         out = _arrow_schema(_PLAN_SCHEMA)
         want = _arrow_schema(base)
+        bad = _collector(on_error, bad_records_dir)
         paths: list = []
         mtimes: list = []
         parts: list = []
@@ -586,57 +745,389 @@ def _plan_batches(fmt: str, opts: dict, schema: StructType):
             parts.clear()
             return batch
 
-        for b in batches:
-            for p, us in zip(
-                b.column("path").to_pylist(),
-                b.column("mtime").cast(pa.int64()).to_pylist(),
-            ):
-                local = _fuse_path(p)
-                if not _exists(local):
-                    continue
-                ds = resolve_format(fmt)({**opts, "path": local})
-                reader = ds.reader(base)
-                _check_file_schema(ds, reader, local, want)
-                for part in reader.partitions():
-                    paths.append(local)
-                    mtimes.append(us)
-                    parts.append(pickle.dumps(part))
-                    if len(parts) >= cap:
-                        yield _flush()
-        if parts:
-            yield _flush()
+        def _partitions(local):
+            ds = resolve_format(fmt)({**opts, "path": local})
+            reader = ds.reader(base)
+            _check_file_schema(ds, reader, local, want)
+            return list(reader.partitions())
+
+        try:
+            for b in batches:
+                for p, us in zip(
+                    b.column("path").to_pylist(),
+                    b.column("mtime").cast(pa.int64()).to_pylist(),
+                ):
+                    local = _fuse_path(p)
+                    if not _exists(local):
+                        continue
+                    if bad is None:
+                        try:
+                            planned = _partitions(local)
+                        except Exception as e:
+                            _quarantine.name_the_file(e, local)
+                            raise
+                    else:
+                        planned = _open_guarded(
+                            bad, local, us, lambda local=local: _partitions(local)
+                        )
+                        if planned is None:
+                            continue
+                    for part in planned:
+                        paths.append(local)
+                        mtimes.append(us)
+                        parts.append(pickle.dumps(part))
+                        if len(parts) >= cap:
+                            yield _flush()
+            if parts:
+                yield _flush()
+        finally:
+            if bad is not None:
+                bad.close()
 
     return _plan
 
 
-def _read_planned(fmt: str, opts: dict, schema: StructType, lineage: bool):
+def _read_planned(
+    fmt: str,
+    opts: dict,
+    schema: StructType,
+    lineage: bool,
+    on_error: str = "fail",
+    bad_records_dir: Optional[str] = None,
+):
     """``mapInArrow`` function: planned ``(path, mtime, part)`` rows -> the
     reader's output for each partition. One reader (and one existence check) per
-    file per task."""
+    file per task. With ``on_error="skip"`` each partition (a tile window, a
+    group of tiles) is the unit of failure."""
     base = _base(schema)
 
     def _read(batches):
         want = _arrow_schema(base)
+        bad = _collector(on_error, bad_records_dir)
         readers: dict = {}
-        for b in batches:
-            for local, us, blob in zip(
-                b.column("path").to_pylist(),
-                b.column("mtime").cast(pa.int64()).to_pylist(),
-                b.column("part").to_pylist(),
-            ):
-                if local not in readers:
-                    readers[local] = (
-                        resolve_format(fmt)({**opts, "path": local}).reader(base)
-                        if _exists(local)
-                        else None
-                    )
-                reader = readers[local]
-                if reader is None:
-                    continue
-                part = pickle.loads(blob)
-                yield from _read_partition(reader, part, local, us, base, want, lineage)
+
+        def _reader(local, us):
+            if not _exists(local):
+                return None
+            if bad is None:
+                try:
+                    return resolve_format(fmt)({**opts, "path": local}).reader(base)
+                except Exception as e:
+                    _quarantine.name_the_file(e, local)
+                    raise
+            reader = _open_guarded(
+                bad,
+                local,
+                us,
+                lambda: resolve_format(fmt)({**opts, "path": local}).reader(base),
+            )
+            if reader is not None:
+                setattr(reader, _quarantine.HOOK, bad.hook(local, us))
+            return reader
+
+        try:
+            for b in batches:
+                for local, us, blob in zip(
+                    b.column("path").to_pylist(),
+                    b.column("mtime").cast(pa.int64()).to_pylist(),
+                    b.column("part").to_pylist(),
+                ):
+                    if local not in readers:
+                        readers[local] = _reader(local, us)
+                    reader = readers[local]
+                    if reader is None:
+                        continue
+                    part = pickle.loads(blob)
+                    if bad is not None:
+                        yield from _guarded(
+                            reader,
+                            part,
+                            local,
+                            us,
+                            base,
+                            want,
+                            lineage,
+                            bad,
+                            _ReadState(),
+                        )
+                        continue
+                    try:
+                        yield from _read_partition(
+                            reader, part, local, us, base, want, lineage
+                        )
+                    except Exception as e:
+                        _quarantine.name_the_file(e, local)
+                        raise
+        finally:
+            if bad is not None:
+                bad.close()
 
     return _read
+
+
+# ---------------------------------------------------------------------------
+# Vector count checks: features a file declares but the reader did not return
+# ---------------------------------------------------------------------------
+
+# Bound on the per-feature probes over one unreadable stretch of a GeoPackage.
+_GPKG_PROBE_LIMIT = 100_000
+
+
+def _reconcile_vector(reader, part, local, mtime_us, schema, want, lineage, bad, state):
+    """After a vector file read without an error, compare the features read with
+    the count the file declares (GeoJSONSeq: its records). Not with a ``bbox``
+    or ``where`` filter, nor for GeoJSON (parsed whole: it fails rather than
+    dropping a feature). A shortfall is a bad record; a GeoPackage read that
+    ended early is resumed past the unreadable page first, and the features on
+    it are recorded one by one. Yields the resumed rows."""
+    if getattr(part, "bbox", None) or getattr(part, "where", None):
+        return
+    kind = _quarantine.count_kind(part.path)
+    if kind is None:
+        return
+    try:
+        with _quarantine.capture():
+            if kind == "lines":
+                declared = _quarantine.sequence_record_count(part.path)
+            else:
+                info = reader._info_for(part.path)
+                declared = int(info.get("features", -1))
+    except _quarantine.PASS_THROUGH:
+        raise
+    except Exception:  # noqa: BLE001 - nothing to compare with
+        return
+    if declared < 0 or state.seen >= declared:
+        return
+    if kind == "lines":
+        _bad_lines(part.path, local, mtime_us, declared, state, bad)
+        return
+    driver = info.get("driver") or ""
+    if driver in ("GPKG", "SQLite"):
+        yield from _resume_gpkg(
+            reader,
+            part,
+            info,
+            declared,
+            local,
+            mtime_us,
+            schema,
+            want,
+            lineage,
+            bad,
+            state,
+        )
+        return
+    deleted = 0
+    if driver == "ESRI Shapefile":
+        try:
+            deleted = _quarantine.dbf_deleted_count(part.path)
+        except OSError:
+            deleted = 0
+    if state.seen + deleted < declared:
+        _not_read(bad, local, mtime_us, state.seen + deleted, declared)
+
+
+def _not_read(bad, local, mtime_us, read, declared, why="") -> None:
+    bad.add(
+        local,
+        mtime_us,
+        None,
+        _quarantine.RECORDS_NOT_READ,
+        f"{declared - read} of the {declared} features the file declares were not "
+        f"returned by the reader{why}",
+    )
+
+
+def _bad_lines(path, local, mtime_us, declared, state, bad) -> None:
+    """GeoJSONSeq: the records the reader dropped, found by parsing each record."""
+    import json
+
+    found = _quarantine.unparseable_lines(path, limit=declared - state.seen)
+    for line, err, text in found:
+        bad.add(
+            local,
+            mtime_us,
+            f"line={line}",
+            _quarantine.RECORDS_NOT_READ,
+            f"line {line} is not a GeoJSON feature: {err}",
+            json.dumps({"line": text}, ensure_ascii=False),
+        )
+    if state.seen + len(found) < declared:
+        _not_read(bad, local, mtime_us, state.seen + len(found), declared)
+
+
+def _gpkg_fids(name, layer, where=None, max_features=None) -> list:
+    import pyogrio
+
+    kw = {"layer": layer, "columns": [], "read_geometry": False, "return_fids": True}
+    if where:
+        kw["where"] = where
+    if max_features is not None:
+        kw["max_features"] = max_features
+    meta, tbl = pyogrio.read_arrow(name, **kw)
+    return tbl.column(meta.get("fid_column") or "OGC_FID").to_pylist()
+
+
+class _GpkgGaps:
+    """Probes over one staged GeoPackage layer for :func:`_resume_gpkg`."""
+
+    def __init__(self, name, layer, fid_column):
+        self.name, self.layer = name, layer
+        self.fid = _quarantine.quote_ident(fid_column or "fid")
+        self.lost: list = []  # fids whose read fails: on an unreadable page
+        self.unclear: list = []  # gap fids no read finds (absent, or garbled)
+        self.first_error = ""
+
+    def max_fid(self):
+        import pyogrio
+
+        _, tbl = pyogrio.read_arrow(
+            self.name,
+            sql=f"SELECT MAX({self.fid}) AS m FROM {_quarantine.quote_ident(self.layer)}",
+        )
+        return tbl.column(0)[0].as_py()
+
+    def last_fid(self, where, n):
+        """The fid of the ``n``-th feature ``where`` reads (in fid order)."""
+        return _gpkg_fids(self.name, self.layer, where, n)[-1]
+
+    def starts(self, k) -> bool:
+        """True if a read of ``fid >= k`` starts, with geometry and attributes
+        as the resumed read will (a garbled cell can read without them)."""
+        import pyogrio
+
+        try:
+            pyogrio.read_arrow(
+                self.name, layer=self.layer, where=f"{self.fid} >= {k}", max_features=1
+            )
+            return True
+        except Exception:  # noqa: BLE001 - the read cannot start there
+            return False
+
+    def first_start(self, last, max_fid) -> int:
+        """Smallest k in (last, max_fid] a read can start from (max_fid + 1 when
+        none can): exponential search, then bisection; ``lo`` cannot start (or
+        is ``last``), ``hi`` can."""
+        lo, step, hi = last, 1, None
+        while last + step <= max_fid:
+            if self.starts(last + step):
+                hi = last + step
+                break
+            lo = last + step
+            step *= 2
+        if hi is None:
+            hi = max_fid if self.starts(max_fid) else max_fid + 1
+        while hi - lo > 1:
+            mid = (lo + hi) // 2
+            if self.starts(mid):
+                hi = mid
+            else:
+                lo = mid
+        return hi
+
+    def probe(self, gap) -> list:
+        """Classify each fid of ``gap`` with ``fid = x``: lost (the read fails),
+        unclear (no row) or readable (returned)."""
+        readable = []
+        for x in gap:
+            try:
+                if _gpkg_fids(self.name, self.layer, f"{self.fid} = {x}"):
+                    readable.append(x)
+                else:
+                    self.unclear.append(x)
+            except Exception as e:  # noqa: BLE001 - on the unreadable page
+                self.lost.append(x)
+                self.first_error = self.first_error or _quarantine._one_line(e)
+        return readable
+
+    def record(self, bad, local, mtime_us, seen, declared) -> None:
+        # A garbled cell can hide its fid: the gap fids no read finds are the
+        # missing features when exactly that many are missing.
+        if self.unclear and declared - seen - len(self.lost) == len(self.unclear):
+            self.lost, self.unclear = sorted(self.lost + self.unclear), []
+            self.first_error = self.first_error or "no read finds it"
+        for x in self.lost:
+            bad.add(
+                local,
+                mtime_us,
+                f"fid={x}",
+                _quarantine.RECORDS_NOT_READ,
+                f"feature fid {x} is on an unreadable page of the GeoPackage: "
+                f"{self.first_error}",
+            )
+        if seen + len(self.lost) < declared:
+            why = (
+                f" (fids {self.unclear[0]} to {self.unclear[-1]} are on an "
+                "unreadable page)"
+                if self.unclear
+                else ""
+            )
+            _not_read(bad, local, mtime_us, seen + len(self.lost), declared, why)
+
+
+def _resume_gpkg(
+    reader, part, info, declared, local, mtime_us, schema, want, lineage, bad, state
+):
+    """A GeoPackage whose read ended early (a corrupt SQLite page ends OGR's scan
+    without an error): resume with ``fid >= k`` (an indexed seek past the page;
+    ``skip_features`` would scan into it), where ``k`` is the first fid a read can
+    start from, and probe each fid in between (``fid = x``): one that fails is a
+    feature on the unreadable page, recorded exactly. Repeats until every
+    declared feature is read or accounted for."""
+    from databricks.labs.gbx.ds.vector import _ChunkPartition
+
+    def segment(where):
+        """Read ``where`` through the reader (rows set aside as usual); an error
+        ends it: the next probe finds what it could not read."""
+        seg = _ChunkPartition(
+            part.path, part.driver, part.layer, part.as_wkb, 0, 0, where=where
+        )
+        it = _read_partition(
+            reader, seg, local, mtime_us, schema, want, lineage, bad, state
+        )
+        while True:
+            try:
+                with _quarantine.capture():
+                    batch = next(it)
+            except StopIteration:
+                return
+            except _quarantine.PASS_THROUGH:
+                raise
+            except Exception:  # noqa: BLE001 - found by the next probe
+                return
+            yield batch
+
+    with reader._staged(part.path) as staged:
+        gaps = _GpkgGaps(
+            reader._source_name(part.path, staged),
+            info.get("layer_name") or part.layer,
+            info.get("fid_column"),
+        )
+        fid = gaps.fid
+        try:
+            max_fid = gaps.max_fid()
+            last = gaps.last_fid(None, state.seen) if state.seen else 0
+        except Exception:  # noqa: BLE001 - cannot locate the gap
+            max_fid, last = None, 0
+        while max_fid is not None and last < max_fid:
+            if state.seen + len(gaps.lost) >= declared:
+                break
+            before = (state.seen, len(gaps.lost))
+            k = gaps.first_start(last, max_fid)
+            if k - last - 1 > _GPKG_PROBE_LIMIT:
+                break
+            readable = gaps.probe(range(last + 1, k))
+            if readable:
+                yield from segment(f"{fid} IN ({', '.join(map(str, readable))})")
+            if k > max_fid:
+                break
+            n0 = state.seen
+            yield from segment(f"{fid} >= {k}")
+            read = state.seen - n0
+            last = gaps.last_fid(f"{fid} >= {k}", read) if read else k
+            if (state.seen, len(gaps.lost)) == before:
+                break
+    gaps.record(bad, local, mtime_us, state.seen, declared)
 
 
 def read_paths(
@@ -649,7 +1140,9 @@ def read_paths(
     schema_path: Optional[str] = None,
     num_partitions: Optional[int] = None,
     lineage: bool = True,
+    on_error: str = "fail",
     schema: Optional[StructType] = None,
+    bad_records_dir: Optional[str] = None,
 ):
     """Read every file named in ``df[path_col]`` with a light reader.
 
@@ -661,9 +1154,18 @@ def read_paths(
     ``df``; required for a stream). A file deleted before it is read is skipped
     with a warning.
 
+    ``on_error`` (see :data:`ON_ERROR_MODES`): ``"fail"`` (default) fails the
+    read on an error, naming the file. ``"skip"`` reads each file (and each
+    raster window or group of PMTiles tiles) on its own: an error, a row that is
+    not data (invalid text; for vector formats a NULL, unreadable or empty
+    geometry) and records a file declares but its reader does not return are
+    logged as warnings and skipped, and everything else is read.
+
     ``schema`` (internal) is an already resolved schema, as from
     :func:`path_schema` (lineage columns optional); given, no file is opened to
-    resolve it.
+    resolve it. ``bad_records_dir`` (internal, with ``on_error="skip"``): write
+    the skipped records to Parquet files in that folder instead of logging them
+    (``declare_ingest`` quarantine).
 
     ``num_partitions`` repartitions the work: by file for vector / LiDAR / EXIF /
     NetCDF, by tile window for raster (``raster_gbx`` / ``gtiff_gbx`` /
@@ -673,6 +1175,7 @@ def read_paths(
     """
     from pyspark.sql import functions as F
 
+    _check_on_error(on_error, bad_records_dir)
     two_stage = _check_options(format, options) in TWO_STAGE_FORMATS
     if schema is not None:
         schema = _output_schema(schema, lineage)
@@ -698,20 +1201,30 @@ def read_paths(
     )
     src = df.select(*cols)
     fmt, opts, keep = format, dict(options or {}), lineage
+    mode, bad_dir = on_error, bad_records_dir
     if two_stage:
-        planned = src.mapInArrow(_plan_batches(fmt, opts, schema), _PLAN_SCHEMA)
+        planned = src.mapInArrow(
+            _plan_batches(fmt, opts, schema, mode, bad_dir), _PLAN_SCHEMA
+        )
         if num_partitions:
             # Hash on the pickled partition: each window of one file is distinct.
             planned = planned.repartition(int(num_partitions), "part")
-        return planned.mapInArrow(_read_planned(fmt, opts, schema, keep), schema)
+        return planned.mapInArrow(
+            _read_planned(fmt, opts, schema, keep, mode, bad_dir), schema
+        )
     if num_partitions:
         src = src.repartition(int(num_partitions), "path")
 
     def _read(batches):
-        for b in batches:
-            paths = b.column("path").to_pylist()
-            mtimes = b.column("mtime").cast(pa.int64()).to_pylist()
-            for p, us in zip(paths, mtimes):
-                yield from iter_path_batches(p, us, fmt, opts, schema, keep)
+        bad = _collector(mode, bad_dir)
+        try:
+            for b in batches:
+                paths = b.column("path").to_pylist()
+                mtimes = b.column("mtime").cast(pa.int64()).to_pylist()
+                for p, us in zip(paths, mtimes):
+                    yield from iter_path_batches(p, us, fmt, opts, schema, keep, bad)
+        finally:
+            if bad is not None:
+                bad.close()
 
     return src.mapInArrow(_read, schema)

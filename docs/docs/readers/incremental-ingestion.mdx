@@ -1,0 +1,256 @@
+---
+sidebar_position: 3
+sidebar_label: Incremental Ingestion
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import ingestExamples from '!!raw-loader!../../tests/python/readers/incremental_ingestion_examples.py';
+
+# Incremental ingestion with Auto Loader
+
+_Since:_ lightweight `read_paths` and `declare_ingest` **v0.5.3** · _(light-only — no heavyweight tier)_
+
+[Auto Loader](https://docs.databricks.com/aws/en/ingestion/cloud-object-storage/auto-loader/) finds
+new and changed files in a Volume folder and remembers which ones it has already delivered. The
+GeoBrix `*_gbx` readers parse those files. Two functions join them, so a folder of vector files,
+LiDAR point clouds, EXIF photos or rasters becomes a table that keeps up with the folder:
+
+- **`read_paths`** takes a DataFrame of file paths — a batch listing or an Auto Loader stream — and
+  reads every file with the reader you name.
+- **`declare_ingest`** declares a complete Lakeflow pipeline flow on top of it: it watches a folder,
+  writes the rows to a table, and decides what happens when a file is overwritten (`scd2`,
+  `replace` or `append`).
+
+Both are pure Python: no JAR and no init script, and neither needs `register(spark)` (they call the
+reader classes directly). They run on Serverless, standard (shared) and classic compute.
+
+## Supported formats
+
+`read_paths` and `declare_ingest` take the name of a lightweight reader. The `_gbx` suffix is
+optional and the name is case-insensitive.
+
+| `format` | Reader | One input file becomes |
+|----------|--------|------------------------|
+| `vector_gbx` | [Vector](./vector) | Features (generic OGR reader) |
+| `shapefile_gbx` | [Shapefile](./shapefile) | Features |
+| `geojson_gbx` | [GeoJSON](./geojson) | Features |
+| `geojsonl_gbx` | [GeoJSONL](../writers/geojsonl) | Features |
+| `gpkg_gbx` | [GeoPackage](./geopackage) | Features |
+| `file_gdb_gbx` | [File Geodatabase](./filegdb) | Features |
+| `lidar_gbx` | [LiDAR](./lidar) | Points |
+| `exif_gbx` | [EXIF/GPS](./exif) | Image metadata |
+| `raster_gbx`, `gtiff_gbx` | [Raster](./raster), [GeoTIFF](./geotiff) | Raster tiles |
+
+Each row carries the columns that reader normally returns, plus two lineage columns:
+
+| Column | Type | Meaning |
+|--------|------|---------|
+| `_source_path` | `STRING` | Bare `/Volumes/...` path of the file the row came from |
+| `_source_mtime` | `TIMESTAMP` | That file's modification time |
+
+## Read a list of files with `read_paths`
+
+Each row of the input DataFrame names one file. Project an Auto Loader or `binaryFile` listing down
+to `path` and `modificationTime` — the file bytes are never loaded — and pass it to `read_paths`
+together with the reader name:
+
+<CodeFromTest
+  code={ingestExamples}
+  language="python"
+  functionName="READ_PATHS_BATCH"
+  source="docs/tests/python/readers/incremental_ingestion_examples.py"
+  testFile="docs/tests/python/readers/test_incremental_ingestion_examples.py"
+  outputConstant="READ_PATHS_BATCH_output"
+/>
+
+```python
+read_paths(df, format, options=None, *, path_col="path", mtime_col="modificationTime",
+           schema_path=None, num_partitions=None, lineage=True)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `df` | _required_ | DataFrame with one row per file. Batch or streaming. |
+| `format` | _required_ | Reader name from the table above. |
+| `options` | `None` | Dict of reader options, exactly as on that reader's page (for example `layerName`, `chunkSize` or `tileSize`). |
+| `path_col` | `"path"` | Column holding the file path. `dbfs:` and `file:` prefixes are accepted. |
+| `mtime_col` | `"modificationTime"` | Column copied to `_source_mtime`. Pass `None` to leave `_source_mtime` NULL. |
+| `schema_path` | `None` | A file or folder whose first file defines the output schema. For a batch DataFrame the default is the first path in `df`. **Required for a streaming DataFrame.** |
+| `num_partitions` | `None` | Spread the work across this many tasks. See [Parallelism](#parallelism). |
+| `lineage` | `True` | Set `False` to leave out `_source_path` and `_source_mtime`. |
+
+### Stream new files
+
+Pass an Auto Loader stream the same way. Because a stream has no first row to look at, give
+`schema_path` a file or a folder; the output schema comes from the first file there.
+
+<CodeFromTest
+  code={ingestExamples}
+  language="python"
+  functionName="READ_PATHS_STREAM"
+  source="docs/tests/python/readers/incremental_ingestion_examples.py"
+  testFile="docs/tests/python/readers/test_incremental_ingestion_examples.py"
+/>
+
+Auto Loader's checkpoint remembers which files were delivered, so each run reads only the files
+that arrived since the last one. Auto Loader (`cloudFiles`) is a Databricks feature.
+
+### Rasters
+
+Raster files are planned into their tile windows first, and the windows are then read as separate
+tasks, so one large raster does not have to be read by a single task. The windows are spread
+across tasks **only when `num_partitions` is set**, so set it (on Serverless, always). Use the
+raster reader's `tileSize` option to choose the window size:
+
+<CodeFromTest
+  code={ingestExamples}
+  language="python"
+  functionName="READ_PATHS_RASTER"
+  source="docs/tests/python/readers/incremental_ingestion_examples.py"
+  testFile="docs/tests/python/readers/test_incremental_ingestion_examples.py"
+  outputConstant="READ_PATHS_RASTER_output"
+/>
+
+By default each raster file is a single whole-file tile; `tileSize` cuts it into a grid of windows
+(see the [Raster Reader](./raster) for its options). The raster `manifest` and `tilesTable` options are rejected by `read_paths`: each input row already names one
+file, and a manifest would be read again for every row. Read those with
+`spark.read.format("gtiff_gbx")` instead. A `.vrt` source reports the `.vrt` file itself as its
+`_source_path`.
+
+## Declare a pipeline flow with `declare_ingest`
+
+In a Lakeflow Spark Declarative Pipeline source file, `declare_ingest` watches a folder with Auto Loader,
+reads each new or changed file with the reader you name, and keeps the rows in a table:
+
+<CodeFromTest
+  code={ingestExamples}
+  language="python"
+  functionName="PIPELINE_SCD2"
+  source="docs/tests/python/readers/incremental_ingestion_examples.py"
+  testFile="docs/tests/python/readers/test_incremental_ingestion_examples.py"
+/>
+
+The pipeline's environment needs the GeoBrix light wheel — see [Installation](../installation).
+
+```python
+declare_ingest(target, source_dir, format, options=None, *,
+               on_change="scd2", glob=None, num_partitions=None, schema_path=None)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `target` | _required_ | Rows table, a fully qualified `catalog.schema.table` name in the pipeline's catalog and schema. |
+| `source_dir` | _required_ | Folder Auto Loader watches. |
+| `format` | _required_ | Reader name from the [formats table](#supported-formats). |
+| `options` | `None` | Reader options, as for `read_paths`. |
+| `on_change` | `"scd2"` | What to do when a file is overwritten: `"scd2"`, `"replace"` or `"append"`. |
+| `glob` | `None` | File-name filter for the folder, such as `"*.geojson"`. |
+| `num_partitions` | `None` | As for `read_paths`. |
+| `schema_path` | `source_dir` | File or folder whose first file defines the table schema. Stage at least one file there before the first update. |
+
+### Choosing `on_change`
+
+Auto Loader runs with `cloudFiles.allowOverwrites` on in every mode, so a file that is overwritten in
+place is delivered again. `on_change` decides what the table does with that second delivery.
+
+| | `scd2` (default) | `replace` | `append` |
+|---|---|---|---|
+| **Rows table** | Append-only: one copy of a file's rows for each distinct content version | Latest content of each file only | Every delivery of every file |
+| **Re-delivery, content unchanged** | Writes nothing | Writes nothing | Duplicates the rows |
+| **File modified** | New rows are added; the earlier version's rows stay | That file's rows are replaced, one atomic `replaceWhere` per micro-batch | New rows are added; the earlier rows stay |
+| **History** | `<t>_file_versions` records when each version was current | None | None |
+| **Rows have `_source_hash`** | Yes | Yes | No |
+| **Use when** | You need the latest content and a record of what it used to be | Only the latest content matters | You want a log of every delivery |
+
+Here `<t>` is the last part of `target`. `scd2` and `replace` compare a SHA-256 hash of the file's
+bytes (`_source_hash`) with what is already stored, so a file that is re-delivered without a content
+change is recognized and skipped. `append` does not hash anything.
+
+Each mode declares these objects in the pipeline's catalog and schema:
+
+| Object | `scd2` | `replace` | `append` |
+|--------|:------:|:---------:|:--------:|
+| `target`: the rows | yes | yes | yes (streaming table) |
+| `<t>_file_events`: one row per delivery with `_source_path`, `_source_mtime`, `_source_hash`, `_source_size` | yes | yes | no |
+| `<t>_file_versions`: one row per content version of a file, with `__START_AT` and `__END_AT` | yes | no | no |
+| `<target>_current`: a view of the rows for each file's latest version | yes | no | no |
+
+In `scd2` and `replace` the rows table is created on the first update and is clustered by
+`_source_path`.
+
+### Query the latest content and past content
+
+`<target>_current` returns each file's latest rows. To read what was current at an earlier time,
+join the rows to the versions table on both `_source_path` and `_source_hash`, and keep the version
+whose interval contains the time:
+
+<CodeFromTest
+  code={ingestExamples}
+  language="sql"
+  functionName="QUERY_CURRENT"
+  source="docs/tests/python/readers/incremental_ingestion_examples.py"
+  testFile="docs/tests/python/readers/test_incremental_ingestion_examples.py"
+/>
+
+`__START_AT` and `__END_AT` are the file's modification times, so the time you ask for is when the
+file's content was written, not when the pipeline ingested it. `__END_AT` is `NULL` for the
+current version, and an interval includes its start and excludes its end.
+
+### What a pipeline update does
+
+- **The newest delivery of each file wins** (`scd2` and `replace`). When one micro-batch holds
+  several deliveries of the same file, only the newest is read, because the bytes on disk are the
+  newest content. Under `scd2` the older deliveries still appear in `<t>_file_versions`, but have
+  no rows in the table.
+- **A file modified after it was hashed is skipped** (`scd2` and `replace`) until its newer delivery
+  arrives, so a row's `_source_hash` describes the content it was read from. A file overwritten in
+  the instant between that check and the read can still be stored under the earlier hash; its next
+  delivery is written as usual (and under `scd2` recorded as the current version).
+- **A file deleted before it is read is skipped** with a warning (all modes), and Auto Loader counts
+  it as processed. Deleting a file never removes rows that were already written.
+
+## Behavior
+
+### Schema
+
+The table schema comes from the first file (`schema_path`). Every later file must have the same
+columns with the same types: a file that differs by column name or type fails with an error that
+names the file. A file whose columns are in a different order is realigned by name. A file with no
+features adds no rows.
+
+### Parallelism
+
+- **Vector, LiDAR and EXIF files are read one file per task.** `num_partitions` repartitions the files
+  across that many tasks.
+- **Raster files are planned into tile windows, and the windows are spread across tasks only when
+  `num_partitions` is set.** Without it a large raster is read by few tasks. On Serverless, set
+  `num_partitions`.
+
+## Compared with the Lakeflow connector
+
+GeoBrix also ships a Lakeflow Connect community connector (`sourceName` `geobrix`). It is the
+route for the **Add data** page and managed ingestion pipelines, and it is governed through a Unity
+Catalog connection: its `root_path` option confines every table to a Volume prefix, and `USE
+CONNECTION` controls who can build pipelines on it.
+
+It reads the same formats with the same code as `read_paths`, so its rows carry the same columns and
+the same `_source_path` and `_source_mtime` lineage columns. The reader comes from the file extension,
+or from the `format` table option; a folder that mixes formats needs `format`. The connector is
+**append only**, with the file modification time as its cursor.
+
+| | Lakeflow connector | `declare_ingest` |
+|---|---|---|
+| Where you set it up | Add data, or a managed ingestion pipeline | A pipeline source file |
+| Access control | Unity Catalog connection (`root_path`, `USE CONNECTION`), plus Volume grants | Volume grants |
+| Overwritten files | Re-read and appended | `scd2`, `replace` or `append` |
+| File version history | No | Yes, with `scd2` |
+
+Use the connector when you want the managed Add data experience and append is enough. Use
+`declare_ingest` when a file can be overwritten and you need its latest content, or its history.
+
+## See also
+
+- [Vector Reader](./vector), [LiDAR Reader](./lidar), [EXIF/GPS Reader](./exif) and
+  [Raster Reader](./raster): the readers `read_paths` drives, and their options.
+- [Serverless & Memory](../serverless-and-memory): memory limits and parallelism on Serverless.
+- [Virtual Tiles](../api/virtual-tiles): how raster windows are read lazily.

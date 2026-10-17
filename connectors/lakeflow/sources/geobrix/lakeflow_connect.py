@@ -1,8 +1,9 @@
-"""GeoBrix vector connector: the LakeflowConnect side (discovery, schema, offsets).
+"""GeoBrix connector: the LakeflowConnect side (discovery, schema, offsets).
 
-The bulk data path is Arrow-native (see ``datasource.py``); the dict-row methods
-here (``read_table`` / ``read_partition``) exist so the framework contract is
-complete, and reuse the same per-file Arrow reads.
+Files are read by the shared ``ds.paths`` core, so any supported light reader
+(vector, LiDAR, EXIF) works per table. The bulk data path is Arrow-native (see
+``datasource.py``); the dict-row methods here (``read_table`` / ``read_partition``)
+exist so the framework contract is complete, and reuse the same per-file Arrow reads.
 """
 
 import fnmatch
@@ -11,50 +12,90 @@ import re
 from typing import Iterator, Optional, Sequence
 
 import pyarrow as pa
-from pyspark.sql.types import StringType, StructField, StructType, TimestampType
+from pyspark.sql.types import StructType
 
 from databricks.labs.community_connector.interface import (
     LakeflowConnect,
     SupportsPartitionedStream,
 )
 from databricks.labs.gbx.ds._listing import list_files
-from databricks.labs.gbx.ds.vector import VectorGbxReader
+from databricks.labs.gbx.ds.paths import (
+    SOURCE_MTIME_COL,
+    iter_path_batches,
+    path_schema,
+    resolve_format,
+)
 
-SOURCE_PATH_COL = "_source_path"
-SOURCE_MTIME_COL = "_source_mtime"
-
-# User-facing `format` table option -> OGR driver understood by VectorGbxReader.
-FORMAT_TO_DRIVER = {
-    "gpkg": "GPKG",
-    "geojson": "GeoJSON",
-    "geojsonl": "GeoJSONSeq",
-    "shapefile": "ESRI Shapefile",
-    "filegdb": "OpenFileGDB",
-    "vector": "",
+# Short table-option values accepted for `format` (any light reader name also works).
+FORMAT_ALIASES = {
+    "vector": "vector_gbx",
+    "gpkg": "gpkg_gbx",
+    "geojson": "geojson_gbx",
+    "geojsonl": "geojsonl_gbx",
+    "shapefile": "shapefile_gbx",
+    "filegdb": "file_gdb_gbx",
+    "lidar": "lidar_gbx",
+    "exif": "exif_gbx",
 }
 
-# Primary data-file extensions per driver (sidecars such as .shx/.dbf/.prj are
-# never members). "" = generic: the union of all of them.
-_DRIVER_EXTS = {
-    "GPKG": (".gpkg",),
-    "GeoJSON": (".geojson", ".json"),
-    "GeoJSONSeq": (".geojsonl", ".geojsons"),
-    "ESRI Shapefile": (".shp", ".shz", ".shp.zip"),
-    "OpenFileGDB": (".gdb", ".gdb.zip"),
+# Discovery: extension -> reader (longest suffix first, so ".gdb.zip" beats ".zip").
+# Sidecars such as .shx/.dbf/.prj are never members.
+EXT_TO_FORMAT = {
+    ".gdb.zip": "file_gdb_gbx",
+    ".gdb": "file_gdb_gbx",
+    ".gpkg": "gpkg_gbx",
+    ".geojsonl": "geojsonl_gbx",
+    ".geojsons": "geojsonl_gbx",
+    ".geojson": "geojson_gbx",
+    ".json": "geojson_gbx",
+    ".shp.zip": "shapefile_gbx",
+    ".shp": "shapefile_gbx",
+    ".shz": "shapefile_gbx",
+    ".las": "lidar_gbx",
+    ".laz": "lidar_gbx",
+    ".jpg": "exif_gbx",
+    ".jpeg": "exif_gbx",
 }
-_ALL_EXTS = tuple(sorted({e for exts in _DRIVER_EXTS.values() for e in exts}))
+_ALL_EXTS = tuple(sorted(EXT_TO_FORMAT, key=len, reverse=True))
 
-# Table options handed to VectorGbxReader unchanged. Everything else on the
-# options dict (framework keys, UC connection keys, our own connector options)
-# is either mapped explicitly in reader_options() or never reaches the reader.
-_PASSTHROUGH_READER_KEYS = ("where", "bbox")
+# The generic `vector` reader accepts every vector extension (not LiDAR / EXIF).
+_NON_VECTOR = {"lidar_gbx", "exif_gbx"}
+
+# Table options handed to the reader unchanged. Everything else on the options
+# dict (framework keys, UC connection keys, our own connector options) is either
+# mapped explicitly in reader_options() or never reaches the reader.
+_PASSTHROUGH_READER_KEYS = ("where", "bbox", "mode")
+
+
+def _format_of(path: str):
+    low = path.lower().rstrip("/")
+    for ext in _ALL_EXTS:
+        if low.endswith(ext):
+            return EXT_TO_FORMAT[ext]
+    return None
+
+
+def format_for(table_options: dict, members: list) -> str:
+    """Reader for a table: the `format` option (alias or reader name), else the
+    members' extension; a mix of extensions without `format` is an error."""
+    fmt = (table_options.get("format") or "").strip().lower()
+    if fmt:
+        return resolve_format(FORMAT_ALIASES.get(fmt, fmt)).name()
+    found = {f for f in (_format_of(m) for m in members) if f}
+    if len(found) == 1:
+        return found.pop()
+    raise ValueError(
+        f"Cannot infer a reader for {members[:3]}...: set the `format` table option "
+        f"(found {sorted(found) or 'no recognized extensions'})."
+    )
+
 
 _START = {"max_mtime_ns": -1, "at_max": []}
 
 
 def _strip_ext(name: str) -> str:
     low = name.lower()
-    for ext in sorted(_ALL_EXTS, key=len, reverse=True):
+    for ext in _ALL_EXTS:
         if low.endswith(ext):
             return name[: -len(ext)]
     return name
@@ -93,25 +134,26 @@ def _not_after(path: str, mtime_ns: int, end: dict) -> bool:
     return path in end["at_max"]
 
 
-class GeoBrixVectorLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
-    """Vector files on Unity Catalog Volumes as append-only Lakeflow tables.
+class GeoBrixLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
+    """Geospatial files on Unity Catalog Volumes as append-only Lakeflow tables.
 
     Connection options: ``root_path`` (optional Volume prefix; enables
     discovery and confines every table path to it).
     Table options: ``path`` (file or folder; relative to ``root_path``),
-    ``format``, ``layer``, ``where``, ``bbox``, ``chunk_size``, ``file_glob``.
+    ``format``, ``layer``, ``where``, ``bbox``, ``chunk_size``, ``file_glob``, ``mode``.
     """
 
     def __init__(self, options: dict[str, str]) -> None:
         super().__init__(options)
         root = options.get("root_path")
+        self._schemas: dict[str, StructType] = {}
         self.root_path = os.path.normpath(root) if root else None
         if self.root_path and not os.path.isabs(self.root_path):
             raise ValueError(f"root_path must be absolute; got {root!r}")
 
     # ------------------------------------------------------------- discovery
     def list_tables(self) -> list[str]:
-        """Datasets directly under ``root_path``: recognized vector files and
+        """Datasets directly under ``root_path``: recognized files and
         folders (a folder is one multi-file dataset). ``[]`` without a root."""
         if not self.root_path:
             return []
@@ -120,7 +162,7 @@ class GeoBrixVectorLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
             if entry.startswith((".", "_")):
                 continue
             full = os.path.join(self.root_path, entry)
-            if os.path.isdir(full) or entry.lower().endswith(_ALL_EXTS):
+            if os.path.isdir(full) or _format_of(entry):
                 name = _table_name_for(entry)
                 if name and name not in names:
                     names.append(name)
@@ -133,14 +175,8 @@ class GeoBrixVectorLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
                 f"Table {table_name!r} has no matching files yet; the schema is taken "
                 f"from the first file, so stage at least one file before creating the table."
             )
-        schema = self._reader_for(members[0], table_options).schema()
-        return StructType(
-            list(schema.fields)
-            + [
-                StructField(SOURCE_PATH_COL, StringType(), True),
-                StructField(SOURCE_MTIME_COL, TimestampType(), True),
-            ]
-        )
+        fmt = format_for(table_options, members)
+        return path_schema(fmt, self.reader_options(table_options), members[0])
 
     def read_table_metadata(self, table_name: str, table_options: dict[str, str]) -> dict:
         return {
@@ -186,25 +222,37 @@ class GeoBrixVectorLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
 
     # ------------------------------------------------------------- reads
     def iter_member_batches(
-        self, member: str, mtime_ns: int, table_options: dict[str, str]
+        self,
+        member: str,
+        mtime_ns: int,
+        table_options: dict[str, str],
+        expected: Optional[StructType] = None,
+        table_name: Optional[str] = None,
     ) -> Iterator[pa.RecordBatch]:
-        """Arrow batches for one file, with lineage columns appended."""
-        reader = self._reader_for(member, table_options)
-        mtime_us = int(mtime_ns) // 1_000
-        ts_type = pa.timestamp("us", tz="UTC")
-        for part in reader.partitions():
-            for batch in reader.read(part):
-                n = batch.num_rows
-                batch = batch.append_column(
-                    SOURCE_PATH_COL, pa.array([member] * n, type=pa.string())
-                )
-                yield batch.append_column(SOURCE_MTIME_COL, pa.array([mtime_us] * n, type=ts_type))
+        """Arrow batches for one file, with lineage columns appended.
+
+        ``expected`` is the table schema (the data source passes the schema Spark
+        planned with); otherwise it is derived from the table's first file and cached.
+        """
+        if expected is None and table_name is not None:
+            expected = self._table_schema(table_name, table_options)
+        fmt = format_for(table_options, [member])
+        yield from iter_path_batches(
+            member,
+            int(mtime_ns) // 1_000,
+            fmt,
+            self.reader_options(table_options),
+            expected,
+        )
 
     def read_partition(
         self, table_name: str, partition: dict, table_options: dict[str, str]
     ) -> Iterator[dict]:
         for batch in self.iter_member_batches(
-            partition["path"], int(partition["mtime_ns"]), table_options
+            partition["path"],
+            int(partition["mtime_ns"]),
+            table_options,
+            table_name=table_name,
         ):
             yield from batch.to_pylist()
 
@@ -222,23 +270,19 @@ class GeoBrixVectorLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
 
     # ------------------------------------------------------------- helpers
     def reader_options(self, table_options: dict[str, str]) -> dict:
-        """Map connector table options onto VectorGbxReader options."""
+        """Map connector table options onto reader options (the named reader sets
+        its own driver)."""
         out = {k: v for k, v in table_options.items() if k in _PASSTHROUGH_READER_KEYS}
-        fmt = (table_options.get("format") or "vector").lower()
-        if fmt not in FORMAT_TO_DRIVER:
-            raise ValueError(
-                f"Unknown format {fmt!r}; expected one of {sorted(FORMAT_TO_DRIVER)}."
-            )
-        if FORMAT_TO_DRIVER[fmt]:
-            out["driverName"] = FORMAT_TO_DRIVER[fmt]
         if table_options.get("layer"):
             out["layerName"] = table_options["layer"]
         if table_options.get("chunk_size"):
             out["chunkSize"] = str(int(table_options["chunk_size"]))
         return out
 
-    def _reader_for(self, member: str, table_options: dict[str, str]) -> VectorGbxReader:
-        return VectorGbxReader({**self.reader_options(table_options), "path": member})
+    def _table_schema(self, table_name: str, table_options: dict[str, str]) -> StructType:
+        if table_name not in self._schemas:
+            self._schemas[table_name] = self.get_table_schema(table_name, table_options)
+        return self._schemas[table_name]
 
     def _guard(self, path: str) -> str:
         path = os.path.normpath(path)
@@ -267,17 +311,28 @@ class GeoBrixVectorLakeflowConnect(LakeflowConnect, SupportsPartitionedStream):
 
     def _members(self, path: str, table_options: dict[str, str]) -> list[str]:
         """Data files for a table path: a file (or a .gdb folder) is one member; a
-        plain folder is listed recursively with the format's extensions."""
+        plain folder is listed recursively, keeping the table format's files (or any
+        recognized file when no `format` is set)."""
         if os.path.isfile(path) or path.lower().rstrip("/").endswith(".gdb"):
             return [path]
         if not os.path.isdir(path):
             raise ValueError(f"Table path {path!r} does not exist.")
-        driver = FORMAT_TO_DRIVER[(table_options.get("format") or "vector").lower()]
-        exts = _DRIVER_EXTS.get(driver, _ALL_EXTS)
+        want = format_for(table_options, []) if table_options.get("format") else None
+
+        def _wanted(f: str) -> bool:
+            kind = _format_of(f)
+            if kind is None:
+                return False
+            if want is None:
+                return True
+            if want == "vector_gbx":
+                return kind not in _NON_VECTOR
+            return kind == want
+
         files = [
             f
             for f in list_files(path, recursive=True, raise_on_empty=False)
-            if f.lower().endswith(exts) and not os.path.basename(f).startswith((".", "_"))
+            if _wanted(f) and not os.path.basename(f).startswith((".", "_"))
         ]
         glob = table_options.get("file_glob")
         if glob:

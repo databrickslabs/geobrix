@@ -1,4 +1,4 @@
-"""GeoBrix vector connector: the PySpark DataSource side.
+"""GeoBrix connector: the PySpark DataSource side.
 
 Hybrid: the framework's ``LakeflowSource`` serves metadata and its virtual
 tables; real tables are read by GeoBrix Arrow-native readers (whole Arrow
@@ -18,13 +18,13 @@ from databricks.labs.community_connector.sparkpds.lakeflow_datasource import (
     LakeflowSource,
 )
 
-from .lakeflow_connect import GeoBrixVectorLakeflowConnect
+from .lakeflow_connect import GeoBrixLakeflowConnect
 
 
 class _ArrowFileReads:
     """Shared by the batch and stream readers: one partition = one file."""
 
-    def _init(self, options: dict, schema: StructType, connect: GeoBrixVectorLakeflowConnect):
+    def _init(self, options: dict, schema: StructType, connect: GeoBrixLakeflowConnect):
         self.table_name = options[TABLE_NAME]
         self.table_options = {k: v for k, v in options.items() if k != IS_DELETE_FLOW}
         self.schema = schema
@@ -37,12 +37,12 @@ class _ArrowFileReads:
     def read(self, partition: InputPartition):
         desc = json.loads(partition.value)
         yield from self.connect.iter_member_batches(
-            desc["path"], int(desc["mtime_ns"]), self.table_options
+            desc["path"], int(desc["mtime_ns"]), self.table_options, self.schema
         )
 
 
-class GeoBrixVectorBatchReader(_ArrowFileReads, DataSourceReader):
-    def __init__(self, options: dict, schema: StructType, connect: GeoBrixVectorLakeflowConnect):
+class GeoBrixBatchReader(_ArrowFileReads, DataSourceReader):
+    def __init__(self, options: dict, schema: StructType, connect: GeoBrixLakeflowConnect):
         self._init(options, schema, connect)
 
     def partitions(self):
@@ -51,12 +51,12 @@ class GeoBrixVectorBatchReader(_ArrowFileReads, DataSourceReader):
         )
 
 
-class GeoBrixVectorStreamReader(
+class GeoBrixStreamReader(
     _ArrowFileReads, DataSourceStreamReader, SupportsTriggerAvailableNow
 ):
     """File-level incremental reads: each micro-batch covers files in (start, end]."""
 
-    def __init__(self, options: dict, schema: StructType, connect: GeoBrixVectorLakeflowConnect):
+    def __init__(self, options: dict, schema: StructType, connect: GeoBrixLakeflowConnect):
         self._init(options, schema, connect)
 
     def initialOffset(self):
@@ -68,7 +68,7 @@ class GeoBrixVectorStreamReader(
     def latestOffset(self, start: dict, limit) -> dict:
         if not isinstance(limit, ReadAllAvailable):
             raise ValueError(
-                f"geobrix_vector only supports ReadAllAvailable; got {type(limit).__name__}."
+                f"geobrix only supports ReadAllAvailable; got {type(limit).__name__}."
             )
         return self.connect.latest_offset(self.table_name, self.table_options, start)
 
@@ -81,17 +81,17 @@ class GeoBrixVectorStreamReader(
         pass
 
 
-class GeoBrixVectorDataSource(LakeflowSource):
-    """``lakeflow_connect`` data source for vector files on Unity Catalog Volumes."""
+class GeoBrixDataSource(LakeflowSource):
+    """``lakeflow_connect`` data source for geospatial files on Unity Catalog Volumes."""
 
-    _lakeflow_connect_cls = GeoBrixVectorLakeflowConnect
+    _lakeflow_connect_cls = GeoBrixLakeflowConnect
 
     def reader(self, schema: StructType):
         if self.options.get(TABLE_NAME) in VIRTUAL_TABLES:
             return super().reader(schema)
-        return GeoBrixVectorBatchReader(self.options, schema, self.lakeflow_connect)
+        return GeoBrixBatchReader(self.options, schema, self.lakeflow_connect)
 
     def streamReader(self, schema: StructType):
         if self.options.get(TABLE_NAME) in VIRTUAL_TABLES:
             return super().streamReader(schema)
-        return GeoBrixVectorStreamReader(self.options, schema, self.lakeflow_connect)
+        return GeoBrixStreamReader(self.options, schema, self.lakeflow_connect)

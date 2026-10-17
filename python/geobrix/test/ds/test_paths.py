@@ -62,6 +62,11 @@ def test_resolve_format_aliases_and_case():
         P.resolve_format("cog_gbx_nope")
 
 
+def test_every_supported_format_is_a_registered_reader():
+    for name in P.SUPPORTED_FORMATS:
+        assert P.resolve_format(name).name() == name
+
+
 def test_resolve_format_rejects_unsupported_reader():
     with pytest.raises(ValueError, match="file_gbx"):
         P.resolve_format("file_gbx")

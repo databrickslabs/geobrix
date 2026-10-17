@@ -6,7 +6,7 @@ build-backend = "setuptools.build_meta"
 name = "geobrix-lakeflow-connectors"
 version = "0.1.0"
 description = "GeoBrix custom connector for Lakeflow Connect"
-readme = "sources/geobrix_vector/README.md"
+readme = "sources/geobrix/README.md"
 requires-python = ">=3.12"
 license = {text = "Databricks"}
 authors = [
@@ -14,9 +14,10 @@ authors = [
 ]
 
 dependencies = [
-    # No hard runtime dependencies: pyspark (provided by Databricks),
-    # lakeflow-community-connectors and geobrix are co-installed by the
-    # pipeline environment, not declared here for the spike.
+    # geobrix >= 0.5.3 ships the shared read core (ds.paths). pyspark (provided by
+    # Databricks) and lakeflow-community-connectors are co-installed by the
+    # pipeline environment.
+    "geobrix>=0.5.3",
 ]
 
 [project.optional-dependencies]
@@ -26,10 +27,10 @@ dev = [
 
 [tool.setuptools]
 include-package-data = false
-packages = ["databricks.labs.community_connector.sources.geobrix_vector"]
+packages = ["databricks.labs.community_connector.sources.geobrix"]
 
 [tool.setuptools.package-dir]
-"databricks.labs.community_connector.sources.geobrix_vector" = "sources/geobrix_vector"
+"databricks.labs.community_connector.sources.geobrix" = "sources/geobrix"
 
 [tool.setuptools.package-data]
 "*" = ["*.json", "*.md", "*.yaml"]

@@ -18,19 +18,19 @@ def spark():
     os.environ["PYSPARK_DRIVER_PYTHON"] = sys.executable
     from pyspark.sql import SparkSession
 
-    from databricks.labs.community_connector.sources.geobrix_vector import (
-        GeoBrixVectorDataSource,
+    from databricks.labs.community_connector.sources.geobrix import (
+        GeoBrixDataSource,
     )
 
     session = (
         SparkSession.builder.master("local[2]")
-        .appName("geobrix_vector_connector_tests")
+        .appName("geobrix_connector_tests")
         .config("spark.sql.shuffle.partitions", "2")
         .config("spark.sql.session.timeZone", "UTC")
         .config("spark.ui.enabled", "false")
         .getOrCreate()
     )
-    session.dataSource.register(GeoBrixVectorDataSource)
+    session.dataSource.register(GeoBrixDataSource)
     yield session
     session.stop()
 

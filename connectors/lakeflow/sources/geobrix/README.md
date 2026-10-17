@@ -1,17 +1,38 @@
-# GeoBrix Vector — Lakeflow Connect connector
+# GeoBrix — Lakeflow Connect connector
 
-Ingest vector files (GeoPackage, GeoJSON, GeoJSONSeq, Shapefile, File Geodatabase, or any
-OGR format) from Unity Catalog Volumes into Unity Catalog tables with a Lakeflow Connect
-ingestion pipeline. Each run appends only files that are new since the last run.
+Ingest geospatial files from Unity Catalog Volumes into Unity Catalog tables with a
+Lakeflow Connect ingestion pipeline: vector data (GeoPackage, GeoJSON, GeoJSONSeq,
+Shapefile, File Geodatabase), LiDAR point clouds, and EXIF photo metadata. Each run
+appends only files that are new since the last run.
 
-Rows carry the same columns as the GeoBrix `*_gbx` readers — attributes, the geometry
-column (`geom_0`, or the layer's geometry name such as `geom` for GeoPackage) with its
-`*_srid` / `*_srid_proj` companions — plus two lineage columns:
+Files are read by the same code as the GeoBrix `*_gbx` readers, so rows carry the same
+columns: attributes, the geometry column (`geom_0`, or the layer's geometry name such as
+`geom` for GeoPackage) with its `*_srid` / `*_srid_proj` companions for vector data, plus
+two lineage columns:
 
 | Column | Type | Meaning |
 |---|---|---|
 | `_source_path` | STRING | Volume path of the file the row came from |
 | `_source_mtime` | TIMESTAMP | That file's modification time |
+
+## Formats
+
+The reader for a table is the `format` table option, or is inferred from the file
+extension when every file in the dataset has the same one. A folder that mixes formats
+needs an explicit `format`.
+
+| Reader | `format` aliases | Extensions |
+|---|---|---|
+| `vector_gbx` | `vector` | any vector extension below (generic) |
+| `gpkg_gbx` | `gpkg` | `.gpkg` |
+| `geojson_gbx` | `geojson` | `.geojson`, `.json` |
+| `geojsonl_gbx` | `geojsonl` | `.geojsonl`, `.geojsons` |
+| `shapefile_gbx` | `shapefile` | `.shp`, `.shz`, `.shp.zip` |
+| `file_gdb_gbx` | `filegdb` | `.gdb`, `.gdb.zip` |
+| `lidar_gbx` | `lidar` | `.las`, `.laz` |
+| `exif_gbx` | `exif` | `.jpg`, `.jpeg` |
+
+The reader name itself (for example `gpkg_gbx`) is also accepted for `format`.
 
 ## Install
 
@@ -36,8 +57,8 @@ geobrix[light_dbr18]@file:///Volumes/<catalog>/<schema>/<volume>/<dir>/geobrix-<
 
 | Option | Required | Meaning |
 |---|---|---|
-| `sourceName` | yes | `geobrix_vector` |
-| `externalOptionsAllowList` | yes | `path,format,layer,where,bbox,chunk_size,file_glob` |
+| `sourceName` | yes | `geobrix` |
+| `externalOptionsAllowList` | yes | `path,format,layer,where,bbox,chunk_size,file_glob,mode` |
 | `root_path` | no | Volume prefix. Enables discovery (every file or folder directly under it is a table) and confines every table path to it. Access is still governed by Volume grants. |
 
 Grant `USE CONNECTION` to the people who build pipelines on it.
@@ -47,14 +68,17 @@ Grant `USE CONNECTION` to the people who build pipelines on it.
 | Option | Meaning |
 |---|---|
 | `path` | File or folder, relative to `root_path` or absolute. A folder is one dataset; its files are read recursively. Optional when the table name matches an entry under `root_path`. |
-| `format` | `gpkg`, `geojson`, `geojsonl`, `shapefile`, `filegdb`, or `vector` (any OGR driver; default) |
-| `layer` | Layer name for multi-layer sources (default: the first layer) |
+| `format` | A reader alias or name from the table above. Default: inferred from the file extension. |
+| `layer` | Layer name for multi-layer vector sources (default: the first layer) |
 | `where` | OGR SQL filter, e.g. `borough = 'Queens'` |
 | `bbox` | `xmin,ymin,xmax,ymax` in the layer's CRS |
 | `chunk_size` | Features per Arrow batch (default 10000) |
 | `file_glob` | Basename filter for folder members, e.g. `zones_*.gpkg` |
+| `mode` | Reader mode for `lidar` (default `points`) and `exif` (default `metadata`); passed through to the reader |
 
-The ingestion type is append-only, with `_source_mtime` as the cursor.
+The ingestion type is append-only, with `_source_mtime` as the cursor. For `scd2` and
+`replace` ingestion, see the incremental-ingestion docs page; the managed Add data route
+supports append only.
 
 ## Deploy
 

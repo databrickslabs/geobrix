@@ -33,14 +33,14 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:connectors${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--path <path>${NC}   Test path relative to connectors/lakeflow/ (default: sources/geobrix_vector/tests)"
+    echo -e "  ${GREEN}--path <path>${NC}   Test path relative to connectors/lakeflow/ (default: sources/geobrix/tests)"
     echo -e "  ${GREEN}--resync${NC}        Force re-install of the venv dependencies"
     echo -e "  ${GREEN}--log <path>${NC}    Log file (default: test-logs/connectors-tests.log)"
     echo -e "  ${GREEN}--help${NC}          Show this help"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-connectors.sh${NC}"
-    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-connectors.sh --path sources/geobrix_vector/tests/test_connector.py --log conn.log${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-connectors.sh --path sources/geobrix/tests/test_connector.py --log conn.log${NC}"
 }
 
 while [[ $# -gt 0 ]]; do
@@ -86,14 +86,14 @@ fi
 
 # The connector is installed as a REGULAR (non-editable) wheel on every run. The
 # framework wheel ships no databricks.labs.community_connector.sources package, so our
-# module must land in site-packages/.../community_connector/sources/geobrix_vector/
+# module must land in site-packages/.../community_connector/sources/geobrix/
 # (an implicit namespace subpackage) -- the same layout a pipeline gets from the built
 # wheel. An editable finder maps only the leaf module and cannot serve it.
 echo "Installing connector package (wheel layout)..."
 "${PIP[@]}" install --index-url "${INDEX_URL}" --force-reinstall --no-deps "${CONNECTORS_DIR}"
-"${VENV_PYTHON}" -c "import databricks.labs.gbx, databricks.labs.community_connector.sources.geobrix_vector as m; print('connector import OK:', m.__file__)"
+"${VENV_PYTHON}" -c "import databricks.labs.gbx, databricks.labs.community_connector.sources.geobrix as m; print('connector import OK:', m.__file__)"
 
-TEST_TARGET="${CONNECTORS_DIR}/${TEST_PATH:-sources/geobrix_vector/tests}"
+TEST_TARGET="${CONNECTORS_DIR}/${TEST_PATH:-sources/geobrix/tests}"
 echo ""
 echo "Running pytest on ${TEST_TARGET}..."
 set +e

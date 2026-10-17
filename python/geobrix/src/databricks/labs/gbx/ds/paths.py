@@ -31,7 +31,7 @@ SUPPORTED_FORMATS = (
     "geojson_gbx",
     "geojsonl_gbx",
     "gpkg_gbx",
-    "filegdb_gbx",
+    "file_gdb_gbx",
     "lidar_gbx",
     "exif_gbx",
 )

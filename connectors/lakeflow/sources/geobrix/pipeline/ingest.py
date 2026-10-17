@@ -1,16 +1,16 @@
-# Lakeflow pipeline source file for the GeoBrix vector connector.
+# Lakeflow pipeline source file for the GeoBrix connector.
 #
 # Add this file to a serverless pipeline (libraries -> file) whose environment
 # installs the three wheels listed in the connector README, then edit the spec.
 from databricks.labs.community_connector.pipeline import ingest
-from databricks.labs.community_connector.sources.geobrix_vector import GeoBrixVectorDataSource
+from databricks.labs.community_connector.sources.geobrix import GeoBrixDataSource
 
 # Inject the UC connection's options (sourceName, root_path, allowlist) into reads.
 spark.conf.set("spark.databricks.unityCatalog.connectionDfOptionInjection.enabled", "true")
-spark.dataSource.register(GeoBrixVectorDataSource)
+spark.dataSource.register(GeoBrixDataSource)
 
 pipeline_spec = {
-    "connection_name": "<connection_name>",
+    "connection_name": "geobrix_dev",
     "objects": [
         # A dataset discovered under the connection's root_path (file or folder name).
         {"table": {"source_table": "<dataset>", "destination_table": "<table>",

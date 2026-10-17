@@ -20,9 +20,17 @@ def test_read_geopackage(spark):
     result = geopackage_examples.read_geopackage(spark, path)
     assert result is not None
     assert result.count() > 0
-    # GeoPackage typically has 'shape' column for geometry
+    # The geometry column is named as the layer names it (`geom` in the sample file),
+    # with its `_srid` and `_srid_proj` companions: the page's schema and output.
     columns = result.columns
-    assert any('shape' in col.lower() or 'geom' in col.lower() for col in columns)
+    assert columns[-3:] == ["geom", "geom_srid", "geom_srid_proj"], columns
+    assert "geom_0" not in columns
+    assert _output_columns(geopackage_examples.READ_GEOPACKAGE_output) == columns
+
+
+def _output_columns(output):
+    """Column names of a displayed ``show()`` output block."""
+    return [c.strip() for c in output.splitlines()[1].strip("|").split("|")]
 
 
 def test_read_specific_layer(spark):
@@ -32,12 +40,15 @@ def test_read_specific_layer(spark):
     assert result is not None
     c = result.count()
     assert MIN_BOROUGHS <= c <= MAX_BOROUGHS, f"Expected {MIN_BOROUGHS}-{MAX_BOROUGHS} boroughs, got {c}"
+    assert _output_columns(geopackage_examples.READ_SPECIFIC_LAYER_output) == result.columns
 
 
 def test_sql_constant():
     """Test SQL constant is defined and valid."""
     assert hasattr(geopackage_examples, 'SQL_GEOPACKAGE')
     assert 'gpkg_ogr.' in geopackage_examples.SQL_GEOPACKAGE
+    cols = _output_columns(geopackage_examples.SQL_GEOPACKAGE_output)
+    assert cols == _output_columns(geopackage_examples.READ_GEOPACKAGE_output)
     assert 'SELECT' in geopackage_examples.SQL_GEOPACKAGE
 
 

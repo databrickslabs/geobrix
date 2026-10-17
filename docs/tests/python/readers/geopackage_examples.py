@@ -14,12 +14,12 @@ READ_GEOPACKAGE = """# Read GeoPackage (sample-data Volumes path)
 df = spark.read.format("gpkg_ogr").load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg")
 df.show()"""
 
-READ_GEOPACKAGE_output = """+--------------------+--------------+---------+
-|shape               |shape_srid    |BoroName |
-+--------------------+--------------+---------+
-|[BINARY]            |4326          |Manhattan|
-|...                 |...           |...      |
-+--------------------+--------------+---------+"""
+READ_GEOPACKAGE_output = """+--------+---------+-------------+-------------+--------------------+---------+--------------------+
+|borocode| boroname|   shape_area|   shape_leng|                geom|geom_srid|      geom_srid_proj|
++--------+---------+-------------+-------------+--------------------+---------+--------------------+
+|       1|Manhattan|636631164.229|359536.412002|[01 06 00 00 00 2...|     4326|+proj=longlat +da...|
+|     ...|      ...|          ...|          ...|                 ...|      ...|                 ...|
++--------+---------+-------------+-------------+--------------------+---------+--------------------+"""
 
 READ_SPECIFIC_LAYER = """# Read specific layer (sample-data Volumes path)
 boroughs = spark.read.format("gpkg_ogr") \\
@@ -27,22 +27,22 @@ boroughs = spark.read.format("gpkg_ogr") \\
     .load("/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg")
 boroughs.show()"""
 
-READ_SPECIFIC_LAYER_output = """+--------------------+--------------+---------+
-|shape               |shape_srid    |BoroName |
-+--------------------+--------------+---------+
-|[BINARY]            |4326          |...      |
-|...                 |...           |...      |
-+--------------------+--------------+---------+"""
+READ_SPECIFIC_LAYER_output = """+--------+---------+-------------+-------------+--------------------+---------+--------------------+
+|borocode| boroname|   shape_area|   shape_leng|                geom|geom_srid|      geom_srid_proj|
++--------+---------+-------------+-------------+--------------------+---------+--------------------+
+|       1|Manhattan|636631164.229|359536.412002|[01 06 00 00 00 2...|     4326|+proj=longlat +da...|
+|     ...|      ...|          ...|          ...|                 ...|      ...|                 ...|
++--------+---------+-------------+-------------+--------------------+---------+--------------------+"""
 
 SQL_GEOPACKAGE = """-- Read GeoPackage in SQL (sample-data Volumes path)
 SELECT * FROM gpkg_ogr.`/Volumes/main/default/geobrix_samples/geobrix-examples/nyc/geopackage/nyc_complete.gpkg`;"""
 
-SQL_GEOPACKAGE_output = """+--------------------+--------------+---------+
-|shape               |shape_srid    |BoroName |
-+--------------------+--------------+---------+
-|[BINARY]            |4326          |...      |
-|...                 |...           |...      |
-+--------------------+--------------+---------+"""
+SQL_GEOPACKAGE_output = """+--------+---------+-------------+-------------+--------------------+---------+--------------------+
+|borocode| boroname|   shape_area|   shape_leng|                geom|geom_srid|      geom_srid_proj|
++--------+---------+-------------+-------------+--------------------+---------+--------------------+
+|       1|Manhattan|636631164.229|359536.412002|[01 06 00 00 00 2...|     4326|+proj=longlat +da...|
+|     ...|      ...|          ...|          ...|                 ...|      ...|                 ...|
++--------+---------+-------------+-------------+--------------------+---------+--------------------+"""
 
 # Test functions (validate logic; use SAMPLE_GEOPACKAGE_PATH when path not given)
 def read_geopackage(spark, path=None):

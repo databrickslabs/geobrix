@@ -414,6 +414,22 @@ def _driver_error(
     return ValueError(f"{path}: cannot read it with {asked}: {detail}")
 
 
+@contextlib.contextmanager
+def _naming(path: str):
+    """Make an open / read error of ``path`` name the file. GDAL's message often
+    does not (``Failed to read GeoJSON data; At line 1 ...``). The error keeps its
+    type and GDAL's message after the path, and the GDAL error is its cause; one
+    that already names the file passes through."""
+    from pyogrio.errors import DataLayerError, DataSourceError
+
+    try:
+        yield
+    except (DataSourceError, DataLayerError) as e:
+        if path in str(e):
+            raise
+        raise type(e)(f"{path}: {e}") from e
+
+
 _CANONICAL_EXT = {
     "GPKG": ".gpkg",
     "GeoJSON": ".geojson",
@@ -1229,6 +1245,11 @@ class VectorGbxReader(DataSourceReader):
             or not os.path.exists(local)
         ):
             return ""
+        if not _forcible(self.driver, local):
+            # Nothing can force the driver (a family with no GDAL prefix, or a zip
+            # / quoted GPKG path), so a detection open could only end in "" or in
+            # the error _info_for raises from the same open at schema time.
+            return ""
         self._gdal_readonly_safe()
         import pyogrio
         from pyogrio.errors import DataLayerError, DataSourceError
@@ -1259,6 +1280,25 @@ class VectorGbxReader(DataSourceReader):
             self._empty[name] = _featureless(name, info, self._layer())
         return self._empty[name]
 
+    def _read_info(self, path: str, local: str, name: str) -> Dict:
+        """read_info of the opened ``name``. A name outside the reader's family
+        extensions that no GDAL prefix can force the driver onto, and that GDAL
+        cannot open, is explained like any file of another format."""
+        import pyogrio
+        from pyogrio.errors import DataSourceError
+
+        try:
+            return pyogrio.read_info(name, layer=self._layer())
+        except DataSourceError as e:
+            if (
+                self.driver
+                and os.path.exists(local)
+                and not _native_ext(path, self.driver)
+                and not _forcible(self.driver, local)
+            ):
+                raise _driver_error(path, self.driver, None, e) from e
+            raise
+
     def _info_for(self, path: str):
         """Read pyogrio metadata for the given path (once per reader). Random-access
         formats are staged to local temp first (see _staged) so the open does not
@@ -1267,13 +1307,10 @@ class VectorGbxReader(DataSourceReader):
         if path in self._infos:
             return self._infos[path]
         self._gdal_readonly_safe()
-        import pyogrio
-
         with self._staged(path) as _p:
             name = self._source_name(path, _p)
-            info = self._probed.get(path) or pyogrio.read_info(
-                name, layer=self._layer()
-            )
+            with _naming(path):
+                info = self._probed.get(path) or self._read_info(path, _p, name)
             if self.driver and info.get("driver") not in _family(self.driver):
                 raise _driver_error(path, self.driver, info.get("driver"))
             # A JSON file of plain objects is not a schema: it must not define one.
@@ -1349,7 +1386,7 @@ class VectorGbxReader(DataSourceReader):
         self._gdal_readonly_safe()
         import pyogrio
 
-        with self._staged(path) as _p:
+        with self._staged(path) as _p, _naming(path):
             _, tbl = pyogrio.read_arrow(
                 self._source_name(path, _p), layer=self._layer(), max_features=0
             )
@@ -1471,7 +1508,7 @@ class VectorGbxReader(DataSourceReader):
         if partition.where:
             kw["where"] = partition.where
 
-        with self._staged(partition.path) as _p:
+        with self._staged(partition.path) as _p, _naming(partition.path):
             # Stream RecordBatches from pyogrio.open_arrow instead of loading the whole
             # layer into memory with read_arrow. Each batch is processed independently.
             src = self._source_name(partition.path, _p)

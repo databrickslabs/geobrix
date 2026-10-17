@@ -1299,3 +1299,136 @@ def test_featureless_json_error_leads_with_it_and_drops_the_csv_hint(tmp_path):
     assert "no features/fields found" in msg
     assert "CSV driver" not in msg and "driverName='CSV'" not in msg
     assert "Read it with" not in msg
+
+
+# --- a file that cannot be opened is named in the error ------------------------
+
+
+def _truncate(path, keep=0.5):
+    data = open(path, "rb").read()
+    with open(path, "wb") as f:
+        f.write(data[: int(len(data) * keep)])
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname",
+    [
+        ("geojson_gbx", "GeoJSON", "cut.geojson"),
+        ("geojsonl_gbx", "GeoJSONSeq", "cut.geojsonl"),
+        ("gpkg_gbx", "GPKG", "cut.gpkg"),
+        ("vector_gbx", "GeoJSON", "cut.json"),
+    ],
+)
+def test_vector_corrupt_file_with_a_native_extension_names_the_file(
+    tmp_path, fmt, driver, fname
+):
+    """A truncated file with the right extension is opened as named: the error says
+    which file (GDAL's own message does not always), keeps GDAL's message and its
+    type, and chains the GDAL error as the cause."""
+    from pyogrio.errors import DataSourceError
+
+    if fname.endswith(".geojsonl"):
+        path = str(tmp_path / fname)
+        open(path, "w").write('{"type":"Feature","pro')
+    else:
+        path = _write_layer(str(tmp_path / fname), driver)
+        _truncate(path, 0.4 if fname.endswith(".gpkg") else 0.5)
+    opts = {"path": path, **({"driverName": driver} if fmt == "vector_gbx" else {})}
+    with pytest.raises(DataSourceError) as err:
+        _source(fmt)(opts).schema()
+    assert path in str(err.value)
+    assert type(err.value.__cause__) is DataSourceError
+
+
+def test_vector_corrupt_geojson_keeps_gdals_message_as_the_cause(tmp_path):
+    from pyogrio.errors import DataSourceError
+
+    path = _write_layer(str(tmp_path / "cut.geojson"), "GeoJSON")
+    _truncate(path)
+    with pytest.raises(DataSourceError) as err:
+        _source("geojson_gbx")({"path": path}).schema()
+    assert str(err.value).startswith(f"{path}: ")
+    assert "Failed to read GeoJSON data" in str(err.value)
+    assert type(err.value.__cause__) is DataSourceError
+    assert path not in str(err.value.__cause__)
+
+
+def test_vector_corrupt_file_names_the_file_at_read_time_too(tmp_path):
+    """An executor opens the file with no schema() first: the read names it too."""
+    from pyogrio.errors import DataSourceError
+
+    path = _write_layer(str(tmp_path / "cut.geojson"), "GeoJSON")
+    _truncate(path)
+    rdr = _source("geojson_gbx")({"path": path}).reader(None)
+    with pytest.raises(DataSourceError) as err:
+        _read_batches(rdr)
+    assert path in str(err.value)
+
+
+def test_vector_error_that_already_names_the_file_is_not_prefixed_again(tmp_path):
+    from pyogrio.errors import DataSourceError
+
+    path = tmp_path / "obj.geojsonl"
+    path.write_text('{"a": 1}\n{"a": 2}\n')
+    with pytest.raises(DataSourceError) as err:
+        _source("geojson_gbx")({"path": str(path)}).schema()
+    assert str(err.value).count("obj.geojsonl") == 1
+
+
+def _zipped_gdb(tmp_path, zip_name):
+    import shutil
+
+    _write_layer(str(tmp_path / "pts.gdb"), "OpenFileGDB")
+    base = str(tmp_path / "zipped")
+    shutil.make_archive(base, "zip", str(tmp_path), "pts.gdb")
+    out = str(tmp_path / zip_name)
+    os.replace(base + ".zip", out)
+    return out
+
+
+_KML = (
+    '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+    "<Placemark><name>a</name><Point><coordinates>1,2</coordinates></Point>"
+    "</Placemark></Document></kml>"
+)
+
+
+@pytest.mark.parametrize(
+    "fmt,driver,fname,rows",
+    [
+        ("file_gdb_gbx", None, "pts_gdb.zip", 3),  # a zipped FileGDB is not .gdb.zip
+        ("vector_gbx", "KML", "doc.xml", 1),  # KML named for its XML
+    ],
+)
+def test_vector_family_with_no_prefix_skips_the_detection_open(
+    tmp_path, monkeypatch, fmt, driver, fname, rows
+):
+    """OpenFileGDB, Shapefile and KML have an extension entry but no GDAL prefix to
+    force them: a name outside the entry can only be opened as named (or fail the
+    way schema() already did), so an executor's read opens it once, not detect
+    first."""
+    if fname.endswith(".zip"):
+        path = _zipped_gdb(tmp_path, fname)
+    else:
+        path = str(tmp_path / fname)
+        open(path, "w").write(_KML)
+    opts = {"path": path, **({"driverName": driver} if driver else {})}
+    rdr = _source(fmt)(opts).reader(None)  # what an executor builds
+    opens = _count_opens(monkeypatch)
+    assert sum(b.num_rows for b in _read_batches(rdr)) == rows
+    assert [fn for fn, _ in opens] == ["open_arrow"]
+
+
+def test_vector_family_with_no_prefix_still_rejects_other_formats_at_schema(tmp_path):
+    """Skipping the detection open at read time does not let schema() pass a file
+    of another format: _info_for still checks the driver GDAL opened it with."""
+    path = _write_layer(str(tmp_path / "pts.dat"), "GeoJSON")
+    with pytest.raises(ValueError, match=r"pts\.dat.*OpenFileGDB.*GeoJSON driver"):
+        _source("vector_gbx")({"path": path, "driverName": "OpenFileGDB"}).schema()
+
+
+def test_vector_family_with_no_prefix_keeps_the_unrecognized_hint(tmp_path):
+    path = tmp_path / "pts.gdb.txt"
+    path.write_bytes(bytes(range(256)) * 4)
+    with pytest.raises(ValueError, match=r"pts\.gdb\.txt.*does not recognize it as"):
+        _source("file_gdb_gbx")({"path": str(path)}).schema()

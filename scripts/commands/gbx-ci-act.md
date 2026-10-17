@@ -39,6 +39,7 @@ The first invocation builds `geobrix-ci-runner:local` (~5 min). Subsequent runs 
 
 - **Runner image**: `catthehacker/ubuntu:runner-24.04` (digest-pinned). pip/Maven/npm registry URLs are build-arg injected from the host env (`PIP_INDEX_URL`, `MAVEN_MIRROR_URL`, `NPM_REGISTRY_URL`); set them to a private proxy if your network requires it, otherwise leave unset to use public registries.
 - **Platform map**: `ubuntu-latest`, `ubuntu-24.04`, `ubuntu-22.04`, `larger`, `linux-ubuntu-latest` → `geobrix-ci-runner:local`
+- **Workspace mirror**: the project is rsynced (hardlinks) into `.cache/act-workspace/`. Heavy, derived and untracked bulk data is left out; `sample-data/Volumes/` is excluded except for its **git-tracked** files (fixtures real CI checks out, such as `proj-grids/synthetic.gsb`), which are mirrored. The full `sample-data/Volumes` is still bind-mounted at `/Volumes`.
 - **JFrog auth stub**: Real `.github/actions/jfrog-auth/action.yml` is bind-mounted over inside the act container with a no-op stub. Real `.github/` on disk is never modified.
 
 ## Coverage

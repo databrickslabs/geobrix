@@ -86,7 +86,8 @@ mkdir -p "$WORKSPACE"
 #  - target/         (Maven build output, GBs)
 #  - python/geobrix/.venv/  (lint venv)
 #  - scripts/docker/m2/     (Maven cache)
-#  - sample-data/Volumes/   (sample-data downloads)
+#  - sample-data/Volumes/   (sample-data downloads; the TRACKED files under it are
+#                            mirrored separately below)
 #  - docs/build/, docs/node_modules/  (docusaurus build/dep dirs)
 #  - node_modules/, staging/, test-logs/, coverage-reports/
 #  - spark-warehouse/, metastore_db/, derby.log  (gitignored local Spark output:
@@ -114,6 +115,21 @@ rsync -a \
     --exclude='spark-warehouse/' \
     --exclude='/metastore_db/' \
     --exclude='/derby.log' \
+    "$PROJECT_ROOT/" "$WORKSPACE/"
+
+# sample-data/Volumes/ is excluded above (untracked bulk downloads), but a few files
+# under it are TRACKED fixtures that real CI checks out, e.g. proj-grids/synthetic.gsb
+# (the pyvx grid-shift and pyrx PROJ end-to-end tests). Mirror exactly the tracked
+# files so those tests do not fail for an act-only reason. A tracked file deleted in
+# the working tree is skipped: rsync would otherwise exit 23 and abort the run.
+(
+    cd "$PROJECT_ROOT"
+    git ls-files -z --cached -- sample-data/Volumes | while IFS= read -r -d '' tracked; do
+        if [ -e "$tracked" ]; then printf '%s\0' "$tracked"; fi
+    done
+) | rsync -a \
+    --link-dest="$PROJECT_ROOT" \
+    --from0 --files-from=- \
     "$PROJECT_ROOT/" "$WORKSPACE/"
 
 # Now drop .github/ in fresh, with stub overlays applied.

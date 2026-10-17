@@ -470,11 +470,12 @@ def test_read_stage_skips_a_file_deleted_after_planning(tmp_path, caplog, monkey
     assert "b.tif" in caplog.text and "no longer exists" in caplog.text
 
 
+@pytest.mark.parametrize("fmt", ["raster_gbx", "gtiff_gbx", "cog_gbx"])
 @pytest.mark.parametrize("opt", ["manifest", "tilesTable", "TILESTABLE"])
-def test_read_paths_rejects_manifest_options_for_raster(spark, tmp_path, opt):
+def test_read_paths_rejects_manifest_options_for_raster(spark, tmp_path, opt, fmt):
     a = _tif(str(tmp_path / "a.tif"))
     with pytest.raises(ValueError, match=f"(?i){opt}"):
-        P.read_paths(_paths_df(spark, [a]), "raster_gbx", {opt: "x"})
+        P.read_paths(_paths_df(spark, [a]), fmt, {opt: "x"})
 
 
 # --- schema file pick (folder schema_path) ----------------------------------
@@ -544,7 +545,7 @@ def test_path_schema_folder_honors_glob(tmp_path):
 
 def test_path_schema_folder_without_a_match_names_the_pattern(tmp_path):
     (tmp_path / "x.txt").write_text("x")
-    with pytest.raises(ValueError, match=r"\*\.\{geojson,json,GEOJSON,JSON\}"):
+    with pytest.raises(ValueError, match=r"\*\.\{geojson,GEOJSON\}"):
         P.path_schema("geojson_gbx", None, str(tmp_path))
 
 
@@ -646,6 +647,10 @@ _GLOB_NAMES = [
     "a.TIF",
     "a.tif.aux.xml",
     "a.ovr",
+    "a.nc",
+    "a.nc4",
+    "a.pmtiles",
+    "a.pmtiles.tmp",
     "notes.txt",
     # Upper-case extensions are common (camera / drone imagery); mixed case is not.
     "b.JPEG",
@@ -657,18 +662,22 @@ _GLOB_NAMES = [
     "b.SHX",
     "b.GPKG",
     "b.GEOJSON",
+    "b.JSON",
     "b.GDB.ZIP",
+    "b.NC",
+    "b.PMTILES",
 ]
 
 
 def test_default_globs_per_format():
     assert P.DEFAULT_GLOBS == {
         "vector_gbx": (
-            "*.{gpkg,geojson,json,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
-            "GPKG,GEOJSON,JSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}"
+            "*.{gpkg,geojson,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
+            "GPKG,GEOJSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}"
         ),
         "shapefile_gbx": "*.{shp,shz,shp.zip,SHP,SHZ,SHP.ZIP}",
-        "geojson_gbx": "*.{geojson,json,GEOJSON,JSON}",
+        # Strict: a .json file is GeoJSON only when a glob says so.
+        "geojson_gbx": "*.{geojson,GEOJSON}",
         "geojsonl_gbx": "*.{geojsonl,geojsons,GEOJSONL,GEOJSONS}",
         "gpkg_gbx": "*.{gpkg,GPKG}",
         "file_gdb_gbx": "*.{gdb.zip,GDB.ZIP}",
@@ -676,9 +685,25 @@ def test_default_globs_per_format():
         "exif_gbx": "*.{jpg,jpeg,JPG,JPEG}",
         "raster_gbx": "*.{tif,tiff,TIF,TIFF}",
         "gtiff_gbx": "*.{tif,tiff,TIF,TIFF}",
+        "cog_gbx": "*.{tif,tiff,TIF,TIFF}",
+        "netcdf_gbx": "*.{nc,NC}",
+        "pmtiles_gbx": "*.{pmtiles,PMTILES}",  # source="archive"
     }
     assert set(P.DEFAULT_GLOBS) == set(P.SUPPORTED_FORMATS)
     assert P.default_glob("GPKG") == "*.{gpkg,GPKG}"
+
+
+def test_pmtiles_default_glob_follows_the_source_option():
+    """pmtiles_gbx reads .pmtiles archives (source="archive") or renders XYZ tiles
+    from GeoTIFFs (source="raster", whose filterRegex default keeps .tif only), so
+    its pattern, and the reader itself, needs the source option."""
+    archive = P.default_glob("pmtiles", {"source": "archive"})
+    assert archive == "*.{pmtiles,PMTILES}"
+    assert P.default_glob("pmtiles_gbx", {"source": "ARCHIVE"}) == archive
+    assert P.default_glob("pmtiles", {"source": "raster"}) == "*.tif"
+    for opts in (None, {}, {"source": "bogus"}):
+        with pytest.raises(ValueError, match="source.*archive.*raster"):
+            P.default_glob("pmtiles", opts)
 
 
 def test_vector_glob_is_the_union_of_the_vector_globs():
@@ -702,15 +727,24 @@ def test_glob_match_agrees_with_spark_path_glob_filter(spark, tmp_path):
         (tmp_path / name).write_bytes(b"x")
     expected = {
         "shapefile_gbx": {"a.shp", "a.shz", "a.shp.zip", "b.SHP"},
-        "geojson_gbx": {"a.geojson", "a.json", "b.GEOJSON"},
+        # .json is not GeoJSON by default.
+        "geojson_gbx": {"a.geojson", "b.GEOJSON"},
         # Lower and upper case match; mixed case (b.Jpg) does not.
         "exif_gbx": {"a.jpg", "a.jpeg", "a.JPG", "b.JPEG"},
         "gtiff_gbx": {"a.tif", "a.tiff", "a.TIF", "b.TIFF"},
         "lidar_gbx": {"a.las", "a.laz", "b.LAS", "b.LAZ"},
         "gpkg_gbx": {"a.gpkg", "b.GPKG"},
         "file_gdb_gbx": {"a.gdb.zip", "b.GDB.ZIP"},
+        "cog_gbx": {"a.tif", "a.tiff", "a.TIF", "b.TIFF"},
+        "netcdf_gbx": {"a.nc", "b.NC"},
+        "pmtiles_gbx": {"a.pmtiles", "b.PMTILES"},
+        "pmtiles_gbx raster": {"a.tif"},
     }
-    for fmt, glob in P.DEFAULT_GLOBS.items():
+    patterns = {
+        **P.DEFAULT_GLOBS,
+        "pmtiles_gbx raster": P.default_glob("pmtiles", {"source": "raster"}),
+    }
+    for fmt, glob in patterns.items():
         listed = {
             os.path.basename(r[0])
             for r in spark.read.format("binaryFile")
@@ -961,3 +995,200 @@ def test_read_paths_equals_the_batch_reader(spark, tmp_path, fmt, make):
     g, w = _comparable(got.select(cols)), _comparable(want.select(cols))
     assert got.count() == want.count() > 0
     assert g.exceptAll(w).count() == 0 and w.exceptAll(g).count() == 0
+
+
+def test_path_schema_folder_skips_underscore_and_dot_folders(tmp_path):
+    """Folders whose names start with _ or . are pruned from the schema-file pick,
+    as Spark's file sources do: _archive/ and .tmp/ sort first but are skipped."""
+    d = tmp_path / "landing"
+    (d / "_archive").mkdir(parents=True)
+    (d / ".tmp").mkdir()
+    _geojson(str(d / "_archive" / "old.geojson"), 1, extra_prop="archived")
+    _geojson(str(d / ".tmp" / "part.geojson"), 1, extra_prop="partial")
+    a = _geojson(str(d / "a.geojson"), 1)
+    assert P._schema_file("geojson_gbx", str(d)) == a
+    names = _schema_names(P.path_schema("geojson_gbx", None, str(d)))
+    assert "archived" not in names and "partial" not in names
+
+
+# --- the other light readers: COG, NetCDF, PMTiles ---------------------------
+
+
+def _assert_same_rows(got, want):
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert cols == want.columns
+    g, w = _comparable(got.select(cols)), _comparable(want.select(cols))
+    assert got.count() == want.count() > 0
+    assert g.exceptAll(w).count() == 0 and w.exceptAll(g).count() == 0
+
+
+def _union(dfs):
+    out = dfs[0]
+    for df in dfs[1:]:
+        out = out.unionByName(df)
+    return out
+
+
+def test_read_paths_cog_splits_like_the_raster_reader(spark, tmp_path):
+    from pyspark.sql import functions as F
+
+    a = _tif(str(tmp_path / "a.tif"), w=1024, h=1024, value=1)
+    b = _tif(str(tmp_path / "b.tif"), w=1024, h=1024, value=2)
+    opts = {"tileSize": "256"}  # 16 windows per file
+    got = P.read_paths(_paths_df(spark, [a, b]), "cog", opts, num_partitions=4)
+    _assert_same_rows(got, _batch_read(spark, "cog_gbx", str(tmp_path), **opts))
+    assert got.count() == 32
+    # Two-stage: one file's windows are planned first, then spread over tasks.
+    tasks = {}
+    for r in got.select(P.SOURCE_PATH_COL, F.spark_partition_id().alias("t")).collect():
+        tasks.setdefault(r[0], set()).add(r["t"])
+    assert set(tasks) == {a, b} and all(len(t) > 1 for t in tasks.values())
+
+
+def _nc_grid(path, scale=1.0):
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(path, "w") as ds:
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        for name in ("ch4", "co"):
+            v = ds.createVariable(name, "f4", ("lat", "lon"), fill_value=-9999.0)
+            v[:] = np.arange(12, dtype="float32").reshape(3, 4) * scale
+    return path
+
+
+def _nc_points(path, start=0.0):
+    import numpy as np
+    from netCDF4 import Dataset
+
+    with Dataset(path, "w") as ds:
+        ds.createDimension("obs", 5)
+        lat = ds.createVariable("latitude", "f8", ("obs",))
+        lon = ds.createVariable("longitude", "f8", ("obs",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = np.arange(5) * 0.1 + 50.0 + start
+        lon[:] = np.arange(5) * 0.1 + 10.0 + start
+        v = ds.createVariable("ch4", "f4", ("obs",))
+        v[:] = np.arange(5, dtype="float32") + start
+    return path
+
+
+@pytest.mark.parametrize(
+    "mode,make,rows",
+    [
+        # raster: one (source, tile) row per grid variable per file
+        ("raster", lambda d: [_nc_grid(f"{d}/a.nc"), _nc_grid(f"{d}/b.nc", 2.0)], 4),
+        # vector: one point feature per observation
+        ("vector", lambda d: [_nc_points(f"{d}/a.nc"), _nc_points(f"{d}/b.nc", 1)], 10),
+    ],
+)
+def test_read_paths_netcdf_both_modes_equal_the_batch_reader(
+    spark, tmp_path, mode, make, rows
+):
+    files = make(str(tmp_path))
+    opts = {"mode": mode}
+    got = P.read_paths(_paths_df(spark, files), "netcdf", opts, num_partitions=2)
+    _assert_same_rows(got, _batch_read(spark, "netcdf_gbx", str(tmp_path), **opts))
+    assert got.count() == rows
+    assert {r[P.SOURCE_PATH_COL] for r in got.collect()} == set(files)
+
+
+def _png(i):
+    import io
+
+    import numpy as np
+    from PIL import Image
+
+    buf = io.BytesIO()
+    Image.fromarray(np.full((256, 256, 3), 40 + i * 20, dtype="uint8")).save(
+        buf, format="PNG"
+    )
+    return buf.getvalue()
+
+
+def _pmtiles_archive(path, tiles):
+    """A single .pmtiles archive holding ``tiles`` = [(z, x, y, bytes)]."""
+    from pmtiles.tile import Compression, TileType, zxy_to_tileid
+
+    from databricks.labs.gbx.ds.tiles._header import build_header_info
+    from databricks.labs.gbx.ds.tiles.backend import PMTilesBackend
+    from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
+
+    info = build_header_info(
+        [(z, x, y) for z, x, y, _ in tiles],
+        SlippyGrid(),
+        TileType.PNG,
+        Compression.NONE,
+        {},
+    )
+    ordered = sorted((zxy_to_tileid(z, x, y), b) for z, x, y, b in tiles)
+    PMTilesBackend().assemble(iter(ordered), info, path)
+    return path
+
+
+def _rgb_tif(path, w, s, e, n, val):
+    import numpy as np
+    import rasterio
+    from rasterio.transform import from_bounds
+
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        width=256,
+        height=256,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(w, s, e, n, 256, 256),
+    ) as ds:
+        ds.write(np.full((3, 256, 256), val, dtype="uint8"))
+    return path
+
+
+def test_read_paths_pmtiles_archive_mode_spreads_an_archive(spark, tmp_path):
+    from pyspark.sql import functions as F
+
+    a = _pmtiles_archive(
+        str(tmp_path / "a.pmtiles"),
+        [(14, 2615 + i, 6330, _png(i)) for i in range(6)],
+    )
+    b = _pmtiles_archive(str(tmp_path / "b.pmtiles"), [(3, 1, 2, _png(7))])
+    opts = {"source": "archive", "tilesPerPartition": "2"}
+    got = P.read_paths(_paths_df(spark, [a, b]), "pmtiles", opts, num_partitions=4)
+    want = _union([_batch_read(spark, "pmtiles_gbx", f, **opts) for f in (a, b)])
+    _assert_same_rows(got, want)
+    assert got.count() == 7
+    # Two-stage: the archive's three partitions are planned, then spread.
+    tasks = got.where(F.col(P.SOURCE_PATH_COL) == a).select(F.spark_partition_id())
+    assert tasks.distinct().count() > 1
+
+
+def test_read_paths_pmtiles_raster_mode_renders_each_file(spark, tmp_path):
+    a = _rgb_tif(str(tmp_path / "a.tif"), -122.50, 37.74, -122.45, 37.79, 120)
+    b = _rgb_tif(str(tmp_path / "b.tif"), -122.45, 37.74, -122.40, 37.79, 220)
+    opts = {"source": "raster", "minZoom": "14", "maxZoom": "14"}
+    opts["tilesPerPartition"] = "2"
+    got = P.read_paths(_paths_df(spark, [a, b]), "pmtiles", opts, num_partitions=2)
+    want = _union([_batch_read(spark, "pmtiles_gbx", f, **opts) for f in (a, b)])
+    _assert_same_rows(got, want)
+    # Each file is rendered on its own: a tile over the seam comes once per file.
+    keys = [(r["z"], r["x"], r["y"]) for r in got.collect()]
+    assert len(keys) > len(set(keys))
+
+
+def test_read_paths_pmtiles_needs_the_source_option(spark, tmp_path):
+    a = _pmtiles_archive(str(tmp_path / "a.pmtiles"), [(3, 1, 2, _png(1))])
+    for opts in (None, {"tilesPerPartition": "2"}, {"source": "tiles"}):
+        with pytest.raises(ValueError, match="source.*archive.*raster"):
+            P.read_paths(_paths_df(spark, [a]), "pmtiles_gbx", opts)
+        with pytest.raises(ValueError, match="source.*archive.*raster"):
+            P.path_schema("pmtiles_gbx", opts, str(tmp_path))

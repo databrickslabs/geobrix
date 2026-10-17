@@ -260,3 +260,41 @@ def test_first_file_takes_an_accepted_directory_as_one_entry(tmp_path):
     assert _listing.first_file(
         root, lambda n: n.endswith(".gdb.zip"), accept_dir=is_gdb
     ) == str(tmp_path / "a.gdb.zip")
+
+
+def test_list_files_skip_hidden_prunes_underscore_and_dot_entries(tmp_path):
+    """skip_hidden: names starting with _ or . are skipped, and such directories
+    are not walked into (Spark's file-source convention, as first_file does)."""
+    for rel in (
+        "a.geojson",
+        "_x.geojson",
+        ".y.geojson",
+        "_archive/old.geojson",
+        ".tmp/part.geojson",
+        "sub/b.geojson",
+        "sub/_old/c.geojson",
+        "sub/.cache/d.geojson",
+    ):
+        p = tmp_path / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"x")
+    walked = []
+    real_walk = os.walk
+
+    def spy(top, *a, **k):
+        for root, dirs, files in real_walk(top, *a, **k):
+            walked.append(os.path.relpath(root, tmp_path))
+            yield root, dirs, files
+
+    root = str(tmp_path)
+    assert len(_listing.list_files(root)) == 8  # default: everything
+    import unittest.mock as mock
+
+    with mock.patch.object(_listing.os, "walk", spy):
+        got = _listing.list_files(root, skip_hidden=True)
+    assert got == [str(tmp_path / "a.geojson"), str(tmp_path / "sub" / "b.geojson")]
+    assert sorted(walked) == [".", "sub"]  # hidden directories never read
+    # Top level only, too.
+    assert _listing.list_files(root, recursive=False, skip_hidden=True) == [
+        str(tmp_path / "a.geojson")
+    ]

@@ -381,7 +381,9 @@ def write_batch(
     return len(todo)
 
 
-def _ingest_setup(target, source_dir, format, on_change, glob, schema_path) -> dict:
+def _ingest_setup(
+    target, source_dir, format, on_change, glob, schema_path, options=None
+) -> dict:
     """Validated names and inputs for :func:`declare_ingest` (no session needed)."""
     _check_mode(on_change)
     try:
@@ -407,7 +409,7 @@ def _ingest_setup(target, source_dir, format, on_change, glob, schema_path) -> d
         "versions_flow": f"{short}_versions_flow",
         "sink": f"{short}_rows_sink",
         "rows_flow": f"{short}_rows_flow",
-        "glob": glob or default_glob(format),
+        "glob": glob or default_glob(format, options),
         "schema_src": schema_path or source_dir,
     }
 
@@ -432,12 +434,15 @@ def declare_ingest(
     instead.
 
     Auto Loader delivers the files under ``source_dir`` whose name matches ``glob``
-    (default: the format's :data:`~databricks.labs.gbx.ds.paths.DEFAULT_GLOBS`
-    pattern). The table schema is resolved once, here, from ``schema_path`` (default
-    ``source_dir``; a folder's first file matching ``glob``) and reused by every
-    micro-batch. ``source_dir`` and ``schema_path`` are Volume paths.
+    (default: the format's :func:`~databricks.labs.gbx.ds.paths.default_glob`
+    pattern; ``pmtiles_gbx`` needs its ``source`` option). The table schema is
+    resolved once, here, from ``schema_path`` (default ``source_dir``; a folder's
+    first file matching ``glob``) and reused by every micro-batch. ``source_dir``
+    and ``schema_path`` are Volume paths.
     """
-    setup = _ingest_setup(target, source_dir, format, on_change, glob, schema_path)
+    setup = _ingest_setup(
+        target, source_dir, format, on_change, glob, schema_path, options
+    )
     schema = path_schema(format, options, setup["schema_src"], glob=setup["glob"])
 
     from pyspark import pipelines as dp

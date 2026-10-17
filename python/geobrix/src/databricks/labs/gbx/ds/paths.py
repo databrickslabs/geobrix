@@ -4,9 +4,10 @@ Each row names one file; the reader's own DataSource contract (``schema()`` ->
 ``reader().partitions()`` -> ``read()``) parses it inside ``mapInArrow``, so the
 same code serves batch reads, Auto Loader streams, and the Lakeflow connector.
 
-Raster readers plan in two stages: each file is first planned into its tile
-windows (one row per reader partition), the windows are repartitioned, and each
-window is read on its own, so one large raster spreads across tasks.
+Raster and PMTiles readers plan in two stages: each file is first planned into
+its reader partitions (tile windows, or groups of PMTiles tiles; one row each),
+those are repartitioned, and each is read on its own, so one large file spreads
+across tasks.
 
 Paths are Unity Catalog Volume (FUSE) paths; ``dbfs:`` / ``file:`` prefixes are
 accepted; object-store URIs (``s3://``, ``abfss://``, ...) and GDAL ``/vsi...``
@@ -42,7 +43,10 @@ SOURCE_MTIME_COL = "_source_mtime"
 _TS = pa.timestamp("us", tz="UTC")
 
 # Light readers read_paths can drive. Vector / LiDAR / EXIF read() yields Arrow
-# RecordBatches; the raster readers yield row tuples (converted in _as_batches).
+# RecordBatches; the raster, NetCDF and PMTiles readers yield row tuples
+# (converted in _as_batches). file_gbx is left out on purpose (it lists files,
+# which the binaryFile / Auto Loader input already does), as are the heavyweight
+# JVM readers.
 SUPPORTED_FORMATS = (
     "vector_gbx",
     "shapefile_gbx",
@@ -54,11 +58,17 @@ SUPPORTED_FORMATS = (
     "exif_gbx",
     "raster_gbx",
     "gtiff_gbx",
+    "cog_gbx",
+    "netcdf_gbx",
+    "pmtiles_gbx",
 )
 
-# Readers with many partitions (tile windows) per file: read_paths plans them
-# first, then spreads the windows across tasks.
-TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx")
+# Readers with many partitions per file: read_paths plans them first, then spreads
+# them across tasks. raster / gtiff / cog: tile windows; pmtiles: groups of
+# ``tilesPerPartition`` tiles, both for an archive and for a raster it renders.
+# netcdf_gbx is not one: both of its modes read a file as one partition (every
+# variable and slice in one pass), so it is spread by file like the vector readers.
+TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx", "pmtiles_gbx")
 
 # Default file pattern per reader, in Spark ``pathGlobFilter`` (Hadoop glob)
 # syntax, matched against the file name. Hadoop globs are case-sensitive, so each
@@ -68,13 +78,15 @@ TWO_STAGE_FORMATS = ("raster_gbx", "gtiff_gbx")
 # ``.gdb`` folder would be read as data. A folder ``schema_path`` takes the schema
 # from its first file matching the same pattern (or, for the readers in
 # _GDB_DIR_FORMATS, its first unzipped ``.gdb`` folder, whichever sorts first).
+# GeoJSON is strict: a ``.json`` file is read as GeoJSON only when a glob names it.
+# pmtiles_gbx: the ``source="archive"`` pattern; see _PMTILES_GLOBS.
 DEFAULT_GLOBS = {
     "vector_gbx": (
-        "*.{gpkg,geojson,json,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
-        "GPKG,GEOJSON,JSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}"
+        "*.{gpkg,geojson,geojsonl,geojsons,shp,shz,shp.zip,gdb.zip,"
+        "GPKG,GEOJSON,GEOJSONL,GEOJSONS,SHP,SHZ,SHP.ZIP,GDB.ZIP}"
     ),
     "shapefile_gbx": "*.{shp,shz,shp.zip,SHP,SHZ,SHP.ZIP}",
-    "geojson_gbx": "*.{geojson,json,GEOJSON,JSON}",
+    "geojson_gbx": "*.{geojson,GEOJSON}",
     "geojsonl_gbx": "*.{geojsonl,geojsons,GEOJSONL,GEOJSONS}",
     "gpkg_gbx": "*.{gpkg,GPKG}",
     "file_gdb_gbx": "*.{gdb.zip,GDB.ZIP}",
@@ -82,7 +94,17 @@ DEFAULT_GLOBS = {
     "exif_gbx": "*.{jpg,jpeg,JPG,JPEG}",
     "raster_gbx": "*.{tif,tiff,TIF,TIFF}",
     "gtiff_gbx": "*.{tif,tiff,TIF,TIFF}",
+    "cog_gbx": "*.{tif,tiff,TIF,TIFF}",
+    "netcdf_gbx": "*.{nc,NC}",
+    "pmtiles_gbx": "*.{pmtiles,PMTILES}",
 }
+
+# pmtiles_gbx reads one of two inputs, chosen by its ``source`` option, which
+# read_paths and declare_ingest require (the reader's own default, ``raster``,
+# would fail on a .pmtiles file): ``archive`` reads the tiles stored in .pmtiles
+# files; ``raster`` renders XYZ tiles from GeoTIFFs, and its pattern keeps to that
+# reader's ``filterRegex`` default (``.tif`` only).
+_PMTILES_GLOBS = {"archive": DEFAULT_GLOBS["pmtiles_gbx"], "raster": "*.tif"}
 
 # Readers that read an unzipped ``.gdb`` folder as one dataset.
 _GDB_DIR_FORMATS = ("file_gdb_gbx", "vector_gbx")
@@ -111,7 +133,10 @@ _PLAN_ROWS_PER_BATCH = 8192
 
 # Raster options that plan from a manifest / table instead of the row's path: in
 # read_paths every input path would replan the whole manifest (duplicate rows).
+# They belong to the readers that plan with RasterGbxReader.partitions() (netcdf_gbx
+# plans its own per-file partitions and ignores them).
 _PATHLESS_RASTER_OPTIONS = ("manifest", "tilesTable")
+_MANIFEST_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx")
 
 
 def _sources() -> Dict[str, type]:
@@ -133,9 +158,46 @@ def resolve_format(fmt: str) -> type:
     return _sources()[name]
 
 
-def default_glob(fmt: str) -> str:
-    """The :data:`DEFAULT_GLOBS` pattern for a reader name (alias or any case)."""
-    return DEFAULT_GLOBS[resolve_format(fmt).name()]
+def _pmtiles_source(options: Optional[dict]) -> str:
+    """The ``source`` option of a pmtiles_gbx read (``archive`` or ``raster``)."""
+    given = (options or {}).get("source")
+    value = str(given).lower() if given is not None else ""
+    if value not in _PMTILES_GLOBS:
+        raise ValueError(
+            "pmtiles_gbx needs the `source` option in read_paths and declare_ingest: "
+            "'archive' reads the tiles stored in .pmtiles files, 'raster' renders "
+            f"XYZ tiles from GeoTIFF files; got {given!r}."
+        )
+    return value
+
+
+def default_glob(fmt: str, options: Optional[dict] = None) -> str:
+    """The default file pattern for a reader name (``_gbx`` optional, any case):
+    its :data:`DEFAULT_GLOBS` entry, or for ``pmtiles_gbx`` the pattern of its
+    ``source`` option (required)."""
+    name = resolve_format(fmt).name()
+    if name == "pmtiles_gbx":
+        return _PMTILES_GLOBS[_pmtiles_source(options)]
+    return DEFAULT_GLOBS[name]
+
+
+def _check_options(fmt: str, options: Optional[dict]) -> str:
+    """Reader name for ``fmt``, after rejecting the reader options read_paths
+    cannot honor: a raster manifest / tiles table (replanned for every row), or a
+    pmtiles_gbx read without its ``source``."""
+    name = resolve_format(fmt).name()
+    if name in _MANIFEST_FORMATS:
+        given = {k.lower() for k in (options or {})}
+        bad = [o for o in _PATHLESS_RASTER_OPTIONS if o.lower() in given]
+        if bad:
+            raise ValueError(
+                f"read_paths does not support the {bad} option(s): each row names "
+                f"one file to read, so a manifest or tiles table would be replanned "
+                f"for every row. Read it with spark.read.format({fmt!r}) instead."
+            )
+    if name == "pmtiles_gbx":
+        _pmtiles_source(options)
+    return name
 
 
 # Hadoop's GlobPattern copies an escape "\X" into its regex (RE2, via re2j)
@@ -268,16 +330,22 @@ def _is_gdb(path: str) -> bool:
     return path.lower().rstrip("/").endswith(".gdb")
 
 
-def _schema_file(fmt: str, schema_path: str, glob: Optional[str] = None) -> str:
+def _schema_file(
+    fmt: str,
+    schema_path: str,
+    glob: Optional[str] = None,
+    options: Optional[dict] = None,
+) -> str:
     """The one file whose reader schema defines the output: ``schema_path`` itself,
-    or for a folder its first file (sorted path order, hidden entries skipped) whose
-    name matches ``glob`` (default: the format's :data:`DEFAULT_GLOBS` pattern). A
-    ``.gdb`` folder is a single dataset and is used as is; inside a folder, for the
-    readers in :data:`_GDB_DIR_FORMATS`, a ``.gdb`` folder counts as one file."""
+    or for a folder its first file (sorted path order; files and folders whose
+    names start with ``_`` or ``.`` skipped) whose name matches ``glob`` (default:
+    :func:`default_glob` of the format and ``options``). A ``.gdb`` folder is a
+    single dataset and is used as is; inside a folder, for the readers in
+    :data:`_GDB_DIR_FORMATS`, a ``.gdb`` folder counts as one file."""
     local = _fuse_path(schema_path)
     if not os.path.isdir(local) or _is_gdb(local):
         return local
-    pattern = glob or default_glob(fmt)
+    pattern = glob or default_glob(fmt, options)
     gdb_dirs = resolve_format(fmt).name() in _GDB_DIR_FORMATS
     found = _listing.first_file(
         local,
@@ -318,10 +386,12 @@ def path_schema(
     """Output schema: the reader schema of ``schema_path`` (+ lineage columns).
 
     A folder ``schema_path`` opens only its first file whose name matches ``glob``
-    (default: the format's :data:`DEFAULT_GLOBS` pattern), so other files in the
+    (default: the format's :func:`default_glob` pattern), so other files in the
     folder (drifted, unrelated or not yet complete) never affect the schema.
+    Options read_paths cannot honor are rejected here (see :func:`_check_options`).
     """
-    base = _reader_schema(fmt, options, _schema_file(fmt, schema_path, glob))
+    _check_options(fmt, options)
+    base = _reader_schema(fmt, options, _schema_file(fmt, schema_path, glob, options))
     return _output_schema(base, lineage)
 
 
@@ -569,23 +639,15 @@ def read_paths(
     :func:`path_schema` (lineage columns optional); given, no file is opened to
     resolve it.
 
-    ``num_partitions`` repartitions the work: by file for vector / LiDAR / EXIF,
-    and by tile window for raster (``raster_gbx`` / ``gtiff_gbx``), whose files
-    are planned into their windows first so one large raster spreads across
-    tasks.
+    ``num_partitions`` repartitions the work: by file for vector / LiDAR / EXIF /
+    NetCDF, by tile window for raster (``raster_gbx`` / ``gtiff_gbx`` /
+    ``cog_gbx``) and by group of tiles for ``pmtiles_gbx``; the files of those
+    :data:`TWO_STAGE_FORMATS` are planned into their partitions first, so one
+    large file spreads across tasks. ``pmtiles_gbx`` needs its ``source`` option.
     """
     from pyspark.sql import functions as F
 
-    two_stage = resolve_format(format).name() in TWO_STAGE_FORMATS
-    if two_stage:
-        given = {k.lower() for k in (options or {})}
-        bad = [o for o in _PATHLESS_RASTER_OPTIONS if o.lower() in given]
-        if bad:
-            raise ValueError(
-                f"read_paths does not support the {bad} option(s): each row names "
-                f"one file to read, so a manifest or tiles table would be replanned "
-                f"for every row. Read it with spark.read.format({format!r}) instead."
-            )
+    two_stage = _check_options(format, options) in TWO_STAGE_FORMATS
     if schema is not None:
         schema = _output_schema(schema, lineage)
     else:

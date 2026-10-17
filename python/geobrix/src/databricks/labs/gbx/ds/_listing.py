@@ -131,11 +131,17 @@ def to_local_path(path: str) -> str:
     return path
 
 
+def _hidden(name: str) -> bool:
+    """Spark's file sources skip names starting with ``.`` or ``_``."""
+    return name.startswith((".", "_"))
+
+
 def list_files(
     path: str,
     filter_regex: str = ".*",
     recursive: bool = True,
     raise_on_empty: bool = True,
+    skip_hidden: bool = False,
 ) -> List[str]:
     """Return sorted absolute file paths under ``path`` whose full path matches ``filter_regex``.
 
@@ -150,6 +156,10 @@ def list_files(
         raise_on_empty: When True (default) raise :class:`FileNotFoundError` if no files
                         match.  When False return an empty list instead (callers that want
                         to check emptiness themselves, e.g. existence checks).
+        skip_hidden:    When True, skip files and folders whose name starts with ``.`` or
+                        ``_``, and never descend into such folders (Spark's file-source
+                        convention, which :func:`first_file` always follows). A ``path``
+                        that names a file is returned as is.
 
     Both the recursive and non-recursive traversal paths are wrapped in
     :func:`_retry_transient` so UC Volume FUSE eventual-consistency
@@ -169,8 +179,12 @@ def list_files(
 
         def _walk() -> List[str]:
             result: List[str] = []
-            for root, _dirs, names in os.walk(abspath):
+            for root, dirs, names in os.walk(abspath):
+                if skip_hidden:
+                    dirs[:] = [d for d in dirs if not _hidden(d)]
                 for name in names:
+                    if skip_hidden and _hidden(name):
+                        continue
                     full = os.path.join(root, name)
                     if pattern.match(full):
                         result.append(full)
@@ -191,6 +205,8 @@ def list_files(
             def _listdir() -> List[str]:
                 result: List[str] = []
                 for name in os.listdir(abspath):
+                    if skip_hidden and _hidden(name):
+                        continue
                     full = os.path.join(abspath, name)
                     if os.path.isfile(full) and pattern.match(full):
                         result.append(full)
@@ -236,7 +252,7 @@ def first_file(
             return sorted(
                 ((e.name + "/" if e.is_dir() else e.name), e.path, e.is_dir())
                 for e in it
-                if not e.name.startswith((".", "_"))
+                if not _hidden(e.name)
             )
 
     def _matches(d: str) -> Iterator[str]:

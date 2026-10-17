@@ -754,16 +754,14 @@ def test_declare_ingest_scd2_uses_qualified_names_and_one_schema(
     assert flow == ("t_rows_flow", {"target": "t_rows_sink"})
 
     dp.fns["main.geo.t_file_events"]()
-    assert ("option", "pathGlobFilter", "*.{geojson,json,GEOJSON,JSON}") in log
+    assert ("option", "pathGlobFilter", "*.{geojson,GEOJSON}") in log
     assert ("load", str(d)) in log
     dp.fns["t_rows_flow"]()
     assert ("table", "`main`.`geo`.`t_file_events`") in log
 
     for batch_id in range(2):  # every micro-batch reuses the declared schema
         dp.fns["t_rows_sink"](object(), batch_id)
-    assert (
-        len(schemas) == 1 and schemas[0][1]["glob"] == "*.{geojson,json,GEOJSON,JSON}"
-    )
+    assert len(schemas) == 1 and schemas[0][1]["glob"] == "*.{geojson,GEOJSON}"
     resolved = P_path_schema(a)
     for args, kw in batches:
         assert args[1] == "main.geo.t" and kw["versions"] == "main.geo.t_file_versions"
@@ -804,3 +802,14 @@ def test_ingest_names_and_default_glob():
     )
     assert odd["events"] == "`a-b`.s.t_file_events" and odd["glob"] == "x_*.gpkg"
     assert odd["schema_src"] == "/V/x_1.gpkg"
+
+
+def test_ingest_default_glob_follows_the_pmtiles_source_option():
+    def glob(options):
+        setup = C._ingest_setup("c.s.t", "/V", "pmtiles", "scd2", None, None, options)
+        return setup["glob"]
+
+    assert glob({"source": "archive"}) == "*.{pmtiles,PMTILES}"
+    assert glob({"source": "raster"}) == "*.tif"
+    with pytest.raises(ValueError, match="source"):
+        glob(None)

@@ -103,18 +103,20 @@ def test_read_paths_on_error_values(spark, tmp_path):
 
 
 def test_fail_mode_error_names_the_file(spark, tmp_path):
-    """GDAL's parse error does not name the file; on_error="fail" adds it, keeping
-    the exception's type and message."""
-    good = _geojson(tmp_path / "good.geojson", [_feature(0)])
-    bad = tmp_path / "bad.geojson"
-    bad.write_text('{"type": "FeatureCollection", "features": [{"type": "Feat')
-    expected = P.path_schema("geojson_gbx", None, good)
+    """laspy's error for a truncated LAS file does not name the file;
+    on_error="fail" adds it, keeping the exception's type and message."""
+    good, offset, reclen = _las(tmp_path / "good.las", 100)
+    bad = str(tmp_path / "cut.las")
+    shutil.copy(good, bad)
+    with open(bad, "r+b") as fh:
+        fh.truncate(offset + 50 * reclen + 7)
+    expected = P.path_schema("lidar_gbx", None, good)
     with pytest.raises(Exception) as info:
-        list(P.iter_path_batches(str(bad), None, "geojson_gbx", None, expected))
-    assert str(bad) not in str(info.value)
+        list(P.iter_path_batches(bad, None, "lidar_gbx", None, expected))
+    assert bad not in str(info.value)
     assert f"while reading {bad}" in info.value.__notes__
     with pytest.raises(Exception, match=f"while reading {bad}"):
-        P.read_paths(_listing(spark, [good, str(bad)]), "geojson_gbx").collect()
+        P.read_paths(_listing(spark, [good, bad]), "lidar_gbx").collect()
 
 
 def test_skip_reads_the_good_files_and_sets_the_bad_one_aside(spark, tmp_path):
@@ -556,28 +558,38 @@ def test_lidar_chunk_that_fails_to_decode_is_narrowed_down(tmp_path, monkeypatch
 
 
 def _jpg(path):
+    """A JPEG whose scan data (noise) is most of the file."""
     from PIL import Image
 
-    Image.new("RGB", (64, 64), (90, 120, 30)).save(str(path), quality=90)
+    rng = np.random.default_rng(5)
+    Image.fromarray(rng.integers(0, 255, (256, 256, 3), dtype="uint8")).save(
+        str(path), quality=90
+    )
     return str(path)
 
 
-def test_exif_file_that_is_not_a_whole_jpeg_is_a_record(tmp_path):
+def test_exif_file_that_is_not_a_jpeg_is_a_record(tmp_path):
+    """Set aside: no JPEG start marker, or a header that cannot be decoded. A
+    missing or late end marker is not: a truncated scan or a Motion Photo
+    (an MP4 after the image) still has its metadata; it is a warning."""
     good = _jpg(tmp_path / "good.jpg")
     data = open(good, "rb").read()
-    cut = tmp_path / "cut.jpg"
-    cut.write_bytes(data[: len(data) // 2])
     junk = tmp_path / "junk.jpg"
     junk.write_bytes(b"\x00" * 300)
-    trailer = tmp_path / "trailer.jpg"
-    trailer.write_bytes(data + b"vendor data after the image" * 10)
-    for path, why in ((cut, "no JPEG end marker"), (junk, "no JPEG start marker")):
+    garbled = tmp_path / "garbled.jpg"
+    garbled.write_bytes(b"\xff\xd8" + b"\x5a" * 400)
+    for path, why in ((junk, "no JPEG start marker"), (garbled, "cannot be decoded")):
         rows, (rec,) = _read(tmp_path, str(path), "exif_gbx", None, good)
         assert rows == [] and rec["error_class"] == Q.NOT_JPEG
         assert why in rec["error_message"]
         shutil.rmtree(tmp_path / "bad_records")
-    rows, recs = _read(tmp_path, str(trailer), "exif_gbx", None, good)
-    assert len(rows) == 1 and recs == []
+    cut = tmp_path / "cut.jpg"
+    cut.write_bytes(data[: len(data) // 2])
+    motion = tmp_path / "motion.jpg"
+    motion.write_bytes(data + b"\x00\x00\x00\x18ftypmp42" + os.urandom(3 << 20))
+    for path in (cut, motion):
+        rows, recs = _read(tmp_path, str(path), "exif_gbx", None, good)
+        assert len(rows) == 1 and recs == []
 
 
 def test_exif_qc_decode_error_is_a_record(tmp_path):
@@ -756,5 +768,336 @@ def test_a_folder_that_cannot_be_written_says_what_to_do(tmp_path):
     blocker.write_text("a file, not a folder")
     bad = Q.BadRecords(str(blocker / ".gbx_scratch" / "x"))
     bad.add("/v/a.gpkg", MTIME_US, None, "ValueError", "x")
-    with pytest.raises(OSError, match="give the pipeline write access"):
+    with pytest.raises(OSError, match="scratch_dir"):
         bad.close()
+
+
+# --- fix round 2: valid data that must not be set aside ---------------------------
+
+
+def _wkb_points(points):
+    return b"".join(struct.pack("<dd", *p) for p in points)
+
+
+_ARC = struct.pack("<BII", 1, 8, 3) + _wkb_points([(0, 0), (1, 1), (2, 0)])
+_COMPOUND = struct.pack("<BII", 1, 9, 1) + _ARC
+_RING = (
+    struct.pack("<BII", 1, 9, 2)
+    + _ARC
+    + struct.pack("<BII", 1, 2, 2)
+    + _wkb_points([(2, 0), (0, 0)])
+)
+_CURVE_POLYGON = struct.pack("<BII", 1, 10, 1) + _RING
+_MULTI_CURVE = struct.pack("<BII", 1, 11, 1) + _COMPOUND
+_TRIANGLE = (
+    struct.pack("<BII", 1, 17, 1)
+    + struct.pack("<I", 4)
+    + _wkb_points([(0, 0), (1, 0), (0, 1), (0, 0)])
+)
+_TIN = struct.pack("<BII", 1, 16, 1) + _TRIANGLE
+_POLYHEDRAL = (
+    struct.pack("<BII", 1, 15, 1) + struct.pack("<BII", 1, 3, 1) + _TRIANGLE[5:]
+)
+_CURVE_IN_COLLECTION = struct.pack("<BII", 1, 7, 1) + _ARC
+_ARC_Z_ISO = struct.pack("<BII", 1, 1008, 3) + b"".join(
+    struct.pack("<ddd", x, y, 0) for x, y in [(0, 0), (1, 1), (2, 0)]
+)
+_ARC_EWKB_SRID = struct.pack("<BIII", 1, 0x20000008, 4326, 3) + _wkb_points(
+    [(0, 0), (1, 1), (2, 0)]
+)
+
+
+def test_curves_and_surfaces_are_readable_geometries():
+    """shapely raises NotImplementedError on curves (even with
+    on_invalid="ignore") and returns None for TIN / Triangle /
+    PolyhedralSurface: none of them is a bad record; only garbage is."""
+    geoms = [
+        _ARC,
+        _COMPOUND,
+        _CURVE_POLYGON,
+        _MULTI_CURVE,
+        _TRIANGLE,
+        _TIN,
+        _POLYHEDRAL,
+        _CURVE_IN_COLLECTION,
+        _ARC_Z_ISO,
+        _ARC_EWKB_SRID,
+        b"\x01\x63\x00\x00\x00" + b"\xab" * 20,
+        None,
+    ]
+    n = len(geoms)
+    batch = pa.record_batch(
+        [
+            pa.array(range(n), pa.int32()),
+            pa.array(geoms, pa.binary()),
+            pa.array(["4326"] * n),
+            pa.array(["+proj=longlat"] * n),
+        ],
+        names=["id", "g", "g_srid", "g_srid_proj"],
+    )
+    assert Q.bad_rows(batch, "g") == {
+        n - 2: (Q.UNREADABLE_GEOMETRY, "g is not readable WKB")
+    }
+
+
+def _layer(path, driver, geometry_type, geoms):
+    import pyogrio
+
+    pyogrio.write_arrow(
+        pa.table(
+            {
+                "id": pa.array(range(len(geoms)), pa.int32()),
+                "geometry": pa.array(geoms, pa.binary()),
+            }
+        ),
+        str(path),
+        driver=driver,
+        layer="l",
+        geometry_name="geometry",
+        geometry_type=geometry_type,
+        crs="EPSG:4326",
+    )
+    return str(path)
+
+
+@pytest.mark.parametrize(
+    "fmt, name, driver, geometry_type, geoms",
+    [
+        ("gpkg_gbx", "curves.gpkg", "GPKG", "Unknown", [_COMPOUND, _CURVE_POLYGON] * 3),
+        ("gpkg_gbx", "tin.gpkg", "GPKG", "Unknown", [_TIN, _TIN]),
+        (
+            "file_gdb_gbx",
+            "curves.gdb",
+            "OpenFileGDB",
+            "MultiLineString",
+            [_MULTI_CURVE] * 4,
+        ),
+    ],
+)
+def test_curved_and_surface_layers_ingest_whole(
+    tmp_path, fmt, name, driver, geometry_type, geoms
+):
+    """Curved features anywhere in the file (here in every batch) are read."""
+    path = _layer(tmp_path / name, driver, geometry_type, geoms)
+    rows, recs = _read(tmp_path, path, fmt, {"chunkSize": "2"})
+    assert len(rows) == len(geoms) and recs == []
+
+
+def test_cdf5_netcdf_is_not_mistaken_for_a_truncated_file(tmp_path):
+    from netCDF4 import Dataset
+
+    path = str(tmp_path / "cdf5.nc")
+    with Dataset(path, "w", format="NETCDF3_64BIT_DATA") as ds:
+        ds.createDimension("time", None)
+        ds.createDimension("y", 8)
+        ds.createDimension("x", 8)
+        ds.createVariable("y", "f8", ("y",))[:] = np.arange(8.0)
+        ds.createVariable("x", "f8", ("x",))[:] = np.arange(8.0)
+        ds.createVariable("r", "f4", ("time", "y", "x"))[0:2] = np.ones((2, 8, 8))
+    assert open(path, "rb").read(4) == b"CDF\x05"
+    rows, recs = _read(tmp_path, path, "netcdf_gbx")
+    assert len(rows) == 1 and recs == []
+
+
+def test_zipped_shapefile_deleted_records_are_not_counted(tmp_path):
+    import zipfile
+
+    shp = _shapefile(tmp_path / "shp")
+    dbf = shp[:-4] + ".dbf"
+    n, header, reclen = _dbf_layout(dbf)
+    with open(dbf, "r+b") as fh:
+        fh.seek(header + 3 * reclen)
+        fh.write(b"*")
+    zipped = str(tmp_path / "pts.shp.zip")
+    with zipfile.ZipFile(zipped, "w") as zf:
+        for f in sorted(os.listdir(tmp_path / "shp")):
+            zf.write(tmp_path / "shp" / f, f)
+    rows, recs = _read(tmp_path, zipped, "shapefile_gbx")
+    assert len(rows) == n - 1 and recs == []
+
+
+def test_lidar_points_just_past_slightly_off_header_bounds_are_data(tmp_path):
+    """A header whose bounds are a little off (rounded) does not set valid
+    points aside: the tolerance is a small part of the extent."""
+    import laspy
+
+    path, offset, reclen = _las(tmp_path / "a.las", 1000)
+    with laspy.open(path) as r:
+        maxs = r.header.maxs
+    with open(path, "r+b") as fh:  # LAS 1.2: max x at byte 179
+        fh.seek(179)
+        fh.write(struct.pack("<d", float(maxs[0]) - 0.02))
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 1000 and recs == []
+
+
+def test_lidar_waveform_data_after_the_points_is_not_extra_points(tmp_path):
+    """LAS 1.3 with internal waveform packets: the bytes after the points are
+    waveform data, not point records the header does not declare."""
+    import laspy
+
+    las = laspy.LasData(laspy.LasHeader(point_format=4, version="1.3"))
+    las.x, las.y, las.z = [1.0, 2.0, 3.0], [1.0, 2.0, 3.0], [1.0, 2.0, 3.0]
+    path = str(tmp_path / "wave.las")
+    las.write(path)
+    with laspy.open(path) as r:
+        end = r.header.offset_to_point_data + 3 * r.header.point_format.size
+    with open(path, "r+b") as fh:
+        fh.seek(6)
+        fh.write(struct.pack("<H", 2))  # global encoding: waveform data internal
+        fh.seek(227)
+        fh.write(struct.pack("<Q", end))  # start of waveform data packet record
+        fh.seek(end)
+        fh.write(b"\x00" * 60 + os.urandom(4000))  # packet header + data
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 3 and recs == []
+
+
+# --- fix round 2: environment errors fail the read; they are not bad data --------
+
+
+def test_memory_and_import_errors_fail_the_read(tmp_path, monkeypatch):
+    path = _geojson(tmp_path / "a.geojson", [_feature(i) for i in range(5)])
+    for err in (MemoryError(), ModuleNotFoundError("No module named 'lazrs'")):
+
+        def boom(err=err):
+            raise err
+
+        _patch_vector_read(monkeypatch, boom)
+        with pytest.raises(type(err)):
+            _read(tmp_path, path, "geojson_gbx", {"chunkSize": "2"})
+
+
+def test_transient_io_errors_are_retried_then_fail_the_read(tmp_path, monkeypatch):
+    import errno
+
+    from databricks.labs.gbx.ds import _listing, vector
+
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    path = _geojson(tmp_path / "a.geojson", [_feature(i) for i in range(3)])
+    real = vector.VectorGbxReader.partitions
+    state = {"calls": 0, "fail": 1}
+
+    def partitions(self):
+        state["calls"] += 1
+        if state["calls"] <= state["fail"]:
+            raise OSError(errno.EIO, "Input/output error", path)
+        return real(self)
+
+    monkeypatch.setattr(vector.VectorGbxReader, "partitions", partitions)
+    rows, recs = _read(tmp_path, path, "geojson_gbx")  # one miss: retried
+    assert len(rows) == 3 and recs == []
+    state.update(calls=0, fail=100)
+    with pytest.raises(OSError, match="Input/output error"):
+        _read(tmp_path, path, "geojson_gbx")
+    # A transient miss, then a data error: still a bad record of the file.
+    state.update(calls=0)
+
+    def partitions_then_garbled(self):
+        state["calls"] += 1
+        if state["calls"] == 1:
+            raise OSError(errno.EIO, "Input/output error", path)
+        raise ValueError("garbled header")
+
+    monkeypatch.setattr(vector.VectorGbxReader, "partitions", partitions_then_garbled)
+    rows, (rec,) = _read(tmp_path, path, "geojson_gbx")
+    assert rows == [] and rec["error_class"] == "ValueError"
+
+
+def test_lidar_environment_errors_fail_the_read(tmp_path, monkeypatch):
+    import laspy
+    from laspy.errors import LaspyException
+
+    from databricks.labs.gbx.ds import _listing
+
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    good, _, _ = _las(tmp_path / "good.las", 10)
+    expected = P.path_schema("lidar_gbx", None, good)
+    for err in (
+        LaspyException("No LazBackend selected, cannot decompress data"),
+        MemoryError(),
+    ):
+
+        def opener(*a, err=err, **k):
+            raise err
+
+        monkeypatch.setattr(laspy, "open", opener)
+        bad = Q.BadRecords(str(tmp_path / "b"))
+        want = Q.EnvironmentFailure if isinstance(err, LaspyException) else type(err)
+        with pytest.raises(want):
+            list(
+                P.iter_path_batches(good, None, "lidar_gbx", None, expected, True, bad)
+            )
+
+
+def test_exif_image_too_large_for_qc_fails_the_read(tmp_path, monkeypatch):
+    from databricks.labs.gbx.ds import file_gbx
+
+    good = _jpg(tmp_path / "good.jpg")
+    monkeypatch.setattr(file_gbx, "materialize_decision", lambda *a, **k: "reject")
+    with pytest.raises(Q.FileTooLarge, match="qc"):
+        _read(tmp_path, good, "exif_gbx", {"mode": "qc"})
+
+
+def test_lidar_rereads_of_a_failing_chunk_are_bounded(tmp_path, monkeypatch):
+    """A decoder that fails on every read (a garbled LAZ with a huge point
+    count) stops after a few failed pieces instead of retrying for hours."""
+    import laspy
+
+    path, _, _ = _las(tmp_path / "a.las")
+    calls = {"n": 0}
+
+    def read_points(self, n):
+        calls["n"] += 1
+        raise _Panic("decoder panicked")
+
+    monkeypatch.setattr(laspy.LasReader, "read_points", read_points)
+    rows, recs = _read(tmp_path, path, "lidar_gbx", {"chunkSize": "100"})
+    assert rows == [] and calls["n"] <= 10
+    assert _classes(recs)[-1][0] == "points=0-4999"
+
+
+# --- fix round 2: what a bad record holds -------------------------------------
+
+
+def test_raw_is_capped_and_binary_values_are_described():
+    batch = pa.record_batch(
+        [pa.array(["x" * 10_000]), pa.array([b"\x00" * 2_000_000])],
+        names=["text", "payload"],
+    )
+    raw = Q.row_json(batch, 0)
+    assert len(raw) <= 4096
+    doc = json.loads(raw)
+    assert doc["truncated"] is True
+    small = pa.record_batch([pa.array([b"\x00" * 300])], names=["payload"])
+    assert json.loads(Q.row_json(small, 0)) == {"payload": "<binary, 300 bytes>"}
+
+
+def test_wkt_geometries_are_not_parsed_only_the_marker_is_checked(monkeypatch):
+    import shapely as _shapely
+
+    from databricks.labs.gbx.ds.vector import _UNREADABLE_WKB
+
+    def no_parse(*a, **k):
+        raise AssertionError("WKT parsed")
+
+    monkeypatch.setattr(_shapely, "from_wkt", no_parse)
+    batch = pa.record_batch(
+        [
+            pa.array(["POINT (1 1)", _UNREADABLE_WKB, None]),
+            pa.array(["4326"] * 3),
+            pa.array(["p"] * 3),
+        ],
+        names=["g", "g_srid", "g_srid_proj"],
+    )
+    assert list(Q.bad_rows(batch, "g")) == [1]
+
+
+def test_skip_log_lines_name_the_error_class_once(caplog):
+    import logging
+
+    bad = Q.BadRecords(None)
+    with caplog.at_level(logging.WARNING, logger=Q.__name__):
+        bad.add("/v/a.gpkg", None, None, "ValueError", "ValueError: schema differs")
+    (line,) = [r.getMessage() for r in caplog.records]
+    assert line.count("ValueError") == 1

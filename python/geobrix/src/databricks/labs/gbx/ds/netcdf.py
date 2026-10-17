@@ -283,6 +283,7 @@ class NetcdfRasterReader(RasterGbxReader):
         def _bad(label: str, exc: BaseException) -> None:
             if hook is None or isinstance(exc, _quarantine.PASS_THROUGH):
                 raise exc
+            _quarantine.reraise_environment(exc)  # memory, modules, I/O: not data
             hook(label, _quarantine.error_class(exc), _quarantine.describe(exc))
 
         if hook is not None:

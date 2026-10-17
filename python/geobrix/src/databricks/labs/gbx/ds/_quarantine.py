@@ -11,8 +11,13 @@ Every such record is a *bad record*.
 
 A :class:`BadRecords` collector receives them on the executors. With a scratch
 folder it writes them to Parquet fragments there (``declare_ingest`` appends
-those to ``<table>_bad_records`` after the rows are written); without one it
-logs them (``read_paths(on_error="skip")``).
+those to ``<table>_bad_records`` first, then writes the rows staged beside them);
+without one it logs them (``read_paths(on_error="skip")``).
+
+Errors of the environment, not of the data (out of memory, a missing module, a
+transient I/O error, a file too large for the task's memory) are never bad
+records: they fail the read so that Spark retries the task or the update fails
+loudly (see :func:`is_environment_error`).
 
 Readers that check their own records (LiDAR points, PMTiles tiles, NetCDF
 slices, EXIF files) report through the hook :data:`HOOK` that ``read_paths``
@@ -25,6 +30,7 @@ Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 from __future__ import annotations
 
 import contextlib
+import errno
 import json
 import logging
 import os
@@ -53,7 +59,6 @@ POINT_OUT_OF_BOUNDS = "PointOutOfBounds"
 SHORT_TILE = "ShortTile"
 NOT_JPEG = "NotJpeg"
 UNREADABLE_FILE = "UnreadableFile"
-FILE_TOO_LARGE = "FileTooLarge"
 # declare_ingest: a delivery none of whose rows could be read (one summary record).
 NOTHING_READABLE = "NothingReadable"
 
@@ -66,9 +71,77 @@ CHECK_CLASSES = (
     SHORT_TILE,
     NOT_JPEG,
     UNREADABLE_FILE,
-    FILE_TOO_LARGE,
     NOTHING_READABLE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Errors of the environment, not of the data
+# ---------------------------------------------------------------------------
+
+
+class EnvironmentFailure(RuntimeError):
+    """A read that failed because of where it ran, not what it read."""
+
+
+class FileTooLarge(EnvironmentFailure):
+    """A file too large to read whole in the task's memory."""
+
+
+# errnos of an I/O or system failure (FUSE, network, permissions, disk), as
+# opposed to a library's parse error (rasterio, PIL, netCDF raise OSError
+# without an errno, or with a negative library code).
+_ENVIRONMENT_ERRNOS = frozenset(
+    getattr(errno, n)
+    for n in (
+        "EIO",
+        "EAGAIN",
+        "ETIMEDOUT",
+        "ESTALE",
+        "EBUSY",
+        "EINTR",
+        "ENOENT",
+        "EACCES",
+        "EPERM",
+        "ENOSPC",
+        "EMFILE",
+        "ENFILE",
+        "EROFS",
+        "ENOTCONN",
+        "ECONNRESET",
+        "ECONNABORTED",
+        "ECONNREFUSED",
+        "EHOSTUNREACH",
+        "ENETUNREACH",
+        "ENETDOWN",
+    )
+    if hasattr(errno, n)
+)
+
+
+def is_environment_error(exc: BaseException) -> bool:
+    """True for an error that is not about the data: out of memory, a missing
+    module (``ImportError``), :class:`EnvironmentFailure` (a file too large for
+    the task, a missing LAZ backend), or an ``OSError`` carrying a system errno
+    (I/O, network, permissions, disk). Such errors fail the read instead of
+    becoming bad records."""
+    if isinstance(exc, (MemoryError, ImportError, EnvironmentFailure)):
+        return True
+    return isinstance(exc, OSError) and exc.errno in _ENVIRONMENT_ERRNOS
+
+
+def is_transient(exc: BaseException) -> bool:
+    """An environment error worth retrying in place (an ``OSError`` with a
+    system errno)."""
+    return isinstance(exc, OSError) and exc.errno in _ENVIRONMENT_ERRNOS
+
+
+def reraise_environment(exc: BaseException) -> None:
+    """Raise ``exc`` again when it is an environment error (see
+    :func:`is_environment_error`); return otherwise."""
+    if is_environment_error(exc):
+        raise exc
+
 
 _TS = pa.timestamp("us", tz="UTC")
 
@@ -312,12 +385,17 @@ class BadRecords:
         n = self._logged.get(path, 0) + 1
         self._logged[path] = n
         if n <= _LOG_PER_FILE:
+            # describe() messages start with the error class already.
+            text = (
+                message
+                if message.startswith(error_class)
+                else (f"{error_class}: {message}")
+            )
             _LOG.warning(
-                "read_paths: skipped a bad record in %s (%s): %s: %s",
+                "read_paths: skipped a bad record in %s (%s): %s",
                 path,
                 record_index if record_index is not None else "whole file",
-                error_class,
-                message,
+                text,
             )
 
     def flush(self) -> None:
@@ -338,10 +416,11 @@ class BadRecords:
             os.replace(tmp, os.path.join(self.scratch_dir, name))
         except OSError as e:
             raise OSError(
+                e.errno,
                 f"cannot write bad records to {self.scratch_dir}: {e}. "
-                "on_error='quarantine' keeps them in a hidden folder under the "
-                "landing folder while a micro-batch is read: give the pipeline "
-                "write access to that folder, or use on_error='fail'."
+                "on_error='quarantine' stages each micro-batch under "
+                "declare_ingest's scratch_dir (default: source_dir): pass a "
+                "scratch_dir the pipeline can write, or use on_error='fail'.",
             ) from e
         self._seq += 1
         self._rows = []
@@ -393,26 +472,55 @@ def geometry_column(schema: pa.Schema) -> Optional[str]:
     return None
 
 
+_RAW_LIMIT = 4096  # characters of one record's raw JSON
+
+
+def _describe_bytes(value) -> str:
+    return f"<binary, {len(value)} bytes>"
+
+
+def _plain(value):
+    """``value`` with every bytes value (nested too) replaced by a descriptor:
+    a tile or blob payload is not something to dump into a record."""
+    if isinstance(value, (bytes, bytearray)):
+        return _describe_bytes(value)
+    if isinstance(value, dict):
+        return {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_plain(v) for v in value]
+    return value
+
+
 def _value(col: pa.Array, i: int):
     v = col[i]
     if pa.types.is_string(col.type) or pa.types.is_large_string(col.type):
         raw = v.cast(pa.binary()).as_py()
         return None if raw is None else raw.decode("utf-8", "backslashreplace")
-    py = v.as_py()
-    if isinstance(py, (bytes, bytearray)):
-        return py.hex()
-    return py
+    if pa.types.is_binary(col.type) or pa.types.is_large_binary(col.type):
+        raw = v.as_py()
+        return None if raw is None else _describe_bytes(raw)
+    return _plain(v.as_py())
 
 
 def row_json(batch: pa.RecordBatch, i: int, skip: Tuple[str, ...] = ()) -> str:
-    """Row ``i``'s columns (but ``skip``) as JSON; invalid UTF-8 is escaped, bytes
-    become hex."""
+    """Row ``i``'s columns (but ``skip``) as JSON, at most :data:`_RAW_LIMIT`
+    characters: invalid UTF-8 is escaped, binary values become a descriptor
+    (``<binary, N bytes>``), and a longer document is kept as
+    ``{"truncated": true, "json": <its first characters>}``."""
     row = {
         name: _value(batch.column(j), i)
         for j, name in enumerate(batch.schema.names)
         if name not in skip
     }
-    return json.dumps(row, default=str, ensure_ascii=False)
+    text = json.dumps(row, default=str, ensure_ascii=False)
+    if len(text) <= _RAW_LIMIT:
+        return text
+    head = text[: _RAW_LIMIT - 64]
+    out = json.dumps({"truncated": True, "json": head}, ensure_ascii=False)
+    while len(out) > _RAW_LIMIT:  # escaping can grow it
+        head = head[: len(head) - (len(out) - _RAW_LIMIT) - 8]
+        out = json.dumps({"truncated": True, "json": head}, ensure_ascii=False)
+    return out
 
 
 def _invalid_text_rows(batch: pa.RecordBatch) -> dict:
@@ -430,35 +538,138 @@ def _invalid_text_rows(batch: pa.RecordBatch) -> dict:
     return out
 
 
+# WKB geometry types shapely cannot build (curves, surfaces: ISO 8-17) though
+# they are valid data; their Z / M / ZM variants add 1000 / 2000 / 3000 (ISO),
+# or set the EWKB high-bit flags.
+_UNPARSED_WKB_TYPES = frozenset(range(8, 18))
+# Text the light vector reader writes, as WKT output under a read_paths hook,
+# for a WKB it could not decode, and for a curve or surface (valid, but shapely
+# cannot write it as WKT).
+UNREADABLE_WKB = "UNREADABLE WKB"
+UNWRITABLE_WKB = "CURVE OR SURFACE WKB"
+_MARKER_MESSAGES = {
+    UNREADABLE_WKB: "the reader could not decode its WKB to WKT",
+    UNWRITABLE_WKB: "a curve or surface cannot be written as WKT; read it with "
+    "asWKB=true",
+}
+
+
+def wkb_base_type(value) -> Optional[int]:
+    """The base geometry type (1-17) a WKB / EWKB value declares, or None when
+    its header is not one."""
+    if value is None or len(value) < 5 or value[0] not in (0, 1):
+        return None
+    code = int.from_bytes(value[1:5], "little" if value[0] == 1 else "big")
+    return (code & 0x0FFFFFFF) % 1000
+
+
+def _readable_wkb(values) -> "object":
+    """Per value: True if readable as a geometry. Curves and surfaces are taken
+    as declared (shapely cannot build them); every other value is parsed,
+    vectorized, then one by one if the batch parse raises (a curve inside a
+    collection), so only the offending value is flagged."""
+    import numpy as np
+    import shapely
+
+    n = len(values)
+    ok = np.zeros(n, dtype=bool)
+    todo = []
+    for i, v in enumerate(values):
+        if v is None:
+            continue
+        if wkb_base_type(v) in _UNPARSED_WKB_TYPES:
+            ok[i] = True
+        else:
+            todo.append(i)
+    if not todo:
+        return ok
+    idx = np.asarray(todo)
+    sub = np.empty(len(todo), dtype=object)
+    sub[:] = [values[i] for i in todo]
+    try:
+        parsed = shapely.from_wkb(sub, on_invalid="ignore")
+        ok[idx] = np.fromiter(
+            (g is not None for g in parsed), dtype=bool, count=len(sub)
+        )
+        return ok
+    except Exception:  # noqa: BLE001 - parse value by value below
+        pass
+    for i in todo:
+        try:
+            ok[i] = shapely.from_wkb(values[i], on_invalid="ignore") is not None
+        except NotImplementedError:  # a geometry shapely cannot build: valid
+            ok[i] = True
+        except Exception:  # noqa: BLE001 - not a geometry
+            ok[i] = False
+    return ok
+
+
+def wkt_or_marker(raw) -> "object":
+    """WKT for each WKB value (the light vector reader's ``asWKB=false`` output
+    under a read_paths hook): None for None, :data:`UNWRITABLE_WKB` for a curve
+    or surface, :data:`UNREADABLE_WKB` for a value that is not WKB."""
+    import numpy as np
+    import shapely
+
+    out = np.full(len(raw), None, dtype=object)
+
+    def one(v):
+        if wkb_base_type(v) in _UNPARSED_WKB_TYPES:
+            return UNWRITABLE_WKB
+        try:
+            g = shapely.from_wkb(v, on_invalid="ignore")
+        except NotImplementedError:  # a curve inside a collection
+            return UNWRITABLE_WKB
+        except Exception:  # noqa: BLE001 - not WKB
+            return UNREADABLE_WKB
+        return UNREADABLE_WKB if g is None else shapely.to_wkt(g)
+
+    todo = [i for i, v in enumerate(raw) if v is not None]
+    if not todo:
+        return out
+    sub = np.empty(len(todo), dtype=object)
+    sub[:] = [raw[i] for i in todo]
+    try:
+        if any(wkb_base_type(v) in _UNPARSED_WKB_TYPES for v in sub):
+            raise NotImplementedError
+        geoms = shapely.from_wkb(sub, on_invalid="ignore")
+        wkt = shapely.to_wkt(geoms)
+        for i, g, w in zip(todo, geoms, wkt):
+            out[i] = UNREADABLE_WKB if g is None else w
+    except Exception:  # noqa: BLE001 - value by value
+        for i in todo:
+            out[i] = one(raw[i])
+    return out
+
+
 def bad_rows(batch: pa.RecordBatch, geometry: Optional[str]) -> dict:
     """``{row: (error_class, message)}`` for the rows of a reader batch that are
     not data: invalid UTF-8 text (any reader), and for a vector reader
-    (``geometry`` names its column) a geometry value that is not readable WKB /
-    WKT. A NULL or empty geometry is data (an unlocated feature, ``POINT
-    EMPTY``) and stays."""
+    (``geometry`` names its column) a geometry value that is not readable WKB --
+    or, as WKT output, the reader's :data:`UNREADABLE_WKB` marker. A NULL or
+    empty geometry is data (an unlocated feature, ``POINT EMPTY``), and so are
+    curves and surfaces shapely cannot build."""
     out = _invalid_text_rows(batch)
     if geometry is None or batch.num_rows == 0:
         return out
     import numpy as np
-    import shapely
 
     col = batch.column(geometry)
-    values = col.to_numpy(zero_copy_only=False)
-    is_wkb = pa.types.is_binary(col.type) or pa.types.is_large_binary(col.type)
-    parse = shapely.from_wkb if is_wkb else shapely.from_wkt
-    present = ~np.asarray(col.is_null().to_numpy(zero_copy_only=False), dtype=bool)
-    if not present.any():
-        return out
-    geoms = np.full(len(values), None, dtype=object)
-    geoms[present] = parse(values[present], on_invalid="ignore")
-    unreadable = present & np.fromiter(
-        (g is None for g in geoms), dtype=bool, count=len(geoms)
-    )
-    kind = "WKB" if is_wkb else "WKT (its WKB could not be decoded)"
-    for i in np.nonzero(unreadable)[0]:
-        out.setdefault(
-            int(i), (UNREADABLE_GEOMETRY, f"{geometry} is not readable {kind}")
+    if pa.types.is_binary(col.type) or pa.types.is_large_binary(col.type):
+        values = col.to_pylist()
+        present = np.fromiter(
+            (v is not None for v in values), dtype=bool, count=len(values)
         )
+        bad = present & ~_readable_wkb(values)
+        message = f"{geometry} is not readable WKB"
+        for i in np.nonzero(bad)[0]:
+            out.setdefault(int(i), (UNREADABLE_GEOMETRY, message))
+        return out
+    for i, v in enumerate(col.to_pylist()):
+        if v in _MARKER_MESSAGES:
+            out.setdefault(
+                i, (UNREADABLE_GEOMETRY, f"{geometry}: {_MARKER_MESSAGES[v]}")
+            )
     return out
 
 
@@ -540,35 +751,53 @@ def unparseable_lines(path: str, limit: int = 10000) -> List[Tuple[int, str, str
     return out
 
 
+def _deleted_in(fh) -> int:
+    """Records a ``.dbf`` stream marks deleted (read sequentially)."""
+    import struct
+
+    head = fh.read(32)
+    if len(head) < 12:
+        return 0
+    n, header_len, rec_len = struct.unpack("<IHH", head[4:12])
+    if rec_len <= 0:
+        return 0
+    fh.read(max(0, header_len - 32))
+    deleted = 0
+    for _ in range(n):
+        rec = fh.read(rec_len)
+        if len(rec) < 1:
+            break
+        if rec[:1] == b"*":
+            deleted += 1
+    return deleted
+
+
 def dbf_deleted_count(shp_path: str) -> int:
     """Records a shapefile's ``.dbf`` marks deleted (OGR skips them; they are
-    not bad records). 0 when there is no plain ``.dbf`` beside the ``.shp``."""
+    not bad records): the ``.dbf`` beside a ``.shp``, or the one ``.dbf`` inside
+    a zipped shapefile (``.shp.zip`` / ``.shz`` / ``.zip``). 0 when there is
+    none (or a zip holds several)."""
+    low = shp_path.lower()
+    if low.endswith((".zip", ".shz")):
+        import zipfile
+
+        try:
+            with zipfile.ZipFile(shp_path) as zf:
+                dbfs = [n for n in zf.namelist() if n.lower().endswith(".dbf")]
+                if len(dbfs) != 1:
+                    return 0
+                with zf.open(dbfs[0]) as fh:
+                    return _deleted_in(fh)
+        except (OSError, zipfile.BadZipFile):
+            return 0
     base, ext = os.path.splitext(shp_path)
     if ext.lower() != ".shp":
         return 0
     for cand in (base + ".dbf", base + ".DBF"):
         if os.path.exists(cand):
-            break
-    else:
-        return 0
-    import struct
-
-    with open(cand, "rb") as fh:
-        head = fh.read(32)
-        if len(head) < 12:
-            return 0
-        n, header_len, rec_len = struct.unpack("<IHH", head[4:12])
-        if rec_len <= 0:
-            return 0
-        fh.read(max(0, header_len - 32))
-        deleted = 0
-        for _ in range(n):
-            rec = fh.read(rec_len)
-            if len(rec) < 1:
-                break
-            if rec[:1] == b"*":
-                deleted += 1
-        return deleted
+            with open(cand, "rb") as fh:
+                return _deleted_in(fh)
+    return 0
 
 
 _IDENT = re.compile(r'"')

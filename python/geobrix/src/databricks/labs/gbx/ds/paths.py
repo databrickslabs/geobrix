@@ -609,6 +609,9 @@ def _bounded(it, bad, local, mtime_us, state, label=None):
         except _quarantine.PASS_THROUGH:
             raise
         except BaseException as e:  # noqa: BLE001 - recorded as a bad record
+            # Not the data's fault (memory, a missing module, I/O): fail the
+            # task so Spark retries it, rather than set the rest of it aside.
+            _quarantine.reraise_environment(e)
             bad.add_error(local, mtime_us, e, diag, state.kept, label)
             return False
         yield batch
@@ -639,7 +642,9 @@ def _open_file(fmt, options, local, expected):
 
 
 def _open_guarded(bad, local, mtime_us, opener):
-    """``opener()``, or None after recording its error as a whole-file bad record."""
+    """``opener()``, or None after recording its error as a whole-file bad record.
+    An environment error fails the read instead; a transient I/O error is retried
+    first (``_listing._retry_transient``)."""
     diag = _quarantine.Diagnostics()
     try:
         with _quarantine.capture(diag):
@@ -647,6 +652,14 @@ def _open_guarded(bad, local, mtime_us, opener):
     except _quarantine.PASS_THROUGH:
         raise
     except BaseException as e:  # noqa: BLE001 - recorded as a bad record
+        if _quarantine.is_transient(e):
+            try:
+                return _listing._retry_transient(opener)
+            except _quarantine.PASS_THROUGH:
+                raise
+            except BaseException as again:  # noqa: BLE001 - classified below
+                e = again  # still transient: raised below; else a data error
+        _quarantine.reraise_environment(e)
         bad.add_error(local, mtime_us, e, diag)
         return None
 
@@ -894,7 +907,8 @@ def _reconcile_vector(reader, part, local, mtime_us, schema, want, lineage, bad,
                 declared = int(info.get("features", -1))
     except _quarantine.PASS_THROUGH:
         raise
-    except Exception:  # noqa: BLE001 - nothing to compare with
+    except Exception as e:  # noqa: BLE001 - nothing to compare with
+        _quarantine.reraise_environment(e)
         return
     if declared < 0 or state.seen >= declared:
         return
@@ -1001,7 +1015,8 @@ class _GpkgGaps:
                 self.name, layer=self.layer, where=f"{self.fid} >= {k}", max_features=1
             )
             return True
-        except Exception:  # noqa: BLE001 - the read cannot start there
+        except Exception as e:  # noqa: BLE001 - the read cannot start there
+            _quarantine.reraise_environment(e)
             return False
 
     def first_start(self, last, max_fid) -> int:
@@ -1036,6 +1051,7 @@ class _GpkgGaps:
                 else:
                     self.unclear.append(x)
             except Exception as e:  # noqa: BLE001 - on the unreadable page
+                _quarantine.reraise_environment(e)
                 self.lost.append(x)
                 self.first_error = self.first_error or _quarantine._one_line(e)
         return readable
@@ -1093,7 +1109,8 @@ def _resume_gpkg(
                 return
             except _quarantine.PASS_THROUGH:
                 raise
-            except Exception:  # noqa: BLE001 - found by the next probe
+            except Exception as e:  # noqa: BLE001 - found by the next probe
+                _quarantine.reraise_environment(e)
                 return
             yield batch
 
@@ -1107,7 +1124,8 @@ def _resume_gpkg(
         try:
             max_fid = gaps.max_fid()
             last = gaps.last_fid(None, state.seen) if state.seen else 0
-        except Exception:  # noqa: BLE001 - cannot locate the gap
+        except Exception as e:  # noqa: BLE001 - cannot locate the gap
+            _quarantine.reraise_environment(e)
             max_fid, last = None, 0
         while max_fid is not None and last < max_fid:
             if state.seen + len(gaps.lost) >= declared:

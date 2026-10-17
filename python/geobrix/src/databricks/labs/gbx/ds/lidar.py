@@ -276,6 +276,7 @@ class LidarGbxReader(DataSourceReader):
             Exception
         ) as exc:  # noqa: BLE001 — corrupt/truncated or persistently missing
             if hook is not None:
+                _raise_if_environment(exc)  # memory, LAZ backend, I/O: not the file's
                 hook(None, _quarantine.error_class(exc), _quarantine.describe(exc))
             else:
                 warnings.warn(
@@ -356,6 +357,15 @@ class LidarGbxReader(DataSourceReader):
 # Points re-read at a time to narrow down a chunk that failed (a LAZ chunk is
 # then lost from where it stops decoding to its end, and nothing else).
 _SALVAGE_POINTS = 1000
+# Consecutive failed reads after which the rest of a file is given up (a
+# decoder that fails on everything, a garbled huge point count).
+_MAX_FAILED_READS = 5
+# Bounds check: a header's bounds may be rounded or slightly stale, so a point
+# is out of bounds only past this part of the extent (plus one scale step).
+_BOUNDS_SLACK = 1e-3
+# A LAZ point takes more than this many bytes, so a header count beyond
+# (bytes of point data / this) cannot be in the file.
+_MIN_LAZ_POINT_BYTES = 0.5
 
 
 def _header_bounds(h):
@@ -365,8 +375,8 @@ def _header_bounds(h):
     maxs = np.asarray(h.maxs, dtype=np.float64)
     if np.any(maxs < mins) or (not mins.any() and not maxs.any()):
         return None
-    tol = np.abs(np.asarray(h.scales, dtype=np.float64)) + 1e-9 * np.maximum(
-        1.0, np.abs(maxs - mins)
+    tol = np.abs(np.asarray(h.scales, dtype=np.float64)) + _BOUNDS_SLACK * np.abs(
+        maxs - mins
     )
     return mins, maxs, tol
 
@@ -410,11 +420,28 @@ def _readable_points(h, local: str, size: int, hook) -> int:
     reads none; points past the declared count are not read. Each is a bad
     record of the file. LAZ (compressed) files are not checked here."""
     total = int(h.point_count)
+    offset = int(h.offset_to_point_data)
     if h.are_points_compressed:
+        most = int((size - offset) / _MIN_LAZ_POINT_BYTES)
+        if total > most:
+            hook(
+                None,
+                _quarantine.RECORDS_NOT_READ,
+                f"the header declares {total} points, more than a {size}-byte LAZ "
+                f"file can hold; at most {most} were read",
+            )
+            return max(0, most)
         return total
     reclen = int(h.point_format.size)
-    end = int(h.start_of_first_evlr) if h.number_of_evlrs else size
-    data = end - int(h.offset_to_point_data)
+    # The point records end where the next section starts: the EVLRs (LAS 1.4)
+    # or the waveform data packets stored in the file (LAS 1.3+).
+    ends = [size]
+    if h.number_of_evlrs:
+        ends.append(int(h.start_of_first_evlr))
+    wave = int(getattr(h, "start_of_waveform_data_packet_record", 0) or 0)
+    if offset < wave < size:
+        ends.append(wave)
+    data = min(ends) - offset
     if reclen <= 0 or data == total * reclen:
         return total
     if data < total * reclen:
@@ -494,71 +521,68 @@ def _lost(hook, first, end, exc) -> None:
     )
 
 
+def _raise_if_environment(exc: BaseException) -> None:
+    """Fail the read on an error of the environment, not the file (see
+    ``_quarantine.is_environment_error``), including laspy's missing LAZ
+    backend (no lazrs / laszip installed)."""
+    if "LazBackend" in str(exc):
+        raise _quarantine.EnvironmentFailure(
+            f"cannot decompress LAZ: no LAZ backend (lazrs or laszip) is "
+            f"installed ({exc})"
+        ) from exc
+    _quarantine.reraise_environment(exc)
+
+
 def _checked_chunks(laspy, local, reader, limit, chunk_size, emit, hook):
     """Read points ``[0, limit)`` chunk by chunk. A chunk that fails (a LAZ
-    decode error, a Rust panic included) is read again in small pieces from a
-    fresh open, to keep every point that decodes; the pieces that fail are bad
-    records (``points=<first>-<last>``) and the read goes on after them."""
+    decode error, a Rust panic included) is read again in pieces of
+    :data:`_SALVAGE_POINTS` from a fresh open positioned past what was read, to
+    keep every point that decodes; a run of failed pieces is one bad record
+    (``points=<first>-<last>``) and the read goes on after it. After
+    :data:`_MAX_FAILED_READS` failed reads in a row the rest of the file is one
+    record. Environment errors (memory, a missing LAZ backend) fail the read."""
     cur = _Cursor(laspy, local, reader)
+    start, size = 0, chunk_size
+    narrow_until = 0  # end of the chunk being re-read in pieces
+    bad_from, first_exc, fails = None, None, 0
     try:
-        start = 0
         while start < limit:
-            n = min(chunk_size, limit - start)
+            n = min(size, limit - start)
             try:
-                if cur.reader is None:
+                if cur.reader is None and not cur.reopen(start):
                     raise RuntimeError(f"cannot reopen {local} at point {start}")
                 points = cur.reader.read_points(n)
+                if len(points) != n:
+                    raise ValueError(f"read {len(points)} of {n} points")
             except _quarantine.PASS_THROUGH:
                 raise
-            except BaseException as e:  # noqa: BLE001 - salvaged below
-                yield from _salvage(cur, start, n, emit, hook, e)
+            except BaseException as e:  # noqa: BLE001 - narrowed down below
+                _raise_if_environment(e)
+                cur.close()
+                if n > _SALVAGE_POINTS:  # re-read this chunk in pieces
+                    size, narrow_until = _SALVAGE_POINTS, start + n
+                    continue
+                if bad_from is None:
+                    bad_from, first_exc = start, e
+                fails += 1
                 start += n
-                if start < limit and not cur.reopen(start):
-                    _lost(hook, start, limit, e)
-                    return
+                if fails >= _MAX_FAILED_READS:
+                    break
                 continue
-            if len(points) == 0:
-                return
+            if bad_from is not None:
+                _lost(hook, bad_from, start, first_exc)
+                bad_from, first_exc = None, None
+            fails = 0
             batch = emit(points, start)
-            start += len(points)
+            start += n
+            if start >= narrow_until:
+                size = chunk_size
             if batch is not None:
                 yield batch
+        if bad_from is not None:
+            _lost(hook, bad_from, limit, first_exc)
     finally:
         cur.close()
-
-
-def _salvage(cur, start, n, emit, hook, exc):
-    """Re-read ``[start, start + n)`` in pieces of :data:`_SALVAGE_POINTS`, each
-    failing piece from a fresh open; consecutive failed pieces are one record."""
-    end, s = start + n, start
-    bad_from, first_exc = None, exc
-    fresh = False
-    while s < end:
-        m = min(_SALVAGE_POINTS, end - s)
-        try:
-            if not fresh and not cur.reopen(s):
-                raise first_exc
-            fresh = True
-            points = cur.reader.read_points(m)
-            if len(points) != m:
-                raise ValueError(f"read {len(points)} of {m} points")
-        except _quarantine.PASS_THROUGH:
-            raise
-        except BaseException as e:  # noqa: BLE001 - this piece is lost
-            if bad_from is None:
-                bad_from, first_exc = s, e
-            fresh = False
-            s += m
-            continue
-        if bad_from is not None:
-            _lost(hook, bad_from, s, first_exc)
-            bad_from = None
-        batch = emit(points, s)
-        if batch is not None:
-            yield batch
-        s += m
-    if bad_from is not None:
-        _lost(hook, bad_from, end, first_exc)
 
 
 class LidarGbxDataSource(DataSource):

@@ -33,7 +33,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _scratch
+from databricks.labs.gbx.ds import _quarantine, _scratch
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
     new_local_temp_dir,
@@ -1022,14 +1022,7 @@ def _copy_tree_to_fuse(src, dst):
 
 # WKT output for a WKB the reader could not decode under read_paths'
 # on_error="skip": not WKT, so the row is set aside as an unreadable geometry.
-_UNREADABLE_WKB = "UNREADABLE WKB"
-
-
-def _is_none(values):
-    """Element-wise ``is None`` over an object array."""
-    import numpy as np
-
-    return np.fromiter((v is None for v in values), dtype=bool, count=len(values))
+_UNREADABLE_WKB = _quarantine.UNREADABLE_WKB
 
 
 class _ChunkPartition(InputPartition):
@@ -1608,12 +1601,11 @@ class VectorGbxReader(DataSourceReader):
             # Under read_paths' on_error="skip" (a bad-record hook on the reader) an
             # unreadable WKB becomes text that is not WKT, which read_paths sets
             # aside as an unreadable geometry, instead of failing the file.
-            hooked = getattr(self, "_gbx_bad_record", None) is not None
             raw = wkb.to_numpy(zero_copy_only=False)
-            geoms = shapely.from_wkb(raw, on_invalid="ignore" if hooked else "raise")
-            wkt = np.asarray(shapely.to_wkt(geoms), dtype=object)
-            if hooked:
-                wkt[_is_none(geoms) & ~_is_none(raw)] = _UNREADABLE_WKB
+            if getattr(self, "_gbx_bad_record", None) is not None:
+                wkt = _quarantine.wkt_or_marker(raw)
+            else:
+                wkt = np.asarray(shapely.to_wkt(shapely.from_wkb(raw)), dtype=object)
             geom_out = pa.array(wkt, type=pa.string())
         cols = [
             (

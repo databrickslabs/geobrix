@@ -7,6 +7,7 @@ Serverless-safe: session-free partitions()/read(); one InputPartition per file.
 Uses no forbidden Spark internal APIs — safe on Spark Connect / Serverless.
 """
 
+import logging
 import os
 import struct
 import warnings
@@ -28,6 +29,8 @@ from databricks.labs.gbx.ds.file_gbx import list_local_files
 
 if TYPE_CHECKING:
     import pyarrow as pa
+
+_LOG = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Schema
@@ -272,11 +275,15 @@ class ExifGbxReader(DataSourceReader):
                 stacklevel=2,
             )
 
-    def _skip(self, message: str, error_class: str, detail: str) -> None:
+    def _skip(self, message: str, error_class: str, detail: str, exc=None) -> None:
         """A file this reader cannot use: skipped with a warning, or (with a
-        read_paths hook, ``on_error="skip"``) a bad record of the file."""
+        read_paths hook, ``on_error="skip"``) a bad record of the file -- unless
+        ``exc`` is an environment error (memory, a module, I/O), which then
+        fails the read."""
         hook = _quarantine.hook_of(self)
         if hook is not None:
+            if exc is not None:
+                _quarantine.reraise_environment(exc)
             hook(None, error_class, detail)
         else:
             warnings.warn(message, stacklevel=3)
@@ -297,6 +304,7 @@ class ExifGbxReader(DataSourceReader):
                 f"exif_gbx: skipping unreadable file {local!r}: {exc}",
                 _quarantine.error_class(exc),
                 _quarantine.describe(exc),
+                exc,
             )
             return None, None
 
@@ -315,27 +323,40 @@ class ExifGbxReader(DataSourceReader):
                 f"exif_gbx: skipping file with unreadable EXIF {local!r}: {exc}",
                 _quarantine.error_class(exc),
                 _quarantine.describe(exc),
+                exc,
             )
             return None, None
 
     def _jpeg_problem(self, local: str, size: int) -> Optional[str]:
-        """Why a ``.jpg`` / ``.jpeg`` file is not a whole JPEG, or None: it must
-        start with the SOI marker (FFD8) and hold the EOI marker (FFD9) in its
-        last 64 KiB (data some cameras append after the image is allowed). Other
-        extensions (TIFF) are not checked."""
+        """Why a ``.jpg`` / ``.jpeg`` file is not a JPEG, or None: it must start
+        with the SOI marker (FFD8) and its header must decode. A missing end
+        marker (FFD9) in the last 64 KiB is only a warning: a truncated scan
+        still has its metadata, and a Motion Photo carries an MP4 after the
+        image. Other extensions (TIFF) are not checked."""
         if not local.lower().endswith((".jpg", ".jpeg")):
             return None
         fh = _listing._retry_transient(lambda: open(local, "rb"))  # noqa: WPS515
         with fh:
-            head = fh.read(2)
-            if head != b"\xff\xd8":
+            if fh.read(2) != b"\xff\xd8":
                 return "no JPEG start marker (FFD8): not a JPEG file"
             fh.seek(max(2, size - _JPEG_TAIL))
-            if b"\xff\xd9" not in fh.read():
-                return (
-                    "no JPEG end marker (FFD9) at the end of the file: it is "
-                    "truncated"
-                )
+            ended = b"\xff\xd9" in fh.read()
+        try:
+            from PIL import Image
+
+            with Image.open(local) as img:  # header only
+                img.size  # noqa: B018 - decodes the frame header
+        except Exception as exc:  # noqa: BLE001 - a data error unless environment
+            _quarantine.reraise_environment(exc)
+            return f"the JPEG header cannot be decoded: {_quarantine.describe(exc)}"
+        if not ended:
+            _LOG.warning(
+                "exif_gbx: %s has no JPEG end marker (FFD9) in its last %d bytes: "
+                "truncated, or data follows the image (a Motion Photo); its "
+                "metadata is read",
+                local,
+                _JPEG_TAIL,
+            )
         return None
 
     def _build_metadata_row(self, local: str, source: str, tags) -> dict:
@@ -443,13 +464,18 @@ class ExifGbxReader(DataSourceReader):
             st.st_size, kind="read", cap_bytes=self._qc_cap_bytes
         )
         if decision != "stream":
-            self._skip(
+            if _quarantine.hook_of(self) is not None:
+                # Not bad data: the task cannot hold it. Fail the read loudly.
+                raise _quarantine.FileTooLarge(
+                    f"{local}: file size {st.st_size} bytes exceeds the memory cap "
+                    "for reading an image whole (exif_gbx qc mode); use a classic "
+                    "cluster for large images, or mode='metadata'"
+                )
+            warnings.warn(
                 f"exif_gbx qc: skipping {local!r} — file size {st.st_size} bytes "
                 "exceeds the Serverless materialize cap; use a classic cluster "
                 "for large images",
-                _quarantine.FILE_TOO_LARGE,
-                f"file size {st.st_size} bytes exceeds the memory cap for reading "
-                "an image whole (qc mode); use a classic cluster for large images",
+                stacklevel=2,
             )
             return
 
@@ -463,6 +489,7 @@ class ExifGbxReader(DataSourceReader):
                 f"exif_gbx qc: skipping {local!r} — cannot read bytes: {exc}",
                 _quarantine.error_class(exc),
                 _quarantine.describe(exc),
+                exc,
             )
             return
 

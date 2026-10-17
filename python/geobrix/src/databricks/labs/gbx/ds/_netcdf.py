@@ -26,15 +26,16 @@ _LON_NAMES = {"lon", "longitude", "x"}
 
 
 def classic_truncation(path: str) -> Optional[str]:
-    """Why a NetCDF classic (``CDF``) file is shorter than the data its header
-    declares, or None (also for NetCDF-4 / HDF5 files, which are not checked
-    here). Classic files carry no checksum: read through netCDF4 the missing data
-    comes back as zeros, so the size check is the only sign. scipy maps the file
-    (no data is read) and fails to shape a variable that runs past its end."""
+    """Why a NetCDF classic file (``CDF`` version 1 or 2) is shorter than the
+    data its header declares, or None (also for CDF-5 and NetCDF-4 / HDF5 files,
+    which are not checked here: scipy reads neither). Classic files carry no
+    checksum: read through netCDF4 the missing data comes back as zeros, so the
+    size check is the only sign. scipy maps the file (no data is read) and fails
+    to shape a variable that runs past its end."""
     import warnings
 
     with open(path, "rb") as fh:
-        if fh.read(3) != b"CDF":
+        if fh.read(4) not in (b"CDF\x01", b"CDF\x02"):
             return None
     from scipy.io import netcdf_file
 

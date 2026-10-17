@@ -1,10 +1,12 @@
 """File-level change handling for incremental ingestion (``on_change``).
 
-``scd2`` (default) keeps every distinct content version of a file: rows are
-append-only and a small versions table (AUTO CDC SCD 2, history on the content
-hash) records when each version was current. ``replace`` keeps the latest
-content only (one atomic ``replaceWhere`` per batch). ``append`` writes every
-delivery. Unchanged re-deliveries write nothing except under ``append``.
+Auto Loader re-delivers a file whose content was overwritten (``allowOverwrites``,
+all modes). ``scd2`` (default) keeps every distinct content version of a file: rows
+are append-only and a small versions table (AUTO CDC SCD 2, history on the content
+hash) records when each version was current. ``replace`` keeps the latest content
+only (one atomic ``replaceWhere`` per batch). ``append`` writes every delivery, so a
+re-delivered file is duplicated by design. Under ``scd2`` and ``replace`` a
+re-delivery with unchanged content writes nothing.
 
 Writes (``write_batch``) run in an SDP ``foreach_batch_sink``; ``declare_ingest``
 wires the pipeline. Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
@@ -12,9 +14,14 @@ wires the pipeline. Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 
 from __future__ import annotations
 
+import logging
+import os
 from typing import Dict, List, Optional, Set
 
+from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.ds.paths import SOURCE_MTIME_COL, SOURCE_PATH_COL, read_paths
+
+_LOG = logging.getLogger(__name__)
 
 ON_CHANGE_MODES = ("scd2", "replace", "append")
 SOURCE_HASH_COL = "_source_hash"
@@ -22,6 +29,7 @@ SOURCE_SIZE_COL = "_source_size"
 _EVENTS_SCHEMA = (
     f"path string, modificationTime timestamp, length long, {SOURCE_HASH_COL} string"
 )
+_MTIME_US = "_mtime_us"  # driver-side only: exact epoch microseconds of _source_mtime
 
 
 def _check_mode(mode: str) -> str:
@@ -30,27 +38,36 @@ def _check_mode(mode: str) -> str:
     return mode
 
 
-def _hash_batches(batches):
+def _sha256(local: str) -> str:
     import hashlib
 
+    h = hashlib.sha256()
+    with open(local, "rb") as f:
+        for chunk in iter(lambda: f.read(8 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _hash_batches(batches):
+    """Append the SHA-256 of each named file; a file that no longer exists is
+    skipped with a warning (like ``read_paths``)."""
     import pyarrow as pa
 
-    from databricks.labs.gbx.ds import _listing
-
     for b in batches:
-        out = []
+        digests = []
         for p in b.column("path").to_pylist():
             local = _listing.to_local_path(p)
-
-            def _digest(local=local):
-                h = hashlib.sha256()
-                with open(local, "rb") as f:
-                    for chunk in iter(lambda: f.read(8 << 20), b""):
-                        h.update(chunk)
-                return h.hexdigest()
-
-            out.append(_listing._retry_transient(_digest))
-        yield b.append_column(SOURCE_HASH_COL, pa.array(out, pa.string()))
+            try:
+                digests.append(
+                    _listing._retry_transient(lambda local=local: _sha256(local))
+                )
+            except FileNotFoundError:
+                _LOG.warning("hash_files: %s no longer exists; skipped", local)
+                digests.append(None)
+        b = b.append_column(SOURCE_HASH_COL, pa.array(digests, pa.string()))
+        if None in digests:
+            b = b.filter(pa.array([d is not None for d in digests], pa.bool_()))
+        yield b
 
 
 def hash_files(df, path_col="path", mtime_col="modificationTime", size_col="length"):
@@ -73,33 +90,41 @@ def hash_files(df, path_col="path", mtime_col="modificationTime", size_col="leng
 def plan_writes(
     events: List[dict], stored: Dict[str, Set[str]], mode: str
 ) -> List[dict]:
-    """Events whose rows must be written for ``mode`` (see module docstring)."""
+    """Events whose rows must be written for ``mode``.
+
+    ``append``: every event. ``scd2`` / ``replace``: only the newest event per path
+    in the batch (rows are read from the file as it is now, so older deliveries in
+    the same batch would carry a hash that does not match their content), and only
+    if its hash is not already stored for that path (``stored`` holds every stored
+    hash per path for ``scd2``, the single current hash for ``replace``).
+    """
     _check_mode(mode)
     if mode == "append":
         return list(events)
     ordered = sorted(events, key=lambda e: (e[SOURCE_PATH_COL], e[SOURCE_MTIME_COL]))
-    if mode == "replace":
-        newest = {}
-        for e in ordered:
-            newest[e[SOURCE_PATH_COL]] = e
-        return [
-            e
-            for p, e in sorted(newest.items())
-            if e[SOURCE_HASH_COL] not in stored.get(p, set())
-        ]
-    seen, out = set(), []
+    newest = {}
     for e in ordered:
-        key = (e[SOURCE_PATH_COL], e[SOURCE_HASH_COL])
-        if key in seen or e[SOURCE_HASH_COL] in stored.get(key[0], set()):
-            continue
-        seen.add(key)
-        out.append(e)
-    return out
+        newest[e[SOURCE_PATH_COL]] = e
+    return [
+        e
+        for p, e in sorted(newest.items())
+        if e[SOURCE_HASH_COL] not in stored.get(p, set())
+    ]
 
 
 def replace_predicate(paths: List[str]) -> str:
-    quoted = ", ".join("'" + p.replace("'", "''") + "'" for p in paths)
+    """``_source_path IN (...)`` as a Spark SQL predicate. Spark string literals
+    treat backslash as the escape character and ``''`` as literal concatenation,
+    so backslash and quote are both escaped with a backslash."""
+    quoted = ", ".join(
+        "'" + p.replace("\\", "\\\\").replace("'", "\\'") + "'" for p in paths
+    )
     return f"{SOURCE_PATH_COL} IN ({quoted})"
+
+
+def _quote(name: str) -> str:
+    """Backtick-quote each dot-separated identifier part (embedded backticks doubled)."""
+    return ".".join("`" + part.replace("`", "``") + "`" for part in name.split("."))
 
 
 def _table_exists(spark, name: str) -> bool:
@@ -131,20 +156,39 @@ def _stored_hashes(
     return out
 
 
+def _current_view_sql(target: str, versions: str) -> str:
+    return (
+        f"CREATE VIEW IF NOT EXISTS {_quote(target + '_current')} AS "
+        f"SELECT r.* FROM {_quote(target)} r JOIN {_quote(versions)} v "
+        f"ON r.{SOURCE_PATH_COL} = v.{SOURCE_PATH_COL} "
+        f"AND r.{SOURCE_HASH_COL} = v.{SOURCE_HASH_COL} WHERE v.__END_AT IS NULL"
+    )
+
+
+def _ensure_current_view(spark, target: str, versions: str) -> None:
+    """Create ``<target>_current`` if missing. Best effort: the versions table may not
+    exist yet (the flows run in parallel); the next batch retries."""
+    if _table_exists(spark, _quote(target + "_current")):
+        return
+    try:
+        spark.sql(_current_view_sql(target, versions))
+    except Exception as e:  # noqa: BLE001 - narrowed by the message check
+        if "TABLE_OR_VIEW_NOT_FOUND" not in str(e):
+            raise
+        _LOG.warning(
+            "%s_current not created yet (%s not available); will retry",
+            target,
+            versions,
+        )
+
+
 def _write_rows(
     rows_df, target: str, mode: str, paths: List[str], versions: Optional[str]
 ) -> None:
     spark = rows_df.sparkSession
     if not _table_exists(spark, target):
-        rows_df.write.mode("overwrite").clusterBy(SOURCE_PATH_COL).saveAsTable(target)
-        if mode == "scd2" and versions:
-            spark.sql(
-                f"CREATE VIEW IF NOT EXISTS {target}_current AS SELECT r.* FROM {target} r "
-                f"JOIN {versions} v ON r.{SOURCE_PATH_COL} = v.{SOURCE_PATH_COL} "
-                f"AND r.{SOURCE_HASH_COL} = v.{SOURCE_HASH_COL} WHERE v.__END_AT IS NULL"
-            )
-        return
-    if mode == "replace":
+        rows_df.write.mode("append").clusterBy(SOURCE_PATH_COL).saveAsTable(target)
+    elif mode == "replace":
         (
             rows_df.write.mode("overwrite")
             .option("replaceWhere", replace_predicate(paths))
@@ -152,27 +196,80 @@ def _write_rows(
         )
     else:
         rows_df.write.mode("append").saveAsTable(target)
+    if mode == "scd2" and versions:
+        _ensure_current_view(spark, target, versions)
 
 
-def write_batch(batch_df, target, format, options, mode, *, versions=None, schema_path):
-    """foreach_batch_sink body: ``batch_df`` = ``hash_files`` rows. Returns files written."""
+def _delivery_is_current(event: dict) -> bool:
+    """True if the file on disk still matches the delivery (size and mtime).
+
+    ``binaryFile`` mtimes have millisecond resolution while ``stat`` has finer, so
+    they are compared to within 1 ms. A file overwritten since it was hashed (a newer
+    delivery is pending) or deleted is not current.
+    """
+    local = _listing.to_local_path(event[SOURCE_PATH_COL])
+    try:
+        st = _listing._retry_transient(lambda: os.stat(local))
+    except FileNotFoundError:
+        _LOG.warning("on_change: %s no longer exists; delivery skipped", local)
+        return False
+    if st.st_size != event[SOURCE_SIZE_COL]:
+        _LOG.warning(
+            "on_change: %s changed since it was hashed; delivery skipped", local
+        )
+        return False
+    if abs(st.st_mtime_ns // 1_000_000 - event[_MTIME_US] // 1000) > 1:
+        _LOG.warning(
+            "on_change: %s was modified since it was hashed; delivery skipped", local
+        )
+        return False
+    return True
+
+
+def write_batch(
+    batch_df,
+    target,
+    format,
+    options,
+    mode,
+    *,
+    versions=None,
+    schema_path,
+    num_partitions=None,
+):
+    """foreach_batch_sink body: ``batch_df`` = ``hash_files`` rows. Returns files written.
+
+    Before reading, each planned file is stat-ed on the driver and skipped (with a
+    warning) if its size or mtime no longer matches the delivery, so a row's
+    ``_source_hash`` describes the content it was read from; the skipped file's newer
+    delivery arrives in a later batch. A file overwritten between that stat and the
+    parse can still be read with the older hash (residual race; the next delivery of
+    the file is written and, under ``scd2``, recorded as the current version).
+    """
     from pyspark.sql import functions as F
 
     _check_mode(mode)
     spark = batch_df.sparkSession
-    events = [r.asDict() for r in batch_df.collect()]
+    events = [
+        r.asDict()
+        for r in batch_df.withColumn(
+            _MTIME_US, F.unix_micros(F.col(SOURCE_MTIME_COL))
+        ).collect()
+    ]
     if not events:
         return 0
     paths = sorted({e[SOURCE_PATH_COL] for e in events})
     stored = {} if mode == "append" else _stored_hashes(spark, target, paths, mode)
-    todo = plan_writes(events, stored, mode)
+    todo = [e for e in plan_writes(events, stored, mode) if _delivery_is_current(e)]
     if not todo:
         return 0
     files = spark.createDataFrame(
         [(e[SOURCE_PATH_COL], e[SOURCE_MTIME_COL], e[SOURCE_HASH_COL]) for e in todo],
         f"path string, modificationTime timestamp, {SOURCE_HASH_COL} string",
     )
-    rows = read_paths(files, format, options, schema_path=schema_path)
+    rows = read_paths(
+        files, format, options, schema_path=schema_path, num_partitions=num_partitions
+    )
     keyed = files.select(
         F.col("path").alias(SOURCE_PATH_COL),
         F.col("modificationTime").alias(SOURCE_MTIME_COL),
@@ -202,15 +299,21 @@ def declare_ingest(
     ``scd2``, ``t_file_versions`` (AUTO CDC SCD 2 on ``_source_path``, history on
     ``_source_hash``) plus the view ``<target>_current``; rows land in ``target``.
     ``append`` declares a plain streaming table ``target`` instead. ``target`` must be
-    fully qualified and in the pipeline's catalog/schema.
+    a fully qualified ``catalog.schema.table`` in the pipeline's catalog/schema.
     """
+    _check_mode(on_change)
+    parts = target.split(".")
+    if len(parts) != 3 or not all(parts):
+        raise ValueError(
+            f"target must be a fully qualified catalog.schema.table name; got {target!r}."
+        )
+
     from pyspark import pipelines as dp
     from pyspark.sql import SparkSession
     from pyspark.sql import functions as F
 
-    _check_mode(on_change)
     spark = SparkSession.getActiveSession()
-    short = target.split(".")[-1]
+    short = parts[-1]
     qualifier = target.rsplit(".", 1)[0]
     schema_src = schema_path or source_dir
 
@@ -218,10 +321,7 @@ def declare_ingest(
         r = (
             spark.readStream.format("cloudFiles")
             .option("cloudFiles.format", "binaryFile")
-            .option(
-                "cloudFiles.allowOverwrites",
-                "true" if on_change != "append" else "false",
-            )
+            .option("cloudFiles.allowOverwrites", "true")
         )
         if glob:
             r = r.option("pathGlobFilter", glob)
@@ -272,6 +372,7 @@ def declare_ingest(
             on_change,
             versions=full_versions,
             schema_path=schema_src,
+            num_partitions=num_partitions,
         )
 
     @dp.append_flow(name=f"{short}_rows_flow", target=sink)

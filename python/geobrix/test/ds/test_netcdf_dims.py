@@ -851,3 +851,67 @@ def test_array_2d_undecodable_variable_reads_raw_per_slice(tmp_path):
             arr = _netcdf.array_2d(ds, "baa", sel={"time": t})
             assert arr.dtype == np.uint8
             np.testing.assert_array_equal(arr, raw[t])
+
+
+def _write_undecodable_variable(grp, raw) -> None:
+    """``baa`` in ``grp`` (the file or one of its groups) whose CF mask decode fails
+    (uint8, _FillValue 251, integer scale_factor), on a 2 x 2 north-up grid."""
+    grp.createDimension("time", 2)
+    grp.createDimension("lat", 2)
+    grp.createDimension("lon", 2)
+    lat = grp.createVariable("lat", "f8", ("lat",))
+    lon = grp.createVariable("lon", "f8", ("lon",))
+    lat.standard_name = "latitude"
+    lon.standard_name = "longitude"
+    lat[:] = [1.0, 0.0]
+    lon[:] = [0.0, 1.0]
+    v = grp.createVariable("baa", "u1", ("time", "lat", "lon"), fill_value=251)
+    v.set_auto_maskandscale(False)
+    v.scale_factor = np.int64(1)
+    v.valid_min = np.uint8(0)
+    v.valid_max = np.uint8(4)
+    v[:] = raw
+
+
+def test_array_2d_raw_fallback_reads_the_requested_group(tmp_path):
+    """The raw fallback reopens the file at the same group: a variable of a group
+    is read from there, not from a variable of the same name at the file's root."""
+    p = str(tmp_path / "grouped.nc")
+    in_group = np.array([[[0, 1], [251, 4]], [[2, 251], [3, 0]]], dtype="u1")
+    at_root = np.full((2, 2, 2), 9, dtype="u1")
+    with Dataset(p, "w", format="NETCDF4") as ds:
+        _write_undecodable_variable(ds, at_root)
+        _write_undecodable_variable(ds.createGroup("g"), in_group)
+    with _netcdf.open_dataset(p, "g") as ds:
+        with pytest.raises(ValueError):
+            ds["baa"].values  # noqa: B018 - the decode this fallback exists for
+        for t in (0, 1):
+            arr = _netcdf.array_2d(ds, "baa", sel={"time": t})
+            np.testing.assert_array_equal(arr, in_group[t])
+
+
+def test_array_2d_raw_fallback_of_a_group_variable_absent_from_the_root(tmp_path):
+    """A group-only variable still reads raw (the root has no such variable, so
+    reopening there fails with a KeyError)."""
+    p = str(tmp_path / "grouped_only.nc")
+    in_group = np.array([[[0, 1], [251, 4]], [[2, 251], [3, 0]]], dtype="u1")
+    with Dataset(p, "w", format="NETCDF4") as ds:
+        _write_undecodable_variable(ds.createGroup("g"), in_group)
+    with _netcdf.open_dataset(p, "g") as ds:
+        arr = _netcdf.array_2d(ds, "baa", sel={"time": 1})
+        np.testing.assert_array_equal(arr, in_group[1])
+
+
+def test_reader_group_option_reaches_the_raw_fallback(tmp_path):
+    """netcdf_gbx with ``group`` reads an undecodable group variable raw (fill
+    kept), not the same-named variable at the file's root."""
+    p = str(tmp_path / "grouped_reader.nc")
+    in_group = np.array([[[0, 1], [251, 4]], [[2, 251], [3, 0]]], dtype="u1")
+    at_root = np.full((2, 2, 2), 9, dtype="u1")
+    with Dataset(p, "w", format="NETCDF4") as ds:
+        _write_undecodable_variable(ds, at_root)
+        _write_undecodable_variable(ds.createGroup("g"), in_group)
+    rows = _read_reader(p, {"group": "g", "variables": "baa", "fanout": "time"})
+    assert [_tile_mean(r) for r in rows] == pytest.approx(
+        [float(in_group[t].mean()) for t in (0, 1)]
+    )

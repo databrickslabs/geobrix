@@ -18,6 +18,9 @@ POINTS = "points"  # CF discrete sampling geometries -> vector
 CURVILINEAR = "curvilinear"  # class 3 (2-D lat/lon) -> vector (per-cell points)
 UNSUPPORTED = "unsupported"  # class 4 (sensor geometry + GLT) / unknown
 
+# Dataset.encoding key holding the HDF5 group a dataset was opened at.
+_GROUP_KEY = "gbx_group"
+
 _LAT_NAMES = {"lat", "latitude", "y"}
 _LON_NAMES = {"lon", "longitude", "x"}
 
@@ -31,6 +34,9 @@ def open_dataset(path: str, group: Optional[str]) -> Iterator["object"]:
     if group:
         kw["group"] = group
     ds = xr.open_dataset(path, **kw)
+    # xarray records the source file but not the group: keep it, so the raw reopen
+    # of a variable that cannot be decoded (see _decoded_or_raw) reads the same group.
+    ds.encoding[_GROUP_KEY] = group or None
     try:
         yield ds
     finally:
@@ -258,7 +264,8 @@ def _decoded_or_raw(ds, variable: str, index: Optional[Dict[str, object]] = None
     (undecoded) values -- which is also what the heavy GDAL reader emits (fill
     kept as its integer sentinel, no NaN promotion), so it is the parity-correct
     behavior. The reopen is targeted (only on decode failure) using the
-    variable's own source-file encoding, and reads the same selection only.
+    variable's own source-file encoding, at the group the dataset was opened at,
+    and reads the same selection only.
     """
     import xarray as xr
 
@@ -270,9 +277,11 @@ def _decoded_or_raw(ds, variable: str, index: Optional[Dict[str, object]] = None
         src = da.encoding.get("source") or ds.encoding.get("source")
         if not src:
             raise
-        raw = xr.open_dataset(
-            src, engine="netcdf4", decode_coords="all", mask_and_scale=False
-        )
+        kw = {"engine": "netcdf4", "decode_coords": "all", "mask_and_scale": False}
+        group = ds.encoding.get(_GROUP_KEY)
+        if group:
+            kw["group"] = group
+        raw = xr.open_dataset(src, **kw)
         try:
             return raw[variable].isel(index).values
         finally:

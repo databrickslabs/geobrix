@@ -12,6 +12,7 @@ import os
 import shutil
 import stat
 import threading
+import time
 import warnings
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -71,8 +72,19 @@ def _search_order(base: str, extra: Sequence[str]) -> List[str]:
 # instead of nesting it.
 _PROJ_DATA_DIRS: Dict[Tuple[str, ...], str] = {}
 _PROJ_DATA_BASES: Dict[str, str] = {}
+# A directory that could not be listed leaves its files out of the merged directory. That
+# build is reused only until the time here (then rebuilt, which lists again): per-row
+# callers must not repeat the listing retries, and a dir that was unreachable once (FUSE)
+# must not stay missing for the life of the process.
+_PROJ_DATA_RETRY_AT: Dict[Tuple[str, ...], float] = {}
+_UNLISTABLE_RETRY_S = 60.0
+_WARNED_UNLISTABLE: set = set()  # dirs already named in a warning (once per process)
 _PROJ_DATA_LOCK = threading.Lock()
 _MERGED_PREFIX = "gbx_proj_data_"
+
+
+def _now() -> float:
+    return time.monotonic()
 
 
 def _usable_merged_dir(path: str, uid: Optional[int]) -> bool:
@@ -85,29 +97,59 @@ def _usable_merged_dir(path: str, uid: Optional[int]) -> bool:
     return stat.S_ISDIR(st.st_mode) and (uid is None or st.st_uid == uid)
 
 
-def _build_merged_proj_dir(search: Sequence[str]) -> str:
-    """Create (or reuse) ONE directory of symlinks to every entry of `search`'s dirs.
+def _list_dir(d: str) -> Optional[List[str]]:
+    """Sorted entry names of `d`; None if it still cannot be listed after the transient
+    retries every FUSE read gets (a UC Volume can miss for a moment even when healthy).
 
-    The first dir in `search` that holds a name wins it, which is PROJ's own order for a
-    multi-directory search path. Missing or unreadable dirs are skipped. The directory
-    name hashes the search order and its listing, so it is shared by every process of
-    the same user on the node and is rebuilt when a grid dir gains files. It is built
-    under a temp name and renamed into place, so readers never see it half-populated.
-    Raises OSError if it cannot be built (e.g. no symlink support).
+    A dir that stays unlistable is named in one warning per process: its files are then
+    missing from PROJ_DATA, which silently costs accuracy (a grid is not applied).
+    """
+    from databricks.labs.gbx.ds import _listing
+
+    try:
+        return sorted(_listing._retry_transient(lambda: os.listdir(d)))
+    except OSError as e:
+        if d not in _WARNED_UNLISTABLE:
+            _WARNED_UNLISTABLE.add(d)
+            warnings.warn(
+                f"register_proj_grids: could not list the PROJ data directory {d!r} "
+                f"({e}); its files are left out of PROJ_DATA, so grids in it are not "
+                f"applied by the raster functions. Listing it again in "
+                f"{_UNLISTABLE_RETRY_S:g} s.",
+                RuntimeWarning,
+                stacklevel=5,
+            )
+        return None
+
+
+def _merged_entries(search: Sequence[str]) -> Tuple[Dict[str, str], List[str]]:
+    """`name -> target` for every entry of `search`'s dirs (first dir to hold a name wins
+    it, which is PROJ's own order for a multi-directory search path), and the dirs that
+    could not be listed."""
+    entries: Dict[str, str] = {}
+    unlisted: List[str] = []
+    for d in search:
+        names = _list_dir(d)
+        if names is None:
+            unlisted.append(d)
+            continue
+        for name in names:
+            entries.setdefault(name, os.path.abspath(os.path.join(d, name)))
+    return entries, unlisted
+
+
+def _build_merged_proj_dir(search: Sequence[str], entries: Dict[str, str]) -> str:
+    """Create (or reuse) ONE directory of symlinks to `entries` (see _merged_entries).
+
+    The directory name hashes the search order and the entries, so it is shared by every
+    process of the same user on the node and is rebuilt when a grid dir gains files. It
+    is built under a temp name and renamed into place, so readers never see it
+    half-populated. Raises OSError if it cannot be built (e.g. no symlink support).
     """
     from databricks.labs.gbx.pyrx.core.local_temp import (
         local_temp_root,
         new_local_temp_dir,
     )
-
-    entries: Dict[str, str] = {}
-    for d in search:
-        try:
-            names = sorted(os.listdir(d))
-        except OSError:
-            continue
-        for name in names:
-            entries.setdefault(name, os.path.abspath(os.path.join(d, name)))
 
     uid = os.getuid() if hasattr(os, "getuid") else None
     key = "\0".join(list(search) + [f"{n}={t}" for n, t in sorted(entries.items())])
@@ -162,10 +204,13 @@ def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
     key = tuple(search)
     with _PROJ_DATA_LOCK:
         hit = _PROJ_DATA_DIRS.get(key)
-        if hit and (hit == base or os.path.isdir(hit)):
-            return hit
+        retry_at = _PROJ_DATA_RETRY_AT.get(key)
+        if hit and (retry_at is None or _now() < retry_at):
+            if hit == base or os.path.isdir(hit):
+                return hit
+        entries, unlisted = _merged_entries(search)
         try:
-            path = _build_merged_proj_dir(search)
+            path = _build_merged_proj_dir(search, entries)
         except OSError as e:
             warnings.warn(
                 f"register_proj_grids: could not build a merged PROJ data directory "
@@ -176,6 +221,10 @@ def _proj_data_dir(base: str, extra_proj_dirs: Sequence[str]) -> Optional[str]:
             )
             path = base  # cached too: per-row callers must not retry the build
         _PROJ_DATA_DIRS[key] = path
+        if unlisted:
+            _PROJ_DATA_RETRY_AT[key] = _now() + _UNLISTABLE_RETRY_S
+        else:
+            _PROJ_DATA_RETRY_AT.pop(key, None)
         if path != base:
             _PROJ_DATA_BASES[path] = base
         return path

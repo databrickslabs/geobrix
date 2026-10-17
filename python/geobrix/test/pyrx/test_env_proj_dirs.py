@@ -14,6 +14,7 @@ import warnings
 
 import pytest
 
+from databricks.labs.gbx.ds import _listing
 from databricks.labs.gbx.pyrx import _env
 
 
@@ -42,6 +43,9 @@ def base(monkeypatch, tmp_path):
     monkeypatch.setattr(_env, "_register_pyproj_search_dirs", lambda dirs: None)
     monkeypatch.setattr(_env, "_PROJ_DATA_DIRS", {})
     monkeypatch.setattr(_env, "_PROJ_DATA_BASES", {})
+    monkeypatch.setattr(_env, "_PROJ_DATA_RETRY_AT", {})
+    monkeypatch.setattr(_env, "_WARNED_UNLISTABLE", set())
+    monkeypatch.setattr(_listing.time, "sleep", lambda _s: None)  # no retry backoff
     return bundled
 
 
@@ -113,7 +117,9 @@ def test_multi_path_base_is_merged_too(monkeypatch, base, tmp_path):
 
 
 def test_missing_registered_dir_is_skipped(base, tmp_path):
-    _env.configure_gdal_env(extra_proj_dirs=[str(tmp_path / "does_not_exist")])
+    missing = tmp_path / "does_not_exist"
+    with pytest.warns(RuntimeWarning, match="does_not_exist"):
+        _env.configure_gdal_env(extra_proj_dirs=[str(missing)])
     proj_data = os.environ["PROJ_DATA"]
     assert os.pathsep not in proj_data
     assert _resolves_to(proj_data, "proj.db", base)
@@ -147,6 +153,83 @@ def test_merge_failure_falls_back_to_the_base(monkeypatch, base, tmp_path):
     assert os.environ["PROJ_DATA"] == str(base)
 
 
+def _fail_listdir(monkeypatch, target, failures):
+    """Make ``os.listdir(target)`` raise OSError ``failures`` times (None = always).
+
+    Returns ``(attempts, heal)``: the attempts made on ``target`` and a function that
+    makes it list normally again. Other paths list normally throughout.
+    """
+    real = os.listdir
+    attempts = []
+
+    def _listdir(path="."):
+        if os.fspath(path) == str(target):
+            attempts.append(path)
+            if failures is None or len(attempts) <= failures:
+                raise FileNotFoundError(2, "transient FUSE miss", str(path))
+        return real(path)
+
+    monkeypatch.setattr(os, "listdir", _listdir)
+    return attempts, lambda: monkeypatch.setattr(os, "listdir", real)
+
+
+def test_transient_listdir_failure_is_retried(monkeypatch, base, tmp_path):
+    """A one-off listing failure on a registered dir (UC Volume FUSE lag) must not drop
+    its grids for the life of the process: the listing is retried like every other
+    FUSE read."""
+    grids = _mkdir_with(tmp_path / "grids", "a.gsb")
+    attempts, _ = _fail_listdir(monkeypatch, grids, failures=2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # recovered: nothing to warn about
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    assert len(attempts) == 3
+    proj_data = os.environ["PROJ_DATA"]
+    assert _resolves_to(proj_data, "a.gsb", grids)
+    assert _resolves_to(proj_data, "proj.db", base)
+
+
+def test_unlistable_dir_warns_once_and_is_retried_later(monkeypatch, base, tmp_path):
+    """A dir that stays unlistable is named in ONE warning, proj.db stays reachable,
+    and the failure is not cached for good: once the dir lists, its grids appear."""
+    grids = _mkdir_with(tmp_path / "grids", "a.gsb")
+    attempts, heal = _fail_listdir(monkeypatch, grids, failures=None)
+    clock = [1000.0]
+    monkeypatch.setattr(_env, "_now", lambda: clock[0])
+    with pytest.warns(RuntimeWarning, match="grids") as caught:
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    assert [str(grids) in str(w.message) for w in caught] == [True]
+    degraded = os.environ["PROJ_DATA"]
+    assert _resolves_to(degraded, "proj.db", base)
+    assert not os.path.exists(os.path.join(degraded, "a.gsb"))
+
+    # Per-row callers shortly afterwards: no new listing attempts, no new warning.
+    made = len(attempts)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    assert len(attempts) == made
+    assert os.environ["PROJ_DATA"] == degraded
+
+    # Past the retry window and still unlistable: tried again, but not warned again.
+    clock[0] += _env._UNLISTABLE_RETRY_S + 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    assert len(attempts) > made
+
+    # The dir becomes listable and the window has passed again: the next call rebuilds
+    # with its grids.
+    heal()
+    clock[0] += _env._UNLISTABLE_RETRY_S + 1
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        _env.configure_gdal_env(extra_proj_dirs=[str(grids)])
+    recovered = os.environ["PROJ_DATA"]
+    assert recovered != degraded
+    assert _resolves_to(recovered, "a.gsb", grids)
+    assert _resolves_to(recovered, "proj.db", base)
+
+
 # ---------------------------------------------------------------------------
 # End to end against the real rasterio wheel (the failure the light CI run hit).
 # ---------------------------------------------------------------------------
@@ -166,6 +249,54 @@ GRID_DIR = os.path.join(
 # synthetic.gsb applies a constant +30 arc-second latitude shift inside its box.
 GRID_CRS = "+proj=longlat +ellps=GRS80 +nadgrids=synthetic.gsb +no_defs"
 EXPECT_LAT = 51.5 + 30.0 / 3600.0
+
+
+_PROCESS_ENV_KEYS = ("GDAL_DATA", "PROJ_DATA", "PROJ_LIB")
+
+
+def _gdal_proj_search_paths():
+    """GDAL's current PROJ search path (it changes only when a rasterio Env starts);
+    empty when rasterio is not installed."""
+    try:
+        from rasterio._env import get_proj_data_search_paths
+    except ImportError:
+        return []
+    return list(get_proj_data_search_paths())
+
+
+@pytest.fixture(scope="module", autouse=True)
+def _module_leaves_process_state_as_found():
+    """The tests here call configure_gdal_env, which changes process-wide state that every
+    later test module in the same pytest process (all light dirs share one) would see:
+    PROJ_DATA / GDAL_DATA, the merged-dir caches, and GDAL's own PROJ search path (set by
+    the next rasterio Env)."""
+    found = {k: os.environ.get(k) for k in _PROCESS_ENV_KEYS}
+    found_dirs = (dict(_env._PROJ_DATA_DIRS), dict(_env._PROJ_DATA_BASES))
+    yield
+    assert {k: os.environ.get(k) for k in _PROCESS_ENV_KEYS} == found
+    assert (dict(_env._PROJ_DATA_DIRS), dict(_env._PROJ_DATA_BASES)) == found_dirs
+    leaked = [p for p in _gdal_proj_search_paths() if _env._MERGED_PREFIX in p]
+    assert not leaked, f"GDAL's PROJ search path still points at {leaked}"
+
+
+@pytest.fixture
+def restored_process_state(monkeypatch):
+    """Clean per-process caches for the test, and afterwards the original PROJ_DATA /
+    GDAL_DATA / PROJ_LIB and GDAL's PROJ search path (re-applied by a final rasterio Env).
+    """
+    rasterio = pytest.importorskip("rasterio")
+    saved = {k: os.environ.get(k) for k in _PROCESS_ENV_KEYS}
+    monkeypatch.setattr(_env, "_PROJ_DATA_DIRS", {})
+    monkeypatch.setattr(_env, "_PROJ_DATA_BASES", {})
+    monkeypatch.setattr(_env, "_PROJ_DATA_RETRY_AT", {})
+    yield
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v
+    with rasterio.Env():  # applies the restored PROJ_DATA as GDAL's search path
+        pass
 
 
 def _in_new_thread(fn):
@@ -188,7 +319,9 @@ def _in_new_thread(fn):
     return out["value"]
 
 
-def test_raster_tier_keeps_proj_db_and_finds_registered_grid(monkeypatch, tmp_path):
+def test_raster_tier_keeps_proj_db_and_finds_registered_grid(
+    monkeypatch, tmp_path, restored_process_state
+):
     rasterio = pytest.importorskip("rasterio")
     from rasterio.warp import transform
 

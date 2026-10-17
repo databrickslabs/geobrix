@@ -12,12 +12,19 @@ show_help() {
     echo -e "  ${GREEN}gbx:test:python${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--path <dir>${NC}           Specific test directory or file"
+    echo -e "  ${GREEN}--path <dir>${NC}           Specific test directory or file (single pytest run; repeatable)"
     echo -e "  ${GREEN}-k <expr>${NC}              Pytest keyword filter (e.g. 'merge or fileName')"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     echo -e "  ${GREEN}--with-integration${NC}     Include ${YELLOW}@pytest.mark.integration${NC} tests (network downloads, slow); excluded by default"
     echo -e "  ${GREEN}--markers <expr>${NC}        Override marker filter with a pytest expression (e.g. 'not slow'); disables the default 'not integration' filter"
     echo -e "  ${GREEN}--help${NC}                 Show this help"
+    echo ""
+    echo -e "${CYAN}Phases (no --path):${NC} the heavy and light tiers cannot share one pytest process, so the default"
+    echo -e "  run mirrors CI as separate pytest invocations, each with its own log, and prints a per-phase summary:"
+    echo -e "  ${YELLOW}heavy${NC}  test/ minus the light dirs (LIGHT_IGNORES in .github/actions/python_build/action.yml)"
+    echo -e "  ${YELLOW}light${NC}  the light dirs (pytest list in .github/actions/pyrx_build/action.yml)"
+    echo -e "  ${YELLOW}bench${NC}  test/bench, run locally on its own while CI's light phase excludes it"
+    echo -e "  Exits non-zero if any phase fails. ${YELLOW}--path${NC} bypasses phasing (one process, as given)."
     echo ""
     echo -e "${CYAN}Default marker filter:${NC} ${YELLOW}not integration${NC} (matches CI; opt in with ${GREEN}--with-integration${NC} or override with ${GREEN}--markers${NC})"
     echo ""
@@ -27,7 +34,7 @@ show_help() {
     echo -e "  ${YELLOW}/abs/path/file.log${NC}     → /abs/path/file.log"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
-    echo -e "  ${YELLOW}gbx:test:python${NC}                                     ${CYAN}# unit tests only (default)${NC}"
+    echo -e "  ${YELLOW}gbx:test:python${NC}                                     ${CYAN}# all tiers as CI-style phases (default)${NC}"
     echo -e "  ${YELLOW}gbx:test:python --with-integration${NC}                  ${CYAN}# unit + integration (network)${NC}"
     echo -e "  ${YELLOW}gbx:test:python --path python/geobrix/test/rasterx/${NC}"
     echo -e "  ${YELLOW}gbx:test:python --markers 'not slow' --log python-tests.log${NC}"
@@ -36,8 +43,10 @@ show_help() {
 
 # Parse arguments
 # TEST_PATH accumulates one or more --path values (pytest accepts multiple positional
-# paths in a single run). Empty until the first --path; falls back to the full test tree.
+# paths in a single run). PATH_GIVEN records whether any --path was passed: without one the
+# command runs the CI-style phases below instead of a single process over the whole tree.
 TEST_PATH=""
+PATH_GIVEN=0
 LOG_PATH=""
 KEYWORD=""
 # Default: exclude integration tests (network downloads); matches CI's python_build action.
@@ -48,6 +57,7 @@ while [[ $# -gt 0 ]]; do
         --path)
             # Append so repeated --path flags all run in one pytest invocation.
             TEST_PATH="$TEST_PATH /root/geobrix/$2"
+            PATH_GIVEN=1
             shift 2
             ;;
         -k)
@@ -79,8 +89,7 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# No --path given → run the full test tree. Trim the leading space from accumulation.
-TEST_PATH="${TEST_PATH:-/root/geobrix/python/geobrix/test/}"
+# Trim the leading space from the --path accumulation.
 TEST_PATH="${TEST_PATH# }"
 
 cd "$PROJECT_ROOT"
@@ -122,38 +131,180 @@ docker exec geobrix-dev /bin/bash -c \
        lazrs==0.8.2 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
        tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"
 
-echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
 if [ -n "$MARKERS" ]; then
     echo -e "${CYAN}🏷️  Markers: ${YELLOW}$MARKERS${NC}"
 else
     echo -e "${CYAN}🏷️  Markers: ${YELLOW}(none — including integration tests)${NC}"
 fi
 
-echo ""
-show_separator
-echo -e "${CYAN}Running tests...${NC}"
-show_separator
-echo ""
+# ---------------------------------------------------------------------------------------
+# Single run: --path given → one pytest process over exactly the paths asked for.
+# ---------------------------------------------------------------------------------------
+run_single() {
+    echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
+    echo ""
+    show_separator
+    echo -e "${CYAN}Running tests...${NC}"
+    show_separator
+    echo ""
 
-# Build pytest command
-PYTEST_CMD="unset JAVA_TOOL_OPTIONS && \
-    cd /root/geobrix && \
-    python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
+    # Build pytest command
+    PYTEST_CMD="unset JAVA_TOOL_OPTIONS && \
+        cd /root/geobrix && \
+        python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
 
-docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"
-EXIT_CODE=$?
+    docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"
+    EXIT_CODE=$?
 
-echo ""
-show_separator
-if [ $EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}✅ Python tests passed!${NC}"
+    echo ""
+    show_separator
+    if [ $EXIT_CODE -eq 0 ]; then
+        echo -e "${GREEN}✅ Python tests passed!${NC}"
+    else
+        echo -e "${RED}❌ Python tests failed (exit code: $EXIT_CODE)${NC}"
+    fi
+    show_separator
+
+    if [ -n "$LOG_PATH" ]; then
+        echo -e "${CYAN}📝 Log saved to: ${YELLOW}$LOG_PATH${NC}"
+    fi
+
+    exit $EXIT_CODE
+}
+
+# ---------------------------------------------------------------------------------------
+# Phased run: no --path → mirror CI's two Python phases (+ a local-only bench phase).
+#
+# WHY phases: the heavy tier (Scala JAR / GDAL natives registered in the Spark session) and
+# the light tier (pure Python: pyrx/pyvx/pygx/ds/...) cannot share one pytest process — one
+# process over test/ produces spurious collection/session errors. CI runs them as separate
+# jobs; this runs them as separate pytest invocations with separate logs.
+#
+# SOURCE OF TRUTH is the CI actions themselves; the lists are read from them (not copied
+# here) so this command cannot drift from CI:
+#   heavy: LIGHT_IGNORES in .github/actions/python_build/action.yml
+#   light: the `pytest test/... -m ...` line in .github/actions/pyrx_build/action.yml
+# Both run from python/geobrix like CI. CI-only extras are skipped locally (the heavy
+# phase's --cov and `python -m build`; the light phase's wheel build and fresh install).
+# bench: CI's light run currently omits test/bench (a PROJ data-path conflict on the runner);
+# locally it still runs, as its own phase. If bench is later re-added to the CI light list
+# the separate phase is dropped automatically (it would otherwise run twice).
+# ---------------------------------------------------------------------------------------
+HEAVY_ACTION="$PROJECT_ROOT/.github/actions/python_build/action.yml"
+LIGHT_ACTION="$PROJECT_ROOT/.github/actions/pyrx_build/action.yml"
+
+load_ci_phases() {
+    LIGHT_IGNORES=$(sed -nE 's/^[[:space:]]*LIGHT_IGNORES="([^"]*)".*$/\1/p' "$HEAVY_ACTION" | head -1)
+    LIGHT_DIRS=$(sed -nE 's/^[[:space:]]*pytest[[:space:]]+((test\/[A-Za-z0-9_]+[[:space:]]+)+)-m[[:space:]].*$/\1/p' "$LIGHT_ACTION" | head -1)
+    LIGHT_DIRS="${LIGHT_DIRS%"${LIGHT_DIRS##*[![:space:]]}"}"
+
+    local tok bad=0
+    [ -n "$LIGHT_IGNORES" ] && [ -n "$LIGHT_DIRS" ] || bad=1
+    for tok in $LIGHT_IGNORES; do
+        [[ "$tok" =~ ^--ignore=test/[A-Za-z0-9_]+$ ]] || bad=1
+    done
+    for tok in $LIGHT_DIRS; do
+        [[ "$tok" =~ ^test/[A-Za-z0-9_]+$ ]] || bad=1
+    done
+    if [ "$bad" -ne 0 ]; then
+        echo -e "${RED}❌ Could not read the CI phase lists:${NC}"
+        echo -e "   LIGHT_IGNORES ($HEAVY_ACTION): '${LIGHT_IGNORES}'"
+        echo -e "   light dirs    ($LIGHT_ACTION): '${LIGHT_DIRS}'"
+        echo -e "${YELLOW}The CI action's shape changed; update load_ci_phases() in gbx-test-python.sh.${NC}"
+        exit 2
+    fi
+}
+
+# Strip ANSI colour codes ($'..' quoting: BSD sed has no \x escapes).
+strip_ansi() { sed $'s/\033\\[[0-9;]*[A-Za-z]//g'; }
+
+# run_phase <name> <pytest-args> <log>: one pytest process in python/geobrix; output is
+# streamed to the terminal and tee'd to <log>. Returns pytest's exit code.
+run_phase() {
+    local name="$1" args="$2" log="$3"
+    echo ""
+    show_separator
+    echo -e "${CYAN}▶ Phase: ${YELLOW}${name}${NC}  ${CYAN}(log: ${log})${NC}"
+    echo -e "${CYAN}  pytest ${args}${NC}"
+    show_separator
+    echo ""
+    docker exec geobrix-dev /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
+        cd /root/geobrix/python/geobrix && \
+        python3 -m pytest $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee "$log"
+    return "${PIPESTATUS[0]}"
+}
+
+run_phased() {
+    load_ci_phases
+
+    local base
+    if [ -n "$LOG_PATH" ]; then
+        base="${LOG_PATH%.log}"
+    else
+        base="test-logs/python-tests"
+    fi
+    mkdir -p "$(dirname "$base")"
+
+    local names=() argsets=() codes=() logs=()
+    names+=("heavy");  argsets+=("test $LIGHT_IGNORES")
+    names+=("light");  argsets+=("$LIGHT_DIRS")
+    case " $LIGHT_DIRS " in
+        *" test/bench "*) ;;
+        *) names+=("bench"); argsets+=("test/bench") ;;
+    esac
+
+    echo -e "${CYAN}🧩 Phases (no --path; mirrors CI): ${YELLOW}${names[*]}${NC}"
+
+    local i code
+    for i in "${!names[@]}"; do
+        logs[$i]="${base}-${names[$i]}.log"
+        run_phase "${names[$i]}" "${argsets[$i]}" "${logs[$i]}"
+        code=$?
+        # With -k, a phase that selects nothing exits 5; that is not a failure.
+        if [ "$code" -eq 5 ] && [ -n "$KEYWORD" ]; then code=0; fi
+        codes[$i]=$code
+    done
+
+    echo ""
+    show_separator
+    echo -e "${CYAN}Per-phase summary${NC}"
+    show_separator
+    local overall=0 line fails
+    for i in "${!names[@]}"; do
+        line=$(strip_ansi < "${logs[$i]}" \
+            | grep -E '^=+ .* in [0-9.]+s( \([0-9:]+\))? =+$' | tail -1 \
+            | sed -E 's/^=+ //; s/ =+$//')
+        [ -n "$line" ] || line="(no pytest summary line — see log)"
+        if [ "${codes[$i]}" -eq 0 ]; then
+            echo -e "  ${GREEN}PASS${NC}  ${names[$i]}: ${line}"
+        else
+            overall=1
+            echo -e "  ${RED}FAIL${NC}  ${names[$i]} (exit ${codes[$i]}): ${line}"
+            fails=$(strip_ansi < "${logs[$i]}" | grep -E '^(FAILED|ERROR) ' | sort -u)
+            if [ -n "$fails" ]; then
+                echo "$fails" | head -25 | sed 's/^/        /'
+                [ "$(echo "$fails" | wc -l)" -gt 25 ] && echo "        ... ($(echo "$fails" | wc -l | tr -d ' ') total; full list in the log)"
+            fi
+        fi
+        echo -e "        log: ${logs[$i]}"
+    done
+
+    echo ""
+    show_separator
+    if [ "$overall" -eq 0 ]; then
+        echo -e "${GREEN}✅ Python tests passed (all phases)!${NC}"
+    else
+        echo -e "${RED}❌ Python tests failed (one or more phases; see summary above)${NC}"
+    fi
+    show_separator
+    if [ -n "$LOG_PATH" ]; then
+        echo -e "${CYAN}📝 Combined log saved to: ${YELLOW}$LOG_PATH${NC}"
+    fi
+    exit "$overall"
+}
+
+if [ "$PATH_GIVEN" -eq 1 ]; then
+    run_single
 else
-    echo -e "${RED}❌ Python tests failed (exit code: $EXIT_CODE)${NC}"
+    run_phased
 fi
-show_separator
-
-if [ -n "$LOG_PATH" ]; then
-    echo -e "${CYAN}📝 Log saved to: ${YELLOW}$LOG_PATH${NC}"
-fi
-
-exit $EXIT_CODE

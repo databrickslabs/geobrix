@@ -541,6 +541,35 @@ def test_write_batch_stat_checks_run_concurrently(
     )
 
 
+# --- idempotent retry --------------------------------------------------------
+
+
+@pytest.mark.parametrize("mode", ["scd2", "replace"])
+def test_write_batch_retry_of_a_written_batch_writes_nothing(
+    spark, tmp_path, monkeypatch, mode
+):
+    monkeypatch.setattr(C._listing, "_retry_transient", lambda fn, **k: fn())
+    store = {}  # path -> stored hashes, as the rows table would hold them
+
+    def stored(spark_, target, paths, mode_):
+        return {p: set(store[p]) for p in paths if p in store}
+
+    def write(rows_df, target, mode_, paths, versions):
+        for p, h in rows_df.select("_source_path", "_source_hash").distinct().collect():
+            if mode_ == "replace":
+                store[p] = {h}
+            else:
+                store.setdefault(p, set()).add(h)
+
+    monkeypatch.setattr(C, "_stored_hashes", stored)
+    monkeypatch.setattr(C, "_write_rows", write)
+    a = _gj(str(tmp_path / "a.geojson"), 2)
+    b = _gj(str(tmp_path / "b.geojson"), 3)
+    events = _frozen_events(spark, [a, b])
+    assert C.write_batch(events, "c.s.t", "geojson_gbx", None, mode, schema_path=a) == 2
+    assert C.write_batch(events, "c.s.t", "geojson_gbx", None, mode, schema_path=a) == 0
+
+
 # --- files DataFrame mtimes --------------------------------------------------
 
 

@@ -718,3 +718,124 @@ def test_scheme_prefixed_local_paths_are_accepted(tmp_path):
     a = _geojson(str(tmp_path / "a.geojson"), 1)
     for p in ("dbfs:" + a, "file:" + a, "file://" + a, a):
         assert P._exists(P._fuse_path(p))
+
+
+# --- streaming increments and exact batch-reader parity ----------------------
+
+
+def test_read_paths_stream_second_run_reads_only_the_new_file(spark, tmp_path):
+    d = tmp_path / "in"
+    d.mkdir()
+    a = _geojson(str(d / "a.geojson"), 3)
+    out, ck = str(tmp_path / "out"), str(tmp_path / "ck")
+
+    def run():
+        stream = (
+            spark.readStream.format("binaryFile")
+            .schema(_BINARY_SCHEMA)
+            .option("pathGlobFilter", "*.geojson")
+            .load(str(d))
+            .select("path", "modificationTime")
+        )
+        (
+            P.read_paths(stream, "geojson_gbx", schema_path=a)
+            .writeStream.format("parquet")
+            .option("path", out)
+            .option("checkpointLocation", ck)
+            .trigger(availableNow=True)
+            .start()
+            .awaitTermination()
+        )
+        rows = spark.read.parquet(out).select(P.SOURCE_PATH_COL).collect()
+        return sorted(r[0] for r in rows)
+
+    assert run() == [a] * 3
+    b = _geojson(str(d / "b.geojson"), 2)
+    assert run() == [a] * 3 + [b] * 2  # run 2 added only b's rows
+
+
+def _comparable(df):
+    """exceptAll rejects MAP columns: compare maps (top level or one struct level
+    down) as sorted entry arrays."""
+    from pyspark.sql import functions as F
+    from pyspark.sql.types import MapType
+
+    cols = []
+    for f in df.schema.fields:
+        if isinstance(f.dataType, MapType):
+            cols.append(F.array_sort(F.map_entries(f.name)).alias(f.name))
+        elif isinstance(f.dataType, StructType) and any(
+            isinstance(s.dataType, MapType) for s in f.dataType.fields
+        ):
+            c = F.col(f.name)
+            for s in f.dataType.fields:
+                if isinstance(s.dataType, MapType):
+                    c = c.withField(
+                        s.name, F.array_sort(F.map_entries(f"{f.name}.{s.name}"))
+                    )
+            cols.append(c.alias(f.name))
+        else:
+            cols.append(F.col(f.name))
+    return df.select(cols)
+
+
+def _gpkg_file(path):
+    import pyogrio
+    import shapely
+
+    tbl = pa.table(
+        {
+            "geom": shapely.to_wkb(shapely.points([0, 1, 2], [0, 1, 2])),
+            "k": [1, 2, 3],
+            "s": ["a", "b", "c"],
+        }
+    )
+    pyogrio.write_arrow(
+        tbl,
+        path,
+        layer="pts",
+        driver="GPKG",
+        geometry_name="geom",
+        geometry_type="Point",
+        crs="EPSG:4326",
+    )
+    return path
+
+
+def _las_file(path):
+    import laspy
+    import numpy as np
+
+    hdr = laspy.LasHeader(point_format=3, version="1.4")
+    hdr.offsets, hdr.scales = [0.0, 0.0, 0.0], [0.01, 0.01, 0.01]
+    las = laspy.LasData(hdr)
+    las.x = np.arange(10.0)
+    las.y = np.arange(10.0) * 2
+    las.z = np.arange(10.0) * 3
+    las.write(path)
+    return path
+
+
+@pytest.mark.parametrize(
+    "fmt,make",
+    [
+        ("gpkg_gbx", lambda d: [_gpkg_file(f"{d}/a.gpkg"), _gpkg_file(f"{d}/b.gpkg")]),
+        (
+            "shapefile_gbx",
+            lambda d: [
+                _shapefile(f"{d}/a.shp", {"k": [1, 2]}),
+                _shapefile(f"{d}/b.shp", {"k": [3, 4]}),
+            ],
+        ),
+        ("lidar_gbx", lambda d: [_las_file(f"{d}/a.las"), _las_file(f"{d}/b.las")]),
+    ],
+)
+def test_read_paths_equals_the_batch_reader(spark, tmp_path, fmt, make):
+    files = make(str(tmp_path))
+    got = P.read_paths(_paths_df(spark, files), fmt)
+    want = _batch_read(spark, fmt, str(tmp_path))
+    cols = [c for c in got.columns if not c.startswith("_source_")]
+    assert cols == want.columns
+    g, w = _comparable(got.select(cols)), _comparable(want.select(cols))
+    assert got.count() == want.count() > 0
+    assert g.exceptAll(w).count() == 0 and w.exceptAll(g).count() == 0

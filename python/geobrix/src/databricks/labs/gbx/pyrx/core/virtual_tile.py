@@ -7,6 +7,11 @@ across both cases so parity locks once; ``path``/``window``/``clip_polygon``/
 ``clip_crs``/``crs`` are null for a plain v1 tile.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Tuple
 

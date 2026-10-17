@@ -1,5 +1,10 @@
 """Geometry + attribute marshalling for pyvx MVT encoding (Spark-free)."""
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import Any, Dict
 
 from pyspark.sql.types import BinaryType, IntegerType, StructField, StructType

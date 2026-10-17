@@ -10,6 +10,11 @@ gx.register(spark), then use on columns. Serverless-safe: spark.udf.register
 plus Column expressions only — no _jvm / spark.conf / RDD access.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import List, Optional, Union
 
 import numpy as np

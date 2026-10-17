@@ -10,6 +10,11 @@ and the consumer functions (grouped_tile_map, _run_file_fast_path) for backward
 compatibility.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from pyspark.sql import DataFrame
 from pyspark.sql import functions as F
 from pyspark.sql.types import StructField, StructType

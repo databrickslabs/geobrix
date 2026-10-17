@@ -18,6 +18,11 @@ Serverless-safe: no ``spark``, no ``sparkContext``, no ``_jvm``, no ``.rdd``.
 
 from __future__ import annotations
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import io
 import math
 

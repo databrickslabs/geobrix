@@ -5,6 +5,11 @@ Swap-compatible with ``databricks.labs.gbx.rasterx.functions``:
     df.select(prx.rst_width("tile"))
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import List, Optional
 
 import pandas as pd

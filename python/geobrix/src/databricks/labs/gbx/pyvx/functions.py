@@ -9,6 +9,11 @@ Signatures mirror databricks.labs.gbx.vectorx.functions so light <-> heavy is a
 one-line import swap. Register once with vx.register(spark), then use on columns.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from typing import List, Optional, Union
 
 import pandas as pd

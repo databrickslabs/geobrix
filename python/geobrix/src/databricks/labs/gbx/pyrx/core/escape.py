@@ -4,6 +4,11 @@ NOT SQL-registered (tile_to_numpy returns a host object; rst_apply takes a Pytho
 callable), so neither appears in registered_functions.txt / function-info.json.
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from pyspark.sql import Column
 from pyspark.sql.functions import udf
 from pyspark.sql.types import DataType, DoubleType

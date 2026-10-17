@@ -18,6 +18,11 @@ v2 tiles, and OUTPUTS only v2). No tile-returning function emits it — outputs 
 always ``V2_TILE_SCHEMA`` (enforced by G1, test_v2_tile_output_invariant.py).
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from contextlib import contextmanager
 from typing import Dict, Iterator, Optional
 

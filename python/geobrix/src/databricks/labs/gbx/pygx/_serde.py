@@ -1,3 +1,8 @@
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 from pyspark.sql.types import (
     BinaryType,
     BooleanType,

@@ -20,6 +20,11 @@ Connect-safe: no sparkContext / .rdd / _jvm / conf.set.
 
 from __future__ import annotations
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import logging
 import os as _os
 import re as _re

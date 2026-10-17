@@ -1,5 +1,10 @@
 """Distributed sparse Structure-from-Motion orchestration (COLMAP/pycolmap)."""
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import json
 import shutil
 import sqlite3 as _sq

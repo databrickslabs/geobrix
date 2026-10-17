@@ -6,6 +6,11 @@ cannot fetch a FILE-containing schema or collect a FILE value. The FILE ref is
 reconstructed lazily at compute time via file_ref_arg(tile["path"]).
 """
 
+# Before the pyspark imports: one clear error when PySpark is missing.
+from databricks.labs.gbx import _pyspark  # noqa: F401
+
+# isort: split
+
 import uuid
 from typing import Optional
 

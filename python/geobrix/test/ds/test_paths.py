@@ -82,13 +82,8 @@ def test_read_paths_lineage_strips_scheme_and_keeps_mtime(spark, tmp_path):
     a = _geojson(str(tmp_path / "a.geojson"), 2)
     got = P.read_paths(_paths_df(spark, [a]), "geojson").collect()
     assert {r[P.SOURCE_PATH_COL] for r in got} == {a}
-    want = datetime.fromtimestamp(os.stat(a).st_mtime, tz=timezone.utc).replace(
-        microsecond=0
-    )
-    assert all(
-        r[P.SOURCE_MTIME_COL].replace(tzinfo=timezone.utc, microsecond=0) == want
-        for r in got
-    )
+    want = int(os.stat(a).st_mtime)
+    assert all(int(r[P.SOURCE_MTIME_COL].timestamp()) == want for r in got)
 
 
 def test_read_paths_no_mtime_col_gives_null(spark, tmp_path):
@@ -214,3 +209,57 @@ def test_iter_path_batches_missing_file_skips(tmp_path, caplog):
     gone = str(tmp_path / "gone.geojson")
     assert list(P.iter_path_batches(gone, None, "geojson_gbx", None, expected)) == []
     assert "gone.geojson" in caplog.text
+
+
+def _geojson_props(path, props):
+    feat = {
+        "type": "Feature",
+        "properties": props,
+        "geometry": {"type": "Point", "coordinates": [0, 0]},
+    }
+    with open(path, "w") as f:
+        json.dump({"type": "FeatureCollection", "features": [feat]}, f)
+    return path
+
+
+def test_read_paths_reorders_columns_by_name(spark, tmp_path):
+    a = _geojson_props(str(tmp_path / "a.geojson"), {"a": "A1", "b": "B1"})
+    b = _geojson_props(str(tmp_path / "b.geojson"), {"b": "B2", "a": "A2"})
+    got = P.read_paths(_paths_df(spark, [a, b]), "geojson_gbx", schema_path=a).collect()
+    by_file = {r[P.SOURCE_PATH_COL]: (r["a"], r["b"]) for r in got}
+    assert by_file == {a: ("A1", "B1"), b: ("A2", "B2")}
+
+
+def test_norm_type_accepts_large_variants():
+    assert P._norm_type(pa.large_string()) == pa.string()
+    assert P._norm_type(pa.large_binary()) == pa.binary()
+    assert P._norm_type(pa.large_list(pa.large_string())) == pa.list_(pa.string())
+
+
+def test_check_schema_accepts_large_and_plain_variants():
+    got = pa.schema(
+        [
+            ("s", pa.large_string()),
+            ("b", pa.large_binary()),
+            ("l", pa.large_list(pa.int32())),
+        ]
+    )
+    want = pa.schema(
+        [("s", pa.string()), ("b", pa.binary()), ("l", pa.list_(pa.int32()))]
+    )
+    P._check_schema("x.geojson", got, want)
+
+
+def test_check_schema_changed_type_names_path_and_field():
+    got = pa.schema([("k", pa.int64())])
+    want = pa.schema([("k", pa.string())])
+    with pytest.raises(ValueError, match=r"x\.geojson.*changed types \['k'\]"):
+        P._check_schema("x.geojson", got, want)
+
+
+def test_check_schema_missing_and_extra_fields():
+    want = pa.schema([("a", pa.string()), ("b", pa.string())])
+    with pytest.raises(ValueError, match=r"x\.geojson.*missing \['b'\]"):
+        P._check_schema("x.geojson", pa.schema([("a", pa.string())]), want)
+    with pytest.raises(ValueError, match=r"x\.geojson.*extra \['c'\]"):
+        P._check_schema("x.geojson", pa.schema(list(want) + [("c", pa.string())]), want)

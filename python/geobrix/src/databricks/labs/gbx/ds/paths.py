@@ -95,9 +95,7 @@ def _norm_type(t: pa.DataType) -> pa.DataType:
         return pa.string()
     if pa.types.is_large_binary(t):
         return pa.binary()
-    if pa.types.is_large_list(t):
-        return pa.list_(_norm_type(t.value_type))
-    if pa.types.is_list(t):
+    if pa.types.is_large_list(t) or pa.types.is_list(t):
         return pa.list_(_norm_type(t.value_type))
     return t
 
@@ -147,6 +145,10 @@ def iter_path_batches(
                 # schema; there is nothing to emit or validate.
                 continue
             _check_schema(local, batch.schema, want)
+            if batch.schema.names != want.names:
+                # Same columns, different file order: realign to the positional
+                # output schema so values never land in the wrong column.
+                batch = batch.select(want.names)
             if lineage:
                 n = batch.num_rows
                 batch = batch.append_column(
@@ -173,7 +175,8 @@ def read_paths(
 
     ``df`` may be batch or streaming (e.g. Auto Loader ``binaryFile`` projected to
     ``path, modificationTime``). The output schema comes from ``schema_path``
-    (default: the first path of a batch ``df``; required for a stream).
+    (default: the first path of a batch ``df``; required for a stream). A file
+    deleted before it is read is skipped with a warning.
     """
     from pyspark.sql import functions as F
 

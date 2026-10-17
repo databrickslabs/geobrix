@@ -103,6 +103,18 @@ def test_example_bundles_use_the_current_channel_extra(name):
 
 
 @pytest.mark.parametrize("name", EXAMPLE_BUNDLES)
+def test_example_bundles_default_to_the_current_wheel(name):
+    """The artifact Volume keeps only the current version of the wheel, so a bundle's
+    default `gbx_wheel` names this release's wheel (an older one is no longer there)."""
+    version = re.search(
+        r'__version__ = "([^"]+)"',
+        (REPO / "python/geobrix/src/databricks/labs/gbx/__init__.py").read_text(),
+    ).group(1)
+    default = yaml.safe_load(EXAMPLE_BUNDLES[name].read_text())["variables"]["gbx_wheel"]["default"]
+    assert default.rsplit("/", 1)[1] == f"geobrix-{version}-py3-none-any.whl"
+
+
+@pytest.mark.parametrize("name", EXAMPLE_BUNDLES)
 def test_example_job_environments_pair_the_env_version_with_its_extra(name):
     """A Serverless job environment installs the extra of its own environment
     version (version 5 -> light_env5), not another regime's."""

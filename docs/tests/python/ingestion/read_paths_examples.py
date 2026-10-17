@@ -1,9 +1,8 @@
-"""Incremental ingestion examples — single source of truth for
-docs/docs/readers/incremental-ingestion.mdx.
+"""read_paths examples -- single source of truth for docs/docs/ingestion/read-paths.mdx.
 
-``read_paths`` runs in this suite against the sample data. ``declare_ingest`` needs a
-Lakeflow pipeline (it is a declaration, not a call), so the pipeline snippet is
-checked against the real signature instead of executed here.
+Every snippet runs in this suite against the sample data. Auto Loader
+(``cloudFiles``) only exists on Databricks, so the stream example runs with
+``binaryFile`` as its stand-in (see :func:`read_paths_stream`).
 """
 
 from path_config import SAMPLE_DATA_BASE
@@ -65,27 +64,6 @@ READ_PATHS_RASTER_output = """+---------------------+---------------------------
 |...                  |...                               |
 +---------------------+----------------------------------+"""
 
-PIPELINE_SCD2 = """# Lakeflow pipeline source file (serverless)
-from databricks.labs.gbx.ds.changes import declare_ingest
-
-declare_ingest(
-    "main.geo.boroughs",                       # rows table: catalog.schema.table
-    "/Volumes/main/geo/landing/boroughs",      # folder Auto Loader watches
-    "geojson_gbx",
-    glob="*.geojson",
-    on_change="scd2",                          # default; or "replace" / "append"
-)"""
-
-QUERY_CURRENT = """-- latest content of every file
-SELECT * FROM main.geo.boroughs_current;
-
--- what was current at a point in time
-SELECT r.* FROM main.geo.boroughs r
-JOIN main.geo.boroughs_file_versions v
-  ON r._source_path = v._source_path AND r._source_hash = v._source_hash
-WHERE v.__START_AT <= TIMESTAMP'2026-10-17 12:00:00'
-  AND (v.__END_AT IS NULL OR v.__END_AT > TIMESTAMP'2026-10-17 12:00:00');"""
-
 
 def _files(spark, folder, glob):
     return (
@@ -107,7 +85,7 @@ def read_paths_batch(spark, folder=None):
 STREAM_TIMEOUT_S = 300
 
 
-def read_paths_stream(spark, folder, checkpoint, query_name="incremental_ingestion_doc"):
+def read_paths_stream(spark, folder, checkpoint, query_name="read_paths_doc"):
     """READ_PATHS_STREAM against a local folder: ``binaryFile`` stands in for Auto
     Loader (``cloudFiles``), which only exists on Databricks; a memory sink stands in
     for ``toTable``. The query is always stopped; one still running after

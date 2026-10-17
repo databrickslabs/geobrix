@@ -10,7 +10,12 @@ Use this connector for the **Add data** page and managed ingestion pipelines, wi
 governed by a Unity Catalog connection. For large or fast-growing folders, where Auto Loader
 tracks the files, or when overwritten files must be kept as versions (`scd2`) or replaced
 (`replace`), use the Auto Loader route instead:
-[Incremental ingestion with Auto Loader](https://databrickslabs.github.io/geobrix/docs/readers/incremental-ingestion).
+[Auto Loader ingestion](https://databrickslabs.github.io/geobrix/docs/ingestion/auto-loader).
+
+The published documentation for this connector is
+[Lakeflow connector](https://databrickslabs.github.io/geobrix/docs/ingestion/lakeflow-connector),
+and [Ingestion Pipelines](https://databrickslabs.github.io/geobrix/docs/ingestion/overview)
+compares it with the other ingestion routes.
 
 Files are read by the same code as the GeoBrix `*_gbx` readers, so rows carry the same
 columns: attributes, the geometry column (`geom_0`, or the layer's geometry name such as
@@ -109,7 +114,7 @@ Folders and files whose names start with `_` or `.` are ignored, as Spark's file
 ignore them: use `_archive/` or `_staging/` to keep files out of a table.
 
 The ingestion type is append-only, with `_source_mtime` as the cursor. For `scd2` and
-`replace` ingestion, see [Incremental ingestion with Auto Loader](https://databrickslabs.github.io/geobrix/docs/readers/incremental-ingestion); the managed Add
+`replace` ingestion, see [Auto Loader ingestion](https://databrickslabs.github.io/geobrix/docs/ingestion/auto-loader); the managed Add
 data route supports append only.
 
 ## Deploy

@@ -9,6 +9,11 @@ import TabItem from '@theme/TabItem';
 
 GeoBrix provides Spark readers for geospatial file formats.
 
+:::tip Keeping a table in sync with a landing folder?
+See [Ingestion Pipelines](../ingestion/overview): a Lakeflow connector, Auto Loader pipelines and
+`read_paths` read only the new and changed files with these readers, and track what changed.
+:::
+
 <Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
 <TabItem value="lightweight" label="Lightweight (pyrx)">
 
@@ -81,12 +86,6 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 
 See the [Raster Reader](./raster) page for full raster usage/options, and the vector
 reader pages for the OGR `(geom_0, geom_0_srid, geom_0_srid_proj, …attributes)` schema.
-
-**Keeping a table in step with a folder.** To ingest the new and changed files that land in a
-Volume folder, pair these readers with Auto Loader: `read_paths` reads every file in a listing or
-stream with the reader you name, and `declare_ingest` declares the whole Lakeflow pipeline flow,
-including what happens when a file is overwritten. See
-[Incremental ingestion with Auto Loader](./incremental-ingestion).
 
 :::note `.limit()` and filters are not pushed into the reader — use the function layer for a bounded scan
 The lightweight DataSource readers **enumerate the entire source at planning time**, regardless of a

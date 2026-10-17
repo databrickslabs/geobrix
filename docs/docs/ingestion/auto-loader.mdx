@@ -1,0 +1,207 @@
+---
+sidebar_label: Auto Loader ingestion
+title: Auto Loader ingestion
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import autoLoaderExamples from '!!raw-loader!../../tests/python/ingestion/auto_loader_examples.py';
+
+# Auto Loader ingestion
+
+_Since:_ **v0.5.3** · _(light-only — no heavyweight tier)_
+
+`declare_ingest` declares a complete ingestion flow in a Lakeflow pipeline: Auto Loader watches a
+Volume folder, each new or changed file is read with the GeoBrix reader you name, and the rows land
+in a table. `on_change` decides what happens when a file is overwritten: keep every version
+(`scd2`, the default), keep only the latest content (`replace`), or append every delivery
+(`append`).
+
+Set up the pipeline first (channel, GeoBrix extra, Serverless notes): see
+[Lakeflow SDP](./lakeflow-sdp).
+
+## Quick start
+
+This is a complete pipeline source file. It keeps `main.geo.boroughs` in sync with the GeoJSON
+files in a landing folder:
+
+<CodeFromTest
+  code={autoLoaderExamples}
+  language="python"
+  functionName="PIPELINE_SCD2"
+  source="docs/tests/python/ingestion/auto_loader_examples.py"
+  testFile="docs/tests/python/ingestion/test_auto_loader_examples.py"
+  validationLevel="compile"
+/>
+
+Stage at least one file in the folder before the first pipeline update: the table schema is
+resolved from it when the pipeline is declared. After an update, `main.geo.boroughs` holds the
+rows, `main.geo.boroughs_current` shows each file's latest rows, and
+`main.geo.boroughs_file_versions` records when each version of a file was current.
+
+Reader options and parallelism go in the same call. Here a raster folder is cut into tile windows
+that are spread across tasks, and only the latest content of each file is kept:
+
+<CodeFromTest
+  code={autoLoaderExamples}
+  language="python"
+  functionName="PIPELINE_RASTER"
+  source="docs/tests/python/ingestion/auto_loader_examples.py"
+  testFile="docs/tests/python/ingestion/test_auto_loader_examples.py"
+  validationLevel="compile"
+/>
+
+:::tip Key considerations
+- **`scd2` is the default and keeps every version.** The rows table grows with each content
+  change of a file. Use `on_change="replace"` when only the latest content matters.
+- **Stage one file before the first update.** The schema is read from `schema_path` (by default
+  the first matching file in `source_dir`) when the pipeline is declared, at each update.
+- **Unity Catalog Volume paths only.** `source_dir` and `schema_path` are `/Volumes/...` paths; to
+  ingest from cloud storage, create an external volume over it. See [Paths](./read-paths#paths).
+- **Each format has a default file pattern**, with lower- and upper-case extensions. GeoJSON is
+  matched by `.geojson` only (pass `glob="*.{geojson,json}"` for `.json` files), a File
+  Geodatabase is delivered as a `.gdb.zip` file, and `pmtiles_gbx` needs its `source` option. See
+  [Default file patterns](./read-paths#default-file-patterns).
+- **Set `num_partitions` on Serverless.** Without it a large raster or PMTiles archive is read by
+  a single task. See [Parallelism](./read-paths#parallelism).
+- **Use a channel that has the pipeline APIs.** `declare_ingest` needs `pyspark.pipelines` with
+  `foreach_batch_sink` and `create_auto_cdc_flow` (the `CURRENT` channel has them), and the
+  GeoBrix extra for that channel's runtime. See [Environment](./lakeflow-sdp#environment).
+- **Overwrite files without preserving their modification time.** A copy made with `cp -p` or
+  `rsync -t` can give new content an older time than the version it replaces (see
+  [Query the latest content](#query-the-latest-content-and-past-content)).
+- **An unreadable file fails the update** until you remove or replace it. See
+  [Unreadable data](#unreadable-data).
+:::
+
+## `declare_ingest` parameters
+
+```python
+declare_ingest(target, source_dir, format, options=None, *,
+               on_change="scd2", glob=None, num_partitions=None, schema_path=None)
+```
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `target` | _required_ | Rows table, a fully qualified `catalog.schema.table` name. The other objects are created in the same catalog and schema. |
+| `source_dir` | _required_ | Volume folder Auto Loader watches (see [Paths](./read-paths#paths)). |
+| `format` | _required_ | Reader name from the [formats table](./read-paths#supported-formats). |
+| `options` | `None` | Reader options, exactly as on that reader's page. |
+| `on_change` | `"scd2"` | What to do when a file is overwritten: `"scd2"`, `"replace"` or `"append"`. See [Choosing `on_change`](#choosing-on_change). |
+| `glob` | `None` | File-name filter for the folder, in Spark `pathGlobFilter` syntax, such as `"zones_*.gpkg"`. By default, the format's [default file pattern](./read-paths#default-file-patterns); a `glob` replaces that pattern. |
+| `num_partitions` | `None` | Spread the reads across this many tasks. See [Parallelism](./read-paths#parallelism). |
+| `schema_path` | `source_dir` | File or folder that defines the table schema; a folder's first file matching `glob` is used. It is read once when the pipeline is declared (at each update), not for every micro-batch. |
+
+Auto Loader delivers every file under `source_dir` on its own, so the file pattern must leave out
+the other files of a multi-file dataset: a shapefile's sidecars, or the files inside an unzipped
+`.gdb` folder. The format's default pattern does; a `glob` you set replaces it, so for shapefiles
+end it in `.shp`. See [Default file patterns](./read-paths#default-file-patterns).
+
+## Choosing `on_change`
+
+Auto Loader runs with `cloudFiles.allowOverwrites` on in every mode, so a file that is overwritten in
+place is delivered again. `on_change` decides what the table does with that second delivery.
+
+| | `scd2` (default) | `replace` | `append` |
+|---|---|---|---|
+| **Rows table** | Append-only: one copy of a file's rows for each distinct content version | Latest content of each file only | Every delivery of every file |
+| **Re-delivery, content unchanged** | Writes nothing | Writes nothing | Duplicates the rows |
+| **File modified** | New rows are added; the earlier version's rows stay | That file's rows are replaced, one atomic `replaceWhere` per micro-batch | New rows are added; the earlier rows stay |
+| **History** | `<t>_file_versions` records when each version was current | None | None |
+| **Rows have `_source_hash`** | Yes | Yes | No |
+| **Use when** | You need the latest content and a record of what it used to be | Only the latest content matters | You want a log of every delivery |
+
+Here `<t>` is the last part of `target`. `scd2` and `replace` compare a SHA-256 hash of the file's
+bytes (`_source_hash`) with what is already stored, so a file that is re-delivered without a content
+change is recognized and skipped. `append` does not hash anything.
+
+Each mode declares these objects in the catalog and schema of `target`:
+
+| Object | `scd2` | `replace` | `append` |
+|--------|:------:|:---------:|:--------:|
+| `target`: the rows | yes | yes | yes (streaming table) |
+| `<t>_file_events`: one row per delivery with `_source_path`, `_source_mtime`, `_source_hash`, `_source_size` | yes | yes | no |
+| `<t>_file_versions`: one row per content version of a file, with `__START_AT` and `__END_AT` | yes | no | no |
+| `<target>_current`: a view of the rows for each file's latest version | yes | no | no |
+
+In `scd2` and `replace` the rows table is written by the pipeline's batch sink: it is a regular
+Delta table, created on the first update and clustered by `_source_path`, not a dataset the
+pipeline manages.
+
+## Query the latest content and past content
+
+`<target>_current` returns each file's latest rows. To read what was current at an earlier time,
+join the rows to the versions table on both `_source_path` and `_source_hash`, and keep the version
+whose interval contains the time:
+
+<CodeFromTest
+  code={autoLoaderExamples}
+  language="sql"
+  functionName="QUERY_CURRENT"
+  source="docs/tests/python/ingestion/auto_loader_examples.py"
+  testFile="docs/tests/python/ingestion/test_auto_loader_examples.py"
+/>
+
+`__START_AT` and `__END_AT` are the file's modification times, so the time you ask for is when the
+file's content was written, not when the pipeline ingested it. `__END_AT` is `NULL` for the
+current version, and an interval includes its start and excludes its end.
+
+"Current" means the version with the newest modification time. A copy that keeps or backdates the
+source's modification time (`cp -p`, `rsync -t`) can give an overwrite an older time than the
+version it replaces; that content is then recorded as history and does not become current. Copy
+without preserving times when you overwrite a file.
+
+## Unreadable data
+
+A file that its reader cannot read fails the pipeline update:
+
+- **The update fails with the reader's error.** Nothing from that micro-batch is written to the
+  rows table, and the flow's progress is not saved, so the next update reads the same files again
+  and fails the same way until the file is dealt with.
+- **To recover, remove the file or replace it with a readable copy**, then start an update. A file
+  deleted before it is read is skipped with a warning (see
+  [Files deleted before they are read](./read-paths#files-deleted-before-they-are-read)); a
+  replacement is delivered again and handled like any overwritten file (see
+  [Choosing `on_change`](#choosing-on_change)).
+- **What counts as unreadable depends on the format.** Most readers fail on a corrupt file, but
+  `lidar_gbx` skips it with a warning and `exif_gbx` gives a row of `NULL` metadata, and a raster
+  read as a virtual tile is not opened until a function reads its pixels. See
+  [Unreadable files](./read-paths#unreadable-files) for each format.
+- **A file whose columns differ from the table schema** fails the same way, with an error that
+  names the file. See [Schema](./read-paths#schema).
+
+## What a pipeline update does
+
+- **The newest delivery of each file wins** (`scd2` and `replace`). When one micro-batch holds
+  several deliveries of the same file, only the newest is read, because the bytes on disk are the
+  newest content. Under `scd2` the older deliveries still appear in `<t>_file_versions`, but have
+  no rows in the table.
+- **A file modified after it was hashed is skipped** (`scd2` and `replace`) until its newer delivery
+  arrives, so a row's `_source_hash` describes the content it was read from. Before reading, each
+  file must still have its delivered size and a modification time within one second of the
+  delivered one. A file overwritten in the instant between that check and the read, or rewritten
+  with the same size within that second, can still be stored under the earlier hash; its next
+  delivery is written as usual (and under `scd2` recorded as the current version).
+- **A file deleted before it is read is skipped** with a warning (all modes), and Auto Loader counts
+  it as processed. Deleting a file does not remove rows that were already written, with one rare
+  exception: under `replace`, a file deleted in the instant between that check and the read is
+  still part of the micro-batch's `replaceWhere`, so its earlier rows are removed and no new rows
+  are written for it.
+
+## See also
+
+:::tip Production examples
+Two examples run GeoBrix ingestion in production Lakeflow SDP bundles, with Auto Loader streaming
+tables as their bronze layer:
+- **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: an Auto Loader
+  `laz_inventory` streaming table over staged USGS 3DEP LiDAR feeds DSM, DTM and CHM surfaces and
+  H3 tower viewsheds.
+- **[Vapor-Eyes](../notebooks/vapor-eyes?flavor=lakeflow)**: five raw sources land on a Volume and
+  become a bronze streaming-table inventory, then silver detection and attribution and gold
+  map-ready tables and PMTiles.
+:::
+
+- [Lakeflow SDP](./lakeflow-sdp): pipeline setup, Serverless notes and the building blocks
+  `declare_ingest` uses.
+- [`read_paths` and reference](./read-paths): formats, file patterns, schema, paths and
+  parallelism.
+- [Lakeflow connector](./lakeflow-connector): the governed, append-only route.

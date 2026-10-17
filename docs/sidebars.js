@@ -72,6 +72,18 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Ingestion Pipelines',
+      collapsed: true,
+      link: { type: 'doc', id: 'ingestion/overview' },
+      items: [
+        'ingestion/lakeflow-sdp',
+        'ingestion/auto-loader',
+        'ingestion/lakeflow-connector',
+        'ingestion/read-paths',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Readers & Writers',
       collapsed: true,
       link: { type: 'doc', id: 'readers-writers' },
@@ -86,7 +98,6 @@ const sidebars = {
             { type: 'category', label: 'General', collapsed: true, items: ['readers/raster', 'readers/vector'] },
             { type: 'category', label: 'Named', collapsed: true, items: ['readers/geotiff', 'readers/cog', 'readers/netcdf', 'readers/pmtiles', 'readers/shapefile', 'readers/geojson', 'readers/geopackage', 'readers/filegdb', 'readers/lidar', 'readers/exif'] },
             'readers/file',
-            'readers/incremental-ingestion',
           ],
         },
         {

@@ -73,7 +73,14 @@ def test_the_scan_reads_notebook_cells(tmp_path):
 def test_the_scan_covers_the_docs_the_examples_and_the_readmes():
     """A moved directory must not turn the scan into a no-op."""
     files = {p.relative_to(rr.REPO_ROOT).as_posix() for p in rr.scan_files()}
-    for prefix in ("docs/docs/", "docs/tests/python/", "examples/", "sample-data/"):
+    for prefix in (
+        "docs/docs/",
+        "docs/docs/ingestion/",
+        "docs/tests/python/",
+        "docs/tests/python/ingestion/",
+        "examples/",
+        "sample-data/",
+    ):
         assert any(f.startswith(prefix) for f in files), f"nothing scanned under {prefix}"
     assert "README.md" in files
     references, _ = rr.scan()

@@ -1,0 +1,151 @@
+---
+sidebar_label: Lakeflow SDP
+title: Lakeflow SDP
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import sdpExamples from '!!raw-loader!../../tests/python/ingestion/lakeflow_sdp_examples.py';
+
+# Lakeflow SDP
+
+[Lakeflow Spark Declarative Pipelines](https://docs.databricks.com/aws/en/dlt/) (SDP) run tables
+as a pipeline: you declare each table and what it reads, and every update brings them up to date
+in order. The GeoBrix lightweight tier runs inside a pipeline, and both pipeline routes,
+[Auto Loader ingestion](./auto-loader) (`declare_ingest`) and the
+[Lakeflow connector](./lakeflow-connector), are pipeline source files. This page covers what they
+share: the pipeline environment, Serverless notes, the SDP building blocks GeoBrix uses, and
+deploying a pipeline as code.
+
+:::tip Production examples
+Two GeoBrix examples ship as complete Lakeflow SDP bundles. Each opens on its Lakeflow tab:
+- **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: a production SDP
+  bundle. An Auto Loader `laz_inventory` streaming table inventories staged USGS 3DEP LiDAR, and
+  materialized views build DSM, DTM and CHM surfaces and H3 tower viewsheds from it. Shows
+  streaming tables over Auto Loader, materialized views and an Asset Bundle.
+- **[Vapor-Eyes](../notebooks/vapor-eyes?flavor=lakeflow)**: an SDP and AI/BI Maps bundle. Five
+  raw sources land on a Volume and become a bronze streaming-table inventory; materialized views
+  do the silver detection and attribution and produce gold map-ready tables and PMTiles. Shows
+  streaming tables over Auto Loader, materialized views and an Asset Bundle with a dashboard.
+:::
+
+## Environment
+
+### Match the GeoBrix extra to the channel
+
+A pipeline runs on the Databricks Runtime of its **channel**, not on a Serverless environment
+version. Install GeoBrix with the extra for that runtime:
+
+| Channel | Runtime when this page was written | GeoBrix extra |
+|---------|------------------------------------|---------------|
+| `CURRENT` (default) | DBR 18 | `light_dbr18` |
+| `PREVIEW` | DBR 19 | `light_dbr19` |
+
+Channels move to newer runtimes over time. Check the
+[current channel versions](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions)
+when you create or update a pipeline, and change the extra when the runtime changes: a DBR 19
+runtime takes `light_dbr19`, whichever channel it is on. See [Installation](../installation) for
+every extra.
+
+### Dependency lines
+
+Add GeoBrix to the pipeline's environment as a dependency line. For a wheel staged on a Unity
+Catalog Volume:
+
+<CodeFromTest
+  code={sdpExamples}
+  language="text"
+  functionName="DEPENDENCY_VOLUME"
+  source="docs/tests/python/ingestion/lakeflow_sdp_examples.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_sdp_examples.py"
+/>
+
+Or straight from the GitHub release, when the pipeline's compute can reach github.com:
+
+<CodeFromTest
+  code={sdpExamples}
+  language="text"
+  functionName="DEPENDENCY_GITHUB"
+  source="docs/tests/python/ingestion/lakeflow_sdp_examples.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_sdp_examples.py"
+/>
+
+- **No spaces around `@`.** A pipeline installs each dependency line with an unquoted
+  `%pip install`, so spaces split the requirement and the install fails.
+- **All extras on one line**, for example `geobrix[light_dbr18,vizx]@...`. Each line is a separate
+  `%pip install`, and extras split across lines can force pip to rebuild packages it already
+  installed and fail the install.
+- **Volume or GitHub.** A Volume wheel works in every workspace; workspaces that restrict outbound
+  network access can block GitHub. See [Installation](../installation) (Lightweight tab) for
+  downloading and staging the wheel.
+
+## Serverless pipelines
+
+- **Lightweight tier only.** A Serverless pipeline can't load a JAR or run an init script, so it
+  installs the GeoBrix wheel and nothing else. `read_paths`, `declare_ingest` and the connector
+  are lightweight-tier, so they run on Serverless and classic pipelines alike.
+- **Fan out by repartitioning on a column.** On Serverless, work spreads across tasks through
+  `repartition(N, column)`. `read_paths` and `declare_ingest` do this for you when you set
+  `num_partitions`; without it a large raster is read by one task. See
+  [Parallelism](./read-paths#parallelism).
+- **Materialized views recompute.** A materialized view whose query calls Python UDFs, as the
+  GeoBrix lightweight functions are, is recomputed in full at each update, while a streaming table
+  over Auto Loader processes only the new files. To re-run only some tables, refresh them
+  selectively, for example `databricks bundle run <pipeline> --refresh <table>,<table>`.
+- **Check product `st_*` functions against the channel's runtime.** Databricks `st_*` functions
+  arrive with runtime releases, so a pipeline can lack one that a notebook on a newer runtime has
+  (when this page was written, `st_makevalid` was not available on the `CURRENT` channel). Where
+  one is missing, use its GeoBrix `gbx_st_*` counterpart. See
+  [Databricks Spatial](../databricks-spatial).
+
+## Building blocks GeoBrix uses
+
+- **Streaming tables over Auto Loader.** A table whose query is an Auto Loader
+  (`cloudFiles`) stream is a streaming table: each update reads only the files that arrived since
+  the last one. `declare_ingest` declares its file-events table this way (its rows table, for
+  `append`), and both production examples use one as their bronze layer.
+- **`foreach_batch_sink`.** A sink that runs your own batch code on each micro-batch.
+  `declare_ingest` writes its rows table through one (for `scd2` and `replace`), so that table is
+  a regular Delta table and `replace` can swap a file's rows in one atomic `replaceWhere`.
+- **AUTO CDC with SCD type 2.** `create_auto_cdc_flow(..., stored_as_scd_type=2)` keeps one row
+  per version of each key, with `__START_AT` and `__END_AT`. `declare_ingest` keys it on
+  `_source_path` and tracks history on `_source_hash`, which gives the `<t>_file_versions` table.
+- **No `spark.catalog.tableExists` inside a sink.** Pipelines don't allow it there. Look the
+  table up and treat "not found" as `False` instead:
+
+<CodeFromTest
+  code={sdpExamples}
+  language="python"
+  functionName="TABLE_EXISTS_IN_SINK"
+  source="docs/tests/python/ingestion/lakeflow_sdp_examples.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_sdp_examples.py"
+/>
+
+## Deploy with Asset Bundles
+
+A [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) keeps a
+pipeline as code: its source files and its settings, deployed with `databricks bundle deploy` and
+run with `databricks bundle run`. A minimal pipeline resource:
+
+<CodeFromTest
+  code={sdpExamples}
+  language="yaml"
+  functionName="BUNDLE_PIPELINE"
+  source="docs/tests/python/ingestion/lakeflow_sdp_examples.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_sdp_examples.py"
+/>
+
+- In a bundle, write the Volume wheel as its path followed by the extras, as above; the example
+  bundles do the same.
+- `serverless: true` is the simplest compute. For heavy runs, switch to classic compute
+  (`serverless: false` and a cluster) for dedicated memory, and match the cluster's runtime to the
+  GeoBrix extra.
+- The two production examples at the top of this page are complete bundles to start from: see
+  the README in each example's `lakeflow` folder for deploy and run steps.
+
+## See also
+
+- [Ingestion Pipelines](./overview): choosing a route.
+- [Auto Loader ingestion](./auto-loader) and [Lakeflow connector](./lakeflow-connector): the two
+  pipeline routes.
+- [Installation](../installation): every GeoBrix extra, and installing from a Volume or GitHub.
+- [Serverless & Memory](../serverless-and-memory): memory limits on Serverless.

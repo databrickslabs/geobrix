@@ -1,0 +1,75 @@
+---
+sidebar_label: Overview
+title: Ingestion Pipelines
+---
+
+# Ingestion Pipelines
+
+Keep tables in sync with landing folders: each update reads only new and changed files and tracks
+what changed.
+
+New files land in a Unity Catalog Volume folder: vector datasets, LiDAR point clouds, drone
+photos, rasters, NetCDF files or PMTiles archives. GeoBrix turns that folder into a table that
+keeps up with it. All three routes are pure Python on the lightweight tier (no JAR, no init
+script) and run on Serverless.
+
+:::tip New to pipelines?
+Start with [Lakeflow SDP](./lakeflow-sdp): how GeoBrix runs in a Lakeflow pipeline, which
+GeoBrix extra each pipeline channel needs, and two production pipelines to start from.
+:::
+
+## Choose a route
+
+| Route | Use it when | Effort |
+|---|---|---|
+| **[Lakeflow connector](./lakeflow-connector)** (`geobrix`) | You want governed, low-code ingestion: an admin creates a Unity Catalog connection to a landing folder, and each table is a name plus options. Append-only. | Install three wheels and create the connection once; then one entry per table in a pipeline source file. |
+| **[Auto Loader ingestion](./auto-loader)** (`declare_ingest`) | Files get overwritten and you need change handling: `scd2` history with a current view (the default), `replace` or `append`. Scales to very large landing folders with Auto Loader. | A few lines of Python in a Lakeflow pipeline source file. |
+| **[`read_paths`](./read-paths)** | You want the building block: read any list of files, batch or streaming, in notebooks and jobs. | You write the file listing or stream, and where the rows go. |
+
+## What every route gives you
+
+- **One row per feature, point, image or tile**, with the columns of the GeoBrix reader for that
+  format.
+- **Lineage on every row:** `_source_path` and `_source_mtime` name the file each row came from and
+  its modification time.
+- **Only new or changed files are read on each update** (for `read_paths`, when you give it an
+  Auto Loader stream).
+
+**Formats:** GeoPackage, GeoJSON, GeoJSONSeq, Shapefile, File Geodatabase, LiDAR (LAS/LAZ), EXIF
+photo metadata, GeoTIFF and COG rasters, NetCDF and PMTiles. See the
+[supported formats](./read-paths#supported-formats) reference.
+
+## Connector or Auto Loader pipeline?
+
+| | Lakeflow connector | Auto Loader ingestion |
+|---|---|---|
+| Where you set it up | A connection, then a pipeline source file that lists the tables | A pipeline source file that calls `declare_ingest` |
+| Access control | Unity Catalog connection (`root_path`, `USE CONNECTION`), plus Volume grants | Volume grants |
+| Overwritten files | Re-read and appended | `scd2`, `replace` or `append` |
+| File version history | No | Yes, with `scd2` |
+| Finding new files | Lists the table's folder at each update | Auto Loader keeps track of delivered files |
+
+Use the connector when an admin should govern the landing folder and append is enough. Use Auto
+Loader ingestion when a folder is large or grows quickly, or when a file can be overwritten and you
+need its latest content, or its history.
+
+:::tip Production examples
+Two examples ship GeoBrix ingestion as complete Lakeflow SDP bundles:
+- **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: an Auto Loader
+  `laz_inventory` streaming table over staged USGS 3DEP LiDAR feeds DSM, DTM and CHM surfaces and
+  H3 tower viewsheds (repo folder `examples/notebooks/wireless-coverage/lakeflow`).
+- **[Vapor-Eyes](../notebooks/vapor-eyes?flavor=lakeflow)**: five raw sources land on a Volume and
+  become a bronze streaming-table inventory, then silver detection and attribution and gold
+  map-ready tables, PMTiles and an AI/BI dashboard (repo folder
+  `examples/notebooks/vapor-eyes/lakeflow`).
+:::
+
+## Pages in this section
+
+- [Lakeflow SDP](./lakeflow-sdp): the pipeline environment, Serverless notes, the SDP building
+  blocks GeoBrix uses and Asset Bundles.
+- [Auto Loader ingestion](./auto-loader): `declare_ingest`, `on_change`, querying current and past
+  content, and unreadable data.
+- [Lakeflow connector](./lakeflow-connector): setup, table options, formats and discovery.
+- [`read_paths` and reference](./read-paths): `read_paths`, and the reference every route shares
+  (formats, file patterns, schema, paths, unreadable files, parallelism).

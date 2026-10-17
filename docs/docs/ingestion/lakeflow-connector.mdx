@@ -1,0 +1,190 @@
+---
+sidebar_label: Lakeflow connector
+title: Lakeflow connector
+---
+
+import CodeFromTest from '@site/src/components/CodeFromTest';
+import connectorExamples from '!!raw-loader!../../tests/python/ingestion/lakeflow_connector_examples.py';
+import pipelineTemplate from '!!raw-loader!../../../connectors/lakeflow/sources/geobrix/pipeline/ingest.py';
+
+# Lakeflow connector
+
+_Since:_ **v0.5.3** · _(light-only — no heavyweight tier)_
+
+GeoBrix ships a Lakeflow Connect community connector, `geobrix`, for governed, low-code ingestion.
+An admin creates one Unity Catalog connection to a landing folder on a Volume. After that, each
+table is a name plus a few options, and each pipeline update appends the rows of the files that
+are new since the last update. Rows carry the columns of the GeoBrix reader for their format, plus
+the [lineage columns](./read-paths#lineage-columns) `_source_path` and `_source_mtime`.
+
+Pipeline setup that every route shares (the channel, the GeoBrix extra, Serverless notes) is on
+[Lakeflow SDP](./lakeflow-sdp). This page covers the connector itself.
+
+:::tip Key considerations
+- **Append-only.** A file overwritten in place gets a new modification time and is read again,
+  so its rows are appended a second time. To keep each version of a file (`scd2`) or only its
+  latest content (`replace`), use [Auto Loader ingestion](./auto-loader).
+- **Three wheels.** The pipeline installs GeoBrix, the connector and the Lakeflow
+  community-connectors framework. The framework and the connector are not on PyPI: build them once
+  ([step 1](#1-install-three-wheels)).
+- **No spaces around `@`** in the dependency lines, and **match the GeoBrix extra to the pipeline
+  channel's runtime** (`light_dbr18` or `light_dbr19`). See
+  [Environment](./lakeflow-sdp#environment).
+- **The connection governs access.** Its `root_path` confines every table to that Volume prefix,
+  and `USE CONNECTION` controls who can build pipelines on it. Volume grants still apply.
+- **The schema comes from the table's first file**, so stage one file before you create the
+  table.
+- **A folder that mixes file kinds needs `format`.**
+- **Each update lists the table's folder** to find new files. That is fine for thousands of files;
+  for very large or fast-growing landing folders, use [Auto Loader ingestion](./auto-loader),
+  where Auto Loader keeps track of the files.
+- **An unreadable file fails the update** for most formats: remove it or replace it with a
+  readable copy, then run the update again. See [Unreadable files](./read-paths#unreadable-files).
+:::
+
+## Set up
+
+### 1. Install three wheels
+
+The pipeline's environment installs three wheels; the compute that queries the resulting tables
+needs no GeoBrix install. Build the framework and connector wheels once, on any machine with
+Python 3.12:
+
+<CodeFromTest
+  code={connectorExamples}
+  language="bash"
+  functionName="BUILD_WHEELS"
+  source="docs/tests/python/ingestion/lakeflow_connector_examples.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_connector_examples.py"
+/>
+
+Keep the three wheels in a Volume folder of their own and list them as the pipeline's
+dependencies, one per line:
+
+<CodeFromTest
+  code={connectorExamples}
+  language="text"
+  functionName="PIPELINE_DEPENDENCIES"
+  source="docs/tests/python/ingestion/lakeflow_connector_examples.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_connector_examples.py"
+/>
+
+Write the GeoBrix line without spaces around `@`, with the extra for the pipeline channel's
+runtime ([Environment](./lakeflow-sdp#environment)). The connector needs GeoBrix 0.5.3 or later.
+
+### 2. Create the connection
+
+Create a Unity Catalog connection of type `COMMUNITY` (once) with these options:
+
+| Option | Required | Meaning |
+|---|---|---|
+| `sourceName` | yes | `geobrix` |
+| `externalOptionsAllowList` | yes | `path,format,layer,where,bbox,chunk_size,file_glob,mode` |
+| `root_path` | no | Volume prefix, such as `/Volumes/main/geo/landing`. Enables discovery (every file or folder directly under it is a table) and confines every table path to it. |
+
+Grant `USE CONNECTION` on it to the people who build pipelines on it.
+
+### 3. Add the pipeline source file
+
+Create a **serverless** pipeline whose source is this file, with the three wheels as the
+environment's dependencies. Set `connection_name` and list one entry per table in
+`pipeline_spec`:
+
+<CodeFromTest
+  code={pipelineTemplate}
+  language="python"
+  title="connectors/lakeflow/sources/geobrix/pipeline/ingest.py"
+  source="connectors/lakeflow/sources/geobrix/pipeline/ingest.py"
+  testFile="docs/tests/python/ingestion/test_lakeflow_connector_examples.py"
+/>
+
+Each pipeline update creates or appends to one streaming table per entry. `source_table` names a
+dataset discovered under `root_path`, or any name when the entry sets `path`; the other keys of
+`table_configuration` are the [table options](#table-options).
+
+:::note
+A pipeline source file, as above, is the verified way to deploy the connector. The Add data page
+and managed ingestion pipelines (an `ingestion_definition` with `source_type: COMMUNITY`) are the
+other routes for community connectors, where they are available in your workspace.
+:::
+
+## Table options
+
+| Option | Meaning |
+|---|---|
+| `path` | File or folder, relative to `root_path` or absolute. A folder is one dataset. Optional when the table name matches an entry under `root_path`. |
+| `format` | A reader from the [formats table](#formats). Default: inferred from the file extension. |
+| `layer` | Vector only. Layer name for multi-layer sources (default: the first layer). |
+| `where` | Vector only. OGR SQL filter, such as `borough = 'Queens'`. |
+| `bbox` | Vector only. `xmin,ymin,xmax,ymax` in the layer's CRS. |
+| `chunk_size` | Vector only. Features per Arrow batch (default 10000). |
+| `file_glob` | File-name pattern for a folder's files, such as `zones_*.gpkg` (see [Discovery](#discovery)). |
+| `mode` | `lidar`, `exif` and `netcdf` only. Reader mode: `points` (default) or `metadata` for LiDAR, `metadata` (default) or `qc` for EXIF, `raster` (default) or `vector` for NetCDF. |
+
+"Vector" means the `vector`, `gpkg`, `geojson`, `geojsonl`, `shapefile` and `file_gdb` readers.
+`path`, `format` and `file_glob` apply to every table. Set on a table whose reader does not take
+it, any other option fails with an error that names the option and the readers it applies to.
+Raster (`raster`, `gtiff`, `cog`) and `pmtiles` tables take none of them.
+
+## Formats
+
+The reader for a table is its `format` option, or is inferred from the file extension when every
+file in the dataset has the same one. `format` takes the same reader names as
+[`read_paths`](./read-paths#supported-formats): the `_gbx` suffix is optional and case is ignored,
+so `gpkg`, `GPKG` and `gpkg_gbx` are the same reader.
+
+| `format` | Extensions |
+|---|---|
+| `vector` | Any vector extension below (generic reader) |
+| `gpkg` | `.gpkg` |
+| `geojson` | `.geojson`. For GeoJSON files named `.json`, set `format: geojson` and `file_glob: *.{geojson,json}`. |
+| `geojsonl` | `.geojsonl`, `.geojsons` |
+| `shapefile` | `.shp`, `.shz`, `.shp.zip` |
+| `file_gdb` | `.gdb`, `.gdb.zip` |
+| `lidar` | `.las`, `.laz` |
+| `exif` | `.jpg`, `.jpeg` |
+| `raster` | `.tif`, `.tiff`. Another raster file, such as `.jp2`, is read only when `path` or `file_glob` names it and `format` is `raster`. |
+| `gtiff` | `.tif`, `.tiff` |
+| `cog` | `.tif`, `.tiff`, read with the COG reader. By extension a `.tif` is a `gtiff` table, so set `format: cog`. |
+| `netcdf` | `.nc`. The `mode` option picks what a file becomes: `raster` (default), one GeoTIFF tile per grid variable; `vector`, one point feature per observation or grid cell. |
+| `pmtiles` | `.pmtiles`: one row per tile stored in the archive (`z`, `x`, `y`, `bytes`). Rendering tiles from GeoTIFFs is not a connector table; use [`read_paths`](./read-paths) or [`declare_ingest`](./auto-loader) with `source="raster"`. |
+
+Extensions match in any case (`.TIF` is `.tif`). The lightweight `file` reader (it lists files)
+and the heavyweight readers are not connector formats.
+
+## Discovery
+
+- **With `root_path`, every file or folder directly under it is a table**, named after the entry
+  without its extension (lower case, other characters replaced by `_`). Without `root_path`, each
+  table sets `path` to an absolute path.
+- **A folder is one dataset**, and its files are read recursively.
+- **`path` is relative to `root_path`, or absolute inside it.** A path outside `root_path` fails.
+- **Folders and files whose names start with `_` or `.` are ignored**, as Spark's file sources
+  ignore them: use `_archive/` or `_staging/` to keep files out of a table.
+- **`file_glob` picks files by name**, with the same syntax as the `glob` of `declare_ingest`: a
+  Spark `pathGlobFilter` (Hadoop glob) pattern, case-sensitive, where `{a,b}` matches either
+  alternative and a backslash escapes a pattern character (`\*` matches a literal `*`). With
+  `format` set, `file_glob` alone picks the folder's files, so for shapefiles end it in `.shp`
+  (`zones_*.shp`): `zones_*` would also pick each shapefile's `.dbf`, `.shx` and `.prj` sidecars.
+  Without `format`, it narrows the files that have a recognized extension.
+
+## How updates work
+
+- **Incremental by file.** Each update records the newest modification time it has read, and the
+  files at that time. The next update reads the files that are newer (or at that time but not yet
+  read). A file replaced in place gets a new modification time and is read again; a copy that
+  keeps the source's modification time (`cp -p`, `rsync -t`) may not be seen as new.
+- **One Spark partition per file**, read as Arrow batches.
+- **The schema comes from the table's first file** (in path order). Every later file must have the
+  same columns; see [Schema](./read-paths#schema).
+- **Unreadable files** are handled per format, as for every route; see
+  [Unreadable files](./read-paths#unreadable-files). When an update fails, its progress is not
+  saved, so the next update reads the same files again.
+
+## See also
+
+- [Ingestion Pipelines](./overview): choosing a route.
+- [Lakeflow SDP](./lakeflow-sdp): the pipeline environment and Serverless notes.
+- [`read_paths` and reference](./read-paths): formats, schema, paths and unreadable files.
+- The connector's [README](https://github.com/databrickslabs/geobrix/tree/main/connectors/lakeflow/sources/geobrix)
+  and [`connector_spec.yaml`](https://github.com/databrickslabs/geobrix/blob/main/connectors/lakeflow/sources/geobrix/connector_spec.yaml).

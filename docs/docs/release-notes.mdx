@@ -32,12 +32,12 @@ shared by both vector reader tiers.
   tile windows or tile groups that spread across tasks when `num_partitions` is set; a NetCDF
   file is read by one task. `pmtiles_gbx` needs the `source` option: `"archive"` reads the
   tiles stored in `.pmtiles` files and `"raster"` renders tiles from GeoTIFF files, each file on
-  its own. See [Incremental ingestion with Auto Loader](./readers/incremental-ingestion).
+  its own. See [Ingestion Pipelines](./ingestion/overview).
 - **`declare_ingest` declares an Auto Loader flow in a Lakeflow pipeline**, with `on_change`
   choosing what happens when a file is overwritten: `scd2` (the default; rows are append-only and
   a versions table with a `_current` view records each content version), `replace` (latest content
   only) or `append` (every delivery). See
-  [Incremental ingestion with Auto Loader](./readers/incremental-ingestion).
+  [Ingestion Pipelines](./ingestion/overview).
 - **GeoJSON is matched by its `.geojson` extension only.** The default file pattern for
   `geojson_gbx` (and `vector_gbx`) does not include `.json`; for GeoJSON files with that
   extension pass `glob="*.{geojson,json}"`.

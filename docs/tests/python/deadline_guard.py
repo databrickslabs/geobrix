@@ -20,6 +20,20 @@ FALLBACK_DEADLINE_S = 600
 _JVM_PROBE_S = 15
 
 
+def end_test(guard, spark):
+    """Stop ``guard``, then every streaming query the test left running -- also when
+    ``guard.stop()`` raises (it reports the deadline when the alarm lands while it
+    waits). Returns the queries that were left, for the fixture to fail the test on."""
+    leaked = []
+    try:
+        guard.stop()
+    finally:
+        leaked = list(spark.streams.active) if spark is not None else []
+        for query in leaked:
+            query.stop()
+    return leaked
+
+
 def parse_deadline_s(raw, fallback=FALLBACK_DEADLINE_S):
     """Seconds from the GBX_DOC_TEST_TIMEOUT_S value ``raw``: ``fallback`` when it is
     unset or blank. A value that is not a positive number is reported in a warning and

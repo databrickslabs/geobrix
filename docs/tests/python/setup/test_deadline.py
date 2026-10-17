@@ -127,3 +127,51 @@ def test_without_a_local_jvm_the_deadline_fails_the_test_instead_of_ending_the_r
             time.sleep(5)  # the handler raises here
     finally:
         guard.stop()
+
+
+class _Query:
+    def __init__(self, name):
+        self.name, self.stopped = name, False
+
+    def stop(self):
+        self.stopped = True
+
+
+class _Spark:
+    def __init__(self, *queries):
+        self.streams = type("Streams", (), {"active": list(queries)})()
+
+
+class _Guard:
+    def __init__(self, error=None):
+        self.error, self.stopped = error, False
+
+    def stop(self):
+        self.stopped = True
+        if self.error:
+            raise self.error
+
+
+def test_a_test_ends_by_stopping_the_guard_and_the_queries_it_left_running():
+    queries = [_Query("a"), _Query("b")]
+    guard = _Guard()
+    left = deadline_guard.end_test(guard, _Spark(*queries))
+    assert guard.stopped and all(q.stopped for q in queries)
+    assert [q.name for q in left] == ["a", "b"]  # reported, so the test fails
+
+
+def test_queries_are_stopped_even_when_the_guard_raises_on_stop():
+    """The guard's stop raises the deadline's TimeoutError when the alarm lands while
+    it waits; a streaming query must not outlive the test because of it."""
+    queries = [_Query("a")]
+    with pytest.raises(TimeoutError, match="still running"):
+        deadline_guard.end_test(
+            _Guard(TimeoutError("t still running after 5 s")), _Spark(*queries)
+        )
+    assert queries[0].stopped
+
+
+def test_a_test_without_spark_ends_cleanly():
+    guard = _Guard()
+    assert deadline_guard.end_test(guard, None) == []
+    assert guard.stopped

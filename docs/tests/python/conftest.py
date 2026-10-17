@@ -16,7 +16,7 @@ GEOBRIX_JAR = PROJECT_ROOT / "target" / "geobrix-0.5.3-jar-with-dependencies.jar
 
 # Sample data root: from path_config (defaults to test-data minimal bundle at runtime)
 from path_config import SAMPLE_DATA_BASE  # noqa: E402
-from deadline_guard import DEFAULT_DEADLINE_S, DeadlineGuard  # noqa: E402
+from deadline_guard import DEFAULT_DEADLINE_S, DeadlineGuard, end_test  # noqa: E402
 
 
 @pytest.fixture(scope="session")
@@ -139,10 +139,7 @@ def _deadline(request):
     try:
         yield
     finally:
-        guard.stop()
-        leaked = spark.streams.active if spark is not None else []
-        for q in leaked:
-            q.stop()
+        leaked = end_test(guard, spark)
     assert not leaked, f"streaming queries left running: {[q.name for q in leaked]}"
 
 

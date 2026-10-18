@@ -15,6 +15,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from _artifact_volume import prune_stale
+
 TESTS_DIR = Path(__file__).resolve().parent
 _env_file = TESTS_DIR / "databricks_cluster_config.env"
 if _env_file.exists():
@@ -97,20 +99,12 @@ def main() -> int:
     # Init-script dir: keep exactly one geobrix-*-jar-with-dependencies.jar.
     # Delete any other-version product JAR before uploading the new one.
     # Never touch geobrix-*-tests.jar, geobrix-gdal-init.sh, or platform tarballs.
+    # A failure here is fatal: swallowing it would leave two JAR versions in the init dir.
     try:
-        for entry in w.files.list(artifact_volume):
-            if entry.is_directory:
-                continue
-            filename = Path(entry.name).name
-            if (
-                filename.startswith("geobrix-")
-                and filename.endswith("-jar-with-dependencies.jar")
-                and filename != jar_path.name
-            ):
-                print(f"Removing stale product JAR: {entry.name}")
-                w.files.delete(entry.name)
+        prune_stale(w, artifact_volume, "geobrix-", "-jar-with-dependencies.jar", jar_path.name)
     except Exception as e:
-        print(f"Warning: could not list/clean artifact volume: {e}", file=sys.stderr)
+        print(f"Error: could not list/clean artifact volume {artifact_volume}: {e}", file=sys.stderr)
+        return 1
 
     volume_path = f"{artifact_volume}/{jar_path.name}"
     print("Uploading product jar to %s (overwrite if exists)..." % volume_path)

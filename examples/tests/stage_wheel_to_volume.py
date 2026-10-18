@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 which builds but skips upload,
-or GBX_BUNDLE_SKIP_JAR=1 which skips the JAR build+upload ENTIRELY for light-tier-only
+Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 or GBX_BUNDLE_SKIP_JAR=1,
+either of which skips the JAR build AND upload ENTIRELY -- no Maven -- for light-tier-only
 wheel changes), then build the GeoBrix Python wheel (python3 -m build) and stage it to TWO
 locations:
   1. GBX_ARTIFACT_VOLUME/<whl_filename>  — init-script dir; dedupes to exactly one
-     geobrix-*.whl (any stale other-version wheel in that dir is removed before upload).
+     geobrix-*.whl (any other-version geobrix-*.whl in that dir is removed before upload;
+     a listing/delete failure aborts the run with a non-zero exit).
   2. bundle volroot/<whl_filename>       — /Volumes/<GBX_BUNDLE_VOLUME_CATALOG>/
      <GBX_BUNDLE_VOLUME_SCHEMA>/<GBX_BUNDLE_VOLUME_NAME>/ — the bundle/%pip path used by
      notebooks and the bench launcher; overwrite in place.
@@ -19,6 +20,8 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+from _artifact_volume import prune_stale
 
 TESTS_DIR = Path(__file__).resolve().parent
 _env_file = TESTS_DIR / "databricks_cluster_config.env"
@@ -35,9 +38,6 @@ if _env_file.exists():
 
 def main() -> int:
     skip_wheel_upload = os.environ.get("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", "").strip().lower() in ("1", "true", "yes")
-    # skip_jar is checked here only to decide whether the wheel upload also needs auth;
-    # stage_jar_to_volume.py handles its own upload-skip logic internally.
-    skip_jar = os.environ.get("GBX_BUNDLE_SKIP_JAR_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent
     pkg_dir = project_root / "python" / "geobrix"
@@ -67,18 +67,21 @@ def main() -> int:
 
         w = WorkspaceClient(profile=profile) if profile else WorkspaceClient(host=host, token=token)
 
-    # JAR first so the wheel build can include it if needed. Always run — stage_jar_to_volume.py
-    # respects GBX_BUNDLE_SKIP_JAR_UPLOAD internally (build only vs build+upload).
-    # GBX_BUNDLE_SKIP_JAR skips the JAR step entirely (no Maven build) for light-tier-only
-    # wheel changes; the wheel is JAR-less (setuptools bundles no lib/*.jar), so the staged
-    # JAR is unaffected and heavy consumers keep the separately-staged JAR.
-    skip_jar_build = os.environ.get("GBX_BUNDLE_SKIP_JAR", "").strip().lower() in ("1", "true", "yes")
+    # JAR first so the wheel build can include it if needed. GBX_BUNDLE_SKIP_JAR and
+    # GBX_BUNDLE_SKIP_JAR_UPLOAD both skip the JAR step ENTIRELY here (no Maven build, no
+    # upload) for light-tier-only wheel changes; the wheel is JAR-less (setuptools bundles
+    # no lib/*.jar), so the staged JAR is unaffected and heavy consumers keep the
+    # separately-staged JAR.
+    skip_jar_build = any(
+        os.environ.get(k, "").strip().lower() in ("1", "true", "yes")
+        for k in ("GBX_BUNDLE_SKIP_JAR", "GBX_BUNDLE_SKIP_JAR_UPLOAD")
+    )
     lib_dir = pkg_dir / "lib"
     if lib_dir.exists():
         shutil.rmtree(lib_dir)
     lib_dir.mkdir(parents=True)
     if skip_jar_build:
-        print("GBX_BUNDLE_SKIP_JAR=1: skipping JAR build; wheel-only stage (JAR-less light tier).")
+        print("GBX_BUNDLE_SKIP_JAR(_UPLOAD)=1: skipping JAR build + upload; wheel-only stage (JAR-less light tier).")
     else:
         print("Running stage_jar_to_volume (JAR before wheel)...")
         rc = subprocess.run([sys.executable, str(TESTS_DIR / "stage_jar_to_volume.py")], cwd=project_root)
@@ -119,26 +122,18 @@ def main() -> int:
         return 0
 
     # ── Destination 1: init-script dir (GBX_ARTIFACT_VOLUME) ──────────────────────────
-    # Keep exactly one geobrix-*.whl in this dir; remove any stale other-version wheel
-    # before uploading. Never touch geobrix-gdal-init.sh or platform tarballs.
+    # Keep exactly one geobrix-*.whl in this dir; remove any other-version wheel before
+    # uploading. Never touch geobrix-gdal-init.sh, platform tarballs, JARs, or subdirs.
+    # A failure here is fatal: swallowing it would leave two wheel versions in the init dir.
     try:
         w.files.create_directory(artifact_volume)
     except Exception:
         pass
     try:
-        for entry in w.files.list(artifact_volume):
-            if entry.is_directory:
-                continue
-            filename = Path(entry.name).name
-            if (
-                filename.startswith("geobrix-")
-                and filename.endswith(".whl")
-                and filename != whl.name
-            ):
-                print(f"Removing stale wheel: {entry.name}")
-                w.files.delete(entry.name)
+        prune_stale(w, artifact_volume, "geobrix-", ".whl", whl.name)
     except Exception as e:
-        print(f"Warning: could not list/clean artifact volume: {e}", file=sys.stderr)
+        print(f"Error: could not list/clean artifact volume {artifact_volume}: {e}", file=sys.stderr)
+        return 1
 
     volume_path = f"{artifact_volume}/{whl.name}"
     print("Uploading to %s (overwrite if exists)..." % volume_path)

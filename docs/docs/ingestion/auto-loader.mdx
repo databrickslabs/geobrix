@@ -297,8 +297,9 @@ always reads this way.
 
 :::tip Production examples
 Two examples are complete Lakeflow SDP pipelines with an Auto Loader streaming-table bronze
-layer. They list their files with a plain `binaryFile` Auto Loader stream, so they don't use
-`declare_ingest`, and show the pipeline setup around it:
+layer. They list their files with a plain `binaryFile` Auto Loader stream and read the listed
+files in silver with [`read_paths`](./read-paths). Their files never change once landed, so they
+don't use `declare_ingest`, and they show the pipeline setup around it:
 - **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: an Auto Loader
   `laz_inventory` streaming table over staged USGS 3DEP LiDAR feeds DSM, DTM and CHM surfaces and
   H3 tower viewsheds.

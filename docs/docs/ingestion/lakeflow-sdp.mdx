@@ -19,13 +19,15 @@ deploying a pipeline as code.
 :::tip Production examples
 Two GeoBrix examples ship as complete Lakeflow SDP bundles. Each opens on its Lakeflow tab:
 - **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: a production SDP
-  bundle. An Auto Loader `laz_inventory` streaming table inventories staged USGS 3DEP LiDAR, and
-  materialized views build DSM, DTM and CHM surfaces and H3 tower viewsheds from it. Shows
-  streaming tables over Auto Loader, materialized views and an Asset Bundle.
+  bundle. An Auto Loader `laz_inventory` streaming table inventories staged USGS 3DEP LiDAR,
+  [`read_paths`](./read-paths) reads the inventoried files, and materialized views build DSM, DTM
+  and CHM surfaces and H3 tower viewsheds from them. Shows streaming tables over Auto Loader,
+  `read_paths` in a materialized view, and an Asset Bundle.
 - **[Vapor-Eyes](../notebooks/vapor-eyes?flavor=lakeflow)**: an SDP and AI/BI Maps bundle. Five
   raw sources land on a Volume and become a bronze streaming-table inventory; materialized views
-  do the silver detection and attribution and produce gold map-ready tables and PMTiles. Shows
-  streaming tables over Auto Loader, materialized views and an Asset Bundle with a dashboard.
+  read the inventoried satellite files with `read_paths`, do the silver detection and attribution
+  and produce gold map-ready tables and PMTiles. Shows streaming tables over Auto Loader,
+  `read_paths` joined back to its inventory, and an Asset Bundle with a dashboard.
 :::
 
 ## Environment

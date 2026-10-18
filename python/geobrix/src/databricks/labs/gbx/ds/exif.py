@@ -161,6 +161,43 @@ def _encode_point_wkb(lon: float, lat: float) -> bytes:
 # ---------------------------------------------------------------------------
 
 
+# Frame headers (SOF0-SOF15 but DHT C4, JPG C8, DAC CC): one must come before
+# the scan for a file to be a JPEG.
+_SOF_MARKERS = frozenset(range(0xC0, 0xD0)) - {0xC4, 0xC8, 0xCC}
+_MAX_HEADER_SEGMENTS = 256
+
+
+def _jpeg_frame_problem(fh) -> Optional[str]:
+    """Walk the marker segments after SOI (``fh`` positioned after it) up to the
+    frame header; None when one is found, else what went wrong. Reads only the
+    segment headers (seeking over their payloads)."""
+    for _ in range(_MAX_HEADER_SEGMENTS):
+        b = fh.read(1)
+        if not b:
+            return "the file ends before the frame header"
+        if b != b"\xff":
+            return f"a header segment does not start with a marker (0x{b[0]:02X})"
+        while b == b"\xff":  # the marker's FF and any fill bytes
+            b = fh.read(1)
+        if not b:
+            return "the file ends before the frame header"
+        marker = b[0]
+        if marker in _SOF_MARKERS:
+            return None
+        if marker in (0xD9, 0xDA):  # EOI / SOS before any frame header
+            return "no frame header (SOF) before the image data"
+        if 0xD0 <= marker <= 0xD7 or marker == 0x01:  # markers without a length
+            continue
+        head = fh.read(2)
+        if len(head) < 2:
+            return "the file ends inside a header segment"
+        length = struct.unpack(">H", head)[0]
+        if length < 2:
+            return f"a header segment declares {length} bytes"
+        fh.seek(length - 2, 1)
+    return "no frame header in the first header segments"
+
+
 class _ExifFilePartition(InputPartition):
     def __init__(self, file_path: str):
         self.file_path = file_path
@@ -329,26 +366,23 @@ class ExifGbxReader(DataSourceReader):
 
     def _jpeg_problem(self, local: str, size: int) -> Optional[str]:
         """Why a ``.jpg`` / ``.jpeg`` file is not a JPEG, or None: it must start
-        with the SOI marker (FFD8) and its header must decode. A missing end
-        marker (FFD9) in the last 64 KiB is only a warning: a truncated scan
-        still has its metadata, and a Motion Photo carries an MP4 after the
-        image. Other extensions (TIFF) are not checked."""
+        with the SOI marker (FFD8) and its header segments must lead to a frame
+        header (SOFn, any precision, 12-bit included). Nothing is decoded, so an
+        image too large for PIL to open is still a JPEG. A missing end marker
+        (FFD9) in the last 64 KiB is only a warning: a truncated scan still has
+        its metadata, and a Motion Photo carries an MP4 after the image. Other
+        extensions (TIFF) are not checked."""
         if not local.lower().endswith((".jpg", ".jpeg")):
             return None
         fh = _listing._retry_transient(lambda: open(local, "rb"))  # noqa: WPS515
         with fh:
             if fh.read(2) != b"\xff\xd8":
                 return "no JPEG start marker (FFD8): not a JPEG file"
+            problem = _jpeg_frame_problem(fh)
+            if problem is not None:
+                return f"the JPEG header cannot be decoded: {problem}"
             fh.seek(max(2, size - _JPEG_TAIL))
             ended = b"\xff\xd9" in fh.read()
-        try:
-            from PIL import Image
-
-            with Image.open(local) as img:  # header only
-                img.size  # noqa: B018 - decodes the frame header
-        except Exception as exc:  # noqa: BLE001 - a data error unless environment
-            _quarantine.reraise_environment(exc)
-            return f"the JPEG header cannot be decoded: {_quarantine.describe(exc)}"
         if not ended:
             _LOG.warning(
                 "exif_gbx: %s has no JPEG end marker (FFD9) in its last %d bytes: "

@@ -348,6 +348,7 @@ class BadRecords:
     ) -> None:
         self.count += 1
         message = (message or "")[:_MESSAGE_LIMIT]
+        raw = cap_raw(raw)
         if self.scratch_dir is None:
             self._log(path, record_index, error_class, message)
             return
@@ -512,8 +513,13 @@ def row_json(batch: pa.RecordBatch, i: int, skip: Tuple[str, ...] = ()) -> str:
         for j, name in enumerate(batch.schema.names)
         if name not in skip
     }
-    text = json.dumps(row, default=str, ensure_ascii=False)
-    if len(text) <= _RAW_LIMIT:
+    return cap_raw(json.dumps(row, default=str, ensure_ascii=False))
+
+
+def cap_raw(text: Optional[str]) -> Optional[str]:
+    """``text`` (a record's raw JSON) if it has at most :data:`_RAW_LIMIT`
+    characters, else ``{"truncated": true, "json": <its first characters>}``."""
+    if text is None or len(text) <= _RAW_LIMIT:
         return text
     head = text[: _RAW_LIMIT - 64]
     out = json.dumps({"truncated": True, "json": head}, ensure_ascii=False)
@@ -554,6 +560,68 @@ _MARKER_MESSAGES = {
 }
 
 
+def _walk_wkb(buf, off: int = 0, depth: int = 0) -> Tuple[int, bool]:
+    """``(offset after the geometry at off, whether it is or holds a curve or
+    surface)`` for a WKB / EWKB value; raises on a malformed one. Walks into
+    collections (a GeometryCollection holding a TIN, say)."""
+    import struct
+
+    if depth > 32:
+        raise ValueError("WKB nested too deep")
+    order = buf[off]
+    if order not in (0, 1):
+        raise ValueError("not a WKB byte order")
+    e = "<" if order == 1 else ">"
+    (code,) = struct.unpack_from(e + "I", buf, off + 1)
+    off += 5
+    iso = code & 0x0FFFFFFF
+    base, dims = iso % 1000, iso // 1000
+    z = bool(code & 0x80000000) or dims in (1, 3)
+    m = bool(code & 0x40000000) or dims in (2, 3)
+    if code & 0x20000000:  # EWKB SRID
+        off += 4
+    point = 8 * (2 + z + m)
+
+    def count():
+        (n,) = struct.unpack_from(e + "I", buf, off)
+        return n
+
+    if base == 1:
+        end = off + point
+    elif base in (2, 8):  # LineString, CircularString
+        end = off + 4 + count() * point
+    elif base in (3, 17):  # Polygon, Triangle
+        rings, end = count(), off + 4
+        for _ in range(rings):
+            (n,) = struct.unpack_from(e + "I", buf, end)
+            end += 4 + n * point
+    elif base in (4, 5, 6, 7, 9, 10, 11, 12, 15, 16):  # multi / collections
+        n, end, inner = count(), off + 4, False
+        for _ in range(n):
+            end, u = _walk_wkb(buf, end, depth + 1)
+            inner = inner or u
+        if end > len(buf):
+            raise ValueError("WKB ends early")
+        return end, inner or base in _UNPARSED_WKB_TYPES
+    else:
+        raise ValueError(f"WKB geometry type {base}")
+    if end > len(buf):
+        raise ValueError("WKB ends early")
+    return end, base in _UNPARSED_WKB_TYPES
+
+
+def _holds_unparsed(value) -> bool:
+    """True if a WKB value is, or holds, a curve or surface (types 8-17)."""
+    if wkb_base_type(value) in _UNPARSED_WKB_TYPES:
+        return True
+    if wkb_base_type(value) != 7:
+        return False
+    try:
+        return _walk_wkb(value)[1]
+    except Exception:  # noqa: BLE001 - malformed: shapely decides
+        return False
+
+
 def wkb_base_type(value) -> Optional[int]:
     """The base geometry type (1-17) a WKB / EWKB value declares, or None when
     its header is not one."""
@@ -577,7 +645,7 @@ def _readable_wkb(values) -> "object":
     for i, v in enumerate(values):
         if v is None:
             continue
-        if wkb_base_type(v) in _UNPARSED_WKB_TYPES:
+        if _holds_unparsed(v):
             ok[i] = True
         else:
             todo.append(i)
@@ -614,7 +682,7 @@ def wkt_or_marker(raw) -> "object":
     out = np.full(len(raw), None, dtype=object)
 
     def one(v):
-        if wkb_base_type(v) in _UNPARSED_WKB_TYPES:
+        if _holds_unparsed(v):
             return UNWRITABLE_WKB
         try:
             g = shapely.from_wkb(v, on_invalid="ignore")
@@ -630,7 +698,7 @@ def wkt_or_marker(raw) -> "object":
     sub = np.empty(len(todo), dtype=object)
     sub[:] = [raw[i] for i in todo]
     try:
-        if any(wkb_base_type(v) in _UNPARSED_WKB_TYPES for v in sub):
+        if any(_holds_unparsed(v) for v in sub):
             raise NotImplementedError
         geoms = shapely.from_wkb(sub, on_invalid="ignore")
         wkt = shapely.to_wkt(geoms)
@@ -788,7 +856,10 @@ def dbf_deleted_count(shp_path: str) -> int:
                     return 0
                 with zf.open(dbfs[0]) as fh:
                     return _deleted_in(fh)
-        except (OSError, zipfile.BadZipFile):
+        except zipfile.BadZipFile:
+            return 0
+        except OSError as e:
+            reraise_environment(e)  # I/O: fail the read; else a damaged zip
             return 0
     base, ext = os.path.splitext(shp_path)
     if ext.lower() != ".shp":

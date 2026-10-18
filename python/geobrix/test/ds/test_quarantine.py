@@ -795,9 +795,7 @@ _TRIANGLE = (
     + _wkb_points([(0, 0), (1, 0), (0, 1), (0, 0)])
 )
 _TIN = struct.pack("<BII", 1, 16, 1) + _TRIANGLE
-_POLYHEDRAL = (
-    struct.pack("<BII", 1, 15, 1) + struct.pack("<BII", 1, 3, 1) + _TRIANGLE[5:]
-)
+_POLYHEDRAL = struct.pack("<BII", 1, 15, 1) + struct.pack("<BI", 1, 3) + _TRIANGLE[5:]
 _CURVE_IN_COLLECTION = struct.pack("<BII", 1, 7, 1) + _ARC
 _ARC_Z_ISO = struct.pack("<BII", 1, 1008, 3) + b"".join(
     struct.pack("<ddd", x, y, 0) for x, y in [(0, 0), (1, 1), (2, 0)]
@@ -1101,3 +1099,127 @@ def test_skip_log_lines_name_the_error_class_once(caplog):
         bad.add("/v/a.gpkg", None, None, "ValueError", "ValueError: schema differs")
     (line,) = [r.getMessage() for r in caplog.records]
     assert line.count("ValueError") == 1
+
+
+# --- fix round 3 -------------------------------------------------------------
+
+
+def _failing_reads(monkeypatch, bad_lo, bad_hi):
+    """laspy reads (and seeks) behave as if points [bad_lo, bad_hi) cannot be
+    decoded: a read that overlaps them raises; returns a read counter."""
+    import laspy
+
+    real, real_seek = laspy.LasReader.read_points, laspy.LasReader.seek
+    pos, calls = {}, {"n": 0}
+
+    def read_points(self, n):
+        calls["n"] += 1
+        start = pos.get(id(self), 0)
+        if start < bad_hi and bad_lo < start + n:
+            raise _Panic("decoder panicked")
+        out = real(self, n)
+        pos[id(self)] = start + len(out)
+        return out
+
+    def seek(self, p, whence=0):
+        pos[id(self)] = p
+        return real_seek(self, p, whence)
+
+    monkeypatch.setattr(laspy.LasReader, "read_points", read_points)
+    monkeypatch.setattr(laspy.LasReader, "seek", seek)
+    return calls
+
+
+def test_one_undecodable_chunk_mid_file_keeps_every_other_point(tmp_path, monkeypatch):
+    """The review's probe: 300,000 points, 10,000-49,999 undecodable (one LAZ
+    chunk from where it breaks). Every other point is read, with the default
+    chunkSize, in a bounded number of reads."""
+    path, _, _ = _las(tmp_path / "a.las", 300_000)
+    calls = _failing_reads(monkeypatch, 10_000, 50_000)
+    rows, recs = _read(tmp_path, path, "lidar_gbx", {"dimensions": "x"})
+    assert len(rows) == 260_000
+    ((index, cls),) = _classes(recs)
+    assert index == "points=10000-49999" and cls.endswith("_Panic")
+    assert calls["n"] <= 40
+
+
+def test_lidar_reopen_environment_errors_fail_the_read(tmp_path, monkeypatch):
+    import laspy
+
+    path, _, _ = _las(tmp_path / "a.las", 3000)
+    _failing_reads(monkeypatch, 1000, 2000)
+    real_open = laspy.open
+    opened = {"n": 0}
+
+    def opener(*a, **k):
+        opened["n"] += 1
+        if opened["n"] > 1:  # the reopen after the failed chunk
+            raise MemoryError
+        return real_open(*a, **k)
+
+    monkeypatch.setattr(laspy, "open", opener)
+    with pytest.raises(MemoryError):
+        _read(tmp_path, path, "lidar_gbx", {"chunkSize": "1000"})
+
+
+def test_dbf_count_io_errors_fail_the_read(tmp_path, monkeypatch):
+    import errno
+
+    shp = _shapefile(tmp_path / "shp")
+    dbf = shp[:-4] + ".dbf"
+    n, header, reclen = _dbf_layout(dbf)
+    with open(dbf, "r+b") as fh:
+        fh.truncate(header + 15 * reclen)  # a shortfall: the .dbf is checked
+
+    def eio(path):
+        raise OSError(errno.EIO, "Input/output error", path)
+
+    monkeypatch.setattr(Q, "dbf_deleted_count", eio)
+    with pytest.raises(OSError, match="Input/output error"):
+        _read(tmp_path, shp, "shapefile_gbx")
+
+
+def test_jpeg_with_a_huge_declared_size_is_a_jpeg(tmp_path):
+    """A JPEG whose frame header declares 192 MP makes PIL refuse to open it
+    (DecompressionBombError); it is still a JPEG, and its metadata is read."""
+    good = _jpg(tmp_path / "good.jpg")
+    data = bytearray(open(good, "rb").read())
+    sof = data.index(b"\xff\xc0")
+    data[sof + 5 : sof + 9] = struct.pack(">HH", 12_000, 16_000)
+    big = tmp_path / "big.jpg"
+    big.write_bytes(bytes(data))
+    rows, recs = _read(tmp_path, str(big), "exif_gbx", None, good)
+    assert len(rows) == 1 and recs == []
+
+
+def test_every_raw_is_capped(tmp_path):
+    """A GeoJSONSeq line, or any raw a reader hands over, is capped too."""
+    lines = [json.dumps(_feature(i)) for i in range(4)]
+    lines[2] = '{"type": "Feature", "properties": {"note": "' + "x" * 20_000
+    path = tmp_path / "a.geojsonl"
+    path.write_text("\n".join(lines) + "\n")
+    rows, (rec,) = _read(tmp_path, str(path), "geojsonl_gbx", None, None)
+    assert len(rows) == 3 and rec["record_index"] == "line=3"
+    assert len(rec["raw"]) <= 4096 and json.loads(rec["raw"])["truncated"] is True
+
+
+def test_collections_of_surfaces_are_readable_geometries():
+    gc_tin = struct.pack("<BII", 1, 7, 1) + _TIN
+    gc_mixed = (
+        struct.pack("<BII", 1, 7, 2)
+        + struct.pack("<BIdd", 1, 1, 1.0, 2.0)
+        + _POLYHEDRAL
+    )
+    gc_nested = struct.pack("<BII", 1, 7, 1) + gc_tin
+    gc_big_endian = struct.pack(">BII", 0, 7, 1) + _TRIANGLE
+    geoms = [gc_tin, gc_mixed, gc_nested, gc_big_endian, b"\x01\x07\x00\x00\x00\xff"]
+    n = len(geoms)
+    batch = pa.record_batch(
+        [
+            pa.array(geoms, pa.binary()),
+            pa.array(["4326"] * n),
+            pa.array(["p"] * n),
+        ],
+        names=["g", "g_srid", "g_srid_proj"],
+    )
+    assert list(Q.bad_rows(batch, "g")) == [n - 1]

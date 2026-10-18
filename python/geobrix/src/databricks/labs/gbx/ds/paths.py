@@ -935,7 +935,8 @@ def _reconcile_vector(reader, part, local, mtime_us, schema, want, lineage, bad,
     if driver == "ESRI Shapefile":
         try:
             deleted = _quarantine.dbf_deleted_count(part.path)
-        except OSError:
+        except OSError as e:
+            _quarantine.reraise_environment(e)  # I/O: fail the read
             deleted = 0
     if state.seen + deleted < declared:
         _not_read(bad, local, mtime_us, state.seen + deleted, declared)

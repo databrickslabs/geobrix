@@ -344,10 +344,12 @@ def _new_batch_scratch(scratch_dir: str, target: str) -> str:
     ``<scratch_dir>/.gbx_scratch/<target namespace>/<uuid>``, created here: the
     batch stages its rows and its bad records in it. This target's batch folders
     older than :data:`_STAGING_TTL_S` (killed batches) are removed first; other
-    targets' are never touched."""
+    targets' are never touched. Day-old folders directly under ``.gbx_scratch``
+    (staging from before namespaces, or a writer's orphan) go too."""
     parent = _fuse_path(scratch_dir, "declare_ingest")
     ns = _staging_namespace(target)
     _scratch.gc_stale_scratch(parent, ttl_seconds=_STAGING_TTL_S, namespace=ns)
+    _scratch.gc_stale_scratch(parent, ttl_seconds=_STAGING_TTL_S)  # never namespaces
     scratch = _scratch.new_scratch_dir(parent, namespace=ns)
     try:
         os.makedirs(scratch)

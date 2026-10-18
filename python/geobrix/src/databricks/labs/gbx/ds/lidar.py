@@ -357,9 +357,9 @@ class LidarGbxReader(DataSourceReader):
 # Points re-read at a time to narrow down a chunk that failed (a LAZ chunk is
 # then lost from where it stops decoding to its end, and nothing else).
 _SALVAGE_POINTS = 1000
-# Consecutive failed reads after which the rest of a file is given up (a
-# decoder that fails on everything, a garbled huge point count).
-_MAX_FAILED_READS = 5
+# Chunks in a row with nothing read after which the rest of a file is given
+# up (a decoder that fails on everything, a garbled huge point count).
+_MAX_FAILED_CHUNKS = 3
 # Bounds check: a header's bounds may be rounded or slightly stale, so a point
 # is out of bounds only past this part of the extent (plus one scale step).
 _BOUNDS_SLACK = 1e-3
@@ -477,11 +477,13 @@ def _readable_points(h, local: str, size: int, hook) -> int:
 
 class _Cursor:
     """Where points are read from: the file's reader, or after a failure a
-    fresh open of the file positioned past it (the previous one is closed)."""
+    fresh open of the file positioned where the next read starts (the previous
+    one is closed). Environment errors (memory, I/O, no LAZ backend) raise."""
 
     def __init__(self, laspy, local, reader):
         self.laspy, self.local = laspy, local
-        self.reader, self._owned = reader, None
+        self.reader, self._owned, self.pos = reader, None, 0
+        self.error = None  # why the last reopen failed
 
     def reopen(self, at: int) -> bool:
         self.close()
@@ -489,18 +491,32 @@ class _Cursor:
             r = self.laspy.open(self.local)
         except _quarantine.PASS_THROUGH:
             raise
-        except BaseException:  # noqa: BLE001 - the caller records the loss
+        except BaseException as e:  # noqa: BLE001 - the caller records the loss
+            _raise_if_environment(e)
+            self.error = e
             return False
         self._owned = r
         try:
             r.seek(at)
         except _quarantine.PASS_THROUGH:
             raise
-        except BaseException:  # noqa: BLE001 - the caller records the loss
+        except BaseException as e:  # noqa: BLE001 - the caller records the loss
             self.close()
+            _raise_if_environment(e)
+            self.error = e
             return False
-        self.reader = r
+        self.reader, self.pos = r, at
         return True
+
+    def read(self, at: int, n: int):
+        """``n`` points from point ``at``; raises when they cannot be read."""
+        if (self.reader is None or self.pos != at) and not self.reopen(at):
+            raise self.error  # the decoder's own error: the record's class
+        points = self.reader.read_points(n)
+        if len(points) != n:
+            raise ValueError(f"read {len(points)} of {n} points")
+        self.pos = at + n
+        return points
 
     def close(self) -> None:
         self.reader = None
@@ -521,6 +537,25 @@ def _lost(hook, first, end, exc) -> None:
     )
 
 
+class _Losses:
+    """Point ranges that could not be read; contiguous ones are one record."""
+
+    def __init__(self, hook):
+        self.hook, self.first, self.end, self.exc = hook, None, None, None
+
+    def add(self, first: int, end: int, exc) -> None:
+        if self.end == first:
+            self.end = end
+            return
+        self.flush()
+        self.first, self.end, self.exc = first, end, exc
+
+    def flush(self) -> None:
+        if self.first is not None:
+            _lost(self.hook, self.first, self.end, self.exc)
+        self.first = self.end = None
+
+
 def _raise_if_environment(exc: BaseException) -> None:
     """Fail the read on an error of the environment, not the file (see
     ``_quarantine.is_environment_error``), including laspy's missing LAZ
@@ -533,54 +568,104 @@ def _raise_if_environment(exc: BaseException) -> None:
     _quarantine.reraise_environment(exc)
 
 
+def _try(cur, at: int, n: int):
+    """``(points, None)``, or ``(None, error)`` when they cannot be read."""
+    try:
+        return cur.read(at, n), None
+    except _quarantine.PASS_THROUGH:
+        raise
+    except BaseException as e:  # noqa: BLE001 - the caller narrows it down
+        _raise_if_environment(e)
+        cur.close()
+        return None, e
+
+
+def _next_readable(cur, at: int, end: int) -> int:
+    """The first point after ``at`` (on the :data:`_SALVAGE_POINTS` grid from
+    ``at``) where reading works again, or ``end``: exponential search, then
+    bisection, so a stretch of undecodable points costs O(log) reads (a LAZ
+    chunk decodes again from its start)."""
+    step = _SALVAGE_POINTS
+
+    def works(k: int) -> bool:
+        p = at + k * step
+        return _try(cur, p, min(step, end - p))[0] is not None
+
+    lo, hi = 0, None
+    k = 1
+    while at + k * step < end:
+        if works(k):
+            hi = k
+            break
+        lo, k = k, k * 2
+    if hi is None:
+        return end
+    while hi - lo > 1:
+        mid = (lo + hi) // 2
+        if works(mid):
+            hi = mid
+        else:
+            lo = mid
+    return at + hi * step
+
+
+def _narrow(cur, start: int, end: int, emit, lost):
+    """Re-read the failed chunk ``[start, end)`` in pieces: the points that
+    decode are kept; a stretch that does not is skipped to where reading works
+    again and is a loss; the rest of the chunk is then tried in one read.
+    Returns True when any point was read."""
+    s, kept = start, False
+    while s < end:
+        m = min(_SALVAGE_POINTS, end - s)
+        points, err = _try(cur, s, m)
+        if points is None:
+            nxt = _next_readable(cur, s, end)
+            lost.add(s, nxt, err)
+            s = nxt
+            if s >= end:
+                break
+            points, _ = _try(cur, s, end - s)  # the rest of the chunk at once
+            if points is None:
+                continue
+            m = end - s
+        kept = True
+        batch = emit(points, s)
+        s += m
+        if batch is not None:
+            yield batch
+    return kept
+
+
 def _checked_chunks(laspy, local, reader, limit, chunk_size, emit, hook):
     """Read points ``[0, limit)`` chunk by chunk. A chunk that fails (a LAZ
-    decode error, a Rust panic included) is read again in pieces of
-    :data:`_SALVAGE_POINTS` from a fresh open positioned past what was read, to
-    keep every point that decodes; a run of failed pieces is one bad record
-    (``points=<first>-<last>``) and the read goes on after it. After
-    :data:`_MAX_FAILED_READS` failed reads in a row the rest of the file is one
-    record. Environment errors (memory, a missing LAZ backend) fail the read."""
+    decode error, a Rust panic included) is re-read in pieces of
+    :data:`_SALVAGE_POINTS` to keep every point that decodes (see
+    :func:`_narrow`); points that do not are bad records
+    (``points=<first>-<last>``, contiguous ones merged). After
+    :data:`_MAX_FAILED_CHUNKS` chunks in a row with nothing read, the rest of
+    the file is one record. Environment errors (memory, a missing LAZ backend)
+    fail the read."""
     cur = _Cursor(laspy, local, reader)
-    start, size = 0, chunk_size
-    narrow_until = 0  # end of the chunk being re-read in pieces
-    bad_from, first_exc, fails = None, None, 0
+    lost = _Losses(hook)
+    start, failed_chunks = 0, 0
     try:
         while start < limit:
-            n = min(size, limit - start)
-            try:
-                if cur.reader is None and not cur.reopen(start):
-                    raise RuntimeError(f"cannot reopen {local} at point {start}")
-                points = cur.reader.read_points(n)
-                if len(points) != n:
-                    raise ValueError(f"read {len(points)} of {n} points")
-            except _quarantine.PASS_THROUGH:
-                raise
-            except BaseException as e:  # noqa: BLE001 - narrowed down below
-                _raise_if_environment(e)
-                cur.close()
-                if n > _SALVAGE_POINTS:  # re-read this chunk in pieces
-                    size, narrow_until = _SALVAGE_POINTS, start + n
-                    continue
-                if bad_from is None:
-                    bad_from, first_exc = start, e
-                fails += 1
-                start += n
-                if fails >= _MAX_FAILED_READS:
-                    break
+            end = min(start + chunk_size, limit)
+            points, err = _try(cur, start, end - start)
+            if points is not None:
+                failed_chunks = 0
+                batch = emit(points, start)
+                start = end
+                if batch is not None:
+                    yield batch
                 continue
-            if bad_from is not None:
-                _lost(hook, bad_from, start, first_exc)
-                bad_from, first_exc = None, None
-            fails = 0
-            batch = emit(points, start)
-            start += n
-            if start >= narrow_until:
-                size = chunk_size
-            if batch is not None:
-                yield batch
-        if bad_from is not None:
-            _lost(hook, bad_from, limit, first_exc)
+            kept = yield from _narrow(cur, start, end, emit, lost)
+            failed_chunks = 0 if kept else failed_chunks + 1
+            start = end
+            if failed_chunks >= _MAX_FAILED_CHUNKS and start < limit:
+                lost.add(start, limit, err)
+                break
+        lost.flush()
     finally:
         cur.close()
 

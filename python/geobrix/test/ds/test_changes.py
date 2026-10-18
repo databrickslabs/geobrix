@@ -1271,7 +1271,35 @@ def test_staging_gc_removes_only_its_own_day_old_batches(tmp_path):
         made[name] = d
     C._new_batch_scratch(str(tmp_path), "main.geo.t")
     assert not os.path.exists(made["old"])
-    for name in ("recent", "their_old", "writer"):
+    for name in ("recent", "their_old"):
+        assert os.path.exists(made[name]), name
+
+
+def test_staging_gc_also_removes_day_old_unnamespaced_folders(tmp_path):
+    """Folders directly under .gbx_scratch (staging from before namespaces, or
+    a writer's orphan) are removed a day old too; namespaces never are."""
+    import time as _time
+    import uuid as _uuid
+
+    container = tmp_path / ".gbx_scratch"
+    theirs = os.path.dirname(C._new_batch_scratch(str(tmp_path), "main.geo.u"))
+    now = _time.time()
+    made = {}
+    for name, parent, age_h in (
+        ("legacy_old", str(container), 30),
+        ("legacy_recent", str(container), 2),
+        ("their_old", theirs, 30),
+    ):
+        d = os.path.join(
+            parent, _uuid.uuid4().hex if name.startswith("legacy") else name
+        )
+        os.makedirs(d)
+        os.utime(d, (now - age_h * 3600, now - age_h * 3600))
+        made[name] = d
+    os.utime(theirs, (now - 30 * 3600, now - 30 * 3600))  # an idle namespace
+    C._new_batch_scratch(str(tmp_path), "main.geo.t")
+    assert not os.path.exists(made["legacy_old"])
+    for name in ("legacy_recent", "their_old"):
         assert os.path.exists(made[name]), name
 
 

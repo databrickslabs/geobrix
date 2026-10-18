@@ -20,6 +20,8 @@ the [lineage columns](./read-paths#lineage-columns) `_source_path` and `_source_
 Pipeline setup that every route shares (the channel, the GeoBrix extra, Serverless notes) is on
 [Lakeflow SDP](./lakeflow-sdp). This page covers the connector itself.
 
+![Lakeflow connector flow — a landing folder on a Volume (/Volumes/main/geo/landing, holding a boroughs folder of GeoJSON files, a Zones 2024.gpkg file, a scenes folder of GeoTIFFs and an \_archive folder) is governed by one Unity Catalog connection of type COMMUNITY whose root_path is that folder; each folder and each file with a recognized extension directly under it becomes one table (boroughs, zones_2024, scenes), named after the entry in lower case, while names that start with an underscore or a dot are ignored; each table’s reader is inferred from the file extension (geojson, gpkg) or set with the format option (format: cog, since a .tif file is otherwise read as gtiff); every pipeline update appends the rows of the files that are new since the last update to an append-only table, with the reader’s columns plus the \_source_path and \_source_mtime lineage columns](../../../resources/images/diagrams/ingestion/ingestion-lakeflow-connector.png)
+
 :::tip Key considerations
 - **Append-only.** A file overwritten in place gets a new modification time and is read again,
   so its rows are appended a second time. To keep each version of a file (`scd2`) or only its
@@ -43,6 +45,32 @@ Pipeline setup that every route shares (the channel, the GeoBrix extra, Serverle
   [Unreadable files](./read-paths#unreadable-files). To keep bad records in a table instead, use
   [Auto Loader ingestion](./auto-loader#unreadable-data).
 :::
+
+## Formats
+
+The reader for a table is its `format` [table option](#table-options), or is inferred from the file
+extension when every file in the dataset has the same one. `format` takes the same reader names as
+[`read_paths`](./read-paths#supported-formats): the `_gbx` suffix is optional and case is ignored,
+so `gpkg`, `GPKG` and `gpkg_gbx` are the same reader.
+
+| `format` | Reader | Extensions |
+|---|---|---|
+| `vector` | [Vector](../readers/vector) | Any vector extension below (generic reader) |
+| `gpkg` | [GeoPackage](../readers/geopackage) | `.gpkg` |
+| `geojson` | [GeoJSON](../readers/geojson) | `.geojson`. For GeoJSON files named `.json`, set `format: geojson` and `file_glob: *.{geojson,json}`. |
+| `geojsonl` | [GeoJSONL](../writers/geojsonl) | `.geojsonl`, `.geojsons` |
+| `shapefile` | [Shapefile](../readers/shapefile) | `.shp`, `.shz`, `.shp.zip` |
+| `file_gdb` | [File Geodatabase](../readers/filegdb) | `.gdb`, `.gdb.zip` |
+| `lidar` | [LiDAR](../readers/lidar) | `.las`, `.laz` |
+| `exif` | [EXIF/GPS](../readers/exif) | `.jpg`, `.jpeg` |
+| `raster` | [Raster](../readers/raster) | `.tif`, `.tiff`. Another raster file, such as `.jp2`, is read only when `path` or `file_glob` names it and `format` is `raster`. |
+| `gtiff` | [GeoTIFF](../readers/geotiff) | `.tif`, `.tiff` |
+| `cog` | [COG](../readers/cog) | `.tif`, `.tiff`, read with the COG reader. By extension a `.tif` is a `gtiff` table, so set `format: cog`. |
+| `netcdf` | [NetCDF](../readers/netcdf) | `.nc`. The `mode` option picks what a file becomes: `raster` (default), one GeoTIFF tile per grid variable; `vector`, one point feature per observation or grid cell. |
+| `pmtiles` | [PMTiles](../readers/pmtiles) | `.pmtiles`: one row per tile stored in the archive (`z`, `x`, `y`, `bytes`). Rendering tiles from GeoTIFFs is not a connector table; use [`read_paths`](./read-paths) or [`declare_ingest`](./auto-loader) with `source="raster"`. |
+
+Extensions match in any case (`.TIF` is `.tif`). The lightweight `file` reader (it lists files)
+and the heavyweight readers are not connector formats.
 
 ## Set up
 
@@ -119,6 +147,7 @@ dataset discovered under `root_path`, or any name when the entry sets `path`; th
 A pipeline source file, as above, is the tested route for deploying the connector. The Add data page
 and managed ingestion pipelines (an `ingestion_definition` with `source_type: COMMUNITY`) are the
 other routes for community connectors, where they are available in your workspace.
+If a managed ingestion pipeline fails at startup, see [Troubleshooting](#troubleshooting).
 :::
 
 ## Table options
@@ -138,32 +167,6 @@ other routes for community connectors, where they are available in your workspac
 `path`, `format` and `file_glob` apply to every table. Set on a table whose reader does not take
 it, any other option fails with an error that names the option and the readers it applies to.
 Raster (`raster`, `gtiff`, `cog`) and `pmtiles` tables take none of them.
-
-## Formats
-
-The reader for a table is its `format` option, or is inferred from the file extension when every
-file in the dataset has the same one. `format` takes the same reader names as
-[`read_paths`](./read-paths#supported-formats): the `_gbx` suffix is optional and case is ignored,
-so `gpkg`, `GPKG` and `gpkg_gbx` are the same reader.
-
-| `format` | Reader | Extensions |
-|---|---|---|
-| `vector` | [Vector](../readers/vector) | Any vector extension below (generic reader) |
-| `gpkg` | [GeoPackage](../readers/geopackage) | `.gpkg` |
-| `geojson` | [GeoJSON](../readers/geojson) | `.geojson`. For GeoJSON files named `.json`, set `format: geojson` and `file_glob: *.{geojson,json}`. |
-| `geojsonl` | [GeoJSONL](../writers/geojsonl) | `.geojsonl`, `.geojsons` |
-| `shapefile` | [Shapefile](../readers/shapefile) | `.shp`, `.shz`, `.shp.zip` |
-| `file_gdb` | [File Geodatabase](../readers/filegdb) | `.gdb`, `.gdb.zip` |
-| `lidar` | [LiDAR](../readers/lidar) | `.las`, `.laz` |
-| `exif` | [EXIF/GPS](../readers/exif) | `.jpg`, `.jpeg` |
-| `raster` | [Raster](../readers/raster) | `.tif`, `.tiff`. Another raster file, such as `.jp2`, is read only when `path` or `file_glob` names it and `format` is `raster`. |
-| `gtiff` | [GeoTIFF](../readers/geotiff) | `.tif`, `.tiff` |
-| `cog` | [COG](../readers/cog) | `.tif`, `.tiff`, read with the COG reader. By extension a `.tif` is a `gtiff` table, so set `format: cog`. |
-| `netcdf` | [NetCDF](../readers/netcdf) | `.nc`. The `mode` option picks what a file becomes: `raster` (default), one GeoTIFF tile per grid variable; `vector`, one point feature per observation or grid cell. |
-| `pmtiles` | [PMTiles](../readers/pmtiles) | `.pmtiles`: one row per tile stored in the archive (`z`, `x`, `y`, `bytes`). Rendering tiles from GeoTIFFs is not a connector table; use [`read_paths`](./read-paths) or [`declare_ingest`](./auto-loader) with `source="raster"`. |
-
-Extensions match in any case (`.TIF` is `.tif`). The lightweight `file` reader (it lists files)
-and the heavyweight readers are not connector formats.
 
 ## Discovery
 
@@ -193,6 +196,25 @@ and the heavyweight readers are not connector formats.
 - **Most unreadable files fail the update.** The connector reads as `read_paths` does with
   `on_error="fail"`; see [Unreadable files](./read-paths#unreadable-files) for each format. When an
   update fails, its progress is not saved, so the next update reads the same files again.
+
+## Troubleshooting
+
+### A managed ingestion pipeline fails with `PYTHON_REPL_CREATION_FAILED`
+
+A managed ingestion pipeline (created from the Add data page, or as an `ingestion_definition` with
+`source_type: COMMUNITY`, where those are available) can fail at startup with
+`PYTHON_REPL_CREATION_FAILED`, caused by `chown: invalid user: spark-<uuid>`. This is a platform
+bootstrap failure: it happens while the managed runtime creates the pipeline's Python REPL, before
+any connector code runs. It is not a problem with the connector, its authentication, the table
+schema or permissions, so changing those does not help.
+
+- Retry the update once.
+- If it fails again, deploy the connector with a
+  [pipeline source file](#3-add-the-pipeline-source-file), the tested route on this page, and
+  contact Databricks support.
+
+Don't count on the retry: the error has repeated on both the `PREVIEW` and `CURRENT` channels in a
+workspace where pipelines with a source file ran.
 
 ## See also
 

@@ -59,7 +59,7 @@ Provision a cluster and stage the artifacts per the [installation guide](../inst
 
 | Tier | Cluster | Artifacts |
 |---|---|---|
-| Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
+| Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Legacy init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
 | Lightweight (pyrx) | x86 **or ARM** | The `[light_env6]` wheel (Serverless) or `[light_dbrN]` (classic) |
 
 Then fill in the cluster configuration file (`examples/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
@@ -84,7 +84,7 @@ Scale the run with the options below. `--cluster-id` and `--run-id` identify the
 | `--set core \| full` | Which function set to benchmark — the representative `core` set or every benchmarked function (`full`). Default `core`. |
 | `--functions rst_slope,rst_ndvi` | Comma-separated list restricting the run to specific functions; overrides `--set`. Default: unset (benchmarks the `--set`). |
 | `--warmup` / `--measured` | Warmup and measured iteration counts. Defaults: pure-core `1` / `3`, spark-path `1` / `1`. |
-| `--lightweight-only` / `--heavyweight-only` | Run a single tier (mutually exclusive). `--lightweight-only` is **required on ARM clusters** (heavyweight is x86-only); `--heavyweight-only` skips the lightweight leg. Default: both tiers run. |
+| `--lightweight-only` / `--heavyweight-only` | Run a single tier (mutually exclusive). `--lightweight-only` is **required on ARM clusters** (the benchmark stages its heavyweight leg with the x86-only init script); `--heavyweight-only` skips the lightweight leg. Default: both tiers run. |
 | `--no-wait` | Submit the job without blocking on completion. Default: waits for the run to finish. |
 
 ```bash
@@ -1378,7 +1378,7 @@ Provision a cluster and stage the artifacts per the [installation guide](../inst
 
 | Tier | Cluster | Artifacts |
 |---|---|---|
-| Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
+| Heavyweight (rasterx) | x86 · DBR 17.3 LTS | Legacy init script + bundle + GeoBrix wheel + the bench tests JAR (`geobrix-*-tests.jar`) |
 | Lightweight (pyrx) | x86 **or ARM** | The `[light_env6]` wheel (Serverless) or `[light_dbrN]` (classic) |
 
 Then fill in the cluster configuration file (`examples/tests/databricks_cluster_config.env`) with your cluster ID and Volume paths.
@@ -1403,7 +1403,7 @@ Scale the run with the options below. `--cluster-id` and `--run-id` identify the
 | `--set core \| full` | Which function set to benchmark — the representative `core` set or every benchmarked function (`full`). Default `core`. |
 | `--functions rst_slope,rst_ndvi` | Comma-separated list restricting the run to specific functions; overrides `--set`. Default: unset (benchmarks the `--set`). |
 | `--warmup` / `--measured` | Warmup and measured iteration counts. Defaults: pure-core `1` / `3`, spark-path `1` / `1`. |
-| `--lightweight-only` / `--heavyweight-only` | Run a single tier (mutually exclusive). `--lightweight-only` is **required on ARM clusters** (heavyweight is x86-only); `--heavyweight-only` skips the lightweight leg. Default: both tiers run. |
+| `--lightweight-only` / `--heavyweight-only` | Run a single tier (mutually exclusive). `--lightweight-only` is **required on ARM clusters** (the benchmark stages its heavyweight leg with the x86-only init script); `--heavyweight-only` skips the lightweight leg. Default: both tiers run. |
 | `--no-wait` | Submit the job without blocking on completion. Default: waits for the run to finish. |
 
 ```bash

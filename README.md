@@ -34,7 +34,7 @@
 ## Tiers
 
 - **Lightweight tier** — pure Python (+ SQL bindings) on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR, no init script, no native GDAL bundle**. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM** — where the heavyweight tier can't.
-- **Heavyweight tier** — Scala (Python and SQL bindings) + native GDAL for distributed processing on classic (x86) clusters. **Same function names across tiers** — switching is a one-line import change.
+- **Heavyweight tier** — Scala (Python and SQL bindings) + native GDAL for distributed processing on dedicated clusters — with the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs) (preferred; Graviton arm64, DBR 19) or the legacy [init script](https://databrickslabs.github.io/geobrix/docs/installation/init-script) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **Same function names across tiers** — switching is a one-line import change.
 
 ## Packages
 
@@ -87,7 +87,7 @@ boroughs = spark.read.format("geojson_gbx").load("/Volumes/.../boroughs.geojson"
 boroughs.write.format("geojson_gbx").mode("overwrite").save("/Volumes/.../out.geojson")
 ```
 
-**Heavyweight** is the same code with `from databricks.labs.gbx.rasterx import functions as rx`, plus the JAR and a GDAL init script — see [Installing & Choosing a Tier](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
+**Heavyweight** is the same code with `from databricks.labs.gbx.rasterx import functions as rx`, plus the JAR and a heavyweight install (the GeoBrix DCS image or the legacy GDAL init script) — see [Installing & Choosing a Tier](https://databrickslabs.github.io/geobrix/docs/api/execution-tiers).
 
 ## Readers & writers
 

@@ -45,7 +45,7 @@ GeoBrix's GDAL stack and DBR's built-in spatial functions each carry
 their own PROJ runtime — they coexist on the cluster but are not the
 same library, and the two PROJ versions can diverge slightly:
 
-- **GeoBrix's GDAL** links to the PROJ shipped in the cluster init
+- **GeoBrix's GDAL** (init-script install) links to the PROJ shipped in the cluster init
   bundle (currently PROJ 9.4.1, from the UbuntuGIS PPA build of
   `libgdal37`). Installed at `/usr/lib/x86_64-linux-gnu/libproj.so.25`.
 - **DBR 17.3 LTS's built-in `ST_*` functions** link to PROJ 9.7.1,
@@ -78,10 +78,11 @@ PROJ in a future release.
 
 The compute requirements below apply to the **heavyweight** tier (Scala JAR + native GDAL). The **lightweight** tier (light-tier extras, e.g. `geobrix[light_env6]`; pure-Python on rasterio's bundled GDAL) has none of them — it runs on Serverless compute (environment v6), standard (shared) clusters, Lakeflow declarative pipelines, and ARM. See [Choosing an Execution Tier](./api/execution-tiers).
 
-The heavyweight tier requires Databricks Classic Clusters:
+The heavyweight tier runs on **dedicated clusters** — with the GeoBrix [DCS image](./installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](./installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](./installation.mdx#choose-an-install-path):
 - **Not** compatible with Serverless compute (use the lightweight tier there)
-- Requires GDAL native libraries via init script, which are currently only supported on classic clusters
-- **Non-ARM instance types only (Intel or AMD x86_64).** The GDAL bundle ships `amd64` `.deb`s from the UbuntuGIS PPA — `amd64` and `x86_64` are the same architecture, and Intel and AMD CPUs are interchangeable. ARM-based instance types — AWS Graviton, Ampere, Apple Silicon — are not supported. The init script fails fast on `aarch64`.
+- Not available yet on standard (shared) access mode, with or without a DCS image (use the lightweight tier there)
+- Requires native GDAL libraries, which the DCS image carries and the legacy init script installs
+- **Init-script route: non-ARM instance types only (Intel or AMD x86_64).** The GDAL bundle ships `amd64` `.deb`s from the UbuntuGIS PPA — `amd64` and `x86_64` are the same architecture, and Intel and AMD CPUs are interchangeable. The init script fails fast on `aarch64`; ARM (Graviton) is supported through the DCS image.
 
 Databricks Runtime:
 - **Minimum**: DBR 17.1 (recommended/tested: DBR 17.3 LTS or 18 LTS)

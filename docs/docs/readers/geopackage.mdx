@@ -19,9 +19,9 @@ Both tiers produce the same `(attrs..., <geom>, <geom>_srid, <geom>_srid_proj)` 
 :::tip Benchmark & tradeoff
 The lightweight (`*_gbx`) and heavyweight readers emit the **same schema**, but your
 **compute usually decides the tier**: the lightweight tier needs **no JAR or init script**
-and is the **only** option on Serverless, standard (shared), and ARM clusters. The
-heavyweight tier requires a **classic x86 cluster** (JAR + GDAL init script); where it is
-available it uses native GDAL on the JVM and tends to pull ahead on large workloads. See
+and is the **only** option on Serverless and standard (shared) clusters. The
+heavyweight tier runs on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path).
+Where it is available it uses native GDAL on the JVM and tends to pull ahead on large workloads. See
 the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings and methodology.
 :::
 

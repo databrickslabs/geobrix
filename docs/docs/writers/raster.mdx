@@ -21,9 +21,9 @@ Write raster tiles from the shared `(source, tile)` schema. The **lightweight**
 
 :::tip Benchmark & tradeoff
 The lightweight (`*_gbx`) writers need **no JAR or init script** and are the **only** option
-on Serverless, standard (shared), and ARM clusters. The heavyweight raster/PMTiles writers
-require a **classic x86 cluster** (JAR + GDAL init script); where available they use native
-GDAL on the JVM. So your compute usually decides the tier — then data scale. See the
+on Serverless and standard (shared) clusters. The heavyweight raster/PMTiles writers run on
+**dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path);
+where available they use native GDAL on the JVM. So your compute usually decides the tier — then data scale. See the
 [Benchmarking](../api/benchmarking) page for timings and methodology.
 :::
 

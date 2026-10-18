@@ -195,7 +195,7 @@ Both tiers expose identical `st_asmvt` / `st_asmvt_pyramid` names and identical 
 # Lightweight (pyvx) — Serverless-safe, no JAR
 from databricks.labs.gbx.pyvx    import functions as vx
 
-# Heavyweight (vectorx) — classic x86 cluster, JAR required
+# Heavyweight (vectorx) — dedicated cluster (DCS image or init script), JAR required
 from databricks.labs.gbx.vectorx import functions as vx
 
 # Everything below is identical in both tiers:
@@ -216,7 +216,9 @@ vx.register(spark)
 | Aspect | Lightweight (pyvx) | Heavyweight (vectorx) |
 |---|---|---|
 | Install | Volume-staged `[light_env6]` wheel ([install](../installation#whl-only)) | JAR + native GDAL ([install paths](../installation#choose-an-install-path)) |
-| Serverless / shared / ARM | Supported | Not supported |
+| Serverless / shared | Supported | Not supported |
+| Dedicated cluster, ARM (Graviton) | Supported | Supported with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; DBR 19) |
+| Dedicated cluster, classic x86 | Supported | Supported with the legacy [init script](../installation/init-script.mdx) (DBR 17.3 / 18 / 19) |
 | Lakeflow declarative pipelines | Supported | Not supported |
 | Execution model | Python UDTF / pandas UDF | JVM (Scala + Spark columnar) |
 | JVM access | None — `spark.udf.register` only | Required |

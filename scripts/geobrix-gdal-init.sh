@@ -400,7 +400,7 @@ step 09_pip_toolchain_done
 pip install --force-reinstall --no-index --no-deps --no-cache-dir --find-links=wheels/ GDAL
 step 10_gdal_wheel_done
 
-# Note: the GeoBrix Python wheel (dblabs_geobrix-*-py3-none-any.whl) is
+# Note: the GeoBrix Python wheel (geobrix-<version>-py3-none-any.whl) is
 # NOT installed here. It's attached separately as a cluster Library via
 # the Databricks UI (Cluster → Libraries → Install new → Upload Python
 # Whl). Keeping it out of this script lets the Python wheel be versioned

@@ -218,8 +218,7 @@ no target grid or resampling method is chosen for you.
 `netcdf_gdal` is the heavyweight (Scala/JVM, native GDAL) raster reader. It reads
 the CF grid variables of a `.nc` file into the shared `(source, tile)` schema —
 **one row per grid variable** — so tessellation, band math, and tiling work
-unchanged. It is read-only. Requires a classic x86 cluster (JAR + GDAL init
-script); on Serverless / standard / ARM compute use lightweight `netcdf_gbx`
+unchanged. It is read-only. Requires a dedicated cluster with the heavyweight tier installed (the GeoBrix [DCS image](../installation/dcs.mdx) or the legacy [init script](../installation/init-script.mdx); see [Choose an install path](../installation.mdx#choose-an-install-path)); on Serverless / standard compute use lightweight `netcdf_gbx`
 raster mode instead — the two emit the same schema.
 
 ```python

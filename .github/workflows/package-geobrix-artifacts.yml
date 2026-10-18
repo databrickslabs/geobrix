@@ -14,7 +14,7 @@ name: package geobrix artifacts
 #
 # Always uploaded as workflow artifacts (downloadable from the run page):
 #   1. geobrix-<version>-jar-with-dependencies.jar              (built inline)
-#   2. dblabs_geobrix-<version>-py3-none-any.whl                (built inline)
+#   2. geobrix-<version>-py3-none-any.whl                       (built inline)
 #   3. geobrix-gdal-artifacts-v<version>-noble.tar.gz           (repackaged)
 #   4. geobrix-gdal-artifacts-v<version>-noble.tar.gz.sha256    (computed)
 #   5. geobrix-gdal-init.sh                                     (committed)

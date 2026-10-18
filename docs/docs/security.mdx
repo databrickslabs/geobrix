@@ -64,7 +64,7 @@ serving a same-version-but-different-bytes wheel fails closed.
 GDAL is the documented exception **for the heavyweight build**: its Python
 wheel must match the GDAL native version installed on the host, so it is
 installed separately against the detected version. The native side is pinned
-via the init script (see below). The lightweight `pyrx` build path has no such
+via the init script (see below) or, in the DCS image, built into the image. The lightweight `pyrx` build path has no such
 exception — it uses rasterio's bundled-GDAL binary wheel, which is hash-pinned
 in `requirements-light-env6-ci.txt` like every other dependency (no native GDAL, no
 JAR).
@@ -246,6 +246,8 @@ for the full how-to.
 
 ## Next steps
 
+- [Databricks Container Service](./installation/dcs.mdx) — the preferred heavyweight packaging,
+  with native GDAL built into the image.
 - [Init Script (Legacy)](./installation/init-script.mdx) — apply the init script as part of
   cluster setup.
 - [Readers overview](./readers/overview) — configuration knobs for narrowing

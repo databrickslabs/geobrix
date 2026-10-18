@@ -11,7 +11,7 @@ sidebar_position: 1
   Serverless, standard/shared clusters, ARM, Lakeflow declarative pipelines. Works with bytes-free
   **[virtual tiles](./virtual-tiles)** so huge rasters ingest without out-of-memory. **The
   recommended default.**
-- **Heavyweight (`rasterx`)** — JVM-native (Scala + GDAL JNI) on a classic x86 cluster. Operates on
+- **Heavyweight (`rasterx`)** — JVM-native (Scala + GDAL JNI) on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path). Operates on
   **materialized** (binary) tiles.
 
 Both tiers cover the **full raster function set** and agree within tolerance across the benchmark
@@ -84,9 +84,9 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 
 | Aspect | Heavyweight (rasterx) | Lightweight (pyrx) |
 |---|---|---|
-| Install | Init script + JAR | Volume-staged wheel (`%pip` or cluster library) |
+| Install | DCS image (preferred) or legacy init script, plus the JAR | Volume-staged wheel (`%pip` or cluster library) |
 | Native GDAL | System/PPA install | Bundled with rasterio (nothing to install) |
-| ARM support | x86 only | x86 and ARM |
+| ARM support | Graviton (arm64) with the DCS image; x86 with the init script | x86 and ARM |
 | Serverless / shared clusters / Lakeflow SDP | Not supported | Supported |
 | Execution model | JVM-native (Scala + GDAL JNI) | Python-worker UDFs (rasterio + NumPy) |
 | Tile model | Materialized (binary) tiles only | Materialized **and** bytes-free **[virtual tiles](./virtual-tiles)** (lazy windowed reads; no ingest OOM) |
@@ -101,7 +101,7 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 
 Choose **Heavyweight (rasterx)** in three cases:
 
-1. **Your environment is already JVM/GDAL-based** — you have the init script and JAR in place, or you specifically want JVM-native execution on a dedicated cluster.
+1. **Your environment is already JVM/GDAL-based** — you have the DCS image or init script and JAR in place, or you specifically want JVM-native execution on a dedicated cluster.
 2. **You need vector OGR readers or format-specific GDAL options** — the OGR vector readers (`shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, …) and the generic `gdal` reader with exotic driver options are heavy-only. For raster I/O, the lightweight tier ships native `raster_gbx` / `gtiff_gbx` readers and a writer (no JAR; see [Lightweight Raster Readers](../readers/raster)).
 3. **You need the heavy-only `conforming` triangulation mode** — GridX is now **fully lightweight**: the **quadbin** (`gbx_quadbin_*`), **BNG** (`gbx_bng_*`), and **custom-grid** (`gbx_custom_*`) functions all run in both tiers via the lightweight `pygx` package. The full **VectorX** function set is now available in the lightweight `pyvx` tier — vector-tile encoding (`gbx_st_asmvt`, `gbx_st_asmvt_pyramid`), TIN surface modeling (`gbx_st_triangulate`, `gbx_st_interpolateelevation*`), and legacy-geometry migration (`gbx_st_legacyaswkb`); only the Steiner-point `conforming` triangulation mode is heavyweight-only (the default `constrained` mode runs in both tiers). See [GridX](./gridx-functions) and [VectorX Function Reference](./vectorx-functions).
 

@@ -21,8 +21,9 @@ The lightweight tier ships native Python DataSource V2 readers — no JAR, no in
 
 :::tip Distributed readers, virtual tiles by default
 These are **Spark DataSource V2** readers (not single-node `rasterio`/`pyogrio` wrappers): work is
-partitioned and read in parallel across the cluster — vector readers slice features by `chunkSize`,
-raster readers split large files by `sizeInMB` — returning a distributed DataFrame with no driver-side
+partitioned and read in parallel across the cluster — vector readers read each file in its own task
+and stream it in batches of `chunkSize` features (memory follows `chunkSize`, not file size), raster
+readers split large files by `sizeInMB` — returning a distributed DataFrame with no driver-side
 `collect`. Raster readers load **virtual tiles** by default — bytes-free `(path, window)` refs that read
 pixels lazily, so a multi-gigabyte raster fans into tiles without OOM (`.option("virtualTiles", "false")`
 for materialized reads). See **[Virtual Tiles](../api/virtual-tiles)**.
@@ -256,7 +257,7 @@ All readers support:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `driverName` | Auto-detect | OGR driver name (e.g., "ESRI Shapefile") |
-| `chunkSize` | `"10000"` | Records per chunk for parallel reading |
+| `chunkSize` | `"10000"` | Features per chunk. The heavyweight reader splits Shapefile, GeoPackage and File Geodatabase files into chunks of this size, read in parallel (GeoJSON files are read whole, one task per file). The lightweight readers read each file in one task and stream it in batches of this size |
 | `layerName` | `""` | Layer name for multi-layer formats |
 | `layerN` | `"0"` | Layer index for multi-layer formats |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text) |

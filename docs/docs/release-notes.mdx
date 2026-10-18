@@ -61,6 +61,13 @@ vector sources and one field-type mapping shared by both vector reader tiers.
   file with a corrupt chunk keeps the points around it, a truncated LAS file keeps its complete
   points, and a NetCDF-3 file shorter than its header declares is set aside (CDF-5 files are read
   as they are). See [Unreadable files](./ingestion/read-paths#unreadable-files) for each format.
+- **A LiDAR file is given up only after a long run of unreadable points.** When `on_error` is
+  `skip` or `quarantine`, the rest of a LAS or LAZ file is set aside (as one record) only after
+  `max(3 × chunkSize, 250,000)` points in a row could not be read, so one corrupt LAZ chunk never
+  ends the read, whatever `chunkSize` is.
+- **Some corrupt LAZ data stops the worker.** A region of `0xFF` bytes, for example, crashes the
+  native LAZ decoder. A crash cannot be caught, so the file is not set aside: the task is retried
+  and then the update fails. Remove the file or replace it with a readable copy.
 - **A NULL or empty geometry is data, not a bad record.** A feature without a location, a
   `POINT EMPTY`, and a curve or surface (with `asWKB="false"` those are set aside, because WKT
   cannot hold them) are written like any other row. GDAL also returns NULL for a geometry it cannot

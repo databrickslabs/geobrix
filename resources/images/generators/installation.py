@@ -240,8 +240,8 @@ PATHS = [
          title="Databricks Container Service", chip="GeoBrix container image",
          branch="Heavyweight · Graviton (arm64)", badge="PREFERRED",
          runs="Dedicated cluster · Graviton (arm64) · DBR 19",
-         install="A GeoBrix image (native GDAL + the wheel), plus the JAR as a cluster library",
-         extra="Not yet covered: x86 (amd64), DBR 17.3 / 18",
+         install="A GeoBrix image on DCS vNext (native GDAL + the wheel), plus the JAR as a cluster library",
+         extra="Not yet available: x86 (amd64) and DBR 17.3 / 18 images",
          tiers=["Lightweight", "Heavyweight"]),
     dict(theme=VIOLET, glyph=g_script, letter="c",
          title="Init Script (Legacy)", chip="geobrix-gdal-init.sh",
@@ -249,7 +249,7 @@ PATHS = [
          runs="Classic x86 cluster · DBR 17.3 / 18 / 19",
          install="Init script, GDAL tarball + .sha256 sidecar on a Volume; wheel as a cluster library",
          extra="Still supported where the DCS image doesn't reach yet",
-         tiers=["Heavyweight"]),
+         tiers=["Lightweight", "Heavyweight"]),
 ]
 
 
@@ -319,7 +319,7 @@ def body_dcs():
     layers = [
         ("GeoBrix wheel  ·  [light_env6]", "Installed into the image's Python", BLUE),
         ("GDAL 3.11.4 + Java (JNI) bindings", "Native GDAL the heavyweight JAR loads", ORANGE),
-        ("databricksruntime/environment:v6-standard-arm", "Databricks environment 6 base (arm64)", TEAL),
+        ("databricksruntime/environment:v6-standard-arm", "DCS vNext base; the -arm variant runs on Graviton", TEAL),
     ]
     ly = top + 88
     for title, sub, th in layers:
@@ -376,7 +376,7 @@ def body_dcs():
         (HEAVY_TIER, "Heavyweight", "rasterx · vectorx · gridx (gbx_* on the JVM)",
          "Read /Volumes with *_gbx readers, then heavy functions"),
     ]
-    th_h, ty = 150, top
+    th_h, th_gap, ty = 140, 18, top
     for th, name, l1, l2 in tiers:
         a, t = th["accent"], th["tint"]
         out.append(panel(x3, ty, w3, th_h, accent=a))
@@ -386,26 +386,25 @@ def body_dcs():
                    f'stroke-linejoin="round"/>')
         out.append(text(x3 + 58, ty + 46, name, size=18, weight=800, fill=C_INK))
         out.extend(wrap_left(x3 + 24, ty + 82, w3 - 48, l1, size=13, fill=C_INK))
-        out.extend(wrap_left(x3 + 24, ty + 116, w3 - 48, l2, size=12, fill=C_MUTED_2))
-        ty += th_h + 24
+        out.extend(wrap_left(x3 + 24, ty + 114, w3 - 48, l2, size=12, fill=C_MUTED_2))
+        ty += th_h + th_gap
     out.append(parrow(x2 + w2 + 6, top + th_h / 2, x3 - 6, top + th_h / 2, LIGHT_TIER["accent"]))
-    out.append(parrow(x2 + w2 + 6, top + th_h * 1.5 + 24, x3 - 6, top + th_h * 1.5 + 24,
-                      HEAVY_TIER["accent"]))
+    out.append(parrow(x2 + w2 + 6, top + th_h * 1.5 + th_gap, x3 - 6,
+                      top + th_h * 1.5 + th_gap, HEAVY_TIER["accent"]))
 
-    # --- not-covered strip -----------------------------------------------------
-    sx, sy = x3, top + 2 * th_h + 48
-    sw, sh = w3, 122
+    # --- not-yet-available strip -----------------------------------------------
+    sx, sy = x3, top + 2 * th_h + th_gap + 18
+    sw, sh = w3, 136
     out.append(f'<rect x="{sx}" y="{sy}" rx="12" ry="12" width="{sw}" height="{sh}" '
                f'fill="#F7F9FB" stroke="{C_MUTED_3}" stroke-width="1.2" stroke-dasharray="6 5"/>')
-    out.append(text(sx + 18, sy + 24, "NOT COVERED BY THIS SETUP", size=10.5, weight=700,
+    out.append(text(sx + 18, sy + 24, "NOT AVAILABLE YET", size=10.5, weight=700,
                     fill=C_MUTED_2, letter_spacing="1.2"))
-    out.extend(wrap_left(sx + 18, sy + 46, sw - 36,
-                         "Standard access mode (Beta): lightweight functions only; "
-                         "Python DataSource readers fail; no heavyweight tier.",
-                         size=12, fill=C_MUTED, line_h=16))
-    out.extend(wrap_left(sx + 18, sy + 92, sw - 36,
-                         "Not yet covered: x86 (amd64) images and DBR 17.3 / 18.",
-                         size=12, fill=C_MUTED, line_h=16))
+    for yy, msg in ((44, "Standard access mode (Beta): lightweight functions work; Python "
+                         "DataSource readers and the heavyweight tier are not available yet."),
+                    (96, "Serverless: DCS is not available on Serverless yet."),
+                    (118, "x86 (amd64) images and DBR 17.3 / 18: not yet available.")):
+        out.extend(wrap_left(sx + 18, sy + yy, sw - 36, msg, size=11.5, fill=C_MUTED,
+                             line_h=15))
     return "".join(out)
 
 
@@ -479,9 +478,9 @@ def body_init_script():
                         letter_spacing="1.2"))
         out.append(text(x3 + 24, ry + 19, val, size=13, weight=600, fill=C_INK))
         ry += 52
-    tsvg, _ = tier_chips(x3 + 24, top + h - 48, ["Heavyweight"])
+    tsvg, _ = tier_chips(x3 + 24, top + h - 48, ["Lightweight", "Heavyweight"])
     out.append(tsvg)
-    out.append(text(x3 + w3 - 24, top + h - 30, "TIER", size=10.5, weight=700,
+    out.append(text(x3 + w3 - 24, top + h - 30, "TIERS", size=10.5, weight=700,
                     fill=C_MUTED_3, anchor="end", letter_spacing="1.2"))
 
     # arrows
@@ -509,7 +508,7 @@ DIAGRAMS = {
     "dcs": dict(
         badge="GB", theme=TEAL,
         title="GeoBrix on Databricks Container Service",
-        subtitle="The preferred heavyweight packaging: one image carries native GDAL and the wheel",
+        subtitle="The preferred heavyweight packaging, on DCS vNext: one image carries native GDAL and the wheel",
         pill="Installation  ·  Container Service",
         body=body_dcs,
         chips=["environment:v6-standard-arm", "GDAL 3.11.4", "geobrix[light_env6]",

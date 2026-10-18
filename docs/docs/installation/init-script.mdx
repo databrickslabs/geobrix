@@ -1,6 +1,6 @@
 ---
 sidebar_label: Init Script (Legacy)
-description: Install the GeoBrix heavyweight tier on a classic x86 cluster with the versioned GDAL init script and a hash-verified bundle staged in a Unity Catalog Volume.
+description: Install the GeoBrix heavyweight tier, and with the wheel the lightweight tier too, on a classic x86 cluster with the versioned GDAL init script and a hash-verified bundle staged in a Unity Catalog Volume.
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
@@ -13,19 +13,20 @@ The init-script path installs the **heavyweight tier** on a classic x86 cluster:
 script installs native GDAL from a pre-built, hash-verified bundle staged in a Unity Catalog Volume,
 and puts the Scala JAR in place. A single JAR plus the init script provide all three heavyweight
 packages — RasterX (`gbx_rst_*`), GridX (`gbx_bng_*`), and VectorX (`gbx_st_*`) — together with the
-GDAL/OGR readers.
+GDAL/OGR readers. The GeoBrix wheel is attached to the same cluster as a library (step 4), so the
+cluster runs **both tiers**.
 
 **Why "legacy":** GeoBrix is moving to [Databricks Container Service](./dcs.mdx) as the preferred
 packaging for the heavyweight tier — the container image already carries native GDAL, so nothing is
 installed at cluster start. The init script is the older route, still supported for compute the DCS
 image doesn't cover yet. Today the GeoBrix image is verified on dedicated Graviton (arm64) clusters
-with DBR 19; x86 (amd64) and DBR 17.3 / 18 are not yet covered, so on x86 clusters use the steps on
-this page.
+with DBR 19; x86 (amd64) and DBR 17.3 / 18 images are not yet available, so on x86 clusters use the
+steps on this page.
 
 If you only need the lightweight tier, you need none of this — see
 [WHL-only (Lightweight)](../installation.mdx#whl-only).
 
-![Init Script (Legacy) flow, the older heavyweight route still supported where the DCS image does not reach yet — step 1, stage on a Volume: VOL_DIR is an isolated Unity Catalog Volume folder holding only the GDAL tarball (the versioned geobrix-gdal-artifacts noble tarball, artifacts or platform variation, one not both), its .sha256 sidecar, and at most one geobrix jar-with-dependencies JAR (used with the platform tarball) — nothing else, never a shared folder of artifacts; step 2, geobrix-gdal-init.sh runs at cluster start, versioned per release with only VOL_DIR edited, and checks the architecture is amd64, verifies the tarball against the sidecar, extracts and verifies the SHA256SUMS manifest, installs the bundled GDAL, PROJ and GEOS .debs, installs the bundled GDAL wheels without PyPI, and copies libgdalalljni.so and the JAR into place; step 3, a classic x86 cluster on DBR 17.3, 18 or 19 (Ubuntu 24.04) with Intel or AMD x86_64 instances and the GeoBrix wheel as a cluster library runs the heavyweight tier; a warning strip explains that the script glob-copies every geobrix jar-with-dependencies JAR in VOL_DIR, so a mixed folder gives a nondeterministic classpath](../../../resources/images/diagrams/installation/installation-init-script.png)
+![Init Script (Legacy) flow, the older heavyweight route still supported where the DCS image does not reach yet — step 1, stage on a Volume: VOL_DIR is an isolated Unity Catalog Volume folder holding only the GDAL tarball (the versioned geobrix-gdal-artifacts noble tarball, artifacts or platform variation, one not both), its .sha256 sidecar, and at most one geobrix jar-with-dependencies JAR (used with the platform tarball) — nothing else, never a shared folder of artifacts; step 2, geobrix-gdal-init.sh runs at cluster start, versioned per release with only VOL_DIR edited, and checks the architecture is amd64, verifies the tarball against the sidecar, extracts and verifies the SHA256SUMS manifest, installs the bundled GDAL, PROJ and GEOS .debs, installs the bundled GDAL wheels without PyPI, and copies libgdalalljni.so and the JAR into place; step 3, a classic x86 cluster on DBR 17.3, 18 or 19 (Ubuntu 24.04) with Intel or AMD x86_64 instances and the GeoBrix wheel as a cluster library runs both the lightweight and heavyweight tiers; a warning strip explains that the script glob-copies every geobrix jar-with-dependencies JAR in VOL_DIR, so a mixed folder gives a nondeterministic classpath](../../../resources/images/diagrams/installation/installation-init-script.png)
 
 :::warning Keep `VOL_DIR` isolated
 `VOL_DIR` — the Volume folder the init script reads — must hold **only** the GeoBrix GDAL tarball
@@ -147,7 +148,8 @@ The init script does **not** install the GeoBrix wheel
 Library via the Databricks UI (see step 4 below). Only the GDAL toolchain wheels
 bundled inside the release tarball (`pip`, `setuptools`, `wheel`, `cython`,
 `numpy`, `GDAL`) are installed by this script. This lets the GeoBrix Python wheel
-be bumped independently of the GDAL platform layer.
+be bumped independently of the GDAL platform layer. With the wheel attached, the cluster also runs
+the lightweight tier.
 :::
 
 Preview of the first 10 lines — expand below for the full script (~400 lines).

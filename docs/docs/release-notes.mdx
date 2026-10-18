@@ -18,9 +18,9 @@ This page tracks **API and naming changes** across GeoBrix releases — the sing
 v0.5.3 is under development and not yet released.
 :::
 
-Incremental ingestion of new and changed files with Auto Loader, a multi-format Lakeflow
-connector, and fixes for very large and domain-coded vector sources and one field-type mapping
-shared by both vector reader tiers.
+Incremental ingestion of new and changed files with Auto Loader that sets unreadable data aside
+instead of failing, a multi-format Lakeflow connector, and fixes for very large and domain-coded
+vector sources and one field-type mapping shared by both vector reader tiers.
 
 ### Incremental ingestion — `read_paths` and `declare_ingest` (new)
 
@@ -37,29 +37,63 @@ shared by both vector reader tiers.
   choosing what happens when a file is overwritten: `scd2` (the default; rows are append-only and
   a versions table with a `_current` view records each content version), `replace` (latest content
   only) or `append` (every delivery). See [Auto Loader ingestion](./ingestion/auto-loader).
-- **`declare_ingest` sets bad records aside.** With `on_error="quarantine"` (the default), data
-  that cannot be read is written to `<table>_bad_records` (created when the first one is found),
-  with its file, where in the file it was and the reader's error, and the rest is written to the
-  table. A bad record is the smallest part of a file the reader can set aside: a feature, a
-  GeoJSONSeq line, a raster tile window, a run of LiDAR points, a PMTiles tile, a NetCDF variable
-  or slice, or the whole file. `on_error="fail"` fails the update instead. See
-  [Unreadable data](./ingestion/auto-loader#unreadable-data).
-- **Quarantine stages each micro-batch under `source_dir`.** The pipeline stages it in a hidden
-  `.gbx_scratch` folder that is removed when the micro-batch ends, so it must be able to write
-  there. Pass `scratch_dir` to stage it somewhere else when the landing folder is read-only.
-- **`<target>_current` shows each file's newest readable version.** A file whose latest delivery
-  could not be read keeps showing the rows of its last readable version. Under quarantine,
-  `on_change="replace"` likewise keeps a file's last readable rows when its new delivery cannot be
-  read at all.
-- **A NULL or empty geometry is data, not a bad record.** A feature without a location, or a
-  `POINT EMPTY`, is written like any other row. GDAL also returns NULL for a geometry it cannot
-  decode, so such a feature is written with a NULL geometry; query the geometry column with
-  `IS NULL` and `ST_IsEmpty` to watch for them.
-- **`read_paths(on_error="skip")` skips what cannot be read** and logs a warning in the executor
-  logs; the default, `on_error="fail"`, fails the read with an error that names the file.
 - **GeoJSON is matched by its `.geojson` extension only.** The default file pattern for
   `geojson_gbx` (and `vector_gbx`) does not include `.json`; for GeoJSON files with that
   extension pass `glob="*.{geojson,json}"`.
+
+### Bad data in ingestion — `on_error` (new)
+
+- **`declare_ingest` sets bad records aside.** With `on_error="quarantine"` (the default), each
+  file is read on its own: what cannot be read is written to `<table>_bad_records` (created when
+  the first one is found) and the rest goes to the table, including the rows read from a file
+  before an error in it. `on_error="fail"` fails the update on the first error, with an error that
+  names the file. With `on_change="append"` there is no bad-records table: bad records are skipped
+  with a warning in the executor logs. See [Unreadable data](./ingestion/auto-loader#unreadable-data).
+- **`<table>_bad_records` says which file, where in it and why.** One row per bad record:
+  `_source_path`, `_source_mtime`, `_source_hash`, `_source_size`, `record_index` (`NULL` for the
+  whole file), `error_class`, `error_message`, `raw` (what could be recovered, as JSON of at most
+  4096 characters) and `quarantined_at`. See
+  [Query the bad records](./ingestion/auto-loader#query-the-bad-records).
+- **A bad record is the smallest part of a file its reader can set aside:** a vector feature
+  whose geometry bytes are not readable or whose text is not valid UTF-8, a GeoJSONSeq line, a
+  GeoPackage feature on a corrupt page (by `fid`), a raster tile window, a run of LiDAR points, a
+  PMTiles tile, a NetCDF variable or slice, a `.jpg` that is not a JPEG, or the whole file. A LAZ
+  file with a corrupt chunk keeps the points around it, a truncated LAS file keeps its complete
+  points, and a NetCDF-3 file shorter than its header declares is set aside (CDF-5 files are read
+  as they are). See [Unreadable files](./ingestion/read-paths#unreadable-files) for each format.
+- **A NULL or empty geometry is data, not a bad record.** A feature without a location, a
+  `POINT EMPTY`, and a curve or surface (with `asWKB="false"` those are set aside, because WKT
+  cannot hold them) are written like any other row. GDAL also returns NULL for a geometry it cannot
+  decode, so such a feature is written with a NULL geometry; query the geometry column with
+  `IS NULL` and `ST_IsEmpty` to watch for them. A JPEG without an end marker (a truncated scan, a
+  Motion Photo) and a very large JPEG are read as well, and the records a `.dbf` marks deleted
+  are not counted as features that went unread.
+- **Errors of the environment fail the update instead.** Out of memory, a missing module (such as
+  a LAZ decompression backend), an I/O error of the Volume (retried first) and an image too large
+  for `exif_gbx` `qc` mode are not about the data, so no bad record is written: the task is
+  retried, or the update fails with that error.
+- **A delivery set aside entirely is not read again.** A delivery none of whose rows could be
+  read gets one `NothingReadable` bad record, and an identical re-delivery is skipped. To read it
+  again, after fixing a reader option for example, delete the file's `NothingReadable` rows from
+  `<table>_bad_records`, then touch the file or deliver it again. A delivery that was partly read
+  is skipped as stored: delete its rows for that `_source_hash` from the table first, or deliver
+  changed content.
+- **`scratch_dir` sets where a micro-batch is staged.** Quarantine reads the files once and stages
+  the micro-batch in a hidden `.gbx_scratch` folder under `scratch_dir` (a `/Volumes` folder;
+  default `source_dir`), in a subfolder for each target table that is removed when the
+  micro-batch ends; one left by a killed micro-batch is removed after 24 hours. The pipeline must
+  be able to write there, so a read-only landing folder needs a `scratch_dir` it can write (or
+  `on_error="fail"`). Bad records are appended before the rows, skipping those already there, so a
+  retried micro-batch neither loses nor repeats them.
+- **`<target>_current` shows each file's newest readable version.** A file whose latest delivery
+  could not be read keeps showing the rows of its last readable version. An existing `_current`
+  view is replaced when its definition differs, the next time a micro-batch writes rows. Under
+  `on_change="replace"`, a file keeps its last readable rows when its new delivery cannot be read
+  at all; a delivery that is partly readable replaces them with the rows that were read.
+- **Rows tables created in quarantine mode keep the reader's `NOT NULL` columns.**
+- **`read_paths(on_error="skip")` skips what cannot be read** and logs a warning in the executor
+  logs; the default, `on_error="fail"`, fails the read with an error that names the file. The
+  [Lakeflow connector](./ingestion/lakeflow-connector) always fails the read on an unreadable file.
 
 ### Lakeflow connector — one multi-format connector (new)
 
@@ -153,9 +187,9 @@ formats.
   archive once and reads just the tile ranges of each partition, so the read cost no longer grows
   with the number of partitions. With `source="raster"`, each source raster is staged once per
   worker process instead of once per partition. See [PMTiles Reader](./readers/pmtiles).
-- **A damaged PMTiles header can no longer crash a worker.** A header whose length field was
-  garbled made the range read try to allocate that many bytes. Reads now stop at the end of the
-  file, so such an archive fails with an error instead.
+- **A damaged PMTiles header cannot crash a worker.** Range reads stop at the end of the file,
+  so an archive whose header declares a length far beyond its end fails with an error instead of
+  trying to allocate that many bytes.
 
 ### NetCDF reader
 

@@ -16,14 +16,15 @@ in order. The GeoBrix lightweight tier runs inside a pipeline, and both pipeline
 share: the pipeline environment, Serverless notes, the SDP building blocks GeoBrix uses, and
 deploying a pipeline as code.
 
-![Lakeflow SDP pattern — files land in a Volume folder; a bronze streaming table over an Auto Loader cloudFiles binaryFile stream lists each new file by path and modification time without loading its bytes; silver reads the listed files with read_paths and a light reader, giving rows plus lineage; gold materialized views build aggregates, H3 grids and map-ready tables. In Wireless Coverage, the bronze laz_inventory streaming table lists staged USGS 3DEP .laz files and the silver wc_lidar_pts streaming table reads only newly inventoried tiles with read_paths, from which materialized views build DSM, DTM and CHM surfaces, H3 grids and tower viewsheds. In Vapor-Eyes, five raw sources get one Auto Loader streaming-table inventory each, silver materialized views read the inventoried satellite files with read_paths for detection and attribution, and gold holds map-ready tables, PMTiles and an AI/BI dashboard. A streaming table reads only new files at each update; a materialized view that calls GeoBrix Python UDFs is recomputed in full](../../../resources/images/diagrams/ingestion/ingestion-lakeflow-sdp.png)
+![Lakeflow SDP pattern — files land in a Volume folder; a bronze streaming table over an Auto Loader cloudFiles binaryFile stream lists each new file by path and modification time without loading its bytes; silver reads the listed files with read_paths and a light reader, giving rows plus lineage; gold materialized views build aggregates, H3 grids and map-ready tables. In Wireless Coverage, the bronze laz_inventory streaming table lists staged USGS 3DEP .laz files and the silver wc_lidar_pts streaming table reads only newly inventoried tiles with read_paths; materialized views build DSM, DTM and CHM surfaces and H3 grids from them, and a job task after the pipeline adds tower viewsheds. In Vapor-Eyes, five raw sources get one Auto Loader streaming-table inventory each, silver materialized views read the inventoried satellite files with read_paths for detection and attribution, and gold holds map-ready tables, PMTiles and an AI/BI dashboard. A streaming table reads only new files at each update; a materialized view that calls GeoBrix Python UDFs is recomputed in full](../../../resources/images/diagrams/ingestion/ingestion-lakeflow-sdp.png)
 
 :::tip Production examples
 Two GeoBrix examples ship as complete Lakeflow SDP bundles. Each opens on its Lakeflow tab:
 - **[Wireless Coverage](../notebooks/wireless-coverage?flavor=lakeflow)**: a production SDP
   bundle. An Auto Loader `laz_inventory` streaming table inventories staged USGS 3DEP LiDAR,
   [`read_paths`](./read-paths) reads the inventoried files, and materialized views build DSM, DTM
-  and CHM surfaces and H3 tower viewsheds from them. Its silver table
+  and CHM surfaces and H3 grids from them; a job task after the pipeline computes the tower
+  viewsheds. Its silver table
   [`wc_lidar_pts`](../notebooks/wireless-coverage?flavor=lakeflow) is a streaming table: each
   update reads only the newly inventoried tiles, with `read_paths` over the bronze inventory
   stream. Shows streaming tables over Auto Loader, `read_paths` in a streaming table, and an Asset

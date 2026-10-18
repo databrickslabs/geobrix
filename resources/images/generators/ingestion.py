@@ -792,7 +792,8 @@ def body_sdp():
                 ),
                 (
                     "H3 grids + viewsheds",
-                    "built from DSM, DTM and CHM surfaces, as materialized views",
+                    "materialized views over the surfaces; a job task after the "
+                    "pipeline adds tower viewsheds",
                     None,
                     False,
                 ),

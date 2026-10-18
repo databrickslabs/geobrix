@@ -54,7 +54,7 @@ gbx:versions:bump --from 0.5.0 --to 0.5.1
 1. `pom.xml`, `__init__.py`, and `docs/package.json` all read the new version.
 2. `git grep -n "<OLD>-py3-none-any.whl\|<OLD>-jar-with-dependencies"` returns nothing.
 3. `git grep -n "Current version: <OLD>"` returns nothing.
-4. Build sanity: the wheel builds as `dblabs_geobrix-<NEW>-*.whl`, the JAR as `geobrix-<NEW>-jar-with-dependencies.jar`.
+4. Build sanity: the wheel builds as `geobrix-<NEW>-py3-none-any.whl`, the JAR as `geobrix-<NEW>-jar-with-dependencies.jar`.
 5. Run affected tests: function-info, bindings/parity, and any JAR-path-pinned conftest or parity test.
 
 ## Release flow (after the bump PR merges to `main`)

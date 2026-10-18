@@ -195,7 +195,7 @@ echo -e "${CYAN}Verify (after applying):${NC}"
 echo -e "  1. ${YELLOW}pom.xml${NC}, ${YELLOW}__init__.py${NC}, ${YELLOW}docs/package.json${NC} all read ${GREEN}${NEW_VER}${NC}."
 echo -e "  2. ${YELLOW}git grep -n \"${OLD_VER}-py3-none-any.whl\\|${OLD_VER}-jar-with-dependencies\"${NC} returns nothing."
 echo -e "  3. ${YELLOW}git grep -n \"Current version: ${OLD_VER}\"${NC} returns nothing."
-echo -e "  4. Build sanity: wheel builds as ${GREEN}dblabs_geobrix-${NEW_VER}-*.whl${NC}, JAR as ${GREEN}geobrix-${NEW_VER}-jar-with-dependencies.jar${NC}"
+echo -e "  4. Build sanity: wheel builds as ${GREEN}geobrix-${NEW_VER}-py3-none-any.whl${NC}, JAR as ${GREEN}geobrix-${NEW_VER}-jar-with-dependencies.jar${NC}"
 echo -e "     (the release workflow parses VERSION from the JAR name)."
 echo -e "  5. Run affected tests: function-info, bindings/parity, and any JAR-path-pinned conftest/parity test."
 show_separator

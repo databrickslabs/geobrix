@@ -76,9 +76,9 @@ const sidebars = {
       collapsed: true,
       link: { type: 'doc', id: 'ingestion/overview' },
       items: [
+        'ingestion/lakeflow-connector',
         'ingestion/lakeflow-sdp',
         'ingestion/auto-loader',
-        'ingestion/lakeflow-connector',
         'ingestion/read-paths',
       ],
     },

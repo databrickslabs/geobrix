@@ -50,7 +50,7 @@ HEADER_CARD_GAP = 14
 CARD_W = 580
 LANDSCAPE_W = PAD * 2 + CARD_W * 2 + COL_GAP
 
-# --- Data: 26 functions used by the Vapor-Eyes Lakeflow example -----------
+# --- Data: 27 functions used by the Vapor-Eyes Lakeflow example -----------
 
 GEOBRIX_CARDS = [
     Card(
@@ -67,9 +67,9 @@ GEOBRIX_CARDS = [
     ),
     Card(
         title="Light readers",
-        subtitle="Serverless DataSources (no JAR)",
+        subtitle="Serverless DataSources + read_paths (no JAR)",
         color="#2E8B57", tint="#E0F4EA",
-        fns=["netcdf_gbx", "geojson_gbx", "shapefile_gbx", "gtiff_gbx"],
+        fns=["read_paths", "netcdf_gbx", "geojson_gbx", "shapefile_gbx", "gtiff_gbx"],
     ),
 ]
 

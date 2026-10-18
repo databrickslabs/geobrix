@@ -40,9 +40,9 @@ Each stage reads only the one before it — declared as table-to-table dependenc
 
 ## Spatial functions used
 
-The pipeline composes **GeoBrix** functions with Databricks' **built-in spatial SQL and H3** — RasterX for raster ops, VectorX + PMTiles for tiles, the light-tier readers for Serverless ingest, and native `st_*` / `h3_*` for geometry and gridding.
+The pipeline composes **GeoBrix** functions with Databricks' **built-in spatial SQL and H3** — RasterX for raster ops, VectorX + PMTiles for tiles, the light-tier readers (run over the bronze inventories by `read_paths`) for Serverless ingest, and native `st_*` / `h3_*` for geometry and gridding.
 
-![Spatial functions used across the Vapor-Eyes Lakeflow example — GeoBrix RasterX, VectorX + PMTiles, and light readers, plus Databricks built-in ST and H3 functions](../../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-functions.png)
+![Spatial functions used across the Vapor-Eyes Lakeflow example — GeoBrix RasterX, VectorX + PMTiles, and light readers with read_paths, plus Databricks built-in ST and H3 functions](../../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-functions.png)
 
 ---
 

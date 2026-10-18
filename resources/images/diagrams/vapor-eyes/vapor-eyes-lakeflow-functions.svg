@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1256 710" width="1256" height="710" style="font-family: Inter, -apple-system, system-ui, sans-serif;">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1256 746" width="1256" height="746" style="font-family: Inter, -apple-system, system-ui, sans-serif;">
 <defs><filter id="card-shadow" x="-5%" y="-5%" width="110%" height="115%"><feDropShadow dx="0" dy="2" stdDeviation="6" flood-color="#0F1B2A" flood-opacity="0.08"/></filter><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FAFBFC"/><stop offset="1" stop-color="#F1F4F8"/></linearGradient></defs>
-<rect x="0" y="0" width="1256" height="710" fill="url(#bg)"/>
+<rect x="0" y="0" width="1256" height="746" fill="url(#bg)"/>
 <text x="36" y="64" font-size="30" font-weight="800" fill="#0F1B2A">GeoBrix &#183; Vapor-Eyes Lakeflow</text>
 <text x="36" y="92" font-size="15" fill="#3F4D5E">Every GeoBrix and Databricks built-in spatial/H3 function used in the example</text>
 <rect x="1156" y="44" rx="13" ry="13" width="64" height="26" fill="#0F1B2A"/><text x="1188.0" y="62" text-anchor="middle" font-size="12" font-weight="700" fill="#FFFFFF">v0.5.3</text>
@@ -23,15 +23,16 @@
 <text x="58" y="440" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" fill="#5A6878">Vector tiles &amp; PMTiles output</text>
 <rect x="58.0" y="462.0" rx="13" ry="13" width="184" height="28" fill="#D5ECEC" stroke="#0F8E8B" stroke-opacity="0.35" stroke-width="1"/><text x="150.0" y="480.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#0F8E8B" font-weight="600">gbx_st_asmvt_pyramid</text>
 <rect x="250.0" y="462.0" rx="13" ry="13" width="112" height="28" fill="#D5ECEC" stroke="#0F8E8B" stroke-opacity="0.35" stroke-width="1"/><text x="306.0" y="480.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#0F8E8B" font-weight="600">pmtiles_agg</text>
-<rect x="36" y="538" rx="14" ry="14" width="580" height="136" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
+<rect x="36" y="538" rx="14" ry="14" width="580" height="172" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
 <path d="M 36 552 A 14 14 0 0 1 50 538 H 602 A 14 14 0 0 1 616 552 V 543 H 36 Z" fill="#2E8B57"/>
-<rect x="537" y="564" rx="11" ry="11" width="57" height="22" fill="#2E8B57"/><text x="565.5" y="579.5" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">4 fns</text>
+<rect x="537" y="564" rx="11" ry="11" width="57" height="22" fill="#2E8B57"/><text x="565.5" y="579.5" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">5 fns</text>
 <text x="58" y="578" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="20" font-weight="800" fill="#1B3139">Light readers</text>
-<text x="58" y="598" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" fill="#5A6878">Serverless DataSources (no JAR)</text>
-<rect x="58.0" y="620.0" rx="13" ry="13" width="104" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="110.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">netcdf_gbx</text>
-<rect x="170.0" y="620.0" rx="13" ry="13" width="112" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="226.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">geojson_gbx</text>
-<rect x="290.0" y="620.0" rx="13" ry="13" width="128" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="354.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">shapefile_gbx</text>
-<rect x="426.0" y="620.0" rx="13" ry="13" width="96" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="474.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">gtiff_gbx</text>
+<text x="58" y="598" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" fill="#5A6878">Serverless DataSources + read_paths (no JAR)</text>
+<rect x="58.0" y="620.0" rx="13" ry="13" width="104" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="110.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">read_paths</text>
+<rect x="170.0" y="620.0" rx="13" ry="13" width="104" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="222.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">netcdf_gbx</text>
+<rect x="282.0" y="620.0" rx="13" ry="13" width="112" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="338.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">geojson_gbx</text>
+<rect x="402.0" y="620.0" rx="13" ry="13" width="128" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="466.0" y="638.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">shapefile_gbx</text>
+<rect x="58.0" y="656.0" rx="13" ry="13" width="96" height="28" fill="#E0F4EA" stroke="#2E8B57" stroke-opacity="0.35" stroke-width="1"/><text x="106.0" y="674.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#2E8B57" font-weight="600">gtiff_gbx</text>
 <rect x="640" y="186" rx="14" ry="14" width="580" height="208" fill="#FFFFFF" stroke="#E5E7EB" stroke-width="1" filter="url(#card-shadow)"/>
 <path d="M 640 200 A 14 14 0 0 1 654 186 H 1206 A 14 14 0 0 1 1220 200 V 191 H 640 Z" fill="#D49213"/>
 <rect x="1134" y="212" rx="11" ry="11" width="64" height="22" fill="#D49213"/><text x="1166.0" y="227.5" text-anchor="middle" font-family="Inter, -apple-system, system-ui, sans-serif" font-size="12" font-weight="700" fill="#FFFFFF">12 fns</text>
@@ -57,6 +58,6 @@
 <rect x="662.0" y="498.0" rx="13" ry="13" width="136" height="28" fill="#FAECE3" stroke="#D44E12" stroke-opacity="0.35" stroke-width="1"/><text x="730.0" y="516.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#D44E12" font-weight="600">h3_longlatash3</text>
 <rect x="806.0" y="498.0" rx="13" ry="13" width="152" height="28" fill="#FAECE3" stroke="#D44E12" stroke-opacity="0.35" stroke-width="1"/><text x="882.0" y="516.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#D44E12" font-weight="600">h3_boundaryaswkb</text>
 <rect x="966.0" y="498.0" rx="13" ry="13" width="136" height="28" fill="#FAECE3" stroke="#D44E12" stroke-opacity="0.35" stroke-width="1"/><text x="1034.0" y="516.0" text-anchor="middle" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="13" fill="#D44E12" font-weight="600">h3_centeraswkb</text>
-<text x="36" y="696" font-size="11" fill="#7A8794">databrickslabs/geobrix &#183; Lakeflow SDP + AI/BI</text>
-<text x="1220" y="696" text-anchor="end" font-size="11" fill="#7A8794">examples/notebooks/vapor-eyes/lakeflow</text>
+<text x="36" y="732" font-size="11" fill="#7A8794">databrickslabs/geobrix &#183; Lakeflow SDP + AI/BI</text>
+<text x="1220" y="732" text-anchor="end" font-size="11" fill="#7A8794">examples/notebooks/vapor-eyes/lakeflow</text>
 </svg>

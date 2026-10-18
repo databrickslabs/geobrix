@@ -249,6 +249,20 @@ formats.
   together; `laspy` 2.7 requires `lazrs` 0.8).
 - **Photogrammetry extras:** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 
+### Examples
+
+- **Wireless Coverage Lakeflow: `wc_lidar_pts` is a streaming table (behavior change; upgrade
+  step).** The silver LiDAR table now reads, with `read_paths`, only the `.laz` tiles that reached
+  the `laz_inventory` stream since the last update, instead of re-reading every tile (about 817 M
+  points for full San Francisco) on each update. **Upgrading a deployment** of the earlier example
+  needs a one-time rebuild: the first update fails with `CANNOT_CHANGE_DATASET_TYPE`, which a full
+  refresh does not fix, so run `DROP MATERIALIZED VIEW <catalog>.<schema>.wc_lidar_pts` once and
+  then run the pipeline. Rows keep the settings of the update that read them: after changing
+  `full_aoi`, `tile_m` or `srid`, run the pipeline with `--full-refresh wc_lidar_pts`, and after
+  changing `laz_dir` with `--full-refresh laz_inventory,wc_lidar_pts`. Tiles deleted from the
+  Volume keep their points until such a reset. See
+  [Wireless Coverage](./notebooks/wireless-coverage).
+
 ---
 
 ## What's new in v0.5.2

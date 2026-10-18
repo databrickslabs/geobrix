@@ -5,6 +5,8 @@ A production-ready **Wireless Coverage pipeline**: a [Lakeflow Declarative Pipel
 > **Requires GeoBrix 0.5.3 or newer** (the silver step reads the LiDAR with `read_paths`, new in 0.5.3). The pipeline installs `geobrix[light_dbr18,vizx,stac,overture]` and the serverless job tasks install `geobrix[light_env5,vizx,stac,overture]` — the protobuf-5 extras that match the Lakeflow runtime **as of this example (DBR 18.3)**. Lakeflow pins its compute by a runtime channel; **check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch to the matching GeoBrix extra** if it has moved (e.g. a DBR 19 channel → `[light_dbr19]` / `[light_env6]`) — the extra and the compute runtime must agree. The `gbx_wheel` variable must point at `geobrix-0.5.3-py3-none-any.whl` or newer, staged on a Unity Catalog Volume.
 >
 > **Compute:** the bundle **defaults to Serverless** (both the pipeline and the job tasks), which runs the whole medallion. For heavier runs — notably **full San Francisco** (`full_aoi=true`), where the LiDAR binning / TIN / H3 work is large — you can switch to **classic compute** (a sized cluster) for dedicated memory and throughput: set `serverless: false` plus a `clusters:` block on the pipeline, and `job_clusters` / `new_cluster` on the job tasks (match the cluster DBR to the GeoBrix extra). Serverless is the default and is sufficient for the demo window.
+>
+> **`wc_lidar_pts` is a streaming table.** Each update reads, with `read_paths`, only the `.laz` tiles that arrived on the `laz_inventory` stream since the last update, instead of re-reading every tile (about 817 M points for full San Francisco). **Upgrading a deployment of an earlier version of this example**, where `wc_lidar_pts` was a materialized view, needs a one-time drop and rebuild of that table: the first update otherwise fails with `CANNOT_CHANGE_DATASET_TYPE`. Changing `full_aoi`, `tile_m`, `srid` or `laz_dir` on a deployed pipeline now needs a full refresh of `wc_lidar_pts`. See [Streaming `wc_lidar_pts`: upgrade and resets](#streaming-wc_lidar_pts-upgrade-and-resets).
 
 This is the production counterpart to the [Wireless Coverage notebook series](../README.md). It runs the same San Francisco AOI and USGS 3DEP LiDAR data, but as a **scheduled medallion pipeline** rather than one-off notebook outputs: a `land` downloader task stages the raw data, the Lakeflow pipeline cascades it bronze → silver → gold, a `siting` task runs the H3-native tower analysis at scale, and a `validate` notebook confirms all outputs.
 
@@ -18,7 +20,7 @@ A scheduled run moves raw `.laz` files through six stages:
 
 1. **Land** — a downloader task (`land/land.py`) stages USGS 3DEP LiDAR EPT nodes and Overture water polygons onto a Unity Catalog Volume. Nothing is interpreted yet — data just arrives.
 2. **Bronze — inventory** — Auto Loader records one row per `.laz` file as it appears (`laz_inventory`), so re-runs pick up only newly staged data.
-3. **Silver — surface stack** — GeoBrix `read_paths` reads exactly the `.laz` files the inventory lists; the classified returns are tile-indexed (`wc_lidar_pts`) and binned into 1 m DSM and TIN DTM rasters per tile (`wc_surface_dsm`, `wc_surface_dtm`); `rst_chm` derives the Canopy Height Model (`wc_surface_chm`).
+3. **Silver — surface stack** — GeoBrix `read_paths` reads the `.laz` files as they arrive on the inventory stream, so each update parses only the newly staged tiles; the classified returns are tile-indexed in the streaming table `wc_lidar_pts` and binned into 1 m DSM and TIN DTM rasters per tile (`wc_surface_dsm`, `wc_surface_dtm`); `rst_chm` derives the Canopy Height Model (`wc_surface_chm`).
 4. **Gold — H3 grids** — the surfaces are reprojected to EPSG:4326, isobanded, and indexed to H3 cells at resolution 10 (`wc_h3_dem_res10`, `wc_h3_dsm_res10`, `wc_h3_chm_res10`). Each table carries a stable res-9 join key so downstream consumers join on one column.
 5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis: a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors (distributed via `h3_viewshed_towers` — one tower per Spark task, Serverless fan-out). Writes seven regular Delta tables.
 6. **Validate** — a final notebook task confirms all output tables are populated and spot-checks key quality assertions.
@@ -28,7 +30,7 @@ Each stage reads only the one before it — declared as table-to-table dependenc
 ## What it uses from GeoBrix
 
 - **Bronze**: a plain Auto Loader `binaryFile` stream lists the staged `.laz` files (`laz_inventory`); it reads no point data.
-- **Silver**: [`read_paths`](https://databrickslabs.github.io/geobrix/docs/ingestion/read-paths) runs the `lidar_gbx` reader over the files that inventory lists (`wc_lidar_pts`), one row per return plus `_source_path` (the file it came from), spread over 512 tasks, with `on_error="skip"`, so a file that cannot be decoded is skipped with a warning in the executor logs and the pipeline keeps going instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](https://databrickslabs.github.io/geobrix/docs/ingestion/lakeflow-sdp) for the pipeline setup.
+- **Silver**: [`read_paths`](https://databrickslabs.github.io/geobrix/docs/ingestion/read-paths) runs the `lidar_gbx` reader over the files that arrive on the inventory stream (`wc_lidar_pts`, a streaming table: each update reads only the tiles inventoried since the last one), one row per return plus `_source_path` (the file it came from), spread over 512 tasks, with `on_error="skip"`, so a file that cannot be decoded is skipped with a warning in the executor logs and the pipeline keeps going instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](https://databrickslabs.github.io/geobrix/docs/ingestion/lakeflow-sdp) for the pipeline setup.
 - **Surfaces and grids**: RasterX on Serverless: `bin_points_tiled`, `rst_dtmfromgeoms_agg` and `rst_chm` build the surfaces; `rst_transform`, `rst_clip`, `rst_isoband` and `gbx_rst_h3_rastertogridmax` turn them into the H3 grids.
 
 ## What a run looks like
@@ -39,7 +41,9 @@ The bundle deploys one job, `wireless_coverage_lf_job`, whose four tasks run in 
 
 Opening the `pipeline` task shows the medallion lineage Lakeflow derived from the table-to-table dependencies. On a full San Francisco run, ~817 M classified LiDAR returns (`wc_lidar_pts`) bin into a few hundred 1 m DSM / DTM / CHM surface tiles, which roll up into the res-10 H3 gold grids:
 
-![A full San Francisco wireless_coverage_lf_pipeline run: wc_lidar_pts (817 M records) feeding wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands, and the gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids, each materialized view with its duration, output record count, and expectations.](../../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
+![A full San Francisco wireless_coverage_lf_pipeline run: wc_lidar_pts (817 M records) feeding wc_surface_dsm, wc_surface_dtm, and wc_surface_chm, then wc_dem_clipped and wc_dem_isobands, and the gold wc_h3_dem_res10, wc_h3_dsm_res10, and wc_h3_chm_res10 grids, each dataset with its type, duration, output record count, and expectations. This run is from an earlier version of the example, where wc_lidar_pts was a materialized view.](../../../../resources/images/screenshots/wireless-coverage/wc-lf-pipeline-run.png)
+
+This run is from an earlier version of the example, where `wc_lidar_pts` was a materialized view that re-read every tile on each update (shown as *Full recompute*). It is now a streaming table: after the first update, an update reads only the newly inventoried tiles.
 
 ---
 
@@ -80,7 +84,7 @@ All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_cov
 
 | Table | Description |
 |---|---|
-| `wc_lidar_pts` | Classified LiDAR returns read from the inventoried `.laz` files with `read_paths`, tile-indexed with a res-15 H3 cell ID (`cellid_r15`, EPSG:3857), plus `_source_path` (the file each return came from). |
+| `wc_lidar_pts` | **Streaming table** — classified LiDAR returns read with `read_paths` from the `.laz` files on the `laz_inventory` stream (each update reads only the newly inventoried tiles), tile-indexed with a res-15 H3 cell ID (`cellid_r15`, EPSG:3857), plus `_source_path` (the file each return came from). |
 | `wc_surface_dsm` | DSM — max elevation of all returns per 1 m tile (EPSG:3857). |
 | `wc_surface_dtm` | DTM — Delaunay-TIN bare earth over class-2 ground returns (gap-free, EPSG:3857). |
 | `wc_surface_chm` | CHM — `rst_chm(DSM, DTM)`: canopy/structure height in metres, clamped ≥ 0. |
@@ -141,6 +145,41 @@ The override file is layered in automatically via `include: ["*.override.yml"]`.
 - **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~830 MB download.
 - **GeoBrix wheel**: `gbx_wheel` defaults to a staged `geobrix-0.5.3-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
 
+### Streaming `wc_lidar_pts`: upgrade and resets
+
+`wc_lidar_pts` is a streaming table over the `laz_inventory` stream. The first update reads every inventoried tile; each later update reads only the tiles inventoried since, so a daily run parses just the newly staged data. Each row keeps the settings of the update that read it.
+
+**Upgrading an existing deployment.** In earlier versions of this example `wc_lidar_pts` was a materialized view. A pipeline table cannot change type in place, so the first update after `databricks bundle deploy` fails with:
+
+```
+[CANNOT_CHANGE_DATASET_TYPE] Cannot change the dataset type of a pipeline table from MATERIALIZED_VIEW to STREAMING_TABLE for `geospatial_docs`.`wireless_coverage_lf`.`wc_lidar_pts`.
+To change the dataset type, please drop the existing dataset first.
+```
+
+A full refresh fails with the same error, and the failed update still resets the tables it names: a full refresh that names `laz_inventory` empties the inventory. Drop the old table once, in your catalog and schema, then run the pipeline. The update rebuilds `wc_lidar_pts` from every inventoried tile (for full San Francisco about 817 M points, read in about 5 minutes on Serverless):
+
+```sql
+DROP MATERIALIZED VIEW geospatial_docs.wireless_coverage_lf.wc_lidar_pts;
+```
+
+```bash
+# rebuild the points only
+databricks bundle run wireless_coverage_lf_pipeline --refresh laz_inventory,wc_lidar_pts
+# or the whole run: points, surfaces, grids, siting and validation
+databricks bundle run wireless_coverage_lf_job
+```
+
+**Settings that need a reset.** A setting `wc_lidar_pts` applies while it reads a tile holds only for the tiles read after the change. Reset the table after changing one of them, so that every tile is read again:
+
+| Change | Run |
+|---|---|
+| `full_aoi` (the AOI clip and the tile grid), `wireless_coverage.tile_m`, `wireless_coverage.srid`, or a GeoBrix upgrade that changes the LiDAR reader | `databricks bundle run wireless_coverage_lf_pipeline --full-refresh wc_lidar_pts` |
+| `laz_dir` (or `volume`, which sets the default LAZ folder) | `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts` |
+
+The other settings (`simplify`, `water_mask_dir`, `wireless_coverage.pixel_m`, `wireless_coverage.tin_max_pts`, `h3_res` and the siting keys) are used by the materialized views and the siting task, which recompute on the next run, so they need no reset.
+
+**Removed, skipped and replaced tiles.** Deleting a `.laz` file from the Volume does not remove its points: `laz_inventory` and `wc_lidar_pts` keep them. A tile that `on_error="skip"` skipped is not read again by later updates, and a file replaced at the same path is not inventoried again. To drop removed tiles or read skipped or replaced ones again, reset both: `--full-refresh laz_inventory,wc_lidar_pts`. Always reset `laz_inventory` together with `wc_lidar_pts`.
+
 ---
 
 ## Configuration
@@ -152,9 +191,9 @@ The override file is layered in automatically via `include: ["*.override.yml"]`.
 | `catalog` | `geospatial_docs` | Unity Catalog catalog name. |
 | `schema` | `wireless_coverage_lf` | UC schema; all pipeline and siting tables land here. |
 | `volume` | `data` | UC volume; raw data lands under `{volume}/wireless-coverage-lf/`. |
-| `full_aoi` | `true` | `true` for the full San Francisco AOI; `false` for the Golden Gate Park demo window. |
+| `full_aoi` | `true` | `true` for the full San Francisco AOI; `false` for the Golden Gate Park demo window. After changing it on a deployed pipeline, run `databricks bundle run wireless_coverage_lf_pipeline --full-refresh wc_lidar_pts`, so the tiles already read are clipped to the new AOI (see [Streaming `wc_lidar_pts`](#streaming-wc_lidar_pts-upgrade-and-resets)). |
 | `simplify` | `true` | `true` to apply product `st_simplify` to isobands before H3 covering (fast, no coverage loss); `false` for exact isobands (heavy/slow at full scale). |
-| `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `wc_lidar_pts` reads every file `laz_inventory` lists, and the inventory keeps the files of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset both once, so points from the old folder do not stay in `wc_lidar_pts`: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. |
+| `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `laz_inventory` and the streaming table `wc_lidar_pts` keep the files and points of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset both once: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
 | `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.3-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
 
@@ -198,7 +237,7 @@ resources:
 
 ## Validation notebook
 
-`validate/validate_wc_lf.ipynb` runs as the final job task after the siting task completes. It reads the pipeline and siting output tables, confirms each is non-empty, checks the H3 tables' `h3` columns and clustering, and prints summary statistics. It also compares the source files in `wc_lidar_pts` with the files `laz_inventory` lists and prints how many have no points, because `read_paths(..., on_error="skip")` skips an unreadable file with only a warning in the executor logs (a file with no point inside the AOI counts too). You can also run it manually from the workspace at any point as a quick sanity check after a fresh deploy or configuration change.
+`validate/validate_wc_lf.ipynb` runs as the final job task after the siting task completes. It reads the pipeline and siting output tables, confirms each is non-empty, checks the H3 tables' `h3` columns and clustering, and prints summary statistics. It also compares the source files in `wc_lidar_pts` with the files `laz_inventory` lists and prints how many have no points, because `read_paths(..., on_error="skip")` skips an unreadable file with only a warning in the executor logs (a file with no point inside the AOI counts too). `wc_lidar_pts` is a streaming table, so a file skipped once stays without points on later updates; reset as described in [Streaming `wc_lidar_pts`](#streaming-wc_lidar_pts-upgrade-and-resets) to read it again. You can also run it manually from the workspace at any point as a quick sanity check after a fresh deploy or configuration change.
 
 ---
 
@@ -211,8 +250,8 @@ resources:
 | `land/land.py` | Task 1 downloader driver — stages USGS 3DEP LiDAR EPT nodes and Overture water polygons to the Volume. |
 | `transformations/_config.py` | Shared pipeline configuration (`cfg`, `paths`, `register_gbx`) read from `spark.conf`. |
 | `transformations/bronze_lidar.py` | Auto Loader bronze streaming table (`laz_inventory`). |
-| `transformations/silver_surfaces.py` | Silver materialized views: `wc_lidar_pts` (`read_paths` over `laz_inventory`), `wc_surface_dsm`, `wc_surface_dtm`, `wc_surface_chm`. |
+| `transformations/silver_surfaces.py` | Silver: the `wc_lidar_pts` streaming table (`read_paths` over the `laz_inventory` stream) and the `wc_surface_dsm`, `wc_surface_dtm`, `wc_surface_chm` materialized views. |
 | `transformations/gold_h3_grids.py` | Gold materialized views: `wc_h3_dem_res10`, `wc_h3_dsm_res10`, `wc_h3_chm_res10`. |
 | `siting/siting.py` | Siting task entry point — Part-4 tower viewsheds at scale. Writes all seven siting tables. |
 | `validate/validate_wc_lf.ipynb` | Validation notebook — confirms all output tables are populated. |
-| `tests/` | Unit tests for the siting policy helpers (`quick_survivors`, `required_mast`, `rank_candidates`). |
+| `tests/` | Unit tests for the siting policy helpers (`quick_survivors`, `required_mast`, `rank_candidates`), the config, the `land` task, and the silver step's streaming read. |

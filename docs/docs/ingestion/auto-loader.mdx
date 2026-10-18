@@ -20,6 +20,8 @@ in a table. `on_change` decides what happens when a file is overwritten: keep ev
 Set up the pipeline first (channel, GeoBrix extra, Serverless notes): see
 [Lakeflow SDP](./lakeflow-sdp).
 
+![declare_ingest flow — Auto Loader (cloudFiles, binaryFile) watches the source_dir landing folder, where glob picks the files, and delivers an overwritten file again. Under scd2 and replace, each delivery becomes a row of the file-events table with its SHA-256 \_source_hash; a foreach_batch_sink skips content already stored and reads the newest delivery of each file with read_paths into the target rows table, where scd2 appends each new version and replace swaps a file’s rows with an atomic replaceWhere. Under scd2, AUTO CDC SCD type 2 builds the file-versions table from the file events, with history on \_source_hash, and the current view joins it with the rows to show each file’s latest readable version. With on_error set to quarantine, each micro-batch is read once into a staging folder under scratch_dir and what cannot be read is appended to the bad-records table before the rows. Under append, the target is a plain streaming table: read_paths over the Auto Loader stream appends every delivery, with no hash and no bad-records table, and bad records are skipped with a warning](../../../resources/images/diagrams/ingestion/ingestion-auto-loader.png)
+
 ## Quick start
 
 This is a complete pipeline source file. It keeps `main.geo.boroughs` in sync with the GeoJSON

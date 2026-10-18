@@ -15,6 +15,8 @@ script) and run on Serverless.
 
 ## Choose a route
 
+![Route chooser — new files land on a Volume; if an admin governs the folder and appending new files is enough, use the Lakeflow connector (geobrix): a Unity Catalog connection to the folder and one entry per table in a pipeline source file, append-only; otherwise, if files get overwritten or you need history, quarantine or very large folders, use Auto Loader ingestion (declare_ingest) in a Lakeflow pipeline, with scd2, replace or append for overwritten files and bad records set aside; otherwise, if you build your own Lakeflow pipeline, list the files with a bronze Auto Loader binaryFile inventory and read them in silver with read_paths, as the production examples do; and in notebooks and jobs, call read_paths yourself on a file listing or stream. Every route gives one row per feature, point, image or tile, the \_source_path and \_source_mtime lineage columns on every row, the same light readers and formats, and pure Python with no JAR on Serverless](../../../resources/images/diagrams/ingestion/ingestion-overview.png)
+
 | Route | Use it when | Effort |
 |---|---|---|
 | **[Lakeflow connector](./lakeflow-connector)** (`geobrix`) | An admin governs the folder, and appending new files is enough. | Install three wheels and create the connection once; then one entry per table in a pipeline source file. |
@@ -66,10 +68,10 @@ don't use `declare_ingest` or the connector, and they show the pipeline setup ar
 
 ## Pages in this section
 
+- [Lakeflow connector](./lakeflow-connector): formats, setup, table options and discovery.
 - [Lakeflow SDP](./lakeflow-sdp): the pipeline environment, Serverless notes, the SDP building
   blocks GeoBrix uses and Asset Bundles.
 - [Auto Loader ingestion](./auto-loader): `declare_ingest`, `on_change`, querying current and past
   content, and the bad records it sets aside.
-- [Lakeflow connector](./lakeflow-connector): setup, table options, formats and discovery.
 - [`read_paths` and reference](./read-paths): `read_paths`, and the reference every route shares
   (formats, file patterns, schema, paths, unreadable files, parallelism).

@@ -650,8 +650,8 @@ def _checked_chunks(laspy, local, reader, limit, chunk_size, emit, hook):
     :func:`_narrow`); points that do not are bad records
     (``points=<first>-<last>``, contiguous ones merged). After
     ``max(_GIVE_UP_CHUNKS * chunk_size, _GIVE_UP_POINTS)`` points in a row that
-    could not be read, the rest of the file is one record. Environment errors (memory, a missing LAZ backend)
-    fail the read."""
+    could not be read, the rest of the file is one record. Environment errors
+    (memory, a missing LAZ backend) fail the read."""
     cur = _Cursor(laspy, local, reader)
     lost = _Losses(hook)
     give_up = max(_GIVE_UP_CHUNKS * chunk_size, _GIVE_UP_POINTS)

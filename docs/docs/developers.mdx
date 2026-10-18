@@ -87,7 +87,7 @@ You can run the **Essential bundle** and **primitive Volume tests** on a live Da
 - **GBX_ARTIFACT_VOLUME** — directory for artifacts (e.g. `/Volumes/.../artifacts`). JAR and wheel are uploaded directly here (no subpaths). Wheel path for the notebook is derived as `GBX_ARTIFACT_VOLUME/geobrix-<version>-py3-none-any.whl` unless overridden.
 - Optional: `GBX_BUNDLE_WHEEL_VOLUME_PATH` — override full wheel path for the notebook pip cells.
 - Optional: `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` — use existing wheel (no build/upload); notebook still gets the pip and restart cells.
-- Optional: `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` — when running stage-wheel, skip JAR build/upload; when running stage-jar alone, skip JAR build/upload.
+- Optional: `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` — when running stage-wheel, skip the JAR build and upload (same as `GBX_BUNDLE_SKIP_JAR=1`); when running stage-jar alone, still build the JAR locally and skip only the upload. `GBX_BUNDLE_SKIP_JAR=1` skips the JAR step entirely (no build, no upload) in both.
 - Optional: `GBX_RUNNER_DIR`, `GBX_BUNDLE_RUNNER_NOTEBOOK`, `GBX_PRIMITIVE_RUNNER_NOTEBOOK` — where to upload the runner notebooks.
 
 **Commands** — From the repo root:
@@ -167,8 +167,8 @@ Doc tests use the **in-repo minimal bundle** (no download step). Generate it onc
 |---------|-------------|--------------|
 | `gbx:data:download` | Need full sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
 | `gbx:data:generate-minimal-bundle` | CI or doc tests; after full bundle if needed | Generates minimal bundle under `sample-data/Volumes/.../test-data/geobrix-examples/` by bbox extraction (NYC/London, `--bbox-size`, `--max-rows`); doc test commands use this, not a download step |
-| `gbx:data:stage-wheel` | Stage built JAR and wheel to Volumes | Builds JAR first (stage-jar) unless `GBX_BUNDLE_SKIP_JAR_UPLOAD=1`, then clears `python/geobrix/dist`, runs `python3 -m build`, stages wheel to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*.whl`) and the bundle volroot (bundle/%pip path); set `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` to skip wheel |
-| `gbx:data:stage-jar` | Stage built JAR to Volumes | Runs `mvn clean package -DskipTests`, stages product JAR to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*-jar-with-dependencies.jar`) and bench tests.jar to bundle volroot; set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to skip |
+| `gbx:data:stage-wheel` | Stage built JAR and wheel to Volumes | Builds JAR first (stage-jar) unless `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` or `GBX_BUNDLE_SKIP_JAR=1` (either skips the JAR build and upload), then clears `python/geobrix/dist`, runs `python3 -m build`, stages wheel to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*.whl`) and the bundle volroot (bundle/%pip path); set `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` to skip wheel |
+| `gbx:data:stage-jar` | Stage built JAR to Volumes | Runs `mvn clean package -DskipTests`, stages product JAR to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*-jar-with-dependencies.jar`) and bench tests.jar to bundle volroot; set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to build locally and skip the upload, or `GBX_BUNDLE_SKIP_JAR=1` to skip build and upload |
 
 **Documentation**
 

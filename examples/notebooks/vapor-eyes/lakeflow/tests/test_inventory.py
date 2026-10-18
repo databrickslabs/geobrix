@@ -28,8 +28,8 @@ def spark():
 
 def _granule(path, n):
     """An S5P-like granule: n scanlines x 2 ground pixels in the PRODUCT group."""
-    import numpy as np
-    from netCDF4 import Dataset
+    np = pytest.importorskip("numpy")
+    Dataset = pytest.importorskip("netCDF4").Dataset
 
     with Dataset(path, "w") as ds:
         g = ds.createGroup("PRODUCT")
@@ -44,8 +44,8 @@ def _granule(path, n):
 
 
 def _band(path, value):
-    import numpy as np
-    import rasterio
+    np = pytest.importorskip("numpy")
+    rasterio = pytest.importorskip("rasterio")
 
     with rasterio.open(
         path, "w", driver="GTiff", width=8, height=8, count=1, dtype="uint16",

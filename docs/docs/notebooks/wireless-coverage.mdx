@@ -187,7 +187,7 @@ Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys i
 
 ## Validation notebook
 
-The `validate` task (`validate/validate_wc_lf.ipynb`) runs after the siting task completes, reads all output tables, confirms each is non-empty, and prints summary statistics. Run it manually from the workspace as a quick sanity check after a fresh deploy or configuration change.
+The `validate` task (`validate/validate_wc_lf.ipynb`) runs after the siting task completes, reads all output tables, confirms each is non-empty, and prints summary statistics. It also compares the source files in `wc_lidar_pts` with the files `laz_inventory` lists and prints how many have no points, because `read_paths(..., on_error="skip")` skips an unreadable file with only a warning in the executor logs (a file with no point inside the AOI counts too). Run it manually from the workspace as a quick sanity check after a fresh deploy or configuration change.
 
 </TabItem>
 <TabItem value="notebooks" label="Notebook Series">

@@ -198,7 +198,7 @@ resources:
 
 ## Validation notebook
 
-`validate/validate_wc_lf.ipynb` runs as the final job task after the siting task completes. It reads the pipeline and siting output tables, confirms each is non-empty, checks the H3 tables' `h3` columns and clustering, and prints summary statistics. You can also run it manually from the workspace at any point as a quick sanity check after a fresh deploy or configuration change.
+`validate/validate_wc_lf.ipynb` runs as the final job task after the siting task completes. It reads the pipeline and siting output tables, confirms each is non-empty, checks the H3 tables' `h3` columns and clustering, and prints summary statistics. It also compares the source files in `wc_lidar_pts` with the files `laz_inventory` lists and prints how many have no points, because `read_paths(..., on_error="skip")` skips an unreadable file with only a warning in the executor logs (a file with no point inside the AOI counts too). You can also run it manually from the workspace at any point as a quick sanity check after a fresh deploy or configuration change.
 
 ---
 

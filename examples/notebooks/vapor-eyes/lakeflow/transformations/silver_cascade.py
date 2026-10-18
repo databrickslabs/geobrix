@@ -10,31 +10,23 @@ upstream table via `spark.read.table(...)`):
 * s2_swir_assets-> s2_plume_cells
 * wells_raw     -> wells_shl  (already wired via the SCD2 change feed)
 
-Reader mechanics (unchanged from the per-file resolution): the netcdf_gbx and
-gtiff_gbx light readers expose NO source-path column, so a pure lazy join from the
-reader's rows to the bronze inventory is not possible. We therefore enumerate the
-staged payload files (driver-side os.listdir — the files are physically staged by
-the land task before this pipeline runs, so they are visible at flow-analysis time,
-whereas an eager collect() of a sibling pipeline table at analysis is not reliable),
-read each file content-scoped by its exact basename via the reader's `filterRegex`,
-tag it with its `source_file`, and then JOIN the union to `spark.read.table(<bronze>)`.
-The join is a LAZY plan reference resolved at EXECUTION (after the bronze table has
-materialized in this update), so it both (a) places the bronze table in the returned
-plan's lineage => the edge is inferred, and (b) sources `observation_date` (and other
-hoisted fields) FROM the bronze table — single source of truth, not re-parsed here.
+Reader mechanics: s5p_hotspots and s2_plume_cells read exactly the files their
+bronze inventory lists, with GeoBrix `read_paths` (`_inventory.read_inventory`):
+the netcdf_gbx / gtiff_gbx reader runs over the inventory's `path` column, and each
+row it returns carries `_source_path`, the file it came from, which joins it back
+to its inventory row. So the bronze table is in the returned plan (the edge is
+inferred), and `observation_date` (and `band` / `item_id` for S2) come FROM the
+bronze table — single source of truth, not re-parsed here. The plan is lazy: the
+files are read at EXECUTION, after the bronze table has materialized in this
+update. The EMIT MVs still read the staged products through `EmitDownloader`.
 
 Every empty branch still returns a plan BUILT OFF the bronze table (via `_empty_ref`)
 so the dependency edge survives even when no payload files are staged.
 
-* Streaming vs materialized: the readers are batch (`spark.read`) Python DataSources,
-  not streaming sources, so these are `@dp.materialized_view`s (partitioned by
-  observation_date), not streaming `@dp.table`s.
+* Streaming vs materialized: these are `@dp.materialized_view`s (partitioned by
+  observation_date), not streaming `@dp.table`s; their GeoBrix UDFs recompute
+  them in full at each update.
 """
-import os
-import re
-from datetime import datetime
-from functools import reduce
-
 from pyspark import pipelines as dp
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -50,9 +42,19 @@ from pyspark.sql.types import (
 from pyspark.databricks.sql import functions as DBF
 
 from _config import cfg, paths, register_gbx
+from _inventory import read_inventory
 
-_S5P_GROUP = "/PRODUCT"
-_S5P_VARIABLES = "methane_mixing_ratio_bias_corrected,qa_value"
+# netcdf_gbx options for an S5P L2 CH4 granule: one point per observation, with
+# the CH4 column and its QA value from the PRODUCT group.
+_S5P_OPTIONS = {
+    "mode": "vector",
+    "group": "/PRODUCT",
+    "variables": "methane_mixing_ratio_bias_corrected,qa_value",
+}
+# Tasks the granules are spread over (by file): the committed windows stage a few
+# hundred granules, so one or two per task, read in parallel on Serverless. A
+# granule is read whole by one task.
+_S5P_TASKS = 256
 
 _HOTSPOT_SCHEMA = StructType(
     [
@@ -66,9 +68,10 @@ _HOTSPOT_SCHEMA = StructType(
     ]
 )
 
-# S2 band filename token: gtiff_gbx writes `{asset_name}_{item_id}.tif`, e.g.
-# `B12_S2A_MSIL2A_20230730T172901_...tif`. The date lives in the item_id (_YYYYMMDDT).
-_S2_TIF_DATE = re.compile(r"_(\d{8})T\d{6}")
+# Keyed buckets the S2 scenes' band pairs are spread over, so each scene's
+# methane-proxy raster is computed and tessellated in its own task (the date
+# window stages a handful of scenes).
+_S2_SCENE_BUCKETS = 64
 
 _S2_CELLS_SCHEMA = StructType(
     [
@@ -122,22 +125,6 @@ def _empty_ref(src_df, schema):
     return src_df.select(*cols).where(F.lit(False))
 
 
-def _read_s5p_file(spark, s5p_dir, filename):
-    """Read one staged granule scoped by its exact filename. observation_date is NOT
-    tagged here — it is joined in from the s5p_granules bronze table."""
-    # filterRegex is matched against the FULL path, so anchor with a leading `.*`
-    # to absorb the /Volumes/.../s5p/ prefix (same convention as the gtiff_gbx reader).
-    return (
-        spark.read.format("netcdf_gbx")
-        .option("mode", "vector")
-        .option("group", _S5P_GROUP)
-        .option("variables", _S5P_VARIABLES)
-        .option("filterRegex", r".*" + re.escape(filename) + r"$")
-        .load(s5p_dir)
-        .withColumn("source_file", F.lit(filename))
-    )
-
-
 @dp.materialized_view(
     name="s5p_hotspots",
     comment="Per-H3-cell CH4 mean/max per overpass (S5P screening surface)",
@@ -152,26 +139,21 @@ def s5p_hotspots():
     c = cfg(spark)
     p = paths(spark)
     minx, miny, maxx, maxy = c["bbox"]
-    s5p_dir = p["s5p"]
 
     bronze = spark.read.table("s5p_granules")
 
-    # Enumerate staged granules (driver-side, visible at flow-analysis); read each one
-    # filename-scoped and tag with its basename. The bronze JOIN below supplies the
-    # date + the dependency edge.
-    try:
-        names = sorted(os.listdir(s5p_dir))
-    except FileNotFoundError:
-        names = []
-    frames = [
-        _read_s5p_file(spark, s5p_dir, fn) for fn in names if fn.endswith(".nc")
-    ]
-    if not frames:
+    # Every granule the bronze inventory lists, one point per observation, each
+    # joined back to its granule row for observation_date (single source of truth).
+    pts = read_inventory(
+        bronze,
+        "netcdf_gbx",
+        p["s5p"],
+        _S5P_OPTIONS,
+        keep=["observation_date"],
+        num_partitions=_S5P_TASKS,
+    )
+    if pts is None:
         return _empty_ref(bronze, _HOTSPOT_SCHEMA)
-
-    pts = reduce(lambda a, b: a.unionByName(b), frames)
-    # JOIN to bronze -> observation_date (single source of truth) + inferred edge.
-    pts = pts.join(bronze.select("source_file", "observation_date"), "source_file")
     pts = pts.filter(
         (F.col("qa_value") >= c["qa_min"])
         & F.col("methane_mixing_ratio_bias_corrected").isNotNull()
@@ -195,49 +177,45 @@ def s5p_hotspots():
     )
 
 
-def _s2_index_cells(spark, s2_dir, date_tok, s2_h3_res):
-    """Port NB02 CELL 10 for one S2 scene date: read B12/B11 SWIR tiles scoped to
-    this date's filenames, compute the methane-proxy index (B11-B12)/(B11+B12) via
+def _s2_index_cells(spark, tiles, s2_h3_res):
+    """Port NB02 CELL 10 for every staged S2 scene: pair each scene's B12 and B11
+    SWIR tiles (`tiles`: one row per band file, with its inventory `band`, `item_id`
+    and `observation_date`), compute the methane-proxy index (B11-B12)/(B11+B12) via
     rst_mapalgebra (band 1 of each tile binds A=B12, B=B11), tessellate the index
     raster into H3 cells (LATERAL UDTF), and summarize per cell. Tagged with the
-    observation_date parsed from the S2 filename token."""
+    scene's observation_date."""
     from databricks.labs.gbx.pyrx import functions as rx
 
     def _band_tile(band):
-        return (
-            spark.read.format("gtiff_gbx")
-            # filterRegex matches the FULL path -> lead with `.*`; scope to this
-            # band AND this scene date so multiple staged scenes stay separated.
-            .option("filterRegex", rf".*{band}.*_{date_tok}T\d{{6}}.*\.tif$")
-            .load(s2_dir)
-            .select(F.col("tile").alias(f"tile_{band.lower()}"))
+        return tiles.where(F.col("band") == band).select(
+            "item_id", "observation_date", F.col("tile").alias(f"tile_{band.lower()}")
         )
 
-    b12 = _band_tile("B12")
-    b11 = _band_tile("B11")
     mbmp = (
-        b12.crossJoin(b11)
+        _band_tile("B12")
+        .join(_band_tile("B11"), ["item_id", "observation_date"])
+        # KEYED repartition: one scene per task, as the map algebra and the
+        # tessellation below each hold a full scene's rasters.
+        .repartition(_S2_SCENE_BUCKETS, "item_id")
         .withColumn("tile", rx.rst_mapalgebra(F.array("tile_b12", "tile_b11"),
                                               "(B - A) / (A + B)"))
-        .select("tile")
+        .select("observation_date", "tile")
     )
-    obs = datetime.strptime(date_tok, "%Y%m%d").date()
-    view = f"_mbmp_{date_tok}"
-    mbmp.createOrReplaceTempView(view)
+    mbmp.createOrReplaceTempView("_s2_mbmp")
     # gbx_rst_h3_tessellate is a UDTF — invoke via SQL LATERAL; rebuild the tile
     # struct for gbx_rst_summary and cast the summary to a JSON string.
     cells = spark.sql(
         f"""
         SELECT
             t.cellid AS h3_cellid,
+            s.observation_date,
             CAST(gbx_rst_summary(named_struct('cellid', t.cellid, 'raster', t.raster,
                                               'metadata', t.metadata)) AS STRING) AS stats
-        FROM {view} s, LATERAL gbx_rst_h3_tessellate(s.tile, {s2_h3_res}) t
+        FROM _s2_mbmp s, LATERAL gbx_rst_h3_tessellate(s.tile, {s2_h3_res}) t
         """
     )
     return (
-        cells.withColumn("observation_date", F.lit(obs))
-        .withColumn("_ingested_at", F.current_timestamp())
+        cells.withColumn("_ingested_at", F.current_timestamp())
         .select("h3_cellid", "observation_date", "stats", "_ingested_at")
     )
 
@@ -253,32 +231,22 @@ def s2_plume_cells():
     register_gbx(spark)
     c = cfg(spark)
     p = paths(spark)
-    s2_dir = p["s2"]
 
     bronze = spark.read.table("s2_swir_assets")
 
-    # Enumerate staged S2 band COGs (driver-side, visible at flow-analysis) to derive
-    # the scene dates that drive the readers; the bronze JOIN below supplies the edge.
-    try:
-        names = sorted(os.listdir(s2_dir))
-    except FileNotFoundError:
-        names = []
-    dates = set()
-    for fn in names:
-        if not fn.endswith(".tif"):
-            continue
-        m = _S2_TIF_DATE.search(fn)
-        if m:
-            dates.add(m.group(1))
-    if not dates:
-        return _empty_ref(bronze, _S2_CELLS_SCHEMA)
-
-    frames = [_s2_index_cells(spark, s2_dir, d, c["s2_h3_res"]) for d in sorted(dates)]
-    cells = reduce(lambda a, b: a.unionByName(b), frames)
-    # JOIN to bronze distinct scene dates -> inferred edge (1:1 on the same dates).
-    return cells.join(
-        bronze.select("observation_date").distinct(), "observation_date"
+    # Every band COG the bronze inventory lists, one tile per file, each joined back
+    # to its inventory row for band, item_id and observation_date (single source of
+    # truth). The tiles are read lazily, so reading them is light; the pairing in
+    # _s2_index_cells spreads the scenes across tasks.
+    tiles = read_inventory(
+        bronze,
+        "gtiff_gbx",
+        p["s2"],
+        keep=["band", "item_id", "observation_date"],
     )
+    if tiles is None:
+        return _empty_ref(bronze, _S2_CELLS_SCHEMA)
+    return _s2_index_cells(spark, tiles, c["s2_h3_res"])
 
 
 @dp.materialized_view(

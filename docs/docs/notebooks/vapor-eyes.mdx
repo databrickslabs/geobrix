@@ -15,7 +15,7 @@ on a schedule to stay current, and an **interactive notebook series** that is mo
 start for understanding the GeoBrix functions involved in the detection cascade.
 
 :::note Requires GeoBrix 0.4.1+
-Both flavors depend on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader (Sentinel-5P swath → points) and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so install `geobrix[light_env6,stac,vizx]` **0.4.1 or newer**.
+Both flavors depend on capabilities introduced in the **0.4.1** release — the `netcdf_gbx` reader (Sentinel-5P swath → points) and the `TropomiDownloader` / `EmitDownloader` / `WellsDownloader` sample downloaders — so install `geobrix[light_env6,stac,vizx]` **0.4.1 or newer**. The Lakeflow pipeline also reads its files with `read_paths`, new in **0.5.3**, so it needs 0.5.3 or newer.
 :::
 
 <Tabs groupId="vapor-eyes-flavor" queryString="flavor">
@@ -30,7 +30,7 @@ This is the production counterpart to the notebook series (see the other tab) �
 :::
 
 :::info Runs on the lightweight tier (Serverless)
-The pipeline and its `land` downloader task both install `geobrix[light_env6,stac,vizx]` from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout (environment version 6). See [Execution Tiers](../api/execution-tiers).
+The pipeline installs `geobrix[light_dbr18,stac,vizx]` (the extra for its Lakeflow runtime channel, DBR 18 as of this example) and its `land` downloader task `geobrix[light_env5,stac,vizx]` (Serverless environment version 5), each from a staged wheel as a single pip dependency entry — pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pyvx`), no JAR, Serverless throughout. See [Execution Tiers](../api/execution-tiers).
 :::
 
 ## How it works: from a raw satellite signal to a leaderboard
@@ -54,6 +54,12 @@ Every scheduled run turns raw satellite files into one ranked, map-ready answer 
 Each stage reads only the one before it — declared as table-to-table dependencies, so Lakeflow builds the lineage graph, orders the stages, and recomputes only what changed.
 
 ![Vapor-Eyes Lakeflow pipeline — five raw sources land on a Volume, become bronze inventory, cascade through silver detection and attribution into gold ranked map-ready tables, and serve an AI/BI dashboard plus a shareable PMTiles map](../../../resources/images/diagrams/vapor-eyes/vapor-eyes-lakeflow-flow.png)
+
+## What it uses from GeoBrix
+
+- **Bronze**: plain Auto Loader `binaryFile` streams list the staged files, one row per file with the date and IDs lifted out of its name (`s5p_granules`, `s2_swir_assets`, `emit_scenes`, `wells_raw`); they read no payload data.
+- **Silver**: [`read_paths`](../ingestion/read-paths) reads exactly the files an inventory lists: the Sentinel-5P granules with `netcdf_gbx` (one point per observation, spread over 256 tasks) for `s5p_hotspots`, and the Sentinel-2 band files with `gtiff_gbx` for `s2_plume_cells`. Each row's `_source_path` joins it back to its inventory row, so `observation_date`, `band` and `item_id` come from bronze, and `on_error="skip"` skips a file that cannot be read with a warning instead of failing the update. The files never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](../ingestion/lakeflow-sdp) for the pipeline setup.
+- **Detection and tiles**: RasterX (`rst_mapalgebra`, `rst_h3_tessellate`, `rst_clip`, `rst_summary`), VectorX MVT and PMTiles, on Serverless.
 
 ## Spatial functions used
 

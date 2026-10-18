@@ -357,9 +357,12 @@ class LidarGbxReader(DataSourceReader):
 # Points re-read at a time to narrow down a chunk that failed (a LAZ chunk is
 # then lost from where it stops decoding to its end, and nothing else).
 _SALVAGE_POINTS = 1000
-# Chunks in a row with nothing read after which the rest of a file is given
-# up (a decoder that fails on everything, a garbled huge point count).
-_MAX_FAILED_CHUNKS = 3
+# Unread points in a row after which the rest of a file is given up (a decoder
+# that fails on everything, a garbled huge point count): at least three chunks,
+# and well past one LAZ chunk (~50,000 points) so that one bad LAZ chunk never
+# ends the read, whatever chunkSize is.
+_GIVE_UP_CHUNKS = 3
+_GIVE_UP_POINTS = 250_000
 # Bounds check: a header's bounds may be rounded or slightly stale, so a point
 # is out of bounds only past this part of the extent (plus one scale step).
 _BOUNDS_SLACK = 1e-3
@@ -550,6 +553,10 @@ class _Losses:
         self.flush()
         self.first, self.end, self.exc = first, end, exc
 
+    def unread_before(self, at: int) -> int:
+        """Points not read in a row up to ``at`` (0 when ``at`` was read)."""
+        return self.end - self.first if self.first is not None and self.end == at else 0
+
     def flush(self) -> None:
         if self.first is not None:
             _lost(self.hook, self.first, self.end, self.exc)
@@ -642,27 +649,26 @@ def _checked_chunks(laspy, local, reader, limit, chunk_size, emit, hook):
     :data:`_SALVAGE_POINTS` to keep every point that decodes (see
     :func:`_narrow`); points that do not are bad records
     (``points=<first>-<last>``, contiguous ones merged). After
-    :data:`_MAX_FAILED_CHUNKS` chunks in a row with nothing read, the rest of
-    the file is one record. Environment errors (memory, a missing LAZ backend)
+    ``max(_GIVE_UP_CHUNKS * chunk_size, _GIVE_UP_POINTS)`` points in a row that
+    could not be read, the rest of the file is one record. Environment errors (memory, a missing LAZ backend)
     fail the read."""
     cur = _Cursor(laspy, local, reader)
     lost = _Losses(hook)
-    start, failed_chunks = 0, 0
+    give_up = max(_GIVE_UP_CHUNKS * chunk_size, _GIVE_UP_POINTS)
+    start = 0
     try:
         while start < limit:
             end = min(start + chunk_size, limit)
             points, err = _try(cur, start, end - start)
             if points is not None:
-                failed_chunks = 0
                 batch = emit(points, start)
                 start = end
                 if batch is not None:
                     yield batch
                 continue
-            kept = yield from _narrow(cur, start, end, emit, lost)
-            failed_chunks = 0 if kept else failed_chunks + 1
+            yield from _narrow(cur, start, end, emit, lost)
             start = end
-            if failed_chunks >= _MAX_FAILED_CHUNKS and start < limit:
+            if lost.unread_before(start) >= give_up and start < limit:
                 lost.add(start, limit, err)
                 break
         lost.flush()

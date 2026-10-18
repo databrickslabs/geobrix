@@ -1038,9 +1038,12 @@ def test_exif_image_too_large_for_qc_fails_the_read(tmp_path, monkeypatch):
 
 
 def test_lidar_rereads_of_a_failing_chunk_are_bounded(tmp_path, monkeypatch):
-    """A decoder that fails on every read (a garbled LAZ with a huge point
-    count) stops after a few failed pieces instead of retrying for hours."""
+    """A decoder that fails on every read, under a garbled huge point count,
+    gives the file up after a bounded number of reads (one record), and a small
+    always-failing file ends quickly too."""
     import laspy
+
+    from databricks.labs.gbx.ds import lidar
 
     path, _, _ = _las(tmp_path / "a.las")
     calls = {"n": 0}
@@ -1051,8 +1054,15 @@ def test_lidar_rereads_of_a_failing_chunk_are_bounded(tmp_path, monkeypatch):
 
     monkeypatch.setattr(laspy.LasReader, "read_points", read_points)
     rows, recs = _read(tmp_path, path, "lidar_gbx", {"chunkSize": "100"})
-    assert rows == [] and calls["n"] <= 10
+    assert rows == [] and calls["n"] <= 110
     assert _classes(recs)[-1][0] == "points=0-4999"
+    shutil.rmtree(tmp_path / "bad_records")
+
+    calls["n"] = 0
+    monkeypatch.setattr(lidar, "_readable_points", lambda *a: 10**9)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert rows == [] and calls["n"] <= 60
+    assert [i for i, _ in _classes(recs)] == ["points=0-999999999"]
 
 
 # --- fix round 2: what a bad record holds -------------------------------------
@@ -1130,17 +1140,22 @@ def _failing_reads(monkeypatch, bad_lo, bad_hi):
     return calls
 
 
-def test_one_undecodable_chunk_mid_file_keeps_every_other_point(tmp_path, monkeypatch):
+@pytest.mark.parametrize("chunk", [None, "10000", "5000"])
+def test_one_undecodable_chunk_mid_file_keeps_every_other_point(
+    tmp_path, monkeypatch, chunk
+):
     """The review's probe: 300,000 points, 10,000-49,999 undecodable (one LAZ
-    chunk from where it breaks). Every other point is read, with the default
-    chunkSize, in a bounded number of reads."""
+    chunk from where it breaks). Every other point is read, whatever the
+    chunkSize (also when the bad stretch spans several chunks), in a bounded
+    number of reads."""
     path, _, _ = _las(tmp_path / "a.las", 300_000)
     calls = _failing_reads(monkeypatch, 10_000, 50_000)
-    rows, recs = _read(tmp_path, path, "lidar_gbx", {"dimensions": "x"})
+    options = {"dimensions": "x", **({"chunkSize": chunk} if chunk else {})}
+    rows, recs = _read(tmp_path, path, "lidar_gbx", options)
     assert len(rows) == 260_000
     ((index, cls),) = _classes(recs)
     assert index == "points=10000-49999" and cls.endswith("_Panic")
-    assert calls["n"] <= 40
+    assert calls["n"] <= 120
 
 
 def test_lidar_reopen_environment_errors_fail_the_read(tmp_path, monkeypatch):

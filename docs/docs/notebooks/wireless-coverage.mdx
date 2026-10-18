@@ -16,10 +16,14 @@ line-of-sight viewsheds score each candidate site. It comes in two flavors: a **
 Lakeflow pipeline** that runs the whole flow as a scheduled job, and an **interactive notebook
 series** that walks through each step and the GeoBrix functions behind it.
 
-:::note Requires GeoBrix 0.5.2+
-Both flavors depend on capabilities introduced in the **0.5.2** release — the `lidar_gbx` reader,
-the point-cloud surface functions (`rst_binpoints`, `rst_chm`, `rst_isoband`), and
-`h3_viewshed_towers` — so install GeoBrix **0.5.2 or newer**.
+:::note Minimum GeoBrix version
+- **Notebook series: GeoBrix 0.5.2 or newer (minimum)** — it depends on capabilities introduced in
+  0.5.2: the `lidar_gbx` reader, the point-cloud surface functions (`rst_binpoints`, `rst_chm`,
+  `rst_isoband`), and `h3_viewshed_towers`. On Serverless it installs `geobrix[light_env6,vizx]`
+  (use `light_env5` on environment 5).
+- **Lakeflow SDP pipeline: GeoBrix 0.5.3 or newer** — it reads its LiDAR files with
+  [`read_paths`](../ingestion/read-paths), new in 0.5.3. It installs the extra for its Lakeflow
+  runtime channel (see the Lakeflow tab).
 :::
 
 ## Executed output — full San Francisco
@@ -42,6 +46,8 @@ Finally — zooming to the Golden Gate Park demo, where the ranked sites are leg
 
 <Tabs groupId="wireless-coverage-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP" default>
+
+**Requires GeoBrix 0.5.3 or newer.**
 
 A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task, packaged as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
@@ -73,7 +79,7 @@ Each stage reads only the one before it — declared as table-to-table dependenc
 ## What it uses from GeoBrix
 
 - **Bronze**: a plain Auto Loader `binaryFile` stream lists the staged `.laz` files (`laz_inventory`); it reads no point data.
-- **Silver**: [`read_paths`](../ingestion/read-paths) runs the `lidar_gbx` reader over the files that inventory lists (`wc_lidar_pts`): one row per return plus `_source_path`, the file it came from, spread over 512 tasks, with `on_error="skip"` so a file that cannot be decoded is skipped with a warning instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](../ingestion/lakeflow-sdp) for the pipeline setup.
+- **Silver**: [`read_paths`](../ingestion/read-paths) runs the `lidar_gbx` reader over the files that inventory lists (`wc_lidar_pts`): one row per return plus `_source_path`, the file it came from, spread over 512 tasks, with `on_error="skip"`, so a file that cannot be decoded is skipped with a warning in the executor logs and the pipeline keeps going instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](../ingestion/lakeflow-sdp) for the pipeline setup.
 - **Surfaces and grids**: RasterX on Serverless: `bin_points_tiled`, `rst_dtmfromgeoms_agg` and `rst_chm` build the surfaces; `rst_transform`, `rst_clip`, `rst_isoband` and `gbx_rst_h3_rastertogridmax` turn them into the H3 grids.
 
 ## What a run looks like
@@ -155,7 +161,7 @@ Bundle variables (set in `databricks.yml`; override per-workspace in `databricks
 | `volume` | `data` | UC volume; raw data lands under `{volume}/wireless-coverage-lf/`. |
 | `full_aoi` | `true` | `true` for the full San Francisco AOI; `false` for the Golden Gate Park demo window. |
 | `simplify` | `true` | Apply product `st_simplify` to isobands before H3 covering (default True = fast, no coverage loss, needed for full-SF performance; False = exact isobands, heavy/slow). |
-| `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `wc_lidar_pts` reads every file `laz_inventory` lists, and the inventory keeps the files of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset the inventory once: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory`. |
+| `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `wc_lidar_pts` reads every file `laz_inventory` lists, and the inventory keeps the files of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset both once, so points from the old folder do not stay in `wc_lidar_pts`: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
 | `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.3-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
 

@@ -25,6 +25,11 @@ show_help() {
     echo -e "  ${YELLOW}light${NC}  the light dirs (pytest list in .github/actions/pyrx_build/action.yml)"
     echo -e "  Exits non-zero if any phase fails. ${YELLOW}--path${NC} bypasses phasing (one process, as given)."
     echo ""
+    echo -e "${CYAN}Staged JAR (heavy tier only):${NC} the heavy tests load ${YELLOW}python/geobrix/lib/geobrix-*-jar-with-dependencies.jar${NC}."
+    echo -e "  Before the heavy phase (or a ${YELLOW}--path${NC} that selects heavy tests) the newest JAR from ${YELLOW}target/${NC} is staged there"
+    echo -e "  when none is staged or ${YELLOW}target/${NC} is newer. Maven is never run; with no JAR in either place the heavy"
+    echo -e "  phase fails at once with one ${YELLOW}PRECONDITION MISSING${NC} line. The light phase never needs the JAR."
+    echo ""
     echo -e "${CYAN}Default marker filter:${NC} ${YELLOW}not integration${NC} (matches CI; opt in with ${GREEN}--with-integration${NC} or override with ${GREEN}--markers${NC})"
     echo ""
     echo -e "${CYAN}Log Path Behavior:${NC}"
@@ -45,6 +50,7 @@ show_help() {
 # paths in a single run). PATH_GIVEN records whether any --path was passed: without one the
 # command runs the CI-style phases below instead of a single process over the whole tree.
 TEST_PATH=""
+PATH_ARGS=()
 PATH_GIVEN=0
 LOG_PATH=""
 KEYWORD=""
@@ -56,6 +62,7 @@ while [[ $# -gt 0 ]]; do
         --path)
             # Append so repeated --path flags all run in one pytest invocation.
             TEST_PATH="$TEST_PATH /root/geobrix/$2"
+            PATH_ARGS+=("$2")
             PATH_GIVEN=1
             shift 2
             ;;
@@ -137,11 +144,53 @@ else
 fi
 
 # ---------------------------------------------------------------------------------------
+# Heavy-tier JAR precondition.
+#
+# The heavy tests glob python/geobrix/lib/geobrix-*-jar-with-dependencies.jar for spark.jars
+# and index it at import time, so an empty lib/ makes EVERY heavy module die at collection
+# with `IndexError: list index out of range`. CI stages it via the Maven package phase (pom
+# `copy-files-on-build`); ensure_staged_jar (common.sh) does the same copy from target/ and
+# never runs Maven. The light tier is pure Python and never needs it.
+# ---------------------------------------------------------------------------------------
+HEAVY_ACTION="$PROJECT_ROOT/.github/actions/python_build/action.yml"
+LIGHT_ACTION="$PROJECT_ROOT/.github/actions/pyrx_build/action.yml"
+
+read_light_ignores() {
+    sed -nE 's/^[[:space:]]*LIGHT_IGNORES="([^"]*)".*$/\1/p' "$HEAVY_ACTION" | head -1
+}
+
+# True when any --path can select heavy-tier tests: anything under python/geobrix/test/ that
+# is not inside a light dir (LIGHT_IGNORES), or the whole tree. Paths outside the test tree
+# are not heavy tests. If the CI list cannot be read, assume heavy (fail safe).
+paths_need_jar() {
+    local ignores p rel first
+    ignores=$(read_light_ignores)
+    for p in "${PATH_ARGS[@]}"; do
+        rel="${p%%::*}"; rel="${rel#./}"; rel="${rel%/}"
+        case "$rel" in
+            python/geobrix|python/geobrix/test) return 0 ;;
+            python/geobrix/test/*)
+                first="${rel#python/geobrix/test/}"; first="${first%%/*}"
+                if [ -n "$ignores" ] && [[ " $ignores " == *" --ignore=test/$first "* ]]; then
+                    continue
+                fi
+                return 0
+                ;;
+        esac
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------------------
 # Single run: --path given → one pytest process over exactly the paths asked for.
 # ---------------------------------------------------------------------------------------
 run_single() {
     echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
     echo ""
+
+    if paths_need_jar && ! ensure_staged_jar "$PROJECT_ROOT"; then
+        exit 1
+    fi
     show_separator
     echo -e "${CYAN}Running tests...${NC}"
     show_separator
@@ -186,11 +235,8 @@ run_single() {
 # Both run from python/geobrix like CI. CI-only extras are skipped locally (the heavy
 # phase's --cov and `python -m build`; the light phase's wheel build and fresh install).
 # ---------------------------------------------------------------------------------------
-HEAVY_ACTION="$PROJECT_ROOT/.github/actions/python_build/action.yml"
-LIGHT_ACTION="$PROJECT_ROOT/.github/actions/pyrx_build/action.yml"
-
 load_ci_phases() {
-    LIGHT_IGNORES=$(sed -nE 's/^[[:space:]]*LIGHT_IGNORES="([^"]*)".*$/\1/p' "$HEAVY_ACTION" | head -1)
+    LIGHT_IGNORES=$(read_light_ignores)
     LIGHT_DIRS=$(sed -nE 's/^[[:space:]]*pytest[[:space:]]+((test\/[A-Za-z0-9_]+[[:space:]]+)+)-m[[:space:]].*$/\1/p' "$LIGHT_ACTION" | head -1)
     LIGHT_DIRS="${LIGHT_DIRS%"${LIGHT_DIRS##*[![:space:]]}"}"
 
@@ -226,7 +272,7 @@ run_phase() {
     echo ""
     docker exec geobrix-dev /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
         cd /root/geobrix/python/geobrix && \
-        python3 -m pytest $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee "$log"
+        python3 -m pytest $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee -a "$log"
     return "${PIPESTATUS[0]}"
 }
 
@@ -241,17 +287,27 @@ run_phased() {
     fi
     mkdir -p "$(dirname "$base")"
 
-    local names=() argsets=() codes=() logs=()
-    names+=("heavy");  argsets+=("test $LIGHT_IGNORES")
-    names+=("light");  argsets+=("$LIGHT_DIRS")
+    local names=() argsets=() needs_jar=() codes=() logs=()
+    names+=("heavy");  argsets+=("test $LIGHT_IGNORES"); needs_jar+=(1)
+    names+=("light");  argsets+=("$LIGHT_DIRS");         needs_jar+=(0)
 
     echo -e "${CYAN}🧩 Phases (no --path; mirrors CI): ${YELLOW}${names[*]}${NC}"
 
     local i code
     for i in "${!names[@]}"; do
         logs[$i]="${base}-${names[$i]}.log"
-        run_phase "${names[$i]}" "${argsets[$i]}" "${logs[$i]}"
-        code=$?
+        : > "${logs[$i]}"
+        if [ "${needs_jar[$i]}" -eq 1 ]; then
+            # Stage (or fail with one clear line) BEFORE pytest; the light phase still runs.
+            ensure_staged_jar "$PROJECT_ROOT" 2>&1 | tee -a "${logs[$i]}"
+            code=${PIPESTATUS[0]}
+        else
+            code=0
+        fi
+        if [ "$code" -eq 0 ]; then
+            run_phase "${names[$i]}" "${argsets[$i]}" "${logs[$i]}"
+            code=$?
+        fi
         # With -k, a phase that selects nothing exits 5; that is not a failure.
         if [ "$code" -eq 5 ] && [ -n "$KEYWORD" ]; then code=0; fi
         codes[$i]=$code
@@ -266,6 +322,7 @@ run_phased() {
         line=$(strip_ansi < "${logs[$i]}" \
             | grep -E '^=+ .* in [0-9.]+s( \([0-9:]+\))? =+$' | tail -1 \
             | sed -E 's/^=+ //; s/ =+$//')
+        [ -n "$line" ] || line=$(strip_ansi < "${logs[$i]}" | grep -m1 '^PRECONDITION MISSING')
         [ -n "$line" ] || line="(no pytest summary line — see log)"
         if [ "${codes[$i]}" -eq 0 ]; then
             echo -e "  ${GREEN}PASS${NC}  ${names[$i]}: ${line}"

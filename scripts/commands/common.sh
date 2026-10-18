@@ -172,6 +172,46 @@ warn_if_jar_stale() {
     fi
 }
 
+# Copy the newest built assembly JAR from target/ into python/geobrix/lib/ -- the dir the
+# heavy Python tests glob (`geobrix-*-jar-with-dependencies.jar`) for spark.jars. This is
+# the host-side twin of the pom's maven-resources-plugin `copy-files-on-build` execution
+# (package phase), which is how CI stages it; use it when the Maven build already ran but the
+# staging dir was emptied. Only the current JAR is kept staged, so a stale one can never be
+# picked up instead. Returns 1 (prints nothing) when target/ holds no assembly JAR.
+# Usage: stage_jar_from_target "$PROJECT_ROOT"
+stage_jar_from_target() {
+    local project_root="$1"
+    local stage_dir="$project_root/python/geobrix/lib"
+    local built
+    built=$(ls -t "$project_root"/target/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+    [ -n "$built" ] || return 1
+    mkdir -p "$stage_dir"
+    rm -f "$stage_dir"/geobrix-*-jar-with-dependencies.jar
+    cp "$built" "$stage_dir/"
+    echo -e "${GREEN}📦 Staged $(basename "$built") → python/geobrix/lib/${NC}"
+}
+
+# Guarantee the heavy Python tests can find a JAR: keep an already-staged one (re-staging
+# only when target/ holds a newer build, as Maven's copy would), else stage the built one
+# from target/. Never runs Maven. With neither, prints ONE
+# `PRECONDITION MISSING` line and returns 1 -- a missing artifact, not a code defect --
+# instead of letting every heavy module die at collection with `IndexError` on
+# `candidates[-1]`.
+# Usage: ensure_staged_jar "$PROJECT_ROOT"
+ensure_staged_jar() {
+    local project_root="$1"
+    local built staged
+    built=$(ls -t "$project_root"/target/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+    staged=$(ls -t "$project_root"/python/geobrix/lib/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -n 1)
+    if [ -n "$built" ] && { [ -z "$staged" ] || [ "$built" -nt "$staged" ]; }; then
+        stage_jar_from_target "$project_root"
+        return $?
+    fi
+    [ -n "$staged" ] && return 0
+    echo -e "${RED}PRECONDITION MISSING: no built JAR in target/ and none staged in python/geobrix/lib/; heavy tests not run. Build it: gbx:docker:exec \"mvn clean package -PskipScoverage -DskipTests\"${NC}"
+    return 1
+}
+
 # Print the port(s) of any running gbx:docs:dev / serve server, one per line.
 # Detects them via the /tmp/docusaurus-<port>.pid files written by the docs
 # commands (only ports whose PID is still alive). Empty output = none running.

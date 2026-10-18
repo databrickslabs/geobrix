@@ -30,8 +30,17 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 - Each phase runs from `python/geobrix` (like CI) with `-m "not integration"` (unless `--with-integration`/`--markers`), `-k` and `-rfE` (failing test ids are listed in the summary).
 - Per-phase logs: `test-logs/python-tests-<phase>.log` by default, or `<--log minus .log>-<phase>.log`.
 - After the last phase a summary prints each phase's pytest result line and, for failing phases, the FAILED/ERROR test ids (first 25; full list in the log).
-- Exit code is non-zero if **any** phase fails (a phase that selects no tests under `-k` is not a failure).
+- Exit code is non-zero if **any** phase fails (a phase that selects no tests under `-k` is not a failure). A missing JAR fails the `heavy` phase before pytest starts (see below).
 - CI-only extras are not mirrored: heavy `--cov`, `python -m build`, and the fresh hash-pinned install.
+
+## Staged JAR (heavy tier only)
+
+The heavy tests load `python/geobrix/lib/geobrix-*-jar-with-dependencies.jar` (`spark.jars`). With that directory empty every heavy module fails at collection with `IndexError: list index out of range`, so the command checks it first:
+
+- **Where**: before the `heavy` phase, and before a `--path` run when any path can select heavy tests (anything under `python/geobrix/test/` that is not inside a light dir from `LIGHT_IGNORES`, or `python/geobrix` / `python/geobrix/test` itself). A path wholly inside a light dir (e.g. `python/geobrix/test/ds/`) and the `light` phase never need the JAR and skip the check.
+- **Staging**: if no JAR is staged, or the newest `target/geobrix-*-jar-with-dependencies.jar` is newer than the staged one, that JAR is copied into `python/geobrix/lib/` (older staged JARs removed). This is the same copy the Maven `package` phase does in CI (`copy-files-on-build` in `pom.xml`) and that `gbx:test:parity` does after its build; both use `stage_jar_from_target` in `common.sh`.
+- **Never runs Maven.** With no JAR in `target/` and none staged, the heavy phase (or the `--path` run) fails immediately with one line, `PRECONDITION MISSING: no built JAR in target/ and none staged in python/geobrix/lib/; heavy tests not run. Build it: gbx:docker:exec "mvn clean package -PskipScoverage -DskipTests"`, and the exit code is non-zero. In the phased run the `light` phase still runs and the summary shows the heavy phase as FAIL with that line.
+- `gbx:data:stage-wheel` with a skip-JAR flag empties `python/geobrix/lib/` (it keeps the wheel JAR-less); the next heavy run here re-stages the JAR from `target/`.
 
 ## Default marker filter
 

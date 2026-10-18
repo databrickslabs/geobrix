@@ -112,16 +112,11 @@ fi
 
 # --- Step 2: stage it where the light tier's Spark session looks for it ----------------
 if [ "$SKIP_BUILD" != true ]; then
-    BUILT_JAR=$(ls -t "$PROJECT_ROOT"/target/geobrix-*-jar-with-dependencies.jar 2>/dev/null | head -1)
-    if [ -z "$BUILT_JAR" ]; then
+    # Shared with gbx:test:python (common.sh); keeps ONLY the current JAR staged.
+    if ! stage_jar_from_target "$PROJECT_ROOT"; then
         echo -e "${RED}❌ Build succeeded but no assembly JAR found under target/.${NC}"
         exit 1
     fi
-    mkdir -p "$STAGE_DIR"
-    # Keep ONLY the current version staged, so a stale JAR can never be picked instead.
-    rm -f "$STAGE_DIR"/geobrix-*-jar-with-dependencies.jar
-    cp "$BUILT_JAR" "$STAGE_DIR/"
-    echo -e "${GREEN}📦 Staged $(basename "$BUILT_JAR") → python/geobrix/lib/${NC}"
 fi
 
 # --- Step 3: run each parity suite in its OWN process, integration ENABLED ------------

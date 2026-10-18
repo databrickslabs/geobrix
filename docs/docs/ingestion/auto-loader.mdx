@@ -225,7 +225,7 @@ found:
 | `RecordsNotRead` | The file declares features, points or lines its reader did not return (a dropped `.dbf` record, an unreadable GeoPackage page, a truncated LAS file, a GeoJSONSeq line that is not JSON) |
 | `PointOutOfBounds` | LiDAR points outside the bounds the file's header declares, by more than 0.1% of its extent and one scale step (garbled point records) |
 | `ShortTile` | A PMTiles tile is shorter than its directory entry declares (a truncated archive) |
-| `NotJpeg` | A `.jpg` / `.jpeg` file has no JPEG start marker, or a header that cannot be decoded (a missing end marker only gives a warning: a truncated scan, or a Motion Photo's video after the image) |
+| `NotJpeg` | A `.jpg` / `.jpeg` file has no JPEG start marker, or header segments that do not lead to a frame header (nothing is decoded, so a very large image is still a JPEG; a missing end marker only gives a warning: a truncated scan, or a Motion Photo's video after the image) |
 | `UnreadableFile` | An empty file, or a LAS file whose point record length does not fit its data |
 | `NothingReadable` | No row of the delivery could be read: every record of it was set aside. One per delivery (`record_index` is `NULL`), next to the records that say why |
 
@@ -256,7 +256,10 @@ found:
 - **To read a file that was set aside again**, for example after fixing a reader option, delete
   its `NothingReadable` rows from `<t>_bad_records` (`DELETE FROM ... WHERE _source_path = '...'
   AND error_class = 'NothingReadable'`), then touch the file or deliver it again. Until then an
-  identical delivery is skipped.
+  identical delivery is skipped. A delivery that was partly read has rows under its
+  `_source_hash`, so the same bytes delivered again are skipped as stored: to read it again,
+  delete its rows for that hash from the table (`DELETE FROM ... WHERE _source_path = '...' AND
+  _source_hash = '...'`) before you touch or deliver it, or deliver changed content.
 - **`append` has no bad-records table.** Its rows table is a plain streaming table, so bad records
   are skipped with a warning in the executor logs, and nothing is staged. Use `scd2` or `replace` to
   keep them.

@@ -20,10 +20,12 @@ SELECT count(*)                                  AS n_inventory_dates,
        sum(CASE WHEN silver.observation_date IS NULL THEN n_granules ELSE 0 END)
                                                  AS n_granules_without_silver
 FROM inventory LEFT JOIN silver ON inventory.observation_date = silver.observation_date;
--- Expect: n_dates_without_silver near 0. A date can also be absent legitimately (every
---         observation below qa_min or outside the AOI bbox), so check the executor-log
---         warnings of the update for the dates it reports. A single skipped granule on a
---         date that has other granules is not visible here.
+-- Expect: many dates are legitimately absent: a date has no hotspot row when no
+--         observation on it passes qa_min inside the AOI, so n_dates_without_silver is
+--         not near 0. Compare it with a known-good run of the same window: an increase
+--         after an update points at skipped granules, so check that update's
+--         executor-log warnings. A single skipped granule on a date that has other
+--         granules is not visible here.
 
 -- S2: scene dates with no plume-cell row (a skipped B11 or B12 file drops its scene).
 WITH inventory AS (

@@ -467,9 +467,8 @@ def _new_bad_records(bad, existing):
 
 
 def _ensure_target(spark, target: str, schema) -> None:
-    """Create the rows table, empty, with ``schema`` (nullability included)
-    when it does not exist yet; clustered by ``_source_path`` like
-    :func:`_write_rows` creates it."""
+    """Create the rows table, empty, from ``schema`` when it does not exist
+    yet; clustered by ``_source_path`` like :func:`_write_rows` creates it."""
     if _table_exists(spark, target):
         return
     (
@@ -525,8 +524,8 @@ def _write_quarantined(spark, rows, files, target, mode, paths, versions, scratc
     ``replaceWhere``."""
     staged_dir = os.path.join(scratch, "rows")
     rows.write.mode("overwrite").parquet(staged_dir)
-    # Parquet reads back all-nullable: create the table from the reader schema
-    # first, so its NOT NULL columns match a fail-mode table.
+    # The staged copy reads back all-nullable: create the table from the reader
+    # schema first, so its columns and types are the reader's, as in fail mode.
     _ensure_target(spark, target, rows.schema)
     staged = spark.read.schema(rows.schema).parquet(staged_dir)
     bad = _bad_records_df(spark, os.path.join(scratch, "bad"), files)

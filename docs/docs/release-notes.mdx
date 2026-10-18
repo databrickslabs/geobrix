@@ -97,7 +97,6 @@ vector sources and one field-type mapping shared by both vector reader tiers.
   view is replaced when its definition differs, the next time a micro-batch writes rows. Under
   `on_change="replace"`, a file keeps its last readable rows when its new delivery cannot be read
   at all; a delivery that is partly readable replaces them with the rows that were read.
-- **Rows tables created in quarantine mode keep the reader's `NOT NULL` columns.**
 - **`read_paths(on_error="skip")` skips what cannot be read** and logs a warning in the executor
   logs; the default, `on_error="fail"`, fails the read with an error that names the file. The
   [Lakeflow connector](./ingestion/lakeflow-connector) always fails the read on an unreadable file.

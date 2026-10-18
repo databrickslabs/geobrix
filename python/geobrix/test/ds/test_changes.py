@@ -907,6 +907,7 @@ class _Tables:
         self.row_writes = []  # (mode, paths, row count) per rows write
         self.bad = []  # appended bad records (dicts)
         self.created = []  # schemas the rows table was created with
+        self.row_schemas = []  # schema of each rows write
         self.fail_rows = self.fail_bad = 0
 
     def stored_hashes(self, spark, target, paths, mode):
@@ -916,6 +917,7 @@ class _Tables:
         if self.fail_rows:
             self.fail_rows -= 1
             raise RuntimeError("rows write failed")
+        self.row_schemas.append(rows_df.schema)
         got = rows_df.select("_source_path", "_source_hash").distinct().collect()
         for p in paths if mode == "replace" else []:
             self.rows.pop(p, None)
@@ -1350,12 +1352,15 @@ def test_bad_records_df_dedupes_on_the_record_key(spark, tmp_path):
     assert C._bad_records_df(spark, scratch, files).count() == 1
 
 
-def test_quarantine_creates_the_rows_table_with_the_readers_nullability(
+def test_quarantine_creates_the_rows_table_from_the_readers_schema(
     spark, tmp_path, tables
 ):
-    """The staged copy reads back all-nullable; the table is created from the
-    reader schema first, so a NOT NULL column (lidar metadata ``path``) stays
-    NOT NULL as in fail mode."""
+    """Fail mode writes the reader's rows, which creates the table from the
+    reader schema. Quarantine mode stages the batch (Parquet reads back
+    all-nullable), so it creates the table first, from that same reader schema,
+    and then appends the staged copy: same columns, types and order. (What the
+    catalog persists for nullability is its own business; Databricks stores
+    nullable columns in both modes.)"""
     import laspy
 
     landing = tmp_path / "landing"
@@ -1364,19 +1369,33 @@ def test_quarantine_creates_the_rows_table_with_the_readers_nullability(
     las.x, las.y, las.z = [1.0, 2.0], [1.0, 2.0], [1.0, 2.0]
     path = str(landing / "a.las")
     las.write(path)
+    args = ("c.s.t", "lidar_gbx", {"mode": "metadata"}, "append")
+
+    C.write_batch(
+        _frozen_events(spark, [path]), *args, schema_path=path, on_error="fail"
+    )
+    (fail_schema,) = tables.row_schemas
+    assert tables.created == []  # fail mode creates it through the rows write
+    # the comparison below tells the reader schema from the staged one only
+    # because the reader has a NOT NULL column
+    assert not fail_schema["path"].nullable
+
+    tables.row_schemas.clear()
     C.write_batch(
         _frozen_events(spark, [path]),
-        "c.s.t",
-        "lidar_gbx",
-        {"mode": "metadata"},
-        "scd2",
+        *args,
         schema_path=path,
         on_error="quarantine",
         scratch_dir=str(landing),
     )
-    (schema,) = tables.created
-    assert schema["path"].nullable is False
-    assert {"_source_path", "_source_hash"} <= set(schema.fieldNames())
+    (created,) = tables.created
+    (staged,) = tables.row_schemas
+    assert created == fail_schema
+    assert [(f.name, f.dataType) for f in staged] == [
+        (f.name, f.dataType) for f in created
+    ]
+    assert {"_source_path", "_source_hash"} <= set(created.fieldNames())
+    assert len(tables.row_writes) == 2  # the staged append went through
 
 
 def test_ensure_target_creates_an_empty_table_with_the_schema():

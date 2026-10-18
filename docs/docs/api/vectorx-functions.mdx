@@ -215,7 +215,7 @@ vx.register(spark)
 
 | Aspect | Lightweight (pyvx) | Heavyweight (vectorx) |
 |---|---|---|
-| Install | Volume-staged `[light_env6]` wheel ([install](../installation)) | Init script + JAR |
+| Install | Volume-staged `[light_env6]` wheel ([install](../installation#whl-only)) | JAR + native GDAL ([install paths](../installation#choose-an-install-path)) |
 | Serverless / shared / ARM | Supported | Not supported |
 | Lakeflow declarative pipelines | Supported | Not supported |
 | Execution model | Python UDTF / pandas UDF | JVM (Scala + Spark columnar) |

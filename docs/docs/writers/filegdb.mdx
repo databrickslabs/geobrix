@@ -35,7 +35,7 @@ lightweight vector readers and writers.
   [Writers Overview](./overview)).
 - **Hybrid writer** — uses the pure-Python DataSource V2 framework but encodes via **native
   GDAL** (`osgeo.ogr`), so it requires the heavyweight GDAL init script
-  (see [Installation](/docs/installation)). Without the native GDAL bindings it raises a clear
+  (see [Init Script (Legacy)](../installation/init-script.mdx)). Without the native GDAL bindings it raises a clear
   error. The output path must end in `.gdb`.
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded

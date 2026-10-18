@@ -52,7 +52,7 @@ This is the production counterpart to the notebook series (see the other tab) �
 :::
 
 :::info Runs on the lightweight tier (Serverless)
-The pipeline and its `land` and `siting` tasks install the GeoBrix wheel with the extra that matches the Lakeflow runtime — **as of this example DBR 18.3**, so `geobrix[light_dbr18,vizx]` (pipeline) and `geobrix[light_env5,vizx]` (serverless job tasks), both the protobuf-5 regime — as a single pip dependency entry; pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. Lakeflow pins compute by a runtime channel: check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch the extra to match if it has moved (e.g. DBR 19 → `[light_dbr19]`/`[light_env6]`). The bundle **defaults to Serverless**; for heavier runs (notably full San Francisco) you can switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Execution Tiers](../api/execution-tiers).
+The pipeline and its `land` and `siting` tasks install the GeoBrix wheel with the extra that matches the Lakeflow runtime — **as of this example DBR 18.3**, so `geobrix[light_dbr18,vizx,stac,overture]` (pipeline) and `geobrix[light_env5,vizx,stac,overture]` (serverless job tasks), both the protobuf-5 regime — as a single pip dependency entry; pure Python/PySpark bindings (`databricks.labs.gbx.pyrx`, `pygx`), no JAR, Serverless throughout. Lakeflow pins compute by a runtime channel: check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch the extra to match if it has moved (e.g. DBR 19 → `[light_dbr19]`/`[light_env6]`). The bundle **defaults to Serverless**; for heavier runs (notably full San Francisco) you can switch the pipeline and job tasks to **classic compute** (`serverless: false` + a cluster spec) for dedicated memory and throughput. See [Execution Tiers](../api/execution-tiers).
 :::
 
 ## How it works: from staged LiDAR to ranked tower sites
@@ -63,12 +63,18 @@ A scheduled run takes raw USGS 3DEP LiDAR `.laz` files through six stages:
 
 1. **Land** — a downloader task stages USGS 3DEP LiDAR EPT nodes and Overture water polygons onto a Unity Catalog Volume. Nothing is interpreted yet — data just arrives.
 2. **Bronze — inventory** — Auto Loader records one row per `.laz` file as it appears, so re-runs pick up only newly staged data.
-3. **Silver — surface stack** — classified returns are tile-indexed and binned into 1 m DSM and TIN DTM rasters per tile; `rst_chm` derives the Canopy Height Model.
+3. **Silver — surface stack** — GeoBrix `read_paths` reads exactly the `.laz` files the inventory lists; the classified returns are tile-indexed and binned into 1 m DSM and TIN DTM rasters per tile; `rst_chm` derives the Canopy Height Model.
 4. **Gold — H3 grids** — the surfaces are reprojected to EPSG:4326, isobanded, and indexed to H3 cells at resolution 10. Each table carries a stable res-9 join key so downstream consumers join on one column.
 5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis: a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors (distributed via `h3_viewshed_towers` — one tower per Spark task).
 6. **Validate** — a final notebook task confirms all output tables are populated and spot-checks quality assertions.
 
 Each stage reads only the one before it — declared as table-to-table dependencies — so Lakeflow builds the lineage graph, runs stages in order, and recomputes only what changed.
+
+## What it uses from GeoBrix
+
+- **Bronze**: a plain Auto Loader `binaryFile` stream lists the staged `.laz` files (`laz_inventory`); it reads no point data.
+- **Silver**: [`read_paths`](../ingestion/read-paths) runs the `lidar_gbx` reader over the files that inventory lists (`wc_lidar_pts`): one row per return plus `_source_path`, the file it came from, spread over 512 tasks, with `on_error="skip"` so a file that cannot be decoded is skipped with a warning instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](../ingestion/lakeflow-sdp) for the pipeline setup.
+- **Surfaces and grids**: RasterX on Serverless: `bin_points_tiled`, `rst_dtmfromgeoms_agg` and `rst_chm` build the surfaces; `rst_transform`, `rst_clip`, `rst_isoband` and `gbx_rst_h3_rastertogridmax` turn them into the H3 grids.
 
 ## What a run looks like
 
@@ -94,7 +100,7 @@ All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_cov
 
 | Table | Description |
 |---|---|
-| `wc_lidar_pts` | Classified LiDAR returns, tile-indexed with a res-15 H3 cell ID (EPSG:3857). |
+| `wc_lidar_pts` | Classified LiDAR returns read from the inventoried `.laz` files with `read_paths`, tile-indexed with a res-15 H3 cell ID (EPSG:3857), plus `_source_path` (the file each return came from). |
 | `wc_surface_dsm` | DSM — max elevation of all returns per 1 m tile. |
 | `wc_surface_dtm` | DTM — Delaunay-TIN bare earth over class-2 ground returns (gap-free). |
 | `wc_surface_chm` | CHM — `rst_chm(DSM, DTM)`: canopy/structure height in metres, clamped ≥ 0. |
@@ -373,7 +379,7 @@ contrasts the two flavors.
 
 | Table | From | Description | Lakeflow (LDP) flavor |
 |---|---|---|---|
-| `wc_lidar_pts` | 01 | Classified LiDAR returns, tile-indexed with a res-15 H3 cell ID (EPSG:3857). | Shared (LDP Silver) |
+| `wc_lidar_pts` | 01 | Classified LiDAR returns, tile-indexed with a res-15 H3 cell ID (EPSG:3857). | Shared (LDP Silver; it also carries `_source_path`) |
 | `wc_lidar_dsm` / `wc_lidar_dtm` / `wc_lidar_chm` | 01 | Part 1's shortest-path DSM / bin-min DTM / CHM surfaces, kept for the pure-LiDAR walkthrough. | Notebook-only (LDP builds `wc_surface_*` instead) |
 | `wc_surface_dsm` | 02a / 02b | DSM — max elevation of all returns per 1 m tile. | Shared (LDP Silver) |
 | `wc_surface_dtm` | 02a / 02b | DTM — Delaunay-TIN bare earth (02a) or morphological-opening approximation (02b). | Shared (LDP Silver; the LDP uses the TIN path) |
@@ -385,7 +391,7 @@ contrasts the two flavors.
 | `wc_h3_candidate_sites_res9` | 04 | Ranked tower survivors: `cellid` BIGINT, `h3` STRING, `lon`, `lat`, `required_mast`, `viewshed_cells`, `viewshed_pct`, `observer_z` (liquid-clustered on `cellid`). | Shared (LDP Siting) |
 | `wc_h3_coverage_res12` / `wc_h3_coverage_top10_res12` | 04 | Per-cell line-of-sight depth at res 12 (all sites / top-10), H3-indexed with `cellid` BIGINT, `h3` STRING columns (liquid-clustered on `cellid`), and the res-9 parent join key. | Shared (LDP Siting) |
 | `wc_h3_site_viewshed_res12` | 04 | Per-site fine-resolution viewshed: one row per sited tower + visible cell pair. Columns: `site_cellid` BIGINT, `site_h3` STRING, `cellid` BIGINT, `h3` STRING (liquid-clustered on `(site_cellid, cellid)` for per-site lookups and per-cell map tiles). | Shared (LDP Siting) |
-| `laz_inventory` | — | *(not generated by the notebook series)* | Lakeflow-only — a Bronze Auto Loader stream; the notebooks read the staged `.laz` directly via `lidar_gbx`. |
+| `laz_inventory` | — | *(not generated by the notebook series)* | Lakeflow-only — a Bronze Auto Loader stream that `wc_lidar_pts` reads with `read_paths`; the notebooks read the staged `.laz` directly via `lidar_gbx`. |
 
 ## Key GeoBrix functions shown
 

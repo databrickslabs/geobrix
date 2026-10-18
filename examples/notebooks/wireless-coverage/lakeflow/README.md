@@ -2,7 +2,7 @@
 
 A production-ready **Wireless Coverage pipeline**: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task, built as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
-> **Requires GeoBrix 0.5.2+.** The pipeline installs `geobrix[light_dbr18,vizx,stac,overture]` and the serverless job tasks install `geobrix[light_env5,vizx,stac,overture]` — the protobuf-5 extras that match the Lakeflow runtime **as of this example (DBR 18.3)**. Lakeflow pins its compute by a runtime channel; **check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch to the matching GeoBrix extra** if it has moved (e.g. a DBR 19 channel → `[light_dbr19]` / `[light_env6]`) — the extra and the compute runtime must agree. The `gbx_wheel` variable must point at `geobrix-0.5.3-py3-none-any.whl` or newer, staged on a Unity Catalog Volume.
+> **Requires GeoBrix 0.5.3+** (the silver step reads the LiDAR with `read_paths`, new in 0.5.3). The pipeline installs `geobrix[light_dbr18,vizx,stac,overture]` and the serverless job tasks install `geobrix[light_env5,vizx,stac,overture]` — the protobuf-5 extras that match the Lakeflow runtime **as of this example (DBR 18.3)**. Lakeflow pins its compute by a runtime channel; **check the [current Lakeflow runtime channel](https://docs.databricks.com/aws/en/release-notes/dlt/#current-databricks-runtime-channel-versions) when you deploy and switch to the matching GeoBrix extra** if it has moved (e.g. a DBR 19 channel → `[light_dbr19]` / `[light_env6]`) — the extra and the compute runtime must agree. The `gbx_wheel` variable must point at `geobrix-0.5.3-py3-none-any.whl` or newer, staged on a Unity Catalog Volume.
 >
 > **Compute:** the bundle **defaults to Serverless** (both the pipeline and the job tasks), which runs the whole medallion. For heavier runs — notably **full San Francisco** (`full_aoi=true`), where the LiDAR binning / TIN / H3 work is large — you can switch to **classic compute** (a sized cluster) for dedicated memory and throughput: set `serverless: false` plus a `clusters:` block on the pipeline, and `job_clusters` / `new_cluster` on the job tasks (match the cluster DBR to the GeoBrix extra). Serverless is the default and is sufficient for the demo window.
 
@@ -18,12 +18,18 @@ A scheduled run moves raw `.laz` files through six stages:
 
 1. **Land** — a downloader task (`land/land.py`) stages USGS 3DEP LiDAR EPT nodes and Overture water polygons onto a Unity Catalog Volume. Nothing is interpreted yet — data just arrives.
 2. **Bronze — inventory** — Auto Loader records one row per `.laz` file as it appears (`laz_inventory`), so re-runs pick up only newly staged data.
-3. **Silver — surface stack** — classified returns are tile-indexed (`wc_lidar_pts`) and binned into 1 m DSM and TIN DTM rasters per tile (`wc_surface_dsm`, `wc_surface_dtm`); `rst_chm` derives the Canopy Height Model (`wc_surface_chm`).
+3. **Silver — surface stack** — GeoBrix `read_paths` reads exactly the `.laz` files the inventory lists; the classified returns are tile-indexed (`wc_lidar_pts`) and binned into 1 m DSM and TIN DTM rasters per tile (`wc_surface_dsm`, `wc_surface_dtm`); `rst_chm` derives the Canopy Height Model (`wc_surface_chm`).
 4. **Gold — H3 grids** — the surfaces are reprojected to EPSG:4326, isobanded, and indexed to H3 cells at resolution 10 (`wc_h3_dem_res10`, `wc_h3_dsm_res10`, `wc_h3_chm_res10`). Each table carries a stable res-9 join key so downstream consumers join on one column.
 5. **Siting** — a post-pipeline Spark task runs the H3-native tower-siting analysis: a res-9 candidate lattice, a coarse quick-pass to rule out weak sites, and exact res-12 H3 line-of-sight viewsheds on survivors (distributed via `h3_viewshed_towers` — one tower per Spark task, Serverless fan-out). Writes seven regular Delta tables.
 6. **Validate** — a final notebook task confirms all output tables are populated and spot-checks key quality assertions.
 
 Each stage reads only the one before it — declared as table-to-table dependencies — so Lakeflow builds the lineage graph, orders the stages, and recomputes only what changed.
+
+## What it uses from GeoBrix
+
+- **Bronze**: a plain Auto Loader `binaryFile` stream lists the staged `.laz` files (`laz_inventory`); it reads no point data.
+- **Silver**: [`read_paths`](https://databrickslabs.github.io/geobrix/docs/ingestion/read-paths) runs the `lidar_gbx` reader over the files that inventory lists (`wc_lidar_pts`), one row per return plus `_source_path` (the file it came from), spread over 512 tasks, with `on_error="skip"` so a file that cannot be decoded is skipped with a warning instead of failing the update. The tiles never change once landed, so the example does not need `declare_ingest`. See [Lakeflow SDP](https://databrickslabs.github.io/geobrix/docs/ingestion/lakeflow-sdp) for the pipeline setup.
+- **Surfaces and grids**: RasterX on Serverless: `bin_points_tiled`, `rst_dtmfromgeoms_agg` and `rst_chm` build the surfaces; `rst_transform`, `rst_clip`, `rst_isoband` and `gbx_rst_h3_rastertogridmax` turn them into the H3 grids.
 
 ## What a run looks like
 
@@ -74,7 +80,7 @@ All tables land in `{catalog}.{schema}` (defaults: `geospatial_docs.wireless_cov
 
 | Table | Description |
 |---|---|
-| `wc_lidar_pts` | Classified LiDAR returns, tile-indexed with a res-15 H3 cell ID (`cellid_r15`, EPSG:3857). |
+| `wc_lidar_pts` | Classified LiDAR returns read from the inventoried `.laz` files with `read_paths`, tile-indexed with a res-15 H3 cell ID (`cellid_r15`, EPSG:3857), plus `_source_path` (the file each return came from). |
 | `wc_surface_dsm` | DSM — max elevation of all returns per 1 m tile (EPSG:3857). |
 | `wc_surface_dtm` | DTM — Delaunay-TIN bare earth over class-2 ground returns (gap-free, EPSG:3857). |
 | `wc_surface_chm` | CHM — `rst_chm(DSM, DTM)`: canopy/structure height in metres, clamped ≥ 0. |
@@ -205,7 +211,7 @@ resources:
 | `land/land.py` | Task 1 downloader driver — stages USGS 3DEP LiDAR EPT nodes and Overture water polygons to the Volume. |
 | `transformations/_config.py` | Shared pipeline configuration (`cfg`, `paths`, `register_gbx`) read from `spark.conf`. |
 | `transformations/bronze_lidar.py` | Auto Loader bronze streaming table (`laz_inventory`). |
-| `transformations/silver_surfaces.py` | Silver materialized views: `wc_lidar_pts`, `wc_surface_dsm`, `wc_surface_dtm`, `wc_surface_chm`. |
+| `transformations/silver_surfaces.py` | Silver materialized views: `wc_lidar_pts` (`read_paths` over `laz_inventory`), `wc_surface_dsm`, `wc_surface_dtm`, `wc_surface_chm`. |
 | `transformations/gold_h3_grids.py` | Gold materialized views: `wc_h3_dem_res10`, `wc_h3_dsm_res10`, `wc_h3_chm_res10`. |
 | `siting/siting.py` | Siting task entry point — Part-4 tower viewsheds at scale. Writes all seven siting tables. |
 | `validate/validate_wc_lf.ipynb` | Validation notebook — confirms all output tables are populated. |

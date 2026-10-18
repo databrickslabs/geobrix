@@ -5,7 +5,8 @@ transforms into the declarative pipeline, config-driven via ``_config.cfg``:
 
   wc_lidar_pts    classified returns, tile-indexed (tx, ty + tile extent) with a
                   res-15 H3 cellid -- ports ``01_pure_lidar_chm`` "Load the point
-                  cloud and assign tiles".
+                  cloud and assign tiles". GeoBrix ``read_paths`` reads exactly the
+                  .laz files the bronze ``laz_inventory`` lists.
   wc_surface_dsm  max-z of all returns per 1 m tile (``bin_points_tiled``) --
                   ports ``01_pure_lidar_chm`` "DSM and DTM" (the DSM half).
   wc_surface_dtm  Delaunay-TIN bare earth over class-2 ground returns, capped at
@@ -28,6 +29,11 @@ from pyspark.sql.window import Window
 
 from _config import cfg, paths, register_gbx  # correct under the pipeline root_path
 
+# Tasks the .laz files are spread over when they are read: the same 512-way
+# fan-out the surface steps use, so a full-SF update parses its tens of thousands
+# of EPT nodes in parallel on Serverless.
+_LAZ_TASKS = 512
+
 
 @dp.materialized_view(
     name="wc_lidar_pts",
@@ -39,10 +45,8 @@ def wc_lidar_pts():
     register_gbx(spark)
     c = cfg(spark)
     p = paths(spark)
+    from databricks.labs.gbx.ds.paths import read_paths
     from databricks.labs.gbx.sample.lidar import aoi_lonlat_to_3857
-
-    # Dependency edge on the bronze inventory; the .laz are read directly below.
-    _ = spark.read.table("laz_inventory")
 
     srid = c["srid"]
     tile_m = c["tile_m"]
@@ -50,12 +54,26 @@ def wc_lidar_pts():
     # bbox (full SF vs Golden Gate demo), replacing the notebook's DEMO +/-2 tile window.
     x0, y0, x1, y1 = aoi_lonlat_to_3857(*c["bbox"])
 
-    # lidar_gbx: one row per return (x, y, z, intensity, return_number,
-    # number_of_returns, classification, gps_time) in native EPSG:3857. Clip to the
-    # AOI, then stamp each return with its tile key (tx, ty) and that tile's extent.
+    # GeoBrix read_paths runs the lidar_gbx reader over exactly the files
+    # laz_inventory lists (the bronze table is also the dependency edge): one row
+    # per return (x, y, z, intensity, return_number, number_of_returns,
+    # classification, gps_time) in native EPSG:3857, plus `_source_path` (the file
+    # it came from). schema_path: the LAZ folder, whose first .laz gives the
+    # columns (no pipeline table is read while the flow is analyzed).
+    # on_error="skip": a file or chunk that cannot be decoded is skipped with a
+    # warning instead of failing the update. The inventory has no modification
+    # time, so the NULL `_source_mtime` is dropped. Clip to the AOI, then stamp
+    # each return with its tile key (tx, ty) and that tile's extent.
     pts = (
-        spark.read.format("lidar_gbx")
-        .load(p["laz"])
+        read_paths(
+            spark.read.table("laz_inventory"),
+            "lidar_gbx",
+            schema_path=p["laz"],
+            mtime_col=None,
+            num_partitions=_LAZ_TASKS,
+            on_error="skip",
+        )
+        .drop("_source_mtime")
         .where(
             (F.col("x") >= x0)
             & (F.col("x") <= x1)

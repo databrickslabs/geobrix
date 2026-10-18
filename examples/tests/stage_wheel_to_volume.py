@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
 Build JAR first (always, unless GBX_BUNDLE_SKIP_JAR_UPLOAD=1 or GBX_BUNDLE_SKIP_JAR=1,
-either of which skips the JAR build AND upload ENTIRELY -- no Maven -- for light-tier-only
-wheel changes), then build the GeoBrix Python wheel (python3 -m build) and stage it to TWO
-locations:
+either of which skips the JAR build AND upload ENTIRELY -- no Maven, and python/geobrix/lib/
+is left untouched -- for light-tier-only wheel changes), then build the GeoBrix Python wheel
+(python3 -m build) and stage it to TWO locations:
   1. GBX_ARTIFACT_VOLUME/<whl_filename>  — init-script dir; dedupes to exactly one
      geobrix-*.whl (any other-version geobrix-*.whl in that dir is removed before upload;
      a listing/delete failure aborts the run with a non-zero exit).
@@ -69,20 +69,22 @@ def main() -> int:
 
     # JAR first so the wheel build can include it if needed. GBX_BUNDLE_SKIP_JAR and
     # GBX_BUNDLE_SKIP_JAR_UPLOAD both skip the JAR step ENTIRELY here (no Maven build, no
-    # upload) for light-tier-only wheel changes; the wheel is JAR-less (setuptools bundles
-    # no lib/*.jar), so the staged JAR is unaffected and heavy consumers keep the
-    # separately-staged JAR.
+    # upload) for light-tier-only wheel changes; the wheel is JAR-less (the package-data
+    # glob names the non-existent package "geobrix", so setuptools bundles no lib/*.jar).
+    # python/geobrix/lib/ holds the locally staged JAR for heavy tests and is refilled ONLY
+    # by the Maven build (pom.xml copy-files-on-build), so it is cleared and recreated only
+    # on the path that rebuilds it; a skip-JAR stage leaves it untouched.
     skip_jar_build = any(
         os.environ.get(k, "").strip().lower() in ("1", "true", "yes")
         for k in ("GBX_BUNDLE_SKIP_JAR", "GBX_BUNDLE_SKIP_JAR_UPLOAD")
     )
-    lib_dir = pkg_dir / "lib"
-    if lib_dir.exists():
-        shutil.rmtree(lib_dir)
-    lib_dir.mkdir(parents=True)
     if skip_jar_build:
         print("GBX_BUNDLE_SKIP_JAR(_UPLOAD)=1: skipping JAR build + upload; wheel-only stage (JAR-less light tier).")
     else:
+        lib_dir = pkg_dir / "lib"
+        if lib_dir.exists():
+            shutil.rmtree(lib_dir)
+        lib_dir.mkdir(parents=True)
         print("Running stage_jar_to_volume (JAR before wheel)...")
         rc = subprocess.run([sys.executable, str(TESTS_DIR / "stage_jar_to_volume.py")], cwd=project_root)
         if rc.returncode != 0:

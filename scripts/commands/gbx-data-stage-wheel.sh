@@ -4,7 +4,7 @@
 # dir; dedupes to one geobrix-*.whl) and the bundle volroot (bundle/%pip path). Set
 # GBX_BUNDLE_SKIP_JAR=1 or GBX_BUNDLE_SKIP_JAR_UPLOAD=1 to skip the JAR step entirely
 # (no Maven build, no JAR upload) — for light-tier-only wheel changes (pyrx/pyvx/pygx);
-# the staged JAR is left untouched.
+# the staged JAR and python/geobrix/lib/ are left untouched.
 # Set GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 to build the wheel locally but skip Databricks upload.
 # Skip-JAR + SKIP_WHEEL_UPLOAD = local wheel-only build with no Maven and no Databricks
 # calls (no auth required). A failure to list/clean the artifact dir exits non-zero.

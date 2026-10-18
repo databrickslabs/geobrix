@@ -1,12 +1,14 @@
 """Silver layer: LiDAR surface rasters for the Wireless Coverage pipeline.
 
-Four materialized views port the shipped Wireless Coverage notebooks' surface
-transforms into the declarative pipeline, config-driven via ``_config.cfg``:
+One streaming table and three materialized views port the shipped Wireless
+Coverage notebooks' surface transforms into the declarative pipeline,
+config-driven via ``_config.cfg``:
 
-  wc_lidar_pts    classified returns, tile-indexed (tx, ty + tile extent) with a
-                  res-15 H3 cellid -- ports ``01_pure_lidar_chm`` "Load the point
-                  cloud and assign tiles". GeoBrix ``read_paths`` reads exactly the
-                  .laz files the bronze ``laz_inventory`` lists.
+  wc_lidar_pts    STREAMING TABLE. Classified returns, tile-indexed (tx, ty + tile
+                  extent) with a res-15 H3 cellid -- ports ``01_pure_lidar_chm``
+                  "Load the point cloud and assign tiles". GeoBrix ``read_paths``
+                  reads the .laz files that arrive on the bronze ``laz_inventory``
+                  stream, so each update parses only the newly inventoried tiles.
   wc_surface_dsm  max-z of all returns per 1 m tile (``bin_points_tiled``) --
                   ports ``01_pure_lidar_chm`` "DSM and DTM" (the DSM half).
   wc_surface_dtm  Delaunay-TIN bare earth over class-2 ground returns, capped at
@@ -16,10 +18,17 @@ transforms into the declarative pipeline, config-driven via ``_config.cfg``:
                   ``02a_surfaces_dsm_dtm_chm`` "CHM".
 
 ``register_gbx(spark)`` is called INSIDE each dataset body (never at import);
-upstream reads are wired with ``spark.read.table(...)`` so the pipeline sees the
-dependency edges. Full-vs-demo is the ``full_aoi`` config toggle (it selects the
-``bbox``), replacing the notebooks' DEMO window; the notebook constants
-(``X0..Y1``, ``TILE_M``, ``TPX``, ``SRID``, ``TIN_MAX_PTS``) come from ``cfg``.
+upstream reads are wired with ``spark.readStream.table(...)`` /
+``spark.read.table(...)`` so the pipeline sees the dependency edges. Full-vs-demo
+is the ``full_aoi`` config toggle (it selects the ``bbox``), replacing the
+notebooks' DEMO window; the notebook constants (``X0..Y1``, ``TILE_M``, ``TPX``,
+``SRID``, ``TIN_MAX_PTS``) come from ``cfg``.
+
+Because ``wc_lidar_pts`` is a streaming table, the settings it applies while a
+tile is read (``full_aoi``, ``tile_m``, ``srid``, ``laz_dir``) hold for the
+tiles read after the change only: run ``--full-refresh wc_lidar_pts`` (with
+``laz_inventory`` for ``laz_dir``) to re-read the tiles already in it. See the
+README.
 """
 
 from pyspark import pipelines as dp
@@ -35,9 +44,12 @@ from _config import cfg, paths, register_gbx  # correct under the pipeline root_
 _LAZ_TASKS = 512
 
 
-@dp.materialized_view(
+@dp.table(
     name="wc_lidar_pts",
-    comment="Classified LiDAR returns, tile-indexed with a res-15 H3 cellid (EPSG:3857).",
+    comment=(
+        "Streaming table: classified LiDAR returns of each newly inventoried .laz "
+        "tile, tile-indexed with a res-15 H3 cellid (EPSG:3857)."
+    ),
 )
 @dp.expect("has_xyz", "x IS NOT NULL AND y IS NOT NULL AND z IS NOT NULL")
 def wc_lidar_pts():
@@ -54,19 +66,22 @@ def wc_lidar_pts():
     # bbox (full SF vs Golden Gate demo), replacing the notebook's DEMO +/-2 tile window.
     x0, y0, x1, y1 = aoi_lonlat_to_3857(*c["bbox"])
 
-    # GeoBrix read_paths runs the lidar_gbx reader over exactly the files
-    # laz_inventory lists (the bronze table is also the dependency edge): one row
-    # per return (x, y, z, intensity, return_number, number_of_returns,
-    # classification, gps_time) in native EPSG:3857, plus `_source_path` (the file
-    # it came from). schema_path: the LAZ folder, whose first .laz gives the
-    # columns (no pipeline table is read while the flow is analyzed).
+    # A streaming table over the laz_inventory stream (also the dependency edge):
+    # each update reads only the .laz files inventoried since the last one, so a
+    # daily run parses just the newly staged tiles. GeoBrix read_paths runs the
+    # lidar_gbx reader over them: one row per return (x, y, z, intensity,
+    # return_number, number_of_returns, classification, gps_time) in native
+    # EPSG:3857, plus `_source_path` (the file it came from). schema_path (needed
+    # for a stream): the LAZ folder, whose first .laz gives the columns.
     # on_error="skip": a file or chunk that cannot be decoded is skipped with a
-    # warning instead of failing the update. The inventory has no modification
-    # time, so the NULL `_source_mtime` is dropped. Clip to the AOI, then stamp
-    # each return with its tile key (tx, ty) and that tile's extent.
+    # warning instead of failing the update (and, being read once, is not retried
+    # by later updates). The inventory has no modification time, so the NULL
+    # `_source_mtime` is dropped. Clip to the AOI, then stamp each return with its
+    # tile key (tx, ty) and that tile's extent: rows keep the AOI and tile grid of
+    # the update that read them.
     pts = (
         read_paths(
-            spark.read.table("laz_inventory"),
+            spark.readStream.table("laz_inventory"),
             "lidar_gbx",
             schema_path=p["laz"],
             mtime_col=None,

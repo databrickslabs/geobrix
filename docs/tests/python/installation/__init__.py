@@ -1,1 +1,1 @@
-# Installation doc examples (one-copy for docs/docs/installation.mdx)
+# Installation doc examples (one-copy for docs/docs/installation/*.mdx)

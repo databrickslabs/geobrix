@@ -1,7 +1,8 @@
 """
-Installation verification snippets (one-copy for docs/docs/installation.mdx).
+Installation verification snippets (one-copy for docs/docs/installation/*.mdx).
 
-Displayed in Installation > Verification. Tested by test_verify_installation.py.
+Displayed in Init Script (Legacy) > Verification and Databricks Container Service >
+Verify the install. Tested by test_verify_installation.py.
 """
 
 VERIFY_PYTHON_INSTALLATION = """from databricks.labs.gbx.rasterx import functions as rx

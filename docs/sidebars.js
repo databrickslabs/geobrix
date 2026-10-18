@@ -16,7 +16,16 @@ const sidebars = {
   // By default, Docusaurus generates a sidebar from the docs folder structure
   tutorialSidebar: [
     'intro',
-    'installation',
+    {
+      type: 'category',
+      label: 'Installation',
+      collapsed: true,
+      link: { type: 'doc', id: 'installation' },
+      items: [
+        'installation/dcs',
+        'installation/init-script',
+      ],
+    },
     'quick-start',
     'databricks-spatial',
     'serverless-and-memory',

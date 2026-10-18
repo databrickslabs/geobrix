@@ -1,16 +1,39 @@
 ---
 sidebar_position: 2
+description: Install GeoBrix three ways — the WHL-only lightweight wheel, a Databricks Container Service image, or the legacy GDAL init script.
 ---
-
-import CodeFromTest from '@site/src/components/CodeFromTest';
-import Tabs from '@theme/Tabs';
-import TabItem from '@theme/TabItem';
-import initScript from '!!raw-loader!../../scripts/geobrix-gdal-init.sh';
-import verifyInstallation from '!!raw-loader!../tests/python/installation/verify_installation.py';
 
 # Installation
 
-GeoBrix offers two execution tiers with different installation paths. See [Choosing an Execution Tier](./api/execution-tiers) for the tradeoffs.
+GeoBrix has two [execution tiers](./api/execution-tiers.mdx) — the pure-Python **lightweight** tier
+and the JVM + native GDAL **heavyweight** tier — and three ways to install them. Pick the path that
+matches the tier you need and the compute you run on.
+
+## Choose an install path {#choose-an-install-path}
+
+![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed with the light_env6 extra or another runtime-pinned extra, running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release and no JAR, init script or native GDAL bundle, giving the lightweight tier; heavyweight on Graviton (arm64) leads to path b, Databricks Container Service, preferred for the heavyweight tier, a GeoBrix container image on a dedicated Graviton (arm64) DBR 19 cluster carrying native GDAL and the wheel, plus the JAR as a cluster library, giving both the lightweight and heavyweight tiers, with x86 (amd64) and DBR 17.3 / 18 not yet covered; heavyweight on classic x86 leads to path c, Init Script (Legacy), geobrix-gdal-init.sh on a classic x86 cluster running DBR 17.3, 18 or 19, with the init script, GDAL tarball and .sha256 sidecar on a Volume and the wheel as a cluster library, still supported where the DCS image does not reach yet, giving the heavyweight tier](../../resources/images/diagrams/installation/installation-paths.png)
+
+| Path | Tiers | Compute | What you install |
+|---|---|---|---|
+| **(a) [WHL-only (Lightweight)](#whl-only)** — recommended | Lightweight | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | One wheel with a runtime-pinned extra — no JAR, no init script |
+| **(b) [Databricks Container Service](./installation/dcs.mdx)** — preferred for heavyweight | Lightweight + Heavyweight | Dedicated cluster, Graviton (arm64), DBR 19 | A GeoBrix container image (native GDAL + the wheel) and the JAR as a cluster library |
+| **(c) [Init Script (Legacy)](./installation/init-script.mdx)** | Heavyweight | Classic x86 cluster, DBR 17.3 / 18 / 19 | The GDAL init script, its tarball + `.sha256` sidecar on a Volume, and the wheel as a cluster library |
+
+**(a) WHL-only (Lightweight)** is the default: if you don't specifically need the JVM tier, install
+the wheel and stop there. The full install steps are [below](#whl-only).
+
+**(b) Databricks Container Service** is the **preferred packaging for the heavyweight tier**. A
+dedicated cluster starts from a GeoBrix container image that already carries native GDAL with its
+Java bindings and the GeoBrix wheel, so there is no init script and nothing to install at cluster
+start; attach the GeoBrix JAR as a cluster library for the heavyweight tier. Verified today on
+dedicated Graviton (arm64) clusters with DBR 19; x86 (amd64) and DBR 17.3 / 18 are not yet covered.
+See [Databricks Container Service](./installation/dcs.mdx).
+
+**(c) Init Script (Legacy)** is the older heavyweight route, still supported for compute the DCS
+image doesn't cover yet — today, classic x86 clusters on DBR 17.3, 18, or 19. A versioned init
+script installs native GDAL at cluster start from a hash-verified tarball staged in an isolated Unity
+Catalog Volume folder, and puts the JAR in place. See
+[Init Script (Legacy)](./installation/init-script.mdx).
 
 ## Supported Databricks Runtimes
 
@@ -24,28 +47,15 @@ GeoBrix supports the following Databricks Runtime releases:
 
 A **single wheel + single JAR** runs on 17.3, 18, and 19: Scala 2.13 minor versions are binary-compatible, the JAR is compiled to Java-17 bytecode so it loads on all three JVMs, and Spark is a `provided` dependency.
 
-GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[light]`. On Serverless, use `geobrix[light_env6]` (environment v6, recommended) or `geobrix[light_env5]` (environment v5). On classic clusters, use `geobrix[light_dbr17]`, `geobrix[light_dbr18]`, or `geobrix[light_dbr19]` to match your runtime. See the extras table in the Lightweight tab below.
+GeoBrix Light uses **explicit, runtime-pinned extras** — there is no bare `[light]`. On Serverless, use `geobrix[light_env6]` (environment v6, recommended) or `geobrix[light_env5]` (environment v5). On classic clusters, use `geobrix[light_dbr17]`, `geobrix[light_dbr18]`, or `geobrix[light_dbr19]` to match your runtime. See the extras table under [WHL-only (Lightweight)](#whl-only) below.
 
 :::note PySpark comes from the runtime
 On Databricks, GeoBrix uses the PySpark that the runtime provides — installing GeoBrix never downloads PySpark. Outside Databricks (for example a local Spark session), install `pyspark>=4.0.0` alongside GeoBrix.
 :::
 
-:::tip On Serverless, use `geobrix[light_env6]`
-**Environment v6 is recommended for Serverless.** Install `geobrix[light_env6]` and set the environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job. For an env 5 Serverless cluster, use `geobrix[light_env5]` instead.
+## WHL-only (Lightweight) {#whl-only}
 
-**Force-reload on Serverless without touching dependencies.** To swap in fresh wheel bytes during an interactive session, run this in a cell towards the top of your notebook:
-
-```python
-%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
-%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
-dbutils.library.restartPython()
-```
-
-Keep `--no-deps` alongside `--force-reinstall` — without it, pip force-reinstalls dependencies that are already preinstalled and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out.
-:::
-
-<Tabs groupId="gbx-tier" queryString="tier" className="gbx-tier-tabs">
-<TabItem value="lightweight" label="Lightweight (pure-Python)">
+The lightweight tier is a single Python wheel installed with a runtime-pinned light extra (`light_env6` on Serverless, `light_dbrN` on classic) — **no init script, no JAR, no native GDAL bundle** (rasterio's bundled GDAL does the work). It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).
 
 :::note Choose an extra for your runtime
 GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a named, runtime-pinned extra. Pick the one that matches your compute:
@@ -71,7 +81,19 @@ required on Serverless.
 **GeoBrix 0.4.x** used a single unversioned extra: `geobrix[light]` (basic) or `geobrix[light,stac,vizx]` (with feature extras). In **0.5.0+** those bare extras are removed — every install names the target runtime explicitly. Replace `[light]` with the matching runtime extra from the table above (e.g. `[light_env6]` on Serverless, `[light_dbr19]` on classic DBR 19). Feature extras (`stac`, `vizx`, `overture`, `earthdata`) are still available and combine with the runtime extra; `[overture]` and `[earthdata]` are opt-in downloaders not included in `_all` — see the note above.
 :::
 
-The lightweight tier is a single Python wheel installed with a runtime-pinned light extra (`light_env6` on Serverless, `light_dbrN` on classic) — **no init script, no JAR, no native GDAL bundle** (rasterio's bundled GDAL does the work). It runs on serverless compute, standard (shared) clusters, Lakeflow declarative pipelines, and ARM. One wheel covers the whole lightweight tier: RasterX (the full `rst_*` set, via `databricks.labs.gbx.pyrx`), VectorX (via `databricks.labs.gbx.pyvx`), and GridX quadbin (via `databricks.labs.gbx.pygx`).
+:::tip On Serverless, use `geobrix[light_env6]`
+**Environment v6 is recommended for Serverless.** Install `geobrix[light_env6]` and set the environment version to **6** — in the Environment side panel, or `environment_version: "6"` on a job. For an env 5 Serverless cluster, use `geobrix[light_env5]` instead.
+
+**Force-reload on Serverless without touching dependencies.** To swap in fresh wheel bytes during an interactive session, run this in a cell towards the top of your notebook:
+
+```python
+%pip install --force-reinstall --no-deps "geobrix @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+%pip install "geobrix[light_env6] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"
+dbutils.library.restartPython()
+```
+
+Keep `--no-deps` alongside `--force-reinstall` — without it, pip force-reinstalls dependencies that are already preinstalled and Serverless fails the cell. The second, plain install then restores any dependencies the first (deps-skipped) step left out.
+:::
 
 The wheel ships as a **GitHub release artifact** for GeoBrix 0.4.0+ — it is **not** published to PyPI. Install it from a Unity Catalog Volume so the same path works on both Serverless and Classic compute:
 
@@ -136,7 +158,7 @@ rx.register(spark)
 # register.register(spark)
 ```
 
-## Verify the lightweight tier
+### Verify the lightweight tier
 
 Confirm the wheel imports, rasterio's bundled GDAL is present, and a function runs end to end (no JAR, no init script). The check below exercises RasterX (`rst_*`); VectorX (`pyvx`, `st_*`) and GridX quadbin (`pygx`, `quadbin_*`) ship in the same wheel and register and run the same way:
 
@@ -159,277 +181,10 @@ tiles.select(
 ).show()
 ```
 
-If the import succeeds and the query returns raster dimensions, the lightweight tier is ready. The rest of this page covers the heavyweight tier.
-
-</TabItem>
-<TabItem value="heavyweight" label="Heavyweight (Scala + GDAL)">
-
-The heavyweight tier needs the Scala JAR + a cluster init script that installs native GDAL. A single JAR plus the init script provide all three heavyweight packages — RasterX (`gbx_rst_*`), GridX (`gbx_bng_*`), and VectorX (`gbx_st_*`) — together with the GDAL/OGR readers. Follow the steps below.
-
-## Prerequisites
-
-The following prerequisites apply to the **heavyweight** tier.
-
-- **Databricks Runtime 17.3, 18, or 19.** The init script's pinned GDAL
-  package targets the Ubuntu 24.04 (`noble`) base shared by DBR 17.3, DBR 18,
-  and DBR 19, so one init script covers all three; other runtimes use different
-  bases and will either fail to install or silently fall back to an unpinned GDAL.
-- Classic Databricks cluster (not Serverless).
-- **Non-ARM instance type (Intel or AMD x86_64).** The GDAL bundle ships
-  `amd64` `.deb` packages from the UbuntuGIS PPA — `amd64` and `x86_64`
-  are the same architecture (just Debian's name vs. the kernel's), and
-  Intel and AMD CPUs are interchangeable. ARM-based instance types — AWS
-  Graviton, Ampere, Apple Silicon — are not supported; the init script
-  refuses to run on `aarch64`.
-- GDAL native libraries (installed by the init script below).
-
-:::note Init script is versioned per release
-The script shown on this page is the **latest** version, imported live from
-`main`. Each GeoBrix release attaches its own copy of `geobrix-gdal-init.sh`
-to the [release page](https://github.com/databrickslabs/geobrix/releases) so
-the script and bundle that ship in that release are unambiguously paired.
-If you're installing a specific GeoBrix version, prefer the init script
-from that release's assets over the version shown below.
-:::
-
-## Installation Steps
-
-### 1. Download Release Artifacts
-
-Each GeoBrix [release](https://github.com/databrickslabs/geobrix/releases)
-attaches three files for the GDAL install path (among others):
-
-- `geobrix-gdal-artifacts-v<version>-noble.tar.gz` — the bundle (JAR,
-  `libgdalalljni.so`, GDAL `.deb`s, Python wheels — everything pre-built and
-  pre-verified in CI).
-- `geobrix-gdal-artifacts-v<version>-noble.tar.gz.sha256` — sidecar file
-  containing the tarball's sha256. The init script reads this at cluster
-  start as its trust anchor.
-- `geobrix-gdal-init.sh` — the cluster init script for this release.
-
-Download all three. Verify the tarball locally before uploading anywhere:
-
-```bash
-sha256sum -c geobrix-gdal-artifacts-v<version>-noble.tar.gz.sha256
-```
-
-:::note Two packaging variations: artifacts vs platform
-The bundle above is the **artifacts** variation — GDAL *plus* the GeoBrix JAR
-and Python wheel pre-packed inside. A second **platform** variation
-(`geobrix-gdal-platform-noble.tar.gz`) adds GDAL via the **same init script
-without the JAR or WHL embedded**; you stage those yourself at the configured
-location (handy for swapping a JAR/WHL build without rebuilding the tarball).
-See [Git LFS — the GDAL platform tarball](./developers#git-lfs--required-to-clone-the-gdal-platform-tarball)
-for how the platform tarball is produced and updated.
-
-When you use the platform packaging, keep `VOL_DIR` unambiguous: stage **only
-one variation or the other** in the Volume path (artifacts *or* platform, never
-both), and keep **only a single version of the JAR / WHL** at the configured
-location. The init script glob-copies `geobrix-*-jar-with-dependencies.jar`, so
-a stray second tarball or a second JAR/wheel version produces a
-nondeterministic classpath.
-:::
-
-### 2. Upload Bundle to a Unity Catalog Volume
-
-Upload the **tarball and the sidecar** (not the init script) to a Unity
-Catalog Volume your workspace owns. The init script discovers them there.
-
-```
-/Volumes/<catalog>/<schema>/<volume>/geobrix-gdal-artifacts-v<version>-noble.tar.gz
-/Volumes/<catalog>/<schema>/<volume>/geobrix-gdal-artifacts-v<version>-noble.tar.gz.sha256
-```
-
-The Volume's write ACL is the trust boundary that lets the cluster trust
-the sidecar — keep write access to that Volume restricted to the
-release/operator process.
-
-### 3. Stage the Init Script
-
-The init script is **not** included in the bundle (from above); it's the cluster's
-init-script attachment.
-
-1. Upload the release's `geobrix-gdal-init.sh` to a workspace file path or
-   a separate Volume the cluster can read, e.g. the same `VOL_DIR` you set (below) or elsewhere.
-2. Edit `VOL_DIR` (one line near the top of the script) to point at the
-   Volume from step 2.
-3. No other edits are required — the script reads the expected tarball
-   hash from the sidecar at runtime, so a future bundle bump doesn't
-   require a new script.
-
-**What the script does** (see [Security](./security) for the full rationale):
-
-- Verifies the cluster architecture is `amd64` (fails fast on ARM).
-- Discovers the `*.tar.gz.sha256` sidecar in `VOL_DIR` and verifies the
-  tarball matches.
-- Extracts the bundle to local disk and verifies the per-file
-  `SHA256SUMS` manifest inside.
-- Installs the bundled `.deb`s (including the UbuntuGIS-PPA versions of
-  `libgdal`, `libproj`, `libgeos`, `proj-data`, etc.) via `dpkg -i`.
-- Installs the pre-built, source-compiled GDAL Python wheel and the
-  pinned pip toolchain from the bundled `wheels/` directory — no PyPI
-  round-trip.
-- Copies `libgdalalljni.so` and `geobrix-*-jar-with-dependencies.jar`
-  from the extracted bundle into place.
-- Logs the installed `libgdal*` / `libproj*` / `libgeos*` versions to
-  the init-script stdout log for later audit.
-
-:::note GeoBrix Python wheel is installed separately
-The init script does **not** install `dblabs_geobrix-*-py3-none-any.whl`
-— that wheel is attached as a cluster Library via the Databricks UI
-(see step 4 below). Only the GDAL toolchain wheels bundled inside the
-release tarball (`pip`, `setuptools`, `wheel`, `cython`, `numpy`, `GDAL`)
-are installed by this script. This lets the GeoBrix Python wheel be
-bumped independently of the GDAL platform layer.
-:::
-
-Preview of the first 10 lines — expand below for the full script (~400 lines).
-
-<CodeFromTest
-  code={initScript.split('\n').slice(0, 10).join('\n') + '\n# ... (expand the disclosure below for the full script)'}
-  language="bash"
-  title="GeoBrix Init Script — preview (scripts/geobrix-gdal-init.sh)"
-/>
-
-<details>
-  <summary>Show the full init script</summary>
-
-<CodeFromTest code={initScript} language="bash" title="GeoBrix Init Script (scripts/geobrix-gdal-init.sh)" />
-
-</details>
-
-### 4. Configure Cluster
-
-#### Add Init Script
-
-1. Go to your cluster configuration
-2. Navigate to **Advanced Options** > **Init Scripts**
-3. Add the init script path from your Volume
-
-#### Add Libraries
-
-1. In your cluster configuration, go to **Libraries**
-2. Click **Install new**
-3. Install the Python wheel:
-   - Select **Upload** > **Python Whl**
-   - Select the `dblabs_geobrix-*-py3-none-any.whl` (version should match the JAR) file from your Volume, e.g. `VOL_DIR` location
-4. Install the JAR:
-   - The JAR is installed via the init script, so nothing further is needed
-
-#### Cluster Configuration Example
-
-<CodeFromTest language="json" validationLevel="static" title="Cluster Configuration">
-{`{
-  "cluster_name": "geobrix-cluster",
-  "spark_version": "17.3.x-scala2.13",
-  "node_type_id": "Standard_DS3_v2",
-  "num_workers": 2,
-  "init_scripts": [
-    {
-      "volumes": {
-        "destination": "/Volumes/catalog/schema/volume_name/geobrix-gdal-init.sh"
-      }
-    }
-  ]
-}`}
-</CodeFromTest>
-
-### 5. Start the Cluster
-
-Start or restart your cluster to ensure the init script runs and all libraries are loaded.
-
-## Verification
-
-To verify that GeoBrix is installed correctly (Scala similar to Python):
-
-### Python
-
-<CodeFromTest
-  code={verifyInstallation}
-  language="python"
-  functionName="VERIFY_PYTHON_INSTALLATION"
-  title="Verify Python Installation"
-  source="docs/tests/python/installation/verify_installation.py"
-  testFile="docs/tests/python/installation/test_verify_installation.py"
-  outputConstant="VERIFY_PYTHON_INSTALLATION_output"
-/>
-
-### SQL
-
-<CodeFromTest
-  code={verifyInstallation}
-  language="sql"
-  functionName="VERIFY_SQL_FUNCTIONS"
-  title="Verify SQL Functions"
-  source="docs/tests/python/installation/verify_installation.py"
-  testFile="docs/tests/python/installation/test_verify_installation.py"
-  outputConstant="VERIFY_SQL_FUNCTIONS_output"
-/>
-
-If you see the GeoBrix functions listed, your installation is successful!
-
-## Troubleshooting
-
-### GDAL Library Issues
-
-The init script installs GDAL from a CI-built bundle staged in your Unity Catalog Volume, verified against a sidecar sha256 file. The CI build itself uses a fingerprint-pinned UbuntuGIS PPA key. Common failure modes:
-
-1. **Tarball sha256 mismatch** — the script exits with a `sha256sum: WARNING: 1 computed checksum did NOT match` error. The tarball in `VOL_DIR` doesn't match the sidecar staged alongside it: either an upload was truncated, the wrong tarball was uploaded, or the sidecar is stale. Re-download both the tarball and the `.sha256` sidecar from the GeoBrix [release page](https://github.com/databrickslabs/geobrix/releases) and re-upload as a pair.
-2. **No `*.tar.gz.sha256` sidecar found** — the operator uploaded the tarball but not its sidecar (or vice versa). Both must be present in `VOL_DIR`. If multiple sidecars are present, the script refuses to install — keep only the active version.
-3. **Unsupported architecture** — the script exits with `Unsupported architecture: arm64` or similar. The bundle ships `amd64` / `x86_64` `.deb`s only (Intel or AMD CPUs). Choose a non-ARM instance type for the cluster.
-4. **DBR base image mismatch** — the script targets the Ubuntu 24.04 (`noble`) base shared by DBR 17.3, DBR 18, and DBR 19.
-5. **General checks** — confirm the init script ran successfully (driver logs) and that `libgdalalljni.so` is in `/usr/lib` on the driver and executors. The script's tail-of-log section prints the installed `libgdal*` / `libproj*` / `libgeos*` versions — compare against `PACKAGES.txt` inside the tarball to confirm the cluster is on the expected versions.
-
-#### Reading init logs when the cluster fails to launch
-
-If the cluster never launches, Databricks's normal `/databricks/init_scripts/...` logs die with the failing node. To recover them, the init script writes a persistent copy of its full stdout/stderr to a per-host subdirectory under your `VOL_DIR`:
-
-```
-$VOL_DIR/_init_logs/<cluster-id>/<hostname>/init.log
-$VOL_DIR/_init_logs/<cluster-id>/<hostname>/_NN_<step>.txt
-```
-
-Filenames are **stable per host** — within a single cluster launch, each host overwrites its own files in place. On every cluster launch the driver also wipes the entire cluster-level log dir (`$VOL_DIR/_init_logs/<cluster-id>/`) so stale per-host subdirs from earlier launches don't accumulate over time. (Important for autoscaling clusters where worker hostnames change between launches.) Workers themselves only clear their own subdir, so they don't race with peer workers or with the still-running driver during the initial startup window.
-
-`init.log` is the full output; `_NN_<step>.txt` are small breadcrumb files marking how far the script got (one per major step: sidecar verify, tarball extract, dpkg, pip, JAR install, etc.) and `_99_trap_*.txt` markers indicating whether the EXIT trap fired and what the cp result was.
-
-From any working cluster in the same workspace:
-
-```bash
-%sh
-# List files for one failing host
-find /Volumes/<your-vol-dir>/_init_logs/<failing-cluster-id>/<hostname> -type f | sort
-
-# Read the full log
-cat /Volumes/<your-vol-dir>/_init_logs/<failing-cluster-id>/<hostname>/init.log
-```
-
-The highest-numbered `_NN_*.txt` breadcrumb tells you the last successful step; `init.log` has the full output up to (and including) the failure. To override the log location (e.g. write to a dedicated logs volume or a Workspace files path), set `WS_LOG_DIR` as a cluster env var or edit the constant near the top of the init script.
-
-:::note Legacy PPA-based init script
-If you need the legacy on-cluster PPA install (slow — typically 10–15 minutes of cluster start time, used historically and still useful for bootstrapping a new bundle), see [`scripts/geobrix-gdal-init-ppa.sh`](https://github.com/databrickslabs/geobrix/blob/main/scripts/geobrix-gdal-init-ppa.sh). It is not the recommended path for new clusters.
-:::
-
-### Function Registration Issues
-
-If functions are not executing (uncommon):
-
-1. Verify the JAR is in `VOL_DIR` used in the init script
-2. Check that you've called the `.register(spark)` method for Spark SQL bindings
-3. Restart the Python kernel or re-attach to cluster in the SQL notebook
-
-### Permission Issues
-
-If you encounter permission errors:
-
-1. Ensure you have read access to the Volume
-2. Check that the init script has execute permissions
-3. Verify cluster policies allow init scripts
+If the import succeeds and the query returns raster dimensions, the lightweight tier is ready. For the heavyweight tier, continue with [Databricks Container Service](./installation/dcs.mdx) or [Init Script (Legacy)](./installation/init-script.mdx).
 
 ## Next Steps
 
-- Follow the [Quick Start Guide](./quick-start) to begin using GeoBrix
-- Explore the [Functions](./api/overview) documentation
-
-</TabItem>
-</Tabs>
+- Follow the [Quick Start Guide](./quick-start.mdx) to begin using GeoBrix
+- Explore the [Functions](./api/overview.mdx) documentation
+- Need the heavyweight tier? See [Databricks Container Service](./installation/dcs.mdx) or [Init Script (Legacy)](./installation/init-script.mdx)

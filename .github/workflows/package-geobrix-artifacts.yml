@@ -192,6 +192,7 @@ jobs:
         run: |
           mvn -C -q clean package -DskipTests -Dscoverage.skip -Dscalastyle.fail=false
           ls -lh target/geobrix-*-jar-with-dependencies.jar
+          python3 scripts/ci/check_jar_packaging.py target/geobrix-*-jar-with-dependencies.jar
 
       # Hash-pinned minimal build set: just build / setuptools / wheel. See
       # python/geobrix/requirements-build.in for the source list; the .txt

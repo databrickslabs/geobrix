@@ -80,10 +80,14 @@
     </properties>
 
     <dependencies>
+        <!-- provided: Databricks Runtime and pyspark ship scala-library. A bundled copy shadows the
+             runtime's newer one from /databricks/jars (DCS, DBR 19). Guarded by
+             scripts/ci/check_jar_packaging.py. -->
         <dependency>
             <groupId>org.scala-lang</groupId>
             <artifactId>scala-library</artifactId>
             <version>${scala.version}</version>
+            <scope>provided</scope>
         </dependency>
         <!-- Test -->
         <dependency>

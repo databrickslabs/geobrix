@@ -7,7 +7,7 @@ paths:
 
 When adding a new `gbx:<category>:<action>` command (or fixing an existing one — don't work around failures, fix the command):
 
-1. **Pick category and action.** Categories in use: `test`, `coverage`, `data`, `docs`, `docker`, `ci`, `lint`, `security`, `versions`, `prompt`. Confirm no duplicate exists in `scripts/commands/`.
+1. **Pick category and action.** Categories in use: `test`, `coverage`, `data`, `docs`, `docker`, `dcs`, `ci`, `lint`, `security`, `versions`, `prompt`. Confirm no duplicate exists in `scripts/commands/`.
 2. **Create the pair** under `scripts/commands/`:
    - `gbx-<category>-<action>.md` — short title, 1-2 sentence description, usage `bash scripts/commands/gbx-<category>-<action>.sh [OPTIONS]`, options (including `--log <path>` and `--help`), 1-2 example invocations.
    - `gbx-<category>-<action>.sh` — bash implementation. Source `common.sh` for `check_docker`, `resolve_log_path`, `setup_log_file`, `show_banner`. Resolve `SCRIPT_DIR` and `PROJECT_ROOT` (see existing commands).

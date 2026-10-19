@@ -12,7 +12,6 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.util.SerializableConfiguration
 
 import scala.jdk.CollectionConverters.MapHasAsScala
-import scala.util.control.NonFatal
 
 /**
   * Spark Data Source V2 provider for OGR-backed vector formats (Shapefile, GeoJSON, GeoPackage,
@@ -54,17 +53,14 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
             if (isGdbLike) {
                 // FileGDB / zipped dataset: stage the whole dataset. NodeFileManager's Hadoop copy runs
                 // on this (analyzer) thread, which DCS dedicated clusters refuse for /Volumes; fall back
-                // to credentialed query reads.
+                // to credentialed query reads (see HadoopUtils.stageDatasetOrFallBack).
                 NodeFileManager.init(new SerializableConfiguration(sparkSession.sessionState.newHadoopConf))
-                val copied =
-                    try Some(NodeFileManager.readRemote(headPath))
-                    catch { case NonFatal(_) => None }
-                copied.filter(p => new java.io.File(p).exists) match {
-                    case Some(p) => (p, true)
-                    case None =>
-                        if (copied.isDefined) NodeFileManager.releaseRemote(headPath)
-                        (HadoopUtils.stageDatasetForSchemaSpark(sparkSession, headPath), false)
-                }
+                HadoopUtils.stageDatasetOrFallBack(
+                  headPath,
+                  NodeFileManager.readRemote,
+                  NodeFileManager.releaseRemote,
+                  p => HadoopUtils.stageDatasetForSchemaSpark(sparkSession, p)
+                )
             } else {
                 (HadoopUtils.stageHeadForSchemaSpark(sparkSession, headPath, files), false)
             }

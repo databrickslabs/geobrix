@@ -68,8 +68,76 @@ class HadoopUtilsSchemaStagingTest extends PlanTest with SilentSparkSession {
         val gdb = Files.createDirectory(tmpDir().resolve("parcels.gdb"))
         val parts = Map("a00000001.gdbtable" -> "t1", "a00000001.gdbtablx" -> "x1", "gdb" -> "g", "timestamps" -> "ts")
         parts.foreach { case (n, body) => Files.write(gdb.resolve(n), body.getBytes) }
-        val local = HadoopUtils.stageDatasetForSchemaSpark(spark, gdb.toString, Seq(refused, refused, queryStep))
+        val local = HadoopUtils.stageDatasetForSchemaSpark(spark, gdb.toString)
         new File(local).getName shouldBe "parcels.gdb"
         parts.foreach { case (n, body) => new String(Files.readAllBytes(Paths.get(local, n))) shouldBe body }
+    }
+
+    // stageDatasetOrFallBack: the readRemote -> fallback decision OGR_DataSource.inferSchema makes for
+    // FileGDB / zip inputs. NodeFileManager.readRemote throws on a refused copy (NodeFilePathUtil.readLock).
+
+    private val remote = "/Volumes/main/default/data/NYC_Sample.gdb.zip"
+
+    test("stageDatasetOrFallBack keeps the node-file copy when readRemote succeeds and the file exists") {
+        val copy = tmpDir().resolve("copy.gdb.zip")
+        Files.write(copy, Array[Byte](1))
+        var released = List.empty[String]
+        var fellBack = false
+        val res = HadoopUtils.stageDatasetOrFallBack(
+          remote,
+          _ => copy.toString,
+          p => released :+= p,
+          _ => { fellBack = true; "unused" }
+        )
+        res shouldBe ((copy.toString, true))
+        released shouldBe empty
+        fellBack shouldBe false
+    }
+
+    test("stageDatasetOrFallBack falls back when readRemote throws") {
+        var released = List.empty[String]
+        var fellBackWith = List.empty[String]
+        val res = HadoopUtils.stageDatasetOrFallBack(
+          remote,
+          _ => throw new RuntimeException("Failed to materialize after 3 retries."),
+          p => released :+= p,
+          p => { fellBackWith :+= p; "/tmp/staged/NYC_Sample.gdb.zip" }
+        )
+        res shouldBe (("/tmp/staged/NYC_Sample.gdb.zip", false))
+        fellBackWith shouldBe List(remote)
+        released shouldBe empty // the failed copy holds no read lock
+    }
+
+    test("stageDatasetOrFallBack releases the lock and falls back when readRemote returns a missing path") {
+        val missing = tmpDir().resolve("not-there.gdb.zip").toString
+        var released = List.empty[String]
+        val res = HadoopUtils.stageDatasetOrFallBack(
+          remote,
+          _ => missing,
+          p => released :+= p,
+          _ => "/tmp/staged/NYC_Sample.gdb.zip"
+        )
+        res shouldBe (("/tmp/staged/NYC_Sample.gdb.zip", false))
+        released shouldBe List(remote)
+    }
+
+    test("stageDatasetOrFallBack attaches the readRemote failure to the fallback's exception") {
+        val original = new RuntimeException("Failed to materialize after 3 retries.")
+        val fallbackErr = new IOException("binaryFile matched 0 files")
+        val e = intercept[IOException] {
+            HadoopUtils.stageDatasetOrFallBack(remote, _ => throw original, _ => (), _ => throw fallbackErr)
+        }
+        (e eq fallbackErr) shouldBe true
+        e.getSuppressed.toSeq shouldBe Seq(original)
+    }
+
+    test("stageDatasetOrFallBack explains a missing copy when the fallback also fails") {
+        val missing = tmpDir().resolve("not-there.gdb.zip").toString
+        var released = List.empty[String]
+        val e = intercept[IOException] {
+            HadoopUtils.stageDatasetOrFallBack(remote, _ => missing, p => released :+= p, _ => throw new IOException("boom"))
+        }
+        released shouldBe List(remote)
+        e.getSuppressed.map(_.getMessage).mkString should include(missing)
     }
 }

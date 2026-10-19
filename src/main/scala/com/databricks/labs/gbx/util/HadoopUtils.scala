@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.util
 import com.google.common.io.{ByteStreams, Closeables}
 import org.apache.hadoop.fs._
 import org.apache.orc.util.Murmur3
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.util.SerializableConfiguration
 
@@ -12,7 +13,7 @@ import scala.util.control.NonFatal
 
 /** Path normalization (Volumes, DBFS, file:), listing, first-file, and copy for Hadoop filesystems. */
 //noinspection ScalaWeakerAccess
-object HadoopUtils {
+object HadoopUtils extends Logging {
 
     /** Shared schema-divergence error message for multi-stem shapefile directories.
       * Wording is identical across the heavy (Scala) and light (Python) tiers so the
@@ -393,6 +394,40 @@ object HadoopUtils {
             val out = new java.io.File(tmpDir, name)
             java.nio.file.Files.write(out.toPath, readBytesForSchema(local, steps))
             out.getAbsolutePath
+        }
+    }
+
+    /** The stage-or-fall-back decision for FileGDB / zip schema inference: take NodeFileManager's copy
+      * when `readRemote` succeeds and the file exists (`releaseAfter = true`, the caller releases it
+      * after use); otherwise fall back to `fallback` (credentialed query reads, `releaseAfter = false`).
+      * The `readRemote` failure is logged at warn and, if the fallback also throws, attached to the
+      * fallback's exception as suppressed, so a genuine copy failure (permissions, corrupt file) is not
+      * reduced to "try the other path". A copy that returned a missing path is released first. */
+    private[gbx] def stageDatasetOrFallBack(
+        path: String,
+        readRemote: String => String,
+        release: String => Unit,
+        fallback: String => String
+    ): (String, Boolean) = {
+        val copied: Either[Throwable, String] =
+            try Right(readRemote(path))
+            catch { case NonFatal(e) => Left(e) }
+        copied match {
+            case Right(local) if new java.io.File(local).exists => (local, true)
+            case _ =>
+                val original: Throwable = copied.fold(
+                  identity,
+                  local => new java.io.FileNotFoundException(s"Node file copy of $path reported $local, which does not exist")
+                )
+                copied.foreach(_ => release(path))
+                logWarning(s"Staging $path through the node file cache failed; falling back to query reads", original)
+                try {
+                    (fallback(path), false)
+                } catch {
+                    case NonFatal(e) =>
+                        if (e ne original) e.addSuppressed(original)
+                        throw e
+                }
         }
     }
 

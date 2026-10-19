@@ -364,6 +364,38 @@ object HadoopUtils {
         new java.io.File(tmpDir, headName).getAbsolutePath
     }
 
+    /** Stages a FileGDB / zipped OGR dataset for schema inference through credentialed reads, for when
+      * NodeFileManager's analyzer-thread Hadoop copy is refused (DCS dedicated). A file (`.zip`,
+      * `.gdb.zip`) goes through `readBytesForSchema`; a `.gdb` directory is read with one `binaryFile`
+      * query over its (flat) files. Returns the local path to open. */
+    def stageDatasetForSchemaSpark(spark: SparkSession, datasetPath: String): String =
+        stageDatasetForSchemaSpark(spark, datasetPath, schemaReadSteps(spark))
+
+    private[util] def stageDatasetForSchemaSpark(
+        spark: SparkSession,
+        datasetPath: String,
+        steps: Seq[SchemaReadStep]
+    ): String = {
+        def baseName(p: String): String = p.replace("\\", "/").stripSuffix("/").reverse.takeWhile(_ != '/').reverse
+        val local = datasetPath.stripPrefix("file:").stripPrefix("dbfs:").stripSuffix("/")
+        val name = baseName(local)
+        val tmpDir = java.nio.file.Files.createTempDirectory("gbx_ogr_schema_").toFile
+        if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".gdb")) {
+            val outDir = new java.io.File(tmpDir, name)
+            outDir.mkdirs()
+            val rows = spark.read.format("binaryFile").load(escapeGlob(local)).select("path", "content").collect()
+            require(rows.nonEmpty, s"No files found in FileGDB directory $datasetPath")
+            rows.foreach(r =>
+                java.nio.file.Files.write(new java.io.File(outDir, baseName(r.getString(0))).toPath, r.getAs[Array[Byte]](1))
+            )
+            outDir.getAbsolutePath
+        } else {
+            val out = new java.io.File(tmpDir, name)
+            java.nio.file.Files.write(out.toPath, readBytesForSchema(local, steps))
+            out.getAbsolutePath
+        }
+    }
+
     /** Returns the distinct `.shp` stems (base names without extension) present in a file listing.
       * Handles both plain `.shp` files and `.shp.zip` archives (e.g. `roads.shp.zip` → stem `roads`).
       * Used to detect multi-stem shapefile directories that may have divergent schemas. */

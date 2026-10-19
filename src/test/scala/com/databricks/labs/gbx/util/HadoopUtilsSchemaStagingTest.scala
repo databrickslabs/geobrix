@@ -55,4 +55,21 @@ class HadoopUtilsSchemaStagingTest extends PlanTest with SilentSparkSession {
             new String(Files.readAllBytes(Paths.get(new File(local).getParent, n))) shouldBe body
         }
     }
+
+    test("stageDatasetForSchemaSpark stages a zipped FileGDB through the binaryFile step") {
+        val zip = tmpDir().resolve("NYC_Sample.gdb.zip")
+        Files.write(zip, Array[Byte](9, 8, 7))
+        val local = HadoopUtils.stageDatasetForSchemaSpark(spark, zip.toString, Seq(refused, refused, queryStep))
+        new File(local).getName shouldBe "NYC_Sample.gdb.zip"
+        Files.readAllBytes(Paths.get(local)) shouldBe Array[Byte](9, 8, 7)
+    }
+
+    test("stageDatasetForSchemaSpark stages every file of a FileGDB directory") {
+        val gdb = Files.createDirectory(tmpDir().resolve("parcels.gdb"))
+        val parts = Map("a00000001.gdbtable" -> "t1", "a00000001.gdbtablx" -> "x1", "gdb" -> "g", "timestamps" -> "ts")
+        parts.foreach { case (n, body) => Files.write(gdb.resolve(n), body.getBytes) }
+        val local = HadoopUtils.stageDatasetForSchemaSpark(spark, gdb.toString, Seq(refused, refused, queryStep))
+        new File(local).getName shouldBe "parcels.gdb"
+        parts.foreach { case (n, body) => new String(Files.readAllBytes(Paths.get(local, n))) shouldBe body }
+    }
 }

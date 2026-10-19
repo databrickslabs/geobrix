@@ -12,6 +12,7 @@ import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.apache.spark.util.SerializableConfiguration
 
 import scala.jdk.CollectionConverters.MapHasAsScala
+import scala.util.control.NonFatal
 
 /**
   * Spark Data Source V2 provider for OGR-backed vector formats (Shapefile, GeoJSON, GeoPackage,
@@ -49,13 +50,24 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
         val lower = rawPath.toLowerCase(java.util.Locale.ROOT).stripSuffix("/")
         val isGdbLike =
           lower.endsWith(".gdb") || lower.endsWith(".gdb.zip") || lower.endsWith(".zip")
-        val localPath = if (isGdbLike) {
-            // FileGDB / zipped dataset: stage the whole dataset via the existing path.
-            NodeFileManager.init(new SerializableConfiguration(sparkSession.sessionState.newHadoopConf))
-            NodeFileManager.readRemote(headPath)
-        } else {
-            HadoopUtils.stageHeadForSchemaSpark(sparkSession, headPath, files)
-        }
+        val (localPath, releaseAfter) =
+            if (isGdbLike) {
+                // FileGDB / zipped dataset: stage the whole dataset. NodeFileManager's Hadoop copy runs
+                // on this (analyzer) thread, which DCS dedicated clusters refuse for /Volumes; fall back
+                // to credentialed query reads.
+                NodeFileManager.init(new SerializableConfiguration(sparkSession.sessionState.newHadoopConf))
+                val copied =
+                    try Some(NodeFileManager.readRemote(headPath))
+                    catch { case NonFatal(_) => None }
+                copied.filter(p => new java.io.File(p).exists) match {
+                    case Some(p) => (p, true)
+                    case None =>
+                        if (copied.isDefined) NodeFileManager.releaseRemote(headPath)
+                        (HadoopUtils.stageDatasetForSchemaSpark(sparkSession, headPath), false)
+                }
+            } else {
+                (HadoopUtils.stageHeadForSchemaSpark(sparkSession, headPath, files), false)
+            }
 
         val schemaOpt = OGR_SchemaInference
             .inferSchemaImpl(
@@ -64,7 +76,7 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
               options.asCaseSensitiveMap().asScala.toMap
             )
 
-        if (isGdbLike) NodeFileManager.releaseRemote(headPath)
+        if (releaseAfter) NodeFileManager.releaseRemote(headPath)
 
         val headSchema = schemaOpt.getOrElse {
             throw new IllegalArgumentException(

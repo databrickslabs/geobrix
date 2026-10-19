@@ -817,7 +817,7 @@ object BNG extends GridSystem {
         keepCoreGeom: Boolean
     ): Iterator[(Long, Boolean, Geometry)] = {
 
-        val inGeomType = geometry.getGeometryType
+        val inputDimension = geometry.getDimension
         val radius = getBufferRadius(geometry, resolution)
         val carvedGeometry = geometry.buffer(-radius)
 
@@ -848,12 +848,12 @@ object BNG extends GridSystem {
         })
         val borderChips = borderIndices.map(cell => {
             val cellGeom = cellIdToGeometry(cell)
-            val intersect = cellGeom.intersection(geometry)
+            val intersect = JTS.intersection(cellGeom, geometry)
             if (intersect.isEmpty) (cell, false, intersect)
             else {
                 val adjusted =
                     if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
-                        intersect.difference(cellGeom.getBoundary)
+                        JTS.difference(intersect, cellGeom.getBoundary)
                     } else {
                         intersect
                     }
@@ -868,9 +868,10 @@ object BNG extends GridSystem {
                     (cell, false, adjusted)
                 }
             }
-        }).filterNot(_._3.isEmpty)
+        }).filter(t => t._3 == null || !t._3.isEmpty)
 
-        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getGeometryType == inGeomType)
+        // Clipping a Polygon can legitimately produce a MultiPolygon (and vice versa).
+        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getDimension == inputDimension)
     }
 
 }

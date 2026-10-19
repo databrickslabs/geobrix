@@ -3,10 +3,12 @@ package com.databricks.labs.gbx.util
 import com.google.common.io.{ByteStreams, Closeables}
 import org.apache.hadoop.fs._
 import org.apache.orc.util.Murmur3
+import org.apache.spark.sql.SparkSession
 import org.apache.spark.util.SerializableConfiguration
 
 import java.net.URI
 import scala.collection.mutable
+import scala.util.control.NonFatal
 
 /** Path normalization (Volumes, DBFS, file:), listing, first-file, and copy for Hadoop filesystems. */
 //noinspection ScalaWeakerAccess
@@ -260,22 +262,72 @@ object HadoopUtils {
         }
     }
 
+    /** One way to read a file's bytes for OGR schema staging; `name` appears in the error when every
+      * step fails. */
+    private[util] final case class SchemaReadStep(name: String, read: String => Array[Byte])
+
+    /** Escapes Hadoop glob characters so a `binaryFile` load matches exactly one literal path. */
+    private[util] def escapeGlob(path: String): String =
+        path.flatMap(c => if ("[]{}*?\\".indexOf(c.toInt) >= 0) s"\\$c" else c.toString)
+
+    /** Reads `path` with a `binaryFile` query. Query tasks carry the UC Volume credential even on DCS
+      * dedicated clusters, where the JVM process is refused direct `/Volumes` reads. */
+    def binaryFileBytes(spark: SparkSession, path: String): Array[Byte] = {
+        val rows = spark.read.format("binaryFile").load(escapeGlob(path)).select("content").collect()
+        require(rows.length == 1, s"binaryFile matched ${rows.length} files for $path")
+        rows.head.getAs[Array[Byte]](0)
+    }
+
+    /** The default read order: java.nio on this thread; java.nio in a one-task Spark job (the executor
+      * carries the credential on classic and Serverless); a `binaryFile` query (DCS dedicated). */
+    private[util] def schemaReadSteps(spark: SparkSession): Seq[SchemaReadStep] = Seq(
+      SchemaReadStep("driver java.nio", (lp: String) => java.nio.file.Files.readAllBytes(new java.io.File(lp).toPath)),
+      SchemaReadStep(
+        "executor java.nio",
+        (lp: String) =>
+            spark.sparkContext
+                .parallelize(Seq(lp), 1)
+                .map(p => java.nio.file.Files.readAllBytes(new java.io.File(p).toPath))
+                .collect()
+                .head
+      ),
+      SchemaReadStep("binaryFile query", (lp: String) => binaryFileBytes(spark, lp))
+    )
+
+    /** Returns the bytes from the first step that succeeds; if every step fails, throws an
+      * IOException listing each step's error. */
+    private[util] def readBytesForSchema(path: String, steps: Seq[SchemaReadStep]): Array[Byte] =
+        steps.foldLeft[Either[List[String], Array[Byte]]](Left(Nil)) {
+            case (done @ Right(_), _) => done
+            case (Left(errors), step) =>
+                try Right(step.read(path))
+                catch { case NonFatal(e) => Left(errors :+ s"${step.name}: ${e.getClass.getSimpleName}: ${e.getMessage}") }
+        } match {
+            case Right(bytes) => bytes
+            case Left(errors) => throw new java.io.IOException(s"Could not read $path for schema inference (${errors.mkString("; ")})")
+        }
+
     /** Stages a dataset's head file (plus any same-stem sidecars, e.g. shapefile `.shx`/`.dbf`/
       * `.prj`) to a local temp dir for OGR schema inference, returning the local head path. Reads
-      * bytes via POSIX `java.io.File` on the FUSE path (proven to read `/Volumes` on driver and
-      * executor; `binaryFile` content reads and raw Hadoop FS stats do NOT). Tries a direct read
-      * first; if the calling (analyzer) thread lacks the UC Volume credential, falls back to a
-      * one-task Spark job whose executor carries it. `candidates` is the `listDataFilesSpark`
-      * listing, used to find the sidecars.
+      * bytes through `readBytesForSchema`: java.nio on the driver, then in an executor task, then a
+      * `binaryFile` query (DCS dedicated, where the JVM process is refused direct `/Volumes` reads).
+      * `candidates` is the `listDataFilesSpark` listing, used to find the sidecars.
       *
       * When `headPath` is a bare `.shp` file path and `candidates` contains no sidecar siblings
       * (i.e. the caller listed only the single `.shp`), the parent directory is enumerated via
       * Spark's credential-aware file index so the full sidecar bundle (`.shx`, `.dbf`, `.prj`,
       * etc.) is staged alongside — without these GDAL throws "Unable to open .shx". */
     def stageHeadForSchemaSpark(
-        spark: org.apache.spark.sql.SparkSession,
+        spark: SparkSession,
         headPath: String,
         candidates: Seq[String]
+    ): String = stageHeadForSchemaSpark(spark, headPath, candidates, schemaReadSteps(spark))
+
+    private[util] def stageHeadForSchemaSpark(
+        spark: SparkSession,
+        headPath: String,
+        candidates: Seq[String],
+        steps: Seq[SchemaReadStep]
     ): String = {
         def baseName(p: String): String = p.replace("\\", "/").reverse.takeWhile(_ != '/').reverse
         def toPosix(p: String): String = p.stripPrefix("file:").stripPrefix("dbfs:")
@@ -306,16 +358,7 @@ object HadoopUtils {
                     s"The directory may contain no readable data files."
                 )
             }
-            val bytes: Array[Byte] =
-                try java.nio.file.Files.readAllBytes(new java.io.File(local).toPath)
-                catch {
-                    case _: Throwable =>
-                        // analyzer thread lacked the FUSE credential -> read on an executor task,
-                        // which carries it (proven: executor java.io.File reads /Volumes).
-                        spark.sparkContext.parallelize(Seq(local), 1)
-                            .map(lp => java.nio.file.Files.readAllBytes(new java.io.File(lp).toPath))
-                            .collect().head
-                }
+            val bytes = readBytesForSchema(local, steps)
             java.nio.file.Files.write(new java.io.File(tmpDir, baseName(p)).toPath, bytes)
         }
         new java.io.File(tmpDir, headName).getAbsolutePath

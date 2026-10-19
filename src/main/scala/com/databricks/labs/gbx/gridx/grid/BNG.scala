@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.gridx.grid
 
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.GeometryTypeEnum._
+import com.databricks.labs.gbx.vectorx.jts.JTS.implicits._
 import com.databricks.labs.gbx.vectorx.jts.{GeometryTypeEnum, JTS}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -848,12 +849,12 @@ object BNG extends GridSystem {
         })
         val borderChips = borderIndices.map(cell => {
             val cellGeom = cellIdToGeometry(cell)
-            val intersect = JTS.intersection(cellGeom, geometry)
+            val intersect = cellGeom.collectionAwareIntersection(geometry)
             if (intersect.isEmpty) (cell, false, intersect)
             else {
                 val adjusted =
                     if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
-                        JTS.difference(intersect, cellGeom.getBoundary)
+                        intersect.collectionAwareDifference(cellGeom.getBoundary)
                     } else {
                         intersect
                     }

@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.gridx.grid
 
 import com.databricks.labs.gbx.gridx.expressions.GridErrorHandler
 import com.databricks.labs.gbx.vectorx.jts.GeometryTypeEnum._
+import com.databricks.labs.gbx.vectorx.jts.JTS.implicits._
 import com.databricks.labs.gbx.vectorx.jts.{GeometryTypeEnum, JTS}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
@@ -817,7 +818,7 @@ object BNG extends GridSystem {
         keepCoreGeom: Boolean
     ): Iterator[(Long, Boolean, Geometry)] = {
 
-        val inGeomType = geometry.getGeometryType
+        val inputDimension = geometry.getDimension
         val radius = getBufferRadius(geometry, resolution)
         val carvedGeometry = geometry.buffer(-radius)
 
@@ -848,12 +849,12 @@ object BNG extends GridSystem {
         })
         val borderChips = borderIndices.map(cell => {
             val cellGeom = cellIdToGeometry(cell)
-            val intersect = cellGeom.intersection(geometry)
+            val intersect = cellGeom.collectionAwareIntersection(geometry)
             if (intersect.isEmpty) (cell, false, intersect)
             else {
                 val adjusted =
                     if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
-                        intersect.difference(cellGeom.getBoundary)
+                        intersect.collectionAwareDifference(cellGeom.getBoundary)
                     } else {
                         intersect
                     }
@@ -868,9 +869,10 @@ object BNG extends GridSystem {
                     (cell, false, adjusted)
                 }
             }
-        }).filterNot(_._3.isEmpty)
+        }).filter(t => t._3 == null || !t._3.isEmpty)
 
-        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getGeometryType == inGeomType)
+        // Clipping a Polygon can legitimately produce a MultiPolygon (and vice versa).
+        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getDimension == inputDimension)
     }
 
 }

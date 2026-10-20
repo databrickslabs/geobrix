@@ -1,6 +1,6 @@
 """Spark-free unit tests for BNG tessellation (Task 6).
 
-Tests the core/border split and the mosaic#423 input-geometry-type chip filter
+Tests the core/border split and the mosaic#423 input-dimension chip filter
 ported from ``BNG.tessellate`` (gridx/grid/BNG.scala line 754). Chips are plain
 WKB (NO SRID), matching heavy ``JTS.toWKB``.
 """
@@ -9,10 +9,93 @@ import pytest
 
 shapely = pytest.importorskip("shapely")
 
-from shapely import from_wkb, get_srid, to_wkb  # noqa: E402
+from shapely import from_wkb, from_wkt, get_srid, set_srid, to_wkb  # noqa: E402
 from shapely.geometry import box  # noqa: E402
 
 from databricks.labs.gbx.pygx import _bng  # noqa: E402
+
+# Synthetic, valid polygons with no holes crossing Easting 400000. Their eastern
+# clips contain two polygons + a boundary line, or a polygon + a boundary point.
+_BOUNDARY_CLIPS = [
+    (
+        "POLYGON ((399998 500001, 400002 500001, 400002 500002, 400000 500002, "
+        "400000 500003, 400002 500003, 400002 500004, 399998 500004, 399998 500001))",
+        "MultiPolygon",
+    ),
+    (
+        "POLYGON ((399998 500001, 400002 500001, 400002 500002, 399999 500002, "
+        "400000 500003, 399999 500004, 399998 500004, 399998 500001))",
+        "Polygon",
+    ),
+]
+
+
+@pytest.mark.parametrize("wkt, eastern_type", _BOUNDARY_CLIPS)
+@pytest.mark.parametrize("keep_core_geom", [False, True])
+def test_tessellate_mixed_boundary_clip_preserves_cells_and_area(
+    wkt, eastern_type, keep_core_geom
+):
+    polygon = from_wkt(wkt)
+    assert polygon.is_valid and not polygon.interiors
+    east = _bng.point_to_cell_id(400001, 500001, 2)
+    west = _bng.point_to_cell_id(399999, 500001, 2)
+    clipped = _bng.cell_id_to_geometry(east).intersection(polygon)
+    assert clipped.geom_type == "GeometryCollection"
+
+    chips = _bng.tessellate(polygon, 2, keep_core_geom)
+    assert {cell for cell, _, _ in chips} == {east, west}
+    assert all(chip.geom_type in ("Polygon", "MultiPolygon") for _, _, chip in chips)
+    assert sum(chip.area for _, _, chip in chips) == pytest.approx(polygon.area)
+    assert (
+        next(chip for cell, _, chip in chips if cell == east).geom_type == eastern_type
+    )
+
+    # Public wrapper must retain the same cells and geometry after WKB encoding.
+    encoded = _bng.tessellate_str(to_wkb(polygon), 2, keep_core_geom)
+    assert {cell for cell, _, _ in encoded} == {_bng.format(east), _bng.format(west)}
+    assert sum(from_wkb(chip).area for _, _, chip in encoded) == pytest.approx(
+        polygon.area
+    )
+
+
+def test_tessellate_multipolygon_retains_polygon_chips():
+    polygon = from_wkt(_BOUNDARY_CLIPS[1][0])
+    multi = shapely.geometry.MultiPolygon([polygon])
+    chips = _bng.tessellate(multi, 2)
+    assert len(chips) == 2
+    assert all(chip.geom_type == "Polygon" for _, _, chip in chips)
+    assert sum(chip.area for _, _, chip in chips) == pytest.approx(polygon.area)
+
+
+def test_clean_chip_geometry_handles_nested_collections_and_preserves_srid():
+    collection = set_srid(
+        from_wkt(
+            "GEOMETRYCOLLECTION (POLYGON ((1 1, 2 1, 2 2, 1 2, 1 1)), "
+            "GEOMETRYCOLLECTION (LINESTRING (0 1, 0 2), POINT (0 3), POINT EMPTY))"
+        ),
+        27700,
+    )
+    result = _bng._clean_chip_geometry(collection, box(0, 0, 4, 4).boundary)
+    assert result.geom_type == "Polygon"
+    assert result.equals(box(1, 1, 2, 2))
+    assert get_srid(result) == 27700
+
+
+def test_clean_chip_geometry_preserves_non_boundary_points_and_lines():
+    collection = from_wkt("GEOMETRYCOLLECTION (POINT (1 1), LINESTRING (2 1, 2 2))")
+    result = _bng._clean_chip_geometry(collection, box(0, 0, 4, 4).boundary)
+    assert result.normalize().equals_exact(collection.normalize(), 0)
+
+
+def test_clean_chip_geometry_discards_empty_results_and_leaves_ordinary_clips_alone():
+    boundary = box(0, 0, 4, 4).boundary
+    for wkt in [
+        "GEOMETRYCOLLECTION EMPTY",
+        "GEOMETRYCOLLECTION (POINT (0 1), LINESTRING (0 2, 0 3))",
+    ]:
+        assert _bng._clean_chip_geometry(from_wkt(wkt), boundary).is_empty
+    polygon = box(0, 0, 2, 2)
+    assert _bng._clean_chip_geometry(polygon, boundary) is polygon
 
 
 def test_tessellate_box_has_core_and_border():

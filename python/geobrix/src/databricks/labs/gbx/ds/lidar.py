@@ -488,12 +488,11 @@ def _readable_points(h, local: str, size: int, hook) -> int:
 
 
 def _serial_laz_backends(laspy):
-    """The installed LAZ backends without laspy's parallel one, or None (laspy's
-    default) when no other is installed. After a seek, the parallel decoder
-    fills a read that runs past the compressed data with zeros instead of
-    failing, so a LAZ file that declares more points than it holds would yield
-    zero-filled points; the single-threaded decoders raise. Uncompressed files
-    ignore the backend."""
+    """The installed LAZ backends without laspy's parallel one, or None when no
+    other is installed. Used only to tell a zero-filled tail from real zeros
+    (see :meth:`_Cursor.read`): reading is left on laspy's default (parallel)
+    decoder, which fails on garbled compressed data, where the single-threaded
+    one can return wrong points without failing after a seek."""
     backends = tuple(
         b
         for b in laspy.LazBackend.detect_available()
@@ -502,11 +501,22 @@ def _serial_laz_backends(laspy):
     return backends or None
 
 
+def _zero_tail(points) -> int:
+    """How many records at the end of ``points`` have all their bytes zero."""
+    n = len(points)
+    if n == 0:
+        return 0
+    raw = np.ascontiguousarray(points.array).view(np.uint8).reshape(n, -1)
+    if raw[-1].any():
+        return 0
+    nonzero = np.flatnonzero(raw.any(axis=1))
+    return n - (int(nonzero[-1]) + 1 if nonzero.size else 0)
+
+
 class _Cursor:
     """Where points are read from: the file's reader, or after a failure a
     fresh open of the file positioned where the next read starts (the previous
-    one is closed), decoded single-threaded (see :func:`_serial_laz_backends`).
-    Environment errors (memory, I/O, no LAZ backend) raise."""
+    one is closed). Environment errors (memory, I/O, no LAZ backend) raise."""
 
     def __init__(self, laspy, local, reader):
         self.laspy, self.local = laspy, local
@@ -516,8 +526,7 @@ class _Cursor:
     def reopen(self, at: int) -> bool:
         self.close()
         try:
-            backends = _serial_laz_backends(self.laspy)
-            r = self.laspy.open(self.local, laz_backend=backends)
+            r = self.laspy.open(self.local)
         except _quarantine.PASS_THROUGH:
             raise
         except BaseException as e:  # noqa: BLE001 - the caller records the loss
@@ -538,14 +547,50 @@ class _Cursor:
         return True
 
     def read(self, at: int, n: int):
-        """``n`` points from point ``at``; raises when they cannot be read."""
+        """``n`` points from point ``at``; raises when they cannot be read.
+
+        After a seek, laspy's parallel LAZ decoder fills a read that runs past
+        the compressed data with zero bytes instead of failing (a file whose
+        header declares more points than it holds). So on a reopened reader of
+        compressed points, a read whose last records are all zero is checked:
+        that run is re-read with a single-threaded decoder, which decodes real
+        zero records and fails past the data. Only then is it data; otherwise
+        the read raises and the run is a loss like any undecodable stretch. A
+        zero record followed by any other record is not checked, nor is a read
+        of the file's own reader (no seek: it fails past the data)."""
         if (self.reader is None or self.pos != at) and not self.reopen(at):
             raise self.error  # the decoder's own error: the record's class
         points = self.reader.read_points(n)
         if len(points) != n:
             raise ValueError(f"read {len(points)} of {n} points")
+        if self._owned is not None and self.reader.header.are_points_compressed:
+            zeros = _zero_tail(points)
+            if zeros:
+                self._check_zero_run(at + n - zeros, zeros)
         self.pos = at + n
         return points
+
+    def _check_zero_run(self, first: int, count: int) -> None:
+        """Raise unless points ``[first, first + count)``, all-zero records from
+        the parallel decoder, decode as all-zero records single-threaded."""
+        backends = _serial_laz_backends(self.laspy)
+        cause = None
+        if backends is not None:
+            try:
+                with self.laspy.open(self.local, laz_backend=backends) as r:
+                    r.seek(first)
+                    again = r.read_points(count)
+                if len(again) == count and _zero_tail(again) == count:
+                    return
+            except _quarantine.PASS_THROUGH:
+                raise
+            except BaseException as e:  # noqa: BLE001 - past the data: a loss
+                _raise_if_environment(e)
+                cause = e
+        raise ValueError(
+            f"points {first} to {first + count - 1} decode as zero-filled "
+            "records past the end of the compressed point data"
+        ) from cause
 
     def close(self) -> None:
         self.reader = None

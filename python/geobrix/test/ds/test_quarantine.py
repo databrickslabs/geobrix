@@ -591,9 +591,11 @@ def test_lidar_record_length_counting_missing_extra_bytes_reads_nothing(tmp_path
     assert "38 bytes" in rec["error_message"]
 
 
-def _laz(path, n=5000):
-    """A one-chunk LAZ file with UTM-like offsets: a zero-filled point record
-    decodes to the offset corner, which lies inside the header bounds."""
+def _laz(path, n=5000, zero_points=()):
+    """A LAZ file (one chunk up to laspy's 50,000 points) with UTM-like offsets:
+    a zero-filled point record decodes to the offset corner, which lies inside
+    the header bounds. ``zero_points`` are written as records whose bytes are
+    all zero (raw X/Y/Z 0; every other field is 0 in every point)."""
     import laspy
 
     header = laspy.LasHeader(point_format=3, version="1.2")
@@ -604,6 +606,11 @@ def _laz(path, n=5000):
     las.x = rng.uniform(500000, 500100, n)
     las.y = rng.uniform(4000000, 4000100, n)
     las.z = rng.uniform(100, 110, n)
+    if zero_points:
+        for dim in ("X", "Y", "Z"):
+            raw = np.array(getattr(las, dim))
+            raw[list(zero_points)] = 0
+            setattr(las, dim, raw)
     las.write(str(path))
     return str(path)
 
@@ -647,6 +654,62 @@ def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):
     path = _laz(tmp_path / "a.laz")
     rows, recs = _read(tmp_path, path, "lidar_gbx")
     assert len(rows) == 5000 and recs == []
+
+
+def _garbled_laz(tmp_path, at, zero_points=()):
+    """A 210,000-point LAZ (5 chunks) with 64 bytes of its compressed data
+    garbled at ``at`` (a fraction of the file size); returns its path and the
+    raw X/Y/Z of its points before the garbling."""
+    import laspy
+
+    path = _laz(tmp_path / "g.laz", 210_000, zero_points)
+    las = laspy.read(path)
+    original = set(zip(las.X.tolist(), las.Y.tolist(), las.Z.tolist()))
+    _garble(path, int(os.path.getsize(path) * at), 64)
+    return path, original
+
+
+def _raw_xyz(row):
+    return (
+        round((row["x"] - 500000.0) / 0.01),
+        round((row["y"] - 4000000.0) / 0.01),
+        round((row["z"] - 100.0) / 0.01),
+    )
+
+
+def _recorded_points(recs):
+    n = 0
+    for r in recs:
+        index = r["record_index"] or ""
+        if index.startswith("points="):
+            a, b = index[len("points=") :].split("-")
+            n += int(b) - int(a) + 1
+        elif index.startswith("point="):
+            n += 1
+    return n
+
+
+@pytest.mark.parametrize("at", [0.3, 0.5])
+def test_lidar_garbled_laz_chunk_reads_no_point_that_is_not_in_the_file(tmp_path, at):
+    """Real garbled compressed data: the chunk that does not decode is a record
+    and every row is a point of the file (a decoder that misses the garbling
+    after a seek returns wrong points without failing)."""
+    path, original = _garbled_laz(tmp_path, at)
+    rows, recs = _read(tmp_path, path, "lidar_gbx", {"dimensions": "x,y,z"})
+    assert rows and recs
+    assert [r for r in rows if _raw_xyz(r) not in original] == []
+    assert len(rows) + _recorded_points(recs) == 210_000
+
+
+def test_lidar_all_zero_points_read_after_a_reopen_are_data(tmp_path):
+    """Points whose record bytes are all zero are data, also at the end of a
+    read on the salvage path (after a reopen), where a zero-filled tail is
+    otherwise taken for records past the compressed data."""
+    path, original = _garbled_laz(tmp_path, 0.5, zero_points=(1500, 1998, 1999))
+    rows, recs = _read(tmp_path, path, "lidar_gbx", {"dimensions": "x,y,z"})
+    assert len(_at_offset_corner(rows)) == 3
+    assert [r for r in rows if _raw_xyz(r) not in original] == []
+    assert len(rows) + _recorded_points(recs) == 210_000
 
 
 # --- EXIF -----------------------------------------------------------------------------

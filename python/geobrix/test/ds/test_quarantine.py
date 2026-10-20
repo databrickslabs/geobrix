@@ -498,15 +498,37 @@ def test_lidar_truncated_file_reads_its_complete_points(tmp_path):
     assert "ends after 2500 of the 5000 points" in rec["error_message"]
 
 
+_CHECK_BOUNDS = {"checkHeaderBounds": "true"}
+
+
 def test_lidar_garbled_points_outside_the_header_bounds_are_set_aside(tmp_path):
+    """With checkHeaderBounds, points outside the header's bounds are a record."""
     path, offset, reclen = _las(tmp_path / "a.las")
     for i in range(2500, 2510):  # X of 10 records -> far outside the bounds
         with open(path, "r+b") as fh:
             fh.seek(offset + i * reclen)
             fh.write(struct.pack("<i", 2_000_000_000))
-    rows, recs = _read(tmp_path, path, "lidar_gbx", {"chunkSize": "1000"})
+    rows, recs = _read(
+        tmp_path, path, "lidar_gbx", {"chunkSize": "1000", **_CHECK_BOUNDS}
+    )
     assert len(rows) == 4990
     assert _classes(recs) == [("points=2500-2509", Q.POINT_OUT_OF_BOUNDS)]
+
+
+def test_lidar_points_outside_the_header_bounds_are_data_by_default(tmp_path):
+    """The header-bounds check is opt-in: by default a point outside the bounds
+    the header declares (a header not updated after its points changed) is read
+    and is no record; with checkHeaderBounds it is set aside as before."""
+    path, _, _ = _las(tmp_path / "a.las")  # x in 0..100
+    with open(path, "r+b") as fh:  # LAS 1.2: max x at byte 179
+        fh.seek(179)
+        fh.write(struct.pack("<d", 90.0))
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 5000 and recs == []
+    shutil.rmtree(tmp_path / "bad_records", ignore_errors=True)
+    rows, recs = _read(tmp_path, path, "lidar_gbx", _CHECK_BOUNDS)
+    assert 0 < len(rows) < 5000
+    assert {c for _, c in _classes(recs)} == {Q.POINT_OUT_OF_BOUNDS}
 
 
 def test_lidar_files_it_used_to_skip_are_records(tmp_path):
@@ -1028,8 +1050,9 @@ def test_zipped_shapefile_deleted_records_are_not_counted(tmp_path):
 
 
 def test_lidar_points_just_past_slightly_off_header_bounds_are_data(tmp_path):
-    """A header whose bounds are a little off (rounded) does not set valid
-    points aside: the tolerance is a small part of the extent."""
+    """With checkHeaderBounds, a header whose bounds are a little off (rounded)
+    does not set valid points aside: the tolerance is a small part of the
+    extent."""
     import laspy
 
     path, offset, reclen = _las(tmp_path / "a.las", 1000)
@@ -1038,7 +1061,7 @@ def test_lidar_points_just_past_slightly_off_header_bounds_are_data(tmp_path):
     with open(path, "r+b") as fh:  # LAS 1.2: max x at byte 179
         fh.seek(179)
         fh.write(struct.pack("<d", float(maxs[0]) - 0.02))
-    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    rows, recs = _read(tmp_path, path, "lidar_gbx", _CHECK_BOUNDS)
     assert len(rows) == 1000 and recs == []
 
 

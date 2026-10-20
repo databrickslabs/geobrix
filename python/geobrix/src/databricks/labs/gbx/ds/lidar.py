@@ -144,6 +144,12 @@ class LidarGbxReader(DataSourceReader):
         )
         self.decimate: int = int(options.get("decimate", "1"))
         self.chunk_size: int = int(options.get("chunkSize", "1000000"))
+        # Under a read_paths / declare_ingest bad-record hook only: set aside points
+        # outside the bounds the file header declares (opt-in; many headers carry
+        # bounds that were never updated after their points changed).
+        self.check_header_bounds: bool = (
+            str(options.get("checkHeaderBounds", "false")).lower() == "true"
+        )
         # Optional column projection: comma-separated subset of the base point
         # columns to return (schema order). None = all columns.
         self.dimensions: Optional[List[str]] = _select_point_dimensions(
@@ -201,7 +207,8 @@ class LidarGbxReader(DataSourceReader):
         if self.return_filter is not None:
             need.add("return_number")
         hook = _quarantine.hook_of(self)
-        if hook is not None:
+        check_bounds = hook is not None and self.check_header_bounds
+        if check_bounds:
             need |= {"x", "y", "z"}  # checked against the header bounds
 
         seen = 0  # filter-passing points seen in this file (decimate parity)
@@ -249,7 +256,8 @@ class LidarGbxReader(DataSourceReader):
                     if batch is not None:
                         yield batch
                 return
-            bounds = _header_bounds(reader.header)
+            if check_bounds:
+                bounds = _header_bounds(reader.header)
             limit = _readable_points(reader.header, local, st.st_size, hook)
             yield from _checked_chunks(
                 laspy, local, reader, limit, self.chunk_size, _emit, hook
@@ -363,8 +371,9 @@ _SALVAGE_POINTS = 1000
 # ends the read, whatever chunkSize is.
 _GIVE_UP_CHUNKS = 3
 _GIVE_UP_POINTS = 250_000
-# Bounds check: a header's bounds may be rounded or slightly stale, so a point
-# is out of bounds only past this part of the extent (plus one scale step).
+# Bounds check (opt-in, checkHeaderBounds): a header's bounds may be rounded or
+# slightly stale, so a point is out of bounds only past this part of the extent
+# (plus one scale step).
 _BOUNDS_SLACK = 1e-3
 # A LAZ point takes more than this many bytes, so a header count beyond
 # (bytes of point data / this) cannot be in the file.

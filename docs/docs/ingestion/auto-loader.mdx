@@ -232,7 +232,7 @@ found:
 | `UnreadableGeometry` | The geometry bytes are not valid WKB (for example a polygon ring that is not closed) |
 | `InvalidText` | A text value is not valid UTF-8 |
 | `RecordsNotRead` | The file declares features, points or lines its reader did not return (a dropped `.dbf` record, an unreadable GeoPackage page, a truncated LAS file, a GeoJSONSeq line that is not JSON) |
-| `PointOutOfBounds` | LiDAR points outside the bounds the file's header declares, by more than 0.1% of its extent and one scale step (garbled point records) |
+| `PointOutOfBounds` | LiDAR points outside the bounds the file's header declares, by more than 0.1% of its extent and one scale step (garbled point records), when the `lidar_gbx` option `checkHeaderBounds` is `"true"` |
 | `ShortTile` | A PMTiles tile is shorter than its directory entry declares (a truncated archive) |
 | `NotJpeg` | A `.jpg` / `.jpeg` file has no JPEG start marker, or header segments that do not lead to a frame header (nothing is decoded, so a very large image is still a JPEG; a missing end marker only gives a warning: a truncated scan, or a Motion Photo's video after the image) |
 | `UnreadableFile` | An empty file, or a LAS file whose point record length does not fit its data |

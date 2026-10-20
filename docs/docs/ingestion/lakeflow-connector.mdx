@@ -139,6 +139,11 @@ environment's dependencies. Set `connection_name` and list one entry per table i
   testFile="docs/tests/python/ingestion/test_lakeflow_connector_examples.py"
 />
 
+The file registers `GeoBrixDataSource`, the connector's PySpark data source; the framework serves
+its tables through `GeoBrixLakeflowConnect`, the connector's implementation of the framework's
+`LakeflowConnect` interface (table discovery, schemas and offsets), which needs no registration of
+its own.
+
 Each pipeline update creates or appends to one streaming table per entry. `source_table` names a
 dataset discovered under `root_path`, or any name when the entry sets `path`; the other keys of
 `table_configuration` are the [table options](#table-options).

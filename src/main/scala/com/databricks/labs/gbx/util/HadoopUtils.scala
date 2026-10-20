@@ -419,10 +419,30 @@ object HadoopUtils extends Logging {
         new java.io.File(tmpDir, headName).getAbsolutePath
     }
 
+    /** Bytes one schema read can hold: a file is read into one byte array, and a `binaryFile` query's
+      * `content` is capped at this (Spark's `ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH`), just under 2 GiB. */
+    private[util] val MaxSchemaReadBytes: Long = Int.MaxValue - 15L
+
+    /** The length of `local`: from the file system when this JVM can stat it, else from a `binaryFile`
+      * listing (metadata only, the content is not read); None when neither tells. */
+    private def schemaReadLength(spark: SparkSession, local: String): Option[Long] = {
+        val f = new java.io.File(local)
+        if (f.isFile) {
+            Some(f.length())
+        } else {
+            scala.util
+                .Try(spark.read.format("binaryFile").load(escapeGlob(local)).select("length").collect())
+                .toOption
+                .flatMap(_.headOption.map(_.getLong(0)))
+        }
+    }
+
     /** Stages a FileGDB / zipped OGR dataset for schema inference through credentialed reads, for when
       * NodeFileManager's analyzer-thread Hadoop copy is refused (DCS dedicated). A file (`.zip`,
-      * `.gdb.zip`) goes through `readBytesForSchema`; a `.gdb` directory is read with one `binaryFile`
-      * query over its (flat) files. Returns the local path to open. */
+      * `.gdb.zip`) goes through `readBytesForSchema`, and one over `MaxSchemaReadBytes` is refused with
+      * an error naming the limit. A `.gdb` directory is read with one `binaryFile` query over its (flat)
+      * files, fetched to the driver a partition at a time and written as each arrives, so the driver
+      * never holds the whole dataset. Returns the local path to open. */
     def stageDatasetForSchemaSpark(spark: SparkSession, datasetPath: String): String =
         stageDatasetForSchemaSpark(spark, datasetPath, schemaReadSteps(spark))
 
@@ -434,15 +454,26 @@ object HadoopUtils extends Logging {
         def baseName(p: String): String = p.replace("\\", "/").stripSuffix("/").reverse.takeWhile(_ != '/').reverse
         val local = datasetPath.stripPrefix("file:").stripPrefix("dbfs:").stripSuffix("/")
         val name = baseName(local)
+        val isGdbDir = name.toLowerCase(java.util.Locale.ROOT).endsWith(".gdb")
+        if (!isGdbDir) schemaReadLength(spark, local).filter(_ > MaxSchemaReadBytes).foreach { length =>
+            throw new java.io.IOException(
+              s"Cannot read $datasetPath for schema inference: it is $length bytes, and a schema read holds " +
+                  s"one file of at most $MaxSchemaReadBytes bytes (2 GiB, the binaryFile content limit). " +
+                  "Unzip it and read the unzipped dataset (a .gdb folder is read file by file)."
+            )
+        }
         val tmpDir = java.nio.file.Files.createTempDirectory("gbx_ogr_schema_").toFile
-        if (name.toLowerCase(java.util.Locale.ROOT).endsWith(".gdb")) {
+        if (isGdbDir) {
             val outDir = new java.io.File(tmpDir, name)
             outDir.mkdirs()
-            val rows = spark.read.format("binaryFile").load(escapeGlob(local)).select("path", "content").collect()
-            require(rows.nonEmpty, s"No files found in FileGDB directory $datasetPath")
-            rows.foreach(r =>
+            val rows = spark.read.format("binaryFile").load(escapeGlob(local)).select("path", "content").toLocalIterator()
+            var written = 0
+            while (rows.hasNext) {
+                val r = rows.next()
                 java.nio.file.Files.write(new java.io.File(outDir, baseName(r.getString(0))).toPath, r.getAs[Array[Byte]](1))
-            )
+                written += 1
+            }
+            require(written > 0, s"No files found in FileGDB directory $datasetPath")
             outDir.getAbsolutePath
         } else {
             val out = new java.io.File(tmpDir, name)

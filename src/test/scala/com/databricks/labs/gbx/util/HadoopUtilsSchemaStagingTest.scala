@@ -201,6 +201,50 @@ class HadoopUtilsSchemaStagingTest extends PlanTest with SilentSparkSession {
         parts.foreach { case (n, body) => new String(Files.readAllBytes(Paths.get(local, n))) shouldBe body }
     }
 
+    // Driver memory is not practical to assert here. What bounds it is that the driver fetches the
+    // query's result one partition at a time (toLocalIterator: one job per partition) instead of all
+    // partitions at once (collect: one job). With one file per partition, fewer jobs than files means
+    // the whole dataset was held on the driver at once.
+    test("stageDatasetForSchemaSpark fetches a FileGDB directory a partition at a time") {
+        val gdb = Files.createDirectory(tmpDir().resolve("roads.gdb"))
+        val parts = Map("a00000001.gdbtable" -> "t1", "a00000001.gdbtablx" -> "x1", "gdb" -> "g", "timestamps" -> "ts")
+        parts.foreach { case (n, body) => Files.write(gdb.resolve(n), body.getBytes) }
+        val group = "gbx-gdb-staging-test"
+        val jobs = new java.util.concurrent.atomic.AtomicInteger(0)
+        val listener = new org.apache.spark.scheduler.SparkListener {
+            override def onJobStart(e: org.apache.spark.scheduler.SparkListenerJobStart): Unit =
+                if (Option(e.properties).exists(_.getProperty("spark.jobGroup.id") == group)) jobs.incrementAndGet()
+        }
+        spark.sparkContext.addSparkListener(listener)
+        spark.sparkContext.setJobGroup(group, "FileGDB staging")
+        try {
+            val local = withSQLConf("spark.sql.files.maxPartitionBytes" -> "1", "spark.sql.files.openCostInBytes" -> "1") {
+                HadoopUtils.stageDatasetForSchemaSpark(spark, gdb.toString, Seq(refused, refused, queryStep))
+            }
+            parts.foreach { case (n, body) => new String(Files.readAllBytes(Paths.get(local, n))) shouldBe body }
+            import org.scalatest.time.{Millis, Seconds, Span}
+            eventually(timeout(Span(30, Seconds)), interval(Span(100, Millis))) { jobs.get should be >= parts.size }
+        } finally {
+            spark.sparkContext.clearJobGroup()
+            spark.sparkContext.removeSparkListener(listener)
+        }
+    }
+
+    test("stageDatasetForSchemaSpark refuses a zip over the 2 GiB a schema read holds, naming the limit") {
+        val zip = tmpDir().resolve("huge.gdb.zip")
+        val raf = new java.io.RandomAccessFile(zip.toFile, "rw")
+        try raf.setLength(3L << 30) // sparse: no 3 GiB written
+        finally raf.close()
+        try {
+            val e = intercept[IOException] {
+                HadoopUtils.stageDatasetForSchemaSpark(spark, zip.toString, Seq(refused, refused, queryStep))
+            }
+            e.getMessage should include(zip.toString)
+            e.getMessage should include("2 GiB")
+            e.getMessage should include(s"${3L << 30} bytes")
+        } finally Files.deleteIfExists(zip)
+    }
+
     // stageDatasetOrFallBack: the readRemote -> fallback decision OGR_DataSource.inferSchema makes for
     // FileGDB / zip inputs. NodeFileManager.readRemote throws on a refused copy (NodeFilePathUtil.readLock).
 

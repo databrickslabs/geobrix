@@ -264,8 +264,27 @@ object HadoopUtils extends Logging {
     }
 
     /** One way to read a file's bytes for OGR schema staging; `name` appears in the error when every
-      * step fails. */
-    private[util] final case class SchemaReadStep(name: String, read: String => Array[Byte])
+      * step fails. `skipsAfterRefusal` marks a step that goes through the same JVM file access as an
+      * earlier step: once any step failed with "Operation not permitted" (see `isFileAccessRefused`)
+      * it is refused the same way, so it is skipped rather than run as a failed Spark job. */
+    private[util] final case class SchemaReadStep(
+        name: String,
+        read: String => Array[Byte],
+        skipsAfterRefusal: Boolean = false
+    )
+
+    /** True when `e` (or its cause) is the refusal a DCS dedicated cluster gives the JVM process for
+      * `/Volumes` files: a `java.nio.file.AccessDeniedException`, or a `FileSystemException` whose
+      * reason or message says "Operation not permitted". */
+    private[util] def isFileAccessRefused(e: Throwable): Boolean = {
+        def refused(t: Throwable): Boolean = t match {
+            case _: java.nio.file.AccessDeniedException => true
+            case f: java.nio.file.FileSystemException =>
+                Seq(f.getReason, f.getMessage).exists(m => m != null && m.contains("Operation not permitted"))
+            case _ => false
+        }
+        refused(e) || (e.getCause != null && (e.getCause ne e) && refused(e.getCause))
+    }
 
     /** Escapes Hadoop glob characters so a `binaryFile` load matches exactly one literal path. */
     private[util] def escapeGlob(path: String): String =
@@ -280,7 +299,9 @@ object HadoopUtils extends Logging {
     }
 
     /** The default read order: java.nio on this thread; java.nio in a one-task Spark job (the executor
-      * carries the credential on classic and Serverless); a `binaryFile` query (DCS dedicated). */
+      * carries the credential on classic and Serverless); a `binaryFile` query (DCS dedicated). The
+      * executor java.nio step is skipped once the driver one was refused: the JVM is refused the same
+      * way in an executor task on DCS, and each attempt would be a failed Spark job. */
     private[util] def schemaReadSteps(spark: SparkSession): Seq[SchemaReadStep] = Seq(
       SchemaReadStep("driver java.nio", (lp: String) => java.nio.file.Files.readAllBytes(new java.io.File(lp).toPath)),
       SchemaReadStep(
@@ -290,28 +311,60 @@ object HadoopUtils extends Logging {
                 .parallelize(Seq(lp), 1)
                 .map(p => java.nio.file.Files.readAllBytes(new java.io.File(p).toPath))
                 .collect()
-                .head
+                .head,
+        skipsAfterRefusal = true
       ),
       SchemaReadStep("binaryFile query", (lp: String) => binaryFileBytes(spark, lp))
     )
 
-    /** Returns the bytes from the first step that succeeds; if every step fails, throws an
-      * IOException listing each step's error. */
-    private[util] def readBytesForSchema(path: String, steps: Seq[SchemaReadStep]): Array[Byte] =
-        steps.foldLeft[Either[List[String], Array[Byte]]](Left(Nil)) {
-            case (done @ Right(_), _) => done
-            case (Left(errors), step) =>
-                try Right(step.read(path))
-                catch { case NonFatal(e) => Left(errors :+ s"${step.name}: ${e.getClass.getSimpleName}: ${e.getMessage}") }
-        } match {
-            case Right(bytes) => bytes
-            case Left(errors) => throw new java.io.IOException(s"Could not read $path for schema inference (${errors.mkString("; ")})")
+    /** Reads the files of ONE staging call (a head file plus its sidecars) through `steps`. A step
+      * that failed is not retried for the next file: reading starts from the step that last
+      * succeeded (steps are ordered by preference, so the earlier ones are the ones that failed).
+      * Once a step fails with "Operation not permitted", steps marked `skipsAfterRefusal` are
+      * skipped for the rest of the call. */
+    private[util] final class SchemaReader(steps: Seq[SchemaReadStep]) {
+        private var first = 0
+        private var refused = false
+
+        /** Returns the bytes from the first usable step; if every step fails, throws an IOException
+          * listing each step's outcome. */
+        def read(path: String): Array[Byte] = {
+            @scala.annotation.tailrec
+            def attempt(i: Int, errors: Vector[String]): Array[Byte] =
+                if (i >= steps.length) {
+                    throw new java.io.IOException(s"Could not read $path for schema inference (${errors.mkString("; ")})")
+                } else {
+                    val step = steps(i)
+                    if (refused && step.skipsAfterRefusal) {
+                        attempt(i + 1, errors :+ s"${step.name}: skipped, the JVM is refused direct file reads")
+                    } else {
+                        val result =
+                            try Right(step.read(path))
+                            catch { case NonFatal(e) => Left(e) }
+                        result match {
+                            case Right(bytes) =>
+                                first = i
+                                bytes
+                            case Left(e) =>
+                                if (isFileAccessRefused(e)) refused = true
+                                attempt(i + 1, errors :+ s"${step.name}: ${e.getClass.getSimpleName}: ${e.getMessage}")
+                        }
+                    }
+                }
+            attempt(first, Vector.empty)
         }
+    }
+
+    /** Returns the bytes from the first step that succeeds; if every step fails, throws an
+      * IOException listing each step's error. One call, one file: see `SchemaReader` for several. */
+    private[util] def readBytesForSchema(path: String, steps: Seq[SchemaReadStep]): Array[Byte] =
+        new SchemaReader(steps).read(path)
 
     /** Stages a dataset's head file (plus any same-stem sidecars, e.g. shapefile `.shx`/`.dbf`/
       * `.prj`) to a local temp dir for OGR schema inference, returning the local head path. Reads
-      * bytes through `readBytesForSchema`: java.nio on the driver, then in an executor task, then a
+      * bytes through one `SchemaReader`: java.nio on the driver, then in an executor task, then a
       * `binaryFile` query (DCS dedicated, where the JVM process is refused direct `/Volumes` reads).
+      * The sidecars start from the step that read the head, so a refused step is not retried per file.
       * `candidates` is the `listDataFilesSpark` listing, used to find the sidecars.
       *
       * When `headPath` is a bare `.shp` file path and `candidates` contains no sidecar siblings
@@ -348,6 +401,7 @@ object HadoopUtils extends Logging {
                 fromCandidates
         val toStage = if (siblings.isEmpty) Seq(headPath) else siblings
         val tmpDir = java.nio.file.Files.createTempDirectory("gbx_ogr_schema_").toFile
+        val reader = new SchemaReader(steps)
         for (p <- toStage) {
             val local = toPosix(p)
             // Defensive guard: never attempt to read a directory as bytes. This can happen if
@@ -359,7 +413,7 @@ object HadoopUtils extends Logging {
                     s"The directory may contain no readable data files."
                 )
             }
-            val bytes = readBytesForSchema(local, steps)
+            val bytes = reader.read(local)
             java.nio.file.Files.write(new java.io.File(tmpDir, baseName(p)).toPath, bytes)
         }
         new java.io.File(tmpDir, headName).getAbsolutePath

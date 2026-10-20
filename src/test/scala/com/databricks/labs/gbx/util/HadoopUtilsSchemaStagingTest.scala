@@ -56,6 +56,134 @@ class HadoopUtilsSchemaStagingTest extends PlanTest with SilentSparkSession {
         }
     }
 
+    // Counting fakes: each step records its calls so the tests can see which steps a staging call runs.
+
+    private def counting(
+        name: String,
+        calls: scala.collection.mutable.Map[String, Int],
+        skipsAfterRefusal: Boolean = false
+    )(body: String => Array[Byte]): HadoopUtils.SchemaReadStep =
+        HadoopUtils.SchemaReadStep(
+          name,
+          (p: String) => { calls(name) = calls.getOrElse(name, 0) + 1; body(p) },
+          skipsAfterRefusal
+        )
+
+    private def readsFile(p: String): Array[Byte] = Files.readAllBytes(Paths.get(p))
+
+    private def notThere(p: String): Nothing = throw new java.nio.file.NoSuchFileException(p)
+
+    private def operationNotPermitted(p: String): Nothing =
+        throw new java.nio.file.FileSystemException(p, null, "Operation not permitted")
+
+    private def shapefileBundle(): (Path, Seq[String], Map[String, String]) = {
+        val dir = tmpDir()
+        val parts = Map("roads.shp" -> "shp", "roads.shx" -> "shx", "roads.dbf" -> "dbf", "roads.prj" -> "prj")
+        parts.foreach { case (n, body) => Files.write(dir.resolve(n), body.getBytes) }
+        (dir, parts.keys.toSeq.sorted.map(n => dir.resolve(n).toString), parts)
+    }
+
+    private def stagedAs(local: String, parts: Map[String, String]): Unit =
+        parts.foreach { case (n, body) =>
+            new String(Files.readAllBytes(Paths.get(new File(local).getParent, n))) shouldBe body
+        }
+
+    test("stageHeadForSchemaSpark runs only the step that worked for the sidecars of a bundle") {
+        val (dir, candidates, parts) = shapefileBundle()
+        val calls = scala.collection.mutable.Map.empty[String, Int]
+        val steps = Seq(
+          counting("driver", calls)(notThere),
+          counting("executor", calls)(notThere),
+          counting("query", calls)(readsFile)
+        )
+        val local = HadoopUtils.stageHeadForSchemaSpark(spark, dir.resolve("roads.shp").toString, candidates, steps)
+        stagedAs(local, parts)
+        // Four files: the first probes driver and executor, the other three start at the query step.
+        calls.toMap shouldBe Map("driver" -> 1, "executor" -> 1, "query" -> 4)
+    }
+
+    test("a step that worked for the head file is also the first step for the sidecars") {
+        val (dir, candidates, parts) = shapefileBundle()
+        val calls = scala.collection.mutable.Map.empty[String, Int]
+        val steps = Seq(
+          counting("driver", calls)(notThere),
+          counting("executor", calls)(readsFile),
+          counting("query", calls)(readsFile)
+        )
+        stagedAs(HadoopUtils.stageHeadForSchemaSpark(spark, dir.resolve("roads.shp").toString, candidates, steps), parts)
+        calls.toMap shouldBe Map("driver" -> 1, "executor" -> 4)
+    }
+
+    test("an Operation not permitted driver failure never calls the executor step") {
+        val (dir, candidates, parts) = shapefileBundle()
+        val calls = scala.collection.mutable.Map.empty[String, Int]
+        val steps = Seq(
+          counting("driver", calls)(operationNotPermitted),
+          counting("executor", calls, skipsAfterRefusal = true)(readsFile),
+          counting("query", calls)(readsFile)
+        )
+        val local = HadoopUtils.stageHeadForSchemaSpark(spark, dir.resolve("roads.shp").toString, candidates, steps)
+        stagedAs(local, parts)
+        calls.toMap shouldBe Map("driver" -> 1, "query" -> 4)
+    }
+
+    test("an AccessDeniedException driver failure never calls the executor step") {
+        val f = tmpDir().resolve("roads.gpkg")
+        Files.write(f, Array[Byte](1, 2, 3))
+        val calls = scala.collection.mutable.Map.empty[String, Int]
+        val steps = Seq(
+          counting("driver", calls)(p => throw new java.nio.file.AccessDeniedException(p)),
+          counting("executor", calls, skipsAfterRefusal = true)(readsFile),
+          counting("query", calls)(readsFile)
+        )
+        HadoopUtils.readBytesForSchema(f.toString, steps) shouldBe Array[Byte](1, 2, 3)
+        calls.toMap shouldBe Map("driver" -> 1, "query" -> 1)
+    }
+
+    test("a different driver failure still tries the executor step") {
+        val (dir, candidates, parts) = shapefileBundle()
+        val calls = scala.collection.mutable.Map.empty[String, Int]
+        val steps = Seq(
+          counting("driver", calls)(notThere),
+          counting("executor", calls, skipsAfterRefusal = true)(readsFile),
+          counting("query", calls)(readsFile)
+        )
+        stagedAs(HadoopUtils.stageHeadForSchemaSpark(spark, dir.resolve("roads.shp").toString, candidates, steps), parts)
+        calls("executor") shouldBe 4
+        calls.get("query") shouldBe None
+    }
+
+    test("a skipped step is named in the error when every remaining step fails") {
+        val calls = scala.collection.mutable.Map.empty[String, Int]
+        val steps = Seq(
+          counting("driver", calls)(operationNotPermitted),
+          counting("executor", calls, skipsAfterRefusal = true)(readsFile),
+          counting("query", calls)(notThere)
+        )
+        val e = intercept[IOException] { HadoopUtils.readBytesForSchema("/no/such/file.gpkg", steps) }
+        e.getMessage should include("executor: skipped")
+        calls.get("executor") shouldBe None
+    }
+
+    test("the default steps skip the executor step after a refusal and the others never") {
+        HadoopUtils.schemaReadSteps(spark).map(s => (s.name, s.skipsAfterRefusal)) shouldBe Seq(
+          ("driver java.nio", false),
+          ("executor java.nio", true),
+          ("binaryFile query", false)
+        )
+    }
+
+    test("isFileAccessRefused recognises the DCS refusal and nothing broader") {
+        import HadoopUtils.isFileAccessRefused
+        isFileAccessRefused(new java.nio.file.AccessDeniedException("/Volumes/a/b/c")) shouldBe true
+        isFileAccessRefused(new java.nio.file.FileSystemException("/Volumes/a/b/c", null, "Operation not permitted")) shouldBe true
+        isFileAccessRefused(new java.nio.file.FileSystemException("/Volumes/a/b/c: Operation not permitted")) shouldBe true
+        isFileAccessRefused(new RuntimeException("wrapped", new java.nio.file.AccessDeniedException("/x"))) shouldBe true
+        isFileAccessRefused(new java.nio.file.NoSuchFileException("/Volumes/a/b/c")) shouldBe false
+        isFileAccessRefused(new java.nio.file.FileSystemException("/x", null, "Is a directory")) shouldBe false
+        isFileAccessRefused(new IOException("Operation not permitted")) shouldBe false
+    }
+
     test("stageDatasetForSchemaSpark stages a zipped FileGDB through the binaryFile step") {
         val zip = tmpDir().resolve("NYC_Sample.gdb.zip")
         Files.write(zip, Array[Byte](9, 8, 7))

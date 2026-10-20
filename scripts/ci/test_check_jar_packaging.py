@@ -1,4 +1,4 @@
-"""Tests for scripts/ci/check_jar_packaging.py (the fat JAR must not bundle scala-library)."""
+"""Tests for scripts/ci/check_jar_packaging.py (the fat JAR must not bundle Scala, Spark or log4j)."""
 
 import subprocess
 import sys
@@ -53,6 +53,85 @@ def test_accepts_jar_without_scala_library(tmp_path):
     assert "OK" in res.stdout
 
 
+def test_rejects_bundled_log4j(tmp_path):
+    res = _run(
+        _jar(
+            tmp_path,
+            [
+                "com/databricks/labs/gbx/A.class",
+                "org/apache/logging/log4j/core/Logger.class",
+            ],
+        )
+    )
+    assert res.returncode == 1
+    assert "org/apache/logging/log4j/core/Logger.class" in res.stderr
+    assert "log4j" in res.stderr
+
+
+def test_rejects_bundled_spark_classes(tmp_path):
+    res = _run(
+        _jar(
+            tmp_path,
+            ["com/databricks/labs/gbx/A.class", "org/apache/spark/SparkContext.class"],
+        )
+    )
+    assert res.returncode == 1
+    assert "org/apache/spark/SparkContext.class" in res.stderr
+    assert "Spark" in res.stderr
+
+
+def test_accepts_geobrix_spark_adapter_classes(tmp_path):
+    res = _run(
+        _jar(
+            tmp_path,
+            [
+                "org/apache/spark/sql/adapters/Column.class",
+                "com/databricks/labs/gbx/A.class",
+            ],
+        )
+    )
+    assert res.returncode == 0, res.stderr
+    assert "OK" in res.stdout
+
+
+def test_ignores_directory_entries_above_geobrix_spark_adapters(tmp_path):
+    # The real fat JAR carries zip directory entries for the ancestors of GeoBrix's own
+    # org/apache/spark/sql/adapters/ package; those hold no Spark classes.
+    res = _run(
+        _jar(
+            tmp_path,
+            [
+                "org/",
+                "org/apache/",
+                "org/apache/spark/",
+                "org/apache/spark/sql/",
+                "org/apache/spark/sql/adapters/",
+                "org/apache/spark/sql/adapters/Column.class",
+                "org/apache/logging/",
+            ],
+        )
+    )
+    assert res.returncode == 0, res.stderr
+
+
+def test_reports_every_offending_group(tmp_path):
+    res = _run(
+        _jar(
+            tmp_path,
+            [
+                "scala/Predef.class",
+                "org/apache/logging/log4j/core/Logger.class",
+                "org/apache/spark/SparkContext.class",
+            ],
+        )
+    )
+    assert res.returncode == 1
+    assert "scala/Predef.class" in res.stderr
+    assert "org/apache/logging/log4j/core/Logger.class" in res.stderr
+    assert "org/apache/spark/SparkContext.class" in res.stderr
+
+
 def test_usage_error_without_argument():
     res = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True)
     assert res.returncode == 2
+    assert "usage" in res.stderr

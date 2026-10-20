@@ -202,10 +202,13 @@ light_env6 = ["geobrix[light_dbr19]"]
 
 # ---------------------------------------------------------------------------
 # Feature-complete (_all) umbrellas — [light_dbrNN] + [stac] + [vizx]
-# [stac] stays: it is a generic, quiet STAC client (pystac-client/planetary-computer).
+# [stac] stays: it is a generic STAC client (pystac-client/planetary-computer). It floors
+#   requests>=2.34.2, so an _all install UPGRADES the base `requests` wherever the base is older
+#   (env 6 / DBR 19 base: 2.32.5). Checked against the DCS env 6 base image, `requests` is the
+#   one base package _all moves; the light extras' pins and the click cap below hold the rest.
 # [overture] and [earthdata] are opt-in source-specific downloaders NOT in _all:
 #   overturemaps 1.x needs click>=8.4 (a base package move — accepted for a
-#   downloader, like [earthdata]); keeping it out lets _all stay silent on-cluster.
+#   downloader, like [earthdata]); keeping it out keeps _all from also moving click.
 # The umbrellas also cap `click` at the per-regime base (pb5 <8.2 base 8.1.8;
 #   pb6 >=8.2,<8.3 base 8.2.1 — the floor stops a downgrade to 8.1.8) so
 #   [stac]/[vizx]'s closure can't float it (verified: env6
@@ -227,7 +230,10 @@ light_dbr17_all = [
     "geobrix[light_dbr17]",
     "geobrix[stac]",
     "geobrix[vizx]",
-    # Hold click at the env5 / DBR17.3-18 base (8.1.8) so _all installs silently.
+    # Hold click at the env5 / DBR17.3-18 base (8.1.8) so _all does not float it.
+    # [stac]'s requests>=2.34.2 floor can still upgrade the base `requests`; the env5 /
+    # DBR17.3-18 base requests version is not recorded in this repo, so whether it does
+    # there is unconfirmed.
     # Umbrella-only (see the header note) — does not bind the [overture] opt-in.
     "click<8.2",
 ]
@@ -240,7 +246,9 @@ light_dbr19_all = [
     "geobrix[light_dbr19]",
     "geobrix[stac]",
     "geobrix[vizx]",
-    # Hold click at the env6 / DBR19 base (8.2.1) so _all installs silently.
+    # Hold click at the env6 / DBR19 base (8.2.1) so _all does not float it.
+    # [stac]'s requests>=2.34.2 floor upgrades the env6 / DBR19 base requests (2.32.5), so
+    # an _all install is not silent: it moves `requests`.
     # The floor matters: a bare click<8.3 lets the resolver DOWNGRADE to 8.1.8
     # (verified on-cluster), so pin the 8.2.x line. Umbrella-only (see the header
     # note) — does not bind the [overture] opt-in.
@@ -264,6 +272,7 @@ overture = [
 ]
 # STAC catalog client (lightweight): distributed search + resilient download + repair.
 # Optional extra so [light_env6] users who don't need STAC don't pull pystac/planetary-computer.
+# requests>=2.34.2 is above the env 6 / DBR 19 base's 2.32.5, so installing [stac] upgrades it.
 stac = [
     "pystac-client>=0.7,<1",
     "planetary-computer>=1.0,<2",
@@ -275,7 +284,7 @@ stac = [
 # s3fs, which ties fsspec+botocore to one release era and CANNOT be installed
 # quietly against a Databricks base carrying old fsspec (2023.5.0) + new botocore
 # (1.40.45) — installing it WILL move fsspec (and/or botocore/urllib3). Keep it out
-# of _all so the feature bundle stays silent on Serverless; EMIT users add [earthdata]
+# of _all so the feature bundle does not also move fsspec/botocore; EMIT users add [earthdata]
 # explicitly and accept the churn.
 earthdata = [
     "earthaccess>=0.11,<1",

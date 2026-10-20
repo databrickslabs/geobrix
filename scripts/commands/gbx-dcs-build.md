@@ -35,5 +35,6 @@ bash scripts/commands/gbx-dcs-build.sh --target base --log dcs-base.log
 - The GDAL compile takes roughly 15-30 minutes natively; run it in the background with `--log` and tail the log.
 - The last two output lines are `IMAGE=<tag>` and `IMAGE_ID=<sha256:...>`. Any `VERIFY FAILED` line means the image is not usable.
 - Refusals (exit 1, before `docker build`): not exactly one JAR or wheel, JAR/wheel version mismatch, or a JAR that bundles the Scala library. Rebuild the JAR with `gbx:data:stage-jar` (set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to skip the upload).
+- The wheel is installed with `geobrix[light_env6,vizx]` (core plus visualization) under the base image's pinned packages. The release verify fails unless the visualization stack and the `tippecanoe` executables are present, `requests` is still the base image's version, and `pystac_client` (the `[stac]` extra) is absent.
 - After the build the command checks `docker history` of the new image and fails with `VERIFY FAILED` if a `PIP_INDEX_URL` value, or the configured index host, appears in the layers this build added (the image is meant for a public registry).
 - Dockerfile: `scripts/docker/dcs/Dockerfile`.

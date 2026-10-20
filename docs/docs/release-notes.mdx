@@ -245,8 +245,9 @@ formats.
 - **A GeoBrix image runs both tiers on a dedicated cluster.** `mjohns797/geobrix:<version>-env6-arm`
   (pinned to a release) and `mjohns797/geobrix:env6-arm` (the newest release) are built on the
   DCS vNext environment 6 ARM image and carry native GDAL 3.11.4 with its Java (JNI) bindings, the
-  GeoBrix wheel (installed with `[light_env6]`) and the GeoBrix JAR in `/databricks/jars`. Start a
-  dedicated Graviton (arm64) cluster on DBR 19 from the image and set
+  GeoBrix wheel (installed with `[light_env6,vizx]`: the core lightweight tier plus visualization)
+  and the GeoBrix JAR in `/databricks/jars`. Start a dedicated Graviton (arm64) cluster
+  on DBR 19 from the image and set
   `spark.databricks.unityCatalog.volumes.enabled true`: there is no init script and no cluster
   library to attach (a cluster should have only one GeoBrix JAR, so do not attach it again). The
   Dockerfile of each release is attached to the GitHub release as `geobrix-<version>-dcs.Dockerfile`.

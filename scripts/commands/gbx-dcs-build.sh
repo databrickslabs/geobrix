@@ -108,6 +108,45 @@ if [ "$TARGET" = "release" ]; then
         test ! -e /opt/geobrix
         /databricks/python3/bin/python -c 'import importlib.metadata as m; v=m.version(\"geobrix\"); assert v == \"$VER\", v'
     " || { echo "VERIFY FAILED: image contents in $TAG"; exit 1; }
+
+    # The image carries geobrix[light_env6,vizx]: the visualization stack is importable, [vizx]'s tippecanoe
+    # package provides its executables (a bundled binary plus a console script), and the STAC extra and
+    # anything that moves a base package are absent (so `requests` stays at the base image's version).
+    BASE_REQUESTS=$(docker run --rm --platform "linux/$ARCH" --entrypoint /databricks/python3/bin/python "$BASE_IMAGE" \
+        -c 'import importlib.metadata as m; print(m.version("requests"))') || { echo "VERIFY FAILED: could not read requests from $BASE_IMAGE"; exit 1; }
+    docker run --rm --platform "linux/$ARCH" --entrypoint /databricks/python3/bin/python "$TAG" -c '
+import importlib, importlib.metadata as md, os, sys
+
+
+def fail(what):
+    print("VERIFY FAILED: " + what)
+    sys.exit(1)
+
+
+for mod in ("geopandas", "mapclassify", "contextily", "imageio_ffmpeg", "anywidget"):
+    try:
+        importlib.import_module(mod)
+    except Exception:
+        fail("cannot import " + mod)
+try:
+    import tippecanoe
+except Exception:
+    fail("cannot import tippecanoe")
+exe = os.path.join(os.path.dirname(tippecanoe.__file__), "bin", "tippecanoe")
+if not (os.path.isfile(exe) and os.access(exe, os.X_OK)):
+    fail("tippecanoe bundled executable missing or not executable")
+if not os.access("/databricks/python3/bin/tippecanoe", os.X_OK):
+    fail("tippecanoe console script missing from /databricks/python3/bin")
+if md.version("requests") != sys.argv[1]:
+    fail("requests is " + md.version("requests") + ", the base image has " + sys.argv[1])
+try:
+    importlib.import_module("pystac_client")
+except ImportError:
+    pass
+else:
+    fail("pystac_client is installed; the image carries [light_env6,vizx], not [stac]")
+print("OK")
+' "$BASE_REQUESTS" || exit 1
 fi
 
 # The image history must not carry a package index (this image is published to a public registry).

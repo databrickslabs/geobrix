@@ -21,7 +21,7 @@ cluster on DBR 19 with the env 6 ARM image below; x86 (amd64) and DBR 17.3 / 18 
 available. On classic x86 clusters (DBR 17.3, 18, or 19), the
 [Init Script (Legacy)](./init-script.mdx) route is still supported.
 
-![GeoBrix on Databricks Container Service, the preferred heavyweight packaging — step 1, the container image, tagged version-env6-arm: the GeoBrix wheel installed with the light_env6 extra into the image Python; the GeoBrix JAR in /databricks/jars, the one GeoBrix JAR, in a directory that dedicated clusters load; native GDAL 3.11.4 with Java (JNI) bindings that the heavyweight JAR loads; and the DCS vNext base image databricksruntime/environment:v6-standard-arm (Databricks environment 6, arm64; the -arm variant runs on Graviton); step 2, a dedicated cluster on DBR 19 with a Graviton (arm64) instance type, the GeoBrix image as its Docker image URL, the Spark config spark.databricks.unityCatalog.volumes.enabled true, and no init script or libraries because the image carries everything; do not attach the JAR as a library, since the image already has it and a cluster uses one GeoBrix JAR; step 3, both tiers run — lightweight pyrx, pyvx, pygx and the _gbx readers with no install step, and heavyweight rasterx, vectorx and gridx on the JVM, where the gdal and _ogr readers read /Volumes directly; for other compute, x86 (amd64) images and DBR 17.3 / 18 are not available yet and use the Init Script (Legacy), while standard access mode and Serverless use WHL-only (Lightweight)](../../../resources/images/diagrams/installation/installation-dcs.png)
+![GeoBrix on Databricks Container Service, the preferred heavyweight packaging — step 1, the container image, tagged version-env6-arm: the GeoBrix wheel installed with the light_env6 and vizx extras (the core plus visualization) into the image Python; the GeoBrix JAR in /databricks/jars, the one GeoBrix JAR, in a directory that dedicated clusters load; native GDAL 3.11.4 with Java (JNI) bindings that the heavyweight JAR loads; and the DCS vNext base image databricksruntime/environment:v6-standard-arm (Databricks environment 6, arm64; the -arm variant runs on Graviton); step 2, a dedicated cluster on DBR 19 with a Graviton (arm64) instance type, the GeoBrix image as its Docker image URL, the Spark config spark.databricks.unityCatalog.volumes.enabled true, and no init script or libraries because the image carries everything; do not attach the JAR as a library, since the image already has it and a cluster uses one GeoBrix JAR; step 3, both tiers run — lightweight pyrx, pyvx, pygx and the _gbx readers with no install step, and heavyweight rasterx, vectorx and gridx on the JVM, where the gdal and _ogr readers read /Volumes directly; for other compute, x86 (amd64) images and DBR 17.3 / 18 are not available yet and use the Init Script (Legacy), while standard access mode and Serverless use WHL-only (Lightweight)](../../../resources/images/diagrams/installation/installation-dcs.png)
 
 ## Status
 
@@ -53,10 +53,15 @@ It contains:
   [Databricks base image list](https://docs.databricks.com/aws/en/compute/custom-containers-standard).
 - **Native GDAL 3.11.4**, built from source with its Java (JNI) bindings — the native library the
   heavyweight JAR loads.
-- **The GeoBrix wheel**, installed with the `[light_env6]` extra into the image's Python, so the
-  lightweight tier needs no `%pip` step.
+- **The GeoBrix wheel**, installed with the `[light_env6,vizx]` extras (the core lightweight tier
+  plus visualization) into the image's Python, so the lightweight tier needs no `%pip` step.
 - **The GeoBrix JAR**, the only GeoBrix JAR on the image, in `/databricks/jars` — the directory a
   dedicated cluster loads JARs from.
+
+STAC search is not in the image. Add it in a notebook with `%pip install "geobrix[stac]"`; on env 6
+this upgrades `requests` from the image's 2.32.5 to 2.34.2 or later. The sample-data downloaders and the
+other opt-in extras (`[overture]`, `[earthdata]`, `[photogrammetry]` and `[models]`) are not in the image
+either and install the same way, for example `%pip install "geobrix[earthdata]"`.
 
 The Dockerfile that builds each release's image is attached to the
 [GitHub release](https://github.com/databrickslabs/geobrix/releases) as

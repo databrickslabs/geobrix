@@ -317,7 +317,7 @@ def body_dcs():
     out.append(panel(x1, top, w1, h, accent=TEAL["accent"], title="GeoBrix image"))
     out.append(centered_chip(x1 + w1 / 2, top + 44, "tag  <version>-env6-arm", TEAL))
     layers = [
-        ("GeoBrix wheel  ·  [light_env6]", "Installed into the image's Python", BLUE),
+        ("GeoBrix wheel  ·  [light_env6,vizx]", "Core + visualization, in the image's Python", BLUE),
         ("GeoBrix JAR  ·  /databricks/jars", "The one GeoBrix JAR; dedicated clusters load this directory", ORANGE),
         ("GDAL 3.11.4 + Java (JNI) bindings", "Native GDAL the heavyweight JAR loads", ORANGE),
         ("databricksruntime/environment:v6-standard-arm", "DCS vNext base; the -arm variant runs on Graviton", TEAL),
@@ -505,7 +505,7 @@ DIAGRAMS = {
         subtitle="The preferred heavyweight packaging, on DCS vNext: one image carries native GDAL, the wheel and the JAR",
         pill="Installation  ·  Container Service",
         body=body_dcs,
-        chips=["environment:v6-standard-arm", "GDAL 3.11.4", "geobrix[light_env6]",
+        chips=["environment:v6-standard-arm", "GDAL 3.11.4", "geobrix[light_env6,vizx]",
                "jar-with-dependencies.jar"],
     ),
     "init-script": dict(

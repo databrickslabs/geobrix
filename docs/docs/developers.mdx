@@ -280,7 +280,7 @@ The Databricks Container Services (DCS) image for dedicated clusters is built an
 1. Build the JAR and wheel for the release, then build the image with `bash scripts/commands/gbx-dcs-build.sh`. If the build network blocks public PyPI, export `PIP_INDEX_URL` before the build; the command passes it as a BuildKit secret, so it never enters the image.
 2. Push the release candidate with `bash scripts/commands/gbx-dcs-publish.sh --candidate`.
 3. Verify the `-rc` image on a dedicated DCS test cluster: both tiers, and the heavyweight readers on `/Volumes`.
-4. Push the release tags with `bash scripts/commands/gbx-dcs-publish.sh --release`. It tags the verified image as `<ver>-env6-<arm|x86>` and `env6-<arm|x86>`; record the printed `DIGEST=` line in the release notes.
+4. Push the release tags with `bash scripts/commands/gbx-dcs-publish.sh --release`. It re-tags the candidate image you pushed and verified as `<ver>-env6-<arm|x86>` and `env6-<arm|x86>`, and refuses an `-rc` image that was never pushed. Don't rebuild between steps 2 and 4: a rebuilt image needs a new candidate push and verification. Record the printed `DIGEST=` line in the release notes.
 5. The release workflow attaches `geobrix-<ver>-dcs.Dockerfile` to the GitHub release.
 
 Both commands default to the arm64 (Graviton) image; pass `--arch amd64` for the x86 image.

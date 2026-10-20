@@ -74,7 +74,9 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a
 
 *(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` in one install. `[databricks]` is added separately if needed.)*
 
-*`[earthdata]` and `[overture]` are source-specific downloaders kept **outside `_all`** (they change preinstalled base packages on install). Add either alongside your runtime extra — e.g. `geobrix[light_env6,overture]` — or, to use one with the full feature set, install it as a **separate step after** `_all` (not combined in one command). See **[NASA Earthdata / EMIT](./sample-data/emit-downloader)** and **[Overture Maps](./sample-data/overture-downloader)** for details.*
+*The `[stac]` part of `_all` requires `requests` 2.34.2 or later, so an `_all` install raises `requests` wherever the runtime ships an older version (env 6 and DBR 19 ship 2.32.5).*
+
+*`[earthdata]` and `[overture]` are source-specific downloaders kept **outside `_all`** (they change further preinstalled base packages on install). Add either alongside your runtime extra — e.g. `geobrix[light_env6,overture]` — or, to use one with the full feature set, install it as a **separate step after** `_all` (not combined in one command). See **[NASA Earthdata / EMIT](./sample-data/emit-downloader)** and **[Overture Maps](./sample-data/overture-downloader)** for details.*
 
 The `file:///Volumes/…` path is a placeholder for the wheel on your Unity Catalog Volume — see
 the install steps below for the exact pattern including the PEP 508 `package @ file://` quoting

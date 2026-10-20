@@ -1154,6 +1154,74 @@ def test_new_bad_records_skips_what_the_table_holds(spark):
     assert C._new_bad_records(bad, None) is bad
 
 
+_BAD_RECORDS_DDL = (
+    "_source_path string, _source_mtime timestamp, _source_hash string, "
+    "_source_size long, record_index string, error_class string, "
+    "error_message string, raw string, quarantined_at timestamp"
+)
+
+
+@pytest.fixture
+def bad_records_view(spark):
+    """``t_bad_records`` (the bad-records table of target ``t``) as a temp
+    view of the given rows; dropped after the test."""
+    spark.catalog.dropTempView("t_bad_records")
+
+    def make(rows):
+        df = spark.createDataFrame(rows, _BAD_RECORDS_DDL)
+        df.createOrReplaceTempView("t_bad_records")
+
+    yield make
+    spark.catalog.dropTempView("t_bad_records")
+
+
+def test_existing_bad_records_reads_the_keys_held_for_the_paths(
+    spark, bad_records_view
+):
+    """The real query: the record keys the table holds for the given paths,
+    once each, a NULL record_index kept; None while there is no table."""
+    table = C._bad_records_table("t")
+    assert C._existing_bad_records(spark, table, ["/a"]) is None
+    nothing = Q.NOTHING_READABLE
+    bad_records_view(
+        [
+            ("/a", None, "h1", 1, None, nothing, "m", None, None),
+            ("/a", None, "h1", 1, "feature=2", "E", "m", None, None),
+            ("/a", None, "h1", 1, "feature=2", "E", "m again", None, None),
+            ("/a", None, "h2", 1, None, "E", "m", None, None),
+            ("/b", None, "h3", 1, None, "E", "m", None, None),
+        ]
+    )
+    got = C._existing_bad_records(spark, table, ["/a"]).collect()
+    assert sorted((tuple(r) for r in got), key=lambda k: (k[1], k[2] or "")) == [
+        ("/a", "h1", None, nothing),
+        ("/a", "h1", "feature=2", "E"),
+        ("/a", "h2", None, "E"),
+    ]
+
+
+def test_quarantined_hashes_reads_the_deliveries_set_aside_whole(
+    spark, bad_records_view
+):
+    """The real query: per given path, the hashes with a NothingReadable
+    record; other records and other paths are not counted."""
+    assert C._quarantined_hashes(spark, "t", ["/a"]) == {}
+    nothing = Q.NOTHING_READABLE
+    bad_records_view(
+        [
+            ("/a", None, "h1", 1, None, nothing, "m", None, None),
+            ("/a", None, "h2", 1, "feature=1", Q.UNREADABLE_GEOMETRY, "m", None, None),
+            ("/b", None, "h3", 1, None, nothing, "m", None, None),
+            ("/c", None, "h4", 1, None, nothing, "m", None, None),
+        ]
+    )
+    assert C._quarantined_hashes(spark, "t", ["/a", "/b"]) == {
+        "/a": {"h1"},
+        "/b": {"h3"},
+    }
+    assert C._quarantined_hashes(spark, "t", []) == {}
+
+
 def test_bad_records_df_keeps_a_record_written_twice_once(spark, tmp_path):
     """A task retry writes its records again: the driver keeps one copy."""
     scratch = str(tmp_path / "s")

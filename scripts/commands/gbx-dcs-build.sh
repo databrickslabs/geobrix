@@ -97,6 +97,11 @@ DOCKER_BUILDKIT=1 docker build --platform "linux/$ARCH" --target "$TARGET" \
 cleanup
 [ "$build_rc" -eq 0 ] || { echo "BUILD FAILED: docker build exited $build_rc for $FINAL_TAG"; exit "$build_rc"; }
 
+# The checks below read $BASE_IMAGE (its history, its installed packages), but docker build leaves the base
+# in BuildKit's cache, not the local image store ("No such image" on a host that never pulled it). Pull it
+# for the build's platform so the checks never depend on a previous manual pull.
+docker pull --platform "linux/$ARCH" "$BASE_IMAGE" > /dev/null || verify_fail "VERIFY FAILED: could not pull $BASE_IMAGE for linux/$ARCH (image not tagged as $FINAL_TAG)"
+
 # Verify what the cluster will see.
 docker run --rm --platform "linux/$ARCH" --entrypoint sh "$TAG" -c '
     set -e

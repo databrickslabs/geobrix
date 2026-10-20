@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # GeoBrix image for Databricks Container Services (DCS vNext) on DEDICATED clusters.
 # Bakes in native GDAL with its Java (JNI) bindings, the GeoBrix wheel and exactly one GeoBrix JAR,
 # so both tiers run with no init script and no cluster library. Build with `gbx:dcs:build`
@@ -45,10 +46,12 @@ RUN ln -sf /usr/local/lib/libgdal.so /usr/lib/libgdal.so && \
 # ---------- release: + GeoBrix wheel (lightweight deps) + exactly one GeoBrix JAR ----------
 FROM base AS release
 ARG GEOBRIX_VERSION
-ARG PIP_INDEX_URL=""
 COPY geobrix-${GEOBRIX_VERSION}-py3-none-any.whl /tmp/geobrix-wheel/
 # Hold every package the base image ships at its version; fail the build rather than drift.
-RUN if [ -n "${PIP_INDEX_URL}" ]; then export PIP_INDEX_URL; else unset PIP_INDEX_URL; fi && \
+# A package index, if one is needed, arrives as the BuildKit secret pip_index_url (never an ARG or ENV),
+# so it is not recorded in the image history.
+RUN --mount=type=secret,id=pip_index_url \
+    if [ -s /run/secrets/pip_index_url ]; then export PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)"; fi && \
     /databricks/python3/bin/python -m pip list --format=freeze | sort > /tmp/base-constraints.txt && \
     /databricks/python3/bin/python -m pip install --no-cache-dir -c /tmp/base-constraints.txt \
       "geobrix[light_env6] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" && \

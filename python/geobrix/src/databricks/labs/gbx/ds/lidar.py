@@ -478,10 +478,26 @@ def _readable_points(h, local: str, size: int, hook) -> int:
     return total
 
 
+def _serial_laz_backends(laspy):
+    """The installed LAZ backends without laspy's parallel one, or None (laspy's
+    default) when no other is installed. After a seek, the parallel decoder
+    fills a read that runs past the compressed data with zeros instead of
+    failing, so a LAZ file that declares more points than it holds would yield
+    zero-filled points; the single-threaded decoders raise. Uncompressed files
+    ignore the backend."""
+    backends = tuple(
+        b
+        for b in laspy.LazBackend.detect_available()
+        if b is not laspy.LazBackend.LazrsParallel
+    )
+    return backends or None
+
+
 class _Cursor:
     """Where points are read from: the file's reader, or after a failure a
     fresh open of the file positioned where the next read starts (the previous
-    one is closed). Environment errors (memory, I/O, no LAZ backend) raise."""
+    one is closed), decoded single-threaded (see :func:`_serial_laz_backends`).
+    Environment errors (memory, I/O, no LAZ backend) raise."""
 
     def __init__(self, laspy, local, reader):
         self.laspy, self.local = laspy, local
@@ -491,7 +507,8 @@ class _Cursor:
     def reopen(self, at: int) -> bool:
         self.close()
         try:
-            r = self.laspy.open(self.local)
+            backends = _serial_laz_backends(self.laspy)
+            r = self.laspy.open(self.local, laz_backend=backends)
         except _quarantine.PASS_THROUGH:
             raise
         except BaseException as e:  # noqa: BLE001 - the caller records the loss

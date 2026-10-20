@@ -554,6 +554,79 @@ def test_lidar_chunk_that_fails_to_decode_is_narrowed_down(tmp_path, monkeypatch
     assert index == "points=2000-2999" and cls.endswith("_Panic")
 
 
+def test_lidar_record_length_counting_missing_extra_bytes_reads_nothing(tmp_path):
+    """A header whose point record length counts 4 extra bytes the point data
+    does not hold (5000 records of 34 bytes, the header says 38) reads no
+    point: the records would decode shifted."""
+    path, _, reclen = _las(tmp_path / "a.las")
+    assert reclen == 34
+    with open(path, "r+b") as fh:  # LAS 1.2: point data record length at byte 105
+        fh.seek(105)
+        fh.write(struct.pack("<H", 38))
+    rows, (rec,) = _read(tmp_path, path, "lidar_gbx")
+    assert rows == []
+    assert (rec["record_index"], rec["error_class"]) == (None, Q.UNREADABLE_FILE)
+    assert "38 bytes" in rec["error_message"]
+
+
+def _laz(path, n=5000):
+    """A one-chunk LAZ file with UTM-like offsets: a zero-filled point record
+    decodes to the offset corner, which lies inside the header bounds."""
+    import laspy
+
+    header = laspy.LasHeader(point_format=3, version="1.2")
+    header.offsets = np.array([500000.0, 4000000.0, 100.0])
+    header.scales = np.array([0.01, 0.01, 0.01])
+    las = laspy.LasData(header)
+    rng = np.random.default_rng(3)
+    las.x = rng.uniform(500000, 500100, n)
+    las.y = rng.uniform(4000000, 4000100, n)
+    las.z = rng.uniform(100, 110, n)
+    las.write(str(path))
+    return str(path)
+
+
+def _declare_points(path, count):
+    with open(path, "r+b") as fh:  # LAS 1.2: point count at byte 107
+        fh.seek(107)
+        fh.write(struct.pack("<I", count))
+
+
+def _at_offset_corner(rows):
+    return [r for r in rows if (r["x"], r["y"], r["z"]) == (500000.0, 4000000.0, 100.0)]
+
+
+def test_lidar_laz_declaring_more_points_than_it_holds_fabricates_none(tmp_path):
+    """A one-chunk LAZ whose header declares 6000 points but holds 5000: the
+    5000 are read and the 1000 missing ones are a record, never zero-filled
+    rows (laspy's parallel LAZ decoder fills a read past the data after a seek
+    with zeros instead of failing)."""
+    path = _laz(tmp_path / "a.laz")
+    _declare_points(path, 6000)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 5000 and _at_offset_corner(rows) == []
+    ((index, _),) = _classes(recs)
+    assert index == "points=5000-5999"
+
+
+def test_lidar_laz_declaring_a_huge_point_count_fabricates_none(tmp_path):
+    path = _laz(tmp_path / "a.laz")
+    _declare_points(path, 10**9)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 5000 and _at_offset_corner(rows) == []
+    capped = [r for r in recs if r["error_class"] == Q.RECORDS_NOT_READ]
+    assert len(capped) == 1 and "more than a" in capped[0]["error_message"]
+    assert [r["record_index"] for r in recs if r["record_index"]][0].startswith(
+        "points=5000-"
+    )
+
+
+def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):
+    path = _laz(tmp_path / "a.laz")
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 5000 and recs == []
+
+
 # --- EXIF -----------------------------------------------------------------------------
 
 

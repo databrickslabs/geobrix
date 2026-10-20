@@ -10,7 +10,7 @@ readme = "sources/geobrix/README.md"
 requires-python = ">=3.12"
 license = {text = "Databricks"}
 authors = [
-    {name = "Databricks", email = "geobrix@databricks.com"}
+    {name = "Databricks", email = "labs@databricks.com"}
 ]
 
 dependencies = [

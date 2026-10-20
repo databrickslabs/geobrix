@@ -218,7 +218,7 @@ vx.register(spark)
 | Install | Volume-staged `[light_env6]` wheel ([install](../installation#whl-only)) | JAR + native GDAL ([install paths](../installation#choose-an-install-path)) |
 | Serverless / shared | Supported | Not supported |
 | Dedicated cluster, ARM (Graviton) | Supported | Supported with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; DBR 19) |
-| Dedicated cluster, classic x86 | Supported | Supported with the legacy [init script](../installation/init-script.mdx) (DBR 17.3 / 18 / 19) |
+| Dedicated cluster, x86 | Supported | Supported with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; DBR 19) or the legacy [init script](../installation/init-script.mdx) (DBR 17.3 / 18 / 19) |
 | Lakeflow declarative pipelines | Supported | Not supported |
 | Execution model | Python UDTF / pandas UDF | JVM (Scala + Spark columnar) |
 | JVM access | None — `spark.udf.register` only | Required |

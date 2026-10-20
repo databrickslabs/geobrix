@@ -11,7 +11,7 @@ sidebar_position: 1
   Serverless, standard/shared clusters, ARM, Lakeflow declarative pipelines. Works with bytes-free
   **[virtual tiles](./virtual-tiles)** so huge rasters ingest without out-of-memory. **The
   recommended default.**
-- **Heavyweight (`rasterx`)** — JVM-native (Scala + GDAL JNI) on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path). Operates on
+- **Heavyweight (`rasterx`)** — JVM-native (Scala + GDAL JNI) on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path). Operates on
   **materialized** (binary) tiles.
 
 Both tiers cover the **full raster function set** and agree within tolerance across the benchmark
@@ -86,7 +86,7 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 |---|---|---|
 | Install | DCS image (preferred; includes the JAR), or the legacy init script plus the JAR | Volume-staged wheel (`%pip` or cluster library) |
 | Native GDAL | System/PPA install | Bundled with rasterio (nothing to install) |
-| ARM support | Graviton (arm64) with the DCS image; x86 with the init script | x86 and ARM |
+| ARM support | Graviton (arm64) and x86 with the DCS image; x86 also with the init script | x86 and ARM |
 | Serverless / shared clusters / Lakeflow SDP | Not supported | Supported |
 | Execution model | JVM-native (Scala + GDAL JNI) | Python-worker UDFs (rasterio + NumPy) |
 | Tile model | Materialized (binary) tiles only | Materialized **and** bytes-free **[virtual tiles](./virtual-tiles)** (lazy windowed reads; no ingest OOM) |

@@ -238,10 +238,10 @@ PATHS = [
          tiers=["Lightweight"]),
     dict(theme=TEAL, glyph=g_container, letter="b",
          title="Databricks Container Service", chip="GeoBrix container image",
-         branch="Heavyweight · Graviton (arm64)", badge="PREFERRED",
-         runs="Dedicated cluster · Graviton (arm64) · DBR 19",
+         branch="Heavyweight · arm64 or x86 · DBR 19", badge="PREFERRED",
+         runs="Dedicated cluster · Graviton (arm64) or x86 · DBR 19",
          install="A GeoBrix image with native GDAL, the wheel and the JAR: no init script, no cluster library",
-         extra="Not yet available: x86 (amd64) and DBR 17.3 / 18 images",
+         extra="Not yet available: DBR 17.3 / 18 images",
          tiers=["Lightweight", "Heavyweight"]),
     dict(theme=VIOLET, glyph=g_script, letter="c",
          title="Init Script (Legacy)", chip="geobrix-gdal-init.sh",
@@ -315,12 +315,12 @@ def body_dcs():
     x1, w1 = PAD, 420
     out.append(col_label(x1 + 4, top - 8, "1 · CONTAINER IMAGE", C_MUTED_3))
     out.append(panel(x1, top, w1, h, accent=TEAL["accent"], title="GeoBrix image"))
-    out.append(centered_chip(x1 + w1 / 2, top + 44, "tag  <version>-env6-arm", TEAL))
+    out.append(centered_chip(x1 + w1 / 2, top + 44, "tag  <version>-env6-<arm|x86>", TEAL))
     layers = [
         ("GeoBrix wheel  ·  [light_env6,vizx]", "Core + visualization, in the image's Python", BLUE),
         ("GeoBrix JAR  ·  /databricks/jars", "The one GeoBrix JAR; dedicated clusters load this directory", ORANGE),
         ("GDAL 3.11.4 + Java (JNI) bindings", "Native GDAL the heavyweight JAR loads", ORANGE),
-        ("databricksruntime/environment:v6-standard-arm", "DCS vNext base; the -arm variant runs on Graviton", TEAL),
+        ("databricksruntime/environment:v6-standard", "DCS vNext base; Graviton uses the -arm variant", TEAL),
     ]
     lh, lgap = 62, 9
     ly = top + 84
@@ -339,8 +339,8 @@ def body_dcs():
     out.append(panel(x2, top, w2, h, accent=TEAL["accent"], title="Dedicated cluster"))
     out.append(g_cluster(x2 + w2 / 2, top + 84, TEAL["accent"], TEAL["tint"]))
     rows = [
-        ("ACCESS MODE", "Dedicated  ·  DBR 19  ·  Graviton (arm64)"),
-        ("DOCKER IMAGE URL", "The GeoBrix image"),
+        ("ACCESS MODE", "Dedicated  ·  DBR 19  ·  Graviton (arm64) or x86"),
+        ("DOCKER IMAGE URL", "The GeoBrix image tag for the instance architecture"),
         ("SPARK CONFIG", "spark.databricks.unityCatalog.volumes.enabled true"),
         ("INIT SCRIPT AND LIBRARIES", "None: the image carries everything"),
     ]
@@ -394,9 +394,8 @@ def body_dcs():
                f'fill="#F7F9FB" stroke="{C_MUTED_3}" stroke-width="1.2" stroke-dasharray="6 5"/>')
     out.append(text(sx + 18, sy + 24, "OTHER COMPUTE", size=10.5, weight=700,
                     fill=C_MUTED_2, letter_spacing="1.2"))
-    for yy, msg in ((44, "x86 (amd64) and DBR 17.3 / 18: no image yet; use the "
-                         "Init Script (Legacy)."),
-                    (80, "Standard access mode and Serverless: use WHL-only (Lightweight).")):
+    for yy, msg in ((44, "DBR 17.3 / 18: no image yet; use the Init Script (Legacy)."),
+                    (68, "Standard access mode and Serverless: use WHL-only (Lightweight).")):
         out.extend(wrap_left(sx + 18, sy + yy, sw - 36, msg, size=11.5, fill=C_MUTED,
                              line_h=15))
     return "".join(out)
@@ -505,7 +504,7 @@ DIAGRAMS = {
         subtitle="The preferred heavyweight packaging, on DCS vNext: one image carries native GDAL, the wheel and the JAR",
         pill="Installation  ·  Container Service",
         body=body_dcs,
-        chips=["environment:v6-standard-arm", "GDAL 3.11.4", "geobrix[light_env6,vizx]",
+        chips=["environment:v6-standard[-arm]", "GDAL 3.11.4", "geobrix[light_env6,vizx]",
                "jar-with-dependencies.jar"],
     ),
     "init-script": dict(

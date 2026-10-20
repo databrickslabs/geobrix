@@ -15,23 +15,23 @@ bindings, the GeoBrix wheel and the GeoBrix JAR, so a **dedicated** cluster star
 
 DCS is the **preferred packaging for the heavyweight tier**: GeoBrix is moving away from the
 [init script](./init-script.mdx) toward it. The GeoBrix image is built on the **DCS vNext**
-environment images (`databricksruntime/environment:v6-standard` and its `-arm` variant), which
-support Graviton through the ARM base image. Today's verified scope is a dedicated Graviton (arm64)
-cluster on DBR 19 with the env 6 ARM image below; x86 (amd64) and DBR 17.3 / 18 images are not yet
-available. On classic x86 clusters (DBR 17.3, 18, or 19), the
+environment images (`databricksruntime/environment:v6-standard` for x86 and its `-arm` variant for
+Graviton). Today's verified scope is a dedicated cluster on DBR 19 with the env 6 image below, on
+either a Graviton (arm64) or an x86 (amd64) instance type; DBR 17.3 / 18 images are not yet
+available. On classic x86 clusters running DBR 17.3 or 18, the
 [Init Script (Legacy)](./init-script.mdx) route is still supported.
 
-![GeoBrix on Databricks Container Service, the preferred heavyweight packaging — step 1, the container image, tagged version-env6-arm: the GeoBrix wheel installed with the light_env6 and vizx extras (the core plus visualization) into the image Python; the GeoBrix JAR in /databricks/jars, the one GeoBrix JAR, in a directory that dedicated clusters load; native GDAL 3.11.4 with Java (JNI) bindings that the heavyweight JAR loads; and the DCS vNext base image databricksruntime/environment:v6-standard-arm (Databricks environment 6, arm64; the -arm variant runs on Graviton); step 2, a dedicated cluster on DBR 19 with a Graviton (arm64) instance type, the GeoBrix image as its Docker image URL, the Spark config spark.databricks.unityCatalog.volumes.enabled true, and no init script or libraries because the image carries everything; do not attach the JAR as a library, since the image already has it and a cluster uses one GeoBrix JAR; step 3, both tiers run — lightweight pyrx, pyvx, pygx and the _gbx readers with no install step, and heavyweight rasterx, vectorx and gridx on the JVM, where the gdal and _ogr readers read /Volumes directly; for other compute, x86 (amd64) images and DBR 17.3 / 18 are not available yet and use the Init Script (Legacy), while standard access mode and Serverless use WHL-only (Lightweight)](../../../resources/images/diagrams/installation/installation-dcs.png)
+![GeoBrix on Databricks Container Service, the preferred heavyweight packaging — step 1, the container image, tagged version-env6-arm for Graviton or version-env6-x86 for x86: the GeoBrix wheel installed with the light_env6 and vizx extras (the core plus visualization) into the image Python; the GeoBrix JAR in /databricks/jars, the one GeoBrix JAR, in a directory that dedicated clusters load; native GDAL 3.11.4 with Java (JNI) bindings that the heavyweight JAR loads; and the DCS vNext base image databricksruntime/environment:v6-standard (Databricks environment 6, x86) or its -arm variant (arm64, for Graviton); step 2, a dedicated cluster on DBR 19 with a Graviton (arm64) or x86 instance type, the GeoBrix image tag that matches the instance architecture as its Docker image URL, the Spark config spark.databricks.unityCatalog.volumes.enabled true, and no init script or libraries because the image carries everything; do not attach the JAR as a library, since the image already has it and a cluster uses one GeoBrix JAR; step 3, both tiers run — lightweight pyrx, pyvx, pygx and the _gbx readers with no install step, and heavyweight rasterx, vectorx and gridx on the JVM, where the gdal and _ogr readers read /Volumes directly; for other compute, DBR 17.3 / 18 images are not available yet and use the Init Script (Legacy), while standard access mode and Serverless use WHL-only (Lightweight)](../../../resources/images/diagrams/installation/installation-dcs.png)
 
 ## Status
 
 | Compute | Lightweight tier | Heavyweight tier |
 |---|---|---|
 | **Dedicated** access mode, Graviton (arm64), DBR 19 | Verified | Verified |
-| x86 (amd64) image | Not yet available | Not yet available |
+| **Dedicated** access mode, x86 (amd64), DBR 19 | Verified | Verified |
 | DBR 17.3 / 18 image | Not yet available | Not yet available |
 
-**x86 (amd64) and DBR 17.3 / 18 images are not yet available.** On that compute, use
+**DBR 17.3 / 18 images are not yet available.** On that compute, use
 [Init Script (Legacy)](./init-script.mdx) for the heavyweight tier on classic x86 clusters.
 
 The heavyweight tier needs dedicated compute. On standard access mode and Serverless, use
@@ -39,17 +39,20 @@ The heavyweight tier needs dedicated compute. On standard access mode and Server
 
 ## The image
 
-The image is published as:
+The image is published for each instance architecture, with a pinned tag per GeoBrix release and a
+tag that moves to the newest release:
 
-- **`mjohns797/geobrix:<version>-env6-arm`** — pinned to a GeoBrix release (for example
-  `mjohns797/geobrix:0.5.3-env6-arm`). Use this one so the image, wheel and JAR stay on the version
-  you tested.
-- **`mjohns797/geobrix:env6-arm`** — moves to the newest release.
+| Instance architecture | Pinned to a release | Newest release |
+|---|---|---|
+| Graviton (arm64) | `mjohns797/geobrix:<version>-env6-arm` | `mjohns797/geobrix:env6-arm` |
+| x86 (amd64) | `mjohns797/geobrix:<version>-env6-x86` | `mjohns797/geobrix:env6-x86` |
 
-It contains:
+Use the pinned tag (for example `mjohns797/geobrix:0.5.3-env6-x86`) so the image, wheel and JAR stay
+on the version you tested. The two architectures carry the same contents:
 
-- **Base:** `databricksruntime/environment:v6-standard-arm`, the DCS vNext environment 6 image
-  for Graviton (arm64); its x86 counterpart is `v6-standard` — see the
+- **Base:** `databricksruntime/environment:v6-standard-arm` for Graviton (arm64) or
+  `databricksruntime/environment:v6-standard` for x86 (amd64), the DCS vNext environment 6 images —
+  see the
   [Databricks base image list](https://docs.databricks.com/aws/en/compute/custom-containers-standard).
 - **Native GDAL 3.11.4**, built from source with its Java (JNI) bindings — the native library the
   heavyweight JAR loads.
@@ -118,9 +121,10 @@ versions, and the build fails rather than change them.
    workspace setting) — see
    [Databricks Container Services for dedicated compute](https://docs.databricks.com/aws/en/compute/custom-containers).
 2. **Create the cluster** with **Dedicated** access mode, **Databricks Runtime 19**, and a
-   **Graviton (arm64)** instance type.
+   **Graviton (arm64)** or **x86 (amd64)** instance type.
 3. **Point it at the image.** Under **Advanced**, open the **Docker** tab, select **Use your own
-   Docker container**, and enter the image in **Docker Image URL**.
+   Docker container**, and enter the image in **Docker Image URL**. Pick the tag that matches the
+   cluster's instance architecture: `-arm` on a Graviton instance type, `-x86` on an x86 one.
 4. **Enable Unity Catalog Volumes.** Add this line to the cluster's **Spark config** — without it,
    `/Volumes` paths are not available on the cluster:
 
@@ -168,4 +172,4 @@ a `*_gbx` reader first and hand the result to heavyweight functions. See the
 
 - Compare the tiers in [Choosing an Execution Tier](../api/execution-tiers.mdx)
 - Follow the [Quick Start Guide](../quick-start.mdx) to begin using GeoBrix
-- On x86 clusters, install the heavyweight tier with [Init Script (Legacy)](./init-script.mdx)
+- On DBR 17.3 / 18 clusters, install the heavyweight tier with [Init Script (Legacy)](./init-script.mdx)

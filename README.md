@@ -34,7 +34,7 @@
 ## Tiers
 
 - **Lightweight tier** — pure Python (+ SQL bindings) on [rasterio](https://rasterio.readthedocs.io/)/[pyogrio](https://pyogrio.readthedocs.io/)/[shapely](https://shapely.readthedocs.io/), **no JAR, no init script, no native GDAL bundle**. Runs on **Serverless**, standard (shared), Lakeflow pipelines, and **ARM** — where the heavyweight tier can't.
-- **Heavyweight tier** — Scala (Python and SQL bindings) + native GDAL for distributed processing on dedicated clusters — with the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs) (preferred; Graviton arm64, DBR 19) or the legacy [init script](https://databrickslabs.github.io/geobrix/docs/installation/init-script) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **Same function names across tiers** — switching is a one-line import change.
+- **Heavyweight tier** — Scala (Python and SQL bindings) + native GDAL for distributed processing on dedicated clusters — with the GeoBrix [DCS image](https://databrickslabs.github.io/geobrix/docs/installation/dcs) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](https://databrickslabs.github.io/geobrix/docs/installation/init-script) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](https://databrickslabs.github.io/geobrix/docs/installation#choose-an-install-path). **Same function names across tiers** — switching is a one-line import change.
 
 ## Packages
 

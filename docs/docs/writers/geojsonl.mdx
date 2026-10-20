@@ -31,7 +31,7 @@ that round-trips with the GeoJSON reader's directory mode:
   for a comparison with the single-file writers.
 - **Tier & compute:** the lightweight `geojsonl_gbx` writer needs **no JAR or init script** and
   is the **only** option on Serverless and standard (shared) clusters. The heavyweight
-  `geojsonl_ogr` writer runs on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path);
+  `geojsonl_ogr` writer runs on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path);
   it encodes each shard with native GDAL/OGR on the JVM. Your compute usually decides the tier.
   See [Benchmarking](../api/benchmarking) for timings and methodology.
 :::

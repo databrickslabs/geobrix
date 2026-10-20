@@ -41,7 +41,7 @@ and ARM.
 </TabItem>
 <TabItem value="heavyweight" label="Heavyweight">
 
-JVM-native (Scala + GDAL/OGR), on **dedicated clusters** — with the GeoBrix [DCS image](./installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](./installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](./installation.mdx#choose-an-install-path). Covers everything the lightweight tier does **plus** the heavy-only deltas: the GDAL/OGR readers (`gtiff_gdal`, `gdal`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`). Choose this tier when your environment is already JVM/GDAL-based or when you need one of those deltas.
+JVM-native (Scala + GDAL/OGR), on **dedicated clusters** — with the GeoBrix [DCS image](./installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](./installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](./installation.mdx#choose-an-install-path). Covers everything the lightweight tier does **plus** the heavy-only deltas: the GDAL/OGR readers (`gtiff_gdal`, `gdal`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`). Choose this tier when your environment is already JVM/GDAL-based or when you need one of those deltas.
 
 ```python
 from databricks.labs.gbx.rasterx import functions as rx

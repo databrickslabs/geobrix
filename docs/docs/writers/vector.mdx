@@ -27,7 +27,7 @@ writers instead:
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
 - **Tier & compute:** the lightweight (`*_gbx`) writers need **no JAR or init script** and are
   the **only** option on Serverless and standard (shared) clusters. The heavyweight
-  raster/PMTiles writers run on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path). Your
+  raster/PMTiles writers run on **dedicated clusters** — with the GeoBrix [DCS image](../installation/dcs.mdx) (preferred; Graviton arm64 or x86, DBR 19) or the legacy [init script](../installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](../installation.mdx#choose-an-install-path). Your
   compute usually decides the tier — then data scale. See
   [Benchmarking](../api/benchmarking) for timings and methodology.
 :::

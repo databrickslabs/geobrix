@@ -394,8 +394,8 @@ def body_dcs():
                f'fill="#F7F9FB" stroke="{C_MUTED_3}" stroke-width="1.2" stroke-dasharray="6 5"/>')
     out.append(text(sx + 18, sy + 24, "OTHER COMPUTE", size=10.5, weight=700,
                     fill=C_MUTED_2, letter_spacing="1.2"))
-    for yy, msg in ((44, "DBR 17.3 / 18: no image yet; use the Init Script (Legacy)."),
-                    (68, "Standard access mode and Serverless: use WHL-only (Lightweight).")):
+    for yy, msg in ((44, "DBR 17.3 / 18: no image yet; on x86 use the Init Script (Legacy)."),
+                    (83, "Standard access mode and Serverless: use WHL-only (Lightweight).")):
         out.extend(wrap_left(sx + 18, sy + yy, sw - 36, msg, size=11.5, fill=C_MUTED,
                              line_h=15))
     return "".join(out)

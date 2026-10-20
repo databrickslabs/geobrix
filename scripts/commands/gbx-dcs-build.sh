@@ -21,6 +21,7 @@ usage() {
     echo "            amd64 (x86, databricksruntime/environment:v6-standard)"
     echo "  --target  release (default): base + wheel + JAR, tagged <repo>:<ver>-env6-<arm|x86>-rc"
     echo "            base: DCS env 6 + GDAL 3.11.4 only, tagged <repo>:base-env6-<arm|x86>"
+    echo "            (the tag is applied only after every check passes; a failed check leaves no new tag)"
     echo "  --log     Log file (filename -> test-logs/<name>)"
     echo ""
     echo "Env: GBX_DCS_REPO (default mjohns797/geobrix); PIP_INDEX_URL (optional package index for the"
@@ -69,10 +70,15 @@ if [ "$TARGET" = "release" ]; then
     [ "$VER" = "$WVER" ] || die "PRECONDITION MISSING: JAR version $VER != wheel version $WVER; gbx:dcs:build not run"
     python3 "$PROJECT_ROOT/scripts/ci/check_jar_packaging.py" "$JAR" || die "PRECONDITION MISSING: rebuild the JAR (mvn clean package); gbx:dcs:build not run"
     cp "$JAR" "$WHL" "$CTX/" || die "PRECONDITION MISSING: could not stage the JAR and wheel; gbx:dcs:build not run"
-    TAG="$REPO:${VER}-${SUFFIX}-rc"
+    FINAL_TAG="$REPO:${VER}-${SUFFIX}-rc"
 else
-    TAG="$REPO:base-${SUFFIX}"
+    FINAL_TAG="$REPO:base-${SUFFIX}"
 fi
+# The image is built and verified under a temporary local tag and only then given its final tag, so a
+# failed check never leaves a <ver>-rc (or base) tag on an image that did not pass, and never moves a
+# good one. Cleanup removes this temporary tag only.
+TAG="gbx-dcs-build-tmp:$$"
+verify_fail() { docker rmi "$TAG" > /dev/null 2>&1 || true; echo "$1"; exit 1; }
 
 # A package index (if any) goes in as a BuildKit secret from a private file outside the build context,
 # so it never lands in the image history; the file exists only for the duration of the build.
@@ -89,14 +95,14 @@ DOCKER_BUILDKIT=1 docker build --platform "linux/$ARCH" --target "$TARGET" \
     ${SECRET_FILE:+--secret id=pip_index_url,src="$SECRET_FILE"} \
     -t "$TAG" "$CTX" || build_rc=$?
 cleanup
-[ "$build_rc" -eq 0 ] || { echo "BUILD FAILED: docker build exited $build_rc for $TAG"; exit "$build_rc"; }
+[ "$build_rc" -eq 0 ] || { echo "BUILD FAILED: docker build exited $build_rc for $FINAL_TAG"; exit "$build_rc"; }
 
 # Verify what the cluster will see.
 docker run --rm --platform "linux/$ARCH" --entrypoint sh "$TAG" -c '
     set -e
     gdalinfo --version | grep -q "GDAL 3.11.4"
     test -e /usr/lib/libgdalalljni.so
-' || { echo "VERIFY FAILED: GDAL 3.11.4 / libgdalalljni.so missing in $TAG"; exit 1; }
+' || verify_fail "VERIFY FAILED: GDAL 3.11.4 / libgdalalljni.so missing in the image (not tagged as $FINAL_TAG)"
 if [ "$TARGET" = "release" ]; then
     JAR_SHA=$(shasum -a 256 "$JAR" | cut -d" " -f1)
     docker run --rm --platform "linux/$ARCH" --entrypoint sh "$TAG" -c "
@@ -107,13 +113,13 @@ if [ "$TARGET" = "release" ]; then
         test ! -e /scala-jars/user/$(basename "$JAR")
         test ! -e /opt/geobrix
         /databricks/python3/bin/python -c 'import importlib.metadata as m; v=m.version(\"geobrix\"); assert v == \"$VER\", v'
-    " || { echo "VERIFY FAILED: image contents in $TAG"; exit 1; }
+    " || verify_fail "VERIFY FAILED: image contents (not tagged as $FINAL_TAG)"
 
     # The image carries geobrix[light_env6,vizx]: the visualization stack is importable, [vizx]'s tippecanoe
     # package provides its executables (a bundled binary plus a console script), and the STAC extra and
     # anything that moves a base package are absent (so `requests` stays at the base image's version).
     BASE_REQUESTS=$(docker run --rm --platform "linux/$ARCH" --entrypoint /databricks/python3/bin/python "$BASE_IMAGE" \
-        -c 'import importlib.metadata as m; print(m.version("requests"))') || { echo "VERIFY FAILED: could not read requests from $BASE_IMAGE"; exit 1; }
+        -c 'import importlib.metadata as m; print(m.version("requests"))') || verify_fail "VERIFY FAILED: could not read requests from $BASE_IMAGE (image not tagged as $FINAL_TAG)"
     docker run --rm --platform "linux/$ARCH" --entrypoint /databricks/python3/bin/python "$TAG" -c '
 import importlib, importlib.metadata as md, os, sys
 
@@ -146,16 +152,18 @@ except ImportError:
 else:
     fail("pystac_client is installed; the image carries [light_env6,vizx], not [stac]")
 print("OK")
-' "$BASE_REQUESTS" || exit 1
+' "$BASE_REQUESTS" || verify_fail "VERIFY FAILED: Python environment of the image, see the line above (not tagged as $FINAL_TAG)"
 fi
 
 # The image history must not carry a package index (this image is published to a public registry).
 # Only the layers this build added are inspected: the public base image's own history already names its
 # build-time index host (UV_DEFAULT_INDEX). History lists newest first, so ours are the top entries.
 # Counts only; never print the URL.
-HIST_ALL=$(docker history --no-trunc --format '{{.CreatedBy}}' "$TAG") || { echo "VERIFY FAILED: could not read the history of $TAG"; exit 1; }
-HIST_BASE=$(docker history --no-trunc --format '{{.CreatedBy}}' "$BASE_IMAGE") || { echo "VERIFY FAILED: could not read the history of $BASE_IMAGE"; exit 1; }
+HIST_ALL=$(docker history --no-trunc --format '{{.CreatedBy}}' "$TAG") || verify_fail "VERIFY FAILED: could not read the history of the image (not tagged as $FINAL_TAG)"
+HIST_BASE=$(docker history --no-trunc --format '{{.CreatedBy}}' "$BASE_IMAGE") || verify_fail "VERIFY FAILED: could not read the history of $BASE_IMAGE (image not tagged as $FINAL_TAG)"
 OWN_LAYERS=$(( $(printf '%s\n' "$HIST_ALL" | wc -l) - $(printf '%s\n' "$HIST_BASE" | wc -l) ))
+# A count of zero or less would make the check below inspect nothing and pass; fail instead.
+[ "$OWN_LAYERS" -gt 0 ] || verify_fail "VERIFY FAILED: could not isolate this build's layers from the base image (not tagged as $FINAL_TAG)"
 HIST=$(printf '%s\n' "$HIST_ALL" | awk -v n="$OWN_LAYERS" 'NR <= n')
 # The Dockerfile reads the secret as PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)"; that text holds no value.
 N_VALUE=$(printf '%s\n' "$HIST" | sed 's|PIP_INDEX_URL="\$(cat /run/secrets/pip_index_url)"||g' | grep -c 'PIP_INDEX_URL=[^[:space:]]' || true)
@@ -165,9 +173,11 @@ if [ -n "${PIP_INDEX_URL:-}" ]; then
     if [ -n "$INDEX_HOST" ]; then N_HOST=$(printf '%s\n' "$HIST" | grep -cF -- "$INDEX_HOST" || true); fi
 fi
 if [ "$N_VALUE" -ne 0 ] || [ "$N_HOST" -ne 0 ]; then
-    echo "VERIFY FAILED: package index found in the history of $TAG (PIP_INDEX_URL values: $N_VALUE, configured index host: $N_HOST)"
-    exit 1
+    verify_fail "VERIFY FAILED: package index found in the history of the image (PIP_INDEX_URL values: $N_VALUE, configured index host: $N_HOST; not tagged as $FINAL_TAG)"
 fi
 
-echo "IMAGE=$TAG"
-echo "IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$TAG")"
+# Every check passed: give the image its final tag, then drop the temporary one (that tag only).
+docker tag "$TAG" "$FINAL_TAG" || verify_fail "BUILD FAILED: could not tag the verified image as $FINAL_TAG"
+docker rmi "$TAG" > /dev/null
+echo "IMAGE=$FINAL_TAG"
+echo "IMAGE_ID=$(docker image inspect --format '{{.Id}}' "$FINAL_TAG")"

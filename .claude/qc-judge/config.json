@@ -2,7 +2,7 @@
   "release_notes_path": "docs/docs/release-notes.mdx",
   "internals_extra_patterns": [
     "wave\\s*\\d+",
-    "(?<!labs)@databricks\\.com",
+    "\\b(?!labs@)[A-Za-z0-9._%+-]+@databricks\\.com",
     "GBX-\\d+"
   ],
   "checks": {

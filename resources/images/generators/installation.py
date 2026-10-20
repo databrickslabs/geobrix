@@ -240,7 +240,7 @@ PATHS = [
          title="Databricks Container Service", chip="GeoBrix container image",
          branch="Heavyweight · Graviton (arm64)", badge="PREFERRED",
          runs="Dedicated cluster · Graviton (arm64) · DBR 19",
-         install="A GeoBrix image on DCS vNext (native GDAL + the wheel), plus the JAR as a cluster library",
+         install="A GeoBrix image with native GDAL, the wheel and the JAR: no init script, no cluster library",
          extra="Not yet available: x86 (amd64) and DBR 17.3 / 18 images",
          tiers=["Lightweight", "Heavyweight"]),
     dict(theme=VIOLET, glyph=g_script, letter="c",
@@ -310,26 +310,28 @@ def body_paths():
 
 def body_dcs():
     out = []
-    top, h = 150, 368
+    top, h = 150, 388
     # --- column 1: the image -------------------------------------------------
     x1, w1 = PAD, 420
     out.append(col_label(x1 + 4, top - 8, "1 · CONTAINER IMAGE", C_MUTED_3))
     out.append(panel(x1, top, w1, h, accent=TEAL["accent"], title="GeoBrix image"))
-    out.append(centered_chip(x1 + w1 / 2, top + 44, "verified tag  0.5.3-env6-arm", TEAL))
+    out.append(centered_chip(x1 + w1 / 2, top + 44, "tag  <version>-env6-arm", TEAL))
     layers = [
         ("GeoBrix wheel  ·  [light_env6]", "Installed into the image's Python", BLUE),
+        ("GeoBrix JAR  ·  /databricks/jars", "The one GeoBrix JAR; dedicated clusters load this directory", ORANGE),
         ("GDAL 3.11.4 + Java (JNI) bindings", "Native GDAL the heavyweight JAR loads", ORANGE),
         ("databricksruntime/environment:v6-standard-arm", "DCS vNext base; the -arm variant runs on Graviton", TEAL),
     ]
-    ly = top + 88
+    lh, lgap = 62, 9
+    ly = top + 84
     for title, sub, th in layers:
         a, t = th["accent"], th["tint"]
         out.append(f'<rect x="{x1 + 20}" y="{ly}" rx="9" ry="9" width="{w1 - 40}" '
-                   f'height="76" fill="{t}" stroke="{a}" stroke-width="1.4"/>')
-        out.append(f'<rect x="{x1 + 20}" y="{ly}" width="6" height="76" rx="3" ry="3" fill="{a}"/>')
-        out.append(mono(x1 + 40, ly + 30, title, size=12.5, weight=700, fill=C_INK))
-        out.append(text(x1 + 40, ly + 54, sub, size=12.5, fill=C_MUTED))
-        ly += 88
+                   f'height="{lh}" fill="{t}" stroke="{a}" stroke-width="1.4"/>')
+        out.append(f'<rect x="{x1 + 20}" y="{ly}" width="6" height="{lh}" rx="3" ry="3" fill="{a}"/>')
+        out.append(mono(x1 + 40, ly + 26, title, size=12.5, weight=700, fill=C_INK))
+        out.append(text(x1 + 40, ly + 47, sub, size=12, fill=C_MUTED))
+        ly += lh + lgap
 
     # --- column 2: the dedicated cluster ---------------------------------------
     x2, w2 = 536, 420
@@ -340,7 +342,7 @@ def body_dcs():
         ("ACCESS MODE", "Dedicated  ·  DBR 19  ·  Graviton (arm64)"),
         ("DOCKER IMAGE URL", "The GeoBrix image"),
         ("SPARK CONFIG", "spark.databricks.unityCatalog.volumes.enabled true"),
-        ("LIBRARY", "GeoBrix JAR as a cluster library"),
+        ("INIT SCRIPT AND LIBRARIES", "None: the image carries everything"),
     ]
     ry = top + 150
     for lbl, val in rows:
@@ -351,16 +353,9 @@ def body_dcs():
         else:
             out.append(text(x2 + 26, ry + 19, val, size=13, weight=600, fill=C_INK))
         ry += 52
-    # JAR -> cluster (from below)
-    jx, jy = x2 + w2 / 2, top + h + 62
-    out.append(f'<rect x="{jx - 150}" y="{jy - 26}" rx="12" ry="12" width="300" height="52" '
-               f'fill="#FFFFFF" stroke="{HEAVY_TIER["accent"]}" stroke-width="1.4" '
-               f'stroke-dasharray="6 5"/>')
-    out.append(g_jar(jx - 112, jy, HEAVY_TIER["accent"], HEAVY_TIER["tint"]))
-    out.append(text(jx - 80, jy - 4, "GeoBrix JAR", size=13, weight=800, fill=C_INK))
-    out.append(text(jx - 80, jy + 14, "/scala-jars/user is not loaded on dedicated",
-                    size=11, fill=C_MUTED))
-    out.append(parrow(jx, jy - 28, jx, top + h + 4, HEAVY_TIER["accent"], width=2.2))
+    out.append(strip(x2, top + h + 18, w2, 52, ROSE,
+                     "DON'T ATTACH THE JAR AS A LIBRARY",
+                     "The image already has it: one GeoBrix JAR per cluster"))
 
     # image -> cluster arrow
     out.append(parrow(x1 + w1 + 6, top + h / 2, x2 - 6, top + h / 2, TEAL["accent"]))
@@ -374,35 +369,34 @@ def body_dcs():
         (LIGHT_TIER, "Lightweight", "pyrx · pyvx · pygx and the *_gbx readers",
          "No %pip step: the wheel is in the image"),
         (HEAVY_TIER, "Heavyweight", "rasterx · vectorx · gridx (gbx_* on the JVM)",
-         "Read /Volumes with *_gbx readers, then heavy functions"),
+         "gdal and *_ogr readers read /Volumes directly"),
     ]
-    th_h, th_gap, ty = 140, 18, top
+    th_h, th_gap, ty = 124, 14, top
     for th, name, l1, l2 in tiers:
         a, t = th["accent"], th["tint"]
         out.append(panel(x3, ty, w3, th_h, accent=a))
-        out.append(f'<circle cx="{x3 + 34}" cy="{ty + 40}" r="14" fill="{a}"/>')
-        out.append(f'<path d="M {x3 + 27} {ty + 40} L {x3 + 32} {ty + 46} L {x3 + 42} {ty + 34}" '
+        out.append(f'<circle cx="{x3 + 34}" cy="{ty + 38}" r="14" fill="{a}"/>')
+        out.append(f'<path d="M {x3 + 27} {ty + 38} L {x3 + 32} {ty + 44} L {x3 + 42} {ty + 32}" '
                    f'fill="none" stroke="#FFFFFF" stroke-width="3" stroke-linecap="round" '
                    f'stroke-linejoin="round"/>')
-        out.append(text(x3 + 58, ty + 46, name, size=18, weight=800, fill=C_INK))
-        out.extend(wrap_left(x3 + 24, ty + 82, w3 - 48, l1, size=13, fill=C_INK))
-        out.extend(wrap_left(x3 + 24, ty + 114, w3 - 48, l2, size=12, fill=C_MUTED_2))
+        out.append(text(x3 + 58, ty + 44, name, size=18, weight=800, fill=C_INK))
+        out.extend(wrap_left(x3 + 24, ty + 76, w3 - 48, l1, size=13, fill=C_INK))
+        out.extend(wrap_left(x3 + 24, ty + 102, w3 - 48, l2, size=12, fill=C_MUTED_2))
         ty += th_h + th_gap
     out.append(parrow(x2 + w2 + 6, top + th_h / 2, x3 - 6, top + th_h / 2, LIGHT_TIER["accent"]))
     out.append(parrow(x2 + w2 + 6, top + th_h * 1.5 + th_gap, x3 - 6,
                       top + th_h * 1.5 + th_gap, HEAVY_TIER["accent"]))
 
-    # --- not-yet-available strip -----------------------------------------------
-    sx, sy = x3, top + 2 * th_h + th_gap + 18
-    sw, sh = w3, 136
+    # --- other compute strip -----------------------------------------------------
+    sx, sy = x3, top + 2 * (th_h + th_gap)
+    sw, sh = w3, top + h - sy
     out.append(f'<rect x="{sx}" y="{sy}" rx="12" ry="12" width="{sw}" height="{sh}" '
                f'fill="#F7F9FB" stroke="{C_MUTED_3}" stroke-width="1.2" stroke-dasharray="6 5"/>')
-    out.append(text(sx + 18, sy + 24, "NOT AVAILABLE YET", size=10.5, weight=700,
+    out.append(text(sx + 18, sy + 24, "OTHER COMPUTE", size=10.5, weight=700,
                     fill=C_MUTED_2, letter_spacing="1.2"))
-    for yy, msg in ((44, "Standard access mode (Beta): lightweight functions work; Python "
-                         "DataSource readers and the heavyweight tier are not available yet."),
-                    (96, "Serverless: DCS is not available on Serverless yet."),
-                    (118, "x86 (amd64) images and DBR 17.3 / 18: not yet available.")):
+    for yy, msg in ((44, "x86 (amd64) and DBR 17.3 / 18: no image yet; use the "
+                         "Init Script (Legacy)."),
+                    (80, "Standard access mode and Serverless: use WHL-only (Lightweight).")):
         out.extend(wrap_left(sx + 18, sy + yy, sw - 36, msg, size=11.5, fill=C_MUTED,
                              line_h=15))
     return "".join(out)
@@ -508,7 +502,7 @@ DIAGRAMS = {
     "dcs": dict(
         badge="GB", theme=TEAL,
         title="GeoBrix on Databricks Container Service",
-        subtitle="The preferred heavyweight packaging, on DCS vNext: one image carries native GDAL and the wheel",
+        subtitle="The preferred heavyweight packaging, on DCS vNext: one image carries native GDAL, the wheel and the JAR",
         pill="Installation  ·  Container Service",
         body=body_dcs,
         chips=["environment:v6-standard-arm", "GDAL 3.11.4", "geobrix[light_env6]",

@@ -11,12 +11,12 @@ matches the tier you need and the compute you run on.
 
 ## Choose an install path {#choose-an-install-path}
 
-![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed with the light_env6 extra or another runtime-pinned extra, running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release and no JAR, init script or native GDAL bundle, giving the lightweight tier; heavyweight on Graviton (arm64) leads to path b, Databricks Container Service, preferred for the heavyweight tier, a GeoBrix container image on DCS vNext, run on a dedicated Graviton (arm64) DBR 19 cluster and carrying native GDAL and the wheel, plus the JAR as a cluster library, giving both the lightweight and heavyweight tiers, with x86 (amd64) and DBR 17.3 / 18 images not yet available; heavyweight on classic x86 leads to path c, Init Script (Legacy), geobrix-gdal-init.sh on a classic x86 cluster running DBR 17.3, 18 or 19, with the init script, GDAL tarball and .sha256 sidecar on a Volume and the wheel as a cluster library, still supported where the DCS image does not reach yet, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
+![Three ways to install GeoBrix — the question of which tier you need, and on which compute, branches three ways: lightweight tier only leads to path a, WHL-only (Lightweight), recommended, installed with the light_env6 extra or another runtime-pinned extra, running on Serverless, standard access mode, Lakeflow pipelines, classic clusters and ARM, with one wheel from a Volume or the GitHub release and no JAR, init script or native GDAL bundle, giving the lightweight tier; heavyweight on Graviton (arm64) leads to path b, Databricks Container Service, preferred for the heavyweight tier, a GeoBrix container image on DCS vNext, run on a dedicated Graviton (arm64) DBR 19 cluster, that carries native GDAL, the wheel and the JAR, with no init script and no cluster library, giving both the lightweight and heavyweight tiers, with x86 (amd64) and DBR 17.3 / 18 images not yet available; heavyweight on classic x86 leads to path c, Init Script (Legacy), geobrix-gdal-init.sh on a classic x86 cluster running DBR 17.3, 18 or 19, with the init script, GDAL tarball and .sha256 sidecar on a Volume and the wheel as a cluster library, still supported where the DCS image does not reach yet, giving both the lightweight and heavyweight tiers](../../resources/images/diagrams/installation/installation-paths.png)
 
 | Path | Tiers | Compute | What you install |
 |---|---|---|---|
 | **(a) [WHL-only (Lightweight)](#whl-only)** — recommended | Lightweight | Serverless, standard access mode, Lakeflow declarative pipelines, classic clusters, ARM | One wheel with a runtime-pinned extra — no JAR, no init script |
-| **(b) [Databricks Container Service](./installation/dcs.mdx)** — preferred for heavyweight | Lightweight + Heavyweight | Dedicated cluster, Graviton (arm64), DBR 19 | A GeoBrix container image on DCS vNext (native GDAL + the wheel) and the JAR as a cluster library |
+| **(b) [Databricks Container Service](./installation/dcs.mdx)** — preferred heavyweight packaging | Lightweight + Heavyweight | Dedicated cluster, Graviton (arm64), DBR 19 | A GeoBrix container image on DCS vNext (native GDAL, the wheel and the JAR) — no init script, no cluster library |
 | **(c) [Init Script (Legacy)](./installation/init-script.mdx)** | Lightweight + Heavyweight | Classic x86 cluster, DBR 17.3 / 18 / 19 | The GDAL init script, its tarball + `.sha256` sidecar on a Volume, and the wheel as a cluster library |
 
 **(a) WHL-only (Lightweight)** is the default: if you don't specifically need the JVM tier, install
@@ -24,10 +24,10 @@ the wheel and stop there. The full install steps are [below](#whl-only).
 
 **(b) Databricks Container Service** is the **preferred packaging for the heavyweight tier**. A
 dedicated cluster starts from a GeoBrix container image, built on the DCS vNext environment images,
-that already carries native GDAL with its Java bindings and the GeoBrix wheel, so there is no init
-script and nothing to install at cluster start; attach the GeoBrix JAR as a cluster library for the
-heavyweight tier. Verified today on dedicated Graviton (arm64) clusters with DBR 19; x86 (amd64) and
-DBR 17.3 / 18 images are not yet available. See
+that already carries native GDAL with its Java bindings, the GeoBrix wheel and the GeoBrix JAR, so
+there is no init script, no cluster library and nothing to install at cluster start — both tiers run,
+heavyweight readers included. Verified today on dedicated Graviton (arm64) clusters with DBR 19; x86
+(amd64) and DBR 17.3 / 18 images are not yet available. See
 [Databricks Container Service](./installation/dcs.mdx).
 
 **(c) Init Script (Legacy)** is the older heavyweight route, still supported for compute the DCS
@@ -35,6 +35,9 @@ image doesn't cover yet — today, classic x86 clusters on DBR 17.3, 18, or 19. 
 script installs native GDAL at cluster start from a hash-verified tarball staged in an isolated Unity
 Catalog Volume folder, and puts the JAR in place; with the GeoBrix wheel attached as a cluster
 library, the cluster runs both tiers. See [Init Script (Legacy)](./installation/init-script.mdx).
+
+The **heavyweight tier needs dedicated compute** (a dedicated access mode cluster), through (b) or
+(c). On standard access mode and Serverless, use **(a)**: the lightweight tier runs there in full.
 
 ## Supported Databricks Runtimes
 

@@ -84,7 +84,7 @@ The lightweight raster tier is, in effect, [distributed rasterio](./rasterio-dis
 
 | Aspect | Heavyweight (rasterx) | Lightweight (pyrx) |
 |---|---|---|
-| Install | DCS image (preferred) or legacy init script, plus the JAR | Volume-staged wheel (`%pip` or cluster library) |
+| Install | DCS image (preferred; includes the JAR), or the legacy init script plus the JAR | Volume-staged wheel (`%pip` or cluster library) |
 | Native GDAL | System/PPA install | Bundled with rasterio (nothing to install) |
 | ARM support | Graviton (arm64) with the DCS image; x86 with the init script | x86 and ARM |
 | Serverless / shared clusters / Lakeflow SDP | Not supported | Supported |

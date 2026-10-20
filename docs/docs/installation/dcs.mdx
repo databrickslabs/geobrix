@@ -1,6 +1,6 @@
 ---
 sidebar_label: Databricks Container Service
-description: Run the GeoBrix lightweight and heavyweight tiers on a dedicated cluster started from a GeoBrix Databricks Container Service image.
+description: Run the GeoBrix lightweight and heavyweight tiers on a dedicated cluster started from a GeoBrix Databricks Container Service image that carries native GDAL, the wheel and the JAR.
 ---
 
 import CodeFromTest from '@site/src/components/CodeFromTest';
@@ -10,9 +10,8 @@ import verifyInstallation from '!!raw-loader!../../tests/python/installation/ver
 
 [Databricks Container Service](https://docs.databricks.com/aws/en/compute/custom-containers) (DCS)
 starts a cluster from a custom Docker image. A GeoBrix image carries native GDAL with its Java (JNI)
-bindings and the GeoBrix wheel, so a **dedicated** cluster started from it runs **both tiers**
-without an init script: the lightweight tier straight from the image's Python, and the heavyweight
-tier once the GeoBrix JAR is attached as a cluster library.
+bindings, the GeoBrix wheel and the GeoBrix JAR, so a **dedicated** cluster started from it runs
+**both tiers** — heavyweight readers included — with no init script and no cluster library.
 
 DCS is the **preferred packaging for the heavyweight tier**: GeoBrix is moving away from the
 [init script](./init-script.mdx) toward it. The GeoBrix image is built on the **DCS vNext**
@@ -22,38 +21,46 @@ cluster on DBR 19 with the env 6 ARM image below; x86 (amd64) and DBR 17.3 / 18 
 available. On classic x86 clusters (DBR 17.3, 18, or 19), the
 [Init Script (Legacy)](./init-script.mdx) route is still supported.
 
-![GeoBrix on Databricks Container Service, the preferred heavyweight packaging — step 1, the container image: a DCS vNext base image, databricksruntime/environment:v6-standard-arm (Databricks environment 6, arm64; the -arm variant runs on Graviton), native GDAL 3.11.4 with Java (JNI) bindings that the heavyweight JAR loads, and the GeoBrix wheel installed with the light_env6 extra into the image Python, verified as tag 0.5.3-env6-arm; step 2, a dedicated cluster on DBR 19 with a Graviton (arm64) instance type, the GeoBrix image as its Docker image URL, the Spark config spark.databricks.unityCatalog.volumes.enabled true, and the GeoBrix JAR attached as a cluster library because the image /scala-jars/user directory is not loaded on dedicated compute; step 3, both tiers run — lightweight pyrx, pyvx, pygx and the _gbx readers with no install step, and heavyweight rasterx, vectorx and gridx on the JVM, reading /Volumes data through the _gbx readers before heavy functions; not available yet: standard access mode (Beta), where the lightweight functions work but the Python DataSource readers and the heavyweight tier are not available yet; Serverless, where DCS is not available yet; and x86 (amd64) images and DBR 17.3 / 18](../../../resources/images/diagrams/installation/installation-dcs.png)
+![GeoBrix on Databricks Container Service, the preferred heavyweight packaging — step 1, the container image, tagged version-env6-arm: the GeoBrix wheel installed with the light_env6 extra into the image Python; the GeoBrix JAR in /databricks/jars, the one GeoBrix JAR, in a directory that dedicated clusters load; native GDAL 3.11.4 with Java (JNI) bindings that the heavyweight JAR loads; and the DCS vNext base image databricksruntime/environment:v6-standard-arm (Databricks environment 6, arm64; the -arm variant runs on Graviton); step 2, a dedicated cluster on DBR 19 with a Graviton (arm64) instance type, the GeoBrix image as its Docker image URL, the Spark config spark.databricks.unityCatalog.volumes.enabled true, and no init script or libraries because the image carries everything; do not attach the JAR as a library, since the image already has it and a cluster uses one GeoBrix JAR; step 3, both tiers run — lightweight pyrx, pyvx, pygx and the _gbx readers with no install step, and heavyweight rasterx, vectorx and gridx on the JVM, where the gdal and _ogr readers read /Volumes directly; for other compute, x86 (amd64) images and DBR 17.3 / 18 are not available yet and use the Init Script (Legacy), while standard access mode and Serverless use WHL-only (Lightweight)](../../../resources/images/diagrams/installation/installation-dcs.png)
 
 ## Status
 
 | Compute | Lightweight tier | Heavyweight tier |
 |---|---|---|
-| **Dedicated** access mode, Graviton (arm64), DBR 19 | Verified | Verified, with the JAR attached as a cluster library |
-| **Standard** access mode (Beta) | Functions work; Python DataSource readers not available yet | Not available yet |
-| **Serverless** | DCS is not available on Serverless yet | DCS is not available on Serverless yet |
+| **Dedicated** access mode, Graviton (arm64), DBR 19 | Verified | Verified |
 | x86 (amd64) image | Not yet available | Not yet available |
 | DBR 17.3 / 18 image | Not yet available | Not yet available |
 
 **x86 (amd64) and DBR 17.3 / 18 images are not yet available.** On that compute, use
-[Init Script (Legacy)](./init-script.mdx) for the heavyweight tier on classic x86 clusters, or
-[WHL-only (Lightweight)](../installation.mdx#whl-only) for the lightweight tier.
+[Init Script (Legacy)](./init-script.mdx) for the heavyweight tier on classic x86 clusters.
+
+The heavyweight tier needs dedicated compute. On standard access mode and Serverless, use
+[WHL-only (Lightweight)](../installation.mdx#whl-only).
 
 ## The image
 
-The verified image is **`mjohns797/geobrix:0.5.3-env6-arm`** (GeoBrix 0.5.3). It contains:
+The image is published as:
+
+- **`mjohns797/geobrix:<version>-env6-arm`** — pinned to a GeoBrix release (for example
+  `mjohns797/geobrix:0.5.3-env6-arm`). Use this one so the image, wheel and JAR stay on the version
+  you tested.
+- **`mjohns797/geobrix:env6-arm`** — moves to the newest release.
+
+It contains:
 
 - **Base:** `databricksruntime/environment:v6-standard-arm`, the DCS vNext environment 6 image
-  for Graviton (arm64); its x86 counterpart is `v6-standard` — see
-  [DCS for standard compute](https://docs.databricks.com/aws/en/compute/custom-containers-standard)
-  for the base image list.
+  for Graviton (arm64); its x86 counterpart is `v6-standard` — see the
+  [Databricks base image list](https://docs.databricks.com/aws/en/compute/custom-containers-standard).
 - **Native GDAL 3.11.4**, built from source with its Java (JNI) bindings — the native library the
   heavyweight JAR loads.
 - **The GeoBrix wheel**, installed with the `[light_env6]` extra into the image's Python, so the
   lightweight tier needs no `%pip` step.
+- **The GeoBrix JAR**, the only GeoBrix JAR on the image, in `/databricks/jars` — the directory a
+  dedicated cluster loads JARs from.
 
-Dedicated compute does **not** load JARs from the image's `/scala-jars/user` directory (the
-location the Databricks standard-compute DCS page describes), so the heavyweight tier needs the
-GeoBrix JAR attached as a cluster library — step 5 below.
+The Dockerfile that builds each release's image is attached to the
+[GitHub release](https://github.com/databrickslabs/geobrix/releases) as
+`geobrix-<version>-dcs.Dockerfile`.
 
 ## Set up a dedicated cluster
 
@@ -71,12 +78,12 @@ GeoBrix JAR attached as a cluster library — step 5 below.
    spark.databricks.unityCatalog.volumes.enabled true
    ```
 
-5. **Attach the JAR** (heavyweight tier only). Download
-   `geobrix-<version>-jar-with-dependencies.jar` from the
-   [GeoBrix releases](https://github.com/databrickslabs/geobrix/releases) — the same version as the
-   image's wheel — stage it in a Unity Catalog Volume, and install it on the cluster as a
-   [compute-scoped library](https://docs.databricks.com/aws/en/libraries/cluster-libraries).
-6. **Start the cluster.**
+5. **Start the cluster.** The first start pulls the image (about 7 GB), which takes several
+   minutes — about 9 minutes in testing.
+
+There is **no init script** and **no library to attach**. In particular, do **not** attach the
+GeoBrix JAR as a cluster library: the image already carries it, and a cluster should have only one
+GeoBrix JAR.
 
 ## Verify the install
 
@@ -84,8 +91,7 @@ GeoBrix JAR attached as a cluster library — step 5 below.
 [Verify the lightweight tier](../installation.mdx#verify-the-lightweight-tier). There is no install
 step: the wheel ships in the image.
 
-**Heavyweight tier** — with the JAR attached, register the heavyweight RasterX functions and list
-them:
+**Heavyweight tier** — register the heavyweight RasterX functions and list them:
 
 <CodeFromTest
   code={verifyInstallation}
@@ -101,43 +107,12 @@ If the list shows `gbx_rst_*` functions, the heavyweight tier is ready.
 
 ## Reading `/Volumes` data with the heavyweight tier {#volumes-heavyweight}
 
-On this setup the JVM cannot read `/Volumes` paths directly. Native GDAL, Python, and Spark query
-paths (such as the `binaryFile` reader) read them fine, but the heavyweight OGR readers
-(`geojson_ogr`, `gpkg_ogr`, …) fail at schema inference on a `/Volumes` path. Read with the
-lightweight readers, then apply heavyweight functions — the
-[light→heavy bridge](../api/execution-tiers.mdx#light-heavy-bridge):
-
-- **Vector:** read with a `*_gbx` reader (for example `geojson_gbx` or `gpkg_gbx`) and pass the
-  geometry column to heavyweight `gbx_st_*` functions.
-- **Raster:** list the files with [`file_gbx`](../readers/file.mdx), build tiles with the
-  lightweight `rst_fromfile(..., materialize=True)`, then call heavyweight `gbx_rst_*` functions —
-  the heavyweight tier accepts only materialized tiles.
-
-Heavyweight [`gbx_st_transformcrs`](../api/vectorx-functions.mdx#st_transformcrs) returns **EWKB**
-(the SRID travels with the geometry). To turn its output into a product geometry, use
-`st_geomfromewkb`, not `st_geomfromwkb`.
-
-## Standard access mode (Beta)
-
-[DCS for standard compute](https://docs.databricks.com/aws/en/compute/custom-containers-standard)
-is in Beta. With a GeoBrix image on standard access mode today:
-
-- The lightweight **UDF functions** (`pyrx`, `pyvx`, `pygx`, and their `gbx_*` SQL registrations)
-  work.
-- The lightweight **Python DataSource readers** (`*_gbx`) are not available yet: they fail with a
-  `ModuleNotFoundError` for `databricks.labs` when the data source is created.
-- The **heavyweight tier is not available yet**.
-
-Support for the readers and the heavyweight tier on standard access mode is being worked on.
-
-For lightweight work on standard access mode, use
-[WHL-only (Lightweight)](../installation.mdx#whl-only) on standard compute without a custom
-container — the full lightweight tier runs there, readers included.
-
-## Serverless
-
-DCS is not available on Serverless compute yet. On Serverless, use
-[WHL-only (Lightweight)](../installation.mdx#whl-only).
+On the image, the heavyweight readers read `/Volumes` paths directly: the raster `gdal` reader and
+the vector `*_ogr` readers (`ogr`, `geojson_ogr`, `gpkg_ogr`, `shapefile_ogr`, …) take the same
+`/Volumes/<catalog>/<schema>/<volume>/…` path you would give a lightweight reader, including for
+schema inference. Pass the bare `/Volumes/…` path, not a `file:` URI. There is no need to read with
+a `*_gbx` reader first and hand the result to heavyweight functions. See the
+[Readers overview](../readers/overview.mdx) for each reader's options.
 
 ## Next Steps
 

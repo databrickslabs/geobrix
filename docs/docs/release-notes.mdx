@@ -19,8 +19,9 @@ v0.5.3 is under development and not yet released.
 :::
 
 Incremental ingestion of new and changed files with Auto Loader that sets unreadable data aside
-instead of failing, a multi-format Lakeflow connector, and fixes for very large and domain-coded
-vector sources and one field-type mapping shared by both vector reader tiers.
+instead of failing, a multi-format Lakeflow connector, a Databricks Container Service image that
+runs both tiers on dedicated clusters, and fixes for very large and domain-coded vector sources and
+one field-type mapping shared by both vector reader tiers.
 
 ### Incremental ingestion — `read_paths` and `declare_ingest` (new)
 
@@ -238,6 +239,28 @@ formats.
   `quadbin_geomkloopexplode` (`databricks.labs.gbx.gridx.quadbin.functions`) were available only
   through SQL in the heavyweight tier; they are now callable from Python like their BNG and
   H3 counterparts.
+
+### Databricks Container Service image for dedicated clusters (new)
+
+- **A GeoBrix image runs both tiers on a dedicated cluster.** `mjohns797/geobrix:<version>-env6-arm`
+  (pinned to a release) and `mjohns797/geobrix:env6-arm` (the newest release) are built on the
+  DCS vNext environment 6 ARM image and carry native GDAL 3.11.4 with its Java (JNI) bindings, the
+  GeoBrix wheel (installed with `[light_env6]`) and the GeoBrix JAR in `/databricks/jars`. Start a
+  dedicated Graviton (arm64) cluster on DBR 19 from the image and set
+  `spark.databricks.unityCatalog.volumes.enabled true`: there is no init script and no cluster
+  library to attach (a cluster should have only one GeoBrix JAR, so do not attach it again). The
+  Dockerfile of each release is attached to the GitHub release as `geobrix-<version>-dcs.Dockerfile`.
+  x86 (amd64) and DBR 17.3 / 18 images are not available yet: use the Init Script (Legacy) on
+  classic x86 clusters. The heavyweight tier needs dedicated compute; on standard access mode and
+  Serverless use the lightweight tier. See
+  [Databricks Container Service](./installation/dcs.mdx) and
+  [Choose an install path](./installation.mdx#choose-an-install-path).
+- **Heavyweight vector readers read `/Volumes` on the image.** On a dedicated cluster the JVM is
+  refused direct reads of Volume files, which made schema inference fail for `ogr` and the named
+  `*_ogr` readers (`geojson_ogr`, `gpkg_ogr`, `shapefile_ogr`, …) on a `/Volumes` path. Schema
+  inference now falls back to reading the file through Spark, so these readers take the same
+  `/Volumes` paths as the lightweight readers. The `gdal` raster reader needed no change, and
+  classic and Serverless compute behave as before.
 
 ### Dependencies
 

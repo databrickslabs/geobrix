@@ -80,7 +80,7 @@ The compute requirements below apply to the **heavyweight** tier (Scala JAR + na
 
 The heavyweight tier runs on **dedicated clusters** — with the GeoBrix [DCS image](./installation/dcs.mdx) (preferred; Graviton arm64, DBR 19) or the legacy [init script](./installation/init-script.mdx) (classic x86, DBR 17.3 / 18 / 19); see [Choose an install path](./installation.mdx#choose-an-install-path):
 - **Not** compatible with Serverless compute (use the lightweight tier there)
-- Not available yet on standard (shared) access mode, with or without a DCS image (use the lightweight tier there)
+- Not available on standard (shared) access mode, with or without a DCS image (use the lightweight tier there)
 - Requires native GDAL libraries, which the DCS image carries and the legacy init script installs
 - **Init-script route: non-ARM instance types only (Intel or AMD x86_64).** The GDAL bundle ships `amd64` `.deb`s from the UbuntuGIS PPA — `amd64` and `x86_64` are the same architecture, and Intel and AMD CPUs are interchangeable. The init script fails fast on `aarch64`; ARM (Graviton) is supported through the DCS image.
 

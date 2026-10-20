@@ -57,7 +57,7 @@ All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker containe
 
 ## Commands (the `gbx:*` palette)
 
-**50 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
+**82 `gbx:*` commands** in `scripts/commands/` (each a `.md` registration + a `.sh` implementation). They handle Docker setup, env vars, log paths (`--log filename` → `test-logs/filename`; relative → under `test-logs/`; absolute → as-is), and profile selection. **If a command fails, fix the command** — don't work around it (procedure in `.claude/rules/gbx-commands.md`).
 
 - **Tests**: `gbx:test:scala`, `gbx:test:python`, `gbx:test:scala-docs`, `gbx:test:python-docs`, `gbx:test:sql-docs`, `gbx:test:docs`, `gbx:test:function-info`, `gbx:test:notebooks`, `gbx:test:bindings`
   - Single Scala suite: `gbx:test:scala --suite 'com.databricks.labs.gbx.gridx.*'` or `--suites 'A,B'`
@@ -69,6 +69,7 @@ All Maven/test/doc/coverage work runs inside the **`geobrix-dev` Docker containe
 - **Data**: `gbx:data:download --bundle {essential|complete}`, `gbx:data:generate-minimal-bundle`, `gbx:data:stage-wheel`, `gbx:data:stage-jar`
 - **CI**: `gbx:ci:push`, `gbx:ci:status`, `gbx:ci:watch`, `gbx:ci:logs`, `gbx:ci:docs`. Dev-branch CI is **not a gate** — batch and push; don't chase red→green on it.
 - **Docker**: `gbx:docker:start`, `gbx:docker:exec "<cmd>"`, `gbx:docker:attach`
+- **DCS image**: `gbx:dcs:build` (local build + in-image checks, tags `<ver>-env6-<arm|x86>-rc`), `gbx:dcs:publish` (`--candidate` / `--release`; run by the release owner only — agents never push or log in)
 - **Review / Security**: `gbx:review:round` (Isaac — scope it; a full branch-vs-main run silently exits 0/0 findings), `gbx:security:codeql`
 
 ## Subagent orientation (paste the relevant parts into every dispatch)

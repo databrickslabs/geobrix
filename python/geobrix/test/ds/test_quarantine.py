@@ -911,6 +911,46 @@ def test_curves_and_surfaces_are_readable_geometries():
     }
 
 
+_CURVES_AND_SURFACES = [
+    _ARC,
+    _COMPOUND,
+    _CURVE_POLYGON,
+    _MULTI_CURVE,
+    _TRIANGLE,
+    _TIN,
+    _POLYHEDRAL,
+    _ARC_Z_ISO,
+    _ARC_EWKB_SRID,
+]
+
+
+def test_truncated_curves_and_surfaces_are_not_readable_geometries():
+    """A curve or surface is data only when its WKB body is whole: a truncated
+    one (only its header is a curve's), or one declaring a million arc points
+    it does not hold, is a bad record as binary output and the reader's
+    unreadable marker as WKT output; a whole one of each type is data."""
+    broken = [g[:-9] for g in _CURVES_AND_SURFACES]
+    broken.append(struct.pack("<BII", 1, 8, 10**6))
+    geoms = broken + _CURVES_AND_SURFACES
+    n = len(geoms)
+    batch = pa.record_batch(
+        [
+            pa.array(range(n), pa.int32()),
+            pa.array(geoms, pa.binary()),
+            pa.array(["4326"] * n),
+            pa.array(["+proj=longlat"] * n),
+        ],
+        names=["id", "g", "g_srid", "g_srid_proj"],
+    )
+    assert Q.bad_rows(batch, "g") == {
+        i: (Q.UNREADABLE_GEOMETRY, "g is not readable WKB") for i in range(len(broken))
+    }
+    assert list(Q.wkt_or_marker(geoms)) == [Q.UNREADABLE_WKB] * len(broken) + [
+        Q.UNWRITABLE_WKB
+    ] * len(_CURVES_AND_SURFACES)
+    assert Q.wkt_or_marker([_ARC[:-9]])[0] == Q.UNREADABLE_WKB
+
+
 def _layer(path, driver, geometry_type, geoms):
     import pyogrio
 

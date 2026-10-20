@@ -610,16 +610,26 @@ def _walk_wkb(buf, off: int = 0, depth: int = 0) -> Tuple[int, bool]:
     return end, base in _UNPARSED_WKB_TYPES
 
 
-def _holds_unparsed(value) -> bool:
-    """True if a WKB value is, or holds, a curve or surface (types 8-17)."""
-    if wkb_base_type(value) in _UNPARSED_WKB_TYPES:
-        return True
-    if wkb_base_type(value) != 7:
-        return False
+def _curve_marker(value) -> Optional[str]:
+    """For a WKB value that is, or holds, a curve or surface (types 8-17, which
+    shapely cannot build): :data:`UNWRITABLE_WKB` when its body is whole (valid
+    data), :data:`UNREADABLE_WKB` when a value declaring one does not walk
+    (truncated or garbled: only its header is a curve's). None for any other
+    value, including a malformed collection: shapely decides. Trailing bytes are
+    not checked (GEOS ignores them on other geometries too)."""
+    base = wkb_base_type(value)
+    if base in _UNPARSED_WKB_TYPES:
+        try:
+            _walk_wkb(value)
+        except Exception:  # noqa: BLE001 - malformed: not a geometry
+            return UNREADABLE_WKB
+        return UNWRITABLE_WKB
+    if base != 7:
+        return None
     try:
-        return _walk_wkb(value)[1]
+        return UNWRITABLE_WKB if _walk_wkb(value)[1] else None
     except Exception:  # noqa: BLE001 - malformed: shapely decides
-        return False
+        return None
 
 
 def wkb_base_type(value) -> Optional[int]:
@@ -632,10 +642,10 @@ def wkb_base_type(value) -> Optional[int]:
 
 
 def _readable_wkb(values) -> "object":
-    """Per value: True if readable as a geometry. Curves and surfaces are taken
-    as declared (shapely cannot build them); every other value is parsed,
-    vectorized, then one by one if the batch parse raises (a curve inside a
-    collection), so only the offending value is flagged."""
+    """Per value: True if readable as a geometry. Curves and surfaces are
+    walked (shapely cannot build them; see :func:`_curve_marker`); every other
+    value is parsed, vectorized, then one by one if the batch parse raises (a
+    curve inside a collection), so only the offending value is flagged."""
     import numpy as np
     import shapely
 
@@ -645,10 +655,11 @@ def _readable_wkb(values) -> "object":
     for i, v in enumerate(values):
         if v is None:
             continue
-        if _holds_unparsed(v):
-            ok[i] = True
-        else:
+        marker = _curve_marker(v)
+        if marker is None:
             todo.append(i)
+        else:
+            ok[i] = marker == UNWRITABLE_WKB
     if not todo:
         return ok
     idx = np.asarray(todo)
@@ -675,15 +686,17 @@ def _readable_wkb(values) -> "object":
 def wkt_or_marker(raw) -> "object":
     """WKT for each WKB value (the light vector reader's ``asWKB=false`` output
     under a read_paths hook): None for None, :data:`UNWRITABLE_WKB` for a curve
-    or surface, :data:`UNREADABLE_WKB` for a value that is not WKB."""
+    or surface, :data:`UNREADABLE_WKB` for a value that is not WKB (a truncated
+    curve or surface included)."""
     import numpy as np
     import shapely
 
     out = np.full(len(raw), None, dtype=object)
 
     def one(v):
-        if _holds_unparsed(v):
-            return UNWRITABLE_WKB
+        marker = _curve_marker(v)
+        if marker is not None:
+            return marker
         try:
             g = shapely.from_wkb(v, on_invalid="ignore")
         except NotImplementedError:  # a curve inside a collection
@@ -698,7 +711,7 @@ def wkt_or_marker(raw) -> "object":
     sub = np.empty(len(todo), dtype=object)
     sub[:] = [raw[i] for i in todo]
     try:
-        if any(_holds_unparsed(v) for v in sub):
+        if any(_curve_marker(v) is not None for v in sub):
             raise NotImplementedError
         geoms = shapely.from_wkb(sub, on_invalid="ignore")
         wkt = shapely.to_wkt(geoms)
@@ -716,7 +729,7 @@ def bad_rows(batch: pa.RecordBatch, geometry: Optional[str]) -> dict:
     (``geometry`` names its column) a geometry value that is not readable WKB --
     or, as WKT output, the reader's :data:`UNREADABLE_WKB` marker. A NULL or
     empty geometry is data (an unlocated feature, ``POINT EMPTY``), and so are
-    curves and surfaces shapely cannot build."""
+    whole curves and surfaces shapely cannot build (a truncated one is not)."""
     out = _invalid_text_rows(batch)
     if geometry is None or batch.num_rows == 0:
         return out

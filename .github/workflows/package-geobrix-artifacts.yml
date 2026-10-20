@@ -9,7 +9,7 @@ name: package geobrix artifacts
 # Inputs:
 #   ref           - git ref to build from (branch / tag / SHA). Empty = the
 #                   ref the workflow was launched on.
-#   attach_to_tag - tag (e.g. v0.3.0) to attach all six files to. Empty =
+#   attach_to_tag - tag (e.g. v0.3.0) to attach all seven files to. Empty =
 #                   produce workflow artifacts only, no tag mutation.
 #
 # Always uploaded as workflow artifacts (downloadable from the run page):
@@ -19,6 +19,7 @@ name: package geobrix artifacts
 #   4. geobrix-gdal-artifacts-v<version>-noble.tar.gz.sha256    (computed)
 #   5. geobrix-gdal-init.sh                                     (committed)
 #   6. geobrix-docs-<version>.zip                               (built inline from docs/)
+#   7. geobrix-<version>-dcs.Dockerfile                         (committed; the DCS image recipe)
 #
 # The slow PPA/apt dance does NOT run here - the GDAL platform layer
 # (~250 MB of .debs + wheels + JNI) is committed under resources/static/
@@ -322,6 +323,7 @@ jobs:
             dist/geobrix-gdal-artifacts-*.tar.gz
             dist/geobrix-gdal-artifacts-*.tar.gz.sha256
             scripts/geobrix-gdal-init.sh
+            scripts/docker/dcs/Dockerfile
             dist/geobrix-docs-*.zip
           if-no-files-found: error
           retention-days: 30
@@ -344,12 +346,20 @@ jobs:
           JAR=$(ls target/geobrix-*-jar-with-dependencies.jar | head -1)
           WHL=$(ls python/geobrix/dist/*.whl | head -1)
 
+          VERSION=$(basename "$JAR" | sed -nE 's/^geobrix-(.+)-jar-with-dependencies\.jar$/\1/p')
+          if [ -z "$VERSION" ]; then
+              echo "could not parse version from JAR name: $(basename "$JAR")" >&2
+              exit 1
+          fi
+          cp scripts/docker/dcs/Dockerfile "dist/geobrix-${VERSION}-dcs.Dockerfile"
+
           gh release upload "$INPUT_ATTACH_TO_TAG" \
               "$JAR" \
               "$WHL" \
               "dist/${GBX_TARBALL}" \
               "dist/${GBX_TARBALL}.sha256" \
               scripts/geobrix-gdal-init.sh \
+              "dist/geobrix-${VERSION}-dcs.Dockerfile" \
               "${GBX_DOCS_ZIP}" \
               --clobber
 
@@ -359,4 +369,5 @@ jobs:
           echo "  ${GBX_TARBALL}"
           echo "  ${GBX_TARBALL}.sha256"
           echo "  geobrix-gdal-init.sh"
+          echo "  geobrix-${VERSION}-dcs.Dockerfile"
           echo "  $(basename "${GBX_DOCS_ZIP}")"

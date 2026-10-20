@@ -273,6 +273,18 @@ The **Scala** and **Python** build actions (`.github/actions/scala_build/` and `
 
 The two actions intentionally mirror each other (same apt repos, same GDAL/natives, same pip stack: numpy, pyspark, gdal). Scala adds JDK, Maven, `zip`/`unzip`, and the JNI `.so` copy; Python adds pytest and `pip install python/geobrix[dev]`. **Lint (ScalaStyle, isort/black/flake8)** runs in CI on every build, but the build **fails on lint errors only for PRs targeting main**; pushes and PRs to other branches do not fail on lint. Config: `scalastyle-config.xml`, `python/geobrix/pyproject.toml`. Use **`gbx:lint:scalastyle`** and **`gbx:lint:python`** locally (or **`gbx:lint:python --fix`** with dev deps on the host). A future refactor could extract a single “setup GDAL + pip” composite used by both; for now the duplication is small and the structure is aligned for easy comparison.
 
+### Releasing the DCS image
+
+The Databricks Container Services (DCS) image for dedicated clusters is built and published separately from the JAR and wheel. The release owner publishes it; the publish command never runs `docker login` or handles credentials, so log in to Docker Hub (`docker login`) with an account that can push to the image repository first.
+
+1. Build the JAR and wheel for the release, then build the image with `bash scripts/commands/gbx-dcs-build.sh`. If the build network blocks public PyPI, export `PIP_INDEX_URL` before the build; the command passes it as a BuildKit secret, so it never enters the image.
+2. Push the release candidate with `bash scripts/commands/gbx-dcs-publish.sh --candidate`.
+3. Verify the `-rc` image on a dedicated DCS test cluster: both tiers, and the heavyweight readers on `/Volumes`.
+4. Push the release tags with `bash scripts/commands/gbx-dcs-publish.sh --release`. It tags the verified image as `<ver>-env6-<arm|x86>` and `env6-<arm|x86>`; record the printed `DIGEST=` line in the release notes.
+5. The release workflow attaches `geobrix-<ver>-dcs.Dockerfile` to the GitHub release.
+
+Both commands default to the arm64 (Graviton) image; pass `--arch amd64` for the x86 image.
+
 ### Summary
 
 The main build runs on **push to any branch** (except `python/**`, `scala/**`) — push triggers are successful — and on all PRs and via **workflow_dispatch**. Use **`gbx:ci:push`** to push and watch the build. Scala doc tests run only on **push to `main`**, in a separate step with `GBX_SAMPLE_DATA_ROOT` set. For full details and triggers, see the YAML files in `.github/workflows/`.

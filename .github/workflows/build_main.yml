@@ -72,6 +72,11 @@ jobs:
         uses: ./.github/actions/pyrx_build
         with:
           python_version: ${{ matrix.python }}
+      # Tests of the scripts themselves: the JAR packaging check and the gbx:dcs:build /
+      # gbx:dcs:publish gates. Stdlib + pytest (from the pyrx install above); the DCS commands
+      # run against a fake docker on PATH, so no Docker daemon or registry is involved.
+      - name: test scripts/ci (JAR packaging check, DCS build/publish gates)
+        run: python -m pytest scripts/ci -v
 
   build:
     # Heavy: full Scala test + Python test+coverage + GDAL native install (mvn -T 1C, ~10–15 min). Standard runner is too small.

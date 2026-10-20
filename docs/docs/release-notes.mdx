@@ -66,11 +66,13 @@ one field-type mapping shared by both vector reader tiers.
   `skip` or `quarantine`, the rest of a LAS or LAZ file is set aside (as one record) only after
   `max(3 × chunkSize, 250,000)` points in a row could not be read, so one corrupt LAZ chunk never
   ends the read, whatever `chunkSize` is.
-- **The LiDAR header-bounds check is opt-in.** With the `lidar_gbx` option
-  `checkHeaderBounds="true"`, points outside the bounds the file's header declares (by more than
-  0.1% of its extent and one scale step, which garbled point records exceed) are set aside as
-  `PointOutOfBounds` records. By default they are read: many files carry header bounds that were
-  not updated after their points changed. See the [LiDAR reader](./readers/lidar#options).
+- **LiDAR points far outside the header's bounds are set aside.** When `on_error` is `skip` or
+  `quarantine`, a point outside the bounds the file's header declares, widened on every side by
+  their largest extent (of x, y and z), is a `PointOutOfBounds` record. Damaged LAZ data can
+  decode without an error into points that are not in the file; they land far away, so this check
+  catches them, as it does garbled point records. The margin is wide so that a header whose bounds
+  were not updated after points were added or moved keeps those points. Turn it off with the
+  `lidar_gbx` option `checkHeaderBounds="false"`. See the [LiDAR reader](./readers/lidar#options).
 - **Some corrupt LAZ data stops the worker.** A region of `0xFF` bytes, for example, crashes the
   native LAZ decoder. A crash cannot be caught, so the file is not set aside: the task is retried
   and then the update fails. Remove the file or replace it with a readable copy.

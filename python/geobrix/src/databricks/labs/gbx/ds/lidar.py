@@ -145,10 +145,11 @@ class LidarGbxReader(DataSourceReader):
         self.decimate: int = int(options.get("decimate", "1"))
         self.chunk_size: int = int(options.get("chunkSize", "1000000"))
         # Under a read_paths / declare_ingest bad-record hook only: set aside points
-        # outside the bounds the file header declares (opt-in; many headers carry
-        # bounds that were never updated after their points changed).
+        # far outside the bounds the file header declares (see _header_bounds).
+        # On by default: it is what catches garbage from damaged LAZ data that
+        # decodes without an error. "false" turns it off.
         self.check_header_bounds: bool = (
-            str(options.get("checkHeaderBounds", "false")).lower() == "true"
+            str(options.get("checkHeaderBounds", "true")).lower() == "true"
         )
         # Optional column projection: comma-separated subset of the base point
         # columns to return (schema order). None = all columns.
@@ -371,10 +372,6 @@ _SALVAGE_POINTS = 1000
 # ends the read, whatever chunkSize is.
 _GIVE_UP_CHUNKS = 3
 _GIVE_UP_POINTS = 250_000
-# Bounds check (opt-in, checkHeaderBounds): a header's bounds may be rounded or
-# slightly stale, so a point is out of bounds only past this part of the extent
-# (plus one scale step).
-_BOUNDS_SLACK = 1e-3
 # A LAZ point takes more than this many bytes, so a header count beyond
 # (bytes of point data / this) cannot be in the file.
 _MIN_LAZ_POINT_BYTES = 0.5
@@ -382,20 +379,26 @@ _MIN_LAZ_POINT_BYTES = 0.5
 
 def _header_bounds(h):
     """``(mins, maxs, tolerance)`` the points are checked against, or None when
-    the header declares no usable bounds (all zero, or a max below a min)."""
+    the header declares no usable bounds (all zero, or a max below a min).
+
+    The margin is wide: on every axis, the largest of the x / y / z extents
+    (plus one scale step). A header whose bounds were not updated after points
+    were added or moved keeps those points, while garbage decoded from damaged
+    LAZ data, which lands orders of magnitude away, is caught. One margin for
+    every axis, so a flat axis (all z equal: zero extent) does not reject
+    every point that is off it by a rounding step or a stale value."""
     mins = np.asarray(h.mins, dtype=np.float64)
     maxs = np.asarray(h.maxs, dtype=np.float64)
     if np.any(maxs < mins) or (not mins.any() and not maxs.any()):
         return None
-    tol = np.abs(np.asarray(h.scales, dtype=np.float64)) + _BOUNDS_SLACK * np.abs(
-        maxs - mins
-    )
+    tol = np.abs(np.asarray(h.scales, dtype=np.float64)) + float(np.max(maxs - mins))
     return mins, maxs, tol
 
 
 def _out_of_bounds(cols, keep, bounds, start, hook) -> np.ndarray:
-    """Points (among ``keep``) outside the header's bounds (garbled point
-    records decode to such values). Each run of consecutive ones is a bad record
+    """Points (among ``keep``) outside the header's bounds widened by their
+    margin (see :func:`_header_bounds`; garbled point records and garbage from
+    damaged LAZ data decode to such values). Each run of consecutive ones is a bad record
     (``points=<first>-<last>``, by index in the file; a single point is
     ``point=<i>`` with its x/y/z). Returns their mask."""
     import json

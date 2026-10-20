@@ -498,27 +498,87 @@ def test_lidar_truncated_file_reads_its_complete_points(tmp_path):
     assert "ends after 2500 of the 5000 points" in rec["error_message"]
 
 
-_CHECK_BOUNDS = {"checkHeaderBounds": "true"}
+_NO_BOUNDS = {"checkHeaderBounds": "false"}
 
 
 def test_lidar_garbled_points_outside_the_header_bounds_are_set_aside(tmp_path):
-    """With checkHeaderBounds, points outside the header's bounds are a record."""
+    """By default, points far outside the header's bounds are a record."""
     path, offset, reclen = _las(tmp_path / "a.las")
     for i in range(2500, 2510):  # X of 10 records -> far outside the bounds
         with open(path, "r+b") as fh:
             fh.seek(offset + i * reclen)
             fh.write(struct.pack("<i", 2_000_000_000))
-    rows, recs = _read(
-        tmp_path, path, "lidar_gbx", {"chunkSize": "1000", **_CHECK_BOUNDS}
-    )
+    rows, recs = _read(tmp_path, path, "lidar_gbx", {"chunkSize": "1000"})
     assert len(rows) == 4990
     assert _classes(recs) == [("points=2500-2509", Q.POINT_OUT_OF_BOUNDS)]
+    shutil.rmtree(tmp_path / "bad_records")
+    rows, recs = _read(tmp_path, path, "lidar_gbx", _NO_BOUNDS)
+    assert len(rows) == 5000 and recs == []  # checkHeaderBounds="false": no check
 
 
-def test_lidar_points_outside_the_header_bounds_are_data_by_default(tmp_path):
-    """The header-bounds check is opt-in: by default a point outside the bounds
-    the header declares (a header not updated after its points changed) is read
-    and is no record; with checkHeaderBounds it is set aside as before."""
+def _set_point_x(path, i, x):
+    """Overwrite the X of point ``i`` of an uncompressed LAS file with ``x``."""
+    import laspy
+
+    with laspy.open(path) as r:
+        h = r.header
+        offset, reclen = h.offset_to_point_data, h.point_format.size
+        raw = round((x - h.offsets[0]) / h.scales[0])
+    with open(path, "r+b") as fh:
+        fh.seek(offset + i * reclen)
+        fh.write(struct.pack("<i", raw))
+
+
+def test_lidar_point_ten_extents_outside_the_header_bounds_is_set_aside(tmp_path):
+    """The bounds are widened on each side by their largest extent: a point 10
+    extents out is a record (with its x, y and z), one 0.9 extents out is data."""
+    import laspy
+
+    path, _, _ = _las(tmp_path / "a.las")  # x, y in 0..100, z in 0..10
+    with laspy.open(path) as r:
+        max_x = float(r.header.maxs[0])
+    _set_point_x(path, 2500, max_x + 10 * 100.0)
+    _set_point_x(path, 2600, max_x + 0.9 * 100.0)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 4999
+    ((rec),) = recs
+    assert (rec["record_index"], rec["error_class"]) == (
+        "point=2500",
+        Q.POINT_OUT_OF_BOUNDS,
+    )
+    assert json.loads(rec["raw"])["x"] == pytest.approx(max_x + 1000.0, abs=0.01)
+
+
+def test_lidar_flat_header_axis_does_not_set_points_aside(tmp_path):
+    """A header with a flat z range (min z == max z, as for terrain flattened to
+    one height) while a few points sit 0.5 m above it: one margin, the largest
+    extent of the bounds, applies to every axis, so a zero z extent does not
+    turn the check into an exact match."""
+    import laspy
+
+    las = laspy.LasData(laspy.LasHeader(point_format=3, version="1.2"))
+    rng = np.random.default_rng(3)
+    las.x = rng.uniform(0, 100, 1000)
+    las.y = rng.uniform(0, 100, 1000)
+    z = np.full(1000, 5.0)
+    z[:10] = 5.5
+    las.z = z
+    path = str(tmp_path / "flat.las")
+    las.write(path)
+    with open(path, "r+b") as fh:  # LAS 1.2: max z at byte 211 (min z at 219)
+        fh.seek(211)
+        fh.write(struct.pack("<d", 5.0))
+    with laspy.open(path) as r:
+        assert r.header.maxs[2] == r.header.mins[2] == 5.0
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 1000 and recs == []
+
+
+def test_lidar_points_past_stale_header_bounds_are_data(tmp_path):
+    """A header whose bounds were not updated after points were added beyond
+    them (max x 90 while the points reach 100: 10% of the extent out, which the
+    0.1% slack once set aside) keeps every point, by default and with the
+    check off."""
     path, _, _ = _las(tmp_path / "a.las")  # x in 0..100
     with open(path, "r+b") as fh:  # LAS 1.2: max x at byte 179
         fh.seek(179)
@@ -526,9 +586,8 @@ def test_lidar_points_outside_the_header_bounds_are_data_by_default(tmp_path):
     rows, recs = _read(tmp_path, path, "lidar_gbx")
     assert len(rows) == 5000 and recs == []
     shutil.rmtree(tmp_path / "bad_records", ignore_errors=True)
-    rows, recs = _read(tmp_path, path, "lidar_gbx", _CHECK_BOUNDS)
-    assert 0 < len(rows) < 5000
-    assert {c for _, c in _classes(recs)} == {Q.POINT_OUT_OF_BOUNDS}
+    rows, recs = _read(tmp_path, path, "lidar_gbx", _NO_BOUNDS)
+    assert len(rows) == 5000 and recs == []
 
 
 def test_lidar_files_it_used_to_skip_are_records(tmp_path):
@@ -656,8 +715,8 @@ def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):
     assert len(rows) == 5000 and recs == []
 
 
-def _garbled_laz(tmp_path, at, zero_points=()):
-    """A 210,000-point LAZ (5 chunks) with 64 bytes of its compressed data
+def _garbled_laz(tmp_path, at, zero_points=(), nbytes=64):
+    """A 210,000-point LAZ (5 chunks) with ``nbytes`` of its compressed data
     garbled at ``at`` (a fraction of the file size); returns its path and the
     raw X/Y/Z of its points before the garbling."""
     import laspy
@@ -665,7 +724,7 @@ def _garbled_laz(tmp_path, at, zero_points=()):
     path = _laz(tmp_path / "g.laz", 210_000, zero_points)
     las = laspy.read(path)
     original = set(zip(las.X.tolist(), las.Y.tolist(), las.Z.tolist()))
-    _garble(path, int(os.path.getsize(path) * at), 64)
+    _garble(path, int(os.path.getsize(path) * at), nbytes)
     return path, original
 
 
@@ -698,6 +757,24 @@ def test_lidar_garbled_laz_chunk_reads_no_point_that_is_not_in_the_file(tmp_path
     rows, recs = _read(tmp_path, path, "lidar_gbx", {"dimensions": "x,y,z"})
     assert rows and recs
     assert [r for r in rows if _raw_xyz(r) not in original] == []
+    assert len(rows) + _recorded_points(recs) == 210_000
+
+
+def test_lidar_garbled_laz_that_decodes_without_an_error_is_set_aside(tmp_path):
+    """16 garbled bytes in the last chunk decode, without an error, into
+    thousands of points that are not in the file. The default bounds check
+    sets nearly all of them aside (garbage lands far outside the bounds; a few
+    land inside them and are read); with checkHeaderBounds="false" they are
+    rows. Every point is a row or recorded either way."""
+    path, original = _garbled_laz(tmp_path, 0.96, nbytes=16)
+    options = {"dimensions": "x,y,z"}
+    rows, recs = _read(tmp_path, path, "lidar_gbx", options)
+    assert len([r for r in rows if _raw_xyz(r) not in original]) <= 20
+    assert Q.POINT_OUT_OF_BOUNDS in {r["error_class"] for r in recs}
+    assert len(rows) + _recorded_points(recs) == 210_000
+    shutil.rmtree(tmp_path / "bad_records")
+    rows, recs = _read(tmp_path, path, "lidar_gbx", {**options, **_NO_BOUNDS})
+    assert len([r for r in rows if _raw_xyz(r) not in original]) > 1000
     assert len(rows) + _recorded_points(recs) == 210_000
 
 
@@ -1113,9 +1190,8 @@ def test_zipped_shapefile_deleted_records_are_not_counted(tmp_path):
 
 
 def test_lidar_points_just_past_slightly_off_header_bounds_are_data(tmp_path):
-    """With checkHeaderBounds, a header whose bounds are a little off (rounded)
-    does not set valid points aside: the tolerance is a small part of the
-    extent."""
+    """A header whose bounds are a little off (rounded) does not set valid
+    points aside."""
     import laspy
 
     path, offset, reclen = _las(tmp_path / "a.las", 1000)
@@ -1124,7 +1200,7 @@ def test_lidar_points_just_past_slightly_off_header_bounds_are_data(tmp_path):
     with open(path, "r+b") as fh:  # LAS 1.2: max x at byte 179
         fh.seek(179)
         fh.write(struct.pack("<d", float(maxs[0]) - 0.02))
-    rows, recs = _read(tmp_path, path, "lidar_gbx", _CHECK_BOUNDS)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
     assert len(rows) == 1000 and recs == []
 
 

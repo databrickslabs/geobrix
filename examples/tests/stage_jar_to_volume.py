@@ -87,12 +87,16 @@ def main() -> int:
     jar_path = jars[0]
 
     # Guard BEFORE any upload (and before the local-only early return): the JAR must not bundle
-    # the Scala library, which would shadow the runtime's own from /databricks/jars.
+    # classes the runtime provides (Scala, Spark or log4j), which would shadow the runtime's own
+    # from /databricks/jars.
     check = subprocess.run(
         [sys.executable, str(project_root / "scripts" / "ci" / "check_jar_packaging.py"), str(jar_path)]
     )
     if check.returncode != 0:
-        print("Refusing to stage a JAR that bundles the Scala library.", file=sys.stderr)
+        print(
+            "Refusing to stage a JAR that bundles classes the runtime provides (Scala, Spark or log4j).",
+            file=sys.stderr,
+        )
         return 1
 
     if skip_jar_upload:

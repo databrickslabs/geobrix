@@ -268,4 +268,24 @@ class HadoopUtilsSchemaStagingTest extends PlanTest with SilentSparkSession {
         released shouldBe List(remote)
         e.getSuppressed.map(_.getMessage).mkString should include(missing)
     }
+
+    test("stageDatasetOrFallBack falls back when the copy is a directory with no files in it") {
+        // A FileGDB copy that holds only a subfolder (or nothing) cannot be opened by OpenFileGDB.
+        val remoteGdb = "/Volumes/main/default/data/NYC_Sample.gdb"
+        val copy = Files.createDirectory(tmpDir().resolve("NYC_Sample.gdb"))
+        Files.createDirectory(copy.resolve("NYC_Sample.gdb"))
+        var released = List.empty[String]
+        val res = HadoopUtils.stageDatasetOrFallBack(
+          remoteGdb,
+          _ => copy.toString,
+          p => released :+= p,
+          _ => "/tmp/staged/NYC_Sample.gdb"
+        )
+        res shouldBe (("/tmp/staged/NYC_Sample.gdb", false))
+        released shouldBe List(remoteGdb)
+        val e = intercept[IOException] {
+            HadoopUtils.stageDatasetOrFallBack(remoteGdb, _ => copy.toString, _ => (), _ => throw new IOException("boom"))
+        }
+        e.getSuppressed.map(_.getMessage).mkString should include(copy.toString)
+    }
 }

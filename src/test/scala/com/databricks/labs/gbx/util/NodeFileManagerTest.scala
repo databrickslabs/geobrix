@@ -6,6 +6,8 @@ import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 import org.scalatest.BeforeAndAfterEach
 
+import java.nio.file.{Files, Paths}
+
 class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
 
     // Note: NodeFileManager is a stateful singleton that interacts with NodeFilePathUtil
@@ -69,6 +71,24 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
         noException should be thrownBy NodeFileManager.releaseRemote("")
         
         spark.stop()
+    }
+
+    test("readRemote on a FileGDB directory returns a local directory holding its files") {
+        val gdb = FileGDBFixture.unzipBridges()
+        val sourceFiles = gdb.toFile.list().toSet
+        NodeFileManager.init(new SerializableConfiguration(new org.apache.hadoop.conf.Configuration()))
+        // OGR_DataSource.inferSchema passes HadoopUtils.cleanPath(<load path>): file:/... here, bare /Volumes/...
+        // on a cluster. With or without a trailing slash, the copy must be the .gdb directory itself.
+        for (remote <- Seq(HadoopUtils.cleanPath(gdb.toString), HadoopUtils.cleanPath(s"$gdb/"))) {
+            val local = Paths.get(NodeFileManager.readRemote(remote))
+            local.startsWith(NodeFilePathUtil.rootPath) shouldBe true
+            local.getFileName.toString shouldBe gdb.getFileName.toString
+            Files.isDirectory(local) shouldBe true
+            val copied = Option(local.toFile.list()).map(_.toSet).getOrElse(Set.empty[String])
+            withClue(s"$remote staged to $local holding $copied: ") {
+                sourceFiles.diff(copied) shouldBe empty
+            }
+        }
     }
 
 }

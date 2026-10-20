@@ -451,12 +451,20 @@ object HadoopUtils extends Logging {
         }
     }
 
+    /** True when a node-file copy can be opened: an existing file, or a directory with at least one
+      * file directly in it (an empty `.gdb` folder, or one holding only a subfolder, is no FileGDB). */
+    private def isUsableCopy(local: String): Boolean = {
+        val f = new java.io.File(local)
+        if (f.isDirectory) Option(f.listFiles()).exists(_.exists(_.isFile)) else f.exists
+    }
+
     /** The stage-or-fall-back decision for FileGDB / zip schema inference: take NodeFileManager's copy
-      * when `readRemote` succeeds and the file exists (`releaseAfter = true`, the caller releases it
-      * after use); otherwise fall back to `fallback` (credentialed query reads, `releaseAfter = false`).
-      * The `readRemote` failure is logged at warn and, if the fallback also throws, attached to the
-      * fallback's exception as suppressed, so a genuine copy failure (permissions, corrupt file) is not
-      * reduced to "try the other path". A copy that returned a missing path is released first. */
+      * when `readRemote` succeeds and the copy is usable (`isUsableCopy`; `releaseAfter = true`, the
+      * caller releases it after use); otherwise fall back to `fallback` (credentialed query reads,
+      * `releaseAfter = false`). The `readRemote` failure is logged at warn and, if the fallback also
+      * throws, attached to the fallback's exception as suppressed, so a genuine copy failure
+      * (permissions, corrupt file) is not reduced to "try the other path". A copy that returned a
+      * missing path or a directory with no files in it is released first. */
     private[gbx] def stageDatasetOrFallBack(
         path: String,
         readRemote: String => String,
@@ -467,11 +475,16 @@ object HadoopUtils extends Logging {
             try Right(readRemote(path))
             catch { case NonFatal(e) => Left(e) }
         copied match {
-            case Right(local) if new java.io.File(local).exists => (local, true)
+            case Right(local) if isUsableCopy(local) => (local, true)
             case _ =>
                 val original: Throwable = copied.fold(
                   identity,
-                  local => new java.io.FileNotFoundException(s"Node file copy of $path reported $local, which does not exist")
+                  local =>
+                      new java.io.FileNotFoundException(
+                        if (new java.io.File(local).isDirectory)
+                            s"Node file copy of $path reported $local, a directory with no files in it"
+                        else s"Node file copy of $path reported $local, which does not exist"
+                      )
                 )
                 copied.foreach(_ => release(path))
                 logWarning(s"Staging $path through the node file cache failed; falling back to query reads", original)
@@ -544,7 +557,11 @@ object HadoopUtils extends Logging {
         }
     }
 
-    /** Copies a file or directory from inPath to outPath; returns path to copied item in outDir. */
+    /** Copies a file or directory `inPath` into `outPath`'s parent under the source's own name (plus a
+      * file's same-stem sidecars); returns the copied item's path. Callers name `outPath` after the
+      * source (NodeFilePathUtil's `<cache>/<hash>/<name>`, the writers' `<root>/<name>`), so the copy
+      * lands at `outPath`. A directory is handled like a file: copying it INTO `outPath` would produce
+      * `outPath/<name>/...` and leave `outPath`, the path NodeFilePathUtil returns, empty. */
     // RAKE GUARD: this reads /Volumes on the EXECUTOR via Hadoop FS on the BARE /Volumes path
     // (see cleanPath) -> the UC-integrated connector, which IS credentialed in DSV2 tasks. Do NOT
     // "fix" a /Volumes read failure here by rewriting to file: or by adding a POSIX java.io copy:
@@ -557,13 +574,7 @@ object HadoopUtils extends Logging {
         hconf: SerializableConfiguration
     ): String = {
         val copyFromPath = new Path(cleanPath(inPath))
-        val outputDir = withFileSystem(copyFromPath, hconf) { srcFS =>
-            if (srcFS.getFileStatus(copyFromPath).isDirectory) {
-                new Path(cleanPath(outPath)).toString
-            } else {
-                new Path(cleanPath(outPath)).getParent.toString
-            }
-        }
+        val outputDir = new Path(cleanPath(outPath)).getParent.toString
         copyToLocalDir(copyFromPath.toString, outputDir, hconf)
     }
 

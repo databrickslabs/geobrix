@@ -1,10 +1,13 @@
 package com.databricks.labs.gbx.vectorx.ds
 
+import com.databricks.labs.gbx.util.FileGDBFixture
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
 import org.scalatest.matchers.must.Matchers.be
 import org.scalatest.matchers.should.Matchers.convertToAnyShouldWrapper
+
+import java.nio.file.Files
 
 
 class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
@@ -91,6 +94,21 @@ class OGR_DataSourceTest extends PlanTest with SilentSparkSession {
 
         res_gpkg.count() should be > 0L
 
+    }
+
+    test("file_gdb_ogr reads an unzipped FileGDB directory as it reads the zip") {
+        val zip = this.getClass.getResource("/binary/gdb/bridges.gdb.zip").toString.replace("file:", "")
+        val fromZip = spark.read.format("file_gdb_ogr").load(zip)
+        val fromDir = spark.read.format("file_gdb_ogr").load(FileGDBFixture.unzipBridges().toString)
+        fromZip.count() should be > 0L
+        fromDir.schema shouldBe fromZip.schema
+        fromDir.count() shouldBe fromZip.count()
+    }
+
+    test("file_gdb_ogr reads the unzipped NYC sample FileGDB directory") {
+        assume(Files.exists(FileGDBFixture.nycSampleZip), s"${FileGDBFixture.nycSampleZip} is not mounted")
+        val dir = FileGDBFixture.unzipGdb(FileGDBFixture.nycSampleZip).toString
+        spark.read.format("file_gdb_ogr").load(dir).count() shouldBe 5L
     }
 
 }

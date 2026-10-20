@@ -31,17 +31,10 @@ object NodeFilePathUtil {
     private final case class Entry(dir: Path, ready: CompletableFuture[Path], readers: AtomicInteger)
     private val entries = new ConcurrentHashMap[String, Entry]()
 
-    /** Last path segment (file name) of the remote path. */
-    private def filename(remote: String): String = {
-        val noPrefix = remote.split("://").last
-        val i = noPrefix.lastIndexOf("/")
-        if (i >= 0) noPrefix.substring(i + 1)
-        else noPrefix
-    }
-
     /** MurmurHash-based string for cache dir name. */
     private def murmur(s: String): String = s"mm3_${hasher.hash(s.getBytes).toString.replace("-", "_")}"
-    /** Last path component (file or dir name) of remote. */
+    /** Last path component (file or dir name) of remote; trailing '/' are ignored, so a directory
+      * given as `x.gdb/` caches as `<cache>/<hash>/x.gdb` like `x.gdb`. */
     private def base(remote: String): String = remote.split("://").last.split('/').last
     /** Cache directory for this remote path (by content hash). */
     private def cacheDir(remote: String): Path = rootPath.resolve(murmur(remote))
@@ -51,8 +44,9 @@ object NodeFilePathUtil {
     private def murmurParent(remote: String): String = s"mm3_${hasher.hash(remote.getBytes).toString.replace("-", "_")}"
     /** Parent cache dir for multi-file sources. */
     private def parentDir(remote: String): Path = rootPath.resolve(murmurParent(remote))
-    /** Full local path where this remote will be (or was) copied. */
-    private def nodeFilePath(remote: String): Path = parentDir(remote).resolve(filename(remote))
+    /** Full local path where this remote will be (or was) copied; `copyToPath` puts a file or a
+      * directory exactly here because the last segment is the source's own name. */
+    private def nodeFilePath(remote: String): Path = parentDir(remote).resolve(base(remote))
 
     /**
       * Ensure copy exists (primary + sidecars via HadoopUtils) and acquire read

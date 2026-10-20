@@ -2,7 +2,8 @@ name: package geobrix artifacts
 # One-stop release packaging: builds the JAR + Python wheel inline,
 # repackages the committed GDAL platform tarball with the JAR baked in, and
 # attaches every release artifact (JAR, wheel, GDAL tarball, sidecar, init
-# script, docs zip) to an existing tag via `gh release upload --clobber`.
+# script, DCS image Dockerfile, docs zip) to an existing tag via
+# `gh release upload --clobber`.
 #
 # Manual-only: Actions -> "package geobrix artifacts" -> Run workflow.
 #
@@ -43,7 +44,7 @@ on:
         type: string
         default: ""
       attach_to_tag:
-        description: "Tag to attach the six files to (e.g. v0.3.0). Empty = workflow artifacts only."
+        description: "Tag to attach the seven files to (e.g. v0.3.0). Empty = workflow artifacts only."
         required: false
         type: string
         default: ""
@@ -308,6 +309,7 @@ jobs:
               "dist/${GBX_TARBALL}" \
               "dist/${GBX_TARBALL}.sha256" \
               scripts/geobrix-gdal-init.sh \
+              scripts/docker/dcs/Dockerfile \
               "${GBX_DOCS_ZIP}"
           echo
           echo "=== outer sidecar ==="

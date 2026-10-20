@@ -58,14 +58,59 @@ It contains:
 - **The GeoBrix JAR**, the only GeoBrix JAR on the image, in `/databricks/jars` — the directory a
   dedicated cluster loads JARs from.
 
-STAC search is not in the image. Add it in a notebook with `%pip install "geobrix[stac]"`; on env 6
-this upgrades `requests` from the image's 2.32.5 to 2.34.2 or later. The sample-data downloaders and the
-other opt-in extras (`[overture]`, `[earthdata]`, `[photogrammetry]` and `[models]`) are not in the image
-either and install the same way, for example `%pip install "geobrix[earthdata]"`.
+STAC search is not in the image. Add it in a notebook from the GeoBrix wheel at the image's version
+(the `<version>` in the image tag), with the same install form the
+[Installation](../installation.mdx#whl-only) page uses:
+
+```python
+%pip install "geobrix[stac] @ https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>-py3-none-any.whl"
+dbutils.library.restartPython()
+```
+
+If the workspace restricts outbound network access, install from a Unity Catalog Volume instead:
+`%pip install "geobrix[stac] @ file:///Volumes/<catalog>/<schema>/<volume>/geobrix/geobrix-<version>-py3-none-any.whl"`.
+In a job or pipeline environment, write the dependency line without spaces around `@`, the form
+that works there:
+`geobrix[stac]@https://github.com/databrickslabs/geobrix/releases/download/v<version>/geobrix-<version>-py3-none-any.whl`.
+
+On env 6 the STAC extra upgrades `requests` from the image's 2.32.5 to 2.34.2 or later. The
+sample-data downloaders and the other opt-in extras (`[overture]`, `[earthdata]`,
+`[photogrammetry]` and `[models]`) are not in the image either and install the same way, with the
+extra's name in place of `stac`.
 
 The Dockerfile that builds each release's image is attached to the
 [GitHub release](https://github.com/databrickslabs/geobrix/releases) as
 `geobrix-<version>-dcs.Dockerfile`.
+
+### Build your own image
+
+To build the image yourself, for example into a registry only your workspace can pull from, use the
+files attached to the same release:
+
+1. Put `geobrix-<version>-dcs.Dockerfile`, `geobrix-<version>-py3-none-any.whl` and
+   `geobrix-<version>-jar-with-dependencies.jar` in one empty directory.
+2. Build from that directory. The Dockerfile needs BuildKit, the default in Docker 23 and later
+   (older versions: set `DOCKER_BUILDKIT=1`):
+
+   ```bash
+   docker build --target release \
+     -f geobrix-<version>-dcs.Dockerfile \
+     --build-arg GEOBRIX_VERSION=<version> \
+     -t <your-repo>:<tag> .
+   ```
+
+   The default base image is the arm64 (Graviton) one. For an x86 image, add
+   `--build-arg BASE_IMAGE=databricksruntime/environment:v6-standard --platform linux/amd64`.
+   `--target base` stops after native GDAL, without the wheel and JAR.
+3. If your network needs a package index for the wheel install, put its URL in a file and add
+   `--secret id=pip_index_url,src=<file>`. The index reaches the build as a BuildKit secret, so it is
+   not recorded in the image.
+4. Push the image to a registry your workspace can pull from, and enter it as the cluster's
+   **Docker Image URL** in the steps below.
+
+The build compiles native GDAL from source, so it takes roughly 15 to 30 minutes on a native
+machine and longer under emulation. The wheel install is held to the base image's package
+versions, and the build fails rather than change them.
 
 ## Set up a dedicated cluster
 

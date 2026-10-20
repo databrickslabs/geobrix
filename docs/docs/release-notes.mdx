@@ -256,12 +256,12 @@ formats.
   Serverless use the lightweight tier. See
   [Databricks Container Service](./installation/dcs.mdx) and
   [Choose an install path](./installation.mdx#choose-an-install-path).
-- **Heavyweight vector readers read `/Volumes` on the image.** On a dedicated cluster the JVM is
+- **Heavyweight vector readers read `/Volumes` on the image.** On a DCS dedicated cluster the JVM is
   refused direct reads of Volume files, which made schema inference fail for `ogr` and the named
   `*_ogr` readers (`geojson_ogr`, `gpkg_ogr`, `shapefile_ogr`, …) on a `/Volumes` path. Schema
   inference now falls back to reading the file through Spark, so these readers take the same
   `/Volumes` paths as the lightweight readers. The `gdal` raster reader needed no change, and
-  classic and Serverless compute behave as before.
+  other compute is unchanged.
 
 ### Dependencies
 

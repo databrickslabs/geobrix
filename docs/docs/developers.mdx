@@ -277,11 +277,19 @@ The two actions intentionally mirror each other (same apt repos, same GDAL/nativ
 
 The Databricks Container Services (DCS) image for dedicated clusters is built and published separately from the JAR and wheel. The release owner publishes it; the publish command never runs `docker login` or handles credentials, so log in to Docker Hub (`docker login`) with an account that can push to the image repository first.
 
-1. Build the JAR and wheel for the release, then build the image with `bash scripts/commands/gbx-dcs-build.sh`. If the build network blocks public PyPI, export `PIP_INDEX_URL` before the build; the command passes it as a BuildKit secret, so it never enters the image.
-2. Push the release candidate with `bash scripts/commands/gbx-dcs-publish.sh --candidate`.
-3. Verify the `-rc` image on a dedicated DCS test cluster: both tiers, and the heavyweight readers on `/Volumes`.
-4. Push the release tags with `bash scripts/commands/gbx-dcs-publish.sh --release`. It re-tags the candidate image you pushed and verified as `<ver>-env6-<arm|x86>` and `env6-<arm|x86>`, and refuses an `-rc` image that was never pushed. Don't rebuild between steps 2 and 4: a rebuilt image needs a new candidate push and verification. Record the printed `DIGEST=` line in the release notes.
+1. Build the JAR and wheel for the release, then build the image with `bash scripts/commands/gbx-dcs-build.sh`. If the build network blocks public PyPI, export `PIP_INDEX_URL` before the build; the command passes it as a BuildKit secret, so it never enters the image. The image gets its `-rc` tag only after every check passes; a failed check leaves no new tag.
+2. Push the release candidate with `bash scripts/commands/gbx-dcs-publish.sh --candidate`. Note the printed `DIGEST=<repo>@sha256:<hex>` line: it identifies the exact image you are about to verify.
+3. Verify the `-rc` image on a dedicated DCS test cluster that has no GeoBrix JAR library attached (a cluster uses one GeoBrix JAR, and the image already carries it): both tiers, and the heavyweight readers on `/Volumes`.
+4. Push the release tags, passing the version and the digest from step 2:
+
+   ```bash
+   bash scripts/commands/gbx-dcs-publish.sh --release --confirm <ver> --expect-digest sha256:<hex>
+   ```
+
+   `--release` refuses unless `--confirm` equals the version being released, so run it only after the verification in step 3. `--expect-digest` refuses unless the local `-rc` image is the one with that digest, which is the image you verified. The command re-tags the candidate image you pushed and verified as `<ver>-env6-<arm|x86>` and `env6-<arm|x86>`, and refuses an `-rc` image that was never pushed. Don't rebuild between steps 2 and 4: a rebuilt image needs a new candidate push and verification. Record the printed `DIGEST=` line in the release notes.
 5. The release workflow attaches `geobrix-<ver>-dcs.Dockerfile` to the GitHub release.
+
+Do the image release (step 4) before the docs that name the release tags are deployed from `main`: the [Databricks Container Service](./installation/dcs.mdx) page tells readers to pull `<ver>-env6-arm` and `env6-arm`, and those tags must exist first.
 
 Both commands default to the arm64 (Graviton) image; pass `--arch amd64` for the x86 image.
 

@@ -2,7 +2,9 @@ package com.databricks.labs.gbx.util
 
 import org.apache.hadoop.fs.{FileSystem, FileUtil, Path}
 
+import java.io.IOException
 import java.time.{Duration, Instant}
+import scala.util.control.NonFatal
 
 /** Copy between Hadoop FileSystems with retry/wait until destination exists (for distributed consistency). */
 object AtomicDistributedCopy {
@@ -19,7 +21,10 @@ object AtomicDistributedCopy {
       * long-lived executor whose local_disk0 still holds the old copy). A length mismatch is
       * a cheap, reliable content-change signal for files; the copy then overwrites the stale
       * local file. (Directories report length 0, so the `.gdb`-directory path behaves as
-      * before -- no regression.) */
+      * before -- no regression.)
+      *
+      * A failed copy throws an IOException carrying the cause: a partly written destination
+      * must not pass for a finished copy, so the caller deletes it and retries. */
     def copyIfNeeded(
         srcFs: FileSystem,
         dstFs: FileSystem,
@@ -30,15 +35,14 @@ object AtomicDistributedCopy {
             dstFs.exists(dstPath) &&
                 dstFs.getFileStatus(dstPath).getLen != srcFs.getFileStatus(srcPath).getLen
         if (!dstFs.exists(dstPath) || stale) {
-            try {
-                // overwrite=true so a stale local copy (wrong length) is replaced, not skipped.
-                val flag = FileUtil.copy(srcFs, srcPath, dstFs, dstPath, false, true, srcFs.getConf)
-                if (!flag) {
-                    throw new RuntimeException(s"Failed to copy $srcPath to $dstPath")
+            val copied =
+                try {
+                    // overwrite=true so a stale local copy (wrong length) is replaced, not skipped.
+                    FileUtil.copy(srcFs, srcPath, dstFs, dstPath, false, true, srcFs.getConf)
+                } catch {
+                    case NonFatal(e) => throw new IOException(s"Failed to copy $srcPath to $dstPath: ${e.getMessage}", e)
                 }
-            } catch {
-                case _: Throwable => waitUntilFileExists(dstFs, dstPath)
-            }
+            if (!copied) throw new IOException(s"Failed to copy $srcPath to $dstPath")
         } else {
             waitUntilFileExists(dstFs, dstPath)
         }

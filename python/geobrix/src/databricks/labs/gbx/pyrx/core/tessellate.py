@@ -26,7 +26,11 @@ from rasterio.windows import Window
 from shapely.geometry import Polygon, mapping, shape
 from shapely.geometry.polygon import orient
 
-from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
+from databricks.labs.gbx.core.crs import (
+    authority_srid_of,
+    crs_to_canonical,
+    get_transformer,
+)
 from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
 from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
@@ -251,6 +255,12 @@ def _footprint_polygon(ds, work_ds, grid: str) -> Polygon:
 
     Work CRS per grid: h3/quadbin WGS84; bng the EPSG:27700 *work_ds*; custom the
     grid-native *ds*. The result is oriented counter-clockwise, as heavy's is.
+
+    Raises ``ValueError`` when the reprojected ring cannot be a lon/lat polygon: a
+    corner does not transform, or the footprint crosses the antimeridian or encloses
+    a pole (longitudes wrap, so the ring jumps by more than 180 degrees or is
+    invalid). Cell enumeration and overlap tests on such a ring are meaningless, so
+    the raster must be reprojected or split first.
     """
     src = work_ds if grid == "bng" else ds
     t = src.transform
@@ -271,13 +281,23 @@ def _footprint_polygon(ds, work_ds, grid: str) -> Polygon:
     )
     xs = t.c + cols * t.a
     ys = t.f + rows * t.e
-    if reproject:
-        xs, ys = get_transformer(ds.crs, _WGS84).transform(xs, ys)
-        if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
-            raise ValueError(
-                "tessellate: raster corners cannot be transformed to EPSG:4326"
-            )
-    return orient(Polygon(zip(xs, ys)), 1.0)
+    if not reproject:
+        return orient(Polygon(zip(xs, ys)), 1.0)
+    xs, ys = get_transformer(ds.crs, _WGS84).transform(xs, ys)
+    if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
+        raise ValueError(
+            f"rst_{grid}_tessellate: the raster corners cannot be transformed "
+            f"from {crs_to_canonical(ds.crs)} to EPSG:4326"
+        )
+    ring = Polygon(zip(xs, ys))
+    wraps = (np.abs(np.diff(np.append(xs, xs[0]))) > 180).any()
+    if wraps or not ring.is_valid:
+        raise ValueError(
+            f"rst_{grid}_tessellate: the raster footprint crosses the antimeridian "
+            f"or encloses a pole in {crs_to_canonical(ds.crs)}; reproject it "
+            "(e.g. to EPSG:4326) or split it before tessellating"
+        )
+    return orient(ring, 1.0)
 
 
 def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
@@ -483,6 +503,9 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
     the axis-aligned lon/lat box of the raster. CF3 guard: a CRS-less raster
     (``ds.crs is None``) uses its corners as grid-native coordinates.
     """
+    # An unusable footprint must fail before any chip is produced (bng's is built below,
+    # from the warped dataset; it is a plain rectangle and cannot fail).
+    footprint = None if grid == "bng" else _footprint_polygon(ds, ds, grid)
     centroid_ids = set()
     for cellid, raster_bytes in _centroid_chips_generic(
         ds, resolution, grid, conf=conf
@@ -492,7 +515,8 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
     # Compute covering set to find covered-but-empty cells.
     _ctx = _as_bng_dataset(ds) if grid == "bng" else nullcontext(ds)
     with _ctx as work_ds:
-        footprint = _footprint_polygon(ds, work_ds, grid)
+        if footprint is None:
+            footprint = _footprint_polygon(ds, work_ds, grid)
         covered = _polyfill_cells(footprint, resolution, grid, conf=conf)
         build_empty = _empty_chip_builder(work_ds, grid, conf=conf)
         for cell in covered:

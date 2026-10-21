@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 import shapely
 from affine import Affine
 from rasterio.io import MemoryFile
@@ -155,3 +156,49 @@ def test_footprint_polygon_is_the_pixel_grid_edge_in_the_work_crs():
         assert LinearRing(footprint.exterior.coords).is_ccw
         assert -75.1 < footprint.bounds[0] < footprint.bounds[2] < -73.6
         assert not footprint.equals(box(*footprint.bounds))
+
+
+def _antimeridian_scene():
+    # 20 km square of EPSG:3338 (Alaska Albers) centred on 180E, 52N: longitudes wrap
+    return _tiny("EPSG:3338", from_origin(-1758782, 577750, 1000, 1000), 20, 20)
+
+
+@pytest.mark.parametrize(
+    "grid, resolution, kwargs",
+    [
+        ("quadbin", 8, dict(mode="covering")),
+        ("quadbin", 8, dict(mode="centroid", coverage="complete")),
+        ("h3", 5, dict(mode="covering")),
+        ("h3", 5, dict(mode="centroid", coverage="complete")),
+    ],
+)
+def test_footprint_crossing_the_antimeridian_fails_loudly(grid, resolution, kwargs):
+    with MemoryFile(_antimeridian_scene()) as mf, mf.open() as ds:
+        # next(): the error comes before the first chip, not after a partial result
+        with pytest.raises(
+            ValueError,
+            match=f"rst_{grid}_tessellate: .*antimeridian or encloses a pole in EPSG:3338",
+        ):
+            next(T.iter_tessellate(ds, resolution, grid, **kwargs))
+
+
+def test_footprint_enclosing_a_pole_fails_loudly():
+    # 100 km square of EPSG:3031 (Antarctic polar stereographic) around the pole
+    data = _tiny("EPSG:3031", from_origin(-50000, 50000, 5000, 5000), 20, 20)
+    with MemoryFile(data) as mf, mf.open() as ds:
+        with pytest.raises(
+            ValueError, match="antimeridian or encloses a pole in EPSG:3031"
+        ):
+            T._footprint_polygon(ds, ds, "h3")
+
+
+def test_footprint_names_the_crs_when_corners_do_not_transform(monkeypatch):
+    class _Inf:
+        @staticmethod
+        def transform(xs, ys):
+            return np.full(len(xs), np.inf), np.full(len(ys), np.inf)
+
+    monkeypatch.setattr(T, "get_transformer", lambda src, dst: _Inf)
+    with MemoryFile(_utm_scene()) as mf, mf.open() as ds:
+        with pytest.raises(ValueError, match="cannot be transformed from EPSG:32618"):
+            T._footprint_polygon(ds, ds, "quadbin")

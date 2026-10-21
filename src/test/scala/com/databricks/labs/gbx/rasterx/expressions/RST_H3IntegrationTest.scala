@@ -264,7 +264,8 @@ class RST_H3IntegrationTest extends AnyFunSuite with BeforeAndAfterAll {
     test("H3 Tessellate should generate cells with raster content") {
         val resolution = 1 // Use coarse resolution to keep test fast
         
-        val iter = RasterTessellate.tessellateH3Iter(ds, Map.empty, resolution)
+        // The tessellation owns (and releases) its input, so it gets its own handle; the suite's `ds` stays open.
+        val iter = RasterTessellate.tessellateH3Iter(gdal.Open(ds.GetDescription()), Map.empty, resolution)
         val result = iter.take(5).toSeq // Take first 5 cells for testing
         
         // Should produce cells

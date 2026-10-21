@@ -82,7 +82,6 @@ class RasterTessellateBngDiscriminatorTest extends AnyFunSuite with BeforeAndAft
             case _                 =>
         }
         cells.foreach { case (_, chip, _) => RasterDriver.releaseDataset(chip) }
-        RasterDriver.releaseDataset(ds)
 
         // Before fix: isCellValid calls BNG.isValid(customCellId), which throws
         // NoSuchElementException because the digit-decoded resolution is absent from BNG's sizeMap.

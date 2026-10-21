@@ -87,7 +87,6 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             count += 1
         }
         it.asInstanceOf[AutoCloseable].close()
-        RasterDriver.releaseDataset(ds)
         assert(count >= 1, "covering tessellation must yield at least one chip")
     }
 
@@ -132,7 +131,6 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             count += 1
         }
         it.asInstanceOf[AutoCloseable].close()
-        RasterDriver.releaseDataset(ds)
         assert(count >= 1, "centroid tessellation must yield at least one chip")
         assert(seenIds.size == count, "each chip must have a distinct BNG cell id (single-assignment)")
         assert(totalAssigned == totalSourcePixels,
@@ -152,7 +150,6 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             count += 1
         }
         it.asInstanceOf[AutoCloseable].close()
-        RasterDriver.releaseDataset(ds)
         assert(count >= 1, "covering tessellation over a 4326 input (post-warp) must yield at least one chip")
         // Verify that the warp actually ran: emitted chips must be in EPSG:27700 (BNG), not the source 4326.
         assert(firstChipSrWkt != null, "expected at least one chip to inspect projection")
@@ -167,48 +164,45 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
     test("bng tessellate covering: emitted cell set covers EVERY cell whose square overlaps the raster bbox (no boundary drop)") {
         val resolution = 3 // 1km cells
         val ds = misalignedBngDs
-        try {
-            // 1) Emitted covering set (as BNG string ids).
-            val emitted = scala.collection.mutable.Set[String]()
-            val it = RasterTessellate.tessellateBngIter(ds, Map.empty[String, String], resolution, assignment = "covering")
-            while (it.hasNext) {
-                val (cell, chip, _) = it.next()
-                emitted += cell
-                RasterDriver.releaseDataset(chip)
-            }
-            it.asInstanceOf[AutoCloseable].close()
-
-            // 2) Independent ground truth: the raster bbox polygon in EPSG:27700 (same extent as misalignedBngDs),
-            //    and every BNG cell whose square geometrically intersects it. Candidates come from a GENEROUSLY
-            //    buffered polyfill (2km == two cells) so the enumeration itself has no blind spot; we then filter
-            //    by real geometric intersection with the un-buffered bbox.
-            val rasterBbox = JTS.fromWKT(
-                "POLYGON((528600 178600, 530400 178600, 530400 180400, 528600 180400, 528600 178600))"
-            )
-            // Positive-area overlap (not mere boundary touch): the covering contract emits a cell iff its
-            // square has >0 area overlap with the raster. On this cell-MISaligned fixture no cell touches
-            // only along an edge, so this coincides with `.intersects` — but the positive-area test is the
-            // authoritative contract shared with the light tier and both other grids.
-            val overlapping = BNG
-                .polyfill(rasterBbox.buffer(2000.0), resolution)
-                .filter(cell => BNG.cellIdToGeometry(cell).intersection(rasterBbox).getArea > 0.0)
-                .map(BNG.format)
-                .toSet
-
-            // Sanity: the misaligned fixture must actually straddle a multi-cell block (else it can't guard the bug).
-            assert(overlapping.size >= 4,
-                s"fixture must overlap several boundary cells to guard the invariant; overlap set was $overlapping")
-
-            // 3) Completeness invariant: no overlapping cell may be missing from the emitted set. This is the
-            //    assertion count>=1 could NOT make — pre-fix (unbuffered polyfill) the fringe cells are dropped
-            //    and `missing` is non-empty; post-fix (buffered bbox before polyfill) the emitted set is a superset.
-            val missing = overlapping.diff(emitted)
-            assert(missing.isEmpty,
-                s"boundary under-coverage: cells overlapping the raster bbox were NOT emitted: $missing " +
-                    s"(emitted=$emitted, overlapping=$overlapping)")
-        } finally {
-            RasterDriver.releaseDataset(ds)
+        // The tessellation owns ds and releases it when the iterator ends.
+        // 1) Emitted covering set (as BNG string ids).
+        val emitted = scala.collection.mutable.Set[String]()
+        val it = RasterTessellate.tessellateBngIter(ds, Map.empty[String, String], resolution, assignment = "covering")
+        while (it.hasNext) {
+            val (cell, chip, _) = it.next()
+            emitted += cell
+            RasterDriver.releaseDataset(chip)
         }
+        it.asInstanceOf[AutoCloseable].close()
+
+        // 2) Independent ground truth: the raster bbox polygon in EPSG:27700 (same extent as misalignedBngDs),
+        //    and every BNG cell whose square geometrically intersects it. Candidates come from a GENEROUSLY
+        //    buffered polyfill (2km == two cells) so the enumeration itself has no blind spot; we then filter
+        //    by real geometric intersection with the un-buffered bbox.
+        val rasterBbox = JTS.fromWKT(
+            "POLYGON((528600 178600, 530400 178600, 530400 180400, 528600 180400, 528600 178600))"
+        )
+        // Positive-area overlap (not mere boundary touch): the covering contract emits a cell iff its
+        // square has >0 area overlap with the raster. On this cell-MISaligned fixture no cell touches
+        // only along an edge, so this coincides with `.intersects` — but the positive-area test is the
+        // authoritative contract shared with the light tier and both other grids.
+        val overlapping = BNG
+            .polyfill(rasterBbox.buffer(2000.0), resolution)
+            .filter(cell => BNG.cellIdToGeometry(cell).intersection(rasterBbox).getArea > 0.0)
+            .map(BNG.format)
+            .toSet
+
+        // Sanity: the misaligned fixture must actually straddle a multi-cell block (else it can't guard the bug).
+        assert(overlapping.size >= 4,
+            s"fixture must overlap several boundary cells to guard the invariant; overlap set was $overlapping")
+
+        // 3) Completeness invariant: no overlapping cell may be missing from the emitted set. This is the
+        //    assertion count>=1 could NOT make — pre-fix (unbuffered polyfill) the fringe cells are dropped
+        //    and `missing` is non-empty; post-fix (buffered bbox before polyfill) the emitted set is a superset.
+        val missing = overlapping.diff(emitted)
+        assert(missing.isEmpty,
+            s"boundary under-coverage: cells overlapping the raster bbox were NOT emitted: $missing " +
+                s"(emitted=$emitted, overlapping=$overlapping)")
     }
 
     test("bng tessellate: unknown assignment throws IllegalArgumentException mentioning 'assignment'") {
@@ -217,7 +211,6 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             RasterTessellate.tessellateBngIter(ds, Map.empty[String, String], resolution = 3, assignment = "bogus")
         }
         assert(ex.getMessage.contains("assignment"))
-        RasterDriver.releaseDataset(ds)
     }
 
     test("bng tessellate: unknown coverage throws IllegalArgumentException mentioning 'coverage'") {
@@ -226,6 +219,5 @@ class RST_BNG_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             RasterTessellate.tessellateBngIter(ds, Map.empty[String, String], resolution = 3, assignment = "covering", coverage = "bogus")
         }
         assert(ex.getMessage.contains("coverage"))
-        RasterDriver.releaseDataset(ds)
     }
 }

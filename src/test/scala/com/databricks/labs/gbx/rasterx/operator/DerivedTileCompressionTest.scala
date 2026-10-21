@@ -66,17 +66,14 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
 
     /** A 32x32 float32 EPSG:4326 ramp near London; small enough that H3 res 7 emits a handful of cells. */
     private def withRamp(name: String)(f: Dataset => Unit): Unit = {
-        val src = buildRamp(
-          mem(name),
-          32,
-          32,
-          1,
-          gdalconstConstants.GDT_Float32,
-          Array(-0.0160, 0.001, 0.0, 51.5160, 0.0, -0.001)
-        )
+        val src = ramp(name)
         try f(src)
         finally RasterDriver.releaseDataset(src)
     }
+
+    /** The 32x32 ramp of [[withRamp]], unreleased (for a consumer that owns its input). */
+    private def ramp(name: String): Dataset =
+        buildRamp(mem(name), 32, 32, 1, gdalconstConstants.GDT_Float32, Array(-0.0160, 0.001, 0.0, 51.5160, 0.0, -0.001))
 
     /** A 32x32 float32 ramp in a metric CRS (EPSG:32633, 1 m pixels, origin (0, 32)); viewshed needs linear units. */
     private def withMetricRamp(name: String)(f: Dataset => Unit): Unit = {
@@ -131,20 +128,19 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     test("RasterTessellate.tessellateH3Iter first chip defaults to ZSTD") {
-        withRamp("tess.tif") { src =>
-            // RasterTessellate.tessellateH3Iter(ds: Dataset, options: Map[String, String], resolution: Int,
-            //     assignment: String = "centroid", coverage: String = "complete"):
-            //     Iterator[(Long, Dataset, Map[String, String])]   (AutoCloseable at runtime)
-            val iter = RasterTessellate.tessellateH3Iter(src, Map.empty, 7)
-            try {
-                assert(iter.hasNext, "tessellation emitted no chips")
-                val (_, chip, meta) = iter.next()
-                try assertCodec(chip, meta, "ZSTD")
-                finally RasterDriver.releaseDataset(chip)
-            } finally iter match {
-                case ac: AutoCloseable => ac.close()
-                case _                 =>
-            }
+        // RasterTessellate.tessellateH3Iter(ds: Dataset, options: Map[String, String], resolution: Int,
+        //     assignment: String = "centroid", coverage: String = "complete"):
+        //     Iterator[(Long, Dataset, Map[String, String])]   (AutoCloseable at runtime)
+        // The tessellation owns its input and releases it when closed.
+        val iter = RasterTessellate.tessellateH3Iter(ramp("tess.tif"), Map.empty, 7)
+        try {
+            assert(iter.hasNext, "tessellation emitted no chips")
+            val (_, chip, meta) = iter.next()
+            try assertCodec(chip, meta, "ZSTD")
+            finally RasterDriver.releaseDataset(chip)
+        } finally iter match {
+            case ac: AutoCloseable => ac.close()
+            case _                 =>
         }
     }
 

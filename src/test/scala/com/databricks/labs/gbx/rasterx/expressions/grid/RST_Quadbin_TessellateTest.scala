@@ -46,7 +46,6 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             count += 1
         }
         it.asInstanceOf[AutoCloseable].close()
-        RasterDriver.releaseDataset(ds)
         assert(count >= 1, "covering tessellation must yield at least one chip")
     }
 
@@ -95,7 +94,6 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             count += 1
         }
         it.asInstanceOf[AutoCloseable].close()
-        RasterDriver.releaseDataset(ds)
         assert(count >= 1, "centroid tessellation must yield at least one chip")
         assert(seenIds.size == count, "each chip must have a distinct cell id (single-assignment)")
         assert(totalAssigned <= totalSourcePixels,
@@ -108,7 +106,6 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             RasterTessellate.tessellateQuadbinIter(ds, Map.empty[String, String], resolution = 12, assignment = "bogus")
         }
         assert(ex.getMessage.contains("assignment"))
-        RasterDriver.releaseDataset(ds)
     }
 
     test("quadbin tessellate: unknown coverage throws IllegalArgumentException mentioning 'coverage'") {
@@ -117,7 +114,6 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             RasterTessellate.tessellateQuadbinIter(ds, Map.empty[String, String], resolution = 12, assignment = "covering", coverage = "bogus")
         }
         assert(ex.getMessage.contains("coverage"))
-        RasterDriver.releaseDataset(ds)
     }
 
     test("generator names + default assignment arity") {

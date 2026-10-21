@@ -81,6 +81,16 @@ object RasterTessellate {
         fp
     }
 
+    /** Runs `check`, releasing the tessellation input `ds` if it throws: a tessellation owns `ds` from
+      * the call on, whether it returns an iterator or fails. */
+    private def releaseOnThrow[T](ds: Dataset)(check: => T): T =
+        try check
+        catch {
+            case t: Throwable =>
+                RasterAccessors.unlink(ds)
+                throw t
+        }
+
     // ------------------------------------------------------------------------------------------------
     // BNG-specific helpers shared by the generic tessellate path.
     // ------------------------------------------------------------------------------------------------
@@ -143,8 +153,8 @@ object RasterTessellate {
       * BNG → the cached [[BngSR]] singleton.  H3/quadbin (SRID 4326) → the cached [[GDAL.WSG84]]
       * singleton.  Both are shared and MUST NOT be released.  A [[CustomGridSystem]] → a FRESH
       * SpatialReference at the grid's own `crsSrid` (traditional axis order): the caller MUST release
-      * it (`.delete()`) when done — the covering iterator does so in `close()`, the centroid iterator
-      * through [[CentroidNatives]].  Use [[isCustom]] to decide whether a release is owed. */
+      * it (`.delete()`) when done — both iterators do so through [[TessellateNatives]].  Use [[isCustom]]
+      * to decide whether a release is owed. */
     private def srForGrid(grid: GridSystem): SpatialReference =
         if (isBng(grid)) BngSR
         else if (isCustom(grid)) {
@@ -200,8 +210,10 @@ object RasterTessellate {
       * methods ([[tessellateH3Iter]], [[tessellateQuadbinIter]], [[tessellateBngIter]]) delegate here
       * and cast the result to their specific return type.
       *
-      * Caller must release each emitted Dataset. The iterator is AutoCloseable and releases the working
-      * dataset when exhausted or explicitly closed.
+      * Caller must release each emitted Dataset. The tessellation owns `ds`: the AutoCloseable iterator
+      * releases it (and any BNG warp) when exhausted or explicitly closed, and a call that throws has
+      * released it already, so the caller never releases `ds`. Centroid reads `ds` lazily, chip by chip,
+      * so `ds` must stay open until the iterator is exhausted or closed.
       *
       * @param assignment `"covering"` — one chip per cell whose polygon overlaps the raster footprint;
       *                   `"centroid"` — pixel-centroid single-assignment. Default: `"centroid"`.
@@ -218,14 +230,16 @@ object RasterTessellate {
         assignment: String = "centroid",
         coverage: String = "complete"
     ): Iterator[(Any, Dataset, Map[String, String])] = {
-        require(
-          Assignments.contains(assignment),
-          s"gbx_rst_${grid.name.toLowerCase}_tessellate assignment must be one of ${Assignments.mkString(", ")}; got '$assignment'"
-        )
-        require(
-          Coverages.contains(coverage),
-          s"gbx_rst_${grid.name.toLowerCase}_tessellate coverage must be one of ${Coverages.mkString(", ")}; got '$coverage'"
-        )
+        releaseOnThrow(ds) {
+            require(
+              Assignments.contains(assignment),
+              s"gbx_rst_${grid.name.toLowerCase}_tessellate assignment must be one of ${Assignments.mkString(", ")}; got '$assignment'"
+            )
+            require(
+              Coverages.contains(coverage),
+              s"gbx_rst_${grid.name.toLowerCase}_tessellate coverage must be one of ${Coverages.mkString(", ")}; got '$coverage'"
+            )
+        }
         if (assignment == "centroid") tessellateGenericCentroidIter(grid, ds, options, resolution, coverage)
         else tessellateGenericCoveringIter(grid, ds, options, resolution, coverage)
     }
@@ -238,6 +252,9 @@ object RasterTessellate {
       *
       * When `coverage == "sparse"`, chips whose clipped result is entirely NoData are released and
       * skipped. When `coverage == "complete"` (default), all-NoData chips are emitted as-is.
+      *
+      * The input, the BNG warp and a custom grid SR ([[TessellateNatives]]) live until the iterator is
+      * exhausted or closed, and are released once; they are also released if setup fails.
       */
     private def tessellateGenericCoveringIter(
         grid: GridSystem,
@@ -246,69 +263,92 @@ object RasterTessellate {
         resolution: Int,
         coverage: String
     ): Iterator[(Any, Dataset, Map[String, String])] = {
-        val gridSR = srForGrid(grid)
-        // BNG requires a pre-warp to EPSG:27700; all other grids (H3/quadbin/custom) use ds as-is.
-        val (workDs, reprojected) = if (isBng(grid)) warpToBng(ds) else (ds, false)
-        val fp = footprint(grid, workDs, gridSR)
-        val cells = grid.coveringCandidateCells(fp, resolution).toArray
+        val natives = new TessellateNatives(ds)
+        try {
+            natives.gridSR = srForGrid(grid)
+            natives.ownsGridSR = isCustom(grid)
+            // BNG requires a pre-warp to EPSG:27700; all other grids (H3/quadbin/custom) use ds as-is.
+            if (isBng(grid)) natives.useBngWarp()
+            val fp = footprint(grid, natives.workDs, natives.gridSR)
+            val cells = grid.coveringCandidateCells(fp, resolution).toArray
+            if (coveringSetupFault != null) throw coveringSetupFault
+            new CoveringChipIterator(grid, natives, options, coverage, fp, cells)
+        } catch {
+            case t: Throwable =>
+                natives.close()
+                throw t
+        }
+    }
 
-        new Iterator[(Any, Dataset, Map[String, String])] with AutoCloseable {
-            private var closed   = false
-            private var fetched  = false
-            private var _ds      = workDs
-            private var cc       = 0
-            private var nextTile: (Any, Dataset, Map[String, String]) = _
+    /** Emits, in candidate order, one clipped chip per candidate cell that is valid and has positive-area
+      * overlap with `rasterFootprint`. The natives are held until the candidates are exhausted (including
+      * a tessellation with no chips at all) or the iterator is closed; `close()` is idempotent, releases a
+      * chip that `hasNext` fetched but `next()` never handed out, and drops the footprint and candidates. */
+    private final class CoveringChipIterator(
+        grid: GridSystem,
+        natives: TessellateNatives,
+        options: Map[String, String],
+        coverage: String,
+        private var rasterFootprint: Geometry,
+        private var cells: Array[Long]
+    ) extends Iterator[(Any, Dataset, Map[String, String])]
+          with AutoCloseable {
+        private var closed   = false
+        private var fetched  = false
+        private var cc       = 0
+        private var nextTile: (Any, Dataset, Map[String, String]) = _
 
-            private def advance(): Unit = {
-                fetched = true
-                nextTile = null
-                while (cc < cells.length && nextTile == null) {
-                    val cellId = cells(cc)
-                    cc += 1
-                    // Guard against out-of-extent candidates (BNG isValid) before touching
-                    // cellIdToGeometry — an invalid cell could produce a degenerate geometry and
-                    // must not be emitted (mirrors the former getBngTile guard).
-                    if (isCellValid(grid, cellId)) {
-                        val cellGeom = grid.cellIdToGeometry(cellId)
-                        if (hasPositiveAreaOverlap(cellGeom, fp)) {
-                            val (resDs, resMtd) = ClipToGeom.clip(_ds, options, cellGeom, gridSR)
-                            if (resDs != null) {
-                                // covering+sparse: drop chips whose clip is entirely NoData.
-                                if (coverage == "sparse" && isAllNoData(resDs)) {
-                                    RasterDriver.releaseDataset(resDs)
-                                } else {
-                                    val rendered = grid.renderCellId(cellId)
-                                    resDs.SetMetadataItem("RASTERX_CELL_ID", rendered.toString)
-                                    resDs.FlushCache()
-                                    nextTile = (rendered, resDs, resMtd)
-                                }
+        private def advance(): Unit = {
+            fetched = true
+            nextTile = null
+            while (cc < cells.length && nextTile == null) {
+                val cellId = cells(cc)
+                cc += 1
+                // Guard against out-of-extent candidates (BNG isValid) before touching
+                // cellIdToGeometry — an invalid cell could produce a degenerate geometry and
+                // must not be emitted (mirrors the former getBngTile guard).
+                if (isCellValid(grid, cellId)) {
+                    val cellGeom = grid.cellIdToGeometry(cellId)
+                    if (hasPositiveAreaOverlap(cellGeom, rasterFootprint)) {
+                        val (resDs, resMtd) = ClipToGeom.clip(natives.workDs, options, cellGeom, natives.gridSR)
+                        if (resDs != null) {
+                            // covering+sparse: drop chips whose clip is entirely NoData.
+                            if (coverage == "sparse" && isAllNoData(resDs)) {
+                                RasterDriver.releaseDataset(resDs)
+                            } else {
+                                val rendered = grid.renderCellId(cellId)
+                                resDs.SetMetadataItem("RASTERX_CELL_ID", rendered.toString)
+                                resDs.FlushCache()
+                                nextTile = (rendered, resDs, resMtd)
                             }
                         }
                     }
                 }
-                if (cc >= cells.length && nextTile == null) close()
             }
-
-            override def hasNext: Boolean = {
-                if (!fetched && !closed) advance()
-                !closed && nextTile != null
-            }
-
-            override def next(): (Any, Dataset, Map[String, String]) = {
-                if (!fetched && !closed) advance()
-                fetched = false
-                nextTile
-            }
-
-            override def close(): Unit = {
-                if (!closed) {
-                    closed = true
-                    if (reprojected) RasterDriver.releaseDataset(_ds) else RasterAccessors.unlink(_ds)
-                    _ds = null
-                    if (isCustom(grid)) gridSR.delete() // fresh per-call SR (see srForGrid); shared SRs are not released
-                }
-            }
+            if (cc >= cells.length && nextTile == null) close()
         }
+
+        override def hasNext: Boolean = {
+            if (!fetched && !closed) advance()
+            !closed && nextTile != null
+        }
+
+        override def next(): (Any, Dataset, Map[String, String]) = {
+            if (!fetched && !closed) advance()
+            fetched = false
+            nextTile
+        }
+
+        override def close(): Unit =
+            if (!closed) {
+                closed = true
+                // A fetched chip that next() never handed out is still ours.
+                if (fetched && nextTile != null) RasterDriver.releaseDataset(nextTile._2)
+                nextTile = null
+                cells = null
+                rasterFootprint = null
+                natives.close()
+            }
     }
 
     // ------------------------------------------------------------------------------------------------
@@ -334,6 +374,9 @@ object RasterTessellate {
     /** Test seam: when set, thrown at the end of the centroid setup, once every native resource exists. */
     @volatile private[operations] var centroidSetupFault: Throwable = null
 
+    /** Test seam: when set, thrown at the end of the covering setup, once every native resource exists. */
+    @volatile private[operations] var coveringSetupFault: Throwable = null
+
     /** Rows per centroid-assignment strip: at most [[StripPixels]] pixels, or one row if a single row is
       * wider than that. When the source blocks are shorter, the strip is a whole number of blocks (at
       * least one), so each block is decoded for one strip only. Same rule as the lightweight tier. */
@@ -343,16 +386,26 @@ object RasterTessellate {
         rows
     }
 
-    /** Native resources one centroid tessellation owns until its iterator ends: the EPSG:27700 warp
-      * (`workDs`, owned when `reprojected`), the per-pixel transform `tf`, its inverse `tfInv`, and a
-      * fresh custom-grid SR (`gridSR`, owned when `ownsGridSR`). `close()` releases them once; later
-      * calls do nothing. Shared SRs (GDAL.WSG84, BngSR) are never released. */
-    private final class CentroidNatives(val workDs: Dataset, reprojected: Boolean) extends AutoCloseable {
+    /** Native resources one tessellation (covering or centroid) owns until its iterator ends: the `input`
+      * dataset, always (a tessellation owns its input), the dataset it works on (`workDs`: the EPSG:27700
+      * warp, owned when `reprojected`, else `input` itself), a fresh custom-grid SR (`gridSR`, owned when
+      * `ownsGridSR`) and, for centroid, the per-pixel transform `tf` and its inverse `tfInv`. `close()`
+      * releases them once; later calls do nothing. Shared SRs (GDAL.WSG84, BngSR) are never released. */
+    private final class TessellateNatives(val input: Dataset) extends AutoCloseable {
+        var workDs: Dataset = input
+        var reprojected: Boolean = false
         var gridSR: SpatialReference = null
         var ownsGridSR: Boolean = false
         var tf: CoordinateTransformation = null
         var tfInv: CoordinateTransformation = null
         private var released = false
+
+        /** Works on `input` warped to EPSG:27700 ([[warpToBng]]; `input` itself when already 27700). */
+        def useBngWarp(): Unit = {
+            val (warped, owned) = warpToBng(input)
+            workDs = warped
+            reprojected = owned
+        }
 
         override def close(): Unit = synchronized {
             if (!released) {
@@ -361,6 +414,7 @@ object RasterTessellate {
                 if (tfInv != null) tfInv.delete()
                 if (ownsGridSR && gridSR != null) gridSR.delete()
                 if (reprojected) RasterDriver.releaseDataset(workDs)
+                RasterAccessors.unlink(input)
             }
         }
     }
@@ -516,8 +570,8 @@ object RasterTessellate {
       * Covered cells are kept against the raster [[footprint]] (the reprojected, densified edge), as in
       * covering.
       *
-      * The BNG warp, the transforms and a custom grid SR ([[CentroidNatives]]) live until the iterator
-      * is exhausted or closed, and are released once; they are also released if setup fails.
+      * The input, the BNG warp, the transforms and a custom grid SR ([[TessellateNatives]]) live until the
+      * iterator is exhausted or closed, and are released once; they are also released if setup fails.
       */
     private def tessellateGenericCentroidIter(
         grid: GridSystem,
@@ -526,11 +580,12 @@ object RasterTessellate {
         resolution: Int,
         coverage: String
     ): Iterator[(Any, Dataset, Map[String, String])] = {
-        // BNG requires a pre-warp so pixel coordinates are in EPSG:27700 (the grid's native CRS).
-        // Other grids, including a custom grid at 27700, use ds as-is.
-        val (workDs, reprojected) = if (isBng(grid)) warpToBng(ds) else (ds, false)
-        val natives = new CentroidNatives(workDs, reprojected)
+        val natives = new TessellateNatives(ds)
         try {
+            // BNG requires a pre-warp so pixel coordinates are in EPSG:27700 (the grid's native CRS).
+            // Other grids, including a custom grid at 27700, use ds as-is.
+            if (isBng(grid)) natives.useBngWarp()
+            val workDs = natives.workDs
             val xSize = workDs.getRasterXSize
             val ySize = workDs.getRasterYSize
             require(
@@ -607,12 +662,13 @@ object RasterTessellate {
     /** Emits the assigned chips (labels `0 until count`, first-seen pixel order), then the synthetic
       * empties in `syntheticCells` order. Assigned chips read their window from `natives.workDs`, so the
       * natives and the label table are held until the iterator is exhausted (including a tessellation
-      * with no chips at all) or closed; `close()` is idempotent. */
+      * with no chips at all) or closed; `close()` is idempotent and drops the label table, the synthetic
+      * cells and the chip context, so a task-lifetime cleanup listener holding the iterator pins none. */
     private final class CentroidChipIterator(
-        ctx: ChipContext,
-        natives: CentroidNatives,
+        private var ctx: ChipContext,
+        natives: TessellateNatives,
         private var assigned: CentroidAssignment,
-        syntheticCells: Array[(Long, Int, Int)],
+        private var syntheticCells: Array[(Long, Int, Int)],
         xSize: Int
     ) extends Iterator[(Any, Dataset, Map[String, String])]
           with AutoCloseable {
@@ -649,6 +705,8 @@ object RasterTessellate {
             if (!closed) {
                 closed = true
                 assigned = null
+                syntheticCells = null
+                ctx = null
                 natives.close()
             }
     }
@@ -807,8 +865,12 @@ object RasterTessellate {
     // ------------------------------------------------------------------------------------------------
 
     /**
-      * Iterator of (cellId Long, Dataset, metadata) per emitted H3 cell at resolution. Caller must release each
-      * Dataset; iterator is AutoCloseable.
+      * Iterator of (cellId Long, Dataset, metadata) per emitted H3 cell at resolution. Caller must release
+      * each Dataset; iterator is AutoCloseable.
+      *
+      * The iterator owns `ds` and releases it when exhausted or closed (a call that throws has released it
+      * already), so the caller never releases `ds`. Centroid reads `ds` lazily, chip by chip: the caller
+      * must keep `ds` open until the iterator is exhausted or closed.
       *
       *  - `assignment="centroid"` (default): pixel-centroid single-assignment.
       *  - `assignment="covering"`: one chip per cell whose hexagon overlaps the raster footprint (reprojected
@@ -828,7 +890,9 @@ object RasterTessellate {
 
     /**
       * Iterator of (cellId Long, Dataset, metadata) per emitted quadbin cell at `resolution` (zoom z).
-      * Caller must release each Dataset; iterator is AutoCloseable. Parallel to [[tessellateH3Iter]].
+      * Caller must release each Dataset; iterator is AutoCloseable. Parallel to [[tessellateH3Iter]],
+      * including its ownership of `ds`: centroid reads `ds` lazily, so the caller must keep `ds` open until
+      * the iterator is exhausted or closed, and never releases it.
       */
     def tessellateQuadbinIter(
         ds: Dataset,
@@ -842,7 +906,10 @@ object RasterTessellate {
 
     /**
       * Iterator of (BNG cellId String, Dataset, metadata) per emitted BNG cell at `resolution`.
-      * Caller must release each Dataset; iterator is AutoCloseable.
+      * Caller must release each Dataset; iterator is AutoCloseable. Parallel to [[tessellateH3Iter]],
+      * including its ownership of `ds` (the EPSG:27700 warp is released with it): centroid reads the
+      * raster lazily, so the caller must keep `ds` open until the iterator is exhausted or closed, and
+      * never releases it.
       *
       * The raster is reprojected to EPSG:27700 first (skipped if already 27700). Cells are enumerated
       * via [[GridSystem.coveringCandidateCells]] (buffered polyfill) and geometrised via
@@ -860,7 +927,10 @@ object RasterTessellate {
 
     /**
       * Iterator of (cellId Long, Dataset, metadata) per emitted custom-grid cell at `resolution`.
-      * Caller must release each Dataset; iterator is AutoCloseable. Parallel to [[tessellateH3Iter]].
+      * Caller must release each Dataset; iterator is AutoCloseable. Parallel to [[tessellateH3Iter]],
+      * including its ownership of `ds` (also released when the R3 guard below rejects the raster):
+      * centroid reads `ds` lazily, so the caller must keep `ds` open until the iterator is exhausted or
+      * closed, and never releases it.
       *
       * The raster is NOT pre-warped (custom cell geometries live in the grid's own `crsSrid`, and the
       * generic path clips/bins in that CRS via [[srForGrid]]); the raster is expected to be in the
@@ -875,7 +945,7 @@ object RasterTessellate {
         assignment: String = "centroid",
         coverage: String = "complete"
     ): Iterator[(Long, Dataset, Map[String, String])] = {
-        CustomGridBounds.requireBoundsContainRaster(grid, ds)
+        releaseOnThrow(ds)(CustomGridBounds.requireBoundsContainRaster(grid, ds))
         tessellate(grid, ds, options, resolution, assignment, coverage)
             .asInstanceOf[Iterator[(Long, Dataset, Map[String, String])]]
     }

@@ -34,9 +34,13 @@ import scala.collection.mutable
   *  - on a reprojected (UTM) raster, empties sit on the cell centroid moved into the raster CRS;
   *  - covering and complete coverage keep cells against the densified reprojected footprint
   *    ([[BoundingBox.densifiedBBox]]), so a projected raster loses no edge cell; a footprint that
-  *    wraps in lon/lat fails up front.
+  *    wraps in lon/lat fails up front;
+  *  - the tessellation owns its input: it is released when the iterator ends or is closed, or when
+  *    setup fails (covering and centroid).
   *
-  * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled.
+  * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled. The
+  * tessellation releases its input, so a test that keeps reading a fixture hands it a copy
+  * ([[handOff]]).
   */
 class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -134,9 +138,17 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         sr
     }
 
-    /** Drains a centroid tessellation of `src`, handing each chip to `f` and releasing it. Returns the chip count. */
+    /** A copy of `src` (same driver) for a tessellation to own: the tessellation releases its input
+      * when it ends, so a test that goes on reading `src` hands it this copy instead. */
+    private def handOff(src: Dataset): Dataset = {
+        val drv = src.GetDriver()
+        drv.CreateCopy(if (drv.getShortName == "MEM") "" else mem("copy.tif"), src)
+    }
+
+    /** Drains a centroid tessellation of a copy of `src`, handing each chip to `f` and releasing it.
+      * Returns the chip count. */
     private def forEachChip(src: Dataset, coverage: String)(f: (Long, Dataset) => Unit): Int = {
-        val it = RasterTessellate.tessellateH3Iter(src, Map.empty[String, String], Res, "centroid", coverage)
+        val it = RasterTessellate.tessellateH3Iter(handOff(src), Map.empty[String, String], Res, "centroid", coverage)
         var n = 0
         try {
             while (it.hasNext) {
@@ -431,12 +443,12 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         assert(RasterTessellate.centroidStripRows(3000000, 10, 1) == 1)
     }
 
-    test("(i) BNG on an EPSG:4326 raster: the warp lives until the iterator ends and is released once") {
+    test("(i) BNG on an EPSG:4326 raster: the input and the warp live until the iterator ends, released once") {
         val src = buildRamp(mem("i.tif"), 256, 256, 1, gdalconstConstants.GDT_Float32, gtGb(256))
         try {
             val before = vsimemCount()
-            val it = RasterTessellate.tessellateBngIter(src, Map.empty[String, String], BngRes, "centroid", "complete")
-            assert(vsimemCount() > before, "the EPSG:27700 warp should be open while chips are produced")
+            val it = RasterTessellate.tessellateBngIter(handOff(src), Map.empty[String, String], BngRes, "centroid", "complete")
+            assert(vsimemCount() >= before + 2, "the input and its EPSG:27700 warp should be open while chips are produced")
             var chips = 0
             while (it.hasNext) {
                 val (_, chip, _) = it.next()
@@ -444,29 +456,27 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
                 chips += 1
             }
             assert(chips > 1, s"expected several chips, got $chips")
-            assert(vsimemCount() == before, "the warp must be released when the iterator is exhausted")
+            assert(vsimemCount() == before, "the input and the warp must be released when the iterator is exhausted")
             it.asInstanceOf[AutoCloseable].close()
             it.asInstanceOf[AutoCloseable].close()
             assert(vsimemCount() == before)
 
-            // Abandoned after two chips (a cancelled task): close() releases the warp, and is idempotent.
-            val it2 = RasterTessellate.tessellateBngIter(src, Map.empty[String, String], BngRes, "centroid", "complete")
+            // Abandoned after two chips (a cancelled task): close() releases them, and is idempotent.
+            val it2 = RasterTessellate.tessellateBngIter(handOff(src), Map.empty[String, String], BngRes, "centroid", "complete")
             (1 to 2).foreach(_ => RasterDriver.releaseDataset(it2.next()._2))
             it2.asInstanceOf[AutoCloseable].close()
             it2.asInstanceOf[AutoCloseable].close()
             assert(!it2.hasNext, "a closed iterator has no more chips")
-            assert(vsimemCount() == before, "close() must release the warp of an abandoned iterator")
+            assert(vsimemCount() == before, "close() must release the input and the warp of an abandoned iterator")
         } finally RasterDriver.releaseDataset(src)
 
-        // No chips at all (all NoData, sparse): the first hasNext already releases the warp.
+        // No chips at all (all NoData, sparse): the first hasNext already releases them.
+        val before = vsimemCount()
         val empty = buildRamp(mem("i0.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32, gtGb(64), Some(NoData))
         fillRect(empty, 1, 0, 0, 64, 64, NoData)
-        try {
-            val before = vsimemCount()
-            val it = RasterTessellate.tessellateBngIter(empty, Map.empty[String, String], BngRes, "centroid", "sparse")
-            assert(!it.hasNext, "an all-NoData raster has no centroid chips")
-            assert(vsimemCount() == before, "an iterator with no chips must release the warp once it reports none")
-        } finally RasterDriver.releaseDataset(empty)
+        val it = RasterTessellate.tessellateBngIter(empty, Map.empty[String, String], BngRes, "centroid", "sparse")
+        assert(!it.hasNext, "an all-NoData raster has no centroid chips")
+        assert(vsimemCount() == before, "an iterator with no chips must release the input and the warp once it reports none")
     }
 
     test("(j) reprojected empties (UTM): 1x1 NoData chips on the cell centroid moved into the raster CRS") {
@@ -504,24 +514,21 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         assert(interior > 0, "expected an empty cell whose centroid pixel lies strictly inside the raster (not clamped)")
     }
 
-    test("(k) a failure during centroid setup releases the BNG warp before it propagates") {
-        val src = buildRamp(mem("k.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32, gtGb(64))
+    test("(k) a failure during centroid setup releases the input and the BNG warp before it propagates") {
         val before = vsimemCount()
+        val src = buildRamp(mem("k.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32, gtGb(64))
         RasterTessellate.centroidSetupFault = new IllegalStateException("injected setup fault")
         try {
             val e = intercept[IllegalStateException] {
                 RasterTessellate.tessellateBngIter(src, Map.empty[String, String], BngRes, "centroid", "complete")
             }
             assert(e.getMessage == "injected setup fault")
-            assert(vsimemCount() == before, "the EPSG:27700 warp leaked after a setup failure")
-        } finally {
-            RasterTessellate.centroidSetupFault = null
-            RasterDriver.releaseDataset(src)
-        }
+            assert(vsimemCount() == before, "the input or the EPSG:27700 warp leaked after a setup failure")
+        } finally RasterTessellate.centroidSetupFault = null
     }
 
     // ---------------------------------------------------------------------------------------------
-    // Densified footprint (covering and complete keep-tests).
+    // Densified footprint (covering and complete keep-tests) and input ownership.
     // ---------------------------------------------------------------------------------------------
 
     /** EPSG:32618 (UTM 18N) scene: 1098 x 1098 pixels at 100 m from (499980, 4500000). */
@@ -627,11 +634,53 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         }
         val expected = "rst_h3_tessellate: the raster footprint crosses the antimeridian or encloses a pole in EPSG:32601; " +
             "reproject it (e.g. to EPSG:4326) or split it before tessellating"
+        val before = vsimemCount()
         Seq(("covering", "complete"), ("covering", "sparse"), ("centroid", "complete")).foreach { case (assignment, coverage) =>
             val e = intercept[IllegalArgumentException] {
                 RasterTessellate.tessellateH3Iter(wrapScene(), Map.empty[String, String], Res, assignment, coverage)
             }
             assert(e.getMessage == expected, s"$assignment+$coverage: ${e.getMessage}")
+            assert(vsimemCount() == before, s"$assignment+$coverage: the input leaked after the footprint error")
         }
+    }
+
+    test("(o) the tessellation releases its input: /vsimem is back to its count after a drain and close") {
+        // The input arrives as the SQL functions open a tile: a /vsimem copy of the tile bytes.
+        def asTile(ds: Dataset): Dataset = RasterDriver.readFromBytes(RasterDriver.writeToBytes(ds, Map.empty), Map("driver" -> "GTiff"))
+        def drain(it: Iterator[(Any, Dataset, Map[String, String])]): Int = {
+            var chips = 0
+            while (it.hasNext) { RasterDriver.releaseDataset(it.next()._2); chips += 1 }
+            it.asInstanceOf[AutoCloseable].close()
+            chips
+        }
+        val src4326 = buildRamp(mem("o4326.tif"), 256, 256, 1, gdalconstConstants.GDT_Float32, gt4326(256))
+        val srcGb = buildRamp(mem("ogb.tif"), 256, 256, 1, gdalconstConstants.GDT_Float32, gtGb(256))
+        try {
+            val before = vsimemCount()
+            val centroidChips = drain(RasterTessellate.tessellateH3Iter(asTile(src4326), Map.empty[String, String], Res, "centroid", "complete"))
+            assert(centroidChips > 1, s"expected several centroid chips, got $centroidChips")
+            assert(vsimemCount() == before, "centroid (H3, EPSG:4326) left its input in /vsimem")
+            val coveringChips = drain(RasterTessellate.tessellateBngIter(asTile(srcGb), Map.empty[String, String], BngRes, "covering", "complete"))
+            assert(coveringChips > 1, s"expected several covering chips, got $coveringChips")
+            assert(vsimemCount() == before, "covering (BNG from EPSG:4326) left its input or its warp in /vsimem")
+            // Closed after hasNext fetched a chip that next() never handed out (a cancelled task).
+            val it = RasterTessellate.tessellateH3Iter(asTile(src4326), Map.empty[String, String], Res, "covering", "complete")
+            assert(it.hasNext, "expected a covering chip")
+            it.asInstanceOf[AutoCloseable].close()
+            assert(vsimemCount() == before, "close() left the fetched covering chip or the input in /vsimem")
+        } finally { RasterDriver.releaseDataset(src4326); RasterDriver.releaseDataset(srcGb) }
+    }
+
+    test("(p) a failure during covering setup releases the input and the BNG warp before it propagates") {
+        val before = vsimemCount()
+        val src = buildRamp(mem("p.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32, gtGb(64))
+        RasterTessellate.coveringSetupFault = new IllegalStateException("injected setup fault")
+        try {
+            val e = intercept[IllegalStateException] {
+                RasterTessellate.tessellateBngIter(src, Map.empty[String, String], BngRes, "covering", "complete")
+            }
+            assert(e.getMessage == "injected setup fault")
+            assert(vsimemCount() == before, "the input or the EPSG:27700 warp leaked after a covering setup failure")
+        } finally RasterTessellate.coveringSetupFault = null
     }
 }

@@ -55,6 +55,7 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         d
     }
 
+    /** Drains and closes a tessellation, releasing its chips. The tessellation owns (and releases) its input `ds`. */
     private def drain(iter: Iterator[(Long, Dataset, Map[String, String])]): List[(Long, Dataset, Map[String, String])] = {
         val cells = try iter.toList finally iter match {
             case ac: AutoCloseable => ac.close()
@@ -69,7 +70,6 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         val cells = drain(
             RasterTessellate.tessellateCustomIter(grid, ds, Map.empty, resolution = 3,
                 assignment = "centroid", coverage = "sparse"))
-        RasterDriver.releaseDataset(ds)
 
         cells should not be empty
         cells.foreach { case (k, _, _) => k shouldBe a[java.lang.Long] }
@@ -80,7 +80,6 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         val cells = drain(
             RasterTessellate.tessellateCustomIter(grid, ds, Map.empty, resolution = 3,
                 assignment = "covering", coverage = "complete"))
-        RasterDriver.releaseDataset(ds)
 
         // Requires the custom-grid SR (27700) in the generic tessellate path: with a WGS84 SR the
         // raster bbox and the 27700 cell geometries would never overlap and the set would be empty.
@@ -95,7 +94,6 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
             RasterTessellate.tessellateCustomIter(tinyGrid, ds, Map.empty, resolution = 3,
                 assignment = "centroid", coverage = "sparse").toList
         }
-        RasterDriver.releaseDataset(ds)
         ex.getMessage.toLowerCase should include("bound")
     }
 
@@ -138,7 +136,6 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         val cells = drain(
             RasterTessellate.tessellateCustomIter(grid3857, ds, Map.empty, resolution = 1,
                 assignment = "centroid", coverage = "sparse"))
-        RasterDriver.releaseDataset(ds)
 
         // Before the fix this threw (centroids transformed to 4326, out of the 3857 grid bounds).
         cells should not be empty
@@ -151,7 +148,6 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         val cells = drain(
             RasterTessellate.tessellateCustomIter(grid3857, ds, Map.empty, resolution = 1,
                 assignment = "centroid", coverage = "sparse"))
-        RasterDriver.releaseDataset(ds)
 
         cells should not be empty
         cells.foreach { case (k, _, _) => k shouldBe a[java.lang.Long] }
@@ -164,7 +160,6 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         val cells = drain(
             RasterTessellate.tessellateCustomIter(grid3857, ds, Map.empty, resolution = 1,
                 assignment = "covering", coverage = "complete"))
-        RasterDriver.releaseDataset(ds)
 
         cells should not be empty
         cells.foreach { case (k, _, _) => k shouldBe a[java.lang.Long] }
@@ -181,7 +176,6 @@ class RasterTessellateCustomTest extends AnyFunSuite with BeforeAndAfterAll {
         val tessKeys = drain(
             RasterTessellate.tessellateCustomIter(grid3857, dsB, Map.empty, resolution = 1,
                 assignment = "centroid", coverage = "sparse")).map(_._1).toSet
-        RasterDriver.releaseDataset(dsB)
 
         r2gKeys should not be empty
         r2gKeys shouldBe tessKeys

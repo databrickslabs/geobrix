@@ -247,6 +247,45 @@ def _chip_nodata(work_ds) -> float:
     return fallback_nodata(work_ds.dtypes[0])
 
 
+def _empty_chip_builder(work_ds, grid: str, conf=None):
+    """Return ``build(cell) -> bytes`` making the 1×1 empty chip of a covered cell.
+
+    Everything that depends only on *work_ds* is resolved once here: identifying
+    the raster CRS (a PROJ ``FindMatches`` per call, so too slow to repeat per
+    cell), the grid-to-raster transformer, the inverse geotransform, the chip
+    profile and its all-NoData pixel. ``build`` then does only the per-cell work.
+    See :func:`_build_empty_chip` for the placement rule.
+    """
+    from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
+
+    to_work = None
+    if (
+        grid in ("h3", "quadbin")
+        and work_ds.crs is not None
+        and authority_srid_of(work_ds.crs) != 4326
+    ):
+        to_work = get_transformer(4326, work_ds.crs).transform
+    inv = ~work_ds.transform
+    last_col, last_row = work_ds.width - 1, work_ds.height - 1
+    nd = _chip_nodata(work_ds)
+    profile = work_ds.profile.copy()
+    profile.update(width=1, height=1, nodata=nd)
+    chip = np.full((work_ds.count, 1, 1), nd, dtype=work_ds.dtypes[0])
+
+    def build(cell) -> bytes:
+        centroid = _cell_geom(cell, grid, conf=conf).centroid
+        x, y = centroid.x, centroid.y
+        if to_work is not None:
+            x, y = to_work(x, y)
+        col_f, row_f = inv * (x, y)
+        col = min(max(math.floor(col_f), 0), last_col)
+        row = min(max(math.floor(row_f), 0), last_row)
+        window_tf = work_ds.window_transform(Window(col, row, 1, 1))
+        return write_gtiff(dict(profile, transform=window_tf), chip)
+
+    return build
+
+
 def _build_empty_chip(work_ds, cell, grid: str, conf=None) -> bytes:
     """Build the 1×1 all-NoData chip of a covered cell that received no pixel.
 
@@ -256,30 +295,10 @@ def _build_empty_chip(work_ds, cell, grid: str, conf=None) -> bytes:
     moved into the raster CRS for h3/quadbin when the raster is not EPSG:4326
     (bng and custom already share the work CRS), floored to a pixel and clamped
     into the raster. ``conf`` is a ``CustomGridConf`` when ``grid="custom"``.
-    """
-    from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
 
-    centroid = _cell_geom(cell, grid, conf=conf).centroid
-    x, y = centroid.x, centroid.y
-    if (
-        grid in ("h3", "quadbin")
-        and work_ds.crs is not None
-        and authority_srid_of(work_ds.crs) != 4326
-    ):
-        x, y = get_transformer(4326, work_ds.crs).transform(x, y)
-    col_f, row_f = ~work_ds.transform * (x, y)
-    col = min(max(math.floor(col_f), 0), work_ds.width - 1)
-    row = min(max(math.floor(row_f), 0), work_ds.height - 1)
-    nd = _chip_nodata(work_ds)
-    profile = work_ds.profile.copy()
-    profile.update(
-        width=1,
-        height=1,
-        transform=work_ds.window_transform(Window(col, row, 1, 1)),
-        nodata=nd,
-    )
-    chip = np.full((work_ds.count, 1, 1), nd, dtype=work_ds.dtypes[0])
-    return write_gtiff(profile, chip)
+    For many cells of one raster, build once with :func:`_empty_chip_builder`.
+    """
+    return _empty_chip_builder(work_ds, grid, conf=conf)(cell)
 
 
 # ---------------------------------------------------------------------------
@@ -434,6 +453,7 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
             west, south, east, north = transform_bounds(ds.crs, _WGS84, *ds.bounds)
         bbox_poly = box(west, south, east, north)
         covered = _polyfill_cells(bbox_poly, resolution, grid, conf=conf)
+        build_empty = _empty_chip_builder(work_ds, grid, conf=conf)
         for cell in covered:
             if not _cell_is_valid(cell, grid, conf=conf):
                 continue
@@ -442,7 +462,7 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
                 continue
             encoded = _encode_cellid(cell, grid, conf=conf)
             if encoded not in centroid_ids:
-                yield (encoded, _build_empty_chip(work_ds, cell, grid, conf=conf))
+                yield (encoded, build_empty(cell))
 
 
 # ---------------------------------------------------------------------------

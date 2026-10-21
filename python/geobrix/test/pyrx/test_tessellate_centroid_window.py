@@ -16,6 +16,7 @@ from rasterio.io import MemoryFile
 from rasterio.transform import Affine, from_bounds
 from rasterio.windows import Window
 
+from databricks.labs.gbx.core.crs import get_transformer
 from databricks.labs.gbx.pygx import _quadbin
 from databricks.labs.gbx.pyrx.core import tessellate as T
 
@@ -253,3 +254,69 @@ def test_sparse_drops_nan_only_cells(mode):
         m, c = _open(cb)
         with m, c:
             assert (c.read_masks(1) != 0).any()
+
+
+def _empties(b, res, grid):
+    """(cellid, chip bytes) of the cells "complete" adds over "sparse": the synthetic empties."""
+    with MemoryFile(b) as mf, mf.open() as ds:
+        sparse = {
+            c
+            for c, _ in T.iter_tessellate(
+                ds, res, grid, mode="centroid", coverage="sparse"
+            )
+        }
+        complete = T.iter_tessellate(
+            ds, res, grid, mode="centroid", coverage="complete"
+        )
+        return [(c, cb) for c, cb in complete if c not in sparse]
+
+
+def test_synthetic_empties_on_a_projected_raster_sit_at_the_cell_centroid_pixel():
+    """An h3 centroid is moved 4326 -> raster CRS before its empty's pixel is chosen."""
+    # UTM 18N, 20 km square at ~39 m; the left 8 km is NoData: wider than a res-7 cell.
+    b = _raster(
+        512,
+        512,
+        bounds=(500000, 4400000, 520000, 4420000),
+        crs="EPSG:32618",
+        hole=(0, 512, 0, 205),
+    )
+    to_utm = get_transformer(4326, 32618)
+    empties = _empties(b, 7, "h3")
+    assert empties
+    inside = 0
+    with MemoryFile(b) as mf, mf.open() as ds:
+        for cellid, cb in empties:
+            m, c = _open(cb)
+            with m, c:
+                assert (c.width, c.height) == (1, 1)
+                assert not (c.read_masks() != 0).any(), "an empty must be all NoData"
+                h3s = h3.int_to_str(cellid & 0xFFFFFFFFFFFFFFFF)
+                lon, lat = T._cell_geom(h3s, "h3").centroid.coords[0]
+                col_f, row_f = ~ds.transform * to_utm.transform(lon, lat)
+                inside += 0 <= col_f < ds.width and 0 <= row_f < ds.height
+                col = min(max(math.floor(col_f), 0), ds.width - 1)
+                row = min(max(math.floor(row_f), 0), ds.height - 1)
+                assert c.transform == ds.window_transform(Window(col, row, 1, 1))
+    assert inside, "no empty's centroid fell inside the raster: placement untested"
+
+
+def test_empty_chip_of_a_source_without_nodata_uses_the_uint16_fallback():
+    """The empty of a uint16 source with no declared nodata carries 65535."""
+    # The east edge reaches 0.3 px into the next quadbin cell: that cell is covered
+    # (positive-area overlap) but holds no pixel centre, so "complete" adds an empty.
+    res, px = 10, 0.001
+    cell = _quadbin.point_as_cell(-122.5, 37.7, res)
+    _, miny, maxx, maxy = T._cell_geom(cell, "quadbin").bounds
+    east, cy = maxx + 0.3 * px, (miny + maxy) / 2
+    b = _raster(
+        16, 16, bounds=(east - 16 * px, cy - 8 * px, east, cy + 8 * px), nodata=None
+    )
+    empties = _empties(b, res, "quadbin")
+    assert empties
+    for _, cb in empties:
+        m, c = _open(cb)
+        with m, c:
+            assert c.nodata == 65535.0
+            assert (c.width, c.height) == (1, 1)
+            assert not (c.read_masks() != 0).any()

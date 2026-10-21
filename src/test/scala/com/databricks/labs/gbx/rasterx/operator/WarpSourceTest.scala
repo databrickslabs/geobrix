@@ -1,6 +1,9 @@
 package com.databricks.labs.gbx.rasterx.operator
 
+import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import org.apache.hadoop.conf.Configuration
+import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants._
 import org.gdal.osr.SpatialReference
@@ -22,11 +25,8 @@ import scala.jdk.CollectionConverters._
   */
 class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
 
-    override def beforeAll(): Unit = {
-        GDALManager.loadSharedObjects(Iterable.empty[String])
-        GDALManager.configureGDAL("/tmp", "/tmp", logCPL = true, CPL_DEBUG = "OFF")
-        gdal.AllRegister()
-    }
+    override def beforeAll(): Unit =
+        GDALManager.init(ExpressionConfig(Map.empty[String, String], new SerializableConfiguration(new Configuration())))
 
     private val N = 40
     private val ToBng = "gdalwarp -t_srs EPSG:27700 -r near"

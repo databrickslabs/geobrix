@@ -25,8 +25,8 @@ def _fill_plan(ds):
     valid. ``read_masked`` says the source has its own (non-alpha) per-dataset mask band:
     a source NoData makes the warp ignore that mask, so each band is read masked and its
     masked pixels set to ``nodata`` before the warp (heavy reads the mask as an alpha
-    band, ``WarpSource``). Reading a band holds one source band in memory, about the size
-    of one band of the warped output, which is in memory too.
+    band, ``WarpSource``). The masked pixels are set in place, so a masked read holds one
+    source band of data plus its boolean mask (one byte per pixel) in memory at a time.
 
     ``None`` (the warp is left as it was) for a source that declares NoData and has no
     mask band (the warp carries its NoData), and for a source with an alpha band: the
@@ -62,7 +62,9 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
             for i in range(1, ds.count + 1):
                 source = rasterio.band(ds, i)
                 if read_masked:
-                    source = ds.read(i, masked=True).filled(nodata)
+                    band = ds.read(i, masked=True)
+                    band.data[np.ma.getmaskarray(band)] = nodata  # in place, dtype kept
+                    source = band.data
                 reproject(
                     source=source,
                     destination=rasterio.band(dst, i),

@@ -72,7 +72,7 @@ final class WarpSource(val ds: Dataset) extends AutoCloseable {
 
 object WarpSource {
 
-    /** Test seam: the number of mask views built. */
+    /** Test seam: the number of mask views built. Its exact-delta test asserts assume suites do not run in parallel. */
     private[rasterx] val viewsBuilt = new AtomicLong()
 
     /** Warps `ds` to `outputPath` with `command` (no write options), the warp fill NoData

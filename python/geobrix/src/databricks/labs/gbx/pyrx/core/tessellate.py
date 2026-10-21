@@ -46,8 +46,9 @@ _VALID_COVERAGES = {"sparse", "complete"}
 _VALID_GRIDS = frozenset({"h3", "quadbin", "bng", "custom"})
 # Points per raster edge, corners included, walked when reprojecting the footprint (rasterio transform_bounds default).
 _FOOTPRINT_EDGE_POINTS = 21
-# Pixels per centroid-assignment strip; its coordinate/cell temporaries are ~80 B/px with h3.
-_STRIP_PIXELS = 2_097_152
+# Pixels per centroid-assignment strip (1 M): its coordinate/cell temporaries, ~80 B/px
+# with h3, stay ~80 MB per strip, so assignment fits a Serverless task.
+_STRIP_PIXELS = 1_048_576
 # Initial number of per-label pixel windows; doubled as cells are found.
 _LABEL_CAPACITY = 1024
 

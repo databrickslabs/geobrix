@@ -33,8 +33,8 @@ def test_centroid_assignment_memory_is_bounded():
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
     # Per-pixel loop: ~90 B/px here (~170 B/px with a reprojection). Bounded design:
-    # int32 labels (4 B/px) + one strip of at most _STRIP_PIXELS (2 M) px of coords,
-    # encodes and transient h3 ints (~80 B per strip px): well under 64 B/px here.
+    # int32 labels (4 B/px) + one strip of at most _STRIP_PIXELS (1 M) px of coords,
+    # encodes and transient h3 ints (~80 B per strip px): ~23 B/px here.
     assert peak / (2048 * 2048) < 64, f"{peak / (2048 * 2048):.1f} B/px"
 
 

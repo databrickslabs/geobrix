@@ -29,7 +29,7 @@ by both execution tiers:
 struct<
   cellid: bigint,                       -- grid cell id (nullable)
   raster: binary,                       -- the raster payload (NULL when virtual)
-  path: string,                         -- source path (set when virtual)
+  path: string,                         -- source path (virtual) or provenance (materialized)
   window: struct<col_off,row_off,width,height>,  -- the pixel window
   clip_polygon: binary,                 -- optional clip geometry (WKB)
   clip_crs: string,                     -- CRS for clip_polygon
@@ -153,6 +153,8 @@ force-output parameters:
 
 - **`virtualize_dir`** — write the produced tile to a durable path and hand back a
   **virtual** row (bytes-free), so a chain stays light after a pixel-producing op.
+  The row's `window` is the full extent of the file written, so it reads back the
+  pixels that were produced.
 - **`virtualize_prefix`** — an optional filename prefix to deconflict outputs.
 - **`materialize`** — force raster bytes into the row.
 

@@ -443,3 +443,87 @@ def test_grouped_tile_map_materialized_is_byte_identical(spark, gtiff_bytes):
     assert all(
         bytes(r["pixels"]) == expected for r in out
     ), "grouped_tile_map materialized path is not byte-identical — composition changed"
+
+
+# ---------------------------------------------------------------------------
+# FILE fast path only reads the source for VIRTUAL tiles
+# ---------------------------------------------------------------------------
+
+
+class _SourceStubLRU:
+    """LRU stand-in whose ``get`` opens the tile's SOURCE path.
+
+    Mirrors what the real opener does with the FileRef on a cache miss: it
+    streams the file at ``uri``. Any call here means the tile's source file, not
+    its inline bytes, is about to be read.
+    """
+
+    def __init__(self):
+        self.gets = []
+        self._open = []
+
+    def get(self, uri):
+        import rasterio
+
+        self.gets.append(uri)
+        src = rasterio.open(uri)
+        self._open.append(src)
+        return src
+
+    def close(self):
+        for src in self._open:
+            src.close()
+
+
+def _dispatch_header(ds, cellid):
+    return (ds.crs.to_epsg(), ds.width, ds.height)
+
+
+def test_dispatch_materialized_tile_reads_its_bytes_not_its_path(tmp_path):
+    """A materialized tile that keeps ``path`` as provenance is read from its bytes.
+
+    Reader tiles, ``materialize=True`` outputs and whole-input retile outputs all
+    carry the source ``path`` next to computed bytes. The bytes here differ from
+    the path file (CRS and size), so a FILE fast path that followed the path would
+    return the source's values.
+    """
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    computed = make_geotiff_bytes(width=6, height=5, epsg=3857)
+    tile = VirtualTile(cellid=1, raster=computed, path=str(src)).to_row()
+
+    for view in ("header", "pixels"):
+        lru = _SourceStubLRU()
+        try:
+            got = _dispatch_tile(
+                tile, object(), _OpenerContext(), lru, view, _dispatch_header
+            )
+        finally:
+            lru.close()
+        assert got == (3857, 6, 5), f"view={view}: read the source file, got {got}"
+        assert lru.gets == [], f"view={view}: FILE open of the source: {lru.gets}"
+
+
+def test_dispatch_virtual_tile_takes_file_fast_path(tmp_path):
+    """Control: a virtual tile (no bytes) still reads its source via the LRU."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    tile = VirtualTile(cellid=1, path=str(src)).to_row()
+
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            tile, object(), _OpenerContext(), lru, "pixels", _dispatch_header
+        )
+    finally:
+        lru.close()
+    assert got == (4326, 4, 3)
+    assert lru.gets == [str(src)]

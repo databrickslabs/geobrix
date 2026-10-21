@@ -53,8 +53,9 @@ def access_path_and_binary(spark):
     A **virtual** tile (default for the light tier) has ``tile.raster = null``
     and ``tile.path`` set to the source file path — it carries no bytes, only
     a reference. A **materialized** tile is the opposite: ``tile.raster``
-    holds the encoded bytes and ``tile.path`` is null. Checking both fields
-    is the correct way to classify a tile at runtime.
+    holds the encoded bytes, and ``tile.path`` is usually null (when set, it
+    only records where the bytes came from). Classify a tile by
+    ``tile.raster``, not by ``tile.path`` alone.
     """
     from databricks.labs.gbx.pyrx import functions as pyrx
 

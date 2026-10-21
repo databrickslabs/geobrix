@@ -24,7 +24,7 @@ A tile has the following structure:
 struct<
   cellid: bigint,                                -- Grid cell ID (nullable)
   raster: binary,                                -- Raster bytes (NULL when virtual)
-  path: string,                                  -- Source path (set when virtual)
+  path: string,                                  -- Source path (virtual) or provenance (materialized)
   path_mode: string,                             -- Storage mode: null, 'external', or 'managed'
   window: struct<col_off,row_off,width,height>,  -- Pixel window
   clip_polygon: binary,                          -- Optional clip geometry (WKB)
@@ -42,7 +42,7 @@ A tile is **materialized** when `raster` carries the encoded bytes (the common c
 |-------|------|----------|-------------|
 | `cellid` | `bigint` (Long) | Yes | Grid cell identifier for tessellated rasters. `null` for non-tessellated rasters. |
 | `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
-| `path` | `string` | Yes | Source path for a virtual tile; `null` for a materialized tile. |
+| `path` | `string` | Yes | Set on a virtual tile, where it is the source the pixels are read from. On a materialized tile it is provenance of where the bytes came from (a reader's tile, a `materialize=True` output, a lightweight retile-family output); the bytes in `raster` are the data and are always read in preference to `path`. `null` when the tile has no single source file. |
 | `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
 | `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. The lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record the window relative to their immediate **input** tile, so windows from different parents can repeat; one output that covers its whole input keeps the input's own window instead. The heavyweight versions leave it null. |
 | `clip_polygon` | `binary` | Yes | Optional clip geometry (WKB). Instruction on a virtual tile; applied-provenance on a materialized tile. |
@@ -99,13 +99,13 @@ Access tile components for custom processing:
 
 ### Materialized vs Virtual: path and raster
 
-A virtual tile has `tile.raster = null` and `tile.path` set to the source file path. A materialized tile is the opposite — `tile.raster` carries the encoded bytes and `tile.path` is null. Check both fields to classify a tile at runtime:
+A virtual tile has `tile.raster = null` and `tile.path` set to the source file path. A materialized tile is the opposite — `tile.raster` carries the encoded bytes, and `tile.path` is usually null; when it is set it only records where the bytes came from. Classify a tile by `tile.raster`, never by `tile.path` alone:
 
 <CodeFromTest code={tileStructureExamples} functionName="access_path_and_binary" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="access_path_and_binary_output" />
 
 ### Tile Storage Mode
 
-`tile.path_mode` records the storage model used by a virtual tile's backing data. It is `null` for both materialized tiles and plain FUSE-path virtual tiles. Use `tile.raster is null` (or check `tile.path`) to distinguish those two cases. The field carries `"external"` for FILE EXTERNAL tiles and `"managed"` for FILE MANAGED tiles (governed lifecycle via Delta):
+`tile.path_mode` records the storage model used by a virtual tile's backing data. It is `null` for both materialized tiles and plain FUSE-path virtual tiles. Use `tile.raster is null` to distinguish those two cases. The field carries `"external"` for FILE EXTERNAL tiles and `"managed"` for FILE MANAGED tiles (governed lifecycle via Delta):
 
 <CodeFromTest code={tileStructureExamples} functionName="tile_path_mode_storage" language="python" source="docs/tests/python/api/tile_structure.py" testFile="docs/tests/python/api/test_tile_structure.py" outputConstant="tile_path_mode_storage_output" />
 

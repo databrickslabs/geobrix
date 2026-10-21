@@ -943,7 +943,9 @@ def shape_output(
         ``<dir>/[<prefix>_]<cellid>_<col>_<row>_<w>_<h>.tif`` (overwrite),
         FUSE-safe (local temp -> shutil.copyfile), return a VirtualTile with
         ``raster=None`` referencing the written file. This is the ONLY way a
-        pixel-producer returns a virtual tile.
+        pixel-producer returns a virtual tile. The returned ``window`` is the
+        written file's full extent ``(0, 0, width, height)``; an input
+        ``window`` (a part's position in its parent) only names the file.
 
     ``materialize=True``:
       - Tile virtual → read via ``open_tile`` (lazy), capture bytes,
@@ -965,14 +967,17 @@ def shape_output(
         if vt.is_virtual():
             return vt
 
-        # Determine (col, row, w, h) for the filename.
+        # The written file's own size (header read only).
+        with _serde.open_tile(vt.raster) as ds:
+            own_w, own_h = ds.width, ds.height
+
+        # (col, row, w, h) names the file. A part cut from a parent carries its
+        # position in the PARENT as ``window``; that tells sibling parts of one
+        # cellid apart, so it stays in the name.
         if vt.window is not None:
             col, row, w, h = vt.window
         else:
-            # Read only the header to get dimensions.
-            with _serde.open_tile(vt.raster) as ds:
-                w, h = ds.width, ds.height
-            col, row = 0, 0
+            col, row, w, h = 0, 0, own_w, own_h
 
         parts = [str(vt.cellid), str(col), str(row), str(w), str(h)]
         base = "_".join(parts) + ".tif"
@@ -1004,7 +1009,10 @@ def shape_output(
             cellid=vt.cellid,
             raster=None,
             path=out_path,
-            window=(col, row, w, h),
+            # The window addresses the file just written, which holds only this
+            # tile: its full extent. The parent position is not carried over; it
+            # would point outside the file.
+            window=(0, 0, own_w, own_h),
             clip_polygon=vt.clip_polygon,
             clip_crs=vt.clip_crs,
             crs=vt.crs,

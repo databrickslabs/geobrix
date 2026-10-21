@@ -189,6 +189,69 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
                 return core_fn(ds, cellid)
 
 
+def _file_fast_path_uri(tile):
+    """The source path the FILE fast path may read for *tile*, else ``None``.
+
+    Only a virtual tile (``raster`` is ``None``) reads its source: there the
+    path IS the data. A materialized tile's ``raster`` holds its computed
+    bytes, and any ``path`` it carries is provenance (reader tiles,
+    ``materialize=True`` outputs, whole-input retile outputs). The source may
+    differ from the bytes (a baked-in ``rst_setsrid``, ``rst_band`` or
+    ``rst_initnodata``, or computed pixels), so such a tile is read from its bytes.
+    """
+    try:
+        if tile["raster"] is not None:
+            return None
+    except (KeyError, TypeError):
+        pass
+    try:
+        return tile["path"] or None
+    except (KeyError, TypeError):
+        return None
+
+
+def _dispatch_tile(tile, fr, ctx, lru, view_mode, core_fn):
+    """Run *core_fn* on one tile: FILE fast path when it applies, else fallback.
+
+    *fr* is the tile's FileRef (``None`` when the driver minted none).
+    Returns the core_fn value, or ``None`` when the tile cannot be read.
+    """
+    # Extract cellid from the tile struct for passing to core_fn.
+    try:
+        cellid = tile["cellid"]
+    except (KeyError, TypeError):
+        cellid = None
+    uri = _file_fast_path_uri(tile)
+
+    result = _MISS
+    if uri and fr is not None:
+        # FILE fast path: inject FileRef so the LRU opener can
+        # stream-open the source on a cache miss.
+        try:
+            result = _run_file_fast_path(
+                ctx.fr_holder,
+                ctx.size_holder,
+                lru,
+                uri,
+                fr,
+                tile,
+                cellid,
+                view_mode,
+                core_fn,
+            )
+        except Exception:
+            # Any open/stream/view-construction failure →
+            # degrade gracefully to the per-tile fallback.
+            result = _MISS
+
+    if result is _MISS:
+        try:
+            result = _run_fallback_tile(tile, cellid, view_mode, core_fn)
+        except Exception:
+            result = None
+    return result
+
+
 def grouped_tile_map(
     df: DataFrame,
     core_fn,
@@ -219,12 +282,14 @@ def grouped_tile_map(
 
     Tile dispatch:
 
-    - **Materialized tiles** (``raster`` set, ``path`` None): opened per-row via
-      ``_open``; the LRU is not consulted — bytes are already inline, nothing
-      to amortise.  This is the path exercised by the local unit test.
-    - **Virtual tiles** (``path`` set) + FILE-capable: before ``mapInPandas`` a
-      ``_file_ref`` column is added holding a ``try_to_file(path)`` FileRef for
-      each row.  Inside the partition the LRU caches the open rasterio dataset
+    - **Materialized tiles** (``raster`` set): opened per-row via ``_open``
+      from their bytes; the LRU is not consulted — bytes are already inline,
+      nothing to amortise.  A materialized tile may still carry ``path`` as
+      provenance of where its bytes came from; it is never read in their place.
+      This is the path exercised by the local unit test.
+    - **Virtual tiles** (``raster`` None, ``path`` set) + FILE-capable: before
+      ``mapInPandas`` a ``_file_ref`` column is added holding a
+      ``try_to_file(path)`` FileRef for each row.  Inside the partition the LRU caches the open rasterio dataset
       (opened from the FileRef's seekable stream) keyed by ``uri``; on the FILE
       fast path the view contract (header/pixels) determines what is passed to
       ``core_fn``.  ``_file_ref`` is stripped from the output so the output
@@ -305,50 +370,12 @@ def grouped_tile_map(
                 # DBR 19.5), which would silently defeat the FILE fast path.
                 has_fr_col = "_file_ref" in pdf.columns
                 for _, row in pdf.iterrows():
-                    tile = row[tile_col]
-                    # Extract cellid from the tile struct for passing to core_fn.
-                    try:
-                        cellid = tile["cellid"]
-                    except (KeyError, TypeError):
-                        cellid = None
-                    # Resolve uri: None for materialized tiles, path string for virtual.
-                    try:
-                        uri = tile["path"] or None
-                    except (KeyError, TypeError):
-                        uri = None
-
-                    result = _MISS
-                    if uri and has_fr_col:
-                        fr = row["_file_ref"]
-                        if fr is not None:
-                            # FILE fast path: inject FileRef so the LRU opener can
-                            # stream-open the source on a cache miss.
-                            try:
-                                result = _run_file_fast_path(
-                                    _ctx.fr_holder,
-                                    _ctx.size_holder,
-                                    lru,
-                                    uri,
-                                    fr,
-                                    tile,
-                                    cellid,
-                                    _view_mode,
-                                    core_fn,
-                                )
-                            except Exception:
-                                # Any open/stream/view-construction failure →
-                                # degrade gracefully to the per-tile fallback.
-                                result = _MISS
-
-                    if result is _MISS:
-                        try:
-                            result = _run_fallback_tile(
-                                tile, cellid, _view_mode, core_fn
-                            )
-                        except Exception:
-                            result = None
-
-                    results.append(result)
+                    fr = row["_file_ref"] if has_fr_col else None
+                    results.append(
+                        _dispatch_tile(
+                            row[tile_col], fr, _ctx, lru, _view_mode, core_fn
+                        )
+                    )
 
                 # Strip _file_ref from the output so the schema matches
                 # original_fields + [return_field] exactly.

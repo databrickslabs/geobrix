@@ -57,6 +57,9 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         val srcXSize = ds.getRasterXSize
         val srcYSize = ds.getRasterYSize
         val totalSourcePixels = srcXSize * srcYSize // 16 pixels total in fixture
+        val srcGt = ds.GetGeoTransform
+        val srcVals = new Array[Double](totalSourcePixels)
+        ds.GetRasterBand(1).ReadRaster(0, 0, srcXSize, srcYSize, srcVals)
         val it = RasterTessellate.tessellateQuadbinIter(ds, Map.empty[String, String], resolution = 12, assignment = "centroid", coverage = "sparse")
         var count = 0
         var totalAssigned = 0
@@ -65,19 +68,28 @@ class RST_Quadbin_TessellateTest extends AnyFunSuite with BeforeAndAfterAll {
             val (cell, chip, _) = it.next()
             assert(cell != 0L, s"centroid chip cell id must be nonzero")
             assert(chip != null, s"centroid chip Dataset must not be null")
-            assert(chip.getRasterXSize == srcXSize && chip.getRasterYSize == srcYSize,
-                "centroid chip must have same extent as source (sparse chip with nodata for unassigned pixels)")
+            // A centroid chip is cropped to its cell's pixel window: a sub-window of the source grid,
+            // located by its geotransform origin.
+            val (w, h) = (chip.getRasterXSize, chip.getRasterYSize)
+            val cgt = chip.GetGeoTransform
+            val xOff = math.round((cgt(0) - srcGt(0)) / srcGt(1)).toInt
+            val yOff = math.round((cgt(3) - srcGt(3)) / srcGt(5)).toInt
+            assert(w >= 1 && h >= 1 && xOff >= 0 && yOff >= 0 && xOff + w <= srcXSize && yOff + h <= srcYSize,
+                s"centroid chip ${w}x$h at ($xOff,$yOff) must be a window of the ${srcXSize}x$srcYSize source")
             seenIds += cell
-            // Count assigned (non-nodata) pixels in band 1.
-            // Sentinel for Float64 is NaN; compare with isNaN to avoid NaN!=NaN always-true trap.
+            // Count assigned (non-nodata) pixels in band 1; each must carry the source value at the
+            // chip's offset. The source declares no NoData, so chips blank with the Float64 constant.
             val nd = new Array[java.lang.Double](1)
             chip.GetRasterBand(1).GetNoDataValue(nd)
-            val buf = new Array[Double](srcXSize * srcYSize)
-            chip.GetRasterBand(1).ReadRaster(0, 0, srcXSize, srcYSize, buf)
-            val validInChip =
-                if (nd(0) != null && nd(0).doubleValue().isNaN) buf.count(!_.isNaN)
-                else if (nd(0) != null) buf.count(_ != nd(0).doubleValue())
-                else buf.count(!_.isNaN) // no nodata set -> treat NaN sentinel as nodata
+            assert(nd(0) != null, "centroid chip must declare a NoData value")
+            val buf = new Array[Double](w * h)
+            chip.GetRasterBand(1).ReadRaster(0, 0, w, h, buf)
+            val validIdx = buf.indices.filter(k => buf(k) != nd(0).doubleValue())
+            validIdx.foreach { k =>
+                val srcIdx = (yOff + k / w) * srcXSize + (xOff + k % w)
+                assert(buf(k) == srcVals(srcIdx), s"chip pixel $k must equal source pixel $srcIdx")
+            }
+            val validInChip = validIdx.length
             totalAssigned += validInChip
             RasterDriver.releaseDataset(chip)
             count += 1

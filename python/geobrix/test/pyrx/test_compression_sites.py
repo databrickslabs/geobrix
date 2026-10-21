@@ -1011,3 +1011,57 @@ def test_drop_ycbcr_unless_jpeg_keeps_the_key_only_for_a_jpeg_codec():
         assert kept["photometric"] == "YCbCr"
     rgb = {"photometric": "rgb", "compress": "zstd"}
     assert drop_ycbcr(rgb, unless_jpeg=True) == rgb
+
+
+# ---------------------------------------------------------------------------
+# Centroid tessellate chips (cell chips and synthetic empties) use the canonical
+# encoding whatever the source's codec is
+# ---------------------------------------------------------------------------
+
+
+def _dem(compress="lzw", nodata=-999999.0):
+    rng = np.random.default_rng(7)
+    a = (rng.random((72, 96)) * 300).astype("float32")
+    a[:, :20] = nodata if nodata is not None else a[:, :20]
+    px = 0.17 / 1836
+    prof = dict(
+        driver="GTiff",
+        width=96,
+        height=72,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4269",
+        transform=from_bounds(
+            -122.52, 37.83 - 72 * px, -122.52 + 96 * px, 37.83, 96, 72
+        ),
+        tiled=True,
+        blockxsize=32,
+        blockysize=32,
+        nodata=nodata,
+        **({"compress": compress} if compress else {}),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(a, 1)
+        return mf.read()
+
+
+@pytest.mark.parametrize("src_compress", ["lzw", None])
+@pytest.mark.parametrize("coverage", ["sparse", "complete"])
+def test_centroid_tessellate_chips_use_creation_opts(src_compress, coverage):
+    from databricks.labs.gbx.pyrx.core import tessellate as T
+
+    # Res 10: the 20-column NoData strip is wider than a cell there, so "complete"
+    # also emits synthetic empty chips (at res 9 every covered cell gets a pixel).
+    with MemoryFile(_dem(src_compress)) as mf, mf.open() as ds:
+        chips = list(
+            T.iter_tessellate(ds, 10, "h3", mode="centroid", coverage=coverage)
+        )
+    assert chips
+    empties = 0
+    for _, b in chips:
+        _assert_canonical(b, "float32")
+        with MemoryFile(b) as m, m.open() as c:
+            empties += int(not (c.read_masks() != 0).any())
+    if coverage == "complete":
+        assert empties, "the NoData strip must yield synthetic empty chips"

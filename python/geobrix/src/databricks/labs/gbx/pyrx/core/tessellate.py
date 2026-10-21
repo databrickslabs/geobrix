@@ -13,6 +13,7 @@ The three per-grid wrappers (:func:`iter_tessellate_h3`,
 delegates for backward compatibility with bench callers and existing tests.
 """
 
+import math
 from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 
@@ -21,10 +22,13 @@ import numpy as np
 import shapely.wkb
 from rasterio.io import MemoryFile
 from rasterio.warp import transform_bounds, transform_geom
+from rasterio.windows import Window
 from shapely.geometry import Polygon, box, mapping, shape
 
 from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
+from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = _quadbin._MAX_POLYFILL_RES
@@ -55,9 +59,6 @@ def _has_positive_area_overlap(cell_poly, bbox_poly) -> bool:
     if not cell_poly.intersects(bbox_poly):
         return False
     return cell_poly.intersection(bbox_poly).area > 0.0
-
-
-_DEFAULT_NODATA = -9999.0
 
 
 def _cell_polygon_lonlat(cell: str) -> Polygon:
@@ -228,42 +229,57 @@ def _encode_cellid(cell, grid: str, conf=None):
 
 
 def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
-    """Return True when the GTiff bytes represent an all-NoData chip.
+    """Return True when no pixel of the GTiff chip is valid in any band.
 
     Used by covering+sparse to drop chips whose pixels are entirely masked.
-    If no nodata is declared, the chip is considered valid (never all-NoData).
+    Validity comes from the mask bands, so a NaN NoData is recognised (``== nan``
+    never is). A chip with no declared nodata has all-valid masks and is kept.
     """
     with MemoryFile(raster_bytes) as mf:
         with mf.open() as chip_ds:
-            nodata = chip_ds.nodata
-            if nodata is None:
-                return False
-            data = chip_ds.read()
-            return bool(np.all(data == nodata))
+            return not (chip_ds.read_masks() != 0).any()
 
 
-def _build_empty_chip(work_ds) -> bytes:
-    """Build a 1×1 all-NoData GTiff chip from *work_ds* profile.
+def _chip_nodata(work_ds) -> float:
+    """NoData every centroid chip carries: the source's, else the dtype fallback."""
+    if work_ds.nodata is not None:
+        return work_ds.nodata
+    return fallback_nodata(work_ds.dtypes[0])
 
-    Used by centroid+complete to emit a synthetic covered-but-empty tile.
-    The chip has the same band count, dtype, CRS, and nodata as the source;
-    the transform is set to a 1×1 extent matching the source's top-left.
+
+def _build_empty_chip(work_ds, cell, grid: str, conf=None) -> bytes:
+    """Build the 1×1 all-NoData chip of a covered cell that received no pixel.
+
+    Used by centroid+complete to emit a synthetic covered-but-empty tile. The chip
+    has the source's band count, dtype and CRS, and sits on the source pixel that
+    holds the cell's centroid: the planar centroid of the cell polygon (grid CRS),
+    moved into the raster CRS for h3/quadbin when the raster is not EPSG:4326
+    (bng and custom already share the work CRS), floored to a pixel and clamped
+    into the raster. ``conf`` is a ``CustomGridConf`` when ``grid="custom"``.
     """
-    nd = work_ds.nodata if work_ds.nodata is not None else _DEFAULT_NODATA
-    profile = work_ds.profile.copy()
-    profile.update(driver="GTiff", width=1, height=1, nodata=nd)
-    from rasterio.transform import from_origin
+    from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
 
-    left = work_ds.transform.c  # west edge
-    top = work_ds.transform.f  # north edge
-    px = abs(work_ds.transform.a)
-    py = abs(work_ds.transform.e)
-    profile["transform"] = from_origin(left, top, px, py)
+    centroid = _cell_geom(cell, grid, conf=conf).centroid
+    x, y = centroid.x, centroid.y
+    if (
+        grid in ("h3", "quadbin")
+        and work_ds.crs is not None
+        and authority_srid_of(work_ds.crs) != 4326
+    ):
+        x, y = get_transformer(4326, work_ds.crs).transform(x, y)
+    col_f, row_f = ~work_ds.transform * (x, y)
+    col = min(max(math.floor(col_f), 0), work_ds.width - 1)
+    row = min(max(math.floor(row_f), 0), work_ds.height - 1)
+    nd = _chip_nodata(work_ds)
+    profile = work_ds.profile.copy()
+    profile.update(
+        width=1,
+        height=1,
+        transform=work_ds.window_transform(Window(col, row, 1, 1)),
+        nodata=nd,
+    )
     chip = np.full((work_ds.count, 1, 1), nd, dtype=work_ds.dtypes[0])
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(chip)
-        return mf.read()
+    return write_gtiff(profile, chip)
 
 
 # ---------------------------------------------------------------------------
@@ -281,7 +297,9 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
 
     ``conf`` is a ``CustomGridConf`` instance when ``grid="custom"``.
 
-    Yields ``(cellid, gtiff_bytes)`` pairs.
+    Yields ``(cellid, gtiff_bytes)`` pairs in first-seen pixel order (row-major).
+    Each chip is cropped to the bounding pixel window of its cell's pixels and
+    carries the source NoData (else the dtype fallback, ``fallback_nodata``).
     """
     rows, cols = np.mgrid[0 : work_ds.height, 0 : work_ds.width]
     xs, ys = work_ds.xy(rows.ravel(), cols.ravel())
@@ -317,12 +335,11 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
         from databricks.labs.gbx.pygx import _custom as _custom_mod
 
     data = work_ds.read()  # shape (bands, height, width)
-    nodata = work_ds.nodata
-
-    if nodata is not None:
-        valid_flat = ~np.all(data.reshape(work_ds.count, -1).T == nodata, axis=1)
-    else:
-        valid_flat = np.ones(work_ds.height * work_ds.width, dtype=bool)
+    # A pixel is valid when ANY band's mask marks it valid (heavy anyValid). The mask
+    # bands recognise a NaN NoData, which an ``== nodata`` comparison never matches.
+    masks = work_ds.read_masks()  # shape (bands, height, width); 0 = invalid
+    valid_flat = (masks != 0).any(axis=0).ravel()
+    del masks
 
     cell_pixels: dict = defaultdict(list)
     for flat_idx in np.where(valid_flat)[0]:
@@ -342,25 +359,28 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
                 continue
         cell_pixels[cell].append(int(flat_idx))
 
+    nd = _chip_nodata(work_ds)
     profile = work_ds.profile.copy()
-    profile.update(driver="GTiff")
-    nd = nodata if nodata is not None else _DEFAULT_NODATA
-    if nodata is None:
-        profile["nodata"] = nd
+    profile["nodata"] = nd
 
+    # Each chip covers only the bounding pixel window of its cell's pixels, on the
+    # source grid (window_transform keeps rotated and south-up geotransforms intact);
+    # pixels of that window assigned to other cells are NoData.
     for cell, flat_indices in cell_pixels.items():
-        chip = np.full_like(data, nd)
         row_idx, col_idx = np.unravel_index(
             flat_indices, (work_ds.height, work_ds.width)
         )
-        chip[:, row_idx, col_idx] = data[:, row_idx, col_idx]
-
-        with MemoryFile() as mf:
-            with mf.open(**profile) as dst:
-                dst.write(chip)
-            raster_bytes = mf.read()
-
-        yield (_encode_cellid(cell, grid, conf=conf), raster_bytes)
+        r0, c0 = int(row_idx.min()), int(col_idx.min())
+        h = int(row_idx.max()) + 1 - r0
+        w = int(col_idx.max()) + 1 - c0
+        chip = np.full((work_ds.count, h, w), nd, dtype=data.dtype)
+        chip[:, row_idx - r0, col_idx - c0] = data[:, row_idx, col_idx]
+        profile.update(
+            width=w,
+            height=h,
+            transform=work_ds.window_transform(Window(c0, r0, w, h)),
+        )
+        yield (_encode_cellid(cell, grid, conf=conf), write_gtiff(profile, chip))
 
 
 def _centroid_chips_generic(ds, resolution, grid: str, conf=None):
@@ -384,7 +404,8 @@ def _centroid_chips_generic(ds, resolution, grid: str, conf=None):
 
 def _centroid_complete(ds, resolution, grid: str, conf=None):
     """centroid + complete coverage: yield centroid chips, then synthetic empty
-    chips for covered cells that received no centroid pixels.
+    chips for covered cells that received no centroid pixels (each a 1×1 chip on
+    the cell's centroid pixel; see :func:`_build_empty_chip`).
 
     Extracted from :func:`iter_tessellate` to stay within C901 complexity limit.
 
@@ -413,7 +434,6 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
             west, south, east, north = transform_bounds(ds.crs, _WGS84, *ds.bounds)
         bbox_poly = box(west, south, east, north)
         covered = _polyfill_cells(bbox_poly, resolution, grid, conf=conf)
-        empty_chip = _build_empty_chip(work_ds)
         for cell in covered:
             if not _cell_is_valid(cell, grid, conf=conf):
                 continue
@@ -422,7 +442,7 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
                 continue
             encoded = _encode_cellid(cell, grid, conf=conf)
             if encoded not in centroid_ids:
-                yield (encoded, empty_chip)
+                yield (encoded, _build_empty_chip(work_ds, cell, grid, conf=conf))
 
 
 # ---------------------------------------------------------------------------

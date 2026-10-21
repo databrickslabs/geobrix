@@ -36,7 +36,8 @@ import scala.collection.mutable
   *    ([[BoundingBox.densifiedBBox]]), so a projected raster loses no edge cell; a footprint that
   *    wraps in lon/lat fails up front;
   *  - the tessellation owns its input: it is released when the iterator ends or is closed, or when
-  *    setup fails (covering and centroid).
+  *    setup fails (covering and centroid);
+  *  - covering chips of a source without NoData carry the dtype constant, so the clip fill is NoData.
   *
   * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled. The
   * tessellation releases its input, so a test that keeps reading a fixture hands it a copy
@@ -682,5 +683,51 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
             assert(e.getMessage == "injected setup fault")
             assert(vsimemCount() == before, "the input or the EPSG:27700 warp leaked after a covering setup failure")
         } finally RasterTessellate.coveringSetupFault = null
+    }
+
+    test("(q) covering on a source without NoData: the clip fill is NoData (65535), not valid 0 pixels") {
+        val src = buildRamp(mem("q.tif"), 64, 64, 1, gdalconstConstants.GDT_UInt16, gt4326(64))
+        val (xSize, ySize) = (src.getRasterXSize, src.getRasterYSize)
+        val inv = invert(src.GetGeoTransform)
+        val (srcVals, _) = readBand(src, 1)
+        val chipNoData = mutable.Set.empty[Option[Double]]
+        var (chips, filled, outside, badValue, zeros) = (0, 0L, 0, 0, 0)
+        val it = RasterTessellate.tessellateH3Iter(handOff(src), Map.empty[String, String], Res, "covering", "complete")
+        try {
+            while (it.hasNext) {
+                val (_, chip, _) = it.next()
+                try {
+                    chips += 1
+                    chipNoData += noDataOf(chip, 1)
+                    val cgt = chip.GetGeoTransform
+                    val w = chip.getRasterXSize
+                    val (vals, mask) = readBand(chip, 1)
+                    var k = 0
+                    while (k < vals.length) {
+                        if (mask(k) == 0) filled += 1
+                        else {
+                            val (i, j) = (k % w, k / w)
+                            val gx = cgt(0) + (i + 0.5) * cgt(1) + (j + 0.5) * cgt(2)
+                            val gy = cgt(3) + (i + 0.5) * cgt(4) + (j + 0.5) * cgt(5)
+                            val sc = math.floor(inv(0) + gx * inv(1) + gy * inv(2)).toInt
+                            val sr = math.floor(inv(3) + gx * inv(4) + gy * inv(5)).toInt
+                            if (sc < 0 || sc >= xSize || sr < 0 || sr >= ySize) outside += 1
+                            else if (vals(k) != srcVals(sr * xSize + sc)) badValue += 1
+                            else if (vals(k) == 0.0) zeros += 1
+                        }
+                        k += 1
+                    }
+                } finally RasterDriver.releaseDataset(chip)
+            }
+        } finally {
+            it.asInstanceOf[AutoCloseable].close()
+            RasterDriver.releaseDataset(src)
+        }
+        assert(chips > 1, s"expected several covering chips, got $chips")
+        assert(chipNoData == Set(Some(65535.0)), s"chip NoData values $chipNoData, expected 65535")
+        assert(filled > 0, "fixture must clip some pixels outside a hexagon")
+        assert(outside == 0, s"$outside valid chip pixels lie outside the source (clip fill read as data)")
+        assert(badValue == 0, s"$badValue valid chip pixels differ from the source (clip fill read as data)")
+        assert(zeros > 0, "the source's real 0 pixels must stay valid")
     }
 }

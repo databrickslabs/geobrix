@@ -297,6 +297,14 @@ object RasterTessellate {
         private var fetched  = false
         private var cc       = 0
         private var nextTile: (Any, Dataset, Map[String, String]) = _
+        // A source without NoData gets the dtype fallback, so the clip fill outside each cell reads as
+        // NoData rather than as valid zero pixels (the light tier does the same).
+        private val fillNoData: Option[Double] = {
+            val band = natives.workDs.GetRasterBand(1)
+            val nd = new Array[java.lang.Double](1)
+            band.GetNoDataValue(nd)
+            if (nd(0) != null) None else Some(GDAL.getNoDataConstant(band.getDataType))
+        }
 
         private def advance(): Unit = {
             fetched = true
@@ -310,7 +318,8 @@ object RasterTessellate {
                 if (isCellValid(grid, cellId)) {
                     val cellGeom = grid.cellIdToGeometry(cellId)
                     if (hasPositiveAreaOverlap(cellGeom, rasterFootprint)) {
-                        val (resDs, resMtd) = ClipToGeom.clip(natives.workDs, options, cellGeom, natives.gridSR)
+                        val (resDs, resMtd) =
+                            ClipToGeom.clip(natives.workDs, options, cellGeom, natives.gridSR, dstNoData = fillNoData)
                         if (resDs != null) {
                             // covering+sparse: drop chips whose clip is entirely NoData.
                             if (coverage == "sparse" && isAllNoData(resDs)) {

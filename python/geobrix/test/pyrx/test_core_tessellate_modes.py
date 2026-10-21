@@ -89,3 +89,50 @@ def test_covering_mode_is_overlap_set():
         for c in h3.polygon_to_cells_experimental(shp, 9, contain="overlap")
     }
     assert cells == oracle
+
+
+def test_covering_chips_of_a_source_without_nodata_mark_the_fill_as_nodata():
+    """Covering chips of a source without NoData carry the dtype fallback (65535).
+
+    The clip fill outside each hexagon is then NoData, not valid zero pixels: every
+    valid chip pixel is a source pixel with the source's value, and the source's
+    real zero rows stay valid.
+    """
+    size = 64
+    data = (np.arange(size * size, dtype="uint32") % 4000 + 1).astype("uint16")
+    data = data.reshape(size, size)
+    data[:4, :] = 0
+    prof = dict(
+        driver="GTiff",
+        height=size,
+        width=size,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(-0.1, 51.5, 0.002, 0.002),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(data, 1)
+        with mf.open() as ds:
+            inv = ~ds.transform
+            chips = list(
+                T.iter_tessellate(ds, 7, "h3", mode="covering", coverage="complete")
+            )
+    assert len(chips) > 1
+    filled = zeros = 0
+    for _, chip in chips:
+        with _serde.open_tile(chip) as c:
+            assert c.nodata == 65535.0
+            valid = c.read_masks(1) != 0
+            filled += int((~valid).sum())
+            rows, cols = np.nonzero(valid)
+            xs, ys = c.transform * (cols + 0.5, rows + 0.5)
+            sc, sr = inv * (xs, ys)
+            sr, sc = np.floor(sr).astype(int), np.floor(sc).astype(int)
+            assert ((sr >= 0) & (sr < size) & (sc >= 0) & (sc < size)).all()
+            values = c.read(1)[rows, cols]
+            assert (values == data[sr, sc]).all(), "a fill pixel reads as valid data"
+            zeros += int((values == 0).sum())
+    assert filled > 0, "fixture must clip some pixels outside a hexagon"
+    assert zeros >= 4 * size, "the real zero rows must stay valid"

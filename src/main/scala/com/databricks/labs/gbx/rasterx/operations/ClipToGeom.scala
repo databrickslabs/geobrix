@@ -14,13 +14,16 @@ import java.util.Locale
 /** Clips a raster to a JTS geometry via gdalwarp cutline; geometry is reprojected to raster CRS and buffered. */
 object ClipToGeom {
 
-    /** Clips the dataset to the geometry; returns (new Dataset, updated metadata). Caller must release the Dataset. */
+    /** Clips the dataset to the geometry; returns (new Dataset, updated metadata). Caller must release the Dataset.
+      * `dstNoData`, when given, fills the pixels outside the geometry and is declared on the output
+      * (`-dstnodata`); otherwise gdalwarp carries the source NoData, or fills with 0 when there is none. */
     def clip(
         ds: Dataset,
         options: Map[String, String],
         geometry: Geometry,
         geomSR: SpatialReference,
-        cutlineAllTouched: Boolean = true
+        cutlineAllTouched: Boolean = true,
+        dstNoData: Option[Double] = None
     ): (Dataset, Map[String, String]) = {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "_")
         val outShortName = ds.GetDriver().getShortName
@@ -29,6 +32,7 @@ object ClipToGeom {
 
         val cutlineToken = cutlineAllTouched.toString.toUpperCase(Locale.ROOT)
         val clipperFile = generateClipFile(geometry, geomSR, ds)
+        val dstNoDataFlag = dstNoData.map(nd => s" -dstnodata ${nd.toString}").getOrElse("")
 
         // For -wo consult https://gdal.org/doxygen/structGDALWarpOptions.html
         val result = GDALWarp.executeWarp(
@@ -37,7 +41,8 @@ object ClipToGeom {
           options,
           // -q flag for quiet, as there is CRS warning spam
           // we already ensured geoms are in Raster CRS
-          command = s"gdalwarp -q -wo CUTLINE_ALL_TOUCHED=$cutlineToken -cutline $clipperFile -crop_to_cutline -oo GEOM_POSSIBLE_NAMES=WKT"
+          command = s"gdalwarp -q -wo CUTLINE_ALL_TOUCHED=$cutlineToken -cutline $clipperFile -crop_to_cutline" +
+            s"$dstNoDataFlag -oo GEOM_POSSIBLE_NAMES=WKT"
         )
         cleanUpClipper(clipperFile)
         result

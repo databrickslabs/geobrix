@@ -23,7 +23,7 @@ _GDAL_TO_NP = {
 }
 
 
-def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
+def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None, nodata=None):
     """Clip a raster to a geometry; return GTiff bytes, or ``None`` on non-overlap.
 
     ``geom`` may be a shapely geometry (preferred — carries SRID via
@@ -41,6 +41,10 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
     distributed job, so we mirror that intent by returning ``None`` (a null tile)
     on non-overlap. Only that specific non-overlap condition is caught; unrelated
     errors propagate.
+
+    ``nodata``, when given, fills the pixels outside the geometry and is declared
+    on the output. Otherwise the fill is the source NoData, or 0 with no NoData
+    declared when the source has none.
     """
     if isinstance(geom, (bytes, bytearray)):
         geom = shapely.wkb.loads(bytes(geom))  # handles WKB and EWKB
@@ -69,7 +73,7 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
 
     try:
         out_image, out_transform = _rio_mask(
-            ds, [mask_shape], crop=True, all_touched=bool(all_touched)
+            ds, [mask_shape], crop=True, all_touched=bool(all_touched), nodata=nodata
         )
     except ValueError as exc:
         # rasterio.mask raises ValueError("Input shapes do not overlap raster.")
@@ -85,6 +89,8 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
         width=out_image.shape[2],
         transform=out_transform,
     )
+    if nodata is not None:
+        profile.update(nodata=nodata)
     return _comp.write_gtiff(profile, out_image)
 
 

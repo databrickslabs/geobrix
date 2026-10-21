@@ -318,7 +318,7 @@ def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
 
 
 def _chip_nodata(work_ds) -> float:
-    """NoData every centroid chip carries: the source's, else the dtype fallback."""
+    """NoData every chip carries: the source's, else the dtype fallback."""
     if work_ds.nodata is not None:
         return work_ds.nodata
     return fallback_nodata(work_ds.dtypes[0])
@@ -739,6 +739,9 @@ def iter_tessellate(
             and work_ds.crs is not None
             and dst_epsg != 4326
         )
+        # A source without NoData gets the dtype fallback, so the clip fill outside
+        # each cell reads as NoData rather than as valid zero pixels.
+        fill = _chip_nodata(work_ds)
 
         for cell in covered:
             if not _cell_is_valid(cell, grid, conf=conf):
@@ -756,7 +759,9 @@ def iter_tessellate(
             try:
                 # all_touched=True: boundary pixels touched by the cell edge are
                 # included in the chip, consistent with the covering selection.
-                clipped = edit.clip_to_geom(work_ds, cell_poly, all_touched=True)
+                clipped = edit.clip_to_geom(
+                    work_ds, cell_poly, all_touched=True, nodata=fill
+                )
             except ValueError:
                 # rasterio.mask raises ValueError when the shape does not overlap.
                 continue

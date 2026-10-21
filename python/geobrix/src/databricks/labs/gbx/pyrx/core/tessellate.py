@@ -21,10 +21,12 @@ import h3
 import numpy as np
 import shapely.wkb
 from rasterio.io import MemoryFile
-from rasterio.warp import transform_bounds, transform_geom
+from rasterio.warp import transform_geom
 from rasterio.windows import Window
-from shapely.geometry import Polygon, box, mapping, shape
+from shapely.geometry import Polygon, mapping, shape
+from shapely.geometry.polygon import orient
 
+from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
 from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
 from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
@@ -41,7 +43,7 @@ _VALID_GRIDS = frozenset({"h3", "quadbin", "bng", "custom"})
 
 
 def _has_positive_area_overlap(cell_poly, bbox_poly) -> bool:
-    """Covering keep-test: cell is emitted iff it has POSITIVE-AREA overlap with the raster bbox.
+    """Covering keep-test: cell is emitted iff it has POSITIVE-AREA overlap with the raster footprint.
 
     Mere boundary touch (a shared edge line or corner point) is NOT enough. On a grid-aligned
     tile (raster edges land exactly on cell boundaries) a fringe cell just outside the data
@@ -101,8 +103,6 @@ def _as_bng_dataset(ds):
     it is reprojected (nearest) via :func:`warp.reproject_to_srid` and the warped
     dataset is yielded and cleaned up.  Mirrors heavy ``warpToBng``.
     """
-    from databricks.labs.gbx.core.crs import authority_srid_of
-
     src_epsg = authority_srid_of(ds.crs)
     if src_epsg == _BNG_EPSG:
         yield ds
@@ -150,7 +150,10 @@ def _polyfill_cells(bbox_poly, resolution, grid: str, conf=None):
     """Return the iterable of raw cell ids covering *bbox_poly* for *grid*.
 
     ``bbox_poly`` must be a shapely geometry in the work CRS for the grid:
-    WGS84 for h3/quadbin, EPSG:27700 for bng, grid-native for custom.
+    WGS84 for h3/quadbin, EPSG:27700 for bng, grid-native for custom. It may be
+    the raster footprint quadrilateral (:func:`_footprint_polygon`): h3 and
+    quadbin enumerate its bounding box, bng and custom (whose footprint is an
+    axis-aligned rectangle) polyfill it directly.
     BNG and custom both apply the buffer-before-polyfill fix internally (custom
     via ``_custom.covering_candidate_cells``, mirroring heavy
     ``CustomGridSystem.coveringCandidateCells``) so a sub-cell pixel/bbox still
@@ -228,6 +231,40 @@ def _encode_cellid(cell, grid: str, conf=None):
         return _bng.format(cell)
 
 
+def _footprint_polygon(ds, work_ds, grid: str) -> Polygon:
+    """Raster footprint in the grid's work CRS: the region a covered cell must overlap.
+
+    Mirrors heavy ``BoundingBox.windowBBox``: the four raster corners
+    ``(c + x*a, f + y*e)`` for ``(x, y)`` in ``(0,0), (W,0), (W,H), (0,H)``, moved
+    into the work CRS and joined as a quadrilateral. The rotation terms of the
+    geotransform (``b``/``d``, gt2/gt4) are ignored, exactly as heavy ignores them.
+    Under a projected raster CRS the reprojected corners form a slanted quadrilateral,
+    NOT the axis-aligned lon/lat box of ``transform_bounds``, so a cell that overlaps
+    only the box corner and not the raster is correctly rejected.
+
+    Work CRS per grid: h3/quadbin WGS84 (corners reprojected unless the raster is
+    already EPSG:4326 or has no CRS, in which case they are used as-is); bng the
+    EPSG:27700 *work_ds* corners; custom the grid-native *ds* corners. The result is
+    oriented counter-clockwise, as heavy's is.
+    """
+    src = work_ds if grid == "bng" else ds
+    t = src.transform
+    width, height = src.width, src.height
+    xs = [t.c + x * t.a for x in (0, width, width, 0)]
+    ys = [t.f + y * t.e for y in (0, 0, height, height)]
+    if (
+        grid in ("h3", "quadbin")
+        and ds.crs is not None
+        and authority_srid_of(ds.crs) != 4326
+    ):
+        xs, ys = get_transformer(ds.crs, _WGS84).transform(xs, ys)
+        if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
+            raise ValueError(
+                "tessellate: raster corners cannot be transformed to EPSG:4326"
+            )
+    return orient(Polygon(zip(xs, ys)), 1.0)
+
+
 def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
     """Return True when no pixel of the GTiff chip is valid in any band.
 
@@ -256,8 +293,6 @@ def _empty_chip_builder(work_ds, grid: str, conf=None):
     profile and its all-NoData pixel. ``build`` then does only the per-cell work.
     See :func:`_build_empty_chip` for the placement rule.
     """
-    from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
-
     to_work = None
     if (
         grid in ("h3", "quadbin")
@@ -326,8 +361,6 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
     ys = np.asarray(ys, dtype="float64")
 
     if grid in ("h3", "quadbin"):
-        from databricks.labs.gbx.core.crs import authority_srid_of
-
         dst_epsg = authority_srid_of(work_ds.crs)
         # Reproject when the raster HAS a CRS and it isn't already WGS84.
         # Gate on CRS PRESENCE (work_ds.crs is not None), not EPSG-authority
@@ -430,9 +463,10 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
 
     ``conf`` is a ``CustomGridConf`` instance when ``grid="custom"``.
 
-    CF3 guard: when ``ds.crs is None`` (CRS-less raster), ``ds.bounds`` are used
-    directly as grid-native bounds instead of calling ``transform_bounds`` (which
-    raises on a None CRS).
+    Covered cells are kept against the raster footprint of
+    :func:`_footprint_polygon` (heavy's reprojected-corner quadrilateral), not
+    the axis-aligned lon/lat box of the raster. CF3 guard: a CRS-less raster
+    (``ds.crs is None``) uses its corners as grid-native coordinates.
     """
     centroid_ids = set()
     for cellid, raster_bytes in _centroid_chips_generic(
@@ -443,22 +477,14 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
     # Compute covering set to find covered-but-empty cells.
     _ctx = _as_bng_dataset(ds) if grid == "bng" else nullcontext(ds)
     with _ctx as work_ds:
-        if grid in ("bng", "custom"):
-            # BNG: work_ds already EPSG:27700; custom: grid-native coords.
-            west, south, east, north = work_ds.bounds
-        elif ds.crs is None:
-            # CF3 guard (~L344): CRS-less raster — use bounds directly (grid-native).
-            west, south, east, north = ds.bounds
-        else:
-            west, south, east, north = transform_bounds(ds.crs, _WGS84, *ds.bounds)
-        bbox_poly = box(west, south, east, north)
-        covered = _polyfill_cells(bbox_poly, resolution, grid, conf=conf)
+        footprint = _footprint_polygon(ds, work_ds, grid)
+        covered = _polyfill_cells(footprint, resolution, grid, conf=conf)
         build_empty = _empty_chip_builder(work_ds, grid, conf=conf)
         for cell in covered:
             if not _cell_is_valid(cell, grid, conf=conf):
                 continue
             cell_poly = _cell_geom(cell, grid, conf=conf)
-            if not _has_positive_area_overlap(cell_poly, bbox_poly):
+            if not _has_positive_area_overlap(cell_poly, footprint):
                 continue
             encoded = _encode_cellid(cell, grid, conf=conf)
             if encoded not in centroid_ids:
@@ -516,9 +542,10 @@ def iter_tessellate(
         ``cellid`` is a signed int64 for h3, quadbin, and custom; a BNG String
         id (e.g. ``"TQ38"``) for bng.
 
-    CF3 guard: when ``ds.crs is None``, the raster bounds are used directly as
-    grid-native bounds for the covering/centroid-complete polyfill instead of
-    calling ``transform_bounds`` (which raises on a None CRS).
+    Covering and centroid+complete keep a covered cell only if it overlaps the
+    raster footprint of :func:`_footprint_polygon` (heavy's reprojected-corner
+    quadrilateral). CF3 guard: when ``ds.crs is None`` the raster corners are used
+    directly as grid-native coordinates.
     """
     if grid not in _VALID_GRIDS:
         raise ValueError(
@@ -551,25 +578,15 @@ def iter_tessellate(
 
     # ---- covering mode -------------------------------------------------------
     # BNG: warp the dataset to EPSG:27700 and operate in that CRS throughout.
-    # H3 / quadbin: use the original dataset; bbox/polyfill/keep-test live in
+    # H3 / quadbin: use the original dataset; footprint/polyfill/keep-test live in
     # WGS84; cell polys are reprojected to ds.crs only for the rasterio clip.
     # Custom: use the original dataset in its grid-native CRS.
     _ctx = _as_bng_dataset(ds) if grid == "bng" else nullcontext(ds)
 
     with _ctx as work_ds:
-        if grid in ("bng", "custom"):
-            # BNG: work_ds already EPSG:27700; custom: grid-native coords.
-            west, south, east, north = work_ds.bounds
-        elif ds.crs is None:
-            # CF3 guard (~L441): CRS-less raster — use bounds directly (grid-native).
-            west, south, east, north = ds.bounds
-        else:
-            west, south, east, north = transform_bounds(ds.crs, _WGS84, *ds.bounds)
-        bbox_poly = box(west, south, east, north)
+        footprint = _footprint_polygon(ds, work_ds, grid)
 
-        covered = _polyfill_cells(bbox_poly, resolution, grid, conf=conf)
-
-        from databricks.labs.gbx.core.crs import authority_srid_of
+        covered = _polyfill_cells(footprint, resolution, grid, conf=conf)
 
         dst_epsg = authority_srid_of(work_ds.crs)
         # Custom and BNG never need cell-polygon reprojection (both are grid-native).
@@ -591,7 +608,7 @@ def iter_tessellate(
             # (zero pixel overlap on grid-aligned tiles); keep real areal overlap
             # including all-NoData-but-overlapping cells.  The clip below remains
             # the pixel-level safety net.
-            if not _has_positive_area_overlap(cell_poly, bbox_poly):
+            if not _has_positive_area_overlap(cell_poly, footprint):
                 continue
             if need_reproject:
                 geom = transform_geom(_WGS84, work_ds.crs, mapping(cell_poly))

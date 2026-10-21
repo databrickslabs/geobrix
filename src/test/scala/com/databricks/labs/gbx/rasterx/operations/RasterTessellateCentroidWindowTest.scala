@@ -38,7 +38,8 @@ import scala.collection.mutable
   *  - the tessellation owns its input: it is released when the iterator ends or is closed, or when
   *    setup fails (covering and centroid);
   *  - covering chips of a source without NoData carry the dtype constant, so the clip fill is NoData,
-  *    and a source's own mask band still masks its pixels;
+  *    and a source's own mask band still masks its pixels, also under hexagon cutlines and on a source
+  *    that declares NoData, with the source's bands, type and chip windows;
   *  - the BNG warp of a source without NoData marks its fill as NoData (the dtype constant), so no
   *    valid chip pixel lies outside the source footprint and real source pixels equal to the constant
   *    are NoData too.
@@ -739,9 +740,9 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
     }
 
     test("(r) covering on a source without NoData but with its own mask: masked pixels stay NoData") {
-        // 16x16 EPSG:4326 at 0.01 deg from lon -0.13: quadbin res-8 cells split it on a pixel edge (lon 0),
-        // so gdalwarp applies the source mask under the cell cutlines. Rows 2-3 are masked; row 6 holds real
-        // 65535s (the uint16 fallback), which make gdalwarp drop the mask once a source NoData is set.
+        // 16x16 EPSG:4326 at 0.01 deg from lon -0.13: quadbin res-8 cells split it on a pixel edge (lon 0).
+        // Rows 2-3 are masked; row 6 holds real 65535s (the uint16 fallback), which make gdalwarp drop the
+        // mask once a source NoData is set, and which must be NoData in the chips, as on an unmasked source.
         val gt = Array(-0.13, 0.01, 0.0, 51.55, 0.0, -0.01)
         val src = buildRamp(mem("r.tif"), 16, 16, 1, gdalconstConstants.GDT_UInt16, gt)
         fillRect(src, 1, 0, 6, 16, 1, 65535.0)
@@ -754,7 +755,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         val (srcVals, _) = readBand(src, 1)
         val input = handOff(src)
         assert(input.GetRasterBand(1).GetMaskFlags() == gdalconstConstants.GMF_PER_DATASET, "fixture needs a per-dataset mask")
-        var (chips, maskedValid, badValue, validSeen) = (0, 0, 0, 0)
+        var (chips, maskedValid, badValue, validSeen, fallbackValid) = (0, 0, 0, 0, 0)
         val it = RasterTessellate.tessellateQuadbinIter(input, Map.empty[String, String], 8, "covering", "complete")
         try {
             while (it.hasNext) {
@@ -775,8 +776,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
                             if (sc >= 0 && sc < xSize && sr >= 0 && sr < ySize) {
                                 val p = sr * xSize + sc
                                 if (srcMask(p) == 0) maskedValid += 1
-                                // a masked source keeps gdalwarp's handling of its fallback-valued pixels
-                                else if (srcVals(p) == 65535.0) ()
+                                else if (srcVals(p) == 65535.0) fallbackValid += 1
                                 else if (vals(k) != srcVals(p)) badValue += 1
                                 else validSeen += 1
                             }
@@ -791,8 +791,120 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         }
         assert(chips > 1, s"expected several covering chips, got $chips")
         assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the covering chips")
+        assert(fallbackValid == 0, s"$fallbackValid source pixels equal to 65535 stayed valid (gdalwarp moved them)")
         assert(badValue == 0, s"$badValue valid chip pixels differ from the source")
         assert(validSeen > 0, "the unmasked pixels must stay valid")
+    }
+
+    /** A 64x64 uint16 EPSG:4326 ramp with `bands` bands, the source NoData `declared` (or none) and, when
+      * `masked`, an internal per-dataset mask that hides rows 10-29 of columns 12-43. Row 40 holds real
+      * 65535s (the uint16 fallback); with `declared`, the ramp's pixels equal to it are real NoData. Returns
+      * the copy a tessellation owns (the GTiff reopened as tiles are), its values per band and the mask. */
+    private def maskedCoveringSource(
+        bands: Int,
+        declared: Option[Double],
+        masked: Boolean
+    ): (Dataset, Seq[Array[Double]], Array[Byte]) = {
+        val n = 64
+        val src = buildRamp(mem(s"w_${bands}_${declared.isDefined}_$masked.tif"), n, n, bands, gdalconstConstants.GDT_UInt16, gt4326(n))
+        (1 to bands).foreach(b => fillRect(src, b, 0, 40, n, 1, 65535.0))
+        declared.foreach(nd => (1 to bands).foreach(b => src.GetRasterBand(b).SetNoDataValue(nd)))
+        val srcMask = Array.tabulate[Byte](n * n) { i =>
+            val (r, c) = (i / n, i % n)
+            if (masked && r >= 10 && r <= 29 && c >= 12 && c <= 43) 0.toByte else 255.toByte
+        }
+        if (masked) {
+            src.CreateMaskBand(gdalconstConstants.GMF_PER_DATASET)
+            src.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, n, n, srcMask)
+        }
+        src.FlushCache()
+        val vals = (1 to bands).map(b => readBand(src, b)._1)
+        val input = handOff(src)
+        RasterDriver.releaseDataset(src)
+        val flags = input.GetRasterBand(1).GetMaskFlags()
+        if (masked) assert(flags == gdalconstConstants.GMF_PER_DATASET, s"fixture needs a per-dataset mask, flags $flags")
+        else assert((flags & gdalconstConstants.GMF_PER_DATASET) == 0, s"twin fixture must have no mask band, flags $flags")
+        (input, vals, srcMask)
+    }
+
+    /** One covering chip, as compared below: band count, band data types, NoData per band, size and
+      * geotransform. */
+    private def chipLayout(chip: Dataset): (Int, Seq[Int], Seq[Option[Double]], Int, Int, Seq[Double]) = {
+        val bands = 1 to chip.GetRasterCount()
+        (
+          chip.GetRasterCount(),
+          bands.map(b => chip.GetRasterBand(b).getDataType),
+          bands.map(b => noDataOf(chip, b)),
+          chip.getRasterXSize,
+          chip.getRasterYSize,
+          chip.GetGeoTransform.toSeq
+        )
+    }
+
+    for ((bands, declared) <- Seq((1, None), (3, None), (1, Some(7.0)))) {
+        val what = declared.fold("without NoData")(nd => s"with NoData ${nd.toInt}")
+        test(s"(w) h3 covering of a $bands-band source $what and its own mask: masked pixels stay NoData under hexagon cutlines") {
+            // H3 cells are hexagons, which gdalwarp rasterizes all-touched as cutlines; it then ignored a
+            // per-dataset source mask (and a source NoData makes it ignore the mask under any cutline).
+            val n = 64
+            val expectedNoData = declared.getOrElse(65535.0)
+            val inv = invert(gt4326(n))
+            val (input, srcVals, srcMask) = maskedCoveringSource(bands, declared, masked = true)
+            val (twin, _, _) = maskedCoveringSource(bands, declared, masked = false)
+            def layouts(ds: Dataset)(each: Dataset => Unit): Map[Long, (Int, Seq[Int], Seq[Option[Double]], Int, Int, Seq[Double])] = {
+                val out = mutable.Map.empty[Long, (Int, Seq[Int], Seq[Option[Double]], Int, Int, Seq[Double])]
+                val it = RasterTessellate.tessellateH3Iter(ds, Map.empty[String, String], Res, "covering", "complete")
+                try {
+                    while (it.hasNext) {
+                        val (cell, chip, _) = it.next()
+                        try {
+                            out(cell) = chipLayout(chip)
+                            each(chip)
+                        } finally RasterDriver.releaseDataset(chip)
+                    }
+                } finally it.asInstanceOf[AutoCloseable].close()
+                out.toMap
+            }
+            var (maskedValid, noDataValid, badValue, outside, validSeen) = (0L, 0L, 0L, 0L, 0L)
+            val masked = layouts(input) { chip =>
+                val cgt = chip.GetGeoTransform
+                val w = chip.getRasterXSize
+                (1 to chip.GetRasterCount()).foreach { b =>
+                    val (vals, mask) = readBand(chip, b)
+                    var k = 0
+                    while (k < vals.length) {
+                        if (mask(k) != 0) {
+                            val (i, j) = (k % w, k / w)
+                            val gx = cgt(0) + (i + 0.5) * cgt(1) + (j + 0.5) * cgt(2)
+                            val gy = cgt(3) + (i + 0.5) * cgt(4) + (j + 0.5) * cgt(5)
+                            val sc = math.floor(inv(0) + gx * inv(1) + gy * inv(2)).toInt
+                            val sr = math.floor(inv(3) + gx * inv(4) + gy * inv(5)).toInt
+                            if (sc < 0 || sc >= n || sr < 0 || sr >= n) outside += 1
+                            else {
+                                val p = sr * n + sc
+                                if (srcMask(p) == 0) maskedValid += 1
+                                else if (srcVals(b - 1)(p) == expectedNoData) noDataValid += 1
+                                else if (vals(k) != srcVals(b - 1)(p)) badValue += 1
+                                else validSeen += 1
+                            }
+                        }
+                        k += 1
+                    }
+                }
+            }
+            val unmasked = layouts(twin)(_ => ())
+            assert(masked.size > 10, s"expected many hexagon chips, got ${masked.size}")
+            assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the covering chips")
+            assert(noDataValid == 0, s"$noDataValid source pixels equal to the NoData $expectedNoData stayed valid")
+            assert(outside == 0, s"$outside valid chip pixels lie outside the source (clip fill read as data)")
+            assert(badValue == 0, s"$badValue valid chip pixels differ from the source")
+            assert(validSeen > 0, "the unmasked pixels must stay valid")
+            val expectedLayout = (bands, Seq.fill(bands)(gdalconstConstants.GDT_UInt16), Seq.fill(bands)(Some(expectedNoData)))
+            val wrongLayout = masked.collect { case (c, l) if (l._1, l._2, l._3) != expectedLayout => c -> l }
+            assert(wrongLayout.isEmpty, s"chips must keep the source's bands, type and NoData $expectedLayout: ${wrongLayout.take(3)}")
+            // the mask changes which pixels are valid, never which cells are emitted or a chip's window
+            assert(masked == unmasked, "the masked source's chips differ in cells, size or geotransform from its unmasked twin")
+        }
     }
 
     /** Valid chip pixels of a BNG tessellation of the uint16 source below, split into `(valid, invented,

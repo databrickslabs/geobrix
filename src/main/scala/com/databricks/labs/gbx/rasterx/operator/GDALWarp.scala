@@ -27,20 +27,26 @@ object GDALWarp {
 
     /** Warps dss to outputPath; appends options and injects SRS if needed. Returns (Dataset, metadata).
       * `extraArgs` are appended as given, one argument each: unlike `command`, they are not split on
-      * spaces, so a value that holds spaces (a per-band `-srcnodata` list) stays one argument. */
+      * spaces, so a value that holds spaces (a per-band `-srcnodata` list) stays one argument. `like`,
+      * when given, stands for the input in the write options and the metadata (its bands pick the
+      * predictor, its SRS, driver and description are recorded): for a caller that warps an in-memory
+      * view of a dataset rather than the dataset itself. */
     def executeWarp(
         outputPath: String,
         dss: Array[Dataset],
         options: Map[String, String],
         command: String,
-        extraArgs: Seq[String] = Seq.empty
+        extraArgs: Seq[String] = Seq.empty,
+        like: Dataset = null
     ): (Dataset, Map[String, String]) = {
         require(command.startsWith("gdalwarp"), "Not a valid GDAL Warp command.")
 
-        val effectiveCommand = OperatorOptions.appendOptions(command, options, dss.head)
+        val ref = if (like != null) like else dss.head
+        val parents = if (like != null) Array(like) else dss
+        val effectiveCommand = OperatorOptions.appendOptions(command, options, ref)
         val warpOptionsVec = OperatorOptions.parseOptions(effectiveCommand)
         extraArgs.foreach(warpOptionsVec.add)
-        val adjustedVec = addSrcSRS(warpOptionsVec, dss.head)
+        val adjustedVec = addSrcSRS(warpOptionsVec, ref)
         val warpOptions = new WarpOptions(adjustedVec)
         val result = gdal.Warp(outputPath, dss, warpOptions)
         // Format will always be the same as the first raster
@@ -49,12 +55,12 @@ object GDALWarp {
         val newOptions = Map(
           "path" -> outputPath,
           "parentPath" -> options.getOrElse("path", ""),
-          "driver" -> options.getOrElse("driver", dss.head.GetDriver().getShortName),
+          "driver" -> options.getOrElse("driver", ref.GetDriver().getShortName),
           "last_command" -> (effectiveCommand +: extraArgs.map(quoteIfSpaced)).mkString(" "),
           "last_error" -> errorMsg,
-          "all_parents" -> dss.map(_.GetDescription()).mkString(";"), // TODO: this should be a union of all parents of all dss
+          "all_parents" -> parents.map(_.GetDescription()).mkString(";"), // TODO: this should be a union of all parents of all dss
           "size" -> size.toString,
-          "format" -> dss.head.GetDriver().getShortName,
+          "format" -> ref.GetDriver().getShortName,
           "compression" -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped" -> "false",
           "isSubset" -> "false"

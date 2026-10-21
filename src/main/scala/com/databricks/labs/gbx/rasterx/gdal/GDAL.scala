@@ -69,6 +69,21 @@ object GDAL {
         WarpNoData(perBand.collect { case (None, band) => band }, list)
     }
 
+    /** True when `band` is masked by its own per-dataset mask band that is not an alpha band (an internal or
+      * external GTiff mask, for example). gdalwarp ignores such a mask once a source NoData is set, and under
+      * a cutline it has to rasterize; it always applies an alpha band. */
+    def hasOwnMask(band: org.gdal.gdal.Band): Boolean = {
+        val flags = band.GetMaskFlags()
+        (flags & GMF_PER_DATASET) != 0 && (flags & GMF_ALPHA) == 0
+    }
+
+    /** True when `ds` has an alpha band, or a band masked by one: gdalwarp carries the alpha band and
+      * applies it as the source mask. */
+    def hasAlpha(ds: org.gdal.gdal.Dataset): Boolean =
+        (1 to ds.GetRasterCount()).map(ds.GetRasterBand).exists { b =>
+            b.GetColorInterpretation == GCI_AlphaBand || (b.GetMaskFlags() & GMF_ALPHA) != 0
+        }
+
     /**
       * gdalwarp arguments that make the source pixels equal to a band's fill value NoData, for the bands of
       * `ds` that declare no NoData: `-srcnodata <one value per band>` (a declared band keeps its own value)
@@ -76,20 +91,19 @@ object GDAL {
       * as NoData only when every band matches). Without them, gdalwarp `-dstnodata X` moves a valid source
       * pixel equal to X to X +/- 1 and keeps it valid. `fill` gives an undeclared band's value, by default
       * [[getNoDataConstant]] for its type. Empty when every band declares NoData, or when a band without
-      * NoData has its own (non-alpha) per-dataset mask: a source NoData makes gdalwarp drop that mask, so
-      * masked pixels would turn valid (an alpha band still masks). The list is ONE argument: pass it as a
-      * warp extra argument, not through a space-split command string.
+      * NoData has its own mask ([[hasOwnMask]]): a source NoData makes gdalwarp drop that mask, so masked
+      * pixels would turn valid (an alpha band still masks). `maskAsAlpha` says the warp reads that mask as
+      * a source alpha band instead (the mask view of [[com.databricks.labs.gbx.rasterx.operations.ClipToGeom]]),
+      * which a source NoData does not drop, so the arguments are given then. The list is ONE argument: pass
+      * it as a warp extra argument, not through a space-split command string.
       */
     def srcNoDataArgs(
         ds: org.gdal.gdal.Dataset,
-        fill: org.gdal.gdal.Band => Double = b => getNoDataConstant(b.getDataType)
+        fill: org.gdal.gdal.Band => Double = b => getNoDataConstant(b.getDataType),
+        maskAsAlpha: Boolean = false
     ): Seq[String] = {
         val nd = warpNoData(ds, fill)
-        def ownMask(band: org.gdal.gdal.Band): Boolean = {
-            val flags = band.GetMaskFlags()
-            (flags & GMF_PER_DATASET) != 0 && (flags & GMF_ALPHA) == 0
-        }
-        if (nd.undeclared.isEmpty || nd.undeclared.exists(ownMask)) Seq.empty
+        if (nd.undeclared.isEmpty || (!maskAsAlpha && nd.undeclared.exists(hasOwnMask))) Seq.empty
         else Seq("-srcnodata", nd.list, "-wo", "UNIFIED_SRC_NODATA=NO")
     }
 

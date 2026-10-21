@@ -1430,10 +1430,10 @@ def test_bng_tessellate_rgba_parity(spark_with_jar, assignment):
         assert zero_rgb_off == 0, f"{label}: {tier} {zero_rgb_off} zeros off row 20"
 
 
-def _masked_uint16_raster(*, epsg, origin, px, n):
-    """n×n uint16 ramp (1..200), NO declared NoData, real 65535s (the fallback) in
-    row 6, and an internal per-dataset mask that hides rows 2-3 and the left half of
-    row 5."""
+def _masked_uint16_raster(*, epsg, origin, px, n, nodata=None):
+    """n×n uint16 ramp (1..200), real 65535s (the fallback) in row 6, and an internal
+    per-dataset mask that hides rows 2-3 and the left half of row 5. The source
+    declares ``nodata`` (none by default); the ramp holds pixels equal to it."""
     import rasterio
     from rasterio.enums import MaskFlags
     from rasterio.io import MemoryFile
@@ -1452,6 +1452,7 @@ def _masked_uint16_raster(*, epsg, origin, px, n):
         dtype="uint16",
         crs=f"EPSG:{epsg}",
         transform=from_origin(origin[0], origin[1], px, px),
+        nodata=nodata,
     )
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
         with MemoryFile() as mf:
@@ -1466,34 +1467,44 @@ def _masked_uint16_raster(*, epsg, origin, px, n):
             return mf.read(), data, mask == 0
 
 
-# h3 is left out: heavy clips hexagons with an all-touched cutline, and GDAL does
-# not apply a source mask band under such a cutline (a separate, known limitation).
-# The quadbin and BNG cells here split the raster on pixel edges, so gdalwarp
-# applies the source mask under their cutlines.
-@pytest.mark.parametrize("grid", ["bng", "quadbin"])
-def test_tessellate_covering_masked_source_parity(spark_with_jar, grid):
-    """Covering on a source without NoData but with its own mask band.
+# h3 cells are hexagons: heavy clips them with a cutline that GDAL rasterizes, and
+# under such a cutline gdalwarp ignores a source mask band unless the mask is handed
+# to it as an alpha band. The quadbin and BNG cells here split the raster on pixel
+# edges. The h3 case with a declared NoData is the mixed source: a source NoData
+# makes gdalwarp ignore the mask band under any cutline.
+_MASKED_COVERING_RES = {"h3": 7, "bng": 1, "quadbin": 8}
+
+
+@pytest.mark.parametrize(
+    "grid,nodata", [("h3", None), ("bng", None), ("quadbin", None), ("h3", 7.0)]
+)
+def test_tessellate_covering_masked_source_parity(spark_with_jar, grid, nodata):
+    """Covering on a source with its own mask band, without NoData or with one.
 
     The source's masked pixels stay NoData in both tiers' chips, and every other
     valid chip pixel carries the source value: the fallback NoData that covering
-    stamps must not override the source mask, also when the source holds pixels
-    equal to the fallback. Heavy keeps gdalwarp's handling of those
-    fallback-valued pixels on a masked source, so they are not compared.
+    stamps must not override the source mask. Source pixels equal to the chip
+    NoData (the fallback 65535, or the source's own NoData) are NoData in both
+    tiers, and both tiers' chips declare the same NoData.
     """
     spark = spark_with_jar
     sql_name, fn_name, is_bng = _TESS_CONFIG[grid]
     if is_bng:
         n = 8
         raster, data, masked = _masked_uint16_raster(
-            epsg=27700, origin=(530000.0, 181000.0), px=100.0, n=n
+            epsg=27700, origin=(530000.0, 181000.0), px=100.0, n=n, nodata=nodata
         )
     else:
         n = 16
         raster, data, masked = _masked_uint16_raster(
-            epsg=4326, origin=(-0.13, 51.55), px=0.01, n=n
+            epsg=4326, origin=(-0.13, 51.55), px=0.01, n=n, nodata=nodata
         )
-    resolution = _TESS_COVERING_RES[grid]
-    label = f"{grid} masked-source covering"
+    chip_nodata = 65535.0 if nodata is None else nodata
+    assert (
+        data == chip_nodata
+    ).any(), "fixture needs source pixels equal to the NoData"
+    resolution = _MASKED_COVERING_RES[grid]
+    label = f"{grid} masked-source covering (NoData {nodata})"
 
     def _id(cid):
         return _tess_id(cid, bng=is_bng)
@@ -1511,17 +1522,17 @@ def test_tessellate_covering_masked_source_parity(spark_with_jar, grid):
 
     src_tf = tp.source_transform(raster)
     for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+        nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
+        assert nodatas == {chip_nodata}, f"{label}: {tier} chip NoData {nodatas}"
         valid = {px for _, b, _ in rows for px in tp.chip_pixels(b, src_tf)}
         inside = [px for px in valid if 0 <= px[0] < n and 0 <= px[1] < n]
         shown = sorted(px for px in inside if masked[px[0], px[1]])[:5]
         assert not shown, f"{label}: {tier} masked source pixels are valid: {shown}"
+        kept = sorted(px for px in inside if data[px[0], px[1]] == chip_nodata)[:5]
+        assert not kept, f"{label}: {tier} pixels equal to the NoData are valid: {kept}"
         wrong = (
             sorted(px for px in valid if px not in inside)[:5]
-            + sorted(
-                px
-                for px in inside
-                if data[px[0], px[1]] != 65535 and px[2] != (float(data[px[0], px[1]]),)
-            )[:5]
+            + sorted(px for px in inside if px[2] != (float(data[px[0], px[1]]),))[:5]
         )
         assert (
             not wrong

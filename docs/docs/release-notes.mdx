@@ -292,8 +292,8 @@ formats.
   tessellation failed on it, and `rst_initnodata` set nothing), and a `uint8` source now gets 0.
   On an integer band without NoData, heavyweight `rst_initnodata` kept the pixels equal to the
   fallback as valid data with the value moved by one (a `uint8` 0 became 1); it now marks them
-  NoData, as the lightweight tier does. In the heavyweight tier, a source that carries its own
-  mask band keeps that mask, and its fallback-valued pixels keep the earlier handling. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the
+  NoData, as the lightweight tier does. In heavyweight `rst_initnodata`, a source that carries its
+  own mask band keeps that mask, and its fallback-valued pixels keep the earlier handling. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the
   `uint16` bands that pass through `rst_initnodata` now carry NoData 65535.
 - **BNG tessellation marks the warp fill as NoData.** `rst_bng_tessellate` first warps a source
   that is not in EPSG:27700 to it. For a source without NoData, both tiers filled the pixels
@@ -304,6 +304,17 @@ formats.
   transparent pixels. On a source with its own mask band (not an alpha band) the mask is kept, but
   real pixels equal to the fallback value shift by one and stay valid (65535 becomes 65534, a
   `uint8` 0 becomes 1); this is new for the BNG warp.
+- **Heavyweight covering keeps a source's own mask.** Some sources carry their own mask band
+  (not an alpha band), as JPEG-compressed aerial imagery often does. With
+  `assignment='covering'`, the heavyweight clip of each cell let the pixels that mask hides
+  through as valid data: for the hexagonal cells of `rst_h3_tessellate`, and for every grid when
+  the source also declares NoData. The lightweight tier already left them out. The heavyweight
+  clip now keeps the mask, so those pixels are NoData in both tiers, and source pixels equal to
+  the chip's NoData are NoData too, as on a source without a mask band, instead of shifting by
+  one. `rst_bng_tessellate` clips the EPSG:27700 warp of a source in another CRS, so its chips
+  follow that warp, and a source that also declares NoData loses its mask in the warp.
+  Heavyweight `rst_clip` also leaves the masked pixels out, filling them like the area outside
+  the geometry. A source with an alpha band is clipped as before.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

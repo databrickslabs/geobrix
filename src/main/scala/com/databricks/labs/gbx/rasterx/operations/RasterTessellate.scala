@@ -114,14 +114,8 @@ object RasterTessellate {
       * the alpha band, which already marks the fill and the transparent pixels, and a declared NoData would
       * shadow it. Both lists are ONE argument each, so these go through the unsplit warp extra arguments.
       */
-    private def bngFillArgs(ds: Dataset): Seq[String] = {
-        val bands = (1 to ds.GetRasterCount()).map(ds.GetRasterBand)
-        val hasAlpha = bands.exists { b =>
-            b.GetColorInterpretation == gdalconstConstants.GCI_AlphaBand ||
-                (b.GetMaskFlags() & gdalconstConstants.GMF_ALPHA) != 0
-        }
-        if (hasAlpha) Seq.empty else GDAL.dstNoDataArgs(ds) ++ GDAL.srcNoDataArgs(ds)
-    }
+    private def bngFillArgs(ds: Dataset): Seq[String] =
+        if (GDAL.hasAlpha(ds)) Seq.empty else GDAL.dstNoDataArgs(ds) ++ GDAL.srcNoDataArgs(ds)
 
     /**
       * Reproject `ds` to EPSG:27700 (nearest-neighbour) unless it is already 27700; returns

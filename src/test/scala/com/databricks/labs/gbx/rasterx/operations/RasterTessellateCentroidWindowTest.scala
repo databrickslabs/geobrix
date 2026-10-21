@@ -37,7 +37,8 @@ import scala.collection.mutable
   *    wraps in lon/lat fails up front;
   *  - the tessellation owns its input: it is released when the iterator ends or is closed, or when
   *    setup fails (covering and centroid);
-  *  - covering chips of a source without NoData carry the dtype constant, so the clip fill is NoData.
+  *  - covering chips of a source without NoData carry the dtype constant, so the clip fill is NoData,
+  *    and a source's own mask band still masks its pixels.
   *
   * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled. The
   * tessellation releases its input, so a test that keeps reading a fixture hands it a copy
@@ -732,5 +733,62 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         assert(badValue == 0, s"$badValue valid chip pixels differ from the source (clip fill read as data)")
         assert(fallbackValid == 0, s"$fallbackValid source pixels equal to 65535 stayed valid (gdalwarp moved them)")
         assert(zeros > 0, "the source's real 0 pixels must stay valid")
+    }
+
+    test("(r) covering on a source without NoData but with its own mask: masked pixels stay NoData") {
+        // 16x16 EPSG:4326 at 0.01 deg from lon -0.13: quadbin res-8 cells split it on a pixel edge (lon 0),
+        // so gdalwarp applies the source mask under the cell cutlines. Rows 2-3 are masked; row 6 holds real
+        // 65535s (the uint16 fallback), which make gdalwarp drop the mask once a source NoData is set.
+        val gt = Array(-0.13, 0.01, 0.0, 51.55, 0.0, -0.01)
+        val src = buildRamp(mem("r.tif"), 16, 16, 1, gdalconstConstants.GDT_UInt16, gt)
+        fillRect(src, 1, 0, 6, 16, 1, 65535.0)
+        src.CreateMaskBand(gdalconstConstants.GMF_PER_DATASET)
+        val srcMask = Array.tabulate[Byte](16 * 16)(i => if (i / 16 == 2 || i / 16 == 3) 0.toByte else 255.toByte)
+        src.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, 16, 16, srcMask)
+        src.FlushCache()
+        val (xSize, ySize) = (src.getRasterXSize, src.getRasterYSize)
+        val inv = invert(src.GetGeoTransform)
+        val (srcVals, _) = readBand(src, 1)
+        val input = handOff(src)
+        assert(input.GetRasterBand(1).GetMaskFlags() == gdalconstConstants.GMF_PER_DATASET, "fixture needs a per-dataset mask")
+        var (chips, maskedValid, badValue, validSeen) = (0, 0, 0, 0)
+        val it = RasterTessellate.tessellateQuadbinIter(input, Map.empty[String, String], 8, "covering", "complete")
+        try {
+            while (it.hasNext) {
+                val (_, chip, _) = it.next()
+                try {
+                    chips += 1
+                    val cgt = chip.GetGeoTransform
+                    val w = chip.getRasterXSize
+                    val (vals, mask) = readBand(chip, 1)
+                    var k = 0
+                    while (k < vals.length) {
+                        if (mask(k) != 0) {
+                            val (i, j) = (k % w, k / w)
+                            val gx = cgt(0) + (i + 0.5) * cgt(1) + (j + 0.5) * cgt(2)
+                            val gy = cgt(3) + (i + 0.5) * cgt(4) + (j + 0.5) * cgt(5)
+                            val sc = math.floor(inv(0) + gx * inv(1) + gy * inv(2)).toInt
+                            val sr = math.floor(inv(3) + gx * inv(4) + gy * inv(5)).toInt
+                            if (sc >= 0 && sc < xSize && sr >= 0 && sr < ySize) {
+                                val p = sr * xSize + sc
+                                if (srcMask(p) == 0) maskedValid += 1
+                                // a masked source keeps gdalwarp's handling of its fallback-valued pixels
+                                else if (srcVals(p) == 65535.0) ()
+                                else if (vals(k) != srcVals(p)) badValue += 1
+                                else validSeen += 1
+                            }
+                        }
+                        k += 1
+                    }
+                } finally RasterDriver.releaseDataset(chip)
+            }
+        } finally {
+            it.asInstanceOf[AutoCloseable].close()
+            RasterDriver.releaseDataset(src)
+        }
+        assert(chips > 1, s"expected several covering chips, got $chips")
+        assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the covering chips")
+        assert(badValue == 0, s"$badValue valid chip pixels differ from the source")
+        assert(validSeen > 0, "the unmasked pixels must stay valid")
     }
 }

@@ -55,8 +55,10 @@ object GDAL {
       * and `-wo UNIFIED_SRC_NODATA=NO`, so each band is judged on its own (GDAL otherwise treats a pixel
       * as NoData only when every band matches). Without them, gdalwarp `-dstnodata X` moves a valid source
       * pixel equal to X to X +/- 1 and keeps it valid. `fill` gives an undeclared band's value, by default
-      * [[getNoDataConstant]] for its type. Empty when every band declares NoData. The list is ONE argument:
-      * pass it as a warp extra argument, not through a space-split command string.
+      * [[getNoDataConstant]] for its type. Empty when every band declares NoData, or when a band without
+      * NoData has its own (non-alpha) per-dataset mask: a source NoData makes gdalwarp drop that mask, so
+      * masked pixels would turn valid (an alpha band still masks). The list is ONE argument: pass it as a
+      * warp extra argument, not through a space-split command string.
       */
     def srcNoDataArgs(
         ds: org.gdal.gdal.Dataset,
@@ -68,7 +70,12 @@ object GDAL {
             band.GetNoDataValue(nd)
             (Option(nd(0)).map(_.doubleValue()), band)
         }
-        if (perBand.forall(_._1.isDefined)) Seq.empty
+        val undeclared = perBand.collect { case (None, band) => band }
+        def ownMask(band: org.gdal.gdal.Band): Boolean = {
+            val flags = band.GetMaskFlags()
+            (flags & GMF_PER_DATASET) != 0 && (flags & GMF_ALPHA) == 0
+        }
+        if (undeclared.isEmpty || undeclared.exists(ownMask)) Seq.empty
         else {
             val values = perBand.map { case (declared, band) => declared.getOrElse(fill(band)) }
             val list = values.distinct match {

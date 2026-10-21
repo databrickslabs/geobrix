@@ -274,9 +274,10 @@ formats.
   instead of as valid zeros. The lightweight `rst_initnodata` and `rst_threshold` use the same
   table: a `uint16` source gets 65535, as in the heavyweight tier (`rst_threshold` and
   tessellation failed on it, and `rst_initnodata` set nothing), and a `uint8` source now gets 0.
-  On a band without NoData, heavyweight `rst_initnodata` kept the pixels equal to the fallback
-  as valid data with the value moved by one (a `uint8` 0 became 1); it now marks them NoData, as
-  the lightweight tier does. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the
+  On an integer band without NoData, heavyweight `rst_initnodata` kept the pixels equal to the
+  fallback as valid data with the value moved by one (a `uint8` 0 became 1); it now marks them
+  NoData, as the lightweight tier does. In the heavyweight tier, a source that carries its own
+  mask band keeps that mask, and its fallback-valued pixels keep the earlier handling. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the
   `uint16` bands that pass through `rst_initnodata` now carry NoData 65535.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources

@@ -1193,6 +1193,105 @@ def test_tessellate_without_nodata_parity(spark_with_jar, dtype, grid, assignmen
         ), f"{label}: chips hold {len(covered)} of {expected} pixels"
 
 
+def _masked_uint16_raster(*, epsg, origin, px, n):
+    """n×n uint16 ramp (1..200), NO declared NoData, real 65535s (the fallback) in
+    row 6, and an internal per-dataset mask that hides rows 2-3 and the left half of
+    row 5."""
+    import rasterio
+    from rasterio.enums import MaskFlags
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    data = (np.arange(n * n, dtype="uint32").reshape(n, n) % 200 + 1).astype("uint16")
+    data[6, :] = 65535
+    mask = np.full((n, n), 255, dtype="uint8")
+    mask[2:4, :] = 0
+    mask[5, : n // 2] = 0
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="uint16",
+        crs=f"EPSG:{epsg}",
+        transform=from_origin(origin[0], origin[1], px, px),
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**prof) as dst:
+                dst.write(data, 1)
+                dst.write_mask(mask)
+            with mf.open() as chk:
+                flags = chk.mask_flag_enums[0]
+                assert flags == [
+                    MaskFlags.per_dataset
+                ], "fixture needs a per-dataset mask"
+            return mf.read(), data, mask == 0
+
+
+# h3 is left out: heavy clips hexagons with an all-touched cutline, and GDAL does
+# not apply a source mask band under such a cutline (a separate, known limitation).
+# The quadbin and BNG cells here split the raster on pixel edges, so gdalwarp
+# applies the source mask under their cutlines.
+@pytest.mark.parametrize("grid", ["bng", "quadbin"])
+def test_tessellate_covering_masked_source_parity(spark_with_jar, grid):
+    """Covering on a source without NoData but with its own mask band.
+
+    The source's masked pixels stay NoData in both tiers' chips, and every other
+    valid chip pixel carries the source value: the fallback NoData that covering
+    stamps must not override the source mask, also when the source holds pixels
+    equal to the fallback. Heavy keeps gdalwarp's handling of those
+    fallback-valued pixels on a masked source, so they are not compared.
+    """
+    spark = spark_with_jar
+    sql_name, fn_name, is_bng = _TESS_CONFIG[grid]
+    if is_bng:
+        n = 8
+        raster, data, masked = _masked_uint16_raster(
+            epsg=27700, origin=(530000.0, 181000.0), px=100.0, n=n
+        )
+    else:
+        n = 16
+        raster, data, masked = _masked_uint16_raster(
+            epsg=4326, origin=(-0.13, 51.55), px=0.01, n=n
+        )
+    resolution = _TESS_COVERING_RES[grid]
+    label = f"{grid} masked-source covering"
+
+    def _id(cid):
+        return _tess_id(cid, bng=is_bng)
+
+    light_rows = tp.light_chips(
+        spark, raster, sql_name, resolution, "covering", "complete", _id
+    )
+    heavy_rows = tp.heavy_chips(
+        spark, raster, fn_name, resolution, "covering", "complete", _id
+    )
+    assert light_rows, f"{label}: light emitted no chips"
+    assert not tp.error_rows(light_rows), f"{label}: light error rows"
+    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
+    assert len(light_rows) == len(heavy_rows), f"{label} row-count mismatch"
+
+    src_tf = tp.source_transform(raster)
+    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+        valid = {px for _, b, _ in rows for px in tp.chip_pixels(b, src_tf)}
+        inside = [px for px in valid if 0 <= px[0] < n and 0 <= px[1] < n]
+        shown = sorted(px for px in inside if masked[px[0], px[1]])[:5]
+        assert not shown, f"{label}: {tier} masked source pixels are valid: {shown}"
+        wrong = (
+            sorted(px for px in valid if px not in inside)[:5]
+            + sorted(
+                px
+                for px in inside
+                if data[px[0], px[1]] != 65535 and px[2] != (float(data[px[0], px[1]]),)
+            )[:5]
+        )
+        assert (
+            not wrong
+        ), f"{label}: {tier} valid chip pixels not from the source: {wrong}"
+        assert inside, f"{label}: {tier} chips hold no valid pixel"
+
+
 # ---------------------------------------------------------------------------
 # Regression: 2-arg default for rst_h3_tessellate == centroid + complete
 # ---------------------------------------------------------------------------

@@ -291,6 +291,11 @@ formats.
   NoData, as the lightweight tier does. In the heavyweight tier, a source that carries its own
   mask band keeps that mask, and its fallback-valued pixels keep the earlier handling. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the
   `uint16` bands that pass through `rst_initnodata` now carry NoData 65535.
+- **BNG tessellation marks the warp fill as NoData.** `rst_bng_tessellate` first warps a source
+  that is not in EPSG:27700 to it. For a source without NoData, both tiers filled the pixels
+  outside the source's footprint with valid zeros, which reached the chips of the edge cells as
+  data. That fill is now NoData, with the fallback value above, and source pixels equal to that
+  value are NoData too. A source's own NoData is kept, and so is a mask band it carries.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

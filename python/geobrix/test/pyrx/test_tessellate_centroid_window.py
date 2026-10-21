@@ -3,7 +3,9 @@
 Each centroid chip covers only the bounding pixel window of the pixels assigned to
 its cell (not the whole source raster), synthetic covered-but-empty chips are 1x1 at
 the pixel holding the cell's centroid, validity comes from the mask bands (NaN-safe),
-and a source without declared NoData gets the shared dtype fallback.
+and a source without declared NoData gets the shared dtype fallback. The BNG warp of
+such a source marks its fill as NoData, so no valid chip pixel is invented outside
+the source footprint.
 """
 
 import math
@@ -11,6 +13,7 @@ import math
 import h3
 import numpy as np
 import pytest
+import rasterio
 import shapely.geometry
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine, from_bounds
@@ -350,3 +353,135 @@ def test_empty_chip_of_a_source_without_nodata_uses_the_uint16_fallback():
             assert c.nodata == 65535.0
             assert (c.width, c.height) == (1, 1)
             assert not (c.read_masks() != 0).any()
+
+
+_FILL_N = 40
+# Norfolk, far from the 27700 central meridian (-2): the warp rotates the grid ~2.4
+# degrees, so the EPSG:27700 raster has corners outside the source footprint.
+_FILL_BOUNDS = (1.00, 52.40, 1.20, 52.60)
+
+
+def _bng_fill_source(*, nodata=None, masked=False):
+    """uint16 EPSG:4326 source: pixel p holds p + 1 (no zeros), row 3 holds 65535.
+
+    ``masked`` adds an internal mask hiding rows 10-11 and leaves out the 65535 row:
+    on a masked source the warp keeps its own handling of fallback-valued pixels
+    (they are not compared, as in the cross-tier masked-source test).
+    """
+    n = _FILL_N
+    data = (np.arange(n * n, dtype="uint32").reshape(n, n) + 1).astype("uint16")
+    if not masked:
+        data[3, :] = 65535
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_bounds(*_FILL_BOUNDS, n, n),
+    )
+    if nodata is not None:
+        prof["nodata"] = nodata
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**prof) as d:
+                d.write(data, 1)
+                if masked:
+                    mask = np.full((n, n), 255, dtype="uint8")
+                    mask[10:12, :] = 0
+                    d.write_mask(mask)
+            return mf.read(), data
+
+
+def _bng_fill_stats(b, data, assignment, coverage):
+    """``(valid, invented, fallback_valid, chip_nodatas)`` of the BNG chips of ``b``.
+
+    A valid chip pixel is invented when its value is not a source value (a 0, or the
+    fallback) or its centre is not on the source pixel that value names. Value ``v``
+    sits at source row/col ``divmod(v - 1, n)``.
+    """
+    n = _FILL_N
+    to_src = get_transformer(27700, 4326).transform
+    valid = invented = fallback_valid = 0
+    nodatas = set()
+    with MemoryFile(b) as mf, mf.open() as ds:
+        inv = ~ds.transform
+        for _, cb in T.iter_tessellate(
+            ds, 3, "bng", mode=assignment, coverage=coverage
+        ):
+            m, c = _open(cb)
+            with m, c:
+                nodatas.add(c.nodata)
+                vals = c.read(1)
+                rr, cc = np.nonzero(c.read_masks(1) != 0)
+                xs, ys = c.transform * (cc + 0.5, rr + 0.5)
+                for r, k, x, y in zip(rr, cc, xs, ys):
+                    valid += 1
+                    v = int(vals[r, k])
+                    if v == 65535:
+                        fallback_valid += 1
+                        continue
+                    if not 1 <= v <= n * n:
+                        invented += 1
+                        continue
+                    lon, lat = to_src(float(x), float(y))
+                    sc, sr = inv * (lon, lat)
+                    er, ec = divmod(v - 1, n)
+                    # 1.5 px of slack for the warp's approximate transformer at the edge
+                    if abs(sc - (ec + 0.5)) > 1.5 or abs(sr - (er + 0.5)) > 1.5:
+                        invented += 1
+    return valid, invented, fallback_valid, nodatas
+
+
+@pytest.mark.parametrize(
+    "assignment,coverage",
+    [("centroid", "sparse"), ("centroid", "complete"), ("covering", "sparse")],
+)
+def test_bng_warp_of_a_source_without_nodata_marks_fill_as_nodata(assignment, coverage):
+    """The warp fill outside the source footprint is NoData, not valid zero pixels."""
+    b, data = _bng_fill_source()
+    valid, invented, fallback_valid, nodatas = _bng_fill_stats(
+        b, data, assignment, coverage
+    )
+    assert valid > 0, "the chips hold no valid pixel"
+    assert invented == 0, f"{invented} of {valid} valid chip pixels are warp fill (0)"
+    assert fallback_valid == 0, f"{fallback_valid} pixels equal to 65535 stayed valid"
+    assert nodatas == {65535.0}
+
+
+def test_bng_warp_keeps_a_sources_own_nodata():
+    """A source that declares NoData is warped with it: chips carry it, fill is NoData."""
+    b, data = _bng_fill_source(nodata=0)
+    valid, invented, fallback_valid, nodatas = _bng_fill_stats(
+        b, data, "centroid", "sparse"
+    )
+    assert nodatas == {0.0}
+    assert valid > 0 and invented == 0
+    # 65535 is a real value here (the source NoData is 0), so row 3 stays valid
+    assert fallback_valid > 0
+
+
+def test_bng_warp_keeps_a_sources_own_mask():
+    """Masked pixels of a source without NoData stay NoData; the warp fill is NoData too."""
+    b, data = _bng_fill_source(masked=True)
+    n = _FILL_N
+    masked_valid = invented = valid = 0
+    with MemoryFile(b) as mf, mf.open() as ds:
+        for _, cb in T.iter_tessellate(
+            ds, 3, "bng", mode="centroid", coverage="sparse"
+        ):
+            m, c = _open(cb)
+            with m, c:
+                vals = c.read(1)
+                rr, cc = np.nonzero(c.read_masks(1) != 0)
+                for r, k in zip(rr, cc):
+                    valid += 1
+                    v = int(vals[r, k])
+                    if not 1 <= v <= n * n:
+                        invented += 1
+                    elif divmod(v - 1, n)[0] in (10, 11):
+                        masked_valid += 1
+    assert valid > 0
+    assert masked_valid == 0, f"{masked_valid} masked source pixels became valid"
+    assert invented == 0, f"{invented} valid chip pixels are warp fill (0)"

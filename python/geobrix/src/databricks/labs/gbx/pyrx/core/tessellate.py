@@ -113,12 +113,18 @@ def _as_bng_dataset(ds):
     be applied.  When ``ds`` is already 27700 it is yielded unchanged; otherwise
     it is reprojected (nearest) via :func:`warp.reproject_to_srid` and the warped
     dataset is yielded and cleaned up.  Mirrors heavy ``warpToBng``.
+
+    A source that declares no NoData is warped with the dtype fallback as its
+    NoData, so the pixels the warp fills outside the source footprint are NoData
+    rather than valid zeros that would be tessellated into the edge cells.
     """
     src_epsg = authority_srid_of(ds.crs)
     if src_epsg == _BNG_EPSG:
         yield ds
         return
-    warped_bytes = warp.reproject_to_srid(ds, _BNG_EPSG, resampling="nearest")
+    warped_bytes = warp.reproject_to_srid(
+        ds, _BNG_EPSG, resampling="nearest", mark_fill_nodata=True
+    )
     with MemoryFile(warped_bytes) as mf:
         with mf.open() as work_ds:
             yield work_ds

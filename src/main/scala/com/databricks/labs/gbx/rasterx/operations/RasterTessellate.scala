@@ -104,9 +104,38 @@ object RasterTessellate {
     }
 
     /**
+      * gdalwarp arguments that make the warp fill of `ds` NoData when some band declares none: gdalwarp
+      * otherwise fills the pixels outside the source footprint with 0 and declares no NoData, so they
+      * would be tessellated as valid data. Each undeclared band gets the dtype constant
+      * ([[GDAL.getNoDataConstant]]) as `-dstnodata` (a declared band keeps its own value), paired with
+      * [[GDAL.srcNoDataArgs]], so source pixels equal to it are NoData too instead of being moved by
+      * +/- 1 and kept valid, and a source's own mask band is left to gdalwarp (see there). Empty when every
+      * band declares NoData: the warp carries it. The `-dstnodata` list is ONE argument, so these go
+      * through the unsplit warp extra arguments.
+      */
+    private def bngFillArgs(ds: Dataset): Seq[String] = {
+        val perBand = (1 to ds.GetRasterCount()).map { i =>
+            val band = ds.GetRasterBand(i)
+            val nd = new Array[java.lang.Double](1)
+            band.GetNoDataValue(nd)
+            (Option(nd(0)).map(_.doubleValue()), band)
+        }
+        if (perBand.forall(_._1.isDefined)) Seq.empty
+        else {
+            val values = perBand.map { case (declared, band) => declared.getOrElse(GDAL.getNoDataConstant(band.getDataType)) }
+            val list = values.distinct match {
+                case Seq(single) => single.toString
+                case _           => values.mkString(" ")
+            }
+            Seq("-dstnodata", list) ++ GDAL.srcNoDataArgs(ds)
+        }
+    }
+
+    /**
       * Reproject `ds` to EPSG:27700 (nearest-neighbour) unless it is already 27700; returns
       * `(workDs, reprojected)`. When `reprojected` is true the caller owns `workDs` and must release it.
-      * Mirrors `RST_BNG_RasterToGrid`'s warp-up-front behaviour (BNG has no lon/lat input path).
+      * Mirrors `RST_BNG_RasterToGrid`'s warp-up-front behaviour (BNG has no lon/lat input path). The warp
+      * fill is NoData ([[bngFillArgs]]), as in the lightweight tier.
       */
     private def warpToBng(ds: Dataset): (Dataset, Boolean) = {
         val srcWkt = ds.GetProjection()
@@ -127,7 +156,8 @@ object RasterTessellate {
               resultPath,
               Array(ds),
               Map.empty[String, String],
-              command = "gdalwarp -t_srs EPSG:27700 -r near"
+              command = "gdalwarp -t_srs EPSG:27700 -r near",
+              extraArgs = bngFillArgs(ds)
             )
             (result, true)
         }

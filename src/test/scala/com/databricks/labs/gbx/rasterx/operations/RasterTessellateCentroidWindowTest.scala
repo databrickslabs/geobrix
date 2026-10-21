@@ -38,7 +38,10 @@ import scala.collection.mutable
   *  - the tessellation owns its input: it is released when the iterator ends or is closed, or when
   *    setup fails (covering and centroid);
   *  - covering chips of a source without NoData carry the dtype constant, so the clip fill is NoData,
-  *    and a source's own mask band still masks its pixels.
+  *    and a source's own mask band still masks its pixels;
+  *  - the BNG warp of a source without NoData marks its fill as NoData (the dtype constant), so no
+  *    valid chip pixel lies outside the source footprint and real source pixels equal to the constant
+  *    are NoData too.
   *
   * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled. The
   * tessellation releases its input, so a test that keeps reading a fixture hands it a copy
@@ -790,5 +793,107 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the covering chips")
         assert(badValue == 0, s"$badValue valid chip pixels differ from the source")
         assert(validSeen > 0, "the unmasked pixels must stay valid")
+    }
+
+    /** Valid chip pixels of a BNG tessellation of the uint16 source below, split into `(valid, invented,
+      * fallbackValid, maskedValid, chipNoData)`: `invented` counts valid pixels that do not map back to the
+      * source pixel their value names (a 0, or a pixel outside the footprint); `fallbackValid` counts valid
+      * pixels equal to the dtype constant; `maskedValid` counts valid pixels of a source pixel its mask
+      * hides. Source pixel `p` holds `p + 1`; there is no declared NoData and no 0. Row 3 holds 65535 (the
+      * uint16 fallback), unless `masked`: then rows 10-11 are hidden by a per-dataset mask band instead
+      * (a masked source keeps gdalwarp's handling of fallback-valued pixels, so there are none). `declared`
+      * sets the source's own NoData instead of leaving it undeclared. */
+    private def bngWarpFill(
+        assignment: String,
+        coverage: String,
+        masked: Boolean = false,
+        declared: Option[Double] = None
+    ): (Long, Long, Long, Long, Set[Option[Double]]) = {
+        val n = 40
+        // Norfolk, far from the 27700 central meridian (-2): the warp rotates the grid ~2.4 degrees, so the
+        // EPSG:27700 raster has corners outside the source footprint.
+        val gt = Array(1.00, 0.2 / n, 0.0, 52.60, 0.0, -0.2 / n)
+        val src = buildRamp(mem(s"bngfill_$assignment$coverage$masked.tif"), n, n, 1, gdalconstConstants.GDT_UInt16, gt)
+        src.GetRasterBand(1).WriteRaster(0, 0, n, n, Array.tabulate(n * n)(p => (p + 1).toDouble))
+        if (masked) {
+            src.CreateMaskBand(gdalconstConstants.GMF_PER_DATASET)
+            val srcMask = Array.tabulate[Byte](n * n)(i => if (i / n == 10 || i / n == 11) 0.toByte else 255.toByte)
+            src.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, n, n, srcMask)
+            src.FlushCache()
+            assert(src.GetRasterBand(1).GetMaskFlags() == gdalconstConstants.GMF_PER_DATASET, "fixture needs a per-dataset mask")
+        } else fillRect(src, 1, 0, 3, n, 1, 65535.0)
+        declared.foreach(src.GetRasterBand(1).SetNoDataValue)
+        assert(noDataOf(src, 1) == declared, s"fixture NoData ${noDataOf(src, 1)}, expected $declared")
+        val inv = invert(gt)
+        val (bng, wgs) = (epsgSR(27700), epsgSR(4326))
+        val toLonLat = new CoordinateTransformation(bng, wgs)
+        val chipNoData = mutable.Set.empty[Option[Double]]
+        var (valid, invented, fallbackValid, maskedValid) = (0L, 0L, 0L, 0L)
+        val it = RasterTessellate.tessellateBngIter(handOff(src), Map.empty[String, String], BngRes, assignment, coverage)
+        try {
+            while (it.hasNext) {
+                val (_, chip, _) = it.next()
+                try {
+                    chipNoData += noDataOf(chip, 1)
+                    val cgt = chip.GetGeoTransform
+                    val w = chip.getRasterXSize
+                    val (vals, mask) = readBand(chip, 1)
+                    var k = 0
+                    while (k < vals.length) {
+                        if (mask(k) != 0) {
+                            valid += 1
+                            val (i, j) = (k % w, k / w)
+                            val e = cgt(0) + (i + 0.5) * cgt(1) + (j + 0.5) * cgt(2)
+                            val nn = cgt(3) + (i + 0.5) * cgt(4) + (j + 0.5) * cgt(5)
+                            val ll = toLonLat.TransformPoint(e, nn)
+                            val sc = inv(0) + ll(0) * inv(1) + ll(1) * inv(2)
+                            val sr = inv(3) + ll(0) * inv(4) + ll(1) * inv(5)
+                            val v = vals(k).toLong
+                            if (v == 65535L) fallbackValid += 1
+                            else if (v < 1 || v > n * n) invented += 1
+                            else {
+                                // the value names its source pixel; the chip pixel centre must fall on it
+                                // (1.5 px of slack for gdalwarp's approximate transformer at the edge)
+                                val (er, ec) = (((v - 1) / n).toInt, ((v - 1) % n).toInt)
+                                if (math.abs(sc - (ec + 0.5)) > 1.5 || math.abs(sr - (er + 0.5)) > 1.5) invented += 1
+                                else if (masked && (er == 10 || er == 11)) maskedValid += 1
+                            }
+                        }
+                        k += 1
+                    }
+                } finally RasterDriver.releaseDataset(chip)
+            }
+        } finally {
+            it.asInstanceOf[AutoCloseable].close()
+            toLonLat.delete(); bng.delete(); wgs.delete()
+            RasterDriver.releaseDataset(src)
+        }
+        (valid, invented, fallbackValid, maskedValid, chipNoData.toSet)
+    }
+
+    for ((assignment, coverage) <- Seq(("centroid", "sparse"), ("centroid", "complete"), ("covering", "sparse"))) {
+        test(s"(s) BNG $assignment+$coverage on an EPSG:4326 source without NoData: the warp fill is NoData, not valid zeros") {
+            val (valid, invented, fallbackValid, _, chipNoData) = bngWarpFill(assignment, coverage)
+            assert(valid > 0, "the chips hold no valid pixel")
+            assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
+            assert(fallbackValid == 0, s"$fallbackValid source pixels equal to 65535 stayed valid")
+            assert(chipNoData == Set(Some(65535.0)), s"chip NoData values $chipNoData, expected 65535")
+        }
+    }
+
+    test("(t) BNG on a source without NoData but with its own mask: masked pixels and the warp fill are NoData") {
+        val (valid, invented, _, maskedValid, chipNoData) = bngWarpFill("centroid", "sparse", masked = true)
+        assert(valid > 0, "the chips hold no valid pixel")
+        assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
+        assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the chips")
+        assert(chipNoData == Set(Some(65535.0)), s"chip NoData values $chipNoData, expected 65535")
+    }
+
+    test("(u) BNG on a source with its own NoData: the warp keeps it, so 65535 stays a real value") {
+        val (valid, invented, fallbackValid, _, chipNoData) = bngWarpFill("centroid", "sparse", declared = Some(0.0))
+        assert(valid > 0, "the chips hold no valid pixel")
+        assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
+        assert(fallbackValid > 0, "65535 is a real value when the source NoData is 0: row 3 must stay valid")
+        assert(chipNoData == Set(Some(0.0)), s"chip NoData values $chipNoData, expected the source's 0")
     }
 }

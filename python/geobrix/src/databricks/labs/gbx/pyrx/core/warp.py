@@ -3,11 +3,32 @@ function returns new GTiff bytes."""
 
 import numpy as np
 import rasterio
+from rasterio.enums import MaskFlags
 from rasterio.io import MemoryFile
 from rasterio.warp import calculate_default_transform, reproject
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
 from databricks.labs.gbx.pyrx.core._util import resampling_enum
+
+
+def _undeclared_fill(ds):
+    """The warp NoData plan of a source that declares none, else ``None``.
+
+    Returns ``(fill, use_src_nodata)``: ``fill`` is the dtype fallback
+    (``fallback_nodata``, heavy ``GDAL.getNoDataConstant``), ``use_src_nodata``
+    says whether source pixels equal to it are NoData too. It is False when a band
+    has its own (non-alpha) per-dataset mask: a source NoData makes the warp ignore
+    that mask, so the masked pixels would turn valid. Same rule as heavy
+    ``GDAL.srcNoDataArgs``.
+    """
+    if any(v is not None for v in ds.nodatavals):
+        return None
+    own_mask = any(
+        MaskFlags.per_dataset in flags and MaskFlags.alpha not in flags
+        for flags in ds.mask_flag_enums
+    )
+    return fallback_nodata(ds.dtypes[0]), not own_mask
 
 
 def reproject_to_crs(ds, target_crs_value, resampling: str = "nearest") -> bytes:
@@ -67,8 +88,18 @@ def reproject_to_crs(ds, target_crs_value, resampling: str = "nearest") -> bytes
         return mf.read()
 
 
-def reproject_to_srid(ds, target_srid: int, resampling: str = "nearest") -> bytes:
+def reproject_to_srid(
+    ds, target_srid: int, resampling: str = "nearest", *, mark_fill_nodata: bool = False
+) -> bytes:
     """Reproject an open dataset to EPSG:<target_srid>; return GTiff bytes.
+
+    ``mark_fill_nodata`` makes the pixels the warp fills outside the source
+    footprint NoData rather than valid zeros, for a source that declares no NoData:
+    the output declares the dtype fallback (``fallback_nodata``), source pixels equal
+    to it become NoData too (as in heavy), and a source's own mask still masks. A
+    source that declares NoData keeps it either way. Off by default, so other
+    callers (``rst_transform`` and friends) are unchanged; BNG tessellation turns it
+    on so edge cells do not tessellate fill as data.
 
     Identity short-circuit: when the source CRS's EPSG code equals
     ``target_srid`` the reprojection is a no-op (produces no new pixels), so the
@@ -108,6 +139,10 @@ def reproject_to_srid(ds, target_srid: int, resampling: str = "nearest") -> byte
     profile.update(
         _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
+    plan = _undeclared_fill(ds) if mark_fill_nodata else None
+    fill, use_src_nodata = plan if plan else (None, False)
+    if plan:
+        profile.update(nodata=fill)
     resamp = resampling_enum(resampling)
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
@@ -120,5 +155,7 @@ def reproject_to_srid(ds, target_srid: int, resampling: str = "nearest") -> byte
                     dst_transform=transform,
                     dst_crs=dst_crs,
                     resampling=resamp,
+                    src_nodata=fill if use_src_nodata else None,
+                    dst_nodata=fill,
                 )
         return mf.read()

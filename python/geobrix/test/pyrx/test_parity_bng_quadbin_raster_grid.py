@@ -1260,6 +1260,79 @@ def test_tessellate_without_nodata_parity(spark_with_jar, dtype, grid, assignmen
         ), f"{label}: chips hold {len(covered)} of {expected} pixels"
 
 
+_FILL_N = 40
+
+
+def _warp_fill_raster():
+    """40x40 uint16 EPSG:4326 source over Norfolk, no declared NoData, pixel ``p``
+    holding ``p + 1`` (no zeros). Norfolk lies far from the 27700 central meridian,
+    so the warp to 27700 rotates the grid ~2.4 degrees and fills its corners."""
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+
+    n = _FILL_N
+    data = (np.arange(n * n, dtype="uint32").reshape(n, n) + 1).astype("uint16")
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_bounds(1.00, 52.40, 1.20, 52.60, n, n),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(data, 1)
+        return mf.read()
+
+
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+def test_bng_tessellate_warp_fill_parity(spark_with_jar, assignment):
+    """BNG tessellate of a 4326 source without NoData: the warp fill is NoData in both tiers.
+
+    The warp to EPSG:27700 fills the pixels outside the source footprint. Both tiers
+    mark that fill as NoData (the uint16 fallback, 65535) instead of keeping valid
+    zeros, so every valid chip pixel carries a source value (1..n*n, no 0), and both
+    tiers emit the same cells.
+    """
+    from rasterio.io import MemoryFile
+
+    spark = spark_with_jar
+    sql_name, fn_name, _ = _TESS_CONFIG["bng"]
+    raster = _warp_fill_raster()
+    label = f"bng warp-fill {assignment}"
+
+    def _id(cid):
+        return _tess_id(cid, bng=True)
+
+    light_rows = tp.light_chips(spark, raster, sql_name, 3, assignment, "sparse", _id)
+    heavy_rows = tp.heavy_chips(spark, raster, fn_name, 3, assignment, "sparse", _id)
+    assert light_rows, f"{label}: light emitted no chips"
+    assert not tp.error_rows(light_rows), f"{label}: light error rows"
+    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
+    light_cells = {cid for cid, _, _ in light_rows}
+    heavy_cells = {cid for cid, _, _ in heavy_rows}
+    assert light_cells == heavy_cells, (
+        f"{label}: cell sets differ: light_only={sorted(light_cells - heavy_cells)[:5]} "
+        f"heavy_only={sorted(heavy_cells - light_cells)[:5]}"
+    )
+
+    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+        nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
+        assert nodatas == {65535.0}, f"{label}: {tier} chip NoData {nodatas}"
+        valid = []
+        for _, b, _ in rows:
+            with MemoryFile(b) as mf, mf.open() as ds:
+                valid.append(ds.read(1)[ds.read_masks(1) != 0])
+        valid = np.concatenate(valid)
+        assert valid.size, f"{label}: {tier} chips hold no valid pixel"
+        fill = int(((valid < 1) | (valid > _FILL_N**2)).sum())
+        assert (
+            fill == 0
+        ), f"{label}: {tier} {fill} of {valid.size} valid chip pixels are not source values (warp fill)"
+
+
 def _masked_uint16_raster(*, epsg, origin, px, n):
     """n×n uint16 ramp (1..200), NO declared NoData, real 65535s (the fallback) in
     row 6, and an internal per-dataset mask that hides rows 2-3 and the left half of

@@ -123,6 +123,9 @@ def init_nodata(ds, default: float | None = None) -> bytes:
     - If that value does NOT fit the band dtype (only possible for an explicit
       *default*), nodata is left unset rather than writing an invalid value,
       which would raise ``ValueError`` on integer dtypes.
+    - A source with its own (per-dataset, non-alpha) mask band keeps it: its masked
+      pixels take the NoData value, as in heavy ``rst_initnodata``. Without a NoData
+      value to write (an out-of-range *default*) the pixels are written as read.
     """
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
@@ -132,7 +135,11 @@ def init_nodata(ds, default: float | None = None) -> bytes:
         if _nd.nodata_fits_dtype(value, dtype_str):
             profile["nodata"] = value
         # else: explicit default out of range for this dtype; leave nodata unset.
-    return _comp.write_gtiff(profile, ds.read())
+    if _nd.has_own_mask(ds) and profile.get("nodata") is not None:
+        data = ds.read(masked=True).filled(profile["nodata"])
+    else:
+        data = ds.read()
+    return _comp.write_gtiff(profile, data)
 
 
 _THRESHOLD_OPS = {

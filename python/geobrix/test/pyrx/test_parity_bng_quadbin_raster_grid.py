@@ -14,6 +14,10 @@ against the design §4.1 parity bar:
   * ``rst_quadbin_rasterize_agg`` / ``rst_bng_rasterize_agg`` — same output
     raster on a shared explicit grid: band NoData == -9999 both tiers, and the
     covered-pixel mask + burned values identical (NoData-aware).
+  * Sources without NoData or with their own mask band, through the warps and
+    clips that must keep them (raster-to-grid, BNG tessellate, covering,
+    ``rst_initnodata``, ``rst_clip``): the warp fill, the masked pixels and the
+    pixels equal to the NoData are never valid data, in either tier.
 
 HARNESS REUSE (no new comparison framework invented):
   * Reducers + tessellate reuse the ``test/pyvx/test_parity_h3_tessellate.py``
@@ -1617,3 +1621,330 @@ def test_default_h3_tessellate_2arg_parity(spark_with_jar):
     assert (
         light_2arg_n == light_explicit_n
     ), "light 2-arg chip count != explicit centroid+complete — Task-8 alignment broken"
+
+
+# ---------------------------------------------------------------------------
+# Warps of a source without NoData, or with its own mask band: the warp fill,
+# the masked pixels and the pixels equal to the NoData are never data
+# ---------------------------------------------------------------------------
+
+_MW_N = 40
+_MW_MASKED_ROWS = (10, 11)
+# Norfolk, far from the EPSG:27700 central meridian: either warp rotates the grid by
+# about 2.4 degrees and fills the corners.
+_MW_SRC_27700 = dict(epsg=27700, origin=(600000.0, 320000.0), px=100.0)
+_MW_SRC_4326 = dict(epsg=4326, origin=(1.00, 52.60), px=0.005)
+# grid -> (source, grid CRS, resolution)
+_MW_GRIDS = {
+    "h3": (_MW_SRC_27700, "EPSG:4326", 9),
+    "quadbin": (_MW_SRC_27700, "EPSG:4326", 15),
+    "bng": (_MW_SRC_4326, "EPSG:27700", 3),
+}
+# label -> (masked, declared NoData)
+_MW_SOURCES = {
+    "no-nodata": (False, None),
+    "masked": (True, None),
+    "masked-nodata-7": (True, 7.0),
+}
+
+
+def _mw_values():
+    """Pixel p holds p + 1 (no 0, so a value names its pixel and 7 is pixel 6); row 3
+    holds 65535 (the uint16 fallback)."""
+    vals = (np.arange(_MW_N * _MW_N) + 1).reshape(_MW_N, _MW_N).astype("uint16")
+    vals[3, :] = 65535
+    return vals
+
+
+def _mw_raster(*, epsg, origin, px, masked, nodata):
+    """uint16 GTiff of ``_mw_values``, an internal per-dataset mask over the rows
+    ``_MW_MASKED_ROWS`` when ``masked``, the NoData ``nodata`` if given."""
+    import rasterio
+    from rasterio.enums import MaskFlags
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    prof = dict(
+        driver="GTiff",
+        width=_MW_N,
+        height=_MW_N,
+        count=1,
+        dtype="uint16",
+        crs=f"EPSG:{epsg}",
+        transform=from_origin(origin[0], origin[1], px, px),
+        nodata=nodata,
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**prof) as dst:
+                dst.write(_mw_values(), 1)
+                if masked:
+                    mask = np.full((_MW_N, _MW_N), 255, dtype="uint8")
+                    mask[list(_MW_MASKED_ROWS), :] = 0
+                    dst.write_mask(mask)
+            if masked:
+                with mf.open() as chk:
+                    assert chk.mask_flag_enums[0] == [MaskFlags.per_dataset]
+            return mf.read()
+
+
+def _mw_expected(src, dst_crs, masked, nodata):
+    """(count, sum) of the valid source pixels the nearest-neighbour warp maps: an
+    index raster of the source (pixel p holds p + 1) warped to the same grid."""
+    from rasterio.transform import from_origin
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    left, top = src["origin"]
+    px = src["px"]
+    src_crs = f"EPSG:{src['epsg']}"
+    dst_tf, w, h = calculate_default_transform(
+        src_crs, dst_crs, _MW_N, _MW_N, left, top - _MW_N * px, left + _MW_N * px, top
+    )
+    index = (np.arange(_MW_N * _MW_N) + 1).reshape(_MW_N, _MW_N).astype("uint32")
+    out = np.zeros((h, w), dtype="uint32")
+    reproject(
+        index,
+        out,
+        src_transform=from_origin(left, top, px, px),
+        src_crs=src_crs,
+        dst_transform=dst_tf,
+        dst_crs=dst_crs,
+        resampling=Resampling.nearest,
+        dst_nodata=0,
+    )
+    p = out[out > 0].astype("int64") - 1
+    vals = _mw_values().ravel().astype("int64")[p]
+    keep = vals != (65535 if nodata is None else nodata)
+    if masked:
+        keep &= ~np.isin(p // _MW_N, _MW_MASKED_ROWS)
+    return int(keep.sum()), int(vals[keep].sum())
+
+
+@pytest.mark.parametrize("label", list(_MW_SOURCES))
+@pytest.mark.parametrize("grid", list(_MW_GRIDS))
+def test_rastertogrid_warp_fill_and_mask_parity(spark_with_jar, grid, label):
+    """Raster-to-grid of a source in another CRS: both tiers aggregate the same cells
+    with the same count and mean, and only the source's valid pixels: not the warp
+    fill (as zeros), the masked pixels, nor the pixels equal to the NoData (the
+    fallback 65535, or the source's own 7, which keeps 65535 a real value)."""
+    spark = spark_with_jar
+    src, dst_crs, resolution = _MW_GRIDS[grid]
+    masked, nodata = _MW_SOURCES[label]
+    raster = _mw_raster(**src, masked=masked, nodata=nodata)
+    tag = f"{grid} {label}"
+
+    def rows(tier, agg):
+        if grid == "bng":
+            fn = _light_reducer_rows if tier == "light" else _heavy_reducer_rows
+            return fn(spark, raster, resolution, agg, coverage="sparse")
+        fn = _light_grid_rows if tier == "light" else _heavy_grid_rows
+        return fn(spark, raster, resolution, grid, agg, coverage="sparse")
+
+    # light first: both tiers register the same gbx_rst_* names
+    light = {agg: rows("light", agg) for agg in ("count", "avg")}
+    heavy = {agg: rows("heavy", agg) for agg in ("count", "avg")}
+    exp_count, exp_sum = _mw_expected(src, dst_crs, masked, nodata)
+    for agg in ("count", "avg"):
+        assert light[agg], f"{tag}: light emitted no {agg} cells"
+        _parity_cmp(light[agg], heavy[agg], label=f"{tag} {agg}")
+    for tier, got in (("light", light), ("heavy", heavy)):
+        count = sum(got["count"].values())
+        total = sum(got["avg"][k] * got["count"][k] for k in got["count"])
+        assert count == exp_count, f"{tag}: {tier} {count} pixels, expected {exp_count}"
+        assert abs(total - exp_sum) <= 1e-6 * exp_sum, (
+            f"{tag}: {tier} sum {total}, expected {exp_sum} (warp fill, masked or "
+            "NoData-valued pixels aggregated)"
+        )
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+def test_bng_tessellate_masked_warp_parity(spark_with_jar, assignment, nodata):
+    """BNG tessellate of a 4326 source with its own mask band, without NoData or with
+    one: the EPSG:27700 warp keeps the mask in both tiers. Both tiers emit the same
+    cells with the same chip NoData; no valid chip pixel is the warp fill, a masked
+    source pixel or a pixel equal to the NoData (65535 moved to 65534 included)."""
+    from rasterio.io import MemoryFile
+
+    spark = spark_with_jar
+    sql_name, fn_name, _ = _TESS_CONFIG["bng"]
+    raster = _mw_raster(**_MW_SRC_4326, masked=True, nodata=nodata)
+    label = f"bng masked warp {assignment} (NoData {nodata})"
+
+    def _id(cid):
+        return _tess_id(cid, bng=True)
+
+    light_rows = tp.light_chips(spark, raster, sql_name, 3, assignment, "sparse", _id)
+    heavy_rows = tp.heavy_chips(spark, raster, fn_name, 3, assignment, "sparse", _id)
+    assert light_rows, f"{label}: light emitted no chips"
+    assert not tp.error_rows(light_rows), f"{label}: light error rows"
+    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
+    light_cells = {cid for cid, _, _ in light_rows}
+    heavy_cells = {cid for cid, _, _ in heavy_rows}
+    assert light_cells == heavy_cells, (
+        f"{label}: cell sets differ: light_only={sorted(light_cells - heavy_cells)[:5]} "
+        f"heavy_only={sorted(heavy_cells - light_cells)[:5]}"
+    )
+    chip_nodata = 65535.0 if nodata is None else nodata
+    n = _MW_N
+    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+        nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
+        assert nodatas == {chip_nodata}, f"{label}: {tier} chip NoData {nodatas}"
+        valid = []
+        for _, b, _ in rows:
+            with MemoryFile(b) as mf, mf.open() as ds:
+                valid.append(ds.read(1)[ds.read_masks(1) != 0].astype("int64"))
+        v = np.concatenate(valid)
+        assert v.size, f"{label}: {tier} chips hold no valid pixel"
+        named = v[(v >= 1) & (v <= n * n)]
+        fill = int((v == 0).sum())
+        shown = int(np.isin((named - 1) // n, _MW_MASKED_ROWS).sum())
+        kept = int(((v == chip_nodata) | ((v == 65534) & (nodata is None))).sum())
+        assert fill == 0, f"{label}: {tier} {fill} warp-fill zeros are valid"
+        assert shown == 0, f"{label}: {tier} {shown} masked source pixels are valid"
+        assert kept == 0, f"{label}: {tier} {kept} pixels equal to the NoData are valid"
+        if nodata is not None:
+            assert (v == 65535).any(), f"{label}: {tier} lost the real 65535s"
+
+
+def _single_tile(spark, raster, tier, fn):
+    """``fn(hx|prx, tile_col)`` applied to ``raster`` in one tier -> output raster bytes."""
+    from pyspark.sql import functions as f
+
+    if tier == "light":
+        from databricks.labs.gbx.pyrx import functions as mod
+    else:
+        from databricks.labs.gbx.rasterx import functions as mod
+    mod.register(spark)
+    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
+        mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+    )
+    row = df.select(fn(mod, f.col("tile")).alias("t")).collect()[0]
+    assert row["t"] is not None and row["t"]["raster"] is not None, f"{tier}: null tile"
+    return bytes(row["t"]["raster"])
+
+
+def _decoded(raster_bytes):
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        return dict(
+            shape=(ds.count, ds.height, ds.width),
+            dtype=ds.dtypes[0],
+            transform=ds.transform.to_gdal(),
+            nodata=ds.nodata,
+            data=ds.read(),
+            valid=ds.read_masks() != 0,
+        )
+
+
+def test_initnodata_masked_source_parity(spark_with_jar):
+    """``rst_initnodata`` of a source without NoData but with its own mask band: both
+    tiers declare 65535, keep the masked pixels and the real 65535s out of the valid
+    data, and agree on every pixel."""
+    spark = spark_with_jar
+    raster = _mw_raster(**_MW_SRC_4326, masked=True, nodata=None)
+    light = _decoded(
+        _single_tile(spark, raster, "light", lambda m, t: m.rst_initnodata(t))
+    )
+    heavy = _decoded(
+        _single_tile(spark, raster, "heavy", lambda m, t: m.rst_initnodata(t))
+    )
+    vals = _mw_values()
+    hidden = np.zeros_like(vals, dtype=bool)
+    hidden[list(_MW_MASKED_ROWS), :] = True
+    for tier, out in (("light", light), ("heavy", heavy)):
+        assert out["nodata"] == 65535.0, f"{tier}: NoData {out['nodata']}"
+        valid = out["valid"][0]
+        assert not valid[hidden].any(), f"{tier}: masked source pixels are valid"
+        assert not valid[vals == 65535].any(), f"{tier}: real 65535s are valid"
+        keep = ~hidden & (vals != 65535)
+        assert valid[keep].all(), f"{tier}: valid source pixels became NoData"
+        assert (out["data"][0][keep] == vals[keep]).all(), f"{tier}: values changed"
+    for key in ("shape", "dtype", "nodata"):
+        assert light[key] == heavy[key], f"{key}: light={light[key]} heavy={heavy[key]}"
+    assert (light["valid"] == heavy["valid"]).all(), "the tiers' masks differ"
+    both = light["valid"] & heavy["valid"]
+    assert (
+        light["data"][both] == heavy["data"][both]
+    ).all(), "the tiers' values differ"
+
+
+# A hexagon over the middle of the 64x64 source below: a cutline gdalwarp rasterizes.
+_CLIP_N = 64
+_CLIP_HEXAGON = (
+    "POLYGON((-122.58 37.70, -122.54 37.62, -122.46 37.62, -122.42 37.70, "
+    "-122.46 37.78, -122.54 37.78, -122.58 37.70))"
+)
+
+
+def _clip_source(nodata):
+    """64x64 uint16 EPSG:4326 (lon -122.60..-122.40, lat 37.60..37.80), pixel p =
+    p % 250 + 1, row 40 holding 65535, an internal per-dataset mask over rows 10-29
+    of columns 12-43, the NoData ``nodata`` if given."""
+    import rasterio
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    n = _CLIP_N
+    vals = (np.arange(n * n) % 250 + 1).reshape(n, n).astype("uint16")
+    vals[40, :] = 65535
+    hidden = np.zeros((n, n), dtype=bool)
+    hidden[10:30, 12:44] = True
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_origin(-122.60, 37.80, 0.2 / n, 0.2 / n),
+        nodata=nodata,
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**prof) as dst:
+                dst.write(vals, 1)
+                dst.write_mask(np.where(hidden, 0, 255).astype("uint8"))
+            return mf.read(), vals, hidden
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+def test_clip_masked_source_hexagon_parity(spark_with_jar, nodata):
+    """``rst_clip`` of a source with its own mask band by a hexagon (all touched): both
+    tiers fill the masked pixels like the area outside the geometry (0 without a
+    source NoData, the NoData when there is one) and agree on every pixel."""
+    from pyspark.sql import functions as f
+
+    spark = spark_with_jar
+    raster, vals, hidden = _clip_source(nodata)
+
+    def clip(m, t):
+        return m.rst_clip(t, f.lit(_CLIP_HEXAGON), f.lit(True))
+
+    light = _decoded(_single_tile(spark, raster, "light", clip))
+    heavy = _decoded(_single_tile(spark, raster, "heavy", clip))
+    for key in ("shape", "dtype", "nodata"):
+        assert light[key] == heavy[key], f"{key}: light={light[key]} heavy={heavy[key]}"
+    assert tp._gt_close(
+        light["transform"], heavy["transform"]
+    ), f"transform: light={light['transform']} heavy={heavy['transform']}"
+    assert light["nodata"] == nodata
+    assert (light["valid"] == heavy["valid"]).all(), "the tiers' masks differ"
+    assert (light["data"] == heavy["data"]).all(), "the tiers' pixel values differ"
+    # the masked source pixels the clip covers hold the fill, in both tiers
+    gt = light["transform"]
+    _, h, w = light["shape"]
+    rows, cols = np.mgrid[0:h, 0:w]
+    sc = np.floor((gt[0] + (cols + 0.5) * gt[1] + 122.60) / (0.2 / _CLIP_N)).astype(int)
+    sr = np.floor((37.80 - (gt[3] + (rows + 0.5) * gt[5])) / (0.2 / _CLIP_N)).astype(
+        int
+    )
+    inside = (sc >= 0) & (sc < _CLIP_N) & (sr >= 0) & (sr < _CLIP_N)
+    on_masked = np.zeros((h, w), dtype=bool)
+    on_masked[inside] = hidden[sr[inside], sc[inside]]
+    assert on_masked.any(), "the clip covers no masked source pixel"
+    fill = 0 if nodata is None else nodata
+    for tier, out in (("light", light), ("heavy", heavy)):
+        held = out["data"][0][on_masked]
+        assert (held == fill).all(), f"{tier}: masked source pixels kept their values"

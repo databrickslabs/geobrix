@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.rasterx.operations
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.gridx.grid.H3
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operator.WarpSource
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.{Dataset, gdal}
@@ -42,7 +43,8 @@ import scala.collection.mutable
   *    that declares NoData, with the source's bands, type and chip windows;
   *  - the BNG warp of a source without NoData marks its fill as NoData (the dtype constant), so no
   *    valid chip pixel lies outside the source footprint and real source pixels equal to the constant
-  *    are NoData too.
+  *    are NoData too; a source's own mask band survives the warp, also when the source declares NoData;
+  *  - covering builds one mask view for all of a masked source's clips.
   *
   * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled. The
   * tessellation releases its input, so a test that keeps reading a fixture hands it a copy
@@ -907,20 +909,36 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         }
     }
 
+    test("(x) h3 covering of a masked source builds one mask view for all its cells' clips") {
+        val (input, _, _) = maskedCoveringSource(1, None, masked = true)
+        val built = WarpSource.viewsBuilt.get()
+        var chips = 0
+        val it = RasterTessellate.tessellateH3Iter(input, Map.empty[String, String], Res, "covering", "complete")
+        try {
+            while (it.hasNext) {
+                val (_, chip, _) = it.next()
+                chips += 1
+                RasterDriver.releaseDataset(chip)
+            }
+        } finally it.asInstanceOf[AutoCloseable].close()
+        assert(chips > 10, s"expected many hexagon chips, got $chips")
+        assert(WarpSource.viewsBuilt.get() - built == 1, s"${WarpSource.viewsBuilt.get() - built} mask views for $chips chips")
+    }
+
     /** Valid chip pixels of a BNG tessellation of the uint16 source below, split into `(valid, invented,
-      * fallbackValid, maskedValid, chipNoData)`: `invented` counts valid pixels that do not map back to the
-      * source pixel their value names (a 0, or a pixel outside the footprint); `fallbackValid` counts valid
-      * pixels equal to the dtype constant; `maskedValid` counts valid pixels of a source pixel its mask
-      * hides. Source pixel `p` holds `p + 1`; there is no declared NoData and no 0. Row 3 holds 65535 (the
-      * uint16 fallback), unless `masked`: then rows 10-11 are hidden by a per-dataset mask band instead
-      * (a masked source keeps gdalwarp's handling of fallback-valued pixels, so there are none). `declared`
-      * sets the source's own NoData instead of leaving it undeclared. */
+      * fallbackValid, maskedValid, chipNoData, declaredValid)`: `invented` counts valid pixels that do not map
+      * back to the source pixel their value names (a 0, or a pixel outside the footprint); `fallbackValid`
+      * counts valid pixels equal to the dtype constant, or to it moved by one (65534: the source holds none);
+      * `maskedValid` counts valid pixels of a source pixel its mask hides; `declaredValid` counts valid pixels
+      * equal to the `declared` NoData. Source pixel `p` holds `p + 1`; there is no 0. Row 3 holds 65535 (the
+      * uint16 fallback); when `masked`, rows 10-11 are hidden by a per-dataset mask band. `declared` sets the
+      * source's own NoData instead of leaving it undeclared. */
     private def bngWarpFill(
         assignment: String,
         coverage: String,
         masked: Boolean = false,
         declared: Option[Double] = None
-    ): (Long, Long, Long, Long, Set[Option[Double]]) = {
+    ): (Long, Long, Long, Long, Set[Option[Double]], Long) = {
         val n = 40
         // Norfolk, far from the 27700 central meridian (-2): the warp rotates the grid ~2.4 degrees, so the
         // EPSG:27700 raster has corners outside the source footprint.
@@ -933,14 +951,15 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
             src.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, n, n, srcMask)
             src.FlushCache()
             assert(src.GetRasterBand(1).GetMaskFlags() == gdalconstConstants.GMF_PER_DATASET, "fixture needs a per-dataset mask")
-        } else fillRect(src, 1, 0, 3, n, 1, 65535.0)
+        }
+        fillRect(src, 1, 0, 3, n, 1, 65535.0)
         declared.foreach(src.GetRasterBand(1).SetNoDataValue)
         assert(noDataOf(src, 1) == declared, s"fixture NoData ${noDataOf(src, 1)}, expected $declared")
         val inv = invert(gt)
         val (bng, wgs) = (epsgSR(27700), epsgSR(4326))
         val toLonLat = new CoordinateTransformation(bng, wgs)
         val chipNoData = mutable.Set.empty[Option[Double]]
-        var (valid, invented, fallbackValid, maskedValid) = (0L, 0L, 0L, 0L)
+        var (valid, invented, fallbackValid, maskedValid, declaredValid) = (0L, 0L, 0L, 0L, 0L)
         val it = RasterTessellate.tessellateBngIter(handOff(src), Map.empty[String, String], BngRes, assignment, coverage)
         try {
             while (it.hasNext) {
@@ -961,7 +980,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
                             val sc = inv(0) + ll(0) * inv(1) + ll(1) * inv(2)
                             val sr = inv(3) + ll(0) * inv(4) + ll(1) * inv(5)
                             val v = vals(k).toLong
-                            if (v == 65535L) fallbackValid += 1
+                            if (v == 65535L || v == 65534L) fallbackValid += 1
                             else if (v < 1 || v > n * n) invented += 1
                             else {
                                 // the value names its source pixel; the chip pixel centre must fall on it
@@ -969,6 +988,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
                                 val (er, ec) = (((v - 1) / n).toInt, ((v - 1) % n).toInt)
                                 if (math.abs(sc - (ec + 0.5)) > 1.5 || math.abs(sr - (er + 0.5)) > 1.5) invented += 1
                                 else if (masked && (er == 10 || er == 11)) maskedValid += 1
+                                if (declared.contains(vals(k))) declaredValid += 1
                             }
                         }
                         k += 1
@@ -980,12 +1000,12 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
             toLonLat.delete(); bng.delete(); wgs.delete()
             RasterDriver.releaseDataset(src)
         }
-        (valid, invented, fallbackValid, maskedValid, chipNoData.toSet)
+        (valid, invented, fallbackValid, maskedValid, chipNoData.toSet, declaredValid)
     }
 
     for ((assignment, coverage) <- Seq(("centroid", "sparse"), ("centroid", "complete"), ("covering", "sparse"))) {
         test(s"(s) BNG $assignment+$coverage on an EPSG:4326 source without NoData: the warp fill is NoData, not valid zeros") {
-            val (valid, invented, fallbackValid, _, chipNoData) = bngWarpFill(assignment, coverage)
+            val (valid, invented, fallbackValid, _, chipNoData, _) = bngWarpFill(assignment, coverage)
             assert(valid > 0, "the chips hold no valid pixel")
             assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
             assert(fallbackValid == 0, s"$fallbackValid source pixels equal to 65535 stayed valid")
@@ -993,16 +1013,30 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         }
     }
 
-    test("(t) BNG on a source without NoData but with its own mask: masked pixels and the warp fill are NoData") {
-        val (valid, invented, _, maskedValid, chipNoData) = bngWarpFill("centroid", "sparse", masked = true)
-        assert(valid > 0, "the chips hold no valid pixel")
-        assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
-        assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the chips")
-        assert(chipNoData == Set(Some(65535.0)), s"chip NoData values $chipNoData, expected 65535")
+    for (assignment <- Seq("centroid", "covering")) {
+        test(s"(t) BNG $assignment on a source without NoData but with its own mask: masked pixels, the warp fill and real 65535s are NoData") {
+            val (valid, invented, fallbackValid, maskedValid, chipNoData, _) = bngWarpFill(assignment, "sparse", masked = true)
+            assert(valid > 0, "the chips hold no valid pixel")
+            assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
+            assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the chips")
+            assert(fallbackValid == 0, s"$fallbackValid source pixels equal to 65535 stayed valid (or moved to 65534)")
+            assert(chipNoData == Set(Some(65535.0)), s"chip NoData values $chipNoData, expected 65535")
+        }
+
+        test(s"(t2) BNG $assignment on a source with NoData 7 and its own mask: masked pixels and the 7s are NoData, 65535 stays real") {
+            val (valid, invented, fallbackValid, maskedValid, chipNoData, declaredValid) =
+                bngWarpFill(assignment, "sparse", masked = true, declared = Some(7.0))
+            assert(valid > 0, "the chips hold no valid pixel")
+            assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
+            assert(maskedValid == 0, s"$maskedValid masked source pixels became valid in the chips")
+            assert(declaredValid == 0, s"$declaredValid source pixels equal to the NoData 7 are valid")
+            assert(fallbackValid > 0, "65535 is a real value when the source NoData is 7: row 3 must stay valid")
+            assert(chipNoData == Set(Some(7.0)), s"chip NoData values $chipNoData, expected the source's 7")
+        }
     }
 
     test("(u) BNG on a source with its own NoData: the warp keeps it, so 65535 stays a real value") {
-        val (valid, invented, fallbackValid, _, chipNoData) = bngWarpFill("centroid", "sparse", declared = Some(0.0))
+        val (valid, invented, fallbackValid, _, chipNoData, _) = bngWarpFill("centroid", "sparse", declared = Some(0.0))
         assert(valid > 0, "the chips hold no valid pixel")
         assert(invented == 0, s"$invented of $valid valid chip pixels are warp fill (0) or off the source pixel they name")
         assert(fallbackValid > 0, "65535 is a real value when the source NoData is 0: row 3 must stay valid")

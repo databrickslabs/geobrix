@@ -271,8 +271,9 @@ class ClipToGeomTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // --------------------------------------------------------------------------------------------
-    // A source with its own (per-dataset, non-alpha) mask band, clipped by a hexagon: gdalwarp must
-    // rasterize the cutline and then ignored the mask, so masked pixels came out as valid data.
+    // A source with its own (per-dataset, non-alpha) mask band, clipped by a hexagon: gdalwarp has to
+    // rasterize the cutline and then ignores the mask band, so the clip reads the mask as an alpha band
+    // (WarpSource) to keep masked pixels out of the valid data.
     // --------------------------------------------------------------------------------------------
 
     private val MaskN = 64
@@ -347,26 +348,30 @@ class ClipToGeomTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("ClipToGeom with a fill NoData keeps a masked source's mask under a hexagon cutline") {
         val (src, path, hidden) = maskFixture(masked = true)
-        src.GetRasterBand(1).GetMaskFlags() shouldBe org.gdal.gdalconst.gdalconstConstants.GMF_PER_DATASET
-        val before = vsimemFiles()
-        val (chip, metadata) = ClipToGeom.clip(src, Map.empty, Hexagon, null, cutlineAllTouched = true, dstNoData = Some(65535.0))
         try {
-            val (maskedValid, maskedValues, fallbackValid) = maskedPixels(chip, hidden)
-            maskedValues should not be empty
-            withClue("masked source pixels valid in the clip: ") { maskedValid shouldBe 0 }
-            withClue("real 65535 pixels valid in the clip (moved by gdalwarp): ") { fallbackValid shouldBe 0 }
-            chip.GetRasterCount shouldBe 1
-            chip.GetRasterBand(1).getDataType shouldBe org.gdal.gdalconst.gdalconstConstants.GDT_UInt16
-            val nd = new Array[java.lang.Double](1)
-            chip.GetRasterBand(1).GetNoDataValue(nd)
-            nd(0).doubleValue() shouldBe 65535.0
-            metadata("last_command") should include("-srcalpha")
+            src.GetRasterBand(1).GetMaskFlags() shouldBe org.gdal.gdalconst.gdalconstConstants.GMF_PER_DATASET
+            val before = vsimemFiles()
+            val (chip, metadata) =
+                ClipToGeom.clip(src, Map.empty, Hexagon, null, cutlineAllTouched = true, dstNoData = Some(65535.0))
+            try {
+                val (maskedValid, maskedValues, fallbackValid) = maskedPixels(chip, hidden)
+                maskedValues should not be empty
+                withClue("masked source pixels valid in the clip: ") { maskedValid shouldBe 0 }
+                withClue("real 65535 pixels valid in the clip (moved by gdalwarp): ") { fallbackValid shouldBe 0 }
+                chip.GetRasterCount shouldBe 1
+                chip.GetRasterBand(1).getDataType shouldBe org.gdal.gdalconst.gdalconstConstants.GDT_UInt16
+                val nd = new Array[java.lang.Double](1)
+                chip.GetRasterBand(1).GetNoDataValue(nd)
+                nd(0).doubleValue() shouldBe 65535.0
+                metadata("last_command") should include("-srcalpha")
+            } finally {
+                RasterDriver.releaseDataset(chip)
+            }
+            withClue("the clip left /vsimem files behind or removed the source's: ") { vsimemFiles() shouldBe before }
         } finally {
-            RasterDriver.releaseDataset(chip)
+            src.delete()
+            gdal.Unlink(path)
         }
-        withClue("the clip left /vsimem files behind or removed the source's: ") { vsimemFiles() shouldBe before }
-        src.delete()
-        gdal.Unlink(path)
     }
 
     test("ClipToGeom without a fill NoData leaves a masked source's masked pixels out of the clip") {

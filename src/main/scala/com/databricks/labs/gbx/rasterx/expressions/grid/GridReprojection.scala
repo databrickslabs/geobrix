@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.grid
 
 import com.databricks.labs.gbx.rasterx.gdal.GDAL
-import com.databricks.labs.gbx.rasterx.operator.GDALWarp
+import com.databricks.labs.gbx.rasterx.operator.WarpSource
 import org.gdal.gdal.Dataset
 import org.gdal.osr.SpatialReference
 
@@ -16,6 +16,11 @@ import org.gdal.osr.SpatialReference
   *
   * Never errors on an absent CRS: a raster with no projection is assumed already in the
   * grid-native CRS and returned unchanged.
+  *
+  * The warp fill is NoData, so the reducers never aggregate it: for a source without NoData,
+  * gdalwarp would otherwise fill the pixels outside the source footprint with valid zeros. The
+  * source pixels equal to that NoData are NoData too, and a source's own mask band still masks
+  * its pixels ([[WarpSource.warpFillAsNoData]]), as in the lightweight tier.
   */
 object GridReprojection {
 
@@ -38,12 +43,7 @@ object GridReprojection {
         val uuid = java.util.UUID.randomUUID().toString.replace("-", "")
         val extension = GDAL.getExtension(ds.GetDriver().getShortName)
         val resultPath = s"/vsimem/raster_grid_${gridSrid}_$uuid.$extension"
-        val (result, _) = GDALWarp.executeWarp(
-          resultPath,
-          Array(ds),
-          Map.empty[String, String],
-          command = s"gdalwarp -t_srs EPSG:$gridSrid -r near"
-        )
+        val (result, _) = WarpSource.warpFillAsNoData(ds, resultPath, s"gdalwarp -t_srs EPSG:$gridSrid -r near")
         (result, true)
     }
 }

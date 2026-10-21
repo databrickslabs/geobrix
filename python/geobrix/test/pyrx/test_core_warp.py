@@ -89,11 +89,43 @@ def test_reproject_to_srid_mark_fill_nodata_keeps_a_sources_own_mask():
     assert nodata == 65535.0
     v = vals[valid].astype(int)
     assert not (v == 0).any()
-    # a valid pixel names its source row: rows 10-11 are masked in the source. On a
-    # masked source the warp keeps its own handling of the 65535s of row 3 (moved to
-    # 65534), so those are not compared.
-    rows = np.where(v == 65534, -1, (v - 1) // n)
-    assert not np.isin(rows, (10, 11)).any()
+    # the 65535s of row 3 are NoData, not moved to 65534 and kept valid
+    assert ((v >= 1) & (v <= n * n)).all(), sorted(set(v[v > n * n]))[:3]
+    # a valid pixel names its source row: rows 10-11 are masked in the source
+    assert not np.isin((v - 1) // n, (10, 11)).any()
+
+
+def test_reproject_to_srid_mark_fill_nodata_keeps_the_mask_of_a_source_with_nodata():
+    """A source NoData would make the warp drop the mask: the masked pixels stay NoData,
+    the source's NoData is kept, and its 65535s stay real values."""
+    n = 40
+    nodata, valid, vals = _warped(
+        _fill_source(nodata=7, masked=True), mark_fill_nodata=True
+    )
+    assert nodata == 7.0
+    v = vals[valid].astype(int)
+    assert not (v == 7).any()
+    assert (v == 65535).any()
+    named = v[v <= n * n]
+    assert not np.isin((named - 1) // n, (10, 11)).any()
+
+
+def test_reproject_to_crs_mark_fill_nodata_warps_as_reproject_to_srid():
+    """Both entry points share the fill policy: a string-given CRS warps the same."""
+    for kw in ({}, {"masked": True}, {"nodata": 7, "masked": True}):
+        b = _fill_source(**kw)
+        with MemoryFile(b) as mf, mf.open() as ds:
+            by_srid = warp.reproject_to_srid(ds, 27700, mark_fill_nodata=True)
+            by_crs = warp.reproject_to_crs(ds, "EPSG:27700", mark_fill_nodata=True)
+        with (
+            MemoryFile(by_srid) as a,
+            a.open() as da,
+            MemoryFile(by_crs) as c,
+            c.open() as dc,
+        ):
+            assert dc.nodata == da.nodata is not None, kw
+            assert (dc.read_masks(1) == da.read_masks(1)).all(), kw
+            assert (dc.read(1) == da.read(1)).all(), kw
 
 
 def test_reproject_to_srid_mark_fill_nodata_leaves_an_alpha_source_alone():

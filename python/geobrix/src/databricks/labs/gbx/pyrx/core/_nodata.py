@@ -31,6 +31,28 @@ def fallback_nodata(dtype: str) -> float:
     return _FALLBACK_NODATA.get(np.dtype(dtype).name, 0.0)
 
 
+def has_alpha(ds) -> bool:
+    """True when *ds* has an alpha band, or a band masked by one (heavy ``GDAL.hasAlpha``)."""
+    from rasterio.enums import ColorInterp, MaskFlags
+
+    return ColorInterp.alpha in ds.colorinterp or any(
+        MaskFlags.alpha in flags for flags in ds.mask_flag_enums
+    )
+
+
+def has_own_mask(ds) -> bool:
+    """True when a band of *ds* is masked by its own per-dataset mask band and *ds* has
+    no alpha band: an internal or external GTiff mask, as JPEG/YCbCr imagery often has
+    (heavy ``GDAL.hasOwnMask``, the sources heavy ``WarpSource`` reads through a mask
+    view). A warp drops such a mask once a source NoData is set, and it is not carried
+    by writing the pixels alone, so ops that rewrite or warp the pixels apply it."""
+    from rasterio.enums import MaskFlags
+
+    return not has_alpha(ds) and any(
+        MaskFlags.per_dataset in flags for flags in ds.mask_flag_enums
+    )
+
+
 def nodata_fits_dtype(nodata: float, dtype: str) -> bool:
     """Return True if *nodata* is representable in *dtype*.
 

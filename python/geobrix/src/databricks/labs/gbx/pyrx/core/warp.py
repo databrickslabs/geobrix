@@ -3,52 +3,90 @@ function returns new GTiff bytes."""
 
 import numpy as np
 import rasterio
-from rasterio.enums import ColorInterp, MaskFlags
 from rasterio.io import MemoryFile
 from rasterio.warp import calculate_default_transform, reproject
 
 from databricks.labs.gbx.pyrx.core import compression as _comp
-from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
+from databricks.labs.gbx.pyrx.core._nodata import (
+    fallback_nodata,
+    has_alpha,
+    has_own_mask,
+)
 from databricks.labs.gbx.pyrx.core._util import resampling_enum
 
 
-def _undeclared_fill(ds):
-    """The warp NoData plan of a source that declares none, else ``None``.
+def _fill_plan(ds):
+    """The warp NoData plan of ``ds`` when its warp fill is marked NoData, else ``None``.
 
-    Returns ``(fill, use_src_nodata)``: ``fill`` is the dtype fallback
-    (``fallback_nodata``, heavy ``GDAL.getNoDataConstant``), ``use_src_nodata``
-    says whether source pixels equal to it are NoData too. It is False when a band
-    has its own (non-alpha) per-dataset mask: a source NoData makes the warp ignore
-    that mask, so the masked pixels would turn valid. Same rule as heavy
-    ``GDAL.srcNoDataArgs``.
+    Returns ``(nodata, read_masked)``. ``nodata`` is the source's NoData, or the dtype
+    fallback (``fallback_nodata``, heavy ``GDAL.getNoDataConstant``) when it declares
+    none; the output declares it, the warp fills with it, and source pixels equal to it
+    are NoData too (warped as the source NoData), instead of being moved by one and kept
+    valid. ``read_masked`` says the source has its own (non-alpha) per-dataset mask band:
+    a source NoData makes the warp ignore that mask, so each band is read masked and its
+    masked pixels set to ``nodata`` before the warp (heavy reads the mask as an alpha
+    band, ``WarpSource``). Reading a band holds one source band in memory, about the size
+    of one band of the warped output, which is in memory too.
 
-    ``None`` (the warp is left as it was) also when the source has an alpha band: the
-    warped alpha band already marks the fill and the transparent pixels, and a
-    declared NoData would shadow it (``NodataShadowWarning``), turning the
-    transparent pixels valid and the source's real 0 pixels NoData. Heavy
-    ``bngFillArgs`` does the same.
+    ``None`` (the warp is left as it was) for a source that declares NoData and has no
+    mask band (the warp carries its NoData), and for a source with an alpha band: the
+    warped alpha band already marks the fill and the transparent pixels, and a declared
+    NoData would shadow it (``NodataShadowWarning``), turning the transparent pixels
+    valid and the source's real 0 pixels NoData. Heavy ``WarpSource.fillNoDataArgs``
+    does the same.
 
     A band-level mix (some bands declare NoData, some do not) occurs only for VRT or
-    in-memory sources: light treats it as declared and skips the marking, heavy
-    marks the undeclared bands.
+    in-memory sources: light treats it as declared (band 1's value), heavy marks the
+    undeclared bands.
     """
-    if any(v is not None for v in ds.nodatavals):
+    if has_alpha(ds):
         return None
-    if ColorInterp.alpha in ds.colorinterp or any(
-        MaskFlags.alpha in flags for flags in ds.mask_flag_enums
-    ):
+    own_mask = has_own_mask(ds)
+    declared = next((v for v in ds.nodatavals if v is not None), None)
+    if declared is not None and not own_mask:
         return None
-    own_mask = any(MaskFlags.per_dataset in flags for flags in ds.mask_flag_enums)
-    return fallback_nodata(ds.dtypes[0]), not own_mask
+    nodata = fallback_nodata(ds.dtypes[0]) if declared is None else declared
+    return nodata, own_mask
 
 
-def reproject_to_crs(ds, target_crs_value, resampling: str = "nearest") -> bytes:
+def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_nodata):
+    """GTiff bytes of every band of ``ds`` warped into a new dataset of ``profile``;
+    with ``mark_fill_nodata``, by the plan of :func:`_fill_plan`."""
+    plan = _fill_plan(ds) if mark_fill_nodata else None
+    nodata, read_masked = plan if plan else (None, False)
+    if plan:
+        profile.update(nodata=nodata)
+    resamp = resampling_enum(resampling)
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            for i in range(1, ds.count + 1):
+                source = rasterio.band(ds, i)
+                if read_masked:
+                    source = ds.read(i, masked=True).filled(nodata)
+                reproject(
+                    source=source,
+                    destination=rasterio.band(dst, i),
+                    src_transform=ds.transform,
+                    src_crs=ds.crs,
+                    dst_transform=transform,
+                    dst_crs=dst_crs,
+                    resampling=resamp,
+                    src_nodata=nodata,
+                    dst_nodata=nodata,
+                )
+        return mf.read()
+
+
+def reproject_to_crs(
+    ds, target_crs_value, resampling: str = "nearest", *, mark_fill_nodata: bool = False
+) -> bytes:
     """Reproject an open dataset to a string-given target CRS; return GTiff bytes.
 
     Accepts any ``resolve_crs``-parseable value: int EPSG, int-castable string
     (``"4326"``), authority string (``"ESRI:54008"``), WKT, PROJ4, …  Unlike
     ``reproject_to_srid`` this never requires a positive EPSG code, so
-    non-EPSG targets (ESRI codes, WKT) work correctly.
+    non-EPSG targets (ESRI codes, WKT) work correctly. ``mark_fill_nodata`` is
+    as in ``reproject_to_srid``.
 
     Identity short-circuit: when ``ds.crs == resolved_target_crs`` the pixels
     are returned verbatim (no resample, no re-encode) exactly like
@@ -83,20 +121,14 @@ def reproject_to_crs(ds, target_crs_value, resampling: str = "nearest") -> bytes
     profile.update(
         _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
-    resamp = resampling_enum(resampling)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            for i in range(1, ds.count + 1):
-                reproject(
-                    source=rasterio.band(ds, i),
-                    destination=rasterio.band(dst, i),
-                    src_transform=ds.transform,
-                    src_crs=ds.crs,
-                    dst_transform=transform,
-                    dst_crs=dst_crs,
-                    resampling=resamp,
-                )
-        return mf.read()
+    return _warp_bands(
+        ds,
+        profile,
+        dst_crs=dst_crs,
+        transform=transform,
+        resampling=resampling,
+        mark_fill_nodata=mark_fill_nodata,
+    )
 
 
 def reproject_to_srid(
@@ -106,11 +138,12 @@ def reproject_to_srid(
 
     ``mark_fill_nodata`` makes the pixels the warp fills outside the source
     footprint NoData rather than valid zeros, for a source that declares no NoData:
-    the output declares the dtype fallback (``fallback_nodata``), source pixels equal
-    to it become NoData too (as in heavy), and a source's own mask still masks. A
-    source that declares NoData keeps it either way. Off by default, so other
-    callers (``rst_transform`` and friends) are unchanged; BNG tessellation turns it
-    on so edge cells do not tessellate fill as data.
+    the output declares the dtype fallback (``fallback_nodata``) and source pixels
+    equal to it become NoData too (as in heavy). A source that declares NoData keeps
+    it either way. A source's own mask band still masks its pixels, also when the
+    source declares NoData (see ``_fill_plan``). Off by default, so other callers
+    (``rst_transform`` and friends) are unchanged; BNG tessellation and the
+    raster-to-grid reducers turn it on so the fill is not read as data.
 
     Identity short-circuit: when the source CRS's EPSG code equals
     ``target_srid`` the reprojection is a no-op (produces no new pixels), so the
@@ -150,23 +183,11 @@ def reproject_to_srid(
     profile.update(
         _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
-    plan = _undeclared_fill(ds) if mark_fill_nodata else None
-    fill, use_src_nodata = plan if plan else (None, False)
-    if plan:
-        profile.update(nodata=fill)
-    resamp = resampling_enum(resampling)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            for i in range(1, ds.count + 1):
-                reproject(
-                    source=rasterio.band(ds, i),
-                    destination=rasterio.band(dst, i),
-                    src_transform=ds.transform,
-                    src_crs=ds.crs,
-                    dst_transform=transform,
-                    dst_crs=dst_crs,
-                    resampling=resamp,
-                    src_nodata=fill if use_src_nodata else None,
-                    dst_nodata=fill,
-                )
-        return mf.read()
+    return _warp_bands(
+        ds,
+        profile,
+        dst_crs=dst_crs,
+        transform=transform,
+        resampling=resampling,
+        mark_fill_nodata=mark_fill_nodata,
+    )

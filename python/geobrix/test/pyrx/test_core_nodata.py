@@ -88,3 +88,43 @@ def test_fallback_nodata_matches_heavy_getNoDataConstant(dtype, expected):
     v = nd.fallback_nodata(dtype)
     assert v == expected and not math.isnan(v)
     assert nd.nodata_fits_dtype(v, dtype)
+
+
+def _mask_kind_tile(kind):
+    """4x4 GTiff: ``plain``, ``masked`` (internal per-dataset mask), ``masked-nodata``
+    (the mask and NoData 7), or ``rgba`` (an alpha band)."""
+    rgba = kind == "rgba"
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=4 if rgba else 1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(10, 50, 0.5, 0.5),
+        nodata=7 if kind == "masked-nodata" else None,
+    )
+    if rgba:
+        profile.update(photometric="RGB", alpha="YES")
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(np.full((profile["count"], 4, 4), 9, dtype="uint8"))
+                if kind.startswith("masked"):
+                    dst.write_mask(np.eye(4, dtype="uint8") * 255)
+            return mf.read()
+
+
+@pytest.mark.parametrize(
+    "kind,alpha,own_mask",
+    [
+        ("plain", False, False),
+        ("masked", False, True),
+        ("masked-nodata", False, True),
+        ("rgba", True, False),
+    ],
+)
+def test_has_alpha_and_has_own_mask(kind, alpha, own_mask):
+    with MemoryFile(_mask_kind_tile(kind)) as mf, mf.open() as ds:
+        assert nd.has_alpha(ds) is alpha
+        assert nd.has_own_mask(ds) is own_mask

@@ -408,15 +408,24 @@ def _complete_coverage_pass(
 
 def _stamp_crs_bytes(ds, target_crs) -> bytes:
     """Return GTiff bytes identical to ``ds`` but with ``target_crs`` stamped —
-    used to give a CRS-less-but-known raster its source CRS before warping."""
+    used to give a CRS-less-but-known raster its source CRS before warping. A
+    source's own (per-dataset, non-alpha) mask band is written with it, so the
+    warp still masks its pixels."""
+    import rasterio
     from rasterio.io import MemoryFile
 
+    from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+
+    own_mask = has_own_mask(ds)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", crs=target_crs)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(ds.read())
-        return mf.read()
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**profile) as dst:
+                dst.write(ds.read())
+                if own_mask:
+                    dst.write_mask(ds.read_masks(1))
+            return mf.read()
 
 
 def _warp_to_4326_if_needed(ds, crs):
@@ -424,7 +433,9 @@ def _warp_to_4326_if_needed(ds, crs):
     needed (already 4326, or CRS-less with no override -> assume grid-native).
 
     The embedded raster CRS wins as the source; else the ``crs`` override (int
-    SRID or CRS string) for a CRS-less raster; else None (never errors)."""
+    SRID or CRS string) for a CRS-less raster; else None (never errors). The
+    warp fill is NoData, so the reducers never aggregate it, and a source's own
+    mask band still masks (``warp.reproject_to_crs(..., mark_fill_nodata=True)``)."""
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core import warp
@@ -435,7 +446,9 @@ def _warp_to_4326_if_needed(ds, crs):
     if ds.crs is not None:
         if ds.crs == _WGS84:
             return None  # already grid-native
-        return warp.reproject_to_crs(ds, "EPSG:4326", resampling="nearest")
+        return warp.reproject_to_crs(
+            ds, "EPSG:4326", resampling="nearest", mark_fill_nodata=True
+        )
 
     # CRS-less raster: use the override if given, else assume grid-native (4326).
     if crs is None:
@@ -445,7 +458,9 @@ def _warp_to_4326_if_needed(ds, crs):
         return None  # override says it is already 4326
     stamped = _stamp_crs_bytes(ds, override)
     with MemoryFile(stamped) as mf, mf.open() as stamped_ds:
-        return warp.reproject_to_crs(stamped_ds, "EPSG:4326", resampling="nearest")
+        return warp.reproject_to_crs(
+            stamped_ds, "EPSG:4326", resampling="nearest", mark_fill_nodata=True
+        )
 
 
 def raster_to_grid(
@@ -684,7 +699,10 @@ def _raster_to_bng(
 
     if already_bng:
         return _run(ds)
-    warped_bytes = warp.reproject_to_srid(ds, 27700, resampling="nearest")
+    # The warp fill is NoData and a source's own mask still masks (as for h3/quadbin).
+    warped_bytes = warp.reproject_to_srid(
+        ds, 27700, resampling="nearest", mark_fill_nodata=True
+    )
     with MemoryFile(warped_bytes) as mf, mf.open() as work_ds:
         return _run(work_ds)
 

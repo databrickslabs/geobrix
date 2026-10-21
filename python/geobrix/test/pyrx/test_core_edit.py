@@ -98,3 +98,59 @@ def test_init_nodata_keeps_existing_nodata():
         out = edit.init_nodata(ds)
     with MemoryFile(out) as m, m.open() as c:
         assert c.nodata == 7.0
+
+
+def _masked_u16(nodata=None):
+    """8x8 uint16 with an internal per-dataset mask over every fifth pixel, an unmasked
+    65535 (the fallback) at pixel 7 and an unmasked 7 at pixel 9."""
+    import rasterio
+
+    vals = (np.arange(64) + 100).astype("uint16")
+    vals[7], vals[9] = 65535, 7
+    mask = np.where(np.arange(64) % 5 == 0, 0, 255).astype("uint8")
+    prof = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=1,
+        dtype="uint16",
+        nodata=nodata,
+        crs="EPSG:4326",
+        transform=from_bounds(0, 0, 1, 1, 8, 8),
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with MemoryFile() as mf:
+            with mf.open(**prof) as d:
+                d.write(vals.reshape(1, 8, 8))
+                d.write_mask(mask.reshape(8, 8))
+            return mf.read(), vals, mask == 0
+
+
+def test_init_nodata_keeps_a_sources_own_mask():
+    """The masked pixels are NoData in the output, and so is the real 65535."""
+    b, vals, hidden = _masked_u16()
+    with MemoryFile(b) as mf, mf.open() as ds:
+        out = edit.init_nodata(ds)
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.nodata == 65535.0
+        valid = (c.read_masks(1) != 0).ravel()
+        data = c.read(1).ravel()
+    assert not valid[hidden].any(), "masked source pixels became valid"
+    assert not valid[7], "the real 65535 stayed valid"
+    keep = ~hidden & (vals != 65535)
+    assert valid[keep].all() and (data[keep] == vals[keep]).all()
+
+
+def test_init_nodata_keeps_the_mask_of_a_source_with_nodata():
+    """A source with NoData 7 keeps it; its masked pixels and its 7 are NoData."""
+    b, vals, hidden = _masked_u16(nodata=7)
+    with MemoryFile(b) as mf, mf.open() as ds:
+        out = edit.init_nodata(ds)
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.nodata == 7.0
+        valid = (c.read_masks(1) != 0).ravel()
+        data = c.read(1).ravel()
+    assert not valid[hidden].any(), "masked source pixels became valid"
+    assert not valid[9], "the source's NoData 7 pixel became valid"
+    keep = ~hidden & (vals != 7)
+    assert valid[keep].all() and (data[keep] == vals[keep]).all()

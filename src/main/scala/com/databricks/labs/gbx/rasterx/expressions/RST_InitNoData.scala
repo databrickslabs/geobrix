@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operator.GDALWarp
+import com.databricks.labs.gbx.rasterx.operator.WarpSource
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -66,21 +66,17 @@ object RST_InitNoData extends WithExpressionInfo {
             case _           => perBand.mkString(" ")
         }
         val cmd = s"""gdalwarp -dstnodata $noDataValues"""
-        // A band without NoData: its pixels equal to the constant become NoData (as in the lightweight
-        // tier) rather than being moved to the constant +/- 1 by gdalwarp. A band that declares NoData keeps
-        // gdalwarp's handling: its NoData pixels take the constant.
-        val srcNoData = GDAL.srcNoDataArgs(ds)
         val uuid = java.util.UUID.randomUUID().toString
         val driver = ds.GetDriver()
         val extension = GDAL.getExtension(driver.getShortName)
         val resFile = s"/vsimem/initnodata_$uuid.$extension"
-        GDALWarp.executeWarp(
-          resFile,
-          Array(ds),
-          options,
-          command = cmd,
-          extraArgs = srcNoData
-        )
+        // A source with its own mask band is warped through its mask view, so the masked pixels become NoData
+        // also when the source declares NoData. A band without NoData: its pixels equal to the constant
+        // become NoData (as in the lightweight tier) rather than being moved to the constant +/- 1 by
+        // gdalwarp. A band that declares NoData keeps gdalwarp's handling: its NoData pixels take the constant.
+        val source = new WarpSource(ds)
+        try source.warp(resFile, options, cmd, GDAL.srcNoDataArgs(ds, maskAsAlpha = source.masked))
+        finally source.close()
     }
 
     override def name: String = "gbx_rst_initnodata"

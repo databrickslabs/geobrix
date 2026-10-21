@@ -93,7 +93,7 @@ object GDAL {
       * [[getNoDataConstant]] for its type. Empty when every band declares NoData, or when a band without
       * NoData has its own mask ([[hasOwnMask]]): a source NoData makes gdalwarp drop that mask, so masked
       * pixels would turn valid (an alpha band still masks). `maskAsAlpha` says the warp reads that mask as
-      * a source alpha band instead (the mask view of [[com.databricks.labs.gbx.rasterx.operations.ClipToGeom]]),
+      * a source alpha band instead (the mask view of [[com.databricks.labs.gbx.rasterx.operator.WarpSource]]),
       * which a source NoData does not drop, so the arguments are given then. The list is ONE argument: pass
       * it as a warp extra argument, not through a space-split command string.
       */

@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.gridx.grid.{BNG, CustomGridSystem, GridSystem, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operator.{GDALWarp, OperatorOptions}
+import com.databricks.labs.gbx.rasterx.operator.{OperatorOptions, WarpSource}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.{CoordinateTransformation, SpatialReference}
@@ -104,24 +104,11 @@ object RasterTessellate {
     }
 
     /**
-      * gdalwarp arguments that make the warp fill of `ds` NoData when some band declares none: gdalwarp
-      * otherwise fills the pixels outside the source footprint with 0 and declares no NoData, so they
-      * would be tessellated as valid data. [[GDAL.dstNoDataArgs]] gives each undeclared band the dtype
-      * constant ([[GDAL.getNoDataConstant]]) as `-dstnodata` (a declared band keeps its own value), paired
-      * with [[GDAL.srcNoDataArgs]], so source pixels equal to it are NoData too instead of being moved by
-      * +/- 1 and kept valid, and a source's own mask band is left to gdalwarp (see there). Empty when every
-      * band declares NoData (the warp carries it), and when the source has an alpha band: gdalwarp carries
-      * the alpha band, which already marks the fill and the transparent pixels, and a declared NoData would
-      * shadow it. Both lists are ONE argument each, so these go through the unsplit warp extra arguments.
-      */
-    private def bngFillArgs(ds: Dataset): Seq[String] =
-        if (GDAL.hasAlpha(ds)) Seq.empty else GDAL.dstNoDataArgs(ds) ++ GDAL.srcNoDataArgs(ds)
-
-    /**
       * Reproject `ds` to EPSG:27700 (nearest-neighbour) unless it is already 27700; returns
       * `(workDs, reprojected)`. When `reprojected` is true the caller owns `workDs` and must release it.
       * Mirrors `RST_BNG_RasterToGrid`'s warp-up-front behaviour (BNG has no lon/lat input path). The warp
-      * fill is NoData ([[bngFillArgs]]), as in the lightweight tier.
+      * fill is NoData and a source's own mask band is kept ([[WarpSource.warpFillAsNoData]]), as in the
+      * lightweight tier.
       */
     private def warpToBng(ds: Dataset): (Dataset, Boolean) = {
         val srcWkt = ds.GetProjection()
@@ -138,13 +125,7 @@ object RasterTessellate {
             val driver = ds.GetDriver()
             val extension = GDAL.getExtension(driver.getShortName)
             val resultPath = s"/vsimem/raster_bng_tess_$uuid.$extension"
-            val (result, _) = GDALWarp.executeWarp(
-              resultPath,
-              Array(ds),
-              Map.empty[String, String],
-              command = "gdalwarp -t_srs EPSG:27700 -r near",
-              extraArgs = bngFillArgs(ds)
-            )
+            val (result, _) = WarpSource.warpFillAsNoData(ds, resultPath, "gdalwarp -t_srs EPSG:27700 -r near")
             (result, true)
         }
     }
@@ -287,6 +268,8 @@ object RasterTessellate {
             if (isBng(grid)) natives.useBngWarp()
             val fp = footprint(grid, natives.workDs, natives.gridSR)
             val cells = grid.coveringCandidateCells(fp, resolution).toArray
+            // One warp source (and mask view, for a source with its own mask) for every cell's clip.
+            natives.clipSource = new WarpSource(natives.workDs)
             if (coveringSetupFault != null) throw coveringSetupFault
             new CoveringChipIterator(grid, natives, options, coverage, fp, cells)
         } catch {
@@ -334,8 +317,14 @@ object RasterTessellate {
                 if (isCellValid(grid, cellId)) {
                     val cellGeom = grid.cellIdToGeometry(cellId)
                     if (hasPositiveAreaOverlap(cellGeom, rasterFootprint)) {
-                        val (resDs, resMtd) =
-                            ClipToGeom.clip(natives.workDs, options, cellGeom, natives.gridSR, dstNoData = fillNoData)
+                        val (resDs, resMtd) = ClipToGeom.clip(
+                          natives.workDs,
+                          options,
+                          cellGeom,
+                          natives.gridSR,
+                          dstNoData = fillNoData,
+                          source = Some(natives.clipSource)
+                        )
                         if (resDs != null) {
                             // covering+sparse: drop chips whose clip is entirely NoData.
                             if (coverage == "sparse" && isAllNoData(resDs)) {
@@ -414,13 +403,16 @@ object RasterTessellate {
     /** Native resources one tessellation (covering or centroid) owns until its iterator ends: the `input`
       * dataset, always (a tessellation owns its input), the dataset it works on (`workDs`: the EPSG:27700
       * warp, owned when `reprojected`, else `input` itself), a fresh custom-grid SR (`gridSR`, owned when
-      * `ownsGridSR`) and, for centroid, the per-pixel transform `tf` and its inverse `tfInv`. `close()`
-      * releases them once; later calls do nothing. Shared SRs (GDAL.WSG84, BngSR) are never released. */
+      * `ownsGridSR`), for covering the [[WarpSource]] of `workDs` its clips warp through (`clipSource`) and,
+      * for centroid, the per-pixel transform `tf` and its inverse `tfInv`. `close()` releases them once
+      * (`clipSource` before `workDs`, whose bands its mask view reads); later calls do nothing. Shared SRs
+      * (GDAL.WSG84, BngSR) are never released. */
     private final class TessellateNatives(val input: Dataset) extends AutoCloseable {
         var workDs: Dataset = input
         var reprojected: Boolean = false
         var gridSR: SpatialReference = null
         var ownsGridSR: Boolean = false
+        var clipSource: WarpSource = null
         var tf: CoordinateTransformation = null
         var tfInv: CoordinateTransformation = null
         private var released = false
@@ -438,6 +430,7 @@ object RasterTessellate {
                 if (tf != null) tf.delete()
                 if (tfInv != null) tfInv.delete()
                 if (ownsGridSR && gridSR != null) gridSR.delete()
+                if (clipSource != null) clipSource.close()
                 if (reprojected) RasterDriver.releaseDataset(workDs)
                 RasterAccessors.unlink(input)
             }

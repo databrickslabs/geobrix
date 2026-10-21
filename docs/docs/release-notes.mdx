@@ -292,18 +292,20 @@ formats.
   tessellation failed on it, and `rst_initnodata` set nothing), and a `uint8` source now gets 0.
   On an integer band without NoData, heavyweight `rst_initnodata` kept the pixels equal to the
   fallback as valid data with the value moved by one (a `uint8` 0 became 1); it now marks them
-  NoData, as the lightweight tier does. In heavyweight `rst_initnodata`, a source that carries its
-  own mask band keeps that mask, and its fallback-valued pixels keep the earlier handling. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the
-  `uint16` bands that pass through `rst_initnodata` now carry NoData 65535.
+  NoData, as the lightweight tier does. A source that carries its own mask band (not an alpha band)
+  keeps that mask through `rst_initnodata` in both tiers, also when it declares NoData: its masked
+  pixels become NoData. The lightweight tier dropped the mask, and the heavyweight tier dropped it
+  when the source declared NoData, so the masked pixels read as valid data. In the
+  [EO series](./notebooks/eo-series) notebooks 03 and 04, the `uint16` bands that pass through
+  `rst_initnodata` now carry NoData 65535.
 - **BNG tessellation marks the warp fill as NoData.** `rst_bng_tessellate` first warps a source
   that is not in EPSG:27700 to it. For a source without NoData, both tiers filled the pixels
   outside the source's footprint with valid zeros, which reached the chips of the edge cells as
-  data. That fill is now NoData, with the fallback value above, and when the source has no mask
-  band, source pixels equal to that value are NoData too. A source's own NoData is kept, and a
-  source with an alpha band is warped as before, its alpha band marking the fill and the
-  transparent pixels. On a source with its own mask band (not an alpha band) the mask is kept, but
-  real pixels equal to the fallback value shift by one and stay valid (65535 becomes 65534, a
-  `uint8` 0 becomes 1); this is new for the BNG warp.
+  data. That fill is now NoData, with the fallback value above, and source pixels equal to that
+  value are NoData too. A source's own NoData is kept, and a source with an alpha band is warped
+  as before, its alpha band marking the fill and the transparent pixels. A source's own mask band
+  (not an alpha band) is kept, also when the source declares NoData: both tiers let the masked
+  pixels of a source that declares NoData through the warp as valid data.
 - **Heavyweight covering keeps a source's own mask.** Some sources carry their own mask band
   (not an alpha band), as JPEG-compressed aerial imagery often does. With
   `assignment='covering'`, the heavyweight clip of each cell let the pixels that mask hides
@@ -311,10 +313,19 @@ formats.
   the source also declares NoData. The lightweight tier already left them out. The heavyweight
   clip now keeps the mask, so those pixels are NoData in both tiers, and source pixels equal to
   the chip's NoData are NoData too, as on a source without a mask band, instead of shifting by
-  one. `rst_bng_tessellate` clips the EPSG:27700 warp of a source in another CRS, so its chips
-  follow that warp, and a source that also declares NoData loses its mask in the warp.
-  Heavyweight `rst_clip` also leaves the masked pixels out, filling them like the area outside
-  the geometry. A source with an alpha band is clipped as before.
+  one. `rst_bng_tessellate` clips the EPSG:27700 warp of a source in another CRS, which keeps
+  the mask too (see above). Heavyweight `rst_clip` now fills the masked pixels like the area
+  outside the geometry, as the lightweight tier does: with the source's NoData when it declares
+  one, else with 0. A source with an alpha band is clipped as before.
+- **Raster-to-grid reducers aggregate only the source's pixels.** The `rst_h3_rastertogrid*`,
+  `rst_quadbin_rastertogrid*` and `rst_bng_rastertogrid*` reducers first warp a source in another
+  coordinate system to the grid's (EPSG:4326, or EPSG:27700 for BNG). For a source without
+  NoData, both tiers filled the pixels outside the source's footprint with valid zeros, which the
+  reducers counted and averaged as data. That fill is now NoData, with the fallback value above,
+  and source pixels equal to that value are NoData too, so neither is aggregated. A source's own
+  mask band (not an alpha band) is kept: its masked pixels were aggregated as zeros, or with their
+  values when the source also declares NoData. A source with an alpha band is warped as before,
+  and a source already in the grid's coordinate system is not warped.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

@@ -38,7 +38,7 @@ def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
     out_ar = np.zeros((ds.height, ds.width), dtype="float64")
     gt = ds.transform.to_gdal()
     func(in_ar, out_ar, 0, 0, ds.width, ds.height, ds.width, ds.height, 0, gt)
-    profile = ds.profile.copy()
+    profile = _comp.drop_ycbcr(ds.profile)
     profile.update(driver="GTiff", count=1, dtype="float64")
     decoded_bytes = out_ar.nbytes
     profile.update(

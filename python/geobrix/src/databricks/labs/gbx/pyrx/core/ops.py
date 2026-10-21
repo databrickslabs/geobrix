@@ -110,7 +110,7 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
 
     data = ds.read()
     out_dtype = ds.dtypes[0]
-    profile = ds.profile.copy()
+    profile = _comp.drop_ycbcr(ds.profile)
     profile.update(driver="GTiff")
     profile.update(
         _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")

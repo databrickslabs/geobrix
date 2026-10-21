@@ -29,7 +29,7 @@ def reproject_to_crs(ds, target_crs_value, resampling: str = "nearest") -> bytes
         # Identity: re-encode with ZSTD baseline (same as reproject_to_srid).
         data = ds.read()
         out_dtype = ds.dtypes[0]
-        profile = ds.profile.copy()
+        profile = _comp.drop_ycbcr(ds.profile)
         profile.update(driver="GTiff")
         profile.update(
             _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
@@ -44,7 +44,7 @@ def reproject_to_crs(ds, target_crs_value, resampling: str = "nearest") -> bytes
     )
     out_dtype = ds.dtypes[0]
     decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
-    profile = ds.profile.copy()
+    profile = _comp.drop_ycbcr(ds.profile)
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )
@@ -85,7 +85,7 @@ def reproject_to_srid(ds, target_srid: int, resampling: str = "nearest") -> byte
         # Identity: emit the source bytes re-encoded with ZSTD baseline.
         data = ds.read()
         out_dtype = ds.dtypes[0]
-        profile = ds.profile.copy()
+        profile = _comp.drop_ycbcr(ds.profile)
         profile.update(driver="GTiff")
         profile.update(
             _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
@@ -101,7 +101,7 @@ def reproject_to_srid(ds, target_srid: int, resampling: str = "nearest") -> byte
     )
     out_dtype = ds.dtypes[0]
     decoded_bytes = ds.count * width * height * np.dtype(out_dtype).itemsize
-    profile = ds.profile.copy()
+    profile = _comp.drop_ycbcr(ds.profile)
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )

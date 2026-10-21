@@ -159,7 +159,7 @@ def _window_dataset_bytes(
     # src.read with indexes as a list always returns 3D (bands, h, w); the
     # 2D-collapse path is unreachable here and has been removed.
     data = src.read(window=window, indexes=indexes)
-    profile = src.profile.copy()
+    profile = _comp.drop_ycbcr(src.profile)
     count = len(bands) if bands else src.count
     profile.update(
         driver="GTiff",
@@ -213,7 +213,7 @@ def _warp_window_bytes(
     win_bytes = _window_dataset_bytes(src, window, pending=pending)
     with MemoryFile(win_bytes) as mf, mf.open() as wds:
         with WarpedVRT(wds, crs=f"EPSG:{want_epsg}") as vrt:
-            prof = vrt.profile.copy()
+            prof = _comp.drop_ycbcr(vrt.profile)
             prof.update(driver="GTiff")
             data = vrt.read()
             # Route through the compression authority for the reprojected output.
@@ -244,7 +244,7 @@ def _warp_window_bytes_crs(
     win_bytes = _window_dataset_bytes(src, window, pending=pending)
     with MemoryFile(win_bytes) as mf, mf.open() as wds:
         with WarpedVRT(wds, crs=want_crs) as vrt:
-            prof = vrt.profile.copy()
+            prof = _comp.drop_ycbcr(vrt.profile)
             prof.update(driver="GTiff")
             data = vrt.read()
             out_dtype = prof.get("dtype", vrt.dtypes[0])
@@ -690,7 +690,7 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     """
     with open_tile(tile) as ds:
         data = ds.read()
-        profile = ds.profile.copy()
+        profile = _comp.drop_ycbcr(ds.profile)
         profile.update(driver="GTiff")
         # Route through the compression authority: ZSTD + dtype-predictor baseline.
         out_dtype = profile.get("dtype", ds.dtypes[0])
@@ -777,7 +777,7 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
 
             # Build the exact profile that _window_dataset_bytes / materialize_to_bytes
             # would produce.
-            profile = src.profile.copy()
+            profile = _comp.drop_ycbcr(src.profile)
             profile.update(
                 driver="GTiff",
                 height=int(window.height),

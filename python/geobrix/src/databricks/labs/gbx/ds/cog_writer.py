@@ -1110,7 +1110,7 @@ class CogGbxWriter(DataSourceWriter):
                     # Build GTiff bytes for this window.  Profile mirrors
                     # _window_dataset_bytes / materialize_to_bytes for fidelity:
                     # same driver, height, width, count, transform, compression.
-                    profile = src.profile.copy()
+                    profile = _comp.drop_ycbcr(src.profile)
                     # A tiled/COG source carries tiled=True + blockxsize/blockysize
                     # (e.g. 512) and possibly interleave. A partial-edge tile whose
                     # dims are smaller than those block dims conflicts when written

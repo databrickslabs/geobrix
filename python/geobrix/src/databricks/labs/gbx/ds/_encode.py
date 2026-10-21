@@ -121,7 +121,7 @@ def encode_tile(
             os.unlink(tmp)
     else:
         # GTiff path: in-memory encode via the compression authority.
-        profile = ds.profile.copy()
+        profile = _comp.drop_ycbcr(ds.profile)
         profile.update(
             driver="GTiff",
             width=win_w,

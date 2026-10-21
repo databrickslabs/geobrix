@@ -95,7 +95,7 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     )
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
-    profile = src.profile.copy()
+    profile = _comp.drop_ycbcr(src.profile)
     profile.update(
         driver="GTiff", crs=dst_crs, transform=transform, width=width, height=height
     )
@@ -306,7 +306,7 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         mosaic, out_transform = _rio_merge(merge_ds, method="last")
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
-        profile = ref.profile.copy()
+        profile = _comp.drop_ycbcr(ref.profile)
         profile.update(
             driver="GTiff",
             height=mosaic.shape[1],
@@ -363,7 +363,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
                 shape = (ds.count, ds.height, ds.width)
                 sums = np.zeros(shape, dtype="float64")
                 counts = np.zeros(shape, dtype="int64")
-                ref_profile = ds.profile.copy()
+                ref_profile = _comp.drop_ycbcr(ds.profile)
                 out_dtype = ds.dtypes[0]
             elif (ds.count, ds.height, ds.width) != shape:
                 raise ValueError(
@@ -461,7 +461,7 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
                     bands.append(dest)
         data = np.stack(bands)
         out_dtype = str(data.dtype)
-        profile = ref.profile.copy()
+        profile = _comp.drop_ycbcr(ref.profile)
         profile.update(driver="GTiff", count=data.shape[0])
         profile.update(
             _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
@@ -563,7 +563,7 @@ def derivedband_tiles(rasters: List[bytes], python_func: str, func_name: str) ->
         ref = datasets[0]
         bands = [ds.read(1) for ds in datasets]
         data = np.stack(bands)
-        profile = ref.profile.copy()
+        profile = _comp.drop_ycbcr(ref.profile)
         profile.update(driver="GTiff", count=data.shape[0])
         with MemoryFile() as stack_mf:
             with stack_mf.open(**profile) as dst:
@@ -692,7 +692,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
 
         ref = datasets[0]
         out_dtype = ref.dtypes[0]
-        ref_profile = ref.profile.copy()
+        ref_profile = _comp.drop_ycbcr(ref.profile)
 
         # Collect per-tile NoData values and per-band arrays.
         # min/max/count don't accumulate, so float32 decode is safe and faster.
@@ -869,7 +869,7 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> byte
                 src.count * dst_width * dst_height * np.dtype(out_dtype).itemsize
             )
 
-            profile = src.profile.copy()
+            profile = _comp.drop_ycbcr(src.profile)
             profile.update(
                 driver="GTiff",
                 crs=dst_crs,

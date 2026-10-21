@@ -609,7 +609,7 @@ def test_percentile_stretch_is_canonical():
     _assert_canonical(out, "uint8")
 
 
-def _ycbcr_src():
+def _ycbcr_src(x0=500000, crs="EPSG:32618"):
     """A 64x64 tiled 3-band uint8 JPEG/YCbCr GTiff: its photometric must not be inherited."""
     a = (np.random.default_rng(7).random((3, 64, 64)) * 255).astype("uint8")
     prof = dict(
@@ -618,8 +618,8 @@ def _ycbcr_src():
         height=64,
         count=3,
         dtype="uint8",
-        crs="EPSG:32618",
-        transform=from_bounds(500000, 4490000, 500640, 4490640, 64, 64),
+        crs=crs,
+        transform=from_bounds(x0, 4490000, x0 + 640, 4490640, 64, 64),
         compress="jpeg",
         photometric="ycbcr",
         tiled=True,
@@ -632,13 +632,13 @@ def _ycbcr_src():
         return mf.read()
 
 
-def _assert_zstd_without_ycbcr(b):
+def _assert_zstd_without_ycbcr(b, count=3):
     with MemoryFile(b) as m, m.open() as c:
         img = c.tags(ns="IMAGE_STRUCTURE")
         assert img.get("COMPRESSION") == "ZSTD", img
         assert "YCbCr" not in img.get("SOURCE_COLOR_SPACE", ""), img
         assert str(c.profile.get("photometric")).lower() != "ycbcr", c.profile
-        assert c.count == 3
+        assert c.count == count
 
 
 def test_write_gtiff_drops_ycbcr_photometric_of_a_jpeg_source():
@@ -689,3 +689,264 @@ def test_rst_fromfile_materialize_accepts_a_ycbcr_jpeg_source(tmp_path):
     tile = _fromfile_impl(str(src), "GTiff", True)
     assert tile is not None, "a YCbCr source must materialize, not null out"
     _assert_zstd_without_ycbcr(bytes(tile["raster"]))
+
+
+# ---------------------------------------------------------------------------
+# Every remaining site that copies a source profile and merges the canonical
+# options drops the YCbCr photometric (fail-on-revert wiring per site)
+# ---------------------------------------------------------------------------
+
+_PIXEL_COPY = (
+    "def f(in_ar, out_ar, xoff, yoff, xsize, ysize, rxs, rys, radius, gt, **kw):\n"
+    "    out_ar[:] = in_ar[0]\n"
+)
+
+
+def _on_ycbcr(fn):
+    """Call fn(ds) on an open 3-band JPEG/YCbCr dataset."""
+    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
+        return fn(ds)
+
+
+def _ycbcr_path(tmp_path):
+    p = tmp_path / "ycbcr.tif"
+    p.write_bytes(_ycbcr_src())
+    return str(p)
+
+
+def _ycbcr_vtile(tmp_path):
+    from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+
+    return VirtualTile(cellid=1, path=_ycbcr_path(tmp_path), window=(0, 0, 32, 32))
+
+
+def _on_ycbcr_window(fn):
+    """Call fn(ds, window) on an open YCbCr dataset and its top-left 32x32 window."""
+    return _on_ycbcr(lambda ds: fn(ds, Window(0, 0, 32, 32)))
+
+
+def _case_resample_by_factor(tmp_path):
+    from databricks.labs.gbx.pyrx.core.resample import resample_by_factor
+
+    return _on_ycbcr(lambda ds: resample_by_factor(ds, 2))
+
+
+def _case_reproject_to_srid(tmp_path):
+    from databricks.labs.gbx.pyrx.core.warp import reproject_to_srid
+
+    return _on_ycbcr(lambda ds: reproject_to_srid(ds, 3857))
+
+
+def _case_reproject_to_srid_identity(tmp_path):
+    from databricks.labs.gbx.pyrx.core.warp import reproject_to_srid
+
+    return _on_ycbcr(lambda ds: reproject_to_srid(ds, 32618))
+
+
+def _case_reproject_to_crs(tmp_path):
+    from databricks.labs.gbx.pyrx.core.warp import reproject_to_crs
+
+    return _on_ycbcr(lambda ds: reproject_to_crs(ds, "EPSG:3857"))
+
+
+def _case_reproject_to_crs_identity(tmp_path):
+    from databricks.labs.gbx.pyrx.core.warp import reproject_to_crs
+
+    return _on_ycbcr(lambda ds: reproject_to_crs(ds, "EPSG:32618"))
+
+
+def _case_build_overviews(tmp_path):
+    from databricks.labs.gbx.pyrx.core.ops import build_overviews
+
+    return _on_ycbcr(lambda ds: build_overviews(ds, [2]))
+
+
+def _case_merge_tiles(tmp_path):
+    from databricks.labs.gbx.pyrx.core.agg import merge_tiles
+
+    return merge_tiles([_ycbcr_src(), _ycbcr_src(x0=500640)])
+
+
+def _case_merge_tiles_mixed_crs(tmp_path):
+    from databricks.labs.gbx.pyrx.core.agg import merge_tiles
+
+    # Tiles in EPSG:32618 and 32619 either side of their zone boundary: the second
+    # is reprojected onto the first's CRS before the merge.
+    return merge_tiles([_ycbcr_src(x0=750000), _ycbcr_src(x0=250000, crs="EPSG:32619")])
+
+
+def _case_combineavg_tiles(tmp_path):
+    from databricks.labs.gbx.pyrx.core.agg import combineavg_tiles
+
+    return combineavg_tiles([_ycbcr_src(), _ycbcr_src()])
+
+
+def _case_combine_max_tiles(tmp_path):
+    from databricks.labs.gbx.pyrx.core.agg import combine_max_tiles
+
+    return combine_max_tiles([_ycbcr_src(), _ycbcr_src()])
+
+
+def _case_frombands_tiles(tmp_path):
+    from databricks.labs.gbx.pyrx.core.agg import frombands_tiles
+
+    return frombands_tiles([(1, _ycbcr_src()), (2, _ycbcr_src())])
+
+
+def _case_derivedband_tiles(tmp_path):
+    from databricks.labs.gbx.pyrx.core.agg import derivedband_tiles
+
+    return derivedband_tiles([_ycbcr_src(), _ycbcr_src()], _PIXEL_COPY, "f")
+
+
+def _case_align_to_tiles(tmp_path):
+    from databricks.labs.gbx.pyrx.core.agg import align_to_tiles
+
+    return align_to_tiles(_ycbcr_src(), _ycbcr_src())
+
+
+def _case_window_dataset_bytes(tmp_path):
+    return _on_ycbcr_window(ot._window_dataset_bytes)
+
+
+def _case_warp_window_bytes(tmp_path):
+    return _on_ycbcr_window(lambda ds, w: ot._warp_window_bytes(ds, w, 3857))
+
+
+def _case_warp_window_bytes_crs(tmp_path):
+    from rasterio.crs import CRS
+
+    return _on_ycbcr_window(
+        lambda ds, w: ot._warp_window_bytes_crs(ds, w, CRS.from_epsg(3857))
+    )
+
+
+def _case_materialize_to_bytes(tmp_path):
+    return ot.materialize_to_bytes(_ycbcr_vtile(tmp_path)).raster
+
+
+def _case_windowed_materialize_bytes(tmp_path):
+    return ot._windowed_materialize_bytes(_ycbcr_vtile(tmp_path))
+
+
+def _case_tile_to_bytes(tmp_path):
+    return ot._tile_to_bytes(_ycbcr_vtile(tmp_path))
+
+
+def _case_proximity(tmp_path):
+    from databricks.labs.gbx.pyrx.core.analysis import proximity
+
+    return _on_ycbcr(lambda ds: proximity(ds, None, "PIXEL", None))
+
+
+def _case_viewshed(tmp_path):
+    from databricks.labs.gbx.pyrx.core.analysis import viewshed
+
+    return _on_ycbcr(lambda ds: viewshed(ds, 500320.0, 4490320.0, 2.0, 0.0, None))
+
+
+def _case_derivedband(tmp_path):
+    from databricks.labs.gbx.pyrx.core.derivedband import derivedband
+
+    return _on_ycbcr(lambda ds: derivedband(ds, _PIXEL_COPY, "f"))
+
+
+def _case_cog_convert(tmp_path):
+    from databricks.labs.gbx.pyrx.core.analysis import cog_convert
+
+    return _on_ycbcr(lambda ds: cog_convert(ds, "AUTO", 32, "AVERAGE"))
+
+
+def _case_encode_tile_gtiff(tmp_path):
+    from databricks.labs.gbx.ds._encode import encode_tile
+
+    path = _ycbcr_path(tmp_path)
+    with rasterio.open(path) as ds:
+        return encode_tile(ds, (0, 0, 32, 32), path, "", "auto", "gtiff")[1]
+
+
+def _case_encode_tile_cog(tmp_path):
+    from databricks.labs.gbx.ds._encode import encode_tile
+
+    path = _ycbcr_path(tmp_path)
+    with rasterio.open(path) as ds:
+        return encode_tile(ds, (0, 0, 32, 32), path, "", "auto", "cog")[1]
+
+
+def _case_tile_to_bytes_cog(tmp_path):
+    from databricks.labs.gbx.ds._write import tile_to_bytes
+
+    meta = {"compression": "ZSTD", "zstd_level": "6"}
+    return tile_to_bytes(0, _ycbcr_src(), meta, force_driver="COG")
+
+
+def _case_apply_compression(tmp_path):
+    from databricks.labs.gbx.ds.writer import _apply_compression
+
+    return _apply_compression(_ycbcr_src(), "auto", None, None)
+
+
+# (case, bands in the result)
+_YCBCR_OPS = [
+    (_case_resample_by_factor, 3),
+    (_case_reproject_to_srid, 3),
+    (_case_reproject_to_srid_identity, 3),
+    (_case_reproject_to_crs, 3),
+    (_case_reproject_to_crs_identity, 3),
+    (_case_build_overviews, 3),
+    (_case_merge_tiles, 3),
+    (_case_merge_tiles_mixed_crs, 3),
+    (_case_combineavg_tiles, 3),
+    (_case_combine_max_tiles, 3),
+    (_case_frombands_tiles, 6),
+    (_case_derivedband_tiles, 1),
+    (_case_align_to_tiles, 3),
+    (_case_window_dataset_bytes, 3),
+    (_case_warp_window_bytes, 3),
+    (_case_warp_window_bytes_crs, 3),
+    (_case_materialize_to_bytes, 3),
+    (_case_windowed_materialize_bytes, 3),
+    (_case_tile_to_bytes, 3),
+    (_case_proximity, 1),
+    (_case_viewshed, 1),
+    (_case_derivedband, 1),
+    (_case_cog_convert, 3),
+    (_case_encode_tile_gtiff, 3),
+    (_case_encode_tile_cog, 3),
+    (_case_tile_to_bytes_cog, 3),
+    (_case_apply_compression, 3),
+]
+
+
+@pytest.mark.parametrize(
+    "case,bands", _YCBCR_OPS, ids=[c.__name__[6:] for c, _ in _YCBCR_OPS]
+)
+def test_ops_accept_a_ycbcr_jpeg_source(tmp_path, case, bands):
+    """A JPEG/YCbCr source must re-encode to canonical ZSTD, not fail on PHOTOMETRIC."""
+    out = case(tmp_path)
+    assert out, "the op returned nothing"
+    _assert_zstd_without_ycbcr(bytes(out), count=bands)
+
+
+def test_cog_writer_mosaic_accepts_a_ycbcr_jpeg_source(tmp_path):
+    """cog_gbx mosaic mode re-encodes windows of a YCbCr source into mini-COGs."""
+    from pyspark.sql.types import StringType, StructField, StructType
+
+    from databricks.labs.gbx.ds.cog_writer import CogGbxWriter, parse_mosaic_options
+
+    opts = parse_mosaic_options(
+        {"vrtMosaic": "true", "gridSystem": "none", "tileSize": 32}
+    )
+    writer = CogGbxWriter(
+        str(tmp_path / "out"),
+        StructType([StructField("path", StringType(), False)]),
+        overwrite=True,
+        cog_blocksize=32,
+        mosaic_opts=opts,
+    )
+    msg = writer.write(iter([{"path": _ycbcr_path(tmp_path)}]))
+    assert len(msg.paths) == 4, msg.paths
+    for p in msg.paths:
+        with rasterio.open(p) as c:
+            assert c.count == 3
+            assert str(c.profile.get("photometric")).lower() != "ycbcr", c.profile

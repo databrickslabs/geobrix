@@ -134,7 +134,7 @@ def _apply_compression(
 
     with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
         data = src.read()
-        profile = src.profile.copy()
+        profile = _comp.drop_ycbcr(src.profile)
         profile.update(driver="GTiff")
         out_dtype = profile.get("dtype", str(src.dtypes[0]))
         decoded_bytes = src.count * src.width * src.height

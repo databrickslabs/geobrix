@@ -768,7 +768,7 @@ object BenchDispatch {
     // The default assignment (centroid + complete) as its own case; the case above
     // times covering. Same drain-release-fingerprint shape; mirrors the spec.py args.
     case "rst_h3_tessellate_centroid" =>
-      val iter = RasterTessellate.tessellateH3Iter(cloneDs(ds), Map.empty, argI(a, "resolution", 7), "centroid", "complete")
+      val iter = h3TessellateCentroidChips(ds, a)
       val ids = scala.collection.mutable.ArrayBuffer.empty[Long]
       iter.foreach { case (cell, resDs, _) =>
         ids += cell
@@ -854,6 +854,12 @@ object BenchDispatch {
     * HeavyRunner's reused input ds survives the warmup+measured loop. */
   private def cloneDs(ds: Dataset): Dataset =
     org.gdal.gdal.gdal.GetDriverByName("MEM").CreateCopy("", ds)
+
+  /** The chips the rst_h3_tessellate_centroid case drains: the default assignment (centroid +
+    * complete) over a clone of `ds`. The caller releases each chip. */
+  private[bench] def h3TessellateCentroidChips(
+      ds: Dataset, a: Map[String, String]): Iterator[(Long, Dataset, Map[String, String])] =
+    RasterTessellate.tessellateH3Iter(cloneDs(ds), Map.empty, argI(a, "resolution", 7), "centroid", "complete")
 
   /** Drain a (Dataset, metadata) tiling iterator into a raster_collection
     * fingerprint, pooling pixels across all output tiles, then release each

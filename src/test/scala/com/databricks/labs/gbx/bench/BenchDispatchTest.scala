@@ -159,15 +159,22 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
       val buf = new Array[Short](64 * 64)
       ds.GetRasterBand(1).ReadRaster(0, 0, 64, 64, buf)
       small.GetRasterBand(1).WriteRaster(0, 0, 64, 64, buf)
-      val mapper = new ObjectMapper()
-      val fp = mapper.readTree(BenchDispatch.pureCore("rst_h3_tessellate_centroid", small, Map.empty))
-      // The tessellate iterator owns its input, so hand it a copy of `small`.
-      val copy = gdal.GetDriverByName("MEM").CreateCopy("", small)
-      val ids = RasterTessellate.tessellateH3Iter(copy, Map.empty, 7, "centroid", "complete").map {
-        case (cell, chip, _) => if (chip != null) RasterDriver.releaseDataset(chip); cell
-      }.toSeq
-      assert(ids.nonEmpty)
-      assert(fp.toString == mapper.readTree(BenchFingerprint.ofDggsGridIds(ids)).toString)
+      // cell -> (chip width, height, geotransform) of a drained tessellation; releases every chip.
+      def shapes(it: Iterator[(Long, Dataset, Map[String, String])]): Map[Long, (Int, Int, Seq[Double])] =
+        it.map { case (cell, chip, _) =>
+          try cell -> (chip.getRasterXSize, chip.getRasterYSize, chip.GetGeoTransform.toSeq)
+          finally RasterDriver.releaseDataset(chip)
+        }.toMap
+      // The tessellate iterator owns its input, so the direct calls get copies of `small`.
+      def direct(assignment: String) = shapes(RasterTessellate.tessellateH3Iter(
+        gdal.GetDriverByName("MEM").CreateCopy("", small), Map.empty, 7, assignment, "complete"))
+      val benched = shapes(BenchDispatch.h3TessellateCentroidChips(small, Map.empty))
+      val centroid = direct("centroid")
+      assert(centroid.nonEmpty)
+      assert(benched == centroid, "the case does not drain the centroid + complete chips")
+      assert(direct("covering") != centroid, "fixture must tell covering chips from centroid chips")
+      val fp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_h3_tessellate_centroid", small, Map.empty))
+      assert(fp.get("kind").asText() == "dggs_grid")
     } finally small.delete()
   }
 

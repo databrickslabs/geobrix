@@ -428,7 +428,8 @@ def coverage_block(cells) -> str:
     implemented = pyrx_implemented()
     n_registered = len(registered)
 
-    benched_fns = {cl.fn for cl in cells}
+    # A variant case (e.g. rst_h3_tessellate_centroid) counts as its function.
+    benched_fns = {spec.benched_function(cl.fn) for cl in cells}
     n_benched = len(benched_fns)
 
     # Parity over compared (non-na) cells.

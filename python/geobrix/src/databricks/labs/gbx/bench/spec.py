@@ -4240,6 +4240,12 @@ def select(
     return out
 
 
+def benched_function(name: str) -> str:
+    """The registered function a bench case times: its ``variant_of``, else ``name``."""
+    fs = REGISTRY.get(name)
+    return fs.variant_of if fs is not None and fs.variant_of else name
+
+
 def benched_functions(specs) -> "frozenset[str]":
     """Registered function names timed by ``specs``; a variant case counts as its function."""
     return frozenset(f.variant_of or f.name for f in specs)

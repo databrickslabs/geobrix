@@ -528,6 +528,15 @@ def test_coverage_block_reports_coverage_parity_gap_and_uncovered():
     assert "rst_merge" in md or "rst_rasterize" in md
 
 
+def test_coverage_block_counts_a_variant_case_as_its_function():
+    cells = [
+        _cmp("rst_h3_tessellate", "pure-core", 20.0, 4.0, 5.0, "exact", ""),
+        _cmp("rst_h3_tessellate_centroid", "pure-core", 20.0, 4.0, 5.0, "exact", ""),
+    ]
+    md = c.coverage_block(cells)
+    assert f"1 / {len(c.registered_raster())}" in md
+
+
 def test_summarize_compare_includes_coverage_block():
     cells = [
         _cmp("rst_slope", "pure-core", 20.0, 4.0, 5.0, "exact", ""),

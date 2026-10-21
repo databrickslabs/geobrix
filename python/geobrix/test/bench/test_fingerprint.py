@@ -68,10 +68,11 @@ def test_h3_cell_id_pinned_for_known_point():
 def test_quadbin_cell_id_pinned_for_known_point():
     import numpy as np
 
-    from databricks.labs.gbx.pyrx.core import gridagg
+    from databricks.labs.gbx.pygx import _quadbin
 
-    # Same point @ quadbin res 10 -> standard CARTO quadbin cell id.
-    cell = gridagg._quadbin_cells(np.array([-73.99]), np.array([40.75]), 10)[0]
+    # Same point @ quadbin res 10 -> standard CARTO quadbin cell id (the encoder
+    # raster_to_grid uses, shared with heavy and tessellate).
+    cell = _quadbin.point_as_cell_vec(np.array([-73.99]), np.array([40.75]), 10)[0]
     assert int(cell) == 5234172679656833023
 
 

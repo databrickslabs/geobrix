@@ -27,14 +27,16 @@ Two new parameters (Stage 2, Task 7):
 count is now Double/float in all modes (centroid count = n as float; covering
 count = Sigma-w; covered-but-empty count = 0.0).
 
-Backed by the best-in-class libs ``h3`` (v4) and ``quadbin`` (CARTO v0).
+Backed by the best-in-class lib ``h3`` (v4); quadbin and BNG cell math is the
+shared ``pygx`` core.
 
 Hot path (centroid) is vectorized: valid pixels are gathered once, mapped to
-cell ids, and grouped/reduced with numpy. The quadbin encoder ``_quadbin_cells``
-is a numpy reimplementation of ``quadbin.point_to_cell`` that is BIT-EXACT with
-the upstream lib (the lib's per-call Python is otherwise ~20x slower than H3's
-C-backed encoder); the H3 encoder stays a scalar comprehension over valid pixels
-because ``h3.latlng_to_cell`` is C-backed and exposes no array API.
+cell ids, and grouped/reduced with numpy. The quadbin encoder is
+``pygx._quadbin.point_as_cell_vec`` -- the same floor-and-clamp point->cell rule
+as heavy ``Quadbin.pointToCellID`` and light tessellate, so a pixel centre at
+longitude 180 or on a tile edge lands in the same cell in every function and
+tier. The H3 encoder stays a scalar comprehension over valid pixels because
+``h3.latlng_to_cell`` is C-backed and exposes no array API.
 
 The covering path is intentionally NOT vectorized (it iterates per-pixel,
 matching the heavy tier's O(pixels) design).  Use small/coarse rasters; this
@@ -44,7 +46,7 @@ path is not intended for large tiles.
 import h3
 import numpy as np
 
-from databricks.labs.gbx.pygx import _bng
+from databricks.labs.gbx.pygx import _bng, _quadbin
 
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = 20
@@ -62,12 +64,6 @@ _COVERING_FAST_PATH_EXACT = frozenset({"custom", "quadbin", "bng"})
 _AGGS = ("avg", "count", "min", "max", "median", "sum", "variance", "stddev")
 _COVERAGES = ("sparse", "complete")
 _ASSIGNMENTS = ("centroid", "covering")
-
-# quadbin 64-bit cell layout constants (see quadbin.main / quadbin.utils).
-_QB_HEADER = np.uint64(0x4000000000000000)
-_QB_FOOTER = np.uint64(0xFFFFFFFFFFFFF)
-_QB_MODE = np.uint64(1) << np.uint64(59)
-_QB_MAX_LAT = 89.0  # web-mercator clip bound used by clip_latitude
 
 
 def _validate_resolution(resolution: int, grid: str) -> None:
@@ -115,67 +111,6 @@ def _bng_cells(e: np.ndarray, n: np.ndarray, resolution: int) -> np.ndarray:
     numpy core the scalar ``point_to_cell_id`` wraps, so cell ids are identical.
     """
     return _bng.point_to_cell_id_vec(e, n, resolution)
-
-
-def _quadbin_cells(lon: np.ndarray, lat: np.ndarray, resolution: int) -> np.ndarray:
-    """Vectorized ``quadbin.point_to_cell`` -- bit-exact with the upstream lib.
-
-    Reproduces, in numpy: longitude/latitude clipping, the web-mercator
-    ``point_to_tile_fraction`` (+ floor), the tile-x wrap, and ``tile_to_cell``
-    (the 32-bit shift, Morton bit-interleave, header/mode/zoom assembly, footer).
-    """
-    z = int(resolution)
-    lon = np.asarray(lon, dtype="float64")
-    lat = np.asarray(lat, dtype="float64")
-
-    # clip_longitude / clip_latitude
-    lon = np.clip(lon, -180.0, 180.0)
-    lat = np.clip(lat, -_QB_MAX_LAT, _QB_MAX_LAT)
-
-    z2 = float(1 << z)
-    sinlat = np.sin(lat * np.pi / 180.0)
-    xf = z2 * (lon / 360.0 + 0.5)
-    yfraction = 0.5 - 0.25 * np.log((1.0 + sinlat) / (1.0 - sinlat)) / np.pi
-    yf = np.clip(z2 * yfraction, 0.0, z2 - 1.0)
-
-    # Wrap tile x: x %= z2; x += z2 if x < 0 (Python % on the float, then floor).
-    xf = np.mod(xf, z2)
-    xf = np.where(xf < 0.0, xf + z2, xf)
-
-    x = np.floor(xf).astype("uint64")
-    y = np.floor(yf).astype("uint64")
-
-    shift = np.uint64(32 - z)
-    x = x << shift
-    y = y << shift
-
-    # Morton spread (matches tile_to_cell's interleave masks/shifts exactly).
-    b = [
-        np.uint64(0x5555555555555555),
-        np.uint64(0x3333333333333333),
-        np.uint64(0x0F0F0F0F0F0F0F0F),
-        np.uint64(0x00FF00FF00FF00FF),
-        np.uint64(0x0000FFFF0000FFFF),
-        np.uint64(0x00000000FFFFFFFF),
-    ]
-    s = [np.uint64(1), np.uint64(2), np.uint64(4), np.uint64(8), np.uint64(16)]
-
-    x = (x | (x << s[4])) & b[4]
-    y = (y | (y << s[4])) & b[4]
-    x = (x | (x << s[3])) & b[3]
-    y = (y | (y << s[3])) & b[3]
-    x = (x | (x << s[2])) & b[2]
-    y = (y | (y << s[2])) & b[2]
-    x = (x | (x << s[1])) & b[1]
-    y = (y | (y << s[1])) & b[1]
-    x = (x | (x << s[0])) & b[0]
-    y = (y | (y << s[0])) & b[0]
-
-    interleaved = (x | (y << np.uint64(1))) >> np.uint64(12)
-    footer = _QB_FOOTER >> np.uint64(z * 2)
-    return (
-        _QB_HEADER | _QB_MODE | (np.uint64(z) << np.uint64(52)) | interleaved | footer
-    )
 
 
 def _grouped_measures(cids: np.ndarray, vals: np.ndarray, agg: str):
@@ -595,7 +530,7 @@ def raster_to_grid(
         )
 
     resolution = int(resolution)
-    encode = _h3_cells if grid == "h3" else _quadbin_cells
+    encode = _h3_cells if grid == "h3" else _quadbin.point_as_cell_vec
 
     def _run(work_ds):
         gt = work_ds.transform.to_gdal()  # (c, a, b, f, d, e) GDAL geotransform

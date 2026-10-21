@@ -455,6 +455,73 @@ def test_grid_rastertogrid_reducer_parity(spark_with_jar, grid, resolution, agg)
 
 
 # ---------------------------------------------------------------------------
+# Quadbin point->cell edge parity — antimeridian and tile edges
+# ---------------------------------------------------------------------------
+# Heavy floors the web-mercator tile and clamps it into [0, 2^z - 1], so a pixel
+# centre at lon = 180 lands on the easternmost tile (not tile 0) and one on a tile
+# edge is rounded the same way in every function. The light raster-to-grid path
+# must make the same choice.
+
+_EDGE_Z = 10
+_EDGE_TILE_DEG = 360.0 / (1 << _EDGE_Z)  # 0.3515625, exact in binary
+
+
+def _quadbin_tile_x_edge_raster():
+    """1025x1 EPSG:4326 row whose pixel centres sit on every zoom-10 tile x edge,
+    from lon = -180 to lon = +180 (the last pixel is on the antimeridian)."""
+    w = (1 << _EDGE_Z) + 1
+    data = np.arange(1, w + 1, dtype="float32").reshape(1, w)
+    return _gtiff_bytes(
+        data,
+        epsg=4326,
+        origin=(-180.0 - _EDGE_TILE_DEG / 2, 10.0),
+        px=_EDGE_TILE_DEG,
+    )
+
+
+def _quadbin_tile_y_edge_raster(k):
+    """1x1 EPSG:4326 raster whose pixel centre is the latitude where zoom-10
+    web-mercator tile row ``k`` starts."""
+    n = 1 << _EDGE_Z
+    px = 2.0**-20
+    lat = float(np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * k / n)))))
+    return _gtiff_bytes(
+        np.ones((1, 1), dtype="float32"),
+        epsg=4326,
+        origin=(10.0 - px / 2, lat + px / 2),
+        px=px,
+    )
+
+
+@pytest.mark.parametrize(
+    "label,raster_fn",
+    [
+        ("antimeridian-and-x-edges", _quadbin_tile_x_edge_raster),
+        # These rows are where the CARTO library puts the pixel one tile away from
+        # heavy's floor-and-clamp rule.
+        ("y-edge-18", lambda: _quadbin_tile_y_edge_raster(18)),
+        ("y-edge-120", lambda: _quadbin_tile_y_edge_raster(120)),
+        ("y-edge-511", lambda: _quadbin_tile_y_edge_raster(511)),
+    ],
+)
+def test_quadbin_rastertogrid_edge_pixel_parity(spark_with_jar, label, raster_fn):
+    """Pixels on the antimeridian / a tile edge land in the same cell in both tiers."""
+    spark = spark_with_jar
+    raster = raster_fn()
+
+    light = _light_grid_rows(
+        spark, raster, _EDGE_Z, "quadbin", "count", coverage="sparse"
+    )
+    heavy = _heavy_grid_rows(
+        spark, raster, _EDGE_Z, "quadbin", "count", coverage="sparse"
+    )
+
+    assert light, f"{label}: light emitted no cells"
+    assert heavy, f"{label}: heavy emitted no cells"
+    _parity_cmp(light, heavy, label=f"quadbin edge {label}")
+
+
+# ---------------------------------------------------------------------------
 # Tessellate parity (quadbin + BNG) — identical cell-id set + chip count
 # ---------------------------------------------------------------------------
 

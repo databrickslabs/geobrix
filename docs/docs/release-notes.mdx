@@ -292,6 +292,10 @@ formats.
   `pruneEmpty`. Tiles from `rst_retile`, `rst_tooverlappingtiles`, `rst_maketiles` and
   `rst_separatebands` now carry the parent tile's `cellid` in both tiers (0 when the parent has
   none); the lightweight tier numbered them 0, 1, 2, ….
+- **Lightweight quadbin raster-to-grid matches the heavyweight cell for edge pixels.** In
+  `rst_quadbin_rastertogrid*`, a pixel centre at longitude 180 now lands in the easternmost tile
+  instead of tile 0, and one on a tile edge falls in the same cell as in the heavyweight tier and
+  in `rst_quadbin_tessellate`.
 
 ### Registered PROJ grids and raster CRS transforms
 

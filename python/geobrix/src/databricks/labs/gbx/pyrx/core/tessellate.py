@@ -385,9 +385,8 @@ def _pixel_cells(xs, ys, resolution, grid: str, conf=None) -> np.ndarray:
     """Integer cell key of each pixel centre ``(xs[i], ys[i])`` in the grid's work CRS.
 
     h3: the uint64 H3 index; quadbin: the cell as int64 (``point_as_cell_vec``, which
-    is bit-identical to the scalar ``point_as_cell`` heavy matches; the gridagg
-    ``_quadbin_cells`` follows the CARTO library instead, which wraps longitude 180
-    and rounds tile edges differently); bng: the Long id (validity is checked per
+    is bit-identical to the scalar ``point_as_cell`` heavy matches, and is also the
+    rule ``gridagg.raster_to_grid`` uses); bng: the Long id (validity is checked per
     unique cell by :func:`_raw_cell`); custom: the id, or ``-1`` where the centre
     falls outside the grid. h3 and custom encode one point at a time (no array API).
     """

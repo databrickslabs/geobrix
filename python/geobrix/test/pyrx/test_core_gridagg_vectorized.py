@@ -1,8 +1,10 @@
 """Identity tests for the vectorized pyrx raster->grid aggregation.
 
-These pin the vectorized ``gridagg`` against (a) the upstream ``quadbin`` lib
-(bit-exact cell ids) and (b) a faithful reference copy of the original
-per-pixel double-loop implementation (identical output for every grid x agg).
+These pin the vectorized ``gridagg`` against (a) the heavy point-to-cell rule
+(``pygx._quadbin.point_as_cell``: floor and clamp), including a pixel centre on
+the antimeridian and on tile edges, and (b) a faithful reference copy of the
+original per-pixel double-loop implementation (identical output for every
+grid x agg).
 
 The downstream bench gates these functions on a SORTED cell-id hash plus
 order-independent measure stats (``fingerprint_dggs_grid``), so cell ORDER does
@@ -16,6 +18,7 @@ import quadbin
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
+from databricks.labs.gbx.pygx import _quadbin
 from databricks.labs.gbx.pyrx.core import gridagg
 
 
@@ -67,7 +70,7 @@ def _raster_to_grid_ref(ds, resolution, grid, agg):
     else:
 
         def cell_fn(lon, lat, res):
-            return quadbin.point_to_cell(lon, lat, res)
+            return _quadbin.point_as_cell(lon, lat, res)
 
     gt = ds.transform.to_gdal()
     out = []
@@ -111,37 +114,86 @@ def _assert_band_equal(new_band, old_band, agg):
         assert np.isclose(new_v, old_v, rtol=0, atol=0) or np.isclose(new_v, old_v)
 
 
-# --- 1. vectorized quadbin encoder is bit-exact vs the lib -------------------
-def test_quadbin_encoder_bit_exact_dense():
-    lons = np.linspace(-179.0, 179.0, 50)
-    lats = np.linspace(-85.0, 85.0, 50)
-    lon_g, lat_g = np.meshgrid(lons, lats)
-    lon_f = lon_g.ravel()
-    lat_f = lat_g.ravel()
-    mismatches = 0
-    total = 0
-    for res in (0, 1, 5, 10, 14, 20):
-        got = gridagg._quadbin_cells(lon_f, lat_f, res)
-        want = np.array(
-            [quadbin.point_to_cell(lo, la, res) for lo, la in zip(lon_f, lat_f)],
-            dtype="uint64",
-        )
-        total += got.size
-        mismatches += int(np.count_nonzero(got.astype("uint64") != want))
-    assert mismatches == 0, f"{mismatches}/{total} quadbin encoder mismatches"
+# --- 1. quadbin raster->grid uses heavy's point->cell rule -------------------
+# Heavy ``Quadbin.pointToCellID`` and light tessellate floor the web-mercator tile
+# and clamp it into [0, 2^z - 1] (``_quadbin.point_as_cell``). The CARTO library
+# (``quadbin.point_to_cell``) instead wraps the tile x, so lon = 180 lands on tile
+# 0, and rounds the tile y differently on an edge.
+_EDGE_Z = 10
+_EDGE_TILE_DEG = 360.0 / (1 << _EDGE_Z)  # 0.3515625: exact in binary
 
 
-def test_quadbin_encoder_clipping_extremes():
-    # Latitudes beyond the web-mercator bound get clipped to +/-89 by the lib.
-    lon = np.array([-200.0, 200.0, 0.0, 0.0], dtype="float64")
-    lat = np.array([95.0, -95.0, 89.0, -89.0], dtype="float64")
-    for res in (3, 12, 20):
-        got = gridagg._quadbin_cells(lon, lat, res)
-        want = np.array(
-            [quadbin.point_to_cell(lo, la, res) for lo, la in zip(lon, lat)],
-            dtype="uint64",
+def _centres(ds):
+    """Pixel-centre (lon, lat) of every pixel, as the aggregation computes them."""
+    gt = ds.transform.to_gdal()
+    return [
+        (
+            gt[0] + (c + 0.5) * gt[1] + (r + 0.5) * gt[2],
+            gt[3] + (c + 0.5) * gt[4] + (r + 0.5) * gt[5],
         )
-        assert np.array_equal(got.astype("uint64"), want), res
+        for r in range(ds.height)
+        for c in range(ds.width)
+    ]
+
+
+def _expected_counts(ds, z):
+    exp = {}
+    for lon, lat in _centres(ds):
+        cid = _quadbin.point_as_cell(lon, lat, z)
+        exp[cid] = exp.get(cid, 0.0) + 1.0
+    return exp
+
+
+def test_quadbin_raster_to_grid_tile_x_edges_and_antimeridian():
+    # A point-registered 1025-column row: the centres sit exactly on every zoom-10
+    # tile x edge, from lon = -180 to lon = +180 (the last column is the antimeridian).
+    w = (1 << _EDGE_Z) + 1
+    data = np.arange(1, w + 1, dtype="float32").reshape(1, w)
+    raster = _custom_raster(
+        data, origin=(-180.0 - _EDGE_TILE_DEG / 2, 10.0), px=_EDGE_TILE_DEG
+    )
+    with _open(raster) as ds:
+        centres = _centres(ds)
+        assert centres[0][0] == -180.0 and centres[-1][0] == 180.0
+        exp = _expected_counts(ds, _EDGE_Z)
+        got = gridagg.raster_to_grid(
+            ds, _EDGE_Z, "quadbin", "count", coverage="sparse", assignment="centroid"
+        )
+    assert {c["cellID"]: c["measure"] for c in got[0]} == exp
+    # lon = 180 is the easternmost tile (n - 1), never the wrapped tile 0.
+    east_cell = _quadbin.point_as_cell(180.0, 10.0, _EDGE_Z)
+    assert quadbin.cell_to_tile(east_cell)[0] == (1 << _EDGE_Z) - 1
+    assert east_cell in {c["cellID"] for c in got[0]}
+
+
+def test_quadbin_raster_to_grid_tile_y_edges():
+    # One pixel per zoom-10 tile y edge (the latitude where web-mercator row k
+    # starts), centre exactly on it. Compare to heavy's rule, and make sure the
+    # fixture reaches edges where the CARTO library disagrees (else the test is vacuous).
+    n = 1 << _EDGE_Z
+    px = 2.0**-20
+    differing = 0
+    for k in range(1, n, 17):
+        lat = np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * k / n))))
+        raster = _custom_raster(
+            np.ones((1, 1), dtype="float32"),
+            origin=(10.0 - px / 2, float(lat) + px / 2),
+            px=px,
+        )
+        with _open(raster) as ds:
+            lon_c, lat_c = _centres(ds)[0]
+            exp = _expected_counts(ds, _EDGE_Z)
+            got = gridagg.raster_to_grid(
+                ds,
+                _EDGE_Z,
+                "quadbin",
+                "count",
+                coverage="sparse",
+                assignment="centroid",
+            )
+        assert {c["cellID"]: c["measure"] for c in got[0]} == exp, (k, lat_c)
+        differing += quadbin.point_to_cell(lon_c, lat_c, _EDGE_Z) != next(iter(exp))
+    assert differing > 0, "no tile-y edge distinguishes the CARTO rule from heavy's"
 
 
 # --- 2. raster_to_grid identity: new == old, every grid x agg ----------------

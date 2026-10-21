@@ -733,7 +733,7 @@ def rst_h3_tessellate(
         assignment: ``"centroid"`` (default) single-assigns each valid pixel to
             the one cell whose hexagon contains its centroid (chips partition the
             valid pixels); ``"covering"`` keeps every cell whose hexagon overlaps
-            the raster bbox (chips may share pixels). String literals are
+            the raster footprint (chips may share pixels). String literals are
             auto-wrapped in ``f.lit``; pass a ``Column`` to defer.
         coverage: ``"complete"`` (default) emits a chip for every candidate cell,
             including synthetic all-NoData chips for covered cells with no
@@ -1852,7 +1852,7 @@ def rst_quadbin_tessellate(
         assignment: ``"centroid"`` (default) single-assigns each valid pixel to
             the one cell containing its centroid (chips partition the valid
             pixels); ``"covering"`` keeps every cell whose tile overlaps the
-            raster bbox. String literals are auto-wrapped in ``f.lit``; pass a
+            raster footprint. String literals are auto-wrapped in ``f.lit``; pass a
             ``Column`` to defer.
         coverage: ``"complete"`` (default) emits a chip for every candidate cell;
             ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped
@@ -1889,7 +1889,7 @@ def rst_bng_tessellate(
             string such as ``"1km"`` or ``"100m"``.
         assignment: ``"centroid"`` (default) single-assigns each valid pixel to
             the one cell containing its centroid; ``"covering"`` keeps every cell
-            whose grid square overlaps the raster bbox. String literals are
+            whose grid square overlaps the raster footprint. String literals are
             auto-wrapped in ``f.lit``; pass a ``Column`` to defer.
         coverage: ``"complete"`` (default) emits a chip for every candidate cell;
             ``"sparse"`` omits all-NoData chips. String literals are auto-wrapped

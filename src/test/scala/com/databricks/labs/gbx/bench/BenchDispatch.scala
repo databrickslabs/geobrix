@@ -188,6 +188,9 @@ object BenchDispatch {
     "rst_separatebands" -> FMT, "rst_xyzpyramid" -> FMT,
     // bucket B, group B-grid: DGGS fns -> a set of grid cells (dggs_grid fp).
     "rst_h3_tessellate" -> DGGS,
+    // a second rst_h3_tessellate case: the default centroid + complete assignment
+    // (bench/spec.py FnSpec variant_of="rst_h3_tessellate").
+    "rst_h3_tessellate_centroid" -> DGGS,
     "rst_h3_rastertogridavg" -> DGGS, "rst_h3_rastertogridcount" -> DGGS,
     "rst_h3_rastertogridmax" -> DGGS, "rst_h3_rastertogridmedian" -> DGGS,
     "rst_h3_rastertogridmin" -> DGGS, "rst_h3_rastertogridsum" -> DGGS,
@@ -762,6 +765,16 @@ object BenchDispatch {
         if (resDs != null) RasterDriver.releaseDataset(resDs)
       }
       BenchFingerprint.ofDggsGridIds(ids.toSeq)
+    // The default assignment (centroid + complete) as its own case; the case above
+    // times covering. Same drain-release-fingerprint shape; mirrors the spec.py args.
+    case "rst_h3_tessellate_centroid" =>
+      val iter = RasterTessellate.tessellateH3Iter(cloneDs(ds), Map.empty, argI(a, "resolution", 7), "centroid", "complete")
+      val ids = scala.collection.mutable.ArrayBuffer.empty[Long]
+      iter.foreach { case (cell, resDs, _) =>
+        ids += cell
+        if (resDs != null) RasterDriver.releaseDataset(resDs)
+      }
+      BenchFingerprint.ofDggsGridIds(ids.toSeq)
     // quadbin tessellate: LONG cell ids, 4326-native. Same drain-release-fingerprint
     // shape as H3 tessellate (id-only dggs_grid, empty agg).
     case "rst_quadbin_tessellate" =>
@@ -1278,6 +1291,8 @@ object BenchDispatch {
       // timing-only, not fingerprint-compared, so the args only need to be valid).
       // The Scala wrappers take an Int resolution overload.
       case "rst_h3_tessellate"             => rst_h3_tessellate(tile, argI(a, "resolution", 7))
+      case "rst_h3_tessellate_centroid"    =>
+        rst_h3_tessellate(tile, argI(a, "resolution", 7), "centroid", "complete")
       case "rst_h3_rastertogridavg"        => rst_h3_rastertogridavg(tile, argI(a, "resolution", 7))
       case "rst_h3_rastertogridcount"      => rst_h3_rastertogridcount(tile, argI(a, "resolution", 7))
       case "rst_h3_rastertogridmax"        => rst_h3_rastertogridmax(tile, argI(a, "resolution", 7))

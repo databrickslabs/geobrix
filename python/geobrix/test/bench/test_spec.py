@@ -95,14 +95,14 @@ def test_select_defaults_to_core():
 
 def test_full_has_only_registered_names():
     reg = s.registered_rst()
-    assert {f.name for f in s.select(set="full")} <= reg
+    assert s.benched_functions(s.select(set="full")) <= reg
     # The registered rst_ set is the canonical registered_functions.txt list. Guard
     # the real invariant (every bench FnSpec is a registered function; the counts
     # agree) without a brittle literal that trips whenever a function is legitimately
     # added. registered_rst() is the source of truth; the bench REGISTRY must be a
     # subset of it AND cover every one of them (bench parity == full registration).
     assert reg  # non-empty
-    assert {f.name for f in s.select(set="full")} == reg
+    assert s.benched_functions(s.select(set="full")) == reg
 
 
 def test_every_full_spec_is_wellformed():
@@ -461,7 +461,7 @@ def test_full_set_covers_every_registered_function():
     # added -- it fails only when bench coverage and registration actually diverge,
     # not on a magic count. (The bench REGISTRY is the light-side mirror of the
     # canonical registered_functions.txt list.)
-    assert {f.name for f in s.select(set="full")} == s.registered_rst()
+    assert s.benched_functions(s.select(set="full")) == s.registered_rst()
 
 
 # --- bucket C, group C1/C2: readers + buildoverviews + subdataset fns (6) ----
@@ -1051,13 +1051,67 @@ def test_bucket_a_derivedband_func_name_present():
 
 
 def test_full_set_size_equals_registered_count():
-    # The "full" bench set size == the registered rst_ count (every registered fn
-    # is benched, and nothing extra). Derived from registered_rst() so a legitimate
-    # function addition self-adjusts; only a real coverage/registration divergence
-    # fails this. Every entry is unique (REGISTRY is keyed by name).
+    # The "full" bench set size == the registered rst_ count plus the variant cases
+    # (every registered fn is benched once under its own name, and nothing extra).
+    # Derived from registered_rst() so a legitimate function addition self-adjusts;
+    # only a real coverage/registration divergence fails this. Every entry is unique
+    # (REGISTRY is keyed by name).
     full = s.select(set="full")
     assert len({f.name for f in full}) == len(full)  # no dupes
-    assert len(full) == len(s.registered_rst())
+    own = [f for f in full if f.variant_of is None]
+    assert len(own) == len(s.registered_rst())
+
+
+def test_variant_cases_bench_a_registered_function():
+    # A variant case is a second entry for a registered function with non-default
+    # args: it calls that function's SQL name, and the function keeps its own entry.
+    variants = {n: f for n, f in s.REGISTRY.items() if f.variant_of}
+    assert "rst_h3_tessellate_centroid" in variants
+    for name, fs in variants.items():
+        assert fs.variant_of in s.REGISTRY, name
+        assert s.REGISTRY[fs.variant_of].variant_of is None, name
+        assert fs.sql_name == f"gbx_{fs.variant_of}", name
+        assert name.startswith(fs.variant_of + "_"), name
+
+
+def test_h3_tessellate_centroid_case_drains_the_default_assignment():
+    # The case must time centroid + complete (the function default), while
+    # rst_h3_tessellate's own pure-core case times covering.
+    import numpy as np
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+
+    from databricks.labs.gbx.pyrx.core import tessellate
+
+    prof = dict(
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=1,
+        dtype="uint16",
+        nodata=0,
+        crs="EPSG:4326",
+        transform=from_bounds(-74.02, 40.70, -73.99, 40.73, 64, 64),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(np.arange(1, 64 * 64 + 1, dtype="uint16").reshape(1, 64, 64))
+        with mf.open() as ds:
+            fs = s.REGISTRY["rst_h3_tessellate_centroid"]
+            got = fs.core_fn(ds, fs.args)
+            want = list(
+                tessellate.iter_tessellate(
+                    ds, 7, "h3", mode="centroid", coverage="complete"
+                )
+            )
+            covering = s.REGISTRY["rst_h3_tessellate"].core_fn(ds, {"resolution": 7})
+    assert fs.args == {
+        "resolution": 7,
+        "assignment": "centroid",
+        "coverage": "complete",
+    }
+    assert got == [want]
+    assert got != covering
 
 
 def test_every_fnspec_declares_existing_sources():

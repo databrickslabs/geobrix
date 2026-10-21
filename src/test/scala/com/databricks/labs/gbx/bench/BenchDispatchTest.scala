@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.bench
 
-import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operations.RasterTessellate
 import com.fasterxml.jackson.databind.ObjectMapper
 import org.gdal.gdal.{Dataset, gdal}
 import org.scalatest.funsuite.AnyFunSuite
@@ -47,7 +48,9 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     // + 4 LiDAR-DSM fns: rst_binpoints + rst_isoband (vector), rst_chm (format),
     //   rst_binpoints_agg (vector aggregator) -> 138 + 4 = 142.
     // + 1 rst_percentile_stretch (edit category) -> 142 + 1 = 143.
-    assert(BenchDispatch.all.size == 143)
+    // + 1 rst_h3_tessellate_centroid (a second rst_h3_tessellate case, the default
+    //   centroid + complete assignment) -> 143 + 1 = 144.
+    assert(BenchDispatch.all.size == 144)
     // bucket A: tile vs geometry aggregate input kinds + agg synth recipes.
     assert(BenchDispatch.inputKind("rst_combineavg_agg") == "tile_aggregate")
     assert(BenchDispatch.inputKind("rst_frombands_agg") == "tile_aggregate")
@@ -82,6 +85,8 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(BenchDispatch.category("rst_merge_agg") == "format")
     assert(BenchDispatch.category("rst_gridfrompoints_agg") == "vector")
     assert(BenchDispatch.category("rst_h3_tessellate") == "dggs")
+    assert(BenchDispatch.category("rst_h3_tessellate_centroid") == "dggs")
+    assert(BenchDispatch.inputKind("rst_h3_tessellate_centroid") == "tile")
     assert(BenchDispatch.inputKind("rst_rasterize") == "geometry")
     assert(BenchDispatch.inputKind("rst_gridfrompoints") == "geometry")
     assert(BenchDispatch.inputKind("rst_dtmfromgeoms") == "geometry")
@@ -143,6 +148,27 @@ class BenchDispatchTest extends AnyFunSuite with BeforeAndAfterAll {
     assert(wfp.get("kind").asText() == "scalar")
     val sfp = new ObjectMapper().readTree(BenchDispatch.pureCore("rst_slope", ds, Map.empty))
     assert(sfp.get("kind").asText() == "raster")
+  }
+
+  test("rst_h3_tessellate_centroid times the default centroid + complete assignment") {
+    // A 64x64 window of the MODIS tile keeps the H3 res-7 run short.
+    val small = gdal.GetDriverByName("MEM").Create("", 64, 64, 1, ds.GetRasterBand(1).getDataType)
+    try {
+      small.SetGeoTransform(ds.GetGeoTransform)
+      small.SetProjection(ds.GetProjection)
+      val buf = new Array[Short](64 * 64)
+      ds.GetRasterBand(1).ReadRaster(0, 0, 64, 64, buf)
+      small.GetRasterBand(1).WriteRaster(0, 0, 64, 64, buf)
+      val mapper = new ObjectMapper()
+      val fp = mapper.readTree(BenchDispatch.pureCore("rst_h3_tessellate_centroid", small, Map.empty))
+      // The tessellate iterator owns its input, so hand it a copy of `small`.
+      val copy = gdal.GetDriverByName("MEM").CreateCopy("", small)
+      val ids = RasterTessellate.tessellateH3Iter(copy, Map.empty, 7, "centroid", "complete").map {
+        case (cell, chip, _) => if (chip != null) RasterDriver.releaseDataset(chip); cell
+      }.toSeq
+      assert(ids.nonEmpty)
+      assert(fp.toString == mapper.readTree(BenchFingerprint.ofDggsGridIds(ids)).toString)
+    } finally small.delete()
   }
 
   // The heavy runner passes an empty args map, so the default in BenchDispatch IS the

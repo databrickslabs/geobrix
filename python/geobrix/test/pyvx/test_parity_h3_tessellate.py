@@ -9,8 +9,12 @@ resolution, both tiers must emit the **same set of H3 cells** for each mode:
   ``hexagon.intersects(bbox)`` keep-test (H3-Java is pinned 3.7.0). The spec
   accepts covering parity "by definition + tests" — this test IS that gate.
 - ``centroid`` — both tiers use the identical pixel-centroid rule
-  (pixel centroid lon/lat -> H3 cell), so the cell sets (and therefore the
-  pixel->cell mapping) must match **exactly**.
+  (pixel centroid lon/lat -> H3 cell), so the cell sets must match **exactly**,
+  and so must each cell's chip: width, height, geotransform, and the source
+  pixels it holds (covered-but-empty cells are the same 1x1 chip in both).
+
+A second fixture, a UTM 18N scene (EPSG:32618), pins the reprojected footprint:
+both tiers keep the same cells in ``centroid`` + ``complete`` and in ``covering``.
 
 Both tiers represent the H3 cell id as the same 64-bit value reinterpreted as a
 signed int64 (light: ``h3.str_to_int`` folded into signed; heavy: H3-Java
@@ -40,6 +44,8 @@ pytest.importorskip(
     "h3",
     reason="h3-py not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
 )
+from test.pyrx import _tessellate_parity as tp  # noqa: E402
+
 import numpy as np  # noqa: E402
 
 pytestmark = pytest.mark.integration
@@ -195,3 +201,96 @@ def test_light_vs_heavy_h3_tessellate_cellset_parity(spark_with_jar, mode):
         )
 
     assert light == heavy
+
+
+def _same_id(cid):
+    return cid
+
+
+def test_light_vs_heavy_h3_centroid_chips_match_per_cell(spark_with_jar):
+    """Centroid chips match per cell: size, geotransform and source pixels.
+
+    The fixture declares no NoData, so both tiers also stamp the float32 fallback.
+    """
+    spark = spark_with_jar
+    raster = _raster_4326_bytes()
+    args = (_TESS_RES, "centroid", "complete", _same_id)
+    light_rows = tp.light_chips(spark, raster, "gbx_rst_h3_tessellate", *args)
+    heavy_rows = tp.heavy_chips(spark, raster, "rst_h3_tessellate", *args)
+    light = tp.by_cell(light_rows, "light")
+    heavy = tp.by_cell(heavy_rows, "heavy")
+    assert light, "light emitted no chips"
+
+    src_tf = tp.source_transform(raster)
+    tp.assert_centroid_chips_match(light, heavy, src_tf, "h3 centroid")
+    covered = {px[:2] for b in heavy.values() for px in tp.chip_pixels(b, src_tf)}
+    assert len(covered) == _SIZE * _SIZE, "the chips must hold every source pixel"
+    fallback = float(np.finfo(np.float32).min)
+    for tier, chips in (("light", light), ("heavy", heavy)):
+        nodatas = {tp.chip_shape(b)[3] for b in chips.values()}
+        assert nodatas == {fallback}, f"{tier} chip NoData {nodatas}"
+
+
+# A UTM 18N scene with the footprint of a ~110 km Sentinel-2 granule (origin
+# 499980, 4500000), sampled at 300 m (366 x 366) to keep the run short. Its edges
+# curve in lon/lat, so the keep-test footprint is the reprojected, densified edge.
+_UTM_SIZE = 366
+_UTM_BOUNDS = (499980.0, 4390200.0, 609780.0, 4500000.0)
+_UTM_RES = 7
+
+
+def _utm_scene_bytes() -> bytes:
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+
+    n = _UTM_SIZE
+    data = (np.arange(n * n, dtype="uint32").reshape(n, n) % 4000 + 1).astype("uint16")
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="uint16",
+        nodata=0,
+        crs="EPSG:32618",
+        transform=from_bounds(*_UTM_BOUNDS, n, n),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(data, 1)
+        return mf.read()
+
+
+@pytest.mark.parametrize("mode", ["centroid", "covering"])
+def test_light_vs_heavy_h3_tessellate_utm_scene(spark_with_jar, mode):
+    """A projected (UTM) scene keeps the same cells in both tiers.
+
+    ``complete`` coverage: covered cells are kept when they overlap the reprojected
+    raster footprint, so this checks the footprint rule, not only pixel assignment.
+    Under ``centroid`` the chips also match per cell, including the 1x1 chips of
+    covered-but-empty cells, which sit at each cell's centroid pixel.
+    """
+    spark = spark_with_jar
+    raster = _utm_scene_bytes()
+    args = (_UTM_RES, mode, "complete", _same_id)
+    light_rows = tp.light_chips(spark, raster, "gbx_rst_h3_tessellate", *args)
+    heavy_rows = tp.heavy_chips(spark, raster, "rst_h3_tessellate", *args)
+    assert not tp.error_rows(light_rows), "light error rows"
+    assert not tp.error_rows(heavy_rows), "heavy error rows"
+    light = tp.by_cell(light_rows, f"utm {mode} light")
+    heavy = tp.by_cell(heavy_rows, f"utm {mode} heavy")
+    assert len(light) > 1000, f"fixture should span many res-{_UTM_RES} cells"
+
+    if set(light) != set(heavy):
+        pytest.fail(
+            f"utm {mode} cell-set mismatch: |light|={len(light)} |heavy|={len(heavy)} "
+            f"light_only={sorted(set(light) - set(heavy))[:8]} "
+            f"heavy_only={sorted(set(heavy) - set(light))[:8]}"
+        )
+    if mode == "centroid":
+        empties = tp.assert_centroid_chips_match(
+            light, heavy, tp.source_transform(raster), "utm centroid"
+        )
+        assert empties, "fixture should have covered-but-empty cells"
+        for cid in empties:
+            assert tp.chip_shape(light[cid])[:2] == (1, 1), f"empty {cid} not 1x1"

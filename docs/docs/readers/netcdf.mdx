@@ -236,6 +236,11 @@ Each row's `source` is the GDAL subdataset selector `NETCDF:"{path}":{var}`,
 identifying the originating variable; `tile` is the standard raster tile
 structure — see [Tile Structure](../api/tile-structure).
 
+The `sizeInMB` option (default `"-1"`, one whole tile per variable) splits each
+variable into windows when set to a positive MB value. Every window is kept,
+including windows whose pixels are all NoData, so an all-NoData variable still
+yields a row.
+
 :::note CF scale/offset decoding
 `netcdf_gdal` applies CF `scale_factor` / `add_offset` automatically, decoding
 stored integer values to physical floating-point measurements. This matches

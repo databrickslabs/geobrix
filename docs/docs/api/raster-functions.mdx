@@ -1663,7 +1663,7 @@ Covering mode uses a **positive-area overlap** rule (shared by all three grids �
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. The lightweight tier applies the same size thresholds and power-of-4 split as the heavyweight tier.
+Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. The lightweight tier applies the same size thresholds and power-of-4 split as the heavyweight tier. With `size_in_mb > 0`, every window is emitted, including windows whose pixels are all NoData, in both tiers.
 :::
 
 **Signature:** `rst_maketiles(tile: Column, sizeInMB: Column): Column` — Subdivide into smaller tiles by approximate size in MB.
@@ -1684,7 +1684,7 @@ Powered by **rasterio**. Streams one tile row per subdivided region via streamin
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio`. It enumerates the overlapping quadbin cells for the raster bbox and clips one tile per cell, matching the heavyweight cell set and clip windows.
+The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio`. It enumerates the quadbin cells that overlap the raster footprint and clips one tile per cell, matching the heavyweight cell set.
 :::
 
 Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. The input raster must be in EPSG:4326 (lon/lat); reproject upstream with `rst_transform` if your source CRS differs. Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.

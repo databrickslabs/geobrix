@@ -18,7 +18,7 @@ GeoBrix provides a unified model for mapping raster tiles onto discrete global g
 
 *Coverage* controls whether grid cells that are geometrically covered by the raster footprint — but contain no valid pixel data — appear in the output.
 
-- **`complete`** (default): every cell whose geometry overlaps the raster bounding box is emitted. A covered cell with no valid pixels is emitted with a `NULL` measure and a pixel count of `0`. Downstream, any `NULL` in the result is **provably genuine missing data**, not a centroid-aliasing artifact.
+- **`complete`** (default): every cell whose geometry overlaps the raster footprint is emitted. A covered cell with no valid pixels is emitted with a `NULL` measure and a pixel count of `0`. Downstream, any `NULL` in the result is **provably genuine missing data**, not a centroid-aliasing artifact. With `rst_<grid>_tessellate` and `assignment='centroid'`, a covered cell that received no pixel is a 1×1 all-NoData chip at the cell's centroid pixel.
 - **`sparse`**: covered-but-empty cells are dropped. The output contains only cells that caught at least one valid pixel.
 
 Three states are always distinguishable under `coverage='complete'`:
@@ -29,15 +29,17 @@ Three states are always distinguishable under `coverage='complete'`:
 | Covered, all-NoData | `(cellid, NULL)` — count = 0, row present |
 | Outside raster footprint | Absent — no row emitted |
 
-The footprint used for covered-cell enumeration is the raster **bounding box**, not a NoData-aware region. A cloud hole entirely inside the raster correctly reads as *covered + NULL*, not out-of-coverage.
+The footprint used for covered-cell enumeration is the raster's **outline** (its four edges), not a NoData-aware region. A cloud hole entirely inside the raster correctly reads as *covered + NULL*, not out-of-coverage. When the raster's coordinate system differs from the grid's (H3 and quadbin cells are in EPSG:4326), the edges are reprojected with intermediate points along each one, so the footprint follows edges that curve in longitude and latitude, as those of a UTM scene do. A cell that holds a valid pixel is always emitted.
+
+`rst_h3_tessellate` and `rst_quadbin_tessellate` raise an error when this footprint crosses the antimeridian or encloses a pole (for example a polar stereographic scene that contains the pole), under `coverage='complete'` or `assignment='covering'`. Reproject such a raster (for example to EPSG:4326) or split it before tessellating.
 
 ### Assignment: `{centroid, covering}` (default: `centroid`)
 
 *Assignment* controls how pixels are distributed to cells.
 
-- **`centroid`** (default): each valid pixel is mapped to the single cell containing that pixel's centroid coordinate. Pixels **partition** into cells — every valid pixel appears in exactly one output chip, no pixel is counted twice, and the union of all chips reproduces the full valid-pixel set.
+- **`centroid`** (default): each valid pixel is mapped to the single cell containing that pixel's centroid coordinate. Pixels **partition** into cells — every valid pixel appears in exactly one output chip, no pixel is counted twice, and the union of all chips reproduces the full valid-pixel set. A pixel is valid when it is valid in any band. With `rst_<grid>_tessellate`, each chip is cropped to the window of the pixels assigned to its cell; pixel values and positions are unchanged, and the other pixels of that window are NoData.
 - **`covering`** — the meaning differs by function family:
-  - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place).
+  - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData; a source without NoData gets its data type's fallback value (for example 65535 for `uint16`).
   - **Scalar-reducing (`rst_<grid>_rastertogrid*`):** area-weighted. Each pixel contributes to every cell its footprint overlaps, weighted by the fraction of the pixel's area inside that cell. Interior pixels (entirely within one cell) carry weight 1; only boundary pixels split. This fills centroid-aliasing gaps — a cell that catches no centroid in `centroid` mode receives area-weighted contributions under `covering`. `sum` and `count` remain globally mass-conserving.
 
 The interaction between the two policies:
@@ -63,6 +65,10 @@ See the [Interpolation and fill](#interpolation-and-fill) section for the full b
 ### Determinism: one boundary rule across all grids
 
 One tie-break rule applies uniformly across H3, quadbin, BNG, and custom grids: **lower-cell-owns, upper-exclusive**. A pixel centroid that falls exactly on a shared cell boundary goes to the cell with the lower coordinate — never split, never double-counted. This rule is enforced by the shared grid abstraction so results are reproducible regardless of grid type.
+
+### Large rasters
+
+`rst_<grid>_tessellate` with `assignment='centroid'` assigns pixels to cells a strip of rows at a time, so its memory stays bounded as the raster grows. With `assignment='covering'`, it reads only each cell's window of the raster. For scene-sized tiles, run `gbx_rst_retile` before tessellating to spread the work across tasks. A cell on a seam between two of those tiles then appears in more than one row, once per tile it overlaps; group by `cellid` to combine them. See [Large Rasters](./large-rasters) for preparing scenes that are too big to load whole.
 
 ---
 
@@ -283,4 +289,4 @@ chips = df.select(rx.rst_h3_tessellate("tile", 7, assignment="covering", coverag
 </TabItem>
 </Tabs>
 
-Parity is test-enforced per function: for each grid and each assignment mode, tests assert that the lightweight and heavyweight tiers produce the same cell set and the same per-cell chip pixels on border-containing tiles.
+Parity is test-enforced per function: for each grid and each assignment mode, tests assert that the lightweight and heavyweight tiers produce the same cell set on border-containing tiles, and for H3 also on a projected (UTM) scene. Under `assignment='centroid'` they also produce the same chip for each cell: the same size, georeference and pixels, including the 1×1 chips of covered-but-empty cells.

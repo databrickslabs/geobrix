@@ -347,6 +347,12 @@ class FnSpec:
     # matching behavior (so raster geometry aggregators that reuse srid_4326/srid_27700
     # are UNAFFECTED).
     geometry_set: Optional[str] = None
+    # A second bench case of a registered function, run with non-default args (e.g.
+    # rst_h3_tessellate_centroid times rst_h3_tessellate in centroid mode). ``name``
+    # is then a case id, not a function: ``variant_of`` names the registered
+    # function, and coverage checks count the case under it. None for the
+    # function's own entry.
+    variant_of: Optional[str] = None
 
 
 _BOTH = ("pure-core", "spark-path")
@@ -2215,6 +2221,41 @@ REGISTRY: Dict[str, FnSpec] = {
             _GRIDX + "H3.scala",
         ),
         core=False,
+    ),
+    # The default assignment (centroid + complete coverage) as its own case: the
+    # entry above times covering in pure-core. Same drain + id-only fingerprint;
+    # the args ride positionally into the LATERAL call in spark-path, and the heavy
+    # dispatch (BenchDispatch "rst_h3_tessellate_centroid") uses the same values.
+    "rst_h3_tessellate_centroid": FnSpec(
+        "rst_h3_tessellate_centroid",
+        "gbx_rst_h3_tessellate",
+        "dggs",
+        _BOTH,
+        {"resolution": 7, "assignment": "centroid", "coverage": "complete"},
+        core_fn=lambda ds, a: [
+            list(
+                tessellate.iter_tessellate(
+                    ds,
+                    a["resolution"],
+                    "h3",
+                    mode=a["assignment"],
+                    coverage=a["coverage"],
+                )
+            )
+        ],
+        col_fn=lambda t, a: prx.rst_h3_tessellate(
+            t, a["resolution"], a["assignment"], a["coverage"]
+        ),
+        fingerprint_kind="dggs_grid",
+        udtf=True,
+        sources=_TESSELLATE_LIGHT
+        + (
+            _HEAVY + "generators/RST_H3_Tessellate.scala",
+            _OPS + "RasterTessellate.scala",
+            _GRIDX + "H3.scala",
+        ),
+        core=False,
+        variant_of="rst_h3_tessellate",
     ),
     # --- H3 raster->grid aggregates (gridagg.py): {avg,count,max,median,min} ---
     "rst_h3_rastertogridavg": FnSpec(
@@ -4197,6 +4238,11 @@ def select(
         cats = frozenset(categories)
         out = [f for f in out if f.category in cats]
     return out
+
+
+def benched_functions(specs) -> "frozenset[str]":
+    """Registered function names timed by ``specs``; a variant case counts as its function."""
+    return frozenset(f.variant_of or f.name for f in specs)
 
 
 def registered_rst() -> "frozenset[str]":

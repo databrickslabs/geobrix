@@ -9,7 +9,8 @@ against the design §4.1 parity bar:
     BNG-String cell-set equality + per-cell measure within 1e-9.
   * ``rst_quadbin_tessellate`` / ``rst_bng_tessellate`` — identical emitted
     cell-id set (quadbin Long / BNG String) + identical chip count, for both
-    ``covering`` and ``centroid`` modes.
+    ``covering`` and ``centroid`` modes; under ``centroid`` the chips also match
+    per cell (size, geotransform and source pixels), for h3 too.
   * ``rst_quadbin_rasterize_agg`` / ``rst_bng_rasterize_agg`` — same output
     raster on a shared explicit grid: band NoData == -9999 both tiers, and the
     covered-pixel mask + burned values identical (NoData-aware).
@@ -56,6 +57,8 @@ pytest.importorskip(
     "shapely",
     reason="shapely not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
 )
+from test.pyrx import _tessellate_parity as tp  # noqa: E402
+
 import numpy as np  # noqa: E402
 
 pytestmark = pytest.mark.integration
@@ -821,8 +824,7 @@ def _is_chip_all_nodata(raster_bytes):
     """True iff the chip raster contains only NoData pixels (no valid data).
 
     Used to verify that covered-but-empty chips are genuinely all-NoData in both tiers.
-    The chips may have different pixel dimensions (accepted divergence between tiers);
-    this function only checks whether every pixel equals the declared NoData value.
+    This function only checks whether every pixel equals the declared NoData value.
     Returns True for ``None`` input (a null raster is treated as all-NoData).
     """
     if raster_bytes is None:
@@ -978,39 +980,45 @@ def test_tessellate_coverage_assignment_parity(
     For each combination the test asserts:
     * Exact cell-id-set equality (same canonical ids in both tiers).
     * Identical chip count (same number of emitted rows).
+    * ``centroid``: per cell, equal chip width, height and geotransform (1e-9),
+      and the same source pixels ``(row, col, value)`` in both tiers' chips.
+    * ``complete``: the cell set contains the ``sparse`` one, and every
+      covered-but-empty cell is all-NoData in both tiers; under ``centroid`` it is
+      the same 1×1 chip in both. Covering chips are clipped to the cell geometry,
+      and their dimensions are not compared here.
 
-    ACCEPTED DIVERGENCE (do NOT add a pixel-dimension assertion):
-        In ``centroid + complete`` mode, heavy synthesises full-source-extent
-        all-NoData chips for covered-but-empty cells; light synthesises 1×1
-        all-NoData chips.  Both chips correctly encode "covered but no data";
-        the measure-level parity tested by rastertogrid is unaffected.  We
-        deliberately skip chip pixel-dimension equality here.
-
-    PERFORMANCE: covering mode uses a coarser resolution so the raster's bbox
+    PERFORMANCE: covering mode uses a coarser resolution so the raster's footprint
     fits in very few cells, keeping the clip-to-cell-geometry work fast.
     """
     spark = spark_with_jar
     sql_name, fn_name, is_bng = _TESS_CONFIG[grid]
 
+    raster = _bng_raster_27700() if is_bng else _quadbin_raster_4326()
     if assignment == "covering":
-        raster = _bng_raster_27700() if is_bng else _quadbin_raster_4326()
         resolution = _TESS_COVERING_RES[grid]
     else:
-        raster = _bng_raster_27700() if is_bng else _quadbin_raster_4326()
         resolution = _TESS_CENTROID_RES[grid]
 
     label = f"{grid} tessellate {coverage}/{assignment}"
 
+    def _id(cid):
+        return _tess_id(cid, bng=is_bng)
+
     # Collect LIGHT first, then register heavy (both share the gbx_rst_* SQL name).
-    light_ids, light_n = _light_tessellate_ids(
-        spark, raster, sql_name, resolution, assignment, bng=is_bng, coverage=coverage
+    light_rows = tp.light_chips(
+        spark, raster, sql_name, resolution, assignment, coverage, _id
     )
-    heavy_ids, heavy_n = _heavy_tessellate_ids(
-        spark, raster, fn_name, resolution, assignment, bng=is_bng, coverage=coverage
+    heavy_rows = tp.heavy_chips(
+        spark, raster, fn_name, resolution, assignment, coverage, _id
     )
+    light = tp.by_cell(light_rows, f"{label} light")
+    heavy = tp.by_cell(heavy_rows, f"{label} heavy")
+    light_ids, heavy_ids = set(light), set(heavy)
 
     assert light_ids, f"{label}: light emitted no chips"
     assert heavy_ids, f"{label}: heavy emitted no chips"
+    assert not tp.error_rows(light_rows), f"{label}: light error rows"
+    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
 
     if light_ids != heavy_ids:
         pytest.fail(
@@ -1020,9 +1028,12 @@ def test_tessellate_coverage_assignment_parity(
             f"heavy_only={sorted(heavy_ids - light_ids)[:8]}"
         )
 
-    assert (
-        light_n == heavy_n
-    ), f"{label} chip-count mismatch: light={light_n} heavy={heavy_n}"
+    assert len(light_rows) == len(
+        heavy_rows
+    ), f"{label} chip-count mismatch: light={len(light_rows)} heavy={len(heavy_rows)}"
+
+    if assignment == "centroid":
+        tp.assert_centroid_chips_match(light, heavy, tp.source_transform(raster), label)
 
     # complete ⊇ sparse: verify superset (at cell-id level) when coverage=complete.
     if coverage == "complete":
@@ -1051,66 +1062,109 @@ def test_tessellate_coverage_assignment_parity(
             heavy_sparse_ids <= heavy_ids
         ), f"{label}: sparse cell set not subset of complete (heavy)"
 
-        # Empty-chip NoData check: cells that appear in complete but NOT in sparse
-        # are "covered-but-empty" cells — their chips must be all-NoData in BOTH tiers.
-        #
-        # ACCEPTED DIMENSION DIVERGENCE: heavy synthesises a full-source-extent all-NoData
-        # chip; light synthesises a 1×1 all-NoData chip.  We intentionally do NOT assert
-        # equal pixel dimensions — only NoData-ness.
+        # Cells in complete but NOT in sparse are covered-but-empty: their chips
+        # must be all-NoData in BOTH tiers, and 1×1 under centroid.
         all_empty_ids = (light_ids - light_sparse_ids) | (heavy_ids - heavy_sparse_ids)
-        if all_empty_ids:
-            from pyspark.sql import functions as _f
-
-            from databricks.labs.gbx.pyrx import functions as _prx
-            from databricks.labs.gbx.rasterx import functions as _hx
-
-            # Collect (cellid, raster bytes) from light FIRST (SQL name shared).
-            _prx.register(spark)
-            _df_c = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-                _prx.rst_fromcontent("raster", _f.lit("GTiff")).alias("tile")
+        for cid in all_empty_ids:
+            assert _is_chip_all_nodata(light.get(cid)), (
+                f"{label}: light chip for empty cell {cid} contains valid pixels "
+                "(expected all-NoData for covered-but-empty cell)"
             )
-            _df_c.createOrReplaceTempView("_ras_empty_nodata_check")
-            _l_rows = spark.sql(
-                f"SELECT t.cellid AS cid, t.raster AS r "
-                f"FROM _ras_empty_nodata_check, "
-                f"LATERAL {sql_name}(tile, {resolution}, '{assignment}', '{coverage}') t"
-            ).collect()
-            _l_chips = {
-                _tess_id(r["cid"], bng=is_bng): (
-                    bytes(r["r"]) if r["r"] is not None else None
-                )
-                for r in _l_rows
-            }
-
-            # Collect from heavy AFTER re-registering heavy.
-            _hx.register(spark)
-            _h_rows = (
-                _df_c.select(
-                    getattr(_hx, fn_name)(
-                        _f.col("tile"), _f.lit(resolution), assignment, coverage
-                    ).alias("tt")
-                )
-                .select(
-                    _f.col("tt.cellid").alias("cid"), _f.col("tt.raster").alias("r")
-                )
-                .collect()
+            assert _is_chip_all_nodata(heavy.get(cid)), (
+                f"{label}: heavy chip for empty cell {cid} contains valid pixels "
+                "(expected all-NoData for covered-but-empty cell)"
             )
-            _h_chips = {
-                _tess_id(r["cid"], bng=is_bng): (
-                    bytes(r["r"]) if r["r"] is not None else None
-                )
-                for r in _h_rows
-            }
+            if assignment == "centroid":
+                for tier, chips in (("light", light), ("heavy", heavy)):
+                    size = tp.chip_shape(chips[cid])[:2]
+                    assert size == (1, 1), f"{label}: {tier} empty chip {cid} is {size}"
 
-            for cid in all_empty_ids:
-                assert _is_chip_all_nodata(_l_chips.get(cid)), (
-                    f"{label}: light chip for empty cell {cid} contains valid pixels "
-                    "(expected all-NoData for covered-but-empty cell)"
-                )
-                assert _is_chip_all_nodata(_h_chips.get(cid)), (
-                    f"{label}: heavy chip for empty cell {cid} contains valid pixels "
-                    "(expected all-NoData for covered-but-empty cell)"
-                )
+
+def _uint16_no_nodata(*, epsg, origin, px, n):
+    """n×n uint16 ramp with NO declared NoData; the first two rows are real zeros."""
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_origin
+
+    data = (np.arange(n * n, dtype="uint32").reshape(n, n) % 4000 + 1).astype("uint16")
+    data[:2, :] = 0
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="uint16",
+        crs=f"EPSG:{epsg}",
+        transform=from_origin(origin[0], origin[1], px, px),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(data, 1)
+        return mf.read()
+
+
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+@pytest.mark.parametrize("grid", ["h3", "bng", "quadbin"])
+def test_tessellate_uint16_without_nodata_parity(spark_with_jar, grid, assignment):
+    """A uint16 source without NoData tessellates the same way in both tiers.
+
+    Both tiers stamp the shared dtype fallback (65535) on every chip, emit the
+    same number of rows with no error rows, and keep the real zero pixels valid.
+    Under ``centroid`` the chips also match per cell (shape and source pixels),
+    and together they hold every source pixel.
+    """
+    spark = spark_with_jar
+    sql_name, fn_name, is_bng = _TESS_CONFIG[grid]
+    if is_bng:
+        n = 8
+        raster = _uint16_no_nodata(
+            epsg=27700, origin=(530000.0, 181000.0), px=100.0, n=n
+        )
+    else:
+        n = 16
+        raster = _uint16_no_nodata(epsg=4326, origin=(-0.13, 51.55), px=0.01, n=n)
+    res_map = _TESS_COVERING_RES if assignment == "covering" else _TESS_CENTROID_RES
+    resolution = res_map[grid]
+    label = f"{grid} uint16 no-nodata {assignment}"
+
+    def _id(cid):
+        return _tess_id(cid, bng=is_bng)
+
+    light_rows = tp.light_chips(
+        spark, raster, sql_name, resolution, assignment, "complete", _id
+    )
+    heavy_rows = tp.heavy_chips(
+        spark, raster, fn_name, resolution, assignment, "complete", _id
+    )
+    assert light_rows, f"{label}: light emitted no chips"
+    assert not tp.error_rows(light_rows), f"{label}: light error rows"
+    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
+    assert len(light_rows) == len(
+        heavy_rows
+    ), f"{label} row-count mismatch: light={len(light_rows)} heavy={len(heavy_rows)}"
+
+    src_tf = tp.source_transform(raster)
+    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+        nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
+        assert nodatas == {65535.0}, f"{label}: {tier} chip NoData {nodatas}"
+        zeros = {
+            px
+            for _, b, _ in rows
+            for px in tp.chip_pixels(b, src_tf)
+            if px[2] == (0.0,)
+        }
+        assert zeros, f"{label}: {tier} chips lost the real zero pixels"
+        # The real zeros are rows 0-1; any other valid zero is clip fill read as data.
+        fake = sorted(px for px in zeros if not (0 <= px[0] < 2 and 0 <= px[1] < n))[:5]
+        assert not fake, f"{label}: {tier} clip fill reads as valid zeros at {fake}"
+
+    if assignment == "centroid":
+        light = tp.by_cell(light_rows, f"{label} light")
+        heavy = tp.by_cell(heavy_rows, f"{label} heavy")
+        tp.assert_centroid_chips_match(light, heavy, src_tf, label)
+        covered = {px[:2] for b in light.values() for px in tp.chip_pixels(b, src_tf)}
+        assert (
+            len(covered) == n * n
+        ), f"{label}: chips hold {len(covered)} of {n * n} pixels"
 
 
 # ---------------------------------------------------------------------------

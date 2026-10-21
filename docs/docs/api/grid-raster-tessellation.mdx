@@ -39,7 +39,7 @@ The footprint used for covered-cell enumeration is the raster's **outline** (its
 
 - **`centroid`** (default): each valid pixel is mapped to the single cell containing that pixel's centroid coordinate. Pixels **partition** into cells — every valid pixel appears in exactly one output chip, no pixel is counted twice, and the union of all chips reproduces the full valid-pixel set. A pixel is valid when it is valid in any band. With `rst_<grid>_tessellate`, each chip is cropped to the window of the pixels assigned to its cell; pixel values and positions are unchanged, and the other pixels of that window are NoData.
 - **`covering`** — the meaning differs by function family:
-  - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData; a source without NoData gets its data type's fallback value (for example 65535 for `uint16`).
+  - **Chip-emitting (`rst_<grid>_tessellate`):** covering-set clip. A cell is emitted if and only if its geometry has positive-area overlap with the raster; a boundary-touch with zero pixel overlap is excluded. A within-extent cell that contains only NoData pixels is still emitted (NoData renders in place). The chip's pixels outside the cell are NoData; a source without NoData gets its data type's fallback value (for example 65535 for `uint16`), and its pixels equal to that value are NoData too.
   - **Scalar-reducing (`rst_<grid>_rastertogrid*`):** area-weighted. Each pixel contributes to every cell its footprint overlaps, weighted by the fraction of the pixel's area inside that cell. Interior pixels (entirely within one cell) carry weight 1; only boundary pixels split. This fills centroid-aliasing gaps — a cell that catches no centroid in `centroid` mode receives area-weighted contributions under `covering`. `sum` and `count` remain globally mass-conserving.
 
 The interaction between the two policies:
@@ -68,7 +68,7 @@ One tie-break rule applies uniformly across H3, quadbin, BNG, and custom grids: 
 
 ### Large rasters
 
-`rst_<grid>_tessellate` with `assignment='centroid'` assigns pixels to cells a strip of rows at a time, so its memory stays bounded as the raster grows. With `assignment='covering'`, it reads only each cell's window of the raster. For scene-sized tiles, run `gbx_rst_retile` before tessellating to spread the work across tasks. A cell on a seam between two of those tiles then appears in more than one row, once per tile it overlaps; group by `cellid` to combine them. See [Large Rasters](./large-rasters) for preparing scenes that are too big to load whole.
+`rst_<grid>_tessellate` with `assignment='centroid'` assigns pixels to cells a strip of rows at a time, so its memory grows with the pixel count, not with cells × pixels. With `assignment='covering'`, it reads only each cell's window of the raster. For scene-sized tiles, run `gbx_rst_retile` before tessellating to spread the work across tasks. A cell on a seam between two of those tiles then appears in more than one row, once per tile it overlaps; group by `cellid` to combine them. See [Large Rasters](./large-rasters) for preparing scenes that are too big to load whole.
 
 ---
 

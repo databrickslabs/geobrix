@@ -21,8 +21,9 @@ v0.5.3 is under development and not yet released.
 Incremental ingestion of new and changed files with Auto Loader that sets unreadable data aside
 instead of failing, a multi-format Lakeflow connector, a Databricks Container Service image that
 runs both tiers on dedicated clusters, fixes for very large and domain-coded vector sources and
-one field-type mapping shared by both vector reader tiers, and raster tessellation and tiling that
-give the same chips in both tiers and scale to scene-sized tiles.
+one field-type mapping shared by both vector reader tiers, and raster tessellation whose
+centroid chips match across tiers and scale to scene-sized tiles, with tiling that keeps every
+window in both tiers.
 
 ### Incremental ingestion — `read_paths` and `declare_ingest` (new)
 
@@ -246,10 +247,10 @@ formats.
   so the work grew with the number of cells times the number of pixels, and tessellating a
   scene-sized tile could run past a task timeout in either tier. Chips are now built from their
   own window, and pixels are assigned to cells a strip of about one million pixels at a time, so
-  memory stays bounded as the raster grows (about 23 bytes per pixel in the lightweight tier; a
-  4-byte label per pixel plus one strip in the heavyweight tier). For very large scenes, running
-  `gbx_rst_retile` first spreads the work across tasks; a cell on a seam between tiles then appears
-  once per tile it overlaps. See
+  memory grows with the pixel count, not with cells × pixels (about 23 bytes per pixel in the
+  lightweight tier; a 4-byte label per pixel plus one strip in the heavyweight tier). For very
+  large scenes, running `gbx_rst_retile` first spreads the work across tasks; a cell on a seam
+  between tiles then appears once per tile it overlaps. See
   [Grid Raster Tessellation](./api/grid-raster-tessellation#large-rasters).
 - **Both tiers keep the same covered cells.** `coverage='complete'` and `assignment='covering'`
   keep a cell when it overlaps the raster footprint: the raster's edges, reprojected to the grid's
@@ -265,15 +266,18 @@ formats.
 - **One NoData fallback for sources without NoData.** Where a source declares no NoData, both
   tiers blank with the same value for its data type: 0 for `uint8`, 65535 for `uint16`, −32768
   for `int16`, 4294967294 for `uint32`, −2147483648 for `int32`, and the type's minimum for
-  `float32` and `float64`. Heavyweight centroid tessellation blanked every integer type with 0, so
+  `float32` and `float64`. Source pixels equal to that value become NoData, for example the zeros
+  of a `uint8` source. Heavyweight centroid tessellation blanked every integer type with 0, so
   the real zero pixels of a `uint16`, `int16`, `uint32` or `int32` source became NoData; they now
   stay valid (and float chips carry the type's minimum, not NaN). `covering` chips of such a
   source now carry this NoData in both tiers, so the pixels outside each cell read as NoData
   instead of as valid zeros. The lightweight `rst_initnodata` and `rst_threshold` use the same
   table: a `uint16` source gets 65535, as in the heavyweight tier (`rst_threshold` and
-  tessellation failed on it, and `rst_initnodata` set nothing), and a `uint8` source now gets 0,
-  so its zero pixels become NoData. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the `uint16` bands that
-  pass through `rst_initnodata` now carry NoData 65535.
+  tessellation failed on it, and `rst_initnodata` set nothing), and a `uint8` source now gets 0.
+  On a band without NoData, heavyweight `rst_initnodata` kept the pixels equal to the fallback
+  as valid data with the value moved by one (a `uint8` 0 became 1); it now marks them NoData, as
+  the lightweight tier does. In the [EO series](./notebooks/eo-series) notebooks 03 and 04, the
+  `uint16` bands that pass through `rst_initnodata` now carry NoData 65535.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

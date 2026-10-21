@@ -677,6 +677,61 @@ def test_retile_family_null_parent_cellid_is_zero(spark):
         assert {r["cellid"] for r in rows} == {0}, (fn, [r["cellid"] for r in rows])
 
 
+def _window_rows(spark, view, fn):
+    """The ``window`` provenance (col_off, row_off, width, height) of each output tile."""
+    rows = spark.sql(
+        f"SELECT t.window AS w, t.metadata AS m FROM {view}, LATERAL {fn} t"
+    ).collect()
+    assert rows, fn
+    return rows, sorted(
+        (r["w"]["col_off"], r["w"]["row_off"], r["w"]["width"], r["w"]["height"])
+        for r in rows
+        if r["w"] is not None
+    )
+
+
+def test_retile_family_stamps_window_provenance(spark):
+    # A tile cut from a parent records its pixel window within the parent, so a writer
+    # (or any consumer) can tell sibling windows apart: they share the parent's cellid.
+    from databricks.labs.gbx.pyrx.core import tiling
+
+    prx.register(spark)
+    _cellid_tile_view(spark, "_ras_window_prov", 7)
+
+    # rst_retile: 4x4 parent in 2x2 windows -> the four quadrants, exactly.
+    rows, windows = _window_rows(
+        spark, "_ras_window_prov", "gbx_rst_retile(tile, 2, 2)"
+    )
+    assert windows == [(0, 0, 2, 2), (0, 2, 2, 2), (2, 0, 2, 2), (2, 2, 2, 2)]
+    assert len(rows) == 4
+
+    # rst_tooverlappingtiles: the planned overlapping grid, edge windows clamped.
+    rows, windows = _window_rows(
+        spark, "_ras_window_prov", "gbx_rst_tooverlappingtiles(tile, 2, 2, 50)"
+    )
+    assert len(windows) == len(rows)
+    assert windows == sorted(tiling.plan_grid_windows(4, 4, 2, 2, 50))
+
+    # rst_maketiles: a 4x4 tile fits one MB, so one tile covering the whole parent.
+    rows, windows = _window_rows(
+        spark, "_ras_window_prov", "gbx_rst_maketiles(tile, 1)"
+    )
+    assert windows == [(0, 0, 4, 4)]
+
+
+def test_separatebands_stamps_band_marker(spark):
+    # Each band tile is marked with its 1-based band number (metadata key "band"); the
+    # bands share the parent's extent, so no window is stamped.
+    prx.register(spark)
+    _cellid_tile_view(spark, "_ras_band_marker", 7)
+    rows = spark.sql(
+        "SELECT t.window AS w, t.metadata AS m "
+        "FROM _ras_band_marker, LATERAL gbx_rst_separatebands(tile) t"
+    ).collect()
+    assert sorted(r["m"]["band"] for r in rows) == ["1", "2", "3"]
+    assert all(r["w"] is None for r in rows)
+
+
 # --- web-mercator XYZ tiling (rst_tilexyz / rst_xyzpyramid) -----------------
 def _rgb_tile_df(spark):
     """One-row DataFrame with a small RGB GTiff tile over a European extent."""

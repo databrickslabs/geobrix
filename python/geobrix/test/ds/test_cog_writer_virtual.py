@@ -474,3 +474,64 @@ def test_whole_file_virtual_keeps_source_stem_name(tmp_path):
         )
     )
     assert [os.path.basename(p) for p in msg.paths] == ["whole.tif"]
+
+
+# -- provenance-marked parts of one source (window / clip / band) ------------
+
+
+def _part_row(source, *, window=None, band=None, path=None, metadata=None, value=10):
+    """A materialized tile row cut out of ``source``: bytes set, plus the provenance
+    a tile function stamps (window within its parent, or a 1-based band marker)."""
+    row = _v2_row(
+        7, raster=_gtiff_bytes(value), window=window, path=path, metadata=metadata
+    )
+    row["source"] = source
+    if band is not None:
+        row["tile"]["metadata"]["band"] = str(band)
+    return row
+
+
+def _stem(writer, row):
+    from databricks.labs.gbx.pyrx.core.open_tile import _to_virtual_tile
+
+    vt = _to_virtual_tile(row["tile"])
+    return os.path.basename(writer._out_path_for(vt, row))
+
+
+def test_windows_of_one_source_with_identical_bytes_get_distinct_names(tmp_path):
+    """Sibling windows share the parent's cellid and source. Even byte-identical
+    windows (e.g. all-NoData) are different places, so the window is part of the
+    name's key."""
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    a = _stem(w, _part_row("/data/parent.tif", window=(0, 0, 256, 256)))
+    b = _stem(w, _part_row("/data/parent.tif", window=(256, 0, 256, 256)))
+    assert a != b
+    assert a.startswith("parent_") and b.startswith("parent_")
+
+
+def test_band_tiles_of_one_source_get_distinct_names(tmp_path):
+    """Band tiles have the parent's cellid, source and extent: the band marker is
+    what tells them apart, even when the bands hold identical pixels."""
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    names = {_stem(w, _part_row("/data/parent.tif", band=band)) for band in (1, 2, 3)}
+    assert len(names) == 3
+    assert all(n.startswith("parent_") for n in names)
+
+
+def test_part_name_is_deterministic(tmp_path):
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    row = _part_row("/data/parent.tif", window=(256, 0, 256, 256))
+    assert _stem(w, row) == _stem(w, row)
+
+
+def test_reader_whole_file_tile_keeps_source_stem(tmp_path):
+    """A reader's materialized whole-file tile records window (0,0,W,H) with its
+    source path and own dims: that is the whole file, so the plain stem stays."""
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    row = _part_row(
+        "/data/parent.tif",
+        path="/data/parent.tif",
+        window=(0, 0, 256, 256),
+        metadata=_dims_meta(256, 256),
+    )
+    assert _stem(w, row) == "parent.tif"

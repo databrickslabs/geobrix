@@ -78,6 +78,7 @@ from databricks.labs.gbx.ds.file_gbx import (
     materialize_decision,
 )
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
+from databricks.labs.gbx.pyrx.core.virtual_tile import BAND_METADATA_KEY
 
 _logger = logging.getLogger(__name__)
 
@@ -177,26 +178,27 @@ def _tile_name_key(vt) -> str:
     would resolve to the same file, and the later writes overwrite (or, with
     ``cogSkipIfExists``, are silently skipped in favor of) the first.
 
-    - A materialized tile is keyed by its encoded bytes: different pixels give
-      different keys, identical tiles give the same key (and the same bytes).
-    - A virtual tile has no bytes, so it is keyed by the fields that say which
-      part of the source it is: path, window, clip polygon / CRS and target CRS.
+    The key hashes the tile's bytes (a virtual tile has none, so its path
+    instead) together with the fields that say which part of the source it is:
+    window, clip polygon / CRS, target CRS and the 1-based ``band`` marker. Two
+    windows of one parent therefore differ even when their pixels are identical
+    (all-NoData windows, duplicated bands).
 
     The key is a pure function of the tile, so a re-run writes the same names.
     """
     h = hashlib.sha1()
     if vt.raster is not None:
         h.update(bytes(vt.raster))
-    else:
-        clip = vt.clip_polygon
-        parts = (
-            str(vt.path),
-            str(vt.window),
-            bytes(clip).hex() if clip is not None else "",
-            str(vt.clip_crs),
-            str(vt.crs),
-        )
-        h.update("|".join(parts).encode("utf-8"))
+    clip = vt.clip_polygon
+    parts = (
+        str(vt.path) if vt.raster is None else "",
+        str(vt.window),
+        bytes(clip).hex() if clip is not None else "",
+        str(vt.clip_crs),
+        str(vt.crs),
+        str((vt.metadata or {}).get(BAND_METADATA_KEY)),
+    )
+    h.update("|".join(parts).encode("utf-8"))
     return h.hexdigest()[:12]
 
 
@@ -1795,11 +1797,26 @@ class CogGbxWriter(DataSourceWriter):
         return os.path.join(self.out_dir, f"{stem}.{self.ext}")
 
     def _is_sub_extent(self, vt) -> bool:
-        """A tile that is only part of its source: it carries a clip polygon, or
-        a window that is not the source's full extent (same rule as whole-file
-        detection, but a pending reprojection alone still leaves one tile per
-        source, so ``crs`` is not considered)."""
-        return vt.clip_polygon is not None or not self._window_is_full_extent(vt)
+        """True when the tile is a PART of its source rather than the whole file.
+
+        A part carries one of: a clip polygon, a band marker (``rst_separatebands``),
+        or a window that is not the source's full extent. A virtual tile's window
+        is compared with the reader-stamped source dims. A materialized tile's
+        window is provenance: with a path (a reader's tile) it is the whole file
+        only when it is ``(0, 0, own width, own height)``; without a path the tile
+        was cut from a parent by a tile function (readers always stamp the path),
+        so any window marks a part. A pending reprojection alone still leaves one
+        tile per source, so ``crs`` is not considered.
+        """
+        if vt.clip_polygon is not None:
+            return True
+        if (vt.metadata or {}).get(BAND_METADATA_KEY) is not None:
+            return True
+        if vt.window is None:
+            return False
+        if vt.raster is not None and not vt.path:
+            return True
+        return not self._window_is_full_extent(vt)
 
     def _is_whole_file_virtual(self, vt) -> bool:
         """A virtual tile that covers the FULL source extent with no pending

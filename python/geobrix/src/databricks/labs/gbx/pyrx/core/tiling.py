@@ -34,12 +34,18 @@ def tile_range(
     return (lo, hi)
 
 
-def iter_separate_bands(ds):
-    """Yield one single-band GTiff byte string per band (streaming)."""
+def iter_separate_bands_indexed(ds):
+    """Yield ``(band, gtiff_bytes)`` per band (streaming); *band* is 1-based."""
     for i in range(1, ds.count + 1):
         profile = ds.profile.copy()
         profile.update(driver="GTiff", count=1)
-        yield _comp.write_gtiff(profile, ds.read(i)[np.newaxis, :, :])
+        yield i, _comp.write_gtiff(profile, ds.read(i)[np.newaxis, :, :])
+
+
+def iter_separate_bands(ds):
+    """Yield one single-band GTiff byte string per band (streaming)."""
+    for _, b in iter_separate_bands_indexed(ds):
+        yield b
 
 
 def separate_bands(ds) -> list:
@@ -48,6 +54,16 @@ def separate_bands(ds) -> list:
 
 def _iter_window_tiles(ds, tile_width, tile_height, step_x, step_y):
     """Yield one GTiff byte string per window tile (streaming, never buffered)."""
+    for _, b in _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):
+        yield b
+
+
+def _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):
+    """Yield ``((col_off, row_off, width, height), gtiff_bytes)`` per window tile.
+
+    The window is the tile's pixel window inside *ds* (clamped at the raster
+    edge), i.e. the provenance a tile struct records for where it was cut from.
+    """
     tw, th = int(tile_width), int(tile_height)
     row = 0
     while row < ds.height:
@@ -65,7 +81,7 @@ def _iter_window_tiles(ds, tile_width, tile_height, step_x, step_y):
                     height=h,
                     transform=ds.window_transform(win),
                 )
-                yield _comp.write_gtiff(profile, data)
+                yield (col, row, w, h), _comp.write_gtiff(profile, data)
             col += step_x
         row += step_y
 
@@ -77,6 +93,12 @@ def _window_tiles(ds, tile_width, tile_height, step_x, step_y) -> list:
 def iter_retile(ds, tile_width, tile_height):
     tw, th = int(tile_width), int(tile_height)
     return _iter_window_tiles(ds, tw, th, tw, th)
+
+
+def iter_retile_located(ds, tile_width, tile_height):
+    """Like :func:`iter_retile` but yields ``(window, gtiff_bytes)``."""
+    tw, th = int(tile_width), int(tile_height)
+    return _iter_window_tiles_located(ds, tw, th, tw, th)
 
 
 def retile(ds, tile_width, tile_height) -> list:
@@ -117,6 +139,12 @@ def plan_grid_windows(width, height, tile_width, tile_height, overlap=0):
 def iter_to_overlapping_tiles(ds, tile_width, tile_height, overlap):
     tw, th, sx, sy = _overlap_steps(tile_width, tile_height, overlap)
     return _iter_window_tiles(ds, tw, th, sx, sy)
+
+
+def iter_to_overlapping_tiles_located(ds, tile_width, tile_height, overlap):
+    """Like :func:`iter_to_overlapping_tiles` but yields ``(window, gtiff_bytes)``."""
+    tw, th, sx, sy = _overlap_steps(tile_width, tile_height, overlap)
+    return _iter_window_tiles_located(ds, tw, th, sx, sy)
 
 
 def to_overlapping_tiles(ds, tile_width, tile_height, overlap) -> list:
@@ -171,15 +199,21 @@ def _encoded_size_bytes(ds) -> int:
         return len(mf.read())
 
 
-def iter_make_tiles(ds, size_in_mb, size_bytes=None):
-    """Streaming variant of :func:`make_tiles`; yields one GTiff byte string per tile."""
+def iter_make_tiles_located(ds, size_in_mb, size_bytes=None):
+    """Streaming variant of :func:`make_tiles`; yields ``(window, gtiff_bytes)``."""
     size_in_mb = int(size_in_mb)  # heavy casts sizeInMB to Int (truncates)
     if size_in_mb <= 0:
-        return iter_retile(ds, ds.width, ds.height)
+        return iter_retile_located(ds, ds.width, ds.height)
     if size_bytes is None:
         size_bytes = _encoded_size_bytes(ds)
     tile_x, tile_y = _get_tile_size(ds.width, ds.height, size_bytes, size_in_mb)
-    return iter_retile(ds, tile_x, tile_y)
+    return iter_retile_located(ds, tile_x, tile_y)
+
+
+def iter_make_tiles(ds, size_in_mb, size_bytes=None):
+    """Streaming variant of :func:`make_tiles`; yields one GTiff byte string per tile."""
+    for _, b in iter_make_tiles_located(ds, size_in_mb, size_bytes):
+        yield b
 
 
 def make_tiles(ds, size_in_mb, size_bytes=None) -> list:

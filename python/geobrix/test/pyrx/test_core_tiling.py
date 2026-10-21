@@ -90,6 +90,30 @@ def test_retile_uneven_edges():
     assert (2, 2) in sizes and (1, 1) in sizes
 
 
+def test_located_variants_pair_each_tile_with_its_window():
+    # The *_located generators yield (window, bytes): the window is the tile's pixel
+    # window in the parent, so its size is the tile's size and its offset places the
+    # tile's georeferencing; the plain iterators yield the very same bytes.
+    from rasterio.windows import Window
+
+    with _serde.open_tile(make_geotiff_bytes(width=5, height=4, epsg=4326)) as ds:
+        located = list(tiling.iter_retile_located(ds, 2, 2))
+        plain = tiling.retile(ds, 2, 2)
+        overlap = list(tiling.iter_to_overlapping_tiles_located(ds, 2, 2, 50))
+        made = list(tiling.iter_make_tiles_located(ds, 1))
+        bands = list(tiling.iter_separate_bands_indexed(ds))
+        for win, b in located + overlap + made:
+            col, row, w, h = win
+            with _serde.open_tile(b) as o:
+                assert (o.width, o.height) == (w, h)
+                assert o.transform == ds.window_transform(Window(col, row, w, h))
+        assert [b for _, b in located] == plain
+        assert [w for w, _ in located] == tiling.plan_grid_windows(5, 4, 2, 2, 0)
+        assert [w for w, _ in overlap] == tiling.plan_grid_windows(5, 4, 2, 2, 50)
+        assert [w for w, _ in made] == [(0, 0, 5, 4)]
+        assert [i for i, _ in bands] == list(range(1, ds.count + 1))
+
+
 def _dims(parts):
     out = []
     for b in parts:

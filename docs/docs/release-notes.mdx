@@ -223,11 +223,15 @@ formats.
   convert with `PREDICTOR=2 is only supported with 8/16/32/64 bit samples`. The writer now
   promotes such samples to the data type's full width, a lossless change, and keeps
   predictor-based compression.
-- **`cog_gbx` names tiles that share a cellid or a source uniquely.** Tiles from the retile
-  functions carry their parent's cellid, so a tile with no `nameCol`, path or source is now
-  written as `<cellid>_<key>.tif` (it was `<cellid>.tif`), and a tile that is only a window or
-  clip of its source gets `_<key>` after the source name. The key is derived from the tile, so
-  a re-run writes the same names; whole-file tiles keep their plain source name.
+- **`cog_gbx` gives every tile its own default file name.** Tiles from the retile functions
+  share their parent's cellid and source, so with no `nameCol` a tile that is only part of its
+  source (a window or clip, or one band from `rst_separatebands`) is now written as
+  `<source name>_<key>.tif`, and a tile with no path or source as `<cellid>_<key>.tif` (it was
+  `<cellid>.tif`). The key is derived from the tile, so a re-run writes the same names;
+  whole-file tiles keep their plain source name. To support this, the lightweight `rst_retile`,
+  `rst_tooverlappingtiles` and `rst_maketiles` now record each tile's pixel window in
+  `tile.window`, and `rst_separatebands` records the 1-based band in `tile.metadata['band']`.
+  The heavyweight functions leave `window` null; pixels are identical across tiers.
 
 ### Raster tiling functions
 

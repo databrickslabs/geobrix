@@ -52,7 +52,11 @@ from databricks.labs.gbx.pyrx.core import tin as tin_core
 from databricks.labs.gbx.pyrx.core import warp, xyz
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.escape import rst_apply, tile_to_numpy  # noqa: F401
-from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
+from databricks.labs.gbx.pyrx.core.virtual_tile import (
+    BAND_METADATA_KEY,
+    V2_TILE_SCHEMA,
+    VirtualTile,
+)
 
 
 def _registrar_groups() -> List[_register.Group]:
@@ -5270,8 +5274,14 @@ class _RstSeparateBandsUDTF:
             with ot._open(tile, file_ref=file_ref) as ds:
                 # Parent cellid (null -> 0), matching heavy's getLong stamp.
                 cellid = _tile_cellid(tile)
-                for b in tiling.iter_separate_bands(ds):
-                    yield _serde.build_tile(b, "GTiff", cellid)
+                for band, b in tiling.iter_separate_bands_indexed(ds):
+                    # The band number marks this tile as one band of its parent.
+                    yield _serde.build_tile(
+                        b,
+                        "GTiff",
+                        cellid,
+                        extra_metadata={BAND_METADATA_KEY: str(band)},
+                    )
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_SeparateBands: {e}")
             return
@@ -5294,8 +5304,10 @@ class _RstRetileUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
-                for b in tiling.iter_retile(ds, int(tile_width), int(tile_height)):
-                    yield _serde.build_tile(b, "GTiff", cellid)
+                for win, b in tiling.iter_retile_located(
+                    ds, int(tile_width), int(tile_height)
+                ):
+                    yield _serde.build_tile(b, "GTiff", cellid, window=win)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ReTile: {e}")
             return
@@ -5320,10 +5332,10 @@ class _RstToOverlappingTilesUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
-                for b in tiling.iter_to_overlapping_tiles(
+                for win, b in tiling.iter_to_overlapping_tiles_located(
                     ds, int(tile_width), int(tile_height), int(overlap)
                 ):
-                    yield _serde.build_tile(b, "GTiff", cellid)
+                    yield _serde.build_tile(b, "GTiff", cellid, window=win)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ToOverlappingTiles: {e}")
             return
@@ -5358,10 +5370,10 @@ class _RstMakeTilesUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
-                for b in tiling.iter_make_tiles(
+                for win, b in tiling.iter_make_tiles_located(
                     ds, float(size_in_mb), size_bytes=size_bytes
                 ):
-                    yield _serde.build_tile(b, "GTiff", cellid)
+                    yield _serde.build_tile(b, "GTiff", cellid, window=win)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_MakeTiles: {e}")
             return

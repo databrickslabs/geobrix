@@ -27,6 +27,11 @@ from pyspark.sql.types import (
 
 Window4 = Tuple[int, int, int, int]  # (col_off, row_off, width, height)
 
+# ``metadata`` key marking a tile as ONE BAND of its parent (1-based band number).
+# ``rst_separatebands`` stamps it so a writer can tell the band tiles apart from
+# a whole-file tile: they share the parent's cellid, path/source and extent.
+BAND_METADATA_KEY = "band"
+
 _WINDOW_STRUCT = StructType(
     [
         StructField("col_off", IntegerType(), nullable=False),

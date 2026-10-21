@@ -72,7 +72,12 @@ def build_error_tile(last_error: str, cellid: int = -1) -> Dict:
 
 
 def build_tile(
-    raster_bytes: bytes, driver: str, cellid: int = 0, grid_system: Optional[str] = None
+    raster_bytes: bytes,
+    driver: str,
+    cellid: int = 0,
+    grid_system: Optional[str] = None,
+    window=None,
+    extra_metadata: Optional[Dict[str, str]] = None,
 ) -> Dict:
     """Construct a **v2-materialized** tile struct dict from raster BINARY content.
 
@@ -86,6 +91,11 @@ def build_tile(
     given string so consumers can disambiguate the DGGS a ``cellid`` belongs to.
     The tessellate UDTFs pass ``"h3"``, ``"quadbin"``, or ``"bng"``; other callers
     (e.g. rasterize_agg) omit it, leaving the key absent.
+
+    A tile cut out of a parent records where it came from. *window* is the
+    ``(col_off, row_off, width, height)`` pixel window within the parent (the
+    retile family passes it); *extra_metadata* adds ``metadata`` entries (e.g. the
+    1-based ``band`` that ``rst_separatebands`` stamps). Both default to absent.
     """
     raster = bytes(raster_bytes)
     with open_tile(raster) as ds:
@@ -97,4 +107,8 @@ def build_tile(
         }
     if grid_system is not None:
         meta["gridSystem"] = grid_system
-    return VirtualTile(cellid=int(cellid), raster=raster, metadata=meta).to_row()
+    if extra_metadata:
+        meta.update(extra_metadata)
+    return VirtualTile(
+        cellid=int(cellid), raster=raster, window=window, metadata=meta
+    ).to_row()

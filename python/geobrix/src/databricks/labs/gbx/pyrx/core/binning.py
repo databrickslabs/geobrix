@@ -12,10 +12,10 @@ This module is intentionally Spark-free: no pyspark import. Task 6 wraps
 from __future__ import annotations
 
 import numpy as np
-from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 
 from databricks.labs.gbx.core.crs import resolve_crs
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 _NODATA: float = -9999.0
 
@@ -156,7 +156,4 @@ def bin_points(
         nodata=_NODATA,
     )
 
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(band, 1)
-        return mf.read()
+    return write_gtiff(profile, band[np.newaxis, ...])

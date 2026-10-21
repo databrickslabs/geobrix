@@ -27,9 +27,9 @@ Single-band output in every case:
 import math
 
 import numpy as np
-from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx.core._nodata import emit, propagate_invalid, read_masked
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 _NODATA = -9999.0
 
@@ -397,10 +397,7 @@ def color_relief(ds, color_table_path: str) -> bytes:
     profile = ds.profile.copy()
     profile.update(driver="GTiff", count=nbands, dtype="uint8", nodata=None)
 
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out_arr)
-        return mf.read()
+    return write_gtiff(profile, out_arr)
 
 
 def hillshade(

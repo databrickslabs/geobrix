@@ -34,24 +34,12 @@ def tile_range(
     return (lo, hi)
 
 
-def _write(profile, data) -> bytes:
-    dtype = profile.get("dtype", str(np.asarray(data).dtype))
-    decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None
-    profile.update(
-        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data)
-        return mf.read()
-
-
 def iter_separate_bands(ds):
     """Yield one single-band GTiff byte string per band (streaming)."""
     for i in range(1, ds.count + 1):
         profile = ds.profile.copy()
         profile.update(driver="GTiff", count=1)
-        yield _write(profile, ds.read(i)[np.newaxis, :, :])
+        yield _comp.write_gtiff(profile, ds.read(i)[np.newaxis, :, :])
 
 
 def separate_bands(ds) -> list:
@@ -77,7 +65,7 @@ def _iter_window_tiles(ds, tile_width, tile_height, step_x, step_y):
                     height=h,
                     transform=ds.window_transform(win),
                 )
-                yield _write(profile, data)
+                yield _comp.write_gtiff(profile, data)
             col += step_x
         row += step_y
 

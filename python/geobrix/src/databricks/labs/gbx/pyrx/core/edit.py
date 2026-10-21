@@ -5,7 +5,6 @@ GTiff bytes."""
 import numpy as np
 import shapely
 import shapely.wkb
-from rasterio.io import MemoryFile
 from rasterio.mask import mask as _rio_mask
 
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
@@ -22,18 +21,6 @@ _GDAL_TO_NP = {
     "Float32": "float32",
     "Float64": "float64",
 }
-
-
-def _write(profile, data) -> bytes:
-    dtype = profile.get("dtype", str(np.asarray(data).dtype))
-    decoded_bytes = data.nbytes if hasattr(data, "nbytes") else None
-    profile.update(
-        _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data)
-        return mf.read()
 
 
 def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
@@ -98,7 +85,7 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None):
         width=out_image.shape[2],
         transform=out_transform,
     )
-    return _write(profile, out_image)
+    return _comp.write_gtiff(profile, out_image)
 
 
 def update_type(ds, new_type: str) -> bytes:
@@ -116,7 +103,7 @@ def update_type(ds, new_type: str) -> bytes:
             info = np.iinfo(np_dtype)
             if not (info.min <= nd <= info.max):
                 profile["nodata"] = None
-    return _write(profile, data)
+    return _comp.write_gtiff(profile, data)
 
 
 def init_nodata(ds, default: float | None = None) -> bytes:
@@ -139,7 +126,7 @@ def init_nodata(ds, default: float | None = None) -> bytes:
         if _nd.nodata_fits_dtype(value, dtype_str):
             profile["nodata"] = value
         # else: explicit default out of range for this dtype; leave nodata unset.
-    return _write(profile, ds.read())
+    return _comp.write_gtiff(profile, ds.read())
 
 
 _THRESHOLD_OPS = {
@@ -175,7 +162,7 @@ def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
     out = np.where(keep, data, nd).astype(data.dtype)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", nodata=nd)
-    return _write(profile, out)
+    return _comp.write_gtiff(profile, out)
 
 
 def set_srid(ds, srid: int) -> bytes:
@@ -209,7 +196,7 @@ def set_srid(ds, srid: int) -> bytes:
     )  # raises for an invalid positive code
     profile = ds.profile.copy()
     profile.update(driver="GTiff", crs=crs)
-    return _write(profile, ds.read())
+    return _comp.write_gtiff(profile, ds.read())
 
 
 def set_crs(ds, crs_value) -> bytes:
@@ -233,7 +220,7 @@ def set_crs(ds, crs_value) -> bytes:
     crs = resolve_crs(crs_value)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", crs=crs)
-    return _write(profile, ds.read())
+    return _comp.write_gtiff(profile, ds.read())
 
 
 def band(ds, band_index: int) -> bytes:
@@ -260,4 +247,4 @@ def band(ds, band_index: int) -> bytes:
     profile = ds.profile.copy()
     profile.update(driver="GTiff", count=1)
     # nodata in the multi-band profile already applies per-band; keep as-is.
-    return _write(profile, data[np.newaxis, :, :])
+    return _comp.write_gtiff(profile, data[np.newaxis, :, :])

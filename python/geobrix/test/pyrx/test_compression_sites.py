@@ -24,6 +24,7 @@ from rasterio.transform import from_bounds
 from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core.compression import predictor_for
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 
 # ---------------------------------------------------------------------------
@@ -448,3 +449,161 @@ def test_tile_to_bytes_cog_deflate_uint8_predictor_1():
             f"DIV-2 guard: expected predictor=1 or None (no prediction) for uint8 DEFLATE COG, "
             f"got {pred!r}. Pre-fold code returned 2 for uint8 (non-float non-small-int branch)."
         )
+
+
+# ---------------------------------------------------------------------------
+# write_gtiff: one canonical light writer; derived rasters never inherit the
+# source file's codec (fail-on-revert wiring per routed site)
+# ---------------------------------------------------------------------------
+
+
+def _lzw_src(dtype="float32", nodata=-999.0):
+    """A 64x64 tiled LZW GTiff with no predictor: the codec a derived raster must NOT inherit."""
+    a = (np.random.default_rng(7).random((64, 64)) * 300).astype(dtype)
+    prof = dict(
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=1,
+        dtype=dtype,
+        nodata=nodata,
+        crs="EPSG:32618",
+        transform=from_bounds(500000, 4490000, 500640, 4490640, 64, 64),
+        compress="lzw",
+        tiled=True,
+        blockxsize=32,
+        blockysize=32,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(a, 1)
+        return mf.read()
+
+
+def _assert_canonical(b, dtype="float32"):
+    """b is ZSTD with the predictor creation_opts derives for dtype (1 = tag omitted)."""
+    with MemoryFile(b) as m, m.open() as c:
+        img = c.tags(ns="IMAGE_STRUCTURE")
+        assert img.get("COMPRESSION") == "ZSTD", img
+        want = predictor_for(dtype)
+        if want == 1:
+            assert img.get("PREDICTOR") in (None, "1"), img
+        else:
+            assert img.get("PREDICTOR") == str(want), img
+
+
+def test_write_gtiff_is_canonical_and_leaves_profile_alone():
+    from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+    prof = dict(
+        driver="COG",
+        width=8,
+        height=8,
+        count=1,
+        dtype="int16",
+        crs="EPSG:32618",
+        transform=from_bounds(0, 0, 8, 8, 8, 8),
+        compress="lzw",
+    )
+    before = dict(prof)
+    out = write_gtiff(prof, np.arange(64, dtype="int16").reshape(1, 8, 8))
+    assert prof == before, "write_gtiff must not mutate the caller's profile"
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.driver == "GTiff"
+    _assert_canonical(out, "int16")
+
+
+def test_focal_filt_is_canonical():
+    from databricks.labs.gbx.pyrx.core import focal
+
+    with MemoryFile(_lzw_src()) as m, m.open() as ds:
+        out = focal.filt(ds, 3, "max")
+    _assert_canonical(out)
+
+
+def test_focal_convolve_is_canonical():
+    from databricks.labs.gbx.pyrx.core import focal
+
+    with MemoryFile(_lzw_src()) as m, m.open() as ds:
+        out = focal.convolve(ds, np.ones((3, 3)) / 9.0)
+    _assert_canonical(out, "float64")
+
+
+def test_nodata_emit_is_canonical_via_terrain_slope():
+    from databricks.labs.gbx.pyrx.core import terrain
+
+    with MemoryFile(_lzw_src()) as m, m.open() as ds:
+        out = terrain.slope(ds)
+    _assert_canonical(out)
+
+
+def test_rasterize_geom_is_canonical():
+    import shapely
+    from shapely.geometry import box
+
+    from databricks.labs.gbx.pyrx.core import features
+
+    poly = shapely.set_srid(box(1, 1, 3, 3), 4326)
+    out = features.rasterize_geom(shapely.to_wkb(poly), 5.0, 0, 0, 4, 4, 8, 8, 4326)
+    _assert_canonical(out, "float64")
+
+
+def test_chm_is_canonical():
+    from databricks.labs.gbx.pyrx.core.chm import chm
+
+    src = _lzw_src()
+    _assert_canonical(chm(src, src))
+
+
+def test_color_relief_is_canonical(tmp_path):
+    from databricks.labs.gbx.pyrx.core import terrain
+
+    table = tmp_path / "colors.txt"
+    table.write_text("0 0 0 0\n300 255 255 255\n")
+    with MemoryFile(_lzw_src()) as m, m.open() as ds:
+        out = terrain.color_relief(ds, str(table))
+    _assert_canonical(out, "uint8")
+
+
+def test_getsubdataset_is_canonical(tmp_path):
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx.pyrx.core import accessors
+
+    sub = tmp_path / "prAdjust.tif"
+    sub.write_bytes(_lzw_src())
+    out = accessors.getsubdataset(
+        SimpleNamespace(subdatasets=[str(sub)]), "prAdjust.tif"
+    )
+    _assert_canonical(out)
+
+
+def test_fill_nodata_is_canonical():
+    from databricks.labs.gbx.pyrx.core import features
+
+    with MemoryFile(_lzw_src()) as m, m.open() as ds:
+        out = features.fill_nodata(ds)
+    _assert_canonical(out)
+
+
+def test_bin_points_is_canonical():
+    from databricks.labs.gbx.pyrx.core.binning import bin_points
+
+    out = bin_points([0.5, 1.5], [0.5, 1.5], [1.0, 2.0], 0, 0, 2, 2, 2, 2, 32618, "max")
+    _assert_canonical(out)
+
+
+def test_idw_grid_is_canonical():
+    from databricks.labs.gbx.pyrx.core import tin
+
+    pts = np.array([[1.0, 1.0], [3.0, 3.0]])
+    out = tin.idw_grid(pts, np.array([10.0, 20.0]), 0.0, 0.0, 4.0, 4.0, 4, 4, 32633)
+    _assert_canonical(out, "float64")
+
+
+def test_percentile_stretch_is_canonical():
+    from databricks.labs.gbx.pyrx.core.stretch import percentile_stretch
+
+    with MemoryFile(_lzw_src()) as m, m.open() as ds:
+        out = percentile_stretch(ds, 2.0, 98.0)
+    _assert_canonical(out, "uint8")

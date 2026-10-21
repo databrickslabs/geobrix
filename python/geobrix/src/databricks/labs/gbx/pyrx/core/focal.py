@@ -13,10 +13,10 @@ import warnings
 
 import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
-from rasterio.io import MemoryFile
 from scipy import ndimage
 
 from databricks.labs.gbx.pyrx.core._nodata import read_masked
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 
 def _nodata_value(ds, default: float = -9999.0) -> float:
@@ -92,10 +92,7 @@ def filt(ds, kernel_size, operation: str) -> bytes:
     out_dtype = "float32" if op == "mean" else ds.dtypes[0]
     out = np.stack(out_bands)
     profile = _out_profile(ds, out_dtype, nd, any_invalid or ds.nodata is not None)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out.astype(out_dtype))
-        return mf.read()
+    return write_gtiff(profile, out.astype(out_dtype))
 
 
 def convolve(ds, kernel) -> bytes:
@@ -123,7 +120,4 @@ def convolve(ds, kernel) -> bytes:
         out_bands.append(res)
     out = np.stack(out_bands)
     profile = _out_profile(ds, "float64", nd, ds.nodata is not None)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out)
-        return mf.read()
+    return write_gtiff(profile, out)

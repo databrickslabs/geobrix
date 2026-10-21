@@ -23,12 +23,12 @@ PARITY DIVERGENCES vs heavyweight (documented inline):
 """
 
 import numpy as np
-from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 from scipy.spatial import Delaunay, cKDTree
 from scipy.spatial.distance import cdist
 
 from databricks.labs.gbx._geom import parse_geom
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 _NODATA = -9999.0
 
@@ -92,10 +92,7 @@ def _write_float64_grid(arr, xmin, ymin, xmax, ymax, width_px, height_px, crs, n
         transform=transform,
         nodata=float(nodata),
     )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(np.asarray(arr, dtype="float64"), 1)
-        return mf.read()
+    return write_gtiff(profile, np.asarray(arr, dtype="float64")[np.newaxis, ...])
 
 
 def _cell_center_coords(xmin, ymin, xmax, ymax, width_px, height_px):

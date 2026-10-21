@@ -13,6 +13,7 @@ from shapely import wkb as _wkb
 from shapely.geometry import box
 
 from databricks.labs.gbx.core.crs import authority_srid_of
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
 # Rasterio/numpy dtype string -> GDAL data-type name (mirrors heavyweight rst_type).
@@ -243,7 +244,6 @@ def getsubdataset(ds, name: str):
     opens it. Raises ValueError if no subdataset matches ``name``.
     """
     import rasterio
-    from rasterio.io import MemoryFile
 
     subs = ds.subdatasets or []
     # Match the subdataset URI whose trailing token equals the requested name.
@@ -261,11 +261,7 @@ def getsubdataset(ds, name: str):
     with rasterio.open(match) as sub:
         profile = sub.profile
         profile.update(driver="GTiff")
-        data = sub.read()
-        with MemoryFile() as mf:
-            with mf.open(**profile) as dst:
-                dst.write(data)
-            return mf.read()
+        return write_gtiff(profile, sub.read())
 
 
 def summary(ds) -> str:

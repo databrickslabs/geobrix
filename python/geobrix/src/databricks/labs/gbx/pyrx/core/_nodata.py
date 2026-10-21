@@ -9,8 +9,9 @@ those pixels to the output NoData value.
 from __future__ import annotations
 
 import numpy as np
-from rasterio.io import MemoryFile
 from scipy import ndimage
+
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 # Mirrors heavy GDAL.getNoDataConstant (rasterx/gdal/GDAL.scala:36-50) exactly, so both tiers
 # blank with the same value when a source declares no nodata. UInt32 is 2*Int.MaxValue there.
@@ -81,7 +82,4 @@ def emit(ds, arr: np.ndarray, nodata: float, invalid: np.ndarray, dtype: str) ->
     out = np.where(invalid, nodata, base).astype(dtype)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", count=1, dtype=dtype, nodata=nodata)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out, 1)
-        return mf.read()
+    return write_gtiff(profile, out[np.newaxis, ...])

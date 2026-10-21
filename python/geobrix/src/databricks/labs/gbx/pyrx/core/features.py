@@ -6,9 +6,10 @@ import shapely.wkb
 from rasterio.features import rasterize as _rasterize
 from rasterio.features import shapes as _shapes
 from rasterio.fill import fillnodata as _fillnodata
-from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 from shapely.geometry import shape as _shape
+
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 _NODATA = -9999.0
 
@@ -87,10 +88,7 @@ def rasterize_geom(
         transform=transform,
         nodata=_NODATA,
     )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(arr, 1)
-        return mf.read()
+    return write_gtiff(profile, arr[np.newaxis, ...])
 
 
 def polygonize(ds, band: int = 1, connectedness: int = 4):
@@ -188,7 +186,4 @@ def fill_nodata(ds, max_search_dist=None, smoothing_iter=None) -> bytes:
             )
         )
     data = np.stack(bands)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data)
-        return mf.read()
+    return write_gtiff(profile, data)

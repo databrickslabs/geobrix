@@ -10,6 +10,7 @@ import numpy as np
 from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx.core import agg
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 _NODATA = -9999.0
 
@@ -57,7 +58,4 @@ def chm(dsm_bytes: bytes, dem_bytes: bytes) -> bytes:
     diff = np.where(valid, np.maximum(A - D, 0.0), _NODATA).astype("float32")
 
     profile.update(driver="GTiff", count=1, dtype="float32", nodata=_NODATA)
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(diff, 1)
-        return mf.read()
+    return write_gtiff(profile, diff[np.newaxis, ...])

@@ -173,6 +173,43 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
         }
     }
 
+    test("GDAL RowWriter default filenames stay distinct when tiles share a cellid") {
+        // Retile-family tiles carry their parent's cellid, so many tiles of one parent share it.
+        // The default name must not be derived from the cellid alone, or the later tiles would
+        // overwrite the first. Every written tile must land in its own file.
+        functions.register(spark)
+
+        val tifPath = this.getClass.getResource("/modis/").toString
+        val outDir = Files.createTempDirectory("gdal_shared_cellid_out_").toString
+
+        try {
+            val shared = spark.read
+                .format("gdal")
+                .option("sizeInMB", "1")
+                .load(tifPath)
+                .withColumn("tile", col("tile").withField("cellid", lit(7L)))
+            val rows = shared.count()
+            rows should be > 1L
+
+            shared.write
+                .format("gdal")
+                .option("ext", "tif")
+                .mode("append")
+                .save(outDir)
+
+            val tifs = Files.list(Paths.get(outDir)).toList.asScala
+                .filter(p => p.toString.endsWith(".tif"))
+                .toList
+            assert(tifs.size.toLong == rows, s"expected one file per tile ($rows), got ${tifs.size}")
+        } finally {
+            val p = Paths.get(outDir)
+            if (Files.exists(p)) {
+                Files.list(p).toList.asScala.foreach(Files.deleteIfExists)
+                Files.deleteIfExists(p)
+            }
+        }
+    }
+
     test("GDAL Data Source nameCol option controls output filename prefix") {
         functions.register(spark)
 

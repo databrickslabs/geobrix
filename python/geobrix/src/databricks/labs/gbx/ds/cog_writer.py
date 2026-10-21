@@ -169,6 +169,37 @@ def _source_discriminator(src_path: str) -> str:
     return f"{safe}{digest}" if safe else digest
 
 
+def _tile_name_key(vt) -> str:
+    """Return a short, stable content key that tells sibling tiles apart.
+
+    Retile-family tiles carry their parent's ``cellid`` (and often its source
+    path), so neither can name a tile on its own: every window of one parent
+    would resolve to the same file, and the later writes overwrite (or, with
+    ``cogSkipIfExists``, are silently skipped in favor of) the first.
+
+    - A materialized tile is keyed by its encoded bytes: different pixels give
+      different keys, identical tiles give the same key (and the same bytes).
+    - A virtual tile has no bytes, so it is keyed by the fields that say which
+      part of the source it is: path, window, clip polygon / CRS and target CRS.
+
+    The key is a pure function of the tile, so a re-run writes the same names.
+    """
+    h = hashlib.sha1()
+    if vt.raster is not None:
+        h.update(bytes(vt.raster))
+    else:
+        clip = vt.clip_polygon
+        parts = (
+            str(vt.path),
+            str(vt.window),
+            bytes(clip).hex() if clip is not None else "",
+            str(vt.clip_crs),
+            str(vt.crs),
+        )
+        h.update("|".join(parts).encode("utf-8"))
+    return h.hexdigest()[:12]
+
+
 def _is_all_nodata(data, nodata) -> bool:
     """Return True when every pixel in *data* matches *nodata*.
 
@@ -1737,18 +1768,38 @@ class CogGbxWriter(DataSourceWriter):
         return CogCommitMessage(paths=written)
 
     def _out_path_for(self, vt, row) -> str:
-        """Output COG path for a v2 tile row (name_col > tile.path > source > cellid)."""
+        """Output COG path for a v2 tile row.
+
+        Name precedence: nameCol > tile.path > source > ``<cellid>_<key>``.
+        A name taken from a source file is shared by every piece cut from that
+        file, so a tile that is only part of it (a sub-window or a clip) gets
+        ``_<key>`` appended; the last-resort cellid name always carries the key,
+        because retile-family tiles share their parent's cellid. A whole-file
+        tile keeps the plain source stem. See :func:`_tile_name_key`.
+        """
         base = None
+        from_source = False
         if self.name_col and row[self.name_col] is not None:
             base = os.path.basename(str(row[self.name_col]))
         elif vt.path:
             base = os.path.basename(str(vt.path))
+            from_source = True
         elif "source" in row and row["source"]:
             base = os.path.basename(str(row["source"]))
-        if not base:
-            base = str(vt.cellid)
-        stem = os.path.splitext(base)[0]
+            from_source = True
+        stem = os.path.splitext(base)[0] if base else ""
+        if not stem:
+            stem = f"{vt.cellid}_{_tile_name_key(vt)}"
+        elif from_source and self._is_sub_extent(vt):
+            stem = f"{stem}_{_tile_name_key(vt)}"
         return os.path.join(self.out_dir, f"{stem}.{self.ext}")
+
+    def _is_sub_extent(self, vt) -> bool:
+        """A tile that is only part of its source: it carries a clip polygon, or
+        a window that is not the source's full extent (same rule as whole-file
+        detection, but a pending reprojection alone still leaves one tile per
+        source, so ``crs`` is not considered)."""
+        return vt.clip_polygon is not None or not self._window_is_full_extent(vt)
 
     def _is_whole_file_virtual(self, vt) -> bool:
         """A virtual tile that covers the FULL source extent with no pending
@@ -1768,6 +1819,14 @@ class CogGbxWriter(DataSourceWriter):
         """
         if not vt.is_virtual() or vt.clip_polygon is not None or vt.crs is not None:
             return False
+        return self._window_is_full_extent(vt)
+
+    @staticmethod
+    def _window_is_full_extent(vt) -> bool:
+        """True when ``vt.window`` is absent (implicit whole file) or equals
+        ``(0, 0, srcW, srcH)``. Source dims come from the reader-stamped
+        ``metadata["width"]/["height"]``; if they are missing a windowed tile is
+        conservatively NOT full-extent."""
         if vt.window is None:
             return True
         col_off, row_off, width, height = vt.window

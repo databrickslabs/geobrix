@@ -223,6 +223,11 @@ formats.
   convert with `PREDICTOR=2 is only supported with 8/16/32/64 bit samples`. The writer now
   promotes such samples to the data type's full width, a lossless change, and keeps
   predictor-based compression.
+- **`cog_gbx` names tiles that share a cellid or a source uniquely.** Tiles from the retile
+  functions carry their parent's cellid, so a tile with no `nameCol`, path or source is now
+  written as `<cellid>_<key>.tif` (it was `<cellid>.tif`), and a tile that is only a window or
+  clip of its source gets `_<key>` after the source name. The key is derived from the tile, so
+  a re-run writes the same names; whole-file tiles keep their plain source name.
 
 ### Raster tiling functions
 

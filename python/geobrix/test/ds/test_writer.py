@@ -92,6 +92,40 @@ def test_namecol_controls_filenames(spark, tmp_path):
     assert files == ["mytile.tif"]
 
 
+def test_default_names_do_not_collide_when_tiles_share_a_cellid(spark, tmp_path):
+    """Retile windows share their parent's cellid. With no nameCol the writer's
+    opaque name must still differ per tile: both tiles land, each with its own
+    pixels."""
+    from databricks.labs.gbx.ds.raster import reader_schema
+
+    first = tmp_path / "first.tif"
+    second = tmp_path / "second.tif"
+    _write_sample(str(first))
+    with rasterio.open(str(first)) as ds:
+        profile = ds.profile
+        data = ds.read(1)
+    with rasterio.open(str(second), "w", **profile) as ds:
+        ds.write(data + 100, 1)
+
+    out_dir = tmp_path / "out_shared_cellid"
+    spark.dataSource.register(RasterGbxDataSource)
+    spark.dataSource.register(GTiffGbxDataSource)
+    rows = [
+        ("", (7, first.read_bytes(), {"driver": "GTiff"})),
+        ("", (7, second.read_bytes(), {"driver": "GTiff"})),
+    ]
+    df = spark.createDataFrame(rows, schema=reader_schema()).repartition(1)
+    df.write.format("gtiff_gbx").mode("overwrite").save(str(out_dir))
+
+    files = sorted(f for f in os.listdir(out_dir) if f.endswith(".tif"))
+    assert len(files) == 2, f"tiles collided on one name: {files}"
+    mins = []
+    for f in files:
+        with rasterio.open(os.path.join(out_dir, f)) as ds:
+            mins.append(float(ds.read(1).min()))
+    assert sorted(mins) == [0.0, 100.0]
+
+
 def test_ext_option_controls_suffix(spark, tmp_path):
     src = tmp_path / "in.tif"
     _write_sample(str(src))

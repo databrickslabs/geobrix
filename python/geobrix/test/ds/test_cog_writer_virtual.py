@@ -365,3 +365,112 @@ def test_top_level_path_input_still_writes(tmp_path):
     assert len(produced) == 1
     with open(produced[0], "rb") as fh:
         assert gbxcog.sniff_header(fh.read()).is_cog is True
+
+
+# ---------------------------------------------------------------------------
+# (d) default output names never collide when tiles share a cellid
+# ---------------------------------------------------------------------------
+
+
+def _gtiff_bytes(value, w=256, h=256):
+    """Encoded GeoTIFF bytes of a constant-valued uint8 raster."""
+    from rasterio.io import MemoryFile
+
+    profile = dict(
+        driver="GTiff",
+        width=w,
+        height=h,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 60, 0.01, 0.01),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as ds:
+            ds.write(np.full((1, h, w), value, dtype="uint8"))
+        return mf.read()
+
+
+def _materialized_row(cellid, value):
+    """A source-less materialized tile row: bytes set, no path, empty source."""
+    return _v2_row(cellid, raster=_gtiff_bytes(value))
+
+
+def _pixel_value(path):
+    with rasterio.open(path) as ds:
+        arr = ds.read(1)
+    assert arr.min() == arr.max(), "constant-valued tile expected"
+    return int(arr[0, 0])
+
+
+def test_sourceless_tiles_sharing_a_cellid_get_distinct_names(tmp_path):
+    """Retile windows share their parent's cellid. With no nameCol, no path and
+    no source, the fallback name must still differ per tile, so no window
+    overwrites (or, with cogSkipIfExists, silently drops) another."""
+    out = tmp_path / "out"
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=128)
+    msg = w.write(iter([_materialized_row(7, 10), _materialized_row(7, 200)]))
+
+    assert len(set(msg.paths)) == 2, f"tiles collided on one name: {msg.paths}"
+    on_disk = sorted(glob.glob(os.path.join(str(out), "*.tif")))
+    assert len(on_disk) == 2, f"expected two files, found {on_disk}"
+    assert sorted(_pixel_value(p) for p in on_disk) == [10, 200]
+
+
+def test_sourceless_tile_name_is_deterministic(tmp_path):
+    """A re-run of the same tile writes the same file name (content-keyed, no
+    random suffix), so an idempotent re-run lines up on the same files."""
+    names = []
+    for run in ("a", "b"):
+        out = tmp_path / run
+        w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=128)
+        msg = w.write(iter([_materialized_row(7, 10)]))
+        names.append([os.path.basename(p) for p in msg.paths])
+    assert names[0] == names[1], f"name changed between runs: {names}"
+    assert names[0][0].startswith("7_"), "cellid stays the readable name prefix"
+
+
+def test_windowed_virtual_tiles_of_one_path_get_distinct_names(tmp_path):
+    """Windows of one source file share its path (and cellid). The default name
+    comes from the path, so each window needs its own name or they overwrite."""
+    src = tmp_path / "in" / "big.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    out = tmp_path / "out"
+    meta = _dims_meta(512, 512)
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=128)
+    msg = w.write(
+        iter(
+            [
+                _v2_row(0, path=str(src), window=(0, 0, 256, 256), metadata=meta),
+                _v2_row(0, path=str(src), window=(256, 0, 256, 256), metadata=meta),
+            ]
+        )
+    )
+
+    assert len(set(msg.paths)) == 2, f"windows collided on one name: {msg.paths}"
+    assert len(glob.glob(os.path.join(str(out), "*.tif"))) == 2
+    assert all(os.path.basename(p).startswith("big_") for p in msg.paths)
+
+
+def test_whole_file_virtual_keeps_source_stem_name(tmp_path):
+    """A whole-file tile is the only tile of its source: it keeps the plain
+    source-stem name (no key suffix)."""
+    src = tmp_path / "in" / "whole.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    out = tmp_path / "out"
+    w = CogGbxWriter(str(out), _v2_schema(), overwrite=True, cog_blocksize=256)
+    msg = w.write(
+        iter(
+            [
+                _v2_row(
+                    0,
+                    path=str(src),
+                    window=(0, 0, 512, 512),
+                    metadata=_dims_meta(512, 512),
+                )
+            ]
+        )
+    )
+    assert [os.path.basename(p) for p in msg.paths] == ["whole.tif"]

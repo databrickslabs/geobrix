@@ -15,7 +15,11 @@ from databricks.labs.gbx.ds.writer import _publish_merged, _glob_merge_inputs, _
 
 - `_publish_merged(parts, dest, ...)` — gathers part files and writes a single merged output.
 - `_glob_merge_inputs(scratch_dir, pattern)` — collects part paths from a scratch directory.
-- `_safe_name(raw)` — sanitizes a user-supplied output name (strips path separators, normalizes extension).
+- `_safe_name(raster_bytes, cellid)` — opaque fallback file name for `RasterGbxWriter` when there is no `nameCol`:
+  content hash plus a random suffix, so it is unique but NOT deterministic across re-runs.
+- `cog_writer._tile_name_key(vt)` — deterministic content key (bytes hash, or path/window/clip hash for a virtual tile).
+  `CogGbxWriter._out_path_for` appends it whenever a default name is not unique per tile (cellid fallback, or a window/clip of a
+  shared source). Never name a tile by `cellid` alone: retile-family tiles share their parent's cellid.
 - `assert_write_schema(df, expected)` — raises early with a clear message when the caller passes a DataFrame whose schema doesn't match the writer's expectation.
 
 ## Scratch directories (`ds/_scratch.py`)

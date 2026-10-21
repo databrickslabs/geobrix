@@ -2,12 +2,14 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.gridx.grid.H3
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.{CoordinateTransformation, SpatialReference, osrConstants}
+import org.locationtech.jts.algorithm.Orientation
+import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
 import org.scalatest.BeforeAndAfterAll
 import org.scalatest.funsuite.AnyFunSuite
 
@@ -29,7 +31,10 @@ import scala.collection.mutable
   *    assigned chips come in first-seen pixel order, before the synthetic empties;
   *  - the BNG warp lives until the iterator is exhausted or closed, and is released once, also when
   *    setup fails;
-  *  - on a reprojected (UTM) raster, empties sit on the cell centroid moved into the raster CRS.
+  *  - on a reprojected (UTM) raster, empties sit on the cell centroid moved into the raster CRS;
+  *  - covering and complete coverage keep cells against the densified reprojected footprint
+  *    ([[BoundingBox.densifiedBBox]]), so a projected raster loses no edge cell; a footprint that
+  *    wraps in lon/lat fails up front.
   *
   * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled.
   */
@@ -512,6 +517,121 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         } finally {
             RasterTessellate.centroidSetupFault = null
             RasterDriver.releaseDataset(src)
+        }
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Densified footprint (covering and complete keep-tests).
+    // ---------------------------------------------------------------------------------------------
+
+    /** EPSG:32618 (UTM 18N) scene: 1098 x 1098 pixels at 100 m from (499980, 4500000). */
+    private val GtScene = Array(499980.0, 100.0, 0.0, 4500000.0, 0.0, -100.0)
+    private val SceneSize = 1098
+
+    /** The UTM scene, every pixel 1, NoData 0 (all pixels valid). */
+    private def utmScene(): Dataset = {
+        val ds = GDALManager.gtiffDriver().Create(mem("scene.tif"), SceneSize, SceneSize, 1, gdalconstConstants.GDT_Byte)
+        ds.SetGeoTransform(GtScene)
+        val srs = epsgSR(32618)
+        ds.SetProjection(srs.ExportToWkt())
+        srs.delete()
+        val band = ds.GetRasterBand(1)
+        band.SetNoDataValue(0.0)
+        band.Fill(1.0)
+        ds.FlushCache()
+        ds
+    }
+
+    /** Drains an H3 tessellation of `input` (which it owns) and closes it: each emitted cell, with
+      * whether its chip holds a valid pixel. */
+    private def h3Cells(input: Dataset, assignment: String, coverage: String): Map[Long, Boolean] = {
+        val it = RasterTessellate.tessellateH3Iter(input, Map.empty[String, String], Res, assignment, coverage)
+        val out = mutable.Map.empty[Long, Boolean]
+        try {
+            while (it.hasNext) {
+                val (cell, chip, _) = it.next()
+                try {
+                    assert(!out.contains(cell), s"cell $cell emitted twice")
+                    out(cell) = validCount(chip, 1) > 0
+                } finally RasterDriver.releaseDataset(chip)
+            }
+        } finally it.asInstanceOf[AutoCloseable].close()
+        out.toMap
+    }
+
+    test("(l) UTM scene: covering keeps every cell that holds valid pixels; complete covers the same cells") {
+        val covering = h3Cells(utmScene(), "covering", "complete")
+        val centroid = h3Cells(utmScene(), "centroid", "sparse").keySet
+        val complete = h3Cells(utmScene(), "centroid", "complete").keySet
+        val coveringValid = covering.collect { case (cell, true) => cell }.toSet
+        info(s"H3 res $Res: covering ${covering.size} cells (${coveringValid.size} with valid pixels), " +
+          s"centroid+sparse ${centroid.size}, centroid+complete ${complete.size}")
+        // Every cell holding a pixel centre holds valid pixels, so covering must keep it.
+        val dropped = centroid -- covering.keySet
+        assert(dropped.isEmpty, s"covering dropped ${dropped.size} cells that hold pixel centres, e.g. ${dropped.take(5)}")
+        // Every pixel is valid, so a cell kept against the true footprint holds a valid pixel: an all-NoData
+        // covering chip means the footprint reached past the raster edge. (Covering may still hold cells
+        // with no pixel centre: its clip takes every pixel a cell touches.)
+        val empty = covering.keySet -- coveringValid
+        assert(empty.isEmpty, s"${empty.size} covering chips hold no valid pixel, e.g. ${empty.take(5)}")
+        assert(covering.keySet == complete,
+          s"covering and centroid+complete differ: covering-only ${(covering.keySet -- complete).take(5)}, " +
+            s"complete-only ${(complete -- covering.keySet).take(5)}")
+    }
+
+    test("(m) densifiedBBox follows the reprojected raster edge; without a transform it is the four corners") {
+        val src = utmScene()
+        val (wgs, utm) = (epsgSR(4326), epsgSR(32618))
+        val toLonLat = new CoordinateTransformation(utm, wgs)
+        val factory = new GeometryFactory()
+        try {
+            val fp = BoundingBox.densifiedBBox(src, GDAL.WSG84)
+            assert(fp.getCoordinates.length == 4 * 20 + 1, s"expected 21 points per edge, got ${fp.getCoordinates.length} coordinates")
+            assert(Orientation.isCCW(fp.getCoordinates), "the footprint ring must be counter-clockwise")
+            assert(fp.getSRID == 4326 && fp.isValid, s"footprint SRID ${fp.getSRID}, valid ${fp.isValid}")
+            // 101 points per edge of the pixel-grid rectangle, corners included, moved to lon/lat.
+            val n = SceneSize.toDouble
+            val samples = (0 to 100).map(_ / 100.0).flatMap(f => Seq((f * n, 0.0), (n, f * n), ((1 - f) * n, n), (0.0, (1 - f) * n)))
+            val points = samples.map { case (col, row) =>
+                val p = toLonLat.TransformPoint(GtScene(0) + col * GtScene(1), GtScene(3) + row * GtScene(5))
+                factory.createPoint(new Coordinate(p(0), p(1)))
+            }
+            val outside = points.map(fp.distance).max
+            val chordOutside = points.map(BoundingBox.bbox(src, GDAL.WSG84).distance).max
+            info(f"farthest edge point outside: densified $outside%.3e deg, 4-corner chord $chordOutside%.3e deg")
+            // A 100 m pixel is about 9e-4 degrees; the densified ring stays within ~1% of one.
+            assert(outside < 1e-5, s"an edge point lies $outside degrees outside the densified footprint")
+            assert(chordOutside > 1e-4, s"the 4-corner chord should miss the curved edge, but misses by only $chordOutside")
+        } finally { RasterDriver.releaseDataset(src); toLonLat.delete(); wgs.delete(); utm.delete() }
+
+        // Same CRS (EPSG:4326 under H3): no transform, the straight edges stay the four corners.
+        val src4326 = buildRamp(mem("m4326.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32, gt4326(64))
+        try {
+            val fp = BoundingBox.densifiedBBox(src4326, GDAL.WSG84)
+            assert(fp.getCoordinates.length == 5, s"expected the 4 corners, got ${fp.getCoordinates.length} coordinates")
+            assert(fp.equalsExact(BoundingBox.bbox(src4326, GDAL.WSG84)), "an untransformed footprint must equal bbox")
+        } finally RasterDriver.releaseDataset(src4326)
+    }
+
+    test("(n) a footprint that crosses the antimeridian fails before any chip, naming the raster CRS") {
+        // UTM zone 1N, 100 km wide around 50N: its west part lies beyond -180, so longitudes wrap.
+        def wrapScene(): Dataset = {
+            val ds = GDALManager.gtiffDriver().Create(mem("wrap.tif"), 100, 100, 1, gdalconstConstants.GDT_Byte)
+            ds.SetGeoTransform(Array(200000.0, 1000.0, 0.0, 5600000.0, 0.0, -1000.0))
+            val srs = epsgSR(32601)
+            ds.SetProjection(srs.ExportToWkt())
+            srs.delete()
+            ds.GetRasterBand(1).Fill(1.0)
+            ds.FlushCache()
+            ds
+        }
+        val expected = "rst_h3_tessellate: the raster footprint crosses the antimeridian or encloses a pole in EPSG:32601; " +
+            "reproject it (e.g. to EPSG:4326) or split it before tessellating"
+        Seq(("covering", "complete"), ("covering", "sparse"), ("centroid", "complete")).foreach { case (assignment, coverage) =>
+            val e = intercept[IllegalArgumentException] {
+                RasterTessellate.tessellateH3Iter(wrapScene(), Map.empty[String, String], Res, assignment, coverage)
+            }
+            assert(e.getMessage == expected, s"$assignment+$coverage: ${e.getMessage}")
         }
     }
 }

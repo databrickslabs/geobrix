@@ -11,7 +11,7 @@ import org.scalatest.matchers.should.Matchers._
 
 /**
   * Covers the H3 covering path of [[RasterTessellate.tessellateH3Iter]]: the emitted cell set must be
-  * exactly the cells whose H3 hexagon geometrically overlaps the raster bbox (no disjoint fringe).
+  * exactly the cells whose H3 hexagon geometrically overlaps the raster footprint (no disjoint fringe).
   */
 class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
 
@@ -80,16 +80,16 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
         finally src.delete()
     }
 
-    test("tessellateH3Iter covering emits only cells whose hexagon overlaps the raster bbox") {
+    test("tessellateH3Iter covering emits only cells whose hexagon overlaps the raster footprint") {
         // MODIS tile footprint in WGS84 is roughly lon [-85..-71], lat [10..20] (see ClipToGeomTest).
         // Resolution 3 yields a handful of cells including border cells, so the old nodata keep-test
         // over-includes a disjoint fringe just outside the raster.
         val resolution = 3
 
-        // Capture the bbox BEFORE consuming the iterator: tessellateH3Iter.close() unlinks `ds`,
-        // after which BoundingBox.bbox(ds, ...) would read a dead dataset and return a degenerate
-        // (0 0 ...) polygon.
-        val bboxGeom: Geometry = BoundingBox.bbox(ds, GDAL.WSG84)
+        // The footprint covering keeps cells against: the sinusoidal edges reprojected to lon/lat and
+        // densified (they curve, so the 4-corner chord is not the raster's extent). The tessellation gets
+        // its own handle (freshDs) because it releases its input; the suite-level `ds` stays open.
+        val bboxGeom: Geometry = BoundingBox.densifiedBBox(ds, GDAL.WSG84)
         bboxGeom.isValid shouldBe true
         bboxGeom.getArea should be > 0.0
 
@@ -103,7 +103,7 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
 
         withClue(
           s"${disjoint.length} of ${cells.length} emitted H3 cells are geometrically disjoint from the " +
-              s"raster bbox (covering must emit only overlapping hexagons): ${disjoint.take(10).mkString(",")} "
+              s"raster footprint (covering must emit only overlapping hexagons): ${disjoint.take(10).mkString(",")} "
         ) {
             disjoint shouldBe empty
         }
@@ -378,8 +378,9 @@ class RasterTessellateTest extends AnyFunSuite with BeforeAndAfterAll {
 
     test("generic tessellate H3 covering keys match independently-computed expected cell set") {
         val h3Res  = 3
-        // Independent expected cell set: buffer the bbox, polyfill, keep only positive-area overlap.
-        val bboxGeom: Geometry = BoundingBox.bbox(ds, GDAL.WSG84)
+        // Independent expected cell set: buffer the densified lon/lat footprint, polyfill, keep only
+        // positive-area overlap.
+        val bboxGeom: Geometry = BoundingBox.densifiedBBox(ds, GDAL.WSG84)
         val bufR = H3.getBufferRadius(bboxGeom, h3Res)
         val expectedH3Keys: Set[Long] = H3.polyfill(bboxGeom.buffer(bufR), h3Res).filter { cell =>
             val hex = H3.cellIdToGeometry(cell)

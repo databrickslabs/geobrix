@@ -15,7 +15,8 @@ import scala.jdk.CollectionConverters.CollectionHasAsScala
 object RasterTessellate {
 
     /** Supported assignment strategies.
-      * `covering` keeps every cell whose polygon overlaps the raster bbox (chips may share pixels).
+      * `covering` keeps every cell whose polygon overlaps the raster footprint ([[footprint]]; chips may
+      * share pixels).
       * `centroid` single-assigns each valid pixel to the one cell whose polygon contains its centroid
       * (chips partition the valid pixels). */
     val Assignments: Set[String] = Set("covering", "centroid")
@@ -29,19 +30,56 @@ object RasterTessellate {
 
     /**
       * Covering keep-test shared by all three grids (H3, quadbin, BNG): a cell is emitted iff its geometry
-      * has POSITIVE-AREA overlap with the raster bbox — mere boundary touch (a shared edge line or corner
-      * point) is NOT enough. On a grid-aligned tile (raster edges land exactly on cell boundaries) a fringe
-      * cell just outside the data shares only a 1-D boundary with the raster: `intersects == true` but
-      * `intersection(bbox).getArea == 0.0` and it holds ZERO source pixels, so clipping it yields a spurious
-      * empty all-NoData chip. This test drops those (matches the light tier). It KEEPS cells with real areal
-      * overlap even if they clip to all-NoData (e.g. a cloud hole or the raster's own NoData) — those fill
-      * their position in covering mode and must not be dropped, else white gaps are punched into the mosaic.
+      * has POSITIVE-AREA overlap with the raster footprint ([[footprint]]) — mere boundary touch (a shared
+      * edge line or corner point) is NOT enough. On a grid-aligned tile (raster edges land exactly on cell
+      * boundaries) a fringe cell just outside the data shares only a 1-D boundary with the raster:
+      * `intersects == true` but `intersection(footprint).getArea == 0.0` and it holds ZERO source pixels,
+      * so clipping it yields a spurious empty all-NoData chip. This test drops those (matches the light
+      * tier). It KEEPS cells with real areal overlap even if they clip to all-NoData (e.g. a cloud hole or
+      * the raster's own NoData) — those fill their position in covering mode and must not be dropped, else
+      * white gaps are punched into the mosaic.
       *
       * Delegates to [[GridOverlap.hasPositiveAreaOverlap]] — the shared canonical implementation that
       * [[com.databricks.labs.gbx.rasterx.expressions.grid.RasterToGridGeneric]] also uses.
       */
-    private def hasPositiveAreaOverlap(cellGeom: Geometry, bbox: Geometry): Boolean =
-        GridOverlap.hasPositiveAreaOverlap(cellGeom, bbox)
+    private def hasPositiveAreaOverlap(cellGeom: Geometry, footprint: Geometry): Boolean =
+        GridOverlap.hasPositiveAreaOverlap(cellGeom, footprint)
+
+    /** Points per raster edge, corners included, walked when the footprint is reprojected into the grid
+      * CRS: the lightweight tier's `_FOOTPRINT_EDGE_POINTS` (rasterio's `transform_bounds` default). */
+    private val FootprintEdgePoints = 21
+
+    /**
+      * The raster footprint that the covering and centroid+complete keep-tests, and their candidate
+      * enumeration, use: [[BoundingBox.densifiedBBox]] of `workDs` in the grid CRS. When the footprint is
+      * reprojected (H3/quadbin on a raster not in EPSG:4326; a custom grid on a raster in another CRS),
+      * each edge is walked at [[FootprintEdgePoints]] points, so the ring follows the curved edge and no
+      * cell holding edge pixels is dropped. BNG (warped to 27700 first), same-CRS and CRS-less rasters keep
+      * their four corners. Same rule as the lightweight tier.
+      *
+      * Throws IllegalArgumentException, before any chip is made, when a corner cannot be transformed, or
+      * when a lon/lat footprint crosses the antimeridian or encloses a pole (its longitudes jump by more
+      * than 180 degrees between consecutive points, closing pair included, or the ring is not a valid
+      * polygon): cell enumeration and overlap tests on such a ring are meaningless.
+      */
+    private def footprint(grid: GridSystem, workDs: Dataset, gridSR: SpatialReference): Geometry = {
+        val fn = s"rst_${grid.name.toLowerCase(java.util.Locale.ROOT)}_tessellate"
+        val fp =
+            try BoundingBox.densifiedBBox(workDs, gridSR, FootprintEdgePoints)
+            catch { case e: IllegalArgumentException => throw new IllegalArgumentException(s"$fn: ${e.getMessage}", e) }
+        if (BoundingBox.reprojects(workDs, gridSR) && gridSR.IsGeographic() == 1) {
+            val ring = fp.getCoordinates // closed: the last point is the first
+            val wraps = (1 until ring.length).exists(i => math.abs(ring(i).x - ring(i - 1).x) > 180.0)
+            if (wraps || !fp.isValid) {
+                throw new IllegalArgumentException(
+                  s"$fn: the raster footprint crosses the antimeridian or encloses a pole in " +
+                    s"${SpatialRefOps.crsToCanonical(workDs.GetSpatialRef)}; reproject it (e.g. to EPSG:4326) " +
+                    "or split it before tessellating"
+                )
+            }
+        }
+        fp
+    }
 
     // ------------------------------------------------------------------------------------------------
     // BNG-specific helpers shared by the generic tessellate path.
@@ -165,7 +203,7 @@ object RasterTessellate {
       * Caller must release each emitted Dataset. The iterator is AutoCloseable and releases the working
       * dataset when exhausted or explicitly closed.
       *
-      * @param assignment `"covering"` — one chip per cell whose polygon overlaps the raster bbox;
+      * @param assignment `"covering"` — one chip per cell whose polygon overlaps the raster footprint;
       *                   `"centroid"` — pixel-centroid single-assignment. Default: `"centroid"`.
       * @param coverage   `"complete"` — always emit a chip for every candidate cell, including
       *                   all-NoData chips (covering) and synthetic all-NoData chips for uncaptured cells
@@ -193,10 +231,10 @@ object RasterTessellate {
     }
 
     /**
-      * Generic covering tessellation. Candidate cells come from [[GridSystem.coveringCandidateCells]],
-      * which encodes each grid's buffering strategy (H3/BNG buffer; quadbin does not). The shared
-      * positive-area keep-test, validity guard, and [[ClipToGeom.clip]] are applied identically for
-      * every grid.
+      * Generic covering tessellation. Candidate cells come from [[GridSystem.coveringCandidateCells]] on
+      * the raster [[footprint]], which encodes each grid's buffering strategy (H3/BNG buffer; quadbin does
+      * not). The shared positive-area keep-test against the footprint, validity guard, and
+      * [[ClipToGeom.clip]] are applied identically for every grid.
       *
       * When `coverage == "sparse"`, chips whose clipped result is entirely NoData are released and
       * skipped. When `coverage == "complete"` (default), all-NoData chips are emitted as-is.
@@ -211,8 +249,8 @@ object RasterTessellate {
         val gridSR = srForGrid(grid)
         // BNG requires a pre-warp to EPSG:27700; all other grids (H3/quadbin/custom) use ds as-is.
         val (workDs, reprojected) = if (isBng(grid)) warpToBng(ds) else (ds, false)
-        val bbox = BoundingBox.bbox(workDs, gridSR)
-        val cells = grid.coveringCandidateCells(bbox, resolution).toArray
+        val fp = footprint(grid, workDs, gridSR)
+        val cells = grid.coveringCandidateCells(fp, resolution).toArray
 
         new Iterator[(Any, Dataset, Map[String, String])] with AutoCloseable {
             private var closed   = false
@@ -232,7 +270,7 @@ object RasterTessellate {
                     // must not be emitted (mirrors the former getBngTile guard).
                     if (isCellValid(grid, cellId)) {
                         val cellGeom = grid.cellIdToGeometry(cellId)
-                        if (hasPositiveAreaOverlap(cellGeom, bbox)) {
+                        if (hasPositiveAreaOverlap(cellGeom, fp)) {
                             val (resDs, resMtd) = ClipToGeom.clip(_ds, options, cellGeom, gridSR)
                             if (resDs != null) {
                                 // covering+sparse: drop chips whose clip is entirely NoData.
@@ -475,6 +513,9 @@ object RasterTessellate {
       * A band without a declared NoData blanks with [[GDAL.getNoDataConstant]] for its data type (the
       * same table the light tier uses), so a real 0 pixel is never mistaken for nodata.
       *
+      * Covered cells are kept against the raster [[footprint]] (the reprojected, densified edge), as in
+      * covering.
+      *
       * The BNG warp, the transforms and a custom grid SR ([[CentroidNatives]]) live until the iterator
       * is exhausted or closed, and are released once; they are also released if setup fails.
       */
@@ -509,10 +550,10 @@ object RasterTessellate {
             natives.ownsGridSR = isCustom(grid)
             val gridSR = natives.gridSR
             // For centroid+complete: the covered cells, kept against the raster footprint in the grid CRS.
-            val (completeBbox, completeCoveredCells): (Geometry, Array[Long]) =
+            val (completeFootprint, completeCoveredCells): (Geometry, Array[Long]) =
                 if (coverage == "complete") {
-                    val b = BoundingBox.bbox(workDs, gridSR)
-                    (b, grid.coveringCandidateCells(b, resolution).toArray)
+                    val fp = footprint(grid, workDs, gridSR)
+                    (fp, grid.coveringCandidateCells(fp, resolution).toArray)
                 } else (null, Array.empty[Long])
             // Per-pixel reprojection TARGET is the grid's OWN CRS (srForGrid), so pixel centroids are
             // transformed into the grid CRS before pointToCellID for ANY grid CRS, consistent with the
@@ -545,7 +586,7 @@ object RasterTessellate {
                 completeCoveredCells.iterator
                     .filter(cellId => isCellValid(grid, cellId) && !assigned.cellIndex.contains(cellId))
                     .map(cellId => (cellId, grid.cellIdToGeometry(cellId)))
-                    .filter { case (_, cellGeom) => hasPositiveAreaOverlap(cellGeom, completeBbox) }
+                    .filter { case (_, cellGeom) => hasPositiveAreaOverlap(cellGeom, completeFootprint) }
                     .map { case (cellId, cellGeom) =>
                         val (col, row) = centroidPixel(cellGeom, natives.tfInv, invGt, xSize, ySize)
                         (cellId, col, row)
@@ -770,7 +811,8 @@ object RasterTessellate {
       * Dataset; iterator is AutoCloseable.
       *
       *  - `assignment="centroid"` (default): pixel-centroid single-assignment.
-      *  - `assignment="covering"`: one chip per cell whose hexagon overlaps the raster bbox.
+      *  - `assignment="covering"`: one chip per cell whose hexagon overlaps the raster footprint (reprojected
+      *    to lon/lat and densified, see [[footprint]]).
       *  - `coverage="complete"` (default): always emit a chip for every candidate cell.
       *  - `coverage="sparse"`: drop chips with no valid pixels (covering) or uncaptured cells (centroid).
       */

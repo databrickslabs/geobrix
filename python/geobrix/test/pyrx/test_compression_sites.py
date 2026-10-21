@@ -609,9 +609,9 @@ def test_percentile_stretch_is_canonical():
     _assert_canonical(out, "uint8")
 
 
-def _ycbcr_src(x0=500000, crs="EPSG:32618"):
+def _ycbcr_src(x0=500000, crs="EPSG:32618", seed=7):
     """A 64x64 tiled 3-band uint8 JPEG/YCbCr GTiff: its photometric must not be inherited."""
-    a = (np.random.default_rng(7).random((3, 64, 64)) * 255).astype("uint8")
+    a = (np.random.default_rng(seed).random((3, 64, 64)) * 255).astype("uint8")
     prof = dict(
         driver="GTiff",
         width=64,
@@ -950,3 +950,64 @@ def test_cog_writer_mosaic_accepts_a_ycbcr_jpeg_source(tmp_path):
         with rasterio.open(p) as c:
             assert c.count == 3
             assert str(c.profile.get("photometric")).lower() != "ycbcr", c.profile
+
+
+@pytest.mark.parametrize("n", [2, 5])
+def test_derivedband_tiles_stacks_a_ycbcr_group_losslessly(n):
+    """The tile stack handed to the pixel function must hold the source values exactly.
+
+    A stack that inherited the sources' JPEG codec came back perturbed (a few
+    tiles) or failed to write at all (five or more).
+    """
+    from databricks.labs.gbx.pyrx.core.agg import derivedband_tiles
+
+    total = (
+        "def f(in_ar, out_ar, xoff, yoff, xsize, ysize, rxs, rys, radius, gt, **kw):\n"
+        "    out_ar[:] = sum(a.astype('float64') for a in in_ar)\n"
+    )
+    tiles = [_ycbcr_src(seed=i) for i in range(n)]
+    want = 0.0
+    for t in tiles:
+        with MemoryFile(t) as m, m.open() as c:
+            want = want + c.read(1).astype("float64")
+    out = derivedband_tiles(tiles, total, "f")
+    with MemoryFile(out) as m, m.open() as c:
+        assert np.array_equal(c.read(1), want), "the stack's values changed"
+
+
+def _assert_jpeg_ycbcr(b):
+    with MemoryFile(b) as m, m.open() as c:
+        assert str(c.profile.get("compress")).lower() == "jpeg", c.profile
+        assert str(c.profile.get("photometric")).lower() == "ycbcr", c.profile
+
+
+def test_encode_tile_gtiff_keeps_ycbcr_for_an_explicit_jpeg_codec(tmp_path):
+    """Asking for JPEG on a YCbCr source keeps the YCbCr photometric JPEG carries."""
+    from databricks.labs.gbx.ds._encode import encode_tile
+
+    path = _ycbcr_path(tmp_path)
+    with rasterio.open(path) as ds:
+        raster = encode_tile(ds, (0, 0, 32, 32), path, "", "JPEG", "gtiff")[1]
+    _assert_jpeg_ycbcr(raster)
+
+
+def test_apply_compression_keeps_ycbcr_for_an_explicit_jpeg_codec():
+    from databricks.labs.gbx.ds.writer import _apply_compression
+
+    _assert_jpeg_ycbcr(_apply_compression(_ycbcr_src(), "jpeg", None, None))
+
+
+def test_drop_ycbcr_unless_jpeg_keeps_the_key_only_for_a_jpeg_codec():
+    from databricks.labs.gbx.pyrx.core.compression import drop_ycbcr
+
+    base = {"photometric": "YCbCr", "count": 3}
+    assert "photometric" not in drop_ycbcr({**base, "compress": "jpeg"})
+    assert "photometric" not in drop_ycbcr(
+        {**base, "compress": "zstd"}, unless_jpeg=True
+    )
+    assert "photometric" not in drop_ycbcr(dict(base), unless_jpeg=True)
+    for codec in ("jpeg", "JPEG"):
+        kept = drop_ycbcr({**base, "compress": codec}, unless_jpeg=True)
+        assert kept["photometric"] == "YCbCr"
+    rgb = {"photometric": "rgb", "compress": "zstd"}
+    assert drop_ycbcr(rgb, unless_jpeg=True) == rgb

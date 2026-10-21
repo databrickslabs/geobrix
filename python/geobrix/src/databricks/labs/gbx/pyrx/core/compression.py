@@ -248,16 +248,25 @@ def _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver) -> dic
     return {"compress": c}
 
 
-def drop_ycbcr(profile: dict) -> dict:
+def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     """Copy of *profile* without a YCbCr ``photometric``.
 
     A JPEG/YCbCr source's profile carries ``photometric="ycbcr"``, which GDAL accepts
     only together with ``COMPRESS=JPEG``. Rasterio hands out decoded RGB samples, so
     for any other codec the key is dropped and GDAL picks its RGB default.
+
+    By default the key is always dropped (the writer is about to apply a non-JPEG
+    codec). With ``unless_jpeg=True`` it is kept when the profile's own ``compress``
+    is JPEG (case-insensitive), so a writer that honours a caller-chosen codec calls
+    this AFTER merging the codec options: a JPEG request keeps its YCbCr encoding,
+    any other codec drops it. No other key is touched.
     """
     prof = dict(profile)
-    if str(prof.get("photometric", "")).lower() == "ycbcr":
-        del prof["photometric"]
+    if str(prof.get("photometric", "")).lower() != "ycbcr":
+        return prof
+    if unless_jpeg and str(prof.get("compress", "")).lower() == "jpeg":
+        return prof
+    del prof["photometric"]
     return prof
 
 

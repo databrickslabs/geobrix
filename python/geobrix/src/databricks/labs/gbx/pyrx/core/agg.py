@@ -563,12 +563,7 @@ def derivedband_tiles(rasters: List[bytes], python_func: str, func_name: str) ->
         ref = datasets[0]
         bands = [ds.read(1) for ds in datasets]
         data = np.stack(bands)
-        profile = _comp.drop_ycbcr(ref.profile)
-        profile.update(driver="GTiff", count=data.shape[0])
-        with MemoryFile() as stack_mf:
-            with stack_mf.open(**profile) as dst:
-                dst.write(data)
-            stacked_bytes = stack_mf.read()
+        stacked_bytes = _comp.write_gtiff({**ref.profile, "count": data.shape[0]}, data)
     finally:
         _close_all(memfiles, datasets)
 

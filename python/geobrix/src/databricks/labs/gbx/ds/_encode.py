@@ -121,7 +121,7 @@ def encode_tile(
             os.unlink(tmp)
     else:
         # GTiff path: in-memory encode via the compression authority.
-        profile = _comp.drop_ycbcr(ds.profile)
+        profile = ds.profile.copy()
         profile.update(
             driver="GTiff",
             width=win_w,
@@ -135,6 +135,9 @@ def encode_tile(
                 out_dtype, decoded_bytes=decoded_bytes, compress=compression
             )
         )
+        # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
+        # any other codec cannot carry it.
+        profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
         with MemoryFile() as mf:
             with mf.open(**profile) as out:
                 out.write(data)

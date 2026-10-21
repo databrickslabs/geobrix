@@ -134,7 +134,7 @@ def _apply_compression(
 
     with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
         data = src.read()
-        profile = _comp.drop_ycbcr(src.profile)
+        profile = src.profile.copy()
         profile.update(driver="GTiff")
         out_dtype = profile.get("dtype", str(src.dtypes[0]))
         decoded_bytes = src.count * src.width * src.height
@@ -156,6 +156,9 @@ def _apply_compression(
                 predictor=predictor,
             )
         )
+        # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
+        # any other codec cannot carry it.
+        profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
         with MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
                 dst.write(data)

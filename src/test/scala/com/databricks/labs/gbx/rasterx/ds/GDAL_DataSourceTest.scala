@@ -1,11 +1,14 @@
 package com.databricks.labs.gbx.rasterx.ds
 
+import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.functions
+import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
 import org.gdal.gdal.gdal
+import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.matchers.must.Matchers.be
 import org.scalatest.matchers.should.Matchers.convertToAnyShouldWrapper
 
@@ -36,6 +39,31 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
 
         res.foreach(arr => arr.foreach(v => v should be >= 0.0))
 
+    }
+
+    test("GDAL reader keeps an all-NoData file as one row (parity with raster_gbx)") {
+        rasterx.functions.register(spark)
+        GDALManager.init(ExpressionConfig(spark))
+        val dir = Files.createTempDirectory("gdal_all_nodata_")
+        val tif = dir.resolve("all_nodata.tif").toString
+        try {
+            // 256x256 uint16, nodata=0, every pixel 0: the whole raster is NoData.
+            val ds = GDALManager.gtiffDriver().Create(tif, 256, 256, 1, gdalconstConstants.GDT_UInt16)
+            ds.SetGeoTransform(Array(500000.0, 10.0, 0.0, 4510000.0, 0.0, -10.0))
+            val band = ds.GetRasterBand(1)
+            band.SetNoDataValue(0.0)
+            band.WriteRaster(0, 0, 256, 256, new Array[Short](256 * 256))
+            ds.FlushCache()
+            ds.delete()
+
+            // Default (one tile per file) and a tiled read must both yield the NoData tile(s),
+            // never an empty result.
+            spark.read.format("gdal").load(dir.toString).count() shouldBe 1L
+            spark.read.format("gdal").option("sizeInMB", "1").load(dir.toString).count() shouldBe 1L
+        } finally {
+            Files.list(dir).toList.asScala.foreach(Files.deleteIfExists)
+            Files.deleteIfExists(dir)
+        }
     }
 
     test("GDAL reader clipCrs option populates the v2 tile.clip_crs (parity with light)") {

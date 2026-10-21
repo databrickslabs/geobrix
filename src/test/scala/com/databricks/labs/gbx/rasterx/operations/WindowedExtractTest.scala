@@ -329,18 +329,16 @@ class WindowedExtractTest extends AnyFunSuite with BeforeAndAfterAll {
         } finally src.delete()
     }
 
-    test("all-NoData window => getTile returns null (isEmpty discard, tile count unchanged)") {
-        // Whole raster filled with the nodata value => the window is all-nodata.
-        val src = buildRamp(mem("allnd.tif"), 32, 32, 1, gdalconstConstants.GDT_Float32,
-          Array(0.0, 1.0, 0.0, 0.0, 0.0, -1.0))
-        try {
-            src.GetRasterBand(1).SetNoDataValue(7.0)
-            val arr = Array.fill(32 * 32)(7.0)
-            src.GetRasterBand(1).WriteRaster(0, 0, 32, 32, arr)
-            src.FlushCache()
-            val tile = ReTile.getTile(src, Map.empty, 0, 0, 16, 16)
-            assert(tile == null, "all-NoData window must be discarded by getTile")
-        } finally src.delete()
+    test("reTileIter emits every window, including all-NoData windows") {
+        val src = buildRamp(mem("keep.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32,
+          Array(0.0, 1.0, 0.0, 0.0, 0.0, -1.0), nodata = Some(7.0))
+        val nd = Array.fill(16 * 16)(7.0)
+        src.GetRasterBand(1).WriteRaster(0, 0, 16, 16, nd)    // window (0,0) all-NoData
+        src.GetRasterBand(1).WriteRaster(32, 48, 16, 16, nd)  // window (r3,c2) all-NoData
+        src.FlushCache()
+        val tiles = ReTile.reTileIter(src, Map.empty, 16, 16).toList // iterator releases src on exhaustion
+        try assert(tiles.size == 16)
+        finally tiles.foreach { case (d, m) => d.delete(); gdal.Unlink(m("path")) }
     }
 
     test("getTile returns a live tile for a window with data and a valid metadata path") {

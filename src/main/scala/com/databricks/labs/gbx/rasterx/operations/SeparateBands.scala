@@ -27,7 +27,7 @@ object SeparateBands {
         (resDs, resMtd)
     }
 
-    /** Iterator of (Dataset, metadata) per band; empty bands skipped. Caller must release each Dataset. Iterator is AutoCloseable. */
+    /** Iterator of (Dataset, metadata) per band; every band is emitted, including all-NoData bands. Caller must release each Dataset. Iterator is AutoCloseable. */
     def separateIter(
         ds: Dataset,
         options: Map[String, String]

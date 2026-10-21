@@ -619,6 +619,64 @@ def test_rst_maketiles(spark):
     )
 
 
+def _cellid_tile_view(spark, name, cellid):
+    """Register a one-row view of a 3-band 4x4 tile carrying the given parent cellid."""
+    from pyspark.sql.types import (
+        BinaryType,
+        LongType,
+        MapType,
+        StringType,
+        StructField,
+        StructType,
+    )
+
+    tile_t = StructType(
+        [
+            StructField("cellid", LongType(), True),
+            StructField("raster", BinaryType(), True),
+            StructField("metadata", MapType(StringType(), StringType()), True),
+        ]
+    )
+    raster = bytearray(make_geotiff_bytes(width=4, height=4, count=3))
+    spark.createDataFrame(
+        [{"tile": {"cellid": cellid, "raster": raster, "metadata": {}}}],
+        StructType([StructField("tile", tile_t)]),
+    ).createOrReplaceTempView(name)
+
+
+_RETILE_FAMILY = [
+    "gbx_rst_retile(tile, 2, 2)",
+    "gbx_rst_tooverlappingtiles(tile, 2, 2, 10)",
+    "gbx_rst_maketiles(tile, 1)",
+    "gbx_rst_separatebands(tile)",
+]
+
+
+def test_retile_family_stamps_parent_cellid(spark):
+    # Every output of the retile family carries the PARENT tile's cellid (as heavy does),
+    # not a light-only emitted ordinal.
+    prx.register(spark)
+    _cellid_tile_view(spark, "_ras_cellid_parent", 7)
+    for fn in _RETILE_FAMILY:
+        rows = spark.sql(
+            f"SELECT t.cellid AS cellid FROM _ras_cellid_parent, LATERAL {fn} t"
+        ).collect()
+        assert rows, fn
+        assert {r["cellid"] for r in rows} == {7}, (fn, [r["cellid"] for r in rows])
+
+
+def test_retile_family_null_parent_cellid_is_zero(spark):
+    # A null parent cellid maps to 0, matching heavy's getLong.
+    prx.register(spark)
+    _cellid_tile_view(spark, "_ras_cellid_null", None)
+    for fn in _RETILE_FAMILY:
+        rows = spark.sql(
+            f"SELECT t.cellid AS cellid FROM _ras_cellid_null, LATERAL {fn} t"
+        ).collect()
+        assert rows, fn
+        assert {r["cellid"] for r in rows} == {0}, (fn, [r["cellid"] for r in rows])
+
+
 # --- web-mercator XYZ tiling (rst_tilexyz / rst_xyzpyramid) -----------------
 def _rgb_tile_df(spark):
     """One-row DataFrame with a small RGB GTiff tile over a European extent."""

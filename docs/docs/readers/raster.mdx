@@ -165,7 +165,7 @@ as COG when you already have tiles in memory:
 | Option | Default | Description |
 |--------|---------|-------------|
 | `driver` | auto-detected from extension | Explicitly specify the GDAL driver to use (regardless of extension). |
-| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split: one whole-image tile per file. Set a positive MB value to split large files into multiple tiles for parallel processing. |
+| `sizeInMB` | `"-1"` | Default (`<= 0`) = no split: one whole-image tile per file. Set a positive MB value to split large files into multiple tiles for parallel processing. Tiled reads keep every window, including windows whose pixels are all NoData, so a file that is entirely NoData yields rows rather than none, as in the lightweight reader. |
 | `filterRegex` | `".*"` | Filter files by regex when reading from a directory. |
 | `readSubdatasets` | `"false"` | Read subdatasets if present (e.g. HDF, NetCDF). |
 | `rasterAsGrid` | `"false"` | Read as grid instead of tiles. |

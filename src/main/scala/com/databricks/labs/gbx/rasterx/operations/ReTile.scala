@@ -1,12 +1,9 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import org.apache.spark.internal.Logging
-import org.gdal.gdal.{Dataset, gdal}
-
-import scala.jdk.CollectionConverters.CollectionHasAsScala
+import org.gdal.gdal.Dataset
 
 /** Splits a raster into non-overlapping tiles (windows); supports retile and getTile. */
-object ReTile extends Logging {
+object ReTile {
 
     /** Returns a sequence of (xMin, yMin, xSize, ySize) windows covering the dataset. */
     def generateWindows(
@@ -30,7 +27,10 @@ object ReTile extends Logging {
         }
     }
 
-    /** Extracts one window as a new Dataset; returns null if the tile is empty. Caller must release if non-null. */
+    /**
+      * Extracts one window as a new Dataset. Every window is returned, including a window whose
+      * pixels are all NoData (so the tile count is `ceil(W/tw) * ceil(H/th)`). Caller must release.
+      */
     def getTile(
         ds: Dataset,
         options: Map[String, String],
@@ -39,20 +39,10 @@ object ReTile extends Logging {
         xOffset: Int,
         yOffset: Int
     ): (Dataset, Map[String, String]) = {
-        val result = WindowedExtract.extract(ds, options, xStart, yStart, xOffset, yOffset)
-
-        val isEmpty = RasterAccessors.isEmpty(result._1)
-
-        if (isEmpty) {
-            result._1.delete()
-            gdal.Unlink(result._2("path"))
-            null
-        } else {
-            (result._1, result._2)
-        }
+        WindowedExtract.extract(ds, options, xStart, yStart, xOffset, yOffset)
     }
 
-    /** Seq of (Dataset, metadata) tiles; empty tiles discarded. Caller must release each Dataset. */
+    /** Seq of (Dataset, metadata) tiles, one per window (all-NoData windows included). Caller must release each Dataset. */
     def reTile(
         ds: Dataset,
         options: Map[String, String],
@@ -83,35 +73,17 @@ object ReTile extends Logging {
             private var fetched = false
             private var closed = false
             private var nextTile: (Dataset, Map[String, String]) = _
-            private var yieldedAny = false
 
-            /** Fetches the next tile into nextTile or closes and nulls it when exhausted. */
+            /** Fetches the next window into nextTile, or closes and nulls it when the windows are exhausted. */
             private def advance(): Unit = {
                 fetched = true
                 nextTile = null
-                while (i < windows.length && nextTile == null) {
+                if (i < windows.length) {
                     val (xs, ys, xo, yo) = windows(i)
                     i += 1
-                    nextTile = getTile(_ds, options, xs, ys, xo, yo) // returns null if empty
+                    nextTile = getTile(_ds, options, xs, ys, xo, yo)
                 }
-                if (nextTile != null) yieldedAny = true
-                if (i >= windows.length && nextTile == null) {
-                    // All windows scanned and none produced a non-empty tile: the
-                    // source raster is entirely empty/NoData. Log it so a 0-tile
-                    // result does not fall through silently (it otherwise looks
-                    // identical to a legitimate "no rows" downstream).
-                    if (!yieldedAny && windows.nonEmpty) {
-                        val sourcePath = Option(_ds)
-                            .flatMap(d => Option(d.GetFileList()))
-                            .flatMap(_.asScala.headOption.map(_.toString))
-                            .getOrElse("unknown source path")
-                        logInfo(
-                            s"ReTile produced 0 non-empty tiles from ${windows.length} " +
-                            s"window(s); source raster is entirely empty/NoData: $sourcePath"
-                        )
-                    }
-                    close()
-                }
+                if (nextTile == null) close()
             }
 
             /** Overrides Iterator.hasNext: true until advance() exhausts windows or close() called. */

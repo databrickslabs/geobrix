@@ -5268,8 +5268,10 @@ class _RstSeparateBandsUDTF:
         # (not exactly 1); accepted because fully-corrupt open-failure is the primary case.
         try:
             with ot._open(tile, file_ref=file_ref) as ds:
-                for i, b in enumerate(tiling.iter_separate_bands(ds)):
-                    yield _serde.build_tile(b, "GTiff", i)
+                # Parent cellid (null -> 0), matching heavy's getLong stamp.
+                cellid = _tile_cellid(tile)
+                for b in tiling.iter_separate_bands(ds):
+                    yield _serde.build_tile(b, "GTiff", cellid)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_SeparateBands: {e}")
             return
@@ -5289,10 +5291,11 @@ class _RstRetileUDTF:
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile, file_ref=file_ref) as ds:
-                for i, b in enumerate(
-                    tiling.iter_retile(ds, int(tile_width), int(tile_height))
-                ):
-                    yield _serde.build_tile(b, "GTiff", i)
+                cellid = _tile_cellid(
+                    tile
+                )  # parent cellid (null -> 0), as heavy stamps
+                for b in tiling.iter_retile(ds, int(tile_width), int(tile_height)):
+                    yield _serde.build_tile(b, "GTiff", cellid)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ReTile: {e}")
             return
@@ -5314,12 +5317,13 @@ class _RstToOverlappingTilesUDTF:
         # NOTE: mid-iteration failure yields already-emitted good rows + one error row.
         try:
             with ot._open(tile, file_ref=file_ref) as ds:
-                for i, b in enumerate(
-                    tiling.iter_to_overlapping_tiles(
-                        ds, int(tile_width), int(tile_height), int(overlap)
-                    )
+                cellid = _tile_cellid(
+                    tile
+                )  # parent cellid (null -> 0), as heavy stamps
+                for b in tiling.iter_to_overlapping_tiles(
+                    ds, int(tile_width), int(tile_height), int(overlap)
                 ):
-                    yield _serde.build_tile(b, "GTiff", i)
+                    yield _serde.build_tile(b, "GTiff", cellid)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ToOverlappingTiles: {e}")
             return
@@ -5351,10 +5355,13 @@ class _RstMakeTilesUDTF:
             # from a materialized tile of the same content, so split-count may vary
             # slightly — this divergence is inherent to streaming and expected.
             with ot._open(tile, file_ref=file_ref) as ds:
-                for i, b in enumerate(
-                    tiling.iter_make_tiles(ds, float(size_in_mb), size_bytes=size_bytes)
+                cellid = _tile_cellid(
+                    tile
+                )  # parent cellid (null -> 0), as heavy stamps
+                for b in tiling.iter_make_tiles(
+                    ds, float(size_in_mb), size_bytes=size_bytes
                 ):
-                    yield _serde.build_tile(b, "GTiff", i)
+                    yield _serde.build_tile(b, "GTiff", cellid)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_MakeTiles: {e}")
             return

@@ -1663,7 +1663,7 @@ Covering mode uses a **positive-area overlap** rule (shared by all three grids �
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. It derives a square tile size from the MB budget and always partitions; it does not honor the heavyweight `size_in_mb = -1` (single tile) or `0` (64 MB) sentinels or the power-of-four split, so tile counts and dimensions differ.
+Powered by **rasterio**. Streams one tile row per subdivided region via streaming UDTF. The lightweight tier applies the same size thresholds and power-of-4 split as the heavyweight tier.
 :::
 
 **Signature:** `rst_maketiles(tile: Column, sizeInMB: Column): Column` — Subdivide into smaller tiles by approximate size in MB.
@@ -1730,7 +1730,7 @@ Tessellate a raster to user-defined custom-grid cells — one row per overlappin
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio**. Streams one tile row per retiled region via streaming UDTF (matches the heavyweight generator behavior).
+Powered by **rasterio**. Streams one tile row per retiled region via streaming UDTF. Every window is emitted, including windows whose pixels are all NoData, in both tiers. To drop them, filter with `WHERE NOT gbx_rst_isempty(tile)` or write with `pruneEmpty`.
 :::
 
 **Signature:** `rst_retile(tile: Column, tileWidth: Column, tileHeight: Column): Column` — Retile to uniform dimensions.
@@ -1772,7 +1772,7 @@ Powered by **rasterio**. Streams one band-tile row per band via streaming UDTF �
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio**. Streams one tile row per overlapping region via streaming UDTF (matches the heavyweight generator behavior).
+Powered by **rasterio**. Streams one tile row per overlapping region via streaming UDTF. Every window is emitted, including windows whose pixels are all NoData, in both tiers. To drop them, filter with `WHERE NOT gbx_rst_isempty(tile)` or write with `pruneEmpty`.
 :::
 
 **Signature:** `rst_tooverlappingtiles(tile: Column, tileWidth: Column, tileHeight: Column, overlap: Column): Column` — Create overlapping tiles.

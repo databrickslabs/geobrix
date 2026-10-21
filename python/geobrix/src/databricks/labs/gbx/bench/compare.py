@@ -536,8 +536,9 @@ def scorecard_from_store(
     n_registered = len(registered)
 
     records = _store.read_all(root)
-    record_names = {r["fn"] for r in records}
-    n_benched = len(records)
+    # A variant case (e.g. rst_h3_tessellate_centroid) counts as its function.
+    record_names = {spec.benched_function(r["fn"]) for r in records}
+    n_benched = len(record_names)
 
     # Flatten all cells across records for parity + performance aggregation.
     all_cells = []

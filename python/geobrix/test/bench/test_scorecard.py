@@ -101,6 +101,21 @@ def test_scorecard_aggregates_over_store(tmp_path):
     assert "abcdef1" in out
 
 
+def test_scorecard_counts_a_variant_case_as_its_function(tmp_path):
+    # rst_h3_tessellate_centroid is a second case of rst_h3_tessellate: one function.
+    src = _write_source(tmp_path, "core/t.py", "v1\n")
+    for fn in ("rst_h3_tessellate", "rst_h3_tessellate_centroid"):
+        _write(tmp_path, fn, sources=(src,), cells=[_cell("exact", 0.0, 2.0)])
+    specs_by_name = {
+        fn: _spec(fn, (src,))
+        for fn in ("rst_h3_tessellate", "rst_h3_tessellate_centroid")
+    }
+    out = compare.scorecard_from_store(root=tmp_path, specs_by_name=specs_by_name)
+    total = len(compare.registered_raster())
+    assert f"Benchmark coverage:** 1 / {total}" in out
+    assert f"Not yet covered:** {total - 1} registered" in out
+
+
 def test_scorecard_default_specs_from_registry(tmp_path):
     # With no specs_by_name override the scorecard resolves specs from the live
     # registry; a record for a real registered fn must not crash and must show up.

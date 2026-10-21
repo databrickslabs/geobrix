@@ -14,7 +14,6 @@ delegates for backward compatibility with bench callers and existing tests.
 """
 
 import math
-from collections import defaultdict
 from contextlib import contextmanager, nullcontext
 
 import h3
@@ -35,6 +34,7 @@ from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
 from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+from databricks.labs.gbx.pyrx.core.gridagg import _bng_cells, _h3_cells
 
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = _quadbin._MAX_POLYFILL_RES
@@ -46,6 +46,10 @@ _VALID_COVERAGES = {"sparse", "complete"}
 _VALID_GRIDS = frozenset({"h3", "quadbin", "bng", "custom"})
 # Points per raster edge, corners included, walked when reprojecting the footprint (rasterio transform_bounds default).
 _FOOTPRINT_EDGE_POINTS = 21
+# Centroid assignment reads at least this many rows per strip (more if the source block is taller).
+_STRIP_MIN_ROWS = 512
+# Initial number of per-label pixel windows; doubled as cells are found.
+_LABEL_CAPACITY = 1024
 
 
 def _has_positive_area_overlap(cell_poly, bbox_poly) -> bool:
@@ -376,6 +380,147 @@ def _build_empty_chip(work_ds, cell, grid: str, conf=None) -> bytes:
 # ---------------------------------------------------------------------------
 
 
+def _pixel_cells(xs, ys, resolution, grid: str, conf=None) -> np.ndarray:
+    """Integer cell key of each pixel centre ``(xs[i], ys[i])`` in the grid's work CRS.
+
+    h3: the uint64 H3 index; quadbin: the cell as int64 (``point_as_cell_vec``, which
+    is bit-identical to the scalar ``point_as_cell`` heavy matches; the gridagg
+    ``_quadbin_cells`` follows the CARTO library instead, which wraps longitude 180
+    and rounds tile edges differently); bng: the Long id (validity is checked per
+    unique cell by :func:`_raw_cell`); custom: the id, or ``-1`` where the centre
+    falls outside the grid. h3 and custom encode one point at a time (no array API).
+    """
+    if grid == "h3":
+        return _h3_cells(xs, ys, resolution)
+    if grid == "quadbin":
+        return _quadbin.point_as_cell_vec(xs, ys, resolution)
+    if grid == "bng":
+        return _bng_cells(xs, ys, resolution)
+    from databricks.labs.gbx.pygx import _custom as _custom_mod
+
+    to_cell = _custom_mod.point_to_cell_id_or_none
+    return np.fromiter(
+        (
+            (
+                -1
+                if (cell := to_cell(conf, float(x), float(y), resolution)) is None
+                else cell
+            )
+            for x, y in zip(xs, ys)  # vectorscan: ok (no array API for custom)
+        ),
+        dtype=np.int64,
+        count=len(xs),
+    )
+
+
+def _raw_cell(key: int, grid: str):
+    """The raw cell of a :func:`_pixel_cells` key, as the grid helpers take it.
+
+    ``None`` drops the key's pixels: a bng cell outside the grid (``_bng.is_valid``)
+    or a pixel outside a custom grid's bounds.
+    """
+    if grid == "h3":
+        return h3.int_to_str(key)
+    if grid == "bng":
+        return key if _bng.is_valid(key) else None
+    if grid == "custom":
+        return None if key < 0 else key
+    return key  # quadbin
+
+
+def _grow_windows(windows: np.ndarray, n: int) -> np.ndarray:
+    """Widen the ``(4, capacity)`` per-label window array to hold label ``n - 1``.
+
+    Rows are ``r0, r1, c0, c1``. The capacity doubles (from at least
+    :data:`_LABEL_CAPACITY`); new labels start empty (``r0``/``c0`` at the int32
+    maximum, ``r1``/``c1`` at -1) so min/max can fold in.
+    """
+    cap = max(windows.shape[1], _LABEL_CAPACITY)
+    while cap < n:
+        cap *= 2
+    out = np.empty((4, cap), dtype=np.int32)
+    out[:, : windows.shape[1]] = windows
+    fresh = out[:, windows.shape[1] :]
+    fresh[0::2] = np.iinfo(np.int32).max
+    fresh[1::2] = -1
+    return out
+
+
+def _assign_pixels(work_ds, resolution, grid: str, conf=None):
+    """Assign every valid pixel to the cell holding its centre, one row strip at a time.
+
+    Returns ``(labels, windows, order)``: an int32 ``(height, width)`` label raster
+    (``-1`` = unassigned), the ``(4, n)`` int32 ``r0, r1, c0, c1`` pixel window of each
+    label, and the raw cell of each label. Labels are numbered in first-seen pixel
+    order (row-major), so chips come out in that order.
+
+    A pixel is valid when ANY band's mask marks it valid (heavy anyValid); the mask
+    bands recognise a NaN NoData. Pixel centres go through the full geotransform;
+    h3/quadbin move them to EPSG:4326 when the raster has a CRS that is not 4326
+    (gated on CRS presence: an authority-less CRS still has ``authority_srid_of``
+    None and needs it; a CRS-less raster is grid-native).
+
+    Memory is the label raster (4 B/px) plus the coordinate and cell arrays of one
+    strip of at least :data:`_STRIP_MIN_ROWS` rows (the source block height if
+    taller); no per-pixel Python except the scalar h3/custom encoders.
+    """
+    height, width = work_ds.height, work_ds.width
+    strip_rows = max(_STRIP_MIN_ROWS, work_ds.block_shapes[0][0])
+    to_lonlat = None
+    if (
+        grid in ("h3", "quadbin")
+        and work_ds.crs is not None
+        and authority_srid_of(work_ds.crs) != 4326
+    ):
+        to_lonlat = get_transformer(work_ds.crs, 4326).transform
+
+    labels = np.full((height, width), -1, dtype=np.int32)
+    windows = _grow_windows(np.empty((4, 0), dtype=np.int32), 0)
+    order = []  # raw cell of each label
+    index = {}  # cell key -> label (-1: dropped)
+    for row0 in range(0, height, strip_rows):  # vectorscan: ok (per row strip)
+        nrows = min(strip_rows, height - row0)
+        masks = work_ds.read_masks(window=Window(0, row0, width, nrows))
+        rr, cc = np.nonzero((masks != 0).any(axis=0))
+        del masks
+        if rr.size == 0:
+            continue
+        rr = (rr + row0).astype(np.int32)
+        cc = cc.astype(np.int32)
+        xs, ys = work_ds.transform * (cc + 0.5, rr + 0.5)
+        if to_lonlat is not None:
+            xs, ys = to_lonlat(xs, ys)
+        cells = _pixel_cells(xs, ys, resolution, grid, conf=conf)
+        del xs, ys
+        uniq, first, inv = np.unique(cells, return_index=True, return_inverse=True)
+        del cells
+        # Visit this strip's cells in first-seen order; a new cell takes the next label.
+        cell_label = np.empty(uniq.size, dtype=np.int32)
+        for j in np.argsort(first):
+            key = int(uniq[j])
+            label = index.get(key)
+            if label is None:
+                raw = _raw_cell(key, grid)
+                label = -1 if raw is None else len(order)
+                if raw is not None:
+                    order.append(raw)
+                index[key] = label
+            cell_label[j] = label
+        lab = cell_label[inv]
+        del inv
+        keep = lab >= 0
+        if not keep.all():
+            rr, cc, lab = rr[keep], cc[keep], lab[keep]
+        labels[rr, cc] = lab
+        if len(order) > windows.shape[1]:
+            windows = _grow_windows(windows, len(order))
+        np.minimum.at(windows[0], lab, rr)
+        np.maximum.at(windows[1], lab, rr)
+        np.minimum.at(windows[2], lab, cc)
+        np.maximum.at(windows[3], lab, cc)
+    return labels, windows[:, : len(order)], order
+
+
 def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
     """Inner centroid-partition loop for an already-prepared dataset.
 
@@ -387,65 +532,12 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
     ``conf`` is a ``CustomGridConf`` instance when ``grid="custom"``.
 
     Yields ``(cellid, gtiff_bytes)`` pairs in first-seen pixel order (row-major).
-    Each chip is cropped to the bounding pixel window of its cell's pixels and
+    Each chip is cropped to the bounding pixel window of its cell's pixels, read
+    from the source by that window (so a virtual tile is never read whole), and
     carries the source NoData (else the dtype fallback, ``fallback_nodata``).
+    Assignment is :func:`_assign_pixels`.
     """
-    rows, cols = np.mgrid[0 : work_ds.height, 0 : work_ds.width]
-    xs, ys = work_ds.xy(rows.ravel(), cols.ravel())
-    xs = np.asarray(xs, dtype="float64")
-    ys = np.asarray(ys, dtype="float64")
-
-    if grid in ("h3", "quadbin"):
-        dst_epsg = authority_srid_of(work_ds.crs)
-        # Reproject when the raster HAS a CRS and it isn't already WGS84.
-        # Gate on CRS PRESENCE (work_ds.crs is not None), not EPSG-authority
-        # presence (dst_epsg is not None): authority_srid_of returns None for valid
-        # non-EPSG/non-ESRI CRSes (WKT/PROJ4-only) which still need reprojection.
-        # CF3: crs=None (grid-native) → skip correctly.
-        if work_ds.crs is not None and dst_epsg != 4326:
-            from rasterio.warp import transform as warp_transform
-
-            coord_x, coord_y = warp_transform(
-                work_ds.crs, _WGS84, xs.tolist(), ys.tolist()
-            )
-            coord_x = np.asarray(coord_x, dtype="float64")
-            coord_y = np.asarray(coord_y, dtype="float64")
-        else:
-            coord_x, coord_y = xs, ys  # already WGS84 or CRS-less (grid-native)
-    else:  # bng or custom: use native coords directly
-        coord_x, coord_y = xs, ys
-
-    # Pre-import custom module once outside the pixel loop.
-    # _custom_mod is used in the `elif grid == "custom"` branch below.
-    _custom_mod = None
-    if grid == "custom":
-        from databricks.labs.gbx.pygx import _custom as _custom_mod
-
-    data = work_ds.read()  # shape (bands, height, width)
-    # A pixel is valid when ANY band's mask marks it valid (heavy anyValid). The mask
-    # bands recognise a NaN NoData, which an ``== nodata`` comparison never matches.
-    masks = work_ds.read_masks()  # shape (bands, height, width); 0 = invalid
-    valid_flat = (masks != 0).any(axis=0).ravel()
-    del masks
-
-    cell_pixels: dict = defaultdict(list)
-    for flat_idx in np.where(valid_flat)[0]:
-        cx = float(coord_x[flat_idx])
-        cy = float(coord_y[flat_idx])
-        if grid == "h3":
-            cell = h3.latlng_to_cell(cy, cx, resolution)  # latlng_to_cell(lat, lon)
-        elif grid == "quadbin":
-            cell = _quadbin.point_as_cell(cx, cy, resolution)  # (lon, lat)
-        elif grid == "custom":
-            cell = _custom_mod.point_to_cell_id_or_none(conf, cx, cy, resolution)
-            if cell is None:
-                continue  # pixel outside grid bounds — skip
-        else:  # bng
-            cell = _bng.point_to_cell_id(cx, cy, resolution)  # (easting, northing)
-            if not _bng.is_valid(cell):
-                continue
-        cell_pixels[cell].append(int(flat_idx))
-
+    labels, windows, order = _assign_pixels(work_ds, resolution, grid, conf=conf)
     nd = _chip_nodata(work_ds)
     profile = work_ds.profile.copy()
     profile["nodata"] = nd
@@ -453,40 +545,37 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
     # Each chip covers only the bounding pixel window of its cell's pixels, on the
     # source grid (window_transform keeps rotated and south-up geotransforms intact);
     # pixels of that window assigned to other cells are NoData.
-    for cell, flat_indices in cell_pixels.items():
-        row_idx, col_idx = np.unravel_index(
-            flat_indices, (work_ds.height, work_ds.width)
-        )
-        r0, c0 = int(row_idx.min()), int(col_idx.min())
-        h = int(row_idx.max()) + 1 - r0
-        w = int(col_idx.max()) + 1 - c0
-        chip = np.full((work_ds.count, h, w), nd, dtype=data.dtype)
-        chip[:, row_idx - r0, col_idx - c0] = data[:, row_idx, col_idx]
-        profile.update(
-            width=w,
-            height=h,
-            transform=work_ds.window_transform(Window(c0, r0, w, h)),
-        )
+    for label, cell in enumerate(order):
+        r0, r1, c0, c1 = (int(v) for v in windows[:, label])
+        h, w = r1 + 1 - r0, c1 + 1 - c0
+        win = Window(c0, r0, w, h)
+        data = work_ds.read(window=win)
+        chip = np.full(data.shape, nd, dtype=data.dtype)
+        np.copyto(chip, data, where=(labels[r0 : r1 + 1, c0 : c1 + 1] == label)[None])
+        profile.update(width=w, height=h, transform=work_ds.window_transform(win))
         yield (_encode_cellid(cell, grid, conf=conf), write_gtiff(profile, chip))
 
 
-def _centroid_chips_generic(ds, resolution, grid: str, conf=None):
+def _work_dataset(ds, grid: str):
+    """Context yielding the dataset a grid works on: bng's EPSG:27700 copy, else ``ds``."""
+    return _as_bng_dataset(ds) if grid == "bng" else nullcontext(ds)
+
+
+def _centroid_chips_generic(work_ds, resolution, grid: str, conf=None):
     """Consolidated centroid-partition dispatcher for all grids.
 
-    BNG warps the dataset to EPSG:27700 first (via :func:`_as_bng_dataset`).
-    H3 and quadbin use the original dataset, reprojecting pixel coords to WGS84
-    inside :func:`_centroid_chips_inner` if needed (CRS-less -> grid-native).
-    Custom uses the original dataset directly (grid-native coordinates).
+    ``work_ds`` is already prepared by :func:`_work_dataset`: for BNG the EPSG:27700
+    dataset of :func:`_as_bng_dataset`, so a caller that also needs it afterwards
+    (centroid+complete) warps once. H3 and quadbin use the original dataset,
+    reprojecting pixel coords to WGS84 inside :func:`_centroid_chips_inner` if
+    needed (CRS-less -> grid-native). Custom uses the original dataset directly
+    (grid-native coordinates).
 
     ``conf`` is a ``CustomGridConf`` instance when ``grid="custom"``.
 
     Yields ``(cellid, gtiff_bytes)`` pairs.
     """
-    if grid == "bng":
-        with _as_bng_dataset(ds) as work_ds:
-            yield from _centroid_chips_inner(work_ds, resolution, grid)
-    else:
-        yield from _centroid_chips_inner(ds, resolution, grid, conf=conf)
+    yield from _centroid_chips_inner(work_ds, resolution, grid, conf=conf)
 
 
 def _centroid_complete(ds, resolution, grid: str, conf=None):
@@ -501,22 +590,19 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
     Covered cells are kept against the raster footprint of
     :func:`_footprint_polygon` (the reprojected, densified raster edge), not
     the axis-aligned lon/lat box of the raster. CF3 guard: a CRS-less raster
-    (``ds.crs is None``) uses its corners as grid-native coordinates.
+    (``ds.crs is None``) uses its corners as grid-native coordinates. BNG warps
+    the raster once, for both the chips and the covered cells.
     """
-    # An unusable footprint must fail before any chip is produced (bng's is built below,
-    # from the warped dataset; it is a plain rectangle and cannot fail).
-    footprint = None if grid == "bng" else _footprint_polygon(ds, ds, grid)
-    centroid_ids = set()
-    for cellid, raster_bytes in _centroid_chips_generic(
-        ds, resolution, grid, conf=conf
-    ):
-        centroid_ids.add(cellid)
-        yield (cellid, raster_bytes)
-    # Compute covering set to find covered-but-empty cells.
-    _ctx = _as_bng_dataset(ds) if grid == "bng" else nullcontext(ds)
-    with _ctx as work_ds:
-        if footprint is None:
-            footprint = _footprint_polygon(ds, work_ds, grid)
+    with _work_dataset(ds, grid) as work_ds:
+        # An unusable footprint must fail before any chip is produced.
+        footprint = _footprint_polygon(ds, work_ds, grid)
+        centroid_ids = set()
+        for cellid, raster_bytes in _centroid_chips_generic(
+            work_ds, resolution, grid, conf=conf
+        ):
+            centroid_ids.add(cellid)
+            yield (cellid, raster_bytes)
+        # Compute covering set to find covered-but-empty cells.
         covered = _polyfill_cells(footprint, resolution, grid, conf=conf)
         build_empty = _empty_chip_builder(work_ds, grid, conf=conf)
         for cell in covered:
@@ -610,7 +696,8 @@ def iter_tessellate(
     if mode == "centroid":
         if coverage == "sparse":
             # Default centroid behaviour: only cells with valid pixels are emitted.
-            yield from _centroid_chips_generic(ds, resolution, grid, conf=conf)
+            with _work_dataset(ds, grid) as work_ds:
+                yield from _centroid_chips_generic(work_ds, resolution, grid, conf=conf)
         else:
             yield from _centroid_complete(ds, resolution, grid, conf=conf)
         return
@@ -620,9 +707,7 @@ def iter_tessellate(
     # H3 / quadbin: use the original dataset; footprint/polyfill/keep-test live in
     # WGS84; cell polys are reprojected to ds.crs only for the rasterio clip.
     # Custom: use the original dataset in its grid-native CRS.
-    _ctx = _as_bng_dataset(ds) if grid == "bng" else nullcontext(ds)
-
-    with _ctx as work_ds:
+    with _work_dataset(ds, grid) as work_ds:
         footprint = _footprint_polygon(ds, work_ds, grid)
 
         covered = _polyfill_cells(footprint, resolution, grid, conf=conf)

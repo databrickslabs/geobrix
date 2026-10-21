@@ -14,10 +14,11 @@ import pytest
 import shapely.geometry
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine, from_bounds
+from rasterio.warp import transform as warp_transform
 from rasterio.windows import Window
 
-from databricks.labs.gbx.core.crs import get_transformer
-from databricks.labs.gbx.pygx import _quadbin
+from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
+from databricks.labs.gbx.pygx import _bng, _custom, _quadbin
 from databricks.labs.gbx.pyrx.core import tessellate as T
 
 BOUNDS = (-122.60, 37.60, -122.40, 37.80)  # ~0.2 deg square; ~70 H3 res-7 cells
@@ -118,32 +119,54 @@ def test_centroid_chip_size_scales_with_pixel_density_not_source_size():
     assert 3.5 <= w2048 / w512 <= 4.5 and w2048 < 2048 and w512 < 512
 
 
-def _oracle_and_check(b, res, grid):
+def _oracle_cell(grid, x, y, res, conf):
+    """The raw cell of one pixel centre by the grid's scalar encoder; None = dropped."""
+    if grid == "h3":
+        return h3.latlng_to_cell(y, x, res)
+    if grid == "quadbin":
+        return _quadbin.point_as_cell(x, y, res)
+    if grid == "bng":
+        cell = _bng.point_to_cell_id(x, y, res)
+        return cell if _bng.is_valid(cell) else None
+    return _custom.point_to_cell_id_or_none(conf, x, y, res)
+
+
+def _oracle_and_check(b, res, grid, conf=None):
+    """Centroid chips equal the per-pixel definition, pixel by pixel and in order.
+
+    Each valid pixel centre goes through the geotransform, then (h3/quadbin on a
+    raster not in EPSG:4326) a per-pixel reprojection to EPSG:4326, then the grid's
+    scalar encoder. bng needs an EPSG:27700 raster (no warp here); custom uses
+    grid-native coordinates. Chips must come in first-seen pixel order (row-major).
+    """
     with MemoryFile(b) as mf, mf.open() as ds:
         data = ds.read(1)
         valid = (ds.read_masks() != 0).any(axis=0)
         rows, cols = np.nonzero(valid)
         xs, ys = ds.transform * (cols + 0.5, rows + 0.5)
-        if grid == "h3":
-            exp_cells = [
-                T._encode_cellid(h3.latlng_to_cell(float(y), float(x), res), "h3")
-                for x, y in zip(xs, ys)
-            ]
-        else:
-            exp_cells = [
-                T._encode_cellid(
-                    _quadbin.point_as_cell(float(x), float(y), res), "quadbin"
-                )
-                for x, y in zip(xs, ys)
-            ]
-        expected = {
-            (int(r), int(c)): (cell, int(data[r, c]))
-            for r, c, cell in zip(rows, cols, exp_cells)
-        }
+        if grid == "bng":
+            assert authority_srid_of(ds.crs) == 27700, "the bng oracle does not warp"
+        if (
+            grid in ("h3", "quadbin")
+            and ds.crs is not None
+            and authority_srid_of(ds.crs) != 4326
+        ):
+            xs, ys = warp_transform(ds.crs, "EPSG:4326", xs.tolist(), ys.tolist())
+        rres = T._resolve_resolution(res, grid)
+        expected = {}
+        for r, c, x, y in zip(rows, cols, xs, ys):
+            cell = _oracle_cell(grid, float(x), float(y), rres, conf)
+            if cell is not None:
+                encoded = T._encode_cellid(cell, grid, conf=conf)
+                expected[(int(r), int(c))] = (encoded, int(data[r, c]))
         inv = ~ds.transform
         chips = list(
-            T.iter_tessellate(ds, res, grid, mode="centroid", coverage="sparse")
+            T.iter_tessellate(
+                ds, res, grid, mode="centroid", coverage="sparse", conf=conf
+            )
         )
+    first_seen = list(dict.fromkeys(cell for cell, _ in expected.values()))
+    assert [cellid for cellid, _ in chips] == first_seen, "emission order changed"
     seen = {}
     for cellid, cb in chips:
         m, c = _open(cb)

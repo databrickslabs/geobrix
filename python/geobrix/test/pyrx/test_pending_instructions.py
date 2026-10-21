@@ -132,10 +132,8 @@ def test_initnodata_virtual_stays_virtual_records_key():
     row = out.select("tile.raster", "tile.path", "tile.metadata").first()
     assert row["raster"] is None, "virtual tile must stay virtual (no bytes)"
     assert row["path"] is not None, "path reference preserved"
-    assert (
-        row["metadata"]["pending_nodata"] == "-9999.0"
-        or row["metadata"]["pending_nodata"] == "-9999"
-    )
+    # "auto" = the dtype's fallback no-data value, resolved when the tile is opened
+    assert row["metadata"]["pending_nodata"] == ot.PENDING_NODATA_AUTO
 
 
 def test_initnodata_virtual_emits_v2_struct():
@@ -231,7 +229,7 @@ def test_accumulated_instructions_apply_in_order():
     assert row["raster"] is None  # still virtual after 3 ops
     md = row["metadata"]
     assert md["pending_bands"] == "1"
-    assert md["pending_nodata"].startswith("-9999")
+    assert md["pending_nodata"] == ot.PENDING_NODATA_AUTO
     assert md["pending_srid"] == "3857"
     # materialize once: all three apply
     m = (
@@ -333,8 +331,8 @@ def test_pending_nodata_uint16_no_nodata_leaves_unset():
 # ---------------------------------------------------------------------------
 
 
-def test_eager_init_nodata_uint16_no_nodata_does_not_raise():
-    """Materialized uint16-no-nodata tile: edit.init_nodata must NOT raise; nodata left unset."""
+def test_eager_init_nodata_uint16_no_nodata_stamps_fallback():
+    """Materialized uint16-no-nodata tile: edit.init_nodata stamps 65535 (heavy tier's uint16 constant)."""
     from databricks.labs.gbx.pyrx.core import edit
 
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
@@ -345,12 +343,12 @@ def test_eager_init_nodata_uint16_no_nodata_does_not_raise():
     # open the produced bytes and check nodata
     with MemoryFile(result) as mf, mf.open() as out:
         assert (
-            out.nodata is None
-        ), f"edit.init_nodata on uint16-no-nodata must leave nodata unset, got {out.nodata}"
+            out.nodata == 65535.0
+        ), f"edit.init_nodata on uint16-no-nodata must stamp 65535, got {out.nodata}"
 
 
 def test_eager_init_nodata_float32_no_nodata_sets_default():
-    """Materialized float32-no-nodata tile: edit.init_nodata must set -9999.0 (fits float)."""
+    """Materialized float32-no-nodata tile: edit.init_nodata must set Float32 min (heavy tier's constant)."""
     from databricks.labs.gbx.pyrx.core import edit
 
     with tempfile.NamedTemporaryFile(suffix=".tif", delete=False) as tmp:
@@ -359,9 +357,10 @@ def test_eager_init_nodata_float32_no_nodata_sets_default():
     with rasterio.open(path) as ds:
         result = edit.init_nodata(ds)
     with MemoryFile(result) as mf, mf.open() as out:
-        assert (
-            out.nodata == -9999.0
-        ), f"edit.init_nodata on float32-no-nodata must set -9999.0, got {out.nodata}"
+        assert out.nodata == float(np.finfo(np.float32).min), (
+            f"edit.init_nodata on float32-no-nodata must set Float32 min, "
+            f"got {out.nodata}"
+        )
 
 
 def test_eager_init_nodata_preserves_existing():
@@ -468,3 +467,64 @@ def test_open_header_pending_nodata_preserves_existing():
         assert (
             ds.nodata == 0.0
         ), f"open_header must preserve existing nodata=0, got {ds.nodata}"
+
+
+# ---------------------------------------------------------------------------
+# rst_initnodata on a virtual uint16 tile without nodata: the pending token is
+# resolved against the dtype's fallback (same value as the heavyweight tier).
+# ---------------------------------------------------------------------------
+
+
+def test_initnodata_virtual_uint16_without_nodata_resolves_fallback(tmp_path):
+    _write_tif(str(tmp_path / "u16.tif"), "uint16", nodata=None)
+    spark = _spark()
+    df = _read_virtual_df(spark, str(tmp_path))
+    row = df.withColumn("tile", rx.rst_initnodata("tile")).select("tile").first()
+    tile = row["tile"]
+    assert tile["raster"] is None, "tile must stay virtual"
+    assert tile["metadata"]["pending_nodata"] == ot.PENDING_NODATA_AUTO
+    with ot._open(tile) as ds:
+        assert ds.nodata == 65535.0
+    with ot.open_header(ot._to_virtual_tile(tile)) as ds:
+        assert ds.nodata == 65535.0
+    mat = ot.materialize_to_bytes(ot._to_virtual_tile(tile))
+    with MemoryFile(mat.raster) as mf, mf.open() as ds:
+        assert ds.nodata == 65535.0
+
+
+@pytest.mark.parametrize(
+    "dtype,expected",
+    [
+        ("uint16", 65535.0),
+        ("int16", -32768.0),
+        ("float32", float(np.finfo(np.float32).min)),
+    ],
+)
+def test_pending_nodata_auto_resolves_per_dtype_on_every_apply_path(
+    tmp_path, dtype, expected
+):
+    """The "auto" token resolves to the dtype's fallback in open, header and both
+    materialize paths (the block-streaming one included)."""
+    path = str(tmp_path / f"{dtype}.tif")
+    _write_tif(path, dtype, nodata=None)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": ot.PENDING_NODATA_AUTO}
+    with ot.open_tile(vt) as ds:
+        assert ds.nodata == expected
+    with ot.open_header(vt) as ds:
+        assert ds.nodata == expected
+    for raster in (
+        ot.materialize_to_bytes(vt).raster,
+        ot._windowed_materialize_bytes(vt),
+    ):
+        with MemoryFile(raster) as mf, mf.open() as ds:
+            assert ds.nodata == expected
+
+
+def test_pending_nodata_auto_preserves_existing(tmp_path):
+    path = str(tmp_path / "keep.tif")
+    _write_tif(path, "uint16", nodata=7)
+    vt = _virtual_from_path(path)
+    vt.metadata = {"pending_nodata": ot.PENDING_NODATA_AUTO}
+    with ot.open_tile(vt) as ds:
+        assert ds.nodata == 7.0

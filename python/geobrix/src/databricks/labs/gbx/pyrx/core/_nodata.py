@@ -12,6 +12,39 @@ import numpy as np
 from rasterio.io import MemoryFile
 from scipy import ndimage
 
+# Mirrors heavy GDAL.getNoDataConstant (rasterx/gdal/GDAL.scala:36-50) exactly, so both tiers
+# blank with the same value when a source declares no nodata. UInt32 is 2*Int.MaxValue there.
+_FALLBACK_NODATA = {
+    "uint8": 0.0,
+    "uint16": 65535.0,
+    "int16": -32768.0,
+    "uint32": 4294967294.0,
+    "int32": -2147483648.0,
+    "float32": float(np.finfo(np.float32).min),
+    "float64": float(np.finfo(np.float64).min),
+}
+
+
+def fallback_nodata(dtype: str) -> float:
+    """The nodata value to stamp when a raster of *dtype* declares none."""
+    return _FALLBACK_NODATA.get(np.dtype(dtype).name, 0.0)
+
+
+def nodata_fits_dtype(nodata: float, dtype: str) -> bool:
+    """Return True if *nodata* is representable in *dtype*.
+
+    Float dtypes always fit (rasterio allows any float nodata for float bands).
+    Integer dtypes are checked via numpy's iinfo range.
+    """
+    try:
+        dt = np.dtype(dtype)
+        if np.issubdtype(dt, np.integer):
+            info = np.iinfo(dt)
+            return info.min <= nodata <= info.max
+        return True  # float dtypes: always fits
+    except Exception:
+        return True  # unknown dtype: don't block
+
 
 def read_masked(ds, band: int = 1):
     """Return (data: float64 2-D, valid: bool 2-D) for *band*.

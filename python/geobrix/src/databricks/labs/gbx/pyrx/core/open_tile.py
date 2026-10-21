@@ -31,8 +31,8 @@ from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
+from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
-from databricks.labs.gbx.pyrx.core.edit import _nodata_fits_dtype
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -47,6 +47,10 @@ from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
 # ---------------------------------------------------------------------------
 
 PENDING_NODATA = "pending_nodata"
+# Token recorded in PENDING_NODATA by rst_initnodata: "stamp the dtype's fallback
+# no-data value when the source declares none" (resolved per dtype at apply time).
+# Tiles carrying a numeric value (older producers, hand-built) keep that value.
+PENDING_NODATA_AUTO = "auto"
 PENDING_SRID = "pending_srid"
 PENDING_BANDS = "pending_bands"
 PENDING_CRS = "pending_crs"
@@ -81,6 +85,9 @@ def _read_size_key(metadata, key) -> Optional[int]:
 def _parse_pending(metadata):
     """Return (bands|None, nodata|None, srid|None, crs_str|None) from tile metadata.
 
+    ``nodata`` is a float, or the string ``PENDING_NODATA_AUTO`` (``"auto"``) meaning
+    "the dtype's fallback value" (see ``_pending_nodata_value``).
+
     ``pending_crs`` (a canonical CRS string e.g. 'ESRI:54008') supersedes
     ``pending_srid`` when both are present — the caller should prefer
     ``pending_crs`` for CRS relabelling to support non-EPSG targets.
@@ -89,12 +96,24 @@ def _parse_pending(metadata):
     bands = None
     if md.get(PENDING_BANDS):
         bands = [int(b) for b in str(md[PENDING_BANDS]).split(",") if b.strip()]
-    nodata = (
-        float(md[PENDING_NODATA]) if md.get(PENDING_NODATA) not in (None, "") else None
-    )
+    nodata = None
+    if md.get(PENDING_NODATA) not in (None, ""):
+        raw = md[PENDING_NODATA]
+        nodata = PENDING_NODATA_AUTO if raw == PENDING_NODATA_AUTO else float(raw)
     srid = int(md[PENDING_SRID]) if md.get(PENDING_SRID) not in (None, "") else None
     crs_str = md[PENDING_CRS] if md.get(PENDING_CRS) not in (None, "") else None
     return bands, nodata, srid, crs_str
+
+
+def _pending_nodata_value(nodata, dtype_str) -> Optional[float]:
+    """Value to stamp for a pending nodata on a source that declares none.
+
+    ``"auto"`` resolves to the dtype's fallback (``_nodata.fallback_nodata``, the
+    heavyweight tier's ``getNoDataConstant``); a numeric value is used as given.
+    Returns None when the value does not fit the dtype (nodata stays unset).
+    """
+    value = _nd.fallback_nodata(dtype_str) if nodata == PENDING_NODATA_AUTO else nodata
+    return value if _nd.nodata_fits_dtype(value, dtype_str) else None
 
 
 def _without_pending(metadata):
@@ -155,11 +174,13 @@ def _window_dataset_bytes(
             # means "ensure exists", not "force override").
             profile["nodata"] = src.nodata
         else:
-            # Source has no nodata: apply the pending default only if it fits.
+            # Source has no nodata: apply the pending value ("auto" -> the dtype's
+            # fallback) only if it fits.
             out_dtype = profile.get("dtype", src.dtypes[0])
-            if _nodata_fits_dtype(nodata, out_dtype):
-                profile["nodata"] = nodata
-            # else: default doesn't fit the dtype; leave nodata unset.
+            value = _pending_nodata_value(nodata, out_dtype)
+            if value is not None:
+                profile["nodata"] = value
+            # else: value doesn't fit the dtype; leave nodata unset.
     # CRS relabel: pending_crs (full string) supersedes pending_srid.
     if crs_str is not None:
         from databricks.labs.gbx.pyrx.core.crs import resolve_crs
@@ -495,13 +516,9 @@ class _WindowHeaderView:
             # Source already has nodata: preserve it.
             self._resolved_nodata = src.nodata
         elif pending_nodata is not None:
-            # Source has no nodata: apply pending default only if it fits.
-            dtype_str = src.dtypes[0]
-            self._resolved_nodata = (
-                pending_nodata
-                if _nodata_fits_dtype(pending_nodata, dtype_str)
-                else None
-            )
+            # Source has no nodata: apply the pending value ("auto" -> the
+            # dtype's fallback) only if it fits.
+            self._resolved_nodata = _pending_nodata_value(pending_nodata, src.dtypes[0])
         else:
             self._resolved_nodata = None
         self._has_nodata_override = pending_nodata is not None and src.nodata is None
@@ -776,8 +793,9 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
                     profile["nodata"] = src.nodata
                 else:
                     out_dtype_nd = profile.get("dtype", src.dtypes[0])
-                    if _nodata_fits_dtype(nodata, out_dtype_nd):
-                        profile["nodata"] = nodata
+                    value = _pending_nodata_value(nodata, out_dtype_nd)
+                    if value is not None:
+                        profile["nodata"] = value
 
             # CRS relabel: pending_crs (full string) supersedes pending_srid.
             if crs_str is not None:

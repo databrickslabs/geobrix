@@ -3013,7 +3013,7 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio**. When no NoData is set it assigns -9999.0; the heavyweight tier assigns a data-type-appropriate sentinel per band, so the NoData value can differ for integer or byte rasters.
+Powered by **rasterio**. A source without NoData gets the data type's fallback value (for example 65535 for `UInt16`), the same one the heavyweight tier uses. A NoData value the source already declares is kept.
 :::
 
 :::note Lightweight Python — virtual-tile force-output
@@ -4070,7 +4070,7 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **NumPy**. This tier keeps each passing pixel's original value and sets failing pixels to NoData; the heavyweight tier instead returns a 0/1 binary mask (Float32). Choose the tier that matches the output you need.
+Powered by **NumPy**. This tier keeps each passing pixel's original value and sets failing pixels to NoData; the heavyweight tier instead returns a 0/1 binary mask (Float32). Choose the tier that matches the output you need. A source without NoData gets the data type's fallback value (for example 65535 for `UInt16`), the same one the heavyweight tier uses.
 :::
 
 :::note Lightweight Python — virtual-tile force-output

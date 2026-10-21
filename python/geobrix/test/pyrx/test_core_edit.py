@@ -1,4 +1,7 @@
+import numpy as np
 import shapely.wkb
+from rasterio.io import MemoryFile
+from rasterio.transform import from_bounds
 from shapely.geometry import box
 
 from databricks.labs.gbx.pyrx import _serde
@@ -31,7 +34,8 @@ def test_init_nodata_sets_when_missing():
         assert ds.nodata is None
         out = edit.init_nodata(ds)
     with _serde.open_tile(out) as o:
-        assert o.nodata == -9999.0
+        # float32 fallback = heavy GDAL.getNoDataConstant(Float32) = Float.MinValue
+        assert o.nodata == float(np.finfo(np.float32).min)
 
 
 def test_init_nodata_preserves_existing():
@@ -39,3 +43,58 @@ def test_init_nodata_preserves_existing():
         out = edit.init_nodata(ds)
     with _serde.open_tile(out) as o:
         assert o.nodata == -1.0
+
+
+def _u16_no_nodata(zeros=False):
+    arr = np.random.default_rng(3).integers(1, 4000, (48, 64)).astype("uint16")
+    if zeros:
+        arr[:8, :8] = 0  # real zero pixels, not nodata
+    prof = dict(
+        driver="GTiff",
+        width=64,
+        height=48,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_bounds(-122.52, 37.70, -122.50, 37.715, 64, 48),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(arr, 1)
+        return mf.read()
+
+
+def test_threshold_uint16_without_nodata_uses_fallback():
+    with MemoryFile(_u16_no_nodata()) as mf, mf.open() as ds:
+        out = edit.threshold(ds, ">", 2000)
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.nodata == 65535.0
+        assert (c.read_masks(1) == 0).any() and (c.read_masks(1) != 0).any()
+
+
+def test_init_nodata_uint16_without_nodata_stamps_fallback():
+    with MemoryFile(_u16_no_nodata()) as mf, mf.open() as ds:
+        out = edit.init_nodata(ds)
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.nodata == 65535.0
+
+
+def test_init_nodata_keeps_existing_nodata():
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=1,
+        dtype="uint16",
+        nodata=7,
+        crs="EPSG:4326",
+        transform=from_bounds(0, 0, 1, 1, 4, 4),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(np.ones((1, 4, 4), "uint16"))
+        b = mf.read()
+    with MemoryFile(b) as mf, mf.open() as ds:
+        out = edit.init_nodata(ds)
+    with MemoryFile(out) as m, m.open() as c:
+        assert c.nodata == 7.0

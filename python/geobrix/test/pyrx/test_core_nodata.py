@@ -1,4 +1,7 @@
+import math
+
 import numpy as np
+import pytest
 import rasterio
 from rasterio.io import MemoryFile
 
@@ -65,3 +68,23 @@ def test_emit_writes_nodata_at_invalid_and_nonfinite():
         assert r[0, 1] == -9999.0
         assert r[1, 1] == -9999.0
         assert r[0, 0] == 1.0
+
+
+@pytest.mark.parametrize(
+    "dtype,expected",
+    [
+        ("uint8", 0.0),
+        ("int8", 0.0),
+        ("uint16", 65535.0),
+        ("int16", -32768.0),
+        ("uint32", 4294967294.0),
+        ("int32", -2147483648.0),
+        ("float32", float(np.finfo(np.float32).min)),
+        ("float64", float(np.finfo(np.float64).min)),
+        ("int64", 0.0),
+    ],
+)
+def test_fallback_nodata_matches_heavy_getNoDataConstant(dtype, expected):
+    v = nd.fallback_nodata(dtype)
+    assert v == expected and not math.isnan(v)
+    assert nd.nodata_fits_dtype(v, dtype)

@@ -185,9 +185,13 @@ def test_rst_updatetype(spark):
 
 
 def test_rst_initnodata(spark):
+    import numpy as np
+
     df = _tile_df(spark, nodata=None)
     out = df.select(prx.rst_initnodata("tile").alias("t"))
-    assert out.select(prx.rst_getnodata("t").alias("nd")).first()["nd"][0] == -9999.0
+    # float32 tile: the dtype's fallback (heavy GDAL.getNoDataConstant: Float.MinValue)
+    nd = out.select(prx.rst_getnodata("t").alias("nd")).first()["nd"][0]
+    assert nd == float(np.finfo(np.float32).min)
 
 
 def test_rst_rasterize(spark):

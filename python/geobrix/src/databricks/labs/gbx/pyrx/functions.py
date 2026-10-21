@@ -2516,7 +2516,7 @@ def _init_nodata_udf(tile):
     if vt.is_virtual():
         # record pending instruction; stay virtual (no pixel read)
         md = dict(vt.metadata or {})
-        md.setdefault(ot.PENDING_NODATA, str(edit._DEFAULT_NODATA))
+        md.setdefault(ot.PENDING_NODATA, ot.PENDING_NODATA_AUTO)
         vt.metadata = md
         return vt.to_row()
     # materialized input: apply eagerly to bytes (today's behavior), emit v2
@@ -2552,7 +2552,7 @@ def _uf_initnodata(tile, file_ref):
     if vt.is_virtual():
         # Pending-instruction path: record intent, stay virtual (no pixel read).
         md = dict(vt.metadata or {})
-        md.setdefault(ot.PENDING_NODATA, str(edit._DEFAULT_NODATA))
+        md.setdefault(ot.PENDING_NODATA, ot.PENDING_NODATA_AUTO)
         vt.metadata = md
         return vt.to_row()
     # Materialized: apply eagerly; file_ref is passed through open_tile.
@@ -2642,7 +2642,10 @@ def rst_initnodata(
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
 ) -> Column:
-    """Ensure a NoData value is set on the raster tile; uses -9999.0 if not already set.
+    """Ensure a NoData value is set on the raster tile; an existing value is kept.
+
+    A source without NoData gets the data type's fallback value, the same one the
+    heavyweight tier uses (e.g. 65535 for uint16).
 
     Force-output (light-tier, Python API only): ``virtualize_dir`` writes the
     result to a durable path and returns a light virtual tile; ``materialize=True``

@@ -37,9 +37,13 @@ def _raster(
     hole=None,
     band_holes=None,
     zero_block=None,
+    blockysize=None,
 ):
     """hole: (r0, r1, c0, c1) set to nodata in every band; band_holes: {band: (r0, r1, c0, c1)}
-    set to nodata in that band only; zero_block: (r0, r1, c0, c1) set to real 0 in every band.
+    set to nodata in that band only; zero_block: (r0, r1, c0, c1) set to real 0 in every band;
+    blockysize: rows per strip of a striped (untiled) GTiff, e.g. ``h`` for a single strip.
+    The strips are DEFLATE-compressed: GDAL reads an uncompressed strip as ~8 KB virtual
+    blocks, so only a compressed strip reports its real height in ``block_shapes``.
     """
     base = (np.arange(w * h, dtype="uint32").reshape(h, w) % 4000 + 1).astype(dtype)
     prof = dict(
@@ -52,6 +56,8 @@ def _raster(
         transform=transform or from_bounds(*bounds, w, h),
         nodata=nodata,
     )
+    if blockysize is not None:
+        prof.update(tiled=False, blockysize=blockysize, compress="deflate")
     with MemoryFile() as mf:
         with mf.open(**prof) as d:
             for b in range(1, count + 1):
@@ -182,6 +188,7 @@ def _oracle_and_check(b, res, grid, conf=None):
                 assert (r, col) not in seen, "pixel in two chips"
                 seen[(r, col)] = (cellid, int(v))
     assert seen == expected
+    return chips
 
 
 @pytest.mark.parametrize("grid,res", [("h3", 7), ("quadbin", 13)])

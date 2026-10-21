@@ -1,7 +1,8 @@
 """Light centroid tessellate assigns pixels to cells in bounded memory.
 
-Assignment runs per row strip with array coordinate transforms and an int32 label
-raster; each chip is read by its cell's window. The partition, the chip pixels and
+Assignment runs per row strip (capped by pixel count, whole source blocks when they
+fit) with array coordinate transforms and an int32 label raster; each chip is read by
+its cell's window. The partition, the chip pixels and
 the emission order (first-seen pixel, row-major) are those of the per-pixel
 definition, across strip boundaries, on a projected raster, for bng and custom
 grids, and for a path-backed (virtual) tile. BNG warps the raster once per call.
@@ -10,6 +11,7 @@ grids, and for a path-backed (virtual) tile. BNG warps the raster once per call.
 import tracemalloc
 
 import numpy as np
+import pytest
 import rasterio
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
@@ -31,10 +33,41 @@ def test_centroid_assignment_memory_is_bounded():
         _, peak = tracemalloc.get_traced_memory()
         tracemalloc.stop()
     # Per-pixel loop: ~90 B/px here (~170 B/px with a reprojection). Bounded design:
-    # int32 labels (4 B/px) + one 512-row strip of float64 coords and encodes (~48 B
-    # per strip px = ~50 MB) + transient h3 ints (~36 MB): ~24 B/px overall. 64 B/px
-    # leaves margin both ways.
+    # int32 labels (4 B/px) + one strip of at most _STRIP_PIXELS (2 M) px of coords,
+    # encodes and transient h3 ints (~80 B per strip px): well under 64 B/px here.
     assert peak / (2048 * 2048) < 64, f"{peak / (2048 * 2048):.1f} B/px"
+
+
+def test_single_strip_source_memory_is_bounded():
+    # One GTiff strip holds the whole image: the block height must not set the strip.
+    b = _raster(2048, 2048, blockysize=2048)
+    with MemoryFile(b) as mf, mf.open() as ds:
+        assert ds.block_shapes[0] == (2048, 2048)
+        tracemalloc.start()
+        for _ in T.iter_tessellate(ds, 7, "h3", mode="centroid", coverage="sparse"):
+            pass
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+    assert peak / (2048 * 2048) < 64, f"{peak / (2048 * 2048):.1f} B/px"
+
+
+@pytest.mark.parametrize(
+    "blockysize,strip_pixels,rows",
+    [
+        (300, 300 * 100, 100),  # single-strip source: 3 strips inside its one block
+        (16, 300 * 40, 32),  # 16-row blocks: 40 rows round down to 2 whole blocks
+        (64, 300 * 40, 40),  # block taller than the cap: the pixel cap wins
+    ],
+)
+def test_strip_rows_follow_the_pixel_cap_and_block_height(
+    monkeypatch, blockysize, strip_pixels, rows
+):
+    monkeypatch.setattr(T, "_STRIP_PIXELS", strip_pixels)
+    b = _raster(300, 300, blockysize=blockysize)
+    with MemoryFile(b) as mf, mf.open() as ds:
+        assert ds.block_shapes[0][0] == blockysize
+        assert T._strip_rows(ds) == rows
+    _oracle_and_check(b, 7, "h3")
 
 
 def test_oracle_on_utm_raster():  # the array transform path
@@ -42,16 +75,23 @@ def test_oracle_on_utm_raster():  # the array transform path
     _oracle_and_check(b, 7, "h3")
 
 
-def test_strip_boundaries_are_seamless():
-    _oracle_and_check(
-        _raster(1300, 700), 7, "h3"
-    )  # spans two 512-row strips, uneven tail
+def test_strip_boundaries_are_seamless(monkeypatch):
+    monkeypatch.setattr(T, "_STRIP_PIXELS", 1300 * 512)  # ~512-row strips
+    b = _raster(1300, 700)
+    with MemoryFile(b) as mf, mf.open() as ds:
+        assert T._strip_rows(ds) < 700  # two strips, uneven tail
+    _oracle_and_check(b, 7, "h3")
 
 
-def test_more_cells_than_the_initial_window_table():
-    # ~1 quadbin res-18 cell per pixel: ~4k cells, past the 1024-label start capacity.
+def test_window_table_grows_across_strips(monkeypatch):
+    # ~1 quadbin res-18 cell per pixel: ~4k cells over four 16-row strips, so the
+    # 1024-label table grows after strips that already filled windows.
+    monkeypatch.setattr(T, "_STRIP_PIXELS", 64 * 16)
     b = _raster(64, 64, bounds=(-122.6, 37.6, -122.5, 37.7))
-    _oracle_and_check(b, 18, "quadbin")
+    with MemoryFile(b) as mf, mf.open() as ds:
+        assert T._strip_rows(ds) == 16
+    chips = _oracle_and_check(b, 18, "quadbin")
+    assert len(chips) > 2 * T._LABEL_CAPACITY
 
 
 def test_bng_oracle_and_single_warp(monkeypatch):

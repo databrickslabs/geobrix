@@ -46,8 +46,8 @@ _VALID_COVERAGES = {"sparse", "complete"}
 _VALID_GRIDS = frozenset({"h3", "quadbin", "bng", "custom"})
 # Points per raster edge, corners included, walked when reprojecting the footprint (rasterio transform_bounds default).
 _FOOTPRINT_EDGE_POINTS = 21
-# Centroid assignment reads at least this many rows per strip (more if the source block is taller).
-_STRIP_MIN_ROWS = 512
+# Pixels per centroid-assignment strip; its coordinate/cell temporaries are ~80 B/px with h3.
+_STRIP_PIXELS = 2_097_152
 # Initial number of per-label pixel windows; doubled as cells are found.
 _LABEL_CAPACITY = 1024
 
@@ -446,6 +446,21 @@ def _grow_windows(windows: np.ndarray, n: int) -> np.ndarray:
     return out
 
 
+def _strip_rows(work_ds) -> int:
+    """Rows per centroid-assignment strip: at most :data:`_STRIP_PIXELS` pixels.
+
+    One row if a single row is wider than that. The cap holds for any width and
+    for a source whose block is the whole image (a single-strip GTiff). When the
+    source blocks are shorter than the cap, the strip is a whole number of blocks
+    (at least one), so a block is decoded for one strip only.
+    """
+    rows = max(1, min(work_ds.height, _STRIP_PIXELS // work_ds.width))
+    block_rows = work_ds.block_shapes[0][0]
+    if block_rows < rows:
+        rows -= rows % block_rows
+    return rows
+
+
 def _assign_pixels(work_ds, resolution, grid: str, conf=None):
     """Assign every valid pixel to the cell holding its centre, one row strip at a time.
 
@@ -461,11 +476,11 @@ def _assign_pixels(work_ds, resolution, grid: str, conf=None):
     None and needs it; a CRS-less raster is grid-native).
 
     Memory is the label raster (4 B/px) plus the coordinate and cell arrays of one
-    strip of at least :data:`_STRIP_MIN_ROWS` rows (the source block height if
-    taller); no per-pixel Python except the scalar h3/custom encoders.
+    strip of at most :data:`_STRIP_PIXELS` pixels (:func:`_strip_rows`); no
+    per-pixel Python except the scalar h3/custom encoders.
     """
     height, width = work_ds.height, work_ds.width
-    strip_rows = max(_STRIP_MIN_ROWS, work_ds.block_shapes[0][0])
+    strip_rows = _strip_rows(work_ds)
     to_lonlat = None
     if (
         grid in ("h3", "quadbin")
@@ -533,7 +548,7 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
 
     Yields ``(cellid, gtiff_bytes)`` pairs in first-seen pixel order (row-major).
     Each chip is cropped to the bounding pixel window of its cell's pixels, read
-    from the source by that window (so a virtual tile is never read whole), and
+    from ``work_ds`` by that window (no second whole-raster copy is made), and
     carries the source NoData (else the dtype fallback, ``fallback_nodata``).
     Assignment is :func:`_assign_pixels`.
     """

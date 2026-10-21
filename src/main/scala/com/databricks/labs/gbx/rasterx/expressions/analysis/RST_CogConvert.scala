@@ -59,6 +59,13 @@ case class RST_CogConvert(
 
 object RST_CogConvert extends WithExpressionInfo {
 
+    /**
+      * Compression `rst_cog_convert` uses when none is given: ZSTD, as documented. Deliberately separate
+      * from [[OperatorOptions.DefaultCompression]], which governs every other heavyweight derived tile
+      * (DEFLATE). Shared by the SQL builder, the null-argument fallback and the Scala wrapper.
+      */
+    val CogDefaultCompression: String = "ZSTD"
+
     def eval(
         row: InternalRow, compression: UTF8String, blocksize: Int,
         overviewResampling: UTF8String, conf: UTF8String
@@ -79,7 +86,7 @@ object RST_CogConvert extends WithExpressionInfo {
               val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
               val (resDs, resMtd) = execute(
                   ds, options,
-                  Option(compression).map(_.toString).getOrElse(OperatorOptions.DefaultCompression),
+                  Option(compression).map(_.toString).getOrElse(CogDefaultCompression),
                   blocksize,
                   Option(overviewResampling).map(_.toString).getOrElse("AVERAGE")
               )
@@ -170,7 +177,7 @@ object RST_CogConvert extends WithExpressionInfo {
     override def name: String = "gbx_rst_cog_convert"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 1 => RST_CogConvert(c(0), Literal(OperatorOptions.DefaultCompression), Literal(512), Literal("AVERAGE"))
+        case 1 => RST_CogConvert(c(0), Literal(CogDefaultCompression), Literal(512), Literal("AVERAGE"))
         case 2 => RST_CogConvert(c(0), c(1), Literal(512), Literal("AVERAGE"))
         case 3 => RST_CogConvert(c(0), c(1), c(2), Literal("AVERAGE"))
         case 4 => RST_CogConvert(c(0), c(1), c(2), c(3))

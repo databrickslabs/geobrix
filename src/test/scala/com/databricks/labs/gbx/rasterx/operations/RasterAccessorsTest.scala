@@ -20,7 +20,7 @@ class RasterAccessorsTest extends AnyFunSuite with BeforeAndAfterAll {
         gdal.AllRegister()
     }
 
-    /** A real-pixel MEM dataset whose ENCODED (default-codec ZSTD GTiff) size comfortably exceeds
+    /** A real-pixel MEM dataset whose ENCODED (DEFLATE GTiff) size comfortably exceeds
       * 1 MiB, forcing a power-of-4 split at a 1 MiB budget. memSize keys on the encoded
       * byte length, so the pixels must be incompressible: a 1024x1024 Float64 band of
       * uniform random doubles encodes to ~8 MiB (a compressible ramp would shrink to

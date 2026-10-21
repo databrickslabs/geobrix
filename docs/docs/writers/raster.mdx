@@ -128,6 +128,10 @@ heavyweight `gdal` writer is also **append-only**, whereas the lightweight write
 `overwrite`. See [Choosing an Execution Tier](../api/execution-tiers) and the
 [Benchmarking](../api/benchmarking) page for light-vs-heavy timings.
 
+Because GeoTIFF tiles pass through verbatim, a tile keeps the codec it already has (ZSTD for tiles
+produced by lightweight functions). The `compression` metadata key (default `DEFLATE` when the
+metadata names none) applies only when the writer re-encodes a tile to another driver such as COG.
+
 It is the lightweight counterpart of the heavyweight `gdal` writer, supporting Python and SQL bindings (not Scala).
 
 </TabItem>
@@ -214,7 +218,7 @@ produced (e.g. via `RST_AsFormat`); the writer honors them on serialization.
 | Metadata key | Default | Effect |
 |--------------|---------|--------|
 | `driver` / `format` | `GTiff` | GDAL output driver. |
-| `compression` | `ZSTD` | `ZSTD` / `DEFLATE` / `LZW` / … creation compression. See [Materialized Compression](../api/materialized-compression). |
+| `compression` | `DEFLATE` | `DEFLATE` / `ZSTD` / `LZW` / … creation compression. See [Materialized Compression](../api/materialized-compression). |
 | `blocksize` | `512` | Tile/block size in pixels (floored to a multiple of 16, clamped to the raster size). |
 | `zlevel` | `6` | DEFLATE level. |
 | `zstd_level` | `9` | ZSTD level. |

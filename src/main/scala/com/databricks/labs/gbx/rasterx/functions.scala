@@ -14,7 +14,6 @@ import com.databricks.labs.gbx.rasterx.expressions.spectral._
 import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize, RST_Rasterize}
 import com.databricks.labs.gbx.rasterx.expressions.web._
 import com.databricks.labs.gbx.rasterx.expressions._
-import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import org.apache.spark.sql.adapters.{Column => ColumnAdapter}
 import org.apache.spark.sql.functions.lit
 import org.apache.spark.sql.{Column, SparkSession}
@@ -1083,7 +1082,7 @@ def rst_combineavg_agg(tile: Column): Column = ColumnAdapter(RST_CombineAvgAgg.n
 
     // Analysis (COG / proximity / contour / viewshed) — Column form + scalar overloads
     def rst_cog_convert(tile: Column): Column =
-        ColumnAdapter(RST_CogConvert.name, Seq(tile, lit(OperatorOptions.DefaultCompression), lit(512), lit("AVERAGE")))
+        ColumnAdapter(RST_CogConvert.name, Seq(tile, lit(RST_CogConvert.CogDefaultCompression), lit(512), lit("AVERAGE")))
     def rst_cog_convert(tile: Column, compression: Column): Column =
         ColumnAdapter(RST_CogConvert.name, Seq(tile, compression, lit(512), lit("AVERAGE")))
     def rst_cog_convert(tile: Column, compression: Column, blocksize: Column): Column =

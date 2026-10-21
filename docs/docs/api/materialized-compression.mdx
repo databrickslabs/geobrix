@@ -14,9 +14,18 @@ A **materialized tile** carries its raster payload as encoded bytes. Those bytes
 
 For the structure of a tile and the full virtual↔materialized lifecycle, see **[Tile Structure](./tile-structure)** and **[Virtual Tiles](./virtual-tiles)**.
 
-## GeoBrix's approach: ZSTD + dtype-matched predictor
+## GeoBrix's approach: a dtype-matched predictor with a per-tier default codec
 
-The default compression in GeoBrix is **ZSTD** paired with a **dtype-matched predictor** that reorders bytes to improve compression ratio:
+Both tiers pair their default codec with a **dtype-matched predictor** that reorders bytes to improve compression ratio. The default codec depends on the tier:
+
+| Tier | Default codec | Why |
+|---|---|---|
+| Lightweight | **ZSTD** (`auto`, size-adaptive level) through the canonical `creation_opts` | Best ratio and write throughput for materialized tiles; see the level ladder below |
+| Heavyweight | **DEFLATE** (level 6) | Baseline TIFF: every reader decodes it, including Java ImageIO and the Databricks image preview, which cannot decode ZSTD output |
+
+On the heavyweight tier, set a tile's metadata `compression` key (for example `ZSTD`) to override the default for that tile. `rst_cog_convert` keeps ZSTD as its default on both tiers (the size-adaptive `auto` level on the lightweight tier).
+
+The predictor rules are the same in both tiers:
 
 - **float32 / float64**: predictor 3 (horizontal differencing for floating-point data)
 - **int16 / uint16 / int32 / uint32**: predictor 2 (delta encoding for integer data)
@@ -24,7 +33,7 @@ The default compression in GeoBrix is **ZSTD** paired with a **dtype-matched pre
 
 All light-tier raster writers route their creation options through the canonical `creation_opts` / `predictor_for` functions, so the documented predictor rules above apply uniformly across every writer — no writer skips the predictor or applies a dtype-mismatched value.
 
-The `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**: levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit, and L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
+The lightweight `auto` (default) compression mode selects a **size-adaptive ZSTD level**. A full level sweep over real and synthetic GeoBrix tiles established **L6 as the size knee**: levels above L6 (L9, L12) add encode CPU and peak RSS with negligible ratio benefit, and L16 can produce *larger* output than L6 on floating-point data. Larger tiles get progressively lower levels to protect worker memory and write throughput:
 
 | Decoded tile size | ZSTD level | Why |
 |---|---|---|

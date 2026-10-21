@@ -292,6 +292,9 @@ formats.
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request
   keeps YCbCr.
+- **Heavyweight tiles default to DEFLATE in every path.** A heavyweight tile whose metadata names
+  no `compression` is now always written as DEFLATE with the predictor for its data type, as
+  documented (some paths wrote ZSTD), and `rst_cog_convert` still defaults to ZSTD.
 - **Tiling keeps all-NoData windows in both tiers.** `rst_retile`, `rst_tooverlappingtiles`,
   `rst_maketiles` (with `size_in_mb > 0`) and the heavyweight tiled raster readers (`gdal`,
   `gtiff_gdal` and `netcdf_gdal` with `sizeInMB > 0`) now emit every window, including windows

@@ -1,14 +1,16 @@
 package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
-import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_Proximity, RST_Viewshed}
+import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_CogConvert, RST_Proximity, RST_Viewshed}
 import com.databricks.labs.gbx.rasterx.expressions.dem.RST_Slope
 import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.{Convolve, RasterTessellate, WindowedExtract}
 import org.apache.hadoop.conf.Configuration
+import org.apache.spark.sql.catalyst.expressions.Literal
 import org.apache.spark.sql.functions.col
+import org.apache.spark.sql.types.StringType
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
@@ -18,14 +20,19 @@ import org.scalatest.funsuite.AnyFunSuite
 import java.util.UUID
 
 /**
-  * Derived heavy tiles (retile / tessellate / warp / translate / VRT / convolve) must default to the
-  * documented ZSTD codec when the caller passes no `compression` option. The default is decided in
-  * two places that have to agree: the metadata each operation stamps on its tile (which
-  * `RasterDriver.writeToBytes` feeds straight back into `OperatorOptions.appendOptions`) and the
-  * `appendOptions` fallback itself. Each test therefore asserts BOTH the stamped `compression`
-  * metadata and the codec GDAL actually recorded in the serialized bytes.
+  * Derived heavy tiles (retile / tessellate / warp / translate / VRT / convolve / proximity / viewshed /
+  * band / DEM) must default to the documented DEFLATE codec (baseline TIFF, decodable by Java ImageIO and
+  * the Databricks image preview) when the caller passes no `compression` option; `rst_cog_convert` alone
+  * keeps its own documented ZSTD default. The default is decided in two places that have to agree: the
+  * metadata each operation stamps on its tile (which `RasterDriver.writeToBytes` feeds straight back
+  * into `OperatorOptions.appendOptions`) and the `appendOptions` fallback itself. Each test therefore
+  * asserts BOTH the stamped `compression` metadata and the codec GDAL actually recorded in the
+  * serialized bytes.
   */
 class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
+
+    /** The documented heavyweight default, pinned as a literal so a change to the constant is caught here. */
+    private val DerivedDefault = "DEFLATE"
 
     override def beforeAll(): Unit =
         GDALManager.init(ExpressionConfig(Map.empty[String, String], new SerializableConfiguration(new Configuration())))
@@ -103,17 +110,17 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         assert(storedCompression(bytes) == expected)
     }
 
-    test("WindowedExtract.extract (retile fast path) defaults to ZSTD") {
+    test("WindowedExtract.extract (retile fast path) defaults to DEFLATE") {
         withRamp("we.tif") { src =>
             // WindowedExtract.extract(ds: Dataset, options: Map[String, String], xStart: Int, yStart: Int,
             //                         xOffset: Int, yOffset: Int): (Dataset, Map[String, String])
             val (out, meta) = WindowedExtract.extract(src, Map.empty, 0, 0, 16, 16)
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
         }
     }
 
-    test("WindowedExtract.extract fallback (gdal_translate -srcwin) defaults to ZSTD") {
+    test("WindowedExtract.extract fallback (gdal_translate -srcwin) defaults to DEFLATE") {
         withRamp("wefb.tif") { src =>
             // applyScale + a non-identity scale routes to the executeTranslate fallback.
             src.GetRasterBand(1).SetScale(0.5)
@@ -122,12 +129,12 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             val (out, meta) = WindowedExtract.extract(src, Map("applyScale" -> "true"), 0, 0, 16, 16)
             try {
                 assert(meta("last_command").startsWith("gdal_translate"), "expected the translate fallback")
-                assertCodec(out, meta, "ZSTD")
+                assertCodec(out, meta, DerivedDefault)
             } finally RasterDriver.releaseDataset(out)
         }
     }
 
-    test("RasterTessellate.tessellateH3Iter first chip defaults to ZSTD") {
+    test("RasterTessellate.tessellateH3Iter first chip defaults to DEFLATE") {
         // RasterTessellate.tessellateH3Iter(ds: Dataset, options: Map[String, String], resolution: Int,
         //     assignment: String = "centroid", coverage: String = "complete"):
         //     Iterator[(Long, Dataset, Map[String, String])]   (AutoCloseable at runtime)
@@ -136,7 +143,7 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         try {
             assert(iter.hasNext, "tessellation emitted no chips")
             val (_, chip, meta) = iter.next()
-            try assertCodec(chip, meta, "ZSTD")
+            try assertCodec(chip, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(chip)
         } finally iter match {
             case ac: AutoCloseable => ac.close()
@@ -144,37 +151,37 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("GDALWarp.executeWarp defaults to ZSTD") {
+    test("GDALWarp.executeWarp defaults to DEFLATE") {
         withRamp("warp.tif") { src =>
             // GDALWarp.executeWarp(outputPath: String, dss: Array[Dataset], options: Map[String, String],
             //                      command: String): (Dataset, Map[String, String])
             val (out, meta) = GDALWarp.executeWarp(mem("warped.tif"), Array(src), Map.empty, command = "gdalwarp")
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
         }
     }
 
-    test("GDALTranslate.executeTranslate defaults to ZSTD") {
+    test("GDALTranslate.executeTranslate defaults to DEFLATE") {
         withRamp("trans.tif") { src =>
             // GDALTranslate.executeTranslate(outputPath: String, raster: Dataset, command: String,
             //                                options: Map[String, String]): (Dataset, Map[String, String])
             val (out, meta) = GDALTranslate.executeTranslate(mem("translated.tif"), src, "gdal_translate", Map.empty)
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
         }
     }
 
-    test("GDALBuildVRT.executeVRT defaults to ZSTD (VRT serializes as a GTiff)") {
+    test("GDALBuildVRT.executeVRT defaults to DEFLATE (VRT serializes as a GTiff)") {
         withRamp("vrt_src.tif") { src =>
             // GDALBuildVRT.executeVRT(outputPath: String, dss: Array[Dataset], options: Map[String, String],
             //                         command: String): (Dataset, Map[String, String])
             val (vrt, meta) = GDALBuildVRT.executeVRT(mem("built.vrt"), Array(src), Map.empty, "gdalbuildvrt")
-            try assertCodec(vrt, meta, "ZSTD")
+            try assertCodec(vrt, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(vrt)
         }
     }
 
-    test("Convolve.convolve defaults to ZSTD") {
+    test("Convolve.convolve defaults to DEFLATE") {
         withRamp("conv.tif") { src =>
             val kernel = Array(
               Array(0.0, 1.0, 0.0),
@@ -184,17 +191,17 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             // Convolve.convolve(ds: Dataset, options: Map[String, String], kernel: Array[Array[Double]]):
             //     (Dataset, Map[String, String])
             val (out, meta) = Convolve.convolve(src, Map.empty, kernel)
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
         }
     }
 
-    test("RST_Proximity.execute defaults to ZSTD and honours an incoming compression") {
+    test("RST_Proximity.execute defaults to DEFLATE and honours an incoming compression") {
         withRamp("prox.tif") { src =>
             // RST_Proximity.execute(ds: Dataset, options: Map[String, String], targetValues: Option[String],
             //                       distUnits: String, maxDistance: Option[Double]): (Dataset, Map[String, String])
             val (out, meta) = RST_Proximity.execute(src, Map.empty, Some("1"), "PIXEL", None)
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
 
             val (lzw, lzwMeta) = RST_Proximity.execute(src, Map("compression" -> "LZW"), Some("1"), "PIXEL", None)
@@ -203,13 +210,13 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("RST_Viewshed.execute defaults to ZSTD and honours an incoming compression") {
+    test("RST_Viewshed.execute defaults to DEFLATE and honours an incoming compression") {
         withMetricRamp("view.tif") { src =>
             // RST_Viewshed.execute(ds: Dataset, options: Map[String, String], observerX: Double,
             //     observerY: Double, observerHeight: Double, targetHeight: Double,
             //     maxDistance: Option[Double]): (Dataset, Map[String, String])
             val (out, meta) = RST_Viewshed.execute(src, Map.empty, 16.0, 16.0, 100.0, 1.6, None)
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
 
             val (lzw, lzwMeta) = RST_Viewshed.execute(src, Map("compression" -> "LZW"), 16.0, 16.0, 100.0, 1.6, None)
@@ -218,22 +225,22 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("RST_Slope.execute (DEM helper) defaults to ZSTD") {
+    test("RST_Slope.execute (DEM helper) defaults to DEFLATE") {
         withRamp("slope.tif") { src =>
             // RST_Slope.execute(ds: Dataset, unit: String, xscale: Double, yscale: Double):
             //     (Dataset, Map[String, String])   -- delegates to RST_DEMProcessingHelper.process
             val (out, meta) = RST_Slope.execute(src, "degrees", 1.0, 1.0)
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
         }
     }
 
-    test("RST_Band.execute defaults to ZSTD and honours an incoming compression") {
+    test("RST_Band.execute defaults to DEFLATE and honours an incoming compression") {
         withRamp("band.tif") { src =>
             // RST_Band.execute(ds: Dataset, options: Map[String, String], bandIndex: Int):
             //     (Dataset, Map[String, String])
             val (out, meta) = RST_Band.execute(src, Map.empty, 1)
-            try assertCodec(out, meta, "ZSTD")
+            try assertCodec(out, meta, DerivedDefault)
             finally RasterDriver.releaseDataset(out)
 
             val (lzw, lzwMeta) = RST_Band.execute(src, Map("compression" -> "LZW"), 1)
@@ -242,31 +249,44 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
-    test("the rst_cog_convert Scala wrapper default matches the SQL builder and docs (ZSTD)") {
+    test("rst_cog_convert keeps its documented ZSTD default (wrapper and SQL builder)") {
         // functions.rst_cog_convert(tile: Column): Column -- builds gbx_rst_cog_convert(tile, <default>, 512, 'AVERAGE')
         val rendered = functions.rst_cog_convert(col("tile")).toString
         assert(rendered.contains("gbx_rst_cog_convert"), rendered)
-        assert(rendered.contains(OperatorOptions.DefaultCompression), rendered)
+        assert(rendered.contains("'ZSTD'"), rendered)
         assert(!rendered.contains("DEFLATE"), rendered)
+
+        // RST_CogConvert.builder(): FunctionBuilder -- the one-argument SQL form injects the default compression.
+        val built = RST_CogConvert.builder()(Seq(Literal.create("", StringType))).asInstanceOf[RST_CogConvert]
+        assert(built.compressionExpr.eval(null).toString == "ZSTD")
     }
 
     test("one shared constant decides the default codec for appendOptions and the stamped metadata") {
-        assert(OperatorOptions.DefaultCompression == "ZSTD")
+        assert(OperatorOptions.DefaultCompression == DerivedDefault)
         withRamp("const.tif") { src =>
             // OperatorOptions.appendOptions(command: String, writeOptions: Map[String, String], ds: Dataset): String
             val cmd = OperatorOptions.appendOptions("gdal_translate", Map.empty, src)
-            assert(cmd.contains(s"COMPRESS=${OperatorOptions.DefaultCompression}"), cmd)
+            assert(cmd.contains(s"COMPRESS=$DerivedDefault"), cmd)
+            // A tile whose metadata names no codec serializes with the default too.
+            // RasterDriver.writeToBytes(ds: Dataset, options: Map[String, String]): Array[Byte]
+            assert(storedCompression(RasterDriver.writeToBytes(src, Map.empty)) == DerivedDefault)
         }
     }
 
     test("an explicit compression option still wins over the default") {
         withRamp("explicit.tif") { src =>
-            // GDALTranslate.executeTranslate(outputPath: String, raster: Dataset, command: String,
-            //                                options: Map[String, String]): (Dataset, Map[String, String])
-            val (out, meta) =
-                GDALTranslate.executeTranslate(mem("lzw.tif"), src, "gdal_translate", Map("compression" -> "LZW"))
-            try assertCodec(out, meta, "LZW")
-            finally RasterDriver.releaseDataset(out)
+            for (codec <- Seq("LZW", "ZSTD")) {
+                // GDALTranslate.executeTranslate(outputPath: String, raster: Dataset, command: String,
+                //                                options: Map[String, String]): (Dataset, Map[String, String])
+                val (out, meta) = GDALTranslate.executeTranslate(
+                  mem(s"${codec.toLowerCase}.tif"),
+                  src,
+                  "gdal_translate",
+                  Map("compression" -> codec)
+                )
+                try assertCodec(out, meta, codec)
+                finally RasterDriver.releaseDataset(out)
+            }
         }
     }
 

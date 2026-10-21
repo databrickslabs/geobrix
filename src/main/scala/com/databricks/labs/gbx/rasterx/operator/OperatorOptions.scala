@@ -10,8 +10,12 @@ object OperatorOptions {
       * Codec used when a caller supplies no `compression` option. Shared by [[appendOptions]] (the `-co`
       * flags) and by every operation that stamps `compression` into the tile metadata it returns, so the
       * metadata a derived tile carries can never disagree with the codec GDAL actually writes.
+      *
+      * DEFLATE (with the dtype-matched predictor) is baseline TIFF: Java ImageIO and the Databricks image
+      * preview can decode it, which ZSTD output is not. `rst_cog_convert` keeps its own documented ZSTD
+      * default ([[com.databricks.labs.gbx.rasterx.expressions.analysis.RST_CogConvert.CogDefaultCompression]]).
       */
-    val DefaultCompression: String = "ZSTD"
+    val DefaultCompression: String = "DEFLATE"
 
     /** Splits command by spaces and returns options as Vector (args after first token). */
     def parseOptions(command: String): java.util.Vector[String] = {

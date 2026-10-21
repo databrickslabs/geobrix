@@ -81,7 +81,7 @@ spark.read.format("gtiff_gdal").load(SAMPLE_RASTER_PATH) \\
     .write.format("gtiff_gdal").mode("append").option("ext", "tif").save(OUT_DIR)"""
 
 ENCODING_FROM_METADATA = """# Output encoding is read from tile.metadata, not writer options:
-#   format/driver (default GTiff), compression (ZSTD), blocksize (512),
+#   format/driver (default GTiff), compression (DEFLATE), blocksize (512),
 #   zlevel (6), zstd_level (9). Set them upstream (e.g. RST_AsFormat), then write."""
 
 

@@ -1,5 +1,8 @@
 """The heavy Python ``rst_cog_convert`` shim defaults to ZSTD, like the SQL builder and the docs.
 
+Every other heavyweight derived tile defaults to DEFLATE (``OperatorOptions.DefaultCompression``);
+``rst_cog_convert`` is the one documented exception, so the shim must not follow that default.
+
 JAR-free: ``f.lit`` / ``f.call_function`` are captured so no Spark session or JAR is needed.
 """
 

@@ -1,9 +1,14 @@
 package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.rasterx.expressions.analysis.{RST_Proximity, RST_Viewshed}
+import com.databricks.labs.gbx.rasterx.expressions.dem.RST_Slope
+import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Band
+import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.{Convolve, RasterTessellate, WindowedExtract}
 import org.apache.hadoop.conf.Configuration
+import org.apache.spark.sql.functions.col
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
@@ -71,6 +76,17 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
         )
         try f(src)
         finally RasterDriver.releaseDataset(src)
+    }
+
+    /** A 32x32 float32 ramp in a metric CRS (EPSG:32633, 1 m pixels, origin (0, 32)); viewshed needs linear units. */
+    private def withMetricRamp(name: String)(f: Dataset => Unit): Unit = {
+        withRamp(name) { src =>
+            val srs = new org.gdal.osr.SpatialReference()
+            srs.ImportFromEPSG(32633)
+            src.SetProjection(srs.ExportToWkt())
+            src.SetGeoTransform(Array(0.0, 1.0, 0.0, 32.0, 0.0, -1.0))
+            f(src)
+        }
     }
 
     /** The codec GDAL recorded for the serialized tile (IMAGE_STRUCTURE / COMPRESSION), read back from the bytes. */
@@ -175,6 +191,67 @@ class DerivedTileCompressionTest extends AnyFunSuite with BeforeAndAfterAll {
             try assertCodec(out, meta, "ZSTD")
             finally RasterDriver.releaseDataset(out)
         }
+    }
+
+    test("RST_Proximity.execute defaults to ZSTD and honours an incoming compression") {
+        withRamp("prox.tif") { src =>
+            // RST_Proximity.execute(ds: Dataset, options: Map[String, String], targetValues: Option[String],
+            //                       distUnits: String, maxDistance: Option[Double]): (Dataset, Map[String, String])
+            val (out, meta) = RST_Proximity.execute(src, Map.empty, Some("1"), "PIXEL", None)
+            try assertCodec(out, meta, "ZSTD")
+            finally RasterDriver.releaseDataset(out)
+
+            val (lzw, lzwMeta) = RST_Proximity.execute(src, Map("compression" -> "LZW"), Some("1"), "PIXEL", None)
+            try assertCodec(lzw, lzwMeta, "LZW")
+            finally RasterDriver.releaseDataset(lzw)
+        }
+    }
+
+    test("RST_Viewshed.execute defaults to ZSTD and honours an incoming compression") {
+        withMetricRamp("view.tif") { src =>
+            // RST_Viewshed.execute(ds: Dataset, options: Map[String, String], observerX: Double,
+            //     observerY: Double, observerHeight: Double, targetHeight: Double,
+            //     maxDistance: Option[Double]): (Dataset, Map[String, String])
+            val (out, meta) = RST_Viewshed.execute(src, Map.empty, 16.0, 16.0, 100.0, 1.6, None)
+            try assertCodec(out, meta, "ZSTD")
+            finally RasterDriver.releaseDataset(out)
+
+            val (lzw, lzwMeta) = RST_Viewshed.execute(src, Map("compression" -> "LZW"), 16.0, 16.0, 100.0, 1.6, None)
+            try assertCodec(lzw, lzwMeta, "LZW")
+            finally RasterDriver.releaseDataset(lzw)
+        }
+    }
+
+    test("RST_Slope.execute (DEM helper) defaults to ZSTD") {
+        withRamp("slope.tif") { src =>
+            // RST_Slope.execute(ds: Dataset, unit: String, xscale: Double, yscale: Double):
+            //     (Dataset, Map[String, String])   -- delegates to RST_DEMProcessingHelper.process
+            val (out, meta) = RST_Slope.execute(src, "degrees", 1.0, 1.0)
+            try assertCodec(out, meta, "ZSTD")
+            finally RasterDriver.releaseDataset(out)
+        }
+    }
+
+    test("RST_Band.execute defaults to ZSTD and honours an incoming compression") {
+        withRamp("band.tif") { src =>
+            // RST_Band.execute(ds: Dataset, options: Map[String, String], bandIndex: Int):
+            //     (Dataset, Map[String, String])
+            val (out, meta) = RST_Band.execute(src, Map.empty, 1)
+            try assertCodec(out, meta, "ZSTD")
+            finally RasterDriver.releaseDataset(out)
+
+            val (lzw, lzwMeta) = RST_Band.execute(src, Map("compression" -> "LZW"), 1)
+            try assertCodec(lzw, lzwMeta, "LZW")
+            finally RasterDriver.releaseDataset(lzw)
+        }
+    }
+
+    test("the rst_cog_convert Scala wrapper default matches the SQL builder and docs (ZSTD)") {
+        // functions.rst_cog_convert(tile: Column): Column -- builds gbx_rst_cog_convert(tile, <default>, 512, 'AVERAGE')
+        val rendered = functions.rst_cog_convert(col("tile")).toString
+        assert(rendered.contains("gbx_rst_cog_convert"), rendered)
+        assert(rendered.contains(OperatorOptions.DefaultCompression), rendered)
+        assert(!rendered.contains("DEFLATE"), rendered)
     }
 
     test("one shared constant decides the default codec for appendOptions and the stamped metadata") {

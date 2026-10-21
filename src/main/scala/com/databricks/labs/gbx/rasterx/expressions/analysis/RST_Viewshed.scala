@@ -3,6 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.analysis
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.operations.SpatialRefOps
+import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
@@ -222,7 +223,7 @@ object RST_Viewshed extends WithExpressionInfo {
             "all_parents" -> Option(ds.GetDescription()).getOrElse(""),
             "size" -> "-1",
             "format" -> "GTiff",
-            "compression" -> "DEFLATE",
+            "compression" -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
             "isZipped" -> "false",
             "isSubset" -> "false"
         )

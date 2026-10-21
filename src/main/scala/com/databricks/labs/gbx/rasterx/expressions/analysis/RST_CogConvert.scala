@@ -79,7 +79,7 @@ object RST_CogConvert extends WithExpressionInfo {
               val (cell, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
               val (resDs, resMtd) = execute(
                   ds, options,
-                  Option(compression).map(_.toString).getOrElse("ZSTD"),
+                  Option(compression).map(_.toString).getOrElse(OperatorOptions.DefaultCompression),
                   blocksize,
                   Option(overviewResampling).map(_.toString).getOrElse("AVERAGE")
               )
@@ -170,7 +170,7 @@ object RST_CogConvert extends WithExpressionInfo {
     override def name: String = "gbx_rst_cog_convert"
 
     override def builder(): FunctionBuilder = (c: Seq[Expression]) => c.length match {
-        case 1 => RST_CogConvert(c(0), Literal("ZSTD"), Literal(512), Literal("AVERAGE"))
+        case 1 => RST_CogConvert(c(0), Literal(OperatorOptions.DefaultCompression), Literal(512), Literal("AVERAGE"))
         case 2 => RST_CogConvert(c(0), c(1), Literal(512), Literal("AVERAGE"))
         case 3 => RST_CogConvert(c(0), c(1), c(2), Literal("AVERAGE"))
         case 4 => RST_CogConvert(c(0), c(1), c(2), c(3))

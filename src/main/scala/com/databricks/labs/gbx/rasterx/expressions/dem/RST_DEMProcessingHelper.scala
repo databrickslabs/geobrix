@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.rasterx.expressions.dem
 
+import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import org.gdal.gdal.{Dataset, DEMProcessingOptions, gdal}
 
 import java.util.UUID
@@ -78,7 +79,7 @@ object RST_DEMProcessingHelper {
             "all_parents" -> Option(srcDs.GetDescription()).getOrElse(""),
             "size" -> "-1",
             "format" -> "GTiff",
-            "compression" -> "DEFLATE",
+            "compression" -> OperatorOptions.DefaultCompression,
             "isZipped" -> "false",
             "isSubset" -> "false"
         )

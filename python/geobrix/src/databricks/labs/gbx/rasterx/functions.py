@@ -3821,7 +3821,7 @@ def rst_cog_convert(
     Args:
         tile: Raster tile column.
         compression: Pixel compression — one of ``NONE``, ``DEFLATE``, ``LZW``,
-            ``ZSTD``, ``LERC``, ``JPEG``, ``WEBP``. Default ``"DEFLATE"``.
+            ``ZSTD``, ``LERC``, ``JPEG``, ``WEBP``. Default ``"ZSTD"``.
             String literals auto-wrapped via ``f.lit``.
         blocksize: Internal tile size in pixels (square). Default ``512``.
         overview_resampling: Downsampling algorithm for the overview pyramid —
@@ -3832,7 +3832,7 @@ def rst_cog_convert(
         COG-laid-out raster tile column.
     """
     comp_col = (
-        f.lit("DEFLATE")
+        f.lit("ZSTD")
         if compression is None
         else (f.lit(compression) if isinstance(compression, str) else _col(compression))
     )

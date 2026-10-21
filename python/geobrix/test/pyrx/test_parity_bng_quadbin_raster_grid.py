@@ -1333,6 +1333,103 @@ def test_bng_tessellate_warp_fill_parity(spark_with_jar, assignment):
         ), f"{label}: {tier} {fill} of {valid.size} valid chip pixels are not source values (warp fill)"
 
 
+def _rgba_raster():
+    """40x40 uint8 RGBA EPSG:4326 source over Norfolk: non-zero RGB and an opaque alpha,
+    except rows 4-8 (alpha 0, RGB still non-zero) and row 20 (real R = G = B = 0 under an
+    opaque alpha)."""
+    from rasterio.io import MemoryFile
+    from rasterio.transform import from_bounds
+
+    n = _FILL_N
+    p = np.arange(n * n, dtype="int64").reshape(n, n)
+    bands = [((p * k) % 199 + 1).astype("uint8") for k in (1, 3, 7)]
+    for band in bands:
+        band[20, :] = 0
+    alpha = np.full((n, n), 255, dtype="uint8")
+    alpha[4:9, :] = 0
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(1.00, 52.40, 1.20, 52.60, n, n),
+        photometric="RGB",
+        alpha="YES",
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            for i, band in enumerate(bands + [alpha], 1):
+                dst.write(band, i)
+        return mf.read()
+
+
+# reading a chip's masks warns: chips declare the NoData fallback over their alpha band
+@pytest.mark.filterwarnings("ignore::rasterio.errors.NodataShadowWarning")
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+def test_bng_tessellate_rgba_parity(spark_with_jar, assignment):
+    """BNG tessellate of a 4326 RGBA source: the alpha band marks the warp fill in both tiers.
+
+    No NoData is declared over the warped alpha band, so the fill is NoData (no valid
+    chip pixel lies off the source footprint), the source's real all-zero pixels under an
+    opaque alpha stay valid, and both tiers emit the same cells. Covering chips also drop
+    the transparent rows; centroid chips of the lightweight tier declare the NoData
+    fallback over their alpha band, so their transparent pixels are not compared.
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.core.crs import get_transformer
+
+    spark = spark_with_jar
+    sql_name, fn_name, _ = _TESS_CONFIG["bng"]
+    raster = _rgba_raster()
+    label = f"bng rgba {assignment}"
+
+    def _id(cid):
+        return _tess_id(cid, bng=True)
+
+    light_rows = tp.light_chips(spark, raster, sql_name, 3, assignment, "sparse", _id)
+    heavy_rows = tp.heavy_chips(spark, raster, fn_name, 3, assignment, "sparse", _id)
+    assert light_rows, f"{label}: light emitted no chips"
+    assert not tp.error_rows(light_rows), f"{label}: light error rows"
+    assert not tp.error_rows(heavy_rows), f"{label}: heavy error rows"
+    light_cells = {cid for cid, _, _ in light_rows}
+    heavy_cells = {cid for cid, _, _ in heavy_rows}
+    assert light_cells == heavy_cells, (
+        f"{label}: cell sets differ: light_only={sorted(light_cells - heavy_cells)[:5]} "
+        f"heavy_only={sorted(heavy_cells - light_cells)[:5]}"
+    )
+
+    n = _FILL_N
+    to_src = get_transformer(27700, 4326).transform
+    with MemoryFile(raster) as mf, mf.open() as src:
+        inv = ~src.transform
+    for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
+        valid = outside = transparent = zero_rgb = zero_rgb_off = 0
+        for _, b, _ in rows:
+            with MemoryFile(b) as mf, mf.open() as ds:
+                data = ds.read()
+                rr, cc = np.nonzero((ds.read_masks() != 0).any(axis=0))
+                xs, ys = ds.transform * (cc + 0.5, rr + 0.5)
+                for r, k, x, y in zip(rr, cc, xs, ys):
+                    valid += 1
+                    sc, sr = inv * to_src(float(x), float(y))
+                    if not (-1.5 <= sc <= n + 1.5 and -1.5 <= sr <= n + 1.5):
+                        outside += 1
+                    elif 4.75 <= sr <= 8.25:
+                        transparent += 1
+                    if (data[:3, r, k] == 0).all():
+                        zero_rgb += 1
+                        zero_rgb_off += not 19.25 <= sr <= 21.75
+        assert valid, f"{label}: {tier} chips hold no valid pixel"
+        assert outside == 0, f"{label}: {tier} {outside} valid pixels off the source"
+        if assignment == "covering" or tier == "heavy":
+            assert transparent == 0, f"{label}: {tier} {transparent} transparent valid"
+        assert zero_rgb, f"{label}: {tier} lost the opaque all-zero pixels"
+        assert zero_rgb_off == 0, f"{label}: {tier} {zero_rgb_off} zeros off row 20"
+
+
 def _masked_uint16_raster(*, epsg, origin, px, n):
     """n×n uint16 ramp (1..200), NO declared NoData, real 65535s (the fallback) in
     row 6, and an internal per-dataset mask that hides rows 2-3 and the left half of

@@ -106,29 +106,21 @@ object RasterTessellate {
     /**
       * gdalwarp arguments that make the warp fill of `ds` NoData when some band declares none: gdalwarp
       * otherwise fills the pixels outside the source footprint with 0 and declares no NoData, so they
-      * would be tessellated as valid data. Each undeclared band gets the dtype constant
-      * ([[GDAL.getNoDataConstant]]) as `-dstnodata` (a declared band keeps its own value), paired with
-      * [[GDAL.srcNoDataArgs]], so source pixels equal to it are NoData too instead of being moved by
+      * would be tessellated as valid data. [[GDAL.dstNoDataArgs]] gives each undeclared band the dtype
+      * constant ([[GDAL.getNoDataConstant]]) as `-dstnodata` (a declared band keeps its own value), paired
+      * with [[GDAL.srcNoDataArgs]], so source pixels equal to it are NoData too instead of being moved by
       * +/- 1 and kept valid, and a source's own mask band is left to gdalwarp (see there). Empty when every
-      * band declares NoData: the warp carries it. The `-dstnodata` list is ONE argument, so these go
-      * through the unsplit warp extra arguments.
+      * band declares NoData (the warp carries it), and when the source has an alpha band: gdalwarp carries
+      * the alpha band, which already marks the fill and the transparent pixels, and a declared NoData would
+      * shadow it. Both lists are ONE argument each, so these go through the unsplit warp extra arguments.
       */
     private def bngFillArgs(ds: Dataset): Seq[String] = {
-        val perBand = (1 to ds.GetRasterCount()).map { i =>
-            val band = ds.GetRasterBand(i)
-            val nd = new Array[java.lang.Double](1)
-            band.GetNoDataValue(nd)
-            (Option(nd(0)).map(_.doubleValue()), band)
+        val bands = (1 to ds.GetRasterCount()).map(ds.GetRasterBand)
+        val hasAlpha = bands.exists { b =>
+            b.GetColorInterpretation == gdalconstConstants.GCI_AlphaBand ||
+                (b.GetMaskFlags() & gdalconstConstants.GMF_ALPHA) != 0
         }
-        if (perBand.forall(_._1.isDefined)) Seq.empty
-        else {
-            val values = perBand.map { case (declared, band) => declared.getOrElse(GDAL.getNoDataConstant(band.getDataType)) }
-            val list = values.distinct match {
-                case Seq(single) => single.toString
-                case _           => values.mkString(" ")
-            }
-            Seq("-dstnodata", list) ++ GDAL.srcNoDataArgs(ds)
-        }
+        if (hasAlpha) Seq.empty else GDAL.dstNoDataArgs(ds) ++ GDAL.srcNoDataArgs(ds)
     }
 
     /**

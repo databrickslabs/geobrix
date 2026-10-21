@@ -3,7 +3,7 @@ function returns new GTiff bytes."""
 
 import numpy as np
 import rasterio
-from rasterio.enums import MaskFlags
+from rasterio.enums import ColorInterp, MaskFlags
 from rasterio.io import MemoryFile
 from rasterio.warp import calculate_default_transform, reproject
 
@@ -21,13 +21,24 @@ def _undeclared_fill(ds):
     has its own (non-alpha) per-dataset mask: a source NoData makes the warp ignore
     that mask, so the masked pixels would turn valid. Same rule as heavy
     ``GDAL.srcNoDataArgs``.
+
+    ``None`` (the warp is left as it was) also when the source has an alpha band: the
+    warped alpha band already marks the fill and the transparent pixels, and a
+    declared NoData would shadow it (``NodataShadowWarning``), turning the
+    transparent pixels valid and the source's real 0 pixels NoData. Heavy
+    ``bngFillArgs`` does the same.
+
+    A band-level mix (some bands declare NoData, some do not) occurs only for VRT or
+    in-memory sources: light treats it as declared and skips the marking, heavy
+    marks the undeclared bands.
     """
     if any(v is not None for v in ds.nodatavals):
         return None
-    own_mask = any(
-        MaskFlags.per_dataset in flags and MaskFlags.alpha not in flags
-        for flags in ds.mask_flag_enums
-    )
+    if ColorInterp.alpha in ds.colorinterp or any(
+        MaskFlags.alpha in flags for flags in ds.mask_flag_enums
+    ):
+        return None
+    own_mask = any(MaskFlags.per_dataset in flags for flags in ds.mask_flag_enums)
     return fallback_nodata(ds.dtypes[0]), not own_mask
 
 

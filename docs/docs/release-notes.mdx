@@ -298,8 +298,12 @@ formats.
 - **BNG tessellation marks the warp fill as NoData.** `rst_bng_tessellate` first warps a source
   that is not in EPSG:27700 to it. For a source without NoData, both tiers filled the pixels
   outside the source's footprint with valid zeros, which reached the chips of the edge cells as
-  data. That fill is now NoData, with the fallback value above, and source pixels equal to that
-  value are NoData too. A source's own NoData is kept, and so is a mask band it carries.
+  data. That fill is now NoData, with the fallback value above, and when the source has no mask
+  band, source pixels equal to that value are NoData too. A source's own NoData is kept, and a
+  source with an alpha band is warped as before, its alpha band marking the fill and the
+  transparent pixels. On a source with its own mask band (not an alpha band) the mask is kept, but
+  real pixels equal to the fallback value shift by one and stay valid (65535 becomes 65534, a
+  `uint8` 0 becomes 1); this is new for the BNG warp.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

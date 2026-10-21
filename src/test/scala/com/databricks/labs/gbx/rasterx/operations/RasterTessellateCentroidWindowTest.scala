@@ -896,4 +896,85 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         assert(fallbackValid > 0, "65535 is a real value when the source NoData is 0: row 3 must stay valid")
         assert(chipNoData == Set(Some(0.0)), s"chip NoData values $chipNoData, expected the source's 0")
     }
+
+    /** Valid chip pixels (valid in any band) of a BNG tessellation of an RGBA uint8 EPSG:4326 source, as
+      * `(chips, valid, outside, transparent, zeroRgb, zeroRgbOff)`: `outside` lies off the source footprint
+      * (warp fill), `transparent` sits on the source's transparent rows, `zeroRgb` has R = G = B = 0 and
+      * `zeroRgbOff` is one of those that is not on the source's opaque all-zero row. Source pixel `p` has
+      * non-zero RGB and an opaque alpha, except rows 4-8 (alpha 0, RGB still non-zero) and row 20 (real
+      * R = G = B = 0 under an opaque alpha). Positions are judged on the fractional source pixel, with the
+      * edges of a row left out (gdalwarp's approximate transformer moves a centre by a fraction of a pixel). */
+    private def bngRgbaChips(assignment: String): (Int, Long, Long, Long, Long, Long) = {
+        val n = 40
+        val gt = Array(1.00, 0.2 / n, 0.0, 52.60, 0.0, -0.2 / n)
+        val drv = GDALManager.gtiffDriver()
+        val src = drv.Create(mem(s"bngrgba_$assignment.tif"), n, n, 4, gdalconstConstants.GDT_Byte, Array("PHOTOMETRIC=RGB", "ALPHA=YES"))
+        src.SetGeoTransform(gt)
+        val srs = epsgSR(4326)
+        src.SetProjection(srs.ExportToWkt())
+        srs.delete()
+        (1 to 4).foreach { b =>
+            val arr = Array.tabulate(n * n) { p =>
+                val (r, mult) = (p / n, Seq(1, 3, 7)(math.min(b, 3) - 1))
+                if (b == 4) (if (r >= 4 && r <= 8) 0.0 else 255.0)
+                else if (r == 20) 0.0
+                else (p * mult % 199 + 1).toDouble
+            }
+            src.GetRasterBand(b).WriteRaster(0, 0, n, n, arr)
+        }
+        src.FlushCache()
+        assert(src.GetRasterBand(4).GetColorInterpretation == gdalconstConstants.GCI_AlphaBand, "fixture needs an alpha band")
+        assert((src.GetRasterBand(1).GetMaskFlags() & gdalconstConstants.GMF_ALPHA) != 0, "fixture needs an alpha mask")
+        val inv = invert(gt)
+        val (bng, wgs) = (epsgSR(27700), epsgSR(4326))
+        val toLonLat = new CoordinateTransformation(bng, wgs)
+        var (chips, valid, outside, transparent, zeroRgb, zeroRgbOff) = (0, 0L, 0L, 0L, 0L, 0L)
+        val it = RasterTessellate.tessellateBngIter(handOff(src), Map.empty[String, String], BngRes, assignment, "sparse")
+        try {
+            while (it.hasNext) {
+                val (_, chip, _) = it.next()
+                try {
+                    chips += 1
+                    val cgt = chip.GetGeoTransform
+                    val w = chip.getRasterXSize
+                    val bands = (1 to chip.getRasterCount).map(readBand(chip, _))
+                    var k = 0
+                    while (k < w * chip.getRasterYSize) {
+                        if (bands.exists(_._2(k) != 0)) {
+                            valid += 1
+                            val (i, j) = (k % w, k / w)
+                            val e = cgt(0) + (i + 0.5) * cgt(1) + (j + 0.5) * cgt(2)
+                            val nn = cgt(3) + (i + 0.5) * cgt(4) + (j + 0.5) * cgt(5)
+                            val ll = toLonLat.TransformPoint(e, nn)
+                            val sc = inv(0) + ll(0) * inv(1) + ll(1) * inv(2)
+                            val sr = inv(3) + ll(0) * inv(4) + ll(1) * inv(5)
+                            if (sc < -1.5 || sc > n + 1.5 || sr < -1.5 || sr > n + 1.5) outside += 1
+                            else if (sr >= 4.75 && sr <= 8.25) transparent += 1
+                            if ((0 until 3).forall(b => bands(b)._1(k) == 0.0)) {
+                                zeroRgb += 1
+                                if (sr < 19.25 || sr > 21.75) zeroRgbOff += 1
+                            }
+                        }
+                        k += 1
+                    }
+                } finally RasterDriver.releaseDataset(chip)
+            }
+        } finally {
+            it.asInstanceOf[AutoCloseable].close()
+            toLonLat.delete(); bng.delete(); wgs.delete()
+            RasterDriver.releaseDataset(src)
+        }
+        (chips, valid, outside, transparent, zeroRgb, zeroRgbOff)
+    }
+
+    for (assignment <- Seq("centroid", "covering")) {
+        test(s"(v) BNG $assignment on an RGBA source: its alpha band marks the warp fill, real 0 pixels stay valid") {
+            val (chips, valid, outside, transparent, zeroRgb, zeroRgbOff) = bngRgbaChips(assignment)
+            assert(chips > 0 && valid > 0, "the chips hold no valid pixel")
+            assert(outside == 0, s"$outside valid chip pixels lie off the source footprint (warp fill read as data)")
+            assert(transparent == 0, s"$transparent transparent source pixels are valid in the chips")
+            assert(zeroRgb > 0, "the opaque all-zero pixels of the source must stay valid")
+            assert(zeroRgbOff == 0, s"$zeroRgbOff valid all-zero chip pixels are not the source's opaque zero row")
+        }
+    }
 }

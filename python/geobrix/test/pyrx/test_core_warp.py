@@ -94,3 +94,36 @@ def test_reproject_to_srid_mark_fill_nodata_keeps_a_sources_own_mask():
     # 65534), so those are not compared.
     rows = np.where(v == 65534, -1, (v - 1) // n)
     assert not np.isin(rows, (10, 11)).any()
+
+
+def test_reproject_to_srid_mark_fill_nodata_leaves_an_alpha_source_alone():
+    """The warped alpha band marks the fill, so no NoData is declared over it."""
+    n = 40
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(1.00, 52.40, 1.20, 52.60, n, n),
+        photometric="RGB",
+        alpha="YES",
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(np.full((4, n, n), 200, dtype="uint8"))
+        b = mf.read()
+    with MemoryFile(b) as mf, mf.open() as ds:
+        plain = warp.reproject_to_srid(ds, 27700)
+        marked = warp.reproject_to_srid(ds, 27700, mark_fill_nodata=True)
+    with (
+        MemoryFile(plain) as p,
+        p.open() as dp,
+        MemoryFile(marked) as m,
+        m.open() as dm,
+    ):
+        assert dm.nodatavals == (None,) * 4
+        assert dm.colorinterp == dp.colorinterp
+        assert (dm.read() == dp.read()).all()
+        assert (dm.read(4) == 0).any()  # the fill is transparent

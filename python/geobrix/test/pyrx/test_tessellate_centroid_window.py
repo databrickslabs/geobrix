@@ -9,12 +9,13 @@ the source footprint.
 """
 
 import math
+import warnings
 
 import h3
 import numpy as np
 import pytest
-import rasterio
 import shapely.geometry
+from rasterio.errors import NodataShadowWarning
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine, from_bounds
 from rasterio.warp import transform as warp_transform
@@ -361,17 +362,11 @@ _FILL_N = 40
 _FILL_BOUNDS = (1.00, 52.40, 1.20, 52.60)
 
 
-def _bng_fill_source(*, nodata=None, masked=False):
-    """uint16 EPSG:4326 source: pixel p holds p + 1 (no zeros), row 3 holds 65535.
-
-    ``masked`` adds an internal mask hiding rows 10-11 and leaves out the 65535 row:
-    on a masked source the warp keeps its own handling of fallback-valued pixels
-    (they are not compared, as in the cross-tier masked-source test).
-    """
+def _bng_fill_source():
+    """uint16 EPSG:4326 source, no NoData: pixel p holds p + 1 (no zeros), row 3 holds 65535."""
     n = _FILL_N
     data = (np.arange(n * n, dtype="uint32").reshape(n, n) + 1).astype("uint16")
-    if not masked:
-        data[3, :] = 65535
+    data[3, :] = 65535
     prof = dict(
         driver="GTiff",
         width=n,
@@ -381,20 +376,13 @@ def _bng_fill_source(*, nodata=None, masked=False):
         crs="EPSG:4326",
         transform=from_bounds(*_FILL_BOUNDS, n, n),
     )
-    if nodata is not None:
-        prof["nodata"] = nodata
-    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
-        with MemoryFile() as mf:
-            with mf.open(**prof) as d:
-                d.write(data, 1)
-                if masked:
-                    mask = np.full((n, n), 255, dtype="uint8")
-                    mask[10:12, :] = 0
-                    d.write_mask(mask)
-            return mf.read(), data
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(data, 1)
+        return mf.read()
 
 
-def _bng_fill_stats(b, data, assignment, coverage):
+def _bng_fill_stats(b, assignment, coverage):
     """``(valid, invented, fallback_valid, chip_nodatas)`` of the BNG chips of ``b``.
 
     A valid chip pixel is invented when its value is not a source value (a 0, or the
@@ -440,9 +428,8 @@ def _bng_fill_stats(b, data, assignment, coverage):
 )
 def test_bng_warp_of_a_source_without_nodata_marks_fill_as_nodata(assignment, coverage):
     """The warp fill outside the source footprint is NoData, not valid zero pixels."""
-    b, data = _bng_fill_source()
     valid, invented, fallback_valid, nodatas = _bng_fill_stats(
-        b, data, assignment, coverage
+        _bng_fill_source(), assignment, coverage
     )
     assert valid > 0, "the chips hold no valid pixel"
     assert invented == 0, f"{invented} of {valid} valid chip pixels are warp fill (0)"
@@ -450,38 +437,82 @@ def test_bng_warp_of_a_source_without_nodata_marks_fill_as_nodata(assignment, co
     assert nodatas == {65535.0}
 
 
-def test_bng_warp_keeps_a_sources_own_nodata():
-    """A source that declares NoData is warped with it: chips carry it, fill is NoData."""
-    b, data = _bng_fill_source(nodata=0)
-    valid, invented, fallback_valid, nodatas = _bng_fill_stats(
-        b, data, "centroid", "sparse"
-    )
-    assert nodatas == {0.0}
-    assert valid > 0 and invented == 0
-    # 65535 is a real value here (the source NoData is 0), so row 3 stays valid
-    assert fallback_valid > 0
-
-
-def test_bng_warp_keeps_a_sources_own_mask():
-    """Masked pixels of a source without NoData stay NoData; the warp fill is NoData too."""
-    b, data = _bng_fill_source(masked=True)
+def _bng_rgba_source():
+    """uint8 RGBA EPSG:4326 source: non-zero RGB and an opaque alpha, except rows 4-8
+    (alpha 0, RGB still non-zero) and row 20 (real R = G = B = 0 under an opaque alpha).
+    """
     n = _FILL_N
-    masked_valid = invented = valid = 0
+    p = np.arange(n * n, dtype="int64").reshape(n, n)
+    bands = [((p * k) % 199 + 1).astype("uint8") for k in (1, 3, 7)]
+    for band in bands:
+        band[20, :] = 0
+    alpha = np.full((n, n), 255, dtype="uint8")
+    alpha[4:9, :] = 0
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_bounds(*_FILL_BOUNDS, n, n),
+        photometric="RGB",
+        alpha="YES",
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            for i, band in enumerate(bands + [alpha], 1):
+                d.write(band, i)
+        return mf.read()
+
+
+# reading a chip's masks warns: chips declare the NoData fallback over their alpha band
+@pytest.mark.filterwarnings("ignore::rasterio.errors.NodataShadowWarning")
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+def test_bng_warp_of_an_rgba_source_leaves_the_fill_to_its_alpha_band(assignment):
+    """An alpha band marks the warp fill, so no NoData is declared over it.
+
+    A declared NoData of 0 shadows the warped alpha band (``NodataShadowWarning``): the
+    transparent pixels, whose RGB is not 0, would turn valid. Real all-zero pixels under
+    an opaque alpha stay valid, and no valid pixel lies off the source footprint.
+    """
+    b = _bng_rgba_source()
+    n = _FILL_N
+    to_src = get_transformer(27700, 4326).transform
+    valid = outside = transparent = zero_rgb = zero_rgb_off = 0
     with MemoryFile(b) as mf, mf.open() as ds:
-        for _, cb in T.iter_tessellate(
-            ds, 3, "bng", mode="centroid", coverage="sparse"
-        ):
-            m, c = _open(cb)
-            with m, c:
-                vals = c.read(1)
-                rr, cc = np.nonzero(c.read_masks(1) != 0)
-                for r, k in zip(rr, cc):
-                    valid += 1
-                    v = int(vals[r, k])
-                    if not 1 <= v <= n * n:
-                        invented += 1
-                    elif divmod(v - 1, n)[0] in (10, 11):
-                        masked_valid += 1
-    assert valid > 0
-    assert masked_valid == 0, f"{masked_valid} masked source pixels became valid"
-    assert invented == 0, f"{invented} valid chip pixels are warp fill (0)"
+        inv = ~ds.transform
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            # "complete": covering+sparse reads each chip's own masks, and a chip declares the
+            # NoData fallback over its alpha band whatever the warp did
+            chips = list(
+                T.iter_tessellate(ds, 3, "bng", mode=assignment, coverage="complete")
+            )
+    shadow = [w for w in caught if issubclass(w.category, NodataShadowWarning)]
+    assert not shadow, f"{len(shadow)} NodataShadowWarning while tessellating"
+    assert chips
+    for _, cb in chips:
+        m, c = _open(cb)
+        with m, c:
+            data = c.read()
+            rr, cc = np.nonzero((c.read_masks() != 0).any(axis=0))
+            xs, ys = c.transform * (cc + 0.5, rr + 0.5)
+            for r, k, x, y in zip(rr, cc, xs, ys):
+                valid += 1
+                sc, sr = inv * to_src(float(x), float(y))
+                if not (-1.5 <= sc <= n + 1.5 and -1.5 <= sr <= n + 1.5):
+                    outside += 1
+                elif 4.75 <= sr <= 8.25:
+                    transparent += 1
+                if (data[:3, r, k] == 0).all():
+                    zero_rgb += 1
+                    zero_rgb_off += not 19.25 <= sr <= 21.75
+    assert valid > 0, "the chips hold no valid pixel"
+    assert outside == 0, f"{outside} valid chip pixels lie off the source footprint"
+    # centroid chips declare the NoData fallback over their alpha band (shadowing it, as
+    # before the BNG warp marked its fill), so only covering chips drop the transparent rows
+    if assignment == "covering":
+        assert transparent == 0, f"{transparent} transparent pixels are valid"
+    assert zero_rgb > 0, "the opaque all-zero pixels must stay valid"
+    assert zero_rgb_off == 0, f"{zero_rgb_off} valid all-zero pixels are not row 20"

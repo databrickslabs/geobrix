@@ -49,6 +49,26 @@ object GDAL {
         }
     }
 
+    /** The NoData state of `ds` for a warp: the bands that declare none, and the value list gdalwarp takes
+      * (`-srcnodata` / `-dstnodata`): one value per band, a declared band's own value or `fill(band)`, written as
+      * ONE value when they all agree. The single scan of the bands' declared NoData that the warp helpers share. */
+    private final case class WarpNoData(undeclared: Seq[org.gdal.gdal.Band], list: String)
+
+    private def warpNoData(ds: org.gdal.gdal.Dataset, fill: org.gdal.gdal.Band => Double): WarpNoData = {
+        val perBand = (1 to ds.GetRasterCount()).map { i =>
+            val band = ds.GetRasterBand(i)
+            val nd = new Array[java.lang.Double](1)
+            band.GetNoDataValue(nd)
+            (Option(nd(0)).map(_.doubleValue()), band)
+        }
+        val values = perBand.map { case (declared, band) => declared.getOrElse(fill(band)) }
+        val list = values.distinct match {
+            case Seq(single) => single.toString
+            case _           => values.mkString(" ")
+        }
+        WarpNoData(perBand.collect { case (None, band) => band }, list)
+    }
+
     /**
       * gdalwarp arguments that make the source pixels equal to a band's fill value NoData, for the bands of
       * `ds` that declare no NoData: `-srcnodata <one value per band>` (a declared band keeps its own value)
@@ -64,26 +84,27 @@ object GDAL {
         ds: org.gdal.gdal.Dataset,
         fill: org.gdal.gdal.Band => Double = b => getNoDataConstant(b.getDataType)
     ): Seq[String] = {
-        val perBand = (1 to ds.GetRasterCount()).map { i =>
-            val band = ds.GetRasterBand(i)
-            val nd = new Array[java.lang.Double](1)
-            band.GetNoDataValue(nd)
-            (Option(nd(0)).map(_.doubleValue()), band)
-        }
-        val undeclared = perBand.collect { case (None, band) => band }
+        val nd = warpNoData(ds, fill)
         def ownMask(band: org.gdal.gdal.Band): Boolean = {
             val flags = band.GetMaskFlags()
             (flags & GMF_PER_DATASET) != 0 && (flags & GMF_ALPHA) == 0
         }
-        if (undeclared.isEmpty || undeclared.exists(ownMask)) Seq.empty
-        else {
-            val values = perBand.map { case (declared, band) => declared.getOrElse(fill(band)) }
-            val list = values.distinct match {
-                case Seq(single) => single.toString
-                case _           => values.mkString(" ")
-            }
-            Seq("-srcnodata", list, "-wo", "UNIFIED_SRC_NODATA=NO")
-        }
+        if (nd.undeclared.isEmpty || nd.undeclared.exists(ownMask)) Seq.empty
+        else Seq("-srcnodata", nd.list, "-wo", "UNIFIED_SRC_NODATA=NO")
+    }
+
+    /**
+      * gdalwarp `-dstnodata <one value per band>` for `ds`, when some band declares no NoData: an undeclared
+      * band gets `fill(band)` (default [[getNoDataConstant]]), a declared band keeps its own value. Empty when
+      * every band declares NoData: the warp carries it. Pair it with [[srcNoDataArgs]]; `-dstnodata` alone
+      * moves source pixels equal to the value by +/- 1 and keeps them valid. ONE argument, like there.
+      */
+    def dstNoDataArgs(
+        ds: org.gdal.gdal.Dataset,
+        fill: org.gdal.gdal.Band => Double = b => getNoDataConstant(b.getDataType)
+    ): Seq[String] = {
+        val nd = warpNoData(ds, fill)
+        if (nd.undeclared.isEmpty) Seq.empty else Seq("-dstnodata", nd.list)
     }
 
     /** Converts pixel (x, y) to geographic (xGeo, yGeo) using the 6-element geotransform. */

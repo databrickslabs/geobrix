@@ -607,3 +607,85 @@ def test_percentile_stretch_is_canonical():
     with MemoryFile(_lzw_src()) as m, m.open() as ds:
         out = percentile_stretch(ds, 2.0, 98.0)
     _assert_canonical(out, "uint8")
+
+
+def _ycbcr_src():
+    """A 64x64 tiled 3-band uint8 JPEG/YCbCr GTiff: its photometric must not be inherited."""
+    a = (np.random.default_rng(7).random((3, 64, 64)) * 255).astype("uint8")
+    prof = dict(
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:32618",
+        transform=from_bounds(500000, 4490000, 500640, 4490640, 64, 64),
+        compress="jpeg",
+        photometric="ycbcr",
+        tiled=True,
+        blockxsize=32,
+        blockysize=32,
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(a)
+        return mf.read()
+
+
+def _assert_zstd_without_ycbcr(b):
+    with MemoryFile(b) as m, m.open() as c:
+        img = c.tags(ns="IMAGE_STRUCTURE")
+        assert img.get("COMPRESSION") == "ZSTD", img
+        assert "YCbCr" not in img.get("SOURCE_COLOR_SPACE", ""), img
+        assert str(c.profile.get("photometric")).lower() != "ycbcr", c.profile
+        assert c.count == 3
+
+
+def test_write_gtiff_drops_ycbcr_photometric_of_a_jpeg_source():
+    from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
+        prof, data = ds.profile.copy(), ds.read()
+    assert str(prof.get("photometric")).lower() == "ycbcr"  # premise of the test
+    before = dict(prof)
+    out = write_gtiff(prof, data)
+    assert prof == before, "write_gtiff must not mutate the caller's profile"
+    _assert_zstd_without_ycbcr(out)
+    with MemoryFile(out) as m, m.open() as c:
+        assert np.array_equal(c.read(), data), "values must survive the re-encode"
+
+
+def test_percentile_stretch_accepts_a_ycbcr_jpeg_source():
+    from databricks.labs.gbx.pyrx.core.stretch import percentile_stretch
+
+    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
+        out = percentile_stretch(ds, 2.0, 98.0)
+    _assert_zstd_without_ycbcr(out)
+
+
+def test_focal_filt_accepts_a_ycbcr_jpeg_source():
+    from databricks.labs.gbx.pyrx.core import focal
+
+    with MemoryFile(_ycbcr_src()) as m, m.open() as ds:
+        out = focal.filt(ds, 3, "max")
+    _assert_zstd_without_ycbcr(out)
+
+
+def test_rst_fromfile_materialize_is_canonical(tmp_path):
+    from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+    src = tmp_path / "lzw.tif"
+    src.write_bytes(_lzw_src())
+    tile = _fromfile_impl(str(src), "GTiff", True)
+    assert tile is not None and tile["raster"] is not None
+    _assert_canonical(bytes(tile["raster"]))
+
+
+def test_rst_fromfile_materialize_accepts_a_ycbcr_jpeg_source(tmp_path):
+    from databricks.labs.gbx.pyrx.functions import _fromfile_impl
+
+    src = tmp_path / "ycbcr.tif"
+    src.write_bytes(_ycbcr_src())
+    tile = _fromfile_impl(str(src), "GTiff", True)
+    assert tile is not None, "a YCbCr source must materialize, not null out"
+    _assert_zstd_without_ycbcr(bytes(tile["raster"]))

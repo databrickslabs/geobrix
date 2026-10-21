@@ -50,6 +50,7 @@ from databricks.labs.gbx.pyrx.core import tessellate as tessellate_core
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core import tin as tin_core
 from databricks.labs.gbx.pyrx.core import warp, xyz
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.escape import rst_apply, tile_to_numpy  # noqa: F401
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
 
@@ -838,12 +839,7 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
                         _os.remove(staged)
             with MemoryFile(_src_bytes) as _src_mf, _src_mf.open() as src:
                 data = src.read()
-                profile = src.profile.copy()
-                profile.update(driver="GTiff")
-                with MemoryFile() as mf:
-                    with mf.open(**profile) as dst:
-                        dst.write(data)
-                    new_bytes = mf.read()
+                new_bytes = write_gtiff(src.profile, data)
         except StageTooLargeError:
             # Cap-guard error: propagate — this is an actionable, user-visible error,
             # not a bad-path that should silently null out. The UDF boundary converts

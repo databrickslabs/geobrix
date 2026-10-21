@@ -248,11 +248,25 @@ def _codec_opts(dtype, decoded_bytes, compress, level, predictor, driver) -> dic
     return {"compress": c}
 
 
+def drop_ycbcr(profile: dict) -> dict:
+    """Copy of *profile* without a YCbCr ``photometric``.
+
+    A JPEG/YCbCr source's profile carries ``photometric="ycbcr"``, which GDAL accepts
+    only together with ``COMPRESS=JPEG``. Rasterio hands out decoded RGB samples, so
+    for any other codec the key is dropped and GDAL picks its RGB default.
+    """
+    prof = dict(profile)
+    if str(prof.get("photometric", "")).lower() == "ycbcr":
+        del prof["photometric"]
+    return prof
+
+
 def write_gtiff(profile: dict, data) -> bytes:
     """GTiff bytes of *data* with the canonical creation options for its dtype.
 
     The single light-tier GTiff writer: every derived raster goes through here so its
-    encoding never inherits the source file's codec. *profile* is not modified.
+    encoding never inherits the source file's codec (a YCbCr photometric, which only
+    JPEG can carry, is dropped with it). *profile* is not modified.
     *data* is a ``(bands, rows, cols)`` array matching ``profile['count']``.
     """
     # Lazy: this module is imported by the Spark data-source writers, which must stay
@@ -260,7 +274,7 @@ def write_gtiff(profile: dict, data) -> bytes:
     import numpy as np
     from rasterio.io import MemoryFile
 
-    prof = dict(profile)
+    prof = drop_ycbcr(profile)
     prof["driver"] = "GTiff"
     dtype = prof.get("dtype", str(np.asarray(data).dtype))
     decoded = data.nbytes if hasattr(data, "nbytes") else None

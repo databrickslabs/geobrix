@@ -1,13 +1,17 @@
 package com.databricks.labs.gbx.rasterx.ds
 
+import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.ds.netcdf.NetCDF_DataSource
+import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy}
+import com.databricks.labs.gbx.util.{HadoopUtils, NodeFileManager}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.StringType
 import org.apache.spark.sql.util.CaseInsensitiveStringMap
 import org.scalatest.matchers.should.Matchers._
 
+import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters._
 
 class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
@@ -110,5 +114,45 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
         val df = spark.read.format("gtiff_gdal").option("sizeInMB", "1").load(tif).limit(1)
         // Reading succeeds and produces a tile; no applyScale option is set anywhere.
         df.count() shouldBe 1L
+    }
+
+    // One .nc copy shared by an outside holder and every netcdf_gdal hold in this JVM (planning's enumeration
+    // and each partition's reader). Each of those releases its own hold once, so the holder's copy survives.
+    // A `file:` path is non-local, so the readers stage it as they would a /Volumes path.
+    test("N1 a netcdf_gdal read of a shared .nc releases only its own holds") {
+        rasterx.functions.register(spark)
+        withNetCDFCopy { (dir, nc) =>
+            NodeFileManager.init(ExpressionConfig(spark).hConf)
+            val path = s"file:${dir.toAbsolutePath}"
+            // The remote exactly as netcdf_gdal names it (its planner lists with listDataFilesSpark), so the
+            // holder and the read share one cache entry.
+            val remote = HadoopUtils.listDataFilesSpark(spark, path).filter(_.endsWith(nc.getFileName.toString)).head
+            val before = entries()
+            val held = Paths.get(NodeFileManager.readRemote(remote))
+            try {
+                spark.read.format("netcdf_gdal").load(path).count() should be > 0L
+                withClue(s"the outside holder's copy $held after the read: ") { Files.isRegularFile(held) shouldBe true }
+            } finally NodeFileManager.releaseLocal(held.toString)
+            withClue(s"generation dir ${held.getParent} after the holder released: ") {
+                Files.exists(held.getParent) shouldBe false
+            }
+            withClue("node-file cache entries left by the read: ") { entries().diff(before) shouldBe empty }
+        }
+    }
+
+    test("netcdf_gdal skips a granule GDAL cannot open, returns the valid file's rows, and frees both copies") {
+        rasterx.functions.register(spark)
+        withNetCDFCopy { (dir, _) =>
+            NodeFileManager.init(ExpressionConfig(spark).hConf)
+            val path = s"file:${dir.toAbsolutePath}"
+            val validOnly = spark.read.format("netcdf_gdal").option("filterRegex", ".*tas_singlevar\\.nc$").load(path)
+                .select("source").collect().map(_.getString(0)).sorted
+            validOnly should not be empty
+            Files.write(dir.resolve("bad.nc"), garbage)
+            val before = entries()
+            val sources = spark.read.format("netcdf_gdal").load(path).select("source").collect().map(_.getString(0)).sorted
+            sources shouldBe validOnly
+            withClue("node-file cache entries left by the read: ") { entries().diff(before) shouldBe empty }
+        }
     }
 }

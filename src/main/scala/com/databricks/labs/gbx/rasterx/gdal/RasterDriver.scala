@@ -6,6 +6,7 @@ import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants._
 
 import scala.jdk.CollectionConverters.CollectionHasAsScala
+import scala.util.control.NonFatal
 
 /**
   * Low-level GDAL raster open/close and read/write.
@@ -65,23 +66,32 @@ object RasterDriver {
         else NodeFileManager.readRemote(path)
     }
 
-    /** Open a raster from a path; normalizes vsizip/subdataset and copies remote to local if needed. Caller must release. */
+    /** Open a raster from a path; normalizes vsizip/subdataset and copies remote to local if needed. Caller must
+      * release the Dataset with [[releaseDataset]], which also releases the copy (GDAL lists its local path). */
     def read(path: String, options: Map[String, String], shared: Boolean = false): Dataset = {
         val isZip = options.getOrElse("isZip", "false").toBoolean
         val isSubdataset = options.getOrElse("isSubdataset", "false").toBoolean
         val isLocal = this.isLocal(path)
         val readPath = this.copyToLocal(path, isLocal)
-        val cleanPath = this.cleanPath(readPath, isZip, isSubdataset)
-        val flags = if (shared) GA_ReadOnly | OF_SHARED else GA_ReadOnly
-        val dataset = org.gdal.gdal.gdal.Open(cleanPath, flags)
-        if (dataset == null) {
-            val error = org.gdal.gdal.gdal.GetLastErrorMsg
-            throw new RuntimeException(s"Failed to open dataset at path: $cleanPath; Error: $error")
+        try {
+            val cleanPath = this.cleanPath(readPath, isZip, isSubdataset)
+            val flags = if (shared) GA_ReadOnly | OF_SHARED else GA_ReadOnly
+            val dataset = org.gdal.gdal.gdal.Open(cleanPath, flags)
+            if (dataset == null) {
+                val error = org.gdal.gdal.gdal.GetLastErrorMsg
+                throw new RuntimeException(s"Failed to open dataset at path: $cleanPath; Error: $error")
+            }
+            dataset
+        } catch {
+            // No Dataset owns the copy, so releaseDataset never will: let it go here.
+            case NonFatal(e) =>
+                if (!isLocal) NodeFileManager.releaseLocal(readPath)
+                throw e
         }
-        dataset
     }
 
-    /** Release a Dataset and any associated vsimem or copied files; must be called when done with a Dataset. */
+    /** Release a Dataset and any associated vsimem or copied files; must be called when done with a Dataset.
+      * A listed file that is a node-file copy is released once (by its local path); any other is left alone. */
     def releaseDataset(ds: Dataset): Unit = {
         if (ds != null) {
             ds.FlushCache()
@@ -89,7 +99,7 @@ object RasterDriver {
             ds.delete()
             files.foreach(f => {
                 if (f.contains("/vsimem/")) gdal.Unlink(f)
-                else NodeFileManager.releaseRemote(f)
+                else NodeFileManager.releaseLocal(f)
             })
         }
     }

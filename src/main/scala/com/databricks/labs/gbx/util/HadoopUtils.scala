@@ -400,7 +400,7 @@ object HadoopUtils extends Logging {
             else
                 fromCandidates
         val toStage = if (siblings.isEmpty) Seq(headPath) else siblings
-        val tmpDir = java.nio.file.Files.createTempDirectory("gbx_ogr_schema_").toFile
+        val tmpDir = java.nio.file.Files.createTempDirectory(SchemaStagingPrefix).toFile
         val reader = new SchemaReader(steps)
         for (p <- toStage) {
             val local = toPosix(p)
@@ -422,6 +422,9 @@ object HadoopUtils extends Logging {
     /** Bytes one schema read can hold: a file is read into one byte array, and a `binaryFile` query's
       * `content` is capped at this (Spark's `ByteArrayMethods.MAX_ROUNDED_ARRAY_LENGTH`), just under 2 GiB. */
     private[util] val MaxSchemaReadBytes: Long = Int.MaxValue - 15L
+
+    /** Name prefix of the temp dirs schema staging writes copies into (see `discardSchemaCopy`). */
+    private val SchemaStagingPrefix = "gbx_ogr_schema_"
 
     /** The length of `local`: from the file system when this JVM can stat it, else from a `binaryFile`
       * listing (metadata only, the content is not read); None when neither tells. */
@@ -462,7 +465,7 @@ object HadoopUtils extends Logging {
                   "Unzip it and read the unzipped dataset (a .gdb folder is read file by file)."
             )
         }
-        val tmpDir = java.nio.file.Files.createTempDirectory("gbx_ogr_schema_").toFile
+        val tmpDir = java.nio.file.Files.createTempDirectory(SchemaStagingPrefix).toFile
         if (isGdbDir) {
             val outDir = new java.io.File(tmpDir, name)
             outDir.mkdirs()
@@ -479,6 +482,16 @@ object HadoopUtils extends Logging {
             val out = new java.io.File(tmpDir, name)
             java.nio.file.Files.write(out.toPath, readBytesForSchema(local, steps))
             out.getAbsolutePath
+        }
+    }
+
+    /** Deletes the temp copy `stageDatasetForSchemaSpark` (or `stageHeadForSchemaSpark`) made: the
+      * `gbx_ogr_schema_*` temp dir holding `local`, recursively. A path in any other dir is left alone. */
+    private[gbx] def discardSchemaCopy(local: String): Unit = {
+        val dir = java.nio.file.Paths.get(local).toAbsolutePath.normalize.getParent
+        val tmp = java.nio.file.Paths.get(System.getProperty("java.io.tmpdir")).toAbsolutePath.normalize
+        if (dir != null && dir.getParent == tmp && dir.getFileName.toString.startsWith(SchemaStagingPrefix)) {
+            NodeFilePathUtil.deleteRecursively(dir)
         }
     }
 

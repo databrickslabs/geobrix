@@ -226,9 +226,6 @@ object NodeFilePathUtil extends Logging {
         if (e == null) 0 else release(e)
     }
 
-    /** True while `localPath` is a copy this cache handed out and has not freed. */
-    private[util] def ownsLocal(localPath: String): Boolean = byLocal.containsKey(localPath)
-
     /** Test-visible: copies made for this remote (kept for the most recently copied remotes). */
     private[gbx] def copyCount(remotePath: String): Int =
         copyCounts.synchronized(copyCounts.getOrDefault(remotePath, 0))
@@ -237,7 +234,7 @@ object NodeFilePathUtil extends Logging {
         copyCounts.synchronized(copyCounts.put(remote, copyCounts.getOrDefault(remote, 0) + 1))
 
     /** Deletes `p` and everything under it, children first, without following links; never throws. */
-    private def deleteRecursively(p: Path): Unit =
+    private[util] def deleteRecursively(p: Path): Unit =
         try {
             if (Files.exists(p, LinkOption.NOFOLLOW_LINKS)) {
                 val walk = Files.walk(p)

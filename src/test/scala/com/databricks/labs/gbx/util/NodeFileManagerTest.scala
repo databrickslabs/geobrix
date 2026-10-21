@@ -328,6 +328,20 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
         }
     }
 
+    test("releaseRemote of a local copy path releases nothing; releaseLocal of it does") {
+        NodeFileManager.init(localConf())
+        withRemoteFile("rr_local.tif", "local".getBytes(StandardCharsets.UTF_8)) { f =>
+            val remote = HadoopUtils.cleanPath(f.toString)
+            val local = NodeFileManager.readRemote(remote)
+            NodeFileManager.releaseRemote(local) // a copy's local path is not a remote
+            withClue(s"releaseRemote($local) must not release the copy: ") { assert(Files.isRegularFile(Paths.get(local))) }
+            NodeFileManager.releaseLocal(local)
+            withClue(s"releaseLocal($local), ${Paths.get(local).getParent}: ") {
+                assert(!Files.exists(Paths.get(local).getParent))
+            }
+        }
+    }
+
     // ---- helpers ------------------------------------------------------------------------------------
 
     private def localConf(): SerializableConfiguration = new SerializableConfiguration(new Configuration())

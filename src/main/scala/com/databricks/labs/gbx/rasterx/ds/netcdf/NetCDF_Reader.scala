@@ -8,8 +8,10 @@ import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.connector.read.PartitionReader
 import org.apache.spark.sql.types.BinaryType
 import org.apache.spark.unsafe.types.UTF8String
-import org.gdal.gdal.gdal
+import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GA_ReadOnly
+
+import scala.util.control.NonFatal
 
 /** Reads one netcdf_gdal partition: opens its subdataset selector, splits into tiles, yields (source, tile). */
 class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[InternalRow] {
@@ -18,6 +20,9 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
 
     // Stage the .nc locally if remote (subdataset selectors are not plain paths, so
     // RasterDriver's own copyToLocal cannot recognize/stage them — do it explicitly).
+    // This one hold is released by the source Dataset: the tile iterator calls
+    // RasterDriver.releaseDataset on it when exhausted or at task end, and GDAL lists the
+    // staged .nc for a NETCDF:"...":var selector. So close() below releases nothing.
     private val isLocal = partition.filePath.startsWith("/") &&
         !partition.filePath.startsWith("/Volumes/") && !partition.filePath.startsWith("/dbfs/")
     private val localPath = if (isLocal) partition.filePath else NodeFileManager.readRemote(partition.filePath)
@@ -28,17 +33,25 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
 
     // A subdataset selector is not a filesystem path, so open it directly via gdal.Open —
     // RasterDriver.read would treat the NETCDF:"..." string as a remote path and try to stage it.
-    private val ds = {
-        val opened = gdal.Open(selector, GA_ReadOnly)
-        if (opened == null) {
-            throw new RuntimeException(s"Failed to open subdataset: $selector; Error: ${gdal.GetLastErrorMsg}")
-        }
-        opened
-    }
     // applyScale=true: decode CF scale_factor/add_offset to physical Float64 in WindowedExtract,
     // matching the light netcdf_gbx reader (xarray mask_and_scale=True). Heavy default is OFF;
     // only netcdf_gdal opts in, so other raster readers keep raw-copy behavior.
-    private val tilesIter = BalancedSubdivision.splitRasterIter(ds, Map("applyScale" -> "true"), partition.sizeInMB)
+    private var opened: Dataset = _
+    private val tilesIter =
+        try {
+            opened = gdal.Open(selector, GA_ReadOnly)
+            if (opened == null) {
+                throw new RuntimeException(s"Failed to open subdataset: $selector; Error: ${gdal.GetLastErrorMsg}")
+            }
+            BalancedSubdivision.splitRasterIter(opened, Map("applyScale" -> "true"), partition.sizeInMB)
+        } catch {
+            // No tile iterator owns the Dataset or the copy yet, and Spark never closes a reader whose
+            // constructor threw: let go of both here.
+            case NonFatal(e) =>
+                if (opened != null) opened.delete()
+                if (!isLocal) NodeFileManager.releaseLocal(localPath)
+                throw e
+        }
     RST_ExpressionUtil.addCleanupListener(tilesIter)
     private val hconf = partition.expressionConfig.hConf
     // The result-facing source keeps the ORIGINAL (remote) path, not the local staging copy.
@@ -53,7 +66,6 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
         InternalRow.fromSeq(Seq(UTF8String.fromString(srcSelector), tileRow))
     }
 
-    override def close(): Unit = {
-        if (!isLocal) NodeFileManager.releaseRemote(partition.filePath)
-    }
+    /** Releases nothing: the tile iterator releases the source Dataset, and with it the staged copy. */
+    override def close(): Unit = ()
 }

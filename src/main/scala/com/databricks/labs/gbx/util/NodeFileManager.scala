@@ -23,12 +23,10 @@ object NodeFileManager {
         NodeFilePathUtil.readLock(remotePath, conf)._1
     }
 
-    /** Releases one reader of the CURRENT copy of `remotePath`; may delete it at its last release. */
+    /** Releases one reader of the CURRENT copy of `remotePath`; may delete it at its last release. A
+      * copy's local path is not a remote: release a copy by its local path with `releaseLocal`. */
     def releaseRemote(remotePath: String): Unit = {
-        // Transitional, T12 removes this: RasterDriver.releaseDataset still passes LOCAL paths (GDAL's
-        // GetFileList), so a path this cache handed out is released as that copy, not as a remote.
-        if (NodeFilePathUtil.ownsLocal(remotePath)) NodeFilePathUtil.releaseByLocal(remotePath)
-        else NodeFilePathUtil.releaseByRemote(remotePath)
+        NodeFilePathUtil.releaseByRemote(remotePath)
     }
 
     /** Releases one reader of the copy that owns `localPath`; an unknown path is a no-op. */

@@ -332,4 +332,25 @@ class HadoopUtilsSchemaStagingTest extends PlanTest with SilentSparkSession {
         }
         e.getSuppressed.map(_.getMessage).mkString should include(copy.toString)
     }
+
+    test("discardSchemaCopy deletes a staged schema copy and leaves any other path alone") {
+        val zip = tmpDir().resolve("NYC_Sample.gdb.zip")
+        Files.write(zip, Array[Byte](9, 8, 7))
+        val stagedZip = Paths.get(HadoopUtils.stageDatasetForSchemaSpark(spark, zip.toString, Seq(refused, refused, queryStep)))
+        val gdb = Files.createDirectory(tmpDir().resolve("parcels.gdb"))
+        Files.write(gdb.resolve("a00000001.gdbtable"), "t1".getBytes)
+        val stagedGdb = Paths.get(HadoopUtils.stageDatasetForSchemaSpark(spark, gdb.toString))
+        for (staged <- Seq(stagedZip, stagedGdb)) {
+            Files.exists(staged) shouldBe true
+            HadoopUtils.discardSchemaCopy(staged.toString)
+            withClue(s"staging dir ${staged.getParent} after discardSchemaCopy($staged): ") {
+                Files.exists(staged.getParent) shouldBe false
+            }
+        }
+        // Not a schema-staging dir: the source zip and the .gdb folder itself stay.
+        HadoopUtils.discardSchemaCopy(zip.toString)
+        HadoopUtils.discardSchemaCopy(gdb.resolve("a00000001.gdbtable").toString)
+        Files.exists(zip) shouldBe true
+        Files.exists(gdb.resolve("a00000001.gdbtable")) shouldBe true
+    }
 }

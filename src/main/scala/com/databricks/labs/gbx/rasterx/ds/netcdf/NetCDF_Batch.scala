@@ -4,12 +4,15 @@ import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.RasterAccessors
 import com.databricks.labs.gbx.util.{HadoopUtils, NodeFileManager}
+import org.apache.spark.internal.Logging
 import org.apache.spark.sql.SparkSession
 import org.apache.spark.sql.connector.read.{Batch, InputPartition, PartitionReaderFactory, Scan}
 import org.apache.spark.sql.functions.{col, explode, udf}
 import org.apache.spark.sql.types.StructType
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants.GA_ReadOnly
+
+import scala.util.control.NonFatal
 
 /** Scan/Batch for netcdf_gdal: one partition per (file, grid-variable subdataset). */
 class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Scan with Batch {
@@ -43,8 +46,16 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                 // RST_ExpressionUtil.init, which NetCDF_Reader calls on its own executor path.
                 NodeFileManager.init(exprConfig.hConf)
                 GDALManager.init(exprConfig)
+                // One hold on the staged copy. releaseDataset(ds) below is its single release (GDAL
+                // lists the local .nc); before ds exists, a failed open releases it here instead.
                 val localPath = NodeFileManager.readRemote(path)
-                val ds = RasterDriver.read(localPath, Map.empty)
+                val ds =
+                    try RasterDriver.read(localPath, Map.empty)
+                    catch {
+                        case NonFatal(t) =>
+                            NodeFileManager.releaseLocal(localPath)
+                            throw t
+                    }
                 // Release ds + the staged local copy on EVERY exit path (success or a
                 // GDAL accessor throwing mid-enumeration). Executors process many
                 // granules per JVM, so leaking a Dataset/staged file per bad granule
@@ -114,16 +125,14 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
                 partitionsForFile
                 } finally {
                     RasterDriver.releaseDataset(ds)
-                    NodeFileManager.releaseRemote(path)
                 }
             } catch {
                 // A per-file enumeration failure must not silently vanish (a swallowed
-                // executor-side error here previously surfaced only as "zero rows"). Print
+                // executor-side error here previously surfaced only as "zero rows"). Log
                 // the cause so a misconfigured file/driver is diagnosable, then skip the
-                // file (one bad granule should not fail the whole scan).
-                case t: Throwable =>
-                    println(s"netcdf_gdal: subdataset enumeration failed for $path: " +
-                        s"${t.getClass.getName}: ${t.getMessage}")
+                // file (one bad granule should not fail the whole scan). Fatal errors propagate.
+                case NonFatal(t) =>
+                    NetCDF_Batch.warnSkipped(path, t)
                     Array.empty[(String, String)]
             }
         }
@@ -140,4 +149,13 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
 
     override def createReaderFactory(): PartitionReaderFactory =
         (partition: InputPartition) => new NetCDF_Reader(partition.asInstanceOf[NetCDF_Partition])
+}
+
+/** Logging for the enumeration UDF, kept on the companion so the UDF's closure never captures a Batch. */
+object NetCDF_Batch extends Logging {
+
+    /** Logs a granule the enumeration skips, with its cause. */
+    private[netcdf] def warnSkipped(path: String, cause: Throwable): Unit =
+        logWarning(s"netcdf_gdal: skipping $path, its subdataset enumeration failed", cause)
+
 }

@@ -65,14 +65,16 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
                 (HadoopUtils.stageHeadForSchemaSpark(sparkSession, headPath, files), false)
             }
 
-        val schemaOpt = OGR_SchemaInference
-            .inferSchemaImpl(
-              driverName,
-              localPath,
-              options.asCaseSensitiveMap().asScala.toMap
-            )
-
-        if (releaseAfter) NodeFileManager.releaseRemote(headPath)
+        val schemaOpt =
+            try {
+                OGR_SchemaInference.inferSchemaImpl(driverName, localPath, options.asCaseSensitiveMap().asScala.toMap)
+            } finally {
+                // Let go of the dataset copy even when inference throws: the one node-file hold
+                // stageDatasetOrFallBack took (released by its local path, the generation it read), or the
+                // fallback's temp copy, which nothing else uses.
+                if (releaseAfter) NodeFileManager.releaseLocal(localPath)
+                else if (isGdbLike) HadoopUtils.discardSchemaCopy(localPath)
+            }
 
         val headSchema = schemaOpt.getOrElse {
             throw new IllegalArgumentException(

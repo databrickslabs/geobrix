@@ -3,7 +3,9 @@ package com.databricks.labs.gbx.rasterx.ds
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.functions
-import com.databricks.labs.gbx.rasterx.gdal.GDALManager
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy, withScratchDir}
+import com.databricks.labs.gbx.util.{HadoopUtils, NodeFileManager}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
@@ -251,6 +253,42 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
                 Files.list(p).toList.asScala.foreach(Files.deleteIfExists)
                 Files.deleteIfExists(p)
             }
+        }
+    }
+
+    // The reader's one hold on a staged source is released by the source Dataset (GetFileList gives the
+    // local copy), so an outside holder of the same remote keeps its copy. A `file:` path is non-local.
+    test("N2 a gdal read of a shared .nc releases only its own hold") {
+        rasterx.functions.register(spark)
+        withNetCDFCopy { (dir, nc) =>
+            val hconf = ExpressionConfig(spark).hConf
+            NodeFileManager.init(hconf)
+            val path = s"file:${dir.toAbsolutePath}"
+            // The remote exactly as the gdal planner names it (listAllHadoopFiles), so the holder and the read
+            // share one cache entry.
+            val remote = HadoopUtils.listAllHadoopFiles(path, hconf, "").filter(_.endsWith(nc.getFileName.toString)).head
+            val before = entries()
+            val held = Paths.get(NodeFileManager.readRemote(remote))
+            try {
+                spark.read.format("gdal").load(path).count() should be > 0L
+                withClue(s"the outside holder's copy $held after the read: ") { Files.isRegularFile(held) shouldBe true }
+            } finally NodeFileManager.releaseLocal(held.toString)
+            withClue(s"generation dir ${held.getParent} after the holder released: ") {
+                Files.exists(held.getParent) shouldBe false
+            }
+            withClue("node-file cache entries left by the read: ") { entries().diff(before) shouldBe Set.empty[String] }
+        }
+    }
+
+    test("RasterDriver.read of a staged file GDAL cannot open frees the copy it took") {
+        GDALManager.init(ExpressionConfig(spark))
+        withScratchDir("gbx_gdal_bad_") { dir =>
+            val bad = dir.resolve("bad.tif")
+            Files.write(bad, garbage)
+            NodeFileManager.init(ExpressionConfig(spark).hConf)
+            val before = entries()
+            intercept[RuntimeException](RasterDriver.read(s"file:${bad.toAbsolutePath}", Map.empty))
+            withClue("node-file cache entries left by the failed open: ") { entries().diff(before) shouldBe Set.empty[String] }
         }
     }
 

@@ -4,6 +4,7 @@ import com.databricks.labs.gbx.gridx.grid.{BNG, CustomGridSystem, GridSystem, H3
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operator.{GDALWarp, OperatorOptions}
 import org.gdal.gdal.{Dataset, gdal}
+import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.{CoordinateTransformation, SpatialReference}
 import org.locationtech.jts.geom.Geometry
 
@@ -105,7 +106,7 @@ object RasterTessellate {
       * singleton.  Both are shared and MUST NOT be released.  A [[CustomGridSystem]] → a FRESH
       * SpatialReference at the grid's own `crsSrid` (traditional axis order): the caller MUST release
       * it (`.delete()`) when done — the covering iterator does so in `close()`, the centroid iterator
-      * right after the bbox is built.  Use [[isCustom]] to decide whether a release is owed. */
+      * through [[CentroidNatives]].  Use [[isCustom]] to decide whether a release is owed. */
     private def srForGrid(grid: GridSystem): SpatialReference =
         if (isBng(grid)) BngSR
         else if (isCustom(grid)) {
@@ -272,21 +273,210 @@ object RasterTessellate {
         }
     }
 
+    // ------------------------------------------------------------------------------------------------
+    // Centroid tessellation: assignment in row strips, chips read by window.
+    // ------------------------------------------------------------------------------------------------
+
+    /** Pixels per centroid-assignment strip (1 M), the cap the lightweight tier uses: each band's mask
+      * strip stays about 1 MB whatever the raster size. */
+    private val StripPixels = 1048576
+
+    /** Initial capacity of the per-cell tables; doubled as cells are found. */
+    private val InitialCells = 1024
+
+    /** Most pixels the centroid label table can index (a JVM array holds a little under Int.MaxValue). */
+    private val MaxCentroidPixels: Long = Int.MaxValue - 8L
+
+    /** Test seam: when positive, the centroid assignment strip height in rows, instead of [[centroidStripRows]]. */
+    @volatile private[operations] var centroidStripRowsOverride: Int = 0
+
+    /** Test seam: the tallest strip, in rows, that the last centroid assignment read. */
+    @volatile private[operations] var lastAssignmentMaxRows: Int = 0
+
+    /** Test seam: when set, thrown at the end of the centroid setup, once every native resource exists. */
+    @volatile private[operations] var centroidSetupFault: Throwable = null
+
+    /** Rows per centroid-assignment strip: at most [[StripPixels]] pixels, or one row if a single row is
+      * wider than that. When the source blocks are shorter, the strip is a whole number of blocks (at
+      * least one), so each block is decoded for one strip only. Same rule as the lightweight tier. */
+    private[operations] def centroidStripRows(xSize: Int, ySize: Int, blockYSize: Int): Int = {
+        var rows = math.max(1, math.min(ySize, StripPixels / xSize))
+        if (blockYSize > 0 && blockYSize < rows) rows -= rows % blockYSize
+        rows
+    }
+
+    /** Native resources one centroid tessellation owns until its iterator ends: the EPSG:27700 warp
+      * (`workDs`, owned when `reprojected`), the per-pixel transform `tf`, its inverse `tfInv`, and a
+      * fresh custom-grid SR (`gridSR`, owned when `ownsGridSR`). `close()` releases them once; later
+      * calls do nothing. Shared SRs (GDAL.WSG84, BngSR) are never released. */
+    private final class CentroidNatives(val workDs: Dataset, reprojected: Boolean) extends AutoCloseable {
+        var gridSR: SpatialReference = null
+        var ownsGridSR: Boolean = false
+        var tf: CoordinateTransformation = null
+        var tfInv: CoordinateTransformation = null
+        private var released = false
+
+        override def close(): Unit = synchronized {
+            if (!released) {
+                released = true
+                if (tf != null) tf.delete()
+                if (tfInv != null) tfInv.delete()
+                if (ownsGridSR && gridSR != null) gridSR.delete()
+                if (reprojected) RasterDriver.releaseDataset(workDs)
+            }
+        }
+    }
+
+    /** Pixel-to-cell assignment of one raster. `labels(p)` is the label of the cell holding source pixel
+      * `p` (row-major flat index; -1 = none). Labels `0 until count` are numbered in first-seen pixel
+      * order; label `k` is cell `cellIds(k)` with the inclusive pixel window rows `r0(k)..r1(k)`, columns
+      * `c0(k)..c1(k)`. `cellIndex` maps each cell met to its label (-1 for a cell the grid rejects). */
+    private final class CentroidAssignment(
+        val labels: Array[Int],
+        val count: Int,
+        val cellIds: Array[Long],
+        val r0: Array[Int],
+        val r1: Array[Int],
+        val c0: Array[Int],
+        val c1: Array[Int],
+        val cellIndex: mutable.LongMap[Int]
+    )
+
+    /** Assigns every valid pixel of `workDs` (valid in ANY band's mask) to the cell holding its centre,
+      * one row strip at a time ([[centroidStripRows]]). Only the mask bands of one strip are read; band
+      * values are read later, per chip window. Pixel centres go through the full geotransform `gt`, then
+      * `tf` into the grid CRS (null when the raster is already in it). Memory is the 4 B/px label table,
+      * one mask strip per band and five primitive per-cell tables. */
+    private def assignCentroids(
+        grid: GridSystem,
+        workDs: Dataset,
+        gt: Array[Double],
+        tf: CoordinateTransformation,
+        resolution: Int
+    ): CentroidAssignment = {
+        val xSize     = workDs.getRasterXSize
+        val ySize     = workDs.getRasterYSize
+        val bandCount = workDs.getRasterCount
+        val rows =
+            if (centroidStripRowsOverride > 0) math.min(centroidStripRowsOverride, ySize)
+            else centroidStripRows(xSize, ySize, workDs.GetRasterBand(1).GetBlockYSize())
+        val maskBands = Array.tabulate(bandCount)(b => workDs.GetRasterBand(b + 1).GetMaskBand())
+        val masks     = Array.fill(bandCount)(new Array[Byte](xSize * rows))
+        val labels    = new Array[Int](xSize * ySize)
+        java.util.Arrays.fill(labels, -1)
+
+        val cellIndex = new mutable.LongMap[Int]()
+        var cellIds   = new Array[Long](InitialCells)
+        var r0        = new Array[Int](InitialCells)
+        var r1        = new Array[Int](InitialCells)
+        var c0        = new Array[Int](InitialCells)
+        var c1        = new Array[Int](InitialCells)
+        var count     = 0
+        // The previous pixel's cell and label: neighbouring pixels mostly share a cell, which skips the lookup.
+        var lastCell  = 0L
+        var lastLabel = Int.MinValue // no previous pixel yet
+        var maxRows   = 0
+
+        var y0 = 0
+        while (y0 < ySize) {
+            val n = math.min(rows, ySize - y0)
+            var b = 0
+            while (b < bandCount) {
+                val rc = maskBands(b).ReadRaster(0, y0, xSize, n, masks(b))
+                if (rc != gdalconstConstants.CE_None) {
+                    throw new IllegalStateException(s"reading the band ${b + 1} mask, rows $y0..${y0 + n - 1}, failed: ${gdal.GetLastErrorMsg()}")
+                }
+                b += 1
+            }
+            if (n > maxRows) maxRows = n
+            var r = 0
+            while (r < n) {
+                val y        = y0 + r
+                val rowBase  = y * xSize
+                val stripRow = r * xSize
+                val yOff     = 0.5 + y
+                var x = 0
+                while (x < xSize) {
+                    var anyValid = false
+                    b = 0
+                    while (b < bandCount && !anyValid) { if (masks(b)(stripRow + x) != 0) anyValid = true; b += 1 }
+                    if (anyValid) {
+                        val xOff = 0.5 + x
+                        var cx   = gt(0) + xOff * gt(1) + yOff * gt(2)
+                        var cy   = gt(3) + xOff * gt(4) + yOff * gt(5)
+                        if (tf != null) {
+                            val p = tf.TransformPoint(cx, cy)
+                            cx = p(0)
+                            cy = p(1)
+                        }
+                        val cellId = grid.pointToCellID(cx, cy, resolution)
+                        val k =
+                            if (lastLabel != Int.MinValue && cellId == lastCell) lastLabel
+                            else {
+                                val found = cellIndex.getOrElse(cellId, Int.MinValue)
+                                val label =
+                                    if (found != Int.MinValue) found
+                                    else if (!isCellValid(grid, cellId)) {
+                                        cellIndex.update(cellId, -1)
+                                        -1
+                                    } else {
+                                        if (count == cellIds.length) {
+                                            val cap = math.min(count.toLong * 2, MaxCentroidPixels).toInt
+                                            cellIds = java.util.Arrays.copyOf(cellIds, cap)
+                                            r0 = java.util.Arrays.copyOf(r0, cap)
+                                            r1 = java.util.Arrays.copyOf(r1, cap)
+                                            c0 = java.util.Arrays.copyOf(c0, cap)
+                                            c1 = java.util.Arrays.copyOf(c1, cap)
+                                        }
+                                        cellIds(count) = cellId
+                                        r0(count) = y
+                                        r1(count) = y
+                                        c0(count) = x
+                                        c1(count) = x
+                                        cellIndex.update(cellId, count)
+                                        count += 1
+                                        count - 1
+                                    }
+                                lastCell = cellId
+                                lastLabel = label
+                                label
+                            }
+                        if (k >= 0) {
+                            labels(rowBase + x) = k
+                            r1(k) = y // rows are visited in order, so the last row seen is the largest
+                            if (x < c0(k)) c0(k) = x
+                            if (x > c1(k)) c1(k) = x
+                        }
+                    }
+                    x += 1
+                }
+                r += 1
+            }
+            y0 += n
+        }
+        lastAssignmentMaxRows = maxRows
+        new CentroidAssignment(labels, count, cellIds, r0, r1, c0, c1, cellIndex)
+    }
+
     /**
-      * Generic centroid tessellation. Reads all pixel values up front, assigns each valid pixel to
-      * the cell returned by [[GridSystem.pointToCellID]], then emits one chip per cell cropped to the
-      * bounding pixel window of its assigned pixels (window pixels assigned to other cells are nodata).
-      * BNG warps the raster to EPSG:27700 before reading so that pixel coordinates are already in the
-      * grid's native CRS. 4326-native grids (H3/quadbin) optionally reproject pixel centroids per-pixel
-      * when the raster CRS differs from 4326.
+      * Generic centroid tessellation. Assigns each valid pixel to the cell returned by
+      * [[GridSystem.pointToCellID]] for its centre ([[assignCentroids]], row strips into a primitive
+      * label table), then emits one chip per cell, in first-seen pixel order (row-major), cropped to the
+      * bounding pixel window of its assigned pixels and read from the raster by that window (window
+      * pixels assigned to other cells are nodata). BNG warps the raster to EPSG:27700 first so that pixel
+      * coordinates are already in the grid's native CRS. Other grids reproject pixel centres per pixel
+      * when the raster CRS differs from the grid CRS.
       *
-      * When `coverage == "complete"`, also emits a synthetic all-NoData chip for each covered cell
-      * (positive-area overlap, valid grid cell) that caught no pixel centroid: a 1x1 chip on the source
-      * pixel holding the cell's centroid (see [[centroidPixel]]). When `coverage == "sparse"`
-      * (default-equivalent to old centroid), only cells with >=1 assigned pixel are emitted.
+      * When `coverage == "complete"`, the assigned chips are followed by a synthetic all-NoData chip for
+      * each covered cell (positive-area overlap, valid grid cell) that caught no pixel centroid: a 1x1
+      * chip on the source pixel holding the cell's centroid (see [[centroidPixel]]). When
+      * `coverage == "sparse"`, only cells with >=1 assigned pixel are emitted.
       *
       * A band without a declared NoData blanks with [[GDAL.getNoDataConstant]] for its data type (the
       * same table the light tier uses), so a real 0 pixel is never mistaken for nodata.
+      *
+      * The BNG warp, the transforms and a custom grid SR ([[CentroidNatives]]) live until the iterator
+      * is exhausted or closed, and are released once; they are also released if setup fails.
       */
     private def tessellateGenericCentroidIter(
         grid: GridSystem,
@@ -298,150 +488,128 @@ object RasterTessellate {
         // BNG requires a pre-warp so pixel coordinates are in EPSG:27700 (the grid's native CRS).
         // Other grids, including a custom grid at 27700, use ds as-is.
         val (workDs, reprojected) = if (isBng(grid)) warpToBng(ds) else (ds, false)
+        val natives = new CentroidNatives(workDs, reprojected)
+        try {
+            val xSize = workDs.getRasterXSize
+            val ySize = workDs.getRasterYSize
+            require(
+              xSize.toLong * ySize <= MaxCentroidPixels,
+              s"centroid tessellation supports at most $MaxCentroidPixels pixels; the raster is $xSize x $ySize. " +
+                "Retile it first (gbx_rst_retile)."
+            )
+            val bandCount = workDs.getRasterCount
+            val dtype     = workDs.GetRasterBand(1).getDataType
+            val gt        = workDs.GetGeoTransform
+            val projWkt   = workDs.GetProjection()
+            val sourcePath = Option(workDs.GetFileList())
+                .flatMap(_.asScala.headOption.map(_.toString))
+                .getOrElse("unknown source path")
 
-        val xSize     = workDs.getRasterXSize
-        val ySize     = workDs.getRasterYSize
-        val nPix      = xSize * ySize
-        val bandCount = workDs.getRasterCount
-        val dtype     = workDs.GetRasterBand(1).getDataType
-        val gt        = workDs.GetGeoTransform
+            natives.gridSR = srForGrid(grid)
+            natives.ownsGridSR = isCustom(grid)
+            val gridSR = natives.gridSR
+            // For centroid+complete: the covered cells, kept against the raster footprint in the grid CRS.
+            val (completeBbox, completeCoveredCells): (Geometry, Array[Long]) =
+                if (coverage == "complete") {
+                    val b = BoundingBox.bbox(workDs, gridSR)
+                    (b, grid.coveringCandidateCells(b, resolution).toArray)
+                } else (null, Array.empty[Long])
+            // Per-pixel reprojection TARGET is the grid's OWN CRS (srForGrid), so pixel centroids are
+            // transformed into the grid CRS before pointToCellID for ANY grid CRS, consistent with the
+            // raster->grid path (which reprojects the raster to the grid CRS). BNG is pre-warped to its
+            // native 27700, so it needs no per-pixel transform. H3/quadbin: srForGrid is the shared WGS84
+            // SR, so the target stays 4326. Custom: a fresh SR built from grid.crsSrid.
+            val srcSR: SpatialReference = if (isBng(grid)) null else workDs.GetSpatialRef
+            val needsTransform = srcSR != null && srcSR.IsSame(gridSR) != 1
+            if (needsTransform) natives.tf = new CoordinateTransformation(srcSR, gridSR)
+            // The inverse (grid CRS -> working-raster CRS) moves a covered-but-empty cell's centroid onto
+            // the raster; only centroid+complete builds those chips.
+            if (needsTransform && coverage == "complete") natives.tfInv = new CoordinateTransformation(gridSR, srcSR)
 
-        // Capture projection WKT and source path before potentially releasing workDs (BNG case).
-        val projWkt = workDs.GetProjection()
-        val sourcePath = Option(workDs.GetFileList())
-            .flatMap(_.asScala.headOption.map(_.toString))
-            .getOrElse("unknown source path")
-
-        // For centroid+complete: capture the covering cells BEFORE releasing workDs.
-        val gridSR = srForGrid(grid)
-        val (completeBbox, completeCoveredCells): (Geometry, Array[Long]) =
-            if (coverage == "complete") {
-                val b = BoundingBox.bbox(workDs, gridSR)
-                (b, grid.coveringCandidateCells(b, resolution).toArray)
-            } else (null, Array.empty[Long])
-        // Per-pixel reprojection TARGET is the grid's OWN CRS (srForGrid), so pixel centroids are
-        // transformed into the grid CRS before pointToCellID for ANY grid CRS — consistent with the
-        // raster->grid path (which reprojects the raster to the grid CRS). BNG is pre-warped to its
-        // native 27700, so it needs no per-pixel transform (else null). H3/quadbin: srForGrid is the
-        // shared WGS84 SR, so the target stays 4326 and per-pixel results are unchanged (digest-neutral).
-        // Custom: srForGrid is a fresh SR built from grid.crsSrid. gridSR is reused (also the bbox SR
-        // above) as the transform target and released below (only when it is a fresh custom SR).
-        val srcSR: SpatialReference = if (isBng(grid)) null else workDs.GetSpatialRef
-        val needsTransform = srcSR != null && srcSR.IsSame(gridSR) != 1
-        val tf: CoordinateTransformation = if (needsTransform) new CoordinateTransformation(srcSR, gridSR) else null
-        // The inverse (grid CRS -> working-raster CRS) moves a covered-but-empty cell's centroid onto
-        // the raster; only centroid+complete builds those chips. Created and released together with tf.
-        val tfInv: CoordinateTransformation =
-            if (needsTransform && coverage == "complete") new CoordinateTransformation(gridSR, srcSR) else null
-
-        // Read every band's values + mask once; assign each valid pixel (by flat index) to its cell.
-        val bandVals   = new Array[Array[Double]](bandCount)
-        val bandMask   = new Array[Array[Byte]](bandCount)
-        val bandNoData = new Array[Double](bandCount)
-        var bi = 0
-        while (bi < bandCount) {
-            val band = workDs.GetRasterBand(bi + 1)
-            val vals = new Array[Double](nPix)
-            val mask = new Array[Byte](nPix)
-            band.ReadRaster(0, 0, xSize, ySize, vals)
-            band.GetMaskBand().ReadRaster(0, 0, xSize, ySize, mask)
-            bandVals(bi) = vals
-            bandMask(bi) = mask
-            val nd = new Array[java.lang.Double](1)
-            band.GetNoDataValue(nd)
-            bandNoData(bi) = if (nd(0) != null) nd(0).doubleValue() else GDAL.getNoDataConstant(dtype)
-            bi += 1
-        }
-
-        // cell -> flat pixel indices; all valid pixels assigned to exactly one cell.
-        val cellPixels = new mutable.LongMap[mutable.ArrayBuffer[Int]]()
-        var y = 0
-        var idx = 0
-        while (y < ySize) {
-            var x = 0
-            while (x < xSize) {
-                var anyValid = false
-                var b = 0
-                while (b < bandCount && !anyValid) { if (bandMask(b)(idx) != 0) anyValid = true; b += 1 }
-                if (anyValid) {
-                    val xOff = 0.5 + x
-                    val yOff = 0.5 + y
-                    val xGeo = gt(0) + xOff * gt(1) + yOff * gt(2)
-                    val yGeo = gt(3) + xOff * gt(4) + yOff * gt(5)
-                    val (cx, cy) = if (tf != null) {
-                        val p = tf.TransformPoint(xGeo, yGeo)
-                        (p(0), p(1))
-                    } else (xGeo, yGeo)
-                    val cellId = grid.pointToCellID(cx, cy, resolution)
-                    if (isCellValid(grid, cellId))
-                        cellPixels.getOrElseUpdate(cellId, new mutable.ArrayBuffer[Int]) += idx
-                }
-                idx += 1
-                x += 1
-            }
-            y += 1
-        }
-
-        // For complete coverage: synthetic cells (valid, covered, but no centroid pixel assigned), each
-        // with the source pixel its 1x1 chip sits on, resolved here while tfInv is still alive.
-        val syntheticCells: Array[(Long, Int, Int)] = if (coverage == "complete") {
-            lazy val invGt = {
-                val inv = new Array[Double](6)
-                require(gdal.InvGeoTransform(gt, inv) == 1, s"raster geotransform ${gt.mkString(",")} is not invertible")
-                inv
-            }
-            completeCoveredCells.iterator
-                .filter(cellId => isCellValid(grid, cellId) && !cellPixels.contains(cellId))
-                .map(cellId => (cellId, grid.cellIdToGeometry(cellId)))
-                .filter { case (_, cellGeom) => hasPositiveAreaOverlap(cellGeom, completeBbox) }
-                .map { case (cellId, cellGeom) =>
-                    val (col, row) = centroidPixel(cellGeom, tfInv, invGt, xSize, ySize)
-                    (cellId, col, row)
-                }
-                .toArray
-        } else Array.empty[(Long, Int, Int)]
-
-        // For BNG the working dataset is a temporary warp; release it once all pixels are read.
-        if (reprojected) RasterDriver.releaseDataset(workDs)
-        // Release the per-pixel transform, its inverse and the fresh per-call custom grid SR; all are
-        // done being used (tf in the pixel loop above, tfInv for the synthetic placements; gridSR in the
-        // bbox and as the transform target/source). Shared SRs (GDAL.WSG84 for H3/quadbin, BngSR for
-        // BNG) are never released.
-        if (tf != null) tf.delete()
-        if (tfInv != null) tfInv.delete()
-        if (isCustom(grid)) gridSR.delete()
-
-        val gridName = grid.name.toLowerCase
-        val cellIter = cellPixels.iterator
-        var synIdx   = 0
-
-        new Iterator[(Any, Dataset, Map[String, String])] with AutoCloseable {
-            private var closed = false
-
-            override def hasNext: Boolean = !closed && (cellIter.hasNext || synIdx < syntheticCells.length)
-
-            override def next(): (Any, Dataset, Map[String, String]) = {
-                val tile = if (cellIter.hasNext) {
-                    val (cellId, pixIdx) = cellIter.next()
-                    buildGenericCentroidChip(
-                      grid, gridName, projWkt, sourcePath, options, cellId, pixIdx,
-                      xSize, bandCount, dtype, gt, bandVals, bandNoData
-                    )
-                } else {
-                    // Synthetic all-NoData chip for a covered cell with no centroid pixel.
-                    val (cellId, col, row) = syntheticCells(synIdx)
-                    synIdx += 1
-                    buildSyntheticEmptyChip(
-                      grid, gridName, projWkt, sourcePath, options, cellId, col, row,
-                      bandCount, dtype, gt, bandNoData
-                    )
-                }
-                if (!hasNext) close()
-                tile
+            val bandNoData = Array.tabulate(bandCount) { bi =>
+                val nd = new Array[java.lang.Double](1)
+                workDs.GetRasterBand(bi + 1).GetNoDataValue(nd)
+                if (nd(0) != null) nd(0).doubleValue() else GDAL.getNoDataConstant(dtype)
             }
 
-            override def close(): Unit = { closed = true }
+            val assigned = assignCentroids(grid, workDs, gt, natives.tf, resolution)
+
+            // For complete coverage: synthetic cells (valid, covered, but no centroid pixel assigned), each
+            // with the source pixel its 1x1 chip sits on.
+            val syntheticCells: Array[(Long, Int, Int)] = if (coverage == "complete") {
+                lazy val invGt = {
+                    val inv = new Array[Double](6)
+                    require(gdal.InvGeoTransform(gt, inv) == 1, s"raster geotransform ${gt.mkString(",")} is not invertible")
+                    inv
+                }
+                completeCoveredCells.iterator
+                    .filter(cellId => isCellValid(grid, cellId) && !assigned.cellIndex.contains(cellId))
+                    .map(cellId => (cellId, grid.cellIdToGeometry(cellId)))
+                    .filter { case (_, cellGeom) => hasPositiveAreaOverlap(cellGeom, completeBbox) }
+                    .map { case (cellId, cellGeom) =>
+                        val (col, row) = centroidPixel(cellGeom, natives.tfInv, invGt, xSize, ySize)
+                        (cellId, col, row)
+                    }
+                    .toArray
+            } else Array.empty[(Long, Int, Int)]
+
+            if (centroidSetupFault != null) throw centroidSetupFault
+            val ctx = ChipContext(grid, grid.name.toLowerCase, projWkt, sourcePath, options, bandCount, dtype, gt, bandNoData)
+            new CentroidChipIterator(ctx, natives, assigned, syntheticCells, xSize)
+        } catch {
+            case t: Throwable =>
+                natives.close()
+                throw t
         }
+    }
+
+    /** Emits the assigned chips (labels `0 until count`, first-seen pixel order), then the synthetic
+      * empties in `syntheticCells` order. Assigned chips read their window from `natives.workDs`, so the
+      * natives and the label table are held until the iterator is exhausted (including a tessellation
+      * with no chips at all) or closed; `close()` is idempotent. */
+    private final class CentroidChipIterator(
+        ctx: ChipContext,
+        natives: CentroidNatives,
+        private var assigned: CentroidAssignment,
+        syntheticCells: Array[(Long, Int, Int)],
+        xSize: Int
+    ) extends Iterator[(Any, Dataset, Map[String, String])]
+          with AutoCloseable {
+        private var closed = false
+        private var k      = 0
+        private var synIdx = 0
+
+        /** Releases everything as soon as the last chip has been handed out. */
+        private def closeIfExhausted(): Unit =
+            if (!closed && k >= assigned.count && synIdx >= syntheticCells.length) close()
+
+        override def hasNext: Boolean = {
+            closeIfExhausted()
+            !closed
+        }
+
+        override def next(): (Any, Dataset, Map[String, String]) = {
+            if (!hasNext) throw new NoSuchElementException("the centroid tessellation has no more chips")
+            val tile = if (k < assigned.count) {
+                val t = buildGenericCentroidChip(ctx, natives.workDs, assigned, k, xSize)
+                k += 1
+                t
+            } else {
+                // Synthetic all-NoData chip for a covered cell with no centroid pixel.
+                val (cellId, col, row) = syntheticCells(synIdx)
+                synIdx += 1
+                buildSyntheticEmptyChip(ctx, cellId, col, row)
+            }
+            closeIfExhausted()
+            tile
+        }
+
+        override def close(): Unit =
+            if (!closed) {
+                closed = true
+                assigned = null
+                natives.close()
+            }
     }
 
     /** Source pixel `(col, row)` that a covered-but-empty cell's 1x1 chip sits on: the planar centroid of
@@ -467,152 +635,128 @@ object RasterTessellate {
         (math.min(math.max(col, 0.0), xSize - 1.0).toInt, math.min(math.max(row, 0.0), ySize - 1.0).toInt)
     }
 
-    /** Creates the /vsimem GTiff for one centroid chip: `w` x `h` pixels whose top-left is source pixel
-      * (`col`, `row`). The geotransform is the source's offset to that pixel (rotation and pixel-size
-      * terms kept, so rotated and south-up rasters stay on the source grid). Returns (path, dataset). */
-    private def createChip(
+    /** Per-call values shared by every centroid chip (assigned and synthetic) of one tessellation. */
+    private final case class ChipContext(
+        grid: GridSystem,
         gridName: String,
-        cellId: Long,
-        w: Int,
-        h: Int,
-        col: Int,
-        row: Int,
+        projWkt: String,
+        sourcePath: String,
+        options: Map[String, String],
         bandCount: Int,
         dtype: Int,
         gt: Array[Double],
-        projWkt: String
-    ): (String, Dataset) = {
+        bandNoData: Array[Double]
+    )
+
+    /** Creates the /vsimem GTiff for one centroid chip: `w` x `h` pixels whose top-left is source pixel
+      * (`col`, `row`). The geotransform is the source's offset to that pixel (rotation and pixel-size
+      * terms kept, so rotated and south-up rasters stay on the source grid). Returns (path, dataset). */
+    private def createChip(ctx: ChipContext, cellId: Long, w: Int, h: Int, col: Int, row: Int): (String, Dataset) = {
+        val gt         = ctx.gt
         val uuid       = java.util.UUID.randomUUID().toString.replace("-", "_")
-        val rasterPath = s"/vsimem/${gridName}_centroid_${cellId}_$uuid.tif"
-        val out = GDALManager.gtiffDriver().Create(rasterPath, w, h, bandCount, dtype)
+        val rasterPath = s"/vsimem/${ctx.gridName}_centroid_${cellId}_$uuid.tif"
+        val out = GDALManager.gtiffDriver().Create(rasterPath, w, h, ctx.bandCount, ctx.dtype)
         out.SetGeoTransform(
           Array(gt(0) + col * gt(1) + row * gt(2), gt(1), gt(2), gt(3) + col * gt(4) + row * gt(5), gt(4), gt(5))
         )
-        out.SetProjection(projWkt)
+        out.SetProjection(ctx.projWkt)
         (rasterPath, out)
     }
 
     /** Tile metadata shared by every centroid chip (assigned and synthetic). */
-    private def chipMeta(
-        gridName: String,
-        rendered: Any,
-        rasterPath: String,
-        sourcePath: String,
-        options: Map[String, String]
-    ): Map[String, String] =
+    private def chipMeta(ctx: ChipContext, rendered: Any, rasterPath: String): Map[String, String] =
         Map(
           "path"         -> rasterPath,
-          "parentPath"   -> options.getOrElse("path", sourcePath),
+          "parentPath"   -> ctx.options.getOrElse("path", ctx.sourcePath),
           "driver"       -> "GTiff",
           "format"       -> "GTiff",
-          "last_command" -> s"${gridName}_centroid_tessellate cell=$rendered",
+          "last_command" -> s"${ctx.gridName}_centroid_tessellate cell=$rendered",
           "last_error"   -> "",
-          "all_parents"  -> s"$sourcePath;${options.getOrElse("all_parents", "")}",
+          "all_parents"  -> s"${ctx.sourcePath};${ctx.options.getOrElse("all_parents", "")}",
           "size"         -> "-1",
-          "compression"  -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
+          "compression"  -> ctx.options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped"     -> "false",
           "isSubset"     -> "false"
         )
 
-    /** Builds one centroid chip cropped to the bounding pixel window of the cell's assigned pixels
-      * (`pixIdx`: flat source indices, non-empty). The window starts as nodata and the assigned pixels
-      * are restored to their source values, so window pixels assigned to other cells stay nodata.
-      * Works for H3, quadbin, BNG and custom grids because the grid-specific rendering
-      * ([[GridSystem.renderCellId]]) and name are supplied as parameters. */
+    /** Builds the chip of label `k`: its pixel window, read from `workDs` band by band, with the window
+      * pixels assigned to other cells (or to none) set to nodata. Works for H3, quadbin, BNG and custom
+      * grids because the grid-specific rendering ([[GridSystem.renderCellId]]) and name come from `ctx`.
+      * The chip is released if building it fails. */
     private def buildGenericCentroidChip(
-        grid: GridSystem,
-        gridName: String,
-        projWkt: String,
-        sourcePath: String,
-        options: Map[String, String],
-        cellId: Long,
-        pixIdx: mutable.ArrayBuffer[Int],
-        xSize: Int,
-        bandCount: Int,
-        dtype: Int,
-        gt: Array[Double],
-        bandVals: Array[Array[Double]],
-        bandNoData: Array[Double]
+        ctx: ChipContext,
+        workDs: Dataset,
+        a: CentroidAssignment,
+        k: Int,
+        xSize: Int
     ): (Any, Dataset, Map[String, String]) = {
-        // Window (c0..c1, r0..r1) = bounding box of the assigned pixels.
-        val n  = pixIdx.length
-        var c0 = Int.MaxValue
-        var c1 = Int.MinValue
-        var r0 = Int.MaxValue
-        var r1 = Int.MinValue
-        var i  = 0
-        while (i < n) {
-            val p = pixIdx(i)
-            val r = p / xSize
-            val c = p - r * xSize
-            if (c < c0) c0 = c
-            if (c > c1) c1 = c
-            if (r < r0) r0 = r
-            if (r > r1) r1 = r
-            i += 1
+        val (c0, r0) = (a.c0(k), a.r0(k))
+        val w        = a.c1(k) - c0 + 1
+        val h        = a.r1(k) - r0 + 1
+        val cellId   = a.cellIds(k)
+        val labels   = a.labels
+        val rendered = ctx.grid.renderCellId(cellId)
+        val (rasterPath, out) = createChip(ctx, cellId, w, h, c0, r0)
+        try {
+            val buf = new Array[Double](w * h)
+            var b = 0
+            while (b < ctx.bandCount) {
+                val nd = ctx.bandNoData(b)
+                val rc = workDs.GetRasterBand(b + 1).ReadRaster(c0, r0, w, h, buf)
+                if (rc != gdalconstConstants.CE_None) {
+                    throw new IllegalStateException(s"reading the band ${b + 1} window of cell $rendered failed: ${gdal.GetLastErrorMsg()}")
+                }
+                var j = 0
+                var r = 0
+                while (r < h) {
+                    var p = (r0 + r) * xSize + c0
+                    var c = 0
+                    while (c < w) {
+                        if (labels(p) != k) buf(j) = nd
+                        p += 1
+                        j += 1
+                        c += 1
+                    }
+                    r += 1
+                }
+                val db = out.GetRasterBand(b + 1)
+                db.SetNoDataValue(nd)
+                // Implicit Float64 buffer overload: GDAL converts double[] to the band's native dtype on write.
+                db.WriteRaster(0, 0, w, h, buf)
+                b += 1
+            }
+            out.SetMetadataItem("RASTERX_CELL_ID", rendered.toString)
+            out.FlushCache()
+        } catch {
+            case t: Throwable =>
+                RasterDriver.releaseDataset(out)
+                throw t
         }
-        val w = c1 - c0 + 1
-        val h = r1 - r0 + 1
-        // Offset of each assigned pixel inside the w x h window buffer.
-        val local = new Array[Int](n)
-        i = 0
-        while (i < n) {
-            val p = pixIdx(i)
-            val r = p / xSize
-            local(i) = (r - r0) * w + (p - r * xSize - c0)
-            i += 1
-        }
-
-        val rendered = grid.renderCellId(cellId)
-        val (rasterPath, out) = createChip(gridName, cellId, w, h, c0, r0, bandCount, dtype, gt, projWkt)
-        val buf = new Array[Double](w * h)
-        var b = 0
-        while (b < bandCount) {
-            val nd  = bandNoData(b)
-            val src = bandVals(b)
-            java.util.Arrays.fill(buf, nd) // blank the window to nodata...
-            i = 0
-            while (i < n) { buf(local(i)) = src(pixIdx(i)); i += 1 } // ...then restore assigned pixels
-            val db = out.GetRasterBand(b + 1)
-            db.SetNoDataValue(nd)
-            // Implicit Float64 buffer overload: GDAL converts double[] to the band's native dtype on write.
-            db.WriteRaster(0, 0, w, h, buf)
-            b += 1
-        }
-        out.SetMetadataItem("RASTERX_CELL_ID", rendered.toString)
-        out.FlushCache()
-        (rendered, out, chipMeta(gridName, rendered, rasterPath, sourcePath, options))
+        (rendered, out, chipMeta(ctx, rendered, rasterPath))
     }
 
     /** Builds the 1x1 all-NoData chip of a covered cell that caught no pixel centroid (used by
       * `centroid+complete`), on source pixel (`col`, `row`) from [[centroidPixel]]. Every band holds
-      * its nodata value. */
-    private def buildSyntheticEmptyChip(
-        grid: GridSystem,
-        gridName: String,
-        projWkt: String,
-        sourcePath: String,
-        options: Map[String, String],
-        cellId: Long,
-        col: Int,
-        row: Int,
-        bandCount: Int,
-        dtype: Int,
-        gt: Array[Double],
-        bandNoData: Array[Double]
-    ): (Any, Dataset, Map[String, String]) = {
-        val rendered = grid.renderCellId(cellId)
-        val (rasterPath, out) = createChip(gridName, cellId, 1, 1, col, row, bandCount, dtype, gt, projWkt)
-        var b = 0
-        while (b < bandCount) {
-            val db = out.GetRasterBand(b + 1)
-            db.SetNoDataValue(bandNoData(b))
-            db.WriteRaster(0, 0, 1, 1, Array(bandNoData(b)))
-            b += 1
+      * its nodata value. The chip is released if building it fails. */
+    private def buildSyntheticEmptyChip(ctx: ChipContext, cellId: Long, col: Int, row: Int): (Any, Dataset, Map[String, String]) = {
+        val rendered = ctx.grid.renderCellId(cellId)
+        val (rasterPath, out) = createChip(ctx, cellId, 1, 1, col, row)
+        try {
+            var b = 0
+            while (b < ctx.bandCount) {
+                val db = out.GetRasterBand(b + 1)
+                db.SetNoDataValue(ctx.bandNoData(b))
+                db.WriteRaster(0, 0, 1, 1, Array(ctx.bandNoData(b)))
+                b += 1
+            }
+            out.SetMetadataItem("RASTERX_CELL_ID", rendered.toString)
+            out.FlushCache()
+        } catch {
+            case t: Throwable =>
+                RasterDriver.releaseDataset(out)
+                throw t
         }
-        out.SetMetadataItem("RASTERX_CELL_ID", rendered.toString)
-        out.FlushCache()
-        (rendered, out, chipMeta(gridName, rendered, rasterPath, sourcePath, options))
+        (rendered, out, chipMeta(ctx, rendered, rasterPath))
     }
 
     // ------------------------------------------------------------------------------------------------

@@ -5,7 +5,7 @@ import com.databricks.labs.gbx.gridx.grid.H3
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
-import org.gdal.gdal.Dataset
+import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.{CoordinateTransformation, SpatialReference, osrConstants}
 import org.scalatest.BeforeAndAfterAll
@@ -24,7 +24,12 @@ import scala.collection.mutable
   *  - a covered cell that caught no pixel (`coverage = "complete"`) is a 1x1 all-NoData chip on the
   *    clamped pixel holding the cell polygon's centroid;
   *  - a source without NoData blanks with the dtype constant (`GDAL.getNoDataConstant`), so real 0s
-  *    survive and float chips carry `Float.MinValue`, not NaN.
+  *    survive and float chips carry `Float.MinValue`, not NaN;
+  *  - assignment runs in row strips of at most 1M pixels; the strip height changes nothing, and
+  *    assigned chips come in first-seen pixel order, before the synthetic empties;
+  *  - the BNG warp lives until the iterator is exhausted or closed, and is released once, also when
+  *    setup fails;
+  *  - on a reprojected (UTM) raster, empties sit on the cell centroid moved into the raster CRS.
   *
   * Fixtures are synthesized in /vsimem (or MEM) so every attribute under test is controlled.
   */
@@ -330,5 +335,183 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         } finally RasterDriver.releaseDataset(src)
         assert(srcValid == Seq(65536L, 32768L, 65536L), s"fixture valid counts $srcValid")
         assert(chipValid.toSeq == srcValid, s"chip valid counts ${chipValid.toSeq} != source $srcValid")
+    }
+
+    // ---------------------------------------------------------------------------------------------
+    // Bounded-memory assignment: row strips, native lifetimes, empty placement under reprojection.
+    // ---------------------------------------------------------------------------------------------
+
+    /** EPSG:4326 over Great Britain (lon -1.20..-1.00, lat 52.00..52.20) at `n` x `n` pixels. */
+    private def gtGb(n: Int): Array[Double] = Array(-1.20, 0.2 / n, 0.0, 52.20, 0.0, -0.2 / n)
+
+    /** BNG resolution index 3 (1 km cells). */
+    private val BngRes = 3
+
+    /** Every chip as plain values, in emission order: (cell, width, height, geotransform, band-1 values). */
+    private def snapshot(src: Dataset, coverage: String): Seq[(Long, Int, Int, Seq[Double], Seq[Double])] = {
+        val out = mutable.ArrayBuffer.empty[(Long, Int, Int, Seq[Double], Seq[Double])]
+        forEachChip(src, coverage) { (cell, chip) =>
+            out += ((cell, chip.getRasterXSize, chip.getRasterYSize, chip.GetGeoTransform.toSeq, readBand(chip, 1)._1.toSeq))
+        }
+        out.toSeq
+    }
+
+    /** Runs `body` with the centroid assignment strip height forced to `rows`. */
+    private def withStripRows[T](rows: Int)(body: => T): T = {
+        RasterTessellate.centroidStripRowsOverride = rows
+        try body finally RasterTessellate.centroidStripRowsOverride = 0
+    }
+
+    /** H3 cells of the valid pixels of band 1 of an EPSG:4326 raster, in first-seen (row-major) order. */
+    private def firstSeenCells(src: Dataset): Seq[Long] = {
+        val (xSize, ySize) = (src.getRasterXSize, src.getRasterYSize)
+        val gt = src.GetGeoTransform
+        val mask = readBand(src, 1)._2
+        val seen = mutable.LinkedHashSet.empty[Long]
+        var p = 0
+        while (p < xSize * ySize) {
+            if (mask(p) != 0) {
+                val (r, c) = (p / xSize, p % xSize)
+                seen += H3.pointToCellID(gt(0) + (c + 0.5) * gt(1) + (r + 0.5) * gt(2), gt(3) + (c + 0.5) * gt(4) + (r + 0.5) * gt(5), Res)
+            }
+            p += 1
+        }
+        seen.toSeq
+    }
+
+    /** Number of entries at the top of /vsimem/ (each dataset this process holds in memory). */
+    private def vsimemCount(): Int = Option(gdal.ReadDir("/vsimem/")).map(_.size).getOrElse(0)
+
+    test("(g) row strips of 64 and 100 rows give the same chips, in first-seen pixel order, as one strip") {
+        val n = 1024
+        val src = buildRamp(mem("g.tif"), n, n, 1, gdalconstConstants.GDT_Float32, gt4326(n), Some(NoData))
+        fillRect(src, 1, 300, 200, 150, 500, NoData)
+        try {
+            assert(RasterTessellate.centroidStripRows(n, n, src.GetRasterBand(1).GetBlockYSize) == n,
+                "a 1024 x 1024 raster should be assigned in a single strip by default")
+            val one = snapshot(src, "complete")
+            Seq(64, 100).foreach { rows =>
+                val strips = withStripRows(rows)(snapshot(src, "complete"))
+                assert(strips.length == one.length, s"$rows-row strips emit ${strips.length} chips, one strip ${one.length}")
+                val firstDiff = strips.indices.find(i => strips(i) != one(i))
+                assert(firstDiff.isEmpty, s"$rows-row strips differ from one strip at chip ${firstDiff.getOrElse(-1)}")
+                assert(RasterTessellate.lastAssignmentMaxRows == rows, s"max strip rows ${RasterTessellate.lastAssignmentMaxRows}")
+            }
+            withStripRows(64)(checkOracle(src, None))
+            // Assigned chips come in first-seen pixel order (row-major); synthetic empties follow them.
+            val sparse = snapshot(src, "sparse").map(_._1)
+            assert(sparse == firstSeenCells(src), "assigned chips are not in first-seen pixel order")
+            assert(one.take(sparse.length).map(_._1) == sparse, "complete coverage must emit the assigned chips first")
+            assert(one.drop(sparse.length).forall(_._5.forall(_ == NoData)), "chips after the assigned ones must be empties")
+        } finally RasterDriver.releaseDataset(src)
+    }
+
+    test("(h) assignment reads at most 1M pixels per strip, in whole source blocks") {
+        val n = 2048
+        val src = buildRamp(mem("h.tif"), n, n, 1, gdalconstConstants.GDT_Float32, gt4326(n))
+        RasterTessellate.lastAssignmentMaxRows = 0
+        try {
+            val chips = forEachChip(src, "sparse")((_, _) => ())
+            assert(chips > 1, s"expected several chips, got $chips")
+            val maxRows = RasterTessellate.lastAssignmentMaxRows
+            assert(maxRows > 0 && maxRows <= 512, s"assignment read strips of $maxRows rows of a ${n}x$n raster")
+        } finally RasterDriver.releaseDataset(src)
+
+        // rows = max(1, min(ySize, 1M / xSize)), rounded down to whole blocks when the block is shorter.
+        assert(RasterTessellate.centroidStripRows(2048, 2048, 1) == 512)
+        assert(RasterTessellate.centroidStripRows(2048, 2048, 384) == 384)
+        assert(RasterTessellate.centroidStripRows(2048, 2048, 512) == 512)
+        assert(RasterTessellate.centroidStripRows(2048, 2048, 4096) == 512)
+        assert(RasterTessellate.centroidStripRows(2048, 100, 1) == 100)
+        assert(RasterTessellate.centroidStripRows(3000000, 10, 1) == 1)
+    }
+
+    test("(i) BNG on an EPSG:4326 raster: the warp lives until the iterator ends and is released once") {
+        val src = buildRamp(mem("i.tif"), 256, 256, 1, gdalconstConstants.GDT_Float32, gtGb(256))
+        try {
+            val before = vsimemCount()
+            val it = RasterTessellate.tessellateBngIter(src, Map.empty[String, String], BngRes, "centroid", "complete")
+            assert(vsimemCount() > before, "the EPSG:27700 warp should be open while chips are produced")
+            var chips = 0
+            while (it.hasNext) {
+                val (_, chip, _) = it.next()
+                RasterDriver.releaseDataset(chip)
+                chips += 1
+            }
+            assert(chips > 1, s"expected several chips, got $chips")
+            assert(vsimemCount() == before, "the warp must be released when the iterator is exhausted")
+            it.asInstanceOf[AutoCloseable].close()
+            it.asInstanceOf[AutoCloseable].close()
+            assert(vsimemCount() == before)
+
+            // Abandoned after two chips (a cancelled task): close() releases the warp, and is idempotent.
+            val it2 = RasterTessellate.tessellateBngIter(src, Map.empty[String, String], BngRes, "centroid", "complete")
+            (1 to 2).foreach(_ => RasterDriver.releaseDataset(it2.next()._2))
+            it2.asInstanceOf[AutoCloseable].close()
+            it2.asInstanceOf[AutoCloseable].close()
+            assert(!it2.hasNext, "a closed iterator has no more chips")
+            assert(vsimemCount() == before, "close() must release the warp of an abandoned iterator")
+        } finally RasterDriver.releaseDataset(src)
+
+        // No chips at all (all NoData, sparse): the first hasNext already releases the warp.
+        val empty = buildRamp(mem("i0.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32, gtGb(64), Some(NoData))
+        fillRect(empty, 1, 0, 0, 64, 64, NoData)
+        try {
+            val before = vsimemCount()
+            val it = RasterTessellate.tessellateBngIter(empty, Map.empty[String, String], BngRes, "centroid", "sparse")
+            assert(!it.hasNext, "an all-NoData raster has no centroid chips")
+            assert(vsimemCount() == before, "an iterator with no chips must release the warp once it reports none")
+        } finally RasterDriver.releaseDataset(empty)
+    }
+
+    test("(j) reprojected empties (UTM): 1x1 NoData chips on the cell centroid moved into the raster CRS") {
+        val n = 512
+        val src = buildRamp(mem("j.tif"), n, n, 1, gdalconstConstants.GDT_Float32, GtUtm, Some(NoData), epsg = 32618)
+        // A 7.7 km NoData square: several res-7 cells (about 2.6 km across) lie wholly inside it.
+        fillRect(src, 1, 128, 128, 256, 256, NoData)
+        val inv = invert(GtUtm)
+        val (wgs, utm) = (epsgSR(4326), epsgSR(32618))
+        val toUtm = new CoordinateTransformation(wgs, utm)
+        var (empties, interior) = (0, 0)
+        try {
+            forEachChip(src, "complete") { (cell, chip) =>
+                val (vals, mask) = readBand(chip, 1)
+                if (!mask.exists(_ != 0)) {
+                    empties += 1
+                    assert(chip.getRasterXSize == 1 && chip.getRasterYSize == 1,
+                        s"empty cell $cell chip is ${chip.getRasterXSize}x${chip.getRasterYSize}, expected 1x1")
+                    assert(vals(0) == NoData && noDataOf(chip, 1).contains(NoData), s"empty cell $cell chip is not NoData")
+                    val cen = H3.cellIdToGeometry(cell).getCentroid
+                    val p = toUtm.TransformPoint(cen.getX, cen.getY)
+                    val colF = math.floor(inv(0) + p(0) * inv(1) + p(1) * inv(2)).toInt
+                    val rowF = math.floor(inv(3) + p(0) * inv(4) + p(1) * inv(5)).toInt
+                    val col = math.min(math.max(colF, 0), n - 1)
+                    val row = math.min(math.max(rowF, 0), n - 1)
+                    if (col == colF && row == rowF && col > 0 && col < n - 1 && row > 0 && row < n - 1) interior += 1
+                    val cgt = chip.GetGeoTransform
+                    val (ex, ey) = (GtUtm(0) + col * GtUtm(1) + row * GtUtm(2), GtUtm(3) + col * GtUtm(4) + row * GtUtm(5))
+                    assert(math.abs(cgt(0) - ex) < 1e-6 && math.abs(cgt(3) - ey) < 1e-6,
+                        s"empty cell $cell chip origin (${cgt(0)}, ${cgt(3)}) != centroid pixel ($col,$row) origin ($ex, $ey)")
+                }
+            }
+        } finally { RasterDriver.releaseDataset(src); toUtm.delete(); wgs.delete(); utm.delete() }
+        assert(empties > 0, "expected covered-but-empty cells over the NoData square")
+        assert(interior > 0, "expected an empty cell whose centroid pixel lies strictly inside the raster (not clamped)")
+    }
+
+    test("(k) a failure during centroid setup releases the BNG warp before it propagates") {
+        val src = buildRamp(mem("k.tif"), 64, 64, 1, gdalconstConstants.GDT_Float32, gtGb(64))
+        val before = vsimemCount()
+        RasterTessellate.centroidSetupFault = new IllegalStateException("injected setup fault")
+        try {
+            val e = intercept[IllegalStateException] {
+                RasterTessellate.tessellateBngIter(src, Map.empty[String, String], BngRes, "centroid", "complete")
+            }
+            assert(e.getMessage == "injected setup fault")
+            assert(vsimemCount() == before, "the EPSG:27700 warp leaked after a setup failure")
+        } finally {
+            RasterTessellate.centroidSetupFault = null
+            RasterDriver.releaseDataset(src)
+        }
     }
 }

@@ -1080,51 +1080,69 @@ def test_tessellate_coverage_assignment_parity(
                     assert size == (1, 1), f"{label}: {tier} empty chip {cid} is {size}"
 
 
-def _uint16_no_nodata(*, epsg, origin, px, n):
-    """n×n uint16 ramp with NO declared NoData; the first two rows are real zeros."""
+# dtype -> (fallback NoData, rows of real pixels equal to it, rows of real 0s that stay
+# valid). For uint8 the fallback IS 0, so its real 0s become NoData.
+_NO_NODATA_CASES = {
+    "uint16": (65535.0, (2,), (0, 1)),
+    "uint8": (0.0, (0, 1), ()),
+}
+
+
+def _no_nodata_raster(dtype, *, epsg, origin, px, n):
+    """n×n ramp (1..200) with NO declared NoData, plus the rows of ``_NO_NODATA_CASES``."""
     from rasterio.io import MemoryFile
     from rasterio.transform import from_origin
 
-    data = (np.arange(n * n, dtype="uint32").reshape(n, n) % 4000 + 1).astype("uint16")
-    data[:2, :] = 0
+    fallback, fallback_rows, zero_rows = _NO_NODATA_CASES[dtype]
+    data = (np.arange(n * n, dtype="uint32").reshape(n, n) % 200 + 1).astype(dtype)
+    for r in zero_rows:
+        data[r, :] = 0
+    for r in fallback_rows:
+        data[r, :] = fallback
     prof = dict(
         driver="GTiff",
         width=n,
         height=n,
         count=1,
-        dtype="uint16",
+        dtype=dtype,
         crs=f"EPSG:{epsg}",
         transform=from_origin(origin[0], origin[1], px, px),
     )
     with MemoryFile() as mf:
         with mf.open(**prof) as dst:
             dst.write(data, 1)
-        return mf.read()
+        return mf.read(), data
 
 
 @pytest.mark.parametrize("assignment", ["centroid", "covering"])
 @pytest.mark.parametrize("grid", ["h3", "bng", "quadbin"])
-def test_tessellate_uint16_without_nodata_parity(spark_with_jar, grid, assignment):
-    """A uint16 source without NoData tessellates the same way in both tiers.
+@pytest.mark.parametrize("dtype", ["uint16", "uint8"])
+def test_tessellate_without_nodata_parity(spark_with_jar, dtype, grid, assignment):
+    """A source without NoData tessellates the same way in both tiers.
 
-    Both tiers stamp the shared dtype fallback (65535) on every chip, emit the
-    same number of rows with no error rows, and keep the real zero pixels valid.
-    Under ``centroid`` the chips also match per cell (shape and source pixels),
-    and together they hold every source pixel.
+    Both tiers stamp the shared dtype fallback (65535 for uint16, 0 for uint8) on
+    every chip and emit the same rows, with no error rows. Every valid chip pixel is
+    a source pixel with the source's value: the clip fill is NoData, and source
+    pixels equal to the fallback are NoData too (not moved to a neighbouring value),
+    while uint16's real 0s stay valid. Under ``centroid`` the chips also match per
+    cell, and together they hold every source pixel that is not the fallback.
     """
     spark = spark_with_jar
     sql_name, fn_name, is_bng = _TESS_CONFIG[grid]
+    fallback, fallback_rows, zero_rows = _NO_NODATA_CASES[dtype]
     if is_bng:
         n = 8
-        raster = _uint16_no_nodata(
-            epsg=27700, origin=(530000.0, 181000.0), px=100.0, n=n
+        raster, data = _no_nodata_raster(
+            dtype, epsg=27700, origin=(530000.0, 181000.0), px=100.0, n=n
         )
     else:
         n = 16
-        raster = _uint16_no_nodata(epsg=4326, origin=(-0.13, 51.55), px=0.01, n=n)
+        raster, data = _no_nodata_raster(
+            dtype, epsg=4326, origin=(-0.13, 51.55), px=0.01, n=n
+        )
     res_map = _TESS_COVERING_RES if assignment == "covering" else _TESS_CENTROID_RES
     resolution = res_map[grid]
-    label = f"{grid} uint16 no-nodata {assignment}"
+    label = f"{grid} {dtype} no-nodata {assignment}"
 
     def _id(cid):
         return _tess_id(cid, bng=is_bng)
@@ -1145,26 +1163,34 @@ def test_tessellate_uint16_without_nodata_parity(spark_with_jar, grid, assignmen
     src_tf = tp.source_transform(raster)
     for tier, rows in (("light", light_rows), ("heavy", heavy_rows)):
         nodatas = {tp.chip_shape(b)[3] for _, b, _ in rows}
-        assert nodatas == {65535.0}, f"{label}: {tier} chip NoData {nodatas}"
-        zeros = {
+        assert nodatas == {fallback}, f"{label}: {tier} chip NoData {nodatas}"
+        valid = {px for _, b, _ in rows for px in tp.chip_pixels(b, src_tf)}
+        kept = sorted(px for px in valid if px[0] in fallback_rows)[:5]
+        assert (
+            not kept
+        ), f"{label}: {tier} pixels equal to the fallback stay valid: {kept}"
+        wrong = sorted(
             px
-            for _, b, _ in rows
-            for px in tp.chip_pixels(b, src_tf)
-            if px[2] == (0.0,)
-        }
-        assert zeros, f"{label}: {tier} chips lost the real zero pixels"
-        # The real zeros are rows 0-1; any other valid zero is clip fill read as data.
-        fake = sorted(px for px in zeros if not (0 <= px[0] < 2 and 0 <= px[1] < n))[:5]
-        assert not fake, f"{label}: {tier} clip fill reads as valid zeros at {fake}"
+            for px in valid
+            if not (0 <= px[0] < n and 0 <= px[1] < n)
+            or px[2] != (float(data[px[0], px[1]]),)
+        )[:5]
+        assert (
+            not wrong
+        ), f"{label}: {tier} valid chip pixels not from the source: {wrong}"
+        if zero_rows:
+            zeros = {px for px in valid if px[2] == (0.0,)}
+            assert zeros, f"{label}: {tier} chips lost the real zero pixels"
 
     if assignment == "centroid":
         light = tp.by_cell(light_rows, f"{label} light")
         heavy = tp.by_cell(heavy_rows, f"{label} heavy")
         tp.assert_centroid_chips_match(light, heavy, src_tf, label)
         covered = {px[:2] for b in light.values() for px in tp.chip_pixels(b, src_tf)}
+        expected = n * n - len(fallback_rows) * n
         assert (
-            len(covered) == n * n
-        ), f"{label}: chips hold {len(covered)} of {n * n} pixels"
+            len(covered) == expected
+        ), f"{label}: chips hold {len(covered)} of {expected} pixels"
 
 
 # ---------------------------------------------------------------------------

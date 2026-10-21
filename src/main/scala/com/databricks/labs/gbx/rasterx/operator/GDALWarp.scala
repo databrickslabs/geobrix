@@ -22,17 +22,24 @@ object GDALWarp {
         }
     }
 
-    /** Warps dss to outputPath; appends options and injects SRS if needed. Returns (Dataset, metadata). */
+    /** An argument as it would be typed in a shell: quoted when it holds spaces (for `last_command`). */
+    private def quoteIfSpaced(arg: String): String = if (arg.contains(" ")) "\"" + arg + "\"" else arg
+
+    /** Warps dss to outputPath; appends options and injects SRS if needed. Returns (Dataset, metadata).
+      * `extraArgs` are appended as given, one argument each: unlike `command`, they are not split on
+      * spaces, so a value that holds spaces (a per-band `-srcnodata` list) stays one argument. */
     def executeWarp(
         outputPath: String,
         dss: Array[Dataset],
         options: Map[String, String],
-        command: String
+        command: String,
+        extraArgs: Seq[String] = Seq.empty
     ): (Dataset, Map[String, String]) = {
         require(command.startsWith("gdalwarp"), "Not a valid GDAL Warp command.")
 
         val effectiveCommand = OperatorOptions.appendOptions(command, options, dss.head)
         val warpOptionsVec = OperatorOptions.parseOptions(effectiveCommand)
+        extraArgs.foreach(warpOptionsVec.add)
         val adjustedVec = addSrcSRS(warpOptionsVec, dss.head)
         val warpOptions = new WarpOptions(adjustedVec)
         val result = gdal.Warp(outputPath, dss, warpOptions)
@@ -43,7 +50,7 @@ object GDALWarp {
           "path" -> outputPath,
           "parentPath" -> options.getOrElse("path", ""),
           "driver" -> options.getOrElse("driver", dss.head.GetDriver().getShortName),
-          "last_command" -> effectiveCommand,
+          "last_command" -> (effectiveCommand +: extraArgs.map(quoteIfSpaced)).mkString(" "),
           "last_error" -> errorMsg,
           "all_parents" -> dss.map(_.GetDescription()).mkString(";"), // TODO: this should be a union of all parents of all dss
           "size" -> size.toString,

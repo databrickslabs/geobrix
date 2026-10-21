@@ -66,6 +66,10 @@ object RST_InitNoData extends WithExpressionInfo {
             case _           => perBand.mkString(" ")
         }
         val cmd = s"""gdalwarp -dstnodata $noDataValues"""
+        // A band without NoData: its pixels equal to the constant become NoData (as in the lightweight
+        // tier) rather than being moved to the constant +/- 1 by gdalwarp. A band that declares NoData keeps
+        // gdalwarp's handling: its NoData pixels take the constant.
+        val srcNoData = GDAL.srcNoDataArgs(ds)
         val uuid = java.util.UUID.randomUUID().toString
         val driver = ds.GetDriver()
         val extension = GDAL.getExtension(driver.getShortName)
@@ -74,7 +78,8 @@ object RST_InitNoData extends WithExpressionInfo {
           resFile,
           Array(ds),
           options,
-          command = cmd
+          command = cmd,
+          extraArgs = srcNoData
         )
     }
 

@@ -16,7 +16,9 @@ object ClipToGeom {
 
     /** Clips the dataset to the geometry; returns (new Dataset, updated metadata). Caller must release the Dataset.
       * `dstNoData`, when given, fills the pixels outside the geometry and is declared on the output
-      * (`-dstnodata`); otherwise gdalwarp carries the source NoData, or fills with 0 when there is none. */
+      * (`-dstnodata`), and the source pixels equal to it in bands without NoData become NoData too
+      * ([[GDAL.srcNoDataArgs]]); otherwise gdalwarp carries the source NoData, or fills with 0 when there
+      * is none. */
     def clip(
         ds: Dataset,
         options: Map[String, String],
@@ -33,6 +35,7 @@ object ClipToGeom {
         val cutlineToken = cutlineAllTouched.toString.toUpperCase(Locale.ROOT)
         val clipperFile = generateClipFile(geometry, geomSR, ds)
         val dstNoDataFlag = dstNoData.map(nd => s" -dstnodata ${nd.toString}").getOrElse("")
+        val srcNoData = dstNoData.map(nd => GDAL.srcNoDataArgs(ds, _ => nd)).getOrElse(Seq.empty)
 
         // For -wo consult https://gdal.org/doxygen/structGDALWarpOptions.html
         val result = GDALWarp.executeWarp(
@@ -42,7 +45,8 @@ object ClipToGeom {
           // -q flag for quiet, as there is CRS warning spam
           // we already ensured geoms are in Raster CRS
           command = s"gdalwarp -q -wo CUTLINE_ALL_TOUCHED=$cutlineToken -cutline $clipperFile -crop_to_cutline" +
-            s"$dstNoDataFlag -oo GEOM_POSSIBLE_NAMES=WKT"
+            s"$dstNoDataFlag -oo GEOM_POSSIBLE_NAMES=WKT",
+          extraArgs = srcNoData
         )
         cleanUpClipper(clipperFile)
         result

@@ -49,6 +49,36 @@ object GDAL {
         }
     }
 
+    /**
+      * gdalwarp arguments that make the source pixels equal to a band's fill value NoData, for the bands of
+      * `ds` that declare no NoData: `-srcnodata <one value per band>` (a declared band keeps its own value)
+      * and `-wo UNIFIED_SRC_NODATA=NO`, so each band is judged on its own (GDAL otherwise treats a pixel
+      * as NoData only when every band matches). Without them, gdalwarp `-dstnodata X` moves a valid source
+      * pixel equal to X to X +/- 1 and keeps it valid. `fill` gives an undeclared band's value, by default
+      * [[getNoDataConstant]] for its type. Empty when every band declares NoData. The list is ONE argument:
+      * pass it as a warp extra argument, not through a space-split command string.
+      */
+    def srcNoDataArgs(
+        ds: org.gdal.gdal.Dataset,
+        fill: org.gdal.gdal.Band => Double = b => getNoDataConstant(b.getDataType)
+    ): Seq[String] = {
+        val perBand = (1 to ds.GetRasterCount()).map { i =>
+            val band = ds.GetRasterBand(i)
+            val nd = new Array[java.lang.Double](1)
+            band.GetNoDataValue(nd)
+            (Option(nd(0)).map(_.doubleValue()), band)
+        }
+        if (perBand.forall(_._1.isDefined)) Seq.empty
+        else {
+            val values = perBand.map { case (declared, band) => declared.getOrElse(fill(band)) }
+            val list = values.distinct match {
+                case Seq(single) => single.toString
+                case _           => values.mkString(" ")
+            }
+            Seq("-srcnodata", list, "-wo", "UNIFIED_SRC_NODATA=NO")
+        }
+    }
+
     /** Converts pixel (x, y) to geographic (xGeo, yGeo) using the 6-element geotransform. */
     def toWorldCoord(gt: Array[Double], x: Int, y: Int): (Double, Double) = {
         val offset = 0.5 // offset to center of the pixel

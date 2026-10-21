@@ -685,13 +685,14 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         } finally RasterTessellate.coveringSetupFault = null
     }
 
-    test("(q) covering on a source without NoData: the clip fill is NoData (65535), not valid 0 pixels") {
+    test("(q) covering on a source without NoData: the clip fill and real 65535 pixels are NoData, 0s stay valid") {
         val src = buildRamp(mem("q.tif"), 64, 64, 1, gdalconstConstants.GDT_UInt16, gt4326(64))
+        fillRect(src, 1, 0, 30, 64, 2, 65535.0) // real pixels equal to the uint16 fallback
         val (xSize, ySize) = (src.getRasterXSize, src.getRasterYSize)
         val inv = invert(src.GetGeoTransform)
         val (srcVals, _) = readBand(src, 1)
         val chipNoData = mutable.Set.empty[Option[Double]]
-        var (chips, filled, outside, badValue, zeros) = (0, 0L, 0, 0, 0)
+        var (chips, filled, outside, badValue, zeros, fallbackValid) = (0, 0L, 0, 0, 0, 0)
         val it = RasterTessellate.tessellateH3Iter(handOff(src), Map.empty[String, String], Res, "covering", "complete")
         try {
             while (it.hasNext) {
@@ -712,6 +713,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
                             val sc = math.floor(inv(0) + gx * inv(1) + gy * inv(2)).toInt
                             val sr = math.floor(inv(3) + gx * inv(4) + gy * inv(5)).toInt
                             if (sc < 0 || sc >= xSize || sr < 0 || sr >= ySize) outside += 1
+                            else if (srcVals(sr * xSize + sc) == 65535.0) fallbackValid += 1
                             else if (vals(k) != srcVals(sr * xSize + sc)) badValue += 1
                             else if (vals(k) == 0.0) zeros += 1
                         }
@@ -728,6 +730,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
         assert(filled > 0, "fixture must clip some pixels outside a hexagon")
         assert(outside == 0, s"$outside valid chip pixels lie outside the source (clip fill read as data)")
         assert(badValue == 0, s"$badValue valid chip pixels differ from the source (clip fill read as data)")
+        assert(fallbackValid == 0, s"$fallbackValid source pixels equal to 65535 stayed valid (gdalwarp moved them)")
         assert(zeros > 0, "the source's real 0 pixels must stay valid")
     }
 }

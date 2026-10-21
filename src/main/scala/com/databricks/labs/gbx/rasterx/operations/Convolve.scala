@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALBlock}
-import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
+import com.databricks.labs.gbx.rasterx.operator.{GDALTranslate, OperatorOptions}
 import org.gdal.gdal.{Band, Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GF_Write
 
@@ -47,7 +47,7 @@ object Convolve {
           "all_parents" -> ds.GetDescription(),
           "size" -> -1.toString, // Size will be determined later
           "format" -> driver.getShortName,
-          "compression" -> options.getOrElse("compression", "DEFLATE"),
+          "compression" -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped" -> "false",
           "isSubset" -> "false"
         )

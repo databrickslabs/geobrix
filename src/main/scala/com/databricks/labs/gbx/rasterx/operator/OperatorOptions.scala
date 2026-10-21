@@ -6,6 +6,13 @@ import org.gdal.gdalconst.gdalconstConstants._
 /** Parses GDAL command strings and appends format/compression/block options for translate/warp/calc. */
 object OperatorOptions {
 
+    /**
+      * Codec used when a caller supplies no `compression` option. Shared by [[appendOptions]] (the `-co`
+      * flags) and by every operation that stamps `compression` into the tile metadata it returns, so the
+      * metadata a derived tile carries can never disagree with the codec GDAL actually writes.
+      */
+    val DefaultCompression: String = "ZSTD"
+
     /** Splits command by spaces and returns options as Vector (args after first token). */
     def parseOptions(command: String): java.util.Vector[String] = {
         val args = command.split(" ")
@@ -18,7 +25,7 @@ object OperatorOptions {
     def appendOptions(command: String, writeOptions: Map[String, String], ds: Dataset): String = {
         val format = writeOptions.getOrElse("format", "GTiff")
         // scalastyle:off caselocale
-        val compression = writeOptions.getOrElse("compression", "ZSTD").toUpperCase
+        val compression = writeOptions.getOrElse("compression", DefaultCompression).toUpperCase
         // scalastyle:on caselocale
         val missingGeoRef = writeOptions.getOrElse("missingGeoRef", "false").toBoolean
         val isCalc = command.startsWith("gdal_calc")

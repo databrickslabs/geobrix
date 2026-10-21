@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.gridx.grid.{BNG, CustomGridSystem, GridSystem, H3, Quadbin}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
-import com.databricks.labs.gbx.rasterx.operator.GDALWarp
+import com.databricks.labs.gbx.rasterx.operator.{GDALWarp, OperatorOptions}
 import org.gdal.gdal.Dataset
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.{CoordinateTransformation, SpatialReference}
@@ -486,7 +486,7 @@ object RasterTessellate {
           "last_error"   -> "",
           "all_parents"  -> s"$sourcePath;${options.getOrElse("all_parents", "")}",
           "size"         -> "-1",
-          "compression"  -> options.getOrElse("compression", "DEFLATE"),
+          "compression"  -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped"     -> "false",
           "isSubset"     -> "false"
         )

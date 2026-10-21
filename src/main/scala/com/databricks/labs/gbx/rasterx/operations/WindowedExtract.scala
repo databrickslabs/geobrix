@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager}
-import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
+import com.databricks.labs.gbx.rasterx.operator.{GDALTranslate, OperatorOptions}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 
@@ -123,7 +123,7 @@ private[rasterx] object WindowedExtract {
           "last_error" -> "",
           "all_parents" -> s"$sourcePath;${options.getOrElse("all_parents", "")}",
           "size" -> "-1",
-          "compression" -> options.getOrElse("compression", "DEFLATE"),
+          "compression" -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped" -> "false",
           "isSubset" -> "false"
         )

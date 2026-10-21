@@ -27,7 +27,7 @@ object GDALBuildVRT {
           "last_error" -> errorMsg,
           "size" -> size.toString,
           "all_parents" -> dss.map(_.GetDescription).mkString(";"),
-          "compression" -> options.getOrElse("compression", "DEFLATE"),
+          "compression" -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped" -> "false",
           "isSubset" -> "false"
         )

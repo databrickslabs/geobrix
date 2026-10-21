@@ -223,8 +223,8 @@ def test_rst_ndvi(spark):
 def test_rst_asformat(spark):
     """Test converting raster format.
 
-    Note: Converts from GTiff to Zarr. Output compression defaults to DEFLATE
-    (baseline TIFF, previewable by Databricks image preview / Java ImageIO).
+    Note: Converts from GTiff to Zarr. Output compression defaults to ZSTD
+    (the GeoBrix default codec) unless the tile metadata names another.
     """
     from databricks.labs.gbx.rasterx import functions as rx
 

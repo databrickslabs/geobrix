@@ -48,7 +48,7 @@ object GDALWarp {
           "all_parents" -> dss.map(_.GetDescription()).mkString(";"), // TODO: this should be a union of all parents of all dss
           "size" -> size.toString,
           "format" -> dss.head.GetDriver().getShortName,
-          "compression" -> options.getOrElse("compression", "DEFLATE"),
+          "compression" -> options.getOrElse("compression", OperatorOptions.DefaultCompression),
           "isZipped" -> "false",
           "isSubset" -> "false"
         )

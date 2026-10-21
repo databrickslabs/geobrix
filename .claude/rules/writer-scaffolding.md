@@ -18,10 +18,16 @@ from databricks.labs.gbx.ds.writer import _publish_merged, _glob_merge_inputs, _
 - `_safe_name(raster_bytes, cellid)` — opaque fallback file name for `RasterGbxWriter` when there is no `nameCol`:
   content hash plus a random suffix, so it is unique but NOT deterministic across re-runs.
 - `cog_writer._tile_name_key(vt)` — deterministic key: hash of the tile bytes (path for a virtual tile) plus window, clip,
-  crs and the `band` marker. `CogGbxWriter._out_path_for` appends it when a default name is not unique per tile (the
-  `<cellid>_<key>` last resort, or a source stem shared by parts: window/clip provenance or a `band` marker; a materialized tile's window counts as whole only when it equals the tile's own raster extent, read from the bytes header, never from metadata dims). Never name a
-  tile by `cellid` alone: retile-family tiles share their parent's cellid. The light retile-family UDTFs stamp `window`
-  (and `rst_separatebands` stamps `metadata["band"]`, `virtual_tile.BAND_METADATA_KEY`) so writers can tell parts apart.
+  crs and the `band` marker. `CogGbxWriter._out_path_for` appends it when a default name is not unique per tile: the
+  `<cellid>_<key>` last resort, or a source stem shared by PARTS. Never name a tile by `cellid` alone: retile-family tiles
+  share their parent's cellid. A tile is a part when it has clip provenance, a `band` marker (`rst_separatebands`,
+  `virtual_tile.BAND_METADATA_KEY`) or a window that is not the whole:
+  - a materialized tile WITH a path (a reader's tile) is whole only when its window equals its own raster extent, read
+    from the bytes header, never from metadata dims (readers stamp none);
+  - a path-less materialized tile with ANY window is a part: every parent's first child sits at the origin, equal to its
+    own extent, so the own-extent test cannot apply to it;
+  - the one retile-family output that covers its whole input is not given a fresh window; the UDTFs hand it the input's
+    path/window/clip/band via `_serde.inherit_provenance`.
 - `assert_write_schema(df, expected)` — raises early with a clear message when the caller passes a DataFrame whose schema doesn't match the writer's expectation.
 
 ## Scratch directories (`ds/_scratch.py`)

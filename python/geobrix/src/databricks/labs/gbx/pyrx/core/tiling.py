@@ -136,6 +136,19 @@ def plan_grid_windows(width, height, tile_width, tile_height, overlap=0):
     return windows
 
 
+def covers_whole_input(ds, tile_width, tile_height, overlap=0) -> bool:
+    """True when a window grid over *ds* yields exactly ONE window and it is the
+    whole raster, so the single output tile is the input itself. Pure arithmetic on
+    the grid steps (no window list is built)."""
+    tw, th, step_x, step_y = _overlap_steps(tile_width, tile_height, overlap)
+    return (
+        tw >= ds.width
+        and th >= ds.height
+        and step_x >= ds.width
+        and step_y >= ds.height
+    )
+
+
 def iter_to_overlapping_tiles(ds, tile_width, tile_height, overlap):
     tw, th, sx, sy = _overlap_steps(tile_width, tile_height, overlap)
     return _iter_window_tiles(ds, tw, th, sx, sy)
@@ -199,14 +212,19 @@ def _encoded_size_bytes(ds) -> int:
         return len(mf.read())
 
 
-def iter_make_tiles_located(ds, size_in_mb, size_bytes=None):
-    """Streaming variant of :func:`make_tiles`; yields ``(window, gtiff_bytes)``."""
+def make_tiles_size(ds, size_in_mb, size_bytes=None):
+    """``(tile_width, tile_height)`` that :func:`make_tiles` cuts *ds* into."""
     size_in_mb = int(size_in_mb)  # heavy casts sizeInMB to Int (truncates)
     if size_in_mb <= 0:
-        return iter_retile_located(ds, ds.width, ds.height)
+        return ds.width, ds.height
     if size_bytes is None:
         size_bytes = _encoded_size_bytes(ds)
-    tile_x, tile_y = _get_tile_size(ds.width, ds.height, size_bytes, size_in_mb)
+    return _get_tile_size(ds.width, ds.height, size_bytes, size_in_mb)
+
+
+def iter_make_tiles_located(ds, size_in_mb, size_bytes=None):
+    """Streaming variant of :func:`make_tiles`; yields ``(window, gtiff_bytes)``."""
+    tile_x, tile_y = make_tiles_size(ds, size_in_mb, size_bytes)
     return iter_retile_located(ds, tile_x, tile_y)
 
 

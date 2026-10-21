@@ -32,20 +32,48 @@ def _write_source(path, *, width, height, count):
             ds.write(np.full((height, width), band * 40, dtype="uint8"), band)
 
 
-def _write_parts(spark, src, out, fn):
-    """Read ``src`` (source, tile), cut it with the LATERAL function ``fn``, and write
-    the (source, tile) parts with cog_gbx and no nameCol."""
+def _write_chain(spark, src, out, fns, read_opts=None):
+    """Read ``src`` (source, tile), cut it with each LATERAL function in ``fns`` in
+    turn (the source column stays), and write the (source, tile) parts with cog_gbx
+    and no nameCol. Returns ``(files, tiles)``."""
     spark.dataSource.register(RasterGbxDataSource)
     spark.dataSource.register(CogGbxDataSource)
     prx.register(spark)
-    spark.read.format("raster_gbx").load(str(src)).createOrReplaceTempView("_cog_src")
-    parts = spark.sql(
-        f"SELECT source, struct(t.*) AS tile FROM _cog_src, LATERAL {fn} t"
-    )
+    reader = spark.read.format("raster_gbx")
+    for key, value in (read_opts or {}).items():
+        reader = reader.option(key, value)
+    reader.load(str(src)).createOrReplaceTempView("_cog_stage_0")
+    for i, fn in enumerate(fns):
+        spark.sql(
+            f"SELECT source, struct(t.*) AS tile FROM _cog_stage_{i}, LATERAL {fn} t"
+        ).createOrReplaceTempView(f"_cog_stage_{i + 1}")
+    parts = spark.table(f"_cog_stage_{len(fns)}")
+    tiles = parts.count()
     parts.write.format("cog_gbx").mode("overwrite").option("cogBlockSize", "128").save(
         str(out)
     )
-    return sorted(glob.glob(os.path.join(str(out), "*.tif")))
+    return sorted(glob.glob(os.path.join(str(out), "*.tif"))), tiles
+
+
+def _write_parts(spark, src, out, fn):
+    """One cut of ``src`` with the LATERAL function ``fn``; returns the files."""
+    return _write_chain(spark, src, out, [fn])[0]
+
+
+def _write_random_source(path, *, width, height):
+    """Incompressible pixels, so the encoded size is about the raw size."""
+    profile = dict(
+        driver="GTiff",
+        width=width,
+        height=height,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(0, 60, 0.01, 0.01),
+    )
+    data = np.random.default_rng(7).integers(0, 256, (height, width), dtype="uint8")
+    with rasterio.open(path, "w", **profile) as ds:
+        ds.write(data, 1)
 
 
 def test_retile_windows_write_to_distinct_files(spark, tmp_path):
@@ -106,3 +134,79 @@ def test_single_maketiles_tile_keeps_source_name(spark, tmp_path):
     files = _write_parts(spark, src, tmp_path / "out", "gbx_rst_maketiles(tile, 100)")
 
     assert [os.path.basename(p) for p in files] == ["scene.tif"]
+
+
+# -- every cut of a cut keeps one file per tile ------------------------------
+#
+# Parts of parts share the source column and the parent's cellid, and each
+# parent's first child sits at window (0,0,tw,th). None of them may take the plain
+# source name or overwrite a sibling from another parent.
+
+
+def _assert_one_file_per_tile(files, tiles, expected):
+    assert tiles == expected, f"unexpected tile count {tiles}"
+    assert len(files) == tiles, f"{tiles} tiles wrote {len(files)} files: {files}"
+
+
+def test_nested_retile_writes_one_file_per_tile(spark, tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_source(str(src), width=512, height=512, count=1)
+
+    files, tiles = _write_chain(
+        spark,
+        src,
+        tmp_path / "out",
+        ["gbx_rst_retile(tile, 256, 256)", "gbx_rst_retile(tile, 128, 128)"],
+        {"virtualTiles": "false"},
+    )
+
+    _assert_one_file_per_tile(files, tiles, 16)
+
+
+def test_maketiles_then_retile_writes_one_file_per_tile(spark, tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    # 1536x1536 incompressible bytes: rst_maketiles(tile, 1) splits it into 4 tiles.
+    _write_random_source(str(src), width=1536, height=1536)
+
+    files, tiles = _write_chain(
+        spark,
+        src,
+        tmp_path / "out",
+        ["gbx_rst_maketiles(tile, 1)", "gbx_rst_retile(tile, 384, 384)"],
+    )
+
+    _assert_one_file_per_tile(files, tiles, 16)
+
+
+def test_reader_split_then_retile_writes_one_file_per_tile(spark, tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_source(str(src), width=512, height=512, count=1)
+
+    files, tiles = _write_chain(
+        spark,
+        src,
+        tmp_path / "out",
+        ["gbx_rst_retile(tile, 128, 128)"],
+        {"virtualTiles": "false", "tileSize": "256"},
+    )
+
+    _assert_one_file_per_tile(files, tiles, 16)
+
+
+def test_noop_retile_of_parts_writes_one_file_per_tile(spark, tmp_path):
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_source(str(src), width=512, height=512, count=1)
+
+    files, tiles = _write_chain(
+        spark,
+        src,
+        tmp_path / "out",
+        ["gbx_rst_retile(tile, 256, 256)", "gbx_rst_retile(tile, 256, 256)"],
+        {"virtualTiles": "false"},
+    )
+
+    _assert_one_file_per_tile(files, tiles, 4)

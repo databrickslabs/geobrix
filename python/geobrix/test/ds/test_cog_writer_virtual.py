@@ -509,6 +509,15 @@ def test_windows_of_one_source_with_identical_bytes_get_distinct_names(tmp_path)
     assert a.startswith("parent_") and b.startswith("parent_")
 
 
+def test_pathless_origin_window_is_a_part(tmp_path):
+    """Every parent's first child sits at (0,0,tw,th), equal to its own extent. A
+    tile with no path was cut from a parent (readers always stamp the path), so even
+    that origin child is a part and never takes the plain source name."""
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    origin = _stem(w, _part_row("/data/parent.tif", window=(0, 0, 256, 256)))
+    assert origin.startswith("parent_")
+
+
 def test_band_tiles_of_one_source_get_distinct_names(tmp_path):
     """Band tiles have the parent's cellid, source and extent: the band marker is
     what tells them apart, even when the bands hold identical pixels."""

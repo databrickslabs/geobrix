@@ -112,3 +112,31 @@ def build_tile(
     return VirtualTile(
         cellid=int(cellid), raster=raster, window=window, metadata=meta
     ).to_row()
+
+
+def inherit_provenance(row: Dict, tile) -> Dict:
+    """Give *row* the provenance of the input *tile* it reproduces.
+
+    Used for the one output of a retile-family function that covers its whole
+    input: it IS the input, so it keeps the input's ``path``, ``window``,
+    ``clip_polygon``/``clip_crs`` and ``band`` marker rather than a fresh window
+    (which would read as "the first piece of its parent" and collide with the
+    other parents' first pieces). Mutates and returns *row*.
+    """
+    from databricks.labs.gbx.pyrx.core.open_tile import _to_virtual_tile
+    from databricks.labs.gbx.pyrx.core.virtual_tile import BAND_METADATA_KEY
+
+    vt = _to_virtual_tile(tile)
+    # Not ``vt.to_row()``: it casts cellid to int, and the input's cellid may be null.
+    row["path"] = vt.path
+    row["window"] = (
+        None
+        if vt.window is None
+        else dict(zip(("col_off", "row_off", "width", "height"), vt.window))
+    )
+    row["clip_polygon"] = vt.clip_polygon
+    row["clip_crs"] = vt.clip_crs
+    band = (vt.metadata or {}).get(BAND_METADATA_KEY)
+    if band is not None:
+        row["metadata"][BAND_METADATA_KEY] = band
+    return row

@@ -44,7 +44,7 @@ A tile is **materialized** when `raster` carries the encoded bytes (the common c
 | `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
 | `path` | `string` | Yes | Source path for a virtual tile; `null` for a materialized tile. |
 | `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
-| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. The lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record the window within their **input** tile, so it compounds when you retile a retiled tile; the heavyweight versions leave it null. |
+| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. The lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record the window relative to their immediate **input** tile, so windows from different parents can repeat; one output that covers its whole input keeps the input's own window instead. The heavyweight versions leave it null. |
 | `clip_polygon` | `binary` | Yes | Optional clip geometry (WKB). Instruction on a virtual tile; applied-provenance on a materialized tile. |
 | `clip_crs` | `string` | Yes | CRS for `clip_polygon` (e.g. `"EPSG:4326"`). |
 | `crs` | `string` | Yes | Working/target CRS. |

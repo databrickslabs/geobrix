@@ -228,13 +228,17 @@ formats.
   (a window or clip, or one band from `rst_separatebands`) is now written as
   `<source name>_<key>.tif`, and a tile with no path or source as `<cellid>_<key>.tif` (it was
   `<cellid>.tif`). The key is derived from the tile, so a re-run writes the same names. A tile
-  whose recorded window is its own full extent (a whole-file read, a single-tile result, or the
-  first window at the origin of a retile) keeps the plain source name. This relies on tile
-  provenance: the lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` now
-  record each tile's pixel window in `tile.window`, relative to the input tile (so it compounds
-  when you retile a retiled tile), and `rst_separatebands` records the 1-based band in
-  `tile.metadata['band']`. The heavyweight retile-family functions record neither, so set
-  `nameCol` when you write heavyweight parts; pixels are identical across tiers.
+  read whole from a file keeps the plain source name: it has a path and its window is its own
+  full extent. This relies on tile provenance: the lightweight `rst_retile`,
+  `rst_tooverlappingtiles` and `rst_maketiles` now record each tile's pixel window in
+  `tile.window`, relative to its immediate input tile, so windows from different parents can
+  repeat (the first piece of every parent sits at the origin). A function that returns one tile
+  covering its whole input hands that tile the input's own provenance instead. The lightweight
+  `rst_separatebands` records the 1-based band in `tile.metadata['band']`. The heavyweight
+  retile-family functions record none of these, so set `nameCol` when you write heavyweight
+  parts; pixels are identical across tiers. The first tile of a materialized split read is
+  indistinguishable from a whole-file read of the same source, so if you write one source both
+  ways into the same directory, set `nameCol`.
 
 ### Raster tiling functions
 

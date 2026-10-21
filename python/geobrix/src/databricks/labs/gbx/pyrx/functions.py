@@ -5287,6 +5287,21 @@ class _RstSeparateBandsUDTF:
             return
 
 
+def _cut_tile(raster_bytes, cellid, window, whole_input_of=None):
+    """One output tile of a retile-family function.
+
+    It records its pixel ``window`` within the INPUT tile, so a writer can tell
+    siblings apart. The one output that covers its whole input (``whole_input_of``
+    is that input tile) is the input itself and keeps the input's provenance
+    instead; see :func:`_serde.inherit_provenance`.
+    """
+    if whole_input_of is not None:
+        return _serde.inherit_provenance(
+            _serde.build_tile(raster_bytes, "GTiff", cellid), whole_input_of
+        )
+    return _serde.build_tile(raster_bytes, "GTiff", cellid, window=window)
+
+
 @udtf(returnType=V2_TILE_SCHEMA)
 class _RstRetileUDTF:
     """Streaming UDTF: yield one sub-tile struct per non-overlapping window."""
@@ -5304,10 +5319,11 @@ class _RstRetileUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
+                whole = tiling.covers_whole_input(ds, tile_width, tile_height)
                 for win, b in tiling.iter_retile_located(
                     ds, int(tile_width), int(tile_height)
                 ):
-                    yield _serde.build_tile(b, "GTiff", cellid, window=win)
+                    yield _cut_tile(b, cellid, win, tile if whole else None)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ReTile: {e}")
             return
@@ -5332,10 +5348,13 @@ class _RstToOverlappingTilesUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
+                whole = tiling.covers_whole_input(
+                    ds, tile_width, tile_height, int(overlap)
+                )
                 for win, b in tiling.iter_to_overlapping_tiles_located(
                     ds, int(tile_width), int(tile_height), int(overlap)
                 ):
-                    yield _serde.build_tile(b, "GTiff", cellid, window=win)
+                    yield _cut_tile(b, cellid, win, tile if whole else None)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_ToOverlappingTiles: {e}")
             return
@@ -5370,10 +5389,12 @@ class _RstMakeTilesUDTF:
                 cellid = _tile_cellid(
                     tile
                 )  # parent cellid (null -> 0), as heavy stamps
-                for win, b in tiling.iter_make_tiles_located(
+                tile_x, tile_y = tiling.make_tiles_size(
                     ds, float(size_in_mb), size_bytes=size_bytes
-                ):
-                    yield _serde.build_tile(b, "GTiff", cellid, window=win)
+                )
+                whole = tiling.covers_whole_input(ds, tile_x, tile_y)
+                for win, b in tiling.iter_retile_located(ds, tile_x, tile_y):
+                    yield _cut_tile(b, cellid, win, tile if whole else None)
         except Exception as e:  # noqa: BLE001
             yield _serde.build_error_tile(f"RST_MakeTiles: {e}")
             return

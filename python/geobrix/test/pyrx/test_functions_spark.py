@@ -712,11 +712,13 @@ def test_retile_family_stamps_window_provenance(spark):
     assert len(windows) == len(rows)
     assert windows == sorted(tiling.plan_grid_windows(4, 4, 2, 2, 50))
 
-    # rst_maketiles: a 4x4 tile fits one MB, so one tile covering the whole parent.
+    # rst_maketiles: a 4x4 tile fits one MB, so the one output is the whole input and
+    # keeps the input's own provenance (a plain tile has no window); see
+    # test_single_output_covering_the_input_keeps_its_provenance.
     rows, windows = _window_rows(
         spark, "_ras_window_prov", "gbx_rst_maketiles(tile, 1)"
     )
-    assert windows == [(0, 0, 4, 4)]
+    assert len(rows) == 1 and windows == []
 
 
 def test_retile_window_is_relative_to_the_input_tile(spark):
@@ -733,6 +735,115 @@ def test_retile_window_is_relative_to_the_input_tile(spark):
     )
     assert len(windows) == 16  # four 2x2 children, four 1x1 windows each
     assert set(windows) == {(c, r, 1, 1) for c in (0, 1) for r in (0, 1)}
+
+
+def _v2_input_view(spark, name, *, path, window):
+    """One-row view of a 4x4 materialized v2 tile carrying the given provenance."""
+    from pyspark.sql.types import StructField, StructType
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    win = (
+        None
+        if window is None
+        else dict(zip(("col_off", "row_off", "width", "height"), window))
+    )
+    tile = {
+        "cellid": 7,
+        "raster": bytearray(make_geotiff_bytes(width=4, height=4, count=1)),
+        "path": path,
+        "path_mode": None,
+        "window": win,
+        "clip_polygon": None,
+        "clip_crs": None,
+        "crs": None,
+        "metadata": {},
+    }
+    spark.createDataFrame(
+        [{"tile": tile}], StructType([StructField("tile", V2_TILE_SCHEMA)])
+    ).createOrReplaceTempView(name)
+
+
+def _provenance_rows(spark, view, fn):
+    rows = spark.sql(
+        f"SELECT t.path AS p, t.window AS w FROM {view}, LATERAL {fn} t"
+    ).collect()
+    return [
+        (
+            r["p"],
+            (
+                None
+                if r["w"] is None
+                else (
+                    r["w"]["col_off"],
+                    r["w"]["row_off"],
+                    r["w"]["width"],
+                    r["w"]["height"],
+                )
+            ),
+        )
+        for r in rows
+    ]
+
+
+# One output that covers its whole 4x4 input IS the input, so it keeps the input's
+# provenance instead of stamping a fresh window.
+_WHOLE_INPUT_FNS = [
+    "gbx_rst_retile(tile, 4, 4)",
+    "gbx_rst_tooverlappingtiles(tile, 4, 4, 0)",
+    "gbx_rst_maketiles(tile, 1)",
+]
+
+
+def test_single_output_covering_the_input_keeps_its_provenance(spark):
+    prx.register(spark)
+    # A whole-file reader tile: path plus the whole window.
+    _v2_input_view(
+        spark, "_ras_prov_whole", path="/data/scene.tif", window=(0, 0, 4, 4)
+    )
+    # A part of a parent: no path, its window within that parent.
+    _v2_input_view(spark, "_ras_prov_part", path=None, window=(4, 0, 4, 4))
+    # A tile with no provenance at all.
+    _v2_input_view(spark, "_ras_prov_none", path=None, window=None)
+    for fn in _WHOLE_INPUT_FNS:
+        assert _provenance_rows(spark, "_ras_prov_whole", fn) == [
+            ("/data/scene.tif", (0, 0, 4, 4))
+        ], fn
+        assert _provenance_rows(spark, "_ras_prov_part", fn) == [
+            (None, (4, 0, 4, 4))
+        ], fn
+        assert _provenance_rows(spark, "_ras_prov_none", fn) == [(None, None)], fn
+
+
+def test_single_output_covering_a_band_tile_keeps_its_band(spark):
+    # A no-op retile of a band tile must stay marked as that band, or the bands would
+    # all look like whole tiles of the same source.
+    prx.register(spark)
+    _cellid_tile_view(spark, "_ras_band_parent", 7)
+    spark.sql(
+        "SELECT struct(t.*) AS tile FROM _ras_band_parent, "
+        "LATERAL gbx_rst_separatebands(tile) t"
+    ).createOrReplaceTempView("_ras_band_children")
+    rows = spark.sql(
+        "SELECT t.metadata AS m FROM _ras_band_children, "
+        "LATERAL gbx_rst_retile(tile, 4, 4) t"
+    ).collect()
+    assert sorted(r["m"]["band"] for r in rows) == ["1", "2", "3"]
+
+
+def test_several_outputs_stamp_windows_within_the_input_and_drop_its_path(spark):
+    prx.register(spark)
+    _v2_input_view(
+        spark, "_ras_prov_multi", path="/data/scene.tif", window=(0, 0, 4, 4)
+    )
+    rows = _provenance_rows(spark, "_ras_prov_multi", "gbx_rst_retile(tile, 2, 2)")
+    assert sorted(w for _, w in rows) == [
+        (0, 0, 2, 2),
+        (0, 2, 2, 2),
+        (2, 0, 2, 2),
+        (2, 2, 2, 2),
+    ]
+    assert {p for p, _ in rows} == {None}
 
 
 def test_separatebands_stamps_band_marker(spark):

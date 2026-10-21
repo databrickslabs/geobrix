@@ -1800,13 +1800,21 @@ class CogGbxWriter(DataSourceWriter):
         """True when the tile is a PART of its source rather than the whole file.
 
         A part carries one of: a clip polygon, a band marker (``rst_separatebands``),
-        or a window that is not the whole extent. A virtual tile's window is
-        compared with the reader-stamped source dims. A materialized tile's window
-        is provenance of what was extracted, and its metadata does not reliably
-        carry dims (the readers stamp none), so the window is compared with the
-        tile's OWN raster dimensions from the bytes header: ``(0, 0, own width,
-        own height)`` is the whole tile. A pending reprojection alone still leaves
-        one tile per source, so ``crs`` is not considered.
+        or a window that is not the whole extent. The window is read like this:
+
+        - virtual tile: compared with the reader-stamped source dims;
+        - materialized tile WITH a path (a reader's tile, one per path): whole
+          only when it is ``(0, 0, own width, own height)``, the own dims read
+          from the bytes header (the readers stamp no dims metadata);
+        - materialized tile WITHOUT a path: cut from a parent by a tile function
+          (readers always stamp the path), so ANY window marks a part. Every
+          parent's first child has window ``(0, 0, tw, th)``, equal to its own
+          extent, so the own-dims test cannot be applied to it. The one output
+          that covers its whole input does not get a fresh window: the tile
+          functions give it the input's own provenance.
+
+        A pending reprojection alone still leaves one tile per source, so ``crs``
+        is not considered.
         """
         if vt.clip_polygon is not None:
             return True
@@ -1816,6 +1824,8 @@ class CogGbxWriter(DataSourceWriter):
             return False
         if vt.is_virtual():
             return not self._window_is_full_extent(vt)
+        if not vt.path:
+            return True
         own = self._own_dims(vt)
         col_off, row_off, width, height = vt.window
         return own is None or (col_off, row_off, width, height) != (0, 0, *own)

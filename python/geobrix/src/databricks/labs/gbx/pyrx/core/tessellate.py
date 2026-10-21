@@ -40,6 +40,8 @@ _BNG_EPSG = 27700
 _VALID_MODES = {"covering", "centroid"}
 _VALID_COVERAGES = {"sparse", "complete"}
 _VALID_GRIDS = frozenset({"h3", "quadbin", "bng", "custom"})
+# Points per raster edge, corners included, walked when reprojecting the footprint (rasterio transform_bounds default).
+_FOOTPRINT_EDGE_POINTS = 21
 
 
 def _has_positive_area_overlap(cell_poly, bbox_poly) -> bool:
@@ -151,8 +153,8 @@ def _polyfill_cells(bbox_poly, resolution, grid: str, conf=None):
 
     ``bbox_poly`` must be a shapely geometry in the work CRS for the grid:
     WGS84 for h3/quadbin, EPSG:27700 for bng, grid-native for custom. It may be
-    the raster footprint quadrilateral (:func:`_footprint_polygon`): h3 and
-    quadbin enumerate its bounding box, bng and custom (whose footprint is an
+    the raster footprint polygon (:func:`_footprint_polygon`): h3 and quadbin
+    enumerate its bounding box, bng and custom (whose footprint is an
     axis-aligned rectangle) polyfill it directly.
     BNG and custom both apply the buffer-before-polyfill fix internally (custom
     via ``_custom.covering_candidate_cells``, mirroring heavy
@@ -234,29 +236,42 @@ def _encode_cellid(cell, grid: str, conf=None):
 def _footprint_polygon(ds, work_ds, grid: str) -> Polygon:
     """Raster footprint in the grid's work CRS: the region a covered cell must overlap.
 
-    Mirrors heavy ``BoundingBox.windowBBox``: the four raster corners
-    ``(c + x*a, f + y*e)`` for ``(x, y)`` in ``(0,0), (W,0), (W,H), (0,H)``, moved
-    into the work CRS and joined as a quadrilateral. The rotation terms of the
-    geotransform (``b``/``d``, gt2/gt4) are ignored, exactly as heavy ignores them.
-    Under a projected raster CRS the reprojected corners form a slanted quadrilateral,
-    NOT the axis-aligned lon/lat box of ``transform_bounds``, so a cell that overlaps
-    only the box corner and not the raster is correctly rejected.
+    The footprint is the raster's pixel-grid rectangle ``(c + x*a, f + y*e)`` for
+    ``x`` in ``0..W`` and ``y`` in ``0..H``; the rotation terms of the geotransform
+    (``b``/``d``, gt2/gt4) are ignored, exactly as heavy ``BoundingBox.windowBBox``
+    ignores them.
 
-    Work CRS per grid: h3/quadbin WGS84 (corners reprojected unless the raster is
-    already EPSG:4326 or has no CRS, in which case they are used as-is); bng the
-    EPSG:27700 *work_ds* corners; custom the grid-native *ds* corners. The result is
-    oriented counter-clockwise, as heavy's is.
+    When the corners must be reprojected (h3/quadbin on a raster whose CRS is not
+    EPSG:4326) each edge is walked with :data:`_FOOTPRINT_EDGE_POINTS` points,
+    corners included, before the transform, so the ring follows the curved image of
+    the edge in lon/lat. A 4-corner chord would cut inside that curve and lose real
+    edge pixels; the lon/lat box of ``transform_bounds`` would add cells outside the
+    raster. With no transform (EPSG:4326, CRS-less, bng, custom) the edge is
+    straight, so the four corners are the footprint.
+
+    Work CRS per grid: h3/quadbin WGS84; bng the EPSG:27700 *work_ds*; custom the
+    grid-native *ds*. The result is oriented counter-clockwise, as heavy's is.
     """
     src = work_ds if grid == "bng" else ds
     t = src.transform
     width, height = src.width, src.height
-    xs = [t.c + x * t.a for x in (0, width, width, 0)]
-    ys = [t.f + y * t.e for y in (0, 0, height, height)]
-    if (
+    reproject = (
         grid in ("h3", "quadbin")
         and ds.crs is not None
         and authority_srid_of(ds.crs) != 4326
-    ):
+    )
+    # Walk the four edges corner to corner; each edge's last point is the next edge's first.
+    n = _FOOTPRINT_EDGE_POINTS - 1 if reproject else 1
+    frac = np.arange(n) / n
+    cols = np.concatenate(
+        [frac * width, np.full(n, width), (1 - frac) * width, np.zeros(n)]
+    )
+    rows = np.concatenate(
+        [np.zeros(n), frac * height, np.full(n, height), (1 - frac) * height]
+    )
+    xs = t.c + cols * t.a
+    ys = t.f + rows * t.e
+    if reproject:
         xs, ys = get_transformer(ds.crs, _WGS84).transform(xs, ys)
         if not (np.isfinite(xs).all() and np.isfinite(ys).all()):
             raise ValueError(
@@ -464,7 +479,7 @@ def _centroid_complete(ds, resolution, grid: str, conf=None):
     ``conf`` is a ``CustomGridConf`` instance when ``grid="custom"``.
 
     Covered cells are kept against the raster footprint of
-    :func:`_footprint_polygon` (heavy's reprojected-corner quadrilateral), not
+    :func:`_footprint_polygon` (the reprojected, densified raster edge), not
     the axis-aligned lon/lat box of the raster. CF3 guard: a CRS-less raster
     (``ds.crs is None``) uses its corners as grid-native coordinates.
     """
@@ -543,8 +558,8 @@ def iter_tessellate(
         id (e.g. ``"TQ38"``) for bng.
 
     Covering and centroid+complete keep a covered cell only if it overlaps the
-    raster footprint of :func:`_footprint_polygon` (heavy's reprojected-corner
-    quadrilateral). CF3 guard: when ``ds.crs is None`` the raster corners are used
+    raster footprint of :func:`_footprint_polygon` (the reprojected, densified
+    raster edge). CF3 guard: when ``ds.crs is None`` the raster corners are used
     directly as grid-native coordinates.
     """
     if grid not in _VALID_GRIDS:

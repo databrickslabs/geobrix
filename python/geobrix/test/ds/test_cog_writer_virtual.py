@@ -503,8 +503,8 @@ def test_windows_of_one_source_with_identical_bytes_get_distinct_names(tmp_path)
     windows (e.g. all-NoData) are different places, so the window is part of the
     name's key."""
     w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
-    a = _stem(w, _part_row("/data/parent.tif", window=(0, 0, 256, 256)))
-    b = _stem(w, _part_row("/data/parent.tif", window=(256, 0, 256, 256)))
+    a = _stem(w, _part_row("/data/parent.tif", window=(256, 0, 256, 256)))
+    b = _stem(w, _part_row("/data/parent.tif", window=(0, 256, 256, 256)))
     assert a != b
     assert a.startswith("parent_") and b.startswith("parent_")
 
@@ -524,14 +524,57 @@ def test_part_name_is_deterministic(tmp_path):
     assert _stem(w, row) == _stem(w, row)
 
 
-def test_reader_whole_file_tile_keeps_source_stem(tmp_path):
-    """A reader's materialized whole-file tile records window (0,0,W,H) with its
-    source path and own dims: that is the whole file, so the plain stem stays."""
+def _reader_row(path, *, window, passthrough):
+    """A materialized (source, tile) row exactly as the raster_gbx reader builds it:
+    ``_encode.passthrough_tile`` / ``encode_tile`` bytes and metadata assembled by
+    ``_v2_tile_row`` (path plus window provenance, NO width/height metadata)."""
+    from databricks.labs.gbx.ds import _encode
+    from databricks.labs.gbx.ds.raster import _v2_tile_row
+
+    with rasterio.open(path) as ds:
+        if passthrough:
+            cellid, raster_bytes, meta = _encode.passthrough_tile(
+                path, ds.width, ds.height, source_path=path, all_parents=""
+            )
+        else:
+            cellid, raster_bytes, meta = _encode.encode_tile(
+                ds, window=window, source_path=path, all_parents=""
+            )
+    tile = _v2_tile_row(cellid, raster_bytes, path=path, window=window, metadata=meta)
+    fields = [f.name for f in reader_schema_v2()["tile"].dataType.fields]
+    return {"source": path, "tile": dict(zip(fields, tile))}
+
+
+def test_reader_passthrough_whole_file_tile_keeps_source_stem(tmp_path):
+    """A materialized whole-file GTiff read (passthrough bytes) records path plus
+    window (0,0,W,H) and no dims metadata: the window is the tile's own full
+    extent, so it is the whole file and keeps the plain stem."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=256, h=256)
     w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
-    row = _part_row(
-        "/data/parent.tif",
-        path="/data/parent.tif",
-        window=(0, 0, 256, 256),
-        metadata=_dims_meta(256, 256),
-    )
-    assert _stem(w, row) == "parent.tif"
+    row = _reader_row(str(src), window=(0, 0, 256, 256), passthrough=True)
+    assert _stem(w, row) == "scene.tif"
+
+
+def test_reader_reencoded_whole_file_tile_keeps_source_stem(tmp_path):
+    """Same for a whole-file read that re-encodes the window (non-GTiff source)."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=256, h=256)
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    row = _reader_row(str(src), window=(0, 0, 256, 256), passthrough=False)
+    assert _stem(w, row) == "scene.tif"
+
+
+def test_reader_split_tiles_are_named_as_parts(tmp_path):
+    """Windows of a materialized split read are parts of the file: each gets its
+    own key after the source stem."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_src(str(src), w=512, h=512)
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    a = _stem(w, _reader_row(str(src), window=(256, 0, 256, 256), passthrough=False))
+    b = _stem(w, _reader_row(str(src), window=(0, 256, 256, 256), passthrough=False))
+    assert a != b
+    assert a.startswith("scene_") and b.startswith("scene_")

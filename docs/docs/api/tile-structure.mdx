@@ -44,11 +44,11 @@ A tile is **materialized** when `raster` carries the encoded bytes (the common c
 | `raster` | `binary` | Yes | Encoded raster bytes when materialized; `null` when the tile is virtual (bytes-free). |
 | `path` | `string` | Yes | Source path for a virtual tile; `null` for a materialized tile. |
 | `path_mode` | `string` | Yes | Storage mode for a virtual tile. `null` = materialized (raster bytes present) or plain FUSE-path virtual. `"external"` = FILE EXTERNAL virtual tile. `"managed"` = FILE MANAGED virtual tile (governed lifecycle). |
-| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. |
+| `window` | `struct<col_off,row_off,width,height>` | Yes | The pixel window (offset + size). On a virtual tile it is the window to read; on a materialized tile it is provenance of the window already extracted. The lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` record the window within their **input** tile, so it compounds when you retile a retiled tile; the heavyweight versions leave it null. |
 | `clip_polygon` | `binary` | Yes | Optional clip geometry (WKB). Instruction on a virtual tile; applied-provenance on a materialized tile. |
 | `clip_crs` | `string` | Yes | CRS for `clip_polygon` (e.g. `"EPSG:4326"`). |
 | `crs` | `string` | Yes | Working/target CRS. |
-| `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. |
+| `metadata` | `map<string,string>` | Yes | Key-value map containing driver name, file extension, size, and other metadata. The lightweight `rst_separatebands` also sets `band` (1-based) on each output. |
 
 :::note Reference vs. instruction
 On a **materialized** tile, `window` / `clip_polygon` / `clip_crs` / `crs` are **provenance** — a record of what was already applied to produce the bytes. On a **virtual** tile they are **instructions** — pending operations applied when the tile is read. See [Virtual Tiles](./virtual-tiles#reference-vs-instruction).

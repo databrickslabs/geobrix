@@ -223,15 +223,18 @@ formats.
   convert with `PREDICTOR=2 is only supported with 8/16/32/64 bit samples`. The writer now
   promotes such samples to the data type's full width, a lossless change, and keeps
   predictor-based compression.
-- **`cog_gbx` gives every tile its own default file name.** Tiles from the retile functions
-  share their parent's cellid and source, so with no `nameCol` a tile that is only part of its
-  source (a window or clip, or one band from `rst_separatebands`) is now written as
+- **`cog_gbx` names the parts of one source apart.** Tiles from the retile functions share
+  their parent's cellid and source, so with no `nameCol` a tile that is only part of its source
+  (a window or clip, or one band from `rst_separatebands`) is now written as
   `<source name>_<key>.tif`, and a tile with no path or source as `<cellid>_<key>.tif` (it was
-  `<cellid>.tif`). The key is derived from the tile, so a re-run writes the same names;
-  whole-file tiles keep their plain source name. To support this, the lightweight `rst_retile`,
-  `rst_tooverlappingtiles` and `rst_maketiles` now record each tile's pixel window in
-  `tile.window`, and `rst_separatebands` records the 1-based band in `tile.metadata['band']`.
-  The heavyweight functions leave `window` null; pixels are identical across tiers.
+  `<cellid>.tif`). The key is derived from the tile, so a re-run writes the same names. A tile
+  whose recorded window is its own full extent (a whole-file read, a single-tile result, or the
+  first window at the origin of a retile) keeps the plain source name. This relies on tile
+  provenance: the lightweight `rst_retile`, `rst_tooverlappingtiles` and `rst_maketiles` now
+  record each tile's pixel window in `tile.window`, relative to the input tile (so it compounds
+  when you retile a retiled tile), and `rst_separatebands` records the 1-based band in
+  `tile.metadata['band']`. The heavyweight retile-family functions record neither, so set
+  `nameCol` when you write heavyweight parts; pixels are identical across tiers.
 
 ### Raster tiling functions
 

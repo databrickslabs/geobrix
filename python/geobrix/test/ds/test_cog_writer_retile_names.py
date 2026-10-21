@@ -75,3 +75,34 @@ def test_separatebands_write_to_distinct_files(spark, tmp_path):
             assert ds.count == 1
             values.append(int(ds.read(1)[0, 0]))
     assert sorted(values) == [40, 80, 120]
+
+
+def test_materialized_read_keeps_source_name(spark, tmp_path):
+    """A whole-file read with virtualTiles=false is one materialized tile with
+    window provenance (0,0,W,H): written with cog_gbx and no nameCol it keeps the
+    plain source name."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_source(str(src), width=256, height=256, count=1)
+    out = tmp_path / "out"
+    spark.dataSource.register(RasterGbxDataSource)
+    spark.dataSource.register(CogGbxDataSource)
+
+    df = spark.read.format("raster_gbx").option("virtualTiles", "false").load(str(src))
+    df.write.format("cog_gbx").mode("overwrite").option("cogBlockSize", "128").save(
+        str(out)
+    )
+
+    assert [os.path.basename(p) for p in glob.glob(str(out / "*.tif"))] == ["scene.tif"]
+
+
+def test_single_maketiles_tile_keeps_source_name(spark, tmp_path):
+    """rst_maketiles on a raster that fits the budget returns one tile covering the
+    whole parent: the window is its full extent, so it keeps the plain source name."""
+    src = tmp_path / "in" / "scene.tif"
+    src.parent.mkdir()
+    _write_source(str(src), width=256, height=256, count=1)
+
+    files = _write_parts(spark, src, tmp_path / "out", "gbx_rst_maketiles(tile, 100)")
+
+    assert [os.path.basename(p) for p in files] == ["scene.tif"]

@@ -1800,13 +1800,13 @@ class CogGbxWriter(DataSourceWriter):
         """True when the tile is a PART of its source rather than the whole file.
 
         A part carries one of: a clip polygon, a band marker (``rst_separatebands``),
-        or a window that is not the source's full extent. A virtual tile's window
-        is compared with the reader-stamped source dims. A materialized tile's
-        window is provenance: with a path (a reader's tile) it is the whole file
-        only when it is ``(0, 0, own width, own height)``; without a path the tile
-        was cut from a parent by a tile function (readers always stamp the path),
-        so any window marks a part. A pending reprojection alone still leaves one
-        tile per source, so ``crs`` is not considered.
+        or a window that is not the whole extent. A virtual tile's window is
+        compared with the reader-stamped source dims. A materialized tile's window
+        is provenance of what was extracted, and its metadata does not reliably
+        carry dims (the readers stamp none), so the window is compared with the
+        tile's OWN raster dimensions from the bytes header: ``(0, 0, own width,
+        own height)`` is the whole tile. A pending reprojection alone still leaves
+        one tile per source, so ``crs`` is not considered.
         """
         if vt.clip_polygon is not None:
             return True
@@ -1814,9 +1814,23 @@ class CogGbxWriter(DataSourceWriter):
             return True
         if vt.window is None:
             return False
-        if vt.raster is not None and not vt.path:
-            return True
-        return not self._window_is_full_extent(vt)
+        if vt.is_virtual():
+            return not self._window_is_full_extent(vt)
+        own = self._own_dims(vt)
+        col_off, row_off, width, height = vt.window
+        return own is None or (col_off, row_off, width, height) != (0, 0, *own)
+
+    @staticmethod
+    def _own_dims(vt):
+        """``(width, height)`` of a materialized tile read from its bytes header
+        (no pixel read), or None if the bytes cannot be opened."""
+        from databricks.labs.gbx.pyrx.core.open_tile import open_header
+
+        try:
+            with open_header(vt) as ds:
+                return ds.width, ds.height
+        except Exception:  # noqa: BLE001 - unreadable bytes: treat as a part
+            return None
 
     def _is_whole_file_virtual(self, vt) -> bool:
         """A virtual tile that covers the FULL source extent with no pending

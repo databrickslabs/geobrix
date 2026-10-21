@@ -19,7 +19,7 @@ from databricks.labs.gbx.ds.writer import _publish_merged, _glob_merge_inputs, _
   content hash plus a random suffix, so it is unique but NOT deterministic across re-runs.
 - `cog_writer._tile_name_key(vt)` — deterministic key: hash of the tile bytes (path for a virtual tile) plus window, clip,
   crs and the `band` marker. `CogGbxWriter._out_path_for` appends it when a default name is not unique per tile (the
-  `<cellid>_<key>` last resort, or a source stem shared by parts: window/clip provenance or a `band` marker). Never name a
+  `<cellid>_<key>` last resort, or a source stem shared by parts: window/clip provenance or a `band` marker; a materialized tile's window counts as whole only when it equals the tile's own raster extent, read from the bytes header, never from metadata dims). Never name a
   tile by `cellid` alone: retile-family tiles share their parent's cellid. The light retile-family UDTFs stamp `window`
   (and `rst_separatebands` stamps `metadata["band"]`, `virtual_tile.BAND_METADATA_KEY`) so writers can tell parts apart.
 - `assert_write_schema(df, expected)` — raises early with a clear message when the caller passes a DataFrame whose schema doesn't match the writer's expectation.

@@ -719,6 +719,22 @@ def test_retile_family_stamps_window_provenance(spark):
     assert windows == [(0, 0, 4, 4)]
 
 
+def test_retile_window_is_relative_to_the_input_tile(spark):
+    # The window is the output's place within the INPUT tile, so retiling a retiled
+    # tile records offsets inside the 2x2 child, not inside the original 4x4.
+    prx.register(spark)
+    _cellid_tile_view(spark, "_ras_window_nested", 7)
+    spark.sql(
+        "SELECT struct(t.*) AS tile FROM _ras_window_nested, "
+        "LATERAL gbx_rst_retile(tile, 2, 2) t"
+    ).createOrReplaceTempView("_ras_window_children")
+    _, windows = _window_rows(
+        spark, "_ras_window_children", "gbx_rst_retile(tile, 1, 1)"
+    )
+    assert len(windows) == 16  # four 2x2 children, four 1x1 windows each
+    assert set(windows) == {(c, r, 1, 1) for c in (0, 1) for r in (0, 1)}
+
+
 def test_separatebands_stamps_band_marker(spark):
     # Each band tile is marked with its 1-based band number (metadata key "band"); the
     # bands share the parent's extent, so no window is stamped.

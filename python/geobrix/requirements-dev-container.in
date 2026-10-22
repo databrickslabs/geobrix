@@ -51,6 +51,17 @@ rioxarray==0.22.0
 # NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P, ERA5).
 # Keep in lockstep with requirements-light-env6-ci.in and the pyproject [light-base] floor.
 netcdf4==1.7.4
+# Zarr transactional stores (test/zarr): the [zarr_dbr19] extra. Ranges MUST match pyproject
+# [zarr_dbr19] and requirements-light-env6-ci.in. gbx:test:python also installs the extra into a
+# container that predates it; baking it here makes that a no-op.
+zarr>=3.4.1,<3.5
+numcodecs>=0.17,<0.18
+zarrs>=0.2.3,<0.3
+tensorstore>=0.1.85,<0.2
+obstore>=0.11,<0.13
+ml_dtypes>=0.5,<1
+msgspec>=0.19,<1
+donfig>=0.8,<1
 pdal==3.5.3
 rio-tiler==9.0.6
 rio-cogeo==7.0.2

@@ -50,6 +50,15 @@ runs:
         # already in the hash-pinned closure above.
         pip install --no-deps python/geobrix
         python -c "import rasterio, pyarrow, pandas, shapely; print('rasterio', rasterio.__version__, 'gdal', rasterio.__gdal_version__, 'pyarrow', pyarrow.__version__, 'pandas', pandas.__version__)"
+    # test/zarr runs the Zarr transactional manifest against a local Delta Lake session. PySpark
+    # needs the OSS delta-spark jars on the JVM classpath, and they are not in the hash-pinned
+    # pip lock. Fetch them with Maven, which jfrog-auth (above) already pointed at the JFrog
+    # db-maven mirror. Spark's own `--packages` (Ivy) is not used: it ignores that mirror and
+    # the hardened runner blocks direct Maven Central. test/conftest.py finds the jars in
+    # ~/.m2/repository and puts them on PYSPARK_SUBMIT_ARGS when test/zarr is collected.
+    - name: Fetch Delta Lake jars (Zarr manifest tests)
+      shell: bash
+      run: bash scripts/ci/fetch-delta-test-jars.sh
     - name: Build lightweight wheel
       shell: bash
       run: |
@@ -65,7 +74,8 @@ runs:
         # The lightweight tier is exercised ONLY here (the heavy phase skips these
         # dirs via test/conftest.py collect_ignore). Every light test dir must be
         # listed: pyrx, ds, pyvx, pygx (light GridX), pmtiles_light (light
-        # pmtiles_agg), stac (light STAC client, [stac] extra),
+        # pmtiles_agg), zarr (transactional Zarr stores, [zarr_dbr19] extra; needs the Delta
+        # jars fetched above), stac (light STAC client, [stac] extra),
         # vizx (gbx.vizx, [vizx] extra), sample (gbx.sample.overture, [overture] extra),
         # bench (bench-harness spec/compare/fingerprint/runner unit tests -- guards
         # the light bench FnSpec registry + cross-tier count invariants),
@@ -79,4 +89,4 @@ runs:
         # All dirs run in ONE process, so state one dir leaves behind reaches the
         # next: e.g. test/pyvx registers PROJ grids before test/bench builds rasters
         # on worker threads (see test/conftest.py for the maintained condition).
-        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models -m "not integration" -v
+        pytest test/pyrx test/ds test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx test/sample test/bench test/core test/models test/zarr -m "not integration" -v

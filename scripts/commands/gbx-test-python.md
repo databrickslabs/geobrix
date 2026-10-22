@@ -42,6 +42,14 @@ The heavy tests load `python/geobrix/lib/geobrix-*-jar-with-dependencies.jar` (`
 - **Never runs Maven.** With no JAR in `target/` and none staged, the heavy phase (or the `--path` run) fails immediately with one line, `PRECONDITION MISSING: no built JAR in target/ and none staged in python/geobrix/lib/; heavy tests not run. Build it: gbx:docker:exec "mvn clean package -PskipScoverage -DskipTests"`, and the exit code is non-zero. In the phased run the `light` phase still runs and the summary shows the heavy phase as FAIL with that line.
 - `gbx:data:stage-wheel` with a skip-JAR flag empties `python/geobrix/lib/` (it keeps the wheel JAR-less); the next heavy run here re-stages the JAR from `target/`.
 
+## Zarr tests (`test/zarr`)
+
+`test/zarr` needs two things the base dev image does not carry. The command provides both before pytest starts, so a plain `--path python/geobrix/test/zarr/` just works:
+
+- **The `zarr_dbr19` extra** (zarr, numcodecs, zarrs, tensorstore, obstore and their transitive packages). If an import probe fails, the command runs `pip install -e python/geobrix[zarr_dbr19]`, so the pins always come from `pyproject.toml`. Once the dev image bakes the extra in, this becomes a no-op.
+- **The OSS Delta Lake jars** (`delta-spark_2.13` + `delta-storage`, 4.0.1), which the manifest tests run against in a local Spark session. They are not a pip package, so `scripts/ci/fetch-delta-test-jars.sh` fetches them with `mvn dependency:get` into the persistent Maven repo (`scripts/docker/m2/`, gitignored) when missing, and does nothing when they are present. If the fetch fails the command warns and carries on; the Delta-backed zarr tests then fail with a message naming the missing jars (they never skip).
+- `test/conftest.py` puts the jars on `PYSPARK_SUBMIT_ARGS` only when `test/zarr` tests are collected, only when both jar files exist, and never overrides a `PYSPARK_SUBMIT_ARGS` you set. This matters because PySpark reads `spark.jars` only when it launches the JVM: in the light phase every light dir shares one process, so the jars must be there before the first session of any dir. The heavy phase ignores `test/zarr` and never sees them.
+
 ## Default marker filter
 
 By default the script runs with `-m "not integration"`, matching CI's `python_build` action. This excludes `python/geobrix/test/sample/test_sample_bundle.py::test_run_*_bundle_returns_dict_shape`, which download hundreds of MB of sample data.

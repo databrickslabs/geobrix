@@ -38,7 +38,7 @@ CONDITION TO MAINTAIN (every light-tier addition must do ALL THREE):
      even if the heavy env drifts (gains rasterio) or a caller targets a light dir
      directly.
 Light test dirs so far: pyrx, pyvx, pygx, pmtiles_light, stac, earthdata, vizx,
-sample, models, plus bench + ds + core (the tier-neutral gbx.core.crs resolver
+sample, models, zarr, plus bench + ds + core (the tier-neutral gbx.core.crs resolver
 imports rasterio, so test/core is light-tier too).
 
 ``bench`` is a light dir (its modules import rasterio/shapely/h3/quadbin via the
@@ -53,6 +53,8 @@ after it. A test that changes such state must restore it (see the ``_isolate`` /
 """
 
 import importlib.util
+import os
+from pathlib import Path
 
 # Every test dir whose modules import light-tier-only deps. Ignored in the
 # heavyweight CI env (no rasterio); collected + run in the light env.
@@ -69,8 +71,66 @@ _LIGHT_TEST_DIRS = [
     "vizx",
     "sample",
     "models",
+    "zarr",
 ]
 
 # Skip the light-tier suites when their dependencies are not installed.
 if importlib.util.find_spec("rasterio") is None:
     collect_ignore = list(_LIGHT_TEST_DIRS)
+
+
+# ---------------------------------------------------------------------------
+# Local Delta Lake for test/zarr (the transactional manifest is a Delta table).
+#
+# PySpark applies spark.jars only when it LAUNCHES the JVM, so the OSS delta-spark jars
+# must be on PYSPARK_SUBMIT_ARGS before the first SparkSession in the process. The light
+# phase runs every light dir in ONE process and several dirs start a plain session, so
+# the spark_delta fixture cannot add the jars later. They are added here instead, at the
+# end of collection and only if test/zarr tests were collected: the heavy phase ignores
+# test/zarr, so it never sees them.
+#
+#   * only when both jars exist locally -- nothing is downloaded here. gbx:test:python
+#     and the light CI action fetch them with scripts/ci/fetch-delta-test-jars.sh;
+#   * never overrides a PYSPARK_SUBMIT_ARGS the caller already set.
+#
+# Without the jars the spark_delta fixture fails loudly (see test/zarr/conftest.py).
+# ---------------------------------------------------------------------------
+# Keep in step with DELTA_VERSION in scripts/ci/fetch-delta-test-jars.sh.
+_DELTA_VERSION = "4.0.1"  # Delta 4.0.x runs on Spark 4.0.x
+
+
+def _delta_jars():
+    """delta-spark + delta-storage jars from the first Maven repo holding both, else []."""
+    v = _DELTA_VERSION
+    repos = [
+        os.environ.get("GBX_M2_REPO"),
+        # the repo checkout's persistent Maven cache (mounted at /root/geobrix in Docker)
+        Path(__file__).resolve().parents[3] / "scripts" / "docker" / "m2",
+        Path.home() / ".m2" / "repository",  # CI runners
+    ]
+    for repo in filter(None, repos):
+        jars = [
+            Path(repo) / "io/delta/delta-spark_2.13" / v / f"delta-spark_2.13-{v}.jar",
+            Path(repo) / "io/delta/delta-storage" / v / f"delta-storage-{v}.jar",
+        ]
+        if all(j.is_file() for j in jars):
+            return jars
+    return []
+
+
+def pytest_collection_finish(session):
+    """Put the Delta jars on PYSPARK_SUBMIT_ARGS when test/zarr tests will run."""
+    if "PYSPARK_SUBMIT_ARGS" in os.environ:
+        return
+    zarr_dir = Path(__file__).resolve().parent / "zarr"
+    if not any(zarr_dir in Path(str(item.path)).parents for item in session.items):
+        return
+    jars = _delta_jars()
+    if jars:
+        # --driver-class-path, not --jars: --jars sets spark.jars, which the pyrx
+        # "no GeoBrix JAR in the session" guardrail (and the pyvx parity JAR check)
+        # read. Local mode runs the executors in the driver JVM, so the driver
+        # classpath is enough.
+        os.environ["PYSPARK_SUBMIT_ARGS"] = (
+            "--driver-class-path " + os.pathsep.join(map(str, jars)) + " pyspark-shell"
+        )

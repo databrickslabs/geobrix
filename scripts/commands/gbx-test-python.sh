@@ -30,6 +30,9 @@ show_help() {
     echo -e "  when none is staged or ${YELLOW}target/${NC} is newer. Maven is never run; with no JAR in either place the heavy"
     echo -e "  phase fails at once with one ${YELLOW}PRECONDITION MISSING${NC} line. The light phase never needs the JAR."
     echo ""
+    echo -e "${CYAN}Zarr tests (test/zarr):${NC} the command installs the ${YELLOW}zarr_dbr19${NC} extra and fetches the OSS Delta Lake jars"
+    echo -e "  (scripts/ci/fetch-delta-test-jars.sh) when missing; conftest puts the jars on the JVM classpath."
+    echo ""
     echo -e "${CYAN}Default marker filter:${NC} ${YELLOW}not integration${NC} (matches CI; opt in with ${GREEN}--with-integration${NC} or override with ${GREEN}--markers${NC})"
     echo ""
     echo -e "${CYAN}Log Path Behavior:${NC}"
@@ -136,6 +139,24 @@ docker exec geobrix-dev /bin/bash -c \
        quadbin==0.2.2 numexpr==2.14.1 laspy==2.7.0 rio-tiler==9.0.6 \
        lazrs==0.8.2 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
        tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"
+
+# Zarr transactional stores (test/zarr): the [zarr_dbr19] extra. Unlike the stopgap above, the
+# pins are NOT repeated here -- pip installs the extra from pyproject.toml, the single source,
+# so a pin change lands in the dev container without touching this script. `-e` re-resolves
+# only that extra for the already-editable geobrix (no other package is touched), and the
+# import probe makes this a near-zero-cost no-op once the stack is present. Remove once the
+# dev image bakes the extra in (requirements-dev-container.txt).
+docker exec geobrix-dev /bin/bash -c \
+    "python3 -c 'import zarr, numcodecs, zarrs, tensorstore, obstore, ml_dtypes, msgspec, donfig; assert zarr.__version__.startswith(\"3.4\")' >/dev/null 2>&1 || \
+     pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'"
+
+# test/zarr runs a LOCAL Delta Lake session: the OSS delta-spark jars must be in the Maven repo
+# (test/conftest.py puts them on PYSPARK_SUBMIT_ARGS when test/zarr is collected). The jars are
+# not a pip package and Spark's Ivy resolver cannot reach the dev proxy, so fetch them with Maven
+# when missing (a no-op once present). Non-fatal: unrelated suites still run, and the Delta-backed
+# zarr tests fail loudly, naming the missing jars, rather than skip.
+docker exec geobrix-dev /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh \
+    || echo -e "${YELLOW}⚠️  Delta jars unavailable: Delta-backed zarr tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
 
 if [ -n "$MARKERS" ]; then
     echo -e "${CYAN}🏷️  Markers: ${YELLOW}$MARKERS${NC}"

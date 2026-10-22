@@ -38,6 +38,7 @@ def spark_delta(tmp_path_factory):
             .config("spark.sql.catalog.spark_catalog", _DELTA_CATALOG)
             .config("spark.sql.warehouse.dir", str(tmp_path_factory.mktemp("delta_wh")))
             .config("spark.sql.shuffle.partitions", "2")
+            .config("spark.databricks.delta.snapshotPartitions", "2")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .config("spark.ui.enabled", "false")
             .getOrCreate()

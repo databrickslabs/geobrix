@@ -526,6 +526,39 @@ def _laszip_record(h) -> Union[str, _LaszipRecord, None]:
     return _LaszipRecord(vlr, item, chunk_size)
 
 
+class _IOWatch:
+    """A file handle that remembers the OSError its ``read`` / ``readinto`` /
+    ``seek`` / ``tell`` raised. lazrs reads through the handle it is given and
+    turns an error of it into a LazrsError ("Failed to use readinto to read
+    bytes"), which says nothing of the Volume error behind it."""
+
+    def __init__(self, f):
+        self._f = f
+        self.error: Optional[OSError] = None
+
+    def _call(self, name: str, *args):
+        try:
+            return getattr(self._f, name)(*args)
+        except OSError as e:
+            self.error = e
+            raise
+
+    def read(self, *args):
+        return self._call("read", *args)
+
+    def readinto(self, buffer):
+        return self._call("readinto", buffer)
+
+    def seek(self, *args):
+        return self._call("seek", *args)
+
+    def tell(self):
+        return self._call("tell")
+
+    def __getattr__(self, name):  # whatever else lazrs asks of a file
+        return getattr(self._f, name)
+
+
 def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _ChunkTable]:
     """The chunk table of the LAZ points of the open file ``f`` (``size`` bytes)
     when it can be handed to the decoder; a str saying why not when it cannot."""
@@ -552,15 +585,18 @@ def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _Chunk
     if count > _most_chunks(points, record.chunk_size):
         return (
             f"the chunk table declares {count} chunks, more than the {points} "
-            "points of the header need"
+            "points of the header need (the header's point count may be wrong)"
         )
-    f.seek(start)
+    handle = _IOWatch(f)
+    handle.seek(start)
     try:  # now bounded by the file and the header: lazrs reserves 16 bytes per chunk
-        entries = lazrs.read_chunk_table(f, record.vlr)
+        entries = lazrs.read_chunk_table(handle, record.vlr)
     except _quarantine.PASS_THROUGH:
         raise
     except BaseException as e:  # noqa: BLE001 - LazrsError, a Rust panic
         _raise_if_environment(e)  # memory is the machine's, not the file's
+        if handle.error is not None:  # an I/O error of the Volume, not the file's
+            _raise_if_environment(handle.error)
         return f"the chunk table cannot be decoded ({type(e).__name__}: {e})"
     if not entries:
         return "the chunk table cannot be found"

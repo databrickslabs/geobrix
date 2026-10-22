@@ -214,7 +214,8 @@ Serverless:
   one corrupt file cannot fail a distributed read over a whole archive. A LAZ file whose chunk
   table or LASzip record is implausible or cannot be decoded is set aside as unreadable before
   it is decoded (a read without `on_error` warns and skips it), instead of ending the worker
-  process. The points of a LAZ file are read up to the number its chunk table holds.
+  process. With `on_error`, a LAZ file whose header declares more points than its chunk table
+  holds is read up to the points the table holds; a plain read of such a file fails.
 - **Parallelism is per file** — one InputPartition per file. A directory of many tiles
   parallelizes naturally across executors; a handful of very large files limits parallelism
   to the file count, so split or tile upstream if you need more executors engaged.

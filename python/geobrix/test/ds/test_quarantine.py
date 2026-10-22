@@ -6,6 +6,7 @@ Every corrupt sample is built here, the same way the corrupt-input probe built
 it: a valid file, then a few bytes garbled, truncated or rewritten.
 """
 
+import errno
 import json
 import os
 import shutil
@@ -1248,6 +1249,7 @@ def test_lidar_chunk_count_above_what_the_header_needs_is_refused_before_lazrs_r
         result = _read_chunk_table(r.header, path, os.path.getsize(path))
     assert isinstance(result, str)
     assert "10 chunks, more than the 120000 points" in result
+    assert "the header's point count may be wrong" in result
     assert called == []
 
 
@@ -1292,6 +1294,45 @@ def test_lidar_chunk_table_check_does_not_blame_the_file_for_running_out_of_memo
         monkeypatch.setattr(lazrs, fails, out_of_memory)
         with pytest.raises(MemoryError):
             _read_chunk_table(r.header, path, os.path.getsize(path))
+
+
+@pytest.mark.parametrize("code", [errno.EIO, None])
+def test_lidar_chunk_table_check_does_not_blame_the_file_for_an_io_error_in_lazrs(
+    tmp_path, monkeypatch, code
+):
+    """An I/O error of the Volume while lazrs reads the table comes back from
+    lazrs as a LazrsError ("Failed to use readinto to read bytes"); the error the
+    handle raised is the environment's, not the file's, so it propagates. An
+    OSError without a system errno (a parser's) is still a verdict on the file."""
+    import builtins
+    import io
+
+    import laspy
+
+    from databricks.labs.gbx.ds.lidar import _read_chunk_table
+
+    path = _laz(tmp_path / "c.laz", 120_000)
+    with laspy.open(path) as r:
+        header = r.header
+    real_open = builtins.open
+
+    class Failing(io.BufferedReader):
+        def readinto(self, b):
+            raise OSError(code, "Input/output error") if code else OSError("bad")
+
+    def failing_open(file, *a, **k):
+        if str(file) == path:
+            return Failing(real_open(file, "rb", buffering=0))
+        return real_open(file, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", failing_open)
+    if code is None:
+        result = _read_chunk_table(header, path, os.path.getsize(path))
+        assert isinstance(result, str) and "chunk table cannot be decoded" in result
+    else:
+        with pytest.raises(OSError) as raised:
+            _read_chunk_table(header, path, os.path.getsize(path))
+        assert raised.value.errno == code
 
 
 def test_lidar_chunk_table_check_retries_a_transient_miss_on_its_open(

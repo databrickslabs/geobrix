@@ -3,12 +3,14 @@
 Not public API. ``make_era5_like`` writes a small synthetic stand-in for an ERA5
 reanalysis cube (hourly 2 m temperature and 10 m wind on a regular 2.5 degree grid)
 in any of the three layouts GeoBrix has to handle: Zarr v3 with sharding, Zarr v3
-without it, and Zarr v2. It needs ``xarray`` and ``zarr`` (the ``zarr_dbr19`` extra
-and the light base), imported on first use.
+without it, and Zarr v2. ``plain_store_rows`` reads such a store back as manifest rows
+and ``rewrite_one_inner_chunk`` overrides one inner chunk of it. They need ``xarray``
+and ``zarr`` (the ``zarr_dbr19`` extra and the light base), imported on first use.
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 # Grid of the synthetic cube. time x latitude x longitude.
@@ -127,3 +129,132 @@ def make_era5_like(path, *, zarr_format: int = 3, sharded: bool | None = None) -
         encoding=encoding,
     )
     return path
+
+
+# --- a plain store as manifest rows -----------------------------------------------
+
+_METADATA_FILES = ("zarr.json", ".zarray", ".zattrs", ".zgroup", ".zmetadata")
+
+
+class PlainRows(list):
+    """Manifest rows made by ``plain_store_rows``; ``root`` is the store they describe."""
+
+    root: Path
+
+
+def plain_store_rows(path):
+    """Read a local Zarr store as ``(metas, rows, arrays)``.
+
+    ``metas`` maps each metadata key to its bytes (``zarr.json``, ``t2m/zarr.json``,
+    ``u10/.zarray`` ...). ``rows`` holds one ``shard`` row per object of a sharded
+    array and one ``chunk`` row per object of any other array, with ``file`` relative
+    to the store, ``offset`` 0, ``length`` the object's size, ``origin`` ``"gbx"`` and
+    a zero ``write_id``. ``arrays`` maps each array name to its ``ArrayMeta``.
+    """
+    from databricks.labs.gbx.zarr._meta import parse_v2, parse_v3
+
+    root = Path(path)
+    metas = {
+        f.relative_to(root).as_posix(): f.read_bytes()
+        for f in sorted(root.rglob("*"))
+        if f.is_file() and f.name in _METADATA_FILES
+    }
+    arrays = {}
+    for key, raw in metas.items():
+        prefix, _, name = key.rpartition("/")
+        if not prefix:
+            continue
+        if name == "zarr.json" and json.loads(raw).get("node_type") == "array":
+            arrays[prefix] = parse_v3(prefix, json.loads(raw))
+        elif name == ".zarray":
+            zattrs = json.loads(metas.get(f"{prefix}/.zattrs", b"{}"))
+            arrays[prefix] = parse_v2(prefix, json.loads(raw), zattrs)
+
+    rows = PlainRows()
+    rows.root = root
+    for name, meta in sorted(arrays.items()):
+        kind = "shard" if meta.shard is not None else "chunk"
+        for f in sorted((root / name).rglob("*")):
+            if not f.is_file() or f.name in _METADATA_FILES:
+                continue
+            key = f.relative_to(root / name).as_posix()
+            rows.append(
+                dict(
+                    kind=kind,
+                    array=name,
+                    key=key,
+                    shard_key=key,
+                    file=f.relative_to(root).as_posix(),
+                    offset=0,
+                    length=f.stat().st_size,
+                    checksum=None,
+                    origin="gbx",
+                    identity=None,
+                    write_id="0" * 32,
+                    tag=None,
+                    meta=None,
+                )
+            )
+    return metas, rows, arrays
+
+
+def rewrite_one_inner_chunk(rows, meta, dir, chunk, value):
+    """Override one inner chunk of a sharded array with a chunk filled with ``value``.
+
+    The chunk is encoded as a standalone chunk of ``inner_meta_doc(meta)`` in a
+    ``MemoryStore`` and written to a new file under ``dir`` (the row's ``file`` is its
+    absolute path). Returns ``(rows + [that chunk row], expected)``, where ``expected``
+    is the array as the store now reads: the original with that chunk's block set to
+    ``value``. ``rows`` must come from ``plain_store_rows``, which knows the store.
+    """
+    import numpy as np
+    import zarr
+    from zarr.core.buffer import default_buffer_prototype
+    from zarr.storage import MemoryStore
+
+    from databricks.labs.gbx.zarr._keys import shard_of
+    from databricks.labs.gbx.zarr._meta import inner_meta_doc
+
+    chunk = tuple(int(c) for c in chunk)
+    store = MemoryStore(
+        {
+            "zarr.json": default_buffer_prototype().buffer.from_bytes(
+                json.dumps(inner_meta_doc(meta)).encode()
+            )
+        }
+    )
+    arr = zarr.open_array(store=store, mode="r+")
+    arr[...] = np.full(meta.chunks, value, dtype=meta.dtype)
+    encoded = store._store_dict[meta.key_encoding.chunk_key((0,) * len(meta.chunks))]
+
+    out = Path(dir) / ("inner_" + "_".join(str(c) for c in chunk) + ".bin")
+    data = encoded.to_bytes()
+    out.write_bytes(data)
+
+    key = meta.key_encoding.chunk_key(chunk)
+    new = PlainRows(
+        [
+            *rows,
+            dict(
+                kind="chunk",
+                array=meta.name,
+                key=key,
+                shard_key=meta.key_encoding.chunk_key(shard_of(chunk, meta.shard.cps)),
+                file=str(out),
+                offset=0,
+                length=len(data),
+                checksum=None,
+                origin="gbx",
+                identity=None,
+                write_id="1" * 32,
+                tag=None,
+                meta=None,
+            ),
+        ]
+    )
+    new.root = rows.root
+
+    expected = zarr.open_array(str(rows.root / meta.name), mode="r")[...]
+    block = tuple(slice(c * n, (c + 1) * n) for c, n in zip(chunk, meta.chunks))
+    expected[block] = value
+    return new, expected

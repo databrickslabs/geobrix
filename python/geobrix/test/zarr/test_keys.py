@@ -8,6 +8,7 @@ from databricks.labs.gbx.zarr._keys import (
     inner_index,
     shard_of,
 )
+from databricks.labs.gbx.zarr.errors import ZarrUnsupported
 
 
 def test_v3_default_keys_round_trip():
@@ -51,3 +52,17 @@ def test_bad_key_raises():
     enc = encoding_for(3, {})
     with pytest.raises(ValueError):
         enc.parse("x/1/2", 2)
+
+
+def test_inner_coords_rejects_an_index_outside_the_shard():
+    cps = (2, 2, 2)
+    assert inner_coords((0, 0, 0), 7, cps) == (1, 1, 1)
+    for bad in (-1, 8):
+        with pytest.raises(ValueError):
+            inner_coords((0, 0, 0), bad, cps)
+
+
+def test_chunks_per_shard_rejects_a_dimension_count_mismatch():
+    with pytest.raises(ZarrUnsupported) as e:
+        chunks_per_shard((24, 74), (12, 37, 72))
+    assert "Fix:" in str(e.value)

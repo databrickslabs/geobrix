@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from databricks.labs.gbx.zarr.errors import ZarrUnsupported
@@ -54,6 +55,12 @@ def encoding_for(zarr_format: int, doc: dict) -> KeyEncoding:
 def chunks_per_shard(
     shard_shape: tuple[int, ...], chunk_shape: tuple[int, ...]
 ) -> tuple[int, ...]:
+    if len(shard_shape) != len(chunk_shape):
+        raise ZarrUnsupported(
+            f"shard shape {tuple(shard_shape)} and chunk shape {tuple(chunk_shape)} "
+            "have a different number of dimensions",
+            fix="rewrite the array so its shard and chunk shapes have one entry per dimension",
+        )
     out = []
     for s, c in zip(shard_shape, chunk_shape):
         if s % c:
@@ -82,6 +89,8 @@ def inner_coords(
     shard_coords: tuple[int, ...], index: int, cps: tuple[int, ...]
 ) -> tuple[int, ...]:
     """Chunk coordinates of the ``index``-th (C-order) chunk of a shard."""
+    if not 0 <= index < math.prod(cps):
+        raise ValueError(f"index {index} is outside a shard of {tuple(cps)} chunks")
     local = []
     for n in reversed(cps):
         local.append(index % n)

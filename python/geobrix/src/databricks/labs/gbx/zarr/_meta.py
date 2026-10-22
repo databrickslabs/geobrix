@@ -122,6 +122,8 @@ def _endian(codecs) -> str:
 
 
 def parse_v3(name: str, doc: dict) -> ArrayMeta:
+    # the model owns its document; the caller's dict stays theirs
+    doc = copy.deepcopy(doc)
     dt = doc.get("data_type")
     if not isinstance(dt, str) or dt not in _V3_DTYPES:
         raise ZarrUnsupported(
@@ -135,6 +137,15 @@ def parse_v3(name: str, doc: dict) -> ArrayMeta:
             fix="rewrite the array with a regular chunk grid",
         )
     codecs = tuple(doc.get("codecs") or ())
+    names = [c.get("name") for c in codecs]
+    if "sharding_indexed" in names and len(codecs) > 1:
+        # Zarr allows array->array codecs before, and bytes->bytes codecs after, an
+        # array->bytes codec; ShardSpec and inner_meta_doc have no place for them.
+        raise ZarrUnsupported(
+            f"array {name!r} has codecs {names} around sharding_indexed, which is not supported",
+            fix="rewrite the array so sharding_indexed is its only outer codec; "
+            "put compression and other codecs inside it",
+        )
     outer = tuple(grid["configuration"]["chunk_shape"])
     shard = None
     shards = None
@@ -166,13 +177,14 @@ def parse_v3(name: str, doc: dict) -> ArrayMeta:
             doc.get("dimension_names") or (f"dim_{i}" for i in range(len(shape)))
         ),
         fill_value=_fill_value(doc.get("fill_value"), dtype),
-        attrs=dict(doc.get("attributes") or {}),
+        attrs=copy.deepcopy(doc.get("attributes") or {}),
         key_encoding=encoding_for(3, doc),
         doc=doc,
     )
 
 
 def parse_v2(name: str, zarray: dict, zattrs: dict) -> ArrayMeta:
+    zarray, zattrs = copy.deepcopy(zarray), copy.deepcopy(zattrs)  # as in parse_v3
     order = zarray.get("order", "C")
     if order != "C":
         raise ZarrUnsupported(
@@ -201,7 +213,9 @@ def parse_v2(name: str, zarray: dict, zattrs: dict) -> ArrayMeta:
         dims=dims,
         fill_value=_fill_value(zarray.get("fill_value"), dtype),
         # the dimension names live in ``dims``; they are not a user attribute
-        attrs={k: v for k, v in zattrs.items() if k != "_ARRAY_DIMENSIONS"},
+        attrs={
+            k: copy.deepcopy(v) for k, v in zattrs.items() if k != "_ARRAY_DIMENSIONS"
+        },
         key_encoding=encoding_for(2, zarray),
         doc={".zarray": zarray, ".zattrs": zattrs},
     )
@@ -244,33 +258,45 @@ def inner_meta_doc(meta: ArrayMeta) -> dict:
     return doc
 
 
-def _cf_fill_attr(raw, dtype: str):
-    """xarray stores a Zarr v3 float ``_FillValue`` attribute as base64 of a little-endian
-    float64 (JSON cannot hold NaN); anything else is already a plain value."""
-    if isinstance(raw, str) and np.dtype(dtype).kind == "f":
-        if raw in _FLOAT_NAMES:
-            return _FLOAT_NAMES[raw]
-        return struct.unpack("<d", base64.standard_b64decode(raw))[0]
-    return raw
+def _cf_fill_attr(raw, meta: ArrayMeta):
+    """A Zarr v3 float ``_FillValue`` attribute as a number.
+
+    xarray stores it as base64 of a little-endian float64, because JSON cannot hold NaN;
+    ``"NaN"``, ``"Infinity"`` and ``"-Infinity"`` are accepted too. Any other kind of
+    value is already a plain number or boolean.
+    """
+    if not isinstance(raw, str) or np.dtype(meta.dtype).kind != "f":
+        return raw
+    if raw in _FLOAT_NAMES:
+        return _FLOAT_NAMES[raw]
+    try:
+        return struct.unpack("<d", base64.b64decode(raw, validate=True))[0]
+    except (ValueError, struct.error):  # binascii.Error is a ValueError
+        raise ZarrUnsupported(
+            f"the _FillValue attribute {raw!r} of array {meta.name!r} is not a "
+            "base64-encoded float64",
+            fix="store _FillValue as a number, or read the array with decode=False",
+        ) from None
 
 
 def _cf_attrs(meta: ArrayMeta) -> dict:
-    """The attributes CF decoding sees, following xarray's own Zarr defaults.
+    """The attributes CF decoding sees: xarray's ``open_zarr`` rules for each Zarr version.
 
-    In Zarr v2 the array ``fill_value`` is the missing-data marker (there is no
-    ``_FillValue`` attribute), so it becomes ``_FillValue``. In Zarr v3 ``fill_value`` is only
-    what unwritten chunks read as (``0`` for every integer array), so only an explicit
-    ``_FillValue`` attribute masks.
+    Zarr v2 has no ``_FillValue`` attribute convention: the array ``fill_value`` is the
+    missing-data marker, so when it is set it becomes ``_FillValue`` and overrides the
+    attribute; otherwise the attribute stays exactly as stored. A boolean array is never
+    masked (that would produce an object array).
+
+    In Zarr v3 ``fill_value`` is only what unwritten chunks read as (``0`` for every
+    integer array) and never masks; an explicit ``_FillValue`` attribute does, after
+    decoding xarray's base64 form of a float.
     """
     attrs = dict(meta.attrs)
-    if "_FillValue" in attrs:
-        attrs["_FillValue"] = _cf_fill_attr(attrs["_FillValue"], meta.dtype)
-    elif (
-        meta.zarr_format == 2
-        and meta.fill_value is not None
-        and np.dtype(meta.dtype).kind != "b"  # masking a boolean yields an object array
-    ):
-        attrs["_FillValue"] = meta.fill_value
+    if meta.zarr_format == 2:
+        if meta.fill_value is not None and np.dtype(meta.dtype).kind != "b":
+            attrs["_FillValue"] = meta.fill_value
+    elif "_FillValue" in attrs:
+        attrs["_FillValue"] = _cf_fill_attr(attrs["_FillValue"], meta)
     return attrs
 
 
@@ -305,7 +331,16 @@ def decode_coord(values: np.ndarray, meta: ArrayMeta) -> np.ndarray:
             f"calendar {calendar!r} of coordinate {meta.name!r} is not supported",
             fix="pass decode=False to read the raw time numbers",
         )
+    from pandas.errors import OutOfBoundsDatetime, OutOfBoundsTimedelta
     from xarray.coding.times import decode_cf_datetime
 
-    decoded = decode_cf_datetime(values, units, calendar, use_cftime=False)
+    try:
+        decoded = decode_cf_datetime(values, units, calendar, use_cftime=False)
+    except (OutOfBoundsDatetime, OutOfBoundsTimedelta, OverflowError):
+        # datetime64[ns] spans only the years 1678 to 2262 (xarray would fall back to cftime)
+        raise ZarrUnsupported(
+            f"times of coordinate {meta.name!r} ({units}) fall outside the range of "
+            "datetime64[ns], the years 1678 to 2262",
+            fix="pass decode=False to read the raw time numbers",
+        ) from None
     return np.asarray(decoded).astype("datetime64[ns]")

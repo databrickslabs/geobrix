@@ -686,8 +686,13 @@ object HadoopUtils extends Logging {
         copyToLocalDir(copyFromPath.toString, outputDir, hconf)
     }
 
+    /** GDAL sidecars of a file `<name>`: `<name>.aux.xml` (PAM metadata), `.ovr` (overviews), `.msk` (mask). */
+    private val GdalSidecarSuffixes = Seq(".aux.xml", ".ovr", ".msk")
+
     /** Copies files from srcFs whose names start with baseSrcPath prefix into dstDirPath on dstFs, replacing
-      * any of the same name there. */
+      * any of the same name there. When the file replaces an older one, the older one's GDAL sidecars that
+      * the new file does not have are deleted first: GDAL would read an old `.aux.xml` as the new file's
+      * metadata. */
     def copyRelativeFiles(
         srcFs: FileSystem,
         dstFs: FileSystem,
@@ -705,12 +710,27 @@ object HadoopUtils extends Logging {
         val parentDir = baseSrcPath.getParent
         val matchingFiles = srcFs.listStatus(parentDir, filter)
 
+        if (isFileAt(dstFs, new Path(dstDirPath, baseSrcPath.getName))) {
+            val copied = matchingFiles.map(_.getPath.getName).toSet
+            GdalSidecarSuffixes.map(baseSrcPath.getName + _).filterNot(copied).foreach { n =>
+                val stale = new Path(dstDirPath, n)
+                if (isFileAt(dstFs, stale) && !dstFs.delete(stale, false) && dstFs.exists(stale)) {
+                    throw new java.io.IOException(s"Could not delete $stale, a sidecar of the older output being replaced")
+                }
+            }
+        }
+
         matchingFiles.foreach { fileStatus =>
             val srcFile = fileStatus.getPath
             val dstFile = new Path(dstDirPath, srcFile.getName)
             AtomicDistributedCopy.copyOverwriting(srcFs, dstFs, srcFile, dstFile)
         }
     }
+
+    /** Whether a file (not a directory) is at `p`. */
+    private def isFileAt(fs: FileSystem, p: Path): Boolean =
+        try fs.getFileStatus(p).isFile
+        catch { case _: java.io.FileNotFoundException => false }
 
     /** Copies inPath (file or dir) into outDir, replacing what is there under its name; for multi-file sources
       * (e.g. .shp) copies all related files. Returns path to result. */

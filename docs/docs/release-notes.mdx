@@ -224,14 +224,15 @@ formats.
   were never deleted. A copy is now deleted once no read is using it, after an idle period that lets
   the next partition of the same file reuse it. For example, the chunks of a large GeoPackage that
   a worker reads share one copy instead of each copying the whole file again. The idle period is 60
-  seconds by default. Set it in milliseconds with the Spark conf
-  `spark.databricks.labs.gbx.nodecache.retention.ms`; `0` deletes a copy as soon as its last read ends.
+  seconds by default. Set it with the Spark conf `spark.databricks.labs.gbx.nodecache.retention.ms`
+  as a duration such as `60s` or `500ms` (a bare number is milliseconds); `0` deletes a copy as soon
+  as its last read ends.
 - **The heavyweight readers re-read a file replaced at the same path.** A copy is reused only while
   the source's size and modification time are unchanged, so a file rewritten in place is copied
   again. Previously a worker could keep reading its earlier copy.
-- **The heavyweight `gdal` and `gtiff_gdal` writers replace an output of the same name**, where an
-  `append` write used to keep an older file of the same size instead of the new tile and failed on a
-  directory format such as Zarr.
+- **The heavyweight `gdal` and `gtiff_gdal` writers replace an output of the same name**: an `append`
+  write used to keep an older file of the same size instead of the new tile, and every write of a
+  directory format such as Zarr failed while removing its local working copy.
 
 ### PMTiles reader
 

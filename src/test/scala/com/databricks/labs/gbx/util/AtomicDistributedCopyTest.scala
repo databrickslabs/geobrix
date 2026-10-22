@@ -7,6 +7,7 @@ import org.scalatest.BeforeAndAfterEach
 import org.scalatest.funsuite.AnyFunSuite
 import org.scalatest.matchers.should.Matchers._
 
+import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import scala.jdk.CollectionConverters._
@@ -132,6 +133,47 @@ class AtomicDistributedCopyTest extends AnyFunSuite with BeforeAndAfterEach {
         AtomicDistributedCopy.copyOverwriting(localFs, localFs, new Path(src.toUri), new Path(dst.toUri))
 
         readTree(dst) shouldBe Map(".zarray" -> "v2", "b/0.0" -> "AAAA")
+    }
+
+    test("copyOverwriting refuses to replace a folder with a file and leaves the folder as it was") {
+        val src = tempDir.resolve("x.tif")
+        Files.write(src, "tile".getBytes(StandardCharsets.UTF_8))
+        val dst = tempDir.resolve("out").resolve("x.tif") // a folder named like the file output
+        writeTree(dst, Map("keep.txt" -> "mine", "sub/deep.txt" -> "also mine"))
+
+        // The destination as the writer path names it: <output dir>/<file name>.
+        val dstPath = new Path(new Path(tempDir.resolve("out").toUri), "x.tif")
+        val e = intercept[IOException](AtomicDistributedCopy.copyOverwriting(localFs, localFs, new Path(src.toUri), dstPath))
+
+        withClue(s"the error '${e.getMessage}': ") { e.getMessage should (include(dst.toString) and include("folder")) }
+        readTree(dst) shouldBe Map("keep.txt" -> "mine", "sub/deep.txt" -> "also mine")
+    }
+
+    test("copyToPath of a file onto an older one deletes the older one's sidecars that the new one does not have") {
+        val hconf = new SerializableConfiguration(new Configuration())
+        val local = tempDir.resolve("local")
+        Files.createDirectories(local)
+        val tile = local.resolve("tile.tif")
+        val out = tempDir.resolve("out")
+        val dest = out.resolve("tile.tif")
+        val sidecars = Seq("tile.tif.aux.xml", "tile.tif.ovr", "tile.tif.msk")
+        Files.write(tile, "first".getBytes(StandardCharsets.UTF_8))
+        sidecars.foreach(n => Files.write(local.resolve(n), "old".getBytes(StandardCharsets.UTF_8)))
+        HadoopUtils.copyToPath(tile.toString, dest.toString, hconf)
+        withClue("the first output's sidecars: ") { sidecars.forall(n => Files.exists(out.resolve(n))) shouldBe true }
+        Files.write(out.resolve("tile.txt"), "not a sidecar of tile.tif".getBytes(StandardCharsets.UTF_8))
+
+        sidecars.foreach(n => Files.delete(local.resolve(n))) // the rewrite produces none
+        Files.write(tile, "again".getBytes(StandardCharsets.UTF_8))
+        HadoopUtils.copyToPath(tile.toString, dest.toString, hconf)
+
+        val left = {
+            val st = Files.list(out)
+            try st.iterator().asScala.map(_.getFileName.toString).filterNot(_.startsWith(".")).toSet
+            finally st.close()
+        }
+        withClue(s"the destination after the rewrite: ") { left shouldBe Set("tile.tif", "tile.txt") }
+        new String(Files.readAllBytes(dest), StandardCharsets.UTF_8) shouldBe "again"
     }
 
     test("copyToPath twice to one destination: the second copy of the same length replaces the first") {

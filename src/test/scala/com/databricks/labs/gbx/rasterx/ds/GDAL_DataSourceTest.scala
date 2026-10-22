@@ -17,10 +17,10 @@ import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.matchers.must.Matchers.be
-import org.scalatest.matchers.should.Matchers.convertToAnyShouldWrapper
+import org.scalatest.matchers.should.Matchers.{convertToAnyShouldWrapper, empty, include, noException}
 
 import java.nio.file.{Files, Paths}
-import scala.jdk.CollectionConverters.ListHasAsScala
+import scala.jdk.CollectionConverters._
 import org.apache.spark.sql.functions.{concat, lit, monotonically_increasing_id}
 
 // Idle retention is off, so a released node-file copy is gone at once.
@@ -272,37 +272,91 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
         }
     }
 
+    // GDAL_RowWriter driven directly with (source, tile) rows built from one band's GeoTIFF.
+    private val writerSchema = StructType(Seq(StructField("source", StringType), StructField("tile", V2Tile.schema)))
+
+    private def modisBand(b: String) =
+        Paths.get(getClass.getResource(s"/modis/MCD43A4.A2018185.h10v07.006.2018194033728_$b.TIF").toURI)
+
+    /** A (source, tile) row of one band's GeoTIFF; `name` is the source, used as the output name (nameCol). */
+    private def bandRow(name: String, b: String, meta: Map[String, String] = Map("driver" -> "GTiff")): InternalRow = {
+        val tile = V2Tile.row(cellid = 0L, raster = Files.readAllBytes(modisBand(b)), metadata = SerializationUtil.toMapData(meta))
+        InternalRow(UTF8String.fromString(name), tile)
+    }
+
+    private def nameColWriter(root: java.nio.file.Path, ext: String): GDAL_RowWriter =
+        new GDAL_RowWriter(writerSchema, root.toString, Some("source"), ext, 0, 0L, ExpressionConfig(spark))
+
     test("GDAL writer replaces a directory-format (Zarr) output written again under the same name") {
         GDALManager.init(ExpressionConfig(spark))
         assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
-        val band = (b: String) =>
-            Paths.get(getClass.getResource(s"/modis/MCD43A4.A2018185.h10v07.006.2018194033728_$b.TIF").toURI)
-        // A (source, tile) row of one band's GeoTIFF, to be written as an uncompressed Zarr named "same"
-        // (Zarr has no DEFLATE codec, the writer's default).
-        val row = (b: String) => {
-            val meta = Map("driver" -> "GTiff", "format" -> "Zarr", "compression" -> "NONE")
-            val tile = V2Tile.row(cellid = 0L, raster = Files.readAllBytes(band(b)), metadata = SerializationUtil.toMapData(meta))
-            InternalRow(UTF8String.fromString("same"), tile)
-        }
+        // Written as an uncompressed Zarr (Zarr has no DEFLATE codec, the writer's default).
+        val asZarr = Map("driver" -> "GTiff", "format" -> "Zarr", "compression" -> "NONE")
         val checksum = (p: String) => {
             val ds = gdal.Open(p)
             try ds.GetRasterBand(1).Checksum()
             finally ds.delete()
         }
-        val schema = StructType(Seq(StructField("source", StringType), StructField("tile", V2Tile.schema)))
         withScratchDir("gdal_zarr_out_") { out =>
-            val writer = new GDAL_RowWriter(schema, out.toString, Some("source"), "zarr", 0, 0L, ExpressionConfig(spark))
-            writer.write(row("B01"))
+            val writer = nameColWriter(out, "zarr")
+            writer.write(bandRow("same", "B01", asZarr))
             val zarr = out.resolve("same.zarr")
             withClue(s"$zarr after the first write: ") { Files.isDirectory(zarr) shouldBe true }
             val stale = zarr.resolve("stale.marker") // an entry the second write does not make
             Files.write(stale, garbage)
-            writer.write(row("B02"))
+            writer.write(bandRow("same", "B02", asZarr))
             withClue(s"$stale after the second write: ") { Files.exists(stale) shouldBe false }
             withClue(s"band 1 of $zarr after the second write: ") {
-                checksum(zarr.toString) shouldBe checksum(band("B02").toString)
+                checksum(zarr.toString) shouldBe checksum(modisBand("B02").toString)
             }
         }
+    }
+
+    test("GDAL writer refuses an output name with a '..' segment, which would write outside its root") {
+        GDALManager.init(ExpressionConfig(spark))
+        withScratchDir("gdal_dotdot_out_") { out =>
+            val root = Files.createDirectories(out.resolve("root"))
+            val writer = nameColWriter(root, "tif")
+            for (bad <- Seq("../escape", "a/../../escape")) {
+                val e = intercept[IllegalArgumentException](writer.write(bandRow(bad, "B01")))
+                withClue(s"the error for '$bad': ") { e.getMessage should (include(bad) and include("..")) }
+            }
+            val outside = {
+                val st = Files.walk(out)
+                try st.iterator().asScala.filter(Files.isRegularFile(_)).map(out.relativize(_).toString).toSet
+                finally st.close()
+            }
+            withClue("files written under the scratch dir: ") { outside shouldBe empty }
+        }
+    }
+
+    test("GDAL writer frees the tile it opened when the output name is not a valid local path") {
+        GDALManager.init(ExpressionConfig(spark))
+        // readFromBytes opens a tile from a /vsimem/temp_raster_* file; releasing the Dataset unlinks it.
+        val tempRasters = () =>
+            Option(gdal.ReadDir("/vsimem/")).map(_.asScala.map(_.toString).filter(_.startsWith("temp_raster_")).toSet)
+                .getOrElse(Set.empty[String])
+        withScratchDir("gdal_nul_out_") { out =>
+            val writer = nameColWriter(out, "tif")
+            val before = tempRasters()
+            intercept[java.nio.file.InvalidPathException](writer.write(bandRow("bad\u0000name", "B01")))
+            withClue("in-memory tiles left open by the failed write: ") { tempRasters().diff(before) shouldBe empty }
+        }
+    }
+
+    test("GDAL writer's release step keeps the write's own error and attaches a failed release to it") {
+        val primary = new RuntimeException("translate failed")
+        val released = scala.collection.mutable.ArrayBuffer.empty[String]
+        val badRelease = () => { released += "first"; throw new IllegalStateException("release failed") }
+        noException should be thrownBy GDAL_RowWriter.releaseAll(primary, badRelease, () => released += "second")
+        released.toList shouldBe List("first", "second")
+        primary.getSuppressed.map(_.getMessage).toList shouldBe List("release failed")
+        // With no error of its own, the write fails with the first release error, the others attached to it.
+        val e = intercept[IllegalStateException](
+          GDAL_RowWriter.releaseAll(null, badRelease, () => throw new IllegalStateException("second failed"))
+        )
+        e.getMessage shouldBe "release failed"
+        e.getSuppressed.map(_.getMessage).toList shouldBe List("second failed")
     }
 
     test("GDAL writer's local cleanup deletes a staging dir holding a non-empty directory output") {

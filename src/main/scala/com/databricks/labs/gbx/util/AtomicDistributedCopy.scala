@@ -8,9 +8,10 @@ import scala.util.control.NonFatal
 /** Copies between Hadoop FileSystems, replacing whatever is at the destination. */
 object AtomicDistributedCopy {
 
-    /** Copies srcPath (a file or a directory) to dstPath, replacing what is there. A file is overwritten.
-      * An existing directory, or anything at dstPath when a directory is copied, is deleted first, so a
-      * directory output (Zarr) keeps no entry of the version it replaces and is never copied into it.
+    /** Copies srcPath (a file or a directory) to dstPath, replacing what is there. A file overwrites a file.
+      * When a directory is copied, whatever is at dstPath is deleted first, so a directory output (Zarr)
+      * keeps no entry of the version it replaces and is never copied into it. A file is never written over
+      * a directory: that throws, and the directory is left as it is.
       *
       * Nothing is skipped: every read copy lands in a fresh generation dir of the node-file cache, so the
       * destination exists only when a writer writes the same output again, and keeping it (as was done
@@ -28,17 +29,28 @@ object AtomicDistributedCopy {
             val copied =
                 try {
                     val srcIsDir = srcFs.getFileStatus(srcPath).isDirectory
-                    if (statusOf(dstFs, dstPath).exists(st => st.isDirectory || srcIsDir)) {
-                        if (!dstFs.delete(dstPath, true) && dstFs.exists(dstPath)) {
-                            throw new IOException(s"Could not delete the existing $dstPath")
-                        }
+                    statusOf(dstFs, dstPath) match {
+                        case Some(_) if srcIsDir =>
+                            if (!dstFs.delete(dstPath, true) && dstFs.exists(dstPath)) {
+                                throw new IOException(s"Could not delete the existing $dstPath")
+                            }
+                        case Some(st) if st.isDirectory => throw new FolderInTheWayException(srcPath, dstPath)
+                        case _ => // nothing there, or a file the copy overwrites
                     }
                     FileUtil.copy(srcFs, srcPath, dstFs, dstPath, false, true, srcFs.getConf)
                 } catch {
-                    case NonFatal(e) => throw new IOException(s"Failed to copy $srcPath to $dstPath: ${e.getMessage}", e)
+                    case e: FolderInTheWayException => throw e
+                    case NonFatal(e)                => throw new IOException(s"Failed to copy $srcPath to $dstPath: ${e.getMessage}", e)
                 }
             if (!copied) throw new IOException(s"Failed to copy $srcPath to $dstPath")
         }
+
+    /** A file output whose destination is an existing folder: the folder is not the copy's to delete. */
+    private final class FolderInTheWayException(src: Path, dst: Path)
+        extends IOException(
+          s"Cannot write the file $src to $dst: a folder of that name is in the way (it is left as it is; " +
+              "remove or rename it, or write under another name)"
+        )
 
     /** The status of `p`, or None when nothing is there. */
     private def statusOf(fs: FileSystem, p: Path): Option[FileStatus] =

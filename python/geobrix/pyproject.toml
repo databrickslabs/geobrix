@@ -217,6 +217,9 @@ light_env6 = ["geobrix[light_dbr19]"]
 #   [stac]/[vizx]'s closure can't float it (verified: env6
 #   _all floats click 8.2.1->8.5.0 without this). The cap lives HERE, not in the
 #   shared light_dbrNN extra, so it does not bind the [overture] opt-in path.
+#   The pb6 cap is skipped on aarch64 (see light_dbr19_all): rasterio >=1.4.4 declares
+#   `click!=8.2.*` and PyPI has no cp312 aarch64 wheel before rasterio 1.4.4, so the cap
+#   is unsatisfiable there; aarch64 _all moves click 8.2.1->8.5.0 like [light_dbr19] does.
 #   To add Overture on top of _all, install it as a SEPARATE step, e.g.
 #   `pip install geobrix[light_env6,overture]` after geobrix[light_env6_all] —
 #   a single combined geobrix[light_env6_all,overture] transaction is intentionally
@@ -256,7 +259,15 @@ light_dbr19_all = [
     # The floor matters: a bare click<8.3 lets the resolver DOWNGRADE to 8.1.8
     # (verified on-cluster), so pin the 8.2.x line. Umbrella-only (see the header
     # note) — does not bind the [overture] opt-in.
-    "click>=8.2,<8.3",
+    # How the hold works: rasterio >=1.4.4 declares `click!=8.2.*`, so this cap makes the
+    # resolver fall back to rasterio 1.4.3 (x86_64 has that wheel). PyPI has NO cp312 aarch64
+    # wheel for rasterio <=1.4.3 (the first one is 1.4.4), so on aarch64 the cap leaves
+    # no installable rasterio: a stock DBR 19 aarch64 install fails (or tries a source build
+    # that needs GDAL headers). The marker below therefore skips the cap on Linux aarch64
+    # only; macOS arm64 reports platform_machine "arm64" and keeps the cap, so locks
+    # compiled on an Apple Silicon host stay identical. On aarch64, _all follows rasterio
+    # 1.5.x and moves click 8.2.1 -> 8.5.0, exactly as [light_dbr19] already does there.
+    'click>=8.2,<8.3; platform_machine != "aarch64"',
 ]
 # Serverless env 6 all-features — aliases the canonical pb6 all-features extra.
 # Recommended for Serverless full installs.

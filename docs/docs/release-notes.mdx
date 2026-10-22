@@ -461,6 +461,13 @@ formats.
   [Installation](./installation).
 - **LiDAR stack:** the lightweight extras now take `laspy` 2.7 with `lazrs` 0.8 (bumped
   together; `laspy` 2.7 requires `lazrs` 0.8).
+- **The `_all` extras install on aarch64 (Graviton) compute.** `light_dbr19_all` and
+  `light_env6_all` hold `click` at the runtime's 8.2.x. Because `rasterio` 1.4.4 and later
+  exclude `click` 8.2.x, that hold pins `rasterio` to 1.4.3, which has no Python 3.12 aarch64
+  wheel on PyPI, so on aarch64 the install failed to resolve (or compiled `rasterio` from source
+  and needed GDAL headers). On aarch64 the hold is now skipped: `click` moves from 8.2.1 to
+  8.5.0 and `rasterio` takes 1.5.x, which is what `light_dbr19` and `light_env6` already do.
+  x86_64 is unchanged: `click` stays at 8.2.1 and `rasterio` stays at 1.4.3.
 - **Photogrammetry extras:** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 - **The GeoBrix JAR no longer bundles the Scala standard library;** Databricks Runtime provides
   it. Nothing changes for users.

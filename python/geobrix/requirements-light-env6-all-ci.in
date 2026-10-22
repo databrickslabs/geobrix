@@ -13,6 +13,10 @@
 # ([overture] is an opt-in extra outside the _all umbrellas.)
 # Protobuf-5 all-features twin: see requirements-light-env5-all-ci.in.
 #
+# Resolved on a non-aarch64 host: the umbrella's `click>=8.2,<8.3` hold applies (it is skipped on
+# Linux aarch64), so this lock carries click 8.2.1 and rasterio 1.4.3 -- the x86_64 resolution.
+# On aarch64 the same extra resolves click 8.5.0 / rasterio 1.5.x (see pyproject [light_dbr19_all]).
+#
 # Note: CI resolves without Serverless grpcio-status constraints; the protobuf version
 # in this lock (6.x) reflects the [light_dbr19] floor on mapbox-vector-tile>=2.2, NOT
 # a CI grpcio constraint. The real runtime protobuf is set by the Serverless base image.

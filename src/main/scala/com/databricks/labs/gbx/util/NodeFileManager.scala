@@ -1,20 +1,26 @@
 package com.databricks.labs.gbx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import org.apache.spark.internal.Logging
+import org.apache.spark.network.util.JavaUtils
 import org.apache.spark.util.SerializableConfiguration
 
 import java.util.concurrent.atomic.AtomicBoolean
+import scala.util.control.NonFatal
 
 /** Caches remote paths as node-local copies via NodeFilePathUtil; each read holds one reader on a
   * copy until it is released (by remote, by local path, or by closing a lease). A copy no reader holds
   * is kept for the retention window, so the next read of an unchanged remote reuses it. */
-object NodeFileManager {
+object NodeFileManager extends Logging {
 
-    /** Spark conf: how long, in milliseconds, a copy no read holds is kept for reuse; 0 deletes it at
-      * once. Read from the ExpressionConfig that executor-side readers pass to `init`. */
+    /** Spark conf: how long a copy no read holds is kept for reuse, as a duration such as `60s` or `500ms`
+      * (a bare number is milliseconds); 0 deletes it at once. Read from the ExpressionConfig passed to
+      * `init` / `initForPlanning`. */
     val RetentionKey = "spark.databricks.labs.gbx.nodecache.retention.ms"
 
     @volatile private var hconf: SerializableConfiguration = _
+    /** The invalid retention last warned about, so one bad setting is logged once per JVM, not per task. */
+    @volatile private var warnedRetention: String = _
 
     /** Sets the Hadoop config used for copying; must be called before readRemote. Leaves the retention
       * as it is (the default, or what the last `init(conf)` in this JVM set). */
@@ -23,25 +29,44 @@ object NodeFileManager {
     }
 
     /** Sets the Hadoop config used for copying and the retention from `conf`'s [[RetentionKey]]
-      * (default 60000 ms; 0 deletes a copy at its last release). An invalid value is refused. */
+      * (default 60 s; 0 deletes a copy at its last release). Executor-side, where every raster expression
+      * runs it: an invalid value is logged and the default used, never thrown, so it cannot turn every
+      * expression into an error. Reader planning refuses it instead (`initForPlanning`). */
     def init(conf: ExpressionConfig): Unit = {
-        val ms = retentionOf(conf.configs)
+        val ms = retentionOf(conf.configs).getOrElse {
+            val v = conf.configs(RetentionKey)
+            if (warnedRetention != v) {
+                warnedRetention = v
+                logWarning(s"${invalidRetention(v)}; using the default ${NodeFilePathUtil.DefaultRetentionMs} ms")
+            }
+            NodeFilePathUtil.DefaultRetentionMs
+        }
         init(conf.hConf)
         NodeFilePathUtil.setRetentionMs(ms)
     }
 
-    /** The retention [[RetentionKey]] asks for: a whole number of milliseconds, 0 or more. */
-    private def retentionOf(configs: Map[String, String]): Long =
-        configs.get(RetentionKey) match {
-            case None    => NodeFilePathUtil.DefaultRetentionMs
-            case Some(v) =>
-                v.trim.toLongOption.filter(_ >= 0L).getOrElse {
-                    throw new IllegalArgumentException(
-                      s"$RetentionKey must be a whole number of milliseconds, 0 or more " +
-                          s"(0 deletes a copy at once), got '$v'"
-                    )
-                }
+    /** Driver-side reader planning: as `init(conf)`, but an invalid [[RetentionKey]] throws, so the read
+      * fails with the reason before any task runs. */
+    def initForPlanning(conf: ExpressionConfig): Unit = {
+        if (retentionOf(conf.configs).isEmpty) {
+            throw new IllegalArgumentException(invalidRetention(conf.configs(RetentionKey)))
         }
+        init(conf)
+    }
+
+    /** The retention [[RetentionKey]] asks for (the default when unset), or None when its value is not a
+      * duration of 0 or more. A Spark time string (`60s`, `500ms`, `2min`); a bare number is milliseconds. */
+    private def retentionOf(configs: Map[String, String]): Option[Long] =
+        configs.get(RetentionKey) match {
+            case None    => Some(NodeFilePathUtil.DefaultRetentionMs)
+            case Some(v) =>
+                try Some(JavaUtils.timeStringAsMs(v)).filter(_ >= 0L)
+                catch { case NonFatal(_) => None }
+        }
+
+    private def invalidRetention(v: String): String =
+        s"$RetentionKey must be a duration of 0 or more, such as 60s or 500ms (a bare number is milliseconds; " +
+            s"0 deletes a copy at once), got '$v'"
 
     /** Test-visible: sets the retention directly. */
     private[gbx] def setRetentionMs(ms: Long): Unit = NodeFilePathUtil.setRetentionMs(ms)

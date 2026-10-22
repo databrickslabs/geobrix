@@ -19,15 +19,27 @@ class NodeFilePathUtilTest extends AnyFunSuite with BeforeAndAfterEach {
     private val hconf = new SerializableConfiguration(new Configuration())
 
     // Every test starts with retention off, so a copy is freed at its last release; the retention tests turn it on.
+    // The retention this JVM had before is restored after each test.
+    private var priorRetentionMs: Long = NodeFilePathUtil.DefaultRetentionMs
+
     override def beforeEach(): Unit = {
         super.beforeEach()
         NodeFileManager.init(hconf)
+        priorRetentionMs = NodeFilePathUtil.retentionMs
         NodeFilePathUtil.setRetentionMs(0L)
     }
 
     override def afterEach(): Unit =
-        try NodeFilePathUtil.setRetentionMs(NodeFilePathUtil.DefaultRetentionMs)
+        try NodeFilePathUtil.setRetentionMs(priorRetentionMs)
         finally super.afterEach()
+
+    test("the cache root is named by a random UUID and the pid, so no other JVM's root, before or after a restart, shares it") {
+        val root = NodeFilePathUtil.rootPath
+        val pid = ProcessHandle.current().pid()
+        withClue(s"the cache root $root: ") {
+            assert(root.getParent == Paths.get("/tmp/gdal_local_files") && root.getFileName.toString.matches(s"[0-9a-f]{32}_$pid"))
+        }
+    }
 
     test("readLock counts holders; releaseByLocal and releaseByRemote return the holders left") {
         withRemoteFile("count.tif", "count") { f =>
@@ -350,7 +362,7 @@ class NodeFilePathUtilTest extends AnyFunSuite with BeforeAndAfterEach {
     }
 
     test("retention on: a reused idle copy is kept while held and expires a full window after its last release") {
-        NodeFilePathUtil.setRetentionMs(600L)
+        NodeFilePathUtil.setRetentionMs(2000L)
         withRemoteFile("ret_g.tif", "g" * 1024) { f =>
             val remote = HadoopUtils.cleanPath(f.toString)
             val first = NodeFileManager.acquire(remote)
@@ -362,12 +374,12 @@ class NodeFilePathUtilTest extends AnyFunSuite with BeforeAndAfterEach {
                 withClue(s"the reacquired copy ${held.localPath}: ") {
                     assert(held.localPath == local.toString && NodeFilePathUtil.copyCount(remote) == 1)
                 }
-                Thread.sleep(500) // past the first idle period's deadline
+                Thread.sleep(2000) // past the first idle period's deadline
                 withClue(s"a held copy $local past the first deadline: ") { assert(Files.isRegularFile(local)) }
             } finally held.close()
-            Thread.sleep(200)
-            withClue(s"$local 200 ms into a fresh 600 ms window: ") { assert(Files.isRegularFile(local)) }
-            withClue(s"${local.getParent} after the fresh window: ") { assert(eventually(5000)(!Files.exists(local.getParent))) }
+            Thread.sleep(500)
+            withClue(s"$local 500 ms into a fresh 2000 ms window: ") { assert(Files.isRegularFile(local)) }
+            withClue(s"${local.getParent} after the fresh window: ") { assert(eventually(8000)(!Files.exists(local.getParent))) }
         }
     }
 

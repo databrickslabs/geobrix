@@ -262,6 +262,16 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
         }
     }
 
+    test("an invalid retention in the session conf fails a gdal read's planning and names the conf") {
+        val modis = this.getClass.getResource("/modis/").toString
+        withSessionRetention("soon") {
+            val e = intercept[Exception](spark.read.format("gdal").load(modis).count())
+            withClue(s"the error chain ${messageChain(e)}: ") {
+                messageChain(e).exists(_.contains(NodeFileManager.RetentionKey)) shouldBe true
+            }
+        }
+    }
+
     test("GDAL writer replaces a directory-format (Zarr) output written again under the same name") {
         GDALManager.init(ExpressionConfig(spark))
         assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")

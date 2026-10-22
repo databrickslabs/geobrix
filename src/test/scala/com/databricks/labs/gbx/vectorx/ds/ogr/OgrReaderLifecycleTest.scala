@@ -156,16 +156,12 @@ class OgrReaderLifecycleTest extends PlanTest with SilentSparkSession with NodeC
     }
 
     /** Runs `body` with node-file copies kept idle for `ms` after their last release, in this JVM and in the
-      * session conf the planner and readers apply; then turns retention off again. */
-    private def withRetention[T](ms: Long)(body: => T): T = {
-        spark.conf.set(NodeFileManager.RetentionKey, ms.toString)
-        NodeFileManager.setRetentionMs(ms)
-        try body
-        finally {
-            spark.conf.set(NodeFileManager.RetentionKey, "0")
-            NodeFileManager.setRetentionMs(0L)
+      * session conf the planner and readers apply; then restores both as they were. */
+    private def withRetention[T](ms: Long)(body: => T): T =
+        withSessionRetention(ms.toString) {
+            NodeFileManager.setRetentionMs(ms)
+            body
         }
-    }
 
     /** Writes a GeoPackage of `n` points (layer `pts`, field `id`) in one transaction. */
     private def writePointsGpkg(out: Path, n: Int): Unit = {
@@ -197,13 +193,31 @@ class OgrReaderLifecycleTest extends PlanTest with SilentSparkSession with NodeC
             writePointsGpkg(gpkg, 50000)
             // The remote exactly as the planner names it (listDataFilesSpark), the key the planner and readers share.
             val remote = HadoopUtils.listDataFilesSpark(spark, gpkg.toString).head
-            withRetention(60000L) {
+            val before = entries()
+            // A short window, so the idle copy is gone soon after the read and is not left to later tests.
+            withRetention(2000L) {
                 val df = spark.read.format("gpkg_ogr").option("chunkSize", "10000").load(gpkg.toString)
                 df.rdd.getNumPartitions shouldBe 5
                 df.count() shouldBe 50000L
             }
             withClue(s"copies of $remote made by planning and five chunk readers: ") {
-                NodeFilePathUtil.copyCount(remote) should be <= 1
+                NodeFilePathUtil.copyCount(remote) shouldBe 1
+            }
+            withClue("node-file cache entries left once the window passed: ") {
+                val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(10)
+                while (leftovers(before).nonEmpty && System.nanoTime() < deadline) Thread.sleep(100)
+                leftovers(before) shouldBe empty
+            }
+        }
+    }
+
+    test("O7 an invalid retention in the session conf fails the read's planning and names the conf") {
+        withShapefileDir { dir =>
+            withSessionRetention("soon") {
+                val e = intercept[Exception](spark.read.format("shapefile_ogr").load(dir.toString).count())
+                withClue(s"the error chain ${messageChain(e)}: ") {
+                    messageChain(e).exists(_.contains(NodeFileManager.RetentionKey)) shouldBe true
+                }
             }
         }
     }

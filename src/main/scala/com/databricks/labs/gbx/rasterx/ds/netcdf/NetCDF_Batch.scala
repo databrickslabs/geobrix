@@ -34,7 +34,7 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
 
         val files = HadoopUtils.listDataFilesSpark(spark, inPath)
             .filter(_.matches(filterRegex))
-        NodeFileManager.init(exprConfig)
+        NodeFileManager.initForPlanning(exprConfig)
 
         // Executor-side enumeration: open each file, list SUBDATASETS, keep grid variables.
         val enumUDF = udf { (path: String) =>

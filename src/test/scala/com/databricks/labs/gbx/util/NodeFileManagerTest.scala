@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.util
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
+import com.databricks.labs.gbx.rasterx.util.RST_ExpressionUtil
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FSDataInputStream, FilterFileSystem, FutureDataInputStreamBuilder, LocalFileSystem, Path => HPath}
 import org.apache.spark.sql.SparkSession
@@ -24,17 +25,26 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
     // Note: NodeFileManager is a stateful singleton that interacts with NodeFilePathUtil
     // These tests verify the manager's state management and basic operations
 
-    // Retention off: these tests check that a copy is freed at its last release.
+    // Retention off: these tests check that a copy is freed at its last release. The retention this JVM had
+    // before is restored after each test.
+    private var priorRetentionMs: Long = NodeFilePathUtil.DefaultRetentionMs
+
     override def beforeEach(): Unit = {
         super.beforeEach()
+        priorRetentionMs = NodeFilePathUtil.retentionMs
         NodeFileManager.setRetentionMs(0L)
     }
 
     override def afterEach(): Unit =
-        try NodeFileManager.setRetentionMs(NodeFilePathUtil.DefaultRetentionMs)
+        try NodeFileManager.setRetentionMs(priorRetentionMs)
         finally super.afterEach()
 
-    test("init(ExpressionConfig) takes the retention from the conf: default 60 s, 0 for none, else rejected") {
+    private val invalidRetentions = Seq("-1", "-5s", "soon", "1.5s", "60 parsecs", "")
+
+    private def retentionConf(v: String): ExpressionConfig =
+        ExpressionConfig(Map(NodeFileManager.RetentionKey -> v), localConf())
+
+    test("init(ExpressionConfig) takes the retention from the conf: default 60 s, a duration, a bare number in ms") {
         def retentionAfter(configs: Map[String, String]): Long = {
             NodeFileManager.init(ExpressionConfig(configs, localConf()))
             NodeFilePathUtil.retentionMs
@@ -42,14 +52,37 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
         retentionAfter(Map.empty) shouldBe 60000L
         retentionAfter(Map(NodeFileManager.RetentionKey -> "0")) shouldBe 0L
         retentionAfter(Map(NodeFileManager.RetentionKey -> " 1234 ")) shouldBe 1234L
-        for (bad <- Seq("-1", "60s", "")) {
-            val e = intercept[IllegalArgumentException](retentionAfter(Map(NodeFileManager.RetentionKey -> bad)))
-            withClue(s"the error for '$bad': ") { e.getMessage should include(NodeFileManager.RetentionKey) }
-        }
+        retentionAfter(Map(NodeFileManager.RetentionKey -> "60s")) shouldBe 60000L
+        retentionAfter(Map(NodeFileManager.RetentionKey -> "500ms")) shouldBe 500L
+        retentionAfter(Map(NodeFileManager.RetentionKey -> "2min")) shouldBe 120000L
         // init(hadoopConf) sets the Hadoop config only: the retention stays as it was.
         NodeFileManager.setRetentionMs(4321L)
         NodeFileManager.init(localConf())
         NodeFilePathUtil.retentionMs shouldBe 4321L
+    }
+
+    test("init(ExpressionConfig), the executor path, falls back to the default on an invalid retention") {
+        for (bad <- invalidRetentions) {
+            NodeFileManager.setRetentionMs(4321L)
+            withClue(s"init with '$bad': ") { noException should be thrownBy NodeFileManager.init(retentionConf(bad)) }
+            withClue(s"the retention after '$bad': ") { NodeFilePathUtil.retentionMs shouldBe NodeFilePathUtil.DefaultRetentionMs }
+        }
+    }
+
+    test("initForPlanning, the driver-side reader path, refuses an invalid retention and names the conf") {
+        for (bad <- invalidRetentions) {
+            NodeFileManager.setRetentionMs(4321L)
+            val e = intercept[IllegalArgumentException](NodeFileManager.initForPlanning(retentionConf(bad)))
+            withClue(s"the error for '$bad': ") { e.getMessage should (include(NodeFileManager.RetentionKey) and include(s"'$bad'")) }
+            withClue(s"the retention after a refused '$bad': ") { NodeFilePathUtil.retentionMs shouldBe 4321L }
+        }
+        NodeFileManager.initForPlanning(retentionConf("2s"))
+        NodeFilePathUtil.retentionMs shouldBe 2000L
+    }
+
+    test("RST_ExpressionUtil.init, run by every gbx_rst_ expression, does not fail on an invalid retention") {
+        noException should be thrownBy RST_ExpressionUtil.init(retentionConf("60 parsecs"))
+        NodeFilePathUtil.retentionMs shouldBe NodeFilePathUtil.DefaultRetentionMs
     }
 
     test("init should accept SerializableConfiguration") {

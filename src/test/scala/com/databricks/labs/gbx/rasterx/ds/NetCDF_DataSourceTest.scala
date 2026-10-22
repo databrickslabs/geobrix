@@ -51,6 +51,17 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
         all(rows.map(_.getString(0))) should startWith("NETCDF:")
     }
 
+    test("an invalid retention in the session conf fails a netcdf_gdal read's planning and names the conf") {
+        withNetCDFCopy { (dir, _) =>
+            withSessionRetention("soon") {
+                val e = intercept[Exception](spark.read.format("netcdf_gdal").load(dir.toString).count())
+                withClue(s"the error chain ${messageChain(e)}: ") {
+                    messageChain(e).exists(_.contains(NodeFileManager.RetentionKey)) shouldBe true
+                }
+            }
+        }
+    }
+
     test("netcdf_gdal variable filter naming an absent variable yields no rows") {
         import com.databricks.labs.gbx.rasterx.functions._
         rasterx.functions.register(spark)

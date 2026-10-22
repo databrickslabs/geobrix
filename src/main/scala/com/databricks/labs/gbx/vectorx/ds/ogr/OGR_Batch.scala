@@ -49,7 +49,7 @@ class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan w
         // schema inference does (a read with an explicit schema never runs inference in this JVM).
         GDALManager.init(exprConfig)
         GDALManager.initOgr()
-        NodeFileManager.init(exprConfig)
+        NodeFileManager.initForPlanning(exprConfig)
         // Credential-aware listing (Spark file index) -- a raw driver-thread Hadoop FS listing
         // lacks the UC Volume / WSFS credential and throws FileNotFound on /Volumes.
         // Filter out OGR sidecar extensions (.dbf, .shx, .prj, .cpg, ...) before building

@@ -9,6 +9,7 @@ import java.nio.charset.StandardCharsets
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.{FileAlreadyExistsException, FileVisitResult, Files, NoSuchFileException, Path, Paths, SimpleFileVisitor}
 import java.security.MessageDigest
+import java.util.UUID
 import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.{CompletableFuture, ConcurrentHashMap, ScheduledExecutorService, ScheduledThreadPoolExecutor, ThreadFactory, TimeUnit}
 import scala.util.control.NonFatal
@@ -30,9 +31,12 @@ import scala.util.control.NonFatal
   */
 object NodeFilePathUtil extends Logging {
 
-    private val uuid = this.hashCode().toHexString
+    /** This JVM's cache dir name: a random UUID plus the pid, so it is never the name of another JVM's dir, one
+      * left on disk by a JVM before a restart included. (An identity hash, used before, can repeat.) Taken
+      * generation dirs are still stepped past (`TakenDirException`) should a dir of the name exist. */
+    private val uuid = s"${UUID.randomUUID().toString.replace("-", "")}_${ProcessHandle.current().pid()}"
 
-    /** Base directory for this JVM's cached files (/tmp/gdal_local_files/&lt;uuid&gt;).
+    /** Base directory for this JVM's cached files (/tmp/gdal_local_files/&lt;uuid&gt;_&lt;pid&gt;).
       *
       * Created eagerly: several callers (RST_MapAlgebra, RST_NDVI, NDVI, ClipToGeom,
       * GDAL_RowWriter) write GDAL outputs directly under this path, and GDAL's

@@ -50,18 +50,42 @@ object NodeFileCacheProbe {
 
 /** For a suite that checks a read leaves no node-file copy behind: copies are freed at their last release
   * (no idle retention), both in this JVM and through the session conf that the readers apply. A test that
-  * wants retention sets both back for its own duration. */
+  * wants retention sets both back for its own duration. The retention this JVM had before the suite is
+  * restored after it. */
 trait NodeCacheRetentionOff extends SharedSparkSession {
+
+    private var priorRetentionMs: Long = NodeFilePathUtil.DefaultRetentionMs
 
     override protected def sparkConf: SparkConf = super.sparkConf.set(NodeFileManager.RetentionKey, "0")
 
     override def beforeAll(): Unit = {
+        priorRetentionMs = NodeFilePathUtil.retentionMs
         NodeFileManager.setRetentionMs(0L)
         super.beforeAll()
     }
 
     override def afterAll(): Unit =
         try super.afterAll()
-        finally NodeFileManager.setRetentionMs(NodeFilePathUtil.DefaultRetentionMs)
+        finally NodeFileManager.setRetentionMs(priorRetentionMs)
+
+    /** Runs `body` with the session conf's retention set to `value` (as a user would set it), then restores
+      * the session conf and this JVM's retention as they were. */
+    protected def withSessionRetention[T](value: String)(body: => T): T = {
+        val priorConf = spark.conf.getOption(NodeFileManager.RetentionKey)
+        val priorMs = NodeFilePathUtil.retentionMs
+        spark.conf.set(NodeFileManager.RetentionKey, value)
+        try body
+        finally {
+            priorConf match {
+                case Some(v) => spark.conf.set(NodeFileManager.RetentionKey, v)
+                case None    => spark.conf.unset(NodeFileManager.RetentionKey)
+            }
+            NodeFileManager.setRetentionMs(priorMs)
+        }
+    }
+
+    /** The messages of `t` and its causes. */
+    protected def messageChain(t: Throwable): Seq[String] =
+        Iterator.iterate(t)(_.getCause).takeWhile(_ != null).take(16).map(e => String.valueOf(e.getMessage)).toSeq
 
 }

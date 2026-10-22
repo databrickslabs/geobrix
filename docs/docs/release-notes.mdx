@@ -213,6 +213,17 @@ formats.
 - **Files replaced at the same path are re-read.** The lightweight readers now stage a new copy
   when a GeoPackage, FileGDB or raster is replaced at the same path. Previously a worker that had
   already staged the old file could keep serving the stale copy.
+- **The heavyweight readers delete their staged copies too.** `gdal`, `gtiff_gdal`, `netcdf_gdal` and
+  the OGR vector readers (`ogr`, `shapefile_ogr`, `geojson_ogr`, `gpkg_ogr`, `file_gdb_ogr`,
+  `netcdf_ogr`) copy a Volume or cloud source to worker-local disk before GDAL opens it. Those copies
+  were never deleted. A copy is now deleted once no read is using it, after an idle period that lets
+  the next partition of the same file reuse it. For example, the chunks of a large GeoPackage that
+  a worker reads share one copy instead of each copying the whole file again. The idle period is 60
+  seconds by default. Set it in milliseconds with the Spark conf
+  `spark.databricks.labs.gbx.nodecache.retention.ms`; `0` deletes a copy as soon as its last read ends.
+- **The heavyweight readers re-read a file replaced at the same path.** A copy is reused only while
+  the source's size and modification time are unchanged, so a file rewritten in place is copied
+  again. Previously a worker could keep reading its earlier copy.
 
 ### PMTiles reader
 

@@ -53,7 +53,8 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
             if (isGdbLike) {
                 // FileGDB / zipped dataset: stage the whole dataset. NodeFileManager's Hadoop copy runs
                 // on this (analyzer) thread, which DCS dedicated clusters refuse for /Volumes; fall back
-                // to credentialed query reads (see HadoopUtils.stageDatasetOrFallBack).
+                // to credentialed query reads (see HadoopUtils.stageDatasetOrFallBack). The Hadoop config
+                // only: the copy retention stays as this JVM's readers set it (the default otherwise).
                 NodeFileManager.init(new SerializableConfiguration(sparkSession.sessionState.newHadoopConf))
                 HadoopUtils.stageDatasetOrFallBack(
                   headPath,

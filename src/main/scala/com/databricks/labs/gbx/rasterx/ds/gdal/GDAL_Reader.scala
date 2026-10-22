@@ -8,6 +8,8 @@ import org.apache.spark.sql.connector.read.PartitionReader
 import org.apache.spark.sql.types.BinaryType
 import org.apache.spark.unsafe.types.UTF8String
 
+import scala.util.control.NonFatal
+
 /** Reads one partition of a GDAL source: splits the raster into tiles (BalancedSubdivision) and yields (source, tile) rows. */
 class GDAL_Reader(partition: GDAL_Partition) extends PartitionReader[InternalRow] {
 
@@ -15,7 +17,15 @@ class GDAL_Reader(partition: GDAL_Partition) extends PartitionReader[InternalRow
 
     // TODO: Options should come from the partition here
     private val ds = RasterDriver.read(partition.filePath, Map.empty)
-    private val tilesIter = BalancedSubdivision.splitRasterIter(ds, Map.empty, partition.sizeInMB)
+    private val tilesIter =
+        try BalancedSubdivision.splitRasterIter(ds, Map.empty, partition.sizeInMB)
+        catch {
+            // No tile iterator owns ds (or the copy it holds) yet, and Spark never closes a reader whose
+            // constructor threw: release it here.
+            case NonFatal(e) =>
+                RasterDriver.releaseDataset(ds)
+                throw e
+        }
     RST_ExpressionUtil.addCleanupListener(tilesIter)
     private var counter = 0
     private val hconf = partition.expressionConfig.hConf

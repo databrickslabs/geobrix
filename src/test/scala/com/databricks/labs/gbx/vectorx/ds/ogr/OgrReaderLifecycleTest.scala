@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.vectorx.ds.ogr
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withScratchDir}
-import com.databricks.labs.gbx.util.NodeFileManager
+import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.StructType
@@ -21,8 +21,9 @@ import scala.util.Try
 /** Each OGR read takes one hold per node-file copy and releases it once, however often the reader is
   * closed (OGR_Reader closes itself at the end of input, then Spark closes it again), and a changed
   * remote is read fresh. Every test reads a fresh copy of a remote in a temp dir: the cache objects are
-  * JVM singletons, so a remote path is never shared across tests. */
-class OgrReaderLifecycleTest extends PlanTest with SilentSparkSession {
+  * JVM singletons, so a remote path is never shared across tests. Idle retention is off (copies are freed
+  * at their last release) except in the test of retention itself. */
+class OgrReaderLifecycleTest extends PlanTest with SilentSparkSession with NodeCacheRetentionOff {
 
     private val shapefileParts = Seq("map.shp", "map.shx", "map.dbf")
 
@@ -151,6 +152,59 @@ class OgrReaderLifecycleTest extends PlanTest with SilentSparkSession {
             val remote = dir.resolve("map.shp").toString
             intercept[Exception](new OGR_Reader(partition(remote, new StructType(), c, layer = "no_such_layer")))
             withClue("after a failed layer lookup: ") { leftovers(before) shouldBe empty }
+        }
+    }
+
+    /** Runs `body` with node-file copies kept idle for `ms` after their last release, in this JVM and in the
+      * session conf the planner and readers apply; then turns retention off again. */
+    private def withRetention[T](ms: Long)(body: => T): T = {
+        spark.conf.set(NodeFileManager.RetentionKey, ms.toString)
+        NodeFileManager.setRetentionMs(ms)
+        try body
+        finally {
+            spark.conf.set(NodeFileManager.RetentionKey, "0")
+            NodeFileManager.setRetentionMs(0L)
+        }
+    }
+
+    /** Writes a GeoPackage of `n` points (layer `pts`, field `id`) in one transaction. */
+    private def writePointsGpkg(out: Path, n: Int): Unit = {
+        GDALManager.initOgr()
+        val ds = ogr.GetDriverByName("GPKG").CreateDataSource(out.toString)
+        try {
+            val srs = new SpatialReference()
+            srs.ImportFromEPSG(4326)
+            val layer = ds.CreateLayer("pts", srs, ogrConstants.wkbPoint)
+            layer.CreateField(new FieldDefn("id", ogrConstants.OFTInteger))
+            layer.StartTransaction()
+            (0 until n).foreach { i =>
+                val f = new Feature(layer.GetLayerDefn)
+                f.SetField("id", i)
+                f.SetGeometry(ogr.CreateGeometryFromWkt(s"POINT (${i % 360 - 180} ${i % 170 - 85})"))
+                layer.CreateFeature(f)
+                f.delete()
+            }
+            layer.CommitTransaction()
+        } finally {
+            ds.FlushCache()
+            ds.delete()
+        }
+    }
+
+    test("O6 a chunked read of a 50,000-feature GeoPackage copies the file once, with retention on") {
+        withScratchDir("gbx_ogr_gpkg_") { dir =>
+            val gpkg = dir.resolve("points.gpkg")
+            writePointsGpkg(gpkg, 50000)
+            // The remote exactly as the planner names it (listDataFilesSpark), the key the planner and readers share.
+            val remote = HadoopUtils.listDataFilesSpark(spark, gpkg.toString).head
+            withRetention(60000L) {
+                val df = spark.read.format("gpkg_ogr").option("chunkSize", "10000").load(gpkg.toString)
+                df.rdd.getNumPartitions shouldBe 5
+                df.count() shouldBe 50000L
+            }
+            withClue(s"copies of $remote made by planning and five chunk readers: ") {
+                NodeFilePathUtil.copyCount(remote) should be <= 1
+            }
         }
     }
 

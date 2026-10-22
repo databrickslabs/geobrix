@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.vectorx.ds.ogr
 
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withScratchDir}
-import com.databricks.labs.gbx.util.{FileGDBFixture, NodeFileCacheProbe, NodeFilePathUtil}
+import com.databricks.labs.gbx.util.{FileGDBFixture, NodeCacheRetentionOff, NodeFileCacheProbe, NodeFilePathUtil}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.StructType
@@ -18,8 +18,9 @@ import scala.util.Try
 /** OGR read planning (OGR_Batch): an unreadable file, a missing path or a wrong layer fails the read
   * naming the file, instead of an empty result; in a directory read, metadata files and files of
   * another vector format are skipped; chunks are planned without a trailing empty one; and planning
-  * lets go of every dataset and node-file copy it opens. Every fixture is built in a temp dir. */
-class OgrPlanningErrorsTest extends PlanTest with SilentSparkSession {
+  * lets go of every dataset and node-file copy it opens. Every fixture is built in a temp dir. Idle
+  * retention is off, so a released copy is gone at once. */
+class OgrPlanningErrorsTest extends PlanTest with SilentSparkSession with NodeCacheRetentionOff {
 
     private val mapDir = Paths.get(getClass.getResource("/binary/shapefile/map.shp").toURI).getParent
 

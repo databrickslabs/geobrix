@@ -36,8 +36,8 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
     // applyScale=true: decode CF scale_factor/add_offset to physical Float64 in WindowedExtract,
     // matching the light netcdf_gbx reader (xarray mask_and_scale=True). Heavy default is OFF;
     // only netcdf_gdal opts in, so other raster readers keep raw-copy behavior.
-    private var opened: Dataset = _
-    private val tilesIter =
+    private val tilesIter = {
+        var opened: Dataset = null
         try {
             opened = gdal.Open(selector, GA_ReadOnly)
             if (opened == null) {
@@ -52,6 +52,7 @@ class NetCDF_Reader(partition: NetCDF_Partition) extends PartitionReader[Interna
                 if (!isLocal) NodeFileManager.releaseLocal(localPath)
                 throw e
         }
+    }
     RST_ExpressionUtil.addCleanupListener(tilesIter)
     private val hconf = partition.expressionConfig.hConf
     // The result-facing source keeps the ORIGINAL (remote) path, not the local staging copy.

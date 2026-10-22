@@ -5,7 +5,7 @@ import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.functions
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy, withScratchDir}
-import com.databricks.labs.gbx.util.{HadoopUtils, NodeFileManager}
+import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
@@ -18,7 +18,8 @@ import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters.ListHasAsScala
 import org.apache.spark.sql.functions.{concat, lit, monotonically_increasing_id}
 
-class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
+// Idle retention is off, so a released node-file copy is gone at once.
+class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCacheRetentionOff {
 
     test("GDAL Data Source must read tif files") {
         import com.databricks.labs.gbx.rasterx.functions._
@@ -289,6 +290,25 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession {
             val before = entries()
             intercept[RuntimeException](RasterDriver.read(s"file:${bad.toAbsolutePath}", Map.empty))
             withClue("node-file cache entries left by the failed open: ") { entries().diff(before) shouldBe Set.empty[String] }
+        }
+    }
+
+    // A Dataset opened on a /vsizip/ (or subdataset) form of a staged copy lists that form, not the copy's path,
+    // so releaseDataset could never give the copy's hold back: such a remote read is refused before it stages.
+    test("RasterDriver.read refuses isZip / isSubdataset on a remote path and stages nothing") {
+        GDALManager.init(ExpressionConfig(spark))
+        withScratchDir("gbx_gdal_zip_") { dir =>
+            val z = dir.resolve("x.zip")
+            Files.write(z, garbage)
+            NodeFileManager.init(ExpressionConfig(spark))
+            val remote = s"file:${z.toAbsolutePath}"
+            val before = entries()
+            for (opt <- Seq("isZip", "isSubdataset")) {
+                val e = intercept[IllegalArgumentException](RasterDriver.read(remote, Map(opt -> "true")))
+                withClue(s"the error for $opt, ${e.getMessage}: ") { assert(e.getMessage.contains(remote)) }
+            }
+            withClue(s"copies made for $remote: ") { NodeFilePathUtil.copyCount(remote) shouldBe 0 }
+            withClue("node-file cache entries left: ") { entries().diff(before) shouldBe Set.empty[String] }
         }
     }
 

@@ -30,7 +30,7 @@ class GDAL_Batch(schema: StructType, options: Map[String, String]) extends Scan 
 
         val sparkSession = SparkSession.builder.getOrCreate
         val exprConfig = ExpressionConfig(sparkSession)
-        NodeFileManager.init(exprConfig.hConf)
+        NodeFileManager.init(exprConfig)
 
         val files = HadoopUtils.listAllHadoopFiles(inPath, exprConfig.hConf, filterRegex)
         val partitions = files.map { file =>

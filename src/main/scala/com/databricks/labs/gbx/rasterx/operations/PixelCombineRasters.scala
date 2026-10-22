@@ -79,13 +79,16 @@ object PixelCombineRasters {
         // GDAL evaluates <PixelFunctionLanguage>Python</...> during VRT read-back and translate.
         val result = GDALManager.withVrtPython {
             val vrtRefreshed = RasterDriver.read(vrtPath, vrtRaster._2)
-
-            GDALTranslate.executeTranslate(
-              rasterPath,
-              vrtRefreshed,
-              command = s"gdal_translate",
-              options
-            )
+            // Closed with delete(), not releaseDataset: a VRT's file list names its sources (the inputs'
+            // files), which are not this method's to unlink or release.
+            try {
+                GDALTranslate.executeTranslate(
+                  rasterPath,
+                  vrtRefreshed,
+                  command = s"gdal_translate",
+                  options
+                )
+            } finally vrtRefreshed.delete()
         }
 
         Files.deleteIfExists(Paths.get(vrtPath))

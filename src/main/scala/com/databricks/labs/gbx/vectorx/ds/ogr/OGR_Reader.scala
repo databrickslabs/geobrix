@@ -14,7 +14,7 @@ class OGR_Reader(partition: OGR_Partition) extends PartitionReader[InternalRow] 
 
     GDALManager.init(partition.expressionConfig)
     OGR_SchemaInference.enableOGRDrivers()
-    NodeFileManager.init(partition.expressionConfig.hConf)
+    NodeFileManager.init(partition.expressionConfig)
 
     // One hold on the node-file copy per reader. close() runs at the end of input (next) and again from
     // Spark's task-completion listener; the lease releases on the first close only.

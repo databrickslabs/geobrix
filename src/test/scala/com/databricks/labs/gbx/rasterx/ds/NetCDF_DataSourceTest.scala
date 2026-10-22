@@ -2,9 +2,9 @@ package com.databricks.labs.gbx.rasterx.ds
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
-import com.databricks.labs.gbx.rasterx.ds.netcdf.NetCDF_DataSource
+import com.databricks.labs.gbx.rasterx.ds.netcdf.{NetCDF_DataSource, NetCDF_Partition, NetCDF_Reader}
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy}
-import com.databricks.labs.gbx.util.{HadoopUtils, NodeFileManager}
+import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.StringType
@@ -14,7 +14,8 @@ import org.scalatest.matchers.should.Matchers._
 import java.nio.file.{Files, Paths}
 import scala.jdk.CollectionConverters._
 
-class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
+// Idle retention is off, so a released node-file copy is gone at once.
+class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCacheRetentionOff {
 
     test("NetCDF_DataSource short name is netcdf_gdal") {
         new NetCDF_DataSource().shortName() shouldBe "netcdf_gdal"
@@ -153,6 +154,20 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession {
             val sources = spark.read.format("netcdf_gdal").load(path).select("source").collect().map(_.getString(0)).sorted
             sources shouldBe validOnly
             withClue("node-file cache entries left by the read: ") { entries().diff(before) shouldBe empty }
+        }
+    }
+
+    // NetCDF_Reader stages its .nc before opening the subdataset; Spark never closes a reader whose constructor
+    // threw, so the constructor itself must release that copy when the open fails.
+    test("a NetCDF_Reader whose subdataset cannot be opened releases the copy it staged") {
+        rasterx.functions.register(spark)
+        withNetCDFCopy { (_, nc) =>
+            val remote = s"file:${nc.toAbsolutePath}"
+            val before = entries()
+            val err = intercept[RuntimeException](new NetCDF_Reader(NetCDF_Partition(remote, "no_such_variable", -1, ExpressionConfig(spark))))
+            err.getMessage should include("no_such_variable")
+            withClue(s"holders of $remote after the failed construction: ") { NodeFilePathUtil.readersOf(remote) shouldBe 0 }
+            withClue("node-file cache entries left by the failed construction: ") { entries().diff(before) shouldBe empty }
         }
     }
 }

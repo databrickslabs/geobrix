@@ -119,9 +119,9 @@ object RST_ExpressionUtil {
     /** StructType for a tile with the given raster DataType (v2 9-field schema). */
     def tileDataType(rdt: DataType): DataType = v2TileType
 
-    /** Initialize NodeFileManager and GDAL for this process (e.g. on executor). */
+    /** Initialize NodeFileManager (Hadoop config and copy retention) and GDAL for this process (e.g. on executor). */
     def init(expressionConfig: ExpressionConfig): Unit = {
-        NodeFileManager.init(expressionConfig.hConf)
+        NodeFileManager.init(expressionConfig)
         GDALManager.init(expressionConfig)
     }
 

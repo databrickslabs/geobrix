@@ -34,17 +34,17 @@ class NetCDF_Batch(schema: StructType, options: Map[String, String]) extends Sca
 
         val files = HadoopUtils.listDataFilesSpark(spark, inPath)
             .filter(_.matches(filterRegex))
-        NodeFileManager.init(exprConfig.hConf)
+        NodeFileManager.init(exprConfig)
 
         // Executor-side enumeration: open each file, list SUBDATASETS, keep grid variables.
         val enumUDF = udf { (path: String) =>
             try {
                 // NodeFileManager.hconf is a JVM-static set only by init(); the driver-side
-                // init(exprConfig.hConf) above does NOT propagate to executor JVMs, so this
+                // init(exprConfig) above does NOT propagate to executor JVMs, so this
                 // UDF must init it here before readRemote (else readRemote hits a null hconf
                 // and the whole enumeration is silently swallowed -> zero rows). Mirrors
                 // RST_ExpressionUtil.init, which NetCDF_Reader calls on its own executor path.
-                NodeFileManager.init(exprConfig.hConf)
+                NodeFileManager.init(exprConfig)
                 GDALManager.init(exprConfig)
                 // One hold on the staged copy. releaseDataset(ds) below is its single release (GDAL
                 // lists the local .nc); before ds exists, a failed open releases it here instead.

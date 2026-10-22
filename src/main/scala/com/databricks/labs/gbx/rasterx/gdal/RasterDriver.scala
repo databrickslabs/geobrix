@@ -67,11 +67,22 @@ object RasterDriver {
     }
 
     /** Open a raster from a path; normalizes vsizip/subdataset and copies remote to local if needed. Caller must
-      * release the Dataset with [[releaseDataset]], which also releases the copy (GDAL lists its local path). */
+      * release the Dataset with [[releaseDataset]].
+      *
+      * Hold transfer: for a remote path this takes one hold on a node-file copy, and the Dataset opened on that
+      * copy owns exactly that one hold. [[releaseDataset]] gives it back, because GDAL lists the copy's local
+      * path; if the open fails, it is given back here. `isZip` / `isSubdataset` are refused for a remote path:
+      * the Dataset would be opened on a /vsizip/ or subdataset form of the copy, which GDAL lists instead of
+      * the copy's path, so its hold could never be given back. Stage such a source first (as NetCDF_Reader
+      * does) and pass the local path. */
     def read(path: String, options: Map[String, String], shared: Boolean = false): Dataset = {
         val isZip = options.getOrElse("isZip", "false").toBoolean
         val isSubdataset = options.getOrElse("isSubdataset", "false").toBoolean
         val isLocal = this.isLocal(path)
+        require(
+          isLocal || (!isZip && !isSubdataset),
+          s"RasterDriver.read: isZip / isSubdataset need a local path, got the remote $path; stage it first"
+        )
         val readPath = this.copyToLocal(path, isLocal)
         try {
             val cleanPath = this.cleanPath(readPath, isZip, isSubdataset)
@@ -90,12 +101,14 @@ object RasterDriver {
         }
     }
 
-    /** Release a Dataset and any associated vsimem or copied files; must be called when done with a Dataset.
-      * A listed file that is a node-file copy is released once (by its local path); any other is left alone. */
+    /** Release a Dataset and any associated vsimem or copied files; must be called once when done with a Dataset.
+      * Each distinct listed file is handled once: a /vsimem/ file is unlinked, a node-file copy's path gives
+      * back the one hold the Dataset owns on it (see [[read]]), and any other path (a sidecar, a user's local
+      * file) is left alone. */
     def releaseDataset(ds: Dataset): Unit = {
         if (ds != null) {
             ds.FlushCache()
-            val files = ds.GetFileList().asScala.toSeq.map(_.toString)
+            val files = ds.GetFileList().asScala.toSeq.map(_.toString).distinct
             ds.delete()
             files.foreach(f => {
                 if (f.contains("/vsimem/")) gdal.Unlink(f)

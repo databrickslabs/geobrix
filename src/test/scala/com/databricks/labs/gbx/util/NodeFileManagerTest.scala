@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.util
 
+import com.databricks.labs.gbx.expressions.ExpressionConfig
 import org.apache.hadoop.conf.Configuration
 import org.apache.hadoop.fs.{FSDataInputStream, FilterFileSystem, FutureDataInputStreamBuilder, LocalFileSystem, Path => HPath}
 import org.apache.spark.sql.SparkSession
@@ -13,8 +14,8 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.{Files, Path, Paths}
 import java.nio.file.attribute.FileTime
-import java.util.concurrent.{ConcurrentHashMap, Executors, TimeUnit}
-import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.{Callable, ConcurrentHashMap, CountDownLatch, CyclicBarrier, ExecutionException, Executors, TimeUnit}
+import java.util.concurrent.atomic.{AtomicBoolean, AtomicInteger}
 import scala.jdk.CollectionConverters._
 import scala.util.control.NonFatal
 
@@ -23,9 +24,32 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
     // Note: NodeFileManager is a stateful singleton that interacts with NodeFilePathUtil
     // These tests verify the manager's state management and basic operations
 
+    // Retention off: these tests check that a copy is freed at its last release.
     override def beforeEach(): Unit = {
         super.beforeEach()
-        // NodeFileManager maintains internal state, so tests should be aware
+        NodeFileManager.setRetentionMs(0L)
+    }
+
+    override def afterEach(): Unit =
+        try NodeFileManager.setRetentionMs(NodeFilePathUtil.DefaultRetentionMs)
+        finally super.afterEach()
+
+    test("init(ExpressionConfig) takes the retention from the conf: default 60 s, 0 for none, else rejected") {
+        def retentionAfter(configs: Map[String, String]): Long = {
+            NodeFileManager.init(ExpressionConfig(configs, localConf()))
+            NodeFilePathUtil.retentionMs
+        }
+        retentionAfter(Map.empty) shouldBe 60000L
+        retentionAfter(Map(NodeFileManager.RetentionKey -> "0")) shouldBe 0L
+        retentionAfter(Map(NodeFileManager.RetentionKey -> " 1234 ")) shouldBe 1234L
+        for (bad <- Seq("-1", "60s", "")) {
+            val e = intercept[IllegalArgumentException](retentionAfter(Map(NodeFileManager.RetentionKey -> bad)))
+            withClue(s"the error for '$bad': ") { e.getMessage should include(NodeFileManager.RetentionKey) }
+        }
+        // init(hadoopConf) sets the Hadoop config only: the retention stays as it was.
+        NodeFileManager.setRetentionMs(4321L)
+        NodeFileManager.init(localConf())
+        NodeFilePathUtil.retentionMs shouldBe 4321L
     }
 
     test("init should accept SerializableConfiguration") {
@@ -311,6 +335,112 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
         }
     }
 
+    test("T8b waiters joined to a copy that fails release their hold, retry, and share the next copy") {
+        val gdb = FileGDBFixture.unzipBridges()
+        val threads = 6
+        val pool = Executors.newFixedThreadPool(threads)
+        try {
+            Files.write(gdb.resolve(FailingFS.Poison), "x".getBytes(StandardCharsets.UTF_8))
+            val sourceFiles = gdb.toFile.list().toSet
+            val conf = failingConf()
+            NodeFileManager.init(conf)
+            val remote = HadoopUtils.cleanPath(gdb.toString)
+            val before = entries(NodeFilePathUtil.rootPath)
+            val allJoined = new AtomicBoolean(false)
+            // The copy fails only once every thread holds its generation: the other five wait on it.
+            FailingFS.beforeFailure = () => {
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+                while (NodeFilePathUtil.readersOf(remote) < threads && System.nanoTime() < deadline) Thread.sleep(5)
+                allJoined.set(NodeFilePathUtil.readersOf(remote) == threads)
+            }
+            FailingFS.failuresLeft = 1
+            FailingFS.failing = true
+            val start = new CountDownLatch(1)
+            val allHold = new CyclicBarrier(threads)
+            val results = (0 until threads).map { _ =>
+                pool.submit(new Callable[(String, Int, Boolean)] {
+                    override def call(): (String, Int, Boolean) = {
+                        start.await()
+                        val (local, n) = NodeFilePathUtil.readLock(remote, conf)
+                        try {
+                            val complete = sourceFiles.subsetOf(Paths.get(local).toFile.list().toSet)
+                            allHold.await(30, TimeUnit.SECONDS) // every thread holds the copy at once
+                            (local, n, complete)
+                        } finally NodeFilePathUtil.releaseByLocal(local)
+                    }
+                })
+            }
+            start.countDown()
+            val got = results.map(_.get(60, TimeUnit.SECONDS))
+            withClue("all threads held the failing copy's generation when it failed: ") { assert(allJoined.get) }
+            withClue(s"local paths returned: ${got.map(_._1).distinct}: ") { assert(got.map(_._1).distinct.size == 1) }
+            withClue(s"holder counts returned: ${got.map(_._2).sorted}: ") { assert(got.map(_._2).sorted == (1 to threads)) }
+            withClue(s"complete copies: ${got.map(_._3)}: ") { assert(got.forall(_._3)) }
+            withClue(s"copies made for $remote: ") { assert(NodeFilePathUtil.copyCount(remote) == 1) }
+            withClue(s"holders of $remote after every release: ") { assert(NodeFilePathUtil.readersOf(remote) == 0) }
+            val leftovers = entries(NodeFilePathUtil.rootPath).diff(before)
+            withClue(s"new entries under ${NodeFilePathUtil.rootPath}: $leftovers: ") { assert(leftovers.isEmpty) }
+        } finally {
+            FailingFS.reset()
+            pool.shutdownNow()
+            NodeFileManager.init(localConf())
+            deleteTree(gdb.getParent)
+        }
+    }
+
+    test("T8c a fatal copy error reaches every waiter instead of leaving it blocked") {
+        val gdb = FileGDBFixture.unzipBridges()
+        val threads = 4
+        val pool = Executors.newFixedThreadPool(threads)
+        try {
+            Files.write(gdb.resolve(FailingFS.Poison), "x".getBytes(StandardCharsets.UTF_8))
+            val conf = failingConf()
+            NodeFileManager.init(conf)
+            val remote = HadoopUtils.cleanPath(gdb.toString)
+            val before = entries(NodeFilePathUtil.rootPath)
+            val firstFailure = new AtomicBoolean(true)
+            FailingFS.beforeFailure = () => {
+                if (firstFailure.getAndSet(false)) {
+                    val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20)
+                    while (NodeFilePathUtil.readersOf(remote) < threads && System.nanoTime() < deadline) Thread.sleep(5)
+                }
+            }
+            FailingFS.fatal = true
+            FailingFS.failing = true
+            val start = new CountDownLatch(1)
+            val results = (0 until threads).map { _ =>
+                pool.submit(new Callable[String] {
+                    override def call(): String = {
+                        start.await()
+                        val (local, _) = NodeFilePathUtil.readLock(remote, conf)
+                        NodeFilePathUtil.releaseByLocal(local)
+                        local
+                    }
+                })
+            }
+            start.countDown()
+            results.foreach { r =>
+                val e = intercept[ExecutionException](r.get(60, TimeUnit.SECONDS))
+                val causes = Iterator.iterate[Throwable](e.getCause)(_.getCause).takeWhile(_ != null).toList
+                withClue(s"a waiter's failure must carry the injected fatal error: $causes: ") {
+                    assert(causes.exists(c => String.valueOf(c.getMessage).contains("injected fatal read failure")))
+                }
+            }
+            withClue(s"holders of $remote after the failures: ") { assert(NodeFilePathUtil.readersOf(remote) == 0) }
+            val leftovers = entries(NodeFilePathUtil.rootPath).diff(before)
+            withClue(s"new entries under ${NodeFilePathUtil.rootPath}: $leftovers: ") { assert(leftovers.isEmpty) }
+            FailingFS.reset()
+            val (local, n) = NodeFilePathUtil.readLock(remote, conf)
+            try withClue(s"after the fault cleared, $local holders: ") { assert(n == 1) }
+            finally NodeFilePathUtil.releaseByLocal(local)
+        } finally {
+            FailingFS.reset()
+            pool.shutdownNow()
+            NodeFileManager.init(localConf())
+            deleteTree(gdb.getParent)
+        }
+    }
+
     test("a lease releases exactly once, however often it is closed") {
         NodeFileManager.init(localConf())
         withRemoteFile("lease.tif", "lease".getBytes(StandardCharsets.UTF_8)) { f =>
@@ -345,6 +475,15 @@ class NodeFileManagerTest extends AnyFunSuite with BeforeAndAfterEach {
     // ---- helpers ------------------------------------------------------------------------------------
 
     private def localConf(): SerializableConfiguration = new SerializableConfiguration(new Configuration())
+
+    /** HadoopUtils.cleanPath rewrites any unknown scheme to file:/..., so the failing FS is registered for file:
+      * itself (uncached, so no other test's FileSystem is affected). */
+    private def failingConf(): SerializableConfiguration = {
+        val conf = new Configuration()
+        conf.set("fs.file.impl", classOf[FailingFS].getName)
+        conf.setBoolean("fs.file.impl.disable.cache", true)
+        new SerializableConfiguration(conf)
+    }
 
     /** A fresh temp dir holding `name` with `bytes`; the dir is deleted recursively after `body`. */
     private def withRemoteFile[T](name: String, bytes: Array[Byte])(body: Path => T): T = {
@@ -400,8 +539,31 @@ object FailingFS {
 
     val Poison = "boom.gdbtable"
     @volatile var failing: Boolean = false
+    /** Failures left before the fault clears by itself; negative: until `failing` is unset. */
+    @volatile var failuresLeft: Int = -1
+    /** Throw a fatal error (a LinkageError, which NonFatal does not match) instead of an IOException. */
+    @volatile var fatal: Boolean = false
+    /** Runs on the failing read just before it throws (a test waits here for other readers to join). */
+    @volatile var beforeFailure: () => Unit = () => ()
+
+    def reset(): Unit = {
+        failing = false
+        failuresLeft = -1
+        fatal = false
+        beforeFailure = () => ()
+    }
 
     def check(p: HPath): Unit =
-        if (failing && p.getName == Poison) throw new IOException(s"injected read failure: $p")
+        if (failing && p.getName == Poison) {
+            beforeFailure()
+            synchronized {
+                if (failuresLeft > 0) {
+                    failuresLeft -= 1
+                    if (failuresLeft == 0) failing = false
+                }
+            }
+            if (fatal) throw new LinkageError(s"injected fatal read failure: $p")
+            throw new IOException(s"injected read failure: $p")
+        }
 
 }

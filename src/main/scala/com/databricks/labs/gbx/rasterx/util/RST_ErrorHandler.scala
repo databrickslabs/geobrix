@@ -133,6 +133,10 @@ object RST_ErrorHandler extends Logging {
     /** Runs generator eval; on exception returns single row with error metadata.
       * VirtualTileExceptions are always re-thrown — they indicate a virtual tile reaching a
       * heavyweight function and must surface as hard failures, not silent error rows.
+      *
+      * The tile generators declare ONE column, `tile`, so the error tile is wrapped in a one-field
+      * row exactly like the rows of the success path. Returning the bare 9-field tile row hands Spark
+      * a Long where it expects the struct and fails with a ClassCastException.
       */
     def safeEval(eval: () => IterableOnce[InternalRow], row: InternalRow, rasterType: DataType): IterableOnce[InternalRow] = {
         try {
@@ -146,7 +150,27 @@ object RST_ErrorHandler extends Logging {
                     cellId
                 }.getOrElse(-1L)
                 val errorMetadata = createErrorMetadata(e)
-                Seq(RasterSerializationUtil.tileToRow((cellId, null, errorMetadata), rasterType, null))
+                val errorTile = RasterSerializationUtil.tileToRow((cellId, null, errorMetadata), rasterType, null)
+                Seq(InternalRow.fromSeq(Seq(errorTile)))
+        }
+    }
+
+    /** Generator variant for generators whose single output column cannot carry an error tile
+      * (the `(z, x, y, bytes)` struct of `gbx_rst_xyzpyramid` has no metadata map).
+      *
+      * A data failure emits ONE row whose column is NULL, so the failure stays visible and auditable
+      * (`WHERE tile IS NULL`). Argument errors (IllegalArgumentException from the generator's own
+      * guards, such as the `max_z` cap) and VirtualTileExceptions are re-thrown so their message reaches the caller.
+      */
+    def safeEvalNullElement(eval: () => IterableOnce[InternalRow]): IterableOnce[InternalRow] = {
+        try {
+            eval()
+        } catch {
+            case e: VirtualTileException     => throw e
+            case e: IllegalArgumentException => throw e
+            case e: Throwable                =>
+                logWarning(s"RasterX generator evaluation failed; emitting one NULL row: ${e.getMessage}", e)
+                Seq(InternalRow.fromSeq(Seq(null)))
         }
     }
 

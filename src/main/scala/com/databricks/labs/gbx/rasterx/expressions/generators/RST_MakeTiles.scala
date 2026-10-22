@@ -60,9 +60,10 @@ case class RST_MakeTiles(
               val inputSize = RasterAccessors.memSize(ds)
 
               if (targetSize <= 0 && inputSize <= Integer.MAX_VALUE) {
-                  // - no split required
+                  // - no split required: hand the tile back unchanged, wrapped in the one-column
+                  //   row the generator declares (the bare tile row would not fit `elementSchema`)
                   RasterDriver.releaseDataset(ds)
-                  Seq(rawTile).iterator
+                  Seq(InternalRow.fromSeq(Seq(RasterSerializationUtil.normalizeToV2Row(rawTile)))).iterator
               } else {
                   // target size is > 0 and raster size > target size
                   val iterator = BalancedSubdivision.splitRasterIter(ds, mtd, targetSize)

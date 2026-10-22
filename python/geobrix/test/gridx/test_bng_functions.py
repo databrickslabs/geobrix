@@ -8,6 +8,7 @@ Tests use valid BNG cell IDs and resolutions based on Scala test patterns:
 """
 
 import logging
+import struct
 from pathlib import Path
 
 import pytest
@@ -649,15 +650,51 @@ def test_bng_geomkringexplode_wkt(spark, bng_registered):
 
 
 def test_bng_tessellateexplode_wkt(spark, bng_registered):
-    """Test tessellate explode with WKT."""
+    """Tessellate explode returns cellid, core and chip; a WKT geometry gives a STRING chip."""
     polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
     result = spark.range(1).select(
         bng_registered.bng_tessellateexplode(
             f.lit(polygon_wkt), f.lit(1), keep_core_geom=True
-        ).alias("result")
+        )
     )
+    assert result.dtypes == [
+        ("cellid", "string"),
+        ("core", "boolean"),
+        ("chip", "string"),
+    ]
     rows = result.collect()
     assert len(rows) > 0
+    # keep_core_geom=True: every chip, core or border, carries its geometry.
+    assert all(r["cellid"] is not None and r["chip"] is not None for r in rows)
+
+
+def test_bng_tessellateexplode_wkb_chip_is_binary(spark, bng_registered):
+    """A WKB geometry gives a BINARY chip; keep_core_geom=False leaves core chips NULL."""
+    # little-endian WKB of a 2.5 km box on exact 1 km grid lines: one core cell, eight border cells
+    ring = [
+        (530000.0, 180000.0),
+        (532500.0, 180000.0),
+        (532500.0, 182500.0),
+        (530000.0, 182500.0),
+        (530000.0, 180000.0),
+    ]
+    wkb = struct.pack("<BIII", 1, 3, 1, len(ring)) + b"".join(
+        struct.pack("<dd", x, y) for x, y in ring
+    )
+    df = spark.createDataFrame([(bytearray(wkb),)], "geom binary")
+    result = df.select(
+        bng_registered.bng_tessellateexplode(
+            f.col("geom"), f.lit(3), keep_core_geom=False
+        )
+    )
+    assert result.dtypes == [
+        ("cellid", "string"),
+        ("core", "boolean"),
+        ("chip", "binary"),
+    ]
+    rows = result.collect()
+    assert any(r["core"] and r["chip"] is None for r in rows)
+    assert any(not r["core"] and r["chip"] is not None for r in rows)
 
 
 def test_bng_tessellateexplode_string_resolution(spark, bng_registered):
@@ -666,8 +703,9 @@ def test_bng_tessellateexplode_string_resolution(spark, bng_registered):
     result = spark.range(1).select(
         bng_registered.bng_tessellateexplode(
             f.lit(polygon_wkt), f.lit("500m"), keep_core_geom=True
-        ).alias("result")
+        )
     )
+    assert result.columns == ["cellid", "core", "chip"]
     rows = result.collect()
     assert len(rows) > 0
 

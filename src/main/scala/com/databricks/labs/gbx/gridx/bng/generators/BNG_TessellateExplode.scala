@@ -12,7 +12,11 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
-/** Generator that tessellates a geometry into BNG cells and explodes one row per (cellId, core, chip). Arguments: geom, resolution, keepCoreGeom. */
+/** Generator that tessellates a geometry into BNG cells and explodes one row per chip. Arguments: geom, resolution, keepCoreGeom.
+  *
+  * Output columns: `cellid` STRING, `core` BOOLEAN, `chip`. The chip type follows the input geometry type:
+  * BINARY (WKB) for a BINARY geometry, STRING (WKT) for a STRING geometry. With `keepCoreGeom` false a core
+  * cell's chip is NULL; border chips always carry their geometry. */
 case class BNG_TessellateExplode(
     geom: Expression,
     resolution: Expression,
@@ -24,7 +28,20 @@ case class BNG_TessellateExplode(
     override def position: Boolean = false
     override def inline: Boolean = false
     override def children: Seq[Expression] = Seq(geom, resolution, keepCoreGeom)
-    override def elementSchema: StructType = StructType(Seq(StructField("cellid", StringType)))
+
+    /** The chip is encoded like the input geometry: WKT text for a STRING input, WKB bytes otherwise. */
+    private def chipType: DataType = geom.dataType match {
+        case StringType => StringType
+        case _          => BinaryType
+    }
+
+    override def elementSchema: StructType = StructType(
+      Seq(
+        StructField("cellid", StringType),
+        StructField("core", BooleanType),
+        StructField("chip", chipType)
+      )
+    )
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
 
     /**
@@ -58,16 +75,18 @@ case class BNG_TessellateExplode(
                 case StringType => JTS.fromWKT(geomRaw.asInstanceOf[UTF8String].toString)
                 case BinaryType => JTS.fromWKB(geomRaw.asInstanceOf[Array[Byte]])
             }
+            val wktChips = geom.dataType == StringType
             BNG
                 .tessellate(geometryVal, resolutionVal, keepCoreGeomVal)
                 .map(c => {
                     val cellId = UTF8String.fromString(BNG.format(c._1))
-                    val g = geom.dataType match {
-                        case StringType if keepCoreGeomVal => UTF8String.fromString(JTS.toWKT(c._3))
-                        case BinaryType if keepCoreGeomVal => JTS.toWKB(c._3)
-                        case _                             => null
-                    }
-                    InternalRow.fromSeq(Seq(cellId, c._2, g))
+                    // tessellate already leaves core chips without a geometry when keepCoreGeom is false;
+                    // border chips always carry theirs.
+                    val chip =
+                        if (c._3 == null) null
+                        else if (wktChips) UTF8String.fromString(JTS.toWKT(c._3))
+                        else JTS.toWKB(c._3)
+                    InternalRow.fromSeq(Seq(cellId, c._2, chip))
                 })
         }
 

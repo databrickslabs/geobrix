@@ -82,9 +82,37 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         val result = RST_ErrorHandler.safeEval(throwingEval, row, BinaryType)
         val seq = result.toSeq
         seq should have size 1
-        val meta = getMetadata(seq.head)
+        // Generators declare one `tile` column: the row wraps the error tile, like a success-path row.
+        seq.head.numFields shouldBe 1
+        val meta = getMetadata(seq.head.getStruct(0, 9))
         meta should contain key "error_message"
         meta("error_message") should include("gen error")
+    }
+
+    test("safeEvalNullElement when eval throws should return one row with a NULL element") {
+        val throwingEval: () => IterableOnce[InternalRow] = () => throw new RuntimeException("gen error")
+        val seq = RST_ErrorHandler.safeEvalNullElement(throwingEval).toSeq
+        seq should have size 1
+        seq.head.numFields shouldBe 1
+        seq.head.isNullAt(0) shouldBe true
+    }
+
+    test("safeEvalNullElement when eval succeeds should return eval result") {
+        val oneRow = Seq(minimalRow())
+        RST_ErrorHandler.safeEvalNullElement(() => oneRow).toSeq shouldBe oneRow
+    }
+
+    test("safeEvalNullElement re-throws argument errors so their message reaches the caller") {
+        val ex = intercept[IllegalArgumentException] {
+            RST_ErrorHandler.safeEvalNullElement(() => throw new IllegalArgumentException("max_z must be <= 20"))
+        }
+        ex.getMessage should include("max_z")
+    }
+
+    test("safeEvalNullElement VirtualTileException is re-thrown not swallowed as a NULL row") {
+        intercept[VirtualTileException] {
+            RST_ErrorHandler.safeEvalNullElement(() => throw new VirtualTileException("generator virtual guard"))
+        }
     }
 
     test("safeEval (generator) when eval succeeds should return eval result") {

@@ -1479,7 +1479,8 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
 
 **Returns:**
-- Exploded rows with cell ID and geometry for each cell
+- One row per cell with the columns `cellid` (STRING), `core` (BOOLEAN) and `chip`
+- `chip` is BINARY (WKB); the heavyweight tier returns a STRING (WKT) chip when the geometry is given as WKT. A core cell's `chip` is NULL unless the core geometry is kept
 
 <FunctionExamples
   name="bng_tessellateexplode"

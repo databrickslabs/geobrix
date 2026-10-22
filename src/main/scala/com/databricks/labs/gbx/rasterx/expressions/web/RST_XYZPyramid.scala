@@ -60,8 +60,10 @@ case class RST_XYZPyramid(
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7))
 
+    /** The `tile` column is the `(z, x, y, bytes)` struct, which cannot hold an error tile, so a data failure
+      * emits one row with a NULL `tile`; argument errors (the `min_z` / `max_z` / tile-count guards) are re-thrown. */
     override def eval(input: InternalRow): IterableOnce[InternalRow] =
-        RST_ErrorHandler.safeEval(() => doEval(input), input, rasterType)
+        RST_ErrorHandler.safeEvalNullElement(() => doEval(input))
 
     private def doEval(input: InternalRow): IterableOnce[InternalRow] = {
         val exprConf = ExpressionConfig.fromExpr(exprConfExpr)

@@ -8,6 +8,7 @@ import org.apache.spark.sql.DataFrame
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
+import org.apache.spark.sql.types.{BinaryType, BooleanType, StringType}
 
 /**
  * Comprehensive tests for BNG aggregator and generator functions.
@@ -305,51 +306,108 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         assert(result.length > 0)
     }
 
-    test("BNG_TessellateExplode should explode geometry into chips") {
+    // ---- BNG_TessellateExplode: declares the columns it emits (cellid, core, chip) -----------------
+
+    private val teWkt = "POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"
+
+    /** Heavy generators are Catalyst generators, so SQL reaches them through LATERAL VIEW or the select list (not `FROM t, LATERAL f(...)`). */
+    private def tessellateLateralView(view: String, keep: Boolean): DataFrame =
+        spark.sql(
+          s"SELECT cellid, core, chip FROM $view " +
+              s"LATERAL VIEW gbx_bng_tessellateexplode(geom, res, $keep) t AS cellid, core, chip"
+        )
+
+    /** Select-list form: the output columns are named by the generator's declared elementSchema. */
+    private def tessellateSelectList(view: String, keep: Boolean): DataFrame =
+        spark.sql(s"SELECT gbx_bng_tessellateexplode(geom, res, $keep) FROM $view")
+
+    test("BNG_TessellateExplode returns cellid, core and chip columns (WKB input, BINARY chip)") {
         spark.sparkContext.setLogLevel("ERROR")
-        import functions._
         bng.functions.register(spark)
-        
-        val triangle = JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))")
-        val wkb = JTS.toWKB(triangle)
-        val resolution = 3
-        
-        val df = spark.createDataFrame(Seq((wkb, resolution))).toDF("geom", "res")
-        val result = df.select(bng_tessellateexplode(df("geom"), df("res")).as("chip")).collect()
-        
-        assert(result.length > 0)
-        // Just verify we got results - structure may vary
-        result.foreach { row =>
-            assert(row != null)
+        val geometry = JTS.fromWKT(teWkt)
+
+        spark.createDataFrame(Seq((JTS.toWKB(geometry), 3))).toDF("geom", "res").createOrReplaceTempView("bng_te_wkb")
+        val df = tessellateLateralView("bng_te_wkb", keep = false)
+
+        assert(tessellateSelectList("bng_te_wkb", keep = false).schema.fields.map(f => (f.name, f.dataType)).toSeq ==
+            Seq(("cellid", StringType), ("core", BooleanType), ("chip", BinaryType)))
+
+        val actual = df.collect().map(r => (r.getString(0), r.getBoolean(1), Option(r.getAs[Array[Byte]](2)))).sortBy(_._1)
+        val expected = BNG.tessellate(geometry, 3, false).toSeq
+            .map(c => (BNG.format(c._1), c._2, Option(c._3).map(JTS.toWKB))).sortBy(_._1)
+        assert(actual.length == expected.length && actual.length > 0)
+        assert(actual.map(_._1).toSeq == expected.map(_._1).toSeq)
+        assert(actual.map(_._2).toSeq == expected.map(_._2).toSeq)
+        // keepCoreGeom=false: core chips are NULL, every border chip still carries its geometry.
+        assert(actual.exists(a => a._2 && a._3.isEmpty), "expected at least one core chip with a NULL geometry")
+        assert(actual.exists(a => !a._2 && a._3.isDefined), "expected at least one border chip with a geometry")
+        actual.zip(expected).foreach { case (a, e) =>
+            assert(a._3.isDefined == e._3.isDefined, s"chip nullness differs for cell ${a._1}")
+            if (e._3.isDefined) assert(java.util.Arrays.equals(a._3.get, e._3.get), s"chip WKB differs for cell ${a._1}")
         }
     }
 
-    test("BNG_TessellateExplode should work with WKT input") {
+    test("BNG_TessellateExplode returns a STRING chip for WKT input") {
         spark.sparkContext.setLogLevel("ERROR")
-        import functions._
         bng.functions.register(spark)
-        
-        val wkt = "POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"
-        val resolution = 3
-        
-        val df = spark.createDataFrame(Seq((wkt, resolution))).toDF("geom", "res")
-        val result = df.select(bng_tessellateexplode(df("geom"), df("res")).as("chip")).collect()
-        
-        assert(result.length > 0)
+        val geometry = JTS.fromWKT(teWkt)
+
+        spark.createDataFrame(Seq((teWkt, 3))).toDF("geom", "res").createOrReplaceTempView("bng_te_wkt")
+        val df = tessellateLateralView("bng_te_wkt", keep = false)
+
+        assert(tessellateSelectList("bng_te_wkt", keep = false).schema.fields.map(f => (f.name, f.dataType)).toSeq ==
+            Seq(("cellid", StringType), ("core", BooleanType), ("chip", StringType)))
+
+        val actual = df.collect().map(r => (r.getString(0), r.getBoolean(1), Option(r.getString(2)))).sortBy(_._1)
+        val expected = BNG.tessellate(geometry, 3, false).toSeq
+            .map(c => (BNG.format(c._1), c._2, Option(c._3).map(JTS.toWKT))).sortBy(_._1)
+        assert(actual.toSeq == expected.toSeq)
+        assert(actual.exists(a => !a._2 && a._3.isDefined), "expected at least one border chip with a geometry")
     }
 
-    test("BNG_TessellateExplode should work with string resolution") {
+    test("BNG_TessellateExplode keepCoreGeom=true gives core chips their cell geometry") {
+        spark.sparkContext.setLogLevel("ERROR")
+        bng.functions.register(spark)
+        val geometry = JTS.fromWKT(teWkt)
+
+        spark.createDataFrame(Seq((JTS.toWKB(geometry), 3))).toDF("geom", "res").createOrReplaceTempView("bng_te_keep")
+        val df = tessellateLateralView("bng_te_keep", keep = true)
+        assert(tessellateSelectList("bng_te_keep", keep = true).schema.fieldNames.toSeq == Seq("cellid", "core", "chip"))
+
+        val actual = df.collect()
+        assert(actual.length > 0)
+        assert(actual.forall(r => !r.isNullAt(2)), "keepCoreGeom=true: every chip carries a geometry")
+        val cores = actual.filter(_.getBoolean(1))
+        assert(cores.nonEmpty)
+        cores.foreach { r =>
+            val cellGeom = BNG.cellIdToGeometry(BNG.parse(r.getString(0)))
+            assert(JTS.fromWKB(r.getAs[Array[Byte]](2)).equalsExact(cellGeom, 1e-6))
+        }
+    }
+
+    test("BNG_TessellateExplode with a string resolution still returns the three columns") {
+        spark.sparkContext.setLogLevel("ERROR")
+        bng.functions.register(spark)
+
+        spark.createDataFrame(Seq((JTS.toWKB(JTS.fromWKT(teWkt)), "500m"))).toDF("geom", "res")
+            .createOrReplaceTempView("bng_te_strres")
+        assert(tessellateSelectList("bng_te_strres", keep = false).schema.fieldNames.toSeq == Seq("cellid", "core", "chip"))
+        assert(tessellateLateralView("bng_te_strres", keep = false).count() > 0)
+    }
+
+    test("BNG_TessellateExplode Scala wrapper exposes cellid, core and chip") {
         spark.sparkContext.setLogLevel("ERROR")
         import functions._
         bng.functions.register(spark)
 
-        val wkb = JTS.toWKB(JTS.fromWKT("POLYGON ((10000 10000, 20000 10000, 20000 20000, 10000 10000))"))
-        val resolution = "500m"
-
-        val df = spark.createDataFrame(Seq((wkb, resolution))).toDF("geom", "res")
-        val result = df.select(bng_tessellateexplode(df("geom"), df("res")).as("chip")).collect()
-
-        assert(result.length > 0)
+        val wkb = JTS.toWKB(JTS.fromWKT(teWkt))
+        val df = spark.createDataFrame(Seq((wkb, 3))).toDF("geom", "res")
+        val result = df.select(bng_tessellateexplode(df("geom"), df("res")))
+        assert(result.schema.fieldNames.toSeq == Seq("cellid", "core", "chip"))
+        val rows = result.collect()
+        assert(rows.length > 0)
+        // The Scala wrapper passes keepCoreGeom=true, so no chip is NULL.
+        assert(rows.forall(r => r.getString(0) != null && !r.isNullAt(2)))
     }
 
     test("BNG.parse should throw IllegalArgumentException for invalid cell ID prefix") {

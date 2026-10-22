@@ -403,6 +403,116 @@ def test_bng_full_parity(spark_with_jar):
     _assert_geom_parity(light_agg_i_blob, heavy_agg_i_blob, "cellintersection_agg")
 
 
+# --- tessellateexplode: the heavy generator emits the columns it declares ---------------------
+
+
+def test_bng_tessellateexplode_columns_parity(spark_with_jar):
+    """Heavy ``gbx_bng_tessellateexplode`` returns the same columns and values as light.
+
+    Heavy declared a single ``cellid`` column while emitting ``(cellid, core, chip)``, so
+    ``core`` and ``chip`` were silently dropped. The chip type follows the input geometry
+    type in the heavy tier (BINARY for WKB, STRING for WKT); light always returns BINARY.
+
+    The fixture is a 2.5 km grid-aligned box at 1 km resolution, which has both a core cell
+    (chip NULL when ``keep_core_geom`` is false) and border cells (chip geometry).
+
+    Light is a table-valued function (``FROM t, LATERAL f(...)``); heavy is a Catalyst
+    generator, reached through the select list or ``LATERAL VIEW``.
+    """
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import _bng
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+    box_wkb = _wkb(_GRID_ALIGNED_BIG_BOX)
+    box_wkt = _GRID_ALIGNED_BIG_BOX.wkt
+
+    # Fixture check: the box must exercise both a core cell and border cells.
+    expected = _bng.tessellate_str(bytes(box_wkb), _RES)
+    assert any(core for _, core, _chip in expected), "fixture has no core cell"
+    assert any(not core for _, core, _chip in expected), "fixture has no border cell"
+
+    spark.createDataFrame(
+        [(box_wkb, box_wkt, _RES)], "wkb binary, wkt string, res int"
+    ).createOrReplaceTempView("bng_te_parity")
+
+    def shape(df):
+        return [(fld.name, fld.dataType.simpleString()) for fld in df.schema.fields]
+
+    def by_cell(df):
+        return {r["cellid"]: (r["core"], r["chip"]) for r in df.collect()}
+
+    # ---- LIGHT first ----
+    gx.register(spark)
+    light_df = spark.sql(
+        "SELECT t.cellid, t.core, t.chip FROM bng_te_parity, "
+        "LATERAL gbx_bng_tessellateexplode(wkb, res) t"
+    )
+    light_shape = shape(light_df)
+    light = by_cell(light_df)
+
+    # ---- HEAVY ----
+    hx.register(spark)
+    heavy_wkb_df = spark.sql(
+        "SELECT gbx_bng_tessellateexplode(wkb, res, false) FROM bng_te_parity"
+    )
+    heavy_wkt_df = spark.sql(
+        "SELECT gbx_bng_tessellateexplode(wkt, res, false) FROM bng_te_parity"
+    )
+    heavy_lateral_df = spark.sql(
+        "SELECT cellid, core, chip FROM bng_te_parity "
+        "LATERAL VIEW gbx_bng_tessellateexplode(wkb, res, false) t AS cellid, core, chip"
+    )
+    heavy_wkb_shape = shape(heavy_wkb_df)
+    heavy_wkt_shape = shape(heavy_wkt_df)
+    heavy_wkb = by_cell(heavy_wkb_df)
+    heavy_wkt = by_cell(heavy_wkt_df)
+    heavy_lateral = by_cell(heavy_lateral_df)
+
+    # === names and types ===
+    assert light_shape == [
+        ("cellid", "string"),
+        ("core", "boolean"),
+        ("chip", "binary"),
+    ]
+    assert heavy_wkb_shape == light_shape, (
+        f"heavy (WKB input) columns differ from light:\n  light={light_shape}\n"
+        f"  heavy={heavy_wkb_shape}"
+    )
+    assert heavy_wkt_shape == [
+        ("cellid", "string"),
+        ("core", "boolean"),
+        ("chip", "string"),
+    ], f"heavy (WKT input) chip must be STRING: {heavy_wkt_shape}"
+
+    # === cell set, core flags, chip nullness (WKB input) ===
+    assert set(heavy_wkb) == set(
+        light
+    ), f"cell-set mismatch:\n  light={sorted(light)}\n  heavy={sorted(heavy_wkb)}"
+    assert heavy_lateral == heavy_wkb, "LATERAL VIEW and select-list forms must agree"
+    for cell, (lcore, lchip) in light.items():
+        hcore, hchip = heavy_wkb[cell]
+        assert (
+            hcore == lcore
+        ), f"core flag differs for {cell}: light={lcore} heavy={hcore}"
+        assert (lchip is None) == (
+            hchip is None
+        ), f"chip nullness differs for {cell} (light={lchip is None} heavy={hchip is None})"
+        if lchip is not None:
+            _assert_geom_parity(lchip, hchip, f"tessellateexplode chip cell={cell}")
+
+    # === WKT input: heavy chip is WKT text; the geometry matches light's WKB chip ===
+    assert set(heavy_wkt) == set(light)
+    for cell, (lcore, lchip) in light.items():
+        hcore, hchip = heavy_wkt[cell]
+        assert hcore == lcore
+        assert (lchip is None) == (hchip is None)
+        if lchip is not None:
+            assert equals_exact(
+                from_wkb(bytes(lchip)).normalize(), from_wkt(hchip).normalize(), 1e-6
+            ), f"WKT-input chip geometry differs for {cell}"
+
+
 # --- mosaic#434 lock-in -----------------------------------------------------------------------
 
 

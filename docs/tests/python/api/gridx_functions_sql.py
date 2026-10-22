@@ -239,10 +239,6 @@ def bng_tessellateexplode_sql_example():
     empty results.  The lightweight UDTF returns three columns per row:
     ``cellid STRING``, ``core BOOLEAN``, ``chip BINARY`` — 9 rows for
     the 3km × 3km BNG polygon at 1km resolution.
-
-    Note: the heavyweight CollectionGenerator has an ``elementSchema`` bug
-    (only ``cellid`` is visible via heavy SQL LATERAL); the light form
-    correctly exposes all three fields and is shown here.
     """
     return """
 SELECT t.*

@@ -459,10 +459,13 @@ def bng_tessellateexplode(
     Args:
         geom: Geometry column (WKT or WKB).
         resolution: BNG resolution — integer index ±1..±6 or string key.
-        keep_core_geom: If True, include the original geometry in the result.
+        keep_core_geom: If True, core cells carry their cell geometry in ``chip``;
+            if False their ``chip`` is NULL. Border cells always carry their geometry.
 
     Returns:
-        Column of exploded BNG cell identifiers (and optionally geometry).
+        Generator column with the columns ``cellid`` (STRING), ``core`` (BOOLEAN) and
+        ``chip`` (BINARY for a WKB geometry, STRING for a WKT geometry). Select it
+        directly; it expands to the three columns.
     """
     return f.call_function(
         "gbx_bng_tessellateexplode",

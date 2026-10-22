@@ -98,6 +98,11 @@ testbook==0.4.2
 # version as the light CI environments (requirements-light-env{5,6}-ci.in).
 exifread>=3.0,<4
 
+# --- LiDAR point-cloud reading (lidar_gbx DataSource; laspy + pure-Rust LAZ backend) ---
+# Same pins as requirements-light-env{5,6}-ci.in; lazrs below 0.8.2 prints Rust panics.
+laspy==2.7.0
+lazrs==0.8.2
+
 # --- Jupyter (final stage only) ---
 ipython==8.30.0
 ipykernel==6.29.5

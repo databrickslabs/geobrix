@@ -75,9 +75,20 @@ window in both tiers.
   catches them, as it does garbled point records. The margin is wide so that a header whose bounds
   were not updated after points were added or moved keeps those points. Turn it off with the
   `lidar_gbx` option `checkHeaderBounds="false"`. See the [LiDAR reader](./readers/lidar#options).
-- **Some corrupt LAZ data stops the worker.** A region of `0xFF` bytes, for example, crashes the
-  native LAZ decoder. A crash cannot be caught, so the file is not set aside: the task is retried
-  and then the update fails. Remove the file or replace it with a readable copy.
+- **A LAZ file the decoder cannot be given is set aside before it, and the read limit comes from
+  its chunk table.** A LAZ file whose chunk table or LASzip record is implausible or cannot be
+  decoded is an unreadable-file record (a warning and a skip without `on_error`) instead of ending
+  the worker; the LiDAR downloader and the point-cloud layer of `plot_static` raise a `ValueError`
+  naming the file. A header that declares more points than the chunk table holds reads the points
+  the table holds, so a highly compressible file (50,000 identical points) is read in full rather
+  than cut short by a guess at the size of a point. The LAZ decoder `lazrs` must be 0.8.2 or later:
+  the lightweight extras require it, because earlier versions print Rust panics in the executor
+  logs for such files.
+- **Damaged LAZ point data can still stop the worker.** A LAZ file whose chunk table or LASzip
+  record is damaged is set aside before it is decoded, but damage inside the compressed points
+  reaches the native LAZ decoder, and a region of `0xFF` bytes, for example, crashes it. A crash
+  cannot be caught, so the file is not set aside: the task is retried and then the update fails.
+  Remove the file or replace it with a readable copy.
 - **A NULL or empty geometry is data, not a bad record.** A feature without a location, a
   `POINT EMPTY`, and a curve or surface (with `asWKB="false"` those are set aside, because WKT
   cannot hold them) are written like any other row. GDAL also returns NULL for a geometry it cannot

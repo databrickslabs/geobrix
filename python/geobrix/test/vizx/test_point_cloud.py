@@ -87,3 +87,30 @@ def test_plot_static_reads_las_path(tmp_path):
     # crs override (the synthetic .las carries no CRS VLR).
     ax = plot_static([point_cloud_layer(str(p), crs="EPSG:4326")], basemap=False)
     assert ax.collections and len(ax.collections[-1].get_offsets()) == 150
+
+
+def test_load_point_cloud_refuses_a_laz_with_a_bad_chunk_table(tmp_path, monkeypatch):
+    """A compressed file whose chunk table offset lies outside the file is a
+    ValueError naming it, raised before laspy decodes (the decoder sizes its
+    buffers from that table and aborts the process on a bad one)."""
+    import struct
+
+    laspy = pytest.importorskip("laspy")
+    from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
+
+    df = _synthetic_xyz(150)
+    las = laspy.LasData(laspy.LasHeader(point_format=0))
+    las.x, las.y, las.z = (df[c].to_numpy() for c in "xyz")
+    p = tmp_path / "bad.laz"
+    las.write(str(p), do_compress=True)
+    with open(p, "r+b") as fh:
+        raw = fh.read(100)
+        fh.seek(struct.unpack_from("<I", raw, 96)[0])
+        fh.write(struct.pack("<q", 1 << 40))
+
+    def decoder_reached(*a, **k):
+        raise AssertionError("laspy decoded a file whose chunk table was refused")
+
+    monkeypatch.setattr(laspy, "read", decoder_reached)
+    with pytest.raises(ValueError, match=r"bad\.laz.*chunk table offset"):
+        load_point_cloud(str(p))

@@ -705,7 +705,9 @@ def test_lidar_laz_declaring_a_huge_point_count_fabricates_none(tmp_path):
     rows, recs = _read(tmp_path, path, "lidar_gbx")
     assert len(rows) == 5000 and _at_offset_corner(rows) == []
     capped = [r for r in recs if r["error_class"] == Q.RECORDS_NOT_READ]
-    assert len(capped) == 1 and "more than a" in capped[0]["error_message"]
+    assert len(capped) == 1
+    assert "more than the" in capped[0]["error_message"]
+    assert "its chunk table holds" in capped[0]["error_message"]
     assert [r["record_index"] for r in recs if r["record_index"]][0].startswith(
         "points=5000-"
     )
@@ -715,6 +717,25 @@ def test_lidar_valid_laz_reads_every_point_and_no_record(tmp_path):
     path = _laz(tmp_path / "a.laz")
     rows, recs = _read(tmp_path, path, "lidar_gbx")
     assert len(rows) == 5000 and recs == []
+
+
+def test_lidar_highly_compressible_laz_reads_every_point(tmp_path):
+    """50,000 identical points compress to under a thousand bytes (0.02 bytes a
+    point): the limit of a read comes from the chunk table, not from a guess of
+    how small a point can get."""
+    import laspy
+
+    path = str(tmp_path / "flat.laz")
+    header = laspy.LasHeader(point_format=3, version="1.2")
+    header.offsets = [500000.0, 4000000.0, 100.0]
+    header.scales = [0.01, 0.01, 0.01]
+    las = laspy.LasData(header)
+    las.x = np.full(50_000, 500050.0)
+    las.y = np.full(50_000, 4000050.0)
+    las.z = np.full(50_000, 105.0)
+    las.write(path)
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == 50_000 and recs == []
 
 
 def _garbled_laz(tmp_path, at, zero_points=(), nbytes=64):
@@ -1000,11 +1021,15 @@ def _garble_laszip_chunk_size(path, chunk_size):
 
 
 @_linux_only()
-def test_lidar_laz_garbled_chunk_size_is_one_bad_record_not_a_dead_process(tmp_path):
+@pytest.mark.parametrize("chunk_size", [0x7FFFFFFF, 0])
+def test_lidar_laz_garbled_chunk_size_is_one_bad_record_not_a_dead_process(
+    tmp_path, chunk_size
+):
     """A chunk size of 2 billion points (a 73 GB buffer per chunk) in the LASzip
-    record: the same class of failure, from the same decoder."""
+    record: the same class of failure, from the same decoder. A chunk of no
+    points is no chunk size either."""
     path = _laz(tmp_path / "c.laz", 120_000)
-    _garble_laszip_chunk_size(path, 0x7FFFFFFF)
+    _garble_laszip_chunk_size(path, chunk_size)
     rows, recs, _ = _read_in_child(tmp_path, path)
     assert rows == 0
     assert "chunk" in _only_record(recs)
@@ -1171,11 +1196,163 @@ def test_lidar_laz_whose_laszip_record_cannot_be_decoded_is_one_bad_record(tmp_p
     assert "LASzip record" in _only_record(recs)
 
 
-@_linux_only()
-def test_lidar_las_1_4_point_format_6_laz_is_read_in_full(tmp_path):
-    """A LAS 1.4 LAZ of point format 6 (64-bit point count, no legacy count, a
-    different record size) has a chunk table like any other: the check reads its
-    point count and item size from that header and lets it through."""
+@pytest.mark.parametrize("sizes", [(1,), (1, 1, 1)])
+def test_lidar_laz_of_one_point_chunks_is_read_in_full(tmp_path, sizes):
+    """lazrs ends a file with a chunk of no points, so these tables are
+    [(1, 38), (0, 4)] and [(1, 38) x 3, (0, 4)]: one more chunk than the point
+    bytes hold at one point each. laspy reads such a file; so must the check."""
+    path = str(_variable_chunk_laz(tmp_path / "t.laz", sizes))
+    assert [p for p, _ in _chunk_entries(path)] == [*sizes, 0]
+    rows, recs = _read(tmp_path, path, "lidar_gbx")
+    assert len(rows) == sum(sizes) and recs == []
+
+
+@pytest.mark.parametrize(
+    "points, chunk_size, most",
+    [
+        (120_000, 50_000, 4),  # three chunks, and one empty
+        (100_000, 50_000, 3),
+        (0, 50_000, 1),
+        (7, None, 8),  # variable chunks: one point each at least
+        (0, None, 1),
+    ],
+)
+def test_lidar_most_chunks_a_header_allows(points, chunk_size, most):
+    from databricks.labs.gbx.ds.lidar import _most_chunks
+
+    assert _most_chunks(points, chunk_size) == most
+
+
+def test_lidar_chunk_count_above_what_the_header_needs_is_refused_before_lazrs_reads(
+    tmp_path, monkeypatch
+):
+    """A chunk table of 10 chunks for a header of 120,000 points (three chunks,
+    one empty at most) fits the file, so only the header can tell it is wrong. It
+    is refused from the count in the table's head, before lazrs builds a list of
+    entries for it (a garbled offset deep in a big file can make that list 2.5 GB)."""
+    import laspy
+    import lazrs
+
+    from databricks.labs.gbx.ds.lidar import _read_chunk_table
+
+    path = _laz(tmp_path / "c.laz", 120_000)
+    at, _, _ = _chunk_table(path)
+    with open(path, "r+b") as fh:  # the count follows the table's version
+        fh.seek(at + 4)
+        fh.write(struct.pack("<I", 10))
+    called, real = [], lazrs.read_chunk_table
+    monkeypatch.setattr(
+        lazrs, "read_chunk_table", lambda *a: called.append(a) or real(*a)
+    )
+    with laspy.open(path) as r:
+        result = _read_chunk_table(r.header, path, os.path.getsize(path))
+    assert isinstance(result, str)
+    assert "10 chunks, more than the 120000 points" in result
+    assert called == []
+
+
+def test_check_laz_lets_a_sound_file_through_and_names_a_refused_one(tmp_path):
+    """The check other readers of LAZ call (a path or the bytes of a file): None
+    for a sound table, a ValueError naming the file for a refused one."""
+    from databricks.labs.gbx.ds.lidar import check_laz
+
+    path = _laz(tmp_path / "c.laz", 120_000)
+    with open(path, "rb") as fh:
+        sound = fh.read()
+    assert check_laz(path, "c.laz") is None and check_laz(sound, "c.laz") is None
+    at, _, _ = _chunk_table(path)
+    with open(path, "r+b") as fh:  # ten chunks for three
+        fh.seek(at + 4)
+        fh.write(struct.pack("<I", 10))
+    with open(path, "rb") as fh:
+        garbled = fh.read()
+    for source in (path, garbled):
+        with pytest.raises(ValueError, match=r"^c\.laz: not read, the chunk table"):
+            check_laz(source, "c.laz")
+
+
+@pytest.mark.parametrize("fails", ["read_chunk_table", "LazVlr"])
+def test_lidar_chunk_table_check_does_not_blame_the_file_for_running_out_of_memory(
+    tmp_path, monkeypatch, fails
+):
+    """Out of memory is the machine's, not the file's: it propagates (like every
+    other catch of a decoder's error in the reader) instead of being recorded as
+    an unreadable file."""
+    import laspy
+    import lazrs
+
+    from databricks.labs.gbx.ds.lidar import _read_chunk_table
+
+    path = _laz(tmp_path / "c.laz", 120_000)
+
+    def out_of_memory(*a, **k):
+        raise MemoryError("cannot allocate")
+
+    with laspy.open(path) as r:
+        monkeypatch.setattr(lazrs, fails, out_of_memory)
+        with pytest.raises(MemoryError):
+            _read_chunk_table(r.header, path, os.path.getsize(path))
+
+
+def test_lidar_chunk_table_check_retries_a_transient_miss_on_its_open(
+    tmp_path, monkeypatch
+):
+    """The check opens the file a second time; a UC Volume FUSE miss there is
+    retried like the first open's, and is not a bad file."""
+    import builtins
+
+    import laspy
+
+    from databricks.labs.gbx.ds import _listing
+    from databricks.labs.gbx.ds.lidar import _ChunkTable, _read_chunk_table
+
+    path = _laz(tmp_path / "c.laz", 120_000)
+    with laspy.open(path) as r:
+        header = r.header
+    opens, real_open = [], builtins.open
+
+    def flaky(file, *a, **k):
+        if str(file) == path:
+            opens.append(file)
+            if len(opens) == 1:
+                raise FileNotFoundError(path)
+        return real_open(file, *a, **k)
+
+    monkeypatch.setattr(builtins, "open", flaky)
+    monkeypatch.setattr(_listing.time, "sleep", lambda s: None)
+    result = _read_chunk_table(header, path, os.path.getsize(path))
+    assert isinstance(result, _ChunkTable) and len(opens) == 2
+
+
+def test_lidar_read_closes_the_file_when_the_chunk_table_check_raises(
+    tmp_path, monkeypatch
+):
+    import errno
+
+    import laspy
+
+    from databricks.labs.gbx.ds import lidar
+
+    path = _laz(tmp_path / "c.laz", 120_000)
+    opened, real_open = [], laspy.open
+
+    def spy(*a, **k):
+        opened.append(real_open(*a, **k))
+        return opened[-1]
+
+    def broken(*a):
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr(laspy, "open", spy)
+    monkeypatch.setattr(lidar, "_read_chunk_table", broken)
+    with pytest.raises(OSError):
+        list(lidar.LidarGbxReader({"path": path})._read_points(path))
+    assert len(opened) == 1 and opened[0]._source.closed
+
+
+def _pf6_laz(path, n=120_000):
+    """A LAS 1.4 LAZ of point format 6: a 64-bit point count (laspy leaves the
+    legacy count at 0) and a different record size."""
     import laspy
 
     header = laspy.LasHeader(point_format=6, version="1.4")
@@ -1183,13 +1360,41 @@ def test_lidar_las_1_4_point_format_6_laz_is_read_in_full(tmp_path):
     header.scales = np.array([0.01, 0.01, 0.01])
     las = laspy.LasData(header)
     rng = np.random.default_rng(3)
-    las.x = rng.uniform(500000, 500100, 120_000)
-    las.y = rng.uniform(4000000, 4000100, 120_000)
-    las.z = rng.uniform(100, 110, 120_000)
-    path = str(tmp_path / "p6.laz")
-    las.write(path)
+    las.x = rng.uniform(500000, 500100, n)
+    las.y = rng.uniform(4000000, 4000100, n)
+    las.z = rng.uniform(100, 110, n)
+    las.write(str(path))
+    return str(path)
+
+
+@_linux_only()
+def test_lidar_las_1_4_point_format_6_laz_is_read_in_full(tmp_path):
+    """A LAS 1.4 LAZ of point format 6 (64-bit point count, no legacy count, a
+    different record size) has a chunk table like any other: the check reads its
+    point count and item size from that header and lets it through."""
+    path = _pf6_laz(tmp_path / "p6.laz")
     rows, recs, _ = _read_in_child(tmp_path, path)
     assert rows == 120_000 and recs == []
+
+
+@_linux_only()
+def test_lidar_las_1_4_point_format_6_laz_with_an_overlong_chunk_table_is_refused(
+    tmp_path,
+):
+    """Chunk sizes together longer than the file, in a file whose legacy point
+    count is 0: the check has to use the 64-bit count (120,000 points, three
+    chunks to read), or it would find no chunk to hold against the file."""
+    import laspy
+
+    path = _pf6_laz(tmp_path / "p6.laz")
+    with laspy.open(path) as r:
+        assert r.header.point_count == 120_000
+    with open(path, "rb") as fh:  # the legacy count, at byte 107
+        assert struct.unpack_from("<I", fh.read(111), 107)[0] == 0
+    _replace_chunk_table(path, [3_000_000] * 3)
+    rows, recs, _ = _read_in_child(tmp_path, path)
+    assert rows == 0
+    assert "past the end of the file" in _only_record(recs)
 
 
 # --- EXIF -----------------------------------------------------------------------------

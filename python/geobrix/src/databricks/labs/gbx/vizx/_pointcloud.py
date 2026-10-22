@@ -29,6 +29,10 @@ def load_point_cloud(data, *, column=None, max_points=150_000, crs=None, seed=0)
     if isinstance(data, str):
         import laspy
 
+        from databricks.labs.gbx.ds.lidar import check_laz
+
+        # A bad chunk table can end the process in laspy's decoder: raise first.
+        check_laz(data, data)
         las = laspy.read(data)
         x = np.asarray(las.x, dtype="float64")
         y = np.asarray(las.y, dtype="float64")

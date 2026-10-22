@@ -207,6 +207,8 @@ def _make_fetch_nodes(
         import numpy as np
         import pandas as pd
 
+        from databricks.labs.gbx.ds.lidar import check_laz
+
         for pdf in iterator:
             for proj, key in zip(pdf["project"], pdf["node_key"]):
                 try:
@@ -223,6 +225,8 @@ def _make_fetch_nodes(
                         with open(laz_path, "wb") as fh:
                             fh.write(raw)
 
+                # A bad chunk table can end the process in laspy's decoder: raise first.
+                check_laz(raw, f"{proj}/{key}.laz")
                 las = laspy.read(_io.BytesIO(raw))
                 x = np.asarray(las.x)
                 y = np.asarray(las.y)
@@ -405,6 +409,8 @@ class LidarDownloader:
         import laspy
         import numpy as np
 
+        from databricks.labs.gbx.ds.lidar import check_laz
+
         bases = {p: b.rstrip("/") + "/" for p, b in self.projects.items()}
         all_points: List[dict] = []
 
@@ -423,6 +429,8 @@ class LidarDownloader:
                     with open(laz_path, "wb") as fh:
                         fh.write(raw)
 
+            # A bad chunk table can end the process in laspy's decoder: raise first.
+            check_laz(raw, f"{project}/{key}.laz")
             las = laspy.read(io.BytesIO(raw))
             x = np.asarray(las.x)
             y = np.asarray(las.y)

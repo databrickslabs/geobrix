@@ -129,11 +129,13 @@ docker exec geobrix-dev /bin/bash -c \
 # targeted (NOT hash-locked) install keeps local suites collecting + running from the dev proxy.
 # One import probe gates one install of all packages (versions match the lockfile); near-zero
 # cost when present; transitive deps resolve off the dev proxy without drifting numpy/pandas pins.
+# The probe also fails when the installed lazrs is older than 0.8.2 (the floor in pyproject.toml):
+# 0.8.0 / 0.8.1 print Rust panics on a LAZ file that declares more points than it holds.
 # Remove once the image ships these.
 # NOTE: tippecanoe is intentionally excluded — it installs but segfaults natively in-container
 # (exit 139); a pip install cannot fix a native crash.
 docker exec geobrix-dev /bin/bash -c \
-    "python3 -c 'import rio_cogeo, skimage, xrspatial, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget' >/dev/null 2>&1 || \
+    "python3 -c 'import importlib.metadata as m, rio_cogeo, skimage, xrspatial, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget; assert tuple(int(v) for v in m.version(\"lazrs\").split(\".\")[:3]) >= (0, 8, 2)' >/dev/null 2>&1 || \
      pip3 install --break-system-packages --quiet \
        rio-cogeo==7.0.2 scikit-image==0.26.0 xarray-spatial==0.9.9 \
        pmtiles==3.7.0 h3==4.5.0 pyarrow==19.0.1 netCDF4==1.7.4 \

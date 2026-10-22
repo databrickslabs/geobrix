@@ -7,6 +7,7 @@ Serverless-safe: session-free partitions()/read(); one InputPartition per file.
 Uses no forbidden Spark internal APIs — safe on Spark Connect / Serverless.
 """
 
+import io
 import os
 import struct
 import warnings
@@ -195,9 +196,8 @@ class LidarGbxReader(DataSourceReader):
         st, opener = opened
         # A LAZ chunk table is checked before any decoder exists: lazrs sizes buffers
         # from numbers in it, and a refused allocation aborts the whole process.
-        table = _read_chunk_table(opener.header, local, st.st_size)
+        table = _checked_table(opener, local, st.st_size)
         if isinstance(table, str):
-            opener.close()
             self._skip(local, table)
             return
         # Columnar (Arrow) output: one RecordBatch per chunk, gathered with vectorised
@@ -276,7 +276,7 @@ class LidarGbxReader(DataSourceReader):
                 return
             if check_bounds:
                 bounds = _header_bounds(reader.header)
-            limit = _readable_points(reader.header, local, st.st_size, hook)
+            limit = _readable_points(reader.header, local, st.st_size, hook, table)
             yield from _checked_chunks(
                 laspy, local, reader, limit, self.chunk_size, _emit, hook
             )
@@ -401,10 +401,6 @@ _SALVAGE_POINTS = 1000
 # ends the read, whatever chunkSize is.
 _GIVE_UP_CHUNKS = 3
 _GIVE_UP_POINTS = 250_000
-# A LAZ point takes more than this many bytes, so a header count beyond
-# (bytes of point data / this) cannot be in the file.
-_MIN_LAZ_POINT_BYTES = 0.5
-
 
 # Limits for the sanity check of a LAZ chunk table (_read_chunk_table): plausibility
 # bounds on numbers read from the file, far above anything a writer produces and far
@@ -421,6 +417,19 @@ class _ChunkTable(NamedTuple):
     entries: list  # [(points, bytes), ...] as lazrs.read_chunk_table returns them
     item_size: int  # bytes per point record (LazVlr.item_size())
     chunk_size: Optional[int]  # points per chunk (LASzip record); None = variable
+
+
+def _checked_table(opener, local: str, size: int) -> Union[str, _ChunkTable, None]:
+    """:func:`_read_chunk_table` of a file opened by laspy (``opener``), which is
+    closed when the table is refused or the check raises."""
+    try:
+        table = _read_chunk_table(opener.header, local, size)
+    except BaseException:  # the second open failed (I/O, memory): close the first
+        opener.close()
+        raise
+    if isinstance(table, str):
+        opener.close()
+    return table
 
 
 def _find_chunk_table(f, start: int, size: int):
@@ -471,20 +480,25 @@ def _chunk_sizes_problem(entries, total: int, item: int, room: int) -> Optional[
     return None
 
 
-def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]:
-    """The chunk table of a LAZ file when it can be handed to the decoder; a str
-    saying why not when it cannot; None for a file that is not LAZ, or when lazrs
-    (so no abort to guard against) is not the decoder.
+class _LaszipRecord(NamedTuple):
+    """The LASzip record of a LAZ file, decoded."""
 
-    lazrs reserves memory for numbers it reads out of the file (the chunk count,
-    each chunk's byte count and point count, the chunk size of the LASzip record)
-    before it decodes a point, and the process aborts on a buffer the machine
-    cannot give it: no exception reaches Python, so one garbled byte would take
-    the worker down. The numbers are checked here first, against the size of the
-    file and against what a chunk can be. Whatever else is wrong with the table
-    (sizes that do not add up, a chunk that does not decode) is left to the
-    decoder and the salvage that follows: it raises. Cost: one open and three
-    small reads."""
+    vlr: object  # lazrs.LazVlr
+    item_size: int  # bytes per point record
+    chunk_size: Optional[int]  # points per chunk; None = variable
+
+
+def _most_chunks(points: int, chunk_size: Optional[int]) -> int:
+    """The most chunks a LAZ file of ``points`` points can have: ``chunk_size``
+    points each (fixed chunks) or at least one each (variable chunks), plus the
+    empty chunk lazrs's writer ends a file with."""
+    return -(-points // (1 if chunk_size is None else chunk_size)) + 1
+
+
+def _laszip_record(h) -> Union[str, _LaszipRecord, None]:
+    """The LASzip record of a LAZ file, checked; a str saying why it cannot go to
+    the decoder; None for a file that is not LAZ, or when lazrs (so no abort to
+    guard against) is not the decoder."""
     if not h.are_points_compressed:
         return None
     try:
@@ -500,40 +514,113 @@ def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]
     except _quarantine.PASS_THROUGH:
         raise
     except Exception as e:  # noqa: BLE001 - LazrsError: a record that cannot decode
+        _raise_if_environment(e)
         return f"the LASzip record cannot be decoded ({type(e).__name__}: {e})"
     item = max(int(vlr.item_size()), 1)
     # The record holds the points per chunk at byte 12 (all ones: chunks vary).
     chunk_size = struct.unpack_from("<I", record, 12)[0]
     if chunk_size == _VARIABLE_CHUNK_SIZE:
         chunk_size = None
+    elif chunk_size == 0 or chunk_size * item > _MAX_LAZ_CHUNK_BYTES:
+        return f"the LASzip record declares chunks of {chunk_size} points"
+    return _LaszipRecord(vlr, item, chunk_size)
+
+
+def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _ChunkTable]:
+    """The chunk table of the LAZ points of the open file ``f`` (``size`` bytes)
+    when it can be handed to the decoder; a str saying why not when it cannot."""
+    import lazrs
+
+    item = record.item_size
+    points = int(h.point_count)
     start = int(h.offset_to_point_data)
-    with open(local, "rb") as f:
-        found = _find_chunk_table(f, start, size)
-        if isinstance(found, str):
-            return found
-        at, count = found
-        if count == 0:
-            if int(h.point_count):
-                return "the chunk table is empty"
-            return _ChunkTable([], item, chunk_size)
-        # One chunk holds at least its first point, uncompressed.
-        if count > min((at - start - 8) // item, _MAX_LAZ_CHUNKS):
-            return (
-                f"the chunk table declares {count} chunks, more than the file can hold"
-            )
-        f.seek(start)
-        try:  # now bounded by the file: lazrs reserves 16 bytes per chunk
-            entries = lazrs.read_chunk_table(f, vlr)
-        except _quarantine.PASS_THROUGH:
-            raise
-        except BaseException as e:  # noqa: BLE001 - LazrsError, a Rust panic
-            return f"the chunk table cannot be decoded ({type(e).__name__}: {e})"
+    found = _find_chunk_table(f, start, size)
+    if isinstance(found, str):
+        return found
+    at, count = found
+    if count == 0:
+        if points:
+            return "the chunk table is empty"
+        return _ChunkTable([], item, record.chunk_size)
+    # One chunk holds at least its first point, uncompressed; the writer's last
+    # chunk may hold none.
+    if count > min((at - start - 8) // item + 1, _MAX_LAZ_CHUNKS):
+        return f"the chunk table declares {count} chunks, more than the file can hold"
+    # Nor more chunks than the header's points fill: a garbled offset deep in a big
+    # file can read as a count up to _MAX_LAZ_CHUNKS, and lazrs builds a list of
+    # that many entries (about 2.5 GB).
+    if count > _most_chunks(points, record.chunk_size):
+        return (
+            f"the chunk table declares {count} chunks, more than the {points} "
+            "points of the header need"
+        )
+    f.seek(start)
+    try:  # now bounded by the file and the header: lazrs reserves 16 bytes per chunk
+        entries = lazrs.read_chunk_table(f, record.vlr)
+    except _quarantine.PASS_THROUGH:
+        raise
+    except BaseException as e:  # noqa: BLE001 - LazrsError, a Rust panic
+        _raise_if_environment(e)  # memory is the machine's, not the file's
+        return f"the chunk table cannot be decoded ({type(e).__name__}: {e})"
     if not entries:
         return "the chunk table cannot be found"
-    problem = _chunk_sizes_problem(
-        entries, int(h.point_count), item, size - (start + 8)
+    problem = _chunk_sizes_problem(entries, points, item, size - (start + 8))
+    return (
+        problem
+        if problem is not None
+        else _ChunkTable(entries, item, record.chunk_size)
     )
-    return problem if problem is not None else _ChunkTable(entries, item, chunk_size)
+
+
+def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]:
+    """The chunk table of a LAZ file when it can be handed to the decoder; a str
+    saying why not when it cannot; None for a file that is not LAZ, or when lazrs
+    (so no abort to guard against) is not the decoder.
+
+    lazrs reserves memory for numbers it reads out of the file (the chunk count,
+    each chunk's byte count and point count, the chunk size of the LASzip record)
+    before it decodes a point, and the process aborts on a buffer the machine
+    cannot give it: no exception reaches Python, so one garbled byte would take
+    the worker down. The numbers are checked here first, against the size of the
+    file, against the point count of the header and against what a chunk can be.
+    Whatever else is wrong with the table (sizes that do not add up, a chunk that
+    does not decode) is left to the decoder and the salvage that follows: it
+    raises. Cost: a second open of the file (retried like the first), three small
+    reads, and lazrs's own reads of the table through that handle (a few seeks
+    and 8 KiB reads; more reads for a table of thousands of chunks)."""
+    record = _laszip_record(h)
+    if record is None or isinstance(record, str):
+        return record
+    f = _listing._retry_transient(lambda: open(local, "rb"))
+    with f:
+        return _chunk_table_in(h, record, f, size)
+
+
+def check_laz(source, name: str) -> None:
+    """Raise a ValueError naming ``name`` when ``source`` (the path or the bytes
+    of a LAS/LAZ file) is a LAZ file the decoder must not be given: a LASzip
+    record that cannot be decoded, or a chunk table that is implausible (see
+    :func:`_read_chunk_table`). Callers that read a LAZ file with ``laspy.read``
+    call this first, since a bad table can end the process instead of raising.
+    Anything else passes: an uncompressed file, a file without lazrs as its
+    decoder, and a LAZ file whose table is sound."""
+    import laspy
+
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        f, size = io.BytesIO(source), len(source)
+    else:
+        f = open(source, "rb")
+        size = os.fstat(f.fileno()).st_size
+    with f:
+        h = laspy.LasHeader.read_from(f, read_evlrs=False)  # points only
+        record = _laszip_record(h)
+        if record is None:
+            return
+        found = (
+            record if isinstance(record, str) else _chunk_table_in(h, record, f, size)
+        )
+    if isinstance(found, str):
+        raise ValueError(f"{name}: not read, {found}")
 
 
 def _header_bounds(h):
@@ -587,24 +674,38 @@ def _out_of_bounds(cols, keep, bounds, start, hook) -> np.ndarray:
     return out
 
 
-def _readable_points(h, local: str, size: int, hook) -> int:
-    """Points of an uncompressed LAS file that can be read: its header count,
-    checked against the file size first. A file that ends early is read up to
-    its last complete point record; a record length that does not fit the data
-    reads none; points past the declared count are not read. Each is a bad
-    record of the file. LAZ (compressed) files are not checked here."""
+def _readable_points(
+    h, local: str, size: int, hook, table: Optional[_ChunkTable]
+) -> int:
+    """Points of a LAS/LAZ file that can be read: its header count, checked
+    against what the file holds first. An uncompressed file that ends early is
+    read up to its last complete point record; a record length that does not
+    fit the data reads none; points past the declared count are not read. A LAZ
+    file is read up to the points its chunk table (``table``, from
+    :func:`_read_chunk_table`) holds. Each is a bad record of the file."""
     total = int(h.point_count)
     offset = int(h.offset_to_point_data)
     if h.are_points_compressed:
-        most = int((size - offset) / _MIN_LAZ_POINT_BYTES)
-        if total > most:
+        if table is None:  # lazrs is not the decoder: its own errors, then salvage
+            return total
+        # lazrs gives ``chunk_size`` points for every entry of a fixed-size table,
+        # the partial last chunk's too (verified on lazrs 0.8.2: a 5,000-point file
+        # has the entry (50000, ...), 120,000 points have (50000, ...) x 3), so
+        # entries x chunk_size is an upper bound, never fewer than the points held.
+        # A variable-size table counts the points of each chunk.
+        coverage = (
+            sum(int(points) for points, _ in table.entries)
+            if table.chunk_size is None
+            else len(table.entries) * table.chunk_size
+        )
+        if total > coverage:
             hook(
                 None,
                 _quarantine.RECORDS_NOT_READ,
-                f"the header declares {total} points, more than a {size}-byte LAZ "
-                f"file can hold; at most {most} were read",
+                f"the header declares {total} points, more than the {coverage} its "
+                f"chunk table holds; at most {coverage} were read",
             )
-            return max(0, most)
+            return coverage
         return total
     reclen = int(h.point_format.size)
     # The point records end where the next section starts: the EVLRs (LAS 1.4)

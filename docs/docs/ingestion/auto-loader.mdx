@@ -195,11 +195,12 @@ decompression backend), an I/O error of the Volume (retried first), and an image
 whole in `exif_gbx` `qc` mode fail the micro-batch, so Spark retries the task or the update fails
 with that error, and no bad record is written for them.
 
-:::caution A corrupt LAZ file can stop the worker
-Some corrupt LAZ data (for example a region of `0xFF` bytes) crashes the native LAZ decoder
-(`lazrs`) and ends the worker process. A crash cannot be caught, so the file is not set aside: the
-task fails, Spark retries it, and then the update fails. Remove the file or replace it with a
-readable copy to continue.
+:::caution Damaged LAZ point data can stop the worker
+A LAZ file whose chunk table or LASzip record is damaged is set aside before it is decoded. Damage
+inside the compressed points themselves (for example a region of `0xFF` bytes) still reaches the
+native LAZ decoder (`lazrs`), and can crash it and end the worker process. A crash cannot be
+caught, so the file is not set aside: the task fails, Spark retries it, and then the update fails.
+Remove the file or replace it with a readable copy to continue.
 :::
 
 ### Query the bad records

@@ -6,10 +6,13 @@ Coverage:
   DL1 — download (driver path) writes <out_dir>/<project>/<key>.laz (idempotent)
   W1  — fetch_nodes worker generator yields clipped point rows with correct schema
         (exercises the mapInPandas body without a live Spark cluster)
+  B1  — a LAZ node whose chunk table cannot go to the decoder raises a ValueError
+        naming the node (driver loop and worker generator), before laspy decodes it
 """
 
 import io
 import json
+import struct
 
 import laspy
 import numpy as np
@@ -173,3 +176,65 @@ def test_fetch_nodes_generator_yields_clipped_rows():
     assert df["x_3857"].tolist() == pytest.approx([20.0, 50.0, 80.0], abs=0.01)
     assert df["y_3857"].tolist() == pytest.approx([20.0, 50.0, 80.0], abs=0.01)
     assert df["z_m"].tolist() == pytest.approx([5.0, 10.0, 15.0], abs=0.01)
+
+
+# B1 — a node with an implausible LAZ chunk table is refused before the decoder
+def _laz_node_with_a_bad_chunk_table():
+    """A compressed node whose chunk table offset points far outside the file
+    (a corrupt download); the decoder sizes its buffers from the table."""
+    hdr = laspy.LasHeader(point_format=3, version="1.2")
+    hdr.offsets = [0, 0, 0]
+    hdr.scales = [0.01, 0.01, 0.01]
+    las = laspy.LasData(hdr)
+    las.x = np.array([20.0, 50.0, 80.0])
+    las.y = np.array([20.0, 50.0, 80.0])
+    las.z = np.array([5.0, 10.0, 15.0])
+    buf = io.BytesIO()
+    las.write(buf, do_compress=True)
+    raw = bytearray(buf.getvalue())
+    start = struct.unpack_from("<I", raw, 96)[0]  # offset to the point data
+    struct.pack_into("<q", raw, start, 1 << 40)  # the chunk table offset
+    return bytes(raw)
+
+
+def _bad_node_store():
+    good = _fake_ept_store()
+    bad = _laz_node_with_a_bad_chunk_table()
+
+    def _get(url, **kw):
+        return bad if "ept-data/0-0-0-0.laz" in url else good(url, **kw)
+
+    return _get
+
+
+def _no_decoder(monkeypatch):
+    def decoder_reached(*a, **k):
+        raise AssertionError("laspy decoded a node whose chunk table was refused")
+
+    monkeypatch.setattr(laspy, "read", decoder_reached)
+
+
+def test_download_driver_refuses_a_laz_node_with_a_bad_chunk_table(monkeypatch):
+    from databricks.labs.gbx.sample.lidar import LidarDownloader
+
+    _no_decoder(monkeypatch)
+    dl = LidarDownloader(projects={"P": "https://x/store"}, _get=_bad_node_store())
+    with pytest.raises(ValueError, match=r"P/0-0-0-0\.laz.*chunk table offset"):
+        dl.download(aoi_3857=(10, 10, 90, 90), spark=None, max_depth=1, write_laz=False)
+
+
+def test_fetch_nodes_refuses_a_laz_node_with_a_bad_chunk_table(monkeypatch):
+    from databricks.labs.gbx.sample.lidar import _make_fetch_nodes
+
+    _no_decoder(monkeypatch)
+    fetch_nodes = _make_fetch_nodes(
+        bases={"P": "https://x/store/"},
+        aoi=(10, 10, 90, 90),
+        out_dir=None,
+        write_laz=False,
+        clip=True,
+        _fetch=_bad_node_store(),
+    )
+    pdf = pd.DataFrame({"project": ["P"], "node_key": ["0-0-0-0"]})
+    with pytest.raises(ValueError, match=r"P/0-0-0-0\.laz.*chunk table offset"):
+        list(fetch_nodes(iter([pdf])))

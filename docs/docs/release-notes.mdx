@@ -191,11 +191,16 @@ formats.
   from a directory). The read now fails with an error that names each such file (up to five), the
   driver, and the message GDAL gave.
 - **Directory reads skip files that are not datasets of the requested format.** Metadata files next
-  to the data (`.shp.xml`, `.aux.xml`, `.txt`, `.md`) and files of another vector format are
-  skipped, with a warning in the driver log that names them, so a folder holding a README or an
-  ArcGIS metadata file next to its shapefiles keeps reading. A `.txt` or `.md` file no longer
-  becomes the schema source of a folder. A file you name as the path is never skipped. See
-  [Vector Readers](./readers/vector#unreadable-files).
+  to the data (`.shp.xml`, `.aux.xml`, `.txt`, `.md`) are skipped, and so are files of another
+  vector format when you use a named reader or `ogr` with a `driverName`, each with a warning in
+  the driver log that names them. A folder holding a README or an ArcGIS metadata file next to its
+  shapefiles keeps reading, and a `.txt` or `.md` file no longer becomes the schema source of a
+  folder. A file you name as the path is never skipped, and a directory in which every file is of
+  another format fails the read, naming the files and the reader to use, instead of returning no
+  rows. See [Vector Readers](./readers/vector?tier=heavyweight#unreadable-files).
+- **Paths with a space or another special character read.** A file or folder such as
+  `/Volumes/main/data/my maps/city #1.geojson` failed with the heavyweight vector readers
+  (the name reached the copy step URL-encoded, as `my%20maps`). It now reads.
 - **Fewer empty partitions and no leftover temp folders.** A layer whose feature count is an exact
   multiple of `chunkSize` no longer gets an empty trailing partition, and schema inference no
   longer leaves a staging folder in the driver's temp directory for each read, or keeps the

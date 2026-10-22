@@ -228,10 +228,14 @@ skipped, with a warning in the driver log that names the file:
 
 - metadata files that sit next to data: `.shp.xml`, `.aux.xml`, `.txt` and `.md`;
 - files of another vector format that GDAL opens with a different driver than the one requested
-  (for example a GeoJSON file in a folder read with `shapefile_ogr`).
+  (for example a GeoJSON file in a folder read with `shapefile_ogr`). This applies to the named
+  readers and to `ogr` with a `driverName`; `ogr` with no `driverName` fails on a file it cannot open.
 
 A file you name as the path is never skipped, and a file of the requested format that is damaged
-fails the read.
+fails the read. If every file of a directory is skipped as another format, the read fails instead of
+returning no rows: the error lists the files, the drivers GDAL detected, and the reader to use.
+A directory with no data files reads as zero rows when you pass a `.schema(...)`; without one,
+inferring the schema fails.
 
 ## Databricks Integration
 

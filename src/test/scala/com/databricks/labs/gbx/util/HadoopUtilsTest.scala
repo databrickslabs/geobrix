@@ -125,4 +125,13 @@ class HadoopUtilsTest extends AnyFunSuite with BeforeAndAfterEach {
         // Nothing but metadata: the head is still the first file, so inference fails naming it.
         HadoopUtils.primaryDataFile(Seq("file:/d/README.txt")) shouldBe Some("file:/d/README.txt")
     }
+
+    test("decodeInputFile decodes the percent-escapes of a path and leaves any other name alone") {
+        HadoopUtils.decodeInputFile("file:///d/my%20file%231.tif") shouldBe "file:///d/my file#1.tif"
+        HadoopUtils.decodeInputFile("dbfs:/Volumes/c/s/v/100%25%20done.tif") shouldBe "dbfs:/Volumes/c/s/v/100% done.tif"
+        HadoopUtils.decodeInputFile("file:///d/plain.tif") shouldBe "file:///d/plain.tif"
+        // Not valid URIs: already plain (a space), or a literal % that no escape follows.
+        HadoopUtils.decodeInputFile("file:/d/my file.tif") shouldBe "file:/d/my file.tif"
+        HadoopUtils.decodeInputFile("file:/d/100%.tif") shouldBe "file:/d/100%.tif"
+    }
 }

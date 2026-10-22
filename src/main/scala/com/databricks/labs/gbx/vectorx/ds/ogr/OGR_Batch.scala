@@ -58,11 +58,16 @@ class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan w
         // over-count (e.g. 200k-feature dir -> 600k rows). .shp.zip archives are unaffected
         // (no loose sidecars). Each .shp's stem-siblings are still staged via copyToPath.
         // Metadata-only files (.shp.xml, .aux.xml, .txt, .md) are not datasets and are left out too.
-        val listed = HadoopUtils.listDataFilesSpark(sparkSession, inPath)
+        val (listed, emptyDir) = HadoopUtils.listDataFilesChecked(sparkSession, inPath)
         val dirListing = OGR_Batch.isDirListing(inPath, listed)
         val primary = HadoopUtils.primaryDataFiles(listed)
-        // A file named as the path is always planned, even a sidecar or a metadata-named file.
-        val files = if (!dirListing && primary.isEmpty) listed else primary
+        // A file named as the path is always planned, even a sidecar or a metadata-named file. A directory
+        // with no data files lists as itself: it holds zero files, it is not a file to open.
+        val files =
+            if (emptyDir) Seq.empty[String]
+            else if (!dirListing && primary.isEmpty) listed
+            else primary
+        if (emptyDir) logWarning(s"OGR read of $inPath: the directory holds no data files, so it reads as 0 rows")
         if (dirListing) {
             val metadata = listed.filter(HadoopUtils.isMetadataOnly)
             if (metadata.nonEmpty) {
@@ -99,6 +104,17 @@ class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan w
               s"OGR read failed to plan ${failed.length} of ${files.size} file(s) " +
                   s"(driver ${if (driverName.isEmpty) "auto-detect" else driverName}): " +
                   failed.take(5).map(p => s"${p.path}: ${p.error}").mkString("; ")
+            )
+        }
+
+        // Every file of a directory read skipped: nothing here is of the requested format, and an empty
+        // result would hide that.
+        if (plans.nonEmpty && plans.forall(_.skippedDriver != null)) {
+            throw new IllegalArgumentException(
+              s"OGR read of $inPath found no file the ${OGR_Batch.driverLabel(driverName)} driver opens: " +
+                  s"all ${plans.length} file(s) are of another vector format (" +
+                  plans.take(5).map(p => s"${p.path}: GDAL detects ${p.skippedDriver}").mkString("; ") +
+                  (if (plans.length > 5) "; ..." else "") + "). " + OGR_Batch.readerHint(plans.map(_.skippedDriver))
             )
         }
 
@@ -164,7 +180,7 @@ object OGR_Batch {
             lease = NodeFileManager.acquire(path)
             dataset = OGR_Driver.open(lease.localPath, driverName)
             if (dataset == null) {
-                unplanned(path, lease, driverName, dirListing, s"${driverLabel(driverName)} could not open it: ${gdal.GetLastErrorMsg}")
+                unplanned(path, lease, driverName, dirListing, couldNotOpen(driverName, gdal.GetLastErrorMsg))
             } else {
                 val layer = if (layerName.isEmpty) dataset.GetLayer(layerN) else dataset.GetLayerByName(layerName)
                 if (layer == null) {
@@ -180,7 +196,7 @@ object OGR_Batch {
                     layer.ResetReading()
                     val n = layer.GetFeatureCount().toInt
                     if (n < 0) {
-                        unplanned(path, lease, driverName, dirListing, s"could not count its features: ${gdal.GetLastErrorMsg}")
+                        unplanned(path, lease, driverName, dirListing, s"could not count its features${gdalSuffix(gdal.GetLastErrorMsg)}")
                     } else if (n == 0) {
                         Array(OgrPlan(path, 0, 0, null, null))
                     } else if (nonSeekable.contains(driverName)) {
@@ -191,8 +207,7 @@ object OGR_Batch {
                 }
             }
         } catch {
-            case NonFatal(e) =>
-                unplanned(path, lease, driverName, dirListing, s"${e.getClass.getSimpleName}: ${e.getMessage}")
+            case NonFatal(e) => unplanned(path, lease, driverName, dirListing, describe(e, driverName))
         } finally {
             try {
                 if (dataset != null) dataset.delete()
@@ -202,7 +217,45 @@ object OGR_Batch {
         }
     }
 
-    private def driverLabel(driverName: String): String = if (driverName.isEmpty) "auto-detect" else driverName
+    private[ogr] def driverLabel(driverName: String): String = if (driverName.isEmpty) "auto-detect" else driverName
+
+    /** The non-blank lines of `msg`, trimmed. */
+    private def lines(msg: String): List[String] =
+        Option(msg).getOrElse("").linesIterator.map(_.trim).filter(_.nonEmpty).toList
+
+    /** `: <first line of the GDAL message>`, or nothing when GDAL gave none. */
+    private def gdalSuffix(gdalMsg: String): String = lines(gdalMsg).headOption.map(": " + _).getOrElse("")
+
+    private def couldNotOpen(driverName: String, gdalMsg: String): String =
+        s"${driverLabel(driverName)} could not open it${gdalSuffix(gdalMsg)}"
+
+    /** One line for a failure in the joined error list. `OGR_Driver.open` throws three lines (the driver, the
+      * copy's local path, the GDAL message); the user needs the driver and the GDAL message, not the path of a
+      * cache copy. Any other exception gives its class and the first line of its message. */
+    private def describe(e: Throwable, driverName: String): String = {
+        val ls = lines(e.getMessage)
+        if (ls.headOption.exists(_.startsWith("Could not open dataset with driver"))) {
+            couldNotOpen(driverName, ls.find(_.startsWith("GDAL Error:")).map(_.stripPrefix("GDAL Error:")).getOrElse(""))
+        } else {
+            val detail = ls.headOption.map(l => ": " + l).getOrElse("")
+            e.getClass.getSimpleName + detail
+        }
+    }
+
+    /** How to read files GDAL opens with the drivers `detected`: the reader that matches each. */
+    private[ogr] def readerHint(detected: Seq[String]): String = {
+        def readerFor(driver: String): String = driver match {
+            case "GeoJSON"                 => "geojson_ogr with .option(\"multi\", \"false\")"
+            case "GeoJSONSeq"              => "geojson_ogr"
+            case "ESRI Shapefile"          => "shapefile_ogr"
+            case "GPKG"                    => "gpkg_ogr"
+            case "OpenFileGDB" | "FileGDB" => "file_gdb_ogr"
+            case "netCDF"                  => "netcdf_ogr"
+            case other                     => "ogr with .option(\"driverName\", \"" + other + "\")"
+        }
+        s"Read them with ${detected.distinct.map(d => s"$d: ${readerFor(d)}").mkString("; ")}, " +
+            "or with ogr and no driverName so GDAL picks the driver for each file."
+    }
 
     /** The plan for a file that could not be planned: its failure `msg`, or, for a directory member with a named
       * driver that GDAL opens with a different driver, that driver (the file is another vector format). */

@@ -186,17 +186,28 @@ object HadoopUtils extends Logging {
       * shards). Falls back to the raw Hadoop FS listing if Spark's binaryFile can't enumerate it.
       * When binaryFile returns empty (Spark's hidden-file filter skips ALL `_`-prefixed names),
       * falls back to a raw Hadoop FS listing via an executor task, which carries the UC credential
-      * and has no `_`-prefix filter — stripping only known Spark/Hadoop job-marker files. */
-    def listDataFilesSpark(spark: org.apache.spark.sql.SparkSession, inPath: String): Seq[String] = {
+      * and has no `_`-prefix filter — stripping only known Spark/Hadoop job-marker files. The paths
+      * come back as plain paths (`file:///tmp/my file.tif`), not as Spark's URL-encoded file names
+      * (`my%20file.tif`), which no Hadoop `Path(String)` or file copy resolves. */
+    def listDataFilesSpark(spark: org.apache.spark.sql.SparkSession, inPath: String): Seq[String] =
+        listDataFilesChecked(spark, inPath)._1
+
+    /** `listDataFilesSpark`, and whether `inPath` is a directory that holds no data files. For such a
+      * directory the listing is `Seq(inPath)` (the same fall-back as a path that cannot be listed), so a
+      * caller that reads rather than infers can treat it as zero files. */
+    private[gbx] def listDataFilesChecked(
+        spark: org.apache.spark.sql.SparkSession,
+        inPath: String
+    ): (Seq[String], Boolean) = {
         val cp = cleanPath(inPath)
         val lower = inPath.toLowerCase(java.util.Locale.ROOT).stripSuffix("/")
         if (lower.endsWith(".gdb") || lower.endsWith(".gdb.zip") || lower.endsWith(".zip")) {
-            Seq(cp)
+            (Seq(cp), false)
         } else {
             try {
-                val files = spark.read.format("binaryFile").load(cp).inputFiles.toSeq.sorted
+                val files = spark.read.format("binaryFile").load(cp).inputFiles.toSeq.map(decodeInputFile).sorted
                 if (files.nonEmpty) {
-                    files
+                    (files, false)
                 } else {
                     // binaryFile returned empty: Spark's hidden-file filter may have skipped all
                     // files in a directory whose names start with '_' (e.g. _shp_fix_782054.shp).
@@ -212,18 +223,34 @@ object HadoopUtils extends Logging {
                     if (isDir) {
                         val listed = try listDirOnExecutor(spark, cp) catch { case _: Throwable => Seq.empty }
                         val filtered = listed.filterNot(p => isMarkerFile(new Path(new URI(p))))
-                        if (filtered.nonEmpty) filtered else Seq(cp)
+                        if (filtered.nonEmpty) (filtered, false) else (Seq(cp), true)
                     } else {
-                        Seq(cp)
+                        (Seq(cp), false)
                     }
                 }
             } catch {
                 case _: Throwable =>
                     val hc = new SerializableConfiguration(spark.sessionState.newHadoopConf)
-                    try listHadoopFiles(cp, hc) catch { case _: Throwable => Seq(cp) }
+                    (try listHadoopFiles(cp, hc) catch { case _: Throwable => Seq(cp) }, false)
             }
         }
     }
+
+    /** `p` with the percent-escapes of its path decoded: Spark's `inputFiles` are URL-encoded
+      * (`file:///d/my%20file%231.tif`). The scheme, authority and the rest stay as they are, and a name
+      * that is not a valid URI (it is already plain, a literal `%` or a space) is returned unchanged. */
+    private[util] def decodeInputFile(p: String): String =
+        try {
+            val uri = new URI(p)
+            val raw = uri.getRawPath
+            if (raw == null || !raw.contains('%')) p
+            else {
+                val i = p.lastIndexOf(raw)
+                p.substring(0, i) + uri.getPath + p.substring(i + raw.length)
+            }
+        } catch {
+            case _: java.net.URISyntaxException => p
+        }
 
     /** Lists files in a directory using Hadoop FileSystem on an executor, bypassing Spark's hidden-
       * file filter (which skips `_`-prefixed names unconditionally). Marker files that are genuine

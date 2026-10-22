@@ -42,6 +42,23 @@ def test_conflict_defaults_to_no_keys_and_no_winner():
     assert e.keys == () and e.winner is None
 
 
+def test_conflict_rows_default_to_none_and_survive_pickling():
+    assert E.ZarrWriteConflict("overlap", fix="retry").conflicts == ()
+    row = {
+        "kind": "chunk",
+        "array": "t2m",
+        "key": "c/0/0/0",
+        "expected_write_id": "ab" * 16,
+        "write_id": None,
+    }
+    e = E.ZarrWriteConflict(
+        "overlap", fix="retry", keys=("t2m/c/0/0/0",), conflicts=[row]
+    )
+    assert e.conflicts == (row,)
+    back = pickle.loads(pickle.dumps(e))
+    assert back.conflicts == (row,) and back.keys == ("t2m/c/0/0/0",)
+
+
 def test_errors_survive_pickling():
     """Raised in a worker process, an error must reach the driver with its fix and
     conflict details intact (the keyword-only ``fix`` defeats the default reduce)."""

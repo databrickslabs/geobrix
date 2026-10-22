@@ -47,7 +47,10 @@ class ZarrWriteConflict(ZarrError):
     """A concurrent commit changed data chunks this write also touches.
 
     ``keys`` lists the conflicting store keys; ``winner`` is the ``write_id`` of the
-    commit that got there first, when known.
+    commit that got there first, when known. ``conflicts`` holds one dict per
+    conflicting row (``kind``, ``array``, ``key``, ``expected_write_id`` and the live
+    ``write_id``, null when the row is gone), so a caller can tell metadata rows from
+    chunk rows.
     """
 
     def __init__(
@@ -57,13 +60,15 @@ class ZarrWriteConflict(ZarrError):
         fix: str,
         keys: tuple[str, ...] = (),
         winner: str | None = None,
+        conflicts: tuple[dict, ...] = (),
     ):
         super().__init__(message, fix=fix)
         self.keys = tuple(keys)
         self.winner = winner
+        self.conflicts = tuple(conflicts)
 
     def _extra(self) -> dict:
-        return {"keys": self.keys, "winner": self.winner}
+        return {"keys": self.keys, "winner": self.winner, "conflicts": self.conflicts}
 
 
 class ZarrStoreDrift(ZarrError):

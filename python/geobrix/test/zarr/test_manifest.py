@@ -268,6 +268,13 @@ _CAS_SERVERLESS = (
     + "\n\nJVM stacktrace:\norg.apache.spark.SparkRuntimeException: "
     + "[USER_RAISED_EXCEPTION]\n\tat com.databricks.photon.PhotonException"
 )
+# Errors that quote the MERGE (ANSI query context) hold the marker without being an abort.
+_ECHOED_MERGE = (
+    "[CAST_INVALID_INPUT] The value 'x' of the type \"STRING\" cannot be cast to "
+    '"BIGINT" because it is malformed. SQLSTATE: 22018\n== SQL (line 11, position 3) ==\n'
+    "  kind = raise_error(concat('GBX_ZARR_CAS ', s.kind, ' ', coalesce(s.array, ''), "
+    "' ', coalesce(s.key, '')))\n"
+)
 _DBR19_APPEND = (
     "An error occurred while calling o312.sql.\n: "
     "io.delta.exceptions.ConcurrentAppendException: "
@@ -308,6 +315,8 @@ _OSS_APPEND = (
         ("io.delta.exceptions.MetadataChangedException: changed", "concurrent"),
         ("[TABLE_OR_VIEW_NOT_FOUND] The table cannot be found", None),
         ("[DELTA_PROTOCOL_CHANGED] protocol", None),
+        (_ECHOED_MERGE, None),
+        ("GBX_ZARR_CAS bogus t2m c/0/0/1", None),
         ("", None),
     ],
 )
@@ -322,6 +331,7 @@ def test_classify_commit_error_by_text(text, expected):
         (_CAS_COMMIT, ("commit", "", "ab" * 16)),
         (_CAS_GROUP, ("group", "", "")),
         (_CAS_SERVERLESS, ("chunk", "t2m", "c/0/0/1")),
+        (_ECHOED_MERGE, None),
         (_DBR19_APPEND, None),
     ],
 )
@@ -363,6 +373,15 @@ def test_commit_maps_concurrent_errors_to_retryable_and_passes_others(
 # --- ruling Z8: versions older than the vacuum horizon are gone -------------------
 
 
+def _tag_row(spark, table, tag, write_id="f" * 32):
+    """What a tag leaves behind: a copy of a live row carrying ``tag=name`` (a later
+    task owns the real write)."""
+    spark.sql(
+        f"INSERT INTO {table} (kind, array, key, shard_key, write_id, tag) "
+        f"VALUES ('chunk', 't2m', 'c/0/0/0', 'c/0/0/0', '{write_id}', '{tag}')"
+    )
+
+
 def test_snapshot_refuses_versions_older_than_the_vacuum_horizon(spark_delta, table):
     w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
     v1 = M.commit(
@@ -388,6 +407,7 @@ def test_snapshot_refuses_versions_older_than_the_vacuum_horizon(spark_delta, ta
     spark_delta.sql(
         f"ALTER TABLE {table} SET TBLPROPERTIES ('geobrix.zarr.vacuum_horizon' = '{horizon}')"
     )
+    v_prop = M.snapshot(spark_delta, table).version  # the ALTER's own version
     v4 = M.commit(
         spark_delta,
         table,
@@ -395,26 +415,71 @@ def test_snapshot_refuses_versions_older_than_the_vacuum_horizon(spark_delta, ta
         write_id=w3,
         meta={},
     )
+    _tag_row(spark_delta, table, "keep")
+    v_tag = M.snapshot(spark_delta, table).version
 
-    for old in (v1, v2):
-        with pytest.raises(ZarrVersionUnavailable) as ei:
-            M.snapshot(spark_delta, table, version_as_of=old)
-        assert "gbx_zarr_tag" in ei.value.fix
+    # v1 was replaced before the horizon: gone. v2 was the live version AT the horizon,
+    # so a vacuum keeps what it needs: readable. Everything after is readable.
+    with pytest.raises(ZarrVersionUnavailable) as ei:
+        M.snapshot(spark_delta, table, version_as_of=v1)
+    assert "gbx_zarr_tag" in ei.value.fix
     with pytest.raises(ZarrVersionUnavailable):
         M.snapshot(spark_delta, table, timestamp_as_of=ts_v1)
-    assert M.snapshot(spark_delta, table, version_as_of=v4).version == v4
+    for kept in (v2, v_prop, v4, v_tag):
+        assert M.snapshot(spark_delta, table, version_as_of=kept).version == kept
     # a tag is read at the latest version and keeps its rows whatever the horizon says
     tagged = M.snapshot(spark_delta, table, version_as_of="tag:keep")
-    assert tagged == M.Snapshot(table=table, version=v4, tag="keep")
+    assert tagged == M.Snapshot(table=table, version=v_tag, tag="keep")
 
+    # a horizon in the future: only the version live at it (the latest) is readable
     far = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
     spark_delta.sql(
         f"ALTER TABLE {table} SET TBLPROPERTIES ('geobrix.zarr.vacuum_horizon' = '{far}')"
     )
     latest = M.snapshot(spark_delta, table).version
     assert M.snapshot(spark_delta, table, version_as_of=latest).version == latest
-    with pytest.raises(ZarrVersionUnavailable):
-        M.snapshot(spark_delta, table, version_as_of=v4)
+    for gone in (v2, v4, v_tag):
+        with pytest.raises(ZarrVersionUnavailable):
+            M.snapshot(spark_delta, table, version_as_of=gone)
+
+
+def test_snapshot_refuses_versions_older_than_the_retain_window(spark_delta):
+    """Delta's own vacuum may have removed the files of a version that left the retain
+    window, so ``snapshot`` refuses it even when no GeoBrix vacuum has run."""
+    name = f"zm_{uuid.uuid4().hex[:8]}"
+    M.create_manifest(spark_delta, name, dataclasses.replace(PROPS, retain="1 second"))
+    try:
+        ws = [uuid.uuid4().hex for _ in range(3)]
+        vs = [
+            M.commit(
+                spark_delta,
+                name,
+                _rows(_chunk("c/0/0/0", w, expected=prev)),
+                write_id=w,
+                meta={},
+            )
+            for w, prev in zip(ws, [None, *ws])
+        ]
+        time.sleep(1.1)  # every commit is now older than the 1 second window
+        with pytest.raises(ZarrVersionUnavailable):
+            M.snapshot(spark_delta, name, version_as_of=vs[0])
+        with pytest.raises(ZarrVersionUnavailable):
+            M.snapshot(spark_delta, name, version_as_of=vs[1])
+        # the version live when the window opened, and the latest, stay readable
+        assert M.snapshot(spark_delta, name, version_as_of=vs[2]).version == vs[2]
+        assert M.snapshot(spark_delta, name).version >= vs[2]
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+def test_snapshot_of_a_missing_tag_names_the_tag(spark_delta, table):
+    w1 = uuid.uuid4().hex
+    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    with pytest.raises(ZarrVersionUnavailable) as ei:
+        M.snapshot(spark_delta, table, version_as_of="tag:nope")
+    assert "nope" in str(ei.value) and "Fix:" in str(ei.value)
+    _tag_row(spark_delta, table, "there")
+    assert M.snapshot(spark_delta, table, version_as_of="tag:there").tag == "there"
 
 
 def test_snapshot_rejects_a_malformed_horizon(spark_delta, table):
@@ -565,6 +630,120 @@ def test_commit_row_records_meta_and_find_commit_version_respects_since(
     assert M.find_commit_version(spark_delta, table, uuid.uuid4().hex) is None
 
 
+def _commit_two(spark, table):
+    w1, w2 = uuid.uuid4().hex, uuid.uuid4().hex
+    v1 = M.commit(spark, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    v2 = M.commit(
+        spark, table, _rows(_chunk("c/0/0/0", w2, expected=w1)), write_id=w2, meta={}
+    )
+    return (w1, v1), (w2, v2)
+
+
+def test_commit_lookup_survives_delta_vacuuming_the_change_feed(spark_delta, table):
+    """Predictive optimization vacuums change files long before the log expires. The
+    commit row itself carries its Delta version (row tracking), so neither
+    ``find_commit_version`` nor a default ``commit`` may depend on the change feed."""
+    (w1, v1), (w2, v2) = _commit_two(spark_delta, table)
+    spark_delta.sql(
+        f"ALTER TABLE {table} SET TBLPROPERTIES "
+        "('delta.deletedFileRetentionDuration' = 'interval 0 hours')"
+    )
+    spark_delta.sql(f"VACUUM {table} RETAIN 0 HOURS")
+    with pytest.raises(Exception):  # the precondition: the change files are really gone
+        spark_delta.sql(f"SELECT * FROM table_changes('{table}', 0)").collect()
+
+    assert M.find_commit_version(spark_delta, table, w1) == v1
+    assert M.find_commit_version(spark_delta, table, w2) == v2
+    assert M.find_commit_version(spark_delta, table, uuid.uuid4().hex) is None
+    w3 = uuid.uuid4().hex
+    v3 = M.commit(
+        spark_delta,
+        table,
+        _rows(_chunk("c/0/0/0", w3, expected=w2)),
+        write_id=w3,
+        meta={},
+    )
+    assert v3 > v2
+    assert M.find_commit_version(spark_delta, table, w3) == v3
+    replay = _rows(_chunk("c/0/0/0", w1))
+    assert M.commit(spark_delta, table, replay, write_id=w1, meta={}) == v1
+
+
+def test_commit_versions_survive_file_rewrites(spark_delta, table):
+    (w1, v1), (w2, v2) = _commit_two(spark_delta, table)
+    rewrote = spark_delta.sql(f"OPTIMIZE {table}").first()["metrics"]["numFilesRemoved"]
+    assert rewrote > 0  # the commits' files really were compacted into new ones
+    spark_delta.sql(f"DELETE FROM {table} WHERE kind = 'chunk'")
+    spark_delta.sql(f"REORG TABLE {table} APPLY (PURGE)")
+    assert M.find_commit_version(spark_delta, table, w1) == v1
+    assert M.find_commit_version(spark_delta, table, w2) == v2
+
+
+def test_a_replay_that_slips_past_the_precheck_returns_its_version(
+    spark_delta, table, monkeypatch
+):
+    """Two twins of one write_id: the loser passes the pre-check before the winner's
+    commit lands, then hits the CAS guard. It must return the winner's version, not
+    raise a conflict against itself."""
+    w1 = uuid.uuid4().hex
+    rows = _rows(_chunk("c/0/0/0", w1))
+    v1 = M.commit(spark_delta, table, rows, write_id=w1, meta={})
+    real, calls = M.find_commit_version, []
+
+    def blind_once(*args, **kwargs):
+        calls.append(1)
+        return None if len(calls) == 1 else real(*args, **kwargs)
+
+    monkeypatch.setattr(M, "find_commit_version", blind_once)
+    assert M.commit(spark_delta, table, rows, write_id=w1, meta={}) == v1
+    assert len(calls) == 2  # the blind pre-check, then the lookup in the CAS branch
+    assert M.snapshot(spark_delta, table).version == v1
+
+
+@pytest.mark.parametrize("lookup", ["raises", "empty"])
+def test_a_conflict_survives_a_failed_diagnosis(
+    spark_delta, table, monkeypatch, lookup
+):
+    """If listing every conflicting key fails, the write still ends as a
+    ZarrWriteConflict that names the key the abort reported."""
+    w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
+    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+
+    def broken(*args, **kwargs):
+        if lookup == "raises":
+            raise RuntimeError("diagnosis unavailable")
+        return pa.table(
+            {c: pa.array([], pa.string()) for c in ("kind", "array", "key")}
+        )
+
+    monkeypatch.setattr(M, "changed_since", broken)
+    stale = _rows(_chunk("c/0/0/0", w3, expected=w2))  # w2 never wrote it
+    with pytest.raises(ZarrWriteConflict) as ei:
+        M.commit(spark_delta, table, stale, write_id=w3, meta={})
+    assert ei.value.keys == ("t2m/c/0/0/0",)
+    assert ei.value.winner is None and "Fix:" in str(ei.value)
+
+
+def test_conflict_rows_ride_on_the_error(spark_delta, table):
+    w1, w2 = uuid.uuid4().hex, uuid.uuid4().hex
+    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    with pytest.raises(ZarrWriteConflict) as ei:
+        M.commit(
+            spark_delta,
+            table,
+            _rows(_chunk("c/0/0/0", w2, expected=uuid.uuid4().hex)),
+            write_id=w2,
+            meta={},
+        )
+    (row,) = ei.value.conflicts
+    assert (row["kind"], row["array"], row["key"], row["write_id"]) == (
+        "chunk",
+        "t2m",
+        "c/0/0/0",
+        w1,
+    )
+
+
 def test_a_user_named_table_is_quoted_everywhere(spark_delta):
     name = f"spark_catalog.default.`zm_{uuid.uuid4().hex[:8]}`"  # Delta bars odd characters
     M.create_manifest(spark_delta, name, PROPS)
@@ -654,6 +833,9 @@ def test_commit_rejects_ill_formed_rows_before_any_sql():
     good = _chunk("c/0/0/0", w)
     with pytest.raises(ValueError, match="duplicate"):
         M.commit(None, "t", _rows(good, good), write_id=w, meta={})
+    meta_row = {**good, "kind": "group", "array": None, "key": None}
+    with pytest.raises(ValueError, match="duplicate"):  # null keys are keys too
+        M.commit(None, "t", _rows(meta_row, meta_row), write_id=w, meta={})
     with pytest.raises(ValueError, match="tag"):
         M.commit(None, "t", _rows({**good, "tag": "v1"}), write_id=w, meta={})
     with pytest.raises(ValueError, match="write_id"):
@@ -666,6 +848,30 @@ def test_commit_rejects_ill_formed_rows_before_any_sql():
         M.commit(None, "t", _rows({**good, "kind": "bogus"}), write_id=w, meta={})
     with pytest.raises(ValueError, match="missing"):
         M.commit(None, "t", _rows(good).drop(["op"]), write_id=w, meta={})
+    with pytest.raises(ValueError, match="op"):  # a null op is not an op
+        M.commit(None, "t", _rows({**good, "op": None}), write_id=w, meta={})
+    with pytest.raises(ValueError, match="kind"):  # nor is a null kind
+        M.commit(None, "t", _rows({**good, "kind": None}), write_id=w, meta={})
+
+
+def test_commit_validation_handles_a_large_commit():
+    """Validation is columnar: a commit can carry millions of chunk rows."""
+    n, w = 300_000, "a" * 32
+    rows = pa.table(
+        {
+            "kind": pa.array(["chunk"] * n),
+            "array": pa.array(["t2m"] * n),
+            "key": pa.array([f"c/0/0/{i}" for i in range(n)]),
+            "write_id": pa.array([w] * n),
+            "op": pa.array(["upsert"] * n),
+            "expected_write_id": pa.array([None] * n, pa.string()),
+        }
+    )
+    out = M._commit_source(rows, w, {"mode": "bulk"})
+    assert out.num_rows == n + 1 and out.schema.names == list(M._COMMIT_COLUMNS)
+    dup = pa.concat_tables([rows, rows.slice(n - 1, 1)])
+    with pytest.raises(ValueError, match="duplicate"):
+        M._commit_source(dup, w, {})
 
 
 @pytest.mark.parametrize(

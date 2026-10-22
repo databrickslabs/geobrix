@@ -21,10 +21,11 @@ import numbers
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from databricks.labs.gbx.zarr.errors import (
     ZarrError,
@@ -265,10 +266,10 @@ def _check_props(props: StoreProps) -> None:
 
 # --- error text -------------------------------------------------------------------
 
-_CAS_MARK = "GBX_ZARR_CAS"
 # 'GBX_ZARR_CAS <kind> <array> <key> SQLSTATE: P0001'; array is empty for commit rows
-# (two spaces) and key can be empty too.
-_CAS_RE = re.compile(r"GBX_ZARR_CAS (\S+) (\S*) (\S*)(?=\s|$)")
+# (two spaces) and key can be empty too. Anchored on a real kind so the MERGE text that
+# some errors echo back (``concat('GBX_ZARR_CAS ', s.kind, ...``) never counts.
+_CAS_RE = re.compile(r"GBX_ZARR_CAS (" + "|".join(KINDS) + r") (\S*) (\S*)(?=\s|$)")
 _CONCURRENT_MARKS = (
     "DELTA_CONCURRENT_APPEND",
     "DELTA_CONCURRENT_DELETE",
@@ -309,7 +310,7 @@ def classify_commit_error(text: str) -> str | None:
     captured errors, Spark Connect raises ``pyspark.errors.exceptions.connect.*``, and
     Serverless appends Photon stack text. ``None`` means "not ours": re-raise unchanged.
     """
-    if _CAS_MARK in text:
+    if _CAS_RE.search(text):
         return "cas"
     if any(mark in text for mark in _CONCURRENT_MARKS):
         return "concurrent"
@@ -407,14 +408,6 @@ def _latest_version(spark, table: str) -> int:
     return int(row[0])
 
 
-def _earliest_version(spark, table: str) -> int:
-    """Oldest commit still in the log; the change feed cannot start earlier."""
-    from pyspark.sql import functions as F
-
-    row = spark.sql(f"DESCRIBE HISTORY {_q(table)}").agg(F.min("version")).first()
-    return int(row[0])
-
-
 def _parse_horizon(text: str) -> datetime:
     try:
         dt = datetime.fromisoformat(text.strip())
@@ -427,6 +420,22 @@ def _parse_horizon(text: str) -> datetime:
     return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(
         timezone.utc
     )
+
+
+def _effective_horizon(props: dict[str, str]) -> datetime | None:
+    """The instant before which older versions are not promised to be readable.
+
+    The later of the vacuum horizon a GeoBrix vacuum recorded and ``now - retain``:
+    Delta's own vacuum (predictive optimization on Unity Catalog) removes files that
+    left the retain window whether or not a GeoBrix vacuum ever ran.
+    """
+    found = []
+    if props.get(HORIZON_PROP):
+        found.append(_parse_horizon(props[HORIZON_PROP]))
+    if props.get(PROP_PREFIX + "retain"):
+        window = timedelta(seconds=retain_seconds(props[PROP_PREFIX + "retain"]))
+        found.append(datetime.now(timezone.utc) - window)
+    return max(found) if found else None
 
 
 def _timestamp_column(spark, value) -> "Column":
@@ -450,11 +459,14 @@ def snapshot(
     """Pin a version of the manifest.
 
     With no argument: the latest version. ``version_as_of`` is an int, or
-    ``"tag:<name>"`` (the latest version, read through the tag's rows).
-    ``timestamp_as_of`` (str or datetime) gives the latest version committed at or
-    before it. A version that no longer exists, or whose commit predates the
-    table's ``geobrix.zarr.vacuum_horizon`` (so its files may be gone), raises
-    ``ZarrVersionUnavailable``. Tags and the latest version are always available.
+    ``"tag:<name>"`` (the latest version, read through the tag's rows; a tag that does
+    not exist raises). ``timestamp_as_of`` (str or datetime) gives the latest version
+    committed at or before it.
+
+    A version raises ``ZarrVersionUnavailable`` when it is not in the table history, or
+    when it is older than the version that was live at the horizon, the later of the
+    ``geobrix.zarr.vacuum_horizon`` property and ``now - retain``: its files may be gone.
+    The version live at the horizon, everything after it and every tag stay readable.
     Other versions on the table (OPTIMIZE, property changes) are not GeoBrix commits;
     ``find_commit_version`` and the commit rows identify those.
     """
@@ -480,16 +492,26 @@ def snapshot(
             f"timestamp_as_of must be a str or datetime, got {timestamp_as_of!r}"
         )
 
-    latest = _latest_version(spark, table)
-    if tag is not None or (version is None and timestamp_as_of is None):
-        return Snapshot(table=table, version=latest, tag=tag)
-
     from pyspark.sql import functions as F
 
-    horizon_text = _tblprops(spark, table).get(HORIZON_PROP)
-    older = F.lit(False)
-    if horizon_text:
-        older = F.col("timestamp") < F.lit(_parse_horizon(horizon_text))
+    latest = _latest_version(spark, table)
+    if tag is not None:
+        present = (
+            spark.sql(f"SELECT tag FROM {_q(table)} VERSION AS OF {latest}")
+            .where(F.col("tag") == F.lit(tag))
+            .limit(1)
+            .first()
+        )
+        if present is None:
+            raise ZarrVersionUnavailable(
+                f"tag {tag!r} does not exist in {table}",
+                fix="pick an existing tag, or create it with gbx_zarr_tag",
+            )
+        return Snapshot(table=table, version=latest, tag=tag)
+    if version is None and timestamp_as_of is None:
+        return Snapshot(table=table, version=latest)
+
+    horizon = _effective_horizon(_tblprops(spark, table))
     hist = spark.sql(f"DESCRIBE HISTORY {_q(table)}").select("version", "timestamp")
     if version is not None:
         wanted = f"version {version}"
@@ -501,18 +523,25 @@ def snapshot(
             .orderBy(F.col("version").desc())
             .limit(1)
         )
-    row = pick.select("version", older.alias("older")).first()
+    row = pick.select("version").first()
     if row is None:
         raise ZarrVersionUnavailable(
             f"{wanted} of {table} does not exist or is no longer in its history",
             fix=_UNAVAILABLE_FIX,
         )
-    if row["version"] < latest and row["older"]:
-        raise ZarrVersionUnavailable(
-            f"version {row['version']} of {table} was committed before the vacuum "
-            f"horizon {horizon_text}, so its files may have been removed",
-            fix=_UNAVAILABLE_FIX,
+    if horizon is not None:
+        oldest = (
+            hist.where(F.col("timestamp") <= F.lit(horizon))
+            .agg(F.max("version"))
+            .first()[0]
         )
+        if oldest is not None and row["version"] < oldest:
+            raise ZarrVersionUnavailable(
+                f"version {row['version']} of {table} predates version {oldest}, the "
+                f"one live at {horizon.isoformat()} (its vacuum horizon or retain "
+                "window), so its files may have been removed",
+                fix=_UNAVAILABLE_FIX,
+            )
     return Snapshot(table=table, version=int(row["version"]), tag=None)
 
 
@@ -571,34 +600,58 @@ def _typed(rows: pa.Table, schema: pa.Schema) -> pa.Table:
     return pa.Table.from_arrays(arrays, schema=schema)
 
 
+def _first(column, mask):
+    """First value of ``column`` where ``mask`` is true."""
+    return column.filter(mask)[0].as_py()
+
+
 def _commit_source(rows: pa.Table, write_id: str, meta: dict) -> pa.Table:
-    """Validate ``rows`` and append the commit row; this is the MERGE source."""
+    """Validate ``rows`` and append the commit row; this is the MERGE source.
+
+    Validation is columnar (``pyarrow.compute``): a commit can carry millions of rows.
+    """
     missing = [c for c in _REQUIRED_COLUMNS if c not in rows.column_names]
     if missing:
         raise ValueError(f"rows are missing column(s) {missing}")
     unknown = [c for c in rows.column_names if c not in _COMMIT_COLUMNS]
     if unknown:
         raise ValueError(f"rows have unexpected column(s) {unknown}")
-    seen = set()
-    needed = ["kind", "array", "key", "op", "write_id", "tag"]
-    for r in _typed(rows, _COMMIT_SCHEMA).select(needed).to_pylist():
-        if r["op"] not in _OPS:
-            raise ValueError(f"op must be 'upsert' or 'delete', got {r['op']!r}")
-        if r["kind"] == "commit":
+    typed = _typed(rows, _COMMIT_SCHEMA)
+    if typed.num_rows:
+        kind, op = typed.column("kind"), typed.column("op")
+        bad_op = pc.invert(pc.is_in(op, value_set=pa.array(list(_OPS))))
+        if pc.any(bad_op, min_count=0).as_py():
+            raise ValueError(
+                f"op must be 'upsert' or 'delete', got {_first(op, bad_op)!r}"
+            )
+        is_commit = pc.fill_null(pc.equal(kind, "commit"), False)
+        if pc.any(is_commit, min_count=0).as_py():
             raise ValueError("rows must not hold kind 'commit': commit() adds that row")
-        if r["kind"] not in KINDS:
-            raise ValueError(f"unknown kind {r['kind']!r}; expected one of {KINDS}")
-        if r["tag"] is not None:
+        bad_kind = pc.invert(pc.is_in(kind, value_set=pa.array(list(KINDS))))
+        if pc.any(bad_kind, min_count=0).as_py():
+            raise ValueError(
+                f"unknown kind {_first(kind, bad_kind)!r}; expected one of {KINDS}"
+            )
+        if pc.any(pc.is_valid(typed.column("tag")), min_count=0).as_py():
             raise ValueError("commit() writes live rows only: tag must be null")
-        if r["op"] == "upsert" and r["write_id"] != write_id:
+        wid = typed.column("write_id")
+        foreign = pc.and_(
+            pc.equal(op, "upsert"),
+            pc.invert(pc.fill_null(pc.equal(wid, write_id), False)),
+        )
+        if pc.any(foreign, min_count=0).as_py():
             raise ValueError(
                 f"an upserted row's write_id must be the commit's write_id "
-                f"({write_id}), got {r['write_id']!r}"
+                f"({write_id}), got {_first(wid, foreign)!r}"
             )
-        ident = (r["kind"], r["array"], r["key"])
-        if ident in seen:
-            raise ValueError(f"duplicate row for (kind, array, key) = {ident}")
-        seen.add(ident)
+        counts = typed.group_by(["kind", "array", "key"]).aggregate([("kind", "count")])
+        crowded = pc.greater(counts.column("kind_count"), 1)
+        if pc.any(crowded, min_count=0).as_py():
+            ident = counts.filter(crowded).slice(0, 1).to_pylist()[0]
+            raise ValueError(
+                "duplicate row for (kind, array, key) = "
+                f"{(ident['kind'], ident['array'], ident['key'])}"
+            )
     commit_row = pa.Table.from_pylist(
         [
             {
@@ -637,18 +690,22 @@ def _with_view(spark, data: pa.Table, schema: pa.Schema, run):
 def find_commit_version(spark, table: str, write_id: str, *, since: int = 0):
     """Delta version that committed ``write_id``, or ``None``.
 
-    Read from the change feed (``since`` is the first version to look at, clamped to
-    the oldest commit still in the log).
+    Read from the commit row itself: a commit row is inserted once and never updated,
+    so its row-tracking commit version (``_metadata.row_commit_version``) is the
+    version of the commit that wrote it. That needs no change files, which Delta's
+    own vacuum (predictive optimization on Unity Catalog) removes long before the log
+    expires. Commits older than ``since`` are not reported.
     """
     _check_write_id(write_id)
     if isinstance(since, bool) or not isinstance(since, numbers.Integral) or since < 0:
         raise ValueError(f"since must be a non-negative int, got {since!r}")
-    since = max(int(since), _earliest_version(spark, table) if since == 0 else 0)
     row = spark.sql(
-        f"SELECT max(_commit_version) FROM table_changes({_lit(_q(table))}, {since}) "
-        f"WHERE kind = 'commit' AND key = '{write_id}' AND _change_type = 'insert'"
+        f"SELECT _metadata.row_commit_version AS v FROM {_q(table)} "
+        f"WHERE kind = 'commit' AND key = '{write_id}' AND tag IS NULL"
     ).first()
-    return None if row is None or row[0] is None else int(row[0])
+    if row is None or row[0] is None or int(row[0]) < since:
+        return None
+    return int(row[0])
 
 
 def changed_since(spark, table: str, base: Snapshot, keys: pa.Table) -> pa.Table:
@@ -679,7 +736,7 @@ def changed_since(spark, table: str, base: Snapshot, keys: pa.Table) -> pa.Table
 
 
 def _write_conflict(
-    spark, table: str, base_version: int, source: pa.Table, text: str
+    spark, table: str, source: pa.Table, text: str
 ) -> ZarrWriteConflict:
     """The ``ZarrWriteConflict`` for a CAS abort, naming every conflicting key.
 
@@ -689,9 +746,8 @@ def _write_conflict(
     """
     first = parse_cas_failure(text)
     try:
-        changed = changed_since(
-            spark, table, Snapshot(table, base_version), source
-        ).to_pylist()
+        base = Snapshot(table, _latest_version(spark, table))
+        changed = changed_since(spark, table, base, source).to_pylist()
     except Exception:
         changed = []
     changed.sort(key=lambda r: (r["kind"], _store_key(r["array"], r["key"])))
@@ -707,28 +763,17 @@ def _write_conflict(
     shown = ", ".join(keys[:5]) + (
         f" and {len(keys) - 5} more" if len(keys) > 5 else ""
     )
-    err = ZarrWriteConflict(
+    return ZarrWriteConflict(
         f"{len(keys) or 'some'} key(s) of {table} changed since this write read "
         f"them{': ' + shown if keys else ''}.",
         fix="re-read the store at its latest version and write again",
         keys=tuple(keys),
         winner=winner,
+        conflicts=tuple(changed),
     )
-    err.conflicts = tuple(
-        changed
-    )  # rows: kind, array, key, expected_write_id, write_id
-    return err
 
 
-def commit(
-    spark,
-    table: str,
-    rows: pa.Table,
-    *,
-    write_id: str,
-    meta: dict,
-    since: int | None = None,
-) -> int:
+def commit(spark, table: str, rows: pa.Table, *, write_id: str, meta: dict) -> int:
     """Commit ``rows`` plus a commit row in one MERGE; returns the Delta version.
 
     ``rows`` holds the manifest columns plus ``op`` (``"upsert"`` | ``"delete"``) and
@@ -736,15 +781,14 @@ def commit(
     "must not exist"). A stale expectation aborts the whole MERGE and raises
     ``ZarrWriteConflict`` listing every key that changed; a Delta conflict with a
     concurrent commit raises the retryable ``ConcurrentCommit``. A ``write_id`` that
-    already committed returns its existing version, so retries are idempotent;
-    ``since`` bounds that lookup (the version the writer's base snapshot was read at).
+    already committed returns its existing version, so retries are idempotent, even
+    when a twin of the same write lands between the check and the MERGE.
     """
     _check_write_id(write_id)
     source = _commit_source(rows, write_id, meta)
-    existing = find_commit_version(spark, table, write_id, since=since or 0)
+    existing = find_commit_version(spark, table, write_id)
     if existing is not None:
         return existing
-    base_version = _latest_version(spark, table)
     sql_table = _q(table)
 
     def merge(view: str) -> None:
@@ -756,7 +800,10 @@ def commit(
         text = _error_text(e)
         kind = classify_commit_error(text)
         if kind == "cas":
-            raise _write_conflict(spark, table, base_version, source, text) from e
+            landed = find_commit_version(spark, table, write_id)
+            if landed is not None:  # a twin of this write_id won the race
+                return landed
+            raise _write_conflict(spark, table, source, text) from e
         if kind == "concurrent":
             mark = next(m for m in _CONCURRENT_MARKS if m in text)
             raise ConcurrentCommit(
@@ -764,11 +811,11 @@ def commit(
                 "touched the same files or rows. Fix: read the store again and retry."
             ) from e
         raise
-    version = find_commit_version(spark, table, write_id, since=base_version)
+    version = find_commit_version(spark, table, write_id)
     if version is None:
         raise ZarrError(
-            f"the MERGE into {table} finished but no commit row for {write_id} is in "
-            f"the change feed from version {base_version}",
-            fix="check that delta.enableChangeDataFeed is true on the manifest table",
+            f"the MERGE into {table} finished but the commit row for {write_id} is "
+            "not live",
+            fix="check that delta.enableRowTracking is true on the manifest table",
         )
     return version

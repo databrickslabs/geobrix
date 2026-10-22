@@ -1,3 +1,6 @@
+import datetime as dt
+import warnings
+
 import numpy as np
 import pytest
 
@@ -226,3 +229,267 @@ def test_missing_coordinate_points_at_isel():
 def test_scalar_array_has_one_empty_key_chunk():
     assert touched_chunks([], ()) == [()]
     assert chunk_slices([], (), (), ()) == [((), ())]
+
+
+# ---- fix round 1: periodic longitudes, time bounds and date-string periods
+
+LON_PM = np.arange(-180, 180, 2.5)  # -180..177.5
+LON_INC = np.arange(
+    0, 360.1, 2.5
+)  # 0..360 inclusive: 145 labels, the last repeats the first
+
+
+def lon_ranges(coord, s, dim="longitude", attrs=None):
+    ax = resolve(
+        (dim,),
+        (len(coord),),
+        {dim: coord},
+        {dim: s},
+        None,
+        coord_attrs={dim: attrs} if attrs else None,
+    )
+    return ax[0].ranges
+
+
+def time_ranges(s, coord=TIME):
+    return resolve(("time",), (len(coord),), {"time": coord}, {"time": s}, None)[
+        0
+    ].ranges
+
+
+def test_periodic_axis_stored_minus180_to_180_in_both_directions():
+    assert lon_ranges(LON_PM, slice(170, -170)) == ((140, 144), (0, 5))
+    assert lon_ranges(LON_PM, slice(-10, 10)) == ((68, 77),)  # plain, no seam
+    assert lon_ranges(LON_PM, slice(350, 10)) == ((68, 77),)  # a 0..360 request
+    assert lon_ranges(LON_PM, slice(190, 200)) == ((4, 9),)  # -170..-160
+    assert lon_ranges(LON_PM, slice(-180, 180)) == ((0, 144),)
+    # the same request on a 0..360 axis crosses its seam instead
+    assert lon_ranges(LON, slice(-170, 170)) == ((76, 144), (0, 69))
+    assert lon_ranges(LON, slice(-180, 180)) == ((0, 144),)
+
+
+def test_periodic_scalars_wrap_and_match_by_circular_distance():
+    def r(c, v):
+        return resolve(
+            ("longitude",), (len(c),), {"longitude": c}, {"longitude": v}, None
+        )[0].ranges
+
+    assert r(LON_PM, 285) == ((42, 43),)  # 285 is -75
+    assert r(LON, -75.0) == ((114, 115),)
+    assert r(LON, 359.5) == (
+        (0, 1),
+    )  # half a degree from 0, though 357.5 is the nearest label by value
+    assert r(LON_INC, 360.0) == (
+        (144, 145),
+    )  # an exact label of an inclusive axis stays put
+
+
+def test_inclusive_zero_to_360_axis_never_selects_the_repeat_twice():
+    assert LON_INC.size == 145
+    r = lon_ranges(LON_INC, slice(-10, 10))
+    assert r == (
+        (140, 144),
+        (0, 5),
+    )  # 350..357.5 then 0..10; index 144 (360) is left out
+    covered = [i for s, e in r for i in range(s, e)]
+    assert len(covered) == len(set(covered))
+    assert lon_ranges(LON_INC, slice(355, 365)) == ((142, 144), (0, 3))
+    assert lon_ranges(LON_INC, slice(0, 360)) == (
+        (0, 145),
+    )  # both ends asked for by name
+
+
+def test_regional_and_projected_axes_never_wrap():
+    lon = np.arange(100.0, 251.0, 1.0)  # 100..250
+    assert lon_ranges(lon, slice(200, 150), "lon") == ()
+    assert lon_ranges(lon, slice(-10, 10), "lon") == ()
+    assert lon_ranges(lon, slice(-10, 120), "lon") == ((0, 21),)
+    cells = np.arange(300.0)  # "x" counted in cells: span + step is 300
+    assert lon_ranges(cells, slice(10, 0), "x") == ()
+    assert lon_ranges(cells, slice(-10, 10), "x") == ((0, 11),)
+    metres = np.arange(0, 500_000, 1000.0)  # "x" in metres: far more than 360 wide
+    assert lon_ranges(metres, slice(-10, 5000), "x") == ((0, 6),)
+    assert lon_ranges(metres, slice(5000, 0), "x") == ()
+    almost = np.arange(0.0, 351.0, 1.0)  # 0..350: span + step is 351, not a full circle
+    assert lon_ranges(almost, slice(340, 10), "lon") == ()
+    # a descending axis is never periodic: the slice follows the axis order
+    assert lon_ranges(np.arange(360.0)[::-1], slice(-10, 10), "lon") == ()
+
+
+def test_longitude_like_by_attributes_and_not_by_name():
+    for attrs in (
+        {"units": "degrees_east"},
+        {"standard_name": "longitude"},
+        {"axis": "X"},
+    ):
+        assert lon_ranges(LON, slice(-10, 10), "col", attrs) == ((140, 144), (0, 5))
+    assert lon_ranges(LON, slice(-10, 10), "col", {"units": "m"}) == ((0, 5),)
+    # an attribute marks the axis longitude-like but a regional one still never wraps
+    cells = np.arange(300.0)
+    assert lon_ranges(cells, slice(10, 0), "col", {"axis": "X"}) == ()
+
+
+def test_time_bounds_beyond_the_dtype_range_clamp_to_the_axis():
+    assert time_ranges(slice("2023-01-01T20", "3000-01-01")) == ((20, 48),)
+    assert time_ranges(slice("1000-01-01", "2023-01-01T02")) == ((0, 3),)
+    assert time_ranges(
+        slice(np.datetime64("1000-01-01"), np.datetime64("3000-01-01"))
+    ) == ((0, 48),)
+    assert time_ranges(slice("3000-01-01", None)) == ()
+    assert time_ranges(slice(None, "1000-01-01")) == ()
+    with pytest.raises(ValueError, match="not found in time.*Fix:"):
+        time_ranges("3000-01-01")  # a scalar cannot be clamped
+    # an axis in seconds reaches years a nanosecond axis cannot
+    far = np.array(["2500-01-01", "2500-01-02", "2500-01-03"], dtype="datetime64[s]")
+    assert time_ranges(slice("2500-01-02", "2500-01-02"), far) == ((1, 2),)
+    assert time_ranges(slice("2023-01-01", "9000-01-01"), far) == ((0, 3),)
+    assert time_ranges("2500-01-03", far) == ((2, 3),)
+
+
+def test_date_strings_are_periods_in_slices():
+    assert time_ranges(slice("2023-01-01", "2023-01-02")) == (
+        (0, 48),
+    )  # both whole days
+    assert time_ranges(slice("2023-01-02", "2023-01-02")) == ((24, 48),)
+    assert time_ranges(slice("2023-01", "2023-01")) == ((0, 48),)
+    assert time_ranges(slice("2023", "2023")) == ((0, 48),)
+    assert time_ranges(slice("2022", "2022")) == ()
+    assert time_ranges(slice("2024", None)) == ()
+    assert time_ranges(slice("2023-01-01T05", "2023-01-01T05")) == ((5, 6),)
+    assert time_ranges(slice("2023-01-01T05:30", "2023-01-01T07:10")) == (
+        (6, 8),
+    )  # minute periods
+    # months and years on a daily axis
+    days = np.arange("2022-12-01", "2023-03-01", dtype="datetime64[D]").astype(
+        "datetime64[ns]"
+    )
+    assert time_ranges(slice("2023-01", "2023-01"), days) == ((31, 62),)
+    assert time_ranges(slice("2023", "2023"), days) == ((31, 90),)
+    assert time_ranges(slice("2022", "2022"), days) == ((0, 31),)
+    assert time_ranges(slice("2022-12", "2023-01"), days) == ((0, 62),)
+
+
+def test_datetime_objects_stay_exact_instants_and_scalar_strings_pick_labels():
+    assert time_ranges(
+        slice(np.datetime64("2023-01-01"), np.datetime64("2023-01-02"))
+    ) == ((0, 25),)
+    assert time_ranges(slice(dt.datetime(2023, 1, 1), dt.datetime(2023, 1, 2))) == (
+        (0, 25),
+    )
+    assert time_ranges(slice(dt.date(2023, 1, 1), dt.date(2023, 1, 2))) == ((0, 25),)
+    assert time_ranges("2023-01-02") == ((24, 25),)  # the label at the start of the day
+    assert time_ranges(["2023-01-01", "2023-01-02T03"]) == ((0, 1), (27, 28))
+
+
+def test_one_nanosecond_axis_compares_exactly():
+    t = np.datetime64("2023-01-01T00:00:00", "ns") + np.arange(10).astype(
+        "timedelta64[ns]"
+    )
+
+    def sl(coord, s):
+        return resolve(("t",), (10,), {"t": coord}, {"t": s}, None)[0].ranges
+
+    assert sl(t, slice(t[3], t[5])) == ((3, 6),)
+    assert sl(t[::-1], slice(t[::-1][3], t[::-1][5])) == ((3, 6),)
+    assert sl(t, t[4]) == ((4, 5),)
+    assert sl(t, slice(t[9], None)) == ((9, 10),)
+
+
+def test_slice_tolerance_never_double_counts_a_label():
+    r = lon_ranges(LON, slice(10.0000001, 10.0))
+    idx = [i for s, e in r for i in range(s, e)]
+    assert len(idx) == len(set(idx)) and sorted(idx) == list(range(144))
+    assert r == ((4, 144), (0, 4))  # almost a full turn, starting at 10
+    r = lon_ranges(LON, slice(-10, 349.9999999))
+    assert sum(e - s for s, e in r) == 144
+
+
+def _assemble(axes, data, chunks):
+    """Rebuild the selection from chunk_slices the way a reader will."""
+    out = np.full(tuple(a.size for a in axes), -1, dtype=data.dtype)
+    for cidx in touched_chunks(axes, chunks):
+        extent = tuple(
+            slice(c * k, min((c + 1) * k, n))
+            for c, k, n in zip(cidx, chunks, data.shape)
+        )
+        block = data[extent]
+        for inside, outside in chunk_slices(axes, cidx, chunks, data.shape):
+            out[outside] = block[inside]
+    return out
+
+
+@pytest.mark.parametrize(
+    "sel, isel, picks",
+    [
+        (  # seam-crossing longitude, descending latitude, several ranges across time chunks
+            {"longitude": slice(-10, 10), "latitude": slice(60, 50)},
+            {"time": [1, 2, 3, 10, 11, 30, 47]},
+            {
+                "time": [1, 2, 3, 10, 11, 30, 47],
+                "latitude": range(12, 17),
+                "longitude": [*range(140, 144), *range(0, 5)],
+            },
+        ),
+        (  # squeezed time, latitude ending on the partial last chunk, whole longitude
+            {"latitude": slice(-80, -90)},
+            {"time": 5},
+            {"time": [5], "latitude": range(68, 73), "longitude": range(144)},
+        ),
+        (  # label lists and a time window; the seam falls between two 72-wide chunks
+            {
+                "latitude": [50, 60, 57.5],
+                "time": slice("2023-01-01T20", "2023-01-02T03"),
+                "longitude": slice(170, 190),
+            },
+            None,
+            {
+                "time": range(20, 28),
+                "latitude": [12, 13, 16],
+                "longitude": range(68, 77),
+            },
+        ),
+    ],
+)
+def test_assembled_chunks_equal_direct_numpy_selection(sel, isel, picks):
+    data = np.arange(np.prod(SHAPE)).reshape(SHAPE)
+    chunks = (12, 37, 72)
+    axes = resolve(DIMS, SHAPE, COORDS, sel, isel)
+    expected = data[np.ix_(*[np.array(list(picks[d])) for d in DIMS])]
+    got = _assemble(axes, data, chunks)
+    assert got.shape == expected.shape
+    assert (got == expected).all()
+
+
+def test_utc_offsets_parse_without_numpy_warnings():
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert time_ranges("2023-01-01T05:00+05:00") == ((0, 1),)  # 00:00 UTC
+        assert time_ranges("2023-01-01T00:00-05:00") == ((5, 6),)  # 05:00 UTC
+        assert time_ranges("2023-01-01T05:00Z") == ((5, 6),)
+        assert time_ranges("2023-01-01 05:00:00+0000") == ((5, 6),)
+        assert time_ranges(
+            slice("2023-01-01T05:00+05:00", "2023-01-01T07:30+02:00")
+        ) == ((0, 6),)
+        aware = dt.datetime(2023, 1, 1, 5, tzinfo=dt.timezone(dt.timedelta(hours=5)))
+        assert time_ranges(slice(aware, aware)) == ((0, 1),)
+
+
+def test_list_selection_prepares_the_axis_once(monkeypatch):
+    from databricks.labs.gbx.zarr import _select
+
+    calls = []
+    real = _select._step
+
+    def counting(num):
+        calls.append(1)
+        return real(num)
+
+    monkeypatch.setattr(_select, "_step", counting)
+    ax = resolve(DIMS, SHAPE, COORDS, {"latitude": [50, 60, 57.5, 55, 52.5]}, None)[1]
+    assert ax.ranges == ((12, 17),) and len(calls) == 1
+
+
+def test_isel_on_an_empty_dimension_says_so():
+    with pytest.raises(ValueError, match="empty") as e:
+        resolve(("t",), (0,), {}, None, {"t": 0})
+    assert "[-0" not in str(e.value) and "Fix:" in str(e.value)

@@ -9,27 +9,59 @@ of slices (inside the chunk, inside the assembled output).
 
 Coordinates are plain numpy arrays (``float``, ``int`` or ``datetime64``); this module uses
 numpy only. Label slices are inclusive of both labels and follow the coordinate order, so a
-descending latitude axis takes ``slice(60, 50)``. Longitudes on a 0..360 axis accept
-negative bounds and east-going arcs (``slice(-10, 10)`` is ``350..360`` then ``0..10``), which
-yields two ranges. Ranges are ascending and non-overlapping except for that wrapped pair,
-whose first range holds the higher indices.
+descending latitude axis takes ``slice(60, 50)`` and a reversed slice on any ordinary axis is
+empty. A global longitude axis is periodic, so a slice may cross its seam (``slice(-10, 10)``
+on a 0..360 axis is ``350..360`` then ``0..10``), which yields two ranges.
 """
 
 from __future__ import annotations
 
 import datetime as _dt
 import itertools
+import re
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 
 _LON_NAMES = frozenset({"lon", "longitude", "x"})
 _FLOAT_TOL = 1e-6  # fraction of the axis step added to slice bounds on float axes
+_PERIOD_TOL = (
+    0.01  # fraction of the axis step allowed when testing for a 360 degree span
+)
+_I64_MIN = (
+    int(np.iinfo(np.int64).min) + 1
+)  # one above NaT, so negating a bound cannot overflow
+_I64_MAX = int(np.iinfo(np.int64).max)
+# attoseconds per unit: exact integer arithmetic keeps out-of-range time bounds from overflowing
+_UNIT_ATTO = {
+    "as": 1,
+    "fs": 10**3,
+    "ps": 10**6,
+    "ns": 10**9,
+    "us": 10**12,
+    "ms": 10**15,
+    "s": 10**18,
+    "m": 60 * 10**18,
+    "h": 3600 * 10**18,
+    "D": 86400 * 10**18,
+    "W": 7 * 86400 * 10**18,
+}
+_ISO_WITH_OFFSET = re.compile(
+    r"(?P<base>\d{4}-\d{2}-\d{2}[T ]\d{2}(?::\d{2}(?::\d{2}(?:\.\d+)?)?)?)"
+    r"(?P<off>Z|[+-]\d{2}(?::?\d{2})?)"
+)
 
 
 @dataclass(frozen=True)
 class AxisSel:
-    """The selected cells along one dimension."""
+    """The selected cells along one dimension.
+
+    ``ranges`` are half-open index ranges in output order: ascending and non-overlapping,
+    except that a slice across the seam of a periodic longitude axis gives two ranges whose
+    FIRST range holds the higher indices, e.g. ``((140, 144), (0, 5))`` for ``350..357.5``
+    then ``0..10``. ``()`` means nothing is selected. ``size`` is the output length.
+    """
 
     dim: str
     ranges: tuple[tuple[int, int], ...]  # half-open index ranges; () = empty
@@ -58,8 +90,29 @@ def resolve(
     follows array order, not request order. A selection that matches nothing gives
     ``ranges == ()``; a scalar label that is not on the axis raises ``ValueError``.
 
-    ``coord_attrs`` maps a dimension to its coordinate array's attributes; a dimension whose
-    ``units`` is ``degrees_east`` is treated as a longitude, like ``lon``/``longitude``/``x``.
+    Label slices follow the coordinate order, so ``a`` and ``b`` reversed against it select
+    nothing (``slice(50, 60)`` on a descending latitude is empty). Open ends use ``None``.
+
+    Periodic longitude: a longitude-like dimension (named ``lon``/``longitude``/``x``, or whose
+    ``coord_attrs`` has ``units == "degrees_east"``, ``standard_name == "longitude"`` or
+    ``axis == "X"``) is periodic when its coordinates ascend and cover the full circle, that is
+    ``span + step >= 360``. On such an axis both slice bounds are normalised into
+    ``[axis min, axis min + 360)`` and the slice is the east-going arc from ``a`` to ``b``: one
+    range, or two when it crosses the seam (see ``AxisSel``). ``slice(-10, 10)`` on 0..360 and
+    ``slice(350, 10)`` on -180..180 are both the labels around 0. An axis stored with a repeated
+    end (0..360 inclusive) never selects that label twice. A regional axis (``x`` 0..299, ``lon``
+    100..250) never wraps, so a reversed slice there is empty. Scalars on a periodic axis
+    are normalised the same way and matched by circular distance.
+
+    Time labels: an ISO string with a date or a partial time is a period, as in xarray. As a
+    slice start it means the beginning of that period and as a slice end the end of it, so
+    ``slice("2023-01-01", "2023-01-02")`` covers both whole days, and ``"2023-01"`` and
+    ``"2023"`` are a month and a year. A ``numpy.datetime64`` or ``datetime`` is an exact
+    instant, and a scalar date string selects the label at its start. Offsets such as ``+05:00``
+    are converted to UTC. A bound beyond what the axis dtype can represent is clamped to the
+    axis end, so ``slice("2023-01-01T20", "3000-01-01")`` is the tail.
+
+    ``coord_attrs`` maps a dimension to its coordinate array's attributes.
     """
     sel = dict(sel or {})
     isel = dict(isel or {})
@@ -160,6 +213,10 @@ def _is_int(v) -> bool:
 
 
 def _norm_index(dim: str, n: int, i: int) -> int:
+    if n == 0:
+        raise ValueError(
+            f"index {i} is out of range for {dim}, which is empty (size 0). Fix: select from a non-empty dimension."
+        )
     if i < -n or i >= n:
         raise ValueError(
             f"index {i} is out of range for {dim} (size {n}). Fix: use an index in [-{n}, {n - 1}]."
@@ -222,6 +279,61 @@ def _isel_axis(dim: str, n: int, v) -> AxisSel:
 # ---------------------------------------------------------------- sel
 
 
+@dataclass(eq=False)
+class _Axis:
+    """One coordinate prepared once per ``sel`` dimension, so list selections do not redo it per label."""
+
+    dim: str
+    coord: np.ndarray  # the coordinate as given
+    num: (
+        np.ndarray
+    )  # float64, or int64 ticks (datetimes and durations in the coordinate's own unit)
+    kind: str  # "f" float, "i" integer, "M" datetime, "m" duration
+    tick: int  # attoseconds per tick for "M"/"m", else 0
+    step: float  # median |difference| between neighbouring labels, in ticks (0 for fewer than two)
+    lon_like: bool
+
+    @property
+    def tol(self):
+        """Slack added to slice bounds: a fraction of the step on float axes, exactly 0 otherwise."""
+        return _FLOAT_TOL * self.step if self.kind == "f" else 0
+
+    @cached_property
+    def direction(self) -> int:
+        """1 when the labels never decrease, -1 when they never increase, 0 when neither."""
+        d = np.diff(self.num)
+        if bool((d >= 0).all()):
+            return 1
+        if bool((d <= 0).all()):
+            return -1
+        return 0
+
+    @cached_property
+    def period(self) -> tuple[float, bool] | None:
+        """``(origin, repeats_origin)`` for a periodic longitude axis, else ``None``.
+
+        Periodic means longitude-like, ascending and covering the full circle: ``span + step >=
+        360``. The span cannot exceed 360 either, which keeps a projected ``x`` in metres from
+        qualifying. ``repeats_origin`` is true when the last label is the first one again
+        (an axis stored 0..360 inclusive).
+        """
+        if (
+            not self.lon_like
+            or self.kind not in "fi"
+            or self.num.size < 2
+            or self.step <= 0
+        ):
+            return None
+        if self.direction != 1:
+            return None
+        origin = float(self.num[0])
+        span = float(self.num[-1]) - origin
+        slack = _PERIOD_TOL * self.step
+        if span + self.step < 360.0 - slack or span > 360.0 + slack:
+            return None
+        return origin, span >= 360.0 - slack
+
+
 def _sel_axis(dim: str, n: int, coord, v, attrs: dict | None) -> AxisSel:
     if coord is None:
         raise ValueError(
@@ -232,121 +344,63 @@ def _sel_axis(dim: str, n: int, coord, v, attrs: dict | None) -> AxisSel:
         raise ValueError(
             f"coordinate {dim} has shape {coord.shape} but the dimension has size {n}. Fix: pass a 1-D coordinate of matching length."
         )
-    lon_like = _is_lon_like(dim, attrs)
+    ax = _axis_of(dim, coord, attrs)
     if isinstance(v, slice):
         if v.step is not None:
             raise ValueError(
                 f"sel slice for {dim} has a step; label slices take only start and stop. Fix: drop the step."
             )
-        return AxisSel(
-            dim, _slice_ranges(coord, v.start, v.stop, lon_like, dim=dim), False
-        )
-    wrap = lon_like and _spans_0_360(_numeric(coord, dim))
+        return AxisSel(dim, _slice_ranges(ax, v.start, v.stop), False)
     if isinstance(v, (list, tuple, np.ndarray)):
         if isinstance(v, np.ndarray) and v.ndim != 1:
             raise ValueError(
                 f"sel list for {dim} must be one-dimensional. Fix: pass a flat list of labels."
             )
-        idx = sorted(
-            {_label_index(coord, _wrap_lon(item) if wrap else item, dim) for item in v}
-        )
+        idx = sorted({_label_index(ax, item) for item in v})
         return AxisSel(dim, _runs(idx), False)
-    i = _label_index(coord, _wrap_lon(v) if wrap else v, dim)
+    i = _label_index(ax, v)
     return AxisSel(dim, ((i, i + 1),), True)
+
+
+def _axis_of(dim: str, coord: np.ndarray, attrs: dict | None) -> _Axis:
+    kind = coord.dtype.kind
+    tick = 0
+    if kind in "Mm":
+        unit, _ = np.datetime_data(coord.dtype)
+        if unit in (
+            "Y",
+            "M",
+        ):  # calendar units have no fixed length: count days instead
+            if kind == "m":
+                raise ValueError(
+                    f"label selection cannot compare {dim} durations in calendar units ({coord.dtype}). Fix: store them in days or a finer unit, or use isel."
+                )
+            coord_t = coord.astype("datetime64[D]")
+        else:
+            coord_t = coord
+        num = coord_t.astype(np.int64)
+        tick = _tick_atto(coord_t.dtype, dim)
+    elif kind in "iu":
+        kind, num = "i", coord.astype(np.int64, copy=False)
+    elif kind == "f":
+        num = coord.astype(np.float64, copy=False)
+    else:
+        raise ValueError(
+            f"label selection needs numeric or datetime coordinates; {dim} is {coord.dtype}. Fix: use isel for position-based selection."
+        )
+    return _Axis(dim, coord, num, kind, tick, _step(num), _is_lon_like(dim, attrs))
 
 
 def _is_lon_like(dim: str, attrs: dict | None) -> bool:
     if dim.lower() in _LON_NAMES:
         return True
-    return bool(attrs) and str(attrs.get("units", "")).lower() == "degrees_east"
-
-
-def _spans_0_360(num: np.ndarray) -> bool:
-    """True for a global-looking longitude axis stored as [0, 360)."""
+    if not attrs:
+        return False
     return (
-        num.dtype.kind in "fi"
-        and num.size > 1
-        and float(num.min()) >= 0.0
-        and 180.0 < float(num.max()) < 360.0
+        str(attrs.get("units", "")).lower() == "degrees_east"
+        or str(attrs.get("standard_name", "")).lower() == "longitude"
+        or str(attrs.get("axis", "")).upper() == "X"
     )
-
-
-def _wrap_lon(value):
-    """Map a numeric scalar outside [0, 360) onto it (``-75`` -> ``285``); anything else is unchanged."""
-    if (
-        isinstance(value, (int, float, np.integer, np.floating))
-        and not isinstance(value, bool)
-        and (value < 0 or value >= 360)
-    ):
-        return float(value) % 360.0
-    return value
-
-
-def _numeric(coord: np.ndarray, dim: str) -> np.ndarray:
-    """The coordinate as ints (datetimes and timedeltas as ns) or float64, for exact comparisons."""
-    kind = coord.dtype.kind
-    if kind == "M":
-        return coord.astype("datetime64[ns]").astype(np.int64)
-    if kind == "m":
-        return coord.astype("timedelta64[ns]").astype(np.int64)
-    if kind in "iu":
-        return coord.astype(np.int64, copy=False)
-    if kind == "f":
-        return coord.astype(np.float64, copy=False)
-    raise ValueError(
-        f"label selection needs numeric or datetime coordinates; {dim} is {coord.dtype}. Fix: use isel for position-based selection."
-    )
-
-
-def _to_datetime64(v, dim: str) -> np.datetime64:
-    if isinstance(v, np.datetime64):
-        out = v
-    elif isinstance(v, str):
-        s = v.strip()
-        out = np.datetime64(s[:-1] if s.endswith("Z") else s)
-    elif isinstance(v, (_dt.datetime, _dt.date)):
-        out = np.datetime64(v)
-    else:
-        raise ValueError(
-            f"{v!r} is not a time label for {dim}. Fix: pass an ISO string such as '2023-01-01T05:00' or a numpy datetime64."
-        )
-    if np.isnat(out):
-        raise ValueError(
-            f"{v!r} is not a valid time label for {dim}. Fix: pass a real timestamp."
-        )
-    return out
-
-
-def _to_num(coord: np.ndarray, v, dim: str):
-    """A label as a number comparable with ``_numeric(coord)``."""
-    kind = coord.dtype.kind
-    try:
-        if kind == "M":
-            return int(_to_datetime64(v, dim).astype("datetime64[ns]").astype(np.int64))
-        if kind == "m":
-            if not isinstance(v, np.timedelta64) or np.isnat(v):
-                raise ValueError(
-                    f"{v!r} is not a duration label for {dim}. Fix: pass a numpy timedelta64."
-                )
-            return int(v.astype("timedelta64[ns]").astype(np.int64))
-        if (
-            isinstance(v, (str, bytes, np.datetime64, np.timedelta64, _dt.date))
-            or v is None
-        ):
-            raise ValueError(
-                f"{v!r} is not a numeric label for {dim} ({coord.dtype}). Fix: pass a number."
-            )
-        if kind == "f":
-            return float(
-                np.asarray(v).astype(coord.dtype)
-            )  # same rounding as the stored labels
-        return v if _is_int(v) else float(v)
-    except (TypeError, ValueError, OverflowError) as e:
-        if isinstance(e, ValueError) and "Fix:" in str(e):
-            raise
-        raise ValueError(
-            f"cannot use {v!r} as a label for {dim} ({coord.dtype}): {e}. Fix: pass a label of the coordinate's type."
-        ) from e
 
 
 def _step(num: np.ndarray) -> float:
@@ -356,40 +410,205 @@ def _step(num: np.ndarray) -> float:
     return float(np.median(np.abs(np.diff(num).astype(np.float64))))
 
 
-def _label_index(coord: np.ndarray, value, dim: str) -> int:
-    """Index of the label equal to ``value``, else of the nearest label within half the axis step."""
-    num = _numeric(coord, dim)
-    v = _to_num(coord, value, dim)
-    if num.size:
-        dist = np.abs(num - v).astype(np.float64)
-        dist[np.isnan(dist)] = np.inf
-        i = int(np.argmin(dist))
-        if dist[i] == 0 or dist[i] <= 0.5 * _step(num):
-            return i
-        nearest = f"; the nearest label is {coord[i]}"
+def _clamp(i: int) -> int:
+    return max(_I64_MIN, min(_I64_MAX, i))
+
+
+def _wrap(x: float, origin: float) -> float:
+    """``x`` mapped into ``[origin, origin + 360)``."""
+    return origin + (x - origin) % 360.0
+
+
+# ---- time labels
+
+
+def _tick_atto(dtype: np.dtype, dim: str) -> int:
+    unit, count = np.datetime_data(dtype)
+    factor = _UNIT_ATTO.get(unit)
+    if factor is None:
+        raise ValueError(
+            f"{dim} has an unsupported time unit '{unit}' ({dtype}). Fix: store the coordinate with a fixed-length unit such as ns, us, s or D."
+        )
+    return factor * count
+
+
+def _atto(x) -> int:
+    """A ``datetime64``/``timedelta64`` scalar as an exact count of attoseconds (a Python int)."""
+    unit, count = np.datetime_data(x.dtype)
+    if unit in ("Y", "M"):
+        if x.dtype.kind != "M":
+            raise ValueError("durations in years or months have no fixed length")
+        x = x.astype("datetime64[D]")
+        unit, count = "D", 1
+    factor = _UNIT_ATTO.get(unit)
+    if factor is None:
+        raise ValueError(f"unsupported time unit '{unit}'")
+    return int(x.astype(np.int64)) * count * factor
+
+
+def _parse_iso(text: str) -> tuple[np.datetime64, np.datetime64]:
+    """An ISO string as ``(start, end)`` of the period its precision names; ``end`` is exclusive.
+
+    ``"2023"`` is a year, ``"2023-01-01"`` a day, ``"2023-01-01T05:00"`` a minute. An offset
+    (``Z``, ``+05:00``) is applied here so both ends come back in UTC with no numpy timezone warning.
+    """
+    s = text.strip()
+    shift = None
+    m = _ISO_WITH_OFFSET.fullmatch(s)
+    if m:
+        s, off = m["base"].replace(" ", "T"), m["off"]
+        if off != "Z":
+            digits = off[1:].replace(":", "")
+            minutes = int(digits[:2]) * 60 + int(digits[2:] or 0)
+            shift = np.timedelta64(-minutes if off[0] == "-" else minutes, "m")
+    start = np.datetime64(s)
+    if np.isnat(start):
+        raise ValueError("not a valid timestamp")
+    end = start + np.timedelta64(1, np.datetime_data(start.dtype)[0])
+    if shift is not None:
+        start, end = start - shift, end - shift
+    return start, end
+
+
+def _time_label(ax: _Axis, v) -> tuple[int, int | None]:
+    """``(start, end)`` of a time label in attoseconds; ``end`` is ``None`` for an exact instant."""
+    try:
+        if ax.kind == "m":
+            if not isinstance(v, np.timedelta64) or np.isnat(v):
+                raise ValueError("not a duration")
+            return _atto(v), None
+        if isinstance(v, str):
+            start, end = _parse_iso(v)
+            return _atto(start), _atto(end)
+        if isinstance(v, np.datetime64):
+            exact = v
+        elif isinstance(v, _dt.datetime):
+            if v.tzinfo is not None:
+                v = v.astimezone(_dt.timezone.utc).replace(tzinfo=None)
+            exact = np.datetime64(v)
+        elif isinstance(v, _dt.date):
+            exact = np.datetime64(v)
+        else:
+            raise ValueError("not a time label")
+        if np.isnat(exact):
+            raise ValueError("not a valid timestamp")
+        return _atto(exact), None
+    except (TypeError, ValueError, OverflowError) as e:
+        hint = (
+            "a numpy timedelta64"
+            if ax.kind == "m"
+            else "an ISO string such as '2023-01-01T05:00' or a numpy datetime64"
+        )
+        raise ValueError(
+            f"cannot use {v!r} as a label for {ax.dim} ({ax.coord.dtype}): {e}. Fix: pass {hint}."
+        ) from e
+
+
+def _time_bound(ax: _Axis, v, role: str) -> int:
+    """A slice bound in the axis's own ticks, clamped to the representable range.
+
+    A start rounds up and an exact end rounds down, so only labels inside the bound qualify. A
+    date or partial-time string ends at the last tick before its period closes.
+    """
+    start, end = _time_label(ax, v)
+    if role == "start":
+        ticks = -((-start) // ax.tick)
+    elif end is None:
+        ticks = start // ax.tick
     else:
-        nearest = ""
+        ticks = -((-end) // ax.tick) - 1
+    return _clamp(ticks)
+
+
+# ---- label lookup
+
+
+def _number(ax: _Axis, v):
+    """A numeric label as a number comparable with ``ax.num``."""
+    if (
+        isinstance(v, (str, bytes, np.datetime64, np.timedelta64, _dt.date))
+        or v is None
+    ):
+        raise ValueError(
+            f"{v!r} is not a numeric label for {ax.dim} ({ax.coord.dtype}). Fix: pass a number."
+        )
+    try:
+        if ax.kind == "f":
+            return float(
+                np.asarray(v).astype(ax.coord.dtype)
+            )  # same rounding as the stored labels
+        return _clamp(int(v)) if _is_int(v) else float(v)
+    except (TypeError, ValueError, OverflowError) as e:
+        raise ValueError(
+            f"cannot use {v!r} as a label for {ax.dim} ({ax.coord.dtype}): {e}. Fix: pass a label of the coordinate's type."
+        ) from e
+
+
+def _scalar(ax: _Axis, v):
+    """A single label (not a slice bound) in ticks, rounded to the nearest tick; may be out of range."""
+    if ax.kind in "Mm":
+        start, _ = _time_label(ax, v)
+        return (2 * start + ax.tick) // (2 * ax.tick)
+    return _number(ax, v)
+
+
+def _nearest(ax: _Axis, v, circular: bool) -> tuple[int, float]:
+    """``(index, distance)`` of the label closest to ``v``."""
+    num = ax.num
+    if num.dtype.kind == "i" and isinstance(v, int) and not circular:
+        lo, hi = int(num.min()), int(num.max())
+        if (
+            max(abs(v - lo), abs(v - hi)) <= _I64_MAX
+        ):  # int64 differences cannot overflow: exact
+            dist = np.abs(num - np.int64(v))
+            i = int(np.argmin(dist))
+            return i, float(dist[i])
+        approx = np.abs(num.astype(np.float64) - float(v))
+        i = int(np.argmin(approx))
+        return i, float(abs(int(num[i]) - v))
+    dist = np.abs(num.astype(np.float64) - float(v))
+    dist[np.isnan(dist)] = np.inf
+    i = int(np.argmin(dist))
+    if (
+        circular and dist[i] != 0
+    ):  # an exact label beats a label on the other side of the seam
+        dist = np.minimum(dist, 360.0 - dist)
+        i = int(np.argmin(dist))
+    return i, float(dist[i])
+
+
+def _label_index(ax: _Axis, value) -> int:
+    """Index of the label equal to ``value``, else of the nearest label within half the axis step."""
+    v = _scalar(ax, value)
+    if ax.kind in "Mm" and not _I64_MIN <= v <= _I64_MAX:
+        raise ValueError(
+            f"{value!r} not found in {ax.dim}: it is outside the times a {ax.coord.dtype} axis can represent. Fix: pick a label on the axis, or use isel."
+        )
+    period = ax.period
+    if period is not None:
+        origin, repeats = period
+        top = origin + 360.0
+        if v < origin or v > top or (v == top and not repeats):
+            v = _wrap(v, origin)
+    nearest = ""
+    if ax.num.size:
+        i, dist = _nearest(ax, v, period is not None)
+        if dist == 0 or dist <= 0.5 * ax.step:
+            return i
+        nearest = f"; the nearest label is {ax.coord[i]}"
     raise ValueError(
-        f"{value!r} not found in {dim}{nearest}. Fix: pick a label on the axis (within half a step), or use isel."
+        f"{value!r} not found in {ax.dim}{nearest}. Fix: pick a label on the axis (within half a step), or use isel."
     )
 
 
-def _direction(num: np.ndarray, dim: str) -> bool:
-    """True when ``num`` is non-decreasing, False when non-increasing; ``ValueError`` otherwise."""
-    d = np.diff(num)
-    if bool((d >= 0).all()):
-        return True
-    if bool((d <= 0).all()):
-        return False
-    raise ValueError(
-        f"coordinate {dim} is not monotonic, so a label slice is ambiguous. Fix: use isel, or a list of labels."
-    )
+# ---- slices
 
 
-def _bounded(
-    num: np.ndarray, asc: bool, a, b, tol: float
-) -> tuple[tuple[int, int], ...]:
-    """Indices from label ``a`` to label ``b`` inclusive, in coordinate order; ``None`` leaves that end open."""
+def _bounded(num: np.ndarray, asc: bool, a, b, tol) -> tuple[tuple[int, int], ...]:
+    """Indices from label ``a`` to label ``b`` inclusive, in coordinate order; ``None`` leaves that end open.
+
+    ``tol`` is an int 0 on integer and time axes so the comparisons stay exact int64.
+    """
     n = num.size
     if asc:
         start = 0 if a is None else int(np.searchsorted(num, a - tol, side="left"))
@@ -401,30 +620,71 @@ def _bounded(
     return ((start, stop),) if start < stop else ()
 
 
-def _slice_ranges(
-    coord: np.ndarray, a, b, lon_like: bool, dim: str = ""
+def _join_arcs(
+    east: tuple[tuple[int, int], ...],
+    west: tuple[tuple[int, int], ...],
+    n: int,
+    repeats_origin: bool,
 ) -> tuple[tuple[int, int], ...]:
-    """Index ranges for the inclusive label slice ``a..b`` along ``coord`` (ascending or descending).
+    """The two arcs of a seam-crossing slice as output ranges: ``east`` (up to the axis end) then ``west``.
 
-    On a longitude axis stored as [0, 360), a request with a negative or >= 360 bound, or with
-    ``a > b``, is an east-going arc from ``a`` to ``b`` and becomes up to two ranges: the labels
-    from ``a`` to the end, then the labels from the start to ``b``. An arc of 360 degrees or more
-    selects the whole axis.
+    The last label of an axis stored 0..360 inclusive is the first one again, so ``east`` stops
+    before it. The slice tolerance can make the arcs reach the same label; ``west`` is cut back so
+    no index appears twice.
     """
-    num = _numeric(coord, dim)
-    if num.size == 0:
+    ranges: list[tuple[int, int]] = []
+    if east:
+        s, e = east[0]
+        if repeats_origin:
+            e = min(e, n - 1)
+        if s < e:
+            ranges.append((s, e))
+    if west:
+        s, e = west[0]
+        if ranges:
+            e = min(e, ranges[0][0])
+        if s < e:
+            ranges.append((s, e))
+    return tuple(ranges)
+
+
+def _slice_ranges(ax: _Axis, a, b) -> tuple[tuple[int, int], ...]:
+    """Index ranges for the inclusive label slice ``a..b`` along the axis (ascending or descending).
+
+    On a periodic longitude axis (see ``resolve``) a slice that leaves ``[origin, origin + 360]`` or
+    is reversed is the east-going arc from ``a`` to ``b``: the labels from ``a`` to the end then
+    from the start to ``b``, or one range when it does not cross the seam. An arc of 360 degrees or
+    more selects the whole axis in array order. Every other slice follows the coordinate order, so
+    a reversed one is empty.
+    """
+    num = ax.num
+    n = num.size
+    if n == 0:
         return ()
-    asc = _direction(num, dim)
-    tol = _FLOAT_TOL * _step(num) if coord.dtype.kind == "f" else 0.0
-    lo = None if a is None else _to_num(coord, a, dim)
-    hi = None if b is None else _to_num(coord, b, dim)
-    if lon_like and asc and lo is not None and hi is not None and _spans_0_360(num):
-        if lo > hi or lo < 0 or hi < 0 or lo >= 360 or hi >= 360:
-            if lo <= hi and hi - lo >= 360:
-                return ((0, num.size),)
-            lo, hi = lo % 360.0, hi % 360.0
-            if lo > hi:
-                return _bounded(num, True, lo, None, tol) + _bounded(
-                    num, True, None, hi, tol
-                )
-    return _bounded(num, asc, lo, hi, tol)
+    if ax.direction == 0:
+        raise ValueError(
+            f"coordinate {ax.dim} is not monotonic, so a label slice is ambiguous. Fix: use isel, or a list of labels."
+        )
+    asc = ax.direction > 0
+    if ax.kind in "Mm":
+        lo = None if a is None else _time_bound(ax, a, "start")
+        hi = None if b is None else _time_bound(ax, b, "stop")
+    else:
+        lo = None if a is None else _number(ax, a)
+        hi = None if b is None else _number(ax, b)
+    period = ax.period
+    if period is not None and lo is not None and hi is not None:
+        origin, repeats = period
+        if not origin <= lo <= hi <= origin + 360.0:
+            if lo <= hi and hi - lo >= 360.0:
+                return ((0, n),)
+            a2, b2 = _wrap(lo, origin), _wrap(hi, origin)
+            if a2 <= b2:
+                return _bounded(num, True, a2, b2, ax.tol)
+            return _join_arcs(
+                _bounded(num, True, a2, None, ax.tol),
+                _bounded(num, True, None, b2, ax.tol),
+                n,
+                repeats,
+            )
+    return _bounded(num, asc, lo, hi, ax.tol)

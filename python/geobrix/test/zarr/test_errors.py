@@ -1,4 +1,7 @@
+import os
 import pickle
+import subprocess
+import sys
 
 import pytest
 
@@ -54,6 +57,28 @@ def test_lazy_package_exports_errors():
     import databricks.labs.gbx.zarr as z
 
     assert z.ZarrWriteConflict is E.ZarrWriteConflict
+
+
+def test_importing_the_package_loads_no_zarr_stack_or_pyspark():
+    """The package and its errors are usable without the zarr stack or PySpark; only
+    the names that need them import them. Checked in a fresh interpreter."""
+    probe = (
+        "import sys\n"
+        "import databricks.labs.gbx.zarr as z\n"
+        "z.ZarrWriteConflict, z.ZarrError  # resolving an export stays lazy too\n"
+        "heavy = {'zarr', 'numcodecs', 'zarrs', 'tensorstore', 'obstore', 'pyspark'}\n"
+        "print(sorted({m.split('.')[0] for m in sys.modules} & heavy))\n"
+    )
+    env = {**os.environ, "PYTHONPATH": os.pathsep.join(p for p in sys.path if p)}
+    r = subprocess.run(
+        [sys.executable, "-c", probe],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=120,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip().splitlines()[-1] == "[]", r.stdout
 
 
 def test_lazy_package_rejects_unknown_names():

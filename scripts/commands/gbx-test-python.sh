@@ -30,8 +30,9 @@ show_help() {
     echo -e "  when none is staged or ${YELLOW}target/${NC} is newer. Maven is never run; with no JAR in either place the heavy"
     echo -e "  phase fails at once with one ${YELLOW}PRECONDITION MISSING${NC} line. The light phase never needs the JAR."
     echo ""
-    echo -e "${CYAN}Zarr tests (test/zarr):${NC} the command installs the ${YELLOW}zarr_dbr19${NC} extra and fetches the OSS Delta Lake jars"
-    echo -e "  (scripts/ci/fetch-delta-test-jars.sh) when missing; conftest puts the jars on the JVM classpath."
+    echo -e "${CYAN}Zarr tests (test/zarr):${NC} when test/zarr is among the selected tests the command installs the"
+    echo -e "  ${YELLOW}zarr_dbr19${NC} extra and fetches + sha256-checks the OSS Delta Lake jars (scripts/ci/fetch-delta-test-jars.sh)"
+    echo -e "  when missing; conftest puts the jars on the JVM classpath. Other runs skip both."
     echo ""
     echo -e "${CYAN}Default marker filter:${NC} ${YELLOW}not integration${NC} (matches CI; opt in with ${GREEN}--with-integration${NC} or override with ${GREEN}--markers${NC})"
     echo ""
@@ -140,24 +141,6 @@ docker exec geobrix-dev /bin/bash -c \
        lazrs==0.8.2 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
        tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"
 
-# Zarr transactional stores (test/zarr): the [zarr_dbr19] extra. Unlike the stopgap above, the
-# pins are NOT repeated here -- pip installs the extra from pyproject.toml, the single source,
-# so a pin change lands in the dev container without touching this script. `-e` re-resolves
-# only that extra for the already-editable geobrix (no other package is touched), and the
-# import probe makes this a near-zero-cost no-op once the stack is present. Remove once the
-# dev image bakes the extra in (requirements-dev-container.txt).
-docker exec geobrix-dev /bin/bash -c \
-    "python3 -c 'import zarr, numcodecs, zarrs, tensorstore, obstore, ml_dtypes, msgspec, donfig; assert zarr.__version__.startswith(\"3.4\")' >/dev/null 2>&1 || \
-     pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'"
-
-# test/zarr runs a LOCAL Delta Lake session: the OSS delta-spark jars must be in the Maven repo
-# (test/conftest.py puts them on PYSPARK_SUBMIT_ARGS when test/zarr is collected). The jars are
-# not a pip package and Spark's Ivy resolver cannot reach the dev proxy, so fetch them with Maven
-# when missing (a no-op once present). Non-fatal: unrelated suites still run, and the Delta-backed
-# zarr tests fail loudly, naming the missing jars, rather than skip.
-docker exec geobrix-dev /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh \
-    || echo -e "${YELLOW}⚠️  Delta jars unavailable: Delta-backed zarr tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
-
 if [ -n "$MARKERS" ]; then
     echo -e "${CYAN}🏷️  Markers: ${YELLOW}$MARKERS${NC}"
 else
@@ -202,6 +185,66 @@ paths_need_jar() {
     return 1
 }
 
+# True when any --path can select test/zarr: the tree, the test root, or the zarr dir itself.
+paths_need_zarr() {
+    local p rel
+    for p in "${PATH_ARGS[@]}"; do
+        rel="${p%%::*}"; rel="${rel#./}"; rel="${rel%/}"
+        case "$rel" in
+            python/geobrix|python/geobrix/test|python/geobrix/test/zarr|python/geobrix/test/zarr/*) return 0 ;;
+        esac
+    done
+    return 1
+}
+
+# True when every pin of the [zarr_dbr19] extra, read from pyproject.toml (the single source),
+# is satisfied by what is installed in the container.
+zarr_extra_installed() {
+    docker exec -i geobrix-dev python3 - >/dev/null 2>&1 <<'PY'
+import importlib.metadata as md
+import tomllib
+
+from packaging.requirements import Requirement
+
+with open("/root/geobrix/python/geobrix/pyproject.toml", "rb") as f:
+    pins = tomllib.load(f)["project"]["optional-dependencies"]["zarr_dbr19"]
+for pin in map(Requirement, pins):
+    # PackageNotFoundError (not installed) is a non-zero exit too.
+    if not pin.specifier.contains(md.version(pin.name), prereleases=True):
+        raise SystemExit(f"{pin.name} {md.version(pin.name)} does not satisfy {pin}")
+PY
+}
+
+# Everything test/zarr needs that the base dev image does not carry. Called only when test/zarr
+# is among the selected tests, so other runs pay nothing.
+#   * the [zarr_dbr19] extra. The pins are NOT repeated here: pip installs the extra from
+#     pyproject.toml, so a pin change reaches the container without touching this script.
+#     `-e` re-resolves only that extra for the already-editable geobrix. Remove once the dev
+#     image bakes it in (requirements-dev-container.txt).
+#   * the OSS Delta Lake jars, which the manifest tests run against in a local Spark session
+#     (test/conftest.py puts them on the JVM classpath when test/zarr is collected). They are
+#     not a pip package and Spark's Ivy resolver cannot reach the dev proxy, so
+#     scripts/ci/fetch-delta-test-jars.sh fetches them with Maven and checks their sha256.
+#     A missing jar is a warning (unrelated suites still run, and the Delta-backed zarr tests
+#     fail loudly, naming it); a sha256 MISMATCH (exit 3) aborts, so tampered jars are never
+#     put on a classpath.
+ensure_zarr_test_env() {
+    if ! zarr_extra_installed; then
+        echo -e "${CYAN}📦 Installing the zarr_dbr19 extra into geobrix-dev${NC}"
+        docker exec geobrix-dev /bin/bash -c \
+            "pip3 install --break-system-packages --quiet -e '/root/geobrix/python/geobrix[zarr_dbr19]'" \
+            || echo -e "${YELLOW}⚠️  zarr_dbr19 install failed: zarr tests will fail on import${NC}"
+    fi
+    local rc=0
+    docker exec geobrix-dev /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
+    if [ "$rc" -eq 3 ]; then
+        echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
+        exit 1
+    elif [ "$rc" -ne 0 ]; then
+        echo -e "${YELLOW}⚠️  Delta jars unavailable: Delta-backed zarr tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
+    fi
+}
+
 # ---------------------------------------------------------------------------------------
 # Single run: --path given → one pytest process over exactly the paths asked for.
 # ---------------------------------------------------------------------------------------
@@ -211,6 +254,9 @@ run_single() {
 
     if paths_need_jar && ! ensure_staged_jar "$PROJECT_ROOT"; then
         exit 1
+    fi
+    if paths_need_zarr; then
+        ensure_zarr_test_env
     fi
     show_separator
     echo -e "${CYAN}Running tests...${NC}"
@@ -313,6 +359,11 @@ run_phased() {
     names+=("light");  argsets+=("$LIGHT_DIRS");         needs_jar+=(0)
 
     echo -e "${CYAN}🧩 Phases (no --path; mirrors CI): ${YELLOW}${names[*]}${NC}"
+
+    # The light phase includes test/zarr whenever the CI list does.
+    if [[ " $LIGHT_DIRS " == *" test/zarr "* ]]; then
+        ensure_zarr_test_env
+    fi
 
     local i code
     for i in "${!names[@]}"; do

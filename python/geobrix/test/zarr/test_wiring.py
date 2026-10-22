@@ -5,9 +5,13 @@ fails loudly when it is (a dir that never runs in CI, a dep missing from the CI 
 """
 
 import ast
+import importlib.util
+import os
 import re
+import shlex
 import tomllib
 from pathlib import Path
+from types import SimpleNamespace
 
 PKG = Path(__file__).resolve().parents[2]  # python/geobrix
 REPO = PKG.parents[1]
@@ -60,3 +64,59 @@ def test_ci_locks_pin_the_zarr_stack():
     ci_in = (PKG / "requirements-light-env6-ci.in").read_text()
     for name in STACK:
         assert re.search(rf"^{name}[<>=]", ci_in, re.M), f"env6 .in lacks {name}"
+
+
+def test_conftest_delta_version_matches_the_fetch_script_and_ci_runs_it():
+    script = (REPO / "scripts/ci/fetch-delta-test-jars.sh").read_text()
+    conftest = (PKG / "test/conftest.py").read_text()
+    script_version = re.search(r'^DELTA_VERSION="([^"]+)"', script, re.M).group(1)
+    conftest_version = re.search(r'^_DELTA_VERSION = "([^"]+)"', conftest, re.M).group(
+        1
+    )
+    assert script_version == conftest_version
+    for pin in ("SHA256_DELTA_SPARK", "SHA256_DELTA_STORAGE"):
+        assert re.search(rf'^{pin}="[0-9a-f]{{64}}"$', script, re.M), pin
+    assert " -C" in script, "Maven must run with strict checksums"
+    light = (REPO / ".github/actions/pyrx_build/action.yml").read_text()
+    assert "scripts/ci/fetch-delta-test-jars.sh" in light
+
+
+def test_delta_jars_reach_the_classpath_only_when_zarr_tests_run(tmp_path, monkeypatch):
+    """The root conftest hook: classpath (never spark.jars), quoted, zarr-gated, no override."""
+    spec = importlib.util.spec_from_file_location(
+        "gbx_root_conftest_under_test", PKG / "test" / "conftest.py"
+    )
+    conftest = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(conftest)
+
+    repo = tmp_path / "a repo with spaces"
+    v = conftest._DELTA_VERSION
+    jars = [
+        repo / f"io/delta/delta-spark_2.13/{v}/delta-spark_2.13-{v}.jar",
+        repo / f"io/delta/delta-storage/{v}/delta-storage-{v}.jar",
+    ]
+    for jar in jars:
+        jar.parent.mkdir(parents=True)
+        jar.write_bytes(b"")
+    monkeypatch.setenv("GBX_M2_REPO", str(repo))
+    monkeypatch.setenv("PYSPARK_SUBMIT_ARGS", "x")  # records the original for teardown
+    monkeypatch.delenv("PYSPARK_SUBMIT_ARGS")
+
+    def session(*paths):
+        return SimpleNamespace(items=[SimpleNamespace(path=p) for p in paths])
+
+    ds_test = PKG / "test" / "ds" / "test_x.py"
+    zarr_test = PKG / "test" / "zarr" / ".." / "zarr" / "test_x.py"  # needs resolving
+
+    conftest.pytest_collection_finish(session(ds_test))
+    assert "PYSPARK_SUBMIT_ARGS" not in os.environ, "no zarr test collected"
+
+    conftest.pytest_collection_finish(session(ds_test, zarr_test))
+    args = shlex.split(os.environ["PYSPARK_SUBMIT_ARGS"])  # as PySpark splits it
+    assert args[0] == "--driver-class-path" and args[2] == "pyspark-shell"
+    assert len(args) == 3 and "--jars" not in args
+    assert args[1].split(os.pathsep) == [str(j) for j in jars]
+
+    os.environ["PYSPARK_SUBMIT_ARGS"] = "--driver-memory 1g pyspark-shell"
+    conftest.pytest_collection_finish(session(zarr_test))
+    assert os.environ["PYSPARK_SUBMIT_ARGS"] == "--driver-memory 1g pyspark-shell"

@@ -54,6 +54,7 @@ after it. A test that changes such state must restore it (see the ``_isolate`` /
 
 import importlib.util
 import os
+import shlex
 from pathlib import Path
 
 # Every test dir whose modules import light-tier-only deps. Ignored in the
@@ -123,14 +124,15 @@ def pytest_collection_finish(session):
     if "PYSPARK_SUBMIT_ARGS" in os.environ:
         return
     zarr_dir = Path(__file__).resolve().parent / "zarr"
-    if not any(zarr_dir in Path(str(item.path)).parents for item in session.items):
+    if not any(zarr_dir in Path(item.path).resolve().parents for item in session.items):
         return
     jars = _delta_jars()
     if jars:
         # --driver-class-path, not --jars: --jars sets spark.jars, which the pyrx
         # "no GeoBrix JAR in the session" guardrail (and the pyvx parity JAR check)
         # read. Local mode runs the executors in the driver JVM, so the driver
-        # classpath is enough.
+        # classpath is enough. PySpark shlex-splits this string, so quote the paths.
+        classpath = shlex.quote(os.pathsep.join(map(str, jars)))
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
-            "--driver-class-path " + os.pathsep.join(map(str, jars)) + " pyspark-shell"
+            f"--driver-class-path {classpath} pyspark-shell"
         )

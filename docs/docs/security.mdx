@@ -45,6 +45,16 @@ any compile, test, or install. CI Maven invocations also pass `-C`
 (strict-checksums), so any checksum mismatch from the registry aborts the
 build instead of warning.
 
+The one Maven fetch outside the project build is for the open-source Delta Lake
+jars (`delta-spark` and `delta-storage`) that the lightweight CI job and the
+development container use to test the Zarr manifest locally. They are test-only
+and are never part of a shipped artifact. Because the PGP step runs inside the
+project build, it does not cover them; instead
+[`scripts/ci/fetch-delta-test-jars.sh`](https://github.com/databrickslabs/geobrix/blob/main/scripts/ci/fetch-delta-test-jars.sh)
+pins the Maven plugin version, runs Maven with `-C`, and checks each jar against
+a fixed sha256. It repeats that check on every run, including when the jars are
+already present, and fails on any mismatch.
+
 ### Hash-pinned Python dependencies
 
 Every Python install path that we control — CI, the development container,

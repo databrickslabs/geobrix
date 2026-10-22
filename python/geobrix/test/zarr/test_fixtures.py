@@ -2,7 +2,8 @@
 
 import numpy as np
 import pytest
-import zarr
+
+zarr = pytest.importorskip("zarr")
 
 CHUNKS = (12, 37, 72)
 
@@ -78,3 +79,21 @@ def test_three_layouts_hold_the_same_data(era5_v3_sharded, era5_v3_unsharded, er
     ref = _open(era5_v3_sharded)["t2m"][:]
     assert np.array_equal(ref, _open(era5_v3_unsharded)["t2m"][:])
     assert np.array_equal(ref, _open(era5_v2)["t2m"][:])
+
+
+def test_sharded_defaults_to_sharded_for_v3_and_unsharded_for_v2(tmp_path):
+    from databricks.labs.gbx.zarr._testing import make_era5_like
+
+    v3 = _open(make_era5_like(tmp_path / "v3.zarr"))["t2m"]
+    assert v3.metadata.zarr_format == 3 and v3.shards == (24, 74, 144)
+    v2 = _open(make_era5_like(tmp_path / "v2.zarr", zarr_format=2))["t2m"]
+    assert v2.metadata.zarr_format == 2
+
+
+def test_v2_cannot_be_sharded(tmp_path):
+    from databricks.labs.gbx.zarr._testing import make_era5_like
+
+    with pytest.raises(ValueError, match="no sharding"):
+        make_era5_like(tmp_path / "x.zarr", zarr_format=2, sharded=True)
+    with pytest.raises(ValueError, match="zarr_format"):
+        make_era5_like(tmp_path / "y.zarr", zarr_format=4)

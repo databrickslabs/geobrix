@@ -72,7 +72,7 @@ GeoBrix Light uses **explicit, runtime-pinned extras** — every install picks a
 | Classic DBR 18 | `%pip install "geobrix[light_dbr18] @ file:///Volumes/…"` | `geobrix[light_dbr18_all]` |
 | Classic DBR 19 | `%pip install "geobrix[light_dbr19] @ file:///Volumes/…"` | `geobrix[light_dbr19_all]` |
 
-*(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` in one install. `[databricks]` is added separately if needed.)*
+*(Full feature set (`_all`) = `[light_envN/_dbrN]` + `[stac]` + `[vizx]` in one install; on env 6 and DBR 19 it also includes the Zarr stack (`[zarr_env6]` / `[zarr_dbr19]`). `[databricks]` is added separately if needed.)*
 
 *The `[stac]` part of `_all` requires `requests` 2.34.2 or later, so an `_all` install raises `requests` wherever the runtime ships an older version (env 6 and DBR 19 ship 2.32.5).*
 

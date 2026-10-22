@@ -17,11 +17,8 @@ LATITUDES = 73  # 90 .. -90, descending, 2.5 degree steps
 LONGITUDES = 144  # 0 .. 357.5, 2.5 degree steps
 SHAPE = (TIME_STEPS, LATITUDES, LONGITUDES)
 INNER_CHUNKS = (12, 37, 72)
-SHARDS = (
-    24,
-    74,
-    144,
-)  # whole multiples of INNER_CHUNKS; wider than the data in latitude
+# Whole multiples of INNER_CHUNKS; the latitude shard (74) is wider than the data (73).
+SHARDS = (24, 74, 144)
 NOISE_SEED = 7
 
 TIME_UNITS = "hours since 1900-01-01"
@@ -77,7 +74,7 @@ def era5_like_dataset():
     )
 
 
-def make_era5_like(path, *, zarr_format: int = 3, sharded: bool = True) -> Path:
+def make_era5_like(path, *, zarr_format: int = 3, sharded: bool | None = None) -> Path:
     """Write the ERA5-like cube to ``path`` as a Zarr store and return the path.
 
     Layouts (``t2m`` and ``u10``; chunks always ``(12, 37, 72)``):
@@ -87,12 +84,18 @@ def make_era5_like(path, *, zarr_format: int = 3, sharded: bool = True) -> Path:
     - ``zarr_format=2``: blosc-lz4, chunk keys such as ``t2m/0.0.0``
       (``dimension_separator "."``).
 
+    ``sharded=None`` (the default) means sharded for Zarr v3 and unsharded for v2,
+    so ``make_era5_like(path, zarr_format=2)`` just works. v2 has no sharding:
+    ``sharded=True`` with ``zarr_format=2`` raises ``ValueError``.
+
     ``time`` is CF-encoded int64 ``hours since 1900-01-01`` (standard calendar);
     ``latitude`` and ``longitude`` carry ``degrees_north`` / ``degrees_east`` units.
     Metadata is not consolidated.
     """
     if zarr_format not in (2, 3):
         raise ValueError(f"zarr_format must be 2 or 3, got {zarr_format!r}")
+    if sharded is None:
+        sharded = zarr_format == 3
     if sharded and zarr_format != 3:
         raise ValueError("Zarr v2 has no sharding; use zarr_format=3 with sharded=True")
 

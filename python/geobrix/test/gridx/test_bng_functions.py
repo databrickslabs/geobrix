@@ -650,7 +650,7 @@ def test_bng_geomkringexplode_wkt(spark, bng_registered):
 
 
 def test_bng_tessellateexplode_wkt(spark, bng_registered):
-    """Tessellate explode returns cellid, core and chip; a WKT geometry gives a STRING chip."""
+    """Tessellate explode returns cellid, core and chip; the chip is WKB (BINARY) for WKT input too."""
     polygon_wkt = "POLYGON ((530000 180000, 530100 180000, 530100 180100, 530000 180100, 530000 180000))"
     result = spark.range(1).select(
         bng_registered.bng_tessellateexplode(
@@ -660,7 +660,7 @@ def test_bng_tessellateexplode_wkt(spark, bng_registered):
     assert result.dtypes == [
         ("cellid", "string"),
         ("core", "boolean"),
-        ("chip", "string"),
+        ("chip", "binary"),
     ]
     rows = result.collect()
     assert len(rows) > 0
@@ -695,6 +695,39 @@ def test_bng_tessellateexplode_wkb_chip_is_binary(spark, bng_registered):
     rows = result.collect()
     assert any(r["core"] and r["chip"] is None for r in rows)
     assert any(not r["core"] and r["chip"] is not None for r in rows)
+
+
+def test_bng_tessellateexplode_keep_core_geom_defaults_to_false(spark, bng_registered):
+    """Without keep_core_geom the core chips are NULL, as in the lightweight tier."""
+    ring = [
+        (530000.0, 180000.0),
+        (532500.0, 180000.0),
+        (532500.0, 182500.0),
+        (530000.0, 182500.0),
+        (530000.0, 180000.0),
+    ]
+    wkb = struct.pack("<BIII", 1, 3, 1, len(ring)) + b"".join(
+        struct.pack("<dd", x, y) for x, y in ring
+    )
+    df = spark.createDataFrame([(bytearray(wkb),)], "geom binary")
+    default_rows = df.select(
+        bng_registered.bng_tessellateexplode(f.col("geom"), f.lit(3))
+    ).collect()
+    explicit_rows = df.select(
+        bng_registered.bng_tessellateexplode(
+            f.col("geom"), f.lit(3), keep_core_geom=False
+        )
+    ).collect()
+    assert sorted(default_rows) == sorted(explicit_rows)
+    assert any(r["core"] and r["chip"] is None for r in default_rows)
+
+    # the two-argument SQL form (the lightweight tier's signature) is the same call
+    df.createOrReplaceTempView("bng_te_two_arg")
+    sql_rows = spark.sql(
+        "SELECT cellid, core, chip FROM bng_te_two_arg "
+        "LATERAL VIEW gbx_bng_tessellateexplode(geom, 3) t AS cellid, core, chip"
+    ).collect()
+    assert sorted(sql_rows) == sorted(default_rows)
 
 
 def test_bng_tessellateexplode_string_resolution(spark, bng_registered):

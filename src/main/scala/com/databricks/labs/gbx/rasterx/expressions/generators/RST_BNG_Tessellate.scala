@@ -36,13 +36,14 @@ case class RST_BNG_Tessellate(
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4))
 
-    override def eval(input: InternalRow): IterableOnce[InternalRow] =
+    override def eval(input: InternalRow): IterableOnce[InternalRow] = {
+        // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
+        val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         RST_ErrorHandler.safeEval(
           () => {
               val conf = exprConfExpr.eval(input).asInstanceOf[UTF8String]
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               // BNG resolution accepts Int index (±1..±6) or String key ("1km", "100m", etc.)
               // BNG.getResolution handles both Int and UTF8String/String via pattern matching.
               val resRaw = resolutionExpr.eval(input)
@@ -78,9 +79,10 @@ case class RST_BNG_Tessellate(
                   }
 
           },
-          input,
+          rawTile,
           rasterType
         )
+    }
 
 }
 

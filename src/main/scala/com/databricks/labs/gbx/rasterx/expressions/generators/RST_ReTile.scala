@@ -32,12 +32,13 @@ case class RST_ReTile(
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2), nc(3))
     override def children: Seq[Expression] = Seq(tile, tileWidthExpr, tileHeightExpr, exprConfExpr)
 
-    override def eval(input: InternalRow): IterableOnce[InternalRow] =
+    override def eval(input: InternalRow): IterableOnce[InternalRow] = {
+        // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
+        val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
               RST_ExpressionUtil.init(exprConf)
-              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
               val tileWidth = tileWidthExpr.eval(input).asInstanceOf[Int]
               val tileHeight = tileHeightExpr.eval(input).asInstanceOf[Int]
@@ -49,9 +50,10 @@ case class RST_ReTile(
                   InternalRow.fromSeq(Seq(resRow)) // Row wrapping in generator
               }
           },
-          input,
+          rawTile,
           rasterType
         )
+    }
 
 }
 

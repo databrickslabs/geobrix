@@ -89,6 +89,37 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         meta("error_message") should include("gen error")
     }
 
+    test("safeEval (generator) error tile carries the input tile's cellid") {
+        // The tile holds corrupt raster bytes, so it cannot be opened; the cellid must still be taken from
+        // the row without opening the raster.
+        val tileRow = new GenericInternalRow(Array[Any](42L, Array[Byte](1, 2, 3, 4), emptyMetadataMapData))
+        val throwingEval: () => IterableOnce[InternalRow] = () => throw new RuntimeException("gen error")
+        val errorTile = RST_ErrorHandler.safeEval(throwingEval, tileRow, BinaryType).toSeq.head.getStruct(0, 9)
+        errorTile.getLong(0) shouldBe 42L
+    }
+
+    test("safeEval (generator) error tile cellid falls back to -1 when the tile row is unusable") {
+        val throwingEval: () => IterableOnce[InternalRow] = () => throw new RuntimeException("gen error")
+        val noTile: InternalRow = null
+        val errorTile = RST_ErrorHandler.safeEval(throwingEval, noTile, BinaryType).toSeq.head.getStruct(0, 9)
+        errorTile.getLong(0) shouldBe -1L
+    }
+
+    test("safeEvalNullElement degrades a data-origin IllegalArgumentException to one NULL row") {
+        // A plain IAE raised while reading the tile is a per-row data error, not an argument guard.
+        val dataError: () => IterableOnce[InternalRow] = () => throw new IllegalArgumentException("Unrecognized raster tile struct")
+        val seq = RST_ErrorHandler.safeEvalNullElement(dataError).toSeq
+        seq should have size 1
+        seq.head.numFields shouldBe 1
+        seq.head.isNullAt(0) shouldBe true
+    }
+
+    test("safeEvalNullElement does not swallow fatal errors") {
+        intercept[OutOfMemoryError] {
+            RST_ErrorHandler.safeEvalNullElement(() => throw new OutOfMemoryError("fatal"))
+        }
+    }
+
     test("safeEvalNullElement when eval throws should return one row with a NULL element") {
         val throwingEval: () => IterableOnce[InternalRow] = () => throw new RuntimeException("gen error")
         val seq = RST_ErrorHandler.safeEvalNullElement(throwingEval).toSeq
@@ -102,11 +133,11 @@ class RST_ErrorHandlerTest extends AnyFunSuite {
         RST_ErrorHandler.safeEvalNullElement(() => oneRow).toSeq shouldBe oneRow
     }
 
-    test("safeEvalNullElement re-throws argument errors so their message reaches the caller") {
-        val ex = intercept[IllegalArgumentException] {
-            RST_ErrorHandler.safeEvalNullElement(() => throw new IllegalArgumentException("max_z must be <= 20"))
+    test("safeEvalNullElement re-throws a generator guard so its message reaches the caller") {
+        val ex = intercept[GeneratorGuardException] {
+            RST_ErrorHandler.safeEvalNullElement(() => throw new GeneratorGuardException("rst_xyzpyramid: tile-count exceeds the cap"))
         }
-        ex.getMessage should include("max_z")
+        ex.getMessage should include("tile-count")
     }
 
     test("safeEvalNullElement VirtualTileException is re-thrown not swallowed as a NULL row") {

@@ -46,14 +46,15 @@ case class RST_MakeTiles(
     override def children: scala.Seq[Expression] = Seq(tile, sizeInMBExpr, exprConfExpr)
 
     /** Overrides generator eval: subdivides tile into (Dataset, metadata) rows by sizeInMB via BalancedSubdivision; caller must release. */
-    override def eval(input: InternalRow): IterableOnce[InternalRow] =
+    override def eval(input: InternalRow): IterableOnce[InternalRow] = {
+        // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
+        val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         RST_ErrorHandler.safeEval(
           () => {
               val conf = exprConfExpr.eval(input).asInstanceOf[UTF8String]
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
 
-              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
 
               val targetSize = sizeInMBExpr.eval(input).asInstanceOf[Int]
@@ -78,9 +79,10 @@ case class RST_MakeTiles(
                       }
               }
           },
-          input,
+          rawTile,
           rasterType
         )
+    }
 
 }
 

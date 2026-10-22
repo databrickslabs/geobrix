@@ -56,7 +56,7 @@ Aggregation functions (mosaic, union, merge) skip any corrupt member tile. The a
 
 ### Generators
 
-Functions that expand a single tile into multiple rows (tessellation, tiling, pyramid generation) emit one error row when a tile fails. The error row's tile column holds an empty tile with `error_message` set; it can be filtered or audited like any other row. The exception is `gbx_rst_xyzpyramid`, whose `(z, x, y, bytes)` tile struct has no metadata to hold an error: a tile that cannot be read gives one row with a NULL `tile`.
+Functions that expand a single tile into multiple rows (tessellation, tiling, pyramid generation) emit one error row when a tile fails. The error row's tile column holds an empty tile with `error_message` set; it can be filtered or audited like any other row. The exception is the heavyweight `gbx_rst_xyzpyramid`, whose `(z, x, y, bytes)` tile struct has no metadata to hold an error: a tile that cannot be read gives one row with a NULL `tile`, while an argument error (a `max_z` above the cap, or too many tiles for the zoom range) raises its message. The lightweight `gbx_rst_xyzpyramid` instead yields no rows for a NULL raster and raises on corrupt bytes.
 
 ### Flipping data errors to hard failures for debugging
 

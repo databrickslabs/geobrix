@@ -85,4 +85,33 @@ class BNGTest extends AnyFunSuite {
         val centerCell = BNG.pointToCellID(530000.0, 180000.0, BNG.getResolution("1km"))
         candidates should contain(centerCell)
     }
+
+    test("a border cell promoted to core keeps a NULL chip when keepCoreGeom is false (no NPE)") {
+        // Force the promotion branch (`adjusted.equalsExact(cellGeom, 0.1)`): clipping returns the whole cell.
+        // JTS overlay re-winds ring vertices, so a real clip rarely reproduces the cell exactly; the seam makes
+        // the branch reachable for a test.
+        val cell = BNG.parse("TQ3080")
+        val cellGeom = BNG.cellIdToGeometry(cell)
+
+        val dropped = BNG.borderChips(Seq(cell), cellGeom, keepCoreGeom = false, clip = (c, _) => c)
+        dropped.map(c => (c._1, c._2, c._3 == null)) shouldBe Seq((cell, true, true))
+
+        val kept = BNG.borderChips(Seq(cell), cellGeom, keepCoreGeom = true, clip = (c, _) => c)
+        kept.map(c => (c._1, c._2)) shouldBe Seq((cell, true))
+        kept.head._3.equalsExact(cellGeom, 1e-9) shouldBe true
+    }
+
+    test("borderChips drops cells the geometry does not touch and keeps clipped border cells") {
+        val cell = BNG.parse("TQ3080")
+        val cellGeom = BNG.cellIdToGeometry(cell)
+        val half = new WKTReader().read("POLYGON((530000 180000, 530500 180000, 530500 181000, 530000 181000, 530000 180000))")
+        val far = new WKTReader().read("POLYGON((100 100, 200 100, 200 200, 100 200, 100 100))")
+
+        BNG.borderChips(Seq(cell), far, keepCoreGeom = false) shouldBe empty
+        val clipped = BNG.borderChips(Seq(cell), half, keepCoreGeom = false)
+        clipped.map(c => (c._1, c._2)) shouldBe Seq((cell, false))
+        clipped.head._3.getArea shouldBe (500.0 * 1000.0 +- 1e-6)
+        cellGeom.getArea shouldBe (1000.0 * 1000.0 +- 1e-6)
+    }
+
 }

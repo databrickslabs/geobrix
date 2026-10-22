@@ -106,7 +106,10 @@ object functions extends Serializable {
         ColumnAdapter(BNG_GeometryKRingExplode.name, Seq(geom, resolution, k, mode, coverage))
     def bng_kloopexplode(cellId: Column, k: Column): Column = ColumnAdapter(BNG_KLoopExplode.name, Seq(cellId, k))
     def bng_kringexplode(cellId: Column, k: Column): Column = ColumnAdapter(BNG_KRingExplode.name, Seq(cellId, k))
-    def bng_tessellateexplode(geom: Column, resolution: Column): Column = ColumnAdapter(BNG_TessellateExplode.name, Seq(geom, resolution, lit(true)))
+    /** `keepCoreGeom` defaults to false: a core cell's chip is NULL, as in the lightweight tier. */
+    def bng_tessellateexplode(geom: Column, resolution: Column): Column = bng_tessellateexplode(geom, resolution, lit(false))
+    def bng_tessellateexplode(geom: Column, resolution: Column, keepCoreGeom: Column): Column =
+        ColumnAdapter(BNG_TessellateExplode.name, Seq(geom, resolution, keepCoreGeom))
 
     // Scalar-literal overloads — so users can pass plain values for non-Column params.
     // Resolution accepts Int (±1..±6 index) or String ("1km", "100m"). k is Int.
@@ -150,5 +153,9 @@ object functions extends Serializable {
     def bng_kringexplode(cellId: Column, k: Int): Column = bng_kringexplode(cellId, lit(k))
     def bng_tessellateexplode(geom: Column, resolution: Int): Column = bng_tessellateexplode(geom, lit(resolution))
     def bng_tessellateexplode(geom: Column, resolution: String): Column = bng_tessellateexplode(geom, lit(resolution))
+    def bng_tessellateexplode(geom: Column, resolution: Int, keepCoreGeom: Boolean): Column =
+        bng_tessellateexplode(geom, lit(resolution), lit(keepCoreGeom))
+    def bng_tessellateexplode(geom: Column, resolution: String, keepCoreGeom: Boolean): Column =
+        bng_tessellateexplode(geom, lit(resolution), lit(keepCoreGeom))
 
 }

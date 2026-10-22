@@ -104,32 +104,34 @@ SELECT gbx_bng_kloop('TQ3080', 1) AS kloop;
 
 
 def bng_kringexplode_sql_example():
-    """Explode k-ring into one row per cell via SQL LATERAL.
+    """Explode k-ring into one row per cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation for both tiers: the light UDTF
-    (``gbx_bng_kringexplode``) and the heavy CollectionGenerator both accept
-    this form.  Returns 9 rows (center TQ3080 + 8 neighbours) at k=1.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_bng_kringexplode(...)`` -- see the Python
+    (light) tab.  Returns 9 rows (center TQ3080 + 8 neighbours) at k=1.
     Each row carries a single ``cellid STRING`` column.
     """
     return """
-SELECT t.*
-FROM (SELECT 'TQ3080' AS cellid) src,
-LATERAL gbx_bng_kringexplode(src.cellid, 1) t;
+SELECT t.cellid
+FROM (SELECT 'TQ3080' AS cell) src
+LATERAL VIEW gbx_bng_kringexplode(src.cell, 1) t AS cellid;
 """
 
 
 def bng_kloopexplode_sql_example():
-    """Explode k-loop (hollow ring) into one row per cell via SQL LATERAL.
+    """Explode k-loop (hollow ring) into one row per cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation for both tiers: the light UDTF
-    (``gbx_bng_kloopexplode``) and the heavy CollectionGenerator both accept
-    this form.  Returns 8 rows (centre excluded) at k=1.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_bng_kloopexplode(...)`` -- see the Python
+    (light) tab.  Returns 8 rows (centre excluded) at k=1.
     Each row carries a single ``cellid STRING`` column.
     """
     return """
-SELECT t.*
-FROM (SELECT 'TQ3080' AS cellid) src,
-LATERAL gbx_bng_kloopexplode(src.cellid, 1) t;
+SELECT t.cellid
+FROM (SELECT 'TQ3080' AS cell) src
+LATERAL VIEW gbx_bng_kloopexplode(src.cell, 1) t AS cellid;
 """
 
 
@@ -167,34 +169,39 @@ SELECT gbx_bng_geomkloop(
 
 
 def bng_geomkringexplode_sql_example():
-    """Explode geometry k-ring into one row per cell via SQL LATERAL.
+    """Explode geometry k-ring into one row per cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation for both tiers.  Geometry
-    MUST be in EPSG:27700 (BNG eastings/northings) — WGS84 lon/lat yields
-    empty results.  At res=3 (1km) with k=1, the boundary-out band of the
-    3km × 3km polygon expands by one ring to 24 cells (interior centre not filled).
-    The optional mode parameter controls boundary classification (default 'boundary-out').
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list); the lightweight tier's table function is called as
+    ``FROM t, LATERAL gbx_bng_geomkringexplode(...)`` -- see the Python (light)
+    tab.  Geometry MUST be in EPSG:27700 (BNG eastings/northings) -- WGS84
+    lon/lat yields empty results.  At res=3 (1km) with k=1, the boundary-out
+    band of the 3km x 3km polygon expands by one ring to 24 cells (interior
+    centre not filled).  The optional mode parameter controls boundary
+    classification (default 'boundary-out').
     """
     return """
-SELECT t.*
-FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src,
-LATERAL gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t;
+SELECT t.cellid
+FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src
+LATERAL VIEW gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;
 """
 
 
 def bng_geomkloopexplode_sql_example():
-    """Explode geometry k-loop (hollow ring) into one row per cell via SQL LATERAL.
+    """Explode geometry k-loop (hollow ring) into one row per cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation for both tiers.  Geometry
-    MUST be in EPSG:27700 (BNG eastings/northings) — WGS84 lon/lat yields
-    empty results.  At res=3 (1km) with k=1, the outer hollow ring
-    of the 3km × 3km polygon polyfill contains 16 cells.
-    The optional mode parameter controls boundary classification (default 'boundary-out').
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list); the lightweight tier's table function is called as
+    ``FROM t, LATERAL gbx_bng_geomkloopexplode(...)`` -- see the Python (light)
+    tab.  Geometry MUST be in EPSG:27700 (BNG eastings/northings) -- WGS84
+    lon/lat yields empty results.  At res=3 (1km) with k=1, the outer hollow
+    ring of the 3km x 3km polygon polyfill contains 16 cells.  The optional
+    mode parameter controls boundary classification (default 'boundary-out').
     """
     return """
-SELECT t.*
-FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src,
-LATERAL gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t;
+SELECT t.cellid
+FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src
+LATERAL VIEW gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;
 """
 
 
@@ -232,18 +239,22 @@ SELECT gbx_bng_tessellate(
 
 
 def bng_tessellateexplode_sql_example():
-    """Explode tessellation into one row per chip via SQL LATERAL (light-tier form).
+    """Explode tessellation into one row per chip (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation for both tiers.  Geometry
-    MUST be in EPSG:27700 (BNG eastings/northings) — WGS84 lon/lat yields
-    empty results.  The lightweight UDTF returns three columns per row:
-    ``cellid STRING``, ``core BOOLEAN``, ``chip BINARY`` — 9 rows for
-    the 3km × 3km BNG polygon at 1km resolution.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list); the lightweight tier's table function is called as
+    ``FROM t, LATERAL gbx_bng_tessellateexplode(...)`` -- see the Python (light)
+    tab.  Geometry MUST be in EPSG:27700 (BNG eastings/northings) -- WGS84
+    lon/lat yields empty results.  Both tiers return three columns per row:
+    ``cellid STRING``, ``core BOOLEAN``, ``chip BINARY`` (WKB) -- 9 rows for
+    the 3km x 3km BNG polygon at 1km resolution.  The optional third argument,
+    ``keep_core_geom`` (default false), keeps the cell geometry as the chip of
+    core cells; by default their chip is NULL.
     """
     return """
-SELECT t.*
-FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src,
-LATERAL gbx_bng_tessellateexplode(src.geom, 3) t;
+SELECT t.cellid, t.core, t.chip
+FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src
+LATERAL VIEW gbx_bng_tessellateexplode(src.geom, 3) t AS cellid, core, chip;
 """
 
 

@@ -4,7 +4,7 @@ import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigEx
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.BoundingBox
 import com.databricks.labs.gbx.rasterx.tile.TileMath
-import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
+import com.databricks.labs.gbx.rasterx.util.{GeneratorGuardException, RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
@@ -60,18 +60,22 @@ case class RST_XYZPyramid(
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5), nc(6), nc(7))
 
-    /** The `tile` column is the `(z, x, y, bytes)` struct, which cannot hold an error tile, so a data failure
-      * emits one row with a NULL `tile`; argument errors (the `min_z` / `max_z` / tile-count guards) are re-thrown. */
-    override def eval(input: InternalRow): IterableOnce[InternalRow] =
-        RST_ErrorHandler.safeEvalNullElement(() => doEval(input))
+    /** Arguments of one call, read and validated before the raster is touched. */
+    private case class Args(minZ: Int, maxZ: Int, format: String, size: Int, resampling: String, rescale: String)
 
-    private def doEval(input: InternalRow): IterableOnce[InternalRow] = {
-        val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
-        RST_ExpressionUtil.init(exprConf)
-
+    /** The `tile` column is the `(z, x, y, bytes)` struct, which cannot hold an error tile. The argument guards
+      * (`min_z` / `max_z` / null checks) run first and raise their message; a failure while reading or rendering
+      * the raster then emits one row with a NULL `tile`, except the tile-count guard, which is re-thrown. */
+    override def eval(input: InternalRow): IterableOnce[InternalRow] = {
         val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         if (rawTile == null) return Iterator.empty
 
+        val args = readArgs(input)
+        RST_ErrorHandler.safeEvalNullElement(() => doEval(rawTile, args))
+    }
+
+    /** Argument guards; these need no dataset, so their errors must reach the caller. */
+    private def readArgs(input: InternalRow): Args = {
         val minZ = readInt(minZExpr.eval(input), "min_z")
         val maxZ = readInt(maxZExpr.eval(input), "max_z")
         require(minZ >= 0, s"rst_xyzpyramid: min_z must be >= 0; got $minZ")
@@ -85,6 +89,13 @@ case class RST_XYZPyramid(
         val size = readInt(sizeExpr.eval(input), "size")
         val resampling = Option(resamplingExpr.eval(input)).map(_.asInstanceOf[UTF8String].toString).getOrElse("bilinear")
         val rescale = Option(rescaleExpr.eval(input)).map(_.asInstanceOf[UTF8String].toString).getOrElse("auto")
+        Args(minZ, maxZ, format, size, resampling, rescale)
+    }
+
+    private def doEval(rawTile: InternalRow, args: Args): IterableOnce[InternalRow] = {
+        val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
+        RST_ExpressionUtil.init(exprConf)
+        val Args(minZ, maxZ, format, size, resampling, rescale) = args
 
         val (_, ds, options) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
         try {
@@ -106,7 +117,7 @@ case class RST_XYZPyramid(
             while (z <= maxZ) {
                 total += TileMath.intersectingTileCount(lonMin, latMin, lonMax, latMax, z)
                 if (total > RST_XYZPyramid.MAX_TILE_COUNT) {
-                    throw new IllegalArgumentException(
+                    throw new GeneratorGuardException(
                       s"rst_xyzpyramid: tile-count across zoom range [$minZ, $maxZ] exceeds " +
                       s"${RST_XYZPyramid.MAX_TILE_COUNT} (raster extent is too large for that pyramid depth). " +
                       s"Lower max_z, or upstream-resample the raster before pyramidizing."

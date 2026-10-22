@@ -7,16 +7,17 @@ import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.codegen.CodegenFallback
-import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expression}
+import org.apache.spark.sql.catalyst.expressions.{CollectionGenerator, Expression, Literal}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.Geometry
 
-/** Generator that tessellates a geometry into BNG cells and explodes one row per chip. Arguments: geom, resolution, keepCoreGeom.
+/** Generator that tessellates a geometry into BNG cells and explodes one row per chip. Arguments: geom, resolution[, keepCoreGeom].
+  * `keepCoreGeom` is optional and defaults to false (as in `gbx_bng_tessellate` and the lightweight tier).
   *
-  * Output columns: `cellid` STRING, `core` BOOLEAN, `chip`. The chip type follows the input geometry type:
-  * BINARY (WKB) for a BINARY geometry, STRING (WKT) for a STRING geometry. With `keepCoreGeom` false a core
-  * cell's chip is NULL; border chips always carry their geometry. */
+  * Output columns: `cellid` STRING, `core` BOOLEAN, `chip` BINARY. The chip is WKB whether the geometry is given as WKB
+  * or WKT, like the chips of `gbx_bng_tessellate`. With `keepCoreGeom` false a core cell's chip is NULL; border
+  * chips always carry their geometry. */
 case class BNG_TessellateExplode(
     geom: Expression,
     resolution: Expression,
@@ -29,17 +30,11 @@ case class BNG_TessellateExplode(
     override def inline: Boolean = false
     override def children: Seq[Expression] = Seq(geom, resolution, keepCoreGeom)
 
-    /** The chip is encoded like the input geometry: WKT text for a STRING input, WKB bytes otherwise. */
-    private def chipType: DataType = geom.dataType match {
-        case StringType => StringType
-        case _          => BinaryType
-    }
-
     override def elementSchema: StructType = StructType(
       Seq(
         StructField("cellid", StringType),
         StructField("core", BooleanType),
-        StructField("chip", chipType)
+        StructField("chip", BinaryType)
       )
     )
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1), nc(2))
@@ -75,17 +70,13 @@ case class BNG_TessellateExplode(
                 case StringType => JTS.fromWKT(geomRaw.asInstanceOf[UTF8String].toString)
                 case BinaryType => JTS.fromWKB(geomRaw.asInstanceOf[Array[Byte]])
             }
-            val wktChips = geom.dataType == StringType
             BNG
                 .tessellate(geometryVal, resolutionVal, keepCoreGeomVal)
                 .map(c => {
                     val cellId = UTF8String.fromString(BNG.format(c._1))
                     // tessellate already leaves core chips without a geometry when keepCoreGeom is false;
                     // border chips always carry theirs.
-                    val chip =
-                        if (c._3 == null) null
-                        else if (wktChips) UTF8String.fromString(JTS.toWKT(c._3))
-                        else JTS.toWKB(c._3)
+                    val chip = if (c._3 == null) null else JTS.toWKB(c._3)
                     InternalRow.fromSeq(Seq(cellId, c._2, chip))
                 })
         }
@@ -98,7 +89,17 @@ case class BNG_TessellateExplode(
 object BNG_TessellateExplode extends WithExpressionInfo {
 
     override def name: String = "gbx_bng_tessellateexplode"
-    override def builder(): FunctionBuilder = (c: Seq[Expression]) => new BNG_TessellateExplode(c(0), c(1), c(2))
+    /** Accepts the two-argument form gbx_bng_tessellateexplode(geom, resolution) -- keepCoreGeom defaults to
+      * false, the signature the lightweight tier exposes and `BNG_Tessellate` already accepts -- as well as the
+      * explicit three-argument form. */
+    override def builder(): FunctionBuilder = {
+        case Seq(g, r)    => new BNG_TessellateExplode(g, r, Literal(false))
+        case Seq(g, r, k) => new BNG_TessellateExplode(g, r, k)
+        case other        =>
+            throw new IllegalArgumentException(
+              s"$name expects 2 or 3 arguments (geom, resolution[, keepCoreGeom]); got ${other.length}"
+            )
+    }
 
 
 }

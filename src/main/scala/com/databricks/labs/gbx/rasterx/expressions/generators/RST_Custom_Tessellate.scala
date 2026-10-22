@@ -41,13 +41,14 @@ case class RST_Custom_Tessellate(
     override protected def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression =
         copy(nc(0), nc(1), nc(2), nc(3), nc(4), nc(5))
 
-    override def eval(input: InternalRow): IterableOnce[InternalRow] =
+    override def eval(input: InternalRow): IterableOnce[InternalRow] = {
+        // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
+        val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         RST_ErrorHandler.safeEval(
           () => {
               val conf = exprConfExpr.eval(input).asInstanceOf[UTF8String]
               val exprConf = ExpressionConfig.fromB64(conf.toString)
               RST_ExpressionUtil.init(exprConf)
-              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val gridSys = Custom_GridSpec.systemFromRow(gridExpr.eval(input).asInstanceOf[InternalRow])
               val resolution = resolutionExpr.eval(input).asInstanceOf[Int]
               val assignment = assignmentExpr.eval(input).asInstanceOf[UTF8String].toString
@@ -71,9 +72,10 @@ case class RST_Custom_Tessellate(
                       InternalRow.fromSeq(Seq(tile))
                   }
           },
-          input,
+          rawTile,
           rasterType
         )
+    }
 
 }
 

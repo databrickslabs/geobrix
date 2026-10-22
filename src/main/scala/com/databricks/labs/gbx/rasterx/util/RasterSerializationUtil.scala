@@ -8,6 +8,8 @@ import org.apache.spark.sql.types.DataType
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.Dataset
 
+import scala.util.Try
+
 /** Raised by [[RasterSerializationUtil.guardMaterialized]] when a virtual (non-materialized)
   * tile is passed to a heavyweight rst_* function. Extends IllegalArgumentException so it
   * remains an IAE for callers that match on that type, but is distinct from ordinary per-row
@@ -53,6 +55,14 @@ object RasterSerializationUtil {
                 "lightweight tier first — call the lightweight rst_* with materialize=True, or write it " +
                 "out and read it back — then pass the result to the heavyweight function.")
         }
+
+    /** Cell id of a tile row (v1 or v2 layout), read without opening the raster; -1 when the row is
+      * null, is not a tile, or has a NULL cell id. */
+    def cellIdOf(row: InternalRow): Long =
+        Try {
+            val lyt = tileLayout(row) // a null row throws here and falls through to -1
+            if (row.isNullAt(lyt.cellid)) -1L else row.getLong(lyt.cellid)
+        }.getOrElse(-1L)
 
     /** Deserialize a tile row to (cellId, Dataset, metadata); opens the raster via RasterDriver. */
     def rowToTile(row: InternalRow, rasterDT: DataType): (Long, Dataset, Map[String, String]) = {

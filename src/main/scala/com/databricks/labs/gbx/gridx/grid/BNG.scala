@@ -809,6 +809,47 @@ object BNG extends GridSystem {
         result
     }
 
+    /**
+      * Chips for the border cells of a tessellation: each candidate cell is clipped to `geometry`; a cell
+      * the geometry covers entirely is promoted to a core cell. Empty clips are dropped.
+      *
+      * With `keepCoreGeom` false a promoted cell has no geometry, so its chip is `null` and must survive
+      * the empty-clip filter (a `null` chip is not an empty one).
+      *
+      * @param clip
+      *   how a cell polygon is clipped to the geometry; overridable so a test can force the promotion branch.
+      */
+    private[grid] def borderChips(
+        cells: Seq[Long],
+        geometry: Geometry,
+        keepCoreGeom: Boolean,
+        clip: (Geometry, Geometry) => Geometry = (cell, geom) => cell.intersection(geom)
+    ): Seq[(Long, Boolean, Geometry)] = {
+        cells.map(cell => {
+            val cellGeom = cellIdToGeometry(cell)
+            val intersect = clip(cellGeom, geometry)
+            if (intersect.isEmpty) (cell, false, intersect)
+            else {
+                val adjusted =
+                    if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
+                        intersect.difference(cellGeom.getBoundary)
+                    } else {
+                        intersect
+                    }
+                // Tolerance is set to 0.1 to account for floating point precision issues
+                // BNG coordinates are integers, so we can use a relatively large tolerance
+                // as coordinates will be in meters and tolerance is a fraction of a meter.
+                val isCore = adjusted.equalsExact(cellGeom, 0.1)
+                if (isCore) {
+                    if (keepCoreGeom) (cell, true, cellGeom)
+                    else (cell, true, null)
+                } else {
+                    (cell, false, adjusted)
+                }
+            }
+        }).filterNot(c => c._3 != null && c._3.isEmpty)
+    }
+
     // TODO: This needs some optimization, as now it is moved to BNG and we can
     //      avoid generic logic that was introducing some overhead.
     def tessellate(
@@ -846,29 +887,7 @@ object BNG extends GridSystem {
             val coreGeom = if (keepCoreGeom) cellIdToGeometry(cell) else null
             (cell, true, coreGeom)
         })
-        val borderChips = borderIndices.map(cell => {
-            val cellGeom = cellIdToGeometry(cell)
-            val intersect = cellGeom.intersection(geometry)
-            if (intersect.isEmpty) (cell, false, intersect)
-            else {
-                val adjusted =
-                    if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
-                        intersect.difference(cellGeom.getBoundary)
-                    } else {
-                        intersect
-                    }
-                // Tolerance is set to 0.1 to account for floating point precision issues
-                // BNG coordinates are integers, so we can use a relatively large tolerance
-                // as coordinates will be in meters and tolerance is a fraction of a meter.
-                val isCore = adjusted.equalsExact(cellGeom, 0.1)
-                if (isCore) {
-                    if (keepCoreGeom) (cell, true, cellGeom)
-                    else (cell, true, null)
-                } else {
-                    (cell, false, adjusted)
-                }
-            }
-        }).filterNot(_._3.isEmpty)
+        val borderChips = this.borderChips(borderIndices, geometry, keepCoreGeom)
 
         (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getGeometryType == inGeomType)
     }

@@ -452,7 +452,7 @@ def bng_kringexplode(cellid: ColLike, k: ColLike) -> Column:
 
 
 def bng_tessellateexplode(
-    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = True
+    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = False
 ) -> Column:
     """Explode the tessellation of the geometry into one row per BNG cell.
 
@@ -460,12 +460,13 @@ def bng_tessellateexplode(
         geom: Geometry column (WKT or WKB).
         resolution: BNG resolution — integer index ±1..±6 or string key.
         keep_core_geom: If True, core cells carry their cell geometry in ``chip``;
-            if False their ``chip`` is NULL. Border cells always carry their geometry.
+            if False (the default, as in the lightweight tier) their ``chip`` is NULL.
+            Border cells always carry their geometry.
 
     Returns:
         Generator column with the columns ``cellid`` (STRING), ``core`` (BOOLEAN) and
-        ``chip`` (BINARY for a WKB geometry, STRING for a WKT geometry). Select it
-        directly; it expands to the three columns.
+        ``chip`` (BINARY, WKB, for a WKB or a WKT geometry). Select it directly; it
+        expands to the three columns.
     """
     return f.call_function(
         "gbx_bng_tessellateexplode",

@@ -272,13 +272,14 @@ def test_bng_full_parity(spark_with_jar):
         }
 
     def explode_sets_heavy():
-        """Heavy has no table-function *explode (the heavy `gbx_bng_*explode` SQL
-        names are not array-returning generators — its Python wrappers explode the
-        underlying ARRAY function). The semantic equivalent of light's `*explode`
-        UDTF output is exactly the heavy ARRAY function it would explode, so compare
-        light's exploded cellid set against the heavy array's cellid set: kringexplode
-        <-> gbx_bng_kring, kloopexplode <-> gbx_bng_kloop, geomk*explode <->
-        gbx_bng_geomk*, tessellateexplode <-> gbx_bng_tessellate (chip cellids)."""
+        """Heavy `gbx_bng_*explode` are Catalyst generators (select list or LATERAL VIEW),
+        not table-valued functions, so `FROM t, LATERAL f(...)` reaches only the light
+        UDTF. Here the semantic equivalent of light's `*explode` output is the heavy
+        ARRAY function the generator would explode, so compare light's exploded cellid
+        set against the heavy array's cellid set: kringexplode <-> gbx_bng_kring,
+        kloopexplode <-> gbx_bng_kloop, geomk*explode <-> gbx_bng_geomk*,
+        tessellateexplode <-> gbx_bng_tessellate (chip cellids). The generator's own
+        columns are compared in test_bng_tessellateexplode_columns_parity."""
         hx.register(spark)
 
         def arr(call):
@@ -410,14 +411,15 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
     """Heavy ``gbx_bng_tessellateexplode`` returns the same columns and values as light.
 
     Heavy declared a single ``cellid`` column while emitting ``(cellid, core, chip)``, so
-    ``core`` and ``chip`` were silently dropped. The chip type follows the input geometry
-    type in the heavy tier (BINARY for WKB, STRING for WKT); light always returns BINARY.
+    ``core`` and ``chip`` were silently dropped. The chip is WKB (BINARY) in both tiers,
+    whatever the input geometry type, like ``gbx_bng_tessellate``.
 
     The fixture is a 2.5 km grid-aligned box at 1 km resolution, which has both a core cell
     (chip NULL when ``keep_core_geom`` is false) and border cells (chip geometry).
 
     Light is a table-valued function (``FROM t, LATERAL f(...)``); heavy is a Catalyst
-    generator, reached through the select list or ``LATERAL VIEW``.
+    generator, reached through the select list or ``LATERAL VIEW``. Both take
+    ``(geom, resolution)``; heavy also takes an optional ``keep_core_geom`` (default false).
     """
     from databricks.labs.gbx.gridx.bng import functions as hx
     from databricks.labs.gbx.pygx import _bng
@@ -453,6 +455,9 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
 
     # ---- HEAVY ----
     hx.register(spark)
+    heavy_two_arg_df = spark.sql(
+        "SELECT gbx_bng_tessellateexplode(wkb, res) FROM bng_te_parity"
+    )
     heavy_wkb_df = spark.sql(
         "SELECT gbx_bng_tessellateexplode(wkb, res, false) FROM bng_te_parity"
     )
@@ -463,6 +468,7 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
         "SELECT cellid, core, chip FROM bng_te_parity "
         "LATERAL VIEW gbx_bng_tessellateexplode(wkb, res, false) t AS cellid, core, chip"
     )
+    heavy_two_arg = by_cell(heavy_two_arg_df)
     heavy_wkb_shape = shape(heavy_wkb_df)
     heavy_wkt_shape = shape(heavy_wkt_df)
     heavy_wkb = by_cell(heavy_wkb_df)
@@ -479,17 +485,19 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
         f"heavy (WKB input) columns differ from light:\n  light={light_shape}\n"
         f"  heavy={heavy_wkb_shape}"
     )
-    assert heavy_wkt_shape == [
-        ("cellid", "string"),
-        ("core", "boolean"),
-        ("chip", "string"),
-    ], f"heavy (WKT input) chip must be STRING: {heavy_wkt_shape}"
+    assert (
+        heavy_wkt_shape == light_shape
+    ), f"heavy (WKT input) columns differ from light: {heavy_wkt_shape}"
+    assert shape(heavy_two_arg_df) == light_shape
 
     # === cell set, core flags, chip nullness (WKB input) ===
     assert set(heavy_wkb) == set(
         light
     ), f"cell-set mismatch:\n  light={sorted(light)}\n  heavy={sorted(heavy_wkb)}"
     assert heavy_lateral == heavy_wkb, "LATERAL VIEW and select-list forms must agree"
+    assert (
+        heavy_two_arg == heavy_wkb
+    ), "heavy (geom, res) must equal (geom, res, false): keep_core_geom defaults to false"
     for cell, (lcore, lchip) in light.items():
         hcore, hchip = heavy_wkb[cell]
         assert (
@@ -501,16 +509,14 @@ def test_bng_tessellateexplode_columns_parity(spark_with_jar):
         if lchip is not None:
             _assert_geom_parity(lchip, hchip, f"tessellateexplode chip cell={cell}")
 
-    # === WKT input: heavy chip is WKT text; the geometry matches light's WKB chip ===
+    # === WKT input: same chips as WKB input (the chip is WKB either way) ===
     assert set(heavy_wkt) == set(light)
     for cell, (lcore, lchip) in light.items():
         hcore, hchip = heavy_wkt[cell]
         assert hcore == lcore
         assert (lchip is None) == (hchip is None)
         if lchip is not None:
-            assert equals_exact(
-                from_wkb(bytes(lchip)).normalize(), from_wkt(hchip).normalize(), 1e-6
-            ), f"WKT-input chip geometry differs for {cell}"
+            _assert_geom_parity(lchip, hchip, f"WKT-input chip cell={cell}")
 
 
 # --- mosaic#434 lock-in -----------------------------------------------------------------------

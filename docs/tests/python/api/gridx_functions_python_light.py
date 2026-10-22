@@ -912,9 +912,9 @@ def bng_tessellateexplode_python_light_example(spark):
     At res=3 (1km): 9 rows, each with ``cellid STRING``, ``core BOOLEAN``,
     ``chip BINARY``.  The TQ3080 row has ``core=true, chip=null`` (full cell).
 
-    Note: the heavy CollectionGenerator exposes only ``cellid`` via SQL LATERAL
-    (``elementSchema`` bug); the light UDTF correctly returns all three fields
-    and is the preferred form here.
+    The heavyweight tier returns the same three columns but is a generator, used
+    with ``LATERAL VIEW`` (see the SQL tab); ``FROM t, LATERAL f(...)`` calls the
+    lightweight table function.
     """
     df = _get_bng_polygons_df(spark)
     df.createOrReplaceTempView("_bng_polygons_tmp")

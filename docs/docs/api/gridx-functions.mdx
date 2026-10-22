@@ -164,17 +164,27 @@ The following rules apply to **all BNG functions** (`gbx_bng_*`):
 - **`bng_cellarea` returns square kilometres** — not square metres. A 1km cell returns `1.0`.
 - **Cell-id format** — standard BNG grid references (e.g. `'TQ3080'`). At resolution 3 (1km), the format is two letters + four digits; the resolution level is encoded in the string length.
 
-### BNG `*explode` generators — SQL LATERAL only
+### BNG `*explode` generators — SQL only, one form per tier
 
-The five BNG explode generators (`bng_kringexplode`, `bng_kloopexplode`, `bng_geomkringexplode`, `bng_geomkloopexplode`, `bng_tessellateexplode`) are Python UDTFs in the lightweight tier — they have **no Python DataFrame Column form**. Calling them as Column expressions raises `NotImplementedError`. Use SQL `LATERAL` for both tiers:
+The five BNG explode generators (`bng_kringexplode`, `bng_kloopexplode`, `bng_geomkringexplode`, `bng_geomkloopexplode`, `bng_tessellateexplode`) are Python UDTFs in the lightweight tier — they have **no Python DataFrame Column form**. Calling them as Column expressions raises `NotImplementedError`. Call them from SQL; the form depends on the tier.
+
+The lightweight tier registers **table functions**, called in the `FROM` clause with `LATERAL`:
 
 ```sql
 SELECT t.*
-FROM (SELECT 'TQ3080' AS cellid, 1 AS k) src,
-LATERAL gbx_bng_kringexplode(src.cellid, src.k) t
+FROM (SELECT 'TQ3080' AS cell, 1 AS k) src,
+LATERAL gbx_bng_kringexplode(src.cell, src.k) t
 ```
 
-The Python (light) tab for these functions shows the same `spark.sql("... LATERAL ...")` invocation.
+The heavyweight tier registers **generators**, called with `LATERAL VIEW` (or in the select list). A generator is not a table function, so the `FROM ..., LATERAL f(...)` form above does not resolve to it:
+
+```sql
+SELECT t.cellid
+FROM (SELECT 'TQ3080' AS cell, 1 AS k) src
+LATERAL VIEW gbx_bng_kringexplode(src.cell, src.k) t AS cellid
+```
+
+The Python (light) tab of each function shows the same `spark.sql("... LATERAL ...")` invocation.
 
 ---
 
@@ -1472,15 +1482,15 @@ Explode tessellated cells into separate rows.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming UDTF — one output row per tessellated cell, each carrying the cell ID and chip geometry (WKB in EPSG:27700, no SRID).
 :::
 
-**Signature:** `bng_tessellateexplode(geometry: Column, resolution: Column): Column`
+**Signature:** `bng_tessellateexplode(geometry: Column, resolution: Column[, keep_core_geom: Column]): Column`
 
 **Parameters:**
 - `geometry` - Input geometry to tessellate
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+- `keep_core_geom` - Optional, heavyweight tier only (default `false`). When `true`, a core cell's `chip` is the cell geometry; when `false` it is NULL. Border cells always carry their clipped geometry. The lightweight tier behaves as `false`
 
 **Returns:**
-- One row per cell with the columns `cellid` (STRING), `core` (BOOLEAN) and `chip`
-- `chip` is BINARY (WKB); the heavyweight tier returns a STRING (WKT) chip when the geometry is given as WKT. A core cell's `chip` is NULL unless the core geometry is kept
+- One row per cell with the columns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB in EPSG:27700), in both tiers and for WKB or WKT input
 
 <FunctionExamples
   name="bng_tessellateexplode"

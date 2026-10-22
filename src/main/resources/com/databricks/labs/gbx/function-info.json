@@ -1862,7 +1862,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_geomkloopexplode": {
-      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src LATERAL VIEW gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
       "bindings": [
         "sql",
@@ -1882,7 +1882,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_geomkringexplode": {
-      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src LATERAL VIEW gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;",
       "usage_args": "geom, resolution, k, [mode], [coverage]",
       "bindings": [
         "sql",
@@ -1902,7 +1902,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_kloopexplode": {
-      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'TQ3080' AS cellid) src, LATERAL gbx_bng_kloopexplode(src.cellid, 1) t;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src LATERAL VIEW gbx_bng_kloopexplode(src.cell, 1) t AS cellid;",
       "usage_args": "cellid, k",
       "bindings": [
         "sql",
@@ -1922,7 +1922,7 @@
       "since": "0.2.0"
     },
     "gbx_bng_kringexplode": {
-      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'TQ3080' AS cellid) src, LATERAL gbx_bng_kringexplode(src.cellid, 1) t;",
+      "examples": "Examples:\n      > SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src LATERAL VIEW gbx_bng_kringexplode(src.cell, 1) t AS cellid;",
       "usage_args": "cellid, k",
       "bindings": [
         "sql",
@@ -1964,8 +1964,8 @@
       "since": "0.2.0"
     },
     "gbx_bng_tessellateexplode": {
-      "examples": "Examples:\n      > SELECT t.* FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src, LATERAL gbx_bng_tessellateexplode(src.geom, 3) t;",
-      "usage_args": "geom, resolution, keep_core_geom",
+      "examples": "Examples:\n      > SELECT t.cellid, t.core, t.chip FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src LATERAL VIEW gbx_bng_tessellateexplode(src.geom, 3) t AS cellid, core, chip;",
+      "usage_args": "geom, resolution, [keep_core_geom]",
       "bindings": [
         "sql",
         "python-light"

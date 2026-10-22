@@ -30,12 +30,13 @@ case class RST_SeparateBands(
     override def withNewChildrenInternal(nc: IndexedSeq[Expression]): Expression = copy(nc(0), nc(1))
     override def children: Seq[Expression] = Seq(tile, exprConfExpr)
 
-    override def eval(input: InternalRow): IterableOnce[InternalRow] =
+    override def eval(input: InternalRow): IterableOnce[InternalRow] = {
+        // The tile row is read once, outside the guarded body, so a failure's error tile can carry its cellid.
+        val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         RST_ErrorHandler.safeEval(
           () => {
               val exprConf = ExpressionConfig.fromExpr(exprConfExpr)
               RST_ExpressionUtil.init(exprConf)
-              val rawTile = tile.eval(input).asInstanceOf[InternalRow]
               val (cell, ds, mtd) = RasterSerializationUtil.rowToTile(rawTile, rasterType)
               val iter = SeparateBands.separateIter(ds, mtd)
               RST_ExpressionUtil.addCleanupListener(iter)
@@ -45,9 +46,10 @@ case class RST_SeparateBands(
                   InternalRow.fromSeq(Seq(resRow)) // Row wrapping in generator
               }
           },
-          input,
+          rawTile,
           rasterType
         )
+    }
 
 }
 

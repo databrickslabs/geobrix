@@ -380,17 +380,41 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         assert(twoArg.exists(r => r._2 && r._3.isEmpty), "the default drops the core geometry")
     }
 
-    test("The documented heavyweight SQL forms of the five BNG explode generators run") {
+    /** The string returned by `def <fn>_sql_example()` in the docs source, as written (comments included). */
+    private def documentedExample(fn: String): String = {
+        val file = new java.io.File(sys.props.getOrElse("basedir", "."), "docs/tests/python/api/gridx_functions_sql.py")
+        assert(file.exists, s"docs example source not found: ${file.getAbsolutePath}")
+        val source = scala.io.Source.fromFile(file, "UTF-8")
+        val src = try source.mkString finally source.close()
+        val start = src.indexOf(s"def ${fn}_sql_example():")
+        assert(start >= 0, s"no ${fn}_sql_example in the docs source")
+        val open = src.indexOf("return \"\"\"", start) + "return \"\"\"".length
+        src.substring(open, src.indexOf("\"\"\"", open))
+    }
+
+    /** The runnable SQL of an example: comment lines dropped, trailing `;` removed. */
+    private def sqlOf(example: String): String =
+        example.linesIterator.map(_.trim).filterNot(l => l.isEmpty || l.startsWith("--")).mkString(" ").stripSuffix(";")
+
+    test("The documented heavyweight SQL examples of the five BNG explode generators run and return the documented rows") {
         spark.sparkContext.setLogLevel("ERROR")
         bng.functions.register(spark)
-        val poly = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
-        def count(sql: String): Long = spark.sql(sql).count()
-
-        assert(count("SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src LATERAL VIEW gbx_bng_kringexplode(src.cell, 1) t AS cellid") == 9)
-        assert(count("SELECT t.cellid FROM (SELECT 'TQ3080' AS cell) src LATERAL VIEW gbx_bng_kloopexplode(src.cell, 1) t AS cellid") == 8)
-        assert(count(s"SELECT t.cellid FROM (SELECT '$poly' AS geom) src LATERAL VIEW gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t AS cellid") == 24)
-        assert(count(s"SELECT t.cellid FROM (SELECT '$poly' AS geom) src LATERAL VIEW gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t AS cellid") == 16)
-        assert(count(s"SELECT t.cellid, t.core, t.chip FROM (SELECT '$poly' AS geom) src LATERAL VIEW gbx_bng_tessellateexplode(src.geom, 3) t AS cellid, core, chip") == 9)
+        // Row counts as stated in the examples' docstrings (3 km x 3 km polygon at 1 km, k = 1).
+        Seq(
+          "bng_kringexplode" -> 9L,
+          "bng_kloopexplode" -> 8L,
+          "bng_geomkringexplode" -> 24L,
+          "bng_geomkloopexplode" -> 16L,
+          "bng_tessellateexplode" -> 9L
+        ).foreach { case (fn, rows) =>
+            val example = documentedExample(fn)
+            val sql = sqlOf(example)
+            withClue(s"$fn: $sql\n") {
+                assert(example.contains("-- heavyweight tier"), "the SQL tab says it is the heavyweight form")
+                assert(sql.contains("LATERAL VIEW"), "the heavyweight example uses LATERAL VIEW")
+                assert(spark.sql(sql).count() == rows)
+            }
+        }
     }
 
     test("BNG_TessellateExplode keepCoreGeom=true gives core chips their cell geometry") {

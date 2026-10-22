@@ -12,19 +12,14 @@ import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.{Coordinate, GeometryFactory}
 
-import scala.collection.mutable
-
 /**
   * Structural contract for the vectorx generators: every row `eval` emits has exactly the columns
   * `elementSchema` declares, with values of the declared types (see [[GeneratorContract]]).
   */
 class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
 
-    private val exercised = mutable.Set.empty[String]
-
     private def check(sqlName: String, gen: CollectionGenerator): Unit = {
         assert(GeneratorContract.coverage.get(sqlName).contains(GeneratorContract.VectorSuite), s"$sqlName is not listed for this suite")
-        exercised += sqlName
         GeneratorContract.assertConforms(sqlName, gen)
     }
 
@@ -42,52 +37,64 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
             JTS.toWKB3(JTS.point(new Coordinate(x, y, 2.0 * x + 3.0 * y + 5.0)))
         }
 
-    test("st_triangulate emits exactly the declared triangle column") {
-        check("gbx_st_triangulate", ST_Triangulate(geomArrayLit(corners), emptyArrayLit, Literal(0.01), Literal(0.01), finder, Literal("constrained")))
-    }
-
-    test("st_interpolateelevationbbox emits exactly the declared elevation_point column") {
-        check(
-          "gbx_st_interpolateelevationbbox",
+    /** Generators are built on demand: the MVT writer needs the native readers initialised first. */
+    private val cases: Seq[(String, () => CollectionGenerator)] = Seq(
+      "gbx_st_triangulate" -> (() =>
+          ST_Triangulate(geomArrayLit(corners), emptyArrayLit, Literal(0.01), Literal(0.01), finder, Literal("constrained"))
+      ),
+      "gbx_st_interpolateelevationbbox" -> (() =>
           ST_InterpolateElevationBBox(
             geomArrayLit(corners), emptyArrayLit, Literal(0.0), Literal(0.01), finder,
             Literal(0.0), Literal(0.0), Literal(100.0), Literal(100.0), Literal(10), Literal(10), Literal(32633), Literal("constrained")
           )
-        )
-    }
-
-    test("st_interpolateelevationgeom emits exactly the declared elevation_point column") {
-        val origin = JTS.point(new Coordinate(0.0, 0.0))
-        origin.setSRID(32633)
-        check(
-          "gbx_st_interpolateelevationgeom",
+      ),
+      "gbx_st_interpolateelevationgeom" -> (() => {
+          val origin = JTS.point(new Coordinate(0.0, 0.0))
+          origin.setSRID(32633)
           ST_InterpolateElevationGeom(
             geomArrayLit(corners), emptyArrayLit, Literal(0.0), Literal(0.01), finder,
             Literal.create(JTS.toEWKB(origin), BinaryType), Literal(10), Literal(10), Literal(10.0), Literal(10.0), Literal("constrained")
           )
-        )
+      }),
+      "gbx_st_asmvt_pyramid" -> (() => {
+          vectorx.functions.register(spark) // initialises the native readers the MVT writer needs
+          val poly = new GeometryFactory().createPolygon(
+            Array(
+              new Coordinate(-30.0, 10.0), new Coordinate(30.0, 10.0), new Coordinate(30.0, 20.0),
+              new Coordinate(-30.0, 20.0), new Coordinate(-30.0, 10.0)
+            )
+          )
+          val attrsType = StructType(Seq(StructField("name", StringType), StructField("id", LongType)))
+          val attrs = Literal(InternalRow(UTF8String.fromString("region-a"), 1L), attrsType)
+          ST_AsMvtPyramid(Literal.create(JTS.toWKB(poly), BinaryType), attrs, Literal(2), Literal(2), Literal("regions"))
+      })
+    )
+
+    private def checkCase(sqlName: String): Unit = {
+        val make = cases.collectFirst { case (n, f) if n == sqlName => f }.getOrElse(fail(s"no case for $sqlName"))
+        check(sqlName, make())
+    }
+
+    test("st_triangulate emits exactly the declared triangle column") {
+        checkCase("gbx_st_triangulate")
+    }
+
+    test("st_interpolateelevationbbox emits exactly the declared elevation_point column") {
+        checkCase("gbx_st_interpolateelevationbbox")
+    }
+
+    test("st_interpolateelevationgeom emits exactly the declared elevation_point column") {
+        checkCase("gbx_st_interpolateelevationgeom")
     }
 
     test("st_asmvt_pyramid emits exactly the declared tile struct") {
-        vectorx.functions.register(spark) // initialises the native readers the MVT writer needs
-        val gf = new GeometryFactory()
-        val poly = gf.createPolygon(
-          Array(
-            new Coordinate(-30.0, 10.0), new Coordinate(30.0, 10.0), new Coordinate(30.0, 20.0),
-            new Coordinate(-30.0, 20.0), new Coordinate(-30.0, 10.0)
-          )
-        )
-        val attrsType = StructType(Seq(StructField("name", StringType), StructField("id", LongType)))
-        val attrs = Literal(InternalRow(UTF8String.fromString("region-a"), 1L), attrsType)
-        check(
-          "gbx_st_asmvt_pyramid",
-          ST_AsMvtPyramid(Literal.create(JTS.toWKB(poly), BinaryType), attrs, Literal(2), Literal(2), Literal("regions"))
-        )
+        checkCase("gbx_st_asmvt_pyramid")
     }
 
-    // Keep last: scalatest runs a suite's tests in registration order.
-    test("this suite exercised every generator the contract assigns to it") {
-        assert(exercised.toSet == GeneratorContract.coveredBy(GeneratorContract.VectorSuite))
+    // Declarative on purpose: the generators this suite covers are the ones in `cases`, so the check does
+    // not depend on test order or on a `-z` filter.
+    test("this suite covers every generator the contract assigns to it") {
+        assert(cases.map(_._1).toSet == GeneratorContract.coveredBy(GeneratorContract.VectorSuite))
     }
 
 }

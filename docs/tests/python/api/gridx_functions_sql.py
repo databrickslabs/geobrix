@@ -113,6 +113,7 @@ def bng_kringexplode_sql_example():
     Each row carries a single ``cellid STRING`` column.
     """
     return """
+-- heavyweight tier
 SELECT t.cellid
 FROM (SELECT 'TQ3080' AS cell) src
 LATERAL VIEW gbx_bng_kringexplode(src.cell, 1) t AS cellid;
@@ -129,6 +130,7 @@ def bng_kloopexplode_sql_example():
     Each row carries a single ``cellid STRING`` column.
     """
     return """
+-- heavyweight tier
 SELECT t.cellid
 FROM (SELECT 'TQ3080' AS cell) src
 LATERAL VIEW gbx_bng_kloopexplode(src.cell, 1) t AS cellid;
@@ -181,6 +183,7 @@ def bng_geomkringexplode_sql_example():
     classification (default 'boundary-out').
     """
     return """
+-- heavyweight tier
 SELECT t.cellid
 FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src
 LATERAL VIEW gbx_bng_geomkringexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;
@@ -199,6 +202,7 @@ def bng_geomkloopexplode_sql_example():
     mode parameter controls boundary classification (default 'boundary-out').
     """
     return """
+-- heavyweight tier
 SELECT t.cellid
 FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src
 LATERAL VIEW gbx_bng_geomkloopexplode(src.geom, 3, 1, 'boundary-out') t AS cellid;
@@ -252,6 +256,7 @@ def bng_tessellateexplode_sql_example():
     core cells; by default their chip is NULL.
     """
     return """
+-- heavyweight tier
 SELECT t.cellid, t.core, t.chip
 FROM (SELECT 'POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))' AS geom) src
 LATERAL VIEW gbx_bng_tessellateexplode(src.geom, 3) t AS cellid, core, chip;

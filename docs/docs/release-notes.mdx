@@ -298,7 +298,8 @@ formats.
   result. It now returns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB), for a WKB or
   a WKT geometry alike, as the lightweight tier and `bng_tessellate` do. `keep_core_geom` is an
   optional third argument that defaults to false in every API (the SQL function takes two or three
-  arguments; the Python wrapper's default changes from true to false): a core cell's `chip` is NULL
+  arguments; the Python wrapper's default changes from true to false, and the Scala two-argument
+  wrapper now passes false instead of true): a core cell's `chip` is NULL
   unless you ask for it, and border cells always carry their geometry. A query that named the whole
   generator output with one alias (`.as("chip")`) now needs one name per column, or none.
 
@@ -311,8 +312,9 @@ formats.
   `ClassCastException` instead. `rst_maketiles` with a size of 0 or less should hand the tile back
   unchanged as one row, but the row was malformed and its `tile` could not be read; it now holds the
   tile. The heavyweight `rst_xyzpyramid` returns one row with a NULL `tile` for a raster it cannot
-  read, since its `(z, x, y, bytes)` struct cannot hold an error tile; a `max_z` above the cap or a
-  tile count above the limit raises its own message.
+  read, since its `(z, x, y, bytes)` struct cannot hold an error tile. A bad argument raises its own
+  message instead: an unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096], a
+  `max_z` above the cap, or a tile count above the limit.
 - **Corrupt tiles yield an error row again.** The lightweight `rst_separatebands`,
   `rst_retile` and `rst_tooverlappingtiles` table functions are meant to emit one error tile
   (NULL raster, the error in `metadata.last_error`) for an unreadable input. They instead

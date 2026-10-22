@@ -9,7 +9,6 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
 import org.scalatest.matchers.should.Matchers._
 
-import scala.collection.mutable
 
 /**
   * Row-shape contract for the RasterX generators: every row a generator emits, on every path
@@ -21,7 +20,7 @@ import scala.collection.mutable
   */
 class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
 
-    private val exercised = mutable.Set.empty[String]
+    private val xyzPyramid = "gbx_rst_xyzpyramid"
 
     private lazy val modisPath = this.getClass.getResource("/modis/").toString
     private val b01 = "MCD43A4.A2018185.h10v07.006.2018194033728_B01.TIF"
@@ -64,7 +63,6 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
     test("a failing tile yields one error row in the tile column for every tile generator") {
         val df = corruptTile()
         tileGenerators().foreach { case (name, gen) =>
-            exercised += name
             val rows = df.select(gen(col("raster")).as("t")).select(col("t.metadata").getItem("error_message").as("err")).collect()
             withClue(s"$name: ") {
                 rows.length shouldBe 1
@@ -107,7 +105,6 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
 
     test("rst_xyzpyramid: a corrupt tile yields one row with a NULL tile (the pyramid struct cannot carry an error tile)") {
         import com.databricks.labs.gbx.rasterx.functions._
-        exercised += "gbx_rst_xyzpyramid"
         val rows = corruptTile().select(rst_xyzpyramid(col("raster"), lit(0), lit(1)).as("t")).collect()
         rows.length shouldBe 1
         rows.head.isNullAt(0) shouldBe true
@@ -141,9 +138,46 @@ class RST_GeneratorRowShapeTest extends PlanTest with SilentSparkSession {
         chain.exists(t => t.getMessage != null && t.getMessage.contains("exceeds")) shouldBe true
     }
 
-    // Keep last: scalatest runs a suite's tests in registration order.
-    test("this suite exercised every generator the contract assigns to it") {
-        exercised.toSet shouldBe GeneratorContract.coveredBy(GeneratorContract.RasterSuite)
+    test("rst_xyzpyramid: bad render arguments raise instead of NULLing every row") {
+        validTile() // registers the functions
+        def raised(args: String): String = {
+            val ex = intercept[Throwable] {
+                validTile().selectExpr(s"gbx_rst_xyzpyramid(raster, 0, 0, $args) AS t").collect()
+            }
+            LazyList.iterate(Option(ex))(_.flatMap(t => Option(t.getCause))).takeWhile(_.isDefined).flatMap(_.toSeq)
+                .flatMap(t => Option(t.getMessage)).mkString(" | ")
+        }
+        raised("'GIF', 64, 'bilinear'") should include("format must be one of")
+        raised("'PNG', 64, 'nearest-ish'") should include("unsupported resampling")
+        raised("'PNG', 0, 'bilinear'") should include("size must be in (0, 4096]")
+        raised("'PNG', 5000, 'bilinear'") should include("size must be in (0, 4096]")
+        raised("'PNG', 64, 'bilinear', 'bogus'") should include("rescale must be")
+        raised("'PNG', 64, 'bilinear', '5,1'") should include("min < max")
+        raised("'PNG', 64, 'bilinear', 'a,b'") should include("rescale")
+    }
+
+    test("rst_xyzpyramid: valid render arguments, in any case, still render tiles") {
+        validTile() // registers the functions
+        for (rescale <- Seq("'auto'", "'none'", "'0,10000'")) {
+            val rows = validTile()
+                .selectExpr(s"gbx_rst_xyzpyramid(raster, 0, 0, 'png', 64, 'Bilinear', $rescale) AS t")
+                .select(col("t.z").as("z"), col("t.bytes").as("bytes"))
+                .collect()
+            withClue(s"rescale=$rescale: ") {
+                rows.length should be > 0
+                rows.foreach { r =>
+                    r.isNullAt(0) shouldBe false
+                    r.isNullAt(1) shouldBe false
+                    r.getAs[Array[Byte]](1).length should be > 0
+                }
+            }
+        }
+    }
+
+    // Declarative on purpose: the generators this suite covers are the ones its tests iterate over, so the
+    // check does not depend on test order or on a `-z` filter.
+    test("this suite covers every generator the contract assigns to it") {
+        (tileGenerators().map(_._1) :+ xyzPyramid).toSet shouldBe GeneratorContract.coveredBy(GeneratorContract.RasterSuite)
     }
 
 }

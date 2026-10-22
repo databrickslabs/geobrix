@@ -74,7 +74,7 @@ case class RST_XYZPyramid(
         RST_ErrorHandler.safeEvalNullElement(() => doEval(rawTile, args))
     }
 
-    /** Argument guards; these need no dataset, so their errors must reach the caller. */
+    /** Argument guards (zoom range, render arguments); these need no dataset, so their errors must reach the caller. */
     private def readArgs(input: InternalRow): Args = {
         val minZ = readInt(minZExpr.eval(input), "min_z")
         val maxZ = readInt(maxZExpr.eval(input), "max_z")
@@ -89,7 +89,11 @@ case class RST_XYZPyramid(
         val size = readInt(sizeExpr.eval(input), "size")
         val resampling = Option(resamplingExpr.eval(input)).map(_.asInstanceOf[UTF8String].toString).getOrElse("bilinear")
         val rescale = Option(rescaleExpr.eval(input)).map(_.asInstanceOf[UTF8String].toString).getOrElse("auto")
-        Args(minZ, maxZ, format, size, resampling, rescale)
+        // The render arguments are parameters too: validate them here so a typo ('GIF', rescale='bogus', a size of
+        // 0) raises instead of failing inside the guarded body and NULLing every row.
+        val (fmt, resample) = RST_TileXYZ.validateRender("rst_xyzpyramid", format, size, resampling)
+        RST_TileXYZ.parseRescale("rst_xyzpyramid", rescale)
+        Args(minZ, maxZ, fmt, size, resample, rescale)
     }
 
     private def doEval(rawTile: InternalRow, args: Args): IterableOnce[InternalRow] = {

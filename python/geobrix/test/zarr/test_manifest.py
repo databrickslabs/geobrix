@@ -724,6 +724,104 @@ def test_a_conflict_survives_a_failed_diagnosis(
     assert ei.value.winner is None and "Fix:" in str(ei.value)
 
 
+def test_a_failed_lookup_in_the_cas_branch_still_ends_as_a_conflict(
+    spark_delta, table, monkeypatch
+):
+    """After a CAS abort ``commit`` looks for a twin of its own write_id. If that lookup
+    fails, the user still gets the ZarrWriteConflict, not the lookup's error."""
+    w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
+    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    real, calls = M.find_commit_version, []
+
+    def fails_after_the_precheck(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 1:
+            return real(*args, **kwargs)  # the pre-check: no such commit yet
+        raise RuntimeError("lookup unavailable")
+
+    monkeypatch.setattr(M, "find_commit_version", fails_after_the_precheck)
+    stale = _rows(_chunk("c/0/0/0", w3, expected=w2))  # w2 never wrote it
+    with pytest.raises(ZarrWriteConflict) as ei:
+        M.commit(spark_delta, table, stale, write_id=w3, meta={})
+    assert len(calls) == 2  # the pre-check, then the lookup that failed
+    assert ei.value.keys == ("t2m/c/0/0/0",) and "Fix:" in str(ei.value)
+
+
+def test_row_tracking_turned_off_is_a_typed_error_from_the_precheck(spark_delta, table):
+    """The commit version comes from row tracking. With it off the lookup used to fail
+    with a raw FIELD_NOT_FOUND from Spark; the pre-check now says what to fix."""
+    spark_delta.sql(
+        f"ALTER TABLE {table} SET TBLPROPERTIES ('delta.enableRowTracking' = 'false')"
+    )
+    w1 = uuid.uuid4().hex
+    with pytest.raises(ZarrError) as ei:
+        M.find_commit_version(spark_delta, table, w1)
+    assert "enableRowTracking" in ei.value.fix and "Fix:" in str(ei.value)
+    with pytest.raises(ZarrError) as ei:
+        M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    assert "enableRowTracking" in ei.value.fix
+    assert _live(spark_delta, table) == []  # the pre-check refused: nothing was merged
+
+
+def _count_metadata_queries(monkeypatch, spark):
+    """Count the DataFrame actions (``collect``, which ``first`` and ``take`` end in)."""
+    from pyspark.sql.classic.dataframe import DataFrame as ClassicDataFrame
+
+    actions = []
+    real = ClassicDataFrame.collect
+
+    def counting(self):
+        actions.append(1)
+        return real(self)
+
+    monkeypatch.setattr(ClassicDataFrame, "collect", counting)
+    return actions
+
+
+@pytest.mark.parametrize("how", ["version", "timestamp"])
+def test_snapshot_of_a_past_version_reads_the_history_once(
+    spark_delta, table, monkeypatch, how
+):
+    w1, w2 = uuid.uuid4().hex, uuid.uuid4().hex
+    v1 = M.commit(
+        spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={}
+    )
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_chunk("c/0/0/0", w2, expected=w1)),
+        write_id=w2,
+        meta={},
+    )
+    kwargs = (
+        {"version_as_of": v1}
+        if how == "version"
+        else {"timestamp_as_of": datetime.now(timezone.utc)}
+    )
+    actions = _count_metadata_queries(monkeypatch, spark_delta)
+    snap = M.snapshot(spark_delta, table, **kwargs)
+    # one for the table history, one for SHOW TBLPROPERTIES (the timestamp form adds the
+    # one that parses its argument)
+    assert len(actions) <= (2 if how == "version" else 3), len(actions)
+    assert snap.version == (
+        v1 if how == "version" else M.snapshot(spark_delta, table).version
+    )
+
+
+def test_snapshot_rejects_a_malformed_retain_property(spark_delta, table):
+    w1 = uuid.uuid4().hex
+    v1 = M.commit(
+        spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={}
+    )
+    spark_delta.sql(
+        f"ALTER TABLE {table} SET TBLPROPERTIES ('geobrix.zarr.retain' = 'a while')"
+    )
+    with pytest.raises(ZarrError) as ei:
+        M.snapshot(spark_delta, table, version_as_of=v1)
+    assert "geobrix.zarr.retain" in str(ei.value) and "Fix:" in str(ei.value)
+    assert "7 days" in ei.value.fix  # the fix shows the form
+
+
 def test_conflict_rows_ride_on_the_error(spark_delta, table):
     w1, w2 = uuid.uuid4().hex, uuid.uuid4().hex
     M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})

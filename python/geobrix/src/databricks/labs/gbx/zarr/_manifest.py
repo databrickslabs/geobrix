@@ -22,7 +22,6 @@ import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -34,9 +33,6 @@ from databricks.labs.gbx.zarr.errors import (
     ZarrVersionUnavailable,
     ZarrWriteConflict,
 )
-
-if TYPE_CHECKING:  # pragma: no cover
-    from pyspark.sql import Column
 
 __all__ = [
     "KINDS",
@@ -107,6 +103,7 @@ _RETAIN_UNIT_SECONDS = {
 }
 
 _UNAVAILABLE_FIX = "pick a later version or tag the version you need with gbx_zarr_tag"
+_ROW_TRACKING_FIX = "check that delta.enableRowTracking is true on the manifest table"
 
 # One MERGE is one transaction. A matched row whose write_id is not the expected one
 # falls through to the raise_error branch; an expectation of NULL ("must not exist")
@@ -432,25 +429,37 @@ def _effective_horizon(props: dict[str, str]) -> datetime | None:
     found = []
     if props.get(HORIZON_PROP):
         found.append(_parse_horizon(props[HORIZON_PROP]))
-    if props.get(PROP_PREFIX + "retain"):
-        window = timedelta(seconds=retain_seconds(props[PROP_PREFIX + "retain"]))
+    retain = props.get(PROP_PREFIX + "retain")
+    if retain:
+        try:
+            window = timedelta(seconds=retain_seconds(retain))
+        except ValueError:
+            raise ZarrError(
+                f"table property {PROP_PREFIX}retain is not a duration: {retain!r}",
+                fix=f"set it with ALTER TABLE ... SET TBLPROPERTIES "
+                f"('{PROP_PREFIX}retain' = '7 days')",
+            ) from None
         found.append(datetime.now(timezone.utc) - window)
     return max(found) if found else None
 
 
-def _timestamp_column(spark, value) -> "Column":
+def _timestamp_micros(spark, value) -> int:
+    """``value`` (a str or datetime) as microseconds since the epoch, parsed by Spark."""
     from pyspark.sql import functions as F
 
     col = (
         F.lit(value) if isinstance(value, datetime) else F.lit(value).cast("timestamp")
     )
     try:
-        parsed = spark.range(1).select(col).first()[0]
+        parsed = spark.range(1).select(F.unix_micros(col)).first()[0]
     except Exception as e:  # ANSI mode raises on an unparseable string
         raise ValueError(f"timestamp_as_of {value!r} is not a timestamp") from e
     if parsed is None:  # ANSI off: unparseable becomes NULL
         raise ValueError(f"timestamp_as_of {value!r} is not a timestamp")
-    return col
+    return int(parsed)
+
+
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def snapshot(
@@ -494,8 +503,10 @@ def snapshot(
 
     from pyspark.sql import functions as F
 
-    latest = _latest_version(spark, table)
-    if tag is not None:
+    if version is None and timestamp_as_of is None:  # the latest, or a tag read there
+        latest = _latest_version(spark, table)
+        if tag is None:
+            return Snapshot(table=table, version=latest)
         present = (
             spark.sql(f"SELECT tag FROM {_q(table)} VERSION AS OF {latest}")
             .where(F.col("tag") == F.lit(tag))
@@ -508,41 +519,38 @@ def snapshot(
                 fix="pick an existing tag, or create it with gbx_zarr_tag",
             )
         return Snapshot(table=table, version=latest, tag=tag)
-    if version is None and timestamp_as_of is None:
-        return Snapshot(table=table, version=latest)
 
     horizon = _effective_horizon(_tblprops(spark, table))
-    hist = spark.sql(f"DESCRIBE HISTORY {_q(table)}").select("version", "timestamp")
+    # (version, commit time in microseconds): read once, then decided here
+    history = [
+        (int(r["version"]), int(r["micros"]))
+        for r in spark.sql(f"DESCRIBE HISTORY {_q(table)}")
+        .select("version", F.unix_micros("timestamp").alias("micros"))
+        .collect()
+    ]
     if version is not None:
         wanted = f"version {version}"
-        pick = hist.where(F.col("version") == version)
+        picked = version if any(v == version for v, _ in history) else None
     else:
         wanted = f"the version at {timestamp_as_of}"
-        pick = (
-            hist.where(F.col("timestamp") <= _timestamp_column(spark, timestamp_as_of))
-            .orderBy(F.col("version").desc())
-            .limit(1)
-        )
-    row = pick.select("version").first()
-    if row is None:
+        at = _timestamp_micros(spark, timestamp_as_of)
+        picked = max((v for v, t in history if t <= at), default=None)
+    if picked is None:
         raise ZarrVersionUnavailable(
             f"{wanted} of {table} does not exist or is no longer in its history",
             fix=_UNAVAILABLE_FIX,
         )
     if horizon is not None:
-        oldest = (
-            hist.where(F.col("timestamp") <= F.lit(horizon))
-            .agg(F.max("version"))
-            .first()[0]
-        )
-        if oldest is not None and row["version"] < oldest:
+        limit = (horizon - _EPOCH) // timedelta(microseconds=1)
+        oldest = max((v for v, t in history if t <= limit), default=None)
+        if oldest is not None and picked < oldest:
             raise ZarrVersionUnavailable(
-                f"version {row['version']} of {table} predates version {oldest}, the "
+                f"version {picked} of {table} predates version {oldest}, the "
                 f"one live at {horizon.isoformat()} (its vacuum horizon or retain "
                 "window), so its files may have been removed",
                 fix=_UNAVAILABLE_FIX,
             )
-    return Snapshot(table=table, version=int(row["version"]), tag=None)
+    return Snapshot(table=table, version=picked, tag=None)
 
 
 def read_rows(spark, snap: Snapshot, *, kinds=None, arrays=None, shard_keys=None):
@@ -699,10 +707,20 @@ def find_commit_version(spark, table: str, write_id: str, *, since: int = 0):
     _check_write_id(write_id)
     if isinstance(since, bool) or not isinstance(since, numbers.Integral) or since < 0:
         raise ValueError(f"since must be a non-negative int, got {since!r}")
-    row = spark.sql(
-        f"SELECT _metadata.row_commit_version AS v FROM {_q(table)} "
-        f"WHERE kind = 'commit' AND key = '{write_id}' AND tag IS NULL"
-    ).first()
+    try:
+        row = spark.sql(
+            f"SELECT _metadata.row_commit_version AS v FROM {_q(table)} "
+            f"WHERE kind = 'commit' AND key = '{write_id}' AND tag IS NULL"
+        ).first()
+    except Exception as e:
+        # FIELD_NOT_FOUND on _metadata.row_commit_version: row tracking is off
+        if "row_commit_version" in _error_text(e):
+            raise ZarrError(
+                f"{table} does not track row commit versions, so the version a commit "
+                "landed in cannot be read",
+                fix=_ROW_TRACKING_FIX,
+            ) from e
+        raise
     if row is None or row[0] is None or int(row[0]) < since:
         return None
     return int(row[0])
@@ -800,7 +818,11 @@ def commit(spark, table: str, rows: pa.Table, *, write_id: str, meta: dict) -> i
         text = _error_text(e)
         kind = classify_commit_error(text)
         if kind == "cas":
-            landed = find_commit_version(spark, table, write_id)
+            try:
+                landed = find_commit_version(spark, table, write_id)
+            except Exception:
+                # no answer: the user still gets the conflict, not the lookup's error
+                landed = None
             if landed is not None:  # a twin of this write_id won the race
                 return landed
             raise _write_conflict(spark, table, source, text) from e
@@ -816,6 +838,6 @@ def commit(spark, table: str, rows: pa.Table, *, write_id: str, meta: dict) -> i
         raise ZarrError(
             f"the MERGE into {table} finished but the commit row for {write_id} is "
             "not live",
-            fix="check that delta.enableRowTracking is true on the manifest table",
+            fix=_ROW_TRACKING_FIX,
         )
     return version

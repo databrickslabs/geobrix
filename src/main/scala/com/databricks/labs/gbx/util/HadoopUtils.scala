@@ -144,23 +144,37 @@ object HadoopUtils extends Logging {
         if (dot > slash) n.substring(dot + 1) else ""
     }
 
+    // Metadata-only names: files that sit next to data (ArcGIS `map.shp.xml`, GDAL `*.aux.xml`, a README) and
+    // are not datasets. Matched by suffix on the whole name, since `fileExt` sees only the last extension.
+    // Bare `.xml` is NOT listed: GML and NAS files are `.xml` datasets.
+    private val OGR_METADATA_SUFFIXES: Seq[String] = Seq(".shp.xml", ".aux.xml", ".txt", ".md")
+
+    /** True for a file that only describes data and is never a dataset to read: a name ending `.shp.xml`,
+      * `.aux.xml`, `.txt` or `.md` (any case). Planning and schema-head selection skip these. */
+    def isMetadataOnly(p: String): Boolean = {
+        val n = p.toLowerCase(java.util.Locale.ROOT)
+        OGR_METADATA_SUFFIXES.exists(n.endsWith)
+    }
+
     /** Picks the PRIMARY data file from a listing for schema inference — the file the OGR driver
       * actually opens, NOT a sidecar. A shapefile directory lists (sorted) as
       * `[.cpg, .dbf, .prj, .shp, .shx]`; `files.head` would be `.cpg`, which OGR cannot open as an
       * ESRI Shapefile (it threw `Could not open dataset ... at .../<name>.cpg`). Excluding the known
       * shapefile sidecars makes `.shp` the head; non-shapefile datasets (`.geojson`, `.gpkg`, ...)
-      * have no matching sidecars and are unaffected. `stageHeadForSchemaSpark` still stages the
+      * have no matching sidecars and are unaffected. Metadata-only files (`isMetadataOnly`) are never the head
+      * either: a `README.txt` sorts first and is not a dataset. `stageHeadForSchemaSpark` still stages the
       * stem-siblings alongside, so the driver sees the full bundle. */
     def primaryDataFile(files: Seq[String]): Option[String] =
-        files.find(p => !OGR_SIDECAR_EXTS.contains(fileExt(p))).orElse(files.headOption)
+        files.find(p => !OGR_SIDECAR_EXTS.contains(fileExt(p)) && !isMetadataOnly(p)).orElse(files.headOption)
 
     /** Filters a file listing to primary data files, excluding OGR shapefile sidecar extensions
       * (`.dbf`, `.shx`, `.prj`, `.cpg`, etc.) that the ESRI Shapefile driver opens as
       * attribute-only datasources. All non-sidecar files (`.shp`, `.zip`, `.geojson`, `.gpkg`,
       * etc.) are kept — this supports multi-stem directories and heterogeneous driver mixes.
-      * Used in the OGR batch read path to prevent loose sidecars from being double-counted. */
+      * Used in the OGR batch read path to prevent loose sidecars from being double-counted. Metadata-only
+      * files (`isMetadataOnly`) are excluded too, as they are not datasets. */
     def primaryDataFiles(files: Seq[String]): Seq[String] =
-        files.filterNot(p => OGR_SIDECAR_EXTS.contains(fileExt(p)))
+        files.filterNot(p => OGR_SIDECAR_EXTS.contains(fileExt(p)) || isMetadataOnly(p))
 
     /** Lists data files under inPath via Spark's file index, which forwards the UC Volume / WSFS
       * credential. This is for the ANALYZER thread only: the OGR reader's `inferSchema` runs on the
@@ -370,7 +384,10 @@ object HadoopUtils extends Logging {
       * When `headPath` is a bare `.shp` file path and `candidates` contains no sidecar siblings
       * (i.e. the caller listed only the single `.shp`), the parent directory is enumerated via
       * Spark's credential-aware file index so the full sidecar bundle (`.shx`, `.dbf`, `.prj`,
-      * etc.) is staged alongside — without these GDAL throws "Unable to open .shx". */
+      * etc.) is staged alongside - without these GDAL throws "Unable to open .shx".
+      *
+      * The copy lives in a `gbx_ogr_schema_*` temp dir that the caller removes with `discardSchemaCopy`
+      * once it has inferred from it; a staging that throws removes its own dir. */
     def stageHeadForSchemaSpark(
         spark: SparkSession,
         headPath: String,
@@ -400,23 +417,24 @@ object HadoopUtils extends Logging {
             else
                 fromCandidates
         val toStage = if (siblings.isEmpty) Seq(headPath) else siblings
-        val tmpDir = java.nio.file.Files.createTempDirectory(SchemaStagingPrefix).toFile
-        val reader = new SchemaReader(steps)
-        for (p <- toStage) {
-            val local = toPosix(p)
-            // Defensive guard: never attempt to read a directory as bytes. This can happen if
-            // listDataFilesSpark falls back to the directory path itself (e.g. all files were
-            // filtered out). Skip with a clear error rather than the cryptic "Is a directory".
-            if (new java.io.File(local).isDirectory) {
-                throw new IllegalArgumentException(
-                    s"stageHeadForSchemaSpark: expected a file but got a directory: $local. " +
-                    s"The directory may contain no readable data files."
-                )
+        withSchemaStagingDir { tmpDir =>
+            val reader = new SchemaReader(steps)
+            for (p <- toStage) {
+                val local = toPosix(p)
+                // Defensive guard: never attempt to read a directory as bytes. This can happen if
+                // listDataFilesSpark falls back to the directory path itself (e.g. all files were
+                // filtered out). Skip with a clear error rather than the cryptic "Is a directory".
+                if (new java.io.File(local).isDirectory) {
+                    throw new IllegalArgumentException(
+                        s"stageHeadForSchemaSpark: expected a file but got a directory: $local. " +
+                        s"The directory may contain no readable data files."
+                    )
+                }
+                val bytes = reader.read(local)
+                java.nio.file.Files.write(new java.io.File(tmpDir, baseName(p)).toPath, bytes)
             }
-            val bytes = reader.read(local)
-            java.nio.file.Files.write(new java.io.File(tmpDir, baseName(p)).toPath, bytes)
+            new java.io.File(tmpDir, headName).getAbsolutePath
         }
-        new java.io.File(tmpDir, headName).getAbsolutePath
     }
 
     /** Bytes one schema read can hold: a file is read into one byte array, and a `binaryFile` query's
@@ -425,6 +443,21 @@ object HadoopUtils extends Logging {
 
     /** Name prefix of the temp dirs schema staging writes copies into (see `discardSchemaCopy`). */
     private val SchemaStagingPrefix = "gbx_ogr_schema_"
+
+    /** Makes a schema-staging temp dir and runs `body` in it. The dir is the caller's to remove with
+      * `discardSchemaCopy` once the staged copy has been used, except that it is deleted here when `body`
+      * throws, since the caller never receives a path to discard. */
+    private def withSchemaStagingDir(body: java.io.File => String): String = {
+        val tmpDir = java.nio.file.Files.createTempDirectory(SchemaStagingPrefix).toFile
+        var staged = false
+        try {
+            val local = body(tmpDir)
+            staged = true
+            local
+        } finally {
+            if (!staged) NodeFilePathUtil.deleteRecursively(tmpDir.toPath)
+        }
+    }
 
     /** The length of `local`: from the file system when this JVM can stat it, else from a `binaryFile`
       * listing (metadata only, the content is not read); None when neither tells. */
@@ -445,7 +478,8 @@ object HadoopUtils extends Logging {
       * `.gdb.zip`) goes through `readBytesForSchema`, and one over `MaxSchemaReadBytes` is refused with
       * an error naming the limit. A `.gdb` directory is read with one `binaryFile` query over its (flat)
       * files, fetched to the driver a partition at a time and written as each arrives, so the driver
-      * never holds the whole dataset. Returns the local path to open. */
+      * never holds the whole dataset. Returns the local path to open; the caller removes its temp dir with
+      * `discardSchemaCopy`, and a staging that throws removes its own. */
     def stageDatasetForSchemaSpark(spark: SparkSession, datasetPath: String): String =
         stageDatasetForSchemaSpark(spark, datasetPath, schemaReadSteps(spark))
 
@@ -465,23 +499,24 @@ object HadoopUtils extends Logging {
                   "Unzip it and read the unzipped dataset (a .gdb folder is read file by file)."
             )
         }
-        val tmpDir = java.nio.file.Files.createTempDirectory(SchemaStagingPrefix).toFile
-        if (isGdbDir) {
-            val outDir = new java.io.File(tmpDir, name)
-            outDir.mkdirs()
-            val rows = spark.read.format("binaryFile").load(escapeGlob(local)).select("path", "content").toLocalIterator()
-            var written = 0
-            while (rows.hasNext) {
-                val r = rows.next()
-                java.nio.file.Files.write(new java.io.File(outDir, baseName(r.getString(0))).toPath, r.getAs[Array[Byte]](1))
-                written += 1
+        withSchemaStagingDir { tmpDir =>
+            if (isGdbDir) {
+                val outDir = new java.io.File(tmpDir, name)
+                outDir.mkdirs()
+                val rows = spark.read.format("binaryFile").load(escapeGlob(local)).select("path", "content").toLocalIterator()
+                var written = 0
+                while (rows.hasNext) {
+                    val r = rows.next()
+                    java.nio.file.Files.write(new java.io.File(outDir, baseName(r.getString(0))).toPath, r.getAs[Array[Byte]](1))
+                    written += 1
+                }
+                require(written > 0, s"No files found in FileGDB directory $datasetPath")
+                outDir.getAbsolutePath
+            } else {
+                val out = new java.io.File(tmpDir, name)
+                java.nio.file.Files.write(out.toPath, readBytesForSchema(local, steps))
+                out.getAbsolutePath
             }
-            require(written > 0, s"No files found in FileGDB directory $datasetPath")
-            outDir.getAbsolutePath
-        } else {
-            val out = new java.io.File(tmpDir, name)
-            java.nio.file.Files.write(out.toPath, readBytesForSchema(local, steps))
-            out.getAbsolutePath
         }
     }
 

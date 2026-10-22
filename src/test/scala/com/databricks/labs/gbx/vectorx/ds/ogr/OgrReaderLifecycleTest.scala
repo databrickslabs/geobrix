@@ -7,13 +7,16 @@ import com.databricks.labs.gbx.util.NodeFileManager
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.StructType
-import org.gdal.ogr.{Feature, ogr}
+import org.gdal.ogr.{Feature, FieldDefn, ogr, ogrConstants}
+import org.gdal.osr.SpatialReference
 import org.scalatest.matchers.should.Matchers._
 
 import java.nio.charset.StandardCharsets
 import java.nio.file.attribute.FileTime
 import java.nio.file.{Files, Path, Paths}
 import java.util.zip.{ZipEntry, ZipOutputStream}
+import scala.jdk.CollectionConverters._
+import scala.util.Try
 
 /** Each OGR read takes one hold per node-file copy and releases it once, however often the reader is
   * closed (OGR_Reader closes itself at the end of input, then Spark closes it again), and a changed
@@ -215,6 +218,90 @@ class OgrReaderLifecycleTest extends PlanTest with SilentSparkSession {
             val before = entries()
             intercept[Exception](spark.read.format("shapefile_ogr").load(z.toString).count())
             withClue("node-file cache entries left by the failed inference: ") { leftovers(before) shouldBe empty }
+        }
+    }
+
+    // Schema inference stages the head file (and each extra stem) in a driver temp folder and opens it with
+    // OGR; it must not leave either behind, however the inference ends.
+
+    private def schemaStagingDirs(): Set[String] = {
+        val tmp = Paths.get(System.getProperty("java.io.tmpdir"))
+        val s = Files.list(tmp)
+        try s.iterator().asScala.map(_.getFileName.toString).filter(_.startsWith("gbx_ogr_schema_")).toSet
+        finally s.close()
+    }
+
+    test("schema inference of a shapefile folder, a multi-stem folder and a GeoJSON file leaves no staging folder") {
+        withShapefileDir { dir =>
+            withScratchDir("gbx_ogr_stems_") { stems =>
+                Seq("a1", "a2", "a3").foreach { stem =>
+                    shapefileParts.foreach { n =>
+                        Files.copy(dir.resolve(n), stems.resolve(n.replace("map", stem)))
+                    }
+                }
+                withScratchDir("gbx_ogr_json_") { json =>
+                    val f = json.resolve("points.geojson")
+                    Files.write(
+                      f,
+                      ("{\"type\":\"FeatureCollection\",\"features\":[{\"type\":\"Feature\"," +
+                          "\"properties\":{\"id\":1},\"geometry\":{\"type\":\"Point\",\"coordinates\":[1.0,0.0]}}]}")
+                          .getBytes(StandardCharsets.UTF_8)
+                    )
+                    val before = schemaStagingDirs()
+                    (1 to 3).foreach { _ =>
+                        spark.read.format("shapefile_ogr").load(dir.toString)
+                        spark.read.format("shapefile_ogr").load(dir.resolve("map.shp").toString)
+                        spark.read.format("shapefile_ogr").load(stems.toString)
+                        spark.read.format("geojson_ogr").option("multi", "false").load(json.toString)
+                    }
+                    withClue("schema staging folders left by 12 inferences: ") { schemaStagingDirs().diff(before) shouldBe empty }
+                }
+            }
+        }
+    }
+
+    test("schema inference that fails leaves no staging folder") {
+        withScratchDir("gbx_ogr_badshp_") { dir =>
+            Files.write(dir.resolve("bad.shp"), garbage)
+            val before = schemaStagingDirs()
+            intercept[Exception](spark.read.format("shapefile_ogr").load(dir.toString))
+            withClue("schema staging folders left by the failed inference: ") { schemaStagingDirs().diff(before) shouldBe empty }
+        }
+    }
+
+    /** Paths of the files this JVM holds open (Linux), under `prefix`. */
+    private def openFilesUnder(prefix: String): Seq[String] = {
+        val fds = Paths.get("/proc/self/fd")
+        assume(Files.isDirectory(fds), "needs /proc/self/fd (Linux)")
+        val s = Files.list(fds)
+        try s.iterator().asScala.flatMap(p => Try(Files.readSymbolicLink(p).toString).toOption).filter(_.startsWith(prefix)).toList
+        finally s.close()
+    }
+
+    test("inferSchemaImpl closes the dataset it opens: a good layer, a layer that is not there, an empty layer") {
+        withShapefileDir { dir =>
+            withScratchDir("gbx_ogr_empty_") { emptyDir =>
+                GDALManager.initOgr()
+                val emptyGpkg = emptyDir.resolve("empty.gpkg")
+                val ds = ogr.GetDriverByName("GPKG").CreateDataSource(emptyGpkg.toString)
+                val srs = new SpatialReference()
+                srs.ImportFromEPSG(4326)
+                val layer = ds.CreateLayer("pts", srs, ogrConstants.wkbPoint)
+                layer.CreateField(new FieldDefn("id", ogrConstants.OFTInteger))
+                ds.FlushCache()
+                ds.delete()
+
+                val shp = dir.resolve("map.shp").toString
+                val prefixes = Seq(dir.toString, emptyDir.toString)
+                def held(): Seq[String] = prefixes.flatMap(openFilesUnder)
+                val before = held()
+                (1 to 10).foreach { _ =>
+                    OGR_SchemaInference.inferSchemaImpl("ESRI Shapefile", shp, Map.empty) should not be empty
+                    Try(OGR_SchemaInference.inferSchemaImpl("ESRI Shapefile", shp, Map("layerName" -> "no_such_layer")))
+                    OGR_SchemaInference.inferSchemaImpl("GPKG", emptyGpkg.toString, Map.empty) shouldBe None
+                }
+                withClue("files held open after 30 inferences: ") { held() shouldBe before }
+            }
         }
     }
 

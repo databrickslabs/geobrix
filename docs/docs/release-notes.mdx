@@ -183,6 +183,24 @@ formats.
   `string` in GDAL's `HH:MM:SS` form (`HH:MM:SS.sss` with milliseconds). The lightweight
   readers previously failed on these fields with `Cannot call the method "getLong"`.
 
+### Heavyweight vector readers — unreadable files fail the read (behavior change)
+
+- **A file the heavyweight vector readers cannot plan now fails the read.** Previously an
+  explicit-schema or directory read of an unreadable file, a path that does not exist, or a
+  `layerName` / `layerNumber` the file does not have silently returned 0 rows (or dropped that file
+  from a directory). The read now fails with an error that names each such file (up to five), the
+  driver, and the message GDAL gave.
+- **Directory reads skip files that are not datasets of the requested format.** Metadata files next
+  to the data (`.shp.xml`, `.aux.xml`, `.txt`, `.md`) and files of another vector format are
+  skipped, with a warning in the driver log that names them, so a folder holding a README or an
+  ArcGIS metadata file next to its shapefiles keeps reading. A `.txt` or `.md` file no longer
+  becomes the schema source of a folder. A file you name as the path is never skipped. See
+  [Vector Readers](./readers/vector#unreadable-files).
+- **Fewer empty partitions and no leftover temp folders.** A layer whose feature count is an exact
+  multiple of `chunkSize` no longer gets an empty trailing partition, and schema inference no
+  longer leaves a staging folder in the driver's temp directory for each read, or keeps the
+  inspected dataset open.
+
 ### Reader staging cache
 
 - **Staged copies no longer accumulate on worker disks.** The lightweight readers copy

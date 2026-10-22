@@ -209,7 +209,11 @@ format its name says) depends on `on_error`:
 
 - **`on_error="fail"`**, the default of `read_paths`. The [Lakeflow connector](./lakeflow-connector)
   always reads this way. A read error fails the read, with an error that names the file. A few
-  readers handle some damage themselves, as the second column of the table below says.
+  readers handle some damage themselves, as the second column of the table below says. The
+  heavyweight vector readers (`ogr` and the named `*_ogr` readers) fail the same way: the read
+  names each file it cannot plan (unreadable, missing, or without the layer you asked for). In a
+  directory read they skip metadata files (`.shp.xml`, `.aux.xml`, `.txt`, `.md`) and files of
+  another vector format, with a warning in the driver log.
 - **`on_error="skip"`** (`read_paths`) and **`on_error="quarantine"`** (the default of
   [`declare_ingest`](./auto-loader#unreadable-data)). Each file is read on its own, and so is each
   raster window or group of PMTiles tiles. What cannot be read is a **bad record**:

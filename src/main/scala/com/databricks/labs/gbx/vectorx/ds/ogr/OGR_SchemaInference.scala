@@ -212,31 +212,42 @@ object OGR_SchemaInference extends Serializable {
         val asWKB = options.getOrElse("asWKB", "true").toBoolean
 
         val dataset = OGR_Driver.open(path, driverName)
-        val layerByIndex = dataset.GetLayer(layerN)
-        if (layerByIndex == null) {
+        if (dataset == null) {
+            // Auto-detect (no driver named) returns null when no driver recognizes the file.
             throw new IllegalArgumentException(
-              s"No layer at index $layerN in dataset. Path: $path"
+              s"Could not open dataset with driver ${if (driverName.isEmpty) "auto-detect" else driverName} " +
+              s"at path $path. GDAL Error: ${org.gdal.gdal.gdal.GetLastErrorMsg}"
             )
         }
-        val resolvedLayerName = if (layerName.isEmpty) layerByIndex.GetName() else layerName
-        val layer = dataset.GetLayer(resolvedLayerName)
-        if (layer == null) {
-            throw new IllegalArgumentException(
-              s"Layer '$resolvedLayerName' not found in dataset. Path: $path. " +
-              s"Available layers: ${(0 until dataset.GetLayerCount()).map(i => dataset.GetLayer(i).GetName()).mkString(", ")}"
-            )
-        }
-        layer.ResetReading()
-        val headFeature = layer.GetNextFeature()
+        // The dataset is a native handle: release it on every path out, including the throws below.
+        try {
+            val layerByIndex = dataset.GetLayer(layerN)
+            if (layerByIndex == null) {
+                throw new IllegalArgumentException(
+                  s"No layer at index $layerN in dataset. Path: $path"
+                )
+            }
+            val resolvedLayerName = if (layerName.isEmpty) layerByIndex.GetName() else layerName
+            val layer = dataset.GetLayer(resolvedLayerName)
+            if (layer == null) {
+                throw new IllegalArgumentException(
+                  s"Layer '$resolvedLayerName' not found in dataset. Path: $path. " +
+                  s"Available layers: ${(0 until dataset.GetLayerCount()).map(i => dataset.GetLayer(i).GetName()).mkString(", ")}"
+                )
+            }
+            layer.ResetReading()
+            val headFeature = layer.GetNextFeature()
 
-        // Handle empty layers - return None if no features
-        if (headFeature == null) {
-            return None
-        }
-
-        // Field types are the layer's declared OGR types, identical for every feature.
-        Some(getFeatureSchema(headFeature, asWKB))
-
+            // Handle empty layers - return None if no features
+            if (headFeature == null) {
+                None
+            } else {
+                try {
+                    // Field types are the layer's declared OGR types, identical for every feature.
+                    Some(getFeatureSchema(headFeature, asWKB))
+                } finally headFeature.delete() // before the dataset: the feature reads the layer's definition
+            }
+        } finally dataset.delete()
     }
 
 }

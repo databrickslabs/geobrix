@@ -69,11 +69,11 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
             try {
                 OGR_SchemaInference.inferSchemaImpl(driverName, localPath, options.asCaseSensitiveMap().asScala.toMap)
             } finally {
-                // Let go of the dataset copy even when inference throws: the one node-file hold
+                // Let go of the staged copy even when inference throws: the one node-file hold
                 // stageDatasetOrFallBack took (released by its local path, the generation it read), or the
-                // fallback's temp copy, which nothing else uses.
+                // temp copy of a staged head file or fallback, which nothing else uses.
                 if (releaseAfter) NodeFileManager.releaseLocal(localPath)
-                else if (isGdbLike) HadoopUtils.discardSchemaCopy(localPath)
+                else HadoopUtils.discardSchemaCopy(localPath)
             }
 
         val headSchema = schemaOpt.getOrElse {
@@ -103,7 +103,9 @@ class OGR_DataSource extends TableProvider with DataSourceRegister {
                   s"shapefile reader: could not locate '$otherStem.shp' or '$otherStem.shp.zip' under $rawPath"
                 ))
                 val otherLocal = HadoopUtils.stageHeadForSchemaSpark(sparkSession, otherShp, files)
-                val otherSchemaOpt = OGR_SchemaInference.inferSchemaImpl(driverName, otherLocal, optMap)
+                val otherSchemaOpt =
+                    try OGR_SchemaInference.inferSchemaImpl(driverName, otherLocal, optMap)
+                    finally HadoopUtils.discardSchemaCopy(otherLocal)
                 otherSchemaOpt.foreach { otherSchema =>
                     if (otherSchema != headSchema) {
                         throw new IllegalArgumentException(

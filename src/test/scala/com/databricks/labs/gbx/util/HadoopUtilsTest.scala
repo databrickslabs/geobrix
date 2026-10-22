@@ -101,4 +101,28 @@ class HadoopUtilsTest extends AnyFunSuite with BeforeAndAfterEach {
             p should not startWith "file:/dbfs/"
         }
     }
+
+    test("isMetadataOnly is a suffix test on the file name: .shp.xml, .aux.xml, .txt and .md, not bare .xml") {
+        val metadata = Seq(
+          "file:/data/map.shp.xml", "/Volumes/c/s/v/MAP.SHP.XML", "file:/data/dem.tif.aux.xml",
+          "/data/README.txt", "file:/data/notes.TXT", "/data/ABOUT.md"
+        )
+        val data = Seq(
+          "file:/data/map.shp", "/data/roads.gpkg", "/data/area.gml", "/data/nas.xml", "/data/points.geojson",
+          "/data/archive.shp.zip", "/data/bundle.gdb", "/data/txt", "/data/xml.dir/data.json"
+        )
+        metadata.foreach(p => withClue(p)(HadoopUtils.isMetadataOnly(p) shouldBe true))
+        data.foreach(p => withClue(p)(HadoopUtils.isMetadataOnly(p) shouldBe false))
+    }
+
+    test("primaryDataFile and primaryDataFiles leave out sidecars and metadata-only files") {
+        val files = Seq(
+          "file:/d/README.txt", "file:/d/map.dbf", "file:/d/map.shp", "file:/d/map.shp.xml", "file:/d/map.shx",
+          "file:/d/zz_notes.md", "file:/d/zz_other.geojson", "file:/d/area.xml"
+        )
+        HadoopUtils.primaryDataFile(files) shouldBe Some("file:/d/map.shp")
+        HadoopUtils.primaryDataFiles(files) shouldBe Seq("file:/d/map.shp", "file:/d/zz_other.geojson", "file:/d/area.xml")
+        // Nothing but metadata: the head is still the first file, so inference fails naming it.
+        HadoopUtils.primaryDataFile(Seq("file:/d/README.txt")) shouldBe Some("file:/d/README.txt")
+    }
 }

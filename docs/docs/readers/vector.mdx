@@ -215,6 +215,24 @@ root
  |-- ...
 ```
 
+## Unreadable Files
+
+The heavyweight vector readers (`ogr` and the named `*_ogr` readers) plan a read by opening each
+file to count its features. A file that cannot be opened with the driver, a path that does not
+exist, or a `layerName` / `layerNumber` the file does not have fails the read. The error names each
+file that failed (up to five), the driver, and the message GDAL gave. This holds when you pass your
+own `.schema(...)` too.
+
+A directory read is more tolerant of files that are not datasets of the requested format. These are
+skipped, with a warning in the driver log that names the file:
+
+- metadata files that sit next to data: `.shp.xml`, `.aux.xml`, `.txt` and `.md`;
+- files of another vector format that GDAL opens with a different driver than the one requested
+  (for example a GeoJSON file in a folder read with `shapefile_ogr`).
+
+A file you name as the path is never skipped, and a file of the requested format that is damaged
+fails the read.
+
 ## Databricks Integration
 
 OGR (and named vector readers) output geometry in WKB format. To use with Databricks spatial functions, convert to GEOMETRY type. Example uses the Shapefile reader and sample-data Volumes path; the same pattern applies to any OGR-based reader.

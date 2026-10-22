@@ -6,6 +6,7 @@ import org.scalatest.matchers.should.Matchers._
 
 import java.io.{File, IOException}
 import java.nio.file.{Files, Path, Paths}
+import scala.jdk.CollectionConverters._
 
 /** On DCS dedicated clusters the JVM process is refused direct `/Volumes` reads (java.nio and native
   * GDAL alike) while query tasks are not. These tests force the java.nio steps to fail the way DCS
@@ -352,5 +353,37 @@ class HadoopUtilsSchemaStagingTest extends PlanTest with SilentSparkSession {
         HadoopUtils.discardSchemaCopy(gdb.resolve("a00000001.gdbtable").toString)
         Files.exists(zip) shouldBe true
         Files.exists(gdb.resolve("a00000001.gdbtable")) shouldBe true
+    }
+
+    private def schemaStagingDirs(): Set[String] = {
+        val s = Files.list(Paths.get(System.getProperty("java.io.tmpdir")))
+        try s.iterator().asScala.map(_.getFileName.toString).filter(_.startsWith("gbx_ogr_schema_")).toSet
+        finally s.close()
+    }
+
+    test("stageDatasetForSchemaSpark that throws leaves no staging folder") {
+        val before = schemaStagingDirs()
+        // An empty .gdb folder: nothing to stage.
+        val emptyGdb = Files.createDirectory(tmpDir().resolve("empty.gdb"))
+        intercept[Exception](HadoopUtils.stageDatasetForSchemaSpark(spark, emptyGdb.toString, Seq(refused, refused, queryStep)))
+        // A zip no step can read.
+        val missing = tmpDir().resolve("missing.zip")
+        intercept[IOException](HadoopUtils.stageDatasetForSchemaSpark(spark, missing.toString, Seq(refused, refused)))
+        withClue("schema staging folders left by the failed stagings: ") { schemaStagingDirs().diff(before) shouldBe empty }
+    }
+
+    test("stageHeadForSchemaSpark that throws leaves no staging folder") {
+        val before = schemaStagingDirs()
+        // The head is a directory.
+        val dir = Files.createDirectory(tmpDir().resolve("roads_dir"))
+        intercept[IllegalArgumentException](
+          HadoopUtils.stageHeadForSchemaSpark(spark, dir.toString, Seq(dir.toString), Seq(refused, refused, queryStep))
+        )
+        // A head no step can read.
+        val missing = tmpDir().resolve("missing.geojson")
+        intercept[IOException](
+          HadoopUtils.stageHeadForSchemaSpark(spark, missing.toString, Seq(missing.toString), Seq(refused, refused))
+        )
+        withClue("schema staging folders left by the failed stagings: ") { schemaStagingDirs().diff(before) shouldBe empty }
     }
 }

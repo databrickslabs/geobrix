@@ -198,3 +198,15 @@ def test_valid_mask_recognises_a_nan_nodata():
     a = np.array([[1.0, np.nan], [np.nan, 2.0]])
     with MemoryFile(_tile(a, float("nan"))) as mf, mf.open() as ds:
         assert nd.valid_mask(ds).tolist() == [[True, False], [False, True]]
+
+
+@pytest.mark.parametrize("kind", ["masked", "masked-nodata"])
+def test_valid_mask_honours_a_sources_own_mask_band(kind):
+    """The mask band of a source (not an alpha band) is the validity: the diagonal."""
+    with MemoryFile(_mask_kind_tile(kind)) as mf, mf.open() as ds:
+        assert nd.has_own_mask(ds)  # the premise
+        assert (nd.valid_mask(ds) == np.eye(4, dtype=bool)).all()
+        assert (
+            nd.valid_mask(ds, window=Window(1, 0, 3, 2))
+            == np.eye(4, dtype=bool)[:2, 1:]
+        ).all()

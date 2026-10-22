@@ -313,9 +313,9 @@ formats.
   the transparent pixels, whose colour bands are not 0, read as valid data in `centroid` chips,
   and reading the mask of a `covering` chip raised a `NodataShadowWarning`. The chips now keep the
   alpha band and declare no NoData: a pixel with alpha 0, and the part of a chip outside its cell,
-  is NoData, and an opaque pixel whose colour bands are 0 stays valid. The heavyweight tier
-  already did this for a source it warps to EPSG:27700 for `rst_bng_tessellate`, and in `covering`;
-  its `centroid` chips of a source that is not warped still declare NoData over the alpha band.
+  is NoData, and an opaque pixel whose colour bands are 0 stays valid. The heavyweight tier gives
+  the same pixels for a source it warps to EPSG:27700 for `rst_bng_tessellate`, and in `covering`;
+  its `centroid` chips of a source that is not warped still read transparent pixels as valid.
   The lightweight warps and clips also stopped labelling the fourth band of a four-band raster
   without alpha (red, green, blue and near-infrared, for example) as alpha, which made that band a
   transparency mask, and now keep the alpha band of 16-bit RGBA and gray-plus-alpha rasters.

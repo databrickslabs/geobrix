@@ -202,6 +202,8 @@ def test_warp_labels_a_band_alpha_exactly_when_the_source_does(layout, by, targe
     near-infrared band of RGB+NIR into a transparency mask (and read_masks then warned
     that the NoData shadows it), and lost the alpha band of a uint16 RGBA source."""
     src = _banded_source(layout)
+    # the premise: only the 16-bit RGBA source has an alpha band 4
+    assert _alpha_labels(src) == [False, False, False, layout == "rgba_u16"]
     with MemoryFile(src) as mf, mf.open() as ds:
         if by == "srid":
             out = warp.reproject_to_srid(ds, target, mark_fill_nodata=True)

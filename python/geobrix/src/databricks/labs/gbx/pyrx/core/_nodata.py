@@ -31,13 +31,22 @@ def fallback_nodata(dtype: str) -> float:
     return _FALLBACK_NODATA.get(np.dtype(dtype).name, 0.0)
 
 
+def _alpha_masked_bands(ds) -> list:
+    """0-based indices of the bands of *ds* that an alpha band masks (``MaskFlags.alpha``).
+
+    GDAL gives the alpha band itself an all-valid mask, and drops the flag from every band
+    when a NoData is declared over the alpha band (it shadows it).
+    """
+    from rasterio.enums import MaskFlags
+
+    return [i for i, flags in enumerate(ds.mask_flag_enums) if MaskFlags.alpha in flags]
+
+
 def has_alpha(ds) -> bool:
     """True when *ds* has an alpha band, or a band masked by one (heavy ``GDAL.hasAlpha``)."""
-    from rasterio.enums import ColorInterp, MaskFlags
+    from rasterio.enums import ColorInterp
 
-    return ColorInterp.alpha in ds.colorinterp or any(
-        MaskFlags.alpha in flags for flags in ds.mask_flag_enums
-    )
+    return ColorInterp.alpha in ds.colorinterp or bool(_alpha_masked_bands(ds))
 
 
 def has_own_mask(ds) -> bool:
@@ -56,18 +65,17 @@ def has_own_mask(ds) -> bool:
 def valid_mask(ds, window=None) -> np.ndarray:
     """``(rows, cols)`` bool array: True where a pixel of *ds* is valid.
 
-    A pixel is valid when ANY band's mask marks it valid (heavy ``anyValid``); the mask
-    bands recognise a NaN NoData. Where an alpha band masks the bands (the bands GDAL
-    flags ``MaskFlags.alpha``: it gives the alpha band itself an all-valid mask) the alpha
-    band decides instead, so an alpha-0 pixel is invalid whatever its colour bands hold. A
-    NoData declared over the alpha band shadows it (``MaskFlags.nodata``), and every band
-    is then judged by its own NoData. (Not ``DatasetReader.dataset_mask``: it takes band 4
-    of any 4-band raster whose band 1 is red as the mask, alpha or not.)
+    A pixel is valid when ANY band's mask marks it valid (heavy ``anyValid``). The masks
+    come from ``read_masks``, so a NaN NoData is recognised and a source's own per-dataset
+    mask band (an internal or external GTiff mask) is honoured. Where an alpha band masks
+    the bands (:func:`_alpha_masked_bands`) the alpha band decides instead, so an alpha-0
+    pixel is invalid whatever its colour bands hold, where "any band" would see the alpha
+    band's own all-valid mask. A NoData declared over the alpha band shadows it, and every
+    band is then judged by its own NoData. (Not ``DatasetReader.dataset_mask``: it takes
+    band 4 of any 4-band raster whose band 1 is red as the mask, alpha or not.)
     """
-    from rasterio.enums import MaskFlags
-
     masks = ds.read_masks(window=window)
-    by_alpha = [i for i, f in enumerate(ds.mask_flag_enums) if MaskFlags.alpha in f]
+    by_alpha = _alpha_masked_bands(ds)
     return (masks[by_alpha] if by_alpha else masks).astype(bool).any(axis=0)
 
 

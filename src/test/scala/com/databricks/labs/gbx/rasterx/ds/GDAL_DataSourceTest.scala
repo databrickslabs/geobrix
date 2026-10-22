@@ -3,12 +3,17 @@ package com.databricks.labs.gbx.rasterx.ds
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.rasterx
 import com.databricks.labs.gbx.rasterx.functions
+import com.databricks.labs.gbx.rasterx.ds.gdal.GDAL_RowWriter
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.util.V2Tile
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withNetCDFCopy, withScratchDir}
-import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil}
+import com.databricks.labs.gbx.util.{HadoopUtils, NodeCacheRetentionOff, NodeFileManager, NodeFilePathUtil, SerializationUtil}
+import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
+import org.apache.spark.sql.types.{StringType, StructField, StructType}
+import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.gdal
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.matchers.must.Matchers.be
@@ -254,6 +259,50 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
                 Files.list(p).toList.asScala.foreach(Files.deleteIfExists)
                 Files.deleteIfExists(p)
             }
+        }
+    }
+
+    test("GDAL writer replaces a directory-format (Zarr) output written again under the same name") {
+        GDALManager.init(ExpressionConfig(spark))
+        assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
+        val band = (b: String) =>
+            Paths.get(getClass.getResource(s"/modis/MCD43A4.A2018185.h10v07.006.2018194033728_$b.TIF").toURI)
+        // A (source, tile) row of one band's GeoTIFF, to be written as an uncompressed Zarr named "same"
+        // (Zarr has no DEFLATE codec, the writer's default).
+        val row = (b: String) => {
+            val meta = Map("driver" -> "GTiff", "format" -> "Zarr", "compression" -> "NONE")
+            val tile = V2Tile.row(cellid = 0L, raster = Files.readAllBytes(band(b)), metadata = SerializationUtil.toMapData(meta))
+            InternalRow(UTF8String.fromString("same"), tile)
+        }
+        val checksum = (p: String) => {
+            val ds = gdal.Open(p)
+            try ds.GetRasterBand(1).Checksum()
+            finally ds.delete()
+        }
+        val schema = StructType(Seq(StructField("source", StringType), StructField("tile", V2Tile.schema)))
+        withScratchDir("gdal_zarr_out_") { out =>
+            val writer = new GDAL_RowWriter(schema, out.toString, Some("source"), "zarr", 0, 0L, ExpressionConfig(spark))
+            writer.write(row("B01"))
+            val zarr = out.resolve("same.zarr")
+            withClue(s"$zarr after the first write: ") { Files.isDirectory(zarr) shouldBe true }
+            val stale = zarr.resolve("stale.marker") // an entry the second write does not make
+            Files.write(stale, garbage)
+            writer.write(row("B02"))
+            withClue(s"$stale after the second write: ") { Files.exists(stale) shouldBe false }
+            withClue(s"band 1 of $zarr after the second write: ") {
+                checksum(zarr.toString) shouldBe checksum(band("B02").toString)
+            }
+        }
+    }
+
+    test("GDAL writer's local cleanup deletes a staging dir holding a non-empty directory output") {
+        withScratchDir("gdal_writer_local_") { root =>
+            val dir = root.resolve("stage")
+            Files.createDirectories(dir.resolve("out.zarr").resolve("b"))
+            Files.write(dir.resolve("out.zarr").resolve(".zarray"), garbage)
+            Files.write(dir.resolve("out.zarr").resolve("b").resolve("0.0"), garbage)
+            GDAL_RowWriter.deleteLocal(dir)
+            withClue(s"$dir after the cleanup: ") { Files.exists(dir) shouldBe false }
         }
     }
 

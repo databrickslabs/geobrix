@@ -1,59 +1,48 @@
 package com.databricks.labs.gbx.util
 
-import org.apache.hadoop.fs.{FileSystem, FileUtil, Path}
+import org.apache.hadoop.fs.{FileStatus, FileSystem, FileUtil, Path}
 
-import java.io.IOException
-import java.time.{Duration, Instant}
+import java.io.{FileNotFoundException, IOException}
 import scala.util.control.NonFatal
 
-/** Copy between Hadoop FileSystems with retry/wait until destination exists (for distributed consistency). */
+/** Copies between Hadoop FileSystems, replacing whatever is at the destination. */
 object AtomicDistributedCopy {
 
-    // Maximum wait time for file existence (10 seconds)
-    private val MAX_WAIT_TIME_MS = 10000
-
-    /** Copies srcPath to dstPath when the destination is missing OR its length differs from
-      * the source; otherwise waits up to MAX_WAIT_TIME_MS for dst to appear.
+    /** Copies srcPath (a file or a directory) to dstPath, replacing what is there. A file is overwritten.
+      * An existing directory, or anything at dstPath when a directory is copied, is deleted first, so a
+      * directory output (Zarr) keeps no entry of the version it replaces and is never copied into it.
       *
-      * The local cache path is keyed by the REMOTE PATH (not its content), so an
-      * existence-only check would serve a STALE local copy when the remote file changed
-      * under the same path (e.g. an overwrite within the same cluster session, on a
-      * long-lived executor whose local_disk0 still holds the old copy). A length mismatch is
-      * a cheap, reliable content-change signal for files; the copy then overwrites the stale
-      * local file. (Directories report length 0, so the `.gdb`-directory path behaves as
-      * before -- no regression.)
+      * Nothing is skipped: every read copy lands in a fresh generation dir of the node-file cache, so the
+      * destination exists only when a writer writes the same output again, and keeping it (as was done
+      * when it had the same length) kept stale output. Copying a path onto itself is a no-op.
       *
-      * A failed copy throws an IOException carrying the cause: a partly written destination
-      * must not pass for a finished copy, so the caller deletes it and retries. */
-    def copyIfNeeded(
+      * A failed copy throws an IOException carrying the cause: a partly written destination must not
+      * pass for a finished copy. */
+    def copyOverwriting(
         srcFs: FileSystem,
         dstFs: FileSystem,
         srcPath: Path,
         dstPath: Path
-    ): Unit = {
-        val stale =
-            dstFs.exists(dstPath) &&
-                dstFs.getFileStatus(dstPath).getLen != srcFs.getFileStatus(srcPath).getLen
-        if (!dstFs.exists(dstPath) || stale) {
+    ): Unit =
+        if (srcFs.makeQualified(srcPath) != dstFs.makeQualified(dstPath)) {
             val copied =
                 try {
-                    // overwrite=true so a stale local copy (wrong length) is replaced, not skipped.
+                    val srcIsDir = srcFs.getFileStatus(srcPath).isDirectory
+                    if (statusOf(dstFs, dstPath).exists(st => st.isDirectory || srcIsDir)) {
+                        if (!dstFs.delete(dstPath, true) && dstFs.exists(dstPath)) {
+                            throw new IOException(s"Could not delete the existing $dstPath")
+                        }
+                    }
                     FileUtil.copy(srcFs, srcPath, dstFs, dstPath, false, true, srcFs.getConf)
                 } catch {
                     case NonFatal(e) => throw new IOException(s"Failed to copy $srcPath to $dstPath: ${e.getMessage}", e)
                 }
             if (!copied) throw new IOException(s"Failed to copy $srcPath to $dstPath")
-        } else {
-            waitUntilFileExists(dstFs, dstPath)
         }
-    }
 
-    /** Polls until path exists or MAX_WAIT_TIME_MS elapses. */
-    private def waitUntilFileExists(fs: FileSystem, path: Path): Unit = {
-        val startTime = Instant.now()
-        while (!fs.exists(path) && Duration.between(startTime, Instant.now()).toMillis < MAX_WAIT_TIME_MS) {
-            Thread.sleep(200)
-        }
-    }
+    /** The status of `p`, or None when nothing is there. */
+    private def statusOf(fs: FileSystem, p: Path): Option[FileStatus] =
+        try Some(fs.getFileStatus(p))
+        catch { case _: FileNotFoundException => None }
 
 }

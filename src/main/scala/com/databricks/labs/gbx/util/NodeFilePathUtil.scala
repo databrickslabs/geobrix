@@ -379,7 +379,7 @@ object NodeFilePathUtil extends Logging {
       * One walk that visits each entry once and deletes it as it goes: an entry that vanishes under the
       * walk (something else deleting the same tree) is skipped, not an error, so this returns once the
       * whole tree is gone. Failures to delete are logged. */
-    private[util] def deleteRecursively(p: Path): Unit =
+    private[gbx] def deleteRecursively(p: Path): Unit =
         try {
             Files.walkFileTree(
               p,

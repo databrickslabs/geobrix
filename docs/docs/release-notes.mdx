@@ -229,6 +229,9 @@ formats.
 - **The heavyweight readers re-read a file replaced at the same path.** A copy is reused only while
   the source's size and modification time are unchanged, so a file rewritten in place is copied
   again. Previously a worker could keep reading its earlier copy.
+- **The heavyweight `gdal` and `gtiff_gdal` writers replace an output of the same name**, where an
+  `append` write used to keep an older file of the same size instead of the new tile and failed on a
+  directory format such as Zarr.
 
 ### PMTiles reader
 

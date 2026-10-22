@@ -667,7 +667,9 @@ object HadoopUtils extends Logging {
       * file's same-stem sidecars); returns the copied item's path. Callers name `outPath` after the
       * source (NodeFilePathUtil's `<cache>/<hash>/<name>`, the writers' `<root>/<name>`), so the copy
       * lands at `outPath`. A directory is handled like a file: copying it INTO `outPath` would produce
-      * `outPath/<name>/...` and leave `outPath`, the path NodeFilePathUtil returns, empty. */
+      * `outPath/<name>/...` and leave `outPath`, the path NodeFilePathUtil returns, empty. Whatever is
+      * already at the destination is replaced (see [[AtomicDistributedCopy.copyOverwriting]]), so a writer
+      * that writes the same output again leaves only the new one. */
     // RAKE GUARD: this reads /Volumes on the EXECUTOR via Hadoop FS on the BARE /Volumes path
     // (see cleanPath) -> the UC-integrated connector, which IS credentialed in DSV2 tasks. Do NOT
     // "fix" a /Volumes read failure here by rewriting to file: or by adding a POSIX java.io copy:
@@ -684,7 +686,8 @@ object HadoopUtils extends Logging {
         copyToLocalDir(copyFromPath.toString, outputDir, hconf)
     }
 
-    /** Copies files from srcFs whose names start with baseSrcPath prefix into dstDirPath on dstFs. */
+    /** Copies files from srcFs whose names start with baseSrcPath prefix into dstDirPath on dstFs, replacing
+      * any of the same name there. */
     def copyRelativeFiles(
         srcFs: FileSystem,
         dstFs: FileSystem,
@@ -705,11 +708,12 @@ object HadoopUtils extends Logging {
         matchingFiles.foreach { fileStatus =>
             val srcFile = fileStatus.getPath
             val dstFile = new Path(dstDirPath, srcFile.getName)
-            AtomicDistributedCopy.copyIfNeeded(srcFs, dstFs, srcFile, dstFile)
+            AtomicDistributedCopy.copyOverwriting(srcFs, dstFs, srcFile, dstFile)
         }
     }
 
-    /** Copies inPath (file or dir) into outDir; for multi-file sources (e.g. .shp) copies all related files. Returns path to result. */
+    /** Copies inPath (file or dir) into outDir, replacing what is there under its name; for multi-file sources
+      * (e.g. .shp) copies all related files. Returns path to result. */
     def copyToLocalDir(inPath: String, outDir: String, hConf: SerializableConfiguration): String = {
         val copyFromPath = new Path(cleanPath(inPath))
         val outDirPath = new Path(cleanPath(outDir))
@@ -719,7 +723,7 @@ object HadoopUtils extends Logging {
 
                 if (srcFS.getFileStatus(copyFromPath).isDirectory) {
                     val dst = new Path(outDirPath, copyFromPath.getName)
-                    AtomicDistributedCopy.copyIfNeeded(srcFS, dstFS, copyFromPath, dst)
+                    AtomicDistributedCopy.copyOverwriting(srcFS, dstFS, copyFromPath, dst)
                     dst.toString
                 } else {
                     if (!dstFS.exists(outDirPath)) dstFS.mkdirs(outDirPath)

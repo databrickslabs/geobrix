@@ -48,7 +48,7 @@ defusedxml==0.7.1
 # library set, so it is pinned independently (safe math-expression evaluator for
 # rst_mapalgebra — no arbitrary-code exec).
 scipy==1.16.3
-numexpr==2.11.0
+numexpr==2.14.1
 
 # --- web-mercator XYZ tiling (rio-tiler bundles morecantile + color-operations) ---
 rio-tiler==9.0.6

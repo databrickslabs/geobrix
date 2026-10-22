@@ -211,7 +211,9 @@ Serverless:
   `decimate=1` for the full-resolution product.
 - **Bad nodes are skipped, not fatal.** A 0-byte or unreadable `.las`/`.laz` (for example an
   empty Entwine Point Tile node from an interrupted download) is skipped with a warning, so
-  one corrupt file cannot fail a distributed read over a whole archive.
+  one corrupt file cannot fail a distributed read over a whole archive. A LAZ file whose chunk
+  table is garbled is set aside as unreadable before it is decoded (a read without `on_error`
+  warns and skips it), instead of ending the worker process.
 - **Parallelism is per file** — one InputPartition per file. A directory of many tiles
   parallelizes naturally across executors; a handful of very large files limits parallelism
   to the file count, so split or tile upstream if you need more executors engaged.

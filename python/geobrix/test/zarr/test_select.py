@@ -493,3 +493,115 @@ def test_isel_on_an_empty_dimension_says_so():
     with pytest.raises(ValueError, match="empty") as e:
         resolve(("t",), (0,), {}, None, {"t": 0})
     assert "[-0" not in str(e.value) and "Fix:" in str(e.value)
+
+
+# ---- fix round 2: projected origins, float32 seams, CF unit spellings, non-finite bounds, offsets
+
+
+def test_projected_x_with_a_large_origin_never_wraps():
+    metres = 500000 + np.arange(
+        360.0
+    )  # about 360 units wide, but nowhere near longitudes
+    assert lon_ranges(metres, slice(499990, 500010), "x") == ((0, 11),)
+    assert lon_ranges(metres, slice(500340, 500400), "x") == ((340, 360),)
+    assert lon_ranges(metres, slice(500010, 499990), "x") == ()
+    tens = 1000 + np.arange(36) * 10.0
+    assert lon_ranges(tens, slice(1340, 1400), "x") == ((34, 36),)
+    assert lon_ranges(tens, slice(1340, 1000), "x") == ()
+
+
+def test_periodic_origin_must_lie_within_one_turn_of_zero():
+    wraps = lon_ranges(360 + np.arange(360.0), slice(350, 370), "lon")
+    assert wraps == ((350, 360), (0, 11))  # origin 360: the boundary is included
+    assert lon_ranges(-360 + np.arange(360.0), slice(-10, 10), "lon") == (
+        (350, 360),
+        (0, 11),
+    )
+    # origin 361 is out of range: a plain slice, 361..370 inclusive
+    assert lon_ranges(361 + np.arange(360.0), slice(350, 370), "lon") == ((0, 10),)
+    assert lon_ranges(-361 + np.arange(360.0), slice(-10, 10), "lon") == ((351, 360),)
+
+
+def test_float32_axis_keeps_its_edge_labels_after_wrapping():
+    lon64 = np.arange(3600) * 0.1
+    lon32 = lon64.astype(np.float32)
+    for lon in (lon64, lon32):
+        assert lon_ranges(lon, slice(-10.1, 10)) == (
+            (3499, 3600),
+            (0, 101),
+        )  # 349.9 .. 10.0
+        assert lon_ranges(lon, slice(-10.1, -9.9)) == (
+            (3499, 3502),
+        )  # 349.9, 350.0, 350.1
+        assert lon_ranges(lon, slice(349.9, 10.1)) == ((3499, 3600), (0, 102))
+
+
+def test_float32_wrap_rounds_after_the_arithmetic_not_before():
+    # float32(-293.2) is off by 1e-5, which would survive the +360 and drop the label at 66.8
+    lon64 = np.arange(3600) * 0.1
+    lon32 = lon64.astype(np.float32)
+    for lon in (lon64, lon32):
+        assert lon_ranges(lon, slice(45.8, -293.2)) == (
+            (458, 669),
+        )  # 45.8 .. 66.8, one turn short
+        assert lon_ranges(lon, slice(305.3, -276.7)) == ((3053, 3600), (0, 834))
+        assert lon_ranges(lon, slice(389.7, 366.4)) == ((297, 3600), (0, 65))
+
+
+@pytest.mark.parametrize(
+    "units",
+    ["degrees_east", "degree_east", "degrees_E", "degree_E", "degreeE", "degreesE"],
+)
+def test_cf_longitude_unit_spellings(units):
+    assert lon_ranges(LON, slice(-10, 10), "col", {"units": units}) == (
+        (140, 144),
+        (0, 5),
+    )
+
+
+def test_other_units_are_not_longitudes():
+    for units in ("degrees_north", "degree_N", "m", ""):
+        assert lon_ranges(LON, slice(-10, 10), "col", {"units": units}) == ((0, 5),)
+
+
+@pytest.mark.parametrize(
+    "bound", [float("nan"), float("inf"), float("-inf"), np.float32("nan")]
+)
+def test_non_finite_slice_bounds_are_rejected(bound):
+    for coord, dim in ((LON, "longitude"), (LAT, "latitude"), (np.arange(10), "k")):
+        for s in (slice(10, bound), slice(bound, 10), slice(None, bound)):
+            with pytest.raises(ValueError, match=r"finite.*Fix:"):
+                lon_ranges(coord, s, dim)
+
+
+def test_non_finite_scalar_labels_are_rejected():
+    for v in (float("nan"), float("inf")):
+        with pytest.raises(ValueError, match=r"finite.*Fix:"):
+            resolve(DIMS, SHAPE, COORDS, {"latitude": v}, None)
+        with pytest.raises(ValueError, match=r"finite.*Fix:"):
+            resolve(DIMS, SHAPE, COORDS, {"latitude": [50, v]}, None)
+
+
+def test_finite_bound_beyond_the_float_dtype_clamps_quietly():
+    lon32 = LON.astype(np.float32)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert lon_ranges(lon32, slice(0, 1e300), "col") == ((0, 144),)
+        assert lon_ranges(lon32, slice(-1e300, 10), "col") == ((0, 5),)
+        assert lon_ranges(lon32, slice(-1e300, 10)) == (
+            (0, 144),
+        )  # periodic: 360 degrees or more
+
+
+@pytest.mark.parametrize("off", ["+25:00", "-25:00", "+24:00", "+05:75", "+99"])
+def test_utc_offset_out_of_range_cannot_be_parsed(off):
+    text = "2023-01-01T05:00" + off
+    for sel in (text, slice(text, None)):
+        with pytest.raises(ValueError, match="cannot parse") as e:
+            time_ranges(sel)
+        assert "not found" not in str(e.value) and "Fix:" in str(e.value)
+
+
+def test_utc_offset_just_inside_the_range_still_parses():
+    assert time_ranges(slice("2023-01-01T05:00+23:59", None)) == ((0, 48),)
+    assert time_ranges(slice("2023-01-01T05:00-23:59", None)) == ((29, 48),)

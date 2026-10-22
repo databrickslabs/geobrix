@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import datetime as _dt
 import itertools
+import math
 import re
 from dataclasses import dataclass
 from functools import cached_property
@@ -25,6 +26,10 @@ from functools import cached_property
 import numpy as np
 
 _LON_NAMES = frozenset({"lon", "longitude", "x"})
+# CF spellings of the longitude unit, lower-cased
+_LON_UNITS = frozenset(
+    {"degrees_east", "degree_east", "degrees_e", "degree_e", "degreese", "degreee"}
+)
 _FLOAT_TOL = 1e-6  # fraction of the axis step added to slice bounds on float axes
 _PERIOD_TOL = (
     0.01  # fraction of the axis step allowed when testing for a 360 degree span
@@ -94,15 +99,20 @@ def resolve(
     nothing (``slice(50, 60)`` on a descending latitude is empty). Open ends use ``None``.
 
     Periodic longitude: a longitude-like dimension (named ``lon``/``longitude``/``x``, or whose
-    ``coord_attrs`` has ``units == "degrees_east"``, ``standard_name == "longitude"`` or
-    ``axis == "X"``) is periodic when its coordinates ascend and cover the full circle, that is
-    ``span + step >= 360``. On such an axis both slice bounds are normalised into
+    ``coord_attrs`` has ``units`` ``degrees_east`` (or the CF spellings ``degree_east``,
+    ``degrees_E``, ``degree_E``, ``degreesE``, ``degreeE``), ``standard_name == "longitude"`` or
+    ``axis == "X"``) is periodic when its coordinates ascend, start between -360 and 360, and
+    cover the full circle: ``span + step >= 360`` and ``span <= 360``. The origin and span bounds
+    keep a projected ``x`` (metres, or cells counted from 500000) from wrapping, but the name
+    rule stays: a bare ``x`` axis of about 360 units whose origin is in range is treated as a
+    longitude. On a periodic axis both slice bounds are normalised into
     ``[axis min, axis min + 360)`` and the slice is the east-going arc from ``a`` to ``b``: one
     range, or two when it crosses the seam (see ``AxisSel``). ``slice(-10, 10)`` on 0..360 and
     ``slice(350, 10)`` on -180..180 are both the labels around 0. An axis stored with a repeated
     end (0..360 inclusive) never selects that label twice. A regional axis (``x`` 0..299, ``lon``
     100..250) never wraps, so a reversed slice there is empty. Scalars on a periodic axis
-    are normalised the same way and matched by circular distance.
+    are normalised the same way and matched by circular distance. A scalar exactly halfway
+    between two labels goes to the lowest index.
 
     Time labels: an ISO string with a date or a partial time is a period, as in xarray. As a
     slice start it means the beginning of that period and as a slice end the end of it, so
@@ -313,9 +323,10 @@ class _Axis:
         """``(origin, repeats_origin)`` for a periodic longitude axis, else ``None``.
 
         Periodic means longitude-like, ascending and covering the full circle: ``span + step >=
-        360``. The span cannot exceed 360 either, which keeps a projected ``x`` in metres from
-        qualifying. ``repeats_origin`` is true when the last label is the first one again
-        (an axis stored 0..360 inclusive).
+        360``. The span cannot exceed 360 and the origin must lie in [-360, 360], which keeps a
+        projected ``x`` (in metres, or counted from a large origin) from qualifying.
+        ``repeats_origin`` is true when the last label is the first one again (an axis stored
+        0..360 inclusive).
         """
         if (
             not self.lon_like
@@ -327,6 +338,8 @@ class _Axis:
         if self.direction != 1:
             return None
         origin = float(self.num[0])
+        if not -360.0 <= origin <= 360.0:
+            return None
         span = float(self.num[-1]) - origin
         slack = _PERIOD_TOL * self.step
         if span + self.step < 360.0 - slack or span > 360.0 + slack:
@@ -397,7 +410,7 @@ def _is_lon_like(dim: str, attrs: dict | None) -> bool:
     if not attrs:
         return False
     return (
-        str(attrs.get("units", "")).lower() == "degrees_east"
+        str(attrs.get("units", "")).lower() in _LON_UNITS
         or str(attrs.get("standard_name", "")).lower() == "longitude"
         or str(attrs.get("axis", "")).upper() == "X"
     )
@@ -459,7 +472,12 @@ def _parse_iso(text: str) -> tuple[np.datetime64, np.datetime64]:
         s, off = m["base"].replace(" ", "T"), m["off"]
         if off != "Z":
             digits = off[1:].replace(":", "")
-            minutes = int(digits[:2]) * 60 + int(digits[2:] or 0)
+            hours, mins = int(digits[:2]), int(digits[2:] or 0)
+            if hours > 23 or mins > 59:
+                raise ValueError(
+                    f"cannot parse the UTC offset {off}: it must be under 24 hours"
+                )
+            minutes = hours * 60 + mins
             shift = np.timedelta64(-minutes if off[0] == "-" else minutes, "m")
     start = np.datetime64(s)
     if np.isnat(start):
@@ -523,8 +541,12 @@ def _time_bound(ax: _Axis, v, role: str) -> int:
 # ---- label lookup
 
 
-def _number(ax: _Axis, v):
-    """A numeric label as a number comparable with ``ax.num``."""
+def _number(ax: _Axis, v, cast: bool = True):
+    """A numeric label as a number comparable with ``ax.num``.
+
+    ``cast=False`` keeps a float as given (still checked finite), for callers that do arithmetic on it
+    first and round to the axis dtype afterwards with ``_as_axis_dtype``.
+    """
     if (
         isinstance(v, (str, bytes, np.datetime64, np.timedelta64, _dt.date))
         or v is None
@@ -533,15 +555,32 @@ def _number(ax: _Axis, v):
             f"{v!r} is not a numeric label for {ax.dim} ({ax.coord.dtype}). Fix: pass a number."
         )
     try:
-        if ax.kind == "f":
-            return float(
-                np.asarray(v).astype(ax.coord.dtype)
-            )  # same rounding as the stored labels
-        return _clamp(int(v)) if _is_int(v) else float(v)
+        x = int(v) if _is_int(v) else float(v)
     except (TypeError, ValueError, OverflowError) as e:
         raise ValueError(
             f"cannot use {v!r} as a label for {ax.dim} ({ax.coord.dtype}): {e}. Fix: pass a label of the coordinate's type."
         ) from e
+    if isinstance(x, float) and not math.isfinite(x):
+        raise ValueError(
+            f"{v!r} is not a finite number, so it cannot select labels on {ax.dim}. Fix: pass a finite number, or None to leave a slice end open."
+        )
+    if isinstance(x, int):
+        x = _clamp(x)
+    if not cast:
+        return x
+    return _as_axis_dtype(ax, float(x)) if ax.kind == "f" else x
+
+
+def _as_axis_dtype(ax: _Axis, x):
+    """``x`` rounded the way the stored labels are, so an equal label compares equal.
+
+    A float beyond the dtype's range is held at its largest finite value, which is past every label.
+    Integer axes keep ``x`` as it is.
+    """
+    if ax.kind != "f":
+        return x
+    fmax = float(np.finfo(ax.coord.dtype).max)
+    return float(np.asarray(max(-fmax, min(fmax, x))).astype(ax.coord.dtype))
 
 
 def _scalar(ax: _Axis, v):
@@ -670,15 +709,18 @@ def _slice_ranges(ax: _Axis, a, b) -> tuple[tuple[int, int], ...]:
         lo = None if a is None else _time_bound(ax, a, "start")
         hi = None if b is None else _time_bound(ax, b, "stop")
     else:
-        lo = None if a is None else _number(ax, a)
-        hi = None if b is None else _number(ax, b)
+        # as given: a periodic wrap does arithmetic on the bound, and rounding to float32 first would
+        # carry that rounding error across the seam; the dtype cast follows the arithmetic
+        lo = None if a is None else _number(ax, a, cast=False)
+        hi = None if b is None else _number(ax, b, cast=False)
     period = ax.period
     if period is not None and lo is not None and hi is not None:
         origin, repeats = period
         if not origin <= lo <= hi <= origin + 360.0:
             if lo <= hi and hi - lo >= 360.0:
                 return ((0, n),)
-            a2, b2 = _wrap(lo, origin), _wrap(hi, origin)
+            a2 = _as_axis_dtype(ax, _wrap(lo, origin))
+            b2 = _as_axis_dtype(ax, _wrap(hi, origin))
             if a2 <= b2:
                 return _bounded(num, True, a2, b2, ax.tol)
             return _join_arcs(
@@ -687,4 +729,7 @@ def _slice_ranges(ax: _Axis, a, b) -> tuple[tuple[int, int], ...]:
                 n,
                 repeats,
             )
+    if ax.kind not in "Mm":
+        lo = None if lo is None else _as_axis_dtype(ax, lo)
+        hi = None if hi is None else _as_axis_dtype(ax, hi)
     return _bounded(num, asc, lo, hi, ax.tol)

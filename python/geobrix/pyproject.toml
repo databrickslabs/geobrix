@@ -74,7 +74,7 @@ light-base = [
     # floor-only elsewhere and floats to latest on the dev-container / transitive
     # path, so bound it like the other runtime-sensitive deps rather than leave it open.
     "scipy>=1.11.0,<2",
-    "numexpr>=2.8.0",
+    "numexpr>=2.14.1",
     "rio-cogeo>=7.0,<8",
     "h3>=4.1,<5",
     "quadbin>=0.2,<0.3",

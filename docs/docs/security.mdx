@@ -52,8 +52,11 @@ and are never part of a shipped artifact. Because the PGP step runs inside the
 project build, it does not cover them; instead
 [`scripts/ci/fetch-delta-test-jars.sh`](https://github.com/databrickslabs/geobrix/blob/main/scripts/ci/fetch-delta-test-jars.sh)
 pins the Maven plugin version, runs Maven with `-C`, and checks each jar against
-a fixed sha256. It repeats that check on every run, including when the jars are
-already present, and fails on any mismatch.
+a fixed sha256. The script repeats that check every time it runs, including when
+the jars are already present, and fails on any mismatch. CI and the development
+container's test command both run it before the Zarr tests. The tests themselves
+only locate the jars and do not re-hash them, so a test run started without the
+script is not covered by the check.
 
 ### Hash-pinned Python dependencies
 

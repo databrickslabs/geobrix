@@ -76,7 +76,9 @@ def test_conftest_delta_version_matches_the_fetch_script_and_ci_runs_it():
     assert script_version == conftest_version
     for pin in ("SHA256_DELTA_SPARK", "SHA256_DELTA_STORAGE"):
         assert re.search(rf'^{pin}="[0-9a-f]{{64}}"$', script, re.M), pin
-    assert " -C" in script, "Maven must run with strict checksums"
+    assert re.search(
+        r"^MVN_ARGS=\(.*\s-C\b", script, re.M
+    ), "Maven must run with strict checksums"
     light = (REPO / ".github/actions/pyrx_build/action.yml").read_text()
     assert "scripts/ci/fetch-delta-test-jars.sh" in light
 

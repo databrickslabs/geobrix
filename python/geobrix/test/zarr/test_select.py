@@ -605,3 +605,92 @@ def test_utc_offset_out_of_range_cannot_be_parsed(off):
 def test_utc_offset_just_inside_the_range_still_parses():
     assert time_ranges(slice("2023-01-01T05:00+23:59", None)) == ((0, 48),)
     assert time_ranges(slice("2023-01-01T05:00-23:59", None)) == ((29, 48),)
+
+
+# ---- fix round 3: seams on pixel-centred float32 axes, out-of-range bounds, float noise
+
+PIXEL64 = np.arange(-1799.5, 1800, 1.0) / 10  # -179.95 .. 179.95, step 0.1
+PIXEL32 = PIXEL64.astype(np.float32)
+EAST64 = np.arange(0.5, 3600, 1.0) / 10  # 0.05 .. 359.95, step 0.1
+EAST32 = EAST64.astype(np.float32)
+FINE64 = np.arange(7200) * 0.05 + 0.025  # 0.025 .. 359.975, step 0.05
+FINE32 = FINE64.astype(np.float32)
+
+
+def test_arcs_ending_on_the_first_label_keep_it_on_pixel_centred_float32_axes():
+    for lon in (PIXEL64, PIXEL32):
+        assert lon_ranges(lon, slice(179.95, -179.95)) == ((3599, 3600), (0, 1))
+        assert lon_ranges(lon, slice(170.05, -179.95)) == ((3500, 3600), (0, 1))
+    for lon in (EAST64, EAST32):
+        assert lon_ranges(lon, slice(359.95, 0.05)) == ((3599, 3600), (0, 1))
+        assert lon_ranges(lon, slice(-0.05, 0.05)) == ((3599, 3600), (0, 1))
+    for lon in (FINE64, FINE32):
+        assert lon_ranges(lon, slice(359.975, 0.025)) == ((7199, 7200), (0, 1))
+        assert lon_ranges(lon, slice(-0.025, 0.075)) == ((7199, 7200), (0, 2))
+
+
+def test_bounds_beyond_the_dtype_range_are_past_every_label():
+    f32 = np.array(
+        [0, 1e38, 3.4028235e38], dtype=np.float32
+    )  # the last label is the dtype maximum
+    f16 = np.array([0, 1, 65504], dtype=np.float16)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert lon_ranges(f32, slice(1e300, None), "k") == ()
+        assert lon_ranges(f32, slice(5e38, None), "k") == ()
+        assert lon_ranges(f16, slice(70000, None), "k") == ()
+        assert lon_ranges(f32, slice(3.4028235e38, None), "k") == (
+            (2, 3),
+        )  # the maximum, spelt in decimal
+        assert lon_ranges(f16, slice(65504, None), "k") == ((2, 3),)
+        assert lon_ranges(f32, slice(None, 1e300), "k") == (
+            (0, 3),
+        )  # an upper bound past the end is open
+        assert lon_ranges(f32, slice(-1e300, None), "k") == ((0, 3),)
+        assert lon_ranges(f32, slice(None, -1e300), "k") == ()
+        desc = f32[::-1]
+        assert lon_ranges(desc, slice(1e300, None), "k") == ((0, 3),)
+        assert lon_ranges(desc, slice(None, 1e300), "k") == ()
+        assert lon_ranges(desc, slice(-1e300, None), "k") == ()
+        with pytest.raises(ValueError, match="not found"):
+            lon_ranges(f32, 1e300, "k")  # a scalar past the maximum is not the maximum
+
+
+def test_non_finite_messages_fit_the_kind_of_selection():
+    with pytest.raises(ValueError, match="Fix:") as e:
+        resolve(DIMS, SHAPE, COORDS, {"latitude": float("nan")}, None)
+    assert "slice end" not in str(e.value) and "isel" in str(e.value)
+    with pytest.raises(ValueError, match="Fix:") as e:
+        lon_ranges(LON, slice(10, float("nan")))
+    assert "slice end" in str(e.value)
+
+
+def test_float_noise_cannot_turn_a_zero_width_arc_into_a_near_full_turn():
+    lon64 = np.arange(-1800, 1800) / 10  # -180 .. 179.9
+    for lon in (lon64, lon64.astype(np.float32)):
+        assert lon_ranges(lon, slice(-218.7, -578.7)) == (
+            (3213, 3214),
+        )  # both are 141.3
+        assert lon_ranges(lon, slice(794.2, 74.2)) == ((2542, 2543),)  # both are 74.2
+        assert lon_ranges(lon, slice(-10.1, 349.9)) == (
+            (0, 3600),
+        )  # exactly one turn wide
+    assert lon_ranges(LON, slice(10.0000001, 10.0)) == (
+        (4, 144),
+        (0, 4),
+    )  # a real near-full turn stays
+
+
+def test_slice_ending_on_the_seam_is_the_same_on_float32_and_float64():
+    for lon64, lon32 in ((PIXEL64, PIXEL32), (EAST64, EAST32), (FINE64, FINE32)):
+        r64 = lon_ranges(lon64, slice(float(lon64[-1]), float(lon64[0]) + 360))
+        r32 = lon_ranges(lon32, slice(float(lon64[-1]), float(lon64[0]) + 360))
+        assert r64 == r32 == ((len(lon64) - 1, len(lon64)),)
+
+
+def test_slice_ending_on_origin_plus_360_is_plain_whatever_the_dtype():
+    # origin -92.15: float32 rounds it, so the decimal origin + 360 is not exactly the axis's own
+    lon64 = (-92150 + np.arange(36000) * 10) / 1000
+    for lon in (lon64, lon64.astype(np.float32)):
+        assert lon_ranges(lon, slice(267.84, 267.85)) == ((35999, 36000),)
+        assert lon_ranges(lon, slice(-92.14, 267.85)) == ((1, 36000),)

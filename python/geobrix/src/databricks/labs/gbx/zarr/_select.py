@@ -122,6 +122,12 @@ def resolve(
     are converted to UTC. A bound beyond what the axis dtype can represent is clamped to the
     axis end, so ``slice("2023-01-01T20", "3000-01-01")`` is the tail.
 
+    Numbers: ``nan`` and infinite bounds or labels raise ``ValueError`` (leave a slice end open with
+    ``None``). A finite number too large for a float axis's dtype is past every label: a slice start
+    there selects nothing, a slice end is open, and a scalar is not found; it never matches a label
+    stored at the dtype maximum. Bounds are rounded to the axis dtype before they are compared, so
+    ``0.3`` finds the label ``float32(0.3)``.
+
     ``coord_attrs`` maps a dimension to its coordinate array's attributes.
     """
     sel = dict(sel or {})
@@ -307,6 +313,13 @@ class _Axis:
     def tol(self):
         """Slack added to slice bounds: a fraction of the step on float axes, exactly 0 otherwise."""
         return _FLOAT_TOL * self.step if self.kind == "f" else 0
+
+    @property
+    def snap(self) -> float:
+        """How close to a seam counts as on it: a few float rounding errors over one turn, 0 for integers."""
+        if self.kind != "f":
+            return 0.0
+        return 4.0 * float(np.finfo(self.coord.dtype).eps) * 360.0
 
     @cached_property
     def direction(self) -> int:
@@ -541,11 +554,12 @@ def _time_bound(ax: _Axis, v, role: str) -> int:
 # ---- label lookup
 
 
-def _number(ax: _Axis, v, cast: bool = True):
+def _number(ax: _Axis, v, cast: bool = True, scalar: bool = False):
     """A numeric label as a number comparable with ``ax.num``.
 
     ``cast=False`` keeps a float as given (still checked finite), for callers that do arithmetic on it
-    first and round to the axis dtype afterwards with ``_as_axis_dtype``.
+    first and round to the axis dtype afterwards with ``_as_axis_dtype``. ``scalar`` only shapes the
+    error text.
     """
     if (
         isinstance(v, (str, bytes, np.datetime64, np.timedelta64, _dt.date))
@@ -561,8 +575,13 @@ def _number(ax: _Axis, v, cast: bool = True):
             f"cannot use {v!r} as a label for {ax.dim} ({ax.coord.dtype}): {e}. Fix: pass a label of the coordinate's type."
         ) from e
     if isinstance(x, float) and not math.isfinite(x):
+        fix = (
+            "pass a label that is on the axis, or use isel"
+            if scalar
+            else "pass a finite number, or None to leave a slice end open"
+        )
         raise ValueError(
-            f"{v!r} is not a finite number, so it cannot select labels on {ax.dim}. Fix: pass a finite number, or None to leave a slice end open."
+            f"{v!r} is not a finite number, so it cannot select labels on {ax.dim}. Fix: {fix}."
         )
     if isinstance(x, int):
         x = _clamp(x)
@@ -574,13 +593,14 @@ def _number(ax: _Axis, v, cast: bool = True):
 def _as_axis_dtype(ax: _Axis, x):
     """``x`` rounded the way the stored labels are, so an equal label compares equal.
 
-    A float beyond the dtype's range is held at its largest finite value, which is past every label.
-    Integer axes keep ``x`` as it is.
+    A float too large for the dtype (it rounds past the largest finite value) becomes +-inf: past every
+    label, so a start bound there selects nothing and an end bound is open, and it never equals the label
+    stored at the dtype maximum. Integer axes keep ``x`` as it is.
     """
     if ax.kind != "f":
         return x
-    fmax = float(np.finfo(ax.coord.dtype).max)
-    return float(np.asarray(max(-fmax, min(fmax, x))).astype(ax.coord.dtype))
+    with np.errstate(over="ignore"):
+        return float(np.asarray(x).astype(ax.coord.dtype))
 
 
 def _scalar(ax: _Axis, v):
@@ -588,7 +608,7 @@ def _scalar(ax: _Axis, v):
     if ax.kind in "Mm":
         start, _ = _time_label(ax, v)
         return (2 * start + ax.tick) // (2 * ax.tick)
-    return _number(ax, v)
+    return _number(ax, v, scalar=True)
 
 
 def _nearest(ax: _Axis, v, circular: bool) -> tuple[int, float]:
@@ -716,13 +736,27 @@ def _slice_ranges(ax: _Axis, a, b) -> tuple[tuple[int, int], ...]:
     period = ax.period
     if period is not None and lo is not None and hi is not None:
         origin, repeats = period
-        if not origin <= lo <= hi <= origin + 360.0:
-            if lo <= hi and hi - lo >= 360.0:
+        top = origin + 360.0
+        snap = (
+            ax.snap
+        )  # the bounds were not rounded to the axis dtype, so seams carry that much noise
+        if not origin - snap <= lo <= hi <= top + snap:
+            if lo <= hi and hi - lo >= 360.0 - snap:
                 return ((0, n),)
-            a2 = _as_axis_dtype(ax, _wrap(lo, origin))
-            b2 = _as_axis_dtype(ax, _wrap(hi, origin))
-            if a2 <= b2:
-                return _bounded(num, True, a2, b2, ax.tol)
+
+            def norm(v):
+                r = _wrap(v, origin)
+                if (
+                    top - r <= snap
+                ):  # just short of the seam is just before the origin, not a turn later
+                    r -= 360.0
+                return _as_axis_dtype(ax, r)
+
+            a2, b2 = norm(lo), norm(hi)
+            if (
+                a2 <= b2 or a2 - b2 <= snap
+            ):  # equal within noise: a zero-width arc, one label
+                return _bounded(num, True, min(a2, b2), max(a2, b2), ax.tol)
             return _join_arcs(
                 _bounded(num, True, a2, None, ax.tol),
                 _bounded(num, True, None, b2, ax.tol),

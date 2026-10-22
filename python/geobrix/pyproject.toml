@@ -253,7 +253,7 @@ databricks = [
 # install geobrix[light_env6,overture] and accept the click bump.
 overture = [
     "pystac>=1.9,<2",
-    "overturemaps>=1.0,<2",
+    "overturemaps>=1.0.2,<2",
 ]
 # STAC catalog client (lightweight): distributed search + resilient download + repair.
 # Optional extra so [light_env6] users who don't need STAC don't pull pystac/planetary-computer.

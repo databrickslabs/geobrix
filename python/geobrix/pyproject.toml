@@ -136,7 +136,7 @@ light-base = [
 # Canonical protobuf-5 runtime extra. Classic DBR 17.3.
 light_dbr17 = [
     "geobrix[light-base]",
-    "typing_extensions>=4.12",
+    "typing_extensions>=4.16.0",
     # Hold preinstalled core packages at the Serverless env5 / DBR17.3-18 base so a
     # cluster %pip install is silent (no "a core Python package changed" notice).
     # Bases: pandas 2.2.3, numpy 2.1.3, urllib3 2.3.0 (verified 2026-09-03).
@@ -168,7 +168,7 @@ light_env5 = ["geobrix[light_dbr17]"]
 light_dbr19 = [
     "geobrix[light-base]",
     # --- Classic DBR 19 / Serverless env 6 runtime-sensitive pins ---
-    "typing_extensions>=4.12",  # relaxed >=4.13 -> >=4.12 to admit env5/DBR17.3-18 base 4.12.2; env6/DBR19 ship 4.13+ (unaffected)
+    "typing_extensions>=4.16.0",  # relaxed >=4.13 -> >=4.12 to admit env5/DBR17.3-18 base 4.12.2; env6/DBR19 ship 4.13+ (unaffected)
     # Hold preinstalled core packages at the Serverless env6 / DBR19 base.
     # Bases: pandas 2.3.3, numpy 2.3.4, urllib3 2.5.0 (verified 2026-09-03).
     "pandas<2.4",

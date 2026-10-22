@@ -15,6 +15,7 @@ import h3
 import numpy as np
 import pytest
 import shapely.geometry
+from rasterio.enums import ColorInterp
 from rasterio.errors import NodataShadowWarning
 from rasterio.io import MemoryFile
 from rasterio.transform import Affine, from_bounds
@@ -24,6 +25,7 @@ from rasterio.windows import Window
 from databricks.labs.gbx.core.crs import authority_srid_of, get_transformer
 from databricks.labs.gbx.pygx import _bng, _custom, _quadbin
 from databricks.labs.gbx.pyrx.core import tessellate as T
+from databricks.labs.gbx.pyrx.core._nodata import valid_mask
 
 BOUNDS = (-122.60, 37.60, -122.40, 37.80)  # ~0.2 deg square; ~70 H3 res-7 cells
 
@@ -437,82 +439,161 @@ def test_bng_warp_of_a_source_without_nodata_marks_fill_as_nodata(assignment, co
     assert nodatas == {65535.0}
 
 
-def _bng_rgba_source():
-    """uint8 RGBA EPSG:4326 source: non-zero RGB and an opaque alpha, except rows 4-8
-    (alpha 0, RGB still non-zero) and row 20 (real R = G = B = 0 under an opaque alpha).
+# name -> (grid, source CRS, source bounds, resolution): the 4326 source is warped to
+# EPSG:27700 for bng and tessellated as is for h3; the 27700 source is not warped.
+_ALPHA_CASES = {
+    "bng_warped": ("bng", "EPSG:4326", _FILL_BOUNDS, 3),
+    "bng_native": ("bng", "EPSG:27700", (620000, 290000, 640000, 310000), 3),
+    "h3": ("h3", "EPSG:4326", _FILL_BOUNDS, 7),
+}
+
+
+def _banded_source(case, *, alpha):
+    """uint8 four-band source, no NoData, rows of interest: 4-8 have RGB (or RGB+NIR) that
+    is still non-zero but alpha 0 (``alpha``), 12 has a zero fourth band under non-zero
+    colour bands, and 20 has zero colour bands (opaque with ``alpha``, else all zero).
     """
+    _, crs, bounds, _ = _ALPHA_CASES[case]
     n = _FILL_N
     p = np.arange(n * n, dtype="int64").reshape(n, n)
-    bands = [((p * k) % 199 + 1).astype("uint8") for k in (1, 3, 7)]
-    for band in bands:
+    bands = [((p * k) % 199 + 1).astype("uint8") for k in (1, 3, 7, 11)]
+    for band in bands[:3]:
         band[20, :] = 0
-    alpha = np.full((n, n), 255, dtype="uint8")
-    alpha[4:9, :] = 0
+    if alpha:
+        bands[3][:] = 255
+        bands[3][4:9, :] = 0
+    else:
+        bands[3][12, :] = 0
+        bands[3][20, :] = 0
     prof = dict(
         driver="GTiff",
         width=n,
         height=n,
         count=4,
         dtype="uint8",
-        crs="EPSG:4326",
-        transform=from_bounds(*_FILL_BOUNDS, n, n),
+        crs=crs,
+        transform=from_bounds(*bounds, n, n),
         photometric="RGB",
-        alpha="YES",
     )
+    if alpha:
+        prof["alpha"] = "YES"
     with MemoryFile() as mf:
         with mf.open(**prof) as d:
-            for i, band in enumerate(bands + [alpha], 1):
+            for i, band in enumerate(bands, 1):
                 d.write(band, i)
+            if not alpha:
+                d.colorinterp = (
+                    ColorInterp.red,
+                    ColorInterp.green,
+                    ColorInterp.blue,
+                    ColorInterp.undefined,
+                )
         return mf.read()
 
 
-# reading a chip's masks warns: chips declare the NoData fallback over their alpha band
-@pytest.mark.filterwarnings("ignore::rasterio.errors.NodataShadowWarning")
-@pytest.mark.parametrize("assignment", ["centroid", "covering"])
-def test_bng_warp_of_an_rgba_source_leaves_the_fill_to_its_alpha_band(assignment):
-    """An alpha band marks the warp fill, so no NoData is declared over it.
-
-    A declared NoData of 0 shadows the warped alpha band (``NodataShadowWarning``): the
-    transparent pixels, whose RGB is not 0, would turn valid. Real all-zero pixels under
-    an opaque alpha stay valid, and no valid pixel lies off the source footprint.
+def _banded_chips(case, *, alpha, assignment, coverage):
+    """Tessellate the source of ``case`` (NodataShadowWarning is an error); return the chips
+    and a function giving the fractional source ``(col, row)`` of a chip pixel centre.
     """
-    b = _bng_rgba_source()
-    n = _FILL_N
-    to_src = get_transformer(27700, 4326).transform
-    valid = outside = transparent = zero_rgb = zero_rgb_off = 0
-    with MemoryFile(b) as mf, mf.open() as ds:
-        inv = ~ds.transform
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            # "complete": covering+sparse reads each chip's own masks, and a chip declares the
-            # NoData fallback over its alpha band whatever the warp did
+    grid, crs, _, res = _ALPHA_CASES[case]
+    b = _banded_source(case, alpha=alpha)
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NodataShadowWarning)
+        with MemoryFile(b) as mf, mf.open() as ds:
+            inv = ~ds.transform
             chips = list(
-                T.iter_tessellate(ds, 3, "bng", mode=assignment, coverage="complete")
+                T.iter_tessellate(ds, res, grid, mode=assignment, coverage=coverage)
             )
-    shadow = [w for w in caught if issubclass(w.category, NodataShadowWarning)]
-    assert not shadow, f"{len(shadow)} NodataShadowWarning while tessellating"
-    assert chips
+    warped = grid == "bng" and crs == "EPSG:4326"
+    to_src = get_transformer(27700, 4326).transform if warped else None
+
+    def source_colrow(x, y):
+        return inv * (to_src(float(x), float(y)) if to_src else (x, y))
+
+    return chips, source_colrow
+
+
+def _chip_stats(chips, source_colrow):
+    """Count the valid pixels (``valid_mask``) of ``chips`` by where their source pixel
+    lies: off the source footprint, in the transparent rows (4-8), or with zero colour
+    bands (all of them, and those outside row 20) or a zero fourth band (row 12 or not).
+    """
+    n = _FILL_N
+    out = dict(valid=0, outside=0, transparent=0, zero_rgb=0, zero_rgb_off=0)
+    out.update(zero_b4=0, zero_b4_off=0)
     for _, cb in chips:
         m, c = _open(cb)
         with m, c:
             data = c.read()
-            rr, cc = np.nonzero((c.read_masks() != 0).any(axis=0))
+            rr, cc = np.nonzero(valid_mask(c))
             xs, ys = c.transform * (cc + 0.5, rr + 0.5)
             for r, k, x, y in zip(rr, cc, xs, ys):
-                valid += 1
-                sc, sr = inv * to_src(float(x), float(y))
+                out["valid"] += 1
+                sc, sr = source_colrow(x, y)
                 if not (-1.5 <= sc <= n + 1.5 and -1.5 <= sr <= n + 1.5):
-                    outside += 1
+                    out["outside"] += 1
                 elif 4.75 <= sr <= 8.25:
-                    transparent += 1
+                    out["transparent"] += 1
                 if (data[:3, r, k] == 0).all():
-                    zero_rgb += 1
-                    zero_rgb_off += not 19.25 <= sr <= 21.75
-    assert valid > 0, "the chips hold no valid pixel"
-    assert outside == 0, f"{outside} valid chip pixels lie off the source footprint"
-    # centroid chips declare the NoData fallback over their alpha band (shadowing it, as
-    # before the BNG warp marked its fill), so only covering chips drop the transparent rows
-    if assignment == "covering":
-        assert transparent == 0, f"{transparent} transparent pixels are valid"
-    assert zero_rgb > 0, "the opaque all-zero pixels must stay valid"
-    assert zero_rgb_off == 0, f"{zero_rgb_off} valid all-zero pixels are not row 20"
+                    out["zero_rgb"] += 1
+                    out["zero_rgb_off"] += not 19.25 <= sr <= 21.75
+                if data[3, r, k] == 0:
+                    out["zero_b4"] += 1
+                    out["zero_b4_off"] += not 11.25 <= sr <= 13.75
+    return out
+
+
+@pytest.mark.parametrize("coverage", ["sparse", "complete"])
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+@pytest.mark.parametrize("case", list(_ALPHA_CASES))
+def test_tessellate_of_an_rgba_source_keeps_its_alpha_band(case, assignment, coverage):
+    """Chips keep the alpha band and declare no NoData over it: a transparent pixel (alpha 0,
+    RGB still non-zero) is NoData, an opaque pixel whose RGB is 0 stays valid, none lies off
+    the source footprint, and reading a chip's masks never warns that NoData shadows alpha.
+    """
+    chips, source_colrow = _banded_chips(
+        case, alpha=True, assignment=assignment, coverage=coverage
+    )
+    assert chips
+    for _, cb in chips:
+        m, c = _open(cb)
+        with m, c:
+            assert c.nodatavals == (None,) * 4
+            assert c.colorinterp[3] == ColorInterp.alpha
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NodataShadowWarning)
+        st = _chip_stats(chips, source_colrow)
+    assert st["valid"] > 0, "the chips hold no valid pixel"
+    assert st["outside"] == 0, f"{st['outside']} valid pixels off the source footprint"
+    assert st["transparent"] == 0, f"{st['transparent']} transparent pixels are valid"
+    assert st["zero_rgb"] > 0, "the opaque all-zero pixels must stay valid"
+    assert st["zero_rgb_off"] == 0, f"{st['zero_rgb_off']} zero pixels not in row 20"
+
+
+@pytest.mark.parametrize(
+    "assignment,coverage",
+    [("centroid", "sparse"), ("centroid", "complete"), ("covering", "sparse")],
+)
+@pytest.mark.parametrize("case", ["bng_warped", "h3"])
+def test_tessellate_of_a_four_band_source_without_alpha_keeps_band_four_data(
+    case, assignment, coverage
+):
+    """The fourth band of RGB+NIR is not alpha in the chips: a zero there under non-zero colour
+    bands is valid, a pixel zero in every band is NoData (the uint8 fallback), and reading the
+    masks never warns that NoData shadows an alpha band."""
+    chips, source_colrow = _banded_chips(
+        case, alpha=False, assignment=assignment, coverage=coverage
+    )
+    assert chips
+    for _, cb in chips:
+        m, c = _open(cb)
+        with m, c:
+            assert c.nodatavals == (0.0,) * 4
+            assert ColorInterp.alpha not in c.colorinterp
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", NodataShadowWarning)
+        st = _chip_stats(chips, source_colrow)
+    assert st["valid"] > 0 and st["outside"] == 0
+    assert st["zero_b4"] > 0, "the zero NIR pixels under colour must stay valid"
+    # row 20 is zero in every band: NoData, so a valid zero-NIR pixel comes from row 12
+    assert st["zero_b4_off"] == 0 and st["zero_rgb"] == 0

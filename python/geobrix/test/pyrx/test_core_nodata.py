@@ -1,9 +1,13 @@
 import math
+import warnings
 
 import numpy as np
 import pytest
 import rasterio
+from rasterio.enums import ColorInterp
+from rasterio.errors import NodataShadowWarning
 from rasterio.io import MemoryFile
+from rasterio.windows import Window
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _nodata as nd
@@ -128,3 +132,69 @@ def test_has_alpha_and_has_own_mask(kind, alpha, own_mask):
     with MemoryFile(_mask_kind_tile(kind)) as mf, mf.open() as ds:
         assert nd.has_alpha(ds) is alpha
         assert nd.has_own_mask(ds) is own_mask
+
+
+def _valid_mask_tile(kind):
+    """4x4 uint8, four bands, rows: 0 = colour 7 with band 4 = 0, 1 = colour 0 with band 4
+    = 255, 2 = every band 0, 3 = colour 7 with band 4 = 255. ``kind``: ``rgba`` (alpha band,
+    no NoData), ``rgba-nodata`` (NoData 0 declared over it), ``rgb-nir`` (band 4 is not
+    alpha, NoData 0) or ``plain`` (band 4 is not alpha, no NoData)."""
+    data = np.full((4, 4, 4), 7, dtype="uint8")
+    data[3] = 255
+    data[3, 0] = 0
+    data[:3, 1] = 0
+    data[:, 2] = 0
+    profile = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=4,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(10, 50, 0.5, 0.5),
+        photometric="RGB",
+        nodata=0 if kind in ("rgba-nodata", "rgb-nir") else None,
+    )
+    if kind.startswith("rgba"):
+        profile["alpha"] = "YES"
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(data)
+            if kind in ("rgb-nir", "plain"):
+                dst.colorinterp = (
+                    ColorInterp.red,
+                    ColorInterp.green,
+                    ColorInterp.blue,
+                    ColorInterp.undefined,
+                )
+        return mf.read()
+
+
+@pytest.mark.parametrize(
+    "kind,valid_rows",
+    [
+        (
+            "rgba",
+            (1, 3),
+        ),  # alpha decides: opaque rows, however dark; a transparent row is not
+        ("rgba-nodata", (0, 1, 3)),  # NoData shadows the alpha band: any band non-zero
+        ("rgb-nir", (0, 1, 3)),  # band 4 is data: valid when any band is
+        ("plain", (0, 1, 2, 3)),  # nothing is masked
+    ],
+)
+def test_valid_mask_is_alpha_aware_and_any_band_otherwise(kind, valid_rows):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NodataShadowWarning)  # rgba-nodata is shadowed
+        with MemoryFile(_valid_mask_tile(kind)) as mf, mf.open() as ds:
+            got = nd.valid_mask(ds)
+            windowed = nd.valid_mask(ds, window=Window(1, 1, 3, 3))
+    assert got.shape == (4, 4) and got.dtype == bool
+    assert [bool(r.all()) for r in got] == [i in valid_rows for i in range(4)]
+    assert not (got.any(axis=1) != got.all(axis=1)).any()
+    assert (windowed == got[1:, 1:]).all()
+
+
+def test_valid_mask_recognises_a_nan_nodata():
+    a = np.array([[1.0, np.nan], [np.nan, 2.0]])
+    with MemoryFile(_tile(a, float("nan"))) as mf, mf.open() as ds:
+        assert nd.valid_mask(ds).tolist() == [[True, False], [False, True]]

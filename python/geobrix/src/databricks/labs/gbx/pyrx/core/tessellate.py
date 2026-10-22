@@ -32,7 +32,7 @@ from databricks.labs.gbx.core.crs import (
 )
 from databricks.labs.gbx.pygx import _bng, _quadbin
 from databricks.labs.gbx.pyrx.core import edit, warp
-from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata
+from databricks.labs.gbx.pyrx.core._nodata import fallback_nodata, has_alpha, valid_mask
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.gridagg import _bng_cells, _h3_cells
 
@@ -312,21 +312,31 @@ def _footprint_polygon(ds, work_ds, grid: str) -> Polygon:
 
 
 def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
-    """Return True when no pixel of the GTiff chip is valid in any band.
+    """Return True when no pixel of the GTiff chip is valid.
 
     Used by covering+sparse to drop chips whose pixels are entirely masked.
-    Validity comes from the mask bands, so a NaN NoData is recognised (``== nan``
-    never is). A chip with no declared nodata has all-valid masks and is kept.
+    Validity is :func:`valid_mask`: a pixel is valid when any band is valid (mask bands, so
+    a NaN NoData is recognised, where ``== nan`` never is), or, for a chip with an alpha
+    band, when its alpha is not 0. A chip with no declared nodata and no alpha band has
+    all-valid masks and is kept.
     """
     with MemoryFile(raster_bytes) as mf:
         with mf.open() as chip_ds:
-            return not (chip_ds.read_masks() != 0).any()
+            return not valid_mask(chip_ds).any()
 
 
-def _chip_nodata(work_ds) -> float:
-    """NoData every chip carries: the source's, else the dtype fallback."""
+def _chip_nodata(work_ds):
+    """NoData every chip carries: the source's, else the dtype fallback, else none.
+
+    A source with an alpha band and no NoData gets none: the chip keeps the alpha band,
+    which marks the transparent pixels and the pixels outside the cell (written as 0, so
+    alpha 0), and a NoData declared over it would shadow the alpha band and turn those
+    pixels valid.
+    """
     if work_ds.nodata is not None:
         return work_ds.nodata
+    if has_alpha(work_ds):
+        return None
     return fallback_nodata(work_ds.dtypes[0])
 
 
@@ -351,7 +361,9 @@ def _empty_chip_builder(work_ds, grid: str, conf=None):
     nd = _chip_nodata(work_ds)
     profile = work_ds.profile.copy()
     profile.update(width=1, height=1, nodata=nd)
-    chip = np.full((work_ds.count, 1, 1), nd, dtype=work_ds.dtypes[0])
+    chip = np.full(
+        (work_ds.count, 1, 1), 0 if nd is None else nd, dtype=work_ds.dtypes[0]
+    )
 
     def build(cell) -> bytes:
         centroid = _cell_geom(cell, grid, conf=conf).centroid
@@ -362,7 +374,9 @@ def _empty_chip_builder(work_ds, grid: str, conf=None):
         col = min(max(math.floor(col_f), 0), last_col)
         row = min(max(math.floor(row_f), 0), last_row)
         window_tf = work_ds.window_transform(Window(col, row, 1, 1))
-        return write_gtiff(dict(profile, transform=window_tf), chip)
+        return write_gtiff(
+            dict(profile, transform=window_tf), chip, alpha_like=work_ds.colorinterp
+        )
 
     return build
 
@@ -555,13 +569,15 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
     Yields ``(cellid, gtiff_bytes)`` pairs in first-seen pixel order (row-major).
     Each chip is cropped to the bounding pixel window of its cell's pixels, read
     from ``work_ds`` by that window (no second whole-raster copy is made), and
-    carries the source NoData (else the dtype fallback, ``fallback_nodata``).
+    carries the source NoData (else the dtype fallback, ``fallback_nodata``; a source with
+    an alpha band keeps it in the chips and declares none, see :func:`_chip_nodata`).
     Assignment is :func:`_assign_pixels`.
     """
     labels, windows, order = _assign_pixels(work_ds, resolution, grid, conf=conf)
     nd = _chip_nodata(work_ds)
     profile = work_ds.profile.copy()
     profile["nodata"] = nd
+    blank = 0 if nd is None else nd  # pixels of the window assigned to other cells
 
     # Each chip covers only the bounding pixel window of its cell's pixels, on the
     # source grid (window_transform keeps rotated and south-up geotransforms intact);
@@ -571,10 +587,13 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
         h, w = r1 + 1 - r0, c1 + 1 - c0
         win = Window(c0, r0, w, h)
         data = work_ds.read(window=win)
-        chip = np.full(data.shape, nd, dtype=data.dtype)
+        chip = np.full(data.shape, blank, dtype=data.dtype)
         np.copyto(chip, data, where=(labels[r0 : r1 + 1, c0 : c1 + 1] == label)[None])
         profile.update(width=w, height=h, transform=work_ds.window_transform(win))
-        yield (_encode_cellid(cell, grid, conf=conf), write_gtiff(profile, chip))
+        yield (
+            _encode_cellid(cell, grid, conf=conf),
+            write_gtiff(profile, chip, alpha_like=work_ds.colorinterp),
+        )
 
 
 def _work_dataset(ds, grid: str):
@@ -745,7 +764,8 @@ def iter_tessellate(
             and dst_epsg != 4326
         )
         # A source without NoData gets the dtype fallback, so the clip fill outside
-        # each cell reads as NoData rather than as valid zero pixels.
+        # each cell reads as NoData rather than as valid zero pixels; with an alpha band it
+        # gets none, and the clip's 0 fill is transparent (see _chip_nodata).
         fill = _chip_nodata(work_ds)
 
         for cell in covered:

@@ -513,6 +513,46 @@ def test_write_gtiff_is_canonical_and_leaves_profile_alone():
     _assert_canonical(out, "int16")
 
 
+@pytest.mark.parametrize(
+    "count,dtype,alpha_at",
+    [
+        (4, "uint8", 3),  # RGBA: GDAL's own default for a 4-band uint8 raster
+        (4, "uint8", None),  # RGB + NIR: GDAL's default would label band 4 alpha
+        (4, "uint16", 3),  # 16-bit RGBA: GDAL's default has no alpha band
+        (4, "uint16", None),
+        (2, "uint8", 1),  # gray + alpha
+        (3, "uint8", None),
+        (1, "float32", None),
+    ],
+)
+def test_write_gtiff_labels_a_band_alpha_exactly_where_alpha_like_does(
+    count, dtype, alpha_at
+):
+    from rasterio.enums import ColorInterp
+
+    from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+    like = [ColorInterp.undefined] * count
+    if alpha_at is not None:
+        like[alpha_at] = ColorInterp.alpha
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=4,
+        count=count,
+        dtype=dtype,
+        crs="EPSG:32618",
+        transform=from_bounds(0, 0, 4, 4, 4, 4),
+    )
+    data = np.full((count, 4, 4), 9, dtype=dtype)
+    out = write_gtiff(prof, data, alpha_like=like)
+    with MemoryFile(out) as m, m.open() as c:
+        assert [ci == ColorInterp.alpha for ci in c.colorinterp] == [
+            ci == ColorInterp.alpha for ci in like
+        ]
+        assert np.array_equal(c.read(), data)
+
+
 def test_focal_filt_is_canonical():
     from databricks.labs.gbx.pyrx.core import focal
 

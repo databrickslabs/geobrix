@@ -1,5 +1,9 @@
+import warnings
+
 import numpy as np
+import pytest
 import rasterio
+from rasterio.errors import NodataShadowWarning
 from rasterio.io import MemoryFile
 from rasterio.transform import from_bounds
 
@@ -159,3 +163,51 @@ def test_reproject_to_srid_mark_fill_nodata_leaves_an_alpha_source_alone():
         assert dm.colorinterp == dp.colorinterp
         assert (dm.read() == dp.read()).all()
         assert (dm.read(4) == 0).any()  # the fill is transparent
+
+
+def _banded_source(layout):
+    """uint8/uint16 EPSG:4326 source over Norfolk whose last band is, or is not, alpha."""
+    n, count, dtype, alpha = {
+        "rgb_nir_u8": (16, 4, "uint8", False),
+        "rgba_u16": (16, 4, "uint16", True),
+    }[layout]
+    prof = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=count,
+        dtype=dtype,
+        crs="EPSG:4326",
+        transform=from_bounds(1.00, 52.40, 1.20, 52.60, n, n),
+        photometric="RGB",
+    )
+    if alpha:
+        prof["alpha"] = "YES"
+    with MemoryFile() as mf:
+        with mf.open(**prof) as d:
+            d.write(np.full((count, n, n), 100, dtype=dtype))
+        return mf.read()
+
+
+def _alpha_labels(b):
+    with MemoryFile(b) as mf, mf.open() as ds:
+        return [c.name == "alpha" for c in ds.colorinterp]
+
+
+@pytest.mark.parametrize("target", [27700, 4326])  # a warp, then the identity copy
+@pytest.mark.parametrize("by", ["srid", "crs"])
+@pytest.mark.parametrize("layout", ["rgb_nir_u8", "rgba_u16"])
+def test_warp_labels_a_band_alpha_exactly_when_the_source_does(layout, by, target):
+    """GDAL labels band 4 of a 4-band uint8 GTiff as alpha, so a warp turned the
+    near-infrared band of RGB+NIR into a transparency mask (and read_masks then warned
+    that the NoData shadows it), and lost the alpha band of a uint16 RGBA source."""
+    src = _banded_source(layout)
+    with MemoryFile(src) as mf, mf.open() as ds:
+        if by == "srid":
+            out = warp.reproject_to_srid(ds, target, mark_fill_nodata=True)
+        else:
+            out = warp.reproject_to_crs(ds, f"EPSG:{target}", mark_fill_nodata=True)
+    assert _alpha_labels(out) == _alpha_labels(src)
+    with MemoryFile(out) as mf, mf.open() as w, warnings.catch_warnings():
+        warnings.simplefilter("error", NodataShadowWarning)
+        w.read_masks()

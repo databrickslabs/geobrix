@@ -270,13 +270,43 @@ def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     return prof
 
 
-def write_gtiff(profile: dict, data) -> bytes:
+def match_alpha(dst, alpha_like) -> None:
+    """Label the bands of the new dataset *dst* alpha exactly where *alpha_like* does.
+
+    *alpha_like* is the ``colorinterp`` of the dataset the pixels come from. GDAL gives a
+    new GTiff its own labels from the band count and type: band 4 of a 4-band ``uint8``
+    raster is alpha, whatever the source was. A non-alpha band 4 (the near-infrared of
+    RGB+NIR) then reads as a transparency mask, and a NoData declared on the raster
+    shadows it (``NodataShadowWarning``). The converse also happens: the alpha band of a
+    16-bit RGBA or a gray+alpha raster is lost. Nothing else is relabelled, and a band
+    count that differs from *alpha_like* (the caller changed it) is left as GDAL labelled it.
+    """
+    from rasterio.enums import ColorInterp
+
+    labels = list(dst.colorinterp)
+    if alpha_like is None or len(alpha_like) != len(labels):
+        return
+    want = [
+        (
+            ColorInterp.alpha
+            if src == ColorInterp.alpha
+            else (ColorInterp.undefined if got == ColorInterp.alpha else got)
+        )
+        for got, src in zip(labels, alpha_like)
+    ]
+    if want != labels:
+        dst.colorinterp = want
+
+
+def write_gtiff(profile: dict, data, alpha_like=None) -> bytes:
     """GTiff bytes of *data* with the canonical creation options for its dtype.
 
     The single light-tier GTiff writer: every derived raster goes through here so its
     encoding never inherits the source file's codec (a YCbCr photometric, which only
     JPEG can carry, is dropped with it). *profile* is not modified.
     *data* is a ``(bands, rows, cols)`` array matching ``profile['count']``.
+    *alpha_like*, the ``colorinterp`` of the dataset *data* derives from, makes the output
+    label a band alpha exactly where that dataset does (see :func:`match_alpha`).
     """
     # Lazy: this module is imported by the Spark data-source writers, which must stay
     # importable where rasterio is absent (the heavy-tier build); numpy likewise above.
@@ -290,5 +320,6 @@ def write_gtiff(profile: dict, data) -> bytes:
     prof.update(creation_opts(dtype, decoded_bytes=decoded, compress="auto"))
     with MemoryFile() as mf:
         with mf.open(**prof) as dst:
+            match_alpha(dst, alpha_like)
             dst.write(data)
         return mf.read()

@@ -53,6 +53,24 @@ def has_own_mask(ds) -> bool:
     )
 
 
+def valid_mask(ds, window=None) -> np.ndarray:
+    """``(rows, cols)`` bool array: True where a pixel of *ds* is valid.
+
+    A pixel is valid when ANY band's mask marks it valid (heavy ``anyValid``); the mask
+    bands recognise a NaN NoData. Where an alpha band masks the bands (the bands GDAL
+    flags ``MaskFlags.alpha``: it gives the alpha band itself an all-valid mask) the alpha
+    band decides instead, so an alpha-0 pixel is invalid whatever its colour bands hold. A
+    NoData declared over the alpha band shadows it (``MaskFlags.nodata``), and every band
+    is then judged by its own NoData. (Not ``DatasetReader.dataset_mask``: it takes band 4
+    of any 4-band raster whose band 1 is red as the mask, alpha or not.)
+    """
+    from rasterio.enums import MaskFlags
+
+    masks = ds.read_masks(window=window)
+    by_alpha = [i for i, f in enumerate(ds.mask_flag_enums) if MaskFlags.alpha in f]
+    return (masks[by_alpha] if by_alpha else masks).astype(bool).any(axis=0)
+
+
 def nodata_fits_dtype(nodata: float, dtype: str) -> bool:
     """Return True if *nodata* is representable in *dtype*.
 

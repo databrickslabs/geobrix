@@ -101,14 +101,17 @@ def chip_shape(raster_bytes):
 def chip_pixels(raster_bytes, src_transform):
     """Valid chip pixels as ``{(src_row, src_col, band_values)}`` on the source grid.
 
-    A pixel is valid if it is valid in any band (mask bands, so NaN-safe). The
-    chip's pixel centres go through the chip geotransform and the inverse source
-    geotransform, so the set is comparable across tiers whatever the chip window.
+    A pixel is valid if it is valid in any band (mask bands, so NaN-safe), or, for a chip
+    with an alpha band, if its alpha is not 0 (``valid_mask``). The chip's pixel centres
+    go through the chip geotransform and the inverse source geotransform, so the set is
+    comparable across tiers whatever the chip window.
     """
     from rasterio.io import MemoryFile
 
+    from databricks.labs.gbx.pyrx.core._nodata import valid_mask
+
     with MemoryFile(raster_bytes) as mf, mf.open() as ds:
-        valid = (ds.read_masks() != 0).any(axis=0)
+        valid = valid_mask(ds)
         rows, cols = np.nonzero(valid)
         if rows.size == 0:
             return set()

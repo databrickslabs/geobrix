@@ -59,6 +59,7 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
     resamp = resampling_enum(resampling)
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
+            _comp.match_alpha(dst, ds.colorinterp)
             for i in range(1, ds.count + 1):
                 source = rasterio.band(ds, i)
                 if read_masked:
@@ -99,17 +100,7 @@ def reproject_to_crs(
     dst_crs = resolve_crs(target_crs_value)
     if ds.crs and ds.crs == dst_crs:
         # Identity: re-encode with ZSTD baseline (same as reproject_to_srid).
-        data = ds.read()
-        out_dtype = ds.dtypes[0]
-        profile = _comp.drop_ycbcr(ds.profile)
-        profile.update(driver="GTiff")
-        profile.update(
-            _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
-        )
-        with MemoryFile() as mf:
-            with mf.open(**profile) as dst:
-                dst.write(data)
-            return mf.read()
+        return _comp.write_gtiff(ds.profile, ds.read(), alpha_like=ds.colorinterp)
 
     transform, width, height = calculate_default_transform(
         ds.crs, dst_crs, ds.width, ds.height, *ds.bounds
@@ -160,17 +151,7 @@ def reproject_to_srid(
     src_epsg = authority_srid_of(ds.crs)
     if src_epsg is not None and src_epsg == target_srid:
         # Identity: emit the source bytes re-encoded with ZSTD baseline.
-        data = ds.read()
-        out_dtype = ds.dtypes[0]
-        profile = _comp.drop_ycbcr(ds.profile)
-        profile.update(driver="GTiff")
-        profile.update(
-            _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
-        )
-        with MemoryFile() as mf:
-            with mf.open(**profile) as dst:
-                dst.write(data)
-            return mf.read()
+        return _comp.write_gtiff(ds.profile, ds.read(), alpha_like=ds.colorinterp)
 
     dst_crs = f"EPSG:{target_srid}"
     transform, width, height = calculate_default_transform(

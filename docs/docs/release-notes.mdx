@@ -299,34 +299,48 @@ formats.
   [EO series](./notebooks/eo-series) notebooks 03 and 04, the `uint16` bands that pass through
   `rst_initnodata` now carry NoData 65535.
 - **BNG tessellation marks the warp fill as NoData.** `rst_bng_tessellate` first warps a source
-  that is not in EPSG:27700 to it. For a source without NoData, both tiers used to fill the pixels
-  outside the source's footprint with valid zeros, which reached the chips of the edge cells as
-  data. That fill is now NoData, with the fallback value above, and source pixels equal to that
-  value are NoData too. A source's own NoData is kept, and a source with an alpha band is warped
-  as before, its alpha band marking the fill and the transparent pixels. A source's own mask band
-  (not an alpha band) is kept, also when the source declares NoData: both tiers used to let the
-  masked pixels of a source that declared NoData through the warp as valid data.
+  that is not in EPSG:27700 to it. For a source with no NoData and no alpha band, both tiers used
+  to fill the pixels outside the source's footprint with valid zeros, which reached the chips of
+  the edge cells as data. That fill is now NoData, with the fallback value above, and source
+  pixels equal to that value are NoData too. A source's own NoData is kept. A source with an alpha
+  band is warped without a NoData, as before: its alpha band marks the fill and the transparent
+  pixels, and the chips keep that alpha band (see the next entry). A source's own mask band (not
+  an alpha band) is kept, also when the source declares NoData: both tiers used to let the masked
+  pixels of a source that declared NoData through the warp as valid data.
+- **Lightweight chips of an RGBA source keep its alpha band.** Tessellating a source with an alpha
+  band and no NoData (aerial imagery as RGBA, for example), the lightweight tier declared the
+  NoData fallback (0 for `uint8`) on every chip, over the alpha band. That hid the alpha band, so
+  the transparent pixels, whose colour bands are not 0, read as valid data in `centroid` chips,
+  and reading the mask of a `covering` chip raised a `NodataShadowWarning`. The chips now keep the
+  alpha band and declare no NoData: a pixel with alpha 0, and the part of a chip outside its cell,
+  is NoData, and an opaque pixel whose colour bands are 0 stays valid. The heavyweight tier
+  already did this for a source it warps to EPSG:27700 for `rst_bng_tessellate`, and in `covering`;
+  its `centroid` chips of a source that is not warped still declare NoData over the alpha band.
+  The lightweight warps and clips also stopped labelling the fourth band of a four-band raster
+  without alpha (red, green, blue and near-infrared, for example) as alpha, which made that band a
+  transparency mask, and now keep the alpha band of 16-bit RGBA and gray-plus-alpha rasters.
 - **Heavyweight covering keeps a source's own mask.** Some sources carry their own mask band
   (not an alpha band), as JPEG-compressed aerial imagery often does. With
   `assignment='covering'`, the heavyweight clip of each cell used to let the pixels that mask
   hides through as valid data: for the hexagonal cells of `rst_h3_tessellate`, and for every
   grid when the source also declared NoData. The lightweight tier already left them out. The
   heavyweight clip now keeps the mask, so those pixels are NoData in both tiers, and source pixels
-  equal to the chip's NoData are NoData too, as on a source without a mask band (on a masked
-  source they used to shift by one and stay valid). `rst_bng_tessellate` clips the EPSG:27700
-  warp of a source in another CRS, which keeps the mask too (see above). Heavyweight `rst_clip`
-  now fills the masked pixels like the area outside the geometry, as the lightweight tier does:
-  with the source's NoData when it declares one, else with 0. A source with an alpha band is
-  clipped as before.
+  equal to the chip's NoData are NoData too, as on a source with no NoData and no mask or alpha
+  band (on a masked source they used to shift by one and stay valid). `rst_bng_tessellate` clips
+  the EPSG:27700 warp of a source in another CRS, which keeps the mask too (see above).
+  Heavyweight `rst_clip` now fills the masked pixels like the area outside the geometry, as the
+  lightweight tier does: with the source's NoData when it declares one, else with 0. A source with
+  an alpha band is clipped as before.
 - **Raster-to-grid reducers aggregate only the source's pixels.** The `rst_h3_rastertogrid*`,
   `rst_quadbin_rastertogrid*` and `rst_bng_rastertogrid*` reducers first warp a source in another
-  coordinate system to the grid's (EPSG:4326, or EPSG:27700 for BNG). For a source without
-  NoData, both tiers used to fill the pixels outside the source's footprint with valid zeros,
-  which the reducers counted and averaged as data. That fill is now NoData, with the fallback
-  value above, and source pixels equal to that value are NoData too, so neither is aggregated. A
-  source's own mask band (not an alpha band) is kept: its masked pixels used to be aggregated as
-  zeros, or with their values when the source also declared NoData. A source with an alpha band
-  is warped as before, and a source already in the grid's coordinate system is not warped.
+  coordinate system to the grid's (EPSG:4326, or EPSG:27700 for BNG). For a source with no
+  NoData and no alpha band, both tiers used to fill the pixels outside the source's footprint with
+  valid zeros, which the reducers counted and averaged as data. That fill is now NoData, with the
+  fallback value above, and source pixels equal to that value are NoData too, so neither is
+  aggregated. A source's own mask band (not an alpha band) is kept: its masked pixels used to be
+  aggregated as zeros, or with their values when the source also declared NoData. A source with an
+  alpha band is warped as before, and a source already in the grid's coordinate system is not
+  warped.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

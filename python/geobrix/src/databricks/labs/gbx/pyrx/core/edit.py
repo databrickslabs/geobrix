@@ -91,7 +91,7 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None, nodata=None
     )
     if nodata is not None:
         profile.update(nodata=nodata)
-    return _comp.write_gtiff(profile, out_image)
+    return _comp.write_gtiff(profile, out_image, alpha_like=ds.colorinterp)
 
 
 def update_type(ds, new_type: str) -> bytes:

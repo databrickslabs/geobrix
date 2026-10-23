@@ -1129,12 +1129,12 @@ EPSG:27700, unlike quadbin's EWKB.)
 The five **`*explode` generators are heavyweight-faster (0.37×–0.67×)**. The lightweight explodes are
 Python table functions that send every output row back across the JVM↔Python boundary — from 8,000
 rows per iteration (`bng_kloopexplode`) to 26,000 (`bng_geomkringexplode`) — while the heavyweight
-generators emit their rows inside the JVM. The gap grows with the fan-out: the geometry k-ring and
-k-loop explodes, which emit the most rows, trail the most. Each tier is timed in its own SQL form
+generators emit their rows inside the JVM. The gap likely grows with the fan-out: the geometry k-ring
+and k-loop explodes, which emit the most rows, trail the most. Each tier is timed in its own SQL form
 (the lightweight `FROM t, LATERAL` table function, the heavyweight generator in the select list), and
-the bench checks each query's plan before timing it. These five rows were measured in a later run on
-the same cluster, by then on DBR 18.x, with the same settings (1,000 rows per iteration, 1 warm-up
-and 5 measured iterations, both tiers, all parity gates passed).
+the bench checks each query's plan before timing it. These five rows (marked † in the table) were measured in a
+later run on the same cluster, by then on DBR 18.x, with the same settings (1,000 rows per
+iteration, 1 warm-up and 5 measured iterations, both tiers, all parity gates passed).
 
 Cluster spark-path results (median wall-clock of one full distributed iteration over 1,000 tiles;
 speedup = heavy ÷ light, ≥1.0 → light faster):
@@ -1147,6 +1147,7 @@ speedup = heavy ÷ light, ≥1.0 → light faster):
 | `bng_aswkt` | 0.18 | 0.17 | 1.06× |
 | `bng_centroid` | 0.14 | 0.14 | 1.06× |
 | `bng_kloop` | 0.13 | 0.13 | 1.01× |
+| `bng_tessellate` † | 0.16 | 0.16 | 1.01× |
 | `bng_cellunion` | 0.14 | 0.15 | 0.97× |
 | `bng_aswkb` | 0.14 | 0.14 | 0.96× |
 | `bng_cellarea` | 0.15 | 0.16 | 0.94× |
@@ -1155,15 +1156,16 @@ speedup = heavy ÷ light, ≥1.0 → light faster):
 | `bng_polyfill` | 0.14 | 0.16 | 0.89× |
 | `bng_cellintersection_agg` | 0.25 | 0.28 | 0.89× |
 | `bng_eastnorthasbng` | 0.14 | 0.16 | 0.88× |
-| `bng_tessellate` | 0.14 | 0.17 | 0.86× |
 | `bng_pointascell` | 0.15 | 0.17 | 0.86× |
 | `bng_distance` | 0.13 | 0.16 | 0.86× |
 | `bng_cellintersection` | 0.14 | 0.17 | 0.82× |
-| `bng_kringexplode` | 0.21 | 0.32 | 0.67× |
-| `bng_kloopexplode` | 0.18 | 0.32 | 0.58× |
-| `bng_tessellateexplode` | 0.25 | 0.52 | 0.47× |
-| `bng_geomkringexplode` | 0.23 | 0.57 | 0.39× |
-| `bng_geomkloopexplode` | 0.20 | 0.54 | 0.37× |
+| `bng_kringexplode` † | 0.21 | 0.32 | 0.67× |
+| `bng_kloopexplode` † | 0.18 | 0.32 | 0.58× |
+| `bng_tessellateexplode` † | 0.25 | 0.52 | 0.47× |
+| `bng_geomkringexplode` † | 0.23 | 0.57 | 0.39× |
+| `bng_geomkloopexplode` † | 0.20 | 0.54 | 0.37× |
+
+† Measured in a later run on the same cluster, by then on DBR 18.x, with the same settings; the other rows are from the DBR 17.3 LTS run. The `bng_tessellate` row was re-measured after its `keep_core_geom` default became false in every tier (the lightweight tier no longer returns core-cell geometry by default).
 
 > Geometry-aware `bng_geomkring`/`geomkloop`(+explode) appear in the table above (cluster parity); their geometry-throughput/scaling numbers are in [Geometry-aware expansion at scale](#geomk-at-scale).
 

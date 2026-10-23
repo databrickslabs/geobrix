@@ -172,6 +172,28 @@ def _write(root, files):
     return root
 
 
+def _builder(base):
+    """What register builds for ``base`` without Spark: documents, arrays, layouts, rows."""
+    metas, arrays, unsupported = read_base_metadata(str(base))
+    layouts = {a: _register._layout_of(m) for a, m in arrays.items()}
+    layouts.update({a: _register._layout_of_unsupported(a, metas) for a in unsupported})
+    files = sorted(f for f in base.rglob("*") if f.is_file())
+    objects = pa.table(
+        {
+            "relpath": [f.relative_to(base).as_posix() for f in files],
+            "length": [f.stat().st_size for f in files],
+            "mtime_ms": [f.stat().st_mtime_ns // 1_000_000 for f in files],
+        }
+    )
+    rows, counts = _register._chunk_rows(objects, layouts, "a" * 32)
+    return metas, arrays, unsupported, layouts, rows, counts
+
+
+def _store_from_rows(metas, arrays, rows, base, scratch):
+    reader = FuseRangeReader(str(scratch), base_root=str(base))
+    return ManifestStore(metas, rows.to_pylist(), reader, arrays)
+
+
 def _make_nested(base):
     """Nested groups, a hidden-named array, and a scalar variable (v3)."""
     g = zarr.open_group(str(base), mode="w", zarr_format=3)
@@ -405,6 +427,40 @@ def test_a_marker_that_cannot_be_written_is_a_zarr_error(tmp_path, monkeypatch):
         write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
     assert "Fix:" in str(ei.value) and "ov" in str(ei.value)
     monkeypatch.undo()
+    assert not (tmp_path / "ov" / OWNER_MARKER).exists()
+
+
+def test_a_marker_taken_over_before_the_read_back_is_not_removed(tmp_path, monkeypatch):
+    overlay = tmp_path / "ov"
+    theirs = json.dumps({"table": "other.s.t", "kind": "overlay", "format": "1"})
+    real = _register._check_owner
+
+    def taken_over(marker, table, kind):
+        # between this call's write and its read-back another table took the root
+        (overlay / OWNER_MARKER).write_text(theirs)
+        return real(marker, table, kind)
+
+    monkeypatch.setattr(_register, "_check_owner", taken_over)
+    with pytest.raises(ZarrOwnershipError, match="other.s.t"):
+        write_owner_marker(str(overlay), "c.s.t", "overlay")
+    assert (overlay / OWNER_MARKER).read_text() == theirs
+
+
+def test_a_marker_whose_write_fails_is_removed(tmp_path, monkeypatch):
+    class Broken:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def write(self, data):
+            raise OSError("disk full")
+
+    monkeypatch.setattr(os, "fdopen", lambda fd, mode: (os.close(fd), Broken())[1])
+    with pytest.raises(ZarrError, match="disk full") as ei:
+        write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
+    assert "Fix:" in str(ei.value)
     assert not (tmp_path / "ov" / OWNER_MARKER).exists()
 
 
@@ -730,9 +786,9 @@ def test_nested_groups_and_hidden_names_in_an_unusual_path(
     assert registered <= listed and "fc/_aux/c/0" in listed
 
 
-def test_every_chunk_key_encoding_registers(spark_delta, tmp_path):
-    v3 = tmp_path / "v3.zarr"
-    g = zarr.open_group(str(v3), mode="w", zarr_format=3)
+def test_every_v3_chunk_key_encoding_registers(spark_delta, tmp_path):
+    base = tmp_path / "v3.zarr"
+    g = zarr.open_group(str(base), mode="w", zarr_format=3)
     keys = {
         "dflt": {"name": "default", "separator": "/"},
         "dflt_dot": {"name": "default", "separator": "."},
@@ -749,9 +805,22 @@ def test_every_chunk_key_encoding_registers(spark_delta, tmp_path):
             chunk_key_encoding=enc,
         )
         x[:] = np.arange(24, dtype="f4").reshape(4, 6)
-    v2 = tmp_path / "v2.zarr"
-    g2 = zarr.open_group(str(v2), mode="w", zarr_format=2)
-    y = g2.create_array(
+    expected = {"dflt": "c/1/1", "dflt_dot": "c.1.1", "v2dot": "1.1", "v2slash": "1/1"}
+
+    table = _table("keys")
+    gbx_zarr_register(spark_delta, str(base), table)
+    chunks = _live(spark_delta, table, kinds="chunk")
+    for array, last in expected.items():
+        got = chunks.filter(pc.equal(chunks["array"], array))["key"].to_pylist()
+        assert len(got) == 4 and last in got, (array, got)
+    store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
+    _assert_reads_like_the_base(store, arrays, base)
+
+
+def test_a_v2_store_with_slash_separated_keys_gets_its_chunk_rows(tmp_path):
+    base = tmp_path / "v2.zarr"
+    g = zarr.open_group(str(base), mode="w", zarr_format=2)
+    y = g.create_array(
         "y",
         shape=(4, 6),
         chunks=(2, 3),
@@ -761,62 +830,82 @@ def test_every_chunk_key_encoding_registers(spark_delta, tmp_path):
     )
     y[:] = np.arange(24, dtype="f4").reshape(4, 6)
 
-    for base, expected in (
-        (v3, {"dflt": "c/1/1", "dflt_dot": "c.1.1", "v2dot": "1.1", "v2slash": "1/1"}),
-        (v2, {"y": "1/1"}),
-    ):
-        table = _table("keys")
-        gbx_zarr_register(spark_delta, str(base), table)
-        chunks = _live(spark_delta, table, kinds="chunk")
-        for array, last in expected.items():
-            got = chunks.filter(pc.equal(chunks["array"], array))["key"].to_pylist()
-            assert len(got) == 4 and last in got, (array, got)
-        store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
-        _assert_reads_like_the_base(store, arrays, base)
+    metas, arrays, _, _, rows, counts = _builder(base)
+    assert sorted(rows["key"].to_pylist()) == ["0/0", "0/1", "1/0", "1/1"]
+    assert set(rows["kind"].to_pylist()) == {"chunk"}
+    assert pc.all(pc.is_null(rows["shard_key"])).as_py()
+    assert (counts["stray"], counts["empty"]) == (0, 0)
+    store = _store_from_rows(metas, arrays, rows, base, tmp_path / "scratch")
+    _assert_reads_like_the_base(store, arrays, base)
 
 
 # --- arrays GeoBrix cannot decode -------------------------------------------------
 
 
-@pytest.mark.parametrize("zarr_format", [3, 2])
 def test_an_array_that_cannot_be_decoded_is_still_registered(
-    spark_delta, tmp_path, caplog, zarr_format
+    spark_delta, tmp_path, caplog
 ):
-    base = _make_with_strings(tmp_path / "s.zarr", zarr_format)
+    base = _make_with_strings(tmp_path / "s.zarr", 3)
     metas, arrays, unsupported = read_base_metadata(str(base))
     assert set(arrays) == {"x"} and set(unsupported) == {"station"}
     assert "not supported" in unsupported["station"]
 
-    table = _table(f"strings{zarr_format}")
+    table = _table("strings3")
     with caplog.at_level(logging.WARNING, logger=_register.__name__):
         gbx_zarr_register(spark_delta, str(base), table)
     assert any("station" in w for w in _warnings(caplog))
     assert _commit_meta(spark_delta, table)["unsupported"] == unsupported
 
     rows = _live(spark_delta, table)
-    doc = "zarr.json" if zarr_format == 3 else ".zarray"
     meta_rows = [
-        r for r in rows.to_pylist() if r["array"] == "station" and r["key"] == doc
+        r
+        for r in rows.to_pylist()
+        if r["array"] == "station" and r["key"] == "zarr.json"
     ]
     assert [r["kind"] for r in meta_rows] == ["array"]  # not "group"
     station = rows.filter(
         pc.and_(pc.equal(rows["array"], "station"), pc.equal(rows["kind"], "chunk"))
     )
-    on_disk = [
-        f
-        for f in (base / "station").rglob("*")
-        if f.is_file() and f.name[0] not in "z."
+    assert sorted(station["file"].to_pylist()) == [
+        "station/c/0",
+        "station/c/1",
     ]
-    assert (
-        sorted(station["file"].to_pylist())
-        == sorted(f.relative_to(base).as_posix() for f in on_disk)
-        and station.num_rows == 2
-    )
     assert _commit_meta(spark_delta, table).get("skipped") is None  # not strays
 
     store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
     assert set(arrays) == {"x"}
     _assert_reads_like_the_base(store, arrays, base)
+
+
+def test_a_v2_object_coordinate_keeps_its_documents_and_chunk_rows(tmp_path):
+    base = _make_with_strings(tmp_path / "s.zarr", 2)
+    metas, arrays, unsupported, layouts, rows, counts = _builder(base)
+    assert set(arrays) == {"x"} and set(unsupported) == {"station"}
+    assert "|O" in unsupported["station"] and layouts["station"] is not None
+    assert "station/.zarray" in metas
+    station = rows.filter(pc.equal(rows["array"], "station"))
+    assert sorted(station["key"].to_pylist()) == ["0", "1"]
+    assert set(station["kind"].to_pylist()) == {"chunk"}
+    assert (counts["stray"], counts["empty"]) == (0, 0)
+    store = _store_from_rows(metas, arrays, rows, base, tmp_path / "scratch")
+    _assert_reads_like_the_base(store, arrays, base)
+
+
+def test_an_array_without_a_readable_layout_is_labelled_not_counted_as_stray(
+    tmp_path, monkeypatch
+):
+    base = _make_with_strings(tmp_path / "s.zarr", 3)
+    monkeypatch.setattr(_register, "_layout_of_unsupported", lambda path, metas: None)
+    _, _, unsupported, layouts, rows, counts = _builder(base)
+    assert layouts["station"] is None
+    assert "station" not in set(rows["array"].to_pylist())  # no rows for it
+    assert counts["stray"] == 0 and counts["no_layout"] == 2  # not strays
+    labelled = _register._label_unlaid(unsupported, layouts)
+    assert "no layout" in labelled["station"]
+    assert labelled["station"].startswith(unsupported["station"])
+    # an array whose layout parsed keeps its reason as it was
+    same = _register._label_unlaid({"a": "why"}, {"a": layouts["x"]})
+    assert same == {"a": "why"}
 
 
 # --- metadata: transient misses ---------------------------------------------------
@@ -838,6 +927,60 @@ def test_a_v2_document_that_misses_once_is_not_dropped(era5_v2, monkeypatch):
     missed = _miss_once(monkeypatch, "t2m/.zarray", "u10/.zarray")
     _, arrays, _ = read_base_metadata(str(era5_v2))
     assert len(missed) == 2 and set(arrays) == ERA5_ARRAYS
+
+
+def test_a_zattrs_that_misses_once_is_not_lost(era5_v2, monkeypatch):
+    _no_sleep(monkeypatch)
+    missed = _miss_once(monkeypatch, "t2m/.zattrs", "/.zattrs")
+    metas, arrays, _ = read_base_metadata(str(era5_v2))
+    assert any(m.endswith("t2m/.zattrs") for m in missed) and len(missed) >= 2
+    assert ".zattrs" in metas and "t2m/.zattrs" in metas  # root and array
+    assert arrays["t2m"].dims == ("time", "latitude", "longitude")
+    assert arrays["t2m"].attrs.get("units") == "K"
+
+
+def test_a_root_zgroup_that_misses_once_with_a_zmetadata_is_retried(
+    era5_v2, tmp_path, monkeypatch
+):
+    base = tmp_path / "base.zarr"
+    shutil.copytree(era5_v2, base)
+    zarr.consolidate_metadata(str(base))
+    _no_sleep(monkeypatch)
+    missed = _miss_once(monkeypatch, "base.zarr/.zgroup")
+    metas, arrays, _ = read_base_metadata(str(base))
+    assert len(missed) == 1 and ".zgroup" in metas and set(arrays) == ERA5_ARRAYS
+
+
+def test_a_root_with_a_zmetadata_and_no_zgroup_is_still_refused(
+    era5_v2, tmp_path, monkeypatch
+):
+    _no_sleep(monkeypatch)
+    base = tmp_path / "base.zarr"
+    shutil.copytree(era5_v2, base)
+    zarr.consolidate_metadata(str(base))
+    (base / ".zgroup").unlink()
+    with pytest.raises(ZarrError, match=r"\.zmetadata but no \.zgroup") as ei:
+        read_base_metadata(str(base))
+    assert "Fix:" in str(ei.value)
+
+
+def test_a_stale_consolidated_entry_is_tried_once_over(era5_v2, tmp_path, monkeypatch):
+    base = tmp_path / "base.zarr"
+    shutil.copytree(era5_v2, base)
+    zarr.consolidate_metadata(str(base))
+    shutil.rmtree(base / "u10")  # .zmetadata still names it
+    _no_sleep(monkeypatch)
+    real, reads = _register._read_file, []
+
+    def read(path):
+        if path.endswith("u10/.zarray"):
+            reads.append(path)
+        return real(path)
+
+    monkeypatch.setattr(_register, "_read_file", read)
+    _, arrays, _ = read_base_metadata(str(base))
+    assert set(arrays) == ERA5_ARRAYS - {"u10"}
+    assert len(reads) == _register._HINTED_ATTEMPTS  # not once more as a plain probe
 
 
 def test_a_directory_the_listing_omits_is_found_through_the_scan(

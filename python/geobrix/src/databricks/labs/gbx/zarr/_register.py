@@ -85,8 +85,9 @@ _GLOB_CHARS = re.compile(r"([\\\[\]{}*?])")
 _NUM = r"(?:0|[1-9][0-9]*)"  # a canonical index: no sign, no leading zeros
 _PLAIN_NAME = re.compile(r"[a-z0-9_]+")
 
-# Attempts for a document that may or may not exist: a node's probe (a FUSE mount can
-# miss a healthy file once), an optional document, and one the consolidated metadata names.
+# Attempts for a document that may or may not exist (a node's probe, a ``.zattrs``: a FUSE
+# mount can miss a healthy file once, and losing ``.zattrs`` loses the dimension names and
+# the scale factor), and for one the consolidated metadata names.
 _PROBE_ATTEMPTS = 3
 _HINTED_ATTEMPTS = 6
 _WORKERS = 16
@@ -273,6 +274,18 @@ def _remove_marker(marker: str) -> None:
         pass
 
 
+def _remove_marker_if_ours(marker: str, body: bytes) -> None:
+    """Remove ``marker`` only if it holds what this call wrote (all of it, or the part
+    that landed before a failed write): never a marker another table has put there."""
+    try:
+        with open(marker, "rb") as f:
+            held = f.read()
+    except OSError:
+        return
+    if body.startswith(held):
+        _remove_marker(marker)
+
+
 def _claim_marker(root: str, table: str, kind: str) -> bool:
     """Claim ``root`` for ``table``; ``True`` when this call created the marker."""
     root = _local_root(root)
@@ -294,11 +307,13 @@ def _claim_marker(root: str, table: str, kind: str) -> bool:
         with os.fdopen(fd, "wb") as f:
             f.write(body)
         _check_owner(marker, table, kind)  # read it back: this call must own it
+    except ZarrOwnershipError:
+        raise  # the marker names another table now: it is theirs, not ours to remove
     except OSError as e:
-        _remove_marker(marker)
+        _remove_marker_if_ours(marker, body)
         raise ZarrError(f"{cannot} ({e}).", fix=fix) from e
     except BaseException:
-        _remove_marker(marker)
+        _remove_marker_if_ours(marker, body)
         raise
     return True
 
@@ -396,7 +411,7 @@ class _Reader:
         except FileNotFoundError:
             return None
 
-    def doc(self, key: str, *, optional: bool = False) -> bytes | None:
+    def doc(self, key: str) -> bytes | None:
         if key in self.named:
             raw = self._read(key, 10)
             if raw is None:
@@ -408,7 +423,7 @@ class _Reader:
             return raw
         if key in self.hinted:
             return self._read(key, _HINTED_ATTEMPTS)
-        return self._read(key, 1 if optional else _PROBE_ATTEMPTS)
+        return self._read(key, _PROBE_ATTEMPTS)
 
     def probe(self, path: str, names) -> tuple[str, bytes] | None:
         """The first of the node documents ``names`` that exists at ``path``."""
@@ -420,14 +435,18 @@ class _Reader:
                 raw = self.doc(key)
                 if raw is not None:
                     return n, raw
+        # a hinted key was tried above, with more attempts than a probe makes
+        rest = [(n, key) for n, key in zip(names, keys) if key not in self.hinted]
 
         def attempt() -> tuple[str, bytes]:
-            for n, key in zip(names, keys):
+            for n, key in rest:
                 raw = self._read(key, 1)
                 if raw is not None:
                     return n, raw
             raise FileNotFoundError(path)
 
+        if not rest:
+            return None
         try:
             return _retry_transient(attempt, attempts=_PROBE_ATTEMPTS)
         except FileNotFoundError:
@@ -457,16 +476,25 @@ def _root_info(root: str):
         )
     reader = _Reader(root)
     names = ("zarr.json", ".zgroup", _ZMETADATA, ".zarray")
+    seen: dict[str, bytes | None] = {}
 
     def attempt() -> dict[str, bytes | None]:
-        found = {n: reader._read(n, 1) for n in names}
-        if all(v is None for v in found.values()):
+        seen.update({n: reader._read(n, 1) for n in names})
+        # a .zmetadata without a root document is a miss on the .zgroup until proven
+        # otherwise, so it is retried like having found nothing at all
+        if all(seen[n] is None for n in ("zarr.json", ".zgroup", ".zarray")):
             raise FileNotFoundError(root)
-        return found
+        return dict(seen)
 
     try:
         found = _retry_transient(attempt, attempts=_PROBE_ATTEMPTS)
     except FileNotFoundError:
+        if seen.get(_ZMETADATA) is not None:
+            raise ZarrError(
+                f"{root} is not a Zarr store: it has a .zmetadata but no .zgroup.",
+                fix="pass the root of a Zarr v2 or v3 store (the directory holding "
+                "zarr.json or .zgroup)",
+            ) from None
         raise ZarrError(
             f"{root} is not a Zarr store: it has no zarr.json, .zgroup or .zmetadata.",
             fix="pass the root of a Zarr v2 or v3 store (the directory holding zarr.json "
@@ -483,13 +511,7 @@ def _root_info(root: str):
             raise _root_array(root)
         return 3, found
     if found[".zgroup"] is None:
-        if found[".zarray"] is not None:
-            raise _root_array(root)
-        raise ZarrError(
-            f"{root} is not a Zarr store: it has a .zmetadata but no .zgroup.",
-            fix="pass the root of a Zarr v2 or v3 store (the directory holding zarr.json "
-            "or .zgroup)",
-        )
+        raise _root_array(root)  # .zarray without .zgroup
     return 2, found
 
 
@@ -528,7 +550,7 @@ def _walk(fmt, reader, pool):
         hit = reader.probe(path, names)
         zattrs = None
         if hit is not None and fmt == 2:
-            zattrs = reader.doc(f"{path}/.zattrs", optional=True)
+            zattrs = reader.doc(f"{path}/.zattrs")
         return path, hit, zattrs
 
     queue = [""]
@@ -697,7 +719,7 @@ def read_base_metadata(
         which = "consolidated_metadata of zarr.json"
     else:
         metas[".zgroup"] = found[".zgroup"]
-        zattrs = reader.doc(".zattrs", optional=True)
+        zattrs = reader.doc(".zattrs")
         if zattrs is not None:
             metas[".zattrs"] = zattrs
         if found[_ZMETADATA] is not None:
@@ -887,20 +909,23 @@ def _chunk_rows(objects: pa.Table, layouts, write_id: str) -> tuple[pa.Table, di
     key whose object has zero bytes: an empty file is not a chunk, and a ``length=0``
     row would make the whole store unreadable (the chunk reads as the fill value).
     An array whose layout is ``None`` (its grid or key encoding cannot be read) gets no
-    rows. Returns ``(rows, counts)`` with the number of rows and, for each thing left out
-    (``empty`` chunk objects, ``stray`` objects), how many and a few names.
+    rows, and its objects are counted as ``no_layout``, not as strays. Returns
+    ``(rows, counts)`` with the number of rows and, for each thing left out (``empty``
+    chunk objects, ``stray`` objects), how many and a few names.
     """
     n = objects.num_rows
     relpath, length = objects.column("relpath"), objects.column("length")
     size = np.asarray(length)
     claimed = np.zeros(n, dtype=bool)  # has a chunk key of an array (empty or not)
+    unlaid = np.zeros(n, dtype=bool)  # under an array whose layout cannot be read
     parts = []
     for name in sorted(layouts):
         layout = layouts[name]
-        if layout is None:
-            continue
         prefix = name + "/"
         under = np.asarray(pc.starts_with(relpath, prefix))
+        if layout is None:
+            unlaid |= under
+            continue
         if not under.any():
             continue
         idx = np.flatnonzero(under)
@@ -945,7 +970,8 @@ def _chunk_rows(objects: pa.Table, layouts, write_id: str) -> tuple[pa.Table, di
             pc.ends_with(relpath, "/" + doc)
         )
     empty = claimed & (size == 0)  # chunk keys with nothing behind them
-    stray = ~claimed & ~is_doc
+    unlaid &= ~is_doc
+    stray = ~claimed & ~is_doc & ~unlaid
 
     def named(mask) -> list[str]:
         return relpath.filter(pa.array(mask)).slice(0, 3).to_pylist()
@@ -953,6 +979,7 @@ def _chunk_rows(objects: pa.Table, layouts, write_id: str) -> tuple[pa.Table, di
     rows = pa.concat_tables(parts) if parts else _ROW_SCHEMA.empty_table()
     return rows, {
         "objects": rows.num_rows,
+        "no_layout": int(unlaid.sum()),
         "empty": int(empty.sum()),
         "empty_examples": named(empty),
         "stray": int(stray.sum()),
@@ -961,6 +988,18 @@ def _chunk_rows(objects: pa.Table, layouts, write_id: str) -> tuple[pa.Table, di
 
 
 # --- register ---------------------------------------------------------------------
+
+
+def _label_unlaid(unsupported: dict[str, str], layouts) -> dict[str, str]:
+    """``unsupported`` with the arrays that also have no readable layout labelled as such."""
+    return {
+        a: (
+            reason
+            if layouts.get(a) is not None
+            else f"{reason} (no layout: its objects are not registered)"
+        )
+        for a, reason in unsupported.items()
+    }
 
 
 def _discard(spark, table: str, write_id: str) -> None:
@@ -1067,6 +1106,7 @@ def gbx_zarr_register(
             counts["stray"],
             _examples(counts["stray_examples"]),
         )
+    unsupported = _label_unlaid(unsupported, layouts)
     if unsupported:
         _LOG.warning(
             "%s: %d array(s) use features GeoBrix cannot decode and are registered "

@@ -3457,7 +3457,7 @@ rst_quadbin_tessellate_python_heavy_example_output = """
 
 
 def rst_custom_tessellate_python_heavy_example(spark):
-    """Tessellate a raster into custom-grid cells (heavy tier LATERAL generator).
+    """Tessellate a raster into custom-grid cells (heavyweight generator, select list).
 
     NOTE: The raster must already be in the custom grid's native CRS — no
     automatic reprojection. Synthesizes a single-band BNG raster (EPSG:27700)
@@ -3481,22 +3481,18 @@ def rst_custom_tessellate_python_heavy_example(spark):
             f.lit(40), f.lit(40), f.lit(27700),
         ).alias("tile")
     )
-    df.createOrReplaceTempView("bng_london_rasters")
     # Custom grid covering the same 4km BNG extent; resolution 1 = four 2km cells.
-    custom_grid_sql = "gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)"
-    return spark.sql(
-        f"SELECT t.* FROM bng_london_rasters, "
-        f"LATERAL gbx_rst_custom_tessellate(tile, {custom_grid_sql}, 1) t"
-    ).take(3)
+    grid = f.expr("gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700)")
+    return df.select(rx.rst_custom_tessellate("tile", grid, f.lit(1))).take(3)
 
 
 rst_custom_tessellate_python_heavy_example_output = """
-+--------------------+-----------------------------------------------------------+
-|cellid              |raster                                                     |
-+--------------------+-----------------------------------------------------------+
-|<custom cell bigint>|{0, <raster bytes>, null, {driver -> GTiff, ...}}          |
-+--------------------+-----------------------------------------------------------+
-(one v2-Tile row per custom-grid cell; cellid is BIGINT encoding the custom cell)
++------------------------------------------------------------+
+|tile                                                        |
++------------------------------------------------------------+
+|{<custom cell bigint>, <raster bytes>, ..., {driver -> ...}}|
++------------------------------------------------------------+
+(one row per custom-grid cell; the tile struct's cellid is the BIGINT custom cell)
 """
 
 
@@ -3506,64 +3502,77 @@ rst_custom_tessellate_python_heavy_example_output = """
 
 
 def rst_retile_python_heavy_example(spark):
-    """Retile a raster into uniform dimensions (UDTF via SQL LATERAL)."""
+    """Retile a raster into uniform dimensions (heavyweight generator).
+
+    The heavyweight function is a generator: select it directly and it yields one
+    ``tile`` row per sub-tile. (``FROM t, LATERAL`` is the lightweight table-function
+    form; it does not reach the heavyweight tier.)
+    """
     if rx is None:
         raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f  # noqa: PLC0415
 
-    # The `rasters` view is created in Setup; retile it into 64x64 sub-tiles via SQL LATERAL.
-    return spark.sql(
-        "SELECT t.* FROM rasters, " "LATERAL gbx_rst_retile(tile, 64, 64) t"
-    ).take(3)
+    # The `rasters` view is created in Setup; retile it into 64x64 sub-tiles.
+    df = spark.table("rasters")
+    return df.select(rx.rst_retile("tile", f.lit(64), f.lit(64))).take(3)
 
 
 rst_retile_python_heavy_example_output = """
-+------+--------------+-----+----------------------+
-|cellid|raster        |path |...                   |
-+------+--------------+-----+----------------------+
-|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
-+------+--------------+-----+----------------------+
-(one row per sub-tile; t.* expands the v2-Tile struct fields)
++-------------------------------------------------+
+|tile                                             |
++-------------------------------------------------+
+|{0, <raster bytes>, ..., {driver -> GTiff, ...}} |
++-------------------------------------------------+
+(one row per sub-tile; the generator's one column is the tile struct)
 """
 
 
 def rst_tooverlappingtiles_python_heavy_example(spark):
-    """Create overlapping tiles for edge-aware processing (UDTF via SQL LATERAL)."""
+    """Create overlapping tiles for edge-aware processing (heavyweight generator).
+
+    Select the generator directly: one ``tile`` row per overlapping tile.
+    """
     if rx is None:
         raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f  # noqa: PLC0415
 
-    # The `rasters` view is created in Setup; 64x64 tiles with 8% overlap via SQL LATERAL.
-    return spark.sql(
-        "SELECT t.* FROM rasters, "
-        "LATERAL gbx_rst_tooverlappingtiles(tile, 64, 64, 8) t"
+    # The `rasters` view is created in Setup; 64x64 tiles with 8% overlap.
+    df = spark.table("rasters")
+    return df.select(
+        rx.rst_tooverlappingtiles("tile", f.lit(64), f.lit(64), f.lit(8))
     ).take(3)
 
 
 rst_tooverlappingtiles_python_heavy_example_output = """
-+------+--------------+-----+----------------------+
-|cellid|raster        |path |...                   |
-+------+--------------+-----+----------------------+
-|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
-+------+--------------+-----+----------------------+
-(one row per overlapping tile; t.* expands the v2-Tile struct fields)
++-------------------------------------------------+
+|tile                                             |
++-------------------------------------------------+
+|{0, <raster bytes>, ..., {driver -> GTiff, ...}} |
++-------------------------------------------------+
+(one row per overlapping tile; the generator's one column is the tile struct)
 """
 
 
 def rst_separatebands_python_heavy_example(spark):
-    """Separate multi-band raster into individual bands (UDTF via SQL LATERAL)."""
+    """Separate multi-band raster into individual bands (heavyweight generator).
+
+    Select the generator directly: one ``tile`` row per band.
+    """
     if rx is None:
         raise ImportError("rasterx not installed")
 
-    # The `multiband_rasters` view is created in Setup; separate its bands via SQL LATERAL.
-    return spark.sql(
-        "SELECT t.* FROM multiband_rasters, " "LATERAL gbx_rst_separatebands(tile) t"
-    ).collect()
+    # The `multiband_rasters` view is created in Setup; separate its bands.
+    df = spark.table("multiband_rasters")
+    return df.select(rx.rst_separatebands("tile")).collect()
 
 
 rst_separatebands_python_heavy_example_output = """
-+---+
-|z  |
-+---+
-(one row per band: each is a v2-Tile struct)
++-------------------------------------------------+
+|tile                                             |
++-------------------------------------------------+
+|{0, <raster bytes>, ..., {driver -> GTiff, ...}} |
++-------------------------------------------------+
+(one row per band; the generator's one column is the tile struct)
 """
 
 
@@ -3596,23 +3605,26 @@ rst_polygonize_python_heavy_example_output = """
 
 
 def rst_maketiles_python_heavy_example(spark):
-    """Subdivide raster into tiles by approximate size (generator, via SQL LATERAL)."""
+    """Subdivide raster into tiles by approximate size (heavyweight generator).
+
+    Select the generator directly: one ``tile`` row per sub-tile.
+    """
     if rx is None:
         raise ImportError("rasterx not installed")
+    from pyspark.sql import functions as f  # noqa: PLC0415
 
-    # The `rasters` view is created in Setup; subdivide into ~1.0 MB tiles via SQL LATERAL.
-    return spark.sql(
-        "SELECT t.* FROM rasters, " "LATERAL gbx_rst_maketiles(tile, 1.0) t"
-    ).collect()
+    # The `rasters` view is created in Setup; subdivide into ~1.0 MB tiles.
+    df = spark.table("rasters")
+    return df.select(rx.rst_maketiles("tile", f.lit(1.0))).collect()
 
 
 rst_maketiles_python_heavy_example_output = """
-+------+--------------+-----+----------------------+
-|cellid|raster        |path |...                   |
-+------+--------------+-----+----------------------+
-|0     |<raster bytes>|...  |{driver -> GTiff, ...}|
-+------+--------------+-----+----------------------+
-(one row per sub-tile; t.* expands the v2-Tile struct fields)
++-------------------------------------------------+
+|tile                                             |
++-------------------------------------------------+
+|{0, <raster bytes>, ..., {driver -> GTiff, ...}} |
++-------------------------------------------------+
+(one row per sub-tile; the generator's one column is the tile struct)
 """
 
 

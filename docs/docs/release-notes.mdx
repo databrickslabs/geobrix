@@ -319,6 +319,14 @@ formats.
 
 ### Raster tiling functions
 
+- **Raster generator examples show each tier's form.** The SQL and Python examples of
+  `rst_retile`, `rst_tooverlappingtiles`, `rst_separatebands`, `rst_maketiles`,
+  `rst_custom_tessellate`, `rst_xyzpyramid`, the `rst_*_tessellate` functions and the
+  `rst_*_rastertogrid*` reducers mark each statement as the heavyweight or the lightweight form.
+  Heavyweight generators are called in the select list or with `LATERAL VIEW`, and the heavyweight
+  reducers return an ARRAY that `posexplode` and `inline` flatten to the same rows the lightweight
+  table functions yield. Several heavyweight examples, and `DESCRIBE FUNCTION` for the tiling
+  generators, showed `FROM t, LATERAL f(...)`, which reaches only the lightweight table function.
 - **Heavyweight tiling and tessellation functions return their error row.** When a tile cannot be
   read, `rst_retile`, `rst_separatebands`, `rst_tooverlappingtiles`, `rst_maketiles` and the four
   `rst_*_tessellate` functions now return one row whose `tile` holds the error tile, as

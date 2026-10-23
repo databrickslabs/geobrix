@@ -976,30 +976,33 @@ _POLYGONIZE_ERROR_TILE_BUG = (
 
 
 def test_rst_retile_python_heavy_example(spark):
-    """rst_retile returns list of rows (via LATERAL)."""
+    """rst_retile (heavyweight generator) returns one `tile` row per sub-tile."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_retile_python_heavy_example(spark)
     assert result is not None
     assert isinstance(result, list)
     assert len(result) > 0
+    assert list(result[0].asDict()) == ["tile"]
 
 
 def test_rst_tooverlappingtiles_python_heavy_example(spark):
-    """rst_tooverlappingtiles returns list of rows (via LATERAL)."""
+    """rst_tooverlappingtiles (heavyweight generator) returns one `tile` row per tile."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_tooverlappingtiles_python_heavy_example(spark)
     assert result is not None
     assert isinstance(result, list)
     assert len(result) > 0
+    assert list(result[0].asDict()) == ["tile"]
 
 
 def test_rst_separatebands_python_heavy_example(spark):
-    """rst_separatebands returns list of rows (one per band, via LATERAL)."""
+    """rst_separatebands (heavyweight generator) returns one `tile` row per band."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_separatebands_python_heavy_example(spark)
     assert result is not None
     assert isinstance(result, list)
     assert len(result) == 3  # multiband fixture has 3 bands
+    assert list(result[0].asDict()) == ["tile"]
 
 
 def test_rst_polygonize_python_heavy_example(spark):
@@ -1013,12 +1016,24 @@ def test_rst_polygonize_python_heavy_example(spark):
 
 
 def test_rst_maketiles_python_heavy_example(spark):
-    """rst_maketiles returns one row per sub-tile (via LATERAL)."""
+    """rst_maketiles (heavyweight generator) returns one `tile` row per sub-tile."""
     assert rasterx_functions is not None
     result = rasterx_functions.rst_maketiles_python_heavy_example(spark)
     assert result is not None
     assert isinstance(result, list)
     assert len(result) > 0
+    assert list(result[0].asDict()) == ["tile"]
+
+
+def test_rst_custom_tessellate_python_heavy_example(spark):
+    """rst_custom_tessellate (heavyweight generator) returns one `tile` row per cell."""
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+
+    cx.register(spark)
+    result = rasterx_functions.rst_custom_tessellate_python_heavy_example(spark)
+    assert isinstance(result, list) and len(result) > 0
+    assert list(result[0].asDict()) == ["tile"]
+    assert result[0]["tile"]["cellid"] is not None
 
 
 def test_rst_rasterize_python_heavy_example(spark):

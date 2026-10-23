@@ -101,7 +101,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridavg(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridavg(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -112,7 +112,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridcount(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridcount(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -123,7 +123,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridmax(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmax(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -134,7 +134,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridmedian(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmedian(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -145,7 +145,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridmin(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridmin(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -156,7 +156,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridstddev(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridstddev(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -167,7 +167,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridsum(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridsum(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -178,7 +178,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_bng_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT gbx_rst_bng_rastertogridvariance(tile, 3) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_bng_rastertogridvariance(tile, 3)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -398,7 +398,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridavg( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridavg(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -409,7 +409,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridcount( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridcount(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -420,7 +420,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmax( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridmax(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -431,7 +431,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmedian( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridmedian(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -442,7 +442,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridmin( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridmin(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -453,7 +453,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridstddev( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridstddev(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -464,7 +464,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridsum( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridsum(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -475,7 +475,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT t.band, t.cellID, t.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_rastertogridvariance( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r LATERAL VIEW posexplode(gbx_rst_custom_rastertogridvariance(tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, grid, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -486,7 +486,7 @@
       "since": "0.5.1"
     },
     "gbx_rst_custom_tessellate": {
-      "examples": "Examples:\n      > SELECT t.* FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r, LATERAL gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_custom_tessellate( tile, gbx_custom_grid(529000, 533000, 179000, 183000, 2, 4000, 4000, 27700), 1 ) FROM (SELECT gbx_rst_fromfile('/Volumes/main/geobrix_samples/geobrix-examples/london/sentinel2/london_sentinel2_red.tif') AS tile) AS r;",
       "usage_args": "tile, grid, resolution, [assignment], [coverage]",
       "bindings": [
         "sql",
@@ -693,7 +693,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_h3_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridavg(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridavg(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -704,7 +704,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_h3_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridcount(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridcount(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -715,7 +715,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_h3_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridmax(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmax(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -726,7 +726,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_h3_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmedian(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -737,7 +737,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_h3_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridmin(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridmin(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -748,7 +748,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_h3_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridstddev(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -759,7 +759,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_h3_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridsum(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridsum(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -770,7 +770,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_h3_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT gbx_rst_h3_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_h3_rastertogridvariance(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -875,7 +875,7 @@
       ]
     },
     "gbx_rst_maketiles": {
-      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_maketiles(tile, 4) t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_maketiles(tile, 4) FROM rasters;",
       "usage_args": "tile, size_in_mb",
       "bindings": [
         "sql",
@@ -1091,7 +1091,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_quadbin_rastertogridavg": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridavg(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridavg(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1102,7 +1102,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_quadbin_rastertogridcount": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridcount(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridcount(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1113,7 +1113,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_quadbin_rastertogridmax": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridmax(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmax(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1124,7 +1124,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_quadbin_rastertogridmedian": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmedian(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1135,7 +1135,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_quadbin_rastertogridmin": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridmin(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridmin(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1146,7 +1146,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_quadbin_rastertogridstddev": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridstddev(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1157,7 +1157,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_quadbin_rastertogridsum": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridsum(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridsum(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1168,7 +1168,7 @@
       "since": "0.4.3"
     },
     "gbx_rst_quadbin_rastertogridvariance": {
-      "examples": "Examples:\n      > SELECT gbx_rst_quadbin_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters;",
+      "examples": "Examples:\n      > SELECT b.pos + 1 AS band, c.cellID, c.measure FROM multiband_rasters LATERAL VIEW posexplode(gbx_rst_quadbin_rastertogridvariance(tile, 4)) b AS pos, cells LATERAL VIEW inline(cells) c AS cellID, measure;",
       "usage_args": "tile, resolution, [coverage], [assignment]",
       "bindings": [
         "sql",
@@ -1278,7 +1278,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_retile": {
-      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_retile(tile, 256, 256) t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_retile(tile, 256, 256) FROM rasters;",
       "usage_args": "tile, tile_width, tile_height",
       "bindings": [
         "sql",
@@ -1355,7 +1355,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_separatebands": {
-      "examples": "Examples:\n      > SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_separatebands(tile) t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_separatebands(tile) FROM multiband_rasters;",
       "usage_args": "tile",
       "bindings": [
         "sql",
@@ -1487,7 +1487,7 @@
       "since": "0.4.0"
     },
     "gbx_rst_tooverlappingtiles": {
-      "examples": "Examples:\n      > SELECT t.* FROM rasters, LATERAL gbx_rst_tooverlappingtiles(tile, 256, 256, 10) t;",
+      "examples": "Examples:\n      > SELECT gbx_rst_tooverlappingtiles(tile, 256, 256, 10) FROM rasters;",
       "usage_args": "tile, tile_width, tile_height, overlap",
       "bindings": [
         "sql",
@@ -1652,7 +1652,7 @@
       "since": "0.2.0"
     },
     "gbx_rst_xyzpyramid": {
-      "examples": "Examples:\n      > SELECT path, t.tile.z as z, t.tile.x as x, t.tile.y as y, t.tile.bytes as png_bytes FROM rasters LATERAL VIEW gbx_rst_xyzpyramid(tile, 4, 6) AS t;",
+      "examples": "Examples:\n      > SELECT path, t.z, t.x, t.y, t.bytes AS png_bytes FROM rasters LATERAL VIEW gbx_rst_xyzpyramid(tile, 4, 6) AS t;",
       "usage_args": "tile, min_z, max_z, [format], [size], [resampling], [rescale]",
       "bindings": [
         "sql",

@@ -313,6 +313,30 @@ def _warp_window_bytes_crs(
     return _warp_bytes(win_bytes, want_crs)
 
 
+def _warp_pending(tile: VirtualTile, src) -> bool:
+    """True when *tile*'s target ``crs`` asks for a reprojection of its source *src*.
+
+    The rule ``open_tile`` applies: the target is compared with the source's CRS, or with
+    the CRS a pending ``rst_setsrid`` relabels it to; a target the source already has
+    asks for nothing.
+    """
+    if not tile.crs:
+        return False
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    _, _, pending_srid, _ = _parse_pending(tile.metadata)
+    want = _epsg_of(tile.crs)
+    if want is not None:
+        effective = (
+            pending_srid if pending_srid is not None else authority_srid_of(src.crs)
+        )
+        return want != effective
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    effective_crs = resolve_crs(pending_srid) if pending_srid is not None else src.crs
+    return effective_crs is None or effective_crs != resolve_crs(tile.crs)
+
+
 def _empty_dataset_bytes(ref) -> bytes:
     """A valid 1x1 NoData GTiff mirroring ref's band count / dtype (disjoint clip).
 
@@ -1004,7 +1028,10 @@ def shape_output(
         ``raster=None`` referencing the written file. This is the ONLY way a
         pixel-producer returns a virtual tile. The returned ``window`` is the
         written file's full extent ``(0, 0, width, height)``; an input
-        ``window`` (a part's position in its parent) only names the file.
+        ``window`` (a part's position in its parent) only names the file. The input's
+        ``clip_polygon`` / ``clip_crs`` / ``crs`` are provenance (already applied to
+        make its bytes) and are not carried: on the virtual tile they would be
+        instructions, applied again on every read.
 
     ``materialize=True``:
       - Tile virtual → read via ``open_tile`` (lazy), capture bytes,
@@ -1072,9 +1099,12 @@ def shape_output(
             # tile: its full extent. The parent position is not carried over; it
             # would point outside the file.
             window=(0, 0, own_w, own_h),
-            clip_polygon=vt.clip_polygon,
-            clip_crs=vt.clip_crs,
-            crs=vt.crs,
+            # On the materialized input clip_polygon / clip_crs / crs record what was
+            # already applied to make its bytes; on this virtual tile they would be
+            # instructions, applied a second time to the file just written.
+            clip_polygon=None,
+            clip_crs=None,
+            crs=None,
             metadata=meta,
         )
 

@@ -145,3 +145,32 @@ def test_virtualize_dir_part_with_source_path_provenance(tmp_path):
     assert out.path != str(src) and os.path.dirname(out.path) == str(tmp_path / "out")
     got_px, _, got_crs = _pixels(out)
     assert np.array_equal(got_px, want_px) and got_crs == want_crs
+
+
+def test_virtualize_dir_resets_the_provenance_already_baked_into_the_bytes(tmp_path):
+    """A materialized tile's ``clip_polygon`` / ``clip_crs`` / ``crs`` record what was
+    already applied to make its bytes; on the virtual tile that points at the written
+    file they would be instructions, applied a second time on every read. The written
+    file is read as is."""
+    import shapely
+    from shapely.geometry import box
+
+    bytes_ = make_geotiff_bytes(width=4, height=3, epsg=4326)
+    # provenance that would change the pixels if it were applied again
+    vt = VirtualTile(
+        cellid=4,
+        raster=bytes_,
+        clip_polygon=shapely.to_wkb(box(10.0, 49.0, 11.0, 50.0)),
+        clip_crs="EPSG:4326",
+        crs="EPSG:3857",
+    )
+    want_px, want_tf, want_crs = _pixels(vt)
+    assert want_px.shape == (1, 3, 4), "bytes tiles are read as they are"
+
+    out = ot.shape_output(vt, virtualize_dir=str(tmp_path))
+
+    assert out.is_virtual()
+    assert out.clip_polygon is None and out.clip_crs is None and out.crs is None
+    got_px, got_tf, got_crs = _pixels(out)
+    assert got_px.shape == want_px.shape and np.array_equal(got_px, want_px)
+    assert got_tf == want_tf and got_crs == want_crs

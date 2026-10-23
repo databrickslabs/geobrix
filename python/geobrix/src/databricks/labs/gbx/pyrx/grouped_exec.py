@@ -55,6 +55,18 @@ def _tile_is_windowless_virtual(tile) -> bool:
         return False
 
 
+def _has_clip_or_crs(tile) -> bool:
+    """True if *tile* carries a ``clip_polygon`` or a target ``crs``.
+
+    On a virtual tile these are instructions (pending operations); only ``open_tile``
+    applies them.
+    """
+    try:
+        return tile["clip_polygon"] is not None or bool(tile["crs"])
+    except (KeyError, TypeError):
+        return False
+
+
 def align_partitions(
     df: DataFrame, *, n: int, path_col: str = "tile.path"
 ) -> DataFrame:
@@ -80,6 +92,10 @@ def _run_file_fast_path(
     real windowed ``DatasetReader`` materialised from the cached source
     (``view_mode="pixels"``).
 
+    Returns ``_MISS`` when the tile's target ``crs`` differs from its source's: the
+    window of the source as it is would be the wrong raster, and ``open_tile`` (the
+    fallback) reprojects. A pending clip is excluded earlier (``_file_fast_path_uri``).
+
     Caller wraps in ``try/except Exception`` and sets ``result = _MISS`` so the
     fallback path can take over on any open / stream / view-construction failure.
     """
@@ -88,6 +104,7 @@ def _run_file_fast_path(
         _parse_pending,
         _read_size_key,
         _to_virtual_tile,
+        _warp_pending,
         _WindowHeaderView,
     )
 
@@ -100,6 +117,10 @@ def _run_file_fast_path(
     )
     size_holder[0] = metadata_size
     src = lru.get(uri)
+    if _warp_pending(vt, src):
+        # The tile asks for another CRS than its source has; this path reads the
+        # source as it is, so open_tile (via the fallback) applies the reprojection.
+        return _MISS
     from rasterio.windows import Window
 
     pending_count = len(bands) if bands else None
@@ -147,12 +168,16 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
     """Execute the per-tile fallback for one tile. Returns result; raises on failure.
 
     Covers:
-      (a) materialized tiles (raster inline, path None)
+      (a) materialized tiles (raster inline; a ``path`` they carry is provenance)
       (b) virtual tiles when driver did not add _file_ref (FILE not supported)
       (c) FILE open/stream/view failure (graceful degrade from fast path)
+      (d) virtual tiles with a pending clip or target CRS (the fast path reads the
+          source as it is; ``open_tile`` applies the instructions)
 
-    For windowless virtual tiles, ``_open`` raises ``ValueError``; ``open_header``
-    returns the full-source footprint (consistent with per-row ``rst_memsize``).
+    A windowless virtual tile with no clip and no target CRS goes to ``open_header``,
+    which returns the full-source footprint (consistent with per-row ``rst_memsize``).
+    With either instruction it goes to ``_open``: the footprint is the clipped or
+    reprojected one.
 
     view contract:
       ``view="header"``: wrap the open DatasetReader in a full-extent
@@ -165,7 +190,7 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
     """
     from .core.open_tile import _open, open_header
 
-    if _tile_is_windowless_virtual(tile):
+    if _tile_is_windowless_virtual(tile) and not _has_clip_or_crs(tile):
         with open_header(tile) as ds:
             if view_mode == "header":
                 from rasterio.windows import Window as _Win
@@ -198,9 +223,14 @@ def _file_fast_path_uri(tile):
     ``materialize=True`` outputs, whole-input retile outputs). The source may
     differ from the bytes (a baked-in ``rst_setsrid``, ``rst_band`` or
     ``rst_initnodata``, or computed pixels), so such a tile is read from its bytes.
+
+    A virtual tile with a pending ``clip_polygon`` is not read from its source as it
+    is either (``open_tile``'s FILE branch makes the same exception): the fallback
+    applies the clip. (A target ``crs`` needs the open source to compare with; see
+    ``_run_file_fast_path``.)
     """
     try:
-        if tile["raster"] is not None:
+        if tile["raster"] is not None or tile["clip_polygon"] is not None:
             return None
     except (KeyError, TypeError):
         pass
@@ -288,15 +318,19 @@ def grouped_tile_map(
       provenance of where its bytes came from; it is never read in their place.
       This is the path exercised by the local unit test.
     - **Virtual tiles** (``raster`` None, ``path`` set) + FILE-capable: before
-      ``mapInPandas`` a ``_file_ref`` column is added holding a
-      ``try_to_file(path)`` FileRef for each row.  Inside the partition the LRU caches the open rasterio dataset
-      (opened from the FileRef's seekable stream) keyed by ``uri``; on the FILE
-      fast path the view contract (header/pixels) determines what is passed to
+      ``mapInPandas`` a ``_file_ref`` column is added holding a ``try_to_file(path)``
+      FileRef for each row.  Inside the partition the LRU caches the open rasterio
+      dataset (opened from the FileRef's seekable stream) keyed by ``uri``; on the
+      FILE fast path the view contract (header/pixels) determines what is passed to
       ``core_fn``.  ``_file_ref`` is stripped from the output so the output
       schema is unchanged.  On any FileRef open or view-construction failure,
-      degrades per-tile to the fallback path below.
-    - **Virtual tiles** + fallback (non-FILE / open failure): opened per-row via
-      ``_open``; no amortisation — each tile's window is unique.
+      degrades per-tile to the fallback path below.  A tile with a pending
+      ``clip_polygon``, or a target ``crs`` its source does not have, skips the fast
+      path: only ``open_tile`` applies those instructions.
+    - **Virtual tiles** + fallback (non-FILE / open failure / pending clip or CRS):
+      opened per-row via ``_open``; no amortisation — each tile's window is unique.
+
+    The per-row choice between these paths is ``_dispatch_tile``'s, and nothing else's.
 
     ``core_fn(ds_or_view, cellid)`` must not hold a reference to its first arg
     after returning.
@@ -319,7 +353,9 @@ def grouped_tile_map(
     out_name = return_field.name
 
     # Add the FileRef column on the driver before mapInPandas.  Each row
-    # gets try_to_file(tile.path); materialized tiles (path=null) get NULL.
+    # gets try_to_file(tile.path); a tile without a path gets NULL.  A materialized
+    # tile may carry a path as provenance and gets a FileRef too, which is never
+    # used: its bytes are read, not its source (see _file_fast_path_uri).
     # Pass df.sparkSession explicitly so file_supported() doesn't need to
     # resolve the session via getActiveSession() (which can return None on
     # Spark Connect / DBR 14+ in some threading contexts).

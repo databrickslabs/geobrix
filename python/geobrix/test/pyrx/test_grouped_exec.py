@@ -10,6 +10,7 @@ getActiveSession()==None pitfall on Spark-Connect worker threads.
 """
 
 import numpy as np
+import pytest
 from pyspark.sql.types import LongType, StructField, StructType
 
 from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA, VirtualTile
@@ -527,3 +528,126 @@ def test_dispatch_virtual_tile_takes_file_fast_path(tmp_path):
         lru.close()
     assert got == (4326, 4, 3)
     assert lru.gets == [str(src)]
+
+
+# ---------------------------------------------------------------------------
+# A virtual tile's pending clip / CRS instructions are applied on the FILE path too
+# ---------------------------------------------------------------------------
+
+
+def _clip_wkb():
+    """A cutline over the upper-left 2x2 pixels of ``make_geotiff_bytes(4, 3)`` (x 10..11,
+    y 49..50 in EPSG:4326, half-degree pixels from the origin 10, 50)."""
+    import shapely
+    from shapely.geometry import box
+
+    return shapely.to_wkb(box(10.0, 49.0, 11.0, 50.0))
+
+
+def _dispatch_virtual(tmp_path, view, **tile_kw):
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    tile = VirtualTile(cellid=1, path=str(src), **tile_kw).to_row()
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            tile, object(), _OpenerContext(), lru, view, _dispatch_header
+        )
+    finally:
+        lru.close()
+    return got, lru.gets, str(src)
+
+
+@pytest.mark.parametrize("view", ["header", "pixels"])
+@pytest.mark.parametrize("window", [(0, 0, 4, 3), None], ids=["windowed", "windowless"])
+def test_dispatch_applies_a_pending_clip(tmp_path, view, window):
+    """A virtual tile with a ``clip_polygon`` reads as the clipped raster, as
+    ``open_tile`` reads it; the whole-window FILE fast path would skip the clip."""
+    got, gets, _ = _dispatch_virtual(
+        tmp_path,
+        view,
+        window=window,
+        clip_polygon=_clip_wkb(),
+        clip_crs="EPSG:4326",
+    )
+    assert got == (4326, 2, 2), f"view={view}: clip not applied, got {got}"
+    assert gets == [], f"view={view}: the FILE fast path read an unclipped source"
+
+
+@pytest.mark.parametrize("view", ["header", "pixels"])
+@pytest.mark.parametrize("window", [(0, 0, 4, 3), None], ids=["windowed", "windowless"])
+def test_dispatch_applies_a_pending_crs(tmp_path, view, window):
+    """A virtual tile whose ``crs`` differs from its source's reads reprojected."""
+    got, _, _ = _dispatch_virtual(tmp_path, view, window=window, crs="EPSG:3857")
+    assert got[0] == 3857, f"view={view}: the target CRS was skipped, got {got}"
+
+
+@pytest.mark.parametrize("view", ["header", "pixels"])
+def test_dispatch_keeps_the_fast_path_when_the_crs_is_the_source_crs(tmp_path, view):
+    """A target CRS the source already has asks for nothing: still the FILE fast path."""
+    got, gets, src = _dispatch_virtual(
+        tmp_path, view, window=(0, 0, 4, 3), crs="EPSG:4326"
+    )
+    assert got == (4326, 4, 3)
+    assert gets == [src], f"view={view}: left the fast path for a no-op CRS: {gets}"
+
+
+# ---------------------------------------------------------------------------
+# grouped_tile_map runs every tile through _dispatch_tile
+# ---------------------------------------------------------------------------
+
+
+def test_grouped_tile_map_routes_every_tile_through_dispatch_tile(
+    spark, gtiff_bytes, monkeypatch
+):
+    """The per-tile decision (FILE fast path vs fallback) lives in ``_dispatch_tile``
+    alone: the executor must call it for each row, with the row's tile and FileRef, and
+    use what it returns. A second copy of the logic inline in the executor would be
+    tested by none of the ``_dispatch_tile`` tests above.
+
+    ``mapInPandas`` is captured and the partition function run here in the driver, where
+    the patched module attribute is visible (a Spark worker imports its own copy)."""
+    import pandas as pd
+    from pyspark.sql.types import StringType
+
+    from databricks.labs.gbx.pyrx import grouped_exec
+
+    calls = []
+
+    def fake_dispatch(tile, fr, ctx, lru, view_mode, core_fn):
+        calls.append((tile["cellid"], fr, view_mode, core_fn))
+        return f"routed-{tile['cellid']}"
+
+    monkeypatch.setattr(grouped_exec, "_dispatch_tile", fake_dispatch)
+
+    df = _tile_df(spark, gtiff_bytes)
+    captured = {}
+
+    def capture(self, func, schema):
+        captured["map"] = func
+        return self
+
+    monkeypatch.setattr(type(df), "mapInPandas", capture)
+
+    def core(ds, cellid):
+        raise AssertionError("core_fn must only run through _dispatch_tile")
+
+    grouped_exec.grouped_tile_map(
+        df, core, return_field=StructField("out", StringType()), view="pixels"
+    )
+    pdf = pd.DataFrame(
+        {
+            "tile": [
+                VirtualTile.from_v1(cellid=i, raster=gtiff_bytes).to_row()
+                for i in range(3)
+            ]
+        }
+    )
+    out = next(captured["map"](iter([pdf])))
+    assert list(out["out"]) == ["routed-0", "routed-1", "routed-2"]
+    assert [c[0] for c in calls] == [0, 1, 2]
+    assert {c[2] for c in calls} == {"pixels"} and {c[3] for c in calls} == {core}

@@ -385,12 +385,15 @@ def test_notebook_threads_input_tile():
 def _bng_cell_legs(functions):
     """Run the BNG grid cell's leg table with stub legs; return the leg names it calls."""
     src = cl._CELL_GRID_BNG.split("\nif LIGHTWEIGHT:")[0]
+    from databricks.labs.gbx.bench import spec
+
     ns = {
         "spark": None,
         "RUN_ID": "r",
         "SPARK_WARMUP": 0,
         "SPARK_MEASURED": 1,
         "FUNCTIONS": functions,
+        "_s": spec,
     }
     exec(src, ns)  # noqa: S102 -- the cell's own definitions, as the notebook runs them
 
@@ -415,3 +418,14 @@ def test_bng_grid_cell_runs_every_leg_without_bng_functions():
     legs = _bng_cell_legs("rst_slope,rst_ndvi")
     assert len(legs) == 23 and len(set(legs)) == 23
     assert legs[0] == "run_bng_pointascell" and legs[-1] == "run_bng_tessellateexplode"
+
+
+def test_bng_grid_cell_rejects_an_unknown_bng_name():
+    """A misspelt bng_* name stops the cell instead of silently running every leg."""
+    with pytest.raises(ValueError, match="bng_kringexplod"):
+        _bng_cell_legs("bng_kringexplod")
+
+
+def test_bng_grid_cell_ignores_bng_functions_of_the_function_benchmark():
+    """bng_cellfill is a registered bench function, not a BNG leg: all legs run."""
+    assert len(_bng_cell_legs("bng_cellfill")) == 23

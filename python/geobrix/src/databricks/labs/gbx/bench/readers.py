@@ -21,6 +21,85 @@ from typing import Dict, List, Optional, Tuple
 from databricks.labs.gbx.bench.results import ResultRow
 from databricks.labs.gbx.bench.runner import capture_env, peak_rss_mb, time_iters
 
+# --- tier resolution -----------------------------------------------------------------
+# Both tiers register the same gbx_* SQL names, and a query times whichever
+# implementation it resolves to. Scalar, array and aggregate functions of both tiers
+# share Spark's functionRegistry (the later registration replaces the earlier); the
+# lightweight explode functions are table functions in tableFunctionRegistry, beside
+# the heavyweight generators. So every two-tier leg reads the plan of the query it is
+# about to time and refuses to time the other tier's implementation.
+
+# Plan-node names that only a Python (lightweight) implementation produces.
+_PYTHON_PLAN_MARKERS = (
+    "PythonUDTF",  # BatchEvalPythonUDTF / ArrowEvalPythonUDTF: table functions
+    "EvalPython",  # BatchEvalPython / ArrowEvalPython: scalar and pandas UDFs
+    "PythonUDF",
+    "PythonUDAF",
+    "InPandas",  # AggregateInPandas / FlatMapGroupsInPandas / MapInPandas
+    "ArrowAggregatePython",  # grouped-aggregate pandas UDFs
+)
+
+
+class TierResolutionError(BaseException):
+    """A bench leg's query runs the other tier's implementation.
+
+    Derives from ``BaseException`` on purpose: every leg turns ``Exception`` into an
+    error row, and this one must stop the run instead, so a timing is never stored
+    under a tier that did not run it.
+    """
+
+
+def _impl_of_plan(plan: str, generator: bool = False) -> str:
+    """``"lightweight"`` for a plan with a Python node, else ``"heavyweight"``.
+
+    The bench inputs are plain DataFrames, so a Python node in the plan can only
+    come from a lightweight function. With ``generator=True`` a heavyweight plan
+    must also run a ``Generate``; otherwise the result is ``"unknown"``.
+    """
+    if any(m in plan for m in _PYTHON_PLAN_MARKERS):
+        return "lightweight"
+    if generator and "Generate" not in plan:
+        return "unknown"
+    return "heavyweight"
+
+
+def _plan_text(df) -> str:
+    """The extended plan of ``df`` as text (``explain`` prints it; works over Connect)."""
+    import contextlib
+    import io
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        df.explain(mode="extended")
+    return buf.getvalue()
+
+
+def _require_tier(api: str, fn: str, resolved: str, query: str = "") -> None:
+    """Raise :class:`TierResolutionError` unless the query resolved to ``api``."""
+    if resolved != api:
+        where = f" Query: {query}" if query else ""
+        raise TierResolutionError(
+            f"{fn}: the {api} leg's query runs the {resolved} implementation; "
+            f"refusing to time it.{where}"
+        )
+
+
+def _assert_tier(api: str, fn: str, df, generator: bool = False) -> None:
+    """Check the plan of the DataFrame a leg is about to time runs ``api``'s implementation."""
+    _require_tier(api, fn, _impl_of_plan(_plan_text(df), generator))
+
+
+def _explode_impl(spark, sql: str) -> str:
+    """Which tier's explode implementation ``sql`` runs, read from its plan.
+
+    A lightweight table function plans as a Python UDTF (``BatchEvalPythonUDTF`` or
+    ``ArrowEvalPythonUDTF``); a heavyweight generator plans as a ``Generate`` with no
+    Python node. ``EXPLAIN`` is plain SQL, so this also works over Spark Connect.
+    Returns ``"lightweight"``, ``"heavyweight"`` or ``"unknown"``.
+    """
+    plan = str(spark.sql(f"EXPLAIN EXTENDED {sql}").collect()[0][0])
+    return _impl_of_plan(plan, generator=True)
+
 
 def measure_parallelism(spark, df):
     """(input_partitions, slots_available) for a timed df, Connect-safe.
@@ -1325,20 +1404,18 @@ def run_mvt_agg(
             **env,
         )
 
-    def _job():
+    def _job_df():
         import pyspark.sql.functions as _F2
 
-        return (
-            df.groupBy("z", "x", "y")
-            .agg(
-                asmvt_fn(_F2.col("geom"), _F2.col("attrs"), _F2.lit("layer")).alias(
-                    "mvt"
-                )
-            )
-            .count()
+        return df.groupBy("z", "x", "y").agg(
+            asmvt_fn(_F2.col("geom"), _F2.col("attrs"), _F2.lit("layer")).alias("mvt")
         )
 
+    def _job():
+        return _job_df().count()
+
     try:
+        _assert_tier(api, "st_asmvt", _job_df())
         # Guard against a tier that "succeeds" (10 groups counted) but emits all-NULL or
         # all-empty MVT blobs -- e.g. the heavy OGR MVT driver dropping every feature to a
         # sub-pixel collapse. Counting groups alone masks that, so validate (once, untimed)
@@ -1571,20 +1648,20 @@ def run_pmtiles_agg(
             **env,
         )
 
-    def _job():
+    def _job_df():
         import pyspark.sql.functions as _F2
 
-        return (
-            df.groupBy("g")
-            .agg(
-                agg_fn(_F2.col("tile"), _F2.col("z"), _F2.col("x"), _F2.col("y")).alias(
-                    "arc"
-                )
+        return df.groupBy("g").agg(
+            agg_fn(_F2.col("tile"), _F2.col("z"), _F2.col("x"), _F2.col("y")).alias(
+                "arc"
             )
-            .count()
         )
 
+    def _job():
+        return _job_df().count()
+
     try:
+        _assert_tier(api, "pmtiles_agg", _job_df())
         # Guard against a tier that "succeeds" (groups counted) but emits all-NULL or
         # all-empty archives. Counting groups alone masks that, so validate (once,
         # untimed) that every group produced a non-empty PMTiles blob; an empty result
@@ -3349,12 +3426,14 @@ def run_legacy_aswkb(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM _legacy_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_st_legacyaswkb(g) AS w FROM _legacy_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm the decode produces non-null WKB.
         _val = spark.sql("SELECT gbx_st_legacyaswkb(g) AS w FROM _legacy_bench_v").head(
             1
@@ -3452,16 +3531,19 @@ def run_triangulate(
 
     if api == "lightweight":
 
-        def _job():
+        def _job_df():
             return spark.sql(
                 "SELECT t.triangle FROM _tin_bench_v, LATERAL "
                 "gbx_st_triangulate(pts, bl, mt, st, spf, 'constrained') t"
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     else:
         import pyspark.sql.functions as _f
 
-        def _job():
+        def _job_df():
             return df.select(
                 _f.call_function(
                     "gbx_st_triangulate",
@@ -3472,9 +3554,13 @@ def run_triangulate(
                     _f.col("spf"),
                     _f.lit("constrained"),
                 ).alias("triangle")
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         n_out = int(_job())
         if n_out <= 0:
             raise RuntimeError("st_triangulate produced no triangles")
@@ -3568,17 +3654,20 @@ def run_interp_bbox(
 
     if api == "lightweight":
 
-        def _job():
+        def _job_df():
             return spark.sql(
                 "SELECT t.elevation_point AS p FROM _tin_bench_v, LATERAL "
                 "gbx_st_interpolateelevationbbox(pts, bl, mt, st, spf, "
                 "xmin, ymin, xmax, ymax, w, h, srid, 'constrained') t"
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     else:
         import pyspark.sql.functions as _f
 
-        def _job():
+        def _job_df():
             return df.select(
                 _f.call_function(
                     "gbx_st_interpolateelevationbbox",
@@ -3596,9 +3685,13 @@ def run_interp_bbox(
                     _f.col("srid"),
                     _f.lit("constrained"),
                 ).alias("p")
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         n_out = int(_job())
         if n_out <= 0:
             raise RuntimeError("st_interpolateelevationbbox produced no points")
@@ -3693,17 +3786,20 @@ def run_interp_geom(
 
     if api == "lightweight":
 
-        def _job():
+        def _job_df():
             return spark.sql(
                 "SELECT t.elevation_point AS p FROM _tin_bench_v, LATERAL "
                 "gbx_st_interpolateelevationgeom(pts, bl, mt, st, spf, "
                 "origin, cols, rows_n, cell_x, cell_y, 'constrained') t"
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     else:
         import pyspark.sql.functions as _f
 
-        def _job():
+        def _job_df():
             return df.select(
                 _f.call_function(
                     "gbx_st_interpolateelevationgeom",
@@ -3719,9 +3815,13 @@ def run_interp_geom(
                     _f.col("cell_y"),
                     _f.lit("constrained"),
                 ).alias("p")
-            ).count()
+            )
+
+        def _job():
+            return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         n_out = int(_job())
         if n_out <= 0:
             raise RuntimeError("st_interpolateelevationgeom produced no points")
@@ -3828,13 +3928,17 @@ def run_quadbin_pointascell(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_pointascell(lon, lat, {res}) AS cell "
             "FROM _quadbin_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm non-null cell ids are produced.
         _val = spark.sql(
             f"SELECT gbx_quadbin_pointascell(lon, lat, {res}) AS cell "
@@ -3923,13 +4027,17 @@ def run_quadbin_polyfill(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_polyfill(geom, {res}) AS cells "
             "FROM _quadbin_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty cell array.
         _val = spark.sql(
             f"SELECT gbx_quadbin_polyfill(geom, {res}) AS cells "
@@ -4018,13 +4126,17 @@ def run_quadbin_tessellate(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_tessellate(geom, {res}) AS chips "
             "FROM _quadbin_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty chip array with bytes.
         _val = spark.sql(
             f"SELECT gbx_quadbin_tessellate(geom, {res}) AS chips "
@@ -4120,13 +4232,17 @@ def run_quadbin_cellunion_agg(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT group, gbx_quadbin_cellunion_agg(cell) AS u "
             "FROM _quadbin_agg_v GROUP BY group"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm each group produced a non-empty union blob.
         _val = spark.sql(
             "SELECT gbx_quadbin_cellunion_agg(cell) AS u "
@@ -4216,12 +4332,16 @@ def run_quadbin_resolution(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_quadbin_resolution(cell) AS r FROM _quadbin_cell_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm the resolution comes back as the input res.
         _val = spark.sql(
             "SELECT gbx_quadbin_resolution(cell) AS r FROM _quadbin_cell_v LIMIT 1"
@@ -4311,12 +4431,16 @@ def run_quadbin_kring(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_quadbin_kring(cell, {k}) AS ring FROM _quadbin_cell_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring (k=1 -> up to 9 cells).
         _val = spark.sql(
             f"SELECT gbx_quadbin_kring(cell, {k}) AS ring FROM _quadbin_cell_v LIMIT 1"
@@ -4404,12 +4528,16 @@ def run_quadbin_distance(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _quadbin_pair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null integer distance comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_distance(cell_a, cell_b) AS d FROM _quadbin_pair_v LIMIT 1"
@@ -4498,12 +4626,14 @@ def run_quadbin_aswkb(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_quadbin_aswkb(cell) AS g FROM _quadbin_cell_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_quadbin_aswkb(cell) AS g FROM _quadbin_cell_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty EWKB polygon comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_aswkb(cell) AS g FROM _quadbin_cell_v LIMIT 1"
@@ -4592,12 +4722,14 @@ def run_quadbin_centroid(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_quadbin_centroid(cell) AS g FROM _quadbin_cell_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_quadbin_centroid(cell) AS g FROM _quadbin_cell_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty EWKB point comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_centroid(cell) AS g FROM _quadbin_cell_v LIMIT 1"
@@ -4696,12 +4828,16 @@ def run_quadbin_cellunion(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_quadbin_cellunion(cells) AS u FROM _quadbin_cellarr_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty union blob comes back.
         _val = spark.sql(
             "SELECT gbx_quadbin_cellunion(cells) AS u FROM _quadbin_cellarr_v LIMIT 1"
@@ -4815,12 +4951,16 @@ def run_bng_pointascell(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_pointascell(geom, '{res}') AS cell FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm non-null cell ids are produced.
         _val = spark.sql(
             f"SELECT gbx_bng_pointascell(geom, '{res}') AS cell "
@@ -4909,12 +5049,16 @@ def run_bng_polyfill(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_polyfill(geom, '{res}') AS cells FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty cell array.
         _val = spark.sql(
             f"SELECT gbx_bng_polyfill(geom, '{res}') AS cells FROM _bng_bench_v LIMIT 1"
@@ -5002,12 +5146,16 @@ def run_bng_tessellate(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_tessellate(geom, '{res}') AS chips FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty chip array with cellids.
         _val = spark.sql(
             f"SELECT gbx_bng_tessellate(geom, '{res}') AS chips FROM _bng_bench_v LIMIT 1"
@@ -5097,12 +5245,16 @@ def run_bng_kring(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_kring(cell, {k}) AS ring FROM _bng_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_kring(cell, {k}) AS ring FROM _bng_cell_bench_v LIMIT 1"
@@ -5194,13 +5346,17 @@ def run_bng_cellunion_agg(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT group, gbx_bng_cellunion_agg(chip) AS u "
             "FROM _bng_agg_v GROUP BY group"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm each group produced a non-null union.
         _val = spark.sql(
             "SELECT gbx_bng_cellunion_agg(chip) AS u " "FROM _bng_agg_v GROUP BY group"
@@ -5289,12 +5445,14 @@ def run_bng_aswkb(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB polygon comes back.
         _val = spark.sql(
             "SELECT gbx_bng_aswkb(cell) AS g FROM _bng_cell_bench_v LIMIT 1"
@@ -5382,12 +5540,14 @@ def run_bng_aswkt(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKT string comes back.
         _val = spark.sql(
             "SELECT gbx_bng_aswkt(cell) AS g FROM _bng_cell_bench_v LIMIT 1"
@@ -5475,12 +5635,14 @@ def run_bng_centroid(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB point comes back.
         _val = spark.sql(
             "SELECT gbx_bng_centroid(cell) AS g FROM _bng_cell_bench_v LIMIT 1"
@@ -5568,12 +5730,14 @@ def run_bng_cellarea(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql("SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_bench_v")
+
     def _job():
-        return spark.sql(
-            "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null area comes back.
         _val = spark.sql(
             "SELECT gbx_bng_cellarea(cell) AS a FROM _bng_cell_bench_v LIMIT 1"
@@ -5661,12 +5825,16 @@ def run_bng_distance(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d FROM _bng_pair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null distance comes back.
         _val = spark.sql(
             "SELECT gbx_bng_distance(cell_a, cell_b) AS d FROM _bng_pair_v LIMIT 1"
@@ -5754,12 +5922,16 @@ def run_bng_euclideandistance(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d FROM _bng_pair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null distance comes back.
         _val = spark.sql(
             "SELECT gbx_bng_euclideandistance(cell_a, cell_b) AS d "
@@ -5849,13 +6021,17 @@ def run_bng_eastnorthasbng(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_eastnorthasbng(e, n, '{res}') AS cell "
             "FROM _bng_eastnorth_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null cell id comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_eastnorthasbng(e, n, '{res}') AS cell "
@@ -5945,12 +6121,16 @@ def run_bng_kloop(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_kloop(cell, {k}) AS ring FROM _bng_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_kloop(cell, {k}) AS ring FROM _bng_cell_bench_v LIMIT 1"
@@ -6046,12 +6226,16 @@ def run_bng_geomkring(
 
     res_i = _bng.get_resolution(res)
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_geomkring(geom, {res_i}, {k}) AS ring FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_geomkring(geom, {res_i}, {k}) AS ring "
@@ -6148,12 +6332,16 @@ def run_bng_geomkloop(
 
     res_i = _bng.get_resolution(res)
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_bng_geomkloop(geom, {res_i}, {k}) AS ring FROM _bng_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_bng_geomkloop(geom, {res_i}, {k}) AS ring "
@@ -6244,14 +6432,18 @@ def run_bng_cellintersection(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_cellintersection("
             "struct(lid, lcore, lchip), struct(rid, rcore, rchip)) AS c "
             "FROM _bng_chippair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null chip struct comes back.
         _val = spark.sql(
             "SELECT gbx_bng_cellintersection("
@@ -6343,14 +6535,18 @@ def run_bng_cellunion(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT gbx_bng_cellunion("
             "struct(lid, lcore, lchip), struct(rid, rcore, rchip)) AS c "
             "FROM _bng_chippair_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null chip struct comes back.
         _val = spark.sql(
             "SELECT gbx_bng_cellunion("
@@ -6444,13 +6640,17 @@ def run_bng_cellintersection_agg(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             "SELECT group, gbx_bng_cellintersection_agg(chip) AS u "
             "FROM _bng_agg_v GROUP BY group"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm each group produced a non-null intersection.
         _val = spark.sql(
             "SELECT gbx_bng_cellintersection_agg(chip) AS u "
@@ -6488,14 +6688,6 @@ def run_bng_cellintersection_agg(
         )
 
 
-class TierResolutionError(AssertionError):
-    """A bench leg's query reaches the other tier's implementation.
-
-    Raised by the leg (never recorded as an error row) so a timing cannot be stored
-    under a tier that did not run it.
-    """
-
-
 def _bng_explode_sql(api: str, view: str, call: str, limit: bool = False) -> str:
     """The timed query of a BNG explode leg, in the form that reaches ``api``'s implementation.
 
@@ -6514,20 +6706,28 @@ def _bng_explode_sql(api: str, view: str, call: str, limit: bool = False) -> str
     return f"{sql} LIMIT 1" if limit else sql
 
 
-def _explode_impl(spark, sql: str) -> str:
-    """Which tier's explode implementation ``sql`` runs, read from its plan.
+def _explode_rows_match(
+    spark, api: str, fn: str, view: str, call: str, n_out: int
+) -> bool:
+    """Compare a leg's output row count with the other tier's form of the same call.
 
-    A lightweight table function plans as a Python UDTF (``BatchEvalPythonUDTF`` or
-    ``ArrowEvalPythonUDTF``); a heavyweight generator plans as a ``Generate`` with no
-    Python UDTF. ``EXPLAIN`` is plain SQL, so this also works over Spark Connect.
-    Returns ``"lightweight"``, ``"heavyweight"`` or ``"unknown"``.
+    Returns False (nothing to compare) when the other tier's form does not resolve to
+    that tier in this session, e.g. in a single-tier run. Raises RuntimeError on a
+    mismatch, which the leg records as an error row.
     """
-    plan = str(spark.sql(f"EXPLAIN EXTENDED {sql}").collect()[0][0])
-    if "PythonUDTF" in plan:
-        return "lightweight"
-    if "Generate" in plan:
-        return "heavyweight"
-    return "unknown"
+    other = "heavyweight" if api == "lightweight" else "lightweight"
+    other_sql = _bng_explode_sql(other, view, call)
+    try:
+        if _explode_impl(spark, other_sql) != other:
+            return False
+    except Exception:  # noqa: BLE001 -- the other tier is not registered here
+        return False
+    n_other = int(spark.sql(other_sql).count())
+    if n_other != n_out:
+        raise RuntimeError(
+            f"{fn}: the {api} form gives {n_out} rows, the {other} form {n_other}"
+        )
+    return True
 
 
 def _run_bng_explode(
@@ -6603,20 +6803,19 @@ def _run_bng_explode(
             note=str(e),
             warmup=warmup,
         )
-    if resolved != api:
-        raise TierResolutionError(
-            f"{fn}: the {api} leg's query runs the {resolved} implementation; "
-            f"refusing to time it. Query: {sql}"
-        )
+    _require_tier(api, fn, resolved, sql)
     form = "LATERAL table function" if api == "lightweight" else "select-list generator"
 
     def _job():
         return spark.sql(sql).count()
 
     try:
-        # Untimed validation: confirm the generator yields a row.
-        if not spark.sql(_bng_explode_sql(api, view, call, limit=True)).head(1):
+        # Untimed validation: the timed form yields rows, and as many as the other
+        # tier's form when that tier is registered in this session too.
+        n_out = int(_job())
+        if n_out <= 0:
             raise RuntimeError(f"{fn} produced no rows")
+        checked = _explode_rows_match(spark, api, fn, view, call, n_out)
         stats = time_iters(_job, warmup, measured)
         return _tin_result_row(
             run_id=run_id,
@@ -6626,7 +6825,10 @@ def _run_bng_explode(
             env=env,
             rows=n,
             status="ok",
-            note=f"{fn} {api} exploded {n} {noun}{detail} via {form}",
+            note=(
+                f"{fn} {api} exploded {n} {noun}{detail} into {n_out} rows via {form}"
+                + ("; same row count as the other tier's form" if checked else "")
+            ),
             stats=stats,
         )
     except Exception as e:  # noqa: BLE001
@@ -7156,13 +7358,17 @@ def run_custom_pointascell(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_pointascell(geom, {CUSTOM_GRID_SQL}, {res}) AS cell "
             "FROM _custom_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm non-null cell ids are produced.
         _val = spark.sql(
             f"SELECT gbx_custom_pointascell(geom, {CUSTOM_GRID_SQL}, {res}) AS cell "
@@ -7255,13 +7461,17 @@ def run_custom_polyfill(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_polyfill(geom, {CUSTOM_GRID_SQL}, {res}) AS cells "
             "FROM _custom_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm at least one non-empty cell array.
         _val = spark.sql(
             f"SELECT gbx_custom_polyfill(geom, {CUSTOM_GRID_SQL}, {res}) AS cells "
@@ -7355,13 +7565,17 @@ def run_custom_kring(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_kring(cell, {CUSTOM_GRID_SQL}, {k}) AS ring "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty ring comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_kring(cell, {CUSTOM_GRID_SQL}, {k}) AS ring "
@@ -7455,13 +7669,17 @@ def run_custom_cellaswkb(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_cellaswkb(cell, {CUSTOM_GRID_SQL}) AS g "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB polygon comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_cellaswkb(cell, {CUSTOM_GRID_SQL}) AS g "
@@ -7555,13 +7773,17 @@ def run_custom_cellaswkt(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_cellaswkt(cell, {CUSTOM_GRID_SQL}) AS g "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKT polygon string comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_cellaswkt(cell, {CUSTOM_GRID_SQL}) AS g "
@@ -7655,13 +7877,17 @@ def run_custom_centroid(
             warmup=warmup,
         )
 
-    def _job():
+    def _job_df():
         return spark.sql(
             f"SELECT gbx_custom_centroid(cell, {CUSTOM_GRID_SQL}) AS g "
             "FROM _custom_cell_bench_v"
-        ).count()
+        )
+
+    def _job():
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-empty WKB point comes back.
         _val = spark.sql(
             f"SELECT gbx_custom_centroid(cell, {CUSTOM_GRID_SQL}) AS g "
@@ -7759,12 +7985,14 @@ def run_custom_grid(
             warmup=warmup,
         )
 
+    def _job_df():
+        return spark.sql(f"SELECT {CUSTOM_GRID_SQL} AS grid FROM _custom_bench_v")
+
     def _job():
-        return spark.sql(
-            f"SELECT {CUSTOM_GRID_SQL} AS grid FROM _custom_bench_v"
-        ).count()
+        return _job_df().count()
 
     try:
+        _assert_tier(api, fn, _job_df())
         # Untimed validation: confirm a non-null grid struct comes back.
         _val = spark.sql(
             f"SELECT {CUSTOM_GRID_SQL} AS grid FROM _custom_bench_v LIMIT 1"
@@ -7990,9 +8218,13 @@ def run_fanout_udtf(
     try:
         sql = light_sql if api == "lightweight" else heavy_sql
 
-        def _job():
-            return spark.sql(sql).count()
+        def _job_df():
+            return spark.sql(sql)
 
+        def _job():
+            return _job_df().count()
+
+        _assert_tier(api, fn, _job_df())
         # Validate once (untimed): guard against 0-row / all-empty output.
         actual_rows = int(_job())
         if actual_rows == 0:

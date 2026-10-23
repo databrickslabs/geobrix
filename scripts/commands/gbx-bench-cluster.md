@@ -12,7 +12,9 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 
 `--set` chooses the tier (`core` default, or `full`). An explicit `--functions` overrides `--set`.
 
-`--grid-bng-only` runs only the British National Grid benchmark (both tiers, then the exact-output parity gates); `--benchmark-grid-bng` adds it to a function run. `--functions` with `bng_*` names (e.g. `bng_kringexplode,bng_tessellateexplode`) runs just those BNG legs; names that are not `bng_*` do not filter it. Each `*explode` leg times its own tier — the lightweight table function through `FROM t, LATERAL f(...)`, the heavyweight generator in the select list — and checks the query plan before timing: a leg whose query reaches the other tier's implementation stops the run with `TierResolutionError` instead of recording a row.
+`--grid-bng-only` runs only the British National Grid benchmark (both tiers, then the exact-output parity gates); `--benchmark-grid-bng` adds it to a function run. `--functions` with `bng_*` names (e.g. `bng_kringexplode,bng_tessellateexplode`) runs just those BNG legs; names that are not `bng_*` do not filter it, and a `bng_*` name that is neither a BNG leg nor a registered bench function (e.g. a typo) stops the run. Each `*explode` leg times its own tier — the lightweight table function through `FROM t, LATERAL f(...)`, the heavyweight generator in the select list — and, when both tiers are registered, checks the two forms give the same row count.
+
+Every two-tier leg of the grid (BNG, quadbin, custom), TIN, legacy, MVT/PMTiles aggregate and fan-out benchmarks reads the plan of the query it is about to time: a leg whose query runs the other tier's implementation stops the run with `TierResolutionError` instead of recording a row.
 
 `--input-tile` selects the input tile mode for the light spark-path leg: `materialized` (bytes column, default — matches all prior bench runs) or `virtual` (path+window tile, exercises the virtual-tile reader path).
 

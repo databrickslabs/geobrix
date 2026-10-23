@@ -2020,49 +2020,60 @@ _BNG_CELL_RES = "1km"   # scalar cell / pair / eastnorth resolution
 _BNG_KRING_K = 1        # kring / kloop radius
 _BNG_KLOOP_K = 1        # kloop radius
 _BNG_GEOMK_K = 1        # geomkring / geomkloop radius
-_BNG_N_LEGS = 23        # legs per tier (keep in sync with the _leg calls below)
-# --functions selects BNG legs by name (e.g. bng_kringexplode); names that are not
-# bng_* are ignored here, and with no bng_* name every leg runs.
-_BNG_SEL = frozenset(x for x in FUNCTIONS.split(",") if x.startswith("bng_"))
-# Order: 5 originals (pointascell, polyfill, tessellate, kring, cellunion_agg)
-# then the 18 new legs: scalars, arrays, chip-struct, intersection_agg, explodes.
+# One (name, kwargs) row per BNG leg, run for each tier in this order: 5 originals
+# (pointascell, polyfill, tessellate, kring, cellunion_agg), then scalars, arrays,
+# chip-struct, intersection_agg, explodes.
+_BNG_LEGS = [
+    ("bng_pointascell", dict(res=_BNG_GEOM_RES)),
+    ("bng_polyfill", dict(res=_BNG_GEOM_RES)),
+    ("bng_tessellate", dict(res=_BNG_GEOM_RES)),
+    ("bng_kring", dict(res=_BNG_CELL_RES, k=_BNG_KRING_K)),
+    ("bng_cellunion_agg", dict(res=_BNG_AGG_RES)),
+    # --- scalars (cell-in / pair / eastnorth) ---
+    ("bng_aswkb", dict(res=_BNG_CELL_RES)),
+    ("bng_aswkt", dict(res=_BNG_CELL_RES)),
+    ("bng_centroid", dict(res=_BNG_CELL_RES)),
+    ("bng_cellarea", dict(res=_BNG_CELL_RES)),
+    ("bng_distance", dict(res=_BNG_CELL_RES)),
+    ("bng_euclideandistance", dict(res=_BNG_CELL_RES)),
+    ("bng_eastnorthasbng", dict(res=_BNG_CELL_RES)),
+    # --- array-returning (kloop, geomk*) ---
+    ("bng_kloop", dict(res=_BNG_CELL_RES, k=_BNG_KLOOP_K)),
+    ("bng_geomkring", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
+    ("bng_geomkloop", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
+    # --- chip-struct scalars ---
+    ("bng_cellintersection", dict(res=_BNG_CELL_RES)),
+    ("bng_cellunion", dict(res=_BNG_CELL_RES)),
+    # --- grouped intersection aggregate ---
+    ("bng_cellintersection_agg", dict(res=_BNG_AGG_RES)),
+    # --- explodes: light LATERAL table functions, heavy select-list generators; each
+    # leg checks its query's plan reaches its own tier before timing (readers). ---
+    ("bng_kringexplode", dict(res=_BNG_CELL_RES, k=_BNG_KRING_K)),
+    ("bng_kloopexplode", dict(res=_BNG_CELL_RES, k=_BNG_KLOOP_K)),
+    ("bng_geomkringexplode", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
+    ("bng_geomkloopexplode", dict(res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)),
+    ("bng_tessellateexplode", dict(res=_BNG_GEOM_RES)),
+]
+_BNG_N_LEGS = len(_BNG_LEGS)
+_BNG_LEG_NAMES = [_n for _n, _ in _BNG_LEGS]
+# --functions selects BNG legs by name (e.g. bng_kringexplode); with no BNG leg named,
+# every leg runs. A bng_* name that is neither a BNG leg nor a registered bench
+# function (bng_cellfill runs in the function benchmark) is a typo: stop here.
+_bng_names = [x for x in FUNCTIONS.split(",") if x.startswith("bng_")]
+_bng_unknown = [x for x in _bng_names if x not in _BNG_LEG_NAMES and x not in _s.REGISTRY]
+if _bng_unknown:
+    raise ValueError(
+        "--functions names no BNG leg: %s (legs: %s)"
+        % (", ".join(_bng_unknown), ", ".join(_BNG_LEG_NAMES)))
+_BNG_SEL = frozenset(x for x in _bng_names if x in _BNG_LEG_NAMES)
 def _bng_legs(_api):
-    # Run the selected BNG legs for one tier, in a fixed order, returning the rows.
+    # Run the selected BNG legs for one tier, in table order, returning the rows.
     _out = []
-    def _leg(_fn, **_kw):
+    for _fn, _kw in _BNG_LEGS:
         if not _BNG_SEL or _fn in _BNG_SEL:
             _out.append(getattr(_rd, "run_" + _fn)(
                 spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
                 n_rows=_BNG_N_ROWS, where="cluster", **_kw))
-    _leg("bng_pointascell", res=_BNG_GEOM_RES)
-    _leg("bng_polyfill", res=_BNG_GEOM_RES)
-    _leg("bng_tessellate", res=_BNG_GEOM_RES)
-    _leg("bng_kring", res=_BNG_CELL_RES, k=_BNG_KRING_K)
-    _leg("bng_cellunion_agg", res=_BNG_AGG_RES)
-    # --- scalars (cell-in / pair / eastnorth) ---
-    _leg("bng_aswkb", res=_BNG_CELL_RES)
-    _leg("bng_aswkt", res=_BNG_CELL_RES)
-    _leg("bng_centroid", res=_BNG_CELL_RES)
-    _leg("bng_cellarea", res=_BNG_CELL_RES)
-    _leg("bng_distance", res=_BNG_CELL_RES)
-    _leg("bng_euclideandistance", res=_BNG_CELL_RES)
-    _leg("bng_eastnorthasbng", res=_BNG_CELL_RES)
-    # --- array-returning (kloop, geomk*) ---
-    _leg("bng_kloop", res=_BNG_CELL_RES, k=_BNG_KLOOP_K)
-    _leg("bng_geomkring", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
-    _leg("bng_geomkloop", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
-    # --- chip-struct scalars ---
-    _leg("bng_cellintersection", res=_BNG_CELL_RES)
-    _leg("bng_cellunion", res=_BNG_CELL_RES)
-    # --- grouped intersection aggregate ---
-    _leg("bng_cellintersection_agg", res=_BNG_AGG_RES)
-    # --- explodes: light LATERAL table functions, heavy select-list generators; each
-    # leg checks its query's plan reaches its own tier before timing (readers). ---
-    _leg("bng_kringexplode", res=_BNG_CELL_RES, k=_BNG_KRING_K)
-    _leg("bng_kloopexplode", res=_BNG_CELL_RES, k=_BNG_KLOOP_K)
-    _leg("bng_geomkringexplode", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
-    _leg("bng_geomkloopexplode", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
-    _leg("bng_tessellateexplode", res=_BNG_GEOM_RES)
     return _out
 if LIGHTWEIGHT:
     for _r in _bng_legs("lightweight"):

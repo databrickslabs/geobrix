@@ -10,8 +10,9 @@ heavyweight leg written in that form, and recorded its timing as heavyweight.
 
 These tests register both tiers in one session, in the order the cluster bench uses
 (lightweight legs first, then heavyweight), run each explode leg, and read the plan
-of every query the leg issued: a lightweight query must plan a Python UDTF, a
-heavyweight query a plain ``Generate`` with no Python UDTF. The plan check here is
+of the query the leg timed: a lightweight query must plan a Python UDTF, a
+heavyweight query a plain ``Generate`` with no Python UDTF. With both tiers
+registered the leg also runs the other tier's form once and compares row counts. The plan check here is
 written independently of the bench's own guard so the guard is not tested with itself.
 
 Heavy needs the geobrix JAR, so the module skips when none is staged under
@@ -126,11 +127,18 @@ def test_explode_leg_times_its_own_tier_when_both_tiers_are_registered(
     assert row.api == api
     assert row.status == "ok", row.note
     assert issued, f"{leg} issued no query that calls {sql_name}"
-    for query in issued:
-        assert _planned_tier(spark, query) == api, (
-            f"the {api} leg of {leg} ran a query that reaches another implementation:\n"
-            f"{query}"
-        )
+    # The timed query runs most often (validation + timed iterations); the only
+    # other query is the other tier's form, run once to compare row counts.
+    timed = max(set(issued), key=issued.count)
+    assert _planned_tier(spark, timed) == api, (
+        f"the {api} leg of {leg} timed a query that reaches another implementation:\n"
+        f"{timed}"
+    )
+    other = "heavyweight" if api == "lightweight" else "lightweight"
+    for query in set(issued) - {timed}:
+        assert _planned_tier(spark, query) == other, query
+    # Both tiers are registered here, so the leg compares the two forms' row counts.
+    assert "same row count as the other tier's form" in row.note, row.note
 
 
 def test_a_leg_whose_query_reaches_the_other_tier_raises_instead_of_recording(

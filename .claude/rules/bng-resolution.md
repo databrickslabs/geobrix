@@ -21,5 +21,5 @@ Docs examples for BNG need a GB raster (not the NYC/London sample rasters, which
 - Geom-aware kring/kloop is implemented for all grids (h3, quadbin, bng, custom) — light tier.
   Do NOT convert h3 geomk to O(perimeter) boundary-as-line (23–96x regression; reverted). h3
   uses native fill; quadbin/bng/custom use the boundary approach.
-- `bng_*explode` functions are streaming UDTFs (no Column form) — permanent `[B]` waiver.
+- `bng_*explode` functions: lightweight = streaming UDTFs (no Column form, SQL `FROM t, LATERAL f()`) — permanent `[B]` waiver; heavyweight = generators (Python/Scala wrappers return the generator Column; SQL select list or `LATERAL VIEW`). `FROM t, LATERAL` never reaches heavy.
 - quadbin has a known light≠heavy divergence on tile-boundary polygon edges (xfail'd, tracked for 0.5.2).

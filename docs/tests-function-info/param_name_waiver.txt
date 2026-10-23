@@ -1,9 +1,12 @@
 # Functions pending canonical param-name migration; shrinks to empty. See spec 2026-08-06-canonical-param-names-design.md
 #
 # Remaining 5 are the bng *explode fns — PERMANENT [B] waivers by design (see spec
-# 2026-08-07-arity-gap-wrapup). They are registered row-streaming UDTFs (one row per
-# cell, array-free); a pyspark Column form is intentionally absent because it would
-# force large-array materialization. Invoke via SQL LATERAL. NOT gaps to close.
+# 2026-08-07-arity-gap-wrapup). In the lightweight tier they are registered
+# row-streaming UDTFs (one row per cell, array-free); a lightweight pyspark Column form
+# is intentionally absent because it would force large-array materialization, so the
+# light SQL form is FROM t, LATERAL f(...). The heavyweight tier registers generators:
+# its Python and Scala wrappers return the generator Column, and its SQL form is the
+# select list or LATERAL VIEW. NOT gaps to close.
 # (The other 2 arity gaps — rst_xyzpyramid rescale, bng_tessellate keep_core_geom —
 # were closed by the arity-gap-wrapup work; they are no longer waived.)
 #
@@ -50,17 +53,17 @@
 # gbx_st_triangulate  # N9 DONE: points_geom/breaklines_geom renamed to *_array
 #
 # --- 5 PERMANENT [B] waivers: bng *explode streaming UDTFs (by design, not gaps) ---
-# The 5 bng *explode fns below are PERMANENT [B] waivers — streaming UDTFs, not gaps. See spec 2026-08-07-arity-gap-wrapup.
-gbx_bng_geomkloopexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_bng_geomkringexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_bng_kloopexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_bng_kringexplode      # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_bng_tessellateexplode # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_quadbin_geomkringexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_quadbin_geomkloopexplode  # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_custom_geomkringexplode   # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_custom_geomkloopexplode   # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_h3_geomkringexplode       # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
-gbx_h3_geomkloopexplode       # [B] INTENTIONAL: registered streaming UDTF (one row/cell, array-free); no pyspark Column form by design. SQL LATERAL only.
+# The *explode fns below are PERMANENT [B] waivers — lightweight streaming UDTFs, not gaps. See spec 2026-08-07-arity-gap-wrapup.
+gbx_bng_geomkloopexplode  # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_bng_geomkringexplode  # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_bng_kloopexplode      # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_bng_kringexplode      # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_bng_tessellateexplode # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_quadbin_geomkringexplode  # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_quadbin_geomkloopexplode  # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_custom_geomkringexplode   # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_custom_geomkloopexplode   # [B] INTENTIONAL: light tier is a streaming UDTF (one row/cell, array-free) with no Column form, SQL FROM t, LATERAL; heavy wrappers return the generator Column.
+gbx_h3_geomkringexplode       # [B] INTENTIONAL: lightweight-only streaming UDTF (one row/cell, array-free); no Column form; SQL FROM t, LATERAL.
+gbx_h3_geomkloopexplode       # [B] INTENTIONAL: lightweight-only streaming UDTF (one row/cell, array-free); no Column form; SQL FROM t, LATERAL.
 # Task 2 DONE: gbx_rst_xyzpyramid light rescale added (arity now 7, matches heavy)
 # Task 3 DONE: gbx_bng_tessellate light keep_core_geom added (arity now 3, matches heavy)

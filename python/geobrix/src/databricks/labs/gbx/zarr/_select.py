@@ -34,6 +34,10 @@ _FLOAT_TOL = 1e-6  # fraction of the axis step added to slice bounds on float ax
 _PERIOD_TOL = (
     0.01  # fraction of the axis step allowed when testing for a 360 degree span
 )
+_SNAP_STEP = 0.25  # the seam snap never exceeds this fraction of the axis step
+_MAX_PERIODIC_REACH = (
+    1e6  # degrees: further than this a 360 degree wrap loses the labels
+)
 _I64_MIN = (
     int(np.iinfo(np.int64).min) + 1
 )  # one above NaT, so negating a bound cannot overflow
@@ -123,10 +127,17 @@ def resolve(
     axis end, so ``slice("2023-01-01T20", "3000-01-01")`` is the tail.
 
     Numbers: ``nan`` and infinite bounds or labels raise ``ValueError`` (leave a slice end open with
-    ``None``). A finite number too large for a float axis's dtype is past every label: a slice start
-    there selects nothing, a slice end is open, and a scalar is not found; it never matches a label
-    stored at the dtype maximum. Bounds are rounded to the axis dtype before they are compared, so
-    ``0.3`` finds the label ``float32(0.3)``.
+    ``None``). A finite number too large for a float axis's dtype, and a Python int too large for a
+    float, is past every label: a slice start there selects nothing, a slice end is open, and a
+    scalar is not found; it never matches a label stored at the dtype maximum. Bounds are rounded
+    to the axis dtype before they are compared, so ``0.3`` finds the label ``float32(0.3)``.
+
+    Periodic axes add two limits. A bound within a few float rounding errors of the seam (at most a
+    quarter of the label step) counts as on it, so ``slice(179.95, -179.95)`` keeps the label at
+    -179.95 on a float32 axis. And a bound or scalar further than 1e6 degrees from the axis raises
+    ``ValueError`` instead of wrapping, because at that size the wrap arithmetic has lost the
+    labels; the exception is a slice that covers 360 degrees or more (``slice(-1e300, 10)``),
+    which is the whole axis however far its ends are.
 
     ``coord_attrs`` maps a dimension to its coordinate array's attributes.
     """
@@ -316,10 +327,15 @@ class _Axis:
 
     @property
     def snap(self) -> float:
-        """How close to a seam counts as on it: a few float rounding errors over one turn, 0 for integers."""
+        """How close to a seam counts as on it: a few float rounding errors over one turn, 0 for integers.
+
+        Capped at a quarter of the label step, so a coarse dtype (float16) or a fine axis (float32 at
+        1e-4 degrees) cannot snap a bound onto a neighbouring label.
+        """
         if self.kind != "f":
             return 0.0
-        return 4.0 * float(np.finfo(self.coord.dtype).eps) * 360.0
+        noise = 4.0 * float(np.finfo(self.coord.dtype).eps) * 360.0
+        return min(noise, _SNAP_STEP * self.step)
 
     @cached_property
     def direction(self) -> int:
@@ -584,10 +600,20 @@ def _number(ax: _Axis, v, cast: bool = True, scalar: bool = False):
             f"{v!r} is not a finite number, so it cannot select labels on {ax.dim}. Fix: {fix}."
         )
     if isinstance(x, int):
-        x = _clamp(x)
+        # a float axis compares floats: an int past the float range is past every label (+-inf),
+        # not the int64 maximum, which an axis label can exceed
+        x = _int_as_float(x) if ax.kind == "f" else _clamp(x)
     if not cast:
         return x
     return _as_axis_dtype(ax, float(x)) if ax.kind == "f" else x
+
+
+def _int_as_float(x: int) -> float:
+    """``x`` as a float; an int too large for a float becomes +-inf."""
+    try:
+        return float(x)
+    except OverflowError:
+        return math.inf if x > 0 else -math.inf
 
 
 def _as_axis_dtype(ax: _Axis, x):
@@ -647,6 +673,11 @@ def _label_index(ax: _Axis, value) -> int:
     if period is not None:
         origin, repeats = period
         top = origin + 360.0
+        if not abs(v) <= _MAX_PERIODIC_REACH:  # also inf: a float cast can overflow
+            raise ValueError(
+                f"{value!r} is too far from {ax.dim} to place on a 360 degree circle. "
+                f"Fix: pass a longitude within {_MAX_PERIODIC_REACH:g} degrees of the axis, or use isel."
+            )
         if v < origin or v > top or (v == top and not repeats):
             v = _wrap(v, origin)
     nearest = ""
@@ -743,6 +774,13 @@ def _slice_ranges(ax: _Axis, a, b) -> tuple[tuple[int, int], ...]:
         if not origin - snap <= lo <= hi <= top + snap:
             if lo <= hi and hi - lo >= 360.0 - snap:
                 return ((0, n),)
+            for bound, given in ((lo, a), (hi, b)):
+                if not abs(bound) <= _MAX_PERIODIC_REACH:
+                    raise ValueError(
+                        f"{given!r} is too far from {ax.dim} to place on a 360 degree circle. "
+                        f"Fix: pass a longitude within {_MAX_PERIODIC_REACH:g} degrees of the axis, "
+                        "or None to leave a slice end open."
+                    )
 
             def norm(v):
                 r = _wrap(v, origin)

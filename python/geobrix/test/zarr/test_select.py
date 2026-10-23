@@ -694,3 +694,101 @@ def test_slice_ending_on_origin_plus_360_is_plain_whatever_the_dtype():
     for lon in (lon64, lon64.astype(np.float32)):
         assert lon_ranges(lon, slice(267.84, 267.85)) == ((35999, 36000),)
         assert lon_ranges(lon, slice(-92.14, 267.85)) == ((1, 36000),)
+
+
+# ---- Task 9 carries (Ruling Z19): seam snap capped by the step, periodic reach, huge ints
+
+
+def test_seam_snap_is_capped_by_the_label_step_on_a_float16_axis():
+    # float16 rounds so coarsely that the uncapped snap (1.4 degrees) was wider than the 1 degree step
+    c16, c64 = np.arange(360).astype(np.float16), np.arange(360.0)
+    for s in (
+        slice(-1, 3),
+        slice(359, 3),
+        slice(-1, -0.5),
+        slice(357, 1),
+        slice(-2, 3),
+        slice(358.5, 2),
+    ):
+        assert lon_ranges(c16, s) == lon_ranges(c64, s), s
+
+
+def test_seam_snap_is_capped_by_the_label_step_on_a_fine_float32_axis():
+    # 1e-4 degree labels: the float32 snap (1.7e-4) is wider than the step
+    c64 = np.arange(0, 360, 1e-4)
+    c32 = c64.astype(np.float32)
+    n = len(c64)
+    assert lon_ranges(c32, slice(-1e-4, 2e-4)) == ((n - 1, n), (0, 3))
+    assert lon_ranges(c32, slice(359.9999, 1e-4)) == ((n - 1, n), (0, 2))
+    assert lon_ranges(c32, slice(359.9998, 2e-4)) == ((n - 2, n), (0, 3))
+
+
+def test_the_snap_is_still_the_float_noise_allowance_on_ordinary_axes():
+    # the cap only bites when the step is tiny: a 0.1 degree float32 axis keeps its full snap
+    assert 4 * float(np.finfo(np.float32).eps) * 360 < 0.25 * 0.1
+    assert lon_ranges(PIXEL32, slice(179.95, -179.95)) == ((3599, 3600), (0, 1))
+
+
+@pytest.mark.parametrize("coord", [LON, LON.astype(np.float32)], ids=["f64", "f32"])
+def test_periodic_slice_bounds_far_from_the_axis_are_refused(coord):
+    for s in (slice(1e15, 10), slice(1e300, 1e300), slice(5e38, 10), slice(10, -1e7)):
+        with pytest.raises(ValueError, match="too far from longitude") as e:
+            lon_ranges(coord, s)
+        assert "360 degree circle" in str(e.value) and "None" in str(e.value)
+        assert "Fix:" in str(e.value)
+
+
+def test_periodic_scalars_far_from_the_axis_are_refused():
+    for coord, values in (
+        (LON, (1e300, 5e38, 2e6, -2e6)),
+        (LON.astype(np.float32), (1e300, 5e38, 2e6, -2e6)),
+        (LON.astype(np.float16), (1e300, 7e4, 2e6)),  # 7e4 overflows float16 to inf
+    ):
+        for v in values:
+            with pytest.raises(ValueError, match="too far from longitude") as e:
+                lon_ranges(coord, v)
+            assert "Fix:" in str(e.value) and "slice end" not in str(e.value)
+    # a scalar a few turns away still wraps
+    assert lon_ranges(LON, 722.5) == lon_ranges(LON, 2.5) == ((1, 2),)
+
+
+def test_periodic_whole_axis_shortcut_and_open_ends_survive_the_reach_limit():
+    for coord in (LON, LON.astype(np.float32)):
+        assert lon_ranges(coord, slice(-1e300, 10)) == ((0, 144),)
+        assert lon_ranges(coord, slice(10, 1e300)) == ((0, 144),)
+        assert lon_ranges(coord, slice(None, 1e300)) == ((0, 144),)
+        assert lon_ranges(coord, slice(-1e300, None)) == ((0, 144),)
+
+
+def test_non_periodic_axes_keep_the_clamp_semantics_for_huge_values():
+    lon32 = LON.astype(np.float32)
+    assert lon_ranges(lon32, slice(0, 1e300), "col") == ((0, 144),)
+    assert lon_ranges(lon32, slice(5e38, None), "col") == ()
+    with pytest.raises(ValueError, match="not found"):
+        lon_ranges(lon32, 5e38, "col")
+
+
+def test_python_ints_beyond_int64_are_not_clamped_before_the_float_cast():
+    c = np.array([0.0, 1e308, 1.7976931348623157e308])
+    big = 10**400
+    assert lon_ranges(c, slice(big, None), "k") == ()  # past every label
+    assert lon_ranges(c, slice(None, big), "k") == ((0, 3),)  # an open end
+    assert lon_ranges(c, slice(None, -big), "k") == ()
+    assert lon_ranges(c, slice(-big, None), "k") == ((0, 3),)
+    with pytest.raises(ValueError, match="not found"):
+        lon_ranges(c, big, "k")
+    # integer axes still compare as integers
+    ci = np.arange(5)
+    assert lon_ranges(ci, slice(10**30, None), "k") == ()
+    assert lon_ranges(ci, slice(None, 10**30), "k") == ((0, 5),)
+    assert lon_ranges(ci, slice(4, 2**63), "k") == ((4, 5),)
+
+
+def test_huge_ints_on_a_periodic_axis_follow_the_reach_rule():
+    big = 10**400
+    assert lon_ranges(LON, slice(-big, 10)) == ((0, 144),)
+    assert lon_ranges(LON, slice(10, big)) == ((0, 144),)
+    with pytest.raises(ValueError, match="too far from longitude"):
+        lon_ranges(LON, slice(big, 10))
+    with pytest.raises(ValueError, match="too far from longitude"):
+        lon_ranges(LON, big)

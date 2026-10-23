@@ -248,16 +248,13 @@ def _light_reducer_rows(
 ):
     """Light tier: SQL LATERAL over the registered pyrx UDTF -> {(band,cellID): measure}.
 
-    ``coverage`` and ``assignment`` are forwarded to the SQL LATERAL call.
+    ``coverage`` and ``assignment`` are forwarded to the SQL LATERAL call. A
+    ``tp.Staged`` ``raster`` starts the light tier from a virtual tile.
     """
-    from pyspark.sql import functions as f
-
     from databricks.labs.gbx.pyrx import functions as prx
 
     prx.register(spark)
-    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
+    df = tp.light_tile_df(spark, raster)
     df.createOrReplaceTempView("_ras_light_bng")
     rows = spark.sql(
         f"SELECT t.band AS band, t.cellID AS cellID, t.measure AS measure "
@@ -391,14 +388,10 @@ def _light_grid_rows(
 
     ``coverage`` and ``assignment`` are forwarded to the SQL LATERAL call.
     """
-    from pyspark.sql import functions as f
-
     from databricks.labs.gbx.pyrx import functions as prx
 
     prx.register(spark)
-    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
+    df = tp.light_tile_df(spark, raster)
     df.createOrReplaceTempView("_ras_light_grid")
     rows = spark.sql(
         f"SELECT t.band AS band, t.cellID AS cellID, t.measure AS measure "
@@ -1562,17 +1555,32 @@ def _masked_uint16_raster(*, epsg, origin, px, n, nodata=None):
 _MASKED_COVERING_RES = {"h3": 7, "bng": 1, "quadbin": 8}
 
 
+# Where the light tier starts: a tile of the raster's bytes (rst_fromcontent), or a virtual
+# tile over its file (rst_fromfile, the default, which reads the file lazily). The heavy
+# tier always reads the bytes.
+_STARTS = ["bytes", "virtual"]
+
+
+def _start_from(raster, start, directory):
+    """``raster`` as the source for the light tier's ``start``."""
+    return tp.stage_file(raster, directory) if start == "virtual" else raster
+
+
+@pytest.mark.parametrize("start", _STARTS)
 @pytest.mark.parametrize(
     "grid,nodata", [("h3", None), ("bng", None), ("quadbin", None), ("h3", 7.0)]
 )
-def test_tessellate_covering_masked_source_parity(spark_with_jar, grid, nodata):
+def test_tessellate_covering_masked_source_parity(
+    spark_with_jar, tmp_path, grid, nodata, start
+):
     """Covering on a source with its own mask band, without NoData or with one.
 
     The source's masked pixels stay NoData in both tiers' chips, and every other
     valid chip pixel carries the source value: the fallback NoData that covering
     stamps must not override the source mask. Source pixels equal to the chip
     NoData (the fallback 65535, or the source's own NoData) are NoData in both
-    tiers, and both tiers' chips declare the same NoData.
+    tiers, and both tiers' chips declare the same NoData. The light tier starts
+    from ``start``: its bytes, or a virtual tile over the file holding them.
     """
     spark = spark_with_jar
     sql_name, fn_name, is_bng = _TESS_CONFIG[grid]
@@ -1590,8 +1598,9 @@ def test_tessellate_covering_masked_source_parity(spark_with_jar, grid, nodata):
     assert (
         data == chip_nodata
     ).any(), "fixture needs source pixels equal to the NoData"
+    raster = _start_from(raster, start, tmp_path)
     resolution = _MASKED_COVERING_RES[grid]
-    label = f"{grid} masked-source covering (NoData {nodata})"
+    label = f"{grid} masked-source covering (NoData {nodata}, light from {start})"
 
     def _id(cid):
         return _tess_id(cid, bng=is_bng)
@@ -1803,18 +1812,30 @@ def _mw_expected(src, dst_crs, masked, nodata):
     return int(keep.sum()), int(vals[keep].sum())
 
 
-@pytest.mark.parametrize("label", list(_MW_SOURCES))
+# (source label, where the light tier starts): every source from bytes; the masked ones
+# also from a virtual tile, which is where a mask can be lost.
+_MW_STARTS = [(label, "bytes") for label in _MW_SOURCES] + [
+    (label, "virtual") for label, (masked, _) in _MW_SOURCES.items() if masked
+]
+
+
+@pytest.mark.parametrize("label,start", _MW_STARTS)
 @pytest.mark.parametrize("grid", list(_MW_GRIDS))
-def test_rastertogrid_warp_fill_and_mask_parity(spark_with_jar, grid, label):
+def test_rastertogrid_warp_fill_and_mask_parity(
+    spark_with_jar, tmp_path, grid, label, start
+):
     """Raster-to-grid of a source in another CRS: both tiers aggregate the same cells
     with the same count and mean, and only the source's valid pixels: not the warp
     fill (as zeros), the masked pixels, nor the pixels equal to the NoData (the
-    fallback 65535, or the source's own 7, which keeps 65535 a real value)."""
+    fallback 65535, or the source's own 7, which keeps 65535 a real value). The
+    light tier starts from ``start``: its bytes, or a virtual tile over their file."""
     spark = spark_with_jar
     src, dst_crs, resolution = _MW_GRIDS[grid]
     masked, nodata = _MW_SOURCES[label]
-    raster = _mw_raster(**src, masked=masked, nodata=nodata)
-    tag = f"{grid} {label}"
+    raster = _start_from(
+        _mw_raster(**src, masked=masked, nodata=nodata), start, tmp_path
+    )
+    tag = f"{grid} {label} (light from {start})"
 
     def rows(tier, agg):
         if grid == "bng":
@@ -1840,19 +1861,25 @@ def test_rastertogrid_warp_fill_and_mask_parity(spark_with_jar, grid, label):
         )
 
 
+@pytest.mark.parametrize("start", _STARTS)
 @pytest.mark.parametrize("nodata", [None, 7.0])
 @pytest.mark.parametrize("assignment", ["centroid", "covering"])
-def test_bng_tessellate_masked_warp_parity(spark_with_jar, assignment, nodata):
+def test_bng_tessellate_masked_warp_parity(
+    spark_with_jar, tmp_path, assignment, nodata, start
+):
     """BNG tessellate of a 4326 source with its own mask band, without NoData or with
     one: the EPSG:27700 warp keeps the mask in both tiers. Both tiers emit the same
     cells with the same chip NoData; no valid chip pixel is the warp fill, a masked
-    source pixel or a pixel equal to the NoData (65535 moved to 65534 included)."""
+    source pixel or a pixel equal to the NoData (65535 moved to 65534 included). The
+    light tier starts from ``start``: its bytes, or a virtual tile over their file."""
     from rasterio.io import MemoryFile
 
     spark = spark_with_jar
     sql_name, fn_name, _ = _TESS_CONFIG["bng"]
-    raster = _mw_raster(**_MW_SRC_4326, masked=True, nodata=nodata)
-    label = f"bng masked warp {assignment} (NoData {nodata})"
+    raster = _start_from(
+        _mw_raster(**_MW_SRC_4326, masked=True, nodata=nodata), start, tmp_path
+    )
+    label = f"bng masked warp {assignment} (NoData {nodata}, light from {start})"
 
     def _id(cid):
         return _tess_id(cid, bng=True)
@@ -1891,17 +1918,23 @@ def test_bng_tessellate_masked_warp_parity(spark_with_jar, assignment, nodata):
 
 
 def _single_tile(spark, raster, tier, fn):
-    """``fn(hx|prx, tile_col)`` applied to ``raster`` in one tier -> output raster bytes."""
+    """``fn(hx|prx, tile_col)`` applied to ``raster`` in one tier -> output raster bytes.
+
+    A ``tp.Staged`` ``raster`` starts the light tier from a virtual tile."""
     from pyspark.sql import functions as f
 
     if tier == "light":
         from databricks.labs.gbx.pyrx import functions as mod
+
+        mod.register(spark)
+        df = tp.light_tile_df(spark, raster)
     else:
         from databricks.labs.gbx.rasterx import functions as mod
-    mod.register(spark)
-    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-        mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-    )
+
+        mod.register(spark)
+        df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
+            mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        )
     row = df.select(fn(mod, f.col("tile")).alias("t")).collect()[0]
     assert row["t"] is not None and row["t"]["raster"] is not None, f"{tier}: null tile"
     return bytes(row["t"]["raster"])
@@ -1921,15 +1954,22 @@ def _decoded(raster_bytes):
         )
 
 
-def test_initnodata_masked_source_parity(spark_with_jar):
+@pytest.mark.parametrize("start", _STARTS)
+def test_initnodata_masked_source_parity(spark_with_jar, tmp_path, start):
     """``rst_initnodata`` of a source without NoData but with its own mask band: both
     tiers declare 65535, keep the masked pixels and the real 65535s out of the valid
-    data, and agree on every pixel."""
+    data, and agree on every pixel. Started from a virtual tile, the light tier records
+    the instruction and applies it when the tile is read; ``rst_asformat`` reads it."""
     spark = spark_with_jar
-    raster = _mw_raster(**_MW_SRC_4326, masked=True, nodata=None)
-    light = _decoded(
-        _single_tile(spark, raster, "light", lambda m, t: m.rst_initnodata(t))
+    raster = _start_from(
+        _mw_raster(**_MW_SRC_4326, masked=True, nodata=None), start, tmp_path
     )
+
+    def light_fn(m, t):
+        out = m.rst_initnodata(t)
+        return m.rst_asformat(out, "GTiff") if start == "virtual" else out
+
+    light = _decoded(_single_tile(spark, raster, "light", light_fn))
     heavy = _decoded(
         _single_tile(spark, raster, "heavy", lambda m, t: m.rst_initnodata(t))
     )

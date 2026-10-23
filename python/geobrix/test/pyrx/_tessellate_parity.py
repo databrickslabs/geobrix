@@ -16,16 +16,59 @@ import numpy as np
 GT_TOL = 1e-9
 
 
-def light_chips(spark, raster, sql_name, resolution, assignment, coverage, id_fn):
-    """Light tier rows via SQL LATERAL -> ``[(cid, raster_bytes|None, metadata)]``."""
+class Staged(bytes):
+    """Raster bytes that also live in a file at ``path``.
+
+    The heavy tier reads the bytes (``rst_fromcontent``). The light tier reads the file as
+    a VIRTUAL tile (``rst_fromfile`` without ``materialize``, its default), the way a
+    lazily read source reaches every light operation. Anywhere else it is plain bytes.
+    """
+
+    path: str
+
+
+def staged(raster, path):
+    """``raster`` (bytes) as a :class:`Staged` source: the file at ``path`` holds the same bytes."""
+    out = Staged(raster)
+    out.path = str(path)
+    return out
+
+
+def stage_file(raster, directory, name="source.tif"):
+    """Write ``raster`` into ``directory`` and return it as a :class:`Staged` source."""
+    import os
+
+    path = os.path.join(str(directory), name)
+    with open(path, "wb") as fh:
+        fh.write(raster)
+    return staged(raster, path)
+
+
+def light_tile_df(spark, raster):
+    """One-row DataFrame with a ``tile`` column for the light tier: a virtual tile over
+    the file of a :class:`Staged` source, else a materialized tile of the bytes."""
     from pyspark.sql import functions as f
 
     from databricks.labs.gbx.pyrx import functions as prx
 
-    prx.register(spark)
-    df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
+    path = getattr(raster, "path", None)
+    if path is not None:
+        return spark.createDataFrame([(path,)], ["path"]).select(
+            prx.rst_fromfile("path").alias("tile")
+        )
+    return spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
+
+
+def light_chips(spark, raster, sql_name, resolution, assignment, coverage, id_fn):
+    """Light tier rows via SQL LATERAL -> ``[(cid, raster_bytes|None, metadata)]``.
+
+    A :class:`Staged` ``raster`` starts the light tier from a virtual tile."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    prx.register(spark)
+    df = light_tile_df(spark, raster)
     df.createOrReplaceTempView("_ras_tess_chips_light")
     rows = spark.sql(
         f"SELECT t.cellid AS cid, t.raster AS r, t.metadata AS m "

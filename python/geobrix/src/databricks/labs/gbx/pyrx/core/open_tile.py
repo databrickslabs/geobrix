@@ -132,8 +132,44 @@ def _epsg_of(crs) -> Optional[int]:
         return None
 
 
+def _own_mask_use(src, profile, pending_nodata):
+    """How a window of *src* carries the source's own mask band: ``(has_mask, as_nodata)``.
+
+    ``has_mask`` is True for a source masked by its own per-dataset mask band, an internal
+    or external mask as JPEG/YCbCr imagery often has (``_nodata.has_own_mask``); an alpha
+    band is an ordinary band and needs nothing. Pixels alone do not carry that mask, so a
+    window written without it returns every masked pixel as valid.
+
+    ``as_nodata`` is True when a NoData is stamped on the window by a pending
+    ``rst_initnodata`` (*pending_nodata* set and *profile* holds a NoData): the masked
+    pixels then take that value and no mask is written, as eager ``edit.init_nodata``
+    does. Otherwise the mask is written with the window as its own mask band (the
+    source's mask, as the bytes of the whole file hold it).
+    """
+    if not _nd.has_own_mask(src):
+        return False, False
+    return True, pending_nodata is not None and profile.get("nodata") is not None
+
+
+def _window_mask(src, window, data, profile, pending_nodata, mark_masked=False):
+    """The window's mask band to write with *data*, or None; marks NoData in place.
+
+    See :func:`_own_mask_use`. A pending ``rst_initnodata`` that stamps a NoData sets the
+    masked pixels of *data* to it (and returns None). ``mark_masked`` also sets them to
+    the NoData the window declares, where a mask is written: a warp ignores a mask band
+    once a NoData is set, so the pixels themselves must say they are NoData.
+    """
+    has_mask, as_nodata = _own_mask_use(src, profile, pending_nodata)
+    if not has_mask:
+        return None
+    mask = src.read_masks(1, window=window)
+    if as_nodata or (mark_masked and profile.get("nodata") is not None):
+        data[:, mask == 0] = profile["nodata"]
+    return None if as_nodata else mask
+
+
 def _window_dataset_bytes(
-    src, window: Window, pending=(None, None, None, None)
+    src, window: Window, pending=(None, None, None, None), mark_masked: bool = False
 ) -> bytes:
     """Read one window into standalone GTiff bytes, applying pending instructions.
 
@@ -148,6 +184,12 @@ def _window_dataset_bytes(
     - If the source has no nodata AND the pending default does NOT fit the dtype
       (e.g. -9999 for uint16), leave nodata unset rather than writing an invalid
       value.
+
+    A source's own mask band (``_nodata.has_own_mask``) comes with the window, as the
+    bytes of the whole file hold it, so a masked pixel stays invalid. Where a pending
+    ``rst_initnodata`` stamps a NoData the masked pixels take it instead, as in eager
+    ``edit.init_nodata`` (see :func:`_own_mask_use`). ``mark_masked``, for a window that is
+    about to be warped, also sets the masked pixels to a declared NoData.
     """
     # Unpack — tolerate the legacy 3-tuple form (srid only, no crs_str).
     if len(pending) == 4:
@@ -192,44 +234,70 @@ def _window_dataset_bytes(
         profile["crs"] = _resolve(
             srid
         )  # epsg/esri classification, not lenient from_epsg
+    mask = _window_mask(src, window, data, profile, nodata, mark_masked)
     # Route through the compression authority: ZSTD + dtype-predictor baseline.
-    out_dtype = profile.get("dtype", src.dtypes[0])
-    decoded_bytes = (
-        count * int(window.width) * int(window.height) * np.dtype(out_dtype).itemsize
-    )
-    profile.update(
-        _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
-    )
+    return _comp.write_gtiff(profile, data, mask=mask)
+
+
+def _warped_mask(wds, vrt):
+    """The own mask band of *wds* warped like the pixels of *vrt*: ``(rows, cols)`` uint8.
+
+    The mask is warped as data through a second view on the grid of *vrt*, so it lands
+    where the pixels do. A pixel no source pixel maps to stays valid, as the plain warp
+    leaves it a valid zero.
+    """
+    from rasterio.enums import Resampling
+
     with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(data)
-        return mf.read()
+        with mf.open(
+            driver="GTiff",
+            width=wds.width,
+            height=wds.height,
+            count=1,
+            dtype="uint8",
+            crs=wds.crs,
+            transform=wds.transform,
+        ) as dst:
+            dst.write(wds.read_masks(1), 1)
+        with mf.open() as mds:
+            with WarpedVRT(
+                mds,
+                crs=vrt.crs,
+                transform=vrt.transform,
+                width=vrt.width,
+                height=vrt.height,
+                resampling=Resampling.nearest,
+                nodata=255,
+            ) as mvrt:
+                return mvrt.read(1)
+
+
+def _warp_bytes(win_bytes: bytes, want_crs) -> bytes:
+    """Reproject standalone window bytes to *want_crs*; return GTiff bytes.
+
+    *want_crs* is anything ``WarpedVRT`` takes: an ``"EPSG:n"`` string or a rasterio CRS.
+    The window's own mask band (see :func:`_window_dataset_bytes`) goes through the warp
+    with the pixels: where the window declares a NoData its masked pixels were set to it
+    and the warp carries it; without one the mask is warped to the output grid and
+    written as the output's own mask band.
+    """
+    with MemoryFile(win_bytes) as mf, mf.open() as wds:
+        mask_band = _nd.has_own_mask(wds) and wds.nodata is None
+        with WarpedVRT(wds, crs=want_crs) as vrt:
+            prof = _comp.drop_ycbcr(vrt.profile)
+            prof.update(driver="GTiff")
+            data = vrt.read()
+            mask = _warped_mask(wds, vrt) if mask_band else None
+            # Route through the compression authority for the reprojected output.
+            return _comp.write_gtiff(prof, data, mask=mask)
 
 
 def _warp_window_bytes(
     src, window: Window, want_epsg: int, pending=(None, None, None)
 ) -> bytes:
     """Materialize a window, lazily reproject it to want_epsg, return GTiff bytes."""
-    win_bytes = _window_dataset_bytes(src, window, pending=pending)
-    with MemoryFile(win_bytes) as mf, mf.open() as wds:
-        with WarpedVRT(wds, crs=f"EPSG:{want_epsg}") as vrt:
-            prof = _comp.drop_ycbcr(vrt.profile)
-            prof.update(driver="GTiff")
-            data = vrt.read()
-            # Route through the compression authority for the reprojected output.
-            out_dtype = prof.get("dtype", vrt.dtypes[0])
-            decoded_bytes = (
-                vrt.count * vrt.width * vrt.height * np.dtype(out_dtype).itemsize
-            )
-            prof.update(
-                _comp.creation_opts(
-                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
-                )
-            )
-            with MemoryFile() as out_mf:
-                with out_mf.open(**prof) as dst:
-                    dst.write(data)
-                return out_mf.read()
+    win_bytes = _window_dataset_bytes(src, window, pending=pending, mark_masked=True)
+    return _warp_bytes(win_bytes, f"EPSG:{want_epsg}")
 
 
 def _warp_window_bytes_crs(
@@ -241,25 +309,8 @@ def _warp_window_bytes_crs(
     EPSG int), so non-EPSG targets (ESRI:54008, WKT, PROJ4) work correctly.
     ``want_crs`` must be a ``rasterio.crs.CRS`` instance.
     """
-    win_bytes = _window_dataset_bytes(src, window, pending=pending)
-    with MemoryFile(win_bytes) as mf, mf.open() as wds:
-        with WarpedVRT(wds, crs=want_crs) as vrt:
-            prof = _comp.drop_ycbcr(vrt.profile)
-            prof.update(driver="GTiff")
-            data = vrt.read()
-            out_dtype = prof.get("dtype", vrt.dtypes[0])
-            decoded_bytes = (
-                vrt.count * vrt.width * vrt.height * np.dtype(out_dtype).itemsize
-            )
-            prof.update(
-                _comp.creation_opts(
-                    out_dtype, decoded_bytes=decoded_bytes, compress="auto"
-                )
-            )
-            with MemoryFile() as out_mf:
-                with out_mf.open(**prof) as dst:
-                    dst.write(data)
-                return out_mf.read()
+    win_bytes = _window_dataset_bytes(src, window, pending=pending, mark_masked=True)
+    return _warp_bytes(win_bytes, want_crs)
 
 
 def _empty_dataset_bytes(ref) -> bytes:
@@ -692,16 +743,10 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
         data = ds.read()
         profile = _comp.drop_ycbcr(ds.profile)
         profile.update(driver="GTiff")
+        # A source's own mask band travels with the bytes (the heavy tier reads them).
+        mask = ds.read_masks(1) if _nd.has_own_mask(ds) else None
         # Route through the compression authority: ZSTD + dtype-predictor baseline.
-        out_dtype = profile.get("dtype", ds.dtypes[0])
-        decoded_bytes = ds.count * ds.width * ds.height * np.dtype(out_dtype).itemsize
-        profile.update(
-            _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
-        )
-        with MemoryFile() as mf:
-            with mf.open(**profile) as dst:
-                dst.write(data)
-            raster = mf.read()
+        raster = _comp.write_gtiff(profile, data, mask=mask)
     # Pending keys are baked into the produced bytes; strip them so the
     # materialized tile's metadata stays honest (no double-application).
     meta = _without_pending(tile.metadata)
@@ -821,21 +866,35 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
                 )
             )
 
+            # A source's own mask band: written block by block as the output's mask, or
+            # (a pending rst_initnodata stamping a NoData) set into the pixels, exactly
+            # as _window_dataset_bytes does for the whole window.
+            has_mask, as_nodata = _own_mask_use(src, profile, nodata)
+
             # Write block-by-block — at most one output block in RAM at a time.
-            with MemoryFile() as mf:
-                with mf.open(**profile) as dst:
-                    for _, block_window in dst.block_windows(1):
-                        # Translate the output-local (0-based) block_window to
-                        # source-file coordinates (offset by the tile window origin).
-                        src_block = Window(
-                            col_off=int(block_window.col_off) + int(window.col_off),
-                            row_off=int(block_window.row_off) + int(window.row_off),
-                            width=int(block_window.width),
-                            height=int(block_window.height),
-                        )
-                        data = src.read(window=src_block, indexes=indexes)
-                        dst.write(data, window=block_window)
-                return mf.read()
+            # (The mask goes in as an internal mask band; without the option GDAL
+            # would put it in a sidecar file a MemoryFile cannot hold on to.)
+            with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+                with MemoryFile() as mf:
+                    with mf.open(**profile) as dst:
+                        for _, block_window in dst.block_windows(1):
+                            # Translate the output-local (0-based) block_window to
+                            # source-file coordinates (offset by the tile window origin).
+                            src_block = Window(
+                                col_off=int(block_window.col_off) + int(window.col_off),
+                                row_off=int(block_window.row_off) + int(window.row_off),
+                                width=int(block_window.width),
+                                height=int(block_window.height),
+                            )
+                            data = src.read(window=src_block, indexes=indexes)
+                            if has_mask:
+                                mask = src.read_masks(1, window=src_block)
+                                if as_nodata:
+                                    data[:, mask == 0] = profile["nodata"]
+                                else:
+                                    dst.write_mask(mask, window=block_window)
+                            dst.write(data, window=block_window)
+                    return mf.read()
 
 
 def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:

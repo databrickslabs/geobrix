@@ -298,7 +298,7 @@ def match_alpha(dst, alpha_like) -> None:
         dst.colorinterp = want
 
 
-def write_gtiff(profile: dict, data, alpha_like=None) -> bytes:
+def write_gtiff(profile: dict, data, alpha_like=None, mask=None) -> bytes:
     """GTiff bytes of *data* with the canonical creation options for its dtype.
 
     The single light-tier GTiff writer: every derived raster goes through here so its
@@ -307,10 +307,16 @@ def write_gtiff(profile: dict, data, alpha_like=None) -> bytes:
     *data* is a ``(bands, rows, cols)`` array matching ``profile['count']``.
     *alpha_like*, the ``colorinterp`` of the dataset *data* derives from, makes the output
     label a band alpha exactly where that dataset does (see :func:`match_alpha`).
+    *mask*, a ``(rows, cols)`` uint8 array (255 valid, 0 invalid, as ``read_masks`` returns
+    it), is written as the raster's own per-dataset mask band, inside the file: the
+    source's mask carried over (see ``_nodata.has_own_mask``).
     """
     # Lazy: this module is imported by the Spark data-source writers, which must stay
     # importable where rasterio is absent (the heavy-tier build); numpy likewise above.
+    from contextlib import nullcontext
+
     import numpy as np
+    import rasterio
     from rasterio.io import MemoryFile
 
     prof = drop_ycbcr(profile)
@@ -318,8 +324,18 @@ def write_gtiff(profile: dict, data, alpha_like=None) -> bytes:
     dtype = prof.get("dtype", str(np.asarray(data).dtype))
     decoded = data.nbytes if hasattr(data, "nbytes") else None
     prof.update(creation_opts(dtype, decoded_bytes=decoded, compress="auto"))
-    with MemoryFile() as mf:
-        with mf.open(**prof) as dst:
-            match_alpha(dst, alpha_like)
-            dst.write(data)
-        return mf.read()
+    # Without the option GDAL puts a written mask in a sidecar file, which a MemoryFile
+    # cannot hold on to.
+    env = (
+        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True)
+        if mask is not None
+        else nullcontext()
+    )
+    with env:
+        with MemoryFile() as mf:
+            with mf.open(**prof) as dst:
+                match_alpha(dst, alpha_like)
+                dst.write(data)
+                if mask is not None:
+                    dst.write_mask(mask)
+            return mf.read()

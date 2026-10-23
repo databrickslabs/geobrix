@@ -439,6 +439,16 @@ formats.
   aggregated as zeros, or with their values when the source also declared NoData. A source with an
   alpha band is warped as before, and a source already in the grid's coordinate system is not
   warped.
+- **Lightweight virtual tiles keep a source's own mask band.** `rst_fromfile` returns virtual
+  tiles by default, and reading one dropped the source's own mask band (not an alpha band), as
+  JPEG-compressed aerial imagery often carries, so every masked pixel read as valid data in every
+  lightweight function that started from it: `rst_initnodata`, covering and BNG tessellation, the
+  raster-to-grid reducers and the rest. A virtual tile now reads as its bytes would. The mask
+  comes with the pixels, also through a band selection, a reprojection or a clip, and a NoData
+  that `rst_initnodata` stamps takes the place of the masked pixels, as it does on bytes. Tiles
+  made with `materialize=True`, and the tiles the writers stream block by block, carry the mask
+  as well, so the heavyweight tier, which reads those bytes, sees the same pixels as the
+  lightweight one.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

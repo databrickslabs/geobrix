@@ -23,7 +23,8 @@ def resolve(spark, file_mode: str, *, has_filespace: bool) -> str:
     """
     if file_mode not in FILE_MODE_CHOICES:
         raise ValueError(
-            f"file_mode must be one of {FILE_MODE_CHOICES}, got {file_mode!r}"
+            f"file_mode must be one of {FILE_MODE_CHOICES}, got {file_mode!r}. "
+            'Fix: pass file_mode="auto" or "fuse".'
         )
     if file_mode in ("external", "managed"):
         raise ZarrUnsupported(

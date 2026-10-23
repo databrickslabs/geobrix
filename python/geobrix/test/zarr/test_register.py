@@ -1,8 +1,10 @@
 """``gbx_zarr_register``: a manifest over a store's own objects, nothing copied."""
 
 import json
+import logging
 import os
 import shutil
+import types
 import uuid
 
 import numpy as np
@@ -12,6 +14,7 @@ import pytest
 
 zarr = pytest.importorskip("zarr")
 
+from databricks.labs.gbx.core import _retry  # noqa: E402
 from databricks.labs.gbx.zarr import _register  # noqa: E402
 from databricks.labs.gbx.zarr._access import FuseRangeReader  # noqa: E402
 from databricks.labs.gbx.zarr._manifest import (  # noqa: E402
@@ -35,6 +38,8 @@ from databricks.labs.gbx.zarr.errors import (  # noqa: E402
     ZarrUnsupported,
 )
 
+ERA5_ARRAYS = {"t2m", "u10", "time", "latitude", "longitude"}
+
 
 def _table(label):
     return f"gbx_zarr_reg_{label}_{uuid.uuid4().hex[:8]}"
@@ -52,8 +57,16 @@ def _store_key(array, key):
     return "/".join(p for p in (array, key) if p)
 
 
+def _commit_meta(spark, table):
+    (row,) = _live(spark, table, kinds="commit").to_pylist()
+    return json.loads(row["meta"])
+
+
 def _open_store(spark, table, base, scratch):
-    """A ``ManifestStore`` made only from what the manifest holds (no look at ``base``)."""
+    """A ``ManifestStore`` made only from what the manifest holds (no look at ``base``).
+
+    Arrays GeoBrix cannot decode are left out of ``arrays``, as a reader would.
+    """
     rows = _live(spark, table).to_pylist()
     metas = {
         _store_key(r["array"], r["key"]): r["meta"].encode()
@@ -65,11 +78,14 @@ def _open_store(spark, table, base, scratch):
         prefix, _, name = key.rpartition("/")
         if not prefix:
             continue
-        if name == "zarr.json" and json.loads(raw).get("node_type") == "array":
-            arrays[prefix] = parse_v3(prefix, json.loads(raw))
-        elif name == ".zarray":
-            zattrs = json.loads(metas.get(f"{prefix}/.zattrs", b"{}"))
-            arrays[prefix] = parse_v2(prefix, json.loads(raw), zattrs)
+        try:
+            if name == "zarr.json" and json.loads(raw).get("node_type") == "array":
+                arrays[prefix] = parse_v3(prefix, json.loads(raw))
+            elif name == ".zarray":
+                zattrs = json.loads(metas.get(f"{prefix}/.zattrs", b"{}"))
+                arrays[prefix] = parse_v2(prefix, json.loads(raw), zattrs)
+        except ZarrUnsupported:
+            pass
     reader = FuseRangeReader(str(scratch), base_root=str(base))
     return ManifestStore(metas, rows, reader, arrays), arrays
 
@@ -80,6 +96,20 @@ def _assert_reads_like_the_base(store, arrays, base):
         got = zarr.open_array(store=store, path=name, mode="r")[...]
         want = zarr.open_array(str(base / name), mode="r")[...]
         np.testing.assert_array_equal(got, want, err_msg=name)
+
+
+def _assert_rows_match_the_testing_helper(spark, table, root):
+    """``plain_store_rows`` is how the other suites fake a registered store."""
+    fields = ("kind", "array", "key", "shard_key", "file", "offset", "length")
+    got = sorted(
+        (
+            tuple(r[f] for f in fields)
+            for r in _live(spark, table, kinds=["shard", "chunk"]).to_pylist()
+        ),
+        key=repr,
+    )
+    _, rows, _ = plain_store_rows(root, origin="external")
+    assert got == sorted((tuple(r[f] for f in fields) for r in rows), key=repr)
 
 
 def _tree(root):
@@ -96,12 +126,83 @@ def _tree(root):
     return out
 
 
+def _listing(root):
+    """What Spark's file listing would report for ``root``: visible files only."""
+    rels = sorted(
+        f.relative_to(root).as_posix()
+        for f in root.rglob("*")
+        if f.is_file()
+        and not any(p.startswith((".", "_")) for p in f.relative_to(root).parts)
+    )
+    return pa.table({"relpath": rels})
+
+
+def _no_sleep(monkeypatch):
+    """Retries without the waits; only the retry module sees the fake clock."""
+    monkeypatch.setattr(_retry, "time", types.SimpleNamespace(sleep=lambda s: None))
+
+
+def _warnings(caplog):
+    return [
+        r.getMessage()
+        for r in caplog.records
+        if r.name == _register.__name__ and r.levelno >= logging.WARNING
+    ]
+
+
+def _miss_once(monkeypatch, *suffixes):
+    """The first read of each file ending in ``suffixes`` misses, as a FUSE mount can."""
+    real, seen = _register._read_file, []
+
+    def read(path):
+        if path.endswith(suffixes) and path not in seen:
+            seen.append(path)
+            raise FileNotFoundError(path)
+        return real(path)
+
+    monkeypatch.setattr(_register, "_read_file", read)
+    return seen
+
+
+def _write(root, files):
+    for rel, doc in files.items():
+        p = root / rel
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(doc if isinstance(doc, str) else json.dumps(doc))
+    return root
+
+
+def _make_nested(base):
+    """Nested groups, a hidden-named array, and a scalar variable (v3)."""
+    g = zarr.open_group(str(base), mode="w", zarr_format=3)
+    fc = g.create_group("fc")
+    x = fc.create_array("x", shape=(4, 6), chunks=(2, 3), dtype="f4", fill_value=0.0)
+    x[:] = np.arange(24, dtype="f4").reshape(4, 6)
+    aux = fc.create_array("_aux", shape=(5,), chunks=(2,), dtype="i4", fill_value=0)
+    aux[:] = np.arange(5, dtype="i4")
+    crs = g.create_array("crs", shape=(), chunks=(), dtype="i4", fill_value=0)
+    crs[...] = 4326  # a scalar variable, as CF stores carry for the grid mapping
+    return base
+
+
+def _make_with_strings(base, zarr_format):
+    """A float array plus a string coordinate, which GeoBrix cannot decode."""
+    g = zarr.open_group(str(base), mode="w", zarr_format=zarr_format)
+    x = g.create_array("x", shape=(4, 6), chunks=(2, 3), dtype="f4", fill_value=0.0)
+    x[:] = np.arange(24, dtype="f4").reshape(4, 6)
+    station = g.create_array("station", shape=(3,), chunks=(2,), dtype=str)
+    station[:] = np.array(["a", "bb", "ccc"], dtype=object)
+    return base
+
+
 # --- the five contract tests ------------------------------------------------------
 
 
 def test_register_v3_sharded_rows_match_objects(spark_delta, era5_v3_sharded, tmp_path):
     table = _table("v3s")
-    version = gbx_zarr_register(spark_delta, str(era5_v3_sharded), table)
+    version = gbx_zarr_register(
+        spark_delta, str(era5_v3_sharded), table, retain="2 days"
+    )
     assert isinstance(version, int)
     assert version == snapshot(spark_delta, table).version
 
@@ -128,16 +229,19 @@ def test_register_v3_sharded_rows_match_objects(spark_delta, era5_v3_sharded, tm
         assert r["origin"] == "external"
         assert r["identity"] == f"{st.st_mtime_ns // 1_000_000}:{st.st_size}"
 
-    commit = _live(spark_delta, table, kinds="commit").to_pylist()
-    assert len(commit) == 1
-    assert json.loads(commit[0]["meta"]) == {
+    assert _commit_meta(spark_delta, table) == {
         "mode": "register",
         "objects": shards.num_rows + chunks.num_rows,
     }
+    props = read_props(spark_delta, table)
+    assert (props.kind, props.root) == ("registered", str(era5_v3_sharded))
+    assert (props.writable, props.overlay_root) == (False, None)
+    assert (props.file_mode, props.retain) == ("fuse", "2 days")
 
     store, arrays = _open_store(spark_delta, table, era5_v3_sharded, tmp_path)
-    assert set(arrays) == {"t2m", "u10", "time", "latitude", "longitude"}
+    assert set(arrays) == ERA5_ARRAYS
     _assert_reads_like_the_base(store, arrays, era5_v3_sharded)
+    _assert_rows_match_the_testing_helper(spark_delta, table, era5_v3_sharded)
 
 
 def test_register_v2_unsharded(spark_delta, era5_v2, tmp_path):
@@ -159,6 +263,7 @@ def test_register_v2_unsharded(spark_delta, era5_v2, tmp_path):
 
     store, arrays = _open_store(spark_delta, table, era5_v2, tmp_path)
     _assert_reads_like_the_base(store, arrays, era5_v2)
+    _assert_rows_match_the_testing_helper(spark_delta, table, era5_v2)
 
 
 def test_register_writable_requires_overlay_root(spark_delta, era5_v3_unsharded):
@@ -181,9 +286,15 @@ def test_overlay_root_exclusive(spark_delta, era5_v3_unsharded, tmp_path):
         first,
         writable=True,
         overlay_root=str(overlay),
+        file_mode="fuse",
     )
     marker = json.loads((overlay / OWNER_MARKER).read_text())
-    assert marker["table"] == first and marker["kind"] == "overlay"
+    owner = _register.qualified_table_name(spark_delta, first)
+    assert marker["table"] == owner and marker["kind"] == "overlay"
+    props = read_props(spark_delta, first)
+    assert (props.writable, props.overlay_root) == (True, str(overlay))
+    assert props.file_mode == "fuse"
+    _assert_rows_match_the_testing_helper(spark_delta, first, era5_v3_unsharded)
 
     with pytest.raises(ZarrOwnershipError) as ei:
         gbx_zarr_register(
@@ -195,9 +306,9 @@ def test_overlay_root_exclusive(spark_delta, era5_v3_unsharded, tmp_path):
         )
     assert first in str(ei.value) and "Fix:" in str(ei.value)
     assert not _exists(spark_delta, second)
-    assert json.loads((overlay / OWNER_MARKER).read_text())["table"] == first
+    assert json.loads((overlay / OWNER_MARKER).read_text())["table"] == owner
 
-    write_owner_marker(str(overlay), first, "overlay")  # its own table: no error
+    write_owner_marker(str(overlay), owner, "overlay")  # its own table: no error
 
 
 def test_register_never_writes_into_base(spark_delta, era5_v3_sharded, tmp_path):
@@ -218,33 +329,7 @@ def test_register_never_writes_into_base(spark_delta, era5_v3_sharded, tmp_path)
     assert not (base / OWNER_MARKER).exists()
 
 
-# --- what the table records -------------------------------------------------------
-
-
-def test_properties_record_a_read_only_registration(spark_delta, era5_v3_unsharded):
-    table = _table("props")
-    gbx_zarr_register(spark_delta, str(era5_v3_unsharded), table, retain="2 days")
-    props = read_props(spark_delta, table)
-    assert (props.kind, props.root) == ("registered", str(era5_v3_unsharded))
-    assert (props.writable, props.overlay_root) == (False, None)
-    assert (props.file_mode, props.retain) == ("fuse", "2 days")
-
-
-def test_properties_record_a_writable_registration(
-    spark_delta, era5_v3_unsharded, tmp_path
-):
-    table = _table("propsrw")
-    gbx_zarr_register(
-        spark_delta,
-        str(era5_v3_unsharded),
-        table,
-        writable=True,
-        overlay_root=str(tmp_path / "ov"),
-        file_mode="fuse",
-    )
-    props = read_props(spark_delta, table)
-    assert (props.writable, props.overlay_root) == (True, str(tmp_path / "ov"))
-    assert props.file_mode == "fuse"
+# --- file modes -------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("mode", ["external", "managed"])
@@ -258,11 +343,116 @@ def test_file_modes_that_need_file_columns_are_not_available_yet(
     assert not _exists(spark_delta, table)
 
 
-def test_an_unknown_file_mode_is_a_value_error(spark_delta, era5_v3_unsharded):
-    with pytest.raises(ValueError, match="file_mode"):
+def test_an_unknown_file_mode_is_a_value_error_with_a_fix(
+    spark_delta, era5_v3_unsharded
+):
+    with pytest.raises(ValueError, match=r"file_mode.*Fix:"):
         gbx_zarr_register(
             spark_delta, str(era5_v3_unsharded), _table("bad"), file_mode="s3"
         )
+
+
+# --- owners -----------------------------------------------------------------------
+
+
+def test_table_names_are_qualified_and_lower_cased(spark_delta):
+    q = _register.qualified_table_name
+    assert q(spark_delta, "T") == "spark_catalog.default.t"
+    assert q(spark_delta, "Default.T") == "spark_catalog.default.t"
+    assert q(spark_delta, "spark_catalog.DEFAULT.`T`") == "spark_catalog.default.t"
+
+
+def test_the_same_name_in_two_schemas_is_two_owners(spark_delta, tmp_path):
+    overlay = tmp_path / "overlay"
+    first = _register.qualified_table_name(spark_delta, "shared_name")
+    write_owner_marker(str(overlay), first, "overlay")
+    spark_delta.sql("CREATE SCHEMA IF NOT EXISTS gbx_zarr_other")
+    try:
+        spark_delta.sql("USE gbx_zarr_other")
+        other = _register.qualified_table_name(spark_delta, "shared_name")
+        assert other == "spark_catalog.gbx_zarr_other.shared_name" != first
+        with pytest.raises(ZarrOwnershipError, match="already owned"):
+            write_owner_marker(str(overlay), other, "overlay")
+    finally:
+        spark_delta.sql("USE default")
+        spark_delta.sql("DROP SCHEMA IF EXISTS gbx_zarr_other CASCADE")
+    # the same table spelled another way is still the owner
+    again = _register.qualified_table_name(spark_delta, "DEFAULT.Shared_Name")
+    write_owner_marker(str(overlay), again, "overlay")
+
+
+def test_an_unreadable_owner_marker_is_refused(tmp_path):
+    (tmp_path / OWNER_MARKER).write_text("{not json")
+    with pytest.raises(ZarrOwnershipError, match="not a readable") as ei:
+        write_owner_marker(str(tmp_path), "c.s.t", "overlay")
+    assert "Fix:" in str(ei.value)
+
+
+def test_a_marker_of_another_kind_is_a_conflict(tmp_path):
+    write_owner_marker(str(tmp_path), "c.s.t", "overlay")
+    with pytest.raises(ZarrOwnershipError, match="already owned"):
+        write_owner_marker(str(tmp_path), "c.s.t", "managed")
+    with pytest.raises(ValueError, match="kind"):
+        write_owner_marker(str(tmp_path), "c.s.t", "scratch")
+
+
+def test_a_marker_that_cannot_be_written_is_a_zarr_error(tmp_path, monkeypatch):
+    def refuse(*a, **k):
+        raise PermissionError("read-only file system")
+
+    monkeypatch.setattr(os, "open", refuse)
+    with pytest.raises(ZarrError) as ei:
+        write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
+    assert "Fix:" in str(ei.value) and "ov" in str(ei.value)
+    monkeypatch.undo()
+    assert not (tmp_path / "ov" / OWNER_MARKER).exists()
+
+
+def test_a_foreign_overlay_is_refused_before_the_store_is_read(
+    spark_delta, era5_v3_unsharded, tmp_path, monkeypatch
+):
+    overlay = tmp_path / "overlay"
+    write_owner_marker(str(overlay), "someone.else.table", "overlay")
+
+    def not_reached(*a, **k):
+        raise AssertionError("the store was read before the overlay was checked")
+
+    monkeypatch.setattr(_register, "_scan", not_reached)
+    monkeypatch.setattr(_register, "read_base_metadata", not_reached)
+    with pytest.raises(ZarrOwnershipError, match="someone.else.table"):
+        gbx_zarr_register(
+            spark_delta,
+            str(era5_v3_unsharded),
+            _table("foreign"),
+            writable=True,
+            overlay_root=str(overlay),
+        )
+
+
+def test_the_marker_is_removed_when_the_manifest_cannot_be_created(
+    spark_delta, era5_v3_unsharded, tmp_path, monkeypatch
+):
+    def boom(*a, **k):
+        raise RuntimeError("create failed")
+
+    monkeypatch.setattr(_register, "create_manifest", boom)
+    table = _table("nomanifest")
+    fresh, kept = tmp_path / "fresh", tmp_path / "kept"
+    write_owner_marker(  # claimed by an earlier attempt of the same table
+        str(kept), _register.qualified_table_name(spark_delta, table), "overlay"
+    )
+    for overlay in (fresh, kept):
+        with pytest.raises(RuntimeError, match="create failed"):
+            gbx_zarr_register(
+                spark_delta,
+                str(era5_v3_unsharded),
+                table,
+                writable=True,
+                overlay_root=str(overlay),
+            )
+    assert not (fresh / OWNER_MARKER).exists()  # this call made it, so it removed it
+    assert (kept / OWNER_MARKER).exists()  # this call did not
+    assert not _exists(spark_delta, table)
 
 
 # --- refusals leave nothing behind ------------------------------------------------
@@ -318,30 +508,111 @@ def test_a_directory_that_is_not_a_store_is_refused(spark_delta, tmp_path):
         assert not _exists(spark_delta, table)
 
 
-def test_a_path_that_is_not_on_a_volume_is_refused(spark_delta):
-    with pytest.raises(ZarrUnsupported) as ei:
-        gbx_zarr_register(spark_delta, "s3://bucket/cube.zarr", _table("s3"))
+@pytest.mark.parametrize(
+    "path, text",
+    [
+        ("s3://bucket/cube.zarr", "Volume"),
+        ("/dbfs/mnt/cube.zarr", "DBFS"),
+        ("dbfs:/mnt/cube.zarr", "DBFS"),
+    ],
+)
+def test_a_path_that_is_not_on_a_volume_is_refused(spark_delta, path, text):
+    with pytest.raises(ZarrUnsupported, match=text) as ei:
+        gbx_zarr_register(spark_delta, path, _table("elsewhere"))
+    assert "Fix:" in str(ei.value) and "symbolic" not in str(ei.value)
+
+
+def test_a_volume_uri_is_a_bare_path():
+    assert (
+        _register._local_root("dbfs:/Volumes/c/s/v/x.zarr") == "/Volumes/c/s/v/x.zarr"
+    )
+
+
+V3_GROUP = {"zarr_format": 3, "node_type": "group", "attributes": {}}
+REFUSALS = {
+    "v3 root array": (
+        {"zarr.json": {"zarr_format": 3, "node_type": "array"}},
+        "single",
+    ),
+    "v3 other format": (
+        {"zarr.json": {"zarr_format": 2, "node_type": "group"}},
+        "zarr_format",
+    ),
+    "unknown node type": (
+        {
+            "zarr.json": V3_GROUP,
+            "weird/zarr.json": {"zarr_format": 3, "node_type": "banana"},
+        },
+        "node_type",
+    ),
+    "v2 root array": (
+        {".zarray": {"shape": [1], "chunks": [1], "dtype": "<f4"}},
+        "single",
+    ),
+    "not json": ({"zarr.json": "{not json"}, "not valid JSON"),
+}
+
+
+@pytest.mark.parametrize("case", list(REFUSALS))
+def test_stores_that_cannot_be_registered_are_refused(tmp_path, case):
+    files, text = REFUSALS[case]
+    with pytest.raises(ZarrUnsupported, match=text) as ei:
+        read_base_metadata(str(_write(tmp_path / "s.zarr", files)))
     assert "Fix:" in str(ei.value)
 
 
+@pytest.mark.parametrize("case", ["v3 root array", "unknown node type"])
+def test_a_refused_store_leaves_no_table_and_no_marker(spark_delta, tmp_path, case):
+    base = _write(tmp_path / "s.zarr", REFUSALS[case][0])
+    table = _table("refused")
+    overlay = tmp_path / "overlay"
+    with pytest.raises(ZarrUnsupported):
+        gbx_zarr_register(
+            spark_delta, str(base), table, writable=True, overlay_root=str(overlay)
+        )
+    assert not _exists(spark_delta, table)
+    assert not (overlay / OWNER_MARKER).exists()
+
+
 def test_a_failed_commit_leaves_no_empty_table(
-    spark_delta, era5_v3_unsharded, monkeypatch
+    spark_delta, era5_v3_unsharded, tmp_path, monkeypatch
 ):
     def boom(*a, **k):
         raise RuntimeError("commit failed")
 
     monkeypatch.setattr(_register, "commit", boom)
     table = _table("boom")
+    overlay = tmp_path / "overlay"
     with pytest.raises(RuntimeError, match="commit failed"):
-        gbx_zarr_register(spark_delta, str(era5_v3_unsharded), table)
+        gbx_zarr_register(
+            spark_delta,
+            str(era5_v3_unsharded),
+            table,
+            writable=True,
+            overlay_root=str(overlay),
+        )
     assert not _exists(spark_delta, table)
+    assert not (overlay / OWNER_MARKER).exists()
+
+
+def test_a_table_that_was_not_made_by_this_call_is_never_dropped(
+    spark_delta, era5_v3_unsharded, monkeypatch
+):
+    table = _table("precious")
+    gbx_zarr_register(spark_delta, str(era5_v3_unsharded), table)
+    before = _live(spark_delta, table).num_rows
+    # get past the early check, so the failure comes from creating the table
+    monkeypatch.setattr(_register, "_table_exists", lambda spark, name: False)
+    with pytest.raises(ZarrOwnershipError, match="already exists"):
+        gbx_zarr_register(spark_delta, str(era5_v3_unsharded), table)
+    assert _live(spark_delta, table).num_rows == before
 
 
 # --- stores that are not tidy -----------------------------------------------------
 
 
 def test_zero_byte_and_stray_objects_do_not_break_the_store(
-    spark_delta, era5_v3_unsharded, tmp_path, caplog
+    spark_delta, era5_v3_unsharded, tmp_path, caplog, monkeypatch
 ):
     base = tmp_path / "base.zarr"
     shutil.copytree(era5_v3_unsharded, base)
@@ -352,21 +623,38 @@ def test_zero_byte_and_stray_objects_do_not_break_the_store(
     (base / "t2m" / "c" / "00" / "0" / "0").write_bytes(b"not a canonical key")
     (base / "t2m" / "thumbs.db").write_bytes(b"x")
 
+    # Spark 4.0 leaves zero-byte files out of its listing; other runtimes may not.
+    # Report the second one as empty too, as such a runtime would.
+    real_scan = _register._scan
+
+    def scan(*a, **k):
+        t = real_scan(*a, **k)
+        length = pc.if_else(
+            pc.equal(t["relpath"], "t2m/c/2/0/0"), pa.scalar(0, pa.int64()), t["length"]
+        )
+        return t.set_column(1, "length", length)
+
+    monkeypatch.setattr(_register, "_scan", scan)
+
     table = _table("messy")
-    with caplog.at_level("WARNING"):
+    with caplog.at_level(logging.WARNING, logger=_register.__name__):
         gbx_zarr_register(spark_delta, str(base), table)
+
+    warned = _warnings(caplog)
+    assert any("zero-byte" in w and "t2m/c/2/0/0" in w for w in warned)
+    assert any("not chunks" in w and "README.txt" in w for w in warned)
+    skipped = _commit_meta(spark_delta, table)["skipped"]
+    assert skipped["stray"] == 3 and skipped["empty"] >= 1
 
     rows = _live(spark_delta, table, kinds="chunk")
     assert pc.all(pc.greater(rows["length"], 0)).as_py()
     t2m_keys = set(rows.filter(pc.equal(rows["array"], "t2m"))["key"].to_pylist())
-    assert "c/1/0/0" not in t2m_keys and "c/0/0/0" in t2m_keys
+    assert not {"c/1/0/0", "c/2/0/0"} & t2m_keys and "c/0/0/0" in t2m_keys
     assert not any(
         "README" in f or "00" in f.split("/") for f in rows["file"].to_pylist()
     )
 
-    store, _ = _open_store(
-        spark_delta, table, base, tmp_path
-    )  # no drift at construction
+    store, _ = _open_store(spark_delta, table, base, tmp_path)  # no drift at build
     got = zarr.open_array(store=store, path="t2m", mode="r")
     want = zarr.open_array(str(era5_v3_unsharded / "t2m"), mode="r")[:]
     np.testing.assert_array_equal(got[:12], want[:12])  # chunks that are there
@@ -377,6 +665,7 @@ def test_zero_byte_and_stray_objects_do_not_break_the_store(
 def test_rows_for_empty_and_stray_objects(era5_v3_sharded):
     """The row builder, given what a listing might return, whatever Spark drops."""
     _, _, arrays = plain_store_rows(era5_v3_sharded)
+    layouts = {n: _register._layout_of(m) for n, m in arrays.items()}
     objects = pa.table(
         {
             "relpath": [
@@ -393,7 +682,7 @@ def test_rows_for_empty_and_stray_objects(era5_v3_sharded):
             "mtime_ms": [1, 2, 3, 4, 5, 6, 7, 8],
         }
     )
-    rows, counts = _register._chunk_rows(objects, arrays, "a" * 32)
+    rows, counts = _register._chunk_rows(objects, layouts, "a" * 32)
     got = {(r["kind"], r["array"], r["key"]): r for r in rows.to_pylist()}
     assert set(got) == {("shard", "t2m", "c/0/0/0"), ("chunk", "time", "c/0")}
     shard = got[("shard", "t2m", "c/0/0/0")]
@@ -406,19 +695,16 @@ def test_rows_for_empty_and_stray_objects(era5_v3_sharded):
     assert (counts["empty"], counts["stray"]) == (1, 3)
 
 
-def test_nested_groups_and_hidden_names_in_an_unusual_path(spark_delta, tmp_path):
-    base = tmp_path / "_my data [v1]" / "cube.zarr"
-    g = zarr.open_group(str(base), mode="w", zarr_format=3)
-    fc = g.create_group("fc")
-    x = fc.create_array("x", shape=(4, 6), chunks=(2, 3), dtype="f4", fill_value=0.0)
-    x[:] = np.arange(24, dtype="f4").reshape(4, 6)
-    aux = fc.create_array("_aux", shape=(5,), chunks=(2,), dtype="i4", fill_value=0)
-    aux[:] = np.arange(5, dtype="i4")
-    crs = g.create_array("crs", shape=(), chunks=(), dtype="i4", fill_value=0)
-    crs[...] = 4326  # a scalar variable, as CF stores carry for the grid mapping
+def test_nested_groups_and_hidden_names_in_an_unusual_path(
+    spark_delta, tmp_path, monkeypatch
+):
+    base = _make_nested(tmp_path / "_my data [v1]" / "cube.zarr")
+    _no_sleep(monkeypatch)
+    missed = _miss_once(monkeypatch, "fc/x/zarr.json", "fc/_aux/zarr.json")
 
     table = _table("nested")
     gbx_zarr_register(spark_delta, str(base), table)
+    assert len(missed) == 2  # both were found on the retry
 
     chunks = _live(spark_delta, table, kinds="chunk")
     by_array = {
@@ -438,39 +724,261 @@ def test_nested_groups_and_hidden_names_in_an_unusual_path(spark_delta, tmp_path
     assert set(arrays) == {"fc/x", "fc/_aux", "crs"}
     _assert_reads_like_the_base(store, arrays, base)
 
+    # the default listing finds the hidden array too, so a sync would not delete it
+    listed = set(list_objects(spark_delta, str(base))["relpath"].to_pylist())
+    registered = set(chunks["file"].to_pylist())
+    assert registered <= listed and "fc/_aux/c/0" in listed
 
-def test_consolidated_v2_metadata_is_kept_and_used(
-    spark_delta, era5_v2, tmp_path, monkeypatch
+
+def test_every_chunk_key_encoding_registers(spark_delta, tmp_path):
+    v3 = tmp_path / "v3.zarr"
+    g = zarr.open_group(str(v3), mode="w", zarr_format=3)
+    keys = {
+        "dflt": {"name": "default", "separator": "/"},
+        "dflt_dot": {"name": "default", "separator": "."},
+        "v2dot": {"name": "v2", "separator": "."},
+        "v2slash": {"name": "v2", "separator": "/"},
+    }
+    for name, enc in keys.items():
+        x = g.create_array(
+            name,
+            shape=(4, 6),
+            chunks=(2, 3),
+            dtype="f4",
+            fill_value=0.0,
+            chunk_key_encoding=enc,
+        )
+        x[:] = np.arange(24, dtype="f4").reshape(4, 6)
+    v2 = tmp_path / "v2.zarr"
+    g2 = zarr.open_group(str(v2), mode="w", zarr_format=2)
+    y = g2.create_array(
+        "y",
+        shape=(4, 6),
+        chunks=(2, 3),
+        dtype="f4",
+        fill_value=0.0,
+        chunk_key_encoding={"name": "v2", "separator": "/"},
+    )
+    y[:] = np.arange(24, dtype="f4").reshape(4, 6)
+
+    for base, expected in (
+        (v3, {"dflt": "c/1/1", "dflt_dot": "c.1.1", "v2dot": "1.1", "v2slash": "1/1"}),
+        (v2, {"y": "1/1"}),
+    ):
+        table = _table("keys")
+        gbx_zarr_register(spark_delta, str(base), table)
+        chunks = _live(spark_delta, table, kinds="chunk")
+        for array, last in expected.items():
+            got = chunks.filter(pc.equal(chunks["array"], array))["key"].to_pylist()
+            assert len(got) == 4 and last in got, (array, got)
+        store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
+        _assert_reads_like_the_base(store, arrays, base)
+
+
+# --- arrays GeoBrix cannot decode -------------------------------------------------
+
+
+@pytest.mark.parametrize("zarr_format", [3, 2])
+def test_an_array_that_cannot_be_decoded_is_still_registered(
+    spark_delta, tmp_path, caplog, zarr_format
+):
+    base = _make_with_strings(tmp_path / "s.zarr", zarr_format)
+    metas, arrays, unsupported = read_base_metadata(str(base))
+    assert set(arrays) == {"x"} and set(unsupported) == {"station"}
+    assert "not supported" in unsupported["station"]
+
+    table = _table(f"strings{zarr_format}")
+    with caplog.at_level(logging.WARNING, logger=_register.__name__):
+        gbx_zarr_register(spark_delta, str(base), table)
+    assert any("station" in w for w in _warnings(caplog))
+    assert _commit_meta(spark_delta, table)["unsupported"] == unsupported
+
+    rows = _live(spark_delta, table)
+    doc = "zarr.json" if zarr_format == 3 else ".zarray"
+    meta_rows = [
+        r for r in rows.to_pylist() if r["array"] == "station" and r["key"] == doc
+    ]
+    assert [r["kind"] for r in meta_rows] == ["array"]  # not "group"
+    station = rows.filter(
+        pc.and_(pc.equal(rows["array"], "station"), pc.equal(rows["kind"], "chunk"))
+    )
+    on_disk = [
+        f
+        for f in (base / "station").rglob("*")
+        if f.is_file() and f.name[0] not in "z."
+    ]
+    assert (
+        sorted(station["file"].to_pylist())
+        == sorted(f.relative_to(base).as_posix() for f in on_disk)
+        and station.num_rows == 2
+    )
+    assert _commit_meta(spark_delta, table).get("skipped") is None  # not strays
+
+    store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
+    assert set(arrays) == {"x"}
+    _assert_reads_like_the_base(store, arrays, base)
+
+
+# --- metadata: transient misses ---------------------------------------------------
+
+
+@pytest.mark.parametrize("hint", ["listing", "walk only"])
+def test_a_v3_document_that_misses_once_is_not_dropped(
+    era5_v3_sharded, monkeypatch, hint
+):
+    _no_sleep(monkeypatch)
+    missed = _miss_once(monkeypatch, "t2m/zarr.json", "u10/zarr.json")
+    listing = _listing(era5_v3_sharded) if hint == "listing" else None
+    _, arrays, _ = read_base_metadata(str(era5_v3_sharded), listing=listing)
+    assert len(missed) == 2 and set(arrays) == ERA5_ARRAYS
+
+
+def test_a_v2_document_that_misses_once_is_not_dropped(era5_v2, monkeypatch):
+    _no_sleep(monkeypatch)
+    missed = _miss_once(monkeypatch, "t2m/.zarray", "u10/.zarray")
+    _, arrays, _ = read_base_metadata(str(era5_v2))
+    assert len(missed) == 2 and set(arrays) == ERA5_ARRAYS
+
+
+def test_a_directory_the_listing_omits_is_found_through_the_scan(
+    era5_v3_sharded, monkeypatch
+):
+    real = _register._list_dirs
+    omitted = []
+
+    def list_dirs(path):
+        names = real(path)
+        if path == str(era5_v3_sharded) and not omitted:
+            omitted.append("t2m")
+            return [n for n in names if n != "t2m"]
+        return names
+
+    monkeypatch.setattr(_register, "_list_dirs", list_dirs)
+    _, arrays, _ = read_base_metadata(
+        str(era5_v3_sharded), listing=_listing(era5_v3_sharded)
+    )
+    assert omitted and set(arrays) == ERA5_ARRAYS
+
+
+def test_a_document_the_listing_names_but_cannot_be_read_is_an_error(
+    era5_v3_sharded, monkeypatch
+):
+    _no_sleep(monkeypatch)
+    real = _register._read_file
+
+    def read(path):
+        if path.endswith("t2m/zarr.json"):
+            raise FileNotFoundError(path)
+        return real(path)
+
+    monkeypatch.setattr(_register, "_read_file", read)
+    with pytest.raises(ZarrError, match="t2m/zarr.json") as ei:
+        read_base_metadata(str(era5_v3_sharded), listing=_listing(era5_v3_sharded))
+    assert "Fix:" in str(ei.value)
+
+
+# --- metadata: consolidated documents ---------------------------------------------
+
+
+@pytest.mark.filterwarnings("ignore:Consolidated metadata")
+def test_consolidated_v3_metadata_opens_like_the_base(spark_delta, tmp_path, caplog):
+    base = tmp_path / "base.zarr"
+    g = zarr.open_group(str(base), mode="w", zarr_format=3)
+    y = g.create_group("fc").create_array(
+        "y", shape=(4,), chunks=(2,), dtype="f4", fill_value=0.0
+    )
+    y[:] = 1
+    z = g.create_array("z", shape=(4,), chunks=(2,), dtype="f4", fill_value=0.0)
+    z[:] = 2
+    zarr.consolidate_metadata(str(base))
+    assert "consolidated_metadata" in json.loads((base / "zarr.json").read_text())
+
+    table = _table("consolidated3")
+    with caplog.at_level(logging.WARNING, logger=_register.__name__):
+        gbx_zarr_register(spark_delta, str(base), table)
+    assert not _warnings(caplog)
+
+    store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
+    assert set(arrays) == {"z", "fc/y"}
+    want = zarr.open_group(str(base), mode="r", use_consolidated=True)
+    got = zarr.open_group(store=store, mode="r", use_consolidated=True)
+    for name in ("z", "fc/y"):
+        assert got[name].shape == want[name].shape
+    _assert_reads_like_the_base(store, arrays, base)
+
+
+@pytest.mark.filterwarnings("ignore:Consolidated metadata")
+def test_stale_v3_consolidated_metadata_is_reported_and_not_trusted(tmp_path, caplog):
+    base = tmp_path / "base.zarr"
+    g = zarr.open_group(str(base), mode="w", zarr_format=3)
+    z = g.create_array("z", shape=(4,), chunks=(2,), dtype="f4", fill_value=0.0)
+    zarr.consolidate_metadata(str(base))
+    z.resize((6,))  # the array's own document moves on; the consolidated one does not
+
+    with caplog.at_level(logging.WARNING, logger=_register.__name__):
+        metas, arrays, _ = read_base_metadata(str(base))
+    assert arrays["z"].shape == (6,)  # the per-array document is the truth
+    assert json.loads(metas["z/zarr.json"])["shape"] == [6]
+    assert any("consolidated" in w and "z/zarr.json" in w for w in _warnings(caplog))
+
+
+def test_v2_consolidated_metadata_is_kept_and_checked(
+    spark_delta, era5_v2, tmp_path, caplog
 ):
     base = tmp_path / "base.zarr"
     shutil.copytree(era5_v2, base)
     zarr.consolidate_metadata(str(base))
     assert (base / ".zmetadata").exists()
 
-    metas, arrays = read_base_metadata(str(base))
-    assert ".zmetadata" in metas and "t2m/.zarray" in metas
-    assert set(arrays) == {"t2m", "u10", "time", "latitude", "longitude"}
+    table = _table("consolidated2")
+    with caplog.at_level(logging.WARNING, logger=_register.__name__):
+        gbx_zarr_register(spark_delta, str(base), table)
+    assert not _warnings(caplog)
 
-    table = _table("consol")
-    gbx_zarr_register(spark_delta, str(base), table)
-    keys = {
-        _store_key(r["array"], r["key"])
-        for r in _live(spark_delta, table, kinds=["group", "array"]).to_pylist()
-    }
-    assert ".zmetadata" in keys and "t2m/.zarray" in keys
+    rows = _live(spark_delta, table, kinds=["group", "array"]).to_pylist()
+    docs = {_store_key(r["array"], r["key"]): r["meta"] for r in rows}
+    assert ".zmetadata" in docs
+    for key, text in docs.items():  # every document is the file, byte for byte
+        assert text.encode() == (base / key).read_bytes(), key
     store, arrays = _open_store(spark_delta, table, base, tmp_path)
     _assert_reads_like_the_base(store, arrays, base)
 
 
+def test_stale_v2_consolidated_metadata_is_reported_and_not_trusted(
+    era5_v2, tmp_path, caplog
+):
+    base = tmp_path / "base.zarr"
+    shutil.copytree(era5_v2, base)
+    zarr.consolidate_metadata(str(base))
+    zarray = json.loads((base / "t2m" / ".zarray").read_text())
+    zarray["shape"][0] += 24
+    (base / "t2m" / ".zarray").write_text(json.dumps(zarray))
+
+    with caplog.at_level(logging.WARNING, logger=_register.__name__):
+        _, arrays, _ = read_base_metadata(str(base))
+    assert arrays["t2m"].shape[0] == zarray["shape"][0]
+    assert any("t2m/.zarray" in w for w in _warnings(caplog))
+
+
+def test_unreadable_consolidated_metadata_is_reported_not_fatal(
+    era5_v2, tmp_path, caplog
+):
+    base = tmp_path / "base.zarr"
+    shutil.copytree(era5_v2, base)
+    (base / ".zmetadata").write_text("{not json")
+    with caplog.at_level(logging.WARNING, logger=_register.__name__):
+        metas, arrays, _ = read_base_metadata(str(base))
+    assert set(arrays) == ERA5_ARRAYS and ".zmetadata" in metas
+    assert any(".zmetadata" in w for w in _warnings(caplog))
+
+
 def test_metadata_documents_are_kept_byte_for_byte(era5_v3_sharded):
-    metas, arrays = read_base_metadata(str(era5_v3_sharded))
-    assert set(metas) == {
-        "zarr.json",
-        *(f"{a}/zarr.json" for a in ("t2m", "u10", "time", "latitude", "longitude")),
-    }
+    metas, arrays, unsupported = read_base_metadata(str(era5_v3_sharded))
+    assert set(metas) == {"zarr.json", *(f"{a}/zarr.json" for a in ERA5_ARRAYS)}
     for key, raw in metas.items():
         assert raw == (era5_v3_sharded / key).read_bytes()
     assert arrays["t2m"].shard is not None and arrays["time"].shard is None
+    assert unsupported == {}
 
 
 # --- the listing ------------------------------------------------------------------
@@ -505,22 +1013,33 @@ def test_a_store_with_no_chunks_registers_its_metadata_only(spark_delta, tmp_pat
     assert set(rows.column("kind").to_pylist()) == {"group", "array", "commit"}
 
 
-# --- the testing helper agrees with register --------------------------------------
+# --- identity ---------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("fixture", ["era5_v3_sharded", "era5_v3_unsharded", "era5_v2"])
-def test_plain_store_rows_match_the_registered_rows(spark_delta, fixture, request):
-    root = request.getfixturevalue(fixture)
-    table = _table("parity")
-    gbx_zarr_register(spark_delta, str(root), table)
-    fields = ("kind", "array", "key", "shard_key", "file", "offset", "length")
-    got = sorted(
-        (
-            tuple(r[f] for f in fields)
-            for r in _live(spark_delta, table, kinds=["shard", "chunk"]).to_pylist()
-        ),
-        key=repr,
-    )
-    _, rows, _ = plain_store_rows(root, origin="external")
-    want = sorted((tuple(r[f] for f in fields) for r in rows), key=repr)
-    assert got == want
+def test_identity_is_floor_epoch_milliseconds_and_size():
+    assert _register.identity_of(1_792_741_018_982, 3) == "1792741018982:3"
+
+
+@pytest.mark.parametrize(
+    "a, b, resolution, same",
+    [
+        ("1000:7", "1000:7", 1, True),
+        ("1000:7", "1001:7", 1, False),  # exact at the default resolution
+        ("1000:7", "1000:8", 1, False),  # size is always exact
+        ("1000:7", "1999:7", 1000, True),  # the same second
+        ("1000:7", "2000:7", 1000, False),
+        ("1999:7", "2000:7", 1000, False),  # buckets, not tolerance
+        ("1000:7", "1999:8", 1000, False),  # size is exact even when mtime is coarse
+    ],
+)
+def test_same_identity_compares_size_exactly_and_mtime_at_a_resolution(
+    a, b, resolution, same
+):
+    assert _register.same_identity(a, b, mtime_resolution_ms=resolution) is same
+
+
+def test_same_identity_rejects_bad_input():
+    with pytest.raises(ValueError, match="identity"):
+        _register.same_identity("1000", "1000:7")
+    with pytest.raises(ValueError, match="resolution"):
+        _register.same_identity("1:2", "1:2", mtime_resolution_ms=0)

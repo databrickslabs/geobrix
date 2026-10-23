@@ -10,11 +10,18 @@ table owns and never touch the base.
 The listing is a Spark ``binaryFile`` scan that selects only ``path``, ``length`` and
 ``modificationTime``: the file contents are never read, and the work is spread over the
 cluster rather than walked on the driver over FUSE. Spark's file sources skip names that
-start with ``.`` or ``_``, so an array whose path has such a name is listed on the
-driver instead (``ds._listing.list_files``, which guards FUSE's transient misses). The
-metadata is read on the driver with ``zarr``'s ``LocalStore``; deriving the rows from
-the metadata alone would be cheaper but cannot be complete, since a sparse store holds
-only some of its keys and an object's identity needs its size and modification time.
+start with ``.`` or ``_``, so an array whose path has such a name gets a scan of its own,
+rooted at its directory. Every object's identity (``"<floor epoch ms>:<size>"``) therefore
+comes from the same place, Hadoop's file status. Deriving the rows from the metadata alone
+would be cheaper but cannot be complete: a sparse store holds only some of its keys, and
+an object's identity needs its size and modification time.
+
+The metadata is read on the driver with plain file reads, not through ``zarr``'s
+``LocalStore``, which turns a missing file into "no such key": on a FUSE mount a healthy
+file can miss for a moment, and that must not drop an array. A document the Spark listing
+(Zarr v3) or the consolidated metadata (Zarr v2) names must exist, so a miss is retried
+and then an error; anything else is probed a few times. The per-node documents are the
+truth; consolidated metadata is compared against them and a disagreement is reported.
 """
 
 from __future__ import annotations
@@ -26,6 +33,7 @@ import re
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 
 import numpy as np
 import pyarrow as pa
@@ -33,10 +41,12 @@ import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
+from databricks.labs.gbx.zarr._keys import KeyEncoding
 from databricks.labs.gbx.zarr._manifest import (
     FORMAT_VERSION,
     StoreProps,
     _q,
+    _split_name,
     commit,
     create_manifest,
     find_commit_version,
@@ -55,6 +65,9 @@ __all__ = [
     "read_base_metadata",
     "list_objects",
     "write_owner_marker",
+    "qualified_table_name",
+    "identity_of",
+    "same_identity",
 ]
 
 _LOG = logging.getLogger(__name__)
@@ -64,11 +77,19 @@ _MARKER_KINDS = ("overlay", "managed")
 
 # Names a store keeps its metadata under; none of them is a chunk or a child array.
 _DOC_NAMES = ("zarr.json", ".zgroup", ".zarray", ".zattrs", ".zmetadata")
+_NODE_DOCS = ("zarr.json", ".zarray", ".zgroup")
 _ZMETADATA = ".zmetadata"
 
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
 _GLOB_CHARS = re.compile(r"([\\\[\]{}*?])")
 _NUM = r"(?:0|[1-9][0-9]*)"  # a canonical index: no sign, no leading zeros
+_PLAIN_NAME = re.compile(r"[a-z0-9_]+")
+
+# Attempts for a document that may or may not exist: a node's probe (a FUSE mount can
+# miss a healthy file once), an optional document, and one the consolidated metadata names.
+_PROBE_ATTEMPTS = 3
+_HINTED_ATTEMPTS = 6
+_WORKERS = 16
 
 _ROW_SCHEMA = pa.schema(
     [
@@ -98,8 +119,52 @@ def _say(message: str) -> None:
 
 
 def _examples(names, limit: int = 3) -> str:
+    names = list(names)
     shown = ", ".join(names[:limit])
     return shown + (f" and {len(names) - limit} more" if len(names) > limit else "")
+
+
+def _table_exists(spark, table: str) -> bool:
+    return bool(spark.catalog.tableExists(table))
+
+
+# --- identity ---------------------------------------------------------------------
+
+
+def identity_of(mtime_ms: int, size: int) -> str:
+    """The identity of an object: its modification time (whole milliseconds since the
+    epoch, UTC, rounded down) and size in bytes, as ``"<mtime_ms>:<size>"``."""
+    return f"{int(mtime_ms)}:{int(size)}"
+
+
+def _parse_identity(identity: str) -> tuple[int, int]:
+    m = re.fullmatch(r"(-?\d+):(\d+)", identity) if isinstance(identity, str) else None
+    if m is None:
+        raise ValueError(
+            f"an identity looks like '<mtime_ms>:<size>' (for example "
+            f"'1792741018982:3'), got {identity!r}"
+        )
+    return int(m.group(1)), int(m.group(2))
+
+
+def same_identity(a: str, b: str, *, mtime_resolution_ms: int = 1) -> bool:
+    """Whether two identities name the same object.
+
+    The size must match exactly. The modification times must fall in the same
+    ``mtime_resolution_ms`` bucket, so ``1`` compares to the millisecond and ``1000``
+    to the second (for a file system that reports whole seconds). The check cannot
+    tell apart two versions of a file written within one bucket with the same size.
+    """
+    if (
+        isinstance(mtime_resolution_ms, bool)
+        or not isinstance(mtime_resolution_ms, int)
+        or mtime_resolution_ms < 1
+    ):
+        raise ValueError(
+            f"mtime_resolution_ms must be a positive integer, got {mtime_resolution_ms!r}"
+        )
+    (ta, sa), (tb, sb) = _parse_identity(a), _parse_identity(b)
+    return sa == sb and ta // mtime_resolution_ms == tb // mtime_resolution_ms
 
 
 # --- paths ------------------------------------------------------------------------
@@ -111,7 +176,18 @@ def _local_root(path: str) -> str:
 
     if not isinstance(path, str) or not path.strip():
         raise ValueError("path must be a non-empty string")
-    local = to_local_path(path.strip())
+    text = path.strip()
+    if (
+        text == "/dbfs"
+        or text.startswith("/dbfs/")
+        or (text.startswith("dbfs:") and not text.startswith("dbfs:/Volumes/"))
+    ):
+        raise ZarrUnsupported(
+            f"{path!r} is a DBFS path; GeoBrix registers stores in place from Unity "
+            "Catalog Volumes.",
+            fix="pass the store's /Volumes/<catalog>/<schema>/<volume>/... path",
+        )
+    local = to_local_path(text)
     if _SCHEME.match(local):
         raise ZarrUnsupported(
             f"{path!r} is not a path GeoBrix can read in place: only paths on a Unity "
@@ -139,6 +215,26 @@ def _check_disjoint(base: str, overlay: str) -> None:
 # --- owner markers ----------------------------------------------------------------
 
 
+def qualified_table_name(spark, table: str) -> str:
+    """``catalog.schema.table`` in lower case, as the owner marker records it.
+
+    A name with fewer than three parts takes the session's current catalog and schema,
+    so ``t`` under two schemas is two owners, and ``T`` and ``t`` are one.
+    """
+    parts = _split_name(table)
+    if len(parts) < 3:
+        row = spark.sql("SELECT current_catalog(), current_schema()").first()
+        parts = [row[0], row[1]][: 3 - len(parts)] + parts
+    return ".".join(
+        p if _PLAIN_NAME.fullmatch(p) else "`" + p.replace("`", "``") + "`"
+        for p in (q.lower() for q in parts)
+    )
+
+
+def _marker_path(root: str) -> str:
+    return os.path.join(root, OWNER_MARKER)
+
+
 def _owner_error(marker: str, owner: dict, table: str) -> ZarrOwnershipError:
     return ZarrOwnershipError(
         f"{os.path.dirname(marker)} is already owned by table "
@@ -146,39 +242,6 @@ def _owner_error(marker: str, owner: dict, table: str) -> ZarrOwnershipError:
         fix=f"choose a different root for {table}, or drop {owner.get('table')} and "
         f"remove {marker} if that store is gone",
     )
-
-
-def write_owner_marker(root: str, table: str, kind: str) -> None:
-    """Claim ``root`` for ``table`` with the owner marker ``_gbx_store.json``.
-
-    ``kind`` is ``"overlay"`` (a registered store's overlay root) or ``"managed"`` (a
-    managed store's data root). Claiming a root the table already owns does nothing;
-    a root owned by another table, or by the same table as another kind, raises
-    ``ZarrOwnershipError``. The marker is created exclusively, so two tables racing for
-    one root cannot both win.
-    """
-    if kind not in _MARKER_KINDS:
-        raise ValueError(f"kind must be one of {_MARKER_KINDS}, got {kind!r}")
-    root = _local_root(root)
-    marker = os.path.join(root, OWNER_MARKER)
-    body = json.dumps(
-        {"table": table, "kind": kind, "format": FORMAT_VERSION}, sort_keys=True
-    ).encode()
-    os.makedirs(root, exist_ok=True)
-    try:
-        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
-    except FileExistsError:
-        _check_owner(marker, table, kind)
-        return
-    try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(body)
-    except BaseException:
-        try:
-            os.remove(marker)
-        except OSError:
-            pass
-        raise
 
 
 def _check_owner(marker: str, table: str, kind: str) -> None:
@@ -196,7 +259,86 @@ def _check_owner(marker: str, table: str, kind: str) -> None:
         raise _owner_error(marker, owner, table)
 
 
+def _precheck_owner(root: str, table: str, kind: str) -> None:
+    """Refuse a root another table owns, without claiming anything."""
+    marker = _marker_path(root)
+    if os.path.exists(marker):
+        _check_owner(marker, table, kind)
+
+
+def _remove_marker(marker: str) -> None:
+    try:
+        os.remove(marker)
+    except OSError:
+        pass
+
+
+def _claim_marker(root: str, table: str, kind: str) -> bool:
+    """Claim ``root`` for ``table``; ``True`` when this call created the marker."""
+    root = _local_root(root)
+    marker = _marker_path(root)
+    body = json.dumps(
+        {"table": table, "kind": kind, "format": FORMAT_VERSION}, sort_keys=True
+    ).encode()
+    cannot = f"GeoBrix cannot claim {root} with an owner marker"
+    fix = "check that the root is on a Volume you can write to, then try again"
+    try:
+        os.makedirs(root, exist_ok=True)
+        fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+    except FileExistsError:
+        _check_owner(marker, table, kind)
+        return False
+    except OSError as e:
+        raise ZarrError(f"{cannot} ({e}).", fix=fix) from e
+    try:
+        with os.fdopen(fd, "wb") as f:
+            f.write(body)
+        _check_owner(marker, table, kind)  # read it back: this call must own it
+    except OSError as e:
+        _remove_marker(marker)
+        raise ZarrError(f"{cannot} ({e}).", fix=fix) from e
+    except BaseException:
+        _remove_marker(marker)
+        raise
+    return True
+
+
+def _release_marker(root: str, table: str, kind: str) -> None:
+    """Remove a marker this call created, if it still names this table."""
+    marker = _marker_path(root)
+    try:
+        _check_owner(marker, table, kind)
+    except ZarrOwnershipError:
+        return
+    _remove_marker(marker)
+
+
+def write_owner_marker(root: str, table: str, kind: str) -> None:
+    """Claim ``root`` for ``table`` with the owner marker ``_gbx_store.json``.
+
+    ``table`` is the owner as ``qualified_table_name`` gives it. ``kind`` is
+    ``"overlay"`` (a registered store's overlay root) or ``"managed"`` (a managed
+    store's data root). Claiming a root the table already owns does nothing; a root owned
+    by another table, or by the same table as another kind, raises
+    ``ZarrOwnershipError``. The marker is created exclusively and read back, so two
+    tables racing for one root cannot both win.
+    """
+    if kind not in _MARKER_KINDS:
+        raise ValueError(f"kind must be one of {_MARKER_KINDS}, got {kind!r}")
+    _claim_marker(root, table, kind)
+
+
 # --- metadata ---------------------------------------------------------------------
+
+
+def _read_file(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
+def _list_dirs(path: str) -> list[str]:
+    with os.scandir(path) as it:
+        return sorted(e.name for e in it if e.is_dir())
 
 
 def _json(raw: bytes, key: str) -> dict:
@@ -222,167 +364,398 @@ def _root_array(root: str) -> ZarrUnsupported:
     )
 
 
-def read_base_metadata(path: str) -> tuple[dict[str, bytes], dict[str, ArrayMeta]]:
-    """The metadata documents of the store at ``path``, and its arrays.
+class _Reader:
+    """Reads a store's metadata documents, telling a missing file from a transient miss.
 
-    Returns ``(metas, arrays)``: ``metas`` maps each store key (``zarr.json``,
-    ``t2m/zarr.json``, ``t2m/.zarray``) to the document's bytes; ``arrays`` maps each
-    array's path to its ``ArrayMeta``. Zarr v3 stores contribute every ``zarr.json``.
-    Zarr v2 stores contribute ``.zgroup``, ``.zarray`` and ``.zattrs``, and ``.zmetadata``
-    when present: consolidated metadata is preferred, so the groups and arrays are taken
-    from it without walking the directories (the same choice zarr-python and xarray make).
-    A directory without a metadata document is not a node and is skipped.
+    ``named`` holds store keys the Spark listing says exist: reading one retries hard and
+    then fails. ``hinted`` holds keys the consolidated metadata names, which may be stale:
+    those are retried less and, when still missing, reported as absent.
     """
-    from zarr.core.buffer import default_buffer_prototype
-    from zarr.core.sync import sync
-    from zarr.storage import LocalStore
 
-    root = _local_root(path)
+    def __init__(self, root: str, named=(), hinted=()):
+        self.root = root
+        self.named = set(named)
+        self.hinted = set(hinted)
+
+    def _read(self, key: str, attempts: int) -> bytes | None:
+        path = os.path.join(self.root, key)
+
+        def attempt() -> bytes | None:
+            try:
+                return _read_file(path)  # a miss raises and is retried
+            except (IsADirectoryError, NotADirectoryError):
+                return None
+            except PermissionError as e:  # waiting will not help
+                raise ZarrError(
+                    f"cannot read {key} of {self.root}: permission denied.",
+                    fix="grant read access to the store, then register it again",
+                ) from e
+
+        try:
+            return _retry_transient(attempt, attempts=attempts)
+        except FileNotFoundError:
+            return None
+
+    def doc(self, key: str, *, optional: bool = False) -> bytes | None:
+        if key in self.named:
+            raw = self._read(key, 10)
+            if raw is None:
+                raise ZarrError(
+                    f"{key} is listed in {self.root} but could not be read.",
+                    fix="check that the Volume is mounted and readable, then register "
+                    "the store again",
+                )
+            return raw
+        if key in self.hinted:
+            return self._read(key, _HINTED_ATTEMPTS)
+        return self._read(key, 1 if optional else _PROBE_ATTEMPTS)
+
+    def probe(self, path: str, names) -> tuple[str, bytes] | None:
+        """The first of the node documents ``names`` that exists at ``path``."""
+        keys = [f"{path}/{n}" for n in names]
+        for n, key in zip(names, keys):
+            if key in self.named:
+                return n, self.doc(key)
+            if key in self.hinted:
+                raw = self.doc(key)
+                if raw is not None:
+                    return n, raw
+
+        def attempt() -> tuple[str, bytes]:
+            for n, key in zip(names, keys):
+                raw = self._read(key, 1)
+                if raw is not None:
+                    return n, raw
+            raise FileNotFoundError(path)
+
+        try:
+            return _retry_transient(attempt, attempts=_PROBE_ATTEMPTS)
+        except FileNotFoundError:
+            return None
+
+    def dirs(self, group: str) -> list[str]:
+        path = os.path.join(self.root, group) if group else self.root
+        try:
+            return _retry_transient(lambda: _list_dirs(path), attempts=_PROBE_ATTEMPTS)
+        except OSError as e:
+            raise ZarrError(
+                f"cannot list {path} ({e}).",
+                fix="check that the Volume is mounted and readable, then register the "
+                "store again",
+            ) from e
+
+
+def _root_info(root: str):
+    """The format of the store at ``root`` (2 or 3) and its root documents.
+
+    Raises for anything that is not a group-rooted Zarr store, before any listing.
+    """
     if not os.path.isdir(root):
         raise ZarrError(
             f"{root} is not a directory.",
             fix="pass the path of a Zarr store directory on a Volume",
         )
-    store = LocalStore(root, read_only=True)
-    proto = default_buffer_prototype()
+    reader = _Reader(root)
+    names = ("zarr.json", ".zgroup", _ZMETADATA, ".zarray")
 
-    def get(key: str) -> bytes | None:
-        def read() -> bytes | None:
-            buf = sync(store.get(key, proto))
-            return None if buf is None else buf.to_bytes()
-
-        return _retry_transient(read, attempts=3)
-
-    def children(prefix: str) -> list[str]:
-        async def names() -> list[str]:
-            return sorted([n async for n in store.list_dir(prefix)])
-
-        return _retry_transient(lambda: sync(names()), attempts=3)
-
-    def root_documents() -> dict[str, bytes | None]:
-        found = {n: get(n) for n in ("zarr.json", ".zgroup", _ZMETADATA, ".zarray")}
+    def attempt() -> dict[str, bytes | None]:
+        found = {n: reader._read(n, 1) for n in names}
         if all(v is None for v in found.values()):
             raise FileNotFoundError(root)
         return found
 
     try:
-        found = _retry_transient(root_documents, attempts=3)
+        found = _retry_transient(attempt, attempts=_PROBE_ATTEMPTS)
     except FileNotFoundError:
         raise ZarrError(
             f"{root} is not a Zarr store: it has no zarr.json, .zgroup or .zmetadata.",
             fix="pass the root of a Zarr v2 or v3 store (the directory holding zarr.json "
             "or .zgroup)",
         ) from None
-
     if found["zarr.json"] is not None:
-        return _walk_v3(root, found["zarr.json"], get, children)
-    if found[".zarray"] is not None and found[".zgroup"] is None:
-        raise _root_array(root)
-    if found[_ZMETADATA] is not None:
-        return _read_consolidated_v2(root, found[_ZMETADATA])
-    return _walk_v2(root, found[".zgroup"], get, children)
-
-
-def _walk_v3(root, root_doc, get, children):
-    doc = _json(root_doc, "zarr.json")
-    if doc.get("zarr_format") != 3:
-        raise ZarrUnsupported(
-            f"zarr.json of {root} has zarr_format {doc.get('zarr_format')!r}.",
-            fix="register a Zarr v3 store with a zarr_format 3 zarr.json",
-        )
-    if doc.get("node_type") == "array":
-        raise _root_array(root)
-    metas: dict[str, bytes] = {"zarr.json": root_doc}
-    arrays: dict[str, ArrayMeta] = {}
-    queue = [""]
-    while queue:
-        group = queue.pop(0)
-        for name in children(group):
-            if name in _DOC_NAMES:
-                continue
-            path = f"{group}/{name}" if group else name
-            raw = get(f"{path}/zarr.json")
-            if raw is None:  # a stray file, or a directory that holds no node
-                continue
-            node = _json(raw, f"{path}/zarr.json")
-            kind = node.get("node_type")
-            if kind == "group":
-                metas[f"{path}/zarr.json"] = raw
-                queue.append(path)
-            elif kind == "array":
-                metas[f"{path}/zarr.json"] = raw
-                arrays[path] = parse_v3(path, node)
-            else:
-                raise ZarrUnsupported(
-                    f"{path}/zarr.json has node_type {kind!r}, expected 'group' or 'array'.",
-                    fix="repair or rewrite the store's metadata, then register it again",
-                )
-    return metas, arrays
-
-
-def _walk_v2(root, root_group, get, children):
-    if root_group is None:
+        doc = _json(found["zarr.json"], "zarr.json")
+        if doc.get("zarr_format") != 3:
+            raise ZarrUnsupported(
+                f"zarr.json of {root} has zarr_format {doc.get('zarr_format')!r}.",
+                fix="register a Zarr v3 store with a zarr_format 3 zarr.json",
+            )
+        if doc.get("node_type") == "array":
+            raise _root_array(root)
+        return 3, found
+    if found[".zgroup"] is None:
+        if found[".zarray"] is not None:
+            raise _root_array(root)
         raise ZarrError(
-            f"{root} is not a Zarr store: it has no zarr.json, .zgroup or .zmetadata.",
-            fix="pass the root of a Zarr v2 or v3 store",
+            f"{root} is not a Zarr store: it has a .zmetadata but no .zgroup.",
+            fix="pass the root of a Zarr v2 or v3 store (the directory holding zarr.json "
+            "or .zgroup)",
         )
-    metas: dict[str, bytes] = {".zgroup": root_group}
-    attrs = get(".zattrs")
-    if attrs is not None:
-        metas[".zattrs"] = attrs
+    return 2, found
+
+
+def _add_array(path, parse, arrays, unsupported) -> None:
+    try:
+        arrays[path] = parse()
+    except ZarrUnsupported as e:
+        unsupported[path] = e.message
+    except (KeyError, TypeError, ValueError, IndexError) as e:
+        raise ZarrUnsupported(
+            f"the metadata of array {path!r} is malformed ({type(e).__name__}: {e}).",
+            fix="repair or rewrite the array's metadata, then register the store again",
+        ) from None
+
+
+def _nodes_by_parent(keys) -> dict[str, set[str]]:
+    """Child node names of each group, from the store keys of node documents."""
+    out: dict[str, set[str]] = {}
+    for key in keys:
+        node, _, doc = key.rpartition("/")
+        if doc in _NODE_DOCS and node:
+            parent, _, name = node.rpartition("/")
+            out.setdefault(parent, set()).add(name)
+    return out
+
+
+def _walk(fmt, reader, pool):
+    names = ("zarr.json",) if fmt == 3 else (".zarray", ".zgroup")
+    by_parent = _nodes_by_parent(reader.named | reader.hinted)
+    metas: dict[str, bytes] = {}
     arrays: dict[str, ArrayMeta] = {}
+    unsupported: dict[str, str] = {}
+
+    def look(task):
+        path = task
+        hit = reader.probe(path, names)
+        zattrs = None
+        if hit is not None and fmt == 2:
+            zattrs = reader.doc(f"{path}/.zattrs", optional=True)
+        return path, hit, zattrs
+
     queue = [""]
     while queue:
         group = queue.pop(0)
-        for name in children(group):
-            if name in _DOC_NAMES:
+        # the directory listing, and any child a listing or the consolidated metadata names
+        children = set(reader.dirs(group)) | by_parent.get(group, set())
+        paths = [
+            f"{group}/{c}" if group else c for c in sorted(children - set(_DOC_NAMES))
+        ]
+        for path, hit, zattrs in pool.map(look, paths):
+            if hit is None:  # a stray file, or a directory that holds no node
                 continue
-            path = f"{group}/{name}" if group else name
-            zarray = get(f"{path}/.zarray")
-            zgroup = None if zarray is not None else get(f"{path}/.zgroup")
-            if zarray is None and zgroup is None:  # a stray file, or no node
+            doc, raw = hit
+            key = f"{path}/{doc}"
+            if fmt == 3:
+                node = _json(raw, key)
+                kind = node.get("node_type")
+                if kind == "group":
+                    metas[key] = raw
+                    queue.append(path)
+                elif kind == "array":
+                    metas[key] = raw
+                    _add_array(path, lambda: parse_v3(path, node), arrays, unsupported)
+                else:
+                    raise ZarrUnsupported(
+                        f"{key} has node_type {kind!r}, expected 'group' or 'array'.",
+                        fix="repair or rewrite the store's metadata, then register it "
+                        "again",
+                    )
                 continue
-            zattrs = get(f"{path}/.zattrs")
+            metas[key] = raw
             if zattrs is not None:
                 metas[f"{path}/.zattrs"] = zattrs
-            if zarray is not None:
-                metas[f"{path}/.zarray"] = zarray
-                arrays[path] = parse_v2(
-                    path,
-                    _json(zarray, f"{path}/.zarray"),
-                    _json(zattrs, f"{path}/.zattrs") if zattrs is not None else {},
-                )
-            else:
-                metas[f"{path}/.zgroup"] = zgroup
+            if doc == ".zgroup":
                 queue.append(path)
-    return metas, arrays
+                continue
+            _add_array(
+                path,
+                lambda: parse_v2(
+                    path,
+                    _json(raw, key),
+                    _json(zattrs, f"{path}/.zattrs") if zattrs is not None else {},
+                ),
+                arrays,
+                unsupported,
+            )
+    return metas, arrays, unsupported
 
 
-def _read_consolidated_v2(root, raw):
-    doc = _json(raw, _ZMETADATA)
-    inner = doc.get("metadata")
-    if doc.get("zarr_consolidated_format") != 1 or not isinstance(inner, dict):
-        raise ZarrUnsupported(
-            f"{_ZMETADATA} of {root} is not Zarr v2 consolidated metadata (format 1).",
-            fix=f"remove {_ZMETADATA} so the store's own documents are read, or "
-            "consolidate it again",
+def _loads(raw: bytes):
+    try:
+        return json.loads(raw)
+    except ValueError:
+        return raw
+
+
+def _consolidated_v2(raw: bytes):
+    """``(documents, problem)`` of a ``.zmetadata``: the parsed documents or why not."""
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        return None, "it is not valid JSON"
+    inner = doc.get("metadata") if isinstance(doc, dict) else None
+    if not isinstance(inner, dict) or doc.get("zarr_consolidated_format") != 1:
+        return None, "it is not Zarr v2 consolidated metadata (format 1)"
+    return inner, None
+
+
+def _disagreements_v2(metas, inner) -> list[str]:
+    actual = {
+        k: _loads(v)
+        for k, v in metas.items()
+        if k.rpartition("/")[2] in (".zgroup", ".zarray", ".zattrs")
+    }
+    out = [
+        f"{k} differs"
+        for k in sorted(inner.keys() & actual.keys())
+        if inner[k] != actual[k]
+    ]
+    out += [f"{k} is only in .zmetadata" for k in sorted(inner.keys() - actual.keys())]
+    out += [f"{k} is not in .zmetadata" for k in sorted(actual.keys() - inner.keys())]
+    return out
+
+
+def _disagreements_v3(metas, root_doc) -> list[str]:
+    block = root_doc.get("consolidated_metadata")
+    if block is None:
+        return []
+    inner = block.get("metadata") if isinstance(block, dict) else None
+    if not isinstance(inner, dict):
+        return ["zarr.json has a consolidated_metadata block that is not readable"]
+    actual = {
+        k.rpartition("/")[0]: _loads(v)
+        for k, v in metas.items()
+        if k.endswith("/zarr.json")
+    }
+    out = []
+    for path in sorted(inner.keys() & actual.keys()):
+        a, b = inner[path], actual[path]
+        if (
+            isinstance(a, dict)
+            and isinstance(b, dict)
+            and a.get("node_type") == "group"
+        ):
+            same = (
+                a.get("attributes") == b.get("attributes")
+                and b.get("node_type") == "group"
+            )
+        else:
+            same = a == b
+        if not same:
+            out.append(f"{path}/zarr.json differs")
+    out += [
+        f"{p}/zarr.json is only in the consolidated metadata"
+        for p in sorted(inner.keys() - actual.keys())
+    ]
+    out += [
+        f"{p}/zarr.json is not in the consolidated metadata"
+        for p in sorted(actual.keys() - inner.keys())
+    ]
+    return out
+
+
+def read_base_metadata(
+    path: str, *, listing: pa.Table | None = None
+) -> tuple[dict[str, bytes], dict[str, ArrayMeta], dict[str, str]]:
+    """The metadata documents of the store at ``path``, its arrays, and the ones it cannot decode.
+
+    Returns ``(metas, arrays, unsupported)``. ``metas`` maps each store key
+    (``zarr.json``, ``t2m/zarr.json``, ``t2m/.zarray``) to the document's bytes, for
+    every group and array. ``arrays`` maps the path of each array GeoBrix can decode to
+    its ``ArrayMeta``. ``unsupported`` maps the path of each array it cannot (for
+    example a string coordinate) to the reason; its documents are in ``metas`` all the
+    same.
+
+    Zarr v3 stores contribute every ``zarr.json``; Zarr v2 stores ``.zgroup``,
+    ``.zarray`` and ``.zattrs``, plus ``.zmetadata`` when present. The documents of each
+    node are the truth: consolidated metadata (``.zmetadata``, or the
+    ``consolidated_metadata`` of the root ``zarr.json``) is kept as it is and compared
+    with them, and a disagreement is logged as a warning.
+
+    ``listing`` is an optional Arrow table with a ``relpath`` column, the Spark listing
+    of the store. Every ``zarr.json`` it holds is a document that must exist, so a
+    transient miss on one is retried rather than dropping the array.
+    """
+    root = _local_root(path)
+    fmt, found = _root_info(root)
+    named: set[str] = set()
+    hinted: set[str] = set()
+    inner, problem = None, None
+    if fmt == 3 and listing is not None:
+        rel = listing["relpath"]
+        keep = pc.or_(pc.equal(rel, "zarr.json"), pc.ends_with(rel, "/zarr.json"))
+        named = set(rel.filter(keep).to_pylist())
+    if fmt == 2 and found[_ZMETADATA] is not None:
+        inner, problem = _consolidated_v2(found[_ZMETADATA])
+        hinted = set(inner or ())
+    reader = _Reader(root, named, hinted)
+
+    with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
+        metas, arrays, unsupported = _walk(fmt, reader, pool)
+    if fmt == 3:
+        metas["zarr.json"] = found["zarr.json"]
+        problems = _disagreements_v3(metas, _json(found["zarr.json"], "zarr.json"))
+        which = "consolidated_metadata of zarr.json"
+    else:
+        metas[".zgroup"] = found[".zgroup"]
+        zattrs = reader.doc(".zattrs", optional=True)
+        if zattrs is not None:
+            metas[".zattrs"] = zattrs
+        if found[_ZMETADATA] is not None:
+            metas[_ZMETADATA] = found[_ZMETADATA]
+            problems = (
+                [f".zmetadata is not used: {problem}"]
+                if problem
+                else _disagreements_v2(metas, inner)
+            )
+        else:
+            problems = []
+        which = ".zmetadata"
+    if problems:
+        _LOG.warning(
+            "%s: the %s disagrees with the store's own documents, which are used (%s)",
+            root,
+            which,
+            _examples(problems),
         )
-    metas = {_ZMETADATA: raw}
-    for key in sorted(inner):
-        metas[key] = json.dumps(inner[key]).encode()
-    arrays: dict[str, ArrayMeta] = {}
-    for key in sorted(inner):
-        prefix, _, name = key.rpartition("/")
-        if name != ".zarray":
-            continue
-        if not prefix:
-            raise _root_array(root)
-        zattrs = inner.get(f"{prefix}/.zattrs") or {}
-        arrays[prefix] = parse_v2(prefix, inner[key], zattrs)
-    return metas, arrays
+    return dict(sorted(metas.items())), arrays, unsupported
 
 
-def _metadata_rows(metas: dict[str, bytes], arrays, write_id: str) -> pa.Table:
+# --- layouts ----------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """What decides which objects are an array's chunks: nothing about its dtype."""
+
+    encoding: KeyEncoding
+    ndim: int
+    sharded: bool
+
+
+def _layout_of(meta: ArrayMeta) -> _Layout:
+    return _Layout(meta.key_encoding, len(meta.shape), meta.shard is not None)
+
+
+def _layout_of_unsupported(path: str, metas: dict[str, bytes]) -> _Layout | None:
+    """The layout of an array GeoBrix cannot decode, if its grid, key encoding and shard
+    spec parse. They do not depend on the dtype, so the array is parsed again as bytes.
+    """
+    try:
+        if f"{path}/zarr.json" in metas:
+            doc = json.loads(metas[f"{path}/zarr.json"])
+            probe = parse_v3(path, {**doc, "data_type": "uint8", "fill_value": 0})
+        else:
+            zarray = json.loads(metas[f"{path}/.zarray"])
+            zattrs = json.loads(metas.get(f"{path}/.zattrs", b"{}"))
+            probe = parse_v2(
+                path, {**zarray, "dtype": "|u1", "order": "C", "fill_value": 0}, zattrs
+            )
+    except (ZarrUnsupported, KeyError, TypeError, ValueError, IndexError):
+        return None
+    return _layout_of(probe)
+
+
+def _metadata_rows(metas: dict[str, bytes], array_names, write_id: str) -> pa.Table:
     """One row per metadata document: ``array`` is its node's path, ``key`` the file name."""
     recs = []
     for store_key in sorted(metas):
@@ -396,7 +769,7 @@ def _metadata_rows(metas: dict[str, bytes], arrays, write_id: str) -> pa.Table:
             ) from None
         recs.append(
             {
-                "kind": "array" if prefix in arrays else "group",
+                "kind": "array" if prefix in array_names else "group",
                 "array": prefix or None,
                 "key": name,
                 "origin": "external",
@@ -416,17 +789,21 @@ def _hidden_path(name: str) -> bool:
     return any(part.startswith((".", "_")) for part in name.split("/"))
 
 
-def _scan(spark, root: str) -> pa.Table:
-    """Every object Spark's file listing sees under ``root``, without reading any content."""
+def _scan(spark, base: str, roots=None) -> pa.Table:
+    """Every object Spark's file listing sees under ``roots`` (default ``base``).
+
+    Content is never read. ``relpath`` is relative to ``base``, which must contain every root.
+    """
     from pyspark.sql import functions as F
 
     from databricks.labs.gbx.ds._listing import to_local_path, to_spark_uri
 
-    uri = _GLOB_CHARS.sub(r"\\\1", to_spark_uri(root))  # load() treats a path as a glob
+    # load() treats a path as a glob
+    uris = [_GLOB_CHARS.sub(r"\\\1", to_spark_uri(r)) for r in (roots or [base])]
     listed = (
         spark.read.format("binaryFile")
         .option("recursiveFileLookup", "true")
-        .load(uri)
+        .load(uris if len(uris) > 1 else uris[0])
         .select(
             F.col("path"),
             F.col("length"),
@@ -437,13 +814,13 @@ def _scan(spark, root: str) -> pa.Table:
     local = pa.array(
         [to_local_path(p) for p in listed["path"].to_pylist()], pa.string()
     )
-    prefix = root.rstrip("/") + "/"
+    prefix = base.rstrip("/") + "/"
     inside = np.asarray(pc.starts_with(local, prefix))
     if not inside.all():
         outside = local.filter(pa.array(~inside))[0].as_py()
         raise ZarrError(
-            f"the listing of {root} returned {outside!r}, which is not under it.",
-            fix="register the store by a path without symbolic links",
+            f"the listing of {base} returned {outside!r}, which is not under it.",
+            fix="register the store by its /Volumes/... path, without symbolic links",
         )
     return pa.table(
         {
@@ -455,73 +832,62 @@ def _scan(spark, root: str) -> pa.Table:
     )
 
 
-def _list_on_driver(root: str, prefixes) -> pa.Table:
-    """Objects under ``prefixes`` (including hidden names), listed and stat-ed on the driver."""
-    from databricks.labs.gbx.ds._listing import list_files
+def _with_hidden(spark, base: str, visible: pa.Table, hidden_prefixes) -> pa.Table:
+    """``visible`` plus the objects of the arrays Spark's listing skips, sorted by path.
 
-    paths = [
-        p
-        for prefix in prefixes
-        for p in list_files(os.path.join(root, prefix), raise_on_empty=False)
-    ]
-
-    def stat(p: str) -> tuple[int, int]:
-        st = _retry_transient(lambda: os.stat(p))
-        return st.st_size, st.st_mtime_ns // 1_000_000
-
-    with ThreadPoolExecutor(max_workers=min(16, max(1, len(paths)))) as pool:
-        stats = list(pool.map(stat, paths))
-    skip = len(root.rstrip("/")) + 1
-    return pa.table(
-        {
-            "relpath": [p[skip:] for p in paths],
-            "length": [s[0] for s in stats],
-            "mtime_ms": [s[1] for s in stats],
-        },
-        schema=_OBJECT_SCHEMA,
-    )
-
-
-def list_objects(spark, path: str, *, hidden_prefixes=()) -> pa.Table:
-    """The objects under the store at ``path``: ``relpath``, ``length``, ``mtime_ms``.
-
-    ``relpath`` is relative to the store root and sorted; ``mtime_ms`` is the
-    modification time in whole milliseconds (the floor), which together with ``length``
-    makes an object's identity (``"<mtime_ms>:<length>"``). Spark's listing skips names
-    starting with ``.`` or ``_``, including hidden metadata files; ``hidden_prefixes``
-    names array paths that have such a component, whose objects are listed on the
-    driver instead.
+    Each such array's directory is scanned as a root of its own: Spark only skips hidden
+    names *below* a root, so its objects are listed, with the same identity source.
     """
-    root = _local_root(path)
-    objects = _scan(spark, root)
+    objects = visible
     if hidden_prefixes:
-        extra = _list_on_driver(root, sorted(hidden_prefixes))
+        extra = _scan(
+            spark, base, [os.path.join(base, p) for p in sorted(hidden_prefixes)]
+        )
         fresh = pc.invert(pc.is_in(extra["relpath"], value_set=objects["relpath"]))
         objects = pa.concat_tables([objects, extra.filter(fresh)])
     return objects.sort_by("relpath")
 
 
+def list_objects(spark, path: str, *, hidden_prefixes=None) -> pa.Table:
+    """The objects under the store at ``path``: ``relpath``, ``length``, ``mtime_ms``.
+
+    ``relpath`` is relative to the store root and sorted; ``mtime_ms`` is the
+    modification time in whole milliseconds (the floor), which together with ``length``
+    makes an object's identity (``identity_of``). Spark's listing skips names starting
+    with ``.`` or ``_``, so an array whose path has such a component is listed by a scan
+    of its own. ``hidden_prefixes`` names those arrays; ``None`` (the default) finds them
+    from the store's metadata, so a listing is never missing an array.
+    """
+    root = _local_root(path)
+    visible = _scan(spark, root)
+    if hidden_prefixes is None:
+        _, arrays, unsupported = read_base_metadata(root, listing=visible)
+        hidden_prefixes = [a for a in (*arrays, *unsupported) if _hidden_path(a)]
+    return _with_hidden(spark, root, visible, hidden_prefixes)
+
+
 # --- rows -------------------------------------------------------------------------
 
 
-def _key_pattern(meta: ArrayMeta) -> str:
-    """A regular expression for the canonical chunk (or shard) keys of ``meta``'s array."""
-    enc, ndim = meta.key_encoding, len(meta.shape)
-    if ndim == 0:
+def _key_pattern(layout: _Layout) -> str:
+    """A regular expression for the canonical chunk (or shard) keys of an array."""
+    enc = layout.encoding
+    if layout.ndim == 0:
         return "^" + re.escape(enc.prefix or "0") + "$"
     head = re.escape(enc.prefix + enc.separator) if enc.prefix else ""
-    return "^" + head + re.escape(enc.separator).join([_NUM] * ndim) + "$"
+    return "^" + head + re.escape(enc.separator).join([_NUM] * layout.ndim) + "$"
 
 
-def _chunk_rows(objects: pa.Table, arrays, write_id: str) -> tuple[pa.Table, dict]:
-    """Manifest rows for the objects of ``arrays``, and what was left out.
+def _chunk_rows(objects: pa.Table, layouts, write_id: str) -> tuple[pa.Table, dict]:
+    """Manifest rows for the objects of the arrays in ``layouts``, and what was left out.
 
     A sharded array's objects become ``shard`` rows (``shard_key`` is the key); any
     other array's become ``chunk`` rows (``shard_key`` is NULL). Only canonical chunk
     keys count, so a stray file inside an array's directory is skipped, as is a chunk
     key whose object has zero bytes: an empty file is not a chunk, and a ``length=0``
     row would make the whole store unreadable (the chunk reads as the fill value).
-    Returns ``(rows, counts)`` with the number of rows and, for each thing left out
+    An array whose layout is ``None`` (its grid or key encoding cannot be read) gets no
+    rows. Returns ``(rows, counts)`` with the number of rows and, for each thing left out
     (``empty`` chunk objects, ``stray`` objects), how many and a few names.
     """
     n = objects.num_rows
@@ -529,8 +895,10 @@ def _chunk_rows(objects: pa.Table, arrays, write_id: str) -> tuple[pa.Table, dic
     size = np.asarray(length)
     claimed = np.zeros(n, dtype=bool)  # has a chunk key of an array (empty or not)
     parts = []
-    for name in sorted(arrays):
-        meta = arrays[name]
+    for name in sorted(layouts):
+        layout = layouts[name]
+        if layout is None:
+            continue
         prefix = name + "/"
         under = np.asarray(pc.starts_with(relpath, prefix))
         if not under.any():
@@ -538,7 +906,7 @@ def _chunk_rows(objects: pa.Table, arrays, write_id: str) -> tuple[pa.Table, dic
         idx = np.flatnonzero(under)
         sub = objects.take(pa.array(idx))
         key = pc.utf8_slice_codeunits(sub["relpath"], len(prefix))
-        is_chunk = np.asarray(pc.match_substring_regex(key, _key_pattern(meta)))
+        is_chunk = np.asarray(pc.match_substring_regex(key, _key_pattern(layout)))
         claimed[idx[is_chunk]] = True
         keep = is_chunk & (size[idx] > 0)
         if not keep.any():
@@ -546,18 +914,18 @@ def _chunk_rows(objects: pa.Table, arrays, write_id: str) -> tuple[pa.Table, dic
         kept = sub.filter(pa.array(keep))
         key = pc.utf8_slice_codeunits(kept["relpath"], len(prefix))
         count = kept.num_rows
-        sharded = meta.shard is not None
         parts.append(
             pa.Table.from_arrays(
                 [
-                    pa.repeat("shard" if sharded else "chunk", count),
+                    pa.repeat("shard" if layout.sharded else "chunk", count),
                     pa.repeat(name, count),
                     key,
-                    key if sharded else pa.nulls(count, pa.string()),
+                    key if layout.sharded else pa.nulls(count, pa.string()),
                     kept["relpath"],
                     pa.array(np.zeros(count, dtype=np.int64)),
                     kept["length"],
                     pa.repeat("external", count),
+                    # the same text as identity_of
                     pc.binary_join_element_wise(
                         pc.cast(kept["mtime_ms"], pa.string()),
                         pc.cast(kept["length"], pa.string()),
@@ -632,6 +1000,10 @@ def gbx_zarr_register(
     ``"auto"`` or ``"fuse"`` (path strings relative to the store root); ``retain`` is how
     long superseded versions stay readable.
 
+    An array GeoBrix cannot decode (a string coordinate, say) is registered like any
+    other, objects and documents, and listed under ``unsupported`` in the commit's
+    metadata; reading it raises, and reading the rest works.
+
     Returns the table's first store version, the one that holds the registered rows.
     """
     if writable and not overlay_root:
@@ -652,25 +1024,34 @@ def gbx_zarr_register(
     overlay = _local_root(overlay_root) if overlay_root else None
     if overlay:
         _check_disjoint(base, overlay)
-    if spark.catalog.tableExists(table):
+    if _table_exists(spark, table):
         raise ZarrOwnershipError(
             f"{table} already exists",
             fix="choose a new table name, or read or write the existing store",
         )
+    owner = qualified_table_name(spark, table)
+    if overlay:
+        _precheck_owner(overlay, owner, "overlay")
+    _root_info(base)  # not a store: refuse before the (possibly long) listing
 
     started = time.monotonic()
+    _say(f"listing the objects of {base}")
+    visible = _scan(spark, base)
     _say(f"reading the metadata of {base}")
-    metas, arrays = read_base_metadata(base)
-    groups = len({k.rpartition("/")[0] for k in metas} - set(arrays))
-    _say(f"{len(arrays)} array(s) found; listing the store's objects")
-    listed = time.monotonic()
-    objects = list_objects(
-        spark, base, hidden_prefixes=[a for a in arrays if _hidden_path(a)]
+    metas, arrays, unsupported = read_base_metadata(base, listing=visible)
+    names = set(arrays) | set(unsupported)
+    hidden = [a for a in names if _hidden_path(a)]
+    _say(
+        f"{len(arrays)} array(s) found"
+        + (f"; {len(hidden)} need a scan of their own" if hidden else "")
     )
-    _say(f"listed {objects.num_rows} object(s) in {time.monotonic() - listed:.1f}s")
+    objects = _with_hidden(spark, base, visible, hidden)
+    _say(f"listed {objects.num_rows} object(s) in {time.monotonic() - started:.1f}s")
 
     write_id = uuid.uuid4().hex
-    chunk_rows, counts = _chunk_rows(objects, arrays, write_id)
+    layouts = {a: _layout_of(m) for a, m in arrays.items()}
+    layouts.update({a: _layout_of_unsupported(a, metas) for a in unsupported})
+    chunk_rows, counts = _chunk_rows(objects, layouts, write_id)
     if counts["empty"]:
         _LOG.warning(
             "%s: %d zero-byte object(s) were not registered, so their chunks read as "
@@ -686,36 +1067,56 @@ def gbx_zarr_register(
             counts["stray"],
             _examples(counts["stray_examples"]),
         )
-    rows = pa.concat_tables([_metadata_rows(metas, arrays, write_id), chunk_rows])
+    if unsupported:
+        _LOG.warning(
+            "%s: %d array(s) use features GeoBrix cannot decode and are registered "
+            "without being readable: %s",
+            base,
+            len(unsupported),
+            _examples(f"{a} ({r})" for a, r in sorted(unsupported.items())),
+        )
+        _say(
+            f"{len(unsupported)} array(s) cannot be decoded: {_examples(sorted(unsupported))}"
+        )
+    rows = pa.concat_tables([_metadata_rows(metas, names, write_id), chunk_rows])
     commit_meta = {"mode": "register", "objects": counts["objects"]}
     if counts["empty"] or counts["stray"]:
         commit_meta["skipped"] = {
             "empty": counts["empty"],
             "stray": counts["stray"],
         }
+    if unsupported:
+        commit_meta["unsupported"] = dict(sorted(unsupported.items()))
 
-    if overlay:
-        write_owner_marker(overlay, table, "overlay")
-    create_manifest(
-        spark,
-        table,
-        StoreProps(
-            kind="registered",
-            root=base,
-            overlay_root=overlay,
-            writable=writable,
-            file_mode=mode,
-            retain=retain,
-        ),
-    )
-    _say(f"committing {rows.num_rows} row(s) to {table}")
+    claimed = made = False
     try:
+        if overlay:
+            claimed = _claim_marker(overlay, owner, "overlay")
+        create_manifest(
+            spark,
+            table,
+            StoreProps(
+                kind="registered",
+                root=base,
+                overlay_root=overlay,
+                writable=writable,
+                file_mode=mode,
+                retain=retain,
+            ),
+        )
+        made = True
+        _say(f"committing {rows.num_rows} row(s) to {table}")
         version = commit(spark, table, rows, write_id=write_id, meta=commit_meta)
     except BaseException:
-        _discard(spark, table, write_id)
+        if made:
+            _discard(spark, table, write_id)
+        if claimed:
+            _release_marker(overlay, owner, "overlay")
         raise
+    groups = len({k.rpartition("/")[0] for k in metas} - names)
     _say(
         f"registered {table} at version {version}: {counts['objects']} object(s), "
-        f"{len(arrays)} array(s), {groups} group(s) in {time.monotonic() - started:.1f}s"
+        f"{len(arrays) + len(unsupported)} array(s), {groups} group(s) in "
+        f"{time.monotonic() - started:.1f}s"
     )
     return version

@@ -120,7 +120,8 @@ class VirtualShard:
     holding that chunk's bytes, or to ``None`` for a chunk the shard does not hold. The
     chunks are laid out in inner-index order; the index sits after them
     (``index_location="end"``) or before them (``"start"``), and every chunk the shard
-    lacks is ``(MISSING, MISSING)`` in it.
+    lacks is ``(MISSING, MISSING)`` in it. ``chunks`` stays readable on the object: it is
+    where each inner chunk lives, for a reader that fetches chunks without the shard.
     """
 
     def __init__(
@@ -139,6 +140,7 @@ class VirtualShard:
             raise ValueError(
                 f"chunk indexes {bad} are outside a shard of {n_chunks} chunks"
             )
+        self.chunks = dict(chunks)
         index_size = index_nbytes(n_chunks, index_codecs)
         data_start = index_size if index_location == "start" else 0
         entries = np.full((n_chunks, 2), MISSING, dtype=np.uint64)

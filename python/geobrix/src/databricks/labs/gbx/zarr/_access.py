@@ -53,6 +53,16 @@ def _coalesce(
     return spans
 
 
+def _held_path(fd: int) -> str:
+    """The path of the file an open descriptor holds, as the kernel reports it.
+
+    The link target is already fully resolved, so it is read with one ``readlink`` rather
+    than walked with ``realpath`` (an ``lstat`` per path component, each a round trip on a
+    FUSE mount).
+    """
+    return os.readlink(f"{_PROC_FD}/{fd}")
+
+
 def _within(path: str, root: str) -> bool:
     """``path`` is ``root`` or below it (a whole-component test, not a prefix test)."""
     return os.path.commonpath([path, root]) == root
@@ -186,7 +196,7 @@ class FuseRangeReader:
         fd = os.open(path, os.O_RDONLY)
         try:
             if _CHECK_DESCRIPTORS:
-                held = os.path.realpath(f"{_PROC_FD}/{fd}")
+                held = _held_path(fd)
                 # an absolute path is the file the descriptor really holds
                 if os.path.isabs(held) and not _within(held, real_root):
                     raise ZarrStoreDrift(

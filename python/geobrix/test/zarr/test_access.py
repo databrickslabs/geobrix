@@ -171,13 +171,9 @@ def test_an_unusable_file_value_is_drift(vol, file):
 def test_the_real_path_of_a_file_is_looked_up_once(vol, monkeypatch):
     calls = []
     real = os.path.realpath
-
-    def counting(p, **k):
-        if not str(p).startswith("/proc/"):  # the descriptor check is not cached
-            calls.append(p)
-        return real(p, **k)
-
-    monkeypatch.setattr(os.path, "realpath", counting)
+    monkeypatch.setattr(
+        os.path, "realpath", lambda p, **k: calls.append(p) or real(p, **k)
+    )
     reader = FuseRangeReader(str(vol / "store"))
     reader.read([Region("x.bin", 0, 4)])
     first = len(calls)

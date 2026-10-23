@@ -167,14 +167,14 @@ class ManifestStore(Store):
         self._virtual: OrderedDict[str, VirtualShard] = OrderedDict()
         self._lock = threading.Lock()
         self._closed = False
+        self._workers = min(32, (os.cpu_count() or 1) * 4)
         self._pool = ThreadPoolExecutor(
-            max_workers=min(32, (os.cpu_count() or 1) * 4),
-            thread_name_prefix="gbx-zarr-read",
+            max_workers=self._workers, thread_name_prefix="gbx-zarr-read"
         )
         self._finalizer = weakref.finalize(self, self._pool.shutdown, wait=False)
 
     def __getstate__(self) -> dict:
-        drop = ("_pool", "_finalizer", "_lock", "_virtual")
+        drop = ("_pool", "_finalizer", "_lock", "_virtual", "_workers")
         return {k: v for k, v in self.__dict__.items() if k not in drop}
 
     def __setstate__(self, state: dict) -> None:
@@ -284,6 +284,38 @@ class ManifestStore(Store):
                 )
         chunks.update(rows.chunks)  # an override, or None: the chunk is deleted
         return VirtualShard(n, chunks, spec.index_codecs, spec.index_location)
+
+    def chunk_regions(
+        self, name: str, coords: list[tuple[int, ...]]
+    ) -> list[Region | None]:
+        """Where each (inner) chunk of array ``name`` lives, in the order of ``coords``.
+
+        ``None`` marks a chunk the store does not hold (never written, or deleted): it
+        reads as the fill value. For a sharded array this reads the index of every shard
+        the chunks lie in, in parallel; for an unsharded one it only looks rows up. A
+        reader that fetches chunk bytes itself, not through zarr's store protocol, starts
+        here.
+        """
+        meta = self._arrays[name]
+        if meta.shard is None:
+            return [
+                self._chunks.get(f"{name}/{meta.key_encoding.chunk_key(c)}")
+                for c in coords
+            ]
+        cps = meta.shard.cps
+        shard_keys = [meta.key_encoding.chunk_key(shard_of(c, cps)) for c in coords]
+        wanted = [k for k in dict.fromkeys(shard_keys) if f"{name}/{k}" in self._shards]
+        if len(wanted) > 1:
+            built = self._executor().map(
+                lambda k: self._virtual_shard(f"{name}/{k}"), wanted
+            )
+        else:
+            built = (self._virtual_shard(f"{name}/{k}") for k in wanted)
+        shards = dict(zip(wanted, built))
+        return [
+            None if k not in shards else shards[k].chunks.get(inner_index(c, cps))
+            for c, k in zip(coords, shard_keys)
+        ]
 
     def _fetch(self, key: str, byte_range: ByteRequest | None) -> bytes | None:
         """The bytes of a chunk or shard key (blocking); ``None`` when it does not exist."""

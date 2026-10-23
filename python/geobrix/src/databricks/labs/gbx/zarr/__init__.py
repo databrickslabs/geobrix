@@ -27,6 +27,7 @@ _EXPORTS = {
     ),
     "ZarrUnsupported": ("databricks.labs.gbx.zarr.errors", "ZarrUnsupported"),
     "ZarrOwnershipError": ("databricks.labs.gbx.zarr.errors", "ZarrOwnershipError"),
+    "gbx_zarr_register": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_register"),
 }
 
 __all__ = list(_EXPORTS)

@@ -6,3 +6,7 @@ The functions are added to this module as each capability lands: ``gbx_zarr_read
 ``gbx_zarr_history``, ``gbx_zarr_restore`` and ``gbx_zarr_export``. Import them from
 ``databricks.labs.gbx.zarr``. They run in the light tier and need no JAR.
 """
+
+from databricks.labs.gbx.zarr._register import gbx_zarr_register
+
+__all__ = ["gbx_zarr_register"]

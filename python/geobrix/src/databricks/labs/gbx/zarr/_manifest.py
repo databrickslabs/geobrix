@@ -686,6 +686,12 @@ def _commit_source(rows: pa.Table, write_id: str, meta: dict) -> pa.Table:
 def _with_view(spark, data: pa.Table, schema: pa.Schema, run):
     """Run ``run(view_name)`` over ``data`` exposed as a temp view; always drop it."""
     view = f"_gbx_zarr_src_{uuid.uuid4().hex}"
+    # createDataFrame stops reading an Arrow table at its first zero-row chunk, silently
+    # dropping every row after it (PySpark 4.0, classic); concatenated tables carry such
+    # chunks whenever a part came out empty.
+    data = pa.Table.from_batches(
+        [b for b in data.to_batches() if b.num_rows], schema=data.schema
+    )
     try:
         spark.createDataFrame(
             data, schema=_spark_schema(schema)

@@ -150,6 +150,7 @@ def plain_store_rows(path, *, origin="gbx"):
     array and one ``chunk`` row per object of any other array, with ``file`` relative
     to the store, ``offset`` 0, ``length`` the object's size, ``origin`` as given
     (``"external"`` makes it a registered store's own files) and a zero ``write_id``.
+    ``shard_key`` is the key on a shard row and NULL on a chunk row, as register writes it.
     ``arrays`` maps each array name to its ``ArrayMeta``.
     """
     from databricks.labs.gbx.zarr._meta import parse_v2, parse_v3
@@ -184,7 +185,7 @@ def plain_store_rows(path, *, origin="gbx"):
                     kind=kind,
                     array=name,
                     key=key,
-                    shard_key=key,
+                    shard_key=key if kind == "shard" else None,
                     file=f.relative_to(root).as_posix(),
                     offset=0,
                     length=f.stat().st_size,

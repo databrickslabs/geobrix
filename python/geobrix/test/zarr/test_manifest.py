@@ -145,6 +145,21 @@ def test_commit_insert_then_cas_update(spark_delta, table):
     assert [r["file"] for r in live] == ["data/t/b.zpack"]
 
 
+def test_a_commit_keeps_every_row_after_an_empty_chunk(spark_delta, table):
+    """A concatenated table can carry zero-row chunks; Spark stops reading at the first."""
+    w = uuid.uuid4().hex
+    keys = [f"c/{i}/0/0" for i in range(5)]
+    parts = [
+        _rows(*(_chunk(k, w) for k in keys[:2])),
+        _rows(),  # an empty part, as when one array contributes no rows
+        _rows(*(_chunk(k, w) for k in keys[2:])),
+    ]
+    rows = pa.concat_tables(parts)
+    assert [len(c) for c in rows.column("kind").chunks] == [2, 0, 3]
+    M.commit(spark_delta, table, rows, write_id=w, meta={"mode": "create"})
+    assert sorted(r["key"] for r in _live(spark_delta, table)) == keys
+
+
 def test_stale_expectation_aborts_whole_commit(spark_delta, table):
     w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
     M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})

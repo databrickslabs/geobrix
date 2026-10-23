@@ -46,14 +46,15 @@ lightweight vector readers and writers.
   a double or written as a date-time with no offset. The option stamps the **whole layer** as
   needing a 3.2 client, so an older Esri client may refuse to open it, even for a layer whose
   other columns are plain. A DataFrame with none of those columns is written for every Esri
-  client. Pass `ALL` to write for every client and accept the rounding, or
+  client (an integer `OBJECTID` column is the feature id, not a field, so it does not count). Pass `ALL` to write for every client and accept the rounding, or
   `ARCGIS_PRO_3_2_OR_LATER` to always target Pro 3.2. GeoBrix's readers, and any reader built on
   GDAL 3.11 or later, open a Pro 3.2 layer; other readers depend on the GDAL they bundle.
 - **Geometry** — a layer holds one geometry type: points, lines or polygons, or their multi-part
   forms (a polygon and a multipolygon can share a layer; a point and a line cannot, and GDAL
   fails the write). Z coordinates are kept. A NULL geometry is written as a feature with no
-  geometry; if every geometry in the first partition is NULL the type cannot be inferred and
-  the write stops with an error asking for the `geometryType` option.
+  geometry. The type and CRS come from the first geometry found, whatever its partition; if
+  every geometry is NULL the type cannot be inferred and the write stops with an error asking
+  for the `geometryType` option.
 - **Reserved column names** — the geometry field of a File Geodatabase layer is `SHAPE`, so a
   column named `shape` in any letter case is refused with an error: rename it first (for
   example `shape_attr`). A column named `OBJECTID` (the match ignores case) is not written as

@@ -1219,10 +1219,12 @@ def run_vector_write(
             throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
             peak_rss_mb=sampler.peak_mb or peak_rss_mb(),
             status="ok",
-            note=(
-                f"{fmt} write+readback of {n} features; "
-                f"driver python-worker peak RSS {sampler.peak_mb:.0f} MB "
+            note=f"{fmt} write+readback of {n} features"
+            + (
+                f"; driver python-worker peak RSS {sampler.peak_mb:.0f} MB "
                 f"({sampler.peak_anon_mb:.0f} MB anonymous)"
+                if sampler.peak_mb  # nothing sampled (no /proc): say nothing
+                else ""
             ),
             output_fingerprint="",
             **env,

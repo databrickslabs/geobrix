@@ -1,3 +1,4 @@
+import os
 import time
 
 import pytest
@@ -987,6 +988,9 @@ def test_spark_virtual_leg_smoke(spark, tmp_path):
     assert all(r.per_tile_avg_s >= 0 for r in ok)
 
 
+@pytest.mark.skipif(
+    not os.path.isdir("/proc"), reason="the sampler reads /proc (Linux)"
+)
 def test_worker_rss_sampler_reports_the_peak_of_matching_processes():
     """The sampler sums the RSS of processes whose command line contains the marker and
     keeps the peak, so a short-lived allocation inside a Python worker is still seen."""

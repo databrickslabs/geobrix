@@ -327,3 +327,76 @@ def test_netcdf_point_writer_types_a_timestamp_attribute_as_utc(
     assert tbl.column("seen").to_pylist() == [
         datetime.datetime(2020, 1, 2, 8, 4, 5, tzinfo=datetime.timezone.utc)
     ]
+
+
+# ---------------------------------------------------------------------------
+# the ends of the datetime range (open end dates, minimum dates) still write
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(params=["UTC", "America/New_York"])
+def local_tz(request):
+    """The process runs on UTC, then on US Eastern time."""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = request.param
+    time.tzset()
+    yield request.param
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
+_UTC = datetime.timezone.utc
+_RANGE_ENDS = [
+    datetime.datetime(9999, 12, 31, 23, 59, 59),
+    datetime.datetime(9999, 12, 31, 0, 0, 0),
+    datetime.datetime(1, 1, 1, 0, 0, 0),
+    datetime.datetime(1, 1, 1, 23, 59, 59),
+]
+
+
+@pytest.mark.parametrize("value", _RANGE_ENDS, ids=lambda d: d.isoformat())
+def test_to_utc_survives_the_ends_of_the_datetime_range(local_tz, value):
+    """``astimezone`` on a naive datetime probes the local offset and raises ``year
+    10000 / year 0 is out of range`` at the range ends. These sentinels are common (open
+    end dates, minimum dates), so they are read as UTC: the offset is immaterial there.
+    """
+    assert _arrow_utc.to_utc(value) == value.replace(tzinfo=_UTC)
+
+
+def test_to_utc_leaves_an_aware_range_end_alone(local_tz):
+    aware = datetime.datetime(9999, 12, 31, 23, 59, 59, tzinfo=_UTC)
+    assert _arrow_utc.to_utc(aware) == aware
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (datetime.datetime(9999, 12, 31, 23, 59, 59), "9999-12-31T23:59:59Z"),
+        (datetime.datetime(1, 1, 1, 0, 0, 0), "0001-01-01T00:00:00Z"),
+    ],
+    ids=["max", "min"],
+)
+@pytest.mark.parametrize(
+    "driver,name", [("GPKG", "ts.gpkg"), ("OpenFileGDB", "ts.gdb")]
+)
+def test_range_end_timestamps_write_and_read_back_unchanged(
+    tmp_path, local_tz, driver, name, value, expected
+):
+    from databricks.labs.gbx.ds.vector import VectorGbxWriter
+
+    schema = StructType(
+        [
+            StructField("seen", TimestampType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    rows = [(value, bytearray(to_wkb(Point(1, 2))), "4326", "")]
+    w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+    w.commit([w.write(iter(rows))])
+    got = pyogrio.raw.read(w.path, datetime_as_string=True)[3][0]
+    assert [str(x) for x in got] == [expected]

@@ -580,6 +580,28 @@ def test_target_version_auto_is_case_insensitive(tmp_path):
     assert _stamped_for_pro_3_2(out)
 
 
+def test_target_version_auto_ignores_an_objectid_column(tmp_path):
+    """An integer OBJECTID becomes the feature id: no long field is written for it, so it
+    does not by itself target Pro 3.2. A real long column still does."""
+    only_oid = _schema(_NAME, StructField("objectid", LongType()))
+    rows = [(f"p{i}", 7 + i, _g(), "4326", "") for i in range(2)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = _write_gdb(tmp_path / "oid.gdb", only_oid, [rows])
+    assert "objectid" not in [f.lower() for f in pyogrio.read_info(out)["fields"]]
+    assert list(pyogrio.read_dataframe(out, fid_as_index=True).index) == [7, 8]
+    assert not _stamped_for_pro_3_2(out)
+
+    with_long = _schema(
+        _NAME, StructField("objectid", LongType()), StructField("n", LongType())
+    )
+    rows = [(f"p{i}", 7 + i, 2**40 + i, _g(), "4326", "") for i in range(2)]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = _write_gdb(tmp_path / "oid2.gdb", with_long, [rows])
+    assert _stamped_for_pro_3_2(out)
+
+
 def test_target_version_invalid_value_raises_before_any_output(tmp_path):
     target = tmp_path / "bad.gdb"
     with pytest.raises(ValueError) as ei:
@@ -733,6 +755,29 @@ def test_only_null_geometries_write_when_the_type_is_given(tmp_path):
     got = pyogrio.read_dataframe(out)
     assert len(got) == 2 and got.geometry.isna().all()
     assert pyogrio.read_info(out)["geometry_type"] == "Point"
+
+
+@pytest.mark.parametrize("null_first", [True, False], ids=["null-first", "null-last"])
+def test_all_null_partition_does_not_decide_the_geometry_type_or_crs(
+    tmp_path, null_first
+):
+    """The geometry type and CRS come from the first partition that HAS a geometry, in
+    either order: an all-NULL partition neither raises nor leaves the layer typeless."""
+    nulls = [(f"n{i}", None, "4326", "") for i in range(2)]
+    good = [(f"g{i}", bytearray(to_wkb(Point(i, i))), "27700", "") for i in range(2)]
+    parts = [nulls, good] if null_first else [good, nulls]
+    out = _write_gdb(tmp_path / "order.gdb", _schema(_NAME), parts)
+    info = pyogrio.read_info(out)
+    assert info["geometry_type"] == "Point" and info["features"] == 4
+    assert authority_srid_of(resolve_crs(info["crs"])) == 27700
+    got = pyogrio.read_dataframe(out)
+    assert got.geometry.isna().sum() == 2
+
+
+def test_every_partition_null_still_raises_the_geometry_type_error(tmp_path):
+    parts = [[("a", None, "4326", "")], [("b", None, "4326", "")]]
+    with pytest.raises(ValueError, match="geometryType"):
+        _write_gdb(tmp_path / "allnull2.gdb", _schema(_NAME), parts)
 
 
 # ---------------------------------------------------------------------------

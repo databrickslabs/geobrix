@@ -43,7 +43,18 @@ def arrow_schema_utc(schema: StructType) -> "pa.Schema":
 
 
 def to_utc(value):
-    """A ``datetime`` as an aware UTC ``datetime`` (naive means the worker's local time)."""
-    if isinstance(value, datetime.datetime):
+    """A ``datetime`` as an aware UTC ``datetime`` (naive means the worker's local time).
+
+    ``astimezone`` on a naive value makes CPython probe the local offset up to a day either
+    way, which raises ``ValueError`` / ``OverflowError`` at the ends of the datetime range
+    (``9999-12-31``, ``0001-01-01``): common sentinels (open end dates, minimum dates) that
+    GDAL stores exactly. There the offset is immaterial, so such a naive value is read as UTC.
+    """
+    if not isinstance(value, datetime.datetime):
+        return value
+    try:
         return value.astimezone(datetime.timezone.utc)
-    return value
+    except (ValueError, OverflowError):
+        if value.tzinfo is None:
+            return value.replace(tzinfo=datetime.timezone.utc)
+        return value  # an aware value at the range end: keep its own offset

@@ -105,3 +105,46 @@ def test_run_vector_write_from_table(spark, tmp_path):
         assert "MB anonymous" in r.note, r.note
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {src_tbl}")
+
+
+def test_run_vector_write_omits_the_worker_rss_when_nothing_was_sampled(
+    spark, tmp_path, monkeypatch
+):
+    """With no /proc to sample (peak 0) the note says nothing about worker memory, rather
+    than 'peak RSS 0 MB', and peak_rss_mb falls back to this process's peak."""
+    from databricks.labs.gbx.bench.corpus_vector import generate_polygon_seed
+    from databricks.labs.gbx.ds.register import register
+
+    class _Nothing:
+        peak_mb = 0.0
+        peak_anon_mb = 0.0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return None
+
+    monkeypatch.setattr(readers, "WorkerRssSampler", _Nothing)
+    register(spark)
+    src_tbl = "t_vec_wsrc_nosample"
+    spark.sql(f"DROP TABLE IF EXISTS {src_tbl}")
+    try:
+        generate_polygon_seed(spark, 4).write.mode("overwrite").saveAsTable(src_tbl)
+        r = readers.run_vector_write(
+            spark,
+            src_tbl,
+            str(tmp_path / "vec_out"),
+            run_id="test",
+            warmup=1,
+            measured=1,
+            fmt="geojson_gbx",
+            src_is_table=True,
+            where="venv",
+        )
+        assert r.status == "ok", r.note
+        assert "peak RSS" not in r.note and "anonymous" not in r.note, r.note
+        assert r.note.endswith("write+readback of 4 features"), r.note
+        assert r.peak_rss_mb > 0
+    finally:
+        spark.sql(f"DROP TABLE IF EXISTS {src_tbl}")

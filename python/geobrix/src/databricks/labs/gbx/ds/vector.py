@@ -875,10 +875,12 @@ def _gdb_target_version(value, schema, attr_cols) -> str:
     """
     key = "AUTO" if value is None else str(value).strip().upper()
     if key == "AUTO":
+        # Only the columns that are written count: an integer OBJECTID becomes the
+        # feature id and is not written as a field (see _check_gdb_attr_names).
         wants_pro = any(
             isinstance(f.dataType, _GDB_PRO_3_2_TYPES)
             for f in schema.fields
-            if f.name in attr_cols
+            if f.name in attr_cols and f.name.lower() != "objectid"
         )
         return _GDB_TARGET_PRO_3_2 if wants_pro else _GDB_TARGET_ALL
     if key in (_GDB_TARGET_ALL, _GDB_TARGET_PRO_3_2):
@@ -1916,9 +1918,7 @@ class VectorGbxWriter(DataSourceWriter):
                 # it to get the inner path the writer produces alongside.
                 inner = local_out[: -len(".zip")]  # .../roads.shp or .../roads.gdb
                 if _should_stream(self.driver):
-                    first_tbl = feather.read_table(frags[0])
-                    geom_type, crs = self._infer_geom_crs([first_tbl])
-                    del first_tbl
+                    geom_type, crs = self._infer_geom_crs_frags(frags)
                     self._write_streaming(frags, inner, geom_type, crs)
                 else:
                     tables = [feather.read_table(f) for f in frags]
@@ -1939,18 +1939,15 @@ class VectorGbxWriter(DataSourceWriter):
                         ):
                             os.remove(os.path.join(local_dir, name))
             elif _should_stream(self.driver):
-                # Infer geom type + CRS from the first fragment only (one
-                # partition, bounded), then stream every fragment into one write.
-                first_tbl = feather.read_table(frags[0])
-                geom_type, crs = self._infer_geom_crs([first_tbl])
-                del first_tbl
+                # Infer geom type + CRS from the first fragment that has a geometry
+                # (bounded: one fragment's geometry columns at a time), then stream
+                # every fragment into one write.
+                geom_type, crs = self._infer_geom_crs_frags(frags)
                 self._write_streaming(frags, local_out, geom_type, crs)
             else:
-                # Infer geom/CRS from first fragment only (bounded memory), then
-                # stream remaining fragments via generator (lazy, not list).
-                first_tbl = feather.read_table(frags[0])
-                geom_type, crs = self._infer_geom_crs([first_tbl])
-                del first_tbl
+                # Infer geom/CRS the same way (bounded memory), then stream the
+                # fragments via generator (lazy, not list).
+                geom_type, crs = self._infer_geom_crs_frags(frags)
                 tables_gen = (feather.read_table(f) for f in frags)
                 self._write_local(tables_gen, local_out, geom_type, crs)
             # Writer is FUSE-only: clear any Spark stub, copy everything pyogrio
@@ -2133,38 +2130,66 @@ class VectorGbxWriter(DataSourceWriter):
                 **kw,
             )
 
-    def _infer_geom_crs(self, tables) -> Tuple[str, Optional[str]]:
+    def _infer_geom_crs_frags(self, frags) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS from the first fragment that has a geometry.
+
+        Fragments are read in order, geometry and CRS columns only, one at a time, and the
+        scan stops at the first non-NULL geometry; a partition whose geometries are all NULL
+        therefore decides nothing, whatever its position. Only when no fragment has a
+        geometry is the type unknown (``Unknown``; an error for a FileGDB layer).
+        """
+        import pyarrow.feather as feather
+
+        cols = [
+            c
+            for c in (self.geom_col, self.srid_col, self.proj_col)
+            if c in self._col_order
+        ]
+        tables = (feather.read_table(f, columns=cols) for f in frags)
+        return self._infer_geom_crs(tables, first_geometry_only=True)
+
+    def _infer_geom_crs(
+        self, tables, first_geometry_only=False
+    ) -> Tuple[str, Optional[str]]:
+        """Geometry type and CRS of the first non-NULL geometry of each table in turn.
+
+        The CRS comes from that geometry's own row. The scan goes on to the next table while
+        the type or the CRS is still unknown, unless ``first_geometry_only``: then it stops
+        at the first table that has a geometry (an unknown CRS stays unknown).
+        """
+        import pyarrow.compute as pc
+
         geom_type, crs = self.geometry_type_override, None
         for tbl in tables:
-            g = tbl.column(self.geom_col).to_pylist()
-            s = (
-                tbl.column(self.srid_col).to_pylist()
-                if self.srid_col in tbl.column_names
-                else []
-            )
-            p = (
-                tbl.column(self.proj_col).to_pylist()
-                if self.proj_col in tbl.column_names
-                else []
-            )
-            for i, gv in enumerate(g):
-                if gv is None:
-                    continue
+            col = tbl.column(self.geom_col)
+            found = col.null_count < len(col)
+            if found:
+                i = pc.index(pc.is_valid(col), True).as_py()
                 if geom_type is None:
-                    geom_type = _geometry_type_of(gv)
+                    geom_type = _geometry_type_of(col[i].as_py())
                 if crs is None:
-                    crs = _srid_to_crs(
-                        s[i] if i < len(s) else "", p[i] if i < len(p) else ""
+                    names = tbl.column_names
+                    s = (
+                        tbl.column(self.srid_col)[i].as_py()
+                        if self.srid_col in names
+                        else ""
                     )
+                    p = (
+                        tbl.column(self.proj_col)[i].as_py()
+                        if self.proj_col in names
+                        else ""
+                    )
+                    crs = _srid_to_crs(s, p)
+            if found and first_geometry_only:
                 break
             if geom_type is not None and crs is not None:
                 break
         geom_type = geom_type or "Unknown"
         if self.driver == "OpenFileGDB" and geom_type == "Unknown":
             raise ValueError(
-                "file_gdb_gbx: every geometry in the first partition is NULL, so the "
-                "geometry type of the layer cannot be inferred, and a FileGDB layer needs "
-                "one. Set the geometryType option (for example geometryType='Point')."
+                "file_gdb_gbx: every geometry is NULL, so the geometry type of the layer "
+                "cannot be inferred, and a FileGDB layer needs one. Set the geometryType "
+                "option (for example geometryType='Point')."
             )
         return geom_type, crs
 

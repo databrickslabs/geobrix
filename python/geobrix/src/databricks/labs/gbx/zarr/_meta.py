@@ -279,31 +279,49 @@ def _cf_fill_attr(raw, meta: ArrayMeta):
         ) from None
 
 
-def _cf_attrs(meta: ArrayMeta) -> dict:
+def _check_mask_flag(flag) -> None:
+    if flag is not None and not isinstance(flag, (bool, np.bool_)):
+        raise ValueError(
+            f"use_zarr_fill_value_as_mask must be True, False or None, got {flag!r}"
+        )
+
+
+def _cf_attrs(meta: ArrayMeta, use_zarr_fill_value_as_mask=None) -> dict:
     """The attributes CF decoding sees: xarray's ``open_zarr`` rules for each Zarr version.
 
-    Zarr v2 has no ``_FillValue`` attribute convention: the array ``fill_value`` is the
-    missing-data marker, so when it is set it becomes ``_FillValue`` and overrides the
-    attribute; otherwise the attribute stays exactly as stored. A boolean array is never
-    masked (that would produce an object array).
+    ``use_zarr_fill_value_as_mask`` is xarray's switch of the same name. When it is true the
+    array ``fill_value`` is the missing-data marker: it becomes ``_FillValue`` and overrides
+    the attribute. ``None`` (the default) means true for Zarr v2, which has no ``_FillValue``
+    attribute convention, and false for v3. A boolean array is never masked (that would
+    produce an object array), and a ``fill_value`` of ``null`` masks nothing.
 
-    In Zarr v3 ``fill_value`` is only what unwritten chunks read as (``0`` for every
-    integer array) and never masks; an explicit ``_FillValue`` attribute does, after
-    decoding xarray's base64 form of a float.
+    When it is false ``fill_value`` is only what unwritten chunks read as (``0`` for every
+    integer array in v3), so an integer v2 array whose ``fill_value`` is a real value, such as
+    ``0``, keeps it. An explicit ``_FillValue`` attribute still masks; a v3 float one is
+    decoded from xarray's base64 form first, and a v2 one stays exactly as stored.
     """
+    _check_mask_flag(use_zarr_fill_value_as_mask)
     attrs = dict(meta.attrs)
-    if meta.zarr_format == 2:
-        if meta.fill_value is not None and np.dtype(meta.dtype).kind != "b":
-            attrs["_FillValue"] = meta.fill_value
-    elif "_FillValue" in attrs:
+    mask = (
+        meta.zarr_format == 2
+        if use_zarr_fill_value_as_mask is None
+        else bool(use_zarr_fill_value_as_mask)
+    )
+    if mask and meta.fill_value is not None and np.dtype(meta.dtype).kind != "b":
+        attrs["_FillValue"] = meta.fill_value
+    elif meta.zarr_format == 3 and "_FillValue" in attrs:
         attrs["_FillValue"] = _cf_fill_attr(attrs["_FillValue"], meta)
     return attrs
 
 
-def cf_decode(values: np.ndarray, meta: ArrayMeta) -> np.ndarray:
+def cf_decode(
+    values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
+) -> np.ndarray:
     """Apply the CF conventions in ``meta.attrs`` (missing values, scale/offset) to ``values``.
 
     Times are not decoded here; see ``decode_coord``. ``values`` may be any block of the array.
+    ``use_zarr_fill_value_as_mask`` is xarray's option of that name: ``None`` masks on the
+    array ``fill_value`` for Zarr v2 only (see ``_cf_attrs``).
     """
     from xarray import Variable
     from xarray.conventions import decode_cf_variable
@@ -314,17 +332,32 @@ def cf_decode(values: np.ndarray, meta: ArrayMeta) -> np.ndarray:
         if len(meta.dims) == values.ndim
         else tuple(f"dim_{i}" for i in range(values.ndim))
     )
-    var = Variable(dims, values, _cf_attrs(meta))
+    var = Variable(dims, values, _cf_attrs(meta, use_zarr_fill_value_as_mask))
     return decode_cf_variable(
         meta.name, var, decode_times=False, decode_timedelta=False
     ).values
 
 
-def decode_coord(values: np.ndarray, meta: ArrayMeta) -> np.ndarray:
-    """Decode a coordinate: CF time units become ``datetime64[ns]``, anything else is returned as is."""
+def is_time_coord(meta: ArrayMeta) -> bool:
+    """Whether the array's ``units`` attribute is a CF time unit (``"hours since 1900-01-01"``)."""
     units = meta.attrs.get("units")
-    if not isinstance(units, str) or " since " not in units:
+    return isinstance(units, str) and " since " in units
+
+
+def decode_coord(
+    values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
+) -> np.ndarray:
+    """Decode a coordinate: CF time units become ``datetime64[ns]``, anything else is returned as is.
+
+    A time coordinate is masked first, as xarray does, so a missing value (a ``_FillValue``, a NaN,
+    or the array ``fill_value`` where ``use_zarr_fill_value_as_mask`` applies) decodes to ``NaT``.
+    Anything GeoBrix cannot decode raises ``ZarrUnsupported``: a calendar other than the standard
+    ones, a unit that is not a CF time unit, a reference date that is not a date, and times
+    outside what ``datetime64[ns]`` holds (the years 1678 to 2262).
+    """
+    if not is_time_coord(meta):
         return values
+    units = meta.attrs["units"]
     calendar = str(meta.attrs.get("calendar") or "standard").lower()
     if calendar not in _STANDARD_CALENDARS:
         raise ZarrUnsupported(
@@ -334,13 +367,51 @@ def decode_coord(values: np.ndarray, meta: ArrayMeta) -> np.ndarray:
     from pandas.errors import OutOfBoundsDatetime, OutOfBoundsTimedelta
     from xarray.coding.times import decode_cf_datetime
 
+    fix = "pass decode=False to read the raw time numbers"
+    values = cf_decode(
+        values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+    )
     try:
         decoded = decode_cf_datetime(values, units, calendar, use_cftime=False)
+    except KeyError as e:  # xarray looks the unit up by name
+        raise ZarrUnsupported(
+            f"the time units {units!r} of coordinate {meta.name!r} are not understood: "
+            f"{e.args[0] if e.args else ''!r} is not a CF time unit (days, hours, minutes, "
+            "seconds, milliseconds, microseconds or nanoseconds)",
+            fix=fix + ", or correct the units attribute",
+        ) from None
     except (OutOfBoundsDatetime, OutOfBoundsTimedelta, OverflowError):
+        problem = _reference_problem(units)
+        if problem:
+            raise ZarrUnsupported(
+                f"the time units {units!r} of coordinate {meta.name!r} have a reference "
+                f"date, {problem!r}, that is not a date",
+                fix=fix + ", or correct the units attribute",
+            ) from None
         # datetime64[ns] spans only the years 1678 to 2262 (xarray would fall back to cftime)
         raise ZarrUnsupported(
             f"times of coordinate {meta.name!r} ({units}) fall outside the range of "
             "datetime64[ns], the years 1678 to 2262",
-            fix="pass decode=False to read the raw time numbers",
+            fix=fix,
         ) from None
     return np.asarray(decoded).astype("datetime64[ns]")
+
+
+def _reference_problem(units: str) -> str | None:
+    """The reference date of ``units`` when it cannot be parsed as a date, else ``None``.
+
+    xarray reports a malformed reference date and a time outside ``datetime64[ns]`` with the
+    same (empty) pandas error; a reference date that parses but lies outside the range is the
+    second kind.
+    """
+    import pandas as pd
+    from pandas.errors import OutOfBoundsDatetime
+
+    reference = units.partition(" since ")[2].strip()
+    try:
+        pd.Timestamp(reference)
+    except OutOfBoundsDatetime:
+        return None
+    except (ValueError, TypeError, OverflowError):
+        return reference
+    return None

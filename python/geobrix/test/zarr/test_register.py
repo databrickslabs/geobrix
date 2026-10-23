@@ -65,7 +65,8 @@ def _commit_meta(spark, table):
 def _open_store(spark, table, base, scratch):
     """A ``ManifestStore`` made only from what the manifest holds (no look at ``base``).
 
-    Arrays GeoBrix cannot decode are left out of ``arrays``, as a reader would.
+    Arrays GeoBrix cannot decode are left out of ``arrays`` and named in ``unsupported``,
+    as a reader does: the store then refuses their chunk keys instead of reading fill.
     """
     rows = _live(spark, table).to_pylist()
     metas = {
@@ -73,7 +74,7 @@ def _open_store(spark, table, base, scratch):
         for r in rows
         if r["kind"] in ("group", "array")
     }
-    arrays = {}
+    arrays, unsupported = {}, {}
     for key, raw in metas.items():
         prefix, _, name = key.rpartition("/")
         if not prefix:
@@ -84,10 +85,11 @@ def _open_store(spark, table, base, scratch):
             elif name == ".zarray":
                 zattrs = json.loads(metas.get(f"{prefix}/.zattrs", b"{}"))
                 arrays[prefix] = parse_v2(prefix, json.loads(raw), zattrs)
-        except ZarrUnsupported:
-            pass
+        except ZarrUnsupported as e:
+            unsupported[prefix] = e.message
     reader = FuseRangeReader(str(scratch), base_root=str(base))
-    return ManifestStore(metas, rows, reader, arrays), arrays
+    store = ManifestStore(metas, rows, reader, arrays, unsupported=unsupported)
+    return store, arrays
 
 
 def _assert_reads_like_the_base(store, arrays, base):
@@ -875,6 +877,10 @@ def test_an_array_that_cannot_be_decoded_is_still_registered(
     store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
     assert set(arrays) == {"x"}
     _assert_reads_like_the_base(store, arrays, base)
+    # reading the array GeoBrix cannot decode raises; it never reads as fill ('')
+    with pytest.raises(ZarrUnsupported) as ei:
+        zarr.open_array(store=store, path="station", mode="r")[:]
+    assert "'station'" in str(ei.value) and "Fix:" in str(ei.value)
 
 
 def test_a_v2_object_coordinate_keeps_its_documents_and_chunk_rows(tmp_path):

@@ -28,6 +28,7 @@ from databricks.labs.gbx.zarr.errors import (  # noqa: E402
     ZarrError,
     ZarrReadOnly,
     ZarrStoreDrift,
+    ZarrUnsupported,
 )
 
 PROTO = default_buffer_prototype()
@@ -618,3 +619,145 @@ def test_directory_deletes_are_read_only_errors_too(era5_v2):
         with pytest.raises(ZarrReadOnly) as ei:
             _run(call())
         assert "Fix:" in str(ei.value)
+
+
+# --- Isaac B22/B23: drift that only a read can see ----------------------------------
+
+
+@pytest.mark.parametrize(
+    "key", ["c/x/0/0", "c/1/0", "c/1/0/0/0", "1/0/0", "c/-1/0/0", "c/1.0/0/0"]
+)
+def test_a_chunk_row_whose_key_is_not_a_chunk_key_is_drift(era5_v3_sharded, key):
+    metas, rows, arrays = plain_store_rows(era5_v3_sharded)
+    bad = _row("t2m", key, "c/0/0/0")
+    with pytest.raises(ZarrStoreDrift) as ei:
+        ManifestStore(
+            metas, [*rows, bad], FuseRangeReader(str(era5_v3_sharded)), arrays
+        )
+    text = str(ei.value)
+    assert "is not a chunk key" in text and repr(key) in text and "t2m" in text
+    assert "gbx_zarr_sync" in ei.value.fix
+
+
+def _start_index_store(tmp_path):
+    """A one-array store whose shards keep their index at the start of the file."""
+    from zarr.codecs import ShardingCodec
+
+    root = tmp_path / "start.zarr"
+    data = np.arange(8 * 8, dtype="int32").reshape(8, 8)
+    zarr.create_array(
+        str(root),
+        name="a",
+        shape=data.shape,
+        chunks=(4, 4),
+        dtype="int32",
+        serializer=ShardingCodec(chunk_shape=(2, 2), index_location="start"),
+        compressors=None,
+    )[:] = data
+    return root, *plain_store_rows(root)
+
+
+def test_a_shard_row_shorter_than_its_index_is_drift(tmp_path):
+    root, metas, rows, arrays = _start_index_store(tmp_path)
+    short = [{**r, "length": 8} if r["key"] == "c/0/0" else r for r in rows]
+    st = ManifestStore(metas, short, FuseRangeReader(str(root)), arrays)
+    with pytest.raises(ZarrStoreDrift) as ei:
+        _get(st, "a/c/0/0")
+    text = str(ei.value)
+    assert "has 8 bytes" in text and "fewer than its" in text and "index" in text
+    assert "gbx_zarr_sync" in ei.value.fix
+    assert _get(st, "a/c/0/1") is not None  # the other shards still read
+
+
+def test_a_shard_index_that_points_outside_the_shard_is_drift(tmp_path):
+    root, metas, rows, arrays = _start_index_store(tmp_path)
+    shard = next(r for r in rows if r["key"] == "c/0/0")
+    # the index is intact at the start; the row says the shard ends before its last chunk
+    cut = [{**r, "length": r["length"] - 8} if r is shard else r for r in rows]
+    st = ManifestStore(metas, cut, FuseRangeReader(str(root)), arrays)
+    with pytest.raises(ZarrStoreDrift) as ei:
+        _get(st, "a/c/0/0")
+    text = str(ei.value)
+    assert "lies outside the shard" in text and "a/c/0/0" in text
+    assert "gbx_zarr_sync" in ei.value.fix
+
+
+# --- Task 8 N2: an array GeoBrix cannot decode reads as an error, never as fill ------
+
+
+def _with_strings(tmp_path):
+    """An unsharded float array and a string array GeoBrix cannot decode, as register sees them."""
+    from databricks.labs.gbx.zarr._register import read_base_metadata
+
+    root = tmp_path / "s.zarr"
+    g = zarr.open_group(str(root), mode="w", zarr_format=3)
+    x = g.create_array("x", shape=(4, 6), chunks=(2, 3), dtype="f4", fill_value=0.0)
+    x[:] = np.arange(24, dtype="f4").reshape(4, 6)
+    station = g.create_array("station", shape=(3,), chunks=(2,), dtype=str)
+    station[:] = np.array(["a", "bb", "ccc"], dtype=object)
+    metas, arrays, unsupported = read_base_metadata(str(root))
+    assert set(arrays) == {"x"} and set(unsupported) == {"station"}
+    rows = []
+    for name in ("x", "station"):
+        for f in sorted((root / name).rglob("*")):
+            if f.is_file() and f.name != "zarr.json":
+                key = f.relative_to(root / name).as_posix()
+                row = _row(name, key, file=f"{name}/{key}", length=f.stat().st_size)
+                rows.append({**row, "shard_key": None})
+    return root, metas, rows, arrays, unsupported
+
+
+def test_an_unsupported_array_raises_on_its_chunk_keys(tmp_path):
+    root, metas, rows, arrays, unsupported = _with_strings(tmp_path)
+    st = ManifestStore(
+        metas, rows, FuseRangeReader(str(root)), arrays, unsupported=unsupported
+    )
+    reason = unsupported["station"]
+    for read in (
+        lambda: _get(st, "station/c/0"),
+        lambda: _run(st.exists("station/c/0")),
+        lambda: _run(st.getsize("station/c/0")),
+        lambda: zarr.open_array(store=st, path="station", mode="r")[:],
+    ):
+        with pytest.raises(ZarrUnsupported) as ei:
+            read()
+        assert "'station'" in str(ei.value) and reason in str(ei.value)
+        assert "Fix:" in str(ei.value)
+    # its documents are still served, and the readable arrays are unaffected
+    assert _get(st, "station/zarr.json") is not None
+    np.testing.assert_array_equal(
+        zarr.open_array(store=st, path="x", mode="r")[:],
+        zarr.open_array(str(root / "x"), mode="r")[:],
+    )
+
+
+def test_without_the_unsupported_set_the_store_cannot_tell_fill_from_refusal(tmp_path):
+    """The failure the set exists for: no entry means the array's rows are ignored and its
+    chunks read as missing (fill), with no error."""
+    root, metas, rows, arrays, _ = _with_strings(tmp_path)
+    st = ManifestStore(metas, rows, FuseRangeReader(str(root)), arrays)
+    assert _get(st, "station/c/0") is None
+
+
+def test_an_unsupported_name_does_not_shadow_a_longer_name(tmp_path):
+    root, metas, rows, arrays, _ = _with_strings(tmp_path)
+    st = ManifestStore(
+        metas,
+        rows,
+        FuseRangeReader(str(root)),
+        arrays,
+        unsupported={"sta": "why"},  # 'station/...' does not start with 'sta/'
+    )
+    assert _get(st, "x/c/0/0") is not None
+    with pytest.raises(ZarrUnsupported):
+        _get(st, "sta/c/0")
+
+
+def test_the_unsupported_set_survives_pickling(tmp_path):
+    root, metas, rows, arrays, unsupported = _with_strings(tmp_path)
+    st = ManifestStore(
+        metas, rows, FuseRangeReader(str(root)), arrays, unsupported=unsupported
+    )
+    again = pickle.loads(pickle.dumps(st))
+    with pytest.raises(ZarrUnsupported):
+        _get(again, "station/c/0")

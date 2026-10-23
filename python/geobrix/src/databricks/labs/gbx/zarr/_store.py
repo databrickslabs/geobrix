@@ -51,7 +51,12 @@ from databricks.labs.gbx.zarr._shard import (
     decode_index,
     index_nbytes,
 )
-from databricks.labs.gbx.zarr.errors import ZarrError, ZarrReadOnly, ZarrStoreDrift
+from databricks.labs.gbx.zarr.errors import (
+    ZarrError,
+    ZarrReadOnly,
+    ZarrStoreDrift,
+    ZarrUnsupported,
+)
 
 __all__ = ["ManifestStore"]
 
@@ -135,6 +140,11 @@ class ManifestStore(Store):
     bytes. ``rows`` are live manifest rows of kinds ``shard`` and ``chunk`` (dicts with
     the manifest columns); rows of an array not in ``arrays`` are ignored. ``arrays``
     maps an array name to its ``ArrayMeta``.
+
+    ``unsupported`` maps the name of each array GeoBrix cannot decode to the reason. Its
+    documents are served like any other, but a read of one of its chunk keys raises
+    ``ZarrUnsupported``: without the entry the array's rows are ignored, its chunks read
+    as missing, and a reader would see fill values (empty strings) and no error.
     """
 
     supports_writes = False
@@ -149,11 +159,14 @@ class ManifestStore(Store):
         rows: list[dict],
         reader: RangeReader,
         arrays: dict[str, ArrayMeta],
+        *,
+        unsupported: dict[str, str] | None = None,
     ):
         super().__init__(read_only=True)
         self._metas = dict(metas)
         self._reader = reader
         self._arrays = dict(arrays)
+        self._unsupported = dict(unsupported or {})
         self._chunks: dict[str, Region] = {}  # unsharded chunk key -> region
         self._shards: dict[str, tuple[ArrayMeta, _ShardRows]] = {}  # shard key -> rows
         for row in rows:
@@ -296,6 +309,18 @@ class ManifestStore(Store):
         chunks.update(rows.chunks)  # an override, or None: the chunk is deleted
         return VirtualShard(n, chunks, spec.index_codecs, spec.index_location)
 
+    def _refuse(self, key: str) -> None:
+        """Raise for a chunk key of an array GeoBrix cannot decode (its documents are served)."""
+        if not self._unsupported or key in self._metas:
+            return
+        for name, reason in self._unsupported.items():
+            if key.startswith(name + "/"):
+                raise ZarrUnsupported(
+                    f"array {name!r} cannot be read: {reason}",
+                    fix="read the arrays GeoBrix can decode (variables=[...]), or "
+                    "convert this one to a numeric dtype",
+                )
+
     def ensure_outside_pool(self, what: str) -> None:
         """Raise unless the caller is outside this store's read pool.
 
@@ -394,6 +419,7 @@ class ManifestStore(Store):
             data = self._metas[key]
             start, stop = _span(len(data), byte_range)
             return prototype.buffer.from_bytes(data[start:stop])
+        self._refuse(key)
         if key not in self._chunks and key not in self._shards:
             return None
         data = await asyncio.get_running_loop().run_in_executor(
@@ -415,6 +441,7 @@ class ManifestStore(Store):
     async def getsize(self, key: str) -> int:
         if key in self._metas:
             return len(self._metas[key])
+        self._refuse(key)
         if key not in self._chunks and key not in self._shards:
             raise FileNotFoundError(key)
         return await asyncio.get_running_loop().run_in_executor(
@@ -422,6 +449,7 @@ class ManifestStore(Store):
         )
 
     async def exists(self, key: str) -> bool:
+        self._refuse(key)
         return key in self._metas or key in self._chunks or key in self._shards
 
     # --- listing ------------------------------------------------------------------

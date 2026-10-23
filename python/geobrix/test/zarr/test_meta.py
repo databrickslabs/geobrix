@@ -307,3 +307,99 @@ def test_parse_keeps_its_own_copy_of_the_document(era5_v3_sharded, era5_v2):
     zt["units"] = "changed"
     assert m2.doc[".zarray"]["shape"][0] == 48 and m2.attrs["units"] == "K"
     assert m2.doc[".zattrs"]["units"] == "K"
+
+
+# --- Task 9 carries: time-unit errors, time fill, use_zarr_fill_value_as_mask (Ruling Z13) ---
+
+
+def _time_meta(era5_v3_sharded, **attrs):
+    t = parse_v3("time", _doc(era5_v3_sharded, "time"))
+    return _with_attrs(t, {"units": "hours since 1900-01-01", **attrs})
+
+
+def test_decode_time_with_an_unknown_unit_is_unsupported_not_a_key_error(
+    era5_v3_sharded,
+):
+    meta = _time_meta(era5_v3_sharded, units="furlongs since 2000-01-01")
+    with pytest.raises(ZarrUnsupported) as e:
+        decode_coord(np.array([0, 1], dtype="<i8"), meta)
+    text = str(e.value)
+    assert "furlongs" in text and "'time'" in text
+    assert "outside" not in text and "Fix:" in text and "decode=False" in e.value.fix
+
+
+def test_decode_time_with_a_malformed_reference_date_says_so(era5_v3_sharded):
+    for units in ("hours since garbage", "days since 2000-13-45"):
+        meta = _time_meta(era5_v3_sharded, units=units)
+        with pytest.raises(ZarrUnsupported) as e:
+            decode_coord(np.array([0, 1], dtype="<i8"), meta)
+        text = str(e.value)
+        assert "reference date" in text and "not a date" in text, units
+        assert "outside" not in text and "Fix:" in text
+
+
+def test_decode_time_range_errors_still_say_outside_the_range(era5_v3_sharded):
+    for units in ("days since 1000-01-01", "days since 2500-01-01"):
+        with pytest.raises(ZarrUnsupported, match="outside the range") as e:
+            decode_coord(
+                np.array([0, 1], dtype="<i8"),
+                _time_meta(era5_v3_sharded, units=units),
+            )
+        assert "reference date" not in str(e.value)
+
+
+def test_time_coordinate_fill_values_become_nat_like_xarray(era5_v3_sharded):
+    nat = np.datetime64("NaT", "ns")
+    # a float coordinate with NaN
+    out = decode_coord(np.array([0.0, np.nan, 5.0]), _time_meta(era5_v3_sharded))
+    assert np.isnat(out[1]) and out[2] == np.datetime64("1900-01-01T05", "ns")
+    # an integer coordinate with a _FillValue attribute (Zarr v3)
+    meta = _time_meta(era5_v3_sharded, _FillValue=-1)
+    out = decode_coord(np.array([0, -1, 5], dtype="<i8"), meta)
+    assert out[0] == np.datetime64("1900-01-01T00", "ns") and np.isnat(out[1])
+    assert out.dtype == nat.dtype
+
+
+def test_time_coordinate_zarr_v2_fill_value_masks_to_nat_unless_turned_off(era5_v2):
+    za = json.loads((era5_v2 / "time" / ".zarray").read_text())
+    za["fill_value"] = -1
+    zt = json.loads((era5_v2 / "time" / ".zattrs").read_text())
+    meta = parse_v2("time", za, zt)
+    raw = np.array([0, -1, 5], dtype="<i8")
+    assert np.isnat(decode_coord(raw, meta)[1])  # xarray's default for Zarr v2
+    kept = decode_coord(raw, meta, use_zarr_fill_value_as_mask=False)
+    assert kept[1] == np.datetime64("1899-12-31T23", "ns")  # -1 hour: a real time
+
+
+def test_use_zarr_fill_value_as_mask_follows_xarray(era5_v3_unsharded, era5_v2):
+    za = json.loads((era5_v2 / "t2m" / ".zarray").read_text())
+    za.update(dtype="<i2", fill_value=0)
+    v2 = parse_v2("n", za, {"_ARRAY_DIMENSIONS": ["time", "latitude", "longitude"]})
+    values = np.array([0, 5], dtype="<i2")
+    assert np.isnan(cf_decode(values, v2)[0])  # None: v2 masks on fill_value
+    assert np.isnan(cf_decode(values, v2, use_zarr_fill_value_as_mask=True)[0])
+    kept = cf_decode(values, v2, use_zarr_fill_value_as_mask=False)
+    assert list(kept) == [0, 5] and kept.dtype == values.dtype
+
+    v3 = _int_meta(era5_v3_unsharded, {})  # int16 with fill_value 0
+    assert list(cf_decode(values, v3)) == [0, 5]  # None: v3 never masks on it
+    assert np.isnan(cf_decode(values, v3, use_zarr_fill_value_as_mask=True)[0])
+    assert list(cf_decode(values, v3, use_zarr_fill_value_as_mask=False)) == [0, 5]
+
+
+def test_use_zarr_fill_value_as_mask_false_still_reads_the_v3_fill_attribute(
+    era5_v3_unsharded,
+):
+    b64 = base64.standard_b64encode(struct.pack("<d", -9999.0)).decode()
+    m = _with_attrs(
+        parse_v3("t2m", _doc(era5_v3_unsharded, "t2m")), {"_FillValue": b64}
+    )
+    values = np.array([1.0, -9999.0], dtype="<f4")
+    for flag in (None, False):
+        assert np.isnan(cf_decode(values, m, use_zarr_fill_value_as_mask=flag)[1])
+
+
+def test_use_zarr_fill_value_as_mask_must_be_a_bool_or_none(era5_v3_unsharded):
+    m = _int_meta(era5_v3_unsharded, {})
+    with pytest.raises(ValueError, match="use_zarr_fill_value_as_mask"):
+        cf_decode(np.array([0], dtype="<i2"), m, use_zarr_fill_value_as_mask="yes")

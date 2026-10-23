@@ -64,13 +64,18 @@ class _ConfigGate:
     time ``zarr.config.set`` is in force, so no plain open can start inside it and two
     scopes cannot overlap (the later one would restore the earlier one's setting). A
     waiting exclusive request holds back new shared ones, so zarrs scopes are not starved.
-    A thread inside its own exclusive scope may take the gate shared (the open it makes);
-    a shared hold is not reentrant and cannot be upgraded.
+
+    Holds nest per thread. A thread inside its own exclusive scope may take the gate shared
+    or exclusive again (the open it makes). A thread that already holds it shared may take
+    it shared again without waiting, even while a writer queues: it is already inside, and
+    waiting for the writer would wait on itself. It cannot take it exclusive, because the
+    writer would wait for the thread's own shared hold; that is refused with a
+    ``ZarrError`` instead of deadlocking.
     """
 
     def __init__(self):
         self._cond = threading.Condition()
-        self._shared: set[int] = set()  # threads holding it shared
+        self._shared: dict[int, int] = {}  # thread -> its shared holds
         self._owner: int | None = None  # the thread holding it exclusive
         self._depth = 0
         self._waiting = 0  # exclusive requests waiting
@@ -87,16 +92,23 @@ class _ConfigGate:
         with self._cond:
             own = self._owner == me
             if not own:
-                while self._owner is not None or self._waiting:
-                    self._cond.wait()
-                self._shared.add(me)
+                if me in self._shared:  # already inside: nothing to wait for
+                    self._shared[me] += 1
+                else:
+                    while self._owner is not None or self._waiting:
+                        self._cond.wait()
+                    self._shared[me] = 1
         try:
             yield
         finally:
             if not own:
                 with self._cond:
-                    self._shared.discard(me)
-                    self._cond.notify_all()
+                    left = self._shared[me] - 1
+                    if left:
+                        self._shared[me] = left
+                    else:
+                        del self._shared[me]
+                        self._cond.notify_all()
 
     @contextmanager
     def exclusive(self):
@@ -105,6 +117,14 @@ class _ConfigGate:
             if self._owner == me:
                 self._depth += 1
             else:
+                if me in self._shared:
+                    raise ZarrError(
+                        "this thread holds the zarr config gate shared (it is inside a "
+                        "plain open) and asked for it exclusive, which would wait for "
+                        "its own shared hold",
+                        fix="open the array with the zarrs pipeline before entering a "
+                        "plain open, not inside one",
+                    )
                 self._waiting += 1
                 try:
                     while self._owner is not None or self._shared:

@@ -282,6 +282,91 @@ def test_every_open_holds_the_config_gate(era5_v3_sharded, monkeypatch):
     assert held == [True, True, True]
 
 
+def _in_thread(fn, seconds=3.0):
+    """Run ``fn`` in a daemon thread; ``(finished, result_or_error)``. A deadlock is a ``False``."""
+    box = {}
+
+    def run():
+        try:
+            box["value"] = fn()
+        except BaseException as e:  # noqa: BLE001
+            box["error"] = e
+
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(seconds)
+    return (not t.is_alive()), box
+
+
+def test_a_nested_shared_hold_does_not_wait_for_a_writer():
+    """A thread that already holds the gate shared may take it shared again while a writer
+    waits; a fresh shared request queues behind the writer."""
+    gate = _engine._ConfigGate()
+    order = []
+
+    def writer():
+        with gate.exclusive():
+            order.append("writer")
+
+    def reader():
+        with gate.shared():
+            w = threading.Thread(target=writer, daemon=True)
+            w.start()
+            deadline = time.time() + 5
+            while not gate._waiting and time.time() < deadline:
+                time.sleep(0.01)
+            assert gate._waiting == 1, "the writer never queued"
+            with gate.shared():  # nested: it must not queue behind the writer
+                order.append("nested")
+            assert gate.held()  # still inside the outer hold
+        w.join(5)
+        return list(order)
+
+    finished, box = _in_thread(reader, 10)
+    assert finished, "a nested shared hold deadlocked behind a waiting writer"
+    assert box.get("value") == ["nested", "writer"], box
+
+
+def test_a_thread_holding_the_gate_shared_cannot_upgrade_it():
+    gate = _engine._ConfigGate()
+
+    def upgrade():
+        with gate.shared():
+            try:
+                with gate.exclusive():
+                    return "upgraded"
+            except ZarrError as e:
+                return e
+
+    finished, box = _in_thread(upgrade)
+    assert finished, "a shared -> exclusive upgrade deadlocked"
+    err = box["value"]
+    assert isinstance(err, ZarrError) and "Fix:" in str(err)
+    assert "exclusive" in str(err) and "shared" in str(err)
+    with gate.exclusive():  # the failed upgrade left the gate usable
+        assert gate.held()
+
+
+def test_the_gate_is_free_after_nested_holds():
+    gate = _engine._ConfigGate()
+    with gate.shared():
+        with gate.shared():
+            pass
+        assert gate.held()  # the outer hold survives the inner exit
+    assert not gate.held()
+    finished, _ = _in_thread(lambda: gate.exclusive().__enter__())
+    assert finished
+
+
+def test_a_zarrs_scope_may_open_inside_itself_and_shared_inside_it():
+    gate = _engine._ConfigGate()
+    with gate.exclusive():
+        with gate.exclusive():
+            with gate.shared():
+                assert gate.held()
+    assert not gate.held()
+
+
 def test_a_manifest_array_cannot_be_written(era5_v3_sharded):
     arr = open_manifest_array(_manifest(era5_v3_sharded), "t2m", pipeline="default")
     with pytest.raises(Exception) as ei:

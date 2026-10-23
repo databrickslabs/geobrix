@@ -820,11 +820,44 @@ _OUTPUT_GEOM_NAME = {"GPKG": "geom", "OpenFileGDB": "SHAPE"}
 # OpenFileGDB layer creation options. By default the driver stores a 64-bit
 # integer column as Float64 (silently rounding ids above 2**53) and a date column
 # as a date-time, to stay readable by older ArcGIS; targeting ArcGIS Pro 3.2 or
-# later keeps both exactly.
+# later keeps both exactly. It also writes a timestamp column as a
+# timestamp-with-offset field and marks the layer as needing a 3.2 client, so an
+# older Esri client may not open the layer (documented in writers/filegdb.mdx).
 _GDB_LAYER_OPTIONS = {"TARGET_ARCGIS_VERSION": "ARCGIS_PRO_3_2_OR_LATER"}
 
 # Layer name a FileGDB gets when the writer is not given ``layerName``.
 _GDB_DEFAULT_LAYER = "layer"
+
+
+def _check_gdb_attr_names(attr_cols):
+    """Refuse or warn about attribute names a FileGDB layer reserves, before pyogrio.
+
+    The geometry field of a FileGDB layer is ``SHAPE``. An attribute named ``shape``
+    in any letter case clashes with it, and ``pyogrio.write_arrow`` then aborts the
+    whole process (GDAL 3.11 and 3.12) instead of raising, so it is refused here with
+    a ``ValueError``. The feature id column is ``OBJECTID``: GDAL does not write an
+    attribute of that name but takes an integer one as the feature ids (and refuses
+    any other type), which is easy to miss, so it warns, naming the column.
+    """
+    import warnings
+
+    clash = [c for c in attr_cols if c.lower() == "shape"]
+    if clash:
+        raise ValueError(
+            f"file_gdb_gbx cannot write the column(s) {clash}: a FileGDB layer names "
+            "its geometry field SHAPE, and a column with that name in any letter case "
+            "clashes with it. Rename the column before writing, for example to "
+            "'shape_attr' (df.withColumnRenamed)."
+        )
+    for c in (c for c in attr_cols if c.lower() == "objectid"):
+        warnings.warn(
+            f"file_gdb_gbx: the column {c!r} is not written as an attribute: a FileGDB "
+            "layer keeps its feature id in OBJECTID, so GDAL takes an integer column of "
+            "that name (unique, positive 32-bit values) as the feature ids and refuses "
+            "any other type. Rename the column to write it as an ordinary attribute.",
+            UserWarning,
+            stacklevel=2,
+        )
 
 
 def _output_geom_name(driver, geom_col):
@@ -1769,6 +1802,8 @@ class VectorGbxWriter(DataSourceWriter):
             srid_col=opts.get("sridcol"),
             proj_col=opts.get("projcol"),
         )
+        if self.driver == "OpenFileGDB":
+            _check_gdb_attr_names(self.attr_cols)
         self._schema = schema
         self._col_order = [f.name for f in schema.fields]
         self._geom_is_wkb = any(

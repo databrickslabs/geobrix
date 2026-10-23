@@ -11,6 +11,7 @@ pyogrio and through the ``file_gdb_gbx`` reader.
 import datetime
 import decimal
 import os
+import subprocess
 import sys
 
 import pyarrow as pa
@@ -385,3 +386,89 @@ def test_zip_output_layout(tmp_path):
     assert os.path.isfile(out)
     assert not os.path.exists(out[: -len(".zip")])  # no loose .gdb beside the archive
     assert pyogrio.read_info("/vsizip/" + out)["features"] == 3
+
+
+# A column named like the geometry field (SHAPE, in any letter case) makes
+# pyogrio.write_arrow abort the whole process (GDAL 3.11 and 3.12), so each case
+# runs in a CHILD process: a regression then fails one test instead of killing pytest.
+_CHILD_WRITE = """
+import sys, warnings
+from pyspark.sql.types import BinaryType, LongType, StringType, StructField, StructType
+from shapely import Point, to_wkb
+from databricks.labs.gbx.ds.vector import VectorGbxWriter
+
+out, name, kind = sys.argv[1], sys.argv[2], sys.argv[3]
+schema = StructType(
+    [
+        StructField(name, LongType() if kind == "long" else StringType()),
+        StructField("keep", StringType()),
+        StructField("geom_0", BinaryType()),
+        StructField("geom_0_srid", StringType()),
+        StructField("geom_0_srid_proj", StringType()),
+    ]
+)
+rows = [(7 if kind == "long" else "a", "b", bytearray(to_wkb(Point(1.0, 2.0))), "4326", "")]
+with warnings.catch_warnings(record=True) as caught:
+    warnings.simplefilter("always")
+    try:
+        w = VectorGbxWriter(out, schema, "OpenFileGDB", {}, True)
+        w.commit([w.write(iter(rows))])
+    except ValueError as e:
+        print("VALUEERROR " + str(e).replace(chr(10), " "))
+        sys.exit(0)
+print("WARNINGS " + " | ".join(str(c.message).replace(chr(10), " ") for c in caught))
+"""
+
+
+def _child_write(tmp_path, column, kind="string"):
+    """Write a one-row FileGDB with an attribute named ``column`` (a string, or a
+    long when ``kind`` is "long") in a child process; return (CompletedProcess, output path).
+    """
+    out = str(tmp_path / "child.gdb")
+    env = dict(os.environ, PYTHONPATH=os.pathsep.join(sys.path))
+    proc = subprocess.run(
+        [sys.executable, "-c", _CHILD_WRITE, out, column, kind],
+        capture_output=True,
+        text=True,
+        env=env,
+        timeout=300,
+    )
+    return proc, out
+
+
+@pytest.mark.parametrize("column", ["shape", "Shape", "SHAPE", "sHaPe"])
+def test_attribute_named_like_the_geometry_field_is_refused(tmp_path, column):
+    """A ``shape`` attribute in any letter case raises a clean ValueError that names
+    the column and the fix; the write does not reach pyogrio (which aborts the process).
+    """
+    proc, out = _child_write(tmp_path, column)
+    assert proc.returncode == 0, (
+        f"child died with return code {proc.returncode} (negative = killed by a signal)\n"
+        f"{proc.stderr[-1500:]}"
+    )
+    lines = [x for x in proc.stdout.splitlines() if x.startswith("VALUEERROR ")]
+    assert lines, f"no ValueError for column {column!r}: {proc.stdout!r}"
+    msg = lines[0]
+    assert repr(column) in msg
+    assert "SHAPE" in msg and "shape_attr" in msg and "Rename" in msg
+    assert not os.path.exists(out)  # refused before any output
+
+
+@pytest.mark.parametrize("column", ["OBJECTID", "objectid", "ObjectID"])
+def test_attribute_named_objectid_warns_it_is_the_feature_id(tmp_path, column):
+    """A FileGDB layer keeps its feature id in OBJECTID: GDAL takes an integer column of
+    that name as the feature ids instead of writing it as an attribute. The writer says
+    so, naming the column."""
+    proc, out = _child_write(tmp_path, column, kind="long")
+    assert (
+        proc.returncode == 0
+    ), f"child died with return code {proc.returncode}\n{proc.stderr[-1500:]}"
+    lines = [x for x in proc.stdout.splitlines() if x.startswith("WARNINGS ")]
+    assert lines, f"the write did not finish: {proc.stdout!r}"
+    assert repr(column) in lines[0] and "feature id" in lines[0]
+    info = pyogrio.read_info(out)
+    assert info["features"] == 1 and "keep" in info["fields"]
+    assert column.lower() not in [f.lower() for f in info["fields"]]  # not an attribute
+    assert list(pyogrio.read_dataframe(out, fid_as_index=True).index) == [
+        7
+    ]  # the feature id

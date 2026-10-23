@@ -17,8 +17,10 @@ schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared across the
 lightweight vector readers and writers.
 
 :::tip Compute & scale
-- **Large datasets:** this writer assembles the `.gdb` on a single node. For very large
-  outputs, use a **classic cluster** with ample memory or switch to the distributed
+- **Large datasets:** this writer assembles the `.gdb` on a single node, and GDAL's FileGDB
+  writer keeps per-feature index state in memory, so driver memory grows with the feature
+  count (about 120 bytes per feature; a 14-million-polygon write peaked at 1.9 GB). For very
+  large outputs, use a **classic cluster** with ample memory or switch to the distributed
   `geojsonl_gbx` writer. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
 - **Tier & compute:** `file_gdb_gbx` is fully lightweight, for writing and for
@@ -33,15 +35,34 @@ lightweight vector readers and writers.
 - **Output path** — must end in `.gdb` (or `.gdb.zip` with `zip=true`).
 - **Esri field limits** — Esri field-name and type limits apply, and a name that is an SQL
   reserved word (for example `by`) is renamed with a trailing underscore.
-- **ArcGIS version** — the layer targets **ArcGIS Pro 3.2 or later**. **Long** (64-bit integer),
-  **date** and **timestamp** columns keep their exact types (64-bit integer, date-only and
-  timestamp-with-offset fields) instead of being rounded to a double or widened to a date-time.
-  Older Esri clients may not open the layer. GDAL-based readers (GeoBrix, QGIS, GeoPandas)
-  read it whatever the ArcGIS version.
+- **Column types** — each column is written with the type of its DataFrame column: an `int`
+  stays a 32-bit integer and a `smallint` a 16-bit integer (the earlier encoder wrote them as
+  doubles), a `float` stays a single-precision float, a `boolean` is stored as an integer, and
+  a `decimal` as a double.
+- **ArcGIS version** — the [`targetArcGisVersion`](#options) option decides which Esri clients
+  can open the layer. By default (`auto`) a DataFrame with a **long** (64-bit integer), **date**
+  or **timestamp** column targets **ArcGIS Pro 3.2 or later**, so those columns keep their exact
+  types (64-bit integer, date-only and timestamp-with-offset fields) instead of being rounded to
+  a double or written as a date-time with no offset. The option stamps the **whole layer** as
+  needing a 3.2 client, so an older Esri client may refuse to open it, even for a layer whose
+  other columns are plain. A DataFrame with none of those columns is written for every Esri
+  client. Pass `ALL` to write for every client and accept the rounding, or
+  `ARCGIS_PRO_3_2_OR_LATER` to always target Pro 3.2. GeoBrix's readers, and any reader built on
+  GDAL 3.11 or later, open a Pro 3.2 layer; other readers depend on the GDAL they bundle.
+- **Geometry** — a layer holds one geometry type: points, lines or polygons, or their multi-part
+  forms (a polygon and a multipolygon can share a layer; a point and a line cannot, and GDAL
+  fails the write). Z coordinates are kept. A NULL geometry is written as a feature with no
+  geometry; if every geometry in the first partition is NULL the type cannot be inferred and
+  the write stops with an error asking for the `geometryType` option.
 - **Reserved column names** — the geometry field of a File Geodatabase layer is `SHAPE`, so a
   column named `shape` in any letter case is refused with an error: rename it first (for
-  example `shape_attr`). A column named `OBJECTID` is not written as an attribute: GDAL uses an
-  integer one as the feature ids, so rename it to keep its values as ordinary data.
+  example `shape_attr`). A column named `OBJECTID` (the match ignores case) is not written as
+  an attribute: GDAL uses an integer one as the feature ids, so rename it to keep its values
+  as ordinary data. A non-integer `OBJECTID` column, or integer values that are `0`, negative,
+  above 2^31 or repeated, fail the write with a GDAL error. The warning about an `OBJECTID`
+  column is raised inside Spark's Python worker and may not show in your notebook output, so
+  this page is where to look for it. Other writers (GeoPackage, GeoJSON, Shapefile) accept
+  columns with these names.
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded
   geometry are **not** accepted. Writing from a Databricks `GEOMETRY` / `GEOGRAPHY` column?
@@ -59,6 +80,7 @@ lightweight vector readers and writers.
 | `zip` | `false` | When `true`, produce a **single `.gdb.zip`** archive (the `.gdb` directory packed at the archive root) instead of a `.gdb` directory. The output path is normalised automatically: `.save("roads")` → `roads.gdb.zip`; `.save("roads.gdb")` → `roads.gdb.zip`. The [reader](../readers/filegdb) opens `.gdb.zip` transparently. Ignored for non-FileGDB drivers. |
 | `geometryType` | inferred from the data | Override the OGR geometry type. |
 | `layerName` | `layer` | Output layer (feature class) name. |
+| `targetArcGisVersion` | `auto` | Which Esri clients can open the layer, matched without regard to case. `auto` targets ArcGIS Pro 3.2 or later only when the DataFrame has a long, date or timestamp column; `ALL` writes for every client (a long is stored as a double, a date as a date-time and a timestamp as a date-time with no offset); `ARCGIS_PRO_3_2_OR_LATER` always targets Pro 3.2 and keeps those types exactly. The Pro 3.2 target stamps the **whole layer** with `RequiredGeodatabaseClientVersion 13.2`. Any other value raises an error. |
 | `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). |
 | `sridCol` | `<geomCol>_srid` | Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown). |
 | `projCol` | `<geomCol>_srid_proj` | Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |

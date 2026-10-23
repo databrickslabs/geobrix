@@ -3,10 +3,9 @@ and end-to-end round-trip tests for the fileName/adaptive-naming behavior of the
 light vector writers (gpkg_gbx, geojson_gbx, shapefile_gbx+zip, file_gdb_gbx).
 
 Pure-unit tests (no Spark, no Docker needed) are at the top.
-Round-trip tests require a local SparkSession and pyogrio/osgeo.
+Round-trip tests require a local SparkSession and pyogrio.
 """
 
-import importlib.util
 import os
 
 import pytest
@@ -247,16 +246,8 @@ def test_shapefile_zip_filename_case_c_option(spark, tmp_path):
 
 
 # ---- file_gdb_gbx -----------------------------------------------------------
-# FileGDB write requires native osgeo (heavyweight GDAL natives). Skip if absent.
-
-_HAS_OSGEO = importlib.util.find_spec("osgeo") is not None
-_FILEGDB_SKIP = pytest.mark.skipif(
-    not _HAS_OSGEO,
-    reason="native osgeo (heavyweight GDAL natives) not present; file_gdb_gbx write requires osgeo",
-)
 
 
-@_FILEGDB_SKIP
 def test_filegdb_filename_case_a_stem(spark, tmp_path):
     """file_gdb_gbx: save to stem path resolves to <stem>.gdb."""
     register(spark)
@@ -267,7 +258,6 @@ def test_filegdb_filename_case_a_stem(spark, tmp_path):
     assert spark.read.format("file_gdb_gbx").load(expected).count() == 3
 
 
-@_FILEGDB_SKIP
 def test_filegdb_filename_case_b_existing_dir(spark, tmp_path):
     """file_gdb_gbx: save to existing dir names the .gdb after the directory."""
     register(spark)
@@ -279,7 +269,6 @@ def test_filegdb_filename_case_b_existing_dir(spark, tmp_path):
     assert spark.read.format("file_gdb_gbx").load(expected).count() == 3
 
 
-@_FILEGDB_SKIP
 def test_filegdb_filename_case_c_option(spark, tmp_path):
     """file_gdb_gbx: .option('fileName','parcels').save(dir) -> dir/parcels.gdb."""
     register(spark)

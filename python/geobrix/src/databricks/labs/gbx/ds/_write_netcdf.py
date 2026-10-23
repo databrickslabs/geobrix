@@ -929,7 +929,9 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             # --- two-phase: write feather fragment into scratch ---
             import pyarrow as pa
             import pyarrow.feather as feather
-            from pyspark.sql.pandas.types import to_arrow_type
+            from pyspark.sql.types import TimestampType
+
+            from databricks.labs.gbx.ds import _arrow_utc
 
             os.makedirs(self.scratch_dir, exist_ok=True)
             # Build Arrow table: longitude, latitude, then each attr col.
@@ -941,7 +943,12 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             )
             cols_data = {"longitude": lons, "latitude": lats}
             for c in self.attr_cols:
-                cols_data[c] = attrs[c]
+                # A timestamp arrives as the worker's local time: store it as UTC.
+                cols_data[c] = (
+                    [_arrow_utc.to_utc(v) for v in attrs[c]]
+                    if isinstance(self.dtypes[c], TimestampType)
+                    else attrs[c]
+                )
 
             # Build Arrow schema: lon/lat as f8, attr cols typed from Spark schema.
             arrow_fields = [
@@ -949,7 +956,9 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                 pa.field("latitude", pa.float64()),
             ]
             for c in self.attr_cols:
-                arrow_fields.append(pa.field(c, to_arrow_type(self.dtypes[c])))
+                arrow_fields.append(
+                    pa.field(c, _arrow_utc.arrow_type_utc(self.dtypes[c]))
+                )
             arr_schema = pa.schema(
                 arrow_fields,
                 metadata={"srid": resolved_srid},

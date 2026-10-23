@@ -822,3 +822,39 @@ def test_write_local_streams_generator_without_materializing(tmp_path, monkeypat
     # whole-generator materialization; and all five were eventually written.
     assert pulled_at_first_write["v"] == 1
     assert pulled["n"] == 5
+
+
+@pytest.mark.parametrize(
+    "driver,name",
+    [("GPKG", "o.gpkg"), ("GeoJSON", "o.geojson"), ("ESRI Shapefile", "o.shp")],
+)
+def test_other_drivers_accept_columns_named_shape_and_objectid(tmp_path, driver, name):
+    """Only a FileGDB layer reserves ``SHAPE`` and ``OBJECTID``: every other writer takes
+    columns with those names as ordinary attributes, with no refusal and no warning."""
+    import warnings
+
+    import pyogrio
+
+    schema = StructType(
+        [
+            StructField("shape", StringType()),
+            StructField("OBJECTID", IntegerType()),
+            StructField("geom_0", BinaryType()),
+            StructField("geom_0_srid", StringType()),
+            StructField("geom_0_srid_proj", StringType()),
+        ]
+    )
+    rows = [
+        ("a", 7, bytearray(to_wkb(Point(1.0, 2.0))), "4326", ""),
+        ("b", 8, bytearray(to_wkb(Point(3.0, 4.0))), "4326", ""),
+    ]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+        w.commit([w.write(iter(rows))])
+    assert not [c for c in caught if "file_gdb_gbx" in str(c.message)]
+    fields = list(pyogrio.read_info(w.path)["fields"])
+    assert "shape" in fields and "OBJECTID" in fields
+    got = pyogrio.read_dataframe(w.path)
+    assert sorted(got["shape"]) == ["a", "b"]
+    assert sorted(int(v) for v in got["OBJECTID"]) == [7, 8]

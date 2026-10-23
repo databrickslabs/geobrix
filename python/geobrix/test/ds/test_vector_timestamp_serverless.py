@@ -112,3 +112,218 @@ def test_reader_streams_timestamp_column(tmp_path, serverless_arrow, fmt, driver
     batches = [b for p in rdr.partitions() for b in rdr.read(p)]
     assert sum(b.num_rows for b in batches) == 2
     assert pa.types.is_timestamp(batches[0].schema.field("seen").type)
+
+
+# ---------------------------------------------------------------------------
+# One shared timestamp -> UTC mapping (ds/_arrow_utc.py), used by every DataSource
+# ---------------------------------------------------------------------------
+
+import os  # noqa: E402
+import time  # noqa: E402
+
+from databricks.labs.gbx.ds import _arrow_utc  # noqa: E402
+
+
+@pytest.fixture
+def new_york(monkeypatch):
+    """The process runs on US Eastern time (UTC-5 in winter, UTC-4 in summer)."""
+    old = os.environ.get("TZ")
+    os.environ["TZ"] = "America/New_York"
+    time.tzset()
+    yield
+    if old is None:
+        os.environ.pop("TZ", None)
+    else:
+        os.environ["TZ"] = old
+    time.tzset()
+
+
+def test_arrow_type_utc_needs_no_session_timezone(serverless_arrow):
+    assert _arrow_utc.arrow_type_utc(TimestampType()) == pa.timestamp("us", tz="UTC")
+    schema = StructType(
+        [StructField("seen", TimestampType(), False), StructField("n", StringType())]
+    )
+    got = _arrow_utc.arrow_schema_utc(schema)
+    assert got.field("seen").type == pa.timestamp("us", tz="UTC")
+    assert not got.field("seen").nullable  # nullability is kept
+    assert got.field("n").type == pa.string()
+
+
+def test_arrow_type_utc_passes_the_zone_where_pyspark_takes_it(monkeypatch):
+    """A timestamp nested in another type still goes through PySpark: it is given the
+    zone when PySpark takes one (>= 4.1) and nothing on 4.0, which always emits UTC."""
+    import pyspark.sql.pandas.types as pst
+    from pyspark.sql.types import ArrayType
+
+    seen = []
+
+    def with_zone(dt, error_on_duplicated_field_names_in_struct=False, timezone=None):
+        seen.append(timezone)
+        return pa.list_(pa.timestamp("us", tz=timezone))
+
+    monkeypatch.setattr(pst, "to_arrow_type", with_zone)
+    assert _arrow_utc.arrow_type_utc(ArrayType(TimestampType())) == pa.list_(
+        pa.timestamp("us", tz="UTC")
+    )
+    assert seen == ["UTC"]
+
+    def without_zone(dt, error_on_duplicated_field_names_in_struct=False):
+        seen.append("no-zone")
+        return pa.list_(pa.timestamp("us", tz="UTC"))
+
+    monkeypatch.setattr(pst, "to_arrow_type", without_zone)
+    _arrow_utc.arrow_type_utc(ArrayType(TimestampType()))
+    assert seen == ["UTC", "no-zone"]
+
+
+def test_to_utc_reads_a_naive_datetime_as_local_time(new_york):
+    assert _arrow_utc.to_utc(datetime.datetime(2020, 1, 2, 3, 4, 5)) == (
+        datetime.datetime(2020, 1, 2, 8, 4, 5, tzinfo=datetime.timezone.utc)
+    )
+    assert _arrow_utc.to_utc(datetime.datetime(2020, 7, 1, 12, 0, 0)) == (
+        datetime.datetime(2020, 7, 1, 16, 0, 0, tzinfo=datetime.timezone.utc)
+    )
+
+
+def test_to_utc_leaves_aware_datetimes_and_other_values_alone(new_york):
+    aware = datetime.datetime(
+        2020, 1, 2, 3, 4, 5, tzinfo=datetime.timezone(datetime.timedelta(hours=2))
+    )
+    assert _arrow_utc.to_utc(aware) == aware  # the same instant
+    assert _arrow_utc.to_utc(aware).utcoffset() == datetime.timedelta(0)
+    assert _arrow_utc.to_utc(None) is None
+    assert _arrow_utc.to_utc("x") == "x"
+
+
+def test_every_consumer_maps_timestamps_through_the_shared_helper(monkeypatch):
+    """exif, read_paths and the vector writer/reader each type a timestamp through
+    ``_arrow_utc.arrow_type_utc`` rather than keeping their own mapping."""
+    from databricks.labs.gbx.ds import exif, paths
+
+    calls = []
+    real = _arrow_utc.arrow_type_utc
+
+    def spy(dt):
+        calls.append(type(dt).__name__)
+        return real(dt)
+
+    monkeypatch.setattr(_arrow_utc, "arrow_type_utc", spy)
+    ts_schema = StructType([StructField("seen", TimestampType(), True)])
+
+    exif._exif_arrow_schema(ts_schema)
+    assert "TimestampType" in calls
+    calls.clear()
+
+    paths._arrow_schema(ts_schema)
+    assert "TimestampType" in calls
+    calls.clear()
+
+    _writer_arrow_table(
+        {"seen": [None], "geom_0": [None]},
+        StructType(
+            [
+                StructField("seen", TimestampType(), True),
+                StructField("geom_0", BinaryType(), True),
+            ]
+        ),
+        "geom_0",
+    )
+    assert "TimestampType" in calls
+
+
+# ---------------------------------------------------------------------------
+# a timestamp is exact when the worker is not on UTC
+# ---------------------------------------------------------------------------
+
+
+def test_writer_arrow_table_converts_local_time_to_utc(serverless_arrow, new_york):
+    schema = StructType(
+        [
+            StructField("seen", TimestampType(), True),
+            StructField("geom_0", BinaryType(), True),
+        ]
+    )
+    cols = {
+        "seen": [datetime.datetime(2020, 1, 2, 3, 4, 5), None],
+        "geom_0": [b"", b""],
+    }
+    tbl = _writer_arrow_table(cols, schema, "geom_0")
+    assert tbl.column("seen").to_pylist() == [
+        datetime.datetime(2020, 1, 2, 8, 4, 5, tzinfo=datetime.timezone.utc),
+        None,
+    ]
+
+
+@pytest.mark.parametrize(
+    "driver,name", [("GPKG", "ts.gpkg"), ("OpenFileGDB", "ts.gdb")]
+)
+def test_a_written_timestamp_is_exact_on_a_non_utc_worker(
+    tmp_path, serverless_arrow, new_york, driver, name
+):
+    import pandas as pd
+
+    from databricks.labs.gbx.ds.vector import VectorGbxWriter
+
+    schema = StructType(
+        [
+            StructField("seen", TimestampType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    rows = [
+        (
+            datetime.datetime(2020, 1, 2, 3, 4, 5),
+            bytearray(to_wkb(Point(1, 2))),
+            "4326",
+            "",
+        )
+    ]
+    w = VectorGbxWriter(str(tmp_path / name), schema, driver, {}, True)
+    w.commit([w.write(iter(rows))])
+    got = pyogrio.read_dataframe(w.path)["seen"].iloc[0]
+    if got.tzinfo is None:  # a date-time field carries no offset: UTC wall clock
+        got = got.tz_localize("UTC")
+    assert got == pd.Timestamp("2020-01-02 08:04:05", tz="UTC")
+
+
+# ---------------------------------------------------------------------------
+# netcdf_gbx point writer: the same Serverless hazard
+# ---------------------------------------------------------------------------
+
+
+def test_netcdf_point_writer_types_a_timestamp_attribute_as_utc(
+    tmp_path, serverless_arrow, new_york
+):
+    import pyarrow.feather as feather
+    from pyspark.sql import Row
+    from pyspark.sql.types import DoubleType
+
+    from databricks.labs.gbx.ds._write_netcdf import NetcdfVectorGbxWriter
+
+    schema = StructType(
+        [
+            StructField("ch4", DoubleType(), True),
+            StructField("seen", TimestampType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    w = NetcdfVectorGbxWriter(
+        {"path": str(tmp_path / "out"), "singleFile": "true"}, schema, True
+    )
+    row = Row(
+        ch4=1.5,
+        seen=datetime.datetime(2020, 1, 2, 3, 4, 5),
+        geom_0=bytearray(to_wkb(Point(10.0, 50.0))),
+        geom_0_srid="4326",
+        geom_0_srid_proj="",
+    )
+    msg = w.write(iter([row]))
+    tbl = feather.read_table(msg.frag_path)
+    assert tbl.schema.field("seen").type == pa.timestamp("us", tz="UTC")
+    assert tbl.column("seen").to_pylist() == [
+        datetime.datetime(2020, 1, 2, 8, 4, 5, tzinfo=datetime.timezone.utc)
+    ]

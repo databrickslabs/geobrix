@@ -76,6 +76,7 @@ def _minimal_writer(out_path, geom_col="geom_0"):
     w.proj_col = f"{geom_col}_srid_proj"
     w.layer_name = None
     w.driver = "OpenFileGDB"
+    w._gdb_target = "ARCGIS_PRO_3_2_OR_LATER"
     w.path = out_path
     return w
 

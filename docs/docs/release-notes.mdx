@@ -291,24 +291,31 @@ formats.
   indistinguishable from a whole-file read of the same source, so if you write one source both
   ways into the same directory, set `nameCol`.
 
-### Vector writers — `file_gdb_gbx` on any compute, timestamps on Serverless
+### Vector writers — `file_gdb_gbx` on any compute, timestamps on Serverless (behavior change)
 
 - **`file_gdb_gbx` writes File Geodatabases with the lightweight tier alone.** The writer used
   to need native GDAL (`osgeo`) and so ran only on classic x86 clusters with the init script.
   It now encodes the `.gdb` through pyogrio's bundled OpenFileGDB driver, so FileGDB writing
   is lightweight and runs on Serverless, standard and dedicated clusters, on x86 and ARM, with
-  no extra install. The output layout, `zip=true`, the shared schema and the options are
-  unchanged, and the driver still assembles the file in one pass with bounded memory. The layer
-  targets ArcGIS Pro 3.2 or later: long (64-bit integer), date and timestamp columns keep their
-  exact types (64-bit integer, date-only and timestamp-with-offset fields) instead of being
-  rounded to a double or widened to a date-time, and older Esri clients may not open the layer;
-  GDAL-based readers read it whatever the ArcGIS version. A column named `shape` (any letter
-  case) is refused with a clear error, because the layer's geometry field is `SHAPE`. See
-  [GeoDatabase Writer](./writers/filegdb).
+  no extra install. The output layout, `zip=true`, the shared schema and the other options are
+  unchanged, and the driver still assembles the file in one pass.
+- **Column types follow the DataFrame types.** An `int` column stays a 32-bit integer and a
+  `smallint` a 16-bit integer in the layer; the earlier encoder wrote both as doubles. A
+  column named `shape` (any letter case) is refused with a clear error, because the layer's
+  geometry field is `SHAPE`.
+- **New option `targetArcGisVersion`** (`auto`, `ALL` or `ARCGIS_PRO_3_2_OR_LATER`) decides which
+  Esri clients can open the layer. By default (`auto`), a DataFrame with a long (64-bit integer),
+  date or timestamp column targets ArcGIS Pro 3.2 or later, so those columns keep their exact
+  types (64-bit integer, date-only and timestamp-with-offset fields) instead of being rounded to
+  a double or written as a date-time with no offset; the whole layer is then marked as needing a
+  3.2 client, and an older Esri client may refuse to open it. A DataFrame without such a column
+  is written for every client, and `ALL` forces that. GeoBrix's readers and any reader built on
+  GDAL 3.11 or later open a Pro 3.2 layer. See [GeoDatabase Writer](./writers/filegdb).
 - **Timestamp columns work in the lightweight vector readers and writers on Serverless.** A
   layer with a date-time field (or a DataFrame with a timestamp column) failed to read or write
   on Serverless compute with `AssertionError`, because those workers have no session time zone
-  for PySpark to type the column with. Timestamps are now read and written as UTC.
+  for PySpark to type the column with. Timestamps are now read and written as UTC, and a
+  written timestamp is exact on a worker whose time zone is not UTC.
 
 ### Grid explode functions — `bng_tessellateexplode` columns (behavior change)
 

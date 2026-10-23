@@ -13,6 +13,7 @@ import decimal
 import os
 import subprocess
 import sys
+import warnings
 
 import pyarrow as pa
 import pyogrio
@@ -32,7 +33,14 @@ from pyspark.sql.types import (
     StructType,
     TimestampType,
 )
-from shapely import LineString, Point, Polygon
+from shapely import (
+    LineString,
+    MultiLineString,
+    MultiPoint,
+    MultiPolygon,
+    Point,
+    Polygon,
+)
 from shapely import from_wkb as _from_wkb
 from shapely import to_wkb
 
@@ -472,3 +480,298 @@ def test_attribute_named_objectid_warns_it_is_the_feature_id(tmp_path, column):
     assert list(pyogrio.read_dataframe(out, fid_as_index=True).index) == [
         7
     ]  # the feature id
+
+
+# ---------------------------------------------------------------------------
+# targetArcGisVersion: which ArcGIS clients the layer is written for
+# ---------------------------------------------------------------------------
+
+
+def _all_gdbtable_bytes(gdb):
+    out = b""
+    for name in sorted(os.listdir(gdb)):
+        if name.endswith(".gdbtable"):
+            with open(os.path.join(gdb, name), "rb") as fh:
+                out += fh.read()
+    return out
+
+
+def _stamped_for_pro_3_2(gdb):
+    """Whether the layer carries ``RequiredGeodatabaseClientVersion 13.2`` (the GDAL
+    stamp that makes Esri clients older than ArcGIS Pro 3.2 refuse the layer)."""
+    return b"RequiredGeodatabaseClientVersion>13.2<" in _all_gdbtable_bytes(gdb)
+
+
+def _g():
+    return bytearray(to_wkb(Point(1.0, 2.0)))
+
+
+def _gdb_with(tmp_path, field, value, options=None, name="t.gdb"):
+    schema = _schema(StructField("v", field))
+    rows = [(value, _g(), "4326", "")]
+    return _write_gdb(tmp_path / name, schema, [rows], options)
+
+
+def test_target_version_auto_with_only_strings_writes_no_client_stamp(tmp_path):
+    out = _write_gdb(tmp_path / "s.gdb", _schema(_NAME), [_pts(2)])
+    assert not _stamped_for_pro_3_2(out)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        (LongType(), 2**53 + 1),
+        (DateType(), datetime.date(2020, 1, 2)),
+        (TimestampType(), datetime.datetime(2020, 1, 2, 3, 4, 5)),
+    ],
+    ids=["long", "date", "timestamp"],
+)
+def test_target_version_auto_stamps_for_long_date_and_timestamp(tmp_path, field, value):
+    out = _gdb_with(tmp_path, field, value)
+    assert _stamped_for_pro_3_2(out)
+
+
+def test_target_version_auto_keeps_a_long_exact(tmp_path):
+    out = _gdb_with(tmp_path, LongType(), 2**53 + 1)
+    info = pyogrio.read_info(out)
+    assert dict(zip(info["fields"], info["dtypes"]))["v"] == "int64"
+    assert pyogrio.read_dataframe(out)["v"].tolist() == [2**53 + 1]
+
+
+def test_target_version_all_writes_a_long_as_float64_without_the_stamp(tmp_path):
+    out = _gdb_with(tmp_path, LongType(), 2**53 + 1, {"targetArcGisVersion": "ALL"})
+    info = pyogrio.read_info(out)
+    assert dict(zip(info["fields"], info["dtypes"]))["v"] == "float64"
+    assert not _stamped_for_pro_3_2(out)
+
+
+def test_target_version_all_makes_a_timestamp_a_date_time_without_offset(tmp_path):
+    """Without the Pro 3.2 target a timestamp is an Esri date-time field, which has no
+    offset; the Pro 3.2 target writes a timestamp-with-offset field."""
+    ts = datetime.datetime(2020, 1, 2, 3, 4, 5)
+    plain = _gdb_with(
+        tmp_path, TimestampType(), ts, {"targetArcGisVersion": "ALL"}, "a.gdb"
+    )
+    pro = _gdb_with(tmp_path, TimestampType(), ts, name="b.gdb")
+    assert b"esriFieldTypeTimestampOffset" not in _all_gdbtable_bytes(plain)
+    assert b"esriFieldTypeTimestampOffset" in _all_gdbtable_bytes(pro)
+
+
+def test_target_version_pro_3_2_stamps_even_without_a_trigger_column(tmp_path):
+    out = _write_gdb(
+        tmp_path / "p.gdb",
+        _schema(_NAME),
+        [_pts(2)],
+        {"targetArcGisVersion": "ARCGIS_PRO_3_2_OR_LATER"},
+    )
+    assert _stamped_for_pro_3_2(out)
+
+
+@pytest.mark.parametrize("value", ["all", "All", "ALL"])
+def test_target_version_all_is_case_insensitive(tmp_path, value):
+    out = _gdb_with(
+        tmp_path, LongType(), 5, {"targetArcGisVersion": value}, f"{value}.gdb"
+    )
+    assert not _stamped_for_pro_3_2(out)
+
+
+def test_target_version_auto_is_case_insensitive(tmp_path):
+    out = _gdb_with(tmp_path, LongType(), 5, {"targetArcGisVersion": "AUTO"})
+    assert _stamped_for_pro_3_2(out)
+
+
+def test_target_version_invalid_value_raises_before_any_output(tmp_path):
+    target = tmp_path / "bad.gdb"
+    with pytest.raises(ValueError) as ei:
+        VectorGbxWriter(
+            str(target),
+            _schema(_NAME),
+            "OpenFileGDB",
+            {"targetArcGisVersion": "ARCGIS_PRO_9"},
+            True,
+        )
+    msg = str(ei.value)
+    assert "targetArcGisVersion" in msg and "ARCGIS_PRO_9" in msg
+    for allowed in ("auto", "ALL", "ARCGIS_PRO_3_2_OR_LATER"):
+        assert allowed in msg
+    assert not target.exists()
+
+
+def test_target_version_is_ignored_by_other_drivers(tmp_path):
+    """Only FileGDB has the option: another driver neither reads nor validates it."""
+    w = VectorGbxWriter(
+        str(tmp_path / "o.gpkg"),
+        _schema(_NAME),
+        "GPKG",
+        {"targetArcGisVersion": "x"},
+        True,
+    )
+    assert w.driver == "GPKG"
+
+
+# ---------------------------------------------------------------------------
+# geometry: Z, multi-part, mixed types, NULL
+# ---------------------------------------------------------------------------
+
+
+def _zs(geom):
+    """Every Z of a geometry (all parts, rings included)."""
+    out = []
+    for part in getattr(geom, "geoms", [geom]):
+        rings = (
+            [part.exterior, *part.interiors] if hasattr(part, "exterior") else [part]
+        )
+        for ring in rings:
+            out += [c[2] for c in ring.coords]
+    return out
+
+
+def _geoms(*shapes, srid="4326"):
+    return [(f"g{i}", bytearray(to_wkb(g)), srid, "") for i, g in enumerate(shapes)]
+
+
+@pytest.mark.parametrize(
+    "shapes",
+    [
+        [Point(1, 2, 3), Point(4, 5, 6)],
+        [LineString([(0, 0, 1), (1, 1, 2)]), LineString([(2, 2, 5), (3, 3, 6)])],
+        [Polygon([(0, 0, 1), (1, 0, 2), (1, 1, 3), (0, 0, 1)])],
+    ],
+    ids=["point-z", "line-z", "polygon-z"],
+)
+def test_z_coordinates_survive_the_write(tmp_path, shapes):
+    out = _write_gdb(tmp_path / "z.gdb", _schema(_NAME), [_geoms(*shapes)])
+    got = pyogrio.read_dataframe(out)
+    assert len(got) == len(shapes)
+    assert all(g.has_z for g in got.geometry)
+    assert sorted(z for g in got.geometry for z in _zs(g)) == sorted(
+        z for s in shapes for z in _zs(s)
+    )
+
+
+@pytest.mark.parametrize(
+    "shapes,allowed",
+    [
+        (
+            [MultiPoint([(1, 2), (3, 4)]), MultiPoint([(5, 6)])],
+            {"MultiPoint"},
+        ),
+        (
+            [
+                MultiLineString([[(0, 0), (1, 1)], [(2, 2), (3, 3)]]),
+                MultiLineString([[(5, 5), (6, 6)]]),
+            ],
+            {"MultiLineString"},
+        ),
+        (
+            [
+                MultiPolygon(
+                    [
+                        Polygon([(0, 0), (1, 0), (1, 1), (0, 0)]),
+                        Polygon([(2, 2), (3, 2), (3, 3), (2, 2)]),
+                    ]
+                ),
+                MultiPolygon([Polygon([(5, 5), (6, 5), (6, 6), (5, 5)])]),
+            ],
+            {"MultiPolygon"},
+        ),
+        (
+            # a Polygon and a MultiPolygon in one layer: a FileGDB polygon layer holds both
+            [
+                Polygon([(0, 0), (1, 0), (1, 1), (0, 0)]),
+                MultiPolygon([Polygon([(2, 2), (3, 2), (3, 3), (2, 2)])]),
+            ],
+            {"MultiPolygon"},
+        ),
+    ],
+    ids=["multipoint", "multiline", "multipolygon", "polygon-and-multipolygon"],
+)
+def test_multi_part_geometries_keep_every_part(tmp_path, shapes, allowed):
+    out = _write_gdb(tmp_path / "m.gdb", _schema(_NAME), [_geoms(*shapes)])
+    assert pyogrio.read_info(out)["geometry_type"] in allowed
+    got = pyogrio.read_dataframe(out)
+    assert len(got) == len(shapes)
+    assert sum(len(getattr(g, "geoms", [g])) for g in got.geometry) == sum(
+        len(getattr(s, "geoms", [s])) for s in shapes
+    )
+
+
+def test_mixed_geometry_types_fail_the_write_with_a_gdal_error(tmp_path):
+    """A FileGDB layer holds one geometry type: a point and a line are refused by GDAL."""
+    with pytest.raises(pyogrio.errors.DataLayerError):
+        _write_gdb(
+            tmp_path / "mix.gdb",
+            _schema(_NAME),
+            [_geoms(Point(1, 2), LineString([(0, 0), (1, 1)]))],
+        )
+
+
+def test_null_geometry_among_geometries_is_written_as_a_null_feature(tmp_path):
+    rows = _geoms(Point(1, 2), Point(3, 4))
+    rows.insert(1, ("gnull", None, "4326", ""))
+    out = _write_gdb(tmp_path / "n.gdb", _schema(_NAME), [rows])
+    got = pyogrio.read_dataframe(out)
+    assert len(got) == 3
+    by_name = dict(zip(got["name"], got.geometry))
+    assert by_name["gnull"] is None
+    assert by_name["g0"] is not None and by_name["g1"] is not None
+
+
+def test_only_null_geometries_raise_a_clear_error_naming_the_option(tmp_path):
+    rows = [("a", None, "4326", ""), ("b", None, "4326", "")]
+    with pytest.raises(ValueError) as ei:
+        _write_gdb(tmp_path / "allnull.gdb", _schema(_NAME), [rows])
+    msg = str(ei.value)
+    assert "geometryType" in msg and "NULL" in msg
+
+
+def test_only_null_geometries_write_when_the_type_is_given(tmp_path):
+    rows = [("a", None, "4326", ""), ("b", None, "4326", "")]
+    out = _write_gdb(
+        tmp_path / "typed.gdb", _schema(_NAME), [rows], {"geometryType": "Point"}
+    )
+    got = pyogrio.read_dataframe(out)
+    assert len(got) == 2 and got.geometry.isna().all()
+    assert pyogrio.read_info(out)["geometry_type"] == "Point"
+
+
+# ---------------------------------------------------------------------------
+# column names: reserved words and the feature id
+# ---------------------------------------------------------------------------
+
+
+def test_sql_reserved_column_name_is_laundered_with_a_trailing_underscore(tmp_path):
+    """GDAL renames a field called after an SQL reserved word (``by``) to ``by_`` and the
+    values still land in it."""
+    schema = _schema(StructField("by", StringType()), StructField("keep", StringType()))
+    rows = [("x", "k", _g(), "4326", ""), ("y", "k", _g(), "4326", "")]
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        out = _write_gdb(tmp_path / "by.gdb", schema, [rows])
+    fields = list(pyogrio.read_info(out)["fields"])
+    assert "by_" in fields and "by" not in fields and "keep" in fields
+    assert sorted(pyogrio.read_dataframe(out)["by_"]) == ["x", "y"]
+    assert any("by_" in str(c.message) for c in caught)
+
+
+@pytest.mark.parametrize(
+    "kind,values",
+    [
+        (DoubleType(), [1.5, 2.5]),
+        (StringType(), ["a", "b"]),
+        (IntegerType(), [0, 1]),
+        (IntegerType(), [-1, 1]),
+        (LongType(), [2**31 + 5, 1]),
+        (IntegerType(), [7, 7]),
+    ],
+    ids=["float", "string", "zero", "negative", "above-2**31", "duplicate"],
+)
+def test_unusable_objectid_values_fail_the_write_with_a_gdal_error(
+    tmp_path, kind, values
+):
+    """GDAL takes an integer OBJECTID column as the feature ids: values that cannot be
+    ids (or a non-integer column) fail the write with a GDAL error."""
+    schema = _schema(StructField("objectid", kind))
+    rows = [(v, _g(), "4326", "") for v in values]
+    with pytest.raises((pyogrio.errors.DataLayerError, pyogrio.errors.FieldError)):
+        _write_gdb(tmp_path / "oid.gdb", schema, [rows])

@@ -24,7 +24,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _listing, _quarantine
+from databricks.labs.gbx.ds import _arrow_utc, _listing, _quarantine
 from databricks.labs.gbx.ds.file_gbx import list_local_files
 
 if TYPE_CHECKING:
@@ -71,27 +71,14 @@ _JPEG_TAIL = 64 * 1024
 
 
 def _exif_arrow_schema(spark_schema: StructType) -> "pa.Schema":
-    """Build a pyarrow schema from a Spark ``StructType`` without a session timezone.
+    """Arrow schema of a Spark ``StructType`` without a session timezone.
 
-    ``pyspark.sql.pandas.types.to_arrow_schema`` funnels ``TimestampType`` through
-    ``to_arrow_type``, which asserts a non-null session timezone — unset on
-    Spark-Connect / Serverless DataSource workers, so it raises ``AssertionError``
-    there. This reader plans session-free, so we map ``TimestampType`` to a fixed
-    UTC arrow type ourselves (matching ``timestamp_utc=True`` semantics; naive EXIF
-    datetimes are treated as UTC wall-clock) and defer every other field to
-    ``to_arrow_type`` (which needs no timezone).
+    This reader plans session-free (a Spark-Connect / Serverless DataSource worker has
+    no session timezone for PySpark to type ``TimestampType`` with), so the timestamp
+    is the shared UTC mapping in ``_arrow_utc``; naive EXIF datetimes are treated as
+    UTC wall-clock.
     """
-    import pyarrow as pa
-    from pyspark.sql.pandas.types import to_arrow_type
-
-    fields = []
-    for f in spark_schema.fields:
-        if isinstance(f.dataType, TimestampType):
-            arrow_type = pa.timestamp("us", tz="UTC")
-        else:
-            arrow_type = to_arrow_type(f.dataType)
-        fields.append(pa.field(f.name, arrow_type, nullable=f.nullable))
-    return pa.schema(fields)
+    return _arrow_utc.arrow_schema_utc(spark_schema)
 
 
 # ---------------------------------------------------------------------------

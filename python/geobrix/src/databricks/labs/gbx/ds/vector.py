@@ -33,7 +33,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _quarantine, _scratch
+from databricks.labs.gbx.ds import _arrow_utc, _quarantine, _scratch
 from databricks.labs.gbx.pyrx.core.local_temp import (
     StageCache,
     new_local_temp_dir,
@@ -817,13 +817,18 @@ def _srid_to_crs(srid: str, proj4: str):
 # name (which may be arbitrary once geomCol is in play).
 _OUTPUT_GEOM_NAME = {"GPKG": "geom", "OpenFileGDB": "SHAPE"}
 
-# OpenFileGDB layer creation options. By default the driver stores a 64-bit
-# integer column as Float64 (silently rounding ids above 2**53) and a date column
-# as a date-time, to stay readable by older ArcGIS; targeting ArcGIS Pro 3.2 or
-# later keeps both exactly. It also writes a timestamp column as a
-# timestamp-with-offset field and marks the layer as needing a 3.2 client, so an
-# older Esri client may not open the layer (documented in writers/filegdb.mdx).
-_GDB_LAYER_OPTIONS = {"TARGET_ARCGIS_VERSION": "ARCGIS_PRO_3_2_OR_LATER"}
+# OpenFileGDB ``TARGET_ARCGIS_VERSION`` layer creation option, set by the writer option
+# ``targetArcGisVersion``. ``ALL`` (GDAL's default) keeps the layer readable by every Esri
+# client but stores a 64-bit integer column as Float64 (silently rounding ids above 2**53),
+# a date column as a date-time and a timestamp column as a date-time with no offset.
+# ``ARCGIS_PRO_3_2_OR_LATER`` keeps all three exactly (64-bit integer, date-only and
+# timestamp-with-offset fields) and stamps the WHOLE layer as needing a 3.2 client
+# (``RequiredGeodatabaseClientVersion`` 13.2), so an older Esri client may not open it.
+# ``auto`` (the default) picks the second only when the schema has such a column.
+_GDB_TARGET_ALL = "ALL"
+_GDB_TARGET_PRO_3_2 = "ARCGIS_PRO_3_2_OR_LATER"
+_GDB_TARGET_CHOICES = ("auto", _GDB_TARGET_ALL, _GDB_TARGET_PRO_3_2)
+_GDB_PRO_3_2_TYPES = (LongType, DateType, TimestampType)
 
 # Layer name a FileGDB gets when the writer is not given ``layerName``.
 _GDB_DEFAULT_LAYER = "layer"
@@ -858,6 +863,30 @@ def _check_gdb_attr_names(attr_cols):
             UserWarning,
             stacklevel=2,
         )
+
+
+def _gdb_target_version(value, schema, attr_cols) -> str:
+    """The ``TARGET_ARCGIS_VERSION`` for the ``targetArcGisVersion`` option.
+
+    ``value`` is matched without regard to case: ``auto`` / ``None`` (the default) is
+    ``ARCGIS_PRO_3_2_OR_LATER`` when an attribute column is a long, date or timestamp (the
+    types ``ALL`` cannot keep exactly) and ``ALL`` otherwise; the other two are used as
+    given. Anything else raises a ``ValueError``.
+    """
+    key = "AUTO" if value is None else str(value).strip().upper()
+    if key == "AUTO":
+        wants_pro = any(
+            isinstance(f.dataType, _GDB_PRO_3_2_TYPES)
+            for f in schema.fields
+            if f.name in attr_cols
+        )
+        return _GDB_TARGET_PRO_3_2 if wants_pro else _GDB_TARGET_ALL
+    if key in (_GDB_TARGET_ALL, _GDB_TARGET_PRO_3_2):
+        return key
+    raise ValueError(
+        f"file_gdb_gbx option targetArcGisVersion={value!r} is not recognised; use one of "
+        f"{', '.join(repr(c) for c in _GDB_TARGET_CHOICES)}."
+    )
 
 
 def _output_geom_name(driver, geom_col):
@@ -978,23 +1007,26 @@ def _writer_arrow_table(cols, schema, geom_col):
     (all-null) Arrow ``string``. The geometry column is always emitted as WKB
     ``bytes`` here, so it is typed ``binary`` regardless of its declared type.
 
-    A TimestampType column is typed UTC here rather than by ``to_arrow_type``, which
-    asserts a session timezone that Spark-Connect / Serverless workers do not have
-    (the same mapping ``exif_gbx`` uses).
+    A TimestampType column is typed UTC through ``_arrow_utc`` (``to_arrow_type`` asserts a
+    session timezone that Spark-Connect / Serverless workers do not have), and its values
+    are converted from the worker's local time to UTC so they stay exact on a worker that
+    is not on UTC.
     """
     import pyarrow as pa
-    from pyspark.sql.pandas.types import to_arrow_type
 
     def _arrow_type(f):
-        if f.name == geom_col:
-            return pa.binary()
+        return (
+            pa.binary() if f.name == geom_col else _arrow_utc.arrow_type_utc(f.dataType)
+        )
+
+    def _values(f):
         if isinstance(f.dataType, TimestampType):
-            return pa.timestamp("us", tz="UTC")
-        return to_arrow_type(f.dataType)
+            return [_arrow_utc.to_utc(v) for v in cols[f.name]]
+        return cols[f.name]
 
     fields = [pa.field(f.name, _arrow_type(f)) for f in schema.fields]
     return pa.table(
-        {f.name: cols[f.name] for f in schema.fields}, schema=pa.schema(fields)
+        {f.name: _values(f) for f in schema.fields}, schema=pa.schema(fields)
     )
 
 
@@ -1501,8 +1533,6 @@ class VectorGbxReader(DataSourceReader):
 
         import pyarrow as pa
 
-        from databricks.labs.gbx.ds.paths import _arrow_schema
-
         self._gdal_readonly_safe()
         import pyogrio
 
@@ -1564,7 +1594,7 @@ class VectorGbxReader(DataSourceReader):
                 fields.append(StructField(out_gname + "_srid_proj", StringType(), True))
                 # TimestampType is typed UTC (not by pyspark: a Serverless worker
                 # has no session timezone for it to assert on).
-                target = _arrow_schema(StructType(fields))
+                target = _arrow_utc.arrow_schema_utc(StructType(fields))
 
                 # Stream: each RecordBatch (<= chunkSize features) is cut into byte-bounded
                 # slices BEFORE any transform/cast, so no array -- WKB in, WKT or WKB out --
@@ -1804,6 +1834,9 @@ class VectorGbxWriter(DataSourceWriter):
         )
         if self.driver == "OpenFileGDB":
             _check_gdb_attr_names(self.attr_cols)
+            self._gdb_target = _gdb_target_version(
+                opts.get("targetarcgisversion"), schema, self.attr_cols
+            )
         self._schema = schema
         self._col_order = [f.name for f in schema.fields]
         self._geom_is_wkb = any(
@@ -1962,7 +1995,7 @@ class VectorGbxWriter(DataSourceWriter):
         elif self.driver == "OpenFileGDB":
             kw["layer"] = _GDB_DEFAULT_LAYER
         if self.driver == "OpenFileGDB":
-            kw["layer_options"] = dict(_GDB_LAYER_OPTIONS)
+            kw["layer_options"] = {"TARGET_ARCGIS_VERSION": self._gdb_target}
         return kw
 
     def _write_streaming(self, frags, local_out, geom_type, crs) -> None:
@@ -2126,7 +2159,14 @@ class VectorGbxWriter(DataSourceWriter):
                 break
             if geom_type is not None and crs is not None:
                 break
-        return geom_type or "Unknown", crs
+        geom_type = geom_type or "Unknown"
+        if self.driver == "OpenFileGDB" and geom_type == "Unknown":
+            raise ValueError(
+                "file_gdb_gbx: every geometry in the first partition is NULL, so the "
+                "geometry type of the layer cannot be inferred, and a FileGDB layer needs "
+                "one. Set the geometryType option (for example geometryType='Point')."
+            )
+        return geom_type, crs
 
     def _prepare_target(self) -> None:
         # PySpark may pre-create self.path as a directory; vector output is a

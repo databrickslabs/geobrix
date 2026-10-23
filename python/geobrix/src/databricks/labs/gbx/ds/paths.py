@@ -38,7 +38,7 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-from databricks.labs.gbx.ds import _listing, _quarantine
+from databricks.labs.gbx.ds import _arrow_utc, _listing, _quarantine
 
 _LOG = logging.getLogger(__name__)
 
@@ -473,15 +473,8 @@ def _check_file_schema(ds, reader, local: str, want: pa.Schema) -> None:
 
 
 def _arrow_schema(schema: StructType) -> pa.Schema:
-    """Spark schema -> Arrow; TIMESTAMP is UTC on every supported PySpark (>= 4.1
-    takes ``timezone=``, 4.0 always emits UTC)."""
-    import inspect
-
-    from pyspark.sql.pandas.types import to_arrow_schema
-
-    if "timezone" in inspect.signature(to_arrow_schema).parameters:
-        return to_arrow_schema(schema, timezone="UTC")
-    return to_arrow_schema(schema)
+    """Spark schema -> Arrow; TIMESTAMP is UTC on every supported PySpark."""
+    return _arrow_utc.arrow_schema_utc(schema)
 
 
 def _as_batches(items: Iterable, schema: StructType) -> Iterator[pa.RecordBatch]:

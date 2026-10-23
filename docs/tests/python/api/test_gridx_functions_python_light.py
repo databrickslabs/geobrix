@@ -301,6 +301,8 @@ def test_bng_tessellate_python_light_example(spark):
     assert (
         "TQ3080" in core_cellids
     ), f"Expected TQ3080 to be the core chip; got core cells {core_cellids!r}"
+    # as documented: keep_core_geom defaults to false, so the core chip is NULL
+    assert all(c["chip"] is None for c in core_chips)
 
 
 # ---------------------------------------------------------------------------

@@ -237,7 +237,7 @@ The model above maps a **raster** onto grid cells. The geometry-aware ring funct
 
 - **`gbx_<grid>_geomkring(geom, resolution, k [, mode])`** — the **filled** disk: the covering set plus every cell within `k` steps.
 - **`gbx_<grid>_geomkloop(geom, resolution, k [, mode])`** — the **hollow** shell: only the cells at exactly `k` steps.
-- **`*explode` variants** stream one row per cell via SQL `LATERAL`.
+- **`*explode` variants** stream one row per cell. In the lightweight tier they are table functions, called with `FROM t, LATERAL gbx_<grid>_geomkringexplode(...)`; in the heavyweight tier (bng, quadbin and custom) they are generators, called with `LATERAL VIEW` or in the select list. h3 is lightweight-only.
 
 A single trailing-optional **`mode`** enum selects how the walk treats the geometry's outer boundary and its holes (default `'boundary-out'`, backward-compatible):
 

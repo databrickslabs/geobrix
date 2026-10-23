@@ -312,6 +312,10 @@ formats.
   as a generator nested in an expression (`UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS`), so every
   call failed. They now return the generator Column: select it and it expands to one `cellid` row
   per cell.
+- **Explode examples show each tier's form.** `FROM t, LATERAL f(...)` reaches only the
+  lightweight table function. The SQL, Python and Scala examples of the heavyweight quadbin and
+  custom-grid explode functions now call the generator with `LATERAL VIEW` or in the select list,
+  and the H3 explode examples say that H3 geometry-aware functions are lightweight-only.
 
 ### Raster tiling functions
 

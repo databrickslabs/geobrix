@@ -621,7 +621,7 @@ Polyfill a geometry at a given quadbin zoom level then return only the hollow ou
 
 <Tier both/> <Impl udtf/>
 
-Streaming UDTF version of `quadbin_geomkring` — one row per cell. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
+Streaming version of `quadbin_geomkring` — one row per cell. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_quadbin_geomkringexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
 
 **Signature:** `quadbin_geomkringexplode(geom, resolution, k, [mode], [coverage])`
 
@@ -645,7 +645,7 @@ Streaming UDTF version of `quadbin_geomkring` — one row per cell. Invoke via S
 
 <Tier both/> <Impl udtf/>
 
-Streaming UDTF version of `quadbin_geomkloop` — one row per cell at exactly `k` steps. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
+Streaming version of `quadbin_geomkloop` — one row per cell at exactly `k` steps. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_quadbin_geomkloopexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
 
 **Signature:** `quadbin_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
 
@@ -1200,14 +1200,15 @@ Tessellate a geometry into BNG cells with their geometries.
 Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus a per-cell core/border split, returning one `STRUCT<cellid, core, chip>` per cell (chip geometry as WKB in EPSG:27700, no SRID). Border chips are filtered to the input geometry type, matching the heavyweight tier.
 :::
 
-**Signature:** `bng_tessellate(geometry: Column, resolution: Column): Column`
+**Signature:** `bng_tessellate(geometry: Column, resolution: Column[, keep_core_geom: Column]): Column`
 
 **Parameters:**
 - `geometry` - Input geometry to tessellate
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
+- `keep_core_geom` - Optional (default `false`). When `true`, a core cell's `chip` is the cell geometry; when `false` it is NULL. Border cells always carry their clipped geometry
 
 **Returns:**
-- Array of structs containing cell ID and geometry
+- `ARRAY<STRUCT<cellid STRING, core BOOLEAN, chip BINARY>>`, one struct per cell (chip as WKB in EPSG:27700)
 
 <FunctionExamples
   name="bng_tessellate"
@@ -1820,7 +1821,7 @@ Polyfill a geometry at a given custom grid resolution then return only the hollo
 
 <Tier both/> <Impl udtf/>
 
-Streaming UDTF version of `custom_geomkring` — one row per cell. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
+Streaming version of `custom_geomkring` — one row per cell. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_custom_geomkringexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
 
 **Signature:** `custom_geomkringexplode(geom, grid, resolution, k, [mode], [coverage])`
 
@@ -1844,7 +1845,7 @@ Streaming UDTF version of `custom_geomkring` — one row per cell. Invoke via SQ
 
 <Tier both/> <Impl udtf/>
 
-Streaming UDTF version of `custom_geomkloop` — one row per cell at exactly `k` steps. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
+Streaming version of `custom_geomkloop` — one row per cell at exactly `k` steps. The form depends on the tier: the lightweight tier registers a table function, called with `FROM t, LATERAL gbx_custom_geomkloopexplode(...)`, and has no Python DataFrame Column form; the heavyweight tier registers a generator, called with `LATERAL VIEW` or in the select list (its Python and Scala wrappers return the generator Column). A generator is not a table function, so the `FROM t, LATERAL` form does not reach the heavyweight tier.
 
 **Signature:** `custom_geomkloopexplode(geom, grid, resolution, k, [mode], [coverage])`
 
@@ -2037,7 +2038,7 @@ Geometry-aware H3 k-loop (hollow ring at exactly `k` steps).
 
 <Tier light/> <Impl udtf/>
 
-Streaming UDTF version of `h3_geomkring` — one row per cell. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
+Streaming version of `h3_geomkring` — one row per cell. Lightweight tier only: a table function, called with `FROM t, LATERAL gbx_h3_geomkringexplode(...)`; there is no Python DataFrame Column form.
 
 **Signature:** `h3_geomkringexplode(geom, resolution, k, [mode], [coverage])`
 
@@ -2059,7 +2060,7 @@ Streaming UDTF version of `h3_geomkring` — one row per cell. Invoke via SQL `L
 
 <Tier light/> <Impl udtf/>
 
-Streaming UDTF version of `h3_geomkloop` — one row per cell at exactly `k` steps. Invoke via SQL `LATERAL`; there is no Python DataFrame Column form.
+Streaming version of `h3_geomkloop` — one row per cell at exactly `k` steps. Lightweight tier only: a table function, called with `FROM t, LATERAL gbx_h3_geomkloopexplode(...)`; there is no Python DataFrame Column form.
 
 **Signature:** `h3_geomkloopexplode(geom, resolution, k, [mode], [coverage])`
 

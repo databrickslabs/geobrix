@@ -4530,11 +4530,9 @@ import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
 import org.apache.spark.sql.functions._
 
 // Reads the quadbin_polygons view (WGS84 polygon near origin)
-// SQL LATERAL is the canonical invocation for this table function
-spark.sql(
-  "SELECT t.cellid FROM quadbin_polygons src, " +
-  "LATERAL gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t"
-).show(truncate = false)
+// A generator: select it directly and it expands to one cellid row per cell
+val df = spark.table("quadbin_polygons")
+df.select(qx.quadbin_geomkringexplode(col("geom"), lit(12), lit(1))).show(truncate = false)
 """.trim
 
   val quadbin_geomkringexplode_scala_example_output: String =
@@ -4553,11 +4551,9 @@ import com.databricks.labs.gbx.gridx.quadbin.{functions => qx}
 import org.apache.spark.sql.functions._
 
 // Reads the quadbin_polygons view (WGS84 polygon near origin)
-// SQL LATERAL is the canonical invocation for this table function
-spark.sql(
-  "SELECT t.cellid FROM quadbin_polygons src, " +
-  "LATERAL gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t"
-).show(truncate = false)
+// A generator: select it directly and it expands to one cellid row per cell
+val df = spark.table("quadbin_polygons")
+df.select(qx.quadbin_geomkloopexplode(col("geom"), lit(12), lit(1))).show(truncate = false)
 """.trim
 
   val quadbin_geomkloopexplode_scala_example_output: String =
@@ -4624,12 +4620,10 @@ import com.databricks.labs.gbx.gridx.custom.{functions => cx}
 import org.apache.spark.sql.functions._
 
 // Reads the custom_grids view (grid struct)
-// SQL LATERAL is the canonical invocation for this table function
+// A generator: select it directly and it expands to one cellid row per cell
 val poly = "POLYGON((529100 179100,529100 182100,532100 182100,532100 179100,529100 179100))"
-spark.sql(
-  "SELECT t.cellid FROM custom_grids src, " +
-  s"LATERAL gbx_custom_geomkringexplode('$poly', src.grid, 1, 1, 'boundary-out') t"
-).show(truncate = false)
+val df = spark.table("custom_grids")
+df.select(cx.custom_geomkringexplode(lit(poly), col("grid"), lit(1), lit(1))).show(truncate = false)
 """.trim
 
   val custom_geomkringexplode_scala_example_output: String =
@@ -4648,12 +4642,10 @@ import com.databricks.labs.gbx.gridx.custom.{functions => cx}
 import org.apache.spark.sql.functions._
 
 // Reads the custom_grids view (grid struct)
-// SQL LATERAL is the canonical invocation for this table function
+// A generator: select it directly and it expands to one cellid row per cell
 val poly = "POLYGON((529100 179100,529100 182100,532100 182100,532100 179100,529100 179100))"
-spark.sql(
-  "SELECT t.cellid FROM custom_grids src, " +
-  s"LATERAL gbx_custom_geomkloopexplode('$poly', src.grid, 1, 1, 'boundary-out') t"
-).show(truncate = false)
+val df = spark.table("custom_grids")
+df.select(cx.custom_geomkloopexplode(lit(poly), col("grid"), lit(1), lit(1))).show(truncate = false)
 """.trim
 
   val custom_geomkloopexplode_scala_example_output: String =

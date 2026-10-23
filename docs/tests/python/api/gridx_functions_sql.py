@@ -646,28 +646,36 @@ SELECT gbx_quadbin_geomkloop(
 
 
 def quadbin_geomkringexplode_sql_example():
-    """Explode geometry k-ring into one row per BIGINT cell via SQL LATERAL.
+    """Explode geometry k-ring into one row per BIGINT cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation. At zoom=12 with k=1, the
-    covering polyfill of the NYC box expands outward by one ring.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_quadbin_geomkringexplode(...)`` -- see the
+    Python (light) tab.  At zoom=12 with k=1, the covering polyfill of the NYC
+    box expands outward by one ring; each row carries one ``cellid BIGINT``.
     """
     return """
-SELECT t.*
-FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src,
-LATERAL gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t;
+-- heavyweight tier
+SELECT t.cellid
+FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src
+LATERAL VIEW gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t AS cellid;
 """
 
 
 def quadbin_geomkloopexplode_sql_example():
-    """Explode geometry k-loop (hollow ring) into one row per BIGINT cell via SQL LATERAL.
+    """Explode geometry k-loop (hollow ring) into one row per BIGINT cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation. At zoom=12 with k=1, returns
-    the hollow outer ring cells of the NYC box polyfill.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_quadbin_geomkloopexplode(...)`` -- see the
+    Python (light) tab.  At zoom=12 with k=1, returns the hollow outer ring
+    cells of the NYC box polyfill, one ``cellid BIGINT`` per row.
     """
     return """
-SELECT t.*
-FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src,
-LATERAL gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t;
+-- heavyweight tier
+SELECT t.cellid
+FROM (SELECT 'POLYGON((-73.99 40.71, -73.95 40.71, -73.95 40.75, -73.99 40.75, -73.99 40.71))' AS geom) src
+LATERAL VIEW gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t AS cellid;
 """
 
 
@@ -1024,30 +1032,38 @@ SELECT gbx_custom_geomkloop(
 
 
 def custom_geomkringexplode_sql_example():
-    """Explode geometry k-ring (custom grid) into one row per BIGINT cell via SQL LATERAL.
+    """Explode geometry k-ring (custom grid) into one row per BIGINT cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation.  At res=0 with k=1, the covering
-    polyfill of the box expands outward by one ring; each cell emitted as a row.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_custom_geomkringexplode(...)`` -- see the
+    Python (light) tab.  At res=0 with k=1, the covering polyfill of the box
+    expands outward by one ring; each cell is emitted as a row.
     """
     return """
-SELECT t.*
+-- heavyweight tier
+SELECT t.cellid
 FROM (SELECT 'POLYGON((530200 180200, 534800 180200, 534800 184800, 530200 184800, 530200 180200))' AS geom,
-             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src,
-LATERAL gbx_custom_geomkringexplode(src.geom, src.grid, 0, 1, 'boundary-out') t;
+             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src
+LATERAL VIEW gbx_custom_geomkringexplode(src.geom, src.grid, 0, 1, 'boundary-out') t AS cellid;
 """
 
 
 def custom_geomkloopexplode_sql_example():
-    """Explode geometry k-loop (custom grid hollow ring) into one row per BIGINT cell.
+    """Explode geometry k-loop (custom grid hollow ring) into one row per BIGINT cell (heavyweight SQL form).
 
-    SQL LATERAL is the canonical invocation.  At res=0, k=1, returns the hollow
-    outer ring cells surrounding the geometry's polyfill.
+    The heavyweight function is a generator, used with ``LATERAL VIEW`` (or in
+    the select list).  The lightweight tier registers a table function instead,
+    called as ``FROM t, LATERAL gbx_custom_geomkloopexplode(...)`` -- see the
+    Python (light) tab.  At res=0, k=1, returns the hollow outer ring cells
+    surrounding the geometry's polyfill.
     """
     return """
-SELECT t.*
+-- heavyweight tier
+SELECT t.cellid
 FROM (SELECT 'POLYGON((530200 180200, 534800 180200, 534800 184800, 530200 184800, 530200 180200))' AS geom,
-             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src,
-LATERAL gbx_custom_geomkloopexplode(src.geom, src.grid, 0, 1, 'boundary-out') t;
+             gbx_custom_grid(0, 1000000, 0, 1000000, 2, 1000, 1000, 27700) AS grid) src
+LATERAL VIEW gbx_custom_geomkloopexplode(src.geom, src.grid, 0, 1, 'boundary-out') t AS cellid;
 """
 
 
@@ -1291,11 +1307,13 @@ SELECT gbx_h3_geomkloop(
 def h3_geomkringexplode_sql_example():
     """Explode geometry-aware H3 k-ring into one row per cell via SQL LATERAL.
 
-    Each row yields one BIGINT H3 cell id.  SQL LATERAL is the only invocation
-    path for this streaming UDTF (no Python Column form).  Self-contained:
-    no Databricks product functions required.
+    The H3 geometry-aware functions exist in the lightweight tier only, where
+    they are table functions: ``FROM t, LATERAL f(...)`` is their one SQL form
+    (there is no Python Column form).  Each row yields one BIGINT H3 cell id.
+    Self-contained: no Databricks product functions required.
     """
     return """
+-- lightweight tier (H3 geometry-aware functions have no heavyweight implementation)
 SELECT t.*
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))' AS geom) src,
 LATERAL gbx_h3_geomkringexplode(src.geom, 9, 1, 'boundary-out') t;
@@ -1305,10 +1323,11 @@ LATERAL gbx_h3_geomkringexplode(src.geom, 9, 1, 'boundary-out') t;
 def h3_geomkloopexplode_sql_example():
     """Explode geometry-aware H3 k-loop (hollow ring) into one row per cell via SQL LATERAL.
 
-    Each row yields one BIGINT H3 cell id at exactly k steps.  SQL LATERAL is the
-    only invocation path for this streaming UDTF (no Python Column form).
+    Lightweight tier only (a table function, called with ``FROM t, LATERAL f(...)``;
+    no Python Column form).  Each row yields one BIGINT H3 cell id at exactly k steps.
     """
     return """
+-- lightweight tier (H3 geometry-aware functions have no heavyweight implementation)
 SELECT t.*
 FROM (SELECT 'POLYGON((-73.99 40.71, -73.99 40.75, -73.95 40.75, -73.95 40.71, -73.99 40.71))' AS geom) src,
 LATERAL gbx_h3_geomkloopexplode(src.geom, 9, 1, 'boundary-out') t;

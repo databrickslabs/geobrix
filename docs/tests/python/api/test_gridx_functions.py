@@ -466,6 +466,8 @@ def test_bng_tessellate_python_heavy_example(bng_heavy_setup):
     assert "TQ3080" in {
         c["cellid"] for c in core_chips
     }, "Expected TQ3080 to be the core chip"
+    # as documented: keep_core_geom defaults to false, so the core chip is NULL
+    assert all(c["chip"] is None for c in core_chips)
 
 
 # ---------------------------------------------------------------------------
@@ -915,3 +917,34 @@ def test_custom_kring_python_heavy_example(bng_heavy_setup):
     assert (
         360287970373976640 in result
     ), "Expected center cell 360287970373976640 in kring result"
+
+
+# ---------------------------------------------------------------------------
+# Quadbin / custom geometry-aware explode — heavy-tier execution tests.
+# The heavyweight explode functions are generators: the example selects them
+# directly, so each must return one row per cell of the matching ARRAY function.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "grid,explode_fn,array_fn",
+    [
+        ("quadbin", "quadbin_geomkringexplode", "quadbin_geomkring"),
+        ("quadbin", "quadbin_geomkloopexplode", "quadbin_geomkloop"),
+        ("custom", "custom_geomkringexplode", "custom_geomkring"),
+        ("custom", "custom_geomkloopexplode", "custom_geomkloop"),
+    ],
+)
+def test_geomk_explode_python_heavy_example_rows_match_the_array(
+    bng_heavy_setup, grid, explode_fn, array_fn
+):
+    spark = bng_heavy_setup
+    if grid == "quadbin":
+        from databricks.labs.gbx.gridx.quadbin import functions as gx  # noqa: PLC0415
+    else:
+        from databricks.labs.gbx.gridx.custom import functions as gx  # noqa: PLC0415
+    gx.register(spark)
+    rows = getattr(gridx_functions, f"{explode_fn}_python_heavy_example")(spark)
+    cells = getattr(gridx_functions, f"{array_fn}_python_heavy_example")(spark)
+    assert rows and list(rows[0].asDict()) == ["cellid"]
+    assert sorted(r["cellid"] for r in rows) == sorted(cells)

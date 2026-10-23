@@ -1514,19 +1514,19 @@ quadbin_geomkloop_python_heavy_example_output = """
 
 
 def quadbin_geomkringexplode_python_heavy_example(spark):
-    """Geometry-aware quadbin k-ring explode: one row per cell via SQL LATERAL (heavy gridx.quadbin tier).
+    """Geometry-aware quadbin k-ring explode: one row per cell (heavy gridx.quadbin tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
-    SQL LATERAL is the canonical invocation for this table function.
+    The heavyweight function is a generator: select it directly and it expands
+    to one ``cellid`` row per cell.
     """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
+
     df = spark.table("quadbin_polygons")
-    df.createOrReplaceTempView("_qb_geomk_heavy_src")
-    result = spark.sql(
-        "SELECT t.cellid FROM _qb_geomk_heavy_src src, "
-        "LATERAL gbx_quadbin_geomkringexplode(src.geom, 12, 1, 'boundary-out') t"
+    return df.select(
+        qx.quadbin_geomkringexplode(f.col("geom"), f.lit(12), f.lit(1))
     ).collect()
-    spark.catalog.dropTempView("_qb_geomk_heavy_src")
-    return result
 
 
 quadbin_geomkringexplode_python_heavy_example_output = """
@@ -1541,19 +1541,19 @@ quadbin_geomkringexplode_python_heavy_example_output = """
 
 
 def quadbin_geomkloopexplode_python_heavy_example(spark):
-    """Geometry-aware quadbin k-loop explode: one row per outer-ring cell via SQL LATERAL (heavy gridx.quadbin tier).
+    """Geometry-aware quadbin k-loop explode: one row per outer-ring cell (heavy gridx.quadbin tier).
 
     Reads the ``quadbin_polygons`` setup view (WGS84 polygon near origin).
-    SQL LATERAL is the canonical invocation for this table function.
+    The heavyweight function is a generator: select it directly and it expands
+    to one ``cellid`` row per cell.
     """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.quadbin import functions as qx  # noqa: PLC0415
+
     df = spark.table("quadbin_polygons")
-    df.createOrReplaceTempView("_qb_geomk_heavy_src")
-    result = spark.sql(
-        "SELECT t.cellid FROM _qb_geomk_heavy_src src, "
-        "LATERAL gbx_quadbin_geomkloopexplode(src.geom, 12, 1, 'boundary-out') t"
+    return df.select(
+        qx.quadbin_geomkloopexplode(f.col("geom"), f.lit(12), f.lit(1))
     ).collect()
-    spark.catalog.dropTempView("_qb_geomk_heavy_src")
-    return result
 
 
 quadbin_geomkloopexplode_python_heavy_example_output = """
@@ -1636,19 +1636,21 @@ custom_geomkloop_python_heavy_example_output = """
 
 
 def custom_geomkringexplode_python_heavy_example(spark):
-    """Geometry-aware custom-grid k-ring explode: one row per cell via SQL LATERAL (heavy gridx.custom tier).
+    """Geometry-aware custom-grid k-ring explode: one row per cell (heavy gridx.custom tier).
 
-    Reads the ``custom_grids`` setup view (grid struct).
-    SQL LATERAL is the canonical invocation for this table function.
+    Reads the ``custom_grids`` setup view (grid struct).  The heavyweight
+    function is a generator: select it directly and it expands to one
+    ``cellid`` row per cell.
     """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+
     df = spark.table("custom_grids")
-    df.createOrReplaceTempView("_cx_geomk_heavy_src")
-    result = spark.sql(
-        f"SELECT t.cellid FROM _cx_geomk_heavy_src src, "
-        f"LATERAL gbx_custom_geomkringexplode('{_CUSTOM_GEOMK_WKT}', src.grid, 1, 1, 'boundary-out') t"
+    return df.select(
+        cx.custom_geomkringexplode(
+            f.lit(_CUSTOM_GEOMK_WKT), f.col("grid"), f.lit(1), f.lit(1)
+        )
     ).collect()
-    spark.catalog.dropTempView("_cx_geomk_heavy_src")
-    return result
 
 
 custom_geomkringexplode_python_heavy_example_output = """
@@ -1663,19 +1665,21 @@ custom_geomkringexplode_python_heavy_example_output = """
 
 
 def custom_geomkloopexplode_python_heavy_example(spark):
-    """Geometry-aware custom-grid k-loop explode: one row per outer-ring cell via SQL LATERAL (heavy gridx.custom tier).
+    """Geometry-aware custom-grid k-loop explode: one row per outer-ring cell (heavy gridx.custom tier).
 
-    Reads the ``custom_grids`` setup view (grid struct).
-    SQL LATERAL is the canonical invocation for this table function.
+    Reads the ``custom_grids`` setup view (grid struct).  The heavyweight
+    function is a generator: select it directly and it expands to one
+    ``cellid`` row per cell.
     """
+    from pyspark.sql import functions as f  # noqa: PLC0415
+    from databricks.labs.gbx.gridx.custom import functions as cx  # noqa: PLC0415
+
     df = spark.table("custom_grids")
-    df.createOrReplaceTempView("_cx_geomk_heavy_src")
-    result = spark.sql(
-        f"SELECT t.cellid FROM _cx_geomk_heavy_src src, "
-        f"LATERAL gbx_custom_geomkloopexplode('{_CUSTOM_GEOMK_WKT}', src.grid, 1, 1, 'boundary-out') t"
+    return df.select(
+        cx.custom_geomkloopexplode(
+            f.lit(_CUSTOM_GEOMK_WKT), f.col("grid"), f.lit(1), f.lit(1)
+        )
     ).collect()
-    spark.catalog.dropTempView("_cx_geomk_heavy_src")
-    return result
 
 
 custom_geomkloopexplode_python_heavy_example_output = """

@@ -1391,8 +1391,9 @@ def _rgba_chip_stats(spark, grid, assignment, coverage):
     lies: ``valid``, ``outside`` the source footprint, ``transparent`` (the alpha-0 rows
     4-8), ``zero_rgb`` (R = G = B = 0) and ``zero_rgb_off`` (those not in the opaque row 20).
     ``counts`` is the valid pixels per cell and ``counts_opaque`` the same without the
-    pixels of the transparent rows. Reading a lightweight chip's masks never warns that
-    NoData shadows its alpha band (heavyweight chips declare NoData over it).
+    pixels of the transparent rows. Reading a lightweight or a heavyweight covering chip's
+    masks never warns that NoData shadows its alpha band; the heavyweight centroid chips
+    still declare NoData over it (see ``_HEAVY_KEEPS_TRANSPARENT``), so only they may warn.
     """
     import warnings
 
@@ -1438,7 +1439,12 @@ def _rgba_chip_stats(spark, grid, assignment, coverage):
             st["counts"][cid] = st["counts_opaque"][cid] = 0
             with MemoryFile(b) as mf, mf.open() as ds, warnings.catch_warnings():
                 warnings.simplefilter(
-                    "error" if tier == "light" else "ignore", NodataShadowWarning
+                    (
+                        "error"
+                        if tier == "light" or assignment == "covering"
+                        else "ignore"
+                    ),
+                    NodataShadowWarning,
                 )
                 data = ds.read()
                 rr, cc = np.nonzero(valid_mask(ds))

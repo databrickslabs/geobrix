@@ -179,7 +179,9 @@ object RasterTessellate {
 
     /**
       * Returns true iff every band of `chip` is entirely NoData (mask is all-zero). Used by
-      * `covering+sparse` to drop chips that have no valid pixels after clipping.
+      * `covering+sparse` to drop chips that have no valid pixels after clipping. An alpha band that
+      * declares no NoData is masked by nothing (its own mask is all valid) while the other bands read
+      * through it, so it is not judged unless it is the chip's only band.
       * GDAL resources: reads only (does not create or release any dataset).
       */
     private def isAllNoData(chip: Dataset): Boolean = {
@@ -187,12 +189,17 @@ object RasterTessellate {
         val ySize = chip.getRasterYSize
         val nPix  = xSize * ySize
         val maskBuf = new Array[Byte](nPix)
-        var b = 1
-        while (b <= chip.getRasterCount) {
-            chip.GetRasterBand(b).GetMaskBand().ReadRaster(0, 0, xSize, ySize, maskBuf)
+        val all = 1 to chip.getRasterCount
+        val judged = all.filterNot { b =>
+            val band = chip.GetRasterBand(b)
+            band.GetColorInterpretation == gdalconstConstants.GCI_AlphaBand &&
+                (band.GetMaskFlags() & gdalconstConstants.GMF_ALL_VALID) != 0
+        }
+        val it = (if (judged.isEmpty) all else judged).iterator
+        while (it.hasNext) {
+            chip.GetRasterBand(it.next()).GetMaskBand().ReadRaster(0, 0, xSize, ySize, maskBuf)
             var i = 0
             while (i < nPix) { if (maskBuf(i) != 0) return false; i += 1 }
-            b += 1
         }
         true
     }
@@ -297,13 +304,17 @@ object RasterTessellate {
         private var cc       = 0
         private var nextTile: (Any, Dataset, Map[String, String]) = _
         // A source without NoData gets the dtype fallback, so the clip fill outside each cell reads as
-        // NoData rather than as valid zero pixels (the light tier does the same).
-        private val fillNoData: Option[Double] = {
-            val band = natives.workDs.GetRasterBand(1)
-            val nd = new Array[java.lang.Double](1)
-            band.GetNoDataValue(nd)
-            if (nd(0) != null) None else Some(GDAL.getNoDataConstant(band.getDataType))
-        }
+        // NoData rather than as valid zero pixels (the light tier does the same). A source with an alpha
+        // band gets none: the clip carries the alpha band, which already marks the fill, and a declared
+        // NoData would shadow it (opaque 0 pixels read as NoData) -- the rule of WarpSource.fillNoDataArgs.
+        private val fillNoData: Option[Double] =
+            if (GDAL.hasAlpha(natives.workDs)) None
+            else {
+                val band = natives.workDs.GetRasterBand(1)
+                val nd = new Array[java.lang.Double](1)
+                band.GetNoDataValue(nd)
+                if (nd(0) != null) None else Some(GDAL.getNoDataConstant(band.getDataType))
+            }
 
         private def advance(): Unit = {
             fetched = true

@@ -171,9 +171,13 @@ def test_an_unusable_file_value_is_drift(vol, file):
 def test_the_real_path_of_a_file_is_looked_up_once(vol, monkeypatch):
     calls = []
     real = os.path.realpath
-    monkeypatch.setattr(
-        os.path, "realpath", lambda p, **k: calls.append(p) or real(p, **k)
-    )
+
+    def counting(p, **k):
+        if not str(p).startswith("/proc/"):  # the descriptor check is not cached
+            calls.append(p)
+        return real(p, **k)
+
+    monkeypatch.setattr(os.path, "realpath", counting)
     reader = FuseRangeReader(str(vol / "store"))
     reader.read([Region("x.bin", 0, 4)])
     first = len(calls)
@@ -183,6 +187,68 @@ def test_the_real_path_of_a_file_is_looked_up_once(vol, monkeypatch):
     assert len(calls) == first
 
 
+# --- the descriptor, not the name -----------------------------------------------
+
+needs_proc = pytest.mark.skipif(
+    not os.path.isdir("/proc/self/fd"), reason="needs /proc/self/fd (Linux)"
+)
+
+
+@needs_proc
+def test_a_file_swapped_for_an_outside_link_after_the_check_is_refused(vol):
+    """The real path of a file is cached, so a link put in its place later still looks
+    inside the root by name. The opened descriptor says where the bytes really come from.
+    """
+    store = vol / "store"
+    reader = FuseRangeReader(str(store), attempts=1)
+    assert reader.read([Region("x.bin", 0, 3)]) == [bytes([0, 1, 2])]
+    (store / "x.bin").unlink()
+    (store / "x.bin").symlink_to(vol / "outside" / "secret.bin")
+    err = _refused(reader, Region("x.bin", 0, 4))
+    assert "resolves outside the store root" in str(err) and str(store) in str(err)
+    assert "gbx_zarr_sync" in err.fix
+
+
+@needs_proc
+def test_a_descriptor_that_lands_outside_the_root_is_closed_and_refused(
+    vol, monkeypatch
+):
+    """The race itself: the name checked is inside, the file opened is not."""
+    opened, closed = [], []
+    real_open, real_close = os.open, os.close
+
+    def other_file(path, flags, *args, **kwargs):
+        fd = real_open(str(vol / "outside" / "secret.bin"), flags)
+        opened.append(fd)
+        return fd
+
+    def record_close(fd):
+        closed.append(fd)
+        return real_close(fd)
+
+    monkeypatch.setattr(os, "open", other_file)
+    monkeypatch.setattr(os, "close", record_close)
+    reader = FuseRangeReader(str(vol / "store"), attempts=1)
+    err = _refused(reader, Region("x.bin", 0, 4))
+    assert "resolves outside the store root" in str(err)
+    assert opened and closed == opened
+
+
+@needs_proc
+def test_the_descriptor_check_allows_each_root_a_file_was_checked_against(vol):
+    (vol / "store" / "inside.bin").symlink_to(vol / "store" / "x.bin")
+    reader = FuseRangeReader(
+        str(vol / "store"), base_root=str(vol / "base"), attempts=1
+    )
+    assert reader.read(
+        [
+            Region("inside.bin", 1, 2),  # a link that stays in the root
+            Region("x.bin", 3, 2, "external"),  # a base-root file
+            Region(str(vol / "base" / "x.bin"), 5, 2),  # absolute, under the base root
+        ]
+    ) == [bytes([1, 2]), bytes([3, 4]), bytes([5, 6])]
+
+
 # --- retries --------------------------------------------------------------------
 
 
@@ -190,7 +256,6 @@ def test_the_real_path_of_a_file_is_looked_up_once(vol, monkeypatch):
     "exc",
     [
         PermissionError(errno.EACCES, "denied"),
-        IsADirectoryError(errno.EISDIR, "a directory"),
         NotADirectoryError(errno.ENOTDIR, "not a directory"),
     ],
 )
@@ -205,6 +270,34 @@ def test_permanent_errors_are_not_retried(packs, monkeypatch, exc):
     monkeypatch.setattr(time, "sleep", sleeps.append)
     with pytest.raises(type(exc)):
         FuseRangeReader(str(packs / "base")).read([Region("a.bin", 0, 4)])
+    assert opens == [1] and sleeps == []
+
+
+def test_a_directory_named_as_a_file_is_drift_and_not_retried(vol, monkeypatch):
+    """A row that names a directory is a manifest that does not match the store; it
+    surfaces as ``ZarrStoreDrift`` (``os.open`` of a directory succeeds on Linux and the
+    ``pread`` then fails with ``IsADirectoryError``), and waiting cannot fix it."""
+    (vol / "store" / "adir").mkdir()
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    err = _refused(FuseRangeReader(str(vol / "store")), Region("adir", 0, 4))
+    assert "adir" in str(err) and "directory" in str(err)
+    assert "Fix:" in str(err) and "gbx_zarr_sync" in err.fix
+    assert sleeps == []
+
+
+def test_an_open_that_reports_a_directory_is_drift_and_not_retried(packs, monkeypatch):
+    opens, sleeps = [], []
+
+    def refuse(*args, **kwargs):
+        opens.append(1)
+        raise IsADirectoryError(errno.EISDIR, "a directory")
+
+    monkeypatch.setattr(os, "open", refuse)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    with pytest.raises(ZarrStoreDrift) as ei:
+        FuseRangeReader(str(packs / "base")).read([Region("a.bin", 0, 4)])
+    assert "directory" in str(ei.value) and "Fix:" in str(ei.value)
     assert opens == [1] and sleeps == []
 
 

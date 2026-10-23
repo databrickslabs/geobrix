@@ -385,6 +385,12 @@ def test_a_shard_with_only_tombstones_is_absent(era5_v3_sharded, shard_row):
         dict(file=None, length=5),  # bytes to read and no file
         dict(offset=-1),
         dict(length=-4),
+        dict(file=""),  # an empty name is not a path (and not a tombstone)
+        dict(file="", length=0),
+        dict(file="", length=None),
+        dict(file="", offset=None),
+        dict(file=7),
+        dict(file="a\0b"),
     ],
 )
 @pytest.mark.parametrize("kind", ["chunk", "shard"])
@@ -552,6 +558,23 @@ def test_the_store_pickles_after_reads(era5_v3_sharded):
         zarr.open_array(store=clone, path="t2m", mode="r")[:],
         zarr.open_array(str(era5_v3_sharded / "t2m"), mode="r")[:],
     )
+
+
+def test_a_pickled_closed_store_is_still_closed(era5_v2):
+    metas, rows, arrays = plain_store_rows(era5_v2)
+    st = ManifestStore(metas, rows, FuseRangeReader(str(era5_v2)), arrays)
+    assert _get(st, "u10/0.0.0")
+    st.close()
+    clone = pickle.loads(pickle.dumps(st))
+    assert clone._closed
+    with pytest.raises(ZarrError) as ei:
+        _get(clone, "u10/0.0.0")
+    assert "closed" in str(ei.value) and "Fix:" in str(ei.value)
+    # an open store stays open through a round trip
+    live = pickle.loads(
+        pickle.dumps(ManifestStore(metas, rows, FuseRangeReader(str(era5_v2)), arrays))
+    )
+    assert not live._closed and _get(live, "u10/0.0.0")
 
 
 def test_a_closed_store_refuses_reads_instead_of_restarting_its_pool(era5_v2):

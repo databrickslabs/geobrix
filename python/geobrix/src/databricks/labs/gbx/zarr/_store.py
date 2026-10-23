@@ -74,6 +74,8 @@ def _region(row: dict, label: str) -> Region:
     problem = None
     if file is None:
         problem = "has bytes but no file"
+    elif not isinstance(file, str) or not file or "\0" in file:
+        problem = f"has {file!r} for a file, which is not a usable path"
     elif offset is None:
         problem = "has a file but no offset"
     elif length is None:
@@ -172,12 +174,16 @@ class ManifestStore(Store):
         self._finalizer = weakref.finalize(self, self._pool.shutdown, wait=False)
 
     def __getstate__(self) -> dict:
-        drop = ("_pool", "_finalizer", "_lock", "_virtual", "_closed")
+        drop = ("_pool", "_finalizer", "_lock", "_virtual")
         return {k: v for k, v in self.__dict__.items() if k not in drop}
 
     def __setstate__(self, state: dict) -> None:
+        closed = state.get("_closed", False)
         self.__dict__.update(state)
         self._start_runtime()
+        if closed:  # a closed store stays closed: no reads, no live pool
+            self._closed = True
+            self._finalizer()
 
     def _add(self, row: dict) -> None:
         name, kind = row.get("array"), row.get("kind")

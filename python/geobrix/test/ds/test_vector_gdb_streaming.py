@@ -1,27 +1,20 @@
 """Tests for the OpenFileGDB fragment-streaming commit path.
 
-The vector writer's OpenFileGDB commit goes through ``_write_local_osgeo_gdb``,
-which streams partition fragments one at a time with OGR transaction batching
-(bounded driver memory — never the whole dataset in RAM simultaneously).
+The vector writer's OpenFileGDB commit goes through ``_write_streaming``: partition
+fragments are streamed record batch by record batch into one pyogrio ``write_arrow``
+(bounded driver memory -- never the whole dataset in RAM at once).
 
 Tests here verify:
-  - The streaming invariant: at most one fragment table is alive at any time
-    during the write (spy via WeakRef-tracked ``feather.read_table`` calls),
-    exercised as a UNIT TEST that calls ``_write_local_osgeo_gdb`` directly
-    so the monkeypatch runs in the same process.
+  - The streaming invariant: no fragment is ever loaded as a whole table by the
+    write loop (spy on ``feather.read_table``), exercised as a UNIT TEST that calls
+    ``_write_streaming`` directly so the monkeypatch runs in the same process.
   - Round-trip correctness: all rows, geometry values, and CRS survive a
     multi-fragment write and read-back cycle (exercised end-to-end via Spark).
-
-All tests require the native ``osgeo`` bindings (heavyweight GDAL natives)
-and are skipped when those are absent.
 """
-
-import importlib.util
-import weakref
 
 import pyarrow as pa
 import pyarrow.feather as feather
-import pytest
+import pyogrio
 from pyspark.sql import functions as F
 from shapely import Polygon as _Polygon
 from shapely import from_wkb as _from_wkb
@@ -32,11 +25,6 @@ from databricks.labs.gbx.ds.register import register
 # ---------------------------------------------------------------------------
 # helpers
 # ---------------------------------------------------------------------------
-
-_NEED_OSGEO = pytest.mark.skipif(
-    importlib.util.find_spec("osgeo") is None,
-    reason="native osgeo (heavy GDAL natives) not present; OpenFileGDB write requires osgeo",
-)
 
 
 def _box(x, y):
@@ -79,7 +67,7 @@ def _make_fragment(tmp_path, idx, n_rows, geom_col="geom_0"):
 
 def _minimal_writer(out_path, geom_col="geom_0"):
     """Return a VectorGbxWriter instance with only the attributes required by
-    ``_write_local_osgeo_gdb``, bypassing the full ``__init__`` that needs Spark."""
+    ``_write_streaming``, bypassing the full ``__init__`` that needs Spark."""
     from databricks.labs.gbx.ds.vector import VectorGbxWriter
 
     w = object.__new__(VectorGbxWriter)
@@ -88,25 +76,22 @@ def _minimal_writer(out_path, geom_col="geom_0"):
     w.proj_col = f"{geom_col}_srid_proj"
     w.layer_name = None
     w.driver = "OpenFileGDB"
+    w.path = out_path
     return w
 
 
 # ---------------------------------------------------------------------------
-# Unit test: _write_local_osgeo_gdb reads one fragment at a time
+# Unit test: the write loop never loads a whole fragment as a table
 # ---------------------------------------------------------------------------
 
 
-@_NEED_OSGEO
-def test_write_local_osgeo_gdb_reads_one_fragment_at_a_time(tmp_path, monkeypatch):
-    """Unit test for ``_write_local_osgeo_gdb``: calls the method directly
-    (same process, so monkeypatch intercepts ``feather.read_table``).
+def test_write_streaming_never_loads_a_whole_fragment(tmp_path, monkeypatch):
+    """Unit test for ``_write_streaming`` on OpenFileGDB: calls the method directly
+    (same process, so the monkeypatch intercepts ``feather.read_table``).
 
-    Asserts that at the moment each new fragment is opened, all previously-
-    returned tables have already been garbage-collected (CPython refcount
-    immediately frees after each iteration's ``del tbl, cols, geom``).
-    A non-streaming path (``[feather.read_table(f) for f in frags]``) would
-    keep all fragment tables alive simultaneously, driving the max-concurrent
-    counter above 1 for the second and later calls.
+    The fragments are memory-mapped and handed to ONE ``write_arrow`` as a stream
+    of record batches; a path that loaded each fragment as a table (let alone all
+    of them) would call ``feather.read_table`` for them.
     """
     n_frags = 3
     frags_dir = tmp_path / "frags"
@@ -114,44 +99,21 @@ def test_write_local_osgeo_gdb_reads_one_fragment_at_a_time(tmp_path, monkeypatc
     frags = [_make_fragment(frags_dir, i, n_rows=4) for i in range(n_frags)]
     out = str(tmp_path / "out.gdb")
 
+    read_calls: list = []
     real_read = feather.read_table
-    returned_refs: list = []
-    max_concurrent = [0]
 
     def spy_read(path, *args, **kwargs):
-        # Before returning the next table, count how many prior tables are
-        # still alive (should be 0 if streaming: each table is del-ed before
-        # the next read).
-        alive_count = sum(1 for r in returned_refs if r() is not None)
-        max_concurrent[0] = max(max_concurrent[0], alive_count)
-        tbl = real_read(path, *args, **kwargs)
-        returned_refs.append(weakref.ref(tbl))
-        return tbl
+        read_calls.append(path)
+        return real_read(path, *args, **kwargs)
 
-    # Patch at the pyarrow.feather module level so every
-    # ``import pyarrow.feather as feather; feather.read_table(...)``
-    # inside ``_write_local_osgeo_gdb`` calls the spy.
     monkeypatch.setattr(feather, "read_table", spy_read)
 
     w = _minimal_writer(out)
-    w._write_local_osgeo_gdb(frags, out, geom_type="Polygon", crs="EPSG:4326")
+    w._write_streaming(frags, out, "Polygon", "EPSG:4326")
 
-    # Spy must have been called: 1 (schema inference) + n_frags (write loop).
-    assert (
-        len(returned_refs) == 1 + n_frags
-    ), f"expected {1 + n_frags} feather.read_table calls, got {len(returned_refs)}"
-
-    # Core invariant: never more than 1 prior fragment alive when a new one
-    # is opened.  (Strict 0 expected in CPython; <=1 tolerates a 1-call lag
-    # in edge-case GC implementations.)
-    assert max_concurrent[0] <= 1, (
-        f"streaming violated: max concurrent live fragment tables = "
-        f"{max_concurrent[0]} (expected <=1); fragments are being accumulated "
-        f"rather than processed one at a time"
-    )
-
-    # Output GDB directory must exist (FileGDB is a directory bundle).
+    assert not read_calls, f"fragments were loaded as whole tables: {read_calls}"
     assert (tmp_path / "out.gdb").exists(), "output .gdb directory not created"
+    assert pyogrio.read_info(out)["features"] == 4 * n_frags
 
 
 # ---------------------------------------------------------------------------
@@ -173,7 +135,6 @@ def _gdb_df(spark, n_rows=12, n_partitions=3):
     ).repartition(n_partitions, F.col("name"))
 
 
-@_NEED_OSGEO
 def test_gdb_multi_fragment_roundtrip_rows_geoms_crs(spark, tmp_path):
     """Write a multi-partition FileGDB then read it back; assert all rows,
     attribute values, geometry values, and the EPSG:4326 CRS survive intact."""

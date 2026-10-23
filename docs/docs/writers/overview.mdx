@@ -28,7 +28,7 @@ contract follow below.
 | [GeoJSON](./geojson) | `geojson_gbx` | — (light-only) |
 | [GeoJSONL](./geojsonl) | `geojsonl_gbx` | `geojsonl_ogr` |
 | [GeoPackage](./geopackage) | `gpkg_gbx` | — (light-only) |
-| [File Geodatabase](./filegdb) | `file_gdb_gbx` | — (hybrid; needs native GDAL) |
+| [File Geodatabase](./filegdb) | `file_gdb_gbx` | — (light-only) |
 
 The single-file vector formats (Vector, Shapefile, GeoJSON, GeoPackage, File Geodatabase) are
 **lightweight-only** to write; the heavyweight tier writes raster (`gdal` / `gtiff_gdal`),
@@ -123,7 +123,7 @@ The `nameCol` option on the sharded and raster writers (`geojsonl_gbx`, `raster_
 
 ### Choosing a writer for large datasets
 
-The **single-file** writers (`geojson_gbx`, `shapefile_gbx`, `gpkg_gbx`) assemble
+The **single-file** writers (`geojson_gbx`, `shapefile_gbx`, `gpkg_gbx`, `file_gdb_gbx`) assemble
 the output on the **driver**, but they **stream** the partitions through one pass
 with **bounded memory** (the whole dataset is never held at once), so they scale
 much further than a naive single-node merge. They are still single-node writes,
@@ -141,9 +141,6 @@ For the largest datasets, prefer the writers that spread work across partitions:
   throughput scales with partitions. The most scalable option.
 - **`gpkg_gbx`** — a single file with no 2 GB cap, a good single-file choice when
   one file is required.
-
-(`file_gdb_gbx` uses the native GDAL path and currently assembles in memory — a
-heavy-tier writer; prefer the above on Serverless.)
 
 :::tip Large single-file writes may need a larger cluster
 The single-file writers assemble the output in Spark's **Python worker**
@@ -226,7 +223,7 @@ See the full [capability tiers & read-options matrix](../readers-writers#capabil
 | [GeoJSON Writer](./geojson) | `geojson_gbx` | Pure-Python GeoJSON writer (OGR driver: `GeoJSON`) — single merged file. |
 | [GeoJSONL Writer](./geojsonl) | `geojsonl_gbx` / `geojsonl_ogr` | Multi-file newline-delimited GeoJSONL — one shard per partition, no driver merge. Available in **both** tiers. |
 | [GeoPackage Writer](./geopackage) | `gpkg_gbx` | Pure-Python GeoPackage writer (OGR driver: `GPKG`). |
-| [GeoDatabase Writer](./filegdb) | `file_gdb_gbx` | **Hybrid** File Geodatabase writer (OGR driver: `OpenFileGDB`) — requires the native GDAL libraries (e.g. as provided by the heavyweight tier), not pure-Python. |
+| [GeoDatabase Writer](./filegdb) | `file_gdb_gbx` | Pure-Python File Geodatabase writer (OGR driver: `OpenFileGDB`). |
 | [NetCDF Writer](./netcdf) | `netcdf_gbx` | Pure-Python CF NetCDF writer — CF grids (raster) or CF-DSG points (vector), with `singleFile` / `merge` consolidation. Light-only (no heavyweight NetCDF writer). |
 | [LiDAR Writer](./lidar) | `lidar_gbx` | Pure-Python LAS/LAZ point-cloud writer — one `.laz` per Spark partition by default, with `singleFile` / `merge` consolidation and `keepParts` control. Light-only (no heavyweight LiDAR writer). |
 
@@ -278,15 +275,6 @@ those OGR write paths aren't implemented in the heavyweight tier. For single-fil
 output, use the lightweight vector writers: [Vector](./vector) (`vector_gbx`),
 [Shapefile](./shapefile) (`shapefile_gbx`), [GeoJSON](./geojson) (`geojson_gbx`),
 [GeoPackage](./geopackage) (`gpkg_gbx`), or [GeoDatabase](./filegdb) (`file_gdb_gbx`).
-:::
-
-:::note Hybrid writer: GeoDatabase (`file_gdb_gbx`)
-The [GeoDatabase writer](./filegdb) (`file_gdb_gbx`) is a **hybrid**: it is registered in the
-lightweight tier but, unlike the other `*_gbx` vector writers, it is not pure-Python — it
-drives the **native GDAL libraries** (`osgeo`) to write the File Geodatabase. It therefore
-runs only where those natives are present, such as on a cluster with the **heavyweight tier**
-(the GeoBrix JAR) installed. On a runtime without native GDAL it raises a clear error at write
-time; use another single-file vector writer (GeoPackage, GeoJSON, Shapefile) there.
 :::
 
 ## Benchmarks

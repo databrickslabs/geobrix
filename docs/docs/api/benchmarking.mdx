@@ -432,17 +432,19 @@ file** (the two-phase writer merges the partition fragments on the driver). Run 
 | GeoJSON (single file) | 14M | 279.1 s | ~50k rows/s |
 | Shapefile (single file) | 14M | 152.6 s | ~92k rows/s |
 | GeoPackage (single file) | 14M | 155.9 s | ~90k rows/s |
-| FileGDB (single file) | 14M | 368.3 s | ~38k rows/s |
+| FileGDB (single file) † | 14M | 368.3 s | ~38k rows/s |
 | **GeoJSONL (sharded)** — light `geojsonl_gbx` / heavy `geojsonl_ogr` | 14M | **16.4 s** / **16.1 s** (80 shards) | **~855k / ~870k rows/s** |
 
 The single-file writers are **driver-bound** — the partition fragments are merged into one
-file on the driver (GeoJSON is slowest: text encoding; FileGDB next: native `osgeo`,
-per-feature). The **sharded GeoJSONL** writer skips the merge entirely — one newline-delimited
+file on the driver (GeoJSON is slowest: text encoding). The **sharded GeoJSONL** writer skips the merge entirely — one newline-delimited
 shard per partition, written in parallel — so it is **~17× faster** than the single-file
 GeoJSON writer at 14M (~16 s vs 279 s) and scales with partitions. It is the only vector
 writer available in **both tiers** (the others are lightweight-only), and the two tiers run at
 parity (16.4 s light vs 16.1 s heavy). It's the recommended writer for large / any-scale
 output; `maxRecordsPerFile` caps features per shard.
+
+† The FileGDB figure was measured with the earlier native-GDAL encoder; the writer now encodes
+through pyogrio and has not been re-measured at this scale.
 
 **Format capacity — the limit is the *format's*, not GeoBrix's.** 14M box polygons sits
 Shapefile near its 2 GB `.shp` ceiling; the other formats carry it easily and are specified

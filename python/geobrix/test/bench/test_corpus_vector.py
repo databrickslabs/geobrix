@@ -33,8 +33,7 @@ def test_transcode_vector_seed(spark, tmp_path):
 
     register(spark)
     seed = generate_polygon_seed(spark, 100)
-    # file_gdb needs native osgeo (heavy natives) -> exclude locally
-    fmts = ["geojson_gbx", "shapefile_gbx", "gpkg_gbx"]
+    fmts = ["geojson_gbx", "shapefile_gbx", "gpkg_gbx", "file_gdb_gbx"]
     out = transcode_vector_seed(spark, seed, fmts, str(tmp_path / "vec"))
     for fmt in fmts:
         assert fmt in out
@@ -49,7 +48,11 @@ def test_transcode_vector_seed(spark, tmp_path):
     assert not any(
         "/" in n for n in names
     ), f"zip entries should be flat (no subdir): {names}"
-    # All three formats must read back via their *_gbx reader
+    # file_gdb_gbx seed must be a .gdb.zip (self-contained archive for dir-read parity)
+    assert out["file_gdb_gbx"].endswith(
+        ".gdb.zip"
+    ), f"expected .gdb.zip for file_gdb_gbx, got {out['file_gdb_gbx']}"
+    # Every format must read back via its *_gbx reader
     for fmt in fmts:
         back = spark.read.format(fmt).load(out[fmt])
         assert back.count() == 100

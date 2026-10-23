@@ -77,15 +77,14 @@ def test_non_geojson_commit_streams_without_concat(spark, tmp_path, monkeypatch)
 
 
 def test_should_stream_policy():
-    # All pyogrio single-file writers (GeoJSON, Shapefile, GPKG) stream fragments
-    # into one write (bounded driver memory, single pass). OpenFileGDB uses the
-    # native osgeo path and is excluded.
+    # All pyogrio single-file writers (GeoJSON, Shapefile, GPKG, OpenFileGDB) stream
+    # fragments into one write (bounded driver memory, single pass).
     from databricks.labs.gbx.ds.vector import _should_stream
 
     assert _should_stream("GeoJSON") is True
     assert _should_stream("ESRI Shapefile") is True
     assert _should_stream("GPKG") is True
-    assert _should_stream("OpenFileGDB") is False
+    assert _should_stream("OpenFileGDB") is True
 
 
 def test_stream_record_batches_chains_and_drops_meta(tmp_path):
@@ -351,39 +350,8 @@ def test_named_writer_roundtrip(spark, tmp_path, fmt, target):
     } == {"Point"}
 
 
-def _ogr_can_create(driver: str) -> bool:
-    try:
-        import tempfile
-
-        import pyarrow as pa
-        import pyogrio
-        from shapely import Point as _P
-        from shapely import to_wkb as _twkb
-
-        d = tempfile.mkdtemp()
-        path = d + ("/t.gdb" if driver == "OpenFileGDB" else "/t.out")
-        tbl = pa.table({"g": [_twkb(_P(0, 0))]})
-        pyogrio.write_arrow(
-            tbl,
-            path,
-            driver=driver,
-            geometry_name="g",
-            geometry_type="Point",
-            crs="EPSG:4326",
-        )
-        return True
-    except Exception:
-        return False
-
-
 def test_file_gdb_writer_roundtrip(spark, tmp_path):
-    import importlib.util
-
     register(spark)
-    if importlib.util.find_spec("osgeo") is None:
-        pytest.skip(
-            "native osgeo (heavy GDAL natives) not present; file_gdb_gbx write requires osgeo"
-        )
     out = str(tmp_path / "out.gdb")
     _wkb_df(spark).coalesce(1).write.format("file_gdb_gbx").mode("overwrite").save(out)
     back = spark.read.format("file_gdb_gbx").load(out)
@@ -411,50 +379,12 @@ def test_gpkg_reads_from_readonly_dir(spark, tmp_path):
         os.chmod(out, 0o644)
 
 
-def test_file_gdb_osgeo_hybrid_roundtrip(spark, tmp_path):
-    import pytest
-
-    pytest.importorskip("osgeo", reason="native osgeo (heavy GDAL natives) not present")
-    register(spark)
-    out = str(tmp_path / "hybrid.gdb")
-    _wkb_df(spark).coalesce(1).write.format("file_gdb_gbx").mode("overwrite").save(out)
-    back = spark.read.format("file_gdb_gbx").load(out)
-    assert back.count() == 2
-
-
-def test_file_gdb_clear_error_without_osgeo(spark, tmp_path):
-    import importlib.util
-
-    import pytest
-
-    if importlib.util.find_spec("osgeo") is not None:
-        pytest.skip("osgeo present -- the no-natives error path is not exercised")
-    register(spark)
-    out = str(tmp_path / "noosgeo.gdb")
-    with pytest.raises(Exception) as ei:
-        _wkb_df(spark).coalesce(1).write.format("file_gdb_gbx").mode("overwrite").save(
-            out
-        )
-    assert "osgeo" in str(ei.value).lower() or "native" in str(ei.value).lower()
-
-
 def test_file_gdb_multi_fragment_streaming(spark, tmp_path):
-    """Multi-partition FileGDB write: fragment streaming + OGR transaction batching
-    must produce the same row count and preserve attribute + geometry values.
-
-    This validates both the fragment-streaming path (no full-dataset in-memory
-    concat before the write) and the transaction batching (no per-feature
-    auto-commit corruption). Uses >1 partition so at least two fragments land.
+    """Multi-partition FileGDB write: fragment streaming must produce the same row
+    count and preserve attribute + geometry values (no full-dataset in-memory concat
+    before the write). Uses >1 partition so at least two fragments land.
     """
-    import importlib.util
-
-    import pytest
     from shapely import from_wkb as _from_wkb
-
-    if importlib.util.find_spec("osgeo") is None:
-        pytest.skip(
-            "native osgeo (heavy GDAL natives) not present; file_gdb_gbx write requires osgeo"
-        )
 
     register(spark)
     # Build a small dataset that is guaranteed to span multiple partitions. Use
@@ -510,88 +440,6 @@ def test_file_gdb_multi_fragment_streaming(spark, tmp_path):
         "MultiPolygon",
     }, f"geometry type mismatch: {geom_types}"
     assert len(geom_types) > 0, "no non-null geometries read back"
-
-
-def test_file_gdb_tx_batch_boundary(spark, tmp_path, monkeypatch):
-    """The OGR mid-loop CommitTransaction/StartTransaction path must not drop or
-    double-write features.
-
-    With the default _GDB_TX_BATCH=100_000 a 10-feature test never triggers the
-    boundary commit.  Monkeypatching the module-level constant to 3 forces the
-    commit/restart cycle at rows 3, 6 (and the tail commit at row 7), so this
-    test exercises the code path the default value leaves dead.
-
-    Asserts:
-    (a) exact row count == 7  (no drop, no double-write at batch boundaries)
-    (b) attribute values survive intact across commit boundaries
-    (c) geometry values survive (non-null, correct shapely type)
-    """
-    import importlib.util
-
-    from shapely import Polygon as _Polygon
-    from shapely import from_wkb as _from_wkb
-
-    import databricks.labs.gbx.ds.vector as _vec_mod
-
-    if importlib.util.find_spec("osgeo") is None:
-        pytest.skip(
-            "native osgeo (heavy GDAL natives) not present; "
-            "file_gdb_gbx write requires osgeo"
-        )
-
-    # Patch the module-level batch size to 3 so 7 features cross two boundaries.
-    monkeypatch.setattr(_vec_mod, "_GDB_TX_BATCH", 3)
-
-    register(spark)
-
-    def _box(x, y):
-        return bytearray(
-            to_wkb(_Polygon([(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1), (x, y)]))
-        )
-
-    # 7 features, 2 partitions -> >=2 fragments; batch=3 means commits at
-    # features 3 and 6, then a tail commit for feature 7.
-    rows = [(f"r{i}", i * 5, _box(float(i), 0.0), "4326", "") for i in range(7)]
-    df = spark.createDataFrame(
-        rows,
-        schema="name string, val int, geom_0 binary, "
-        "geom_0_srid string, geom_0_srid_proj string",
-    ).repartition(2, F.col("name"))
-
-    out = str(tmp_path / "boundary.gdb")
-    df.write.format("file_gdb_gbx").mode("overwrite").save(out)
-
-    back = spark.read.format("file_gdb_gbx").load(out)
-    rows_back = back.collect()
-
-    # (a) exact row count -- no drop or double-write
-    assert len(rows_back) == 7, f"expected 7 rows, got {len(rows_back)}"
-
-    # (b) attribute values survive
-    name_to_val = {r["name"]: r["val"] for r in rows_back}
-    assert set(name_to_val.keys()) == {
-        f"r{i}" for i in range(7)
-    }, f"name set mismatch: {set(name_to_val.keys())}"
-    for i in range(7):
-        assert (
-            name_to_val[f"r{i}"] == i * 5
-        ), f"val mismatch for r{i}: got {name_to_val[f'r{i}']}"
-
-    # (c) geometry survives (non-null; OpenFileGDB may promote Polygon->MultiPolygon)
-    gcol = next(
-        f.name
-        for f in back.schema.fields
-        if f.name not in ("name", "val")
-        and not f.name.endswith(("_srid", "_srid_proj"))
-    )
-    geom_types = {
-        _from_wkb(bytes(r[gcol])).geom_type for r in rows_back if r[gcol] is not None
-    }
-    assert geom_types <= {
-        "Polygon",
-        "MultiPolygon",
-    }, f"unexpected geometry types: {geom_types}"
-    assert len(geom_types) > 0, "all geometries were null after round-trip"
 
 
 def test_gpkg_output_uses_format_default_geom_name(spark, tmp_path):

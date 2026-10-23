@@ -40,35 +40,10 @@ def test_crs_to_srid_proj_production(src, expected_srid):
     assert "+proj=" in proj4, f"proj4 for {src}: got {proj4!r}"
 
 
-# ── 2. _make_layer_srs (vector.py OGR-SRS branch, lines 1387-1391) ───────────
-
-
-@pytest.mark.parametrize(
-    "src,expected_auth,expected_code",
-    [
-        (
-            "ESRI:54008",
-            "ESRI",
-            "54008",
-        ),  # fail-on-revert; matrix lives in test_crs_helpers
-    ],
-    ids=["esri"],
-)
-def test_make_layer_srs_authority(src, expected_auth, expected_code):
-    """ds/vector.py _make_layer_srs: SetFromUserInput carries ESRI authority.
-
-    Old ImportFromProj4("ESRI:54008") fails silently → null SRS → GetAuthorityName
-    returns None.  FAILS for ESRI:54008 on revert.
-    """
-    pytest.importorskip("osgeo.osr")
-    from databricks.labs.gbx.ds.vector import _make_layer_srs
-
-    srs = _make_layer_srs(src)
-    assert srs is not None, f"SRS for {src} is None"
-    auth_name = srs.GetAuthorityName(None)
-    auth_code = srs.GetAuthorityCode(None)
-    assert auth_name == expected_auth, f"Authority name for {src}: {auth_name!r}"
-    assert auth_code == expected_code, f"Authority code for {src}: {auth_code!r}"
+# ── 2. FileGDB writer layer CRS ──────────────────────────────────────────────
+# The OpenFileGDB writer passes the canonical CRS string to pyogrio (no OGR
+# SpatialReference of its own); the ESRI-authority round-trip is covered in
+# test_vector_gdb_pyogrio.py::test_crs_is_written[esri-54008].
 
 
 # ── 3. _build_mosaic_vrt SRS element (cog_writer.py line 320) ────────────────

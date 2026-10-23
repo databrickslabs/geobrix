@@ -291,6 +291,22 @@ formats.
   indistinguishable from a whole-file read of the same source, so if you write one source both
   ways into the same directory, set `nameCol`.
 
+### Vector writers — `file_gdb_gbx` on any compute, timestamps on Serverless
+
+- **`file_gdb_gbx` writes File Geodatabases with the lightweight tier alone.** The writer used
+  to need native GDAL (`osgeo`) and so ran only on classic x86 clusters with the init script.
+  It now encodes the `.gdb` through pyogrio's bundled OpenFileGDB driver, so FileGDB writing
+  is lightweight and runs on Serverless, standard and dedicated clusters, on x86 and ARM, with
+  no extra install. The output layout, `zip=true`, the shared schema and the options are
+  unchanged, and the driver still assembles the file in one pass with bounded memory. Long
+  (64-bit integer) and date columns are stored as 64-bit integer and date-only fields, which
+  Esri software reads from ArcGIS Pro 3.2 onward; GDAL-based readers read them on any version.
+  See [GeoDatabase Writer](./writers/filegdb).
+- **Timestamp columns work in the lightweight vector readers and writers on Serverless.** A
+  layer with a date-time field (or a DataFrame with a timestamp column) failed to read or write
+  on Serverless compute with `AssertionError`, because those workers have no session time zone
+  for PySpark to type the column with. Timestamps are now read and written as UTC.
+
 ### Grid explode functions — `bng_tessellateexplode` columns (behavior change)
 
 - **Heavyweight `bng_tessellateexplode` now returns `core` and `chip`, like the lightweight tier.**

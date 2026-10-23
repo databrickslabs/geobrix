@@ -127,11 +127,9 @@ Lightweight (`*_gbx`) formats are pure-Python (no JAR); each pairs with a heavyw
 | GeoJSON | `geojson_gbx` | — (light-only) |
 | GeoJSONL — *sharded, multi-file* | `geojsonl_gbx` | `geojsonl_ogr` |
 | GeoPackage | `gpkg_gbx` | — (light-only) |
-| File Geodatabase | `file_gdb_gbx` | — (hybrid; needs native GDAL) ¹ |
+| File Geodatabase | `file_gdb_gbx` | — (light-only) |
 
 Single-file vector writes are lightweight-only; the **sharded GeoJSONL** writer (multi-file, one shard per partition, no driver merge — the recommended writer at any scale) is available in **both** tiers.
-
-¹ `file_gdb_gbx` write is a **hybrid**: it encodes the `.gdb` via the native GDAL (`osgeo`) from the heavyweight GDAL init script, because pyogrio's bundled GDAL ships a read-only OpenFileGDB driver. On compute with those natives it writes natively; otherwise it raises a clear error (use `gpkg_gbx` / `geojson_gbx`). FileGDB *reading* is lightweight-only.
 
 Light vector readers/writers exchange geometry as **WKB/WKT** with companion `*_srid` columns — convert to/from Databricks `GEOMETRY` with `st_geomfromwkb` / `st_aswkb` (see [Databricks Spatial](https://databrickslabs.github.io/geobrix/docs/databricks-spatial)).
 

@@ -182,7 +182,7 @@ CODED_ROWS = [
 
 def _build_coded_domain_source(path: str, driver: str) -> str:
     """Write a 1-layer point dataset whose fields carry real OGR coded-value
-    domains, via native osgeo (pyogrio's bundled OpenFileGDB is read-only).
+    domains, via native osgeo (pyogrio cannot author field domains).
     Return codes are checked rather than flipping the process-global osgeo
     exception mode, which other tests in the session rely on."""
     from osgeo import ogr, osr

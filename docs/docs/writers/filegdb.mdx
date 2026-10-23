@@ -8,12 +8,11 @@ import vectorWriteExamples from '!!raw-loader!../../tests/python/writers/vector_
 
 # GeoDatabase Writer
 
-_Since:_ lightweight `file_gdb_gbx` **v0.4.0** · _(hybrid — needs native GDAL)_
+_Since:_ lightweight `file_gdb_gbx` **v0.4.0**
 
-`file_gdb_gbx` — a **hybrid** writer. It uses the pure-Python DataSource V2 framework
-like the other `*_gbx` writers, but because pyogrio's bundled GDAL ships a **read-only**
-OpenFileGDB driver, it encodes the `.gdb` via the **native** GDAL (`osgeo.ogr`) supplied
-by the heavyweight GDAL init script. It round-trips with the `file_gdb_gbx` reader; the
+`file_gdb_gbx` — a pure-Python DataSource V2 writer like the other `*_gbx` writers. It
+encodes the `.gdb` with the OpenFileGDB driver in pyogrio's bundled GDAL, so it needs no
+native GDAL and no init script. It round-trips with the `file_gdb_gbx` reader; the
 schema (`attrs..., geom_0, geom_0_srid, geom_0_srid_proj`) is shared across the
 lightweight vector readers and writers.
 
@@ -22,21 +21,21 @@ lightweight vector readers and writers.
   outputs, use a **classic cluster** with ample memory or switch to the distributed
   `geojsonl_gbx` writer. See
   [**Choosing a writer for large datasets**](./overview#choosing-a-writer-for-large-datasets).
-- **Tier & compute:** `file_gdb_gbx` writing is the **exception** among the `*_gbx` writers —
-  because it encodes via native GDAL (`osgeo`), it requires a **classic x86 cluster** with the
-  heavyweight GDAL init script and does **not** run on Serverless or ARM. (FileGDB
-  **reading** is fully lightweight and runs anywhere.) For vector output on Serverless/ARM, use
-  `gpkg_gbx`, `geojson_gbx`, or `geojsonl_gbx`. See
+- **Tier & compute:** `file_gdb_gbx` is fully lightweight, for writing and for
+  [reading](../readers/filegdb): it runs wherever the lightweight tier runs — Serverless,
+  standard and dedicated clusters, x86 and ARM. See
   [Benchmarking](../api/benchmarking) for timings and methodology.
 :::
 
 :::note Before you write
 - **Register first** — call `register(spark)` once before using any `*_gbx` format (see the
   [Writers Overview](./overview)).
-- **Hybrid writer** — uses the pure-Python DataSource V2 framework but encodes via **native
-  GDAL** (`osgeo.ogr`), so it requires the heavyweight GDAL init script
-  (see [Init Script (Legacy)](../installation/init-script.mdx)). Without the native GDAL bindings it raises a clear
-  error. The output path must end in `.gdb`.
+- **Output path** — must end in `.gdb` (or `.gdb.zip` with `zip=true`).
+- **Esri field limits** — Esri field-name and type limits apply, and a name that is an SQL
+  reserved word (for example `by`) is renamed with a trailing underscore. A **long**
+  (64-bit integer) column and a **date** column are written as 64-bit integer and date-only
+  fields, which Esri software reads from ArcGIS Pro 3.2 onward; GDAL-based readers (GeoBrix,
+  QGIS, GeoPandas) read them on any version.
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded
   geometry are **not** accepted. Writing from a Databricks `GEOMETRY` / `GEOGRAPHY` column?
@@ -53,8 +52,8 @@ lightweight vector readers and writers.
 | `fileName` | _(none)_ | Name the output unit explicitly. When set, `.save(path)` treats `path` as the **parent directory** (created if missing) and writes `path/<fileName>.gdb` (or `path/<fileName>.gdb.zip` when `zip=true`; extension auto-completed). See [Output naming](#output-naming). |
 | `zip` | `false` | When `true`, produce a **single `.gdb.zip`** archive (the `.gdb` directory packed at the archive root) instead of a `.gdb` directory. The output path is normalised automatically: `.save("roads")` → `roads.gdb.zip`; `.save("roads.gdb")` → `roads.gdb.zip`. The [reader](../readers/filegdb) opens `.gdb.zip` transparently. Ignored for non-FileGDB drivers. |
 | `geometryType` | inferred from the data | Override the OGR geometry type. |
-| `layerName` | driver default | Output layer name where supported. |
-| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). This is a lightweight-tier writer (hybrid — requires native GDAL for write). |
+| `layerName` | `layer` | Output layer (feature class) name. |
+| `geomCol` | auto-detected from the `*_srid` column | Override the geometry column name. Locates the geometry and its SRID companion (`<geomCol>_srid`). See [Named Vector Formats](./overview#named-vector-formats). |
 | `sridCol` | `<geomCol>_srid` | Override the SRID column name. **Required** — supplies the CRS authority code (e.g. `"4326"`, or `"0"` if unknown). |
 | `projCol` | `<geomCol>_srid_proj` | Override the PROJ4 column name (optional fallback CRS when `sridCol` is `"0"`). |
 
@@ -78,9 +77,7 @@ For coercing an arbitrary frame to this shape and for exporting Databricks `GEOM
 `GEOGRAPHY` columns, see the [**Vector Writer schema**](./vector#schema).
 
 **Output:** an ESRI File Geodatabase (a `.gdb` directory, or a single `.gdb.zip` with
-`zip=true` — see below); the geometry is stored in a named field (default `SHAPE`). This is
-the **hybrid** writer — it encodes via native GDAL (`osgeo.ogr`), so the heavyweight GDAL
-init script is required (Esri field name and type limits apply).
+`zip=true` — see below); the geometry is stored in a named field (default `SHAPE`).
 
 ## Producing a portable ZIP archive
 
@@ -127,7 +124,7 @@ With `zip=true` replace `.gdb` with `.gdb.zip` in the table above. Extension aut
 
 ## Typical pipeline: export a table to a single file
 
-Export a table of vector data to a File Geodatabase — no `coalesce` needed (the writer merges partitions into a single file on commit). The output path must end in `.gdb`. Requires the native GDAL init script (see the hybrid warning above):
+Export a table of vector data to a File Geodatabase — no `coalesce` needed (the writer merges partitions into a single file on commit). The output path must end in `.gdb`:
 
 ```python
 df = spark.table("main.geo.parcels")  # vector data in a (Delta) table
@@ -148,7 +145,7 @@ primitives. The table below shows which are active in this writer and which are 
 | `gbx_file_read` (FILE-tier read) | Not in the DataSource | FILE-tier reads for vector data go through `vector_file_read` at the function layer. |
 
 :::note Coordinate reference systems
-The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and applies it to the OGR layer via native GDAL `srs.SetFromUserInput`. An EPSG, ESRI, or OGC authority string is accepted; if `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 fallback is used. The CRS is written into the FileGDB's spatial reference record. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
+The writer reads the CRS from the `geom_0_srid` column (or `sridCol`) and writes it into the layer's spatial reference. An EPSG or ESRI authority code is accepted; if `srid` is `"0"`, the `geom_0_srid_proj` PROJ4 fallback is used. The CRS is stored in the FileGDB's spatial reference record. See [Coordinate reference systems](../api/coordinate-reference-systems) for the full CRS model.
 :::
 
 :::note Shared file-access layer

@@ -1,8 +1,7 @@
 """Scaled vector benchmark corpus generator. Mints a 1M-polygon seed in the light
 vector-writer schema, transcodes it to each format via the *_gbx writers, and
 replicates each seed into a per-format directory on the bench Volume. Runs locally
-(small scale) and on the bench cluster (full scale). FileGDB writing needs the
-heavyweight GDAL natives (native osgeo) -- cluster only.
+(small scale) and on the bench cluster (full scale).
 
 Shapefile and FileGDB seeds+copies are stored as self-contained zip archives
 (.shp.zip / .gdb.zip) so both the light (*_gbx) and heavy (*_ogr) readers can read
@@ -120,8 +119,7 @@ def _zip_gdb(gdb_path: str) -> str:
 
 def transcode_vector_seed(spark, seed_df, formats: List[str], out_base: str) -> dict:
     """Write the seed DataFrame to each format's seed file via the *_gbx writers.
-    Returns {fmt: seed_path}. The seed is cached so each write reuses it. FileGDB
-    requires the native osgeo (heavyweight GDAL natives).
+    Returns {fmt: seed_path}. The seed is cached so each write reuses it.
 
     Shapefile and FileGDB outputs are zipped into self-contained archives (.shp.zip
     and .gdb.zip respectively) so both the light and heavy readers can dir-read a

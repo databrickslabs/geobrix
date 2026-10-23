@@ -101,6 +101,7 @@ def _run_file_fast_path(
     """
     fr_holder[0] = fr
     from .core.open_tile import (
+        _has_pending,
         _parse_pending,
         _read_size_key,
         _to_virtual_tile,
@@ -129,9 +130,16 @@ def _run_file_fast_path(
         from .core.crs import resolve_crs
 
         pending_crs = resolve_crs(crs_str if crs_str is not None else srid)
+    win = None
     if vt.window is not None:
         c, r_off, w, h = vt.window
         win = Window(c, r_off, w, h)
+    elif _has_pending(vt.metadata):
+        # A whole-file tile with a pending instruction (rst_initnodata, rst_band,
+        # rst_setsrid, rst_setcrs) is its whole extent as a window: the instruction is
+        # applied to it, as open_tile does, not skipped.
+        win = Window(0, 0, src.width, src.height)
+    if win is not None:
         if view_mode == "pixels":
             # Materialise the window into GTiff bytes, open as a real
             # DatasetReader inside an ExitStack, and pass to core_fn.
@@ -157,8 +165,8 @@ def _run_file_fast_path(
             )
             return core_fn(header_view, cellid)
     else:
-        # No sub-window: full source; src is a complete DatasetReader.
-        # For view="pixels" src is already a full DatasetReader; for
+        # No sub-window and nothing pending: full source; src is a complete
+        # DatasetReader. For view="pixels" src is already a full DatasetReader; for
         # view="header" we pass it directly (no sub-window means full-source
         # dims are correct — a WindowHeaderView would be a no-op wrapper).
         return core_fn(src, cellid)
@@ -177,7 +185,10 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
     A windowless virtual tile with no clip goes to ``open_header``, which returns the
     full-source footprint (consistent with per-row ``rst_memsize``) unless its target
     ``crs`` asks for a reprojection of that source. With a clip, or such a ``crs``, it
-    goes to ``_open``: the footprint is the clipped or reprojected one.
+    goes to ``_open``: the footprint is the clipped or reprojected one. With
+    ``view="pixels"`` and a pending instruction (``rst_initnodata``, ``rst_band``,
+    ``rst_setsrid``, ``rst_setcrs``) it goes to ``_open`` as well: ``open_header``
+    shows the instruction's effect on the header but refuses ``read``.
 
     view contract:
       ``view="header"``: wrap the open DatasetReader in a full-extent
@@ -188,9 +199,18 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
     Caller wraps in ``try/except Exception`` and sets ``result = None`` on failure
     so per-tile errors degrade gracefully rather than crashing the whole partition.
     """
-    from .core.open_tile import _open, _to_virtual_tile, _warp_pending, open_header
+    from .core.open_tile import (
+        _has_pending,
+        _open,
+        _to_virtual_tile,
+        _warp_pending,
+        open_header,
+    )
 
-    if _tile_is_windowless_virtual(tile) and not _has_clip(tile):
+    header_enough = view_mode == "header" or not _has_pending(
+        _to_virtual_tile(tile).metadata
+    )
+    if _tile_is_windowless_virtual(tile) and not _has_clip(tile) and header_enough:
         with open_header(tile) as ds:
             # The header view of a relabelled source wraps the file's own dataset; the
             # reprojection rule compares the target with the file's CRS (see open_tile).

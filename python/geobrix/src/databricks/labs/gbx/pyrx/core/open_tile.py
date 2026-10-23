@@ -105,6 +105,12 @@ def _parse_pending(metadata):
     return bands, nodata, srid, crs_str
 
 
+def _has_pending(metadata) -> bool:
+    """True when the tile metadata records a pending band-select, nodata, SRID or CRS
+    instruction (see :func:`_parse_pending`)."""
+    return any(v is not None for v in _parse_pending(metadata))
+
+
 def _pending_nodata_value(nodata, dtype_str) -> Optional[float]:
     """Value to stamp for a pending nodata on a source that declares none.
 

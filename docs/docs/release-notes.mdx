@@ -457,6 +457,13 @@ formats.
   tile whose `crs` differs from its source's is reprojected too. A tile written with
   `virtualize_dir` from a clipped or reprojected tile no longer applies that clip and CRS a
   second time when it is read.
+- **Grouped functions apply `rst_initnodata`, `rst_band` and `rst_setsrid` to a whole-file
+  virtual tile.** `raster_gbx` emits whole-file virtual tiles by default. After one of those
+  functions, a lightweight `*_grouped` function that reads pixels (`rst_resample_grouped`,
+  `rst_slope_grouped` and the rest) returned NULL on a cluster without the FILE type, with no
+  error, and on one with it ignored the instruction, so the NoData was never applied. They now
+  read the tile as every other lightweight function does, and the header-only grouped
+  functions see the band count, NoData and CRS the instruction sets.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

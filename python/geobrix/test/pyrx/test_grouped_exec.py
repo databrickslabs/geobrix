@@ -630,6 +630,147 @@ def test_windowless_tile_with_the_source_crs_keeps_the_header_path(
 
 
 # ---------------------------------------------------------------------------
+# A windowless virtual tile's pending instructions are applied, in both views and on
+# both runtimes (raster_gbx emits exactly these tiles by default)
+# ---------------------------------------------------------------------------
+
+_PENDING_KINDS = {
+    "nodata": {"pending_nodata": "auto"},  # rst_initnodata
+    "bands": {"pending_bands": "2"},  # rst_band
+    "srid": {"pending_srid": "3857"},  # rst_setsrid
+    "crs": {"pending_crs": "EPSG:3857"},  # rst_setcrs
+}
+
+
+def _windowless_pending_tile(tmp_path, kind):
+    """(row, VirtualTile) for a two-band uint16 EPSG:4326 file with no NoData, no window
+    and the pending instruction ``kind``."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    src = tmp_path / "two_band.tif"
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=2,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.5, 0.5),
+    )
+    with rasterio.open(src, "w", **prof) as dst:
+        dst.write(np.arange(24, dtype="uint16").reshape(2, 3, 4) + 1)
+    vt = VirtualTile(cellid=1, path=str(src), metadata=dict(_PENDING_KINDS[kind]))
+    assert vt.window is None and vt.raster is None
+    return vt.to_row(), vt
+
+
+def _view_signature(ds, cellid):
+    """What a header-only operation can see."""
+    from databricks.labs.gbx.core.crs import authority_srid_of
+
+    return (ds.count, ds.nodata, authority_srid_of(ds.crs), ds.width, ds.height)
+
+
+def _pixel_signature(ds, cellid):
+    return _view_signature(ds, cellid) + (ds.read().tobytes(),)
+
+
+@pytest.mark.parametrize("kind", list(_PENDING_KINDS))
+@pytest.mark.parametrize("view", ["header", "pixels"])
+@pytest.mark.parametrize("runtime", ["plain", "file"])
+def test_dispatch_applies_a_windowless_tiles_pending_instructions(
+    tmp_path, runtime, view, kind
+):
+    """``rst_initnodata`` / ``rst_band`` / ``rst_setsrid`` / ``rst_setcrs`` on a
+    whole-file virtual tile record an instruction; a grouped operation must see what
+    ``open_tile`` shows, whichever way the tile is read. A pixel operation used to get
+    NULL on a runtime without the FILE type (the header view refuses ``read``) and the
+    source as it is, instruction ignored, on one with it."""
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    row, vt = _windowless_pending_tile(tmp_path, kind)
+    core = _pixel_signature if view == "pixels" else _view_signature
+    with ot.open_tile(vt) as ds:
+        want = core(ds, 1)
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            row,
+            object() if runtime == "file" else None,
+            _OpenerContext(),
+            lru,
+            view,
+            core,
+        )
+    finally:
+        lru.close()
+    assert got is not None, f"{runtime}/{view}/{kind}: NULL result"
+    assert got == want, f"{runtime}/{view}/{kind}: {got[:5]} != eager {want[:5]}"
+
+
+def test_rst_initnodata_then_a_pixel_grouped_function_on_a_whole_file_tile(
+    spark, tmp_path
+):
+    """The path of a ``raster_gbx`` tile (no window) through ``rst_initnodata`` and a pixel
+    ``_grouped`` function, on the local (no FILE type) runtime: a tile with the NoData
+    applied, not NULL."""
+    import rasterio
+    from rasterio.transform import from_origin
+
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    src = tmp_path / "whole.tif"
+    prof = dict(
+        driver="GTiff",
+        width=4,
+        height=3,
+        count=1,
+        dtype="uint16",
+        crs="EPSG:4326",
+        transform=from_origin(10.0, 50.0, 0.5, 0.5),
+    )
+    with rasterio.open(src, "w", **prof) as dst:
+        dst.write(np.arange(12, dtype="uint16").reshape(1, 3, 4) + 1)
+    vt = VirtualTile(cellid=3, path=str(src))
+    assert vt.window is None
+    df = spark.createDataFrame(
+        [(vt.to_row(),)], StructType([StructField("tile", V2_TILE_SCHEMA)])
+    ).select(prx.rst_initnodata("tile").alias("tile"))
+    out = prx.rst_resample_grouped(df, 2.0, "nearest").collect()
+    assert len(out) == 1 and out[0]["tile"] is not None, "NULL tile"
+    with rasterio.MemoryFile(bytes(out[0]["tile"]["raster"])) as mf, mf.open() as ds:
+        assert ds.nodata == 65535.0
+        assert (ds.width, ds.height) == (8, 6)
+
+
+def test_a_windowless_tile_without_instructions_still_reads_the_source_directly(
+    tmp_path,
+):
+    """Control: nothing pending, nothing to apply; the FILE path hands over the cached
+    source itself."""
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    row, vt = _windowless_pending_tile(tmp_path, "nodata")
+    vt.metadata = {}
+    seen = []
+
+    def core(ds, cellid):
+        seen.append(ds)
+        return _pixel_signature(ds, cellid)
+
+    lru = _SourceStubLRU()
+    try:
+        got = _dispatch_tile(
+            vt.to_row(), object(), _OpenerContext(), lru, "pixels", core
+        )
+    finally:
+        lru.close()
+    assert got is not None and seen[0] is lru._open[0]
+
+
+# ---------------------------------------------------------------------------
 # grouped_tile_map runs every tile through _dispatch_tile
 # ---------------------------------------------------------------------------
 

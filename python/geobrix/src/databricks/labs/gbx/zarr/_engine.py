@@ -12,9 +12,10 @@ Two kinds of array, two openers, one reader:
 The zarrs codec pipeline is a Rust decoder for zarr-python. zarr picks the pipeline when
 an array is opened, and ``codec_pipeline.path`` is a setting of the whole process, so the
 engines select zarrs only inside a short ``zarr.config.set`` scope around the open, under
-a lock, and never leave it set. Every open GeoBrix makes takes the same lock, so none of
-them can run inside another's scope. Code outside GeoBrix that opens a zarr array on
-another thread is not under the lock: for the duration of a zarrs open (the metadata
+a reader-writer gate, and never leave it set. Every open GeoBrix makes holds the gate (a
+zarrs scope exclusively, a plain open shared, so plain opens still overlap), so none of
+them can run inside a scope. Code outside GeoBrix that opens a zarr array on
+another thread is not under the gate: for the duration of a zarrs open (the metadata
 read, not the data reads) it would get zarrs too. That is inherent to ``config.set``,
 which changes the setting for the whole process. zarrs-python
 reads only the stores it knows (local files, object stores, HTTP) and has no way to take a
@@ -54,24 +55,90 @@ _INSTALL_FIX = (
     "Serverless environment 6)"
 )
 
-# zarr.config is process-wide state; two scopes must not overlap or the later one would
-# restore the earlier one's setting. Reentrant: a scope may open another array inside.
-_CONFIG_LOCK = threading.RLock()
+
+class _ConfigGate:
+    """A reader-writer lock over ``zarr.config``, which is process-wide state.
+
+    Every open GeoBrix makes holds the gate. A plain open holds it *shared*: any number
+    run at once, since none changes the config. A zarrs open holds it *exclusive* for the
+    time ``zarr.config.set`` is in force, so no plain open can start inside it and two
+    scopes cannot overlap (the later one would restore the earlier one's setting). A
+    waiting exclusive request holds back new shared ones, so zarrs scopes are not starved.
+    A thread inside its own exclusive scope may take the gate shared (the open it makes);
+    a shared hold is not reentrant and cannot be upgraded.
+    """
+
+    def __init__(self):
+        self._cond = threading.Condition()
+        self._shared: set[int] = set()  # threads holding it shared
+        self._owner: int | None = None  # the thread holding it exclusive
+        self._depth = 0
+        self._waiting = 0  # exclusive requests waiting
+
+    def held(self) -> bool:
+        """Whether the calling thread holds the gate, either way."""
+        me = threading.get_ident()
+        with self._cond:
+            return me in self._shared or self._owner == me
+
+    @contextmanager
+    def shared(self):
+        me = threading.get_ident()
+        with self._cond:
+            own = self._owner == me
+            if not own:
+                while self._owner is not None or self._waiting:
+                    self._cond.wait()
+                self._shared.add(me)
+        try:
+            yield
+        finally:
+            if not own:
+                with self._cond:
+                    self._shared.discard(me)
+                    self._cond.notify_all()
+
+    @contextmanager
+    def exclusive(self):
+        me = threading.get_ident()
+        with self._cond:
+            if self._owner == me:
+                self._depth += 1
+            else:
+                self._waiting += 1
+                try:
+                    while self._owner is not None or self._shared:
+                        self._cond.wait()
+                finally:
+                    self._waiting -= 1
+                self._owner, self._depth = me, 1
+        try:
+            yield
+        finally:
+            with self._cond:
+                self._depth -= 1
+                if not self._depth:
+                    self._owner = None
+                    self._cond.notify_all()
+
+
+_CONFIG_GATE = _ConfigGate()
 
 
 @contextmanager
 def _zarrs_scope():
-    with _CONFIG_LOCK, zarr.config.set({_PIPELINE_KEY: _ZARRS_PIPELINE}):
+    with _CONFIG_GATE.exclusive(), zarr.config.set({_PIPELINE_KEY: _ZARRS_PIPELINE}):
         yield
 
 
 def _open_array(*args, **kwargs) -> zarr.Array:
-    """``zarr.open_array``, under the config lock like every open GeoBrix makes.
+    """``zarr.open_array`` with the gate held shared, like every open GeoBrix makes.
 
     A default open must not run inside another thread's zarrs scope, or it would get
-    zarrs; taking the lock keeps the scopes and the plain opens apart.
+    zarrs; holding the gate keeps the scopes and the plain opens apart, while plain opens
+    still run alongside each other.
     """
-    with _CONFIG_LOCK:
+    with _CONFIG_GATE.shared():
         return zarr.open_array(*args, **kwargs)
 
 

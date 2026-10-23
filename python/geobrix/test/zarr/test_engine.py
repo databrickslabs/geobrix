@@ -183,12 +183,94 @@ def test_mixed_default_and_zarrs_opens_each_get_their_own_pipeline(
     assert zarr.config.get(PIPELINE_PATH) == before
 
 
-def test_every_open_holds_the_config_lock(era5_v3_sharded, monkeypatch):
+def _slow_opens(monkeypatch, seconds, record):
+    """zarr.open_array that takes a while, recording how many run at once."""
+    real = zarr.open_array
+    lock = threading.Lock()
+    state = {"now": 0, "peak": 0}
+
+    def slow(*args, **kwargs):
+        with lock:
+            state["now"] += 1
+            state["peak"] = max(state["peak"], state["now"])
+        try:
+            time.sleep(seconds)
+            return real(*args, **kwargs)
+        finally:
+            with lock:
+                state["now"] -= 1
+
+    monkeypatch.setattr(zarr, "open_array", slow)
+    record.append(state)
+
+
+def test_default_opens_run_at_the_same_time(era5_v3_sharded, monkeypatch):
+    """Only a zarrs scope needs the process to itself; plain opens share it."""
+    state = []
+    _slow_opens(monkeypatch, 0.2, state)
+    path = str(era5_v3_sharded)
+    pipelines = []
+    threads = [
+        threading.Thread(
+            target=lambda: pipelines.append(
+                open_plain_array(
+                    path, "t2m", engine="zarr", pipeline="default"
+                ).pipeline
+            )
+        )
+        for _ in range(8)
+    ]
+    start = time.perf_counter()
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    took = time.perf_counter() - start
+    assert pipelines == ["default"] * 8
+    assert state[0]["peak"] == 8
+    assert took < 8 * 0.2 / 2  # not one after another
+
+
+def test_a_zarrs_scope_waits_for_default_opens_in_flight(era5_v3_sharded, monkeypatch):
+    path = str(era5_v3_sharded)
+    inside, release = threading.Event(), threading.Event()
+    real = zarr.open_array
+    first = []
+
+    def blocking(*args, **kwargs):
+        if not first:  # the default open parks inside zarr.open_array
+            first.append(1)
+            inside.set()
+            release.wait(10)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(zarr, "open_array", blocking)
+    default = threading.Thread(
+        target=lambda: open_plain_array(path, "t2m", engine="zarr", pipeline="default")
+    )
+    default.start()
+    assert inside.wait(10)
+    done = threading.Event()
+
+    def zarrs_open():
+        open_plain_array(path, "t2m", engine="zarr", pipeline="zarrs")
+        done.set()
+
+    zarrs = threading.Thread(target=zarrs_open)
+    zarrs.start()
+    assert not done.wait(0.4)  # a zarrs scope cannot start while a default open runs
+    release.set()
+    default.join()
+    zarrs.join()
+    assert done.is_set()
+
+
+def test_every_open_holds_the_config_gate(era5_v3_sharded, monkeypatch):
     held = []
     real = zarr.open_array
 
     def checking(*args, **kwargs):
-        held.append(_engine._CONFIG_LOCK._is_owned())
+        held.append(_engine._CONFIG_GATE.held())
         return real(*args, **kwargs)
 
     monkeypatch.setattr(zarr, "open_array", checking)

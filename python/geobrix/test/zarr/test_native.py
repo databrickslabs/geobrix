@@ -4,6 +4,7 @@ import copy
 import json
 import os
 import threading
+import time
 import tracemalloc
 
 import numpy as np
@@ -225,7 +226,8 @@ def test_native_holds_only_a_bounded_window_of_compressed_bytes(
         for f in (tmp_path / "s.zarr" / "a").rglob("*")
         if f.is_file() and f.name != "zarr.json"
     )
-    assert stored > 14 << 20
+    # incompressible float32: the stored size must follow from the data, not a constant
+    assert stored > 0.8 * full.nbytes
     monkeypatch.setattr(_native, "_INFLIGHT_BYTES", 512 << 10)
     st = _store(tmp_path / "s.zarr")
     native = open_manifest_array(st, "a", pipeline="native")
@@ -239,6 +241,106 @@ def test_native_holds_only_a_bounded_window_of_compressed_bytes(
     np.testing.assert_array_equal(got, full)
     extra = peak - current  # what was held beyond the result
     assert extra < stored // 4, f"{extra} bytes above the result, stored {stored}"
+
+
+class SlowReader:
+    """A reader with a FUSE-like cost: per call latency plus a rate per stream (sleeps
+    release the GIL, so concurrent reads overlap). Records how many data reads overlap.
+    """
+
+    def __init__(self, inner, latency=0.01, rate=10e6):
+        self.inner, self.latency, self.rate = inner, latency, rate
+        self._lock = threading.Lock()
+        self.active = self.peak = 0
+
+    def read(self, regions):
+        nbytes = sum(r.length for r in regions)
+        data = nbytes > (32 << 10)  # not a shard index
+        if data:
+            with self._lock:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+        try:
+            time.sleep(self.latency + nbytes / self.rate)
+            return self.inner.read(regions)
+        finally:
+            if data:
+                with self._lock:
+                    self.active -= 1
+
+
+def test_native_keeps_many_reads_in_flight_on_a_box_larger_than_the_budget(
+    tmp_path, monkeypatch
+):
+    """The budget bounds memory, not concurrency: groups are cut to a fraction of it, so a
+    box bigger than the budget still has about eight reads in flight (on a Volume each
+    read has latency and a rate of its own, so fewer reads is slower)."""
+    shape = (8, 512, 512)
+    full = np.random.default_rng(1).random(shape, dtype=np.float32)
+    group = zarr.open_group(str(tmp_path / "s.zarr"), mode="w", zarr_format=3)
+    arr = group.create_array(
+        name="a",
+        shape=shape,
+        chunks=(1, 128, 128),
+        shards=(1, 512, 512),  # 8 files of about 1 MiB
+        dtype="f4",
+        compressors=[zarr.codecs.ZstdCodec(level=1)],
+    )
+    arr[:] = full
+    path = tmp_path / "s.zarr"
+    metas, rows, arrays = plain_store_rows(path)
+    stored = sum(r["length"] for r in rows if r["array"] == "a")
+    budget = 2 << 20
+    assert stored > 3 * budget  # the box is larger than the budget
+
+    def run(inflight):
+        monkeypatch.setattr(_native, "_INFLIGHT_BYTES", inflight)
+        best, peak = None, 0
+        for _ in range(2):
+            slow = SlowReader(FuseRangeReader(str(path)))
+            st = ManifestStore(metas, rows, slow, arrays)
+            native = open_manifest_array(st, "a", pipeline="native")
+            start = time.perf_counter()
+            got = read_box(native, (slice(None),) * 3)
+            took = time.perf_counter() - start
+            np.testing.assert_array_equal(got, full)
+            best = took if best is None else min(best, took)
+            peak = max(peak, slow.peak)
+        return best, peak
+
+    bounded, bounded_peak = run(budget)
+    unbounded, unbounded_peak = run(1 << 40)
+    assert bounded_peak >= 8, f"only {bounded_peak} reads in flight"
+    assert unbounded_peak >= 8
+    assert bounded <= 1.6 * unbounded + 0.05, f"{bounded:.2f}s against {unbounded:.2f}s"
+
+
+def test_native_group_size_is_a_fraction_of_the_budget(monkeypatch):
+    monkeypatch.setattr(_native, "_IO_GROUP_BYTES", 32 << 20)
+    monkeypatch.setattr(_native, "_INFLIGHT_BYTES", 64 << 20)
+    assert _native._group_bytes() == 8 << 20
+    monkeypatch.setattr(_native, "_INFLIGHT_BYTES", 1 << 40)
+    assert _native._group_bytes() == 32 << 20
+
+
+class ShortReader:
+    """A faulty reader: for a read of several regions it returns one result too few."""
+
+    def __init__(self, inner):
+        self.inner = inner
+
+    def read(self, regions):
+        got = self.inner.read(regions)
+        return got[:-1] if len(got) > 1 else got
+
+
+def test_native_raises_when_a_reader_returns_too_few_results(era5_v3_sharded):
+    """Chunks that were asked for and not returned must never read as the fill value."""
+    st = _store(era5_v3_sharded, ShortReader(FuseRangeReader(str(era5_v3_sharded))))
+    arr = open_manifest_array(st, "t2m", pipeline="native")
+    with pytest.raises(ZarrError) as ei:
+        read_box(arr, (slice(None),) * 3)
+    assert "returned" in str(ei.value) and "Fix:" in str(ei.value)
 
 
 def test_native_refuses_a_call_from_the_stores_own_threads(era5_v3_sharded):

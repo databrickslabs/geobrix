@@ -18,9 +18,10 @@ Memory: the result is the box at its decoded size. Beyond it, reads are submitte
 a window of about two groups per worker, and no more than ``_INFLIGHT_BYTES`` of compressed
 bytes are read but not yet decoded at any time; a read's bytes are released as soon as
 their decodes have run, so a box of any size costs the result plus that window, not the
-stored size of the box. The compressed bytes of a single read group (``_IO_GROUP_BYTES``,
-or one oversized chunk) are held whole, and the file reader copies each once more while it
-splits a read into chunks.
+stored size of the box. A read group holds at most ``_group_bytes()`` compressed bytes
+(an eighth of the budget, at most ``_IO_GROUP_BYTES``; one oversized chunk is its own
+group), so the budget never limits the reads in flight to fewer than about eight. The file
+reader copies each group once more while it splits it into chunks.
 
 A box is read from the caller's own thread, never from the store's pool (the call queues
 work there and waits for it).
@@ -36,13 +37,14 @@ import numpy as np
 
 from databricks.labs.gbx.zarr._meta import ArrayMeta
 from databricks.labs.gbx.zarr._shard import Region
-from databricks.labs.gbx.zarr.errors import ZarrStoreDrift, ZarrUnsupported
+from databricks.labs.gbx.zarr.errors import ZarrError, ZarrStoreDrift, ZarrUnsupported
 
 __all__ = ["make_decoder", "read_box_native"]
 
 _BYTES_TO_BYTES = ("zstd", "gzip", "blosc", "crc32c")
 _IO_GROUP_BYTES = 32 << 20  # split one file's reads into tasks of about this size
 _INFLIGHT_BYTES = 64 << 20  # compressed bytes read (or being read) but not yet decoded
+_MIN_READS_IN_FLIGHT = 8  # the budget is cut into at least this many read groups
 _FALLBACK_FIX = "read it with pipeline='default'"
 
 
@@ -135,8 +137,20 @@ def _chunk_ranges(meta: ArrayMeta, box) -> list[range]:
     return [range(a // n, (b - 1) // n + 1) for (a, b), n in zip(box, meta.chunks)]
 
 
+def _group_bytes() -> int:
+    """The most compressed bytes one read group holds.
+
+    A group is one read call: on a Volume it pays a latency and runs at the rate of one
+    stream, so a box is read fastest with many groups in flight. The budget bounds memory
+    by bytes, so a group is a fraction of it: at least ``_MIN_READS_IN_FLIGHT`` groups fit
+    in the budget at once, however large the files are.
+    """
+    return max(1, min(_IO_GROUP_BYTES, _INFLIGHT_BYTES // _MIN_READS_IN_FLIGHT))
+
+
 def _io_groups(items: list[tuple[tuple, Region]]) -> list[list[tuple[tuple, Region]]]:
     """Split the (coords, region) pairs into reads of one file each, in offset order."""
+    limit = _group_bytes()
     by_file: dict[tuple[str, str], list] = {}
     for item in items:
         by_file.setdefault((item[1].file, item[1].origin), []).append(item)
@@ -145,7 +159,7 @@ def _io_groups(items: list[tuple[tuple, Region]]) -> list[list[tuple[tuple, Regi
         members.sort(key=lambda it: it[1].offset)
         group, size = [], 0
         for item in members:
-            if group and size + item[1].length > _IO_GROUP_BYTES:
+            if group and size + item[1].length > limit:
                 groups.append(group)
                 group, size = [], 0
             group.append(item)
@@ -192,13 +206,20 @@ def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
         out[tuple(dst)] = values[tuple(src)]  # converts to native byte order
 
     def fetch(group: list) -> tuple[list, list[bytes]]:
-        return group, reader.read([r for _, r in group])
+        datas = reader.read([r for _, r in group])
+        if len(datas) != len(group):  # never let an unread chunk read as the fill value
+            raise ZarrError(
+                f"the reader returned {len(datas)} results for {len(group)} regions "
+                f"of array {meta.name!r}",
+                fix="this is a defect in the range reader; report it",
+            )
+        return group, datas
 
     # Reads go through a window: at most two groups per worker in flight, and no more
     # than _INFLIGHT_BYTES of compressed bytes read but not yet decoded. A finished read
     # is taken off the queue at once and its bytes live only in its decode tasks.
     window = 2 * store._workers
-    waiting = deque(_io_groups(held))
+    waiting = deque((g, sum(r.length for _, r in g)) for g in _io_groups(held))
     finished: queue.SimpleQueue = queue.SimpleQueue()
     pending: dict = {}  # future -> ("read" | "decode", compressed bytes)
     reading = inflight = 0
@@ -211,10 +232,10 @@ def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
     def start_reads() -> None:
         nonlocal reading, inflight
         while waiting and reading < window:
-            nbytes = sum(r.length for _, r in waiting[0])
+            nbytes = waiting[0][1]
             if inflight and inflight + nbytes > _INFLIGHT_BYTES:
                 break
-            submit(fetch, "read", nbytes, waiting.popleft())
+            submit(fetch, "read", nbytes, waiting.popleft()[0])
             reading += 1
             inflight += nbytes
 
@@ -226,7 +247,7 @@ def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
             if kind == "read":
                 reading -= 1
                 group, datas = done.result()
-                for (coord, region), data in zip(group, datas):
+                for (coord, region), data in zip(group, datas, strict=True):
                     submit(place, "decode", region.length, coord, region, data)
                 del group, datas
             else:
@@ -238,4 +259,10 @@ def read_box_native(store, meta: ArrayMeta, box, decode) -> np.ndarray:
         for future in pending:
             future.cancel()
         raise
+    if waiting or inflight:  # every group read and every chunk decoded, or it is a bug
+        raise ZarrError(
+            f"a read of array {meta.name!r} ended with {len(waiting)} groups unread "
+            f"and {inflight} bytes undecoded",
+            fix="this is a defect in the native engine; report it",
+        )
     return out

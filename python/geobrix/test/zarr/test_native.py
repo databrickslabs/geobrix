@@ -4,12 +4,14 @@ import copy
 import json
 import os
 import threading
+import tracemalloc
 
 import numpy as np
 import pytest
 
 zarr = pytest.importorskip("zarr")
 
+from databricks.labs.gbx.zarr import _native  # noqa: E402
 from databricks.labs.gbx.zarr._access import FuseRangeReader  # noqa: E402
 from databricks.labs.gbx.zarr._engine import open_manifest_array, read_box  # noqa: E402
 from databricks.labs.gbx.zarr._store import ManifestStore  # noqa: E402
@@ -199,6 +201,76 @@ def test_native_reports_a_chunk_that_does_not_decode_as_drift(
     assert "Fix:" in str(ei.value)
 
 
+@pytest.mark.parametrize("sharded", [False, True], ids=["one file per chunk", "shards"])
+def test_native_holds_only_a_bounded_window_of_compressed_bytes(
+    tmp_path, monkeypatch, sharded
+):
+    """A box of many chunks is read through a window, not all at once: the memory above
+    the result stays far below the stored size (incompressible data: stored ~ decoded).
+    """
+    shape, chunks = (64, 256, 256), (4, 32, 32)
+    full = np.random.default_rng(5).random(shape, dtype=np.float32)
+    group = zarr.open_group(str(tmp_path / "s.zarr"), mode="w", zarr_format=3)
+    arr = group.create_array(
+        name="a",
+        shape=shape,
+        chunks=chunks,
+        dtype="f4",
+        shards=(16, 128, 128) if sharded else None,
+        compressors=[zarr.codecs.ZstdCodec(level=1)],
+    )
+    arr[:] = full
+    stored = sum(
+        f.stat().st_size
+        for f in (tmp_path / "s.zarr" / "a").rglob("*")
+        if f.is_file() and f.name != "zarr.json"
+    )
+    assert stored > 14 << 20
+    monkeypatch.setattr(_native, "_INFLIGHT_BYTES", 512 << 10)
+    st = _store(tmp_path / "s.zarr")
+    native = open_manifest_array(st, "a", pipeline="native")
+    tracemalloc.start()
+    try:
+        tracemalloc.reset_peak()
+        got = read_box(native, (slice(None),) * 3)
+        current, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+    np.testing.assert_array_equal(got, full)
+    extra = peak - current  # what was held beyond the result
+    assert extra < stored // 4, f"{extra} bytes above the result, stored {stored}"
+
+
+def test_native_refuses_a_call_from_the_stores_own_threads(era5_v3_sharded):
+    """The store's pool runs the reads; a read that waits on that pool from inside it
+    would deadlock once the pool is busy, so it is refused."""
+    st = _store(era5_v3_sharded)
+    arr = open_manifest_array(st, "t2m", pipeline="native")
+    box = (slice(None),) * 3
+    inside_read = st._executor().submit(read_box, arr, box)
+    with pytest.raises(ZarrError) as ei:
+        inside_read.result(timeout=30)
+    assert "Fix:" in str(ei.value) and "own threads" in str(ei.value)
+    coords = [(0, 0, 0), (2, 0, 0)]  # two shards
+    inside_regions = st._executor().submit(st.chunk_regions, "t2m", coords)
+    with pytest.raises(ZarrError):
+        inside_regions.result(timeout=30)
+    # from the caller's own thread both work
+    assert read_box(arr, box).shape == (48, 73, 144)
+    assert len(st.chunk_regions("t2m", coords)) == 2
+
+
+def test_a_memory_error_in_a_decode_is_not_reported_as_a_corrupt_file(era5_v2):
+    arr = open_manifest_array(_store(era5_v2), "t2m", pipeline="native")
+
+    def out_of_memory(data):
+        raise MemoryError("no room")
+
+    arr._decode = out_of_memory
+    with pytest.raises(MemoryError):
+        read_box(arr, (slice(0, 2),))
+
+
 def test_a_closed_store_refuses_native_reads(era5_v2):
     st = _store(era5_v2)
     arr = open_manifest_array(st, "t2m", pipeline="native")
@@ -240,12 +312,18 @@ def test_native_refuses_a_codec_it_does_not_decode(era5_v3_unsharded, codecs):
     assert "Fix:" in str(ei.value) and "pipeline='default'" in ei.value.fix
 
 
-def test_auto_falls_back_to_the_default_pipeline_for_such_an_array(era5_v3_unsharded):
+def test_auto_always_returns_the_same_kind_of_array(era5_v3_unsharded):
+    """``auto`` is native or, for a codec native does not decode, zarr's pipeline; either
+    way the caller gets an object with ``shape``, ``dtype``, ``engine`` and ``pipeline``.
+    """
     codecs = [
         {"name": "transpose", "configuration": {"order": [2, 1, 0]}},
         {"name": "bytes", "configuration": {"endian": "little"}},
     ]
     st = _with_codecs(era5_v3_unsharded, "t2m", codecs)
-    assert isinstance(open_manifest_array(st, "t2m"), zarr.Array)
-    # and the usual arrays of the same store take the native engine
-    assert not isinstance(open_manifest_array(st, "u10"), zarr.Array)
+    fell_back = open_manifest_array(st, "t2m")
+    usual = open_manifest_array(st, "u10")
+    assert not isinstance(fell_back, zarr.Array) and not isinstance(usual, zarr.Array)
+    assert (fell_back.engine, fell_back.pipeline) == ("manifest", "default")
+    assert (usual.engine, usual.pipeline) == ("manifest", "native")
+    assert fell_back.shape == usual.shape == (48, 73, 144)

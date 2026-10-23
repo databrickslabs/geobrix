@@ -84,8 +84,8 @@ class FuseRangeReader:
     errors propagate. UC Volume FUSE mounts can raise ``FileNotFoundError`` transiently
     on a healthy file, so the open and reads of a file are retried ``attempts`` times
     (the same guard the readers use) before a missing file counts as drift. Errors that
-    waiting cannot fix are raised at once: a path that names a directory is drift, and a
-    permission error propagates.
+    waiting cannot fix are raised at once: a path that names a directory, or runs through
+    a file, is drift, and a permission error propagates.
 
     The name check can lag the file system: the real path of a name is looked up once
     and kept, and a link can be put in the name's place between the check and the open.
@@ -184,6 +184,12 @@ class FuseRangeReader:
                     f"{path} is recorded in the manifest as a file but is a directory",
                     fix=_SYNC_FIX + "restore the file",
                 ) from None
+            if isinstance(p.args[0], NotADirectoryError):
+                raise ZarrStoreDrift(
+                    f"{path} is recorded in the manifest, but a part of its path "
+                    "is not a directory",
+                    fix=_SYNC_FIX + "restore the file",
+                ) from None
             raise p.args[0] from None
         except FileNotFoundError:
             raise ZarrStoreDrift(
@@ -196,7 +202,16 @@ class FuseRangeReader:
         fd = os.open(path, os.O_RDONLY)
         try:
             if _CHECK_DESCRIPTORS:
-                held = _held_path(fd)
+                try:
+                    held = _held_path(fd)
+                except (
+                    OSError
+                ) as e:  # fail closed, and do not retry as a transient miss
+                    raise ZarrStoreDrift(
+                        f"could not tell which file {path} opened ({e})",
+                        fix="run gbx_zarr_sync if the store changed outside GeoBrix; "
+                        "otherwise check that /proc is readable",
+                    ) from None
                 # an absolute path is the file the descriptor really holds
                 if os.path.isabs(held) and not _within(held, real_root):
                     raise ZarrStoreDrift(

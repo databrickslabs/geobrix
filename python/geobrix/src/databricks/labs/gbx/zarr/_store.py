@@ -168,13 +168,24 @@ class ManifestStore(Store):
         self._lock = threading.Lock()
         self._closed = False
         self._workers = min(32, (os.cpu_count() or 1) * 4)
+        self._pool_threads: set[int] = set()
+        threads = self._pool_threads
         self._pool = ThreadPoolExecutor(
-            max_workers=self._workers, thread_name_prefix="gbx-zarr-read"
+            max_workers=self._workers,
+            thread_name_prefix="gbx-zarr-read",
+            initializer=lambda: threads.add(threading.get_ident()),
         )
         self._finalizer = weakref.finalize(self, self._pool.shutdown, wait=False)
 
     def __getstate__(self) -> dict:
-        drop = ("_pool", "_finalizer", "_lock", "_virtual", "_workers")
+        drop = (
+            "_pool",
+            "_finalizer",
+            "_lock",
+            "_virtual",
+            "_workers",
+            "_pool_threads",
+        )
         return {k: v for k, v in self.__dict__.items() if k not in drop}
 
     def __setstate__(self, state: dict) -> None:
@@ -285,6 +296,20 @@ class ManifestStore(Store):
         chunks.update(rows.chunks)  # an override, or None: the chunk is deleted
         return VirtualShard(n, chunks, spec.index_codecs, spec.index_location)
 
+    def ensure_outside_pool(self, what: str) -> None:
+        """Raise unless the caller is outside this store's read pool.
+
+        ``read_box`` and ``chunk_regions`` queue work on the pool and wait for it. Called
+        from a pool thread they would wait on themselves, which deadlocks as soon as the
+        pool is busy, so they are refused there.
+        """
+        if threading.get_ident() in self._pool_threads:
+            raise ZarrError(
+                f"{what} was called from one of the store's own threads, where it "
+                "would wait on the pool it runs in",
+                fix="call it from your own thread or task, not from inside a store read",
+            )
+
     def chunk_regions(
         self, name: str, coords: list[tuple[int, ...]]
     ) -> list[Region | None]:
@@ -296,6 +321,7 @@ class ManifestStore(Store):
         reader that fetches chunk bytes itself, not through zarr's store protocol, starts
         here.
         """
+        self.ensure_outside_pool("chunk_regions")
         meta = self._arrays[name]
         if meta.shard is None:
             return [

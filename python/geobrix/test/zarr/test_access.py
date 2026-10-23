@@ -252,7 +252,6 @@ def test_the_descriptor_check_allows_each_root_a_file_was_checked_against(vol):
     "exc",
     [
         PermissionError(errno.EACCES, "denied"),
-        NotADirectoryError(errno.ENOTDIR, "not a directory"),
     ],
 )
 def test_permanent_errors_are_not_retried(packs, monkeypatch, exc):
@@ -282,19 +281,55 @@ def test_a_directory_named_as_a_file_is_drift_and_not_retried(vol, monkeypatch):
     assert sleeps == []
 
 
-def test_an_open_that_reports_a_directory_is_drift_and_not_retried(packs, monkeypatch):
+@pytest.mark.parametrize(
+    "exc, word",
+    [
+        (IsADirectoryError(errno.EISDIR, "a directory"), "directory"),
+        (NotADirectoryError(errno.ENOTDIR, "not a directory"), "not a directory"),
+    ],
+)
+def test_an_open_that_reports_a_directory_is_drift_and_not_retried(
+    packs, monkeypatch, exc, word
+):
     opens, sleeps = [], []
 
     def refuse(*args, **kwargs):
         opens.append(1)
-        raise IsADirectoryError(errno.EISDIR, "a directory")
+        raise exc
 
     monkeypatch.setattr(os, "open", refuse)
     monkeypatch.setattr(time, "sleep", sleeps.append)
     with pytest.raises(ZarrStoreDrift) as ei:
         FuseRangeReader(str(packs / "base")).read([Region("a.bin", 0, 4)])
-    assert "directory" in str(ei.value) and "Fix:" in str(ei.value)
+    assert word in str(ei.value) and "Fix:" in str(ei.value)
     assert opens == [1] and sleeps == []
+
+
+def test_a_path_through_a_file_is_drift(vol):
+    """``x.bin/more``: a component of the name is a file, so the file is not there."""
+    err = _refused(
+        FuseRangeReader(str(vol / "store"), attempts=1), Region("x.bin/more", 0, 4)
+    )
+    assert "x.bin" in str(err) and "Fix:" in str(err)
+
+
+@needs_proc
+def test_a_descriptor_that_cannot_be_traced_is_refused_and_not_retried(
+    packs, monkeypatch
+):
+    """The check fails closed, and an OS error from it is no transient miss to retry."""
+    sleeps, tries = [], []
+
+    def untraceable(fd):
+        tries.append(fd)
+        raise OSError(errno.EIO, "Input/output error")
+
+    monkeypatch.setattr("databricks.labs.gbx.zarr._access._held_path", untraceable)
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    with pytest.raises(ZarrStoreDrift) as ei:
+        FuseRangeReader(str(packs / "base")).read([Region("a.bin", 0, 4)])
+    assert "a.bin" in str(ei.value) and "Fix:" in str(ei.value)
+    assert len(tries) == 1 and sleeps == []
 
 
 def test_a_transient_error_is_retried(packs, monkeypatch):

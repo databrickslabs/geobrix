@@ -12,7 +12,11 @@ Two kinds of array, two openers, one reader:
 The zarrs codec pipeline is a Rust decoder for zarr-python. zarr picks the pipeline when
 an array is opened, and ``codec_pipeline.path`` is a setting of the whole process, so the
 engines select zarrs only inside a short ``zarr.config.set`` scope around the open, under
-a lock, and never leave it set: other code in the process keeps zarr's default. zarrs-python
+a lock, and never leave it set. Every open GeoBrix makes takes the same lock, so none of
+them can run inside another's scope. Code outside GeoBrix that opens a zarr array on
+another thread is not under the lock: for the duration of a zarrs open (the metadata
+read, not the data reads) it would get zarrs too. That is inherent to ``config.set``,
+which changes the setting for the whole process. zarrs-python
 reads only the stores it knows (local files, object stores, HTTP) and has no way to take a
 ``ManifestStore``; zarr then quietly uses its own pipeline. So asking for
 ``pipeline="zarrs"`` on a manifest array is an error rather than a silent no-op, and the
@@ -61,6 +65,16 @@ def _zarrs_scope():
         yield
 
 
+def _open_array(*args, **kwargs) -> zarr.Array:
+    """``zarr.open_array``, under the config lock like every open GeoBrix makes.
+
+    A default open must not run inside another thread's zarrs scope, or it would get
+    zarrs; taking the lock keeps the scopes and the plain opens apart.
+    """
+    with _CONFIG_LOCK:
+        return zarr.open_array(*args, **kwargs)
+
+
 def _zarrs_importable() -> bool:
     try:
         import zarrs  # noqa: F401
@@ -94,6 +108,8 @@ def open_manifest_array(store, array: str, *, pipeline: str = "auto"):
     - ``"zarrs"``: the zarrs pipeline. zarrs-python cannot read a ``ManifestStore``, so
       this raises ``ZarrUnsupported`` instead of letting zarr quietly fall back.
     - ``"auto"``: ``"native"``, or ``"default"`` for an array native does not decode.
+      Either way the result has ``shape``, ``dtype``, ``engine``, ``pipeline`` and
+      ``read`` (the zarr fallback is wrapped), so a caller never has to tell them apart.
     """
     if pipeline not in _MANIFEST_PIPELINES:
         raise ValueError(
@@ -103,7 +119,7 @@ def open_manifest_array(store, array: str, *, pipeline: str = "auto"):
         try:
             return _open_native(store, array)
         except ZarrUnsupported:
-            return _open_in_store(store, array)
+            return _ManifestZarrArray(_open_in_store(store, array))
     if pipeline == "native":
         return _open_native(store, array)
     if pipeline == "default":
@@ -143,7 +159,7 @@ def _open_native(store, array: str):
 
 def _open_in_store(store, array: str) -> zarr.Array:
     try:
-        return zarr.open_array(store=store, path=array, mode="r")
+        return _open_array(store=store, path=array, mode="r")
     except (FileNotFoundError, KeyError, zarr.errors.NodeNotFoundError) as e:
         raise _no_array(store, array) from e
 
@@ -152,11 +168,14 @@ def _open_in_store(store, array: str) -> zarr.Array:
 
 
 class PlainArray:
-    """A read-only array of a plain store, read through ``engine``.
+    """A read-only array behind one of the engines.
 
-    ``shape`` and ``dtype`` describe the array; ``engine`` is ``"tensorstore"`` or
-    ``"zarr"``; ``pipeline`` is ``"zarrs"`` or ``"default"`` for the zarr engine and
-    ``None`` for tensorstore. ``read`` returns the box as a ``numpy`` array.
+    ``shape`` and ``dtype`` describe the array (``dtype`` in native byte order);
+    ``engine`` is ``"tensorstore"`` or ``"zarr"`` for a plain store and ``"manifest"``
+    for a manifest array; ``pipeline`` is how the bytes are decoded: ``"zarrs"`` or
+    ``"default"`` (zarr's own) for the zarr engine and a default manifest array,
+    ``"native"`` for the native engine, ``None`` for tensorstore. ``read`` returns the
+    box as a ``numpy`` array in native byte order.
     """
 
     shape: tuple[int, ...]
@@ -166,10 +185,17 @@ class PlainArray:
 
     def read(self, slices) -> np.ndarray:
         box = _box(self.shape, slices)
-        return np.asarray(self._read(box))
+        return _native_order(np.asarray(self._read(box)))
 
     def _read(self, box: list[tuple[int, int]]) -> np.ndarray:
         raise NotImplementedError
+
+
+def _native_order(values: np.ndarray) -> np.ndarray:
+    """``values`` in native byte order (pyarrow rejects byte-swapped arrays)."""
+    if values.dtype.isnative:
+        return values
+    return values.astype(values.dtype.newbyteorder("="))
 
 
 class _ZarrPlainArray(PlainArray):
@@ -178,11 +204,17 @@ class _ZarrPlainArray(PlainArray):
     def __init__(self, arr: zarr.Array):
         self._arr = arr
         self.shape = tuple(arr.shape)
-        self.dtype = np.dtype(arr.dtype)
+        self.dtype = np.dtype(arr.dtype).newbyteorder("=")
         self.pipeline = _pipeline_of(arr)
 
     def _read(self, box):
         return self._arr[tuple(slice(a, b) for a, b in box)]
+
+
+class _ManifestZarrArray(_ZarrPlainArray):
+    """A manifest array read by zarr-python (``auto`` for an array native cannot decode)."""
+
+    engine = "manifest"
 
 
 class _TensorstorePlainArray(PlainArray):
@@ -204,8 +236,10 @@ class _NativeManifestArray(PlainArray):
 
     def __init__(self, store, meta, decode):
         self._store, self._meta, self._decode = store, meta, decode
+        from databricks.labs.gbx.zarr._native import native_dtype
+
         self.shape = tuple(meta.shape)
-        self.dtype = np.dtype(meta.dtype)
+        self.dtype = native_dtype(meta)
 
     def _read(self, box):
         from databricks.labs.gbx.zarr._native import read_box_native
@@ -285,18 +319,26 @@ def _open_tensorstore(root: str, path: str, array: str) -> PlainArray:
 
 
 def _open_zarr(root: str, path: str, array: str, pipeline: str) -> PlainArray:
-    use_zarrs = pipeline == "zarrs" or (pipeline == "auto" and _zarrs_importable())
     if pipeline == "zarrs" and not _zarrs_importable():
         raise ZarrUnsupported(
             "the zarrs pipeline needs the zarrs package, which is not installed",
             fix=_INSTALL_FIX + ", or use pipeline='default'",
         )
+    use_zarrs = pipeline == "zarrs" or (pipeline == "auto" and _zarrs_importable())
     try:
         if use_zarrs:
             with _zarrs_scope():
-                arr = zarr.open_array(root, mode="r")
+                arr = _open_array(root, mode="r")
+            if not np.dtype(arr.dtype).isnative:
+                # zarrs-python refuses to read a non-native byte order
+                if pipeline == "zarrs":
+                    raise ZarrUnsupported(
+                        f"the zarrs pipeline cannot read the big-endian array {array!r}",
+                        fix="open it with pipeline='default' (or 'auto')",
+                    )
+                arr = _open_array(root, mode="r")
         else:
-            arr = zarr.open_array(root, mode="r")
+            arr = _open_array(root, mode="r")
     except (FileNotFoundError, KeyError, zarr.errors.NodeNotFoundError) as e:
         raise _missing(path, array) from e
     return _ZarrPlainArray(arr)
@@ -337,7 +379,7 @@ def read_box(arr, slices) -> np.ndarray:
         return arr.read(slices)
     if isinstance(arr, zarr.Array):
         box = _box(tuple(arr.shape), slices)
-        return np.asarray(arr[tuple(slice(a, b) for a, b in box)])
+        return _native_order(np.asarray(arr[tuple(slice(a, b) for a, b in box)]))
     raise TypeError(
         f"read_box reads arrays from open_manifest_array or open_plain_array, not "
         f"{type(arr).__name__}"

@@ -3,12 +3,14 @@
 import subprocess
 import sys
 import threading
+import time
 
 import numpy as np
 import pytest
 
 zarr = pytest.importorskip("zarr")
 
+from databricks.labs.gbx.zarr import _engine  # noqa: E402
 from databricks.labs.gbx.zarr._access import FuseRangeReader  # noqa: E402
 from databricks.labs.gbx.zarr._engine import (  # noqa: E402
     open_manifest_array,
@@ -118,6 +120,86 @@ def test_concurrent_opens_never_leave_zarrs_selected(era5_v3_sharded, era5_v2):
     assert zarr.config.get(PIPELINE_PATH) == before
 
 
+def test_a_default_open_never_runs_inside_a_zarrs_scope(era5_v3_sharded):
+    """The config scope is process-wide while it lasts, so every GeoBrix open takes the
+    same lock: a default open that starts during a zarrs scope waits for it."""
+    path = str(era5_v3_sharded)
+    entered, release = threading.Event(), threading.Event()
+
+    def hold_a_zarrs_scope():
+        with _engine._zarrs_scope():
+            entered.set()
+            release.wait(10)
+
+    holder = threading.Thread(target=hold_a_zarrs_scope)
+    holder.start()
+    assert entered.wait(10)
+    got = {}
+
+    def default_open():
+        got["plain"] = open_plain_array(
+            path, "t2m", engine="zarr", pipeline="default"
+        ).pipeline
+        got["manifest"] = _pipeline(
+            open_manifest_array(_manifest(era5_v3_sharded), "t2m", pipeline="default")
+        )
+
+    opener = threading.Thread(target=default_open)
+    opener.start()
+    time.sleep(0.3)  # long enough for an unlocked open to finish inside the scope
+    release.set()
+    holder.join()
+    opener.join()
+    assert got == {"plain": "default", "manifest": "BatchedCodecPipeline"}
+
+
+def test_mixed_default_and_zarrs_opens_each_get_their_own_pipeline(
+    era5_v3_sharded, era5_v2
+):
+    before = zarr.config.get(PIPELINE_PATH)
+    wrong, errors = [], []
+
+    def opens(path, pipeline):
+        try:
+            for _ in range(10):
+                arr = open_plain_array(
+                    str(path), "t2m", engine="zarr", pipeline=pipeline
+                )
+                if arr.pipeline != pipeline:
+                    wrong.append((pipeline, arr.pipeline))
+        except BaseException as e:  # noqa: BLE001
+            errors.append(e)
+
+    threads = [
+        threading.Thread(target=opens, args=(p, pl))
+        for p in (era5_v3_sharded, era5_v2)
+        for pl in ("zarrs", "default", "zarrs", "default")
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors and not wrong
+    assert zarr.config.get(PIPELINE_PATH) == before
+
+
+def test_every_open_holds_the_config_lock(era5_v3_sharded, monkeypatch):
+    held = []
+    real = zarr.open_array
+
+    def checking(*args, **kwargs):
+        held.append(_engine._CONFIG_LOCK._is_owned())
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(zarr, "open_array", checking)
+    path = str(era5_v3_sharded)
+    open_plain_array(path, "t2m", engine="zarr", pipeline="default")
+    open_plain_array(path, "t2m", engine="zarr", pipeline="zarrs")
+    store = _manifest(era5_v3_sharded)
+    open_manifest_array(store, "t2m", pipeline="default")
+    assert held == [True, True, True]
+
+
 def test_a_manifest_array_cannot_be_written(era5_v3_sharded):
     arr = open_manifest_array(_manifest(era5_v3_sharded), "t2m", pipeline="default")
     with pytest.raises(Exception) as ei:
@@ -213,7 +295,6 @@ def test_explicit_tensorstore_without_the_package_says_how_to_install_it(
 @pytest.mark.parametrize("fixture", FIXTURES)
 def test_read_box_partial_edge(fixture, request):
     """The same box, through every engine, equals numpy slicing of the direct read."""
-    pytest.importorskip("tensorstore")
     path = request.getfixturevalue(fixture)
     want = _direct(path)[EDGE_BOX]
     assert want.shape == (5, 13, 4)
@@ -221,8 +302,13 @@ def test_read_box_partial_edge(fixture, request):
         open_manifest_array(_manifest(path), "t2m", pipeline="native"),
         open_manifest_array(_manifest(path), "t2m", pipeline="default"),
         open_plain_array(str(path), "t2m", engine="zarr"),
-        open_plain_array(str(path), "t2m", engine="tensorstore"),
     ]
+    try:
+        import tensorstore  # noqa: F401
+    except ImportError:  # only the tensorstore leg needs the package
+        pass
+    else:
+        arrays.append(open_plain_array(str(path), "t2m", engine="tensorstore"))
     for arr in arrays:
         got = read_box(arr, EDGE_BOX)
         assert isinstance(got, np.ndarray) and got.shape == want.shape

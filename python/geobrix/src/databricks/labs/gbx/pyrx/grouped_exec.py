@@ -55,14 +55,14 @@ def _tile_is_windowless_virtual(tile) -> bool:
         return False
 
 
-def _has_clip_or_crs(tile) -> bool:
-    """True if *tile* carries a ``clip_polygon`` or a target ``crs``.
+def _has_clip(tile) -> bool:
+    """True if *tile* carries a ``clip_polygon``.
 
-    On a virtual tile these are instructions (pending operations); only ``open_tile``
-    applies them.
+    On a virtual tile that is an instruction (a pending operation); only ``open_tile``
+    applies it.
     """
     try:
-        return tile["clip_polygon"] is not None or bool(tile["crs"])
+        return tile["clip_polygon"] is not None
     except (KeyError, TypeError):
         return False
 
@@ -174,10 +174,10 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
       (d) virtual tiles with a pending clip or target CRS (the fast path reads the
           source as it is; ``open_tile`` applies the instructions)
 
-    A windowless virtual tile with no clip and no target CRS goes to ``open_header``,
-    which returns the full-source footprint (consistent with per-row ``rst_memsize``).
-    With either instruction it goes to ``_open``: the footprint is the clipped or
-    reprojected one.
+    A windowless virtual tile with no clip goes to ``open_header``, which returns the
+    full-source footprint (consistent with per-row ``rst_memsize``) unless its target
+    ``crs`` asks for a reprojection of that source. With a clip, or such a ``crs``, it
+    goes to ``_open``: the footprint is the clipped or reprojected one.
 
     view contract:
       ``view="header"``: wrap the open DatasetReader in a full-extent
@@ -188,30 +188,30 @@ def _run_fallback_tile(tile, cellid, view_mode, core_fn):
     Caller wraps in ``try/except Exception`` and sets ``result = None`` on failure
     so per-tile errors degrade gracefully rather than crashing the whole partition.
     """
-    from .core.open_tile import _open, open_header
+    from .core.open_tile import _open, _to_virtual_tile, _warp_pending, open_header
 
-    if _tile_is_windowless_virtual(tile) and not _has_clip_or_crs(tile):
+    if _tile_is_windowless_virtual(tile) and not _has_clip(tile):
         with open_header(tile) as ds:
-            if view_mode == "header":
-                from rasterio.windows import Window as _Win
+            # The header view of a relabelled source wraps the file's own dataset; the
+            # reprojection rule compares the target with the file's CRS (see open_tile).
+            if not _warp_pending(_to_virtual_tile(tile), getattr(ds, "_src", ds)):
+                return _call_core(ds, cellid, view_mode, core_fn)
+        # a target CRS the source does not have: read it through open_tile
+    with _open(tile) as ds:
+        return _call_core(ds, cellid, view_mode, core_fn)
 
-                from .core.open_tile import _WindowHeaderView
 
-                _hv = _WindowHeaderView(ds, _Win(0, 0, ds.width, ds.height))
-                return core_fn(_hv, cellid)
-            else:
-                return core_fn(ds, cellid)
-    else:
-        with _open(tile) as ds:
-            if view_mode == "header":
-                from rasterio.windows import Window as _Win
+def _call_core(ds, cellid, view_mode, core_fn):
+    """Run *core_fn* on an open dataset under the fallback's view contract: a
+    read-blocking full-extent ``_WindowHeaderView`` for ``view="header"``, the real
+    dataset for ``view="pixels"``."""
+    if view_mode == "header":
+        from rasterio.windows import Window as _Win
 
-                from .core.open_tile import _WindowHeaderView
+        from .core.open_tile import _WindowHeaderView
 
-                _hv = _WindowHeaderView(ds, _Win(0, 0, ds.width, ds.height))
-                return core_fn(_hv, cellid)
-            else:
-                return core_fn(ds, cellid)
+        return core_fn(_WindowHeaderView(ds, _Win(0, 0, ds.width, ds.height)), cellid)
+    return core_fn(ds, cellid)
 
 
 def _file_fast_path_uri(tile):
@@ -230,10 +230,12 @@ def _file_fast_path_uri(tile):
     ``_run_file_fast_path``.)
     """
     try:
-        if tile["raster"] is not None or tile["clip_polygon"] is not None:
+        if tile["raster"] is not None:
             return None
     except (KeyError, TypeError):
         pass
+    if _has_clip(tile):
+        return None
     try:
         return tile["path"] or None
     except (KeyError, TypeError):

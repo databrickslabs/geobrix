@@ -596,6 +596,39 @@ def test_dispatch_keeps_the_fast_path_when_the_crs_is_the_source_crs(tmp_path, v
     assert gets == [src], f"view={view}: left the fast path for a no-op CRS: {gets}"
 
 
+@pytest.mark.parametrize("view", ["header", "pixels"])
+def test_windowless_tile_with_the_source_crs_keeps_the_header_path(
+    tmp_path, monkeypatch, view
+):
+    """On the fallback, a windowless tile whose target ``crs`` is its source's reads the
+    header, not the whole raster; one whose ``crs`` differs is read and reprojected."""
+    from databricks.labs.gbx.pyrx.core import open_tile as ot
+
+    full_reads = []
+    real_open = ot._open
+
+    def spy(tile, file_ref=None):
+        full_reads.append(tile)
+        return real_open(tile, file_ref=file_ref)
+
+    monkeypatch.setattr(ot, "_open", spy)
+
+    from databricks.labs.gbx.pyrx.grouped_exec import _dispatch_tile, _OpenerContext
+
+    from .conftest import make_geotiff_bytes
+
+    src = tmp_path / "source_4326.tif"
+    src.write_bytes(make_geotiff_bytes(width=4, height=3, epsg=4326))
+    for crs, want_epsg, reads in (("EPSG:4326", 4326, 0), ("EPSG:3857", 3857, 1)):
+        del full_reads[:]
+        tile = VirtualTile(cellid=1, path=str(src), crs=crs).to_row()
+        got = _dispatch_tile(
+            tile, None, _OpenerContext(), _SourceStubLRU(), view, _dispatch_header
+        )
+        assert got[0] == want_epsg, f"crs={crs}: {got}"
+        assert len(full_reads) == reads, f"crs={crs}: {len(full_reads)} full reads"
+
+
 # ---------------------------------------------------------------------------
 # grouped_tile_map runs every tile through _dispatch_tile
 # ---------------------------------------------------------------------------

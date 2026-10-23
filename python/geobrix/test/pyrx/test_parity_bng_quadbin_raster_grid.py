@@ -2032,15 +2032,18 @@ def _clip_source(nodata):
             return mf.read(), vals, hidden
 
 
+@pytest.mark.parametrize("start", _STARTS)
 @pytest.mark.parametrize("nodata", [None, 7.0])
-def test_clip_masked_source_hexagon_parity(spark_with_jar, nodata):
+def test_clip_masked_source_hexagon_parity(spark_with_jar, tmp_path, nodata, start):
     """``rst_clip`` of a source with its own mask band by a hexagon (all touched): both
     tiers fill the masked pixels like the area outside the geometry (0 without a
-    source NoData, the NoData when there is one) and agree on every pixel."""
+    source NoData, the NoData when there is one) and agree on every pixel. The light
+    tier starts from ``start``: its bytes, or a virtual tile over the file."""
     from pyspark.sql import functions as f
 
     spark = spark_with_jar
     raster, vals, hidden = _clip_source(nodata)
+    raster = _start_from(raster, start, tmp_path)
 
     def clip(m, t):
         return m.rst_clip(t, f.lit(_CLIP_HEXAGON), f.lit(True))

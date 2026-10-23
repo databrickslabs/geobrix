@@ -15,6 +15,7 @@ Layout (the canonical-module matrix once, one wiring test per consumer):
     and no masked source pixel in it.
 """
 
+import unittest.mock
 from pathlib import Path
 
 import numpy as np
@@ -256,10 +257,56 @@ def test_warp_variants_keep_the_mask(tmp_path, target, nodata):
     )
 
 
+@pytest.mark.parametrize("target", ["EPSG:3857", "EPSG:27700", "ESRI:54008"])
+def test_warped_mask_holds_only_0_and_255(tmp_path, target):
+    """Valid is 255 in the warped mask. (GDAL moves a value that collides with the NoData
+    it warps with, 255 here, to 254; the mask file stores one bit, so the output does
+    not show it, but the array handed to it must be clean.)"""
+    from rasterio.vrt import WarpedVRT
+
+    p = write_masked(tmp_path / "m.tif")
+    with rasterio.open(p) as src:
+        window_bytes = ot._window_dataset_bytes(
+            src, Window(0, 0, N, N), mark_masked=True
+        )
+    with rasterio.MemoryFile(window_bytes) as mf, mf.open() as wds:
+        with WarpedVRT(wds, crs=target) as vrt:
+            warped = ot._warped_mask(wds, vrt)
+    assert warped.dtype == np.uint8
+    assert set(np.unique(warped)) <= {0, 255}, np.unique(warped)
+    assert (warped == 0).any() and (warped == 255).any()
+
+
 def test_warp_to_the_same_crs_is_the_plain_read(tmp_path):
     p = write_masked(tmp_path / "m.tif")
     _, valid, _ = read_tile(virtual(p, crs="EPSG:4326"))
     assert not valid[:, list(MASKED_ROWS), :].any()
+
+
+def test_one_warp_rule_for_a_non_epsg_target_equal_to_the_source_crs(tmp_path):
+    """A target CRS the source already has asks for no warp, in every reader of a tile:
+    the pixels are the plain window's (no resampling), also for a non-EPSG CRS, and the
+    block-streaming materializer does not hand such a tile to the in-memory one."""
+    esri = "ESRI:54008"
+    p = str(tmp_path / "sinu.tif")
+    mask = np.full((N, N), 255, dtype="uint8")
+    mask[list(MASKED_ROWS), :] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rasterio.open(
+            p, "w", **_profile(crs=esri, origin=(1e5, 5e6), px=100.0)
+        ) as dst:
+            dst.write(_values())
+            dst.write_mask(mask)
+    want = source_view(p)
+    tile = virtual(p, crs=esri)
+    data, valid, _ = read_tile(tile)
+    assert_same_pixels((data, valid), want, "open_tile")
+    assert_same_pixels(decode(ot._tile_to_bytes(tile))[:2], want, "_tile_to_bytes")
+    with unittest.mock.patch.object(
+        ot, "materialize_to_bytes", side_effect=AssertionError("not streamed")
+    ):
+        streamed = decode(ot._windowed_materialize_bytes(tile))
+    assert_same_pixels(streamed[:2], want, "_windowed_materialize_bytes")
 
 
 # ---------------------------------------------------------------------------
@@ -326,13 +373,36 @@ def _tile_df(spark, path, *, virtual_start):
     from databricks.labs.gbx.pyrx import functions as prx
 
     if virtual_start:
-        return spark.createDataFrame([(str(path),)], ["path"]).select(
+        df = spark.createDataFrame([(str(path),)], ["path"]).select(
             prx.rst_fromfile("path").alias("tile")
         )
+        # the "virtual" case must start from a tile without bytes
+        assert df.select("tile.raster").first()[0] is None, "rst_fromfile: not virtual"
+        return df
     raw = Path(path).read_bytes()
     return spark.createDataFrame([(bytearray(raw),)], ["raster"]).select(
         prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )
+
+
+@pytest.mark.parametrize("nodata", [None, 7.0])
+def test_rst_fromfile_materialize_keeps_the_mask(spark, tmp_path, nodata):
+    """``rst_fromfile(path, materialize=True)`` reads the file now; its bytes hold the
+    mask, so the tile equals the virtual read of the same file."""
+    from databricks.labs.gbx.pyrx import functions as prx
+
+    p = write_masked(tmp_path / "m.tif", nodata=nodata)
+    row = (
+        spark.createDataFrame([(p,)], ["path"])
+        .select(prx.rst_fromfile("path", materialize=True).alias("tile"))
+        .first()["tile"]
+    )
+    assert row["raster"] is not None, "materialize=True gave a virtual tile"
+    data, valid, got_nodata = decode(bytes(row["raster"]))
+    v_data, v_valid, v_nodata = read_tile(virtual(p))
+    assert not valid[:, list(MASKED_ROWS), :].any()
+    assert got_nodata == v_nodata == nodata
+    assert_same_pixels((data, valid), (v_data, v_valid), "materialized vs virtual")
 
 
 def test_rst_initnodata_from_a_virtual_tile(spark, tmp_path):

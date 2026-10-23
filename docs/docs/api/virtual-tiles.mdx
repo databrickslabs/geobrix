@@ -180,9 +180,11 @@ finally read (e.g. at tessellation). Pass `materialize=True` (or `virtualize_dir
 apply them immediately and produce bytes.
 
 A source's own mask band (not an alpha band), as JPEG-compressed imagery often has, is
-read with the window: its masked pixels stay NoData in whatever the tile goes on to do,
-as they do on a tile of the file's bytes. Where `rst_initnodata` stamps a NoData on such a
-tile, the masked pixels take it.
+read with the window, so a virtual tile reads exactly as a tile of the file's bytes does:
+the masked pixels are invalid. Where `rst_initnodata` stamps a NoData on such a tile, the
+masked pixels take it. An internal mask band is carried wherever the file is read; an
+external `.msk` sidecar file is not carried when the source is copied to local disk first
+or read through a FileRef stream, so prefer an internal mask.
 
 ## Tiers: light tiles vs. heavy tiles
 

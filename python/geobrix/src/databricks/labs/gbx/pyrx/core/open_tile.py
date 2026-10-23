@@ -162,6 +162,9 @@ def _window_mask(src, window, data, profile, pending_nodata, mark_masked=False):
     has_mask, as_nodata = _own_mask_use(src, profile, pending_nodata)
     if not has_mask:
         return None
+    # Memory: an own-mask source costs one uint8 per window pixel for the mask, and the
+    # boolean ``mask == 0`` below is a second one, next to the window's pixels. A source
+    # without an own mask pays nothing.
     mask = src.read_masks(1, window=window)
     if as_nodata or (mark_masked and profile.get("nodata") is not None):
         data[:, mask == 0] = profile["nodata"]
@@ -245,6 +248,9 @@ def _warped_mask(wds, vrt):
     The mask is warped as data through a second view on the grid of *vrt*, so it lands
     where the pixels do. A pixel no source pixel maps to stays valid, as the plain warp
     leaves it a valid zero.
+
+    Memory: the mask is held three times as uint8 per pixel (the window's mask, the copy
+    the second view reads, the warped one), on top of the warped pixels.
     """
     from rasterio.enums import Resampling
 
@@ -269,7 +275,10 @@ def _warped_mask(wds, vrt):
                 resampling=Resampling.nearest,
                 nodata=255,
             ) as mvrt:
-                return mvrt.read(1)
+                warped = mvrt.read(1)
+    # The warp moves a valid 255 to 254 where it collides with the NoData 255 it fills
+    # with: 0 stays invalid, anything else is valid.
+    return np.where(warped == 0, 0, 255).astype("uint8")
 
 
 def _warp_bytes(win_bytes: bytes, want_crs) -> bytes:
@@ -335,6 +344,23 @@ def _warp_pending(tile: VirtualTile, src) -> bool:
 
     effective_crs = resolve_crs(pending_srid) if pending_srid is not None else src.crs
     return effective_crs is None or effective_crs != resolve_crs(tile.crs)
+
+
+def _tile_window_bytes(tile: VirtualTile, src, window: Window, pending) -> bytes:
+    """GTiff bytes of *window* of *src* with *tile*'s pending instructions applied,
+    reprojected to the tile's target ``crs`` when :func:`_warp_pending` says it differs.
+
+    The one place that decides between the plain, EPSG-warp and CRS-object-warp reads.
+    """
+    if not _warp_pending(tile, src):
+        return _window_dataset_bytes(src, window, pending=pending)
+    want = _epsg_of(tile.crs)
+    if want is not None:
+        return _warp_window_bytes(src, window, want, pending=pending)
+    # Non-EPSG target (e.g. 'ESRI:54008', WKT, PROJ4): resolve to a CRS object.
+    from databricks.labs.gbx.pyrx.core.crs import resolve_crs
+
+    return _warp_window_bytes_crs(src, window, resolve_crs(tile.crs), pending=pending)
 
 
 def _empty_dataset_bytes(ref) -> bytes:
@@ -413,7 +439,6 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
         # (as_local_file → tile.path) and today's plain tile.path read (file_ref=None).
         local_path = _resolve_local_or_windowed(tile, file_ref, stack)
 
-        bands, _nodata, pending_srid, _pending_crs_str = pending
         with rasterio.open(local_path) as src:
             # Resolve window=None → full extent, mirroring open_header() semantics.
             if tile.window is None:
@@ -421,36 +446,10 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
             else:
                 c, r, w, h = tile.window
                 window = Window(c, r, w, h)
-            from databricks.labs.gbx.core.crs import authority_srid_of
-
-            src_epsg = authority_srid_of(src.crs)
-            want = _epsg_of(tile.crs) if tile.crs else None
-            # When pending_srid relabels the CRS, use the relabeled EPSG as the
-            # "current" CRS for the warp skip-decision.  Without this, a tile
-            # with pending_srid=3857 + tile.crs=4326 would skip the warp
-            # (want==src_epsg==4326) even though the relabeled CRS is 3857.
-            effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
-            if want is not None and want != effective_src_epsg:
-                tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
-            elif tile.crs is not None and want is None:
-                # Non-EPSG tile.crs (e.g. 'ESRI:54008', WKT, PROJ4): _epsg_of returned
-                # None so the EPSG path above was skipped.  Resolve via CRS-object
-                # comparison: if the source CRS differs from the requested CRS, warp;
-                # otherwise passthrough (identity for non-EPSG sources).
-                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
-
-                want_crs = resolve_crs(tile.crs)
-                effective_src_crs = (
-                    resolve_crs(pending_srid) if pending_srid is not None else src.crs
-                )
-                if effective_src_crs is None or effective_src_crs != want_crs:
-                    tile_bytes = _warp_window_bytes_crs(
-                        src, window, want_crs, pending=pending
-                    )
-                else:
-                    tile_bytes = _window_dataset_bytes(src, window, pending=pending)
-            else:
-                tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+            # The pending_srid relabel counts as the source's CRS in the warp
+            # decision (see _warp_pending): a tile with pending_srid=3857 and
+            # crs=4326 is warped although the file itself is 4326.
+            tile_bytes = _tile_window_bytes(tile, src, window, pending)
         # src is closed here; we hold only standalone bytes.
 
         wds = _open_bytes(stack, tile_bytes)
@@ -824,14 +823,7 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
 
             # Detect whether reprojection is needed.  Warp and clip cannot be
             # done block-by-block (they need full-window context), so fall back.
-            from databricks.labs.gbx.core.crs import authority_srid_of
-
-            src_epsg = authority_srid_of(src.crs)
-            want = _epsg_of(tile.crs) if tile.crs else None
-            effective_src_epsg = srid if srid is not None else src_epsg
-            needs_warp = (want is not None and want != effective_src_epsg) or (
-                tile.crs is not None and want is None
-            )
+            needs_warp = _warp_pending(tile, src)
             needs_clip = tile.clip_polygon is not None
 
             if needs_warp or needs_clip:
@@ -947,8 +939,6 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
     with ExitStack() as stack:
         pending = _parse_pending(vt.metadata)
         local_path = _resolve_local_or_windowed(vt, None, stack)
-        _, _, pending_srid, _ = pending
-
         with rasterio.open(local_path) as src:
             # Resolve window=None → full extent, mirroring open_tile() semantics.
             # A deferred whole-file virtual tile (Task 2) carries window=None;
@@ -958,28 +948,7 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
             else:
                 c, r, w, h = vt.window
                 window = Window(c, r, w, h)
-            from databricks.labs.gbx.core.crs import authority_srid_of
-
-            src_epsg = authority_srid_of(src.crs)
-            want = _epsg_of(vt.crs) if vt.crs else None
-            effective_src_epsg = pending_srid if pending_srid is not None else src_epsg
-            if want is not None and want != effective_src_epsg:
-                tile_bytes = _warp_window_bytes(src, window, want, pending=pending)
-            elif vt.crs is not None and want is None:
-                from databricks.labs.gbx.pyrx.core.crs import resolve_crs
-
-                want_crs = resolve_crs(vt.crs)
-                effective_src_crs = (
-                    resolve_crs(pending_srid) if pending_srid is not None else src.crs
-                )
-                if effective_src_crs is None or effective_src_crs != want_crs:
-                    tile_bytes = _warp_window_bytes_crs(
-                        src, window, want_crs, pending=pending
-                    )
-                else:
-                    tile_bytes = _window_dataset_bytes(src, window, pending=pending)
-            else:
-                tile_bytes = _window_dataset_bytes(src, window, pending=pending)
+            tile_bytes = _tile_window_bytes(vt, src, window, pending)
 
         if vt.clip_polygon is None:
             return tile_bytes

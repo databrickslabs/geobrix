@@ -449,6 +449,14 @@ formats.
   made with `materialize=True`, and the tiles the writers stream block by block, carry the mask
   as well, so the heavyweight tier, which reads those bytes, sees the same pixels as the
   lightweight one.
+- **Grouped functions apply a virtual tile's clip.** `raster_gbx` and `cog_gbx` emit virtual
+  tiles that carry the `clipPolygons` polygon, and the lightweight `*_grouped` functions
+  (`rst_clip_grouped`, `rst_memsize_grouped`, `rst_resample_grouped` and the rest) on runtimes
+  with the FILE type read such a tile as the whole envelope window of its source file, so the
+  polygon was skipped. They now read it clipped, as every other lightweight function does, and a
+  tile whose `crs` differs from its source's is reprojected too. A tile written with
+  `virtualize_dir` from a clipped or reprojected tile no longer applies that clip and CRS a
+  second time when it is read.
 - **Lightweight raster outputs use one encoding.** Lightweight raster functions write ZSTD with
   the predictor that suits the data type, instead of inheriting the source file's codec. Sources
   compressed as JPEG (YCbCr) no longer make lightweight writes fail; an explicit JPEG request

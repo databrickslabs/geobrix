@@ -53,9 +53,12 @@ def light_tile_df(spark, raster):
 
     path = getattr(raster, "path", None)
     if path is not None:
-        return spark.createDataFrame([(path,)], ["path"]).select(
+        df = spark.createDataFrame([(path,)], ["path"]).select(
             prx.rst_fromfile("path").alias("tile")
         )
+        # a "virtual" case that quietly started from bytes would test nothing
+        assert df.select("tile.raster").first()[0] is None, "rst_fromfile: not virtual"
+        return df
     return spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
         prx.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
     )

@@ -28,6 +28,10 @@ _EXPORTS = {
     "ZarrUnsupported": ("databricks.labs.gbx.zarr.errors", "ZarrUnsupported"),
     "ZarrOwnershipError": ("databricks.labs.gbx.zarr.errors", "ZarrOwnershipError"),
     "gbx_zarr_register": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_register"),
+    "gbx_zarr_read": ("databricks.labs.gbx.zarr.functions", "gbx_zarr_read"),
+    "BLOCKS_SCHEMA": ("databricks.labs.gbx.zarr.functions", "BLOCKS_SCHEMA"),
+    "block_to_numpy": ("databricks.labs.gbx.zarr.functions", "block_to_numpy"),
+    "block_to_xarray": ("databricks.labs.gbx.zarr.functions", "block_to_xarray"),
 }
 
 __all__ = list(_EXPORTS)

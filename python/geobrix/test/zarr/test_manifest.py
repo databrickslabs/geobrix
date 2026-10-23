@@ -600,6 +600,22 @@ def test_read_rows_filters_and_tag_snapshots(spark_delta, table):
         M.read_rows(spark_delta, snap, kinds=["bogus"])
 
 
+def test_read_rows_filters_by_key_for_arrays_without_shards(spark_delta, table):
+    """Chunk rows of an unsharded array have no shard_key, so a read prunes them by key."""
+    w1 = uuid.uuid4().hex
+    rows = []
+    for key in ("c/0/0/0", "c/0/0/1", "c/1/0/0"):
+        row = _chunk(key, w1)
+        row.update(shard_key=None)
+        rows.append(row)
+    M.commit(spark_delta, table, _rows(*rows), write_id=w1, meta={})
+    snap = M.snapshot(spark_delta, table)
+    got = M.read_rows(spark_delta, snap, kinds="chunk", keys=["c/0/0/1", "c/1/0/0"])
+    assert _keys(got) == [("chunk", "t2m", "c/0/0/1"), ("chunk", "t2m", "c/1/0/0")]
+    assert M.read_rows(spark_delta, snap, kinds="chunk", keys=[]).num_rows == 0
+    assert M.read_rows(spark_delta, snap, kinds="chunk", keys="c/0/0/0").num_rows == 1
+
+
 def test_commit_delete_removes_the_row_under_cas(spark_delta, table):
     w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
     M.commit(

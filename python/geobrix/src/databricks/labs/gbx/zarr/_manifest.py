@@ -553,11 +553,15 @@ def snapshot(
     return Snapshot(table=table, version=picked, tag=None)
 
 
-def read_rows(spark, snap: Snapshot, *, kinds=None, arrays=None, shard_keys=None):
+def read_rows(
+    spark, snap: Snapshot, *, kinds=None, arrays=None, shard_keys=None, keys=None
+):
     """Manifest rows of a snapshot as an Arrow table.
 
     Live rows (``tag IS NULL``), or the tag's rows for a tag snapshot, optionally
-    narrowed to the given kinds, arrays and shard keys.
+    narrowed to the given kinds, arrays, shard keys and keys. ``keys`` is how a read
+    prunes the chunk rows of an unsharded array, which have no shard key; an empty
+    list matches nothing.
     """
     from pyspark.sql import functions as F
 
@@ -572,7 +576,7 @@ def read_rows(spark, snap: Snapshot, *, kinds=None, arrays=None, shard_keys=None
         if bad:
             raise ValueError(f"unknown kind(s) {bad}; expected some of {KINDS}")
         cond = cond & F.col("kind").isin(kinds)
-    for column, values in (("array", arrays), ("shard_key", shard_keys)):
+    for column, values in (("array", arrays), ("shard_key", shard_keys), ("key", keys)):
         if values is not None:
             values = [values] if isinstance(values, str) else list(values)
             cond = cond & F.col(column).isin(values)

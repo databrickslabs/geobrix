@@ -26,12 +26,13 @@ NOISE_SEED = 7
 TIME_UNITS = "hours since 1900-01-01"
 
 
-def era5_like_dataset():
+def era5_like_dataset(latitude=None):
     """The in-memory ERA5-like ``xarray.Dataset`` (float32 ``t2m`` and ``u10``).
 
     The fields are smooth in space and time plus seeded noise (seed 7), so two calls
     return identical arrays. ``time`` is a datetime64 coordinate; ``make_era5_like``
-    encodes it to CF int64 hours.
+    encodes it to CF int64 hours. ``latitude`` replaces the regular 2.5 degree latitudes
+    (73 values) with the given ones, for an irregular axis such as a Gaussian grid.
     """
     import numpy as np
     import pandas as pd
@@ -39,6 +40,10 @@ def era5_like_dataset():
 
     time = pd.date_range("2023-01-01", periods=TIME_STEPS, freq="h")
     lat = np.linspace(90.0, -90.0, LATITUDES)
+    if latitude is not None:
+        lat = np.asarray(latitude, dtype="float64")
+        if lat.shape != (LATITUDES,):
+            raise ValueError(f"latitude needs {LATITUDES} values, got {lat.shape}")
     lon = np.arange(LONGITUDES) * 2.5
     rng = np.random.default_rng(NOISE_SEED)
 
@@ -76,7 +81,9 @@ def era5_like_dataset():
     )
 
 
-def make_era5_like(path, *, zarr_format: int = 3, sharded: bool | None = None) -> Path:
+def make_era5_like(
+    path, *, zarr_format: int = 3, sharded: bool | None = None, latitude=None
+) -> Path:
     """Write the ERA5-like cube to ``path`` as a Zarr store and return the path.
 
     Layouts (``t2m`` and ``u10``; chunks always ``(12, 37, 72)``):
@@ -92,7 +99,7 @@ def make_era5_like(path, *, zarr_format: int = 3, sharded: bool | None = None) -
 
     ``time`` is CF-encoded int64 ``hours since 1900-01-01`` (standard calendar);
     ``latitude`` and ``longitude`` carry ``degrees_north`` / ``degrees_east`` units.
-    Metadata is not consolidated.
+    Metadata is not consolidated. ``latitude`` is passed to ``era5_like_dataset``.
     """
     if zarr_format not in (2, 3):
         raise ValueError(f"zarr_format must be 2 or 3, got {zarr_format!r}")
@@ -121,7 +128,7 @@ def make_era5_like(path, *, zarr_format: int = 3, sharded: bool | None = None) -
     encoding["longitude"] = {"_FillValue": None}
 
     path = Path(path)
-    era5_like_dataset().to_zarr(
+    era5_like_dataset(latitude).to_zarr(
         str(path),
         mode="w",
         zarr_format=zarr_format,

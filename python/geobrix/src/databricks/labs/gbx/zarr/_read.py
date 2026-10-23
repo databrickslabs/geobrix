@@ -1,0 +1,1007 @@
+"""``gbx_zarr_read``: a Zarr store, or a cut of one, as Spark blocks or a table.
+
+The read is planned on the driver and run in tasks:
+
+1. Resolve the source. A table is a managed or registered store: one Delta version of its
+   manifest is pinned and everything below comes from that version. A path is a plain
+   store and reads whatever bytes are there.
+2. Read the array documents and the coordinate arrays (small, read whole), turn ``sel``
+   (labels) and ``isel`` (positions) into index ranges, and find the inner chunks they
+   touch.
+3. Fetch only the manifest rows of the touched shards, and pack the chunks into work units
+   that fit the memory budget (``_plan``).
+4. ``spark.range(n_units, numPartitions=n_units).mapInArrow``: each task rebuilds its store
+   from its unit's rows alone, reads each chunk's selected cells, decodes them, and emits
+   Arrow batches. No task needs a session or the manifest table.
+
+``output="blocks"`` returns one row per (variable, touched chunk, selected sub-box): the
+decoded cells as C-order bytes with their position in the array (``BLOCKS_SCHEMA``).
+``output="table"`` returns one row per selected cell with a column per dimension and per
+variable. Both pin the snapshot, so a read is consistent whatever commits meanwhile.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import math
+import re
+from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
+
+import numpy as np
+import pyarrow as pa
+
+from databricks.labs.gbx.zarr._meta import (
+    ArrayMeta,
+    _check_mask_flag,
+    cf_decode,
+    decode_coord,
+    is_time_coord,
+    parse_v2,
+    parse_v3,
+)
+from databricks.labs.gbx.zarr._plan import (
+    Unit,
+    boxes_of,
+    keys_of_boxes,
+    plan_units,
+    row_unit_key,
+    rows_for_boxes,
+    unit_key,
+)
+from databricks.labs.gbx.zarr._select import AxisSel, resolve, touched_chunks
+from databricks.labs.gbx.zarr.errors import (
+    ZarrAccessUnavailable,
+    ZarrError,
+    ZarrGridMismatch,
+    ZarrUnsupported,
+    ZarrVersionUnavailable,
+)
+
+__all__ = [
+    "BLOCKS_SCHEMA",
+    "gbx_zarr_read",
+    "block_to_numpy",
+    "block_to_xarray",
+    "classify_source",
+    "parse_documents",
+    "store_documents",
+]
+
+_LOG = logging.getLogger(__name__)
+
+BLOCKS_SCHEMA = (
+    "variable STRING, dims ARRAY<STRING>, start ARRAY<BIGINT>, stop ARRAY<BIGINT>, "
+    "coord_start ARRAY<STRING>, coord_stop ARRAY<STRING>, dtype STRING, "
+    "shape ARRAY<BIGINT>, data BINARY, fill_value STRING, attrs STRING"
+)
+_BLOCKS_ARROW = pa.schema(
+    [
+        ("variable", pa.string()),
+        ("dims", pa.list_(pa.string())),
+        ("start", pa.list_(pa.int64())),
+        ("stop", pa.list_(pa.int64())),
+        ("coord_start", pa.list_(pa.string())),
+        ("coord_stop", pa.list_(pa.string())),
+        ("dtype", pa.string()),
+        ("shape", pa.list_(pa.int64())),
+        ("data", pa.binary()),
+        ("fill_value", pa.string()),
+        ("attrs", pa.string()),
+    ]
+)
+
+_OUTPUTS = ("blocks", "tiles", "table")
+_ACCESS = ("auto", "fuse", "direct")
+_SOURCE_TYPES = ("auto", "path", "table")
+_SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:/")
+_BATCH_ROWS = 64  # blocks per Arrow batch
+_TABLE_BATCH_ROWS = 65536  # cells per Arrow batch of a table read
+_READ_THREADS = 8  # boxes a task reads at once
+_PRUNE_LIMIT = (
+    10_000  # most keys sent to the manifest as an IN list; more reads them all
+)
+_CONSOLIDATED = "consolidated_metadata"
+# attributes cf_decode consumes: a decoded block no longer carries them
+_PACKING_ATTRS = ("scale_factor", "add_offset", "_FillValue", "missing_value")
+_TIME_ATTRS = ("units", "calendar")
+_ROWS = ("shard", "chunk")
+
+
+def classify_source(source: str, source_type: str = "auto") -> str:
+    """``"path"`` or ``"table"``.
+
+    ``auto`` takes a string that starts with ``/`` or has a URI scheme (``dbfs:/``,
+    ``file:/``, ``s3://``) for a path and anything else for a table name.
+    """
+    if source_type not in _SOURCE_TYPES:
+        raise ValueError(
+            f"source_type must be one of {_SOURCE_TYPES}, got {source_type!r}. "
+            "Fix: pass 'auto', 'path' or 'table'."
+        )
+    if not isinstance(source, str) or not source.strip():
+        raise ValueError(
+            "source must be a table name or a store path. "
+            "Fix: pass the manifest table of a store, or the path of a Zarr store."
+        )
+    if source_type != "auto":
+        return source_type
+    text = source.strip()
+    return "path" if text.startswith("/") or _SCHEME.match(text) else "table"
+
+
+def _budget_bytes() -> int:
+    """Decoded bytes a task may hold: the same table ``raster_gbx`` sizes its tiles by."""
+    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+
+    return decoded_budget_bytes("auto")
+
+
+# --- documents -----------------------------------------------------------------------
+
+
+def store_documents(metas: dict[str, bytes]) -> dict[str, bytes]:
+    """``metas`` as a store should serve them: with no consolidated metadata.
+
+    Consolidated metadata (``.zmetadata``, or the ``consolidated_metadata`` block of a group's
+    ``zarr.json``) is a copy of the per-node documents taken at some past moment. The
+    per-node documents are the truth and a registered store can change under it, so a stale
+    copy must never be served; a reader that opens a group then reads the per-node documents.
+    """
+    out = {}
+    for key, raw in metas.items():
+        name = key.rpartition("/")[2]
+        if name == ".zmetadata":
+            continue
+        if name == "zarr.json":
+            try:
+                doc = json.loads(raw)
+            except ValueError:
+                out[key] = raw
+                continue
+            if isinstance(doc, dict) and _CONSOLIDATED in doc:
+                doc = {k: v for k, v in doc.items() if k != _CONSOLIDATED}
+                raw = json.dumps(doc).encode()
+        out[key] = raw
+    return out
+
+
+def parse_documents(
+    metas: dict[str, bytes],
+) -> tuple[dict[str, ArrayMeta], dict[str, str]]:
+    """``(arrays, unsupported)`` from the metadata documents of a store.
+
+    ``arrays`` maps the path of each array GeoBrix can decode to its ``ArrayMeta``.
+    ``unsupported`` maps the path of each one it cannot (a string coordinate, say, or a
+    malformed document) to the reason. A parse failure of one array never fails the others:
+    the array is named only when it is decoded.
+    """
+    arrays: dict[str, ArrayMeta] = {}
+    unsupported: dict[str, str] = {}
+    for key in sorted(metas):
+        prefix, _, name = key.rpartition("/")
+        if not prefix:
+            continue  # the root group's documents
+        try:
+            if name == "zarr.json":
+                doc = json.loads(metas[key])
+                if doc.get("node_type") == "array":
+                    arrays[prefix] = parse_v3(prefix, doc)
+            elif name == ".zarray":
+                zattrs = json.loads(metas.get(f"{prefix}/.zattrs", b"{}"))
+                arrays[prefix] = parse_v2(prefix, json.loads(metas[key]), zattrs)
+        except ZarrUnsupported as e:
+            unsupported[prefix] = e.message
+        except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
+            unsupported[prefix] = f"its metadata is malformed ({type(e).__name__}: {e})"
+    return arrays, unsupported
+
+
+# --- the source ----------------------------------------------------------------------
+
+
+@dataclass
+class _Source:
+    """What the driver knows about a store: documents, arrays, and how to read its rows."""
+
+    kind: str  # "table" | "plain"
+    root: str  # where gbx-origin files live (a plain store: the store)
+    base_root: str | None  # where a registered store's own files live
+    metas: dict[str, bytes]
+    arrays: dict[str, ArrayMeta]
+    unsupported: dict[str, str]
+    spark: object = None
+    table: str | None = None
+    snap: object = None
+
+    def rows(self, meta: ArrayMeta, keys: list[str] | None) -> dict[str, list[dict]]:
+        """The shard and chunk rows of ``meta``'s array, grouped by ``unit_key``; only the
+        groups in ``keys`` (all of them for ``None``). Empty for a plain store."""
+        if self.kind == "plain" or keys == []:
+            return {}
+        from databricks.labs.gbx.zarr._manifest import read_rows
+
+        kw = {}
+        if keys is not None and len(keys) <= _PRUNE_LIMIT:
+            kw["shard_keys" if meta.shard is not None else "keys"] = keys
+        table = read_rows(
+            self.spark, self.snap, kinds=list(_ROWS), arrays=[meta.name], **kw
+        )
+        wanted = None if keys is None else set(keys)
+        grouped: dict[str, list[dict]] = {}
+        for row in table.to_pylist():
+            key = row_unit_key(meta, row)
+            if wanted is None or key in wanted:
+                grouped.setdefault(key, []).append(row)
+        return grouped
+
+    def reader(self):
+        from databricks.labs.gbx.zarr._access import FuseRangeReader
+
+        return FuseRangeReader(self.root, base_root=self.base_root)
+
+
+def _open_source(spark, source, kind, version_as_of, timestamp_as_of) -> _Source:
+    if kind == "table":
+        return _open_table(spark, source, version_as_of, timestamp_as_of)
+    if version_as_of is not None or timestamp_as_of is not None:
+        raise ZarrVersionUnavailable(
+            f"{source} is a plain Zarr store, which has no versions: it reads the bytes "
+            "that are there now",
+            fix="register the store with gbx_zarr_register to read it as of a version, "
+            "or drop version_as_of and timestamp_as_of",
+        )
+    from databricks.labs.gbx.zarr._register import _local_root, read_base_metadata
+
+    root = _local_root(source)
+    metas, arrays, unsupported = read_base_metadata(root)
+    return _Source("plain", root, None, metas, arrays, unsupported)
+
+
+def _open_table(spark, table, version_as_of, timestamp_as_of) -> _Source:
+    from databricks.labs.gbx.zarr._manifest import read_props, read_rows, snapshot
+
+    props = read_props(spark, table)
+    snap = snapshot(
+        spark, table, version_as_of=version_as_of, timestamp_as_of=timestamp_as_of
+    )
+    metas = {}
+    for row in read_rows(spark, snap, kinds=["group", "array"]).to_pylist():
+        if row["meta"] is not None:
+            key = "/".join(p for p in (row["array"], row["key"]) if p)
+            metas[key] = row["meta"].encode()
+    arrays, unsupported = parse_documents(metas)
+    if props.kind == "registered":
+        # a registered store's own objects are under its base; what GeoBrix wrote is under
+        # the overlay (a read-only registration has none, and so no gbx-origin rows)
+        root, base = props.overlay_root or props.root, props.root
+    else:
+        root, base = props.root, None
+    return _Source(
+        "table",
+        root,
+        base,
+        store_documents(metas),
+        arrays,
+        unsupported,
+        spark,
+        table,
+        snap,
+    )
+
+
+# --- variables, coordinates and selections -------------------------------------------
+
+
+def _coordinate_of(dim, array, arrays, unsupported) -> str | None:
+    """The path of the array that holds the labels of ``dim`` for ``array``, if any.
+
+    A dimension coordinate is a one-dimensional array named like the dimension, in the
+    array's own group or the root. An array GeoBrix cannot decode counts: the dimension
+    does have labels, they just cannot be read.
+    """
+    parent = array.rpartition("/")[0]
+    for path in ([f"{parent}/{dim}"] if parent else []) + [dim]:
+        if path in unsupported:
+            return path
+        meta = arrays.get(path)
+        if meta is not None and len(meta.shape) == 1 and meta.dims == (dim,):
+            return path
+    return None
+
+
+def _auxiliary(arrays: dict[str, ArrayMeta]) -> set[str]:
+    """Arrays other arrays name as coordinates or bounds (CF ``coordinates``/``bounds``)."""
+    out = set()
+    for name, meta in arrays.items():
+        parent = name.rpartition("/")[0]
+        for attr in ("coordinates", "bounds"):
+            text = meta.attrs.get(attr)
+            for ref in text.split() if isinstance(text, str) else ():
+                for path in ([f"{parent}/{ref}"] if parent else []) + [ref]:
+                    if path in arrays:
+                        out.add(path)
+                        break
+    return out
+
+
+def _choose_variables(variables, src: _Source) -> list[str]:
+    arrays, unsupported = src.arrays, src.unsupported
+    if variables is None:
+        coordinates = {
+            c
+            for name, meta in arrays.items()
+            for d in meta.dims
+            if (c := _coordinate_of(d, name, arrays, unsupported))
+        }
+        skip = coordinates | _auxiliary(arrays)
+        chosen = [n for n in sorted(arrays) if n not in skip and arrays[n].shape != ()]
+        left_out = sorted(unsupported)
+        if left_out:
+            _LOG.warning(
+                "%s: %d array(s) cannot be decoded and are left out (or have no labels): "
+                "%s",
+                src.table or src.root,
+                len(left_out),
+                ", ".join(f"{a} ({unsupported[a]})" for a in left_out),
+            )
+        if not chosen:
+            raise ValueError(
+                "the store has no gridded variable to read. "
+                "Fix: name the arrays to read with variables=[...]."
+            )
+        return chosen
+    names = [variables] if isinstance(variables, str) else list(variables)
+    if not names or not all(isinstance(n, str) for n in names):
+        raise ValueError(
+            "variables must be a variable name or a non-empty list of names. "
+            "Fix: pass variables=['t2m'] or leave it None for every variable."
+        )
+    names = list(dict.fromkeys(names))
+    for n in names:
+        if n in unsupported:
+            raise ZarrUnsupported(
+                f"array {n!r} cannot be decoded: {unsupported[n]}",
+                fix="read the other variables, or convert this array to a numeric dtype",
+            )
+    unknown = [n for n in names if n not in arrays]
+    if unknown:
+        raise ValueError(
+            f"unknown variable(s) {unknown}; the store has {sorted(arrays)}. "
+            "Fix: name arrays of the store."
+        )
+    return names
+
+
+def _decode_values(values: np.ndarray, meta: ArrayMeta, decode: bool, flag):
+    """``values`` as the caller sees them: CF-decoded (times become ``datetime64[ns]``), or
+    as stored for ``decode=False``; always in native byte order."""
+    if decode:
+        if is_time_coord(meta):
+            values = decode_coord(values, meta, use_zarr_fill_value_as_mask=flag)
+        else:
+            values = cf_decode(values, meta, use_zarr_fill_value_as_mask=flag)
+    values = np.asarray(values)
+    if not values.dtype.isnative:
+        values = values.astype(values.dtype.newbyteorder("="))
+    return np.asarray(values, order="C")
+
+
+def _read_coordinates(src: _Source, paths, decode, flag) -> dict[str, np.ndarray]:
+    """The values of each coordinate array, read whole and decoded."""
+    from databricks.labs.gbx.zarr._engine import (
+        open_manifest_array,
+        open_plain_array,
+        read_box,
+    )
+
+    paths = sorted(paths)
+    if not paths:
+        return {}
+    out = {}
+    if src.kind == "plain":
+        for path in paths:
+            arr = open_plain_array(src.root, path, engine="auto")
+            out[path] = read_box(arr, (slice(None),))
+    else:
+        from databricks.labs.gbx.zarr._store import ManifestStore
+
+        rows = []
+        for path in paths:
+            for group in src.rows(src.arrays[path], None).values():
+                rows += group
+        store = ManifestStore(
+            src.metas, rows, src.reader(), {p: src.arrays[p] for p in paths}
+        )
+        try:
+            for path in paths:
+                out[path] = read_box(open_manifest_array(store, path), (slice(None),))
+        finally:
+            store.close()
+    return {p: _decode_values(v, src.arrays[p], decode, flag) for p, v in out.items()}
+
+
+def _check_selection(sel, isel, metas: list[ArrayMeta]) -> tuple[dict, dict]:
+    sel, isel = dict(sel or {}), dict(isel or {})
+    both = [d for d in sel if d in isel]
+    if both:
+        raise ValueError(
+            f"dimension(s) {both} are in both sel and isel. "
+            "Fix: select each dimension one way."
+        )
+    known = {d for m in metas for d in m.dims}
+    unknown = [d for d in (*sel, *isel) if d not in known]
+    if unknown:
+        raise ValueError(
+            f"unknown dimension(s) {unknown}; the variables have {sorted(known)}. "
+            "Fix: select only existing dimensions."
+        )
+    return sel, isel
+
+
+def _mismatch(variables, arrays) -> ZarrGridMismatch:
+    shown = "; ".join(f"{v}{arrays[v].dims}={arrays[v].shape}" for v in variables)
+    return ZarrGridMismatch(
+        f"output='table' needs variables on the same grid, but they differ: {shown}",
+        fix="select variables with the same dimensions, or read them separately",
+    )
+
+
+# --- the plan ------------------------------------------------------------------------
+
+
+@dataclass
+class _TaskConfig:
+    """Everything a task needs besides its unit; travels in the ``mapInArrow`` closure."""
+
+    kind: str  # "table" | "plain"
+    output: str  # "blocks" | "table"
+    root: str
+    base_root: str | None
+    docs: dict[str, bytes]  # the documents of the arrays read
+    arrays: dict[str, ArrayMeta]  # the arrays read
+    axes: dict[str, tuple[AxisSel, ...]]
+    coords: dict[str, np.ndarray]  # decoded labels by coordinate array
+    dim_coords: dict[
+        str, tuple[str | None, ...]
+    ]  # per variable, per dim: coordinate path
+    variables: tuple[str, ...]
+    decode: bool
+    flag: bool | None
+    columns: tuple[tuple[str, str], ...] = ()  # table: (name, kind) per column
+
+
+_TABLE_ARROW = {
+    "timestamp": pa.timestamp("us", tz="UTC"),
+    "double": pa.float64(),
+    "float": pa.float32(),
+    "long": pa.int64(),
+}
+
+
+def _spark_type(kind: str):
+    from pyspark.sql import types as T
+
+    return {
+        "timestamp": T.TimestampType(),
+        "double": T.DoubleType(),
+        "float": T.FloatType(),
+        "long": T.LongType(),
+    }[kind]
+
+
+def _decoded_dtype(meta: ArrayMeta, decode: bool, flag) -> np.dtype:
+    """The dtype a read of ``meta`` returns, found by decoding one cell."""
+    native = np.dtype(meta.dtype).newbyteorder("=")
+    probe = np.zeros((1,) * len(meta.shape), dtype=native)
+    return _decode_values(probe, meta, decode, flag).dtype
+
+
+def _table_columns(variables, arrays, dim_coords, coords, decode, flag):
+    """``(name, kind)`` per table column: the dimensions, then the variables."""
+    ref = arrays[variables[0]]
+    columns = []
+    for dim, cpath in zip(ref.dims, dim_coords[variables[0]]):
+        if cpath is None:
+            columns.append((dim, "long"))  # no labels: the position
+        else:
+            kind = "timestamp" if coords[cpath].dtype.kind == "M" else "double"
+            columns.append((dim, kind))
+    names = {c for c, _ in columns}
+    for v in variables:
+        if v in names:
+            raise ValueError(
+                f"variable {v!r} has the name of a dimension, so a table cannot hold both. "
+                "Fix: leave the coordinate out of variables, or read it as blocks."
+            )
+        dtype = _decoded_dtype(arrays[v], decode, flag)
+        kind = (
+            "timestamp"
+            if dtype.kind == "M"
+            else "float" if dtype == np.float32 else "double"
+        )
+        columns.append((v, kind))
+    return tuple(columns)
+
+
+def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
+    """``(units, config)`` for reading ``variables``, or ``([], config)`` for nothing."""
+    arrays = src.arrays
+    metas = [arrays[v] for v in variables]
+    sel, isel = _check_selection(sel, isel, metas)
+
+    dim_coords: dict[str, tuple[str | None, ...]] = {}
+    for v in variables:
+        dim_coords[v] = tuple(
+            _coordinate_of(d, v, arrays, src.unsupported) for d in arrays[v].dims
+        )
+    need = {c for cs in dim_coords.values() for c in cs if c} - set(src.unsupported)
+    coords = _read_coordinates(src, need, decode, flag)
+    for v in variables:
+        for dim, size, cpath in zip(arrays[v].dims, arrays[v].shape, dim_coords[v]):
+            if cpath in coords and coords[cpath].shape != (size,):
+                raise ZarrError(
+                    f"coordinate {cpath!r} has {coords[cpath].shape[0]} labels but "
+                    f"{v!r} has {size} cells along {dim!r}",
+                    fix="correct the store's metadata"
+                    + (", or run gbx_zarr_sync" if src.kind == "table" else ""),
+                )
+
+    axes: dict[str, list[AxisSel]] = {}
+    for v in variables:
+        meta = arrays[v]
+        mine_sel = {d: x for d, x in sel.items() if d in meta.dims}
+        mine_isel = {d: x for d, x in isel.items() if d in meta.dims}
+        for d, cpath in zip(meta.dims, dim_coords[v]):
+            if d in mine_sel and cpath in src.unsupported:
+                raise ZarrUnsupported(
+                    f"array {cpath!r} cannot be decoded, so sel has no labels for "
+                    f"{d!r}: {src.unsupported[cpath]}",
+                    fix=f"select {d!r} by position with isel",
+                )
+        axes[v] = resolve(
+            meta.dims,
+            meta.shape,
+            {d: coords[c] for d, c in zip(meta.dims, dim_coords[v]) if c in coords},
+            mine_sel,
+            mine_isel,
+            coord_attrs={
+                d: arrays[c].attrs
+                for d, c in zip(meta.dims, dim_coords[v])
+                if c in arrays
+            },
+        )
+
+    columns = ()
+    if output == "table":
+        ref = arrays[variables[0]]
+        if any(
+            (arrays[v].dims, arrays[v].shape) != (ref.dims, ref.shape)
+            for v in variables
+        ):
+            raise _mismatch(variables, arrays)
+        for dim, cpath in zip(ref.dims, dim_coords[variables[0]]):
+            if cpath in src.unsupported:
+                raise ZarrUnsupported(
+                    f"array {cpath!r} cannot be decoded, so the table has no labels for "
+                    f"{dim!r}: {src.unsupported[cpath]}",
+                    fix="read it as blocks, or select the variables by position",
+                )
+        columns = _table_columns(variables, arrays, dim_coords, coords, decode, flag)
+
+    budget = _budget_bytes()
+    units: list[Unit] = []
+    if output == "blocks":
+        for v in variables:
+            meta = arrays[v]
+            touched = touched_chunks(axes[v], meta.chunks)
+            by_key = src.rows(meta, sorted({unit_key(meta, c) for c in touched}))
+            units += plan_units(meta, axes[v], by_key, budget)
+    else:
+        units = _plan_table(src, variables, axes[variables[0]], budget)
+
+    read = {v: arrays[v] for v in variables}
+    cfg = _TaskConfig(
+        kind=src.kind,
+        output=output,
+        root=src.root,
+        base_root=src.base_root,
+        docs={k: raw for k, raw in src.metas.items() if k.rpartition("/")[0] in read},
+        arrays=read,
+        axes={v: tuple(a) for v, a in axes.items()},
+        coords={c: coords[c] for cs in dim_coords.values() for c in cs if c in coords},
+        dim_coords=dim_coords,
+        variables=tuple(variables),
+        decode=decode,
+        flag=flag,
+        columns=columns,
+    )
+    return units, cfg
+
+
+def _plan_table(src: _Source, variables, axes, budget) -> list[Unit]:
+    """Units that cover the same cells of every variable.
+
+    The first variable's chunks cut the grid. Each unit also carries the rows of the other
+    variables' chunks its cells lie in (their chunking may differ from the first's).
+    """
+    arrays = src.arrays
+    ref = arrays[variables[0]]
+    touched = touched_chunks(axes, ref.chunks)
+    ref_rows = src.rows(ref, sorted({unit_key(ref, c) for c in touched}))
+    units = plan_units(ref, axes, ref_rows, max(1, budget // len(variables)))
+    if len(variables) == 1 or src.kind == "plain":
+        return units
+    boxes = [[b for c in u.chunks for b in boxes_of(ref, axes, c)] for u in units]
+    rows_of = {}
+    for v in variables[1:]:
+        keys = {k for group in boxes for k in keys_of_boxes(arrays[v], group)}
+        rows_of[v] = src.rows(arrays[v], sorted(keys))
+    return [
+        Unit(
+            u.array,
+            u.chunks,
+            (
+                *u.rows,
+                *(
+                    r
+                    for v in variables[1:]
+                    for r in rows_for_boxes(arrays[v], group, rows_of[v])
+                ),
+            ),
+        )
+        for u, group in zip(units, boxes)
+    ]
+
+
+# --- tasks ---------------------------------------------------------------------------
+
+
+class _UnitReader:
+    """Opens what a unit reads: a store built from its rows, or the plain arrays."""
+
+    def __init__(self, cfg: _TaskConfig, unit: Unit):
+        self.cfg, self.store, self._open = cfg, None, {}
+        if cfg.kind == "table":
+            from databricks.labs.gbx.zarr._access import FuseRangeReader
+            from databricks.labs.gbx.zarr._store import ManifestStore
+
+            reader = FuseRangeReader(cfg.root, base_root=cfg.base_root)
+            self.store = ManifestStore(cfg.docs, list(unit.rows), reader, cfg.arrays)
+
+    def array(self, name: str):
+        from databricks.labs.gbx.zarr._engine import (
+            open_manifest_array,
+            open_plain_array,
+        )
+
+        arr = self._open.get(name)
+        if arr is None:
+            if self.store is not None:
+                arr = open_manifest_array(self.store, name)
+            else:  # tensorstore regresses inside tasks (spike), so the zarr engine
+                arr = open_plain_array(self.cfg.root, name, engine="zarr")
+            self._open[name] = arr
+        return arr
+
+    def read(self, meta: ArrayMeta, box) -> np.ndarray:
+        from databricks.labs.gbx.zarr._engine import read_box
+
+        values = read_box(self.array(meta.name), tuple(slice(a, b) for a, b in box))
+        return _decode_values(values, meta, self.cfg.decode, self.cfg.flag)
+
+    def close(self) -> None:
+        if self.store is not None:
+            self.store.close()
+
+
+def _run_unit(cfg: _TaskConfig, unit: Unit) -> Iterator[pa.RecordBatch]:
+    reader = _UnitReader(cfg, unit)
+    try:
+        for name in (unit.array,) if cfg.output == "blocks" else cfg.variables:
+            reader.array(name)  # open before the threads start
+        if cfg.output == "blocks":
+            yield from _block_batches(cfg, unit, reader)
+        else:
+            yield from _table_batches(cfg, unit, reader)
+    finally:
+        reader.close()
+
+
+def _cells(block: np.ndarray) -> memoryview:
+    """The cells of a C-order block as bytes Arrow can read in place (no copy of its own)."""
+    return memoryview(block.reshape(-1).view(np.uint8))
+
+
+def _label(values, index: int) -> str:
+    return str(values[index])
+
+
+def _fill_text(v) -> str | None:
+    if v is None:
+        return None
+    if isinstance(v, np.datetime64):
+        return str(v)
+    if isinstance(v, np.generic):
+        v = v.item()
+    if isinstance(v, complex):
+        return str(v)
+    return json.dumps(v)
+
+
+def _block_fill(cfg: _TaskConfig, meta: ArrayMeta) -> str | None:
+    """What a cell nothing was written to holds in this array's blocks."""
+    fill = meta.fill_value
+    if fill is None:
+        return None
+    if cfg.decode:
+        probe = np.full((1,) * len(meta.shape), fill, dtype=np.dtype(meta.dtype))
+        fill = _decode_values(probe, meta, True, cfg.flag).reshape(-1)[0]
+    return _fill_text(fill)
+
+
+def _block_attrs(cfg: _TaskConfig, meta: ArrayMeta) -> str:
+    attrs = dict(meta.attrs)
+    if cfg.decode:  # the decoding has consumed these
+        drop = set(_PACKING_ATTRS) | (
+            set(_TIME_ATTRS) if is_time_coord(meta) else set()
+        )
+        attrs = {k: v for k, v in attrs.items() if k not in drop}
+    return json.dumps(attrs, sort_keys=True, default=str)
+
+
+def _unit_boxes(cfg: _TaskConfig, unit: Unit) -> list:
+    meta = cfg.arrays[unit.array]
+    axes = list(cfg.axes[unit.array])
+    return [box for c in unit.chunks for box in boxes_of(meta, axes, c)]
+
+
+def _block_batches(cfg, unit, reader) -> Iterator[pa.RecordBatch]:
+    meta = cfg.arrays[unit.array]
+    boxes = _unit_boxes(cfg, unit)
+    fill, attrs = _block_fill(cfg, meta), _block_attrs(cfg, meta)
+    labels = [cfg.coords.get(c) if c else None for c in cfg.dim_coords[unit.array]]
+    with ThreadPoolExecutor(max_workers=max(1, min(_READ_THREADS, len(boxes)))) as pool:
+        for lo in range(0, len(boxes), _BATCH_ROWS):
+            group = boxes[lo : lo + _BATCH_ROWS]
+            blocks = list(pool.map(lambda b: reader.read(meta, b), group))
+            n = len(group)
+            columns = {
+                "variable": [meta.name] * n,
+                "dims": [list(meta.dims)] * n,
+                "start": [[a for a, _ in b] for b in group],
+                "stop": [[z for _, z in b] for b in group],
+                "coord_start": [
+                    [
+                        None if v is None else _label(v, a)
+                        for v, (a, _) in zip(labels, b)
+                    ]
+                    for b in group
+                ],
+                "coord_stop": [
+                    [
+                        None if v is None else _label(v, z - 1)
+                        for v, (_, z) in zip(labels, b)
+                    ]
+                    for b in group
+                ],
+                "dtype": [x.dtype.str for x in blocks],
+                "shape": [list(x.shape) for x in blocks],
+                "data": [_cells(x) for x in blocks],
+                "fill_value": [fill] * n,
+                "attrs": [attrs] * n,
+            }
+            batch = pa.RecordBatch.from_pydict(columns, schema=_BLOCKS_ARROW)
+            del blocks, columns  # the batch holds its own copy: free the cells first
+            yield batch
+
+
+def _arrow_column(values: np.ndarray, kind: str) -> pa.Array:
+    if kind == "timestamp":
+        values = np.asarray(values)
+        if values.dtype.kind != "M":
+            raise ZarrUnsupported(
+                "a time column holds values that are not times",
+                fix="read with decode=True, or as blocks",
+            )
+        us = values.astype("datetime64[us]")
+        return pa.array(
+            us.astype("int64"),
+            type=_TABLE_ARROW["timestamp"],
+            mask=np.isnat(us),
+        )
+    target = {"double": "float64", "float": "float32", "long": "int64"}[kind]
+    return pa.array(
+        np.asarray(values).astype(target, copy=False), type=_TABLE_ARROW[kind]
+    )
+
+
+def _table_batches(cfg, unit, reader) -> Iterator[pa.RecordBatch]:
+    ref = cfg.arrays[unit.array]
+    schema = pa.schema([(name, _TABLE_ARROW[kind]) for name, kind in cfg.columns])
+    ndim = len(ref.dims)
+    labels = [cfg.coords.get(c) if c else None for c in cfg.dim_coords[unit.array]]
+    boxes = _unit_boxes(cfg, unit)
+    with ThreadPoolExecutor(
+        max_workers=max(1, min(_READ_THREADS, len(cfg.variables)))
+    ) as pool:
+        for box in boxes:
+            shape = tuple(z - a for a, z in box)
+            n = math.prod(shape)
+            values = list(
+                pool.map(
+                    lambda v: reader.read(cfg.arrays[v], box).reshape(-1), cfg.variables
+                )
+            )
+            for lo in range(0, n, _TABLE_BATCH_ROWS):
+                hi = min(n, lo + _TABLE_BATCH_ROWS)
+                cells = np.arange(lo, hi)
+                at = np.unravel_index(cells, shape) if ndim else ()
+                cols = []
+                for (name, kind), d in zip(cfg.columns[:ndim], range(ndim)):
+                    pos = box[d][0] + at[d]
+                    cols.append(
+                        _arrow_column(
+                            pos if labels[d] is None else labels[d][pos], kind
+                        )
+                    )
+                for (name, kind), v in zip(cfg.columns[ndim:], values):
+                    cols.append(_arrow_column(v[lo:hi], kind))
+                yield pa.RecordBatch.from_arrays(cols, schema=schema)
+            del values
+
+
+def _task_function(units_json: list[str], cfg: _TaskConfig):
+    def run(batches):
+        for batch in batches:
+            for i in batch.column("id").to_pylist():
+                yield from _run_unit(cfg, Unit.from_json(units_json[i]))
+
+    return run
+
+
+# --- the public function -------------------------------------------------------------
+
+
+def gbx_zarr_read(
+    spark,
+    source: str,
+    *,
+    source_type: str = "auto",
+    variables=None,
+    sel=None,
+    isel=None,
+    output: str = "blocks",
+    version_as_of=None,
+    timestamp_as_of=None,
+    access: str = "auto",
+    decode: bool = True,
+    virtual_tiles: bool = True,
+    band_dim=None,
+    tile_size=None,
+    use_zarr_fill_value_as_mask: bool | None = None,
+):
+    """Read a Zarr store, or a selection of it, into a DataFrame.
+
+    ``source`` is the manifest table of a managed or registered store, or the path of a
+    plain store; ``source_type="auto"`` takes a string that starts with ``/`` or has a URI
+    scheme for a path. A table read is pinned to one version: the latest, or
+    ``version_as_of`` (a version number or ``"tag:<name>"``) or ``timestamp_as_of``. A plain
+    store has no versions.
+
+    ``variables`` is a name or a list (default: every gridded variable; coordinate arrays and
+    scalars are left out). ``sel`` selects by label and ``isel`` by position: a dict of
+    dimension to a scalar, a slice, or a list. Label slices are inclusive and follow the
+    axis order, a longitude slice may cross the seam, and times may be ISO strings; see
+    ``_select.resolve``. A scalar keeps its dimension, with length one. Variables that lack
+    a selected dimension are read whole along the others.
+
+    ``output="blocks"`` returns ``BLOCKS_SCHEMA``: one row per variable and touched chunk,
+    holding that chunk's selected cells as C-order ``data`` with their ``start``/``stop`` in
+    the array, the first and last label of each dimension, ``dtype``, ``shape``, the
+    ``fill_value`` a never-written cell holds, and the array's attributes as JSON.
+    ``block_to_numpy`` and ``block_to_xarray`` turn a row into an array. With ``decode=True``
+    the CF conventions are applied (scale and offset, missing values to NaN, times to
+    ``datetime64[ns]``) and the attributes they consumed are dropped; ``decode=False``
+    returns the stored values. ``output="table"`` returns one row per selected cell: a
+    column per dimension (``TIMESTAMP`` for times, ``DOUBLE`` for other labels, ``BIGINT``
+    positions when the dimension has no coordinate array) and a column per variable
+    (``FLOAT`` for float32, else ``DOUBLE``). The variables must share their dimensions and
+    shape. Row order is not defined.
+
+    ``use_zarr_fill_value_as_mask`` is xarray's option of that name: ``None`` masks on the
+    array ``fill_value`` for Zarr v2 only, ``False`` keeps an integer v2 array's zeros.
+
+    ``access`` is ``"auto"`` or ``"fuse"`` (files are read through the Volume mount);
+    ``"direct"`` is not available yet. ``virtual_tiles``, ``band_dim`` and ``tile_size``
+    belong to ``output="tiles"``, which arrives with the tile reader.
+
+    An array GeoBrix cannot decode (a string coordinate) does not fail the read: it is left
+    out, its dimension gets no labels, and it is named only when you ask for it, select by
+    its labels, or need its labels for a table.
+    """
+    if output not in _OUTPUTS:
+        raise ValueError(
+            f"output must be one of {_OUTPUTS}, got {output!r}. "
+            "Fix: pass 'blocks' or 'table'."
+        )
+    if access not in _ACCESS:
+        raise ValueError(
+            f"access must be one of {_ACCESS}, got {access!r}. Fix: pass 'auto' or 'fuse'."
+        )
+    if access == "direct":
+        raise ZarrAccessUnavailable(
+            "direct storage access is not available yet: files are read through the "
+            "Volume mount",
+            fix='use access="auto" or "fuse"',
+        )
+    if version_as_of is not None and timestamp_as_of is not None:
+        raise ValueError(
+            "pass version_as_of or timestamp_as_of, not both. "
+            "Fix: name the version one way."
+        )
+    if output != "tiles":
+        for name, value in (("band_dim", band_dim), ("tile_size", tile_size)):
+            if value is not None:
+                raise ValueError(
+                    f"{name} applies to output='tiles', and this read is output={output!r}. "
+                    f"Fix: drop {name}."
+                )
+    _check_mask_flag(use_zarr_fill_value_as_mask)
+    kind = classify_source(source, source_type)
+    if output == "tiles":
+        raise NotImplementedError("tiles output arrives in a later task")
+
+    src = _open_source(spark, source, kind, version_as_of, timestamp_as_of)
+    names = _choose_variables(variables, src)
+    units, cfg = _plan(
+        spark, src, names, sel, isel, output, decode, use_zarr_fill_value_as_mask
+    )
+    if output == "blocks":
+        schema = BLOCKS_SCHEMA
+    else:
+        from pyspark.sql import types as T
+
+        schema = T.StructType(
+            [T.StructField(n, _spark_type(k), True) for n, k in cfg.columns]
+        )
+    if not units:
+        return spark.createDataFrame([], schema)
+    n = len(units)
+    task = _task_function([u.to_json() for u in units], cfg)
+    # a Range scan, not a shuffle: AQE cannot coalesce the tasks away on Serverless
+    return spark.range(n, numPartitions=n).mapInArrow(task, schema)
+
+
+# --- block helpers -------------------------------------------------------------------
+
+
+def _field(row, name):
+    return row[name]
+
+
+def block_to_numpy(row) -> np.ndarray:
+    """The cells of a block row (a ``Row`` or a dict from ``output="blocks"``) as an array.
+
+    The array has the block's ``shape`` and ``dtype``, in C order, and is a writable copy.
+    """
+    data = _field(row, "data")
+    dtype = np.dtype(_field(row, "dtype"))
+    shape = tuple(int(n) for n in _field(row, "shape"))
+    return np.frombuffer(data, dtype=dtype).reshape(shape).copy()
+
+
+def block_to_xarray(row):
+    """A block row as an ``xarray.DataArray``: named for the variable, with the block's
+    dimensions and attributes. A block carries the first and last label of each
+    dimension, not every label, so no coordinates are attached."""
+    import xarray as xr
+
+    return xr.DataArray(
+        block_to_numpy(row),
+        dims=tuple(_field(row, "dims")),
+        name=_field(row, "variable"),
+        attrs=json.loads(_field(row, "attrs") or "{}"),
+    )

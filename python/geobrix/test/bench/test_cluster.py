@@ -380,3 +380,38 @@ def test_notebook_threads_input_tile():
     assert "INPUT_TILE" in src
     assert "input_tile=INPUT_TILE" in src
     assert "'virtual'" in src or '"virtual"' in src
+
+
+def _bng_cell_legs(functions):
+    """Run the BNG grid cell's leg table with stub legs; return the leg names it calls."""
+    src = cl._CELL_GRID_BNG.split("\nif LIGHTWEIGHT:")[0]
+    ns = {
+        "spark": None,
+        "RUN_ID": "r",
+        "SPARK_WARMUP": 0,
+        "SPARK_MEASURED": 1,
+        "FUNCTIONS": functions,
+    }
+    exec(src, ns)  # noqa: S102 -- the cell's own definitions, as the notebook runs them
+
+    class _StubReaders:
+        def __getattr__(self, name):
+            def _leg(*_a, api, **_kw):
+                return (name, api)
+
+            return _leg
+
+    ns["_rd"] = _StubReaders()
+    return [name for name, api in ns["_bng_legs"]("heavyweight")]
+
+
+def test_bng_grid_cell_runs_only_the_bng_legs_named_in_functions():
+    """--functions with bng_* names selects those BNG legs; other names are ignored."""
+    legs = _bng_cell_legs("rst_slope,bng_kringexplode,bng_tessellateexplode")
+    assert legs == ["run_bng_kringexplode", "run_bng_tessellateexplode"]
+
+
+def test_bng_grid_cell_runs_every_leg_without_bng_functions():
+    legs = _bng_cell_legs("rst_slope,rst_ndvi")
+    assert len(legs) == 23 and len(set(legs)) == 23
+    assert legs[0] == "run_bng_pointascell" and legs[-1] == "run_bng_tessellateexplode"

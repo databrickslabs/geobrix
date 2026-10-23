@@ -2004,7 +2004,9 @@ _CELL_GRID_BNG = """# BNG grid benchmark: light pygx vs heavy gridx.bng, exact-o
 # (scalar STRING cell-in -> ARRAY<STRING>) / cellunion_agg (grouped aggregate over
 # chip structs). Both tiers expose the SAME gbx_bng_* SQL names, so light is
 # collected BEFORE heavy re-registers (the later registration overwrites the UDF)
-# -- the same ordering trick as the quadbin parity cell. Inputs are EPSG:27700
+# -- the same ordering trick as the quadbin parity cell. The *explode names do not
+# overwrite each other (light table functions vs heavy generators); each tier's
+# explode leg uses the SQL form that reaches it. Inputs are EPSG:27700
 # (BNG eastings/northings, not WGS84); resolutions are string keys ("1km"),
 # never metres-as-Int (the BNG resolution convention).
 from databricks.labs.gbx.bench import readers as _rd
@@ -2018,86 +2020,49 @@ _BNG_CELL_RES = "1km"   # scalar cell / pair / eastnorth resolution
 _BNG_KRING_K = 1        # kring / kloop radius
 _BNG_KLOOP_K = 1        # kloop radius
 _BNG_GEOMK_K = 1        # geomkring / geomkloop radius
-_BNG_N_LEGS = 23        # legs per tier (keep in sync with the appends below)
+_BNG_N_LEGS = 23        # legs per tier (keep in sync with the _leg calls below)
+# --functions selects BNG legs by name (e.g. bng_kringexplode); names that are not
+# bng_* are ignored here, and with no bng_* name every leg runs.
+_BNG_SEL = frozenset(x for x in FUNCTIONS.split(",") if x.startswith("bng_"))
 # Order: 5 originals (pointascell, polyfill, tessellate, kring, cellunion_agg)
 # then the 18 new legs: scalars, arrays, chip-struct, intersection_agg, explodes.
 def _bng_legs(_api):
-    # Run all 23 BNG legs for one tier, in a fixed order, returning the rows.
+    # Run the selected BNG legs for one tier, in a fixed order, returning the rows.
     _out = []
-    _out.append(_rd.run_bng_pointascell(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
-    _out.append(_rd.run_bng_polyfill(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
-    _out.append(_rd.run_bng_tessellate(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
-    _out.append(_rd.run_bng_kring(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KRING_K, where="cluster"))
-    _out.append(_rd.run_bng_cellunion_agg(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_AGG_RES, where="cluster"))
+    def _leg(_fn, **_kw):
+        if not _BNG_SEL or _fn in _BNG_SEL:
+            _out.append(getattr(_rd, "run_" + _fn)(
+                spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
+                n_rows=_BNG_N_ROWS, where="cluster", **_kw))
+    _leg("bng_pointascell", res=_BNG_GEOM_RES)
+    _leg("bng_polyfill", res=_BNG_GEOM_RES)
+    _leg("bng_tessellate", res=_BNG_GEOM_RES)
+    _leg("bng_kring", res=_BNG_CELL_RES, k=_BNG_KRING_K)
+    _leg("bng_cellunion_agg", res=_BNG_AGG_RES)
     # --- scalars (cell-in / pair / eastnorth) ---
-    _out.append(_rd.run_bng_aswkb(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_aswkt(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_centroid(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_cellarea(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_distance(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_euclideandistance(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_eastnorthasbng(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
+    _leg("bng_aswkb", res=_BNG_CELL_RES)
+    _leg("bng_aswkt", res=_BNG_CELL_RES)
+    _leg("bng_centroid", res=_BNG_CELL_RES)
+    _leg("bng_cellarea", res=_BNG_CELL_RES)
+    _leg("bng_distance", res=_BNG_CELL_RES)
+    _leg("bng_euclideandistance", res=_BNG_CELL_RES)
+    _leg("bng_eastnorthasbng", res=_BNG_CELL_RES)
     # --- array-returning (kloop, geomk*) ---
-    _out.append(_rd.run_bng_kloop(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KLOOP_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkring(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkloop(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
+    _leg("bng_kloop", res=_BNG_CELL_RES, k=_BNG_KLOOP_K)
+    _leg("bng_geomkring", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
+    _leg("bng_geomkloop", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
     # --- chip-struct scalars ---
-    _out.append(_rd.run_bng_cellintersection(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
-    _out.append(_rd.run_bng_cellunion(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, where="cluster"))
+    _leg("bng_cellintersection", res=_BNG_CELL_RES)
+    _leg("bng_cellunion", res=_BNG_CELL_RES)
     # --- grouped intersection aggregate ---
-    _out.append(_rd.run_bng_cellintersection_agg(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_AGG_RES, where="cluster"))
-    # --- explode UDTFs (LATERAL SQL, tier-agnostic job) ---
-    _out.append(_rd.run_bng_kringexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KRING_K, where="cluster"))
-    _out.append(_rd.run_bng_kloopexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_CELL_RES, k=_BNG_KLOOP_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkringexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
-    _out.append(_rd.run_bng_geomkloopexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, k=_BNG_GEOMK_K, where="cluster"))
-    _out.append(_rd.run_bng_tessellateexplode(
-        spark, RUN_ID, SPARK_WARMUP, SPARK_MEASURED, api=_api,
-        n_rows=_BNG_N_ROWS, res=_BNG_GEOM_RES, where="cluster"))
+    _leg("bng_cellintersection_agg", res=_BNG_AGG_RES)
+    # --- explodes: light LATERAL table functions, heavy select-list generators; each
+    # leg checks its query's plan reaches its own tier before timing (readers). ---
+    _leg("bng_kringexplode", res=_BNG_CELL_RES, k=_BNG_KRING_K)
+    _leg("bng_kloopexplode", res=_BNG_CELL_RES, k=_BNG_KLOOP_K)
+    _leg("bng_geomkringexplode", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
+    _leg("bng_geomkloopexplode", res=_BNG_GEOM_RES, k=_BNG_GEOMK_K)
+    _leg("bng_tessellateexplode", res=_BNG_GEOM_RES)
     return _out
 if LIGHTWEIGHT:
     for _r in _bng_legs("lightweight"):

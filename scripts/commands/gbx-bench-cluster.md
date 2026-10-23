@@ -6,11 +6,13 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 
 **Usage:** `bash scripts/commands/gbx-bench-cluster.sh [options]`
 
-**Options:** `--cluster-id`, `--existing-cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--grouped-file`, `--grouped-file-only`, `--multiwindow-corpus <path>`, `--file-matrix`, `--file-matrix-only`, `--gpkg-chunksize`, `--gpkg-chunksize-only`, `--layout-sweep`, `--layout-sweep-only`, `--layout-scan`, `--layout-scan-only`, `--file-filespace <id>`, `--gpkg-corpus <path>`, `--max-partition-bytes <v>`, `--no-wait`, `--help`.
+**Options:** `--cluster-id`, `--existing-cluster-id`, `--run-id`, `--functions`, `--set core|full`, `--grid-bng-only`, `--benchmark-grid-bng`, `--spark-warmup`, `--spark-measured`, `--modes`, `--row-counts`, `--warmup`, `--measured`, `--heavyweight-only`, `--lightweight-only`, `--input-tile materialized|virtual`, `--grouped-file`, `--grouped-file-only`, `--multiwindow-corpus <path>`, `--file-matrix`, `--file-matrix-only`, `--gpkg-chunksize`, `--gpkg-chunksize-only`, `--layout-sweep`, `--layout-sweep-only`, `--layout-scan`, `--layout-scan-only`, `--file-filespace <id>`, `--gpkg-corpus <path>`, `--max-partition-bytes <v>`, `--no-wait`, `--help`.
 
 `--existing-cluster-id <id>` attaches the run to a warm all-purpose cluster, skipping the 4-8 min job-cluster startup. Passed through to the Python launcher; equivalent to setting `CLUSTER_ID` in the env file. (`--cluster-id` in the shell command sets the same env var for back-compat.)
 
 `--set` chooses the tier (`core` default, or `full`). An explicit `--functions` overrides `--set`.
+
+`--grid-bng-only` runs only the British National Grid benchmark (both tiers, then the exact-output parity gates); `--benchmark-grid-bng` adds it to a function run. `--functions` with `bng_*` names (e.g. `bng_kringexplode,bng_tessellateexplode`) runs just those BNG legs; names that are not `bng_*` do not filter it. Each `*explode` leg times its own tier — the lightweight table function through `FROM t, LATERAL f(...)`, the heavyweight generator in the select list — and checks the query plan before timing: a leg whose query reaches the other tier's implementation stops the run with `TierResolutionError` instead of recording a row.
 
 `--input-tile` selects the input tile mode for the light spark-path leg: `materialized` (bytes column, default — matches all prior bench runs) or `virtual` (path+window tile, exercises the virtual-tile reader path).
 
@@ -37,4 +39,5 @@ Submit the heavy-vs-light benchmark as a one-off notebook job to a **provisioned
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id clfull --set full`
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0202-arm --lightweight-only` (ARM)
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id virt1 --input-tile virtual`
+- `bash scripts/commands/gbx-bench-cluster.sh --existing-cluster-id 0101-x --run-id bngx1 --grid-bng-only --functions bng_kringexplode,bng_kloopexplode --spark-warmup 1 --spark-measured 5`
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id gfile1 --grouped-file-only --multiwindow-corpus /Volumes/geospatial_docs/geobrix/sample-data/bench-corpus-cog-multiwindow`

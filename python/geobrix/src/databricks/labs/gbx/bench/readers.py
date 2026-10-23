@@ -4735,16 +4735,19 @@ def run_quadbin_cellunion(
 
 
 def _register_bng(spark, api: str) -> None:
-    """Register exactly one BNG tier.
+    """Register one BNG tier.
 
     light  -> ``databricks.labs.gbx.pygx`` (gx.register: spark.udf/udtf only).
-    heavy  -> ``databricks.labs.gbx.gridx.bng`` (JVM Scala UDFs).
+    heavy  -> ``databricks.labs.gbx.gridx.bng`` (JVM expressions).
 
-    Both tiers expose the SAME ``gbx_bng_*`` SQL names, so registering one
-    overwrites the other in the session catalog.  Each ``run_bng_*`` call
-    therefore registers a single tier; the light-vs-heavy parity gate (which
-    must collect light BEFORE re-registering heavy) lives in the cluster cell,
-    not here.
+    Both tiers expose the SAME ``gbx_bng_*`` SQL names. The scalar, array and
+    aggregate functions of both tiers live in Spark's ``functionRegistry``, so the
+    later registration replaces the earlier one there, and each ``run_bng_*`` leg
+    registers its own tier first. The five ``*explode`` functions do NOT replace each
+    other: light registers table functions (``tableFunctionRegistry``) and heavy
+    registers generators (``functionRegistry``), so both stay registered and the SQL
+    form picks the tier (see :func:`_bng_explode_sql`). The light-vs-heavy parity gate
+    (which collects light BEFORE re-registering heavy) lives in the cluster cell.
     """
     if api == "lightweight":
         from databricks.labs.gbx.pygx import functions as gx
@@ -6485,31 +6488,72 @@ def run_bng_cellintersection_agg(
         )
 
 
-def run_bng_kringexplode(
+class TierResolutionError(AssertionError):
+    """A bench leg's query reaches the other tier's implementation.
+
+    Raised by the leg (never recorded as an error row) so a timing cannot be stored
+    under a tier that did not run it.
+    """
+
+
+def _bng_explode_sql(api: str, view: str, call: str, limit: bool = False) -> str:
+    """The timed query of a BNG explode leg, in the form that reaches ``api``'s implementation.
+
+    Both tiers register the same ``gbx_bng_*explode`` names, in different registries:
+    the lightweight tier registers Python table functions (``tableFunctionRegistry``),
+    the heavyweight tier Catalyst generators (``functionRegistry``). Registering one
+    does not replace the other. ``FROM v, LATERAL f(...)`` resolves table functions
+    only, so it reaches the lightweight UDTF even after the heavyweight tier registers;
+    a generator in the select list resolves through ``functionRegistry`` only, so it
+    reaches the heavyweight generator. Both forms yield one row per output cell.
+    """
+    if api == "lightweight":
+        sql = f"SELECT t.cellid FROM {view}, LATERAL {call} t"
+    else:
+        sql = f"SELECT {call} FROM {view}"
+    return f"{sql} LIMIT 1" if limit else sql
+
+
+def _explode_impl(spark, sql: str) -> str:
+    """Which tier's explode implementation ``sql`` runs, read from its plan.
+
+    A lightweight table function plans as a Python UDTF (``BatchEvalPythonUDTF`` or
+    ``ArrowEvalPythonUDTF``); a heavyweight generator plans as a ``Generate`` with no
+    Python UDTF. ``EXPLAIN`` is plain SQL, so this also works over Spark Connect.
+    Returns ``"lightweight"``, ``"heavyweight"`` or ``"unknown"``.
+    """
+    plan = str(spark.sql(f"EXPLAIN EXTENDED {sql}").collect()[0][0])
+    if "PythonUDTF" in plan:
+        return "lightweight"
+    if "Generate" in plan:
+        return "heavyweight"
+    return "unknown"
+
+
+def _run_bng_explode(
     spark,
     run_id: str,
     warmup: int,
     measured: int,
     *,
     api: str,
-    n_rows: int = 1000,
-    res="1km",
-    k: int = 1,
-    where: str = "cluster",
+    fn: str,
+    view: str,
+    build,
+    call: str,
+    noun: str,
+    detail: str,
+    where: str,
 ) -> "ResultRow":
-    """Time gbx_bng_kringexplode (UDTF: STRING cell -> rows of cellid) over cells.
+    """Time one BNG explode generator for ``api``; shared body of the five explode legs.
 
-    A table-valued generator: timed via a SQL LATERAL query (NOT the Column API;
-    the Python wrapper raises NotImplementedError). Both tiers register the SAME
-    ``gbx_bng_kringexplode`` SQL name (light a pygx UDTF, heavy a JVM
-    CollectionGenerator), so the LATERAL ``_job`` is tier-agnostic. Records
-    ``rows`` = number of input cells. Returns one ResultRow (mode="spark-path",
-    category="grid"). Parity (cluster cell): exploded cellid set == kring's set.
+    ``build()`` returns the ``(rows, schema)`` input corpus, registered as ``view``;
+    ``call`` is the SQL call over that view's columns. Before timing, the leg reads
+    the plan of its query and raises :class:`TierResolutionError` unless it runs
+    ``api``'s implementation. Records ``rows`` = number of input rows. Returns one
+    ResultRow (mode="spark-path", category="grid").
     """
-    from databricks.labs.gbx.bench.corpus_vector import generate_bng_cells
-
     env = capture_env(where)
-    fn = "bng_kringexplode"
     cat = "grid"
     try:
         _register_bng(spark, api)
@@ -6527,10 +6571,10 @@ def run_bng_kringexplode(
         )
 
     try:
-        data, schema = generate_bng_cells(n_rows, res=res)
+        data, schema = build()
         df = spark.createDataFrame(data, schema=schema).cache()
         n = int(df.count())
-        df.createOrReplaceTempView("_bng_cell_bench_v")
+        df.createOrReplaceTempView(view)
     except Exception as e:  # noqa: BLE001
         return _tin_result_row(
             run_id=run_id,
@@ -6544,20 +6588,35 @@ def run_bng_kringexplode(
             warmup=warmup,
         )
 
+    sql = _bng_explode_sql(api, view, call)
+    try:
+        resolved = _explode_impl(spark, sql)
+    except Exception as e:  # noqa: BLE001 -- e.g. the function is not registered
+        return _tin_result_row(
+            run_id=run_id,
+            api=api,
+            fn=fn,
+            category=cat,
+            env=env,
+            rows=n,
+            status="error",
+            note=str(e),
+            warmup=warmup,
+        )
+    if resolved != api:
+        raise TierResolutionError(
+            f"{fn}: the {api} leg's query runs the {resolved} implementation; "
+            f"refusing to time it. Query: {sql}"
+        )
+    form = "LATERAL table function" if api == "lightweight" else "select-list generator"
+
     def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kringexplode(cell, {k}) t"
-        ).count()
+        return spark.sql(sql).count()
 
     try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kringexplode(cell, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_kringexplode produced no rows")
+        # Untimed validation: confirm the generator yields a row.
+        if not spark.sql(_bng_explode_sql(api, view, call, limit=True)).head(1):
+            raise RuntimeError(f"{fn} produced no rows")
         stats = time_iters(_job, warmup, measured)
         return _tin_result_row(
             run_id=run_id,
@@ -6567,7 +6626,7 @@ def run_bng_kringexplode(
             env=env,
             rows=n,
             status="ok",
-            note=f"bng_kringexplode {api} exploded {n} cells (k={k})",
+            note=f"{fn} {api} exploded {n} {noun}{detail} via {form}",
             stats=stats,
         )
     except Exception as e:  # noqa: BLE001
@@ -6582,6 +6641,42 @@ def run_bng_kringexplode(
             note=str(e),
             warmup=warmup,
         )
+
+
+def run_bng_kringexplode(
+    spark,
+    run_id: str,
+    warmup: int,
+    measured: int,
+    *,
+    api: str,
+    n_rows: int = 1000,
+    res="1km",
+    k: int = 1,
+    where: str = "cluster",
+) -> "ResultRow":
+    """Time gbx_bng_kringexplode (STRING cell -> rows of cellid) over cells.
+
+    A generator, timed in SQL (the light Python wrapper raises NotImplementedError):
+    light as a ``LATERAL`` table function, heavy as a select-list generator (see
+    :func:`_bng_explode_sql`). Parity (cluster cell): exploded cellid set == kring's set.
+    """
+    from databricks.labs.gbx.bench.corpus_vector import generate_bng_cells
+
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_kringexplode",
+        view="_bng_cell_bench_v",
+        build=lambda: generate_bng_cells(n_rows, res=res),
+        call=f"gbx_bng_kringexplode(cell, {k})",
+        noun="cells",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_kloopexplode(
@@ -6596,89 +6691,27 @@ def run_bng_kloopexplode(
     k: int = 1,
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_kloopexplode (UDTF: STRING cell -> rows of cellid) over cells.
+    """Time gbx_bng_kloopexplode (STRING cell -> rows of cellid) over cells.
 
-    Mirror of kringexplode (k-loop / hollow ring). Timed via SQL LATERAL; both
-    tiers register the SAME ``gbx_bng_kloopexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input cells. Parity (cluster cell): exploded
-    cellid set == kloop's set.
+    Mirror of kringexplode (k-loop / hollow ring), in each tier's SQL form. Parity
+    (cluster cell): exploded cellid set == kloop's set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_cells
 
-    env = capture_env(where)
-    fn = "bng_kloopexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_cells(n_rows, res=res)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_cell_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kloopexplode(cell, {k}) t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_cell_bench_v, "
-            f"LATERAL gbx_bng_kloopexplode(cell, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_kloopexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_kloopexplode {api} exploded {n} cells (k={k})",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_kloopexplode",
+        view="_bng_cell_bench_v",
+        build=lambda: generate_bng_cells(n_rows, res=res),
+        call=f"gbx_bng_kloopexplode(cell, {k})",
+        noun="cells",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_geomkringexplode(
@@ -6693,95 +6726,30 @@ def run_bng_geomkringexplode(
     k: int = 1,
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_geomkringexplode (UDTF: geom -> rows of cellid) over polygons.
+    """Time gbx_bng_geomkringexplode (geom -> rows of cellid) over WKT polygons.
 
-    A table-valued generator: timed via SQL LATERAL over WKT polygons. Both tiers
-    register the SAME ``gbx_bng_geomkringexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input polygons. Parity (cluster cell): exploded
-    cellid set == geomkring's set.
+    In each tier's SQL form (see :func:`_bng_explode_sql`). Records ``rows`` = number
+    of input polygons. Parity (cluster cell): exploded cellid set == geomkring's set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_polygons
-
-    env = capture_env(where)
-    fn = "bng_geomkringexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_polygons(n_rows)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    # Align resolution to the int index for parity with the canonical
-    # function-info form (heavy accepts Int or String here).
     from databricks.labs.gbx.pygx import _bng
 
+    # Resolution as the int index, the canonical function-info form (heavy accepts both).
     res_i = _bng.get_resolution(res)
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkringexplode(geom, {res_i}, {k}) t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkringexplode(geom, {res_i}, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_geomkringexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_geomkringexplode {api} exploded {n} polygons (k={k})",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_geomkringexplode",
+        view="_bng_bench_v",
+        build=lambda: generate_bng_polygons(n_rows),
+        call=f"gbx_bng_geomkringexplode(geom, {res_i}, {k})",
+        noun="polygons",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_geomkloopexplode(
@@ -6796,95 +6764,29 @@ def run_bng_geomkloopexplode(
     k: int = 1,
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_geomkloopexplode (UDTF: geom -> rows of cellid) over polygons.
+    """Time gbx_bng_geomkloopexplode (geom -> rows of cellid) over WKT polygons.
 
-    Mirror of geomkringexplode (k-loop). Timed via SQL LATERAL; both tiers
-    register the SAME ``gbx_bng_geomkloopexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input polygons. Parity (cluster cell): exploded
-    cellid set == geomkloop's set.
+    Mirror of geomkringexplode (k-loop), in each tier's SQL form. Parity (cluster
+    cell): exploded cellid set == geomkloop's set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_polygons
-
-    env = capture_env(where)
-    fn = "bng_geomkloopexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_polygons(n_rows)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    # Align resolution to the int index for parity with the canonical
-    # function-info form (heavy accepts Int or String here).
     from databricks.labs.gbx.pygx import _bng
 
     res_i = _bng.get_resolution(res)
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkloopexplode(geom, {res_i}, {k}) t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_geomkloopexplode(geom, {res_i}, {k}) t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_geomkloopexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_geomkloopexplode {api} exploded {n} polygons (k={k})",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_geomkloopexplode",
+        view="_bng_bench_v",
+        build=lambda: generate_bng_polygons(n_rows),
+        call=f"gbx_bng_geomkloopexplode(geom, {res_i}, {k})",
+        noun="polygons",
+        detail=f" (k={k})",
+        where=where,
+    )
 
 
 def run_bng_tessellateexplode(
@@ -6898,89 +6800,28 @@ def run_bng_tessellateexplode(
     res="1km",
     where: str = "cluster",
 ) -> "ResultRow":
-    """Time gbx_bng_tessellateexplode (UDTF: geom -> rows of (cellid, core, chip)).
+    """Time gbx_bng_tessellateexplode (geom -> rows of (cellid, core, chip)).
 
-    A table-valued generator: timed via SQL LATERAL over WKT polygons. Both tiers
-    register the SAME ``gbx_bng_tessellateexplode`` SQL name (tier-agnostic job).
-    Records ``rows`` = number of input polygons. Parity (cluster cell): exploded
-    cellid set == tessellate's chip cellid set.
+    In each tier's SQL form (see :func:`_bng_explode_sql`), with the two-argument
+    call both tiers accept. Records ``rows`` = number of input polygons. Parity
+    (cluster cell): exploded cellid set == tessellate's chip cellid set.
     """
     from databricks.labs.gbx.bench.corpus_vector import generate_bng_polygons
 
-    env = capture_env(where)
-    fn = "bng_tessellateexplode"
-    cat = "grid"
-    try:
-        _register_bng(spark, api)
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"register error: {e}",
-            warmup=warmup,
-        )
-
-    try:
-        data, schema = generate_bng_polygons(n_rows)
-        df = spark.createDataFrame(data, schema=schema).cache()
-        n = int(df.count())
-        df.createOrReplaceTempView("_bng_bench_v")
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=0,
-            status="error",
-            note=f"dataframe build error: {e}",
-            warmup=warmup,
-        )
-
-    def _job():
-        return spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_tessellateexplode(geom, '{res}') t"
-        ).count()
-
-    try:
-        # Untimed validation: confirm the LATERAL generator yields a row.
-        _val = spark.sql(
-            f"SELECT t.cellid FROM _bng_bench_v, "
-            f"LATERAL gbx_bng_tessellateexplode(geom, '{res}') t LIMIT 1"
-        ).head(1)
-        if not _val:
-            raise RuntimeError("bng_tessellateexplode produced no rows")
-        stats = time_iters(_job, warmup, measured)
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="ok",
-            note=f"bng_tessellateexplode {api} exploded {n} polygons",
-            stats=stats,
-        )
-    except Exception as e:  # noqa: BLE001
-        return _tin_result_row(
-            run_id=run_id,
-            api=api,
-            fn=fn,
-            category=cat,
-            env=env,
-            rows=n,
-            status="error",
-            note=str(e),
-            warmup=warmup,
-        )
+    return _run_bng_explode(
+        spark,
+        run_id,
+        warmup,
+        measured,
+        api=api,
+        fn="bng_tessellateexplode",
+        view="_bng_bench_v",
+        build=lambda: generate_bng_polygons(n_rows),
+        call=f"gbx_bng_tessellateexplode(geom, '{res}')",
+        noun="polygons",
+        detail="",
+        where=where,
+    )
 
 
 def _make_synthetic_geotiff(

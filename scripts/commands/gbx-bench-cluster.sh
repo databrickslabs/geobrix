@@ -17,12 +17,15 @@ Usage: bash scripts/commands/gbx-bench-cluster.sh [options]
 Options:
   --cluster-id <id>     Target cluster (overrides CLUSTER_ID from config)
   --run-id <id>         Run id (default cluster)
-  --functions <csv>     rst_* names (overrides --set)
+  --functions <csv>     rst_* names (overrides --set); with --grid-bng-only, bng_* names
+                        pick which BNG legs run (no bng_* name = all legs)
   --set <core|full>     Selection tier: core (fast default) or full (default core)
   --modes <m>           pure-core | spark-path | both (default both)
   --row-counts <csv>    Spark-path row ladder (default 10,100,1000,10000)
-  --warmup <n>          Warmup iters (default 2)
-  --measured <n>        Measured iters (default 5)
+  --warmup <n>          Pure-core warmup iters (default 1)
+  --measured <n>        Pure-core measured iters (default 3)
+  --spark-warmup <n>    Spark-path warmup iters (default 1)
+  --spark-measured <n>  Spark-path measured iters (default 1)
   --heavyweight-only    Skip the lightweight leg
   --lightweight-only    Skip the heavyweight leg (use on ARM clusters)
   --benchmark-readers   Also run reader benchmarks (raster_gbx vs gdal)
@@ -37,6 +40,9 @@ Options:
   --lidar-only          Run ONLY the LiDAR reader+writer benchmark (no fn benchmarks)
   --benchmark-exif      Also run EXIF reader benchmark (light exif_gbx only)
   --exif-only           Run ONLY the EXIF reader benchmark (no fn benchmarks)
+  --benchmark-grid-bng  Also run the BNG grid benchmark (light pygx vs heavy gridx.bng)
+  --grid-bng-only       Run ONLY the BNG grid benchmark; each explode leg checks its query
+                        reaches its own tier before timing
   --input-tile <mode>   Input tile for the light spark-path leg: materialized (default) or virtual
   --disable-file        Set GBX_DISABLE_FILE=1 in the notebook (FILE-off A/B leg; use with --input-tile virtual)
   --grouped-file        Also run the grouped FILE-amortization benchmark (rst_clip_grouped +

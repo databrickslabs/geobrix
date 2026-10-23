@@ -32,10 +32,16 @@ lightweight vector readers and writers.
   [Writers Overview](./overview)).
 - **Output path** — must end in `.gdb` (or `.gdb.zip` with `zip=true`).
 - **Esri field limits** — Esri field-name and type limits apply, and a name that is an SQL
-  reserved word (for example `by`) is renamed with a trailing underscore. A **long**
-  (64-bit integer) column and a **date** column are written as 64-bit integer and date-only
-  fields, which Esri software reads from ArcGIS Pro 3.2 onward; GDAL-based readers (GeoBrix,
-  QGIS, GeoPandas) read them on any version.
+  reserved word (for example `by`) is renamed with a trailing underscore.
+- **ArcGIS version** — the layer targets **ArcGIS Pro 3.2 or later**. **Long** (64-bit integer),
+  **date** and **timestamp** columns keep their exact types (64-bit integer, date-only and
+  timestamp-with-offset fields) instead of being rounded to a double or widened to a date-time.
+  Older Esri clients may not open the layer. GDAL-based readers (GeoBrix, QGIS, GeoPandas)
+  read it whatever the ArcGIS version.
+- **Reserved column names** — the geometry field of a File Geodatabase layer is `SHAPE`, so a
+  column named `shape` in any letter case is refused with an error: rename it first (for
+  example `shape_attr`). A column named `OBJECTID` is not written as an attribute: GDAL uses an
+  integer one as the feature ids, so rename it to keep its values as ordinary data.
 - **Input geometry** — provide geometry as **WKB** (binary) or **WKT** (text), with the CRS in
   the companion `*_srid` / `*_srid_proj` columns. **EWKB**, **EWKT**, and GeoJSON-encoded
   geometry are **not** accepted. Writing from a Databricks `GEOMETRY` / `GEOGRAPHY` column?

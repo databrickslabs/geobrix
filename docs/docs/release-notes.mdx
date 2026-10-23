@@ -298,10 +298,13 @@ formats.
   It now encodes the `.gdb` through pyogrio's bundled OpenFileGDB driver, so FileGDB writing
   is lightweight and runs on Serverless, standard and dedicated clusters, on x86 and ARM, with
   no extra install. The output layout, `zip=true`, the shared schema and the options are
-  unchanged, and the driver still assembles the file in one pass with bounded memory. Long
-  (64-bit integer) and date columns are stored as 64-bit integer and date-only fields, which
-  Esri software reads from ArcGIS Pro 3.2 onward; GDAL-based readers read them on any version.
-  See [GeoDatabase Writer](./writers/filegdb).
+  unchanged, and the driver still assembles the file in one pass with bounded memory. The layer
+  targets ArcGIS Pro 3.2 or later: long (64-bit integer), date and timestamp columns keep their
+  exact types (64-bit integer, date-only and timestamp-with-offset fields) instead of being
+  rounded to a double or widened to a date-time, and older Esri clients may not open the layer;
+  GDAL-based readers read it whatever the ArcGIS version. A column named `shape` (any letter
+  case) is refused with a clear error, because the layer's geometry field is `SHAPE`. See
+  [GeoDatabase Writer](./writers/filegdb).
 - **Timestamp columns work in the lightweight vector readers and writers on Serverless.** A
   layer with a date-time field (or a DataFrame with a timestamp column) failed to read or write
   on Serverless compute with `AssertionError`, because those workers have no session time zone

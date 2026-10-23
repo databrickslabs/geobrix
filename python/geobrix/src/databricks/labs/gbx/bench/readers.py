@@ -19,7 +19,12 @@ from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from databricks.labs.gbx.bench.results import ResultRow
-from databricks.labs.gbx.bench.runner import capture_env, peak_rss_mb, time_iters
+from databricks.labs.gbx.bench.runner import (
+    WorkerRssSampler,
+    capture_env,
+    peak_rss_mb,
+    time_iters,
+)
 
 # --- tier resolution -----------------------------------------------------------------
 # Both tiers register the same gbx_* SQL names, and a query times whichever
@@ -1033,7 +1038,11 @@ def run_vector_write(
     non-null geometry count equals the source count.
 
     Returns a single ResultRow with category="writer", mode="spark-path",
-    fn="write_<fmt>", api="lightweight".  On any error returns status="error"
+    fn="write_<fmt>", api="lightweight".  The commit runs in a Python worker on the
+    driver node, which this process's own peak never sees, so ``peak_rss_mb`` is the
+    summed peak RSS of the driver's ``pyspark.daemon`` workers sampled during the writes
+    (this process's peak where none could be sampled); ``note`` states it with its
+    anonymous part.  On any error returns status="error"
     with the exception in ``note`` (does not raise).
     """
     from databricks.labs.gbx.ds.register import register
@@ -1100,8 +1109,12 @@ def run_vector_write(
         _iter_idx[0] += 1
         df.write.format(fmt).mode("overwrite").save(target)
 
+    sampler = WorkerRssSampler()
     try:
-        stats = time_iters(_job, warmup, measured)
+        # The two-phase writer's commit runs in a Python worker on the driver node: sample
+        # its RSS (this process's peak_rss_mb never sees it) while the writes run.
+        with sampler:
+            stats = time_iters(_job, warmup, measured)
         ms = stats["iter_median_ms"]
 
         # Read-back parity: last written target (index measured-1, clamped to len).
@@ -1204,9 +1217,13 @@ def run_vector_write(
             per_tile_avg_ms=(ms / n) if (ms and n) else 0.0,
             throughput_mpix_s=0.0,
             throughput_rows_s=(n / (ms / 1000.0)) if (ms and n) else 0.0,
-            peak_rss_mb=peak_rss_mb(),
+            peak_rss_mb=sampler.peak_mb or peak_rss_mb(),
             status="ok",
-            note=f"{fmt} write+readback of {n} features",
+            note=(
+                f"{fmt} write+readback of {n} features; "
+                f"driver python-worker peak RSS {sampler.peak_mb:.0f} MB "
+                f"({sampler.peak_anon_mb:.0f} MB anonymous)"
+            ),
             output_fingerprint="",
             **env,
         )

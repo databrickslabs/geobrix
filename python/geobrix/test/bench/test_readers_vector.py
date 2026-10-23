@@ -100,5 +100,8 @@ def test_run_vector_write_from_table(spark, tmp_path):
         assert r.rows > 0
         # rows must equal the source table size.
         assert r.rows == n_rows, f"rows mismatch: {r.rows} != {n_rows}"
+        # The driver-side Python workers run the commit: their peak RSS is reported.
+        assert "driver python-worker peak RSS" in r.note, r.note
+        assert "MB anonymous" in r.note, r.note
     finally:
         spark.sql(f"DROP TABLE IF EXISTS {src_tbl}")

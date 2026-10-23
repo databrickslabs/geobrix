@@ -985,3 +985,28 @@ def test_spark_virtual_leg_smoke(spark, tmp_path):
     assert disp.get("rst_avg") == "materialized"
     assert disp.get("rst_fromfile") == "deferred"  # creation micro-leg
     assert all(r.per_tile_avg_s >= 0 for r in ok)
+
+
+def test_worker_rss_sampler_reports_the_peak_of_matching_processes():
+    """The sampler sums the RSS of processes whose command line contains the marker and
+    keeps the peak, so a short-lived allocation inside a Python worker is still seen."""
+    import subprocess
+    import sys
+
+    marker = "gbx-rss-sampler-marker"
+    code = "import sys, time; b = bytearray(160 * 1024 * 1024); b[::4096] = b'x' * len(b[::4096]); time.sleep(2.5)"
+    proc = subprocess.Popen([sys.executable, "-c", code, marker])
+    try:
+        with rn.WorkerRssSampler(match=marker, interval_s=0.05) as seen:
+            time.sleep(1.8)
+        none = rn.WorkerRssSampler(match="gbx-no-such-process-marker")
+        with none:
+            time.sleep(0.2)
+    finally:
+        proc.kill()
+        proc.wait()
+    assert seen.peak_mb >= 100, seen.peak_mb
+    assert (
+        seen.peak_anon_mb >= 100
+    ), seen.peak_anon_mb  # the bytearray is heap, not a file
+    assert none.peak_mb == 0.0 and none.peak_anon_mb == 0.0

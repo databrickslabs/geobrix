@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import dataclasses as _dc
+import os
 import platform
 import statistics
+import threading
 import time
 from contextlib import ExitStack
 from pathlib import Path
@@ -116,6 +118,71 @@ def peak_rss_mb() -> float:
         return (kb / (1024 * 1024)) if platform.system() == "Darwin" else (kb / 1024)
     except Exception:  # noqa: BLE001
         return 0.0
+
+
+class WorkerRssSampler:
+    """Peak summed memory (MB) of the processes whose command line contains ``match``.
+
+    ``peak_rss_mb`` is the RSS of this (notebook) process; the commit of a two-phase
+    vector writer runs in a separate Python worker on the driver node
+    (``python -m pyspark.daemon``), which that number never sees. This polls
+    ``/proc/<pid>/status`` while the ``with`` block runs, so a bench row can report the
+    memory the commit really used: ``peak_mb`` is the summed resident set (it counts the
+    pages of memory-mapped files the process has touched), ``peak_anon_mb`` the summed
+    anonymous part (heap and buffers, the part that does not shrink under memory pressure).
+    Linux only: elsewhere both stay 0.0.
+    """
+
+    def __init__(self, match: str = "pyspark.daemon", interval_s: float = 0.25):
+        self._match = match.encode()
+        self._interval = interval_s
+        self._stop = threading.Event()
+        self._thread = None
+        self.peak_mb = 0.0
+        self.peak_anon_mb = 0.0
+
+    def _sample_mb(self):
+        """(resident MB, anonymous MB) summed over the matching processes now."""
+        rss_kb = anon_kb = 0
+        try:
+            pids = [p for p in os.listdir("/proc") if p.isdigit()]
+        except OSError:
+            return 0.0, 0.0
+        for pid in pids:
+            try:
+                with open(f"/proc/{pid}/cmdline", "rb") as fh:
+                    if self._match not in fh.read():
+                        continue
+                with open(f"/proc/{pid}/status", encoding="utf-8") as fh:
+                    for line in fh:
+                        if line.startswith("VmRSS:"):
+                            rss_kb += int(line.split()[1])
+                        elif line.startswith("RssAnon:"):
+                            anon_kb += int(line.split()[1])
+            except (OSError, ValueError):
+                continue  # the process ended between listing and reading
+        return rss_kb / 1024, anon_kb / 1024
+
+    def _take(self) -> None:
+        rss, anon = self._sample_mb()
+        self.peak_mb = max(self.peak_mb, rss)
+        self.peak_anon_mb = max(self.peak_anon_mb, anon)
+
+    def _run(self) -> None:
+        while not self._stop.is_set():
+            self._take()
+            self._stop.wait(self._interval)
+
+    def __enter__(self) -> "WorkerRssSampler":
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join()
+        self._take()
 
 
 def _mpix(tile_px: int, bands: int, rows: int) -> float:

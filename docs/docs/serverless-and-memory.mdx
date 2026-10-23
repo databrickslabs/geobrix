@@ -81,7 +81,7 @@ from databricks.labs.gbx.pyvx.file_read import vector_file_read
 df = vector_file_read(spark, "catalog.schema.roads_table", source_type="table")
 ```
 
-**Vector writes.** The commit phase runs on the driver and assembles the output file by streaming one Arrow-IPC fragment at a time — driver RAM is bounded at one batch, not the full dataset — for `geojson_gbx`, `shapefile_gbx`, `gpkg_gbx`, and `file_gdb_gbx`. `geojsonl_gbx` goes further: each Spark partition writes an independent shard directly to the Volume with **no driver merge at all**, so write throughput scales with parallelism.
+**Vector writes.** The commit phase runs on the driver and assembles the output file by streaming one Arrow-IPC fragment at a time — driver RAM is bounded at one batch, not the full dataset — for `geojson_gbx`, `shapefile_gbx` and `gpkg_gbx`. `file_gdb_gbx` streams the same way, but GDAL's FileGDB writer keeps per-feature index state in memory until the file is closed, so its driver memory grows with the feature count (about 120 bytes per feature; a 14-million-polygon write peaked at 1.9 GB). `geojsonl_gbx` goes further: each Spark partition writes an independent shard directly to the Volume with **no driver merge at all**, so write throughput scales with parallelism.
 
 For very large vector output, prefer `geojsonl_gbx` (parallel shards, no driver bottleneck) or a FILE-column vector table. Assembling a single very large GeoJSON or GPKG file still routes all data through the driver's local disk — bounded in RAM but not in time or disk space.
 
@@ -152,7 +152,8 @@ See [Readers & Writers](./readers-writers#file-gbx) for the full file-access bas
 | Large tile with pending warp or clip | **Caution** — see [below](#large-tile-pending-warp-or-clip) | Full materialization before write |
 | **— Vector —** | | |
 | `geojsonl_gbx` (partitioned shards) | Yes | No driver merge; each partition writes independently |
-| `geojson_gbx` / `shapefile_gbx` / `gpkg_gbx` / `file_gdb_gbx` | Yes | Driver commit streams one fragment batch at a time |
+| `geojson_gbx` / `shapefile_gbx` / `gpkg_gbx` | Yes | Driver commit streams one fragment batch at a time |
+| `file_gdb_gbx` | Yes, size the driver | Streams one fragment batch at a time, but driver memory grows with the feature count (about 120 bytes per feature) |
 | Very large single-file output (`geojson_gbx`, `gpkg_gbx`) | **Caution** — see [below](#large-vector-file-reads) | All data flows through driver local disk; prefer `geojsonl_gbx` or FILE table |
 
 ## Caveats

@@ -495,11 +495,11 @@ def _bng_geomkloop(geom, res, k, mode="boundary-out", coverage="coveras"):
         return None  # bad WKB/WKT geom DATA -> degrade to NULL (matches heavy)
 
 
-def _bng_tessellate(geom, res, keep_core_geom=True):
+def _bng_tessellate(geom, res, keep_core_geom=False):
     if geom is None or res is None:
         return None
     _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
-    keep = True if keep_core_geom is None else bool(keep_core_geom)
+    keep = False if keep_core_geom is None else bool(keep_core_geom)
     try:
         return [
             {"cellid": c, "core": bool(core), "chip": chip}
@@ -1686,12 +1686,12 @@ def bng_geomkloop(
 
 
 def bng_tessellate(
-    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = True
+    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = False
 ) -> Column:
     """ARRAY<STRUCT<cellid:STRING, core:BOOL, chip:BINARY>> chips per cell.
 
-    keep_core_geom (default True, matches heavy): when True, a fully-interior
-    cell's chip holds its core-geometry WKB; when False the chip is null.
+    keep_core_geom (default False, as in every API and tier): when True, a
+    fully-interior cell's chip holds its core-geometry WKB; when False the chip is null.
     """
     return f.call_function(
         "gbx_bng_tessellate", _col(geom), _col(resolution), _col(keep_core_geom)

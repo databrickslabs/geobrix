@@ -18,6 +18,8 @@ class BNG_FunctionsTest extends AnyFunSuite {
         functions.bng_pointascell(col("pt"), "1km") should not be null
         functions.bng_polyfill(col("geom"), "1km") should not be null
         functions.bng_tessellate(col("geom"), "1km") should not be null
+        functions.bng_tessellate(col("geom"), 1, keepCoreGeom = true) should not be null
+        functions.bng_tessellate(col("geom"), "1km", keepCoreGeom = false) should not be null
 
         // k-ring / k-loop Int overloads
         functions.bng_kloop(col("cellId"), 2) should not be null

@@ -1,5 +1,6 @@
 package com.databricks.labs.gbx.gridx.bng
 
+import com.databricks.labs.gbx.DocExampleSource
 import com.databricks.labs.gbx.gridx.bng
 import com.databricks.labs.gbx.gridx.bng.agg.UnionAcc
 import com.databricks.labs.gbx.gridx.grid.BNG
@@ -380,22 +381,6 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
         assert(twoArg.exists(r => r._2 && r._3.isEmpty), "the default drops the core geometry")
     }
 
-    /** The string returned by `def <fn>_sql_example()` in the docs source, as written (comments included). */
-    private def documentedExample(fn: String): String = {
-        val file = new java.io.File(sys.props.getOrElse("basedir", "."), "docs/tests/python/api/gridx_functions_sql.py")
-        assert(file.exists, s"docs example source not found: ${file.getAbsolutePath}")
-        val source = scala.io.Source.fromFile(file, "UTF-8")
-        val src = try source.mkString finally source.close()
-        val start = src.indexOf(s"def ${fn}_sql_example():")
-        assert(start >= 0, s"no ${fn}_sql_example in the docs source")
-        val open = src.indexOf("return \"\"\"", start) + "return \"\"\"".length
-        src.substring(open, src.indexOf("\"\"\"", open))
-    }
-
-    /** The runnable SQL of an example: comment lines dropped, trailing `;` removed. */
-    private def sqlOf(example: String): String =
-        example.linesIterator.map(_.trim).filterNot(l => l.isEmpty || l.startsWith("--")).mkString(" ").stripSuffix(";")
-
     test("The documented heavyweight SQL examples of the five BNG explode generators run and return the documented rows") {
         spark.sparkContext.setLogLevel("ERROR")
         bng.functions.register(spark)
@@ -407,14 +392,35 @@ class BNG_AggregatorGeneratorTest extends PlanTest with SilentSparkSession {
           "bng_geomkloopexplode" -> 16L,
           "bng_tessellateexplode" -> 9L
         ).foreach { case (fn, rows) =>
-            val example = documentedExample(fn)
-            val sql = sqlOf(example)
+            val example = DocExampleSource.example("gridx_functions_sql.py", fn)
+            val sql = DocExampleSource.sqlOf(example)
             withClue(s"$fn: $sql\n") {
                 assert(example.contains("-- heavyweight tier"), "the SQL tab says it is the heavyweight form")
                 assert(sql.contains("LATERAL VIEW"), "the heavyweight example uses LATERAL VIEW")
                 assert(spark.sql(sql).count() == rows)
             }
         }
+    }
+
+    test("The bng_tessellate Scala wrapper defaults keepCoreGeom to false, as SQL's two-argument form does") {
+        spark.sparkContext.setLogLevel("ERROR")
+        bng.functions.register(spark)
+        // 3 km x 3 km polygon at 1 km: TQ3080 is the one core cell.
+        val poly = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
+        val df = spark.createDataFrame(Seq(Tuple1(poly))).toDF("geom")
+        def coreChip(c: org.apache.spark.sql.Column): Option[Array[Byte]] = {
+            val chips = df.select(explode(c).as("c")).select("c.cellid", "c.core", "c.chip").collect()
+            val core = chips.filter(_.getString(0) == "TQ3080")
+            assert(core.length == 1 && core.head.getBoolean(1), "TQ3080 is the core cell")
+            Option(core.head.getAs[Array[Byte]](2))
+        }
+        assert(coreChip(functions.bng_tessellate(col("geom"), lit(3))).isEmpty, "the default drops the core geometry")
+        assert(coreChip(functions.bng_tessellate(col("geom"), 3)).isEmpty, "the Int overload has the same default")
+        assert(coreChip(functions.bng_tessellate(col("geom"), "1km")).isEmpty, "the String overload has the same default")
+        assert(coreChip(expr("gbx_bng_tessellate(geom, 3)")).isEmpty, "SQL's two-argument form")
+        assert(coreChip(functions.bng_tessellate(col("geom"), lit(3), lit(true))).isDefined, "keepCoreGeom=true keeps it")
+        assert(coreChip(functions.bng_tessellate(col("geom"), 3, keepCoreGeom = true)).isDefined)
+        assert(coreChip(functions.bng_tessellate(col("geom"), "1km", keepCoreGeom = true)).isDefined)
     }
 
     test("BNG_TessellateExplode keepCoreGeom=true gives core chips their cell geometry") {

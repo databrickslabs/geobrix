@@ -549,6 +549,60 @@ def test_bng_geomkloopexplode_mode_column_builds(spark, bng_registered):
     assert hasattr(col, "_jc"), "bng_geomkloopexplode(mode=...) did not return a Column"
 
 
+# The documented 3 km x 3 km polygon (EPSG:27700) and its centre cell at 1 km.
+_DOC_POLY = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
+
+
+@pytest.mark.parametrize(
+    "wrapper,args,expected",
+    [
+        ("bng_kringexplode", ("TQ3080", 1), 9),
+        ("bng_kloopexplode", ("TQ3080", 1), 8),
+        ("bng_geomkringexplode", (_DOC_POLY, 3, 1), 24),
+        ("bng_geomkloopexplode", (_DOC_POLY, 3, 1), 16),
+        ("bng_geomkringexplode", (_DOC_POLY, 3, 1, "boundary-out"), 24),
+        ("bng_geomkloopexplode", (_DOC_POLY, 3, 1, "boundary-out"), 16),
+    ],
+)
+def test_bng_explode_wrappers_evaluate_to_one_row_per_cell(
+    spark, bng_registered, wrapper, args, expected
+):
+    """The Python explode wrappers evaluate in a select, one ``cellid`` row per cell.
+
+    The first argument is a column of the input DataFrame; the rest are scalars.
+    """
+    first, *rest = args
+    df = spark.createDataFrame([(first,)], "src string")
+    result = df.select(getattr(bng_registered, wrapper)(f.col("src"), *rest))
+    assert result.columns == ["cellid"]
+    cells = [r["cellid"] for r in result.collect()]
+    assert len(cells) == expected
+    assert len(set(cells)) == expected and all(isinstance(c, str) for c in cells)
+
+
+def test_bng_tessellate_keep_core_geom_defaults_to_false(spark, bng_registered):
+    """bng_tessellate leaves core chips NULL unless keep_core_geom is set, like SQL's 2-arg form."""
+    df = spark.createDataFrame([(_DOC_POLY,)], "geom string")
+
+    def chips(col):
+        return {c["cellid"]: c for c in df.select(col.alias("t")).collect()[0]["t"]}
+
+    default = chips(bng_registered.bng_tessellate(f.col("geom"), 3))
+    kept = chips(bng_registered.bng_tessellate(f.col("geom"), 3, keep_core_geom=True))
+    df.createOrReplaceTempView("bng_tess_default")
+    sql_two_arg = {
+        c["cellid"]: c
+        for c in spark.sql(
+            "SELECT gbx_bng_tessellate(geom, 3) AS t FROM bng_tess_default"
+        ).collect()[0]["t"]
+    }
+
+    assert len(default) == 9 and default["TQ3080"]["core"]
+    assert default["TQ3080"]["chip"] is None
+    assert kept["TQ3080"]["chip"] is not None
+    assert default == sql_two_arg
+
+
 # ====== Aggregator Functions ======
 
 
@@ -595,7 +649,7 @@ def test_bng_cellunion_agg(spark, bng_registered, test_data):
 
 
 # ====== Generator/Explode Functions ======
-# Note: Python functions already wrap with f.explode(), so these work directly
+# The Python explode wrappers return the generator itself; select it directly.
 
 
 def test_bng_kloopexplode(spark, bng_registered, test_data):

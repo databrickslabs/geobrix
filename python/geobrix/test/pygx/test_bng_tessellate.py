@@ -136,8 +136,10 @@ def test_bng_tessellate_udf_keep_core_geom_toggles_interior_chip():
         c["chip"] is None for c in interior_drop
     ), "keep_core_geom=False must leave interior-cell chip null"
 
-    # default matches heavy (True): interior chips populated
+    # default is False in every API (heavy SQL 2-arg, heavy wrappers, tessellateexplode)
     default = _bng_tessellate(geom, res)
-    assert any(
-        c["chip"] is not None for c in default if c["core"]
-    ), "light bng_tessellate default must be keep_core_geom=True (heavy parity)"
+    assert all(
+        c["chip"] is None for c in default if c["core"]
+    ), "light bng_tessellate default must be keep_core_geom=False (heavy parity)"
+    # a NULL keep_core_geom behaves as the default
+    assert _bng_tessellate(geom, res, None) == default

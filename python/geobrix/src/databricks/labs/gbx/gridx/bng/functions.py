@@ -289,17 +289,19 @@ def bng_polyfill(geom: ColLike, resolution: ColLike) -> Column:
 
 
 def bng_tessellate(
-    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = True
+    geom: ColLike, resolution: ColLike, keep_core_geom: ColLike = False
 ) -> Column:
-    """Tessellate the geometry into BNG cells (as array of cell IDs).
+    """Tessellate the geometry into BNG cells, one chip per cell.
 
     Args:
         geom: Geometry column (WKT or WKB).
         resolution: BNG resolution — integer index ±1..±6 or string key.
-        keep_core_geom: If True, include the original geometry in the result.
+        keep_core_geom: If True, core cells carry their cell geometry in ``chip``;
+            if False (the default, as in SQL's two-argument form and the lightweight
+            tier) their ``chip`` is NULL. Border cells always carry their geometry.
 
     Returns:
-        Column of array of BNG cell identifiers (and optionally geometry).
+        Column of ``ARRAY<STRUCT<cellid STRING, core BOOLEAN, chip BINARY>>``.
     """
     return f.call_function(
         "gbx_bng_tessellate", _col(geom), _col(resolution), _col(keep_core_geom)
@@ -389,13 +391,12 @@ def bng_geomkloopexplode(
             auto-promoted to literals.
 
     Returns:
-        Column of exploded BNG cell identifiers.
+        Generator column with one ``cellid`` (STRING) row per cell. Select it
+        directly; a generator cannot be nested in another expression.
     """
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    return f.explode(
-        f.call_function(
-            "gbx_bng_geomkloopexplode", _col(geom), _col(resolution), _col(k), mode_arg
-        )
+    return f.call_function(
+        "gbx_bng_geomkloopexplode", _col(geom), _col(resolution), _col(k), mode_arg
     )
 
 
@@ -415,40 +416,41 @@ def bng_geomkringexplode(
             auto-promoted to literals.
 
     Returns:
-        Column of exploded BNG cell identifiers.
+        Generator column with one ``cellid`` (STRING) row per cell. Select it
+        directly; a generator cannot be nested in another expression.
     """
     mode_arg = mode if isinstance(mode, Column) else f.lit(mode)
-    return f.explode(
-        f.call_function(
-            "gbx_bng_geomkringexplode", _col(geom), _col(resolution), _col(k), mode_arg
-        )
+    return f.call_function(
+        "gbx_bng_geomkringexplode", _col(geom), _col(resolution), _col(k), mode_arg
     )
 
 
 def bng_kloopexplode(cellid: ColLike, k: ColLike) -> Column:
-    """Explode the k-ring around the cell into one row per cell.
+    """Explode the k-loop (hollow ring at exactly k) around the cell into one row per cell.
 
     Args:
         cellid: BNG cell identifier column.
         k: Ring distance.
 
     Returns:
-        Column of exploded BNG cell identifiers (use with explode).
+        Generator column with one ``cellid`` (STRING) row per cell. Select it
+        directly; a generator cannot be nested in another expression.
     """
-    return f.explode(f.call_function("gbx_bng_kloopexplode", _col(cellid), _col(k)))
+    return f.call_function("gbx_bng_kloopexplode", _col(cellid), _col(k))
 
 
 def bng_kringexplode(cellid: ColLike, k: ColLike) -> Column:
-    """Explode the k-loop (hollow ring) around the cell into one row per cell.
+    """Explode the k-ring (filled disk through k) around the cell into one row per cell.
 
     Args:
         cellid: BNG cell identifier column.
         k: Ring distance.
 
     Returns:
-        Column of exploded BNG cell identifiers (use with explode).
+        Generator column with one ``cellid`` (STRING) row per cell. Select it
+        directly; a generator cannot be nested in another expression.
     """
-    return f.explode(f.call_function("gbx_bng_kringexplode", _col(cellid), _col(k)))
+    return f.call_function("gbx_bng_kringexplode", _col(cellid), _col(k))
 
 
 def bng_tessellateexplode(

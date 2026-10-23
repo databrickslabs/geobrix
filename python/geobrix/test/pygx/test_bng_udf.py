@@ -86,6 +86,32 @@ def test_polyfill_and_tessellate(spark):
     assert len(chips) > 0 and isinstance(chips[0]["cellid"], str)
 
 
+def test_tessellate_keep_core_geom_defaults_to_false(spark):
+    """The 2-arg SQL form and the Python wrapper leave core chips NULL, as heavy does."""
+    gx.register(spark)
+    poly = "POLYGON((529000 179000, 529000 182000, 532000 182000, 532000 179000, 529000 179000))"
+    df = spark.createDataFrame([(poly,)], "g string")
+    df.createOrReplaceTempView("bv_tess_default")
+
+    def by_cell(chips):
+        return {c["cellid"]: c for c in chips}
+
+    sql_two = by_cell(
+        spark.sql(
+            "SELECT gbx_bng_tessellate(g, 3) AS t FROM bv_tess_default"
+        ).collect()[0]["t"]
+    )
+    wrapper = by_cell(df.select(gx.bng_tessellate("g", 3).alias("t")).collect()[0]["t"])
+    kept = by_cell(
+        df.select(gx.bng_tessellate("g", 3, keep_core_geom=True).alias("t")).collect()[
+            0
+        ]["t"]
+    )
+    assert sql_two["TQ3080"]["core"] and sql_two["TQ3080"]["chip"] is None
+    assert wrapper == sql_two
+    assert kept["TQ3080"]["chip"] is not None
+
+
 def test_geomkring_and_geomkloop(spark):
     gx.register(spark)
     df = spark.createDataFrame(

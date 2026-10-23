@@ -302,6 +302,16 @@ formats.
   wrapper now passes false instead of true): a core cell's `chip` is NULL
   unless you ask for it, and border cells always carry their geometry. A query that named the whole
   generator output with one alias (`.as("chip")`) now needs one name per column, or none.
+- **`bng_tessellate` defaults `keep_core_geom` to false in every API.** The two-argument SQL form
+  returned a NULL core chip in the heavyweight tier but the cell geometry in the lightweight tier,
+  and the Scala and Python wrappers of both tiers defaulted to true. All now default to false, as
+  `bng_tessellateexplode` does: a core cell's `chip` is NULL unless you pass `keep_core_geom` as
+  true (the Scala wrapper gains overloads that take it). Pass true to keep the old wrapper result.
+- **Heavyweight Python `bng_kringexplode`, `bng_kloopexplode`, `bng_geomkringexplode` and
+  `bng_geomkloopexplode` work.** They wrapped the generator in `explode(...)`, which Spark rejects
+  as a generator nested in an expression (`UNSUPPORTED_GENERATOR.NESTED_IN_EXPRESSIONS`), so every
+  call failed. They now return the generator Column: select it and it expands to one `cellid` row
+  per cell.
 
 ### Raster tiling functions
 

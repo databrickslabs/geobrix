@@ -77,7 +77,10 @@ object functions extends Serializable {
     def bng_kring(cellId: Column, k: Column): Column = ColumnAdapter(BNG_KRing.name, Seq(cellId, k))
     def bng_pointascell(point: Column, resolution: Column): Column = ColumnAdapter(BNG_PointAsCell.name, Seq(point, resolution))
     def bng_polyfill(geom: Column, resolution: Column): Column = ColumnAdapter(BNG_Polyfill.name, Seq(geom, resolution))
-    def bng_tessellate(geom: Column, resolution: Column): Column = ColumnAdapter(BNG_Tessellate.name, Seq(geom, resolution, lit(true)))
+    /** `keepCoreGeom` defaults to false: a core cell's chip is NULL, as in SQL's two-argument form and the lightweight tier. */
+    def bng_tessellate(geom: Column, resolution: Column): Column = bng_tessellate(geom, resolution, lit(false))
+    def bng_tessellate(geom: Column, resolution: Column, keepCoreGeom: Column): Column =
+        ColumnAdapter(BNG_Tessellate.name, Seq(geom, resolution, keepCoreGeom))
 
     // Aggregators
     def bng_cellintersection_agg(c1: Column): Column = ColumnAdapter(BNG_CellIntersectionAgg.name, Seq(c1))
@@ -137,6 +140,10 @@ object functions extends Serializable {
     def bng_polyfill(geom: Column, resolution: String): Column = bng_polyfill(geom, lit(resolution))
     def bng_tessellate(geom: Column, resolution: Int): Column = bng_tessellate(geom, lit(resolution))
     def bng_tessellate(geom: Column, resolution: String): Column = bng_tessellate(geom, lit(resolution))
+    def bng_tessellate(geom: Column, resolution: Int, keepCoreGeom: Boolean): Column =
+        bng_tessellate(geom, lit(resolution), lit(keepCoreGeom))
+    def bng_tessellate(geom: Column, resolution: String, keepCoreGeom: Boolean): Column =
+        bng_tessellate(geom, lit(resolution), lit(keepCoreGeom))
     def bng_geomkloopexplode(geom: Column, resolution: Int, k: Int): Column = bng_geomkloopexplode(geom, lit(resolution), lit(k))
     def bng_geomkloopexplode(geom: Column, resolution: String, k: Int): Column = bng_geomkloopexplode(geom, lit(resolution), lit(k))
     def bng_geomkloopexplode(geom: Column, resolution: Int, k: Int, mode: String): Column = bng_geomkloopexplode(geom, lit(resolution), lit(k), lit(mode))

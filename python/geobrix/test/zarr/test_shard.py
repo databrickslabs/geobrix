@@ -83,3 +83,13 @@ def test_big_endian_and_checksum_free_indexes_round_trip():
 def test_an_index_codec_other_than_bytes_and_crc32c_is_unsupported():
     with pytest.raises(ZarrUnsupported):
         index_nbytes(2, ({"name": "bytes"}, {"name": "zstd"}))
+
+
+def test_a_none_entry_leaves_the_chunk_missing():
+    vs = VirtualShard(
+        3, {0: Region("a", 0, 4), 1: None, 2: Region("b", 0, 2)}, CODECS, "end"
+    )
+    assert vs.size == 6 + index_nbytes(3, CODECS)
+    idx = decode_index(b"".join(vs.pieces(6, vs.size)), 3, CODECS)
+    assert idx.tolist() == [[0, 4], [MISSING, MISSING], [4, 2]]
+    assert vs.pieces(0, 6) == [Region("a", 0, 4), Region("b", 0, 2)]

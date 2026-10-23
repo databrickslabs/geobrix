@@ -9,6 +9,12 @@ objects the manifest rows describe, and every read is a byte range of a pack fil
   chunk rows with that shard key, which replace single inner chunks without touching
   the shard. With neither kind of row the key does not exist.
 
+A row with no file and no bytes is a tombstone: the chunk it names is deleted. In a
+sharded array it hides the inner chunk the shard row holds; in an unsharded one the key
+is simply absent; a shard left with only tombstones does not exist. A row that is
+neither a tombstone nor a complete region is a manifest that does not match the store
+(``ZarrStoreDrift``), as is a row whose ``shard_key`` is not the shard its key lies in.
+
 zarr reads this through its normal sharding codec: it asks for the index with a
 suffix request and then for single chunks with range requests, and only those bytes
 are fetched.
@@ -19,6 +25,9 @@ from __future__ import annotations
 import asyncio
 import math
 import os
+import threading
+import weakref
+from collections import OrderedDict
 from collections.abc import AsyncIterator, Iterable
 from concurrent.futures import ThreadPoolExecutor
 
@@ -42,7 +51,7 @@ from databricks.labs.gbx.zarr._shard import (
     decode_index,
     index_nbytes,
 )
-from databricks.labs.gbx.zarr.errors import ZarrReadOnly, ZarrStoreDrift
+from databricks.labs.gbx.zarr.errors import ZarrError, ZarrReadOnly, ZarrStoreDrift
 
 __all__ = ["ManifestStore"]
 
@@ -51,10 +60,33 @@ _READ_ONLY_FIX = (
 )
 
 
-def _region(row: dict) -> Region:
-    return Region(
-        row["file"], int(row["offset"]), int(row["length"]), row.get("origin") or "gbx"
-    )
+_ROWS_FIX = "run gbx_zarr_sync to rebuild the manifest rows from the store"
+
+
+def _is_tombstone(row: dict) -> bool:
+    """A deleted chunk: no file, and no bytes (length 0 or null)."""
+    return row.get("file") is None and not row.get("length")
+
+
+def _region(row: dict, label: str) -> Region:
+    """The region a live row points at; anything less than a whole region is drift."""
+    file, offset, length = row.get("file"), row.get("offset"), row.get("length")
+    problem = None
+    if file is None:
+        problem = "has bytes but no file"
+    elif offset is None:
+        problem = "has a file but no offset"
+    elif length is None:
+        problem = "has a file but no length"
+    elif length == 0:
+        problem = "has a file but a length of 0 (a deleted chunk has no file)"
+    elif offset < 0 or length < 0:
+        problem = f"has a negative offset or length ({offset}, {length})"
+    if problem:
+        raise ZarrStoreDrift(
+            f"the manifest {row.get('kind')} row {label} {problem}", fix=_ROWS_FIX
+        )
+    return Region(file, int(offset), int(length), row.get("origin") or "gbx")
 
 
 def _span(size: int, byte_range: ByteRequest | None) -> tuple[int, int]:
@@ -80,11 +112,18 @@ def _span(size: int, byte_range: ByteRequest | None) -> tuple[int, int]:
 class _ShardRows:
     """The rows behind one shard key: its shard row and its inner-chunk overrides."""
 
-    __slots__ = ("shard_row", "chunk_rows")
+    __slots__ = ("shard", "chunks")
 
     def __init__(self):
-        self.shard_row: dict | None = None
-        self.chunk_rows: dict[int, dict] = {}  # inner index -> row
+        self.shard: Region | None = None
+        self.chunks: dict[int, Region | None] = (
+            {}
+        )  # inner index -> region; None: deleted
+
+    def exists(self) -> bool:
+        return self.shard is not None or any(
+            r is not None for r in self.chunks.values()
+        )
 
 
 class ManifestStore(Store):
@@ -100,6 +139,8 @@ class ManifestStore(Store):
     supports_deletes = False
     supports_listing = True
 
+    _SHARD_CACHE_SIZE = 256  # virtual shards kept per store (least recently used out)
+
     def __init__(
         self,
         metas: dict[str, bytes],
@@ -111,38 +152,71 @@ class ManifestStore(Store):
         self._metas = dict(metas)
         self._reader = reader
         self._arrays = dict(arrays)
-        self._pool: ThreadPoolExecutor | None = None
-        self._virtual: dict[str, VirtualShard] = {}
         self._chunks: dict[str, Region] = {}  # unsharded chunk key -> region
         self._shards: dict[str, tuple[ArrayMeta, _ShardRows]] = {}  # shard key -> rows
         for row in rows:
             self._add(row)
+        self._shards = {k: v for k, v in self._shards.items() if v[1].exists()}
         self._keys = sorted({*self._metas, *self._chunks, *self._shards})
+        self._start_runtime()
+
+    def _start_runtime(self) -> None:
+        """The parts that cannot be pickled: the read pool, its cleanup, the shard cache."""
+        self._virtual: OrderedDict[str, VirtualShard] = OrderedDict()
+        self._lock = threading.Lock()
+        self._closed = False
+        self._pool = ThreadPoolExecutor(
+            max_workers=min(32, (os.cpu_count() or 1) * 4),
+            thread_name_prefix="gbx-zarr-read",
+        )
+        self._finalizer = weakref.finalize(self, self._pool.shutdown, wait=False)
+
+    def __getstate__(self) -> dict:
+        drop = ("_pool", "_finalizer", "_lock", "_virtual", "_closed")
+        return {k: v for k, v in self.__dict__.items() if k not in drop}
+
+    def __setstate__(self, state: dict) -> None:
+        self.__dict__.update(state)
+        self._start_runtime()
 
     def _add(self, row: dict) -> None:
         name, kind = row.get("array"), row.get("kind")
         meta = self._arrays.get(name)
         if meta is None or kind not in ("shard", "chunk"):
             return
+        label = f"{name}/{row['key']}"
+        region = None if _is_tombstone(row) else _region(row, label)
         if meta.shard is None:
             if kind == "chunk":
-                self._chunks[f"{name}/{row['key']}"] = _region(row)
+                if region is None:
+                    self._chunks.pop(label, None)
+                else:
+                    self._chunks[label] = region
             return
         if kind == "shard":
-            shard_key = row.get("shard_key") or row["key"]
-            self._rows_of(name, meta, shard_key).shard_row = row
-            return
-        try:
-            coords = meta.key_encoding.parse(row["key"], len(meta.shape))
-        except ValueError as e:
+            shard_key = row["key"]
+        else:
+            try:
+                coords = meta.key_encoding.parse(row["key"], len(meta.shape))
+            except ValueError as e:
+                raise ZarrStoreDrift(
+                    f"the manifest key {row['key']!r} of array {name!r} is not a chunk "
+                    f"key: {e}",
+                    fix=_ROWS_FIX,
+                ) from None
+            shard_key = meta.key_encoding.chunk_key(shard_of(coords, meta.shard.cps))
+        claimed = row.get("shard_key")
+        if claimed is not None and claimed != shard_key:
             raise ZarrStoreDrift(
-                f"the manifest key {row['key']!r} of array {name!r} is not a chunk key: {e}",
-                fix="run gbx_zarr_sync to rebuild the manifest rows from the store",
-            ) from None
-        shard_key = meta.key_encoding.chunk_key(shard_of(coords, meta.shard.cps))
-        self._rows_of(name, meta, shard_key).chunk_rows[
-            inner_index(coords, meta.shard.cps)
-        ] = row
+                f"the manifest {kind} row {label} says its shard is {claimed!r}, but "
+                f"its key lies in shard {shard_key!r}",
+                fix=_ROWS_FIX,
+            )
+        rows = self._rows_of(name, meta, shard_key)
+        if kind == "shard":
+            rows.shard = region
+        else:
+            rows.chunks[inner_index(coords, meta.shard.cps)] = region
 
     def _rows_of(self, name: str, meta: ArrayMeta, shard_key: str) -> _ShardRows:
         key = f"{name}/{shard_key}"
@@ -153,15 +227,28 @@ class ManifestStore(Store):
     # --- reading ------------------------------------------------------------------
 
     def _virtual_shard(self, key: str) -> VirtualShard:
-        """The shard object at ``key``; reads the shard row's index once, then caches."""
-        if key in self._virtual:
-            return self._virtual[key]
+        """The shard object at ``key``; cached (least recently used out)."""
+        with self._lock:
+            shard = self._virtual.get(key)
+            if shard is not None:
+                self._virtual.move_to_end(key)
+                return shard
+        shard = self._build_shard(key)
+        with self._lock:
+            self._virtual[key] = shard
+            self._virtual.move_to_end(key)
+            while len(self._virtual) > self._SHARD_CACHE_SIZE:
+                self._virtual.popitem(last=False)
+        return shard
+
+    def _build_shard(self, key: str) -> VirtualShard:
+        """Read the shard row's index, if it has one, and lay the chunk rows over it."""
         meta, rows = self._shards[key]
         spec = meta.shard
         n = math.prod(spec.cps)
-        chunks: dict[int, Region] = {}
-        if rows.shard_row is not None:
-            whole = _region(rows.shard_row)
+        chunks: dict[int, Region | None] = {}
+        if rows.shard is not None:
+            whole = rows.shard
             size = index_nbytes(n, spec.index_codecs)
             if whole.length < size:
                 raise ZarrStoreDrift(
@@ -189,11 +276,8 @@ class ManifestStore(Store):
                 chunks[i] = Region(
                     whole.file, whole.offset + offset, nbytes, whole.origin
                 )
-        for i, row in rows.chunk_rows.items():
-            chunks[i] = _region(row)
-        shard = VirtualShard(n, chunks, spec.index_codecs, spec.index_location)
-        self._virtual[key] = shard
-        return shard
+        chunks.update(rows.chunks)  # an override, or None: the chunk is deleted
+        return VirtualShard(n, chunks, spec.index_codecs, spec.index_location)
 
     def _fetch(self, key: str, byte_range: ByteRequest | None) -> bytes | None:
         """The bytes of a chunk or shard key (blocking); ``None`` when it does not exist."""
@@ -229,10 +313,10 @@ class ManifestStore(Store):
         return None
 
     def _executor(self) -> ThreadPoolExecutor:
-        if self._pool is None:
-            self._pool = ThreadPoolExecutor(
-                max_workers=min(32, (os.cpu_count() or 1) * 4),
-                thread_name_prefix="gbx-zarr-read",
+        if self._closed:
+            raise ZarrError(
+                "this ManifestStore is closed",
+                fix="open a new store (read the table again) instead of reusing a closed one",
             )
         return self._pool
 
@@ -317,11 +401,18 @@ class ManifestStore(Store):
             )
         return self
 
+    async def delete_dir(self, prefix: str) -> None:
+        raise ZarrReadOnly(
+            f"cannot delete {prefix!r}: this store is read-only", fix=_READ_ONLY_FIX
+        )
+
+    async def clear(self) -> None:
+        raise ZarrReadOnly("cannot clear: this store is read-only", fix=_READ_ONLY_FIX)
+
     def close(self) -> None:
         super().close()
-        if self._pool is not None:
-            self._pool.shutdown(wait=False)
-            self._pool = None
+        self._closed = True
+        self._finalizer()  # shuts the pool down now, once
 
     def __eq__(self, value: object) -> bool:
         return self is value

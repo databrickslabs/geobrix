@@ -713,8 +713,11 @@ def find_commit_version(spark, table: str, write_id: str, *, since: int = 0):
             f"WHERE kind = 'commit' AND key = '{write_id}' AND tag IS NULL"
         ).first()
     except Exception as e:
-        # FIELD_NOT_FOUND on _metadata.row_commit_version: row tracking is off
-        if "row_commit_version" in _error_text(e):
+        # Row tracking is off exactly when Spark reports FIELD_NOT_FOUND for the field.
+        # The name alone is not enough: the error for a missing table prints the
+        # unresolved plan, which projects _metadata.row_commit_version too.
+        text = _error_text(e)
+        if "FIELD_NOT_FOUND" in text and "row_commit_version" in text:
             raise ZarrError(
                 f"{table} does not track row commit versions, so the version a commit "
                 "landed in cannot be read",

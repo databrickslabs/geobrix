@@ -2,7 +2,8 @@
 
 ``FuseRangeReader`` reads files through the local file system, which is how a
 Unity Catalog Volume appears on a cluster (``/Volumes/...``). Blocking, so callers on
-an event loop run it in a thread.
+an event loop run it in a thread. It opens only files under the store's roots: a
+manifest is data, and a row must not be able to name ``/etc/passwd``.
 """
 
 from __future__ import annotations
@@ -10,16 +11,25 @@ from __future__ import annotations
 import os
 from typing import Protocol
 
+from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr.errors import ZarrStoreDrift
 
 __all__ = ["RangeReader", "FuseRangeReader"]
+
+# A transient FUSE miss is worth another try; these will not change by waiting.
+_PERMANENT = (PermissionError, IsADirectoryError, NotADirectoryError)
+_SYNC_FIX = "run gbx_zarr_sync if the store changed outside GeoBrix; otherwise "
 
 
 class RangeReader(Protocol):
     def read(self, regions: list[Region]) -> list[bytes]:
         """The bytes of each region, in the order given."""
         ...
+
+
+class _Permanent(Exception):
+    """Carries a permanent OS error through ``_retry_transient`` without a retry."""
 
 
 def _coalesce(
@@ -38,42 +48,88 @@ def _coalesce(
     return spans
 
 
+def _within(path: str, root: str) -> bool:
+    """``path`` is ``root`` or below it (a whole-component test, not a prefix test)."""
+    return os.path.commonpath([path, root]) == root
+
+
 class FuseRangeReader:
     """Reads regions from files under a root with positional ``os.pread`` calls.
 
     A relative ``Region.file`` resolves under ``root``, or under ``base_root`` when the
     region's ``origin`` is ``"external"`` (a registered store's own files; ``root`` then
-    holds only what GeoBrix wrote). Without a ``base_root`` external files resolve
-    under ``root``, and an absolute ``file`` is used as it is.
+    holds only what GeoBrix wrote), and must stay under that directory. An absolute
+    ``file`` must lie under ``root`` or ``base_root``. A ``..`` that leaves the root, a
+    symlink that leads out of it, an empty or non-string ``file`` raise
+    ``ZarrStoreDrift`` before anything is opened. Without a ``base_root`` external
+    files resolve under ``root``.
 
     Regions of one file that touch or overlap are fetched with one read. A file that is
     missing, or shorter than the manifest says, raises ``ZarrStoreDrift``; other I/O
     errors propagate. UC Volume FUSE mounts can raise ``FileNotFoundError`` transiently
     on a healthy file, so the open and reads of a file are retried ``attempts`` times
-    (the same guard the readers use) before a missing file counts as drift.
+    (the same guard the readers use) before a missing file counts as drift. Errors that
+    waiting cannot fix (permission, not a file) are raised at once.
     """
 
     def __init__(self, root: str, *, base_root: str | None = None, attempts: int = 10):
         self._root = root
         self._base_root = base_root
         self._attempts = attempts
+        self._real: dict[str, str] = {}  # path -> os.path.realpath(path)
 
-    def _path(self, region: Region) -> str:
-        base = (
-            self._base_root
-            if region.origin == "external" and self._base_root is not None
-            else self._root
+    def _realpath(self, path: str) -> str:
+        real = self._real.get(path)
+        if real is None:
+            real = self._real[path] = os.path.realpath(path)
+        return real
+
+    def _resolve(self, region: Region) -> str:
+        """The path to open for ``region``, or ``ZarrStoreDrift`` if it leaves the roots."""
+        file = region.file
+        if not isinstance(file, str) or not file or "\0" in file:
+            raise ZarrStoreDrift(
+                f"manifest file {file!r} is not a usable path",
+                fix="correct the row or run gbx_zarr_sync",
+            )
+        external = region.origin == "external" and self._base_root is not None
+        base = os.path.normpath(
+            os.path.abspath(self._base_root if external else self._root)
         )
-        return os.path.join(base, region.file)
+        if os.path.isabs(file):
+            cand = os.path.normpath(file)
+            roots = [
+                os.path.normpath(os.path.abspath(r))
+                for r in (self._root, self._base_root)
+                if r
+            ]
+        else:
+            cand = os.path.normpath(os.path.join(base, file))
+            roots = [base]
+        for root in roots:
+            if _within(cand, root) and _within(
+                self._realpath(cand), self._realpath(root)
+            ):
+                return cand
+        raise ZarrStoreDrift(
+            f"manifest file {file!r} resolves outside the store root {' or '.join(roots)}",
+            fix="correct the row or run gbx_zarr_sync; a manifest may only point at "
+            "files under the store root or, for a registered store, its base root",
+        )
 
     def read(self, regions: list[Region]) -> list[bytes]:
         out: list[bytes] = [b""] * len(regions)
         by_file: dict[str, list[int]] = {}
         for i, r in enumerate(regions):
+            path = self._resolve(r)
             if r.offset < 0 or r.length < 0:
-                raise ValueError(f"region {r} has a negative offset or length")
+                raise ZarrStoreDrift(
+                    f"manifest region {r.length} bytes at offset {r.offset} of "
+                    f"{r.file!r} is negative",
+                    fix="correct the row or run gbx_zarr_sync",
+                )
             if r.length:
-                by_file.setdefault(self._path(r), []).append(i)
+                by_file.setdefault(path, []).append(i)
         for path, members in by_file.items():
             spans = _coalesce(regions, members)
             for (start, _, held), data in zip(spans, self._read_spans(path, spans)):
@@ -87,17 +143,20 @@ class FuseRangeReader:
         return out
 
     def _read_spans(self, path: str, spans) -> list[bytes]:
-        from databricks.labs.gbx.ds._listing import _retry_transient
+        def attempt() -> list[bytes]:
+            try:
+                return self._pread_all(path, spans)
+            except _PERMANENT as e:
+                raise _Permanent(e) from None
 
         try:
-            return _retry_transient(
-                lambda: self._pread_all(path, spans), attempts=self._attempts
-            )
+            return _retry_transient(attempt, attempts=self._attempts)
+        except _Permanent as p:
+            raise p.args[0] from None
         except FileNotFoundError:
             raise ZarrStoreDrift(
                 f"{path} is recorded in the manifest but missing",
-                fix="run gbx_zarr_sync if the store changed outside GeoBrix; "
-                "otherwise restore the file",
+                fix=_SYNC_FIX + "restore the file",
             ) from None
 
     @staticmethod
@@ -113,8 +172,7 @@ class FuseRangeReader:
                         raise ZarrStoreDrift(
                             f"{path} ends before byte {stop}, which the manifest "
                             "says it holds",
-                            fix="run gbx_zarr_sync if the store changed outside "
-                            "GeoBrix; otherwise the file is truncated",
+                            fix=_SYNC_FIX + "the file is truncated",
                         )
                     parts.append(chunk)
                     want -= len(chunk)

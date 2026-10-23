@@ -107,6 +107,13 @@ def test_retry_sleeps_with_linear_backoff(monkeypatch):
     assert sleeps == [0.5, 1.0, 1.5]
 
 
+def test_retry_transient_lives_in_the_light_core_and_is_re_exported():
+    """The zarr package retries Volume reads without importing the ds package."""
+    from databricks.labs.gbx.core import _retry
+
+    assert _listing._retry_transient is _retry._retry_transient
+
+
 def test_list_files_strips_file_scheme(tree):
     """A scheme-qualified input (columns store dbfs:/file: paths) lists the same
     files as the bare path -- list_files strips the scheme before os.* resolves it."""

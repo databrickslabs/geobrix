@@ -142,14 +142,15 @@ class PlainRows(list):
     root: Path
 
 
-def plain_store_rows(path):
+def plain_store_rows(path, *, origin="gbx"):
     """Read a local Zarr store as ``(metas, rows, arrays)``.
 
     ``metas`` maps each metadata key to its bytes (``zarr.json``, ``t2m/zarr.json``,
     ``u10/.zarray`` ...). ``rows`` holds one ``shard`` row per object of a sharded
     array and one ``chunk`` row per object of any other array, with ``file`` relative
-    to the store, ``offset`` 0, ``length`` the object's size, ``origin`` ``"gbx"`` and
-    a zero ``write_id``. ``arrays`` maps each array name to its ``ArrayMeta``.
+    to the store, ``offset`` 0, ``length`` the object's size, ``origin`` as given
+    (``"external"`` makes it a registered store's own files) and a zero ``write_id``.
+    ``arrays`` maps each array name to its ``ArrayMeta``.
     """
     from databricks.labs.gbx.zarr._meta import parse_v2, parse_v3
 
@@ -188,7 +189,7 @@ def plain_store_rows(path):
                     offset=0,
                     length=f.stat().st_size,
                     checksum=None,
-                    origin="gbx",
+                    origin=origin,
                     identity=None,
                     write_id="0" * 32,
                     tag=None,
@@ -202,10 +203,12 @@ def rewrite_one_inner_chunk(rows, meta, dir, chunk, value):
     """Override one inner chunk of a sharded array with a chunk filled with ``value``.
 
     The chunk is encoded as a standalone chunk of ``inner_meta_doc(meta)`` in a
-    ``MemoryStore`` and written to a new file under ``dir`` (the row's ``file`` is its
-    absolute path). Returns ``(rows + [that chunk row], expected)``, where ``expected``
-    is the array as the store now reads: the original with that chunk's block set to
-    ``value``. ``rows`` must come from ``plain_store_rows``, which knows the store.
+    ``MemoryStore`` and written to a new file in ``dir``; its row is ``origin="gbx"``
+    with ``file`` the file name, relative to ``dir``, so a reader whose ``root`` is
+    ``dir`` finds it (the store's own files stay under a ``base_root``). Returns
+    ``(rows + [that chunk row], expected)``, where ``expected`` is the array as the
+    store now reads: the original with that chunk's block set to ``value``. ``rows``
+    must come from ``plain_store_rows``, which knows the store.
     """
     import numpy as np
     import zarr
@@ -216,31 +219,29 @@ def rewrite_one_inner_chunk(rows, meta, dir, chunk, value):
     from databricks.labs.gbx.zarr._meta import inner_meta_doc
 
     chunk = tuple(int(c) for c in chunk)
-    store = MemoryStore(
-        {
-            "zarr.json": default_buffer_prototype().buffer.from_bytes(
-                json.dumps(inner_meta_doc(meta)).encode()
-            )
-        }
-    )
-    arr = zarr.open_array(store=store, mode="r+")
-    arr[...] = np.full(meta.chunks, value, dtype=meta.dtype)
-    encoded = store._store_dict[meta.key_encoding.chunk_key((0,) * len(meta.chunks))]
+    held = {
+        "zarr.json": default_buffer_prototype().buffer.from_bytes(
+            json.dumps(inner_meta_doc(meta)).encode()
+        )
+    }
+    # a chunk equal to the fill value is skipped unless empty chunks are written
+    with zarr.config.set({"array.write_empty_chunks": True}):
+        arr = zarr.open_array(store=MemoryStore(store_dict=held), mode="r+")
+        arr[...] = np.full(meta.chunks, value, dtype=meta.dtype)
+    data = held[meta.key_encoding.chunk_key((0,) * len(meta.chunks))].to_bytes()
 
-    out = Path(dir) / ("inner_" + "_".join(str(c) for c in chunk) + ".bin")
-    data = encoded.to_bytes()
-    out.write_bytes(data)
+    name = "inner_" + "_".join(str(c) for c in chunk) + ".bin"
+    (Path(dir) / name).write_bytes(data)
 
-    key = meta.key_encoding.chunk_key(chunk)
     new = PlainRows(
         [
             *rows,
             dict(
                 kind="chunk",
                 array=meta.name,
-                key=key,
+                key=meta.key_encoding.chunk_key(chunk),
                 shard_key=meta.key_encoding.chunk_key(shard_of(chunk, meta.shard.cps)),
-                file=str(out),
+                file=name,
                 offset=0,
                 length=len(data),
                 checksum=None,

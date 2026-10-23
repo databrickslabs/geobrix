@@ -117,15 +117,16 @@ class VirtualShard:
     """A shard object assembled from chunk regions, with a synthesized index.
 
     ``chunks`` maps an inner index (C-order position in the shard) to the region
-    holding that chunk's bytes. The chunks are laid out in inner-index order; the index
-    sits after them (``index_location="end"``) or before them (``"start"``), and every
-    chunk the shard lacks is ``(MISSING, MISSING)`` in it.
+    holding that chunk's bytes, or to ``None`` for a chunk the shard does not hold. The
+    chunks are laid out in inner-index order; the index sits after them
+    (``index_location="end"``) or before them (``"start"``), and every chunk the shard
+    lacks is ``(MISSING, MISSING)`` in it.
     """
 
     def __init__(
         self,
         n_chunks: int,
-        chunks: dict[int, Region],
+        chunks: dict[int, Region | None],
         index_codecs,
         index_location: str,
     ):
@@ -146,6 +147,8 @@ class VirtualShard:
         pos = data_start
         for i in sorted(chunks):
             region = chunks[i]
+            if region is None:  # stays (MISSING, MISSING)
+                continue
             entries[i] = (pos, region.length)
             if region.length:
                 starts.append(pos)

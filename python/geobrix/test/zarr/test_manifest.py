@@ -763,6 +763,18 @@ def test_row_tracking_turned_off_is_a_typed_error_from_the_precheck(spark_delta,
     assert _live(spark_delta, table) == []  # the pre-check refused: nothing was merged
 
 
+def test_a_missing_table_is_not_blamed_on_row_tracking(spark_delta):
+    """Spark's error for a missing table prints the unresolved plan, which projects
+    ``_metadata.row_commit_version``; only a FIELD_NOT_FOUND for that field means row
+    tracking is off."""
+    with pytest.raises(Exception) as ei:
+        M.find_commit_version(
+            spark_delta, f"zm_{uuid.uuid4().hex[:8]}", uuid.uuid4().hex
+        )
+    assert not isinstance(ei.value, ZarrError)
+    assert "enableRowTracking" not in str(ei.value)
+
+
 def _count_metadata_queries(monkeypatch, spark):
     """Count the DataFrame actions (``collect``, which ``first`` and ``take`` end in)."""
     from pyspark.sql.classic.dataframe import DataFrame as ClassicDataFrame

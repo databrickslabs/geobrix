@@ -515,14 +515,18 @@ def _root_info(root: str):
     return 2, found
 
 
-def _add_array(path, parse, arrays, unsupported) -> None:
+def _add_array(path, parse, arrays, unsupported, tolerant=False) -> None:
     try:
         arrays[path] = parse()
     except ZarrUnsupported as e:
         unsupported[path] = e.message
     except (KeyError, TypeError, ValueError, IndexError) as e:
+        text = f"the metadata of array {path!r} is malformed ({type(e).__name__}: {e})."
+        if tolerant:
+            unsupported[path] = text
+            return
         raise ZarrUnsupported(
-            f"the metadata of array {path!r} is malformed ({type(e).__name__}: {e}).",
+            text,
             fix="repair or rewrite the array's metadata, then register the store again",
         ) from None
 
@@ -538,7 +542,7 @@ def _nodes_by_parent(keys) -> dict[str, set[str]]:
     return out
 
 
-def _walk(fmt, reader, pool):
+def _walk(fmt, reader, pool, tolerant=False):
     names = ("zarr.json",) if fmt == 3 else (".zarray", ".zgroup")
     by_parent = _nodes_by_parent(reader.named | reader.hinted)
     metas: dict[str, bytes] = {}
@@ -567,19 +571,33 @@ def _walk(fmt, reader, pool):
             doc, raw = hit
             key = f"{path}/{doc}"
             if fmt == 3:
-                node = _json(raw, key)
-                kind = node.get("node_type")
+                try:
+                    node = _json(raw, key)
+                    kind = node.get("node_type")
+                    if kind not in ("group", "array"):
+                        raise ZarrUnsupported(
+                            f"{key} has node_type {kind!r}, expected 'group' or 'array'.",
+                            fix="repair or rewrite the store's metadata, then register "
+                            "it again",
+                        )
+                except ZarrUnsupported as e:
+                    if not tolerant:
+                        raise
+                    # a reader walks past a node it cannot read: the directory is an array
+                    # nobody can decode, named only when asked for
+                    metas[key] = raw
+                    unsupported[path] = e.message
+                    continue
+                metas[key] = raw
                 if kind == "group":
-                    metas[key] = raw
                     queue.append(path)
-                elif kind == "array":
-                    metas[key] = raw
-                    _add_array(path, lambda: parse_v3(path, node), arrays, unsupported)
                 else:
-                    raise ZarrUnsupported(
-                        f"{key} has node_type {kind!r}, expected 'group' or 'array'.",
-                        fix="repair or rewrite the store's metadata, then register it "
-                        "again",
+                    _add_array(
+                        path,
+                        lambda: parse_v3(path, node),
+                        arrays,
+                        unsupported,
+                        tolerant,
                     )
                 continue
             metas[key] = raw
@@ -597,6 +615,7 @@ def _walk(fmt, reader, pool):
                 ),
                 arrays,
                 unsupported,
+                tolerant,
             )
     return metas, arrays, unsupported
 
@@ -676,7 +695,7 @@ def _disagreements_v3(metas, root_doc) -> list[str]:
 
 
 def read_base_metadata(
-    path: str, *, listing: pa.Table | None = None
+    path: str, *, listing: pa.Table | None = None, tolerant: bool = False
 ) -> tuple[dict[str, bytes], dict[str, ArrayMeta], dict[str, str]]:
     """The metadata documents of the store at ``path``, its arrays, and the ones it cannot decode.
 
@@ -696,6 +715,11 @@ def read_base_metadata(
     ``listing`` is an optional Arrow table with a ``relpath`` column, the Spark listing
     of the store. Every ``zarr.json`` it holds is a document that must exist, so a
     transient miss on one is retried rather than dropping the array.
+
+    ``tolerant`` is for a reader: a node whose document cannot be parsed (invalid JSON, a
+    malformed array) is listed in ``unsupported`` with the reason instead of failing the
+    whole walk, so one corrupt array does not stop a read of its neighbours. Registering
+    leaves it off, because a store with a corrupt document should not be registered.
     """
     root = _local_root(path)
     fmt, found = _root_info(root)
@@ -712,7 +736,7 @@ def read_base_metadata(
     reader = _Reader(root, named, hinted)
 
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-        metas, arrays, unsupported = _walk(fmt, reader, pool)
+        metas, arrays, unsupported = _walk(fmt, reader, pool, tolerant)
     if fmt == 3:
         metas["zarr.json"] = found["zarr.json"]
         problems = _disagreements_v3(metas, _json(found["zarr.json"], "zarr.json"))

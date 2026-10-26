@@ -86,3 +86,77 @@ def era5_v2(tmp_path_factory):
     return make_era5_like(
         tmp_path_factory.mktemp("era5") / "era5_v2.zarr", zarr_format=2, sharded=False
     )
+
+
+@pytest.fixture(scope="session")
+def dtype_matrix(tmp_path_factory):
+    """A Zarr v3 store with one variable per table column kind, on a (3, 4) grid.
+
+    Dimensions ``lev`` (an int32 coordinate) and ``x`` (no coordinate). Returns
+    ``(path, expected)`` where ``expected`` maps each column to its 12 values in C order,
+    ``None`` for a masked cell and a float NaN for NaN data.
+    """
+    import numpy as np
+    import zarr
+
+    path = tmp_path_factory.mktemp("matrix") / "m.zarr"
+    g = zarr.open_group(str(path), mode="w", zarr_format=3)
+    lev = g.create_array(
+        "lev", shape=(3,), chunks=(3,), dtype="int32", dimension_names=("lev",)
+    )
+    lev[:] = [10, 20, 30]
+    shape, n = (3, 4), 12
+    nan = float("nan")
+    expected = {"lev": [10] * 4 + [20] * 4 + [30] * 4, "x": [0, 1, 2, 3] * 3}
+
+    def put(name, values, dtype, attrs=None, shown=None):
+        arr = g.create_array(
+            name,
+            shape=shape,
+            chunks=shape,
+            dtype=dtype,
+            dimension_names=("lev", "x"),
+            attributes=attrs or {},
+        )
+        arr[:] = np.asarray(values, dtype=dtype).reshape(shape)
+        expected[name] = list(values) if shown is None else shown
+
+    put("i1", [-5 + i for i in range(n)], "int8")
+    put("i2", [-300 + i for i in range(n)], "int16")
+    put("i4", [2**31 - 1 - i for i in range(n)], "int32")
+    put(
+        "i8", [2**53 + 1 + i for i in range(n)], "int64"
+    )  # beyond float64's exact range
+    put("u1", [250 + i % 6 for i in range(n)], "uint8")
+    put("u2", [65535 - i for i in range(n)], "uint16")
+    put("u4", [2**32 - 1 - i for i in range(n)], "uint32")
+    put("u8", [2**64 - 1 - i for i in range(n)], "uint64")
+    put("b", [bool(i % 3) for i in range(n)], "bool")
+    put("f2", [0.5 * i for i in range(n)], "float16")
+    put("f4", [0.25 * i for i in range(n)], "float32")
+    put("f8", [0.1 * i for i in range(n)], "float64")
+    masked = [5, -1, 7, -1, 9, 10, 11, 12, -1, 14, 15, 16]
+    put(
+        "m2",
+        masked,
+        "int16",
+        {"_FillValue": -1},
+        [None if v == -1 else v for v in masked],
+    )
+    fl = [1.5, nan, -9999.0, 2.5, -9999.0, 3.5, nan, 4.5, 5.5, 6.5, 7.5, 8.5]
+    put(
+        "mf",
+        fl,
+        "float64",
+        {"_FillValue": -9999.0},
+        [None if v == -9999.0 else v for v in fl],
+    )
+    packed = [2, -1, 4, 6, 8, -1, 12, 14, 16, 18, 20, 22]
+    put(
+        "pk",
+        packed,
+        "int16",
+        {"_FillValue": -1, "scale_factor": 0.5, "add_offset": 10.0},
+        [None if v == -1 else v * 0.5 + 10.0 for v in packed],
+    )
+    return path, expected

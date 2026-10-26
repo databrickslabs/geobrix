@@ -761,3 +761,40 @@ def test_the_unsupported_set_survives_pickling(tmp_path):
     again = pickle.loads(pickle.dumps(st))
     with pytest.raises(ZarrUnsupported):
         _get(again, "station/c/0")
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_an_unsupported_array_does_not_break_opening_the_group(tmp_path, fmt):
+    """Only a chunk key is refused: the probes zarr makes for documents are answered."""
+    from databricks.labs.gbx.zarr._register import read_base_metadata
+
+    root = tmp_path / f"s{fmt}.zarr"
+    g = zarr.open_group(str(root), mode="w", zarr_format=fmt)
+    x = g.create_array("x", shape=(4,), chunks=(2,), dtype="f4")
+    x[:] = 1
+    s = g.create_array("station", shape=(3,), chunks=(2,), dtype=str)
+    s[:] = np.array(["a", "bb", "c"], dtype=object)
+    metas, arrays, unsupported = read_base_metadata(str(root))
+    assert set(unsupported) == {"station"}
+    rows = []
+    for name in ("x", "station"):
+        for f in sorted((root / name).rglob("*")):
+            if f.is_file() and f.name not in ("zarr.json", ".zarray", ".zattrs"):
+                key = f.relative_to(root / name).as_posix()
+                row = _row(name, key, file=f"{name}/{key}", length=f.stat().st_size)
+                rows.append({**row, "shard_key": None})
+    st = ManifestStore(
+        metas, rows, FuseRangeReader(str(root)), arrays, unsupported=unsupported
+    )
+    members = dict(zarr.open_group(store=st, mode="r").members())
+    assert set(members) == {"x", "station"}
+    for probe in (
+        "station/.zgroup",
+        "station/.zattrs",
+        "station/zarr.json",
+        "station/.zarray",
+    ):
+        _run(st.exists(probe))  # answered (True or False), never refused
+    chunk = "station/0" if fmt == 2 else "station/c/0"
+    with pytest.raises(ZarrUnsupported):
+        _get(st, chunk)

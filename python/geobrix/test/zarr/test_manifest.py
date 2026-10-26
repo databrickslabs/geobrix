@@ -616,6 +616,42 @@ def test_read_rows_filters_by_key_for_arrays_without_shards(spark_delta, table):
     assert M.read_rows(spark_delta, snap, kinds="chunk", keys="c/0/0/0").num_rows == 1
 
 
+def test_a_long_key_list_is_pruned_by_a_semi_join_not_fetched_whole(
+    spark_delta, table, monkeypatch, capsys
+):
+    """Past the IN-list limit the filter becomes a semi-join on the cluster: the driver gets
+    the matching rows only, never every row of the array to filter itself."""
+    w1 = uuid.uuid4().hex
+    rows = []
+    for i in range(6):
+        row = _chunk(f"c/{i}/0/0", w1)
+        row.update(shard_key=f"c/{i // 2}/0/0")
+        rows.append(row)
+    M.commit(spark_delta, table, _rows(*rows), write_id=w1, meta={})
+    snap = M.snapshot(spark_delta, table)
+    monkeypatch.setattr(M, "_IN_LIST_LIMIT", 2)
+
+    keys = ["c/1/0/0", "c/3/0/0", "c/5/0/0", "c/9/0/0"]  # the last one matches nothing
+    got = M.read_rows(spark_delta, snap, kinds="chunk", keys=keys)
+    assert sorted(got.column("key").to_pylist()) == keys[:3]
+    shards = M.read_rows(
+        spark_delta, snap, kinds="chunk", shard_keys=["c/0/0/0", "c/1/0/0", "c/2/0/0"]
+    )
+    assert shards.num_rows == 6
+
+    base = spark_delta.table(table)
+    M._pruned(spark_delta, base, "key", keys).explain()
+    assert "LeftSemi" in capsys.readouterr().out
+    M._pruned(
+        spark_delta, base, "key", keys[:2]
+    ).explain()  # within the limit: an IN list
+    assert "LeftSemi" not in capsys.readouterr().out
+    assert (
+        M._pruned(spark_delta, base, "key", ["c/1/0/0", "c/1/0/0", "c/3/0/0"]).count()
+        == 2
+    )
+
+
 def test_commit_delete_removes_the_row_under_cas(spark_delta, table):
     w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
     M.commit(

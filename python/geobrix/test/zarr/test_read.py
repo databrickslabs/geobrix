@@ -406,6 +406,58 @@ def test_table_of_variables_with_different_chunking(spark_delta, tmp_path):
     np.testing.assert_array_equal([r["b"] for r in got], -np.arange(24.0))
 
 
+def test_a_table_has_one_spark_type_per_kind_and_nulls_for_masked_cells(
+    spark_delta, dtype_matrix
+):
+    from decimal import Decimal
+
+    path, want = dtype_matrix
+    df = gbx_zarr_read(spark_delta, str(path), output="table")
+    assert {f.name: f.dataType.simpleString() for f in df.schema.fields} == {
+        "lev": "int",
+        "x": "bigint",
+        "i1": "tinyint",
+        "i2": "smallint",
+        "i4": "int",
+        "i8": "bigint",
+        "u1": "smallint",
+        "u2": "int",
+        "u4": "bigint",
+        "u8": "decimal(20,0)",
+        "b": "boolean",
+        "f2": "float",
+        "f4": "float",
+        "f8": "double",
+        "m2": "smallint",
+        "mf": "double",
+        "pk": "double",
+    }
+    rows = df.orderBy("lev", "x").collect()
+    assert rows[0]["u8"] == Decimal(2**64 - 1) and rows[0]["i8"] == 2**53 + 1
+    assert [r["m2"] for r in rows][:4] == [5, None, 7, None]
+    assert [r["pk"] for r in rows][:3] == [11.0, None, 12.0]
+    assert (
+        rows[1]["mf"] != rows[1]["mf"] and rows[2]["mf"] is None
+    )  # NaN data vs a masked cell
+    assert [r["b"] for r in rows][:3] == [False, True, True]
+
+
+def test_an_error_while_spark_runs_the_read_arrives_as_a_python_exception(
+    spark_delta, tmp_path
+):
+    """Planning errors keep their classes; a task's error is Spark's PythonException."""
+    import shutil
+
+    from pyspark.errors import PythonException
+
+    path = _packed_store(tmp_path / "gone.zarr")
+    df = gbx_zarr_read(spark_delta, str(path), variables="p")
+    shutil.rmtree(path / "p")
+    with pytest.raises(PythonException) as e:
+        df.collect()
+    assert "Fix:" in str(e.value) and "Zarr" in str(e.value)
+
+
 def test_empty_selection_returns_empty_frame(spark_delta, v3):
     blocks = gbx_zarr_read(spark_delta, v3, sel={"latitude": slice(95, 91)})
     assert blocks.count() == 0

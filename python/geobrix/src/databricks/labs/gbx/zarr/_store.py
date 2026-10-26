@@ -67,6 +67,11 @@ _READ_ONLY_FIX = (
 
 _ROWS_FIX = "run gbx_zarr_sync to rebuild the manifest rows from the store"
 
+# the names a store keeps its metadata under; none of them is a chunk key
+_DOCUMENT_NAMES = frozenset(
+    {"zarr.json", ".zgroup", ".zarray", ".zattrs", ".zmetadata"}
+)
+
 
 def _is_tombstone(row: dict) -> bool:
     """A deleted chunk: no file, and no bytes (length 0 or null)."""
@@ -310,8 +315,14 @@ class ManifestStore(Store):
         return VirtualShard(n, chunks, spec.index_codecs, spec.index_location)
 
     def _refuse(self, key: str) -> None:
-        """Raise for a chunk key of an array GeoBrix cannot decode (its documents are served)."""
+        """Raise for a chunk key of an array GeoBrix cannot decode.
+
+        Metadata names are never refused: zarr probes ``station/.zgroup`` or
+        ``station/zarr.json`` when it opens a group, and the answer is simply "absent".
+        """
         if not self._unsupported or key in self._metas:
+            return
+        if key.rpartition("/")[2] in _DOCUMENT_NAMES:
             return
         for name, reason in self._unsupported.items():
             if key.startswith(name + "/"):

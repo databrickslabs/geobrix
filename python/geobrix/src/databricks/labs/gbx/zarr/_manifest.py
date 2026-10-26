@@ -553,6 +553,29 @@ def snapshot(
     return Snapshot(table=table, version=picked, tag=None)
 
 
+# Longest list sent as an IN predicate. Longer ones become a semi-join against a small
+# DataFrame of the values, which the cluster evaluates: either way only matching rows
+# reach the driver.
+_IN_LIST_LIMIT = 10_000
+
+
+def _pruned(spark, df, column: str, values: list[str]):
+    """``df`` narrowed to the rows whose ``column`` is one of ``values``.
+
+    A short list is an IN predicate (which Delta can use to skip files); a long one is a
+    left semi-join against the distinct values, so the filter runs on the cluster and not
+    in a literal that the planner has to carry.
+    """
+    from pyspark.sql import functions as F
+
+    if len(values) <= _IN_LIST_LIMIT:
+        return df.where(F.col(column).isin(values))
+    wanted = spark.createDataFrame(
+        [(v,) for v in dict.fromkeys(values)], f"{column} STRING"
+    )
+    return df.join(wanted, on=column, how="left_semi")
+
+
 def read_rows(
     spark, snap: Snapshot, *, kinds=None, arrays=None, shard_keys=None, keys=None
 ):
@@ -561,7 +584,8 @@ def read_rows(
     Live rows (``tag IS NULL``), or the tag's rows for a tag snapshot, optionally
     narrowed to the given kinds, arrays, shard keys and keys. ``keys`` is how a read
     prunes the chunk rows of an unsharded array, which have no shard key; an empty
-    list matches nothing.
+    list matches nothing. A list of more than ``_IN_LIST_LIMIT`` values is applied as a
+    semi-join, so a read of a huge selection still fetches only the rows it names.
     """
     from pyspark.sql import functions as F
 
@@ -576,14 +600,18 @@ def read_rows(
         if bad:
             raise ValueError(f"unknown kind(s) {bad}; expected some of {KINDS}")
         cond = cond & F.col("kind").isin(kinds)
-    for column, values in (("array", arrays), ("shard_key", shard_keys), ("key", keys)):
-        if values is not None:
-            values = [values] if isinstance(values, str) else list(values)
-            cond = cond & F.col(column).isin(values)
     cols = ", ".join(MANIFEST_COLUMNS)
     df = spark.sql(
         f"SELECT {cols} FROM {_q(snap.table)} VERSION AS OF {int(snap.version)}"
     )
+    for column, values in (("array", arrays), ("shard_key", shard_keys), ("key", keys)):
+        if values is None:
+            continue
+        values = [values] if isinstance(values, str) else list(values)
+        if len(values) <= _IN_LIST_LIMIT:
+            cond = cond & F.col(column).isin(values)
+        else:
+            df = _pruned(spark, df, column, values)
     return df.where(cond).toArrow()
 
 

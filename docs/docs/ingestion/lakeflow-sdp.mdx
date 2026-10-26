@@ -43,7 +43,7 @@ Two GeoBrix examples ship as complete Lakeflow SDP bundles. Each opens on its La
 A pipeline runs on the Databricks Runtime of its **channel**, not on a Serverless environment
 version. Install GeoBrix with the extra for that runtime:
 
-| Channel | Runtime as of v0.5.3 (October 2026) | GeoBrix extra |
+| Channel | Runtime as of v0.6.0 (October 2026) | GeoBrix extra |
 |---------|-------------------------------------|---------------|
 | `CURRENT` (default) | DBR 18 | `light_dbr18` |
 | `PREVIEW` | DBR 19 | `light_dbr19` |
@@ -101,7 +101,7 @@ Or straight from the GitHub release, when the pipeline's compute can reach githu
   selectively, for example `databricks bundle run <pipeline> --refresh <table>,<table>`.
 - **Check product `st_*` functions against the channel's runtime.** Databricks `st_*` functions
   arrive with runtime releases, so a pipeline can lack one that a notebook on a newer runtime has.
-  As of v0.5.3 (October 2026), `st_makevalid` was not available on the `CURRENT` channel. Where
+  As of v0.6.0 (October 2026), `st_makevalid` was not available on the `CURRENT` channel. Where
   one is missing, use its GeoBrix `gbx_st_*` counterpart. See
   [Databricks Spatial](../databricks-spatial).
 

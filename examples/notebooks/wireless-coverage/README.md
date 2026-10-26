@@ -9,7 +9,7 @@ consume for antenna siting and line-of-sight analysis.
 > 0.5.2 — the `lidar_gbx` reader, the point-cloud surface functions (`rst_binpoints`, `rst_chm`,
 > `rst_isoband`), and `h3_viewshed_towers`. The notebooks install `geobrix[light_env6,vizx]` on
 > Serverless environment 6 (`light_env5` on environment 5). The [Lakeflow pipeline](lakeflow/README.md)
-> needs 0.5.3 or newer.
+> needs 0.6.0 or newer.
 
 ![Wireless Coverage series — config_nb → 01 → 02a/02b → 03a → 03b → 04](https://raw.githubusercontent.com/databrickslabs/geobrix/main/resources/images/diagrams/wireless-coverage/wireless-coverage-overview.png)
 

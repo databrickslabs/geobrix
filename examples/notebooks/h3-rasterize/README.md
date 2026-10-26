@@ -58,8 +58,8 @@ shared canvas, cumulative tier overlays, and a final coverage-depth composite.
   lightweight default runs on Serverless. Step 4 persists the
   per-tier tiles to a **permanent table** you own (`CATALOG.SCHEMA.wc_dem_tier_tiles`); set a
   catalog/schema you can write to.
-- **GeoBrix 0.5.3.** Update the `%pip install` cell to point at your staged
-  `geobrix-0.5.3-py3-none-any.whl`. The `[light_env5,stac,vizx,overture]` extras install
+- **GeoBrix 0.6.0.** Update the `%pip install` cell to point at your staged
+  `geobrix-0.6.0-py3-none-any.whl`. The `[light_env5,stac,vizx,overture]` extras install
   rasterio, geopandas, matplotlib, mapclassify, the planetary-computer STAC client, and
   Overture Maps helpers — no other dependencies assumed pre-staged.
 - **Unity Catalog Volumes.** `DemDownloader()` stages the 3DEP seamless (10 m) GeoTIFFs to

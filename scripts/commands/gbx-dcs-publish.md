@@ -33,7 +33,7 @@ bash scripts/commands/gbx-dcs-publish.sh --candidate
 
 # After the candidate is verified on a cluster, push the release tags
 # (the digest is the one --candidate printed in its DIGEST= line)
-bash scripts/commands/gbx-dcs-publish.sh --release --confirm 0.5.3 --expect-digest sha256:<hex>
+bash scripts/commands/gbx-dcs-publish.sh --release --confirm 0.6.0 --expect-digest sha256:<hex>
 ```
 
 ## Notes

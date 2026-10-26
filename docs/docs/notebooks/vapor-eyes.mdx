@@ -20,15 +20,15 @@ start for understanding the GeoBrix functions involved in the detection cascade.
   `EmitDownloader` / `WellsDownloader` sample downloaders — and installs the `light_env6` and
   `earthdata` extras, which arrived in 0.5.0 (`geobrix[light_env6,stac,vizx,earthdata]`; use
   `light_env5` on Serverless environment 5).
-- **Lakeflow SDP pipeline: GeoBrix 0.5.3 or newer** — it reads its files with
-  [`read_paths`](../ingestion/read-paths), new in 0.5.3. It installs the extra for its Lakeflow
+- **Lakeflow SDP pipeline: GeoBrix 0.6.0 or newer** — it reads its files with
+  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the extra for its Lakeflow
   runtime channel (see the Lakeflow tab).
 :::
 
 <Tabs groupId="vapor-eyes-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP + AI/BI Maps" default>
 
-**Requires GeoBrix 0.5.3 or newer.**
+**Requires GeoBrix 0.6.0 or newer.**
 
 A standalone, production-grade Permian Basin methane-monitoring pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus an [AI/BI dashboard](https://docs.databricks.com/aws/en/dashboards/), packaged as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running on the GeoBrix lightweight tier over Serverless compute.
 

@@ -50,7 +50,7 @@ The `photogrammetry` extra bundles: `pycolmap>=4.0.0`, `rasterio>=1.3`, `rio-cog
 
 The wheel is fetched from:
 ```
-/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.3-py3-none-any.whl
+/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl
 ```
 
 `03_segment` is standalone (no `%run ./config_nb`) and installs its own extras —

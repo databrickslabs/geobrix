@@ -173,7 +173,7 @@ def test_register_bundles_wheel_via_code_paths(monkeypatch):
     serving.register_to_unity_gateway(object(), "cat.sch.geosam", profile="oauth-fe")
     assert calls["code_paths"] == [serving.DEFAULT_WHEEL_PATH]
     pip_reqs_str = " ".join(calls["pip_reqs"])
-    assert "code/geobrix-0.5.3-py3-none-any.whl[models_gpu_env5]" in pip_reqs_str
+    assert "code/geobrix-0.6.0-py3-none-any.whl[models_gpu_env5]" in pip_reqs_str
     assert "segment-geospatial" in pip_reqs_str
     assert "file:///Volumes" not in pip_reqs_str
 

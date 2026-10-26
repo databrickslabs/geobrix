@@ -18,7 +18,7 @@ variables:
   # already-staged LiDAR and skip a second ~830 MB download.
   laz_dir: {default: ""}
   water_mask_dir: {default: ""}
-  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.3-py3-none-any.whl"}
+  gbx_wheel: {default: "/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl"}
 
 resources:
   pipelines:

@@ -14,10 +14,10 @@ authors = [
 ]
 
 dependencies = [
-    # geobrix >= 0.5.3 ships the shared read core (ds.paths). pyspark (provided by
+    # geobrix >= 0.6.0 ships the shared read core (ds.paths). pyspark (provided by
     # Databricks) and lakeflow-community-connectors are co-installed by the
     # pipeline environment.
-    "geobrix>=0.5.3",
+    "geobrix>=0.6.0",
 ]
 
 [project.optional-dependencies]

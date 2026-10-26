@@ -62,7 +62,7 @@ def test_build_commands_build_the_wheels_the_pipeline_installs():
     geobrix = tomllib.loads((REPO / "python/geobrix/pyproject.toml").read_text())
     extra = re.search(r"\[(\w+)\]", lines[0]).group(1)
     assert extra in geobrix["project"]["optional-dependencies"]
-    assert "geobrix>=0.5.3" in pyproject["project"]["dependencies"]  # "0.5.3 or later"
+    assert "geobrix>=0.6.0" in pyproject["project"]["dependencies"]  # "0.6.0 or later"
 
 
 def test_connection_options_match_the_spec():

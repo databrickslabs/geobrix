@@ -21,8 +21,8 @@ series** that walks through each step and the GeoBrix functions behind it.
   0.5.2: the `lidar_gbx` reader, the point-cloud surface functions (`rst_binpoints`, `rst_chm`,
   `rst_isoband`), and `h3_viewshed_towers`. On Serverless it installs `geobrix[light_env6,vizx]`
   (use `light_env5` on environment 5).
-- **Lakeflow SDP pipeline: GeoBrix 0.5.3 or newer** — it reads its LiDAR files with
-  [`read_paths`](../ingestion/read-paths), new in 0.5.3. It installs the extra for its Lakeflow
+- **Lakeflow SDP pipeline: GeoBrix 0.6.0 or newer** — it reads its LiDAR files with
+  [`read_paths`](../ingestion/read-paths), new in 0.6.0. It installs the extra for its Lakeflow
   runtime channel (see the Lakeflow tab).
 :::
 
@@ -47,7 +47,7 @@ Finally — zooming to the Golden Gate Park demo, where the ranked sites are leg
 <Tabs groupId="wireless-coverage-flavor" queryString="flavor">
 <TabItem value="lakeflow" label="Lakeflow SDP" default>
 
-**Requires GeoBrix 0.5.3 or newer.**
+**Requires GeoBrix 0.6.0 or newer.**
 
 A production-ready Wireless Coverage pipeline: a [Lakeflow Declarative Pipeline](https://docs.databricks.com/aws/en/dlt/) (SDP) plus a post-pipeline tower-siting task, packaged as a [Databricks Asset Bundle](https://docs.databricks.com/aws/en/dev-tools/bundles/) and running entirely on the GeoBrix **lightweight tier** over **Serverless** compute.
 
@@ -176,7 +176,7 @@ The bundle validates and deploys with the committed defaults in `databricks.yml`
 
 - **Schedule**: the job ships paused (`pause_status: PAUSED`, daily at `0 0 7 * * ?` America/Chicago) — unpause it in the workspace once you've confirmed a manual run.
 - **Shared LiDAR**: if you have already run the notebook series and staged the USGS 3DEP data, set `laz_dir` (and optionally `water_mask_dir`) in your override file to reuse those files and skip the ~830 MB download. See `databricks.override.yml.example` for the exact paths.
-- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.5.3-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
+- **GeoBrix wheel**: `gbx_wheel` points at a staged `geobrix-0.6.0-py3-none-any.whl`. Stage your own build at that path or override the variable to wherever your wheel lives.
 
 ## Configuration
 
@@ -195,7 +195,7 @@ Bundle variables (set in `databricks.yml`; override per-workspace in `databricks
 | `simplify` | `true` | Apply product `st_simplify` to isobands before H3 covering (default True = fast, no coverage loss, needed for full-SF performance; False = exact isobands, heavy/slow). |
 | `laz_dir` | _(derived)_ | Path to staged `.laz` EPT files. Leave empty to auto-derive under the Volume. Set to the notebook series' Volume path to reuse already-staged LiDAR. `laz_inventory` and the streaming table `wc_lidar_pts` keep the files and points of an earlier folder, so after changing `laz_dir` on a deployed pipeline reset both once: `databricks bundle run wireless_coverage_lf_pipeline --full-refresh laz_inventory,wc_lidar_pts`. |
 | `water_mask_dir` | _(derived)_ | Path to staged Overture water GeoParquet. Leave empty to auto-derive. |
-| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.5.3-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
+| `gbx_wheel` | `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-0.6.0-py3-none-any.whl` | Path to the staged GeoBrix wheel. |
 
 Algorithm and resolution parameters are tunable via `wireless_coverage.*` keys in the pipeline `configuration` block. Key defaults:
 

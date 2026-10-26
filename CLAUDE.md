@@ -8,11 +8,11 @@ core. The index of those rules is at the bottom.
 
 ## Project
 
-**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.5.3**. APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
+**GeoBrix** is a high-performance spatial processing library — a modern successor to [DBLabs Mosaic](https://databrickslabs.github.io/mosaic/), targeting Databricks Runtime (DBR 17.3, 18, or 19). Current version **0.6.0**. APIs may break to stabilize, and there are **no function aliases** — one canonical name per function. See `docs/docs/release-notes.mdx` for breaking changes.
 
 Heavy code is Scala/Spark (JAR); lightweight bindings are Python (wheel) and SQL, both wrapping the Scala columnar expressions via Spark Connect.
 
-Current branch: `beta/0.5.0`. Repo: `databrickslabs/geobrix`. Release fixes land on `beta/*` first; the user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `beta/*`.
+Current branch: `beta/0.6.0` (cut 2026-10-22 from the old `beta/0.5.0`, which was deleted; `beta/0.5.2` = the v0.5.2 release line, kept for hotfixes only — 0.5.2 is the last 0.5.x). Repo: `databrickslabs/geobrix`. Release fixes land on `beta/*` first; the user merges to `main` (docs deploy is main-only). A `branch/*` name is a red flag — confirm `beta/*`.
 
 ## Working patterns in this repo
 

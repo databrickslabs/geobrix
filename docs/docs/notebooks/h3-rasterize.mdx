@@ -36,9 +36,9 @@ The notebook uses the **lightweight tier** — pure Python/PySpark bindings (`da
 ## Prerequisites
 
 - **Databricks Runtime 17.3 LTS / 18.1+ or Serverless** (Spark 4 / Python 3.12). Lightweight default runs on Serverless. Session temp tables (Step 4) require Serverless or DBR 18.1+; they are not available on dedicated / single-user clusters.
-- **GeoBrix** (version 0.5.3). The `%pip install` cell installs the `geobrix[light_env5,stac,vizx,overture]` wheel, which pulls in `rasterio`, `matplotlib`, `geopandas`, `mapclassify` (visualization), planetary-computer STAC client (`stac`), and Overture Maps helpers (`overture`). No JAR or GDAL init script is required.
+- **GeoBrix** (version 0.6.0). The `%pip install` cell installs the `geobrix[light_env5,stac,vizx,overture]` wheel, which pulls in `rasterio`, `matplotlib`, `geopandas`, `mapclassify` (visualization), planetary-computer STAC client (`stac`), and Overture Maps helpers (`overture`). No JAR or GDAL init script is required.
 - **Unity Catalog Volumes**: `DemDownloader()` stages the USGS 3DEP seamless (10 m) GeoTIFFs to `/Volumes/geospatial_docs/geobrix/sample-data/geobrix-examples/sf/elevation-3dep/dem_10m`; `OvertureClient` stages the Overture water layer to `.../sf/overture-water-bay`. Update `DEM_DIR` and `LAND_DIR` if your Volume layout differs. The Volume root must already exist; staging creates sub-directories automatically.
-- **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.5.3-py3-none-any.whl` if its Volume path differs from the default.
+- **Wheel path**: update the `%pip install` cell to point at your staged `geobrix-0.6.0-py3-none-any.whl` if its Volume path differs from the default.
 - **Databricks product H3**: `h3_try_coverash3` is a built-in Databricks function available on **DBR 16.3+ / Serverless**, accessed via the product Python bindings (`from pyspark.databricks.sql import functions as DBF`) — no extra install is needed.
 
 ---

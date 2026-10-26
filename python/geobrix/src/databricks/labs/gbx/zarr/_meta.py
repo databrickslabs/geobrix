@@ -121,6 +121,28 @@ def _endian(codecs) -> str:
     return "<"
 
 
+def _extent(name: str, value, what: str, *, minimum: int) -> tuple[int, ...]:
+    """``value`` as a tuple of integers, each at least ``minimum``; anything else is malformed."""
+    ok = isinstance(value, (list, tuple)) and all(
+        isinstance(n, int) and not isinstance(n, bool) and n >= minimum for n in value
+    )
+    if not ok:
+        raise ZarrUnsupported(
+            f"the {what} {value!r} of array {name!r} is not a list of integers "
+            f"({'positive' if minimum else 'non-negative'})",
+            fix="repair or rewrite the array's metadata",
+        )
+    return tuple(value)
+
+
+def _same_rank(name: str, shape, chunks) -> None:
+    if len(shape) != len(chunks):
+        raise ZarrUnsupported(
+            f"array {name!r} has shape {shape} but chunks {chunks}, which differ in length",
+            fix="repair or rewrite the array's metadata",
+        )
+
+
 def parse_v3(name: str, doc: dict) -> ArrayMeta:
     # the model owns its document; the caller's dict stays theirs
     doc = copy.deepcopy(doc)
@@ -146,14 +168,16 @@ def parse_v3(name: str, doc: dict) -> ArrayMeta:
             fix="rewrite the array so sharding_indexed is its only outer codec; "
             "put compression and other codecs inside it",
         )
-    outer = tuple(grid["configuration"]["chunk_shape"])
+    outer = _extent(
+        name, grid["configuration"]["chunk_shape"], "chunk shape", minimum=1
+    )
     shard = None
     shards = None
     chunks = outer
     inner_codecs = codecs
     if codecs and codecs[0].get("name") == "sharding_indexed":
         cfg = codecs[0]["configuration"]
-        chunks = tuple(cfg["chunk_shape"])
+        chunks = _extent(name, cfg["chunk_shape"], "inner chunk shape", minimum=1)
         shards = outer
         inner_codecs = tuple(cfg.get("codecs") or ())
         shard = ShardSpec(
@@ -164,7 +188,8 @@ def parse_v3(name: str, doc: dict) -> ArrayMeta:
         )
     base = _V3_DTYPES[dt]
     dtype = base if base[0] == "|" else _endian(inner_codecs) + base
-    shape = tuple(doc["shape"])
+    shape = _extent(name, doc["shape"], "shape", minimum=0)
+    _same_rank(name, shape, outer)
     return ArrayMeta(
         name=name,
         zarr_format=3,
@@ -198,7 +223,9 @@ def parse_v2(name: str, zarray: dict, zattrs: dict) -> ArrayMeta:
             fix="read it as raw blocks with decode=False, or convert the array to a numeric dtype",
         )
     dtype = np_dtype.str
-    shape = tuple(zarray["shape"])
+    shape = _extent(name, zarray["shape"], "shape", minimum=0)
+    chunks = _extent(name, zarray["chunks"], "chunk shape", minimum=1)
+    _same_rank(name, shape, chunks)
     dims = tuple(
         zattrs.get("_ARRAY_DIMENSIONS") or (f"dim_{i}" for i in range(len(shape)))
     )
@@ -207,7 +234,7 @@ def parse_v2(name: str, zarray: dict, zattrs: dict) -> ArrayMeta:
         zarr_format=2,
         shape=shape,
         dtype=dtype,
-        chunks=tuple(zarray["chunks"]),
+        chunks=chunks,
         shards=None,
         shard=None,
         dims=dims,
@@ -338,6 +365,61 @@ def cf_decode(
     ).values
 
 
+def missing_mask(
+    values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
+) -> np.ndarray | None:
+    """Which cells of ``values`` (as stored) are missing data, or ``None`` when nothing masks.
+
+    A cell is missing when it equals the ``_FillValue`` or one of the ``missing_value``s
+    (and, where ``use_zarr_fill_value_as_mask`` applies, the array ``fill_value``; see
+    ``_cf_attrs``). The comparison is on the stored values, before any scaling, so it is
+    exact for integers of any size. A NaN fill value matches NaN cells; a NaN that is data
+    beside a numeric fill is not missing. A boolean array is never masked.
+    """
+    values = np.asarray(values)
+    if values.dtype.kind == "b":
+        return None
+    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    fills = []
+    for key in ("_FillValue", "missing_value"):
+        raw = attrs.get(key)
+        if raw is not None:
+            fills.extend(np.asarray(raw).reshape(-1).tolist())
+    mask = None
+    for fill in fills:
+        if isinstance(fill, bool) or not isinstance(fill, (int, float)):
+            continue  # xarray masks numbers only
+        if isinstance(fill, float) and math.isnan(fill):
+            hit = np.isnan(values) if values.dtype.kind in "fc" else None
+        else:
+            hit = values == fill
+        if hit is not None:
+            mask = hit if mask is None else mask | hit
+    return mask
+
+
+def cf_unpack(
+    values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
+) -> tuple[np.ndarray, np.ndarray | None]:
+    """``(values, mask)`` for a reader that wants missing data as a mask, not as NaN.
+
+    ``mask`` is ``missing_mask`` (``None`` when nothing is masked). ``values`` keep their
+    stored dtype, and so stay exact for integers, unless the array is packed
+    (``scale_factor`` or ``add_offset``), when they are decoded to floating point as
+    ``cf_decode`` does. The cells under ``mask`` hold no meaningful value.
+    """
+    values = np.asarray(values)
+    mask = missing_mask(
+        values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+    )
+    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    if "scale_factor" in attrs or "add_offset" in attrs:
+        values = cf_decode(
+            values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+        )
+    return values, mask
+
+
 def is_time_coord(meta: ArrayMeta) -> bool:
     """Whether the array's ``units`` attribute is a CF time unit (``"hours since 1900-01-01"``)."""
     units = meta.attrs.get("units")
@@ -349,8 +431,9 @@ def decode_coord(
 ) -> np.ndarray:
     """Decode a coordinate: CF time units become ``datetime64[ns]``, anything else is returned as is.
 
-    A time coordinate is masked first, as xarray does, so a missing value (a ``_FillValue``, a NaN,
-    or the array ``fill_value`` where ``use_zarr_fill_value_as_mask`` applies) decodes to ``NaT``.
+    A missing value (a ``_FillValue`` or ``missing_value``, a NaN, or the array ``fill_value``
+    where ``use_zarr_fill_value_as_mask`` applies) decodes to ``NaT``, as in xarray. Integer
+    times decode exactly.
     Anything GeoBrix cannot decode raises ``ZarrUnsupported``: a calendar other than the standard
     ones, a unit that is not a CF time unit, a reference date that is not a date, and times
     outside what ``datetime64[ns]`` holds (the years 1678 to 2262).
@@ -368,9 +451,22 @@ def decode_coord(
     from xarray.coding.times import decode_cf_datetime
 
     fix = "pass decode=False to read the raw time numbers"
-    values = cf_decode(
-        values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
-    )
+    # Missing times are found on the stored values and put back as NaT afterwards, so an
+    # integer coordinate (nanoseconds since 1970, say) never passes through float64; the
+    # fill itself is replaced by 0 for the decoding, where it could lie outside the range.
+    values = np.asarray(values)
+    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    mask = None
+    if "scale_factor" in attrs or "add_offset" in attrs:
+        values = cf_decode(
+            values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+        )
+    else:
+        mask = missing_mask(
+            values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+        )
+        if mask is not None and mask.any():
+            values = np.where(mask, np.zeros((), dtype=values.dtype), values)
     try:
         decoded = decode_cf_datetime(values, units, calendar, use_cftime=False)
     except KeyError as e:  # xarray looks the unit up by name
@@ -394,7 +490,10 @@ def decode_coord(
             "datetime64[ns], the years 1678 to 2262",
             fix=fix,
         ) from None
-    return np.asarray(decoded).astype("datetime64[ns]")
+    decoded = np.array(decoded).astype("datetime64[ns]")
+    if mask is not None:
+        decoded[mask] = np.datetime64("NaT")
+    return decoded
 
 
 def _reference_problem(units: str) -> str | None:

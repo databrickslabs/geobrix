@@ -403,3 +403,138 @@ def test_use_zarr_fill_value_as_mask_must_be_a_bool_or_none(era5_v3_unsharded):
     m = _int_meta(era5_v3_unsharded, {})
     with pytest.raises(ValueError, match="use_zarr_fill_value_as_mask"):
         cf_decode(np.array([0], dtype="<i2"), m, use_zarr_fill_value_as_mask="yes")
+
+
+# --- Task 9 fix round 1: exact integers, masks as masks ---------------------------------
+
+
+def _packed_meta(era5_v3_unsharded, dtype, attrs, fill=0):
+    doc = copy.deepcopy(_doc(era5_v3_unsharded, "t2m"))
+    doc.update(data_type=dtype, fill_value=fill, attributes=attrs)
+    return parse_v3("n", doc)
+
+
+def test_missing_mask_compares_the_raw_values_with_the_fill_attributes(
+    era5_v3_unsharded,
+):
+    from databricks.labs.gbx.zarr._meta import missing_mask
+
+    m = _packed_meta(
+        era5_v3_unsharded, "int16", {"_FillValue": -1, "missing_value": [-2, -3]}
+    )
+    raw = np.array([-1, 5, -2, -3, 0], dtype="<i2")
+    assert list(missing_mask(raw, m)) == [True, False, True, True, False]
+    plain = _packed_meta(era5_v3_unsharded, "int16", {})
+    assert (
+        missing_mask(raw, plain) is None
+    )  # nothing to mask: v3 fill_value never masks
+    assert list(missing_mask(raw, plain, use_zarr_fill_value_as_mask=True)) == [
+        False,
+        False,
+        False,
+        False,
+        True,
+    ]
+
+
+def test_missing_mask_nan_fill_masks_nan_and_a_numeric_fill_leaves_nan_alone(
+    era5_v3_unsharded,
+):
+    from databricks.labs.gbx.zarr._meta import missing_mask
+
+    nan_fill = _packed_meta(era5_v3_unsharded, "float32", {"_FillValue": "NaN"}, "NaN")
+    values = np.array([1.0, np.nan, -9999.0], dtype="<f4")
+    assert list(missing_mask(values, nan_fill)) == [False, True, False]
+    numeric = _packed_meta(era5_v3_unsharded, "float32", {"_FillValue": -9999.0}, "NaN")
+    # a NaN that is data, with a different fill, is not missing
+    assert list(missing_mask(values, numeric)) == [False, False, True]
+
+
+def test_missing_mask_never_masks_a_bool_array(era5_v2):
+    from databricks.labs.gbx.zarr._meta import missing_mask
+
+    za = json.loads((era5_v2 / "t2m" / ".zarray").read_text())
+    za.update(dtype="|b1", fill_value=False)
+    m = parse_v2("flag", za, {})
+    assert missing_mask(np.array([True, False]), m) is None
+
+
+def test_cf_unpack_keeps_exact_integers_and_returns_the_mask_separately(
+    era5_v3_unsharded,
+):
+    from databricks.labs.gbx.zarr._meta import cf_unpack
+
+    big = 2**53 + 1
+    m = _packed_meta(era5_v3_unsharded, "int64", {"_FillValue": -1})
+    raw = np.array([big, -1, 7], dtype="<i8")
+    values, mask = cf_unpack(raw, m)
+    assert (
+        values.dtype == np.dtype("int64") and values[0] == big
+    )  # exact: not via float64
+    assert list(mask) == [False, True, False]
+    # packing is decoded to floating point (the mask is still from the raw values)
+    packed = _packed_meta(
+        era5_v3_unsharded,
+        "int16",
+        {"_FillValue": -1, "scale_factor": 0.5, "add_offset": 10.0},
+    )
+    values, mask = cf_unpack(np.array([2, -1], dtype="<i2"), packed)
+    assert (
+        values.dtype.kind == "f" and values[0] == 11.0 and list(mask) == [False, True]
+    )
+    # no fill, no packing: the values as stored, no mask
+    values, mask = cf_unpack(raw, _packed_meta(era5_v3_unsharded, "int64", {}))
+    assert values.dtype == np.dtype("int64") and mask is None
+
+
+def test_integer_time_coordinates_with_a_fill_decode_exactly(tmp_path):
+    """int64 nanoseconds beyond 2**53 must not pass through float64; the fill becomes NaT."""
+    import zarr
+
+    raw = np.array(
+        [1672531200000000001, -9223372036854775808, 1685620800123456789], dtype="i8"
+    )
+    want = [1672531200000000001, None, 1685620800123456789]
+    for fmt in (2, 3):
+        path = tmp_path / f"t{fmt}.zarr"
+        g = zarr.open_group(str(path), mode="w", zarr_format=fmt)
+        attrs = {"units": "nanoseconds since 1970-01-01", "calendar": "standard"}
+        if fmt == 2:
+            attrs["_ARRAY_DIMENSIONS"] = ["time"]
+        else:
+            attrs["_FillValue"] = int(raw[1])
+        kw = {"dimension_names": ("time",)} if fmt == 3 else {}
+        a = g.create_array(
+            "time",
+            shape=(3,),
+            chunks=(3,),
+            dtype="i8",
+            fill_value=int(raw[1]),
+            attributes=attrs,
+            **kw,
+        )
+        a[:] = raw
+        meta = (
+            parse_v3("time", json.loads((path / "time" / "zarr.json").read_text()))
+            if fmt == 3
+            else parse_v2(
+                "time",
+                json.loads((path / "time" / ".zarray").read_text()),
+                json.loads((path / "time" / ".zattrs").read_text()),
+            )
+        )
+        ours = decode_coord(raw, meta)
+        assert ours.dtype == np.dtype("datetime64[ns]")
+        got = [None if np.isnat(x) else int(x.astype("i8")) for x in ours]
+        assert got == want, (fmt, got)
+        theirs = xr_time(path)
+        np.testing.assert_array_equal(ours, theirs)
+
+
+def xr_time(path):
+    import xarray as xr
+    from xarray.backends.zarr import ZarrStore
+
+    return xr.open_dataset(
+        ZarrStore.open_group(str(path), mode="r", consolidated=False)
+    ).time.values

@@ -81,12 +81,13 @@ if [ "$JAR_STEP" = true ]; then
     gbx_acquire_test_lock
 fi
 
-# The upload uses WorkspaceClient (databricks-sdk): see gbx_python_with_sdk in common.sh. A
-# local-only build (GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1) imports no SDK, so it keeps system python3
-# and needs neither network nor uv.
+# The upload uses WorkspaceClient (databricks-sdk): see gbx_python_with_sdk in common.sh. With
+# no .venv-pyrx the launcher falls back to `python -m build` on that interpreter, so ask for
+# `build` as well. A local-only build (GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1) imports no SDK, so it
+# keeps system python3 and needs neither network nor uv.
 case "$(printf '%s' "${GBX_BUNDLE_SKIP_WHEEL_UPLOAD:-}" | tr '[:upper:]' '[:lower:]')" in
     1|true|yes) GBX_SDK_PYTHON=(python3) ;;
-    *) gbx_python_with_sdk ;;
+    *) gbx_python_with_sdk build || exit 1 ;;
 esac
 
 if [[ -n "$LOG_FILE" ]]; then

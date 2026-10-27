@@ -423,23 +423,35 @@ run_in_pyrx_venv() {
 
 # Python that can import databricks-sdk, for the launchers that talk to a workspace
 # (gbx:data:stage-jar, gbx:data:stage-wheel, gbx:test:notebooks-serverless, gbx:bench:cluster).
-# Sets the array GBX_SDK_PYTHON; run a script with it:
-#   gbx_python_with_sdk; "${GBX_SDK_PYTHON[@]}" examples/tests/<launcher>.py ...
+# Sets the array GBX_SDK_PYTHON; run a script with it (after parsing arguments, so --help
+# works anywhere):
+#   gbx_python_with_sdk [extra-pip-package ...] || exit 1
+#   "${GBX_SDK_PYTHON[@]}" examples/tests/<launcher>.py ...
 # The pyrx venv is the CI light lock and carries no databricks-sdk, so it is used as it is only
-# when it can import the SDK. Otherwise `uv run --with databricks-sdk` layers the SDK over the
-# venv's interpreter (its packages, such as the bench launcher's rasterio, stay importable), or
-# over Python 3.12 when there is no venv; system python3 is the last resort when uv is absent.
+# when it can import the SDK (extra packages are then the venv's business). Otherwise
+# `uv run --with databricks-sdk [--with <extra> ...]` layers the SDK over the venv's own
+# interpreter (its packages, such as the bench launcher's rasterio, stay importable), or over
+# Python 3.12 when there is no venv, where only the SDK and the extras exist: a launcher that
+# builds the wheel passes `build`. Without uv, system python3 is used if it has the SDK;
+# otherwise this prints one hint and returns 1.
 # Needs PROJECT_ROOT (every command sets it before sourcing this file); GBX_PYRX_VENV moves the venv.
 gbx_python_with_sdk() {
     local _venv_py="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}/bin/python"
+    local _with=(--with databricks-sdk) _pkg
+    for _pkg in "$@"; do _with+=(--with "${_pkg}"); done
     if [[ -x "${_venv_py}" ]] && "${_venv_py}" -c "import databricks.sdk" >/dev/null 2>&1; then
         GBX_SDK_PYTHON=("${_venv_py}")
     elif command -v uv >/dev/null 2>&1; then
         local _base="3.12"
         [[ -x "${_venv_py}" ]] && _base="${_venv_py}"
-        GBX_SDK_PYTHON=(uv run --no-project --python "${_base}" --with databricks-sdk python)
-    else
+        GBX_SDK_PYTHON=(uv run --no-project --python "${_base}" "${_with[@]}" python)
+    elif python3 -c "import databricks.sdk" >/dev/null 2>&1; then
         GBX_SDK_PYTHON=(python3)
+    else
+        echo "ERROR: no Python with databricks-sdk: uv is not installed and python3 cannot import it." >&2
+        echo "       Install uv (https://docs.astral.sh/uv/), which fetches the SDK on demand," >&2
+        echo "       or run: python3 -m pip install databricks-sdk" >&2
+        return 1
     fi
 }
 

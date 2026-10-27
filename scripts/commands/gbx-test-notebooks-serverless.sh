@@ -15,10 +15,6 @@ source "$SCRIPT_DIR/common.sh"
 
 RUNNER_SCRIPT="$PROJECT_ROOT/examples/tests/run_notebooks_serverless.py"
 
-# The runner needs databricks-sdk and Python >= 3.11 (tomllib): see gbx_python_with_sdk in common.sh.
-gbx_python_with_sdk
-PYTHON_CMD=("${GBX_SDK_PYTHON[@]}")
-
 show_help() {
     show_banner "GeoBrix: Serverless Notebook Tests"
     echo -e "${CYAN}Usage:${NC}"
@@ -122,6 +118,11 @@ fi
 # ---------------------------------------------------------------------------
 show_banner "GeoBrix: Serverless Notebook Tests"
 setup_log_file "$LOG_PATH"
+
+# The runner needs databricks-sdk and Python >= 3.11 (tomllib): see gbx_python_with_sdk in common.sh.
+# Chosen here, after --help, so help works on a machine with no SDK.
+gbx_python_with_sdk || exit 1
+PYTHON_CMD=("${GBX_SDK_PYTHON[@]}")
 
 echo -e "${CYAN}Runner : ${YELLOW}$RUNNER_SCRIPT${NC}"
 echo -e "${CYAN}Python : ${YELLOW}${PYTHON_CMD[*]}${NC}"

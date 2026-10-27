@@ -49,6 +49,6 @@ case "$(printf '%s' "${GBX_BUNDLE_SKIP_JAR:-}" | tr '[:upper:]' '[:lower:]')" in
 esac
 
 # The upload uses WorkspaceClient (databricks-sdk): see gbx_python_with_sdk in common.sh.
-gbx_python_with_sdk
+gbx_python_with_sdk || exit 1
 "${GBX_SDK_PYTHON[@]}" examples/tests/stage_jar_to_volume.py
 exit $?

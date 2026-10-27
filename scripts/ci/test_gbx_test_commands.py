@@ -456,72 +456,123 @@ def _venv_python(sandbox, *, sdk, venv=None):
     return python, venv / "calls.log"
 
 
-def _sdk_python(sandbox, **env):
-    """What gbx_python_with_sdk (common.sh) picks, one word per line."""
+def _fake_python3(directory, *, sdk):
+    """A `python3` that can or cannot import databricks.sdk; any other call is recorded."""
+    directory.mkdir(parents=True, exist_ok=True)
+    python3, log = directory / "python3", directory / "python3.log"
+    python3.write_text(
+        '#!/bin/sh\n[ "$1" = "-c" ] && exit %d\necho "$*" >> "%s"\nexit 0\n'
+        % (0 if sdk else 1, log)
+    )
+    python3.chmod(0o755)
+    return log
+
+
+def _run_sdk_helper(sandbox, *packages, **env):
+    """Run gbx_python_with_sdk (common.sh); returns the result and the chosen command's words."""
     res = subprocess.run(
         [
             "bash",
             "-c",
             f'PROJECT_ROOT="{sandbox.root}"; source "{sandbox.commands}/common.sh"; '
-            'gbx_python_with_sdk; printf "%s\\n" "${GBX_SDK_PYTHON[@]}"',
+            f'gbx_python_with_sdk {" ".join(packages)} || exit 1; '
+            'printf "%s\\n" "${GBX_SDK_PYTHON[@]}"',
         ],
         env=sandbox.env(**env),
         capture_output=True,
         text=True,
         timeout=60,
     )
+    return res, res.stdout.split("\n")[:-1]
+
+
+def _sdk_python(sandbox, *packages, **env):
+    res, words = _run_sdk_helper(sandbox, *packages, **env)
     assert res.returncode == 0, res.stderr
-    return res.stdout.split("\n")[:-1]
+    return words
 
 
 def test_the_sdk_python_is_the_venv_only_when_the_venv_can_import_the_sdk(
     sandbox, tmp_path
 ):
-    # With the SDK: the venv as it is. Without it (the CI-lock venv): uv layers the SDK over the
-    # venv's own interpreter, so the venv's packages stay importable. No venv: uv on 3.12.
-    # No venv and no uv: system python3.
-    uv = ["run", "--no-project", "--python"]
+    # With the SDK: the venv as it is. Without it (the CI-lock venv): uv layers the SDK, and any
+    # extra package, over the venv's own interpreter, so the venv's packages stay importable.
+    # No venv: uv on 3.12. No uv: system python3, if it can import the SDK.
+    uv = ["uv", "run", "--no-project", "--python"]
     with_sdk, _ = _venv_python(sandbox, sdk=True)
     assert _sdk_python(sandbox) == [str(with_sdk)]
+    assert _sdk_python(sandbox, "build") == [
+        str(with_sdk)
+    ]  # extras are the venv's business
 
     other, _ = _venv_python(sandbox, sdk=False, venv=tmp_path / "bare")
-    layered = _sdk_python(sandbox, GBX_PYRX_VENV=str(tmp_path / "bare"))
-    assert layered == ["uv"] + uv + [str(other), "--with", "databricks-sdk", "python"]
+    bare = {"GBX_PYRX_VENV": str(tmp_path / "bare")}
+    assert _sdk_python(sandbox, **bare) == uv + [
+        str(other),
+        *("--with", "databricks-sdk", "python"),
+    ]
+    assert _sdk_python(sandbox, "build", **bare) == uv + [
+        str(other),
+        *("--with", "databricks-sdk", "--with", "build", "python"),
+    ]
 
-    missing = _sdk_python(sandbox, GBX_PYRX_VENV=str(tmp_path / "nowhere"))
-    assert missing == ["uv"] + uv + ["3.12", "--with", "databricks-sdk", "python"]
+    nowhere = {"GBX_PYRX_VENV": str(tmp_path / "nowhere")}
+    assert _sdk_python(sandbox, "build", **nowhere) == uv + [
+        "3.12",
+        *("--with", "databricks-sdk", "--with", "build", "python"),
+    ]
 
-    assert _sdk_python(
-        sandbox, GBX_PYRX_VENV=str(tmp_path / "nowhere"), PATH="/usr/bin:/bin"
-    ) == ["python3"]
+    _fake_python3(tmp_path / "py3", sdk=True)
+    no_uv = {**nowhere, "PATH": f"{tmp_path / 'py3'}:/usr/bin:/bin"}
+    assert _sdk_python(sandbox, **no_uv) == ["python3"]
+
+
+def test_without_uv_or_an_sdk_the_helper_stops_with_one_hint(sandbox, tmp_path):
+    # A bare traceback ("No module named databricks") told the user nothing about the fix.
+    _fake_python3(tmp_path / "py3", sdk=False)
+    nowhere = str(tmp_path / "nowhere")
+
+    res, words = _run_sdk_helper(
+        sandbox, GBX_PYRX_VENV=nowhere, PATH=f"{tmp_path / 'py3'}:/usr/bin:/bin"
+    )
+
+    assert res.returncode == 1 and words == []
+    assert "uv is not installed" in res.stderr and "Install uv" in res.stderr
+    assert "pip install databricks-sdk" in res.stderr
+    assert "Traceback" not in res.stderr
 
 
 @pytest.mark.parametrize(
-    "command, args, env, launcher",
+    "command, args, env, launcher, extras",
     [
         (
             "gbx-data-stage-jar.sh",
             [],
             {"GBX_BUNDLE_SKIP_JAR": "1"},
             "stage_jar_to_volume",
+            [],
         ),
         (
             "gbx-data-stage-wheel.sh",
             [],
             {"GBX_BUNDLE_SKIP_JAR": "1"},
             "stage_wheel_to_volume",
+            [
+                "build"
+            ],  # without a venv it builds with `python -m build` on this interpreter
         ),
-        ("gbx-bench-cluster.sh", [], {}, "push_and_run_bench_on_cluster"),
+        ("gbx-bench-cluster.sh", [], {}, "push_and_run_bench_on_cluster", []),
         (
             "gbx-test-notebooks-serverless.sh",
             ["--notebook", "x.ipynb"],
             {},
             "run_notebooks_serverless",
+            [],
         ),
     ],
 )
 def test_the_workspace_launchers_get_the_sdk_when_the_venv_has_none(
-    sandbox, command, args, env, launcher
+    sandbox, command, args, env, launcher, extras
 ):
     # The venv is the CI light lock and has no databricks-sdk: running a launcher on it died with
     # "No module named databricks.sdk" before anything reached the workspace.
@@ -536,9 +587,44 @@ def test_the_workspace_launchers_get_the_sdk_when_the_venv_has_none(
     assert res.returncode == 0, res.output
     words = uv_log.read_text().splitlines()[-1].split()
     assert words[:4] == ["run", "--no-project", "--python", str(python)], words
-    assert words[4:7] == ["--with", "databricks-sdk", "python"], words
-    assert any(w.endswith(f"examples/tests/{launcher}.py") for w in words[7:]), words
+    packages = ["--with", "databricks-sdk"] + [x for p in extras for x in ("--with", p)]
+    assert words[4 : 5 + len(packages)] == packages + ["python"], words
+    assert any(w.endswith(f"examples/tests/{launcher}.py") for w in words), words
     assert not calls.exists()  # the SDK-less interpreter never ran the launcher itself
+
+
+def test_a_fresh_checkout_builds_the_wheel_on_an_interpreter_that_has_build(sandbox):
+    # No .venv-pyrx: stage_wheel_to_volume.py builds with `[sys.executable, -m, build]`, so the
+    # ephemeral uv Python needs `build` next to the SDK or the stage dies on "No module named build".
+    uv_log = _fake_uv(sandbox)
+    assert not (sandbox.root / ".venv-pyrx").exists()
+
+    res = sandbox.run("gbx-data-stage-wheel.sh", GBX_BUNDLE_SKIP_JAR="1")
+
+    assert res.returncode == 0, res.output
+    words = uv_log.read_text().splitlines()[-1].split()
+    assert words[:9] == [
+        *("run", "--no-project", "--python", "3.12"),
+        *("--with", "databricks-sdk", "--with", "build", "python"),
+    ], words
+    assert words[9].endswith("examples/tests/stage_wheel_to_volume.py"), words
+
+
+def test_a_local_only_wheel_build_needs_no_sdk_so_it_stays_on_python3(sandbox):
+    # GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1 imports no SDK: no uv, no network, and not the venv either.
+    _, venv_calls = _venv_python(sandbox, sdk=False)
+    uv_log = _fake_uv(sandbox)
+    py3_log = _fake_python3(sandbox.bin, sdk=False)
+
+    res = sandbox.run(
+        "gbx-data-stage-wheel.sh",
+        GBX_BUNDLE_SKIP_JAR="1",
+        GBX_BUNDLE_SKIP_WHEEL_UPLOAD="1",
+    )
+
+    assert res.returncode == 0, res.output
+    assert py3_log.read_text().split() == ["examples/tests/stage_wheel_to_volume.py"]
+    assert not uv_log.exists() and not venv_calls.exists()
 
 
 def test_a_launcher_runs_on_the_venv_itself_when_it_has_the_sdk(sandbox):

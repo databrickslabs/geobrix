@@ -30,7 +30,7 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 
 ## Interpreter
 
-The runner needs `databricks-sdk` and Python 3.11 or newer. It runs on `.venv-pyrx` when that venv can import the SDK (the CI-lock venv from `gbx:venv:sync` cannot), otherwise on `uv run --with databricks-sdk` layered over the venv's interpreter (Python 3.12 when there is no venv), otherwise system `python3`. The choice is the shared `gbx_python_with_sdk` helper in `common.sh`, which `gbx:data:stage-jar`, `gbx:data:stage-wheel` and `gbx:bench:cluster` use too.
+The runner needs `databricks-sdk` and Python 3.11 or newer. It runs on `.venv-pyrx` when that venv can import the SDK (the CI-lock venv from `gbx:venv:sync` cannot), otherwise on `uv run --with databricks-sdk` layered over the venv's interpreter (Python 3.12 when there is no venv), otherwise system `python3` if it has the SDK, otherwise it stops with a hint to install uv. The choice is the shared `gbx_python_with_sdk` helper in `common.sh`, which `gbx:data:stage-jar`, `gbx:data:stage-wheel` and `gbx:bench:cluster` use too.
 
 ## Each run is submitted once
 

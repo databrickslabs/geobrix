@@ -99,6 +99,6 @@ fi
 echo "Submitting benchmark job (this runs on a real cluster and costs compute)..."
 # The launcher imports the bench package (-> pyrx -> rasterio) and the databricks SDK: it runs
 # on the project's .venv-pyrx with the SDK layered over it (see gbx_python_with_sdk in common.sh).
-gbx_python_with_sdk
+gbx_python_with_sdk || exit 1
 "${GBX_SDK_PYTHON[@]}" examples/tests/push_and_run_bench_on_cluster.py "${PASS_ARGS[@]}"
 exit $?

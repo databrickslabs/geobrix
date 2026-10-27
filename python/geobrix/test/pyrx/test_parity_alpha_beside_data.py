@@ -80,7 +80,7 @@ def spark_with_jar():
 
     session = (
         SparkSession.builder.master("local[2]")
-        .appName("gbx-bng-quadbin-raster-grid-parity")
+        .appName("gbx-alpha-beside-data-parity")
         .config("spark.sql.shuffle.partitions", "2")
         .config(
             "spark.driver.extraJavaOptions",
@@ -140,23 +140,45 @@ def test_rastertogrid_alpha_parity(spark_with_jar, name, grid, resolution, assig
         ), f"{label}: {tier} totals {totals}"
 
 
-def _scalar(spark, raster, tier, fn):
-    """``fn(module, tile)`` of a one-row tile column in one tier -> the value."""
+def _tile_df(spark, raster, tier):
+    """A one-row DataFrame ``(tile)`` of ``raster`` made by one tier (its functions registered)."""
     from pyspark.sql import functions as f
 
     if tier == "light":
         from databricks.labs.gbx.pyrx import functions as mod
 
         mod.register(spark)
-        df = tp.light_tile_df(spark, raster)
-    else:
-        from databricks.labs.gbx.rasterx import functions as mod
+        return mod, tp.light_tile_df(spark, raster)
+    from databricks.labs.gbx.rasterx import functions as mod
 
-        mod.register(spark)
-        df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-            mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-        )
+    mod.register(spark)
+    return mod, spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
+        mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+    )
+
+
+def _scalar(spark, raster, tier, fn):
+    """``fn(module, tile)`` of a one-row tile column in one tier -> the value."""
+    from pyspark.sql import functions as f
+
+    mod, df = _tile_df(spark, raster, tier)
     return df.select(fn(mod, f.col("tile")).alias("v")).collect()[0]["v"]
+
+
+def _assert_scalar_parity(spark, raster, fn_names, label=""):
+    """Each of ``fn_names`` (an accessor of the tile) gives the same per-band values in both tiers."""
+    for fn_name in fn_names:
+        light = _scalar(spark, raster, "light", lambda m, t: getattr(m, fn_name)(t))
+        heavy = _scalar(spark, raster, "heavy", lambda m, t: getattr(m, fn_name)(t))
+        assert list(light) == pytest.approx(list(heavy)), f"{label} {fn_name}"
+
+
+def _both_tiers(spark, raster, fn):
+    """``{tier: decoded output raster}`` of ``fn(module, tile)`` in the light and the heavy tier."""
+    return {
+        tier: _decoded(_single_tile(spark, raster, tier, fn))
+        for tier in ("light", "heavy")
+    }
 
 
 @pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba", "rgb_nir"])
@@ -166,10 +188,9 @@ def test_alpha_statistics_parity(spark_with_jar, name):
     statistics used to count its transparent pixels)."""
     spark = spark_with_jar
     raster = _pattern_raster(name)
-    for fn_name in ("rst_pixelcount", "rst_min", "rst_max", "rst_avg"):
-        light = _scalar(spark, raster, "light", lambda m, t: getattr(m, fn_name)(t))
-        heavy = _scalar(spark, raster, "heavy", lambda m, t: getattr(m, fn_name)(t))
-        assert list(light) == pytest.approx(list(heavy)), f"{name} {fn_name}"
+    _assert_scalar_parity(
+        spark, raster, ("rst_pixelcount", "rst_min", "rst_max", "rst_avg"), name
+    )
     counts = _scalar(spark, raster, "light", lambda m, t: m.rst_pixelcount(t))
     assert list(counts) == _valid_counts(name)
     assert _scalar(spark, raster, "light", lambda m, t: m.rst_isempty(t)) is False
@@ -269,22 +290,14 @@ def _masked_rgb_nir():
 
 def _sql_rows(spark, raster, tier, sql):
     """The rows of ``sql`` over a one-row view ``_alpha_t(tile)`` made from ``raster`` in one tier."""
-    from pyspark.sql import functions as f
-
-    if tier == "light":
-        from databricks.labs.gbx.pyrx import functions as mod
-
-        mod.register(spark)
-        df = tp.light_tile_df(spark, raster)
-    else:
-        from databricks.labs.gbx.rasterx import functions as mod
-
-        mod.register(spark)
-        df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
-            mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
-        )
+    _, df = _tile_df(spark, raster, tier)
     df.createOrReplaceTempView("_alpha_t")
     return spark.sql(sql).collect()
+
+
+def _raster_of(name):
+    """The fixture of a test case: the RGB+NIR raster with an internal mask, or the 4x4 pattern of a layout."""
+    return _masked_rgb_nir() if name == "masked_rgb_nir" else _pattern_raster(name)
 
 
 @pytest.mark.parametrize(
@@ -294,7 +307,7 @@ def test_histogram_parity_over_the_pixels_valid_for_each_band(spark_with_jar, na
     """Per band, the histogram counts the pixels valid for it. The range [0, 8) holds the data values
     (0 and 7) and not the alpha band's 255: GDAL's buckets are half-open and numpy's close the top one, so
     a range ending on a value that occurs would count it in one tier only."""
-    raster = _masked_rgb_nir() if name == "masked_rgb_nir" else _pattern_raster(name)
+    raster = _raster_of(name)
     sql = "SELECT gbx_rst_histogram(tile, 8, 0.0, 8.0, false) AS h FROM _alpha_t"
     light = dict(_sql_rows(spark_with_jar, raster, "light", sql)[0]["h"])
     heavy = dict(_sql_rows(spark_with_jar, raster, "heavy", sql)[0]["h"])
@@ -307,19 +320,64 @@ def test_histogram_parity_over_the_pixels_valid_for_each_band(spark_with_jar, na
     assert (light["band_1"][0], light["band_1"][7]) == want, light["band_1"]
 
 
-@pytest.mark.parametrize("name", ["masked_rgb_nir"])
-def test_statistics_of_a_raster_with_its_own_mask_parity(spark_with_jar, name):
+def _default_range_histograms(spark, name):
+    """``{tier: {band: counts}}`` of 8 buckets over the range each tier derives from the valid pixels."""
+    # the light function is registered with its five arguments; the heavyweight one takes the range as
+    # absent in its 2-argument form (its 5-argument form with NULLs returns NULL)
+    sql = {
+        "light": "SELECT gbx_rst_histogram(tile, 8, NULL, NULL, false) AS h FROM _alpha_t",
+        "heavy": "SELECT gbx_rst_histogram(tile, 8) AS h FROM _alpha_t",
+    }
+    return {
+        tier: {
+            k: list(v)
+            for k, v in dict(
+                _sql_rows(spark, _raster_of(name), tier, sql[tier])[0]["h"]
+            ).items()
+        }
+        for tier in ("light", "heavy")
+    }
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "masked_rgb_nir"])
+def test_histogram_parity_with_the_default_range_below_the_maximum(
+    spark_with_jar, name
+):
+    """With the range derived from the valid pixels the tiers count the same pixels in every bucket but the
+    top one, where the heavyweight tier counts none of the pixels at the maximum (H19, below).
+    """
+    got = _default_range_histograms(spark_with_jar, name)
+    assert got["light"].keys() == got["heavy"].keys()
+    for band in got["light"]:
+        assert got["light"][band][:-1] == got["heavy"][band][:-1], (band, got)
+    assert any(
+        got["light"][b][-1] > got["heavy"][b][-1] for b in got["light"]
+    ), "the premise: some band has pixels at its maximum"
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "H19 (held for the streamline): the heavyweight histogram with the default range drops every "
+        "pixel equal to the band maximum (GDAL's buckets are half-open), the lightweight one counts it. "
+        "Pre-existing and unrelated to alpha; remove this mark when the heavyweight tier counts the maximum."
+    ),
+)
+@pytest.mark.parametrize("name", ["gray_x_alpha", "masked_rgb_nir"])
+def test_histogram_parity_with_the_default_range(spark_with_jar, name):
+    """With no range given both tiers derive it from the valid pixels of each band and must count the
+    same pixels in it, those at the maximum among them."""
+    got = _default_range_histograms(spark_with_jar, name)
+    assert got["light"] == got["heavy"], got
+
+
+def test_statistics_of_a_raster_with_its_own_mask_parity(spark_with_jar):
     """pixel count, min, max, mean per band and isempty: the masked column is left out in both tiers
     (heavy's multi-dimensional statistics ignored the mask band)."""
     raster = _masked_rgb_nir()
-    for fn_name in ("rst_pixelcount", "rst_min", "rst_max", "rst_avg"):
-        light = _scalar(
-            spark_with_jar, raster, "light", lambda m, t: getattr(m, fn_name)(t)
-        )
-        heavy = _scalar(
-            spark_with_jar, raster, "heavy", lambda m, t: getattr(m, fn_name)(t)
-        )
-        assert list(light) == pytest.approx(list(heavy)), fn_name
+    _assert_scalar_parity(
+        spark_with_jar, raster, ("rst_pixelcount", "rst_min", "rst_max", "rst_avg")
+    )
     counts = _scalar(spark_with_jar, raster, "light", lambda m, t: m.rst_pixelcount(t))
     assert list(counts) == [12, 12, 12, 12]
 
@@ -331,15 +389,9 @@ def test_focal_filter_parity_skips_transparent_and_masked_neighbours(
 ):
     from pyspark.sql import functions as f
 
-    raster = _striped(name)
-    outs = {
-        tier: _decoded(
-            _single_tile(
-                spark_with_jar, raster, tier, lambda m, t: m.rst_filter(t, 3, f.lit(op))
-            )
-        )
-        for tier in ("light", "heavy")
-    }
+    outs = _both_tiers(
+        spark_with_jar, _striped(name), lambda m, t: m.rst_filter(t, 3, f.lit(op))
+    )
     assert outs["light"]["dtype"] == outs["heavy"]["dtype"]
     assert (outs["light"]["data"][0] == outs["heavy"]["data"][0]).all(), op
     assert (outs["light"]["data"][0] == 5).all(), "a hidden 99 reached a window"
@@ -347,23 +399,17 @@ def test_focal_filter_parity_skips_transparent_and_masked_neighbours(
 
 @pytest.mark.parametrize("name", _STRIPED)
 def test_convolve_parity_skips_transparent_and_masked_neighbours(spark_with_jar, name):
-    """A 3x3 sum of ones. The edges differ by design (heavy skips the pixels off the raster, light
-    replicates the edge), so the interior is compared: every window there holds nine pixels or
-    their hidden neighbours' zero contribution."""
+    """A 3x3 sum of ones over the whole raster: both tiers add only the in-bounds neighbours (the
+    positions off the raster add 0, as a hidden neighbour does), so the edges agree too.
+    """
     from pyspark.sql import functions as f
 
-    raster = _striped(name)
     kernel = f.array(*[f.array(*[f.lit(1.0)] * 3)] * 3)
-    outs = {
-        tier: _decoded(
-            _single_tile(
-                spark_with_jar, raster, tier, lambda m, t: m.rst_convolve(t, kernel)
-            )
-        )
-        for tier in ("light", "heavy")
-    }
+    outs = _both_tiers(
+        spark_with_jar, _striped(name), lambda m, t: m.rst_convolve(t, kernel)
+    )
     light, heavy = outs["light"]["data"][0], outs["heavy"]["data"][0]
-    assert (light[1:5, 1:5] == heavy[1:5, 1:5]).all(), (light.tolist(), heavy.tolist())
+    assert (light == heavy).all(), (light.tolist(), heavy.tolist())
     assert heavy.max() <= 45, "a hidden 99 reached a window"
 
 
@@ -415,7 +461,7 @@ def test_derivedband_parity_is_invalid_where_the_input_is(spark_with_jar, name):
 
     from databricks.labs.gbx.pyrx.core._nodata import valid_mask
 
-    raster = _masked_rgb_nir() if name == "masked_rgb_nir" else _pattern_raster(name)
+    raster = _raster_of(name)
 
     def derive(m, t):
         from pyspark.sql import functions as f
@@ -448,16 +494,9 @@ def test_percentile_stretch_parity_over_the_pixels_valid_for_each_band(
     in both tiers: the values agree everywhere, the hidden pixels included."""
     # the 4x4 pattern: its valid values are 0 and 7 only, so both tiers' percentile rules (interpolated in
     # light, the nearest rank in heavy) give the same 0 and 7
-    raster = _masked_rgb_nir() if name == "masked_rgb_nir" else _pattern_raster(name)
-    outs = {
-        tier: _decoded(
-            _single_tile(
-                spark_with_jar,
-                raster,
-                tier,
-                lambda m, t: m.rst_percentile_stretch(t, 2.0, 98.0),
-            )
-        )
-        for tier in ("light", "heavy")
-    }
+    outs = _both_tiers(
+        spark_with_jar,
+        _raster_of(name),
+        lambda m, t: m.rst_percentile_stretch(t, 2.0, 98.0),
+    )
     assert (outs["light"]["data"] == outs["heavy"]["data"]).all()

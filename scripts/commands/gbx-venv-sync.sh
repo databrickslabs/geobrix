@@ -4,24 +4,25 @@ SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
-VENV_DIR="${PROJECT_ROOT}/.venv-pyrx"
+# GBX_PYRX_VENV moves the venv (e.g. to try a new lock without touching a venv a test run is using).
+VENV_DIR="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}"
 PYTHON_VERSION="3.12"
 LOG_PATH=""
-# Extras: the Serverless env 6 / DBR 19 light set plus the Zarr set (DBR 19 / env 6 only, so the
-# venv matches the runtime test/zarr targets). NOT the `test` extra: it pins
-# mapbox-vector-tile<2.2, which no light_env6 install can satisfy (light_env6 needs >=2.2).
-EXTRAS="light_env6,zarr_env6"
-# Test tools, installed directly instead. pyspark is capped because the Delta test jars that
-# test/zarr loads (conftest _DELTA_VERSION 4.0.x) run on Spark 4.0.x only; the CI lock pins 4.0.0.
-TEST_SPECS=("pytest>=7.0" "pyspark>=4.0,<4.1")
+# The venv is the CI light phase's install, not an extras resolve: the hash-pinned lock (every
+# test dependency at CI's exact version, incl. the Zarr set, pyspark 4.0.x for the Delta test
+# jars, tenacity/anywidget for test/stac and test/vizx), then the package itself with --no-deps.
+# An extras install floats: an older venv keeps stale versions (h3, pyogrio, numpy) that change
+# test results, and the `test` extra pins mapbox-vector-tile<2.2, which light_env6 (>=2.2) rejects.
+LIGHT_LOCK="${PROJECT_ROOT}/python/geobrix/requirements-light-env6-ci.txt"
 
 show_help() {
     show_banner "gbx:venv:sync — isolated pyrx venv"
     cat <<'EOF'
 Create or refresh an isolated uv venv (no system site-packages) for the light-tier
-tests (gbx:test:light / gbx:test:pyrx, zarr included), installing the
-[light_env6,zarr_env6] extras from python/geobrix plus pytest and pyspark>=4.0,<4.1.
-Re-running refreshes an existing venv in place; --recreate starts from scratch.
+tests (gbx:test:light / gbx:test:pyrx, zarr included). It installs what the light CI phase
+installs: the hash-pinned lock python/geobrix/requirements-light-env6-ci.txt, then
+python/geobrix itself (editable, --no-deps). Re-running refreshes an existing venv in place;
+--recreate starts from scratch. GBX_PYRX_VENV=<dir> moves the venv from .venv-pyrx.
 
 Usage: bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--log <path>]
 Options:
@@ -34,9 +35,10 @@ EOF
 
 RECREATE=0
 while [[ $# -gt 0 ]]; do case $1 in
-    --python) PYTHON_VERSION="$2"; shift 2 ;;
+    --python|--log) [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
+        if [[ $1 == --python ]]; then PYTHON_VERSION="$2"; else LOG_PATH=$(resolve_log_path "$2"); fi
+        shift 2 ;;
     --recreate) RECREATE=1; shift ;;
-    --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
 esac; done
@@ -44,6 +46,11 @@ esac; done
 cd "$PROJECT_ROOT"
 show_banner "gbx:venv:sync — isolated pyrx venv"
 setup_log_file "$LOG_PATH"
+
+if [[ ! -f "$LIGHT_LOCK" ]]; then
+    echo "ERROR: CI light lock not found: $LIGHT_LOCK" >&2
+    exit 1
+fi
 
 if ! command -v uv >/dev/null 2>&1; then
     echo "ERROR: uv not found on PATH. Install uv: https://docs.astral.sh/uv/" >&2
@@ -60,8 +67,10 @@ fi
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     uv venv "$VENV_DIR" --python "$PYTHON_VERSION" || { echo "❌ uv venv failed" >&2; exit 1; }
 fi
-uv pip install --python "$VENV_DIR/bin/python" -e "./python/geobrix[${EXTRAS}]" "${TEST_SPECS[@]}" \
-    || { echo "❌ uv pip install failed" >&2; exit 1; }
+uv pip install --python "$VENV_DIR/bin/python" --require-hashes -r "$LIGHT_LOCK" \
+    || { echo "❌ uv pip install of the lock failed" >&2; exit 1; }
+uv pip install --python "$VENV_DIR/bin/python" --no-deps -e ./python/geobrix \
+    || { echo "❌ uv pip install of the package failed" >&2; exit 1; }
 
 # Assert isolation: the venv must not see host site-packages.
 "$VENV_DIR/bin/python" - <<'PY'
@@ -69,10 +78,10 @@ import sys
 # Confirm rasterio resolves from the venv, not host.
 import rasterio, pathlib
 p = pathlib.Path(rasterio.__file__).resolve()
-assert ".venv-pyrx" in str(p), f"rasterio leaked from host: {p}"
+assert str(pathlib.Path(sys.prefix).resolve()) in str(p), f"rasterio leaked from host: {p}"
 print("venv isolation OK:", sys.prefix)
 print("rasterio", rasterio.__version__, "GDAL", rasterio.__gdal_version__)
-# The Zarr extra and the Spark line the Delta test jars need.
+# The Zarr set and the Spark line the Delta test jars need.
 import pyspark, zarr
 assert pyspark.__version__.startswith("4.0."), f"pyspark {pyspark.__version__}: Delta 4.0.x jars need Spark 4.0.x"
 print("pyspark", pyspark.__version__, "zarr", zarr.__version__)

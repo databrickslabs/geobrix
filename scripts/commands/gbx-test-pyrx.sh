@@ -42,6 +42,7 @@ USE_DOCKER=0
 while [[ $# -gt 0 ]]; do
     case $1 in
         --path)
+            [[ $# -ge 2 ]] || { echo -e "${RED}Option --path needs a value${NC}" >&2; exit 2; }
             # Accumulate: --path may be repeated to run several files/dirs.
             TEST_PATHS+=("/root/geobrix/$2")
             shift 2
@@ -51,6 +52,7 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --log)
+            [[ $# -ge 2 ]] || { echo -e "${RED}Option --log needs a value${NC}" >&2; exit 2; }
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;

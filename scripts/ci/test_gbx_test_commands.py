@@ -6,6 +6,7 @@ into the container (pytest, Maven) is recorded instead of run.
 """
 
 import re
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -209,15 +210,17 @@ def test_scala_runs_pass_a_utf8_locale_to_the_container(sandbox):
 # ------------------------------------- light-tier tests run natively on the host (no container)
 
 
-def _fake_venv(sandbox):
-    """A `.venv-pyrx` whose python records the PySpark worker settings and its arguments."""
-    bin_dir = sandbox.root / ".venv-pyrx" / "bin"
+def _fake_venv(sandbox, venv=None):
+    """A venv (default `.venv-pyrx`) whose python records the PySpark worker settings and args."""
+    venv = venv or sandbox.root / ".venv-pyrx"
+    bin_dir = venv / "bin"
     bin_dir.mkdir(parents=True)
-    log = sandbox.root / "venv-python.log"
+    log = venv / "calls.log"
     python = bin_dir / "python"
     python.write_text(
         "#!/bin/sh\n"
         f'printf "%s|%s|%s\\n" "$PYSPARK_PYTHON" "$PYSPARK_DRIVER_PYTHON" "$*" >> "{log}"\n'
+        f'printf "%s\\n" "$TZ" >> "{log}.tz"\n'
         '[ "$1" = "-" ] && cat > /dev/null\n'
         "exit 0\n"
     )
@@ -249,11 +252,43 @@ def test_the_host_run_starts_spark_workers_on_the_venv_python(sandbox):
     assert sandbox.execs() == []  # the host run never reaches the container
 
 
+def test_the_host_run_pins_utc_as_the_container_and_ci_do(sandbox):
+    # The container and the CI runners are UTC; a developer's local zone makes the timestamp
+    # tests (e.g. test/zarr/test_read.py) fail natively.
+    python, log = _fake_venv(sandbox)
+
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        "--path",
+        "python/geobrix/test/zarr/test_read.py",
+        TZ="America/New_York",
+    )
+
+    assert res.returncode == 0, res.output
+    assert Path(str(log) + ".tz").read_text().split() == ["UTC"]
+
+
+CI_ACTION = REPO_ROOT / ".github" / "actions" / "pyrx_build" / "action.yml"
+
+
+def _ci_light_dirs():
+    """The dirs of the light CI phase's pytest line, in the order CI runs them."""
+    line = next(
+        x
+        for x in CI_ACTION.read_text().splitlines()
+        if x.strip().startswith("pytest test/")
+    )
+    return re.findall(r"\btest/(\w+)", line)
+
+
 def _light_sandbox(sandbox):
     python, log = _fake_venv(sandbox)
     test_dir = sandbox.root / "python" / "geobrix" / "test"
     test_dir.mkdir(parents=True)
     (test_dir / "conftest.py").write_text((TEST_ROOT / "conftest.py").read_text())
+    action = sandbox.root / ".github" / "actions" / "pyrx_build" / "action.yml"
+    action.parent.mkdir(parents=True)
+    action.write_text(CI_ACTION.read_text())
     return log
 
 
@@ -264,7 +299,7 @@ def _light_dirs_conftest_lists():
     return re.findall(r'"(\w+)"', block.group(1))
 
 
-def test_the_light_command_runs_every_light_dir_when_no_path_is_given(sandbox):
+def test_the_light_command_runs_every_light_dir_in_the_ci_order(sandbox):
     log = _light_sandbox(sandbox)
 
     res = sandbox.run("gbx-test-light.sh")
@@ -272,9 +307,13 @@ def test_the_light_command_runs_every_light_dir_when_no_path_is_given(sandbox):
     assert res.returncode == 0, res.output
     _, _, argv = _last_python_call(log)
     ran = [a.rstrip("/") for a in argv.split() if a.startswith("python/geobrix/test/")]
-    dirs = _light_dirs_conftest_lists()
-    assert "zarr" in dirs and len(dirs) >= 13
-    assert ran == [f"python/geobrix/test/{d}" for d in dirs]
+    ci = _ci_light_dirs()
+    assert ran == [f"python/geobrix/test/{d}" for d in ci]
+    # The order is deliberate: all dirs share one process, and pyvx registers the PROJ grids
+    # that bench's raster builds on worker threads rely on (see the CI action's comment).
+    assert ci.index("pyvx") < ci.index("bench")
+    # ... and it covers exactly the dirs the heavy phase ignores.
+    assert sorted(ci) == sorted(_light_dirs_conftest_lists())
 
 
 def test_the_light_command_runs_only_the_paths_it_is_given(sandbox):
@@ -306,29 +345,92 @@ def _fake_uv(sandbox):
     return log
 
 
-def test_venv_sync_refreshes_an_existing_venv_with_the_zarr_extra(sandbox):
+def _fake_lock(sandbox):
+    lock = sandbox.root / "python" / "geobrix" / "requirements-light-env6-ci.txt"
+    lock.parent.mkdir(parents=True, exist_ok=True)
+    lock.write_text("pyspark==4.0.0 \\\n    --hash=sha256:aa\n")
+    return lock
+
+
+def test_venv_sync_installs_the_ci_lock_into_an_existing_venv(sandbox):
     # `uv venv` refuses an existing venv, so the sync must not call it when one is there.
     _fake_venv(sandbox)
     uv_log = _fake_uv(sandbox)
+    lock = _fake_lock(sandbox)
 
     res = sandbox.run("gbx-venv-sync.sh")
 
     assert res.returncode == 0, res.output
     calls = uv_log.read_text().splitlines()
     assert not [c for c in calls if c.startswith("venv")], calls
-    (install,) = [c for c in calls if c.startswith("pip install")]
-    assert "zarr_env6" in install and "light_env6" in install
-    # The `test` extra pins mapbox-vector-tile<2.2, which light_env6 (>=2.2) cannot satisfy.
-    assert "test]" not in install and ",test" not in install
-    # The Delta 4.0.x test jars run on Spark 4.0.x only; the `test` extra leaves pyspark open.
-    assert "pyspark>=4.0,<4.1" in install
+    # What the light CI phase installs: the hash-pinned lock (CI's exact versions, so the
+    # results match CI; an extras install floats and keeps a stale venv's versions), then the
+    # package alone. The `test` extra is never used: it pins mapbox-vector-tile<2.2, which
+    # light_env6 (>=2.2) cannot satisfy.
+    installs = [c for c in calls if c.startswith("pip install")]
+    assert len(installs) == 2, calls
+    assert "--require-hashes" in installs[0] and f"-r {lock}" in installs[0]
+    assert "--no-deps" in installs[1] and "-e ./python/geobrix" in installs[1]
+    assert "[" not in installs[1]
 
 
 def test_venv_sync_creates_the_venv_when_it_is_missing(sandbox):
     uv_log = _fake_uv(sandbox)
+    _fake_lock(sandbox)
 
     # The run fails at the isolation check (the fake makes no venv); only the uv calls matter.
     sandbox.run("gbx-venv-sync.sh")
 
     calls = uv_log.read_text().splitlines()
     assert calls[0].startswith("venv ") and "--python 3.12" in calls[0], calls
+
+
+def test_venv_sync_refuses_to_run_without_the_lock(sandbox):
+    _fake_venv(sandbox)
+    uv_log = _fake_uv(sandbox)
+
+    res = sandbox.run("gbx-venv-sync.sh")
+
+    assert res.returncode == 1 and "requirements-light-env6-ci.txt" in res.output
+    assert not uv_log.exists()  # nothing was installed from an unpinned resolve
+
+
+def test_the_venv_location_can_be_moved(sandbox, tmp_path):
+    # So a new lock can be tried without disturbing a venv another test run is using.
+    _, default_log = _fake_venv(sandbox)
+    python, log = _fake_venv(sandbox, tmp_path / "other-venv")
+
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        "--path",
+        "python/geobrix/test/zarr/test_keys.py",
+        GBX_PYRX_VENV=str(tmp_path / "other-venv"),
+    )
+
+    assert res.returncode == 0, res.output
+    workers, _, _ = _last_python_call(log)
+    assert Path(workers).resolve() == python.resolve()
+    assert not default_log.exists()  # the default venv was not used
+
+
+@pytest.mark.parametrize(
+    "command, option",
+    [
+        ("gbx-test-light.sh", "--path"),
+        ("gbx-test-light.sh", "--log"),
+        ("gbx-test-pyrx.sh", "--path"),
+        ("gbx-test-pyrx.sh", "--log"),
+        ("gbx-venv-sync.sh", "--python"),
+        ("gbx-venv-sync.sh", "--log"),
+    ],
+)
+def test_an_option_without_its_value_is_refused_not_looped_on(sandbox, command, option):
+    proc = sandbox.popen(command, option)
+    try:
+        out, _ = proc.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.communicate()
+        pytest.fail(f"{command} {option} with no value never exited")
+
+    assert proc.returncode == 2 and option in out, out

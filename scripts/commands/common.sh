@@ -399,20 +399,22 @@ validate_set() {
 
 # Run a command inside the isolated pyrx venv (host, no Docker).
 # Usage: run_in_pyrx_venv "<command string>"
-# Requires gbx:venv:sync to have been run (venv at $PROJECT_ROOT/.venv-pyrx).
+# Requires gbx:venv:sync to have been run (venv at $PROJECT_ROOT/.venv-pyrx, or $GBX_PYRX_VENV).
 # PySpark starts its Python workers from PYSPARK_PYTHON, and a worker on any other interpreter
 # than the driver's fails with PYTHON_VERSION_MISMATCH. Both are set to the venv python here,
 # overriding whatever the caller's shell exports (a system python3 is another minor version).
+# TZ is pinned to UTC, as in the dev container and on the CI runners: a developer's local zone
+# (EST/EDT) makes timestamp tests fail natively, and the Spark JVM takes its zone from TZ too.
 run_in_pyrx_venv() {
     local _cmd="$1"
-    local _venv="${PROJECT_ROOT}/.venv-pyrx"
+    local _venv="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}"
     if [[ ! -x "${_venv}/bin/python" ]]; then
         echo "ERROR: pyrx venv not found at ${_venv}. Run: bash scripts/commands/gbx-venv-sync.sh" >&2
         return 1
     fi
     # shellcheck disable=SC1091
     source "${_venv}/bin/activate"
-    PYSPARK_PYTHON="${_venv}/bin/python" PYSPARK_DRIVER_PYTHON="${_venv}/bin/python" \
+    PYSPARK_PYTHON="${_venv}/bin/python" PYSPARK_DRIVER_PYTHON="${_venv}/bin/python" TZ=UTC \
         bash -c "${_cmd}"
     local _rc=$?
     deactivate || true

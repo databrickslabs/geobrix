@@ -170,6 +170,11 @@ LOCKED = {
     "gbx-test-scala-docs.sh": [],
     "gbx-test-docs.sh": [],
     "gbx-test-pyrx.sh": ["--docker"],
+    "gbx-test-light.sh": [
+        "--docker",
+        "--path",
+        "python/geobrix/test/zarr/test_keys.py",
+    ],
     "gbx-test-function-info.sh": [],
     "gbx-coverage-scala.sh": [],
     "gbx-coverage-scala-package.sh": ["rasterx"],
@@ -182,6 +187,9 @@ LOCKED = {
     "gbx-data-stage-jar.sh": [],
     "gbx-data-stage-wheel.sh": [],
 }
+
+# Locked commands whose --docker run is a call to another command, which takes the lock.
+LOCK_TAKEN_BY = {"gbx-test-light.sh": "gbx-test-pyrx.sh"}
 
 # Commands that send Maven or pytest into the container but are not locked, and why.
 EXEMPT = {
@@ -207,7 +215,7 @@ def test_a_locked_command_documents_no_wait(command):
     commands = REPO_ROOT / "scripts" / "commands"
     doc = (commands / command.replace(".sh", ".md")).read_text()
     assert "--no-wait" in doc and "exit 75" in doc, f"{command}: document the lock"
-    script = (commands / command).read_text()
+    script = (commands / LOCK_TAKEN_BY.get(command, command)).read_text()
     assert "--no-wait" in script and "gbx_acquire_test_lock" in script
 
 
@@ -479,8 +487,9 @@ def test_a_helper_that_cannot_take_the_lock_exits_70_not_75(demo):
 # ----------------------------------- every locked command sends its work through the wrapper
 
 
-# gbx:test:docs runs no Maven itself: its three doc-suite children are locked commands.
-DELEGATES = {"gbx-test-docs.sh"}
+# These run no Maven or pytest exec themselves: gbx:test:docs runs three locked doc-suite
+# children, and gbx:test:light calls gbx:test:pyrx.
+DELEGATES = {"gbx-test-docs.sh", "gbx-test-light.sh"}
 
 # `docker exec` statements in a locked command that are NOT Maven/pytest work, so they run
 # without the work lock: (command, regex that matches the whole statement). Keep it short;

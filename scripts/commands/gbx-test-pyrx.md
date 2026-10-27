@@ -4,6 +4,8 @@ Run light-tier Python tests (JAR-free: pyrx by default, but any light dir, `zarr
 
 The host run is the default because the dev container is x86_64 under emulation on an Apple-silicon Mac: the same 131 tests of `test/zarr/test_manifest.py` take about 134 s on the host and 1,410 s in the container. Use `--docker` only for work that needs the container: GDAL natives, the JAR, and parity.
 
+The host run sets `TZ=UTC` (as the container and the CI runners are), and points `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` at the venv python. Without `TZ=UTC`, timestamp tests such as `test/zarr/test_read.py` fail in a US time zone.
+
 ## Usage
 
 `bash scripts/commands/gbx-test-pyrx.sh [OPTIONS]`

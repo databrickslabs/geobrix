@@ -1,6 +1,8 @@
 # gbx:venv:sync
 
-Create or refresh the isolated `uv` venv (`.venv-pyrx/`, no system site-packages) for the light-tier tests (`gbx:test:light`, `gbx:test:pyrx`, zarr included) and the light benchmarks. It installs the `[light_env6,zarr_env6]` extras from `python/geobrix` plus `pytest` and `pyspark>=4.0,<4.1` (not the `test` extra, whose `mapbox-vector-tile<2.2` pin no `light_env6` install can satisfy; pyspark is capped because the Delta test jars that `test/zarr` loads run on Spark 4.0.x only), then checks that the venv sees its own rasterio, zarr and pyspark. Re-running refreshes an existing venv in place.
+Create or refresh the isolated `uv` venv (`.venv-pyrx/`, no system site-packages) for the light-tier tests (`gbx:test:light`, `gbx:test:pyrx`, zarr included) and the light benchmarks. It installs what the light CI phase installs: the hash-pinned lock `python/geobrix/requirements-light-env6-ci.txt` (read-only; every test dependency at CI's exact version, so test results match CI), then `python/geobrix` itself (editable, `--no-deps`). An extras install is not used: it floats, an older venv keeps stale versions (h3, pyogrio, numpy) that change test results, and the `test` extra's `mapbox-vector-tile<2.2` pin cannot be installed with `light_env6`. The command then checks that the venv sees its own rasterio, zarr and pyspark (4.0.x, which the Delta test jars that `test/zarr` loads need). Re-running refreshes an existing venv in place.
+
+Set `GBX_PYRX_VENV=<dir>` to put the venv somewhere other than `.venv-pyrx`, for example to try a new lock without disturbing a venv another test run is using. The test commands honour the same variable.
 
 **Usage:** `bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--log <path>]`
 

@@ -135,14 +135,34 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     return mf, dst
 
 
+def _valid_u8(ds) -> np.ndarray:
+    """``(rows, cols)`` uint8 (255 valid, 0 invalid) validity of *ds* by THE rule of both tiers,
+    :func:`_nodata.valid_mask`: valid when any data band is (its NoData, its own mask band) and, with an
+    alpha band, opaque. (``read_masks(1)`` is band 1's mask alone: it calls a pixel invalid whose band 1
+    is NoData though another band holds data.)"""
+    return np.where(_nodata.valid_mask(ds), 255, 0).astype("uint8")
+
+
+def _write_masked_tile(ds, path, mask) -> None:
+    """Write *ds* to *path* as a GTiff whose own mask band is *mask* (``None``: no mask band), the alpha
+    label kept."""
+    profile = _comp.drop_ycbcr(ds.profile)
+    profile.update(driver="GTiff")
+    with _comp.internal_mask_env(mask), rasterio.open(path, "w", **profile) as dst:
+        _comp.match_alpha(dst, ds.colorinterp)
+        dst.write(ds.read())
+        if mask is not None:
+            dst.write_mask(mask)
+
+
 def _union_own_mask(datasets) -> np.ndarray:
     """``(rows, cols)`` uint8 (255 valid, 0 invalid) own mask of the mosaic ``rasterio.merge`` builds
     from *datasets*: valid where some tile that covers the pixel says it is valid, and a pixel no tile
     covers invalid.
 
-    What a tile says is its band-1 mask, ``read_masks(1)`` (the ``mask,1`` the streamed VRT unions): its
-    own mask band, its NoData, the alpha band GDAL derives a mask from, all valid for a tile with none of
-    them. A tile whose invalid pixels are NoData stays invalid there beside a tile with an own mask.
+    What a tile says is its validity by the rule of both tiers (:func:`_valid_u8`: any data band valid, its
+    own mask band, its NoData, its alpha band), so a tile whose invalid pixels are NoData stays invalid
+    there beside a tile with an own mask, and a pixel with data in one band only stays valid.
 
     Built by merging the tiles' mask rasters with the same geometry as the pixels (``method="max"``), so
     it lands on the pixels' grid. The mask comes from the tiles' masks, not from the merged values: a
@@ -162,7 +182,7 @@ def _union_own_mask(datasets) -> np.ndarray:
                 transform=d.transform,
                 crs=d.crs,
             ) as dst:
-                dst.write(d.read_masks(1), 1)
+                dst.write(_valid_u8(d), 1)
             masks.append(mf.open())
         merged, _ = _rio_merge(masks, method="max")
         return np.where(merged[0] != 0, 255, 0).astype("uint8")
@@ -243,8 +263,13 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     ``<NODATA>`` masking) in input order; GDAL's last-valid-source-wins resolution matches
     ``method="last"`` nodata handling in the in-RAM path.
 
-    MEMORY: peak RSS ≈ one tile's encoded bytes + GDAL's COG cache (≤200 MiB);
-    the full decoded mosaic array is NEVER allocated.
+    MASKS: when some tile has an own mask band the mosaic carries the union of the tiles' masks
+    (``mask,1`` of each scratch tile), which is band 1's mask alone for a tile without one. Each such
+    tile is rewritten with its validity by the rule of both tiers (:func:`_valid_u8`: any band) as its
+    mask, so a pixel with data in one band only stays valid, as in the in-RAM merge.
+
+    MEMORY: peak RSS ≈ one tile's encoded bytes (decoded too, for a tile written with a mask) +
+    GDAL's COG cache (≤200 MiB); the full decoded mosaic array is NEVER allocated.
     """
     scratch = new_local_temp_dir("gbx_merge")
     try:
@@ -258,10 +283,13 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
             ref_crs = _pick_ref_crs(datasets)
             tile_crses = [ds.crs for ds in datasets]
             ref_pixel_res = _pixel_size(_reference_tile(datasets, ref_crs))
+            has_mask = [_nodata.has_own_mask(ds) for ds in datasets]
         finally:
             _close_all(memfiles, datasets)
 
-        # Pass 2: write tiles one-at-a-time to the scratch dir.
+        # Pass 2: write tiles one-at-a-time to the scratch dir. In a group with an own-masked tile
+        # every tile without one is written with its validity as its mask band (see MASKS above).
+        group_masked = any(has_mask)
         tile_paths = []
         for i, (rb, tile_crs) in enumerate(zip(sorted_rasters, tile_crses)):
             tile_path = os.path.join(scratch, f"tile_{i}.tif")
@@ -279,24 +307,17 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                             src, ref_crs, target_res=ref_pixel_res
                         )
                         try:
-                            profile = rep_ds.profile.copy()
-                            profile.update(driver="GTiff")
-                            mask = (
-                                rep_ds.read_masks(1)
-                                if _nodata.has_own_mask(rep_ds)
-                                else None
+                            _write_masked_tile(
+                                rep_ds,
+                                tile_path,
+                                _valid_u8(rep_ds) if group_masked else None,
                             )
-                            with (
-                                _comp.internal_mask_env(mask),
-                                rasterio.open(tile_path, "w", **profile) as dst,
-                            ):
-                                _comp.match_alpha(dst, rep_ds.colorinterp)
-                                dst.write(rep_ds.read())
-                                if mask is not None:
-                                    dst.write_mask(mask)
                         finally:
                             rep_ds.close()
                             rep_mf.close()
+            elif group_masked and not has_mask[i]:
+                with MemoryFile(rb) as src_mf, src_mf.open() as src:
+                    _write_masked_tile(src, tile_path, _valid_u8(src))
             else:
                 # Same CRS (or no CRS): write raw GTiff bytes straight to disk.
                 with open(tile_path, "wb") as fh:

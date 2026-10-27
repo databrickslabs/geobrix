@@ -535,6 +535,63 @@ def test_a_merge_keeps_nodata_pixels_invalid_beside_a_tile_with_an_own_mask(
     assert valid[:, plain_col].tolist() == [r != 7 for r in range(12)]
 
 
+def _rgb_merge_tile(x, *, mask_rows=()):
+    """A 12x12 three-band uint8 tile at ``x`` degrees, NoData 0 in every band, of 50s except row 6, which
+    is (0, 50, 50) (valid: green and blue are data) and row 7, which is (0, 0, 0) (NoData in every band).
+    ``mask_rows`` are hidden by an own mask band."""
+    data = np.full((3, 12, 12), 50, dtype="uint8")
+    data[0, 6, :] = 0
+    data[:, 7, :] = 0
+    prof = dict(
+        driver="GTiff",
+        width=12,
+        height=12,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(x, 50, 0.5, 0.5),
+        nodata=0,
+        photometric="RGB",
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(data)
+            if mask_rows:
+                mask = np.full((12, 12), 255, dtype="uint8")
+                mask[list(mask_rows), :] = 0
+                dst.write_mask(mask)
+        return mf.read()
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+@pytest.mark.parametrize("masked_x", [10, 16], ids=["mask-left", "mask-right"])
+def test_a_merge_judges_a_multi_band_tile_by_any_band_beside_a_tile_with_an_own_mask(
+    monkeypatch, streaming, masked_x
+):
+    """A pixel is valid when ANY data band is: the (0, 50, 50) row of an RGB tile with NoData 0 stays
+    valid in the mosaic, and its (0, 0, 0) row stays invalid, though the group holds a tile with an own
+    mask (the mosaic's mask must not be that of band 1 alone, which calls the first row invalid). Both
+    paths give the validity of the sources, whichever tile stands first in byte order.
+    """
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    masked = _rgb_merge_tile(masked_x, mask_rows=(3,))
+    plain = _rgb_merge_tile(26 - masked_x)
+
+    def validity(raster, col):
+        with MemoryFile(raster) as mf, mf.open() as ds:
+            return nd.valid_mask(ds)[:, col].tolist()
+
+    # the premise: the (0, 50, 50) row is valid in the plain tile, its (0, 0, 0) row is not; the own mask of
+    # the other tile outranks its NoData, so only its masked row is invalid
+    assert validity(plain, 0) == [r != 7 for r in range(12)]
+    assert validity(masked, 0) == [r != 3 for r in range(12)]
+    out = agg.merge_tiles([masked, plain])
+    masked_col, plain_col = (0, 23) if masked_x == 10 else (23, 0)
+    assert validity(out, masked_col) == validity(masked, 0)
+    assert validity(out, plain_col) == validity(plain, 0)
+
+
 def _two_crs_tiles(name):
     """A 4326 tile and, beside it, the same layout in 3857 (the 3857 one first: it is the
     reference CRS the other is reprojected to)."""

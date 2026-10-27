@@ -47,7 +47,7 @@ Both tiers (lightweight `vector_gbx`, heavyweight `ogr`) take the same options, 
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text). |
 | `chunkSize` | `"10000"` | Features per unit of work. Lightweight: the layer is streamed in batches of this many features, so per-task memory scales with `chunkSize`, not layer size. Heavyweight: each partition reads this many features, so a large file is read in parallel. |
 | `layerName` | `""` | Layer name for multi-layer formats (overrides the layer index). |
-| `layerNumber` / `layerN` | `"0"` | Layer index for multi-layer formats (0-based) — `layerNumber` (lightweight) / `layerN` (heavyweight). |
+| `layerNumber` | `"0"` | Layer index for multi-layer formats (0-based). Ignored when `layerName` is set. |
 | `codedDomains` | `"code"` | Lightweight only. Fields with a coded-value domain return the stored code in the field's declared type (`"code"`, the default — the same values the heavyweight reader returns) or the domain's description as a string (`"description"`; a code not listed in the domain returns the code as text). Range domains pass through unchanged. |
 
 Example — forcing the driver explicitly:

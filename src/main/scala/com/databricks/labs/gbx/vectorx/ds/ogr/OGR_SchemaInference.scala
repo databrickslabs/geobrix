@@ -207,8 +207,7 @@ object OGR_SchemaInference extends Serializable {
         options: Map[String, String]
     ): Option[StructType] = {
         GDALManager.initOgr()
-        val layerN = options.getOrElse("layerNumber", "0").toInt
-        val layerName = options.getOrElse("layerName", "")
+        val selection = OGR_LayerSelection.fromOptions(options)
         val asWKB = options.getOrElse("asWKB", "true").toBoolean
 
         val dataset = OGR_Driver.open(path, driverName)
@@ -221,19 +220,9 @@ object OGR_SchemaInference extends Serializable {
         }
         // The dataset is a native handle: release it on every path out, including the throws below.
         try {
-            val layerByIndex = dataset.GetLayer(layerN)
-            if (layerByIndex == null) {
-                throw new IllegalArgumentException(
-                  s"No layer at index $layerN in dataset. Path: $path"
-                )
-            }
-            val resolvedLayerName = if (layerName.isEmpty) layerByIndex.GetName() else layerName
-            val layer = dataset.GetLayer(resolvedLayerName)
+            val layer = selection.open(dataset)
             if (layer == null) {
-                throw new IllegalArgumentException(
-                  s"Layer '$resolvedLayerName' not found in dataset. Path: $path. " +
-                  s"Available layers: ${(0 until dataset.GetLayerCount()).map(i => dataset.GetLayer(i).GetName()).mkString(", ")}"
-                )
+                throw new IllegalArgumentException(s"${selection.notFound(dataset)}. Path: $path")
             }
             layer.ResetReading()
             val headFeature = layer.GetNextFeature()

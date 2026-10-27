@@ -6,7 +6,8 @@ import org.apache.spark.sql.types.StructType
 
 /**
   * Case class: one partition of an OGR scan (file, layer, [start, end) feature range, schema, config).
-  * Passed to [[OGR_Reader]], which opens the layer and yields feature rows from start to end.
+  * Passed to [[OGR_Reader]], which opens the layer and yields feature rows from start to end. The layer is
+  * `layer` when that is not empty, otherwise the one at index `layerNumber` (see [[OGR_LayerSelection]]).
   */
 case class OGR_Partition(
     filePath: String,
@@ -16,6 +17,7 @@ case class OGR_Partition(
     schema: StructType,
     start: Int,
     end: Int,
-    expressionConfig: ExpressionConfig
+    expressionConfig: ExpressionConfig,
+    layerNumber: Int = 0
 ) extends InputPartition
       with Serializable

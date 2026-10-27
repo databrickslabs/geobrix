@@ -564,7 +564,7 @@ COMMON_OPTIONS = {
     "vector": {
         "driverName": "Specific OGR driver to use",
         "chunkSize": "Records per chunk for multi-threading (default: '10000')",
-        "layerN": "Layer index for multi-layer formats (default: '0')",
+        "layerNumber": "Layer index for multi-layer formats (default: '0')",
         "layerName": "Layer name for multi-layer formats",
         "asWKB": "Output as WKB vs WKT (default: 'true')"
     }
@@ -2318,7 +2318,7 @@ def read_geopackage_with_layer_options(spark, path="/path/to/data.gpkg"):
     
     # Read specific layer by index (0-based)
     df = spark.read.format("gpkg_ogr") \
-        .option("layerN", "1") \
+        .option("layerNumber", "1") \
         .load(path)
     
     return df
@@ -2749,7 +2749,7 @@ def read_filegdb_with_layer_options(spark, path="/path/to/database.gdb"):
     
     # Read specific feature class by index (0-based)
     df = spark.read.format("file_gdb_ogr") \
-        .option("layerN", "2") \
+        .option("layerNumber", "2") \
         .load(path)
     
     return df
@@ -3284,11 +3284,11 @@ def read_ogr_with_layer_index(spark, path="/path/to/multi_layer.gpkg"):
     """
     Read specific layer by index from multi-layer format.
     
-    Use layerN option for layer index (0-based).
+    Use layerNumber option for layer index (0-based).
     """
     # Read second layer
     df = spark.read.format("ogr") \
-        .option("layerN", "1") \
+        .option("layerNumber", "1") \
         .load(path)
     return df
 

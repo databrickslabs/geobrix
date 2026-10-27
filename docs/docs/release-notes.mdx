@@ -219,6 +219,17 @@ formats.
   longer leaves a staging folder in the driver's temp directory for each read, or keeps the
   inspected dataset open.
 
+### Heavyweight vector readers — `layerNumber` reads the layer it names (fix)
+
+- **`layerNumber` picks the layer the heavyweight vector readers return.** A read with a
+  `layerNumber` above 0 and no `layerName` took its schema and row counts from that layer but
+  returned the rows of layer 0, so the result was wrong without an error. It now returns the rows
+  of the layer at that index. A `layerName` still wins over `layerNumber`, even when the index is
+  one the file does not have (that read used to fail), and a `layerNumber` the file does not have
+  fails the read and lists the file's layers. The option is `layerNumber` in both tiers: the
+  heavyweight reader pages listed it as `layerN`, which was never read, so a read that passed
+  `layerN` got layer 0. See [Vector Readers](./readers/vector#options).
+
 ### Reader staging cache
 
 - **Staged copies no longer accumulate on worker disks.** The lightweight readers copy

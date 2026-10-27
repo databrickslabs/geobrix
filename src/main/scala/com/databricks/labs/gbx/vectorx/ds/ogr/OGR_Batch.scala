@@ -18,7 +18,8 @@ import scala.util.control.NonFatal
   * vector format that is skipped (`skippedDriver`). Exactly one of the three is set; a range has neither. */
 case class OgrPlan(path: String, start: Int, end: Int, error: String, skippedDriver: String)
 
-/** Scan/Batch for OGR: plans partitions per (file, chunk) and supplies OGR_Reader as reader factory. */
+/** Scan/Batch for OGR: plans partitions per (file, chunk) and supplies OGR_Reader as reader factory. The layer
+  * it plans is the one the reader opens (see [[OGR_LayerSelection]]). */
 class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan with Batch with Logging {
 
     /** Overrides Scan.readSchema: returns table schema. */
@@ -35,8 +36,7 @@ class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan w
         val chunkSize = options.getOrElse("chunkSize", "10000").toInt
         require(chunkSize > 0, s"OGR chunkSize must be positive, got $chunkSize")
         val driverName = options.getOrElse("driverName", "")
-        val layerN = options.getOrElse("layerNumber", "0").toInt
-        val layerName = options.getOrElse("layerName", "")
+        val layer = OGR_LayerSelection.fromOptions(options)
         val asWKB = options.getOrElse("asWKB", "true").toBoolean
         val sparkSession = SparkSession.builder.getOrCreate
         val exprConfig = ExpressionConfig(sparkSession)
@@ -82,7 +82,7 @@ class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan w
 
         val offsetsUDF = udf { (path: String) =>
             // sidecar and metadata files are already filtered out above; this opens only primary data files
-            OGR_Batch.planFile(path, driverName, layerN, layerName, chunkSize, dirListing)
+            OGR_Batch.planFile(path, driverName, layer, chunkSize, dirListing)
         }
 
         val plans = filesDf
@@ -122,12 +122,13 @@ class OGR_Batch(schema: StructType, options: Map[String, String]) extends Scan w
             OGR_Partition(
               p.path,
               driverName,
-              layerName,
+              layer.name,
               asWKB,
               schema,
               p.start,
               p.end,
-              exprConfig
+              exprConfig,
+              layer.number
             )
         }
         partitions.toArray
@@ -168,8 +169,7 @@ object OGR_Batch {
     private[ogr] def planFile(
         path: String,
         driverName: String,
-        layerN: Int,
-        layerName: String,
+        layer: OGR_LayerSelection,
         chunkSize: Int,
         dirListing: Boolean
     ): Array[OgrPlan] = {
@@ -182,19 +182,12 @@ object OGR_Batch {
             if (dataset == null) {
                 unplanned(path, lease, driverName, dirListing, couldNotOpen(driverName, gdal.GetLastErrorMsg))
             } else {
-                val layer = if (layerName.isEmpty) dataset.GetLayer(layerN) else dataset.GetLayerByName(layerName)
-                if (layer == null) {
-                    val layers = (0 until dataset.GetLayerCount()).map(i => dataset.GetLayer(i).GetName())
-                    unplanned(
-                      path,
-                      lease,
-                      driverName,
-                      dirListing,
-                      s"layer '${if (layerName.isEmpty) layerN.toString else layerName}' not found; layers: ${layers.mkString(", ")}"
-                    )
+                val selected = layer.open(dataset)
+                if (selected == null) {
+                    unplanned(path, lease, driverName, dirListing, layer.notFound(dataset))
                 } else {
-                    layer.ResetReading()
-                    val n = layer.GetFeatureCount().toInt
+                    selected.ResetReading()
+                    val n = selected.GetFeatureCount().toInt
                     if (n < 0) {
                         unplanned(path, lease, driverName, dirListing, s"could not count its features${gdalSuffix(gdal.GetLastErrorMsg)}")
                     } else if (n == 0) {

@@ -259,7 +259,7 @@ All readers support:
 | `driverName` | Auto-detect | OGR driver name (e.g., "ESRI Shapefile") |
 | `chunkSize` | `"10000"` | Features per chunk. The heavyweight reader splits Shapefile, GeoPackage and File Geodatabase files into chunks of this size, read in parallel (GeoJSON files are read whole, one task per file). The lightweight readers read each file in one task and stream it in batches of this size |
 | `layerName` | `""` | Layer name for multi-layer formats |
-| `layerN` | `"0"` | Layer index for multi-layer formats |
+| `layerNumber` | `"0"` | Layer index for multi-layer formats (0-based). Ignored when `layerName` is set |
 | `asWKB` | `"true"` | Output geometry as WKB (binary) vs WKT (text) |
 
 ## Reader Types Explained

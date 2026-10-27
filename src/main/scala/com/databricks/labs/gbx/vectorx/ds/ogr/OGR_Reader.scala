@@ -24,11 +24,9 @@ class OGR_Reader(partition: OGR_Partition) extends PartitionReader[InternalRow] 
     private val layer: Layer =
         try {
             dataset = OGR_Driver.open(lease.localPath, partition.driver)
-            val l = if (partition.layer.isEmpty) dataset.GetLayer(0) else dataset.GetLayer(partition.layer)
-            if (l == null) {
-                val which = if (partition.layer.isEmpty) "0" else s"'${partition.layer}'"
-                throw new IllegalArgumentException(s"No layer $which in ${partition.filePath}")
-            }
+            val selection = OGR_LayerSelection(partition.layerNumber, partition.layer)
+            val l = selection.open(dataset)
+            if (l == null) throw new IllegalArgumentException(s"${partition.filePath}: ${selection.notFound(dataset)}")
             l.ResetReading()
             l.SetNextByIndex(partition.start)
             l

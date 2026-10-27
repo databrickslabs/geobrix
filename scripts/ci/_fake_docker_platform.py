@@ -10,6 +10,9 @@ and answers from the JSON state in $FAKE_DOCKER_STATE:
   `ps`, `inspect`, `stop`, `rm`, `start` and `run` see and change.
 - history: lines printed by `history`. history_rc / inspect_rc: a non-zero exit of `history` / of
   `image inspect` on a checkpoint image (the build could not be read back).
+- container_image_gone: `image inspect` of the container's image fails (its architecture is unknown).
+- probe / probe_rc: the lines a `run --rm` (the native-stack probe, no container is created) prints for
+  the platform's architecture, and its exit code.
 - A `build` with `--secret id=...,src=FILE` reads FILE (content and mode) and appends them to
   $FAKE_DOCKER_LOG.secrets before answering, so a test can see what the build was given.
 """
@@ -57,6 +60,9 @@ def main(args):
             print("Error: cannot inspect", file=sys.stderr)
             return state["inspect_rc"]
         if ref == container.get("image") if container else False:
+            if state.get("container_image_gone"):
+                print(f"Error: No such image: {ref}", file=sys.stderr)
+                return 1
             img = {"arch": container.get("arch", "amd64")}
         else:
             img = images.get(ref)
@@ -72,11 +78,13 @@ def main(args):
             )
         return 0
     if cmd == "history":
-        if state.get("history_rc"):
-            print("Error: cannot read history", file=sys.stderr)
-            return state["history_rc"]
         for line in state.get("history", []):
             print(line)
+        if state.get(
+            "history_rc"
+        ):  # fails AFTER printing: partial output, then an error
+            print("Error: cannot read history", file=sys.stderr)
+            return state["history_rc"]
         return 0
     if cmd == "build":
         secret = flag("--secret")
@@ -113,6 +121,14 @@ def main(args):
     if cmd == "start" and container:
         container["running"] = True
         save()
+        return 0
+    if cmd == "run" and "--rm" in args:
+        # the native-stack probe: a throwaway container that prints state["probe"][arch] lines
+        arch = (flag("--platform") or "").rsplit("/", 1)[-1]
+        if state.get("probe_rc"):
+            return state["probe_rc"]
+        for line in state.get("probe", {}).get(arch, []):
+            print(line)
         return 0
     if cmd == "run":
         platform = flag("--platform") or ""

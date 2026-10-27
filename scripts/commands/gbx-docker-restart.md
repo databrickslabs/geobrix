@@ -12,6 +12,7 @@ bash scripts/commands/gbx-docker-restart.sh [OPTIONS]
 
 - `--timeout <seconds>` - Timeout before force stop (default: 10)
 - `--attach` - Attach to container after restart
+- `--privileged` - Recreate the container in privileged mode (stop, remove, create). It is recreated on the architecture of the container it replaces, read from that container's image, never the host default or `GBX_DOCKER_PLATFORM`; the image for that architecture must exist, checked before anything is stopped. To change architecture use `gbx:docker:start --recreate --platform <p>`.
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path)
 - `--help` - Display help message
 

@@ -14,11 +14,15 @@ no build. The package index used here is a made-up value; the tests assert it is
 
 import json
 import os
+import re
+import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from check_dev_container_locks import parse_lock
 from conftest import REPO_ROOT
 
 DOCKER_DIR = REPO_ROOT / "scripts" / "docker"
@@ -33,6 +37,37 @@ STAGES = [
     "gdal-builder",
     "final",
 ]
+
+
+def good_probe(arch: str) -> list:
+    """What the native-stack probe prints for an image that is as intended: the system GDAL/PROJ/GEOS,
+    a JNI that resolves libgdal.so.37, a manylinux rasterio wheel, and the lock's wheel versions.
+    """
+    lock = (
+        REPO_ROOT
+        / "python"
+        / "geobrix"
+        / (
+            "requirements-dev-container-aarch64.txt"
+            if arch == "arm64"
+            else "requirements-dev-container.txt"
+        )
+    )
+    pins = parse_lock(lock)[0]
+    plat = "aarch64" if arch == "arm64" else "x86_64"
+    return [
+        "gdal=3.11.4",
+        "proj=9.4.0",
+        "geos=3.12.1",
+        "jni_libgdal=/usr/local/lib/libgdal.so.37",
+        "jni_unresolved=0",
+        "rasterio_gdal=3.12.1",
+        f"rasterio_tags=cp312-cp312-manylinux_2_17_{plat}.manylinux2014_{plat}",
+        "rasterio_libs=true",
+        f"pyogrio={pins['pyogrio']}",
+        f"pyproj={pins['pyproj']}",
+        f"shapely={pins['shapely']}",
+    ]
 
 
 class Sandbox:
@@ -58,8 +93,14 @@ class Sandbox:
         )
         sysctl.chmod(0o755)
         self.log = tmp_path / "docker.log"
+        self.salt_file = tmp_path / "salt" / "pip-index-fpr-salt"
         self.state_file = tmp_path / "docker.json"
-        self.state = {"images": {}, "container": None, "history": []}
+        self.state = {
+            "images": {},
+            "container": None,
+            "history": [],
+            "probe": {a: good_probe(a) for a in ("arm64", "amd64")},
+        }
         self.host_arch = host_arch
         self.cwd = (
             tmp_path  # start_docker_with_volumes.sh creates sample-data under its cwd
@@ -88,6 +129,7 @@ class Sandbox:
             FAKE_UNAME_M=self.host_arch,
             FAKE_DOCKER_LOG=str(self.log),
             FAKE_DOCKER_STATE=str(self.state_file),
+            GBX_PIP_INDEX_SALT_FILE=str(self.salt_file),
             TERM="dumb",
         )
         full.update(env or {})
@@ -353,10 +395,21 @@ def test_the_package_index_goes_in_as_a_private_secret_file(arm):
     assert INDEX not in res.output and "idx.internal" not in res.output
 
 
-def fingerprint(url):
-    import hashlib
+def salt_of(sb) -> bytes:
+    return bytes.fromhex(sb.salt_file.read_text().strip())
 
-    return hashlib.sha256(url.encode()).hexdigest()[:12]
+
+def fingerprint(sb, url):
+    """The 12 hex characters build_smart.sh passes: HMAC-SHA256 of the index keyed with the salt."""
+    import hashlib
+    import hmac
+
+    return hmac.new(salt_of(sb), url.encode(), hashlib.sha256).hexdigest()[:12]
+
+
+def final_build_arg(sb):
+    final = [b for b in sb.of("build") if flag_value(b, "--target") == "final"][0]
+    return flag_value(final, "--build-arg")
 
 
 def test_a_non_secret_fingerprint_of_the_index_keys_the_final_stage_only(arm):
@@ -364,7 +417,7 @@ def test_a_non_secret_fingerprint_of_the_index_keys_the_final_stage_only(arm):
     res = build(arm, env={"PIP_INDEX_URL": INDEX})
     assert res.returncode == 0, res.output
     by_stage = {flag_value(b, "--target"): b for b in arm.of("build")}
-    want = f"GBX_PIP_INDEX_FPR={fingerprint(INDEX)}"
+    want = f"GBX_PIP_INDEX_FPR={fingerprint(arm, INDEX)}"
     assert flag_value(by_stage["final"], "--build-arg") == want
     assert len(want.split("=")[1]) == 12
     assert not any("--build-arg" in b for s, b in by_stage.items() if s != "final")
@@ -372,15 +425,68 @@ def test_a_non_secret_fingerprint_of_the_index_keys_the_final_stage_only(arm):
     assert not any(INDEX in a or "idx.internal" in a for c in arm.calls for a in c)
 
 
-def test_another_index_gives_another_fingerprint_and_none_gives_none(arm):
-    other = "https://other.internal/simple"
-    assert build(arm, env={"PIP_INDEX_URL": other}).returncode == 0
-    final = [b for b in arm.of("build") if flag_value(b, "--target") == "final"][0]
-    assert flag_value(final, "--build-arg") == f"GBX_PIP_INDEX_FPR={fingerprint(other)}"
-    assert fingerprint(other) != fingerprint(INDEX)
+def test_the_fingerprint_is_salted_so_it_cannot_confirm_a_guessed_index(arm):
+    """`docker history` shows the value; a plain hash of a guessed URL must not match it."""
+    import hashlib
+
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 0, res.output
+    value = final_build_arg(arm).split("=")[1]
+    assert value != hashlib.sha256(INDEX.encode()).hexdigest()[:12]
+    assert value != hashlib.sha1(INDEX.encode()).hexdigest()[:12]
+
+
+def test_the_salt_is_random_private_and_never_shown(arm):
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 0, res.output
+    salt_hex = arm.salt_file.read_text().strip()
+    assert len(salt_hex) == 64 and len(salt_of(arm)) == 32  # 32 random bytes
+    assert stat.S_IMODE(arm.salt_file.stat().st_mode) == 0o600
+    assert stat.S_IMODE(arm.salt_file.parent.stat().st_mode) == 0o700
+    # never printed, never an argument of a docker call
+    assert salt_hex not in res.output
+    assert not any(salt_hex in a for c in arm.calls for a in c)
+    assert INDEX not in res.output and "idx.internal" not in res.output
+
+
+def test_the_same_index_keeps_its_fingerprint_so_the_cache_holds(arm):
+    assert build(arm, env={"PIP_INDEX_URL": INDEX}).returncode == 0
+    first, salt = final_build_arg(arm), arm.salt_file.read_text()
     arm.log.unlink()
+    assert build(arm, env={"PIP_INDEX_URL": INDEX}).returncode == 0
+    assert final_build_arg(arm) == first
+    assert arm.salt_file.read_text() == salt  # generated once, then reused
+
+
+def test_another_index_or_another_machine_gives_another_fingerprint(arm):
+    other = "https://other.internal/simple"
+    assert build(arm, env={"PIP_INDEX_URL": INDEX}).returncode == 0
+    first = final_build_arg(arm)
+    arm.log.unlink()
+    assert build(arm, env={"PIP_INDEX_URL": other}).returncode == 0
+    assert final_build_arg(arm) == f"GBX_PIP_INDEX_FPR={fingerprint(arm, other)}"
+    assert final_build_arg(arm) != first
+    # another machine: another salt, so the same index fingerprints differently
+    arm.log.unlink()
+    arm.salt_file.unlink()
+    assert build(arm, env={"PIP_INDEX_URL": INDEX}).returncode == 0
+    assert final_build_arg(arm) != first
+
+
+def test_no_index_means_no_fingerprint_and_no_salt_file(arm):
     assert build(arm).returncode == 0
     assert not any("GBX_PIP_INDEX_FPR" in a for c in arm.of("build") for a in c)
+    assert not arm.salt_file.exists()
+
+
+def test_an_existing_salt_directory_keeps_its_permissions(arm):
+    arm.salt_file.parent.mkdir(mode=0o755)
+    arm.salt_file.parent.chmod(0o755)
+    assert build(arm, env={"PIP_INDEX_URL": INDEX}).returncode == 0
+    assert (
+        stat.S_IMODE(arm.salt_file.parent.stat().st_mode) == 0o755
+    )  # not ours to change
+    assert stat.S_IMODE(arm.salt_file.stat().st_mode) == 0o600
 
 
 def test_without_an_index_there_is_no_secret(arm):
@@ -425,7 +531,9 @@ def test_an_assigned_index_is_caught_even_when_none_is_exported(arm):
 
 @pytest.mark.parametrize("key", ["history_rc", "inspect_rc"])
 def test_a_build_that_cannot_be_read_back_is_not_tagged(arm, key):
-    """The check fails closed: no history or config to read means nothing was verified."""
+    """The check fails closed. The history is non-empty and clean, so the guard against EMPTY output cannot
+    be what stops the build: it is the failed docker command itself."""
+    arm.state["history"] = ["RUN apt-get update", "COPY lock /tmp/"]
     arm.state[key] = 1
     res = build(arm, env={"PIP_INDEX_URL": INDEX})
     assert res.returncode == 1
@@ -703,16 +811,40 @@ def test_recreate_with_the_target_image_still_replaces_the_container(arm):
 
 def test_a_worktree_mismatch_recreate_checks_the_image_first_too(arm):
     arm.container("amd64", mount="/some/other/worktree")
-    res = start(arm)  # the default platform is arm64, whose image does not exist
-    assert res.returncode == 1 and "left untouched" in res.output
-    assert untouched(arm) and arm.of("run") == []
+    # only the OTHER architecture's image exists: the replacement keeps amd64, so nothing is recreated
     arm.image(f"{TAG}-arm64", "arm64")
+    res = start(arm)
+    assert res.returncode == 1 and "left untouched" in res.output
+    assert f"{TAG}-amd64" in res.output
+    assert untouched(arm) and arm.of("run") == []
+    arm.image(f"{TAG}-amd64", "amd64")
     res = start(arm)
     assert res.returncode == 0, res.output
     assert lifecycle(arm) == [
         "stop",
         "rm",
     ]  # with the image there, it recreates as before
+
+
+def test_a_worktree_mismatch_recreate_keeps_the_architecture_of_the_container(arm):
+    """Only the mount is wrong: an amd64 container on an arm64 host stays amd64."""
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{TAG}-amd64", "amd64")
+    arm.container("amd64", mount="/some/other/worktree")
+    res = start(arm)
+    assert res.returncode == 0, res.output
+    run = arm.of("run")[0]
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/amd64", f"{TAG}-amd64")
+
+
+def test_a_worktree_mismatch_recreate_honours_an_explicit_platform(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{TAG}-amd64", "amd64")
+    arm.container("amd64", mount="/some/other/worktree")
+    res = start(arm, "--platform", "linux/arm64")
+    assert res.returncode == 0, res.output
+    run = arm.of("run")[0]
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/arm64", f"{TAG}-arm64")
 
 
 def restart(sb, *args, env=None):
@@ -723,9 +855,237 @@ def test_restart_privileged_checks_the_image_before_removing_the_container(arm):
     arm.container("amd64")
     res = restart(arm, "--privileged")
     assert res.returncode == 1
-    assert f"{TAG}-arm64" in res.output and "left untouched" in res.output
+    assert f"{TAG}-amd64" in res.output and "left untouched" in res.output
     assert untouched(arm) and arm.of("run") == []
-    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{TAG}-amd64", "amd64")
     res = restart(arm, "--privileged")
     assert res.returncode == 0, res.output
     assert lifecycle(arm) == ["stop", "rm"] and arm.of("run")
+
+
+def test_restart_privileged_recreates_on_the_architecture_it_replaces(arm):
+    """Read from the existing container's image, not the host default: an amd64 container on an arm64
+    host comes back amd64, even though the arm64 image exists and is the default."""
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{TAG}-amd64", "amd64")
+    arm.container("amd64")
+    res = restart(arm, "--privileged")
+    assert res.returncode == 0, res.output
+    run = arm.of("run")[0]
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/amd64", f"{TAG}-amd64")
+    assert "--privileged" in run
+    assert arm.final_state()["container"]["arch"] == "amd64"
+
+
+def test_restart_privileged_is_not_moved_by_the_platform_environment_either(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.image(f"{TAG}-amd64", "amd64")
+    arm.container("amd64")
+    res = restart(arm, "--privileged", env={"GBX_DOCKER_PLATFORM": "linux/arm64"})
+    assert res.returncode == 0, res.output
+    assert flag_value(arm.of("run")[0], "--platform") == "linux/amd64"
+
+
+def test_restart_privileged_on_an_x86_host_keeps_an_arm64_container_arm64(x86):
+    x86.image(f"{TAG}-arm64", "arm64")
+    x86.image(f"{TAG}-amd64", "amd64")
+    x86.container("arm64")
+    res = restart(x86, "--privileged")
+    assert res.returncode == 0, res.output
+    run = x86.of("run")[0]
+    assert (flag_value(run, "--platform"), run[-2]) == ("linux/arm64", f"{TAG}-arm64")
+
+
+def test_restart_privileged_refuses_when_the_architecture_cannot_be_read(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.container("amd64")
+    arm.state["container_image_gone"] = True
+    res = restart(arm, "--privileged")
+    assert res.returncode == 1 and "Cannot tell which architecture" in res.output
+    assert "--recreate --platform" in res.output
+    assert untouched(arm) and arm.of("run") == []
+
+
+# --- the post-build native-stack probe -----------------------------------------------------------
+#
+# After the stages are built and the index check passes, build_smart.sh runs a throwaway container from
+# the finished image (never the running geobrix-dev) and compares its native stack with what the image is
+# meant to hold. Any difference leaves the image untagged.
+
+
+def probe_calls(sb):
+    return [c for c in sb.of("run") if "--rm" in c]
+
+
+def test_the_probe_runs_in_a_throwaway_container_of_the_finished_image(arm):
+    arm.container("amd64")  # a running geobrix-dev that the probe must not touch
+    res = build(arm)
+    assert res.returncode == 0, res.output
+    probes = probe_calls(arm)
+    assert len(probes) == 1
+    assert probes[0] == [
+        "run",
+        "--rm",
+        "-i",
+        "--platform",
+        "linux/arm64",
+        "--entrypoint",
+        "bash",
+        "geobrix-checkpoint:final-arm64",
+        "-s",
+    ]
+    # no `--name geobrix-dev`, no exec into any container
+    assert not any("--name" in c for c in arm.of("run"))
+    assert arm.of("exec") == []
+    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
+    assert "Native stack as expected" in res.output
+    # it comes after the index check and before the tag
+    order = [c[0] for c in arm.calls if c[0] in ("history", "run", "tag")]
+    assert order == ["history", "run", "tag"]
+
+
+def test_the_probe_on_an_x86_host_uses_the_amd64_platform(x86):
+    res = build(x86)
+    assert res.returncode == 0, res.output
+    assert flag_value(probe_calls(x86)[0], "--platform") == "linux/amd64"
+    assert ["tag", "geobrix-checkpoint:final-amd64", f"{TAG}-amd64"] in x86.calls
+
+
+def probe_with(arch, **changes):
+    lines = dict(line.split("=", 1) for line in good_probe(arch))
+    lines.update(changes)
+    return [f"{k}={v}" for k, v in lines.items()]
+
+
+PROBE_FAILURES = {
+    "GDAL differs": (dict(gdal="3.11.3"), "GDAL: want '3.11.4', got '3.11.3'"),
+    "GDAL missing": (dict(gdal=""), "GDAL: want '3.11.4', got 'nothing'"),
+    "PROJ differs": (dict(proj="9.4.1"), "PROJ: want '9.4.0', got '9.4.1'"),
+    "GEOS differs": (dict(geos="3.12.2"), "GEOS: want '3.12.1', got '3.12.2'"),
+    "JNI resolves no libgdal": (
+        dict(jni_libgdal=""),
+        "libgdalalljni.so does not resolve libgdal.so.37",
+    ),
+    "JNI resolves another libgdal": (
+        dict(jni_libgdal="/usr/lib/libgdal.so.34"),
+        "libgdalalljni.so does not resolve libgdal.so.37",
+    ),
+    "JNI has unresolved libraries": (
+        dict(jni_unresolved="2"),
+        "libgdalalljni.so has unresolved libraries",
+    ),
+    "rasterio built from source": (
+        dict(rasterio_tags="cp312-cp312-linux_aarch64"),
+        "rasterio is not a manylinux wheel",
+    ),
+    "rasterio without vendored libs": (
+        dict(rasterio_libs="false"),
+        "no vendored rasterio.libs",
+    ),
+    "rasterio on the system GDAL": (
+        dict(rasterio_gdal="3.11.4"),
+        "rasterio's GDAL: want '3.12.1', got '3.11.4'",
+    ),
+    "rasterio not importable": (
+        dict(rasterio_gdal="", rasterio_tags="", rasterio_libs=""),
+        "rasterio's GDAL",
+    ),
+    "pyogrio off the lock": (dict(pyogrio="0.12.1"), "pyogrio (lock): want"),
+    "pyproj off the lock": (dict(pyproj="3.8.0"), "pyproj (lock): want"),
+    "shapely off the lock": (dict(shapely="2.2.0"), "shapely (lock): want"),
+    "shapely missing": (dict(shapely=""), "shapely (lock): want"),
+}
+
+
+@pytest.mark.parametrize("name", sorted(PROBE_FAILURES))
+def test_a_native_stack_that_is_not_as_intended_is_not_tagged(arm, name):
+    changes, expected = PROBE_FAILURES[name]
+    arm.state["probe"]["arm64"] = probe_with("arm64", **changes)
+    res = build(arm)
+    assert res.returncode == 1, res.output
+    assert expected in res.output, res.output
+    assert "not tagged" in res.output and f"{TAG}-arm64" in res.output
+    assert arm.of("tag") == []  # the final tag is never applied
+    # the checkpoint is kept for inspection
+    assert "geobrix-checkpoint:final-arm64" in arm.final_state()["images"]
+
+
+def test_every_failed_expectation_is_listed(arm):
+    arm.state["probe"]["arm64"] = probe_with(
+        "arm64", gdal="3.10.0", proj="9.0.0", rasterio_tags="cp312-cp312-linux_aarch64"
+    )
+    res = build(arm)
+    assert res.returncode == 1
+    for expected in ("GDAL: want", "PROJ: want", "rasterio is not a manylinux wheel"):
+        assert expected in res.output
+    assert arm.of("tag") == []
+
+
+def test_a_probe_that_cannot_run_or_prints_nothing_fails_closed(arm):
+    arm.state["probe_rc"] = 125
+    res = build(arm)
+    assert res.returncode == 1 and "Could not run the native-stack probe" in res.output
+    assert arm.of("tag") == []
+    arm.state["probe_rc"] = 0
+    arm.state["probe"]["arm64"] = []
+    arm.log.unlink()
+    res = build(arm)
+    assert res.returncode == 1 and "Could not run the native-stack probe" in res.output
+    assert arm.of("tag") == []
+
+
+def scratch_tree(tmp_path, pyproj_pin_changed_in: str):
+    """A copy of the build script, its helpers, the Dockerfile and the two locks under tmp_path, with
+    pyproj pinned to another version in one lock (the real locks pin the same versions).
+    """
+    root = tmp_path / "tree"
+    (root / "scripts" / "docker").mkdir(parents=True)
+    (root / "python" / "geobrix").mkdir(parents=True)
+    for name in (
+        "build_smart.sh",
+        "gbx-platform.sh",
+        "gbx-native-probe.sh",
+        "Dockerfile",
+    ):
+        shutil.copy(DOCKER_DIR / name, root / "scripts" / "docker" / name)
+    for lock in (
+        "requirements-dev-container.txt",
+        "requirements-dev-container-aarch64.txt",
+    ):
+        text = (REPO_ROOT / "python" / "geobrix" / lock).read_text()
+        if lock == pyproj_pin_changed_in:
+            text = re.sub(r"(?m)^pyproj==\S+", "pyproj==0.0.1", text)
+        (root / "python" / "geobrix" / lock).write_text(text)
+    return root / "scripts" / "docker" / "build_smart.sh"
+
+
+@pytest.mark.parametrize(
+    "lock,host,fails",
+    [
+        ("requirements-dev-container-aarch64.txt", "arm64", True),
+        ("requirements-dev-container-aarch64.txt", "x86_64", False),
+        ("requirements-dev-container.txt", "x86_64", True),
+        ("requirements-dev-container.txt", "arm64", False),
+    ],
+)
+def test_each_image_is_checked_against_its_own_architectures_lock(
+    tmp_path, lock, host, fails
+):
+    sb = Sandbox(tmp_path, host)
+    script = scratch_tree(tmp_path, lock)
+    res = sb.run(script, "--no-pull")
+    if fails:
+        assert res.returncode == 1 and "pyproj (lock): want '0.0.1'" in res.output
+        assert sb.of("tag") == []
+    else:
+        assert res.returncode == 0, res.output
+
+
+def test_a_native_stack_failure_does_not_mask_an_index_leak_and_the_reverse(arm):
+    """The index check runs first and removes the checkpoint; the probe never runs on a leaking image."""
+    arm.state["history"] = [f"ENV PIP_INDEX_URL={INDEX}"]
+    arm.state["probe"]["arm64"] = probe_with("arm64", gdal="0")
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 1 and "recorded in the image history" in res.output
+    assert probe_calls(arm) == []
+    assert INDEX not in res.output and "idx.internal" not in res.output

@@ -168,6 +168,15 @@ if docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
         echo -e "${YELLOW}⚠️  Existing 'geobrix-dev' container is mounted to a different worktree:${NC}"
         echo -e "   existing: ${YELLOW}$EXISTING_MOUNT${NC}"
         echo -e "   current:  ${YELLOW}$PROJECT_ROOT${NC}"
+        # Only the mount is wrong, so the replacement keeps the architecture of the container it replaces
+        # unless a platform was asked for (--platform or GBX_DOCKER_PLATFORM).
+        if [ -z "$PLATFORM_ARG" ] && [ -z "${GBX_DOCKER_PLATFORM:-}" ]; then
+            KEPT_ARCH="$(gbx_container_arch geobrix-dev)"
+            if [ -n "$KEPT_ARCH" ]; then
+                PLATFORM="linux/$KEPT_ARCH"
+                echo -e "   keeping its architecture: ${YELLOW}${PLATFORM}${NC}"
+            fi
+        fi
         require_image_before_removal
         echo -e "${CYAN}🔄 Recreating container with current worktree mount...${NC}"
         docker stop geobrix-dev >/dev/null 2>&1 || true

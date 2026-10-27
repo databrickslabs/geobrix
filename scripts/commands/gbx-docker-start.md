@@ -45,6 +45,7 @@ GBX_DOCKER_PLATFORM=linux/amd64 bash scripts/commands/gbx-docker-start.sh --recr
 
 - Uses `scripts/docker/start_docker_with_volumes.sh`
 - **Image and platform:** `geobrix-dev:ubuntu24-gdal311-spark-<arch>`, with the platform from `--platform`, else `$GBX_DOCKER_PLATFORM`, else this host's architecture. If that image does not exist the command stops with the build command (`gbx:docker:rebuild --platform ...`) and the fallback (`GBX_DOCKER_PLATFORM=linux/amd64`), rather than trying to pull a local-only tag. The old un-suffixed tag (the amd64 image) is used only as an amd64 fallback.
+- A container recreated only because it is mounted to another worktree keeps the architecture of the container it replaces, unless `--platform` or `GBX_DOCKER_PLATFORM` is given.
 - An existing container keeps the architecture it was created with, whatever is requested. When that differs, the command warns and keeps it (other runs may be using it); `--recreate` replaces it, but only after checking that the requested platform's image exists: with no such image it stops with the build command and leaves the container running (the same check guards the worktree-mismatch recreate and `gbx:docker:restart --privileged`).
 - **Maven setup**: On every start (or when already running), runs `scripts/docker/extras/docker_maven_setup.sh` so Maven uses project-local `.m2` (`scripts/docker/m2`) and `skipScoverage` as the default profile. Avoids a wiped `.m2` on each launch.
 - Checks if container already running

@@ -75,6 +75,9 @@ NOTES:
     - Stops and removes the existing container before rebuild so the next start uses the new image,
       but only when that container runs the SAME architecture as the rebuild; a container of the other
       architecture, and --keep-container, leave it alone.
+    - After the build, a throwaway container of the new image is probed (GDAL 3.11.4, PROJ 9.4.0, GEOS 3.12.1,
+      the JNI library's libgdal.so.37, rasterio as a manylinux wheel, pyogrio/pyproj/shapely at the locked
+      versions); any difference leaves the image untagged.
     - Start script uses the same per-architecture tag (start_docker_with_volumes.sh)
 
 EOF

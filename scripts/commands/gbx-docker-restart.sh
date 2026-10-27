@@ -28,7 +28,8 @@ USAGE:
 OPTIONS:
     --timeout <seconds>  Timeout before force stop (default: 10)
     --attach             Attach to container after restart
-    --privileged         Recreate container with privileged mode (stop, rm, create)
+    --privileged         Recreate container with privileged mode (stop, rm, create), on the same
+                         architecture as the container it replaces
     --log <path>         Write output to log file
     --help               Display this help message
 
@@ -111,8 +112,18 @@ fi
 
 # If --privileged requested, recreate container instead of restarting
 if [ "$PRIVILEGED" = true ]; then
-    # The image to recreate from must exist BEFORE the working container is stopped and removed.
-    RESTART_PLATFORM="$(gbx_docker_platform)" || exit 2
+    # Recreate on the architecture of the container being replaced, read from its image (never the host
+    # default or GBX_DOCKER_PLATFORM: a restart must not silently switch architecture; use
+    # `gbx:docker:start --recreate --platform <p>` for that). The image must exist BEFORE the working
+    # container is stopped and removed.
+    CONTAINER_ARCH="$(gbx_container_arch geobrix-dev)"
+    if [ -z "$CONTAINER_ARCH" ]; then
+        echo -e "${RED}❌ Cannot tell which architecture the existing geobrix-dev container runs; it was left untouched.${NC}"
+        echo -e "   To replace it on a chosen architecture: ${YELLOW}bash scripts/commands/gbx-docker-start.sh --recreate --platform linux/arm64|linux/amd64${NC}"
+        exit 1
+    fi
+    RESTART_PLATFORM="linux/$CONTAINER_ARCH"
+    echo -e "${CYAN}   Keeping the container's architecture: ${RESTART_PLATFORM}${NC}"
     if ! gbx_require_dev_image "$RESTART_PLATFORM" >/dev/null; then
         echo -e "${RED}❌ Not recreating: the existing geobrix-dev container was left untouched.${NC}"
         exit 1
@@ -121,7 +132,7 @@ if [ "$PRIVILEGED" = true ]; then
     print_separator
     docker stop -t $TIMEOUT geobrix-dev 2>/dev/null || true
     docker rm geobrix-dev 2>/dev/null || true
-    bash "$SCRIPT_DIR/gbx-docker-start.sh" --privileged \
+    bash "$SCRIPT_DIR/gbx-docker-start.sh" --privileged --platform "$RESTART_PLATFORM" \
         $([ "$ATTACH" = true ] && echo "--attach")
     exit $?
 fi

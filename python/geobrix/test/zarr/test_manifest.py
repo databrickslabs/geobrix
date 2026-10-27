@@ -1344,3 +1344,90 @@ def test_a_v2_document_in_the_commit_says_not_sharded_without_a_lookup():
     )
     rows = _rows(zarray, _bare("t2m", "0", w))
     M._require_shard_keys(None, "t", M._commit_source(rows, w, {}))  # no session needed
+
+
+# --- read guards: op 'check' (fix round 1, I1) ------------------------------------------
+
+
+def _check(kind, array, key, wid, expected):
+    return dict(
+        kind=kind,
+        array=array,
+        key=key,
+        write_id=wid,
+        op="check",
+        expected_write_id=expected,
+    )
+
+
+def test_a_check_row_passes_on_an_unchanged_row_and_changes_nothing(spark_delta, table):
+    w = uuid.uuid4().hex
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_shard_row("t2m", "c/0/0/0", w, "c/0/0/0")),
+        write_id=w,
+        meta={},
+        sharded={"t2m": True},
+    )
+    w2 = uuid.uuid4().hex
+    rows = _rows(
+        _check("shard", "t2m", "c/0/0/0", w2, w),  # the shard is as this write read it
+        _check("shard", "t2m", "c/1/0/0", w2, None),  # and this one still absent
+        _chunk("c/0/0/1", w2),
+    )
+    M.commit(spark_delta, table, rows, write_id=w2, meta={}, sharded={"t2m": True})
+    shards = M.read_rows(spark_delta, M.snapshot(spark_delta, table), kinds="shard")
+    assert [(r["key"], r["write_id"]) for r in shards.to_pylist()] == [("c/0/0/0", w)]
+
+
+@pytest.mark.parametrize("how", ["changed", "gone", "appeared"])
+def test_a_check_row_aborts_the_commit_when_the_row_moved(spark_delta, table, how):
+    w = uuid.uuid4().hex
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_shard_row("t2m", "c/0/0/0", w, "c/0/0/0")),
+        write_id=w,
+        meta={},
+        sharded={"t2m": True},
+    )
+    w2 = uuid.uuid4().hex
+    if how == "changed":
+        guard = _check("shard", "t2m", "c/0/0/0", w2, uuid.uuid4().hex)
+    elif how == "gone":
+        guard = _check("shard", "t2m", "c/9/0/0", w2, w)
+    else:  # expected absent, but it is there
+        guard = _check("shard", "t2m", "c/0/0/0", w2, None)
+    with pytest.raises(ZarrWriteConflict) as e:
+        M.commit(
+            spark_delta,
+            table,
+            _rows(guard, _chunk("c/0/0/1", w2)),
+            write_id=w2,
+            meta={},
+            sharded={"t2m": True},
+        )
+    assert "Fix:" in str(e.value)
+    assert M.find_commit_version(spark_delta, table, w2) is None
+    assert (
+        M.read_rows(spark_delta, M.snapshot(spark_delta, table), kinds="chunk").num_rows
+        == 0
+    )
+
+
+# --- argument errors carry a Fix: line (fix round 1, M10) -----------------------------------
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda: M._check_write_id("not-hex"),
+        lambda: M._split_name("a.b.c.d"),
+        lambda: M._split_name(""),
+        lambda: M.retain_seconds("forever"),
+    ],
+)
+def test_argument_errors_say_how_to_fix_them(call):
+    with pytest.raises(ValueError, match="Fix:"):
+        call()

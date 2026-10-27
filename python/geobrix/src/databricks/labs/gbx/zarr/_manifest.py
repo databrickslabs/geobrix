@@ -19,6 +19,7 @@ import json
 import math
 import numbers
 import re
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -80,7 +81,7 @@ MANIFEST_COLUMNS = (
 )
 _COMMIT_COLUMNS = MANIFEST_COLUMNS + ("op", "expected_write_id")
 _REQUIRED_COLUMNS = ("kind", "write_id", "op", "expected_write_id")
-_OPS = ("upsert", "delete")
+_OPS = ("upsert", "delete", "check")
 
 _INT_COLUMNS = ("offset", "length")
 _COMMIT_SCHEMA = pa.schema(
@@ -109,6 +110,12 @@ _ROW_TRACKING_FIX = "check that delta.enableRowTracking is true on the manifest 
 # One MERGE is one transaction. A matched row whose write_id is not the expected one
 # falls through to the raise_error branch; an expectation of NULL ("must not exist")
 # on an existing key does too, because ``t.write_id = NULL`` is never true.
+#
+# ``op = 'check'`` is a read guard: a row the write read but does not change (the shard row
+# a read-modify-write took a chunk from, the document a new array was sized from). It
+# rewrites the row unchanged, so a concurrent commit that changes the same row conflicts in
+# Delta too; a different write_id, a row that is gone or (expectation NULL) one that has
+# appeared aborts the MERGE like any other stale expectation.
 _MERGE_SQL = """
 MERGE INTO {table} AS t
 USING {view} AS s
@@ -117,13 +124,15 @@ WHEN MATCHED AND s.op = 'delete' AND t.write_id = s.expected_write_id THEN DELET
 WHEN MATCHED AND s.op = 'upsert' AND t.write_id = s.expected_write_id THEN UPDATE SET
   shard_key = s.shard_key, file = s.file, offset = s.offset, length = s.length, checksum = s.checksum,
   origin = s.origin, identity = s.identity, write_id = s.write_id, meta = s.meta
+WHEN MATCHED AND s.op = 'check' AND t.write_id = s.expected_write_id THEN UPDATE SET
+  write_id = t.write_id
 WHEN MATCHED THEN UPDATE SET
   kind = raise_error(concat('GBX_ZARR_CAS ', s.kind, ' ', coalesce(s.array, ''), ' ', coalesce(s.key, '')))
 WHEN NOT MATCHED AND s.op = 'upsert' AND s.expected_write_id IS NULL THEN INSERT
   (kind, array, key, shard_key, file, offset, length, checksum, origin, identity, write_id, tag, meta)
   VALUES (s.kind, s.array, s.key, s.shard_key, s.file, s.offset, s.length, s.checksum, s.origin,
           s.identity, s.write_id, NULL, s.meta)
-WHEN NOT MATCHED THEN INSERT (kind, write_id)
+WHEN NOT MATCHED AND NOT (s.op = 'check' AND s.expected_write_id IS NULL) THEN INSERT (kind, write_id)
   VALUES (raise_error(concat('GBX_ZARR_CAS ', s.kind, ' ', coalesce(s.array, ''), ' ', coalesce(s.key, ''))), s.write_id)
 """
 
@@ -167,7 +176,9 @@ class ConcurrentCommit(Exception):
 def _split_name(name: str) -> list[str]:
     """Split ``catalog.schema.table`` into parts; a part may be backtick-quoted."""
     if not isinstance(name, str) or not name:
-        raise ValueError("table name must be a non-empty string")
+        raise ValueError(
+            "table name must be a non-empty string. Fix: pass catalog.schema.table, backtick-quoting a part that needs it."
+        )
     parts: list[str] = []
     i, n = 0, len(name)
     while True:
@@ -175,7 +186,9 @@ def _split_name(name: str) -> list[str]:
             j, buf = i + 1, []
             while True:
                 if j >= n:
-                    raise ValueError(f"unterminated backtick in table name {name!r}")
+                    raise ValueError(
+                        f"unterminated backtick in table name {name!r}. Fix: pass catalog.schema.table, backtick-quoting a part that needs it."
+                    )
                 if name[j] == "`":
                     if j + 1 < n and name[j + 1] == "`":
                         buf.append("`")
@@ -189,19 +202,27 @@ def _split_name(name: str) -> list[str]:
             j = i
             while j < n and name[j] != ".":
                 if name[j] == "`":
-                    raise ValueError(f"stray backtick in table name {name!r}")
+                    raise ValueError(
+                        f"stray backtick in table name {name!r}. Fix: pass catalog.schema.table, backtick-quoting a part that needs it."
+                    )
                 j += 1
             part, i = name[i:j], j
         if not part:
-            raise ValueError(f"empty part in table name {name!r}")
+            raise ValueError(
+                f"empty part in table name {name!r}. Fix: pass catalog.schema.table, backtick-quoting a part that needs it."
+            )
         parts.append(part)
         if i == n:
             break
         if name[i] != ".":
-            raise ValueError(f"expected '.' after a quoted part in {name!r}")
+            raise ValueError(
+                f"expected '.' after a quoted part in {name!r}. Fix: pass catalog.schema.table, backtick-quoting a part that needs it."
+            )
         i += 1
     if len(parts) > 3:
-        raise ValueError(f"table name {name!r} has more than catalog.schema.table")
+        raise ValueError(
+            f"table name {name!r} has more than catalog.schema.table. Fix: pass catalog.schema.table, backtick-quoting a part that needs it."
+        )
     return parts
 
 
@@ -218,7 +239,8 @@ def _lit(value: str) -> str:
 def _check_write_id(write_id) -> str:
     if not isinstance(write_id, str) or not _WRITE_ID_RE.fullmatch(write_id):
         raise ValueError(
-            f"write_id must be 32 lowercase hex characters (uuid4().hex), got {write_id!r}"
+            f"write_id must be 32 lowercase hex characters (uuid4().hex), got "
+            f"{write_id!r}. Fix: pass uuid.uuid4().hex, or leave write_id unset."
         )
     return write_id
 
@@ -239,7 +261,7 @@ def retain_seconds(retain: str) -> int:
     if m is None:
         raise ValueError(
             f"retain must look like '7 days' (seconds, minutes, hours, days or weeks); "
-            f"got {retain!r}"
+            f"got {retain!r}. Fix: pass a number and a unit, such as retain='7 days'."
         )
     return int(round(float(m.group(1)) * _RETAIN_UNIT_SECONDS[m.group(2).lower()]))
 
@@ -663,7 +685,7 @@ def _commit_source(rows: pa.Table, write_id: str, meta: dict) -> pa.Table:
         bad_op = pc.invert(pc.is_in(op, value_set=pa.array(list(_OPS))))
         if pc.any(bad_op, min_count=0).as_py():
             raise ValueError(
-                f"op must be 'upsert' or 'delete', got {_first(op, bad_op)!r}"
+                f"op must be 'upsert', 'delete' or 'check', got {_first(op, bad_op)!r}"
             )
         is_commit = pc.fill_null(pc.equal(kind, "commit"), False)
         if pc.any(is_commit, min_count=0).as_py():
@@ -867,15 +889,22 @@ def _require_shard_keys(
     )
 
 
+def _nonempty(data: pa.Table) -> pa.Table:
+    """``data`` without zero-row batches: what to hand ``spark.createDataFrame``.
+
+    Spark's JVM Arrow iterator (ArrowConverters) ends at the first zero-row batch and
+    silently drops every row after it. That affects PySpark 4.0 and 4.2, classic and
+    Connect; concatenated tables carry such chunks whenever a part came out empty.
+    """
+    return pa.Table.from_batches(
+        [b for b in data.to_batches() if b.num_rows], schema=data.schema
+    )
+
+
 def _with_view(spark, data: pa.Table, schema: pa.Schema, run):
     """Run ``run(view_name)`` over ``data`` exposed as a temp view; always drop it."""
     view = f"_gbx_zarr_src_{uuid.uuid4().hex}"
-    # Spark's JVM Arrow iterator (ArrowConverters) ends at the first zero-row batch and
-    # silently drops every row after it. That affects PySpark 4.0 and 4.2, classic and
-    # Connect; concatenated tables carry such chunks whenever a part came out empty.
-    data = pa.Table.from_batches(
-        [b for b in data.to_batches() if b.num_rows], schema=data.schema
-    )
+    data = _nonempty(data)
     try:
         spark.createDataFrame(
             data, schema=_spark_schema(schema)
@@ -984,6 +1013,19 @@ def _write_conflict(
     )
 
 
+def _landed(spark, table: str, write_id: str, attempts: int = 3):
+    """``find_commit_version`` after a MERGE that returned: the commit is in, so a failed
+    lookup (a transient Connect error, say) is asked again before it is reported."""
+    for attempt in range(attempts):
+        try:
+            return find_commit_version(spark, table, write_id)
+        except Exception:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.5 * (attempt + 1))
+    return None
+
+
 def commit(
     spark,
     table: str,
@@ -1040,7 +1082,7 @@ def commit(
                 "touched the same files or rows. Fix: read the store again and retry."
             ) from e
         raise
-    version = find_commit_version(spark, table, write_id)
+    version = _landed(spark, table, write_id)
     if version is None:
         raise ZarrError(
             f"the MERGE into {table} finished but the commit row for {write_id} is "

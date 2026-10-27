@@ -15,17 +15,9 @@ source "$SCRIPT_DIR/common.sh"
 
 RUNNER_SCRIPT="$PROJECT_ROOT/examples/tests/run_notebooks_serverless.py"
 
-# The runner needs databricks-sdk and Python >= 3.11 (tomllib). The pyrx venv is the CI light
-# lock and carries no SDK, so use it only when it has one; otherwise an ephemeral uv env with
-# the SDK; otherwise system python3.
-VENV_PY="$PROJECT_ROOT/.venv-pyrx/bin/python"
-if [[ -x "$VENV_PY" ]] && "$VENV_PY" -c "import databricks.sdk" >/dev/null 2>&1; then
-    PYTHON_CMD=("$VENV_PY")
-elif command -v uv >/dev/null 2>&1; then
-    PYTHON_CMD=(uv run --no-project --python 3.12 --with databricks-sdk python)
-else
-    PYTHON_CMD=(python3)
-fi
+# The runner needs databricks-sdk and Python >= 3.11 (tomllib): see gbx_python_with_sdk in common.sh.
+gbx_python_with_sdk
+PYTHON_CMD=("${GBX_SDK_PYTHON[@]}")
 
 show_help() {
     show_banner "GeoBrix: Serverless Notebook Tests"

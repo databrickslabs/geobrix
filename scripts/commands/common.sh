@@ -421,10 +421,32 @@ run_in_pyrx_venv() {
     return $_rc
 }
 
+# Python that can import databricks-sdk, for the launchers that talk to a workspace
+# (gbx:data:stage-jar, gbx:data:stage-wheel, gbx:test:notebooks-serverless, gbx:bench:cluster).
+# Sets the array GBX_SDK_PYTHON; run a script with it:
+#   gbx_python_with_sdk; "${GBX_SDK_PYTHON[@]}" examples/tests/<launcher>.py ...
+# The pyrx venv is the CI light lock and carries no databricks-sdk, so it is used as it is only
+# when it can import the SDK. Otherwise `uv run --with databricks-sdk` layers the SDK over the
+# venv's interpreter (its packages, such as the bench launcher's rasterio, stay importable), or
+# over Python 3.12 when there is no venv; system python3 is the last resort when uv is absent.
+# Needs PROJECT_ROOT (every command sets it before sourcing this file); GBX_PYRX_VENV moves the venv.
+gbx_python_with_sdk() {
+    local _venv_py="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}/bin/python"
+    if [[ -x "${_venv_py}" ]] && "${_venv_py}" -c "import databricks.sdk" >/dev/null 2>&1; then
+        GBX_SDK_PYTHON=("${_venv_py}")
+    elif command -v uv >/dev/null 2>&1; then
+        local _base="3.12"
+        [[ -x "${_venv_py}" ]] && _base="${_venv_py}"
+        GBX_SDK_PYTHON=(uv run --no-project --python "${_base}" --with databricks-sdk python)
+    else
+        GBX_SDK_PYTHON=(python3)
+    fi
+}
+
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
 export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
-          print_banner print_separator setup_log run_in_pyrx_venv validate_set \
+          print_banner print_separator setup_log run_in_pyrx_venv gbx_python_with_sdk validate_set \
           print_lock_help gbx_acquire_test_lock 2>/dev/null || true

@@ -81,11 +81,19 @@ if [ "$JAR_STEP" = true ]; then
     gbx_acquire_test_lock
 fi
 
+# The upload uses WorkspaceClient (databricks-sdk): see gbx_python_with_sdk in common.sh. A
+# local-only build (GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1) imports no SDK, so it keeps system python3
+# and needs neither network nor uv.
+case "$(printf '%s' "${GBX_BUNDLE_SKIP_WHEEL_UPLOAD:-}" | tr '[:upper:]' '[:lower:]')" in
+    1|true|yes) GBX_SDK_PYTHON=(python3) ;;
+    *) gbx_python_with_sdk ;;
+esac
+
 if [[ -n "$LOG_FILE" ]]; then
     mkdir -p "$(dirname "$LOG_FILE")"
-    python3 examples/tests/stage_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
+    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py 2>&1 | tee "$LOG_FILE"
     exit "${PIPESTATUS[0]}"
 else
-    python3 examples/tests/stage_wheel_to_volume.py
+    "${GBX_SDK_PYTHON[@]}" examples/tests/stage_wheel_to_volume.py
     exit $?
 fi

@@ -434,3 +434,119 @@ def test_an_option_without_its_value_is_refused_not_looped_on(sandbox, command, 
         pytest.fail(f"{command} {option} with no value never exited")
 
     assert proc.returncode == 2 and option in out, out
+
+
+# ------------------- workspace launchers: a Python that can import databricks-sdk (host)
+
+
+def _venv_python(sandbox, *, sdk, venv=None):
+    """A venv (default `.venv-pyrx`) whose python can or cannot import databricks.sdk.
+
+    The CI-lock venv has no SDK: `python -c "import databricks.sdk"` fails there. Any other
+    call (a launcher run) is recorded in calls.log next to the interpreter.
+    """
+    venv = venv or sandbox.root / ".venv-pyrx"
+    (venv / "bin").mkdir(parents=True)
+    python = venv / "bin" / "python"
+    python.write_text(
+        '#!/bin/sh\n[ "$1" = "-c" ] && exit %d\n'
+        'echo "$*" >> "%s"\nexit 0\n' % (0 if sdk else 1, venv / "calls.log")
+    )
+    python.chmod(0o755)
+    return python, venv / "calls.log"
+
+
+def _sdk_python(sandbox, **env):
+    """What gbx_python_with_sdk (common.sh) picks, one word per line."""
+    res = subprocess.run(
+        [
+            "bash",
+            "-c",
+            f'PROJECT_ROOT="{sandbox.root}"; source "{sandbox.commands}/common.sh"; '
+            'gbx_python_with_sdk; printf "%s\\n" "${GBX_SDK_PYTHON[@]}"',
+        ],
+        env=sandbox.env(**env),
+        capture_output=True,
+        text=True,
+        timeout=60,
+    )
+    assert res.returncode == 0, res.stderr
+    return res.stdout.split("\n")[:-1]
+
+
+def test_the_sdk_python_is_the_venv_only_when_the_venv_can_import_the_sdk(
+    sandbox, tmp_path
+):
+    # With the SDK: the venv as it is. Without it (the CI-lock venv): uv layers the SDK over the
+    # venv's own interpreter, so the venv's packages stay importable. No venv: uv on 3.12.
+    # No venv and no uv: system python3.
+    uv = ["run", "--no-project", "--python"]
+    with_sdk, _ = _venv_python(sandbox, sdk=True)
+    assert _sdk_python(sandbox) == [str(with_sdk)]
+
+    other, _ = _venv_python(sandbox, sdk=False, venv=tmp_path / "bare")
+    layered = _sdk_python(sandbox, GBX_PYRX_VENV=str(tmp_path / "bare"))
+    assert layered == ["uv"] + uv + [str(other), "--with", "databricks-sdk", "python"]
+
+    missing = _sdk_python(sandbox, GBX_PYRX_VENV=str(tmp_path / "nowhere"))
+    assert missing == ["uv"] + uv + ["3.12", "--with", "databricks-sdk", "python"]
+
+    assert _sdk_python(
+        sandbox, GBX_PYRX_VENV=str(tmp_path / "nowhere"), PATH="/usr/bin:/bin"
+    ) == ["python3"]
+
+
+@pytest.mark.parametrize(
+    "command, args, env, launcher",
+    [
+        (
+            "gbx-data-stage-jar.sh",
+            [],
+            {"GBX_BUNDLE_SKIP_JAR": "1"},
+            "stage_jar_to_volume",
+        ),
+        (
+            "gbx-data-stage-wheel.sh",
+            [],
+            {"GBX_BUNDLE_SKIP_JAR": "1"},
+            "stage_wheel_to_volume",
+        ),
+        ("gbx-bench-cluster.sh", [], {}, "push_and_run_bench_on_cluster"),
+        (
+            "gbx-test-notebooks-serverless.sh",
+            ["--notebook", "x.ipynb"],
+            {},
+            "run_notebooks_serverless",
+        ),
+    ],
+)
+def test_the_workspace_launchers_get_the_sdk_when_the_venv_has_none(
+    sandbox, command, args, env, launcher
+):
+    # The venv is the CI light lock and has no databricks-sdk: running a launcher on it died with
+    # "No module named databricks.sdk" before anything reached the workspace.
+    python, calls = _venv_python(sandbox, sdk=False)
+    uv_log = _fake_uv(sandbox)
+    config = sandbox.root / "examples" / "tests" / "databricks_cluster_config.env"
+    config.parent.mkdir(parents=True)
+    config.write_text("")  # gbx-bench-cluster.sh refuses to start without it
+
+    res = sandbox.run(command, *args, **env)
+
+    assert res.returncode == 0, res.output
+    words = uv_log.read_text().splitlines()[-1].split()
+    assert words[:4] == ["run", "--no-project", "--python", str(python)], words
+    assert words[4:7] == ["--with", "databricks-sdk", "python"], words
+    assert any(w.endswith(f"examples/tests/{launcher}.py") for w in words[7:]), words
+    assert not calls.exists()  # the SDK-less interpreter never ran the launcher itself
+
+
+def test_a_launcher_runs_on_the_venv_itself_when_it_has_the_sdk(sandbox):
+    python, calls = _venv_python(sandbox, sdk=True)
+    uv_log = _fake_uv(sandbox)
+
+    res = sandbox.run("gbx-data-stage-jar.sh", GBX_BUNDLE_SKIP_JAR="1")
+
+    assert res.returncode == 0, res.output
+    assert calls.read_text().split() == ["examples/tests/stage_jar_to_volume.py"]
+    assert not uv_log.exists()  # nothing was fetched

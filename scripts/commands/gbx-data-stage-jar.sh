@@ -48,11 +48,7 @@ case "$(printf '%s' "${GBX_BUNDLE_SKIP_JAR:-}" | tr '[:upper:]' '[:lower:]')" in
     *) check_docker; gbx_acquire_test_lock ;;
 esac
 
-# Prefer the project venv interpreter -- it has databricks-sdk (the bare `python` on PATH
-# often does not, and the upload uses WorkspaceClient). Fall back to PATH python.
-PY="python"
-if [ -x "$PROJECT_ROOT/.venv-pyrx/bin/python" ]; then
-  PY="$PROJECT_ROOT/.venv-pyrx/bin/python"
-fi
-"$PY" examples/tests/stage_jar_to_volume.py
+# The upload uses WorkspaceClient (databricks-sdk): see gbx_python_with_sdk in common.sh.
+gbx_python_with_sdk
+"${GBX_SDK_PYTHON[@]}" examples/tests/stage_jar_to_volume.py
 exit $?

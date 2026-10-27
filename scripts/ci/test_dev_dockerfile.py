@@ -19,6 +19,15 @@ LOCK_X86 = "requirements-dev-container.txt"
 LOCK_ARM = "requirements-dev-container-aarch64.txt"
 
 
+# Official SHA-512 of apache-maven-<version>-bin.tar.gz, per version, from the Apache .sha512 files
+# (archive.apache.org, downloads.apache.org and dlcdn.apache.org agree for each). A bump of MAVEN_VERSION
+# in the Dockerfile needs its row here, so the version and the pinned hash cannot move apart.
+MAVEN_SHA512_BY_VERSION = {
+    "3.9.9": "a555254d6b53d267965a3404ecb14e53c3827c09c3b94b5678835887ab404556bfaf78dcfe03ba76fa2508649dca8531c74bca4d5846513522404d48e8c4ac8b",
+    "3.9.16": "831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6",
+}
+
+
 class Instr:
     def __init__(self, stage, keyword, rest):
         self.stage, self.keyword, self.rest = stage, keyword, rest
@@ -196,6 +205,39 @@ def problems(text: str) -> list:
     final = [i for i in instrs if i.keyword == "FROM" and i.stage == "final"]
     if not final or "final-${TARGETARCH}" not in final[0].rest:
         out.append("the final stage is not FROM final-${TARGETARCH}")
+
+    # --- Maven is pinned by version AND the official SHA-512 of that version, and verified
+    maven = {
+        k: v
+        for k, v in key_values(instrs, ("ARG",)).items()
+        if k in ("MAVEN_VERSION", "MAVEN_SHA512")
+    }
+    version, digest = maven.get("MAVEN_VERSION"), maven.get("MAVEN_SHA512")
+    if not version or not digest:
+        out.append("MAVEN_VERSION and MAVEN_SHA512 must both be pinned")
+    elif version not in MAVEN_SHA512_BY_VERSION:
+        out.append(
+            f"MAVEN_VERSION {version} has no recorded official SHA-512 in this test "
+            "(add its row from the Apache .sha512 file)"
+        )
+    elif digest != MAVEN_SHA512_BY_VERSION[version]:
+        out.append(
+            f"MAVEN_SHA512 does not match the recorded official hash for Maven {version}"
+        )
+    maven_runs = [i for i in instrs if i.keyword == "RUN" and "apache-maven" in i.rest]
+    if not maven_runs:
+        out.append("no RUN installs Maven")
+    else:
+        run = maven_runs[0].rest
+        if (
+            "https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/"
+            "apache-maven-${MAVEN_VERSION}-bin.tar.gz" not in run
+        ):
+            out.append(
+                "Maven is not downloaded from archive.apache.org by MAVEN_VERSION"
+            )
+        if '"${MAVEN_SHA512}  /tmp/apache-maven.tar.gz" | sha512sum -c -' not in run:
+            out.append("the Maven tarball is not verified with the pinned MAVEN_SHA512")
 
     # --- the pip stage carries the index fingerprint that keys its cache
     fpr = [
@@ -410,6 +452,32 @@ MUTATIONS = {
             "FROM hadoop-builder AS gdal-builder\nARG GBX_PIP_INDEX_FPR=none\n",
         ),
         "GBX_PIP_INDEX_FPR must be declared once, in the stage of the secret-reading RUN",
+    ),
+    "Maven version bumped without the hash": (
+        mutate("ARG MAVEN_VERSION=3.9.16", "ARG MAVEN_VERSION=3.9.17"),
+        "MAVEN_VERSION 3.9.17 has no recorded official SHA-512",
+    ),
+    "Maven version moved back without the hash": (
+        mutate("ARG MAVEN_VERSION=3.9.16", "ARG MAVEN_VERSION=3.9.9"),
+        "MAVEN_SHA512 does not match the recorded official hash for Maven 3.9.9",
+    ),
+    "Maven hash changed without the version": (
+        mutate("ARG MAVEN_SHA512=831a8591", "ARG MAVEN_SHA512=a555254d"),
+        "MAVEN_SHA512 does not match the recorded official hash for Maven 3.9.16",
+    ),
+    "Maven hash dropped": (
+        re.sub(r"ARG MAVEN_SHA512=[0-9a-f]{128}", "ARG MAVEN_SHA512=", REAL),
+        "MAVEN_VERSION and MAVEN_SHA512 must both be pinned",
+    ),
+    "Maven download not verified": (
+        mutate('"${MAVEN_SHA512}  /tmp/apache-maven.tar.gz" | sha512sum -c -', "true"),
+        "Maven tarball is not verified",
+    ),
+    "Maven from another host": (
+        mutate(
+            "https://archive.apache.org/dist/maven/", "https://dlcdn.apache.org/maven/"
+        ),
+        "Maven is not downloaded from archive.apache.org",
     ),
     "stray amd64 path": (
         mutate(

@@ -659,14 +659,21 @@ def _check_integer_range(values: np.ndarray, attrs: dict, meta: ArrayMeta, targe
         )
 
 
+def _time_unit_name(text: str) -> str:
+    """A CF time unit name as xarray reads it: lower case, plural (``"Hour"`` is
+    ``"hours"``), so that names it rewrites compare equal."""
+    name = text.strip().lower()
+    return name if name.endswith("s") else name + "s"
+
+
 def _same_time_units(a: str, b: str) -> bool:
     """Whether two CF time units are the same unit since the same instant (xarray
-    rewrites ``"hours since 2023-01-01 00:00:00"`` as ``"hours since 2023-01-01"``)."""
+    rewrites ``"hour since 2023-01-01 00:00:00"`` as ``"hours since 2023-01-01"``)."""
     import pandas as pd
 
     ua, _, ra = str(a).partition(" since ")
     ub, _, rb = str(b).partition(" since ")
-    if ua.strip().lower() != ub.strip().lower():
+    if _time_unit_name(ua) != _time_unit_name(ub):
         return False
     try:
         return pd.Timestamp(ra.strip()) == pd.Timestamp(rb.strip())
@@ -716,6 +723,13 @@ def cf_encode(values, meta: ArrayMeta, *, stored: bool = False) -> np.ndarray:
             raise _encode_refusal(meta, "times into an array with no CF time units")
         encoding["units"] = meta.attrs["units"]
         encoding["calendar"] = meta.attrs.get("calendar") or "standard"
+        if np.isnat(values).all():
+            # nothing to encode (xarray's encoder fails on it): every cell is missing,
+            # stored as mixed NaT is, as the fill
+            fill = encoding.get("_FillValue")
+            if fill is None:
+                fill = np.iinfo(target).min if target.kind in "iu" else np.nan
+            return np.full(values.shape, fill, dtype=target)
     elif target.kind in "iub" and values.dtype.kind in "fc":
         masks = "_FillValue" in encoding or "missing_value" in encoding
         if not masks and np.isnan(values).any():
@@ -738,6 +752,14 @@ def cf_encode(values, meta: ArrayMeta, *, stored: bool = False) -> np.ndarray:
             # the requested ones; the units it used are checked below instead
             warnings.simplefilter("ignore")
             encoded = encode_cf_variable(var, name=meta.name)
+    except KeyError as e:  # xarray looks a time unit up by name
+        raise ZarrUnsupported(
+            f"values cannot be written to array {meta.name!r}: its time units "
+            f"{encoding.get('units')!r} are not CF time units xarray reads ({e} is not "
+            "days, hours, minutes, seconds, milliseconds, microseconds or nanoseconds)",
+            fix="store the coordinate with CF time units such as 'hours since "
+            "2023-01-01', or write its stored values (blocks read with decode=False)",
+        ) from None
     except (ValueError, TypeError, OverflowError) as e:
         raise _encode_refusal(meta, str(e)) from None
     if "units" in encoding and not _same_time_units(

@@ -936,3 +936,55 @@ def test_cf_encode_refuses_times_its_units_cannot_hold(tmp_path):
     with pytest.raises(ZarrUnsupported, match="whole multiples") as e:
         cf_encode(hours + np.timedelta64(30, "m"), meta)
     assert "Fix:" in str(e.value)
+
+
+@pytest.mark.parametrize(
+    "units, values, stored",
+    [
+        ("hour since 2023-01-01", ["2023-01-01T01", "2023-01-01T02"], [1, 2]),
+        ("day since 2023-01-01", ["2023-01-02", "2023-01-05"], [1, 4]),
+        ("minute since 2023-01-01", ["2023-01-01T00:01", "2023-01-01T00:05"], [1, 5]),
+        ("Hours since 2023-01-01 00:00:00", ["2023-01-01T01", "2023-01-01T02"], [1, 2]),
+    ],
+)
+def test_cf_encode_takes_singular_and_rewritten_time_unit_names(
+    tmp_path, units, values, stored
+):
+    """RR2-I1: xarray reads 'hour' as 'hours' (and rewrites the text); the same unit is
+    not a mismatch."""
+    from databricks.labs.gbx.zarr._meta import cf_encode
+
+    attrs = {"units": units, "calendar": "standard"}
+    _, meta = _stored(tmp_path, 3, np.array([0, 1], "i8"), "i8", attrs, name="time")
+    out = cf_encode(np.array(values, "datetime64[ns]"), meta)
+    assert list(out) == stored
+
+
+@pytest.mark.parametrize("fill", [None, int(np.iinfo("i8").min)])
+def test_cf_encode_stores_an_all_nat_block_as_the_fill(tmp_path, fill):
+    """RR2-M1: a block of nothing but missing times is the fill, as a mixed one's NaT is
+    (xarray's encoder fails on it)."""
+    from databricks.labs.gbx.zarr._meta import cf_encode
+
+    attrs = {"units": "hours since 2023-01-01", "calendar": "standard"}
+    if fill is not None:
+        attrs["_FillValue"] = fill
+    _, meta = _stored(tmp_path, 3, np.array([0, 1], "i8"), "i8", attrs, name="time")
+    nat = np.array(["NaT", "NaT"], "datetime64[ns]")
+    mixed = cf_encode(np.array(["2023-01-01T01", "NaT"], "datetime64[ns]"), meta)
+    assert (
+        list(cf_encode(nat, meta)) == [mixed[1], mixed[1]] == [np.iinfo("i8").min] * 2
+    )
+
+
+@pytest.mark.parametrize("units", ["h since 2023-01-01", "hrs since 2023-01-01"])
+def test_cf_encode_refuses_time_units_xarray_cannot_read(tmp_path, units):
+    """RR2-M2: a unit name xarray does not know is a typed refusal, not a KeyError."""
+    from databricks.labs.gbx.zarr._meta import cf_encode
+    from databricks.labs.gbx.zarr.errors import ZarrUnsupported
+
+    attrs = {"units": units, "calendar": "standard"}
+    _, meta = _stored(tmp_path, 3, np.array([0, 1], "i8"), "i8", attrs, name="time")
+    with pytest.raises(ZarrUnsupported, match="not CF time units") as e:
+        cf_encode(np.array(["2023-01-01T01", "2023-01-01T02"], "datetime64[ns]"), meta)
+    assert "Fix:" in str(e.value)

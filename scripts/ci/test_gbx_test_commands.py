@@ -5,6 +5,7 @@ conftest.py's ContainerSandbox): nothing reaches a daemon, and the work a comman
 into the container (pytest, Maven) is recorded instead of run.
 """
 
+import os
 import re
 import shlex
 import subprocess
@@ -153,6 +154,42 @@ def test_a_missing_path_fails_the_run(sandbox):
     res, ran = _run_parity(sandbox, "--path", "python/geobrix/test/pyvx/test_nope.py")
 
     assert res.returncode == 1 and "No such suite file" in res.output and ran == []
+
+
+def test_a_dot_slash_path_still_honours_the_documented_exclusions(sandbox):
+    _parity_sandbox(sandbox, TEST_ROOT)
+
+    res, ran = _run_parity(sandbox, "--path", "./python/geobrix/test/ds/")
+
+    assert ran, res.output
+    assert not set(ran) & EXCLUDED, "the exclusions were defeated by the ./ prefix"
+    assert all(not r.startswith("./") for r in ran)
+
+
+def test_a_parity_skip_names_missing_sample_data_when_that_is_why(sandbox):
+    # Newly discovered suites skip wholesale when the container has no sample-data mounts; the
+    # failure said only "0 tests passed", not why.
+    _parity_sandbox(sandbox, TEST_ROOT)
+    path = ("--path", "python/geobrix/test/ds/test_vector_parity.py")
+    sample = (
+        "SKIPPED [2] python/geobrix/test/ds/test_vector_parity.py:67: sample not mounted: /Volumes/x\n"
+        "== 0 passed, 2 skipped in 1.00s =="
+    )
+    other = (
+        "SKIPPED [2] python/geobrix/test/ds/test_vector_parity.py:23: could not import 'mapbox_vector_tile'\n"
+        "== 0 passed, 2 skipped in 1.00s =="
+    )
+
+    res = sandbox.run(
+        "gbx-test-parity.sh", "--skip-build", *path, FAKE_DOCKER_EXEC_STDOUT=sample
+    )
+    assert res.returncode == 1
+    assert "sample data missing" in res.output and "sample-data mounts" in res.output
+
+    res = sandbox.run(
+        "gbx-test-parity.sh", "--skip-build", *path, FAKE_DOCKER_EXEC_STDOUT=other
+    )
+    assert res.returncode == 1 and "sample data missing" not in res.output
 
 
 # --------------------------------------------------- python-docs: single-file isolation
@@ -791,3 +828,41 @@ def test_lint_path_scopes_the_run_to_the_files_named(sandbox):
     res, _ = lint("--fix", "--path", "scripts/commands/common.sh")
     assert res.returncode == 2 and "outside the lint scopes" in res.output
     assert len(sandbox.execs()) == before  # nothing was run
+
+
+def test_stage_jar_writes_a_log_when_asked(sandbox):
+    # The gbx convention is --log <path> on every command; stage-jar refused it as unknown.
+    _fake_uv(sandbox)
+
+    res = sandbox.run(
+        "gbx-data-stage-jar.sh", "--log", "stage.log", GBX_BUNDLE_SKIP_JAR="1"
+    )
+
+    assert res.returncode == 0, res.output
+    assert (
+        "Logging to" in res.output
+        and (sandbox.root / "test-logs" / "stage.log").exists()
+    )
+
+
+def test_ci_status_help_is_help_not_the_run_limit(tmp_path):
+    # `--help` was taken as the LIMIT: `gh run list --limit --help` failed. gh must not be called.
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    gh = bin_dir / "gh"
+    gh.write_text(f'#!/bin/sh\necho "$*" >> "{tmp_path / "gh.log"}"\n')
+    gh.chmod(0o755)
+    env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ['PATH']}"}
+    command = REPO_ROOT / "scripts" / "commands" / "gbx-ci-status.sh"
+
+    for flag in ("--help", "-h"):
+        res = subprocess.run(
+            ["bash", str(command), flag], env=env, capture_output=True, text=True
+        )
+        assert res.returncode == 0 and "Usage" in res.stdout, (flag, res.stderr)
+    bad = subprocess.run(
+        ["bash", str(command), "--nope"], env=env, capture_output=True, text=True
+    )
+
+    assert bad.returncode == 1 and "Unknown option" in bad.stderr
+    assert not (tmp_path / "gh.log").exists()

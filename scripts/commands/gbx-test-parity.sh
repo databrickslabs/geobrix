@@ -32,10 +32,21 @@ PARITY_EXCLUDE=(
     "python/geobrix/test/ds/test_reader_parity.py"               # skips by design when the heavy gdal reader yields 0 rows
 )
 
+# norm_path <path>: "./a//b/" and "a/./b" are "a/b", the form PARITY_EXCLUDE and the discovery use.
+norm_path() {
+    local p="$1"
+    while [[ "$p" == ./* ]]; do p="${p#./}"; done
+    while [[ "$p" == *//* ]]; do p="${p//\/\///}"; done
+    while [[ "$p" == */./* ]]; do p="${p//\/.\///}"; done
+    p="${p%/}"
+    echo "${p:-.}"
+}
+
 # discover_parity_files [dir]: parity suites under dir (default the whole test tree), sorted.
 discover_parity_files() {
     local root="${1:-$PARITY_ROOT}" f e skip
     while IFS= read -r f; do
+        f="$(norm_path "$f")"   # find prints ./x for a root of "."; the exclusions are not ./x
         skip=false
         for e in "${PARITY_EXCLUDE[@]}"; do
             [ "$f" = "$e" ] && skip=true
@@ -86,7 +97,7 @@ SKIP_BUILD=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --path)       TEST_PATHS+=("${2%/}"); shift 2 ;;
+        --path)       TEST_PATHS+=("$(norm_path "$2")"); shift 2 ;;
         -k)           KEYWORD="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=true; shift ;;
         --log)        LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
@@ -166,6 +177,7 @@ echo ""
 TOTAL_PASSED=0
 TOTAL_SKIPPED_FILES=()
 FAILED_FILES=()
+SAMPLE_DATA_MISSING=false
 
 for f in "${RUN_FILES[@]}"; do
     show_separator
@@ -186,8 +198,9 @@ for f in "${RUN_FILES[@]}"; do
     docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "set -o pipefail; $PYTEST_CMD"
     FILE_EXIT=$?
 
+    # The pytest summary line, then the skip reasons (-rs): which one explains a skip below.
     SUMMARY=$(docker exec geobrix-dev /bin/bash -c \
-        "tail -6 $REPORT 2>/dev/null | grep -E 'passed|failed|skipped|no tests ran'" 2>/dev/null)
+        "tail -6 $REPORT 2>/dev/null | grep -E 'passed|failed|skipped|no tests ran'; grep -E '^SKIPPED' $REPORT 2>/dev/null" 2>/dev/null)
     N_PASSED=$(echo "$SUMMARY" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
     N_PASSED=${N_PASSED:-0}
     N_SKIPPED=$(echo "$SUMMARY" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | head -1)
@@ -202,7 +215,16 @@ for f in "${RUN_FILES[@]}"; do
         # partial-skip loophole -- a file where most tests skip and one passes would
         # otherwise read green. Every test in every parity file transitively needs the
         # JAR-bearing session, so in a healthy run no parity test skips at all.
-        TOTAL_SKIPPED_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped)")
+        # Why: when EVERY skip reason is a missing sample (the container was started without the
+        # sample-data mounts) say so, since that skips newly discovered suites wholesale.
+        N_REASONS=$(echo "$SUMMARY" | grep -cE '^SKIPPED')
+        N_SAMPLE=$(echo "$SUMMARY" | grep -E '^SKIPPED' | grep -ciE 'not mounted|sample')
+        WHY=""
+        if [ "$N_REASONS" -gt 0 ] && [ "$N_SAMPLE" -eq "$N_REASONS" ]; then
+            WHY="; sample data missing"
+            SAMPLE_DATA_MISSING=true
+        fi
+        TOTAL_SKIPPED_FILES+=("$f ($N_PASSED passed, $N_SKIPPED skipped$WHY)")
     fi
     echo ""
 done
@@ -220,6 +242,9 @@ if [ ${#TOTAL_SKIPPED_FILES[@]} -gt 0 ]; then
     echo -e "${RED}❌ Cross-tier parity did NOT RUN in ${#TOTAL_SKIPPED_FILES[@]} suite(s) — 0 tests passed:${NC}"
     for f in "${TOTAL_SKIPPED_FILES[@]}"; do echo -e "     ${YELLOW}$f${NC}"; done
     echo -e "${CYAN}   A skipped parity suite is not a passing gate. Common causes:${NC}"
+    if [ "$SAMPLE_DATA_MISSING" = true ]; then
+        echo -e "     • ${YELLOW}sample data missing${NC} (start the container with the sample-data mounts: ${GREEN}gbx:docker:start${NC})"
+    fi
     echo -e "     • no JAR staged in python/geobrix/lib/ (run without ${GREEN}--skip-build${NC})"
     echo -e "     • a JAR-free Spark session already live in the same process"
     echo -e "     • the suite's own dependency guard (e.g. mapbox-vector-tile) is unmet"

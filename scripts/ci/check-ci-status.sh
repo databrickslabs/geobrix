@@ -14,6 +14,20 @@ BLUE='\033[0;34m'
 CYAN='\033[0;36m'
 NC='\033[0m'
 
+show_help() {
+    echo "Usage: bash scripts/commands/gbx-ci-status.sh [LIMIT]"
+    echo ""
+    echo "Show the recent GitHub Actions runs for the current branch and the latest run's details."
+    echo ""
+    echo "  LIMIT        Number of recent runs to list (default 10)"
+    echo "  --help, -h   Show this help"
+}
+
+case "${1:-}" in
+    --help|-h) show_help; exit 0 ;;
+    -*) echo "Unknown option: $1" >&2; show_help >&2; exit 1 ;;
+esac
+
 # Check if gh CLI is installed
 if ! command -v gh &> /dev/null; then
     echo -e "${RED}❌ Error: GitHub CLI (gh) is not installed${NC}"
@@ -25,6 +39,10 @@ cd "$PROJECT_ROOT"
 
 CURRENT_BRANCH=$(git branch --show-current)
 LIMIT=${1:-10}
+if ! [[ "$LIMIT" =~ ^[0-9]+$ ]]; then
+    echo "LIMIT must be a number (got '$LIMIT')" >&2
+    exit 1
+fi
 
 echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
 echo -e "${CYAN}  GeoBriX CI Status Dashboard${NC}"

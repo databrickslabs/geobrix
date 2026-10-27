@@ -7,7 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 show_help() {
-    echo "Usage: bash scripts/commands/gbx-data-stage-jar.sh [--no-wait] [--help]"
+    echo "Usage: bash scripts/commands/gbx-data-stage-jar.sh [--log <path>] [--no-wait] [--help]"
     echo ""
     echo "Build the GeoBrix JAR (in Docker) and stage both JARs to Databricks Volumes."
     echo ""
@@ -16,6 +16,7 @@ show_help() {
     echo "  bench *-tests.jar                   → bundle volroot"
     echo ""
     echo "Options:"
+    echo "  --log <path>  Write output to a log file (filename → test-logs/<name>)"
     echo "  --no-wait   Fail at once (exit 75) if another test run holds the container lock,"
     echo "              instead of waiting for it. The Maven build wipes target/ (mvn clean), so"
     echo "              it takes the container lock unless GBX_BUNDLE_SKIP_JAR=1."
@@ -31,15 +32,19 @@ show_help() {
     echo "  GBX_BUNDLE_SKIP_TESTS_JAR_UPLOAD=1 bash scripts/commands/gbx-data-stage-jar.sh"
 }
 
+LOG_PATH=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --help|-h) show_help; exit 0 ;;
         --no-wait) GBX_LOCK_NO_WAIT=true; shift ;;
+        --log) [[ $# -ge 2 ]] || { echo "Option --log needs a value" >&2; exit 2; }
+               LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
         *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
     esac
 done
 
 cd "$PROJECT_ROOT" || exit 1
+setup_log_file "$LOG_PATH"
 
 # The Maven build (mvn clean package, in stage_jar_to_volume.py) wipes target/: never under a
 # running test. GBX_BUNDLE_SKIP_JAR=1 runs no Maven at all, so it needs no lock.

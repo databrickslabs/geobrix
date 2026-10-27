@@ -26,13 +26,13 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 1. **Rebuilds the JAR by default.** A staged JAR older than the Scala sources makes every heavy call fail with `UNRESOLVED_ROUTINE`: a mass failure that looks like a code bug but is only a stale artifact. Rebuilding first removes that failure mode entirely.
 2. **Stages exactly one JAR**, deleting older ones so a stale artifact cannot be picked up instead.
 3. **Runs with integration enabled** — parity is the whole point of the run.
-4. **Fails when 0 tests passed**, printing the likely cause (no staged JAR, or a JAR-free Spark session already live in the process). This is what stops a fully-skipped run from being mistaken for a pass.
+4. **Fails when any test skipped**, printing the likely cause (no staged JAR, a JAR-free Spark session already live in the process, or **sample data missing**: the container was started without the sample-data mounts, so the suites that read the sample bundle skip as `sample not mounted`; start it with `gbx:docker:start`). This is what stops a fully-skipped run from being mistaken for a pass.
 
 ## Which suites run
 
-The suites are **discovered**, not listed: every `python/geobrix/test/**/test_parity*.py`, `test_*_parity.py` and `*_cross_tier.py` (the cross-tier suites that need the JAR are parity suites in intent), sorted, minus a short exclusion list (`PARITY_EXCLUDE` in the script) of files that are not cross-tier gates: `core/test_check_binding_parity.py` (a unit test of the binding-parity checker, run by `gbx:test:bindings`), `ds/test_vector_writer_parity.py` and `ds/test_writer_parity.py` (light-only writer round trips), and `ds/test_reader_parity.py` (skips by design when the heavy `gdal` reader yields no rows). A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
+The suites are **discovered**, not listed: every `python/geobrix/test/**/test_parity*.py`, `test_*_parity.py` and `*_cross_tier.py` (the cross-tier suites that need the JAR are parity suites in intent), sorted, minus a short exclusion list (`PARITY_EXCLUDE` in the script) of files that are not cross-tier gates: `core/test_check_binding_parity.py` (a unit test of the binding-parity checker, run by `gbx:test:bindings`), `ds/test_vector_writer_parity.py` and `ds/test_writer_parity.py` (light-only writer round trips), and `ds/test_reader_parity.py` (skips by design when the heavy `gdal` reader yields no rows). These four are not part of any parity gate: they run only under `gbx:test:python --with-integration` (which also runs their `ds` tests that need the container's sample data). A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
 
-`--path` may be given several times and each value may be a file or a directory; they run once each, in the order given:
+`--path` may be given several times and each value may be a file or a directory (`./x` and `x/` are the same path, so the exclusions still apply); they run once each, in the order given:
 
 ```bash
 bash scripts/commands/gbx-test-parity.sh --skip-build \

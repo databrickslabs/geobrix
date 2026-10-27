@@ -189,10 +189,13 @@ def _valid_mask_tile(kind):
 )
 def test_valid_mask_is_alpha_aware_and_any_band_otherwise(kind, valid_rows):
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", NodataShadowWarning)  # rgba-nodata is shadowed
+        # a NoData beside the alpha band (rgba-nodata) shadows it in GDAL's masks; the alpha values are
+        # read here, so the warning is not raised
+        warnings.simplefilter("error", NodataShadowWarning)
         with MemoryFile(_valid_mask_tile(kind)) as mf, mf.open() as ds:
             got = nd.valid_mask(ds)
             windowed = nd.valid_mask(ds, window=Window(1, 1, 3, 3))
+            nd.band_valid_mask(ds, 1)
     assert got.shape == (4, 4) and got.dtype == bool
     assert [bool(r.all()) for r in got] == [i in valid_rows for i in range(4)]
     assert not (got.any(axis=1) != got.all(axis=1)).any()
@@ -241,7 +244,7 @@ def test_valid_mask_applies_the_alpha_band_at_every_band_count(
     applied here for every band count: a pixel is valid only when its alpha is not 0 and
     a data band is valid (any band, by its own NoData or mask)."""
     with warnings.catch_warnings():
-        warnings.simplefilter("ignore", NodataShadowWarning)
+        warnings.simplefilter("error", NodataShadowWarning)
         with MemoryFile(al.layout_bytes(name, nodata=nodata)) as mf, mf.open() as ds:
             got = nd.valid_mask(ds)
             windowed = nd.valid_mask(ds, window=Window(1, 1, 3, 3))

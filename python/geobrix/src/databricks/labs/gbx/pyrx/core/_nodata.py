@@ -8,7 +8,10 @@ those pixels to the output NoData value.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+from rasterio.errors import NodataShadowWarning
 from scipy import ndimage
 
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
@@ -141,6 +144,16 @@ def opaque_mask(ds, window=None):
     return None if a is None else ds.read(a + 1, window=window) > 0
 
 
+def _read_masks(ds, index=None, window=None):
+    """``ds.read_masks`` of one band (*index*, 1-based) or of all, without the ``NodataShadowWarning``
+    rasterio raises for a NoData declared beside an alpha band: the callers read the alpha values
+    themselves (:func:`opaque_mask`), so the mask GDAL would derive from the alpha band is not the one
+    they use."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NodataShadowWarning)
+        return ds.read_masks(index, window=window)
+
+
 def band_valid_mask(ds, index: int, window=None) -> np.ndarray:
     """``(rows, cols)`` bool array: True where a pixel of band *index* (1-based) of *ds* is
     valid for that band.
@@ -153,7 +166,7 @@ def band_valid_mask(ds, index: int, window=None) -> np.ndarray:
     alpha band itself is judged by its own mask only, as GDAL does: its values over every
     pixel, which is how an opacity is summarised.
     """
-    valid = ds.read_masks(index, window=window) != 0
+    valid = _read_masks(ds, index, window=window) != 0
     a = alpha_index(ds.colorinterp)
     if a is None or index - 1 == a:
         return valid
@@ -178,7 +191,7 @@ def valid_mask(ds, window=None) -> np.ndarray:
     NoData, mask as gdalwarp does. (Not ``DatasetReader.dataset_mask``: it takes band 4 of
     any 4-band raster whose band 1 is red as the mask, alpha or not.)
     """
-    masks = ds.read_masks(window=window) != 0
+    masks = _read_masks(ds, window=window) != 0
     a = alpha_index(ds.colorinterp)
     if a is None:
         return masks.any(axis=0)

@@ -166,6 +166,21 @@ def test_the_row_of_a_latitude_on_a_tile_edge_is_decided_exactly(k, row):
     assert int(y[0]) == row
 
 
+def test_an_edge_latitude_is_decided_once_however_many_points_share_it():
+    """Pixel centres along a raster row share one latitude: the exact decision is made once for it."""
+    import numpy as np
+
+    n = 1 << 10
+    lat = float(np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * 120 / n)))))
+    _quadbin._tile_y_at_least.cache_clear()
+    x, y = _quadbin._lonlat_to_tile_vec(
+        np.linspace(-170, 170, 5000), np.full(5000, lat), 10
+    )
+    assert set(y.tolist()) == {119}
+    info = _quadbin._tile_y_at_least.cache_info()
+    assert info.misses == 1 and info.hits == 4999, info
+
+
 def test_the_exact_row_matches_the_fast_formula_away_from_an_edge():
     import numpy as np
 

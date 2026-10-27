@@ -12,6 +12,7 @@ declared extent.
 """
 
 import decimal
+import functools
 import math
 
 import numpy as np
@@ -136,13 +137,15 @@ _PI60 = decimal.Decimal(
 )
 
 
+@functools.lru_cache(maxsize=4096)
 def _tile_y_at_least(lat: float, z: int, m: int) -> bool:
     """True when the web-mercator tile row of the double ``lat`` at zoom ``z`` is at least ``m``.
 
     Exact, in 60-digit decimal arithmetic on the binary value of ``lat``:
     ``y >= m`` is ``tan(r) + sec(r) <= exp(pi * (1 - 2m / n))`` for ``r = lat`` in radians.
     Identical in both tiers (heavy ``Quadbin.tileYAtLeast``), so a pixel centre on a tile
-    edge lands in the same row whatever the platform's libm says.
+    edge lands in the same row whatever the platform's libm says. Memoised: the rows of a
+    raster's pixel centres repeat one latitude along a row, and an exact decision is ~0.07 ms.
     """
     n = 1 if z == 0 else (1 << z)
     with decimal.localcontext() as ctx:

@@ -77,11 +77,34 @@ object GDAL {
         (flags & GMF_PER_DATASET) != 0 && (flags & GMF_ALPHA) == 0
     }
 
-    /** True when `ds` has an alpha band, or a band masked by one: gdalwarp carries the alpha band and
-      * applies it as the source mask. */
-    def hasAlpha(ds: org.gdal.gdal.Dataset): Boolean =
-        (1 to ds.GetRasterCount()).map(ds.GetRasterBand).exists { b =>
-            b.GetColorInterpretation == GCI_AlphaBand || (b.GetMaskFlags() & GMF_ALPHA) != 0
+    /**
+      * THE alpha rule of both tiers (the lightweight tier's `_nodata.alpha_index`): the 1-based index of the
+      * alpha band of `ds`, which is its LAST band when that band is labelled alpha, as gdalwarp reads a
+      * source. A band labelled alpha anywhere else is ordinary data.
+      */
+    def alphaBandIndex(ds: org.gdal.gdal.Dataset): Option[Int] = {
+        val n = ds.GetRasterCount()
+        if (n > 0 && ds.GetRasterBand(n).GetColorInterpretation == GCI_AlphaBand) Some(n) else None
+    }
+
+    /** True when `ds` has an alpha band ([[alphaBandIndex]]): gdalwarp carries it and applies it as the source
+      * mask. */
+    def hasAlpha(ds: org.gdal.gdal.Dataset): Boolean = alphaBandIndex(ds).isDefined
+
+    /**
+      * Labels the bands of `dst`, a new dataset holding (windows of) the bands of a source, alpha exactly where
+      * the source's alpha band is (`alpha`, from [[alphaBandIndex]] of the source): GDAL labels band 4 of a 4-band
+      * uint8 GTiff alpha when it creates one, whatever the source was, and gives a 16-bit RGBA or a gray+alpha
+      * GTiff no alpha band. A non-alpha 4th band (near-infrared) then reads as a transparency mask. Nothing else
+      * is relabelled, and the call is made before the pixels are written (GDAL ignores a label set after).
+      * The lightweight tier's `compression.match_alpha`.
+      */
+    def matchAlpha(dst: org.gdal.gdal.Dataset, alpha: Option[Int]): Unit =
+        (1 to dst.GetRasterCount()).foreach { i =>
+            val band = dst.GetRasterBand(i)
+            val current = band.GetColorInterpretation
+            if (alpha.contains(i)) { if (current != GCI_AlphaBand) band.SetColorInterpretation(GCI_AlphaBand) }
+            else if (current == GCI_AlphaBand) band.SetColorInterpretation(GCI_Undefined)
         }
 
     /**

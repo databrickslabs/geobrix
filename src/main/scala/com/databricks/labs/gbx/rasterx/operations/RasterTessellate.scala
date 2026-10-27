@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.gridx.grid.{BNG, CustomGridSystem, GridSystem, H3, Quadbin}
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import com.databricks.labs.gbx.rasterx.operator.{OperatorOptions, WarpSource}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
@@ -178,31 +178,13 @@ object RasterTessellate {
         if (isBng(grid)) BNG.isValid(cellId) else true
 
     /**
-      * Returns true iff every band of `chip` is entirely NoData (mask is all-zero). Used by
-      * `covering+sparse` to drop chips that have no valid pixels after clipping. An alpha band that
-      * declares no NoData is masked by nothing (its own mask is all valid) while the other bands read
-      * through it, so it is not judged unless it is the chip's only band.
+      * Returns true iff no pixel of `chip` is valid ([[ValidMask]]: its alpha is above 0 when it has an alpha
+      * band, and some data band is valid). Used by `covering+sparse` to drop chips that have no valid pixels
+      * after clipping, which includes a chip whose pixels are all transparent whatever its band count. A
+      * raster that is only an alpha band is judged by its alpha values.
       * GDAL resources: reads only (does not create or release any dataset).
       */
-    private def isAllNoData(chip: Dataset): Boolean = {
-        val xSize = chip.getRasterXSize
-        val ySize = chip.getRasterYSize
-        val nPix  = xSize * ySize
-        val maskBuf = new Array[Byte](nPix)
-        val all = 1 to chip.getRasterCount
-        val judged = all.filterNot { b =>
-            val band = chip.GetRasterBand(b)
-            band.GetColorInterpretation == gdalconstConstants.GCI_AlphaBand &&
-                (band.GetMaskFlags() & gdalconstConstants.GMF_ALL_VALID) != 0
-        }
-        val it = (if (judged.isEmpty) all else judged).iterator
-        while (it.hasNext) {
-            chip.GetRasterBand(it.next()).GetMaskBand().ReadRaster(0, 0, xSize, ySize, maskBuf)
-            var i = 0
-            while (i < nPix) { if (maskBuf(i) != 0) return false; i += 1 }
-        }
-        true
-    }
+    private def isAllNoData(chip: Dataset): Boolean = !ValidMask.anyValid(chip)
 
     /**
       * Generic tessellation of a raster over any [[GridSystem]]. The per-grid enumeration differences
@@ -307,8 +289,9 @@ object RasterTessellate {
         // NoData rather than as valid zero pixels (the light tier does the same). A source with an alpha
         // band gets none: the clip carries the alpha band, which already marks the fill, and a declared
         // NoData would shadow it (opaque 0 pixels read as NoData) -- the rule of WarpSource.fillNoDataArgs.
+        private val alphaBand: Option[Int] = GDAL.alphaBandIndex(natives.workDs)
         private val fillNoData: Option[Double] =
-            if (GDAL.hasAlpha(natives.workDs)) None
+            if (alphaBand.isDefined) None
             else {
                 val band = natives.workDs.GetRasterBand(1)
                 val nd = new Array[java.lang.Double](1)
@@ -337,6 +320,9 @@ object RasterTessellate {
                           source = Some(natives.clipSource)
                         )
                         if (resDs != null) {
+                            // gdalwarp carries the source's labels: a band labelled alpha that is not the alpha
+                            // band is data, so it is not labelled alpha in the chip.
+                            if (resDs.GetRasterCount() == natives.workDs.GetRasterCount()) GDAL.matchAlpha(resDs, alphaBand)
                             // covering+sparse: drop chips whose clip is entirely NoData.
                             if (coverage == "sparse" && isAllNoData(resDs)) {
                                 RasterDriver.releaseDataset(resDs)
@@ -382,7 +368,7 @@ object RasterTessellate {
 
     /** Pixels per centroid-assignment strip (1 M), the cap the lightweight tier uses: each band's mask
       * strip stays about 1 MB whatever the raster size. */
-    private val StripPixels = 1048576
+    private val StripPixels = ValidMask.StripPixels
 
     /** Initial capacity of the per-cell tables; doubled as cells are found. */
     private val InitialCells = 1024
@@ -463,11 +449,12 @@ object RasterTessellate {
         val cellIndex: mutable.LongMap[Int]
     )
 
-    /** Assigns every valid pixel of `workDs` (valid in ANY band's mask) to the cell holding its centre,
-      * one row strip at a time ([[centroidStripRows]]). Only the mask bands of one strip are read; band
-      * values are read later, per chip window. Pixel centres go through the full geotransform `gt`, then
-      * `tf` into the grid CRS (null when the raster is already in it). Memory is the 4 B/px label table,
-      * one mask strip per band and five primitive per-cell tables. */
+    /** Assigns every valid pixel of `workDs` ([[ValidMask]]: some data band is valid and, with an alpha
+      * band, its alpha is above 0, so a transparent pixel belongs to no cell) to the cell holding its
+      * centre, one row strip at a time ([[centroidStripRows]]). Only the validity of one strip is read;
+      * band values are read later, per chip window. Pixel centres go through the full geotransform `gt`,
+      * then `tf` into the grid CRS (null when the raster is already in it). Memory is the 4 B/px label
+      * table, the validity buffers of one strip and five primitive per-cell tables. */
     private def assignCentroids(
         grid: GridSystem,
         workDs: Dataset,
@@ -477,12 +464,11 @@ object RasterTessellate {
     ): CentroidAssignment = {
         val xSize     = workDs.getRasterXSize
         val ySize     = workDs.getRasterYSize
-        val bandCount = workDs.getRasterCount
         val rows =
             if (centroidStripRowsOverride > 0) math.min(centroidStripRowsOverride, ySize)
             else centroidStripRows(xSize, ySize, workDs.GetRasterBand(1).GetBlockYSize())
-        val maskBands = Array.tabulate(bandCount)(b => workDs.GetRasterBand(b + 1).GetMaskBand())
-        val masks     = Array.fill(bandCount)(new Array[Byte](xSize * rows))
+        val validity  = new ValidMask(workDs)
+        val valid     = new Array[Byte](xSize * rows)
         val labels    = new Array[Int](xSize * ySize)
         java.util.Arrays.fill(labels, -1)
 
@@ -501,14 +487,7 @@ object RasterTessellate {
         var y0 = 0
         while (y0 < ySize) {
             val n = math.min(rows, ySize - y0)
-            var b = 0
-            while (b < bandCount) {
-                val rc = maskBands(b).ReadRaster(0, y0, xSize, n, masks(b))
-                if (rc != gdalconstConstants.CE_None) {
-                    throw new IllegalStateException(s"reading the band ${b + 1} mask, rows $y0..${y0 + n - 1}, failed: ${gdal.GetLastErrorMsg()}")
-                }
-                b += 1
-            }
+            validity.read(0, y0, xSize, n, valid)
             if (n > maxRows) maxRows = n
             var r = 0
             while (r < n) {
@@ -518,10 +497,7 @@ object RasterTessellate {
                 val yOff     = 0.5 + y
                 var x = 0
                 while (x < xSize) {
-                    var anyValid = false
-                    b = 0
-                    while (b < bandCount && !anyValid) { if (masks(b)(stripRow + x) != 0) anyValid = true; b += 1 }
-                    if (anyValid) {
+                    if (valid(stripRow + x) != 0) {
                         val xOff = 0.5 + x
                         var cx   = gt(0) + xOff * gt(1) + yOff * gt(2)
                         var cy   = gt(3) + xOff * gt(4) + yOff * gt(5)
@@ -651,10 +627,17 @@ object RasterTessellate {
             // the raster; only centroid+complete builds those chips.
             if (needsTransform && coverage == "complete") natives.tfInv = new CoordinateTransformation(gridSR, srcSR)
 
-            val bandNoData = Array.tabulate(bandCount) { bi =>
+            // A band's chips carry its declared NoData, else the dtype constant. A source with an alpha band
+            // gets none: the chip keeps the alpha band, which marks the transparent pixels and the pixels
+            // outside the cell (written as 0, so alpha 0), and a NoData declared over it would shadow the
+            // alpha band and turn those pixels valid (the lightweight tier's `_chip_nodata`).
+            val alphaSource = GDAL.hasAlpha(workDs)
+            val bandNoData: Array[Option[Double]] = Array.tabulate(bandCount) { bi =>
                 val nd = new Array[java.lang.Double](1)
                 workDs.GetRasterBand(bi + 1).GetNoDataValue(nd)
-                if (nd(0) != null) nd(0).doubleValue() else GDAL.getNoDataConstant(dtype)
+                if (nd(0) != null) Some(nd(0).doubleValue())
+                else if (alphaSource) None
+                else Some(GDAL.getNoDataConstant(dtype))
             }
 
             val assigned = assignCentroids(grid, workDs, gt, natives.tf, resolution)
@@ -679,7 +662,10 @@ object RasterTessellate {
             } else Array.empty[(Long, Int, Int)]
 
             if (centroidSetupFault != null) throw centroidSetupFault
-            val ctx = ChipContext(grid, grid.name.toLowerCase, projWkt, sourcePath, options, bandCount, dtype, gt, bandNoData)
+            val ctx = ChipContext(
+              grid, grid.name.toLowerCase, projWkt, sourcePath, options, bandCount, dtype, gt, bandNoData,
+              GDAL.alphaBandIndex(workDs)
+            )
             new CentroidChipIterator(ctx, natives, assigned, syntheticCells, xSize)
         } catch {
             case t: Throwable =>
@@ -773,12 +759,14 @@ object RasterTessellate {
         bandCount: Int,
         dtype: Int,
         gt: Array[Double],
-        bandNoData: Array[Double]
+        bandNoData: Array[Option[Double]],
+        alphaBand: Option[Int]
     )
 
     /** Creates the /vsimem GTiff for one centroid chip: `w` x `h` pixels whose top-left is source pixel
       * (`col`, `row`). The geotransform is the source's offset to that pixel (rotation and pixel-size
-      * terms kept, so rotated and south-up rasters stay on the source grid). Returns (path, dataset). */
+      * terms kept, so rotated and south-up rasters stay on the source grid). The alpha label is the source's
+      * ([[GDAL.matchAlpha]]). Returns (path, dataset). */
     private def createChip(ctx: ChipContext, cellId: Long, w: Int, h: Int, col: Int, row: Int): (String, Dataset) = {
         val gt         = ctx.gt
         val uuid       = java.util.UUID.randomUUID().toString.replace("-", "_")
@@ -788,6 +776,7 @@ object RasterTessellate {
           Array(gt(0) + col * gt(1) + row * gt(2), gt(1), gt(2), gt(3) + col * gt(4) + row * gt(5), gt(4), gt(5))
         )
         out.SetProjection(ctx.projWkt)
+        GDAL.matchAlpha(out, ctx.alphaBand)
         (rasterPath, out)
     }
 
@@ -830,6 +819,7 @@ object RasterTessellate {
             var b = 0
             while (b < ctx.bandCount) {
                 val nd = ctx.bandNoData(b)
+                val blank = nd.getOrElse(0.0) // 0 is alpha 0 on an alpha band
                 val rc = workDs.GetRasterBand(b + 1).ReadRaster(c0, r0, w, h, buf)
                 if (rc != gdalconstConstants.CE_None) {
                     throw new IllegalStateException(s"reading the band ${b + 1} window of cell $rendered failed: ${gdal.GetLastErrorMsg()}")
@@ -840,7 +830,7 @@ object RasterTessellate {
                     var p = (r0 + r) * xSize + c0
                     var c = 0
                     while (c < w) {
-                        if (labels(p) != k) buf(j) = nd
+                        if (labels(p) != k) buf(j) = blank
                         p += 1
                         j += 1
                         c += 1
@@ -848,7 +838,7 @@ object RasterTessellate {
                     r += 1
                 }
                 val db = out.GetRasterBand(b + 1)
-                db.SetNoDataValue(nd)
+                nd.foreach(v => db.SetNoDataValue(v))
                 // Implicit Float64 buffer overload: GDAL converts double[] to the band's native dtype on write.
                 db.WriteRaster(0, 0, w, h, buf)
                 b += 1
@@ -865,7 +855,8 @@ object RasterTessellate {
 
     /** Builds the 1x1 all-NoData chip of a covered cell that caught no pixel centroid (used by
       * `centroid+complete`), on source pixel (`col`, `row`) from [[centroidPixel]]. Every band holds
-      * its nodata value. The chip is released if building it fails. */
+      * its nodata value, or 0 (alpha 0, transparent) when it declares none. The chip is released if
+      * building it fails. */
     private def buildSyntheticEmptyChip(ctx: ChipContext, cellId: Long, col: Int, row: Int): (Any, Dataset, Map[String, String]) = {
         val rendered = ctx.grid.renderCellId(cellId)
         val (rasterPath, out) = createChip(ctx, cellId, 1, 1, col, row)
@@ -873,8 +864,8 @@ object RasterTessellate {
             var b = 0
             while (b < ctx.bandCount) {
                 val db = out.GetRasterBand(b + 1)
-                db.SetNoDataValue(ctx.bandNoData(b))
-                db.WriteRaster(0, 0, 1, 1, Array(ctx.bandNoData(b)))
+                ctx.bandNoData(b).foreach(v => db.SetNoDataValue(v))
+                db.WriteRaster(0, 0, 1, 1, Array(ctx.bandNoData(b).getOrElse(0.0)))
                 b += 1
             }
             out.SetMetadataItem("RASTERX_CELL_ID", rendered.toString)

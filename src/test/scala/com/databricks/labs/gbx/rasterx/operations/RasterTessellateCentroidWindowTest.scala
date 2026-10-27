@@ -1077,18 +1077,20 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
       * non-zero RGB and an opaque alpha, except rows 4-8 (alpha 0, RGB still non-zero) and row 20 (real
       * R = G = B = 0 under an opaque alpha). Positions are judged on the fractional source pixel, with the
       * edges of a row left out (gdalwarp's approximate transformer moves a centre by a fraction of a pixel). */
-    private def bngRgbaChips(assignment: String): (Int, Long, Long, Long, Long, Long) = {
+    private def bngRgbaChips(assignment: String): (Int, Long, Long, Long, Long, Long, Set[Option[Double]]) = {
         val (src, n, gt) = rgbaSource(s"bngrgba_$assignment.tif")
         val inv = invert(gt)
         val (bng, wgs) = (epsgSR(27700), epsgSR(4326))
         val toLonLat = new CoordinateTransformation(bng, wgs)
         var (chips, valid, outside, transparent, zeroRgb, zeroRgbOff) = (0, 0L, 0L, 0L, 0L, 0L)
+        val declared = mutable.Set.empty[Option[Double]]
         val it = RasterTessellate.tessellateBngIter(handOff(src), Map.empty[String, String], BngRes, assignment, "sparse")
         try {
             while (it.hasNext) {
                 val (_, chip, _) = it.next()
                 try {
                     chips += 1
+                    (1 to chip.getRasterCount).foreach(b => declared += noDataOf(chip, b))
                     val cgt = chip.GetGeoTransform
                     val w = chip.getRasterXSize
                     val bands = (1 to chip.getRasterCount).map(readBand(chip, _))
@@ -1110,7 +1112,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
                             val sc = inv(0) + ll(0) * inv(1) + ll(1) * inv(2)
                             val sr = inv(3) + ll(0) * inv(4) + ll(1) * inv(5)
                             if (sc < -1.5 || sc > n + 1.5 || sr < -1.5 || sr > n + 1.5) outside += 1
-                            else if (sr >= 4.75 && sr <= 8.25) transparent += 1
+                            else if (sr >= 4.25 && sr <= 8.75) transparent += 1
                             if ((0 until 3).forall(b => bands(b)._1(k) == 0.0)) {
                                 zeroRgb += 1
                                 if (sr < 19.25 || sr > 21.75) zeroRgbOff += 1
@@ -1125,13 +1127,14 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
             toLonLat.delete(); bng.delete(); wgs.delete()
             RasterDriver.releaseDataset(src)
         }
-        (chips, valid, outside, transparent, zeroRgb, zeroRgbOff)
+        (chips, valid, outside, transparent, zeroRgb, zeroRgbOff, declared.toSet)
     }
 
     for (assignment <- Seq("centroid", "covering")) {
         test(s"(v) BNG $assignment on an RGBA source: its alpha band marks the warp fill, real 0 pixels stay valid") {
-            val (chips, valid, outside, transparent, zeroRgb, zeroRgbOff) = bngRgbaChips(assignment)
+            val (chips, valid, outside, transparent, zeroRgb, zeroRgbOff, declared) = bngRgbaChips(assignment)
             assert(chips > 0 && valid > 0, "the chips hold no valid pixel")
+            assert(declared == Set(None), s"the chips declare NoData $declared over the source's alpha band")
             assert(outside == 0, s"$outside valid chip pixels lie off the source footprint (warp fill read as data)")
             assert(transparent == 0, s"$transparent transparent source pixels are valid in the chips")
             assert(zeroRgb > 0, "the opaque all-zero pixels of the source must stay valid")
@@ -1168,7 +1171,7 @@ class RasterTessellateCentroidWindowTest extends AnyFunSuite with BeforeAndAfter
                             val sc = inv(0) + x * inv(1) + y * inv(2)
                             val sr = inv(3) + x * inv(4) + y * inv(5)
                             if (sc < -1.5 || sc > n + 1.5 || sr < -1.5 || sr > n + 1.5) outside += 1
-                            else if (sr >= 4.75 && sr <= 8.25) transparent += 1
+                            else if (sr >= 4.25 && sr <= 8.75) transparent += 1
                             if (bands.forall(_(k) == 0.0)) {
                                 zeroRgb += 1
                                 if (sr < 19.25 || sr > 21.75) zeroRgbOff += 1

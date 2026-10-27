@@ -551,26 +551,47 @@ formats.
 - **The remaining lightweight writers keep the alpha label and the own mask.** The `cog_gbx`
   writer's quadbin, h3 and BNG cells, and its `pruneEmpty` check (a window or cell with no valid
   pixel is not written, whether it is all NoData, all transparent or all masked); the COG
-  re-encode of the `raster_gbx` writer; `gbx_rst_frombands` and `gbx_rst_derivedband` (a stack of
-  four `uint8` tiles no longer gets an alpha band from GDAL's default, and a derived band is
-  invalid where its input is); `gbx_rst_merge` and the streamed merge of large groups, whose
-  mosaic index now carries the colour interpretation and the union of the tiles' masks; the
-  `pmtiles_gbx` reader's RGB sibling of an RGBA source; and the `netcdf_gbx` `bandDim` stack
-  (four `uint8` steps used to read the fourth as alpha). The h3 cells of a source with an alpha
-  band declare no NoData over it: their pixels outside the hexagon are written transparent.
+  re-encode of the `raster_gbx` writer; `gbx_rst_frombands` (a stack of four `uint8` tiles no
+  longer gets an alpha band from GDAL's default); `gbx_rst_merge` and the streamed merge of large
+  groups, whose mosaic carries the union of the tiles' mask bands, so a valid pixel that holds 0
+  stays valid and the result no longer depends on how large the group is, and whose index VRT
+  carries the colour interpretation; the `pmtiles_gbx` reader's RGB sibling of an RGBA source;
+  and the `netcdf_gbx` `bandDim` stack (four `uint8` steps used to read the fourth as alpha). The
+  h3 cells of a source with an alpha band declare no NoData over it: their pixels outside the
+  hexagon are written transparent, and each cell carries its hexagon as a mask band, so the index
+  VRT composites the cells by it (the corners of a cell's bounding box no longer overwrite its
+  neighbours).
 - **Chips copy the colour interpretation of every band.** Tessellation chips and clips used to
   copy only the alpha label, so RGB, and the data bands of a gray-plus-extra-plus-alpha or a
   16-bit RGBA raster, followed GDAL's defaults for a new GeoTIFF. Both tiers now label each band
   as the source does.
 - **A transparent pixel counts for no band, whatever the band count.** The raster-to-grid
   reducers (`rst_h3_rastertogrid*`, `rst_quadbin_rastertogrid*`, `rst_bng_rastertogrid*` and the
-  custom-grid variants) and the band statistics `gbx_rst_pixelcount`, `gbx_rst_avg`,
-  `gbx_rst_min` and `gbx_rst_max`, and the percentiles of `gbx_rst_percentile_stretch`, judge each
-  band by its own NoData or mask and its alpha band, in both tiers: GDAL derives a mask from an
-  alpha band only for two- and four-band rasters, and the heavyweight statistics ignored even that
-  one, so they counted the transparent pixels. The alpha band itself is summarised over every
-  pixel. `gbx_rst_isempty` is true for a raster with no valid pixel, so an entirely transparent
-  raster is empty.
+  custom-grid variants), the band statistics `gbx_rst_pixelcount`, `gbx_rst_avg`, `gbx_rst_min`,
+  `gbx_rst_max` and `gbx_rst_histogram`, the percentiles of `gbx_rst_percentile_stretch` (a pixel
+  invalid for a band is written 0 in it, in both tiers), the neighbours of `gbx_rst_filter` and
+  `gbx_rst_convolve`, and the pixels `gbx_rst_polygonize` and `gbx_rst_isoband` vectorise judge
+  each band by its own NoData or mask and its alpha band, in both tiers: GDAL derives a mask from
+  an alpha band only for two- and four-band rasters, and the heavyweight statistics ignored even
+  that one, so they counted the transparent pixels. A band masked by its own mask band (no alpha
+  band) is left out of the heavyweight `gbx_rst_avg` and `gbx_rst_pixelcount` too. The alpha band
+  itself is summarised over every pixel. `gbx_rst_isempty` is true for a raster with no valid
+  pixel, so an entirely transparent raster is empty. The lightweight `gbx_rst_summary` takes its
+  statistics over the valid pixels the same way (the heavyweight one reports none), and
+  `gbx_rst_derivedband` of one raster is invalid where its input is, in both tiers: the validity
+  is written as the derived band's own mask.
+- **Quadbin cells of a point on a tile edge agree between the tiers.** The row of a latitude on a
+  web-mercator tile edge came out one apart in the two tiers on some platforms (the last bit of
+  `tan`, `cos` and `log` differs). A latitude within 1e-6 of a whole row is decided exactly now,
+  identically in both tiers.
+- **Two lightweight merge and mosaic crashes, and two heavyweight focal defects, are fixed.** A
+  quadbin, h3 or BNG `cog_gbx` cell that a source barely touches no longer fails with
+  `Invalid dataset dimensions`; `gbx_rst_merge` of tiles in two coordinate systems no longer
+  measures its size or picks its pixel size in the units of whichever tile sorts first (a few
+  pixels could be sent to the streamed merge, with 0.5 degrees read as 0.5 metres);
+  `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window; and
+  `gbx_rst_convolve` writes each block's result where the block is (it wrote it shifted and left
+  the rest as the input).
 - **The lightweight reprojection and the tile encoders keep a source's own mask band.**
   `gbx_rst_transform` and `gbx_rst_transformcrs` dropped the own mask band (not an alpha band) of a
   source, as JPEG-compressed aerial imagery often carries, so its masked pixels read as valid data;

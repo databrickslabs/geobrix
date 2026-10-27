@@ -19,8 +19,9 @@ from rasterio.transform import from_origin
 from databricks.labs.gbx.pyrx.core import _nodata as nd
 from databricks.labs.gbx.pyrx.core import accessors, agg, derivedband, gridagg
 from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core import stretch
 from databricks.labs.gbx.pyrx.core import tessellate as T
-from databricks.labs.gbx.pyrx.core import stretch, warp
+from databricks.labs.gbx.pyrx.core import warp
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.gridagg import _stamp_crs_bytes
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -475,6 +476,8 @@ def test_the_reprojected_tile_of_a_merge_keeps_the_alpha_band_and_the_mask(name)
     with MemoryFile(in_4326) as mf, mf.open() as src:
         rep_mf, rep = agg._reproject_dataset(src, "EPSG:3857")
         try:
+            # the warp turns the masked pixels into valid zeros: the mask band is what keeps them out
+            assert nd.has_own_mask(rep), "the reprojected tile lost its own mask band"
             raster = _comp_bytes(rep)
         finally:
             rep.close()
@@ -490,10 +493,26 @@ def _comp_bytes(ds):
 
 @pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])
 def test_the_streaming_merge_keeps_the_alpha_band_and_the_mask_of_a_reprojected_tile(
-    name,
+    name, monkeypatch
 ):
     tiles = _two_crs_tiles(name)
+    scratch_masks = (
+        []
+    )  # whether each tile file written for the VRT has its own mask band
+    real = agg._build_mosaic_vrt
+
+    def spy(tile_paths, out_dir, *args, **kwargs):
+        for path in tile_paths:
+            with rasterio.open(path) as d:
+                scratch_masks.append(nd.has_own_mask(d))
+        return real(tile_paths, out_dir, *args, **kwargs)
+
+    monkeypatch.setattr(agg, "_build_mosaic_vrt", spy)
     _assert_rows_valid_as_their_source(agg._merge_tiles_streaming(tiles), name)
+    assert scratch_masks == [
+        True,
+        True,
+    ], "a tile written for the streamed merge lost its mask"
 
 
 # --- chips copy the colour interpretation of every band --------------------------------------
@@ -566,7 +585,9 @@ def _stretch_source(name):
     rows that are masked (3-4) or, for an alpha layout, transparent (8)."""
     count = len(al.LAYOUTS[name][0])
     rows = np.arange(H)
-    hidden = np.isin(rows, list(MASKED) + (list(TRANSPARENT) if al.LAYOUTS[name][1] else []))
+    hidden = np.isin(
+        rows, list(MASKED) + (list(TRANSPARENT) if al.LAYOUTS[name][1] else [])
+    )
     col = np.where(hidden, 250, 10 + rows).astype("uint8")
     data = np.broadcast_to(col[None, :, None], (count, H, 12)).copy()
     if al.LAYOUTS[name][1]:
@@ -579,7 +600,8 @@ def _stretch_source(name):
 @pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "rgb_nir"])
 def test_percentile_stretch_counts_only_the_pixels_valid_for_the_band(name):
     """The percentiles are over the opaque, unmasked pixels: the visible rows stretch over their own
-    range, to 255 at the top. Counted, the 250s of the hidden rows would end the range there."""
+    range, to 255 at the top. Counted, the 250s of the hidden rows would end the range there.
+    """
     raw, hidden = _stretch_source(name)
     with MemoryFile(raw) as mf, mf.open() as ds:
         out = stretch.percentile_stretch(ds, 0.0, 100.0)

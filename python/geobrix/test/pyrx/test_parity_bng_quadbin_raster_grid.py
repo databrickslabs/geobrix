@@ -2100,3 +2100,148 @@ def test_clip_masked_source_hexagon_parity(spark_with_jar, tmp_path, nodata, sta
     for tier, out in (("light", light), ("heavy", heavy)):
         held = out["data"][0][on_masked]
         assert (held == fill).all(), f"{tier}: masked source pixels kept their values"
+
+
+# ---------------------------------------------------------------------------
+# An alpha band beside data bands, at every band count: reducers, statistics, chips
+# ---------------------------------------------------------------------------
+# GDAL derives a mask from the alpha band for 2- and 4-band rasters only, and the statistics
+# it computes through the multi-dimensional API apply none, so both tiers read the alpha
+# band as values: a transparent pixel is valid for no data band, whatever the band count.
+
+
+def _pattern_raster(name):
+    """The 4x4 ``al.pattern`` of layout ``name`` over 2 x 2 degrees at 10E, 50N (rows 1 and
+    3 opaque for an alpha layout)."""
+    from rasterio.transform import from_origin
+
+    return al.layout_bytes(name, transform=from_origin(10, 50, 0.5, 0.5))
+
+
+def _valid_counts(name):
+    """Per band, the pixels of the pattern that are valid for it: a data band of an alpha
+    layout counts the opaque pixels, the alpha band every pixel."""
+    n = len(al.LAYOUTS[name][0])
+    return [8] * (n - 1) + [16] if al.LAYOUTS[name][1] else [16] * n
+
+
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+@pytest.mark.parametrize("grid,resolution", [("h3", 4), ("quadbin", 6)])
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba", "rgb_nir"])
+def test_rastertogrid_alpha_parity(spark_with_jar, name, grid, resolution, assignment):
+    """The reducers aggregate the same cells and the same pixels in both tiers: per band, the
+    counts add up to the pixels valid for it."""
+    spark = spark_with_jar
+    raster = _pattern_raster(name)
+    label = f"{grid} {assignment} {name}"
+    kw = dict(coverage="sparse", assignment=assignment)
+    light = _light_grid_rows(spark, raster, resolution, grid, "count", **kw)
+    heavy = _heavy_grid_rows(spark, raster, resolution, grid, "count", **kw)
+    assert light and heavy, f"{label}: a tier emitted no cells"
+    _parity_cmp(light, heavy, label=label, tol=1e-6)
+    for tier, rows in (("light", light), ("heavy", heavy)):
+        totals = [
+            sum(m for (b, _), m in rows.items() if b == band + 1)
+            for band in range(len(_valid_counts(name)))
+        ]
+        assert totals == pytest.approx(
+            [float(c) for c in _valid_counts(name)]
+        ), f"{label}: {tier} totals {totals}"
+
+
+def _scalar(spark, raster, tier, fn):
+    """``fn(module, tile)`` of a one-row tile column in one tier -> the value."""
+    from pyspark.sql import functions as f
+
+    if tier == "light":
+        from databricks.labs.gbx.pyrx import functions as mod
+
+        mod.register(spark)
+        df = tp.light_tile_df(spark, raster)
+    else:
+        from databricks.labs.gbx.rasterx import functions as mod
+
+        mod.register(spark)
+        df = spark.createDataFrame([(bytearray(raster),)], ["raster"]).select(
+            mod.rst_fromcontent("raster", f.lit("GTiff")).alias("tile")
+        )
+    return df.select(fn(mod, f.col("tile")).alias("v")).collect()[0]["v"]
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba", "rgb_nir"])
+def test_alpha_statistics_parity(spark_with_jar, name):
+    """pixel count, min, max and mean per band, and isempty, agree between the tiers on
+    the pixels valid for each band (an RGBA raster included: heavy's multi-dimensional
+    statistics used to count its transparent pixels)."""
+    spark = spark_with_jar
+    raster = _pattern_raster(name)
+    for fn_name in ("rst_pixelcount", "rst_min", "rst_max", "rst_avg"):
+        light = _scalar(spark, raster, "light", lambda m, t: getattr(m, fn_name)(t))
+        heavy = _scalar(spark, raster, "heavy", lambda m, t: getattr(m, fn_name)(t))
+        assert list(light) == pytest.approx(list(heavy)), f"{name} {fn_name}"
+    counts = _scalar(spark, raster, "light", lambda m, t: m.rst_pixelcount(t))
+    assert list(counts) == _valid_counts(name)
+    assert _scalar(spark, raster, "light", lambda m, t: m.rst_isempty(t)) is False
+    assert _scalar(spark, raster, "heavy", lambda m, t: m.rst_isempty(t)) is False
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgb_x_alpha", "rgba"])
+def test_an_entirely_transparent_raster_is_empty_in_both_tiers(spark_with_jar, name):
+    count = len(al.LAYOUTS[name][0])
+    data = np.full((count, 4, 4), 9, dtype="uint8")
+    data[-1] = 0
+    raster = al.layout_bytes(name, data=data)
+    for tier in ("light", "heavy"):
+        got = _scalar(spark_with_jar, raster, tier, lambda m, t: m.rst_isempty(t))
+        assert got is True, f"{name}: {tier} reads a fully transparent raster as data"
+
+
+def _chip_valid_rows(chips):
+    """The source rows (coded in the pixels of ``al.row_coded``) that some chip pixel is valid for."""
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core._nodata import valid_mask
+
+    rows = set()
+    for _, b, _ in chips:
+        with MemoryFile(b) as mf, mf.open() as ds:
+            coded = ds.read(1).astype("int64") - 100
+            rows |= {int(r) for r in coded[valid_mask(ds)] if r >= 0}
+    return rows
+
+
+@pytest.mark.parametrize("grid", ["h3", "quadbin"])
+@pytest.mark.parametrize("assignment", ["covering", "centroid"])
+@pytest.mark.parametrize("name", ["rgba", "gray_x_alpha", "rgb_nir"])
+def test_tessellate_alpha_and_own_mask_parity(spark_with_jar, name, assignment, grid):
+    """A source with an alpha band AND its own mask band: the chips of both tiers are valid
+    on exactly the source rows that are neither masked (rows 3-4) nor transparent (row 8).
+    """
+    from rasterio.transform import from_origin
+
+    spark = spark_with_jar
+    sql_name, fn_name, bng = _TESS_CONFIG[grid]
+    raster = al.row_coded(
+        name,
+        height=12,
+        masked_rows=(3, 4),
+        transparent_rows=(8,),
+        transform=from_origin(-0.13, 51.55, 0.01, 0.01),
+    )
+    resolution = {"h3": 8, "quadbin": 14}[grid]
+    label = f"{grid} {assignment} {name}"
+
+    def _id(cid):
+        return _tess_id(cid, bng=bng)
+
+    light = tp.light_chips(
+        spark, raster, sql_name, resolution, assignment, "sparse", _id
+    )
+    heavy = tp.heavy_chips(
+        spark, raster, fn_name, resolution, assignment, "sparse", _id
+    )
+    assert light and heavy, f"{label}: a tier emitted no chips"
+    assert not tp.error_rows(light) and not tp.error_rows(heavy), f"{label}: errors"
+    want = set(al.valid_rows(name, 12, (3, 4), (8,)))
+    assert _chip_valid_rows(light) == want, f"{label}: light"
+    assert _chip_valid_rows(heavy) == want, f"{label}: heavy"

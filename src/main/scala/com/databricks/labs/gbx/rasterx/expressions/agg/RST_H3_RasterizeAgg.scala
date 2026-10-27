@@ -96,9 +96,10 @@ object H3RasterizeAcc {
  *  is derived from the cell set + `kring_pad` (port of `cellraster.compute_gridspec`).
  *  NoData = -9999.0. A null/omitted `value` burns 1.0 (presence mask).
  *
- *  Overlap is last-wins; the accumulated cells are sorted by `(cellId, value)` before
- *  building the value lookup so the winner is deterministic regardless of row-arrival
- *  order (matches the lightweight tier).
+ *  A cell id that repeats keeps its LARGEST value, whatever order the rows arrive in: the
+ *  accumulated cells are sorted by `(cellId, value)` before the value lookup is built, so the
+ *  last write for a cell is its maximum. A null `value` counts as 1.0 in that comparison.
+ *  The lightweight tier follows the same rule.
  */
 case class RST_H3_RasterizeAgg(
     cellidExpr:    Expression,
@@ -195,9 +196,9 @@ case class RST_H3_RasterizeAgg(
         // Resolution from the cells; error on mixed.
         val resolution = RST_H3_RasterizeAgg.resolutionOf(buffer.cells.iterator.map(_._1))
 
-        // Canonical fold order: sort by (cellId, value) so the last-wins overlap
-        // winner is deterministic regardless of row-arrival order. Build the lookup
-        // in that order so later writes win.
+        // Canonical fold order: sort by (cellId, value) and build the lookup in that order,
+        // so the last write for a repeated cell is its largest value (a null value was
+        // already turned into 1.0), regardless of row-arrival order.
         val ordered = buffer.cells.toSeq.sortWith { (a, b) =>
             if (a._1 != b._1) java.lang.Long.compareUnsigned(a._1, b._1) < 0 else a._2 < b._2
         }

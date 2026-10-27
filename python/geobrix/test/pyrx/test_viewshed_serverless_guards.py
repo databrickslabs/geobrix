@@ -22,6 +22,7 @@ no Serverless, and no JAR.
 
 import importlib
 import os
+import tempfile
 import types
 
 import numpy as np
@@ -117,7 +118,8 @@ def _fake_viewshed(da, **kw):
 
 def test_numba_cache_dir_set_to_tmp_gbx_prefix_when_absent(monkeypatch):
     """When neither NUMBA_CACHE_DIR nor NUMBA_DISABLE_JIT is set, viewshed
-    creates NUMBA_CACHE_DIR pointing to a ``/tmp/gbx_numba_*`` directory."""
+    creates NUMBA_CACHE_DIR pointing to a ``gbx_numba_*`` directory in the temp
+    dir (``/tmp`` on Linux; macOS puts its temp dir under ``/var/folders``)."""
     monkeypatch.delitem(os.environ, "NUMBA_CACHE_DIR", raising=False)
     monkeypatch.delitem(os.environ, "NUMBA_DISABLE_JIT", raising=False)
 
@@ -133,9 +135,8 @@ def test_numba_cache_dir_set_to_tmp_gbx_prefix_when_absent(monkeypatch):
         "NUMBA_CACHE_DIR" in os.environ
     ), "NUMBA_CACHE_DIR was not set; the numba caching guard is missing"
     val = os.environ["NUMBA_CACHE_DIR"]
-    assert val.startswith(
-        "/tmp/gbx_numba_"
-    ), f"expected a /tmp/gbx_numba_* path, got {val!r}"
+    prefix = os.path.join(tempfile.gettempdir(), "gbx_numba_")
+    assert val.startswith(prefix), f"expected a {prefix}* path, got {val!r}"
 
 
 def test_numba_cache_dir_not_overridden_when_already_present(monkeypatch):

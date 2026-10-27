@@ -809,9 +809,21 @@ def test_vector_glob_is_the_union_of_the_vector_globs():
         ), name
 
 
+def _is_case_insensitive(directory):
+    """True on a case-insensitive filesystem (the macOS default), where a.jpg is a.JPG."""
+    probe = directory / "CaseProbe"
+    probe.write_bytes(b"x")
+    try:
+        return (directory / "caseprobe").exists()
+    finally:
+        probe.unlink()
+
+
 def test_glob_match_agrees_with_spark_path_glob_filter(spark, tmp_path):
     """The default patterns are Spark pathGlobFilter (Hadoop glob) patterns, and
     glob_match (the schema-file pick) matches exactly what Spark lists."""
+    if _is_case_insensitive(tmp_path):
+        pytest.skip("case-insensitive filesystem: a.jpg and a.JPG are one file")
     for name in _GLOB_NAMES:
         (tmp_path / name).write_bytes(b"x")
     expected = {

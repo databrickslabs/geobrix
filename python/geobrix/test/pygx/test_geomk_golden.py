@@ -26,6 +26,7 @@ Run the frozen assertion (pure Python, no JAR, no Spark):
 from __future__ import annotations
 
 import json
+import platform
 import sys
 from pathlib import Path
 
@@ -478,6 +479,18 @@ def _load_corpus() -> dict:
 # ===========================================================================
 
 
+# The golden corpus was generated on x86_64. h3's ``cell_to_boundary`` returns vertex doubles that
+# differ in the last digits on arm64 (libm/FMA: same h3 4.5.0 gives 51.489710814352954 on x86_64 and
+# 51.48971081435296 on arm64). The h3 ``aligned`` fixture is the union of those cell polygons, so its
+# edges sit within an ulp of the cell boundaries and the cell sets recorded on x86_64 flip. Only
+# those entries are skipped off x86_64 (every other h3 fixture and the other grids still compare).
+_X86_64 = platform.machine().lower() in ("x86_64", "amd64")
+
+
+def _depends_on_h3_boundary_ulps(key: str) -> bool:
+    return key.startswith("h3|") and key.endswith("|aligned")
+
+
 def test_geomk_golden() -> None:
     """Assert current light-tier output matches the committed golden corpus.
 
@@ -497,6 +510,8 @@ def test_geomk_golden() -> None:
     grid_fixtures = {grid: _get_fixtures(grid) for grid in _GRIDS}
 
     for key, expected in corpus.items():
+        if not _X86_64 and _depends_on_h3_boundary_ulps(key):
+            continue
         grid, mode, coverage, kind, k_str, fixture = key.split("|")
         geom = grid_fixtures[grid][fixture]
         actual = _run_one(grid, geom, kind, int(k_str), mode, coverage)

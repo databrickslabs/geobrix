@@ -146,3 +146,35 @@ def test_kring_negative_raises():
     cell = quadbin.point_to_cell(0.0, 0.0, 10)
     with pytest.raises(ValueError, match="k must be"):
         _quadbin.k_ring(cell, -1)
+
+
+# The latitude at which zoom-10 tile row k starts, as a double: the fast formula's tan, cos and log differ
+# between platforms by an ulp, so a point ON such a latitude used to land one row away on some of them (and
+# from the heavy tier's). The row of the double is decided exactly, in both tiers: the doubles lie 4e-14, 2e-14
+# and 6e-17 of a row above their edges' floors.
+_EDGE_ROWS = [(18, 17), (120, 119), (511, 510)]
+
+
+@pytest.mark.parametrize("k,row", _EDGE_ROWS)
+def test_the_row_of_a_latitude_on_a_tile_edge_is_decided_exactly(k, row):
+    import numpy as np
+
+    n = 1 << 10
+    lat = float(np.degrees(np.arctan(np.sinh(np.pi * (1.0 - 2.0 * k / n)))))
+    assert _quadbin._lonlat_to_tile(10.0, lat, 10)[1] == row
+    x, y = _quadbin._lonlat_to_tile_vec(np.array([10.0]), np.array([lat]), 10)
+    assert int(y[0]) == row
+
+
+def test_the_exact_row_matches_the_fast_formula_away_from_an_edge():
+    import numpy as np
+
+    rng = np.random.default_rng(7)
+    lons = rng.uniform(-180, 180, 500)
+    lats = rng.uniform(-85, 85, 500)
+    for z in (0, 6, 14, 26):
+        x, y = _quadbin._lonlat_to_tile_vec(lons, lats, z)
+        want = [
+            _quadbin._lonlat_to_tile(float(a), float(b), z) for a, b in zip(lons, lats)
+        ]
+        assert [(int(a), int(b)) for a, b in zip(x, y)] == want

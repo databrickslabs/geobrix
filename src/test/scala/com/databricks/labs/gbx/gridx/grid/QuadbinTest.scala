@@ -42,4 +42,25 @@ class QuadbinTest extends AnyFunSuite {
         val cell = Quadbin.pointToCell(-0.13, 51.5, 10)
         Quadbin.renderCellId(cell) shouldBe cell
     }
+
+    // The latitudes at which the zoom-10 web-mercator tile row k starts, as doubles. The fast formula's tan, cos
+    // and log differ between platforms by an ulp, so a pixel centre ON such a latitude used to land one row away
+    // from the lightweight tier's on some of them. The row of the double is decided exactly: 17, 119 and 510 here
+    // (the doubles lie just north of the edges 18 and 120 and just south of 511 -- the row below -- by 4e-14,
+    // 2e-14 and 6e-17 of a row).
+    private val edgeRows = Seq((18, 17L), (120, 119L), (511, 510L))
+
+    for ((k, row) <- edgeRows) {
+        test(s"Quadbin.lonLatToTile decides the row of the double at the edge of row $k exactly: $row") {
+            val n   = 1 << 10
+            val lat = math.toDegrees(math.atan(math.sinh(math.Pi * (1.0 - 2.0 * k / n))))
+            Quadbin.lonLatToTile(10.0, lat, 10)._2 shouldBe row
+        }
+    }
+
+    test("Quadbin.lonLatToTile away from a row edge keeps the fast formula") {
+        // London: nowhere near an edge
+        val (x, y) = Quadbin.lonLatToTile(-0.1276, 51.5074, 10)
+        (x, y) shouldBe ((511L, 340L))
+    }
 }

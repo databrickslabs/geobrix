@@ -11,6 +11,7 @@ and Custom grids, which return NULL (None) when a point falls outside their
 declared extent.
 """
 
+import decimal
 import math
 
 import numpy as np
@@ -125,6 +126,58 @@ def cell_union(cells):
     return _ewkb(union_all(polys))
 
 
+# A latitude whose web-mercator tile row sits within this distance of a whole number is
+# decided exactly (see _tile_y_at_least), not by the libm functions of the fast formula.
+# The libm results of tan, cos and log differ by an ulp or two between platforms (glibc,
+# macOS, the JVM's intrinsics), which is 1e-9 of a tile row at zoom 26 at most.
+_EDGE_BAND = 1e-6
+_PI60 = decimal.Decimal(
+    "3.14159265358979323846264338327950288419716939937510582097494459"
+)
+
+
+def _tile_y_at_least(lat: float, z: int, m: int) -> bool:
+    """True when the web-mercator tile row of the double ``lat`` at zoom ``z`` is at least ``m``.
+
+    Exact, in 60-digit decimal arithmetic on the binary value of ``lat``:
+    ``y >= m`` is ``tan(r) + sec(r) <= exp(pi * (1 - 2m / n))`` for ``r = lat`` in radians.
+    Identical in both tiers (heavy ``Quadbin.tileYAtLeast``), so a pixel centre on a tile
+    edge lands in the same row whatever the platform's libm says.
+    """
+    n = 1 if z == 0 else (1 << z)
+    with decimal.localcontext() as ctx:
+        ctx.prec = 60
+        r = decimal.Decimal(lat) * _PI60 / 180
+        # Taylor series; |r| < 1.49, so 70 terms are far past 60 digits
+        r2 = r * r
+        cos, sin = decimal.Decimal(1), r
+        term_c, term_s = decimal.Decimal(1), r
+        for k in range(1, 70):
+            term_c = -term_c * r2 / ((2 * k - 1) * (2 * k))
+            term_s = -term_s * r2 / ((2 * k) * (2 * k + 1))
+            cos += term_c
+            sin += term_s
+        lhs = (1 + sin) / cos
+        rhs = (_PI60 * (1 - decimal.Decimal(2 * m) / n)).exp()
+        return lhs <= rhs
+
+
+def _tile_y(lat: float, lat_rad: float, z: int) -> int:
+    """The web-mercator tile row of a (clamped) latitude: ``floor`` of the fast formula, decided
+    exactly (:func:`_tile_y_at_least`) when the formula lands within ``_EDGE_BAND`` of a row edge.
+    """
+    n = 1 if z == 0 else (1 << z)
+    y = (
+        (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi)
+        / 2.0
+        * n
+    )
+    m = round(y)
+    if 0 < m < n and abs(y - m) <= _EDGE_BAND:
+        return m if _tile_y_at_least(lat, z, m) else m - 1
+    return math.floor(y)
+
+
 def _lonlat_to_tile(lon: float, lat: float, z: int):
     """Port of Quadbin.scala lonLatToTile: (lon, lat) -> clamped (xTile, yTile)."""
     lat = max(_LAT_MIN, min(_LAT_MAX, lat))
@@ -132,11 +185,7 @@ def _lonlat_to_tile(lon: float, lat: float, z: int):
     n = 1 if z == 0 else (1 << z)
     lat_rad = lat * math.pi / 180.0
     x = math.floor((lon + 180.0) / 360.0 * n)
-    y = math.floor(
-        (1.0 - math.log(math.tan(lat_rad) + 1.0 / math.cos(lat_rad)) / math.pi)
-        / 2.0
-        * n
-    )
+    y = _tile_y(lat, lat_rad, z)
     x = max(0, min(n - 1, x))
     y = max(0, min(n - 1, y))
     return x, y
@@ -157,9 +206,16 @@ def _lonlat_to_tile_vec(lons: np.ndarray, lats: np.ndarray, z: int):
     n = 1 if z == 0 else (1 << z)
     lat_rad = lat * math.pi / 180.0
     x = np.floor((lon + 180.0) / 360.0 * n)
-    y = np.floor(
-        (1.0 - np.log(np.tan(lat_rad) + 1.0 / np.cos(lat_rad)) / math.pi) / 2.0 * n
+    yf = (1.0 - np.log(np.tan(lat_rad) + 1.0 / np.cos(lat_rad)) / math.pi) / 2.0 * n
+    y = np.floor(yf)
+    # the rows within _EDGE_BAND of a row edge are decided exactly, as _tile_y does
+    near = (
+        (np.abs(yf - np.rint(yf)) <= _EDGE_BAND) & (np.rint(yf) > 0) & (np.rint(yf) < n)
     )
+    for idx in np.argwhere(near):
+        at = tuple(idx)
+        m = int(np.rint(yf[at]))
+        y[at] = m if _tile_y_at_least(float(lat[at]), z, m) else m - 1
     x = np.clip(x, 0, n - 1).astype(np.uint64)
     y = np.clip(y, 0, n - 1).astype(np.uint64)
     return x, y

@@ -8,14 +8,19 @@ import java.util.concurrent.atomic.AtomicLong
 
 /**
   * What a gdalwarp of `ds` reads: `ds` itself, or, for a source masked by its own per-dataset mask band
-  * ([[GDAL.hasOwnMask]]: an internal or external GTiff mask, as JPEG/YCbCr imagery often has, not an alpha
-  * band), its mask view. The view is an in-memory VRT of `ds`: its bands, then that mask as one more band
-  * (colour interpretation undefined), which the warp reads as the source alpha ([[alphaArgs]]: `-srcalpha`).
-  * gdalwarp ignores a per-dataset mask band whenever a source NoData is set and under a cutline it has to
-  * rasterize (a hexagon, for example), but it always applies a source alpha band. As the extra band is not
-  * marked alpha, gdalwarp adds no alpha band to the output, which keeps the source's bands and data type.
-  * A source with an alpha band, which gdalwarp already applies, and a source without a mask band are warped
-  * as they are.
+  * ([[GDAL.hasOwnMask]]: an internal or external GTiff mask, as JPEG/YCbCr imagery often has, not the mask
+  * GDAL derives from an alpha band), its mask view. The view is an in-memory VRT of `ds`: its bands, then
+  * that mask as one more band (colour interpretation undefined), which the warp reads as the source alpha
+  * ([[alphaArgs]]: `-srcalpha`). gdalwarp ignores a per-dataset mask band whenever a source NoData is set and
+  * under a cutline it has to rasterize (a hexagon, for example), but it always applies a source alpha band.
+  * As the extra band is not marked alpha, gdalwarp adds no alpha band to the output, which keeps the source's
+  * bands and data type. A source that has an alpha band AND an own mask band gets the view as well: GDAL
+  * reports the own mask only (it outranks the mask derived from the alpha band), the view's source alpha is
+  * that mask, and the alpha band is warped as a data band (the view labels it undefined, so that gdalwarp
+  * does not take it for the destination's alpha band) and labelled alpha again in the output ([[warp]]), so
+  * it still marks the fill and the transparent pixels.
+  * A source with only an alpha band, which gdalwarp already applies, and a source without a mask band are
+  * warped as they are.
   *
   * gdalwarp copies the source's band labels to the output, written with the pixels. A band labelled alpha that
   * is not the alpha band ([[GDAL.alphaBandIndex]]: the last band) is data, so the view (an in-memory VRT as
@@ -54,7 +59,7 @@ final class WarpSource(val ds: Dataset) extends AutoCloseable {
       * extra arguments ([[warp]] adds [[alphaArgs]]).
       */
     def fillNoDataArgs: Seq[String] =
-        if (!masked && GDAL.hasAlpha(ds)) Seq.empty
+        if (GDAL.hasAlpha(ds)) Seq.empty
         else GDAL.dstNoDataArgs(ds) ++ GDAL.srcNoDataArgs(ds, maskAsAlpha = masked)
 
     /** [[GDALWarp.executeWarp]] of [[dataset]] with [[alphaArgs]] then `extraArgs`, `ds` standing for the
@@ -64,8 +69,18 @@ final class WarpSource(val ds: Dataset) extends AutoCloseable {
         options: Map[String, String],
         command: String,
         extraArgs: Seq[String] = Seq.empty
-    ): (Dataset, Map[String, String]) =
-        GDALWarp.executeWarp(outputPath, Array(dataset), options, command, alphaArgs ++ extraArgs, like = ds)
+    ): (Dataset, Map[String, String]) = {
+        val (result, metadata) =
+            GDALWarp.executeWarp(outputPath, Array(dataset), options, command, alphaArgs ++ extraArgs, like = ds)
+        // The mask view labelled the alpha band of `ds` undefined for the warp: it is the output's alpha band.
+        if (result != null && masked) {
+            GDAL.alphaBandIndex(ds).foreach { a =>
+                result.GetRasterBand(a).SetColorInterpretation(GCI_AlphaBand)
+                result.FlushCache()
+            }
+        }
+        (result, metadata)
+    }
 
     /** Deletes the view; idempotent. The view owns no file, so delete() releases all of it (as for the VRTs of
       * MergeRasters and MergeBands). RasterDriver.releaseDataset must not be used: a VRT's file list names its
@@ -91,12 +106,16 @@ object WarpSource {
     }
 
     /** The view of `ds` a warp reads (see [[WarpSource]]) and whether it is a mask view, or None when `ds` has no
-      * own mask band and no band labelled alpha apart from its alpha band, or has an alpha band and the latter. */
+      * own mask band and no band labelled alpha apart from its alpha band. */
     private def view(ds: Dataset): Option[(Dataset, Boolean)] = {
         val n = ds.GetRasterCount()
-        val maskOf = if (GDAL.hasAlpha(ds)) None else (1 to n).find(i => GDAL.hasOwnMask(ds.GetRasterBand(i)))
+        val maskOf = (1 to n).find(i => GDAL.hasOwnMask(ds.GetRasterBand(i)))
         val alpha = GDAL.alphaBandIndex(ds)
-        val dataLabelled = (1 to n).filter(i => !alpha.contains(i) && ds.GetRasterBand(i).GetColorInterpretation == GCI_AlphaBand)
+        // Bands labelled alpha that are data, and the alpha band itself when the view adds the source's mask as
+        // the source alpha: the warp reads those as data.
+        val dataLabelled = (1 to n).filter(i =>
+            ds.GetRasterBand(i).GetColorInterpretation == GCI_AlphaBand && (!alpha.contains(i) || maskOf.isDefined)
+        )
         if (maskOf.isEmpty && dataLabelled.isEmpty) None
         else {
             val args = new java.util.Vector[String]()

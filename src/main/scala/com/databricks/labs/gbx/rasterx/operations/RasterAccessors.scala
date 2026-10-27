@@ -55,11 +55,14 @@ object RasterAccessors {
     private def isSubdatasetSelector(desc: String): Boolean =
         desc.contains(":/") && desc.split(":").length >= 3
 
-    /** Returns true if the dataset is null, has no size, or all bands have no valid pixels. */
+    /** Returns true if the dataset is null, has no size, or no pixel of it is valid: the rule of both tiers
+      * ([[com.databricks.labs.gbx.rasterx.gdal.ValidMask]]), a pixel being valid when some data band is
+      * valid there and, for a raster with an alpha band, its alpha is above 0. An entirely transparent
+      * raster is empty, whatever its band count. */
     def isEmpty(ds: Dataset): Boolean = {
         if (ds == null || ds.GetRasterXSize <= 0 || ds.GetRasterYSize <= 0) return true
         val n = ds.GetRasterCount; if (n <= 0) return true
-        (1 to n).forall(i => BandAccessors.isEmpty(ds.GetRasterBand(i)))
+        !com.databricks.labs.gbx.rasterx.gdal.ValidMask.anyValid(ds)
     }
 
     /** Releases the dataset and, if vsimem, unlinks the buffer; otherwise delegates to RasterDriver.

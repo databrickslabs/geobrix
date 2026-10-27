@@ -19,7 +19,9 @@ import org.gdal.gdalconst.gdalconstConstants.CE_None
   * mask as gdalwarp does.
   *
   * Reads are by row window and reuse their buffers, so a caller bounds the memory by the window it asks for
-  * (one byte per pixel for each of two buffers, and four bytes per pixel for the alpha values).
+  * (one byte per pixel for each of two buffers, and eight bytes per pixel for the alpha values, read as
+  * Double so that any alpha above 0 stays above 0). [[readBand]] is the same rule for ONE band, for the
+  * reducers and statistics that judge each band alone.
   * GDAL resources: reads only (creates and releases no dataset).
   */
 final class ValidMask(ds: Dataset) {
@@ -31,7 +33,7 @@ final class ValidMask(ds: Dataset) {
     private val dataMasks: Array[Band] = dataBands.map(b => ds.GetRasterBand(b).GetMaskBand())
     private val alphaBand: Option[Band] = alphaIndex.map(ds.GetRasterBand)
     private var scratch: Array[Byte] = Array.emptyByteArray
-    private var alpha: Array[Float] = Array.emptyFloatArray
+    private var alpha: Array[Double] = Array.emptyDoubleArray
 
     private def check(rc: Int, what: String, yOff: Int, h: Int): Unit =
         if (rc != CE_None) {
@@ -58,12 +60,30 @@ final class ValidMask(ds: Dataset) {
                 i += 1
             }
         }
+        gateByAlpha(xOff, yOff, w, h, out)
+    }
+
+    /** Sets `out(p)` to 0 where the alpha value of pixel `p` of the window is not above 0 (0, negative and NaN
+      * alike). Does nothing when `ds` has no alpha band. */
+    private def gateByAlpha(xOff: Int, yOff: Int, w: Int, h: Int, out: Array[Byte]): Unit =
         alphaBand.foreach { band =>
-            if (alpha.length < n) alpha = new Array[Float](n)
+            val n = w * h
+            if (alpha.length < n) alpha = new Array[Double](n)
             check(band.ReadRaster(xOff, yOff, w, h, alpha), s"the alpha band ${alphaIndex.get}", yOff, h)
             var p = 0
-            while (p < n) { if (!(alpha(p) > 0.0f)) out(p) = 0; p += 1 } // 0, negative and NaN alike
+            while (p < n) { if (!(alpha(p) > 0.0)) out(p) = 0; p += 1 }
         }
+
+    /** The per-band form of [[read]]: fills `out(0 until w * h)` for the window `(xOff, yOff, w, h)` with
+      * non-zero where the pixel is valid FOR BAND `band` (1-based): valid by the band's own mask (its NoData,
+      * the dataset's own mask band) and, when `ds` has an alpha band, opaque. The alpha band itself is
+      * judged by its own mask only, as GDAL does: its values over every pixel, which is how an opacity is
+      * summarised. A pixel that is NoData in one band still counts for another. */
+    def readBand(band: Int, xOff: Int, yOff: Int, w: Int, h: Int, out: Array[Byte]): Unit = {
+        require(band >= 1 && band <= ds.getRasterCount, s"band $band is not one of the ${ds.getRasterCount} bands")
+        require(out.length >= w * h, s"the output holds ${out.length} pixels, the window ${w * h}")
+        check(ds.GetRasterBand(band).GetMaskBand().ReadRaster(xOff, yOff, w, h, out), s"the band $band mask", yOff, h)
+        if (!alphaIndex.contains(band)) gateByAlpha(xOff, yOff, w, h, out)
     }
 
     /** True when some pixel of the dataset is valid, read in row strips of at most [[ValidMask.StripPixels]]

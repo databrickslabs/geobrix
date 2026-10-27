@@ -1,6 +1,7 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import org.gdal.gdal.Band
+import com.databricks.labs.gbx.rasterx.gdal.ValidMask
+import org.gdal.gdal.{Band, Dataset}
 import org.gdal.gdalconst.gdalconstConstants
 
 import scala.jdk.CollectionConverters.DictionaryHasAsScala
@@ -60,6 +61,48 @@ object BandAccessors {
             case gdalconstConstants.GDT_CFloat64 => "ComplexFloat64"
             case _                               => "Unknown"
         }
+
+    /** Count, minimum, maximum and sum of the valid pixels of one band. */
+    final case class ValidStats(count: Long, min: Double, max: Double, sum: Double) {
+        def mean: Double = sum / count
+    }
+
+    /**
+      * Statistics of the pixels of band `index` (1-based) of `ds` that are valid FOR THAT BAND
+      * ([[ValidMask.readBand]]): valid by the band's own mask and, when `ds` has an alpha band, opaque. For a
+      * raster with an alpha band beside its data bands ([[com.databricks.labs.gbx.rasterx.gdal.GDAL.hasAlphaBesideData]]),
+      * where GDAL's own statistics count the transparent pixels. Read in row strips of at most [[ValidMask.StripPixels]] pixels, so the memory is bounded whatever the size of
+      * the raster. NaN values are skipped, as GDAL's statistics skip them.
+      */
+    def validStats(ds: Dataset, index: Int): ValidStats = {
+        val xSize = ds.GetRasterXSize()
+        val ySize = ds.GetRasterYSize()
+        val rows = math.max(1, math.min(ySize, ValidMask.StripPixels / math.max(1, xSize)))
+        val data = new Array[Double](xSize * rows)
+        val mask = new Array[Byte](xSize * rows)
+        val validity = new ValidMask(ds)
+        val band = ds.GetRasterBand(index)
+        var (count, min, max, sum) = (0L, Double.PositiveInfinity, Double.NegativeInfinity, 0.0)
+        var y0 = 0
+        while (y0 < ySize) {
+            val h = math.min(rows, ySize - y0)
+            require(band.ReadRaster(0, y0, xSize, h, data) == gdalconstConstants.CE_None, s"reading band $index, rows $y0..${y0 + h - 1}, failed")
+            validity.readBand(index, 0, y0, xSize, h, mask)
+            var p = 0
+            val n = xSize * h
+            while (p < n) {
+                val v = data(p)
+                if (mask(p) != 0 && !v.isNaN) {
+                    count += 1; sum += v
+                    if (v < min) min = v
+                    if (v > max) max = v
+                }
+                p += 1
+            }
+            y0 += h
+        }
+        ValidStats(count, min, max, sum)
+    }
 
     /** Returns true if the band has no valid pixels (mask all invalid). */
     def isEmpty(band: Band): Boolean = {

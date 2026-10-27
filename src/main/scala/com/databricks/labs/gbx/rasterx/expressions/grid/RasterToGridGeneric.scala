@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.grid
 
 import com.databricks.labs.gbx.gridx.grid.GridSystem
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{RasterDriver, ValidMask}
 import com.databricks.labs.gbx.rasterx.operations.{BoundingBox, GridOverlap}
 import com.databricks.labs.gbx.vectorx.jts.JTS
 import org.gdal.gdal.Dataset
@@ -13,7 +13,7 @@ import scala.collection.mutable
 /** Generic raster→grid pixel aggregation for any [[GridSystem]].
   *
   * Reprojects `ds` to the grid's native CRS (via [[GridReprojection]]), bins each valid
-  * (non-NoData) pixel centroid to a cell id with `grid.pointToCellID`, optionally filters
+  * (non-NoData, opaque) pixel centroid to a cell id with `grid.pointToCellID`, optionally filters
   * cells with `isCellValid` (for grids like BNG that have coordinate-extent constraints),
   * accumulates pixel values per cell, and applies `fAgg`. Cells with no valid pixels are
   * dropped (sparse output). The caller owns `ds`; any internally reprojected dataset is
@@ -205,14 +205,16 @@ object RasterToGridGeneric {
         val nPix   = xSize * ySize
         val bands  = ds.getRasterCount
 
-        val bandBuf = new Array[Double](nPix)
-        val maskBuf = new Array[Byte](nPix)
+        val bandBuf  = new Array[Double](nPix)
+        val maskBuf  = new Array[Byte](nPix)
+        val validity = new ValidMask(ds)
 
         (1 to bands).iterator.map { bi =>
             val b = ds.GetRasterBand(bi)
-            val m = b.GetMaskBand()
             b.ReadRaster(0, 0, xSize, ySize, bandBuf)
-            m.ReadRaster(0, 0, xSize, ySize, maskBuf)
+            // Valid FOR THIS BAND: by its own mask and, for a raster with an alpha band, opaque (GDAL derives
+            // a mask from the alpha band only for 2- and 4-band rasters).
+            validity.readBand(bi, 0, 0, xSize, ySize, maskBuf)
 
             // Count valid pixels for LongMap pre-sizing.
             var valid = 0; var i = 0
@@ -283,14 +285,14 @@ object RasterToGridGeneric {
         val nPix   = xSize * ySize
         val bands  = ds.getRasterCount
 
-        val bandBuf = new Array[Double](nPix)
-        val maskBuf = new Array[Byte](nPix)
+        val bandBuf  = new Array[Double](nPix)
+        val maskBuf  = new Array[Byte](nPix)
+        val validity = new ValidMask(ds)
 
         (1 to bands).iterator.map { bi =>
             val b = ds.GetRasterBand(bi)
-            val m = b.GetMaskBand()
             b.ReadRaster(0, 0, xSize, ySize, bandBuf)
-            m.ReadRaster(0, 0, xSize, ySize, maskBuf)
+            validity.readBand(bi, 0, 0, xSize, ySize, maskBuf) // valid for this band: see executeOn
 
             val accW = new mutable.LongMap[mutable.ArrayBuffer[(Double, Double)]]()
             var y = 0; var idx = 0

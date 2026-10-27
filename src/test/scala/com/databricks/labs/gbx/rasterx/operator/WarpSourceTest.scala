@@ -172,4 +172,132 @@ class WarpSourceTest extends AnyFunSuite with BeforeAndAfterAll {
             } finally release(masked, path)
         }
     }
+
+    // ------------------------------------------------------------------------------------------------
+    // a band labelled alpha that is not the alpha band: a relabelling view, not a mask view
+    // ------------------------------------------------------------------------------------------------
+
+    /** `l`'s bands as `bands` uint8 bands labelled `labels`: band b holds `base + b` over the source rows,
+      * except band 4, which is 0 everywhere when `zeroFour`. Returns it and its path. */
+    private def banded(labels: Seq[Int], zeroFour: Boolean): (Dataset, String) = {
+        val path = s"/vsimem/warpsource_banded_${UUID.randomUUID().toString.replace("-", "")}.tif"
+        val made = GDALManager.gtiffDriver().Create(path, N, N, labels.size, GDT_Byte, Array("PHOTOMETRIC=MINISBLACK"))
+        made.SetGeoTransform(Array(1.00, 0.005, 0.0, 52.60, 0.0, -0.005))
+        val sr = new SpatialReference()
+        sr.ImportFromEPSG(4326)
+        made.SetProjection(sr.ExportToWkt())
+        sr.delete()
+        labels.zipWithIndex.foreach { case (label, i) =>
+            made.GetRasterBand(i + 1).SetColorInterpretation(label)
+            made.GetRasterBand(i + 1).WriteRaster(0, 0, N, N, Array.fill(N * N)(if (zeroFour && i == 3) 0.0 else 50.0 + i))
+        }
+        made.FlushCache()
+        made.delete()
+        (gdal.Open(path), path)
+    }
+
+    test("a source with a band labelled alpha that is not its alpha band is warped through a relabelling view") {
+        // RGB, a band labelled alpha, then a data band: gdalwarp would copy the alpha label to the output
+        val labels = Seq(GCI_RedBand, GCI_GreenBand, GCI_BlueBand, GCI_AlphaBand, GCI_Undefined)
+        val (src, path) = banded(labels, zeroFour = true)
+        val built = WarpSource.viewsBuilt.get()
+        val before = vsimemFiles()
+        val source = new WarpSource(src)
+        try {
+            source.masked shouldBe false // no mask view
+            WarpSource.viewsBuilt.get() shouldBe built // and not counted as one
+            (source.dataset eq src) shouldBe false // but a view
+            source.alphaArgs shouldBe empty
+            source.dataset.GetRasterCount shouldBe 5
+            source.dataset.GetRasterBand(4).GetColorInterpretation shouldBe GCI_Undefined
+            src.GetRasterBand(4).GetColorInterpretation shouldBe GCI_AlphaBand // the source is untouched
+            val outPath = s"/vsimem/warpsource_relabel_out_${UUID.randomUUID().toString.replace("-", "")}.tif"
+            val (out, _) = source.warp(outPath, Map.empty[String, String], ToBng, source.fillNoDataArgs)
+            try {
+                out.GetRasterCount shouldBe 5
+                // band 4 is written as data, with the zeros it holds
+                (1 to 5).map(out.GetRasterBand(_).GetColorInterpretation) shouldBe
+                    Seq(GCI_RedBand, GCI_GreenBand, GCI_BlueBand, GCI_Undefined, GCI_Undefined)
+                val valid = new Array[Byte](out.getRasterXSize * out.getRasterYSize)
+                new com.databricks.labs.gbx.rasterx.gdal.ValidMask(out).read(0, 0, out.getRasterXSize, out.getRasterYSize, valid)
+                val four = new Array[Double](valid.length)
+                out.GetRasterBand(4).ReadRaster(0, 0, out.getRasterXSize, out.getRasterYSize, four)
+                val inFootprint = valid.indices.filter(valid(_) != 0)
+                inFootprint should not be empty // the zeros of band 4 are not transparency
+                inFootprint.forall(four(_) == 0.0) shouldBe true
+            } finally RasterDriver.releaseDataset(out)
+        } finally source.close()
+        withClue("the view left /vsimem files behind or removed the source's: ") { vsimemFiles() shouldBe before }
+        src.GetRasterBand(1).ReadRaster(0, 0, 1, 1, new Array[Double](1)) shouldBe CE_None
+        release(src, path)
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // an alpha source that ALSO has its own mask band
+    // ------------------------------------------------------------------------------------------------
+
+    /** RGBA uint8 whose colour bands hold `100 + row`, alpha 255 except rows 20-21 (0), an internal mask hiding
+      * rows 10-11. */
+    private def alphaMasked(): (Dataset, String) = {
+        val path = s"/vsimem/warpsource_alphamask_${UUID.randomUUID().toString.replace("-", "")}.tif"
+        val made = GDALManager.gtiffDriver().Create(path, N, N, 4, GDT_Byte, Array("PHOTOMETRIC=RGB", "ALPHA=YES"))
+        made.SetGeoTransform(Array(1.00, 0.005, 0.0, 52.60, 0.0, -0.005))
+        val sr = new SpatialReference()
+        sr.ImportFromEPSG(4326)
+        made.SetProjection(sr.ExportToWkt())
+        sr.delete()
+        (1 to 3).foreach(b => made.GetRasterBand(b).WriteRaster(0, 0, N, N, Array.tabulate(N * N)(p => 100.0 + p / N)))
+        made.GetRasterBand(4).WriteRaster(0, 0, N, N, Array.tabulate(N * N)(p => if (p / N == 20 || p / N == 21) 0.0 else 255.0))
+        made.CreateMaskBand(GMF_PER_DATASET)
+        made.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, N, N, Array.tabulate[Byte](N * N)(p => if (maskedRow(p / N)) 0.toByte else 255.toByte))
+        made.FlushCache()
+        made.delete()
+        val ds = gdal.Open(path)
+        ds.GetRasterBand(1).GetMaskFlags() shouldBe GMF_PER_DATASET // GDAL reports the own mask only
+        (ds, path)
+    }
+
+    test("an alpha source with its own mask band is read through a mask view, and keeps its alpha band") {
+        val (src, path) = alphaMasked()
+        val built = WarpSource.viewsBuilt.get()
+        val source = new WarpSource(src)
+        try {
+            source.masked shouldBe true
+            WarpSource.viewsBuilt.get() shouldBe built + 1
+            source.dataset.GetRasterCount shouldBe 5 // the four bands, then the mask
+            source.alphaArgs shouldBe Seq("-srcalpha")
+            source.fillNoDataArgs shouldBe empty // an alpha band marks the fill; a NoData would shadow it
+            val (out, outMeta) = WarpSource.warpFillAsNoData(src, s"/vsimem/warpsource_am_out_${UUID.randomUUID().toString.replace("-", "")}.tif", ToBng)
+            withClue(s"the warp failed: ${outMeta("last_error")} ") { out should not be null }
+            try {
+                out.GetRasterCount shouldBe 4
+                (1 to 4).map(noDataOf(out, _)) shouldBe Seq.fill(4)(None)
+                out.GetRasterBand(4).GetColorInterpretation shouldBe GCI_AlphaBand
+                // and the label is in the written file, not only on the handle
+                out.FlushCache()
+                val copy = s"/vsimem/warpsource_am_copy_${UUID.randomUUID().toString.replace("-", "")}.tif"
+                gdal.FileFromMemBuffer(copy, gdal.GetMemFileBuffer(out.GetDescription))
+                val reopened = gdal.Open(copy)
+                try (1 to 4).map(reopened.GetRasterBand(_).GetColorInterpretation) shouldBe
+                    Seq(GCI_RedBand, GCI_GreenBand, GCI_BlueBand, GCI_AlphaBand)
+                finally {
+                    reopened.delete()
+                    gdal.Unlink(copy)
+                }
+                val (w, h) = (out.getRasterXSize, out.getRasterYSize)
+                val valid  = new Array[Byte](w * h)
+                new com.databricks.labs.gbx.rasterx.gdal.ValidMask(out).read(0, 0, w, h, valid)
+                val red = new Array[Double](w * h)
+                out.GetRasterBand(1).ReadRaster(0, 0, w, h, red)
+                val validValues = valid.indices.filter(valid(_) != 0).map(red(_).toInt - 100)
+                validValues should not be empty
+                // no valid pixel comes from a masked row (10-11) or a transparent one (20-21)
+                validValues.filter(r => maskedRow(r) || r == 20 || r == 21) shouldBe empty
+                // and the masked source pixels are not valid in the output
+                val maskedSeen = red.indices.count(k => red(k) >= 110 && red(k) <= 111 && valid(k) != 0)
+                maskedSeen shouldBe 0
+            } finally RasterDriver.releaseDataset(out)
+        } finally source.close()
+        release(src, path)
+    }
 }

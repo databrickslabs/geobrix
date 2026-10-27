@@ -661,7 +661,7 @@ object RasterTessellate {
             if (centroidSetupFault != null) throw centroidSetupFault
             val ctx = ChipContext(
               grid, grid.name.toLowerCase, projWkt, sourcePath, options, bandCount, dtype, gt, bandNoData,
-              GDAL.alphaBandIndex(workDs)
+              GDAL.colorInterpretations(workDs)
             )
             new CentroidChipIterator(ctx, natives, assigned, syntheticCells, xSize)
         } catch {
@@ -757,13 +757,13 @@ object RasterTessellate {
         dtype: Int,
         gt: Array[Double],
         bandNoData: Array[Option[Double]],
-        alphaBand: Option[Int]
+        labels: Seq[Int]
     )
 
     /** Creates the /vsimem GTiff for one centroid chip: `w` x `h` pixels whose top-left is source pixel
       * (`col`, `row`). The geotransform is the source's offset to that pixel (rotation and pixel-size
-      * terms kept, so rotated and south-up rasters stay on the source grid). The alpha label is the source's
-      * ([[GDAL.matchAlpha]]). Returns (path, dataset). */
+      * terms kept, so rotated and south-up rasters stay on the source grid). The bands are labelled as the
+      * source's are, band by band ([[GDAL.matchLabels]]). Returns (path, dataset). */
     private def createChip(ctx: ChipContext, cellId: Long, w: Int, h: Int, col: Int, row: Int): (String, Dataset) = {
         val gt         = ctx.gt
         val uuid       = java.util.UUID.randomUUID().toString.replace("-", "_")
@@ -773,7 +773,7 @@ object RasterTessellate {
           Array(gt(0) + col * gt(1) + row * gt(2), gt(1), gt(2), gt(3) + col * gt(4) + row * gt(5), gt(4), gt(5))
         )
         out.SetProjection(ctx.projWkt)
-        GDAL.matchAlpha(out, ctx.alphaBand)
+        GDAL.matchLabels(out, ctx.labels)
         (rasterPath, out)
     }
 

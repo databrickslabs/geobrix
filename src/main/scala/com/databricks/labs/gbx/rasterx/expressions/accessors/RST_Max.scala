@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -49,10 +49,17 @@ object RST_Max extends WithExpressionInfo {
         ).map(_.asInstanceOf[ArrayData]).orNull
 
     def execute(ds: Dataset): Array[java.lang.Double] = {
+        // A raster with an alpha band beside data bands: the transparent pixels are valid in no band (GDAL's
+        // statistics count them, whatever the band count).
+        val gated = GDAL.hasAlphaBesideData(ds)
         (1 to ds.GetRasterCount()).map { bandIndex =>
             val band = ds.GetRasterBand(bandIndex)
             val res: java.lang.Double =
                 if (band == null) null
+                else if (gated) {
+                    val st = BandAccessors.validStats(ds, bandIndex)
+                    if (st.count == 0L) null else java.lang.Double.valueOf(st.max)
+                }
                 else if (BandAccessors.isEmpty(band)) null
                 else java.lang.Double.valueOf(BandAccessors.getMinMax(band)._2)
             if (band != null) band.delete()

@@ -257,6 +257,64 @@ class RasterTessellateAlphaTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // ------------------------------------------------------------------------------------------------
+    // chips copy the colour interpretation of every band
+    // ------------------------------------------------------------------------------------------------
+
+    /** The labels a chip of `l` is written with: the source's, an alpha label that is not on the last band being data. */
+    private def chipLabels(l: Layout): Seq[Int] =
+        l.interps.zipWithIndex.map { case (c, i) => if (c == GCI_AlphaBand && i != l.count - 1) GCI_Undefined else c }
+
+    for (
+      layout <- Seq(Rgba, GrayXA, RgbXA, GrayA, Rgba16, RgbaX, RgbNir);
+      assignment <- Seq("centroid", "covering");
+      coverage <- Seq("sparse", "complete")
+    ) {
+        test(s"$assignment $coverage chips of ${layout.name} are labelled as the source is, band by band") {
+            val src = source(layout, H3Site)
+            val seen = mutable.Set.empty[Seq[Int]]
+            val chips =
+                try forEachChip(H3Site, src, assignment, coverage)(chip => seen += labels(chip))
+                finally RasterDriver.releaseDataset(src)
+            assert(chips > 0, "no chips")
+            assert(seen == Set(chipLabels(layout)), s"chips are labelled $seen, expected ${chipLabels(layout)}")
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // the 1x1 chip of a covered cell that caught no pixel centroid
+    // ------------------------------------------------------------------------------------------------
+
+    for (layout <- Seq(Rgba, GrayXA)) {
+        test(s"centroid complete on ${layout.name} with cells smaller than its pixels: the empty 1x1 chips are alpha 0, with no NoData") {
+            // H3 resolution 9 cells (about 0.1 km2) are smaller than the pixels (about 0.2 km2), so most cells catch
+            // no pixel centroid and complete coverage has to build an empty chip for them. A pixel's own chip is
+            // 1x1 as well, and valid: the fixture is opaque.
+            val src = source(layout, H3Site)
+            var (ones, validOnes, withNoData, wrongLabel) = (0, 0, 0, 0)
+            try {
+                val it = RasterTessellate.tessellateH3Iter(handOff(src), Map.empty[String, String], 9, "centroid", "complete")
+                try {
+                    while (it.hasNext) {
+                        val (_, chip, _) = it.next()
+                        try {
+                            if (chip.getRasterXSize == 1 && chip.getRasterYSize == 1) {
+                                ones += 1
+                                if (com.databricks.labs.gbx.rasterx.gdal.ValidMask.anyValid(chip)) validOnes += 1
+                                if ((1 to chip.getRasterCount).exists(noDataOf(chip, _).isDefined)) withNoData += 1
+                                if (alphaLabelled(chip) != Seq(layout.count - 1)) wrongLabel += 1
+                            }
+                        } finally RasterDriver.releaseDataset(chip)
+                    }
+                } finally it.asInstanceOf[AutoCloseable].close()
+            } finally RasterDriver.releaseDataset(src)
+            assert(ones - validOnes > 0, "the fixture produced no empty chip")
+            assert(validOnes == N * N, s"$validOnes valid 1x1 chips, expected the $N x $N pixels' own")
+            assert(withNoData == 0, s"$withNoData of $ones 1x1 chips declare a NoData over the alpha band")
+            assert(wrongLabel == 0, s"$wrongLabel of $ones 1x1 chips lost the alpha label")
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------
     // the alpha rule
     // ------------------------------------------------------------------------------------------------
 

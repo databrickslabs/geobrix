@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -50,10 +51,14 @@ object RST_PixelCount extends WithExpressionInfo {
         ).map(_.asInstanceOf[ArrayData]).orNull
 
     def execute(ds: Dataset): Array[Long] = {
+        // A raster with an alpha band beside data bands: the transparent pixels are valid in no band (GDAL's
+        // statistics count them, whatever the band count).
+        val gated = GDAL.hasAlphaBesideData(ds)
         (1 to ds.GetRasterCount())
             .map(i => {
                 val band = ds.GetRasterBand(i)
                 if (band == null) 0
+                else if (gated) BandAccessors.validStats(ds, i).count
                 else {
                     val md = band.AsMDArray()
                     val stats = md.GetStatistics()

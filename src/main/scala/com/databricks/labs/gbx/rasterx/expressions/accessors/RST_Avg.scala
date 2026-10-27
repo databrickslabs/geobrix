@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.rasterx.expressions.accessors
 
 import com.databricks.labs.gbx.expressions._
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
+import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -50,10 +51,17 @@ object RST_Avg extends WithExpressionInfo {
         ).map(_.asInstanceOf[ArrayData]).orNull
 
     def execute(ds: Dataset): Array[java.lang.Double] = {
+        // A raster with an alpha band beside data bands: the transparent pixels are valid in no band (GDAL's
+        // statistics count them, whatever the band count).
+        val gated = GDAL.hasAlphaBesideData(ds)
         (1 to ds.GetRasterCount()).map { bandIndex =>
             val band = ds.GetRasterBand(bandIndex)
             if (band == null) null
-            else {
+            else if (gated) {
+                val st = BandAccessors.validStats(ds, bandIndex)
+                band.delete()
+                if (st.count == 0L) null else java.lang.Double.valueOf(st.mean)
+            } else {
                 val md = band.AsMDArray()
                 val stats = md.GetStatistics()
                 val res: java.lang.Double =

@@ -129,6 +129,46 @@ object GDAL {
             else if (current == GCI_AlphaBand) band.SetColorInterpretation(GCI_Undefined)
         }
 
+    /** The colour interpretation (`GCI_*`) of every band of `ds`, in order. */
+    def colorInterpretations(ds: org.gdal.gdal.Dataset): Seq[Int] =
+        (1 to ds.GetRasterCount()).map(ds.GetRasterBand(_).GetColorInterpretation)
+
+    /**
+      * [[matchAlpha]] that also copies the other labels: labels the bands of `dst`, a new dataset holding
+      * (windows of) the bands of a source whose bands are labelled `labels` ([[colorInterpretations]]), band
+      * by band. The alpha label goes only on the source's alpha band ([[alphaBandIndex]] rule: the LAST band,
+      * when labelled alpha); an alpha label anywhere else is data (undefined); gray, undefined, red, green and
+      * blue are copied, so RGB and the data bands of a gray+x+alpha or a 16-bit RGBA raster are not left to
+      * the defaults GDAL gives a new GTiff (red and green for the first two bands of a 3-band uint8 raster).
+      * Any other label (palette, CMYK, YCbCr ...) goes with a colour table or photometric `dst` may not
+      * have, and is left to GDAL. A band count that differs from `labels` is left as GDAL labelled it. Made
+      * before the pixels are written (GDAL ignores a label set after). The lightweight tier's
+      * `compression.match_alpha(all_labels=True)`.
+      */
+    def matchLabels(dst: org.gdal.gdal.Dataset, labels: Seq[Int]): Unit =
+        if (labels.size == dst.GetRasterCount()) {
+            val alpha = if (labels.last == GCI_AlphaBand) Some(labels.size) else None
+            val plain = Set(GCI_GrayIndex, GCI_Undefined, GCI_RedBand, GCI_GreenBand, GCI_BlueBand)
+            labels.zipWithIndex.foreach { case (label, i) =>
+                val band    = dst.GetRasterBand(i + 1)
+                val current = band.GetColorInterpretation
+                val want =
+                    if (alpha.contains(i + 1)) GCI_AlphaBand
+                    else if (plain.contains(label)) label
+                    else if (label == GCI_AlphaBand || current == GCI_AlphaBand) GCI_Undefined
+                    else current
+                if (want != current) band.SetColorInterpretation(want)
+            }
+        }
+
+    /** True when `ds` has an alpha band ([[alphaBandIndex]]) beside at least one data band, so the statistics of
+      * its data bands have to be judged by [[com.databricks.labs.gbx.rasterx.gdal.ValidMask.readBand]]: GDAL
+      * derives a mask from the alpha band for 2- and 4-band rasters only, drops it when a NoData or a mask band
+      * of the dataset is declared, and the multi-dimensional statistics (`AsMDArray().GetStatistics()`) apply
+      * no mask derived from an alpha band at all, so they count the transparent pixels of an RGBA raster too. */
+    def hasAlphaBesideData(ds: org.gdal.gdal.Dataset): Boolean =
+        ds.GetRasterCount() > 1 && alphaBandIndex(ds).isDefined
+
     /**
       * gdalwarp arguments that make the source pixels equal to a band's fill value NoData, for the bands of
       * `ds` that declare no NoData: `-srcnodata <one value per band>` (a declared band keeps its own value)

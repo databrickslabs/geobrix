@@ -147,4 +147,74 @@ class ValidMaskTest extends AnyFunSuite with BeforeAndAfterAll {
             } finally RasterDriver.releaseDataset(ds)
         }
     }
+
+    // ------------------------------------------------------------------------------------------------
+    // wide alpha values, a window that cannot be read, an own mask beside an alpha band, one band at a time
+    // ------------------------------------------------------------------------------------------------
+
+    test("an alpha value above 0 is opaque however small: a Float64 alpha band is read as Double, not Float") {
+        val ds = GDALManager.gtiffDriver().Create(
+          s"/vsimem/validmask_f64_${UUID.randomUUID().toString.replace("-", "")}.tif", 2, 1, 2, GDT_Float64
+        )
+        try {
+            ds.GetRasterBand(1).SetColorInterpretation(GCI_GrayIndex)
+            ds.GetRasterBand(2).SetColorInterpretation(GCI_AlphaBand)
+            ds.GetRasterBand(1).WriteRaster(0, 0, 2, 1, Array(5.0, 5.0))
+            // 1e-50 is above 0 as a Double, and 0 as a Float
+            ds.GetRasterBand(2).WriteRaster(0, 0, 2, 1, Array(1e-50, 0.0))
+            ds.FlushCache()
+            val buf = new Array[Byte](2)
+            new ValidMask(ds).read(0, 0, 2, 1, buf)
+            assert(buf.map(_ != 0).toSeq == Seq(true, false))
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    test("a window that cannot be read fails with the band named") {
+        val ds = fixture(Layouts.head, None)
+        try {
+            val e = intercept[RuntimeException](new ValidMask(ds).read(0, 4, 4, 1, new Array[Byte](4))) // yOff = ySize
+            assert(e.getMessage.contains("band"), e.getMessage)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    /** `l` with an internal per-dataset mask hiding column 0, beside its alpha band. */
+    private def maskedFixture(l: Layout): Dataset = {
+        val ds = fixture(l, None)
+        ds.CreateMaskBand(GMF_PER_DATASET)
+        val mask = Array.tabulate[Byte](16)(p => if (p % 4 == 0) 0.toByte else 255.toByte)
+        ds.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, 4, 4, mask)
+        ds.FlushCache()
+        ds
+    }
+
+    for (l <- Layouts.filter(l => l.alphaLast && l.interps.size > 1)) {
+        test(s"a pixel of ${l.name} with its own mask band is valid only if the mask AND the alpha band say so") {
+            val ds = maskedFixture(l)
+            try {
+                // GDAL reports the own mask only; the alpha band is read as values
+                assert(GDAL.hasOwnMask(ds.GetRasterBand(1)))
+                val buf = new Array[Byte](16)
+                new ValidMask(ds).read(0, 0, 4, 4, buf)
+                // rows 1 and 3 are opaque; column 0 is masked
+                val valid = (0 until 16).filter(p => buf(p) != 0)
+                assert(valid == Seq(5, 6, 7, 13, 14, 15))
+            } finally RasterDriver.releaseDataset(ds)
+        }
+    }
+
+    for (l <- Layouts.filter(_.interps.size > 1)) {
+        test(s"readBand of ${l.name}: a data band is valid where it is opaque, the alpha band over every pixel") {
+            val ds = fixture(l, None)
+            try {
+                val n = l.interps.size
+                val perBand = (1 to n).map { b =>
+                    val buf = new Array[Byte](16)
+                    new ValidMask(ds).readBand(b, 0, 0, 4, 4, buf)
+                    buf.count(_ != 0)
+                }
+                val want = if (l.alphaLast) Seq.fill(n - 1)(8) :+ 16 else Seq.fill(n)(16)
+                assert(perBand == want)
+            } finally RasterDriver.releaseDataset(ds)
+        }
+    }
 }

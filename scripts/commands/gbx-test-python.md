@@ -15,6 +15,7 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 - `--path <path>` - Run specific test file or directory (repeatable). Single pytest run, no phasing. Cross-tier paths in one call can still hit the heavy/light process conflict; pass one tier per call.
 - `-k <expr>` - Pytest keyword filter (e.g. `"merge or fileName"`)
 - `--log <path>` - Write output to log file (supports filename, relative, or absolute path). In phased mode this is the combined log; each phase also gets `<path minus .log>-<phase>.log`.
+- `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")
 - `--with-integration` - Include `@pytest.mark.integration` tests (network downloads, slow). Excluded by default.
 - `--markers <expr>` - Override marker filter with a custom pytest expression (e.g. `"not slow"`). Disables the default `not integration` filter.
 - `--help` - Display help message
@@ -56,6 +57,15 @@ The heavy tests load `python/geobrix/lib/geobrix-*-jar-with-dependencies.jar` (`
 By default the script runs with `-m "not integration"`, matching CI's `python_build` action. This excludes `python/geobrix/test/sample/test_sample_bundle.py::test_run_*_bundle_returns_dict_shape`, which download hundreds of MB of sample data.
 
 Opt in with `--with-integration` (drops the filter entirely) or `--markers <expr>` (replaces it with your own expression).
+
+## One test run at a time
+
+This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the container test lock first: a `flock` on `/tmp/gbx-test.lock` inside the container, shared by every command that runs Maven or a test JVM there (`gbx:test:*`, `gbx:coverage:*`, `gbx:lint:scalastyle`, `gbx:bench:heavyweight`, and `gbx:docker:exec` with an `mvn` or `pytest` command), so two runs never share `target/`.
+
+- **Default: wait.** A second run prints one line naming the holder (its command and PID, read from the lock file) and waits, giving up after `GBX_TEST_LOCK_TIMEOUT` seconds (default `3600`) with exit 75.
+- **`--no-wait`: fail fast.** Exit 75 at once, naming the holder.
+- The log starts with this run's PID and the lock acquisition (`test lock acquired: pid <pid> <command>`), so a duplicate launch shows up.
+- The lock is released when the command exits, and also when it is killed. Do not detach a run with `&` or `nohup`: use the harness's `run_in_background`, which is tracked.
 
 ## Examples
 

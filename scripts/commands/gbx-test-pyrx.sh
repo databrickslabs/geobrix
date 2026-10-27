@@ -15,6 +15,7 @@ show_help() {
     echo -e "  ${GREEN}--path <dir>${NC}           Specific test directory or file (default: python/geobrix/test/pyrx/)"
     echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Log Path Behavior:${NC}"
@@ -49,6 +50,10 @@ while [[ $# -gt 0 ]]; do
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -82,6 +87,7 @@ echo ""
 
 if [[ $USE_DOCKER -eq 1 ]]; then
     check_docker
+    gbx_acquire_test_lock   # only the container run shares Maven/Spark state; the host venv run does not
     PYTEST_CMD="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
         python3 -m pytest ${TEST_PATHS[*]} -v --tb=short --color=yes -m 'not integration'"
     docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"

@@ -19,6 +19,7 @@ show_help() {
     echo -e "  ${GREEN}--by-package${NC}              Run coverage per package in sequence, merge, then report (same as CI package matrix; no parallel in one container)"
     echo -e "  ${GREEN}--log <path>${NC}              Write output to log file"
     echo -e "  ${GREEN}--open${NC}                    Open HTML report in browser after generation"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                    Show this help"
     echo ""
     echo -e "${CYAN}Log Path Behavior:${NC}"
@@ -77,6 +78,10 @@ while [[ $# -gt 0 ]]; do
             OPEN_REPORT=true
             shift
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -95,6 +100,7 @@ cd "$PROJECT_ROOT"
 show_banner "📊 GeoBrix: Scala Code Coverage"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 echo -e "${CYAN}🎯 Minimum coverage: ${YELLOW}$MIN_COVERAGE%${NC}"
 

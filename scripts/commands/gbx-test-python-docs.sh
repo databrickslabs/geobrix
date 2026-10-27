@@ -37,6 +37,7 @@ show_help() {
     echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
     echo -e "  ${GREEN}--sample-data-root <dir>${NC} Container path for GBX_SAMPLE_DATA_ROOT (default /Volumes/main/default/test-data;"
     echo -e "                           /Volumes/main/default/geobrix_samples runs against the complete bundle)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                 This help"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
@@ -134,6 +135,10 @@ while [[ $# -gt 0 ]]; do
             SAMPLE_DATA_ROOT="${2%/}"
             shift 2
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -163,6 +168,7 @@ cd "$PROJECT_ROOT"
 show_banner "📚 GeoBrix: Python Documentation Tests"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 # Ensure sample-data Volumes structure exists on host (mount target for start_docker_with_volumes.sh)
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"

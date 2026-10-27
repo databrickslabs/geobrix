@@ -39,6 +39,7 @@ show_help() {
     echo -e "  ${GREEN}--parallel${NC}                Run tests in parallel (scoverage:test -T 1C then report-only)"
     echo -e "  ${GREEN}--log <path>${NC}              Write output to log file"
     echo -e "  ${GREEN}--open${NC}                    Open HTML report in browser"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                    Show this help"
     echo ""
     echo -e "${CYAN}Output:${NC}"
@@ -97,6 +98,10 @@ while [[ $# -gt 0 ]]; do
             ;;
         --open)
             OPEN_REPORT=true
+            shift
+            ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
             shift
             ;;
         --help|-h)
@@ -231,6 +236,7 @@ cd "$PROJECT_ROOT"
 show_banner "📦 GeoBrix: Package-Targeted Scala Coverage"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 echo -e "${CYAN}📦 Package: ${GREEN}$PACKAGE${NC}"
 [ -n "$CLASS_NAMES" ] && echo -e "${CYAN}🎯 Class(es) only: ${YELLOW}$CLASS_NAMES${NC}"

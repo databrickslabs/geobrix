@@ -27,6 +27,7 @@ show_help() {
     echo -e "  ${GREEN}--include-integration${NC}  Include integration tests (excluded by default)"
     echo -e "  ${GREEN}--skip-build${NC}           Skip Maven and Python build"
     echo -e "  ${GREEN}--no-sample-data-root${NC}   Do not set GBX_SAMPLE_DATA_ROOT (use env or path_config default)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                 This help"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
@@ -87,6 +88,10 @@ while [[ $# -gt 0 ]]; do
             SET_SAMPLE_DATA_ROOT=false
             shift
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -104,6 +109,7 @@ cd "$PROJECT_ROOT"
 show_banner "📚 GeoBrix: SQL Documentation Tests"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 mkdir -p "$PROJECT_ROOT/sample-data/Volumes/main/default/geobrix_samples"
 if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then

@@ -18,6 +18,7 @@ show_help() {
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     echo -e "  ${GREEN}--tags-to-exclude <tag>${NC}  Override tagsToExclude (use NoOpExcludeSentinel to un-exclude a tag)"
     echo -e "  ${GREEN}--verbose${NC}              Increase Maven verbosity (-X flag)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Log Path Behavior:${NC}"
@@ -68,6 +69,10 @@ while [[ $# -gt 0 ]]; do
             VERBOSE="-X"
             shift
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -86,6 +91,7 @@ cd "$PROJECT_ROOT"
 show_banner "🧪 GeoBrix: Scala Tests (Non-Docs)"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 # Package list for --by-package (same as CI matrix)
 GBX_PACKAGES="rasterx gridx vectorx ds expressions util"

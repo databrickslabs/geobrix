@@ -51,6 +51,7 @@ show_help() {
     echo -e "  ${GREEN}-k <expr>${NC}          Pytest keyword filter"
     echo -e "  ${GREEN}--skip-build${NC}       Reuse the staged JAR (fast; only if Scala is unchanged)"
     echo -e "  ${GREEN}--log <path>${NC}       Write output to log file (filename → test-logs/<name>)"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}             Show this help"
     echo ""
     echo -e "${CYAN}Why the rebuild is the default:${NC}"
@@ -76,6 +77,7 @@ while [[ $# -gt 0 ]]; do
         -k)           KEYWORD="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=true; shift ;;
         --log)        LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+        --no-wait)    GBX_LOCK_NO_WAIT=true; shift ;;
         --help|-h)    show_help; exit 0 ;;
         *)
             echo -e "${RED}❌ Unknown option: $1${NC}"; echo ""; show_help; exit 1 ;;
@@ -87,6 +89,7 @@ cd "$PROJECT_ROOT"
 show_banner "⚖️  GeoBrix: Cross-Tier Parity Tests"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 STAGE_DIR="$PROJECT_ROOT/python/geobrix/lib"
 

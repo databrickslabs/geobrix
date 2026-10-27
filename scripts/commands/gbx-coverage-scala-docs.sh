@@ -16,6 +16,7 @@ show_help() {
     echo -e "  ${GREEN}--report-only${NC}             Generate report from existing data (no re-test)"
     echo -e "  ${GREEN}--log <path>${NC}              Write output to log file"
     echo -e "  ${GREEN}--open${NC}                    Open HTML report in browser after generation"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                    Show this help"
     echo ""
     echo -e "${CYAN}Log Path Behavior:${NC}"
@@ -61,6 +62,10 @@ while [[ $# -gt 0 ]]; do
             OPEN_REPORT=true
             shift
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -79,6 +84,7 @@ cd "$PROJECT_ROOT"
 show_banner "📊 GeoBrix: Scala Docs Coverage"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 echo -e "${CYAN}🎯 Test suite: ${YELLOW}tests.docs.scala.*${NC}"
 echo -e "${CYAN}📊 Minimum coverage: ${YELLOW}$MIN_COVERAGE%${NC}"

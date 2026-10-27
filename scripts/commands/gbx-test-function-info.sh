@@ -21,6 +21,7 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--skip-generate${NC}  Skip the generator step; run only tests"
     echo -e "  ${GREEN}--log <path>${NC}    Write output to log file"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}          Show this help"
     echo ""
 }
@@ -36,6 +37,10 @@ while [[ $# -gt 0 ]]; do
         --log)
             LOG_PATH=$(resolve_log_path "$2")
             shift 2
+            ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
             ;;
         --help|-h)
             show_help
@@ -54,6 +59,7 @@ cd "$PROJECT_ROOT" || exit 1
 show_banner "🧪 GeoBrix: Function-Info Tests"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 # Run generator and pytest inside container (paths under /root/geobrix)
 RUN_CMD="set -e

@@ -14,6 +14,7 @@ bash scripts/commands/gbx-test-parity.sh [OPTIONS]
 - `-k <expr>` - Pytest keyword filter (e.g. `crs`)
 - `--skip-build` - Reuse the already-staged JAR (fast; only when Scala is unchanged)
 - `--log <path>` - Write output to a log file (filename → `test-logs/<name>`)
+- `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")
 - `--help` - Display help message
 
 ## Why this command exists
@@ -32,6 +33,15 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 - Before pushing a change that touches CRS handling, geometry encoding, or anything implemented in both tiers.
 - After changing any Scala expression that has a light-tier counterpart (the rebuild is what makes the heavy side current).
 - As the final gate for a both-tiers feature, alongside `gbx:test:bindings`.
+
+## One test run at a time
+
+This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the container test lock first: a `flock` on `/tmp/gbx-test.lock` inside the container, shared by every command that runs Maven or a test JVM there (`gbx:test:*`, `gbx:coverage:*`, `gbx:lint:scalastyle`, `gbx:bench:heavyweight`, and `gbx:docker:exec` with an `mvn` or `pytest` command), so two runs never share `target/`.
+
+- **Default: wait.** A second run prints one line naming the holder (its command and PID, read from the lock file) and waits, giving up after `GBX_TEST_LOCK_TIMEOUT` seconds (default `3600`) with exit 75.
+- **`--no-wait`: fail fast.** Exit 75 at once, naming the holder.
+- The log starts with this run's PID and the lock acquisition (`test lock acquired: pid <pid> <command>`), so a duplicate launch shows up.
+- The lock is released when the command exits, and also when it is killed. Do not detach a run with `&` or `nohup`: use the harness's `run_in_background`, which is tracked.
 
 ## Examples
 

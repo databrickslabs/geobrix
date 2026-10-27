@@ -38,6 +38,8 @@ COMMAND EXECUTION:
 OPTIONS:
     --interactive        Run command in interactive mode (keep TTY)
     --log <path>         Write output to log file (non-interactive only)
+    --no-wait            With a Maven or pytest command: fail at once (exit 75) if another
+                         test run holds the container lock, instead of waiting for it
     --help               Display this help message
 
 EXAMPLES:
@@ -58,6 +60,8 @@ EXAMPLES:
 
 NOTES:
     - Requires geobrix-dev container to be running
+    - A command that runs Maven (mvn) or pytest takes the container test lock first, so it never
+      overlaps another test run (see common.sh); everything else runs immediately
     - Interactive shells use -it flag (TTY)
     - Command execution uses standard docker exec
     - Logging only available for non-interactive commands
@@ -100,6 +104,10 @@ while [[ $# -gt 0 ]]; do
         --log)
             LOG_FILE=$(resolve_log_path "$2")
             shift 2
+            ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
             ;;
         --help)
             show_help
@@ -181,6 +189,13 @@ elif [ -n "$COMMAND" ]; then
         print_separator
     fi
     
+    # Maven and pytest runs share the container's target/ and Spark state with the gbx:test:*
+    # commands: one at a time (lock in common.sh). Other commands are not held up.
+    LOCK_RE='(^|[^[:alnum:]_.-])(mvn|pytest)([^[:alnum:]_-]|$)'
+    if [[ "$COMMAND" =~ $LOCK_RE ]]; then
+        gbx_acquire_test_lock
+    fi
+
     # Run the command under `set -o pipefail` so a failure anywhere in a pipeline
     # propagates (e.g. `mvn ... | tail` must surface mvn's non-zero exit, not tail's 0).
     # Without this the wrapper faithfully reports the last pipe stage's status, which

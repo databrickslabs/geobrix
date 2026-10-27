@@ -244,6 +244,130 @@ warn_if_docs_server_running() {
     fi
 }
 
+# ---------------------------------------------------------------------------------------
+# One container test run at a time.
+#
+# Maven and the Spark test JVMs of the gbx:test:*, gbx:coverage:* and build commands share the
+# container's target/ directory and Maven repository, so two overlapping runs corrupt each
+# other. Every such command calls gbx_acquire_test_lock once, right after check_docker (and
+# setup_log_file). The lock is a flock INSIDE geobrix-dev on a fixed path, so it covers every
+# caller of the container, whichever host shell or agent started it.
+#
+# How it is held: a short script runs inside the container, takes `flock` on
+# $GBX_TEST_LOCK_FILE, writes the holder (this script's pid and command line) into that file,
+# then blocks reading its stdin. Its stdin is a FIFO whose write end this shell keeps open, so
+# the lock lasts as long as this script (or any child it started) is alive and is released
+# when they all end, even if the script is killed. Nothing is detached or untracked.
+#
+#   default      wait for the lock, naming the holder once; give up after
+#                $GBX_TEST_LOCK_TIMEOUT seconds (default 3600) with exit 75.
+#   --no-wait    (GBX_LOCK_NO_WAIT=true) fail at once with exit 75, naming the holder.
+#
+# A gbx command run by a parent that already holds the lock (gbx:test:docs runs the three doc
+# suites) skips taking it: GBX_TEST_LOCK_HELD_BY carries the parent's pid.
+# ---------------------------------------------------------------------------------------
+GBX_TEST_LOCK_FILE="${GBX_TEST_LOCK_FILE:-/tmp/gbx-test.lock}"   # a path INSIDE geobrix-dev
+GBX_TEST_LOCK_TIMEOUT="${GBX_TEST_LOCK_TIMEOUT:-3600}"
+GBX_LOCK_NO_WAIT="${GBX_LOCK_NO_WAIT:-false}"
+# Command line of the script that sourced this file (written into the lock file and the log).
+GBX_LOCK_CMD="$(basename "${BASH_SOURCE[1]:-$0}") $*"
+GBX_LOCK_CMD="${GBX_LOCK_CMD:0:200}"
+
+# The script that runs inside the container and holds the flock (a function, so the heredoc
+# is parsed as a plain heredoc by bash 3.2 and nothing here trips `set -e`).
+gbx_lock_holder_script() {
+    cat <<'GBX_LOCK_EOF'
+# GBX_TEST_LOCK_HOLDER
+exec 9>>"$GBX_LOCK_FILE" || { echo "ERROR cannot open $GBX_LOCK_FILE"; exit 1; }
+chmod 666 "$GBX_LOCK_FILE" 2>/dev/null || true
+holder() { tr '\n' ' ' < "$GBX_LOCK_FILE" 2>/dev/null; }
+if ! flock -n 9; then
+    if [ "$GBX_LOCK_NO_WAIT" = true ]; then echo "BUSY $(holder)"; exit 75; fi
+    echo "WAITING $(holder)"
+    flock -w "$GBX_LOCK_TIMEOUT" 9 || { echo "TIMEOUT $(holder)"; exit 75; }
+fi
+printf '%s container_pid=%s\n' "$GBX_LOCK_INFO" "$$" > "$GBX_LOCK_FILE"
+trap ': > "$GBX_LOCK_FILE"' EXIT
+echo ACQUIRED
+cat > /dev/null
+GBX_LOCK_EOF
+}
+
+# The --no-wait line for a command's show_help.
+print_lock_help() {
+    echo -e "  ${GREEN}--no-wait${NC}              Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it"
+}
+
+# Take the container test lock, or exit 75. Call once after check_docker. Prints this run's
+# pid and the acquisition, so a duplicate launch is obvious in the log.
+gbx_acquire_test_lock() {
+    if [ -n "${GBX_TEST_LOCK_HELD_BY:-}" ]; then
+        echo -e "${CYAN}🔒 test lock: held by the parent command (pid ${GBX_TEST_LOCK_HELD_BY}); this run is pid $$${NC}"
+        return 0
+    fi
+    local info dir status fifo holder_pid line start="$SECONDS" next_note=30 waiting=false
+    info="pid=$$ cmd=${GBX_LOCK_CMD} since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    dir="$(mktemp -d "${TMPDIR:-/tmp}/gbx-lock.XXXXXX")" || return 1
+    status="$dir/status"
+    fifo="$dir/hold"
+    mkfifo "$fifo" || { rm -rf "$dir"; return 1; }
+    : > "$status"
+    # fd 7 (read-write, so opening never blocks) is the write end the lock depends on; the
+    # holder's stdin is a read-only open (fd 6) of the same FIFO, so it sees EOF only when
+    # every holder of fd 7 -- this script and its children -- is gone.
+    exec 7<>"$fifo" 6<"$fifo"
+    rm -f "$fifo"
+    docker exec -i \
+        -e GBX_LOCK_FILE="$GBX_TEST_LOCK_FILE" \
+        -e GBX_LOCK_TIMEOUT="$GBX_TEST_LOCK_TIMEOUT" \
+        -e GBX_LOCK_NO_WAIT="$GBX_LOCK_NO_WAIT" \
+        -e GBX_LOCK_INFO="$info" \
+        geobrix-dev /bin/bash -c "$(gbx_lock_holder_script)" \
+        <&6 >"$status" 2>&1 3>&- 7>&- 6<&- &
+    holder_pid=$!
+    exec 6<&-
+    while :; do
+        if grep -q '^ACQUIRED' "$status"; then
+            break
+        fi
+        if line="$(grep -E '^(BUSY|TIMEOUT|ERROR) ' "$status" | head -1)" && [ -n "$line" ]; then
+            wait "$holder_pid" 2>/dev/null
+            rm -rf "$dir"
+            exec 7<&-
+            case "$line" in
+                BUSY*)
+                    echo -e "${RED}❌ Another test run holds the container lock: ${line#BUSY }${NC}"
+                    echo -e "${YELLOW}   Not waiting (--no-wait). This run: pid $$ ${GBX_LOCK_CMD}${NC}" ;;
+                TIMEOUT*)
+                    echo -e "${RED}❌ Timed out after ${GBX_TEST_LOCK_TIMEOUT}s waiting for the container lock held by: ${line#TIMEOUT }${NC}" ;;
+                *)
+                    echo -e "${RED}❌ Could not take the container lock: ${line#ERROR }${NC}" ;;
+            esac
+            exit 75
+        fi
+        if ! kill -0 "$holder_pid" 2>/dev/null; then
+            echo -e "${RED}❌ The container lock helper exited without taking the lock:${NC}"
+            sed 's/^/   /' "$status"
+            rm -rf "$dir"
+            exec 7<&-
+            exit 75
+        fi
+        if [ "$waiting" = false ] && line="$(grep '^WAITING ' "$status" | head -1)" && [ -n "$line" ]; then
+            waiting=true
+            echo -e "${YELLOW}⏳ Another test run holds the container lock: ${line#WAITING }${NC}"
+            echo -e "${YELLOW}   Waiting up to ${GBX_TEST_LOCK_TIMEOUT}s (--no-wait fails at once). This run: pid $$ ${GBX_LOCK_CMD}${NC}"
+        fi
+        if [ "$waiting" = true ] && [ $((SECONDS - start)) -ge "$next_note" ]; then
+            echo -e "${YELLOW}   ...still waiting for the container lock ($((SECONDS - start))s)${NC}"
+            next_note=$((next_note + 30))
+        fi
+        sleep 0.2
+    done
+    rm -rf "$dir"
+    export GBX_TEST_LOCK_HELD_BY="$$"
+    echo -e "${GREEN}🔒 test lock acquired: pid $$ ${GBX_LOCK_CMD} (waited $((SECONDS - start))s; ${GBX_TEST_LOCK_FILE} in geobrix-dev)${NC}"
+}
+
 # Aliases for backward compatibility
 print_banner() { show_banner "$@"; }
 print_separator() { show_separator "$@"; }
@@ -278,7 +402,8 @@ run_in_pyrx_venv() {
 
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
-export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV
+export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
-          print_banner print_separator setup_log run_in_pyrx_venv validate_set 2>/dev/null || true
+          print_banner print_separator setup_log run_in_pyrx_venv validate_set \
+          gbx_lock_holder_script print_lock_help gbx_acquire_test_lock 2>/dev/null || true

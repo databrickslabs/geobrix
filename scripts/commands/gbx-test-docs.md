@@ -21,6 +21,7 @@ bash scripts/commands/gbx-test-docs.sh [OPTIONS]
 **Common**
 
 - `--log <path>` – Log file (filename → `test-logs/<name>`).
+- `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")
 - `--markers <markers>` – Pytest markers for Python (e.g. `"not slow"`).
 - `--include-integration` – Include Python integration tests (excluded by default).
 - `--skip-build` – Skip Maven and Python build before Python tests.
@@ -31,6 +32,15 @@ bash scripts/commands/gbx-test-docs.sh [OPTIONS]
 - `--help` – Help and examples.
 
 **Sample data (default):** The command sets `GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data` inside the container so doc tests use the minimal bundle (host path `sample-data/Volumes/main/default/test-data`). This is required for running docs unit tests on remote/CI. Use `--no-sample-data-root` to leave it unset (e.g. to use a full bundle or your own env).
+
+## One test run at a time
+
+This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the container test lock first: a `flock` on `/tmp/gbx-test.lock` inside the container, shared by every command that runs Maven or a test JVM there (`gbx:test:*`, `gbx:coverage:*`, `gbx:lint:scalastyle`, `gbx:bench:heavyweight`, and `gbx:docker:exec` with an `mvn` or `pytest` command), so two runs never share `target/`. It holds the lock for the whole run; the doc suites it runs skip taking it.
+
+- **Default: wait.** A second run prints one line naming the holder (its command and PID, read from the lock file) and waits, giving up after `GBX_TEST_LOCK_TIMEOUT` seconds (default `3600`) with exit 75.
+- **`--no-wait`: fail fast.** Exit 75 at once, naming the holder.
+- The log starts with this run's PID and the lock acquisition (`test lock acquired: pid <pid> <command>`), so a duplicate launch shows up.
+- The lock is released when the command exits, and also when it is killed. Do not detach a run with `&` or `nohup`: use the harness's `run_in_background`, which is tracked.
 
 ## Examples
 

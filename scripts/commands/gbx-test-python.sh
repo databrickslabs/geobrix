@@ -17,6 +17,7 @@ show_help() {
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     echo -e "  ${GREEN}--with-integration${NC}     Include ${YELLOW}@pytest.mark.integration${NC} tests (network downloads, slow); excluded by default"
     echo -e "  ${GREEN}--markers <expr>${NC}        Override marker filter with a pytest expression (e.g. 'not slow'); disables the default 'not integration' filter"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
     echo -e "${CYAN}Phases (no --path):${NC} the heavy and light tiers cannot share one pytest process, so the default"
@@ -86,6 +87,10 @@ while [[ $# -gt 0 ]]; do
             MARKERS="-m '$2'"
             shift 2
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -107,6 +112,7 @@ cd "$PROJECT_ROOT"
 show_banner "🐍 GeoBrix: Python Tests (Non-Docs)"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 # Python tests run against the assembly JAR (spark.jars); warn if it predates Scala sources.
 warn_if_jar_stale "$PROJECT_ROOT"

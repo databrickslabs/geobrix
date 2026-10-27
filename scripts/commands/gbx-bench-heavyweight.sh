@@ -35,6 +35,8 @@ Options:
   --warmup <n>        Warmup iters (default 2)
   --measured <n>      Measured iters (default 5)
   --log <path>        Tee output under test-logs/
+  --no-wait           Fail at once (exit 75) if another test run holds the container lock,
+                      instead of waiting for it
   --help, -h          Show help
 EOF
 }
@@ -50,6 +52,7 @@ while [[ $# -gt 0 ]]; do case $1 in
     --warmup) WARMUP="$2"; shift 2 ;;
     --measured) MEASURED="$2"; shift 2 ;;
     --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+    --no-wait) GBX_LOCK_NO_WAIT=true; shift ;;
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
 esac; done
@@ -59,6 +62,7 @@ show_banner "gbx:bench:heavyweight"
 validate_set "$SET" || exit 1
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 [[ -z "$OUT" ]] && OUT="/root/geobrix/test-logs/bench/${RUN_ID}/heavyweight.jsonl"
 

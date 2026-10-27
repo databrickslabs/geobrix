@@ -16,6 +16,7 @@ show_help() {
     echo -e "  ${GREEN}--min-coverage <percent>${NC}  Minimum coverage threshold"
     echo -e "  ${GREEN}--log <path>${NC}              Write output to log file"
     echo -e "  ${GREEN}--open${NC}                    Open HTML report in browser after generation"
+    print_lock_help
     echo -e "  ${GREEN}--help${NC}                    Show this help"
     echo ""
     echo -e "${CYAN}Log Path Behavior:${NC}"
@@ -57,6 +58,10 @@ while [[ $# -gt 0 ]]; do
             OPEN_REPORT=true
             shift
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         --help|-h)
             show_help
             exit 0
@@ -75,6 +80,7 @@ cd "$PROJECT_ROOT"
 show_banner "📊 GeoBrix: Python Code Coverage (Non-Docs)"
 check_docker
 setup_log_file "$LOG_PATH"
+gbx_acquire_test_lock
 
 echo -e "${CYAN}🎯 Test path: ${YELLOW}$TEST_PATH${NC}"
 if [ -n "$MIN_COVERAGE" ]; then

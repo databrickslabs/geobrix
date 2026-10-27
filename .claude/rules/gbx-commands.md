@@ -19,6 +19,7 @@ When adding a new `gbx:<category>:<action>` command (or fixing an existing one �
    - Exit with a non-zero code on failure; let it propagate from Docker/Maven/pytest.
 4. **Make executable**: `chmod +x scripts/commands/gbx-<category>-<action>.sh`.
 5. **Fixing a broken command**: reproduce the failure, fix the script (or its `.md`), re-run to confirm, commit. Don't add fallback ad-hoc shell invocations elsewhere.
+6. **Never detach a run with `&`, `nohup` or `( … &)`.** Use the harness's `run_in_background`, which is tracked: a detached run is invisible and the next run overlaps it (two Maven JVMs ended up on one `target/` this way). Commands that run Maven or a Spark test JVM in `geobrix-dev` take the container test lock (`gbx_acquire_test_lock` in `common.sh`: wait by default, `--no-wait` exits 75) — a new such command must call it and document `--no-wait`.
 
 The `.md` files are legacy Cursor command-palette registrations; commands are now invoked directly
 from any shell or via the Task tool (path math via `$SCRIPT_DIR/../..`).

@@ -61,8 +61,8 @@ object RST_DerivedBand extends WithExpressionInfo {
             new ValidMask(dss.head).read(0, 0, w, h, valid)
             var i = 0
             while (i < valid.length) { valid(i) = if (valid(i) != 0) 255.toByte else 0.toByte; i += 1 }
-            result.CreateMaskBand(GMF_PER_DATASET)
-            result.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, w, h, valid)
+            GDAL.requireOk(result.CreateMaskBand(GMF_PER_DATASET), "creating the mask band of the derived band")
+            GDAL.requireOk(result.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, w, h, valid), "writing the validity of the derived band")
             result.FlushCache()
         }
         (result, resultMtd)

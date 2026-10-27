@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.pixel
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver, ValidMask}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -10,7 +10,7 @@ import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.catalyst.util.{ArrayBasedMapData, ArrayData, GenericArrayData, MapData}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
-import org.gdal.gdal.{Dataset, gdal}
+import org.gdal.gdal.Dataset
 import org.gdal.gdalconst.gdalconstConstants.GMF_PER_DATASET
 
 /**
@@ -150,18 +150,19 @@ object RST_Histogram extends WithExpressionInfo {
                     val eps = if (lo == 0.0) 1.0 else math.abs(lo) * 1e-9 + 1e-12
                     (lo, lo + eps)
                 }
-            val counts = new Array[Int](nBuckets)
+            val counts = new Array[Long](nBuckets)
             // GetHistogram signature (Java binding):
             //   int GetHistogram(double min, double max, int[] panHistogram,
             //                    boolean bIncludeOutOfRange, boolean bApproxOK)
             if (gated) validHistogram(ds, b, loEff, hiEff, counts)
-            else band.GetHistogram(loEff, hiEff, counts, false, false)
-            // Widen to Long for the MAP<STRING, ARRAY<LONG>> return shape.
-            var i = 0
-            while (i < nBuckets) {
-                buckets(i) = counts(i).toLong
-                i += 1
+            else {
+                val gdalCounts = new Array[Int](nBuckets)
+                band.GetHistogram(loEff, hiEff, gdalCounts, false, false)
+                // Widen to Long for the MAP<STRING, ARRAY<LONG>> return shape.
+                var i = 0
+                while (i < nBuckets) { counts(i) = gdalCounts(i).toLong; i += 1 }
             }
+            java.lang.System.arraycopy(counts, 0, buckets, 0, nBuckets)
             result += (s"band_$b" -> buckets.clone())
             b += 1
         }
@@ -169,34 +170,41 @@ object RST_Histogram extends WithExpressionInfo {
     }
 
     /**
-      * GDAL's histogram of the pixels of band `b` of `ds` that are valid for it ([[ValidMask.readBand]]): the
-      * band is copied, strip by strip, into an in-memory dataset of the same data type whose mask band is that
-      * validity, and `GetHistogram` runs on the copy, so the bucket rule is GDAL's own. Memory: one copy of the
-      * band plus its mask.
+      * Adds to `counts` GDAL's histogram of the pixels of band `b` of `ds` that are valid for it
+      * ([[ValidMask.readBand]]). The band is copied, strip by strip, into a new in-memory dataset of the same data
+      * type whose mask band is that validity, and `GetHistogram` runs on each strip with the same range and
+      * buckets, so the bucket rule is GDAL's own and the counts of the strips add up to those of the band.
+      * Memory: one strip (at most [[ValidMask.StripPixels]] pixels: the copy, its mask, and the Double and Byte
+      * read buffers), whatever the size of the band. (A strip has its own dataset: GDAL's block cache of a reused
+      * in-memory dataset serves the previous strip's blocks to the next histogram.)
       */
-    private def validHistogram(ds: Dataset, b: Int, lo: Double, hi: Double, counts: Array[Int]): Unit = {
+    private def validHistogram(ds: Dataset, b: Int, lo: Double, hi: Double, counts: Array[Long]): Unit = {
         val (xSize, ySize) = (ds.GetRasterXSize(), ds.GetRasterYSize())
         val src            = ds.GetRasterBand(b)
-        val copy           = gdal.GetDriverByName("MEM").Create("", xSize, ySize, 1, src.getDataType)
-        try {
-            copy.CreateMaskBand(GMF_PER_DATASET)
-            val dst  = copy.GetRasterBand(1)
-            val mask = dst.GetMaskBand()
-            val rows = math.max(1, math.min(ySize, ValidMask.StripPixels / math.max(1, xSize)))
-            val data = new Array[Double](xSize * rows)
-            val ok   = new Array[Byte](xSize * rows)
-            val validity = new ValidMask(ds)
-            var y0 = 0
-            while (y0 < ySize) {
-                val h = math.min(rows, ySize - y0)
-                src.ReadRaster(0, y0, xSize, h, data)
-                validity.readBand(b, 0, y0, xSize, h, ok)
-                dst.WriteRaster(0, y0, xSize, h, data)
-                mask.WriteRaster(0, y0, xSize, h, ok)
-                y0 += h
-            }
-            dst.GetHistogram(lo, hi, counts, false, false)
-        } finally copy.delete()
+        val rows           = math.max(1, math.min(ySize, ValidMask.StripPixels / math.max(1, xSize)))
+        val data           = new Array[Double](xSize * rows)
+        val ok             = new Array[Byte](xSize * rows)
+        val part           = new Array[Int](counts.length)
+        val validity       = new ValidMask(ds)
+        var y0 = 0
+        while (y0 < ySize) {
+            val h    = math.min(rows, ySize - y0)
+            val what = s"band $b, rows $y0..${y0 + h - 1}"
+            GDAL.requireOk(src.ReadRaster(0, y0, xSize, h, data), s"reading $what")
+            validity.readBand(b, 0, y0, xSize, h, ok)
+            val strip = GDALManager.memDriver().Create("", xSize, h, 1, src.getDataType)
+            try {
+                GDAL.requireOk(strip.CreateMaskBand(GMF_PER_DATASET), s"creating the mask band of the histogram of $what")
+                val dst = strip.GetRasterBand(1)
+                GDAL.requireOk(dst.WriteRaster(0, 0, xSize, h, data), s"copying $what")
+                GDAL.requireOk(dst.GetMaskBand().WriteRaster(0, 0, xSize, h, ok), s"copying the validity of $what")
+                java.util.Arrays.fill(part, 0)
+                GDAL.requireOk(dst.GetHistogram(lo, hi, part, false, false), s"the histogram of $what")
+            } finally strip.delete()
+            var i = 0
+            while (i < part.length) { counts(i) += part(i).toLong; i += 1 }
+            y0 += h
+        }
     }
 
     override def name: String = "gbx_rst_histogram"

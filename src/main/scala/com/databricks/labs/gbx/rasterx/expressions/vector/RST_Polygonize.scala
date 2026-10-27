@@ -94,8 +94,9 @@ object RST_Polygonize extends WithExpressionInfo {
             if (GDAL.hasAlphaBesideData(ds)) {
                 val valid = new Array[Byte](ds.GetRasterXSize * ds.GetRasterYSize)
                 new ValidMask(ds).readBand(band, 0, 0, ds.GetRasterXSize, ds.GetRasterYSize, valid)
-                val memDs = gdal.GetDriverByName("MEM").Create("", ds.GetRasterXSize, ds.GetRasterYSize, 1, gdalconstConstants.GDT_Byte)
-                memDs.GetRasterBand(1).WriteRaster(0, 0, ds.GetRasterXSize, ds.GetRasterYSize, valid)
+                val memDs = GDALManager.memDriver().Create("", ds.GetRasterXSize, ds.GetRasterYSize, 1, gdalconstConstants.GDT_Byte)
+                try GDAL.requireOk(memDs.GetRasterBand(1).WriteRaster(0, 0, ds.GetRasterXSize, ds.GetRasterYSize, valid), "writing the validity of the band")
+                catch { case e: Throwable => memDs.delete(); throw e }
                 memDs
             } else null
         val maskBand = if (validityDs != null) validityDs.GetRasterBand(1) else srcBand.GetMaskBand()

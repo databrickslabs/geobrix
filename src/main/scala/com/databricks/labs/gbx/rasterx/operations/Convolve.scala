@@ -119,7 +119,7 @@ object Convolve {
                     System.arraycopy(resultBuf, (ty + dy) * current.width + dx, trimBuf, ty * w, w)
                     ty += 1
                 }
-                outputBand.WriteRaster(xOffset, yOffset, w, h, trimBuf)
+                GDAL.requireOk(outputBand.WriteRaster(xOffset, yOffset, w, h, trimBuf), s"writing the convolved block at ($xOffset, $yOffset)")
 
                 xOffset += xBlockSize
             }

@@ -169,6 +169,12 @@ object GDAL {
     def hasAlphaBesideData(ds: org.gdal.gdal.Dataset): Boolean =
         ds.GetRasterCount() > 1 && alphaBandIndex(ds).isDefined
 
+    /** Throws when a GDAL call that reports failure by its return code (`ReadRaster`, `WriteRaster`,
+      * `CreateMaskBand`, `GetHistogram`) did not return `CE_None`, with GDAL's last error message: such a call
+      * does not throw, so an unchecked failure leaves a half-written result that reads as a valid one. */
+    private[rasterx] def requireOk(rc: Int, what: String): Unit =
+        if (rc != CE_None) throw new IllegalStateException(s"$what failed: ${gdal.GetLastErrorMsg()}")
+
     /** True when the multi-dimensional statistics GDAL computes for the bands of `ds`
       * (`AsMDArray().GetStatistics()`: `rst_avg`, `rst_pixelcount`) would count pixels that are not valid for the
       * band, so they are computed over [[com.databricks.labs.gbx.rasterx.gdal.ValidMask.readBand]] instead: `ds`

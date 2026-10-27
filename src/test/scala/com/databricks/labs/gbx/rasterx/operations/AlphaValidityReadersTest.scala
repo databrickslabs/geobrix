@@ -54,12 +54,15 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         l: Layout,
         value: (Int, Boolean) => Double = AlphaValidityReadersTest.pattern,
         size: Int = 4,
-        maskedColumn0: Boolean = false
+        maskedColumn0: Boolean = false,
+        blockSize: Int = 0,
+        pixel: Option[(Int, Int) => Double] = None
     ): Dataset = {
         val rgb = l.interps.take(3) == Seq(GCI_RedBand, GCI_GreenBand, GCI_BlueBand)
+        val tiling = if (blockSize > 0) Array("TILED=YES", s"BLOCKXSIZE=$blockSize", s"BLOCKYSIZE=$blockSize") else Array.empty[String]
         val ds = GDALManager.gtiffDriver().Create(
           s"/vsimem/alphareaders_${UUID.randomUUID().toString.replace("-", "")}.tif", size, size, l.count, GDT_Byte,
-          Array(s"PHOTOMETRIC=${if (rgb) "RGB" else "MINISBLACK"}")
+          Array(s"PHOTOMETRIC=${if (rgb) "RGB" else "MINISBLACK"}") ++ tiling
         )
         ds.SetGeoTransform(Array(10.0, 0.5, 0.0, 50.0, 0.0, -0.5))
         val sr = new SpatialReference()
@@ -69,7 +72,10 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         l.interps.zipWithIndex.foreach { case (c, i) => ds.GetRasterBand(i + 1).SetColorInterpretation(c) }
         (0 until l.count).foreach { i =>
             val last = i == l.count - 1
-            ds.GetRasterBand(i + 1).WriteRaster(0, 0, size, size, Array.tabulate(size * size)(p => value(p / size, last)))
+            val px = pixel.filter(_ => !last || !l.alphaLast)
+            ds.GetRasterBand(i + 1).WriteRaster(
+              0, 0, size, size, Array.tabulate(size * size)(p => px.map(f => f(p / size, p % size)).getOrElse(value(p / size, last)))
+            )
         }
         if (maskedColumn0) {
             ds.CreateMaskBand(GMF_PER_DATASET)
@@ -220,6 +226,25 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
+    test("the histogram of a raster larger than a strip adds up the strips, the shorter last one included") {
+        // 1100 x 1100 is 1,210,000 pixels: a strip of 953 rows (ValidMask.StripPixels / 1100) and one of 147. Band 1 holds
+        // row % 8, and every 10th row is transparent; the buckets are those of [0, 8) over 8 buckets.
+        val n  = 1100
+        val ds = fixture(GrayXA, (row, last) => if (last) (if (row % 10 == 0) 0.0 else 255.0) else (row % 8).toDouble, size = n)
+        try {
+            val got = RST_Histogram.execute(ds, 8, Some(0.0), Some(8.0), includeNodata = false)("band_1")
+            val want = Array.tabulate(8)(k => (0 until n).count(r => r % 10 != 0 && r % 8 == k).toLong * n)
+            assert(got.toSeq == want.toSeq, s"${got.toSeq} vs ${want.toSeq}")
+            assert(n * n > ValidMask.StripPixels)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    test("GDAL.requireOk passes CE_None and throws, with GDAL's message, for any other code") {
+        GDAL.requireOk(CE_None, "a call that worked")
+        val e = intercept[IllegalStateException](GDAL.requireOk(CE_Failure, "writing the validity"))
+        assert(e.getMessage.startsWith("writing the validity failed"), e.getMessage)
+    }
+
     test("the heavy summary holds no statistics to judge: it is the gdalinfo structure of the raster") {
         val ds = fixture(GrayXA)
         try {
@@ -274,6 +299,27 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
                     5.0 * rows * cols
                 }
                 assert(px.toSeq == want.toSeq, px.toSeq.toString)
+            } finally RasterDriver.releaseDataset(out)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    test("Convolve over several blocks gives the zero-padded sum at every pixel, those at the block borders included") {
+        // 40 x 40 in tiles of 16 (blocks of 16, 16 and 8): each pixel is the sum of its in-bounds 3 x 3 neighbours, the
+        // neighbour blocks' pixels among them, and lands where it is. The values are 0..6, so the sums fit a Byte.
+        val (n, value) = (40, (r: Int, c: Int) => ((r * 3 + c * 5 + (r * c) % 4) % 7).toDouble)
+        val ds = fixture(RgbNir.copy(interps = Seq(GCI_GrayIndex)), (_, _) => 0.0, size = n, blockSize = 16, pixel = Some(value))
+        try {
+            assert(ds.GetRasterBand(1).GetBlockXSize == 16 && ds.GetRasterBand(1).GetBlockYSize == 16)
+            val (out, _) = Convolve.convolve(ds, Map.empty[String, String], Array.fill(3, 3)(1.0))
+            try {
+                val px = new Array[Double](n * n)
+                out.GetRasterBand(1).ReadRaster(0, 0, n, n, px)
+                val want = Array.tabulate(n * n) { p =>
+                    val (r, c) = (p / n, p % n)
+                    (for (dr <- -1 to 1; dc <- -1 to 1 if r + dr >= 0 && r + dr < n && c + dc >= 0 && c + dc < n) yield value(r + dr, c + dc)).sum
+                }
+                val bad = (0 until n * n).filter(p => px(p) != want(p))
+                if (bad.nonEmpty) fail(s"${bad.size} pixels differ, the first at row ${bad.head / n}, column ${bad.head % n}")
             } finally RasterDriver.releaseDataset(out)
         } finally RasterDriver.releaseDataset(ds)
     }

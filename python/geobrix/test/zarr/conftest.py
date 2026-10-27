@@ -36,7 +36,7 @@ def pytest_collection_modifyitems(config, items):
     starts Spark in the fast loop.
     """
     for item in items:
-        if _HERE in Path(item.path).parents and any(
+        if _HERE in Path(item.path).resolve().parents and any(
             "spark" in name.lower() for name in item.fixturenames
         ):
             item.add_marker(pytest.mark.delta)

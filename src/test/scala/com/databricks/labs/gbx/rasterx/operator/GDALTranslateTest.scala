@@ -233,6 +233,80 @@ class GDALTranslateTest extends AnyFunSuite with BeforeAndAfterAll {
         succeed
     }
 
+    // The Zarr driver has no DEFLATE (the heavyweight default codec) and no PREDICTOR; its zlib codec is ZLIB, and its
+    // levels are ZLIB_LEVEL / ZSTD_LEVEL. Which codecs it has depends on the GDAL build, so the driver is asked.
+    private def zarrCommand(writeOptions: Map[String, String]): String = {
+        assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
+        OperatorOptions.appendOptions("gdal_translate", writeOptions + ("format" -> "Zarr"), ds)
+    }
+
+    test("appendOptions maps the default DEFLATE to the Zarr driver's ZLIB, with its level and no predictor") {
+        val cmd = zarrCommand(Map.empty)
+        cmd should include("-of Zarr")
+        cmd should include("-co COMPRESS=ZLIB")
+        cmd should include("-co ZLIB_LEVEL=6")
+        cmd should not include "DEFLATE"
+        cmd should not include "PREDICTOR"
+        cmd should not include "ZLEVEL"
+
+        val explicit = zarrCommand(Map("compression" -> "deflate", "zlevel" -> "3"))
+        explicit should include("-co COMPRESS=ZLIB")
+        explicit should include("-co ZLIB_LEVEL=3")
+    }
+
+    test("appendOptions keeps ZSTD for the Zarr driver, with its level and no predictor") {
+        val cmd = zarrCommand(Map("compression" -> "ZSTD"))
+        cmd should include("-co COMPRESS=ZSTD")
+        cmd should include("-co ZSTD_LEVEL=9")
+        cmd should not include "PREDICTOR"
+        zarrCommand(Map("compression" -> "ZSTD", "zstd_level" -> "3")) should include("-co ZSTD_LEVEL=3")
+    }
+
+    test("appendOptions passes the other Zarr codecs through, and keeps SRC_METHOD for a raster without georeferencing") {
+        for (codec <- Seq("NONE", "ZLIB", "GZIP", "LZMA")) {
+            val cmd = zarrCommand(Map("compression" -> codec))
+            withClue(s"$codec: ") { cmd should include(s"-co COMPRESS=$codec") }
+        }
+        val noGeoRef = zarrCommand(Map("missingGeoRef" -> "true"))
+        noGeoRef should include("SRC_METHOD=NO_GEOTRANSFORM")
+        noGeoRef should include("-co COMPRESS=ZLIB")
+    }
+
+    test("appendOptions refuses a codec the Zarr driver lacks and names the ones it has") {
+        for (codec <- Seq("LZW", "JPEG")) {
+            val e = intercept[IllegalArgumentException](zarrCommand(Map("compression" -> codec)))
+            withClue(s"$codec: ${e.getMessage}: ") {
+                e.getMessage should (include(codec) and include("Zarr") and include("NONE") and include("ZLIB") and include("ZSTD"))
+                // DEFLATE is accepted and written as ZLIB, so the message says so.
+                e.getMessage should include("DEFLATE")
+            }
+        }
+    }
+
+    test("appendOptions leaves the GTiff and COG codecs alone") {
+        OperatorOptions.appendOptions("gdal_translate", Map("format" -> "GTiff"), ds) should include("-co COMPRESS=DEFLATE")
+        OperatorOptions.appendOptions("gdal_translate", Map("format" -> "COG"), ds) should include("-co COMPRESS=DEFLATE")
+        // LZW is a TIFF codec; only the Zarr driver refuses it.
+        OperatorOptions.appendOptions("gdal_translate", Map("compression" -> "LZW"), ds) should include("-co COMPRESS=LZW")
+    }
+
+    test("GDALTranslate writes a Zarr store with default options, and the store holds the source's pixels") {
+        assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
+        for (compression <- Seq(None, Some("ZSTD"), Some("NONE"))) {
+            val outputPath = s"/vsimem/translated_default_${compression.getOrElse("default")}.zarr"
+            val options = Map("format" -> "Zarr") ++ compression.map("compression" -> _)
+            val (resultDs, metadata) = GDALTranslate.executeTranslate(outputPath, ds, "gdal_translate", options)
+            try {
+                withClue(s"${compression.getOrElse("default")}: ${metadata("last_error")}: ") { resultDs should not be null }
+                resultDs.GetDriver().getShortName shouldBe "Zarr"
+                resultDs.GetRasterBand(1).Checksum() shouldBe ds.GetRasterBand(1).Checksum()
+            } finally {
+                if (resultDs != null) resultDs.delete()
+                gdal.RmdirRecursive(outputPath)
+            }
+        }
+    }
+
     test("GDALTranslate should use DEFLATE+PREDICTOR for float datasets by default") {
         // Create a Float32 dataset
         val driver = gdal.GetDriverByName("MEM")

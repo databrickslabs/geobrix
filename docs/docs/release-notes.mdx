@@ -285,6 +285,15 @@ formats.
 
 ### Raster writers
 
+- **The heavyweight `gdal` writer writes Zarr with its default options.** The default compression,
+  DEFLATE, is a TIFF codec name the Zarr driver does not have, so a Zarr write failed with
+  `Compressor/decompressor for DEFLATE not available` unless the tile's `compression` named a Zarr
+  codec. The writer now writes DEFLATE as `ZLIB` (the same zlib stream, with `zlevel` as its level)
+  and keeps `ZSTD` (with `zstd_level`); `NONE`, `GZIP` and `LZMA` pass through. Any other codec,
+  such as `LZW`, raises an error that names the codecs the Zarr driver of the GDAL build does have.
+- **The heavyweight `gdal` and `gtiff_gdal` writers refuse an output name that leaves the target
+  directory.** A `nameCol` value with a `..` segment or starting with `/` would have written outside
+  the target (an absolute name also left its file behind); the write now raises and names the value.
 - **`cog_gbx` writes sources with a non-byte-aligned bit depth.** Rasters whose band is
   tagged with an `NBITS` such as 15 (common for Sentinel-2 `uint16` products) failed to
   convert with `PREDICTOR=2 is only supported with 8/16/32/64 bit samples`. The writer now

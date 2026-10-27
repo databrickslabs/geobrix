@@ -223,6 +223,10 @@ produced (e.g. via `RST_AsFormat`); the writer honors them on serialization.
 | `zlevel` | `6` | DEFLATE level. |
 | `zstd_level` | `9` | ZSTD level. |
 
+For a `Zarr` output the Zarr driver's own codecs apply: `DEFLATE` is written as `ZLIB` (with
+`zlevel`), `ZSTD` keeps its name (with `zstd_level`), and `NONE`, `GZIP` and `LZMA` also work. A
+codec the driver lacks, such as `LZW`, raises an error that names the ones it has.
+
 <CodeFromTest code={gdalWriteExamples} language="python" functionName="ENCODING_FROM_METADATA"
   source="docs/tests/python/writers/gdal_examples.py" />
 

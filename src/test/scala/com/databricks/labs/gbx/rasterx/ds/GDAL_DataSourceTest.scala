@@ -14,13 +14,17 @@ import org.apache.spark.sql.functions._
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.{StringType, StructField, StructType}
 import org.apache.spark.unsafe.types.UTF8String
-import org.gdal.gdal.gdal
+import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants
 import org.scalatest.matchers.must.Matchers.be
 import org.scalatest.matchers.should.Matchers.{convertToAnyShouldWrapper, empty, include, noException}
 
+import java.nio.ByteOrder
 import java.nio.file.{Files, Paths}
+import java.security.MessageDigest
 import scala.jdk.CollectionConverters._
+import scala.sys.process._
+import scala.util.Try
 import org.apache.spark.sql.functions.{concat, lit, monotonically_increasing_id}
 
 // Idle retention is off, so a released node-file copy is gone at once.
@@ -290,7 +294,7 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
     test("GDAL writer replaces a directory-format (Zarr) output written again under the same name") {
         GDALManager.init(ExpressionConfig(spark))
         assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
-        // Written as an uncompressed Zarr (Zarr has no DEFLATE codec, the writer's default).
+        // Written as an uncompressed Zarr, so this test is about the replacement and not the codec.
         val asZarr = Map("driver" -> "GTiff", "format" -> "Zarr", "compression" -> "NONE")
         val checksum = (p: String) => {
             val ds = gdal.Open(p)
@@ -312,6 +316,93 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
         }
     }
 
+    // Tile metadata that names the Zarr format and no codec: the writer's default codec (DEFLATE) applies.
+    private val zarrDefaults = Map("driver" -> "GTiff", "format" -> "Zarr")
+
+    private def requireZarrDriver(): Unit = {
+        GDALManager.init(ExpressionConfig(spark))
+        assume(gdal.GetDriverByName("Zarr") != null, "this GDAL build has no Zarr driver")
+    }
+
+    /** Band 1 of the raster at `path` as Int32 values, row by row. */
+    private def bandValues(path: String): (Int, Int, Array[Int]) = {
+        val ds = gdal.Open(path)
+        try {
+            val (w, h) = (ds.getRasterXSize, ds.getRasterYSize)
+            val values = new Array[Int](w * h)
+            ds.GetRasterBand(1).ReadRaster(0, 0, w, h, w, h, gdalconstConstants.GDT_Int32, values)
+            (w, h, values)
+        } finally ds.delete()
+    }
+
+    /** The `.zarray` of the data array of a Zarr store, as text: the array is named for the file. The store also holds
+      * uncompressed arrays for its coordinates. */
+    private def dataArrayText(store: java.nio.file.Path, name: String): String =
+        Files.readString(store.resolve(name).resolve(".zarray"))
+
+    private def md5LittleEndianInt32(values: Array[Int]): String = {
+        val bytes = java.nio.ByteBuffer.allocate(values.length * 4).order(ByteOrder.LITTLE_ENDIAN)
+        bytes.asIntBuffer().put(values)
+        MessageDigest.getInstance("MD5").digest(bytes.array()).map(b => f"${b & 0xff}%02x").mkString
+    }
+
+    test("GDAL writer writes Zarr with default options and gdal reads the store back with the source's values") {
+        requireZarrDriver()
+        withScratchDir("gdal_zarr_default_") { out =>
+            nameColWriter(out, "zarr").write(bandRow("dflt", "B01", zarrDefaults))
+            val zarr = out.resolve("dflt.zarr")
+            withClue(s"$zarr after the write: ") { Files.isDirectory(zarr) shouldBe true }
+            val (w, h, written) = bandValues(zarr.toString)
+            val (sw, sh, source) = bandValues(modisBand("B01").toString)
+            (w, h) shouldBe ((sw, sh))
+            withClue("pixel values read back from the Zarr store: ") { java.util.Arrays.equals(written, source) shouldBe true }
+            // DEFLATE has no Zarr codec of that name: the store holds the same zlib stream as ZLIB.
+            withClue(s"the data array of $zarr: ") { dataArrayText(zarr, "dflt") should include regex """"id"\s*:\s*"zlib"""" }
+        }
+    }
+
+    test("GDAL writer writes Zarr with default options and zarr-python reads the store back with the source's values") {
+        requireZarrDriver()
+        val script =
+            """import hashlib, sys, numpy as np, zarr
+              |g = zarr.open_group(sys.argv[1], mode="r")
+              |a = np.asarray(g[sys.argv[2]][...]) # the data array is named for the file; the store also holds coordinate arrays
+              |print(a.shape[0], a.shape[1], hashlib.md5(np.ascontiguousarray(a.astype("<i4")).tobytes()).hexdigest())
+              |""".stripMargin
+        val python = Seq("python3", "-I", "-c", script)
+        val probe = Try(Seq("python3", "-I", "-c", "import zarr, numpy").!(ProcessLogger(_ => ()))).getOrElse(-1)
+        assume(probe == 0, "python3 with zarr and numpy is not available")
+        withScratchDir("gdal_zarr_python_") { out =>
+            nameColWriter(out, "zarr").write(bandRow("dflt", "B01", zarrDefaults))
+            val zarr = out.resolve("dflt.zarr")
+            val (stdout, stderr) = (new StringBuilder, new StringBuilder)
+            val exit = (python ++ Seq(zarr.toString, "dflt")).!(ProcessLogger(l => stdout.append(l), l => stderr.append(l).append('\n')))
+            val (sw, sh, source) = bandValues(modisBand("B01").toString)
+            withClue(s"zarr-python exit $exit, stdout '$stdout', stderr: $stderr") {
+                exit shouldBe 0
+                stdout.toString.trim shouldBe s"$sh $sw ${md5LittleEndianInt32(source)}"
+            }
+        }
+    }
+
+    test("GDAL writer keeps a Zarr codec the tile names and refuses one the Zarr driver lacks") {
+        requireZarrDriver()
+        val (_, _, source) = bandValues(modisBand("B01").toString)
+        withScratchDir("gdal_zarr_codec_") { out =>
+            val writer = nameColWriter(out, "zarr")
+            writer.write(bandRow("zstd", "B01", zarrDefaults + ("compression" -> "ZSTD")))
+            val zstd = out.resolve("zstd.zarr")
+            withClue(s"the data array of $zstd: ") { dataArrayText(zstd, "zstd") should include regex """"id"\s*:\s*"zstd"""" }
+            withClue("pixel values read back from the ZSTD store: ") {
+                java.util.Arrays.equals(bandValues(zstd.toString)._3, source) shouldBe true
+            }
+            // LZW is a TIFF codec: the error names the codec and the ones the Zarr driver does have.
+            val e = intercept[IllegalArgumentException](writer.write(bandRow("lzw", "B01", zarrDefaults + ("compression" -> "LZW"))))
+            e.getMessage should (include("LZW") and include("ZLIB") and include("ZSTD") and include("NONE"))
+            withClue(s"output left for the refused write: ") { Files.exists(out.resolve("lzw.zarr")) shouldBe false }
+        }
+    }
+
     test("GDAL writer refuses an output name with a '..' segment, which would write outside its root") {
         GDALManager.init(ExpressionConfig(spark))
         withScratchDir("gdal_dotdot_out_") { out =>
@@ -330,7 +421,25 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
         }
     }
 
-    test("GDAL writer frees the tile it opened when the output name is not a valid local path") {
+    test("GDAL writer refuses an absolute output name, which would write outside its root") {
+        GDALManager.init(ExpressionConfig(spark))
+        withScratchDir("gdal_abs_out_") { out =>
+            val root = Files.createDirectories(out.resolve("root"))
+            val outside = out.resolve("outside") // an absolute path that is not under root
+            val e = intercept[IllegalArgumentException](nameColWriter(root, "tif").write(bandRow(outside.toString, "B01")))
+            e.getMessage should (include(outside.toString) and include("/"))
+            withClue(s"the file an absolute name would have written at $outside.tif: ") {
+                Files.exists(Paths.get(s"$outside.tif")) shouldBe false
+            }
+            withClue("files written under the scratch dir: ") {
+                val st = Files.walk(out)
+                try st.iterator().asScala.filter(Files.isRegularFile(_)).toList shouldBe empty
+                finally st.close()
+            }
+        }
+    }
+
+    test("GDAL writer opens no tile for an output name that is not a valid local path") {
         GDALManager.init(ExpressionConfig(spark))
         // readFromBytes opens a tile from a /vsimem/temp_raster_* file; releasing the Dataset unlinks it.
         val tempRasters = () =>
@@ -341,6 +450,31 @@ class GDAL_DataSourceTest extends PlanTest with SilentSparkSession with NodeCach
             val before = tempRasters()
             intercept[java.nio.file.InvalidPathException](writer.write(bandRow("bad\u0000name", "B01")))
             withClue("in-memory tiles left open by the failed write: ") { tempRasters().diff(before) shouldBe empty }
+        }
+    }
+
+    // translateTo must release its two Datasets through one step that keeps the write's own error. A nested
+    // try/finally would let the first release error replace the write's error and skip nothing visible.
+    test("GDAL writer's translate step releases both Datasets and fails with its own error, not a release error") {
+        requireZarrDriver()
+        withScratchDir("gdal_release_out_") { out =>
+            val opened = scala.collection.mutable.ArrayBuffer.empty[Boolean]
+            val writer = new GDAL_RowWriter(writerSchema, out.toString, Some("source"), "zarr", 0, 0L, ExpressionConfig(spark)) {
+                override protected[ds] def releaseDataset(ds: Dataset): Unit = {
+                    opened += (ds != null)
+                    try super.releaseDataset(ds)
+                    finally throw new IllegalStateException(s"release ${opened.size} failed")
+                }
+            }
+            // The translate fails after the tile is open: Zarr has no LZW codec.
+            val e = intercept[IllegalArgumentException](
+              writer.write(bandRow("rel", "B01", zarrDefaults + ("compression" -> "LZW")))
+            )
+            e.getMessage should include("LZW")
+            withClue("Datasets handed to the release step (the opened tile, then the output that was never made): ") {
+                opened.toList shouldBe List(true, false)
+            }
+            e.getSuppressed.map(_.getMessage).toList shouldBe List("release 1 failed", "release 2 failed")
         }
     }
 

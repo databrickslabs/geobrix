@@ -82,9 +82,12 @@ class GDAL_RowWriter(
                 failure = t
                 throw t
         } finally {
-            GDAL_RowWriter.releaseAll(failure, () => RasterDriver.releaseDataset(ds), () => RasterDriver.releaseDataset(res))
+            GDAL_RowWriter.releaseAll(failure, () => releaseDataset(ds), () => releaseDataset(res))
         }
     }
+
+    /** Releases one Dataset of [[translateTo]]; a null one is a no-op. Overridable so a test can make a release fail. */
+    protected[ds] def releaseDataset(dataset: Dataset): Unit = RasterDriver.releaseDataset(dataset)
 
     /** Returns a commit message carrying any GDAL error strings collected during write. */
     /** Overrides DataWriter.commit: returns GDAL_WriterMsg with any collected error strings. */
@@ -102,9 +105,15 @@ object GDAL_RowWriter {
       * included; never throws (a failure to delete is logged). */
     private[ds] def deleteLocal(dir: Path): Unit = NodeFilePathUtil.deleteRecursively(dir)
 
-    /** `<root>/<name>.<ext>`, refusing a name with a `..` path segment: the path is normalized, so such a
-      * name would write outside `root`. */
+    /** `<root>/<name>.<ext>`, refusing a name that would write outside `root`: one with a `..` path segment (the
+      * path is normalized) and one that starts with `/` (resolving it against the local staging dir gives that
+      * absolute path, so GDAL writes there and the cleanup of the staging dir never sees the file). */
     private[ds] def outputPath(root: String, name: String, ext: String): String = {
+        if (name.startsWith("/")) {
+            throw new IllegalArgumentException(
+              s"The output name '$name' starts with '/', so it would be written outside $root; use a relative name"
+            )
+        }
         if (s"$name.$ext".split('/').contains("..")) {
             throw new IllegalArgumentException(
               s"The output name '$name' has a '..' path segment, so it would be written outside $root; " +

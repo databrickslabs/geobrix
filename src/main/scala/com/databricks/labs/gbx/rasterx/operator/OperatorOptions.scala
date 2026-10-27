@@ -17,6 +17,46 @@ object OperatorOptions {
       */
     val DefaultCompression: String = "DEFLATE"
 
+    /** The Zarr codecs to assume when the driver does not list its compressors (`NONE` aside). */
+    private val ZarrBuiltInCodecs: Seq[String] = Seq("ZLIB", "GZIP", "LZMA", "ZSTD")
+
+    /**
+      * The codecs this GDAL build's Zarr driver can write, `NONE` first. The driver lists its compressors in the
+      * `COMPRESSORS` metadata item (`zlib,gzip,lzma,zstd`, plus `blosc` and `lz4` where they are built), so a
+      * build with Blosc accepts it without a change here.
+      */
+    private def zarrCodecs: Seq[String] = {
+        val listed = Option(gdal.GetDriverByName("Zarr"))
+            .flatMap(d => Option(d.GetMetadataItem("COMPRESSORS")))
+            // scalastyle:off caselocale
+            .map(_.split(",").map(_.trim.toUpperCase).filter(_.nonEmpty).toSeq)
+            // scalastyle:on caselocale
+        "NONE" +: listed.getOrElse(ZarrBuiltInCodecs)
+    }
+
+    /**
+      * The `-co` flags for a Zarr output. The Zarr driver has no DEFLATE (the heavyweight default) and takes no
+      * PREDICTOR: DEFLATE is written as ZLIB, the same zlib stream, with `zlevel` as `ZLIB_LEVEL`; ZSTD keeps its
+      * name, with `zstd_level` as `ZSTD_LEVEL`. Any other codec the driver lists is passed as it is, and one it does
+      * not (LZW, JPEG, ...) raises, naming the ones it has: GDAL would fail the translate with "Compressor/
+      * decompressor for X not available" and no hint of the alternatives.
+      */
+    private def zarrCompression(compression: String, writeOptions: Map[String, String], coFlag: String): Seq[String] = {
+        val codec = if (compression == "DEFLATE") "ZLIB" else compression
+        val supported = zarrCodecs
+        if (!supported.contains(codec)) {
+            throw new IllegalArgumentException(
+              s"Zarr output does not support compression '$compression'; the Zarr driver of this GDAL build writes " +
+                  s"${supported.mkString(", ")} (DEFLATE is written as ZLIB). Set the tile's 'compression' to one of these."
+            )
+        }
+        codec match {
+            case "ZLIB" => Seq(s"$coFlag COMPRESS=ZLIB", s"$coFlag ZLIB_LEVEL=${writeOptions.getOrElse("zlevel", "6")}")
+            case "ZSTD" => Seq(s"$coFlag COMPRESS=ZSTD", s"$coFlag ZSTD_LEVEL=${writeOptions.getOrElse("zstd_level", "9")}")
+            case other  => Seq(s"$coFlag COMPRESS=$other")
+        }
+    }
+
     /** Splits command by spaces and returns options as Vector (args after first token). */
     def parseOptions(command: String): java.util.Vector[String] = {
         val args = command.split(" ")
@@ -25,7 +65,8 @@ object OperatorOptions {
         optionsVec
     }
 
-    /** Appends -of/--format, -co compression/blocksize/predictor from writeOptions and ds; does not change output format (use RST_AsFormat for that). */
+    /** Appends -of/--format, -co compression/blocksize/predictor from writeOptions and ds; does not change output format (use RST_AsFormat for that).
+      * A Zarr output gets the Zarr driver's own codec flags, and a codec that driver lacks raises (see `zarrCompression`). */
     def appendOptions(command: String, writeOptions: Map[String, String], ds: Dataset): String = {
         val format = writeOptions.getOrElse("format", "GTiff")
         // scalastyle:off caselocale
@@ -80,7 +121,10 @@ object OperatorOptions {
             case _       => Seq.empty
         }
 
-        val coComp = compression match {
+        // Zarr takes its own codec names, levels and no predictor (see zarrCompression). Lazy, with `cos`: the
+        // VRT, PNG and PNM branches below drop the codec flags, so a codec Zarr refuses must not fail them.
+        lazy val coComp = if (format == "Zarr") zarrCompression(compression, writeOptions, coFlag)
+        else compression match {
             case "ZSTD"    => {
                 // COG driver uses "LEVEL"; GTiff uses "ZSTD_LEVEL"
                 val levelOption = if (format == "COG") "LEVEL" else "ZSTD_LEVEL"
@@ -101,7 +145,7 @@ object OperatorOptions {
             case other     => Seq(s"$coFlag COMPRESS=$other")
         }
 
-        val cos = (coBase ++ coComp).mkString(" ")
+        lazy val cos = (coBase ++ coComp).mkString(" ")
 
         // Optional per-band rescale string (e.g. "-scale_1 min max 0 255 -scale_2 ..."),
         // supplied by the XYZ tilers for data-aware 8-bit encoding. Empty/absent => no -scale

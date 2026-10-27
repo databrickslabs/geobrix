@@ -243,7 +243,17 @@ if not os.path.exists(io_path):
     results.append(("nested-claude-lockdown", "missing-anchor"))
 else:
     io = read(io_path)
-    if MARKER in io and "--no-session-persistence" in io and "JUDGE_DISABLE" in io:
+    # "Applied" means the WHOLE lockdown: the empty --tools pair, both flags and both env
+    # keys. A judge that has only some of it falls through to missing-anchor, not "already".
+    lockdown_applied = (
+        MARKER in io
+        and '"--tools", ""' in io
+        and '"--strict-mcp-config"' in io
+        and '"--no-session-persistence"' in io
+        and '"QC_DISABLE": "1"' in io
+        and '"JUDGE_DISABLE": "1"' in io
+    )
+    if lockdown_applied:
         results.append(("nested-claude-lockdown", "already"))
     elif IO_LOCK_OLD in io:
         if check_only:

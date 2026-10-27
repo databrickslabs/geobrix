@@ -151,6 +151,35 @@ def test_fix_is_idempotent(tmp_path):
     assert _fix(home, "--check").returncode == 0
 
 
+PARTIAL_LOCKDOWNS = {
+    # the session flag and a JUDGE_DISABLE mention, but no `--tools ""`
+    "no-tools-flag": '["claude", "-p", "--no-session-persistence"], env={"JUDGE_DISABLE": "1"}',
+    # the argv, but not the env keys
+    "no-env-keys": '["claude", "-p", "--tools", "", "--strict-mcp-config", "--no-session-persistence"]',
+    # everything but --strict-mcp-config
+    "no-strict-mcp": '["claude", "-p", "--tools", "", "--no-session-persistence"], '
+    'env={"QC_DISABLE": "1", "JUDGE_DISABLE": "1"}',
+}
+
+
+@pytest.mark.parametrize("partial", sorted(PARTIAL_LOCKDOWNS))
+def test_a_partial_lockdown_is_not_read_as_applied(tmp_path, partial):
+    """'already' needs the whole lockdown: the argv pair, both flags and both env keys."""
+    old_call = 'subprocess.run(\n            ["claude", "-p", "--model", model, "--output-format", "text"],'
+    io = QC_IO.replace(
+        old_call, f"subprocess.run(\n            {PARTIAL_LOCKDOWNS[partial]},"
+    )
+    assert io != QC_IO
+    home = _qc_home(tmp_path, io)
+
+    res = _fix(home)
+
+    assert "nested-claude-lockdown: already" not in res.output
+    assert (
+        res.returncode == 1 and "nested-claude-lockdown: missing-anchor" in res.output
+    )
+
+
 def test_a_restructured_judge_is_reported_not_guessed(tmp_path):
     home = _qc_home(
         tmp_path, QC_IO.replace('"-p", "--model"', '"-p", "--effort", "--model"')

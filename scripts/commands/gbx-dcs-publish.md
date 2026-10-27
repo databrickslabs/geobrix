@@ -21,7 +21,7 @@ bash scripts/commands/gbx-dcs-publish.sh (--candidate | --release --confirm <ver
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
 
-An option that needs a value (`--arch`, `--version`, `--log`) given without one prints `<option> needs a value` and the usage, and exits 2.
+An option that needs a value (`--arch`, `--version`, `--log`, `--confirm`, `--expect-digest`) given without one prints `<option> needs a value` and the usage, and exits 2.
 
 ## Environment
 

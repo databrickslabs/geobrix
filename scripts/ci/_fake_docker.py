@@ -10,6 +10,8 @@ $FAKE_DOCKER_LOG and answers from the JSON state in $FAKE_DOCKER_STATE:
 - info_rc, build_rc, pull_rc, run_rc, push_rc: exit codes (default 0). run_rcs: a list of exit
   codes for the first `run` calls, in order (each call takes the head of the list); then run_rc.
 - build_hang: a file path. `build` creates it, then blocks until it is killed (a build in progress).
+- build_context_log: a file path. `build` writes the sorted names in its context directory
+  (its last argument) there as JSON.
 - push_no_digest: `push` succeeds but records no digest on the ref.
 - push_fail_refs: refs whose `push` fails (exit 1) without recording a digest.
 
@@ -43,6 +45,9 @@ def main(args):
         with open(state["build_hang"], "w") as fh:
             fh.write("building\n")
         time.sleep(120)
+    if cmd == "build" and state.get("build_context_log"):
+        with open(state["build_context_log"], "w") as fh:
+            json.dump(sorted(os.listdir(args[-1])), fh)
     if cmd == "run" and state.get("run_rcs"):
         rc = state["run_rcs"].pop(0)
         save()

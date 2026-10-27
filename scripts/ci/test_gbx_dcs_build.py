@@ -7,7 +7,10 @@ made-up value; the tests assert the command never prints it.
 """
 
 import hashlib
+import importlib.util
+import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -244,6 +247,30 @@ def test_the_checked_and_hashed_jar_is_the_copy_in_the_build_context(dcs_build):
     assert f"{sha}  /databricks/jars/{name}" in contents[-1]
 
 
+def test_the_hash_is_of_the_copy_not_of_target(dcs_build):
+    """Rebuild target/ after the copy (during the JAR check): the image gets the copy, so the
+    digest the verify step expects must be the copy's, not the new file's."""
+    target_jar = dcs_build.jar("0.0.2")
+    name = target_jar.name
+    dcs_build.wheel("0.0.2")
+    dcs_build.state.update(history_own=["COPY geobrix /x"], history_base=BASE_HISTORY)
+    copied_sha = hashlib.sha256(target_jar.read_bytes()).hexdigest()
+    shim = dcs_build.bin / "python3"
+    shim.write_text(
+        "#!/bin/sh\n"
+        f'case "$1" in *check_jar_packaging.py) printf rebuilt >> "{target_jar}" ;; esac\n'
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    shim.chmod(0o755)
+    res = dcs_build.run()
+    assert res.returncode == 0, res.output
+    assert hashlib.sha256(target_jar.read_bytes()).hexdigest() != copied_sha
+    contents = next(
+        c for c in dcs_build.calls if c[0] == "run" and "sha256sum -c" in c[-1]
+    )
+    assert f"{copied_sha}  /databricks/jars/{name}" in contents[-1]
+
+
 def test_a_missing_python3_is_named_not_blamed_on_the_jar(dcs_build):
     dcs_build.jar("0.0.2")
     dcs_build.wheel("0.0.2")
@@ -322,22 +349,136 @@ def test_the_wheel_install_is_quiet_so_the_index_stays_out_of_the_build_log():
         assert "-q" in flags or "--quiet" in flags, line
 
 
+def _wheel_install_script():
+    """The Dockerfile's RUN statement that installs the wheel, without its --mount flags."""
+    text = (REPO_ROOT / "scripts" / "docker" / "dcs" / "Dockerfile").read_text()
+    run = next(
+        line
+        for line in text.replace("\\\n", " ").splitlines()
+        if line.startswith("RUN") and "pip install" in line
+    )
+    return re.sub(r"^RUN\s+(--\S+\s+)*", "", run)
+
+
+FAKE_PIP = """#!/bin/sh
+# Stands in for /databricks/python3/bin/python: `-m pip ...` is faked, anything else runs
+# the real interpreter (the redactor is a Python script).
+if [ "$1" = "-m" ] && [ "$2" = "pip" ]; then
+    case "$3" in
+        list) echo "numpy==2.0.0" ;;
+        check) echo "No broken requirements found." ;;
+        install)
+            if [ "${FAKE_PIP_INSTALL_RC:-0}" -ne 0 ]; then
+                echo "WARNING: Retrying after connection broken: ${FAKE_INDEX}/geobrix/" >&2
+                echo "ERROR: Could not fetch URL ${FAKE_INDEX}/geobrix/: no route to host"
+                echo "ERROR: user ${FAKE_USER} refused by ${FAKE_HOST}" >&2
+            fi
+            exit "${FAKE_PIP_INSTALL_RC:-0}" ;;
+    esac
+    exit 0
+fi
+exec "%s" "$@"
+"""
+
+
+def _run_wheel_install(tmp_path, install_rc, script=None):
+    """Run the Dockerfile's wheel-install RUN script on this machine, with the secret, the
+    interpreter and /tmp stood in for and a fake pip that fails the way an unreachable index does.
+    """
+    work = tmp_path / "image-tmp"
+    work.mkdir()
+    secret = tmp_path / "pip_index_url"
+    secret.write_text(INDEX)
+    python = tmp_path / "python"
+    python.write_text(FAKE_PIP % sys.executable)
+    python.chmod(0o755)
+    redactor = REPO_ROOT / "scripts" / "docker" / "dcs" / "redact_pip_log.py"
+    script = script or _wheel_install_script()
+    # /tmp/ first: the other replacements are paths under the pytest temp dir, which may be in /tmp.
+    for image_path, local in (
+        ("/tmp/", f"{work}/"),
+        ("/run/secrets/pip_index_url", secret),
+        ("/databricks/python3/bin/python", python),
+        ("/mnt/redact_pip_log.py", redactor),
+    ):
+        script = script.replace(image_path, str(local))
+    return subprocess.run(
+        ["sh", "-c", script],
+        env={
+            "PATH": f"/usr/bin{os.pathsep}/bin",
+            "GEOBRIX_VERSION": "0.0.2",
+            "FAKE_PIP_INSTALL_RC": str(install_rc),
+            "FAKE_INDEX": INDEX,
+            "FAKE_HOST": INDEX_HOST,
+            "FAKE_USER": "ci-user",
+        },
+        capture_output=True,
+        text=True,
+    )
+
+
+def test_a_failing_wheel_install_prints_its_errors_without_the_package_index(tmp_path):
+    """pip's warnings and errors on an unreachable index name the index; the build log must not."""
+    res = _run_wheel_install(tmp_path, install_rc=1)
+    out = res.stdout + res.stderr
+    assert res.returncode != 0  # the failure still fails the build
+    assert (
+        "Could not fetch URL" in out and "<package-index>" in out
+    )  # and says what failed
+    for leaked in (INDEX, INDEX_HOST, "ci-user"):
+        assert leaked not in out
+
+
+def test_a_successful_wheel_install_prints_nothing_about_the_package_index(tmp_path):
+    res = _run_wheel_install(tmp_path, install_rc=0)
+    assert res.returncode == 0, res.stdout + res.stderr
+    assert INDEX_HOST not in res.stdout + res.stderr
+
+
+def test_the_log_redactor_removes_every_part_of_the_index():
+    spec = importlib.util.spec_from_file_location(
+        "redact_pip_log",
+        REPO_ROOT / "scripts" / "docker" / "dcs" / "redact_pip_log.py",
+    )
+    redactor = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(redactor)
+    url = "https://ci-user:s3cret@idx.internal:8443/simple/"
+    text = (
+        f"Looking in indexes: {url}\nfetch https://idx.internal:8443/simple/x\n"
+        "user ci-user password s3cret host idx.internal\n"
+    )
+    out = redactor.redact(text, url)
+    for leaked in ("ci-user", "s3cret", "idx.internal", "8443"):
+        assert leaked not in out
+    assert out.count("<package-index>") >= 4
+    assert redactor.redact(text, "") == text  # no index configured: nothing to remove
+
+
+def test_the_build_context_holds_the_dockerfile_and_the_log_redactor(
+    dcs_build, tmp_path
+):
+    listing = tmp_path / "context.json"
+    dcs_build.state["build_context_log"] = str(listing)
+    res = _release_build(dcs_build)
+    assert res.returncode == 0, res.output
+    held = json.loads(listing.read_text())
+    assert {"Dockerfile", "redact_pip_log.py"} <= set(held)
+    assert any(n.endswith("-jar-with-dependencies.jar") for n in held)
+
+
 # --- Ctrl-C and SIGTERM clean up what the build created ------------------------------------
 
 
-@pytest.mark.parametrize(
-    "sig, code", [(signal.SIGINT, 130), (signal.SIGTERM, 143)], ids=["int", "term"]
-)
-def test_an_interrupted_build_removes_its_temp_files(dcs_build, tmp_path, sig, code):
-    """The build context and the 0600 file holding the package index live in $TMPDIR until the
-    build ends; an interrupt must not leave them (the second one holds the index)."""
+def _interrupt_a_build(cmd, tmp_path, sig, extra_args=()):
+    """Start a build whose `docker build` hangs, signal its whole process group the way a
+    terminal does for Ctrl-C, and return (process, output, the $TMPDIR it used)."""
     tmp = tmp_path / "tmp"
     tmp.mkdir()
     marker = tmp_path / "building"
-    dcs_build.state["build_hang"] = str(marker)
-    dcs_build.jar("0.0.2")
-    dcs_build.wheel("0.0.2")
-    proc = dcs_build.start(env={"TMPDIR": str(tmp), "PIP_INDEX_URL": INDEX})
+    cmd.state["build_hang"] = str(marker)
+    cmd.jar("0.0.2")
+    cmd.wheel("0.0.2")
+    proc = cmd.start(*extra_args, env={"TMPDIR": str(tmp), "PIP_INDEX_URL": INDEX})
     try:
         deadline = time.time() + 30
         while not marker.exists() and time.time() < deadline:
@@ -351,13 +492,62 @@ def test_an_interrupted_build_removes_its_temp_files(dcs_build, tmp_path, sig, c
         if proc.poll() is None:
             os.killpg(proc.pid, signal.SIGKILL)
             proc.communicate()
+    return proc, out, tmp
+
+
+def _assert_cleaned_up(cmd, proc, out, tmp, code):
     assert proc.returncode == code, out
     assert list(tmp.iterdir()) == []
     assert INDEX not in out
-    assert _tagged(dcs_build) == []
+    assert _tagged(cmd) == []
     assert (
         any(  # and the temporary tag, which a build that got as far as verify may hold
-            c[0] == "rmi" and c[1].startswith("gbx-dcs-build-tmp:")
-            for c in dcs_build.calls
+            c[0] == "rmi" and c[1].startswith("gbx-dcs-build-tmp:") for c in cmd.calls
         )
     )
+
+
+@pytest.mark.parametrize(
+    "sig, code", [(signal.SIGINT, 130), (signal.SIGTERM, 143)], ids=["int", "term"]
+)
+def test_an_interrupted_build_removes_its_temp_files(dcs_build, tmp_path, sig, code):
+    """The build context and the 0600 file holding the package index live in $TMPDIR until the
+    build ends; an interrupt must not leave them (the second one holds the index)."""
+    proc, out, tmp = _interrupt_a_build(dcs_build, tmp_path, sig)
+    _assert_cleaned_up(dcs_build, proc, out, tmp, code)
+
+
+@pytest.mark.parametrize(
+    "sig, code", [(signal.SIGINT, 130), (signal.SIGTERM, 143)], ids=["int", "term"]
+)
+def test_an_interrupted_build_with_a_log_still_cleans_up(
+    dcs_build, tmp_path, sig, code
+):
+    """With --log, stdout is a pipe into `tee`, and a group SIGTERM kills the tee as well. The
+    shell then writes to a pipe with no reader: it must not die of SIGPIPE before the trap has
+    removed the temp files (bash 3.2 reports the killed `docker` to that pipe first), nor
+    exit with a signal status."""
+    log = tmp_path / "logs" / "build.log"
+    proc, out, tmp = _interrupt_a_build(
+        dcs_build, tmp_path, sig, extra_args=("--log", str(log))
+    )
+    _assert_cleaned_up(dcs_build, proc, out, tmp, code)
+    assert INDEX not in log.read_text()
+    if (
+        sig == signal.SIGINT
+    ):  # the tee survives Ctrl-C (a background job ignores SIGINT)
+        assert "Interrupted" in log.read_text()
+
+
+def test_an_interrupt_still_cleans_up_when_the_test_runner_ignores_sigint(
+    dcs_build, tmp_path
+):
+    """A pytest started with SIGINT ignored (`cmd &` in a non-interactive shell) would hand that
+    disposition to the child, and bash cannot trap a signal that was ignored at entry.
+    """
+    before = signal.signal(signal.SIGINT, signal.SIG_IGN)
+    try:
+        proc, out, tmp = _interrupt_a_build(dcs_build, tmp_path, signal.SIGINT)
+    finally:
+        signal.signal(signal.SIGINT, before)
+    _assert_cleaned_up(dcs_build, proc, out, tmp, 130)

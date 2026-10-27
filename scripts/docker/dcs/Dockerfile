@@ -50,14 +50,22 @@ COPY geobrix-${GEOBRIX_VERSION}-py3-none-any.whl /tmp/geobrix-wheel/
 # Hold every package the base image ships at its version; fail the build rather than drift.
 # A package index, if one is needed, arrives as the BuildKit secret pip_index_url (never an ARG or ENV),
 # so it is not recorded in the image history. The install is quiet (-q): at its default verbosity pip prints
-# "Looking in indexes: <url>" into the build log.
+# "Looking in indexes: <url>" into the build log. Its output goes to a file that is printed through
+# redact_pip_log.py (bind-mounted from the build context, so it is not in the image), so a warning or an
+# error from a failing install ("Could not fetch URL <index>/...") does not name the index either; the
+# install's exit status is checked after the print.
 RUN --mount=type=secret,id=pip_index_url \
+    --mount=type=bind,source=redact_pip_log.py,target=/mnt/redact_pip_log.py \
     if [ -s /run/secrets/pip_index_url ]; then export PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)"; fi && \
-    /databricks/python3/bin/python -m pip list --format=freeze | sort > /tmp/base-constraints.txt && \
-    /databricks/python3/bin/python -m pip install -q --no-cache-dir -c /tmp/base-constraints.txt \
-      "geobrix[light_env6,vizx] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" && \
+    /databricks/python3/bin/python -m pip list --disable-pip-version-check --format=freeze | sort > /tmp/base-constraints.txt && \
+    pip_rc=0 && \
+    { /databricks/python3/bin/python -m pip install -q --disable-pip-version-check --no-cache-dir -c /tmp/base-constraints.txt \
+        "geobrix[light_env6,vizx] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" \
+        > /tmp/pip-install.log 2>&1 || pip_rc=$?; } && \
+    /databricks/python3/bin/python /mnt/redact_pip_log.py /tmp/pip-install.log && \
+    [ "$pip_rc" -eq 0 ] && \
     /databricks/python3/bin/python -m pip check && \
-    rm -rf /tmp/geobrix-wheel /tmp/base-constraints.txt
+    rm -rf /tmp/geobrix-wheel /tmp/base-constraints.txt /tmp/pip-install.log
 # Dedicated clusters load /databricks/jars; one GeoBrix JAR per cluster, so never also attach it as a library.
 COPY geobrix-${GEOBRIX_VERSION}-jar-with-dependencies.jar /databricks/jars/
 RUN chmod 0644 /databricks/jars/geobrix-${GEOBRIX_VERSION}-jar-with-dependencies.jar

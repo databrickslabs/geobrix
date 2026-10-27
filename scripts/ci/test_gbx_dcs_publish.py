@@ -132,7 +132,9 @@ def test_version_is_read_from_the_one_jar(dcs_publish):
 # --- an option without its value is a usage error ------------------------------------------
 
 
-@pytest.mark.parametrize("option", ["--arch", "--version", "--log"])
+@pytest.mark.parametrize(
+    "option", ["--arch", "--version", "--log", "--confirm", "--expect-digest"]
+)
 def test_an_option_without_its_value_is_a_usage_error(dcs_publish, option):
     """A trailing `--arch` used to die on an unbound `$2` (exit 1, no message)."""
     res = dcs_publish.run("--candidate", option)

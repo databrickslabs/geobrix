@@ -10,6 +10,7 @@ import fcntl
 import json
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import zipfile
@@ -38,6 +39,10 @@ class DcsCommand:
         (self.root / "scripts" / "docker" / "dcs").mkdir(parents=True)
         (self.root / "scripts" / "docker" / "dcs" / "Dockerfile").write_text(
             "FROM scratch\n"
+        )
+        shutil.copy(
+            REPO_ROOT / "scripts" / "docker" / "dcs" / "redact_pip_log.py",
+            self.root / "scripts" / "docker" / "dcs" / "redact_pip_log.py",
         )
         self.script = commands / command
         self.bin = tmp_path / "bin"
@@ -92,7 +97,10 @@ class DcsCommand:
 
     def start(self, *args: str, env=None) -> subprocess.Popen:
         """Start the command in its own process group, so a test can signal it and its
-        children together, as a terminal does for Ctrl-C."""
+        children together, as a terminal does for Ctrl-C. SIGINT is reset to its default in
+        the child: a runner started with SIGINT ignored (`cmd &` in a non-interactive shell)
+        would otherwise hand that to bash, which cannot trap a signal ignored at entry.
+        """
         return subprocess.Popen(
             ["bash", str(self.script), *args],
             stdout=subprocess.PIPE,
@@ -100,6 +108,7 @@ class DcsCommand:
             text=True,
             env=self._env(env),
             start_new_session=True,
+            preexec_fn=lambda: signal.signal(signal.SIGINT, signal.SIG_DFL),
         )
 
     def path_without(self, *names: str) -> str:

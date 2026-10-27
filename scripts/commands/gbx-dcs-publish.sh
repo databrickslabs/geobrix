@@ -34,8 +34,8 @@ while [[ $# -gt 0 ]]; do
     case "$1" in
         --candidate) MODE="candidate"; shift ;;
         --release) MODE="release"; shift ;;
-        --confirm) [ $# -ge 2 ] || { echo "--confirm needs a version" >&2; exit 1; }; CONFIRM="$2"; shift 2 ;;
-        --expect-digest) [ $# -ge 2 ] || { echo "--expect-digest needs sha256:<hex>" >&2; exit 1; }; EXPECT_DIGEST="$2"; shift 2 ;;
+        --confirm) [[ $# -ge 2 ]] || needs_value "$1"; CONFIRM="$2"; shift 2 ;;
+        --expect-digest) [[ $# -ge 2 ]] || needs_value "$1"; EXPECT_DIGEST="$2"; shift 2 ;;
         --arch) [[ $# -ge 2 ]] || needs_value "$1"; ARCH="$2"; shift 2 ;;
         --version) [[ $# -ge 2 ]] || needs_value "$1"; VER="$2"; shift 2 ;;
         --log) [[ $# -ge 2 ]] || needs_value "$1"; LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;

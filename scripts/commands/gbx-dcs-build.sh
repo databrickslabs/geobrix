@@ -67,10 +67,16 @@ die() { cleanup; echo "$1"; exit 1; }
 # with the signal's conventional status. INT and TERM only: the EXIT trap stays setup_log_file's and still
 # runs on this exit. (bash runs the trap when the foreground docker command returns; Ctrl-C reaches that
 # command too, since it signals the whole foreground group.)
+# SIGPIPE is ignored for the same reason: with --log, stdout is a pipe into tee, and a group signal kills
+# the tee as well. The next write to that pipe (bash 3.2 reports the killed docker to it before it runs the
+# trap) would then kill the shell with SIGPIPE, skipping the clean-up and the exit status. Ignored, the write
+# just fails. The clean-up itself writes nothing, so it is done before the closing message.
+trap '' PIPE
 interrupted() { cleanup; docker rmi "$TAG" > /dev/null 2>&1 || true; echo "Interrupted: removed the build's temporary files"; exit "$1"; }
 trap 'interrupted 130' INT
 trap 'interrupted 143' TERM
 cp "$PROJECT_ROOT/scripts/docker/dcs/Dockerfile" "$CTX/Dockerfile" || die "PRECONDITION MISSING: could not stage the Dockerfile; gbx:dcs:build not run"
+cp "$PROJECT_ROOT/scripts/docker/dcs/redact_pip_log.py" "$CTX/redact_pip_log.py" || die "PRECONDITION MISSING: could not stage redact_pip_log.py; gbx:dcs:build not run"
 
 if [ "$TARGET" = "release" ]; then
     shopt -s nullglob

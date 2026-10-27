@@ -31,6 +31,7 @@ from databricks.labs.gbx.ds.file_gbx import (  # noqa: F401
     file_ref_arg,
     file_supported,
 )
+from databricks.labs.gbx.zarr._tiles import is_zarr_tile
 
 # Sentinel for "core_fn has not been called yet for this tile".
 # Distinct from None so a core_fn that legitimately returns None
@@ -254,6 +255,8 @@ def _file_fast_path_uri(tile):
             return None
     except (KeyError, TypeError):
         pass
+    if is_zarr_tile(tile):  # its path is a store of chunks, not a file to open
+        return None
     if _has_clip(tile):
         return None
     try:

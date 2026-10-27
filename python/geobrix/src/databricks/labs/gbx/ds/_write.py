@@ -69,6 +69,8 @@ def tile_to_bytes(
 ) -> bytes:
     """Return the on-disk bytes for one tile (verbatim GTiff, else re-encode)."""
     driver = force_driver or metadata.get("driver") or metadata.get("format") or "GTiff"
+    if not force_driver and driver == "Zarr":
+        driver = "GTiff"  # a Zarr tile names its source; the raster bytes are a GeoTIFF
     if str(driver).upper() == "GTIFF":
         return raster_bytes
 

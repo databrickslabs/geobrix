@@ -20,10 +20,15 @@ The read is planned on the driver and run in tasks:
 decoded cells as C-order bytes with their position in the array (``BLOCKS_SCHEMA``).
 ``output="table"`` returns one row per selected cell with a column per dimension and per
 variable. Both pin the snapshot, so a read is consistent whatever commits meanwhile.
+
+``output="tiles"`` returns GeoBrix tiles (``_tiles.py``): the driver plans their windows and
+the manifest rows behind them, and tasks make the tile rows from that plan (``spark.range``
+of tile numbers into ``mapInArrow``), so no tile passes through the driver.
 """
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import math
@@ -686,11 +691,12 @@ def _label_spans(values_by_path, variables, dim_coords, axes):
     return spans
 
 
-def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
-    """``(units, config)`` for reading ``variables``, or ``([], config)`` for nothing."""
+def _resolve_axes(src: _Source, variables, sel, isel, decode, flag):
+    """``(dim_coords, stored, coords, axes)`` of a read of ``variables``: the coordinate
+    array of each dimension, the stored and decoded values of those that can be read, and
+    the selection along each dimension of each variable (``_select.resolve``)."""
     arrays = src.arrays
-    metas = [arrays[v] for v in variables]
-    sel, isel = _check_selection(sel, isel, metas)
+    sel, isel = _check_selection(sel, isel, [arrays[v] for v in variables])
 
     dim_coords: dict[str, tuple[str | None, ...]] = {}
     for v in variables:
@@ -732,6 +738,15 @@ def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
                 if c in arrays
             },
         )
+    return dim_coords, stored, coords, axes
+
+
+def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
+    """``(units, config)`` for reading ``variables``, or ``([], config)`` for nothing."""
+    arrays = src.arrays
+    dim_coords, stored, coords, axes = _resolve_axes(
+        src, variables, sel, isel, decode, flag
+    )
 
     columns, typed = (), {}
     if output == "table":
@@ -1158,9 +1173,27 @@ def gbx_zarr_read(
     ``use_zarr_fill_value_as_mask`` is xarray's option of that name: ``None`` masks on the
     array ``fill_value`` for Zarr v2 only, ``False`` keeps an integer v2 array's zeros.
 
+    ``output="tiles"`` returns GeoBrix tiles, a ``(source, tile)`` DataFrame like the other
+    raster readers, so every ``rst_*`` function applies to Zarr data without converting the
+    cube to GeoTIFF. Each selected 2-D (latitude, longitude) plane of each variable is cut
+    into windows, one inner chunk each (``tile_size=(width, height)`` in cells overrides
+    this; a window never crosses the longitude seam), and every selected position along the
+    other dimensions makes its own tile (``sliceDims``, ``sliceCoord_<dim>`` in the tile
+    metadata, as the NetCDF reader writes them). ``band_dim`` stacks one dimension as the
+    bands of one tile instead. With ``virtual_tiles=True`` (the default) a tile holds no
+    pixels: it names its window and the storage objects behind it, and reads them when a
+    function opens it, so a table of tiles can be saved and read back by tasks that have
+    no session; the store must stay on a Volume and, for a table, the pinned version
+    readable. ``virtual_tiles=False`` reads each tile now and holds its GeoTIFF bytes.
+    Tiles are north-up (rows flipped when latitude ascends); the CRS is the array's
+    ``grid_mapping``, or EPSG:4326 for a plain latitude/longitude grid; NoData is NaN for
+    floating-point cells. The coordinates must be a regular grid: an irregular or
+    curvilinear one raises ``ZarrUnsupported`` (read it as blocks or a table). By default
+    a variable with no such grid is left out, with a warning; one named in ``variables``
+    raises.
+
     ``access`` is ``"auto"`` or ``"fuse"`` (files are read through the Volume mount);
-    ``"direct"`` is not available yet. ``virtual_tiles``, ``band_dim`` and ``tile_size``
-    belong to ``output="tiles"``, which arrives with the tile reader.
+    ``"direct"`` is not available yet.
 
     An array GeoBrix cannot decode (a string coordinate, or one whose metadata is corrupt)
     does not fail the read, on a table or a plain path: it is left out, its dimension gets
@@ -1178,7 +1211,7 @@ def gbx_zarr_read(
     if output not in _OUTPUTS:
         raise ValueError(
             f"output must be one of {_OUTPUTS}, got {output!r}. "
-            "Fix: pass 'blocks' or 'table'."
+            "Fix: pass 'blocks', 'tiles' or 'table'."
         )
     if access not in _ACCESS:
         raise ValueError(
@@ -1205,10 +1238,32 @@ def gbx_zarr_read(
     _check_mask_flag(use_zarr_fill_value_as_mask)
     kind = classify_source(source, source_type)
     if output == "tiles":
-        raise NotImplementedError("tiles output arrives in a later task")
+        from databricks.labs.gbx.zarr._tiles import check_tile_args
+
+        tile_size = check_tile_args(band_dim, tile_size)
+        if not isinstance(virtual_tiles, bool):
+            raise ValueError(
+                f"virtual_tiles must be True or False, got {virtual_tiles!r}. "
+                "Fix: pass virtual_tiles=True for tiles that read their chunks when "
+                "opened, or False for tiles that hold their bytes."
+            )
 
     src = _open_source(spark, source, kind, version_as_of, timestamp_as_of)
     names = _choose_variables(variables, src)
+    if output == "tiles":
+        plans = _plan_tile_set(
+            spark,
+            src,
+            names,
+            variables is not None,
+            sel,
+            isel,
+            decode,
+            use_zarr_fill_value_as_mask,
+            band_dim,
+            tile_size,
+        )
+        return _tiles_frame(spark, plans, virtual_tiles)
     units, cfg = _plan(
         spark, src, names, sel, isel, output, decode, use_zarr_fill_value_as_mask
     )
@@ -1223,6 +1278,179 @@ def gbx_zarr_read(
     if not units:
         return spark.createDataFrame([], schema)
     return _work_frame(spark, units).mapInArrow(_task_function(cfg), schema)
+
+
+# --- tiles ---------------------------------------------------------------------------
+
+_TILES_PER_TASK = 2048  # virtual tiles one task makes
+_MATERIALIZED_PER_TASK = 64  # tiles a task reads and encodes when virtual_tiles=False
+_TILE_BATCH = 512  # virtual tiles per Arrow batch
+_MATERIALIZED_BATCH = 8  # materialized tiles per Arrow batch (each holds its bytes)
+_WINDOW_ARROW = pa.struct(
+    [
+        ("col_off", pa.int32()),
+        ("row_off", pa.int32()),
+        ("width", pa.int32()),
+        ("height", pa.int32()),
+    ]
+)
+_TILE_ARROW = pa.struct(
+    [
+        ("cellid", pa.int64()),
+        ("raster", pa.binary()),
+        ("path", pa.string()),
+        ("path_mode", pa.string()),
+        ("window", _WINDOW_ARROW),
+        ("clip_polygon", pa.binary()),
+        ("clip_crs", pa.string()),
+        ("crs", pa.string()),
+        ("metadata", pa.map_(pa.string(), pa.string())),
+    ]
+)
+_TILES_ARROW = pa.schema([("source", pa.string()), ("tile", _TILE_ARROW)])
+
+
+def _raw_attrs(metas: dict[str, bytes], path: str) -> dict | None:
+    """The attributes of the node at ``path`` read from its documents, or ``None``."""
+    try:
+        if f"{path}/zarr.json" in metas:
+            return dict(json.loads(metas[f"{path}/zarr.json"]).get("attributes") or {})
+        if f"{path}/.zattrs" in metas:
+            return dict(json.loads(metas[f"{path}/.zattrs"]))
+    except (ValueError, TypeError, AttributeError):
+        pass
+    return None
+
+
+def _grid_mapping_attrs(src: _Source, meta: ArrayMeta) -> dict | None:
+    """The attributes of the CF grid-mapping variable ``meta`` names, if the store has it."""
+    name = meta.attrs.get("grid_mapping")
+    if not isinstance(name, str) or not name.split():
+        return None
+    name = name.split()[0].rstrip(":")  # "crs", or "crs: x y"
+    parent = meta.name.rpartition("/")[0]
+    for path in ([f"{parent}/{name}"] if parent else []) + [name]:
+        if path in src.arrays:
+            return dict(src.arrays[path].attrs)
+        found = _raw_attrs(src.metas, path)
+        if found is not None:
+            return found
+    return None
+
+
+def _plan_tile_set(
+    spark, src, names, explicit, sel, isel, decode, flag, band_dim, tile_size
+):
+    """The ``TilePlan`` of each of ``names`` that has a regular 2-D grid.
+
+    A variable named in ``variables`` (``explicit``) that cannot be tiled raises; one picked
+    by default is left out with a warning, as a variable GeoBrix cannot decode is.
+    """
+    from databricks.labs.gbx.ds.file_gbx import _connect_aware_lru_sizing
+    from databricks.labs.gbx.zarr._tiles import plan_tiles
+
+    arrays = src.arrays
+    dim_coords, _, coords, axes = _resolve_axes(src, names, sel, isel, decode, flag)
+    if band_dim is not None and not any(band_dim in arrays[v].dims for v in names):
+        raise ValueError(
+            f"band_dim {band_dim!r} is not a dimension of {names}. "
+            "Fix: name a dimension of the variables."
+        )
+    # the largest tile a task may hold (64 MiB on Spark Connect, 256 MiB on classic): a task
+    # cannot measure it, so the driver does, and it travels with the tiles
+    cap = _connect_aware_lru_sizing(spark)[0]
+    plans, left_out = [], {}
+    for v in names:
+        meta = arrays[v]
+        kwargs = dict(
+            root=src.root,
+            base_root=src.base_root,
+            table=src.table or "",
+            version="" if src.snap is None else src.snap.version,
+            tile_size=tile_size,
+            band_dim=band_dim,
+            coord_attrs={
+                d: arrays[c].attrs
+                for d, c in zip(meta.dims, dim_coords[v])
+                if c in arrays
+            },
+            grid_mapping=_grid_mapping_attrs(src, meta),
+            decode=decode,
+            flag=flag,
+            cap_bytes=cap,
+        )
+        by_dim = {d: coords[c] for d, c in zip(meta.dims, dim_coords[v]) if c in coords}
+        try:  # decide before fetching any manifest rows
+            plan_tiles(meta, by_dim, axes[v], {}, **kwargs)
+        except ZarrUnsupported as e:
+            if explicit:
+                raise
+            left_out[v] = e.message
+            continue
+        touched = touched_chunks(axes[v], meta.chunks)
+        rows = src.rows(meta, sorted({unit_key(meta, c) for c in touched}))
+        plans.append(plan_tiles(meta, by_dim, axes[v], rows, **kwargs))
+    if left_out:
+        _LOG.warning(
+            "%s: %d variable(s) have no regular 2-D grid and are left out of the tiles: %s",
+            src.table or src.root,
+            len(left_out),
+            "; ".join(f"{a} ({why})" for a, why in left_out.items()),
+        )
+    if not plans:
+        raise ZarrUnsupported(
+            "no variable of the store has a regular latitude/longitude grid to tile",
+            fix='read it with output="blocks" or output="table"',
+        )
+    return plans
+
+
+def _tile_batches(plan, ids: list[int], virtual: bool) -> Iterator[pa.RecordBatch]:
+    from databricks.labs.gbx.zarr._tiles import source_of, tile_rows
+
+    if not virtual:
+        from databricks.labs.gbx.pyrx.core.open_tile import materialize_to_bytes
+        from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+    step = _TILE_BATCH if virtual else _MATERIALIZED_BATCH
+    for lo in range(0, len(ids), step):
+        rows = tile_rows(plan, ids[lo : lo + step])
+        if not virtual:
+            rows = [
+                materialize_to_bytes(VirtualTile.from_row(r)).to_row() for r in rows
+            ]
+        yield pa.RecordBatch.from_pylist(
+            [{"source": source_of(r), "tile": r} for r in rows], schema=_TILES_ARROW
+        )
+
+
+def _tile_task(plans, virtual: bool):
+    """The function ``mapInArrow`` runs: tile numbers in, tile rows out. The plans are its
+    closure, so the tiles are made where they are used and never pass through the driver.
+    """
+    offsets = list(itertools.accumulate((p.n_tiles for p in plans), initial=0))
+
+    def run(batches):
+        for batch in batches:
+            ids = batch.column("id").to_pylist()
+            for plan, lo, hi in zip(plans, offsets, offsets[1:]):
+                mine = [i - lo for i in ids if lo <= i < hi]
+                if mine:
+                    yield from _tile_batches(plan, mine, virtual)
+
+    return run
+
+
+def _tiles_frame(spark, plans, virtual: bool):
+    """The ``(source, tile)`` DataFrame of the plans' tiles, made in tasks."""
+    from databricks.labs.gbx.ds.raster import reader_schema_v2
+
+    schema = reader_schema_v2()
+    total = sum(p.n_tiles for p in plans)
+    if not total:
+        return spark.createDataFrame([], schema)
+    per_task = _TILES_PER_TASK if virtual else _MATERIALIZED_PER_TASK
+    tiles = spark.range(total, numPartitions=-(-total // per_task))
+    return tiles.mapInArrow(_tile_task(plans, virtual), schema)
 
 
 # --- block helpers -------------------------------------------------------------------

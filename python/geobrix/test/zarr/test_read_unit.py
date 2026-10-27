@@ -1354,13 +1354,6 @@ def test_a_managed_store_reads_from_its_data_root(request, monkeypatch, layout):
 # --- arguments are checked before any work ----------------------------------------------------------
 
 
-def test_tiles_output_arrives_in_a_later_task(era5_v3_sharded):
-    with pytest.raises(
-        NotImplementedError, match="tiles output arrives in a later task"
-    ):
-        _read.gbx_zarr_read(None, str(era5_v3_sharded), output="tiles")
-
-
 def test_arguments_are_checked_before_any_work(era5_v3_sharded, era5_v2):
     """No session is given: every one of these is refused on the driver, before a plan."""
     read, path = _read.gbx_zarr_read, str(era5_v3_sharded)

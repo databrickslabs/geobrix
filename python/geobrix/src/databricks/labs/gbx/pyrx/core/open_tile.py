@@ -37,6 +37,7 @@ from databricks.labs.gbx.pyrx.core import warp as _warp
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.zarr import _tiles as _zarr_tiles  # stdlib + numpy only
 
 # ---------------------------------------------------------------------------
 # Pending-instruction metadata keys
@@ -357,6 +358,29 @@ def _tile_window_bytes(tile: VirtualTile, src, window: Window, pending) -> bytes
     return _warp_window_bytes_crs(src, window, resolve_crs(tile.crs), pending=pending)
 
 
+def _zarr_tile_bytes(tile: VirtualTile, pending) -> bytes:
+    """GTiff bytes of a Zarr-backed tile with its pending instructions applied (not its clip).
+
+    The store's window is decoded into standalone GTiff bytes (``zarr_tile_dataset_bytes``);
+    from there the tile is a window of a file: pending band-select / NoData / SRID
+    instructions and a target ``crs`` apply to those bytes as :func:`_tile_window_bytes`
+    applies them to a window of a source.
+    """
+    data = _zarr_tiles.zarr_tile_dataset_bytes(tile)
+    if not _has_pending(tile.metadata) and not tile.crs:
+        return data  # nothing to apply
+    with MemoryFile(data) as mf, mf.open() as src:
+        window = Window(0, 0, src.width, src.height)
+        return _tile_window_bytes(tile, src, window, pending)
+
+
+def _clip_bytes(tile_bytes: bytes, tile: VirtualTile) -> bytes:
+    """``tile_bytes`` clipped to the tile's ``clip_polygon`` (a disjoint clip: a 1x1 NoData)."""
+    with MemoryFile(tile_bytes) as mf, mf.open() as wds:
+        clipped = _clip.clip_dataset(wds, tile.clip_polygon, tile.clip_crs)
+        return _empty_dataset_bytes(wds) if clipped is None else clipped
+
+
 def _empty_dataset_bytes(ref) -> bytes:
     """A valid 1x1 NoData GTiff mirroring ref's band count / dtype (disjoint clip).
 
@@ -412,6 +436,16 @@ def open_tile(tile: VirtualTile, file_ref=None) -> Iterator[DatasetReader]:
     #    path locally and read the window with optional warp + clip.
     with ExitStack() as stack:
         pending = _parse_pending(tile.metadata)
+
+        # Zarr-backed tile: its window is decoded from the store (tile.path is the store,
+        # not a raster to open), then the pending instructions and the clip apply as for a
+        # window of a file.
+        if _zarr_tiles.is_zarr_tile(tile):
+            data = _zarr_tile_bytes(tile, pending)
+            if tile.clip_polygon is not None:
+                data = _clip_bytes(data, tile)
+            yield _open_bytes(stack, data)
+            return
 
         # FILE branch: try windowed read via FileRef (avoids staging the full file).
         # A FileRef is a handle to the same source file — it does NOT reproject
@@ -702,8 +736,13 @@ def open_header(tile, file_ref=None) -> Iterator[DatasetReader]:
 
     # Virtual path: open the source header — no window read in either branch.
     with ExitStack() as stack:
-        local_path = _resolve_local_or_windowed(vt, file_ref, stack)
-        src = stack.enter_context(rasterio.open(local_path))
+        if _zarr_tiles.is_zarr_tile(vt):
+            # the header of the tile's plane, from its metadata: no chunk is read, and
+            # vt.window below picks the tile's part of it, as for a file
+            src = _zarr_tiles.zarr_tile_header_view(vt)
+        else:
+            local_path = _resolve_local_or_windowed(vt, file_ref, stack)
+            src = stack.enter_context(rasterio.open(local_path))
 
         # Parse pending instructions to reflect band-select / setsrid / nodata in header.
         bands, raw_nodata, srid, crs_str = _parse_pending(vt.metadata)
@@ -761,6 +800,8 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     result into `raster`, keep provenance. Output is heavy-consumable. This is
     the single sanctioned light->heavy crossing for virtual tiles.
     """
+    if _zarr_tiles.is_zarr_tile(tile):
+        return _materialize_zarr(tile)
     with open_tile(tile) as ds:
         data = ds.read()
         profile = _comp.drop_ycbcr(ds.profile)
@@ -774,6 +815,31 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
     meta = _without_pending(tile.metadata)
     # Stamp tile_byte_size (materialized raster byte length) into metadata.
     meta["tile_byte_size"] = str(len(raster))
+    return VirtualTile(
+        cellid=tile.cellid,
+        raster=raster,
+        path=tile.path,
+        window=tile.window,
+        clip_polygon=tile.clip_polygon,
+        clip_crs=tile.clip_crs,
+        crs=tile.crs,
+        metadata=meta,
+    )
+
+
+def _materialize_zarr(tile: VirtualTile) -> VirtualTile:
+    """``materialize_to_bytes`` of a Zarr-backed tile.
+
+    The window is decoded from the store once (``zarr_tile_dataset_bytes``, whose size check
+    is ``materialize_decision``), the pending instructions and the clip are applied to
+    those bytes, and the provenance stays: ``path``, ``window``, ``sliceDims``,
+    ``zarr_array``, ``zarr_version``, the CF attributes in ``zarr_meta``. The bytes are a
+    GeoTIFF, which is what a writer reads from the ``driver`` and ``format`` keys.
+    """
+    raster = _tile_to_bytes(tile)
+    meta = _without_pending(tile.metadata)
+    meta["tile_byte_size"] = str(len(raster))
+    meta["driver"] = meta["format"] = "GTiff"
     return VirtualTile(
         cellid=tile.cellid,
         raster=raster,
@@ -804,7 +870,12 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
     context that cannot be assembled block-by-block safely.  These cases delegate
     to ``materialize_to_bytes(tile).raster``.  Tests exercise the no-warp / no-clip
     path only and assert ``materialize_to_bytes`` is NOT called there.
+
+    A Zarr-backed tile has no file to stream from; it is decoded a window at a time by the
+    store engine, so it takes ``materialize_to_bytes``.
     """
+    if _zarr_tiles.is_zarr_tile(tile):
+        return materialize_to_bytes(tile).raster
     with ExitStack() as stack:
         pending = _parse_pending(tile.metadata)
         bands, nodata, srid, crs_str = pending
@@ -935,6 +1006,10 @@ def _tile_to_bytes(vt: VirtualTile) -> Optional[bytes]:
     """
     if not vt.is_virtual():
         return bytes(vt.raster) if vt.raster is not None else None
+
+    if _zarr_tiles.is_zarr_tile(vt):
+        data = _zarr_tile_bytes(vt, _parse_pending(vt.metadata))
+        return data if vt.clip_polygon is None else _clip_bytes(data, vt)
 
     with ExitStack() as stack:
         pending = _parse_pending(vt.metadata)

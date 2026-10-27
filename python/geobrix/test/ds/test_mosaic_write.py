@@ -56,7 +56,6 @@ from databricks.labs.gbx.ds.cog_writer import (
     CogCommitMessage,
     CogGbxWriter,
     MosaicOptions,
-    _is_all_nodata,
     _source_discriminator,
     _tile_grid_windows,
     parse_mosaic_options,
@@ -529,34 +528,40 @@ def test_write_mosaic_non_divisible_source(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# 10. _is_all_nodata helper unit tests
+# 10. pruneEmpty: a window with no valid pixel (by the rule of both tiers) is not written
 # ---------------------------------------------------------------------------
 
 
-def test_is_all_nodata_true():
-    data = np.full((1, 4, 4), -9999.0, dtype="float32")
-    assert _is_all_nodata(data, -9999.0)
-
-
-def test_is_all_nodata_false_mixed():
-    data = np.ones((1, 4, 4), dtype="float32")
-    data[0, 0, 0] = 42.0
-    assert not _is_all_nodata(data, -9999.0)
-
-
-def test_is_all_nodata_none_nodata():
-    data = np.zeros((1, 4, 4), dtype="float32")
-    assert not _is_all_nodata(data, None), "None nodata must never prune"
-
-
-def test_is_all_nodata_nan():
-    data = np.full((1, 2, 2), float("nan"), dtype="float32")
-    assert _is_all_nodata(data, float("nan"))
-
-
-def test_is_all_nodata_nan_mixed():
-    data = np.array([[[1.0, float("nan")]]], dtype="float32")
-    assert not _is_all_nodata(data, float("nan"))
+@pytest.mark.parametrize(
+    "nodata,fill,written",
+    [
+        (-9999.0, -9999.0, 1),  # the left window is all NoData: pruned
+        (float("nan"), float("nan"), 1),  # NaN is NoData too
+        (None, 0.0, 2),  # no NoData declared: nothing can be pruned
+    ],
+    ids=["nodata", "nan", "undeclared"],
+)
+def test_prune_empty_skips_a_window_that_is_all_nodata(tmp_path, nodata, fill, written):
+    src = str(tmp_path / "src.tif")
+    data = np.ones((1, 32, 64), dtype="float32")
+    data[:, :, :32] = fill  # window (0, 0)
+    profile = dict(
+        driver="GTiff",
+        width=64,
+        height=32,
+        count=1,
+        dtype="float32",
+        crs="EPSG:32630",
+        transform=from_origin(500000.0, 5700000.0, 10.0, 10.0),
+        nodata=nodata,
+    )
+    with rasterio.open(src, "w", **profile) as dst:
+        dst.write(data)
+    w = _make_writer(
+        str(tmp_path / "out"), mosaic_opts=_default_mosaic_opts(tileSize=32)
+    )
+    msg = w.write(iter([{"path": src}]))
+    assert len([p for p in msg.paths if p.endswith(".tif")]) == written
 
 
 # ---------------------------------------------------------------------------

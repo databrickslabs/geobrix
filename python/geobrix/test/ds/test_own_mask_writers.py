@@ -149,7 +149,7 @@ GRID_TRANSPARENT = tuple(range(60, 70))
 # mode -> (gridSystem options, source CRS, source origin)
 GRID_MODES = {
     "quadbin": (
-        {"gridSystem": "quadbin", "gridResolution": "12"},
+        {"gridSystem": "quadbin", "gridResolution": "11"},
         "EPSG:32630",
         (500000.0, 5700000.0),
     ),
@@ -200,8 +200,12 @@ def _interior(rows, margin=3):
     return rows[margin:-margin]
 
 
-@pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])
-@pytest.mark.parametrize("mode", list(GRID_MODES))
+@pytest.mark.parametrize(
+    "mode,name",
+    [(m, n) for m in GRID_MODES for n in ("rgb_nir", "rgba", "gray_x_alpha")]
+    # the 6-band alpha layout and the non-last alpha label, on the cheapest grids
+    + [("bng", "rgb_x_alpha"), ("bng", "rgba_x"), ("h3", "rgba_x")],
+)
 def test_grid_mosaic_cells_keep_the_mask_and_the_alpha_band(tmp_path, mode, name):
     """Every cell's pixels that come from a masked source row are invalid, and so are the
     ones from a transparent row of an alpha source; the others are valid. The 4th band of
@@ -249,7 +253,7 @@ def test_h3_cells_of_an_alpha_source_declare_no_nodata(tmp_path, name):
 
 
 def _half_hidden_source(tmp_path, mode, name, hide):
-    """A 600x300 source (60 x 30 km) of one value, whose left half is hidden by the mask
+    """A 640x320 source (64 x 32 km) of one value, whose left half is hidden by the mask
     (``hide="masked"``) or by alpha 0 (``"transparent"``), or not hidden at all (``None``).
     """
     _, crs, origin = GRID_MODES[mode]
@@ -275,26 +279,144 @@ def _half_hidden_source(tmp_path, mode, name, hide):
     return path
 
 
+def _cell_ids(tiles):
+    """The cell id in each tile's name (``cell_<source>_<cellid>.tif``)."""
+    return {os.path.basename(t)[:-4].split("_", 2)[2] for t in tiles}
+
+
 @pytest.mark.parametrize("mode", list(GRID_MODES))
-@pytest.mark.parametrize("hide,name", [("masked", "rgb_nir"), ("transparent", "rgba")])
+@pytest.mark.parametrize(
+    "hide,name",
+    [("masked", "rgb_nir"), ("transparent", "rgba"), ("transparent", "gray_x_alpha")],
+)
 def test_grid_mosaic_prunes_cells_with_no_valid_pixel(tmp_path, mode, hide, name):
-    """Cells that lie wholly in the hidden half of the source (masked, or transparent) are
-    not written: fewer cells than for the same source with nothing hidden. A cell that
-    reaches the visible half is written."""
-    shown = _grid_tiles(
-        tmp_path / "a", mode, _half_hidden_source(tmp_path / "a", mode, name, None)
-    )
-    pruned = _grid_tiles(
-        tmp_path / "b", mode, _half_hidden_source(tmp_path / "b", mode, name, hide)
-    )
+    """Cells that lie wholly in the hidden half of the source (masked, or transparent) are not
+    written; every cell that reaches the visible half is, and holds a valid pixel."""
+    from rasterio.warp import transform_bounds
+
+    src_a = _half_hidden_source(tmp_path / "a", mode, name, None)
+    src_b = _half_hidden_source(tmp_path / "b", mode, name, hide)
+    shown = _grid_tiles(tmp_path / "a", mode, src_a)
+    pruned = _grid_tiles(tmp_path / "b", mode, src_b)
     assert pruned and len(pruned) < len(shown), (len(pruned), len(shown))
+    with rasterio.open(src_b) as src:
+        visible_from = src.bounds.left + src.width // 2 * src.transform.a
+        src_crs = src.crs
+    written = _cell_ids(pruned)
+    assert written <= _cell_ids(shown)
+    for tile in shown:
+        with rasterio.open(tile) as cell:
+            right = transform_bounds(cell.crs, src_crs, *cell.bounds)[2]
+        reaches = (
+            right > visible_from + 1000.0
+        )  # a margin: the cell's bbox edge is not its data
+        if reaches:
+            assert (
+                _cell_ids([tile]) <= written
+            ), f"{os.path.basename(tile)}: not written"
+    for tile in pruned:
+        with rasterio.open(tile) as cell:
+            assert nd.valid_mask(
+                cell
+            ).any(), f"{os.path.basename(tile)}: no valid pixel"
 
 
-@pytest.mark.parametrize("hide", ["masked", "transparent"])
-def test_mosaic_window_prune_checks_the_mask_and_the_alpha_band(tmp_path, hide):
+@pytest.mark.parametrize("mode", list(GRID_MODES))
+@pytest.mark.parametrize("name", ["rgba", "gray_x_alpha", "rgb_nir"])
+def test_the_mosaic_vrt_of_the_cells_of_an_opaque_source_is_valid_inside_the_source(
+    tmp_path, mode, name
+):
+    """The index VRT composites the cells: where the source is opaque, the mosaic is valid. The h3
+    cells of an alpha source declare no NoData, and their bounding-box corners used to overwrite the
+    neighbouring cells (about a quarter of the pixels came out transparent)."""
+    from rasterio.warp import transform_bounds
+
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+
+    src_path = _half_hidden_source(tmp_path, mode, name, None)
+    tiles = _grid_tiles(tmp_path, mode, src_path)
+    assert len(tiles) > 1
+    vrt_path = _build_mosaic_vrt(tiles, str(tmp_path / "out"))
+    with rasterio.open(src_path) as src, rasterio.open(vrt_path) as vrt:
+        left, bottom, right, top = transform_bounds(src.crs, vrt.crs, *src.bounds)
+        w, h = right - left, top - bottom
+        inner = vrt.window(
+            left + 0.1 * w, bottom + 0.1 * h, right - 0.1 * w, top - 0.1 * h
+        )
+        valid = nd.valid_mask(vrt, window=inner)
+        labels = al.labelled_alpha(open(tiles[0], "rb").read())
+        assert [i for i, c in enumerate(vrt.colorinterp) if c.name == "alpha"] == labels
+    assert valid.size > 1000
+    assert (
+        valid.all()
+    ), f"{int((~valid).sum())} of {valid.size} pixels inside the source are invalid"
+
+
+def test_the_mosaic_vrt_labels_a_non_last_alpha_band_as_data(tmp_path):
+    """RGBA+extra: the alpha label is not on the last band, so the index VRT carries no alpha band."""
+    from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+
+    tiles = []
+    for i, x in enumerate((10, 11)):
+        raw = al.layout_bytes("rgba_x", transform=from_origin(x, 50, 0.25, 0.25))
+        path = str(tmp_path / f"t{i}.tif")
+        with open(path, "wb") as fh:
+            fh.write(raw)
+        tiles.append(path)
+    vrt_path = _build_mosaic_vrt(tiles, str(tmp_path))
+    with rasterio.open(vrt_path) as vrt:
+        assert [c.name for c in vrt.colorinterp] == [
+            "red",
+            "green",
+            "blue",
+            "undefined",
+            "undefined",
+        ]
+
+
+@pytest.mark.parametrize(
+    "mode,width,height,name",
+    [
+        ("quadbin", 600, 300, "rgb_nir"),
+        ("h3", 600, 300, "rgba"),
+        ("h3", 800, 300, "rgb_nir"),
+        ("bng", 600, 300, "rgba"),
+    ],
+)
+def test_a_cell_whose_source_window_rounds_to_no_pixel_is_skipped(
+    tmp_path, mode, width, height, name
+):
+    """A cell the source barely touches reads a window of fewer than half a pixel: the read comes back
+    with no rows and the reprojection raised ``Invalid dataset dimensions : 62 x 0``."""
+    _, crs, origin = GRID_MODES[mode]
+    ox, oy = (origin[0] + 37.0, origin[1] - 53.0) if mode == "bng" else origin
+    count = len(al.LAYOUTS[name][0])
+    raw = al.layout_bytes(
+        name,
+        data=np.full((count, height, width), 50, dtype="uint8"),
+        crs=crs,
+        transform=from_origin(ox, oy, 100.0, 100.0),
+    )
+    path = str(tmp_path / "src" / f"{name}.tif")
+    os.makedirs(os.path.dirname(path))
+    with open(path, "wb") as fh:
+        fh.write(raw)
+    res = {"h3": {"gridSystem": "h3", "gridResolution": "6"}}.get(
+        mode, GRID_MODES[mode][0]
+    )
+    opts = {"vrtMosaic": "true", **res}
+    w = _make_writer(str(tmp_path / "out"), mosaic_opts=parse_mosaic_options(opts))
+    msg = w.write(iter([{"path": path}]))
+    assert [p for p in msg.paths if p.endswith(".tif")], f"{mode}: no cell written"
+
+
+@pytest.mark.parametrize(
+    "hide,name",
+    [("masked", "rgb_nir"), ("transparent", "rgba"), ("transparent", "gray_x_alpha")],
+)
+def test_mosaic_window_prune_checks_the_mask_and_the_alpha_band(tmp_path, hide, name):
     """tileSize 32 over 64x64: the window that is entirely masked (or entirely transparent)
     is not written; the other three are."""
-    name = "rgb_nir" if hide == "masked" else "rgba"
     width = height = 64
     rows = np.arange(height)[:, None]
     cols = np.arange(width)[None, :]
@@ -317,3 +439,32 @@ def test_mosaic_window_prune_checks_the_mask_and_the_alpha_band(tmp_path, hide):
     names = sorted(os.path.basename(p) for p in msg.paths if p.endswith(".tif"))
     assert len(names) == 3, names
     assert not any(n.endswith("_0_0.tif") for n in names), names
+
+
+# --- an alpha band AND an own mask band ------------------------------------------------------
+
+
+@pytest.mark.parametrize("tile_format", ["gtiff", "cog"])
+@pytest.mark.parametrize("name", ["rgba", "gray_x_alpha"])
+def test_encode_tile_keeps_the_mask_beside_the_alpha_band(tile_format, name):
+    """GDAL reports only the own mask of a raster that has both: the tile encoder writes it with the
+    pixels and the alpha band, and the rows hidden by either stay invalid."""
+    raw = al.row_coded(name, height=12, masked_rows=(3, 4), transparent_rows=(8,))
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        want = nd.valid_mask(ds)
+        _, out, _ = _encode.encode_tile(
+            ds, (0, 0, 12, 12), "/x/src.tif", "", tile_format=tile_format
+        )
+    with MemoryFile(out) as mf, mf.open() as got:
+        assert nd.has_own_mask(got) and nd.has_alpha(got)
+        assert (nd.valid_mask(got) == want).all()
+    assert not want.all() and want.any()
+
+
+@pytest.mark.parametrize("name", ["rgba", "gray_x_alpha"])
+def test_apply_compression_keeps_the_mask_beside_the_alpha_band(name):
+    raw = al.row_coded(name, height=12, masked_rows=(3, 4), transparent_rows=(8,))
+    out = _apply_compression(raw, "deflate", None, None)
+    with MemoryFile(raw) as a, a.open() as src, MemoryFile(out) as b, b.open() as got:
+        assert (nd.valid_mask(got) == nd.valid_mask(src)).all()
+        assert nd.has_own_mask(got) and nd.has_alpha(got)

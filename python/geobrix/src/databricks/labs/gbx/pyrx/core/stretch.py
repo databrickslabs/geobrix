@@ -27,8 +27,8 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
     For each band: compute the lo_pct/hi_pct percentiles over the pixels valid for it
     (``_nodata.band_valid_mask``: not NoData, not hidden by the raster's own mask band
     and, for a raster with an alpha band, opaque, at any band count), clip to that
-    range, linearly rescale to [0, 255]. Pixels that are NoData in *every* band are
-    preserved as 0.
+    range, linearly rescale to [0, 255]. A pixel that is invalid for a band (NoData, masked,
+    or transparent) is written 0 in that band, as the heavyweight tier does.
 
     Args:
         ds:     Open rasterio DatasetReader.
@@ -53,18 +53,13 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
 
     count = ds.count
 
-    # Pass 1: combined NoData mask = pixels invalid in EVERY band. Read each band
-    # in its NATIVE dtype (not float64) so uint8/uint16 rasters stay cheap and take
-    # the LUT path below; the memory hog is float rescale buffers, bounded in pass 2.
+    # Pass 1: each band's validity. Read each band in its NATIVE dtype (not float64) so
+    # uint8/uint16 rasters stay cheap and take the LUT path below; the memory hog is
+    # float rescale buffers, bounded in pass 2.
     datas, valids = [], []
-    invalid_all = None
     for b in range(1, count + 1):
-        data = ds.read(b)
-        valid = band_valid_mask(ds, b)  # NoData, own mask and transparency
-        datas.append(data)
-        valids.append(valid)
-        inv = ~valid
-        invalid_all = inv if invalid_all is None else (invalid_all & inv)
+        datas.append(ds.read(b))
+        valids.append(band_valid_mask(ds, b))  # NoData, own mask and transparency
 
     profile = drop_ycbcr(ds.profile)
     profile.update(driver="GTiff", count=count, dtype="uint8", nodata=0)
@@ -113,7 +108,7 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
                     out -= lo_val
                     out *= 255.0 / (hi_val - lo_val)
                     out = out.astype("uint8")
-                out[invalid_all] = 0
+                out[~valid] = 0  # invalid for this band -> 0, as heavy does
                 dst.write(out, i + 1)
                 # free this band's buffers before the next
                 datas[i] = None

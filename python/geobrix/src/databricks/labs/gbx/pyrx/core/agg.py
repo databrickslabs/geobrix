@@ -135,6 +135,42 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     return mf, dst
 
 
+def _union_own_mask(datasets) -> np.ndarray:
+    """``(rows, cols)`` uint8 (255 valid, 0 invalid) own mask of the mosaic ``rasterio.merge`` builds
+    from *datasets*: valid where some tile that covers the pixel is, a tile without an own mask band
+    being valid over its whole footprint, and a pixel no tile covers invalid.
+
+    Built by merging the tiles' mask rasters with the same geometry as the pixels (``method="max"``),
+    so it lands on the pixels' grid. The mask comes from the tiles' own mask bands, not from the
+    merged values: a pixel whose value is 0 is not thereby invalid.
+    """
+    memfiles, masks = [], []
+    try:
+        for d in datasets:
+            mask = (
+                d.read_masks(1)
+                if _nodata.has_own_mask(d)
+                else np.full((d.height, d.width), 255, dtype="uint8")
+            )
+            mf = MemoryFile()
+            memfiles.append(mf)
+            with mf.open(
+                driver="GTiff",
+                count=1,
+                dtype="uint8",
+                width=d.width,
+                height=d.height,
+                transform=d.transform,
+                crs=d.crs,
+            ) as dst:
+                dst.write(mask, 1)
+            masks.append(mf.open())
+        merged, _ = _rio_merge(masks, method="max")
+        return np.where(merged[0] != 0, 255, 0).astype("uint8")
+    finally:
+        _close_all(memfiles, masks)
+
+
 def _pick_ref_crs(datasets):
     """Deterministic target CRS for a (possibly multi-CRS) group: the smallest EPSG
     code present. This makes every band's merge of the SAME cell agree on one CRS, so a
@@ -154,6 +190,37 @@ def _pick_ref_crs(datasets):
         if best_epsg is None or e < best_epsg:
             best, best_epsg = c, e
     return best if best is not None else datasets[0].crs
+
+
+def _reference_tile(datasets, ref_crs):
+    """The tile whose grid the merge keeps: the first one in the reference CRS (its pixel size is in the
+    reference CRS's units), else the first. ``_pick_ref_crs`` names a CRS one of the tiles has, so the
+    tile that stands first in byte order is not the reference when it is in another CRS.
+    """
+    return next((d for d in datasets if d.crs == ref_crs), datasets[0])
+
+
+def _bounds_in(ds, ref_crs):
+    """``(left, bottom, right, top)`` of *ds* in the reference CRS (its own bounds when it is in it)."""
+    if ref_crs is None or ds.crs is None or ds.crs == ref_crs:
+        return tuple(ds.bounds)
+    from rasterio.warp import transform_bounds
+
+    return transform_bounds(ds.crs, ref_crs, *ds.bounds)
+
+
+def _union_decoded_bytes(datasets, ref_crs) -> int:
+    """Decoded size of the mosaic of *datasets* in the reference CRS: the union of their bounds in that
+    CRS over the pixel size of the reference tile. 0 when the reference tile has no pixel size.
+    """
+    ref = _reference_tile(datasets, ref_crs)
+    px_x, px_y = abs(ref.transform.a), abs(ref.transform.e)
+    if not (px_x > 0 and px_y > 0):
+        return 0
+    boxes = [_bounds_in(d, ref_crs) for d in datasets]
+    width = int(round((max(b[2] for b in boxes) - min(b[0] for b in boxes)) / px_x))
+    height = int(round((max(b[3] for b in boxes) - min(b[1] for b in boxes)) / px_y))
+    return width * height * ref.count * np.dtype(ref.dtypes[0]).itemsize
 
 
 def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
@@ -184,7 +251,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         try:
             ref_crs = _pick_ref_crs(datasets)
             tile_crses = [ds.crs for ds in datasets]
-            _ref0 = datasets[0]
+            _ref0 = _reference_tile(datasets, ref_crs)
             _rx = abs(_ref0.transform.a)
             _ry = abs(_ref0.transform.e)
             ref_pixel_res = (_rx, _ry) if _rx > 0 and _ry > 0 else None
@@ -292,19 +359,9 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # gate computation falls back to the in-RAM path rather than crashing.
         _over_budget = False
         try:
-            _budget = decoded_budget_bytes("serverless")
-            _ref = datasets[0]
-            _px_x = abs(_ref.transform.a)
-            _px_y = abs(_ref.transform.e)
-            if _px_x > 0 and _px_y > 0:
-                _ulx = min(ds.bounds.left for ds in datasets)
-                _uly = max(ds.bounds.top for ds in datasets)
-                _lrx = max(ds.bounds.right for ds in datasets)
-                _lry = min(ds.bounds.bottom for ds in datasets)
-                _mw = int(round((_lrx - _ulx) / _px_x))
-                _mh = int(round((_uly - _lry) / _px_y))
-                _decoded = _mw * _mh * _ref.count * np.dtype(_ref.dtypes[0]).itemsize
-                _over_budget = _decoded > _budget
+            _over_budget = _union_decoded_bytes(
+                datasets, ref_crs
+            ) > decoded_budget_bytes("serverless")
         except Exception:
             _log.debug(
                 "merge_tiles: size-gate computation failed; falling back to in-RAM path",
@@ -330,18 +387,16 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
                 extra.append((mf, rds))
                 merge_ds.append(rds)
         ref = merge_ds[0]
-        # A tile with its own mask band (not an alpha band): its masked pixels do not
-        # overwrite a valid pixel of another tile (the merge reads each tile masked), and
-        # the mosaic carries the union of the masks, a pixel no valid tile covers being
-        # invalid. Tiles without one are merged as before, with no mask band.
-        if any(_nodata.has_own_mask(d) for d in merge_ds):
-            merged, out_transform = _rio_merge(merge_ds, method="last", masked=True)
-            mosaic = merged.data
-            own_mask = np.where(merged.mask.all(axis=0), 0, 255).astype("uint8")
-            del merged
-        else:
-            mosaic, out_transform = _rio_merge(merge_ds, method="last")
-            own_mask = None
+        # A tile with its own mask band (not an alpha band): the mosaic carries the union of the
+        # tiles' masks, built from the masks themselves (:func:`_union_own_mask`), never from the
+        # pixel values: a valid pixel of 0 stays valid. Tiles without one are merged as before,
+        # with no mask band.
+        mosaic, out_transform = _rio_merge(merge_ds, method="last")
+        own_mask = (
+            _union_own_mask(merge_ds)
+            if any(_nodata.has_own_mask(d) for d in merge_ds)
+            else None
+        )
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
         profile = _comp.drop_ycbcr(ref.profile)

@@ -270,12 +270,6 @@ def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     return prof
 
 
-#: The colour interpretations ``match_alpha(all_labels=True)`` copies from the source: the
-#: plain ones. Palette, CMYK, HLS and YCbCr labels go with a colour table or a photometric
-#: the new raster may not have, so they are left to GDAL.
-_PLAIN_LABELS = ("gray", "undefined", "red", "green", "blue")
-
-
 def match_alpha(dst, alpha_like, all_labels: bool = False) -> None:
     """Label the bands of the new dataset *dst* alpha exactly where *alpha_like* does.
 
@@ -292,28 +286,24 @@ def match_alpha(dst, alpha_like, all_labels: bool = False) -> None:
     Nothing else is relabelled, unless ``all_labels``: then every other band takes the
     source's label as well (gray, undefined, red, green, blue), as the chips of a
     tessellation do, so RGB and the data bands of a gray+x+alpha or a 16-bit RGBA raster are
-    not left to GDAL's defaults.
+    not left to GDAL's defaults. The rule is ``_nodata.carried_labels``.
     """
     from rasterio.enums import ColorInterp
 
-    from databricks.labs.gbx.pyrx.core._nodata import alpha_index
+    from databricks.labs.gbx.pyrx.core._nodata import carried_labels
 
     labels = list(dst.colorinterp)
     if alpha_like is None or len(alpha_like) != len(labels):
         return
-    alpha_at = alpha_index(alpha_like)
-
-    def label_of(i, got):
-        if i == alpha_at:
-            return ColorInterp.alpha
-        if all_labels and alpha_like[i].name in _PLAIN_LABELS:
-            return alpha_like[i]
-        # alpha anywhere but on the alpha band is data; any other label is GDAL's own
-        if all_labels and alpha_like[i] == ColorInterp.alpha:
-            return ColorInterp.undefined
-        return ColorInterp.undefined if got == ColorInterp.alpha else got
-
-    want = [label_of(i, got) for i, got in enumerate(labels)]
+    carried = carried_labels(alpha_like, all_labels)
+    want = [
+        (
+            c
+            if c is not None
+            else (ColorInterp.undefined if got == ColorInterp.alpha else got)
+        )
+        for c, got in zip(carried, labels)
+    ]
     if want != labels:
         dst.colorinterp = want
 

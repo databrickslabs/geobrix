@@ -202,27 +202,6 @@ def _tile_name_key(vt) -> str:
     return h.hexdigest()[:12]
 
 
-def _is_all_nodata(data, nodata) -> bool:
-    """Return True when every pixel in *data* matches *nodata*.
-
-    Parameters
-    ----------
-    data:
-        numpy array of pixel values (any shape).
-    nodata:
-        Source nodata value (may be None, float, or NaN).
-
-    Returns False when nodata is None (no declared nodata → cannot prune).
-    """
-    import numpy as np
-
-    if nodata is None:
-        return False
-    if isinstance(nodata, float) and math.isnan(nodata):
-        return bool(np.all(np.isnan(data)))
-    return bool(np.all(data == nodata))
-
-
 def _nodata_pixels(data, nodata):
     """Boolean array shaped like *data*: True where a value is *nodata* (NaN-aware)."""
     import numpy as np
@@ -232,27 +211,32 @@ def _nodata_pixels(data, nodata):
     return data == nodata
 
 
-def _has_no_valid_pixel(data, nodata, colorinterp, mask=None) -> bool:
-    """True when no pixel of *data* (``(bands, rows, cols)``) is valid, so a window or cell
-    of it is not worth writing (``pruneEmpty``).
+def _cell_gtiff_bytes(profile, dst_data, colorinterp, mask, tags, prune_empty):
+    """Intermediate GTiff bytes of a reprojected cell: the pixels, the labels of the source
+    (``match_alpha``), the mask band (when there is one) and the tags; ``None`` for ``pruneEmpty``
+    when no pixel of it is valid, by the rule of both tiers (``_nodata.valid_mask``).
 
-    The rule of both tiers (``_nodata.valid_mask``): a pixel is valid when a data band is
-    not *nodata* there (when a NoData is declared), the alpha band of *colorinterp* is above
-    0 (when it has one) and the own *mask* (``(rows, cols)``, 0 invalid) is valid. A raster
-    that declares nothing and has neither is never pruned.
+    The cell is checked as it will be read, from its own bytes, so a cell that is entirely NoData,
+    transparent or masked is not converted to a COG, whichever of the three says so.
     """
-    import numpy as np
+    from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core import _nodata
+    from databricks.labs.gbx.pyrx.core import compression as _comp
 
-    valid = np.ones(data.shape[1:], dtype=bool) if mask is None else mask != 0
-    a = _nodata.alpha_index(colorinterp)
-    if a is not None:
-        valid = valid & (data[a] > 0)
-        data = data[:a]
-    if nodata is not None and data.shape[0]:
-        valid = valid & ~_nodata_pixels(data, nodata).all(axis=0)
-    return not valid.any()
+    with _comp.internal_mask_env(mask), MemoryFile() as mf:
+        with mf.open(**profile) as dst_ds:
+            _comp.match_alpha(dst_ds, colorinterp)
+            dst_ds.write(dst_data)
+            if mask is not None:
+                dst_ds.write_mask(mask)
+            dst_ds.update_tags(**tags)
+        raw = mf.read()
+    if prune_empty:
+        with MemoryFile(raw) as mf, mf.open() as ds:
+            if not _nodata.valid_mask(ds).any():
+                return None
+    return raw
 
 
 def _cell_own_mask(
@@ -329,8 +313,8 @@ _RASTERIO_TO_GDAL_DTYPE: Dict[str, str] = {
 }
 
 
-#: rasterio ColorInterp name -> GDAL colour interpretation name, for the labels a VRT band
-#: carries (the others are left to GDAL: palette, CMYK, YCbCr need more than a label).
+#: GDAL's names of the colour interpretations a VRT band carries (the rule of which band carries
+#: which label is ``_nodata.carried_labels``).
 _VRT_COLOR_INTERP = {
     "gray": "Gray",
     "undefined": "Undefined",
@@ -342,16 +326,13 @@ _VRT_COLOR_INTERP = {
 
 
 def _vrt_color_interp(colorinterp, index: int):
-    """GDAL name of the colour interpretation of band *index* (0-based) of a raster labelled
-    *colorinterp*, or ``None`` to leave the VRT band's to GDAL. Alpha only for the alpha band
-    the alpha rule names (``_nodata.alpha_index``: the LAST band, when labelled alpha); an
-    alpha label on any other band is data."""
+    """GDAL name of the colour interpretation of band *index* (0-based) of a mosaic of tiles
+    labelled *colorinterp*, or ``None`` to leave the VRT band's to GDAL: the label the copy rule
+    (``_nodata.carried_labels``) gives the band."""
     from databricks.labs.gbx.pyrx.core import _nodata
 
-    label = colorinterp[index]
-    if label.name == "alpha":
-        return "Alpha" if _nodata.alpha_index(colorinterp) == index else "Undefined"
-    return _VRT_COLOR_INTERP.get(label.name)
+    label = _nodata.carried_labels(colorinterp, all_labels=True)[index]
+    return None if label is None else _VRT_COLOR_INTERP.get(label.name)
 
 
 def _build_mosaic_vrt(
@@ -549,6 +530,11 @@ def _build_mosaic_vrt(
             # Skip this tile's nodata pixels when compositing (transparent overlap).
             if band_nodata is not None:
                 ET.SubElement(src_el, "NODATA").text = repr(float(band_nodata))
+            # A tile with its own mask band is composited by it: its masked pixels (the
+            # corners of an h3 cell's bounding box, for a cell of an alpha source, which
+            # declares no NoData) do not overwrite a neighbour's pixels.
+            if meta["own_mask"]:
+                ET.SubElement(src_el, "UseMaskBand").text = "true"
 
     # ── Step 4b: the union of the tiles' own masks, when any tile has one ──
     if any(m["own_mask"] for m in metas):
@@ -1289,6 +1275,11 @@ class CogGbxWriter(DataSourceWriter):
                     # build GTiff bytes from already-read data (single read pass).
                     data = src.read(window=window)
 
+                    # pruneEmpty: skip tiles with no valid pixel (all NoData, all
+                    # transparent, or all hidden by the mask): the rule of both tiers.
+                    if prune_empty and not _nodata.valid_mask(src, window).any():
+                        continue
+
                     # The source's own (non-alpha) mask band is not carried by the
                     # pixels: it travels with the window as the tile's mask band.
                     mask = (
@@ -1296,13 +1287,6 @@ class CogGbxWriter(DataSourceWriter):
                         if _nodata.has_own_mask(src)
                         else None
                     )
-
-                    # pruneEmpty: skip tiles with no valid pixel (all NoData, all
-                    # transparent, or all hidden by the mask).
-                    if prune_empty and _has_no_valid_pixel(
-                        data, src_nodata, src.colorinterp, mask
-                    ):
-                        continue
 
                     # Build GTiff bytes for this window.  Profile mirrors
                     # _window_dataset_bytes / materialize_to_bytes for fidelity:
@@ -1361,7 +1345,6 @@ class CogGbxWriter(DataSourceWriter):
         """
         import numpy as np
         import rasterio
-        from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
             Resampling,
@@ -1466,6 +1449,8 @@ class CogGbxWriter(DataSourceWriter):
 
                     # ── Reproject source window → cell's 3857 extent ─────────
                     src_data = src.read(window=src_win)
+                    if src_data.shape[1] == 0 or src_data.shape[2] == 0:
+                        continue  # the window rounds to no pixel: the cell misses the source
                     _mask_masked_source_pixels(src, src_win, src_data, src_nodata)
                     src_win_transform = src.window_transform(src_win)
 
@@ -1499,12 +1484,6 @@ class CogGbxWriter(DataSourceWriter):
                         src_nodata,
                     )
 
-                    # ── pruneEmpty ────────────────────────────────────────────
-                    if prune_empty and _has_no_valid_pixel(
-                        dst_data, src_nodata, src.colorinterp, mask
-                    ):
-                        continue
-
                     # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
                     # GBX_CELLID and GBX_GRIDSYSTEM travel through
                     # rasterio.shutil.copy (cog_convert_file) via GDAL's
@@ -1526,17 +1505,20 @@ class CogGbxWriter(DataSourceWriter):
                             out_dtype, decoded_bytes=decoded_size, compress="auto"
                         )
                     )
-                    with _comp.internal_mask_env(mask), MemoryFile() as mf:
-                        with mf.open(**profile) as dst_ds:
-                            _comp.match_alpha(dst_ds, src.colorinterp)
-                            dst_ds.write(dst_data)
-                            if mask is not None:
-                                dst_ds.write_mask(mask)
-                            dst_ds.update_tags(
-                                GBX_CELLID=str(cell.cellid),
-                                GBX_GRIDSYSTEM="quadbin",
-                            )
-                        window_bytes = mf.read()
+                    # ── pruneEmpty: None when no pixel of the cell is valid ───
+                    window_bytes = _cell_gtiff_bytes(
+                        profile,
+                        dst_data,
+                        src.colorinterp,
+                        mask,
+                        {
+                            "GBX_CELLID": str(cell.cellid),
+                            "GBX_GRIDSYSTEM": "quadbin",
+                        },
+                        prune_empty,
+                    )
+                    if window_bytes is None:
+                        continue
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)
@@ -1568,7 +1550,6 @@ class CogGbxWriter(DataSourceWriter):
         import numpy as np
         import rasterio
         from rasterio.features import geometry_mask
-        from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
             Resampling,
@@ -1684,6 +1665,8 @@ class CogGbxWriter(DataSourceWriter):
 
                     # ── Reproject source window → cell's EPSG:4326 bbox ─────
                     src_data = src.read(window=src_win)
+                    if src_data.shape[1] == 0 or src_data.shape[2] == 0:
+                        continue  # the window rounds to no pixel: the cell misses the source
                     _mask_masked_source_pixels(src, src_win, src_data, src_nodata)
                     src_win_transform = src.window_transform(src_win)
 
@@ -1739,12 +1722,13 @@ class CogGbxWriter(DataSourceWriter):
                     )
                     if mask is not None:
                         mask[outside_mask] = 0
-
-                    # ── pruneEmpty ───────────────────────────────────────────
-                    if prune_empty and _has_no_valid_pixel(
-                        dst_data, out_nodata, src.colorinterp, mask
-                    ):
-                        continue
+                    elif out_nodata is None:
+                        # A cell of an alpha source declares no NoData (it would shadow the
+                        # alpha band), so the hexagon is its own mask band: the mosaic VRT
+                        # composites a cell by it, as it does by NoData for any other cell
+                        # (``_build_mosaic_vrt``: ``UseMaskBand``). The pixels outside are
+                        # 0, alpha 0, as well.
+                        mask = np.where(outside_mask, 0, 255).astype("uint8")
 
                     # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
                     profile = {
@@ -1762,17 +1746,17 @@ class CogGbxWriter(DataSourceWriter):
                             out_dtype, decoded_bytes=decoded_size, compress="auto"
                         )
                     )
-                    with _comp.internal_mask_env(mask), MemoryFile() as mf:
-                        with mf.open(**profile) as dst_ds:
-                            _comp.match_alpha(dst_ds, src.colorinterp)
-                            dst_ds.write(dst_data)
-                            if mask is not None:
-                                dst_ds.write_mask(mask)
-                            dst_ds.update_tags(
-                                GBX_CELLID=cell.cellid,
-                                GBX_GRIDSYSTEM="h3",
-                            )
-                        window_bytes = mf.read()
+                    # ── pruneEmpty: None when no pixel of the cell is valid ───
+                    window_bytes = _cell_gtiff_bytes(
+                        profile,
+                        dst_data,
+                        src.colorinterp,
+                        mask,
+                        {"GBX_CELLID": cell.cellid, "GBX_GRIDSYSTEM": "h3"},
+                        prune_empty,
+                    )
+                    if window_bytes is None:
+                        continue
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)
@@ -1811,7 +1795,6 @@ class CogGbxWriter(DataSourceWriter):
         """
         import numpy as np
         import rasterio
-        from rasterio.io import MemoryFile
         from rasterio.transform import from_bounds as transform_from_bounds
         from rasterio.warp import (
             Resampling,
@@ -1909,6 +1892,8 @@ class CogGbxWriter(DataSourceWriter):
 
                     # ── Reproject source window → cell's 27700 extent ────────
                     src_data = src.read(window=src_win)
+                    if src_data.shape[1] == 0 or src_data.shape[2] == 0:
+                        continue  # the window rounds to no pixel: the cell misses the source
                     _mask_masked_source_pixels(src, src_win, src_data, src_nodata)
                     src_win_transform = src.window_transform(src_win)
 
@@ -1942,12 +1927,6 @@ class CogGbxWriter(DataSourceWriter):
                         src_nodata,
                     )
 
-                    # ── pruneEmpty ────────────────────────────────────────────
-                    if prune_empty and _has_no_valid_pixel(
-                        dst_data, src_nodata, src.colorinterp, mask
-                    ):
-                        continue
-
                     # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
                     profile = {
                         "driver": "GTiff",
@@ -1965,17 +1944,17 @@ class CogGbxWriter(DataSourceWriter):
                             out_dtype, decoded_bytes=decoded_size, compress="auto"
                         )
                     )
-                    with _comp.internal_mask_env(mask), MemoryFile() as mf:
-                        with mf.open(**profile) as dst_ds:
-                            _comp.match_alpha(dst_ds, src.colorinterp)
-                            dst_ds.write(dst_data)
-                            if mask is not None:
-                                dst_ds.write_mask(mask)
-                            dst_ds.update_tags(
-                                GBX_CELLID=str(cell.cellid),
-                                GBX_GRIDSYSTEM="bng",
-                            )
-                        window_bytes = mf.read()
+                    # ── pruneEmpty: None when no pixel of the cell is valid ───
+                    window_bytes = _cell_gtiff_bytes(
+                        profile,
+                        dst_data,
+                        src.colorinterp,
+                        mask,
+                        {"GBX_CELLID": str(cell.cellid), "GBX_GRIDSYSTEM": "bng"},
+                        prune_empty,
+                    )
+                    if window_bytes is None:
+                        continue
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)

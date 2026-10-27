@@ -77,6 +77,36 @@ def subset_colorinterp(colorinterp, indexes):
     ]
 
 
+#: The colour interpretations a copy takes from its source label by label: the plain ones. Palette,
+#: CMYK, HLS and YCbCr labels go with a colour table or a photometric the copy may not have.
+PLAIN_LABELS = ("gray", "undefined", "red", "green", "blue")
+
+
+def carried_labels(colorinterp, all_labels: bool = False):
+    """The label each band of a copy of a raster labelled *colorinterp* carries, band by band; ``None``
+    where the copy's writer (GDAL) keeps its own.
+
+    THE copy rule of the light tier, shared by ``compression.match_alpha`` (a GTiff written with
+    rasterio) and the mosaic VRT (``cog_writer._build_mosaic_vrt``): alpha only on the alpha band
+    (:func:`alpha_index`), an alpha label anywhere else is data (undefined), and, with ``all_labels``,
+    gray, undefined, red, green and blue are copied too. Heavy ``GDAL.matchLabels`` is the same rule.
+    """
+    from rasterio.enums import ColorInterp
+
+    alpha_at = alpha_index(colorinterp)
+    out = []
+    for i, label in enumerate(colorinterp):
+        if i == alpha_at:
+            out.append(ColorInterp.alpha)
+        elif label == ColorInterp.alpha:
+            out.append(ColorInterp.undefined)
+        elif all_labels and label.name in PLAIN_LABELS:
+            out.append(label)
+        else:
+            out.append(None)
+    return out
+
+
 def has_alpha(ds) -> bool:
     """True when the last band of *ds* is labelled alpha (see :func:`alpha_index`)."""
     return alpha_index(ds.colorinterp) is not None
@@ -183,6 +213,14 @@ def read_masked(ds, band: int = 1):
     data = ds.read(int(band)).astype("float64")
     valid = ds.read_masks(int(band)) != 0
     return data, valid
+
+
+def read_valid(ds, band: int = 1):
+    """Return (data: float64 2-D, valid: bool 2-D) for *band*, ``valid`` by :func:`band_valid_mask`: the
+    band's own mask (NoData, the raster's own mask band) and, for a raster with an alpha band, opaque.
+    :func:`read_masked` is the same read judged by the band's GDAL mask alone."""
+    data = ds.read(int(band)).astype("float64")
+    return data, band_valid_mask(ds, int(band))
 
 
 def propagate_invalid(valid: np.ndarray, size: int = 3) -> np.ndarray:

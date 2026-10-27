@@ -15,12 +15,25 @@ import numpy as np
 from numpy.lib.stride_tricks import sliding_window_view
 from scipy import ndimage
 
-from databricks.labs.gbx.pyrx.core._nodata import read_masked
+from databricks.labs.gbx.pyrx.core._nodata import (
+    fallback_nodata,
+    has_alpha,
+    nodata_fits_dtype,
+    read_valid,
+)
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 
 def _nodata_value(ds, default: float = -9999.0) -> float:
-    return ds.nodata if ds.nodata is not None else default
+    """The source's NoData, else *default* when the band type can hold it, else the type's fallback
+    (``fallback_nodata``): a ``uint8`` raster cannot carry -9999."""
+    if ds.nodata is not None:
+        return ds.nodata
+    return (
+        default
+        if nodata_fits_dtype(default, ds.dtypes[0])
+        else fallback_nodata(ds.dtypes[0])
+    )
 
 
 def _out_profile(ds, dtype: str, nd: float, set_nodata: bool) -> dict:
@@ -38,7 +51,9 @@ def filt(ds, kernel_size, operation: str) -> bytes:
     """Apply a focal min/max/mean/median filter per band, GDALBlock semantics.
 
     Output dtype: ``mean`` -> Float32; ``min``/``max``/``median`` -> input dtype.
-    All-invalid windows become NoData.
+    All-invalid windows become NoData. A neighbour is valid by ``_nodata.band_valid_mask``: the
+    band's own mask and, for a raster with an alpha band, opaque, so transparent pixels are skipped
+    like NoData at any band count.
     """
     size = int(kernel_size)
     op = str(operation)
@@ -46,7 +61,7 @@ def filt(ds, kernel_size, operation: str) -> bytes:
     nd = _nodata_value(ds, default=-9999.0)
     out_bands, any_invalid = [], False
     for i in range(1, ds.count + 1):
-        data, valid = read_masked(ds, i)
+        data, valid = read_valid(ds, i)
         if op == "mean":
             num = ndimage.correlate(data * valid, box, mode="constant", cval=0.0)
             cnt = ndimage.correlate(
@@ -91,7 +106,11 @@ def filt(ds, kernel_size, operation: str) -> bytes:
         out_bands.append(res)
     out_dtype = "float32" if op == "mean" else ds.dtypes[0]
     out = np.stack(out_bands)
-    profile = _out_profile(ds, out_dtype, nd, any_invalid or ds.nodata is not None)
+    # a raster with an alpha band declares none: a NoData would shadow it (the all-invalid windows
+    # are written with the value ``nd`` all the same)
+    profile = _out_profile(
+        ds, out_dtype, nd, (any_invalid or ds.nodata is not None) and not has_alpha(ds)
+    )
     return write_gtiff(profile, out.astype(out_dtype), alpha_like=ds.colorinterp)
 
 
@@ -113,7 +132,7 @@ def convolve(ds, kernel) -> bytes:
     nd = _nodata_value(ds, default=-9999.0)
     out_bands = []
     for i in range(1, ds.count + 1):
-        data, valid = read_masked(ds, i)
+        data, valid = read_valid(ds, i)
         # data * valid zeroes out masked / NoData neighbors so they add 0,
         # exactly matching the heavyweight's skip-and-keep-sum behavior.
         res = ndimage.correlate(data * valid, k, mode="nearest")

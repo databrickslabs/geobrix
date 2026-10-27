@@ -17,7 +17,14 @@ from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.pyrx.core import _nodata as nd
-from databricks.labs.gbx.pyrx.core import accessors, agg, derivedband, gridagg
+from databricks.labs.gbx.pyrx.core import (
+    accessors,
+    agg,
+    derivedband,
+    features,
+    focal,
+    gridagg,
+)
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import stretch
 from databricks.labs.gbx.pyrx.core import tessellate as T
@@ -92,18 +99,26 @@ def test_a_same_grid_writer_keeps_the_mask_beside_the_alpha_band(writer, name):
     assert _valid_rows(out) == _want_rows(name), f"{writer} of {name}"
 
 
-@pytest.mark.parametrize("nodata", [None, 7])
+@pytest.mark.parametrize("pending_nodata", [False, True], ids=["plain", "initnodata"])
 @pytest.mark.parametrize("name", BOTH)
 def test_the_virtual_tile_read_keeps_the_mask_beside_the_alpha_band(
-    tmp_path, name, nodata
+    tmp_path, name, pending_nodata
 ):
+    """The lazy read of an alpha source with its own mask. With a pending ``rst_initnodata`` the masked
+    pixels take the NoData instead of being masked (in every band, the alpha band included), and the
+    rows hidden by the mask or by alpha stay invalid either way."""
     path = str(tmp_path / "s.tif")
     with open(path, "wb") as fh:
         fh.write(_fixture(name))
-    tile = VirtualTile(cellid=0, path=path, window=(0, 0, 12, H))
+    meta = {ot.PENDING_NODATA: ot.PENDING_NODATA_AUTO} if pending_nodata else {}
+    tile = VirtualTile(cellid=0, path=path, window=(0, 0, 12, H), metadata=meta)
     out = ot.materialize_to_bytes(tile).raster
     assert _valid_rows(out) == _want_rows(name)
-    assert _valid_rows(ot._windowed_materialize_bytes(tile)) == _want_rows(name)
+    if not pending_nodata:
+        assert _valid_rows(ot._windowed_materialize_bytes(tile)) == _want_rows(name)
+    else:
+        with MemoryFile(out) as mf, mf.open() as ds:
+            assert ds.nodata == 0, "the pending NoData is stamped"
 
 
 @pytest.mark.parametrize(
@@ -434,6 +449,43 @@ def test_a_merge_keeps_the_alpha_band_and_the_mask(monkeypatch, name, streaming)
     assert valid[:, 23].tolist() == [r in _want_rows(name) for r in range(H)]
 
 
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+def test_a_merge_keeps_valid_zero_pixels_when_a_tile_has_an_own_mask(
+    monkeypatch, streaming
+):
+    """The union mask comes from the tiles' mask bands, not from the merged values: a valid pixel
+    that holds 0 (black, sea level) stays valid, and the result does not depend on which path merged
+    the group."""
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+
+    def tile(x):
+        data = np.full((1, 12, 12), 50, dtype="uint8")
+        data[:, 5, :] = 0  # valid zeros
+        mask = np.full((12, 12), 255, dtype="uint8")
+        mask[3, :] = 0
+        prof = dict(
+            driver="GTiff",
+            width=12,
+            height=12,
+            count=1,
+            dtype="uint8",
+            crs="EPSG:4326",
+            transform=from_origin(x, 50, 0.5, 0.5),
+        )
+        with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), MemoryFile() as mf:
+            with mf.open(**prof) as dst:
+                dst.write(data)
+                dst.write_mask(mask)
+            return mf.read()
+
+    out = agg.merge_tiles([tile(10), tile(16)])
+    with MemoryFile(out) as mf, mf.open() as ds:
+        valid = nd.valid_mask(ds)
+    assert valid[:, 0].tolist() == [r != 3 for r in range(12)]
+    assert valid[:, 23].tolist() == [r != 3 for r in range(12)]
+
+
 def _two_crs_tiles(name):
     """A 4326 tile and, beside it, the same layout in 3857 (the 3857 one first: it is the
     reference CRS the other is reprojected to)."""
@@ -467,6 +519,84 @@ def _assert_rows_valid_as_their_source(raster_bytes, name):
     assert (
         valid[covered] == want[covered]
     ).all(), f"{int((valid[covered] != want[covered]).sum())} pixels differ in validity"
+
+
+def _crs_tile(srid, x, width, extra_entries=False):
+    """A 1-band uint8 tile of ``width`` columns in EPSG:``srid``: 4326 at 0.5 degrees or 3857 at
+    50 km, side by side near 10E, 50N."""
+    from rasterio.warp import transform
+
+    if srid == 4326:
+        tf = from_origin(x, 50, 0.5, 0.5)
+    else:
+        mx, my = transform("EPSG:4326", "EPSG:3857", [x], [50])
+        tf = from_origin(mx[0], my[0], 50000.0, 50000.0)
+    prof = dict(
+        driver="GTiff",
+        width=width,
+        height=12,
+        count=1,
+        dtype="uint8",
+        crs=f"EPSG:{srid}",
+        transform=tf,
+    )
+    if extra_entries:
+        prof["nodata"] = 0
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(np.full((1, 12, width), 7, dtype="uint8"))
+            if extra_entries:
+                dst.update_tags(note="x")
+        return mf.read()
+
+
+def _group_sorted_with_4326_first():
+    """A 4326 tile and a 3857 tile whose byte order puts the 4326 one first: the order ``merge_tiles``
+    folds them in, and the one in which the units of its size gate used to be the wrong ones. The
+    first byte that differs is the number of entries in the tile's directory (15 for the 3857 tile
+    and 16 for the 4326 one, whose CRS takes more keys), so the 3857 tile gets two more entries: a
+    NoData and a tag."""
+    a = _crs_tile(4326, 10, 12)
+    b = _crs_tile(3857, 16, 12, extra_entries=True)
+    assert sorted([a, b])[0] == a
+    return [a, b]
+
+
+def test_the_size_gate_of_a_two_crs_merge_is_in_the_reference_crs(monkeypatch):
+    """The reference CRS is the one with the smallest EPSG code (3857 here), and the gate measures the
+    mosaic there, whichever tile stands first in byte order: it used to mix degrees and metres, call a
+    handful of pixels a mosaic of 10^13 and stream it."""
+    group = _group_sorted_with_4326_first()
+    streamed = []
+    monkeypatch.setattr(
+        agg, "_merge_tiles_streaming", lambda rasters: streamed.append(rasters)
+    )
+    out = agg.merge_tiles(group)
+    assert not streamed, "a few pixels were sent to the streaming merge"
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert ds.crs.to_epsg() == 3857 and ds.count == 1
+
+
+def test_the_streamed_merge_uses_the_pixel_size_of_a_tile_in_the_reference_crs(
+    monkeypatch,
+):
+    """Streamed, the tile in another CRS is reprojected onto the pixel size of the reference tile, in
+    the reference CRS's units; it used to take the size of the first tile whatever its CRS
+    (0.5 degrees read as 0.5 metres)."""
+    a, b = _group_sorted_with_4326_first()  # the 4326 tile first
+    seen = []
+
+    class Stop(Exception):
+        pass
+
+    def spy(src, dst_crs, target_res=None):
+        seen.append(target_res)
+        raise Stop
+
+    monkeypatch.setattr(agg, "_reproject_dataset", spy)
+    with pytest.raises(Stop):
+        agg._merge_tiles_streaming([a, b])
+    assert seen == [(50000.0, 50000.0)]
 
 
 @pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])
@@ -609,3 +739,65 @@ def test_percentile_stretch_counts_only_the_pixels_valid_for_the_band(name):
         band1 = o.read(1)
     visible = ~hidden
     assert band1[visible].max() == 255 and band1[visible].min() == 0
+    assert (
+        band1[hidden] == 0
+    ).all(), "a pixel invalid for the band is written 0, as heavy does"
+
+
+# --- focal filters, polygonize and isoband: transparent pixels are skipped like NoData ---------
+
+
+def _striped_alpha_raster(name):
+    """6x6 of layout ``name`` (1 degree pixels): data bands hold 5 over rows 0-1 and 4-5 and 99 over the
+    transparent rows 2-3; the alpha band (an alpha layout's last band) is 255 over the opaque rows, 0 over
+    the transparent ones. A layout without alpha has no transparent rows, but a mask over rows 2-3.
+    """
+    count = len(al.LAYOUTS[name][0])
+    data = np.full((count, 6, 6), 5, dtype="uint8")
+    data[:, 2:4, :] = 99
+    mask = None
+    if al.LAYOUTS[name][1]:
+        data[-1] = 255
+        data[-1, 2:4, :] = 0
+    else:
+        mask = np.full((6, 6), 255, dtype="uint8")
+        mask[2:4, :] = 0
+    return al.layout_bytes(
+        name, data=data, mask=mask, transform=from_origin(0, 6, 1, 1)
+    )
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "rgb_nir"])
+def test_a_focal_max_filter_skips_transparent_and_masked_neighbours(name):
+    """The 99s of the hidden rows are not neighbours: the max of a window is over the pixels valid for the
+    band, so every pixel next to them (and, with valid neighbours left, they themselves) stays 5.
+    """
+    with MemoryFile(_striped_alpha_raster(name)) as mf, mf.open() as ds:
+        out = focal.filt(ds, 3, "max")
+    with MemoryFile(out) as mf, mf.open() as o:
+        band1 = o.read(1)
+    assert (band1 == 5).all(), band1.tolist()
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "rgb_nir"])
+def test_a_convolution_skips_transparent_and_masked_neighbours(name):
+    with MemoryFile(_striped_alpha_raster(name)) as mf, mf.open() as ds:
+        out = focal.convolve(ds, np.ones((3, 3)))
+    with MemoryFile(out) as mf, mf.open() as o:
+        band1 = o.read(1)
+    # row 1: its window holds rows 0-2: six valid 5s from rows 0 and 1 (edge columns shrink the sum to 4*... by
+    # replicate-edge), none from the hidden row 2. The hidden 99s add nothing anywhere.
+    assert band1.max() <= 9 * 5, band1.tolist()
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "rgb_nir"])
+def test_polygonize_and_isoband_leave_out_transparent_and_masked_pixels(name):
+    import shapely.wkb
+
+    with MemoryFile(_striped_alpha_raster(name)) as mf, mf.open() as ds:
+        shapes = features.polygonize(ds, 1, 4)
+        bands = features.isoband(ds, [0, 10, 200], 1)
+    assert sum(shapely.wkb.loads(g).area for g, _ in shapes) == 24.0
+    assert {v for _, v in shapes} == {5.0}
+    assert sum(shapely.wkb.loads(g).area for g, *_ in bands) == 24.0
+    assert {b for _, b, *_ in bands} == {0}

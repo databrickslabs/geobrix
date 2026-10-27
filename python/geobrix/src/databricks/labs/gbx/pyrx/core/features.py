@@ -9,6 +9,7 @@ from rasterio.fill import fillnodata as _fillnodata
 from rasterio.transform import from_bounds
 from shapely.geometry import shape as _shape
 
+from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
 _NODATA = -9999.0
@@ -94,8 +95,8 @@ def rasterize_geom(
 def polygonize(ds, band: int = 1, connectedness: int = 4):
     """Extract vector polygons from contiguous equal-value regions of a band.
 
-    Returns a list of (geom_wkb: bytes, value: float). NoData pixels are
-    excluded via the band mask. ``connectedness`` is 4 or 8.
+    Returns a list of (geom_wkb: bytes, value: float). NoData, masked and
+    transparent pixels are excluded (``_nodata.band_valid_mask``). ``connectedness`` is 4 or 8.
 
     Mirrors heavyweight ``gbx_rst_polygonize`` (GDAL ``GDALPolygonize``), which
     is the *integer* polygonize: it reads the band as ``Int32``, so a float
@@ -109,7 +110,9 @@ def polygonize(ds, band: int = 1, connectedness: int = 4):
     """
     b = int(band)
     arr = ds.read(b)
-    msk = ds.read_masks(b)  # 0 where NoData -> excluded from shapes
+    msk = band_valid_mask(
+        ds, b
+    )  # NoData, masked or transparent -> excluded from shapes
     # GDALPolygonize reads the band as Int32: GDAL's float->int RasterIO rounds
     # to nearest, so np.round (round-half-to-even) reproduces it bit-for-bit.
     arr = np.round(arr).astype("int32")
@@ -125,7 +128,7 @@ def isoband(ds, breaks, band=1):
     """Reclassify a band into value bins ``[breaks[i], breaks[i+1])`` and return one
     ``(geom_wkb, band_index, lower, upper)`` tuple per CONTIGUOUS patch.
 
-    NoData pixels are excluded via the band mask. *breaks* must be strictly
+    NoData, masked and transparent pixels are excluded (``_nodata.band_valid_mask``). *breaks* must be strictly
     ascending; values below ``breaks[0]`` or >= ``breaks[-1]`` are dropped.
 
     Args:
@@ -143,12 +146,12 @@ def isoband(ds, breaks, band=1):
     if not np.all(np.diff(brk) > 0):
         raise ValueError("breaks must be strictly ascending")
     arr = ds.read(int(band))
-    msk = ds.read_masks(int(band))  # 0 where NoData
+    msk = band_valid_mask(ds, int(band))  # False where NoData, masked or transparent
     # np.digitize(right=False) maps a value v to index i such that breaks[i-1] <= v < breaks[i].
     # Subtract 1 → band index in [0, len(brk)-2] for in-range values; 0 maps below-range → -1,
     # and len(brk)-1 maps >= breaks[-1] → len(brk)-2+1 = out-of-range.
     idx = np.digitize(arr, brk, right=False) - 1
-    valid = (idx >= 0) & (idx <= len(brk) - 2) & (msk != 0)
+    valid = (idx >= 0) & (idx <= len(brk) - 2) & msk
     idx = np.where(valid, idx, -1).astype("int32")
     out = []
     for geom_dict, v in _shapes(

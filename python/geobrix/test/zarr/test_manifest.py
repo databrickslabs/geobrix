@@ -6,6 +6,7 @@ without a retry; real concurrency is exercised on Databricks.
 """
 
 import dataclasses
+import json
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -1236,3 +1237,110 @@ def test_the_pruner_keeps_in_so_a_row_without_a_shard_key_is_never_selected(
     assert (
         M.read_rows(spark_delta, snap, kinds="chunk").num_rows == 2
     )  # only unpruned sees it
+
+
+# --- a chunk row is a whole region or a tombstone (Task 6 carry) ---------------------------
+
+
+@pytest.mark.parametrize(
+    "change, match",
+    [
+        ({"offset": None}, "not a whole region"),
+        ({"length": None}, "not a whole region"),
+        ({"length": 0}, "not a whole region"),  # a file and no bytes
+        ({"offset": -1}, "not a whole region"),
+        (
+            {"file": None, "offset": None, "length": 7, "checksum": None},
+            "not a tombstone",
+        ),
+        ({"file": None, "offset": 0, "length": 0, "checksum": None}, "not a tombstone"),
+        (
+            {"file": None, "offset": None, "length": 0, "checksum": "00"},
+            "not a tombstone",
+        ),
+        ({"file": None, "offset": None, "length": None, "checksum": None}, "tombstone"),
+    ],
+)
+def test_commit_refuses_a_row_that_is_neither_a_region_nor_a_tombstone(change, match):
+    w = uuid.uuid4().hex
+    row = {**_chunk("c/0/0/0", w), **change}
+    with pytest.raises(ZarrError, match=match) as e:
+        M.commit(None, "t", _rows(row), write_id=w, meta={})  # refused before any query
+    assert "Fix:" in str(e.value) and "t2m/c/0/0/0" in str(e.value)
+
+
+def test_a_shard_row_always_names_a_file():
+    w = uuid.uuid4().hex
+    row = {**_shard_row("t2m", "c/0/0/0", w, "c/0/0/0"), "file": None, "offset": None}
+    row.update(length=0, checksum=None)
+    with pytest.raises(ZarrError, match="a shard row always names one"):
+        M.commit(None, "t", _rows(row), write_id=w, meta={})
+
+
+def test_a_tombstone_commits_and_hides_the_inner_chunk_a_shard_row_holds(
+    spark_delta, table
+):
+    w = uuid.uuid4().hex
+    tomb = {
+        **_chunk("c/0/0/1", w),
+        "file": None,
+        "offset": None,
+        "length": 0,
+        "checksum": None,
+    }
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_shard_row("t2m", "c/0/0/0", w, "c/0/0/0"), tomb),
+        write_id=w,
+        meta={},
+        sharded={"t2m": True},
+    )
+    live = {r["key"]: r for r in _live(spark_delta, table)}
+    assert live["c/0/0/1"]["length"] == 0 and live["c/0/0/1"]["file"] is None
+
+
+# --- the writer passes the sharding it knows (follow-up M1, Isaac K20) ---------------------
+
+
+def test_a_caller_that_knows_the_sharding_spares_the_lookup_and_stays_columnar():
+    """Every v2 array and every unsharded v3 append used to cost two driver queries and a
+    Python dict per row; with ``sharded`` there is no query (no session is passed)."""
+    n = 300_000
+    w = uuid.uuid4().hex
+    source = M._commit_source(
+        pa.table(
+            {
+                "kind": pa.array(["chunk"] * n),
+                "array": pa.array(["a"] * n),
+                "key": pa.array([f"c/{i}" for i in range(n)]),
+                "write_id": pa.array([w] * n),
+                "op": pa.array(["upsert"] * n),
+                "expected_write_id": pa.nulls(n, pa.string()),
+                "file": pa.array(["f"] * n),
+                "offset": pa.array(range(n), pa.int64()),
+                "length": pa.array([1] * n, pa.int64()),
+            }
+        ),
+        w,
+        {},
+    )
+    started = time.monotonic()
+    M._require_shard_keys(None, "t", source, {"a": False})
+    assert time.monotonic() - started < 5.0
+    with pytest.raises(ZarrError, match=f"{n} chunk row"):
+        M._require_shard_keys(None, "t", source, {"a": True})
+
+
+def test_a_v2_document_in_the_commit_says_not_sharded_without_a_lookup():
+    w = uuid.uuid4().hex
+    zarray = dict(
+        kind="array",
+        array="t2m",
+        key=".zarray",
+        write_id=w,
+        op="upsert",
+        meta=json.dumps({"zarr_format": 2, "shape": [4], "chunks": [2]}),
+    )
+    rows = _rows(zarray, _bare("t2m", "0", w))
+    M._require_shard_keys(None, "t", M._commit_source(rows, w, {}))  # no session needed

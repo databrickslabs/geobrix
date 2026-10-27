@@ -716,19 +716,87 @@ def _commit_source(rows: pa.Table, write_id: str, meta: dict) -> pa.Table:
     )
 
 
+_REGION_FIX = (
+    "write each shard or chunk row with its file, offset and length (> 0), or delete a "
+    "chunk with a tombstone: a chunk row with no file, offset or checksum and length 0"
+)
+
+
+def _require_regions(source: pa.Table) -> None:
+    """Refuse an upserted shard or chunk row that is neither a region nor a tombstone.
+
+    A row with a file is a region of it: ``offset`` and ``length`` are set, ``offset`` is
+    not negative and ``length`` is positive (a zero-byte region with a file would read as
+    a chunk of nothing). A row without a file is a tombstone, the one way to delete an inner
+    chunk that a live shard row still holds: a ``chunk`` row with no ``offset`` and no
+    ``checksum`` and ``length`` 0. The store reads anything else as drift, so it is never
+    written. Columnar: a commit can carry millions of rows.
+    """
+    kind, op = source.column("kind"), source.column("op")
+    data = pc.and_(
+        pc.equal(op, "upsert"), pc.is_in(kind, value_set=pa.array(["shard", "chunk"]))
+    )
+    if not pc.any(data, min_count=0).as_py():
+        return
+    has_file = pc.is_valid(source.column("file"))
+    offset, length = source.column("offset"), source.column("length")
+    no_region = pc.or_(pc.is_null(offset), pc.is_null(length))
+    bad_region = pc.or_(
+        no_region,
+        pc.or_(
+            pc.fill_null(pc.less_equal(length, 0), True),
+            pc.fill_null(pc.less(offset, 0), True),
+        ),
+    )
+    bad_tomb = pc.or_(
+        pc.or_(pc.equal(kind, "shard"), pc.is_valid(offset)),
+        pc.or_(
+            pc.fill_null(pc.not_equal(length, 0), True),
+            pc.is_valid(source.column("checksum")),
+        ),
+    )
+    bad = pc.and_(data, pc.if_else(has_file, bad_region, bad_tomb))
+    if not pc.any(bad, min_count=0).as_py():
+        return
+    row = source.filter(bad).slice(0, 1).to_pylist()[0]
+    label = f"{row['array']}/{row['key']}" if row["array"] else row["key"]
+    if row["file"] is not None:
+        problem = (
+            f"names the file {row['file']!r} with offset {row['offset']} and length "
+            f"{row['length']}, which is not a whole region"
+        )
+    elif row["kind"] == "shard":
+        problem = "has no file (a shard row always names one)"
+    else:
+        problem = (
+            f"has no file but offset {row['offset']}, length {row['length']} and "
+            f"checksum {row['checksum']!r}, which is not a tombstone"
+        )
+    raise ZarrError(
+        f"the {row['kind']} row {label} {problem}; a read would take it for drift.",
+        fix=_REGION_FIX,
+    )
+
+
 def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> set[str]:
     """Which of the arrays ``names`` are sharded: by the array document this commit writes,
-    else by the one the table holds now. An array nobody has described is not."""
+    else by the one the table holds now. An array nobody has described is not, and neither
+    is a Zarr v2 array (a ``.zarray`` document): v2 has no sharding."""
     docs: dict[str, str | None] = {}
     described = source.filter(
         pc.and_(
-            pc.equal(source.column("kind"), "array"),
-            pc.equal(source.column("op"), "upsert"),
+            pc.and_(
+                pc.equal(source.column("kind"), "array"),
+                pc.equal(source.column("op"), "upsert"),
+            ),
+            pc.is_in(source.column("array"), value_set=pa.array(names, pa.string())),
         )
     )
-    for row in described.to_pylist():
-        if row["key"] == "zarr.json" and row["array"] in names:
+    for row in described.select(["array", "key", "meta"]).to_pylist():
+        if row["key"] == "zarr.json":
             docs[row["array"]] = row["meta"]
+        elif row["key"] == ".zarray":
+            docs.setdefault(row["array"], None)
     missing = [n for n in names if n not in docs]
     if missing:
         snap = Snapshot(table, _latest_version(spark, table))
@@ -745,15 +813,23 @@ def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> se
     return {n for n, text in docs.items() if sharded(text)}
 
 
-def _require_shard_keys(spark, table: str, source: pa.Table) -> None:
+def _require_shard_keys(
+    spark, table: str, source: pa.Table, sharded: dict | None = None
+) -> None:
     """Refuse an upserted shard or chunk row of a sharded array that has no ``shard_key``.
 
     A read selects a sharded array's rows with ``shard_key IN (...)`` (``read_rows``), and
     NULL is in no list: such a row would be skipped, and its chunk would read as old bytes or
     fill, silently. So a shard row, whose ``shard_key`` is its own key, and a chunk row of an
     array the manifest knows to be sharded, must say which shard they lie in. Rows of
-    unsharded arrays, and deletes (matched on their key), need none. The table is read only
-    when some chunk row lacks a ``shard_key`` and its array is not described in this commit.
+    unsharded arrays, and deletes (matched on their key), need none.
+
+    ``sharded`` maps array names to whether they are sharded, for a caller that knows (the
+    writer does): those arrays need no lookup. For the others the table is read only when
+    some chunk row lacks a ``shard_key`` and its array is not described in this commit
+    (a Zarr v2 document there says "not sharded" without one). The rows are filtered
+    column by column; only the distinct array names and the first offending row become
+    Python objects.
     """
     kind, op = source.column("kind"), source.column("op")
     bare = source.filter(
@@ -767,23 +843,28 @@ def _require_shard_keys(spark, table: str, source: pa.Table) -> None:
     )
     if not bare.num_rows:
         return
-    rows = bare.to_pylist()
-    found = [r for r in rows if r["kind"] == "shard"]
-    chunks = [r for r in rows if r["kind"] == "chunk"]
-    if not found and chunks:
-        sharded = _sharded_arrays(
-            spark, table, source, sorted({r["array"] for r in chunks})
+    found = bare.filter(pc.equal(bare.column("kind"), "shard"))
+    if not found.num_rows:
+        names = [n for n in pc.unique(bare.column("array")).to_pylist()]
+        known = {n: bool(v) for n, v in (sharded or {}).items()}
+        ask = sorted(n for n in names if n is not None and n not in known)
+        if ask:
+            hits = _sharded_arrays(spark, table, source, ask)
+            known.update({n: n in hits for n in ask})
+        bad = [n for n in names if n is not None and known.get(n)]
+        if not bad:
+            return
+        found = bare.filter(
+            pc.is_in(bare.column("array"), value_set=pa.array(bad, pa.string()))
         )
-        found = [r for r in chunks if r["array"] in sharded]
-    if found:
-        first = found[0]
-        raise ZarrError(
-            f"{len(found)} {first['kind']} row(s) of the sharded array {first['array']!r} "
-            f"have no shard_key (first: {first['key']!r}), so a read that selects by "
-            "shard would skip them and their chunks would read as stale or fill.",
-            fix="set shard_key on every shard and chunk row of a sharded array to the key "
-            "of the shard it lies in",
-        )
+    first = found.slice(0, 1).to_pylist()[0]
+    raise ZarrError(
+        f"{found.num_rows} {first['kind']} row(s) of the sharded array {first['array']!r} "
+        f"have no shard_key (first: {first['key']!r}), so a read that selects by "
+        "shard would skip them and their chunks would read as stale or fill.",
+        fix="set shard_key on every shard and chunk row of a sharded array to the key "
+        "of the shard it lies in",
+    )
 
 
 def _with_view(spark, data: pa.Table, schema: pa.Schema, run):
@@ -903,21 +984,33 @@ def _write_conflict(
     )
 
 
-def commit(spark, table: str, rows: pa.Table, *, write_id: str, meta: dict) -> int:
+def commit(
+    spark,
+    table: str,
+    rows: pa.Table,
+    *,
+    write_id: str,
+    meta: dict,
+    sharded: dict | None = None,
+) -> int:
     """Commit ``rows`` plus a commit row in one MERGE; returns the Delta version.
 
     ``rows`` holds the manifest columns plus ``op`` (``"upsert"`` | ``"delete"``) and
     ``expected_write_id`` (the row's ``write_id`` in the base snapshot; null means
-    "must not exist"). Every shard row, and every chunk row of a sharded array, must carry
-    its ``shard_key`` (``_require_shard_keys``). A stale expectation aborts the whole MERGE
-    and raises ``ZarrWriteConflict`` listing every key that changed; a Delta conflict with
-    a concurrent commit raises the retryable ``ConcurrentCommit``. A ``write_id`` that
+    "must not exist"). Every upserted shard or chunk row is a whole region of a file or a
+    chunk tombstone (``_require_regions``). Every shard row, and every chunk row of a
+    sharded array, must carry its ``shard_key`` (``_require_shard_keys``); ``sharded``
+    (array name to whether it is sharded) spares that check its table lookup for the arrays
+    a caller already knows. A stale expectation aborts the whole MERGE and raises
+    ``ZarrWriteConflict`` listing every key that changed; a Delta conflict with a
+    concurrent commit raises the retryable ``ConcurrentCommit``. A ``write_id`` that
     already committed returns its existing version, so retries are idempotent, even when a
     twin of the same write lands between the check and the MERGE.
     """
     _check_write_id(write_id)
     source = _commit_source(rows, write_id, meta)
-    _require_shard_keys(spark, table, source)
+    _require_regions(source)
+    _require_shard_keys(spark, table, source, sharded)
     existing = find_commit_version(spark, table, write_id)
     if existing is not None:
         return existing

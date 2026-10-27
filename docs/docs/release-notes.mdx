@@ -431,18 +431,47 @@ formats.
   pixels, and the chips keep that alpha band (see the next entry). A source's own mask band (not
   an alpha band) is kept, also when the source declares NoData: both tiers used to let the masked
   pixels of a source that declared NoData through the warp as valid data.
-- **Lightweight chips of an RGBA source keep its alpha band.** Tessellating a source with an alpha
-  band and no NoData (aerial imagery as RGBA, for example), the lightweight tier declared the
-  NoData fallback (0 for `uint8`) on every chip, over the alpha band. That hid the alpha band, so
-  the transparent pixels, whose colour bands are not 0, read as valid data in `centroid` chips,
-  and reading the mask of a `covering` chip raised a `NodataShadowWarning`. The chips now keep the
-  alpha band and declare no NoData: a pixel with alpha 0, and the part of a chip outside its cell,
-  is NoData, and an opaque pixel whose colour bands are 0 stays valid. The heavyweight tier gives
-  the same pixels for a source it warps to EPSG:27700 for `rst_bng_tessellate`, and in `covering`;
-  its `centroid` chips of a source that is not warped still read transparent pixels as valid.
-  The lightweight warps and clips also stopped labelling the fourth band of a four-band raster
-  without alpha (red, green, blue and near-infrared, for example) as alpha, which made that band a
-  transparency mask, and now keep the alpha band of 16-bit RGBA and gray-plus-alpha rasters.
+- **Chips of a source with an alpha band keep it, in both tiers.** The alpha band of a raster is
+  its last band, when that band is labelled alpha, as gdalwarp reads a source; a band labelled
+  alpha anywhere else is ordinary data. Tessellating a source with an alpha band and no NoData
+  (aerial imagery as RGBA, for example), the lightweight tier declared the NoData fallback (0 for
+  `uint8`) on every chip, over the alpha band. That hid the alpha band, so the transparent pixels,
+  whose colour bands are not 0, read as valid data in `centroid` chips, and reading the mask of a
+  `covering` chip raised a `NodataShadowWarning`. The heavyweight tier did the same in the
+  `centroid` chips of a source it does not warp: `rst_h3_tessellate`, `rst_quadbin_tessellate`,
+  the custom grid, and `rst_bng_tessellate` of a source already in EPSG:27700. The chips in both
+  tiers now keep the alpha band and declare no NoData: a pixel with alpha 0, and the part of a chip
+  outside its cell, is NoData, and an opaque pixel whose colour bands are 0 stays valid. A chip is
+  labelled alpha exactly where its source is: the fourth band of a `uint8` source without alpha
+  (red, green, blue and near-infrared, for example) stays an ordinary band, and the alpha band of
+  a 16-bit RGBA source stays alpha, in the heavyweight chips too.
+- **A transparent pixel belongs to no cell.** Both tiers gave the pixels with alpha 0 to cells,
+  so `rst_*_tessellate` with `assignment='centroid'` and `coverage='sparse'` emitted cells that
+  hold only transparent pixels. A pixel is now valid when its alpha is above 0 and some data band
+  is valid by its NoData or its mask, at every band count: GDAL derives a mask from an alpha band
+  only for two- and four-band rasters, so a three-band gray-plus-extra-plus-alpha raster or a
+  six-band one with alpha used to read as entirely valid, and `covering` with `coverage='sparse'`
+  kept the chips that were entirely transparent. A pixel that is NoData in the colour bands is
+  NoData also under an opaque alpha, when the source declares that NoData. A raster that is only
+  an alpha band is judged by its alpha values.
+- **Lightweight functions keep the alpha label of their source.** GDAL labels band 4 of every
+  four-band `uint8` GeoTIFF alpha when it creates one, and drops the alpha band of a 16-bit RGBA or
+  a gray-plus-alpha raster. The lightweight functions that rewrite a raster, `gbx_rst_updatetype`,
+  `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_filter`,
+  `gbx_rst_convolve`, `gbx_rst_fillnodata`, `gbx_rst_resample` and its variants,
+  `gbx_rst_buildoverviews`, `gbx_rst_asformat` to GeoTIFF, `gbx_rst_cog_convert`, the virtual-tile
+  reads and the tile encoders of the `raster_gbx` and `cog_gbx` writers, used to
+  label the fourth band of a four-band raster without alpha (red, green, blue and near-infrared, for
+  example) as alpha, which made that band a transparency mask, and lost the alpha band of other
+  rasters. They now label a band alpha exactly where the raster they read does.
+- **The lightweight reprojection and the tile encoders keep a source's own mask band.**
+  `gbx_rst_transform` and `gbx_rst_transformcrs` dropped the own mask band (not an alpha band) of a
+  source, as JPEG-compressed aerial imagery often carries, so its masked pixels read as valid data;
+  so did a transform to the CRS the raster is already in, the `raster_gbx` writer's tile encoder
+  and its compression re-encode, and the windows of the `cog_gbx` writer's mosaic tiles. The
+  masked pixels stay masked now: where the source declares a NoData they take it, and otherwise
+  the mask is warped with the pixels and written with the output, as a virtual tile with a target
+  CRS does.
 - **Heavyweight covering keeps a source's own mask.** Some sources carry their own mask band
   (not an alpha band), as JPEG-compressed aerial imagery often does. With
   `assignment='covering'`, the heavyweight clip of each cell used to let the pixels that mask

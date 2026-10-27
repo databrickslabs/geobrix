@@ -1330,13 +1330,23 @@ def test_bng_tessellate_warp_fill_parity(spark_with_jar, assignment):
         ), f"{label}: {tier} {fill} of {valid.size} valid chip pixels are not source values (warp fill)"
 
 
-def _rgba_raster():
-    """40x40 uint8 RGBA EPSG:4326 source over Norfolk: non-zero RGB and an opaque alpha,
-    except rows 4-8 (alpha 0, RGB still non-zero) and row 20 (real R = G = B = 0 under an
-    opaque alpha)."""
+# name -> (CRS, bounds of the 40x40 source): the 4326 source is warped to EPSG:27700 for BNG
+# and tessellated as it is by H3 and quadbin; the 27700 source is not warped by BNG.
+_RGBA_SOURCES = {
+    "4326": ("EPSG:4326", (1.00, 52.40, 1.20, 52.60)),
+    "27700": ("EPSG:27700", (620000.0, 290000.0, 640000.0, 310000.0)),
+}
+_RGBA_RES = {"h3": 7, "bng": 3, "quadbin": 12}
+
+
+def _rgba_raster(source="4326"):
+    """40x40 uint8 RGBA source over Norfolk (EPSG:4326) or Great Britain (EPSG:27700):
+    non-zero RGB and an opaque alpha, except rows 4-8 (alpha 0, RGB still non-zero) and row 20
+    (real R = G = B = 0 under an opaque alpha)."""
     from rasterio.io import MemoryFile
     from rasterio.transform import from_bounds
 
+    crs, bounds = _RGBA_SOURCES[source]
     n = _FILL_N
     p = np.arange(n * n, dtype="int64").reshape(n, n)
     bands = [((p * k) % 199 + 1).astype("uint8") for k in (1, 3, 7)]
@@ -1350,8 +1360,8 @@ def _rgba_raster():
         height=n,
         count=4,
         dtype="uint8",
-        crs="EPSG:4326",
-        transform=from_bounds(1.00, 52.40, 1.20, 52.60, n, n),
+        crs=crs,
+        transform=from_bounds(*bounds, n, n),
         photometric="RGB",
         alpha="YES",
     )
@@ -1362,38 +1372,33 @@ def _rgba_raster():
         return mf.read()
 
 
-# The heavyweight centroid chips of a source that is not warped declare NoData over its
-# alpha band, so their transparent pixels (alpha 0, RGB non-zero) stay valid: only the BNG
-# warp, which zeroes them, masks them. The lightweight chips keep the alpha band instead.
-_HEAVY_KEEPS_TRANSPARENT = pytest.mark.xfail(
-    strict=True,
-    raises=AssertionError,
-    reason=(
-        "heavyweight centroid chips of an unwarped RGBA source still treat transparent "
-        "pixels as valid; tracked for a follow-up fix"
-    ),
-)
+# (grid, source, assignment, coverage): the source is warped only by BNG, and only when it
+# is not already in EPSG:27700.
 _RGBA_CASES = [
-    ("bng", "centroid", "sparse"),
-    ("bng", "centroid", "complete"),
-    ("bng", "covering", "sparse"),
-    ("h3", "centroid", "sparse"),
-    ("h3", "centroid", "complete"),
-    ("h3", "covering", "sparse"),
+    (grid, source, assignment, coverage)
+    for grid, source in [
+        ("bng", "4326"),
+        ("bng", "27700"),
+        ("h3", "4326"),
+        ("quadbin", "4326"),
+    ]
+    for assignment, coverage in [
+        ("centroid", "sparse"),
+        ("centroid", "complete"),
+        ("covering", "sparse"),
+    ]
 ]
 
 
-def _rgba_chip_stats(spark, grid, assignment, coverage):
+def _rgba_chip_stats(spark, grid, source, assignment, coverage):
     """Tessellate the RGBA source in both tiers; return ``{tier: stats}`` after checking that
     both emit the same cells.
 
     ``stats`` counts the valid chip pixels (``valid_mask``) by where their source pixel
     lies: ``valid``, ``outside`` the source footprint, ``transparent`` (the alpha-0 rows
-    4-8), ``zero_rgb`` (R = G = B = 0) and ``zero_rgb_off`` (those not in the opaque row 20).
-    ``counts`` is the valid pixels per cell and ``counts_opaque`` the same without the
-    pixels of the transparent rows. Reading a lightweight or a heavyweight covering chip's
-    masks never warns that NoData shadows its alpha band; the heavyweight centroid chips
-    still declare NoData over it (see ``_HEAVY_KEEPS_TRANSPARENT``), so only they may warn.
+    4-8, whose centres are at 4.5 .. 8.5), ``zero_rgb`` (R = G = B = 0) and ``zero_rgb_off``
+    (those not in the opaque row 20). ``counts`` is the valid pixels per cell. Reading a
+    chip's masks never warns that NoData shadows its alpha band, in either tier.
     """
     import warnings
 
@@ -1404,9 +1409,9 @@ def _rgba_chip_stats(spark, grid, assignment, coverage):
     from databricks.labs.gbx.pyrx.core._nodata import valid_mask
 
     sql_name, fn_name, bng = _TESS_CONFIG[grid]
-    raster = _rgba_raster()
-    res = 3 if bng else 7
-    label = f"{grid} rgba {assignment} {coverage}"
+    raster = _rgba_raster(source)
+    res = _RGBA_RES[grid]
+    label = f"{grid} rgba {source} {assignment} {coverage}"
 
     def _id(cid):
         return _tess_id(cid, bng=bng)
@@ -1428,24 +1433,20 @@ def _rgba_chip_stats(spark, grid, assignment, coverage):
     )
 
     n = _FILL_N
-    to_src = get_transformer(27700, 4326).transform if bng else None
+    # a chip pixel is on the source grid as it is, except BNG chips of a source it warps
+    to_src = (
+        get_transformer(27700, 4326).transform if bng and source == "4326" else None
+    )
     with MemoryFile(raster) as mf, mf.open() as src:
         inv = ~src.transform
     stats = {}
     for tier, tier_rows in rows.items():
         st = dict(valid=0, outside=0, transparent=0, zero_rgb=0, zero_rgb_off=0)
-        st.update(counts={}, counts_opaque={})
+        st["counts"] = {}
         for cid, b, _ in tier_rows:
-            st["counts"][cid] = st["counts_opaque"][cid] = 0
+            st["counts"][cid] = 0
             with MemoryFile(b) as mf, mf.open() as ds, warnings.catch_warnings():
-                warnings.simplefilter(
-                    (
-                        "error"
-                        if tier == "light" or assignment == "covering"
-                        else "ignore"
-                    ),
-                    NodataShadowWarning,
-                )
+                warnings.simplefilter("error", NodataShadowWarning)
                 data = ds.read()
                 rr, cc = np.nonzero(valid_mask(ds))
                 xs, ys = ds.transform * (cc + 0.5, rr + 0.5)
@@ -1453,10 +1454,11 @@ def _rgba_chip_stats(spark, grid, assignment, coverage):
                     st["valid"] += 1
                     st["counts"][cid] += 1
                     sc, sr = inv * (to_src(float(x), float(y)) if to_src else (x, y))
-                    st["counts_opaque"][cid] += not 4.0 <= sr < 9.0
                     if not (-1.5 <= sc <= n + 1.5 and -1.5 <= sr <= n + 1.5):
                         st["outside"] += 1
-                    elif 4.75 <= sr <= 8.25:
+                    elif (
+                        4.25 <= sr <= 8.75
+                    ):  # the interior of rows 4-8, centres included
                         st["transparent"] += 1
                     if (data[:3, r, k] == 0).all():
                         st["zero_rgb"] += 1
@@ -1465,16 +1467,15 @@ def _rgba_chip_stats(spark, grid, assignment, coverage):
     return stats
 
 
-@pytest.mark.parametrize("grid,assignment,coverage", _RGBA_CASES)
-def test_tessellate_rgba_parity(spark_with_jar, grid, assignment, coverage):
-    """Tessellate of a 4326 RGBA source: both tiers emit the same cells, no valid chip pixel
-    lies off the source footprint (the BNG warp fill is NoData), the source's real all-zero
-    pixels under an opaque alpha stay valid, the lightweight chips mask the transparent
-    pixels, and centroid chips hold the same number of valid pixels per cell (not counting
-    the transparent rows, which the heavyweight tier may keep: see the next test).
-    """
-    label = f"{grid} rgba {assignment} {coverage}"
-    stats = _rgba_chip_stats(spark_with_jar, grid, assignment, coverage)
+@pytest.mark.parametrize("grid,source,assignment,coverage", _RGBA_CASES)
+def test_tessellate_rgba_parity(spark_with_jar, grid, source, assignment, coverage):
+    """Tessellate of an RGBA source: both tiers emit the same cells; no valid chip pixel lies
+    off the source footprint (the BNG warp fill is NoData); the source's real all-zero pixels
+    under an opaque alpha stay valid; the transparent pixels (alpha 0, RGB non-zero) are NoData
+    in the chips of both tiers, also for a source that is not warped (H3, quadbin, BNG of a
+    27700 source); and centroid chips hold the same number of valid pixels per cell."""
+    label = f"{grid} rgba {source} {assignment} {coverage}"
+    stats = _rgba_chip_stats(spark_with_jar, grid, source, assignment, coverage)
     for tier, st in stats.items():
         assert st["valid"], f"{label}: {tier} chips hold no valid pixel"
         assert (
@@ -1482,34 +1483,9 @@ def test_tessellate_rgba_parity(spark_with_jar, grid, assignment, coverage):
         ), f"{label}: {tier} {st['outside']} valid off the source"
         assert st["zero_rgb"], f"{label}: {tier} lost the opaque all-zero pixels"
         assert st["zero_rgb_off"] == 0, f"{label}: {tier} zero pixels off row 20"
-    assert stats["light"]["transparent"] == 0, f"{label}: light transparent valid"
-    if assignment == "centroid":
-        light, heavy = stats["light"]["counts_opaque"], stats["heavy"]["counts_opaque"]
-        differ = {c: (light[c], heavy[c]) for c in light if light[c] != heavy[c]}
-        assert not differ, f"{label}: valid pixels per cell (light, heavy): {differ}"
-
-
-@pytest.mark.parametrize(
-    "grid,assignment,coverage",
-    [
-        (
-            pytest.param(*case, marks=_HEAVY_KEEPS_TRANSPARENT)
-            if case[:2] == ("h3", "centroid")
-            else case
-        )
-        for case in _RGBA_CASES
-    ],
-)
-def test_tessellate_rgba_heavy_masks_transparent_pixels(
-    spark_with_jar, grid, assignment, coverage
-):
-    """The heavyweight chips treat the transparent pixels (alpha 0, RGB non-zero) as NoData,
-    as the lightweight chips do, so the valid pixels per centroid cell match in full."""
-    label = f"{grid} rgba {assignment} {coverage}"
-    stats = _rgba_chip_stats(spark_with_jar, grid, assignment, coverage)
-    assert (
-        stats["heavy"]["transparent"] == 0
-    ), f"{label}: heavy {stats['heavy']['transparent']} transparent valid"
+        assert (
+            st["transparent"] == 0
+        ), f"{label}: {tier} {st['transparent']} transparent valid"
     if assignment == "centroid":
         light, heavy = stats["light"]["counts"], stats["heavy"]["counts"]
         differ = {c: (light[c], heavy[c]) for c in light if light[c] != heavy[c]}

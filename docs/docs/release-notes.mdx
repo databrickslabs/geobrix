@@ -537,10 +537,40 @@ formats.
 - **A band selection writes the alpha band as data, unless it is selected last with a data
   band.** `gbx_rst_band` and `gbx_rst_separatebands` extract a band for its values, so the alpha
   band of an RGBA raster comes out as an ordinary band, valid wherever its own NoData says so, in
-  both tiers. They used to keep the alpha label (heavyweight tier, and the lightweight tier on
-  tiles read lazily), which made the zero pixels of the extracted band NoData. A selection of
+  both tiers. They used to keep the alpha label (the heavyweight tier, and the lightweight
+  `gbx_rst_band` of a lazily read tile), which made the zero pixels of the extracted band NoData. A selection of
   several bands keeps the alpha label only when the source's alpha band is selected last with at
   least one other band; a band labelled alpha anywhere else in the source is ordinary data.
+- **A raster with an alpha band and its own mask band keeps both.** GDAL reports only the own mask
+  of a raster that has both, so the writers and warps that look for a mask band skipped every
+  raster with an alpha band, and the pixels the mask hides came out valid. The lightweight
+  encoders, writers and reprojections, and the heavyweight warp behind covering, `rst_initnodata`
+  and the raster-to-grid reducers, now carry the mask beside the alpha band: a pixel is valid when
+  a data band is valid, its alpha is above 0 and the mask says so. The heavyweight warp labels the
+  alpha band alpha again in its output.
+- **The remaining lightweight writers keep the alpha label and the own mask.** The `cog_gbx`
+  writer's quadbin, h3 and BNG cells, and its `pruneEmpty` check (a window or cell with no valid
+  pixel is not written, whether it is all NoData, all transparent or all masked); the COG
+  re-encode of the `raster_gbx` writer; `gbx_rst_frombands` and `gbx_rst_derivedband` (a stack of
+  four `uint8` tiles no longer gets an alpha band from GDAL's default, and a derived band is
+  invalid where its input is); `gbx_rst_merge` and the streamed merge of large groups, whose
+  mosaic index now carries the colour interpretation and the union of the tiles' masks; the
+  `pmtiles_gbx` reader's RGB sibling of an RGBA source; and the `netcdf_gbx` `bandDim` stack
+  (four `uint8` steps used to read the fourth as alpha). The h3 cells of a source with an alpha
+  band declare no NoData over it: their pixels outside the hexagon are written transparent.
+- **Chips copy the colour interpretation of every band.** Tessellation chips and clips used to
+  copy only the alpha label, so RGB, and the data bands of a gray-plus-extra-plus-alpha or a
+  16-bit RGBA raster, followed GDAL's defaults for a new GeoTIFF. Both tiers now label each band
+  as the source does.
+- **A transparent pixel counts for no band, whatever the band count.** The raster-to-grid
+  reducers (`rst_h3_rastertogrid*`, `rst_quadbin_rastertogrid*`, `rst_bng_rastertogrid*` and the
+  custom-grid variants) and the band statistics `gbx_rst_pixelcount`, `gbx_rst_avg`,
+  `gbx_rst_min` and `gbx_rst_max`, and the percentiles of `gbx_rst_percentile_stretch`, judge each
+  band by its own NoData or mask and its alpha band, in both tiers: GDAL derives a mask from an
+  alpha band only for two- and four-band rasters, and the heavyweight statistics ignored even that
+  one, so they counted the transparent pixels. The alpha band itself is summarised over every
+  pixel. `gbx_rst_isempty` is true for a raster with no valid pixel, so an entirely transparent
+  raster is empty.
 - **The lightweight reprojection and the tile encoders keep a source's own mask band.**
   `gbx_rst_transform` and `gbx_rst_transformcrs` dropped the own mask band (not an alpha band) of a
   source, as JPEG-compressed aerial imagery often carries, so its masked pixels read as valid data;

@@ -81,7 +81,7 @@ light-base = [
     # floor-only elsewhere and floats to latest on the dev-container / transitive
     # path, so bound it like the other runtime-sensitive deps rather than leave it open.
     "scipy>=1.11.0,<2",
-    "numexpr>=2.8.0",
+    "numexpr>=2.14.1",
     "rio-cogeo>=7.0,<8",
     "h3>=4.1,<5",
     "quadbin>=0.2,<0.3",
@@ -210,8 +210,9 @@ light_env6 = ["geobrix[light_dbr19]"]
 #   (env 6 / DBR 19 base: 2.32.5). Checked against the DCS env 6 base image, `requests` is the
 #   one base package _all moves; the light extras' pins and the click cap below hold the rest.
 # [overture] and [earthdata] are opt-in source-specific downloaders NOT in _all:
-#   overturemaps 1.x needs click>=8.4 (a base package move — accepted for a
-#   downloader, like [earthdata]); keeping it out keeps _all from also moving click.
+#   overturemaps 1.x needs click>=8.3.0 and tqdm>=4.67.3 (base package moves on most
+#   runtimes — accepted for a downloader, like [earthdata]); keeping it out keeps _all from
+#   also moving click and tqdm.
 # The umbrellas also cap `click` at the per-regime base (pb5 <8.2 base 8.1.8;
 #   pb6 >=8.2,<8.3 base 8.2.1 — the floor stops a downgrade to 8.1.8) so
 #   [stac]/[vizx]'s closure can't float it (verified: env6
@@ -305,12 +306,14 @@ databricks = [
 ]
 # Overture Maps data source (gbx.sample.overture): static-STAC catalog traversal.
 # pystac is the static-catalog reader; geopandas/pyarrow (in [light-base]) do parquet read.
-# overturemaps 1.x requires click>=8.4 (a base package move), so [overture] is an
-# opt-in downloader kept OUT of _all — like [earthdata]. Users who need Overture
-# install geobrix[light_env6,overture] and accept the click bump.
+# overturemaps 1.x requires click>=8.3.0 and tqdm>=4.67.3, so [overture] moves base packages
+# (click 8.1.7-8.2.1 -> 8.5.0 on every runtime; tqdm 4.67.1 -> 4.70.1 on DBR 18/19 and env 5/6,
+# newly installed on DBR 17.3). It is an opt-in downloader kept OUT of _all — like [earthdata].
+# Users who need Overture install geobrix[light_env6,overture] and accept those bumps.
+# The >=1.0.2 floor fences out 1.0.0 and 1.0.1, which predate the fix for absolute STAC catalog hrefs.
 overture = [
     "pystac>=1.9,<2",
-    "overturemaps>=1.0,<2",
+    "overturemaps>=1.0.2,<2",
 ]
 # STAC catalog client (lightweight): distributed search + resilient download + repair.
 # Optional extra so [light_env6] users who don't need STAC don't pull pystac/planetary-computer.
@@ -345,7 +348,7 @@ vizx = [
     "mapclassify>=2.6,<3",
     "contextily>=1.5,<2",
     "anywidget>=0.9,<1",
-    "tippecanoe>=2.45,<3",
+    "tippecanoe>=2.72.0,<3",
     "imageio>=2.28,<3",
     "imageio-ffmpeg>=0.4,<2",
 ]

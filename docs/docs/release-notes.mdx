@@ -601,6 +601,11 @@ formats.
   [Installation](./installation).
 - **LiDAR stack:** the lightweight extras now take `laspy` 2.7 with `lazrs` 0.8 (bumped
   together; `laspy` 2.7 requires `lazrs` 0.8).
+- **Newer minimums for `numexpr`, `tippecanoe` and `overturemaps`.** The lightweight install
+  now requires `numexpr` 2.14.1 or later, the `vizx` extra `tippecanoe` 2.72.0 or later, and the
+  `overture` extra `overturemaps` 1.0.2 or later. None of the three is preinstalled on a
+  supported runtime. The `overture` extra still raises `click` and `tqdm` on install, because
+  `overturemaps` 1.x requires `click` 8.3 or later and `tqdm` 4.67.3 or later.
 - **The `_all` extras install on aarch64 (Graviton) compute.** `light_dbr19_all` and
   `light_env6_all` hold `click` at the runtime's 8.2.x. Because `rasterio` 1.4.4 and later
   exclude `click` 8.2.x, that hold pins `rasterio` to 1.4.3, which has no Python 3.12 aarch64

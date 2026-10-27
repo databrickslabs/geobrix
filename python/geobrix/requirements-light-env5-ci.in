@@ -50,7 +50,7 @@ defusedxml==0.7.1
 # library set, so it is pinned independently (safe math-expression evaluator for
 # rst_mapalgebra — no arbitrary-code exec).
 scipy==1.15.3
-numexpr==2.11.0
+numexpr==2.14.2
 
 # --- web-mercator XYZ tiling (rio-tiler bundles morecantile + color-operations) ---
 rio-tiler==9.0.6
@@ -127,7 +127,7 @@ geopandas==1.1.4
 mapclassify==2.10.0
 contextily==1.6.2
 anywidget==0.9.18
-tippecanoe==2.45.0
+tippecanoe==2.72.0
 # IPython is what the Databricks/Jupyter runtime provides; gbx.vizx.plot_interactive
 # reaches displayHTML through it (IPython.get_ipython user_ns) and falls back to
 # IPython.display. test/vizx/test_interactive.py exercises both paths, so the light

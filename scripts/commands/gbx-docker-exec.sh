@@ -192,8 +192,10 @@ elif [ -n "$COMMAND" ]; then
     # Maven and pytest runs share the container's target/ and Spark state with the gbx:test:*
     # commands: one at a time (lock in common.sh). Other commands are not held up.
     LOCK_RE='(^|[^[:alnum:]_.-])(mvn|pytest)([^[:alnum:]_-]|$)'
+    LOCK_PREFIX=""
     if [[ "$COMMAND" =~ $LOCK_RE ]]; then
         gbx_acquire_test_lock
+        LOCK_PREFIX="$GBX_LOCK_RUN"   # the work holds the work lock, so a killed run cannot free it
     fi
 
     # Run the command under `set -o pipefail` so a failure anywhere in a pipeline
@@ -201,9 +203,9 @@ elif [ -n "$COMMAND" ]; then
     # Without this the wrapper faithfully reports the last pipe stage's status, which
     # silently masks build/test failures piped through head/tail/grep.
     if [ "$INTERACTIVE" = true ]; then
-        docker exec -it geobrix-dev bash -c "set -o pipefail; $COMMAND"
+        docker exec -it geobrix-dev $LOCK_PREFIX bash -c "set -o pipefail; $COMMAND"
     else
-        docker exec geobrix-dev bash -c "set -o pipefail; $COMMAND"
+        docker exec geobrix-dev $LOCK_PREFIX bash -c "set -o pipefail; $COMMAND"
     fi
 
     EXIT_CODE=$?

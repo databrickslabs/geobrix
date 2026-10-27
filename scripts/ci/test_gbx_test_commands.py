@@ -64,6 +64,16 @@ def test_the_default_run_covers_every_test_parity_file_in_the_repo(sandbox):
     assert len(ran) == len(set(ran))  # each suite once
 
 
+def test_the_default_run_covers_the_cross_tier_suites_that_need_the_jar(sandbox):
+    _parity_sandbox(sandbox, TEST_ROOT)
+    cross_tier = {_repo_rel(p) for p in TEST_ROOT.rglob("*_cross_tier.py")}
+    assert len(cross_tier) >= 5  # netcdf, chm, binpoints, binpoints_agg, isoband
+
+    res, ran = _run_parity(sandbox)
+
+    assert cross_tier - set(ran) == set()
+
+
 def test_the_default_run_keeps_the_suites_the_old_list_named(sandbox):
     _parity_sandbox(sandbox, TEST_ROOT)
 
@@ -81,7 +91,7 @@ def test_the_default_run_skips_only_the_documented_exclusions(sandbox):
     _parity_sandbox(sandbox, TEST_ROOT)
     candidates = {
         _repo_rel(p)
-        for pattern in ("test_parity*.py", "test_*_parity.py")
+        for pattern in ("test_parity*.py", "test_*_parity.py", "*_cross_tier.py")
         for p in TEST_ROOT.rglob(pattern)
     }
 

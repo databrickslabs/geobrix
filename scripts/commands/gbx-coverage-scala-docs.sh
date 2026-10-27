@@ -102,7 +102,7 @@ fi
 show_separator
 echo ""
 
-docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
 EXIT_CODE=$?
 
 echo ""

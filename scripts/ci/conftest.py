@@ -122,12 +122,16 @@ class ContainerSandbox:
             REPO_ROOT / "scripts" / "commands", self.root / "scripts" / "commands"
         )
         self.commands = self.root / "scripts" / "commands"
+        docker_dir = self.root / "scripts" / "docker"
+        docker_dir.mkdir()
+        shutil.copy(REPO_ROOT / "scripts" / "docker" / "gbx-lock.sh", docker_dir)
         self.bin = tmp_path / "bin"
         self.bin.mkdir()
         self._shim("docker", "_fake_docker_local.py")
         if shutil.which("flock") is None:
             self._shim("flock", "_flock_shim.py")
         self.lock_file = tmp_path / "gbx-test.lock"
+        self.work_lock_file = tmp_path / "gbx-work.lock"
         self.exec_log = tmp_path / "exec.log"
         self.events = tmp_path / "events.log"
 
@@ -149,6 +153,8 @@ class ContainerSandbox:
         env.update(
             PATH=f"{self.bin}{os.pathsep}{os.environ['PATH']}",
             GBX_TEST_LOCK_FILE=str(self.lock_file),
+            GBX_WORK_LOCK_FILE=str(self.work_lock_file),
+            FAKE_DOCKER_ROOT=str(self.root),
             GBX_DEMO_EVENTS=str(self.events),
             FAKE_DOCKER_EXEC_LOG=str(self.exec_log),
         )
@@ -183,13 +189,21 @@ class ContainerSandbox:
         return [json.loads(x) for x in log.read_text().splitlines()]
 
     @contextmanager
-    def lock_held_by(self, info: str):
-        """Hold the container test lock from this process, with `info` as the holder."""
-        fd = os.open(str(self.lock_file), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
+    def lock_held_by(self, info: str, lock: Path = None, legacy: bool = False):
+        """Hold a container lock from this process, with `info` as the holder.
+
+        The RUN lock by default; pass lock=self.work_lock_file for the WORK lock. `legacy`
+        writes the info into the lock file itself, as the first version of the helper did.
+        """
+        lock = lock or self.lock_file
+        fd = os.open(str(lock), os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o666)
         try:
             fcntl.flock(fd, fcntl.LOCK_EX)
-            os.truncate(str(self.lock_file), 0)
-            os.write(fd, (info + "\n").encode())
+            if legacy:
+                os.truncate(str(lock), 0)
+                os.write(fd, (info + "\n").encode())
+            else:
+                Path(str(lock) + ".info").write_text(info + "\n")
             yield
         finally:
             os.close(fd)

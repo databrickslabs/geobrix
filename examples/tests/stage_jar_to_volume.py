@@ -18,6 +18,8 @@ from pathlib import Path
 from _artifact_volume import prune_stale
 
 TESTS_DIR = Path(__file__).resolve().parent
+# Container side of the gbx test lock (scripts/docker/gbx-lock.sh, the repo as mounted in geobrix-dev).
+LOCK_RUN = ["/bin/bash", "/root/geobrix/scripts/docker/gbx-lock.sh", "run"]
 _env_file = TESTS_DIR / "databricks_cluster_config.env"
 if _env_file.exists():
     with open(_env_file) as f:
@@ -70,8 +72,11 @@ def main() -> int:
         'cd /root/geobrix && mvn clean package -DskipTests'
     )
     print("Running in geobrix-dev: mvn clean package -DskipTests ...")
+    # `clean` wipes target/, so this must never overlap a test run: the command
+    # (gbx-data-stage-jar.sh / gbx-data-stage-wheel.sh) holds the container run lock, and the
+    # Maven process holds the work lock via gbx-lock.sh, so a killed host script cannot free it.
     rc = subprocess.run(
-        ["docker", "exec", "geobrix-dev", "/bin/bash", "-c", mvn_cmd],
+        ["docker", "exec", "geobrix-dev", *LOCK_RUN, "/bin/bash", "-c", mvn_cmd],
         cwd=project_root,
         capture_output=False,
     )

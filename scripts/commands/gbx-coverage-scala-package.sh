@@ -257,11 +257,11 @@ CLEAN_PREFIX=""
 [ "$CLEAN" = true ] && CLEAN_PREFIX="clean "
 echo -e "${CYAN}Step 1: Running package tests (scoverage:test -T 1C)...${NC}"
 MVN_TEST="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$SUITE_PATTERN'"
-docker exec geobrix-dev /bin/bash -c "$MVN_TEST"
+docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_TEST"
 EXIT_CODE=$?
 if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${CYAN}Step 2: Generating report (report-only, aggregate only)...${NC}"
-    docker exec geobrix-dev /bin/bash -c "$SCOV_REPORT_ONLY"
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$SCOV_REPORT_ONLY"
     EXIT_CODE=$?
 fi
 

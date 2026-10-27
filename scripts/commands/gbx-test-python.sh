@@ -276,7 +276,7 @@ run_single() {
         cd /root/geobrix && \
         python3 -m pytest $TEST_PATH -v --tb=short --color=yes $MARKERS $KEYWORD"
 
-    docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 
     echo ""
@@ -345,7 +345,7 @@ run_phase() {
     echo -e "${CYAN}  pytest ${args}${NC}"
     show_separator
     echo ""
-    docker exec geobrix-dev /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "unset JAVA_TOOL_OPTIONS && \
         cd /root/geobrix/python/geobrix && \
         python3 -m pytest $args -v --tb=short --color=yes -rfE $MARKERS $KEYWORD" 2>&1 | tee -a "$log"
     return "${PIPESTATUS[0]}"

@@ -271,7 +271,7 @@ echo '━━━━━━━━━━━━━━━━━━━━━━━━�
 python3 -m pytest $TEST_PATH -v $MARKERS $FILTER --tb=short --color=yes $IGNORE_API_ARG
 "
 
-docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} geobrix-dev /bin/bash -c "$RUN_CMD"
+docker exec ${DOCKER_ENV_ARGS[@]+"${DOCKER_ENV_ARGS[@]}"} geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD"
 EXIT_CODE=$?
 
 echo ""

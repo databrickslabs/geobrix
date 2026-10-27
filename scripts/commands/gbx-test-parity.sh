@@ -14,7 +14,8 @@ source "$SCRIPT_DIR/common.sh"
 
 # The cross-tier parity suites are DISCOVERED, not listed: a hand-kept list silently skipped
 # every suite added after it was written (a skipped parity suite reads as a passing gate).
-# A suite is any python/geobrix/test/**/test_parity*.py or test_*_parity.py. The few that are
+# A suite is any python/geobrix/test/**/test_parity*.py, test_*_parity.py or *_cross_tier.py (the
+# cross-tier suites that need the JAR are parity suites in intent). The few that are
 # not cross-tier gates are named in PARITY_EXCLUDE with the reason; anything new is gated by
 # default until it is excluded on purpose.
 #
@@ -40,7 +41,7 @@ discover_parity_files() {
             [ "$f" = "$e" ] && skip=true
         done
         [ "$skip" = true ] || echo "$f"
-    done < <(cd "$PROJECT_ROOT" && find -L "$root" -type f \( -name 'test_parity*.py' -o -name 'test_*_parity.py' \) | LC_ALL=C sort)
+    done < <(cd "$PROJECT_ROOT" && find -L "$root" -type f \( -name 'test_parity*.py' -o -name 'test_*_parity.py' -o -name '*_cross_tier.py' \) | LC_ALL=C sort)
 }
 
 show_help() {
@@ -51,8 +52,9 @@ show_help() {
     echo -e "${CYAN}What it does:${NC}"
     echo -e "  1. Rebuilds the assembly JAR (skip with ${GREEN}--skip-build${NC})"
     echo -e "  2. Stages it to ${YELLOW}python/geobrix/lib/${NC} where the light tier loads it"
-    echo -e "  3. Runs every parity suite found under ${YELLOW}python/geobrix/test/${NC} (test_parity*.py and"
-    echo -e "     test_*_parity.py, minus the documented exclusions) with ${YELLOW}@pytest.mark.integration${NC} ENABLED"
+    echo -e "  3. Runs every parity suite found under ${YELLOW}python/geobrix/test/${NC} (test_parity*.py,"
+    echo -e "     test_*_parity.py and *_cross_tier.py, minus the documented exclusions) with"
+    echo -e "     ${YELLOW}@pytest.mark.integration${NC} ENABLED"
     echo -e "  4. Fails if every test skipped (a skipped gate is not a passing gate)"
     echo ""
     echo -e "${CYAN}Options:${NC}"
@@ -115,7 +117,7 @@ if [ "$SKIP_BUILD" = true ]; then
     warn_if_jar_stale "$PROJECT_ROOT"
 else
     echo -e "${CYAN}🔨 Building assembly JAR (skipScoverage, no tests)...${NC}"
-    docker exec geobrix-dev /bin/bash -c \
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c \
         "$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn -o -q -P skipScoverage clean package -DskipTests"
     BUILD_EXIT=$?
     if [ $BUILD_EXIT -ne 0 ]; then
@@ -181,7 +183,7 @@ for f in "${RUN_FILES[@]}"; do
     [ -n "$KEYWORD" ] && PYTEST_CMD="$PYTEST_CMD -k '$KEYWORD'"
     PYTEST_CMD="$PYTEST_CMD | tee $REPORT"
 
-    docker exec geobrix-dev /bin/bash -c "set -o pipefail; $PYTEST_CMD"
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "set -o pipefail; $PYTEST_CMD"
     FILE_EXIT=$?
 
     SUMMARY=$(docker exec geobrix-dev /bin/bash -c \

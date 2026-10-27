@@ -90,7 +90,7 @@ if [[ $USE_DOCKER -eq 1 ]]; then
     gbx_acquire_test_lock   # only the container run shares Maven/Spark state; the host venv run does not
     PYTEST_CMD="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
         python3 -m pytest ${TEST_PATHS[*]} -v --tb=short --color=yes -m 'not integration'"
-    docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 else
     # Host venv path (default): isolated from system site-packages.

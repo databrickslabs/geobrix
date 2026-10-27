@@ -90,7 +90,7 @@ MVN="mvn test -PskipScoverage -DskipTests=false \
     -Dgbx.bench.functions='$FUNCTIONS' -Dgbx.bench.modes='$MODES' \
     -Dgbx.bench.rowCounts='$ROW_COUNTS' -Dgbx.bench.warmup='$WARMUP' -Dgbx.bench.measured='$MEASURED'"
 
-docker exec geobrix-dev /bin/bash -c "$DOCKER_MAVEN_ENV && cd /root/geobrix && $MVN"
+docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$DOCKER_MAVEN_ENV && cd /root/geobrix && $MVN"
 EXIT_CODE=$?
 HOST_OUT="${OUT/\/root\/geobrix\//$PROJECT_ROOT/}"
 if [[ $EXIT_CODE -eq 0 ]]; then

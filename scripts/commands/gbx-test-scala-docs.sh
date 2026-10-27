@@ -92,7 +92,7 @@ SAMPLE_DATA_ROOT_MAVEN=""
 
 MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
 
-docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
 EXIT_CODE=$?
 
 echo ""

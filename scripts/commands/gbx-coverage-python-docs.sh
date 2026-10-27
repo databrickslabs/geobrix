@@ -105,7 +105,7 @@ PYTEST_CMD="unset JAVA_TOOL_OPTIONS && \
     -m 'not integration' \
     $MIN_COVERAGE"
 
-docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"
+docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
 EXIT_CODE=$?
 
 echo ""

@@ -1,0 +1,114 @@
+#!/bin/bash
+# gbx-lock.sh: the container side of the gbx test lock. Runs INSIDE geobrix-dev
+# (the repo is mounted at /root/geobrix); the host side is gbx_acquire_test_lock in
+# scripts/commands/common.sh. Read that block for the whole design.
+#
+#   gbx-lock.sh hold         take the RUN lock, wait out orphaned work, print the status lines
+#                            the host reads, then hold the lock until stdin reaches EOF
+#   gbx-lock.sh run CMD...   run CMD holding the WORK lock
+#
+# Two locks, because they have different owners:
+#   RUN lock  (/tmp/gbx-test.lock)  owned by the host script: `hold` runs for as long as the
+#             script (or a child of it) keeps the pipe it reads open. It makes whole runs
+#             take turns, with no gaps between the several execs of one run.
+#   WORK lock (/tmp/gbx-work.lock)  owned by the work itself: `run` takes it on a descriptor
+#             that Maven, Surefire, pytest and everything they start inherit. Killing the
+#             host script or its `docker exec` client does not stop the work in the container,
+#             and does not free this lock either: it is held until the last process holding
+#             the descriptor ends. `hold` waits for it before it reports ACQUIRED.
+#
+# Status lines on stdout (`hold`): ACQUIRED | WAITING <holder> | BUSY <holder> | TIMEOUT <holder>
+# for the run lock, and WORK_WAITING / WORK_BUSY / WORK_TIMEOUT <holder> for the work lock.
+# Exit 75 means busy or timed out; 70 means the helper itself failed.
+
+RUN_LOCK="${GBX_LOCK_FILE:-/tmp/gbx-test.lock}"
+WORK_LOCK="${GBX_WORK_LOCK_FILE:-/tmp/gbx-work.lock}"
+TIMEOUT="${GBX_LOCK_TIMEOUT:-3600}"
+
+# The holder of <lock>, as the holder wrote it to <lock>.info (an older helper wrote it into
+# the lock file itself). The info is published a moment after the flock succeeds, so retry
+# briefly before saying the holder is not named yet.
+holder_of() {
+    local i
+    for i in 1 2 3 4 5; do
+        [ -s "$1.info" ] && { tr '\n' ' ' < "$1.info"; return; }
+        sleep 0.1
+    done
+    [ -s "$1" ] && { tr '\n' ' ' < "$1"; return; }
+    printf '(holder not named yet) '
+}
+
+# Up to three processes that hold <lock> open, as "pid(command line)". This is what a stuck
+# lock needs: the work's process tree outlives the script that started it.
+users_of() {
+    local p n=0
+    for p in /proc/[0-9]*; do
+        [ "${p#/proc/}" = "$$" ] && continue
+        if ls -l "$p/fd" 2>/dev/null | grep -qF -- "$1"; then
+            printf '%s(%s) ' "${p#/proc/}" "$(tr '\0' ' ' < "$p/cmdline" 2>/dev/null | cut -c1-90)"
+            n=$((n + 1))
+            [ "$n" -ge 3 ] && break
+        fi
+    done
+}
+
+# Publish the holder atomically: a reader sees the old text or the new, never a half-written one.
+publish_info() {   # <lock> <text>
+    printf '%s\n' "$2" > "$1.info.$$" && mv -f "$1.info.$$" "$1.info"
+}
+
+describe() {   # <lock>: holder, and who holds it open
+    printf '%sheld open by: %s' "$(holder_of "$1")" "$(users_of "$1")"
+}
+
+# Wait until no work started by an earlier (killed or detached) run is still going.
+work_barrier() {
+    exec 8>>"$WORK_LOCK" || return 0
+    if flock -n 8; then exec 8>&-; return 0; fi
+    exec 8>&-   # describe the holder without holding the descriptor ourselves
+    local what
+    what="$(describe "$WORK_LOCK")"
+    if [ "$GBX_LOCK_NO_WAIT" = true ]; then echo "WORK_BUSY $what"; exit 75; fi
+    echo "WORK_WAITING $what"
+    exec 8>>"$WORK_LOCK"
+    flock -w "$TIMEOUT" 8 || { exec 8>&-; echo "WORK_TIMEOUT $(describe "$WORK_LOCK")"; exit 75; }
+    exec 8>&-
+}
+
+hold() {
+    GBX_LOCK_NO_WAIT="${GBX_LOCK_NO_WAIT:-false}"
+    exec 9>>"$RUN_LOCK" || { echo "ERROR cannot open $RUN_LOCK"; exit 70; }
+    chmod 666 "$RUN_LOCK" 2>/dev/null || true
+    if ! flock -n 9; then
+        if [ "$GBX_LOCK_NO_WAIT" = true ]; then echo "BUSY $(holder_of "$RUN_LOCK")"; exit 75; fi
+        echo "WAITING $(holder_of "$RUN_LOCK")"
+        flock -w "$TIMEOUT" 9 || { echo "TIMEOUT $(holder_of "$RUN_LOCK")"; exit 75; }
+    fi
+    publish_info "$RUN_LOCK" "$GBX_LOCK_INFO container_pid=$$"
+    trap 'rm -f "$RUN_LOCK.info"' EXIT
+    work_barrier
+    echo ACQUIRED
+    cat > /dev/null   # until the host script (and every child of it) has closed the pipe
+}
+
+run() {
+    [ "$#" -gt 0 ] || { echo "usage: gbx-lock.sh run CMD [ARG...]" >&2; exit 64; }
+    exec 9>>"$WORK_LOCK" || { echo "gbx-lock: cannot open $WORK_LOCK" >&2; exit 70; }
+    chmod 666 "$WORK_LOCK" 2>/dev/null || true
+    if ! flock -n 9; then
+        exec 9>&-
+        echo "gbx-lock: waiting for earlier work still running in this container: $(describe "$WORK_LOCK")"
+        exec 9>>"$WORK_LOCK"
+        flock -w "$TIMEOUT" 9 || { echo "gbx-lock: timed out waiting for earlier work: $(describe "$WORK_LOCK")"; exit 75; }
+    fi
+    publish_info "$WORK_LOCK" "pid=$$ cmd=$* since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    # Not `exec`: this process stays as the parent. The command and everything it starts
+    # inherit descriptor 9, which is what keeps the lock while the work runs, whoever dies.
+    "$@"
+}
+
+case "${1:-}" in
+    hold) hold ;;
+    run) shift; run "$@" ;;
+    *) echo "usage: gbx-lock.sh hold | run CMD [ARG...]" >&2; exit 64 ;;
+esac

@@ -4,13 +4,15 @@ It never reaches a Docker daemon. `docker ps` lists a running geobrix-dev. `dock
 appends the command (one JSON line) to $FAKE_DOCKER_EXEC_LOG -- and its `-e KEY=VALUE` pairs
 to $FAKE_DOCKER_EXEC_LOG.env, same line number -- and then either
 
-- runs it on THIS machine (bash, flock and the lock file are real), when it is the test-lock
-  holder (it carries the GBX_TEST_LOCK_HOLDER marker) or $FAKE_DOCKER_RUN_ALL=1; or
+- runs it on THIS machine (bash, flock and the lock files are real), when it is the lock
+  holder (`gbx-lock.sh hold`) or $FAKE_DOCKER_RUN_ALL=1; or
 - does nothing, prints $FAKE_DOCKER_EXEC_STDOUT (default nothing) and exits
   $FAKE_DOCKER_EXEC_RC (default 0): the work a command would send into the container (Maven,
   pytest) is recorded, not run.
 
-Every other docker command succeeds and does nothing.
+A path under /root/geobrix is run from $FAKE_DOCKER_ROOT instead (the scratch repo), so the
+real scripts/docker/gbx-lock.sh runs as it does in the container. Every other docker command
+succeeds and does nothing.
 """
 
 import json
@@ -19,6 +21,8 @@ import subprocess
 import sys
 
 CONTAINER = "geobrix-dev"
+CONTAINER_REPO = "/root/geobrix"
+LOCK_SCRIPT = "gbx-lock.sh"
 OPTS_WITH_VALUE = {"-e", "--env", "-w", "--workdir", "-u", "--user"}
 
 
@@ -48,8 +52,13 @@ def main(args):
     with open(os.environ["FAKE_DOCKER_EXEC_LOG"] + ".env", "a") as fh:
         fh.write(json.dumps(passed) + "\n")  # line N = the -e pairs of exec call N
 
-    holder = any("GBX_TEST_LOCK_HOLDER" in part for part in command)
+    holder = (
+        any(part.endswith(LOCK_SCRIPT) for part in command) and command[-1] == "hold"
+    )
     if holder or os.environ.get("FAKE_DOCKER_RUN_ALL") == "1":
+        root = os.environ.get("FAKE_DOCKER_ROOT")
+        if root:
+            command = [part.replace(CONTAINER_REPO, root) for part in command]
         return subprocess.call(command, env=env)
     print(os.environ.get("FAKE_DOCKER_EXEC_STDOUT", ""), end="")
     return int(os.environ.get("FAKE_DOCKER_EXEC_RC", "0"))

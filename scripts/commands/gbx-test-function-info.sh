@@ -82,7 +82,7 @@ python3 -m pytest docs/tests-function-info/ -v -s --tb=short
 "
 
 EXIT=0
-docker exec geobrix-dev /bin/bash -c "$RUN_CMD" || EXIT=$?
+docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$RUN_CMD" || EXIT=$?
 
 show_separator
 if [ $EXIT -eq 0 ]; then

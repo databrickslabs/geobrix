@@ -27,6 +27,10 @@ while [[ $# -gt 0 ]]; do
             SHOW_HELP=1
             shift
             ;;
+        --no-wait)
+            GBX_LOCK_NO_WAIT=true
+            shift
+            ;;
         *)
             shift
             ;;
@@ -44,6 +48,7 @@ if [[ "$SHOW_HELP" == "1" ]]; then
     echo ""
     echo "Options:"
     echo "  --log <path>   Write output to this log file (filename → test-logs/<name>)"
+    print_lock_help
     echo "  --help, -h     Show this help"
     echo ""
     echo "Environment:"
@@ -62,6 +67,19 @@ if [[ "$SHOW_HELP" == "1" ]]; then
 fi
 
 cd "$PROJECT_ROOT" || exit 1
+
+# The JAR step runs `mvn clean package`, which wipes target/: never under a running test, so it
+# takes the container lock. With a skip-JAR flag no Maven runs and no lock is needed.
+JAR_STEP=true
+for flag in GBX_BUNDLE_SKIP_JAR GBX_BUNDLE_SKIP_JAR_UPLOAD; do
+    case "$(printf '%s' "${!flag:-}" | tr '[:upper:]' '[:lower:]')" in
+        1|true|yes) JAR_STEP=false ;;
+    esac
+done
+if [ "$JAR_STEP" = true ]; then
+    check_docker
+    gbx_acquire_test_lock
+fi
 
 if [[ -n "$LOG_FILE" ]]; then
     mkdir -p "$(dirname "$LOG_FILE")"

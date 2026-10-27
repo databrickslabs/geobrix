@@ -4,6 +4,8 @@ Run light-tier Python tests (JAR-free: pyrx by default, but any light dir, `zarr
 
 The host run is the default: it needs no container, takes no lock and starts at once. Use `--docker` only for work that needs the container: GDAL natives, the JAR, and parity. (The dev container is a native arm64 image on Apple silicon, so it is not emulated there; it is still the slower, shared, locked route for light-tier tests.)
 
+`GBX_PYRX_VENV=<dir>` runs on a venv other than `.venv-pyrx` (created with `gbx:venv:sync` under the same variable), for example to try a new lock without disturbing a venv another run is using.
+
 The host run sets `TZ=UTC` (as the container and the CI runners are), and points `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` at the venv python. Without `TZ=UTC`, timestamp tests such as `test/zarr/test_read.py` fail in a US time zone.
 
 ## Usage

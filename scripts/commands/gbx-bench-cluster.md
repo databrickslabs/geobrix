@@ -36,6 +36,8 @@ Every two-tier leg of the grid (BNG, quadbin, custom), TIN, legacy, MVT/PMTiles 
 
 `--max-partition-bytes <v>` sets `spark.sql.files.maxPartitionBytes` (e.g. `32m`, `16m`) in the run's preamble to cap bytes-per-partition on file/Delta scans — smaller partitions mean fewer rows per task (less memory per decode task). Unlike AQE, this conf **is settable on Serverless**, so it works on both classic and `--serverless` runs. Default: empty (leave the platform default, 128 MB).
 
+**Interpreter:** the launcher needs `databricks-sdk` and Python 3.11 or newer. It does not use whatever `python` is on the PATH: the shared `gbx_python_with_sdk` helper in `common.sh` picks `.venv-pyrx` (or the venv in `GBX_PYRX_VENV`) when that venv is Python 3.11+ and can import the SDK (the CI-lock venv from `gbx:venv:sync` cannot), otherwise `uv run --with databricks-sdk==<pinned version>` layered over the venv's interpreter, so the venv's own packages (rasterio, the bench harness) stay importable; with no usable venv it uses Python 3.12 plus the SDK only; otherwise system `python3` if it is 3.11+ and has the SDK, otherwise it stops with a hint to install uv. The SDK is pinned (`GBX_DATABRICKS_SDK_SPEC` in `common.sh`) so a run does not float to a newer release.
+
 **Examples:**
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id cl1 --functions rst_slope,rst_ndvi`
 - `bash scripts/commands/gbx-bench-cluster.sh --cluster-id 0101-x --run-id clfull --set full`

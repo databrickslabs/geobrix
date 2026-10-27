@@ -5,10 +5,13 @@ conftest.py's ContainerSandbox): nothing reaches a daemon, and the work a comman
 into the container (pytest, Maven) is recorded instead of run.
 """
 
+import json
 import os
 import re
 import shlex
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -591,30 +594,40 @@ def test_an_option_without_its_value_is_refused_not_looped_on(sandbox, command, 
 # ------------------- workspace launchers: a Python that can import databricks-sdk (host)
 
 
-def _venv_python(sandbox, *, sdk, venv=None):
+# What the launchers' interpreter is asked: "is it Python 3.11+?" (version_info) and "can it
+# import databricks.sdk?". The fakes answer the first with `new` and the second with `sdk`.
+SDK_SPEC = re.search(
+    r"GBX_DATABRICKS_SDK_SPEC:-([^}]+)\}",
+    (REPO_ROOT / "scripts" / "commands" / "common.sh").read_text(),
+).group(1)
+
+
+def _venv_python(sandbox, *, sdk, venv=None, new=True):
     """A venv (default `.venv-pyrx`) whose python can or cannot import databricks.sdk.
 
     The CI-lock venv has no SDK: `python -c "import databricks.sdk"` fails there. Any other
-    call (a launcher run) is recorded in calls.log next to the interpreter.
+    call (a launcher run) is recorded in calls.log next to the interpreter. `new=False` is a
+    Python older than 3.11.
     """
     venv = venv or sandbox.root / ".venv-pyrx"
     (venv / "bin").mkdir(parents=True)
     python = venv / "bin" / "python"
     python.write_text(
-        '#!/bin/sh\n[ "$1" = "-c" ] && exit %d\n'
-        'echo "$*" >> "%s"\nexit 0\n' % (0 if sdk else 1, venv / "calls.log")
+        '#!/bin/sh\nif [ "$1" = "-c" ]; then case "$2" in *version_info*) exit %d;; esac; exit %d; fi\n'
+        'echo "$*" >> "%s"\nexit 0\n'
+        % (0 if new else 1, 0 if sdk else 1, venv / "calls.log")
     )
     python.chmod(0o755)
     return python, venv / "calls.log"
 
 
-def _fake_python3(directory, *, sdk):
+def _fake_python3(directory, *, sdk, new=True):
     """A `python3` that can or cannot import databricks.sdk; any other call is recorded."""
     directory.mkdir(parents=True, exist_ok=True)
     python3, log = directory / "python3", directory / "python3.log"
     python3.write_text(
-        '#!/bin/sh\n[ "$1" = "-c" ] && exit %d\necho "$*" >> "%s"\nexit 0\n'
-        % (0 if sdk else 1, log)
+        '#!/bin/sh\nif [ "$1" = "-c" ]; then case "$2" in *version_info*) exit %d;; esac; exit %d; fi\n'
+        'echo "$*" >> "%s"\nexit 0\n' % (0 if new else 1, 0 if sdk else 1, log)
     )
     python3.chmod(0o755)
     return log
@@ -663,17 +676,17 @@ def test_the_sdk_python_is_the_venv_only_when_the_venv_can_import_the_sdk(
     bare = {"GBX_PYRX_VENV": str(tmp_path / "bare")}
     assert _sdk_python(sandbox, **bare) == uv + [
         str(other),
-        *("--with", "databricks-sdk", "python"),
+        *("--with", SDK_SPEC, "python"),
     ]
     assert _sdk_python(sandbox, "build", **bare) == uv + [
         str(other),
-        *("--with", "databricks-sdk", "--with", "build", "python"),
+        *("--with", SDK_SPEC, "--with", "build", "python"),
     ]
 
     nowhere = {"GBX_PYRX_VENV": str(tmp_path / "nowhere")}
     assert _sdk_python(sandbox, "build", **nowhere) == uv + [
         "3.12",
-        *("--with", "databricks-sdk", "--with", "build", "python"),
+        *("--with", SDK_SPEC, "--with", "build", "python"),
     ]
 
     _fake_python3(tmp_path / "py3", sdk=True)
@@ -696,6 +709,33 @@ def test_without_uv_or_an_sdk_the_helper_stops_with_one_hint(sandbox, tmp_path):
     assert "Traceback" not in res.stderr
 
 
+def test_the_sdk_is_pinned_and_an_interpreter_older_than_3_11_is_passed_over(
+    sandbox, tmp_path
+):
+    # The serverless runner reads pyproject.toml with tomllib (3.11+), and `uv run --with
+    # databricks-sdk` floated to whatever PyPI had that day.
+    assert "==" in SDK_SPEC
+    _fake_uv(sandbox)
+    _venv_python(sandbox, sdk=True, new=False)  # a venv with the SDK, but Python 3.10
+
+    words = _sdk_python(sandbox)
+
+    assert words[:5] == ["uv", "run", "--no-project", "--python", "3.12"], words
+    assert (
+        SDK_SPEC in words
+    )  # not the old venv's interpreter, which tomllib cannot serve
+
+    _fake_python3(
+        tmp_path / "py3", sdk=True, new=False
+    )  # system python3 3.10 with the SDK
+    old = {
+        "GBX_PYRX_VENV": str(tmp_path / "nowhere"),
+        "PATH": f"{tmp_path / 'py3'}:/usr/bin:/bin",
+    }
+    res, _ = _run_sdk_helper(sandbox, **old)
+    assert res.returncode == 1 and "3.11" in res.stderr
+
+
 @pytest.mark.parametrize(
     "command, args, env, launcher, extras",
     [
@@ -716,6 +756,14 @@ def test_without_uv_or_an_sdk_the_helper_stops_with_one_hint(sandbox, tmp_path):
             ],  # without a venv it builds with `python -m build` on this interpreter
         ),
         ("gbx-bench-cluster.sh", [], {}, "push_and_run_bench_on_cluster", []),
+        ("gbx-test-bundle-databricks.sh", [], {}, "push_and_run_bundle_on_cluster", []),
+        (
+            "gbx-test-primitive-databricks.sh",
+            [],
+            {},
+            "push_and_run_primitive_on_cluster",
+            [],
+        ),
         (
             "gbx-test-notebooks-serverless.sh",
             ["--notebook", "x.ipynb"],
@@ -741,7 +789,7 @@ def test_the_workspace_launchers_get_the_sdk_when_the_venv_has_none(
     assert res.returncode == 0, res.output
     words = uv_log.read_text().splitlines()[-1].split()
     assert words[:4] == ["run", "--no-project", "--python", str(python)], words
-    packages = ["--with", "databricks-sdk"] + [x for p in extras for x in ("--with", p)]
+    packages = ["--with", SDK_SPEC] + [x for p in extras for x in ("--with", p)]
     assert words[4 : 5 + len(packages)] == packages + ["python"], words
     assert any(w.endswith(f"examples/tests/{launcher}.py") for w in words), words
     assert not calls.exists()  # the SDK-less interpreter never ran the launcher itself
@@ -759,7 +807,7 @@ def test_a_fresh_checkout_builds_the_wheel_on_an_interpreter_that_has_build(sand
     words = uv_log.read_text().splitlines()[-1].split()
     assert words[:9] == [
         *("run", "--no-project", "--python", "3.12"),
-        *("--with", "databricks-sdk", "--with", "build", "python"),
+        *("--with", SDK_SPEC, "--with", "build", "python"),
     ], words
     assert words[9].endswith("examples/tests/stage_wheel_to_volume.py"), words
 

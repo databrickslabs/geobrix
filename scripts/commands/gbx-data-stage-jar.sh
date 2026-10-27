@@ -26,6 +26,8 @@ show_help() {
     echo "  GBX_BUNDLE_SKIP_JAR=1               Skip the JAR step entirely (no build, no upload)"
     echo "  GBX_BUNDLE_SKIP_TESTS_JAR_UPLOAD=1  Stage only the product jar"
     echo "  GBX_BENCH_TESTS_JAR_VOLUME_PATH      Override tests.jar destination"
+    echo "  GBX_PYRX_VENV=<dir>                 Python venv the upload runs on instead of .venv-pyrx"
+    echo "                                      (needs Python 3.11+; databricks-sdk is added on top when it lacks it)"
     echo ""
     echo "Examples:"
     echo "  bash scripts/commands/gbx-data-stage-jar.sh"

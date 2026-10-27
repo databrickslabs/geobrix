@@ -23,6 +23,9 @@ show_help() {
     print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
     echo ""
+    echo -e "${CYAN}Environment:${NC}"
+    echo -e "  ${YELLOW}GBX_PYRX_VENV=<dir>${NC}  Use this venv instead of .venv-pyrx (create it with the same variable: gbx:venv:sync)"
+    echo ""
     echo -e "${CYAN}Other pytest options:${NC}"
     echo -e "  Set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (e.g. '--durations=20 --junitxml=test-logs/light.xml')"
     echo ""

@@ -24,5 +24,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 cd "$PROJECT_ROOT" || exit 1
-python examples/tests/push_and_run_primitive_on_cluster.py $NO_WAIT
+# Needs databricks-sdk and Python >= 3.11: see gbx_python_with_sdk in common.sh.
+gbx_python_with_sdk || exit 1
+"${GBX_SDK_PYTHON[@]}" examples/tests/push_and_run_primitive_on_cluster.py $NO_WAIT
 exit $?

@@ -28,6 +28,10 @@ This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the co
 - The log starts with this run's PID and the lock acquisition (`test lock acquired: pid <pid> <command>`), so a duplicate launch shows up.
 - Do not detach a run with `&` or `nohup`: use the harness's `run_in_background`, which is tracked.
 
+## Interpreter
+
+This command talks to a workspace, so it needs `databricks-sdk` and Python 3.11 or newer. It does not use whatever `python` is on the PATH: the shared `gbx_python_with_sdk` helper in `common.sh` picks `.venv-pyrx` (or the venv in `GBX_PYRX_VENV`) when that venv is Python 3.11+ and can import the SDK (the CI-lock venv from `gbx:venv:sync` cannot), otherwise `uv run --with databricks-sdk==<pinned version>` layered over the venv's interpreter (Python 3.12 when there is no usable venv), otherwise system `python3` if it is 3.11+ and has the SDK, otherwise it stops with a hint to install uv. The SDK is pinned (`GBX_DATABRICKS_SDK_SPEC` in `common.sh`) to the version the launchers were last run against, so a run does not float to a newer release. `GBX_PYRX_VENV=<dir>` moves the venv.
+
 ## Requires
 
 - Maven (for `mvn clean package -DskipTests`).

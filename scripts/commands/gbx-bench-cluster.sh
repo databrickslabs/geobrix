@@ -75,6 +75,9 @@ Options:
   --no-wait             Submit without blocking on completion
   --help, -h            Show help
 
+Environment: GBX_PYRX_VENV=<dir> runs the launcher on that venv instead of .venv-pyrx (Python 3.11+;
+databricks-sdk is added on top when the venv lacks it).
+
 NOTE: this submits a job to a real cluster (or Serverless) and consumes compute. For classic
 cluster runs the operator must have provisioned the cluster and filled databricks_cluster_config.env.
 For --serverless, set DATABRICKS_CONFIG_PROFILE to a workspace with Serverless enabled (e.g. dogfood).

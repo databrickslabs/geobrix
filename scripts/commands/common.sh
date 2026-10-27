@@ -435,44 +435,58 @@ run_in_pyrx_venv() {
     return $_rc
 }
 
+# The databricks-sdk the launchers are run against (gbx_python_with_sdk pins `uv run --with` to
+# it, so a launcher does not float to whatever PyPI has today). Bump it on purpose, after running
+# the launchers once against the new version.
+GBX_DATABRICKS_SDK_SPEC="${GBX_DATABRICKS_SDK_SPEC:-databricks-sdk==0.102.0}"
+
+# 0 when <python> is 3.11 or newer: the serverless runner reads pyproject.toml with tomllib.
+_gbx_py_ok() {
+    "$1" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 11) else 1)' >/dev/null 2>&1
+}
+
 # Python that can import databricks-sdk, for the launchers that talk to a workspace
-# (gbx:data:stage-jar, gbx:data:stage-wheel, gbx:test:notebooks-serverless, gbx:bench:cluster).
+# (gbx:data:stage-jar, gbx:data:stage-wheel, gbx:test:notebooks-serverless, gbx:bench:cluster,
+# gbx:test:bundle-databricks, gbx:test:primitive-databricks).
 # Sets the array GBX_SDK_PYTHON; run a script with it (after parsing arguments, so --help
 # works anywhere):
 #   gbx_python_with_sdk [extra-pip-package ...] || exit 1
 #   "${GBX_SDK_PYTHON[@]}" examples/tests/<launcher>.py ...
+# Every interpreter it picks is Python >= 3.11 (an older venv or python3 is passed over).
 # The pyrx venv is the CI light lock and carries no databricks-sdk, so it is used as it is only
 # when it can import the SDK (extra packages are then the venv's business). Otherwise
-# `uv run --with databricks-sdk [--with <extra> ...]` layers the SDK over the venv's own
-# interpreter (its packages, such as the bench launcher's rasterio, stay importable), or over
-# Python 3.12 when there is no venv, where only the SDK and the extras exist: a launcher that
-# builds the wheel passes `build`. Without uv, system python3 is used if it has the SDK;
+# `uv run --with $GBX_DATABRICKS_SDK_SPEC [--with <extra> ...]` layers the SDK over the venv's
+# own interpreter (its packages, such as the bench launcher's rasterio, stay importable), or over
+# Python 3.12 when there is no usable venv, where only the SDK and the extras exist: a launcher
+# that builds the wheel passes `build`. Without uv, system python3 is used if it has the SDK;
 # otherwise this prints one hint and returns 1.
 # Needs PROJECT_ROOT (every command sets it before sourcing this file); GBX_PYRX_VENV moves the venv.
 gbx_python_with_sdk() {
     local _venv_py="${GBX_PYRX_VENV:-${PROJECT_ROOT}/.venv-pyrx}/bin/python"
-    local _with=(--with databricks-sdk) _pkg
+    local _with=(--with "${GBX_DATABRICKS_SDK_SPEC}") _pkg
     for _pkg in "$@"; do _with+=(--with "${_pkg}"); done
-    if [[ -x "${_venv_py}" ]] && "${_venv_py}" -c "import databricks.sdk" >/dev/null 2>&1; then
+    local _venv_ok=false
+    [[ -x "${_venv_py}" ]] && _gbx_py_ok "${_venv_py}" && _venv_ok=true
+    if [[ "${_venv_ok}" == true ]] && "${_venv_py}" -c "import databricks.sdk" >/dev/null 2>&1; then
         GBX_SDK_PYTHON=("${_venv_py}")
     elif command -v uv >/dev/null 2>&1; then
         local _base="3.12"
-        [[ -x "${_venv_py}" ]] && _base="${_venv_py}"
+        [[ "${_venv_ok}" == true ]] && _base="${_venv_py}"
         GBX_SDK_PYTHON=(uv run --no-project --python "${_base}" "${_with[@]}" python)
-    elif python3 -c "import databricks.sdk" >/dev/null 2>&1; then
+    elif command -v python3 >/dev/null 2>&1 && _gbx_py_ok python3 && python3 -c "import databricks.sdk" >/dev/null 2>&1; then
         GBX_SDK_PYTHON=(python3)
     else
-        echo "ERROR: no Python with databricks-sdk: uv is not installed and python3 cannot import it." >&2
+        echo "ERROR: no Python >= 3.11 with databricks-sdk: uv is not installed and python3 is older or cannot import it." >&2
         echo "       Install uv (https://docs.astral.sh/uv/), which fetches the SDK on demand," >&2
-        echo "       or run: python3 -m pip install databricks-sdk" >&2
+        echo "       or run: python3 -m pip install ${GBX_DATABRICKS_SDK_SPEC} (on Python 3.11 or newer)" >&2
         return 1
     fi
 }
 
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
-export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
+export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
-          print_banner print_separator setup_log run_in_pyrx_venv gbx_python_with_sdk validate_set \
+          print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_python_with_sdk validate_set \
           print_lock_help gbx_acquire_test_lock 2>/dev/null || true

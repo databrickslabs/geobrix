@@ -60,8 +60,12 @@ done
 
 cd "$PROJECT_ROOT" || exit 1
 
+# Needs databricks-sdk and Python >= 3.11: see gbx_python_with_sdk in common.sh (bare `python`
+# was whatever the shell had, often without the SDK). Chosen after --help so help works anywhere.
+gbx_python_with_sdk || exit 1
+
 if [[ "$MODE" == "cluster" ]]; then
-    python examples/tests/push_and_run_bundle_on_cluster.py $NO_WAIT
+    "${GBX_SDK_PYTHON[@]}" examples/tests/push_and_run_bundle_on_cluster.py $NO_WAIT
     exit $?
 fi
 
@@ -69,5 +73,5 @@ export GBX_NOTEBOOK_TESTS_ALLOW_HOST=1
 [[ -n "$DEBUG" ]] && export GBX_BUNDLE_DEBUG=1
 PYTEST_OPTS="-s -v"
 [[ -n "$DEBUG" ]] && PYTEST_OPTS="-s -vv"
-python -m pytest examples/tests/test_bundle_on_databricks.py $PYTEST_OPTS
+"${GBX_SDK_PYTHON[@]}" -m pytest examples/tests/test_bundle_on_databricks.py $PYTEST_OPTS
 exit $?

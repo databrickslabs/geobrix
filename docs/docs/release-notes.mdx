@@ -93,7 +93,8 @@ window in both tiers.
   at least half `0xFF`, and sets the file aside as an unreadable-file record (a warning and a skip
   without `on_error`). The LiDAR downloader and the point-cloud layer of `plot_static` raise a
   `ValueError` naming the file. The scan reads the compressed points once more, ahead of the
-  decoder; on local storage that adds a few percent to the time it takes to decode them.
+  decoder; on local storage that adds about 5 percent to the time it takes to decode them, up to
+  about 10 percent when the file is not cached.
 - **Other damage to a LAZ file can still stop the worker.** A run of `0xFF` bytes in the compressed
   points, and a chunk table or LASzip record that is implausible or cannot be decoded, are set aside
   before the file is decoded, but these checks look for those patterns only. Other damage inside

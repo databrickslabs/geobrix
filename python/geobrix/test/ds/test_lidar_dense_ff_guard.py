@@ -210,14 +210,18 @@ def test_the_minimal_crashing_file_is_set_aside_not_a_dead_process(tmp_path, pla
     _is_set_aside(*_read_in_child(tmp_path, path, plain), plain)
 
 
-@pytest.mark.parametrize("point_format", [1, 3])
+@pytest.mark.parametrize(
+    "point_format,version", [(1, "1.2"), (3, "1.2"), (4, "1.3"), (5, "1.3")]
+)
 @pytest.mark.parametrize("plain", [False, True], ids=["on_error", "plain"])
 def test_a_4_kib_run_of_ff_in_the_points_is_set_aside_not_a_dead_process(
-    tmp_path, point_format, plain
+    tmp_path, point_format, version, plain
 ):
     """4 KiB of 0xFF where the first chunk's compressed points start: the
-    decoder's stack overflows. The file is set aside, whole, with no row read."""
-    path = _make_laz(tmp_path / "a.laz", point_format)
+    decoder's stack overflows (formats 4 and 5, LAS 1.3 with waveform packets,
+    carry GPS time too and die the same way). The file is set aside, whole,
+    with no row read."""
+    path = _make_laz(tmp_path / "a.laz", point_format, version=version)
     _overwrite(path, 0, 0, b"\xff" * 4096)
     _is_set_aside(*_read_in_child(tmp_path, path, plain), plain)
 
@@ -234,7 +238,12 @@ def test_a_run_of_ff_in_a_later_chunk_is_found(tmp_path):
 def test_the_layered_point_formats_with_gps_time_are_scanned(
     tmp_path, point_format, version
 ):
-    """Formats 6-8 keep GPS time in a layer of their own; the scan covers them."""
+    """Formats 6-8 keep GPS time in a layer of their own; the scan covers them.
+
+    This proves the scan sees the run, not that a crash is prevented: on a small
+    file the same fill rarely lands in the GPS-time layer, so the decoder often
+    survives it (the crash is shown for formats 1, 3, 4 and 5 above; the layered
+    formats died in 4-5 of 18 reads of a 210,000-point file)."""
     path = _make_laz(tmp_path / "a.laz", point_format, 5000, version)
     _overwrite(path, 0, 2000, b"\xff" * 4096)
     assert _verdict(path) == VERDICT
@@ -266,6 +275,8 @@ def test_formats_without_gps_time_are_not_scanned_and_read_as_before(
         (1, "1.2"),
         (2, "1.2"),
         (3, "1.2"),
+        (4, "1.3"),
+        (5, "1.3"),
         (6, "1.4"),
         (7, "1.4"),
         (8, "1.4"),

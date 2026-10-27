@@ -225,7 +225,8 @@ def _make_fetch_nodes(
                         with open(laz_path, "wb") as fh:
                             fh.write(raw)
 
-                # A bad chunk table can end the process in laspy's decoder: raise first.
+                # A bad chunk table or run of 0xFF bytes can end the process in laspy's
+                # decoder: raise first.
                 check_laz(raw, f"{proj}/{key}.laz")
                 las = laspy.read(_io.BytesIO(raw))
                 x = np.asarray(las.x)
@@ -429,7 +430,8 @@ class LidarDownloader:
                     with open(laz_path, "wb") as fh:
                         fh.write(raw)
 
-            # A bad chunk table can end the process in laspy's decoder: raise first.
+            # A bad chunk table or run of 0xFF bytes can end the process in laspy's
+            # decoder: raise first.
             check_laz(raw, f"{project}/{key}.laz")
             las = laspy.read(io.BytesIO(raw))
             x = np.asarray(las.x)

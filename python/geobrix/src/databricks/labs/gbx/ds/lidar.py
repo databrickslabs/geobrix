@@ -592,8 +592,9 @@ def _dense_ff_in(f, start: int, needed: list, item: int) -> bool:
     failed copy leaves such runs. The chunks lie one after another from
     ``start + 8``; the first record of each (``item`` bytes) is stored
     uncompressed and never reaches the decoder, so it is not counted. ``f`` is
-    read in pieces of ``_FF_SCAN_BYTES``, in order. A pass over the compressed
-    points costs about 1% of decoding them, plus reading them once more."""
+    read in pieces of ``_FF_SCAN_BYTES``, in order. Measured on a 250 MB file
+    (20 million points), the pass costs about 4-6% of the decode time warm and up
+    to about 10% cold, on local storage: it reads the compressed points once more."""
     sizes = np.array([int(nbytes) for _, nbytes in needed], dtype=np.int64)
     ends = np.cumsum(sizes)
     begins = ends - sizes

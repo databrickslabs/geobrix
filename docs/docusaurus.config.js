@@ -141,24 +141,30 @@ const config = {
             label: 'Readers & Writers',
             position: 'left'
           },
-          {
-            type: 'dropdown',
-            label: 'Version',
-            position: 'right',
-            items: [
-              {
-                label: '0.6 (current)',
-                to: '/docs/intro',
-              },
-              {
-                // pathname:// keeps the baseUrl, does a full page load (the archive
-                // is a separate static site) and skips the broken-link check.
-                label: '0.5.x (archive)',
-                href: 'pathname:///archive/0.5/',
-                target: '_self',
-              },
-            ],
-          },
+          // The archive is a separate static site on the published docs host; the offline
+          // static zip (DOCS_STATIC_ZIP=1) does not contain it, so it gets no version menu.
+          ...(process.env.DOCS_STATIC_ZIP === '1'
+            ? []
+            : [
+                {
+                  type: 'dropdown',
+                  label: 'Version',
+                  position: 'right',
+                  items: [
+                    {
+                      label: '0.6 (current)',
+                      to: '/docs/intro',
+                    },
+                    {
+                      // pathname:// keeps the baseUrl, does a full page load (the archive
+                      // is a separate static site) and skips the broken-link check.
+                      label: '0.5.x (archive)',
+                      href: 'pathname:///archive/0.5/',
+                      target: '_self',
+                    },
+                  ],
+                },
+              ]),
           {
             href: 'https://github.com/databrickslabs/geobrix',
             label: 'GitHub',

@@ -4,14 +4,18 @@ Create or refresh the isolated `uv` venv (`.venv-pyrx/`, no system site-packages
 
 Set `GBX_PYRX_VENV=<dir>` to put the venv somewhere other than `.venv-pyrx`, for example to try a new lock without disturbing a venv another test run is using. The test commands honour the same variable.
 
-**Usage:** `bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--log <path>]`
+**Usage:** `bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--connect] [--log <path>]`
 
 **Options:**
 - `--python <ver>` — Python version for the venv (default 3.12)
 - `--recreate` — delete and recreate the venv
+- `--connect` — also install the Spark Connect client deps, for the local Connect tier (see below)
 - `--log <path>` — tee output to `test-logs/<path>`
 - `--help, -h` — show help
+
+**Local Spark Connect tier (`--connect`, opt-in).** The CI lock carries no gRPC client, so `SparkSession.builder.remote(...)` cannot connect from the synced venv. `--connect` installs `pyspark[connect]==<the venv's pyspark>` (pyspark's own list for that version: `grpcio`, `grpcio-status`, `googleapis-common-protos`) plus `zstandard`, with the venv as it stands as a constraint file, so no locked version moves (a conflict fails the sync instead). The CI lock file is not touched. The `spark_connect_local` fixture (`python/geobrix/test/conftest.py`) then starts `remote("local[2]")` once per session and skips with a one-line reason when the deps are absent. The local server lives in the test process, so run Connect tests on their own: `gbx:test:pyrx --path python/geobrix/test/test_spark_connect_local.py`. The packages are installed through the host's configured `uv`; the command never prints or reads an index URL.
 
 **Examples:**
 - `bash scripts/commands/gbx-venv-sync.sh`
 - `bash scripts/commands/gbx-venv-sync.sh --recreate --log venv-sync.log`
+- `bash scripts/commands/gbx-venv-sync.sh --connect`

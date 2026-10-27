@@ -24,21 +24,28 @@ installs: the hash-pinned lock python/geobrix/requirements-light-env6-ci.txt, th
 python/geobrix itself (editable, --no-deps). Re-running refreshes an existing venv in place;
 --recreate starts from scratch. GBX_PYRX_VENV=<dir> moves the venv from .venv-pyrx.
 
-Usage: bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--log <path>]
+Usage: bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--connect] [--log <path>]
 Options:
   --python <ver>   Python version for the venv (default 3.12)
   --recreate       Delete and recreate the venv from scratch
+  --connect        Also install the Spark Connect client deps for the venv's own pyspark
+                   (grpcio, grpcio-status, googleapis-common-protos, zstandard: pyspark's
+                   `connect` extra), so the local Connect tier runs (`spark_connect_local`
+                   in python/geobrix/test/conftest.py). Opt-in: the CI lock does not carry
+                   them, and nothing already installed changes version.
   --log <path>     Tee output to a log file (resolved under test-logs/)
   --help, -h       Show this help
 EOF
 }
 
 RECREATE=0
+CONNECT=0
 while [[ $# -gt 0 ]]; do case $1 in
     --python|--log) [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
         if [[ $1 == --python ]]; then PYTHON_VERSION="$2"; else LOG_PATH=$(resolve_log_path "$2"); fi
         shift 2 ;;
     --recreate) RECREATE=1; shift ;;
+    --connect) CONNECT=1; shift ;;
     --help|-h) show_help; exit 0 ;;
     *) echo "Unknown option: $1" >&2; show_help; exit 1 ;;
 esac; done
@@ -72,6 +79,22 @@ uv pip install --python "$VENV_DIR/bin/python" --require-hashes -r "$LIGHT_LOCK"
 uv pip install --python "$VENV_DIR/bin/python" --no-deps -e ./python/geobrix \
     || { echo "❌ uv pip install of the package failed" >&2; exit 1; }
 
+# Opt-in: the Spark Connect client deps. `pyspark[connect]==<installed>` asks pyspark's own
+# metadata for them (grpcio, grpcio-status, googleapis-common-protos; zstandard is named too
+# for the plan compression), so they match the venv's pyspark whatever its version. The
+# constraints file is the venv as it is now: nothing the lock installed may move, and a
+# conflict fails here, loudly, instead of silently changing the CI versions.
+if [[ $CONNECT -eq 1 ]]; then
+    PYSPARK_VERSION="$("$VENV_DIR/bin/python" -c 'import pyspark; print(pyspark.__version__)')" \
+        || { echo "❌ pyspark is not importable in $VENV_DIR" >&2; exit 1; }
+    CONSTRAINTS="$(mktemp "${TMPDIR:-/tmp}/gbx-connect-constraints.XXXXXX")"
+    uv pip freeze --python "$VENV_DIR/bin/python" | grep -vE '^(-e |#)' > "$CONSTRAINTS"
+    uv pip install --python "$VENV_DIR/bin/python" -c "$CONSTRAINTS" \
+        "pyspark[connect]==${PYSPARK_VERSION}" zstandard \
+        || { rm -f "$CONSTRAINTS"; echo "❌ uv pip install of the Spark Connect client deps failed" >&2; exit 1; }
+    rm -f "$CONSTRAINTS"
+fi
+
 # Assert isolation: the venv must not see host site-packages.
 "$VENV_DIR/bin/python" - <<'PY'
 import sys
@@ -87,5 +110,9 @@ assert pyspark.__version__.startswith("4.0."), f"pyspark {pyspark.__version__}: 
 print("pyspark", pyspark.__version__, "zarr", zarr.__version__)
 PY
 EXIT_CODE=$?
+if [[ $EXIT_CODE -eq 0 && $CONNECT -eq 1 ]]; then
+    "$VENV_DIR/bin/python" -c 'import grpc, grpc_status, google.rpc, pyspark.sql.connect.session; print("Spark Connect client OK: grpcio", grpc.__version__)'
+    EXIT_CODE=$?
+fi
 [[ $EXIT_CODE -eq 0 ]] && echo "✅ venv ready at $VENV_DIR" || echo "❌ venv sync failed"
 exit $EXIT_CODE

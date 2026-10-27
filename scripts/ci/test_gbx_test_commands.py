@@ -417,6 +417,42 @@ def test_venv_sync_installs_the_ci_lock_into_an_existing_venv(sandbox):
     assert "[" not in installs[1]
 
 
+def test_venv_sync_connect_adds_the_client_deps_for_the_venvs_own_pyspark(sandbox):
+    # Opt-in: the CI lock has no gRPC client, so the local Connect tier needs `pyspark[connect]`
+    # at the venv's pyspark version, constrained to what is installed (no locked version moves).
+    bin_dir = sandbox.root / ".venv-pyrx" / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    python.write_text(
+        "#!/bin/sh\n"
+        '[ "$1" = "-c" ] && case "$2" in "import pyspark"*) echo 4.0.0;; esac\n'
+        '[ "$1" = "-" ] && cat > /dev/null\n'
+        "exit 0\n"
+    )
+    python.chmod(0o755)
+    uv_log = _fake_uv(sandbox)
+    _fake_lock(sandbox)
+
+    sandbox.run("gbx-venv-sync.sh")
+    plain = uv_log.read_text().splitlines()
+    assert not [
+        c for c in plain if "pyspark[connect]" in c or c.startswith("pip freeze")
+    ]
+
+    uv_log.unlink()
+    res = sandbox.run("gbx-venv-sync.sh", "--connect")
+
+    assert res.returncode == 0, res.output
+    calls = uv_log.read_text().splitlines()
+    assert [c for c in calls if c.startswith("pip freeze")], calls
+    extra = [c for c in calls if "pyspark[connect]" in c]
+    assert len(extra) == 1 and "pyspark[connect]==4.0.0 zstandard" in extra[0], calls
+    assert " -c " in extra[0] and "--require-hashes" not in extra[0]
+    assert calls.index(extra[0]) > max(
+        i for i, c in enumerate(calls) if "--require-hashes" in c
+    )  # after the lock install
+
+
 def test_venv_sync_creates_the_venv_when_it_is_missing(sandbox):
     uv_log = _fake_uv(sandbox)
     _fake_lock(sandbox)

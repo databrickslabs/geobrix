@@ -57,6 +57,8 @@ import os
 import shlex
 from pathlib import Path
 
+import pytest
+
 # Every test dir whose modules import light-tier-only deps. Ignored in the
 # heavyweight CI env (no rasterio); collected + run in the light env.
 _LIGHT_TEST_DIRS = [
@@ -136,3 +138,53 @@ def pytest_collection_finish(session):
         os.environ["PYSPARK_SUBMIT_ARGS"] = (
             f"--driver-class-path {classpath} pyspark-shell"
         )
+
+
+# ---------------------------------------------------------------------------
+# Local Spark Connect (Tier 1): the plan shapes a Connect client sends, with no cluster.
+#
+# `SparkSession.builder.remote("local[2]")` starts a Connect server inside a regular local
+# PySpark session of THIS process and returns a Connect client for it. Two consequences:
+#
+#   * the process cannot already hold a classic SparkContext (PySpark raises
+#     SESSION_ALREADY_EXIST), so the fixture skips when one is active; and
+#   * while the session lives, SparkSession.builder.getOrCreate() hands out Connect
+#     sessions (SPARK_CONNECT_MODE_ENABLED), so classic tests must not run after it. The
+#     tests that use the fixture are therefore ordered LAST in a run.
+#
+# Run Connect tests on their own for a clean answer:
+#   gbx:test:pyrx --path python/geobrix/test/test_spark_connect_local.py
+# The client deps are opt-in: gbx:venv:sync --connect (the CI lock does not carry them).
+# ---------------------------------------------------------------------------
+def _importable(name):
+    try:
+        return importlib.util.find_spec(name) is not None
+    except ImportError:
+        return False
+
+
+def pytest_collection_modifyitems(items):
+    """Order the tests that use the local Connect session last (stable for the rest)."""
+    items.sort(
+        key=lambda item: "spark_connect_local" in getattr(item, "fixturenames", ())
+    )
+
+
+@pytest.fixture(scope="session")
+def spark_connect_local():
+    """A local Spark Connect session (`remote("local[2]")`), started once per session."""
+    missing = [m for m in ("grpc", "grpc_status", "google.rpc") if not _importable(m)]
+    if missing:
+        pytest.skip(
+            f"Spark Connect client deps missing ({', '.join(missing)}): run gbx:venv:sync --connect"
+        )
+    from pyspark import SparkContext
+    from pyspark.sql import SparkSession
+
+    if SparkContext._active_spark_context is not None:
+        pytest.skip(
+            "a classic SparkContext is already active in this process; run the Connect tests alone"
+        )
+    spark = SparkSession.builder.remote("local[2]").getOrCreate()
+    yield spark
+    spark.stop()  # also stops the local server and clears the Connect-mode environment

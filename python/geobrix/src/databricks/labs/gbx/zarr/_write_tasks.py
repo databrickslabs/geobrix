@@ -27,7 +27,6 @@ import itertools
 import json
 import math
 import os
-import uuid
 from dataclasses import dataclass
 
 import numpy as np
@@ -42,7 +41,7 @@ from databricks.labs.gbx.zarr._pack import (
     is_fill,
     pad_to_chunk,
 )
-from databricks.labs.gbx.zarr.errors import ZarrError, ZarrGridMismatch
+from databricks.labs.gbx.zarr.errors import ZarrError, ZarrGridMismatch, ZarrUnsupported
 
 __all__ = [
     "PIECES_DDL",
@@ -61,6 +60,7 @@ __all__ = [
 _CF_ATTRS = ("scale_factor", "add_offset", "_FillValue", "missing_value")
 _TIME_ATTRS = ("units", "calendar")
 _HASH_MASK = (1 << 64) - 1
+_SIDE_PART = "side"
 
 PIECES_DDL = (
     "variable STRING, key STRING, part STRING, shard_key STRING, ord INT, "
@@ -127,6 +127,7 @@ class TaskConfig:
     batch_bytes: int
     roll_bytes: int
     fault: tuple | None = None
+    unsupported: dict | None = None  # name -> why the store cannot decode that array
 
 
 # --- shared helpers ----------------------------------------------------------------------
@@ -249,7 +250,9 @@ def _side(kind: str, info: str, data) -> dict:
     return {
         "variable": "",
         "key": "",
-        "part": uuid.uuid4().hex,
+        # one fixed group: a task Spark recomputes (after a lost shuffle file) routes its
+        # side rows exactly as before, so none is lost or seen twice
+        "part": _SIDE_PART,
         "shard_key": None,
         "ord": 2,
         "chunk": None,
@@ -292,6 +295,13 @@ def _block_pieces(cfg: TaskConfig, row: dict, buf, seen: dict):
         yield _side("coord", json.dumps(info), bytes(buf))
         return
     meta = cfg.arrays.get(name)
+    if meta is None and name in (cfg.unsupported or {}):
+        raise ZarrUnsupported(
+            f"array {name!r} of the store cannot be decoded, so it cannot be written: "
+            f"{cfg.unsupported[name]}",
+            fix=f"leave the blocks of {name!r} out of the input, or rewrite that array "
+            "in a dtype GeoBrix decodes",
+        )
     if meta is None:
         raise ZarrError(
             f"the blocks hold the variable {name!r}, which this write did not plan",
@@ -503,8 +513,11 @@ class _Assembler:
         group, cfg = self.group, self.cfg
         out = _fill_chunk(meta)
         base = cfg.base_arrays.get(meta.name)
-        if meta.shard is not None:
-            group.read_shard = True  # absent or not, the commit checks it is unchanged
+        if meta.shard is not None and key not in group.chunks:
+            # the chunk comes from the shard row (or, with none, reads as fill): the commit
+            # checks that row is unchanged. A chunk with its own row needs no guard: that
+            # row's expectation covers it, and disjoint writers of one shard stay disjoint
+            group.read_shard = True
         if base is None or (group.shard is None and key not in group.chunks):
             return out
         origin = [k * c for k, c in zip(chunk, meta.chunks)]

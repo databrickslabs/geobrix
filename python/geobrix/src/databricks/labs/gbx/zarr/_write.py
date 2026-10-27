@@ -568,8 +568,13 @@ def _coordinate_condition():
     return (F.size("dims") == 1) & (F.element_at("dims", 1) == F.col("variable"))
 
 
-def _blocks_frame(df, variables):
-    """The blocks to write: the blocks DataFrame, narrowed to ``variables`` when given."""
+def _blocks_frame(df, variables, dims=None):
+    """The blocks to write: the blocks DataFrame, narrowed to ``variables`` when given.
+
+    Naming variables never drops their labels: the coordinate blocks (one dimension, named
+    like it) stay, all of them, or those of ``dims`` when the dimensions the named
+    variables use are known.
+    """
     from pyspark.sql import functions as F
 
     missing = [c for c in _BLOCK_COLUMNS if c not in df.columns]
@@ -584,13 +589,54 @@ def _blocks_frame(df, variables):
             "output of gbx_zarr_read(output='blocks'), or a DataFrame in BLOCKS_SCHEMA."
         )
     names = _names(variables)
-    return df if names is None else df.where(F.col("variable").isin(names))
+    if names is None:
+        return df
+    coords = _coordinate_condition()
+    if dims is not None:
+        coords = coords & F.col("variable").isin(sorted(dims))
+    return df.where(F.col("variable").isin(names) | coords)
 
 
-def _position_pass(frame) -> tuple[dict[str, _Var], tuple[int, int]]:
-    """The variables of a blocks frame from one pass over its block positions, and the
-    digest of what it saw. Only position, type and attribute columns are selected, never
-    ``data``: a staged input is not read for its bytes here."""
+def _digest_of(vars_: dict) -> tuple[int, int]:
+    """``(count, hash)`` of a set of blocks: what the write pass must see again."""
+    count, digest = 0, 0
+    for name, var in vars_.items():
+        for start, stop in zip(var.starts.tolist(), var.stops.tolist()):
+            digest = (digest + block_hash(name, start, stop)) & _HASH_MASK
+            count += 1
+    return count, digest
+
+
+def _planned_blocks(data, variables) -> _Input:
+    """A create's or append's blocks, planned from one position pass. With ``variables``
+    the named variables are kept with the coordinates of the dimensions they use; any other
+    coordinate block is left out of the frame (and so of the digest) before writing."""
+    from pyspark.sql import functions as F
+
+    frame = _blocks_frame(data, variables)
+    vars_ = _position_pass(frame)
+    names = _names(variables)
+    if names is not None:
+        missing = [n for n in names if n not in vars_]
+        if missing:
+            raise ValueError(
+                f"variables {missing} are not in the input, which has {sorted(vars_)}. "
+                "Fix: name variables of the input."
+            )
+        used = {d for n in names for d in vars_[n].dims}
+        keep = [
+            n for n, v in vars_.items() if n in names or (v.coordinate and n in used)
+        ]
+        if len(keep) < len(vars_):
+            frame = frame.where(F.col("variable").isin(keep))
+            vars_ = {n: vars_[n] for n in keep}
+    return _Input("blocks", vars_, {}, frame=frame, digest=_digest_of(vars_))
+
+
+def _position_pass(frame) -> dict[str, _Var]:
+    """The variables of a blocks frame from one pass over its block positions. Only
+    position, type and attribute columns are selected, never ``data``: a staged input is
+    not read for its bytes here."""
     from pyspark.sql import functions as F
 
     cols = [F.col(c) for c in ("variable", "dims", "start", "stop", "dtype", "shape")]
@@ -606,19 +652,14 @@ def _position_pass(frame) -> tuple[dict[str, _Var], tuple[int, int]]:
             "the blocks DataFrame is empty. Fix: pass the blocks to write."
         )
     out = {}
-    count, digest = 0, 0
     for name in pc.unique(seen.column("variable")).to_pylist():
         if name is None:
             raise ValueError(
                 "a block has no variable name. Fix: name the variable of every block."
             )
         sub = seen.filter(pc.equal(seen.column("variable"), name))
-        var = _summarize_blocks(name, sub)
-        out[name] = var
-        for start, stop in zip(var.starts.tolist(), var.stops.tolist()):
-            digest = (digest + block_hash(name, start, stop)) & _HASH_MASK
-            count += 1
-    return out, (count, digest)
+        out[name] = _summarize_blocks(name, sub)
+    return out
 
 
 def _positions(sub: pa.Table, column: str, ndim: int, name: str) -> np.ndarray:
@@ -1304,13 +1345,11 @@ def _plan_existing(
     )
     if _is_xarray(data):
         inp = _xarray_input(data, variables)
+    elif mode in ("update", "overwrite"):
+        return _plan_single_pass(spark, plan, data, variables)
     else:
-        frame = _blocks_frame(data, variables)
-        if mode in ("update", "overwrite"):
-            return _plan_single_pass(spark, plan, frame, variables)
-        vars_, digest = _position_pass(frame)
-        inp = _Input("blocks", vars_, {}, frame=frame, digest=digest)
-        plan.digest = digest
+        inp = _planned_blocks(data, variables)
+        plan.digest = inp.digest
     _check_against_store(table, inp.vars.values(), docs, extents)
     dims_in = {d for v in inp.vars.values() for d in v.dims}
     store_labels = _decoded_coords(
@@ -1392,10 +1431,12 @@ def _append_labels(inp: _Input, append_dim, arrays) -> tuple[np.ndarray, int]:
     return labels, cvar.lo[0]
 
 
-def _plan_single_pass(spark, plan: _Plan, frame, variables) -> _Plan:
+def _plan_single_pass(spark, plan: _Plan, data, variables) -> _Plan:
     """An update or overwrite from blocks: no pass before the write. The tasks may meet
-    any decodable data array of the store (or those ``variables`` names); a variable the
-    store lacks is created only when ``variables`` names it, from its first block."""
+    any decodable data array of the store (or those ``variables`` names, with the
+    coordinate blocks of their dimensions); a variable the store lacks is created only when
+    ``variables`` names it, from its first block."""
+    frame = _blocks_frame(data, None)
     docs, names = plan.docs, _names(variables)
     data_arrays = {n: m for n, m in plan.arrays.items() if n not in plan.coords}
     if names is not None:
@@ -1430,6 +1471,10 @@ def _plan_single_pass(spark, plan: _Plan, frame, variables) -> _Plan:
             plan.created.add(n)
             _sizing_docs(plan, docs, n)
         data_arrays = {n: m for n, m in data_arrays.items() if n in names}
+        dims = {d for n in names if n in plan.arrays for d in plan.arrays[n].dims}
+        frame = _blocks_frame(
+            data, names, dims | {n for n in names if n in plan.coords}
+        )
     plan.task_arrays = data_arrays
     plan.frame = frame
     plan.single_pass = True
@@ -1733,6 +1778,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         },
         base_arrays={n: plan.docs.arrays[n] for n in base_names},
         unknown_fix=unknown_fix,
+        unsupported=dict(plan.docs.unsupported) if plan.docs else {},
         batch_rows=_BATCH_ROWS,
         batch_bytes=sizes["batch_bytes"],
         roll_bytes=sizes["roll_bytes"],
@@ -2585,9 +2631,7 @@ def gbx_zarr_write(
     if _is_xarray(data):
         inp = _xarray_input(data, variables)
     else:
-        frame = _blocks_frame(data, variables)
-        vars_, digest = _position_pass(frame)
-        inp = _Input("blocks", vars_, {}, frame=frame, digest=digest)
+        inp = _planned_blocks(data, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
     claimed = made = False
     try:

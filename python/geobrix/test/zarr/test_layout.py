@@ -93,3 +93,23 @@ def test_bad_layouts_are_refused_with_a_fix(args, match):
     with pytest.raises(ValueError, match=match) as e:
         chunk_layout(*args)
     assert "Fix:" in str(e.value)
+
+
+def test_rr1_m5_a_shard_holds_at_most_4096_inner_chunks():
+    """Ruling Z41 (RR1-M5): the leading growth stops at 4,096 inner chunks a shard, so a
+    shard's index stays near 64 KiB (the (12, 5, 6) case grew to 93,204 and 1.5 MB)."""
+    import numpy as np
+
+    from databricks.labs.gbx.zarr._layout import SHARD_MAX_CHUNKS
+    from databricks.labs.gbx.zarr._shard import index_nbytes
+
+    chunks, shards = chunk_layout(
+        (48, 10, 12), DIMS, "float32", {"time": 12, "latitude": 5, "longitude": 6}
+    )
+    per_shard = int(np.prod([s // c for s, c in zip(shards, chunks)]))
+    assert shards == (12288, 10, 12) and per_shard == SHARD_MAX_CHUNKS == 4096
+    codecs = (
+        {"name": "bytes", "configuration": {"endian": "little"}},
+        {"name": "crc32c"},
+    )
+    assert index_nbytes(per_shard, codecs) == 65540  # about 64 KiB, not 1.5 MB

@@ -26,6 +26,7 @@ import numpy as np
 __all__ = [
     "TARGET_CHUNK_BYTES",
     "SHARD_CAP_BYTES",
+    "SHARD_MAX_CHUNKS",
     "PRESETS",
     "chunk_layout",
     "coordinate_chunks",
@@ -34,6 +35,9 @@ __all__ = [
 
 TARGET_CHUNK_BYTES = 4 << 20
 SHARD_CAP_BYTES = 128 << 20
+# A shard holds at most this many inner chunks: its (virtual) index, 16 bytes per chunk,
+# stays near 64 KiB, which every read of the shard fetches or builds.
+SHARD_MAX_CHUNKS = 4096
 PRESETS = ("maps", "series", "balanced")
 _SERIES_TILE = 32
 _BALANCED_LEAD = 24
@@ -84,7 +88,9 @@ def shard_layout(
     in whole chunks. Then the first leading dimension grows by whole chunks while the shard
     stays within the cap, past the dimension's current length if need be: a store created
     small and appended to along time keeps filling the same shards, as the brief's rule
-    and the append workload want.
+    and the append workload want. A shard never holds more than ``SHARD_MAX_CHUNKS``
+    inner chunks (Ruling Z41): the spatial shard is halved further if it alone has more,
+    and the leading growth stops there.
     """
     shape, chunks = tuple(int(n) for n in shape), tuple(int(c) for c in chunks)
     ndim = len(shape)
@@ -98,13 +104,17 @@ def shard_layout(
     def nbytes() -> int:
         return math.prod(c * k for c, k in zip(chunks, count)) * itemsize
 
-    while nbytes() > SHARD_CAP_BYTES and any(count[d] > 1 for d in spatial):
+    def too_big() -> bool:
+        return nbytes() > SHARD_CAP_BYTES or math.prod(count) > SHARD_MAX_CHUNKS
+
+    while too_big() and any(count[d] > 1 for d in spatial):
         for d in spatial:
             count[d] = -(-count[d] // 2)
     if ndim > 2:
         lead = 0
         slab = nbytes()  # one leading chunk's worth of the shard
-        count[lead] = max(1, SHARD_CAP_BYTES // max(1, slab))
+        by_chunks = max(1, SHARD_MAX_CHUNKS // math.prod(count))
+        count[lead] = max(1, min(SHARD_CAP_BYTES // max(1, slab), by_chunks))
     return tuple(c * k for c, k in zip(chunks, count))
 
 

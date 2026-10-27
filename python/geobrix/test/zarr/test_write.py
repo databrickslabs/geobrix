@@ -1352,3 +1352,197 @@ def test_a_write_to_a_root_whose_marker_is_gone_is_refused(
             mode="update",
         )
     assert _latest(spark_delta, table) == version
+
+
+# --- fix round 2 (Ruling Z41) ------------------------------------------------------------------
+
+
+def test_p13_naming_variables_keeps_the_coordinate_blocks_of_their_dimensions(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """RR1-I1: ``variables=["t2m"]`` with blocks of t2m and time. An append finds its
+    labels, a create makes the time array, an update patches the labels; a coordinate no
+    named variable uses is left out."""
+    ds = _dataset(hours=48)
+    day1, day2 = ds.isel(time=slice(0, 24)), ds.isel(time=slice(24, 48))
+    table, _, _ = _create(spark_delta, drop, tmp_path, day1)
+    gbx_zarr_write(
+        _blocks(
+            spark_delta,
+            ("t2m", (0, 0, 0), day2.t2m.values),
+            ("time", (0,), day2.time.values),
+        ),
+        table,
+        mode="append",
+        variables=["t2m"],
+    )
+    np.testing.assert_array_equal(_read(spark_delta, table, "time"), ds.time.values)
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
+
+    made = _table("p13c")
+    drop(made)
+    gbx_zarr_write(
+        _blocks(
+            spark_delta,
+            ("t2m", (0, 0, 0), day1.t2m.values),
+            ("time", (0,), day1.time.values),
+        ),
+        made,
+        root=str(tmp_path / "p13c"),
+        variables=["t2m"],
+        chunks=CHUNKS,
+    )
+    np.testing.assert_array_equal(_read(spark_delta, made, "time"), day1.time.values)
+
+    def relabel(shift):
+        return gbx_zarr_write(
+            _blocks(
+                spark_delta,
+                ("t2m", (0, 0, 0), np.full((24, 10, 12), 1.0, "float32")),
+                ("time", (0,), day1.time.values + shift),
+            ),
+            made,
+            mode="update",
+            variables=["t2m"],
+        )
+
+    # labels the hourly int64 units cannot hold are refused, never stored in other units
+    with pytest.raises(ZarrUnsupported, match="whole multiples"):
+        relabel(np.timedelta64(30, "m"))
+    relabel(np.timedelta64(1, "h"))  # relabel day 1 through an update
+    np.testing.assert_array_equal(
+        _read(spark_delta, made, "time"), day1.time.values + np.timedelta64(1, "h")
+    )
+    assert (_read(spark_delta, made, "t2m") == 1.0).all()
+
+
+def test_rr1_m3_disjoint_read_modify_writers_of_one_shard_need_no_guard(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """RR1-M3: chunks with rows of their own are guarded by those rows; the shard is not
+    checked. Two partial writers of different chunks in one registered shard both land,
+    each on its first commit, and neither commit carries a check row."""
+    store, table = _registered(spark_delta, drop, tmp_path, "m3")
+    whole = np.full((12, 37, 72), 1.0, "float32")
+    gbx_zarr_write(  # give both chunks of shard c/0/0/0 a chunk row
+        _blocks(spark_delta, ("t2m", (0, 0, 0), whole), ("t2m", (12, 0, 0), whole)),
+        table,
+        mode="update",
+    )
+    a, b = uuid.uuid4().hex, uuid.uuid4().hex
+    part = np.full((6, 37, 72), 2.0, "float32")
+    blocks_a = _blocks(spark_delta, ("t2m", (0, 0, 0), part))
+    blocks_b = _blocks(spark_delta, ("t2m", (12, 0, 0), part))
+    real, calls, ran = M.commit, [], []
+
+    def recording(spark_, table_, rows, *, write_id, meta, sharded=None):
+        calls.append((write_id, rows.column("op").to_pylist()))
+        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+
+    def a_first(wid):
+        if wid == b and not ran:
+            ran.append(gbx_zarr_write(blocks_a, table, mode="update", write_id=a))
+
+    no_hooks.setattr(_write.M, "commit", recording)
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", a_first)
+    gbx_zarr_write(blocks_b, table, mode="update", write_id=b)
+    for wid in (a, b):
+        ops = [o for w, o in calls if w == wid]
+        assert len(ops) == 1 and "check" not in ops[0]  # one commit, no guard
+    got = _read(spark_delta, table, "t2m")
+    assert (got[0:6, 0:37, 0:72] == 2.0).all() and (got[6:12, 0:37, 0:72] == 1.0).all()
+    assert (got[12:18, 0:37, 0:72] == 2.0).all() and (
+        got[18:24, 0:37, 0:72] == 1.0
+    ).all()
+
+
+def test_rr1_m4_an_overwrite_starts_a_partly_covered_chunk_from_fill(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Ruling (b): an overwrite replaces the variable, so the cells of a chunk it covers
+    only in part read as fill, not as the base, and nothing is read."""
+    table, _, _ = _create(spark_delta, drop, tmp_path)
+    wid = uuid.uuid4().hex
+    gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), np.full((6, 5, 6), 3.0, "float32"))),
+        table,
+        mode="overwrite",
+        write_id=wid,
+    )
+    got = _read(spark_delta, table, "t2m")
+    assert (got[0:6, 0:5, 0:6] == 3.0).all()
+    assert np.isnan(got[6:12, 0:5, 0:6]).all() and np.isnan(got[12:]).all()
+    assert _commit_meta(spark_delta, table, wid)["rmw"] == 0
+
+
+def test_rr1_m6_a_block_of_an_array_the_store_cannot_decode_says_so(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    path = tmp_path / "strings.zarr"
+    g = zarr.open_group(str(path), mode="w", zarr_format=3)
+    v = g.create_array("v", shape=(3,), chunks=(2,), dtype="f8", dimension_names=("x",))
+    v[:] = [1.0, 2.0, 3.0]
+    label = g.create_array(
+        "label", shape=(3,), chunks=(2,), dtype=str, dimension_names=("x",)
+    )
+    label[:] = ["a", "b", "c"]
+    table = _table("m6")
+    drop(table)
+    gbx_zarr_register(
+        spark_delta, str(path), table, writable=True, overlay_root=str(tmp_path / "ov6")
+    )
+    row = ("label", ["x"], [0], [2], None, None, "<f8", [2], bytes(16), None, None)
+    with pytest.raises(Exception, match="cannot be decoded") as e:
+        gbx_zarr_write(
+            spark_delta.createDataFrame([row], BLOCKS_SCHEMA), table, mode="update"
+        )
+    assert "variables=" not in str(e.value) and "Fix:" in str(e.value)
+
+
+def test_rr1_m2_side_rows_are_routed_the_same_way_every_time():
+    """A recomputed explode task must route its digest and coordinate rows as before."""
+    import pyarrow as pa
+
+    from databricks.labs.gbx.zarr._read import _BLOCKS_ARROW
+    from databricks.labs.gbx.zarr._write_tasks import TaskConfig, explode_function
+
+    cfg = TaskConfig(
+        write_id="a" * 32,
+        mode="update",
+        root="/tmp",
+        base_root=None,
+        arrays={},
+        offsets={},
+        base_docs={},
+        base_arrays={},
+        unknown_fix="x",
+        batch_rows=8,
+        batch_bytes=1 << 20,
+        roll_bytes=1 << 20,
+    )
+    coord = np.arange(3, dtype="f8")
+    batch = pa.RecordBatch.from_pylist(
+        [
+            {
+                "variable": "x",
+                "dims": ["x"],
+                "start": [0],
+                "stop": [3],
+                "coord_start": None,
+                "coord_stop": None,
+                "dtype": "<f8",
+                "shape": [3],
+                "data": coord.tobytes(),
+                "fill_value": None,
+                "attrs": None,
+            }
+        ],
+        schema=_BLOCKS_ARROW,
+    )
+
+    def parts():
+        out = list(explode_function(cfg)([batch]))
+        return sorted(r["part"] for b in out for r in b.to_pylist())
+
+    first = parts()
+    assert first == parts() and len(set(first)) == 1

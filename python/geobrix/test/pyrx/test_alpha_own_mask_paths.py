@@ -20,7 +20,7 @@ from databricks.labs.gbx.pyrx.core import _nodata as nd
 from databricks.labs.gbx.pyrx.core import accessors, agg, derivedband, gridagg
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import tessellate as T
-from databricks.labs.gbx.pyrx.core import warp
+from databricks.labs.gbx.pyrx.core import stretch, warp
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.gridagg import _stamp_crs_bytes
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -556,3 +556,34 @@ def test_the_empty_chip_of_a_covered_cell_copies_the_colour_interpretation(name)
         raw = T._build_empty_chip(ds, cell, "h3")
     with MemoryFile(raw) as mf, mf.open() as c:
         assert list(c.colorinterp) == _expected_labels(name)
+
+
+# --- the percentile stretch ------------------------------------------------------------------
+
+
+def _stretch_source(name):
+    """Layout ``name`` whose data bands hold ``10 + row`` over the visible rows and 250 over the
+    rows that are masked (3-4) or, for an alpha layout, transparent (8)."""
+    count = len(al.LAYOUTS[name][0])
+    rows = np.arange(H)
+    hidden = np.isin(rows, list(MASKED) + (list(TRANSPARENT) if al.LAYOUTS[name][1] else []))
+    col = np.where(hidden, 250, 10 + rows).astype("uint8")
+    data = np.broadcast_to(col[None, :, None], (count, H, 12)).copy()
+    if al.LAYOUTS[name][1]:
+        data[-1] = np.where(np.isin(rows, list(TRANSPARENT)), 0, 255)[:, None]
+    mask = np.full((H, 12), 255, dtype="uint8")
+    mask[list(MASKED), :] = 0
+    return al.layout_bytes(name, data=data, mask=mask), hidden
+
+
+@pytest.mark.parametrize("name", ["gray_x_alpha", "rgba", "rgb_nir"])
+def test_percentile_stretch_counts_only_the_pixels_valid_for_the_band(name):
+    """The percentiles are over the opaque, unmasked pixels: the visible rows stretch over their own
+    range, to 255 at the top. Counted, the 250s of the hidden rows would end the range there."""
+    raw, hidden = _stretch_source(name)
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        out = stretch.percentile_stretch(ds, 0.0, 100.0)
+    with MemoryFile(out) as mf, mf.open() as o:
+        band1 = o.read(1)
+    visible = ~hidden
+    assert band1[visible].max() == 255 and band1[visible].min() == 0

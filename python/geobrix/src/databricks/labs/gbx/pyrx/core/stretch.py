@@ -7,6 +7,7 @@ band at a time, a single percentile call per band, no full-array float64 copies.
 
 import numpy as np
 
+from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
 from databricks.labs.gbx.pyrx.core.compression import (
     creation_opts,
     drop_ycbcr,
@@ -23,9 +24,11 @@ _PERCENTILE_SAMPLE_CAP = 500_000
 def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
     """Per-band percentile contrast stretch to uint8 [0,255].
 
-    For each band: compute the lo_pct/hi_pct percentiles over valid (non-NoData)
-    pixels, clip to that range, linearly rescale to [0, 255]. Pixels that are
-    NoData in *every* band are preserved as 0.
+    For each band: compute the lo_pct/hi_pct percentiles over the pixels valid for it
+    (``_nodata.band_valid_mask``: not NoData, not hidden by the raster's own mask band
+    and, for a raster with an alpha band, opaque, at any band count), clip to that
+    range, linearly rescale to [0, 255]. Pixels that are NoData in *every* band are
+    preserved as 0.
 
     Args:
         ds:     Open rasterio DatasetReader.
@@ -57,7 +60,7 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
     invalid_all = None
     for b in range(1, count + 1):
         data = ds.read(b)
-        valid = ds.read_masks(b) != 0
+        valid = band_valid_mask(ds, b)  # NoData, own mask and transparency
         datas.append(data)
         valids.append(valid)
         inv = ~valid

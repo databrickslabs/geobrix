@@ -122,6 +122,22 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
+    test("the percentile stretch of gray+x+alpha counts only the opaque pixels") {
+        // data bands: 10 + row over the opaque rows (1 and 3), 250 over the transparent ones (0 and 2); the
+        // percentiles 0 and 100 are the range of the opaque pixels, 11 to 13: the top maps to 255, the bottom to 0.
+        // Counted, the 250s of the transparent rows would make the range 10 to 250.
+        val ds = fixture(GrayXA, (row, last) => if (last) (if (row == 1 || row == 3) 255.0 else 0.0) else (if (row == 1 || row == 3) 10.0 + row else 250.0))
+        try {
+            val (out, _) = PercentileStretch.execute(ds, Map.empty[String, String], 0.0, 100.0)
+            try {
+                val px = new Array[Double](16)
+                out.GetRasterBand(1).ReadRaster(0, 0, 4, 4, px)
+                val opaque = (0 until 16).filter(p => p / 4 == 1 || p / 4 == 3).map(px(_))
+                assert(opaque.max == 255.0 && opaque.min == 0.0, s"the opaque pixels stretch to ${opaque.min}..${opaque.max}")
+            } finally RasterDriver.releaseDataset(out)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
     test("the median of a 3-band gray+x+alpha raster is over its opaque pixels") {
         // 12 transparent pixels hold 99 and the 4 opaque ones hold 5: the median is 99 over every pixel, 5 over the
         // opaque ones

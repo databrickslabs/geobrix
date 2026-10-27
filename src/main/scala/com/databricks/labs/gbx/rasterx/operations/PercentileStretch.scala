@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants._
 
@@ -11,12 +11,16 @@ import scala.jdk.CollectionConverters._
   * Per-band percentile-based contrast stretching to uint8.
   *
   * For each band:
-  *   1. Read all pixel values (excluding NoData) into memory
+  *   1. Read all pixel values (excluding the pixels invalid for the band) into memory
   *   2. Compute lo_pct and hi_pct percentiles
   *   3. Create output uint8 dataset
   *   4. Rescale and write pixels: new = ((old - lo_pct_val) / (hi_pct_val - lo_pct_val)) * 255
   *   5. Clip to [0, 255] and convert to uint8
-  *   6. NoData pixels output as 0
+  *   6. Invalid pixels output as 0
+  *
+  * A pixel is invalid for a band ([[ValidMask.readBand]]) when the band's own mask says so (its NoData, the
+  * dataset's own mask band) or, for a raster with an alpha band, when it is transparent: the stretch does not
+  * count transparent pixels in the percentiles, at any band count.
   */
 object PercentileStretch {
 
@@ -43,26 +47,24 @@ object PercentileStretch {
             }
 
             // Process each band
+            val validity = new ValidMask(ds)
+            val valid    = new Array[Byte](width * height)
             var b = 1
             while (b <= nBands) {
                 val inBand = ds.GetRasterBand(b)
                 val outBand = outDs.GetRasterBand(b)
 
-                // Get NoData value if set
-                val noDataValue: Option[Double] = {
-                    val noDataArray = new Array[java.lang.Double](1)
-                    inBand.GetNoDataValue(noDataArray)
-                    if (noDataArray(0) != null) Option(noDataArray(0).doubleValue()) else None
-                }
+                // The pixels valid for this band: by its mask (NoData, own mask band) and its alpha band
+                validity.readBand(b, 0, 0, width, height, valid)
 
                 // Read pixels and compute percentiles
                 val (pixelValues, stretchLoVal, stretchHiVal) = computePercentiles(
-                    inBand, width, height, noDataValue, loPct, hiPct
+                    inBand, width, height, valid, loPct, hiPct
                 )
 
                 // Rescale and write output
                 rescaleAndWrite(
-                    inBand, outBand, width, height, noDataValue,
+                    inBand, outBand, width, height, valid,
                     stretchLoVal, stretchHiVal
                 )
 
@@ -87,12 +89,12 @@ object PercentileStretch {
         }
     }
 
-    /** Compute percentile values from a band, excluding NoData pixels. */
+    /** Compute percentile values from a band, excluding the pixels `valid` marks 0. */
     private def computePercentiles(
         band: org.gdal.gdal.Band,
         width: Int,
         height: Int,
-        noDataValue: Option[Double],
+        valid: Array[Byte],
         loPct: Double,
         hiPct: Double
     ): (Seq[Double], Double, Double) = {
@@ -102,15 +104,11 @@ object PercentileStretch {
         val pixelData = new Array[Double](width * height)
         band.ReadRaster(0, 0, width, height, pixelData)
 
-        // Filter out NoData values
+        // Filter out the invalid pixels
         var i = 0
         while (i < pixelData.length) {
             val pv = pixelData(i)
-            val isNoData = noDataValue.exists { nd =>
-                // Handle floating-point comparison with tolerance
-                math.abs(pv - nd) < 1e-10
-            }
-            if (!isNoData && !pv.isNaN) {
+            if (valid(i) != 0 && !pv.isNaN) {
                 pixelValues += pv
             }
             i += 1
@@ -133,7 +131,7 @@ object PercentileStretch {
         outBand: org.gdal.gdal.Band,
         width: Int,
         height: Int,
-        noDataValue: Option[Double],
+        valid: Array[Byte],
         stretchLoVal: Double,
         stretchHiVal: Double
     ): Unit = {
@@ -146,11 +144,8 @@ object PercentileStretch {
         var i = 0
         while (i < pixelData.length) {
             val pv = pixelData(i)
-            val isNoData = noDataValue.exists { nd =>
-                math.abs(pv - nd) < 1e-10
-            }
 
-            val byteValue: Byte = if (isNoData || pv.isNaN) {
+            val byteValue: Byte = if (valid(i) == 0 || pv.isNaN) {
                 0.toByte
             } else {
                 // Rescale from [stretchLoVal, stretchHiVal] to [0, 255]

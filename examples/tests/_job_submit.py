@@ -42,6 +42,15 @@ _TRANSIENT_API_ERRORS = frozenset(
 )
 
 
+_LOCAL_FILE_ERRORS = (
+    FileNotFoundError,
+    PermissionError,
+    IsADirectoryError,
+    NotADirectoryError,
+    FileExistsError,
+)
+
+
 def new_idempotency_token() -> str:
     """A fresh token for one logical run (32 hex chars; the API allows up to 64)."""
     return uuid.uuid4().hex
@@ -55,8 +64,9 @@ def is_transient(exc: BaseException) -> bool:
         # request, a permission error or a missing resource will fail the same way again.
         return bool(names & _TRANSIENT_API_ERRORS)
     # Network-level failures: builtin ConnectionError/TimeoutError and requests' exceptions
-    # (all OSError subclasses) carry no server verdict, so the request may have landed.
-    return isinstance(exc, OSError)
+    # (all OSError subclasses) carry no server verdict, so the request may have landed. Local
+    # file errors are OSErrors too, but retrying cannot change them.
+    return isinstance(exc, OSError) and not isinstance(exc, _LOCAL_FILE_ERRORS)
 
 
 def submit_once(

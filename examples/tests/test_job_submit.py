@@ -180,6 +180,33 @@ def test_attempts_must_be_positive():
         _job_submit.submit_once(fake_workspace(), attempts=0, run_name="nb")
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        FileNotFoundError("no such file"),
+        PermissionError("denied"),
+        IsADirectoryError("is a directory"),
+        NotADirectoryError("not a directory"),
+        FileExistsError("exists"),
+    ],
+    ids=lambda e: type(e).__name__,
+)
+def test_local_file_errors_are_not_retried(exc):
+    """They are OSErrors, but no server verdict is missing: the same call fails the same way."""
+    attempts = []
+
+    def fails(**kw):
+        attempts.append(1)
+        raise exc
+
+    w = SimpleNamespace(jobs=SimpleNamespace(submit=fails))
+
+    with pytest.raises(type(exc)):
+        _job_submit.submit_once(w, run_name="nb")
+
+    assert len(attempts) == 1
+
+
 # ------------------------------------------------------ the notebook runner end to end
 
 
@@ -238,30 +265,127 @@ def test_run_one_makes_one_run_when_the_first_submit_response_is_lost(
 # ----------------------------------------------------- every launcher goes through it
 
 
-def _launcher_files():
-    return sorted(
-        p
-        for p in TESTS_DIR.glob("*.py")
-        if p.name != "_job_submit.py" and not p.name.startswith("test_")
-    )
+# Where a launcher may live: the notebook/bench runners, scripts, and the bench package.
+LAUNCHER_ROOTS = [
+    TESTS_DIR,
+    TESTS_DIR.parents[1] / "scripts",
+    TESTS_DIR.parents[1] / "python/geobrix/src/databricks/labs/gbx/bench",
+]
+SUBMITS = ("submit", "submit_and_wait")
 
 
-def _calls_to_jobs_submit(tree):
-    return [
-        n
-        for n in ast.walk(tree)
-        if isinstance(n, ast.Call)
-        and isinstance(n.func, ast.Attribute)
-        and n.func.attr == "submit"
-        and isinstance(n.func.value, ast.Attribute)
-        and n.func.value.attr == "jobs"
-    ]
+def _launcher_files(roots=None):
+    files = []
+    for root in roots or LAUNCHER_ROOTS:
+        for path in root.rglob("*.py"):
+            if path.name == "_job_submit.py" or path.name.startswith(
+                ("test_", "_fake")
+            ):
+                continue
+            if (
+                path.name == "conftest.py"
+                or "node_modules" in path.parts
+                or "m2" in path.parts
+            ):
+                continue
+            files.append(path)
+    return sorted(files)
+
+
+def _is_jobs_api(node):
+    """``<expr>.jobs``."""
+    return isinstance(node, ast.Attribute) and node.attr == "jobs"
+
+
+def _direct_submit_lines(source):
+    """Lines that call ``jobs.submit`` / ``jobs.submit_and_wait`` without submit_once.
+
+    Catches ``w.jobs.submit(...)``, ``api = w.jobs; api.submit(...)`` and
+    ``fn = w.jobs.submit; fn(...)``. A ``ThreadPool.submit`` is not a Jobs call.
+    """
+    tree = ast.parse(source)
+    apis, bound = set(), set()  # names bound to ``<x>.jobs`` / to ``<x>.jobs.submit``
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target, value = node.targets[0], node.value
+            if isinstance(target, ast.Name):
+                if _is_jobs_api(value):
+                    apis.add(target.id)
+                elif (
+                    isinstance(value, ast.Attribute)
+                    and value.attr in SUBMITS
+                    and (
+                        _is_jobs_api(value.value)
+                        or getattr(value.value, "id", None) in apis
+                    )
+                ):
+                    bound.add(target.id)
+    lines = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Call):
+            continue
+        f = node.func
+        if isinstance(f, ast.Attribute) and f.attr in SUBMITS:
+            if _is_jobs_api(f.value) or getattr(f.value, "id", None) in apis:
+                lines.append(node.lineno)
+        elif isinstance(f, ast.Name) and f.id in bound:
+            lines.append(node.lineno)
+    return lines
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "w.jobs.submit(run_name='x')",
+        "self.client.jobs.submit(run_name='x')",
+        "w.jobs.submit_and_wait(run_name='x')",
+        "api = w.jobs\napi.submit(run_name='x')",
+        "api = w.jobs\napi.submit_and_wait(run_name='x')",
+        "fn = w.jobs.submit\nfn(run_name='x')",
+        "api = w.jobs\nfn = api.submit\nfn(run_name='x')",
+    ],
+)
+def test_the_guard_flags_every_way_of_calling_jobs_submit(source):
+    assert _direct_submit_lines(source) != []
+
+
+@pytest.mark.parametrize(
+    "source",
+    [
+        "submit_once(w, run_name='x')",
+        "pool.submit(work)",
+        "ex = ThreadPoolExecutor()\nex.submit(work)",
+        "w.jobs.get_run(run_id=1)",
+    ],
+)
+def test_the_guard_ignores_other_submit_calls(source):
+    assert _direct_submit_lines(source) == []
+
+
+def test_the_guard_scans_subdirectories(tmp_path):
+    nested = tmp_path / "a" / "b"
+    nested.mkdir(parents=True)
+    (nested / "launcher.py").write_text("w.jobs.submit(run_name='x')\n")
+    (tmp_path / "test_x.py").write_text("w.jobs.submit()\n")
+
+    files = _launcher_files([tmp_path])
+
+    assert [f.name for f in files] == ["launcher.py"]
+
+
+def test_the_guard_covers_the_known_launcher_roots():
+    names = {f.name for f in _launcher_files()}
+    assert {
+        "run_notebooks_serverless.py",
+        "stage_jar_to_volume.py",
+        "datagen.py",
+    } <= names
 
 
 def test_no_launcher_calls_jobs_submit_directly():
     """A direct ``w.jobs.submit(...)`` has no idempotency token: a lost response duplicates."""
     direct = {
-        p.name: [n.lineno for n in _calls_to_jobs_submit(ast.parse(p.read_text()))]
+        str(p.relative_to(TESTS_DIR.parents[1])): _direct_submit_lines(p.read_text())
         for p in _launcher_files()
     }
     assert {name: lines for name, lines in direct.items() if lines} == {}

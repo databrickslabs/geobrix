@@ -481,7 +481,7 @@ All three are available in **both** tiers under the same names, so a CRS query i
 
 **Geometry input** — every geometry argument accepts **WKB, EWKB, WKT, and EWKT**. WKB/WKT carry no SRID; EWKB/EWKT carry one.
 
-**SQL output is always BINARY.** `gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB/EWKB) whichever encoding the geometry argument arrived in — a STRING geometry input still yields BINARY. One function has one declared return type: an input-dependent return type cannot be used in a view or any fixed schema, and WKB is how the rest of `gbx_st_*` and the built-in `ST_*` functions exchange geometries. To read a CRS back as text, wrap the result in `gbx_st_crs`; to hand it to a built-in, `ST_GeomFromWKB` accepts it directly. `gbx_st_crs` returns `STRING`.
+**SQL output is always BINARY.** `gbx_st_setcrs` and `gbx_st_transformcrs` return `BINARY` (WKB/EWKB) whichever encoding the geometry argument arrived in — a STRING geometry input still yields BINARY. One function has one declared return type: an input-dependent return type cannot be used in a view or any fixed schema, and WKB is how the rest of `gbx_st_*` and the built-in `ST_*` functions exchange geometries. To read a CRS back as text, wrap the result in `gbx_st_crs`; to hand it to a built-in, use `ST_GeomFromEWKB` for EWKB output (a stamped SRID) and `ST_GeomFromWKB` for plain WKB. `gbx_st_crs` returns `STRING`.
 
 **Errors are the exception, not the rule.** These functions degrade rather than fail a whole column:
 
@@ -595,6 +595,10 @@ Reprojects a geometry's coordinates into `target_crs`. The counterpart to the bu
 | Has no integer authority code | raw `PROJCS[...]` WKT, `'+proj=utm +zone=33 …'`, `'OGC:CRS84'` | plain WKB: coordinates reprojected, and the now-**stale** source SRID **cleared** — leaving it would label the geometry with a CRS it is no longer in |
 
 Source CRS resolution order: the geometry's embedded SRID first, then `source_crs`, and if neither resolves the geometry is returned unchanged.
+
+:::tip Converting the result to a product geometry
+When the output is EWKB (the SRID travels with the geometry), convert it with the built-in `ST_GeomFromEWKB`, not `ST_GeomFromWKB`. Use `ST_GeomFromWKB` only for the plain WKB that an authority-less target returns.
+:::
 
 <FunctionExamples
   name="st_transformcrs"

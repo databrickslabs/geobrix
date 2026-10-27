@@ -57,7 +57,7 @@ df.withColumn("source", df["scene_id"]) \
 
 ## Options
 
-Both tiers require the exact `(source, tile)` schema and take the same two writer options. The on-disk driver, compression, and block layout come from `tile.metadata`, not from writer options (see [Output encoding](#output-encoding-from-tile-metadata)).
+Both tiers require the exact `(source, tile)` schema and take the same two writer options. The on-disk driver and block layout come from `tile.metadata`, not from writer options (see [Output encoding](#output-encoding-from-tile-metadata)). The lightweight writer also takes `compress`, `compressLevel` and `predictor` to choose the GeoTIFF codec (see [Output format & compression](#output-format--compression)); the heavyweight writer reads its compression from `tile.metadata`.
 
 | Option | Default | Description |
 |--------|---------|-------------|
@@ -66,7 +66,7 @@ Both tiers require the exact `(source, tile)` schema and take the same two write
 
 ### Lightweight (`raster_gbx`)
 
-Supports `.mode("overwrite")`. Passes whole-file GeoTIFF tiles through verbatim; re-encodes non-GTiff tiles (e.g. `COG`) via `rasterio`.
+Supports `.mode("overwrite")`. For GeoTIFF output the `compress` option decides what happens to each tile: by default (`auto`) a ZSTD tile is written as it is and a tile in any other codec is re-encoded to ZSTD, while an explicit codec re-encodes every tile. Tiles whose driver is not GTiff (e.g. `COG`) are re-encoded via `rasterio`.
 
 ### Heavyweight (`gdal`)
 
@@ -77,8 +77,9 @@ Append-only — `.mode("overwrite")` is not supported. Re-encodes every tile thr
 
 Pure-Python/PySpark raster writer — the lightweight tier's drop-in for the
 GDAL-backed [`gdal`](./raster?tier=heavyweight) writer. Requires the exact `(source, tile)` schema,
-the same as the heavy writer. Writer options are `path` / `nameCol` / `ext`; the
-on-disk format and compression come from `tile.metadata`, not writer options.
+the same as the heavy writer. Writer options are `path` / `nameCol` / `ext`, plus
+`compress` / `compressLevel` / `predictor` to choose the GeoTIFF codec; the
+on-disk format comes from `tile.metadata`.
 
 ## Write raster tiles
 
@@ -86,8 +87,9 @@ on-disk format and compression come from `tile.metadata`, not writer options.
   source="docs/tests/python/writers/raster_gbx_write_examples.py"
   testFile="docs/tests/python/writers/test_raster_gbx_write_examples.py" />
 
-A whole-file GeoTIFF tile is written through verbatim (no re-encode); a tile whose
-`metadata["driver"]` is non-GTiff (e.g. `COG`) is re-encoded via `rasterio`.
+With the default `compress="auto"`, a GeoTIFF tile that is already ZSTD-compressed is written
+as it is, and a GeoTIFF tile in any other codec (DEFLATE, LZW, uncompressed) is re-encoded to
+ZSTD. A tile whose `metadata["driver"]` is non-GTiff (e.g. `COG`) is re-encoded via `rasterio`.
 
 For an explicit GeoTIFF-forced writer, see the [Lightweight GeoTIFF Writer](./geotiff).
 
@@ -116,21 +118,26 @@ full explanation.
 |--------|---------|-------------|
 | `nameCol` | _unset_ | Existing string column whose value is the output filename (overwrite `source`). When unset, an opaque unique name is used. |
 | `ext` | `"tif"` | Filename suffix. Does **not** change the on-disk format. |
+| `compress` | `"auto"` | GeoTIFF codec: `auto` (ZSTD with a dtype-matched predictor and a size-adaptive level), `zstd`, `deflate`, `lzw` or `none`. |
+| `compressLevel` | codec default | Level for an explicit `zstd` or `deflate`. Ignored under `auto`. |
+| `predictor` | dtype-matched | TIFF predictor (1-3) for an explicit codec. Ignored under `auto`. |
 
-The driver / `compression` / `blocksize` / `zlevel` / `zstd_level` are read from
-`tile.metadata` (same as the heavy [`gdal`](./raster?tier=heavyweight) writer).
-See [Materialized Compression](../api/materialized-compression) for the codec,
-level, and dtype-matched predictor details.
+The output driver is read from `tile.metadata`. For GeoTIFF output, `compress` governs the
+codec: under `auto` a ZSTD tile is written as it is and any other GeoTIFF tile is re-encoded to
+ZSTD, while an explicit `compress` re-encodes every tile with that codec (decoded pixels are
+identical either way). The `compression` / `blocksize` / `zlevel` / `zstd_level` metadata keys
+(`compression` defaults to `DEFLATE` when the metadata names none) apply when a tile is encoded
+to another driver such as COG. See [Materialized Compression](../api/materialized-compression)
+for the codec, level, and dtype-matched predictor details.
 
-The lightweight writer passes whole-file GeoTIFF tiles through **verbatim**, while the
-heavyweight writer re-encodes every tile (decoded pixels are identical either way). The
-heavyweight `gdal` writer is also **append-only**, whereas the lightweight writer supports
-`overwrite`. See [Choosing an Execution Tier](../api/execution-tiers) and the
-[Benchmarking](../api/benchmarking) page for light-vs-heavy timings.
+<CodeFromTest code={rasterGbxWrite} language="python" functionName="WRITE_WITH_COMPRESS"
+  source="docs/tests/python/writers/raster_gbx_write_examples.py"
+  testFile="docs/tests/python/writers/test_raster_gbx_write_examples.py" />
 
-Because GeoTIFF tiles pass through verbatim, a tile keeps the codec it already has (ZSTD for tiles
-produced by lightweight functions). The `compression` metadata key (default `DEFLATE` when the
-metadata names none) applies only when the writer re-encodes a tile to another driver such as COG.
+The heavyweight `gdal` writer has no compression options: it reads the codec, block size and
+levels from `tile.metadata` and re-encodes every tile. It is also **append-only**, whereas the
+lightweight writer supports `overwrite`. See [Choosing an Execution Tier](../api/execution-tiers)
+and the [Benchmarking](../api/benchmarking) page for light-vs-heavy timings.
 
 It is the lightweight counterpart of the heavyweight `gdal` writer, supporting Python and SQL bindings (not Scala).
 

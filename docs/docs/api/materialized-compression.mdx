@@ -62,10 +62,10 @@ Set `GBX_ZSTD_LEVEL` in the executor environment to override the size-adaptive l
 |---|---|
 | unset or `default` | Size-adaptive ladder above (the default) |
 | `fast` | L1 everywhere — highest encode throughput, output ~0.3–2.5% larger than L6 |
-| `max` | L9 everywhere — heavy-tier-parity ceiling; no smaller output than L6 on GeoBrix tiles |
+| `max` | L9 everywhere — the level a heavyweight tile gets when its metadata names ZSTD; no smaller output than L6 on GeoBrix tiles |
 | `1`–`22` | Explicit fixed level applied to all tile sizes, size-independent |
 
-Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable; `max` (L9) matches the old ladder's ceiling if hard parity with the heavyweight tier is required.
+Because decompression speed is level-independent, `GBX_ZSTD_LEVEL` helps encode throughput only, not reads. `fast` (L1) is the right choice when encode CPU is the bottleneck and a small size premium is acceptable; `max` (L9) matches the old ladder's ceiling, and the default level of an explicit heavyweight ZSTD tile (`zstd_level` is 9). The heavyweight tier defaults to DEFLATE, so that match applies only to heavyweight tiles whose metadata sets `compression` to `ZSTD`.
 
 ## When to reach for other codecs
 

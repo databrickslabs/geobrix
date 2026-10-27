@@ -1889,7 +1889,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridavg(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridavg(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridavg(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridavg(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column`
@@ -1914,7 +1914,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridcount(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridcount(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridcount(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridcount(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per H3 cell.
@@ -1939,7 +1939,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmax(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmax(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmax(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridmax(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max value per H3 cell.
@@ -1964,7 +1964,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmedian(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridmedian(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median value per H3 cell.
@@ -1989,7 +1989,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmin(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridmin(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridmin(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridmin(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min value per H3 cell.
@@ -2014,7 +2014,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridstddev(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridstddev(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per H3 cell.
@@ -2039,7 +2039,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridsum(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridsum(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridsum(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridsum(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per H3 cell.
@@ -2064,7 +2064,7 @@ Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_h3_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_h3_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_h3_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_h3_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_h3_rastertogridvariance(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_h3_rastertogridvariance(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per H3 cell.
@@ -2095,7 +2095,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridavg(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridavg(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridavg(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridavg(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Mean pixel value per quadbin cell.
@@ -2120,7 +2120,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridcount(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridcount(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridcount(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridcount(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per quadbin cell.
@@ -2145,7 +2145,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmax(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmax(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmax(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridmax(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max pixel value per quadbin cell.
@@ -2170,7 +2170,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmedian(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmedian(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridmedian(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median pixel value per quadbin cell.
@@ -2195,7 +2195,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmin(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridmin(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridmin(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridmin(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min pixel value per quadbin cell.
@@ -2220,7 +2220,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridstddev(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridstddev(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridstddev(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per quadbin cell.
@@ -2247,7 +2247,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridsum(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridsum(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridsum(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridsum(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per quadbin cell.
@@ -2272,7 +2272,7 @@ Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band)
 :::
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_quadbin_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_quadbin_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_quadbin_rastertogridvariance(tile, 4) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_quadbin_rastertogridvariance(tile, 4) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_quadbin_rastertogridvariance(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per quadbin cell.
@@ -2309,7 +2309,7 @@ A cell that covers only NoData pixels returns **`NULL`** for the measure (not `0
 Mean pixel value per BNG cell. The raster is reprojected to EPSG:27700 internally before sampling.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridavg(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridavg(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridavg(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridavg(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Mean pixel value per BNG cell.
@@ -2332,7 +2332,7 @@ Heavyweight registers `gbx_rst_bng_rastertogridavg` as a scalar (ARRAY-returning
 Valid (non-NoData) pixel count per BNG cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridcount(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridcount(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridcount(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridcount(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per BNG cell.
@@ -2355,7 +2355,7 @@ Heavyweight registers `gbx_rst_bng_rastertogridcount` as a scalar (ARRAY-returni
 Maximum pixel value per BNG cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmax(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmax(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmax(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridmax(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max pixel value per BNG cell.
@@ -2378,7 +2378,7 @@ Heavyweight registers `gbx_rst_bng_rastertogridmax` as a scalar (ARRAY-returning
 Median pixel value per BNG cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmedian(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmedian(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmedian(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridmedian(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median pixel value per BNG cell.
@@ -2401,7 +2401,7 @@ Heavyweight registers `gbx_rst_bng_rastertogridmedian` as a scalar (ARRAY-return
 Minimum pixel value per BNG cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmin(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridmin(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridmin(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridmin(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min pixel value per BNG cell.
@@ -2424,7 +2424,7 @@ Heavyweight registers `gbx_rst_bng_rastertogridmin` as a scalar (ARRAY-returning
 Population standard deviation (`sqrt` of the population variance) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridstddev(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridstddev(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridstddev(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridstddev(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per BNG cell.
@@ -2449,7 +2449,7 @@ Heavyweight registers `gbx_rst_bng_rastertogridstddev` as a scalar (ARRAY-return
 Sum of pixel values per BNG cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridsum(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridsum(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridsum(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridsum(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per BNG cell.
@@ -2472,7 +2472,7 @@ Heavyweight registers `gbx_rst_bng_rastertogridsum` as a scalar (ARRAY-returning
 Population variance (`÷ n`, two-pass) of pixel values per BNG cell — a single-pixel cell yields `0.0`.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_bng_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows: `SELECT gbx_rst_bng_rastertogridvariance(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_bng_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows: `SELECT gbx_rst_bng_rastertogridvariance(tile, 3) AS grid FROM multiband_rasters`. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`: `SELECT t.* FROM multiband_rasters, LATERAL gbx_rst_bng_rastertogridvariance(tile, 3) t`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_bng_rastertogridvariance(tile: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per BNG cell.
@@ -2509,7 +2509,7 @@ A cell that covers only NoData pixels returns **`NULL`** for the measure (not `0
 Mean pixel value per custom-grid cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridavg` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridavg(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Mean pixel value per custom-grid cell.
@@ -2532,7 +2532,7 @@ Heavyweight registers `gbx_rst_custom_rastertogridavg` as a scalar (ARRAY-return
 Valid (non-NoData) pixel count per custom-grid cell (measure is DOUBLE).
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridcount` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridcount(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Pixel count (Double) per custom-grid cell.
@@ -2555,7 +2555,7 @@ Heavyweight registers `gbx_rst_custom_rastertogridcount` as a scalar (ARRAY-retu
 Maximum pixel value per custom-grid cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridmax` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridmax(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Max pixel value per custom-grid cell.
@@ -2578,7 +2578,7 @@ Heavyweight registers `gbx_rst_custom_rastertogridmax` as a scalar (ARRAY-return
 Median pixel value per custom-grid cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridmedian` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridmedian(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Median pixel value per custom-grid cell.
@@ -2601,7 +2601,7 @@ Heavyweight registers `gbx_rst_custom_rastertogridmedian` as a scalar (ARRAY-ret
 Minimum pixel value per custom-grid cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridmin` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridmin(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Min pixel value per custom-grid cell.
@@ -2624,7 +2624,7 @@ Heavyweight registers `gbx_rst_custom_rastertogridmin` as a scalar (ARRAY-return
 Population standard deviation (`sqrt` of the population variance) of pixel values per custom-grid cell — a single-pixel cell yields `0.0`.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridstddev` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridstddev(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population standard deviation of pixel values per custom-grid cell.
@@ -2649,7 +2649,7 @@ Heavyweight registers `gbx_rst_custom_rastertogridstddev` as a scalar (ARRAY-ret
 Sum of pixel values per custom-grid cell.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridsum` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridsum(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Sum of pixel values per custom-grid cell.
@@ -2672,7 +2672,7 @@ Heavyweight registers `gbx_rst_custom_rastertogridsum` as a scalar (ARRAY-return
 Population variance (`÷ n`, two-pass) of pixel values per custom-grid cell — a single-pixel cell yields `0.0`.
 
 :::note Tier differences — SQL invocation
-Heavyweight registers `gbx_rst_custom_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and `explode(...)` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
+Heavyweight registers `gbx_rst_custom_rastertogridvariance` as a scalar (ARRAY-returning) function — call it directly and use `posexplode` and `inline` to flatten to rows. The lightweight (pyrx) tier registers it as a streaming **table function**, so lightweight SQL must use `LATERAL`. Both forms appear in the SQL tab below.
 :::
 
 **Signature:** `rst_custom_rastertogridvariance(tile: Column, grid: Column, resolution: Column, [coverage: Column], [assignment: Column]): Column` — Population variance of pixel values per custom-grid cell.

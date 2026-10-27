@@ -108,7 +108,7 @@ FROM rasters;
 
 **CRS handling:**
 - `rst_h3_tessellate` reprojects the tile extent to **EPSG:4326** internally before H3 cell lookups. Any CRS supported by GDAL is accepted; no pre-transformation of the tile is required.
-- `rst_h3_rastertogrid*` interprets pixel coordinates as EPSG:4326 lon/lat directly. If your tiles are in a projected CRS (e.g., UTM), reproject them upstream with `rst_transform` before calling any `rst_h3_rastertogrid*` function.
+- `rst_h3_rastertogrid*` reprojects the tile to **EPSG:4326** internally, with nearest-neighbour resampling so pixel values are never interpolated, before binning pixels into H3 cells. A tile in a projected CRS (e.g., UTM) needs no upstream `rst_transform`. A tile with no CRS is assumed to be in EPSG:4326 already.
 
 **Resolution:** an integer level 0–15 (higher = finer hexagons; level 7 ≈ 5 km² per cell; level 9 ≈ 0.1 km²).
 

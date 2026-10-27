@@ -1,7 +1,9 @@
 """raster_gbx / gtiff_gbx (lightweight) Writer Examples — single source of truth.
 
-Code shown in docs/docs/writers/raster_gbx.mdx is imported from here. Writer
-options are path/nameCol/ext; on-disk encoding comes from tile.metadata.
+Code shown in docs/docs/writers/raster.mdx is imported from here. Writer
+options are path/nameCol/ext plus compress/compressLevel/predictor for GeoTIFF
+output; the output driver and the encoding of non-GeoTIFF drivers come from
+tile.metadata.
 """
 
 import os
@@ -29,10 +31,19 @@ from pyspark.sql.functions import concat, lit, monotonically_increasing_id
    .write.format("gtiff_gbx").mode("overwrite")
    .option("nameCol", "source").option("ext", "tif").save(OUT_DIR))"""
 
-ENCODING_NOTE = """# On-disk format/compression come from tile.metadata, NOT writer options
-#   driver/format -> output driver (default GTiff; GTiff = passed through verbatim)
-#   compression/blocksize/zlevel/zstd_level -> applied when re-encoding (non-GTiff)
-# Change them via upstream transforms, then write."""
+ENCODING_NOTE = """# GeoTIFF output: the writer options choose the codec
+#   compress -> auto (default) | zstd | deflate | lzw | none
+#   compressLevel, predictor -> refine an explicit codec (ignored under auto)
+# Other drivers: the output driver and its encoding come from tile.metadata
+#   driver/format -> output driver (default GTiff)
+#   compression/blocksize/zlevel/zstd_level -> applied when encoding a non-GTiff driver (COG)
+# Change the metadata via upstream transforms, then write."""
+
+WRITE_WITH_COMPRESS = """# Choose the GeoTIFF codec at write time: DEFLATE level 9 instead of the default ZSTD
+(df.write.format("gtiff_gbx").mode("overwrite")
+   .option("compress", "deflate")
+   .option("compressLevel", "9")
+   .save(OUT_DIR))"""
 
 
 def _register(spark):
@@ -95,3 +106,30 @@ def write_with_namecol(spark, path=None):
             .save(out_dir)
         )
         assert "mytile.tif" in os.listdir(out_dir)
+
+
+def write_with_compress(spark, path=None):
+    """Verify WRITE_WITH_COMPRESS: default is ZSTD; compress="deflate" is honoured."""
+    import rasterio
+
+    _register(spark)
+    df = spark.read.format("raster_gbx").load(path or SAMPLE_RASTER_PATH)
+
+    def _codec(out_dir):
+        files = [f for f in os.listdir(out_dir) if f.endswith(".tif")]
+        assert files, "no output written"
+        with rasterio.open(os.path.join(out_dir, files[0])) as w:
+            return w.compression.value.lower() if w.compression else None
+
+    with tempfile.TemporaryDirectory() as out_dir:
+        df.write.format("gtiff_gbx").mode("overwrite").save(out_dir)
+        assert _codec(out_dir) == "zstd"
+    with tempfile.TemporaryDirectory() as out_dir:
+        (
+            df.write.format("gtiff_gbx")
+            .mode("overwrite")
+            .option("compress", "deflate")
+            .option("compressLevel", "9")
+            .save(out_dir)
+        )
+        assert _codec(out_dir) == "deflate"

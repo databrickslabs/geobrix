@@ -345,7 +345,7 @@ Three functions mirror the raster family above, for geometries. They take a **CR
 
 ```sql
 -- Both tiers, same names. In SQL these always return BINARY, so read the CRS
--- back with gbx_st_crs (or hand the bytes to ST_GeomFromWKB).
+-- back with gbx_st_crs (or hand the EWKB bytes to ST_GeomFromEWKB).
 SELECT gbx_st_crs(geom)                                        AS crs,
        gbx_st_crs(gbx_st_setcrs(geom, 'ESRI:54008'))           AS relabelled,
        gbx_st_crs(gbx_st_transformcrs(geom, 'EPSG:3857'))      AS webmercator

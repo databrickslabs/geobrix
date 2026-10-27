@@ -1392,7 +1392,7 @@ rst_h3_rastertogridavg_sql_example_output = """
 +----+------------------+-------+
 (one row per band×cell. The lightweight LATERAL form yields these [band, cellID,
  measure] rows directly; the heavyweight scalar form returns a nested ARRAY that
- explode(...) flattens to the same rows.)
+ posexplode + inline flatten to the same rows.)
 """
 
 

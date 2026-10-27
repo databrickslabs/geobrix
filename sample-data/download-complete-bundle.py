@@ -6,7 +6,7 @@ Thin wrapper: uses the same bundle_lib as the docs notebook and test-friendly
 scripts. Run after download-essential-bundle.py.
 
 The NYC File Geodatabase (nyc/filegdb/NYC_Sample.gdb.zip) is built by
-run_complete_bundle itself when GDAL's Python bindings are available.
+run_complete_bundle itself, from the NYC layers of this bundle.
 """
 
 import sys

@@ -360,123 +360,114 @@ def _bundle_debug(msg: str) -> None:
 
 
 _NYC_FILEGDB_ZIP = "nyc/filegdb/NYC_Sample.gdb.zip"
+_NYC_FILEGDB_DIR = "NYC_Sample.gdb"
 
 # Feature classes of the NYC sample File Geodatabase, built from layers the bundle
-# already holds: (feature class, OGR geometry type, source under the bundle,
-# ((FileGDB field, OGR field type, source column), ...), row limit).
+# already holds: (feature class, source under the bundle, promote polygons to multi,
+# ((FileGDB field, source column, "str" | "int" | "float"), ...), row limit).
 _NYC_FILEGDB_LAYERS = (
     (
         "NYC_Boroughs",
-        "wkbMultiPolygon",
         "nyc/boroughs/nyc_boroughs.geojson",
-        (
-            ("BORO_NAME", "OFTString", "boro_name"),
-            ("BORO_CODE", "OFTString", "boro_code"),
-        ),
+        True,
+        (("BORO_NAME", "boroname", "str"), ("BORO_CODE", "borocode", "str")),
         None,
     ),
     (
         "NYC_TaxiZones",
-        "wkbMultiPolygon",
         "nyc/taxi-zones/nyc_taxi_zones.geojson",
-        (
-            ("ZONE_NAME", "OFTString", "zone"),
-            ("LOCATION_ID", "OFTInteger", "LocationID"),
-        ),
+        True,
+        (("ZONE_NAME", "zone", "str"), ("LOCATION_ID", "locationid", "int")),
         None,
     ),
     (
         "NYC_Parks",
-        "wkbMultiPolygon",
         "nyc/parks/nyc_parks.shp.zip",
+        True,  # the parks layer mixes Polygon and MultiPolygon
         (
-            ("PARK_NAME", "OFTString", "name311"),
-            ("ACRES", "OFTReal", "acres"),
-            ("BOROUGH", "OFTString", "borough"),
+            ("PARK_NAME", "name311", "str"),
+            ("ACRES", "acres", "float"),
+            ("BOROUGH", "borough", "str"),
         ),
         500,
     ),
     (
         "NYC_SubwayStations",
-        "wkbPoint",
         "nyc/subway/nyc_subway.shp.zip",
-        (("STATION_NAME", "OFTString", "Station_Na"), ("LINE", "OFTString", "Line")),
+        False,
+        (("STATION_NAME", "stop_name", "str"), ("LINE", "line", "str")),
         None,
     ),
 )
 
 
-def _fgdb_value(value, ogr_type: str):
-    """Convert a GeoDataFrame cell to the FileGDB field type; None when missing."""
-    if value is None or value != value:  # None or NaN
-        return None
-    try:
-        if ogr_type == "OFTInteger":
-            return int(value)
-        if ogr_type == "OFTReal":
-            return float(value)
-    except (TypeError, ValueError):
-        return None
-    return str(value)
+def _fgdb_column(series, kind: str):
+    """Convert a source column to the dtype of its FileGDB field; missing values stay null."""
+    import pandas as pd
+
+    if kind == "str":
+        return series.map(lambda v: None if v is None or v != v else str(v))
+    numeric = pd.to_numeric(series, errors="coerce")
+    if kind == "int" and not numeric.isna().any():
+        return numeric.astype("int32")
+    return numeric.astype("float64")
+
+
+def _nyc_filegdb_read(base: Path, rel: str, columns, limit):
+    """Read one NYC source layer and project it to its FileGDB fields (geometry kept)."""
+    import geopandas as gpd
+
+    src = base / rel
+    uri = "zip://" + src.resolve().as_posix() if rel.endswith(".zip") else str(src)
+    gdf = gpd.read_file(uri, engine="pyogrio")
+    absent = [col for _, col, _ in columns if col not in gdf.columns]
+    if absent:
+        raise RuntimeError(f"{rel} has no column {', '.join(absent)}")
+    if limit:
+        gdf = gdf.head(limit)
+    return gpd.GeoDataFrame(
+        {field: _fgdb_column(gdf[col], kind) for field, col, kind in columns},
+        geometry=gdf.geometry.values,
+        crs=gdf.crs,
+    )
 
 
 def _write_nyc_filegdb(gdb_path: Path, base: Path) -> List[str]:
     """Write NYC_Sample.gdb at gdb_path from the NYC layers under base.
 
-    Returns the feature classes written; layers whose source is missing are skipped.
+    Goes through geopandas / pyogrio (OpenFileGDB, GDAL 3.6+, bundled in the pyogrio
+    wheel), the same writer path as ``file_gdb_gbx``; it needs no GDAL Python bindings.
+    Returns the feature classes written.
     """
-    import geopandas as gpd
-    from osgeo import ogr, osr
-
-    # OpenFileGDB writes File Geodatabases since GDAL 3.6; the Esri-SDK FileGDB driver also works.
-    driver = ogr.GetDriverByName("OpenFileGDB") or ogr.GetDriverByName("FileGDB")
-    gdb = driver.CreateDataSource(str(gdb_path)) if driver is not None else None
-    if gdb is None:
-        raise RuntimeError(
-            "cannot create a File Geodatabase (needs the GDAL OpenFileGDB driver, GDAL 3.6+)"
+    written: List[str] = []
+    for name, rel, promote, columns, limit in _NYC_FILEGDB_LAYERS:
+        layer = _nyc_filegdb_read(base, rel, columns, limit)
+        layer.to_file(
+            str(gdb_path),
+            layer=name,
+            driver="OpenFileGDB",
+            engine="pyogrio",
+            promote_to_multi=True if promote else None,
         )
-    srs = osr.SpatialReference()
-    srs.ImportFromEPSG(4326)
-    created: List[str] = []
-    layer = defn = None
+        written.append(name)
+        print(f"  ✅ FileGDB {name}: {len(layer)} features")
+    return written
+
+
+def _nyc_filegdb_complete(zip_path: Path) -> bool:
+    """True when the zip opens as a File Geodatabase that holds all four NYC feature classes."""
     try:
-        for name, geom_type, rel, fields, limit in _NYC_FILEGDB_LAYERS:
-            src = base / rel
-            if not _path_exists_for_skip(src)[0]:
-                print(f"  ⚠️  FileGDB: {rel} not found; skipping {name}")
-                continue
-            uri = (
-                "zip://" + src.resolve().as_posix()
-                if rel.endswith(".zip")
-                else str(src)
+        import pyogrio
+
+        found = {
+            str(row[0])
+            for row in pyogrio.list_layers(
+                "/vsizip/" + Path(zip_path).as_posix() + "/" + _NYC_FILEGDB_DIR
             )
-            gdf = gpd.read_file(uri)
-            if limit:
-                gdf = gdf.head(limit)
-            layer = gdb.CreateLayer(name, srs, getattr(ogr, geom_type))
-            for field, ogr_type, _col in fields:
-                layer.CreateField(ogr.FieldDefn(field, getattr(ogr, ogr_type)))
-            defn = layer.GetLayerDefn()
-            for _, row in gdf.iterrows():
-                if row.geometry is None:
-                    continue
-                feature = ogr.Feature(defn)
-                for field, ogr_type, col in fields:
-                    value = _fgdb_value(row.get(col), ogr_type)
-                    if value is not None:
-                        feature.SetField(field, value)
-                geom = ogr.CreateGeometryFromWkb(bytes(row.geometry.wkb))
-                if geom_type == "wkbMultiPolygon":
-                    geom = ogr.ForceToMultiPolygon(geom)
-                feature.SetGeometry(geom)
-                layer.CreateFeature(feature)
-                feature = None
-            layer = defn = None  # flush this feature class before the next
-            created.append(name)
-            print(f"  ✅ FileGDB {name}: {len(gdf)} features")
-    finally:
-        layer = defn = gdb = None  # close the geodatabase so it is complete on disk
-    return created
+        }
+    except Exception:
+        return False
+    return {spec[0] for spec in _NYC_FILEGDB_LAYERS} <= found
 
 
 def _stage_nyc_filegdb(
@@ -484,26 +475,42 @@ def _stage_nyc_filegdb(
 ) -> Optional[Path]:
     """Build nyc/filegdb/NYC_Sample.gdb.zip from the bundle's NYC layers and copy it under base.
 
-    Skips if the zip already exists. Needs GDAL's Python bindings (osgeo, GDAL 3.6+ for
-    OpenFileGDB writing) and geopandas, and raises ImportError without them. Raises
-    RuntimeError when none of the NYC source layers is present.
+    The zip is written only when all four feature classes were built: a missing source
+    layer or column raises RuntimeError and leaves no zip. An existing zip is skipped only
+    if it is complete (holds all four feature classes); an incomplete one is replaced.
+    Needs geopandas and pyogrio (ImportError otherwise); no GDAL Python bindings.
     """
     base = Path(base)
     dest = base / _NYC_FILEGDB_ZIP
     exists_skip, size_mb = _path_exists_for_skip(dest)
-    if exists_skip and size_mb is not None:
+    existing = exists_skip and size_mb is not None
+    if existing and _nyc_filegdb_complete(dest):
         print(f"⏭️  NYC FileGDB: {size_mb:.1f} MB (already exists)")
         return dest
+    missing = [
+        rel
+        for _, rel, _, _, _ in _NYC_FILEGDB_LAYERS
+        if not _path_exists_for_skip(base / rel)[0]
+    ]
+    if missing:
+        raise RuntimeError(
+            "NYC FileGDB needs all four source layers; missing: " + ", ".join(missing)
+        )
+    from databricks.labs.gbx.ds.vector import _zip_gdb_bundle
+
     print("⬇️  Building NYC FileGDB...")
     work = Path(tmp) / "nyc_filegdb_build"
     shutil.rmtree(work, ignore_errors=True)
     work.mkdir(parents=True)
     try:
-        if not _write_nyc_filegdb(work / "NYC_Sample.gdb", base):
-            raise RuntimeError(f"no NYC source layers found under {base}")
-        shutil.make_archive(str(work / "NYC_Sample.gdb"), "zip", work, "NYC_Sample.gdb")
+        _write_nyc_filegdb(work / _NYC_FILEGDB_DIR, base)
+        built = work / (_NYC_FILEGDB_DIR + ".zip")
+        _zip_gdb_bundle(str(work / _NYC_FILEGDB_DIR), str(built))
+        if existing:
+            print("  ⚠️  replacing the incomplete NYC FileGDB")
+            dest.unlink()
         return _copy_final_to_volumes(
-            work / "NYC_Sample.gdb.zip", dest, "NYC FileGDB", volume_root=volume_root
+            built, dest, "NYC FileGDB", volume_root=volume_root
         )
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -783,9 +790,10 @@ def run_complete_bundle(  # noqa: C901
     London boroughs (GeoJSON), HRRR weather (GRIB2), NYC parks and subway
     shapefiles (delivered as single zips per dataset), a multi-layer
     GeoPackage, and a multi-feature-class File Geodatabase
-    (nyc/filegdb/NYC_Sample.gdb.zip). All interim work (unzipping, GPKG and
-    FileGDB build) uses temp_dir; only final assets are written to
-    volumes_path. Skips if already present.
+    (nyc/filegdb/NYC_Sample.gdb.zip, written only when all four of its feature
+    classes could be built). All interim work (unzipping, GPKG and FileGDB
+    build) uses temp_dir; only final assets are written to volumes_path.
+    Skips if already present.
 
     Args:
         volumes_path: Base path (same as used for Essential bundle).
@@ -799,7 +807,7 @@ def run_complete_bundle(  # noqa: C901
 
     Requires:
         requests. For London boroughs and GeoPackage: geopandas. For the File
-        Geodatabase: geopandas and GDAL's Python bindings (osgeo, GDAL 3.6+).
+        Geodatabase: geopandas and pyogrio (OpenFileGDB writer, GDAL 3.6+).
     """
     import zipfile
     from datetime import datetime, timedelta, timezone
@@ -1067,9 +1075,7 @@ def run_complete_bundle(  # noqa: C901
     try:
         _stage_nyc_filegdb(base, tmp, volume_root=volume_root)
     except ImportError:
-        errors.append(
-            ("FileGDB", "geopandas and GDAL Python bindings (osgeo) required")
-        )
+        errors.append(("FileGDB", "geopandas and pyogrio required"))
     except Exception as e:
         errors.append(("FileGDB", str(e)))
         print(f"⚠️  FileGDB failed: {e}")

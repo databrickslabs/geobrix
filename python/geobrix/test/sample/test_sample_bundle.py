@@ -6,7 +6,7 @@ _path_exists_for_skip, _copy_final_to_volumes, _bundle_debug, download_to_path
 (skip_if_exists), and run_essential_bundle / run_complete_bundle (with mocked
 requests where needed) to raise coverage without requiring network or UC. The
 NYC FileGDB step (nyc/filegdb/NYC_Sample.gdb.zip) is tested offline against tiny
-layers and needs GDAL's Python bindings plus geopandas (skipped without them).
+layers through geopandas and pyogrio only, so it runs in the light CI env too.
 """
 
 import os
@@ -288,15 +288,25 @@ def test_run_complete_bundle_returns_dict_shape():
 # ========== NYC FileGDB step (nyc/filegdb/NYC_Sample.gdb.zip) ==========
 
 FILEGDB_REL = Path("nyc") / "filegdb" / "NYC_Sample.gdb.zip"
+FILEGDB_LAYERS = {"NYC_Boroughs", "NYC_TaxiZones", "NYC_Parks", "NYC_SubwayStations"}
+
+
+def _gdb_uri(zip_path: Path) -> str:
+    return f"/vsizip/{zip_path.as_posix()}/NYC_Sample.gdb"
+
+
+def _zip_layers(zip_path: Path) -> set:
+    pyogrio = pytest.importorskip("pyogrio")
+    return {str(row[0]) for row in pyogrio.list_layers(_gdb_uri(zip_path))}
 
 
 def _write_tiny_nyc_layers(base: Path) -> None:
-    """Write the four NYC layers the FileGDB step reads, in the bundle's own layout."""
-    pytest.importorskip("osgeo")
+    """Write the four NYC layers the FileGDB step reads, in the bundle's own layout and columns."""
     gpd = pytest.importorskip("geopandas")
+    pytest.importorskip("pyogrio")
     import zipfile
 
-    from shapely.geometry import Point, Polygon
+    from shapely.geometry import MultiPolygon, Point, Polygon
 
     def square(x, y):
         return Polygon([(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)])
@@ -305,12 +315,11 @@ def _write_tiny_nyc_layers(base: Path) -> None:
         out = base / rel
         out.parent.mkdir(parents=True, exist_ok=True)
         gdf.to_file(str(out), driver=driver)
-        return out
 
     put(
         "nyc/boroughs/nyc_boroughs.geojson",
         gpd.GeoDataFrame(
-            {"boro_name": ["Bronx", "Queens"], "boro_code": ["2", "4"]},
+            {"boroname": ["Bronx", "Queens"], "borocode": ["2", "4"]},
             geometry=[square(0, 0), square(2, 0)],
             crs="EPSG:4326",
         ),
@@ -319,20 +328,25 @@ def _write_tiny_nyc_layers(base: Path) -> None:
     put(
         "nyc/taxi-zones/nyc_taxi_zones.geojson",
         gpd.GeoDataFrame(
-            {"zone": ["A", "B", "C"], "LocationID": [1, 2, 3]},
+            {"zone": ["A", "B", "C"], "locationid": ["1", "2", "3"]},
             geometry=[square(0, 0), square(1, 0), square(2, 0)],
             crs="EPSG:4326",
         ),
         "GeoJSON",
     )
     shapefiles = {
+        # one Polygon and one MultiPolygon: like the real parks layer, only a multi-type layer holds both
         "nyc/parks/nyc_parks.shp.zip": gpd.GeoDataFrame(
-            {"name311": ["Park One"], "acres": [3.5], "borough": ["Q"]},
-            geometry=[square(0, 0)],
+            {
+                "name311": ["Park One", "Park Two"],
+                "acres": [3.5, 1.25],
+                "borough": ["Q", "M"],
+            },
+            geometry=[square(0, 0), MultiPolygon([square(5, 5), square(7, 7)])],
             crs="EPSG:4326",
         ),
         "nyc/subway/nyc_subway.shp.zip": gpd.GeoDataFrame(
-            {"Station_Na": ["Main St", "Elm St"], "Line": ["7", "N"]},
+            {"stop_name": ["Main St", "Elm St"], "line": ["Flushing", "Broadway"]},
             geometry=[Point(0.5, 0.5), Point(2.5, 0.5)],
             crs="EPSG:4326",
         ),
@@ -366,44 +380,79 @@ def test_run_complete_bundle_stages_nyc_filegdb_zip(tmp_path, monkeypatch):
     assert "FileGDB" not in [name for name, _ in result["errors"]]
 
 
-def test_nyc_filegdb_zip_holds_the_bundle_layers(tmp_path):
-    """The zip opens as a File Geodatabase with the four feature classes and their rows."""
+def test_nyc_filegdb_zip_holds_the_four_feature_classes(tmp_path):
+    """The zip opens as a File Geodatabase with the four feature classes, real attributes and multi geometries."""
+    pyogrio = pytest.importorskip("pyogrio")
     base = tmp_path / "geobrix-examples"
     _write_tiny_nyc_layers(base)
-    from osgeo import ogr
 
     dest = _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
 
     assert dest == base / FILEGDB_REL
-    ds = ogr.Open(f"/vsizip/{dest}/NYC_Sample.gdb")
-    assert ds is not None
-    counts = {
-        ds.GetLayer(i).GetName(): ds.GetLayer(i).GetFeatureCount()
-        for i in range(ds.GetLayerCount())
-    }
-    assert counts == {
-        "NYC_Boroughs": 2,
-        "NYC_TaxiZones": 3,
-        "NYC_Parks": 1,
-        "NYC_SubwayStations": 2,
-    }
-    boroughs = ds.GetLayerByName("NYC_Boroughs")
-    assert sorted(f.GetField("BORO_NAME") for f in boroughs) == ["Bronx", "Queens"]
-    zones = ds.GetLayerByName("NYC_TaxiZones")
-    assert sorted(f.GetField("LOCATION_ID") for f in zones) == [1, 2, 3]
-    ds = None
+    assert _zip_layers(dest) == FILEGDB_LAYERS
+
+    def read(layer):
+        return pyogrio.read_dataframe(_gdb_uri(dest), layer=layer)
+
+    boroughs = read("NYC_Boroughs")
+    assert sorted(boroughs["BORO_NAME"]) == ["Bronx", "Queens"]
+    assert sorted(boroughs["BORO_CODE"]) == ["2", "4"]
+    assert sorted(read("NYC_TaxiZones")["LOCATION_ID"]) == [1, 2, 3]
+    parks = read("NYC_Parks")
+    assert sorted(parks["PARK_NAME"]) == ["Park One", "Park Two"]
+    assert set(parks.geom_type) == {"MultiPolygon"}  # the Polygon park was promoted
+    subway = read("NYC_SubwayStations")
+    assert sorted(subway["STATION_NAME"]) == ["Elm St", "Main St"]
+    assert sorted(subway["LINE"]) == ["Broadway", "Flushing"]
 
 
-def test_nyc_filegdb_step_skips_when_present_and_needs_a_source_layer(tmp_path):
+def test_nyc_filegdb_step_writes_no_zip_when_a_source_layer_is_missing(tmp_path):
+    """No partial geodatabase is frozen: a missing source layer raises and leaves no zip."""
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+    (base / "nyc" / "subway" / "nyc_subway.shp.zip").unlink()
+
+    with pytest.raises(RuntimeError, match="missing: nyc/subway/nyc_subway.shp.zip"):
+        _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+
+    assert not (base / FILEGDB_REL).exists()
+
+
+def test_nyc_filegdb_step_writes_no_zip_when_a_source_column_is_missing(tmp_path):
+    """A source layer without a mapped column fails loudly instead of writing an empty field."""
+    gpd = pytest.importorskip("geopandas")
+    base = tmp_path / "geobrix-examples"
+    _write_tiny_nyc_layers(base)
+    boroughs = base / "nyc" / "boroughs" / "nyc_boroughs.geojson"
+    gpd.read_file(boroughs).rename(columns={"boroname": "name"}).to_file(
+        str(boroughs), driver="GeoJSON"
+    )
+
+    with pytest.raises(RuntimeError, match="has no column boroname"):
+        _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
+
+    assert not (base / FILEGDB_REL).exists()
+
+
+def test_nyc_filegdb_step_skips_a_complete_zip_and_replaces_an_incomplete_one(tmp_path):
+    gpd = pytest.importorskip("geopandas")
     base = tmp_path / "geobrix-examples"
     _write_tiny_nyc_layers(base)
     dest = _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work")
     before = dest.stat().st_mtime_ns
 
+    # a complete zip is left alone
     assert _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work") == dest
     assert dest.stat().st_mtime_ns == before
 
-    empty = tmp_path / "empty-examples"
-    empty.mkdir()
-    with pytest.raises(RuntimeError, match="no NYC source layers"):
-        _bundle_mod._stage_nyc_filegdb(empty, tmp_path / "work2")
+    # a zip with only some of the feature classes is rebuilt
+    gdb = tmp_path / "partial" / "NYC_Sample.gdb"
+    gdb.parent.mkdir()
+    gpd.read_file(base / "nyc" / "boroughs" / "nyc_boroughs.geojson").to_file(
+        str(gdb), layer="NYC_Boroughs", driver="OpenFileGDB"
+    )
+    dest.unlink()
+    shutil.make_archive(str(dest.with_suffix("")), "zip", gdb.parent, "NYC_Sample.gdb")
+    assert _zip_layers(dest) == {"NYC_Boroughs"}
+    assert _bundle_mod._stage_nyc_filegdb(base, tmp_path / "work") == dest
+    assert _zip_layers(dest) == FILEGDB_LAYERS

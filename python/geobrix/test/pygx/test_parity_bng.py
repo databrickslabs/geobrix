@@ -710,6 +710,9 @@ def _chip_parity_problem(light_blob, heavy_blob, ctx):
         lg, hg = from_wkb(bytes(light_blob)), from_wkb(bytes(heavy_blob))
         if "GeometryCollection" not in (lg.geom_type, hg.geom_type):
             return str(strict)
+        # The topological path below never looks at the SRID; BNG chips carry none.
+        if get_srid(lg) != 0 or get_srid(hg) != 0:
+            return str(strict)
 
     def by_dimension(geom):
         leaves = []

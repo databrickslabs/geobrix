@@ -75,6 +75,39 @@ jobs:
           # Force public GitHub Pages baseUrl (https://databrickslabs.github.io/geobrix/)
           DOCS_PUBLIC_PAGES: '1'
 
+      # Serve the frozen 0.5.x docs at /geobrix/archive/0.5/. The site was built once
+      # and is published as an asset on the v0.5.2 GitHub Release; the navbar's
+      # "0.5.x (archive)" entry links to it. A missing asset or a checksum mismatch
+      # fails the deploy. Main-only, so branch and manual runs are unaffected.
+      - name: Add the archived 0.5.x docs
+        if: github.ref == 'refs/heads/main'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Release that carries the archive asset.
+          ARCHIVE_TAG: v0.5.2
+          # Asset name of the frozen 0.5.x docs site (built from main at 59cc8d40).
+          ARCHIVE_ZIP: geobrix-docs-0.5.x-59cc8d40-r2.zip
+          # Expected sha256 of that asset; a mismatch fails the deploy.
+          ARCHIVE_SHA256: 5a2fef2412769e02ba4eb4e8c3db210e56b2759d01a0e16bfec3a3e49a5c6a97
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          gh release download "$ARCHIVE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --pattern "$ARCHIVE_ZIP" --dir "$tmp"
+          if [ ! -f "$tmp/$ARCHIVE_ZIP" ]; then
+              echo "::error::Release $ARCHIVE_TAG has no asset $ARCHIVE_ZIP."
+              exit 1
+          fi
+          if ! (cd "$tmp" && echo "$ARCHIVE_SHA256  $ARCHIVE_ZIP" | sha256sum -c -); then
+              echo "::error::$ARCHIVE_ZIP does not match the pinned sha256; refusing to deploy it."
+              exit 1
+          fi
+          mkdir -p docs/build/archive/0.5
+          unzip -q "$tmp/$ARCHIVE_ZIP" -d docs/build/archive/0.5
+          test -f docs/build/archive/0.5/index.html
+          rm -rf "$tmp"
+
       - name: Upload artifact
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b  # v4.0.0
         with:

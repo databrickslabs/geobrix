@@ -142,6 +142,24 @@ const config = {
             position: 'left'
           },
           {
+            type: 'dropdown',
+            label: 'Version',
+            position: 'right',
+            items: [
+              {
+                label: '0.6 (current)',
+                to: '/docs/intro',
+              },
+              {
+                // pathname:// keeps the baseUrl, does a full page load (the archive
+                // is a separate static site) and skips the broken-link check.
+                label: '0.5.x (archive)',
+                href: 'pathname:///archive/0.5/',
+                target: '_self',
+              },
+            ],
+          },
+          {
             href: 'https://github.com/databrickslabs/geobrix',
             label: 'GitHub',
             position: 'right',

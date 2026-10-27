@@ -1215,7 +1215,6 @@ class CogGbxWriter(DataSourceWriter):
                 src_width, src_height = src.width, src.height
                 count = src.count
                 out_dtype = src.dtypes[0]
-                src_nodata = src.nodata
 
                 for tile_row, tile_col, window in _tile_grid_windows(
                     src_width, src_height, tile_size, overlap_pct

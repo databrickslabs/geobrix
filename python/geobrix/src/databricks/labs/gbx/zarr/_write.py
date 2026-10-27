@@ -64,6 +64,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
@@ -1629,7 +1630,7 @@ def _xarray_frame(spark, plan: _Plan, group_bytes: int):
         table = pa.Table.from_batches(
             [pa.RecordBatch.from_pylist(rows, schema=_BLOCKS_ARROW)]
         )
-        frames.append(spark.createDataFrame(M._nonempty(table), schema=schema))
+        frames.append(to_spark_df(spark, table, schema))
 
     for name, var in plan.dataset_vars.items():
         meta = plan.arrays[name]

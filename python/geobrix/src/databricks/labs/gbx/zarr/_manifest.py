@@ -27,6 +27,7 @@ from datetime import datetime, timedelta, timezone
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr._meta import is_sharded_doc
 from databricks.labs.gbx.zarr.errors import (
     ZarrError,
@@ -889,26 +890,11 @@ def _require_shard_keys(
     )
 
 
-def _nonempty(data: pa.Table) -> pa.Table:
-    """``data`` without zero-row batches: what to hand ``spark.createDataFrame``.
-
-    Spark's JVM Arrow iterator (ArrowConverters) ends at the first zero-row batch and
-    silently drops every row after it. That affects PySpark 4.0 and 4.2, classic and
-    Connect; concatenated tables carry such chunks whenever a part came out empty.
-    """
-    return pa.Table.from_batches(
-        [b for b in data.to_batches() if b.num_rows], schema=data.schema
-    )
-
-
 def _with_view(spark, data: pa.Table, schema: pa.Schema, run):
     """Run ``run(view_name)`` over ``data`` exposed as a temp view; always drop it."""
     view = f"_gbx_zarr_src_{uuid.uuid4().hex}"
-    data = _nonempty(data)
     try:
-        spark.createDataFrame(
-            data, schema=_spark_schema(schema)
-        ).createOrReplaceTempView(view)
+        to_spark_df(spark, data, _spark_schema(schema)).createOrReplaceTempView(view)
         return run(view)
     finally:
         spark.catalog.dropTempView(view)

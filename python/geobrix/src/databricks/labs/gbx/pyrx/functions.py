@@ -8791,6 +8791,23 @@ def _dtmfromgeoms_agg_udf(
     )
 
 
+def _max_value_per_cell(cells, vals):
+    """``{cell: value}`` keeping the LARGEST value of every cell id that repeats.
+
+    The duplicate-cell rule of the four cell rasterizers
+    (``rst_{h3,quadbin,bng,custom}_rasterize_agg``), the same as the heavyweight tier,
+    which sorts the group by ``(cellid, value)`` and lets the last write win. Arrival
+    order inside a Spark group is not fixed, so "the last row wins" would change the
+    raster from run to run; the largest value does not depend on order. ``vals`` are
+    plain floats: a null value was already turned into the presence mask (1.0).
+    """
+    best = {}
+    for cell, val in zip(cells, vals):
+        if cell not in best or val > best[cell]:
+            best[cell] = val
+    return best
+
+
 def _rasterize_agg_body(
     cell_values,
     cells,
@@ -8912,7 +8929,7 @@ def _rst_h3_rasterize_agg_udf(
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
     vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = {c: v for c, v in zip(cells, vals)}  # last-wins
+    cell_values = _max_value_per_cell(cells, vals)
     # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
     # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
     if out_crs is not None and out_crs.iloc[0] is not None:
@@ -8987,7 +9004,7 @@ def _rst_quadbin_rasterize_agg_udf(
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
     vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = {c: v for c, v in zip(cells, vals)}  # last-wins
+    cell_values = _max_value_per_cell(cells, vals)
     # Output CRS spec: out_crs (string) wins over the int srid; else grid-native
     # 4326. cellraster accepts an int SRID or a CRS string interchangeably.
     if out_crs is not None and out_crs.iloc[0] is not None:
@@ -9047,7 +9064,7 @@ def _rst_bng_rasterize_agg_udf(
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
     vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = {c: v for c, v in zip(cells, vals)}  # last-wins
+    cell_values = _max_value_per_cell(cells, vals)
     # BNG is EPSG:27700-native; the srid arg is a no-op (forced 27700). The sample
     # points and output raster are both 27700 -- NO WGS84 hop.
     return _rasterize_agg_body(
@@ -9130,7 +9147,7 @@ def _rst_custom_rasterize_agg_udf(
     # Null value -> presence mask (1.0). A null in a typed (Double) value column
     # arrives as np.nan, not None, so guard with pd.isna (np.nan is not None).
     vals = [1.0 if v is None or pd.isna(v) else float(v) for _, v in pairs]
-    cell_values = {c: v for c, v in zip(cells, vals)}  # last-wins
+    cell_values = _max_value_per_cell(cells, vals)
 
     # Extract the grid conf from the first row (per-group constant).
     conf = conf_from_row(grid.iloc[0])

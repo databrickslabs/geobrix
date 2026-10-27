@@ -617,6 +617,17 @@ formats.
   instead of tile 0, and one on a tile edge falls in the same cell as in the heavyweight tier and
   in `rst_quadbin_tessellate`.
 
+### Grid rasterizers — repeated cell ids burn the largest value (fix)
+
+- **The lightweight cell rasterizers keep the largest value when a cell repeats, like the
+  heavyweight tier, so results no longer depend on row order.** When a group held the same cell id
+  more than once with different values, `rst_h3_rasterize_agg`, `rst_quadbin_rasterize_agg`,
+  `rst_bng_rasterize_agg` and `rst_custom_rasterize_agg` burned whichever row arrived last in the
+  lightweight tier, and the order of the rows inside a group is not fixed, so the same data could
+  give a different raster from one run to the next. Both tiers now burn the largest value of the
+  cell. A null value is the presence mask and counts as `1.0`. A cell that appears once, or whose
+  rows all carry the same value, burns as before.
+
 ### Registered PROJ grids and raster CRS transforms
 
 - **Lightweight raster CRS transforms work after `register_proj_grids`.** After you called

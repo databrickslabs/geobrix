@@ -1373,7 +1373,7 @@ def test_a_rebase_refuses_a_layout_another_write_changed(
         )
 
 
-def test_the_rebase_loop_gives_up_after_five_attempts(
+def test_the_rebase_loop_gives_up_after_its_attempt_bound(
     spark_delta, drop, tmp_path, no_hooks
 ):
     table, _, _ = _create(spark_delta, drop, tmp_path)
@@ -1385,13 +1385,68 @@ def test_the_rebase_loop_gives_up_after_five_attempts(
 
     no_hooks.setattr(_write.M, "commit", always_busy)
     no_hooks.setattr(_write, "_pause", lambda s: None)
-    with pytest.raises(ZarrWriteConflict, match="gave up after 5 attempts") as e:
+    bound = _write._ATTEMPTS
+    with pytest.raises(ZarrWriteConflict, match=f"gave up after {bound} attempts") as e:
         gbx_zarr_write(
             _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32"))),
             table,
             mode="update",
         )
-    assert len(calls) == 5 and "Fix:" in str(e.value)
+    assert len(calls) == bound and "Fix:" in str(e.value)
+
+
+def test_a_writer_that_loses_seven_rounds_still_lands(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Eight appenders that commit at the same moment all change the array documents and
+    the time chunk, so Delta lets one of them land per round and the others rebase and try
+    again: the last of eight needs eight attempts (measured on Databricks, UC managed
+    tables). A bound of five gave up on three of the eight."""
+    table, _, _ = _create(spark_delta, drop, tmp_path)
+    real, calls, pauses = M.commit, [], []
+
+    def lose_seven_rounds(spark_, table_, rows, *, write_id, meta, sharded=None):
+        calls.append(write_id)
+        if len(calls) <= 7:
+            raise M.ConcurrentCommit("lost this round. Fix: retry.")
+        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+
+    no_hooks.setattr(_write.M, "commit", lose_seven_rounds)
+    no_hooks.setattr(_write, "_pause", pauses.append)
+    wid = uuid.uuid4().hex
+    new = np.full((12, 5, 6), 3.0, "float32")
+    version = gbx_zarr_write(
+        _blocks(spark_delta, ("t2m", (0, 0, 0), new)),
+        table,
+        mode="update",
+        write_id=wid,
+    )
+    assert len(calls) == 8 and len(pauses) == 7
+    assert version == _latest(spark_delta, table)
+    assert (_read(spark_delta, table, "t2m")[0:12, 0:5, 0:6] == 3.0).all()
+
+
+def test_the_wait_between_attempts_is_capped(spark_delta, drop, tmp_path, no_hooks):
+    """The wait doubles each attempt, up to a cap: with the bound above five, an uncapped
+    wait would reach minutes by the last attempts."""
+    table, _, _ = _create(spark_delta, drop, tmp_path)
+    pauses = []
+
+    def always_busy(*a, **k):
+        raise M.ConcurrentCommit("busy. Fix: retry.")
+
+    no_hooks.setattr(_write.M, "commit", always_busy)
+    no_hooks.setattr(_write, "_pause", pauses.append)
+    no_hooks.setattr(_write.random, "uniform", lambda lo, hi: hi)  # the longest wait
+    with pytest.raises(ZarrWriteConflict):
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32"))),
+            table,
+            mode="update",
+        )
+    assert len(pauses) == _write._ATTEMPTS
+    assert max(pauses) == _write._MAX_WAIT_SECONDS  # reached, and never passed
+    assert pauses == sorted(pauses)  # and it never shrinks
 
 
 def test_a_write_to_a_root_whose_marker_is_gone_is_refused(

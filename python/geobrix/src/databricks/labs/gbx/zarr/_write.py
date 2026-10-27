@@ -36,7 +36,11 @@ that landed meanwhile is rebased:
 - a new array is sized to the latest extents;
 - coordinate chunks are read-modified-written again over the latest version;
 - the metadata expectations are refreshed.
-Then the MERGE is retried, at most five times with jitter. Data files are never rewritten.
+Then the MERGE is retried, at most ``_ATTEMPTS`` (20) times with jitter. Data files are
+never rewritten. Appenders to one array all change the array documents and the time chunk,
+so Delta lands one of them per round; each failed attempt means another writer landed, so
+N simultaneous appenders need at most N attempts (measured on Databricks: eight need up to
+eight, and a bound of five gave up on three of them).
 
 **Empty chunks.** A chunk whose every cell is the fill value is not stored, in every mode,
 as zarr does by default (``write_empty_chunks=False``). The chunk's row is deleted; under a
@@ -111,7 +115,11 @@ _ACCESS = ("auto", "fuse", "direct")
 _BLOCK_COLUMNS = ("variable", "dims", "start", "stop", "dtype", "shape", "data")
 _MIB = 1 << 20
 _BATCH_ROWS = 256
-_ATTEMPTS = 5
+# Rounds a commit may lose to concurrent writers before it gives up. Writers of one array
+# land one per round, so N simultaneous appenders need up to N attempts; 20 covers 16 with
+# room for maintenance commits. The wait between attempts doubles up to _MAX_WAIT_SECONDS.
+_ATTEMPTS = 20
+_MAX_WAIT_SECONDS = 16
 _HASH_MASK = (1 << 64) - 1
 _CF_ATTRS = ("scale_factor", "add_offset", "_FillValue", "missing_value")
 _TIME_ATTRS = ("units", "calendar")
@@ -2290,6 +2298,12 @@ def _pause(seconds: float) -> None:
     time.sleep(seconds)
 
 
+def _wait(attempt: int) -> float:
+    """Seconds to wait after losing attempt number ``attempt`` (from 0): jittered, doubling
+    each time, up to ``_MAX_WAIT_SECONDS``."""
+    return random.uniform(0.2, 1.0) * min(2**attempt, _MAX_WAIT_SECONDS)
+
+
 def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
     """Phase 2: the CAS commit, rebasing metadata at most ``_ATTEMPTS`` times."""
     ids = plan.docs.ids if plan.docs is not None else {}
@@ -2333,7 +2347,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
                 sharded=sharded,
             )
         except M.ConcurrentCommit:
-            _pause(random.uniform(0.2, 1.0) * (2**attempt))
+            _pause(_wait(attempt))
             base = latest
         except ZarrWriteConflict as e:
             found = list(e.conflicts)
@@ -2342,10 +2356,10 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
                 raise _conflict(data) from e
             if not found:
                 raise
-            _pause(random.uniform(0.2, 1.0) * (2**attempt))
+            _pause(_wait(attempt))
             base = latest
     raise ZarrWriteConflict(
-        "gave up after 5 attempts",
+        f"gave up after {_ATTEMPTS} attempts",
         fix="retry later or reduce concurrent writers to this array",
     )
 
@@ -2519,8 +2533,9 @@ def gbx_zarr_write(
     that changed the same chunks since this one read them (or a shard a chunk was read
     from, or a coordinate label to another value) raises ``ZarrWriteConflict``, and nothing
     of this write is visible. One that changed only metadata is rebased and the commit
-    retried, at most five times. Examples are another append's shape, a shared coordinate
-    chunk, or an array created meanwhile.
+    retried, at most twenty times (every lost round means another writer landed, so up to
+    twenty simultaneous appenders to one array all land). Examples are another append's
+    shape, a shared coordinate chunk, or an array created meanwhile.
 
     A blocks DataFrame is read once for ``update`` and ``overwrite``. ``create`` and
     ``append`` first read its block positions (never the ``data`` column; an append also

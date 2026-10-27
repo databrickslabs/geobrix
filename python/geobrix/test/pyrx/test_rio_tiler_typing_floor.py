@@ -120,13 +120,17 @@ def test_the_floor_is_not_raised_past_pep_728():
         assert _floor(extra) == EXTRA_ITEMS_FLOOR, f"[{extra}] {_floor(extra)}"
 
 
+CAP_OPERATORS = ("<", "<=", "!=", "~=", "==", "===")
+
+
 def test_the_floor_has_no_upper_bound():
-    # A cap such as <4.14 would downgrade the 4.15.0 that DBR 19 / env 6 ship.
+    # A cap such as <4.14, or an exact pin such as ==4.13.0, would downgrade the 4.15.0
+    # that DBR 19 / env 6 ship.
     for extra in _rio_tiler_9_extras():
         for req in _closure(extra):
             if canonicalize_name(req.name) != "typing-extensions":
                 continue
-            caps = [s for s in req.specifier if s.operator in ("<", "<=", "!=", "~=")]
+            caps = [s for s in req.specifier if s.operator in CAP_OPERATORS]
             assert not caps, f"[{extra}] {req}"
 
 

@@ -148,7 +148,7 @@ light_dbr17 = [
     # rio-tiler 9.x defines TypedDict(extra_items=...) (PEP 728), added in typing_extensions
     # 4.13.0; its own metadata asks only for >=4.10. The bases ship 4.12.2, which pip keeps
     # under a lower floor, so `import rio_tiler` failed there. 4.13.0 is the minimum that
-    # works: keep it, since a floor above 4.15.0 also moves the DBR 19 / env 6 base.
+    # works: keep it; pip upgrades the 4.12.2 bases to the newest release under any such floor.
     "typing_extensions>=4.13",
     # Hold preinstalled core packages at the Serverless env5 / DBR17.3-18 base so a
     # cluster %pip install is silent (no "a core Python package changed" notice).
@@ -184,7 +184,7 @@ light_dbr19 = [
     "geobrix[light-base]",
     # --- Classic DBR 19 / Serverless env 6 runtime-sensitive pins ---
     # PEP 728 floor for rio-tiler 9.x (see [light_dbr17]). DBR 19, DBR 19 ML and env 6 ship
-    # 4.15.0, so nothing moves here.
+    # 4.15.0, so nothing moves here; a floor above 4.15.0 would move it for no gain.
     "typing_extensions>=4.13",
     # Hold preinstalled core packages at the Serverless env6 / DBR19 base.
     # Bases: pandas 2.3.3, numpy 2.3.4, urllib3 2.5.0 (verified 2026-09-03).

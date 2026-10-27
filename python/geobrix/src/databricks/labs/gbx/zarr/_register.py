@@ -27,6 +27,7 @@ the truth; consolidated metadata is compared against them and a disagreement is 
 
 from __future__ import annotations
 
+import errno
 import json
 import logging
 import os
@@ -68,6 +69,7 @@ from databricks.labs.gbx.zarr.errors import (
 
 __all__ = [
     "OWNER_MARKER",
+    "check_owner_marker",
     "gbx_zarr_register",
     "read_base_metadata",
     "list_objects",
@@ -259,6 +261,10 @@ class _MarkerUnreadable(ZarrOwnershipError):
     marker): ``__cause__`` is the ``OSError``. What the marker says is still unknown."""
 
 
+class _MarkerGarbled(ZarrOwnershipError):
+    """The marker was read, but its bytes are not an owner marker (not a JSON object)."""
+
+
 def _check_owner(marker: str, table: str, kind: str) -> None:
     problem = f"{marker} exists but is not a readable GeoBrix owner marker."
     fix = f"remove {marker} if no table owns this root, or use another root"
@@ -270,9 +276,43 @@ def _check_owner(marker: str, table: str, kind: str) -> None:
     except OSError as e:
         raise _MarkerUnreadable(problem, fix=fix) from e
     except ValueError:
-        raise ZarrOwnershipError(problem, fix=fix) from None
+        raise _MarkerGarbled(problem, fix=fix) from None
     if owner.get("table") != table or owner.get("kind") != kind:
         raise _owner_error(marker, owner, table)
+
+
+def _read_back(marker: str, table: str, kind: str) -> None:
+    """``_check_owner`` with a failed read raised as its ``OSError``, so that
+    ``_retry_transient`` retries a transient FUSE miss instead of reporting it."""
+    try:
+        _check_owner(marker, table, kind)
+    except _MarkerUnreadable as e:
+        raise e.__cause__ from None
+
+
+def check_owner_marker(root: str, table: str, kind: str) -> None:
+    """Refuse to write under ``root`` unless its owner marker names ``table`` as ``kind``.
+
+    A writer calls this before it puts files under a managed data root or an overlay root:
+    the root may have been claimed, or its marker removed, since the table was made. A
+    transient miss is retried; a marker that is gone, garbled or names another table
+    raises ``ZarrOwnershipError``.
+    """
+    marker = _marker_path(_local_root(root))
+    try:
+        _retry_transient(lambda: _read_back(marker, table, kind))
+    except FileNotFoundError:
+        raise ZarrOwnershipError(
+            f"{os.path.dirname(marker)} has no owner marker ({OWNER_MARKER}), so it cannot "
+            f"be shown to belong to {table}.",
+            fix=f"restore {marker} if {table} still owns this root; otherwise register "
+            "or create the store again",
+        ) from None
+    except OSError as e:
+        raise ZarrError(
+            f"cannot read the owner marker {marker} ({e}).",
+            fix="check that the Volume is mounted and readable, then write again",
+        ) from e
 
 
 def _precheck_owner(root: str, table: str, kind: str) -> None:
@@ -289,20 +329,30 @@ def _remove_marker(marker: str) -> None:
         pass
 
 
-def _remove_marker_if_ours(marker: str, body: bytes) -> None:
-    """Remove ``marker`` only if it holds what this call wrote (all of it, or the part
-    that landed before a failed write): never a marker another table has put there."""
+def _remove_marker_if_ours(marker: str, written: bytes) -> bool:
+    """Remove ``marker`` only if it holds exactly ``written``, the bytes this call wrote
+    (all of the marker, or the part that landed before a failed write); ``True`` when it
+    was removed. A marker with any other content (another table's, or a longer one that
+    merely starts the same) is never touched."""
     try:
-        with open(marker, "rb") as f:
-            held = f.read()
+        held = _retry_transient(lambda: _read_file(marker), attempts=_PROBE_ATTEMPTS)
     except OSError:
-        return
-    if body.startswith(held):
-        _remove_marker(marker)
+        return False
+    if held != written:
+        return False
+    _remove_marker(marker)
+    return True
 
 
 def _claim_marker(root: str, table: str, kind: str) -> bool:
-    """Claim ``root`` for ``table``; ``True`` when this call created the marker."""
+    """Claim ``root`` for ``table``; ``True`` when this call created the marker.
+
+    The marker is created exclusively, written with ``os.write`` until every byte is out
+    (the count is kept), then read back under ``_retry_transient``, so a FUSE mount that
+    misses the new file for a moment does not fail the claim. Only a read-back that parses
+    and names another table leaves the marker alone (it is theirs); on any other failure
+    the marker is removed if it holds exactly the bytes this call wrote.
+    """
     root = _local_root(root)
     marker = _marker_path(root)
     body = json.dumps(
@@ -318,22 +368,32 @@ def _claim_marker(root: str, table: str, kind: str) -> bool:
         return False
     except OSError as e:
         raise ZarrError(f"{cannot} ({e}).", fix=fix) from e
+    written = 0
     try:
-        with os.fdopen(fd, "wb") as f:
-            f.write(body)
-        _check_owner(marker, table, kind)  # read it back: this call must own it
-    except _MarkerUnreadable as e:
-        # the read-back failed, so what the marker says is unknown: if it still holds the
-        # bytes written above it is this call's, and it must not stay behind
-        _remove_marker_if_ours(marker, body)
-        raise ZarrError(f"{cannot} ({e.__cause__}).", fix=fix) from e.__cause__
+        try:
+            view = memoryview(body)
+            while written < len(body):
+                n = os.write(fd, view[written:])
+                if not n:
+                    raise OSError(errno.EIO, "the owner marker write made no progress")
+                written += n
+        finally:
+            os.close(fd)
+        # read it back: this call must own it
+        _retry_transient(lambda: _read_back(marker, table, kind))
+    except _MarkerGarbled:
+        if _remove_marker_if_ours(marker, body[:written]):
+            raise ZarrError(
+                f"{cannot}: the marker it wrote did not read back whole.", fix=fix
+            ) from None
+        raise
     except ZarrOwnershipError:
-        raise  # the marker names another table now: it is theirs, not ours to remove
+        raise  # the marker parsed and names another table: theirs, not ours to remove
     except OSError as e:
-        _remove_marker_if_ours(marker, body)
+        _remove_marker_if_ours(marker, body[:written])
         raise ZarrError(f"{cannot} ({e}).", fix=fix) from e
     except BaseException:
-        _remove_marker_if_ours(marker, body)
+        _remove_marker_if_ours(marker, body[:written])
         raise
     return True
 
@@ -458,6 +518,7 @@ class _Reader:
     def probe(self, path: str, names) -> tuple[str, bytes] | None:
         """The first of the node documents ``names`` that exists at ``path``."""
         keys = [f"{path}/{n}" for n in names]
+        stale = False  # a hinted document was missing: the hint is out of date
         for n, key in zip(names, keys):
             if key in self.named:
                 return n, self.doc(key)
@@ -465,6 +526,7 @@ class _Reader:
                 raw = self.doc(key)
                 if raw is not None:
                     return n, raw
+                stale = True
         # a hinted key was tried above, with more attempts than a probe makes
         rest = [(n, key) for n, key in zip(names, keys) if key not in self.hinted]
 
@@ -477,10 +539,11 @@ class _Reader:
 
         if not rest:
             return None
+        # after a stale hint the other names are read once: the hinted read already waited
+        # out a transient miss, and waiting again would only add to it
+        tries = 1 if stale else max(self._attempts(key) for _, key in rest)
         try:
-            return _retry_transient(
-                attempt, attempts=max(self._attempts(key) for _, key in rest)
-            )
+            return _retry_transient(attempt, attempts=tries)
         except FileNotFoundError:
             return None
 
@@ -532,6 +595,16 @@ def _root_info(root: str):
             fix="pass the root of a Zarr v2 or v3 store (the directory holding zarr.json "
             "or .zgroup)",
         ) from None
+    if found[".zgroup"] is not None and found[_ZMETADATA] is None:
+        # the attempt that found .zgroup may have missed a healthy .zmetadata once: when
+        # the directory shows one, it is read again (a listing is one call; a blind retry
+        # would cost every store without consolidated metadata the full backoff)
+        try:
+            listed = _ZMETADATA in os.listdir(root)
+        except OSError:
+            listed = False
+        if listed:
+            found[_ZMETADATA] = reader._read(_ZMETADATA, _HINTED_ATTEMPTS)
     if found["zarr.json"] is not None:
         doc = _json(found["zarr.json"], "zarr.json")
         if doc.get("zarr_format") != 3:

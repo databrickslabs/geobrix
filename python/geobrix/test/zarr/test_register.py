@@ -449,20 +449,19 @@ def test_a_marker_taken_over_before_the_read_back_is_not_removed(tmp_path, monke
 
 
 def test_a_marker_whose_write_fails_is_removed(tmp_path, monkeypatch):
-    class Broken:
-        def __enter__(self):
-            return self
+    """The write stops part way: what landed is exactly this call's bytes, so it goes."""
+    real_write, calls = os.write, []
 
-        def __exit__(self, *a):
-            return False
+    def half_then_full(fd, data):
+        calls.append(len(data))
+        if len(calls) == 1:
+            return real_write(fd, bytes(data[:10]))  # a short write: the loop goes on
+        raise OSError("disk full")
 
-        def write(self, data):
-            raise OSError("disk full")
-
-    monkeypatch.setattr(os, "fdopen", lambda fd, mode: (os.close(fd), Broken())[1])
+    monkeypatch.setattr(os, "write", half_then_full)
     with pytest.raises(ZarrError, match="disk full") as ei:
         write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
-    assert "Fix:" in str(ei.value)
+    assert "Fix:" in str(ei.value) and len(calls) == 2
     assert not (tmp_path / "ov" / OWNER_MARKER).exists()
 
 
@@ -1243,24 +1242,42 @@ def test_same_identity_rejects_bad_input():
 # --- Task 9 follow-ups: markers, readers, probes and unreadable documents ----------------
 
 
-def test_a_marker_that_cannot_be_read_back_is_removed_not_left_behind(
-    tmp_path, monkeypatch
-):
-    """The write landed but the read-back failed (a FUSE miss right after the write): the
-    marker this call just made names this table and nobody can tell, so it goes, and the
-    caller gets a typed error with a fix, not a claim of foreign ownership."""
+def _failing_reads(monkeypatch, failures: int):
+    """Make the first ``failures`` binary reads of an owner marker raise EIO."""
     real_open, failed = open, []
 
     def flaky(path, mode="r", *a, **k):
-        if str(path).endswith(OWNER_MARKER) and mode == "rb" and not failed:
-            failed.append(path)  # only the read-back; the cleanup's own read works
+        if str(path).endswith(OWNER_MARKER) and mode == "rb" and len(failed) < failures:
+            failed.append(path)
             raise OSError(5, "Input/output error")
         return real_open(path, mode, *a, **k)
 
     monkeypatch.setattr(_register, "open", flaky, raising=False)
+    return failed
+
+
+def test_a_marker_read_back_that_misses_once_is_retried_and_kept(tmp_path, monkeypatch):
+    """Carry R1: a FUSE miss right after the write is retried, not reported. The marker is
+    this call's, valid, and stays."""
+    _no_sleep(monkeypatch)
+    failed = _failing_reads(monkeypatch, 1)
+    assert _register._claim_marker(str(tmp_path / "ov"), "c.s.t", "overlay") is True
+    assert failed  # the first read-back did miss
+    marker = json.loads((tmp_path / "ov" / OWNER_MARKER).read_text())
+    assert marker["table"] == "c.s.t" and marker["kind"] == "overlay"
+
+
+def test_a_marker_that_cannot_be_read_back_is_removed_not_left_behind(
+    tmp_path, monkeypatch
+):
+    """Every read-back attempt fails: the marker this call made names this table and
+    nobody can tell, so it goes (it holds exactly the bytes written), and the caller gets
+    a typed error with a fix, not a claim of foreign ownership."""
+    _no_sleep(monkeypatch)
+    failed = _failing_reads(monkeypatch, 10)  # the read-back's ten attempts
     with pytest.raises(ZarrError, match="Input/output error") as ei:
         write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
-    assert failed and "Fix:" in str(ei.value)
+    assert len(failed) == 10 and "Fix:" in str(ei.value)
     assert not isinstance(ei.value, ZarrOwnershipError)
     assert isinstance(ei.value.__cause__, OSError)
     assert not (tmp_path / "ov" / OWNER_MARKER).exists()
@@ -1268,6 +1285,73 @@ def test_a_marker_that_cannot_be_read_back_is_removed_not_left_behind(
     write_owner_marker(
         str(tmp_path / "ov"), "c.s.t", "overlay"
     )  # nothing is in the way
+
+
+def test_only_a_marker_holding_exactly_the_written_bytes_is_removed(tmp_path):
+    """No prefix rule: a marker that merely starts with what this call wrote (or that this
+    call's bytes merely start with) is someone else's."""
+    marker = tmp_path / OWNER_MARKER
+    marker.write_bytes(b'{"kind"')
+    assert not _register._remove_marker_if_ours(str(marker), b'{"kind": "overlay"}')
+    assert marker.exists()
+    marker.write_bytes(b'{"kind": "overlay", "table": "x"}')
+    assert not _register._remove_marker_if_ours(str(marker), b'{"kind"')
+    assert marker.exists()
+    assert _register._remove_marker_if_ours(str(marker), marker.read_bytes())
+    assert not marker.exists()
+
+
+def test_a_writer_checks_the_owner_marker_before_writing(tmp_path, monkeypatch):
+    from databricks.labs.gbx.zarr._register import check_owner_marker
+
+    _no_sleep(monkeypatch)
+    with pytest.raises(ZarrOwnershipError, match="no owner marker") as ei:
+        check_owner_marker(str(tmp_path), "c.s.t", "overlay")
+    assert "Fix:" in str(ei.value)
+    write_owner_marker(str(tmp_path), "c.s.t", "overlay")
+    check_owner_marker(str(tmp_path), "c.s.t", "overlay")  # it is ours
+    with pytest.raises(ZarrOwnershipError, match="already owned"):
+        check_owner_marker(str(tmp_path), "other.s.t", "overlay")
+    _failing_reads(monkeypatch, 1)
+    check_owner_marker(str(tmp_path), "c.s.t", "overlay")  # a one-off miss is retried
+
+
+def test_a_zmetadata_that_misses_once_is_read_again(tmp_path, monkeypatch):
+    """Carry R2: the attempt that finds .zgroup may miss a healthy .zmetadata once; the
+    directory shows it, so it is read again and its consolidated row is not lost."""
+    _no_sleep(monkeypatch)
+    g = zarr.open_group(str(tmp_path / "s.zarr"), mode="w", zarr_format=2)
+    g.create_array("a", shape=(2,), chunks=(2,), dtype="i4")
+    zarr.consolidate_metadata(str(tmp_path / "s.zarr"))
+    real, missed = _register._read_file, []
+
+    def once(path):
+        if path.endswith(".zmetadata") and not missed:
+            missed.append(path)
+            raise FileNotFoundError(path)
+        return real(path)
+
+    monkeypatch.setattr(_register, "_read_file", once)
+    fmt, found = _register._root_info(str(tmp_path / "s.zarr"))
+    assert fmt == 2 and missed and found[".zmetadata"] is not None
+
+
+def test_a_stale_hint_reads_the_other_node_documents_once(tmp_path, monkeypatch):
+    """Optional carry: once a hinted document is missing, the hint is stale and the other
+    names are read once, not retried with backoff."""
+    _no_sleep(monkeypatch)
+    reader = _register._Reader(str(tmp_path), hinted={"x/.zarray"})
+    reads = []
+    real = _register._read_file
+
+    def count(path):
+        reads.append(path)
+        return real(path)
+
+    monkeypatch.setattr(_register, "_read_file", count)
+    assert reader.probe("x", (".zarray", ".zgroup")) is None
+    zgroup = [r for r in reads if r.endswith(".zgroup")]
+    assert len(zgroup) == 1
 
 
 def test_a_document_that_cannot_be_read_for_lack_of_permission_is_not_retried(

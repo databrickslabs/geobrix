@@ -3,12 +3,6 @@
 # passes the host's, or $GBX_DOCKER_PLATFORM): linux/arm64 or linux/amd64. Nothing here defaults
 # to amd64, and an arch-specific path is derived in-image (dpkg) or from BuildKit's TARGETARCH.
 ARG GDAL_VERSION=3.11.4
-ARG PDAL_VERSION=2.8.2
-# Pinned commit for PDAL ${PDAL_VERSION} (Labs lockdown policy: tags are mutable).
-# To bump PDAL_VERSION, resolve the new tag with:
-#   gh api repos/PDAL/PDAL/git/refs/tags/<version> --jq .object.sha
-# and update PDAL_SHA in lockstep.
-ARG PDAL_SHA=736fa0a66af4bed7105dff5fa152edf26bbb8a3a
 
 # ==========================================
 # STAGE 1: OS Base & Java
@@ -145,34 +139,11 @@ RUN ln -s $ROOTDIR/lib/libgdal.so /usr/lib/libgdal.so && \
     mkdir -p /usr/lib/jni && ln -s $ROOTDIR/lib/jni/libgdalalljni.so /usr/lib/jni/libgdalalljni.so.30
 
 # ==========================================
-# STAGE 5: PDAL Builder
-# e.g. `docker build --target pdal-builder -t geobrix-pdal-builder .`
-# ==========================================
-FROM gdal-builder AS pdal-builder
-ARG PDAL_VERSION
-ARG PDAL_SHA
-RUN mkdir -p /tmp/pdal && cd /tmp/pdal \
-    && git init -q \
-    && git remote add origin https://github.com/PDAL/PDAL.git \
-    && git fetch --depth 1 -q origin ${PDAL_SHA} \
-    && git checkout -q FETCH_HEAD \
-    && mkdir -p build && cd build \
-    && cmake -G Ninja .. \
-        -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr/local \
-        -DGDAL_CONFIG=/usr/local/bin/gdal-config \
-        -DGDAL_INCLUDE_DIR=/usr/local/include \
-        -DGDAL_LIBRARY=/usr/local/lib/libgdal.so \
-        -DGEOTIFF_INCLUDE_DIR=/usr/include/geotiff \
-        -DBUILD_PLUGIN_PYTHON=OFF -DBUILD_PLUGIN_GREYHOUND=OFF \
-    && cmake --build . --parallel 2 && cmake --install . && ldconfig && \
-    cd / && rm -rf /tmp/pdal
-
-# ==========================================
-# STAGE 6: Final Development Environment
+# STAGE 5: Final Development Environment
 # e.g. `docker build --target final -t geobrix-final .`
-# (STAGE 7 below sets the per-architecture library path and is the stage tagged as the image.)
+# (STAGE 6 below sets the per-architecture library path and is the stage tagged as the image.)
 # ==========================================
-FROM pdal-builder AS final-base
+FROM gdal-builder AS final-base
 
 # --- Maven Installation (Pinned Checksum per Labs lockdown policy) ---
 # Pinning the SHA-512 in-Dockerfile prevents a compromised archive.apache.org
@@ -235,7 +206,7 @@ ENV PYZMQ_VERSION=25.1.1
 # BuildKit does NOT key its layer cache on a secret, so a changed index alone would reuse the cached
 # layer below with the old one. GBX_PIP_INDEX_FPR is the fix: build_smart.sh passes the first 12 hex
 # characters of the sha256 of the index (a fingerprint, not the index) to this stage only. It changes
-# when the index does, so this layer and the pip steps after it rebuild (GDAL and PDAL stay cached).
+# when the index does, so this layer and the pip steps after it rebuild (GDAL stays cached).
 # Caveat for lock recompiles: the
 # dev proxy (pypi-proxy.dev.databricks.com) is a ROLLING-RECENT mirror that prunes old releases,
 # so it cannot reproduce runtime-matched locks (e.g. botocore 1.40.x). Authoritative recompiles
@@ -360,7 +331,7 @@ RUN mkdir -p /tmp/jupyter_runtime && chmod 1777 /tmp/jupyter_runtime
 RUN python3 -m ipykernel install --name python3 --display-name "Python 3 (Geobrix)" --env JUPYTER_IP 0.0.0.0 --env JUPYTER_RUNTIME_DIR /tmp/jupyter_runtime
 
 # ==========================================
-# STAGE 7: per-architecture library path, entrypoint (the stage tagged as the image)
+# STAGE 6: per-architecture library path, entrypoint (the stage tagged as the image)
 # e.g. `docker buildx build --platform linux/arm64 --target final -t geobrix-final .`
 # BuildKit sets TARGETARCH (amd64 | arm64) from --platform; any other value has no
 # final-<arch> stage and fails the build, rather than defaulting to one. A direct build for another

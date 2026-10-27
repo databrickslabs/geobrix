@@ -10,7 +10,6 @@ STAGES=(
     "system-deps"
     "hadoop-builder"
     "gdal-builder"
-    "pdal-builder"
     "final"
 )
 
@@ -124,7 +123,7 @@ log_info "Starting smart build for ${FINAL_TAG} (${PLATFORM})..."
 # BuildKit does not key its layer cache on a secret, so a changed index alone would reuse the cached pip
 # configuration layer. A non-secret fingerprint of the index (the first 12 hex characters of its sha256)
 # is therefore also passed as the build-arg GBX_PIP_INDEX_FPR, to the final stage only (the stage with
-# the pip steps): a changed index rebuilds that stage and nothing before it (GDAL and PDAL stay cached).
+# the pip steps): a changed index rebuilds that stage and nothing before it (GDAL stays cached).
 SECRET_ARGS=()
 FINAL_STAGE_ARGS=()
 if [ -n "${PIP_INDEX_URL:-}" ]; then

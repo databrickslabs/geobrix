@@ -1,7 +1,7 @@
 """
 GeoBrix Library Integration Examples
 
-Code examples for integrating GeoBrix with third-party libraries like rasterio, xarray, PDAL.
+Code examples for integrating GeoBrix with third-party libraries like rasterio and xarray.
 Single source for docs/docs/advanced/library-integration.mdx.
 Tested by: docs/tests/python/advanced/test_library_integration.py
 """
@@ -11,9 +11,6 @@ rasterio_install_snippet = """%pip install rasterio"""
 
 # ----- XArray (one-copy: doc imports these) -----
 xarray_install_snippet = """%pip install xarray rioxarray"""
-
-# ----- PDAL (one-copy: doc imports these) -----
-pdal_install_snippet = """%pip install pdal python-pdal"""
 
 # Sample-data Volumes path for runnable examples (same as gdal-cli)
 from path_config import SAMPLE_DATA_BASE
@@ -490,110 +487,6 @@ xarray_resampling_aggregation_output = """+-------------------------------------
 +--------------------------------------------------+---------------+
 |/Volumes/.../nyc_sentinel2_red.tif                |123.45         |
 +--------------------------------------------------+---------------+"""
-
-
-def pdal_integration_basic(spark):
-    """
-    Basic PDAL integration for point clouds.
-
-    Process point cloud data from sample-data Volumes path; apply UDF to extract metadata.
-    """
-    # Sample-data Volumes path for point cloud (use your LAS/LAZ path if different)
-    point_cloud_path = f"{SAMPLE_DATA_BASE}/nyc/pointcloud/sample.las"
-
-    @f.udf(StructType([
-        StructField("point_count", IntegerType()),
-        StructField("bounds", StringType()),
-        StructField("has_classification", BooleanType())
-    ]))
-    def extract_las_metadata(las_bytes):
-        """Extract metadata from LAS/LAZ point cloud"""
-        if las_bytes is None:
-            return None
-
-        try:
-            import pdal
-            import json
-
-            # Create PDAL pipeline
-            pipeline = pdal.Pipeline(json.dumps({
-                "pipeline": [
-                    {
-                        "type": "readers.las",
-                        "filename": "STDIN"
-                    },
-                    {
-                        "type": "filters.info"
-                    }
-                ]
-            }))
-
-            # Execute would process the data
-            # pipeline.execute()
-
-            return {
-                "point_count": 0,
-                "bounds": "{}",
-                "has_classification": False
-            }
-        except ImportError:
-            return None
-
-    binary_df = spark.read.format("binaryFile").load(point_cloud_path)
-    result = binary_df.select(
-        "path",
-        extract_las_metadata(f.col("content")).alias("metadata")
-    )
-    result.limit(2).show(truncate=50)
-    return result
-
-
-pdal_integration_basic_output = """+--------------------------------------------------+--------------------+
-|path                                              |metadata            |
-+--------------------------------------------------+--------------------+
-|/Volumes/.../sample.las                           |{point_count=0, ...}|
-+--------------------------------------------------+--------------------+"""
-
-
-def pdal_raster_integration_pattern(spark):
-    """
-    Integrate PDAL point clouds with raster processing.
-
-    Combined workflow: load raster from sample path, show pattern for adding PDAL (point cloud) path.
-    """
-    # Sample-data Volumes paths
-    point_cloud_path = f"{SAMPLE_DATA_BASE}/nyc/pointcloud/sample.las"
-    raster_path = SAMPLE_RASTER_VOLUMES_PATH
-
-    from databricks.labs.gbx.rasterx import functions as rx
-
-    @f.udf(StructType([
-        StructField("raster_loaded", BooleanType()),
-        StructField("point_cloud_path", StringType())
-    ]))
-    def workflow_summary(raster_bytes, pc_path):
-        """Summary for PDAL + raster integration pattern."""
-        return (raster_bytes is not None, pc_path or "")
-
-    rx.register(spark)
-    binary_df = spark.read.format("binaryFile").load(raster_path)
-    tiles_df = binary_df.select(
-        "path",
-        rx.rst_fromcontent(f.col("content"), f.lit("GTiff")).alias("tile")
-    )
-    result = tiles_df.select(
-        "path",
-        workflow_summary(f.col("tile.raster"), f.lit(point_cloud_path)).alias("workflow")
-    )
-    result.limit(2).show(truncate=50)
-    return result
-
-
-pdal_raster_integration_pattern_output = """+--------------------------------------------------+-----------------------+
-|path                                              |workflow               |
-+--------------------------------------------------+-----------------------+
-|/Volumes/.../nyc_sentinel2_red.tif                |{raster_loaded=true...}|
-+--------------------------------------------------+-----------------------+"""
 
 
 def numpy_advanced_operations(spark):

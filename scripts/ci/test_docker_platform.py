@@ -31,7 +31,6 @@ STAGES = [
     "system-deps",
     "hadoop-builder",
     "gdal-builder",
-    "pdal-builder",
     "final",
 ]
 

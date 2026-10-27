@@ -140,45 +140,6 @@ def test_xarray_resampling_aggregation(spark):
     assert result.count() >= 0
 
 
-def test_pdal_install_snippet():
-    """PDAL install snippet is defined (one-copy doc)."""
-    assert hasattr(library_integration, "pdal_install_snippet")
-    assert "pdal" in library_integration.pdal_install_snippet
-
-
-def test_pdal_output_constants():
-    """PDAL examples have output constants for doc display (one-copy)."""
-    for name in (
-        "pdal_integration_basic_output",
-        "pdal_raster_integration_pattern_output",
-    ):
-        assert hasattr(library_integration, name), f"missing {name}"
-
-
-@pytest.mark.integration
-def test_pdal_integration_basic(spark):
-    """Fully validated: run with sample-data Volumes and assert result."""
-    try:
-        result = library_integration.pdal_integration_basic(spark)
-    except Exception as e:
-        pytest.skip(f"Requires PDAL + point cloud sample data: {e}")
-    assert result is not None
-    assert "path" in result.columns
-    assert result.count() >= 0
-
-
-@pytest.mark.integration
-def test_pdal_raster_integration_pattern(spark):
-    """Fully validated: run with sample-data Volumes and assert result."""
-    try:
-        result = library_integration.pdal_raster_integration_pattern(spark)
-    except Exception as e:
-        pytest.skip(f"Requires GeoBrix rx + sample raster: {e}")
-    assert result is not None
-    assert "path" in result.columns and "workflow" in result.columns
-    assert result.count() >= 0
-
-
 def test_numpy_advanced_operations_output_constant():
     """NumPy advanced operations has output constant for doc display (one-copy)."""
     assert hasattr(library_integration, "numpy_advanced_operations_output")

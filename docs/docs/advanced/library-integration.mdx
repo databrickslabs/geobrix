@@ -7,14 +7,13 @@ import libraryIntegration from '!!raw-loader!../../tests/python/advanced/library
 
 # Third-Party Library Integration
 
-Learn how to integrate GeoBrix with popular Python geospatial libraries like rasterio, xarray, and PDAL for extended functionality.
+Learn how to integrate GeoBrix with popular Python geospatial libraries like rasterio and xarray for extended functionality.
 
 ## Overview
 
 While GeoBrix provides comprehensive spatial processing on Spark, you may want to integrate with specialized Python libraries for:
 - Advanced array operations (xarray)
 - Flexible raster I/O (rasterio)  
-- Point cloud processing (PDAL)
 - NumPy-based operations
 
 GeoBrix works seamlessly with these libraries because it uses standard formats (WKB, GeoTIFF bytes) that can be easily converted to library-specific objects.
@@ -184,61 +183,6 @@ Stack and analyze multiple time periods:
 
 ---
 
-## PDAL Integration
-
-[PDAL](https://pdal.io/) (Point Data Abstraction Library) processes point cloud data from lidar, photogrammetry, and other sources.
-
-### Why Use PDAL with GeoBrix?
-
-- **Point Cloud Processing**: LAS/LAZ file support
-- **Filtering**: Remove noise, classify points
-- **DEM Generation**: Create rasters from point clouds
-- **Format Conversion**: Convert between point cloud formats
-- **Integration**: Combine lidar with imagery
-
-### Installation
-
-<CodeFromTest 
-  code={libraryIntegration} 
-  language="python" 
-  functionName="pdal_install_snippet"
-  title="Install PDAL"
-  source="docs/tests/python/advanced/library_integration.py"
-  testFile="docs/tests/python/advanced/test_library_integration.py"
-/>
-
-:::note PDAL native binaries
-The Python packages above provide bindings only. You also need PDAL native libraries installed on the cluster (e.g. `libpdal` and PDAL command-line tools). On Databricks, install them via [cluster-scoped init scripts](https://docs.databricks.com/aws/en/init-scripts/cluster-scoped) (for example, a script that runs `apt-get install -y pdal` or equivalent for your environment).
-:::
-
----
-
-### Basic PDAL Integration
-
-<CodeFromTest 
-  code={libraryIntegration} 
-  language="python" 
-  functionName="pdal_integration_basic"
-  source="docs/tests/python/advanced/library_integration.py"
-  testFile="docs/tests/python/advanced/test_library_integration.py"
-  outputConstant="pdal_integration_basic_output"
-/>
-
-### PDAL-Raster Integration Pattern
-
-Combine point cloud processing with raster analysis:
-
-<CodeFromTest 
-  code={libraryIntegration} 
-  language="python" 
-  functionName="pdal_raster_integration_pattern"
-  source="docs/tests/python/advanced/library_integration.py"
-  testFile="docs/tests/python/advanced/test_library_integration.py"
-  outputConstant="pdal_raster_integration_pattern_output"
-/>
-
----
-
 ## Advanced NumPy Operations
 
 Apply complex array operations via rasterio:
@@ -317,4 +261,3 @@ Always close resources properly:
 - [Examples](../examples/overview) - Real-world integration workflows
 - [Rasterio Docs](https://rasterio.readthedocs.io/)
 - [XArray Docs](https://xarray.pydata.org/)
-- [PDAL Docs](https://pdal.io/)

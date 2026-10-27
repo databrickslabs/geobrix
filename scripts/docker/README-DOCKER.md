@@ -15,7 +15,7 @@ The image is built and run natively for the host: `geobrix-dev:ubuntu24-gdal311-
 - The Python dependencies are hash-pinned per architecture: `python/geobrix/requirements-dev-container.txt` (x86_64) and `requirements-dev-container-aarch64.txt`, compiled from the same `.in` with the same versions (`python3 scripts/ci/check_dev_container_locks.py`).
 - A private package index: `export PIP_INDEX_URL=...` before the build. It is passed as a BuildKit secret, not a build-arg, and is not in the image history or environment.
   - **The image holds the index** in its pip and uv configuration files (`/etc/pip.conf`, `/root/.pip/pip.conf`, `/etc/uv/uv.toml`) so pip and uv keep working inside the container. Never push, `docker save` or share the image.
-  - A BuildKit secret is not part of the layer cache key, so the build also passes a non-secret fingerprint of the index (12 hex characters of its sha256, build-arg `GBX_PIP_INDEX_FPR`) to the final stage. Changing the index rebuilds that stage and no earlier one (GDAL and PDAL stay cached); no `--no-cache` needed.
+  - A BuildKit secret is not part of the layer cache key, so the build also passes a non-secret fingerprint of the index (12 hex characters of its sha256, build-arg `GBX_PIP_INDEX_FPR`) to the final stage. Changing the index rebuilds that stage and no earlier one (GDAL stays cached); no `--no-cache` needed.
   - pip prints the index host into the build output, so a `--log` file of a build with an index contains it. Do not share that log.
 - `scripts/docker/gbx-platform.sh` holds the platform and tag logic that the build and start scripts share.
 

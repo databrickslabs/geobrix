@@ -2275,7 +2275,6 @@ numpy==2.1.3 \
     #   numcodecs
     #   numexpr
     #   pandas
-    #   pdal
     #   pyogrio
     #   rasterio
     #   rio-tiler
@@ -2430,9 +2429,6 @@ pathspec==1.1.1 \
     --hash=sha256:17db5ecd524104a120e173814c90367a96a98d07c45b2e10c2f3919fff91bf5a \
     --hash=sha256:a00ce642f577bf7f473932318056212bc4f8bfdf53128c78bbd5af0b9b20b189
     # via black
-pdal==3.5.3 \
-    --hash=sha256:1d8fb955b91b97ff927d99295d719f8dada16b2c85f778d5c38cf04dcd44f3cc
-    # via -r requirements-dev-container.in
 pexpect==4.9.0 \
     --hash=sha256:7236d1e080e4936be2dc3e326cec0af72acf9212a7e1d060210e70a47e253523 \
     --hash=sha256:ee7d41123f3c9911050ea2c2dac107568dc43b2d3b0c7557a33212c398ead30f

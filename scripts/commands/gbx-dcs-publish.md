@@ -21,6 +21,8 @@ bash scripts/commands/gbx-dcs-publish.sh (--candidate | --release --confirm <ver
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
 
+An option that needs a value (`--arch`, `--version`, `--log`) given without one prints `<option> needs a value` and the usage, and exits 2.
+
 ## Environment
 
 - `GBX_DCS_REPO` - image repository (default `mjohns797/geobrix`); must match the value used for `gbx:dcs:build`
@@ -39,5 +41,7 @@ bash scripts/commands/gbx-dcs-publish.sh --release --confirm 0.6.0 --expect-dige
 ## Notes
 
 - The local `<repo>:<ver>-env6-<arm|x86>-rc` image from `gbx:dcs:build` must exist; otherwise the command prints `PRECONDITION MISSING: local image ...` and exits 1 without pushing.
-- The last line is `DIGEST=<repo>@sha256:...`; if the pushed image has no such digest the command fails instead of printing an empty one. Record the release digest in the release notes.
+- The last line is `DIGEST=<repo>@sha256:...`; if the pushed image has no such digest the command fails (exit 1, `No <repo>@sha256 digest on <image> after the push`) instead of printing an empty one. Record the release digest in the release notes.
+- `--release` pushes two tags, the versioned one and then `env6-<arm|x86>`. If the second push fails, the output says `PARTIAL RELEASE: already pushed in this run: <tag>; <tag> was not pushed`; if the first fails, `Release incomplete: no release tag was pushed`. Either way it is safe to re-run the same `--release` command: it re-tags the same `-rc` image and pushes again, and a tag that is already pushed is unchanged.
+- The log (`--log`) starts before the version is read from `target/`, so a `PRECONDITION MISSING` about the JAR is in the log too.
 - `--release` re-tags the candidate image you pushed and verified. A fresh `gbx:dcs:build` has no `<repo>@sha256:...` digest until it is pushed, so `--release` refuses an `-rc` image without one (`PRECONDITION MISSING ... push it as the candidate and verify it first`). If you rebuild after `--candidate`, push a new candidate and verify it again before `--release`.

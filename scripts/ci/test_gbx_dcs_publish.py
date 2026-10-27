@@ -127,3 +127,82 @@ def test_version_is_read_from_the_one_jar(dcs_publish):
     res = dcs_publish.run("--candidate", "--arch", "arm64")
     assert res.returncode == 0, res.output
     assert _tags_and_pushes(dcs_publish) == [["push", rc]]
+
+
+# --- an option without its value is a usage error ------------------------------------------
+
+
+@pytest.mark.parametrize("option", ["--arch", "--version", "--log"])
+def test_an_option_without_its_value_is_a_usage_error(dcs_publish, option):
+    """A trailing `--arch` used to die on an unbound `$2` (exit 1, no message)."""
+    res = dcs_publish.run("--candidate", option)
+    assert res.returncode == 2, res.output
+    assert f"{option} needs a value" in res.output and "Usage:" in res.output
+    assert "unbound variable" not in res.output
+    assert dcs_publish.calls == []
+
+
+# --- the digest line is never empty ----------------------------------------------------
+
+
+def test_a_push_that_leaves_no_digest_fails_instead_of_printing_an_empty_one(
+    dcs_publish,
+):
+    """Registry or daemon state can leave the pushed image without a <repo>@ digest; the
+    line a release owner copies into the release notes must never be empty."""
+    dcs_publish.state["images"][RC] = {"digests": []}
+    dcs_publish.state["push_no_digest"] = True
+    res = dcs_publish.run("--candidate", "--version", VER)
+    assert res.returncode == 1, res.output
+    assert f"No {TEST_REPO}@sha256 digest on {RC} after the push" in res.output
+    assert "DIGEST=" not in res.output
+
+
+# --- a release that stops half way says what was pushed -----------------------------------
+
+
+def test_a_release_that_fails_on_the_second_push_names_what_was_pushed(dcs_publish):
+    _pushed_rc(dcs_publish)
+    floating = f"{TEST_REPO}:env6-arm"
+    versioned = f"{TEST_REPO}:{VER}-env6-arm"
+    dcs_publish.state["push_fail_refs"] = [floating]
+    res = dcs_publish.run("--release", "--confirm", VER, "--version", VER)
+    assert res.returncode == 1
+    assert f"Push of {floating} failed" in res.output
+    assert f"already pushed in this run: {versioned}" in res.output
+    assert f"{floating} was not pushed" in res.output
+    assert "safe to re-run" in res.output
+
+
+def test_a_release_that_fails_on_the_first_push_pushed_nothing(dcs_publish):
+    _pushed_rc(dcs_publish)
+    versioned = f"{TEST_REPO}:{VER}-env6-arm"
+    dcs_publish.state["push_fail_refs"] = [versioned]
+    res = dcs_publish.run("--release", "--confirm", VER, "--version", VER)
+    assert res.returncode == 1
+    assert f"Push of {versioned} failed" in res.output
+    assert "no release tag was pushed" in res.output
+    assert "safe to re-run" in res.output
+    assert [c for c in dcs_publish.calls if c[0] == "push"] == [["push", versioned]]
+
+
+def test_a_failed_candidate_push_is_not_called_a_partial_release(dcs_publish):
+    dcs_publish.state["images"][RC] = {"digests": []}
+    dcs_publish.state["push_fail_refs"] = [RC]
+    res = dcs_publish.run("--candidate", "--version", VER)
+    assert res.returncode == 1
+    assert f"Push of {RC} failed" in res.output and "release tag" not in res.output
+
+
+# --- a precondition printed before the log starts is not in the log --------------------------
+
+
+def test_a_version_precondition_lands_in_the_log(dcs_publish, tmp_path):
+    dcs_publish.jar("0.0.3")
+    dcs_publish.jar("0.0.4")
+    log = tmp_path / "publish.log"
+    res = dcs_publish.run("--candidate", "--log", str(log))
+    assert res.returncode == 1
+    assert "PRECONDITION MISSING: expected exactly one" in res.output
+    assert "PRECONDITION MISSING: expected exactly one" in log.read_text()
+    assert dcs_publish.calls == []

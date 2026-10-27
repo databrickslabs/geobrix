@@ -27,15 +27,18 @@ usage() {
     echo "Requires: you are logged in to Docker Hub (docker login) as an account that can push to <repo>."
 }
 
+# Under `set -u` a trailing `--arch` would die on an unbound $2 with no explanation.
+needs_value() { echo "$1 needs a value" >&2; usage; exit 2; }
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --candidate) MODE="candidate"; shift ;;
         --release) MODE="release"; shift ;;
         --confirm) [ $# -ge 2 ] || { echo "--confirm needs a version" >&2; exit 1; }; CONFIRM="$2"; shift 2 ;;
         --expect-digest) [ $# -ge 2 ] || { echo "--expect-digest needs sha256:<hex>" >&2; exit 1; }; EXPECT_DIGEST="$2"; shift 2 ;;
-        --arch) ARCH="$2"; shift 2 ;;
-        --version) VER="$2"; shift 2 ;;
-        --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+        --arch) [[ $# -ge 2 ]] || needs_value "$1"; ARCH="$2"; shift 2 ;;
+        --version) [[ $# -ge 2 ]] || needs_value "$1"; VER="$2"; shift 2 ;;
+        --log) [[ $# -ge 2 ]] || needs_value "$1"; LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
@@ -46,6 +49,8 @@ if [ -n "$EXPECT_DIGEST" ] && ! printf '%s' "$EXPECT_DIGEST" | grep -Eq '^sha256
     echo "--expect-digest must look like sha256:<64 hex characters> (the part after @ in the DIGEST= line --candidate printed)" >&2; exit 1
 fi
 case "$ARCH" in arm64) SUFFIX="env6-arm" ;; amd64) SUFFIX="env6-x86" ;; *) echo "--arch must be arm64 or amd64" >&2; exit 1 ;; esac
+# The log starts before anything that can refuse on a missing precondition, so the refusal is in the log.
+setup_log_file "$LOG_PATH"
 if [ -z "$VER" ]; then
     # Same rule as gbx:dcs:build: exactly one JAR, otherwise the version is ambiguous and must be explicit.
     shopt -s nullglob
@@ -57,7 +62,6 @@ fi
 [ -n "$VER" ] || { echo "PRECONDITION MISSING: could not read a version from the JAR name; pass --version <ver>; not published"; exit 1; }
 
 show_banner "DCS: publish $REPO ($MODE, $VER, $ARCH)"
-setup_log_file "$LOG_PATH"
 # Publishing the release tags is the step users pull, so it needs explicit consent, given before any
 # docker tag or push: the version to release, typed again after the candidate was verified on a cluster.
 if [ "$MODE" = "release" ]; then
@@ -67,8 +71,23 @@ fi
 RC="$REPO:${VER}-${SUFFIX}-rc"
 docker image inspect "$RC" > /dev/null 2>&1 || { echo "PRECONDITION MISSING: local image $RC (run gbx:dcs:build); not published"; exit 1; }
 
+# A release pushes two tags, one after the other; PUSHED lists those that went through, so a failure on
+# the second says exactly what is already out there.
+PUSHED=""
 push() {
-    docker push "$1" || { echo "Push of $1 failed. If this is an authentication error, run 'docker login' yourself and retry."; exit 1; }
+    if ! docker push "$1"; then
+        echo "Push of $1 failed. If this is an authentication error, run 'docker login' yourself and retry."
+        if [ "$MODE" = "release" ]; then
+            if [ -n "$PUSHED" ]; then
+                echo "PARTIAL RELEASE: already pushed in this run:$PUSHED; $1 was not pushed."
+            else
+                echo "Release incomplete: no release tag was pushed."
+            fi
+            echo "It is safe to re-run the same --release command: it re-tags the same -rc image and pushes again, and a tag that is already pushed is unchanged."
+        fi
+        exit 1
+    fi
+    PUSHED="$PUSHED $1"
 }
 
 # The <repo>@sha256:... entry in the image's RepoDigests; empty if the image was never pushed to <repo>.

@@ -82,7 +82,9 @@ def shard_layout(
     The spatial shard starts as the whole spatial extent, rounded up to a multiple of the
     chunk. While a shard holds more than ``SHARD_CAP_BYTES`` the spatial shard is halved,
     in whole chunks. Then the first leading dimension grows by whole chunks while the shard
-    stays within the cap, up to the dimension's length (rounded up to a chunk).
+    stays within the cap, past the dimension's current length if need be: a store created
+    small and appended to along time keeps filling the same shards, as the brief's rule
+    and the append workload want.
     """
     shape, chunks = tuple(int(n) for n in shape), tuple(int(c) for c in chunks)
     ndim = len(shape)
@@ -102,8 +104,7 @@ def shard_layout(
     if ndim > 2:
         lead = 0
         slab = nbytes()  # one leading chunk's worth of the shard
-        most = max(1, -(-shape[lead] // chunks[lead]))
-        count[lead] = max(1, min(most, SHARD_CAP_BYTES // max(1, slab)))
+        count[lead] = max(1, SHARD_CAP_BYTES // max(1, slab))
     return tuple(c * k for c, k in zip(chunks, count))
 
 

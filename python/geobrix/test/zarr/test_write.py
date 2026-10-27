@@ -122,7 +122,7 @@ def _blocks(spark, *blocks):
         rows.append(
             (
                 name,
-                list(DIMS[-values.ndim :]) if name != "time" else ["time"],
+                [name] if name in DIMS else list(DIMS[-values.ndim :]),
                 list(start),
                 [a + n for a, n in zip(start, values.shape)],
                 None,
@@ -581,7 +581,7 @@ def test_the_write_module_uses_no_api_that_spark_connect_forbids():
     import pathlib
 
     found = []
-    for name in ("_write.py", "_pack.py", "_layout.py"):
+    for name in ("_write.py", "_write_tasks.py", "_pack.py", "_layout.py"):
         path = pathlib.Path(_write.__file__).parent / name
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Attribute) and node.attr in (
@@ -655,3 +655,700 @@ def test_a_new_variable_is_created_on_the_store_dimensions(
     assert doc["codecs"][0]["name"] == "sharding_indexed"
     assert [c["name"] for c in inner] == ["bytes", "zstd", "crc32c"]
     np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
+
+
+# --- fix round 1: the reviewer's probes as tests ----------------------------------------------
+
+from databricks.labs.gbx.zarr import _manifest as M  # noqa: E402
+from databricks.labs.gbx.zarr.errors import (  # noqa: E402
+    ZarrError,
+    ZarrOwnershipError,
+    ZarrUnsupported,
+)
+
+
+def _blocks_arrow_schema():
+    import pyarrow as pa
+
+    return pa.schema(
+        [
+            ("variable", pa.string()),
+            ("dims", pa.list_(pa.string())),
+            ("start", pa.list_(pa.int64())),
+            ("stop", pa.list_(pa.int64())),
+            ("coord_start", pa.list_(pa.string())),
+            ("coord_stop", pa.list_(pa.string())),
+            ("dtype", pa.string()),
+            ("shape", pa.list_(pa.int64())),
+            ("data", pa.binary()),
+            ("fill_value", pa.string()),
+            ("attrs", pa.string()),
+        ]
+    )
+
+
+def _moving_source(spark, flag, first, second, extra=()):
+    """A blocks DataFrame whose one t2m block is ``first`` (start, shape) until ``flag``
+    exists and ``second`` after: an input that changes between two evaluations."""
+    flag_s, schema = str(flag), _blocks_arrow_schema()
+    extra = [dict(e) for e in extra]
+
+    def source(batches):
+        import os as _os
+
+        import numpy as _np
+        import pyarrow as _pa
+
+        for _ in batches:
+            pass
+        start, shape = second if _os.path.exists(flag_s) else first
+        rows = [
+            {
+                "variable": "t2m",
+                "dims": list(DIMS),
+                "start": list(start),
+                "stop": [a + n for a, n in zip(start, shape)],
+                "coord_start": None,
+                "coord_stop": None,
+                "dtype": "<f4",
+                "shape": list(shape),
+                "data": _np.full(shape, 2.0, "float32").tobytes(),
+                "fill_value": None,
+                "attrs": None,
+            },
+            *extra,
+        ]
+        yield _pa.RecordBatch.from_pylist(rows, schema=schema)
+
+    return spark.range(1, numPartitions=1).mapInArrow(source, BLOCKS_SCHEMA)
+
+
+def _flip_before_files(monkeypatch, flag):
+    real = _write._write_files
+
+    def flip_then_write(spark_, plan):
+        flag.write_text("x")
+        return real(spark_, plan)
+
+    monkeypatch.setattr(_write, "_write_files", flip_then_write)
+
+
+def _registered(spark, drop, tmp_path, label, fmt=3):
+    store = make_era5_like(tmp_path / f"{label}.zarr", zarr_format=fmt)
+    table = _table(label)
+    drop(table)
+    gbx_zarr_register(
+        spark,
+        str(store),
+        table,
+        writable=True,
+        overlay_root=str(tmp_path / f"ov_{label}"),
+    )
+    return store, table
+
+
+def test_p1_a_chunk_read_from_a_shard_conflicts_when_that_shard_changes(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """I1: B patches half of chunk c/0/0/0, read from shard c/0/0/0. A's overwrite (which
+    deletes every shard row) lands first. B's read guard sees it: B conflicts instead of
+    landing the shard's pre-overwrite cells."""
+    store, table = _registered(spark_delta, drop, tmp_path, "p1")
+    a, b = uuid.uuid4().hex, uuid.uuid4().hex
+    blocks_b = _blocks(
+        spark_delta, ("t2m", (0, 0, 0), np.full((6, 37, 72), 2.0, "float32"))
+    )
+    blocks_a = _blocks(
+        spark_delta, ("t2m", (36, 37, 72), np.full((12, 36, 72), 5.0, "float32"))
+    )
+    ran = []
+
+    def overwrite_first(wid):
+        if wid == b and not ran:
+            ran.append(gbx_zarr_write(blocks_a, table, mode="overwrite", write_id=a))
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", overwrite_first)
+    with pytest.raises(ZarrWriteConflict) as e:
+        gbx_zarr_write(blocks_b, table, mode="update", write_id=b)
+    assert ran and "t2m/c/0/0/0" in e.value.keys
+    assert any(c["kind"] == "shard" for c in e.value.conflicts)
+    assert find_commit_version(spark_delta, table, b) is None
+    got = _read(spark_delta, table, "t2m")
+    assert np.isnan(got[0:12, 0:37, 0:72]).all()  # A's result alone: fill there
+
+
+def test_an_overwrite_deletes_the_shard_rows_of_a_registered_store(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """I8(b), pre-ruling (f): every shard row of the variable goes; only the rewritten
+    chunk stays; the base files are untouched."""
+    store, table = _registered(spark_delta, drop, tmp_path, "ow")
+    before = _files(store)
+    wid = uuid.uuid4().hex
+    gbx_zarr_write(
+        _blocks(
+            spark_delta, ("t2m", (36, 37, 72), np.full((12, 36, 72), 5.0, "float32"))
+        ),
+        table,
+        mode="overwrite",
+        write_id=wid,
+    )
+    live = spark_delta.sql(
+        f"SELECT kind, key, write_id FROM {table} WHERE array = 't2m' AND tag IS NULL "
+        "AND kind IN ('shard', 'chunk')"
+    ).collect()
+    assert [(r["kind"], r["key"], r["write_id"]) for r in live] == [
+        ("chunk", "c/3/1/1", wid)
+    ]
+    got = _read(spark_delta, table, "t2m")
+    assert (got[36:48, 37:73, 72:144] == 5.0).all()
+    assert np.isnan(got[:36]).all() and np.isnan(got[36:48, :37]).all()
+    assert _files(store) == before
+    u10 = zarr.open_array(str(store / "u10"), mode="r")[...]
+    np.testing.assert_array_equal(_read(spark_delta, table, "u10"), u10)
+
+
+@pytest.mark.parametrize(
+    "label, first, second",
+    [
+        (
+            "partial-to-unread-shard",
+            ((0, 0, 0), (6, 37, 72)),
+            ((24, 0, 0), (6, 37, 72)),
+        ),
+        ("whole-then-partial", ((0, 0, 0), (12, 37, 72)), ((24, 0, 0), (6, 37, 72))),
+    ],
+)
+def test_p2_an_update_reads_its_input_once(
+    spark_delta, drop, tmp_path, no_hooks, label, first, second
+):
+    """I4 + I5: an update makes one pass over its blocks, so an input that would differ
+    on a second evaluation is written as that one pass saw it, base cells and all."""
+    store, table = _registered(spark_delta, drop, tmp_path, "p2")
+    base = zarr.open_array(str(store / "t2m"), mode="r")[...]
+    flag = tmp_path / f"flag_{label}"
+    df = _moving_source(spark_delta, flag, first, second)
+    _flip_before_files(no_hooks, flag)
+    gbx_zarr_write(df, table, mode="update")
+    got = _read(spark_delta, table, "t2m")
+    assert (got[24:30, 0:37, 0:72] == 2.0).all()
+    np.testing.assert_array_equal(got[30:36, 0:37, 0:72], base[30:36, 0:37, 0:72])
+    np.testing.assert_array_equal(got[0:24], base[0:24])  # the first pass never ran
+
+
+def test_p2_an_append_refuses_an_input_that_changed_between_its_passes(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """I4: create and append plan from a narrow first pass; the write pass's digest of the
+    block positions must match it."""
+    ds = _dataset()
+    table, root, version = _create(
+        spark_delta, drop, tmp_path, ds.isel(time=slice(0, 24))
+    )
+    labels = ds.time.values[24:36]
+    time_block = {
+        "variable": "time",
+        "dims": ["time"],
+        "start": [0],
+        "stop": [12],
+        "coord_start": None,
+        "coord_stop": None,
+        "dtype": labels.dtype.str,
+        "shape": [12],
+        "data": labels.tobytes(),
+        "fill_value": None,
+        "attrs": None,
+    }
+    flag = tmp_path / "flag_append"
+    df = _moving_source(
+        spark_delta,
+        flag,
+        ((0, 0, 0), (6, 10, 12)),
+        ((6, 0, 0), (6, 10, 12)),
+        [time_block],
+    )
+    _flip_before_files(no_hooks, flag)
+    with pytest.raises(ZarrError, match="materialize it as a table") as e:
+        gbx_zarr_write(df, table, mode="append")
+    assert "Fix:" in str(e.value) and _latest(spark_delta, table) == version
+
+
+def test_the_position_pass_never_selects_the_data_column(spark_delta):
+    """I5: pass 1 projects positions only, so a staged input is not read for its bytes."""
+    df = _blocks(spark_delta, ("t2m", (0, 0, 0), np.zeros((2, 2, 2), "float32")))
+    seen = []
+
+    class Spy:
+        columns = df.columns
+
+        def select(self, *cols):
+            seen.extend(str(c) for c in cols)
+            return df.select(*cols)
+
+    _write._position_pass(Spy())
+    assert seen and not any("data" in c for c in seen)
+
+
+def test_p3_explicit_codecs_round_trip_and_bad_chains_fail_while_planning(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    from zarr.codecs import BytesCodec, ZstdCodec
+
+    ds = _dataset(hours=24)
+    chain = [
+        {"name": "bytes", "configuration": {"endian": "little"}},
+        {"name": "zstd", "configuration": {"level": 7, "checksum": False}},
+    ]
+    for label, shards, codecs in (
+        ("sharded", None, chain),
+        ("unsharded", False, chain),
+        ("objects", None, [BytesCodec(), ZstdCodec(level=5)]),
+    ):
+        table, _, _ = _create(
+            spark_delta,
+            drop,
+            tmp_path,
+            ds,
+            label=f"p3{label}",
+            shards=shards,
+            codecs=codecs,
+        )
+        np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
+        doc = json.loads(
+            spark_delta.sql(
+                f"SELECT meta FROM {table} WHERE kind = 'array' AND array = 't2m'"
+            ).first()["meta"]
+        )
+        inner = (
+            doc["codecs"][0]["configuration"]["codecs"]
+            if shards is None
+            else doc["codecs"]
+        )
+        assert [c["name"] for c in inner] == ["bytes", "zstd"]
+    for label, codecs in (
+        ("noserializer", [{"name": "zstd", "configuration": {"level": 3}}]),
+        ("unknown", [{"name": "bytes"}, {"name": "lz77"}]),
+        ("notacodec", [object()]),
+    ):
+        table = _table(f"p3{label}")
+        with pytest.raises(ZarrUnsupported) as e:
+            gbx_zarr_write(
+                ds,
+                table,
+                root=str(tmp_path / label),
+                chunks=CHUNKS,
+                codecs=codecs,
+                spark=spark_delta,
+            )
+        assert "Fix:" in str(e.value)
+        assert not spark_delta.catalog.tableExists(table)  # refused before any table
+
+
+def test_p4_a_new_variable_in_a_registered_v2_store(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    store, table = _registered(spark_delta, drop, tmp_path, "p4", fmt=2)
+    full = xr.open_zarr(str(store), consolidated=False)
+    extra = (
+        full[["t2m"]].isel(time=slice(0, 12)).rename({"t2m": "sp"}).load() * 0 + 1013.0
+    )
+    gbx_zarr_write(extra, table, mode="update", spark=spark_delta)
+    got = _read(spark_delta, table, "sp")
+    assert got.shape == (48, 73, 144)
+    assert (got[:12] == 1013.0).all() and np.isnan(got[12:]).all()
+    zarray = json.loads(
+        spark_delta.sql(
+            f"SELECT meta FROM {table} WHERE kind = 'array' AND array = 'sp' "
+            "AND key = '.zarray'"
+        ).first()["meta"]
+    )
+    assert zarray["compressor"] == {"id": "zstd", "level": 3}
+    keys = {
+        r["key"]
+        for r in spark_delta.sql(
+            f"SELECT key FROM {table} WHERE kind = 'chunk' AND array = 'sp'"
+        ).collect()
+    }
+    assert keys and all("." in k and "/" not in k for k in keys)  # v2 keys, like 0.0.0
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), full.t2m.values)
+
+
+@pytest.mark.parametrize("how", ["concurrent", "cas"])
+def test_p5_the_rebase_after_a_merge_level_conflict(
+    spark_delta, drop, tmp_path, no_hooks, how
+):
+    """I8(a): the two branches that react at the MERGE. Day 3 lands inside day 2's commit
+    call: as a row-level conflict (ConcurrentCommit), or before the MERGE runs so it aborts
+    on metadata only. Day 2 rebases and lands either way."""
+    ds = _dataset(hours=72)
+    day = {d: ds.isel(time=slice(24 * (d - 1), 24 * d)) for d in (1, 2, 3)}
+    chunks = {"time": 24, "latitude": 5, "longitude": 6}
+    table, _, _ = _create(spark_delta, drop, tmp_path, day[1], chunks=chunks)
+    two, three = uuid.uuid4().hex, uuid.uuid4().hex
+    real, calls = M.commit, []
+
+    def racing(spark_, table_, rows, *, write_id, meta, sharded=None):
+        calls.append(write_id)
+        if write_id == two and calls.count(two) == 1:
+            gbx_zarr_write(
+                day[3], table, mode="append", write_id=three, spark=spark_delta
+            )
+            if how == "concurrent":
+                raise M.ConcurrentCommit("simulated row-level conflict. Fix: retry.")
+        return real(spark_, table_, rows, write_id=write_id, meta=meta, sharded=sharded)
+
+    no_hooks.setattr(_write.M, "commit", racing)
+    no_hooks.setattr(_write, "_pause", lambda s: None)
+    gbx_zarr_write(day[2], table, mode="append", write_id=two, spark=spark_delta)
+    assert calls.count(two) == 2
+    np.testing.assert_array_equal(_read(spark_delta, table, "time"), ds.time.values)
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
+
+
+def test_p7_an_update_fills_the_gap_an_out_of_order_append_left(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    ds = _dataset(hours=72)
+    day = {d: ds.isel(time=slice(24 * (d - 1), 24 * d)) for d in (1, 2, 3)}
+    chunks = {"time": 24, "latitude": 5, "longitude": 6}
+    table, _, _ = _create(spark_delta, drop, tmp_path, day[1], chunks=chunks)
+    gbx_zarr_write(day[3], table, mode="append", spark=spark_delta)
+    with pytest.raises(ValueError, match="fill a gap"):
+        gbx_zarr_write(day[2], table, mode="append", spark=spark_delta)
+    gbx_zarr_write(day[2], table, mode="update", spark=spark_delta)
+    np.testing.assert_array_equal(_read(spark_delta, table, "time"), ds.time.values)
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
+
+
+@pytest.mark.parametrize("how", ["once", "always"])
+def test_p9_a_create_whose_commit_landed_keeps_its_marker(
+    spark_delta, drop, tmp_path, no_hooks, how
+):
+    """I7: the lookup after the MERGE fails (a transient error once, or every time). The
+    commit is in, so the marker must stay and the store stays writable."""
+    root, table = tmp_path / f"r9{how}", _table(f"p9{how}")
+    drop(table)
+    real, calls = M.find_commit_version, []
+
+    def flaky(spark_, table_, write_id, *, since=0):
+        calls.append(1)
+        if len(calls) >= 2 and (how == "always" or len(calls) == 2):
+            raise RuntimeError("transient lookup failure")
+        return real(spark_, table_, write_id, since=since)
+
+    no_hooks.setattr(M, "find_commit_version", flaky)
+    wid = uuid.uuid4().hex
+    if how == "once":
+        assert (
+            gbx_zarr_write(
+                _dataset(),
+                table,
+                root=str(root),
+                chunks=CHUNKS,
+                write_id=wid,
+                spark=spark_delta,
+            )
+            == 1
+        )
+    else:
+        with pytest.raises(RuntimeError, match="transient"):
+            gbx_zarr_write(
+                _dataset(),
+                table,
+                root=str(root),
+                chunks=CHUNKS,
+                write_id=wid,
+                spark=spark_delta,
+            )
+    no_hooks.setattr(M, "find_commit_version", real)
+    assert real(spark_delta, table, wid) == 1
+    assert (root / OWNER_MARKER).exists()
+    gbx_zarr_write(
+        _dataset(hours=24, start="2023-01-03"), table, mode="append", spark=spark_delta
+    )
+
+
+def test_p10_an_append_of_fill_stores_no_chunk(spark_delta, drop, tmp_path, no_hooks):
+    """M2 (Ruling Z40): chunks of fill are dropped in every mode."""
+    table, _, _ = _create(spark_delta, drop, tmp_path)
+    nxt = _dataset(hours=24, start="2023-01-03")
+    nxt["t2m"][:] = np.nan
+    wid = uuid.uuid4().hex
+    gbx_zarr_write(nxt, table, mode="append", write_id=wid, spark=spark_delta)
+    assert [r for r in _rows_of(spark_delta, table, wid) if r["array"] == "t2m"] == []
+    got = _read(spark_delta, table, "t2m")
+    assert got.shape == (72, 10, 12) and np.isnan(got[48:]).all()
+
+
+def test_p11_an_update_with_coordinate_blocks_keeps_labels_appended_meanwhile(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """I2: the update rewrites day 1's time labels; day 2 is appended before it commits.
+    The rebase reads the latest time chunk, so day 2's labels survive."""
+    ds = _dataset(hours=48)
+    day1, day2 = ds.isel(time=slice(0, 24)), ds.isel(time=slice(24, 48))
+    chunks = {"time": 24, "latitude": 5, "longitude": 6}
+    table, _, _ = _create(spark_delta, drop, tmp_path, day1, chunks=chunks)
+    upd, ran = uuid.uuid4().hex, []
+
+    def append_first(wid):
+        if wid == upd and not ran:
+            ran.append(gbx_zarr_write(day2, table, mode="append", spark=spark_delta))
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", append_first)
+    blocks = _blocks(
+        spark_delta,
+        ("t2m", (0, 0, 0), np.full((24, 5, 6), 7.0, "float32")),
+        ("time", (0,), day1.time.values),
+    )
+    gbx_zarr_write(blocks, table, mode="update", write_id=upd)
+    np.testing.assert_array_equal(_read(spark_delta, table, "time"), ds.time.values)
+    got = _read(spark_delta, table, "t2m")
+    assert (got[0:24, 0:5, 0:6] == 7.0).all()
+    np.testing.assert_array_equal(got[24:], day2.t2m.values)
+
+
+def test_p12_a_new_variable_written_while_another_write_appends_takes_the_new_extent(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """I3: the new array's write guards the documents it was sized from, so the append
+    landing first forces a rebase that re-sizes it."""
+    ds = _dataset(hours=48)
+    day1, day2 = ds.isel(time=slice(0, 24)), ds.isel(time=slice(24, 48))
+    table, _, _ = _create(spark_delta, drop, tmp_path, day1)
+    new, ran = uuid.uuid4().hex, []
+
+    def append_first(wid):
+        if wid == new and not ran:
+            ran.append(gbx_zarr_write(day2, table, mode="append", spark=spark_delta))
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", append_first)
+    extra = day1[["t2m"]].rename({"t2m": "sp"}).isel(time=slice(0, 12)) * 0 + 1.0
+    gbx_zarr_write(extra, table, mode="update", write_id=new, spark=spark_delta)
+    shapes = {
+        r["array"]: json.loads(r["meta"])["shape"]
+        for r in spark_delta.sql(
+            f"SELECT array, meta FROM {table} WHERE kind = 'array' AND tag IS NULL"
+        ).collect()
+    }
+    assert shapes["sp"] == shapes["t2m"] == [48, 10, 12] and shapes["time"] == [48]
+
+
+def test_an_append_grows_an_array_created_after_its_base(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """I3, the other order: the new array lands first; the append, whose base predates
+    it, grows it at commit time."""
+    ds = _dataset(hours=48)
+    day1, day2 = ds.isel(time=slice(0, 24)), ds.isel(time=slice(24, 48))
+    table, _, _ = _create(spark_delta, drop, tmp_path, day1)
+    app, ran = uuid.uuid4().hex, []
+    extra = day1[["t2m"]].rename({"t2m": "sp"}).isel(time=slice(0, 12)) * 0 + 1.0
+
+    def new_variable_first(wid):
+        if wid == app and not ran:
+            ran.append(gbx_zarr_write(extra, table, mode="update", spark=spark_delta))
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", new_variable_first)
+    gbx_zarr_write(day2, table, mode="append", write_id=app, spark=spark_delta)
+    got = _read(spark_delta, table, "sp")
+    assert got.shape == (48, 10, 12) and (got[:12] == 1.0).all()
+
+
+@pytest.mark.parametrize("same", [False, True])
+def test_m11_two_writers_setting_one_label_differently_conflict(
+    spark_delta, drop, tmp_path, no_hooks, same
+):
+    """M11 (Ruling Z40): a coordinate cell both writers set is data: different values
+    conflict, equal values merge."""
+    ds = _dataset(hours=24)
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds)
+    lon = ds.longitude.values
+    mine, theirs = lon + 0.5, lon + (0.5 if same else 0.25)
+    b, ran = uuid.uuid4().hex, []
+
+    def other_first(wid):
+        if wid == b and not ran:
+            ran.append(
+                gbx_zarr_write(
+                    _blocks(spark_delta, ("longitude", (0,), theirs)),
+                    table,
+                    mode="update",
+                )
+            )
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", other_first)
+    blocks = _blocks(spark_delta, ("longitude", (0,), mine))
+    if same:
+        gbx_zarr_write(blocks, table, mode="update", write_id=b)
+        np.testing.assert_array_equal(_read(spark_delta, table, "longitude"), mine)
+    else:
+        with pytest.raises(ZarrWriteConflict, match="different values") as e:
+            gbx_zarr_write(blocks, table, mode="update", write_id=b)
+        assert "longitude/c/0" in e.value.keys
+        np.testing.assert_array_equal(_read(spark_delta, table, "longitude"), theirs)
+
+
+# --- create edge cases (I6, M14) ------------------------------------------------------------
+
+
+def test_i6_create_refuses_an_existing_root_that_is_not_its_own(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    full = tmp_path / "vendor.zarr"
+    full.mkdir()
+    (full / "zarr.json").write_text("{}")
+    with pytest.raises(ZarrOwnershipError, match="not empty") as e:
+        gbx_zarr_write(_dataset(), _table("i6"), root=str(full), spark=spark_delta)
+    assert "Fix:" in str(e.value) and not (full / OWNER_MARKER).exists()
+    theirs, _, _ = _create(spark_delta, drop, tmp_path, label="theirs")
+    with pytest.raises(ZarrOwnershipError, match="already owned"):
+        gbx_zarr_write(
+            _dataset(),
+            _table("i6b"),
+            root=str(tmp_path / "root_theirs"),
+            spark=spark_delta,
+        )
+    empty = tmp_path / "empty"
+    empty.mkdir()
+    table = _table("i6c")
+    drop(table)
+    assert gbx_zarr_write(
+        _dataset(), table, root=str(empty), chunks=CHUNKS, spark=spark_delta
+    )
+
+
+def test_m14_a_create_retried_after_a_crash_adopts_its_empty_manifest(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    from databricks.labs.gbx.zarr._register import _claim_marker, qualified_table_name
+
+    table, root = _table("m14"), tmp_path / "m14"
+    drop(table)
+    owner = qualified_table_name(spark_delta, table)
+    _claim_marker(str(root), owner, "managed")  # the crashed attempt got this far
+    M.create_manifest(
+        spark_delta,
+        table,
+        M.StoreProps("managed", str(root), None, True, "fuse", "7 days"),
+    )
+    (root / "data").mkdir()  # and wrote some packs
+    v = gbx_zarr_write(
+        _dataset(), table, root=str(root), chunks=CHUNKS, spark=spark_delta
+    )
+    assert v == 1
+    np.testing.assert_array_equal(
+        _read(spark_delta, table, "t2m"), _dataset().t2m.values
+    )
+
+
+def test_m14_a_losing_create_keeps_the_marker_the_winner_relies_on(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    table, root = _table("m14b"), tmp_path / "m14b"
+    drop(table)
+    real = M.create_manifest
+
+    def the_other_wins(spark_, table_, props):
+        real(spark_, table_, props)  # a concurrent create of the same table got there
+        raise ZarrOwnershipError(f"{table_} already exists", fix="choose another")
+
+    no_hooks.setattr(_write.M, "create_manifest", the_other_wins)
+    with pytest.raises(ZarrOwnershipError):
+        gbx_zarr_write(
+            _dataset(), table, root=str(root), chunks=CHUNKS, spark=spark_delta
+        )
+    assert (root / OWNER_MARKER).exists()
+
+
+# --- the rest of the rebase loop, and the marker wiring (M1) ---------------------------------
+
+
+def test_a_rebase_refuses_a_layout_another_write_changed(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    ds = _dataset(hours=48)
+    table, _, _ = _create(spark_delta, drop, tmp_path, ds.isel(time=slice(0, 24)))
+    app, ran = uuid.uuid4().hex, []
+
+    def relayout(wid):
+        if wid == app and not ran:
+            row = spark_delta.sql(
+                f"SELECT meta, write_id FROM {table} WHERE kind = 'array' AND array = 't2m'"
+            ).first()
+            doc = json.loads(row["meta"])
+            doc["codecs"][0]["configuration"]["codecs"][1]["configuration"]["level"] = 9
+            w = uuid.uuid4().hex
+            import pyarrow as pa
+
+            ran.append(
+                M.commit(
+                    spark_delta,
+                    table,
+                    pa.Table.from_pylist(
+                        [
+                            dict(
+                                kind="array",
+                                array="t2m",
+                                key="zarr.json",
+                                write_id=w,
+                                op="upsert",
+                                expected_write_id=row["write_id"],
+                                meta=json.dumps(doc),
+                            )
+                        ]
+                    ),
+                    write_id=w,
+                    meta={},
+                )
+            )
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", relayout)
+    with pytest.raises(ZarrWriteConflict, match="layout"):
+        gbx_zarr_write(
+            ds.isel(time=slice(24, 48)),
+            table,
+            mode="append",
+            write_id=app,
+            spark=spark_delta,
+        )
+
+
+def test_the_rebase_loop_gives_up_after_five_attempts(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    table, _, _ = _create(spark_delta, drop, tmp_path)
+    calls = []
+
+    def always_busy(*a, **k):
+        calls.append(1)
+        raise M.ConcurrentCommit("busy. Fix: retry.")
+
+    no_hooks.setattr(_write.M, "commit", always_busy)
+    no_hooks.setattr(_write, "_pause", lambda s: None)
+    with pytest.raises(ZarrWriteConflict, match="gave up after 5 attempts") as e:
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32"))),
+            table,
+            mode="update",
+        )
+    assert len(calls) == 5 and "Fix:" in str(e.value)
+
+
+def test_a_write_to_a_root_whose_marker_is_gone_is_refused(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    import types
+
+    from databricks.labs.gbx.core import _retry
+
+    no_hooks.setattr(_retry, "time", types.SimpleNamespace(sleep=lambda s: None))
+    table, root, version = _create(spark_delta, drop, tmp_path)
+    (root / OWNER_MARKER).unlink()
+    with pytest.raises(ZarrOwnershipError, match="no owner marker"):
+        gbx_zarr_write(
+            _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32"))),
+            table,
+            mode="update",
+        )
+    assert _latest(spark_delta, table) == version

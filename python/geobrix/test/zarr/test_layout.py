@@ -22,8 +22,9 @@ DIMS = ("time", "latitude", "longitude")
         # (1440 -> 2048 longitudes) times as many steps as fit in 128 MiB (22)
         ("maps", (1, 721, 1024), (22, 721, 2048)),
         # 32 x 32 tiles of all 744 steps (4 MiB / 4 KiB = 1024, clipped); the globe's
-        # shard (736 x 1440) halved three times in whole chunks to fit 128 MiB
-        ("series", (744, 32, 32), (744, 96, 192)),
+        # shard (736 x 1440) halved three times in whole chunks to fit 128 MiB, then two
+        # leading chunks fit (past the 744 steps there are: room for appends)
+        ("series", (744, 32, 32), (1488, 96, 192)),
         # 24 steps, s = floor(sqrt(4 MiB / (24 x 4 B))) = 209; the whole globe in 4 x 7
         # chunks fits one shard of 24 steps, two would not
         ("balanced", (24, 209, 209), (24, 836, 1463)),
@@ -52,9 +53,16 @@ def test_a_dict_sets_some_dimensions_and_the_rest_are_balanced():
     assert math.prod(shards) * 4 <= SHARD_CAP_BYTES
 
 
-def test_small_arrays_are_clipped_and_one_shard():
+def test_small_arrays_are_clipped_and_their_leading_shard_grows_past_the_extent():
+    """Ruling Z40 (M7): the leading shard grows by whole chunks while it stays within
+    128 MiB, past today's length, so a store created small and appended to along time
+    keeps filling the same shards."""
     chunks, shards = chunk_layout((48, 73, 144), DIMS, "float32")
-    assert chunks == (24, 73, 144) and shards == (48, 73, 144)
+    assert chunks == (24, 73, 144)
+    assert shards == (24 * 133, 73, 144)  # 133 slabs of 24 x 73 x 144 x 4 B fit 128 MiB
+    assert math.prod(shards) * 4 <= SHARD_CAP_BYTES
+    one_step = chunk_layout((1, 721, 1440), DIMS, "float32")
+    assert one_step[0][0] == 1 and one_step[1][0] > 1  # an hourly store's first hour
 
 
 def test_other_ranks():

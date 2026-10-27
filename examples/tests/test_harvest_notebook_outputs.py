@@ -74,6 +74,22 @@ def test_apply_outputs_keeps_cells_with_unsupported_result_types():
     assert nb["cells"][0]["outputs"] == kept
 
 
+def test_apply_outputs_tolerates_the_result_of_a_notebook_exit_cell():
+    """A cell that ends in dbutils.notebook.exit(value) comes back with ``results`` of type
+    "raw" whose ``data`` is the exit value (a string), not a list of items: it has no
+    output of its own, and its neighbours still get theirs."""
+    nb = {"cells": [_code("print('a')"), _code("dbutils.notebook.exit('done')")]}
+    model = {"commands": [
+        _cmd(1, "print('a')", ANSI),
+        {"position": 2, "command": "dbutils.notebook.exit('done')",
+         "results": {"type": "raw", "data": "done"}},
+    ]}
+    assert apply_outputs(nb, model) == (2, [])
+    assert nb["cells"][0]["outputs"][0]["text"] == ["a\n", "b\n"]
+    assert nb["cells"][1]["outputs"] == []
+    assert hno._n_items(model) == 1
+
+
 def test_dump_like_preserves_serialization():
     nb = {"cells": [_code("x = '—'")], "metadata": {}, "nbformat": 4, "nbformat_minor": 5}
     for ensure_ascii in (False, True):

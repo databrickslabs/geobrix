@@ -51,10 +51,21 @@ def _lines(text: str) -> list[str]:
 SUPPORTED = ("ansi", "mimeBundle")
 
 
+def _items(results) -> list:
+    """The result items of a command's ``results``.
+
+    A cell that ends in ``dbutils.notebook.exit(value)`` comes back with ``results`` of type
+    ``raw`` whose ``data`` is the exit value itself (a string), not a list of items: it has
+    none.
+    """
+    data = results.get("data") if isinstance(results, dict) else None
+    return data if isinstance(data, list) else []
+
+
 def to_outputs(results: dict | None) -> list[dict]:
     """Convert a command's ``results`` to nbformat v4 outputs (``SUPPORTED`` item types)."""
     outs = []
-    for item in (results or {}).get("data") or []:
+    for item in _items(results):
         kind = item.get("type")
         if kind == "ansi" and item.get("data"):
             outs.append({"name": item.get("name") or "stdout", "output_type": "stream",
@@ -90,7 +101,7 @@ def apply_outputs(nb: dict, model: dict) -> tuple[int, list[int]]:
         if key.startswith(("%pip", "%restart_python", "%run")):
             continue
         cmd = executed.pop(key, None)
-        items = ((cmd or {}).get("results") or {}).get("data") or []
+        items = _items((cmd or {}).get("results"))
         if cmd is None or any(it.get("type") not in SUPPORTED for it in items):
             unmatched.append(i)
             continue
@@ -122,7 +133,7 @@ def _export_model(run_id, profile: str) -> dict:
 
 
 def _n_items(model: dict) -> int:
-    return sum(len((c.get("results") or {}).get("data") or []) for c in model.get("commands", []))
+    return sum(len(_items(c.get("results"))) for c in model.get("commands", []))
 
 
 def harvest_run_outputs(run_id, profile: str, local_nb_path, settle_s: int = 20) -> tuple[int, list[int]]:

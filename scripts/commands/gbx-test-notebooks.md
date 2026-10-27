@@ -55,6 +55,10 @@ bash scripts/commands/gbx-test-notebooks.sh --allow-absolute-reads
 bash scripts/commands/gbx-test-notebooks.sh --allow-absolute-writes
 ```
 
+## Python version
+
+Everything runs in the container (Python 3.12), including the pytest files under `examples/tests/` (`--path test_job_submit.py`, `--path test_harvest_notebook_outputs.py`, ...). Run them through this command rather than with a host `pytest`: `run_notebooks_serverless.py`, which some of them import, needs `tomllib` (Python 3.11+), and a host `python3` older than that cannot import it.
+
 ## Test location
 
 - **Runner**: `examples/tests/run_notebooks_cell_by_cell.py` (discovers and runs notebooks).

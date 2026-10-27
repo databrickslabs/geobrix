@@ -11,7 +11,10 @@ NC='\033[0m'
 
 # Maven env for Docker runs: unset conflicting opts, set Jupyter dirs, and tune Maven/JVM for coverage
 # MAVEN_OPTS speeds up builds and scoverage (G1GC + 4G heap when running in geobrix-dev)
-export DOCKER_MAVEN_ENV="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export MAVEN_OPTS=\"-Xmx4G -XX:+UseG1GC\""
+# LC_ALL: the container has no locale, so the JVM's sun.jnu.encoding would be ASCII and the tests
+# that create non-ASCII file names (NodeFilePathUtilTest) would cancel; every Maven run that
+# executes tests gets the same locale (gbx:test:scala passes it with `docker exec -e` as well).
+export DOCKER_MAVEN_ENV="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export LC_ALL=C.UTF-8 && export MAVEN_OPTS=\"-Xmx4G -XX:+UseG1GC\""
 
 check_docker() {
     if ! docker ps &> /dev/null; then

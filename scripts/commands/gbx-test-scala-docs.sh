@@ -90,7 +90,7 @@ echo ""
 SAMPLE_DATA_ROOT_MAVEN=""
 [ "$SET_SAMPLE_DATA_ROOT" = true ] && SAMPLE_DATA_ROOT_MAVEN="export GBX_SAMPLE_DATA_ROOT=/Volumes/main/default/test-data && "
 
-MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
+MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export LC_ALL=C.UTF-8 && ${SAMPLE_DATA_ROOT_MAVEN}cd /root/geobrix && mvn test -Dsuites='$SUITE_PATTERN'"
 
 docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_CMD"
 EXIT_CODE=$?

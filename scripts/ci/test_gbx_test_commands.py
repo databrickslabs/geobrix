@@ -208,6 +208,42 @@ def test_scala_runs_pass_a_utf8_locale_to_the_container(sandbox):
     assert all(e.get("LC_ALL") == "C.UTF-8" for _, e in maven), [e for _, e in maven]
 
 
+@pytest.mark.parametrize(
+    "command, args",
+    [
+        ("gbx-test-scala-docs.sh", []),
+        ("gbx-coverage-scala.sh", []),
+        ("gbx-coverage-scala.sh", ["--by-package"]),
+        ("gbx-coverage-scala-package.sh", ["rasterx"]),
+        ("gbx-coverage-scala-docs.sh", []),
+        ("gbx-bench-heavyweight.sh", ["--functions", "gbx_rst_x"]),
+    ],
+    ids=[
+        "scala-docs",
+        "coverage",
+        "coverage-by-package",
+        "coverage-package",
+        "coverage-docs",
+        "bench",
+    ],
+)
+def test_every_maven_test_run_gets_the_utf8_locale(sandbox, command, args):
+    # gbx:test:scala had it; the other Maven test runs cancelled the non-ASCII file-name tests
+    # (NodeFilePathUtilTest) for want of a locale, so coverage and the suite disagreed.
+    sandbox.run(command, *args)
+
+    maven = [
+        (c, e)
+        for c, e in zip(sandbox.execs(), sandbox.exec_envs())
+        if re.search(
+            r"\bmvn (clean )?(scoverage:(test|integration-check)|test)\b", c[-1]
+        )
+    ]
+    assert maven, sandbox.execs()
+    for c, e in maven:
+        assert e.get("LC_ALL") == "C.UTF-8" or "export LC_ALL=C.UTF-8" in c[-1], c[-1]
+
+
 # ------------------------------------- light-tier tests run natively on the host (no container)
 
 

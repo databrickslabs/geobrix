@@ -93,11 +93,11 @@ echo ""
 show_separator
 if [ "$REPORT_ONLY" = true ]; then
     echo -e "${CYAN}Generating report from existing data...${NC}"
-    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn scoverage:report-only -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.reportDir=target/scoverage-docs-report"
+    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export LC_ALL=C.UTF-8 && cd /root/geobrix && mvn scoverage:report-only -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.reportDir=target/scoverage-docs-report"
 else
     echo -e "${CYAN}Running documentation tests with coverage...${NC}"
     # Run only doc tests with coverage, output to separate directory
-    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && cd /root/geobrix && mvn clean scoverage:integration-check -Dsuites='tests.docs.scala.*' -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.reportDir=target/scoverage-docs-report"
+    MVN_CMD="unset JAVA_TOOL_OPTIONS && export JUPYTER_PLATFORM_DIRS=1 && export LC_ALL=C.UTF-8 && cd /root/geobrix && mvn clean scoverage:integration-check -Dsuites='tests.docs.scala.*' -Dminimum.coverage=$MIN_COVERAGE -Dscoverage.reportDir=target/scoverage-docs-report"
 fi
 show_separator
 echo ""

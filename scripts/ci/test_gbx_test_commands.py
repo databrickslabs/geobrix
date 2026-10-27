@@ -498,6 +498,8 @@ def test_the_sdk_python_is_the_venv_only_when_the_venv_can_import_the_sdk(
     # With the SDK: the venv as it is. Without it (the CI-lock venv): uv layers the SDK, and any
     # extra package, over the venv's own interpreter, so the venv's packages stay importable.
     # No venv: uv on 3.12. No uv: system python3, if it can import the SDK.
+    # The uv cases use the sandbox's fake uv: a CI runner may have no uv on PATH.
+    _fake_uv(sandbox)
     uv = ["uv", "run", "--no-project", "--python"]
     with_sdk, _ = _venv_python(sandbox, sdk=True)
     assert _sdk_python(sandbox) == [str(with_sdk)]

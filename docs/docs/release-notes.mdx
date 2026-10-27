@@ -611,6 +611,9 @@ formats.
 - **Photogrammetry extras:** `pycolmap` and `pycolmap-cuda12` move to 4.2.1.
 - **The GeoBrix JAR no longer bundles the Scala standard library;** Databricks Runtime provides
   it. Nothing changes for users.
+- **The GeoBrix JAR bundles `h3` 3.7.3, the version Databricks Runtime 17.3, 18 and 19 ship,
+  and no longer bundles `proj4j`.** Nothing in GeoBrix used `proj4j`, so coordinate handling is
+  unchanged.
 
 ### Examples
 

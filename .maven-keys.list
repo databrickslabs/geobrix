@@ -45,7 +45,6 @@
 #   com.fasterxml.jackson.core:* https://github.com/FasterXML/jackson signing keys
 #   com.uber:h3                  https://github.com/uber/h3-java release signatures
 #   org.locationtech.jts.*       https://github.com/locationtech/jts release signatures
-#   org.locationtech.proj4j.*    https://github.com/locationtech/proj4j release signatures
 #   org.gdal:gdal                https://github.com/OSGeo/gdal release signatures
 #   junit:junit                  https://repo.maven.apache.org/maven2/junit/junit/.../*.asc
 #   org.codehaus.mojo:*          https://www.mojohaus.org/ release signing keys
@@ -312,8 +311,6 @@ org.jline:jline-terminal                                                 = 0xEA2
 org.jsoup:jsoup                                                          = 0xF3184BCD55F4D016E30D4C9BF42E87F9665015C9
 org.locationtech.jts.io:jts-io-common                                    = 0x6EB0DED2F354B5D1DD24006168127E5CB45F41F3
 org.locationtech.jts:jts-core                                            = 0x6EB0DED2F354B5D1DD24006168127E5CB45F41F3
-org.locationtech.proj4j:proj4j-epsg                                      = 0x3B854F176E251D753BB2FF1BBAE04B4DA2C66578
-org.locationtech.proj4j:proj4j                                           = 0x3B854F176E251D753BB2FF1BBAE04B4DA2C66578
 org.nibor.autolink:autolink                                              = 0x624B96CEB9896889C97B258F7DC3076FE22D4F88
 org.ow2.asm:asm                                                          = 0xA5BD02B93E7A40482EB1D66A5F69AD087600B22C
 org.scala-lang.modules:scala-parallel-collections_2.13                   = 0xC44A68FD10FF456C91E2757D18088D07854014B3
@@ -426,8 +423,6 @@ com.thoughtworks.qdox:qdox:jar:2.2.0                                            
 com.thoughtworks.qdox:qdox:pom:2.2.0                                                       = noSig
 com.typesafe:config:jar:1.2.0                                                              = noSig
 com.typesafe:config:pom:1.2.0                                                              = noSig
-com.uber:h3:jar:3.7.0                                                                      = noSig
-com.uber:h3:pom:3.7.0                                                                      = noSig
 commons-cli:commons-cli:jar:1.0                                                            = noSig
 commons-cli:commons-cli:pom:1.0                                                            = noSig
 commons-codec:commons-codec:jar:1.11                                                       = noSig
@@ -913,10 +908,6 @@ org.locationtech.jts.io:jts-io-common:jar:1.20.0                                
 org.locationtech.jts.io:jts-io-common:pom:1.20.0                                           = noSig
 org.locationtech.jts:jts-core:jar:1.20.0                                                   = noSig
 org.locationtech.jts:jts-core:pom:1.20.0                                                   = noSig
-org.locationtech.proj4j:proj4j-epsg:jar:1.3.0                                              = noSig
-org.locationtech.proj4j:proj4j-epsg:pom:1.3.0                                              = noSig
-org.locationtech.proj4j:proj4j:jar:1.3.0                                                   = noSig
-org.locationtech.proj4j:proj4j:pom:1.3.0                                                   = noSig
 org.mortbay.jetty:jetty-util:jar:6.1.25                                                    = noSig
 org.mortbay.jetty:jetty-util:pom:6.1.25                                                    = noSig
 org.mortbay.jetty:jetty:jar:6.1.25                                                         = noSig
@@ -1105,6 +1096,10 @@ org.apache.maven.plugins:maven-install-plugin:jar:3.2.0                         
 org.apache.maven.plugins:maven-install-plugin:pom:3.2.0                                    = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
 org.apache.maven.plugins:maven-deploy-plugin:jar:3.1.4                                     = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
 org.apache.maven.plugins:maven-deploy-plugin:pom:3.1.4                                     = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
+org.apache.maven.plugins:maven-deploy-plugin:jar:3.2.0                                     = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
+org.apache.maven.plugins:maven-deploy-plugin:pom:3.2.0                                     = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
+org.apache.maven.plugins:maven-clean-plugin:jar:3.5.0                                      = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
+org.apache.maven.plugins:maven-clean-plugin:pom:3.5.0                                      = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
 org.apache.maven.shared:file-management:jar:3.2.0                                          = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
 org.apache.maven.shared:file-management:pom:3.2.0                                          = 0x84789D24DF77A32433CE1F079EB80E92EB2135B1
 org.apache.maven.plugins:maven-compiler-plugin:jar:3.15.0                                  = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
@@ -1118,18 +1113,12 @@ org.codehaus.plexus:plexus-compiler-manager:pom:2.16.2                          
 
 # --- 2026-10-01: Dependabot dependency bumps (PRs #104/#105/#107 + transitives) ---
 #
-# proj4j-epsg 1.4.3 (#104, runtime JAR dependency) is now SIGNED (1.3.0 was noSig).
 # maven-jar-plugin 3.5.1 (#107) + build-helper-maven-plugin 3.6.2 (#105) and the
 # transitive plexus-compiler-* / plexus-utils bumps (pulled by maven-compiler-plugin
 # 3.16.0, #106) are signed by keys ALREADY trusted elsewhere in this keysmap.
 # maven-compiler-plugin 3.16.0 itself verifies against the general 0x84789D24 entry.
 #
 # Trust verification (2026-10-01):
-#
-#   0x21C69D5001D89593B30B028B4404968560D6F9E6   (NEW to this keysmap)
-#       uid: Grigory Pomadchin <gr.pomadchin@gmail.com>
-#       #1 contributor to github.com/locationtech/proj4j (lead maintainer and
-#       Maven Central publisher); org.locationtech.proj4j is a verified namespace.
 #
 #   0x6DE9B8077FBB2F8A019F4904BD17A565509DEE20   (NEW to this keysmap; build-time only)
 #       uid: Jean-Pierre Lerbscher <jean-pierre.lerbscher@jperf.com>
@@ -1141,8 +1130,6 @@ org.codehaus.plexus:plexus-compiler-manager:pom:2.16.2                          
 #   0x88BE34F94BDB2B5357044E2E3A387D43964143E3  (Apache Maven general signer for
 #       maven-deploy/-install/enforcer) are already trusted above / elsewhere here.
 
-org.locationtech.proj4j:proj4j-epsg:jar:1.4.3                                              = 0x21C69D5001D89593B30B028B4404968560D6F9E6
-org.locationtech.proj4j:proj4j-epsg:pom:1.4.3                                              = 0x21C69D5001D89593B30B028B4404968560D6F9E6
 org.codehaus.mojo:build-helper-maven-plugin:jar:3.6.2                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
 org.codehaus.mojo:build-helper-maven-plugin:pom:3.6.2                                      = 0x32118CF76C9EC5D918E54967CA80D1F0EB6CA4BA
 org.apache.maven.plugins:maven-jar-plugin:jar:3.5.1                                        = 0x88BE34F94BDB2B5357044E2E3A387D43964143E3

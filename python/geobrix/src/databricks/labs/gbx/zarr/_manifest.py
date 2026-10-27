@@ -26,6 +26,7 @@ from datetime import datetime, timedelta, timezone
 import pyarrow as pa
 import pyarrow.compute as pc
 
+from databricks.labs.gbx.zarr._meta import is_sharded_doc
 from databricks.labs.gbx.zarr.errors import (
     ZarrError,
     ZarrOwnershipError,
@@ -715,6 +716,76 @@ def _commit_source(rows: pa.Table, write_id: str, meta: dict) -> pa.Table:
     )
 
 
+def _sharded_arrays(spark, table: str, source: pa.Table, names: list[str]) -> set[str]:
+    """Which of the arrays ``names`` are sharded: by the array document this commit writes,
+    else by the one the table holds now. An array nobody has described is not."""
+    docs: dict[str, str | None] = {}
+    described = source.filter(
+        pc.and_(
+            pc.equal(source.column("kind"), "array"),
+            pc.equal(source.column("op"), "upsert"),
+        )
+    )
+    for row in described.to_pylist():
+        if row["key"] == "zarr.json" and row["array"] in names:
+            docs[row["array"]] = row["meta"]
+    missing = [n for n in names if n not in docs]
+    if missing:
+        snap = Snapshot(table, _latest_version(spark, table))
+        for row in read_rows(spark, snap, kinds="array", arrays=missing).to_pylist():
+            if row["key"] == "zarr.json":
+                docs[row["array"]] = row["meta"]
+
+    def sharded(text) -> bool:
+        try:
+            return is_sharded_doc(json.loads(text))
+        except (TypeError, ValueError):
+            return False
+
+    return {n for n, text in docs.items() if sharded(text)}
+
+
+def _require_shard_keys(spark, table: str, source: pa.Table) -> None:
+    """Refuse an upserted shard or chunk row of a sharded array that has no ``shard_key``.
+
+    A read selects a sharded array's rows with ``shard_key IN (...)`` (``read_rows``), and
+    NULL is in no list: such a row would be skipped, and its chunk would read as old bytes or
+    fill, silently. So a shard row, whose ``shard_key`` is its own key, and a chunk row of an
+    array the manifest knows to be sharded, must say which shard they lie in. Rows of
+    unsharded arrays, and deletes (matched on their key), need none. The table is read only
+    when some chunk row lacks a ``shard_key`` and its array is not described in this commit.
+    """
+    kind, op = source.column("kind"), source.column("op")
+    bare = source.filter(
+        pc.and_(
+            pc.and_(
+                pc.equal(op, "upsert"),
+                pc.is_in(kind, value_set=pa.array(["shard", "chunk"])),
+            ),
+            pc.is_null(source.column("shard_key")),
+        )
+    )
+    if not bare.num_rows:
+        return
+    rows = bare.to_pylist()
+    found = [r for r in rows if r["kind"] == "shard"]
+    chunks = [r for r in rows if r["kind"] == "chunk"]
+    if not found and chunks:
+        sharded = _sharded_arrays(
+            spark, table, source, sorted({r["array"] for r in chunks})
+        )
+        found = [r for r in chunks if r["array"] in sharded]
+    if found:
+        first = found[0]
+        raise ZarrError(
+            f"{len(found)} {first['kind']} row(s) of the sharded array {first['array']!r} "
+            f"have no shard_key (first: {first['key']!r}), so a read that selects by "
+            "shard would skip them and their chunks would read as stale or fill.",
+            fix="set shard_key on every shard and chunk row of a sharded array to the key "
+            "of the shard it lies in",
+        )
+
+
 def _with_view(spark, data: pa.Table, schema: pa.Schema, run):
     """Run ``run(view_name)`` over ``data`` exposed as a temp view; always drop it."""
     view = f"_gbx_zarr_src_{uuid.uuid4().hex}"
@@ -837,14 +908,16 @@ def commit(spark, table: str, rows: pa.Table, *, write_id: str, meta: dict) -> i
 
     ``rows`` holds the manifest columns plus ``op`` (``"upsert"`` | ``"delete"``) and
     ``expected_write_id`` (the row's ``write_id`` in the base snapshot; null means
-    "must not exist"). A stale expectation aborts the whole MERGE and raises
-    ``ZarrWriteConflict`` listing every key that changed; a Delta conflict with a
-    concurrent commit raises the retryable ``ConcurrentCommit``. A ``write_id`` that
-    already committed returns its existing version, so retries are idempotent, even
-    when a twin of the same write lands between the check and the MERGE.
+    "must not exist"). Every shard row, and every chunk row of a sharded array, must carry
+    its ``shard_key`` (``_require_shard_keys``). A stale expectation aborts the whole MERGE
+    and raises ``ZarrWriteConflict`` listing every key that changed; a Delta conflict with
+    a concurrent commit raises the retryable ``ConcurrentCommit``. A ``write_id`` that
+    already committed returns its existing version, so retries are idempotent, even when a
+    twin of the same write lands between the check and the MERGE.
     """
     _check_write_id(write_id)
     source = _commit_source(rows, write_id, meta)
+    _require_shard_keys(spark, table, source)
     existing = find_commit_version(spark, table, write_id)
     if existing is not None:
         return existing

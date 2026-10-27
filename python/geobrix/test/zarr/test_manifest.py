@@ -1088,3 +1088,151 @@ def test_retain_parses_to_seconds(retain, seconds):
 )
 def test_retain_days_round_up_with_a_floor_of_one(retain, days):
     assert M.retain_days(retain) == days
+
+
+# --- a sharded array's rows always say which shard they lie in (Ruling F6) ----------------
+
+
+def _array_row(name, doc_text, wid, expected=None):
+    return dict(
+        kind="array",
+        array=name,
+        key="zarr.json",
+        write_id=wid,
+        op="upsert",
+        expected_write_id=expected,
+        meta=doc_text,
+    )
+
+
+def _shard_row(array, key, wid, shard_key):
+    row = _chunk(key, wid)
+    row.update(array=array, kind="shard", shard_key=shard_key)
+    return row
+
+
+def _bare(array, key, wid, kind="chunk"):
+    """A chunk (or shard) row of ``array`` with no shard_key."""
+    row = _chunk(key, wid)
+    row.update(array=array, kind=kind, shard_key=None)
+    return row
+
+
+@pytest.fixture
+def docs(era5_v3_sharded, era5_v3_unsharded):
+    """The ``zarr.json`` text of a sharded and of an unsharded array."""
+    return {
+        "sharded": (era5_v3_sharded / "t2m" / "zarr.json").read_text(),
+        "plain": (era5_v3_unsharded / "t2m" / "zarr.json").read_text(),
+    }
+
+
+def test_commit_rejects_a_null_shard_key_on_a_sharded_array(spark_delta, table, docs):
+    """The pruned read selects a sharded array's rows with ``shard_key IN (...)``, so a row
+    without one would be dropped and its chunk would read as old bytes or fill. A commit
+    refuses to write one."""
+    w = uuid.uuid4().hex
+    bad = _rows(_array_row("t2m", docs["sharded"], w), _bare("t2m", "c/1/0/0", w))
+    with pytest.raises(
+        ZarrError, match="shard_key"
+    ) as e:  # the array is in this commit
+        M.commit(None, "t", bad, write_id=w, meta={})
+    assert (
+        "Fix:" in str(e.value) and "'t2m'" in str(e.value) and "c/1/0/0" in str(e.value)
+    )
+    # the array was committed earlier: its document is looked up in the table
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_array_row("t2m", docs["sharded"], w)),
+        write_id=w,
+        meta={},
+    )
+    w2 = uuid.uuid4().hex
+    with pytest.raises(ZarrError, match="shard_key") as e:
+        M.commit(
+            spark_delta,
+            table,
+            _rows(_bare("t2m", "c/1/0/0", w2)),
+            write_id=w2,
+            meta={},
+        )
+    assert "Fix:" in str(e.value) and _live(spark_delta, table) == []  # nothing landed
+    # a shard row names its own shard whatever the array: no lookup needed
+    w3 = uuid.uuid4().hex
+    with pytest.raises(ZarrError, match="shard_key"):
+        M.commit(
+            None, "t", _rows(_bare("any", "c/0/0/0", w3, "shard")), write_id=w3, meta={}
+        )
+
+
+def test_commit_accepts_a_missing_shard_key_where_the_array_is_not_sharded(
+    spark_delta, table, docs
+):
+    w = uuid.uuid4().hex
+    M.commit(
+        spark_delta,
+        table,
+        _rows(_array_row("t2m", docs["plain"], w), _bare("t2m", "c/0/0/0", w)),
+        write_id=w,
+        meta={},
+    )
+    assert [r["shard_key"] for r in _live(spark_delta, table)] == [None]
+    w2 = uuid.uuid4().hex  # the document is now in the table, and says: unsharded
+    M.commit(
+        spark_delta, table, _rows(_bare("t2m", "c/0/0/1", w2)), write_id=w2, meta={}
+    )
+    # an array nobody has described cannot be told apart from one: it is let through
+    w3 = uuid.uuid4().hex
+    M.commit(
+        spark_delta, table, _rows(_bare("other", "c/0/0/0", w3)), write_id=w3, meta={}
+    )
+    assert len(_live(spark_delta, table)) == 3
+
+
+def test_commit_takes_a_sharded_row_that_names_its_shard_and_a_delete_without_one(
+    spark_delta, table, docs
+):
+    w = uuid.uuid4().hex
+    sharded = _chunk("c/3/1/1", w)
+    sharded.update(array="t2m", shard_key="c/1/0/0")
+    M.commit(
+        spark_delta,
+        table,
+        _rows(
+            _array_row("t2m", docs["sharded"], w),
+            sharded,
+            _shard_row("t2m", "c/0/0/0", w, "c/0/0/0"),
+        ),
+        write_id=w,
+        meta={},
+    )
+    w2 = (
+        uuid.uuid4().hex
+    )  # a delete matches on its key; it carries no shard_key to prune by
+    gone = {
+        **_delete("c/3/1/1", w),
+        "array": "t2m",
+        "shard_key": None,
+    }
+    M.commit(spark_delta, table, _rows(gone), write_id=w2, meta={})
+    assert [r["key"] for r in _live(spark_delta, table)] == []
+
+
+def test_the_pruner_keeps_in_so_a_row_without_a_shard_key_is_never_selected(
+    spark_delta, table
+):
+    """Why the commit rule exists: ``shard_keys`` is an IN list, and NULL is in no list."""
+    w = uuid.uuid4().hex
+    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w)), write_id=w, meta={})
+    spark_delta.sql(  # past commit(), as only a foreign writer could
+        f"INSERT INTO {table} (kind, array, key, shard_key, write_id) "
+        "VALUES ('chunk', 't2m', 'c/9/0/0', NULL, 'f')"
+    )
+    snap = M.snapshot(spark_delta, table)
+    pick = M.read_rows(spark_delta, snap, kinds="chunk", shard_keys=["c/0/0/0"])
+    assert [r["key"] for r in pick.to_pylist()] == ["c/0/0/0"]
+    assert M.read_rows(spark_delta, snap, kinds="chunk", shard_keys=[]).num_rows == 0
+    assert (
+        M.read_rows(spark_delta, snap, kinds="chunk").num_rows == 2
+    )  # only unpruned sees it

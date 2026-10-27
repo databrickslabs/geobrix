@@ -553,10 +553,11 @@ formats.
   pixel is not written, whether it is all NoData, all transparent or all masked); the COG
   re-encode of the `raster_gbx` writer; `gbx_rst_frombands` (a stack of four `uint8` tiles no
   longer gets an alpha band from GDAL's default); `gbx_rst_merge` and the streamed merge of large
-  groups, whose mosaic carries the union of what each tile says is valid (its mask band, its
-  NoData), so a valid pixel that holds 0 stays valid, a tile's NoData pixels stay invalid beside a
-  tile that has a mask band, and the result no longer depends on how large the group is, and
-  whose index VRT carries the colour interpretation; the `pmtiles_gbx` reader's RGB sibling of an RGBA source;
+  groups, whose mosaic carries the union of what each tile says is valid (a pixel is valid when
+  any of its data bands is, by NoData or mask band, and, with an alpha band, opaque), so a valid
+  pixel that holds 0 stays valid, a pixel with data in one band only stays valid, a tile's NoData
+  pixels stay invalid beside a tile that has a mask band, and the result no longer depends on how
+  large the group is, and whose index VRT carries the colour interpretation; the `pmtiles_gbx` reader's RGB sibling of an RGBA source;
   and the `netcdf_gbx` `bandDim` stack (four `uint8` steps used to read the fourth as alpha). The
   h3 cells of a source with an alpha band declare no NoData over it: their pixels outside the
   hexagon are written transparent, and each cell carries its hexagon as a mask band, so the index

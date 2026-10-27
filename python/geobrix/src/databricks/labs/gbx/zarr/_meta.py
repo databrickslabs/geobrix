@@ -17,6 +17,7 @@ import dataclasses
 import json
 import math
 import struct
+import warnings
 from dataclasses import dataclass
 
 import numpy as np
@@ -658,6 +659,21 @@ def _check_integer_range(values: np.ndarray, attrs: dict, meta: ArrayMeta, targe
         )
 
 
+def _same_time_units(a: str, b: str) -> bool:
+    """Whether two CF time units are the same unit since the same instant (xarray
+    rewrites ``"hours since 2023-01-01 00:00:00"`` as ``"hours since 2023-01-01"``)."""
+    import pandas as pd
+
+    ua, _, ra = str(a).partition(" since ")
+    ub, _, rb = str(b).partition(" since ")
+    if ua.strip().lower() != ub.strip().lower():
+        return False
+    try:
+        return pd.Timestamp(ra.strip()) == pd.Timestamp(rb.strip())
+    except (ValueError, TypeError, OverflowError):
+        return ra.strip() == rb.strip()
+
+
 def cf_encode(values, meta: ArrayMeta, *, stored: bool = False) -> np.ndarray:
     """``values`` as ``meta`` stores them, in native byte order: the inverse of the reading.
 
@@ -717,10 +733,23 @@ def cf_encode(values, meta: ArrayMeta, *, stored: bool = False) -> np.ndarray:
         tuple(f"dim_{i}" for i in range(values.ndim)), values, encoding=encoding
     )
     try:
-        out = encode_cf_variable(var, name=meta.name).values
+        with warnings.catch_warnings():
+            # xarray warns, then silently picks finer units, when the times do not fit
+            # the requested ones; the units it used are checked below instead
+            warnings.simplefilter("ignore")
+            encoded = encode_cf_variable(var, name=meta.name)
     except (ValueError, TypeError, OverflowError) as e:
         raise _encode_refusal(meta, str(e)) from None
-    return np.asarray(out).astype(target, copy=False)
+    if "units" in encoding and not _same_time_units(
+        encoded.attrs.get("units", encoding["units"]), encoding["units"]
+    ):
+        raise _encode_refusal(
+            meta,
+            f"the times are not whole multiples of its units {encoding['units']!r} "
+            f"(they would need {encoded.attrs['units']!r}), and its stored type "
+            f"{target} has no fractions",
+        )
+    return np.asarray(encoded.values).astype(target, copy=False)
 
 
 def is_time_coord(meta: ArrayMeta) -> bool:

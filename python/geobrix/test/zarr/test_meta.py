@@ -921,3 +921,18 @@ def test_a_bool_dtype_array_is_masked_before_the_cast_in_a_table_not_in_blocks(
     assert blocks.dtype == np.dtype("bool")
     if fill != -1:  # the masked cells are True in blocks, whatever they stored
         assert blocks[raw == fill].all()
+
+
+def test_cf_encode_refuses_times_its_units_cannot_hold(tmp_path):
+    """xarray, asked to store :30 times in int64 'hours since', silently switches to
+    'minutes since'; the stored numbers would then read as hours. Refused instead."""
+    from databricks.labs.gbx.zarr._meta import cf_encode
+    from databricks.labs.gbx.zarr.errors import ZarrUnsupported
+
+    attrs = {"units": "hours since 2023-01-01", "calendar": "standard"}
+    _, meta = _stored(tmp_path, 3, np.array([0, 1], "i8"), "i8", attrs, name="time")
+    hours = np.array(["2023-01-01T01", "2023-01-01T02"], "datetime64[ns]")
+    assert list(cf_encode(hours, meta)) == [1, 2]
+    with pytest.raises(ZarrUnsupported, match="whole multiples") as e:
+        cf_encode(hours + np.timedelta64(30, "m"), meta)
+    assert "Fix:" in str(e.value)

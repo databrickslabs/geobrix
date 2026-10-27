@@ -135,3 +135,19 @@ def test_usage_error_without_argument():
     res = subprocess.run([sys.executable, str(SCRIPT)], capture_output=True, text=True)
     assert res.returncode == 2
     assert "usage" in res.stderr
+
+
+def test_a_missing_jar_is_exit_3_and_not_reported_as_bundling(tmp_path):
+    res = _run(tmp_path / "geobrix-0.0.0-jar-with-dependencies.jar")
+    assert res.returncode == 3
+    assert "cannot read" in res.stderr and "bundles" not in res.stderr
+    assert "Traceback" not in res.stderr
+
+
+def test_a_corrupt_jar_is_exit_3_and_not_reported_as_bundling(tmp_path):
+    jar = tmp_path / "geobrix-0.0.0-jar-with-dependencies.jar"
+    jar.write_text("this is not a zip file")
+    res = _run(jar)
+    assert res.returncode == 3
+    assert "cannot read" in res.stderr and "bundles" not in res.stderr
+    assert "Traceback" not in res.stderr

@@ -97,9 +97,17 @@ def main() -> int:
     check = subprocess.run(
         [sys.executable, str(project_root / "scripts" / "ci" / "check_jar_packaging.py"), str(jar_path)]
     )
-    if check.returncode != 0:
+    if check.returncode == 1:
         print(
             "Refusing to stage a JAR that bundles classes the runtime provides (Scala, Spark or log4j).",
+            file=sys.stderr,
+        )
+        return 1
+    if check.returncode != 0:
+        # Exit 3 is a JAR the guard could not read (missing, or not a zip file): not a bundling problem.
+        print(
+            f"Refusing to stage {jar_path}: it could not be checked (missing or not a readable "
+            "zip file); rebuild it with mvn clean package.",
             file=sys.stderr,
         )
         return 1

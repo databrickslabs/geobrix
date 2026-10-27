@@ -13,7 +13,7 @@ Three groups are refused, each reported with a count and its first entry:
   package on purpose to reach Spark-internal APIs.
 
 Zip directory entries are ignored; only files count. Exit codes: 0 clean, 1 a group is
-bundled, 2 usage error.
+bundled, 2 usage error, 3 the JAR is missing or not a readable zip file (it was not checked).
 
 Usage: python3 scripts/ci/check_jar_packaging.py target/geobrix-<ver>-jar-with-dependencies.jar
 """
@@ -76,7 +76,15 @@ def main(argv: list[str]) -> int:
         )
         return 2
     jar = argv[1]
-    found = bundled_entries(jar)
+    try:
+        found = bundled_entries(jar)
+    except (OSError, zipfile.BadZipFile) as e:
+        print(
+            f"{jar}: cannot read the JAR ({type(e).__name__}: {e}); rebuild it "
+            "(mvn clean package)",
+            file=sys.stderr,
+        )
+        return 3
     for label, _, _, _, remedy in GROUPS:
         if label in found:
             hits = found[label]

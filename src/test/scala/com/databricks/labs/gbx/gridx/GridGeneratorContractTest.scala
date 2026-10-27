@@ -64,13 +64,15 @@ class GridGeneratorContractTest extends AnyFunSuite {
       ("gbx_quadbin_geomkloopexplode", "quadbin_geomkloopexplode(wkt)", Quadbin_GeometryKLoopExplode(str(lonLatWkt), int(8), int(1), mode, coverage))
     )
 
+    private def checkCase(sqlName: String, label: String, gen: CollectionGenerator): Unit = {
+        assert(GeneratorContract.coverage.get(sqlName).contains(GeneratorContract.GridSuite), s"$sqlName is not listed for this suite")
+        GeneratorContract.assertConforms(label, gen)
+    }
+
     private def check(prefix: String): Unit = {
         val selected = cases.filter(_._1.startsWith(prefix))
         assert(selected.nonEmpty, s"no cases for $prefix")
-        selected.foreach { case (sqlName, label, gen) =>
-            assert(GeneratorContract.coverage.get(sqlName).contains(GeneratorContract.GridSuite), s"$sqlName is not listed for this suite")
-            GeneratorContract.assertConforms(label, gen)
-        }
+        selected.foreach { case (sqlName, label, gen) => checkCase(sqlName, label, gen) }
     }
 
     test("BNG k-ring / k-loop explode emit exactly the declared cellid column (STRING and LONG cells)") {
@@ -104,6 +106,17 @@ class GridGeneratorContractTest extends AnyFunSuite {
     // not depend on test order or on a `-z` filter.
     test("this suite covers every generator the contract assigns to it") {
         assert(cases.map(_._1).toSet == GeneratorContract.coveredBy(GeneratorContract.GridSuite))
+    }
+
+    // The test above proves the table lists every generator; the family tests evaluate the entries whose name starts
+    // with the prefix they pass. This one evaluates EVERY entry, so a case whose name no family test selects still
+    // meets the contract.
+    test("every entry of the cases table is evaluated against the contract") {
+        val evaluated = cases.map { case (sqlName, label, gen) =>
+            checkCase(sqlName, label, gen)
+            label
+        }
+        assert(evaluated == cases.map(_._2) && evaluated.nonEmpty)
     }
 
 }

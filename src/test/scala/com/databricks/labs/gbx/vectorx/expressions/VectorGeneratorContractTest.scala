@@ -97,4 +97,14 @@ class VectorGeneratorContractTest extends PlanTest with SilentSparkSession {
         assert(cases.map(_._1).toSet == GeneratorContract.coveredBy(GeneratorContract.VectorSuite))
     }
 
+    // The test above proves the table lists every generator; the tests before it evaluate the entries they name.
+    // This one evaluates EVERY entry, so a case added to the table without its own test still meets the contract.
+    test("every entry of the cases table is evaluated against the contract") {
+        val evaluated = cases.map { case (sqlName, _) =>
+            checkCase(sqlName)
+            sqlName
+        }
+        assert(evaluated == cases.map(_._1) && evaluated.nonEmpty)
+    }
+
 }

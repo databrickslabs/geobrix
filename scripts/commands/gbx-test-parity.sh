@@ -12,28 +12,36 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 source "$SCRIPT_DIR/common.sh"
 
-# Every cross-tier parity suite, ONE PER LINE. Add new ones here so this stays the
-# single gate.
+# The cross-tier parity suites are DISCOVERED, not listed: a hand-kept list silently skipped
+# every suite added after it was written (a skipped parity suite reads as a passing gate).
+# A suite is any python/geobrix/test/**/test_parity*.py or test_*_parity.py. The few that are
+# not cross-tier gates are named in PARITY_EXCLUDE with the reason; anything new is gated by
+# default until it is excluded on purpose.
 #
 # Each file is run in its OWN pytest process, deliberately. `spark.jars` only takes effect
 # at JVM startup, so a parity module that loads after some other test already created a
 # JAR-free SparkSession cannot get the JAR and self-skips. Running the whole directory in
 # one process therefore skipped every parity test while the run still exited 0 -- exactly
 # the silently-not-running gate this command exists to prevent.
-PARITY_FILES=(
-    "python/geobrix/test/pyvx/test_crs_parity.py"
-    "python/geobrix/test/pyvx/test_parity_mvt.py"
-    "python/geobrix/test/pyvx/test_parity_tin.py"
-    "python/geobrix/test/pyvx/test_parity_legacy.py"
-    "python/geobrix/test/pyvx/test_parity_h3_tessellate.py"
-    "python/geobrix/test/pygx/test_gridx_error_parity.py"
-    "python/geobrix/test/pygx/test_parity_bng.py"
-    "python/geobrix/test/pygx/test_parity_quadbin.py"
-    "python/geobrix/test/pygx/test_parity_custom.py"
-    "python/geobrix/test/pyrx/test_parity_custom_raster.py"
-    "python/geobrix/test/pyrx/test_parity_percentile_stretch.py"
-    "python/geobrix/test/ds/test_vector_parity.py"
+PARITY_ROOT="python/geobrix/test"
+PARITY_EXCLUDE=(
+    "python/geobrix/test/core/test_check_binding_parity.py"      # unit test of the binding-parity checker (gbx:test:bindings)
+    "python/geobrix/test/ds/test_vector_writer_parity.py"        # light-only writer round trip, not a tier comparison
+    "python/geobrix/test/ds/test_writer_parity.py"               # light-only writer round trip, not a tier comparison
+    "python/geobrix/test/ds/test_reader_parity.py"               # skips by design when the heavy gdal reader yields 0 rows
 )
+
+# discover_parity_files [dir]: parity suites under dir (default the whole test tree), sorted.
+discover_parity_files() {
+    local root="${1:-$PARITY_ROOT}" f e skip
+    while IFS= read -r f; do
+        skip=false
+        for e in "${PARITY_EXCLUDE[@]}"; do
+            [ "$f" = "$e" ] && skip=true
+        done
+        [ "$skip" = true ] || echo "$f"
+    done < <(cd "$PROJECT_ROOT" && find -L "$root" -type f \( -name 'test_parity*.py' -o -name 'test_*_parity.py' \) | LC_ALL=C sort)
+}
 
 show_help() {
     show_banner "⚖️  GeoBrix: Cross-Tier Parity Tests"
@@ -43,11 +51,13 @@ show_help() {
     echo -e "${CYAN}What it does:${NC}"
     echo -e "  1. Rebuilds the assembly JAR (skip with ${GREEN}--skip-build${NC})"
     echo -e "  2. Stages it to ${YELLOW}python/geobrix/lib/${NC} where the light tier loads it"
-    echo -e "  3. Runs the parity suites with ${YELLOW}@pytest.mark.integration${NC} ENABLED"
+    echo -e "  3. Runs every parity suite found under ${YELLOW}python/geobrix/test/${NC} (test_parity*.py and"
+    echo -e "     test_*_parity.py, minus the documented exclusions) with ${YELLOW}@pytest.mark.integration${NC} ENABLED"
     echo -e "  4. Fails if every test skipped (a skipped gate is not a passing gate)"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--path <path>${NC}      Run ONE suite file instead of all parity suites"
+    echo -e "  ${GREEN}--path <path>${NC}      Run this suite file, or the parity suites under this directory, instead of"
+    echo -e "                       all of them; repeat it to run several (relative to the repo root)"
     echo -e "  ${GREEN}-k <expr>${NC}          Pytest keyword filter"
     echo -e "  ${GREEN}--skip-build${NC}       Reuse the staged JAR (fast; only if Scala is unchanged)"
     echo -e "  ${GREEN}--log <path>${NC}       Write output to log file (filename → test-logs/<name>)"
@@ -62,18 +72,19 @@ show_help() {
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh --skip-build -k crs${NC}"
+    echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh --skip-build --path python/geobrix/test/pyvx/test_parity_mvt.py --path python/geobrix/test/pygx/test_parity_bng.py${NC}"
     echo -e "  ${YELLOW}bash scripts/commands/gbx-test-parity.sh --log parity.log${NC}"
     echo ""
 }
 
-TEST_PATH=""
+TEST_PATHS=()
 LOG_PATH=""
 KEYWORD=""
 SKIP_BUILD=false
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --path)       TEST_PATH="$2"; shift 2 ;;
+        --path)       TEST_PATHS+=("${2%/}"); shift 2 ;;
         -k)           KEYWORD="$2"; shift 2 ;;
         --skip-build) SKIP_BUILD=true; shift ;;
         --log)        LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
@@ -123,10 +134,26 @@ if [ "$SKIP_BUILD" != true ]; then
 fi
 
 # --- Step 3: run each parity suite in its OWN process, integration ENABLED ------------
-if [ -n "$TEST_PATH" ]; then
-    RUN_FILES=("$TEST_PATH")
+RUN_FILES=()
+add_run_file() {   # once each, in the order given
+    local f="$1" seen
+    for seen in ${RUN_FILES[@]+"${RUN_FILES[@]}"}; do [ "$seen" = "$f" ] && return; done
+    RUN_FILES+=("$f")
+}
+if [ ${#TEST_PATHS[@]} -gt 0 ]; then
+    for p in "${TEST_PATHS[@]}"; do
+        if [ -d "$PROJECT_ROOT/$p" ]; then
+            while IFS= read -r f; do add_run_file "$f"; done < <(discover_parity_files "$p")
+        else
+            add_run_file "$p"   # a file; a missing one fails the run below, by name
+        fi
+    done
 else
-    RUN_FILES=("${PARITY_FILES[@]}")
+    while IFS= read -r f; do add_run_file "$f"; done < <(discover_parity_files)
+fi
+if [ ${#RUN_FILES[@]} -eq 0 ]; then
+    echo -e "${RED}❌ No parity suites found${NC}"
+    exit 1
 fi
 
 echo ""

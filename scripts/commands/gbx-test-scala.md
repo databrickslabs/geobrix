@@ -18,6 +18,10 @@ bash scripts/commands/gbx-test-scala.sh [OPTIONS]
 - `--verbose` - Show detailed Maven output
 - `--help` - Display help message
 
+## Locale
+
+The container has no `LANG`/`LC_ALL`, which would leave the JVM's file-name encoding at ASCII and cancel the tests that create non-ASCII file names (for example the non-ASCII case in `NodeFilePathUtilTest`). The command passes `-e LC_ALL=C.UTF-8` to the container, so those tests run.
+
 ## One test run at a time
 
 This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the container test lock first: a `flock` on `/tmp/gbx-test.lock` inside the container, shared by every command that runs Maven or a test JVM there (`gbx:test:*`, `gbx:coverage:*`, `gbx:lint:scalastyle`, `gbx:bench:heavyweight`, and `gbx:docker:exec` with an `mvn` or `pytest` command), so two runs never share `target/`.

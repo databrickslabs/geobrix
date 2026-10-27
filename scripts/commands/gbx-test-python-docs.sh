@@ -215,11 +215,25 @@ if [ "$SET_SAMPLE_DATA_ROOT" = true ]; then
     SAMPLE_DATA_ROOT_EXPORT="export GBX_SAMPLE_DATA_ROOT=$SAMPLE_DATA_ROOT"
 fi
 
+# A single-file target (--path x/test_y.py, --test x/test_y.py::name) must import its
+# sibling example modules (`from _fixtures import ...`) as it does when its whole directory is
+# collected. Collecting the directory runs other test modules' `sys.path.insert(<their dir>)`
+# first; a lone file never does, so the import fails. Put the file's directory (and its parent,
+# for the `from . import ...` / `from api import ...` forms) on PYTHONPATH.
+PYTHONPATH_EXPORT=""
+TEST_FILE="${TEST_PATH%%::*}"
+if [[ "$TEST_FILE" == *.py ]]; then
+    TEST_FILE_DIR="$(dirname "$TEST_FILE")"
+    PYTHONPATH_EXPORT="export PYTHONPATH=$TEST_FILE_DIR:$(dirname "$TEST_FILE_DIR")\${PYTHONPATH:+:\$PYTHONPATH}"
+    echo -e "${CYAN}🧩 Single-file target: ${YELLOW}$TEST_FILE_DIR${NC}${CYAN} added to PYTHONPATH${NC}"
+fi
+
 # Run pre-steps and pytest inside Docker (single bash -c so env and cwd carry through)
 RUN_CMD="set -e
 unset JAVA_TOOL_OPTIONS
 export JUPYTER_PLATFORM_DIRS=1
 $SAMPLE_DATA_ROOT_EXPORT
+$PYTHONPATH_EXPORT
 cd /root/geobrix
 
 # 1) Ensure Volumes/sample-data is mounted (doc tests use /Volumes/main/default/geobrix_samples/... or test-data)

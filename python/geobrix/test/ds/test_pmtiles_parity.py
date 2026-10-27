@@ -113,7 +113,10 @@ def test_light_vs_heavy_single_archive(spark_with_jar, tmp_path):
         light_out
     )
 
-    heavy_out = str(tmp_path / "heavy_out")
+    # The heavy writer names a file-like target itself: a path that is not an existing
+    # directory is the archive (".pmtiles" completed), not a directory to fill. Name the
+    # archive, as for the light writer, so the decoder reads the file the writer wrote.
+    heavy_out = str(tmp_path / "heavy.pmtiles")
     df.write.format("pmtiles").mode("overwrite").save(heavy_out)
 
     light = _decode_any(light_out)

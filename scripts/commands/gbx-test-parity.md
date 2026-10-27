@@ -10,7 +10,7 @@ bash scripts/commands/gbx-test-parity.sh [OPTIONS]
 
 ## Options
 
-- `--path <path>` - Suite path (default: `python/geobrix/test/pyvx/`)
+- `--path <path>` - A suite file, or a directory whose parity suites to run; repeat it to run several (relative to the repo root; default: every parity suite, see below)
 - `-k <expr>` - Pytest keyword filter (e.g. `crs`)
 - `--skip-build` - Reuse the already-staged JAR (fast; only when Scala is unchanged)
 - `--log <path>` - Write output to a log file (filename → `test-logs/<name>`)
@@ -27,6 +27,18 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 2. **Stages exactly one JAR**, deleting older ones so a stale artifact cannot be picked up instead.
 3. **Runs with integration enabled** — parity is the whole point of the run.
 4. **Fails when 0 tests passed**, printing the likely cause (no staged JAR, or a JAR-free Spark session already live in the process). This is what stops a fully-skipped run from being mistaken for a pass.
+
+## Which suites run
+
+The suites are **discovered**, not listed: every `python/geobrix/test/**/test_parity*.py` and `test_*_parity.py`, sorted, minus a short exclusion list (`PARITY_EXCLUDE` in the script) of files that are not cross-tier gates: `core/test_check_binding_parity.py` (a unit test of the binding-parity checker, run by `gbx:test:bindings`), `ds/test_vector_writer_parity.py` and `ds/test_writer_parity.py` (light-only writer round trips), and `ds/test_reader_parity.py` (skips by design when the heavy `gdal` reader yields no rows). A new parity suite is gated by default; excluding one is a deliberate edit with a reason. Each file runs in its own pytest process.
+
+`--path` may be given several times and each value may be a file or a directory; they run once each, in the order given:
+
+```bash
+bash scripts/commands/gbx-test-parity.sh --skip-build \
+  --path python/geobrix/test/pyvx/test_parity_mvt.py \
+  --path python/geobrix/test/pygx/
+```
 
 ## When to use
 
@@ -51,6 +63,9 @@ bash scripts/commands/gbx-test-parity.sh
 
 # Just the CRS-family parity, reusing the staged JAR
 bash scripts/commands/gbx-test-parity.sh --skip-build -k crs
+
+# Two named suites
+bash scripts/commands/gbx-test-parity.sh --skip-build --path python/geobrix/test/pyvx/test_parity_mvt.py --path python/geobrix/test/pygx/test_parity_bng.py
 
 # With a log file
 bash scripts/commands/gbx-test-parity.sh --log parity.log

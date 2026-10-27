@@ -36,6 +36,10 @@ show_help() {
     echo ""
 }
 
+# The container has no LANG/LC_ALL, so the JVM's sun.jnu.encoding is ASCII and tests that create
+# non-ASCII file names (NodeFilePathUtilTest) cancel on `assume`. Both runs below pass
+# LC_ALL=C.UTF-8 to the container instead of weakening the test.
+
 # Parse arguments
 SUITE_PATTERN=""
 LOG_PATH=""
@@ -106,7 +110,7 @@ if [ "$BY_PACKAGE" = true ]; then
         show_separator
         SUITES="com.databricks.labs.gbx.${pkg}.*"
         MVN_CMD="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn test -PskipScoverage -DskipTests=false -Dsuites='$SUITES' $VERBOSE"
-        if docker exec geobrix-dev /bin/bash -c "$MVN_CMD"; then
+        if docker exec -e LC_ALL=C.UTF-8 geobrix-dev /bin/bash -c "$MVN_CMD"; then
             echo -e "${GREEN}✅ $pkg passed${NC}"
         else
             echo -e "${RED}❌ $pkg failed${NC}"
@@ -147,7 +151,7 @@ else
     show_separator
     echo ""
 
-    docker exec geobrix-dev /bin/bash -c "$MVN_CMD"
+    docker exec -e LC_ALL=C.UTF-8 geobrix-dev /bin/bash -c "$MVN_CMD"
     EXIT_CODE=$?
 
     echo ""

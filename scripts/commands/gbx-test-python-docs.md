@@ -55,7 +55,7 @@ bash scripts/commands/gbx-test-python-docs.sh [OPTIONS]
 
 - `--test <nodeid>` – Single test (e.g. `quickstart/test_examples.py::test_exec_sql_read_and_use_snippet`).
 - `--suite <name>` – Subset: `quickstart` | `api` | `readers` | `ingestion` | `rasterx` | `advanced` | `setup` | `integration`.
-- `--path <path>` – Directory or file relative to `docs/tests/python/` (overridden by `--test`/`--suite` if both given last).
+- `--path <path>` – Directory or file relative to `docs/tests/python/` (overridden by `--test`/`--suite` if both given last). A single file (`--path api/test_x.py`, or a `--test` node id) gets its directory and that directory's parent on `PYTHONPATH`, so its sibling example modules (`from _fixtures import ...`) import exactly as they do when the whole directory is collected; before, a lone `api/` file failed to collect with `ModuleNotFoundError: No module named '_fixtures'` while `--suite api` passed.
 
 **Other**
 

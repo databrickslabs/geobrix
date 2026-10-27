@@ -175,6 +175,13 @@ class ContainerSandbox:
             return []
         return [json.loads(x) for x in self.exec_log.read_text().splitlines()]
 
+    def exec_envs(self) -> list:
+        """The `docker exec -e KEY=VALUE` pairs of each exec call, parallel to execs()."""
+        log = Path(str(self.exec_log) + ".env")
+        if not log.exists():
+            return []
+        return [json.loads(x) for x in log.read_text().splitlines()]
+
     @contextmanager
     def lock_held_by(self, info: str):
         """Hold the container test lock from this process, with `info` as the holder."""

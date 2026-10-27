@@ -529,6 +529,26 @@ def test_venv_sync_connect_adds_the_client_deps_for_the_venvs_own_pyspark(sandbo
     )  # after the lock install
 
 
+def test_python_option_on_an_existing_venv_fails_instead_of_being_ignored(sandbox):
+    # `uv venv` is skipped for an existing venv, so --python used to change nothing, silently.
+    bin_dir = sandbox.root / ".venv-pyrx" / "bin"
+    bin_dir.mkdir(parents=True)
+    python = bin_dir / "python"
+    python.write_text('#!/bin/sh\n[ "$1" = "-c" ] && echo 3.12.11\nexit 0\n')
+    python.chmod(0o755)
+    uv_log = _fake_uv(sandbox)
+    _fake_lock(sandbox)
+
+    res = sandbox.run("gbx-venv-sync.sh", "--python", "3.11")
+
+    assert (
+        res.returncode == 1 and "--recreate" in res.output and "3.12.11" in res.output
+    )
+    assert not uv_log.exists()  # nothing was installed
+    sandbox.run("gbx-venv-sync.sh", "--python", "3.12")  # the venv's own minor is fine
+    assert uv_log.exists()
+
+
 def test_venv_sync_creates_the_venv_when_it_is_missing(sandbox):
     uv_log = _fake_uv(sandbox)
     _fake_lock(sandbox)
@@ -950,3 +970,131 @@ def test_review_round_skips_the_generated_lock_files_unless_asked(sandbox):
     assert (
         review("--", "-c", "mine.yaml").count("-c") == 1
     )  # the caller's config, not ours
+
+
+# ----------------------------------------- host venv curated to match the container (venv check)
+
+
+def _env_json(python="3.12.3", natives=None, **packages):
+    return json.dumps(
+        {
+            "python": python,
+            "packages": packages,
+            "natives": natives or {"gdal": "3.12.1", "proj": "9.5.1", "geos": "3.13.1"},
+        }
+    )
+
+
+def _curated_sandbox(sandbox, host_json):
+    """Sandbox with the report script and a host venv whose `python - collect` prints host_json.
+
+    Any other call of that python (running the report's compare / match-requirements) runs on the
+    real interpreter, so the comparison itself is the real code."""
+    ci = sandbox.root / "scripts" / "ci"
+    ci.mkdir(parents=True)
+    shutil.copy(REPO_ROOT / "scripts" / "ci" / "venv_env_report.py", ci)
+    venv = sandbox.root / ".venv-pyrx"
+    (venv / "bin").mkdir(parents=True)
+    python = venv / "bin" / "python"
+    python.write_text(
+        f'#!/bin/sh\nif [ "$1" = "-" ]; then cat > /dev/null; cat <<\'JSON\'\n{host_json}\nJSON\nexit 0; fi\n'
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    python.chmod(0o755)
+    return venv
+
+
+def test_venv_check_fails_on_drift_and_passes_on_a_match(sandbox):
+    host = _env_json(python="3.12.11", numpy="2.3.4", scipy="1.16.3", extra="1.0")
+    venv = _curated_sandbox(sandbox, host)
+
+    # Python patch, numpy and a native drift; `extra` is host-only (not comparable).
+    drifted = _env_json(
+        python="3.12.3",
+        numpy="2.1.3",
+        scipy="1.16.3",
+        natives={"gdal": "3.11.0", "proj": "9.5.1", "geos": "3.13.1"},
+    )
+    res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=drifted)
+    assert res.returncode == 1, res.output
+    assert re.search(r"python\s+3\.12\.11\s+3\.12\.3\s+DRIFT", res.output)
+    assert re.search(r"numpy\s+2\.3\.4\s+2\.1\.3\s+DRIFT", res.output)
+    assert re.search(r"gdal\s+3\.12\.1\s+3\.11\.0\s+DRIFT", res.output)
+    assert (
+        "scipy" not in res.output.split("item")[1].split("packages in both")[0]
+    )  # equal: not listed
+
+    same = _env_json(python="3.12.11", numpy="2.3.4", scipy="1.16.3")
+    res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=same)
+    assert res.returncode == 0, res.output
+    assert "2 packages in both, 0 differ" in res.output
+
+    # Packages `gbx:venv:sync --connect` added that the container lacks are declared, not drift.
+    (venv / ".gbx-connect-extras").write_text("extra\n")
+    res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=same)
+    assert res.returncode == 0, res.output
+    assert "declared connect-tier extras (host only): extra" in res.output
+    assert (
+        "1 packages only on the host" not in res.output
+    )  # counted as declared, not stray
+
+
+def test_venv_sync_match_container_builds_on_the_containers_python_and_versions(
+    sandbox,
+):
+    container = _env_json(python="3.12.3", numpy="2.1.3", pyspark="4.0.0", trans="2.0")
+    _curated_sandbox(sandbox, _env_json(python="3.12.3", numpy="2.1.3", trans="1.0"))
+    shutil.rmtree(sandbox.root / ".venv-pyrx")  # a fresh checkout: uv creates the venv
+    log = sandbox.root / "uv.calls"
+    uv = sandbox.bin / "uv"
+    uv.write_text(
+        "#!/bin/sh\n"
+        f'echo "$*" >> "{log}"\n'
+        'case "$1" in\n'
+        f'  venv) mkdir -p "$2/bin"; cp "{sandbox.root}/.venv-fake-python" "$2/bin/python";;\n'
+        '  pip) while [ $# -gt 0 ]; do [ "$1" = "-r" ] && cp "$2" "$(mktemp "'
+        + str(sandbox.root)
+        + '/req.XXXXXX")"; shift; done;;\n'
+        "esac\n"
+    )
+    uv.chmod(0o755)
+    # the python the fake `uv venv` installs: prints the host environment for `python - collect`
+    fake = sandbox.root / ".venv-fake-python"
+    fake.write_text(
+        '#!/bin/sh\nif [ "$1" = "-" ]; then cat > /dev/null; '
+        f"echo '{_env_json(python='3.12.3', numpy='2.3.4', trans='1.0')}'; exit 0; fi\n"
+        f'exec "{sys.executable}" "$@"\n'
+    )
+    fake.chmod(0o755)
+    lock = _fake_lock(sandbox)
+    lock.write_text(
+        "numpy==2.3.4 \\\n    --hash=sha256:aa\nonlylock==9.9 \\\n    --hash=sha256:bb\n"
+        "pyspark==4.0.0 \\\n    --hash=sha256:cc\n"
+    )
+
+    res = sandbox.run(
+        "gbx-venv-sync.sh", "--match-container", FAKE_DOCKER_EXEC_STDOUT=container
+    )
+
+    calls = log.read_text().splitlines()
+    assert calls[0].startswith("venv ") and "--python 3.12.3" in calls[0], calls
+    installs = [c for c in calls if c.startswith("pip install")]
+    assert all(
+        "--require-hashes" not in c for c in installs
+    )  # CI's hashes are another platform
+    reqs = [p.read_text() for p in sandbox.root.glob("req.*")]
+    first = next(r for r in reqs if "onlylock" in r)
+    assert (
+        "numpy==2.1.3" in first and "numpy==2.3.4" not in first
+    )  # the container's version
+    assert (
+        "onlylock==9.9" in first
+    )  # a package the container lacks keeps the lock's version
+    # Matching can pull in packages the lock does not name at their newest: they are pinned too.
+    pins = next(r for r in reqs if "onlylock" not in r)
+    assert pins.split() == [
+        "numpy==2.1.3",
+        "trans==2.0",
+    ]  # what the host has at other versions
+    # The fake never really installs, so the final check still sees drift: the sync must fail.
+    assert res.returncode == 1 and "drifts from the container" in res.output, res.output

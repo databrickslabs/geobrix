@@ -24,15 +24,24 @@ installs: the hash-pinned lock python/geobrix/requirements-light-env6-ci.txt, th
 python/geobrix itself (editable, --no-deps). Re-running refreshes an existing venv in place;
 --recreate starts from scratch. GBX_PYRX_VENV=<dir> moves the venv from .venv-pyrx.
 
-Usage: bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--connect] [--log <path>]
+Usage: bash scripts/commands/gbx-venv-sync.sh [--python 3.12] [--recreate] [--connect] [--match-container] [--log <path>]
 Options:
-  --python <ver>   Python version for the venv (default 3.12)
+  --python <ver>   Python version for a NEW venv (default 3.12). An existing venv keeps the
+                   Python it was made with: asking for another version fails (use --recreate)
   --recreate       Delete and recreate the venv from scratch
   --connect        Also install the Spark Connect client deps for the venv's own pyspark
                    (grpcio, grpcio-status, googleapis-common-protos, zstandard: pyspark's
                    `connect` extra), so the local Connect tier runs (`spark_connect_local`
                    in python/geobrix/test/conftest.py). Opt-in: the CI lock does not carry
-                   them, and nothing already installed changes version.
+                   them, and nothing already installed changes version. The names are recorded
+                   in <venv>/.gbx-connect-extras for gbx:venv:check.
+  --match-container
+                   Build the venv to match the running geobrix-dev container instead of the CI
+                   lock: the container's exact Python patch version (uv fetches it) and the
+                   container's exact version of every package the lock names (the lock's version
+                   for the few it lacks). Installed by exact version, WITHOUT hashes: the lock's
+                   hashes are for the CI platform, not this one. Ends with gbx:venv:check, and
+                   fails if anything still drifts. Needs the container running.
   --log <path>     Tee output to a log file (resolved under test-logs/)
   --help, -h       Show this help
 EOF
@@ -40,10 +49,13 @@ EOF
 
 RECREATE=0
 CONNECT=0
+MATCH=0
+PYTHON_EXPLICIT=0
 while [[ $# -gt 0 ]]; do case $1 in
     --python|--log) [[ $# -ge 2 ]] || { echo "Option $1 needs a value" >&2; exit 2; }
-        if [[ $1 == --python ]]; then PYTHON_VERSION="$2"; else LOG_PATH=$(resolve_log_path "$2"); fi
+        if [[ $1 == --python ]]; then PYTHON_VERSION="$2"; PYTHON_EXPLICIT=1; else LOG_PATH=$(resolve_log_path "$2"); fi
         shift 2 ;;
+    --match-container) MATCH=1; shift ;;
     --recreate) RECREATE=1; shift ;;
     --connect) CONNECT=1; shift ;;
     --help|-h) show_help; exit 0 ;;
@@ -64,9 +76,33 @@ if ! command -v uv >/dev/null 2>&1; then
     exit 1
 fi
 
+REPORT="${PROJECT_ROOT}/scripts/ci/venv_env_report.py"
+WORK=""   # scratch dir of --match-container; removed explicitly (an EXIT trap would replace the log's)
+if [[ $MATCH -eq 1 ]]; then
+    # The container decides the Python patch version and the package versions.
+    check_docker
+    WORK="$(mktemp -d "${TMPDIR:-/tmp}/gbx-venv-sync.XXXXXX")"
+    docker exec -i geobrix-dev python3 - collect < "$REPORT" > "$WORK/container.json" \
+        || { rm -rf "$WORK"; echo "❌ could not read the container's environment" >&2; exit 1; }
+    PYTHON_VERSION="$(sed -n 's/.*"python": "\([^"]*\)".*/\1/p' "$WORK/container.json")"
+    [[ -n "$PYTHON_VERSION" ]] || { rm -rf "$WORK"; echo "❌ the container reported no Python version" >&2; exit 1; }
+    PYTHON_EXPLICIT=1
+    echo "Matching the container: Python $PYTHON_VERSION, its package versions (no hashes: installed by exact version)"
+fi
+
 if [[ $RECREATE -eq 1 && -d "$VENV_DIR" ]]; then
     echo "Recreating venv (removing $VENV_DIR)"
     rm -rf "$VENV_DIR"
+fi
+
+# An existing venv keeps its Python: say so instead of silently ignoring --python.
+if [[ -x "$VENV_DIR/bin/python" && $PYTHON_EXPLICIT -eq 1 ]]; then
+    HAVE_PYTHON="$("$VENV_DIR/bin/python" -c 'import platform; print(platform.python_version())')"
+    case "$HAVE_PYTHON" in
+        "$PYTHON_VERSION"|"$PYTHON_VERSION".*) ;;
+        *) echo "❌ $VENV_DIR is Python $HAVE_PYTHON; --python $PYTHON_VERSION does not change an existing venv. Add --recreate." >&2
+           exit 1 ;;
+    esac
 fi
 
 # uv venvs are no-system-site-packages by default.
@@ -74,8 +110,26 @@ fi
 if [[ ! -x "$VENV_DIR/bin/python" ]]; then
     uv venv "$VENV_DIR" --python "$PYTHON_VERSION" || { echo "❌ uv venv failed" >&2; exit 1; }
 fi
-uv pip install --python "$VENV_DIR/bin/python" --require-hashes -r "$LIGHT_LOCK" \
-    || { echo "❌ uv pip install of the lock failed" >&2; exit 1; }
+if [[ $MATCH -eq 1 ]]; then
+    # The lock's packages at the container's versions, plain pins (the lock's hashes are CI's).
+    "$VENV_DIR/bin/python" "$REPORT" match-requirements --lock "$LIGHT_LOCK" --container "$WORK/container.json" \
+        > "$WORK/requirements.txt" || { rm -rf "$WORK"; echo "❌ could not derive the container's requirements" >&2; exit 1; }
+    uv pip install --python "$VENV_DIR/bin/python" -r "$WORK/requirements.txt" \
+        || { rm -rf "$WORK"; echo "❌ uv pip install of the container's versions failed" >&2; exit 1; }
+    # Older pins can pull in packages the lock does not name, at their newest release: pin every
+    # package both environments have to the container's version (the container is consistent).
+    "$VENV_DIR/bin/python" - collect < "$REPORT" > "$WORK/host.json" \
+        && "$VENV_DIR/bin/python" "$REPORT" pin-drift "$WORK/host.json" "$WORK/container.json" > "$WORK/pins.txt" \
+        || { rm -rf "$WORK"; echo "❌ could not compare the new venv with the container" >&2; exit 1; }
+    if [[ -s "$WORK/pins.txt" ]]; then
+        echo "Pinning $(wc -l < "$WORK/pins.txt" | tr -d ' ') transitive packages to the container's versions"
+        uv pip install --python "$VENV_DIR/bin/python" -r "$WORK/pins.txt" \
+            || { rm -rf "$WORK"; echo "❌ uv pip install of the container's transitive versions failed" >&2; exit 1; }
+    fi
+else
+    uv pip install --python "$VENV_DIR/bin/python" --require-hashes -r "$LIGHT_LOCK" \
+        || { echo "❌ uv pip install of the lock failed" >&2; exit 1; }
+fi
 uv pip install --python "$VENV_DIR/bin/python" --no-deps -e ./python/geobrix \
     || { echo "❌ uv pip install of the package failed" >&2; exit 1; }
 
@@ -93,6 +147,16 @@ if [[ $CONNECT -eq 1 ]]; then
         "pyspark[connect]==${PYSPARK_VERSION}" zstandard \
         || { rm -f "$CONSTRAINTS"; echo "❌ uv pip install of the Spark Connect client deps failed" >&2; exit 1; }
     rm -f "$CONSTRAINTS"
+    # Record what the connect tier declares, so gbx:venv:check can tell these host-only packages
+    # from drift (the container does not carry them yet). pyspark's own metadata names them.
+    "$VENV_DIR/bin/python" - > "$VENV_DIR/.gbx-connect-extras" <<'PY'
+import importlib.metadata as m, re
+names = set()
+for r in m.requires("pyspark") or []:
+    if re.search(r"""extra\s*==\s*["']connect["']""", r):
+        names.add(re.split(r"[ ;<>=!~\[(]", r)[0].lower().replace("_", "-"))
+print("\n".join(sorted(names)))
+PY
 fi
 
 # Assert isolation: the venv must not see host site-packages.
@@ -115,4 +179,10 @@ if [[ $EXIT_CODE -eq 0 && $CONNECT -eq 1 ]]; then
     EXIT_CODE=$?
 fi
 [[ $EXIT_CODE -eq 0 ]] && echo "✅ venv ready at $VENV_DIR" || echo "❌ venv sync failed"
+[[ -n "$WORK" ]] && rm -rf "$WORK"
+if [[ $EXIT_CODE -eq 0 && $MATCH -eq 1 ]]; then
+    echo ""
+    GBX_PYRX_VENV="$VENV_DIR" bash "$SCRIPT_DIR/gbx-venv-check.sh"
+    EXIT_CODE=$?
+fi
 exit $EXIT_CODE

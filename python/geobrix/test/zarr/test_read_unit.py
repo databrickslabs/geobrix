@@ -133,6 +133,7 @@ _KINDS = {
     "u2": "int",
     "u4": "long",
     "u8": "decimal",
+    "u8m": "decimal",  # a masked uint64 is still a DECIMAL(20,0), with NULLs
     "b": "boolean",
     "f2": "float",
     "f4": "float",
@@ -184,6 +185,10 @@ def test_masked_cells_are_null_and_nan_data_is_not(dtype_matrix):
     path, want = dtype_matrix
     _, table = _table(path)
     assert table.column("m2").null_count == 3
+    assert table.column("u8m").null_count == 2
+    assert (
+        table.column("u8m")[1].as_py() == 2**63 + 1
+    )  # exact, beyond int64 and float64
     assert table.column("pk").null_count == 2
     mf = table.column("mf").to_pylist()
     assert (
@@ -485,3 +490,143 @@ def test_the_docstring_says_where_executor_errors_surface():
     doc = _read.gbx_zarr_read.__doc__
     assert "pyspark.errors.PythonException" in doc and "Fix:" in doc
     assert "keep their" in doc and "DECIMAL(20,0)" in doc and "NULL" in doc
+
+
+# --- table, blocks and xarray agree (xarray's _Unsigned and dtype: bool coders) -------------
+
+
+def _one_array(tmp_path, fmt, values, dtype, attrs, name="v"):
+    """A one-array store with dimension ``k`` (no coordinate), v2 or v3."""
+    path = (
+        tmp_path / f"a{fmt}_{abs(hash((name, json.dumps(attrs, sort_keys=True))))}.zarr"
+    )
+    g = zarr.open_group(str(path), mode="w", zarr_format=fmt)
+    attributes, kw = dict(attrs), {}
+    if fmt == 2:
+        attributes["_ARRAY_DIMENSIONS"] = ["k"]
+    else:
+        kw["dimension_names"] = ("k",)
+    arr = g.create_array(
+        name,
+        shape=(len(values),),
+        chunks=(len(values),),
+        dtype=dtype,
+        fill_value=None if fmt == 2 else 0,
+        attributes=attributes,
+        **kw,
+    )
+    arr[:] = np.asarray(values, dtype=dtype)
+    return path
+
+
+def _three_ways(path, name="v"):
+    """``(table column as a list, blocks array, xarray array)`` of one variable."""
+    import xarray as xr
+    from xarray.backends.zarr import ZarrStore
+
+    _, table = _table(path, variables=[name])
+    _, _, units, cfg = _plan(path, variables=[name])
+    rows = [r for b in _run(units, cfg) for r in b.to_pylist()]
+    blocks = np.concatenate([_read.block_to_numpy(r) for r in rows])
+    theirs = xr.open_dataset(
+        ZarrStore.open_group(str(path), mode="r", consolidated=False)
+    )
+    return table.column(name).to_pylist(), blocks, theirs[name].values
+
+
+def _agree(column, blocks, theirs):
+    """Missing cells are NULL in the table and NaN/NaT in blocks and xarray; the rest equal."""
+    assert len(column) == len(blocks) == len(theirs)
+    for got, b, x in zip(column, blocks, theirs):
+        gone = got is None
+        assert gone == bool(np.isnan(b) if b.dtype.kind in "fM" else False)
+        assert gone == bool(np.isnan(x) if x.dtype.kind in "fM" else False)
+        if not gone:
+            assert got == b.item() == x.item() or (got == int(b) == int(x))
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_table_blocks_and_xarray_agree_on_an_unsigned_array(tmp_path, fmt):
+    path = _one_array(tmp_path, fmt, [-1, -56, 0, 100], "i1", {"_Unsigned": "true"})
+    cfg, _ = _table(path)
+    assert dict(cfg.columns)["v"] == "short"  # int8 -> uint8 -> SMALLINT
+    column, blocks, theirs = _three_ways(path)
+    assert column == [255, 200, 0, 100] and list(blocks) == [255, 200, 0, 100]
+    assert blocks.dtype == np.dtype("u1") and list(theirs) == [255, 200, 0, 100]
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_table_blocks_and_xarray_agree_on_unsigned_false(tmp_path, fmt):
+    path = _one_array(tmp_path, fmt, [65535, 5, 7], "u2", {"_Unsigned": "false"})
+    cfg, _ = _table(path)
+    assert dict(cfg.columns)["v"] == "short"  # uint16 -> int16 -> SMALLINT
+    column, blocks, theirs = _three_ways(path)
+    assert (
+        column == [-1, 5, 7]
+        and list(blocks) == [-1, 5, 7]
+        and list(theirs) == [-1, 5, 7]
+    )
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_table_blocks_and_xarray_agree_on_a_bool_dtype_attribute(tmp_path, fmt):
+    path = _one_array(tmp_path, fmt, [0, 1, 1, 0], "i1", {"dtype": "bool"})
+    cfg, _ = _table(path)
+    assert dict(cfg.columns)["v"] == "boolean"
+    column, blocks, theirs = _three_ways(path)
+    want = [False, True, True, False]
+    assert column == want and list(blocks) == want and list(theirs) == want
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_table_blocks_and_xarray_agree_on_an_unsigned_array_with_a_fill(tmp_path, fmt):
+    attrs = {"_Unsigned": "true", "_FillValue": -1}
+    path = _one_array(tmp_path, fmt, [-1, -56, 0, 100], "i1", attrs)
+    cfg, _ = _table(path)
+    assert dict(cfg.columns)["v"] == "short"  # still an integer column, with a NULL
+    column, blocks, theirs = _three_ways(path)
+    assert column == [None, 200, 0, 100]  # the stored -1 is 255 unsigned: the fill
+    assert np.isnan(blocks[0]) and list(blocks[1:]) == [200, 0, 100]
+    assert np.isnan(theirs[0]) and list(theirs[1:]) == [200, 0, 100]
+    _agree(column, blocks, theirs)
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_table_blocks_and_xarray_agree_on_an_unsigned_time_coordinate(tmp_path, fmt):
+    attrs = {
+        "units": "hours since 2000-01-01",
+        "calendar": "standard",
+        "_Unsigned": "true",
+    }
+    g_path = tmp_path / f"t{fmt}.zarr"
+    g = zarr.open_group(str(g_path), mode="w", zarr_format=fmt)
+    kw = {"dimension_names": ("time",)} if fmt == 3 else {}
+    a = dict(attrs, **({"_ARRAY_DIMENSIONS": ["time"]} if fmt == 2 else {}))
+    t = g.create_array(
+        "time",
+        shape=(2,),
+        chunks=(2,),
+        dtype="i2",
+        fill_value=None if fmt == 2 else 0,
+        attributes=a,
+        **kw,
+    )
+    t[:] = np.array([-1, 10], dtype="i2")
+    v = g.create_array(
+        "v",
+        shape=(2,),
+        chunks=(2,),
+        dtype="f4",
+        attributes={"_ARRAY_DIMENSIONS": ["time"]} if fmt == 2 else {},
+        **kw,
+    )
+    v[:] = 1
+    cfg, table = _table(g_path, variables=["v"])
+    got = [x.replace(tzinfo=None) for x in table.column("time").to_pylist()]
+    want = [np.datetime64("2007-06-23T15:00"), np.datetime64("2000-01-01T10:00")]
+    assert [np.datetime64(x, "m") for x in got] == want
+    # the labels blocks carry are the same times
+    _, _, units, bcfg = _plan(g_path, variables=["v"])
+    row = _run(units, bcfg)[0].to_pylist()[0]
+    assert row["coord_start"][0].startswith("2007-06-23T15:00")
+    assert row["coord_stop"][0].startswith("2000-01-01T10:00")

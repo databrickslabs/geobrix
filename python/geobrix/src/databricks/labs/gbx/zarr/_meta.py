@@ -360,26 +360,76 @@ def cf_decode(
         else tuple(f"dim_{i}" for i in range(values.ndim))
     )
     var = Variable(dims, values, _cf_attrs(meta, use_zarr_fill_value_as_mask))
-    return decode_cf_variable(
-        meta.name, var, decode_times=False, decode_timedelta=False
-    ).values
+    try:
+        return decode_cf_variable(
+            meta.name, var, decode_times=False, decode_timedelta=False
+        ).values
+    except (
+        OverflowError
+    ) as e:  # an _Unsigned array whose fill is not in its storage type
+        raise _fill_error(meta, var.attrs.get("_FillValue"), e) from None
 
 
-def missing_mask(
+def _fill_error(meta: ArrayMeta, fill, cause) -> ZarrUnsupported:
+    return ZarrUnsupported(
+        f"the _FillValue {fill!r} of array {meta.name!r} does not fit its stored "
+        f"{np.dtype(meta.dtype)} type once _Unsigned is applied ({cause})",
+        fix="store _FillValue in the array's stored integer type, or read with decode=False",
+    )
+
+
+def cf_reinterpret(
     values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
-) -> np.ndarray | None:
-    """Which cells of ``values`` (as stored) are missing data, or ``None`` when nothing masks.
+) -> tuple[np.ndarray, dict]:
+    """``(values, attrs)``: the stored values as xarray's integer and boolean coders see them.
 
-    A cell is missing when it equals the ``_FillValue`` or one of the ``missing_value``s
-    (and, where ``use_zarr_fill_value_as_mask`` applies, the array ``fill_value``; see
-    ``_cf_attrs``). The comparison is on the stored values, before any scaling, so it is
-    exact for integers of any size. A NaN fill value matches NaN cells; a NaN that is data
-    beside a numeric fill is not missing. A boolean array is never masked.
+    xarray applies these before it masks or scales, and every reader of raw values must too:
+
+    - ``_Unsigned = "true"`` on a signed integer makes the values the unsigned integers of
+      the same width, and ``"false"`` on an unsigned one the signed integers (the bits are
+      kept). ``_FillValue`` follows, converted as xarray converts it (the stored signed -1 of
+      an unsigned byte is 255), so integer comparisons stay exact. Any other value of
+      ``_Unsigned``, or a non-integer array, is left alone.
+    - ``dtype = "bool"`` on an integer array makes the values booleans.
+
+    ``attrs`` are the CF attributes (``_cf_attrs``) with ``_Unsigned`` and a boolean
+    ``dtype`` consumed and the fill converted. Raises ``ZarrUnsupported`` for a
+    ``_FillValue`` that does not fit the stored type.
     """
     values = np.asarray(values)
+    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    unsigned = attrs.pop("_Unsigned", None)
+    kind = values.dtype.kind
+    target = None
+    if kind == "i" and unsigned == "true":
+        target = np.dtype(f"u{values.dtype.itemsize}")
+    elif kind == "u" and unsigned == "false":
+        target = np.dtype(f"i{values.dtype.itemsize}")
+    if target is not None:
+        fill = attrs.get("_FillValue")
+        if fill is not None and np.ndim(fill) == 0:
+            try:
+                if (
+                    kind == "i"
+                ):  # the fill is the signed value on disk: same bits, unsigned
+                    attrs["_FillValue"] = (
+                        np.array(fill, dtype=values.dtype).view(target).item()
+                    )
+                else:
+                    attrs["_FillValue"] = target.type(fill)
+            except (OverflowError, ValueError, TypeError) as e:
+                raise _fill_error(meta, fill, e) from None
+        values = values.astype(target)
+    if attrs.get("dtype") == "bool":
+        del attrs["dtype"]
+        values = values.astype(bool)
+    return values, attrs
+
+
+def _mask_of(values: np.ndarray, attrs: dict) -> np.ndarray | None:
+    """Cells of ``values`` that equal a fill value in ``attrs``; ``None`` for no mask."""
     if values.dtype.kind == "b":
         return None
-    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
     fills = []
     for key in ("_FillValue", "missing_value"):
         raw = attrs.get(key)
@@ -388,7 +438,9 @@ def missing_mask(
     mask = None
     for fill in fills:
         if isinstance(fill, bool) or not isinstance(fill, (int, float)):
-            continue  # xarray masks numbers only
+            # xarray compares the data with the fill, and a string is never equal to a
+            # number: it masks nothing, so neither does this
+            continue
         if isinstance(fill, float) and math.isnan(fill):
             hit = np.isnan(values) if values.dtype.kind in "fc" else None
         else:
@@ -398,24 +450,43 @@ def missing_mask(
     return mask
 
 
+def missing_mask(
+    values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
+) -> np.ndarray | None:
+    """Which cells of ``values`` (as stored) are missing data, or ``None`` when nothing masks.
+
+    A cell is missing when it equals the ``_FillValue`` or one of the ``missing_value``s
+    (and, where ``use_zarr_fill_value_as_mask`` applies, the array ``fill_value``; see
+    ``_cf_attrs``). The comparison is on the stored values after ``cf_reinterpret`` and
+    before any scaling, so it is exact for integers of any size. A NaN fill value matches
+    NaN cells; a NaN that is data beside a numeric fill is not missing. A boolean array is
+    never masked, and a fill that is not a number matches nothing, as in xarray.
+    """
+    values, attrs = cf_reinterpret(
+        values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+    )
+    return _mask_of(values, attrs)
+
+
 def cf_unpack(
     values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """``(values, mask)`` for a reader that wants missing data as a mask, not as NaN.
 
-    ``mask`` is ``missing_mask`` (``None`` when nothing is masked). ``values`` keep their
-    stored dtype, and so stay exact for integers, unless the array is packed
-    (``scale_factor`` or ``add_offset``), when they are decoded to floating point as
-    ``cf_decode`` does. The cells under ``mask`` hold no meaningful value.
+    ``mask`` is ``missing_mask`` (``None`` when nothing is masked). ``values`` are the
+    stored values after ``cf_reinterpret`` (so ``_Unsigned`` and a boolean ``dtype`` are
+    applied, as in ``cf_decode``) and keep their integer dtype, and so stay exact, unless
+    the array is packed (``scale_factor`` or ``add_offset``), when they are decoded to
+    floating point as ``cf_decode`` does. The cells under ``mask`` hold no meaningful value.
     """
-    values = np.asarray(values)
-    mask = missing_mask(
-        values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+    stored = np.asarray(values)
+    values, attrs = cf_reinterpret(
+        stored, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
     )
-    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    mask = _mask_of(values, attrs)
     if "scale_factor" in attrs or "add_offset" in attrs:
         values = cf_decode(
-            values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+            stored, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
         )
     return values, mask
 
@@ -451,20 +522,21 @@ def decode_coord(
     from xarray.coding.times import decode_cf_datetime
 
     fix = "pass decode=False to read the raw time numbers"
-    # Missing times are found on the stored values and put back as NaT afterwards, so an
-    # integer coordinate (nanoseconds since 1970, say) never passes through float64; the
-    # fill itself is replaced by 0 for the decoding, where it could lie outside the range.
-    values = np.asarray(values)
-    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    # The stored integers are reinterpreted first (_Unsigned), as xarray does. Missing times
+    # are then found on them and put back as NaT afterwards, so an integer coordinate
+    # (nanoseconds since 1970, say) never passes through float64; the fill itself is
+    # replaced by 0 for the decoding, where it could lie outside the range.
+    stored = np.asarray(values)
+    values, attrs = cf_reinterpret(
+        stored, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+    )
     mask = None
     if "scale_factor" in attrs or "add_offset" in attrs:
         values = cf_decode(
-            values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+            stored, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
         )
     else:
-        mask = missing_mask(
-            values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
-        )
+        mask = _mask_of(values, attrs)
         if mask is not None and mask.any():
             values = np.where(mask, np.zeros((), dtype=values.dtype), values)
     try:

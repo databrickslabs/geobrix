@@ -538,3 +538,191 @@ def xr_time(path):
     return xr.open_dataset(
         ZarrStore.open_group(str(path), mode="r", consolidated=False)
     ).time.values
+
+
+# --- Task 9 fix round 2: xarray's _Unsigned and dtype:bool coders, one reinterpretation ----
+
+
+def _stored(tmp_path, fmt, values, dtype, attrs, name="v"):
+    """A one-array store (dimension ``k``) and the array's ``ArrayMeta``."""
+    import zarr
+
+    path = (
+        tmp_path / f"s{fmt}_{name}_{abs(hash(json.dumps(attrs, sort_keys=True)))}.zarr"
+    )
+    g = zarr.open_group(str(path), mode="w", zarr_format=fmt)
+    attributes, kw = dict(attrs), {}
+    if fmt == 2:
+        attributes["_ARRAY_DIMENSIONS"] = ["k"]
+    else:
+        kw["dimension_names"] = ("k",)
+    arr = g.create_array(
+        name,
+        shape=(len(values),),
+        chunks=(len(values),),
+        dtype=dtype,
+        fill_value=None if fmt == 2 else 0,
+        attributes=attributes,
+        **kw,
+    )
+    arr[:] = np.asarray(values, dtype=dtype)
+    doc = path / name
+    meta = (
+        parse_v3(name, json.loads((doc / "zarr.json").read_text()))
+        if fmt == 3
+        else parse_v2(
+            name,
+            json.loads((doc / ".zarray").read_text()),
+            json.loads((doc / ".zattrs").read_text()),
+        )
+    )
+    return path, meta
+
+
+def _xarray_values(path, name="v"):
+    import xarray as xr
+    from xarray.backends.zarr import ZarrStore
+
+    store = ZarrStore.open_group(str(path), mode="r", consolidated=False)
+    return xr.open_dataset(store)[name].values
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_an_unsigned_attribute_reinterprets_signed_integers_like_xarray(tmp_path, fmt):
+    from databricks.labs.gbx.zarr._meta import cf_reinterpret, cf_unpack
+
+    raw = np.array([-1, -56, 0, 100], dtype="i1")
+    path, meta = _stored(tmp_path, fmt, raw, "i1", {"_Unsigned": "true"})
+    values, attrs = cf_reinterpret(raw, meta)
+    assert values.dtype == np.dtype("u1") and list(values) == [255, 200, 0, 100]
+    assert "_Unsigned" not in attrs  # consumed, as xarray moves it to the encoding
+    out, mask = cf_unpack(raw, meta)
+    assert out.dtype == np.dtype("u1") and mask is None
+    np.testing.assert_array_equal(out, _xarray_values(path))
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_an_unsigned_false_attribute_reinterprets_unsigned_integers(tmp_path, fmt):
+    from databricks.labs.gbx.zarr._meta import cf_unpack
+
+    raw = np.array([65535, 5, 7], dtype="u2")
+    path, meta = _stored(tmp_path, fmt, raw, "u2", {"_Unsigned": "false"})
+    out, mask = cf_unpack(raw, meta)
+    assert out.dtype == np.dtype("i2") and list(out) == [-1, 5, 7] and mask is None
+    np.testing.assert_array_equal(out, _xarray_values(path))
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_a_bool_dtype_attribute_makes_booleans_like_xarray(tmp_path, fmt):
+    from databricks.labs.gbx.zarr._meta import cf_unpack, missing_mask
+
+    raw = np.array([0, 1, 1, 0], dtype="i1")
+    path, meta = _stored(tmp_path, fmt, raw, "i1", {"dtype": "bool"})
+    out, mask = cf_unpack(raw, meta)
+    assert out.dtype == np.dtype("bool") and list(out) == [False, True, True, False]
+    assert mask is None and missing_mask(raw, meta) is None  # a boolean is never masked
+    np.testing.assert_array_equal(out, _xarray_values(path))
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_an_unsigned_array_masks_its_fill_in_the_unsigned_values(tmp_path, fmt):
+    """_FillValue -1 on int8 with _Unsigned is 255 once reinterpreted (xarray's rule)."""
+    from databricks.labs.gbx.zarr._meta import cf_reinterpret, cf_unpack
+
+    raw = np.array([-1, -56, 0, 100], dtype="i1")
+    path, meta = _stored(
+        tmp_path, fmt, raw, "i1", {"_Unsigned": "true", "_FillValue": -1}
+    )
+    values, attrs = cf_reinterpret(raw, meta)
+    assert attrs["_FillValue"] == 255 and list(values) == [255, 200, 0, 100]
+    out, mask = cf_unpack(raw, meta)
+    assert list(mask) == [True, False, False, False] and out.dtype == np.dtype("u1")
+    theirs = _xarray_values(path)  # float, NaN where missing
+    np.testing.assert_array_equal(np.where(mask, np.nan, out), theirs)
+
+
+def test_unsigned_is_ignored_where_xarray_ignores_it(tmp_path):
+    from databricks.labs.gbx.zarr._meta import cf_unpack
+
+    raw = np.array([-1, 5], dtype="i1")
+    for attrs in ({"_Unsigned": True}, {"_Unsigned": "TRUE"}, {"_Unsigned": "false"}):
+        path, meta = _stored(
+            tmp_path, 3, raw, "i1", attrs
+        )  # not "true" on a signed int
+        out, _ = cf_unpack(raw, meta)
+        assert out.dtype == np.dtype("i1") and list(out) == [-1, 5], attrs
+        np.testing.assert_array_equal(out, _xarray_values(path))
+    flt = np.array([1.5, -2.0], dtype="f4")
+    path, meta = _stored(
+        tmp_path, 3, flt, "f4", {"_Unsigned": "true"}
+    )  # not an integer
+    out, _ = cf_unpack(flt, meta)
+    np.testing.assert_array_equal(out, flt)
+
+
+def test_an_unsigned_fill_that_does_not_fit_is_a_typed_refusal(tmp_path):
+    from databricks.labs.gbx.zarr._meta import cf_unpack
+
+    raw = np.array([-1, 5], dtype="i1")
+    _, meta = _stored(tmp_path, 3, raw, "i1", {"_Unsigned": "true", "_FillValue": 255})
+    with pytest.raises(ZarrUnsupported) as e:
+        cf_unpack(raw, meta)  # xarray raises a bare OverflowError for the same array
+    assert "_FillValue" in str(e.value) and "Fix:" in str(e.value)
+    with pytest.raises(ZarrUnsupported):
+        cf_decode(raw, meta)
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_an_unsigned_time_coordinate_decodes_from_the_unsigned_values(tmp_path, fmt):
+    raw = np.array([-1, 10], dtype="i2")
+    attrs = {
+        "units": "hours since 2000-01-01",
+        "calendar": "standard",
+        "_Unsigned": "true",
+    }
+    path, meta = _stored(tmp_path, fmt, raw, "i2", attrs, name="time")
+    ours = decode_coord(raw, meta)
+    assert str(ours[0]) == "2007-06-23T15:00:00.000000000"  # 65535 hours, not -1
+    assert str(ours[1]) == "2000-01-01T10:00:00.000000000"
+    np.testing.assert_array_equal(ours, _xarray_values(path, "time"))
+    # with a fill expressed in the stored (signed) type: that cell is NaT
+    attrs["_FillValue"] = -1
+    path, meta = _stored(tmp_path, fmt, raw, "i2", attrs, name="time")
+    ours = decode_coord(raw, meta)
+    assert np.isnat(ours[0]) and str(ours[1]) == "2000-01-01T10:00:00.000000000"
+    np.testing.assert_array_equal(ours, _xarray_values(path, "time"))
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_a_packed_time_coordinate_with_a_fill_decodes_through_the_packing(
+    tmp_path, fmt
+):
+    raw = np.array([2, -1], dtype="i2")
+    attrs = {
+        "units": "hours since 2000-01-01",
+        "calendar": "standard",
+        "scale_factor": 0.5,
+        "_FillValue": -1,
+    }
+    path, meta = _stored(tmp_path, fmt, raw, "i2", attrs, name="time")
+    ours = decode_coord(raw, meta)
+    assert str(ours[0]) == "2000-01-01T01:00:00.000000000" and np.isnat(ours[1])
+    np.testing.assert_array_equal(ours, _xarray_values(path, "time"))
+
+
+@pytest.mark.parametrize("attr", ["_FillValue", "missing_value"])
+@pytest.mark.parametrize("fill", ["NaN", "-9999"])
+def test_a_string_fill_matches_nothing_exactly_as_it_does_in_xarray(
+    tmp_path, attr, fill
+):
+    """xarray compares the data with the string, which is never equal: nothing is masked.
+    The table's mask must not disagree with the blocks it sits beside."""
+    from databricks.labs.gbx.zarr._meta import cf_unpack
+
+    raw = np.array([1.0, np.nan, -9999.0, 2.0], dtype="f4")
+    path, meta = _stored(
+        tmp_path, 2, raw, "f4", {attr: fill}
+    )  # v2: the attribute stays raw
+    out, mask = cf_unpack(raw, meta)
+    assert mask is None or not mask.any()
+    np.testing.assert_array_equal(out, _xarray_values(path))

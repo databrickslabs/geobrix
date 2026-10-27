@@ -424,6 +424,7 @@ def test_a_table_has_one_spark_type_per_kind_and_nulls_for_masked_cells(
         "u2": "int",
         "u4": "bigint",
         "u8": "decimal(20,0)",
+        "u8m": "decimal(20,0)",
         "b": "boolean",
         "f2": "float",
         "f4": "float",
@@ -677,6 +678,23 @@ def test_a_unit_round_trips_through_json():
         "t2m", ((0,),), ({**row, "write_id": "f" * 32, "meta": "{}", "tag": None},)
     )
     assert set(json.loads(heavy.to_json())["rows"][0]) == set(row)
+
+
+@pytest.mark.parametrize("n", [1, 8, 24, 37])
+def test_every_unit_gets_a_partition_of_its_own(spark_delta, n):
+    """Hashing the ids into n partitions leaves some empty and doubles up others; the
+    Range scan joined to the units is exactly one unit per partition."""
+    from pyspark.sql import functions as F
+
+    units = [Unit("t2m", ((i,),), ()) for i in range(n)]
+    work = _read._work_frame(spark_delta, units)
+    assert work.columns == ["id", "unit"]
+    by_partition = work.groupBy(F.spark_partition_id().alias("p")).count().collect()
+    assert len(by_partition) == n and {r["count"] for r in by_partition} == {1}
+    assert sorted(r["id"] for r in work.collect()) == list(range(n))
+    assert {Unit.from_json(r["unit"]).chunks[0][0] for r in work.collect()} == set(
+        range(n)
+    )
 
 
 def test_small_budgets_split_the_read_into_many_tasks_without_losing_a_cell(

@@ -10,7 +10,7 @@ The read is planned on the driver and run in tasks:
    touch.
 3. Fetch only the manifest rows of the touched shards, and pack the chunks into work units
    that fit the memory budget (``_plan``).
-4. The units are the rows of a DataFrame (one per unit, ``repartition(n_units, id)``) that
+4. The units are the rows of a DataFrame (one per unit, one per partition) that
    ``mapInArrow`` runs: each task rebuilds its store from its own unit's rows alone, reads
    each chunk's selected cells, decodes them, and emits Arrow batches. No task needs a
    session or the manifest table, and what is sent to every task does not grow with the
@@ -1033,6 +1033,26 @@ def _table_batches(cfg, unit, reader) -> Iterator[pa.RecordBatch]:
             del values, masks
 
 
+def _work_frame(spark, units: list[Unit]):
+    """One row ``(id, unit)`` per unit, in exactly one partition each.
+
+    The units are data, so a task is sent its own and not all of them. They are joined to a
+    ``spark.range(n, numPartitions=n)`` scan: a Range scan puts one id in each of the n
+    partitions and the broadcast join keeps those partitions, so no shuffle can leave one
+    empty or double another up, and nothing for Serverless's AQE to coalesce. (Hashing the
+    ids into n partitions with ``repartition(n, id)`` puts several units in one partition
+    and leaves others empty.) The units are built from a plain list of tuples: an Arrow
+    table conversion drops the rows that follow an empty chunk.
+    """
+    from pyspark.sql import functions as F
+
+    n = len(units)
+    work = spark.createDataFrame(
+        [(i, u.to_json()) for i, u in enumerate(units)], "id BIGINT, unit STRING"
+    )
+    return spark.range(n, numPartitions=n).join(F.broadcast(work), "id")
+
+
 def _task_function(cfg: _TaskConfig):
     """The function ``mapInArrow`` runs: each input row is one unit, as JSON."""
 
@@ -1169,14 +1189,7 @@ def gbx_zarr_read(
         )
     if not units:
         return spark.createDataFrame([], schema)
-    n = len(units)
-    # One row per unit, so a task reads only its own unit rather than all of them. A plain
-    # list of tuples (not an Arrow table, whose conversion drops the rows after an empty
-    # chunk); repartition(n, column) is the one fan-out Serverless honours.
-    work = spark.createDataFrame(
-        [(i, u.to_json()) for i, u in enumerate(units)], "id BIGINT, unit STRING"
-    ).repartition(n, "id")
-    return work.mapInArrow(_task_function(cfg), schema)
+    return _work_frame(spark, units).mapInArrow(_task_function(cfg), schema)
 
 
 # --- block helpers -------------------------------------------------------------------

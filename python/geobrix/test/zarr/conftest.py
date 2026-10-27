@@ -131,6 +131,14 @@ def dtype_matrix(tmp_path_factory):
     put("u2", [65535 - i for i in range(n)], "uint16")
     put("u4", [2**32 - 1 - i for i in range(n)], "uint32")
     put("u8", [2**64 - 1 - i for i in range(n)], "uint64")
+    u8m = [2**64 - 1 if i in (0, 5) else 2**63 + i for i in range(n)]
+    put(
+        "u8m",
+        u8m,
+        "uint64",
+        {"_FillValue": 2**64 - 1},  # a fill beyond what int64 or float64 can hold
+        [None if v == 2**64 - 1 else v for v in u8m],
+    )
     put("b", [bool(i % 3) for i in range(n)], "bool")
     put("f2", [0.5 * i for i in range(n)], "float16")
     put("f4", [0.25 * i for i in range(n)], "float32")

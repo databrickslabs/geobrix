@@ -6,6 +6,10 @@ batches until one is empty. A table concatenated from parts has such a chunk whe
 part came out empty, so any Arrow table GeoBrix builds from parts must reach Spark through
 :func:`to_spark_df`, not through ``createDataFrame`` directly.
 
+Measured: classic PySpark 4.0.0 loses the rows; Serverless env 6 (Spark Connect, PySpark
+4.3 dev) keeps them. The helper is a cheap no-op where Spark is fixed, and the guard where it
+is not, so callers do not branch on the runtime.
+
 Light by design: no PySpark import, no ``sparkContext``/``_jvm``/``.rdd``/``spark.conf``,
 so it is safe on Serverless and Spark Connect. ``pyarrow`` is imported when a table is
 rebuilt, not at import time.

@@ -4,6 +4,17 @@ spark.addArtifact does not work due to permissions issues.
 Also there could be annoying warnings about jupyter_client which isn't something relevant to the pytest we do.
 If those warnings occur use:  export JUPYTER_PLATFORM_DIRS=1
 
+## Platform (arm64 and amd64)
+
+The image is built and run natively for the host: `geobrix-dev:ubuntu24-gdal311-spark-arm64` on an arm64 Mac, `...-amd64` on an x86 host. An amd64 image on an arm64 Mac runs under Rosetta and is about 10x slower (one 131-test file took 1,410 s in the container against 134 s natively), so the default follows the host; there is no amd64 default.
+
+- Build: `bash scripts/commands/gbx-docker-rebuild.sh [--platform linux/arm64|linux/amd64]`.
+- Run: `scripts/docker/start_docker*.sh` and `gbx:docker:start` choose the platform and tag from the host. `GBX_DOCKER_PLATFORM=linux/amd64` (or `--platform`) overrides, e.g. to fall back to the amd64 image.
+- Both images can exist at once. Switch a running container with `gbx:docker:start --recreate --platform <p>`.
+- The Python dependencies are hash-pinned per architecture: `python/geobrix/requirements-dev-container.txt` (x86_64) and `requirements-dev-container-aarch64.txt`, compiled from the same `.in` with the same versions (`python3 scripts/ci/check_dev_container_locks.py`).
+- A private package index: `export PIP_INDEX_URL=...` before the build. It is passed as a BuildKit secret, not a build-arg. BuildKit's layer cache ignores secrets, so after adding or changing the index rebuild with `--no-cache`.
+- `scripts/docker/gbx-platform.sh` holds the platform and tag logic that the build and start scripts share.
+
 ## Ports and binding
 
 - The image sets **JUPYTER_IP=0.0.0.0** so the kernel ZMQ binds to all interfaces and works reliably in Docker (for **testbook** and notebook tests). No security requirement in this dev image.

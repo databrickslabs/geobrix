@@ -1,12 +1,19 @@
 # Source of truth for the geobrix-dev Docker image's Python deps.
-# Consumed by scripts/docker/Dockerfile via:
-#   pip install --require-hashes -r python/geobrix/requirements-dev-container.txt
+# Consumed by scripts/docker/Dockerfile via (the lock for the image's own architecture):
+#   pip install --require-hashes -r python/geobrix/requirements-dev-container.txt          (x86_64)
+#   pip install --require-hashes -r python/geobrix/requirements-dev-container-aarch64.txt  (arm64)
 #
-# Regenerate the hash-pinned lock alongside any edit:
-#   docker exec -it geobrix-dev bash -lc \
-#     'cd /root/geobrix/python/geobrix && \
-#      uv pip compile --generate-hashes --python-version 3.12 \
-#         --output-file requirements-dev-container.txt requirements-dev-container.in'
+# Regenerate BOTH hash-pinned locks alongside any edit (x86_64 first; the aarch64 compile takes its
+# versions from it with -c, so the two pin the same versions), then check them:
+#   cd python/geobrix
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#      --python-platform x86_64-unknown-linux-gnu \
+#      --output-file requirements-dev-container.txt requirements-dev-container.in
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#      --python-platform aarch64-unknown-linux-gnu \
+#      -c requirements-dev-container.txt \
+#      --output-file requirements-dev-container-aarch64.txt requirements-dev-container.in
+#   python3 scripts/ci/check_dev_container_locks.py
 #
 # All versions match scripts/docker/Dockerfile's ENV block (DBR 17.3 LTS-aligned
 # where applicable). GDAL is NOT included — it's built from source and the

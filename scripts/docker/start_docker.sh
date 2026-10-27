@@ -33,6 +33,14 @@ esac
 # always-on default; a second concurrent JVM fails because both bind 5005, which is why gbx
 # commands unset it), add this line to the docker run below:
 #   -e JAVA_TOOL_OPTIONS="-agentlib:jdwp=transport=dt_socket,address=5005,server=y,suspend=n" \
-docker run --platform linux/amd64 --name geobrix-dev -p 5005:5005 -p 8888:8888 -p 4040:4040 \
+#
+# Platform: the host's architecture, or $GBX_DOCKER_PLATFORM (linux/arm64 | linux/amd64). The image is
+# geobrix-dev:ubuntu24-gdal311-spark-<arch> (see gbx-platform.sh).
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+source "$SCRIPT_DIR/gbx-platform.sh"
+PLATFORM="$(gbx_docker_platform)" || exit 2
+IMAGE="$(gbx_require_dev_image "$PLATFORM")" || exit 1
+
+docker run --platform "$PLATFORM" --name geobrix-dev -p 5005:5005 -p 8888:8888 -p 4040:4040 \
 -v "$REPO_ROOT":/root/geobrix \
--itd geobrix-dev:ubuntu24-gdal311-spark /bin/bash
+-itd "$IMAGE" /bin/bash

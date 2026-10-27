@@ -1,5 +1,7 @@
 # --- GLOBAL ARGUMENTS ---
-ARG BUILDPLATFORM=linux/amd64
+# The CPU platform is whatever `--platform` the build is given (scripts/docker/build_smart.sh
+# passes the host's, or $GBX_DOCKER_PLATFORM): linux/arm64 or linux/amd64. Nothing here defaults
+# to amd64, and an arch-specific path is derived in-image (dpkg) or from BuildKit's TARGETARCH.
 ARG GDAL_VERSION=3.11.4
 ARG PDAL_VERSION=2.8.2
 # Pinned commit for PDAL ${PDAL_VERSION} (Labs lockdown policy: tags are mutable).
@@ -14,7 +16,8 @@ ARG PDAL_SHA=736fa0a66af4bed7105dff5fa152edf26bbb8a3a
 # ==========================================
 # Pinned by digest (Labs lockdown policy). To refresh, re-pull ubuntu:24.04 from
 # Docker Hub and update the sha256 below. Tag comment retained for readability.
-FROM --platform=${BUILDPLATFORM} ubuntu@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b AS base
+# The digest is the multi-arch index (amd64 + arm64); the build's --platform picks the member.
+FROM ubuntu@sha256:c4a8d5503dfb2a3eb8ab5f807da5bc69a85730fb49b5cfca2330194ebcc41c7b AS base
 # ubuntu:24.04
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -40,8 +43,8 @@ RUN curl -fsSL https://repos.azul.com/azul-repo.key -o /tmp/azul-repo.key \
 RUN apt-get update && apt-get install -y zulu17-jdk --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Fix Java Pathing
-RUN ln -s /usr/lib/jvm/zulu17-ca-amd64 /usr/lib/jvm/zulu-17
+# Fix Java Pathing (the Zulu package installs to zulu17-ca-<dpkg arch>: amd64 or arm64)
+RUN ln -s /usr/lib/jvm/zulu17-ca-$(dpkg --print-architecture) /usr/lib/jvm/zulu-17
 ENV JAVA_HOME=/usr/lib/jvm/zulu-17
 ENV PATH=$JAVA_HOME/bin:$PATH
 
@@ -155,8 +158,9 @@ RUN mkdir -p /tmp/pdal && cd /tmp/pdal \
 # ==========================================
 # STAGE 6: Final Development Environment
 # e.g. `docker build --target final -t geobrix-final .`
+# (STAGE 7 below sets the per-architecture library path and is the stage tagged as the image.)
 # ==========================================
-FROM pdal-builder AS final
+FROM pdal-builder AS final-base
 
 # --- Maven Installation (Pinned Checksum per Labs lockdown policy) ---
 # Pinning the SHA-512 in-Dockerfile prevents a compromised archive.apache.org
@@ -205,36 +209,38 @@ ENV PYZMQ_VERSION=25.1.1
 
 # --- Python Environment ---
 #
-# Pip index URL is injectable via --build-arg. Defaults to public PyPI;
-# override to a private mirror if your build network requires one.
+# A package index (a private mirror, if the build network needs one) arrives as the BuildKit
+# SECRET pip_index_url, never as an ARG or ENV: either would be recorded in `docker history` /
+# `docker inspect`. scripts/docker/build_smart.sh passes the host's PIP_INDEX_URL this way (as does
+# scripts/commands/gbx-dcs-build.sh for the DCS image). With no secret, pip uses public PyPI; an
+# empty index-url would make pip build URLs with no host and fail with `Connection refused`.
 #
-# Example:
-#   docker build --build-arg PIP_INDEX_URL="$PIP_INDEX_URL" ...
-# or set PIP_INDEX_URL in the host env before invoking scripts/docker/build_smart.sh.
-# Default to public PyPI rather than empty string — an empty PIP_INDEX_URL
-# env var causes pip to construct URLs with no host and fail with
-# `Connection refused` against `/simple/<pkg>/` instead of falling back to
-# the public index.
-ARG PIP_INDEX_URL=https://pypi.org/simple/
-RUN mkdir -p /etc/pip /root/.pip && \
-    printf '[global]\ntimeout = 60\nindex-url = %s\n' "$PIP_INDEX_URL" \
-      | tee /etc/pip.conf /root/.pip/pip.conf >/dev/null
-ENV PIP_INDEX_URL=${PIP_INDEX_URL}
-# uv does NOT read pip.conf; it needs its own index env var. Mirror PIP_INDEX_URL
-# into UV_INDEX_URL so `uv pip compile`/`uv pip install` use the same corp proxy pip
-# does instead of hitting the blocked public pypi.org (Connection refused). Takes
-# effect on the next image rebuild. CAVEAT for lock recompiles: the dev proxy
-# (pypi-proxy.dev.databricks.com) is a ROLLING-RECENT mirror that prunes old releases,
-# so it cannot reproduce runtime-matched locks (e.g. botocore 1.40.x). Authoritative
-# recompiles must run against CI's full-retention JFrog mirror (db-pypi) — see the
-# note in scripts/security/README.md; the dev proxy and public PyPI are both unsuitable.
-ENV UV_INDEX_URL=${PIP_INDEX_URL}
+# The step below writes the index into pip.conf (and uv.toml) so pip/uv keep working INSIDE the
+# container (gbx:test:python installs extras at run time). It is the only place the URL lands in the
+# image: a file in this layer, not the history and not the environment. The image is local only
+# (never pushed); treat it like any file that holds a mirror URL. BuildKit does NOT key its layer
+# cache on a secret, so after adding or changing PIP_INDEX_URL rebuild with --no-cache, or the
+# cached layer below keeps the old index. Caveat for lock recompiles: the
+# dev proxy (pypi-proxy.dev.databricks.com) is a ROLLING-RECENT mirror that prunes old releases,
+# so it cannot reproduce runtime-matched locks (e.g. botocore 1.40.x). Authoritative recompiles
+# must run against CI's full-retention JFrog mirror (db-pypi) -- see the note in
+# scripts/security/README.md; the dev proxy and public PyPI are both unsuitable.
+RUN --mount=type=secret,id=pip_index_url \
+    idx=https://pypi.org/simple/; \
+    if [ -s /run/secrets/pip_index_url ]; then idx="$(cat /run/secrets/pip_index_url)"; fi; \
+    case "$idx" in *'"'*|*'\'*) echo "the pip_index_url secret holds a quote or backslash" >&2; exit 1 ;; esac; \
+    mkdir -p /etc/pip /root/.pip /etc/uv && \
+    printf '[global]\ntimeout = 60\nindex-url = %s\n' "$idx" | tee /etc/pip.conf /root/.pip/pip.conf >/dev/null && \
+    printf '[[index]]\nurl = "%s"\ndefault = true\n' "$idx" > /etc/uv/uv.toml
 
 # --- Hash-pinned Python install (Labs lockdown — supply chain) ---
 #
 # The full Python dependency closure for the dev container is locked with
-# sha256 hashes in python/geobrix/requirements-dev-container.txt. pip refuses
-# to install anything whose hash doesn't match. This protects against a
+# sha256 hashes, one lock per CPU architecture (same versions in both; see
+# scripts/ci/check_dev_container_locks.py):
+#   x86_64   python/geobrix/requirements-dev-container.txt
+#   aarch64  python/geobrix/requirements-dev-container-aarch64.txt
+# pip refuses to install anything whose hash doesn't match. This protects against a
 # compromised PyPI mirror substituting same-version-but-different-bytes
 # wheels at docker-build time (the LiteLLM-class attack vector).
 #
@@ -242,11 +248,18 @@ ENV UV_INDEX_URL=${PIP_INDEX_URL}
 # aligned where applicable). GDAL is NOT in the lockfile — its Python wheel
 # must build against the gdal-config from Stage 4 (source build).
 #
-# Regenerate via:
-#   docker exec -it geobrix-dev bash -lc \
-#     'cd /root/geobrix/python/geobrix && \
-#      uv pip compile --generate-hashes --python-version 3.12 \
-#         --output-file requirements-dev-container.txt requirements-dev-container.in'
+# Regenerate both locks from requirements-dev-container.in (on the host or in the
+# container; the platform flag picks the wheels, so either machine can compile either lock):
+#   cd python/geobrix
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#      --python-platform x86_64-unknown-linux-gnu \
+#      --output-file requirements-dev-container.txt requirements-dev-container.in
+#   uv pip compile --generate-hashes --python-version 3.12 \
+#      --python-platform aarch64-unknown-linux-gnu \
+#      -c requirements-dev-container.txt \
+#      --output-file requirements-dev-container-aarch64.txt requirements-dev-container.in
+# (-c pins the aarch64 lock to the x86_64 versions.) Then:
+#   python3 scripts/ci/check_dev_container_locks.py
 
 # 1. Upgrade pip itself to a known version BEFORE consuming the hash-pinned
 #    lockfile. Bootstrap is hash-pinned too (chicken-and-egg: a compromised
@@ -256,13 +269,13 @@ ENV UV_INDEX_URL=${PIP_INDEX_URL}
 #    ubuntu:24.04 base rejects command-line --hash with "no such option:
 #    --hash"), so materialize a one-line requirements file and install with
 #    --require-hashes. Hashes match the pip==$PIP_VERSION entry in
-#    requirements-dev-container.txt.
+#    both locks (the pip wheel is pure Python: one hash set for both architectures).
 RUN printf 'pip==%s --hash=sha256:88f96547ea48b940a3a385494e181e29fb8637898f88d88737c5049780f196ea --hash=sha256:c46efd13b6aa8279f33f2864459c8ce587ea6a1a59ee20de055868d8f7688f7f\n' "$PIP_VERSION" > /tmp/pip-bootstrap.txt \
  && python3 -m pip install --upgrade --ignore-installed --break-system-packages \
         --require-hashes -r /tmp/pip-bootstrap.txt
 
-# 2. Copy the lockfile (and its .in source for in-container regen if needed).
-COPY --link python/geobrix/requirements-dev-container.in python/geobrix/requirements-dev-container.txt /tmp/
+# 2. Copy the lockfiles (and their .in source for in-container regen if needed).
+COPY --link python/geobrix/requirements-dev-container.in python/geobrix/requirements-dev-container.txt python/geobrix/requirements-dev-container-aarch64.txt /tmp/
 
 # 3. Install the full hash-pinned closure (~110 packages).
 #    --ignore-installed: skip pip's pre-install uninstall pass. apt-installed
@@ -270,7 +283,15 @@ COPY --link python/geobrix/requirements-dev-container.in python/geobrix/requirem
 #    uninstall them; without this flag pip aborts when an apt-managed package
 #    version differs from the lockfile pin. Safe because --require-hashes
 #    still cryptographically verifies every byte that lands on disk.
-RUN pip3 install --require-hashes --ignore-installed -r /tmp/requirements-dev-container.txt --break-system-packages
+#    The lock is chosen by the image's own architecture (dpkg), so a build for one platform can
+#    never install the other's.
+RUN arch="$(dpkg --print-architecture)" && \
+    case "$arch" in \
+      amd64) lock=/tmp/requirements-dev-container.txt ;; \
+      arm64) lock=/tmp/requirements-dev-container-aarch64.txt ;; \
+      *) echo "no dev-container lock for architecture $arch" >&2; exit 1 ;; \
+    esac && \
+    pip3 install --require-hashes --ignore-installed -r "$lock" --break-system-packages
 
 # 4. Build the GDAL Python binding from sdist against the verified libgdal
 #    headers from Stage 4.
@@ -309,7 +330,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Bind to 0.0.0.0 so kernel ZMQ works reliably in Docker (no security
 # requirement in dev). jupyterlab / jupyter_server / jupyter_core /
 # jupyter_client / tornado / nbformat / nbconvert / testbook / pyzmq are all
-# locked in requirements-dev-container.txt and were installed (and SHA-256
+# locked in the requirements-dev-container lockfiles and were installed (and SHA-256
 # verified) by the --require-hashes step above. No follow-up pip install
 # here — adding one would re-resolve dependencies without hash enforcement
 # and silently undo the lockfile's supply-chain guarantee.
@@ -320,8 +341,21 @@ ENV JUPYTER_PLATFORM_DIRS=1
 RUN mkdir -p /tmp/jupyter_runtime && chmod 1777 /tmp/jupyter_runtime
 RUN python3 -m ipykernel install --name python3 --display-name "Python 3 (Geobrix)" --env JUPYTER_IP 0.0.0.0 --env JUPYTER_RUNTIME_DIR /tmp/jupyter_runtime
 
-# Final refresh of the shared library cache
+# ==========================================
+# STAGE 7: per-architecture library path, entrypoint (the stage tagged as the image)
+# e.g. `docker buildx build --platform linux/arm64 --target final -t geobrix-final .`
+# BuildKit sets TARGETARCH (amd64 | arm64) from --platform; any other value has no
+# final-<arch> stage and fails the build, rather than defaulting to one.
+# ==========================================
+FROM final-base AS final-amd64
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu
+
+FROM final-base AS final-arm64
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/aarch64-linux-gnu
+
+FROM final-${TARGETARCH} AS final
+
+# Final refresh of the shared library cache
 RUN ldconfig
 
 WORKDIR /root/geobrix

@@ -201,7 +201,7 @@ All non-customer-facing Python installs in the repo are hash-pinned:
 | Trust boundary | Source | Lockfile |
 |---|---|---|
 | CI (scala_build, python_build) | `python/geobrix/requirements-ci.in` | `python/geobrix/requirements-ci.txt` |
-| Dev container (geobrix-dev) | `python/geobrix/requirements-dev-container.in` | `python/geobrix/requirements-dev-container.txt` |
+| Dev container (geobrix-dev) | `python/geobrix/requirements-dev-container.in` | `python/geobrix/requirements-dev-container.txt` (x86_64) and `requirements-dev-container-aarch64.txt` (arm64): same versions, checked by `scripts/ci/check_dev_container_locks.py`. The build passes a private package index as a BuildKit secret. |
 | Notebook test harness (gbx:test:notebooks) | `examples/tests/requirements.in` | `examples/tests/requirements.txt` |
 
 Intentionally NOT hash-pinned (per maintainer policy):

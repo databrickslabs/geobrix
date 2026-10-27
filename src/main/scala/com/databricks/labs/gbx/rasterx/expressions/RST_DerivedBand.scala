@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver, ValidMask}
 import com.databricks.labs.gbx.rasterx.operations.PixelCombineRasters
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -10,6 +10,7 @@ import org.apache.spark.sql.catalyst.expressions.Expression
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.Dataset
+import org.gdal.gdalconst.gdalconstConstants.GMF_PER_DATASET
 
 /** Expression that computes a new band by applying a Python UDF to existing band values (tile, pythonCode, funcName). */
 case class RST_DerivedBand(
@@ -50,7 +51,21 @@ object RST_DerivedBand extends WithExpressionInfo {
         )
 
     def execute(dss: Seq[Dataset], mtd: Map[String, String], pythonFunc: String, funcName: String): (Dataset, Map[String, String]) = {
-        PixelCombineRasters.combine(dss.toArray, mtd, pythonFunc, funcName)
+        val (result, resultMtd) = PixelCombineRasters.combine(dss.toArray, mtd, pythonFunc, funcName)
+        // The derived band has no alpha band of its own: where the one raster it is derived from is transparent or
+        // masked (the rule of both tiers, [[ValidMask]]) it is invalid, carried in its own mask band. A raster
+        // with neither is written as before; the tiles of an aggregate are stacked as plain bands, with no mask.
+        if (dss.size == 1 && (GDAL.hasAlpha(dss.head) || (1 to dss.head.GetRasterCount()).exists(i => GDAL.hasOwnMask(dss.head.GetRasterBand(i))))) {
+            val (w, h) = (result.GetRasterXSize(), result.GetRasterYSize())
+            val valid = new Array[Byte](w * h)
+            new ValidMask(dss.head).read(0, 0, w, h, valid)
+            var i = 0
+            while (i < valid.length) { valid(i) = if (valid(i) != 0) 255.toByte else 0.toByte; i += 1 }
+            result.CreateMaskBand(GMF_PER_DATASET)
+            result.GetRasterBand(1).GetMaskBand().WriteRaster(0, 0, w, h, valid)
+            result.FlushCache()
+        }
+        (result, resultMtd)
     }
 
     override def name: String = "gbx_rst_derivedband"

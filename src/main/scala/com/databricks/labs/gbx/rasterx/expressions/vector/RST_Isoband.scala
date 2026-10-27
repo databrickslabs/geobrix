@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.vector
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver, ValidMask}
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -111,9 +111,10 @@ object RST_Isoband extends WithExpressionInfo {
         val vals = new Array[Double](w * h)
         srcBand.ReadRaster(0, 0, w, h, vals)
 
-        // Read mask band: 0 = NoData/masked, 255 = valid.
+        // Read the validity of the band: 0 = NoData/masked/transparent, non-zero = valid ([[ValidMask.readBand]]:
+        // the band's own mask and, for a raster with an alpha band, opaque).
         val maskBuf = new Array[Byte](w * h)
-        srcBand.GetMaskBand().ReadRaster(0, 0, w, h, maskBuf)
+        new ValidMask(srcDs).readBand(band, 0, 0, w, h, maskBuf)
 
         // Compute per-pixel bin index; -1 for excluded pixels.
         // binIdx = (count of breaks <= v) - 1, half-open [breaks[i], breaks[i+1]).

@@ -169,6 +169,15 @@ object GDAL {
     def hasAlphaBesideData(ds: org.gdal.gdal.Dataset): Boolean =
         ds.GetRasterCount() > 1 && alphaBandIndex(ds).isDefined
 
+    /** True when the multi-dimensional statistics GDAL computes for the bands of `ds`
+      * (`AsMDArray().GetStatistics()`: `rst_avg`, `rst_pixelcount`) would count pixels that are not valid for the
+      * band, so they are computed over [[com.databricks.labs.gbx.rasterx.gdal.ValidMask.readBand]] instead: `ds`
+      * has an alpha band beside data bands ([[hasAlphaBesideData]]), or a band masked by its own mask band
+      * ([[hasOwnMask]]), which those statistics ignore. (`ComputeRasterMinMax` and `GetHistogram` honour an own
+      * mask band.) */
+    def validityJudgesStatistics(ds: org.gdal.gdal.Dataset): Boolean =
+        hasAlphaBesideData(ds) || (1 to ds.GetRasterCount()).exists(i => hasOwnMask(ds.GetRasterBand(i)))
+
     /**
       * gdalwarp arguments that make the source pixels equal to a band's fill value NoData, for the bands of
       * `ds` that declare no NoData: `-srcnodata <one value per band>` (a declared band keeps its own value)

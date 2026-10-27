@@ -51,14 +51,18 @@ object RST_PixelCount extends WithExpressionInfo {
         ).map(_.asInstanceOf[ArrayData]).orNull
 
     def execute(ds: Dataset): Array[Long] = {
-        // A raster with an alpha band beside data bands: the transparent pixels are valid in no band (GDAL's
-        // statistics count them, whatever the band count).
-        val gated = GDAL.hasAlphaBesideData(ds)
+        // A raster with an alpha band beside data bands, or a band masked by its own mask band: the pixels that
+        // are not valid for a band are not counted in it (GDAL's statistics count them).
+        val gated = GDAL.validityJudgesStatistics(ds)
         (1 to ds.GetRasterCount())
             .map(i => {
                 val band = ds.GetRasterBand(i)
                 if (band == null) 0
-                else if (gated) BandAccessors.validStats(ds, i).count
+                else if (gated) {
+                    val count = BandAccessors.validStats(ds, i).count
+                    band.delete()
+                    count
+                }
                 else {
                     val md = band.AsMDArray()
                     val stats = md.GetStatistics()

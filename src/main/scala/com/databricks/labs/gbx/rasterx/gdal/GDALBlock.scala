@@ -57,14 +57,14 @@ case class GDALBlock[T: ClassTag](
                 }
             }
         }
-        val result = values.filter(_ != noDataValue)
-        // always return only one NoDataValue if no valid values are found
-        // one and only one NoDataValue can be returned
-        // in all cases that have some valid values, the NoDataValue will be filtered out
-        if (result.isEmpty) {
+        // the first n entries are the valid values; the rest is the fill. (Filtering the fill out by value does
+        // not work when the raster declares no NoData: the fill is then NaN, which equals nothing, so every
+        // window used to come back with NaNs among its values and a min, max or mean of NaN.)
+        // Always return only one NoDataValue if no valid values are found.
+        if (n == 0) {
             Array(noDataValue)
         } else {
-            result
+            java.util.Arrays.copyOf(values, n)
         }
     }
 
@@ -155,7 +155,8 @@ object GDALBlock {
         xOffset: Int,
         yOffset: Int,
         xBlockSize: Int,
-        yBlockSize: Int
+        yBlockSize: Int,
+        validity: Option[(ValidMask, Int)] = None
     ): GDALBlock[Double] = {
         val noDataValue = BandAccessors.getNoDataValue(band)
         val rasterWidth = band.getXSize
@@ -180,7 +181,15 @@ object GDALBlock {
         val maskBlock = Array.ofDim[Double](xs * ys)
 
         band.ReadRaster(xo, yo, xs, ys, block)
-        band.GetMaskBand().ReadRaster(xo, yo, xs, ys, maskBlock)
+        validity match {
+            // the pixels valid for the band: its own mask and, for a raster with an alpha band, opaque
+            case Some((mask, bandIndex)) =>
+                val valid = new Array[Byte](xs * ys)
+                mask.readBand(bandIndex, xo, yo, xs, ys, valid)
+                var i = 0
+                while (i < valid.length) { maskBlock(i) = if (valid(i) != 0) 255.0 else 0.0; i += 1 }
+            case None => band.GetMaskBand().ReadRaster(xo, yo, xs, ys, maskBlock)
+        }
 
         new GDALBlock(
           block,

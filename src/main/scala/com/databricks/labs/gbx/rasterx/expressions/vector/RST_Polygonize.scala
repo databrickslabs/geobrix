@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.vector
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -10,6 +10,7 @@ import org.apache.spark.sql.catalyst.util.ArrayData
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.gdal.gdal.{Dataset, gdal}
+import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.ogr.{FieldDefn, ogr}
 import org.gdal.ogr.ogrConstants.{OFTReal, wkbPolygon}
 import org.gdal.osr.SpatialReference
@@ -86,7 +87,18 @@ object RST_Polygonize extends WithExpressionInfo {
         require(connectedness == 4 || connectedness == 8,
             s"rst_polygonize: connectedness must be 4 or 8; got $connectedness")
         val srcBand = ds.GetRasterBand(band)
-        val maskBand = srcBand.GetMaskBand()
+        // The pixels valid for the band: its own mask and, for a raster with an alpha band beside data bands,
+        // opaque (GDAL derives a mask from the alpha band for 2- and 4-band rasters only). With an alpha band the
+        // validity is an in-memory Byte raster handed to Polygonize as the mask; otherwise it is the band's own.
+        val validityDs: Dataset =
+            if (GDAL.hasAlphaBesideData(ds)) {
+                val valid = new Array[Byte](ds.GetRasterXSize * ds.GetRasterYSize)
+                new ValidMask(ds).readBand(band, 0, 0, ds.GetRasterXSize, ds.GetRasterYSize, valid)
+                val memDs = gdal.GetDriverByName("MEM").Create("", ds.GetRasterXSize, ds.GetRasterYSize, 1, gdalconstConstants.GDT_Byte)
+                memDs.GetRasterBand(1).WriteRaster(0, 0, ds.GetRasterXSize, ds.GetRasterYSize, valid)
+                memDs
+            } else null
+        val maskBand = if (validityDs != null) validityDs.GetRasterBand(1) else srcBand.GetMaskBand()
 
         // Build an in-memory OGR layer to receive the output polygons.
         GDALManager.initOgr()
@@ -123,6 +135,7 @@ object RST_Polygonize extends WithExpressionInfo {
         } finally {
             outDs.delete()
             sr.delete()
+            if (validityDs != null) validityDs.delete()
         }
     }
 

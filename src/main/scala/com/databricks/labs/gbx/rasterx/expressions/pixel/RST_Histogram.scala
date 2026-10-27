@@ -1,7 +1,8 @@
 package com.databricks.labs.gbx.rasterx.expressions.pixel
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver, ValidMask}
+import com.databricks.labs.gbx.rasterx.operations.BandAccessors
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
@@ -9,7 +10,8 @@ import org.apache.spark.sql.catalyst.expressions.{Expression, Literal}
 import org.apache.spark.sql.catalyst.util.{ArrayBasedMapData, ArrayData, GenericArrayData, MapData}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
-import org.gdal.gdal.Dataset
+import org.gdal.gdal.{Dataset, gdal}
+import org.gdal.gdalconst.gdalconstConstants.GMF_PER_DATASET
 
 /**
   * Per-band pixel histogram via `band.GetHistogram(min, max, buckets, ...)`.
@@ -117,6 +119,10 @@ object RST_Histogram extends WithExpressionInfo {
         val nBands = ds.GetRasterCount
         val buckets = new Array[Long](nBuckets) // reused (overwritten per band)
         val result = scala.collection.mutable.LinkedHashMap.empty[String, Array[Long]]
+        // A raster with an alpha band beside data bands: the transparent pixels are not valid for a band and
+        // are not counted in it (GDAL's range and histogram count them at every band count but the 2- and
+        // 4-band ones). A band masked by its own mask band is already left out by GDAL.
+        val gated = GDAL.hasAlphaBesideData(ds)
         var b = 1
         while (b <= nBands) {
             val band = ds.GetRasterBand(b)
@@ -127,7 +133,10 @@ object RST_Histogram extends WithExpressionInfo {
                 case (Some(a), Some(c)) => (a, c)
                 case _ =>
                     val stats = new Array[Double](2)
-                    band.ComputeRasterMinMax(stats, 1) // 1 = approx ok
+                    if (gated) {
+                        val st = BandAccessors.validStats(ds, b)
+                        if (st.count > 0L) { stats(0) = st.min; stats(1) = st.max }
+                    } else band.ComputeRasterMinMax(stats, 1) // 1 = approx ok
                     (
                         minOpt.getOrElse(stats(0)),
                         maxOpt.getOrElse(stats(1))
@@ -145,7 +154,8 @@ object RST_Histogram extends WithExpressionInfo {
             // GetHistogram signature (Java binding):
             //   int GetHistogram(double min, double max, int[] panHistogram,
             //                    boolean bIncludeOutOfRange, boolean bApproxOK)
-            band.GetHistogram(loEff, hiEff, counts, false, false)
+            if (gated) validHistogram(ds, b, loEff, hiEff, counts)
+            else band.GetHistogram(loEff, hiEff, counts, false, false)
             // Widen to Long for the MAP<STRING, ARRAY<LONG>> return shape.
             var i = 0
             while (i < nBuckets) {
@@ -156,6 +166,37 @@ object RST_Histogram extends WithExpressionInfo {
             b += 1
         }
         result.toMap
+    }
+
+    /**
+      * GDAL's histogram of the pixels of band `b` of `ds` that are valid for it ([[ValidMask.readBand]]): the
+      * band is copied, strip by strip, into an in-memory dataset of the same data type whose mask band is that
+      * validity, and `GetHistogram` runs on the copy, so the bucket rule is GDAL's own. Memory: one copy of the
+      * band plus its mask.
+      */
+    private def validHistogram(ds: Dataset, b: Int, lo: Double, hi: Double, counts: Array[Int]): Unit = {
+        val (xSize, ySize) = (ds.GetRasterXSize(), ds.GetRasterYSize())
+        val src            = ds.GetRasterBand(b)
+        val copy           = gdal.GetDriverByName("MEM").Create("", xSize, ySize, 1, src.getDataType)
+        try {
+            copy.CreateMaskBand(GMF_PER_DATASET)
+            val dst  = copy.GetRasterBand(1)
+            val mask = dst.GetMaskBand()
+            val rows = math.max(1, math.min(ySize, ValidMask.StripPixels / math.max(1, xSize)))
+            val data = new Array[Double](xSize * rows)
+            val ok   = new Array[Byte](xSize * rows)
+            val validity = new ValidMask(ds)
+            var y0 = 0
+            while (y0 < ySize) {
+                val h = math.min(rows, ySize - y0)
+                src.ReadRaster(0, y0, xSize, h, data)
+                validity.readBand(b, 0, y0, xSize, h, ok)
+                dst.WriteRaster(0, y0, xSize, h, data)
+                mask.WriteRaster(0, y0, xSize, h, ok)
+                y0 += h
+            }
+            dst.GetHistogram(lo, hi, counts, false, false)
+        } finally copy.delete()
     }
 
     override def name: String = "gbx_rst_histogram"

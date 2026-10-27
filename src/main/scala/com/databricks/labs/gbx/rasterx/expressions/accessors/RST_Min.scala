@@ -50,7 +50,7 @@ object RST_Min extends WithExpressionInfo {
 
     def execute(ds: Dataset): Array[java.lang.Double] = {
         // A raster with an alpha band beside data bands: the transparent pixels are valid in no band (GDAL's
-        // statistics count them, whatever the band count).
+        // ComputeRasterMinMax counts them at every band count but the 2- and 4-band ones, where it does not).
         val gated = GDAL.hasAlphaBesideData(ds)
         (1 to ds.GetRasterCount()).map { bandIndex =>
             val band = ds.GetRasterBand(bandIndex)

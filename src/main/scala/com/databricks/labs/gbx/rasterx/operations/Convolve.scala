@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALBlock}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALBlock, ValidMask}
 import com.databricks.labs.gbx.rasterx.operator.{GDALTranslate, OperatorOptions}
 import org.gdal.gdal.{Band, Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GF_Write
@@ -29,10 +29,13 @@ object Convolve {
         val resultBuf: Array[Double] = Array.emptyDoubleArray
         val trimBuf: Array[Double] = Array.emptyDoubleArray
 
+        // A raster with an alpha band beside data bands: a transparent pixel is not a neighbour, at any band count
+        // (GDAL derives a mask from the alpha band for 2- and 4-band rasters only).
+        val validity = if (GDAL.hasAlphaBesideData(ds)) Some(new ValidMask(ds)) else None
         for (bandIndex <- 1 to ds.GetRasterCount()) {
             val band = ds.GetRasterBand(bandIndex)
             val outputBand = outputRaster.GetRasterBand(bandIndex)
-            convolve(band, kernel, outputBand, stride, resultBuf, trimBuf)
+            convolve(band, kernel, outputBand, stride, resultBuf, trimBuf, validity.map((_, bandIndex)))
         }
 
         outputRaster.FlushCache()
@@ -62,7 +65,8 @@ object Convolve {
         outputBand: Band,
         stride: Int,
         _resultBuf: Array[Double],
-        _trimBuf: Array[Double]
+        _trimBuf: Array[Double],
+        validity: Option[(ValidMask, Int)] = None
     ): Unit = {
         val xSize = band.GetXSize()
         val ySize = band.GetYSize()
@@ -85,14 +89,17 @@ object Convolve {
                   xOffset,
                   yOffset,
                   w,
-                  h
+                  h,
+                  validity
                 )
 
                 val resultLen = current.block.length
                 if (resultBuf.length != resultLen) resultBuf = new Array[Double](resultLen)
-                val trimmedW = current.width - 2 * stride
-                val trimmedH = current.height - 2 * stride
-                val trimLen = math.max(0, trimmedW) * math.max(0, trimmedH)
+                // The block's own pixels, w x h at (xOffset, yOffset): the block read holds `stride` more pixels on every
+                // side that has a neighbour block, so they start at (xOffset - current.xOffset, yOffset - current.yOffset).
+                // (They used to be taken as the block read minus `stride` on both sides, which shifted them and left the
+                // rest of the output as the copy of the input it started from.)
+                val trimLen = w * h
                 if (trimBuf.length != trimLen) trimBuf = new Array[Double](trimLen)
 
                 var y = 0
@@ -106,16 +113,13 @@ object Convolve {
                     y += 1
                 }
 
-                if (trimLen > 0) {
-                    var ty = 0
-                    while (ty < trimmedH) {
-                        val srcRow = (ty + stride) * current.width + stride
-                        val dstRow = ty * trimmedW
-                        System.arraycopy(resultBuf, srcRow, trimBuf, dstRow, trimmedW)
-                        ty += 1
-                    }
-                    outputBand.WriteRaster(xOffset, yOffset, trimmedW, trimmedH, trimBuf)
+                val (dx, dy) = (xOffset - current.xOffset, yOffset - current.yOffset)
+                var ty = 0
+                while (ty < h) {
+                    System.arraycopy(resultBuf, (ty + dy) * current.width + dx, trimBuf, ty * w, w)
+                    ty += 1
                 }
+                outputBand.WriteRaster(xOffset, yOffset, w, h, trimBuf)
 
                 xOffset += xBlockSize
             }

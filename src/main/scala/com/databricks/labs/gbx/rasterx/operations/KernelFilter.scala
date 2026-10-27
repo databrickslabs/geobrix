@@ -1,6 +1,6 @@
 package com.databricks.labs.gbx.rasterx.operations
 
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALBlock}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALBlock, ValidMask}
 import com.databricks.labs.gbx.rasterx.operator.GDALTranslate
 import org.gdal.gdal.{Band, Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants.GF_Write
@@ -22,10 +22,13 @@ object KernelFilter {
 
         val resDs = gdal.Open(resultFileName, GF_Write)
 
+        // A raster with an alpha band beside data bands: a transparent pixel is not a neighbour, at any band count
+        // (GDAL derives a mask from the alpha band for 2- and 4-band rasters only).
+        val validity = if (GDAL.hasAlphaBesideData(ds)) Some(new ValidMask(ds)) else None
         for (bandIndex <- 1 to ds.GetRasterCount) {
             val inBand = ds.GetRasterBand(bandIndex)
             val outBand = resDs.GetRasterBand(bandIndex)
-            filterBand(inBand, outBand, kernelSize, operation)
+            filterBand(inBand, outBand, kernelSize, operation, validity.map((_, bandIndex)))
         }
 
         val newOptions = Map(
@@ -41,7 +44,13 @@ object KernelFilter {
     }
 
     /** Applies the kernel filter to one band, writing to outBand. */
-    def filterBand(inBand: Band, outBand: Band, kernelSize: Int, operation: String): Unit = {
+    def filterBand(
+        inBand: Band,
+        outBand: Band,
+        kernelSize: Int,
+        operation: String,
+        validity: Option[(ValidMask, Int)] = None
+    ): Unit = {
         val blockSize = inBand.GetBlockXSize()
         val stride = kernelSize / 2
         val xSize = inBand.GetXSize()
@@ -56,7 +65,8 @@ object KernelFilter {
                   xOffset,
                   yOffset,
                   blockSize,
-                  blockSize
+                  blockSize,
+                  validity
                 )
 
                 val result = Array.ofDim[Double](currentBlock.block.length)

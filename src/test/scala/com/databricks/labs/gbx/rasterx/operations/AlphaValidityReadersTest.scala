@@ -2,9 +2,12 @@ package com.databricks.labs.gbx.rasterx.operations
 
 import com.databricks.labs.gbx.expressions.ExpressionConfig
 import com.databricks.labs.gbx.gridx.grid.{H3, Quadbin}
-import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_Max, RST_Median, RST_Min, RST_PixelCount}
+import com.databricks.labs.gbx.rasterx.expressions.RST_DerivedBand
+import com.databricks.labs.gbx.rasterx.expressions.accessors.{RST_Avg, RST_Max, RST_Median, RST_Min, RST_PixelCount, RST_Summary}
+import com.databricks.labs.gbx.rasterx.expressions.pixel.RST_Histogram
+import com.databricks.labs.gbx.rasterx.expressions.vector.{RST_Isoband, RST_Polygonize}
 import com.databricks.labs.gbx.rasterx.expressions.grid.RasterToGridGeneric
-import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver, ValidMask}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
 import org.gdal.gdal.Dataset
@@ -45,11 +48,17 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
     private val RgbNir = Layout("rgb_nir", Seq(GCI_RedBand, GCI_GreenBand, GCI_BlueBand, GCI_Undefined))
     private val Layouts = Seq(Rgba, GrayA, GrayXA, RgbXA, RgbaX, RgbNir)
 
-    /** A 4 x 4 EPSG:4326 GTiff of `l`; `pattern(row, last)` gives the value of a pixel in `row`. */
-    private def fixture(l: Layout, value: (Int, Boolean) => Double = AlphaValidityReadersTest.pattern): Dataset = {
+    /** A `size` x `size` (4 by default) EPSG:4326 GTiff of `l`; `value(row, last)` gives the value of a pixel in `row`
+      * (`last`: the last band). With `maskedColumn0` an internal per-dataset mask hides column 0. */
+    private def fixture(
+        l: Layout,
+        value: (Int, Boolean) => Double = AlphaValidityReadersTest.pattern,
+        size: Int = 4,
+        maskedColumn0: Boolean = false
+    ): Dataset = {
         val rgb = l.interps.take(3) == Seq(GCI_RedBand, GCI_GreenBand, GCI_BlueBand)
         val ds = GDALManager.gtiffDriver().Create(
-          s"/vsimem/alphareaders_${UUID.randomUUID().toString.replace("-", "")}.tif", 4, 4, l.count, GDT_Byte,
+          s"/vsimem/alphareaders_${UUID.randomUUID().toString.replace("-", "")}.tif", size, size, l.count, GDT_Byte,
           Array(s"PHOTOMETRIC=${if (rgb) "RGB" else "MINISBLACK"}")
         )
         ds.SetGeoTransform(Array(10.0, 0.5, 0.0, 50.0, 0.0, -0.5))
@@ -60,7 +69,13 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
         l.interps.zipWithIndex.foreach { case (c, i) => ds.GetRasterBand(i + 1).SetColorInterpretation(c) }
         (0 until l.count).foreach { i =>
             val last = i == l.count - 1
-            ds.GetRasterBand(i + 1).WriteRaster(0, 0, 4, 4, Array.tabulate(16)(p => value(p / 4, last)))
+            ds.GetRasterBand(i + 1).WriteRaster(0, 0, size, size, Array.tabulate(size * size)(p => value(p / size, last)))
+        }
+        if (maskedColumn0) {
+            ds.CreateMaskBand(GMF_PER_DATASET)
+            ds.GetRasterBand(1).GetMaskBand().WriteRaster(
+              0, 0, size, size, Array.tabulate[Byte](size * size)(p => if (p % size == 0) 0.toByte else 255.toByte)
+            )
         }
         ds.FlushCache()
         (0 until l.count).foreach(i => assert(ds.GetRasterBand(i + 1).GetColorInterpretation == l.interps(i), s"fixture ${l.name}"))
@@ -159,6 +174,172 @@ class AlphaValidityReadersTest extends AnyFunSuite with BeforeAndAfterAll {
                 RasterDriver.releaseDataset(opaque)
                 RasterDriver.releaseDataset(transparent)
             }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // a band masked by its own mask band (no alpha band): GDAL's multi-dimensional statistics ignore it
+    // ------------------------------------------------------------------------------------------------
+
+    test("the statistics of a raster with its own mask band count only the unmasked pixels") {
+        val ds = fixture(RgbNir, maskedColumn0 = true)
+        try {
+            assert(GDAL.hasOwnMask(ds.GetRasterBand(1)))
+            // columns 1-3 of the pattern: rows 0 and 3 hold 7, rows 1 and 2 hold 0
+            assert(RST_PixelCount.execute(ds).toSeq == Seq.fill(4)(12L))
+            // band 4 of the fixture holds the pattern's last-band values (0 and 255): 6 of each over the 12 pixels
+            assert(RST_Avg.execute(ds).map(_.doubleValue).toSeq == Seq(3.5, 3.5, 3.5, 127.5))
+            assert(RST_Min.execute(ds).head.doubleValue == 0.0 && RST_Max.execute(ds).head.doubleValue == 7.0)
+            // GetHistogram honours the mask band: 6 zeros and 6 sevens
+            val h = RST_Histogram.execute(ds, 8, Some(0.0), Some(7.5), includeNodata = false)("band_1")
+            assert(h.sum == 12L && h.head == 6L)
+            assert(!RasterAccessors.isEmpty(ds))
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // histogram: over the pixels valid for the band, GDAL's own bucket rule
+    // ------------------------------------------------------------------------------------------------
+
+    for (l <- Seq(GrayXA, Rgba, RgbXA)) {
+        test(s"the histogram of ${l.name} is over the opaque pixels, with GDAL's buckets") {
+            // band 1 over the 8 opaque pixels: 4 zeros and 4 sevens. GDAL histograms the reference itself.
+            val ds    = fixture(l)
+            // the plain raster is 4 x 4: top half 0, bottom half 7, 8 of each: twice the counts of the opaque pixels
+            val plain = fixture(GrayXA.copy(interps = Seq(GCI_GrayIndex)), (row, _) => if (row < 2) 0.0 else 7.0, size = 4)
+            try {
+                val got  = RST_Histogram.execute(ds, 8, None, None, includeNodata = false)("band_1")
+                val want = RST_Histogram.execute(plain, 8, None, None, includeNodata = false)("band_1")
+                // GDAL's buckets are half-open, so the sevens (the top of the range) are out of both histograms
+                assert(got.sum > 0L)
+                assert(got.toSeq == want.map(_ / 2).toSeq, s"${got.toSeq} vs ${want.toSeq}")
+            } finally {
+                RasterDriver.releaseDataset(ds)
+                RasterDriver.releaseDataset(plain)
+            }
+        }
+    }
+
+    test("the heavy summary holds no statistics to judge: it is the gdalinfo structure of the raster") {
+        val ds = fixture(GrayXA)
+        try {
+            val json = RST_Summary.execute(ds)
+            assert(json.contains("\"bands\"") && !json.contains("\"mean\"") && !json.contains("STATISTICS_MEAN"), json)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // derivedband: invalid where the input is
+    // ------------------------------------------------------------------------------------------------
+
+    private val SumFunc =
+        "def total(in_ar, out_ar, xoff, yoff, xsize, ysize, rxsize, rysize, radius, gt, **kw):\n" +
+            "    out_ar[:] = sum(a.astype('float64') for a in in_ar)\n"
+
+    for ((what, build) <- Seq[(String, () => Dataset)](
+      ("gray_x_alpha", () => fixture(GrayXA)),
+      ("rgba", () => fixture(Rgba)),
+      ("rgb_nir with its own mask", () => fixture(RgbNir, maskedColumn0 = true))
+    )) {
+        test(s"the band derived from $what is invalid where its input is") {
+            val ds = build()
+            try {
+                val (out, _) = RST_DerivedBand.execute(Seq(ds), Map.empty[String, String], SumFunc, "total")
+                try {
+                    assert(out.GetRasterCount == 1)
+                    val valid = new Array[Byte](16)
+                    new ValidMask(out).read(0, 0, 4, 4, valid)
+                    val want = new Array[Byte](16)
+                    new ValidMask(ds).read(0, 0, 4, 4, want)
+                    assert(valid.map(_ != 0).toSeq == want.map(_ != 0).toSeq)
+                    assert(valid.exists(_ == 0) && valid.exists(_ != 0))
+                } finally RasterDriver.releaseDataset(out)
+            } finally RasterDriver.releaseDataset(ds)
+        }
+    }
+
+
+    test("Convolve writes every pixel of its output where the pixel is: corners 20, edges 30, interior 45 for a 3x3 sum of 5s") {
+        // it used to write each block's interior at the block's origin, shifted, and leave the rest as the input
+        val ds = fixture(RgbNir.copy(interps = Seq(GCI_GrayIndex, GCI_Undefined, GCI_Undefined)), (_, _) => 5.0, size = 6)
+        try {
+            val (out, _) = Convolve.convolve(ds, Map.empty[String, String], Array.fill(3, 3)(1.0))
+            try {
+                val px = new Array[Double](36)
+                out.GetRasterBand(1).ReadRaster(0, 0, 6, 6, px)
+                val want = Array.tabulate(36) { p =>
+                    val (r, c) = (p / 6, p % 6)
+                    val rows = if (r == 0 || r == 5) 2 else 3
+                    val cols = if (c == 0 || c == 5) 2 else 3
+                    5.0 * rows * cols
+                }
+                assert(px.toSeq == want.toSeq, px.toSeq.toString)
+            } finally RasterDriver.releaseDataset(out)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    test("a filter of a raster with no declared NoData is its value, not NaN") {
+        val ds = fixture(RgbNir.copy(interps = Seq(GCI_GrayIndex, GCI_Undefined, GCI_Undefined)), (row, _) => 10.0 + row, size = 6)
+        try {
+            val (out, _) = KernelFilter.filter(ds, 3, "avg")
+            try {
+                val px = new Array[Double](36)
+                out.GetRasterBand(1).ReadRaster(0, 0, 6, 6, px)
+                // rows 2-3 average rows 1-4 over the 3x3 window: (11 + 12 + 13) / 3 = 12 and (12 + 13 + 14) / 3 = 13
+                assert(px(2 * 6 + 2) == 12.0 && px(3 * 6 + 2) == 13.0, px.toSeq.toString)
+            } finally RasterDriver.releaseDataset(out)
+        } finally RasterDriver.releaseDataset(ds)
+    }
+
+    // ------------------------------------------------------------------------------------------------
+    // focal filters, polygonize, isoband: a transparent pixel is skipped like NoData, at any band count
+    // ------------------------------------------------------------------------------------------------
+
+    /** 6 x 6: 5 over rows 0-1 and 4-5, 99 over rows 2-3, which are transparent (alpha 0; the others 255). */
+    private def striped(l: Layout): Dataset =
+        fixture(l, (row, last) => if (last && l.alphaLast) (if (row == 2 || row == 3) 0.0 else 255.0) else (if (row == 2 || row == 3) 99.0 else 5.0), size = 6)
+
+    for (l <- Seq(GrayXA, Rgba)) {
+        test(s"a max filter of ${l.name} skips the transparent neighbours") {
+            val ds = striped(l)
+            try {
+                val (out, _) = KernelFilter.filter(ds, 3, "max")
+                try {
+                    val px = new Array[Double](36)
+                    out.GetRasterBand(1).ReadRaster(0, 0, 6, 6, px)
+                    assert(px.forall(_ == 5.0), px.toSeq.toString)
+                } finally RasterDriver.releaseDataset(out)
+            } finally RasterDriver.releaseDataset(ds)
+        }
+
+        test(s"a convolution of ${l.name} equals that of the same raster with its transparent pixels set to 0") {
+            // a transparent neighbour adds nothing, as a 0 does; the same Convolve geometry on both
+            val ds    = striped(l)
+            val plain = fixture(RgbNir.copy(interps = Seq(GCI_GrayIndex, GCI_Undefined, GCI_Undefined)), (row, _) => if (row == 2 || row == 3) 0.0 else 5.0, size = 6)
+            try {
+                def convolved(d: Dataset): Array[Double] = {
+                    val (out, _) = Convolve.convolve(d, Map.empty[String, String], Array.fill(3, 3)(1.0))
+                    try { val px = new Array[Double](36); out.GetRasterBand(1).ReadRaster(0, 0, 6, 6, px); px }
+                    finally RasterDriver.releaseDataset(out)
+                }
+                val (a, b) = (convolved(ds), convolved(plain))
+                assert(a.toSeq == b.toSeq, s"${a.toSeq} vs ${b.toSeq}")
+            } finally {
+                RasterDriver.releaseDataset(ds)
+                RasterDriver.releaseDataset(plain)
+            }
+        }
+
+        test(s"polygonize and isoband of ${l.name} leave out the transparent pixels") {
+            val ds = striped(l)
+            try {
+                val polys = RST_Polygonize.execute(ds, 1, 4)
+                val values = (0 until polys.numElements()).map(i => polys.getStruct(i, 2).getDouble(1)).toSet
+                assert(values == Set(5.0), values.toString)
+                val bands = RST_Isoband.execute(ds, Array(0.0, 10.0, 200.0), 1)
+                val idx = (0 until bands.numElements()).map(i => bands.getStruct(i, 4).getInt(1)).toSet
+                assert(idx == Set(0), idx.toString)
+            } finally RasterDriver.releaseDataset(ds)
         }
     }
 }

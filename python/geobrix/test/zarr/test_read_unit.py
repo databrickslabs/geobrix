@@ -805,9 +805,11 @@ def test_a_time_column_exists_only_where_the_values_are_times(tmp_path):
 def test_a_bool_dtype_array_whose_fill_is_a_stored_value_is_null_in_a_table(
     tmp_path, how
 ):
-    """Ruling Z36. [0, 1, 1, 0] read as booleans with a stored 0 as the fill: the table
-    masks on the integers, before the cast, so those cells are NULL. Blocks (and xarray)
-    cast the masked cell's NaN to True."""
+    """Ruling Z36. [0, 1, 1, 0] read as booleans with a stored 0 as an explicit fill: the
+    table masks on the integers, before the cast, so those cells are NULL. Blocks (and
+    xarray) cast the masked cell's NaN to True. Ruling Z38(2): the Zarr v2 fill_value alone
+    is not a fill for such an array (its 0 is the stored False), so nothing is masked;
+    xarray does mask it."""
     fmt = 3 if how.startswith("v3") else 2
     attrs = {"dtype": "bool"}
     if how.endswith("_FillValue"):
@@ -819,8 +821,12 @@ def test_a_bool_dtype_array_whose_fill_is_a_stored_value_is_null_in_a_table(
         zarray["fill_value"] = 0
         doc.write_text(json.dumps(zarray))
     column, blocks, theirs = _three_ways(path)
-    assert column == [None, True, True, None]
-    assert list(blocks) == [True, True, True, True]
+    if how == "v2 fill_value":
+        assert column == [False, True, True, False]
+        assert list(blocks) == [False, True, True, False]
+    else:
+        assert column == [None, True, True, None]
+        assert list(blocks) == [True, True, True, True]
     assert list(theirs) == [True, True, True, True]
     cfg, _ = _table(path)
     assert dict(cfg.columns)["v"] == "boolean"  # still a boolean column, with NULLs
@@ -833,3 +839,39 @@ def test_the_work_frame_docstring_says_units_are_broadcast_once_per_executor():
         "not all of them" not in doc
     )  # the claim that a task is sent only its own unit
     assert "sent only its own" not in " ".join(_read._TaskConfig.__doc__.split())
+
+
+@pytest.mark.parametrize(
+    "attrs, table_values, block_values",
+    [
+        # zarr's default v2 fill_value 0 is the stored False: it masks nothing
+        ({"dtype": "bool"}, [False, True, True, False], [False, True, True, False]),
+        # an explicit _FillValue still masks (NULL in a table; xarray's True in blocks)
+        (
+            {"dtype": "bool", "_FillValue": 0},
+            [None, True, True, None],
+            [True, True, True, True],
+        ),
+    ],
+)
+def test_a_v2_bool_dtype_array_masks_only_on_an_explicit_fill(
+    tmp_path, attrs, table_values, block_values
+):
+    """Carry Z38(2): an integer v2 array read as booleans never masks on its fill_value."""
+    path = tmp_path / "flags.zarr"
+    g = zarr.open_group(str(path), mode="w", zarr_format=2)
+    arr = g.create_array(
+        "v",
+        shape=(4,),
+        chunks=(4,),
+        dtype="i1",
+        fill_value=0,
+        attributes={"_ARRAY_DIMENSIONS": ["k"], **attrs},
+    )
+    arr[:] = [0, 1, 1, 0]
+    _, table = _table(path, variables=["v"])
+    assert table.column("v").to_pylist() == table_values
+    _, _, units, cfg = _plan(path, variables=["v"])
+    rows = [r for b in _run(units, cfg) for r in b.to_pylist()]
+    blocks = np.concatenate([_read.block_to_numpy(r) for r in rows])
+    assert blocks.dtype == np.dtype("bool") and blocks.tolist() == block_values

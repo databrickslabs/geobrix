@@ -394,6 +394,12 @@ def _cf_attrs(meta: ArrayMeta, use_zarr_fill_value_as_mask=None) -> dict:
     integer array in v3), so an integer v2 array whose ``fill_value`` is a real value, such as
     ``0``, keeps it. An explicit ``_FillValue`` attribute still masks; a v3 float one is
     decoded from xarray's base64 form first, and a v2 one stays exactly as stored.
+
+    An integer array read as booleans (a ``dtype`` attribute of ``"bool"``) is never masked
+    on the array ``fill_value`` either, only on an explicit ``_FillValue`` or
+    ``missing_value`` attribute: its ``fill_value`` (zarr's default ``0``) is the stored
+    ``False``, and masking it would turn every ``False`` into a missing cell (``NULL`` in a
+    table, ``True`` in xarray's blocks). xarray does mask it; GeoBrix does not.
     """
     _check_mask_flag(use_zarr_fill_value_as_mask)
     attrs = dict(meta.attrs)
@@ -402,7 +408,8 @@ def _cf_attrs(meta: ArrayMeta, use_zarr_fill_value_as_mask=None) -> dict:
         if use_zarr_fill_value_as_mask is None
         else bool(use_zarr_fill_value_as_mask)
     )
-    if mask and meta.fill_value is not None and np.dtype(meta.dtype).kind != "b":
+    boolean = np.dtype(meta.dtype).kind == "b" or attrs.get("dtype") == "bool"
+    if mask and meta.fill_value is not None and not boolean:
         attrs["_FillValue"] = meta.fill_value
     elif meta.zarr_format == 3 and "_FillValue" in attrs:
         attrs["_FillValue"] = _cf_fill_attr(attrs["_FillValue"], meta)

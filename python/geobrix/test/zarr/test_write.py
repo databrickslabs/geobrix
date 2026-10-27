@@ -16,8 +16,11 @@ import pytest
 zarr = pytest.importorskip("zarr")
 xr = pytest.importorskip("xarray")
 
+from test.zarr import _helpers as H  # noqa: E402
+
 import pandas as pd  # noqa: E402
 
+from databricks.labs.gbx.zarr import _read as _read_mod  # noqa: E402
 from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr._manifest import find_commit_version  # noqa: E402
 from databricks.labs.gbx.zarr._read import (  # noqa: E402
@@ -99,8 +102,22 @@ def _create(spark, drop, tmp_path, ds=None, label="s", **kw):
 
 
 def _read(spark, table, name, **kw):
-    """Variable ``name`` of the store assembled from its blocks (NaN where none)."""
-    rows = gbx_zarr_read(spark, table, variables=[name], **kw).collect()
+    """Variable ``name`` of the store assembled from its blocks (NaN where none).
+
+    The blocks come from the read's own planner and task body, run in this process
+    (``_helpers.run``): the manifest is queried for real, but no Spark job decodes the
+    chunks, which is most of a read's cost on a local session. The Spark-distributed read
+    has its end-to-end tests in test_read.py; a keyword argument reads that way here too.
+    """
+    if kw:
+        rows = gbx_zarr_read(spark, table, variables=[name], **kw).collect()
+    else:
+        src = _read_mod._open_source(spark, table, "table", None, None)
+        names = _read_mod._choose_variables([name], src)
+        units, cfg = _read_mod._plan(
+            spark, src, names, None, None, "blocks", True, None
+        )
+        rows = [r for b in H.run(units, cfg) for r in b.to_pylist()]
     stops = [r["stop"] for r in rows]
     shape = tuple(max(s[i] for s in stops) for i in range(len(stops[0])))
     first = block_to_numpy(rows[0])
@@ -636,6 +653,58 @@ def test_append_positions_follow_the_axis_step():
     assert start("time", gap, later) == 72  # missing labels are skipped
 
 
+_CHAIN = [
+    {"name": "bytes", "configuration": {"endian": "little"}},
+    {"name": "zstd", "configuration": {"level": 7, "checksum": False}},
+]
+
+
+def _codec_array_doc(shards, codecs):
+    """The ``zarr.json`` a create writes for ``t2m`` with this layout and codec chain."""
+    spec = _write._NewArray(
+        "t2m", DIMS, (24, 10, 12), np.dtype("float32"), {}, float("nan"), False
+    )
+    chain = _write._codec_chain(codecs)
+    kw = dict(fmt=3, chunks=CHUNKS, shards=shards, codecs=chain, separator="/")
+    _write._new_meta(spec, **kw)  # refuses a chain that cannot encode a chunk
+    return _write._v3_doc(
+        "t2m", DIMS, spec.shape, spec.dtype, (12, 5, 6), None, spec.fill, {}, chain
+    )
+
+
+@pytest.mark.parametrize(
+    "shards, codecs",
+    [
+        (None, _CHAIN),
+        (False, _CHAIN),
+        (None, "objects"),
+    ],
+    ids=["sharded", "unsharded", "objects"],
+)
+def test_p3_explicit_codecs_make_the_array_document(shards, codecs):
+    from zarr.codecs import BytesCodec, ZstdCodec
+
+    if codecs == "objects":
+        codecs = [BytesCodec(), ZstdCodec(level=5)]
+    doc = _codec_array_doc(shards, codecs)
+    assert [c["name"] for c in doc["codecs"]] == ["bytes", "zstd"]
+
+
+@pytest.mark.parametrize(
+    "codecs",
+    [
+        [{"name": "zstd", "configuration": {"level": 3}}],  # no serializer
+        [{"name": "bytes"}, {"name": "lz77"}],  # a codec zarr does not know
+        [object()],  # not a codec at all
+    ],
+    ids=["noserializer", "unknown", "notacodec"],
+)
+def test_p3_bad_codec_chains_are_refused_with_a_fix_while_planning(codecs):
+    with pytest.raises(ZarrUnsupported) as e:
+        _codec_array_doc(None, codecs)
+    assert "Fix:" in str(e.value)
+
+
 def test_a_new_variable_is_created_on_the_store_dimensions(
     spark_delta, drop, tmp_path, no_hooks
 ):
@@ -892,39 +961,21 @@ def test_the_position_pass_never_selects_the_data_column(spark_delta):
 def test_p3_explicit_codecs_round_trip_and_bad_chains_fail_while_planning(
     spark_delta, drop, tmp_path, no_hooks
 ):
-    from zarr.codecs import BytesCodec, ZstdCodec
-
+    """One chain end to end (the chains' documents are test_p3_explicit_codecs_make_...), and
+    a refused chain makes no table."""
     ds = _dataset(hours=24)
-    chain = [
-        {"name": "bytes", "configuration": {"endian": "little"}},
-        {"name": "zstd", "configuration": {"level": 7, "checksum": False}},
-    ]
-    for label, shards, codecs in (
-        ("sharded", None, chain),
-        ("unsharded", False, chain),
-        ("objects", None, [BytesCodec(), ZstdCodec(level=5)]),
-    ):
-        table, _, _ = _create(
-            spark_delta,
-            drop,
-            tmp_path,
-            ds,
-            label=f"p3{label}",
-            shards=shards,
-            codecs=codecs,
-        )
-        np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
-        doc = json.loads(
-            spark_delta.sql(
-                f"SELECT meta FROM {table} WHERE kind = 'array' AND array = 't2m'"
-            ).first()["meta"]
-        )
-        inner = (
-            doc["codecs"][0]["configuration"]["codecs"]
-            if shards is None
-            else doc["codecs"]
-        )
-        assert [c["name"] for c in inner] == ["bytes", "zstd"]
+    table, _, _ = _create(
+        spark_delta, drop, tmp_path, ds, label="p3sharded", codecs=_CHAIN
+    )
+    np.testing.assert_array_equal(_read(spark_delta, table, "t2m"), ds.t2m.values)
+    doc = json.loads(
+        spark_delta.sql(
+            f"SELECT meta FROM {table} WHERE kind = 'array' AND array = 't2m'"
+        ).first()["meta"]
+    )
+    inner = doc["codecs"][0]["configuration"]["codecs"]
+    assert [c["name"] for c in inner] == ["bytes", "zstd"]
+    assert inner[1]["configuration"]["level"] == 7
     for label, codecs in (
         ("noserializer", [{"name": "zstd", "configuration": {"level": 3}}]),
         ("unknown", [{"name": "bytes"}, {"name": "lz77"}]),

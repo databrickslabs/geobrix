@@ -8,6 +8,7 @@ without a retry; real concurrency is exercised on Databricks.
 import dataclasses
 import json
 import time
+import types
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -105,6 +106,52 @@ def table(spark_delta):
     spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
 
 
+@pytest.fixture(scope="module")
+def held(spark_delta):
+    """A manifest holding one chunk row, ``c/0/0/0`` written by ``w1`` at version ``v1``.
+
+    Shared by the tests whose commit is REFUSED (a stale expectation, a replay, a failed
+    diagnosis): a refused commit leaves the table as it was, so they can read it in turn
+    and each still checks that nothing moved. A test that needs to change the table takes
+    ``table`` instead; teardown fails if a test of this module changed ``held``.
+    """
+    name = f"zm_{uuid.uuid4().hex[:8]}"
+    M.create_manifest(spark_delta, name, PROPS)
+    w1 = uuid.uuid4().hex
+    v1 = M.commit(spark_delta, name, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    try:
+        yield types.SimpleNamespace(table=name, w1=w1, v1=v1)
+        assert (
+            M.snapshot(spark_delta, name).version == v1
+        ), "a test changed the shared `held` manifest; give it its own `table`"
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
+
+
+@pytest.fixture(scope="module")
+def held_shard(spark_delta):
+    """A manifest holding one shard row, ``t2m`` ``c/0/0/0`` written by ``w``; shared like
+    ``held`` by the tests whose guarded commit is refused."""
+    name = f"zm_{uuid.uuid4().hex[:8]}"
+    M.create_manifest(spark_delta, name, PROPS)
+    w = uuid.uuid4().hex
+    v = M.commit(
+        spark_delta,
+        name,
+        _rows(_shard_row("t2m", "c/0/0/0", w, "c/0/0/0")),
+        write_id=w,
+        meta={},
+        sharded={"t2m": True},
+    )
+    try:
+        yield types.SimpleNamespace(table=name, w=w, v=v)
+        assert (
+            M.snapshot(spark_delta, name).version == v
+        ), "a test changed the shared `held_shard` manifest; give it its own `table`"
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
+
+
 # --- the brief's five -------------------------------------------------------------
 
 
@@ -161,19 +208,18 @@ def test_a_commit_keeps_every_row_after_an_empty_chunk(spark_delta, table):
     assert sorted(r["key"] for r in _live(spark_delta, table)) == keys
 
 
-def test_stale_expectation_aborts_whole_commit(spark_delta, table):
-    w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
-    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
-    before = M.snapshot(spark_delta, table).version
+def test_stale_expectation_aborts_whole_commit(spark_delta, held):
+    w2, w3 = uuid.uuid4().hex, uuid.uuid4().hex
+    before = M.snapshot(spark_delta, held.table).version
     stale = _rows(
         _chunk("c/0/0/1", w3), _chunk("c/0/0/0", w3, expected=w2)
     )  # w2 never wrote it
     with pytest.raises(ZarrWriteConflict):
-        M.commit(spark_delta, table, stale, write_id=w3, meta={})
-    assert M.snapshot(spark_delta, table).version == before  # nothing committed
+        M.commit(spark_delta, held.table, stale, write_id=w3, meta={})
+    assert M.snapshot(spark_delta, held.table).version == before  # nothing committed
     assert (
         M.read_rows(
-            spark_delta, M.snapshot(spark_delta, table), kinds=["chunk"]
+            spark_delta, M.snapshot(spark_delta, held.table), kinds=["chunk"]
         ).num_rows
         == 1
     )
@@ -748,14 +794,12 @@ def test_commit_versions_survive_file_rewrites(spark_delta, table):
 
 
 def test_a_replay_that_slips_past_the_precheck_returns_its_version(
-    spark_delta, table, monkeypatch
+    spark_delta, held, monkeypatch
 ):
     """Two twins of one write_id: the loser passes the pre-check before the winner's
     commit lands, then hits the CAS guard. It must return the winner's version, not
     raise a conflict against itself."""
-    w1 = uuid.uuid4().hex
-    rows = _rows(_chunk("c/0/0/0", w1))
-    v1 = M.commit(spark_delta, table, rows, write_id=w1, meta={})
+    rows = _rows(_chunk("c/0/0/0", held.w1))  # the commit `held` made, sent again
     real, calls = M.find_commit_version, []
 
     def blind_once(*args, **kwargs):
@@ -763,19 +807,16 @@ def test_a_replay_that_slips_past_the_precheck_returns_its_version(
         return None if len(calls) == 1 else real(*args, **kwargs)
 
     monkeypatch.setattr(M, "find_commit_version", blind_once)
-    assert M.commit(spark_delta, table, rows, write_id=w1, meta={}) == v1
+    assert M.commit(spark_delta, held.table, rows, write_id=held.w1, meta={}) == held.v1
     assert len(calls) == 2  # the blind pre-check, then the lookup in the CAS branch
-    assert M.snapshot(spark_delta, table).version == v1
+    assert M.snapshot(spark_delta, held.table).version == held.v1
 
 
 @pytest.mark.parametrize("lookup", ["raises", "empty"])
-def test_a_conflict_survives_a_failed_diagnosis(
-    spark_delta, table, monkeypatch, lookup
-):
+def test_a_conflict_survives_a_failed_diagnosis(spark_delta, held, monkeypatch, lookup):
     """If listing every conflicting key fails, the write still ends as a
     ZarrWriteConflict that names the key the abort reported."""
-    w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
-    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    w2, w3 = uuid.uuid4().hex, uuid.uuid4().hex
 
     def broken(*args, **kwargs):
         if lookup == "raises":
@@ -787,18 +828,17 @@ def test_a_conflict_survives_a_failed_diagnosis(
     monkeypatch.setattr(M, "changed_since", broken)
     stale = _rows(_chunk("c/0/0/0", w3, expected=w2))  # w2 never wrote it
     with pytest.raises(ZarrWriteConflict) as ei:
-        M.commit(spark_delta, table, stale, write_id=w3, meta={})
+        M.commit(spark_delta, held.table, stale, write_id=w3, meta={})
     assert ei.value.keys == ("t2m/c/0/0/0",)
     assert ei.value.winner is None and "Fix:" in str(ei.value)
 
 
 def test_a_failed_lookup_in_the_cas_branch_still_ends_as_a_conflict(
-    spark_delta, table, monkeypatch
+    spark_delta, held, monkeypatch
 ):
     """After a CAS abort ``commit`` looks for a twin of its own write_id. If that lookup
     fails, the user still gets the ZarrWriteConflict, not the lookup's error."""
-    w1, w2, w3 = (uuid.uuid4().hex for _ in range(3))
-    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+    w2, w3 = uuid.uuid4().hex, uuid.uuid4().hex
     real, calls = M.find_commit_version, []
 
     def fails_after_the_precheck(*args, **kwargs):
@@ -810,7 +850,7 @@ def test_a_failed_lookup_in_the_cas_branch_still_ends_as_a_conflict(
     monkeypatch.setattr(M, "find_commit_version", fails_after_the_precheck)
     stale = _rows(_chunk("c/0/0/0", w3, expected=w2))  # w2 never wrote it
     with pytest.raises(ZarrWriteConflict) as ei:
-        M.commit(spark_delta, table, stale, write_id=w3, meta={})
+        M.commit(spark_delta, held.table, stale, write_id=w3, meta={})
     assert len(calls) == 2  # the pre-check, then the lookup that failed
     assert ei.value.keys == ("t2m/c/0/0/0",) and "Fix:" in str(ei.value)
 
@@ -902,13 +942,12 @@ def test_snapshot_rejects_a_malformed_retain_property(spark_delta, table):
     assert "7 days" in ei.value.fix  # the fix shows the form
 
 
-def test_conflict_rows_ride_on_the_error(spark_delta, table):
-    w1, w2 = uuid.uuid4().hex, uuid.uuid4().hex
-    M.commit(spark_delta, table, _rows(_chunk("c/0/0/0", w1)), write_id=w1, meta={})
+def test_conflict_rows_ride_on_the_error(spark_delta, held):
+    w2 = uuid.uuid4().hex
     with pytest.raises(ZarrWriteConflict) as ei:
         M.commit(
             spark_delta,
-            table,
+            held.table,
             _rows(_chunk("c/0/0/0", w2, expected=uuid.uuid4().hex)),
             write_id=w2,
             meta={},
@@ -918,7 +957,7 @@ def test_conflict_rows_ride_on_the_error(spark_delta, table):
         "chunk",
         "t2m",
         "c/0/0/0",
-        w1,
+        held.w1,
     )
 
 
@@ -1382,16 +1421,8 @@ def test_a_check_row_passes_on_an_unchanged_row_and_changes_nothing(spark_delta,
 
 
 @pytest.mark.parametrize("how", ["changed", "gone", "appeared"])
-def test_a_check_row_aborts_the_commit_when_the_row_moved(spark_delta, table, how):
-    w = uuid.uuid4().hex
-    M.commit(
-        spark_delta,
-        table,
-        _rows(_shard_row("t2m", "c/0/0/0", w, "c/0/0/0")),
-        write_id=w,
-        meta={},
-        sharded={"t2m": True},
-    )
+def test_a_check_row_aborts_the_commit_when_the_row_moved(spark_delta, held_shard, how):
+    table, w = held_shard.table, held_shard.w
     w2 = uuid.uuid4().hex
     if how == "changed":
         guard = _check("shard", "t2m", "c/0/0/0", w2, uuid.uuid4().hex)

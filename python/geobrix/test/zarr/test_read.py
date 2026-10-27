@@ -2,7 +2,6 @@
 
 import ast
 import json
-import logging
 import pathlib
 import uuid
 from datetime import datetime, timezone
@@ -12,6 +11,8 @@ import pyarrow as pa
 import pytest
 
 zarr = pytest.importorskip("zarr")
+
+from test.zarr import _helpers as H  # noqa: E402
 
 from pyspark.sql import functions as F  # noqa: E402
 from pyspark.sql import types as T  # noqa: E402
@@ -26,22 +27,15 @@ from databricks.labs.gbx.zarr._plan import Unit, plan_units  # noqa: E402
 from databricks.labs.gbx.zarr._read import (  # noqa: E402
     BLOCKS_SCHEMA,
     block_to_numpy,
-    block_to_xarray,
     gbx_zarr_read,
 )
 from databricks.labs.gbx.zarr._register import gbx_zarr_register  # noqa: E402
 from databricks.labs.gbx.zarr._select import resolve  # noqa: E402
 from databricks.labs.gbx.zarr._testing import (  # noqa: E402
-    make_era5_like,
     plain_store_rows,
     rewrite_one_inner_chunk,
 )
-from databricks.labs.gbx.zarr.errors import (  # noqa: E402
-    ZarrAccessUnavailable,
-    ZarrGridMismatch,
-    ZarrUnsupported,
-    ZarrVersionUnavailable,
-)
+from databricks.labs.gbx.zarr.errors import ZarrVersionUnavailable  # noqa: E402
 
 SHAPE = (48, 73, 144)
 SEL = {"latitude": slice(60, 50), "longitude": slice(-10, 10)}
@@ -126,24 +120,6 @@ def test_blocks_cover_selection_exactly(spark_delta, v3, era5_v3_sharded):
     assert attrs["units"] == "K" and "_FillValue" not in attrs  # applied by decoding
 
 
-def test_block_helpers_round_trip_a_row(spark_delta, v3, era5_v3_sharded):
-    row = gbx_zarr_read(
-        spark_delta,
-        v3,
-        variables="t2m",
-        isel={"time": slice(0, 4), "latitude": slice(0, 3), "longitude": slice(5, 9)},
-    ).first()
-    arr = block_to_numpy(row)
-    np.testing.assert_array_equal(arr, _direct(era5_v3_sharded, "t2m")[0:4, 0:3, 5:9])
-    assert arr.flags.writeable
-    xa = block_to_xarray(row)
-    assert xa.dims == ("time", "latitude", "longitude") and xa.name == "t2m"
-    assert xa.attrs["units"] == "K"
-    np.testing.assert_array_equal(xa.values, arr)
-    asdict = row.asDict()  # a plain dict works the same
-    np.testing.assert_array_equal(block_to_numpy(asdict), arr)
-
-
 def test_blocks_respect_version_as_of(spark_delta, era5_v3_sharded, tmp_path):
     table, overlay = _table("ver"), tmp_path / "overlay"
     v1 = gbx_zarr_register(
@@ -197,135 +173,7 @@ def test_plain_path_source(spark_delta, era5_v2):
     assert r["coord_start"][0] == "2023-01-01T00:00:00.000000000"
 
 
-def test_plain_path_source_by_uri_and_registered_agree(
-    spark_delta, v3, era5_v3_sharded
-):
-    a = gbx_zarr_read(
-        spark_delta, f"file:{era5_v3_sharded}", variables=["u10"], access="fuse"
-    )
-    b = gbx_zarr_read(spark_delta, v3, variables=["u10"])
-    ga, _ = _assemble(a.collect(), "u10", SHAPE)
-    gb, _ = _assemble(b.collect(), "u10", SHAPE)
-    np.testing.assert_array_equal(ga, gb)
-
-
-def test_blocks_on_irregular_axis(spark_delta, tmp_path):
-    # Gaussian-like: monotonic, no constant step
-    lat = 90 * np.tanh(np.linspace(2.5, -2.5, 73)) / np.tanh(2.5)
-    assert np.ptp(np.diff(lat)) > 1.0
-    path = make_era5_like(tmp_path / "gauss.zarr", latitude=lat)
-    lo, hi = lat[40], lat[20]
-    df = gbx_zarr_read(
-        spark_delta,
-        str(path),
-        variables=["t2m"],
-        sel={"latitude": slice(hi, lo)},
-        isel={"time": slice(0, 12)},
-    )
-    got, seen = _assemble(df.collect(), "t2m", SHAPE)
-    want = _mask(SHAPE, range(12), range(20, 41), range(144))
-    np.testing.assert_array_equal(seen, want)
-    np.testing.assert_array_equal(got[want], _direct(path, "t2m")[want])
-
-
-def test_a_dimension_the_attributes_call_a_longitude_wraps_at_the_seam(
-    spark_delta, tmp_path
-):
-    """coord_attrs reach the selection planner: the name 'xi' says nothing, the units do."""
-    path = tmp_path / "xi.zarr"
-    g = zarr.open_group(str(path), mode="w", zarr_format=3)
-    xi = g.create_array(
-        "xi", shape=(144,), chunks=(72,), dtype="f8", dimension_names=("xi",)
-    )
-    xi[:] = np.arange(144) * 2.5
-    xi.attrs["units"] = "degrees_east"
-    v = g.create_array(
-        "v", shape=(144,), chunks=(72,), dtype="f4", dimension_names=("xi",)
-    )
-    v[:] = np.arange(144, dtype="f4")
-    df = gbx_zarr_read(spark_delta, str(path), sel={"xi": slice(-10, 10)})
-    got, seen = _assemble(df.collect(), "v", (144,))
-    np.testing.assert_array_equal(
-        np.flatnonzero(seen), [*range(0, 5), *range(140, 144)]
-    )
-
-
-def test_a_scalar_variable_reads_as_one_block(spark_delta, tmp_path):
-    path = tmp_path / "scalar.zarr"
-    g = zarr.open_group(str(path), mode="w", zarr_format=3)
-    crs = g.create_array("crs", shape=(), chunks=(), dtype="i4", fill_value=0)
-    crs[...] = 4326
-    v = g.create_array("v", shape=(4,), chunks=(2,), dtype="f4", dimension_names=("k",))
-    v[:] = 1
-    default = gbx_zarr_read(spark_delta, str(path)).collect()
-    assert {r["variable"] for r in default} == {"v"}  # a scalar is not gridded data
-    (row,) = gbx_zarr_read(spark_delta, str(path), variables="crs").collect()
-    assert row["dims"] == [] and row["start"] == [] and row["shape"] == []
-    assert int(block_to_numpy(row)) == 4326
-
-
 # --- decoding ----------------------------------------------------------------------
-
-
-def _packed_store(path, zarr_format=3):
-    """int16 with scale_factor/add_offset and a _FillValue, and a v2-style zero fill_value."""
-    g = zarr.open_group(str(path), mode="w", zarr_format=zarr_format)
-    attrs = {"scale_factor": 0.5, "add_offset": 10.0, "_FillValue": -1}
-    if zarr_format == 2:
-        attrs["_ARRAY_DIMENSIONS"] = ["x"]
-    a = g.create_array(
-        "p",
-        shape=(6,),
-        chunks=(3,),
-        dtype="i2",
-        fill_value=0,
-        attributes=attrs,
-        **({"dimension_names": ("x",)} if zarr_format == 3 else {}),
-    )
-    a[:] = np.array([0, 2, -1, 4, 6, 0], dtype="i2")
-    return path
-
-
-def test_decode_false_returns_stored_values_and_attributes(spark_delta, tmp_path):
-    path = _packed_store(tmp_path / "p.zarr")
-    decoded = gbx_zarr_read(spark_delta, str(path), variables="p").collect()
-    raw = gbx_zarr_read(spark_delta, str(path), variables="p", decode=False).collect()
-    got, _ = _assemble(decoded, "p", (6,), dtype="float64")
-    np.testing.assert_array_equal(
-        got, [10.0, 11.0, np.nan, 12.0, 13.0, 10.0]
-    )  # (v * 0.5) + 10, -1 masked
-    stored, _ = _assemble(raw, "p", (6,), dtype="int16")
-    np.testing.assert_array_equal(stored, [0, 2, -1, 4, 6, 0])
-    assert {r["dtype"] for r in raw} == {"<i2"} and decoded[0]["dtype"].startswith("<f")
-    # decoding consumed the packing attributes; the raw block still carries them
-    assert "scale_factor" not in json.loads(decoded[0]["attrs"])
-    assert json.loads(raw[0]["attrs"])["scale_factor"] == 0.5
-    # a never-written cell holds, in the decoded block's units, the decoded fill value
-    assert raw[0]["fill_value"] == "0" and decoded[0]["fill_value"] == "10.0"
-
-
-def test_use_zarr_fill_value_as_mask_keeps_the_zeros_of_a_v2_integer_array(
-    spark_delta, tmp_path
-):
-    g = zarr.open_group(str(tmp_path / "z.zarr"), mode="w", zarr_format=2)
-    a = g.create_array(
-        "a",
-        shape=(4,),
-        chunks=(2,),
-        dtype="i2",
-        fill_value=0,
-        attributes={"_ARRAY_DIMENSIONS": ["x"]},
-    )
-    a[:] = np.array([0, 3, 0, 5], dtype="i2")
-    path = str(tmp_path / "z.zarr")
-    masked, _ = _assemble(
-        gbx_zarr_read(spark_delta, path).collect(), "a", (4,), dtype="float64"
-    )
-    np.testing.assert_array_equal(masked, [np.nan, 3, np.nan, 5])  # xarray's default
-    kept = gbx_zarr_read(spark_delta, path, use_zarr_fill_value_as_mask=False).collect()
-    got, _ = _assemble(kept, "a", (4,), dtype="int16")
-    np.testing.assert_array_equal(got, [0, 3, 0, 5])
-    assert kept[0]["dtype"] == "<i2"
 
 
 # --- tables ------------------------------------------------------------------------
@@ -357,53 +205,6 @@ def test_table_output_time_column_is_timestamp(spark_delta, v3, era5_v3_sharded,
     # the instant is exact whatever the session time zone
     epoch = ordered.select(F.unix_micros("time")).first()[0]
     assert epoch == int(datetime(2023, 1, 1, tzinfo=timezone.utc).timestamp()) * 10**6
-
-
-def test_table_by_label_selection_and_a_chosen_variable(spark_delta, v3, utc):
-    df = gbx_zarr_read(
-        spark_delta,
-        v3,
-        output="table",
-        variables=["u10"],
-        sel={"time": slice("2023-01-01T05", "2023-01-01T06"), "latitude": 0.0},
-        isel={"longitude": [0, 1]},
-    )
-    assert df.columns == ["time", "latitude", "longitude", "u10"]
-    rows = df.orderBy("time", "longitude").collect()
-    assert [(r["time"].hour, r["latitude"], r["longitude"]) for r in rows] == [
-        (5, 0.0, 0.0),
-        (5, 0.0, 2.5),
-        (6, 0.0, 0.0),
-        (6, 0.0, 2.5),
-    ]
-
-
-def test_table_rejects_mixed_dims(spark_delta, v3):
-    with pytest.raises(ZarrGridMismatch) as e:
-        gbx_zarr_read(spark_delta, v3, output="table", variables=["t2m", "latitude"])
-    assert "dimensions" in str(e.value) and "Fix:" in str(e.value)
-    assert "same dimensions, or read them separately" in e.value.fix
-
-
-def test_table_of_variables_with_different_chunking(spark_delta, tmp_path):
-    path = tmp_path / "mix.zarr"
-    g = zarr.open_group(str(path), mode="w", zarr_format=3)
-    for name, chunks in (("a", (2, 3)), ("b", (4, 2))):
-        arr = g.create_array(
-            name, shape=(4, 6), chunks=chunks, dtype="f8", dimension_names=("y", "x")
-        )
-        arr[:] = np.arange(24, dtype="f8").reshape(4, 6) * (1 if name == "a" else -1)
-    rows = gbx_zarr_read(spark_delta, str(path), output="table").orderBy("y", "x")
-    got = rows.collect()
-    assert len(got) == 24 and rows.columns == [
-        "y",
-        "x",
-        "a",
-        "b",
-    ]  # no coordinates: index
-    assert isinstance(rows.schema["y"].dataType, T.LongType)
-    np.testing.assert_array_equal([r["a"] for r in got], np.arange(24.0))
-    np.testing.assert_array_equal([r["b"] for r in got], -np.arange(24.0))
 
 
 def test_a_table_has_one_spark_type_per_kind_and_nulls_for_masked_cells(
@@ -451,7 +252,7 @@ def test_an_error_while_spark_runs_the_read_arrives_as_a_python_exception(
 
     from pyspark.errors import PythonException
 
-    path = _packed_store(tmp_path / "gone.zarr")
+    path = H.packed_store(tmp_path / "gone.zarr")
     df = gbx_zarr_read(spark_delta, str(path), variables="p")
     shutil.rmtree(path / "p")
     with pytest.raises(PythonException) as e:
@@ -541,91 +342,18 @@ def _manage(spark, store, table):
     return commit(spark, table, table_rows, write_id=wid, meta={"m": 1})
 
 
-def test_a_managed_store_reads_from_its_data_root(
-    spark_delta, era5_v3_unsharded, era5_v2
-):
-    for store in (era5_v3_unsharded, era5_v2):  # chunk rows, v3 and v2
-        table = _table("managed")
-        _manage(spark_delta, store, table)
+def test_a_managed_store_reads_from_its_data_root(spark_delta, era5_v3_unsharded):
+    """One end-to-end managed read; v2's chunk keys are read the same way, without a table,
+    in test_read_unit.py."""
+    table = _table("managed")
+    _manage(spark_delta, era5_v3_unsharded, table)
+    try:
         rows = gbx_zarr_read(spark_delta, table, variables=["t2m"]).collect()
         got, seen = _assemble(rows, "t2m", SHAPE)
         assert seen.all()
-        np.testing.assert_array_equal(got, _direct(store, "t2m"))
+        np.testing.assert_array_equal(got, _direct(era5_v3_unsharded, "t2m"))
+    finally:
         spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
-
-
-@pytest.mark.filterwarnings("ignore:Consolidated metadata")
-def test_stale_consolidated_metadata_is_never_served(spark_delta, tmp_path):
-    base = tmp_path / "base.zarr"
-    g = zarr.open_group(str(base), mode="w", zarr_format=3)
-    z = g.create_array("z", shape=(4,), chunks=(2,), dtype="f4", dimension_names=("k",))
-    z[:] = np.arange(4, dtype="f4")
-    zarr.consolidate_metadata(str(base))
-    z.resize((6,))  # the array's own document moves on; the consolidated one does not
-    z[4:] = [10, 11]
-    root = json.loads((base / "zarr.json").read_text())
-    assert root["consolidated_metadata"]["metadata"]["z"]["shape"] == [4]  # stale
-
-    table = _table("consol")
-    gbx_zarr_register(spark_delta, str(base), table)
-    rows = gbx_zarr_read(spark_delta, table).collect()
-    got, seen = _assemble(rows, "z", (6,))
-    assert seen.all() and list(got) == [0, 1, 2, 3, 10, 11]  # the per-array shape
-
-    docs = _read.store_documents(
-        {
-            "zarr.json": json.dumps(root).encode(),
-            "z/zarr.json": b"{}",
-            ".zmetadata": b"{}",
-        }
-    )
-    assert "consolidated_metadata" not in json.loads(docs["zarr.json"])
-    assert ".zmetadata" not in docs and docs["z/zarr.json"] == b"{}"
-
-
-# --- arrays GeoBrix cannot decode ----------------------------------------------------
-
-
-def _store_with_a_string_coordinate(path):
-    g = zarr.open_group(str(path), mode="w", zarr_format=3)
-    v = g.create_array(
-        "v", shape=(3,), chunks=(2,), dtype="f4", dimension_names=("station",)
-    )
-    v[:] = np.array([1, 2, 3], dtype="f4")
-    s = g.create_array(
-        "station", shape=(3,), chunks=(2,), dtype=str, dimension_names=("station",)
-    )
-    s[:] = np.array(["a", "bb", "ccc"], dtype=object)
-    return path
-
-
-def test_an_undecodable_array_raises_only_when_it_is_decoded(
-    spark_delta, tmp_path, caplog
-):
-    path = _store_with_a_string_coordinate(tmp_path / "st.zarr")
-    table = _table("strings")
-    gbx_zarr_register(spark_delta, str(path), table)
-    for source in (str(path), table):
-        with caplog.at_level(logging.WARNING, logger=_read.__name__):
-            rows = gbx_zarr_read(spark_delta, source).collect()  # the rest reads
-        got, seen = _assemble(rows, "v", (3,))
-        assert seen.all() and list(got) == [1, 2, 3]
-        assert rows[0]["coord_start"] == [None]  # no label for a string coordinate
-        assert any("station" in r.getMessage() for r in caplog.records)
-        # asking for the array, or for labels from it, names it
-        with pytest.raises(ZarrUnsupported) as e:
-            gbx_zarr_read(spark_delta, source, variables=["station"])
-        assert "'station'" in str(e.value) and "Fix:" in str(e.value)
-        with pytest.raises(ZarrUnsupported) as e:
-            gbx_zarr_read(spark_delta, source, sel={"station": "a"})
-        assert "'station'" in str(e.value)
-        with pytest.raises(ZarrUnsupported) as e:
-            gbx_zarr_read(spark_delta, source, output="table")
-        assert "'station'" in str(e.value)
-        by_position = gbx_zarr_read(spark_delta, source, isel={"station": [0, 2]})
-        _, seen = _assemble(by_position.collect(), "v", (3,))
-        assert list(seen) == [True, False, True]
-    spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
 
 
 # --- planning ----------------------------------------------------------------------
@@ -697,17 +425,6 @@ def test_every_unit_gets_a_partition_of_its_own(spark_delta, n):
     )
 
 
-def test_small_budgets_split_the_read_into_many_tasks_without_losing_a_cell(
-    spark_delta, v3, era5_v3_sharded, monkeypatch
-):
-    monkeypatch.setattr(_read, "_budget_bytes", lambda: 1)  # one chunk per unit
-    rows = gbx_zarr_read(spark_delta, v3, variables=["t2m"]).collect()
-    assert len(rows) == 16  # one block per (variable, chunk)
-    got, seen = _assemble(rows, "t2m", SHAPE)
-    assert seen.all()
-    np.testing.assert_array_equal(got, _direct(era5_v3_sharded, "t2m"))
-
-
 # --- arguments ---------------------------------------------------------------------
 
 
@@ -721,56 +438,6 @@ def test_source_classification():
     assert _read.classify_source("/x", "table") == "table"
     with pytest.raises(ValueError, match="source_type"):
         _read.classify_source("x", "location")
-
-
-def test_tiles_output_arrives_in_a_later_task(spark_delta, v3):
-    with pytest.raises(
-        NotImplementedError, match="tiles output arrives in a later task"
-    ):
-        gbx_zarr_read(spark_delta, v3, output="tiles")
-
-
-def test_arguments_are_checked_before_any_work(spark_delta, v3, era5_v2):
-    with pytest.raises(ValueError, match="output"):
-        gbx_zarr_read(spark_delta, v3, output="rows")
-    with pytest.raises(ZarrAccessUnavailable) as e:
-        gbx_zarr_read(spark_delta, v3, access="direct")
-    assert 'access="auto"' in e.value.fix
-    with pytest.raises(ValueError, match="access"):
-        gbx_zarr_read(spark_delta, v3, access="turbo")
-    with pytest.raises(ValueError, match="band_dim"):
-        gbx_zarr_read(spark_delta, v3, band_dim="time")
-    with pytest.raises(ValueError, match="tile_size"):
-        gbx_zarr_read(spark_delta, v3, tile_size=(256, 256))
-    with pytest.raises(ValueError, match="not both"):
-        gbx_zarr_read(spark_delta, v3, version_as_of=1, timestamp_as_of="2020-01-01")
-    with pytest.raises(ZarrVersionUnavailable) as e:  # a plain store has no versions
-        gbx_zarr_read(spark_delta, str(era5_v2), version_as_of=1)
-    assert "Fix:" in str(e.value) and "gbx_zarr_register" in e.value.fix
-    with pytest.raises(ValueError, match="unknown variable"):
-        gbx_zarr_read(spark_delta, v3, variables=["nope"])
-    with pytest.raises(ValueError, match="unknown dimension"):
-        gbx_zarr_read(spark_delta, v3, sel={"depth": 1})
-    with pytest.raises(ValueError, match="both sel and isel"):
-        gbx_zarr_read(spark_delta, v3, sel={"time": "2023-01-01"}, isel={"time": 0})
-    with pytest.raises(ValueError, match="use_zarr_fill_value_as_mask"):
-        gbx_zarr_read(spark_delta, v3, use_zarr_fill_value_as_mask="no")
-
-
-def test_the_dependent_selection_is_per_variable(spark_delta, tmp_path):
-    """sel on a dimension only some variables have reaches those variables and no error."""
-    path = tmp_path / "two.zarr"
-    g = zarr.open_group(str(path), mode="w", zarr_format=3)
-    a = g.create_array(
-        "a", shape=(4, 6), chunks=(2, 3), dtype="f4", dimension_names=("y", "x")
-    )
-    a[:] = 1
-    b = g.create_array("b", shape=(6,), chunks=(3,), dtype="f4", dimension_names=("x",))
-    b[:] = 2
-    rows = gbx_zarr_read(spark_delta, str(path), isel={"y": slice(0, 2)}).collect()
-    _, seen_a = _assemble(rows, "a", (4, 6))
-    _, seen_b = _assemble(rows, "b", (6,))
-    assert seen_a[:2].all() and not seen_a[2:].any() and seen_b.all()
 
 
 def test_the_zarr_package_uses_no_api_that_spark_connect_forbids():
@@ -802,28 +469,9 @@ def test_the_zarr_package_uses_no_api_that_spark_connect_forbids():
 
 @pytest.fixture(scope="module")
 def mixed(spark_delta, tmp_path_factory):
-    """A registered v3 store whose two variables have different chunks, and ``b`` shards.
-
-    ``a`` has chunks (2, 3) and no shards; ``b`` has chunks (4, 2) inside shards (8, 4), so
-    one chunk of ``a`` lies in two chunks, often of two shards, of ``b``. No value is 0 (the
-    fill), so a chunk read from the wrong place, or not at all, is seen.
-    """
-    path = tmp_path_factory.mktemp("mixed") / "mixed.zarr"
-    g = zarr.open_group(str(path), mode="w", zarr_format=3)
-    data = np.arange(1, 97, dtype="f8").reshape(8, 12)
-    a = g.create_array(
-        "a", shape=(8, 12), chunks=(2, 3), dtype="f8", dimension_names=("y", "x")
-    )
-    b = g.create_array(
-        "b",
-        shape=(8, 12),
-        chunks=(4, 2),
-        shards=(8, 4),
-        dtype="f8",
-        dimension_names=("y", "x"),
-    )
-    a[:] = data
-    b[:] = -data
+    """A registered v3 store whose two variables have different chunks, and ``b`` shards
+    (see ``_helpers.make_mixed``)."""
+    path = H.make_mixed(tmp_path_factory.mktemp("mixed") / "mixed.zarr")
     table = _table("mixed")
     gbx_zarr_register(spark_delta, str(path), table)
     yield path, table
@@ -837,30 +485,6 @@ def _xarray_dataset(path):
     return xr.open_dataset(
         ZarrStore.open_group(str(path), mode="r", consolidated=False)
     )
-
-
-def test_each_unit_of_a_registered_table_carries_the_rows_of_the_other_variables_chunks(
-    spark_delta, mixed, monkeypatch
-):
-    """The first variable's chunks cut the grid; for each unit, the rows of the other
-    variable are those of the chunks (here, of the shards) its cells lie in."""
-    _, table = mixed
-    monkeypatch.setattr(_read, "_budget_bytes", lambda: 1)  # one chunk of ``a`` a unit
-    src = _read._open_source(spark_delta, table, "table", None, None)
-    units, _ = _read._plan(
-        spark_delta, src, ["a", "b"], None, None, "table", True, None
-    )
-    assert len(units) == 16  # a's grid is 4 x 4 chunks
-    for unit in units:
-        row, col = unit.chunks[0][0], unit.chunks[0][1]
-        want_shards = {  # a's columns [3*col, 3*col+3) lie in b's shards of width 4
-            f"c/0/{j}" for j in range(3 * col // 4, (3 * col + 2) // 4 + 1)
-        }
-        a_rows = [r for r in unit.rows if r["array"] == "a"]
-        b_rows = [r for r in unit.rows if r["array"] == "b"]
-        assert [r["key"] for r in a_rows] == [f"c/{row}/{col}"], (row, col)
-        assert {r["key"] for r in b_rows} == want_shards, (row, col)
-        assert {r["kind"] for r in b_rows} == {"shard"}
 
 
 def test_a_table_of_variables_chunked_differently_equals_xarray_from_a_registered_store(

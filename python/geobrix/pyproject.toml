@@ -439,6 +439,7 @@ exclude_lines = ["pragma: no cover"]
 pythonpath = [ "src", "." ]
 markers = [
     "integration: tests that need network or long-running setup (excluded from CI)",
+    "delta: zarr tests that run on the local Spark/Delta session (marked in test/zarr/conftest.py); -m 'not delta' is the fast, Spark-free inner loop",
 ]
 filterwarnings = [
     "ignore:Support for class-based .* config.* deprecated:",

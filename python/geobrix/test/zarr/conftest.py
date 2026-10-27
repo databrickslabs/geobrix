@@ -4,17 +4,49 @@
 SparkSession starts. The root conftest puts them on ``PYSPARK_SUBMIT_ARGS`` when this
 directory is collected (see ``pytest_collection_finish`` in ``test/conftest.py``);
 ``gbx:test:python`` fetches the jars into the Maven repo when they are missing.
+
+Fast inner loop. Every test that runs on the local Spark/Delta session (it asks for
+``spark_delta``, directly or through another fixture) is marked ``delta`` when collected,
+so ``-m "not delta"`` runs only the Spark-free tests, in seconds::
+
+    python -m pytest python/geobrix/test/zarr -m "not delta and not integration"
+
+(run it from the repo root in ``.venv-pyrx``; the ``gbx:test:*`` commands add their own
+``-m`` and do not pass one through). The default run, with no ``-m delta`` filter, is
+complete: it is the one CI and ``gbx:test:light`` use. The Spark-free tests carry each
+correctness matrix (selections, dtypes, CF decoding, layouts, conflict classification);
+the ``delta`` tests keep one end-to-end test per behaviour, plus the commit, conflict and
+rebase tests, which are real Delta semantics.
 """
+
+from pathlib import Path
 
 import pytest
 
 _DELTA_EXT = "io.delta.sql.DeltaSparkSessionExtension"
 _DELTA_CATALOG = "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+_HERE = Path(__file__).resolve().parent
 
 
-@pytest.fixture(scope="module")
+def pytest_collection_modifyitems(config, items):
+    """Mark every zarr test that needs the local Spark/Delta session as ``delta``."""
+    for item in items:
+        if "spark_delta" in item.fixturenames and _HERE in Path(item.path).parents:
+            item.add_marker(pytest.mark.delta)
+
+
+@pytest.fixture(scope="package")
 def spark_delta(tmp_path_factory):
     """A local-mode Spark session with Delta Lake enabled (OSS delta-spark 4.0.x).
+
+    One session for the whole directory (package scope): a JVM start costs seconds, and
+    every module used to pay it. The tests clean up after themselves (tables dropped, the
+    session time zone and current schema restored), so they share it safely. The engine
+    runs without whole-stage codegen and adaptive execution: with a few rows per query,
+    compiling and re-planning cost more than they save, and every commit and read in
+    these suites is dozens of such queries. Delta uses its local log store (single-JVM
+    tests only) and Hadoop its checksum-free local file system, which spawn far fewer
+    child processes; none of this changes what a commit, a conflict or a read returns.
 
     The Delta extension is a static conf, so a live session without it is stopped
     first; a session that already has it is reused. Without the Delta jars on the
@@ -41,6 +73,21 @@ def spark_delta(tmp_path_factory):
             .config("spark.databricks.delta.snapshotPartitions", "2")
             .config("spark.sql.execution.arrow.pyspark.enabled", "true")
             .config("spark.ui.enabled", "false")
+            .config("spark.sql.adaptive.enabled", "false")
+            .config("spark.sql.codegen.wholeStage", "false")
+            .config("spark.sql.codegen.factoryMode", "NO_CODEGEN")
+            # Hadoop's local file system runs `readlink` and `chmod` as child processes
+            # (there is no native library to call): dozens of forks for every Delta commit,
+            # a fifth of the driver's time on macOS, and more where a fork is slower. The local
+            # log store and the checksum-free local file system need a third of them.
+            .config("spark.delta.logStore.class", "io.delta.storage.LocalLogStore")
+            .config(
+                "spark.hadoop.fs.file.impl", "org.apache.hadoop.fs.RawLocalFileSystem"
+            )
+            .config(
+                "spark.hadoop.fs.AbstractFileSystem.file.impl",
+                "org.apache.hadoop.fs.local.RawLocalFs",
+            )
             .getOrCreate()
         )
     except Exception as e:  # the JVM could not load the Delta classes

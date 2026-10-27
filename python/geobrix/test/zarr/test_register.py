@@ -833,7 +833,7 @@ def test_nested_groups_and_hidden_names_in_an_unusual_path(
     assert registered <= listed and "fc/_aux/c/0" in listed
 
 
-def test_every_v3_chunk_key_encoding_registers(spark_delta, tmp_path):
+def test_every_v3_chunk_key_encoding_registers(tmp_path):
     base = tmp_path / "v3.zarr"
     g = zarr.open_group(str(base), mode="w", zarr_format=3)
     keys = {
@@ -854,13 +854,11 @@ def test_every_v3_chunk_key_encoding_registers(spark_delta, tmp_path):
         x[:] = np.arange(24, dtype="f4").reshape(4, 6)
     expected = {"dflt": "c/1/1", "dflt_dot": "c.1.1", "v2dot": "1.1", "v2slash": "1/1"}
 
-    table = _table("keys")
-    gbx_zarr_register(spark_delta, str(base), table)
-    chunks = _live(spark_delta, table, kinds="chunk")
+    metas, arrays, _, _, rows, _ = _builder(base)  # what register builds, without Spark
     for array, last in expected.items():
-        got = chunks.filter(pc.equal(chunks["array"], array))["key"].to_pylist()
+        got = rows.filter(pc.equal(rows["array"], array))["key"].to_pylist()
         assert len(got) == 4 and last in got, (array, got)
-    store, arrays = _open_store(spark_delta, table, base, tmp_path / "scratch")
+    store = _store_from_rows(metas, arrays, rows, base, tmp_path / "scratch")
     _assert_reads_like_the_base(store, arrays, base)
 
 

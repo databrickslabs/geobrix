@@ -6,7 +6,7 @@ resolution, both tiers must emit the **same set of H3 cells** for each mode:
 
 - ``covering`` — light uses h3-py ``polygon_to_cells_experimental(contain='overlap')``;
   heavy hand-rolls polyfill+buffer candidates filtered by a JTS
-  ``hexagon.intersects(bbox)`` keep-test (H3-Java is pinned 3.7.0). The spec
+  ``hexagon.intersects(bbox)`` keep-test (H3-Java is pinned 3.7.3). The spec
   accepts covering parity "by definition + tests" — this test IS that gate.
 - ``centroid`` — both tiers use the identical pixel-centroid rule
   (pixel centroid lon/lat -> H3 cell), so the cell sets must match **exactly**,

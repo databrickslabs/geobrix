@@ -9,7 +9,8 @@
 #
 # This .in uses a local-package-with-extra reference so uv expands [light_env5_all]
 # directly from pyproject.toml. The [light_env5_all] extra pulls
-# [light_dbr17]+[stac]+[vizx]+[overture] (protobuf-5 / mapbox-vector-tile<2.2).
+# [light_dbr17]+[stac]+[vizx] (protobuf-5 / mapbox-vector-tile<2.2).
+# ([overture] is an opt-in extra outside the _all umbrellas.)
 # Protobuf-6 all-features twin: see requirements-light-env6-all-ci.in.
 #
 # Note: CI resolves without Serverless grpcio-status constraints; the protobuf version

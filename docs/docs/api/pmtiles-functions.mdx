@@ -147,7 +147,7 @@ GeoBrix passes tile bytes through unchanged. If your tiles are already compresse
 | `3` | brotli |
 | `4` | zstd |
 
-The internal compression (root directory + metadata) is always `none` in v0.4.0; the spec's compressed-root-directory variant ships in a future release.
+The internal compression (root directory + metadata) is always `none` in v0.4.0; the spec's compressed-root-directory variant ships in a future release. Archives the heavyweight writer produces read back through the lightweight [`pmtiles_gbx` reader](../readers/pmtiles).
 
 ---
 

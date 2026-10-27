@@ -284,6 +284,12 @@ formats.
 - **A damaged PMTiles header cannot crash a worker.** Range reads stop at the end of the file,
   so an archive whose header declares a length far beyond its end fails with an error instead of
   trying to allocate that many bytes.
+- **`pmtiles_gbx` reads archives with uncompressed directories (fix).** The heavyweight `pmtiles`
+  writer stores its root directory and metadata uncompressed, as the PMTiles v3 spec allows, but the
+  reader always gunzipped directories, so an archive written by the heavyweight writer failed to
+  read back with `Not a gzipped file`. The reader now decodes directories by the compression the
+  archive header declares: none and gzip are read, and any other compression fails the read with an
+  error that names it.
 
 ### NetCDF reader
 

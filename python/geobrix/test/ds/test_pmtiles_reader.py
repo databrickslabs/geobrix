@@ -485,3 +485,196 @@ def test_archive_with_a_garbled_root_length_fails_cleanly(tmp_path):
     with pytest.raises(Exception) as info:
         PMtilesArchiveReader({"path": path}).partitions()
     assert not isinstance(info.value, MemoryError)
+
+
+# ---------------------------------------------------------------------------
+# Uncompressed internal directories (header internal_compression = NONE)
+# ---------------------------------------------------------------------------
+
+
+def _with_uncompressed_internals(src, dst):
+    """Rewrite a library-written PMTiles archive (gzip root, leaves, metadata)
+    so its root directory, leaf directories and metadata are stored
+    uncompressed and the header declares ``internal_compression = NONE`` -- the
+    layout the heavyweight writer produces. The tile data is copied unchanged;
+    offsets and lengths are recomputed in the writer's section order (header,
+    root, metadata, leaves, tile data)."""
+    import gzip
+
+    from pmtiles.tile import (
+        Compression,
+        Entry,
+        deserialize_directory,
+        deserialize_header,
+        serialize_directory,
+        serialize_header,
+    )
+
+    with open(src, "rb") as fh:
+        raw = fh.read()
+    h = deserialize_header(raw[:127])
+    assert h["internal_compression"] == Compression.GZIP
+
+    def section(offset, length):
+        return raw[offset : offset + length]
+
+    def plain(entries):
+        # serialize_directory gzips; the archive wants the bare varint stream
+        return gzip.decompress(serialize_directory(entries))
+
+    leaves = b""
+    root_entries = []
+    for e in deserialize_directory(section(h["root_offset"], h["root_length"])):
+        if e.run_length > 0:  # tile entry in the root: kept as is
+            root_entries.append(e)
+            continue
+        leaf = plain(
+            deserialize_directory(
+                section(h["leaf_directory_offset"] + e.offset, e.length)
+            )
+        )
+        root_entries.append(Entry(e.tile_id, len(leaves), len(leaf), 0))
+        leaves += leaf
+    root = plain(root_entries)
+    metadata = gzip.decompress(section(h["metadata_offset"], h["metadata_length"]))
+    tiles = section(h["tile_data_offset"], h["tile_data_length"])
+
+    h = dict(h, internal_compression=Compression.NONE)
+    h["root_offset"] = 127
+    h["root_length"] = len(root)
+    h["metadata_offset"] = h["root_offset"] + len(root)
+    h["metadata_length"] = len(metadata)
+    h["leaf_directory_offset"] = h["metadata_offset"] + len(metadata)
+    h["leaf_directory_length"] = len(leaves)
+    h["tile_data_offset"] = h["leaf_directory_offset"] + len(leaves)
+    with open(dst, "wb") as fh:
+        fh.write(serialize_header(h) + root + metadata + leaves + tiles)
+
+
+def test_uncompressed_variant_is_what_the_heavy_writer_stores(tmp_path):
+    """Guard on the fixture itself: the rewritten archive declares NONE and its
+    root directory is not a gzip stream, so a reader that gunzips fails on it."""
+    import gzip
+
+    gz, plain = str(tmp_path / "gz.pmtiles"), str(tmp_path / "plain.pmtiles")
+    _write_multi_partition_archive(gz, n=50)
+    _with_uncompressed_internals(gz, plain)
+    h = _archive_header(plain)
+    with open(plain, "rb") as fh:
+        root = fh.read()[h["root_offset"] : h["root_offset"] + h["root_length"]]
+    assert h["internal_compression"].name == "NONE"
+    with pytest.raises(gzip.BadGzipFile):
+        gzip.decompress(root)
+
+
+def test_archive_reader_spark_reads_uncompressed_directories(spark, tmp_path):
+    """10 tiles in an archive whose directories and metadata are stored
+    uncompressed read back through pmtiles_gbx with the same (z, x, y) rows and
+    identical tile bytes as the gzip-directory archive."""
+    from pmtiles.tile import Compression, TileType, zxy_to_tileid
+    from pmtiles.writer import Writer
+
+    gz, plain = str(tmp_path / "gz.pmtiles"), str(tmp_path / "plain.pmtiles")
+    tiles = {(14, 2615 + i, 6330): _png_bytes(i) for i in range(10)}
+    with open(gz, "wb") as fh:
+        w = Writer(fh)
+        for (z, x, y), data in sorted(
+            tiles.items(), key=lambda kv: zxy_to_tileid(*kv[0])
+        ):
+            w.write_tile(zxy_to_tileid(z, x, y), data)
+        w.finalize(
+            {"tile_type": TileType.PNG, "tile_compression": Compression.NONE},
+            {"name": "ten"},
+        )
+    _with_uncompressed_internals(gz, plain)
+
+    spark.dataSource.register(PMTilesGbxDataSource)
+
+    def read(path):
+        rows = (
+            spark.read.format("pmtiles_gbx")
+            .option("source", "archive")
+            .option("path", path)
+            .load()
+            .collect()
+        )
+        return {(r["z"], r["x"], r["y"]): bytes(r["bytes"]) for r in rows}
+
+    assert read(gz) == tiles
+    assert read(plain) == tiles
+
+
+def test_archive_reader_uncompressed_directories_with_leaves(tmp_path):
+    """The uncompressed variant of a multi-partition archive (root pointing at
+    leaf directories, run-length entries, deduplicated tiles) yields the same
+    rows as the library traversal of the gzip original: planning and the
+    per-tile lookup both decode root and leaf directories by the header."""
+    from databricks.labs.gbx.ds._pmtiles_read import PMtilesArchiveReader
+
+    gz, plain = str(tmp_path / "gz.pmtiles"), str(tmp_path / "plain.pmtiles")
+    _write_multi_partition_archive(gz)
+    _with_uncompressed_internals(gz, plain)
+    assert _archive_header(plain)["leaf_directory_length"] > 0  # leaves exercised
+    expected = _expected_archive_rows(gz)
+
+    reader = PMtilesArchiveReader({"path": plain, "tilesPerPartition": str(_TPP)})
+    parts = reader.partitions()
+    assert [t for part in parts for t in part.tiles] == [e[:3] for e in expected]
+    assert [row for part in parts for row in reader.read(part)] == expected
+
+
+def test_read_directory_decodes_by_the_declared_compression():
+    import gzip
+
+    from pmtiles.tile import Compression, Entry, serialize_directory
+
+    from databricks.labs.gbx.ds._pmtiles_read import _read_directory
+
+    entries = [Entry(5, 0, 10, 1), Entry(9, 10, 7, 3)]
+    gzipped = serialize_directory(entries)
+    bare = gzip.decompress(gzipped)
+    calls = []
+
+    def get_bytes(offset, length):
+        calls.append((offset, length))
+        return {1: bare, 2: gzipped}[offset]
+
+    def view(comp, offset):
+        got = _read_directory(get_bytes, {"internal_compression": comp}, offset, 99)
+        return [(e.tile_id, e.offset, e.length, e.run_length) for e in got]
+
+    want = [(5, 0, 10, 1), (9, 10, 7, 3)]
+    assert view(Compression.NONE, 1) == want
+    assert view(Compression.GZIP, 2) == want
+    assert calls == [(1, 99), (2, 99)]
+
+
+@pytest.mark.parametrize("name,value", [("UNKNOWN", 0), ("BROTLI", 3), ("ZSTD", 4)])
+def test_read_directory_rejects_unsupported_compression(name, value):
+    from pmtiles.tile import Compression
+
+    from databricks.labs.gbx.ds._pmtiles_read import _read_directory
+
+    header = {"internal_compression": Compression[name]}
+    with pytest.raises(ValueError) as info:
+        _read_directory(lambda o, n: b"", header, 127, 10)
+    assert str(info.value) == (
+        f"pmtiles_gbx: internal compression {value} is not supported"
+    )
+
+
+def test_archive_with_an_unsupported_internal_compression_fails_at_planning(tmp_path):
+    """A zstd-directory archive is refused when the read is planned, with the
+    reader's own error, not a gzip decoding error."""
+    from pmtiles.tile import Compression, deserialize_header, serialize_header
+
+    from databricks.labs.gbx.ds._pmtiles_read import PMtilesArchiveReader
+
+    path = str(tmp_path / "z.pmtiles")
+    _write_multi_partition_archive(path, n=50)
+    with open(path, "r+b") as fh:
+        h = deserialize_header(fh.read(127))
+        fh.seek(0)
+        fh.write(serialize_header(dict(h, internal_compression=Compression.ZSTD)))
+    with pytest.raises(ValueError, match="internal compression 4 is not supported"):
+        PMtilesArchiveReader({"path": path}).partitions()

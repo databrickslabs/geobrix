@@ -128,3 +128,31 @@ def test_light_vs_heavy_single_archive(spark_with_jar, tmp_path):
         f"heavy-only={set(heavy) - set(light)}"
     )
     assert light == heavy, "decoded tile bytes differ between light and heavy"
+
+
+def test_heavy_written_archive_reads_back_through_pmtiles_gbx(spark_with_jar, tmp_path):
+    """An archive the heavy writer produced (uncompressed directories) reads back
+    through the light `pmtiles_gbx` reader with every tile written, bytes intact."""
+    spark = spark_with_jar
+    tiles = [(2, 1, 1), (2, 2, 1), (3, 4, 3)]
+    written = {t: PNG + bytes([i]) for i, t in enumerate(tiles)}
+    df = spark.createDataFrame(
+        [(z, x, y, bytearray(b)) for (z, x, y), b in written.items()],
+        schema="z int, x int, y int, bytes binary",
+    )
+    heavy_out = str(tmp_path / "heavy.pmtiles")
+    df.write.format("pmtiles").mode("overwrite").save(heavy_out)
+
+    with open(heavy_out, "rb") as f:
+        header = _pmtile.deserialize_header(f.read(127))
+    assert header["internal_compression"] == Compression.NONE  # else vacuous
+
+    back = (
+        spark.read.format("pmtiles_gbx")
+        .option("source", "archive")
+        .option("path", heavy_out)
+        .load()
+        .collect()
+    )
+    assert len(back) == len(written)
+    assert {(r["z"], r["x"], r["y"]): bytes(r["bytes"]) for r in back} == written

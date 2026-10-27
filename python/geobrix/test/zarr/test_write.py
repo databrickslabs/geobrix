@@ -23,11 +23,7 @@ import pandas as pd  # noqa: E402
 from databricks.labs.gbx.zarr import _read as _read_mod  # noqa: E402
 from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr._manifest import find_commit_version  # noqa: E402
-from databricks.labs.gbx.zarr._read import (  # noqa: E402
-    BLOCKS_SCHEMA,
-    block_to_numpy,
-    gbx_zarr_read,
-)
+from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA, block_to_numpy  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
     OWNER_MARKER,
     gbx_zarr_register,
@@ -101,23 +97,18 @@ def _create(spark, drop, tmp_path, ds=None, label="s", **kw):
     return table, root, version
 
 
-def _read(spark, table, name, **kw):
+def _read(spark, table, name):
     """Variable ``name`` of the store assembled from its blocks (NaN where none).
 
     The blocks come from the read's own planner and task body, run in this process
     (``_helpers.run``): the manifest is queried for real, but no Spark job decodes the
     chunks, which is most of a read's cost on a local session. The Spark-distributed read
-    has its end-to-end tests in test_read.py; a keyword argument reads that way here too.
+    has its end-to-end tests in test_read.py.
     """
-    if kw:
-        rows = gbx_zarr_read(spark, table, variables=[name], **kw).collect()
-    else:
-        src = _read_mod._open_source(spark, table, "table", None, None)
-        names = _read_mod._choose_variables([name], src)
-        units, cfg = _read_mod._plan(
-            spark, src, names, None, None, "blocks", True, None
-        )
-        rows = [r for b in H.run(units, cfg) for r in b.to_pylist()]
+    src = _read_mod._open_source(spark, table, "table", None, None)
+    names = _read_mod._choose_variables([name], src)
+    units, cfg = _read_mod._plan(spark, src, names, None, None, "blocks", True, None)
+    rows = [r for b in H.run(units, cfg) for r in b.to_pylist()]
     stops = [r["stop"] for r in rows]
     shape = tuple(max(s[i] for s in stops) for i in range(len(stops[0])))
     first = block_to_numpy(rows[0])
@@ -659,35 +650,51 @@ _CHAIN = [
 ]
 
 
-def _codec_array_doc(shards, codecs):
-    """The ``zarr.json`` a create writes for ``t2m`` with this layout and codec chain."""
+def _codec_array_doc(monkeypatch, shards, codecs):
+    """``(doc, meta)`` of ``t2m`` as a create makes it with this layout and codec chain.
+
+    The document is the one ``_new_meta`` builds (taken from ``_v3_doc`` as it returns), so
+    the layout asserted on is the layout the code chose for ``shards``.
+    """
+    built, real = [], _write._v3_doc
+
+    def record(*args, **kw):
+        built.append(real(*args, **kw))
+        return built[-1]
+
+    monkeypatch.setattr(_write, "_v3_doc", record)
     spec = _write._NewArray(
         "t2m", DIMS, (24, 10, 12), np.dtype("float32"), {}, float("nan"), False
     )
-    chain = _write._codec_chain(codecs)
-    kw = dict(fmt=3, chunks=CHUNKS, shards=shards, codecs=chain, separator="/")
-    _write._new_meta(spec, **kw)  # refuses a chain that cannot encode a chunk
-    return _write._v3_doc(
-        "t2m", DIMS, spec.shape, spec.dtype, (12, 5, 6), None, spec.fill, {}, chain
-    )
+    kw = dict(fmt=3, chunks=CHUNKS, shards=shards, separator="/")
+    meta = _write._new_meta(spec, codecs=_write._codec_chain(codecs), **kw)
+    return built[-1], meta
 
 
 @pytest.mark.parametrize(
-    "shards, codecs",
+    "shards, codecs, level",
     [
-        (None, _CHAIN),
-        (False, _CHAIN),
-        (None, "objects"),
+        (None, _CHAIN, 7),
+        (False, _CHAIN, 7),
+        (None, "objects", 5),
     ],
     ids=["sharded", "unsharded", "objects"],
 )
-def test_p3_explicit_codecs_make_the_array_document(shards, codecs):
+def test_p3_explicit_codecs_make_the_array_document(monkeypatch, shards, codecs, level):
     from zarr.codecs import BytesCodec, ZstdCodec
 
     if codecs == "objects":
         codecs = [BytesCodec(), ZstdCodec(level=5)]
-    doc = _codec_array_doc(shards, codecs)
-    assert [c["name"] for c in doc["codecs"]] == ["bytes", "zstd"]
+    doc, meta = _codec_array_doc(monkeypatch, shards, codecs)
+    if shards is None:  # the default layout shards: the chain is each inner chunk's
+        assert meta.shard is not None
+        assert doc["codecs"][0]["name"] == "sharding_indexed"
+        inner = doc["codecs"][0]["configuration"]["codecs"]
+    else:
+        assert meta.shard is None
+        inner = doc["codecs"]
+    assert [c["name"] for c in inner] == ["bytes", "zstd"]
+    assert inner[1]["configuration"]["level"] == level
 
 
 @pytest.mark.parametrize(
@@ -699,10 +706,11 @@ def test_p3_explicit_codecs_make_the_array_document(shards, codecs):
     ],
     ids=["noserializer", "unknown", "notacodec"],
 )
-def test_p3_bad_codec_chains_are_refused_with_a_fix_while_planning(codecs):
-    with pytest.raises(ZarrUnsupported) as e:
-        _codec_array_doc(None, codecs)
-    assert "Fix:" in str(e.value)
+def test_p3_bad_codec_chains_are_refused_with_a_fix_while_planning(monkeypatch, codecs):
+    for shards in (None, False):  # each layout encodes a chunk with the chain
+        with pytest.raises(ZarrUnsupported) as e:
+            _codec_array_doc(monkeypatch, shards, codecs)
+        assert "Fix:" in str(e.value)
 
 
 def test_a_new_variable_is_created_on_the_store_dimensions(

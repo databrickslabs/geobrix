@@ -7,7 +7,7 @@ directory is collected (see ``pytest_collection_finish`` in ``test/conftest.py``
 
 Fast inner loop. Every test that runs on the local Spark/Delta session (it asks for
 ``spark_delta``, directly or through another fixture) is marked ``delta`` when collected,
-so ``-m "not delta"`` runs only the Spark-free tests, in seconds::
+so ``-m "not delta"`` runs only the Spark-free tests (721 of 861 today, about 20 s)::
 
     python -m pytest python/geobrix/test/zarr -m "not delta and not integration"
 
@@ -29,9 +29,16 @@ _HERE = Path(__file__).resolve().parent
 
 
 def pytest_collection_modifyitems(config, items):
-    """Mark every zarr test that needs the local Spark/Delta session as ``delta``."""
+    """Mark every zarr test that needs a Spark session as ``delta``.
+
+    A test needs one when any fixture in its closure has ``spark`` in its name, not only
+    ``spark_delta``, so a fixture added later under another name cannot leave a test that
+    starts Spark in the fast loop.
+    """
     for item in items:
-        if "spark_delta" in item.fixturenames and _HERE in Path(item.path).parents:
+        if _HERE in Path(item.path).parents and any(
+            "spark" in name.lower() for name in item.fixturenames
+        ):
             item.add_marker(pytest.mark.delta)
 
 

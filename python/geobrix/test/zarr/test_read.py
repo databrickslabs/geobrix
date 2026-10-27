@@ -174,6 +174,41 @@ def test_plain_path_source(spark_delta, era5_v2):
 
 
 # --- decoding ----------------------------------------------------------------------
+#
+# The decoding matrix is Spark-free (test_read_unit.py), and it calls the planner. These two
+# reads pass the arguments through gbx_zarr_read itself, which nothing else does: a wrapper
+# that dropped either one would read as the default and pass every Spark-free test.
+
+
+def test_decode_false_reaches_the_read_through_gbx_zarr_read(spark_delta, tmp_path):
+    path = H.packed_store(tmp_path / "p.zarr")  # int16, scale 0.5, offset 10, fill -1
+    raw = gbx_zarr_read(spark_delta, str(path), variables="p", decode=False).collect()
+    stored, _ = _assemble(raw, "p", (6,), dtype="int16")
+    np.testing.assert_array_equal(stored, [0, 2, -1, 4, 6, 0])  # not (v * 0.5) + 10
+    assert {r["dtype"] for r in raw} == {"<i2"}
+
+
+def test_use_zarr_fill_value_as_mask_reaches_the_read_through_gbx_zarr_read(
+    spark_delta, tmp_path
+):
+    g = zarr.open_group(str(tmp_path / "z.zarr"), mode="w", zarr_format=2)
+    a = g.create_array(
+        "a",
+        shape=(4,),
+        chunks=(2,),
+        dtype="i2",
+        fill_value=0,
+        attributes={"_ARRAY_DIMENSIONS": ["x"]},
+    )
+    a[:] = np.array([0, 3, 0, 5], dtype="i2")
+    path = str(tmp_path / "z.zarr")
+    rows = gbx_zarr_read(spark_delta, path, use_zarr_fill_value_as_mask=False).collect()
+    kept, _ = _assemble(rows, "a", (4,), dtype="int16")
+    np.testing.assert_array_equal(kept, [0, 3, 0, 5])  # the zeros are data
+    assert {r["dtype"] for r in rows} == {"<i2"}
+    masked = gbx_zarr_read(spark_delta, path).collect()  # the default masks a v2 fill
+    got, _ = _assemble(masked, "a", (4,), dtype="float64")
+    np.testing.assert_array_equal(got, [np.nan, 3, np.nan, 5])
 
 
 # --- tables ------------------------------------------------------------------------

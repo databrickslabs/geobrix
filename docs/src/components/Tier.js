@@ -1,10 +1,11 @@
 import React from 'react';
+import Link from '@docusaurus/Link';
 import styles from './Tier.module.css';
 
 // Availability badge for Execution Tiers. Usage in MDX:
 //   <Tier both/>  <Tier light/>  <Tier heavy/>
 //
-// Lightweight impl-technique tags (link to /api/performance). Usage in MDX:
+// Lightweight impl-technique tags (link to the performance page). Usage in MDX:
 //   <Impl udtf/>          — Streaming UDTF
 //   <Impl groupedAgg/>    — Grouped-agg UDF
 export default function Tier({both, light, heavy}) {
@@ -23,16 +24,16 @@ export default function Tier({both, light, heavy}) {
 export function Impl({udtf, groupedAgg}) {
   if (udtf) {
     return (
-      <a href="/api/performance#streaming-udtfs" className={styles.implLink}>
+      <Link to="/docs/api/performance#streaming-udtfs" className={styles.implLink}>
         <span className={`${styles.tier} ${styles.implUdtf}`}>Streaming UDTF</span>
-      </a>
+      </Link>
     );
   }
   if (groupedAgg) {
     return (
-      <a href="/api/performance#grouped-aggregate-udfs" className={styles.implLink}>
+      <Link to="/docs/api/performance#grouped-aggregate-udfs" className={styles.implLink}>
         <span className={`${styles.tier} ${styles.implAgg}`}>Grouped-agg UDF</span>
-      </a>
+      </Link>
     );
   }
   return null;

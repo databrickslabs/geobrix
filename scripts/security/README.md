@@ -251,7 +251,7 @@ base-version fidelity).  These CVEs are resolved when Databricks ships a patched
   vulnerable; fix: 23.0.1).  `pyproject.toml` sets no upper bound on pyarrow, so geobrix
   does not prevent the fix.  The CI lockfiles are pinned to the DBR base-image version
   for test fidelity; upgrading them past the base triggers the "core package changed"
-  cluster notice on DBR.  Patching is a CI-health action, not a 0.5.x release gate.
+  cluster notice on DBR.  Patching is a CI-health action, not a 0.6.0 release gate.
 
 - **httpx2 / httpcore2 — 4 HIGH+MED alerts** in the two `_all` umbrella locks
   (`requirements-light-env5-all-ci.txt` / `-env6-all-ci.txt`).  rio-tiler 9.2.x

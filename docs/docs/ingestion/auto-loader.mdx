@@ -195,7 +195,7 @@ decompression backend), an I/O error of the Volume (retried first), and an image
 whole in `exif_gbx` `qc` mode fail the micro-batch, so Spark retries the task or the update fails
 with that error, and no bad record is written for them.
 
-:::caution Damaged LAZ point data can stop the worker
+:::caution Other damage to a LAZ file can still stop the worker
 A LAZ file whose chunk table or LASzip record is implausible or cannot be decoded, or (point
 formats with GPS time) whose compressed points hold a run of `0xFF` bytes, is set aside before it
 is decoded. Other damage, inside the compressed points or in a chunk table that is wrong but

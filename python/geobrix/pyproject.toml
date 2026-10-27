@@ -145,10 +145,11 @@ light-base = [
 # Canonical protobuf-5 runtime extra. Classic DBR 17.3.
 light_dbr17 = [
     "geobrix[light-base]",
-    # rio-tiler 9.x defines TypedDict(extra_items=...) (PEP 728), added in typing_extensions
-    # 4.13.0; its own metadata asks only for >=4.10. The bases ship 4.12.2, which pip keeps
-    # under a lower floor, so `import rio_tiler` failed there. 4.13.0 is the minimum that
-    # works: keep it; pip upgrades the 4.12.2 bases to the newest release under any such floor.
+    # rio-tiler 9.x defines TypedDict(extra_items=...) (PEP 728). That keyword works from
+    # typing_extensions 4.13.0 (4.10 added only the earlier `closed=` draft), while rio-tiler's
+    # own metadata asks only for >=4.10. The bases ship 4.12.2, which pip keeps under a lower
+    # floor, so `import rio_tiler` failed there. 4.13.0 is the minimum that works: keep it; pip
+    # upgrades the 4.12.2 bases to the newest release under any such floor.
     "typing_extensions>=4.13",
     # Hold preinstalled core packages at the Serverless env5 / DBR17.3-18 base so a
     # cluster %pip install is silent (no "a core Python package changed" notice).
@@ -244,9 +245,8 @@ light_dbr17_all = [
     "geobrix[stac]",
     "geobrix[vizx]",
     # Hold click at the env5 / DBR17.3-18 base (8.1.8) so _all does not float it.
-    # [stac]'s requests>=2.34.2 floor can still upgrade the base `requests`; the env5 /
-    # DBR17.3-18 base requests version is not recorded in this repo, so whether it does
-    # there is unconfirmed.
+    # [stac]'s requests>=2.34.2 floor upgrades the env5 / DBR17.3-18 base requests (2.32.3), so
+    # an _all install is not silent there either: it moves `requests`.
     # Umbrella-only (see the header note) — does not bind the [overture] opt-in.
     "click<8.2",
 ]
@@ -290,9 +290,10 @@ light_env6_all = ["geobrix[light_dbr19_all]"]
 # Floors are at or below what the DBR 19 / env 6 / DBR 19 ML base ships (numpy>=2,
 # typing_extensions>=4.14, packaging>=22, google-crc32c>=1.5, pyyaml), so nothing
 # preinstalled moves. Do NOT cap those shared packages: a cap under a later base bump
-# becomes a downgrade. Not for DBR 17.3 / 18 / env 5 (zarr 3.4 needs typing_extensions>=4.14;
-# their base ships 4.12.2). Each package is minor-capped because zarrs subclasses zarr
-# internals and documents no zarr ceiling: widen a cap only after a re-test.
+# becomes a downgrade. Not for DBR 17.3 / 18 / env 5: Zarr support targets DBR 19 and env 6
+# only (zarr 3.4 also needs typing_extensions>=4.14, and their base ships 4.12.2). Each
+# package is minor-capped because zarrs subclasses zarr internals and documents no zarr
+# ceiling: widen a cap only after a re-test.
 # ---------------------------------------------------------------------------
 zarr_dbr19 = [
     "zarr>=3.4.1,<3.5",           # sharded v3 stores; pulls msgspec>=0.19 and donfig>=0.8

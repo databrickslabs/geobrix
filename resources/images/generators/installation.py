@@ -195,14 +195,6 @@ def g_cluster(cx, cy, color, tint):
     return "".join(out)
 
 
-def g_jar(cx, cy, color, tint):
-    """A JAR archive: a document with a 'jar' label."""
-    return (fgf.glyph_file(cx, cy, color, tint, s=46)
-            + f'<text x="{cx - 2}" y="{cy - 2}" text-anchor="middle" '
-              f'font-family="ui-monospace, SFMono-Regular, Menlo, monospace" '
-              f'font-size="10" font-weight="800" fill="{color}">.jar</text>')
-
-
 # --- canvas scaffold -----------------------------------------------------------
 
 def canvas(badge, title, subtitle, pill, theme, body, chips, label="ARTIFACTS"):

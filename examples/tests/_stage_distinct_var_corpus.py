@@ -15,6 +15,7 @@ import io
 import json
 import os
 from pathlib import Path
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 CORPUS = os.environ.get("GBX_BENCH_CORPUS", "/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus")
 # GDDP-CMIP6 asset names ARE variable ids; these are all regular 0.25-deg global grids.
@@ -153,8 +154,8 @@ def main() -> int:
         pass
     w.workspace.upload(p, io.BytesIO(_nb()), format=ImportFormat.JUPYTER, overwrite=True)
     print(f"Submitting distinct-var corpus staging on {cid} (vars={VARIABLES})...")
-    waiter = w.jobs.submit(run_name="geobrix-stage-distinct-var-corpus", timeout_seconds=3600,
-                           tasks=[jobs.SubmitTask(task_key="stage", existing_cluster_id=cid,
+    waiter = submit_once(w, run_name="geobrix-stage-distinct-var-corpus", timeout_seconds=3600,
+                         tasks=[jobs.SubmitTask(task_key="stage", existing_cluster_id=cid,
                                                   notebook_task=jobs.NotebookTask(notebook_path=p, source=jobs.Source.WORKSPACE))])
     try:
         r = waiter.result()

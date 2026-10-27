@@ -12,6 +12,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 SRC = os.environ.get("GBX_S5P_SRC", "/Volumes/geospatial_docs/vapor_eyes_lf/data/vapor-eyes-lf/s5p")
 DEST = os.environ.get("GBX_S5P_DEST", "/Volumes/geospatial_docs/vapor_eyes_lf/data/vapor-eyes-lf/netcdf")
@@ -62,7 +63,8 @@ def main() -> int:
         pass
     w.workspace.upload(nb_path, io.BytesIO(_nb()), format=ImportFormat.JUPYTER, overwrite=True)
     print(f"Submitting S5P corpus stage on cluster {cluster_id} (src={SRC} dest={DEST} limit={LIMIT})...")
-    waiter = w.jobs.submit(
+    waiter = submit_once(
+        w,
         run_name="geobrix-stage-s5p-netcdf",
         timeout_seconds=3600,
         tasks=[jobs.SubmitTask(task_key="stage_s5p", existing_cluster_id=cluster_id,

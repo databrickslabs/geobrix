@@ -37,6 +37,8 @@ import time
 import tomllib
 from typing import Optional
 
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+
 # ---------------------------------------------------------------------------
 # Resolve PROJECT_ROOT (examples/tests/ -> examples/ -> project root)
 # ---------------------------------------------------------------------------
@@ -308,7 +310,8 @@ def run_one(
         # classic clusters support %pip), so there is no environment spec or GPU
         # compute request here; --extras/--wheel/--env-version/--hardware-accelerator
         # do not apply in this mode.
-        waiter = w.jobs.submit(
+        waiter = submit_once(
+            w,
             run_name=f"gbx-nb:{task_key}",
             tasks=[
                 jobs.SubmitTask(
@@ -326,7 +329,8 @@ def run_one(
             else None
         )
 
-        waiter = w.jobs.submit(
+        waiter = submit_once(
+            w,
             run_name=f"gbx-nb:{task_key}",
             environments=[
                 jobs.JobEnvironment(

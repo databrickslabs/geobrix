@@ -10,6 +10,7 @@ import io
 import json
 import os
 from pathlib import Path
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 CORPUS = os.environ.get("GBX_BENCH_CORPUS", "/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus")
 S5P_SRC = "/Volumes/geospatial_docs/vapor_eyes_lf/data/vapor-eyes-lf/s5p"
@@ -109,8 +110,8 @@ def main() -> int:
         pass
     w.workspace.upload(p, io.BytesIO(_nb()), format=ImportFormat.JUPYTER, overwrite=True)
     print(f"Submitting corpus staging on {cid} (raster_keep={RASTER_KEEP}, vector_keep={VECTOR_KEEP})...")
-    r = w.jobs.submit(run_name="geobrix-stage-bench-corpora", timeout_seconds=3600,
-                      tasks=[jobs.SubmitTask(task_key="stage", existing_cluster_id=cid,
+    r = submit_once(w, run_name="geobrix-stage-bench-corpora", timeout_seconds=3600,
+                    tasks=[jobs.SubmitTask(task_key="stage", existing_cluster_id=cid,
                                              notebook_task=jobs.NotebookTask(notebook_path=p, source=jobs.Source.WORKSPACE))]).result()
     o = w.jobs.get_run_output(r.tasks[0].run_id)
     print("RESULT:", o.notebook_output.result if getattr(o, "notebook_output", None) else (o.error or "")[:600])

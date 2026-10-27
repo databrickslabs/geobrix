@@ -23,6 +23,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
@@ -263,7 +264,8 @@ def main() -> int:
     )
 
     print("Submitting one-off run on cluster...")
-    submit_waiter = w.jobs.submit(
+    submit_waiter = submit_once(
+        w,
         run_name="geobrix-bundle-runner",
         timeout_seconds=3600,
         tasks=[

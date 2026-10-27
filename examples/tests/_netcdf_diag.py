@@ -11,6 +11,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 NC_DIR = os.environ.get(
     "GBX_NETCDF_VALIDATE_DIR",
@@ -141,7 +142,8 @@ def main() -> int:
         pass
     w.workspace.upload(nb_path, io.BytesIO(_nb()), format=ImportFormat.JUPYTER, overwrite=True)
     print(f"Submitting netcdf diag on cluster {cluster_id}...")
-    waiter = w.jobs.submit(
+    waiter = submit_once(
+        w,
         run_name="geobrix-netcdf-diag",
         timeout_seconds=1800,
         tasks=[jobs.SubmitTask(task_key="netcdf_diag", existing_cluster_id=cluster_id,

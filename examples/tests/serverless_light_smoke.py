@@ -28,6 +28,7 @@ from pathlib import Path
 
 from databricks.sdk import WorkspaceClient
 from databricks.sdk.service import compute, jobs, workspace
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 # All workspace-specific values (profile, Volume coordinates) come from the
 # gitignored examples/tests/databricks_cluster_config.env so nothing internal is
@@ -431,7 +432,8 @@ def main():
     )
 
     print(f"Submitting serverless run (env v{args.env_version}) ...")
-    run = w.jobs.submit(
+    run = submit_once(
+        w,
         run_name=args.run_name,
         tasks=[jobs.SubmitTask(
             task_key="smoke",

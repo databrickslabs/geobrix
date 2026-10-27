@@ -22,6 +22,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 # The Volume dir holding the coral .nc (bare /Volumes path -> remote -> executor readRemote).
 NC_VOLUME_DIR = os.environ.get(
@@ -123,7 +124,8 @@ def main() -> int:
     )
 
     print(f"Submitting netcdf_gdal validation on cluster {cluster_id}...")
-    waiter = w.jobs.submit(
+    waiter = submit_once(
+        w,
         run_name="geobrix-netcdf-gdal-validate",
         timeout_seconds=1800,
         tasks=[

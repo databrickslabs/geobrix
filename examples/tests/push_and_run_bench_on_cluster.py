@@ -39,6 +39,7 @@ import json
 import os
 import sys
 from pathlib import Path
+from _job_submit import submit_once  # sibling module (script dir is on sys.path)
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
@@ -981,7 +982,8 @@ def main() -> int:
         # the failure (standing bench rule).
         env_version_str = str(env_version)
         print(f"Submitting one-off benchmark run on Serverless (env v{env_version_str})...")
-        submit_waiter = w.jobs.submit(
+        submit_waiter = submit_once(
+            w,
             run_name=f"geobrix-bench-{run_id}",
             # 6h matches the classic timeout; Serverless light spark-path can still be slow
             # on a large tile set with the virtual-tile reader path.
@@ -1006,7 +1008,8 @@ def main() -> int:
         )
     else:
         print("Submitting one-off benchmark run on cluster...")
-        submit_waiter = w.jobs.submit(
+        submit_waiter = submit_once(
+            w,
             run_name=f"geobrix-bench-{run_id}",
             # 6h: the full 1000-row both-run is dominated by the slow light spark-path fns
             # (the perf gap being measured). 2h timed out mid light-spark-path; 6h covers

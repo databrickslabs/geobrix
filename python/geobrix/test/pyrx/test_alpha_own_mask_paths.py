@@ -486,6 +486,55 @@ def test_a_merge_keeps_valid_zero_pixels_when_a_tile_has_an_own_mask(
     assert valid[:, 23].tolist() == [r != 3 for r in range(12)]
 
 
+def _merge_tile(x, *, mask_rows=(), nodata=None, nodata_rows=()):
+    """A 12x12 uint8 tile of 50s at ``x`` degrees: ``mask_rows`` are hidden by an own mask band,
+    and ``nodata_rows`` hold the declared ``nodata`` value."""
+    data = np.full((1, 12, 12), 50, dtype="uint8")
+    if nodata_rows:
+        data[:, list(nodata_rows), :] = nodata
+    prof = dict(
+        driver="GTiff",
+        width=12,
+        height=12,
+        count=1,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(x, 50, 0.5, 0.5),
+        nodata=nodata,
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(data)
+            if mask_rows:
+                mask = np.full((12, 12), 255, dtype="uint8")
+                mask[list(mask_rows), :] = 0
+                dst.write_mask(mask)
+        return mf.read()
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+@pytest.mark.parametrize("masked_x", [10, 16], ids=["mask-left", "mask-right"])
+def test_a_merge_keeps_nodata_pixels_invalid_beside_a_tile_with_an_own_mask(
+    monkeypatch, streaming, masked_x
+):
+    """A tile whose invalid pixels are NoData, merged with a tile that has an own mask, stays
+    invalid where its source is: the mosaic's mask is the union of what each tile says is valid
+    (``read_masks``), not a mask that calls every pixel of a tile without its own mask valid. Both
+    paths give the validity of the sources, whichever tile stands first in byte order.
+    """
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    other_x = 26 - masked_x
+    masked = _merge_tile(masked_x, mask_rows=(3,))
+    plain = _merge_tile(other_x, nodata=9, nodata_rows=(7,))
+    out = agg.merge_tiles([masked, plain])
+    with MemoryFile(out) as mf, mf.open() as ds:
+        valid = nd.valid_mask(ds)
+    masked_col, plain_col = (0, 23) if masked_x == 10 else (23, 0)
+    assert valid[:, masked_col].tolist() == [r != 3 for r in range(12)]
+    assert valid[:, plain_col].tolist() == [r != 7 for r in range(12)]
+
+
 def _two_crs_tiles(name):
     """A 4326 tile and, beside it, the same layout in 3857 (the 3857 one first: it is the
     reference CRS the other is reprojected to)."""
@@ -597,6 +646,72 @@ def test_the_streamed_merge_uses_the_pixel_size_of_a_tile_in_the_reference_crs(
     with pytest.raises(Stop):
         agg._merge_tiles_streaming([a, b])
     assert seen == [(50000.0, 50000.0)]
+
+
+def _two_crs_group(first):
+    """The 4326 + 3857 pair, a pixel or two apart (so that no pixel is shared and the compositing order
+    cannot show), in the byte order that puts the ``first`` CRS's tile first."""
+    a = _crs_tile(4326, 10, 12)
+    b = _crs_tile(3857, 17, 12, extra_entries=(first == "4326"))
+    assert sorted([a, b])[0] == (a if first == "4326" else b)
+    return [a, b]
+
+
+def _merged_grid(group):
+    """``(pixel size, shape, origin, pixels, covered)`` of the merge of *group*: the tiles hold 7s,
+    the rest of the mosaic 0."""
+    with MemoryFile(agg.merge_tiles(group)) as mf, mf.open() as ds:
+        assert ds.crs.to_epsg() == 3857
+        t = ds.transform
+        return (
+            (abs(t.a), abs(t.e)),
+            ds.shape,
+            (t.c, t.f),
+            ds.read(1),
+            ds.read(1) == 7,
+        )
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+@pytest.mark.parametrize("first", ["3857", "4326"])
+def test_a_two_crs_merge_has_the_pixel_size_of_the_tile_in_the_reference_crs(
+    monkeypatch, first, streaming
+):
+    """The pixel size is the reference tile's (3857, 50 km), whichever tile stands first in byte
+    order: the tile in the other CRS is reprojected onto it, and the merge takes it, on both paths.
+    The mosaic used to take the size of the first tile after reprojection (70 km when the 4326 tile
+    stood first)."""
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    res, _, _, pixels, covered = _merged_grid(_two_crs_group(first))
+    assert res == (50000.0, 50000.0)
+    assert covered.any() and set(np.unique(pixels)) <= {0, 7}
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+def test_a_two_crs_merge_does_not_depend_on_the_byte_order(monkeypatch, streaming):
+    """The same two tiles, in either byte order, merge to the same grid and the same pixels."""
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    a = _merged_grid(_two_crs_group("3857"))
+    b = _merged_grid(_two_crs_group("4326"))
+    assert a[0] == b[0] and a[1] == b[1] and a[2] == b[2]
+    assert (a[4] == b[4]).all() and (a[3][a[4]] == b[3][b[4]]).all()
+
+
+def test_the_in_ram_and_the_streamed_two_crs_merge_agree(monkeypatch):
+    """The pixel size, the size of the mosaic, its origin and the number of pixels the tiles cover
+    are those of the streamed merge. (Where a tile that is not on the reference grid lands within
+    its pixel is each merge's own rounding, not asserted.)"""
+    group = _two_crs_group("4326")
+    in_ram = _merged_grid(group)
+    monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    streamed = _merged_grid(group)
+    assert in_ram[0] == streamed[0] and in_ram[1] == streamed[1]
+    assert in_ram[2] == pytest.approx(
+        streamed[2], rel=1e-12
+    )  # a COG writes the origin as text
+    assert in_ram[4].sum() == streamed[4].sum()
 
 
 @pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])

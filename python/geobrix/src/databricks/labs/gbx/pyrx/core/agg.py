@@ -137,21 +137,20 @@ def _reproject_dataset(src, dst_crs, target_res=None):
 
 def _union_own_mask(datasets) -> np.ndarray:
     """``(rows, cols)`` uint8 (255 valid, 0 invalid) own mask of the mosaic ``rasterio.merge`` builds
-    from *datasets*: valid where some tile that covers the pixel is, a tile without an own mask band
-    being valid over its whole footprint, and a pixel no tile covers invalid.
+    from *datasets*: valid where some tile that covers the pixel says it is valid, and a pixel no tile
+    covers invalid.
 
-    Built by merging the tiles' mask rasters with the same geometry as the pixels (``method="max"``),
-    so it lands on the pixels' grid. The mask comes from the tiles' own mask bands, not from the
-    merged values: a pixel whose value is 0 is not thereby invalid.
+    What a tile says is its band-1 mask, ``read_masks(1)`` (the ``mask,1`` the streamed VRT unions): its
+    own mask band, its NoData, the alpha band GDAL derives a mask from, all valid for a tile with none of
+    them. A tile whose invalid pixels are NoData stays invalid there beside a tile with an own mask.
+
+    Built by merging the tiles' mask rasters with the same geometry as the pixels (``method="max"``), so
+    it lands on the pixels' grid. The mask comes from the tiles' masks, not from the merged values: a
+    pixel whose value is 0 is not thereby invalid.
     """
     memfiles, masks = [], []
     try:
         for d in datasets:
-            mask = (
-                d.read_masks(1)
-                if _nodata.has_own_mask(d)
-                else np.full((d.height, d.width), 255, dtype="uint8")
-            )
             mf = MemoryFile()
             memfiles.append(mf)
             with mf.open(
@@ -163,7 +162,7 @@ def _union_own_mask(datasets) -> np.ndarray:
                 transform=d.transform,
                 crs=d.crs,
             ) as dst:
-                dst.write(mask, 1)
+                dst.write(d.read_masks(1), 1)
             masks.append(mf.open())
         merged, _ = _rio_merge(masks, method="max")
         return np.where(merged[0] != 0, 255, 0).astype("uint8")
@@ -200,6 +199,12 @@ def _reference_tile(datasets, ref_crs):
     return next((d for d in datasets if d.crs == ref_crs), datasets[0])
 
 
+def _pixel_size(ds):
+    """``(xres, yres)`` of *ds* (positive), or ``None`` when it has no pixel size."""
+    rx, ry = abs(ds.transform.a), abs(ds.transform.e)
+    return (rx, ry) if rx > 0 and ry > 0 else None
+
+
 def _bounds_in(ds, ref_crs):
     """``(left, bottom, right, top)`` of *ds* in the reference CRS (its own bounds when it is in it)."""
     if ref_crs is None or ds.crs is None or ds.crs == ref_crs:
@@ -214,9 +219,10 @@ def _union_decoded_bytes(datasets, ref_crs) -> int:
     CRS over the pixel size of the reference tile. 0 when the reference tile has no pixel size.
     """
     ref = _reference_tile(datasets, ref_crs)
-    px_x, px_y = abs(ref.transform.a), abs(ref.transform.e)
-    if not (px_x > 0 and px_y > 0):
+    res = _pixel_size(ref)
+    if res is None:
         return 0
+    px_x, px_y = res
     boxes = [_bounds_in(d, ref_crs) for d in datasets]
     width = int(round((max(b[2] for b in boxes) - min(b[0] for b in boxes)) / px_x))
     height = int(round((max(b[3] for b in boxes) - min(b[1] for b in boxes)) / px_y))
@@ -251,10 +257,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         try:
             ref_crs = _pick_ref_crs(datasets)
             tile_crses = [ds.crs for ds in datasets]
-            _ref0 = _reference_tile(datasets, ref_crs)
-            _rx = abs(_ref0.transform.a)
-            _ry = abs(_ref0.transform.e)
-            ref_pixel_res = (_rx, _ry) if _rx > 0 and _ry > 0 else None
+            ref_pixel_res = _pixel_size(_reference_tile(datasets, ref_crs))
         finally:
             _close_all(memfiles, datasets)
 
@@ -377,13 +380,17 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # Reconcile CRS before merging: real AOIs that straddle a UTM zone boundary
         # (e.g. Sentinel-2 over SE Alaska -> EPSG:32608 + 32609) yield groups whose
         # tiles span multiple CRSs, but rasterio.merge requires one. Reproject any
-        # mismatched source to the reference (first) CRS; same-CRS groups are untouched.
+        # mismatched source to the reference CRS, onto the pixel size of the reference
+        # tile (a tile in that CRS, whichever stands first in byte order): the merge takes
+        # the pixel size of its first tile, which is then that size whichever tile that
+        # is, as in the streamed merge. Same-CRS groups are untouched.
+        ref_res = _pixel_size(_reference_tile(datasets, ref_crs))
         merge_ds = []
         for ds in datasets:
             if ref_crs is None or ds.crs == ref_crs:
                 merge_ds.append(ds)
             else:
-                mf, rds = _reproject_dataset(ds, ref_crs)
+                mf, rds = _reproject_dataset(ds, ref_crs, target_res=ref_res)
                 extra.append((mf, rds))
                 merge_ds.append(rds)
         ref = merge_ds[0]

@@ -15,11 +15,16 @@ source "$SCRIPT_DIR/common.sh"
 
 RUNNER_SCRIPT="$PROJECT_ROOT/examples/tests/run_notebooks_serverless.py"
 
-# Prefer the project pyrx venv; fall back to system python3
-if [[ -x "$PROJECT_ROOT/.venv-pyrx/bin/python" ]]; then
-    PYTHON="$PROJECT_ROOT/.venv-pyrx/bin/python"
+# The runner needs databricks-sdk and Python >= 3.11 (tomllib). The pyrx venv is the CI light
+# lock and carries no SDK, so use it only when it has one; otherwise an ephemeral uv env with
+# the SDK; otherwise system python3.
+VENV_PY="$PROJECT_ROOT/.venv-pyrx/bin/python"
+if [[ -x "$VENV_PY" ]] && "$VENV_PY" -c "import databricks.sdk" >/dev/null 2>&1; then
+    PYTHON_CMD=("$VENV_PY")
+elif command -v uv >/dev/null 2>&1; then
+    PYTHON_CMD=(uv run --no-project --python 3.12 --with databricks-sdk python)
 else
-    PYTHON="python3"
+    PYTHON_CMD=(python3)
 fi
 
 show_help() {
@@ -127,13 +132,13 @@ show_banner "GeoBrix: Serverless Notebook Tests"
 setup_log_file "$LOG_PATH"
 
 echo -e "${CYAN}Runner : ${YELLOW}$RUNNER_SCRIPT${NC}"
-echo -e "${CYAN}Python : ${YELLOW}$PYTHON${NC}"
+echo -e "${CYAN}Python : ${YELLOW}${PYTHON_CMD[*]}${NC}"
 echo ""
 
 # ---------------------------------------------------------------------------
 # Execute
 # ---------------------------------------------------------------------------
-"$PYTHON" "$RUNNER_SCRIPT" "${RUNNER_ARGS[@]}"
+"${PYTHON_CMD[@]}" "$RUNNER_SCRIPT" "${RUNNER_ARGS[@]}"
 EXIT_CODE=$?
 
 echo ""

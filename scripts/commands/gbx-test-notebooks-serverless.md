@@ -28,6 +28,10 @@ bash scripts/commands/gbx-test-notebooks-serverless.sh [OPTIONS]
 - `--log <path>` – Write output to log file (filename → `test-logs/<name>`).
 - `--help` – Help and examples.
 
+## Interpreter
+
+The runner needs `databricks-sdk` and Python 3.11 or newer. The command uses `.venv-pyrx` when that venv has the SDK (the CI-lock venv from `gbx:venv:sync` does not), otherwise an ephemeral `uv run --with databricks-sdk` environment on Python 3.12, otherwise system `python3`.
+
 ## Each run is submitted once
 
 Every `jobs.submit` carries an `idempotency_token` (one fresh token per notebook run, shared by every retry of that submit), so a lost response cannot leave a second, orphan run. A transient submit failure (network error, 429/5xx) is retried with the same token and the server returns the run it already created. The helper is `examples/tests/_job_submit.py`; every launcher in `examples/tests/` goes through it.

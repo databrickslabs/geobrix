@@ -114,3 +114,42 @@ def test_load_point_cloud_refuses_a_laz_with_a_bad_chunk_table(tmp_path, monkeyp
     monkeypatch.setattr(laspy, "read", decoder_reached)
     with pytest.raises(ValueError, match=r"bad\.laz.*chunk table offset"):
         load_point_cloud(str(p))
+
+
+def test_load_point_cloud_refuses_a_laz_with_a_run_of_ff(tmp_path, monkeypatch):
+    """Compressed points holding a run of 0xFF bytes (a failed copy) overflow the
+    decoder's stack and end the process: a ValueError naming the file, raised
+    before laspy decodes."""
+    import io
+    import struct
+
+    laspy = pytest.importorskip("laspy")
+    lazrs = pytest.importorskip("lazrs")
+    from databricks.labs.gbx.vizx._pointcloud import load_point_cloud
+
+    df = _synthetic_xyz(150)
+    las = laspy.LasData(laspy.LasHeader(point_format=3))  # a format with GPS time
+    las.x, las.y, las.z = (df[c].to_numpy() for c in "xyz")
+    p = tmp_path / "ff.laz"
+    las.write(str(p), do_compress=True)
+    raw = p.read_bytes()
+    start = struct.unpack_from("<I", raw, 96)[0]
+    vlr = lazrs.LazVlr(
+        laspy.LasHeader.read_from(io.BytesIO(raw)).vlrs.get("LasZipVlr")[0].record_data
+    )
+    at = io.BytesIO(raw)
+    at.seek(start)
+    points = lazrs.read_chunk_table(at, vlr)[0][0]
+    body = raw[start + 8 : start + 8 + vlr.item_size()] + b"\xff" * 4096
+    table = io.BytesIO()
+    lazrs.write_chunk_table(table, [(points, len(body))], vlr)
+    p.write_bytes(
+        raw[:start] + struct.pack("<q", start + 8 + len(body)) + body + table.getvalue()
+    )
+
+    def decoder_reached(*a, **k):
+        raise AssertionError("laspy decoded a file with a run of 0xFF bytes")
+
+    monkeypatch.setattr(laspy, "read", decoder_reached)
+    with pytest.raises(ValueError, match=r"ff\.laz.*a run of 0xFF bytes"):
+        load_point_cloud(str(p))

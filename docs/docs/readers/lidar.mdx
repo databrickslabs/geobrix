@@ -212,10 +212,15 @@ Serverless:
 - **Bad nodes are skipped, not fatal.** A 0-byte or unreadable `.las`/`.laz` (for example an
   empty Entwine Point Tile node from an interrupted download) is skipped with a warning, so
   one corrupt file cannot fail a distributed read over a whole archive. A LAZ file whose chunk
-  table or LASzip record is implausible or cannot be decoded is set aside as unreadable before
-  it is decoded (a read without `on_error` warns and skips it), instead of ending the worker
-  process. With `on_error`, a LAZ file whose header declares more points than its chunk table
-  holds is read up to the points the table holds; a plain read of such a file fails.
+  table or LASzip record is implausible or cannot be decoded, or (point formats with GPS time)
+  whose compressed points hold a run of `0xFF` bytes, as erased storage or a failed copy leaves,
+  is set aside as unreadable before it is decoded (a read without `on_error` warns and skips
+  it), instead of ending the worker process. The decoder's stack overflows on such a run, and
+  no error reaches Python. Finding the run reads the compressed points once more, ahead of the
+  decoder. These checks do not cover every kind of damage: other damage inside the compressed
+  points, or a crafted file, can still crash the decoder until `lazrs` releases a fix for it.
+  With `on_error`, a LAZ file whose header declares more points than its chunk table holds is
+  read up to the points the table holds; a plain read of such a file fails.
 - **Parallelism is per file** — one InputPartition per file. A directory of many tiles
   parallelizes naturally across executors; a handful of very large files limits parallelism
   to the file count, so split or tile upstream if you need more executors engaged.

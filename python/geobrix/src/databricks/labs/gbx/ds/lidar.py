@@ -410,6 +410,18 @@ _MAX_LAZ_CHUNK_BYTES = 128 << 20  # a chunk that decodes to more than 128 MiB
 # The chunk size a LASzip record holds when chunks vary in size (COPC files).
 _VARIABLE_CHUNK_SIZE = 0xFFFFFFFF
 
+# Dense runs of 0xFF in compressed point data (see _dense_ff_in): the blocks scanned,
+# the 0xFF bytes in one that make it damaged (a random block holds about one, a sound
+# LAZ stream's longest run is a few bytes), and the bytes read at a time (a multiple
+# of the block).
+_FF_BLOCK = 256
+_FF_BLOCK_LIMIT = 128
+_FF_SCAN_BYTES = 1 << 20
+_DENSE_FF_PROBLEM = (
+    "compressed point data looks damaged (a run of 0xFF bytes); "
+    "the decoder would crash on it"
+)
+
 
 class _ChunkTable(NamedTuple):
     """A LAZ chunk table that passed the check, as the decoder will see it."""
@@ -454,19 +466,24 @@ def _find_chunk_table(f, start: int, size: int):
     return at, count
 
 
-def _chunk_sizes_problem(entries, total: int, item: int, room: int) -> Optional[str]:
-    """Why the ``(points, bytes)`` of the chunks cannot be read, or None. ``total``
-    is the header's point count, ``item`` the bytes of a point, ``room`` the bytes
-    from the start of the compressed points to the end of the file."""
-    # The chunks a read needs: the first ones holding the header's points. Entries
-    # after them (an empty last chunk, say) are never read, so their sizes are
-    # not held against the file.
+def _needed_chunks(entries, total: int) -> list:
+    """The chunks a read needs: the first ones holding the header's ``total``
+    points. Entries after them (an empty last chunk, say) are never read, so
+    their sizes are not held against the file and their bytes are not scanned."""
     needed, points_left = [], total
     for points, nbytes in entries:
         if points_left <= 0:
             break
         needed.append((points, nbytes))
         points_left -= int(points)
+    return needed
+
+
+def _chunk_sizes_problem(entries, total: int, item: int, room: int) -> Optional[str]:
+    """Why the ``(points, bytes)`` of the chunks cannot be read, or None. ``total``
+    is the header's point count, ``item`` the bytes of a point, ``room`` the bytes
+    from the start of the compressed points to the end of the file."""
+    needed = _needed_chunks(entries, total)
     if sum(int(nbytes) for _, nbytes in needed) > room:
         return "the chunk table sizes run past the end of the file"
     for points, _ in entries:  # lazrs sizes a buffer from the biggest chunk
@@ -559,6 +576,52 @@ class _IOWatch:
         return getattr(self._f, name)
 
 
+def _read_at(f, at: int, n: int) -> bytes:
+    f.seek(at)
+    return f.read(n)
+
+
+def _dense_ff_in(f, start: int, needed: list, item: int) -> bool:
+    """True when the compressed points of ``needed`` (the ``(points, bytes)`` of
+    the chunks a read decodes) hold a 256-byte block that is at least half 0xFF.
+
+    The GPS-time decompressor of the native LAZ decoder (the ``laz`` crate, in
+    lazrs) calls itself once for every "switch to another sequence" symbol with no
+    depth limit, and 0xFF bytes make the arithmetic decoder return that symbol
+    for ever: the stack overflows, which no ``except`` catches. Erased flash or a
+    failed copy leaves such runs. The chunks lie one after another from
+    ``start + 8``; the first record of each (``item`` bytes) is stored
+    uncompressed and never reaches the decoder, so it is not counted. ``f`` is
+    read in pieces of ``_FF_SCAN_BYTES``, in order. A pass over the compressed
+    points costs about 1% of decoding them, plus reading them once more."""
+    sizes = np.array([int(nbytes) for _, nbytes in needed], dtype=np.int64)
+    ends = np.cumsum(sizes)
+    begins = ends - sizes
+    raw_ends = begins + np.minimum(item, sizes)  # the uncompressed first records
+    base, total, done = start + 8, int(ends[-1]) if sizes.size else 0, 0
+    while done < total:
+        want = min(_FF_SCAN_BYTES, total - done)
+        data = _listing._retry_transient(lambda: _read_at(f, base + done, want))
+        if not data:  # the file ends early: the decoder says so
+            return False
+        ff = np.frombuffer(data, dtype=np.uint8) == 0xFF
+        top = done + ff.size
+        for i in range(
+            int(np.searchsorted(raw_ends, done, side="right")),
+            int(np.searchsorted(begins, top, side="left")),
+        ):
+            ff[max(int(begins[i]) - done, 0) : int(raw_ends[i]) - done] = False
+        blocks = ff.size // _FF_BLOCK
+        if blocks:
+            full = ff[: blocks * _FF_BLOCK].view(np.uint8).reshape(blocks, _FF_BLOCK)
+            if (full.sum(axis=1, dtype=np.uint16) >= _FF_BLOCK_LIMIT).any():
+                return True
+        if ff.size < want:  # a short read: the file ends here
+            return False
+        done = top
+    return False
+
+
 def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _ChunkTable]:
     """The chunk table of the LAZ points of the open file ``f`` (``size`` bytes)
     when it can be handed to the decoder; a str saying why not when it cannot."""
@@ -601,6 +664,11 @@ def _chunk_table_in(h, record: _LaszipRecord, f, size: int) -> Union[str, _Chunk
     if not entries:
         return "the chunk table cannot be found"
     problem = _chunk_sizes_problem(entries, points, item, size - (start + 8))
+    if problem is None and "gps_time" in h.point_format.dimension_names:
+        # Only a format with GPS time can overflow the decoder's stack on a run of
+        # 0xFF (formats 0 and 2 decode it into garbage or an error).
+        if _dense_ff_in(handle, start, _needed_chunks(entries, points), item):
+            problem = _DENSE_FF_PROBLEM
     return (
         problem
         if problem is not None
@@ -621,9 +689,14 @@ def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]
     file, against the point count of the header and against what a chunk can be.
     Whatever else is wrong with the table (sizes that do not add up, a chunk that
     does not decode) is left to the decoder and the salvage that follows: it
-    raises. Cost: a second open of the file (retried like the first), three small
-    reads, and lazrs's own reads of the table through that handle (a few seeks
-    and 8 KiB reads; more reads for a table of thousands of chunks)."""
+    raises. A point format with GPS time also has the compressed points of the
+    chunks the read needs scanned for dense runs of 0xFF, which overflow the
+    decoder's stack (see :func:`_dense_ff_in`); other damage inside the points
+    reaches the decoder. Cost: a second open of the file (retried like the
+    first), three small reads, lazrs's own reads of the table through that
+    handle (a few seeks and 8 KiB reads; more reads for a table of thousands of
+    chunks), and for a format with GPS time one more sequential read of the
+    compressed points."""
     record = _laszip_record(h)
     if record is None or isinstance(record, str):
         return record
@@ -635,11 +708,14 @@ def _read_chunk_table(h, local: str, size: int) -> Union[str, _ChunkTable, None]
 def check_laz(source, name: str) -> None:
     """Raise a ValueError naming ``name`` when ``source`` (the path or the bytes
     of a LAS/LAZ file) is a LAZ file the decoder must not be given: a LASzip
-    record that cannot be decoded, or a chunk table that is implausible (see
-    :func:`_read_chunk_table`). Callers that read a LAZ file with ``laspy.read``
-    call this first, since a bad table can end the process instead of raising.
-    Anything else passes: an uncompressed file, a file without lazrs as its
-    decoder, and a LAZ file whose table is sound."""
+    record that cannot be decoded, a chunk table that is implausible, or (a
+    point format with GPS time) compressed points with a dense run of 0xFF bytes
+    (see :func:`_read_chunk_table`). Callers that read a LAZ file with
+    ``laspy.read`` call this first, since such a file can end the process
+    instead of raising. Anything else passes: an uncompressed file, a file
+    without lazrs as its decoder, and a LAZ file whose table and points are
+    sound as far as these checks go (other damage can still reach the
+    decoder)."""
     import laspy
 
     if isinstance(source, (bytes, bytearray, memoryview)):

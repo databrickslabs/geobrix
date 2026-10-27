@@ -63,6 +63,12 @@ def is_transient(exc: BaseException) -> bool:
         # An API error is retryable only when it is one of the transient classes; a bad
         # request, a permission error or a missing resource will fail the same way again.
         return bool(names & _TRANSIENT_API_ERRORS)
+    if "HTTPError" in names:
+        # requests' HTTPError (an OSError) is raised for a response the server DID send, so it
+        # carries a verdict: only throttling, a request timeout and server faults can differ
+        # next time; a 400/401/403/404 fails the same way again.
+        status = getattr(getattr(exc, "response", None), "status_code", None)
+        return status is None or status in (408, 429) or status >= 500
     # Network-level failures: builtin ConnectionError/TimeoutError and requests' exceptions
     # (all OSError subclasses) carry no server verdict, so the request may have landed. Local
     # file errors are OSErrors too, but retrying cannot change them.

@@ -175,6 +175,25 @@ def test_transient_errors_retry_with_one_token_until_attempts_run_out(exc):
     assert len(seen) == 3 and len(set(seen)) == 1
 
 
+class HTTPError(OSError):
+    """Stand-in for requests.HTTPError (an OSError); `response` is set when the server answered."""
+
+    def __init__(self, status=None):
+        super().__init__(f"HTTP {status}")
+        self.response = None if status is None else SimpleNamespace(status_code=status)
+
+
+@pytest.mark.parametrize(
+    "status, retried",
+    [(400, False), (403, False), (404, False), (408, True), (429, True), (503, True)],
+)
+def test_an_http_error_is_retried_only_when_the_server_verdict_can_change(
+    status, retried
+):
+    assert _job_submit.is_transient(HTTPError(status)) is retried
+    assert _job_submit.is_transient(HTTPError()) is True  # no response: no verdict
+
+
 def test_attempts_must_be_positive():
     with pytest.raises(ValueError):
         _job_submit.submit_once(fake_workspace(), attempts=0, run_name="nb")

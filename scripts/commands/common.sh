@@ -259,11 +259,14 @@ warn_if_docs_server_running() {
 #              shell keeps open, and releases the lock when every holder of that end is gone.
 #              It makes whole runs take turns, with no gap between the execs of one run.
 #   WORK lock  (/tmp/gbx-work.lock)  held by the WORK: `$GBX_LOCK_RUN <command>` runs the
-#              command on a descriptor that Maven, Surefire, pytest and everything they start
-#              inherit. Killing this script or its `docker exec` client (kill -9, a harness
-#              tree-kill, a timeout) frees the RUN lock but NOT the container's work, which
-#              keeps running; it keeps the WORK lock too, so the next run's acquisition waits
-#              for it to end (exit 75 under --no-wait), naming the process still holding it.
+#              command on a descriptor that the Maven or pytest process itself keeps for as
+#              long as it runs (its bash and fork() children hold it too; a child started by
+#              Python's subprocess or Java's ProcessBuilder, such as a Surefire fork or
+#              pyspark's JVM, does not, and normally exits with its parent). Killing this
+#              script or its `docker exec` client (kill -9, a harness tree-kill, a timeout)
+#              frees the RUN lock but NOT the container's work, which keeps running; the main
+#              process keeps the WORK lock, so the next run's acquisition waits for it to end
+#              (exit 75 under --no-wait), naming the process still holding it.
 #
 # What this guarantees: gbx commands never overlap, including after a killed run. What it does
 # not: Maven or pytest started in the container outside a gbx command (an interactive

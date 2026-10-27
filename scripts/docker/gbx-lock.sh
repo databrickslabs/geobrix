@@ -12,10 +12,13 @@
 #             script (or a child of it) keeps the pipe it reads open. It makes whole runs
 #             take turns, with no gaps between the several execs of one run.
 #   WORK lock (/tmp/gbx-work.lock)  owned by the work itself: `run` takes it on a descriptor
-#             that Maven, Surefire, pytest and everything they start inherit. Killing the
-#             host script or its `docker exec` client does not stop the work in the container,
-#             and does not free this lock either: it is held until the last process holding
-#             the descriptor ends. `hold` waits for it before it reports ACQUIRED.
+#             that the Maven or pytest process itself keeps for as long as it runs (bash
+#             children and fork() children hold it too). Killing the host script or its
+#             `docker exec` client does not stop that process, and does not free this lock
+#             either. It is NOT inherited by children that Python's subprocess (close_fds) or
+#             Java's ProcessBuilder start (a Surefire fork, pyspark's JVM); those normally exit
+#             with their parent, and the main process is what the next run waits for.
+#             `hold` waits for the lock before it reports ACQUIRED.
 #
 # Status lines on stdout (`hold`): ACQUIRED | WAITING <holder> | BUSY <holder> | TIMEOUT <holder>
 # for the run lock, and WORK_WAITING / WORK_BUSY / WORK_TIMEOUT <holder> for the work lock.
@@ -39,7 +42,7 @@ holder_of() {
 }
 
 # Up to three processes that hold <lock> open, as "pid(command line)". This is what a stuck
-# lock needs: the work's process tree outlives the script that started it.
+# lock needs: the work outlives the script that started it.
 users_of() {
     local p n=0
     for p in /proc/[0-9]*; do
@@ -102,8 +105,8 @@ run() {
         flock -w "$TIMEOUT" 9 || { echo "gbx-lock: timed out waiting for earlier work: $(describe "$WORK_LOCK")"; exit 75; }
     fi
     publish_info "$WORK_LOCK" "pid=$$ cmd=$* since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-    # Not `exec`: this process stays as the parent. The command and everything it starts
-    # inherit descriptor 9, which is what keeps the lock while the work runs, whoever dies.
+    # Not `exec`: this process stays as the parent. The command inherits descriptor 9 and
+    # holds it while it runs, whoever dies; bash and fork() children hold it too.
     "$@"
 }
 

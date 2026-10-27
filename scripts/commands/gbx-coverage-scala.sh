@@ -126,7 +126,7 @@ elif [ "$BY_PACKAGE" = true ]; then
         echo -e "${CYAN}Package: ${GREEN}$pkg${NC}"
         PKG_SUITE="com.databricks.labs.gbx.${pkg}.*"
         MVN_PKG="$DOCKER_MAVEN_ENV && cd /root/geobrix && mvn ${CLEAN_PREFIX}scoverage:test -T 1C -Druntime=standard -Dsuites='$PKG_SUITE'"
-        docker exec geobrix-dev /bin/bash -c "$MVN_PKG" || { EXIT_CODE=1; echo -e "${RED}$pkg failed${NC}"; break; }
+        docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_PKG" || { EXIT_CODE=1; echo -e "${RED}$pkg failed${NC}"; break; }
         docker exec geobrix-dev /bin/bash -c "cp -f /root/geobrix/target/scoverage.xml /root/geobrix/coverage-artifacts/scoverage-${pkg}.xml 2>/dev/null || true"
         [ "$CLEAN" = true ] && CLEAN_PREFIX=""  # only clean first run
     done

@@ -244,7 +244,7 @@ ensure_zarr_test_env() {
             || echo -e "${YELLOW}⚠️  zarr_dbr19 install failed: zarr tests will fail on import${NC}"
     fi
     local rc=0
-    docker exec geobrix-dev /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
+    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh || rc=$?
     if [ "$rc" -eq 3 ]; then
         echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
         exit 1

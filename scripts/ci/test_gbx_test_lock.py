@@ -479,8 +479,153 @@ def test_a_helper_that_cannot_take_the_lock_exits_70_not_75(demo):
 # gbx:test:docs runs no Maven itself: its three doc-suite children are locked commands.
 DELEGATES = {"gbx-test-docs.sh"}
 
+# `docker exec` statements in a locked command that are NOT Maven/pytest work, so they run
+# without the work lock: (command, regex that matches the whole statement). Keep it short;
+# a new exec that is not listed here must go through $GBX_LOCK_RUN (or $LOCK_PREFIX).
+NOT_WORK = [
+    ("gbx-test-python.sh", r"pip show geobrix"),  # editable-install check
+    (
+        "gbx-test-python.sh",
+        r"import importlib\.metadata as m, rio_cogeo",
+    ),  # test-deps probe
+    ("gbx-test-python.sh", r"python3 - >/dev/null 2>&1 <<'PY'"),  # zarr extra pin check
+    (
+        "gbx-test-python.sh",
+        r"pip3 install --break-system-packages --quiet -e",
+    ),  # zarr extra
+    ("gbx-test-parity.sh", r"tail -6 \$REPORT"),  # reads the pytest summary
+    ("gbx-test-python-docs.sh", r"test -d /Volumes"),
+    ("gbx-test-python-docs.sh", r'test -d "\$SAMPLE_DATA_ROOT/geobrix-examples"'),
+    ("gbx-test-sql-docs.sh", r"test -d /Volumes"),
+    ("gbx-test-docs.sh", r"test -d /Volumes"),
+    ("gbx-coverage-scala.sh", r"mkdir -p /root/geobrix/coverage-artifacts"),
+    ("gbx-coverage-scala.sh", r"cp -f /root/geobrix/target/scoverage\.xml"),
+    (
+        "gbx-docker-exec.sh",
+        r"^docker exec -it geobrix-dev (spark-shell|pyspark|python3|scala|bash)$",
+    ),
+]
 
-@pytest.mark.parametrize("command", sorted(set(LOCKED) - VIA_PYTHON - DELEGATES))
-def test_a_locked_command_runs_its_maven_or_pytest_under_the_work_lock(command):
-    text = (REPO_ROOT / "scripts" / "commands" / command).read_text()
-    assert "$GBX_LOCK_RUN" in text, f"{command}: wrap the work exec in $GBX_LOCK_RUN"
+DOCKER_EXEC_CALL = re.compile(r"(^|[=(&|;!]|\bif\b|\bthen\b)\s*docker exec\b")
+WRAPPERS = ("$GBX_LOCK_RUN", "$LOCK_PREFIX")
+
+
+def _docker_exec_statements(text):
+    """(line number, statement) for every `docker exec` call; a statement runs on through
+    lines that end with a backslash."""
+    lines = text.splitlines()
+    out, i = [], 0
+    while i < len(lines):
+        line = lines[i]
+        if not line.lstrip().startswith("#") and DOCKER_EXEC_CALL.search(line):
+            j, stmt = i, [line]
+            while lines[j].rstrip().endswith("\\") and j + 1 < len(lines):
+                j += 1
+                stmt.append(lines[j])
+            out.append((i + 1, "\n".join(s.strip() for s in stmt)))
+            i = j
+        i += 1
+    return out
+
+
+def _unwrapped_execs(command, text):
+    """The `docker exec` calls in `text` that neither use the work lock nor are in NOT_WORK."""
+    allowed = [rx for cmd, rx in NOT_WORK if cmd == command]
+    return [
+        (lineno, stmt.splitlines()[0])
+        for lineno, stmt in _docker_exec_statements(text)
+        if not any(w in stmt for w in WRAPPERS)
+        and not any(re.search(rx, stmt, re.M) for rx in allowed)
+    ]
+
+
+def _command_text(command):
+    return (REPO_ROOT / "scripts" / "commands" / command).read_text()
+
+
+@pytest.mark.parametrize("command", sorted(set(LOCKED) - VIA_PYTHON))
+def test_every_docker_exec_of_a_locked_command_is_under_the_work_lock(command):
+    """EACH exec, not 'somewhere in the file': one bare Maven exec leaves that path unfenced."""
+    text = _command_text(command)
+
+    assert (
+        _unwrapped_execs(command, text) == []
+    ), f"{command}: wrap Maven/pytest execs in $GBX_LOCK_RUN, or list a non-work exec in NOT_WORK"
+    if command not in DELEGATES:
+        assert any(
+            any(w in stmt for w in WRAPPERS)
+            for _, stmt in _docker_exec_statements(text)
+        ), f"{command}: no exec goes through the work lock"
+
+
+def test_every_not_work_entry_still_matches_an_exec():
+    for command, rx in NOT_WORK:
+        stmts = [stmt for _, stmt in _docker_exec_statements(_command_text(command))]
+        assert any(
+            re.search(rx, stmt, re.M) for stmt in stmts
+        ), f"stale NOT_WORK: {command} {rx}"
+
+
+def test_the_guard_catches_an_unwrapped_pytest_exec_in_gbx_test_python():
+    """Mutation: the main pytest exec of gbx:test:python loses its wrapper."""
+    wrapped = 'docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"'
+    text = _command_text("gbx-test-python.sh")
+    assert wrapped in text
+    mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))
+
+    bad = _unwrapped_execs("gbx-test-python.sh", mutated)
+
+    assert [stmt for _, stmt in bad] == [
+        'docker exec geobrix-dev /bin/bash -c "$PYTEST_CMD"'
+    ]
+
+
+def test_the_guard_catches_the_unwrapped_by_package_maven_exec_in_gbx_coverage_scala():
+    """Mutation: the --by-package Maven exec is bare, as it was before the fix."""
+    wrapped = 'docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$MVN_PKG"'
+    text = _command_text("gbx-coverage-scala.sh")
+    assert wrapped in text
+    mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))
+
+    bad = _unwrapped_execs("gbx-coverage-scala.sh", mutated)
+
+    assert [stmt.split(" ||")[0] for _, stmt in bad] == [
+        'docker exec geobrix-dev /bin/bash -c "$MVN_PKG"'
+    ]
+
+
+def test_the_guard_catches_the_delta_jar_fetch_outside_the_work_lock():
+    """Mutation: fetch-delta-test-jars.sh runs `mvn dependency:get` in the container."""
+    wrapped = "docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash /root/geobrix/scripts/ci/fetch-delta-test-jars.sh"
+    text = _command_text("gbx-test-python.sh")
+    assert wrapped in text
+    mutated = text.replace(wrapped, wrapped.replace("$GBX_LOCK_RUN ", ""))
+
+    bad = _unwrapped_execs("gbx-test-python.sh", mutated)
+
+    assert len(bad) == 1 and "fetch-delta-test-jars.sh" in bad[0][1]
+
+
+# ---- the two execs the per-exec guard found, run end to end against the fake docker
+
+
+def test_coverage_by_package_sends_each_maven_run_through_the_work_lock(sandbox):
+    sandbox.run("gbx-coverage-scala.sh", "--by-package")
+
+    maven = [c for c in sandbox.execs() if "scoverage:test" in c[-1]]
+    assert len(maven) >= 6  # one per package
+    assert all(c[: len(RUN_PREFIX)] == RUN_PREFIX for c in maven), maven
+
+
+def test_the_delta_jar_fetch_runs_under_the_work_lock(sandbox):
+    lib = sandbox.root / "python" / "geobrix" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "geobrix-0.0.0-jar-with-dependencies.jar").write_text("jar")
+
+    sandbox.run("gbx-test-python.sh", "--path", "python/geobrix/test/zarr/")
+
+    fetches = [
+        c for c in sandbox.execs() if any("fetch-delta-test-jars.sh" in a for a in c)
+    ]
+    assert len(fetches) == 1
+    assert fetches[0][: len(RUN_PREFIX)] == RUN_PREFIX

@@ -19,7 +19,13 @@ from _artifact_volume import prune_stale
 
 TESTS_DIR = Path(__file__).resolve().parent
 # Container side of the gbx test lock (scripts/docker/gbx-lock.sh, the repo as mounted in geobrix-dev).
-LOCK_RUN = ["/bin/bash", "/root/geobrix/scripts/docker/gbx-lock.sh", "run"]
+# The command that started this (gbx-data-stage-*.sh) exports GBX_LOCK_RUN with its lock overrides
+# (work-lock file, timeout); a direct run falls back to the defaults.
+LOCK_RUN = os.environ.get("GBX_LOCK_RUN", "").split() or [
+    "/bin/bash",
+    "/root/geobrix/scripts/docker/gbx-lock.sh",
+    "run",
+]
 _env_file = TESTS_DIR / "databricks_cluster_config.env"
 if _env_file.exists():
     with open(_env_file) as f:

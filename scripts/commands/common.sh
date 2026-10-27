@@ -278,7 +278,10 @@ warn_if_docs_server_running() {
 # must never start another locked exec: it would wait for the lock its own parent holds.
 #
 #   default      wait for the lock, naming the holder once; give up after
-#                $GBX_TEST_LOCK_TIMEOUT seconds (default 3600) with exit 75.
+#                $GBX_TEST_LOCK_TIMEOUT seconds (default 3600) with exit 75. That is ONE budget
+#                for the whole acquisition: waiting for the run lock and then for earlier work
+#                share it. A waiter whose script is killed ends within a second (the helper
+#                sees its stdin close), not at the timeout.
 #   --no-wait    (GBX_LOCK_NO_WAIT=true) fail at once with exit 75, naming the holder.
 #
 # A gbx command run by a parent that already holds the lock (gbx:test:docs runs the three doc
@@ -288,10 +291,14 @@ GBX_TEST_LOCK_FILE="${GBX_TEST_LOCK_FILE:-/tmp/gbx-test.lock}"        # RUN lock
 GBX_WORK_LOCK_FILE="${GBX_WORK_LOCK_FILE:-/tmp/gbx-work.lock}"        # WORK lock, likewise
 GBX_TEST_LOCK_TIMEOUT="${GBX_TEST_LOCK_TIMEOUT:-3600}"
 GBX_LOCK_NO_WAIT="${GBX_LOCK_NO_WAIT:-false}"
-GBX_CONTAINER_LOCK="/root/geobrix/scripts/docker/gbx-lock.sh"        # the repo, as mounted in the container
+GBX_CONTAINER_ROOT="${GBX_CONTAINER_ROOT:-/root/geobrix}"             # the repo, as mounted in the container
+GBX_CONTAINER_LOCK="$GBX_CONTAINER_ROOT/scripts/docker/gbx-lock.sh"
 # Prefix for a Maven/pytest `docker exec`, left UNQUOTED on purpose (it is several words):
 #   docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$CMD"
-GBX_LOCK_RUN="/bin/bash $GBX_CONTAINER_LOCK run"
+# The `env` words carry this shell's lock overrides into the container: `docker exec` does not
+# pass the host environment, and `run` reads the work-lock file and the timeout from there
+# (`hold` gets the same values through `docker exec -e` in gbx_acquire_test_lock).
+GBX_LOCK_RUN="env GBX_WORK_LOCK_FILE=$GBX_WORK_LOCK_FILE GBX_LOCK_TIMEOUT=$GBX_TEST_LOCK_TIMEOUT /bin/bash $GBX_CONTAINER_LOCK run"
 # Command line of the script that sourced this file (written into the lock info and the log).
 GBX_LOCK_CMD="$(basename "${BASH_SOURCE[1]:-$0}") $*"
 GBX_LOCK_CMD="${GBX_LOCK_CMD:0:200}"
@@ -320,6 +327,9 @@ gbx_acquire_test_lock() {
     # every holder of fd 7 -- this script and its children -- is gone.
     exec 7<>"$fifo" 6<"$fifo"
     rm -f "$fifo"
+    # A TERM/INT/HUP while waiting must not leave the container-side waiter or the status dir
+    # behind (kill -9 cannot run this; the helper then notices the closed pipe by itself).
+    trap '[ -n "${holder_pid:-}" ] && kill "$holder_pid" 2>/dev/null; rm -rf "$dir"; exit 143' TERM INT HUP
     docker exec -i \
         -e GBX_LOCK_FILE="$GBX_TEST_LOCK_FILE" \
         -e GBX_WORK_LOCK_FILE="$GBX_WORK_LOCK_FILE" \
@@ -382,6 +392,7 @@ gbx_acquire_test_lock() {
         sleep 0.2
     done
     rm -rf "$dir"
+    trap - TERM INT HUP
     export GBX_TEST_LOCK_HELD_BY="$$"
     echo -e "${GREEN}🔒 test lock acquired: pid $$ ${GBX_LOCK_CMD} (waited $((SECONDS - start))s; ${GBX_TEST_LOCK_FILE} in geobrix-dev)${NC}"
 }
@@ -460,7 +471,7 @@ gbx_python_with_sdk() {
 
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
-export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_LOCK GBX_LOCK_RUN
+export RED GREEN YELLOW BLUE CYAN NC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
           print_banner print_separator setup_log run_in_pyrx_venv gbx_python_with_sdk validate_set \

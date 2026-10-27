@@ -248,6 +248,12 @@ ensure_zarr_test_env() {
     if [ "$rc" -eq 3 ]; then
         echo -e "${RED}❌ Delta jar sha256 mismatch; refusing to run (see the message above)${NC}"
         exit 1
+    elif [ "$rc" -eq 75 ] || [ "$rc" -eq 70 ]; then
+        # The work-lock wrapper, not the fetch: earlier work is still running in the container
+        # (75, timed out) or the lock file cannot be used (70). The pytest exec below would stop
+        # the same way, so say so instead of calling it a missing Delta jar.
+        echo -e "${RED}❌ Could not take the container work lock (exit $rc; see the message above); not running${NC}"
+        exit "$rc"
     elif [ "$rc" -ne 0 ]; then
         echo -e "${YELLOW}⚠️  Delta jars unavailable: Delta-backed zarr tests will fail (see scripts/ci/fetch-delta-test-jars.sh)${NC}"
     fi

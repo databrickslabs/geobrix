@@ -50,7 +50,15 @@ def _events(sandbox):
 
 
 HOLD_CMD = ["/bin/bash", "/root/geobrix/scripts/docker/gbx-lock.sh", "hold"]
-RUN_PREFIX = ["/bin/bash", "/root/geobrix/scripts/docker/gbx-lock.sh", "run"]
+LOCK_SCRIPT = "/root/geobrix/scripts/docker/gbx-lock.sh"
+
+
+def _under_work_lock(command):
+    """True for `[env KEY=VALUE ...] /bin/bash gbx-lock.sh run ...`: the work lock's wrapper."""
+    if LOCK_SCRIPT not in command:
+        return False
+    i = command.index(LOCK_SCRIPT)
+    return i > 0 and command[i - 1] == "/bin/bash" and command[i + 1 : i + 2] == ["run"]
 
 
 def _only_the_lock_helper(sandbox):
@@ -195,7 +203,9 @@ LOCK_TAKEN_BY = {"gbx-test-light.sh": "gbx-test-pyrx.sh"}
 EXEMPT = {
     "gbx-test-python-dbr.sh": "tests against a remote DBR cluster; no local Maven or Spark JVM",
     "gbx-test-notebooks.sh": "runs fixture/sample notebooks in an isolated venv and temp workdir; "
-    "no Maven, no Spark JVM on target/",
+    "no Maven, no Spark JVM on target/. Its editable install of geobrix into the shared "
+    "site-packages happens only when geobrix is missing (pip show first), so a routine run "
+    "never rewrites it under a locked pytest",
 }
 
 
@@ -348,7 +358,7 @@ def _can_lock(path: Path) -> bool:
         os.close(fd)
 
 
-def _kill_host_side(proc):
+def _kill_host_side(proc, clients=2):
     """kill -9 a gbx script and its `docker exec` clients; what runs 'in the container' lives on."""
     # `ww`: never cut the command column. Linux ps truncates it to the terminal width
     # (COLUMNS), which on the CI runner hid the `_fake_docker_local.py` marker behind
@@ -373,7 +383,7 @@ def _kill_host_side(proc):
         for pid, _, cmd in rows
         if pid in tree and (pid == proc.pid or "_fake_docker_local.py" in cmd)
     ]
-    assert len(victims) >= 3, rows  # the script and its two docker clients
+    assert len(victims) >= 1 + clients, rows  # the script and its docker clients
     for pid in victims:
         os.kill(pid, signal.SIGKILL)
     proc.wait()
@@ -484,6 +494,128 @@ def test_a_helper_that_cannot_take_the_lock_exits_70_not_75(demo):
     assert "Could not take the container lock" in res.output
 
 
+# ------------------------------------------------- waits, deadlines and what the helper leaves
+
+
+def _holds(sandbox):
+    """pids of this sandbox's container-side `gbx-lock.sh hold` helpers."""
+    out = subprocess.run(
+        ["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True
+    ).stdout
+    marker = f"{sandbox.root}/scripts/docker/gbx-lock.sh hold"
+    return [int(x.split(None, 1)[0]) for x in out.splitlines() if marker in x]
+
+
+def test_a_killed_waiter_does_not_linger_until_the_timeout(demo):
+    # kill -9 of a run that is still WAITING left its container-side helper blocked in
+    # `flock -w` for the whole timeout (an hour by default), a ghost holder when the lock freed.
+    first = demo.popen("lockdemo.sh", "--hold", "60")
+    _wait_for(lambda: "start" in _events(demo))
+    second = demo.popen("lockdemo.sh")
+    _wait_for(lambda: len(_holds(demo)) == 2)  # the waiter's helper is up and waiting
+
+    _kill_host_side(second, clients=1)
+
+    _wait_for(
+        lambda: len(_holds(demo)) == 1, timeout=10
+    )  # only the real holder is left
+    first.kill()
+    first.communicate()
+
+
+def test_the_run_and_work_lock_waits_share_one_deadline(demo):
+    # The run-lock wait used the whole timeout and the work-lock wait started a fresh one:
+    # a run could wait twice as long as GBX_TEST_LOCK_TIMEOUT says.
+    first = demo.popen("lockdemo.sh", "--hold", "4")
+    _wait_for(lambda: "start" in _events(demo))
+
+    with demo.lock_held_by("pid=9 cmd=orphan since=then", lock=demo.work_lock_file):
+        started = time.monotonic()
+        res = demo.run(
+            "lockdemo.sh", GBX_TEST_LOCK_TIMEOUT="5"
+        )  # ~4 s run wait, then work
+        elapsed = time.monotonic() - started
+    first.communicate(timeout=30)
+
+    assert res.returncode == 75, res.output
+    assert "Timed out after 5s waiting for earlier work" in res.output  # WORK_TIMEOUT
+    assert elapsed < 8, elapsed  # about 5 s in all, not 4 + 5
+
+
+def test_the_work_locks_holder_is_cleared_when_the_work_ends_or_is_stale(demo):
+    info = Path(str(demo.work_lock_file) + ".info")
+    script = demo.root / "scripts" / "docker" / "gbx-lock.sh"
+    subprocess.run(
+        ["bash", str(script), "run", "true"], env=demo.env(), capture_output=True
+    )
+    assert not info.exists()  # was left naming a finished process
+
+    info.write_text(
+        "pid=1 cmd=killed-long-ago since=then\n"
+    )  # a kill -9 leaves this behind
+    demo.run("lockdemo.sh")  # the next run finds the lock free
+    assert not info.exists()
+
+
+def test_a_container_without_flock_stops_the_helper_not_mistakes_it_for_busy(tmp_path):
+    script = REPO_ROOT / "scripts" / "docker" / "gbx-lock.sh"
+    nothing = tmp_path / "empty-bin"
+    nothing.mkdir()
+
+    res = subprocess.run(
+        ["/bin/bash", str(script), "hold"],
+        env={"PATH": str(nothing), "GBX_LOCK_FILE": str(tmp_path / "run.lock")},
+        stdin=subprocess.DEVNULL,
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+
+    assert res.returncode == 70, res.stdout
+    assert res.stdout.startswith("ERROR flock failed (exit 127")
+
+
+def test_work_that_outlasts_the_wait_names_itself_in_the_timeout(demo):
+    with demo.lock_held_by("pid=9 cmd=orphan since=then", lock=demo.work_lock_file):
+        res = demo.run("lockdemo.sh", GBX_TEST_LOCK_TIMEOUT="1")
+
+    assert res.returncode == 75
+    assert "Timed out after 1s waiting for earlier work" in res.output
+    assert "pid=9 cmd=orphan" in res.output
+    assert _events(demo) == []  # no work was started
+
+
+def test_a_helper_that_exits_without_a_status_is_reported_with_its_output(demo):
+    # Also pins that the helper's path comes from GBX_CONTAINER_ROOT (not a literal).
+    res = demo.run("lockdemo.sh", GBX_CONTAINER_ROOT="/nowhere/geobrix")
+
+    assert res.returncode == 70, res.output
+    assert "exited without taking the lock" in res.output
+    assert any(
+        "/nowhere/geobrix/scripts/docker/gbx-lock.sh" in c for c in demo.execs()[0]
+    )
+
+
+def test_the_work_wrapper_carries_this_shells_lock_overrides_into_the_container(
+    sandbox,
+):
+    # `docker exec` does not pass the host environment; the work lock file and the timeout
+    # have to ride in the command, or an override reaches only the run lock.
+    sandbox.run("gbx-docker-exec.sh", "mvn -version", GBX_TEST_LOCK_TIMEOUT="123")
+
+    (work,) = _work_execs(sandbox)
+    assert f"GBX_WORK_LOCK_FILE={sandbox.work_lock_file}" in work
+    assert "GBX_LOCK_TIMEOUT=123" in work and _under_work_lock(work)
+
+
+def test_a_docker_exec_command_that_is_not_maven_or_pytest_skips_the_lock(sandbox):
+    with sandbox.lock_held_by("pid=4242 cmd=gbx-test-scala.sh since=now"):
+        res = sandbox.run("gbx-docker-exec.sh", "ls /root", "--no-wait")
+
+    assert res.returncode == 0 and "container lock" not in res.output
+    assert sandbox.execs() == [["bash", "-c", "set -o pipefail; ls /root"]]
+
+
 # ----------------------------------- every locked command sends its work through the wrapper
 
 
@@ -492,33 +624,74 @@ def test_a_helper_that_cannot_take_the_lock_exits_70_not_75(demo):
 DELEGATES = {"gbx-test-docs.sh", "gbx-test-light.sh"}
 
 # `docker exec` statements in a locked command that are NOT Maven/pytest work, so they run
-# without the work lock: (command, regex that matches the whole statement). Keep it short;
-# a new exec that is not listed here must go through $GBX_LOCK_RUN (or $LOCK_PREFIX).
+# without the work lock: (command, regex that must match the WHOLE statement; re.S). Keep it
+# short; a new exec that is not listed here must go through $GBX_LOCK_RUN (or $LOCK_PREFIX).
+# A listed statement that names mvn or pytest anywhere is never exempt (see _unwrapped_execs).
 NOT_WORK = [
-    ("gbx-test-python.sh", r"pip show geobrix"),  # editable-install check
+    # editable-install check
     (
         "gbx-test-python.sh",
-        r"import importlib\.metadata as m, rio_cogeo",
-    ),  # test-deps probe
-    ("gbx-test-python.sh", r"python3 - >/dev/null 2>&1 <<'PY'"),  # zarr extra pin check
+        r'docker exec geobrix-dev /bin/bash -c \\\n"pip show geobrix .*--quiet"',
+    ),
+    # test-deps probe
     (
         "gbx-test-python.sh",
-        r"pip3 install --break-system-packages --quiet -e",
-    ),  # zarr extra
-    ("gbx-test-parity.sh", r"tail -6 \$REPORT"),  # reads the pytest summary
-    ("gbx-test-python-docs.sh", r"test -d /Volumes"),
-    ("gbx-test-python-docs.sh", r'test -d "\$SAMPLE_DATA_ROOT/geobrix-examples"'),
-    ("gbx-test-sql-docs.sh", r"test -d /Volumes"),
-    ("gbx-test-docs.sh", r"test -d /Volumes"),
-    ("gbx-coverage-scala.sh", r"mkdir -p /root/geobrix/coverage-artifacts"),
-    ("gbx-coverage-scala.sh", r"cp -f /root/geobrix/target/scoverage\.xml"),
+        r'docker exec geobrix-dev /bin/bash -c \\\n"python3 -c \'import importlib\.metadata as m, rio_cogeo.*anywidget==[\d.]+"',
+    ),
+    # zarr extra pin check
+    (
+        "gbx-test-python.sh",
+        r"docker exec -i geobrix-dev python3 - >/dev/null 2>&1 <<'PY'",
+    ),
+    # zarr extra
+    (
+        "gbx-test-python.sh",
+        r'docker exec geobrix-dev /bin/bash -c \\\n"pip3 install --break-system-packages --quiet -e \'/root/geobrix/python/geobrix\[zarr_dbr19\]\'" \\\n\|\| echo -e .*',
+    ),
+    # reads the pytest summary
+    (
+        "gbx-test-parity.sh",
+        r'SUMMARY=\$\(docker exec geobrix-dev /bin/bash -c \\\n"tail -6 \$REPORT 2>/dev/null \| grep -E \'passed\|failed\|skipped\|no tests ran\'; grep -E \'\^SKIPPED\' \$REPORT 2>/dev/null" 2>/dev/null\)',
+    ),
+    (
+        "gbx-test-python-docs.sh",
+        r"if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then",
+    ),
+    (
+        "gbx-test-python-docs.sh",
+        r'if ! docker exec geobrix-dev test -d "\$SAMPLE_DATA_ROOT/geobrix-examples" 2>/dev/null; then',
+    ),
+    (
+        "gbx-test-sql-docs.sh",
+        r"if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then",
+    ),
+    (
+        "gbx-test-docs.sh",
+        r"if ! docker exec geobrix-dev test -d /Volumes 2>/dev/null; then",
+    ),
+    (
+        "gbx-coverage-scala.sh",
+        r'docker exec geobrix-dev /bin/bash -c "mkdir -p /root/geobrix/coverage-artifacts"',
+    ),
+    (
+        "gbx-coverage-scala.sh",
+        r'docker exec geobrix-dev /bin/bash -c "cp -f /root/geobrix/target/scoverage\.xml /root/geobrix/coverage-artifacts/scoverage-\$\{pkg\}\.xml 2>/dev/null \|\| true"',
+    ),
     (
         "gbx-docker-exec.sh",
-        r"^docker exec -it geobrix-dev (spark-shell|pyspark|python3|scala|bash)$",
+        r"docker exec -it geobrix-dev (spark-shell|pyspark|python3|scala|bash)",
+    ),
+    # the lock helper itself (common.sh): holds the RUN lock, runs no work
+    (
+        "common.sh",
+        r'docker exec -i \\\n(-e [A-Z_]+="[^"]*" \\\n)+geobrix-dev /bin/bash "\$GBX_CONTAINER_LOCK" hold \\\n<&6 >"\$status" 2>&1 3>&- 7>&- 6<&- &',
     ),
 ]
 
-DOCKER_EXEC_CALL = re.compile(r"(^|[=(&|;!]|\bif\b|\bthen\b)\s*docker exec\b")
+# A `docker exec` at the start of a statement, or after an operator or a keyword that begins one.
+DOCKER_EXEC_CALL = re.compile(
+    r"(^|[=(&|;!{]|\bif\b|\bthen\b|\belse\b|\belif\b|\bdo\b)\s*docker exec\b"
+)
 WRAPPERS = ("$GBX_LOCK_RUN", "$LOCK_PREFIX")
 
 
@@ -547,7 +720,10 @@ def _unwrapped_execs(command, text):
         (lineno, stmt.splitlines()[0])
         for lineno, stmt in _docker_exec_statements(text)
         if not any(w in stmt for w in WRAPPERS)
-        and not any(re.search(rx, stmt, re.M) for rx in allowed)
+        and not (
+            any(re.fullmatch(rx, stmt, re.S) for rx in allowed)
+            and not MAVEN_OR_PYTEST.search(stmt)
+        )
     ]
 
 
@@ -574,8 +750,56 @@ def test_every_not_work_entry_still_matches_an_exec():
     for command, rx in NOT_WORK:
         stmts = [stmt for _, stmt in _docker_exec_statements(_command_text(command))]
         assert any(
-            re.search(rx, stmt, re.M) for stmt in stmts
+            re.fullmatch(rx, stmt, re.S) for stmt in stmts
         ), f"stale NOT_WORK: {command} {rx}"
+
+
+def test_the_legacy_doc_tests_script_sends_nothing_to_the_container_itself():
+    """scripts/ci/run-doc-tests.sh ran `mvn test` with a raw docker exec, unlocked; its local runs
+    now call the locked gbx commands, so it has no docker exec of its own."""
+    text = (REPO_ROOT / "scripts" / "ci" / "run-doc-tests.sh").read_text()
+
+    assert _docker_exec_statements(text) == []
+    assert "gbx-test-scala-docs.sh" in text and "gbx-test-python-docs.sh" in text
+
+
+def test_common_sh_runs_no_work_exec_outside_the_lock_helper():
+    """The guard read only the top-level commands; the helper library is held to it too."""
+    assert _unwrapped_execs("common.sh", _command_text("common.sh")) == []
+
+
+def test_every_docker_exec_in_a_python_helper_is_under_the_work_lock():
+    """Per exec, as for the scripts: a helper with one wrapped and one bare exec fails."""
+    direct, _ = _maven_helpers()
+    assert direct
+    for path in direct:
+        execs = re.findall(r'"docker",\s*"exec"(.*?)\]', path.read_text(), re.S)
+        assert execs and all(
+            "LOCK_RUN" in e or "gbx-lock.sh" in e for e in execs
+        ), f"{path.name}: an exec outside the work lock"
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "else docker exec geobrix-dev mvn test",
+        "for x in a; do docker exec geobrix-dev mvn test; done",
+        "{ docker exec geobrix-dev mvn test; }",
+        "elif docker exec geobrix-dev mvn test; then",
+    ],
+    ids=["else", "do", "brace", "elif"],
+)
+def test_the_guard_sees_a_docker_exec_after_else_do_brace_and_elif(line):
+    assert len(_docker_exec_statements(line)) == 1
+
+
+def test_a_listed_probe_does_not_exempt_a_longer_exec_that_runs_pytest():
+    """NOT_WORK entries match the whole statement: `test -d /Volumes && pytest` is not the probe."""
+    probe = "if ! docker exec geobrix-dev test -d /Volumes && python -m pytest x; then"
+
+    bad = _unwrapped_execs("gbx-test-sql-docs.sh", probe)
+
+    assert [stmt for _, stmt in bad] == [probe]
 
 
 def test_the_guard_catches_an_unwrapped_pytest_exec_in_gbx_test_python():
@@ -626,7 +850,7 @@ def test_coverage_by_package_sends_each_maven_run_through_the_work_lock(sandbox)
 
     maven = [c for c in sandbox.execs() if "scoverage:test" in c[-1]]
     assert len(maven) >= 6  # one per package
-    assert all(c[: len(RUN_PREFIX)] == RUN_PREFIX for c in maven), maven
+    assert all(_under_work_lock(c) for c in maven), maven
 
 
 def test_the_delta_jar_fetch_runs_under_the_work_lock(sandbox):
@@ -640,4 +864,35 @@ def test_the_delta_jar_fetch_runs_under_the_work_lock(sandbox):
         c for c in sandbox.execs() if any("fetch-delta-test-jars.sh" in a for a in c)
     ]
     assert len(fetches) == 1
-    assert fetches[0][: len(RUN_PREFIX)] == RUN_PREFIX
+    assert _under_work_lock(fetches[0])
+
+
+@pytest.mark.parametrize("rc", [75, 70])
+def test_a_work_lock_failure_during_the_delta_fetch_is_not_called_a_missing_jar(
+    sandbox, rc
+):
+    lib = sandbox.root / "python" / "geobrix" / "lib"
+    lib.mkdir(parents=True)
+    (lib / "geobrix-0.0.0-jar-with-dependencies.jar").write_text("jar")
+
+    res = sandbox.run(
+        "gbx-test-python.sh",
+        *("--path", "python/geobrix/test/zarr/"),
+        FAKE_DOCKER_EXEC_RC=str(rc),
+    )
+
+    assert res.returncode == rc, res.output
+    assert "Delta jars unavailable" not in res.output
+    assert "work lock" in res.output
+    assert not [
+        c for c in sandbox.execs() if "python3 -m pytest" in c[-1]
+    ]  # never started
+
+
+def test_the_exempt_notebook_runner_installs_geobrix_only_when_it_is_missing(sandbox):
+    # It takes no lock, so its `pip install -e` into the shared site-packages must not run on
+    # every call (that rewrites the editable install a locked pytest is importing).
+    sandbox.run("gbx-test-notebooks.sh")
+
+    (run,) = [c[-1] for c in sandbox.execs() if "run_notebooks_cell_by_cell" in c[-1]]
+    assert re.search(r"pip show geobrix [^\n]*\|\| pip install --no-deps -e", run)

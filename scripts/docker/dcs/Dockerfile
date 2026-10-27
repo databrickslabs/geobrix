@@ -49,11 +49,12 @@ ARG GEOBRIX_VERSION
 COPY geobrix-${GEOBRIX_VERSION}-py3-none-any.whl /tmp/geobrix-wheel/
 # Hold every package the base image ships at its version; fail the build rather than drift.
 # A package index, if one is needed, arrives as the BuildKit secret pip_index_url (never an ARG or ENV),
-# so it is not recorded in the image history.
+# so it is not recorded in the image history. The install is quiet (-q): at its default verbosity pip prints
+# "Looking in indexes: <url>" into the build log.
 RUN --mount=type=secret,id=pip_index_url \
     if [ -s /run/secrets/pip_index_url ]; then export PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)"; fi && \
     /databricks/python3/bin/python -m pip list --format=freeze | sort > /tmp/base-constraints.txt && \
-    /databricks/python3/bin/python -m pip install --no-cache-dir -c /tmp/base-constraints.txt \
+    /databricks/python3/bin/python -m pip install -q --no-cache-dir -c /tmp/base-constraints.txt \
       "geobrix[light_env6,vizx] @ file:///tmp/geobrix-wheel/geobrix-${GEOBRIX_VERSION}-py3-none-any.whl" && \
     /databricks/python3/bin/python -m pip check && \
     rm -rf /tmp/geobrix-wheel /tmp/base-constraints.txt

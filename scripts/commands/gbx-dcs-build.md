@@ -15,6 +15,8 @@ bash scripts/commands/gbx-dcs-build.sh [--arch arm64|amd64] [--target base|relea
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
 
+An option that needs a value (`--arch`, `--target`, `--log`) given without one prints `<option> needs a value` and the usage, and exits 2.
+
 ## Environment
 
 - `GBX_DCS_REPO` - image repository (default `mjohns797/geobrix`)
@@ -35,7 +37,10 @@ bash scripts/commands/gbx-dcs-build.sh --target base --log dcs-base.log
 - The GDAL compile takes roughly 15-30 minutes natively; run it in the background with `--log` and tail the log.
 - The image is built under a temporary local tag (`gbx-dcs-build-tmp:<pid>`) and every check runs against it. Only when all of them pass is it tagged `<repo>:<ver>-env6-<arm|x86>-rc` (or `<repo>:base-env6-<arm|x86>`) and the temporary tag removed, so a failed check leaves no new `-rc` or `base` tag and never moves an existing one. The failed image is removed with its temporary tag.
 - The last two output lines are `IMAGE=<final tag>` and `IMAGE_ID=<sha256:...>`. Any `VERIFY FAILED` line means the image is not usable and was not tagged.
-- Refusals (exit 1, before `docker build`): not exactly one JAR or wheel, JAR/wheel version mismatch, or a JAR that bundles classes the runtime provides (Scala, Spark or log4j). Rebuild the JAR with `gbx:data:stage-jar` (set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to skip the upload).
+- Refusals (exit 1, before `docker build`): `python3` not on `PATH` (the release target uses it to check and hash the JAR), not exactly one JAR or wheel, JAR/wheel version mismatch, or a JAR that bundles classes the runtime provides (Scala, Spark or log4j) or cannot be read. The JAR is copied into the build context first and the copy is what is checked and hashed, so it is the file the image gets. Rebuild the JAR with `gbx:data:stage-jar` (set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to skip the upload).
+- Ctrl-C or SIGTERM removes the build context, the package-index file (mode 0600) and the temporary tag, then exits 130 or 143. A signal sent to the script alone is acted on when the running `docker` command returns; Ctrl-C reaches that command too.
+- The first verify step runs `ldd` on `/usr/lib/libgdalalljni.so` and fails when any library it needs is `not found` (the file existing is not enough; the heavyweight JAR loads it).
+- The in-image `pip install` runs with `-q`, so the build log does not carry pip's `Looking in indexes: ...` line.
 - The wheel is installed with `geobrix[light_env6,vizx]` (core plus visualization) under the base image's pinned packages. The release verify fails unless the visualization stack and the `tippecanoe` executables are present, `requests` is still the base image's version, and `pystac_client` (the `[stac]` extra) is absent.
 - After the build the command checks `docker history` of the new image and fails with `VERIFY FAILED` if a `PIP_INDEX_URL` value, or the configured index host, appears in the layers this build added (the image is meant for a public registry). It also fails with `VERIFY FAILED: could not isolate this build's layers from the base image` when it cannot tell which layers are this build's, rather than checking nothing and passing.
 - Dockerfile: `scripts/docker/dcs/Dockerfile`.

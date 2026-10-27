@@ -7,7 +7,11 @@ $FAKE_DOCKER_LOG and answers from the JSON state in $FAKE_DOCKER_STATE:
   `tag` copies an image to a new ref; `push` records <repo>@<push_digest> on the ref.
 - history_own / history_base: `history` of a build's temporary tag prints history_own then
   history_base (newest first, like Docker); any other image prints history_base.
-- info_rc, build_rc, pull_rc, run_rc, push_rc: exit codes (default 0).
+- info_rc, build_rc, pull_rc, run_rc, push_rc: exit codes (default 0). run_rcs: a list of exit
+  codes for the first `run` calls, in order (each call takes the head of the list); then run_rc.
+- build_hang: a file path. `build` creates it, then blocks until it is killed (a build in progress).
+- push_no_digest: `push` succeeds but records no digest on the ref.
+- push_fail_refs: refs whose `push` fails (exit 1) without recording a digest.
 
 An argument naming the real repository (mjohns797/) exits 97 without doing anything.
 """
@@ -15,6 +19,7 @@ An argument naming the real repository (mjohns797/) exits 97 without doing anyth
 import json
 import os
 import sys
+import time
 
 TMP_TAG_PREFIX = "gbx-dcs-build-tmp:"
 
@@ -34,6 +39,14 @@ def main(args):
             json.dump(state, fh)
 
     cmd = args[0] if args else ""
+    if cmd == "build" and state.get("build_hang"):
+        with open(state["build_hang"], "w") as fh:
+            fh.write("building\n")
+        time.sleep(120)
+    if cmd == "run" and state.get("run_rcs"):
+        rc = state["run_rcs"].pop(0)
+        save()
+        return rc
     if cmd in ("info", "build", "pull", "run"):
         return state.get(f"{cmd}_rc", 0)
     if cmd == "history":
@@ -53,10 +66,12 @@ def main(args):
         return 0
     if cmd == "push":
         ref = args[1]
+        if ref in state.get("push_fail_refs", []):
+            return 1
         repo = ref.rsplit(":", 1)[0]
         digest = f"{repo}@{state.get('push_digest', 'sha256:' + '1' * 64)}"
         img = images.setdefault(ref, {"digests": []})
-        if digest not in img["digests"]:
+        if digest not in img["digests"] and not state.get("push_no_digest"):
             img["digests"].append(digest)
         save()
         return state.get("push_rc", 0)

@@ -29,11 +29,14 @@ usage() {
     echo "Publishing is separate and run by the release owner: gbx:dcs:publish."
 }
 
+# Under `set -u` a trailing `--arch` would die on an unbound $2 with no explanation.
+needs_value() { echo "$1 needs a value" >&2; usage; exit 2; }
+
 while [[ $# -gt 0 ]]; do
     case "$1" in
-        --arch) ARCH="$2"; shift 2 ;;
-        --target) TARGET="$2"; shift 2 ;;
-        --log) LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
+        --arch) [[ $# -ge 2 ]] || needs_value "$1"; ARCH="$2"; shift 2 ;;
+        --target) [[ $# -ge 2 ]] || needs_value "$1"; TARGET="$2"; shift 2 ;;
+        --log) [[ $# -ge 2 ]] || needs_value "$1"; LOG_PATH=$(resolve_log_path "$2"); shift 2 ;;
         -h|--help) usage; exit 0 ;;
         *) echo "Unknown option: $1" >&2; usage; exit 1 ;;
     esac
@@ -51,10 +54,22 @@ setup_log_file "$LOG_PATH"
 docker info > /dev/null 2>&1 || { echo "PRECONDITION MISSING: Docker is not running; gbx:dcs:build not run"; exit 1; }
 
 # No EXIT trap here: setup_log_file owns it (it waits for the log tee). Clean up explicitly instead.
-CTX=$(mktemp -d)
+# The template names TMPDIR explicitly: a bare `mktemp -d` ignores it on macOS.
+CTX=$(mktemp -d "${TMPDIR:-/tmp}/gbx-dcs-build.XXXXXX")
 SECRET_FILE=""
+# The image is built and verified under a temporary local tag and only then given its final tag, so a
+# failed check never leaves a <ver>-rc (or base) tag on an image that did not pass, and never moves a
+# good one. Cleanup removes this temporary tag only.
+TAG="gbx-dcs-build-tmp:$$"
 cleanup() { rm -rf "$CTX"; if [ -n "$SECRET_FILE" ]; then rm -f "$SECRET_FILE"; fi; }
 die() { cleanup; echo "$1"; exit 1; }
+# Ctrl-C or SIGTERM: remove the build context, the package-index file and the temporary tag, then exit
+# with the signal's conventional status. INT and TERM only: the EXIT trap stays setup_log_file's and still
+# runs on this exit. (bash runs the trap when the foreground docker command returns; Ctrl-C reaches that
+# command too, since it signals the whole foreground group.)
+interrupted() { cleanup; docker rmi "$TAG" > /dev/null 2>&1 || true; echo "Interrupted: removed the build's temporary files"; exit "$1"; }
+trap 'interrupted 130' INT
+trap 'interrupted 143' TERM
 cp "$PROJECT_ROOT/scripts/docker/dcs/Dockerfile" "$CTX/Dockerfile" || die "PRECONDITION MISSING: could not stage the Dockerfile; gbx:dcs:build not run"
 
 if [ "$TARGET" = "release" ]; then
@@ -68,16 +83,24 @@ if [ "$TARGET" = "release" ]; then
     VER=$(basename "$JAR" | sed -nE 's/^geobrix-(.+)-jar-with-dependencies\.jar$/\1/p')
     WVER=$(basename "$WHL" | sed -nE 's/^geobrix-(.+)-py3-none-any\.whl$/\1/p')
     [ "$VER" = "$WVER" ] || die "PRECONDITION MISSING: JAR version $VER != wheel version $WVER; gbx:dcs:build not run"
-    python3 "$PROJECT_ROOT/scripts/ci/check_jar_packaging.py" "$JAR" || die "PRECONDITION MISSING: rebuild the JAR (mvn clean package); gbx:dcs:build not run"
+    command -v python3 > /dev/null 2>&1 || die "PRECONDITION MISSING: python3 is not on PATH (it checks and hashes the JAR); gbx:dcs:build not run"
     cp "$JAR" "$WHL" "$CTX/" || die "PRECONDITION MISSING: could not stage the JAR and wheel; gbx:dcs:build not run"
+    # Check and hash the copy in the build context: it is the file the image gets, so a rebuild of target/
+    # between the check and the copy cannot put an unchecked JAR in the image.
+    CTX_JAR="$CTX/$(basename "$JAR")"
+    python3 "$PROJECT_ROOT/scripts/ci/check_jar_packaging.py" "$CTX_JAR" || die "PRECONDITION MISSING: rebuild the JAR (mvn clean package); gbx:dcs:build not run"
+    JAR_SHA=$(python3 -c '
+import hashlib, sys
+h = hashlib.sha256()
+with open(sys.argv[1], "rb") as f:
+    for block in iter(lambda: f.read(1 << 20), b""):
+        h.update(block)
+print(h.hexdigest())
+' "$CTX_JAR") || die "PRECONDITION MISSING: could not hash the JAR; gbx:dcs:build not run"
     FINAL_TAG="$REPO:${VER}-${SUFFIX}-rc"
 else
     FINAL_TAG="$REPO:base-${SUFFIX}"
 fi
-# The image is built and verified under a temporary local tag and only then given its final tag, so a
-# failed check never leaves a <ver>-rc (or base) tag on an image that did not pass, and never moves a
-# good one. Cleanup removes this temporary tag only.
-TAG="gbx-dcs-build-tmp:$$"
 verify_fail() { docker rmi "$TAG" > /dev/null 2>&1 || true; echo "$1"; exit 1; }
 
 # A package index (if any) goes in as a BuildKit secret from a private file outside the build context,
@@ -103,13 +126,20 @@ cleanup
 docker pull --platform "linux/$ARCH" "$BASE_IMAGE" > /dev/null || verify_fail "VERIFY FAILED: could not pull $BASE_IMAGE for linux/$ARCH (image not tagged as $FINAL_TAG)"
 
 # Verify what the cluster will see.
+# The JNI library must load, not just exist: ldd fails (or lists "not found") when one of its libraries,
+# libgdal above all, cannot be resolved.
 docker run --rm --platform "linux/$ARCH" --entrypoint sh "$TAG" -c '
     set -e
     gdalinfo --version | grep -q "GDAL 3.11.4"
     test -e /usr/lib/libgdalalljni.so
-' || verify_fail "VERIFY FAILED: GDAL 3.11.4 / libgdalalljni.so missing in the image (not tagged as $FINAL_TAG)"
+    jni_libs=$(ldd /usr/lib/libgdalalljni.so 2>&1)
+    if printf "%s\n" "$jni_libs" | grep -q "not found"; then
+        echo "libgdalalljni.so has unresolved libraries:"
+        printf "%s\n" "$jni_libs" | grep "not found"
+        exit 1
+    fi
+' || verify_fail "VERIFY FAILED: GDAL 3.11.4 missing, or libgdalalljni.so missing or unable to load its libraries (not tagged as $FINAL_TAG)"
 if [ "$TARGET" = "release" ]; then
-    JAR_SHA=$(shasum -a 256 "$JAR" | cut -d" " -f1)
     docker run --rm --platform "linux/$ARCH" --entrypoint sh "$TAG" -c "
         set -e
         n=\$(find / -xdev -name 'geobrix-*-jar-with-dependencies.jar' 2>/dev/null | wc -l)

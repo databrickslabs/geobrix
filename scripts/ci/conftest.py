@@ -66,7 +66,7 @@ class DcsCommand:
         whl.write_bytes(b"not a real wheel")
         return whl
 
-    def run(self, *args: str, env=None) -> subprocess.CompletedProcess:
+    def _env(self, env=None) -> dict:
         self.state_file.write_text(json.dumps(self.state))
         full = {k: v for k, v in os.environ.items() if k != "PIP_INDEX_URL"}
         full.update(
@@ -76,16 +76,60 @@ class DcsCommand:
             FAKE_DOCKER_STATE=str(self.state_file),
         )
         full.update(env or {})
+        return full
+
+    def run(self, *args: str, env=None) -> subprocess.CompletedProcess:
         res = subprocess.run(
             ["bash", str(self.script), *args],
             capture_output=True,
             text=True,
-            env=full,
+            env=self._env(env),
             timeout=120,
         )
         res.output = res.stdout + res.stderr
         assert not any("mjohns797" in a for c in self.calls for a in c), self.calls
         return res
+
+    def start(self, *args: str, env=None) -> subprocess.Popen:
+        """Start the command in its own process group, so a test can signal it and its
+        children together, as a terminal does for Ctrl-C."""
+        return subprocess.Popen(
+            ["bash", str(self.script), *args],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            env=self._env(env),
+            start_new_session=True,
+        )
+
+    def path_without(self, *names: str) -> str:
+        """A PATH of the fake docker plus the system tools the commands use, minus `names`
+        (for a test of a missing tool)."""
+        tools = self.bin.parent / "tools-without"
+        tools.mkdir(exist_ok=True)
+        for tool in (
+            "awk",
+            "basename",
+            "bash",
+            "cat",
+            "chmod",
+            "cp",
+            "cut",
+            "dirname",
+            "grep",
+            "mkdir",
+            "mktemp",
+            "printf",
+            "rm",
+            "sed",
+            "sort",
+            "tr",
+            "wc",
+        ):
+            found = shutil.which(tool)
+            if tool not in names and found and not (tools / tool).exists():
+                (tools / tool).symlink_to(found)
+        return f"{self.bin}{os.pathsep}{tools}"
 
     @property
     def calls(self) -> list:

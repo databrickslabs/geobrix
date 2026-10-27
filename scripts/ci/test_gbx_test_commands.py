@@ -6,6 +6,7 @@ into the container (pytest, Maven) is recorded instead of run.
 """
 
 import re
+import shlex
 import subprocess
 from pathlib import Path
 
@@ -221,6 +222,7 @@ def _fake_venv(sandbox, venv=None):
         "#!/bin/sh\n"
         f'printf "%s|%s|%s\\n" "$PYSPARK_PYTHON" "$PYSPARK_DRIVER_PYTHON" "$*" >> "{log}"\n'
         f'printf "%s\\n" "$TZ" >> "{log}.tz"\n'
+        f'printf "%s\\n" "$@" > "{log}.argv"\n'  # one word per line: the last call's arguments
         '[ "$1" = "-" ] && cat > /dev/null\n'
         "exit 0\n"
     )
@@ -250,6 +252,47 @@ def test_the_host_run_starts_spark_workers_on_the_venv_python(sandbox):
     assert Path(workers).resolve() == Path(driver).resolve() == python.resolve()
     assert "-m pytest python/geobrix/test/zarr/test_write.py" in argv
     assert sandbox.execs() == []  # the host run never reaches the container
+
+
+def _last_m(words):
+    """The word after the last `-m` (the first is `python -m pytest`)."""
+    return words[len(words) - words[::-1].index("-m")]
+
+
+def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
+    # `-m "not delta"` must work through the commands, as one pytest argument, without
+    # re-admitting the integration tests the default excludes.
+    python, log = _fake_venv(sandbox)
+    argv = Path(str(log) + ".argv")
+    path = "python/geobrix/test/zarr/test_keys.py"
+
+    sandbox.run("gbx-test-pyrx.sh", "--path", path, "--markers", "not delta")
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == "(not integration) and (not delta)"
+
+    sandbox.run("gbx-test-light.sh", "--path", path, "--markers", "slow or fast")
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == "(not integration) and (slow or fast)"
+
+    sandbox.run("gbx-test-pyrx.sh", "--path", path)  # no --markers: unchanged
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == "not integration"
+
+    # --docker: the marker is still one word in the container's command, and the caller's
+    # PYTEST_ADDOPTS (--durations, --junitxml) is passed into the container.
+    sandbox.run(
+        "gbx-test-pyrx.sh",
+        *("--docker", "--path", path, "--markers", "not delta"),
+        PYTEST_ADDOPTS="--durations=5",
+    )
+    command, env = [
+        (c, e)
+        for c, e in zip(sandbox.execs(), sandbox.exec_envs())
+        if "pytest" in c[-1]
+    ][-1]
+    words = shlex.split(command[-1])
+    assert _last_m(words) == "(not integration) and (not delta)"
+    assert env["PYTEST_ADDOPTS"] == "--durations=5"
 
 
 def test_the_host_run_pins_utc_as_the_container_and_ci_do(sandbox):

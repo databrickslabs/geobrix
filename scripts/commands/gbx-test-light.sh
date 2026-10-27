@@ -17,10 +17,14 @@ show_help() {
     echo ""
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable (default: every light dir, in the light CI phase order)"
+    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with 'not integration' (see gbx:test:pyrx)"
     echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (see gbx:test:pyrx)"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
+    echo ""
+    echo -e "${CYAN}Other pytest options:${NC}"
+    echo -e "  Set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (e.g. '--durations=20 --junitxml=test-logs/light.xml')"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:test:light --path python/geobrix/test/zarr/test_manifest.py${NC}"
@@ -32,7 +36,7 @@ ARGS=()
 HAS_PATH=0
 while [[ $# -gt 0 ]]; do
     case $1 in
-        --path|--log)
+        --path|--log|--markers)
             if [[ $# -lt 2 ]]; then
                 echo -e "${RED}Option $1 needs a value${NC}" >&2
                 exit 2

@@ -2,7 +2,7 @@
 
 Run light-tier Python tests (JAR-free: pyrx by default, but any light dir, `zarr` included) natively in the host venv `.venv-pyrx`. Build or refresh the venv with `gbx:venv:sync`. To run every light dir, use `gbx:test:light`.
 
-The host run is the default because the dev container is x86_64 under emulation on an Apple-silicon Mac: the same 131 tests of `test/zarr/test_manifest.py` take about 134 s on the host and 1,410 s in the container. Use `--docker` only for work that needs the container: GDAL natives, the JAR, and parity.
+The host run is the default: it needs no container, takes no lock and starts at once. Use `--docker` only for work that needs the container: GDAL natives, the JAR, and parity. (The dev container is a native arm64 image on Apple silicon, so it is not emulated there; it is still the slower, shared, locked route for light-tier tests.)
 
 The host run sets `TZ=UTC` (as the container and the CI runners are), and points `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` at the venv python. Without `TZ=UTC`, timestamp tests such as `test/zarr/test_read.py` fail in a US time zone.
 
@@ -13,10 +13,15 @@ The host run sets `TZ=UTC` (as the container and the CI runners are), and points
 ## Options
 
 - `--path <dir>` — test file or directory; repeatable. Any light dir listed in `_LIGHT_TEST_DIRS` (`python/geobrix/test/conftest.py`), e.g. `python/geobrix/test/zarr/test_manifest.py` (default: `python/geobrix/test/pyrx/`)
+- `--markers <expr>` — extra pytest marker expression, ANDed with the default `not integration`: `--markers 'not delta'` runs `-m '(not integration) and (not delta)'`. Integration tests stay excluded
 - `--docker` — run in the `geobrix-dev` container instead of the host venv (takes the container lock; see below)
 - `--log <path>` — write output to `test-logs/<path>` (relative) or an absolute path
 - `--no-wait` - Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it (see "One test run at a time")
 - `--help`, `-h` — show usage
+
+## Other pytest options
+
+Set `PYTEST_ADDOPTS` in the calling shell: pytest reads it as extra arguments, and both the host and the `--docker` run pass it on. For example `PYTEST_ADDOPTS='--durations=20 --junitxml=test-logs/pyrx.xml' gbx:test:pyrx --path python/geobrix/test/zarr/test_manifest.py`. (`gbx:test:light` takes the same.)
 
 ## One test run at a time
 
@@ -34,4 +39,5 @@ This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the co
 - `bash scripts/commands/gbx-test-pyrx.sh`
 - `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/pyrx/test_functions_spark.py --log pyrx.log`
 - `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/zarr/test_manifest.py` (host; Delta jars from `scripts/docker/m2` via the test conftest)
+- `bash scripts/commands/gbx-test-pyrx.sh --path python/geobrix/test/zarr/ --markers 'not delta'` (skip the Delta-dependent tests)
 - `bash scripts/commands/gbx-test-pyrx.sh --docker --path python/geobrix/test/pyrx/test_functions_spark.py` (container)

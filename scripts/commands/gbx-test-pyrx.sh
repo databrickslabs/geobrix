@@ -15,8 +15,10 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable. Any light dir (default: python/geobrix/test/pyrx/)"
     echo -e "                          e.g. python/geobrix/test/zarr/test_manifest.py. The light dirs are _LIGHT_TEST_DIRS in test/conftest.py"
+    echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with the default 'not integration',"
+    echo -e "                          e.g. --markers 'not delta' (runs as -m '(not integration) and (not delta)')"
     echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default). Only for GDAL"
-    echo -e "                          natives, the JAR and parity: x86 emulation makes it ~10x slower for light-tier tests"
+    echo -e "                          natives, the JAR and parity"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
@@ -26,9 +28,14 @@ show_help() {
     echo -e "  ${YELLOW}subdir/file.log${NC}        -> test-logs/subdir/file.log"
     echo -e "  ${YELLOW}/abs/path/file.log${NC}     -> /abs/path/file.log"
     echo ""
+    echo -e "${CYAN}Other pytest options:${NC}"
+    echo -e "  Set ${YELLOW}PYTEST_ADDOPTS${NC} in the calling shell (host and --docker runs both pass it on), e.g."
+    echo -e "  ${YELLOW}PYTEST_ADDOPTS='--durations=20 --junitxml=test-logs/pyrx.xml' gbx:test:pyrx --path ...${NC}"
+    echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:test:pyrx${NC}"
     echo -e "  ${YELLOW}gbx:test:pyrx --path python/geobrix/test/zarr/test_manifest.py${NC}"
+    echo -e "  ${YELLOW}gbx:test:pyrx --path python/geobrix/test/zarr/ --markers 'not delta'${NC}"
     echo -e "  ${YELLOW}gbx:test:pyrx --path python/geobrix/test/pyrx/test_functions_spark.py --log pyrx.log${NC}"
     echo ""
 }
@@ -38,6 +45,7 @@ DEFAULT_TEST_PATH="/root/geobrix/python/geobrix/test/pyrx/"
 TEST_PATHS=()
 LOG_PATH=""
 USE_DOCKER=0
+EXTRA_MARKERS=""
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -45,6 +53,11 @@ while [[ $# -gt 0 ]]; do
             [[ $# -ge 2 ]] || { echo -e "${RED}Option --path needs a value${NC}" >&2; exit 2; }
             # Accumulate: --path may be repeated to run several files/dirs.
             TEST_PATHS+=("/root/geobrix/$2")
+            shift 2
+            ;;
+        --markers)
+            [[ $# -ge 2 ]] || { echo -e "${RED}Option --markers needs a value${NC}" >&2; exit 2; }
+            EXTRA_MARKERS="$2"
             shift 2
             ;;
         --docker)
@@ -83,8 +96,13 @@ fi
 show_banner "GeoBrix: Light-tier Tests (pyrx, zarr, ...; no JAR)"
 setup_log_file "$LOG_PATH"
 
+# The marker expression: integration tests are always excluded; --markers narrows further.
+MARKERS="not integration"
+[[ -n "$EXTRA_MARKERS" ]] && MARKERS="(not integration) and ($EXTRA_MARKERS)"
+MARKERS_Q="$(printf '%q' "$MARKERS")"   # one shell word inside the `bash -c` command string below
+
 echo -e "${CYAN}Test path: ${YELLOW}${TEST_PATHS[*]}${NC}"
-echo -e "${CYAN}Markers: ${YELLOW}not integration${NC}"
+echo -e "${CYAN}Markers: ${YELLOW}${MARKERS}${NC}"
 echo ""
 show_separator
 echo -e "${CYAN}Running light-tier tests...${NC}"
@@ -95,8 +113,10 @@ if [[ $USE_DOCKER -eq 1 ]]; then
     check_docker
     gbx_acquire_test_lock   # only the container run shares Maven/Spark state; the host venv run does not
     PYTEST_CMD="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
-        python3 -m pytest ${TEST_PATHS[*]} -v --tb=short --color=yes -m 'not integration'"
-    docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
+        python3 -m pytest ${TEST_PATHS[*]} -v --tb=short --color=yes -m $MARKERS_Q"
+    ENV_ARGS=()
+    [[ -n "${PYTEST_ADDOPTS:-}" ]] && ENV_ARGS+=(-e "PYTEST_ADDOPTS=$PYTEST_ADDOPTS")
+    docker exec "${ENV_ARGS[@]}" geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 else
     # Host venv path (default): isolated from system site-packages. run_in_pyrx_venv also
@@ -106,7 +126,7 @@ else
         HOST_PATHS+=("${p#/root/geobrix/}")   # strip the in-container prefix if present
     done
     run_in_pyrx_venv "cd '$PROJECT_ROOT' && python -m pytest ${HOST_PATHS[*]} \
-        -v --tb=short --color=yes -m 'not integration'"
+        -v --tb=short --color=yes -m $MARKERS_Q"
     EXIT_CODE=$?
 fi
 

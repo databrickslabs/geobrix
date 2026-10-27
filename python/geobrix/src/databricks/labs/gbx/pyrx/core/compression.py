@@ -270,7 +270,13 @@ def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     return prof
 
 
-def match_alpha(dst, alpha_like) -> None:
+#: The colour interpretations ``match_alpha(all_labels=True)`` copies from the source: the
+#: plain ones. Palette, CMYK, HLS and YCbCr labels go with a colour table or a photometric
+#: the new raster may not have, so they are left to GDAL.
+_PLAIN_LABELS = ("gray", "undefined", "red", "green", "blue")
+
+
+def match_alpha(dst, alpha_like, all_labels: bool = False) -> None:
     """Label the bands of the new dataset *dst* alpha exactly where *alpha_like* does.
 
     *alpha_like* is the ``colorinterp`` of the dataset the pixels come from. GDAL gives a
@@ -280,8 +286,13 @@ def match_alpha(dst, alpha_like) -> None:
     shadows it (``NodataShadowWarning``). The converse also happens: the alpha band of a
     16-bit RGBA or a gray+alpha raster is lost. The alpha band is the one the alpha rule
     names (``_nodata.alpha_index``: the LAST band, when labelled alpha); a band labelled
-    alpha anywhere else is data and is not carried. Nothing else is relabelled, and a band
-    count that differs from *alpha_like* (the caller changed it) is left as GDAL labelled it.
+    alpha anywhere else is data and is not carried. A band count that differs from
+    *alpha_like* (the caller changed it) is left as GDAL labelled it.
+
+    Nothing else is relabelled, unless ``all_labels``: then every other band takes the
+    source's label as well (gray, undefined, red, green, blue), as the chips of a
+    tessellation do, so RGB and the data bands of a gray+x+alpha or a 16-bit RGBA raster are
+    not left to GDAL's defaults.
     """
     from rasterio.enums import ColorInterp
 
@@ -291,14 +302,18 @@ def match_alpha(dst, alpha_like) -> None:
     if alpha_like is None or len(alpha_like) != len(labels):
         return
     alpha_at = alpha_index(alpha_like)
-    want = [
-        (
-            ColorInterp.alpha
-            if i == alpha_at
-            else (ColorInterp.undefined if got == ColorInterp.alpha else got)
-        )
-        for i, got in enumerate(labels)
-    ]
+
+    def label_of(i, got):
+        if i == alpha_at:
+            return ColorInterp.alpha
+        if all_labels and alpha_like[i].name in _PLAIN_LABELS:
+            return alpha_like[i]
+        # alpha anywhere but on the alpha band is data; any other label is GDAL's own
+        if all_labels and alpha_like[i] == ColorInterp.alpha:
+            return ColorInterp.undefined
+        return ColorInterp.undefined if got == ColorInterp.alpha else got
+
+    want = [label_of(i, got) for i, got in enumerate(labels)]
     if want != labels:
         dst.colorinterp = want
 
@@ -321,7 +336,9 @@ def internal_mask_env(mask):
     )
 
 
-def write_gtiff(profile: dict, data, alpha_like=None, mask=None) -> bytes:
+def write_gtiff(
+    profile: dict, data, alpha_like=None, mask=None, all_labels: bool = False
+) -> bytes:
     """GTiff bytes of *data* with the canonical creation options for its dtype.
 
     The single light-tier GTiff writer: every derived raster goes through here so its
@@ -329,7 +346,8 @@ def write_gtiff(profile: dict, data, alpha_like=None, mask=None) -> bytes:
     JPEG can carry, is dropped with it). *profile* is not modified.
     *data* is a ``(bands, rows, cols)`` array matching ``profile['count']``.
     *alpha_like*, the ``colorinterp`` of the dataset *data* derives from, makes the output
-    label a band alpha exactly where that dataset does (see :func:`match_alpha`).
+    label a band alpha exactly where that dataset does (see :func:`match_alpha`);
+    ``all_labels`` also copies the source's other labels band by band.
     *mask*, a ``(rows, cols)`` uint8 array (255 valid, 0 invalid, as ``read_masks`` returns
     it), is written as the raster's own per-dataset mask band, inside the file: the
     source's mask carried over (see ``_nodata.has_own_mask``).
@@ -347,7 +365,7 @@ def write_gtiff(profile: dict, data, alpha_like=None, mask=None) -> bytes:
     with internal_mask_env(mask):
         with MemoryFile() as mf:
             with mf.open(**prof) as dst:
-                match_alpha(dst, alpha_like)
+                match_alpha(dst, alpha_like, all_labels=all_labels)
                 dst.write(data)
                 if mask is not None:
                     dst.write_mask(mask)

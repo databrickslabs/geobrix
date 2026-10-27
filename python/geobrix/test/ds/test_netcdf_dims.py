@@ -915,3 +915,45 @@ def test_reader_group_option_reaches_the_raw_fallback(tmp_path):
     assert [_tile_mean(r) for r in rows] == pytest.approx(
         [float(in_group[t].mean()) for t in (0, 1)]
     )
+
+
+def _write_uint8_steps(path: str, steps: int = 4) -> None:
+    """A (time, lat, lon) ``uint8`` variable 'u8': step k holds 7 + k, except the last step,
+    which is 0 in the left half of the pixels."""
+    with Dataset(path, "w") as ds:
+        ds.createDimension("time", steps)
+        ds.createDimension("lat", 3)
+        ds.createDimension("lon", 4)
+        lat = ds.createVariable("lat", "f8", ("lat",))
+        lon = ds.createVariable("lon", "f8", ("lon",))
+        lat.standard_name = "latitude"
+        lon.standard_name = "longitude"
+        lat[:] = [50.0, 49.5, 49.0]
+        lon[:] = [10.0, 10.5, 11.0, 11.5]
+        t_var = ds.createVariable("time", "f8", ("time",))
+        t_var[:] = [float(i) for i in range(steps)]
+        v = ds.createVariable("u8", "u1", ("time", "lat", "lon"), fill_value=False)
+        for k in range(steps):
+            v[k, :, :] = 7 + k
+        v[steps - 1, :, :2] = 0
+
+
+@pytest.mark.parametrize("steps", [3, 4, 5])
+def test_banddim_stack_of_uint8_steps_has_no_alpha_band(tmp_path, steps):
+    """The steps of a variable are plain bands: GDAL labels band 4 of a 4-band ``uint8`` GTiff
+    alpha when it creates one, which made the zeros of the 4th step transparent."""
+    from ..pyrx import _alpha_layouts as al
+
+    p = str(tmp_path / "u8.nc")
+    _write_uint8_steps(p, steps)
+    rows = _read_reader(p, {"bandDim": "time"})
+    assert len(rows) == 1
+    _, (_, raster_bytes, _) = rows[0]
+    raster_bytes = bytes(raster_bytes)
+    with MemoryFile(raster_bytes) as mf, mf.open() as rds:
+        assert rds.count == steps
+        valid = rds.read_masks(1) != 0
+        zeros = (rds.read(steps) == 0).sum()
+    assert zeros, "fixture: the last step must hold zeros"
+    assert al.labelled_alpha(raster_bytes) == []
+    assert valid.all(), "no pixel of a step stack is transparent"

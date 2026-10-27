@@ -158,6 +158,7 @@ def _encode_multiband_tile(
     Returns ``(source, (cellid, raster_bytes, meta))``.
     """
     import numpy as np
+    from rasterio.enums import ColorInterp
     from rasterio.io import MemoryFile
 
     # Decode the first slice to learn shape/dtype; write it to band 1.
@@ -207,6 +208,10 @@ def _encode_multiband_tile(
 
     with MemoryFile() as mf:
         with mf.open(**profile) as out:
+            # The steps of a variable are plain bands, none of them alpha. GDAL labels band 4
+            # of a 4-band uint8 GTiff alpha (and bands 1-3 of a 3-band one RGB) when it
+            # creates one, and ignores a label set after the pixels are written.
+            out.colorinterp = [ColorInterp.undefined] * n_bands
             out.write(first_arr.astype(dtype), 1)
             del first_arr
             for k in range(1, n_bands):

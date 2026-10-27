@@ -49,21 +49,26 @@ def _fill_plan(ds):
     return nodata, own_mask
 
 
-def warped_own_mask(ds, *, dst_crs, transform, width: int, height: int) -> np.ndarray:
+def warped_own_mask(
+    ds, *, dst_crs, transform, width: int, height: int, window=None
+) -> np.ndarray:
     """The own mask band of ``ds`` warped like its pixels onto the given grid: ``(rows,
     cols)`` uint8, 255 valid and 0 invalid.
 
     The mask is warped as data (nearest), so it lands where the pixels do. A pixel no
     source pixel maps to stays valid, as the plain warp leaves it a valid zero; GDAL moves
     a valid 255 to 254 where it collides with the NoData 255 it fills with, so anything
-    but 0 is valid. Memory: the mask is held twice as uint8 per pixel (the source's, the
-    warped one), on top of the warped pixels.
+    but 0 is valid. ``window`` limits the source to a window of ``ds`` (the pixels a
+    caller warps from). Memory: the mask is held twice as uint8 per pixel (the source's,
+    the warped one), on top of the warped pixels.
     """
     warped = np.full((height, width), 255, dtype="uint8")
     reproject(
-        source=ds.read_masks(1),
+        source=ds.read_masks(1, window=window),
         destination=warped,
-        src_transform=ds.transform,
+        src_transform=(
+            ds.window_transform(window) if window is not None else ds.transform
+        ),
         src_crs=ds.crs,
         dst_transform=transform,
         dst_crs=dst_crs,
@@ -85,13 +90,22 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
     as the lazy read of a virtual tile with a target CRS does.
     """
     plan = _fill_plan(ds) if mark_fill_nodata else None
+    own_mask = has_own_mask(ds)
     nodata, read_masked = plan if plan else (None, False)
+    band_nodata = [nodata] * ds.count  # each band's source NoData
     if plan:
         profile.update(nodata=nodata)
-    own_mask = has_own_mask(ds)
-    if own_mask and not plan:
-        read_masked = ds.nodata is not None
-        nodata = ds.nodata
+    elif own_mask and not has_alpha(ds):
+        # As the fill plan: a source whose bands declare different values (a VRT or in-memory
+        # source) is declared with the first one, and a band that declares none takes it. Each
+        # band keeps its own value as its source NoData. (A source with an alpha band is left
+        # to it, as the fill plan leaves it: its mask is warped and written below, and a
+        # NoData set on the masked pixels would turn the masked alpha values opaque.)
+        nodata = next((v for v in ds.nodatavals if v is not None), None)
+        band_nodata = [v if v is not None else nodata for v in ds.nodatavals]
+        read_masked = nodata is not None
+        if read_masked:
+            profile.update(nodata=nodata)
     mask = (
         warped_own_mask(
             ds,
@@ -111,7 +125,8 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
                 source = rasterio.band(ds, i)
                 if read_masked:
                     band = ds.read(i, masked=True)
-                    band.data[np.ma.getmaskarray(band)] = nodata  # in place, dtype kept
+                    # in place, dtype kept
+                    band.data[np.ma.getmaskarray(band)] = band_nodata[i - 1]
                     source = band.data
                 reproject(
                     source=source,
@@ -121,7 +136,7 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
                     dst_transform=transform,
                     dst_crs=dst_crs,
                     resampling=resamp,
-                    src_nodata=nodata,
+                    src_nodata=band_nodata[i - 1],
                     dst_nodata=nodata,
                 )
             if mask is not None:

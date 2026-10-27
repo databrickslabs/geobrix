@@ -50,7 +50,11 @@ from databricks.labs.gbx.pyrx.core import tessellate as tessellate_core
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core import tin as tin_core
 from databricks.labs.gbx.pyrx.core import warp, xyz
-from databricks.labs.gbx.pyrx.core.compression import match_alpha, write_gtiff
+from databricks.labs.gbx.pyrx.core.compression import (
+    internal_mask_env,
+    match_alpha,
+    write_gtiff,
+)
 from databricks.labs.gbx.pyrx.core.escape import rst_apply, tile_to_numpy  # noqa: F401
 from databricks.labs.gbx.pyrx.core.virtual_tile import (
     BAND_METADATA_KEY,
@@ -233,10 +237,14 @@ def _dataset_to_gtiff_bytes(ds) -> bytes:
     data = ds.read()
     profile = ds.profile.copy()
     profile.update(driver="GTiff")
-    with MemoryFile() as mf:
+    # The source's own mask band (not an alpha band) is part of the raster: carry it.
+    mask = ds.read_masks(1) if _nodata.has_own_mask(ds) else None
+    with internal_mask_env(mask), MemoryFile() as mf:
         with mf.open(**profile) as dst:
             match_alpha(dst, ds.colorinterp)
             dst.write(data)
+            if mask is not None:
+                dst.write_mask(mask)
         return mf.read()
 
 

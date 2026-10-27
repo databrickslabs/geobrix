@@ -13,6 +13,7 @@ from shapely import wkb as _wkb
 from shapely.geometry import box
 
 from databricks.labs.gbx.core.crs import authority_srid_of
+from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask, valid_mask
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 from databricks.labs.gbx.pyrx.core.crs import crs_to_canonical
 
@@ -105,15 +106,17 @@ def scaley(ds) -> float:
 
 
 def isempty(ds) -> bool:
-    """True if the raster has no size, or every band has zero valid pixels.
+    """True if the raster has no size, or no pixel of it is valid.
 
-    Mirrors heavyweight RasterAccessors.isEmpty (null / no size / all bands
-    fully NoData). A dimensionally-valid raster whose every band is NoData is
-    still empty (issue #59).
+    Mirrors heavyweight RasterAccessors.isEmpty (null / no size / no valid pixel).
+    A pixel is valid by the rule of both tiers (``_nodata.valid_mask``): a data band is
+    valid there and, for a raster with an alpha band, its alpha is above 0. A
+    dimensionally-valid raster whose every band is NoData, or that is entirely
+    transparent, is still empty (issue #59).
     """
     if int(ds.width) == 0 or int(ds.height) == 0 or int(ds.count) == 0:
         return True
-    return all(_valid_values(ds, bi).size == 0 for bi in range(1, ds.count + 1))
+    return not valid_mask(ds).any()
 
 
 def type(ds) -> List[str]:
@@ -130,13 +133,13 @@ def getnodata(ds) -> Optional[List[float]]:
 
 
 # --- per-band statistics over VALID pixels ----------------------------------
-# Heavyweight uses GDAL GetStatistics, which excludes NoData. We mirror that by
-# masking with rasterio read_masks (0 = invalid; also covers nodata).
+# A pixel is valid for a band when the band's own mask says so (NoData, the raster's own
+# mask band) and, for a raster with an alpha band, its alpha is above 0
+# (``_nodata.band_valid_mask``), whatever the band count.
 def _valid_values(ds, band_index: int) -> np.ndarray:
-    """Return a 1-D array of valid (non-masked, non-NoData) pixel values for a band."""
+    """Return a 1-D array of valid (non-masked, non-NoData, opaque) pixel values for a band."""
     arr = ds.read(band_index)
-    mask = ds.read_masks(band_index)  # uint8: 0 = invalid, 255 = valid
-    return arr[mask != 0].ravel()
+    return arr[band_valid_mask(ds, band_index)].ravel()
 
 
 def avg(ds) -> List[Optional[float]]:

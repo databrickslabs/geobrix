@@ -21,6 +21,7 @@ from typing import List, Tuple
 import numpy as np
 import rasterio
 import shapely.wkb
+from rasterio.enums import ColorInterp
 from rasterio.features import rasterize as _rasterize
 from rasterio.io import MemoryFile
 from rasterio.merge import merge as _rio_merge
@@ -28,8 +29,10 @@ from rasterio.transform import from_bounds
 from rasterio.warp import Resampling, reproject
 
 from databricks.labs.gbx.ds.cog_writer import _build_mosaic_vrt
+from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
 from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
+from databricks.labs.gbx.pyrx.core import warp as _warp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
@@ -102,21 +105,33 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     profile.update(
         _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
-    mf = MemoryFile()
-    dst = mf.open(**profile)
-    _comp.match_alpha(dst, src.colorinterp)
-    for b in range(1, src.count + 1):
-        reproject(
-            source=rasterio.band(src, b),
-            destination=rasterio.band(dst, b),
-            src_transform=src.transform,
-            src_crs=src.crs,
-            dst_transform=transform,
-            dst_crs=dst_crs,
-            src_nodata=src.nodata,
-            dst_nodata=src.nodata,
-            resampling=Resampling.nearest,
+    # A source's own mask band (not an alpha band) is warped to the new grid and written
+    # with the pixels; the warp itself leaves the masked pixels as valid zeros.
+    mask = (
+        _warp.warped_own_mask(
+            src, dst_crs=dst_crs, transform=transform, width=width, height=height
         )
+        if _nodata.has_own_mask(src)
+        else None
+    )
+    mf = MemoryFile()
+    with _comp.internal_mask_env(mask):
+        dst = mf.open(**profile)
+        _comp.match_alpha(dst, src.colorinterp)
+        for b in range(1, src.count + 1):
+            reproject(
+                source=rasterio.band(src, b),
+                destination=rasterio.band(dst, b),
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=transform,
+                dst_crs=dst_crs,
+                src_nodata=src.nodata,
+                dst_nodata=src.nodata,
+                resampling=Resampling.nearest,
+            )
+        if mask is not None:
+            dst.write_mask(mask)
     return mf, dst
 
 
@@ -196,9 +211,19 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                         try:
                             profile = rep_ds.profile.copy()
                             profile.update(driver="GTiff")
-                            with rasterio.open(tile_path, "w", **profile) as dst:
+                            mask = (
+                                rep_ds.read_masks(1)
+                                if _nodata.has_own_mask(rep_ds)
+                                else None
+                            )
+                            with (
+                                _comp.internal_mask_env(mask),
+                                rasterio.open(tile_path, "w", **profile) as dst,
+                            ):
                                 _comp.match_alpha(dst, rep_ds.colorinterp)
                                 dst.write(rep_ds.read())
+                                if mask is not None:
+                                    dst.write_mask(mask)
                         finally:
                             rep_ds.close()
                             rep_mf.close()
@@ -305,7 +330,18 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
                 extra.append((mf, rds))
                 merge_ds.append(rds)
         ref = merge_ds[0]
-        mosaic, out_transform = _rio_merge(merge_ds, method="last")
+        # A tile with its own mask band (not an alpha band): its masked pixels do not
+        # overwrite a valid pixel of another tile (the merge reads each tile masked), and
+        # the mosaic carries the union of the masks, a pixel no valid tile covers being
+        # invalid. Tiles without one are merged as before, with no mask band.
+        if any(_nodata.has_own_mask(d) for d in merge_ds):
+            merged, out_transform = _rio_merge(merge_ds, method="last", masked=True)
+            mosaic = merged.data
+            own_mask = np.where(merged.mask.all(axis=0), 0, 255).astype("uint8")
+            del merged
+        else:
+            mosaic, out_transform = _rio_merge(merge_ds, method="last")
+            own_mask = None
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
         profile = _comp.drop_ycbcr(ref.profile)
@@ -319,10 +355,12 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         profile.update(
             _comp.creation_opts(out_dtype, decoded_bytes=decoded_bytes, compress="auto")
         )
-        with MemoryFile() as out_mf:
+        with _comp.internal_mask_env(own_mask), MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
                 _comp.match_alpha(dst, ref.colorinterp)
                 dst.write(mosaic)
+                if own_mask is not None:
+                    dst.write_mask(own_mask)
             return out_mf.read()
     finally:
         for mf, rds in extra:
@@ -422,7 +460,9 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
     *indexed* is a list of ``(band_index, raster_bytes)``. The list is sorted by
     ``band_index`` ASCENDING (the critical ordering guarantee of
     RST_FromBandsAgg), then each tile's band(s) are concatenated in that order.
-    Georef/CRS/dtype/nodata are taken from the first (lowest-index) tile.
+    Georef/CRS/dtype/nodata are taken from the first (lowest-index) tile. The stack has an
+    alpha band only when its last band is the alpha band of the last tile; where every
+    tile has its own mask band the stack has the union of them.
     """
     if not indexed:
         return None
@@ -440,6 +480,8 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
         # cell), so a bare np.stack would fail. This mirrors the heavyweight RST_FromBands,
         # which builds a VRT and gdal_translate-resamples (bilinear) the bands to one grid.
         bands = []
+        labels = []  # the colour interpretation of every band of the stack, in order
+        masks = []  # per tile: its own mask on the reference grid (bool), or None
         for ds in datasets:
             aligned = (
                 ds.width == ref.width
@@ -447,6 +489,22 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
                 and ds.transform == ref.transform
                 and ds.crs == ref.crs
             )
+            labels.extend(ds.colorinterp)
+            if _nodata.has_own_mask(ds):
+                own = (
+                    ds.read_masks(1)
+                    if aligned
+                    else _warp.warped_own_mask(
+                        ds,
+                        dst_crs=ref.crs,
+                        transform=ref.transform,
+                        width=ref.width,
+                        height=ref.height,
+                    )
+                )
+                masks.append(own != 0)
+            else:
+                masks.append(None)
             for i in range(1, ds.count + 1):
                 if aligned:
                     bands.append(ds.read(i))
@@ -465,16 +523,18 @@ def frombands_tiles(indexed: List[Tuple[int, bytes]]) -> bytes:
                     )
                     bands.append(dest)
         data = np.stack(bands)
-        out_dtype = str(data.dtype)
         profile = _comp.drop_ycbcr(ref.profile)
         profile.update(driver="GTiff", count=data.shape[0])
-        profile.update(
-            _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
-        )
-        with MemoryFile() as out_mf:
-            with out_mf.open(**profile) as dst:
-                dst.write(data)
-            return out_mf.read()
+        # A pixel of the stack is valid when a band of it is (a data band valid, the rule of
+        # both tiers), so the stack keeps an own mask only where EVERY tile has one: the union
+        # of their masks. A tile without one is valid everywhere, and so is the stack.
+        mask = None
+        if all(m is not None for m in masks):
+            mask = np.where(np.logical_or.reduce(masks), 255, 0).astype("uint8")
+        # The alpha band of the stack is the last band, when it is the alpha band of the
+        # last tile (``write_gtiff`` -> ``match_alpha``); GDAL would otherwise label band 4
+        # of every 4-band uint8 stack alpha.
+        return _comp.write_gtiff(profile, data, alpha_like=labels, mask=mask)
     finally:
         _close_all(memfiles, datasets)
 
@@ -568,7 +628,13 @@ def derivedband_tiles(rasters: List[bytes], python_func: str, func_name: str) ->
         ref = datasets[0]
         bands = [ds.read(1) for ds in datasets]
         data = np.stack(bands)
-        stacked_bytes = _comp.write_gtiff({**ref.profile, "count": data.shape[0]}, data)
+        # The tiles are stacked as plain bands, none of them alpha (GDAL would label band 4
+        # of a 4-band uint8 stack alpha, and the pixel function would then see an alpha band).
+        stacked_bytes = _comp.write_gtiff(
+            {**ref.profile, "count": data.shape[0]},
+            data,
+            alpha_like=[ColorInterp.undefined] * data.shape[0],
+        )
     finally:
         _close_all(memfiles, datasets)
 

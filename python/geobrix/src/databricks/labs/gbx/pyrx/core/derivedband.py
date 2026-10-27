@@ -7,8 +7,8 @@ trusted developer code (the same trust model as any user-authored Spark UDF). Do
 NOT pass pyfunc sourced from untrusted input."""
 
 import numpy as np
-from rasterio.io import MemoryFile
 
+from databricks.labs.gbx.pyrx.core import _nodata
 from databricks.labs.gbx.pyrx.core import compression as _comp
 
 
@@ -29,7 +29,8 @@ def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
         func_name: Name of the callable within ``pyfunc``.
 
     Returns:
-        GTiff bytes of the resulting single-band Float64 raster.
+        GTiff bytes of the resulting single-band Float64 raster; its own mask band marks the
+        pixels the input marks transparent (alpha band) or masked (own mask band).
     """
     namespace = {"np": np, "numpy": np}
     exec(pyfunc, namespace)  # noqa: S102 — trusted developer code by design
@@ -40,11 +41,10 @@ def derivedband(ds, pyfunc: str, func_name: str) -> bytes:
     func(in_ar, out_ar, 0, 0, ds.width, ds.height, ds.width, ds.height, 0, gt)
     profile = _comp.drop_ycbcr(ds.profile)
     profile.update(driver="GTiff", count=1, dtype="float64")
-    decoded_bytes = out_ar.nbytes
-    profile.update(
-        _comp.creation_opts("float64", decoded_bytes=decoded_bytes, compress="auto")
-    )
-    with MemoryFile() as mf:
-        with mf.open(**profile) as dst:
-            dst.write(out_ar.astype("float64"), 1)
-        return mf.read()
+    # The output has one band and no alpha band of its own: where the input is transparent
+    # or masked (the rule of both tiers, ``_nodata.valid_mask``) the output is invalid,
+    # carried in its own mask band. An input with neither is written as before.
+    mask = None
+    if _nodata.has_alpha(ds) or _nodata.has_own_mask(ds):
+        mask = np.where(_nodata.valid_mask(ds), 255, 0).astype("uint8")
+    return _comp.write_gtiff(profile, out_ar[np.newaxis, ...], mask=mask)

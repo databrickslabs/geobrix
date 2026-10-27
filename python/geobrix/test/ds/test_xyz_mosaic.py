@@ -159,3 +159,28 @@ def test_to_render_rgb_passthrough_for_three_band():
         assert to_render_rgb(rgb) == rgb
     finally:
         os.unlink(rgb)
+
+
+def test_to_render_rgb_keeps_the_sources_own_mask_when_it_strips_the_alpha_band():
+    """The alpha band is dropped on purpose (its zeros mask valid imagery), but a source's own
+    (per-dataset) mask band is real: the RGB sibling carries it, so masked rows stay invalid
+    while the rows the alpha band called transparent are rendered."""
+    from ..pyrx import _alpha_layouts as al
+
+    masked, transparent = (3, 4), (8,)
+    raw = al.row_coded(
+        "rgba", height=12, masked_rows=masked, transparent_rows=transparent
+    )
+    src = _tmp(raw)
+    out = None
+    try:
+        out = to_render_rgb(src)
+        assert out != src
+        with rasterio.open(out) as ds:
+            assert ds.count == 3
+            valid = ds.read_masks(1)[:, 0] != 0
+        assert valid.tolist() == [r not in masked for r in range(12)]
+    finally:
+        os.unlink(src)
+        if out and out != src and os.path.exists(out):
+            os.unlink(out)

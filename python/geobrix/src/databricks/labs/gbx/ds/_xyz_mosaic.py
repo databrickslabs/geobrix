@@ -84,12 +84,16 @@ def to_render_rgb(path: str) -> str:
     GeoTIFF (dropping the alpha) and return its path. Non-alpha sources (1/3-band, or a
     4th band that isn't tagged alpha) are returned unchanged.
 
+    The alpha band is the only thing dropped on purpose: a source's own (per-dataset) mask
+    band is a real mask, so the sibling carries it and its masked pixels stay invalid.
+
     Operates on a LOCAL path (rasterio does random-access reads) — callers must stage
     Volume bytes to local disk SEQUENTIALLY first (FUSE-safe), then call this.
     """
     import rasterio
     from rasterio.enums import ColorInterp
 
+    from databricks.labs.gbx.pyrx.core import _nodata
     from databricks.labs.gbx.pyrx.core import compression as _comp
 
     with rasterio.open(path) as src:
@@ -97,6 +101,7 @@ def to_render_rgb(path: str) -> str:
             return path
         out_dtype = src.dtypes[0]
         data = src.read([1, 2, 3])
+        mask = src.read_masks(1) if _nodata.has_own_mask(src) else None
         profile = src.profile.copy()
         profile.update(count=3)
         profile.pop("nodata", None)
@@ -104,7 +109,9 @@ def to_render_rgb(path: str) -> str:
             _comp.creation_opts(out_dtype, decoded_bytes=data.nbytes, compress="auto")
         )
     out = path + ".rgb.tif"
-    with rasterio.open(out, "w", **profile) as dst:
+    with _comp.internal_mask_env(mask), rasterio.open(out, "w", **profile) as dst:
         dst.write(data)
         dst.colorinterp = [ColorInterp.red, ColorInterp.green, ColorInterp.blue]
+        if mask is not None:
+            dst.write_mask(mask)
     return out

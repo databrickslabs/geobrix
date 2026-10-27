@@ -375,7 +375,10 @@ def _empty_chip_builder(work_ds, grid: str, conf=None):
         row = min(max(math.floor(row_f), 0), last_row)
         window_tf = work_ds.window_transform(Window(col, row, 1, 1))
         return write_gtiff(
-            dict(profile, transform=window_tf), chip, alpha_like=work_ds.colorinterp
+            dict(profile, transform=window_tf),
+            chip,
+            alpha_like=work_ds.colorinterp,
+            all_labels=True,
         )
 
     return build
@@ -594,7 +597,7 @@ def _centroid_chips_inner(work_ds, resolution, grid: str, conf=None):
         profile.update(width=w, height=h, transform=work_ds.window_transform(win))
         yield (
             _encode_cellid(cell, grid, conf=conf),
-            write_gtiff(profile, chip, alpha_like=work_ds.colorinterp),
+            write_gtiff(profile, chip, alpha_like=work_ds.colorinterp, all_labels=True),
         )
 
 

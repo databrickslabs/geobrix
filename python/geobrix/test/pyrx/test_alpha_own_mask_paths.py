@@ -1,0 +1,558 @@
+"""A raster with an alpha band AND its own (per-dataset) mask band keeps both through the
+light writers and warps, and a raster that is not alpha does not become one.
+
+GDAL reports the own mask only when a raster has both (it outranks the mask derived from the
+alpha band), so ``_nodata.has_own_mask`` used to exclude every alpha raster and the writers
+dropped the mask: rows hidden by the mask came out valid. The rule is the one of
+``_nodata.valid_mask``: a pixel is valid when a data band is valid, its alpha is above 0 and
+the raster's own mask is valid.
+"""
+
+import h3
+import numpy as np
+import pytest
+import rasterio
+from rasterio.enums import ColorInterp as CI
+from rasterio.io import MemoryFile
+from rasterio.transform import from_origin
+
+from databricks.labs.gbx.pyrx.core import _nodata as nd
+from databricks.labs.gbx.pyrx.core import accessors, agg, derivedband, gridagg
+from databricks.labs.gbx.pyrx.core import open_tile as ot
+from databricks.labs.gbx.pyrx.core import tessellate as T
+from databricks.labs.gbx.pyrx.core import warp
+from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+from databricks.labs.gbx.pyrx.core.gridagg import _stamp_crs_bytes
+from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
+from databricks.labs.gbx.pyrx.functions import _dataset_to_gtiff_bytes
+
+from . import _alpha_layouts as al
+from .test_tessellate_centroid_window import _ALPHA_CASES, _FILL_N, _chips_of
+
+H = 12
+MASKED = (3, 4)
+TRANSPARENT = (8,)
+# an alpha band GDAL derives a mask from (4 bands), and one it does not (3 bands)
+BOTH = ["rgba", "gray_x_alpha"]
+
+
+def _fixture(name):
+    return al.row_coded(
+        name, height=H, masked_rows=MASKED, transparent_rows=TRANSPARENT
+    )
+
+
+def _want_rows(name):
+    return al.valid_rows(name, H, MASKED, TRANSPARENT)
+
+
+def _valid_rows(raster_bytes):
+    """The source rows (coded in the pixels) that are valid in a same-grid output."""
+    with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        valid = nd.valid_mask(ds)
+        coded = ds.read(1).astype("int64") - 100
+    rows = sorted({int(r) for r in coded[valid]})
+    # a row is valid or not as a whole in these fixtures
+    for r in range(H):
+        assert valid[coded == r].all() or not valid[coded == r].any(), r
+    return rows
+
+
+@pytest.mark.parametrize("name", BOTH)
+def test_an_alpha_raster_with_its_own_mask_has_both(name):
+    with MemoryFile(_fixture(name)) as mf, mf.open() as ds:
+        assert nd.has_alpha(ds) and nd.has_own_mask(ds)
+        assert nd.valid_mask(ds)[:, 0].tolist() == [
+            r in _want_rows(name) for r in range(H)
+        ]
+
+
+@pytest.mark.parametrize("name", al.LAST_ALPHA)
+def test_a_mask_derived_from_the_alpha_band_is_not_an_own_mask(name):
+    with MemoryFile(al.row_coded(name, height=H, transparent_rows=TRANSPARENT)) as mf:
+        with mf.open() as ds:
+            assert nd.has_alpha(ds) and not nd.has_own_mask(ds)
+
+
+# writer name -> fn(open dataset) -> GTiff bytes on the source's grid
+SAME_GRID = {
+    "identity_srid": lambda ds: warp.reproject_to_srid(ds, 4326),
+    "identity_crs": lambda ds: warp.reproject_to_crs(ds, "EPSG:4326"),
+    "stamp_crs": lambda ds: _stamp_crs_bytes(ds, "EPSG:3857"),
+    "dataset_to_bytes": _dataset_to_gtiff_bytes,
+}
+
+
+@pytest.mark.parametrize("writer", list(SAME_GRID))
+@pytest.mark.parametrize("name", BOTH)
+def test_a_same_grid_writer_keeps_the_mask_beside_the_alpha_band(writer, name):
+    with MemoryFile(_fixture(name)) as mf, mf.open() as ds:
+        out = SAME_GRID[writer](ds)
+    assert _valid_rows(out) == _want_rows(name), f"{writer} of {name}"
+
+
+@pytest.mark.parametrize("nodata", [None, 7])
+@pytest.mark.parametrize("name", BOTH)
+def test_the_virtual_tile_read_keeps_the_mask_beside_the_alpha_band(
+    tmp_path, name, nodata
+):
+    path = str(tmp_path / "s.tif")
+    with open(path, "wb") as fh:
+        fh.write(_fixture(name))
+    tile = VirtualTile(cellid=0, path=path, window=(0, 0, 12, H))
+    out = ot.materialize_to_bytes(tile).raster
+    assert _valid_rows(out) == _want_rows(name)
+    assert _valid_rows(ot._windowed_materialize_bytes(tile)) == _want_rows(name)
+
+
+@pytest.mark.parametrize(
+    "target,warper",
+    [
+        ("EPSG:3857", lambda ds: warp.reproject_to_srid(ds, 3857)),
+        ("ESRI:54008", lambda ds: warp.reproject_to_crs(ds, "ESRI:54008")),
+    ],
+    ids=["srid-3857", "crs-54008"],
+)
+@pytest.mark.parametrize("name", BOTH)
+def test_the_eager_warp_keeps_the_mask_beside_the_alpha_band(name, target, warper):
+    """Output pixels that come from a masked or transparent source row are invalid, and the
+    others are valid (the warp fill is alpha 0)."""
+    with MemoryFile(_fixture(name)) as mf, mf.open() as ds:
+        out = warper(ds)
+    with MemoryFile(out) as mf, mf.open() as o:
+        coded = o.read(1).astype("int64") - 100
+        valid = nd.valid_mask(o)
+        assert nd.has_alpha(o)
+    covered = coded >= 0
+    from_hidden = covered & np.isin(
+        coded, [r for r in range(H) if r not in _want_rows(name)]
+    )
+    from_visible = covered & np.isin(coded, _want_rows(name))
+    assert from_hidden.any() and from_visible.any(), "fixture: the warp keeps both"
+    assert not valid[
+        from_hidden
+    ].any(), f"{int(valid[from_hidden].sum())} hidden pixels are valid"
+    assert valid[from_visible].all()
+
+
+def _per_band_nodata_masked(tmp_path, nodatavals):
+    """A VRT (the only source rasterio reads with a NoData per band) over a GTiff with an
+    internal mask band over row 5. Every band holds ``100 + row`` except rows 0-1, which hold
+    that band's own NoData value, so a band is only right about its OWN NoData."""
+    path = str(tmp_path / "m.tif")
+    data = np.empty((3, 8, 8), dtype="uint8")
+    data[:] = (100 + np.arange(8, dtype="uint8"))[None, :, None]
+    for b, v in enumerate(nodatavals):
+        data[b, :2] = 0 if v is None else int(v)
+    mask = np.full((8, 8), 255, dtype="uint8")
+    mask[5] = 0
+    prof = dict(
+        driver="GTiff",
+        width=8,
+        height=8,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=rasterio.transform.from_origin(0, 8, 1, 1),
+    )
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
+        with rasterio.open(path, "w", **prof) as dst:
+            dst.write(data)
+            dst.write_mask(mask)
+    bands = "".join(
+        f'<VRTRasterBand dataType="Byte" band="{b}">'
+        + (f"<NoDataValue>{v}</NoDataValue>" if v is not None else "")
+        + f'<SimpleSource><SourceFilename relativeToVRT="0">{path}</SourceFilename>'
+        f"<SourceBand>{b}</SourceBand></SimpleSource></VRTRasterBand>"
+        for b, v in enumerate(nodatavals, 1)
+    )
+    mask_band = (
+        '<MaskBand><VRTRasterBand dataType="Byte"><SimpleSource>'
+        f'<SourceFilename relativeToVRT="0">{path}</SourceFilename>'
+        "<SourceBand>mask,1</SourceBand></SimpleSource></VRTRasterBand></MaskBand>"
+    )
+    return (
+        '<VRTDataset rasterXSize="8" rasterYSize="8"><SRS>EPSG:4326</SRS>'
+        f"<GeoTransform>0,1,0,8,0,-1</GeoTransform>{bands}{mask_band}</VRTDataset>"
+    )
+
+
+def test_the_own_mask_warp_treats_each_band_by_its_own_nodata(tmp_path):
+    """A source with an own mask whose bands declare different NoData values: band 1's value
+    is what the output declares, and each band's OWN NoData pixels (rows 0-1) are still
+    NoData after the warp, not data. Every band ends up invalid in the same pixels."""
+    vrt = _per_band_nodata_masked(tmp_path, (10, 20, 30))
+    with rasterio.open(vrt) as ds:
+        assert ds.nodatavals == (10.0, 20.0, 30.0) and nd.has_own_mask(ds)
+        out = warp.reproject_to_srid(ds, 3857)
+    with MemoryFile(out) as mf, mf.open() as o:
+        invalid = [(o.read_masks(b) == 0) for b in (1, 2, 3)]
+        assert o.nodata == 10.0
+    assert invalid[0].any()
+    assert (invalid[1] == invalid[0]).all(), "band 2 kept its own NoData pixels as data"
+    assert (invalid[2] == invalid[0]).all(), "band 3 kept its own NoData pixels as data"
+
+
+def test_the_own_mask_warp_declares_the_first_nodata_when_band_one_declares_none(
+    tmp_path,
+):
+    """Band 1 declares no NoData, bands 2 and 3 do: as for the fill plan (``_fill_plan``) the
+    output declares the first declared value (20), and the masked pixels and the NoData
+    pixels of bands 2 and 3 are NoData, while band 1 keeps its rows 0-1 (value 0) as data.
+    """
+    vrt = _per_band_nodata_masked(tmp_path, (None, 20, 30))
+    with rasterio.open(vrt) as ds:
+        assert ds.nodata is None and nd.has_own_mask(ds)
+        out = warp.reproject_to_srid(ds, 3857)
+    with MemoryFile(out) as mf, mf.open() as o:
+        assert o.nodata == 20.0
+        invalid = [(o.read_masks(b) == 0) for b in (1, 2, 3)]
+    assert (invalid[1] == invalid[2]).all()
+    assert invalid[0].any() and (invalid[0] & ~invalid[1]).sum() == 0
+    assert (invalid[1] & ~invalid[0]).any(), "band 1 lost its rows 0-1"
+
+
+# --- raster-to-grid reducers and accessors -----------------------------------------------
+# A transparent pixel counts for no band, however many bands the raster has: GDAL derives a
+# mask from the alpha band for 2- and 4-band rasters only, so a 3-band gray+x+alpha raster
+# read as all valid.
+
+
+def _valid_counts(name):
+    """Per band, the pixels of ``al.pattern`` that are valid for it. A data band of an alpha
+    layout counts the opaque pixels (rows 1 and 3, 4 pixels each); the alpha band counts every
+    pixel (it is summarised by its own values); a layout with no alpha band counts every
+    pixel."""
+    n = len(al.LAYOUTS[name][0])
+    return [8] * (n - 1) + [16] if al.LAYOUTS[name][1] else [16] * n
+
+
+_CUSTOM_CONF = {
+    "bound_x_min": 0,
+    "bound_x_max": 200,
+    "bound_y_min": 0,
+    "bound_y_max": 200,
+    "cell_splits": 2,
+    "root_cell_size_x": 200,
+    "root_cell_size_y": 200,
+    "srid": -1,
+}
+
+# grid -> (resolution, crs, transform, grid_conf): a 4x4 raster inside a handful of cells
+_GRIDS = {
+    "h3": (4, "EPSG:4326", from_origin(10, 50, 0.5, 0.5), None),
+    "quadbin": (4, "EPSG:4326", from_origin(10, 50, 0.5, 0.5), None),
+    "bng": (3, "EPSG:27700", from_origin(530000, 180400, 200, 200), None),
+    "custom": (1, None, from_origin(0, 200, 50, 50), _CUSTOM_CONF),
+}
+
+
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+@pytest.mark.parametrize("grid", list(_GRIDS))
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_raster_to_grid_counts_only_the_pixels_valid_for_each_band(
+    grid, name, assignment
+):
+    resolution, crs, transform, conf = _GRIDS[grid]
+    raw = al.layout_bytes(name, crs=crs, transform=transform)
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        result = gridagg.raster_to_grid(
+            ds,
+            resolution,
+            grid,
+            "count",
+            coverage="sparse",
+            assignment=assignment,
+            grid_conf=conf,
+        )
+    totals = [sum(c["measure"] for c in band) for band in result]
+    assert totals == pytest.approx(
+        [float(n) for n in _valid_counts(name)]
+    ), f"{grid} {assignment} {name}"
+
+
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_accessor_statistics_cover_only_the_opaque_pixels(name):
+    """Rows 1 and 3 of the pattern are opaque (band 1 holds 0 there and 7), so every band's
+    statistics are over those pixels."""
+    with MemoryFile(al.layout_bytes(name)) as mf, mf.open() as ds:
+        alpha = al.LAYOUTS[name][1]
+        assert accessors.pixelcount(ds) == _valid_counts(name)
+        if alpha:
+            # band 1: 4 zeros (row 1) and 4 sevens (row 3)
+            assert accessors.minimum(ds)[0] == 0.0
+            assert accessors.maximum(ds)[0] == 7.0
+            assert accessors.avg(ds)[0] == 3.5
+            assert accessors.median(ds)[0] == 3.5
+            # the alpha band is summarised by its own values over every pixel: 0 and 255
+            assert accessors.minimum(ds)[-1] == 0.0
+            assert accessors.maximum(ds)[-1] == 255.0
+        assert not accessors.isempty(ds)
+
+
+@pytest.mark.parametrize("name", al.LAST_ALPHA)
+def test_a_raster_that_is_entirely_transparent_is_empty(name):
+    count = len(al.LAYOUTS[name][0])
+    data = np.full((count, 4, 4), 9, dtype="uint8")
+    data[-1] = 0
+    with MemoryFile(al.layout_bytes(name, data=data)) as mf, mf.open() as ds:
+        assert accessors.isempty(ds)
+        assert accessors.pixelcount(ds)[:-1] == [0] * (count - 1)
+        assert accessors.avg(ds)[:-1] == [None] * (count - 1)
+
+
+# --- frombands / derivedband stacks ---------------------------------------------------------
+
+
+def _band_tile(value_rows, *, mask_rows=(), alpha=False, nodata=None):
+    """A 12x12 uint8 GTiff of ONE data band (or gray+alpha when ``alpha``): ``value_rows`` hold
+    50, the others 0, and ``mask_rows`` are hidden by an own mask band."""
+    data = np.zeros((2 if alpha else 1, 12, 12), dtype="uint8")
+    data[0, list(value_rows), :] = 50
+    if alpha:
+        data[1] = 255
+    prof = dict(
+        driver="GTiff",
+        width=12,
+        height=12,
+        count=data.shape[0],
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(10, 50, 0.5, 0.5),
+        nodata=nodata,
+        photometric="MINISBLACK",
+    )
+    mask = None
+    if mask_rows:
+        mask = np.full((12, 12), 255, dtype="uint8")
+        mask[list(mask_rows), :] = 0
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            if alpha:
+                from rasterio.enums import ColorInterp as CI
+
+                dst.colorinterp = [CI.gray, CI.alpha]
+            dst.write(data)
+            if mask is not None:
+                dst.write_mask(mask)
+        return mf.read()
+
+
+def test_four_stacked_single_band_tiles_are_not_given_an_alpha_band():
+    """GDAL labels band 4 of a 4-band uint8 raster alpha when it creates one: a stack of four
+    data tiles (R, G, B, NIR) has no alpha band, so a 0 in the 4th is valid."""
+    tiles = [_band_tile(rows) for rows in ((1, 2), (3,), (4,), (5, 6))]
+    out = agg.frombands_tiles(list(enumerate(tiles)))
+    assert al.labelled_alpha(out) == []
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert nd.valid_mask(ds).all()
+
+
+def test_a_stack_labels_alpha_only_when_the_last_tile_ends_in_one():
+    gray, gray_alpha = _band_tile((1,)), _band_tile((2,), alpha=True)
+    ends_in_alpha = agg.frombands_tiles([(0, gray), (1, gray_alpha)])
+    alpha_inside = agg.frombands_tiles([(0, gray_alpha), (1, gray)])
+    assert al.labelled_alpha(ends_in_alpha) == [2]
+    assert al.labelled_alpha(alpha_inside) == []
+
+
+def test_a_stack_keeps_the_mask_the_tiles_share():
+    """Three tiles with the same own mask: the stack has it. If one tile has none, a band
+    of the stack is valid everywhere and so is the stack."""
+    rows = (3, 4)
+    masked = [_band_tile((1,), mask_rows=rows) for _ in range(3)]
+    out = agg.frombands_tiles(list(enumerate(masked)))
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert nd.has_own_mask(ds)
+        assert nd.valid_mask(ds)[:, 0].tolist() == [r not in rows for r in range(12)]
+    mixed = agg.frombands_tiles([(0, masked[0]), (1, _band_tile((1,))), (2, masked[2])])
+    with MemoryFile(mixed) as mf, mf.open() as ds:
+        assert nd.valid_mask(ds).all()
+
+
+def _derive(raw):
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        return derivedband.derivedband(ds, _SUM, "total")
+
+
+_SUM = (
+    "def total(in_ar, out_ar, xoff, yoff, xsize, ysize, rxsize, rysize, radius, gt, **kw):\n"
+    "    out_ar[:] = sum(a.astype('float64') for a in in_ar)\n"
+)
+
+
+@pytest.mark.parametrize("name", BOTH + ["rgb_nir"])
+def test_derivedband_output_is_invalid_where_the_input_is(name):
+    """The single band derived from a raster has no alpha band of its own: the pixels the
+    input marks transparent or masked are invalid in the output's own mask."""
+    raw = al.row_coded(name, height=H, masked_rows=MASKED, transparent_rows=TRANSPARENT)
+    out = _derive(raw)
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert ds.count == 1 and not nd.has_alpha(ds)
+        assert nd.valid_mask(ds)[:, 0].tolist() == [
+            r in _want_rows(name) for r in range(H)
+        ]
+
+
+def test_derivedband_agg_of_four_tiles_is_valid_where_the_fourth_is_zero():
+    """The tiles are stacked as bands before the function runs: the 4th is data."""
+    tiles = [_band_tile(rows) for rows in ((1, 2), (3,), (4,), (5, 6))]
+    out = agg.derivedband_tiles(tiles, _SUM, "total")
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert nd.valid_mask(ds).all()
+
+
+# --- the merge, in RAM and streamed ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+@pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])
+def test_a_merge_keeps_the_alpha_band_and_the_mask(monkeypatch, name, streaming):
+    """Two side-by-side tiles with an own mask (and an alpha band): the mosaic is invalid
+    where the tiles are, labelled alpha where they are, and a 4th data band stays data.
+    """
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    tiles = [
+        al.row_coded(
+            name,
+            height=H,
+            masked_rows=MASKED,
+            transparent_rows=TRANSPARENT,
+            transform=from_origin(x, 50, 0.5, 0.5),
+        )
+        for x in (10, 16)
+    ]
+    out = agg.merge_tiles(tiles)
+    alpha = al.LAYOUTS[name][1]
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert ds.width == 24
+        assert al.labelled_alpha(out) == ([ds.count - 1] if alpha else [])
+        valid = nd.valid_mask(ds)
+    assert valid[:, 0].tolist() == [r in _want_rows(name) for r in range(H)]
+    assert valid[:, 23].tolist() == [r in _want_rows(name) for r in range(H)]
+
+
+def _two_crs_tiles(name):
+    """A 4326 tile and, beside it, the same layout in 3857 (the 3857 one first: it is the
+    reference CRS the other is reprojected to)."""
+
+    def tile(x):
+        return al.row_coded(
+            name,
+            height=H,
+            masked_rows=MASKED,
+            transparent_rows=TRANSPARENT,
+            transform=from_origin(x, 50, 0.5, 0.5),
+        )
+
+    with MemoryFile(tile(13)) as mf, mf.open() as ds:
+        in_3857 = warp.reproject_to_srid(ds, 3857)
+    return [in_3857, tile(10)]
+
+
+def _assert_rows_valid_as_their_source(raster_bytes, name):
+    """Every output pixel names the source row it came from, and is valid exactly when that
+    row is; the labels are the layout's."""
+    alpha = al.LAYOUTS[name][1]
+    with MemoryFile(raster_bytes) as mf, mf.open() as ds:
+        assert ds.crs.to_epsg() == 3857
+        assert al.labelled_alpha(raster_bytes) == ([ds.count - 1] if alpha else [])
+        coded = ds.read(1).astype("int64") - 100
+        valid = nd.valid_mask(ds)
+    covered = coded >= 0
+    assert covered.any()
+    want = np.isin(coded, _want_rows(name))
+    assert (
+        valid[covered] == want[covered]
+    ).all(), f"{int((valid[covered] != want[covered]).sum())} pixels differ in validity"
+
+
+@pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])
+def test_the_reprojected_tile_of_a_merge_keeps_the_alpha_band_and_the_mask(name):
+    """``_reproject_dataset``, which brings a tile of another CRS to the reference one."""
+    _, in_4326 = _two_crs_tiles(name)
+    with MemoryFile(in_4326) as mf, mf.open() as src:
+        rep_mf, rep = agg._reproject_dataset(src, "EPSG:3857")
+        try:
+            raster = _comp_bytes(rep)
+        finally:
+            rep.close()
+            rep_mf.close()
+    _assert_rows_valid_as_their_source(raster, name)
+
+
+def _comp_bytes(ds):
+    """The dataset's pixels, labels and own mask as GTiff bytes."""
+    mask = ds.read_masks(1) if nd.has_own_mask(ds) else None
+    return write_gtiff(ds.profile, ds.read(), alpha_like=ds.colorinterp, mask=mask)
+
+
+@pytest.mark.parametrize("name", ["rgb_nir", "rgba", "gray_x_alpha"])
+def test_the_streaming_merge_keeps_the_alpha_band_and_the_mask_of_a_reprojected_tile(
+    name,
+):
+    tiles = _two_crs_tiles(name)
+    _assert_rows_valid_as_their_source(agg._merge_tiles_streaming(tiles), name)
+
+
+# --- chips copy the colour interpretation of every band --------------------------------------
+
+
+def _chip_labels_source(case, name, dtype):
+    from rasterio.transform import from_bounds
+
+    _, crs, bounds, _ = _ALPHA_CASES[case]
+    n = _FILL_N
+    count = len(al.LAYOUTS[name][0])
+    p = np.arange(n * n, dtype="int64").reshape(n, n)
+    data = np.stack([((p * (b + 1)) % 199 + 1).astype(dtype) for b in range(count)])
+    if al.LAYOUTS[name][1]:
+        data[-1] = 255
+    return al.layout_bytes(
+        name, dtype=dtype, data=data, crs=crs, transform=from_bounds(*bounds, n, n)
+    )
+
+
+def _expected_labels(name):
+    """The layout's labels, an alpha label that is not on the last band being data."""
+    labels = list(al.LAYOUTS[name][0])
+    return [
+        CI.undefined if c == CI.alpha and i != len(labels) - 1 else c
+        for i, c in enumerate(labels)
+    ]
+
+
+@pytest.mark.parametrize(
+    "assignment,coverage",
+    [("centroid", "sparse"), ("centroid", "complete"), ("covering", "sparse")],
+)
+@pytest.mark.parametrize("case", ["h3", "bng_native"])
+@pytest.mark.parametrize("dtype", ["uint8", "uint16"])
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_tessellate_chips_copy_the_colour_interpretation_of_every_band(
+    name, dtype, case, assignment, coverage
+):
+    """GDAL labels a new GTiff's bands from its band count and type (RGB for 3 bands, gray
+    and undefined for 16-bit): the chips are labelled as the source is, band by band."""
+    chips = _chips_of(
+        _chip_labels_source(case, name, dtype), case, assignment, coverage
+    )
+    assert chips
+    for _, cb in chips:
+        with MemoryFile(cb) as mf, mf.open() as c:
+            assert list(c.colorinterp) == _expected_labels(
+                name
+            ), f"{name} {dtype} {case} {assignment}"
+
+
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_the_empty_chip_of_a_covered_cell_copies_the_colour_interpretation(name):
+    """The 1x1 chip of a covered-but-empty cell (centroid + complete) is labelled as the
+    source is, like the chips with pixels."""
+    _, _, (west, south, east, north), res = _ALPHA_CASES["h3"]
+    cell = h3.latlng_to_cell((south + north) / 2, (west + east) / 2, res)
+    with MemoryFile(_chip_labels_source("h3", name, "uint8")) as mf, mf.open() as ds:
+        raw = T._build_empty_chip(ds, cell, "h3")
+    with MemoryFile(raw) as mf, mf.open() as c:
+        assert list(c.colorinterp) == _expected_labels(name)

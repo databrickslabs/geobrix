@@ -83,16 +83,51 @@ def has_alpha(ds) -> bool:
 
 
 def has_own_mask(ds) -> bool:
-    """True when a band of *ds* is masked by its own per-dataset mask band and *ds* has
-    no alpha band: an internal or external GTiff mask, as JPEG/YCbCr imagery often has
-    (heavy ``GDAL.hasOwnMask``, the sources heavy ``WarpSource`` reads through a mask
-    view). A warp drops such a mask once a source NoData is set, and it is not carried
-    by writing the pixels alone, so ops that rewrite or warp the pixels apply it."""
+    """True when a band of *ds* is masked by its own per-dataset mask band that is not
+    derived from an alpha band: an internal or external GTiff mask, as JPEG/YCbCr imagery
+    often has (heavy ``GDAL.hasOwnMask``, the sources heavy ``WarpSource`` reads through a
+    mask view). A warp drops such a mask once a source NoData is set, and it is not carried
+    by writing the pixels alone, so ops that rewrite or warp the pixels apply it.
+
+    A raster may have an alpha band AND an own mask: GDAL then reports the own mask only (it
+    outranks the mask it would derive from the alpha band), so the alpha band is still read
+    as values (:func:`valid_mask`) and the mask is carried beside it. A mask GDAL derives
+    from an alpha band is flagged ``alpha`` as well as ``per_dataset``, and is not an own
+    mask: the alpha band carries it.
+    """
     from rasterio.enums import MaskFlags
 
-    return not has_alpha(ds) and any(
-        MaskFlags.per_dataset in flags for flags in ds.mask_flag_enums
+    return any(
+        MaskFlags.per_dataset in flags and MaskFlags.alpha not in flags
+        for flags in ds.mask_flag_enums
     )
+
+
+def opaque_mask(ds, window=None):
+    """``(rows, cols)`` bool array of the pixels whose alpha is above 0, or ``None`` when
+    *ds* has no alpha band (:func:`alpha_index`). 0, negative and NaN are transparent.
+    """
+    a = alpha_index(ds.colorinterp)
+    return None if a is None else ds.read(a + 1, window=window) > 0
+
+
+def band_valid_mask(ds, index: int, window=None) -> np.ndarray:
+    """``(rows, cols)`` bool array: True where a pixel of band *index* (1-based) of *ds* is
+    valid for that band.
+
+    The per-band form of :func:`valid_mask`, for the reducers and statistics that judge each
+    band alone (a pixel that is NoData in one band still counts for another). A data band is
+    valid where its own mask says so (NoData, the raster's own mask band) and, when *ds* has
+    an alpha band, where the pixel is opaque: GDAL derives a mask from alpha only for 2- and
+    4-band rasters, so this makes a 3-band gray+x+alpha raster agree with an RGBA one. The
+    alpha band itself is judged by its own mask only, as GDAL does: its values over every
+    pixel, which is how an opacity is summarised.
+    """
+    valid = ds.read_masks(index, window=window) != 0
+    a = alpha_index(ds.colorinterp)
+    if a is None or index - 1 == a:
+        return valid
+    return valid & opaque_mask(ds, window=window)
 
 
 def valid_mask(ds, window=None) -> np.ndarray:
@@ -117,9 +152,7 @@ def valid_mask(ds, window=None) -> np.ndarray:
     a = alpha_index(ds.colorinterp)
     if a is None:
         return masks.any(axis=0)
-    opaque = (
-        ds.read(a + 1, window=window) > 0
-    )  # 0, negative and NaN alike are transparent
+    opaque = opaque_mask(ds, window=window)
     valid = masks[:a].any(axis=0) if a else np.ones(masks.shape[1:], dtype=bool)
     return valid & opaque
 

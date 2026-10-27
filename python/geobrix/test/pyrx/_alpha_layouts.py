@@ -8,6 +8,7 @@ fourth band that is data (RGB+NIR).
 """
 
 import numpy as np
+import rasterio
 from rasterio.enums import ColorInterp as CI
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
@@ -41,9 +42,18 @@ def pattern(count, dtype="uint8"):
 
 
 def layout_bytes(
-    name, *, nodata=None, dtype="uint8", crs="EPSG:4326", transform=None, data=None
+    name,
+    *,
+    nodata=None,
+    dtype="uint8",
+    crs="EPSG:4326",
+    transform=None,
+    data=None,
+    mask=None,
 ):
-    """GTiff bytes of layout ``name`` holding :func:`pattern` (or ``data``)."""
+    """GTiff bytes of layout ``name`` holding :func:`pattern` (or ``data``). ``mask``, a
+    ``(rows, cols)`` uint8 array (255 valid, 0 invalid), is written as the raster's own
+    internal mask band, beside any alpha band."""
     colorinterp, _ = LAYOUTS[name]
     count = len(colorinterp)
     if data is None:
@@ -63,11 +73,13 @@ def layout_bytes(
             else "MINISBLACK"
         ),
     )
-    with MemoryFile() as mf:
+    with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True), MemoryFile() as mf:
         with mf.open(**prof) as dst:
             # before the write: GDAL ignores a label set after the pixels are written
             dst.colorinterp = colorinterp
             dst.write(data)
+            if mask is not None:
+                dst.write_mask(mask)
         raw = mf.read()
     with MemoryFile(raw) as mf, mf.open() as chk:
         assert tuple(chk.colorinterp) == tuple(colorinterp), (name, chk.colorinterp)
@@ -78,3 +90,46 @@ def labelled_alpha(raster_bytes):
     """The 0-based indices of the bands that ``raster_bytes`` labels alpha."""
     with MemoryFile(raster_bytes) as mf, mf.open() as ds:
         return [i for i, c in enumerate(ds.colorinterp) if c == CI.alpha]
+
+
+def row_coded(
+    name,
+    *,
+    width=12,
+    height=12,
+    masked_rows=(),
+    transparent_rows=(),
+    nodata=None,
+    crs="EPSG:4326",
+    transform=None,
+):
+    """Layout ``name`` whose every data band holds ``100 + source row``, so any output pixel
+    names the source row it came from. The alpha band (when the layout has one) is 255 except
+    in ``transparent_rows`` (0); ``masked_rows`` are hidden by an internal mask band. The valid
+    rows are :func:`valid_rows`."""
+    colorinterp, alpha_last = LAYOUTS[name]
+    count = len(colorinterp)
+    data = np.empty((count, height, width), dtype="uint8")
+    data[:] = (100 + np.arange(height, dtype="uint8"))[None, :, None]
+    if alpha_last:
+        data[-1] = 255
+        data[-1, list(transparent_rows), :] = 0
+    mask = None
+    if masked_rows:
+        mask = np.full((height, width), 255, dtype="uint8")
+        mask[list(masked_rows), :] = 0
+    return layout_bytes(
+        name,
+        data=data,
+        mask=mask,
+        nodata=nodata,
+        crs=crs,
+        transform=transform or from_origin(10, 50, 0.5, 0.5),
+    )
+
+
+def valid_rows(name, height=12, masked_rows=(), transparent_rows=()):
+    """The rows of :func:`row_coded` that are valid: not masked and, for a layout with an
+    alpha band, not transparent."""
+    hidden = set(masked_rows) | (set(transparent_rows) if LAYOUTS[name][1] else set())
+    return [r for r in range(height) if r not in hidden]

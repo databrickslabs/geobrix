@@ -47,7 +47,23 @@ WRITERS = {
     "cog_convert": lambda ds: analysis.cog_convert(ds, "DEFLATE", 256, "NEAREST"),
     "stamp_crs": lambda ds: _stamp_crs_bytes(ds, "EPSG:3857"),
     "dataset_to_bytes": _dataset_to_gtiff_bytes,
+    "getsubdataset": lambda ds: _getsubdataset_of(ds),
 }
+
+
+def _getsubdataset_of(ds):
+    """``accessors.getsubdataset`` of a container whose one subdataset is a copy of *ds*."""
+    import os
+    import tempfile
+    from types import SimpleNamespace
+
+    from databricks.labs.gbx.pyrx.core import accessors
+    from databricks.labs.gbx.pyrx.core.local_temp import local_temp_root
+
+    with tempfile.TemporaryDirectory(dir=local_temp_root()) as tmp:
+        path = os.path.join(tmp, "sub.tif")
+        rasterio.shutil.copy(ds, path, driver="GTiff")
+        return accessors.getsubdataset(SimpleNamespace(subdatasets=[path]), "sub.tif")
 
 
 def _alpha_bands(raster_bytes):
@@ -96,6 +112,20 @@ def _write_file(tmp_path, name):
     with open(path, "wb") as fh:
         fh.write(al.layout_bytes(name))
     return path
+
+
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_eager_fromfile_labels_alpha_where_its_source_does(tmp_path, name):
+    """``rst_fromfile`` with ``materialize`` re-encodes the file into the tile: RGB+NIR keeps
+    band 4 as data and an RGBA file keeps its alpha band."""
+    from databricks.labs.gbx.pyrx import functions as F
+
+    path = _write_file(tmp_path, name)
+    want = [len(al.LAYOUTS[name][0]) - 1] if al.LAYOUTS[name][1] else []
+    tile = F._fromfile_impl(path, "GTiff", True)
+    raster = tile["raster"] if isinstance(tile, dict) else tile.raster
+    assert raster is not None
+    assert _alpha_bands(bytes(raster)) == want
 
 
 @pytest.mark.parametrize("name", list(al.LAYOUTS))

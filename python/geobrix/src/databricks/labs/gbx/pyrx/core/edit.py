@@ -91,7 +91,11 @@ def clip_to_geom(ds, geom, all_touched: bool = False, geom_crs=None, nodata=None
     )
     if nodata is not None:
         profile.update(nodata=nodata)
-    return _comp.write_gtiff(profile, out_image, alpha_like=ds.colorinterp)
+    # The clip is a chip of the raster (tessellation covering chips): it keeps the colour
+    # interpretation of every band, not only the alpha band.
+    return _comp.write_gtiff(
+        profile, out_image, alpha_like=ds.colorinterp, all_labels=True
+    )
 
 
 def update_type(ds, new_type: str) -> bytes:

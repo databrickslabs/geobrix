@@ -2,12 +2,16 @@
 
 Mirrors the heavyweight ``RST_{H3,Quadbin,BNG}_RasterToGrid`` families exactly:
 
-* Per band, every valid pixel (non-zero mask) is mapped to a grid cell id by
+* Per band, every valid pixel is mapped to a grid cell id by
   the pixel-centroid world coordinate (0.5-pixel offset through the
   geotransform). For H3/quadbin the raster is interpreted as EPSG:4326 lon/lat
   -- no reprojection (callers reproject upstream via ``rst_transform``). BNG has
   no lon/lat path, so the raster is warped to EPSG:27700 (nearest) up front and
   pixels outside GB are dropped via ``pygx._bng.is_valid``.
+  A pixel is valid for a band when the band's own mask says so (NoData, the raster's
+  own mask band) and, for a raster with an alpha band, its alpha is above 0
+  (``_nodata.band_valid_mask``): every band is judged alone, and a transparent pixel
+  counts for none of them, however many bands the raster has.
 * Pixel values are accumulated per cell, then reduced by the chosen aggregate.
 * BNG cell math is the single source of truth in ``pygx._bng`` (no numpy codec);
   H3/quadbin ids are ``int`` (Long) but BNG ids are rendered to ``str`` via
@@ -47,6 +51,7 @@ import h3
 import numpy as np
 
 from databricks.labs.gbx.pygx import _bng, _quadbin
+from databricks.labs.gbx.pyrx.core._nodata import band_valid_mask
 
 H3_MAX_RES = 15
 QUADBIN_MAX_RES = 20
@@ -554,7 +559,7 @@ def raster_to_grid(
         out = []
         for bi in range(1, work_ds.count + 1):
             band = work_ds.read(bi).astype("float64")
-            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+            mask = band_valid_mask(work_ds, bi)  # False = NoData, masked or transparent
 
             if assignment == "centroid":
                 ys, xs = np.nonzero(mask)  # valid pixels only (matches mask==0 skip)
@@ -657,7 +662,7 @@ def _raster_to_bng(
         out = []
         for bi in range(1, work_ds.count + 1):
             band = work_ds.read(bi).astype("float64")
-            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+            mask = band_valid_mask(work_ds, bi)  # False = NoData, masked or transparent
 
             if assignment == "centroid":
                 ys, xs = np.nonzero(mask)  # valid pixels only
@@ -745,7 +750,7 @@ def _raster_to_custom(
         out = []
         for bi in range(1, work_ds.count + 1):
             band = work_ds.read(bi).astype("float64")
-            mask = work_ds.read_masks(bi)  # 0 = invalid (nodata-derived)
+            mask = band_valid_mask(work_ds, bi)  # False = NoData, masked or transparent
 
             if assignment == "centroid":
                 ys, xs = np.nonzero(mask)

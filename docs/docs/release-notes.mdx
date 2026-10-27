@@ -553,9 +553,10 @@ formats.
   pixel is not written, whether it is all NoData, all transparent or all masked); the COG
   re-encode of the `raster_gbx` writer; `gbx_rst_frombands` (a stack of four `uint8` tiles no
   longer gets an alpha band from GDAL's default); `gbx_rst_merge` and the streamed merge of large
-  groups, whose mosaic carries the union of the tiles' mask bands, so a valid pixel that holds 0
-  stays valid and the result no longer depends on how large the group is, and whose index VRT
-  carries the colour interpretation; the `pmtiles_gbx` reader's RGB sibling of an RGBA source;
+  groups, whose mosaic carries the union of what each tile says is valid (its mask band, its
+  NoData), so a valid pixel that holds 0 stays valid, a tile's NoData pixels stay invalid beside a
+  tile that has a mask band, and the result no longer depends on how large the group is, and
+  whose index VRT carries the colour interpretation; the `pmtiles_gbx` reader's RGB sibling of an RGBA source;
   and the `netcdf_gbx` `bandDim` stack (four `uint8` steps used to read the fourth as alpha). The
   h3 cells of a source with an alpha band declare no NoData over it: their pixels outside the
   hexagon are written transparent, and each cell carries its hexagon as a mask band, so the index
@@ -588,10 +589,13 @@ formats.
   quadbin, h3 or BNG `cog_gbx` cell that a source barely touches no longer fails with
   `Invalid dataset dimensions`; `gbx_rst_merge` of tiles in two coordinate systems no longer
   measures its size or picks its pixel size in the units of whichever tile sorts first (a few
-  pixels could be sent to the streamed merge, with 0.5 degrees read as 0.5 metres);
+  pixels could be sent to the streamed merge, with 0.5 degrees read as 0.5 metres): the tile in the
+  other system is reprojected onto the pixel size of a tile in the reference system, and the
+  mosaic has that size, in memory and streamed alike, whichever tile sorts first;
   `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window; and
   `gbx_rst_convolve` writes each block's result where the block is (it wrote it shifted and left
-  the rest as the input).
+  the rest as the input), and in both tiers adds only the neighbours that are on the raster, so
+  the two agree over the whole raster, its edges included (the lightweight one replicated the edge).
 - **The lightweight reprojection and the tile encoders keep a source's own mask band.**
   `gbx_rst_transform` and `gbx_rst_transformcrs` dropped the own mask band (not an alpha band) of a
   source, as JPEG-compressed aerial imagery often carries, so its masked pixels read as valid data;

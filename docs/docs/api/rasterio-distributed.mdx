@@ -175,7 +175,7 @@ Where the lightweight and heavyweight implementations use different underlying a
 | Function | Heavyweight | Lightweight | Divergence |
 |---|---|---|---|
 | `rst_color_relief` | `gdal.DEMProcessing` | NumPy `np.interp` | Color ramp interpolation can differ at boundary values; `default` keyword not available in `pyrx` |
-| `rst_convolve`, `rst_derivedband` | GDAL halo convolution | NumPy `pad(mode='edge')` | Border pixel handling differs at tile edges |
+| `rst_derivedband` | GDAL halo convolution | NumPy `pad(mode='edge')` | Border pixel handling differs at tile edges |
 | `rst_resample` | GDAL resampler | rasterio resampler | NoData and boundary pixels can differ |
 | `rst_contour` | `gdal.ContourGenerateEx` | `skimage.find_contours` | Contour tracing algorithm differs; vertex positions near NoData may diverge |
 | `rst_viewshed` | `gdal.ViewshedGenerate` | `xrspatial.viewshed` | Visibility computation differs in algorithm; results agree on clear line-of-sight and fully obstructed pixels, but may differ at grazing angles |

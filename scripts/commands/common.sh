@@ -400,6 +400,9 @@ validate_set() {
 # Run a command inside the isolated pyrx venv (host, no Docker).
 # Usage: run_in_pyrx_venv "<command string>"
 # Requires gbx:venv:sync to have been run (venv at $PROJECT_ROOT/.venv-pyrx).
+# PySpark starts its Python workers from PYSPARK_PYTHON, and a worker on any other interpreter
+# than the driver's fails with PYTHON_VERSION_MISMATCH. Both are set to the venv python here,
+# overriding whatever the caller's shell exports (a system python3 is another minor version).
 run_in_pyrx_venv() {
     local _cmd="$1"
     local _venv="${PROJECT_ROOT}/.venv-pyrx"
@@ -409,7 +412,8 @@ run_in_pyrx_venv() {
     fi
     # shellcheck disable=SC1091
     source "${_venv}/bin/activate"
-    bash -c "${_cmd}"
+    PYSPARK_PYTHON="${_venv}/bin/python" PYSPARK_DRIVER_PYTHON="${_venv}/bin/python" \
+        bash -c "${_cmd}"
     local _rc=$?
     deactivate || true
     return $_rc

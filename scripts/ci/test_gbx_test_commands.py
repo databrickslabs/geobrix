@@ -204,3 +204,131 @@ def test_scala_runs_pass_a_utf8_locale_to_the_container(sandbox):
     # The JVM derives sun.jnu.encoding from the locale; without one, non-ASCII file names
     # cannot be encoded and the tests that use them are cancelled.
     assert all(e.get("LC_ALL") == "C.UTF-8" for _, e in maven), [e for _, e in maven]
+
+
+# ------------------------------------- light-tier tests run natively on the host (no container)
+
+
+def _fake_venv(sandbox):
+    """A `.venv-pyrx` whose python records the PySpark worker settings and its arguments."""
+    bin_dir = sandbox.root / ".venv-pyrx" / "bin"
+    bin_dir.mkdir(parents=True)
+    log = sandbox.root / "venv-python.log"
+    python = bin_dir / "python"
+    python.write_text(
+        "#!/bin/sh\n"
+        f'printf "%s|%s|%s\\n" "$PYSPARK_PYTHON" "$PYSPARK_DRIVER_PYTHON" "$*" >> "{log}"\n'
+        '[ "$1" = "-" ] && cat > /dev/null\n'
+        "exit 0\n"
+    )
+    python.chmod(0o755)
+    (bin_dir / "activate").write_text(f'export PATH="{bin_dir}:$PATH"\n')
+    return python, log
+
+
+def _last_python_call(log):
+    workers, driver, argv = log.read_text().splitlines()[-1].split("|", 2)
+    return workers, driver, argv
+
+
+def test_the_host_run_starts_spark_workers_on_the_venv_python(sandbox):
+    python, log = _fake_venv(sandbox)
+
+    # A caller's shell may export another interpreter; workers on it fail the version check.
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        "--path",
+        "python/geobrix/test/zarr/test_write.py",
+        PYSPARK_PYTHON="/usr/bin/python3",
+    )
+
+    assert res.returncode == 0, res.output
+    workers, driver, argv = _last_python_call(log)
+    assert Path(workers).resolve() == Path(driver).resolve() == python.resolve()
+    assert "-m pytest python/geobrix/test/zarr/test_write.py" in argv
+    assert sandbox.execs() == []  # the host run never reaches the container
+
+
+def _light_sandbox(sandbox):
+    python, log = _fake_venv(sandbox)
+    test_dir = sandbox.root / "python" / "geobrix" / "test"
+    test_dir.mkdir(parents=True)
+    (test_dir / "conftest.py").write_text((TEST_ROOT / "conftest.py").read_text())
+    return log
+
+
+def _light_dirs_conftest_lists():
+    block = re.search(
+        r"_LIGHT_TEST_DIRS = \[(.*?)\]", (TEST_ROOT / "conftest.py").read_text(), re.S
+    )
+    return re.findall(r'"(\w+)"', block.group(1))
+
+
+def test_the_light_command_runs_every_light_dir_when_no_path_is_given(sandbox):
+    log = _light_sandbox(sandbox)
+
+    res = sandbox.run("gbx-test-light.sh")
+
+    assert res.returncode == 0, res.output
+    _, _, argv = _last_python_call(log)
+    ran = [a.rstrip("/") for a in argv.split() if a.startswith("python/geobrix/test/")]
+    dirs = _light_dirs_conftest_lists()
+    assert "zarr" in dirs and len(dirs) >= 13
+    assert ran == [f"python/geobrix/test/{d}" for d in dirs]
+
+
+def test_the_light_command_runs_only_the_paths_it_is_given(sandbox):
+    log = _light_sandbox(sandbox)
+
+    res = sandbox.run(
+        "gbx-test-light.sh",
+        "--path",
+        "python/geobrix/test/zarr/test_keys.py",
+        "--path",
+        "python/geobrix/test/zarr/test_layout.py",
+    )
+
+    assert res.returncode == 0, res.output
+    _, _, argv = _last_python_call(log)
+    ran = [a for a in argv.split() if a.startswith("python/geobrix/test/")]
+    assert ran == [
+        "python/geobrix/test/zarr/test_keys.py",
+        "python/geobrix/test/zarr/test_layout.py",
+    ]
+    assert sandbox.execs() == []
+
+
+def _fake_uv(sandbox):
+    log = sandbox.root / "uv.log"
+    uv = sandbox.bin / "uv"
+    uv.write_text(f'#!/bin/sh\necho "$*" >> "{log}"\n')
+    uv.chmod(0o755)
+    return log
+
+
+def test_venv_sync_refreshes_an_existing_venv_with_the_zarr_extra(sandbox):
+    # `uv venv` refuses an existing venv, so the sync must not call it when one is there.
+    _fake_venv(sandbox)
+    uv_log = _fake_uv(sandbox)
+
+    res = sandbox.run("gbx-venv-sync.sh")
+
+    assert res.returncode == 0, res.output
+    calls = uv_log.read_text().splitlines()
+    assert not [c for c in calls if c.startswith("venv")], calls
+    (install,) = [c for c in calls if c.startswith("pip install")]
+    assert "zarr_env6" in install and "light_env6" in install
+    # The `test` extra pins mapbox-vector-tile<2.2, which light_env6 (>=2.2) cannot satisfy.
+    assert "test]" not in install and ",test" not in install
+    # The Delta 4.0.x test jars run on Spark 4.0.x only; the `test` extra leaves pyspark open.
+    assert "pyspark>=4.0,<4.1" in install
+
+
+def test_venv_sync_creates_the_venv_when_it_is_missing(sandbox):
+    uv_log = _fake_uv(sandbox)
+
+    # The run fails at the isolation check (the fake makes no venv); only the uv calls matter.
+    sandbox.run("gbx-venv-sync.sh")
+
+    calls = uv_log.read_text().splitlines()
+    assert calls[0].startswith("venv ") and "--python 3.12" in calls[0], calls

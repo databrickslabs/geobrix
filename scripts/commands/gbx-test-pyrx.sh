@@ -1,5 +1,6 @@
 #!/bin/bash
-# gbx:test:pyrx - Run the pyrx lightweight raster API tests (no JAR required)
+# gbx:test:pyrx - Run light-tier Python tests (pyrx by default; any light dir, zarr included) on the host
+# venv (no JAR, no container). See gbx:test:light for the whole light tier.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -7,13 +8,15 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 source "$SCRIPT_DIR/common.sh"
 
 show_help() {
-    show_banner "GeoBrix: pyrx Tests (lightweight, no JAR)"
+    show_banner "GeoBrix: Light-tier Tests (pyrx, zarr, ...; no JAR)"
     echo -e "${CYAN}Usage:${NC}"
     echo -e "  ${GREEN}gbx:test:pyrx${NC} ${YELLOW}[options]${NC}"
     echo ""
     echo -e "${CYAN}Options:${NC}"
-    echo -e "  ${GREEN}--path <dir>${NC}           Specific test directory or file (default: python/geobrix/test/pyrx/)"
-    echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default)"
+    echo -e "  ${GREEN}--path <dir>${NC}           Test directory or file; repeatable. Any light dir (default: python/geobrix/test/pyrx/)"
+    echo -e "                          e.g. python/geobrix/test/zarr/test_manifest.py. The light dirs are _LIGHT_TEST_DIRS in test/conftest.py"
+    echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default). Only for GDAL"
+    echo -e "                          natives, the JAR and parity: x86 emulation makes it ~10x slower for light-tier tests"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
     print_lock_help
     echo -e "  ${GREEN}--help${NC}                 Show this help"
@@ -25,6 +28,7 @@ show_help() {
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:test:pyrx${NC}"
+    echo -e "  ${YELLOW}gbx:test:pyrx --path python/geobrix/test/zarr/test_manifest.py${NC}"
     echo -e "  ${YELLOW}gbx:test:pyrx --path python/geobrix/test/pyrx/test_functions_spark.py --log pyrx.log${NC}"
     echo ""
 }
@@ -74,14 +78,14 @@ if [[ ${#TEST_PATHS[@]} -eq 0 ]]; then
     TEST_PATHS=("$DEFAULT_TEST_PATH")
 fi
 
-show_banner "GeoBrix: pyrx Tests (lightweight, no JAR)"
+show_banner "GeoBrix: Light-tier Tests (pyrx, zarr, ...; no JAR)"
 setup_log_file "$LOG_PATH"
 
 echo -e "${CYAN}Test path: ${YELLOW}${TEST_PATHS[*]}${NC}"
 echo -e "${CYAN}Markers: ${YELLOW}not integration${NC}"
 echo ""
 show_separator
-echo -e "${CYAN}Running pyrx tests...${NC}"
+echo -e "${CYAN}Running light-tier tests...${NC}"
 show_separator
 echo ""
 
@@ -93,7 +97,8 @@ if [[ $USE_DOCKER -eq 1 ]]; then
     docker exec geobrix-dev $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
     EXIT_CODE=$?
 else
-    # Host venv path (default): isolated from system site-packages.
+    # Host venv path (default): isolated from system site-packages. run_in_pyrx_venv also
+    # points PYSPARK_PYTHON at the venv python so Spark workers match the driver.
     HOST_PATHS=()
     for p in "${TEST_PATHS[@]}"; do
         HOST_PATHS+=("${p#/root/geobrix/}")   # strip the in-container prefix if present
@@ -106,9 +111,9 @@ fi
 echo ""
 show_separator
 if [ $EXIT_CODE -eq 0 ]; then
-    echo -e "${GREEN}pyrx tests passed!${NC}"
+    echo -e "${GREEN}Light-tier tests passed!${NC}"
 else
-    echo -e "${RED}pyrx tests failed (exit code: $EXIT_CODE)${NC}"
+    echo -e "${RED}Light-tier tests failed (exit code: $EXIT_CODE)${NC}"
 fi
 show_separator
 

@@ -103,18 +103,7 @@ FINAL_TAG="$(gbx_dev_image_tag "$PLATFORM")"
 
 # The platform is chosen above, and the package index travels as a secret (below): a docker flag
 # that sets either again would build one thing and tag another, or put the index in the history.
-for a in "${EXTRA_ARGS[@]}"; do
-    case "$a" in
-        --platform|--platform=*)
-            log_error "Pass the platform as --platform <p> before any '--' (or set GBX_DOCKER_PLATFORM), not as a docker flag."
-            exit 2
-            ;;
-        PIP_INDEX_URL=*|--build-arg=PIP_INDEX_URL=*)
-            log_error "Do not pass the package index as a build-arg (it would be recorded in the image history). Export PIP_INDEX_URL; it is passed as a BuildKit secret."
-            exit 2
-            ;;
-    esac
-done
+gbx_check_docker_flags "${EXTRA_ARGS[@]}" || exit 2
 
 # --- ERROR HANDLING ---
 set -e
@@ -131,13 +120,21 @@ log_info "Starting smart build for ${FINAL_TAG} (${PLATFORM})..."
 # point at a private mirror if your network needs one. It goes in as a BuildKit secret from a
 # private file that exists only for the duration of the build, never as a --build-arg or ENV
 # (either is recorded in `docker history`). The URL is never printed.
+#
+# BuildKit does not key its layer cache on a secret, so a changed index alone would reuse the cached pip
+# configuration layer. A non-secret fingerprint of the index (the first 12 hex characters of its sha256)
+# is therefore also passed as the build-arg GBX_PIP_INDEX_FPR, to the final stage only (the stage with
+# the pip steps): a changed index rebuilds that stage and nothing before it (GDAL and PDAL stay cached).
 SECRET_ARGS=()
+FINAL_STAGE_ARGS=()
 if [ -n "${PIP_INDEX_URL:-}" ]; then
     log_info "Using PIP_INDEX_URL from host environment for the build (as a build secret)."
     SECRET_FILE=$(mktemp "${TMPDIR:-/tmp}/gbx-dev-pip-index.XXXXXX")
     chmod 600 "$SECRET_FILE"
     printf '%s' "$PIP_INDEX_URL" > "$SECRET_FILE"
     SECRET_ARGS=(--secret "id=pip_index_url,src=$SECRET_FILE")
+    INDEX_FPR="$(printf '%s' "$PIP_INDEX_URL" | { shasum -a 256 2>/dev/null || sha256sum; } | cut -c1-12)"
+    FINAL_STAGE_ARGS=(--build-arg "GBX_PIP_INDEX_FPR=${INDEX_FPR}")
 fi
 
 # --- STEP 1: PULL LATEST BASE ---
@@ -158,6 +155,11 @@ for STAGE in "${STAGES[@]}"; do
         PULL_FLAG="--pull"
     fi
 
+    STAGE_ARGS=()
+    if [ "$STAGE" == "final" ]; then
+        STAGE_ARGS=("${FINAL_STAGE_ARGS[@]}")
+    fi
+
     log_info "Building stage: ${YELLOW}${STAGE}${NC}..."
     STAGE_START=$(date +%s)
 
@@ -172,6 +174,7 @@ for STAGE in "${STAGES[@]}"; do
         -t "$STAGE_TAG" \
         -f "$PROJECT_ROOT/scripts/docker/Dockerfile" \
         "${SECRET_ARGS[@]}" \
+        "${STAGE_ARGS[@]}" \
         "${EXTRA_ARGS[@]}" "$PROJECT_ROOT"
 
     STAGE_END=$(date +%s)
@@ -179,18 +182,43 @@ for STAGE in "${STAGES[@]}"; do
 done
 
 # --- STEP 3: CHECK THE IMAGE RECORDS NO PACKAGE INDEX, THEN TAG ---
-# The index must not be in the image's history or environment. Compared as a fixed string read from a
-# pipe, so the URL is neither printed nor placed on a command line.
-FINAL_CHECKPOINT="geobrix-checkpoint:final-${ARCH}"
-if [ -n "${PIP_INDEX_URL:-}" ]; then
-    if { docker history --no-trunc "$FINAL_CHECKPOINT"; docker image inspect "$FINAL_CHECKPOINT"; } 2>/dev/null \
-        | grep -qF -f <(printf '%s\n' "$PIP_INDEX_URL"); then
-        docker rmi "$FINAL_CHECKPOINT" >/dev/null 2>&1 || true
-        log_error "The package index was recorded in the image history or config; image not tagged as ${FINAL_TAG}."
-        exit 1
+# The index must not be in the image's history or environment. Mirrors the check in gbx-dcs-build.sh,
+# and never prints the URL (patterns are read from a pipe, not placed on a command line).
+# Returns 0 clean, 1 an index was found, 2 the history or config could not be read (fails closed).
+verify_image_holds_no_index() {
+    local meta host
+    meta="$( { docker history --no-trunc "$1" && docker image inspect "$1"; } 2>/dev/null )" || return 2
+    [ -n "$meta" ] || return 2
+    # An ARG, ENV or RUN that assigns PIP_INDEX_URL / UV_INDEX_URL a value (a script that only READS the
+    # secret, as PIP_INDEX_URL="$(cat /run/secrets/pip_index_url)", holds no value).
+    if printf '%s\n' "$meta" \
+        | sed 's|PIP_INDEX_URL="\$(cat /run/secrets/pip_index_url)"||g' \
+        | grep -qE '(PIP|UV)_INDEX_URL=[^[:space:]]'; then
+        return 1
     fi
-    log_info "Image history and config hold no package index."
+    if [ -n "${PIP_INDEX_URL:-}" ]; then
+        host="$(printf '%s' "$PIP_INDEX_URL" | sed -E 's#^[A-Za-z][A-Za-z0-9+.-]*://##; s#^[^@/]*@##; s#[/:?].*$##')"
+        # The public index appears in the Dockerfile's own default; it is no private mirror to leak.
+        case "$host" in pypi.org|files.pythonhosted.org) return 0 ;; esac
+        if printf '%s\n' "$meta" | grep -qF -f <(printf '%s\n' "$PIP_INDEX_URL"; [ -n "$host" ] && printf '%s\n' "$host"); then
+            return 1
+        fi
+    fi
+    return 0
+}
+
+FINAL_CHECKPOINT="geobrix-checkpoint:final-${ARCH}"
+verify_rc=0
+verify_image_holds_no_index "$FINAL_CHECKPOINT" || verify_rc=$?
+if [ "$verify_rc" -eq 1 ]; then
+    docker rmi "$FINAL_CHECKPOINT" >/dev/null 2>&1 || true
+    log_error "The package index was recorded in the image history or config; image not tagged as ${FINAL_TAG}."
+    exit 1
+elif [ "$verify_rc" -ne 0 ]; then
+    log_error "Could not read the image history or config to verify it holds no package index; image not tagged as ${FINAL_TAG}."
+    exit 1
 fi
+log_info "Image history and config hold no package index."
 log_info "Applying final tag: ${YELLOW}${FINAL_TAG}${NC}..."
 docker tag "$FINAL_CHECKPOINT" "$FINAL_TAG"
 

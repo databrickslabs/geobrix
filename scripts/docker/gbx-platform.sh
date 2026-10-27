@@ -35,6 +35,10 @@ gbx_normalize_platform() {
 gbx_host_platform() {
     local m
     m="$(uname -m)"
+    # A shell started under Rosetta reports x86_64 on an Apple Silicon Mac; the CPU says what the host is.
+    if [ "$m" = "x86_64" ] && [ "$(uname -s)" = "Darwin" ] && [ "$(sysctl -n hw.optional.arm64 2>/dev/null)" = "1" ]; then
+        m="arm64"
+    fi
     gbx_normalize_platform "$m" || {
         echo "ERROR: unsupported host architecture '$m' (expected arm64/aarch64 or x86_64/amd64); set GBX_DOCKER_PLATFORM" >&2
         return 2
@@ -114,4 +118,23 @@ gbx_require_dev_image() {
         return 1
     fi
     echo "$image"
+}
+
+# gbx_check_docker_flags <docker build flags...>  ->  status 2 (and says why) for a flag build_smart.sh owns:
+# a platform (it is chosen with --platform / GBX_DOCKER_PLATFORM, and the tag follows it) or the package index
+# as a build-arg (it travels as a BuildKit secret; a build-arg is recorded in the image history).
+gbx_check_docker_flags() {
+    local a
+    for a in "$@"; do
+        case "$a" in
+            --platform|--platform=*)
+                echo "ERROR: pass the platform as --platform <p> before any '--' (or set GBX_DOCKER_PLATFORM), not as a docker flag." >&2
+                return 2
+                ;;
+            PIP_INDEX_URL=*|--build-arg=PIP_INDEX_URL=*)
+                echo "ERROR: do not pass the package index as a build-arg (it would be recorded in the image history). Export PIP_INDEX_URL; it is passed as a BuildKit secret." >&2
+                return 2
+                ;;
+        esac
+    done
 }

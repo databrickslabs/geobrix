@@ -8,7 +8,8 @@ and answers from the JSON state in $FAKE_DOCKER_STATE:
   `tag` and `rmi` keep it current.
 - container: null, or {"image": ref-or-id, "running": bool, "arch": ..., "mount": path}: what
   `ps`, `inspect`, `stop`, `rm`, `start` and `run` see and change.
-- history: lines printed by `history`.
+- history: lines printed by `history`. history_rc / inspect_rc: a non-zero exit of `history` / of
+  `image inspect` on a checkpoint image (the build could not be read back).
 - A `build` with `--secret id=...,src=FILE` reads FILE (content and mode) and appends them to
   $FAKE_DOCKER_LOG.secrets before answering, so a test can see what the build was given.
 """
@@ -52,6 +53,9 @@ def main(args):
         return 0
     if cmd == "image" and args[1:2] == ["inspect"]:
         ref = args[-1]
+        if state.get("inspect_rc") and ref.startswith("geobrix-checkpoint:"):
+            print("Error: cannot inspect", file=sys.stderr)
+            return state["inspect_rc"]
         if ref == container.get("image") if container else False:
             img = {"arch": container.get("arch", "amd64")}
         else:
@@ -68,6 +72,9 @@ def main(args):
             )
         return 0
     if cmd == "history":
+        if state.get("history_rc"):
+            print("Error: cannot read history", file=sys.stderr)
+            return state["history_rc"]
         for line in state.get("history", []):
             print(line)
         return 0

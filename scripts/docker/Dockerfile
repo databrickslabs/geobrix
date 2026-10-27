@@ -83,16 +83,28 @@ WORKDIR $ROOTDIR/
 # e.g. `docker build --target hadoop-builder -t geobrix-hadoop-builder .`
 # ==========================================
 FROM system-deps AS hadoop-builder
+# BuildKit sets TARGETARCH (amd64 | arm64) from --platform; it selects the matching Hadoop binary release.
+ARG TARGETARCH
 ENV HADOOP_VERSION=3.4.0
 ENV HADOOP_HOME=/usr/local/hadoop
-# Pinned SHA-512 of the Apache Hadoop 3.4.0 source tarball (Labs lockdown policy).
-# Cross-checked against https://downloads.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz.sha512
-# To bump HADOOP_VERSION, update HADOOP_SHA512 in lockstep.
-ENV HADOOP_SHA512=6f653c0109f97430047bd3677c50da7c8a2809d153b231794cf980b3208a6b4beff8ff1a03a01094299d459a3a37a3fe16731629987165d71f328657dbf2f24c
+# Pinned SHA-512 of the Apache Hadoop 3.4.0 binary release (Labs lockdown policy), one per architecture:
+# the x86_64 release carries x86-64 native libraries (libhadoop.so), the -aarch64 release aarch64 ones.
+# Cross-checked against the official .sha512 files (downloads.apache.org, archive.apache.org and
+# dlcdn.apache.org agree for both):
+#   https://downloads.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0.tar.gz.sha512
+#   https://downloads.apache.org/hadoop/common/hadoop-3.4.0/hadoop-3.4.0-aarch64.tar.gz.sha512
+# To bump HADOOP_VERSION, update both HADOOP_SHA512_* in lockstep.
+ENV HADOOP_SHA512_AMD64=6f653c0109f97430047bd3677c50da7c8a2809d153b231794cf980b3208a6b4beff8ff1a03a01094299d459a3a37a3fe16731629987165d71f328657dbf2f24c
+ENV HADOOP_SHA512_ARM64=56d4bd695bce54cef859336e7ce2999403db0ecc1f5ecaabf0074bf174f3d4dd1ce15858bb66d4b857c03ba408570c8aca1422ebbc7063b71f8b337b017847c8
 
-RUN mkdir -p $ROOTDIR/src \
-    && wget -q -O /tmp/hadoop.tar.gz https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/hadoop-${HADOOP_VERSION}.tar.gz \
-    && echo "${HADOOP_SHA512}  /tmp/hadoop.tar.gz" | sha512sum -c - \
+RUN case "$TARGETARCH" in \
+      amd64) hadoop_tgz="hadoop-${HADOOP_VERSION}.tar.gz"; hadoop_sha="$HADOOP_SHA512_AMD64" ;; \
+      arm64) hadoop_tgz="hadoop-${HADOOP_VERSION}-aarch64.tar.gz"; hadoop_sha="$HADOOP_SHA512_ARM64" ;; \
+      *) echo "unsupported TARGETARCH '$TARGETARCH' (expected amd64 or arm64; build with --platform linux/amd64 or linux/arm64)" >&2; exit 1 ;; \
+    esac \
+    && mkdir -p $ROOTDIR/src \
+    && wget -q -O /tmp/hadoop.tar.gz "https://dlcdn.apache.org/hadoop/common/hadoop-${HADOOP_VERSION}/${hadoop_tgz}" \
+    && echo "${hadoop_sha}  /tmp/hadoop.tar.gz" | sha512sum -c - \
     && tar -xzf /tmp/hadoop.tar.gz -C $ROOTDIR/src/ \
     && rm /tmp/hadoop.tar.gz \
     && mv $ROOTDIR/src/hadoop-${HADOOP_VERSION} $HADOOP_HOME && \
@@ -217,15 +229,21 @@ ENV PYZMQ_VERSION=25.1.1
 #
 # The step below writes the index into pip.conf (and uv.toml) so pip/uv keep working INSIDE the
 # container (gbx:test:python installs extras at run time). It is the only place the URL lands in the
-# image: a file in this layer, not the history and not the environment. The image is local only
-# (never pushed); treat it like any file that holds a mirror URL. BuildKit does NOT key its layer
-# cache on a secret, so after adding or changing PIP_INDEX_URL rebuild with --no-cache, or the
-# cached layer below keeps the old index. Caveat for lock recompiles: the
+# image: a file in this layer, not the history and not the environment. The image is local only: never
+# push, `docker save` or share it, because the layer carries that file.
+#
+# BuildKit does NOT key its layer cache on a secret, so a changed index alone would reuse the cached
+# layer below with the old one. GBX_PIP_INDEX_FPR is the fix: build_smart.sh passes the first 12 hex
+# characters of the sha256 of the index (a fingerprint, not the index) to this stage only. It changes
+# when the index does, so this layer and the pip steps after it rebuild (GDAL and PDAL stay cached).
+# Caveat for lock recompiles: the
 # dev proxy (pypi-proxy.dev.databricks.com) is a ROLLING-RECENT mirror that prunes old releases,
 # so it cannot reproduce runtime-matched locks (e.g. botocore 1.40.x). Authoritative recompiles
 # must run against CI's full-retention JFrog mirror (db-pypi) -- see the note in
 # scripts/security/README.md; the dev proxy and public PyPI are both unsuitable.
+ARG GBX_PIP_INDEX_FPR=none
 RUN --mount=type=secret,id=pip_index_url \
+    echo "package index fingerprint: ${GBX_PIP_INDEX_FPR}"; \
     idx=https://pypi.org/simple/; \
     if [ -s /run/secrets/pip_index_url ]; then idx="$(cat /run/secrets/pip_index_url)"; fi; \
     case "$idx" in *'"'*|*'\'*) echo "the pip_index_url secret holds a quote or backslash" >&2; exit 1 ;; esac; \
@@ -345,7 +363,10 @@ RUN python3 -m ipykernel install --name python3 --display-name "Python 3 (Geobri
 # STAGE 7: per-architecture library path, entrypoint (the stage tagged as the image)
 # e.g. `docker buildx build --platform linux/arm64 --target final -t geobrix-final .`
 # BuildKit sets TARGETARCH (amd64 | arm64) from --platform; any other value has no
-# final-<arch> stage and fails the build, rather than defaulting to one.
+# final-<arch> stage and fails the build, rather than defaulting to one. A direct build for another
+# platform fails with a stage-lookup error such as "pull access denied ... final-riscv64"; the
+# Hadoop and pip-lock selections above name the supported architectures. build_smart.sh refuses
+# anything but linux/arm64 and linux/amd64 before Docker is called.
 # ==========================================
 FROM final-base AS final-amd64
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/lib/x86_64-linux-gnu

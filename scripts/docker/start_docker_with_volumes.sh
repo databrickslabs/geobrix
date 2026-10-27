@@ -1,6 +1,6 @@
 #!/bin/bash
 # Start Docker container with Volumes mount for sample data testing
-# Run from project root: sh scripts/docker/start_docker_with_volumes.sh [--privileged]
+# Run from project root: bash scripts/docker/start_docker_with_volumes.sh [--privileged] [--platform linux/arm64|linux/amd64]
 #
 # Ports: 5005 = JDWP remote debug (attach your IDE's "Remote JVM Debug" to localhost:5005);
 #        8888 = Jupyter's default port, kept for an ad-hoc `jupyter` server (none starts by default);
@@ -21,6 +21,7 @@ PRIVILEGED=""
 PLATFORM_ARG=""
 while [[ $# -gt 0 ]]; do
     case "$1" in
+        -h|--help) echo "usage: $0 [--privileged] [--platform linux/arm64|linux/amd64]  (platform: else \$GBX_DOCKER_PLATFORM, else this host)"; exit 0 ;;
         --privileged) PRIVILEGED="--privileged"; shift ;;
         --platform)
             if [ $# -lt 2 ]; then echo "ERROR: --platform needs a value (linux/arm64 or linux/amd64)" >&2; exit 2; fi

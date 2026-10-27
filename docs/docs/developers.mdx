@@ -186,12 +186,12 @@ Doc tests use the **in-repo minimal bundle** (no download step). Generate it onc
 
 | Command | When to use | What it does |
 |---------|-------------|--------------|
-| `gbx:docker:start` | First time or after stop | Starts `geobrix-dev` container |
+| `gbx:docker:start` | First time or after stop | Starts `geobrix-dev` container from the image for your machine's architecture (`--platform` or `GBX_DOCKER_PLATFORM` to choose; `--recreate` to switch a running container) |
 | `gbx:docker:stop` | When done developing | Stops container |
 | `gbx:docker:exec` | Run Maven, pytest, etc. | Runs a command (or interactive shell) in container |
 | `gbx:docker:attach` | Interactive shell in container | Attach to running container |
 | `gbx:docker:restart` | After config change | Restart container |
-| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image and optionally start |
+| `gbx:docker:rebuild` | After Dockerfile or deps change | Rebuild image (native for your machine's architecture; `--platform` to choose) and optionally start |
 | `gbx:docker:clear-pycache` | After editing Python code, stale imports | Clears `.pyc` and `__pycache__` in container so tests see fresh code |
 
 **Lint**

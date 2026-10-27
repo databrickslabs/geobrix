@@ -7,6 +7,7 @@ PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 
 # Source common utilities
 source "$SCRIPT_DIR/common.sh"
+source "$PROJECT_ROOT/scripts/docker/gbx-platform.sh"
 
 # Default values
 TIMEOUT=10
@@ -110,6 +111,12 @@ fi
 
 # If --privileged requested, recreate container instead of restarting
 if [ "$PRIVILEGED" = true ]; then
+    # The image to recreate from must exist BEFORE the working container is stopped and removed.
+    RESTART_PLATFORM="$(gbx_docker_platform)" || exit 2
+    if ! gbx_require_dev_image "$RESTART_PLATFORM" >/dev/null; then
+        echo -e "${RED}❌ Not recreating: the existing geobrix-dev container was left untouched.${NC}"
+        exit 1
+    fi
     echo -e "${CYAN}🔄 Recreating container with privileged mode...${NC}"
     print_separator
     docker stop -t $TIMEOUT geobrix-dev 2>/dev/null || true

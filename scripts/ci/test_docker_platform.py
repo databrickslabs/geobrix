@@ -48,9 +48,16 @@ class Sandbox:
         docker.chmod(0o755)
         uname = self.bin / "uname"
         uname.write_text(
-            '#!/bin/sh\nif [ "$1" = "-m" ]; then echo "$FAKE_UNAME_M"; else exec /usr/bin/uname "$@"; fi\n'
+            '#!/bin/sh\ncase "$1" in -m) echo "$FAKE_UNAME_M" ;; -s) echo "${FAKE_UNAME_S:-Linux}" ;; '
+            '*) exec /usr/bin/uname "$@" ;; esac\n'
         )
         uname.chmod(0o755)
+        # `sysctl -n hw.optional.arm64`: set FAKE_HW_ARM64 to answer, leave it unset for "no such key"
+        sysctl = self.bin / "sysctl"
+        sysctl.write_text(
+            '#!/bin/sh\n[ -n "$FAKE_HW_ARM64" ] && echo "$FAKE_HW_ARM64" || exit 1\n'
+        )
+        sysctl.chmod(0o755)
         self.log = tmp_path / "docker.log"
         self.state_file = tmp_path / "docker.json"
         self.state = {"images": {}, "container": None, "history": []}
@@ -62,11 +69,12 @@ class Sandbox:
     def image(self, ref: str, arch: str):
         self.state["images"][ref] = {"arch": arch}
 
-    def container(self, arch: str, running: bool = True):
+    def container(self, arch: str, running: bool = True, mount: str = ""):
         self.state["container"] = {
             "image": f"sha256:{arch}",
             "arch": arch,
             "running": running,
+            "mount": mount,
         }
 
     def _exec(self, argv, env=None, cwd=None):
@@ -152,6 +160,24 @@ def flag_value(call, name):
 def test_the_default_is_the_host_architecture(tmp_path, uname_m, want):
     res = Sandbox(tmp_path, uname_m).sh("gbx_docker_platform")
     assert (res.returncode, res.stdout.strip()) == (0, want)
+
+
+def test_a_rosetta_shell_on_apple_silicon_is_still_arm64(tmp_path):
+    """uname -m says x86_64 in a shell started under Rosetta; the CPU says arm64."""
+    env = {"FAKE_UNAME_S": "Darwin", "FAKE_HW_ARM64": "1"}
+    res = Sandbox(tmp_path, "x86_64").sh("gbx_docker_platform", env=env)
+    assert (res.returncode, res.stdout.strip()) == (0, "linux/arm64")
+
+
+def test_an_intel_mac_and_a_linux_x86_host_stay_amd64(tmp_path):
+    sb = Sandbox(tmp_path, "x86_64")
+    for env in (
+        {"FAKE_UNAME_S": "Darwin"},  # Intel Mac: the key is absent
+        {"FAKE_UNAME_S": "Darwin", "FAKE_HW_ARM64": "0"},
+        {"FAKE_UNAME_S": "Linux", "FAKE_HW_ARM64": "1"},  # only macOS is asked
+    ):
+        res = sb.sh("gbx_docker_platform", env=env)
+        assert (res.returncode, res.stdout.strip()) == (0, "linux/amd64"), env
 
 
 @pytest.mark.parametrize(
@@ -328,6 +354,36 @@ def test_the_package_index_goes_in_as_a_private_secret_file(arm):
     assert INDEX not in res.output and "idx.internal" not in res.output
 
 
+def fingerprint(url):
+    import hashlib
+
+    return hashlib.sha256(url.encode()).hexdigest()[:12]
+
+
+def test_a_non_secret_fingerprint_of_the_index_keys_the_final_stage_only(arm):
+    """BuildKit's cache ignores secrets, so a changed index must change a build-arg."""
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 0, res.output
+    by_stage = {flag_value(b, "--target"): b for b in arm.of("build")}
+    want = f"GBX_PIP_INDEX_FPR={fingerprint(INDEX)}"
+    assert flag_value(by_stage["final"], "--build-arg") == want
+    assert len(want.split("=")[1]) == 12
+    assert not any("--build-arg" in b for s, b in by_stage.items() if s != "final")
+    # the fingerprint is not the index, and the index is still nowhere in any argument
+    assert not any(INDEX in a or "idx.internal" in a for c in arm.calls for a in c)
+
+
+def test_another_index_gives_another_fingerprint_and_none_gives_none(arm):
+    other = "https://other.internal/simple"
+    assert build(arm, env={"PIP_INDEX_URL": other}).returncode == 0
+    final = [b for b in arm.of("build") if flag_value(b, "--target") == "final"][0]
+    assert flag_value(final, "--build-arg") == f"GBX_PIP_INDEX_FPR={fingerprint(other)}"
+    assert fingerprint(other) != fingerprint(INDEX)
+    arm.log.unlink()
+    assert build(arm).returncode == 0
+    assert not any("GBX_PIP_INDEX_FPR" in a for c in arm.of("build") for a in c)
+
+
 def test_without_an_index_there_is_no_secret(arm):
     assert build(arm).returncode == 0
     assert not any("--secret" in b for b in arm.of("build"))
@@ -342,6 +398,49 @@ def test_an_index_in_the_image_history_fails_the_build_untagged(arm):
     assert INDEX not in res.output and "idx.internal" not in res.output
     assert [c for c in arm.of("tag")] == []
     assert "geobrix-checkpoint:final-arm64" not in arm.final_state()["images"]
+
+
+@pytest.mark.parametrize(
+    "leak",
+    [
+        "RUN pip config set global.index-url https://idx.internal:8443/other",  # the host only
+        "RUN curl https://ci-user:s3cret@idx.internal:8443/simple/x",  # host, other path
+        "ENV PIP_INDEX_URL=https://somewhere.else/simple",  # a value, not this build's
+        "ARG UV_INDEX_URL=https://somewhere.else/simple",
+    ],
+)
+def test_the_check_also_matches_the_host_and_any_assigned_index(arm, leak):
+    arm.state["history"] = [leak, "RUN apt-get update"]
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 1, leak
+    assert "not tagged" in res.output and arm.of("tag") == []
+    assert "s3cret" not in res.output and "idx.internal" not in res.output
+
+
+def test_an_assigned_index_is_caught_even_when_none_is_exported(arm):
+    arm.state["history"] = ["ENV PIP_INDEX_URL=https://somewhere.else/simple"]
+    res = build(arm)
+    assert res.returncode == 1 and arm.of("tag") == []
+    assert "somewhere.else" not in res.output
+
+
+@pytest.mark.parametrize("key", ["history_rc", "inspect_rc"])
+def test_a_build_that_cannot_be_read_back_is_not_tagged(arm, key):
+    """The check fails closed: no history or config to read means nothing was verified."""
+    arm.state[key] = 1
+    res = build(arm, env={"PIP_INDEX_URL": INDEX})
+    assert res.returncode == 1
+    assert "Could not read" in res.output and "not tagged" in res.output
+    assert arm.of("tag") == []
+    assert INDEX not in res.output and "idx.internal" not in res.output
+
+
+def test_the_public_index_is_not_mistaken_for_a_leak(arm):
+    """The Dockerfile's own default names pypi.org in the history; that is no private mirror."""
+    arm.state["history"] = ["RUN idx=https://pypi.org/simple/; echo done"]
+    res = build(arm, env={"PIP_INDEX_URL": "https://pypi.org/simple/"})
+    assert res.returncode == 0, res.output
+    assert ["tag", "geobrix-checkpoint:final-arm64", f"{TAG}-arm64"] in arm.calls
 
 
 def test_a_clean_history_is_tagged_after_the_check(arm):
@@ -495,6 +594,29 @@ def test_rebuild_refuses_a_bad_platform_before_touching_anything(arm):
     assert arm.calls == []
 
 
+def test_a_platform_in_the_extra_docker_flags_is_refused_before_anything_is_touched(
+    arm,
+):
+    """It would override the platform the container-removal decision was made for."""
+    arm.container("arm64")
+    for flags in (("--platform", "linux/amd64"), ("--platform=linux/amd64",)):
+        res = rebuild(arm, "--", *flags)
+        assert res.returncode == 2 and "--platform" in res.output, flags
+        assert arm.calls == []  # not even a container removal
+    res = rebuild(arm, "--", "--build-arg", f"PIP_INDEX_URL={INDEX}")
+    assert res.returncode == 2 and arm.calls == []
+    assert INDEX not in res.output
+
+
+def test_extra_docker_flags_reach_docker_after_a_separator(arm):
+    arm.container("amd64")
+    res = rebuild(arm, "--platform", "linux/arm64", "--", "--build-arg", "CORES=4")
+    assert res.returncode == 0, res.output
+    builds = arm.of("build")
+    assert builds and all(["--build-arg", "CORES=4"] == b[-3:-1] for b in builds)
+    assert all(flag_value(b, "--platform") == "linux/arm64" for b in builds)
+
+
 def test_rebuild_start_passes_the_platform_on(arm):
     arm.image(f"{TAG}-arm64", "arm64")
     res = rebuild(arm, "--start")
@@ -548,3 +670,63 @@ def test_start_refuses_a_bad_platform(arm):
     assert res.returncode == 2 and arm.calls == []
     res = start(arm, env={"GBX_DOCKER_PLATFORM": "nope"})
     assert res.returncode == 2 and arm.calls == []
+
+
+# --- a recreate checks the image BEFORE it stops or removes the working container -----------
+
+
+def untouched(sb, arch="amd64"):
+    state = sb.final_state()
+    return (
+        lifecycle(sb) == []
+        and state["container"]["running"] is True
+        and (state["container"]["arch"] == arch)
+    )
+
+
+def test_recreate_without_the_target_image_leaves_the_container_alone(arm):
+    arm.image(f"{TAG}-amd64", "amd64")  # the arm64 image was never built
+    arm.container("amd64")
+    res = start(arm, "--recreate", "--platform", "linux/arm64")
+    assert res.returncode == 1
+    assert f"{TAG}-arm64" in res.output and "left untouched" in res.output
+    assert "gbx-docker-rebuild.sh --platform linux/arm64" in res.output
+    assert untouched(arm) and arm.of("run") == []
+
+
+def test_recreate_with_the_target_image_still_replaces_the_container(arm):
+    arm.image(f"{TAG}-arm64", "arm64")
+    arm.container("amd64")
+    res = start(arm, "--recreate", "--platform", "linux/arm64")
+    assert res.returncode == 0, res.output
+    assert lifecycle(arm) == ["stop", "rm"] and arm.of("run")
+
+
+def test_a_worktree_mismatch_recreate_checks_the_image_first_too(arm):
+    arm.container("amd64", mount="/some/other/worktree")
+    res = start(arm)  # the default platform is arm64, whose image does not exist
+    assert res.returncode == 1 and "left untouched" in res.output
+    assert untouched(arm) and arm.of("run") == []
+    arm.image(f"{TAG}-arm64", "arm64")
+    res = start(arm)
+    assert res.returncode == 0, res.output
+    assert lifecycle(arm) == [
+        "stop",
+        "rm",
+    ]  # with the image there, it recreates as before
+
+
+def restart(sb, *args, env=None):
+    return sb.run(COMMANDS / "gbx-docker-restart.sh", *args, env=env)
+
+
+def test_restart_privileged_checks_the_image_before_removing_the_container(arm):
+    arm.container("amd64")
+    res = restart(arm, "--privileged")
+    assert res.returncode == 1
+    assert f"{TAG}-arm64" in res.output and "left untouched" in res.output
+    assert untouched(arm) and arm.of("run") == []
+    arm.image(f"{TAG}-arm64", "arm64")
+    res = restart(arm, "--privileged")
+    assert res.returncode == 0, res.output
+    assert lifecycle(arm) == ["stop", "rm"] and arm.of("run")

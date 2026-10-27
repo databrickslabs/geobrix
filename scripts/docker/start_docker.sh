@@ -3,7 +3,7 @@
 # The mount source is resolved from git (not $PWD) so the container is always bound
 # to the repository root regardless of which subdirectory you launch from, and so a
 # stale/deleted CWD can't dangle the mount. Run from anywhere inside the repo:
-#   sh scripts/docker/start_docker.sh
+#   bash scripts/docker/start_docker.sh
 
 # Resolve the repository top-level via git. Errors clearly if not inside a git work tree.
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"

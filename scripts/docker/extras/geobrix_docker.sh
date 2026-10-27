@@ -1,6 +1,6 @@
 #!/bin/bash
 # [1] Build the image with 'build_smart.sh' (or gbx:docker:rebuild); the platform is this host's, or $GBX_DOCKER_PLATFORM:
-# [2] Assumes you are executing this from project root, e.g. 'sh scripts/docker/mac/geobrix_docker_mac.sh'
+# [2] Assumes you are executing this from project root, e.g. 'bash scripts/docker/extras/geobrix_docker.sh'
 # [3] if you want to run tests within the container shell
 # - [a] JDWP is opt-in (no JAVA_TOOL_OPTIONS by default): debug a test run with
 #       `mvn test -DagentLib='${jdwp.agent}' ...` and attach to localhost:5005. To attach the agent

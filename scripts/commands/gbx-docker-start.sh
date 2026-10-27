@@ -144,7 +144,17 @@ existing_mount_source() {
     docker inspect --format '{{ range .Mounts }}{{ if eq .Destination "/root/geobrix" }}{{ .Source }}{{ end }}{{ end }}' geobrix-dev 2>/dev/null
 }
 
+# A recreate removes the working container first, so the image it will be recreated from must exist
+# BEFORE anything is stopped or removed; otherwise a missing image leaves no container at all.
+require_image_before_removal() {
+    if ! gbx_require_dev_image "$PLATFORM" >/dev/null; then
+        echo -e "${RED}❌ Not recreating: the existing geobrix-dev container was left untouched.${NC}"
+        exit 1
+    fi
+}
+
 if [ "$RECREATE" = true ] && docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
+    require_image_before_removal
     echo ""
     echo -e "${CYAN}🔄 Recreating container (--recreate): stopping and removing the existing one...${NC}"
     docker stop geobrix-dev >/dev/null 2>&1 || true
@@ -158,6 +168,7 @@ if docker ps -a --format '{{.Names}}' | grep -q '^geobrix-dev$'; then
         echo -e "${YELLOW}⚠️  Existing 'geobrix-dev' container is mounted to a different worktree:${NC}"
         echo -e "   existing: ${YELLOW}$EXISTING_MOUNT${NC}"
         echo -e "   current:  ${YELLOW}$PROJECT_ROOT${NC}"
+        require_image_before_removal
         echo -e "${CYAN}🔄 Recreating container with current worktree mount...${NC}"
         docker stop geobrix-dev >/dev/null 2>&1 || true
         docker rm geobrix-dev >/dev/null 2>&1 || true

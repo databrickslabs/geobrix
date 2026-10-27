@@ -34,7 +34,8 @@ OPTIONS:
     --keep-container     Do not stop or remove the running geobrix-dev container
     --start              Start container after rebuild
     --attach             Attach to container after start (implies --start)
-    --log <path>         Write output to log file (filename → test-logs/<name>)
+    --log <path>         Write output to log file (filename → test-logs/<name>). Not for a build with
+                         PIP_INDEX_URL set: pip prints the index host, so the log would contain it.
     --help               Display this help message
 
 DOCKER FLAGS (after --):
@@ -69,7 +70,8 @@ NOTES:
     - Platform: --platform, else \$GBX_DOCKER_PLATFORM, else this host's architecture. An arm64 host builds
       a native arm64 image (an amd64 image under emulation is about 10x slower).
     - A private package index: export PIP_INDEX_URL before running; it reaches the build as a BuildKit
-      secret, never a build-arg, and is not recorded in the image history.
+      secret, never a build-arg, and is not recorded in the image history. The image does keep it in its
+      pip/uv config files, so never push, docker save or share the image.
     - Stops and removes the existing container before rebuild so the next start uses the new image,
       but only when that container runs the SAME architecture as the rebuild; a container of the other
       architecture, and --keep-container, leave it alone.
@@ -140,8 +142,11 @@ if [ -n "$LOG_FILE" ]; then
     setup_log_file "$LOG_FILE"
 fi
 
-# Resolve the platform now, so a bad value fails before anything is touched.
+# Resolve the platform now, so a bad value fails before anything is touched. Docker flags that would set
+# the platform or the package index again are refused for the same reason (they are checked before the
+# container is removed, and build_smart.sh would refuse them too).
 PLATFORM="$(gbx_docker_platform "$PLATFORM_ARG")" || exit 2
+gbx_check_docker_flags "${BUILD_EXTRA[@]}" || exit 2
 IMAGE_TAG="$(gbx_dev_image_tag "$PLATFORM")"
 
 print_banner "🐳 GeoBrix: Rebuild Docker Image"
@@ -194,7 +199,11 @@ BUILD_ARGS=("--platform" "$PLATFORM")
 [ "$PULL" = true ] && BUILD_ARGS+=("--pull")
 [ "$PULL" = false ] && BUILD_ARGS+=("--no-pull")
 [ "$NO_CACHE" = true ] && BUILD_ARGS+=("--no-cache")
-BUILD_ARGS+=("${BUILD_EXTRA[@]}")
+# After `--`, so build_smart.sh passes them to docker and never parses one as its own option (a --platform
+# there would otherwise override the platform decided above).
+if [ ${#BUILD_EXTRA[@]} -gt 0 ]; then
+    BUILD_ARGS+=("--" "${BUILD_EXTRA[@]}")
+fi
 
 bash build_smart.sh "${BUILD_ARGS[@]}"
 EXIT_CODE=$?

@@ -100,14 +100,16 @@ def _read_directory(get_bytes, header: dict, offset: int, length: int) -> list:
     from pmtiles.tile import Compression, deserialize_directory
 
     raw = get_bytes(offset, length)
-    comp = Compression(header["internal_compression"])
+    comp = header["internal_compression"]
     if comp is Compression.GZIP:
         return deserialize_directory(raw)
     if comp is Compression.NONE:
         # The library has no raw parser; a directory is a few KB, so re-gzipping
         # (cheapest level) it for the library's own parser costs nothing.
         return deserialize_directory(gzip.compress(raw, compresslevel=1))
-    raise ValueError(f"pmtiles_gbx: internal compression {comp.value} is not supported")
+    raise ValueError(
+        f"pmtiles_gbx: internal compression {comp.value} ({comp.name}) is not supported"
+    )
 
 
 def _iter_tile_ids(get_bytes, header: dict, offset: int, length: int):

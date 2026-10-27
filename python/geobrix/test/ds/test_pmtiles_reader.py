@@ -659,7 +659,7 @@ def test_read_directory_rejects_unsupported_compression(name, value):
     with pytest.raises(ValueError) as info:
         _read_directory(lambda o, n: b"", header, 127, 10)
     assert str(info.value) == (
-        f"pmtiles_gbx: internal compression {value} is not supported"
+        f"pmtiles_gbx: internal compression {value} ({name}) is not supported"
     )
 
 
@@ -676,5 +676,7 @@ def test_archive_with_an_unsupported_internal_compression_fails_at_planning(tmp_
         h = deserialize_header(fh.read(127))
         fh.seek(0)
         fh.write(serialize_header(dict(h, internal_compression=Compression.ZSTD)))
-    with pytest.raises(ValueError, match="internal compression 4 is not supported"):
+    with pytest.raises(
+        ValueError, match=r"internal compression 4 \(ZSTD\) is not supported"
+    ):
         PMtilesArchiveReader({"path": path}).partitions()

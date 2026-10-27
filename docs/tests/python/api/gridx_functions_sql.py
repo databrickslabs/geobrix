@@ -461,6 +461,39 @@ bng_kloop_sql_example_output = """
 ... (8 cells: hollow ring at k=1, center TQ3080 excluded)
 """
 
+bng_kringexplode_sql_example_output = """
++------+
+|cellid|
++------+
+|TQ3080|
+|TQ2979|
+|TQ2981|
+|TQ3181|
+|TQ3179|
+|TQ2980|
+|TQ3180|
+|TQ3081|
+|TQ3079|
++------+
+... (9 rows: center TQ3080 plus its 8 neighbours at k=1)
+"""
+
+bng_kloopexplode_sql_example_output = """
++------+
+|cellid|
++------+
+|TQ2979|
+|TQ2981|
+|TQ3181|
+|TQ3179|
+|TQ2980|
+|TQ3180|
+|TQ3081|
+|TQ3079|
++------+
+... (8 rows: hollow ring at k=1, center TQ3080 excluded)
+"""
+
 bng_geomkring_sql_example_output = """
 +-----------------------------+
 |kring                        |
@@ -497,6 +530,23 @@ bng_tessellate_sql_example_output = """
 ... (9 chips; TQ3080 is core (core=true, chip=null); border cells carry WKB clip geometry)
 """
 
+
+bng_tessellateexplode_sql_example_output = """
++------+-----+--------------------------------------------------------+
+|cellid|core |chip                                                    |
++------+-----+--------------------------------------------------------+
+|TQ3080|true |NULL                                                    |
+|TQ2979|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 2C A0 ...]|
+|TQ3179|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 3C 40 ...]|
+|TQ3181|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 3C 40 ...]|
+|TQ2981|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 2C A0 ...]|
+|TQ3079|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 34 70 ...]|
+|TQ2980|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 24 D0 ...]|
+|TQ3081|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 34 70 ...]|
+|TQ3180|false|[00 00 00 00 03 00 00 00 01 00 00 00 05 41 20 3C 40 ...]|
++------+-----+--------------------------------------------------------+
+... (9 rows: TQ3080 is core (core=true, chip=null); border cells carry a WKB clip polygon, cut here)
+"""
 
 bng_cellintersection_agg_sql_example_output = """
 # Heavyweight SQL (active tier = heavy/Scala) — STRUCT<cellid, core, chip>:

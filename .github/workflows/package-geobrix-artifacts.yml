@@ -20,7 +20,8 @@ name: package geobrix artifacts
 #   4. geobrix-gdal-artifacts-v<version>-noble.tar.gz.sha256    (computed)
 #   5. geobrix-gdal-init.sh                                     (committed)
 #   6. geobrix-docs-<version>.zip                               (built inline from docs/)
-#   7. geobrix-<version>-dcs.Dockerfile                         (committed; the DCS image recipe)
+#   7. scripts/docker/dcs/Dockerfile                            (committed; the DCS image recipe;
+#                                                                attached to the tag as geobrix-<version>-dcs.Dockerfile)
 #
 # The slow PPA/apt dance does NOT run here - the GDAL platform layer
 # (~250 MB of .debs + wheels + JNI) is committed under resources/static/

@@ -391,6 +391,10 @@ formats.
   read, since its `(z, x, y, bytes)` struct cannot hold an error tile. A bad argument raises its own
   message instead: an unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096], a
   `max_z` above the cap, or a tile count above the limit.
+- **Heavyweight `rst_tilexyz` raises for a bad parameter.** An unknown `format`, `resampling` or
+  `rescale`, or a `size` outside (0, 4096], returned a transparent PNG, which hid the typo; it now
+  raises its message, as `rst_xyzpyramid` and the lightweight tier do. A tile that cannot be read or
+  rendered still returns a transparent PNG, never NULL.
 - **Corrupt tiles yield an error row again.** The lightweight `rst_separatebands`,
   `rst_retile` and `rst_tooverlappingtiles` table functions are meant to emit one error tile
   (NULL raster, the error in `metadata.last_error`) for an unreadable input. They instead

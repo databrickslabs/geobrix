@@ -27,8 +27,9 @@ import scala.util.Try
  *    3. `gdal.Translate -of <format>` to materialize PNG / JPEG / WEBP bytes.
  *    4. Read the bytes back from `/vsimem/`.
  *
- *  Out-of-extent tiles return a transparent PNG (alpha=0) of the requested size - NOT
- *  null. Slippy-map tile servers expect a 200-status non-zero body even outside source
+ *  A bad parameter (an unknown `format`, `resampling` or `rescale`, a `size` outside (0, 4096]) raises.
+ *  A data failure does not: out-of-extent tiles, and tiles that cannot be read or rendered, return a
+ *  transparent PNG (alpha=0) of the requested size - NOT null. Slippy-map tile servers expect a 200-status non-zero body even outside source
  *  coverage; returning null would surface as a 404 in the publishing pipeline.
  *
  *  Defaults: `format = "PNG"`, `size = 256`, `resampling = "bilinear"`, `rescale = "auto"`.
@@ -140,19 +141,24 @@ object RST_TileXYZ extends WithExpressionInfo {
         format: UTF8String, size: Int, resampling: UTF8String,
         rescale: UTF8String, conf: UTF8String, dt: DataType
     ): Array[Byte] = {
+        // A bad PARAMETER raises (error-handling.mdx): validate before the Try below, which exists for bad DATA.
+        // These checks read no dataset, so a failure here is never a data failure.
+        val fmtStr = if (format == null) "PNG" else format.toString
+        val resampleStr = if (resampling == null) "bilinear" else resampling.toString
+        val rescaleStr = if (rescale == null) "auto" else rescale.toString
+        val (fmt, resampleLower) = validateRender("rst_tilexyz", fmtStr, size, resampleStr)
+        parseRescale("rst_tilexyz", rescaleStr)
+
         val safe: () => Array[Byte] = () => {
             val exprConf = ExpressionConfig.fromB64(conf.toString)
             RST_ExpressionUtil.init(exprConf)
-            val fmtStr = if (format == null) "PNG" else format.toString
-            val resampleStr = if (resampling == null) "bilinear" else resampling.toString
-            val rescaleStr = if (rescale == null) "auto" else rescale.toString
-            val (fmt, resampleLower) = validateRender("rst_tilexyz", fmtStr, size, resampleStr)
             val (_, ds, options) = RasterSerializationUtil.rowToTile(row, dt)
             try execute(ds, options, z, x, y, fmt, size, resampleLower, rescaleStr)
             finally RasterDriver.releaseDataset(ds)
         }
         // safeEval wraps Throwables -> null; for BinaryType callers want bytes, never null.
-        // On hard failure we still want a transparent PNG, so wrap the safe-eval ourselves.
+        // On a data failure (unreadable tile, nothing to render) we still want a transparent PNG, so wrap the
+        // safe-eval ourselves.
         val result = Try(safe()).toOption.flatMap(Option(_))
         result.getOrElse(transparentPng(size))
     }

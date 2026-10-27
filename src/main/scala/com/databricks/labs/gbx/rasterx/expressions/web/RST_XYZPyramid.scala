@@ -64,8 +64,10 @@ case class RST_XYZPyramid(
     private case class Args(minZ: Int, maxZ: Int, format: String, size: Int, resampling: String, rescale: String)
 
     /** The `tile` column is the `(z, x, y, bytes)` struct, which cannot hold an error tile. The argument guards
-      * (`min_z` / `max_z` / null checks) run first and raise their message; a failure while reading or rendering
-      * the raster then emits one row with a NULL `tile`, except the tile-count guard, which is re-thrown. */
+      * run first and raise their message: the zoom range (`min_z` >= 0, `max_z` >= `min_z` and within the cap),
+      * the render arguments (`format`, `size`, `resampling`, `rescale`, via [[RST_TileXYZ.validateRender]] and
+      * [[RST_TileXYZ.parseRescale]]) and the null checks. A failure while reading or rendering the raster then
+      * emits one row with a NULL `tile`, except the tile-count guard, which is re-thrown. */
     override def eval(input: InternalRow): IterableOnce[InternalRow] = {
         val rawTile = tile.eval(input).asInstanceOf[InternalRow]
         if (rawTile == null) return Iterator.empty

@@ -12,9 +12,8 @@ Mirrors the heavyweight rasterx ``RST_TileXYZ`` / ``RST_XYZPyramid`` semantics:
 
 Primary backend: rio-tiler (lazy import, checked at call time via
 ``_riotiler_available``).  Fallback backend: rasterio warp + GDAL CreateCopy
-(always available; handles the Databricks Serverless env where rio-tiler 9.3.0
-re-resolves and fails to import under py3.12).  Public API is identical for
-both backends.
+(always available; used when rio-tiler cannot be imported on the executor).
+Public API is identical for both backends.
 """
 
 import morecantile
@@ -23,12 +22,13 @@ from rasterio.warp import transform_bounds
 
 # NOTE: rio_tiler is imported LAZILY (inside _transparent_png_riotiler /
 # _render_tile_riotiler), not at module top. rio-tiler 9.x defines
-# TypedDict(extra_items=...) (PEP 728), which fails to import under Databricks
-# Serverless %pip (its immutable constraints hold typing_extensions back).
+# TypedDict(extra_items=...) (PEP 728), which needs typing_extensions>=4.13; a
+# runtime that keeps an older typing_extensions (Serverless env 5, DBR 17.3 and 18
+# ship 4.12.2 until the light extras raise it) cannot import it.
 # Keeping the import lazy means `import pyrx` — and every rst_* function that
-# does NOT use XYZ tiling — works on Serverless; only rst_tilexyz /
-# rst_xyzpyramid require a working backend at call time.  See pyproject
-# [light-base] rio-tiler pin.
+# does NOT use XYZ tiling — still works there; only rst_tilexyz /
+# rst_xyzpyramid fall back to the rasterio backend at call time.  See the
+# pyproject [light_dbr17] typing_extensions floor and rio-tiler pin.
 
 # --- constants (mirror heavyweight) -----------------------------------------
 MAX_ZOOM = 20
@@ -66,8 +66,8 @@ _RIOTILER_OK = None  # module-level cache; None = not yet checked
 
 def _riotiler_available() -> bool:
     """True if rio-tiler imports cleanly (primary backend). Cached. Any import
-    failure — ImportError OR the 9.3.0 py3.12 TypedDict TypeError — selects the
-    rasterio fallback."""
+    failure — ImportError OR the TypeError from a typing_extensions older than 4.13
+    (PEP 728 ``extra_items``) — selects the rasterio fallback."""
     global _RIOTILER_OK
     if _RIOTILER_OK is None:
         try:

@@ -3,8 +3,9 @@
 # Covers: light_env6_all, light_dbr19_all — all alias geobrix[light_dbr19_all],
 # the canonical pb6 all-features extra.
 #
-# Regenerate (from python/geobrix/):
-#   uv pip compile --generate-hashes --python-version 3.12 \
+# Regenerate (from python/geobrix/), on any host: the platform is explicit so the result does not
+# depend on where it runs (a Linux aarch64 host would otherwise drop the click hold below):
+#   uv pip compile --generate-hashes --python-version 3.12 --python-platform x86_64-manylinux_2_28 \
 #       --output-file requirements-light-env6-all-ci.txt requirements-light-env6-all-ci.in
 #
 # This .in uses a local-package-with-extra reference so uv expands [light_env6_all]
@@ -13,7 +14,7 @@
 # ([overture] is an opt-in extra outside the _all umbrellas.)
 # Protobuf-5 all-features twin: see requirements-light-env5-all-ci.in.
 #
-# Resolved on a non-aarch64 host: the umbrella's `click>=8.2,<8.3` hold applies (it is skipped on
+# Resolved for x86_64 Linux: the umbrella's `click>=8.2,<8.3` hold applies (it is skipped on
 # Linux aarch64), so this lock carries click 8.2.1 and rasterio 1.4.3 -- the x86_64 resolution.
 # On aarch64 the same extra resolves click 8.5.0 / rasterio 1.5.x (see pyproject [light_dbr19_all]).
 #

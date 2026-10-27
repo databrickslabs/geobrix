@@ -149,7 +149,7 @@ GRID_TRANSPARENT = tuple(range(60, 70))
 # mode -> (gridSystem options, source CRS, source origin)
 GRID_MODES = {
     "quadbin": (
-        {"gridSystem": "quadbin", "gridResolution": "11"},
+        {"gridSystem": "quadbin", "gridResolution": "12"},
         "EPSG:32630",
         (500000.0, 5700000.0),
     ),

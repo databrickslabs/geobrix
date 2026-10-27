@@ -342,8 +342,11 @@ def _can_lock(path: Path) -> bool:
 
 def _kill_host_side(proc):
     """kill -9 a gbx script and its `docker exec` clients; what runs 'in the container' lives on."""
+    # `ww`: never cut the command column. Linux ps truncates it to the terminal width
+    # (COLUMNS), which on the CI runner hid the `_fake_docker_local.py` marker behind
+    # its long interpreter path.
     out = subprocess.run(
-        ["ps", "-axo", "pid=,ppid=,command="], capture_output=True, text=True
+        ["ps", "-axww", "-o", "pid=,ppid=,command="], capture_output=True, text=True
     ).stdout
     rows = []
     for line in out.splitlines():

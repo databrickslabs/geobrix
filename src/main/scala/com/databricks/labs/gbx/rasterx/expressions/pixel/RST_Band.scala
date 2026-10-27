@@ -1,7 +1,7 @@
 package com.databricks.labs.gbx.rasterx.expressions.pixel
 
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, InvokedExpression, WithExpressionInfo}
-import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
+import com.databricks.labs.gbx.rasterx.gdal.{GDAL, RasterDriver}
 import com.databricks.labs.gbx.rasterx.operator.OperatorOptions
 import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
@@ -18,7 +18,8 @@ import java.util.{Vector => JVector}
   *
   * Equivalent to `gdal_translate -b <bandIndex> <src> <dst>`. `bandIndex` is
   * 1-based to match GDAL convention. The extracted tile preserves the source
-  * CRS, GeoTransform, and pixel values; only the band count is reduced to 1.
+  * CRS, GeoTransform, and pixel values; only the band count is reduced to 1. A band labelled alpha is
+  * written as data ([[GDAL.subsetAlphaIndex]]).
   */
 case class RST_Band(
     tile: Expression,
@@ -77,6 +78,8 @@ object RST_Band extends WithExpressionInfo {
         opts.add("GTiff")
         opts.add("-b")
         opts.add(bandIndex.toString)
+        // gdal_translate copies the band's label: a lone alpha band is extracted for its values, as data.
+        GDAL.subsetInterpretationArgs(ds, Seq(bandIndex)).foreach(opts.add)
         val tOpts = new TranslateOptions(opts)
         val result =
             try {

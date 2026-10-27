@@ -17,7 +17,7 @@ object SeparateBands {
         val (resDs, resMtd) = GDALTranslate.executeTranslate(
           rasterPath,
           ds,
-          command = s"gdal_translate -b ${bandIdx + 1}",
+          command = (Seq(s"gdal_translate -b ${bandIdx + 1}") ++ GDAL.subsetInterpretationArgs(ds, Seq(bandIdx + 1))).mkString(" "),
           options
         )
 

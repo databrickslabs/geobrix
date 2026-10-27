@@ -115,4 +115,36 @@ class ValidMaskTest extends AnyFunSuite with BeforeAndAfterAll {
             assert(!ValidMask.anyValid(ds))
         } finally RasterDriver.releaseDataset(ds)
     }
+
+    // The band-subset rule, the same cases as the lightweight tier's `subset_colorinterp`.
+    private val SubsetCases: Seq[(Layout, Seq[Int], Option[Int])] = Seq(
+      (Layouts(0), Seq(4), None), // a lone alpha band is data
+      (Layouts(5), Seq(2, 4), None), // rgba_x: band 4 is data
+      (Layouts(5), Seq(4), None),
+      (Layouts(0), Seq(1, 2, 3, 4), Some(4)), // the alpha band, selected last with data: kept
+      (Layouts(0), Seq(4, 1), None), // selected first
+      (Layouts(0), Seq(1, 4), Some(2)),
+      (Layouts(0), Seq(4, 4), None), // no data band
+      (Layouts(0), Seq(1), None),
+      (Layouts(2), Seq(1, 3), Some(2)),
+      (Layouts(2), Seq(3), None),
+      (Layouts(6), Seq(1, 4), None) // rgb_nir has no alpha band
+    )
+
+    for ((l, bands, expected) <- SubsetCases) {
+        test(s"a subset of ${l.name} bands ${bands.mkString(",")} has its alpha band at $expected") {
+            val ds = fixture(l, None)
+            try {
+                assert(GDAL.subsetAlphaIndex(ds, bands) == expected)
+                // the translate arguments relabel every band labelled alpha apart from the subset's alpha band
+                val args = GDAL.subsetInterpretationArgs(ds, bands)
+                val relabelled = args.grouped(2).map(a => a.head.stripPrefix("-colorinterp_").toInt).toSeq
+                val labelledAlpha = bands.zipWithIndex.collect {
+                    case (b, i) if ds.GetRasterBand(b).GetColorInterpretation == GCI_AlphaBand && !expected.contains(i + 1) => i + 1
+                }
+                assert(relabelled == labelledAlpha)
+                assert(args.grouped(2).forall(_.last == "undefined"))
+            } finally RasterDriver.releaseDataset(ds)
+        }
+    }
 }

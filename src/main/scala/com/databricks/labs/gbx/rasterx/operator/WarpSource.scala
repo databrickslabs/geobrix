@@ -2,6 +2,7 @@ package com.databricks.labs.gbx.rasterx.operator
 
 import com.databricks.labs.gbx.rasterx.gdal.GDAL
 import org.gdal.gdal.{Dataset, TranslateOptions, gdal}
+import org.gdal.gdalconst.gdalconstConstants.GCI_AlphaBand
 
 import java.util.concurrent.atomic.AtomicLong
 
@@ -16,6 +17,11 @@ import java.util.concurrent.atomic.AtomicLong
   * A source with an alpha band, which gdalwarp already applies, and a source without a mask band are warped
   * as they are.
   *
+  * gdalwarp copies the source's band labels to the output, written with the pixels. A band labelled alpha that
+  * is not the alpha band ([[GDAL.alphaBandIndex]]: the last band) is data, so the view (an in-memory VRT as
+  * well, built only for such a source) relabels it undefined, and the warp writes it as data. That view is not
+  * a mask view: [[masked]] stays false and no [[viewsBuilt]] is counted.
+  *
   * Every heavyweight warp of a source that may carry its own mask goes through one: [[warp]] hands gdalwarp
   * [[dataset]] with [[alphaArgs]], and `ds` as the dataset the output's write options and metadata follow.
   * One view serves any number of warps of `ds`. The view reads `ds` through its band handles and owns no
@@ -23,12 +29,13 @@ import java.util.concurrent.atomic.AtomicLong
   */
 final class WarpSource(val ds: Dataset) extends AutoCloseable {
 
-    private var view: Dataset = WarpSource.maskView(ds).orNull
+    private val built: Option[(Dataset, Boolean)] = WarpSource.view(ds)
+    private var view: Dataset = built.map(_._1).orNull
 
     /** True when the warp reads the mask view. */
-    val masked: Boolean = view != null
+    val masked: Boolean = built.exists(_._2)
 
-    /** The dataset gdalwarp reads: the mask view, or `ds`. */
+    /** The dataset gdalwarp reads: the view (mask view and/or relabelled), or `ds`. */
     def dataset: Dataset = if (view != null) view else ds
 
     /** `-srcalpha` when the warp reads the mask view, so it applies the mask band as the source alpha. */
@@ -83,15 +90,21 @@ object WarpSource {
         finally source.close()
     }
 
-    /** The mask view of `ds` (see [[WarpSource]]), or None when it has no own mask band or has an alpha band. */
-    private def maskView(ds: Dataset): Option[Dataset] = {
+    /** The view of `ds` a warp reads (see [[WarpSource]]) and whether it is a mask view, or None when `ds` has no
+      * own mask band and no band labelled alpha apart from its alpha band, or has an alpha band and the latter. */
+    private def view(ds: Dataset): Option[(Dataset, Boolean)] = {
         val n = ds.GetRasterCount()
-        val maskOf = (1 to n).find(i => GDAL.hasOwnMask(ds.GetRasterBand(i)))
-        if (maskOf.isEmpty || GDAL.hasAlpha(ds)) None
+        val maskOf = if (GDAL.hasAlpha(ds)) None else (1 to n).find(i => GDAL.hasOwnMask(ds.GetRasterBand(i)))
+        val alpha = GDAL.alphaBandIndex(ds)
+        val dataLabelled = (1 to n).filter(i => !alpha.contains(i) && ds.GetRasterBand(i).GetColorInterpretation == GCI_AlphaBand)
+        if (maskOf.isEmpty && dataLabelled.isEmpty) None
         else {
             val args = new java.util.Vector[String]()
-            (Seq("-of", "VRT") ++ (1 to n).flatMap(i => Seq("-b", i.toString)) ++
-                Seq("-b", s"mask,${maskOf.get}", s"-colorinterp_${n + 1}", "undefined", "-mask", "none"))
+            val maskArgs =
+                maskOf.toSeq.flatMap(k =>
+                    (1 to n).flatMap(i => Seq("-b", i.toString)) ++ Seq("-b", s"mask,$k", s"-colorinterp_${n + 1}", "undefined")
+                )
+            (Seq("-of", "VRT") ++ maskArgs ++ dataLabelled.flatMap(i => Seq(s"-colorinterp_$i", "undefined")) ++ Seq("-mask", "none"))
                 .foreach(args.add)
             val translateOptions = new TranslateOptions(args)
             val view =
@@ -99,11 +112,11 @@ object WarpSource {
                 finally translateOptions.delete()
             if (view == null) {
                 throw new IllegalStateException(
-                  s"WarpSource: could not build the mask view of ${ds.GetDescription}: ${gdal.GetLastErrorMsg}"
+                  s"WarpSource: could not build the view of ${ds.GetDescription}: ${gdal.GetLastErrorMsg}"
                 )
             }
-            viewsBuilt.incrementAndGet()
-            Some(view)
+            if (maskOf.isDefined) viewsBuilt.incrementAndGet()
+            Some((view, maskOf.isDefined))
         }
     }
 }

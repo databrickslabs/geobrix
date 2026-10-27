@@ -320,9 +320,6 @@ object RasterTessellate {
                           source = Some(natives.clipSource)
                         )
                         if (resDs != null) {
-                            // gdalwarp carries the source's labels: a band labelled alpha that is not the alpha
-                            // band is data, so it is not labelled alpha in the chip.
-                            if (resDs.GetRasterCount() == natives.workDs.GetRasterCount()) GDAL.matchAlpha(resDs, alphaBand)
                             // covering+sparse: drop chips whose clip is entirely NoData.
                             if (coverage == "sparse" && isAllNoData(resDs)) {
                                 RasterDriver.releaseDataset(resDs)

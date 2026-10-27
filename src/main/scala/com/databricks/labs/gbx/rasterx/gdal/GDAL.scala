@@ -92,6 +92,28 @@ object GDAL {
     def hasAlpha(ds: org.gdal.gdal.Dataset): Boolean = alphaBandIndex(ds).isDefined
 
     /**
+      * THE band-subset rule of both tiers (the lightweight tier's `_nodata.subset_colorinterp`): the 1-based
+      * position of the alpha band in the subset `bands` (1-based source indices, in output order) of `ds`, if
+      * any. A subset keeps the Alpha label only when ALL of these hold: the selected band is the source's alpha
+      * band ([[alphaBandIndex]]), it is selected LAST, and at least one data band is selected with it. Otherwise
+      * every selected band is data, so a lone alpha band, selected for its values, is valid wherever its own
+      * NoData or mask says so, and an alpha label on any other band stays data.
+      */
+    def subsetAlphaIndex(ds: org.gdal.gdal.Dataset, bands: Seq[Int]): Option[Int] =
+        alphaBandIndex(ds).filter(a => bands.nonEmpty && bands.last == a && bands.init.exists(_ != a)).map(_ => bands.size)
+
+    /** `gdal_translate` arguments (`-colorinterp_<position> undefined`) that write every band of the subset
+      * `bands` of `ds` labelled alpha in the source as data, except the alpha band of the subset
+      * ([[subsetAlphaIndex]]): `gdal_translate -b` copies the labels. Empty when nothing needs relabelling. */
+    def subsetInterpretationArgs(ds: org.gdal.gdal.Dataset, bands: Seq[Int]): Seq[String] = {
+        val alpha = subsetAlphaIndex(ds, bands)
+        bands.zipWithIndex.collect {
+            case (b, i) if ds.GetRasterBand(b).GetColorInterpretation == GCI_AlphaBand && !alpha.contains(i + 1) =>
+                Seq(s"-colorinterp_${i + 1}", "undefined")
+        }.flatten
+    }
+
+    /**
       * Labels the bands of `dst`, a new dataset holding (windows of) the bands of a source, alpha exactly where
       * the source's alpha band is (`alpha`, from [[alphaBandIndex]] of the source): GDAL labels band 4 of a 4-band
       * uint8 GTiff alpha when it creates one, whatever the source was, and gives a 16-bit RGBA or a gray+alpha

@@ -5,7 +5,7 @@ import com.databricks.labs.gbx.gridx.grid.{CustomGridSystem, GridConf}
 import com.databricks.labs.gbx.rasterx.gdal.{GDAL, GDALManager, RasterDriver}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.util.SerializableConfiguration
-import org.gdal.gdal.Dataset
+import org.gdal.gdal.{Dataset, gdal}
 import org.gdal.gdalconst.gdalconstConstants._
 import org.gdal.osr.SpatialReference
 import org.gdal.osr.osrConstants
@@ -153,11 +153,11 @@ class RasterTessellateAlphaTest extends AnyFunSuite with BeforeAndAfterAll {
     private def alphaLabelled(ds: Dataset): Seq[Int] = labels(ds).zipWithIndex.collect { case (GCI_AlphaBand, i) => i }
 
     // ------------------------------------------------------------------------------------------------
-    // (a) centroid chips of an unwarped alpha source
+    // centroid chips of an unwarped alpha source
     // ------------------------------------------------------------------------------------------------
 
     for (site <- Sites; coverage <- Seq("sparse", "complete")) {
-        test(s"(a) ${site.grid} centroid $coverage on an unwarped RGBA source: no NoData over alpha, transparent pixels are NoData") {
+        test(s"${site.grid} centroid $coverage on an unwarped RGBA source: no NoData over alpha, transparent pixels are NoData") {
             val src = source(Rgba, site, transparent = Seq((0, 4, N, 5)))
             val declared = mutable.Set.empty[Option[Double]]
             var (chips, alphaMasked, validTransparent, validOpaque) = (0, true, 0L, 0L)
@@ -181,11 +181,11 @@ class RasterTessellateAlphaTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // ------------------------------------------------------------------------------------------------
-    // (b) + (g) no all-transparent cell, whatever the band count
+    // no all-transparent cell, whatever the band count
     // ------------------------------------------------------------------------------------------------
 
     for (site <- Sites; layout <- Seq(Rgba, GrayA, GrayXA, RgbXA); assignment <- Seq("centroid", "covering")) {
-        test(s"(b) ${site.grid} $assignment sparse on ${layout.name}: no all-transparent chip") {
+        test(s"${site.grid} $assignment sparse on ${layout.name}: no all-transparent chip") {
             val src = source(layout, site, transparent = Seq((0, 0, N / 2, N)))
             val last = layout.count
             var empty = 0
@@ -220,12 +220,48 @@ class RasterTessellateAlphaTest extends AnyFunSuite with BeforeAndAfterAll {
         }
     }
 
+    /** The labels written into the FILE of a covering chip, read from a copy of the file's own bytes once the handle
+      * is closed (the handle reports a label set after the write, whatever the file holds). */
+    private def fileLabels(chip: Dataset): Seq[Int] = {
+        val path = chip.GetDescription
+        chip.FlushCache()
+        chip.delete()
+        val copy = mem("file_copy.tif")
+        gdal.FileFromMemBuffer(copy, gdal.GetMemFileBuffer(path))
+        val reopened = gdal.Open(copy)
+        try labels(reopened)
+        finally {
+            reopened.delete()
+            gdal.Unlink(copy)
+            gdal.Unlink(path)
+        }
+    }
+
+    for (layout <- Seq(RgbaX, Rgba, RgbNir); coverage <- Seq("sparse", "complete")) {
+        test(s"covering $coverage chips of ${layout.name} carry the alpha label of the source in the written file") {
+            val src = source(layout, H3Site)
+            val want = if (layout.alphaLast) Seq(layout.count - 1) else Seq.empty[Int]
+            val it = tessellate(H3Site, handOff(src), "covering", coverage)
+            val seen = mutable.Set.empty[Seq[Int]]
+            try {
+                while (it.hasNext) {
+                    val (_, chip, _) = it.next()
+                    seen += fileLabels(chip).zipWithIndex.collect { case (GCI_AlphaBand, i) => i }
+                }
+            } finally {
+                it.asInstanceOf[AutoCloseable].close()
+                RasterDriver.releaseDataset(src)
+            }
+            assert(seen == Set(want), s"the chip files label bands $seen alpha, expected $want")
+        }
+    }
+
     // ------------------------------------------------------------------------------------------------
-    // (h) the alpha rule
+    // the alpha rule
     // ------------------------------------------------------------------------------------------------
 
     for (layout <- Seq(Rgba, GrayA, GrayXA, RgbXA, Rgba16, OnlyAlpha, RgbaX, RgbNir)) {
-        test(s"(h) GDAL.hasAlpha: ${layout.name} has an alpha band exactly when its last band is labelled alpha") {
+        test(s"GDAL.hasAlpha: ${layout.name} has an alpha band exactly when its last band is labelled alpha") {
             val src = source(layout, H3Site)
             try {
                 assert(GDAL.hasAlpha(src) == layout.alphaLast)
@@ -234,10 +270,10 @@ class RasterTessellateAlphaTest extends AnyFunSuite with BeforeAndAfterAll {
     }
 
     // ------------------------------------------------------------------------------------------------
-    // E1: a raster that is only an alpha band
+    // a raster that is only an alpha band
     // ------------------------------------------------------------------------------------------------
 
-    test("(E1) H3 covering+sparse on a raster that is only an alpha band drops the chips that are fully transparent") {
+    test("H3 covering+sparse on a raster that is only an alpha band drops the chips that are fully transparent") {
         val src = source(OnlyAlpha, H3Site, transparent = Seq((0, 0, N / 2, N)))
         def perCell(coverage: String): Map[Long, Boolean] = {
             val it = RasterTessellate.tessellateH3Iter(handOff(src), Map.empty[String, String], H3Res, "covering", coverage)

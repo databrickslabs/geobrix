@@ -15,7 +15,7 @@ persisted and read back by tasks that have no session and no manifest:
   ``zarr_tile_header`` and never reads a chunk.
 
 The grid is the 2-D plane of the variable's latitude/longitude (or ``y``/``x``) coordinate
-arrays, which must be regular (``affine_of``). A tile is north-up: when latitude ascends the
+arrays, which must be regular (``affine_of``) over the cells selected. A tile is north-up: when latitude ascends the
 rows are flipped, so row 0 is always the northernmost one and the geotransform's row step is
 negative. Windows are one inner chunk wide by default and never cross the longitude seam
 (each range of a wrapped ``sel`` is tiled on its own).
@@ -157,6 +157,18 @@ def affine_of(coords_y, coords_x, *, rtol: float = 1e-6) -> tuple[float, ...] | 
     (_, y_hi, y_step), (x_lo, _, x_step) = ys, xs
     gt = (x_lo - x_step / 2.0, x_step, 0.0, y_hi + y_step / 2.0, 0.0, -y_step)
     return tuple(float(v) for v in gt)
+
+
+def _selected_span(axis, n: int) -> tuple[int, int]:
+    """The index range ``[lo, hi)`` that holds every selected cell of ``axis`` (an axis of
+    ``n`` cells). A span of one cell has no step, so it takes its neighbours too."""
+    if not axis.ranges:
+        return 0, n
+    lo = min(start for start, _ in axis.ranges)
+    hi = max(stop for _, stop in axis.ranges)
+    if hi - lo < 2:
+        lo, hi = max(lo - 1, 0), min(hi + 1, n)
+    return lo, hi
 
 
 def _is_lat_like(dim: str, attrs: dict | None) -> bool:
@@ -558,16 +570,33 @@ def plan_tiles(
                 "GeoBrix can read, so its cells have no position",
                 fix='add a coordinate array for it, or use output="blocks"',
             )
-    gt = affine_of(coords[ydim], coords[xdim])
-    if gt is None:
+    cy, cx = np.asarray(coords[ydim]), np.asarray(coords[xdim])
+    height, width = int(meta.shape[y]), int(meta.shape[x])
+    # the grid has to be regular where the tiles lie, not along the whole axis
+    (ylo, yhi), (xlo, xhi) = _selected_span(axes[y], height), _selected_span(
+        axes[x], width
+    )
+    span = affine_of(cy[ylo:yhi], cx[xlo:xhi])
+    if span is None:
         raise ZarrUnsupported(
             f"the {ydim!r} and {xdim!r} coordinates of array {meta.name!r} are not a "
-            "regular grid (a constant step along each, at least two labels)",
+            "regular grid over the selected cells (a constant step along each, at least "
+            "two labels)",
             fix=_IRREGULAR_FIX,
         )
-    cy, cx = np.asarray(coords[ydim]), np.asarray(coords[xdim])
-    flip_y, flip_x = bool(cy[0] < cy[-1]), bool(cx[0] > cx[-1])
-    height, width = int(meta.shape[y]), int(meta.shape[x])
+    flip_y, flip_x = bool(cy[ylo] < cy[yhi - 1]), bool(cx[xlo] > cx[xhi - 1])
+    # the span's north-west corner is at this row and column of the (north-up) plane;
+    # the plane's own origin is that many steps further out
+    row0 = height - yhi if flip_y else ylo
+    col0 = width - xhi if flip_x else xlo
+    gt = (
+        span[0] - col0 * span[1],
+        span[1],
+        0.0,
+        span[3] - row0 * span[5],
+        0.0,
+        span[5],
+    )
     crs = _grid_crs(
         meta,
         grid_mapping,
@@ -943,8 +972,9 @@ class _ZarrHeader:
             "transform": self.transform,
         }
 
-    def tags(self, bidx=0, **_) -> dict:
-        return dict(self._tags) if not bidx else {}
+    def tags(self, bidx=0, ns=None) -> dict:
+        """The dataset's own tags; a band, or a domain such as ``SUBDATASETS``, has none."""
+        return dict(self._tags) if not bidx and ns is None else {}
 
     def window_transform(self, window):
         from rasterio.windows import transform

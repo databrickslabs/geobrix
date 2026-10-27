@@ -348,18 +348,42 @@ def test_header_functions_do_not_read_chunks(era5_v3_sharded, monkeypatch):
     assert reads  # the same counter does see a pixel read
 
 
-@pytest.mark.parametrize(
-    "name",
-    "width height numbands srid crs pixelwidth upperleftx upperlefty boundingbox scalex "
-    "scaley type getnodata metadata georeference bandmetadata subdatasets".split(),
-)
-def test_every_header_accessor_answers_for_a_zarr_tile(era5_v2, name):
+def test_a_zarr_tile_header_equals_the_header_of_its_materialization(era5_v2):
+    """Every header accessor gives for a virtual Zarr tile what it gives for the GeoTIFF the
+    tile becomes: the geotransform of a partial corner window of a v2 store, its CRS,
+    NaN NoData, type and extent."""
+    from shapely import wkb
+
     from databricks.labs.gbx.pyrx.core import accessors
 
-    (tile,) = virtual(one_plan(era5_v2, isel={"time": 0}, tile_size=(10, 6)), [5])
-    fn = getattr(accessors, name)
-    with ot.open_header(tile) as ds:
-        assert (fn(ds, 1) if name == "bandmetadata" else fn(ds)) is not None
+    plan = one_plan(era5_v2, isel={"time": 0}, tile_size=(10, 6))
+    tile = virtual(plan, [plan.n_tiles - 1])[0]
+    assert tile.window == (140, 72, 4, 1)  # the last window: 4 x 1 cells
+    mat = ot.materialize_to_bytes(tile)
+
+    def norm(v):
+        if isinstance(v, (bytes, bytearray)):
+            return tuple(round(c, 9) for c in wkb.loads(bytes(v)).bounds)
+        if isinstance(v, dict):
+            return {k: norm(x) for k, x in v.items()}
+        if isinstance(v, (list, tuple)):
+            return [norm(x) for x in v]
+        if isinstance(v, float):
+            return "nan" if v != v else round(v, 9)
+        return v
+
+    names = (
+        "width height numbands srid crs pixelwidth upperleftx upperlefty boundingbox "
+        "scalex scaley type getnodata georeference subdatasets"
+    ).split()
+    with ot.open_header(tile) as virtual_header, ot.open_header(mat) as real_header:
+        for name in names:
+            fn = getattr(accessors, name)
+            assert norm(fn(virtual_header)) == norm(fn(real_header)), name
+        assert norm(accessors.bandmetadata(virtual_header, 1)) == norm(
+            accessors.bandmetadata(real_header, 1)
+        )
+        assert (virtual_header.width, virtual_header.height) == (4, 1)
 
 
 def test_pending_instructions_apply_to_the_decoded_window(era5_v3_unsharded):
@@ -435,21 +459,28 @@ def test_band_dim_stacks_slices(era5_v3_sharded):
             assert hdr.count == 6
 
 
-def test_a_band_stack_is_one_read_unless_it_is_sparse(era5_v3_sharded, monkeypatch):
-    from databricks.labs.gbx.zarr import _engine
+def test_a_band_stack_reads_each_chunk_once(era5_v3_unsharded, monkeypatch):
+    """Eight steps of one time chunk are eight bands of ONE chunk read from the file, not
+    eight reads of it: a stack costs the chunks it touches, not the bands it has (the
+    decode and the file read are the cost of a tile)."""
+    from databricks.labs.gbx.zarr import _access
 
-    dense = one_plan(era5_v3_sharded, isel={"time": slice(0, 8)}, band_dim="time")
-    sparse = one_plan(era5_v3_sharded, isel={"time": [0, 30, 47]}, band_dim="time")
-    boxes = []
-    real = _engine.read_box
+    src = H.registered_source(monkeypatch, era5_v3_unsharded)
+    dense = one_plan(src, isel={"time": slice(0, 8)}, band_dim="time")
+    sparse = one_plan(src, isel={"time": [0, 30, 47]}, band_dim="time")
+    reads = []
+    real = _access.FuseRangeReader.read
     monkeypatch.setattr(
-        _engine, "read_box", lambda arr, sl: boxes.append(sl) or real(arr, sl)
+        _access.FuseRangeReader,
+        "read",
+        lambda self, regions: reads.extend(regions) or real(self, regions),
     )
-    read(virtual(dense, [0])[0])
-    assert len(boxes) == 1  # eight slices of one chunk are decoded once
-    boxes.clear()
+    t2m = zarr.open_array(str(era5_v3_unsharded / "t2m"), mode="r")
+    data, _, _, _ = read(virtual(dense, [0])[0])
+    assert len(reads) == 1 and same(data, t2m[0:8, :37, :72])
+    reads.clear()  # steps in other chunks: each band right, one read per chunk
     data, _, _, _ = read(virtual(sparse, [0])[0])
-    assert len(boxes) == 3 and data.shape[0] == 3
+    assert len(reads) == 3 and same(data, t2m[[0, 30, 47], :37, :72])
 
 
 def test_a_band_stack_is_never_alpha_or_rgb(tmp_path):
@@ -554,6 +585,37 @@ def test_tiles_reject_irregular_axis(tmp_path):
     assert H.read_blocks(store, variables=["t2m"], isel={"time": 0})
 
 
+@pytest.mark.parametrize("ascending", [False, True], ids=["descending", "ascending"])
+def test_the_grid_has_to_be_regular_only_where_the_tiles_lie(tmp_path, ascending):
+    """Latitude steps 0.5 for six cells and 0.3 after: the axis is not regular, the first six
+    cells are. A selection of those is tiled, with the geotransform placed on the plane
+    from the selected cells; a selection that reaches the irregular cells is refused."""
+    lat = np.array([10, 9.5, 9, 8.5, 8, 7.5, 7.2, 6.9])
+    lat = lat[::-1] if ascending else lat
+    store = cube(tmp_path / "p.zarr", dtype="float32", nt=2, lat=lat)
+    arr = zarr.open_array(str(store / "v"), mode="r")[0]
+    regular = slice(2, 8) if ascending else slice(0, 6)
+    irregular = slice(0, 6) if ascending else slice(2, 8)
+    with pytest.raises(ZarrUnsupported, match="not a regular grid over the selected"):
+        one_plan(store, variables=("v",), isel={"y": irregular})
+    with pytest.raises(ZarrUnsupported, match="not a regular grid"):
+        one_plan(store, variables=("v",))
+    plan = one_plan(store, variables=("v",), isel={"y": regular})
+    assert plan.n_tiles == 2 and plan.gt[3] == 10.25 and plan.gt[5] == -0.5
+    data, transform, _, _ = read(virtual(plan, [0])[0])
+    assert transform.f == 10.25 and transform.e == -0.5 and data.shape == (1, 6, 6)
+    assert same(data[0], arr[regular][::-1] if ascending else arr[regular])
+    # a span that starts partway down: the plane's own origin is extrapolated to row 0
+    low = slice(3, 6)
+    plan = one_plan(store, variables=("v",), isel={"y": low})
+    data, transform, _, _ = read(virtual(plan, [0])[0])
+    assert plan.gt[3] == 10.25  # the whole plane's north edge, from three cells
+    assert transform.f == (
+        9.25 if ascending else 8.75
+    )  # this window's, 2 or 3 rows down
+    assert same(data[0], arr[low][::-1] if ascending else arr[low])
+
+
 def test_a_variable_with_no_grid_is_left_out_by_default_and_refused_by_name(
     tmp_path, caplog
 ):
@@ -603,6 +665,9 @@ def test_a_virtual_zarr_tile_is_written_as_a_geotiff(era5_v3_sharded):
     raster = ot.materialize_to_bytes(tile).raster
     assert _write.tile_to_bytes(-1, raster, dict(tile.metadata)) == raster
     assert read(ot.materialize_to_bytes(tile))[0].shape == (1, 37, 72)
+    # the writer's block-streaming branch (a tile over its cap) has no file to stream from
+    streamed = ot._windowed_materialize_bytes(tile)
+    assert same(read(VirtualTile(cellid=0, raster=streamed))[0], read(tile)[0])
 
 
 def test_the_file_fast_path_never_takes_a_zarr_tile(era5_v3_sharded):

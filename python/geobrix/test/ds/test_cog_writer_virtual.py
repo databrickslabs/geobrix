@@ -16,6 +16,7 @@ import glob
 import os
 
 import numpy as np
+import pytest
 import rasterio
 from pyspark.sql.types import StringType, StructField, StructType
 from rasterio.transform import from_origin
@@ -587,3 +588,69 @@ def test_reader_split_tiles_are_named_as_parts(tmp_path):
     b = _stem(w, _reader_row(str(src), window=(0, 256, 256, 256), passthrough=False))
     assert a != b
     assert a.startswith("scene_") and b.startswith("scene_")
+
+
+# ---------------------------------------------------------------------------
+# virtual Zarr tiles: the path is a store of chunks, one file per tile
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "tile_size", [None, (24, 16)], ids=["chunk-windows", "whole-plane"]
+)
+def test_virtual_zarr_tiles_are_each_written_to_their_own_cog(tmp_path, tile_size):
+    """Zarr tiles of one store share its path and, for a whole-plane window, the stamped
+    source dims. Every variable and step still gets its own file, band 1 of which is that
+    step's cells; a whole-plane tile is not path-converted (its path is a directory)."""
+    zarr = pytest.importorskip("zarr")
+    from databricks.labs.gbx.zarr import _read, _tiles
+
+    store = tmp_path / "cube.zarr"
+    group = zarr.open_group(str(store), mode="w", zarr_format=3)
+    axes = (
+        ("time", np.arange(3, dtype="int64"), "hours since 2000-01-01"),
+        ("latitude", np.linspace(15.5, 0.5, 16), "degrees_north"),
+        ("longitude", np.linspace(0.5, 23.5, 24), "degrees_east"),
+    )
+    for name, values, units in axes:
+        axis = group.create_array(
+            name,
+            shape=values.shape,
+            chunks=values.shape,
+            dtype=values.dtype,
+            dimension_names=(name,),
+            attributes={"units": units},
+        )
+        axis[:] = values
+    cells = {}
+    for k, name in enumerate(("a", "b")):
+        cells[name] = (
+            np.arange(3 * 16 * 24, dtype="float32").reshape(3, 16, 24) + k * 1e4
+        )
+        var = group.create_array(
+            name,
+            shape=(3, 16, 24),
+            chunks=(1, 8, 12),
+            dtype="float32",
+            dimension_names=("time", "latitude", "longitude"),
+        )
+        var[:] = cells[name]
+
+    src = _read._open_source(None, str(store), "path", None, None)
+    plans = _read._plan_tile_set(
+        None, src, ["a", "b"], True, None, None, True, None, None, tile_size
+    )
+    tiles = [r for p in plans for r in _tiles.tile_rows(p, range(p.n_tiles))]
+    assert len(tiles) == (2 * 3 * 4 if tile_size is None else 2 * 3)
+    w = CogGbxWriter(str(tmp_path / "out"), _v2_schema(), overwrite=True)
+    msg = w._write_tiles(
+        iter([{"source": _tiles.source_of(t), "tile": t} for t in tiles])
+    )
+
+    assert len(msg.paths) == len(set(msg.paths)) == len(tiles)
+    for t, path in zip(tiles, msg.paths):
+        c, r, width, height = t["window"].values()
+        step = int(t["metadata"]["sliceDims"].partition("=")[2])
+        want = cells[t["metadata"]["zarr_array"]][step, r : r + height, c : c + width]
+        with rasterio.open(path) as ds:
+            assert np.array_equal(ds.read(1), want)

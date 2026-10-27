@@ -1187,7 +1187,8 @@ def gbx_zarr_read(
     readable. ``virtual_tiles=False`` reads each tile now and holds its GeoTIFF bytes.
     Tiles are north-up (rows flipped when latitude ascends); the CRS is the array's
     ``grid_mapping``, or EPSG:4326 for a plain latitude/longitude grid; NoData is NaN for
-    floating-point cells. The coordinates must be a regular grid: an irregular or
+    floating-point cells. The coordinates must be a regular grid over the selected cells
+    (a constant step; what lies outside the selection does not matter): an irregular or
     curvilinear one raises ``ZarrUnsupported`` (read it as blocks or a table). By default
     a variable with no such grid is left out, with a warning; one named in ``variables``
     raises.

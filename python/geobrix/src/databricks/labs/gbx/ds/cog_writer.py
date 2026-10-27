@@ -79,6 +79,7 @@ from databricks.labs.gbx.ds.file_gbx import (
 )
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.virtual_tile import BAND_METADATA_KEY
+from databricks.labs.gbx.zarr._tiles import is_zarr_tile  # stdlib + numpy only
 
 _logger = logging.getLogger(__name__)
 
@@ -184,19 +185,26 @@ def _tile_name_key(vt) -> str:
     windows of one parent therefore differ even when their pixels are identical
     (all-NoData windows, duplicated bands).
 
+    A Zarr tile also says which variable and which step of the other dimensions it is
+    (``zarr_array``, ``sliceDims``, ``zarr_band_index``): its path is the whole store, so
+    the steps and variables that share a window are told apart by those keys. They are
+    in the key only when the tile has them, so no other tile's name changes.
+
     The key is a pure function of the tile, so a re-run writes the same names.
     """
     h = hashlib.sha1()
     if vt.raster is not None:
         h.update(bytes(vt.raster))
     clip = vt.clip_polygon
+    md = vt.metadata or {}
     parts = (
         str(vt.path) if vt.raster is None else "",
         str(vt.window),
         bytes(clip).hex() if clip is not None else "",
         str(vt.clip_crs),
         str(vt.crs),
-        str((vt.metadata or {}).get(BAND_METADATA_KEY)),
+        str(md.get(BAND_METADATA_KEY)),
+        *(md[k] for k in ("zarr_array", "sliceDims", "zarr_band_index") if md.get(k)),
     )
     h.update("|".join(parts).encode("utf-8"))
     return h.hexdigest()[:12]
@@ -2006,8 +2014,11 @@ class CogGbxWriter(DataSourceWriter):
 
         A pending reprojection alone still leaves one tile per source, so ``crs``
         is not considered.
+
+        A Zarr tile is always a part: one variable and one step of a cube, never the
+        whole store, even when its window is the whole plane.
         """
-        if vt.clip_polygon is not None:
+        if vt.clip_polygon is not None or is_zarr_tile(vt):
             return True
         if (vt.metadata or {}).get(BAND_METADATA_KEY) is not None:
             return True
@@ -2051,6 +2062,8 @@ class CogGbxWriter(DataSourceWriter):
         """
         if not vt.is_virtual() or vt.clip_polygon is not None or vt.crs is not None:
             return False
+        if is_zarr_tile(vt):
+            return False  # its path is a store of chunks, not a file to convert
         return self._window_is_full_extent(vt)
 
     @staticmethod

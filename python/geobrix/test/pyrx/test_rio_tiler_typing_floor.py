@@ -11,8 +11,10 @@ an installed package that satisfies the requirement, a ``>=4.12`` floor left 4.1
 ``import rio_tiler`` failed on those runtimes. The CI locks pin typing-extensions 4.16.0, so
 no CI test ever saw the failure: this guard reads the extras instead.
 
-The floor is the PEP 728 minimum on purpose. Do not raise it: Serverless holds
-typing_extensions at its preinstalled version, and every runtime ships 4.12.2 or 4.15.0.
+The floor is the PEP 728 minimum on purpose. On the 4.12.2 bases pip upgrades to the newest
+release under any floor of 4.13 or higher, so raising it gains nothing there; DBR 19, DBR 19 ML
+and env 6 preinstall 4.15.0, so a floor above 4.15.0 would move it there for no gain. The floor
+has no upper bound: a cap would downgrade a later base.
 """
 
 import re
@@ -112,10 +114,20 @@ def test_every_extra_that_installs_rio_tiler_9_floors_typing_extensions_at_pep_7
 
 
 def test_the_floor_is_not_raised_past_pep_728():
-    # Raising it moves a preinstalled core package on Serverless env 5 / DBR 17.3 / DBR 18
-    # (4.12.2) for no gain; 4.13.0 is the first release with extra_items.
+    # 4.13.0 is the first release with extra_items. A floor above 4.15.0 moves the
+    # preinstalled package on DBR 19 / DBR 19 ML / env 6 for no gain.
     for extra in _rio_tiler_9_extras():
         assert _floor(extra) == EXTRA_ITEMS_FLOOR, f"[{extra}] {_floor(extra)}"
+
+
+def test_the_floor_has_no_upper_bound():
+    # A cap such as <4.14 would downgrade the 4.15.0 that DBR 19 / env 6 ship.
+    for extra in _rio_tiler_9_extras():
+        for req in _closure(extra):
+            if canonicalize_name(req.name) != "typing-extensions":
+                continue
+            caps = [s for s in req.specifier if s.operator in ("<", "<=", "!=", "~=")]
+            assert not caps, f"[{extra}] {req}"
 
 
 def test_the_ci_locks_resolve_typing_extensions_at_or_above_the_floor():

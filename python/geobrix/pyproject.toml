@@ -148,7 +148,7 @@ light_dbr17 = [
     # rio-tiler 9.x defines TypedDict(extra_items=...) (PEP 728), added in typing_extensions
     # 4.13.0; its own metadata asks only for >=4.10. The bases ship 4.12.2, which pip keeps
     # under a lower floor, so `import rio_tiler` failed there. 4.13.0 is the minimum that
-    # works: keep it exact, since raising it moves a preinstalled core package for no gain.
+    # works: keep it, since a floor above 4.15.0 also moves the DBR 19 / env 6 base.
     "typing_extensions>=4.13",
     # Hold preinstalled core packages at the Serverless env5 / DBR17.3-18 base so a
     # cluster %pip install is silent (no "a core Python package changed" notice).

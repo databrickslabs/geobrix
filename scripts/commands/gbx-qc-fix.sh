@@ -3,7 +3,7 @@
 # user-global QC judge (~/.claude/qc-judge/). Databricks force-updates those
 # files periodically and can wipe the adjustments; re-run this after any update.
 #
-# Adjustments applied (both marker-guarded, no-op if already present):
+# Adjustments applied (all marker-guarded, no-op if already present):
 #   1. qc_core.py compute_verdict: a WARN-severity check that ERRORs (a tooling
 #      failure, e.g. the LLM subprocess dying on an ANTHROPIC_API_KEY/claude.ai
 #      env conflict) no longer HARD-BLOCKS an otherwise-clean push. CRITICAL
@@ -18,6 +18,13 @@
 #      exits 1 and the LLM checks ERROR. Use ANTHROPIC_DEFAULT_HAIKU_MODEL (the
 #      gateway alias, e.g. system.ai.claude-haiku-4-5) when a gateway is active,
 #      so the checks actually RUN under enterprise auth instead of failing.
+#   4. qc_io.py run_llm_check: lock the nested `claude -p` down. It ran with the
+#      default tool set from the repo cwd, where .claude/settings.local.json
+#      allowlists test-runner commands (gbx-test-scala.sh, gbx-test-python.sh,
+#      gbx-docker-exec.sh), so a push could have run one. Add `--tools ""
+#      --strict-mcp-config --no-session-persistence` (no tools, no MCP servers,
+#      no session) and run it with QC_DISABLE=1 JUDGE_DISABLE=1 so neither judge
+#      fires again inside it. Same hardening the runtime judge's claude -p has.
 
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
@@ -36,7 +43,7 @@ show_help() {
     echo -e "  ${GREEN}--log <path>${NC}   Write output to a log file (filename -> test-logs/<name>)."
     echo -e "  ${GREEN}--help${NC}         Show this help."
     echo ""
-    echo -e "${CYAN}What it patches:${NC} ${QC_DIR}/qc_core.py and ${QC_DIR}/qc.py"
+    echo -e "${CYAN}What it patches:${NC} ${QC_DIR}/qc_core.py, ${QC_DIR}/qc.py and ${QC_DIR}/qc_io.py"
     echo -e "${CYAN}When to run:${NC} after a suspected Databricks force-update of the QC judge —"
     echo -e "  i.e. a clean push (0 FAIL / 0 REVIEW, criticals PASS) still BLOCKS with only ERROR rows."
     echo ""
@@ -132,6 +139,23 @@ IO_RESOLVE_OLD = '    prompt = _format_prompt(spec.get("prompt", ""), ctx, input
 IO_RESOLVE_NEW = (IO_RESOLVE_OLD
                   + '\n    model = _effective_llm_model(model)  # ' + MARKER)
 
+# --- Adjustment 4: qc_io.py nested `claude -p` lockdown ----------------------
+# The LLM checks pipe a prompt to `claude -p`. Give it no tools, no MCP servers and no
+# session, and disable both judges inside it (it must not re-enter a hook).
+IO_LOCK_OLD = '''        r = subprocess.run(
+            ["claude", "-p", "--model", model, "--output-format", "text"],
+            input=prompt, capture_output=True, text=True, timeout=llm_timeout,
+        )'''
+IO_LOCK_NEW = '''        # ''' + MARKER + ''': the nested `claude -p` gets no tools, no MCP servers and no
+        # session (the repo cwd's settings allowlist test runners), and neither judge
+        # fires again inside it.
+        r = subprocess.run(
+            ["claude", "-p", "--model", model, "--output-format", "text",
+             "--tools", "", "--strict-mcp-config", "--no-session-persistence"],
+            input=prompt, capture_output=True, text=True, timeout=llm_timeout,
+            env={**os.environ, "QC_DISABLE": "1", "JUDGE_DISABLE": "1"},
+        )'''
+
 def read(p):
     with open(p, "r") as fh:
         return fh.read()
@@ -214,6 +238,23 @@ else:
     else:
         results.append(("gateway-llm-model", "missing-anchor"))
 
+# ---- Adjustment 4 ---- (re-read: adjustment 3 may have rewritten the file)
+if not os.path.exists(io_path):
+    results.append(("nested-claude-lockdown", "missing-anchor"))
+else:
+    io = read(io_path)
+    if MARKER in io and "--no-session-persistence" in io and "JUDGE_DISABLE" in io:
+        results.append(("nested-claude-lockdown", "already"))
+    elif IO_LOCK_OLD in io:
+        if check_only:
+            results.append(("nested-claude-lockdown", "would-apply"))
+        else:
+            bak = backup_and_write(io_path, io.replace(IO_LOCK_OLD, IO_LOCK_NEW, 1))
+            results.append(("nested-claude-lockdown", f"applied (backup {os.path.basename(bak)})"))
+            changed = True
+    else:
+        results.append(("nested-claude-lockdown", "missing-anchor"))
+
 # ---- Report ----
 print("QC judge adjustments:")
 missing = False
@@ -235,7 +276,7 @@ if changed:
         print(proc.stderr, file=sys.stderr)
         print("Restore from the *.gbx-qc-fix.*.bak file next to each patched file.", file=sys.stderr)
         sys.exit(1)
-    print("verify: qc_core + qc import ok")
+    print("verify: qc_core + qc + qc_io import ok")
 
 if check_only and any(s in ("would-apply", "missing-anchor") for _, s in results):
     sys.exit(1)

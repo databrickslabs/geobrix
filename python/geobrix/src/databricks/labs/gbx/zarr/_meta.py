@@ -625,6 +625,104 @@ def cf_unpack(
     return values, mask
 
 
+_ENCODE_FIX = (
+    "write values that fit the array's type and attributes, or write its stored values "
+    "(blocks read with decode=False)"
+)
+
+
+def _encode_refusal(meta: ArrayMeta, why: str) -> ZarrUnsupported:
+    return ZarrUnsupported(
+        f"values cannot be written to array {meta.name!r}: {why}", fix=_ENCODE_FIX
+    )
+
+
+def _check_integer_range(values: np.ndarray, attrs: dict, meta: ArrayMeta, target):
+    """Refuse floating values that, once packed and rounded, leave the integer ``target``
+    (numpy would wrap them around silently)."""
+    finite = values[np.isfinite(values)] if values.dtype.kind in "fc" else values
+    if not finite.size:
+        return
+    packed = finite.astype("float64")
+    if "add_offset" in attrs:
+        packed = packed - float(attrs["add_offset"])
+    if "scale_factor" in attrs:
+        packed = packed / float(attrs["scale_factor"])
+    lo, hi = float(np.min(np.around(packed))), float(np.max(np.around(packed)))
+    info = np.iinfo(target)
+    if lo < info.min or hi > info.max:
+        raise _encode_refusal(
+            meta,
+            f"the values pack to {lo:g}..{hi:g}, outside the stored {target} range "
+            f"{info.min}..{info.max}",
+        )
+
+
+def cf_encode(values, meta: ArrayMeta, *, stored: bool = False) -> np.ndarray:
+    """``values`` as ``meta`` stores them, in native byte order: the inverse of the reading.
+
+    ``stored=False`` takes values as ``gbx_zarr_read`` returns them with ``decode=True``
+    and encodes them with the array's CF attributes, through xarray's own encoder (the one
+    ``to_zarr`` uses): times become numbers in its ``units`` and ``calendar``, packed values
+    are ``(v - add_offset) / scale_factor`` rounded to the stored integer type, and a NaN
+    (or NaT) becomes the ``_FillValue`` (for Zarr v2, the array ``fill_value``, which is what
+    reading masks). ``stored=True`` takes values that are already stored values and only
+    casts them, which must be exact (``safe`` casting).
+
+    Raises ``ZarrUnsupported`` for values the array cannot hold: a NaN in an integer array
+    with no fill, values that leave the stored integer range once packed, complex values in
+    a real array, an ``_Unsigned`` array written with decoded values.
+    """
+    target = np.dtype(meta.dtype).newbyteorder("=")
+    values = _native_values(values)
+    if stored:
+        if values.dtype != target and not np.can_cast(values.dtype, target, "safe"):
+            raise _encode_refusal(
+                meta,
+                f"stored values of type {values.dtype} do not cast exactly to {target}",
+            )
+        return values.astype(target, copy=False)
+    attrs = _cf_attrs(meta)
+    if attrs.get("_Unsigned") in ("true", "false") and target.kind in "iu":
+        raise _encode_refusal(
+            meta,
+            "it reinterprets its integers through _Unsigned, so only its stored values "
+            "can be written",
+        )
+    if values.dtype.kind == "c" and target.kind != "c":
+        raise _encode_refusal(meta, "complex values into a real array")
+    encoding: dict = {"dtype": target}
+    for key in ("_FillValue", "missing_value", "scale_factor", "add_offset"):
+        if attrs.get(key) is not None:
+            encoding[key] = attrs[key]
+    if values.dtype.kind == "M":
+        if not is_time_coord(meta):
+            raise _encode_refusal(meta, "times into an array with no CF time units")
+        encoding["units"] = meta.attrs["units"]
+        encoding["calendar"] = meta.attrs.get("calendar") or "standard"
+    elif target.kind in "iub" and values.dtype.kind in "fc":
+        masks = "_FillValue" in encoding or "missing_value" in encoding
+        if not masks and np.isnan(values).any():
+            raise _encode_refusal(
+                meta,
+                "it holds NaN, and an integer array without a _FillValue has no "
+                "cell for a missing value",
+            )
+        if target.kind in "iu":
+            _check_integer_range(values, encoding, meta, target)
+    from xarray import Variable
+    from xarray.conventions import encode_cf_variable
+
+    var = Variable(
+        tuple(f"dim_{i}" for i in range(values.ndim)), values, encoding=encoding
+    )
+    try:
+        out = encode_cf_variable(var, name=meta.name).values
+    except (ValueError, TypeError, OverflowError) as e:
+        raise _encode_refusal(meta, str(e)) from None
+    return np.asarray(out).astype(target, copy=False)
+
+
 def is_time_coord(meta: ArrayMeta) -> bool:
     """Whether the array's ``units`` attribute is a CF time unit (``"hours since 1900-01-01"``)."""
     units = meta.attrs.get("units")

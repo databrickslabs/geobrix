@@ -86,9 +86,10 @@ def test_lazy_package_exports_the_functions_and_the_block_helpers():
     for name, (module, attr) in z._EXPORTS.items():
         assert getattr(z, name) is getattr(importlib.import_module(module), attr), name
         assert name in dir(z)
-    from databricks.labs.gbx.zarr import _read, _register, functions
+    from databricks.labs.gbx.zarr import _read, _register, _write, functions
 
     assert z.gbx_zarr_read is _read.gbx_zarr_read is functions.gbx_zarr_read
+    assert z.gbx_zarr_write is _write.gbx_zarr_write is functions.gbx_zarr_write
     assert z.gbx_zarr_register is _register.gbx_zarr_register
     assert z.BLOCKS_SCHEMA is _read.BLOCKS_SCHEMA
     assert z.block_to_numpy is _read.block_to_numpy

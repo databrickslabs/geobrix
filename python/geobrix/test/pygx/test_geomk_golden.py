@@ -28,6 +28,7 @@ from __future__ import annotations
 import json
 import platform
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
@@ -509,8 +510,10 @@ def test_geomk_golden() -> None:
     # Build fixture sets once per grid (reuses cached aligned fixtures)
     grid_fixtures = {grid: _get_fixtures(grid) for grid in _GRIDS}
 
+    skipped = 0
     for key, expected in corpus.items():
         if not _X86_64 and _depends_on_h3_boundary_ulps(key):
+            skipped += 1
             continue
         grid, mode, coverage, kind, k_str, fixture = key.split("|")
         geom = grid_fixtures[grid][fixture]
@@ -521,6 +524,15 @@ def test_geomk_golden() -> None:
                 f"    expected ({len(expected)} cells): {expected[:4]}…\n"
                 f"    actual   ({len(actual)} cells):   {actual[:4]}…"
             )
+
+    if skipped:
+        # A skip must be visible: the count is part of what "golden passed" means off x86_64.
+        warnings.warn(
+            f"test_geomk_golden: {skipped} of {len(corpus)} entries were NOT compared "
+            f"(h3 'aligned' fixtures differ by an ulp off x86_64); "
+            f"{len(corpus) - skipped} were compared",
+            stacklevel=1,
+        )
 
     if mismatches:
         preview = "\n".join(mismatches[:10])

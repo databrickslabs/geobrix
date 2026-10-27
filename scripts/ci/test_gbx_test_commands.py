@@ -866,3 +866,39 @@ def test_ci_status_help_is_help_not_the_run_limit(tmp_path):
 
     assert bad.returncode == 1 and "Unknown option" in bad.stderr
     assert not (tmp_path / "gh.log").exists()
+
+
+def test_review_round_skips_the_generated_lock_files_unless_asked(sandbox):
+    # The compiled lock files are hash-pinned output nobody reviews; Isaac loads every changed
+    # file in full, so they only cost context. They are opted out through a layered config.
+    git = ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-C", str(sandbox.root)]
+    subprocess.run([*git, "init", "-q"], check=True)
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "base"], check=True)
+    (sandbox.root / "change.txt").write_text("x\n")
+    subprocess.run([*git, "add", "change.txt"], check=True)
+    subprocess.run([*git, "commit", "-q", "-m", "change"], check=True)
+    argv = sandbox.root / "dbexec.argv"
+    dbexec = sandbox.bin / "dbexec"
+    dbexec.write_text(f'#!/bin/sh\nprintf "%s\\n" "$@" > "{argv}"\necho reviewed\n')
+    dbexec.chmod(0o755)
+
+    def review(*args):
+        res = sandbox.run("gbx-review-round.sh", "--base", "HEAD~1", *args)
+        assert res.returncode == 0, res.output
+        return argv.read_text().splitlines()
+
+    words = review()
+    config = Path(words[words.index("-c") + 1])
+    assert config == sandbox.commands / "isaac-review-local.yaml"
+    text = config.read_text()
+    for pattern in ("**/requirements-dev-container*.txt", "**/requirements*-ci.txt"):
+        assert f'"{pattern}"' in text
+    assert (
+        '"third_party/go/vendor/**"' in text
+    )  # Isaac's own defaults are repeated: lists replace
+
+    assert "-c" not in review("--include-generated")
+    assert (
+        review("--", "-c", "mine.yaml").count("-c") == 1
+    )  # the caller's config, not ours

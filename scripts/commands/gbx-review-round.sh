@@ -24,6 +24,7 @@ RULE=""
 LOG_PATH=""
 ALLOW_LARGE=0
 KEEP_OUTPUTS=0
+INCLUDE_GENERATED=0
 PASSTHRU=()
 
 show_help() {
@@ -43,6 +44,9 @@ show_help() {
     echo -e "  ${GREEN}--allow-large${NC}    Proceed even if the scope exceeds ${LARGE_THRESHOLD} files."
     echo -e "  ${GREEN}--keep-outputs${NC}   Review .ipynb files WITH their stored outputs (default strips"
     echo -e "                   them: embedded plots overflow isaac's context and aren't code)."
+    echo -e "  ${GREEN}--include-generated${NC}  Also review the generated lock files (requirements-dev-container*.txt,"
+    echo -e "                   requirements*-ci.txt). Default: skipped (scripts/commands/isaac-review-local.yaml,"
+    echo -e "                   Isaac opt_out.paths); they are hash-pinned compile output."
     echo -e "  ${GREEN}--log <path>${NC}     Tee output to a log (filename -> test-logs/<name>)."
     echo -e "  ${GREEN}-h, --help${NC}       Show this help."
     echo ""
@@ -68,6 +72,7 @@ while [[ $# -gt 0 ]]; do
         --rule) RULE="$2"; shift 2 ;;
         --allow-large) ALLOW_LARGE=1; shift ;;
         --keep-outputs) KEEP_OUTPUTS=1; shift ;;
+        --include-generated) INCLUDE_GENERATED=1; shift ;;
         --log) LOG_PATH="$(resolve_log_path "$2")"; shift 2 ;;
         --) shift; while [[ $# -gt 0 ]]; do PASSTHRU+=("$1"); shift; done ;;
         *) PASSTHRU+=("$1"); shift ;;
@@ -164,6 +169,15 @@ if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
     strip_outputs "$REVIEW_DIR" "${NOTEBOOKS[@]}"
     ISAAC_ARGS=(review --uncommitted)
     echo -e "${CYAN}Notebook outputs stripped${NC} for review (${#NOTEBOOKS[@]} .ipynb; --keep-outputs to include them)."
+fi
+# Skip the generated lock files by default (Isaac opt_out.paths in the layered config). A config
+# the caller passes after `--` (-c/--config) is theirs to manage, so none is added then.
+HAS_OWN_CONFIG=0
+for a in ${PASSTHRU[@]+"${PASSTHRU[@]}"}; do
+    case "$a" in -c|--config|-c=*|--config=*) HAS_OWN_CONFIG=1 ;; esac
+done
+if [[ "$INCLUDE_GENERATED" -ne 1 && "$HAS_OWN_CONFIG" -ne 1 ]]; then
+    ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-local.yaml")
 fi
 [[ "$FULL" -eq 1 ]] && ISAAC_ARGS+=(--full)
 [[ -n "$RULE" ]] && ISAAC_ARGS+=(--run-rule "$RULE")

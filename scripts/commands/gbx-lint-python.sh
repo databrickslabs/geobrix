@@ -15,8 +15,15 @@ show_help() {
     echo -e "${CYAN}Options:${NC}"
     echo -e "  ${GREEN}--check${NC}         Check only (no edits). Default when run in CI or without --fix."
     echo -e "  ${GREEN}--fix${NC}            Apply isort and black (in Docker, py3.12 — same as CI), then run flake8."
+    echo -e "  ${GREEN}--path <file|dir>${NC} Lint (or, with --fix, format) only this file or directory. Repeatable. It must be"
+    echo -e "                      under python/geobrix or connectors/lakeflow; relative paths are taken from the"
+    echo -e "                      current directory, else from the repo root. Without --path both scopes run in full."
     echo -e "  ${GREEN}--log <path>${NC}     Write output to log file."
     echo -e "  ${GREEN}--help${NC}           Show this help."
+    echo ""
+    echo -e "${CYAN}Scope:${NC}"
+    echo -e "  An unscoped ${YELLOW}--fix${NC} reformats the WHOLE tree, including files other people (or agents) are"
+    echo -e "  editing. Give ${YELLOW}--path${NC} for every file you changed, and run the unscoped form only deliberately."
     echo ""
     echo -e "${CYAN}Modes:${NC}"
     echo -e "  ${YELLOW}--check${NC}  Runs in Docker (same as CI). Fails if imports or format are not clean."
@@ -29,6 +36,39 @@ show_help() {
 
 MODE="check"
 LOG_PATH=""
+# Newline-separated paths per lint scope, relative to the scope's own directory (that is where
+# its tools run). Empty until a --path names one; then only the scopes that got a path run.
+PKG_PATHS=""
+LAKEFLOW_PATHS=""
+SCOPED=false
+
+# Add one --path: resolve it on the host, then file it under the lint scope that contains it.
+add_lint_path() {
+    local raw="$1" abs root rel
+    local pwd_rel="$PWD/$raw"
+    if [[ "$raw" == /* ]]; then abs="$raw"
+    elif [ -e "$pwd_rel" ]; then abs="$pwd_rel"
+    else abs="$PROJECT_ROOT/$raw"; fi
+    if [ ! -e "$abs" ]; then
+        echo -e "${RED}--path: no such file or directory: $raw${NC}" >&2
+        exit 2
+    fi
+    if [ -d "$abs" ]; then abs="$(cd "$abs" && pwd -P)"
+    else abs="$(cd "$(dirname "$abs")" && pwd -P)/$(basename "$abs")"; fi
+    root="$(cd "$PROJECT_ROOT" && pwd -P)"
+    rel="${abs#"$root"/}"
+    case "$rel" in
+        python/geobrix) PKG_PATHS+="src"$'\n'"test"$'\n' ;;
+        python/geobrix/*) PKG_PATHS+="${rel#python/geobrix/}"$'\n' ;;
+        connectors/lakeflow) LAKEFLOW_PATHS+="sources"$'\n' ;;
+        connectors/lakeflow/*) LAKEFLOW_PATHS+="${rel#connectors/lakeflow/}"$'\n' ;;
+        *)
+            echo -e "${RED}--path: $raw is outside the lint scopes (python/geobrix, connectors/lakeflow)${NC}" >&2
+            exit 2 ;;
+    esac
+    SCOPED=true
+}
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --check)
@@ -38,6 +78,11 @@ while [[ $# -gt 0 ]]; do
         --fix)
             MODE="fix"
             shift
+            ;;
+        --path)
+            [ $# -ge 2 ] || { echo -e "${RED}--path needs a file or directory${NC}" >&2; exit 2; }
+            add_lint_path "$2"
+            shift 2
             ;;
         --log)
             LOG_PATH=$(resolve_log_path "$2")
@@ -63,7 +108,8 @@ setup_log_file "$LOG_PATH"
 # linted from its own cwd, so isort/black/flake8 read THAT project's pyproject.toml:
 #   - python/geobrix      src test   (the package; unchanged)
 #   - connectors/lakeflow sources    (the Lakeflow Connect connector; its own pyproject.toml)
-# Keep this list identical to the "Lint Python" step in .github/actions/python_build/action.yml.
+# Keep the default paths identical to the "Lint Python" step in .github/actions/python_build/action.yml.
+# --path replaces them: LINT_PKG_PATHS / LINT_LAKEFLOW_PATHS are newline-separated paths per scope.
 # ISORT_FLAGS/BLACK_FLAGS are "--check-only"/"--check" in check mode and empty in fix mode.
 # flake8 does NOT read pyproject.toml [tool.flake8] natively — CI relies on the
 # flake8-pyproject plugin (pinned in requirements-ci.txt) to honor its ignore list
@@ -88,8 +134,15 @@ lint_scope() {
     [ $flake8_exit -eq 0 ] && echo '  flake8: PASS' || echo "  flake8: FAIL (exit code: $flake8_exit)"
     [ $isort_exit -eq 0 ] && [ $black_exit -eq 0 ] && [ $flake8_exit -eq 0 ] || overall=1
 }
-lint_scope python/geobrix src test
-lint_scope connectors/lakeflow sources
+# $1 = scope dir, $2 = newline-separated paths in it (empty: this scope is not linted).
+run_scope() {
+    [ -n "$2" ] || return 0
+    local paths=() line
+    while IFS= read -r line; do [ -n "$line" ] && paths+=("$line"); done <<<"$2"
+    lint_scope "$1" "${paths[@]}"
+}
+run_scope python/geobrix "$LINT_PKG_PATHS"
+run_scope connectors/lakeflow "$LINT_LAKEFLOW_PATHS"
 exit $overall
 LINT_EOF
 
@@ -111,7 +164,15 @@ run_lint_docker() {
     # dependent for e.g. multiline-string call args), which then fails the CI gate. That
     # host/CI drift is exactly what this command exists to prevent, so --fix is Docker-only.
     # Docker writes to the /root/geobrix bind mount preserve host file ownership.
+    local pkg_paths="$PKG_PATHS" lakeflow_paths="$LAKEFLOW_PATHS"
+    if [ "$SCOPED" = false ]; then
+        pkg_paths=$'src\ntest\n'
+        lakeflow_paths=$'sources\n'
+    else
+        echo -e "${CYAN}Scoped to: $(printf '%s' "$pkg_paths$lakeflow_paths" | tr '\n' ' ')${NC}"
+    fi
     docker exec -e ISORT_FLAGS="$ISORT_FLAGS" -e BLACK_FLAGS="$BLACK_FLAGS" \
+        -e LINT_PKG_PATHS="$pkg_paths" -e LINT_LAKEFLOW_PATHS="$lakeflow_paths" \
         geobrix-dev /bin/bash -c "$LINT_SCRIPT"
 }
 

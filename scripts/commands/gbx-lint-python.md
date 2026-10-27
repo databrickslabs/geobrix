@@ -17,8 +17,11 @@ bash scripts/commands/gbx-lint-python.sh [OPTIONS]
 
 - `--check` - Check only (no edits). Default. Runs in Docker for CI parity.
 - `--fix` - Apply isort and black, then run flake8. **Also runs in Docker** (Python 3.12 + the CI-pinned black/isort), so auto-formatted files are byte-identical to what CI's `black --check` gates on. It does NOT run on the host: a host Python (e.g. 3.10) can format some constructs differently even at the same black version, and that output then fails the CI gate.
+- `--path <file|dir>` - Lint (or, with `--fix`, format) only this file or directory. Repeatable. It must be under `python/geobrix` or `connectors/lakeflow`; a relative path is taken from the current directory if it exists there, else from the repo root. Only the scopes that got a path run, with the scope's own config. Without `--path` both scopes run in full (`src test` and `sources`, as CI does).
 - `--log <path>` - Write output to log file.
 - `--help` - Display help.
+
+An unscoped `--fix` reformats the whole tree, including files someone else (an agent working in parallel, or your own uncommitted edits elsewhere) is editing. Pass `--path` for each file you changed and use the unscoped form only on purpose.
 
 ## Examples
 
@@ -29,6 +32,9 @@ gbx:lint:python --check
 
 # Auto-fix import order and formatting (Docker; py3.12, same as CI)
 gbx:lint:python --fix
+
+# Format only the files you changed
+gbx:lint:python --fix --path python/geobrix/src/databricks/labs/gbx/ds/writer.py --path python/geobrix/test/ds/
 ```
 
 ## Notes

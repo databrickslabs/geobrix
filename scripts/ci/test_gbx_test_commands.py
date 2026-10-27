@@ -638,3 +638,41 @@ def test_a_launcher_runs_on_the_venv_itself_when_it_has_the_sdk(sandbox):
     assert res.returncode == 0, res.output
     assert calls.read_text().split() == ["examples/tests/stage_jar_to_volume.py"]
     assert not uv_log.exists()  # nothing was fetched
+
+
+# ------------------------------------------------------- lint: a --path scope for --fix
+
+
+def test_lint_path_scopes_the_run_to_the_files_named(sandbox):
+    # An unscoped --fix reformats the whole tree, other people's files included.
+    geobrix = sandbox.root / "python" / "geobrix"
+    (geobrix / "src").mkdir(parents=True)
+    (geobrix / "src" / "mine.py").write_text("x = 1\n")
+    (geobrix / "test").mkdir()
+    sources = sandbox.root / "connectors" / "lakeflow" / "sources"
+    sources.mkdir(parents=True)
+    (sources / "conn.py").write_text("y = 2\n")
+
+    def lint(*args):
+        res = sandbox.run("gbx-lint-python.sh", *args)
+        envs = sandbox.exec_envs()
+        return res, (envs[-1] if envs else {})
+
+    res, env = lint("--fix", "--path", "python/geobrix/src/mine.py")
+    assert res.returncode == 0, res.output
+    assert env["LINT_PKG_PATHS"] == "src/mine.py\n" and env["LINT_LAKEFLOW_PATHS"] == ""
+    assert env["ISORT_FLAGS"] == "" and env["BLACK_FLAGS"] == ""  # still a fix run
+
+    res, env = lint("--check", "--path", "python/geobrix/test/", "--path", str(sources))
+    assert env["LINT_PKG_PATHS"] == "test\n"  # a directory, trailing slash dropped
+    assert env["LINT_LAKEFLOW_PATHS"] == "sources\n"
+    assert env["BLACK_FLAGS"] == "--check"
+
+    res, env = lint()  # no --path: the CI scopes, unchanged
+    assert env["LINT_PKG_PATHS"] == "src\ntest\n"
+    assert env["LINT_LAKEFLOW_PATHS"] == "sources\n"
+
+    before = len(sandbox.execs())
+    res, _ = lint("--fix", "--path", "scripts/commands/common.sh")
+    assert res.returncode == 2 and "outside the lint scopes" in res.output
+    assert len(sandbox.execs()) == before  # nothing was run

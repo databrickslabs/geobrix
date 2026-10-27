@@ -145,12 +145,19 @@ def _valid_u8(ds) -> np.ndarray:
 
 def _write_masked_tile(ds, path, mask) -> None:
     """Write *ds* to *path* as a GTiff whose own mask band is *mask* (``None``: no mask band), the alpha
-    label kept."""
+    label kept, with the canonical creation options: never the source's codec, so a JPEG tile is not
+    re-compressed lossily."""
+    data = ds.read()
     profile = _comp.drop_ycbcr(ds.profile)
     profile.update(driver="GTiff")
+    profile.update(
+        _comp.creation_opts(
+            profile["dtype"], decoded_bytes=data.nbytes, compress="auto"
+        )
+    )
     with _comp.internal_mask_env(mask), rasterio.open(path, "w", **profile) as dst:
         _comp.match_alpha(dst, ds.colorinterp)
-        dst.write(ds.read())
+        dst.write(data)
         if mask is not None:
             dst.write_mask(mask)
 

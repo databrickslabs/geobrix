@@ -592,6 +592,43 @@ def test_a_merge_judges_a_multi_band_tile_by_any_band_beside_a_tile_with_an_own_
     assert validity(out, plain_col) == validity(plain, 0)
 
 
+@pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+def test_a_merge_keeps_a_jpeg_tiles_pixels_beside_a_tile_with_an_own_mask(
+    monkeypatch, streaming
+):
+    """A JPEG tile in a group with an own-masked tile comes out with the pixels it decodes to, on both
+    paths: the streamed path rewrites such a tile to give it a mask, with the canonical creation options,
+    never the source's lossy codec."""
+    if streaming:
+        monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
+    yy, xx = np.mgrid[0:64, 0:64]
+    textured = (
+        np.stack([(xx * 3 + yy) % 251, (yy * 5) % 251, (xx * yy) % 251]).astype("uint8")
+        + 1
+    )
+    prof = dict(
+        driver="GTiff",
+        width=64,
+        height=64,
+        count=3,
+        dtype="uint8",
+        crs="EPSG:4326",
+        transform=from_origin(10, 50, 0.5, 0.5),
+        compress="jpeg",
+        photometric="RGB",
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.write(textured)
+        jpeg = mf.read()
+    with MemoryFile(jpeg) as mf, mf.open() as ds:
+        want = ds.read()
+    out = agg.merge_tiles([jpeg, _rgb_merge_tile(42, mask_rows=(3,))])
+    with MemoryFile(out) as mf, mf.open() as ds:
+        assert (ds.transform.c, ds.transform.f) == (10, 50)
+        assert np.array_equal(ds.read()[:, :64, :64], want)
+
+
 def _two_crs_tiles(name):
     """A 4326 tile and, beside it, the same layout in 3857 (the 3857 one first: it is the
     reference CRS the other is reprojected to)."""

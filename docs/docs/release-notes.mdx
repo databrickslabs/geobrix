@@ -456,14 +456,25 @@ formats.
   an alpha band is judged by its alpha values.
 - **Lightweight functions keep the alpha label of their source.** GDAL labels band 4 of every
   four-band `uint8` GeoTIFF alpha when it creates one, and drops the alpha band of a 16-bit RGBA or
-  a gray-plus-alpha raster. The lightweight functions that rewrite a raster, `gbx_rst_updatetype`,
-  `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_setsrid`, `gbx_rst_setcrs`, `gbx_rst_filter`,
-  `gbx_rst_convolve`, `gbx_rst_fillnodata`, `gbx_rst_resample` and its variants,
-  `gbx_rst_buildoverviews`, `gbx_rst_asformat` to GeoTIFF, `gbx_rst_cog_convert`, the virtual-tile
-  reads and the tile encoders of the `raster_gbx` and `cog_gbx` writers, used to
-  label the fourth band of a four-band raster without alpha (red, green, blue and near-infrared, for
-  example) as alpha, which made that band a transparency mask, and lost the alpha band of other
-  rasters. They now label a band alpha exactly where the raster they read does.
+  a gray-plus-alpha raster. The lightweight functions that write a raster from another one used to
+  label the fourth band of a four-band raster without alpha (red, green, blue and near-infrared,
+  for example) as alpha, which made that band a transparency mask, and lost the alpha band of other
+  rasters. They now label a band alpha exactly where the raster they read does. This covers
+  `gbx_rst_updatetype`, `gbx_rst_initnodata`, `gbx_rst_threshold`, `gbx_rst_setsrid`,
+  `gbx_rst_setcrs`, `gbx_rst_filter`, `gbx_rst_convolve`, `gbx_rst_fillnodata`,
+  `gbx_rst_percentile_stretch`, `gbx_rst_resample` and its variants, `gbx_rst_buildoverviews`,
+  `gbx_rst_asformat` to GeoTIFF, `gbx_rst_cog_convert`, `gbx_rst_getsubdataset`, `gbx_rst_fromfile`
+  with `materialize`, the merge family (`gbx_rst_merge`, `gbx_rst_merge_agg`, `gbx_rst_align_to`
+  and the `gbx_rst_combine*` functions), the retile family (`gbx_rst_retile`,
+  `gbx_rst_tooverlappingtiles`, `gbx_rst_maketiles`), the reads of a lazily read tile, and the tile
+  encoders of the `raster_gbx` and `cog_gbx` writers.
+- **A band selection writes the alpha band as data, unless it is selected last with a data
+  band.** `gbx_rst_band` and `gbx_rst_separatebands` extract a band for its values, so the alpha
+  band of an RGBA raster comes out as an ordinary band, valid wherever its own NoData says so, in
+  both tiers. They used to keep the alpha label (heavyweight tier, and the lightweight tier on
+  tiles read lazily), which made the zero pixels of the extracted band NoData. A selection of
+  several bands keeps the alpha label only when the source's alpha band is selected last with at
+  least one other band; a band labelled alpha anywhere else in the source is ordinary data.
 - **The lightweight reprojection and the tile encoders keep a source's own mask band.**
   `gbx_rst_transform` and `gbx_rst_transformcrs` dropped the own mask band (not an alpha band) of a
   source, as JPEG-compressed aerial imagery often carries, so its masked pixels read as valid data;

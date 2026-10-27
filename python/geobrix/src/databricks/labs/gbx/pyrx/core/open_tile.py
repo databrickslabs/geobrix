@@ -140,11 +140,12 @@ def _epsg_of(crs) -> Optional[int]:
 
 
 def _selected_labels(src, indexes):
-    """The colour interpretation of *src*'s bands *indexes* (1-based; None = all): the labels
-    a window of those bands is written with (the alpha band is still the last band, or not
-    selected)."""
-    labels = list(src.colorinterp)
-    return labels if not indexes else [labels[i - 1] for i in indexes]
+    """The colour interpretation a window of *src* is written with: its own for all its bands,
+    or for the band subset *indexes* (1-based) by the band-subset rule
+    (``_nodata.subset_colorinterp``)."""
+    if not indexes:
+        return list(src.colorinterp)
+    return _nd.subset_colorinterp(src.colorinterp, indexes)
 
 
 def _own_mask_use(src, profile, pending_nodata):

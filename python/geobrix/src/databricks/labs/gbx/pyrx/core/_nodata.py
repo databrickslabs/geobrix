@@ -44,6 +44,39 @@ def alpha_index(colorinterp):
     return len(labels) - 1 if labels and labels[-1] == ColorInterp.alpha else None
 
 
+def subset_colorinterp(colorinterp, indexes):
+    """The colour interpretation of the band subset *indexes* (1-based, in output order) of a
+    dataset labelled *colorinterp*: the labels a copy of those bands is written with.
+
+    THE band-subset rule of both tiers (heavy ``GDAL.subsetAlphaIndex``). A subset keeps the
+    Alpha label only when ALL of these hold: the selected band is the source's alpha band
+    (:func:`alpha_index`), it is selected LAST, and at least one data band is selected with it.
+    Otherwise every selected band is data (a band labelled Alpha is relabelled undefined), so a
+    lone alpha band, which the user selects for its values, is valid wherever its own NoData or
+    mask says so, and an alpha label on any other band stays data.
+    """
+    from rasterio.enums import ColorInterp
+
+    labels = list(colorinterp)
+    source_alpha = alpha_index(labels)
+    chosen = [i - 1 for i in indexes]
+    keeps = (
+        source_alpha is not None
+        and chosen[-1] == source_alpha
+        and any(i != source_alpha for i in chosen[:-1])
+    )
+    return [
+        (
+            ColorInterp.alpha
+            if keeps and pos == len(chosen) - 1
+            else (
+                ColorInterp.undefined if labels[i] == ColorInterp.alpha else labels[i]
+            )
+        )
+        for pos, i in enumerate(chosen)
+    ]
+
+
 def has_alpha(ds) -> bool:
     """True when the last band of *ds* is labelled alpha (see :func:`alpha_index`)."""
     return alpha_index(ds.colorinterp) is not None

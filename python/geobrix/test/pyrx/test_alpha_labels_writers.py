@@ -20,6 +20,7 @@ from rasterio.enums import ColorInterp as CI
 from rasterio.io import MemoryFile
 from rasterio.windows import Window
 
+from databricks.labs.gbx.pyrx.core import _nodata as nd
 from databricks.labs.gbx.pyrx.core import agg, analysis, edit, features, focal
 from databricks.labs.gbx.pyrx.core import open_tile as ot
 from databricks.labs.gbx.pyrx.core import ops, resample, stretch, tiling
@@ -111,3 +112,37 @@ def test_virtual_tile_reads_label_alpha_where_their_source_does(tmp_path, name):
     assert _alpha_bands(ot.materialize_to_bytes(tile).raster) == want
     assert _alpha_bands(ot._windowed_materialize_bytes(tile)) == want
     assert _alpha_bands(ot._tile_to_bytes(tile)) == want
+
+
+@pytest.mark.parametrize("target", ["EPSG:3857", "ESRI:54008"])
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_a_virtual_tile_with_a_target_crs_labels_alpha_where_its_source_does(
+    tmp_path, name, target
+):
+    """The lazy reprojected read (``_warp_bytes``) carries the alpha label of the window it
+    warps, through an EPSG and a non-EPSG target."""
+    path = _write_file(tmp_path, name)
+    want = [len(al.LAYOUTS[name][0]) - 1] if al.LAYOUTS[name][1] else []
+    tile = VirtualTile(cellid=0, path=path, window=(0, 0, 4, 4), crs=target)
+    with ot.open_tile(tile) as ds:
+        assert [i for i, c in enumerate(ds.colorinterp) if c == CI.alpha] == want
+    assert _alpha_bands(ot.materialize_to_bytes(tile).raster) == want
+
+
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_the_empty_tile_of_a_disjoint_clip_declares_no_nodata_over_an_alpha_band(name):
+    """The 1x1 tile standing for a clip that misses the raster is 0 in every band: for a
+    source with an alpha band that is alpha 0 with no NoData declared (a NoData would shadow
+    the alpha band); otherwise it is declared NoData 0. It is labelled alpha where its source
+    is."""
+    alpha_last = al.LAYOUTS[name][1]
+    with MemoryFile(al.layout_bytes(name)) as mf, mf.open() as ref:
+        empty = ot._empty_dataset_bytes(ref)
+        with MemoryFile(empty) as em, em.open() as out:
+            assert (out.width, out.height, out.count) == (1, 1, ref.count)
+            assert (out.read() == 0).all()
+            assert out.nodata == (None if alpha_last else 0)
+            assert [i for i, c in enumerate(out.colorinterp) if c == CI.alpha] == (
+                [ref.count - 1] if alpha_last else []
+            )
+            assert not nd.valid_mask(out).any(), "the empty tile holds a valid pixel"

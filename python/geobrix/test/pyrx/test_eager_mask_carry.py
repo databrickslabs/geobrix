@@ -75,10 +75,20 @@ def test_the_identity_short_circuit_keeps_the_mask(tmp_path, warper, target, nod
 
 @pytest.mark.parametrize("srid", [3857, 4326])
 def test_rst_transform_keeps_the_mask(tmp_path, srid):
-    """The tile function behind ``rst_transform``, from a virtual tile (the default)."""
+    """The tile function behind ``rst_transform``, from a virtual tile (the default): the
+    output pixels that come from the masked source rows are invalid, and nothing else is
+    (the warp fills outside the footprint with valid zeros, the source declaring no NoData).
+    The index file names the source row of every output pixel."""
     masked = vm.write_masked(tmp_path / "m.tif")
-    raw = F._transform_bytes(vm.virtual(masked), srid)
-    data, valid, _ = vm.decode(raw)
-    assert (~valid).any(), "the mask is lost"
+    index = vm._index_file(tmp_path / "idx.tif", None)
+    data, valid, _ = vm.decode(F._transform_bytes(vm.virtual(masked), srid))
+    idx, _, _ = vm.decode(F._transform_bytes(vm.virtual(index), srid))
+    covered = idx[0] != 0
+    from_masked = covered & np.isin(idx[0].astype("int64") - 100, MASKED_ROWS)
+    assert from_masked.any(), "fixture: the warp must keep some masked source pixels"
+    assert (valid[0] == ~from_masked).all(), (
+        f"masked pixels valid: {int((valid[0] & from_masked).sum())}, "
+        f"valid pixels lost: {int((~valid[0] & ~from_masked).sum())}"
+    )
     if srid == 4326:
         vm.assert_same_pixels((data, valid), vm.source_view(masked), "rst_transform")

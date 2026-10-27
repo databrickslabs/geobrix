@@ -61,6 +61,7 @@ pytest.importorskip(
     "shapely",
     reason="shapely not installed (a light-tier extra (e.g. geobrix[light_env6]) required)",
 )
+from test.pyrx import _alpha_layouts as al  # noqa: E402
 from test.pyrx import _tessellate_parity as tp  # noqa: E402
 
 import numpy as np  # noqa: E402
@@ -1934,6 +1935,49 @@ def _decoded(raster_bytes):
             data=ds.read(),
             valid=ds.read_masks() != 0,
         )
+
+
+@pytest.mark.parametrize("start", _STARTS)
+@pytest.mark.parametrize(
+    "layout,band",
+    [("rgba", 4), ("rgba_x", 4), ("gray_x_alpha", 3), ("rgba", 1)],
+)
+def test_rst_band_of_the_alpha_labelled_band_parity(
+    spark_with_jar, tmp_path, start, layout, band
+):
+    """``rst_band`` extracts a band for its values: the alpha-labelled band of the source comes
+    out as an ordinary band in both tiers, valid wherever its values say (its zero pixels
+    included), and a colour band is unchanged. Started from a virtual tile, the light tier
+    records the selection and applies it when the tile is read (``rst_asformat`` reads it).
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.pyrx.core._nodata import valid_mask
+
+    spark = spark_with_jar
+    count = len(al.LAYOUTS[layout][0])
+    data = np.full((count, 4, 4), 7, dtype="uint8")
+    data[-1, [0, 2]] = 0
+    if layout == "rgba_x":
+        data[3, [0, 2]] = 0  # the alpha-labelled band, which is not the last band
+    raster = _start_from(al.layout_bytes(layout, data=data), start, tmp_path)
+
+    def light_fn(m, t):
+        out = m.rst_band(t, band)
+        return m.rst_asformat(out, "GTiff") if start == "virtual" else out
+
+    outs = {
+        "light": _single_tile(spark, raster, "light", light_fn),
+        "heavy": _single_tile(spark, raster, "heavy", lambda m, t: m.rst_band(t, band)),
+    }
+    for tier, out in outs.items():
+        with MemoryFile(out) as mf, mf.open() as ds:
+            labelled = [c.name for c in ds.colorinterp]
+            assert ds.count == 1 and "alpha" not in labelled, f"{tier}: {labelled}"
+            assert valid_mask(
+                ds
+            ).all(), f"{tier}: zero pixels of the band read as NoData"
+            assert (ds.read(1) == data[band - 1]).all(), f"{tier}: values differ"
 
 
 @pytest.mark.parametrize("start", _STARTS)

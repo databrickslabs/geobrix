@@ -315,9 +315,9 @@ def _chip_is_all_nodata(raster_bytes: bytes) -> bool:
     """Return True when no pixel of the GTiff chip is valid.
 
     Used by covering+sparse to drop chips whose pixels are entirely masked.
-    Validity is :func:`valid_mask`: a pixel is valid when any band is valid (mask bands, so
-    a NaN NoData is recognised, where ``== nan`` never is), or, for a chip with an alpha
-    band, when its alpha is not 0. A chip with no declared nodata and no alpha band has
+    Validity is :func:`valid_mask`: a pixel is valid when some data band is valid (mask
+    bands, so a NaN NoData is recognised, where ``== nan`` never is) and, for a chip with an
+    alpha band, its alpha is above 0. A chip with no declared nodata and no alpha band has
     all-valid masks and is kept.
     """
     with MemoryFile(raster_bytes) as mf:

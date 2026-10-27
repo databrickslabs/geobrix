@@ -726,3 +726,198 @@ def test_a_string_fill_matches_nothing_exactly_as_it_does_in_xarray(
     out, mask = cf_unpack(raw, meta)
     assert mask is None or not mask.any()
     np.testing.assert_array_equal(out, _xarray_values(path))
+
+
+# --- Task 9 follow-ups: rank mismatch, scalar fills, byte order, _Unsigned corners ----------
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_a_shape_and_chunks_of_different_rank_are_a_typed_refusal(
+    era5_v2, era5_v3_unsharded, fmt
+):
+    if fmt == 3:
+        doc = _doc(era5_v3_unsharded, "t2m")
+        doc["chunk_grid"]["configuration"]["chunk_shape"] = [12, 37]  # 3-D shape
+        parse = lambda: parse_v3("t2m", doc)  # noqa: E731
+    else:
+        za = json.loads((era5_v2 / "t2m" / ".zarray").read_text())
+        za["chunks"] = [12, 37]
+        zt = json.loads((era5_v2 / "t2m" / ".zattrs").read_text())
+        parse = lambda: parse_v2("t2m", za, zt)  # noqa: E731
+    with pytest.raises(ZarrUnsupported, match="differ in length") as e:
+        parse()
+    assert "'t2m'" in str(e.value) and "Fix:" in str(e.value)
+
+
+def test_an_overflow_that_is_not_about_unsigned_is_not_blamed_on_unsigned(
+    era5_v3_unsharded, monkeypatch
+):
+    """cf_decode words an OverflowError as an _Unsigned fill problem only when _Unsigned is
+    applied; any other one reaches the caller as it is."""
+    import xarray.conventions
+
+    def boom(*a, **k):
+        raise OverflowError("python int too large to convert to C long")
+
+    monkeypatch.setattr(xarray.conventions, "decode_cf_variable", boom)
+    plain = _packed_meta(era5_v3_unsharded, "int16", {"_FillValue": -1})
+    with pytest.raises(OverflowError, match="too large"):
+        cf_decode(np.array([1, -1], dtype="<i2"), plain)
+    unsigned = _packed_meta(
+        era5_v3_unsharded, "int16", {"_FillValue": -1, "_Unsigned": "true"}
+    )
+    with pytest.raises(ZarrUnsupported, match="_Unsigned") as e:
+        cf_decode(np.array([1, -1], dtype="<i2"), unsigned)
+    assert "Fix:" in str(e.value)
+
+
+@pytest.mark.parametrize(
+    "dtype, unsigned", [("i1", "true"), ("u1", "false")], ids=["i1-true", "u1-false"]
+)
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_an_array_valued_fill_beside_unsigned_is_a_typed_refusal(
+    tmp_path, fmt, dtype, unsigned
+):
+    """CF wants one fill; xarray fails with a bare TypeError and a mask would silently
+    cover nothing. Every reader refuses with a Fix instead."""
+    from databricks.labs.gbx.zarr._meta import cf_unpack, missing_mask
+
+    raw = np.array([1, 5, 7], dtype=dtype)
+    _, meta = _stored(
+        tmp_path, fmt, raw, dtype, {"_Unsigned": unsigned, "_FillValue": [1, 5]}
+    )
+    for read in (cf_decode, cf_unpack, missing_mask):
+        with pytest.raises(ZarrUnsupported, match="scalar") as e:
+            read(raw, meta)
+        assert "_FillValue" in str(e.value) and "Fix:" in str(e.value)
+    time_attrs = {
+        "units": "hours since 2000-01-01",
+        "_Unsigned": unsigned,
+        "_FillValue": [1, 5],
+    }
+    _, tmeta = _stored(tmp_path, fmt, raw, dtype, time_attrs, name="time")
+    with pytest.raises(ZarrUnsupported, match="scalar"):
+        decode_coord(raw, tmeta)
+
+
+def test_an_array_valued_fill_without_unsigned_still_masks_every_value(tmp_path):
+    """Only the _Unsigned conversion needs a single fill; xarray masks a list otherwise."""
+    from databricks.labs.gbx.zarr._meta import cf_unpack
+
+    raw = np.array([1, 5, 7], dtype="i1")
+    _, meta = _stored(tmp_path, 3, raw, "i1", {"_FillValue": [1, 5]})
+    _, mask = cf_unpack(raw, meta)
+    assert list(mask) == [True, True, False]
+    out = cf_decode(raw, meta)  # xarray's own decoding of the same attributes
+    assert np.isnan(out[:2]).all() and out[2] == 7
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_a_big_endian_unsigned_time_with_a_fill_decodes_like_native(tmp_path, fmt):
+    """The fill is converted in the order the values are in: a direct caller may hold
+    big-endian values (an engine read is always native)."""
+    attrs = {
+        "units": "hours since 2000-01-01",
+        "calendar": "standard",
+        "_Unsigned": "true",
+        "_FillValue": -2,
+    }
+    native = np.array([-2, 10, 20], dtype="<i2")
+    _, meta = _stored(tmp_path, fmt, native, "i2", attrs, name="time")
+    want = decode_coord(native, meta)
+    assert np.isnat(want[0]) and str(want[1]) == "2000-01-01T10:00:00.000000000"
+    got = decode_coord(native.astype(">i2"), meta)
+    np.testing.assert_array_equal(got, want)
+
+
+def test_a_big_endian_unsigned_array_is_masked_like_native(tmp_path):
+    from databricks.labs.gbx.zarr._meta import cf_unpack, missing_mask
+
+    native = np.array([-2, 10, 20], dtype="<i2")
+    _, meta = _stored(
+        tmp_path, 3, native, "i2", {"_Unsigned": "true", "_FillValue": -2}
+    )
+    big = native.astype(">i2")
+    assert list(missing_mask(big, meta)) == [True, False, False]
+    out, mask = cf_unpack(big, meta)
+    assert out.dtype.isnative and list(out) == [65534, 10, 20]
+    assert list(mask) == [True, False, False]
+    np.testing.assert_array_equal(cf_decode(big, meta), cf_decode(native, meta))
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_unsigned_false_masks_its_fill_in_the_signed_values_like_xarray(tmp_path, fmt):
+    """uint16 [65535, 5, 7] with _Unsigned 'false' reads as int16 [-1, 5, 7]; a fill of -1
+    is then the first cell."""
+    from databricks.labs.gbx.zarr._meta import cf_reinterpret, cf_unpack
+
+    raw = np.array([65535, 5, 7], dtype="u2")
+    path, meta = _stored(
+        tmp_path, fmt, raw, "u2", {"_Unsigned": "false", "_FillValue": -1}
+    )
+    values, attrs = cf_reinterpret(raw, meta)
+    assert values.dtype == np.dtype("i2") and attrs["_FillValue"] == -1
+    out, mask = cf_unpack(raw, meta)
+    assert out.dtype == np.dtype("i2") and list(mask) == [True, False, False]
+    theirs = _xarray_values(path)  # float, NaN where missing
+    np.testing.assert_array_equal(np.where(mask, np.nan, out), theirs)
+    assert np.isnan(theirs[0]) and list(theirs[1:]) == [5, 7]
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+@pytest.mark.parametrize("fill", [None, -1], ids=["no-fill", "fill"])
+def test_unsigned_with_a_scale_factor_masks_the_reinterpreted_values(
+    tmp_path, fmt, fill
+):
+    """_Unsigned and scale_factor together: the mask is found on the unsigned values and
+    the numbers are the packed ones, decoded as xarray decodes them."""
+    from databricks.labs.gbx.zarr._meta import cf_unpack
+
+    raw = np.array([-1, 5, 100], dtype="i1")  # unsigned: 255, 5, 100
+    attrs = {"_Unsigned": "true", "scale_factor": 0.5}
+    if fill is not None:
+        attrs["_FillValue"] = fill
+    path, meta = _stored(tmp_path, fmt, raw, "i1", attrs)
+    out, mask = cf_unpack(raw, meta)
+    theirs = _xarray_values(path)
+    assert out.dtype.kind == "f"
+    if fill is None:
+        assert mask is None
+        np.testing.assert_array_equal(out, theirs)
+        assert list(theirs) == [127.5, 2.5, 50.0]  # 255, 5 and 100 times 0.5
+    else:
+        assert list(mask) == [True, False, False]
+        np.testing.assert_array_equal(np.where(mask, np.nan, out), theirs)
+        assert np.isnan(theirs[0]) and list(theirs[1:]) == [2.5, 50.0]
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+@pytest.mark.parametrize(
+    "fill, masked",
+    [(0, [True, False, False, True]), (1, [False, True, True, False]), (-1, None)],
+)
+def test_a_bool_dtype_array_is_masked_before_the_cast_in_a_table_not_in_blocks(
+    tmp_path, fmt, fill, masked
+):
+    """Ruling Z36: an integer array read as booleans (``dtype: "bool"``) whose fill is a
+    stored value. The table finds the missing cells on the integers, before the cast, so
+    they are NULL; blocks keep xarray's rule, which casts the NaN of a masked cell to True.
+    """
+    from databricks.labs.gbx.zarr._meta import cf_unpack, missing_mask
+
+    raw = np.array([0, 1, 1, 0], dtype="i1")
+    path, meta = _stored(
+        tmp_path, fmt, raw, "i1", {"dtype": "bool", "_FillValue": fill}
+    )
+    out, mask = cf_unpack(raw, meta)
+    assert out.dtype == np.dtype("bool") and list(out) == [False, True, True, False]
+    if masked is None:  # a fill no cell holds masks nothing
+        assert mask is None or not mask.any()
+        assert not missing_mask(raw, meta).any()
+    else:
+        assert list(mask) == masked and list(missing_mask(raw, meta)) == masked
+    blocks = cf_decode(raw, meta)
+    np.testing.assert_array_equal(blocks, _xarray_values(path))
+    assert blocks.dtype == np.dtype("bool")
+    if fill != -1:  # the masked cells are True in blocks, whatever they stored
+        assert blocks[raw == fill].all()

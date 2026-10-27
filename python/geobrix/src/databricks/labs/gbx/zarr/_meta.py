@@ -46,6 +46,8 @@ _DEFAULT_INDEX_CODECS = (
 )
 _FLOAT_NAMES = {"NaN": math.nan, "Infinity": math.inf, "-Infinity": -math.inf}
 _STANDARD_CALENDARS = ("standard", "gregorian", "proleptic_gregorian")
+# Names a node (group or array) keeps its own document under, in Zarr v3 and v2.
+NODE_DOCS = ("zarr.json", ".zarray", ".zgroup")
 
 
 @dataclass(frozen=True)
@@ -143,6 +145,19 @@ def _same_rank(name: str, shape, chunks) -> None:
         )
 
 
+def is_sharded_doc(doc) -> bool:
+    """Whether a Zarr v3 array document stores its chunks in shards (its outer codec is
+    ``sharding_indexed``). Decided from the document alone, so it holds for an array
+    GeoBrix cannot decode as well."""
+    codecs = doc.get("codecs") if isinstance(doc, dict) else None
+    return (
+        isinstance(codecs, (list, tuple))
+        and bool(codecs)
+        and isinstance(codecs[0], dict)
+        and codecs[0].get("name") == "sharding_indexed"
+    )
+
+
 def parse_v3(name: str, doc: dict) -> ArrayMeta:
     # the model owns its document; the caller's dict stays theirs
     doc = copy.deepcopy(doc)
@@ -175,7 +190,7 @@ def parse_v3(name: str, doc: dict) -> ArrayMeta:
     shards = None
     chunks = outer
     inner_codecs = codecs
-    if codecs and codecs[0].get("name") == "sharding_indexed":
+    if is_sharded_doc(doc):
         cfg = codecs[0]["configuration"]
         chunks = _extent(name, cfg["chunk_shape"], "inner chunk shape", minimum=1)
         shards = outer
@@ -285,6 +300,59 @@ def inner_meta_doc(meta: ArrayMeta) -> dict:
     return doc
 
 
+def isolate_unreadable_groups(
+    metas: dict, arrays: dict, unsupported: dict[str, str]
+) -> None:
+    """Keep a group whose document cannot be read out of ``unsupported``, in place.
+
+    A node document that cannot be parsed (not JSON, a node type that is neither group nor
+    array) is recorded in ``unsupported`` as an array nobody can decode, because the
+    document alone does not say what the node is. But a node with other nodes under it is
+    a group, and it is not an array: it is dropped from ``unsupported``, and every array
+    under it moves there with the reason ``group document unreadable``, so asking for one
+    is a typed refusal that names the cause and not an "unknown variable". Arrays that were
+    unsupported for a reason of their own keep it.
+
+    ``metas`` maps store keys to documents (``t2m/zarr.json``), ``arrays`` the path of each
+    array GeoBrix decodes to its ``ArrayMeta``, ``unsupported`` the path of each it cannot
+    to the reason.
+    """
+    parents: set[str] = set()  # every path that has a node under it
+    for key in metas:
+        node, _, doc = key.rpartition("/")
+        if doc not in NODE_DOCS:
+            continue
+        while "/" in node:
+            node = node.rpartition("/")[0]
+            if node in parents:
+                break  # it, and so all its parents, are in
+            parents.add(node)
+    groups = {p: why for p, why in unsupported.items() if p in parents}
+    if not groups:
+        return
+
+    def outermost(path: str):
+        found, node = None, path
+        while "/" in node:
+            node = node.rpartition("/")[0]
+            if node in groups:
+                found = node
+        return found
+
+    for path in [*arrays, *(p for p in unsupported if p not in groups)]:
+        group = outermost(path)
+        if group is not None:
+            why = groups[group].rstrip(".")
+            arrays.pop(path, None)
+            unsupported.setdefault(
+                path,
+                f"group document unreadable: {why}, so the arrays under {group!r} "
+                "are not read.",
+            )
+    for group in groups:
+        del unsupported[group]
+
+
 def _cf_fill_attr(raw, meta: ArrayMeta):
     """A Zarr v3 float ``_FillValue`` attribute as a number.
 
@@ -341,6 +409,42 @@ def _cf_attrs(meta: ArrayMeta, use_zarr_fill_value_as_mask=None) -> dict:
     return attrs
 
 
+def _native_values(values) -> np.ndarray:
+    """``values`` as an array in native byte order: the integer coders below reinterpret
+    bytes, which only means the same thing as the numbers in the machine's own order."""
+    values = np.asarray(values)
+    if not values.dtype.isnative:
+        values = values.astype(values.dtype.newbyteorder("="))
+    return values
+
+
+def _unsigned_target(values: np.ndarray, attrs: dict):
+    """The integer type xarray's ``_Unsigned`` coder turns ``values`` into, or ``None``.
+
+    ``_Unsigned = "true"`` makes a signed integer the unsigned one of the same width, and
+    ``"false"`` an unsigned integer the signed one. Anything else is left alone.
+    """
+    unsigned, kind = attrs.get("_Unsigned"), values.dtype.kind
+    if kind == "i" and unsigned == "true":
+        return np.dtype(f"u{values.dtype.itemsize}")
+    if kind == "u" and unsigned == "false":
+        return np.dtype(f"i{values.dtype.itemsize}")
+    return None
+
+
+def _require_scalar_fill(meta: ArrayMeta, fill) -> None:
+    """``_Unsigned`` converts the ``_FillValue`` to the reinterpreted type, which needs one
+    value: CF defines ``_FillValue`` as a scalar, and xarray fails on a list with a bare
+    ``TypeError``. Several missing values belong in ``missing_value``."""
+    if fill is not None and np.ndim(fill) != 0:
+        raise ZarrUnsupported(
+            f"the _FillValue {fill!r} of array {meta.name!r} is not a single value, but "
+            "_Unsigned needs one: CF requires a scalar fill",
+            fix="store _FillValue as one value (several missing values belong in "
+            "missing_value), or read with decode=False",
+        )
+
+
 def cf_decode(
     values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
 ) -> np.ndarray:
@@ -353,21 +457,26 @@ def cf_decode(
     from xarray import Variable
     from xarray.conventions import decode_cf_variable
 
-    values = np.asarray(values)
+    values = _native_values(values)
     dims = (
         meta.dims
         if len(meta.dims) == values.ndim
         else tuple(f"dim_{i}" for i in range(values.ndim))
     )
-    var = Variable(dims, values, _cf_attrs(meta, use_zarr_fill_value_as_mask))
+    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    unsigned = _unsigned_target(values, attrs) is not None
+    if unsigned:
+        _require_scalar_fill(meta, attrs.get("_FillValue"))
+    var = Variable(dims, values, attrs)
     try:
         return decode_cf_variable(
             meta.name, var, decode_times=False, decode_timedelta=False
         ).values
-    except (
-        OverflowError
-    ) as e:  # an _Unsigned array whose fill is not in its storage type
-        raise _fill_error(meta, var.attrs.get("_FillValue"), e) from None
+    except OverflowError as e:
+        if not unsigned:  # not about the fill: it is not ours to word
+            raise
+        # an _Unsigned array whose fill is not in its storage type
+        raise _fill_error(meta, attrs.get("_FillValue"), e) from None
 
 
 def _fill_error(meta: ArrayMeta, fill, cause) -> ZarrUnsupported:
@@ -376,6 +485,39 @@ def _fill_error(meta: ArrayMeta, fill, cause) -> ZarrUnsupported:
         f"{np.dtype(meta.dtype)} type once _Unsigned is applied ({cause})",
         fix="store _FillValue in the array's stored integer type, or read with decode=False",
     )
+
+
+def _reinterpret_integers(
+    values: np.ndarray, meta: ArrayMeta, *, use_zarr_fill_value_as_mask=None
+) -> tuple[np.ndarray, dict]:
+    """``(values, attrs)`` after xarray's ``_Unsigned`` coder, in native byte order.
+
+    The values are the signed or unsigned integers of the same width (the bits are kept)
+    and ``_FillValue`` follows, converted as xarray converts it (the stored signed -1 of an
+    unsigned byte is 255), so integer comparisons stay exact. ``_Unsigned`` is consumed.
+    Any other value of it, or a non-integer array, is left alone. A boolean ``dtype``
+    attribute is still in ``attrs``: see ``cf_reinterpret``.
+    """
+    values = _native_values(values)
+    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
+    target = _unsigned_target(values, attrs)
+    attrs.pop("_Unsigned", None)
+    if target is not None:
+        fill = attrs.get("_FillValue")
+        _require_scalar_fill(meta, fill)
+        if fill is not None:
+            try:
+                if values.dtype.kind == "i":
+                    # the fill is the signed value on disk: the same bits, unsigned
+                    attrs["_FillValue"] = (
+                        np.array(fill, dtype=values.dtype).view(target).item()
+                    )
+                else:
+                    attrs["_FillValue"] = target.type(fill)
+            except (OverflowError, ValueError, TypeError) as e:
+                raise _fill_error(meta, fill, e) from None
+        values = values.astype(target)
+    return values, attrs
 
 
 def cf_reinterpret(
@@ -394,32 +536,11 @@ def cf_reinterpret(
 
     ``attrs`` are the CF attributes (``_cf_attrs``) with ``_Unsigned`` and a boolean
     ``dtype`` consumed and the fill converted. Raises ``ZarrUnsupported`` for a
-    ``_FillValue`` that does not fit the stored type.
+    ``_FillValue`` that does not fit the stored type or is not a single value.
     """
-    values = np.asarray(values)
-    attrs = _cf_attrs(meta, use_zarr_fill_value_as_mask)
-    unsigned = attrs.pop("_Unsigned", None)
-    kind = values.dtype.kind
-    target = None
-    if kind == "i" and unsigned == "true":
-        target = np.dtype(f"u{values.dtype.itemsize}")
-    elif kind == "u" and unsigned == "false":
-        target = np.dtype(f"i{values.dtype.itemsize}")
-    if target is not None:
-        fill = attrs.get("_FillValue")
-        if fill is not None and np.ndim(fill) == 0:
-            try:
-                if (
-                    kind == "i"
-                ):  # the fill is the signed value on disk: same bits, unsigned
-                    attrs["_FillValue"] = (
-                        np.array(fill, dtype=values.dtype).view(target).item()
-                    )
-                else:
-                    attrs["_FillValue"] = target.type(fill)
-            except (OverflowError, ValueError, TypeError) as e:
-                raise _fill_error(meta, fill, e) from None
-        values = values.astype(target)
+    values, attrs = _reinterpret_integers(
+        values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
+    )
     if attrs.get("dtype") == "bool":
         del attrs["dtype"]
         values = values.astype(bool)
@@ -457,12 +578,14 @@ def missing_mask(
 
     A cell is missing when it equals the ``_FillValue`` or one of the ``missing_value``s
     (and, where ``use_zarr_fill_value_as_mask`` applies, the array ``fill_value``; see
-    ``_cf_attrs``). The comparison is on the stored values after ``cf_reinterpret`` and
-    before any scaling, so it is exact for integers of any size. A NaN fill value matches
-    NaN cells; a NaN that is data beside a numeric fill is not missing. A boolean array is
-    never masked, and a fill that is not a number matches nothing, as in xarray.
+    ``_cf_attrs``). The comparison is on the stored values after the ``_Unsigned``
+    reinterpretation (``cf_reinterpret``) and before any scaling or boolean cast, so it is
+    exact for integers of any size, and an integer array read as booleans (``dtype`` of
+    ``"bool"``) is masked on its integers. A NaN fill value matches NaN cells; a NaN that
+    is data beside a numeric fill is not missing. A stored boolean array is never masked,
+    and a fill that is not a number matches nothing, as in xarray.
     """
-    values, attrs = cf_reinterpret(
+    values, attrs = _reinterpret_integers(
         values, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
     )
     return _mask_of(values, attrs)
@@ -473,14 +596,16 @@ def cf_unpack(
 ) -> tuple[np.ndarray, np.ndarray | None]:
     """``(values, mask)`` for a reader that wants missing data as a mask, not as NaN.
 
-    ``mask`` is ``missing_mask`` (``None`` when nothing is masked). ``values`` are the
-    stored values after ``cf_reinterpret`` (so ``_Unsigned`` and a boolean ``dtype`` are
-    applied, as in ``cf_decode``) and keep their integer dtype, and so stay exact, unless
-    the array is packed (``scale_factor`` or ``add_offset``), when they are decoded to
-    floating point as ``cf_decode`` does. The cells under ``mask`` hold no meaningful value.
+    ``mask`` is ``missing_mask`` (``None`` when nothing is masked): it is found before the
+    boolean cast, so a boolean column has NULLs where blocks, following xarray, cast the
+    masked cell's NaN to True. ``values`` are the stored values after ``cf_reinterpret``
+    (so ``_Unsigned`` and a boolean ``dtype`` are applied, as in ``cf_decode``) and keep
+    their integer dtype, and so stay exact, unless the array is packed (``scale_factor``
+    or ``add_offset``), when they are decoded to floating point as ``cf_decode`` does. The
+    cells under ``mask`` hold no meaningful value.
     """
-    stored = np.asarray(values)
-    values, attrs = cf_reinterpret(
+    stored = _native_values(values)
+    values, attrs = _reinterpret_integers(
         stored, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
     )
     mask = _mask_of(values, attrs)
@@ -488,6 +613,8 @@ def cf_unpack(
         values = cf_decode(
             stored, meta, use_zarr_fill_value_as_mask=use_zarr_fill_value_as_mask
         )
+    elif attrs.get("dtype") == "bool":
+        values = values.astype(bool)
     return values, mask
 
 

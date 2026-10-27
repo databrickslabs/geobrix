@@ -151,4 +151,57 @@ class BNGTest extends AnyFunSuite {
         chips.map(_._3.getArea).sum shouldBe (polygon.getArea +- 1e-8)
     }
 
+    // A collection large enough that carving it (buffer by minus half a cell diagonal) leaves area: a 3.8 km
+    // polygon, a line crossing it into the cells on either side, and a point.
+    private val largePolygon =
+        "POLYGON ((530100 180100, 533900 180100, 533900 183900, 530100 183900, 530100 180100))"
+    private val largeCollection =
+        s"GEOMETRYCOLLECTION ($largePolygon, LINESTRING (529000 182500, 535000 182500), POINT (536000 185000))"
+
+    test("tessellate of a large GeometryCollection tessellates its polygon") {
+        val polygon = JTS.fromWKT(largePolygon)
+        val collection = JTS.fromWKT(largeCollection)
+        polygon.buffer(-707).isEmpty shouldBe false
+        for (keepCore <- Seq(false, true)) {
+            val chips = BNG.tessellate(collection, 3, keepCoreGeom = keepCore).toVector
+            val expected = BNG.tessellate(polygon, 3, keepCoreGeom = keepCore).toVector
+            chips.exists(_._2) shouldBe true
+            chips.map(c => (c._1, c._2)).toSet shouldBe expected.map(c => (c._1, c._2)).toSet
+            // Boundary-only lines and points never become cells of their own.
+            chips.filter(_._3 != null).forall(_._3.getDimension == 2) shouldBe true
+            if (keepCore) chips.map(_._3.getArea).sum shouldBe (polygon.getArea +- 1e-6)
+        }
+    }
+
+    test("tessellate of a GeometryCollection of adjacent polygons matches the dissolved polygon") {
+        // Eroding each member separately would leave a seam of non-core cells along the shared edge.
+        val collection = JTS.fromWKT(
+          "GEOMETRYCOLLECTION (POLYGON ((530000 180000, 532000 180000, 532000 184000, 530000 184000, 530000 180000)), " +
+              "POLYGON ((532000 180000, 534000 180000, 534000 184000, 532000 184000, 532000 180000)))")
+        val dissolved = JTS.fromWKT("POLYGON ((530000 180000, 534000 180000, 534000 184000, 530000 184000, 530000 180000))")
+        val chips = BNG.tessellate(collection, 3, keepCoreGeom = true).toVector
+        val expected = BNG.tessellate(dissolved, 3, keepCoreGeom = true).toVector
+        chips.map(c => (c._1, c._2)).toSet shouldBe expected.map(c => (c._1, c._2)).toSet
+        chips.map(_._3.getArea).sum shouldBe (dissolved.getArea +- 1e-6)
+    }
+
+    test("tessellate of a GeometryCollection without polygons does not fail") {
+        val collection = JTS.fromWKT(
+          "GEOMETRYCOLLECTION (LINESTRING (530200 180200, 532700 181700), POINT (531500 180500))")
+        val chips = BNG.tessellate(collection, 3, keepCoreGeom = false).toVector
+        chips should not be empty
+        chips.forall(_._3.getDimension < 2) shouldBe true
+    }
+
+    test("polygonalPart dissolves the polygonal leaves of nested collections") {
+        val nested = JTS.fromWKT(
+          "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), " +
+              "GEOMETRYCOLLECTION (MULTIPOLYGON (((1 0, 3 0, 3 2, 1 2, 1 0))), LINESTRING (0 5, 1 5), POINT (9 9)))")
+        BNG.polygonalPart(nested).equalsTopo(JTS.fromWKT("POLYGON ((0 0, 3 0, 3 2, 0 2, 0 0))")) shouldBe true
+        BNG.polygonalPart(JTS.fromWKT("GEOMETRYCOLLECTION (LINESTRING (0 5, 1 5), POINT (9 9))")).isEmpty shouldBe true
+        BNG.polygonalPart(JTS.fromWKT("GEOMETRYCOLLECTION EMPTY")).isEmpty shouldBe true
+        val ordinary = JTS.fromWKT("POLYGON ((0 0, 1 0, 1 1, 0 0))")
+        BNG.polygonalPart(ordinary) should be theSameInstanceAs ordinary
+    }
+
 }

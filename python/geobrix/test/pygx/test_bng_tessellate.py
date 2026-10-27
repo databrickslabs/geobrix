@@ -9,7 +9,14 @@ import pytest
 
 shapely = pytest.importorskip("shapely")
 
-from shapely import from_wkb, from_wkt, get_srid, set_srid, to_wkb  # noqa: E402
+from shapely import (  # noqa: E402
+    from_wkb,
+    from_wkt,
+    get_dimensions,
+    get_srid,
+    set_srid,
+    to_wkb,
+)
 from shapely.geometry import box  # noqa: E402
 
 from databricks.labs.gbx.pygx import _bng  # noqa: E402
@@ -96,6 +103,83 @@ def test_clean_chip_geometry_discards_empty_results_and_leaves_ordinary_clips_al
         assert _bng._clean_chip_geometry(from_wkt(wkt), boundary).is_empty
     polygon = box(0, 0, 2, 2)
     assert _bng._clean_chip_geometry(polygon, boundary) is polygon
+
+
+# A collection large enough that carving it (buffer by minus half a cell diagonal) leaves
+# area: a 3.8 km polygon, a line crossing it into the cells on either side, and a point.
+_LARGE_POLYGON = (
+    "POLYGON ((530100 180100, 533900 180100, 533900 183900, 530100 183900, "
+    "530100 180100))"
+)
+_LARGE_COLLECTION = (
+    f"GEOMETRYCOLLECTION ({_LARGE_POLYGON}, "
+    "LINESTRING (529000 182500, 535000 182500), POINT (536000 185000))"
+)
+
+
+@pytest.mark.parametrize("keep_core_geom", [False, True])
+def test_tessellate_large_collection_tessellates_its_polygon(keep_core_geom):
+    polygon = from_wkt(_LARGE_POLYGON)
+    collection = from_wkt(_LARGE_COLLECTION)
+    assert not collection.is_empty and polygon.buffer(-707).area > 0
+
+    chips = _bng.tessellate(collection, 3, keep_core_geom)
+    expected = _bng.tessellate(polygon, 3, keep_core_geom)
+    assert any(core for _, core, _ in chips)
+    assert {(cell, core) for cell, core, _ in chips} == {
+        (cell, core) for cell, core, _ in expected
+    }
+    # Boundary-only lines and points never become cells of their own.
+    assert all(get_dimensions(chip) == 2 for _, _, chip in chips if chip is not None)
+    if keep_core_geom:
+        assert sum(chip.area for _, _, chip in chips) == pytest.approx(polygon.area)
+
+
+def test_tessellate_collection_of_adjacent_polygons_matches_dissolved_polygon():
+    # Eroding each member separately would leave a seam of non-core cells along the
+    # shared edge; the collection must carve like the polygon it dissolves into.
+    left = (
+        "((530000 180000, 532000 180000, 532000 184000, 530000 184000, 530000 180000))"
+    )
+    right = (
+        "((532000 180000, 534000 180000, 534000 184000, 532000 184000, 532000 180000))"
+    )
+    collection = from_wkt(f"GEOMETRYCOLLECTION (POLYGON {left}, POLYGON {right})")
+    dissolved = from_wkt(
+        "POLYGON ((530000 180000, 534000 180000, 534000 184000, 530000 184000, "
+        "530000 180000))"
+    )
+    chips = _bng.tessellate(collection, 3, True)
+    expected = _bng.tessellate(dissolved, 3, True)
+    assert {(cell, core) for cell, core, _ in chips} == {
+        (cell, core) for cell, core, _ in expected
+    }
+    assert sum(chip.area for _, _, chip in chips) == pytest.approx(dissolved.area)
+
+
+def test_tessellate_collection_without_polygons_does_not_fail():
+    collection = from_wkt(
+        "GEOMETRYCOLLECTION (LINESTRING (530200 180200, 532700 181700), POINT (531500 180500))"
+    )
+    chips = _bng.tessellate(collection, 3)
+    assert chips
+    assert all(chip.geom_type != "Polygon" for _, _, chip in chips)
+
+
+def test_polygonal_part_dissolves_polygonal_leaves_of_nested_collections():
+    nested = from_wkt(
+        "GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), "
+        "GEOMETRYCOLLECTION (MULTIPOLYGON (((1 0, 3 0, 3 2, 1 2, 1 0))), "
+        "LINESTRING (0 5, 1 5), POINT (9 9)))"
+    )
+    assert _bng._polygonal_part(nested).equals(box(0, 0, 3, 2))
+    only_lines = from_wkt("GEOMETRYCOLLECTION (LINESTRING (0 5, 1 5), POINT (9 9))")
+    assert _bng._polygonal_part(only_lines).is_empty
+    assert _bng._polygonal_part(from_wkt("GEOMETRYCOLLECTION EMPTY")).is_empty
+    ordinary = box(0, 0, 1, 1)
+    assert _bng._polygonal_part(ordinary) is ordinary
+    multi = from_wkt("MULTIPOLYGON (((0 0, 1 0, 1 1, 0 0)))")
+    assert _bng._polygonal_part(multi) is multi
 
 
 def test_tessellate_box_has_core_and_border():

@@ -6,6 +6,8 @@ import com.databricks.labs.gbx.vectorx.jts.{GeometryTypeEnum, JTS}
 import org.apache.spark.sql.types._
 import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom._
+import org.locationtech.jts.geom.util.PolygonExtracter
+import org.locationtech.jts.operation.union.UnaryUnionOp
 
 import scala.annotation.tailrec
 import scala.collection.mutable
@@ -854,6 +856,24 @@ object BNG extends GridSystem {
         }).filterNot(c => c._3 != null && c._3.isEmpty)
     }
 
+    /**
+      * The polygonal part of `geometry`, used to carve and bound a tessellation.
+      *
+      * A GeometryCollection has no boundary and no single erosion (JTS rejects `getBoundary` on it, and eroding
+      * its members one by one would leave a seam of non-core cells where two polygons share an edge). So it is
+      * carved as the union of its polygonal leaves, at any nesting depth; the lines and points it holds still
+      * reach the chips through `borderChips`. Any other geometry is returned as is, and a collection with no
+      * polygon gives an empty polygon.
+      */
+    private[grid] def polygonalPart(geometry: Geometry): Geometry = {
+        if (geometry.getGeometryType != "GeometryCollection") geometry
+        else {
+            val polygons = PolygonExtracter.getPolygons(geometry)
+            if (polygons.isEmpty) geometry.getFactory.createPolygon()
+            else UnaryUnionOp.union(polygons, geometry.getFactory)
+        }
+    }
+
     // TODO: This needs some optimization, as now it is moved to BNG and we can
     //      avoid generic logic that was introducing some overhead.
     def tessellate(
@@ -864,7 +884,8 @@ object BNG extends GridSystem {
 
         val inputDimension = geometry.getDimension
         val radius = getBufferRadius(geometry, resolution)
-        val carvedGeometry = geometry.buffer(-radius)
+        val polygonal = polygonalPart(geometry)
+        val carvedGeometry = polygonal.buffer(-radius)
 
         // add 1% to the radius to ensure union of carved and border geometries does not have holes inside the original geometry areas
         val borderGeometry =
@@ -875,7 +896,7 @@ object BNG extends GridSystem {
                 )
             } else {
                 JTS.simplify(
-                  geometry.getBoundary.buffer(radius * 1.01),
+                  polygonal.getBoundary.buffer(radius * 1.01),
                   0.01 * radius
                 )
             }

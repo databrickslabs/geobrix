@@ -30,6 +30,7 @@ from shapely import set_srid as _set_srid
 from shapely import to_wkb as _to_wkb
 from shapely import union_all as _union_all
 from shapely.geometry import Point as _Point
+from shapely.geometry import Polygon as _Polygon
 from shapely.geometry import box as _box
 from shapely.geometry import mapping as _mapping
 
@@ -554,7 +555,9 @@ def polyfill_str(geom, resolution) -> list:
 # chip) tuple. Mirrors BNG.tessellate and BNG.borderChips (gridx/grid/BNG.scala):
 #   * radius = edgeSize * sqrt(2) / 2  (half the cell diagonal -> no blind spots)
 #   * carved = geometry.buffer(-radius); polyfill(carved) -> CORE cells (fully
-#     inside, chip == None unless keep_core_geom).
+#     inside, chip == None unless keep_core_geom). A GeometryCollection is carved
+#     (and its border found) from the union of its polygonal leaves, see
+#     _polygonal_part: it has no boundary and no single erosion of its own.
 #   * border = polyfill(borderGeometry) minus core, where borderGeometry is a
 #     1%-grown, simplified buffer of either the geometry (if carved is empty) or
 #     its boundary; each border cell's chip is cell_geom.intersection(geometry)
@@ -597,6 +600,31 @@ def _clean_chip_geometry(intersect, cell_boundary):
     return _set_srid(_union_all(list(cleaned_members(intersect))), _get_srid(intersect))
 
 
+def _polygonal_part(geometry):
+    """The polygonal part of ``geometry``, used to carve and bound a tessellation.
+
+    A GeometryCollection has no boundary (shapely returns ``None``) and no single
+    erosion: eroding its members one by one would leave a seam of non-core cells
+    where two polygons share an edge. So it is carved as the union of its polygonal
+    leaves, at any nesting depth; the lines and points it holds still reach the chips
+    through the per-cell clip. Any other geometry is returned as is, and a collection
+    with no polygon gives an empty polygon. Mirrors heavy ``BNG.polygonalPart``.
+    """
+    if geometry.geom_type != "GeometryCollection":
+        return geometry
+    polygons = []
+
+    def collect(member):
+        if member.geom_type == "GeometryCollection":
+            for part in member.geoms:
+                collect(part)
+        elif member.geom_type in ("Polygon", "MultiPolygon"):
+            polygons.append(member)
+
+    collect(geometry)
+    return _union_all(polygons) if polygons else _Polygon()
+
+
 def get_buffer_radius(resolution: int) -> float:
     """Optimal polyfill buffer radius (BNG.getBufferRadius): edgeSize*sqrt(2)/2.
 
@@ -619,14 +647,15 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
 
     input_dimension = _get_dimensions(geometry)
     radius = get_buffer_radius(resolution)
-    carved = geometry.buffer(-radius)
+    polygonal = _polygonal_part(geometry)
+    carved = polygonal.buffer(-radius)
 
     # 1% grow ensures the union of carved + border has no holes inside the
     # original area; simplify by 1% of the radius (matches JTS.simplify).
     if carved.is_empty:
         border_geom = geometry.buffer(radius * 1.01).simplify(0.01 * radius)
     else:
-        border_geom = geometry.boundary.buffer(radius * 1.01).simplify(0.01 * radius)
+        border_geom = polygonal.boundary.buffer(radius * 1.01).simplify(0.01 * radius)
 
     core_set = set(polyfill(carved, resolution))
     border = [c for c in polyfill(border_geom, resolution) if c not in core_set]

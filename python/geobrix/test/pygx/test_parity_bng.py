@@ -41,8 +41,9 @@ import logging
 from pathlib import Path
 
 import pytest
-from shapely import equals_exact, from_wkb, from_wkt, get_srid
+from shapely import equals_exact, from_wkb, from_wkt, get_dimensions, get_srid
 from shapely import to_wkb as _to_wkb
+from shapely import union_all
 from shapely.geometry import Point as _Point
 from shapely.geometry import box as _box
 
@@ -666,6 +667,22 @@ _MIXED_CLIP_FIXTURES = [
         "POLYGON ((400100 500100, 400104 500100, 400104 500104, 400100 500104, "
         "400100 500100)))",
     ),
+    (
+        # Large enough to carve (core cells): a polygon, a line crossing it, a point.
+        "geometrycollection_large",
+        _RES,
+        "GEOMETRYCOLLECTION (POLYGON ((530100 180100, 533900 180100, 533900 183900, "
+        "530100 183900, 530100 180100)), LINESTRING (529000 182500, 535000 182500), "
+        "POINT (536000 185000))",
+    ),
+    (
+        # Two polygons sharing an edge carve like the polygon they dissolve into.
+        "geometrycollection_adjacent_polygons",
+        _RES,
+        "GEOMETRYCOLLECTION (POLYGON ((530000 180000, 532000 180000, 532000 184000, "
+        "530000 184000, 530000 180000)), POLYGON ((532000 180000, 534000 180000, "
+        "534000 184000, 532000 184000, 532000 180000)))",
+    ),
     ("aligned_box_423", _RES, _ALIGNED_BOX.wkt),
     ("aligned_big_box_with_core", _RES, _GRID_ALIGNED_BIG_BOX.wkt),
     (
@@ -678,6 +695,49 @@ _MIXED_CLIP_FIXTURES = [
 ]
 
 
+def _chip_parity_problem(light_blob, heavy_blob, ctx):
+    """None when the two chips agree, else a message.
+
+    Chips are compared vertex for vertex (``_assert_geom_parity``). The one exception is
+    a chip that holds a line or point beside a polygon: the tiers union those pieces with
+    different engines, which can leave an extra collinear vertex on the polygon's ring,
+    so such a chip is compared topologically, one dimension at a time.
+    """
+    try:
+        _assert_geom_parity(light_blob, heavy_blob, ctx)
+        return None
+    except AssertionError as strict:
+        lg, hg = from_wkb(bytes(light_blob)), from_wkb(bytes(heavy_blob))
+        if "GeometryCollection" not in (lg.geom_type, hg.geom_type):
+            return str(strict)
+
+    def by_dimension(geom):
+        leaves = []
+
+        def walk(member):
+            if member.geom_type == "GeometryCollection":
+                for part in member.geoms:
+                    walk(part)
+            elif not member.is_empty:
+                leaves.append(member)
+
+        walk(geom)
+        return {
+            d: union_all([g for g in leaves if get_dimensions(g) == d])
+            for d in range(3)
+        }
+
+    light_parts, heavy_parts = by_dimension(lg), by_dimension(hg)
+    for dim in range(3):
+        lpart, hpart = light_parts[dim], heavy_parts[dim]
+        if not (lpart.is_empty and hpart.is_empty) and not lpart.equals(hpart):
+            return (
+                f"{ctx}: dimension-{dim} part differs\n"
+                f"  light={lg.wkt}\n  heavy={hg.wkt}"
+            )
+    return None
+
+
 def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
     """Light == heavy for polygons whose clip against a cell is a collection or MultiPolygon.
 
@@ -687,16 +747,19 @@ def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
     filter. Both tiers now keep every cell whose clip has the input's dimension, so
     for each fixture and each ``keep_core_geom`` mode the cell sets, core flags and chip
     geometries (within 1e-6) must agree, and the chips must cover the input area.
+
+    A GeometryCollection input is carved from the union of its polygonal leaves (it has
+    no boundary of its own): the large collections here leave core cells after carving,
+    which crashed both tiers before.
     """
     from pyspark.sql import functions as f
-    from shapely import from_wkt as _from_wkt
 
     from databricks.labs.gbx.gridx.bng import functions as hx
     from databricks.labs.gbx.pygx import functions as gx
 
     spark = spark_with_jar
     df = spark.createDataFrame(
-        [(name, res, _wkb(_from_wkt(wkt))) for name, res, wkt in _MIXED_CLIP_FIXTURES],
+        [(name, res, _wkb(from_wkt(wkt))) for name, res, wkt in _MIXED_CLIP_FIXTURES],
         "name string, res int, geom binary",
     )
 
@@ -728,7 +791,7 @@ def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
 
     problems = []
     for name, _res, wkt in _MIXED_CLIP_FIXTURES:
-        input_area = _from_wkt(wkt).area
+        input_area = from_wkt(wkt).area
         for keep in (False, True):
             lt, ht = light[keep][name], heavy[keep][name]
             ctx = f"{name} keep_core_geom={keep}"
@@ -747,10 +810,9 @@ def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
                         f"heavy={hchip is None}"
                     )
                 elif lchip is not None:
-                    try:
-                        _assert_geom_parity(lchip, hchip, f"{ctx} {cell}")
-                    except AssertionError as e:
-                        problems.append(str(e))
+                    problem = _chip_parity_problem(lchip, hchip, f"{ctx} {cell}")
+                    if problem:
+                        problems.append(problem)
             if keep:  # every cell carries geometry, so the chips tile the input
                 for tier, tt in (("light", lt), ("heavy", ht)):
                     area = sum(from_wkb(bytes(c)).area for _, c in tt.values())

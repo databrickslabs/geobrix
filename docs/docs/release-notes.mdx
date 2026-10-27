@@ -388,12 +388,19 @@ formats.
   polygon can clip to a cell as a MultiPolygon, or as a GeometryCollection that holds polygons plus a
   point or line along the cell edge. The heavyweight `bng_tessellate` returned NULL for the whole
   polygon and `bng_tessellateexplode` returned no rows, because the clip failed on the collection;
-  the lightweight tier returned fewer cells than the polygon covers, and none at all for a
-  MultiPolygon input. Both tiers now keep the polygonal part of every clip and return the same cells
+  the lightweight tier returned fewer cells than the polygon covers, and dropped every border cell
+  of a MultiPolygon input. Both tiers now keep the polygonal part of every clip and return the same cells
   and chips. A MultiPolygon input returns its Polygon chips, and a polygon's chip can be a
   MultiPolygon. Points and lines that only touch a cell edge are still dropped, so a polygon aligned
   to the grid produces no degenerate chips. Results for polygons that clip to plain Polygon chips do
   not change.
+- **A GeometryCollection that holds a large polygon is tessellated.** When a collection's polygons
+  were big enough to leave core cells after the tessellation shrinks them, the call failed before any
+  cell was clipped: the heavyweight `bng_tessellate` returned NULL (and `bng_tessellateexplode` no
+  rows), and the lightweight tier raised an error. Both tiers now tessellate the union of the
+  collection's polygons, at any nesting depth, so two polygons that share an edge give the same cells
+  as the polygon they form. A line or point in the collection can remain in the chip of a cell the
+  polygons also touch, but never yields a cell of its own.
 
 ### Raster tiling functions
 

@@ -6,6 +6,7 @@ These complement the smoke-level focal goldens in test_core_bandmath.py.
 """
 
 import numpy as np
+import pytest
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 from scipy import ndimage
@@ -58,24 +59,24 @@ def _run(fn, raster_bytes, *args):
         return fn(ds, *args)
 
 
-def test_convolve_edge_is_replicate_nearest():
-    # convolve uses mode="nearest" (replicate edge) -- empirically the closest
-    # scipy boundary to the heavyweight's GDAL block-halo convolution.
-    data = np.arange(16, dtype="float64").reshape(4, 4)
+def test_convolve_edge_is_zero_padded():
+    # the positions off the raster add 0, as the heavyweight's GDALBlock.convolveAt sums
+    # only the in-bounds neighbours: corners 4, edges 6, interior 9 for a 3x3 of ones
+    data = np.ones((4, 4), dtype="float64")
     k = np.ones((3, 3), dtype="float64")
-    expected = ndimage.correlate(data, k, mode="nearest")
     out = _read_band(_run(focal.convolve, _tile(data, nodata=None), k.tolist()))
-    assert np.allclose(out, expected)
-    # and NOT zero-padded (the regressed behavior we reverted)
-    assert not np.allclose(out, ndimage.correlate(data, k, mode="constant", cval=0.0))
+    assert np.allclose(out, ndimage.correlate(data, k, mode="constant", cval=0.0))
+    assert out[0, 0] == 4 and out[0, 1] == 6 and out[1, 1] == 9
+    # and the edge is not replicated
+    assert not np.allclose(out, ndimage.correlate(data, k, mode="nearest"))
 
 
 def test_convolve_asymmetric_kernel_is_unflipped_correlation():
     data = np.arange(25, dtype="float64").reshape(5, 5)
     k = np.array([[0, 0, 0], [0, 0, 1], [0, 0, 0]], dtype="float64")
     out = _read_band(_run(focal.convolve, _tile(data, nodata=None), k.tolist()))
-    assert np.allclose(out, ndimage.correlate(data, k, mode="nearest"))
-    assert not np.allclose(out, ndimage.convolve(data, k, mode="nearest"))
+    assert np.allclose(out, ndimage.correlate(data, k, mode="constant", cval=0.0))
+    assert not np.allclose(out, ndimage.convolve(data, k, mode="constant", cval=0.0))
 
 
 def test_filter_mean_shrinks_window_at_edge():
@@ -177,6 +178,9 @@ def test_filt_vectorized_matches_generic_filter_reference():
             )
 
 
+@pytest.mark.filterwarnings(
+    "ignore:All-NaN slice:RuntimeWarning"
+)  # the reference's nan-aware window
 def test_filt_vectorized_all_invalid_window():
     # a fully-NoData block -> every window all-invalid -> nd everywhere
     nd = -9999.0

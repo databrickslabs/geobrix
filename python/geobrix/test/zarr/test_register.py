@@ -586,6 +586,38 @@ def test_a_volume_uri_is_a_bare_path():
     )
 
 
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        "/Volumes/c/s/v/x.zarr",
+        "dbfs:/Volumes/c/s/v/x.zarr",
+        "dbfs:///Volumes/c/s/v/x.zarr",
+        "/dbfs/Volumes/c/s/v/x.zarr",
+        " /dbfs/Volumes/c/s/v/x.zarr/ ",
+        "file:/Volumes/c/s/v/x.zarr",
+    ],
+)
+def test_every_spelling_of_a_volume_path_is_the_same_bare_path(spelling):
+    assert _register._local_root(spelling) == "/Volumes/c/s/v/x.zarr"
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        "/dbfs",
+        "/dbfs/mnt/x.zarr",
+        "dbfs:/mnt/x.zarr",
+        "dbfs:///mnt/x.zarr",
+        "dbfs:mnt/x.zarr",
+        "dbfs:///x.zarr",
+    ],
+)
+def test_the_other_dbfs_paths_are_still_refused(path):
+    with pytest.raises(ZarrUnsupported, match="DBFS") as ei:
+        _register._local_root(path)
+    assert "Fix:" in str(ei.value) and "/Volumes/" in ei.value.fix
+
+
 V3_GROUP = {"zarr_format": 3, "node_type": "group", "attributes": {}}
 REFUSALS = {
     "v3 root array": (
@@ -608,6 +640,20 @@ REFUSALS = {
         "single",
     ),
     "not json": ({"zarr.json": "{not json"}, "not valid JSON"),
+    "malformed structure": (  # a regular grid with no configuration: a KeyError, not a refusal
+        {
+            "zarr.json": V3_GROUP,
+            "a/zarr.json": {
+                "zarr_format": 3,
+                "node_type": "array",
+                "shape": [2],
+                "data_type": "float32",
+                "chunk_grid": {"name": "regular"},
+                "codecs": [],
+            },
+        },
+        "malformed",
+    ),
 }
 
 
@@ -1192,3 +1238,228 @@ def test_same_identity_rejects_bad_input():
         _register.same_identity("1000", "1000:7")
     with pytest.raises(ValueError, match="resolution"):
         _register.same_identity("1:2", "1:2", mtime_resolution_ms=0)
+
+
+# --- Task 9 follow-ups: markers, readers, probes and unreadable documents ----------------
+
+
+def test_a_marker_that_cannot_be_read_back_is_removed_not_left_behind(
+    tmp_path, monkeypatch
+):
+    """The write landed but the read-back failed (a FUSE miss right after the write): the
+    marker this call just made names this table and nobody can tell, so it goes, and the
+    caller gets a typed error with a fix, not a claim of foreign ownership."""
+    real_open, failed = open, []
+
+    def flaky(path, mode="r", *a, **k):
+        if str(path).endswith(OWNER_MARKER) and mode == "rb" and not failed:
+            failed.append(path)  # only the read-back; the cleanup's own read works
+            raise OSError(5, "Input/output error")
+        return real_open(path, mode, *a, **k)
+
+    monkeypatch.setattr(_register, "open", flaky, raising=False)
+    with pytest.raises(ZarrError, match="Input/output error") as ei:
+        write_owner_marker(str(tmp_path / "ov"), "c.s.t", "overlay")
+    assert failed and "Fix:" in str(ei.value)
+    assert not isinstance(ei.value, ZarrOwnershipError)
+    assert isinstance(ei.value.__cause__, OSError)
+    assert not (tmp_path / "ov" / OWNER_MARKER).exists()
+    monkeypatch.undo()
+    write_owner_marker(
+        str(tmp_path / "ov"), "c.s.t", "overlay"
+    )  # nothing is in the way
+
+
+def test_a_document_that_cannot_be_read_for_lack_of_permission_is_not_retried(
+    tmp_path, monkeypatch
+):
+    calls = []
+
+    def deny(path):
+        calls.append(path)
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(_register, "_read_file", deny)
+    with pytest.raises(ZarrError, match="permission denied") as ei:
+        _register._Reader(str(tmp_path)).doc("a/zarr.json")
+    assert "a/zarr.json" in str(ei.value) and "Fix:" in str(ei.value)
+    assert isinstance(ei.value.__cause__, PermissionError)
+    assert len(calls) == 1  # waiting would not help
+
+
+def test_a_directory_that_cannot_be_listed_is_an_error_after_the_retries(
+    tmp_path, monkeypatch
+):
+    _no_sleep(monkeypatch)
+    calls = []
+
+    def broken(path):
+        calls.append(path)
+        raise OSError(5, "Input/output error")
+
+    monkeypatch.setattr(_register, "_list_dirs", broken)
+    with pytest.raises(ZarrError, match="cannot list") as ei:
+        _register._Reader(str(tmp_path)).dirs("grp")
+    assert str(tmp_path / "grp") in str(ei.value) and "Fix:" in str(ei.value)
+    assert isinstance(ei.value.__cause__, OSError)
+    assert len(calls) == _register._PROBE_ATTEMPTS
+
+
+def _count_reads(monkeypatch):
+    """Every call of the metadata file read, by path relative to nothing: the full path."""
+    real, reads = _register._read_file, []
+
+    def read(path):
+        reads.append(path)
+        return real(path)
+
+    monkeypatch.setattr(_register, "_read_file", read)
+    return reads
+
+
+def test_a_document_the_listing_proves_absent_is_probed_once(
+    era5_v3_sharded, tmp_path, monkeypatch
+):
+    """Spark's listing shows every visible file of a Zarr v3 store, so a directory it holds
+    no zarr.json for is not worth retrying. A hidden name never shows, and with no listing
+    nothing is proven: both keep the retries."""
+    base = tmp_path / "base.zarr"
+    shutil.copytree(era5_v3_sharded, base)
+    for stray in ("junk", "_hidden"):
+        (base / stray).mkdir()
+        (base / stray / "notes.txt").write_text("x")
+    _no_sleep(monkeypatch)
+    reads = _count_reads(monkeypatch)
+
+    def probes(rel):
+        return sum(p.endswith(f"/{rel}/zarr.json") for p in reads)
+
+    _, arrays, _ = read_base_metadata(str(base), listing=_listing(base))
+    assert set(arrays) == ERA5_ARRAYS
+    assert probes("junk") == 1
+    assert probes("_hidden") == _register._PROBE_ATTEMPTS
+    reads.clear()
+    read_base_metadata(str(base))  # no listing: nothing is proven absent
+    assert probes("junk") == _register._PROBE_ATTEMPTS
+
+
+def test_a_hidden_array_the_listing_cannot_show_still_survives_a_miss(
+    tmp_path, monkeypatch
+):
+    base = _make_nested(tmp_path / "base.zarr")  # fc/_aux has a hidden name
+    _no_sleep(monkeypatch)
+    missed = _miss_once(monkeypatch, "fc/_aux/zarr.json")
+    _, arrays, _ = read_base_metadata(str(base), listing=_listing(base))
+    assert len(missed) == 1 and "fc/_aux" in arrays
+
+
+def _node_type_store(base):
+    ok = {
+        "zarr_format": 3,
+        "node_type": "array",
+        "shape": [2],
+        "data_type": "float32",
+        "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [2]}},
+        "chunk_key_encoding": {"name": "default"},
+        "fill_value": 0,
+        "codecs": [],
+    }
+    return _write(
+        base,
+        {
+            "zarr.json": V3_GROUP,
+            "ok/zarr.json": ok,
+            "weird/zarr.json": {"zarr_format": 3, "node_type": "banana"},
+        },
+    )
+
+
+def test_a_bad_node_type_is_an_unsupported_array_to_a_reader_and_a_refusal_to_register(
+    tmp_path,
+):
+    base = _node_type_store(tmp_path / "s.zarr")
+    metas, arrays, unsupported = read_base_metadata(str(base), tolerant=True)
+    assert set(arrays) == {"ok"} and set(unsupported) == {"weird"}
+    assert "node_type" in unsupported["weird"] and "banana" in unsupported["weird"]
+    assert "weird/zarr.json" in metas  # its document is kept
+    with pytest.raises(ZarrUnsupported, match="node_type"):
+        read_base_metadata(str(base))
+
+
+def _two(base, fmt):
+    g = zarr.open_group(str(base), mode="w", zarr_format=fmt)
+    for name in ("a", "b"):
+        kw = {"dimension_names": ("k",)} if fmt == 3 else {}
+        arr = g.create_array(name, shape=(4,), chunks=(2,), dtype="f4", **kw)
+        arr[:] = 1
+    return base
+
+
+@pytest.mark.parametrize("fmt", [2, 3])
+def test_a_document_that_is_not_json_is_an_unsupported_array_in_either_format(
+    tmp_path, fmt
+):
+    """One rule for both formats: the array is registered as one nobody can decode, and
+    its neighbours are not lost."""
+    base = _two(tmp_path / "s.zarr", fmt)
+    (base / "b" / ("zarr.json" if fmt == 3 else ".zarray")).write_text("{not json")
+    _, arrays, unsupported = read_base_metadata(str(base))
+    assert set(arrays) == {"a"} and set(unsupported) == {"b"}
+    assert "not valid JSON" in unsupported["b"]
+
+
+def _corrupt_group(base):
+    _make_nested(base)
+    (base / "fc" / "zarr.json").write_text("{oops")
+    return base
+
+
+@pytest.mark.parametrize("tolerant", [False, True])
+def test_a_corrupt_group_is_not_an_array_and_the_arrays_under_it_say_why(
+    tmp_path, tolerant
+):
+    base = _corrupt_group(tmp_path / "s.zarr")
+    metas, arrays, unsupported = read_base_metadata(str(base), tolerant=tolerant)
+    assert set(arrays) == {"crs"}
+    assert set(unsupported) == {"fc/x", "fc/_aux"}  # the group itself is not among them
+    for reason in unsupported.values():
+        assert "group document unreadable" in reason and "'fc'" in reason
+        assert "not valid JSON" in reason
+    assert "fc/zarr.json" in metas  # its document is kept
+
+
+def test_asking_for_an_array_under_a_corrupt_group_is_a_typed_refusal(tmp_path):
+    from databricks.labs.gbx.zarr import _read
+
+    base = _corrupt_group(tmp_path / "s.zarr")
+    src = _read._open_source(None, str(base), "path", None, None)
+    assert "fc" not in src.unsupported and set(src.arrays) == {"crs"}
+    with pytest.raises(ZarrUnsupported, match="group document unreadable") as ei:
+        _read._choose_variables(["fc/x"], src)
+    assert "'fc/x'" in str(ei.value) and "Fix:" in str(ei.value)
+    with pytest.raises(ValueError, match="unknown variable"):
+        _read._choose_variables(["fc"], src)  # the group is not a variable at all
+
+
+def test_a_corrupt_group_registers_as_a_group_and_its_arrays_are_refused(
+    spark_delta, tmp_path
+):
+    from databricks.labs.gbx.zarr._read import gbx_zarr_read
+
+    base = _corrupt_group(tmp_path / "s.zarr")
+    table = _table("badgroup")
+    gbx_zarr_register(spark_delta, str(base), table)
+    docs = {
+        (r["array"], r["kind"])
+        for r in _live(spark_delta, table, kinds=["group", "array"]).to_pylist()
+    }
+    assert ("fc", "group") in docs and ("fc/x", "array") in docs
+    assert ("crs", "array") in docs and ("fc", "array") not in docs
+    assert sorted(_commit_meta(spark_delta, table)["unsupported"]) == [
+        "fc/_aux",
+        "fc/x",
+    ]
+    assert gbx_zarr_read(spark_delta, table, variables=["crs"]).count() == 1
+    with pytest.raises(ZarrUnsupported, match="group document unreadable"):
+        gbx_zarr_read(spark_delta, table, variables=["fc/x"])
+    spark_delta.sql(f"DROP TABLE IF EXISTS {table}")

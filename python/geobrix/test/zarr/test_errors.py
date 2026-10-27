@@ -76,6 +76,25 @@ def test_lazy_package_exports_errors():
     assert z.ZarrWriteConflict is E.ZarrWriteConflict
 
 
+def test_lazy_package_exports_the_functions_and_the_block_helpers():
+    """Every lazy export resolves to the object its module defines, and is listed."""
+    import importlib
+
+    import databricks.labs.gbx.zarr as z
+
+    assert set(z.__all__) == set(z._EXPORTS)
+    for name, (module, attr) in z._EXPORTS.items():
+        assert getattr(z, name) is getattr(importlib.import_module(module), attr), name
+        assert name in dir(z)
+    from databricks.labs.gbx.zarr import _read, _register, functions
+
+    assert z.gbx_zarr_read is _read.gbx_zarr_read is functions.gbx_zarr_read
+    assert z.gbx_zarr_register is _register.gbx_zarr_register
+    assert z.BLOCKS_SCHEMA is _read.BLOCKS_SCHEMA
+    assert z.block_to_numpy is _read.block_to_numpy
+    assert z.block_to_xarray is _read.block_to_xarray
+
+
 def test_importing_the_package_loads_no_zarr_stack_or_pyspark():
     """The package and its errors are usable without the zarr stack or PySpark; only
     the names that need them import them. Checked in a fresh interpreter."""

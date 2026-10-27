@@ -42,6 +42,7 @@ from databricks.labs.gbx.zarr._meta import (
     cf_unpack,
     decode_coord,
     is_time_coord,
+    isolate_unreadable_groups,
     parse_v2,
     parse_v3,
 )
@@ -177,7 +178,9 @@ def parse_documents(
     ``arrays`` maps the path of each array GeoBrix can decode to its ``ArrayMeta``.
     ``unsupported`` maps the path of each one it cannot (a string coordinate, say, or a
     malformed document) to the reason. A parse failure of one array never fails the others:
-    the array is named only when it is decoded.
+    the array is named only when it is decoded. A group whose document is unreadable is
+    not an array: the arrays under it are in ``unsupported`` for that cause instead
+    (``isolate_unreadable_groups``).
     """
     arrays: dict[str, ArrayMeta] = {}
     unsupported: dict[str, str] = {}
@@ -197,6 +200,7 @@ def parse_documents(
             unsupported[prefix] = e.message
         except (KeyError, TypeError, ValueError, IndexError, AttributeError) as e:
             unsupported[prefix] = f"its metadata is malformed ({type(e).__name__}: {e})"
+    isolate_unreadable_groups(metas, arrays, unsupported)
     return arrays, unsupported
 
 
@@ -298,18 +302,41 @@ def _open_table(spark, table, version_as_of, timestamp_as_of) -> _Source:
 # --- variables, coordinates and selections -------------------------------------------
 
 
-def _coordinate_of(dim, array, arrays, unsupported) -> str | None:
+def _raw_grid(metas: dict[str, bytes], path: str):
+    """``(shape, dims)`` read straight from the documents of an array GeoBrix cannot
+    decode (a string coordinate, say), or ``None`` when they cannot be read either."""
+    try:
+        if f"{path}/zarr.json" in metas:
+            doc = json.loads(metas[f"{path}/zarr.json"])
+            shape, names = doc["shape"], doc.get("dimension_names")
+        else:
+            shape = json.loads(metas[f"{path}/.zarray"])["shape"]
+            attrs = json.loads(metas.get(f"{path}/.zattrs", b"{}"))
+            names = attrs.get("_ARRAY_DIMENSIONS")
+        shape = tuple(shape)
+        dims = tuple(names) if names else tuple(f"dim_{i}" for i in range(len(shape)))
+    except (KeyError, TypeError, ValueError, AttributeError):
+        return None
+    return shape, dims
+
+
+def _coordinate_of(dim, array, src: _Source) -> str | None:
     """The path of the array that holds the labels of ``dim`` for ``array``, if any.
 
     A dimension coordinate is a one-dimensional array named like the dimension, in the
-    array's own group or the root. An array GeoBrix cannot decode counts: the dimension
-    does have labels, they just cannot be read.
+    array's own group or the root. An array GeoBrix cannot decode counts when its documents
+    say it is one: the dimension does have labels, they just cannot be read. One that is
+    not (a 2-D array that happens to share the name) labels nothing, and neither does one
+    whose documents cannot be read at all, which is given the benefit of the doubt.
     """
     parent = array.rpartition("/")[0]
     for path in ([f"{parent}/{dim}"] if parent else []) + [dim]:
-        if path in unsupported:
-            return path
-        meta = arrays.get(path)
+        if path in src.unsupported:
+            grid = _raw_grid(src.metas, path)
+            if grid is None or (len(grid[0]) == 1 and grid[1] == (dim,)):
+                return path
+            continue
+        meta = src.arrays.get(path)
         if meta is not None and len(meta.shape) == 1 and meta.dims == (dim,):
             return path
     return None
@@ -337,7 +364,7 @@ def _choose_variables(variables, src: _Source) -> list[str]:
             c
             for name, meta in arrays.items()
             for d in meta.dims
-            if (c := _coordinate_of(d, name, arrays, unsupported))
+            if (c := _coordinate_of(d, name, src))
         }
         skip = coordinates | _auxiliary(arrays)
         chosen = [n for n in sorted(arrays) if n not in skip and arrays[n].shape != ()]
@@ -509,7 +536,7 @@ class _TaskConfig:
     """Everything a task needs besides its unit; travels in the ``mapInArrow`` closure.
 
     Nothing here grows with the number of units: the units themselves are rows of the
-    DataFrame the tasks read, one per unit, so a task is sent only its own.
+    DataFrame the tasks read, one per unit, and a task reads only its own.
     """
 
     kind: str  # "table" | "plain"
@@ -667,9 +694,7 @@ def _plan(spark, src: _Source, variables, sel, isel, output, decode, flag):
 
     dim_coords: dict[str, tuple[str | None, ...]] = {}
     for v in variables:
-        dim_coords[v] = tuple(
-            _coordinate_of(d, v, arrays, src.unsupported) for d in arrays[v].dims
-        )
+        dim_coords[v] = tuple(_coordinate_of(d, v, src) for d in arrays[v].dims)
     need = {c for cs in dim_coords.values() for c in cs if c} - set(src.unsupported)
     stored = _read_coordinates(src, need)
     coords = {p: _decode_values(v, arrays[p], decode, flag) for p, v in stored.items()}
@@ -1036,13 +1061,18 @@ def _table_batches(cfg, unit, reader) -> Iterator[pa.RecordBatch]:
 def _work_frame(spark, units: list[Unit]):
     """One row ``(id, unit)`` per unit, in exactly one partition each.
 
-    The units are data, so a task is sent its own and not all of them. They are joined to a
-    ``spark.range(n, numPartitions=n)`` scan: a Range scan puts one id in each of the n
-    partitions and the broadcast join keeps those partitions, so no shuffle can leave one
-    empty or double another up, and nothing for Serverless's AQE to coalesce. (Hashing the
-    ids into n partitions with ``repartition(n, id)`` puts several units in one partition
-    and leaves others empty.) The units are built from a plain list of tuples: an Arrow
-    table conversion drops the rows that follow an empty chunk.
+    The units are data, not part of the task closure, and each task reads only its own. They
+    are joined to a ``spark.range(n, numPartitions=n)`` scan: a Range scan puts one id in
+    each of the n partitions and the broadcast join keeps those partitions, so no shuffle
+    can leave one empty or double another up, and nothing for Serverless's AQE to coalesce.
+    (Hashing the ids into n partitions with ``repartition(n, id)`` puts several units in one
+    partition and leaves others empty.) The units are built from a plain list of tuples: an
+    Arrow table conversion drops the rows that follow an empty chunk.
+
+    The join broadcasts the whole ``(id, unit)`` table, every unit's manifest rows
+    included, to every executor: once per executor, not once per task. The cost grows with
+    the executors times all the rows a read touches, and a read large enough to pass Spark's
+    broadcast size limit fails loudly rather than reading wrong data.
     """
     from pyspark.sql import functions as F
 
@@ -1117,7 +1147,10 @@ def gbx_zarr_read(
     ``FLOAT`` or ``DOUBLE``. Missing data is ``NULL``: a cell equal to the ``_FillValue``
     or ``missing_value`` (or to the array ``fill_value`` where
     ``use_zarr_fill_value_as_mask`` applies), found on the stored values before any
-    scaling; a NaN that is data beside a numeric fill stays NaN. Complex arrays raise
+    scaling or cast; a NaN that is data beside a numeric fill stays NaN. (An integer array
+    read as booleans through a ``dtype`` attribute of ``"bool"`` is masked on its integers,
+    so a cell equal to the fill is ``NULL`` here where blocks, following xarray, cast the
+    masked cell's NaN to True.) Complex arrays raise
     ``ZarrUnsupported``: read them as blocks. With ``decode=False`` the table holds the
     stored values and nothing is ``NULL``. The variables must share their dimensions and
     shape. Row order is not defined.

@@ -20,8 +20,9 @@ The metadata is read on the driver with plain file reads, not through ``zarr``'s
 ``LocalStore``, which turns a missing file into "no such key": on a FUSE mount a healthy
 file can miss for a moment, and that must not drop an array. A document the Spark listing
 (Zarr v3) or the consolidated metadata (Zarr v2) names must exist, so a miss is retried
-and then an error; anything else is probed a few times. The per-node documents are the
-truth; consolidated metadata is compared against them and a disagreement is reported.
+and then an error; anything else is probed a few times, except a Zarr v3 document the
+listing does not show, which it proves absent and is read once. The per-node documents are
+the truth; consolidated metadata is compared against them and a disagreement is reported.
 """
 
 from __future__ import annotations
@@ -52,7 +53,13 @@ from databricks.labs.gbx.zarr._manifest import (
     find_commit_version,
     retain_seconds,
 )
-from databricks.labs.gbx.zarr._meta import ArrayMeta, parse_v2, parse_v3
+from databricks.labs.gbx.zarr._meta import (
+    NODE_DOCS,
+    ArrayMeta,
+    isolate_unreadable_groups,
+    parse_v2,
+    parse_v3,
+)
 from databricks.labs.gbx.zarr.errors import (
     ZarrError,
     ZarrOwnershipError,
@@ -77,7 +84,6 @@ _MARKER_KINDS = ("overlay", "managed")
 
 # Names a store keeps its metadata under; none of them is a chunk or a child array.
 _DOC_NAMES = ("zarr.json", ".zgroup", ".zarray", ".zattrs", ".zmetadata")
-_NODE_DOCS = ("zarr.json", ".zarray", ".zgroup")
 _ZMETADATA = ".zmetadata"
 
 _SCHEME = re.compile(r"^[A-Za-z][A-Za-z0-9+.\-]*:")
@@ -172,23 +178,26 @@ def same_identity(a: str, b: str, *, mtime_resolution_ms: int = 1) -> bool:
 
 
 def _local_root(path: str) -> str:
-    """The bare local path of a store or overlay root: no ``dbfs:``/``file:``, normalized."""
-    from databricks.labs.gbx.ds._listing import to_local_path
+    """The bare local path of a store or overlay root: no ``dbfs:``/``file:``, normalized.
+
+    A Volume is ``/Volumes/...``, which Spark also spells ``dbfs:/Volumes/...`` (or
+    ``dbfs:///Volumes/...``) and the DBFS mount ``/dbfs/Volumes/...``: all of those are the
+    same path. Any other DBFS path is refused.
+    """
+    from databricks.labs.gbx.ds._listing import to_local_path, to_spark_uri
 
     if not isinstance(path, str) or not path.strip():
         raise ValueError("path must be a non-empty string")
     text = path.strip()
-    if (
-        text == "/dbfs"
-        or text.startswith("/dbfs/")
-        or (text.startswith("dbfs:") and not text.startswith("dbfs:/Volumes/"))
-    ):
-        raise ZarrUnsupported(
-            f"{path!r} is a DBFS path; GeoBrix registers stores in place from Unity "
-            "Catalog Volumes.",
-            fix="pass the store's /Volumes/<catalog>/<schema>/<volume>/... path",
-        )
-    local = to_local_path(text)
+    local = to_local_path(to_spark_uri(text))  # /dbfs/Volumes/x -> /Volumes/x
+    if text == "/dbfs" or text.startswith(("/dbfs/", "dbfs:")):
+        volume = os.path.normpath(local)  # dbfs:///Volumes/x -> /Volumes/x
+        if volume != "/Volumes" and not volume.startswith("/Volumes/"):
+            raise ZarrUnsupported(
+                f"{path!r} is a DBFS path; GeoBrix registers stores in place from Unity "
+                "Catalog Volumes.",
+                fix="pass the store's /Volumes/<catalog>/<schema>/<volume>/... path",
+            )
     if _SCHEME.match(local):
         raise ZarrUnsupported(
             f"{path!r} is not a path GeoBrix can read in place: only paths on a Unity "
@@ -245,17 +254,23 @@ def _owner_error(marker: str, owner: dict, table: str) -> ZarrOwnershipError:
     )
 
 
+class _MarkerUnreadable(ZarrOwnershipError):
+    """The marker is there but reading it failed (an I/O error, not bytes that are no
+    marker): ``__cause__`` is the ``OSError``. What the marker says is still unknown."""
+
+
 def _check_owner(marker: str, table: str, kind: str) -> None:
+    problem = f"{marker} exists but is not a readable GeoBrix owner marker."
+    fix = f"remove {marker} if no table owns this root, or use another root"
     try:
         with open(marker, "rb") as f:
             owner = json.loads(f.read())
         if not isinstance(owner, dict):
             raise ValueError("not an object")
-    except (OSError, ValueError):
-        raise ZarrOwnershipError(
-            f"{marker} exists but is not a readable GeoBrix owner marker.",
-            fix=f"remove {marker} if no table owns this root, or use another root",
-        ) from None
+    except OSError as e:
+        raise _MarkerUnreadable(problem, fix=fix) from e
+    except ValueError:
+        raise ZarrOwnershipError(problem, fix=fix) from None
     if owner.get("table") != table or owner.get("kind") != kind:
         raise _owner_error(marker, owner, table)
 
@@ -307,6 +322,11 @@ def _claim_marker(root: str, table: str, kind: str) -> bool:
         with os.fdopen(fd, "wb") as f:
             f.write(body)
         _check_owner(marker, table, kind)  # read it back: this call must own it
+    except _MarkerUnreadable as e:
+        # the read-back failed, so what the marker says is unknown: if it still holds the
+        # bytes written above it is this call's, and it must not stay behind
+        _remove_marker_if_ours(marker, body)
+        raise ZarrError(f"{cannot} ({e.__cause__}).", fix=fix) from e.__cause__
     except ZarrOwnershipError:
         raise  # the marker names another table now: it is theirs, not ours to remove
     except OSError as e:
@@ -384,13 +404,23 @@ class _Reader:
 
     ``named`` holds store keys the Spark listing says exist: reading one retries hard and
     then fails. ``hinted`` holds keys the consolidated metadata names, which may be stale:
-    those are retried less and, when still missing, reported as absent.
+    those are retried less and, when still missing, reported as absent. ``complete`` says
+    ``named`` is the Spark listing of every visible document of the store (Zarr v3 with a
+    listing): a visible key it does not name is absent, so it is read once. Anything else
+    that is neither named nor hinted may be a healthy file a FUSE mount missed once, and is
+    read ``_PROBE_ATTEMPTS`` times: that includes every name Spark's listing skips (it
+    starts with ``.`` or ``_``), and a store with no listing.
     """
 
-    def __init__(self, root: str, named=(), hinted=()):
+    def __init__(self, root: str, named=(), hinted=(), complete: bool = False):
         self.root = root
         self.named = set(named)
         self.hinted = set(hinted)
+        self.complete = complete
+
+    def _attempts(self, key: str) -> int:
+        """Reads of a document that is neither named nor hinted."""
+        return 1 if self.complete and not _hidden_path(key) else _PROBE_ATTEMPTS
 
     def _read(self, key: str, attempts: int) -> bytes | None:
         path = os.path.join(self.root, key)
@@ -423,7 +453,7 @@ class _Reader:
             return raw
         if key in self.hinted:
             return self._read(key, _HINTED_ATTEMPTS)
-        return self._read(key, _PROBE_ATTEMPTS)
+        return self._read(key, self._attempts(key))
 
     def probe(self, path: str, names) -> tuple[str, bytes] | None:
         """The first of the node documents ``names`` that exists at ``path``."""
@@ -448,7 +478,9 @@ class _Reader:
         if not rest:
             return None
         try:
-            return _retry_transient(attempt, attempts=_PROBE_ATTEMPTS)
+            return _retry_transient(
+                attempt, attempts=max(self._attempts(key) for _, key in rest)
+            )
         except FileNotFoundError:
             return None
 
@@ -536,10 +568,33 @@ def _nodes_by_parent(keys) -> dict[str, set[str]]:
     out: dict[str, set[str]] = {}
     for key in keys:
         node, _, doc = key.rpartition("/")
-        if doc in _NODE_DOCS and node:
+        if doc in NODE_DOCS and node:
             parent, _, name = node.rpartition("/")
             out.setdefault(parent, set()).add(name)
     return out
+
+
+def _v3_node(key: str, raw: bytes, tolerant: bool):
+    """``(node, None)`` for a readable Zarr v3 node document, else ``(None, problem)``.
+
+    A document that is not JSON is a node nobody can read, as a v2 ``.zarray`` that is not
+    JSON is. A ``node_type`` that is neither group nor array is the same for a reader, and
+    a structure registration refuses.
+    """
+    try:
+        node = _json(raw, key)
+    except ZarrUnsupported as problem:
+        return None, problem
+    kind = node.get("node_type")
+    if kind not in ("group", "array"):
+        problem = ZarrUnsupported(
+            f"{key} has node_type {kind!r}, expected 'group' or 'array'.",
+            fix="repair or rewrite the store's metadata, then register it again",
+        )
+        if not tolerant:
+            raise problem
+        return None, problem
+    return node, None
 
 
 def _walk(fmt, reader, pool, tolerant=False):
@@ -571,24 +626,18 @@ def _walk(fmt, reader, pool, tolerant=False):
             doc, raw = hit
             key = f"{path}/{doc}"
             if fmt == 3:
-                try:
-                    node = _json(raw, key)
-                    kind = node.get("node_type")
-                    if kind not in ("group", "array"):
-                        raise ZarrUnsupported(
-                            f"{key} has node_type {kind!r}, expected 'group' or 'array'.",
-                            fix="repair or rewrite the store's metadata, then register "
-                            "it again",
-                        )
-                except ZarrUnsupported as e:
-                    if not tolerant:
-                        raise
-                    # a reader walks past a node it cannot read: the directory is an array
-                    # nobody can decode, named only when asked for
+                node, problem = _v3_node(key, raw, tolerant)
+                if problem is not None:
+                    # Walk past a node nobody can read. Its document does not say what it
+                    # is, so it is an array nobody can decode, named only when asked for,
+                    # unless nodes turn up under it: then it is a group, and
+                    # isolate_unreadable_groups moves what it holds into ``unsupported``.
                     metas[key] = raw
-                    unsupported[path] = e.message
+                    unsupported[path] = problem.message
+                    queue.append(path)
                     continue
                 metas[key] = raw
+                kind = node["node_type"]
                 if kind == "group":
                     queue.append(path)
                 else:
@@ -617,6 +666,7 @@ def _walk(fmt, reader, pool, tolerant=False):
                 unsupported,
                 tolerant,
             )
+    isolate_unreadable_groups(metas, arrays, unsupported)
     return metas, arrays, unsupported
 
 
@@ -716,10 +766,16 @@ def read_base_metadata(
     of the store. Every ``zarr.json`` it holds is a document that must exist, so a
     transient miss on one is retried rather than dropping the array.
 
-    ``tolerant`` is for a reader: a node whose document cannot be parsed (invalid JSON, a
-    malformed array) is listed in ``unsupported`` with the reason instead of failing the
-    whole walk, so one corrupt array does not stop a read of its neighbours. Registering
-    leaves it off, because a store with a corrupt document should not be registered.
+    A node whose document is not JSON is listed in ``unsupported`` with the reason, in
+    either Zarr version, and the walk goes on: one corrupt array does not stop its
+    neighbours. If nodes lie under it, it is a group and not an array: it is left out of
+    ``unsupported`` and the arrays under it are in it instead, for that cause
+    (``isolate_unreadable_groups``).
+
+    ``tolerant`` is for a reader: a node whose document parses as JSON but is malformed (a
+    missing key, a ``node_type`` that is neither group nor array) is listed in
+    ``unsupported`` too, instead of failing the whole walk. Registering leaves it off, and
+    refuses such a store: a structure that cannot be read at all should not be registered.
     """
     root = _local_root(path)
     fmt, found = _root_info(root)
@@ -733,7 +789,7 @@ def read_base_metadata(
     if fmt == 2 and found[_ZMETADATA] is not None:
         inner, problem = _consolidated_v2(found[_ZMETADATA])
         hinted = set(inner or ())
-    reader = _Reader(root, named, hinted)
+    reader = _Reader(root, named, hinted, complete=fmt == 3 and listing is not None)
 
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
         metas, arrays, unsupported = _walk(fmt, reader, pool, tolerant)

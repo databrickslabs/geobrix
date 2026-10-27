@@ -17,7 +17,7 @@ zarr = pytest.importorskip("zarr")
 from pyspark import cloudpickle  # noqa: E402
 
 from databricks.labs.gbx.zarr import _read  # noqa: E402
-from databricks.labs.gbx.zarr.errors import ZarrUnsupported  # noqa: E402
+from databricks.labs.gbx.zarr.errors import ZarrError, ZarrUnsupported  # noqa: E402
 
 
 def _plan(
@@ -630,3 +630,206 @@ def test_table_blocks_and_xarray_agree_on_an_unsigned_time_coordinate(tmp_path, 
     row = _run(units, bcfg)[0].to_pylist()[0]
     assert row["coord_start"][0].startswith("2007-06-23T15:00")
     assert row["coord_stop"][0].startswith("2000-01-01T10:00")
+
+
+# --- Task 9 follow-ups: planning branches and docstrings ---------------------------------
+
+
+def _group(path, **arrays):
+    """A v3 store: ``name=(shape, dims, dtype, values)`` per array."""
+    g = zarr.open_group(str(path), mode="w", zarr_format=3)
+    for name, (shape, dims, dtype, values) in arrays.items():
+        arr = g.create_array(
+            name, shape=shape, chunks=shape, dtype=dtype, dimension_names=dims
+        )
+        if values is not None:
+            arr[...] = values
+    return path
+
+
+def test_row_unit_key_takes_a_missing_shard_key_from_the_key(
+    era5_v3_sharded, era5_v3_unsharded
+):
+    from databricks.labs.gbx.zarr._plan import row_unit_key, unit_key
+    from databricks.labs.gbx.zarr._testing import plain_store_rows
+
+    sharded = plain_store_rows(era5_v3_sharded)[2]["t2m"]
+    plain = plain_store_rows(era5_v3_unsharded)[2]["t2m"]
+    chunk = {"kind": "chunk", "key": "c/3/1/1", "shard_key": None}
+    # an unsharded array: the row is its own unit
+    assert row_unit_key(plain, chunk) == "c/3/1/1"
+    # a sharded one: the shard_key the row says, else a shard row's own key, else the
+    # shard the chunk's coordinates lie in
+    assert row_unit_key(sharded, {**chunk, "shard_key": "c/1/0/0"}) == "c/1/0/0"
+    assert row_unit_key(sharded, {"kind": "shard", "key": "c/1/0/0"}) == "c/1/0/0"
+    assert row_unit_key(sharded, chunk) == "c/1/0/0" == unit_key(sharded, (3, 1, 1))
+
+
+def test_parse_documents_names_each_malformed_document_and_keeps_the_rest(
+    era5_v3_unsharded, era5_v2
+):
+    good = (era5_v3_unsharded / "t2m" / "zarr.json").read_bytes()
+    no_config = json.loads(good)
+    no_config["chunk_grid"] = {"name": "regular"}  # a KeyError, not a refusal
+    v2_good = (era5_v2 / "t2m" / ".zarray").read_bytes()
+    metas = {
+        "zarr.json": b'{"zarr_format": 3, "node_type": "group"}',
+        "ok/zarr.json": good,
+        "keys/zarr.json": json.dumps(no_config).encode(),
+        "json/zarr.json": b"{not json",
+        "list/zarr.json": b"[]",
+        "v2ok/.zarray": v2_good,
+        "v2keys/.zarray": b'{"shape": [2], "chunks": [2]}',
+        "v2json/.zarray": b"{",
+    }
+    arrays, unsupported = _read.parse_documents(metas)
+    assert sorted(arrays) == ["ok", "v2ok"]
+    assert sorted(unsupported) == ["json", "keys", "list", "v2json", "v2keys"]
+    for path, kind in (
+        ("keys", "KeyError"),
+        ("json", "JSONDecodeError"),
+        ("list", "AttributeError"),
+        ("v2keys", "KeyError"),
+        ("v2json", "JSONDecodeError"),
+    ):
+        assert "malformed" in unsupported[path] and kind in unsupported[path], path
+
+
+def test_parse_documents_keeps_a_corrupt_group_out_of_the_arrays():
+    """A group whose document is unreadable is not an array, and what is under it is
+    refused for that cause."""
+    leaf = (
+        b'{"zarr_format": 3, "node_type": "array", "shape": [2], "data_type": "float32",'
+        b' "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [2]}},'
+        b' "chunk_key_encoding": {"name": "default"}, "fill_value": 0, "codecs": []}'
+    )
+    metas = {
+        "zarr.json": b'{"zarr_format": 3, "node_type": "group"}',
+        "fine/zarr.json": b'{"zarr_format": 3, "node_type": "group"}',
+        "fine/x/zarr.json": leaf,
+        "grp/zarr.json": b"{oops",
+        "grp/x/zarr.json": leaf,
+        "grp/sub/zarr.json": b'{"zarr_format": 3, "node_type": "group"}',
+        "grp/sub/y/zarr.json": leaf,
+        "lone/zarr.json": b"{oops",  # no node under it: an array nobody can decode
+    }
+    arrays, unsupported = _read.parse_documents(metas)
+    assert sorted(arrays) == ["fine/x"]
+    assert sorted(unsupported) == ["grp/sub/y", "grp/x", "lone"]
+    for path in ("grp/x", "grp/sub/y"):
+        assert "group document unreadable" in unsupported[path]
+        assert "'grp'" in unsupported[path], unsupported[path]
+    assert "malformed" in unsupported["lone"]
+
+
+def test_an_undecodable_array_is_a_coordinate_only_if_it_is_one_dimensional(tmp_path):
+    names = np.array(["a", "bb"], dtype=object)
+    # a string array of the dimension's own name and dims: labels that cannot be read
+    one_d = _group(
+        tmp_path / "one.zarr",
+        v=((2,), ("x",), "f4", 1),
+        x=((2,), ("x",), str, names),
+    )
+    with pytest.raises(ZarrUnsupported, match="no labels for 'x'"):
+        _plan(one_d, output="table")
+    # the same name on a 2-D array is not a coordinate of x: x is labelled by position
+    two_d = _group(
+        tmp_path / "two.zarr",
+        v=((2, 2), ("p", "x"), "f4", 1),
+        x=((2, 2), ("p", "q"), str, np.array([["a", "b"], ["c", "d"]], dtype=object)),
+    )
+    cfg, table = _table(two_d, variables=["v"])
+    assert dict(cfg.columns) == {"p": "long", "x": "long", "v": "float"}
+    assert sorted(table.column("x").to_pylist()) == [0, 0, 1, 1]
+
+
+def test_a_store_with_no_gridded_variable_asks_for_variables(tmp_path):
+    path = _group(
+        tmp_path / "bare.zarr",
+        k=((3,), ("k",), "f4", [1, 2, 3]),  # a coordinate
+        crs=((), (), "i4", 4326),  # a scalar
+    )
+    with pytest.raises(ValueError, match="no gridded variable") as e:
+        _plan(path)
+    assert "variables=" in str(e.value) and "Fix:" in str(e.value)
+
+
+def test_a_table_cannot_hold_a_coordinate_and_a_dimension_of_the_same_name(tmp_path):
+    path = _group(
+        tmp_path / "same.zarr",
+        k=((3,), ("k",), "f4", [1, 2, 3]),
+        v=((3,), ("k",), "f4", 1),
+    )
+    with pytest.raises(ValueError, match="name of a dimension") as e:
+        _plan(path, variables=["k", "v"], output="table")
+    assert "'k'" in str(e.value) and "Fix:" in str(e.value)
+    _plan(path, variables=["k", "v"])  # as blocks both read
+
+
+def test_a_coordinate_with_the_wrong_number_of_labels_is_refused(tmp_path):
+    path = _group(
+        tmp_path / "short.zarr",
+        k=((3,), ("k",), "f4", [1, 2, 3]),
+        v=((4,), ("k",), "f4", 1),
+    )
+    with pytest.raises(ZarrError, match="3 labels but 'v' has 4 cells") as e:
+        _plan(path, variables=["v"])
+    assert "'k'" in str(e.value) and "Fix:" in str(e.value)
+
+
+def test_a_time_column_exists_only_where_the_values_are_times(tmp_path):
+    """The table's column kind comes from the values' dtype, so a TIMESTAMP column never
+    holds numbers: with decode=False a CF time coordinate is a plain integer column."""
+    g = zarr.open_group(str(tmp_path / "t.zarr"), mode="w", zarr_format=3)
+    t = g.create_array(
+        "time",
+        shape=(2,),
+        chunks=(2,),
+        dtype="i8",
+        dimension_names=("time",),
+        attributes={"units": "hours since 2000-01-01"},
+    )
+    t[:] = [0, 6]
+    v = g.create_array(
+        "v", shape=(2,), chunks=(2,), dtype="f4", dimension_names=("time",)
+    )
+    v[:] = 1
+    cfg, decoded = _table(tmp_path / "t.zarr", variables=["v"])
+    assert dict(cfg.columns)["time"] == "timestamp"
+    cfg, raw = _table(tmp_path / "t.zarr", variables=["v"], decode=False)
+    assert dict(cfg.columns)["time"] == "long"
+    assert raw.column("time").to_pylist() == [0, 6]
+
+
+@pytest.mark.parametrize("how", ["v3 _FillValue", "v2 fill_value", "v2 _FillValue"])
+def test_a_bool_dtype_array_whose_fill_is_a_stored_value_is_null_in_a_table(
+    tmp_path, how
+):
+    """Ruling Z36. [0, 1, 1, 0] read as booleans with a stored 0 as the fill: the table
+    masks on the integers, before the cast, so those cells are NULL. Blocks (and xarray)
+    cast the masked cell's NaN to True."""
+    fmt = 3 if how.startswith("v3") else 2
+    attrs = {"dtype": "bool"}
+    if how.endswith("_FillValue"):
+        attrs["_FillValue"] = 0
+    path = _one_array(tmp_path, fmt, [0, 1, 1, 0], "i1", attrs)
+    if how == "v2 fill_value":  # the Zarr fill_value, which xarray masks for v2
+        doc = path / "v" / ".zarray"
+        zarray = json.loads(doc.read_text())
+        zarray["fill_value"] = 0
+        doc.write_text(json.dumps(zarray))
+    column, blocks, theirs = _three_ways(path)
+    assert column == [None, True, True, None]
+    assert list(blocks) == [True, True, True, True]
+    assert list(theirs) == [True, True, True, True]
+    cfg, _ = _table(path)
+    assert dict(cfg.columns)["v"] == "boolean"  # still a boolean column, with NULLs
+
+
+def test_the_work_frame_docstring_says_units_are_broadcast_once_per_executor():
+    doc = " ".join(_read._work_frame.__doc__.split())
+    assert "once per executor" in doc and "not once per task" in doc
+    assert (
+        "not all of them" not in doc
+    )  # the claim that a task is sent only its own unit
+    assert "sent only its own" not in " ".join(_read._TaskConfig.__doc__.split())

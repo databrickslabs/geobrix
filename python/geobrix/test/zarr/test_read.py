@@ -795,3 +795,86 @@ def test_the_zarr_package_uses_no_api_that_spark_connect_forbids():
             ):
                 found.append(f"{path.name}:{node.lineno} conf.set")
     assert not found, found
+
+
+# --- a table of variables chunked differently, from a registered store ----------------------
+
+
+@pytest.fixture(scope="module")
+def mixed(spark_delta, tmp_path_factory):
+    """A registered v3 store whose two variables have different chunks, and ``b`` shards.
+
+    ``a`` has chunks (2, 3) and no shards; ``b`` has chunks (4, 2) inside shards (8, 4), so
+    one chunk of ``a`` lies in two chunks, often of two shards, of ``b``. No value is 0 (the
+    fill), so a chunk read from the wrong place, or not at all, is seen.
+    """
+    path = tmp_path_factory.mktemp("mixed") / "mixed.zarr"
+    g = zarr.open_group(str(path), mode="w", zarr_format=3)
+    data = np.arange(1, 97, dtype="f8").reshape(8, 12)
+    a = g.create_array(
+        "a", shape=(8, 12), chunks=(2, 3), dtype="f8", dimension_names=("y", "x")
+    )
+    b = g.create_array(
+        "b",
+        shape=(8, 12),
+        chunks=(4, 2),
+        shards=(8, 4),
+        dtype="f8",
+        dimension_names=("y", "x"),
+    )
+    a[:] = data
+    b[:] = -data
+    table = _table("mixed")
+    gbx_zarr_register(spark_delta, str(path), table)
+    yield path, table
+    spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+def _xarray_dataset(path):
+    import xarray as xr
+    from xarray.backends.zarr import ZarrStore
+
+    return xr.open_dataset(
+        ZarrStore.open_group(str(path), mode="r", consolidated=False)
+    )
+
+
+def test_each_unit_of_a_registered_table_carries_the_rows_of_the_other_variables_chunks(
+    spark_delta, mixed, monkeypatch
+):
+    """The first variable's chunks cut the grid; for each unit, the rows of the other
+    variable are those of the chunks (here, of the shards) its cells lie in."""
+    _, table = mixed
+    monkeypatch.setattr(_read, "_budget_bytes", lambda: 1)  # one chunk of ``a`` a unit
+    src = _read._open_source(spark_delta, table, "table", None, None)
+    units, _ = _read._plan(
+        spark_delta, src, ["a", "b"], None, None, "table", True, None
+    )
+    assert len(units) == 16  # a's grid is 4 x 4 chunks
+    for unit in units:
+        row, col = unit.chunks[0][0], unit.chunks[0][1]
+        want_shards = {  # a's columns [3*col, 3*col+3) lie in b's shards of width 4
+            f"c/0/{j}" for j in range(3 * col // 4, (3 * col + 2) // 4 + 1)
+        }
+        a_rows = [r for r in unit.rows if r["array"] == "a"]
+        b_rows = [r for r in unit.rows if r["array"] == "b"]
+        assert [r["key"] for r in a_rows] == [f"c/{row}/{col}"], (row, col)
+        assert {r["key"] for r in b_rows} == want_shards, (row, col)
+        assert {r["kind"] for r in b_rows} == {"shard"}
+
+
+def test_a_table_of_variables_chunked_differently_equals_xarray_from_a_registered_store(
+    spark_delta, mixed, monkeypatch
+):
+    path, table = mixed
+    monkeypatch.setattr(_read, "_budget_bytes", lambda: 1)  # many units, merged rows
+    df = gbx_zarr_read(spark_delta, table, output="table").orderBy("y", "x")
+    rows = df.collect()
+    theirs = _xarray_dataset(path)
+    assert df.columns == ["y", "x", "a", "b"] and len(rows) == 96
+    assert [(r["y"], r["x"]) for r in rows] == [
+        (y, x) for y in range(8) for x in range(12)
+    ]
+    np.testing.assert_array_equal([r["a"] for r in rows], theirs.a.values.reshape(-1))
+    np.testing.assert_array_equal([r["b"] for r in rows], theirs.b.values.reshape(-1))
+    assert min(abs(r["b"]) for r in rows) >= 1  # no cell read as the fill value

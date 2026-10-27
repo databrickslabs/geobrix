@@ -6,9 +6,11 @@ import org.apache.spark.unsafe.types.UTF8String
 import org.locationtech.jts.geom.util.AffineTransformation
 import org.locationtech.jts.geom._
 import org.locationtech.jts.io.{WKBReader, WKBWriter, WKTReader, WKTWriter}
+import org.locationtech.jts.operation.union.UnaryUnionOp
 import org.locationtech.jts.simplify.DouglasPeuckerSimplifier
 
 import scala.collection.mutable
+import scala.jdk.CollectionConverters._
 
 /**
   * JTS geometry factory and serialization helpers; thread-safe per-thread caches for readers/writers.
@@ -17,6 +19,62 @@ import scala.collection.mutable
   * use thread-local-like caches because JTS readers/writers are not thread-safe.
   */
 object JTS {
+
+    /** Collection-aware intersection. Ordinary geometries retain JTS overlay semantics;
+      * mixed collections are intersected member by member, including nested collections.
+      * Lower-dimensional results are retained, not filtered to the input dimension. */
+    def intersection(left: Geometry, right: Geometry): Geometry = {
+        val result = if (!isMixedCollection(left) && !isMixedCollection(right)) left.intersection(right)
+        else {
+            val parts = for {
+                a <- collectionMembers(left)
+                b <- collectionMembers(right)
+            } yield a.intersection(b)
+            compactOverlay(parts, left)
+        }
+        result.setSRID(left.getSRID)
+        result
+    }
+
+    /** Collection-aware left-minus-right difference. A collection on the left is
+      * processed member by member; members on the right are subtracted sequentially.
+      * In particular, operands are never swapped: difference is not commutative. */
+    def difference(left: Geometry, right: Geometry): Geometry = {
+        val result = if (!isMixedCollection(left) && !isMixedCollection(right)) left.difference(right)
+        else {
+            val subtractors = collectionMembers(right)
+            val parts = collectionMembers(left).map { member =>
+                subtractors.foldLeft(member) { (remaining, subtractor) =>
+                    // A difference can itself produce a mixed collection.
+                    difference(remaining, subtractor)
+                }
+            }
+            compactOverlay(parts, left)
+        }
+        result.setSRID(left.getSRID)
+        result
+    }
+
+    // MultiPoint/MultiLineString/MultiPolygon inherit GeometryCollection too, but
+    // JTS supports their overlay operations directly. Only split mixed collections.
+    private def isMixedCollection(geometry: Geometry): Boolean =
+        geometry.getGeometryType == "GeometryCollection"
+
+    private def collectionMembers(geometry: Geometry): Seq[Geometry] = {
+        if (isMixedCollection(geometry)) {
+            (0 until geometry.getNumGeometries).flatMap(i => collectionMembers(geometry.getGeometryN(i)))
+        } else Seq(geometry)
+    }
+
+    private def compactOverlay(parts: Seq[Geometry], source: Geometry): Geometry = {
+        val nonEmpty = parts.filterNot(_.isEmpty)
+        val factory = source.getFactory
+        val result =
+            if (nonEmpty.isEmpty) factory.createGeometryCollection(Array.empty[Geometry])
+            else UnaryUnionOp.union(nonEmpty.asJava, factory)
+        result.setSRID(source.getSRID)
+        result
+    }
 
     // Per-thread caches: JTS readers/writers are not thread-safe and this object is shared across tasks.
     private val geometryFactories = mutable.Map[Long, GeometryFactory]()

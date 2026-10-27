@@ -630,6 +630,139 @@ def test_bng_mosaic_423_no_degenerate_chips(spark_with_jar):
     )
 
 
+# --- mixed-collection clipping lock-in --------------------------------------------------------
+
+# Polygons whose clip against a BNG cell is NOT a plain Polygon: a GeometryCollection
+# (polygons plus a boundary line or point), a MultiPolygon, or a hole/aligned control.
+# (name, resolution, WKT) -- EPSG:27700 eastings/northings. The clip fixtures straddle
+# Easting 400000 at res 2 (10 km); the east clip of the first holds two polygons and a
+# boundary line, the east clip of the second a polygon and a boundary point.
+_CLIP_TWO_POLYGONS_AND_LINE = (
+    "POLYGON ((399998 500001, 400002 500001, 400002 500002, 400000 500002, "
+    "400000 500003, 400002 500003, 400002 500004, 399998 500004, 399998 500001))"
+)
+_CLIP_POLYGON_AND_POINT = (
+    "POLYGON ((399998 500001, 400002 500001, 400002 500002, 399999 500002, "
+    "400000 500003, 399999 500004, 399998 500004, 399998 500001))"
+)
+_MIXED_CLIP_FIXTURES = [
+    ("polygons_and_boundary_line", 2, _CLIP_TWO_POLYGONS_AND_LINE),
+    ("polygon_and_boundary_point", 2, _CLIP_POLYGON_AND_POINT),
+    (
+        "multipolygon_input",
+        2,
+        "MULTIPOLYGON (" + _CLIP_POLYGON_AND_POINT[len("POLYGON ") :] + ")",
+    ),
+    (
+        "disjoint_two_prong",
+        2,
+        "POLYGON ((399998 500001, 400002 500001, 400002 500002, 399999 500002, "
+        "399999 500003, 400002 500003, 400002 500004, 399998 500004, 399998 500001))",
+    ),
+    (
+        "geometrycollection_input",
+        2,
+        f"GEOMETRYCOLLECTION ({_CLIP_POLYGON_AND_POINT}, "
+        "POLYGON ((400100 500100, 400104 500100, 400104 500104, 400100 500104, "
+        "400100 500100)))",
+    ),
+    ("aligned_box_423", _RES, _ALIGNED_BOX.wkt),
+    ("aligned_big_box_with_core", _RES, _GRID_ALIGNED_BIG_BOX.wkt),
+    (
+        "polygon_with_hole",
+        _RES,
+        "POLYGON ((530000 180000, 534000 180000, 534000 184000, 530000 184000, "
+        "530000 180000), (531000.5 181000.5, 533000.5 181000.5, 533000.5 183000.5, "
+        "531000.5 183000.5, 531000.5 181000.5))",
+    ),
+]
+
+
+def test_bng_tessellate_mixed_collection_clip_parity(spark_with_jar):
+    """Light == heavy for polygons whose clip against a cell is a collection or MultiPolygon.
+
+    A valid polygon clipped by a cell can yield a GeometryCollection (polygons plus a
+    boundary line or point) or a MultiPolygon. Heavy used to throw (NULL row from
+    ``gbx_bng_tessellate``) and light used to drop the cell through its exact-type
+    filter. Both tiers now keep every cell whose clip has the input's dimension, so
+    for each fixture and each ``keep_core_geom`` mode the cell sets, core flags and chip
+    geometries (within 1e-6) must agree, and the chips must cover the input area.
+    """
+    from pyspark.sql import functions as f
+    from shapely import from_wkt as _from_wkt
+
+    from databricks.labs.gbx.gridx.bng import functions as hx
+    from databricks.labs.gbx.pygx import functions as gx
+
+    spark = spark_with_jar
+    df = spark.createDataFrame(
+        [(name, res, _wkb(_from_wkt(wkt))) for name, res, wkt in _MIXED_CLIP_FIXTURES],
+        "name string, res int, geom binary",
+    )
+
+    def tess(mod, keep_core):
+        """name -> {cellid: (core, chip WKB | None)} for one tier and keep_core_geom."""
+        mod.register(spark)
+        col = mod.bng_tessellate(f.col("geom"), f.col("res"), f.lit(keep_core))
+        rows = (
+            df.select("name", f.explode_outer(col).alias("c"))
+            .select(
+                "name",
+                f.col("c.cellid").alias("cell"),
+                f.col("c.core").alias("core"),
+                f.col("c.chip").alias("chip"),
+            )
+            .collect()
+        )
+        out = {name: {} for name, _, _ in _MIXED_CLIP_FIXTURES}
+        for r in rows:
+            if (
+                r["cell"] is not None
+            ):  # explode_outer: a NULL result is one all-NULL row
+                out[r["name"]][r["cell"]] = (r["core"], r["chip"])
+        return out
+
+    # Light first: heavy registration overwrites the shared gbx_bng_* SQL names.
+    light = {keep: tess(gx, keep) for keep in (False, True)}
+    heavy = {keep: tess(hx, keep) for keep in (False, True)}
+
+    problems = []
+    for name, _res, wkt in _MIXED_CLIP_FIXTURES:
+        input_area = _from_wkt(wkt).area
+        for keep in (False, True):
+            lt, ht = light[keep][name], heavy[keep][name]
+            ctx = f"{name} keep_core_geom={keep}"
+            if not lt or not ht or set(lt) != set(ht):
+                problems.append(
+                    f"{ctx}: cell sets differ light={sorted(lt)} heavy={sorted(ht)}"
+                )
+                continue
+            for cell in sorted(lt):
+                (lcore, lchip), (hcore, hchip) = lt[cell], ht[cell]
+                if lcore != hcore:
+                    problems.append(f"{ctx} {cell}: core light={lcore} heavy={hcore}")
+                elif (lchip is None) != (hchip is None):
+                    problems.append(
+                        f"{ctx} {cell}: null chip light={lchip is None} "
+                        f"heavy={hchip is None}"
+                    )
+                elif lchip is not None:
+                    try:
+                        _assert_geom_parity(lchip, hchip, f"{ctx} {cell}")
+                    except AssertionError as e:
+                        problems.append(str(e))
+            if keep:  # every cell carries geometry, so the chips tile the input
+                for tier, tt in (("light", lt), ("heavy", ht)):
+                    area = sum(from_wkb(bytes(c)).area for _, c in tt.values())
+                    if abs(area - input_area) > 1e-6 * max(1.0, input_area):
+                        problems.append(
+                            f"{ctx}: {tier} chip area {area} != input area {input_area}"
+                        )
+    assert not problems, "mixed-collection tessellate parity failures:\n" + "\n".join(
+        problems
+    )
+
+
 # --- grid-aligned geomkring / geomkloop lock-in -----------------------------------------------
 
 

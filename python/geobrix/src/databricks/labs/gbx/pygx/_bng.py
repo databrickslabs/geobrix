@@ -16,7 +16,7 @@ Mosaic-lineage bug status (validated against this port):
     logic in ``get_resolution_from_digits``/``format`` (a 100km id is 6 digits,
     trailing quadrant-digit 0).
   * mosaic#423: grid-aligned polygons must not emit POINT/LINESTRING chips. Carried
-    here by the input-geometry-type filter on border chips in ``tessellate``.
+    here by the input-dimension filter on border chips in ``tessellate``.
 """
 
 import math
@@ -24,7 +24,11 @@ from typing import Any
 
 import numpy as np
 from shapely import equals_exact as _equals_exact
+from shapely import get_dimensions as _get_dimensions
+from shapely import get_srid as _get_srid
+from shapely import set_srid as _set_srid
 from shapely import to_wkb as _to_wkb
+from shapely import union_all as _union_all
 from shapely.geometry import Point as _Point
 from shapely.geometry import box as _box
 from shapely.geometry import mapping as _mapping
@@ -547,26 +551,50 @@ def polyfill_str(geom, resolution) -> list:
 # tessellation (BNG.tessellate)
 #
 # Splits the input geometry into per-cell chips, each a (Long cellid, core,
-# chip) tuple. Mirrors BNG.tessellate (gridx/grid/BNG.scala line 754):
+# chip) tuple. Mirrors BNG.tessellate and BNG.borderChips (gridx/grid/BNG.scala):
 #   * radius = edgeSize * sqrt(2) / 2  (half the cell diagonal -> no blind spots)
 #   * carved = geometry.buffer(-radius); polyfill(carved) -> CORE cells (fully
 #     inside, chip == None unless keep_core_geom).
 #   * border = polyfill(borderGeometry) minus core, where borderGeometry is a
 #     1%-grown, simplified buffer of either the geometry (if carved is empty) or
-#     its boundary; each border cell's chip is cell_geom.intersection(geometry).
+#     its boundary; each border cell's chip is cell_geom.intersection(geometry)
+#     (a GeometryCollection clip has its boundary fragments removed leaf by leaf,
+#     like heavy's collection-aware JTS.difference -- see _clean_chip_geometry).
 #     A border chip is PROMOTED to core only when it matches the whole cell via
 #     vertex-order-sensitive equals_exact(cell_geom, 0.1) -- mirroring heavy JTS
 #     equalsExact, which (like shapely) rejects a renormalized grid-aligned ring,
 #     so grid-aligned full cells STAY border.
-#   * mosaic#423 fix: the final result keeps only chips whose geometry type
-#     matches the INPUT geometry type (drops degenerate POINT/LINESTRING chips
-#     produced by grid-aligned edges/vertices touching a Polygon input).
+#   * mosaic#423 fix: keep only chips matching the input dimension, allowing
+#     Polygon/MultiPolygon transitions while dropping boundary-only points/lines.
 # ---------------------------------------------------------------------------
 
 
 # Tolerance (metres) for promoting a near-full border chip to a core cell --
-# matches heavy BNG.tessellate's equalsExact(cellGeom, 0.1) (BNG.scala ~L803).
+# matches heavy BNG.borderChips's equalsExact(cellGeom, 0.1).
 _FULL_CELL_TOL = 0.1
+
+
+def _clean_chip_geometry(intersect, cell_boundary):
+    """Remove boundary fragments from mixed clips, then compact the members.
+
+    Shapely accepts collection difference, but can retain boundary-only points
+    when subtracting from the collection as a whole. Subtract from each leaf
+    instead, matching the heavyweight collection-aware difference. Ordinary
+    clips are unchanged, preserving vertex order for core-cell promotion.
+    """
+    if intersect.geom_type != "GeometryCollection":
+        return intersect
+
+    def cleaned_members(geometry):
+        if geometry.geom_type == "GeometryCollection":
+            for member in geometry.geoms:
+                yield from cleaned_members(member)
+        else:
+            adjusted = geometry.difference(cell_boundary)
+            if not adjusted.is_empty:
+                yield adjusted
+
+    return _set_srid(_union_all(list(cleaned_members(intersect))), _get_srid(intersect))
 
 
 def get_buffer_radius(resolution: int) -> float:
@@ -589,7 +617,7 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
     if geometry is None or geometry.is_empty:
         return []
 
-    in_type = geometry.geom_type
+    input_dimension = _get_dimensions(geometry)
     radius = get_buffer_radius(resolution)
     carved = geometry.buffer(-radius)
 
@@ -612,12 +640,11 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
         intersect = cell_geom.intersection(geometry)
         if intersect.is_empty:
             continue  # heavy: (cell, false, intersect).filterNot(_._3.isEmpty)
-        if intersect.geom_type == "GeometryCollection":
-            adjusted = intersect.difference(cell_geom.boundary)
-        else:
-            adjusted = intersect
+        adjusted = _clean_chip_geometry(intersect, cell_geom.boundary)
+        if adjusted.is_empty:
+            continue
         # Heavy promotes a border cell to core iff the clipped chip is the whole
-        # cell per JTS ``adjusted.equalsExact(cellGeom, 0.1)`` (BNG.scala ~L803).
+        # cell per JTS ``adjusted.equalsExact(cellGeom, 0.1)`` (BNG.borderChips).
         # JTS ``equalsExact`` is vertex-ORDER sensitive: when the polygon-vs-cell
         # intersection renormalizes the clipped ring's start vertex / winding
         # (which it does for grid-aligned cells whose edges sit ON the cell
@@ -634,15 +661,12 @@ def tessellate(geometry, resolution: int, keep_core_geom: bool = False) -> list:
         else:
             chips.append((cell, False, adjusted))
 
-    # mosaic#423: drop degenerate (non-areal) chips by keeping only chips whose
-    # geometry type matches the input geometry type. Heavy (line 813):
-    #   .filter(t => t._3 == null || t._3.getGeometryType == inGeomType)
-    # A POINT/LINESTRING intersection of a grid-aligned vertex/edge against a
-    # Polygon input is dropped, leaving only areal (Polygon/MultiPolygon) chips.
+    # Match heavy's dimension filter: a Polygon may clip into a MultiPolygon,
+    # and a MultiPolygon into a Polygon. Boundary-only points/lines still drop.
     return [
         (cell, core, chip)
         for (cell, core, chip) in chips
-        if chip is None or chip.geom_type == in_type
+        if chip is None or _get_dimensions(chip) == input_dimension
     ]
 
 

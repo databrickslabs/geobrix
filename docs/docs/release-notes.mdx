@@ -371,6 +371,19 @@ formats.
   `bng_tessellateexplode` does: a core cell's `chip` is NULL unless you pass `keep_core_geom` as
   true (the Scala wrapper gains overloads that take it). Pass true to keep the old wrapper result.
 
+### Grid functions — `bng_tessellate` keeps cells that clip to a MultiPolygon or a mixed collection (fix)
+
+- **A polygon no longer loses cells when its clip is a MultiPolygon or a mixed collection.** A valid
+  polygon can clip to a cell as a MultiPolygon, or as a GeometryCollection that holds polygons plus a
+  point or line along the cell edge. The heavyweight `bng_tessellate` returned NULL for the whole
+  polygon and `bng_tessellateexplode` returned no rows, because the clip failed on the collection;
+  the lightweight tier returned fewer cells than the polygon covers, and none at all for a
+  MultiPolygon input. Both tiers now keep the polygonal part of every clip and return the same cells
+  and chips. A MultiPolygon input returns its Polygon chips, and a polygon's chip can be a
+  MultiPolygon. Points and lines that only touch a cell edge are still dropped, so a polygon aligned
+  to the grid produces no degenerate chips. Results for polygons that clip to plain Polygon chips do
+  not change.
+
 ### Raster tiling functions
 
 - **Raster generator examples show each tier's form.** The SQL and Python examples of

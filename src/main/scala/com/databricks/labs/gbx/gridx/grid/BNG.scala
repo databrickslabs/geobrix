@@ -813,6 +813,10 @@ object BNG extends GridSystem {
       * Chips for the border cells of a tessellation: each candidate cell is clipped to `geometry`; a cell
       * the geometry covers entirely is promoted to a core cell. Empty clips are dropped.
       *
+      * The clip and the boundary cleanup are collection-aware (`JTS.intersection`, `JTS.difference`):
+      * a valid polygon can clip to a GeometryCollection (polygons plus a boundary line or point) or a
+      * MultiPolygon, and plain JTS overlay rejects a GeometryCollection operand.
+      *
       * With `keepCoreGeom` false a promoted cell has no geometry, so its chip is `null` and must survive
       * the empty-clip filter (a `null` chip is not an empty one).
       *
@@ -823,7 +827,7 @@ object BNG extends GridSystem {
         cells: Seq[Long],
         geometry: Geometry,
         keepCoreGeom: Boolean,
-        clip: (Geometry, Geometry) => Geometry = (cell, geom) => cell.intersection(geom)
+        clip: (Geometry, Geometry) => Geometry = (cell, geom) => JTS.intersection(cell, geom)
     ): Seq[(Long, Boolean, Geometry)] = {
         cells.map(cell => {
             val cellGeom = cellIdToGeometry(cell)
@@ -832,7 +836,7 @@ object BNG extends GridSystem {
             else {
                 val adjusted =
                     if (GeometryTypeEnum(intersect.getGeometryType) == GEOMETRYCOLLECTION) {
-                        intersect.difference(cellGeom.getBoundary)
+                        JTS.difference(intersect, cellGeom.getBoundary)
                     } else {
                         intersect
                     }
@@ -858,7 +862,7 @@ object BNG extends GridSystem {
         keepCoreGeom: Boolean
     ): Iterator[(Long, Boolean, Geometry)] = {
 
-        val inGeomType = geometry.getGeometryType
+        val inputDimension = geometry.getDimension
         val radius = getBufferRadius(geometry, resolution)
         val carvedGeometry = geometry.buffer(-radius)
 
@@ -889,7 +893,9 @@ object BNG extends GridSystem {
         })
         val borderChips = this.borderChips(borderIndices, geometry, keepCoreGeom)
 
-        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getGeometryType == inGeomType)
+        // Keep chips of the input's dimension: clipping a Polygon can legitimately produce a MultiPolygon (and
+        // vice versa), while the boundary-only points and lines of a grid-aligned input are dropped (mosaic#423).
+        (coreChips ++ borderChips).filter(t => t._3 == null || t._3.getDimension == inputDimension)
     }
 
 }

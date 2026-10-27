@@ -1197,7 +1197,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Enumerates the
 Tessellate a geometry into BNG cells with their geometries.
 
 :::note Lightweight tier (pygx)
-Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus a per-cell core/border split, returning one `STRUCT<cellid, core, chip>` per cell (chip geometry as WKB in EPSG:27700, no SRID). Border chips are filtered to the input geometry type, matching the heavyweight tier.
+Powered by the **pure-Python port of `BNG.scala`** + **shapely**. Polyfill plus a per-cell core/border split, returning one `STRUCT<cellid, core, chip>` per cell (chip geometry as WKB in EPSG:27700, no SRID). Border chips are filtered to the input geometry's dimension, matching the heavyweight tier: a Polygon can yield MultiPolygon chips (and the reverse), a clip that is a mixed collection keeps its polygonal part, and the boundary-only points and lines of a grid-aligned input are dropped.
 :::
 
 **Signature:** `bng_tessellate(geometry: Column, resolution: Column[, keep_core_geom: Column]): Column`

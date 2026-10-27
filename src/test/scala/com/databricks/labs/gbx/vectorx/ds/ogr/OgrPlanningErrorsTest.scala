@@ -2,7 +2,7 @@ package com.databricks.labs.gbx.vectorx.ds.ogr
 
 import com.databricks.labs.gbx.rasterx.gdal.GDALManager
 import com.databricks.labs.gbx.util.NodeFileCacheProbe.{entries, garbage, withScratchDir}
-import com.databricks.labs.gbx.util.{FileGDBFixture, NodeCacheRetentionOff, NodeFileCacheProbe, NodeFilePathUtil}
+import com.databricks.labs.gbx.util.{FileGDBFixture, HadoopUtils, NodeCacheRetentionOff, NodeFileCacheProbe, NodeFilePathUtil}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.apache.spark.sql.types.StructType
@@ -217,6 +217,8 @@ class OgrPlanningErrorsTest extends PlanTest with SilentSparkSession with NodeCa
             val schema = shapefileSchema(spaced.resolve("map.shp"))
             val msg = failureOf(count("shapefile_ogr", other, schema))
             msg should include("other file.geojson")
+            msg should include("could not open it")
+            msg should not include "another vector format"
             msg should not include "skipped"
         }
     }
@@ -225,7 +227,7 @@ class OgrPlanningErrorsTest extends PlanTest with SilentSparkSession with NodeCa
         withScratchDir("gbx_ogr_plan_") { dir =>
             val f = Files.createDirectory(dir.resolve("my dir")).resolve("my file#1.geojson")
             Files.write(f, goodGeoJson.getBytes(StandardCharsets.UTF_8))
-            val listed = com.databricks.labs.gbx.util.HadoopUtils.listDataFilesSpark(spark, f.toString)
+            val listed = HadoopUtils.listDataFilesSpark(spark, f.toString)
             listed.map(_.stripPrefix("file:").dropWhile(_ == '/')) shouldBe Seq(f.toString.dropWhile(_ == '/'))
             OGR_Batch.isDirListing(f.toString, listed) shouldBe false
             OGR_Batch.isDirListing(f.getParent.toString, listed) shouldBe true
@@ -263,6 +265,32 @@ class OgrPlanningErrorsTest extends PlanTest with SilentSparkSession with NodeCa
             count("shapefile_ogr", empty, schema) shouldBe 0L
             count("ogr", empty, schema) shouldBe 0L
             failureOf(spark.read.format("shapefile_ogr").load(empty.toString)) should include("directory")
+        }
+    }
+
+    test("E12c an empty directory whose path has a space or a percent sign reads as 0 rows with an explicit schema") {
+        withScratchDir("gbx_ogr_plan_") { dir =>
+            val good = Files.createDirectory(dir.resolve("good"))
+            copyShapefile(good, "map")
+            val schema = shapefileSchema(good.resolve("map.shp"))
+            Seq("my empty dir", "50% off", "a#1 b").foreach { name =>
+                withClue(s"empty directory '$name': ") {
+                    count("shapefile_ogr", Files.createDirectory(dir.resolve(name)), schema) shouldBe 0L
+                }
+            }
+        }
+    }
+
+    test("E12d a directory that cannot be listed fails with the listing error, not as an empty read") {
+        withScratchDir("gbx_ogr_plan_") { dir =>
+            val unlistable = Files.createDirectory(dir.resolve("unlistable"))
+            val e = intercept[java.io.IOException](
+              HadoopUtils.listDataFilesChecked(spark, unlistable.toString, (_, _) => throw new RuntimeException("listing refused"))
+            )
+            e.getMessage should include("unlistable")
+            messages(e) should include("listing refused")
+            // The same directory listed normally is the empty read.
+            HadoopUtils.listDataFilesChecked(spark, unlistable.toString)._2 shouldBe true
         }
     }
 
@@ -309,6 +337,23 @@ class OgrPlanningErrorsTest extends PlanTest with SilentSparkSession with NodeCa
             named should include("a.geojson: GeoJSONSeq could not open it")
             named should not include "another vector format"
             count("geojson_ogr", data, schema, "multi" -> "false") shouldBe 4L
+        }
+    }
+
+    test("E13d a directory of GeoJSONSeq files read with shapefile_ogr points at geojson_ogr with multi=true") {
+        withScratchDir("gbx_ogr_plan_") { dir =>
+            val good = Files.createDirectory(dir.resolve("good"))
+            copyShapefile(good, "map")
+            val schema = shapefileSchema(good.resolve("map.shp"))
+            val data = Files.createDirectory(dir.resolve("data"))
+            val seq =
+                """{"type":"Feature","properties":{"id":1},"geometry":{"type":"Point","coordinates":[1.0,0.0]}}
+                  |{"type":"Feature","properties":{"id":2},"geometry":{"type":"Point","coordinates":[2.0,0.0]}}
+                  |""".stripMargin
+            Seq("a.geojsonl", "b.geojsonl").foreach(n => Files.write(data.resolve(n), seq.getBytes(StandardCharsets.UTF_8)))
+            val msg = failureOf(count("shapefile_ogr", data, schema))
+            msg should include("GDAL detects GeoJSONSeq")
+            msg should include("""geojson_ogr with .option("multi", "true")""")
         }
     }
 

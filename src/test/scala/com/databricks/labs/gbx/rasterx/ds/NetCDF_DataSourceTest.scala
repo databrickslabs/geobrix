@@ -51,6 +51,18 @@ class NetCDF_DataSourceTest extends PlanTest with SilentSparkSession with NodeCa
         all(rows.map(_.getString(0))) should startWith("NETCDF:")
     }
 
+    test("netcdf_gdal reads a file whose path has a space and a hash like one whose path has neither") {
+        rasterx.functions.register(spark)
+        withNetCDFCopy { (dir, nc) =>
+            val spaced = Files.copy(nc, Files.createDirectory(dir.resolve("my dir")).resolve("tas single#1.nc"))
+            def sources(p: java.nio.file.Path): Seq[String] =
+                spark.read.format("netcdf_gdal").option("sizeInMB", "1").load(p.toString).select("source").collect().map(_.getString(0)).toSeq
+            val plain = sources(nc)
+            plain should not be empty
+            sources(spaced).size shouldBe plain.size
+        }
+    }
+
     test("an invalid retention in the session conf fails a netcdf_gdal read's planning and names the conf") {
         withNetCDFCopy { (dir, _) =>
             withSessionRetention("soon") {

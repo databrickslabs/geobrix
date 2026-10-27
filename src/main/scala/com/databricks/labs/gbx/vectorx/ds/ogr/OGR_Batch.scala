@@ -239,7 +239,7 @@ object OGR_Batch {
     private[ogr] def readerHint(detected: Seq[String]): String = {
         def readerFor(driver: String): String = driver match {
             case "GeoJSON"                 => "geojson_ogr with .option(\"multi\", \"false\")"
-            case "GeoJSONSeq"              => "geojson_ogr"
+            case "GeoJSONSeq"              => "geojson_ogr with .option(\"multi\", \"true\")"
             case "ESRI Shapefile"          => "shapefile_ogr"
             case "GPKG"                    => "gpkg_ogr"
             case "OpenFileGDB" | "FileGDB" => "file_gdb_ogr"

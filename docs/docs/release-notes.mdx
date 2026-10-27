@@ -213,7 +213,12 @@ formats.
   rows. See [Vector Readers](./readers/vector?tier=heavyweight#unreadable-files).
 - **Paths with a space or another special character read.** A file or folder such as
   `/Volumes/main/data/my maps/city #1.geojson` failed with the heavyweight vector readers
-  (the name reached the copy step URL-encoded, as `my%20maps`). It now reads.
+  (the name reached the copy step URL-encoded, as `my%20maps`). It now reads, and so does a
+  `netcdf_gdal` read of such a path. An empty folder with a space or a `%` in its name reads as
+  0 rows when you pass a `.schema(...)`; it failed to plan.
+- **A folder that cannot be listed fails the read.** When listing a folder for the heavyweight
+  readers failed, the folder read as empty and returned 0 rows. The read now fails with an error
+  that names the folder and the cause.
 - **Fewer empty partitions and no leftover temp folders.** A layer whose feature count is an exact
   multiple of `chunkSize` no longer gets an empty trailing partition, and schema inference no
   longer leaves a staging folder in the driver's temp directory for each read, or keeps the

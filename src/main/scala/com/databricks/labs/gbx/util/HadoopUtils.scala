@@ -98,7 +98,7 @@ object HadoopUtils extends Logging {
     /** Lists non-directory data files under inPath using the given Hadoop config
       * (marker/hidden files like `_SUCCESS` are skipped). */
     def listHadoopFiles(inPath: String, hconf: SerializableConfiguration): Seq[String] = {
-        val path = new Path(new URI(cleanPath(inPath)))
+        val path = new Path(cleanPath(inPath))
         withFileSystem(path, hconf) { fs =>
             fs.listStatus(path)
                 .filter(st => !st.isDirectory && isDataFile(st.getPath))
@@ -197,43 +197,56 @@ object HadoopUtils extends Logging {
       * caller that reads rather than infers can treat it as zero files. */
     private[gbx] def listDataFilesChecked(
         spark: org.apache.spark.sql.SparkSession,
-        inPath: String
+        inPath: String,
+        listDir: (org.apache.spark.sql.SparkSession, String) => Seq[String] = listDirOnExecutor
     ): (Seq[String], Boolean) = {
         val cp = cleanPath(inPath)
         val lower = inPath.toLowerCase(java.util.Locale.ROOT).stripSuffix("/")
         if (lower.endsWith(".gdb") || lower.endsWith(".gdb.zip") || lower.endsWith(".zip")) {
             (Seq(cp), false)
         } else {
-            try {
-                val files = spark.read.format("binaryFile").load(cp).inputFiles.toSeq.map(decodeInputFile).sorted
-                if (files.nonEmpty) {
-                    (files, false)
-                } else {
+            val viaSpark =
+                try Some(spark.read.format("binaryFile").load(cp).inputFiles.toSeq.map(decodeInputFile).sorted)
+                catch { case _: Throwable => None }
+            viaSpark match {
+                case Some(files) if files.nonEmpty => (files, false)
+                case Some(_) =>
                     // binaryFile returned empty: Spark's hidden-file filter may have skipped all
                     // files in a directory whose names start with '_' (e.g. _shp_fix_782054.shp).
                     // Fall back to a raw Hadoop FS listing on an executor (which carries the UC
                     // Volume credential and has no '_'-prefix filter) and strip only known
-                    // Spark/Hadoop job markers.
+                    // Spark/Hadoop job markers. `cp` is a plain path (not a URI): a space or '%' in it
+                    // is part of the name. A listing that fails is an error, never an empty directory.
                     val hc = new SerializableConfiguration(spark.sessionState.newHadoopConf)
-                    val path = new Path(new URI(cp))
+                    val path = new Path(cp)
                     val isDir = try {
                         val fs = path.getFileSystem(hc.value)
                         fs.isDirectory(path)
                     } catch { case _: Throwable => false }
                     if (isDir) {
-                        val listed = try listDirOnExecutor(spark, cp) catch { case _: Throwable => Seq.empty }
-                        val filtered = listed.filterNot(p => isMarkerFile(new Path(new URI(p))))
+                        val listed =
+                            try listDir(spark, cp)
+                            catch {
+                                case NonFatal(e) =>
+                                    throw new java.io.IOException(s"Could not list the directory $cp: ${firstLineOf(e)}", e)
+                            }
+                        val filtered = listed.filterNot(p => isMarkerFile(new Path(p)))
                         if (filtered.nonEmpty) (filtered, false) else (Seq(cp), true)
                     } else {
                         (Seq(cp), false)
                     }
-                }
-            } catch {
-                case _: Throwable =>
+                case None =>
                     val hc = new SerializableConfiguration(spark.sessionState.newHadoopConf)
                     (try listHadoopFiles(cp, hc) catch { case _: Throwable => Seq(cp) }, false)
             }
         }
+    }
+
+    /** The first line of the message of the innermost cause of `e` (its class name when it has none): what
+      * went wrong, without the long wrapper Spark puts around a failure on an executor. */
+    private def firstLineOf(e: Throwable): String = {
+        val root = Iterator.iterate(e)(_.getCause).takeWhile(_ != null).toSeq.last
+        Option(root.getMessage).flatMap(_.linesIterator.find(_.trim.nonEmpty)).map(_.trim).getOrElse(root.getClass.getSimpleName)
     }
 
     /** `p` with the percent-escapes of its path decoded: Spark's `inputFiles` are URL-encoded
@@ -261,7 +274,7 @@ object HadoopUtils extends Logging {
     ): Seq[String] = {
         val hc = new SerializableConfiguration(spark.sessionState.newHadoopConf)
         spark.sparkContext.parallelize(Seq(cp), 1).flatMap { p =>
-            val path = new Path(new URI(p))
+            val path = new Path(p)
             val fs = path.getFileSystem(hc.value)
             if (fs.isDirectory(path)) {
                 fs.listStatus(path)

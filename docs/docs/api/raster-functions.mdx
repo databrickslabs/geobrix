@@ -1695,7 +1695,7 @@ Powered by **rasterio**. Streams one tile row per subdivided region via streamin
 The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio`. It enumerates the quadbin cells that overlap the raster footprint and clips one tile per cell, matching the heavyweight cell set.
 :::
 
-Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. The input raster must be in EPSG:4326 (lon/lat); reproject upstream with `rst_transform` if your source CRS differs. Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
+Tessellate a raster to CARTO quadbin v0 cells — one row per overlapping cell, each clipped to that cell's extent. A raster in another CRS is accepted: its footprint is reprojected to EPSG:4326 to find the overlapping cells (see [Grid raster tessellation](./grid-raster-tessellation) for the antimeridian and pole limits). Resolution is the quadbin zoom level (0..26). Each output row carries the quadbin cell ID (`BIGINT`) and the clipped tile struct.
 
 **Signature:** `rst_quadbin_tessellate(tile: Column, resolution: Column, [assignment: Column], [coverage: Column]): Column` — assignment is `"centroid"` (default) or `"covering"`; coverage is `"complete"` (default) or `"sparse"`.
 
@@ -1885,7 +1885,7 @@ STRUCT<xmin DOUBLE, ymin DOUBLE, xmax DOUBLE, ymax DOUBLE,
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -1910,7 +1910,7 @@ Heavyweight registers `gbx_rst_h3_rastertogridavg` as a scalar (ARRAY-returning)
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -1935,7 +1935,7 @@ Heavyweight registers `gbx_rst_h3_rastertogridcount` as a scalar (ARRAY-returnin
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -1960,7 +1960,7 @@ Heavyweight registers `gbx_rst_h3_rastertogridmax` as a scalar (ARRAY-returning)
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -1985,7 +1985,7 @@ Heavyweight registers `gbx_rst_h3_rastertogridmedian` as a scalar (ARRAY-returni
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2010,7 +2010,7 @@ Heavyweight registers `gbx_rst_h3_rastertogridmin` as a scalar (ARRAY-returning)
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2035,7 +2035,7 @@ Heavyweight registers `gbx_rst_h3_rastertogridstddev` as a scalar (ARRAY-returni
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2060,7 +2060,7 @@ Heavyweight registers `gbx_rst_h3_rastertogridsum` as a scalar (ARRAY-returning)
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **h3**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2091,7 +2091,7 @@ Aggregate raster values to CARTO quadbin v0 grid cells (8 reducers). Each reduce
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2116,7 +2116,7 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridavg` as a scalar (ARRAY-retur
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the per-cell pixel count (integer). A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2141,7 +2141,7 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridcount` as a scalar (ARRAY-ret
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2166,7 +2166,7 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridmax` as a scalar (ARRAY-retur
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2191,7 +2191,7 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridmedian` as a scalar (ARRAY-re
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2216,7 +2216,7 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridmin` as a scalar (ARRAY-retur
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population standard deviation (`sqrt` of the population variance) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2243,7 +2243,7 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridstddev` as a scalar (ARRAY-re
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the total of the valid pixel values in each cell. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation
@@ -2268,7 +2268,7 @@ Heavyweight registers `gbx_rst_quadbin_rastertogridsum` as a scalar (ARRAY-retur
 <Tier both/> <Impl udtf/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. The raster is interpreted as EPSG:4326 lon/lat — reproject upstream with `rst_transform` if your source CRS differs.
+Powered by **rasterio** + **quadbin**. Returns an `ARRAY` (one element per band) of `ARRAY<struct(cellID, measure)>`, where `measure` is the population variance (`÷ n`, two-pass) of the valid pixel values in each cell — a single-pixel cell yields `0.0`. A raster in another CRS is reprojected to EPSG:4326 internally (nearest-neighbour, so statistics are never interpolated); a raster with no CRS is assumed to be in EPSG:4326 already.
 :::
 
 :::note Tier differences — SQL invocation

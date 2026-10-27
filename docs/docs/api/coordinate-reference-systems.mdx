@@ -315,7 +315,7 @@ The lightweight and heavyweight tiers describe the **same** CRS for the same ras
 
 Each discrete global grid has a fixed native CRS, so GridX functions don't take a CRS argument — they assume the grid's CRS and reproject for you where needed:
 
-- **H3** and **quadbin** operate in **EPSG:4326** (WGS84 lon/lat). Raster tessellation functions interpret the raster as EPSG:4326 — reproject upstream with `rst_transform`/`rst_transformcrs` if your source differs.
+- **H3** and **quadbin** operate in **EPSG:4326** (WGS84 lon/lat). A raster in another CRS is reprojected for you: the raster-to-grid functions warp it to EPSG:4326, and the tessellation functions reproject its footprint (see [Grid raster tessellation](./grid-raster-tessellation)).
 - **BNG** (British National Grid) is **EPSG:27700**. BNG geometry outputs are plain WKB in EPSG:27700 with no SRID; assign the CRS when you read them back, e.g. `ST_GeomFromWKB(bng_geom, 27700)`.
 
 Visualization helpers such as [`plot_static`](./vizx-vector#static-maps) reproject each grid's native CRS onto the basemap automatically.

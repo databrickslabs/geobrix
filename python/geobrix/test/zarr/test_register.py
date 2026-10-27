@@ -1547,3 +1547,53 @@ def test_a_corrupt_group_registers_as_a_group_and_its_arrays_are_refused(
     with pytest.raises(ZarrUnsupported, match="group document unreadable"):
         gbx_zarr_read(spark_delta, table, variables=["fc/x"])
     spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
+
+
+# --- fix round 1 (I7): a marker stays with a table that may hold a commit ------------------
+
+
+def test_discard_says_whether_it_dropped_the_table(monkeypatch):
+    sql = []
+
+    class Session:
+        def sql(self, text):
+            sql.append(text)
+
+    wid = "a" * 32
+    monkeypatch.setattr(_register, "find_commit_version", lambda s, t, w: None)
+    assert _register._discard(Session(), "c.s.t", wid) is True and sql
+    monkeypatch.setattr(_register, "find_commit_version", lambda s, t, w: 3)
+    assert _register._discard(Session(), "c.s.t", wid) is False  # it committed
+
+    def unknown(*a):
+        raise RuntimeError("lookup failed")
+
+    monkeypatch.setattr(_register, "find_commit_version", unknown)
+    assert _register._discard(Session(), "c.s.t", wid) is False and len(sql) == 1
+
+
+def test_a_registration_whose_commit_may_have_landed_keeps_its_marker(
+    spark_delta, era5_v3_unsharded, tmp_path, monkeypatch
+):
+    real = _register.commit
+
+    def landed_then_lost(*a, **k):
+        real(*a, **k)
+        raise RuntimeError("the connection dropped after the MERGE")
+
+    def unknown(*a, **k):
+        raise RuntimeError("lookup failed")
+
+    monkeypatch.setattr(_register, "commit", landed_then_lost)
+    monkeypatch.setattr(_register, "find_commit_version", unknown)
+    table, overlay = _table("kept"), tmp_path / "overlay"
+    with pytest.raises(RuntimeError, match="dropped after the MERGE"):
+        gbx_zarr_register(
+            spark_delta,
+            str(era5_v3_unsharded),
+            table,
+            writable=True,
+            overlay_root=str(overlay),
+        )
+    assert _exists(spark_delta, table) and (overlay / OWNER_MARKER).exists()
+    spark_delta.sql(f"DROP TABLE IF EXISTS {table}")

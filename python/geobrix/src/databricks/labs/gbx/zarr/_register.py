@@ -1155,11 +1155,17 @@ def _label_unlaid(unsupported: dict[str, str], layouts) -> dict[str, str]:
     }
 
 
-def _discard(spark, table: str, write_id: str) -> None:
-    """Drop a manifest this registration created but never committed to."""
+def _discard(spark, table: str, write_id: str) -> bool:
+    """Drop a manifest this call created but never committed to; ``True`` when dropped.
+
+    ``False`` when the commit landed, and when that cannot be told (the lookup failed): the
+    table is then kept, and so must be the root's owner marker, since a committed store
+    that loses its marker can be claimed by another table.
+    """
     try:
         if find_commit_version(spark, table, write_id) is None:
             spark.sql(f"DROP TABLE IF EXISTS {_q(table)}")
+            return True
     except Exception:
         _LOG.warning(
             "could not remove the partly registered table %s; drop it before "
@@ -1167,6 +1173,7 @@ def _discard(spark, table: str, write_id: str) -> None:
             table,
             exc_info=True,
         )
+    return False
 
 
 def gbx_zarr_register(
@@ -1301,9 +1308,9 @@ def gbx_zarr_register(
         _say(f"committing {rows.num_rows} row(s) to {table}")
         version = commit(spark, table, rows, write_id=write_id, meta=commit_meta)
     except BaseException:
-        if made:
-            _discard(spark, table, write_id)
-        if claimed:
+        # a table that may hold a commit (the lookup could not tell) keeps its marker
+        dropped = _discard(spark, table, write_id) if made else True
+        if claimed and dropped:
             _release_marker(overlay, owner, "overlay")
         raise
     groups = len({k.rpartition("/")[0] for k in metas} - names)

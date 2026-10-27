@@ -521,6 +521,13 @@ def test_write_gtiff_is_canonical_and_leaves_profile_alone():
         (4, "uint16", 3),  # 16-bit RGBA: GDAL's default has no alpha band
         (4, "uint16", None),
         (2, "uint8", 1),  # gray + alpha
+        (3, "uint8", 2),  # gray + extra + alpha: GDAL labels no band alpha
+        (6, "uint8", 5),  # RGB + extra + alpha
+        (
+            5,
+            "uint8",
+            3,
+        ),  # an alpha label that is not the last band is data: not carried
         (3, "uint8", None),
         (1, "float32", None),
     ],
@@ -546,10 +553,10 @@ def test_write_gtiff_labels_a_band_alpha_exactly_where_alpha_like_does(
     )
     data = np.full((count, 4, 4), 9, dtype=dtype)
     out = write_gtiff(prof, data, alpha_like=like)
+    # the alpha band is the last band, when it is labelled alpha (the one alpha rule)
+    want = [i == count - 1 and like[-1] == ColorInterp.alpha for i in range(count)]
     with MemoryFile(out) as m, m.open() as c:
-        assert [ci == ColorInterp.alpha for ci in c.colorinterp] == [
-            ci == ColorInterp.alpha for ci in like
-        ]
+        assert [ci == ColorInterp.alpha for ci in c.colorinterp] == want
         assert np.array_equal(c.read(), data)
 
 

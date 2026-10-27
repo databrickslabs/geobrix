@@ -81,7 +81,9 @@ def _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):
                     height=h,
                     transform=ds.window_transform(win),
                 )
-                yield (col, row, w, h), _comp.write_gtiff(profile, data)
+                yield (col, row, w, h), _comp.write_gtiff(
+                    profile, data, alpha_like=ds.colorinterp
+                )
             col += step_x
         row += step_y
 

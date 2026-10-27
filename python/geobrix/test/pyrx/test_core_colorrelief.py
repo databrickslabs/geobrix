@@ -1,4 +1,5 @@
 import numpy as np
+from rasterio.enums import ColorInterp
 from rasterio.io import MemoryFile
 from rasterio.transform import from_origin
 
@@ -50,6 +51,18 @@ def test_color_relief_rgba_when_alpha_present(tmp_path):
         out = terrain.color_relief(ds, str(table))
     with _serde.open_tile(out) as o:
         assert o.count == 4
+        assert o.colorinterp[3] == ColorInterp.alpha
+
+
+def test_color_relief_without_alpha_labels_no_band_alpha(tmp_path):
+    table = tmp_path / "colors_rgb.txt"
+    table.write_text("0 0 0 0\n10 255 0 0\n")
+    dem = np.array([[0, 10]], dtype="float32")
+    with _serde.open_tile(_dem(dem)) as ds:
+        out = terrain.color_relief(ds, str(table))
+    with _serde.open_tile(out) as o:
+        assert o.count == 3
+        assert ColorInterp.alpha not in o.colorinterp
 
 
 def test_color_relief_nv_color_fills_nodata(tmp_path):

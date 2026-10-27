@@ -7,7 +7,11 @@ band at a time, a single percentile call per band, no full-array float64 copies.
 
 import numpy as np
 
-from databricks.labs.gbx.pyrx.core.compression import creation_opts, drop_ycbcr
+from databricks.labs.gbx.pyrx.core.compression import (
+    creation_opts,
+    drop_ycbcr,
+    match_alpha,
+)
 
 # Percentiles are estimated from at most this many valid samples per band. The
 # 2nd/98th percentiles of a large raster are stable under decimation, so this
@@ -71,6 +75,7 @@ def percentile_stretch(ds, lo_pct: float, hi_pct: float) -> bytes:
 
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
+            match_alpha(dst, ds.colorinterp)
             for i in range(count):
                 data, valid = datas[i], valids[i]
                 vv = data[valid]

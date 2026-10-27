@@ -261,7 +261,7 @@ def getsubdataset(ds, name: str):
     with rasterio.open(match) as sub:
         profile = sub.profile
         profile.update(driver="GTiff")
-        return write_gtiff(profile, sub.read())
+        return write_gtiff(profile, sub.read(), alpha_like=sub.colorinterp)
 
 
 def summary(ds) -> str:

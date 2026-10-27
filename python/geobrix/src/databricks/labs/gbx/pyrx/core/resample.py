@@ -37,6 +37,7 @@ def _write_resampled(ds, dst_width: int, dst_height: int, algorithm: str) -> byt
     )
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
+            _comp.match_alpha(dst, ds.colorinterp)
             dst.write(data)
         return mf.read()
 

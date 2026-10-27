@@ -57,9 +57,14 @@ def encode_tile(
         cog_overview_resampling: Overview resampling algorithm for COG (default
                                ``"AVERAGE"``).
     """
+    from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+
     col_off, row_off, win_w, win_h = window
     rio_window = Window(col_off, row_off, win_w, win_h)
     data = ds.read(window=rio_window)
+    # The pixels alone do not carry a source's own (non-alpha) mask band: written
+    # with them, it keeps the masked pixels invalid in the encoded tile.
+    mask = ds.read_masks(1, window=rio_window) if has_own_mask(ds) else None
 
     win_transform = ds.window_transform(rio_window)
 
@@ -111,8 +116,14 @@ def encode_tile(
 
         tmp = new_local_temp_file(suffix=".tif")
         try:
-            with rasterio.open(tmp, "w", **profile) as out:
+            with (
+                _comp.internal_mask_env(mask),
+                rasterio.open(tmp, "w", **profile) as out,
+            ):
+                _comp.match_alpha(out, ds.colorinterp)
                 out.write(data)
+                if mask is not None:
+                    out.write_mask(mask)
             # Free the decoded array before reading bytes back.
             del data
             with open(tmp, "rb") as fh:
@@ -138,9 +149,12 @@ def encode_tile(
         # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
         # any other codec cannot carry it.
         profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
-        with MemoryFile() as mf:
+        with _comp.internal_mask_env(mask), MemoryFile() as mf:
             with mf.open(**profile) as out:
+                _comp.match_alpha(out, ds.colorinterp)
                 out.write(data)
+                if mask is not None:
+                    out.write_mask(mask)
             raster_bytes = mf.read()
 
     metadata = {

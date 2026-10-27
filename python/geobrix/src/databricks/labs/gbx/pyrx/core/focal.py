@@ -92,7 +92,7 @@ def filt(ds, kernel_size, operation: str) -> bytes:
     out_dtype = "float32" if op == "mean" else ds.dtypes[0]
     out = np.stack(out_bands)
     profile = _out_profile(ds, out_dtype, nd, any_invalid or ds.nodata is not None)
-    return write_gtiff(profile, out.astype(out_dtype))
+    return write_gtiff(profile, out.astype(out_dtype), alpha_like=ds.colorinterp)
 
 
 def convolve(ds, kernel) -> bytes:
@@ -120,4 +120,4 @@ def convolve(ds, kernel) -> bytes:
         out_bands.append(res)
     out = np.stack(out_bands)
     profile = _out_profile(ds, "float64", nd, ds.nodata is not None)
-    return write_gtiff(profile, out)
+    return write_gtiff(profile, out, alpha_like=ds.colorinterp)

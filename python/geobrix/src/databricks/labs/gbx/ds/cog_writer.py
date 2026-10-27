@@ -1051,8 +1051,8 @@ class CogGbxWriter(DataSourceWriter):
             return self._write_mosaic_bng(iterator)
         import numpy as np
         import rasterio
-        from rasterio.io import MemoryFile
 
+        from databricks.labs.gbx.pyrx.core import _nodata
         from databricks.labs.gbx.pyrx.core import compression as _comp
 
         opts = self.mosaic_opts
@@ -1140,6 +1140,14 @@ class CogGbxWriter(DataSourceWriter):
                     if prune_empty and _is_all_nodata(data, src_nodata):
                         continue
 
+                    # The source's own (non-alpha) mask band is not carried by the
+                    # pixels: it travels with the window as the tile's mask band.
+                    mask = (
+                        src.read_masks(1, window=window)
+                        if _nodata.has_own_mask(src)
+                        else None
+                    )
+
                     # Build GTiff bytes for this window.  Profile mirrors
                     # _window_dataset_bytes / materialize_to_bytes for fidelity:
                     # same driver, height, width, count, transform, compression.
@@ -1159,15 +1167,9 @@ class CogGbxWriter(DataSourceWriter):
                         count=count,
                         transform=src.window_transform(window),
                     )
-                    profile.update(
-                        _comp.creation_opts(
-                            out_dtype, decoded_bytes=decoded_size, compress="auto"
-                        )
+                    window_bytes = _comp.write_gtiff(
+                        profile, data, alpha_like=src.colorinterp, mask=mask
                     )
-                    with MemoryFile() as mf:
-                        with mf.open(**profile) as dst:
-                            dst.write(data)
-                        window_bytes = mf.read()
 
                     self._bytes_to_cog(window_bytes, out_path)
                     written.append(out_path)
@@ -1357,6 +1359,7 @@ class CogGbxWriter(DataSourceWriter):
                     )
                     with MemoryFile() as mf:
                         with mf.open(**profile) as dst_ds:
+                            _comp.match_alpha(dst_ds, src.colorinterp)
                             dst_ds.write(dst_data)
                             dst_ds.update_tags(
                                 GBX_CELLID=str(cell.cellid),
@@ -1570,6 +1573,7 @@ class CogGbxWriter(DataSourceWriter):
                     )
                     with MemoryFile() as mf:
                         with mf.open(**profile) as dst_ds:
+                            _comp.match_alpha(dst_ds, src.colorinterp)
                             dst_ds.write(dst_data)
                             dst_ds.update_tags(
                                 GBX_CELLID=cell.cellid,
@@ -1757,6 +1761,7 @@ class CogGbxWriter(DataSourceWriter):
                     )
                     with MemoryFile() as mf:
                         with mf.open(**profile) as dst_ds:
+                            _comp.match_alpha(dst_ds, src.colorinterp)
                             dst_ds.write(dst_data)
                             dst_ds.update_tags(
                                 GBX_CELLID=str(cell.cellid),

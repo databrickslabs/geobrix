@@ -12,6 +12,8 @@ from rasterio.windows import Window
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _nodata as nd
 
+from . import _alpha_layouts as al
+
 
 def _tile(arr, nodata):
     profile = dict(
@@ -177,7 +179,10 @@ def _valid_mask_tile(kind):
             "rgba",
             (1, 3),
         ),  # alpha decides: opaque rows, however dark; a transparent row is not
-        ("rgba-nodata", (0, 1, 3)),  # NoData shadows the alpha band: any band non-zero
+        (
+            "rgba-nodata",
+            (3,),
+        ),  # alpha 0 is transparent AND colour 0 is NoData: both must say valid
         ("rgb-nir", (0, 1, 3)),  # band 4 is data: valid when any band is
         ("plain", (0, 1, 2, 3)),  # nothing is masked
     ],
@@ -210,3 +215,57 @@ def test_valid_mask_honours_a_sources_own_mask_band(kind):
             nd.valid_mask(ds, window=Window(1, 0, 3, 2))
             == np.eye(4, dtype=bool)[:2, 1:]
         ).all()
+
+
+@pytest.mark.parametrize("name", list(al.LAYOUTS))
+def test_the_alpha_band_is_the_last_band_labelled_alpha(name):
+    """Only the LAST band, and only when it is labelled alpha, is the alpha band (as
+    gdalwarp reads a source): an alpha label on any other band is ordinary data."""
+    with MemoryFile(al.layout_bytes(name)) as mf, mf.open() as ds:
+        want = al.LAYOUTS[name][1]
+        assert nd.has_alpha(ds) is want
+        assert nd.alpha_index(ds.colorinterp) == (ds.count - 1 if want else None)
+
+
+@pytest.mark.parametrize(
+    "name,nodata,valid_rows",
+    [(n, None, (1, 3)) for n in al.LAST_ALPHA]  # opaque rows, however dark
+    + [(n, 0, (3,)) for n in al.LAST_ALPHA]  # and a colour of 0 is NoData
+    + [(n, None, (0, 1, 2, 3)) for n in al.NOT_ALPHA]  # nothing is masked
+    + [(n, 0, (0, 1, 3)) for n in al.NOT_ALPHA],  # valid when any band is
+)
+def test_valid_mask_applies_the_alpha_band_at_every_band_count(
+    name, nodata, valid_rows
+):
+    """GDAL derives a mask from alpha only for 2- and 4-band rasters, so the rule is
+    applied here for every band count: a pixel is valid only when its alpha is not 0 and
+    a data band is valid (any band, by its own NoData or mask)."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NodataShadowWarning)
+        with MemoryFile(al.layout_bytes(name, nodata=nodata)) as mf, mf.open() as ds:
+            got = nd.valid_mask(ds)
+            windowed = nd.valid_mask(ds, window=Window(1, 1, 3, 3))
+    assert [bool(r.all()) for r in got] == [i in valid_rows for i in range(4)], name
+    assert not (got.any(axis=1) != got.all(axis=1)).any()
+    assert (windowed == got[1:, 1:]).all()
+
+
+def test_valid_mask_of_a_raster_that_is_only_an_alpha_band():
+    """With no data band to mask, the alpha band decides: valid where it is not 0."""
+    data = np.array([[[0, 255], [7, 0]]], dtype="uint8")
+    prof = dict(
+        driver="GTiff",
+        width=2,
+        height=2,
+        count=1,
+        dtype="uint8",
+        photometric="MINISBLACK",
+    )
+    with MemoryFile() as mf:
+        with mf.open(**prof) as dst:
+            dst.colorinterp = (ColorInterp.alpha,)
+            dst.write(data)
+        raw = mf.read()
+    with MemoryFile(raw) as mf, mf.open() as ds:
+        assert nd.has_alpha(ds)
+        assert nd.valid_mask(ds).tolist() == [[False, True], [True, False]]

@@ -109,7 +109,7 @@ def update_type(ds, new_type: str) -> bytes:
             info = np.iinfo(np_dtype)
             if not (info.min <= nd <= info.max):
                 profile["nodata"] = None
-    return _comp.write_gtiff(profile, data)
+    return _comp.write_gtiff(profile, data, alpha_like=ds.colorinterp)
 
 
 def init_nodata(ds, default: float | None = None) -> bytes:
@@ -139,7 +139,7 @@ def init_nodata(ds, default: float | None = None) -> bytes:
         data = ds.read(masked=True).filled(profile["nodata"])
     else:
         data = ds.read()
-    return _comp.write_gtiff(profile, data)
+    return _comp.write_gtiff(profile, data, alpha_like=ds.colorinterp)
 
 
 _THRESHOLD_OPS = {
@@ -175,7 +175,7 @@ def threshold(ds, op: str = ">", value: float = 0.0) -> bytes:
     out = np.where(keep, data, nd).astype(data.dtype)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", nodata=nd)
-    return _comp.write_gtiff(profile, out)
+    return _comp.write_gtiff(profile, out, alpha_like=ds.colorinterp)
 
 
 def set_srid(ds, srid: int) -> bytes:
@@ -209,7 +209,7 @@ def set_srid(ds, srid: int) -> bytes:
     )  # raises for an invalid positive code
     profile = ds.profile.copy()
     profile.update(driver="GTiff", crs=crs)
-    return _comp.write_gtiff(profile, ds.read())
+    return _comp.write_gtiff(profile, ds.read(), alpha_like=ds.colorinterp)
 
 
 def set_crs(ds, crs_value) -> bytes:
@@ -233,7 +233,7 @@ def set_crs(ds, crs_value) -> bytes:
     crs = resolve_crs(crs_value)
     profile = ds.profile.copy()
     profile.update(driver="GTiff", crs=crs)
-    return _comp.write_gtiff(profile, ds.read())
+    return _comp.write_gtiff(profile, ds.read(), alpha_like=ds.colorinterp)
 
 
 def band(ds, band_index: int) -> bytes:

@@ -27,6 +27,8 @@ from databricks.labs.gbx.pygx import _bng, _custom, _quadbin
 from databricks.labs.gbx.pyrx.core import tessellate as T
 from databricks.labs.gbx.pyrx.core._nodata import valid_mask
 
+from . import _alpha_layouts as al
+
 BOUNDS = (-122.60, 37.60, -122.40, 37.80)  # ~0.2 deg square; ~70 H3 res-7 cells
 
 
@@ -532,7 +534,7 @@ def _chip_stats(chips, source_colrow):
                 sc, sr = source_colrow(x, y)
                 if not (-1.5 <= sc <= n + 1.5 and -1.5 <= sr <= n + 1.5):
                     out["outside"] += 1
-                elif 4.75 <= sr <= 8.25:
+                elif 4.25 <= sr <= 8.75:  # the interior of rows 4-8, centres included
                     out["transparent"] += 1
                 if (data[:3, r, k] == 0).all():
                     out["zero_rgb"] += 1
@@ -597,3 +599,50 @@ def test_tessellate_of_a_four_band_source_without_alpha_keeps_band_four_data(
     assert st["zero_b4"] > 0, "the zero NIR pixels under colour must stay valid"
     # row 20 is zero in every band: NoData, so a valid zero-NIR pixel comes from row 12
     assert st["zero_b4_off"] == 0 and st["zero_rgb"] == 0
+
+
+def _transparent_half_source(case, name):
+    """40x40 source of layout ``name`` (alpha last), alpha 0 over the left half (colour bands
+    still non-zero), opaque elsewhere: whole cells lie in the transparent half."""
+    _, crs, bounds, _ = _ALPHA_CASES[case]
+    n = _FILL_N
+    count = len(al.LAYOUTS[name][0])
+    p = np.arange(n * n, dtype="int64").reshape(n, n)
+    data = np.stack([((p * (b + 1)) % 199 + 1).astype("uint8") for b in range(count)])
+    data[-1] = 255
+    data[-1, :, : n // 2] = 0
+    return al.layout_bytes(
+        name,
+        data=data,
+        crs=crs,
+        transform=from_bounds(*bounds, n, n),
+    )
+
+
+def _chips_of(raster, case, assignment, coverage):
+    grid, _, _, res = _ALPHA_CASES[case]
+    with MemoryFile(raster) as mf, mf.open() as ds:
+        return list(
+            T.iter_tessellate(ds, res, grid, mode=assignment, coverage=coverage)
+        )
+
+
+@pytest.mark.parametrize("assignment", ["centroid", "covering"])
+@pytest.mark.parametrize("case", list(_ALPHA_CASES))
+@pytest.mark.parametrize("name", al.LAST_ALPHA)
+def test_sparse_tessellate_emits_no_all_transparent_cell(name, case, assignment):
+    """Transparent pixels (alpha 0) belong to no cell: sparse emits a cell only when a
+    pixel of it is opaque, whatever the band count of the source (GDAL masks by alpha for
+    2- and 4-band rasters only)."""
+    chips = _chips_of(_transparent_half_source(case, name), case, assignment, "sparse")
+    assert chips
+    empty = []
+    for cid, cb in chips:
+        m, c = _open(cb)
+        with m, c:
+            assert [ci == ColorInterp.alpha for ci in c.colorinterp][-1], "alpha kept"
+            if not (c.read(c.count) > 0).any():  # the alpha band, read as it is stored
+                empty.append(cid)
+    assert (
+        not empty
+    ), f"{name} {case} {assignment}: {len(empty)} of {len(chips)} chips are all transparent"

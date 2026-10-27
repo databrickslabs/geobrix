@@ -50,7 +50,7 @@ from databricks.labs.gbx.pyrx.core import tessellate as tessellate_core
 from databricks.labs.gbx.pyrx.core import tiling
 from databricks.labs.gbx.pyrx.core import tin as tin_core
 from databricks.labs.gbx.pyrx.core import warp, xyz
-from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+from databricks.labs.gbx.pyrx.core.compression import match_alpha, write_gtiff
 from databricks.labs.gbx.pyrx.core.escape import rst_apply, tile_to_numpy  # noqa: F401
 from databricks.labs.gbx.pyrx.core.virtual_tile import (
     BAND_METADATA_KEY,
@@ -235,6 +235,7 @@ def _dataset_to_gtiff_bytes(ds) -> bytes:
     profile.update(driver="GTiff")
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
+            match_alpha(dst, ds.colorinterp)
             dst.write(data)
         return mf.read()
 
@@ -846,7 +847,9 @@ def _fromfile_impl(path, driver, materialize, cap_bytes=None):
                 # The file's own mask band (not an alpha band) is part of its bytes;
                 # carry it, as a virtual tile of this file reads it.
                 mask = src.read_masks(1) if _nodata.has_own_mask(src) else None
-                new_bytes = write_gtiff(src.profile, data, mask=mask)
+                new_bytes = write_gtiff(
+                    src.profile, data, alpha_like=src.colorinterp, mask=mask
+                )
         except StageTooLargeError:
             # Cap-guard error: propagate — this is an actionable, user-visible error,
             # not a bad-path that should silently null out. The UDF boundary converts

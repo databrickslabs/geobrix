@@ -132,8 +132,12 @@ def _apply_compression(
 
     from rasterio.io import MemoryFile
 
+    from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+
     with MemoryFile(raster_bytes) as src_mf, src_mf.open() as src:
         data = src.read()
+        # The pixels alone do not carry a source's own (non-alpha) mask band.
+        mask = src.read_masks(1) if has_own_mask(src) else None
         profile = src.profile.copy()
         profile.update(driver="GTiff")
         out_dtype = profile.get("dtype", str(src.dtypes[0]))
@@ -159,9 +163,12 @@ def _apply_compression(
         # The codec is the caller's: a JPEG request keeps its YCbCr photometric,
         # any other codec cannot carry it.
         profile = _comp.drop_ycbcr(profile, unless_jpeg=True)
-        with MemoryFile() as out_mf:
+        with _comp.internal_mask_env(mask), MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
+                _comp.match_alpha(dst, src.colorinterp)
                 dst.write(data)
+                if mask is not None:
+                    dst.write_mask(mask)
             return out_mf.read()
 
 

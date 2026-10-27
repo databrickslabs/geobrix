@@ -186,4 +186,4 @@ def fill_nodata(ds, max_search_dist=None, smoothing_iter=None) -> bytes:
             )
         )
     data = np.stack(bands)
-    return write_gtiff(profile, data)
+    return write_gtiff(profile, data, alpha_like=ds.colorinterp)

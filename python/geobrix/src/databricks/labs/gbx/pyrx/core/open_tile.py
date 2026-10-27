@@ -33,6 +33,7 @@ from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import _clip
 from databricks.labs.gbx.pyrx.core import _nodata as _nd
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core import warp as _warp
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 from databricks.labs.gbx.pyrx.core.preparer import _stage_local_if_needed
 from databricks.labs.gbx.pyrx.core.virtual_tile import VirtualTile
@@ -136,6 +137,14 @@ def _epsg_of(crs) -> Optional[int]:
         return int(s)
     except ValueError:
         return None
+
+
+def _selected_labels(src, indexes):
+    """The colour interpretation of *src*'s bands *indexes* (1-based; None = all): the labels
+    a window of those bands is written with (the alpha band is still the last band, or not
+    selected)."""
+    labels = list(src.colorinterp)
+    return labels if not indexes else [labels[i - 1] for i in indexes]
 
 
 def _own_mask_use(src, profile, pending_nodata):
@@ -245,46 +254,24 @@ def _window_dataset_bytes(
         )  # epsg/esri classification, not lenient from_epsg
     mask = _window_mask(src, window, data, profile, nodata, mark_masked)
     # Route through the compression authority: ZSTD + dtype-predictor baseline.
-    return _comp.write_gtiff(profile, data, mask=mask)
+    return _comp.write_gtiff(
+        profile, data, alpha_like=_selected_labels(src, indexes), mask=mask
+    )
 
 
 def _warped_mask(wds, vrt):
     """The own mask band of *wds* warped like the pixels of *vrt*: ``(rows, cols)`` uint8.
 
-    The mask is warped as data through a second view on the grid of *vrt*, so it lands
-    where the pixels do. A pixel no source pixel maps to stays valid, as the plain warp
-    leaves it a valid zero.
-
-    Memory: the mask is held three times as uint8 per pixel (the window's mask, the copy
-    the second view reads, the warped one), on top of the warped pixels.
+    See :func:`warp.warped_own_mask`: the mask is warped as data onto the grid of *vrt*,
+    so it lands where the pixels do, and a pixel no source pixel maps to stays valid.
     """
-    from rasterio.enums import Resampling
-
-    with MemoryFile() as mf:
-        with mf.open(
-            driver="GTiff",
-            width=wds.width,
-            height=wds.height,
-            count=1,
-            dtype="uint8",
-            crs=wds.crs,
-            transform=wds.transform,
-        ) as dst:
-            dst.write(wds.read_masks(1), 1)
-        with mf.open() as mds:
-            with WarpedVRT(
-                mds,
-                crs=vrt.crs,
-                transform=vrt.transform,
-                width=vrt.width,
-                height=vrt.height,
-                resampling=Resampling.nearest,
-                nodata=255,
-            ) as mvrt:
-                warped = mvrt.read(1)
-    # The warp moves a valid 255 to 254 where it collides with the NoData 255 it fills
-    # with: 0 stays invalid, anything else is valid.
-    return np.where(warped == 0, 0, 255).astype("uint8")
+    return _warp.warped_own_mask(
+        wds,
+        dst_crs=vrt.crs,
+        transform=vrt.transform,
+        width=vrt.width,
+        height=vrt.height,
+    )
 
 
 def _warp_bytes(win_bytes: bytes, want_crs) -> bytes:
@@ -304,7 +291,7 @@ def _warp_bytes(win_bytes: bytes, want_crs) -> bytes:
             data = vrt.read()
             mask = _warped_mask(wds, vrt) if mask_band else None
             # Route through the compression authority for the reprojected output.
-            return _comp.write_gtiff(prof, data, mask=mask)
+            return _comp.write_gtiff(prof, data, alpha_like=wds.colorinterp, mask=mask)
 
 
 def _warp_window_bytes(
@@ -376,7 +363,11 @@ def _empty_dataset_bytes(ref) -> bytes:
     (tiled/blockxsize/blockysize) make no sense at 1x1 and copying them risks a
     GDAL GTiff-creation warning/error, so they are deliberately dropped.
     """
-    nodata = ref.nodata if ref.nodata is not None else 0
+    # An alpha band marks the pixel transparent (0) by itself: a NoData declared over it
+    # would shadow it.
+    nodata = (
+        ref.nodata if ref.nodata is not None else (None if _nd.has_alpha(ref) else 0)
+    )
     dtype = ref.dtypes[0]
     profile = dict(
         driver="GTiff",
@@ -393,9 +384,10 @@ def _empty_dataset_bytes(ref) -> bytes:
     profile.update(
         _comp.creation_opts(dtype, decoded_bytes=decoded_bytes, compress="auto")
     )
-    arr = np.full((ref.count, 1, 1), nodata, dtype=dtype)
+    arr = np.full((ref.count, 1, 1), 0 if nodata is None else nodata, dtype=dtype)
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
+            _comp.match_alpha(dst, ref.colorinterp)
             dst.write(arr)
         return mf.read()
 
@@ -775,7 +767,7 @@ def materialize_to_bytes(tile: VirtualTile) -> VirtualTile:
         # A source's own mask band travels with the bytes (the heavy tier reads them).
         mask = ds.read_masks(1) if _nd.has_own_mask(ds) else None
         # Route through the compression authority: ZSTD + dtype-predictor baseline.
-        raster = _comp.write_gtiff(profile, data, mask=mask)
+        raster = _comp.write_gtiff(profile, data, alpha_like=ds.colorinterp, mask=mask)
     # Pending keys are baked into the produced bytes; strip them so the
     # materialized tile's metadata stays honest (no double-application).
     meta = _without_pending(tile.metadata)
@@ -899,6 +891,7 @@ def _windowed_materialize_bytes(tile: VirtualTile) -> bytes:
             with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
                 with MemoryFile() as mf:
                     with mf.open(**profile) as dst:
+                        _comp.match_alpha(dst, _selected_labels(src, indexes))
                         for _, block_window in dst.block_windows(1):
                             # Translate the output-local (0-based) block_window to
                             # source-file coordinates (offset by the tile window origin).

@@ -489,8 +489,10 @@ def _assign_pixels(work_ds, resolution, grid: str, conf=None):
     label, and the raw cell of each label. Labels are numbered in first-seen pixel
     order (row-major), so chips come out in that order.
 
-    A pixel is valid when ANY band's mask marks it valid (heavy anyValid); the mask
-    bands recognise a NaN NoData. Pixel centres go through the full geotransform;
+    A pixel is valid by :func:`valid_mask` (heavy ``ValidMask``): some data band's mask
+    marks it valid (heavy anyValid; the mask bands recognise a NaN NoData) and, when the
+    source has an alpha band, its alpha is not 0, so a transparent pixel belongs to no
+    cell. Pixel centres go through the full geotransform;
     h3/quadbin move them to EPSG:4326 when the raster has a CRS that is not 4326
     (gated on CRS presence: an authority-less CRS still has ``authority_srid_of``
     None and needs it; a CRS-less raster is grid-native).
@@ -515,9 +517,9 @@ def _assign_pixels(work_ds, resolution, grid: str, conf=None):
     index = {}  # cell key -> label (-1: dropped)
     for row0 in range(0, height, strip_rows):  # vectorscan: ok (per row strip)
         nrows = min(strip_rows, height - row0)
-        masks = work_ds.read_masks(window=Window(0, row0, width, nrows))
-        rr, cc = np.nonzero((masks != 0).any(axis=0))
-        del masks
+        valid = valid_mask(work_ds, window=Window(0, row0, width, nrows))
+        rr, cc = np.nonzero(valid)
+        del valid
         if rr.size == 0:
             continue
         rr = (rr + row0).astype(np.int32)

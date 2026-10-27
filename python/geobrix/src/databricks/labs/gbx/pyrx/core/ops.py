@@ -71,6 +71,8 @@ def as_format(ds, new_format: str) -> bytes:
     profile.update(driver=new_format)
     with MemoryFile() as mf:
         with mf.open(**profile) as dst:
+            if new_format == "GTiff":
+                _comp.match_alpha(dst, ds.colorinterp)
             dst.write(data)
         return mf.read()
 
@@ -122,6 +124,7 @@ def build_overviews(ds, levels, resampling: str = "average") -> bytes:
     tmp = new_local_temp_file(suffix=".tif")
     try:
         with rasterio.open(tmp, "w", **profile) as dst:
+            _comp.match_alpha(dst, ds.colorinterp)
             dst.write(data)
         with rasterio.open(tmp, "r+") as dst:
             dst.build_overviews(levels, resampling_enum)

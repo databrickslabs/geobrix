@@ -49,15 +49,62 @@ def _fill_plan(ds):
     return nodata, own_mask
 
 
+def warped_own_mask(ds, *, dst_crs, transform, width: int, height: int) -> np.ndarray:
+    """The own mask band of ``ds`` warped like its pixels onto the given grid: ``(rows,
+    cols)`` uint8, 255 valid and 0 invalid.
+
+    The mask is warped as data (nearest), so it lands where the pixels do. A pixel no
+    source pixel maps to stays valid, as the plain warp leaves it a valid zero; GDAL moves
+    a valid 255 to 254 where it collides with the NoData 255 it fills with, so anything
+    but 0 is valid. Memory: the mask is held twice as uint8 per pixel (the source's, the
+    warped one), on top of the warped pixels.
+    """
+    warped = np.full((height, width), 255, dtype="uint8")
+    reproject(
+        source=ds.read_masks(1),
+        destination=warped,
+        src_transform=ds.transform,
+        src_crs=ds.crs,
+        dst_transform=transform,
+        dst_crs=dst_crs,
+        resampling=resampling_enum("nearest"),
+        src_nodata=None,
+        dst_nodata=255,
+    )
+    return np.where(warped == 0, 0, 255).astype("uint8")
+
+
 def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_nodata):
     """GTiff bytes of every band of ``ds`` warped into a new dataset of ``profile``;
-    with ``mark_fill_nodata``, by the plan of :func:`_fill_plan`."""
+    with ``mark_fill_nodata``, by the plan of :func:`_fill_plan`.
+
+    A source's own mask band (``has_own_mask``) goes through the warp with its pixels: a
+    warp ignores a mask band once a NoData is set, so where the source declares a NoData
+    the masked pixels are set to it and the warp carries it, and without one the mask is
+    warped to the output grid and written as its own mask band (:func:`warped_own_mask`),
+    as the lazy read of a virtual tile with a target CRS does.
+    """
     plan = _fill_plan(ds) if mark_fill_nodata else None
     nodata, read_masked = plan if plan else (None, False)
     if plan:
         profile.update(nodata=nodata)
+    own_mask = has_own_mask(ds)
+    if own_mask and not plan:
+        read_masked = ds.nodata is not None
+        nodata = ds.nodata
+    mask = (
+        warped_own_mask(
+            ds,
+            dst_crs=dst_crs,
+            transform=transform,
+            width=profile["width"],
+            height=profile["height"],
+        )
+        if own_mask and not (plan or read_masked)
+        else None
+    )
     resamp = resampling_enum(resampling)
-    with MemoryFile() as mf:
+    with _comp.internal_mask_env(mask), MemoryFile() as mf:
         with mf.open(**profile) as dst:
             _comp.match_alpha(dst, ds.colorinterp)
             for i in range(1, ds.count + 1):
@@ -77,7 +124,17 @@ def _warp_bands(ds, profile, *, dst_crs, transform, resampling: str, mark_fill_n
                     src_nodata=nodata,
                     dst_nodata=nodata,
                 )
+            if mask is not None:
+                dst.write_mask(mask)
         return mf.read()
+
+
+def _identity(ds) -> bytes:
+    """``ds`` re-encoded as it is: its alpha band and its own mask band come with it."""
+    mask = ds.read_masks(1) if has_own_mask(ds) else None
+    return _comp.write_gtiff(
+        ds.profile, ds.read(), alpha_like=ds.colorinterp, mask=mask
+    )
 
 
 def reproject_to_crs(
@@ -100,7 +157,7 @@ def reproject_to_crs(
     dst_crs = resolve_crs(target_crs_value)
     if ds.crs and ds.crs == dst_crs:
         # Identity: re-encode with ZSTD baseline (same as reproject_to_srid).
-        return _comp.write_gtiff(ds.profile, ds.read(), alpha_like=ds.colorinterp)
+        return _identity(ds)
 
     transform, width, height = calculate_default_transform(
         ds.crs, dst_crs, ds.width, ds.height, *ds.bounds
@@ -151,7 +208,7 @@ def reproject_to_srid(
     src_epsg = authority_srid_of(ds.crs)
     if src_epsg is not None and src_epsg == target_srid:
         # Identity: emit the source bytes re-encoded with ZSTD baseline.
-        return _comp.write_gtiff(ds.profile, ds.read(), alpha_like=ds.colorinterp)
+        return _identity(ds)
 
     dst_crs = f"EPSG:{target_srid}"
     transform, width, height = calculate_default_transform(

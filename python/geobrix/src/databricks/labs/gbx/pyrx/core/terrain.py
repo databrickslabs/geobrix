@@ -397,7 +397,14 @@ def color_relief(ds, color_table_path: str) -> bytes:
     profile = ds.profile.copy()
     profile.update(driver="GTiff", count=nbands, dtype="uint8", nodata=None)
 
-    return write_gtiff(profile, out_arr)
+    # The colour table's channels: RGB, then alpha when it has one (the band count of the
+    # source says nothing about them).
+    from rasterio.enums import ColorInterp
+
+    labels = [ColorInterp.red, ColorInterp.green, ColorInterp.blue]
+    if has_alpha:
+        labels.append(ColorInterp.alpha)
+    return write_gtiff(profile, out_arr, alpha_like=labels)
 
 
 def hillshade(

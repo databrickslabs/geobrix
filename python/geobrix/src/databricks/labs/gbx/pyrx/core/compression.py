@@ -278,24 +278,47 @@ def match_alpha(dst, alpha_like) -> None:
     raster is alpha, whatever the source was. A non-alpha band 4 (the near-infrared of
     RGB+NIR) then reads as a transparency mask, and a NoData declared on the raster
     shadows it (``NodataShadowWarning``). The converse also happens: the alpha band of a
-    16-bit RGBA or a gray+alpha raster is lost. Nothing else is relabelled, and a band
+    16-bit RGBA or a gray+alpha raster is lost. The alpha band is the one the alpha rule
+    names (``_nodata.alpha_index``: the LAST band, when labelled alpha); a band labelled
+    alpha anywhere else is data and is not carried. Nothing else is relabelled, and a band
     count that differs from *alpha_like* (the caller changed it) is left as GDAL labelled it.
     """
     from rasterio.enums import ColorInterp
 
+    from databricks.labs.gbx.pyrx.core._nodata import alpha_index
+
     labels = list(dst.colorinterp)
     if alpha_like is None or len(alpha_like) != len(labels):
         return
+    alpha_at = alpha_index(alpha_like)
     want = [
         (
             ColorInterp.alpha
-            if src == ColorInterp.alpha
+            if i == alpha_at
             else (ColorInterp.undefined if got == ColorInterp.alpha else got)
         )
-        for got, src in zip(labels, alpha_like)
+        for i, got in enumerate(labels)
     ]
     if want != labels:
         dst.colorinterp = want
+
+
+def internal_mask_env(mask):
+    """The GDAL environment a writer of *mask* (see :func:`write_gtiff`) runs in.
+
+    Without ``GDAL_TIFF_INTERNAL_MASK`` GDAL puts a written mask band in a sidecar file,
+    which a ``MemoryFile`` cannot hold on to. A context manager that does nothing when
+    there is no mask to write.
+    """
+    from contextlib import nullcontext
+
+    import rasterio
+
+    return (
+        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True)
+        if mask is not None
+        else nullcontext()
+    )
 
 
 def write_gtiff(profile: dict, data, alpha_like=None, mask=None) -> bytes:
@@ -313,10 +336,7 @@ def write_gtiff(profile: dict, data, alpha_like=None, mask=None) -> bytes:
     """
     # Lazy: this module is imported by the Spark data-source writers, which must stay
     # importable where rasterio is absent (the heavy-tier build); numpy likewise above.
-    from contextlib import nullcontext
-
     import numpy as np
-    import rasterio
     from rasterio.io import MemoryFile
 
     prof = drop_ycbcr(profile)
@@ -324,14 +344,7 @@ def write_gtiff(profile: dict, data, alpha_like=None, mask=None) -> bytes:
     dtype = prof.get("dtype", str(np.asarray(data).dtype))
     decoded = data.nbytes if hasattr(data, "nbytes") else None
     prof.update(creation_opts(dtype, decoded_bytes=decoded, compress="auto"))
-    # Without the option GDAL puts a written mask in a sidecar file, which a MemoryFile
-    # cannot hold on to.
-    env = (
-        rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True)
-        if mask is not None
-        else nullcontext()
-    )
-    with env:
+    with internal_mask_env(mask):
         with MemoryFile() as mf:
             with mf.open(**prof) as dst:
                 match_alpha(dst, alpha_like)

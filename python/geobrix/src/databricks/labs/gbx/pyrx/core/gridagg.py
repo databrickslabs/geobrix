@@ -415,6 +415,7 @@ def _stamp_crs_bytes(ds, target_crs) -> bytes:
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.pyrx.core._nodata import has_own_mask
+    from databricks.labs.gbx.pyrx.core.compression import match_alpha
 
     own_mask = has_own_mask(ds)
     profile = ds.profile.copy()
@@ -422,6 +423,7 @@ def _stamp_crs_bytes(ds, target_crs) -> bytes:
     with rasterio.Env(GDAL_TIFF_INTERNAL_MASK=True):
         with MemoryFile() as mf:
             with mf.open(**profile) as dst:
+                match_alpha(dst, ds.colorinterp)
                 dst.write(ds.read())
                 if own_mask:
                     dst.write_mask(ds.read_masks(1))

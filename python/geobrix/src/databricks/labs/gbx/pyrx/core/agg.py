@@ -104,6 +104,7 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     )
     mf = MemoryFile()
     dst = mf.open(**profile)
+    _comp.match_alpha(dst, src.colorinterp)
     for b in range(1, src.count + 1):
         reproject(
             source=rasterio.band(src, b),
@@ -196,6 +197,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                             profile = rep_ds.profile.copy()
                             profile.update(driver="GTiff")
                             with rasterio.open(tile_path, "w", **profile) as dst:
+                                _comp.match_alpha(dst, rep_ds.colorinterp)
                                 dst.write(rep_ds.read())
                         finally:
                             rep_ds.close()
@@ -319,6 +321,7 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         )
         with MemoryFile() as out_mf:
             with out_mf.open(**profile) as dst:
+                _comp.match_alpha(dst, ref.colorinterp)
                 dst.write(mosaic)
             return out_mf.read()
     finally:
@@ -354,7 +357,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
     if len(rasters) == 1:
         return bytes(rasters[0])
     sums = counts = None
-    shape = ref_profile = out_dtype = None
+    shape = ref_profile = ref_labels = out_dtype = None
     fallback = None
     any_nodata = False
     for b in rasters:
@@ -364,6 +367,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
                 sums = np.zeros(shape, dtype="float64")
                 counts = np.zeros(shape, dtype="int64")
                 ref_profile = _comp.drop_ycbcr(ds.profile)
+                ref_labels = list(ds.colorinterp)
                 out_dtype = ds.dtypes[0]
             elif (ds.count, ds.height, ds.width) != shape:
                 raise ValueError(
@@ -407,6 +411,7 @@ def combineavg_tiles(rasters: List[bytes]) -> bytes:
     )
     with MemoryFile() as out_mf:
         with out_mf.open(**ref_profile) as dst:
+            _comp.match_alpha(dst, ref_labels)
             dst.write(out)
         return out_mf.read()
 
@@ -765,6 +770,7 @@ def _combine_stat_tiles(rasters: List[bytes], stat: str) -> bytes:
         )
         with MemoryFile() as out_mf:
             with out_mf.open(**ref_profile) as dst:
+                _comp.match_alpha(dst, ref.colorinterp)
                 dst.write(out)
             return out_mf.read()
     finally:
@@ -882,6 +888,7 @@ def align_to_tiles(tile_bytes: bytes, ref_bytes: bytes, dst_nodata=None) -> byte
 
             with MemoryFile() as out_mf:
                 with out_mf.open(**profile) as dst:
+                    _comp.match_alpha(dst, src.colorinterp)
                     for b in range(1, src.count + 1):
                         reproject(
                             source=rasterio.band(src, b),

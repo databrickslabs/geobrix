@@ -1122,3 +1122,20 @@ def test_venv_sync_match_container_builds_on_the_containers_python_and_versions(
     ]  # what the host has at other versions
     # The fake never really installs, so the final check still sees drift: the sync must fail.
     assert res.returncode == 1 and "drifts from the container" in res.output, res.output
+
+
+def test_no_command_hard_codes_a_package_index():
+    # This is a public repository: a package index comes from PIP_INDEX_URL or pip's own
+    # configuration, never from a literal URL in a command.
+    commands = Path(__file__).resolve().parents[1] / "commands"
+    literal_index = re.compile(
+        r"(--(extra-)?index-url[ =]+|INDEX_URL=|index-url *= *)[\"']?https?://", re.IGNORECASE
+    )
+    offenders = [
+        f"{path.name}:{n}"
+        for path in sorted(commands.glob("*"))
+        if path.suffix in {".sh", ".md", ".py"}
+        for n, line in enumerate(path.read_text(errors="replace").splitlines(), 1)
+        if literal_index.search(line)
+    ]
+    assert offenders == [], offenders

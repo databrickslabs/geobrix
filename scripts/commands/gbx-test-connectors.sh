@@ -15,7 +15,10 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 source "${SCRIPT_DIR}/common.sh"
 
-INDEX_URL="https://pypi-proxy.dev.databricks.com/simple"
+# The package index comes from the environment (PIP_INDEX_URL) or pip's own configuration,
+# never from a literal here: this is a public repository.
+INDEX_ARGS=()
+[[ -n "${PIP_INDEX_URL:-}" ]] && INDEX_ARGS=(--index-url "${PIP_INDEX_URL}")
 LFCC_COMMIT="70d16606fb2a7c32e9965af0c9c9452a0172008e"
 LFCC_CACHE_DIR="${PROJECT_ROOT}/.cache/lfcc-wheels"
 LFCC_WHEEL="${LFCC_CACHE_DIR}/lakeflow_community_connectors-0.1.0-py3-none-any.whl"
@@ -68,7 +71,7 @@ PIP=("${VENV_PYTHON}" -m pip -q --disable-pip-version-check)
 if [ ! -f "${LFCC_WHEEL}" ]; then
     echo "Building lakeflow-community-connectors wheel (commit ${LFCC_COMMIT:0:8})..."
     mkdir -p "${LFCC_CACHE_DIR}"
-    "${PIP[@]}" wheel --no-deps --index-url "${INDEX_URL}" -w "${LFCC_CACHE_DIR}" \
+    "${PIP[@]}" wheel --no-deps ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} -w "${LFCC_CACHE_DIR}" \
         "lakeflow-community-connectors @ git+https://github.com/databrickslabs/lakeflow-community-connectors@${LFCC_COMMIT}"
     RESYNC=true
 fi
@@ -78,9 +81,9 @@ STAMP_FILE="${VENV_PATH}/.gbx-deps-stamp"
 STAMP="$(cat "${PROJECT_ROOT}/python/geobrix/pyproject.toml" "${LFCC_WHEEL}" | shasum | cut -d' ' -f1)"
 if [ "${RESYNC}" = true ] || [ "$(cat "${STAMP_FILE}" 2>/dev/null)" != "${STAMP}" ]; then
     echo "Syncing venv dependencies (pyspark>=4.1, geobrix[light_env6], framework, pytest)..."
-    "${PIP[@]}" install --index-url "${INDEX_URL}" "pyspark>=4.1" pytest
-    "${PIP[@]}" install --index-url "${INDEX_URL}" -e "${PROJECT_ROOT}/python/geobrix[light_env6]"
-    "${PIP[@]}" install --index-url "${INDEX_URL}" --force-reinstall --no-deps "${LFCC_WHEEL}"
+    "${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} "pyspark>=4.1" pytest
+    "${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} -e "${PROJECT_ROOT}/python/geobrix[light_env6]"
+    "${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} --force-reinstall --no-deps "${LFCC_WHEEL}"
     echo "${STAMP}" > "${STAMP_FILE}"
 fi
 
@@ -90,7 +93,7 @@ fi
 # (an implicit namespace subpackage) -- the same layout a pipeline gets from the built
 # wheel. An editable finder maps only the leaf module and cannot serve it.
 echo "Installing connector package (wheel layout)..."
-"${PIP[@]}" install --index-url "${INDEX_URL}" --force-reinstall --no-deps "${CONNECTORS_DIR}"
+"${PIP[@]}" install ${INDEX_ARGS[@]+"${INDEX_ARGS[@]}"} --force-reinstall --no-deps "${CONNECTORS_DIR}"
 "${VENV_PYTHON}" -c "import databricks.labs.gbx, databricks.labs.community_connector.sources.geobrix as m; print('connector import OK:', m.__file__)"
 
 TEST_TARGET="${CONNECTORS_DIR}/${TEST_PATH:-sources/geobrix/tests}"

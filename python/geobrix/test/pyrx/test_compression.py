@@ -75,6 +75,29 @@ def test_creation_opts_cog_driver_emits_level_not_zstd_level():
     assert o["LEVEL"] == str(C.auto_level(1 * 1024**2))
 
 
+def test_cog_profile_drops_the_layout_and_codec_keys_of_a_source():
+    # the COG driver lays the file out itself and takes its codec from creation_opts(driver="COG")
+    source = dict(
+        driver="GTiff",
+        width=4,
+        count=3,
+        dtype="uint8",
+        nodata=0,
+        interleave="pixel",
+        tiled=True,
+        blockxsize=256,
+        blockysize=256,
+        photometric="rgb",
+        compress="deflate",
+        zlevel=6,
+        predictor=2,
+    )
+    assert C.cog_profile(source) == dict(
+        driver="GTiff", width=4, count=3, dtype="uint8", nodata=0, interleave="pixel"
+    )
+    assert "tiled" in source  # the source is left as it was
+
+
 def test_creation_opts_gtiff_driver_emits_zstd_level():
     """FIX 1: GTiff driver uses zstd_level (as before)."""
     o = C.creation_opts(

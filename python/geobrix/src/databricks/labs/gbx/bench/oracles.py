@@ -564,6 +564,25 @@ MVP_A: Tuple[Case, ...] = (
         [[NULL_BURN, NAN, -9999.0], [3.0, 2.0, -9999.0]],
         ("session",),
     ),
+    # A NaN value beside numbers in one cell never wins (the largest number is burned), wherever it arrives; a cell
+    # of nothing but NaN burns NaN (br_dup_max).
+    Case(
+        "br_nan_beside_numbers",
+        BR,
+        (
+            (
+                ("TQ3080", NAN),
+                ("TQ3080", 4.0),
+                ("TQ3080", 1.0),
+                ("TQ3180", 2.0),
+                ("TQ3180", NAN),
+            ),
+        )
+        + CANVAS,
+        "pixels",
+        [[-9999.0, -9999.0, -9999.0], [4.0, 2.0, -9999.0]],
+        ("session",),
+    ),
     # Rows whose cell id is NULL carry no cell: nothing to burn, so the group has no raster.
     Case(
         "br_empty",

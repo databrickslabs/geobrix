@@ -811,7 +811,7 @@ Combine or merge rasters in group-by (7 total).
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls. A `NaN` that is a real value, not a null, is ignored the same way on both tiers: beside a number in one cell the number is burned, and a cell whose values are all `NaN` burns `NaN`.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).

@@ -42,19 +42,23 @@ object RasterizeBurn {
         res
     }
 
-    /** The cell-value lookup of a set of `(cell id, value)` pairs, a repeated cell keeping its LARGEST value whatever
-     *  order the pairs arrive in: they are written in `(cell id unsigned, value)` order, so the last write for a cell
-     *  is its maximum. [[java.lang.Double.compare]] orders NaN after every number (and `<` does not order it at all,
-     *  which can make the sort raise), so a NaN beside numbers wins.
+    /** The cell-value lookup of a set of `(cell id, value)` pairs, a repeated cell keeping its LARGEST number
+     *  whatever order the pairs arrive in: they are written in `(cell id unsigned, value)` order, so the last write
+     *  for a cell is its maximum. A NaN sorts BEFORE every number, so it is overwritten by any number in its cell and
+     *  stays only for a cell with nothing but NaN (a NaN never wins, as on the lightweight tier). The order is a
+     *  valid one for the sort: `<` does not order a NaN at all, which can make the sort raise.
      */
     def canonicalLut(pairs: scala.collection.Seq[(Long, Double)]): scala.collection.mutable.LongMap[Double] = {
         val lut = scala.collection.mutable.LongMap.empty[Double]
         pairs.sortWith { (a, b) =>
             if (a._1 != b._1) java.lang.Long.compareUnsigned(a._1, b._1) < 0
-            else java.lang.Double.compare(a._2, b._2) < 0
+            else nanFirst(a._2, b._2) < 0
         }.foreach { case (cellId, v) => lut.update(cellId, v) }
         lut
     }
+
+    private def nanFirst(a: Double, b: Double): Int =
+        if (a.isNaN) { if (b.isNaN) 0 else -1 } else if (b.isNaN) 1 else java.lang.Double.compare(a, b)
 
     /** Burn a cell-value lookup table into `rasterDs`, writing NoData for absent cells.
      *

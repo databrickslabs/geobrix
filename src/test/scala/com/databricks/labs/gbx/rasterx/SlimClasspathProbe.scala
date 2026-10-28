@@ -1,19 +1,43 @@
 package com.databricks.labs.gbx.rasterx
 
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf}
+import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RstMergeArrayBytesUdf}
 import com.databricks.labs.gbx.rasterx.expressions.agg.mvp.BngRasterizeCellsBytesUdf
+import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import org.apache.spark.sql.Row
 
 import scala.jdk.CollectionConverters._
 
-/** Run by [[KernelFacadesSmokeTest]] in a child JVM whose classpath is only the facades, scala-library, JTS and
-  * spark-sql-api with what its `Row` needs (what a standard-mode or Unity Catalog sandbox offers). It must not touch
-  * Spark itself, and says which of Catalyst, the unsafe types and Kryo could load (none should). */
+/** Run by [[KernelFacadesSmokeTest]] in a child JVM whose classpath is the facades, scala-library, JTS, the GDAL
+  * bindings, spark-sql-api with what its `Row` needs, and what the GDAL start-up needs of Spark core, Hadoop and log4j
+  * (what a standard-mode or Unity Catalog sandbox offers) but NOT Catalyst, the unsafe types or Kryo. It says which of
+  * those could load (none should), and runs the raster facades end to end. */
 object SlimClasspathProbe {
 
     private def attempt(body: => String): String =
         try body catch { case t: Throwable => "RAISES " + t.getClass.getSimpleName + ": " + t.getMessage }
+
+    private val rasterize = new BngRasterizeCellsBytesUdf()
+
+    /** A 2 x 2 km canvas of 1 km pixels from `xmin` east, 180 to 182 km north. */
+    private def burn(cells: Seq[Row], xmin: Double): Array[Byte] =
+        rasterize.call(cells, xmin, 180000.0, xmin + 2000.0, 182000.0, 2, 2)
+
+    private def size(bytes: Array[Byte]): (Int, Int) = {
+        val ds = RasterDriver.readFromBytes(bytes, Map("driver" -> "GTiff"))
+        try (ds.getRasterXSize, ds.getRasterYSize) finally RasterDriver.releaseDataset(ds)
+    }
+
+    /** The first band as rows of pixels, `;` between rows. */
+    private def pixels(bytes: Array[Byte]): String = {
+        val ds = RasterDriver.readFromBytes(bytes, Map("driver" -> "GTiff"))
+        try {
+            val (w, h) = (ds.getRasterXSize, ds.getRasterYSize)
+            val all = new Array[Double](w * h)
+            ds.GetRasterBand(1).ReadRaster(0, 0, w, h, all)
+            all.grouped(w).map(_.mkString(",")).mkString(";")
+        } finally RasterDriver.releaseDataset(ds)
+    }
 
     def main(args: Array[String]): Unit = {
         val udf = new BngEastNorthAsBngUdf()
@@ -33,20 +57,15 @@ object SlimClasspathProbe {
               chips.size + " " + chips.asScala.map(_.getString(0)).min // six chips; the lowest cell id
           },
           "L2 tessellate bad: " + attempt(tessellate.call(offset, "3km", java.lang.Boolean.FALSE).size.toString),
-          // The rasterize facade needs GDAL natives, which this JVM does not have, so it stops there. What it must not
-          // do is stop sooner, on a class of Catalyst or the unsafe types: the line says what it raised.
-          "L2 rasterize: " + attempt {
-              new BngRasterizeCellsBytesUdf().call(Seq(Row("TQ3080", 1.0)), 530000.0, 180000.0, 532000.0, 182000.0, 2, 2)
-              "burned"
-          },
-          // The classes the merge facade runs on, loaded (it too stops at the natives when called).
-          "L2 merge classes: " + attempt {
-              // scalastyle:off classforname
-              Seq("com.databricks.labs.gbx.kernels.udf.RstMergeArrayBytesUdf",
-                  "com.databricks.labs.gbx.rasterx.operations.MergeRasters$",
-                  "com.databricks.labs.gbx.rasterx.gdal.RasterDriver$").foreach(n => Class.forName(n))
-              // scalastyle:on classforname
-              "loaded"
+          // The raster facades run end to end, GDAL natives included (the image has them): a canvas burned from cells and
+          // two canvases merged, the pixels read back. A Catalyst or unsafe class anywhere on their path would raise here.
+          "L2 rasterize: " + attempt(pixels(burn(Seq(
+            Row("TQ3080", 3.0), Row("TQ3080", 1.0), Row("TQ3180", 2.0),
+            Row("TQ3081", Double.NaN), Row("TQ3081", 7.0), Row("TQ3181", Double.NaN)), 530000.0))),
+          "L2 merge: " + attempt {
+              val merged = new RstMergeArrayBytesUdf().call(Seq(burn(Seq(Row("TQ3080", 1.0)), 530000.0), burn(Seq(Row("TQ3280", 5.0)), 532000.0)))
+              val (w, h) = size(merged)
+              s"${w}x$h"
           },
           "loadable: " + (if (loadable.isEmpty) "none" else loadable.mkString(",")))
         // scalastyle:off println

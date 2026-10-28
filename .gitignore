@@ -39,6 +39,8 @@ __pycache__/
 /prompts/
 /sample-data/Volumes/main/default/geobrix_samples/
 /sample-data/Volumes/main/default/bench-corpus/
+# Generated, byte-reproducible: bash scripts/commands/gbx-data-generate-minimal-bundle.sh --zarr-only
+/sample-data/Volumes/main/default/test-data/geobrix-examples/global/era5-weather/
 /WORKFLOW-SETUP.md
 /.vscode/
 /.coverage

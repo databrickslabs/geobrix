@@ -136,7 +136,7 @@ def test_geometry_types(tmp_path, geom, allowed):
     assert set(got["name"]) == {"g0", "g1", "g2"}
     for g in got.geometry:
         assert g.geom_type in allowed
-        assert g.equals(geom) or g.bounds == geom.bounds
+        assert g.equals(geom)  # the same shape, not just the same bounds
 
 
 def test_default_layer_name_and_layername_option(tmp_path):

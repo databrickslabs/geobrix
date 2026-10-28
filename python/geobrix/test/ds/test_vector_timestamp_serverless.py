@@ -111,7 +111,13 @@ def test_reader_streams_timestamp_column(tmp_path, serverless_arrow, fmt, driver
     rdr = {s.name(): s for s in _SOURCES}[fmt]({"path": path}).reader(None)
     batches = [b for p in rdr.partitions() for b in rdr.read(p)]
     assert sum(b.num_rows for b in batches) == 2
-    assert pa.types.is_timestamp(batches[0].schema.field("seen").type)
+    # UTC-typed, and the values are the instants that were written
+    assert batches[0].schema.field("seen").type.tz == "UTC"
+    utc = datetime.timezone.utc
+    assert pa.concat_arrays([b.column("seen") for b in batches]).to_pylist() == [
+        datetime.datetime(2020, 1, 2, 3, 4, 5, tzinfo=utc),
+        datetime.datetime(2021, 6, 7, 8, 9, 10, tzinfo=utc),
+    ]
 
 
 # ---------------------------------------------------------------------------

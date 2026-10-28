@@ -30,6 +30,7 @@ from pyspark.sql.types import (
     StringType,
     StructField,
     StructType,
+    TimestampNTZType,
     TimestampType,
 )
 
@@ -828,7 +829,7 @@ _OUTPUT_GEOM_NAME = {"GPKG": "geom", "OpenFileGDB": "SHAPE"}
 _GDB_TARGET_ALL = "ALL"
 _GDB_TARGET_PRO_3_2 = "ARCGIS_PRO_3_2_OR_LATER"
 _GDB_TARGET_CHOICES = ("auto", _GDB_TARGET_ALL, _GDB_TARGET_PRO_3_2)
-_GDB_PRO_3_2_TYPES = (LongType, DateType, TimestampType)
+_GDB_PRO_3_2_TYPES = (LongType, DateType, TimestampType, TimestampNTZType)
 
 # Layer name a FileGDB gets when the writer is not given ``layerName``.
 _GDB_DEFAULT_LAYER = "layer"
@@ -2186,6 +2187,13 @@ class VectorGbxWriter(DataSourceWriter):
                 break
         geom_type = geom_type or "Unknown"
         if self.driver == "OpenFileGDB" and geom_type == "Unknown":
+            if self.geometry_type_override is not None:
+                # the option itself says Unknown (any other type would not be "Unknown")
+                raise ValueError(
+                    "file_gdb_gbx: geometryType='Unknown' is not a type a FileGDB layer can "
+                    "have. Name one (for example geometryType='Point'), or leave the option "
+                    "out to take the type from the first geometry."
+                )
             raise ValueError(
                 "file_gdb_gbx: every geometry is NULL, so the geometry type of the layer "
                 "cannot be inferred, and a FileGDB layer needs one. Set the geometryType "

@@ -88,13 +88,33 @@
     "concurrently": "^9.1.2",
     "eslint": "^9.16.0",
     "tsx": "^4.19.2",
-    "vitest": "^2.1.8"
+    "vitest": "^4.1.12"
   },
   "packageManager": "pnpm@10.30.3+sha512.c961d1e0a2d8e354ecaa5166b822516668b7f44cb5bd95122d590dd81922f606f5473b6d23ec4a5be05e7fcd18e8488d47d978bbe981872f1145d06e9a740017",
   "pnpm": {
     "overrides": {
       "@kepler.gl/utils": "3.2.5",
-      "apache-arrow": "21.1.0"
+      "apache-arrow": "21.1.0",
+      "@opentelemetry/instrumentation-cassandra-driver@<0.66.0": "0.66.0",
+      "@opentelemetry/instrumentation-knex@<0.65.0": "0.65.0",
+      "@opentelemetry/instrumentation-mongoose@<0.67.0": "0.67.0",
+      "@opentelemetry/instrumentation-mysql2@<0.67.0": "0.67.0",
+      "@opentelemetry/instrumentation-mysql@<0.67.0": "0.67.0",
+      "@opentelemetry/instrumentation-oracledb@<0.46.0": "0.46.0",
+      "@opentelemetry/instrumentation-pg@<0.73.0": "0.73.0",
+      "@opentelemetry/instrumentation-tedious@<0.40.0": "0.40.0",
+      "@opentelemetry/propagator-jaeger@<2.9.0": "^2.9.0",
+      "dompurify@<3.4.17": "^3.4.17",
+      "drizzle-orm@<0.45.2": "~0.45.2",
+      "fflate@<0.7.5": "~0.7.5",
+      "js-yaml@>=4.0.0 <4.3.2": "^4.3.2",
+      "lodash@<4.18.0": "^4.18.0",
+      "postcss@<8.5.23": "^8.5.23",
+      "qs@<6.16.0": "^6.16.0",
+      "uuid@<11.1.1": "^11.1.1",
+      "zod@>=4.0.0 <4.6.6": "^4.6.6",
+      "echarts@>=6.0.0 <6.1.0": "^6.1.0",
+      "node-fetch@<2.6.7": "^2.6.7"
     }
   }
 }

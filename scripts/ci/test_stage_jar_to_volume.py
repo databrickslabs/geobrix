@@ -26,6 +26,7 @@ def stage(tmp_path, monkeypatch):
     monkeypatch.syspath_prepend(str(REPO_ROOT / "examples" / "tests"))
     monkeypatch.setenv("GBX_BUNDLE_SKIP_JAR_UPLOAD", "1")
     monkeypatch.delenv("GBX_BUNDLE_SKIP_JAR", raising=False)
+    monkeypatch.setenv("GBX_DEV_CONTAINER", "gbx-test-container")
     # The module copies databricks_cluster_config.env into os.environ at import; undo that.
     with mock.patch.dict(os.environ):
         module = importlib.import_module("stage_jar_to_volume")
@@ -38,13 +39,16 @@ def stage(tmp_path, monkeypatch):
     (tmp_path / "examples" / "tests").mkdir(parents=True)
     monkeypatch.setattr(module, "TESTS_DIR", tmp_path / "examples" / "tests")
     real_run = subprocess.run
+    docker_calls = []
 
     def run(cmd, **kwargs):
-        if cmd[0] == "docker":  # the Maven build in geobrix-dev
+        if cmd[0] == "docker":  # the Maven build in the dev container
+            docker_calls.append(cmd)
             return subprocess.CompletedProcess(cmd, 0)
         return real_run(cmd, **kwargs)
 
     monkeypatch.setattr(module.subprocess, "run", run)
+    module.docker_calls = docker_calls
     return module, tmp_path
 
 
@@ -80,3 +84,22 @@ def test_a_clean_jar_passes_the_guard(stage, capsys):
     _jar(root, ["com/databricks/labs/gbx/A.class"])
     assert module.main() == 0
     assert "skipping Databricks upload" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("value", [None, "", "  "], ids=["unset", "empty", "blank"])
+def test_without_a_container_name_it_stops_instead_of_using_the_main_container(
+    stage, monkeypatch, capsys, value
+):
+    """The name comes from the checkout's gbx-container.sh via the gbx command; a missing one must
+    never fall back to geobrix-dev, whose target/ it would then wipe."""
+    module, root = stage
+    _jar(root, ["com/databricks/labs/gbx/A.class"])
+    if value is None:
+        monkeypatch.delenv("GBX_DEV_CONTAINER")
+    else:
+        monkeypatch.setenv("GBX_DEV_CONTAINER", value)
+
+    assert module.main() == 2
+
+    assert "GBX_DEV_CONTAINER" in capsys.readouterr().err
+    assert module.docker_calls == []

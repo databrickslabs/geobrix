@@ -70,8 +70,30 @@ def good_probe(arch: str) -> list:
     ]
 
 
+def scratch_repo(tmp_path: Path) -> Path:
+    """A non-git copy of what the docker scripts and commands need, rooted at tmp_path/repo.
+
+    The scripts decide what they do from the checkout they live in (a linked git worktree needs a
+    .gbx-local.env of its own), so tests run them from a plain directory, not from this checkout,
+    which may itself be a worktree.
+    """
+    repo = tmp_path / "repo"
+    shutil.copytree(COMMANDS, repo / "scripts" / "commands")
+    shutil.copytree(
+        DOCKER_DIR,
+        repo / "scripts" / "docker",
+        ignore=shutil.ignore_patterns("m2", "dcs", "__pycache__"),
+    )
+    lock_dir = repo / "python" / "geobrix"
+    lock_dir.mkdir(parents=True)
+    for lock in (REPO_ROOT / "python" / "geobrix").glob("requirements-dev-container*"):
+        shutil.copy(lock, lock_dir)
+    return repo
+
+
 class Sandbox:
-    """A fake docker and uname first on PATH, and the state/log files they use."""
+    """A fake docker and uname first on PATH, and the state/log files they use. The scripts run from
+    a scratch copy (self.commands, self.docker), see scratch_repo."""
 
     def __init__(self, tmp_path: Path, host_arch: str = "arm64"):
         self.tmp = tmp_path
@@ -103,18 +125,22 @@ class Sandbox:
         }
         self.host_arch = host_arch
         self.cwd = tmp_path
-        # These tests run the scripts in place, and this checkout may be a linked worktree with a
-        # .gbx-local.env of its own: pin the container settings to the main checkout's.
-        self.local_env = tmp_path / "gbx-local.env"
-        self.local_env.write_text(
-            f"GBX_DEV_CONTAINER=geobrix-dev\nGBX_DEV_VOLUMES_DIR={tmp_path / 'Volumes'}\n"
-        )
+        self.repo = scratch_repo(tmp_path)
+        self.commands = self.repo / "scripts" / "commands"
+        self.docker = self.repo / "scripts" / "docker"
 
     def image(self, ref: str, arch: str):
         self.state["images"][ref] = {"arch": arch}
 
-    def container(self, arch: str, running: bool = True, mount: str = ""):
+    def container(
+        self,
+        arch: str,
+        running: bool = True,
+        mount: str = "",
+        name: str = "geobrix-dev",
+    ):
         self.state["container"] = {
+            "name": name,
             "image": f"sha256:{arch}",
             "arch": arch,
             "running": running,
@@ -134,7 +160,6 @@ class Sandbox:
             FAKE_DOCKER_LOG=str(self.log),
             FAKE_DOCKER_STATE=str(self.state_file),
             GBX_PIP_INDEX_SALT_FILE=str(self.salt_file),
-            GBX_LOCAL_ENV_FILE=str(self.local_env),
             TERM="dumb",
         )
         full.update(env or {})
@@ -154,7 +179,7 @@ class Sandbox:
 
     def sh(self, snippet: str, env=None):
         """Run a snippet with gbx-platform.sh sourced."""
-        src = f'source "{DOCKER_DIR / "gbx-platform.sh"}"; {snippet}'
+        src = f'source "{self.docker / "gbx-platform.sh"}"; {snippet}'
         return self._exec(["bash", "-c", src], env=env)
 
     @property
@@ -306,7 +331,7 @@ def test_a_missing_image_says_how_to_build_it_or_run_the_other(arm):
 
 
 def build(sb, *args, env=None):
-    return sb.run(DOCKER_DIR / "build_smart.sh", "--no-pull", *args, env=env)
+    return sb.run(sb.docker / "build_smart.sh", "--no-pull", *args, env=env)
 
 
 def test_the_build_defaults_to_the_host_architecture(arm):
@@ -344,7 +369,7 @@ def test_the_environment_and_the_flag_choose_the_platform(arm):
 
 
 def test_the_base_pull_names_the_platform(arm):
-    res = arm.run(DOCKER_DIR / "build_smart.sh")
+    res = arm.run(arm.docker / "build_smart.sh")
     assert res.returncode == 0
     assert ["pull", "--platform", "linux/arm64", "ubuntu:24.04"] in arm.calls
 
@@ -570,7 +595,7 @@ def test_a_clean_history_is_tagged_after_the_check(arm):
 
 
 def started(sb, script, *args, env=None, cwd=None):
-    res = sb.run(DOCKER_DIR / script, *args, env=env, cwd=cwd)
+    res = sb.run(sb.docker / script, *args, env=env, cwd=cwd)
     return res, sb.of("run")
 
 
@@ -645,16 +670,14 @@ def test_start_refuses_an_unknown_option_and_platform(arm):
 def test_start_docker_sh_uses_the_same_choice(arm):
     arm.image(f"{TAG}-arm64", "arm64")
     arm.image(f"{TAG}-amd64", "amd64")
-    res, runs = started(arm, "start_docker.sh", cwd=REPO_ROOT)
+    res, runs = started(arm, "start_docker.sh")
     assert res.returncode == 0, res.output
     assert (flag_value(runs[0], "--platform"), runs[0][-2]) == (
         "linux/arm64",
         f"{TAG}-arm64",
     )
     arm.log.unlink()
-    _, runs = started(
-        arm, "start_docker.sh", env={"GBX_DOCKER_PLATFORM": "amd64"}, cwd=REPO_ROOT
-    )
+    _, runs = started(arm, "start_docker.sh", env={"GBX_DOCKER_PLATFORM": "amd64"})
     assert (flag_value(runs[0], "--platform"), runs[0][-2]) == (
         "linux/amd64",
         f"{TAG}-amd64",
@@ -665,7 +688,7 @@ def test_start_docker_sh_uses_the_same_choice(arm):
 
 
 def rebuild(sb, *args, env=None):
-    return sb.run(COMMANDS / "gbx-docker-rebuild.sh", "--no-pull", *args, env=env)
+    return sb.run(sb.commands / "gbx-docker-rebuild.sh", "--no-pull", *args, env=env)
 
 
 def lifecycle(sb):
@@ -741,7 +764,7 @@ def test_rebuild_start_passes_the_platform_on(arm):
 
 
 def start(sb, *args, env=None):
-    return sb.run(COMMANDS / "gbx-docker-start.sh", *args, env=env)
+    return sb.run(sb.commands / "gbx-docker-start.sh", *args, env=env)
 
 
 def test_start_keeps_a_running_container_of_the_other_architecture_and_says_so(arm):
@@ -853,7 +876,7 @@ def test_a_worktree_mismatch_recreate_honours_an_explicit_platform(arm):
 
 
 def restart(sb, *args, env=None):
-    return sb.run(COMMANDS / "gbx-docker-restart.sh", *args, env=env)
+    return sb.run(sb.commands / "gbx-docker-restart.sh", *args, env=env)
 
 
 def test_restart_privileged_checks_the_image_before_removing_the_container(arm):

@@ -80,7 +80,7 @@
       "type": "command",
       "severity": "warn",
       "enabled": true,
-      "cmd": "docker ps --format '{{.Names}}' 2>/dev/null | grep -qx geobrix-dev || { echo 'geobrix-dev container down; skipping python-lint gate (gbx:docker:start then gbx:lint:python --check)'; exit 0; }; bash scripts/commands/gbx-lint-python.sh --check",
+      "cmd": "C=\"$(bash -c '. scripts/docker/gbx-container.sh && gbx_load_local_env \"$PWD\" >/dev/null 2>&1 && printf %s \"$GBX_DEV_CONTAINER\"')\"; if [ -n \"$C\" ] && ! docker ps --format '{{.Names}}' 2>/dev/null | grep -Fxq -- \"$C\"; then echo \"$C container down; skipping python-lint gate (gbx:docker:start then gbx:lint:python --check)\"; exit 0; fi; bash scripts/commands/gbx-lint-python.sh --check",
       "expect_exit": 0,
       "timeout_seconds": 180
     },

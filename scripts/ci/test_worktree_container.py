@@ -5,7 +5,8 @@ ports and mounts in an untracked .gbx-local.env, or every container command refu
 must never stop, recreate or remount another's container.
 
 Run against the fake docker CLIs (_fake_docker_platform.py, _fake_docker_local.py) from a scratch copy
-of the scripts, so the root is a plain directory (not this checkout, which may itself be a worktree).
+of the scripts, so the root is a plain directory (not this checkout, which may itself be a worktree), or
+from a real `git worktree add` of one.
 """
 
 import json
@@ -22,16 +23,6 @@ from test_docker_platform import TAG, Sandbox
 COMMANDS = REPO_ROOT / "scripts" / "commands"
 DOCKER_DIR = REPO_ROOT / "scripts" / "docker"
 HOLD = ["/bin/bash", "/root/geobrix/scripts/docker/gbx-lock.sh", "hold"]
-
-
-def scratch_repo(tmp_path: Path) -> Path:
-    """A non-git copy of the scripts: its root is tmp_path/repo, a plain checkout."""
-    repo = tmp_path / "repo"
-    shutil.copytree(COMMANDS, repo / "scripts" / "commands")
-    (repo / "scripts" / "docker").mkdir()
-    for script in DOCKER_DIR.glob("*.sh"):
-        shutil.copy(script, repo / "scripts" / "docker")
-    return repo
 
 
 def local_env(tmp_path: Path, *lines: str) -> Path:
@@ -88,7 +79,7 @@ STREAMLINE = [
 )
 def test_the_run_arguments_follow_the_checkout(tmp_path, script, lines, tail):
     sb = Sandbox(tmp_path, "arm64")
-    repo = scratch_repo(tmp_path)
+    repo = sb.repo
     sb.image(f"{TAG}-arm64", "arm64")
     env_file = local_env(tmp_path, *lines) if lines else tmp_path / "no-such.env"
 
@@ -164,12 +155,17 @@ def load(root, env_file=None):
     return res.returncode, res.stderr, res.stdout
 
 
-def test_a_linked_worktree_without_a_local_env_file_is_refused(tmp_path):
+def init_repo(tmp_path: Path) -> Path:
     main = tmp_path / "main"
     main.mkdir()
     git(main, "init", "-q")
+    return main
+
+
+def commit_all(repo: Path):
+    git(repo, "add", "-A")
     git(
-        main,
+        repo,
         "-c",
         "user.name=t",
         "-c",
@@ -180,24 +176,54 @@ def test_a_linked_worktree_without_a_local_env_file_is_refused(tmp_path):
         "-m",
         "x",
     )
+
+
+@pytest.mark.parametrize(
+    "content, container",
+    [
+        (None, None),  # no file at all
+        ("", None),  # an empty file
+        ("GBX_DEV_PORT_JDWP=5006\nGBX_CARGO_REGISTRY=x\n", None),  # names no container
+        (
+            "GBX_DEV_CONTAINER=geobrix-dev\n",
+            None,
+        ),  # names the main checkout's container
+        (
+            "GBX_DEV_CONTAINER=geobrix-dev-wt\nGBX_DEV_PORT_JDWP=5006\n",
+            "geobrix-dev-wt",
+        ),
+    ],
+    ids=["no-file", "empty", "no-name", "main-name", "own-name"],
+)
+def test_a_linked_worktree_must_name_a_container_of_its_own(
+    tmp_path, content, container
+):
+    main = init_repo(tmp_path)
+    commit_all(main)
     wt = tmp_path / "wt"
     git(main, "worktree", "add", "-q", str(wt))
+    if content is not None:
+        (wt / ".gbx-local.env").write_text(content)
 
     rc, err, out = load(wt)
-    assert rc == 1 and "GBX_DEV_CONTAINER" in err
-    assert (
-        "container=[]" in out
-    )  # a command that forgot to require the file acts on nothing
 
-    assert load(main) == (
-        0,
-        "",
-        "container=[geobrix-dev]\n",
-    )  # the main checkout needs no file
-    (wt / ".gbx-local.env").write_text(
-        "GBX_DEV_CONTAINER=geobrix-dev-wt\nGBX_DEV_PORT_JDWP=5006\n"
-    )
-    assert load(wt) == (0, "", "container=[geobrix-dev-wt]\n")
+    if container:
+        assert (rc, err, out) == (0, "", f"container=[{container}]\n")
+    else:
+        assert rc == 1 and "GBX_DEV_CONTAINER" in err
+        assert (
+            "container=[]" in out
+        )  # a command that forgot to require it acts on nothing
+
+
+def test_the_main_checkout_needs_no_container_name(tmp_path):
+    main = init_repo(tmp_path)
+    commit_all(main)
+    default = (0, "", "container=[geobrix-dev]\n")
+
+    assert load(main) == default
+    (main / ".gbx-local.env").write_text("GBX_DEV_PORT_JDWP=5006\n")
+    assert load(main) == default
 
 
 @pytest.mark.parametrize(
@@ -235,6 +261,10 @@ def container_scripts():
                     yield Path(dirpath) / name
 
 
+# An image reference is geobrix-dev:<tag>; geobrix-dev:/path is a docker cp into the container.
+IMAGE_REFERENCE = re.compile(r"geobrix-dev:(?=[A-Za-z0-9<$])")
+
+
 def test_no_script_hard_codes_the_container_name():
     """Only an image reference (geobrix-dev:<tag>) and the repository name may spell it."""
     offenders = []
@@ -243,7 +273,7 @@ def test_no_script_hard_codes_the_container_name():
             code = line.strip()
             if code.startswith("#"):
                 continue
-            code = code.replace("geobrix-dev:", "").replace(
+            code = IMAGE_REFERENCE.sub("", code).replace(
                 'GBX_DEV_IMAGE_REPO="geobrix-dev"', ""
             )
             if "geobrix-dev" in code:
@@ -253,17 +283,85 @@ def test_no_script_hard_codes_the_container_name():
     assert offenders == []
 
 
+REQUIRES_LOCAL_ENV = re.compile(
+    r"^\s*(?:(?:if|then|else|elif|do)\s+)?(?:!\s*)?(?:check_docker|gbx_require_local_env)\b(?![\w-])",
+    re.M,
+)
+
+
 def test_every_command_that_uses_the_container_requires_a_usable_local_env():
     """common.sh loads the file without failing (host-only commands never need it); a command that
-    reaches the container must call check_docker or gbx_require_local_env (as a call, not as part of
-    another name), or a refused load goes unnoticed."""
-    requires = re.compile(r"(?<![\w-])(check_docker|gbx_require_local_env)(?![\w-])")
+    reaches the container must CALL check_docker or gbx_require_local_env (a comment or a help line
+    naming it does not count), or a refused load goes unnoticed."""
+
+    def calls_it(text):
+        code = "\n".join(
+            line for line in text.splitlines() if not line.lstrip().startswith("#")
+        )
+        return REQUIRES_LOCAL_ENV.search(code)
+
     missing = [
         p.name
         for p in sorted(COMMANDS.glob("gbx-*.sh"))
-        if "$GBX_DEV_CONTAINER" in p.read_text() and not requires.search(p.read_text())
+        if "$GBX_DEV_CONTAINER" in p.read_text() and not calls_it(p.read_text())
     ]
     assert missing == []
+
+
+# --- a linked worktree only touches a container that mounts it ---------------------------------------
+
+
+def linked_checkout(sb: Sandbox, tmp_path: Path, container: str, mount) -> Path:
+    """A real linked worktree of a git repo holding the scripts, with a .gbx-local.env naming `container`,
+    and the fake docker holding that container with /root/geobrix mounted from `mount` (default: the
+    worktree itself)."""
+    main = init_repo(tmp_path)
+    shutil.copytree(sb.repo / "scripts", main / "scripts")
+    shutil.copytree(sb.repo / "python", main / "python")
+    commit_all(main)
+    wt = tmp_path / "wt"
+    git(main, "worktree", "add", "-q", str(wt))
+    (wt / ".gbx-local.env").write_text(f"GBX_DEV_CONTAINER={container}\n")
+    sb.image(f"{TAG}-arm64", "arm64")
+    sb.image(f"{TAG}-amd64", "amd64")
+    sb.container("arm64", mount=str(mount or wt), name=container)
+    return wt
+
+
+@pytest.mark.parametrize(
+    "script, args",
+    [
+        ("gbx-docker-exec.sh", ["echo hi"]),
+        ("gbx-docker-start.sh", []),
+        ("gbx-docker-start.sh", ["--recreate"]),
+        ("gbx-docker-restart.sh", ["--privileged"]),
+        ("gbx-docker-rebuild.sh", ["--no-pull"]),
+    ],
+    ids=["exec", "start", "start-recreate", "restart-privileged", "rebuild"],
+)
+def test_a_linked_worktree_neither_uses_nor_removes_a_container_mounted_elsewhere(
+    tmp_path, script, args
+):
+    sb = Sandbox(tmp_path, "arm64")
+    wt = linked_checkout(sb, tmp_path, "gbx-dev-wt", mount="/some/other/checkout")
+
+    res = sb.run(wt / "scripts" / "commands" / script, *args)
+
+    assert res.returncode == 1, res.output
+    assert "/root/geobrix" in res.output and "/some/other/checkout" in res.output
+    touched = ("exec", "stop", "rm", "run", "start", "restart", "build", "tag")
+    assert [c[0] for c in sb.calls if c[0] in touched] == []
+    assert sb.final_state()["container"]["running"] is True
+
+
+def test_a_linked_worktree_uses_the_container_that_mounts_it(tmp_path):
+    sb = Sandbox(tmp_path, "arm64")
+    wt = linked_checkout(sb, tmp_path, "gbx-dev-wt", mount=None)
+
+    res = sb.run(wt / "scripts" / "commands" / "gbx-docker-exec.sh", "echo hi")
+
+    assert res.returncode == 0, res.output
+    assert [c[1] for c in sb.of("exec")] == ["gbx-dev-wt"]
 
 
 # --- a container whose architecture cannot be used is left alone ---------------------------------------
@@ -292,13 +390,12 @@ def test_an_unusable_container_architecture_is_refused(
     tmp_path, script, args, arch, gone
 ):
     sb = Sandbox(tmp_path, "arm64")
-    repo = scratch_repo(tmp_path)
     sb.image(f"{TAG}-arm64", "arm64")
     sb.image(f"{TAG}-amd64", "amd64")
     sb.container(arch, mount="/some/other/worktree")
     sb.state["container_image_gone"] = gone
 
-    res = sb.run(repo / "scripts" / "commands" / script, *args, cwd=tmp_path)
+    res = sb.run(sb.commands / script, *args)
 
     assert res.returncode == 1, res.output
     assert (

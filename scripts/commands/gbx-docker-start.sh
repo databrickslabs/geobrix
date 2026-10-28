@@ -134,14 +134,18 @@ if ! docker info >/dev/null 2>&1; then
     echo -e "${RED}❌ Docker is not running or not accessible${NC}"
     exit 1
 fi
+# From a linked worktree, a container that does not mount this worktree is neither started nor recreated.
+gbx_require_owned_container "$PROJECT_ROOT"
 
 print_separator
 echo -e "${CYAN}🔍 Checking container status...${NC}"
 print_separator
 
 # Worktree-aware mount-source check. If this checkout's container exists,
-# verify its /root/geobrix mount source matches the current worktree;
+# verify its /root/geobrix mount source matches the current checkout;
 # otherwise recreate so the agent / user gets the right files in-container.
+# That repair is for the main checkout's geobrix-dev only (a worktree-made mount of it). A linked
+# worktree never removes a container it does not own: gbx_require_owned_container refuses first.
 existing_mount_source() {
     docker inspect --format '{{ range .Mounts }}{{ if eq .Destination "/root/geobrix" }}{{ .Source }}{{ end }}{{ end }}' "$GBX_DEV_CONTAINER" 2>/dev/null
 }

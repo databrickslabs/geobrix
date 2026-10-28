@@ -160,6 +160,8 @@ if ! docker info >/dev/null 2>&1; then
     echo -e "${RED}❌ Docker is not running or not accessible${NC}"
     exit 1
 fi
+# From a linked worktree, a container that does not mount this worktree is never stopped or removed below.
+gbx_require_owned_container "$PROJECT_ROOT"
 
 # Stop and remove existing container so next start uses new image. Only a container running the
 # architecture being rebuilt is replaced by this build; one of the other architecture is unaffected by

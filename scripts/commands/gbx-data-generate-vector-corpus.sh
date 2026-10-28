@@ -95,7 +95,7 @@ df.write.format(fmt).mode("overwrite").save(out)
 print(f"wrote {n} features to {out} as {fmt}")
 PYEOF
 
-docker cp "$TMPSCRIPT" "geobrix-dev:/tmp/gbx-vec-corpus-gen.py"
+docker cp "$TMPSCRIPT" "$GBX_DEV_CONTAINER:/tmp/gbx-vec-corpus-gen.py"
 rm -f "$TMPSCRIPT"
 
 docker exec "$GBX_DEV_CONTAINER" bash -lc \

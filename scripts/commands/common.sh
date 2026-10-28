@@ -39,6 +39,7 @@ check_docker() {
         echo -e "  ${YELLOW}bash scripts/commands/gbx-docker-start.sh${NC}"
         exit 1
     fi
+    gbx_require_owned_container "$GBX_COMMON_ROOT"
     
     if ! docker ps --format '{{.Names}}' | grep -Fxq -- "$GBX_DEV_CONTAINER"; then
         echo -e "${YELLOW}⚠️  Container is not running. Starting...${NC}"

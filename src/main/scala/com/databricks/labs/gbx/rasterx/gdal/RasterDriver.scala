@@ -127,7 +127,14 @@ object RasterDriver {
             if (isZip) s"/vsizip//vsimem/$uuid.zip/$uuid.$extension"
             else s"/vsimem/temp_raster_$uuid.$extension"
         gdal.FileFromMemBuffer(tempPath, bytes)
-        gdal.Open(tempPath)
+        // An unreadable payload opens as null (or throws): nothing owns the in-memory file then, so unlink it here.
+        val ds = try gdal.Open(tempPath) catch {
+            case e: Exception =>
+                gdal.Unlink(tempPath)
+                throw e
+        }
+        if (ds == null) gdal.Unlink(tempPath)
+        ds
     }
 
     /** Encode a Dataset to bytes: always translates to a fresh /vsimem/ path so the output

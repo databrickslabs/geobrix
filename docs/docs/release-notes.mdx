@@ -308,6 +308,11 @@ formats.
   a variable of the same name in the root returned the root's values, silently wrong data (this
   also affected v0.5.2), and a variable only in the group failed with `No variable named …`. Both
   now read the group.
+- **`netcdf_gbx` vector mode reads times, dates and flags as such.** A CF time variable came
+  back as a `STRING` of epoch nanoseconds and a 0 / 1 flag as a float, so a `TIMESTAMP`,
+  `DATE` or `BOOLEAN` column written by `netcdf_gbx` did not read back as one. A time variable
+  is now a `TIMESTAMP` (UTC), one in `days since …` units a `DATE`, and a variable that flags
+  `0` and `1` as `false true` a `BOOLEAN`; a `NULL` stays `NULL`. Other variables are unchanged.
 
 ### Raster writers
 
@@ -317,6 +322,15 @@ formats.
   size-adaptive ZSTD, and overviews when the tile is larger than 512 pixels), as
   `rst_cog_convert` writes it; other output formats are unchanged. The heavyweight
   `rst_asformat` still writes a plain GeoTIFF for `'COG'`; a later release fixes that.
+- **The lightweight `rst_asformat` takes a driver name in any case and records `GTiff` for
+  `'COG'`.** `'png'` and `'cog'` work like `'PNG'` and `'COG'` (GDAL looks a driver up in any
+  case, as the heavyweight tier does), and the Surfer grid formats (`GS7BG`, `GSAG`, `GSBG`) and
+  `VICAR` are available. The tile of `rst_asformat(tile, 'COG')` has `metadata['driver'] = 'GTiff'`,
+  the driver its bytes open as and the one `rst_cog_convert` records, where it had `'COG'`: a
+  writer now passes those bytes through, keeping the layout and codec you asked for, instead of
+  re-encoding them with its own defaults. `rst_cog_convert` and `rst_asformat(..., 'COG')` no
+  longer log a GDAL warning per tile that the COG driver ignores the source's `TILED`,
+  `BLOCKXSIZE`, `BLOCKYSIZE` or `PHOTOMETRIC` option; the output is unchanged.
 - **The lightweight `rst_cog_convert` keeps the colour interpretation of RGB tiles.** The red,
   green and blue bands of a COG it wrote were left unlabelled (only an alpha band was kept);
   they now keep their red, green and blue labels, as in the source tile.
@@ -364,6 +378,10 @@ formats.
   `smallint` a 16-bit integer in the layer; the earlier encoder wrote both as doubles. A
   column named `shape` (any letter case) is refused with a clear error, because the layer's
   geometry field is `SHAPE`.
+- **`file_gdb_gbx` reads an empty `geometryType` as not given, and refuses `unknown` in any
+  case.** `geometryType=''` was refused with a message about `'Unknown'`, and `'unknown'` slipped
+  past that check into an error from the driver; the first now takes the type of the first
+  geometry, the second gets the same message as `'Unknown'`.
 - **New option `targetArcGisVersion`** (`auto`, `ALL` or `ARCGIS_PRO_3_2_OR_LATER`) decides which
   Esri clients can open the layer. By default (`auto`), a DataFrame with a long (64-bit integer),
   date or timestamp column targets ArcGIS Pro 3.2 or later, so those columns keep their exact
@@ -647,6 +665,19 @@ formats.
   `gbx_rst_convolve` writes each block's result where the block is (it wrote it shifted and left
   the rest as the input), and in both tiers adds only the neighbours that are on the raster, so
   the two agree over the whole raster, its edges included (the lightweight one replicated the edge).
+- **A lightweight merge of tiles in two coordinate systems no longer overwrites valid pixels
+  with zeros.** `gbx_rst_merge` and `gbx_rst_merge_agg` reproject a tile in another system onto
+  the reference system. The box around its footprint (the corners of a rotated one, the pad of a
+  footprint snapped to the pixel grid) was filled with zeros that read as data when the tile
+  declares no NoData, so when that tile was merged last it replaced valid pixels of the tile
+  beside it (about 7,000 of 360,000 across a UTM zone boundary, in memory and streamed alike). The
+  reprojected tile now carries the footprint of the warp as its mask, so the pixels it does not
+  reach are invalid; the mosaic of such a group has a mask band, and a pixel no tile covers is
+  invalid in it.
+- **The `cog_gbx` mosaic index masks a multi-band tile by every band.** Where a source with a
+  mask band and a source without one are written together, a pixel of the tile without one was
+  invalid when band 1 alone was NoData there. It is invalid now only where every band is NoData,
+  the validity rule of both tiers.
 - **The lightweight reprojection and the tile encoders keep a source's own mask band.**
   `gbx_rst_transform` and `gbx_rst_transformcrs` dropped the own mask band (not an alpha band) of a
   source, as JPEG-compressed aerial imagery often carries, so its masked pixels read as valid data;

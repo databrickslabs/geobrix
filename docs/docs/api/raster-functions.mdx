@@ -811,7 +811,7 @@ Combine or merge rasters in group-by (7 total).
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._bng` cell math and `rasterio`. BNG cell IDs (**STRING**) are parsed via `pygx._bng` to EPSG:27700-native cell geometries and burned into the output band — the output canvas is EPSG:27700 throughout with no warp step (this aggregator takes cellid+value rows, not a raster tile).
@@ -1064,7 +1064,7 @@ _Multi-row fixture: 4 WKB POINT rows with observations 10–40 over a `[0,0,1,1]
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **h3**. Aggregate — `groupBy(...).agg(rx.rst_h3_rasterize_agg("cellid", "value", ...))` burns each H3 cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent and pixel size are derived automatically from the H3 resolution unless explicit bounds are supplied; `kring_pad` (default 1) expands the canvas by that many rings to avoid clipping edge cells.
@@ -1157,7 +1157,7 @@ _Multi-tile fixture: 3 per-band rows from `rgb_nir_small.tif`. All tabs use the 
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 The lightweight implementation is backed by `pygx._quadbin` cell math and `rasterio` — it burns each quadbin cell's geometry/value into the output band via `rasterio.features.rasterize`, matching the heavyweight cell set and burn values exactly.
@@ -1205,7 +1205,7 @@ _Multi-row fixture: 3 quadbin zoom-12 cell rows near central London with burn va
 
 <Tier both/> <Impl groupedAgg/>
 
-If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
+If a cell id repeats in a group with different values, the **largest** value is burned, whatever order the rows arrive in. In the lightweight tier a null value (or `NaN`) never wins against a number, and a cell whose values are all null burns `NaN`, also when the whole `value` column is null; only an omitted `value` (or an untyped `NULL`) is the presence mask and burns `1.0`. A `DECIMAL` column reaches the aggregate without its type, so a column of `DECIMAL` nulls counts as omitted too: cast it to `DOUBLE` first. The heavyweight tier counts a null value as `1.0` in that comparison, and burns `1.0` for a column of nulls.
 
 :::note Lightweight tier (pyrx)
 Powered by **rasterio** + **pygx** custom-grid cell math. Aggregate — `groupBy(...).agg(rx.rst_custom_rasterize_agg("cellid", "value", ...))` burns each custom-grid cell's centroid pixel (or spatial-envelope pixels with `mode='spatial_envelope'`) into one raster tile per group. Cell IDs are BIGINT encoded by the custom-grid layout. When `value` is omitted (or an untyped `NULL`), all burned pixels carry `1.0` (presence mask); a typed column of nulls burns `NaN` in the lightweight tier. The extent auto-derives from the cell set when canvas parameters are null.

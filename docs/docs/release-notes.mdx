@@ -302,6 +302,12 @@ formats.
 
 ### NetCDF reader
 
+- **`dimIndex` and `bandDim` are honored in `spark.read` (fix).** With
+  `spark.read.format("netcdf_gbx").option("dimIndex", "level=1")` or `.option("bandDim", "time")`,
+  the option was ignored and every variable read its first slice of each extra dimension, as if
+  it had not been set (this also affected v0.5.1 and v0.5.2): Spark gives a reader its option
+  names in lower case, and the reader looked for the camel-case ones. Both now work. `fanout`
+  was not affected.
 - **`group` is honored when a variable is read without decoding (fix).** When xarray cannot apply
   a variable's CF masks (for example, integer data with an integer `scale_factor`), `netcdf_gbx`
   reads the raw values instead. That read opened the file's root group, not the `group` you set:

@@ -43,6 +43,21 @@ def test_force_gtiff_is_verbatim_even_if_metadata_says_otherwise():
     assert out == raw
 
 
+def test_a_zarr_tile_is_written_as_the_geotiff_its_bytes_are():
+    """A Zarr tile names its source store in its metadata (driver Zarr) but carries GeoTIFF bytes,
+    so it passes through verbatim; a driver the writer forces wins over that name."""
+    raw = _gtiff_bytes()
+    meta = {"driver": "Zarr", "format": "Zarr"}
+    out = _write.tile_to_bytes(
+        cellid=-1, raster_bytes=raw, metadata=meta, force_driver=None
+    )
+    assert out == raw
+    forced = _write.tile_to_bytes(
+        cellid=-1, raster_bytes=raw, metadata=meta, force_driver="COG"
+    )
+    assert forced != raw  # the forced COG is a re-encode, not the verbatim bytes
+
+
 def test_non_gtiff_target_reencodes_same_pixels_with_tags():
     raw = _gtiff_bytes()
     meta = {"driver": "COG", "format": "COG", "compression": "DEFLATE"}

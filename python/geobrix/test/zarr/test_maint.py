@@ -7,6 +7,7 @@ asked what it would do a week from now; the Delta history keeps its real timesta
 import hashlib
 import json
 import os
+import time
 import uuid
 from datetime import datetime, timedelta, timezone
 
@@ -42,6 +43,8 @@ from databricks.labs.gbx.zarr._write import gbx_zarr_write  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402
     ZarrError,
     ZarrOwnershipError,
+    ZarrReadOnly,
+    ZarrUnsupported,
     ZarrVersionUnavailable,
 )
 
@@ -302,18 +305,23 @@ def test_optimize_skips_a_shard_that_changed_while_it_ran(
     """Another write replaces a chunk of one shard between the fold's read and its commit:
     that shard is left as it is (and reported), the other folds."""
     table, _, _ = _store(spark_delta, drop, tmp_path)
-    real, state = M.commit, {"done": False}
+    real, state, pauses = M.commit, {"done": False, "busy": 0}, []
 
     def interfere(spark, name, rows, **kw):
-        if kw["meta"].get("mode") == "optimize" and not state["done"]:
-            state["done"] = True
-            gbx_zarr_write(_fill_block(spark, value=8.0), name, mode="update")
+        if kw["meta"].get("mode") == "optimize":
+            if not state["done"]:
+                state["done"] = True
+                gbx_zarr_write(_fill_block(spark, value=8.0), name, mode="update")
+            elif state["busy"] < 7:  # more rounds lost than a bare five-try loop allows
+                state["busy"] += 1
+                raise M.ConcurrentCommit("another commit touched the same rows")
         return real(spark, name, rows, **kw)
 
     no_hooks.setattr(M, "commit", interfere)
+    no_hooks.setattr(_write, "_pause", pauses.append)  # the writes' jittered wait
     with caplog.at_level("WARNING"):
         gbx_zarr_optimize(spark_delta, table, variables="t2m")
-    assert state["done"]
+    assert state["done"] and len(pauses) == 7
     assert [r["key"] for r in _live(spark_delta, table, "shard")] == ["c/1/0/0"]
     left = _live(spark_delta, table, "chunk")
     assert {r["shard_key"] for r in left} == {"c/0/0/0"} and len(left) == 8
@@ -399,17 +407,18 @@ def _orphan(layered):
     """A pack file of a write that never committed (a crash after its files, say)."""
     folder = layered.root / "data" / "t2m" / uuid.uuid4().hex
     folder.mkdir(parents=True)
-    (folder / "part-0.zpack").write_bytes(b"orphan")
-    return f"data/t2m/{folder.name}/part-0.zpack"
+    pack = f"part-{uuid.uuid4().hex}.zpack"
+    (folder / pack).write_bytes(b"orphan")
+    return f"data/t2m/{folder.name}/{pack}"
 
 
 def test_vacuum_keeps_live_tagged_and_retained(spark_delta, layered):
     orphan = _orphan(layered)
-    got = _reasons(gbx_zarr_vacuum(spark_delta, layered.table, retain="10 days"))
+    got = _reasons(gbx_zarr_vacuum(spark_delta, layered.table))
     assert got.pop(orphan) == ("kept", "recent")  # young: its write may be in flight
-    props = M._tblprops(spark_delta, layered.table)  # nothing went: no horizon, but the
-    assert M.HORIZON_PROP not in props  # Delta retention follows the retain used
-    assert props["delta.deletedFileRetentionDuration"] == "interval 10 days"
+    props = M._tblprops(spark_delta, layered.table)
+    assert M.HORIZON_PROP not in props  # nothing went: no horizon
+    assert props["delta.deletedFileRetentionDuration"] == "interval 7 days"
     kept = _by_array(got, "t2m")
     by_reason = {}
     for file, (action, reason) in kept.items():
@@ -527,11 +536,107 @@ def test_tag_survives_vacuum_and_reads_by_tag(spark_delta, layered, monkeypatch)
     assert any(a == "would_delete" for a, _ in dry.values())  # nothing holds them now
 
 
-@pytest.mark.parametrize("case", ["registered", "foreign-owner", "read-only"])
+def test_vacuum_keeps_deltas_retention_at_the_stores_and_survives_a_delta_vacuum(
+    spark_delta, layered, monkeypatch
+):
+    """A vacuum with a shorter retain used to lower Delta's retention to it. Delta's own
+    maintenance (predictive optimization) then dropped the files of versions the store still
+    promised: their reads failed inside Delta and every later vacuum failed on them. Now
+    Delta's retention is never set below the store's retain (a lower one is raised again, a
+    longer log retention is kept), a version Delta dropped is ``ZarrVersionUnavailable``,
+    and a later vacuum copes with it."""
+    spark, table = spark_delta, layered.table
+    spark.sql(
+        f"ALTER TABLE {table} SET TBLPROPERTIES ("
+        "'delta.deletedFileRetentionDuration' = 'interval 1 days', "
+        "'delta.logRetentionDuration' = 'interval 90 days')"
+    )
+    gbx_zarr_vacuum(spark, table, retain="1 day")
+    props = M._tblprops(spark, table)
+    assert props["delta.deletedFileRetentionDuration"] == "interval 7 days"
+    assert props["delta.logRetentionDuration"] == "interval 90 days"
+
+    # Delta's maintenance a week on: it compacts, then removes every file no current
+    # version needs (the check is relaxed for the session in place of waiting a week)
+    check = "spark.databricks.delta.retentionDurationCheck.enabled"
+    spark.conf.set(check, "false")
+    try:
+        spark.sql(f"OPTIMIZE {table}").collect()
+        spark.sql(f"VACUUM {table} RETAIN 0 HOURS").collect()
+    finally:
+        spark.conf.set(check, "true")
+    with pytest.raises(ZarrVersionUnavailable, match="Delta has removed"):
+        M.snapshot(spark, table, version_as_of=layered.v1)
+
+    t1, t2 = (_micros(spark, table, v) for v in (layered.v1, layered.v2))
+    midway = datetime.fromtimestamp((t1 + t2) / 2 / 1e6, timezone.utc)
+    monkeypatch.setattr(_maint, "_utcnow", lambda: midway + timedelta(days=7))
+    got = _reasons(
+        gbx_zarr_vacuum(spark, table)
+    )  # its horizon version is one Delta dropped
+    assert {"live", "tagged"} <= {r for _, r in _by_array(got, "t2m").values()}
+    assert (H.read_variable(spark, table, "t2m", version_as_of="tag:keep") == 2.0).all()
+
+
+def test_a_write_in_flight_keeps_its_files_from_a_vacuum_unless_forced(
+    spark_delta, drop, tmp_path, no_hooks, monkeypatch
+):
+    """The files of a write that has not committed are kept for the store's retain, whatever
+    ``retain`` the vacuum is given. With ``force=True`` they can go, and then the write
+    fails when it comes to commit instead of committing a version that cannot be read.
+    """
+    table, root, _ = _store(spark_delta, drop, tmp_path)
+    _at(monkeypatch, timedelta(hours=2))  # the writes below have been running two hours
+    fates = {}
+
+    def vacuum_midway(force):
+        def hook(write_id):
+            mine = {
+                p.relative_to(root).as_posix()
+                for p in (root / "data").rglob(f"{write_id}/*.zpack")
+            }
+            got = _reasons(
+                gbx_zarr_vacuum(spark_delta, table, retain="1 hour", force=force)
+            )
+            fates.update({f: got.get(f) for f in mine})
+
+        return hook
+
+    def put(value):
+        return _blocks(
+            spark_delta, ("t2m", (0, 0, 0), np.full(CHUNK, value, "float32"))
+        )
+
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", vacuum_midway(False))
+    gbx_zarr_write(put(9.0), table, mode="update")
+    assert fates and set(fates.values()) == {("kept", "recent")}
+    assert (H.read_variable(spark_delta, table, "t2m")[0:12, 0:5, 0:6] == 9.0).all()
+
+    fates.clear()
+    wid = uuid.uuid4().hex
+    no_hooks.setattr(_write, "_BEFORE_COMMIT", vacuum_midway(True))
+    with pytest.raises(ZarrError, match="pack file") as e:
+        gbx_zarr_write(put(5.0), table, mode="update", write_id=wid)
+    assert set(fates.values()) == {("deleted", "uncommitted")}
+    assert "force=True" in str(e.value) and "again" in e.value.fix
+    assert M.find_commit_version(spark_delta, table, wid) is None
+    assert (H.read_variable(spark_delta, table, "t2m")[0:12, 0:5, 0:6] == 9.0).all()
+
+
+@pytest.mark.parametrize(
+    "case",
+    ["registered", "foreign-owner", "read-only", "foreign-file", "nested-store"],
+)
 def test_vacuum_never_touches_base_or_unowned_root(
     spark_delta, drop, tmp_path, no_hooks, monkeypatch, case
 ):
+    """Only the packs this store wrote are candidates: not the vendor's base, not another
+    table's root, not a file a user keeps in the overlay root, and not a whole store that was
+    created under this one's ``data/`` (marker included)."""
     _at(monkeypatch, timedelta(days=60))
+    old = (
+        time.time() - 90 * 86400
+    )  # all of it is old enough to be deleted, were it ours
     if case == "foreign-owner":
         table, root, _ = _store(spark_delta, drop, tmp_path)
         marker = root / OWNER_MARKER
@@ -541,15 +646,36 @@ def test_vacuum_never_touches_base_or_unowned_root(
             gbx_zarr_vacuum(spark_delta, table)
         assert any((root / "data").rglob("*.zpack"))
         return
+    if case == "nested-store":
+        table, root, _ = _store(spark_delta, drop, tmp_path, label="outer")
+        inner = _table("inner")
+        drop(inner)
+        nested = root / "data" / "nested"
+        gbx_zarr_write(
+            _cube(), inner, root=str(nested), chunks=CHUNKS, spark=spark_delta
+        )
+        for p in nested.rglob("*"):
+            os.utime(p, (old, old))
+        mine = _hashes(nested)
+        got = _reasons(gbx_zarr_vacuum(spark_delta, table))
+        assert not [f for f in got if f.startswith("data/nested/")]
+        assert _hashes(nested) == mine and OWNER_MARKER in mine
+        assert H.read_variable(spark_delta, inner, "t2m").shape == (48, 10, 12)
+        return
     store = make_era5_like(tmp_path / "base.zarr", zarr_format=3)
     table = _table(case.replace("-", "_"))
     drop(table)
     kw = {"writable": True, "overlay_root": str(tmp_path / "ov")}
+    users = tmp_path / "ov" / "data" / "raw" / "observations_2025.nc"
+    if case == "foreign-file":  # a folder the user already keeps files in
+        users.parent.mkdir(parents=True)
+        users.write_bytes(b"user data that predates the registration")
+        os.utime(users, (old, old))
     gbx_zarr_register(
-        spark_delta, str(store), table, **(kw if case == "registered" else {})
+        spark_delta, str(store), table, **(kw if case != "read-only" else {})
     )
     base = _hashes(store)
-    if case == "registered":
+    if case != "read-only":
         for value in (3.0, 4.0):  # the second write supersedes the first one's chunk
             gbx_zarr_write(
                 _blocks(
@@ -566,6 +692,10 @@ def test_vacuum_never_touches_base_or_unowned_root(
         assert {r for _, r in got.values()} >= {"live"}
         assert sum(a == "deleted" for a, _ in got.values()) == 1  # the superseded chunk
         assert _hashes(tmp_path / "ov").keys() >= {OWNER_MARKER}
+    if case == "foreign-file":
+        assert users.read_bytes().startswith(b"user data") and not [
+            f for f in got if "raw" in f
+        ]
 
 
 def test_vacuum_retain_floor_and_malformed_retain(
@@ -578,6 +708,11 @@ def test_vacuum_retain_floor_and_malformed_retain(
         spark_delta, table, retain="59 minutes", force=True, dry_run=True
     )
     assert short.columns == ["file", "action", "reason"]
+    with pytest.raises(
+        ValueError, match="geobrix.zarr.retain"
+    ) as e:  # not silently capped
+        gbx_zarr_vacuum(spark_delta, table, retain="30 days")
+    assert "gbx_zarr_tag" in str(e.value)
     spark_delta.sql(
         f"ALTER TABLE {table} SET TBLPROPERTIES ('geobrix.zarr.retain' = 'soon')"
     )
@@ -588,8 +723,9 @@ def test_vacuum_retain_floor_and_malformed_retain(
 def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
     spark_delta, drop, tmp_path
 ):
-    """Ruling Z10: the retention property is set, then a plain VACUUM runs (never a RETAIN
-    clause, so retentionDurationCheck is never touched)."""
+    """Ruling Z10: the retention property is set (never below the store's retain), then a
+    plain VACUUM runs, never a RETAIN clause, so retentionDurationCheck is never touched.
+    Another file mode that GeoBrix does not write yet is refused."""
     table = _table("fm")
     drop(table)
     M.create_manifest(
@@ -597,11 +733,25 @@ def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
         table,
         M.StoreProps("managed", str(tmp_path / "fm"), None, True, "managed", "7 days"),
     )
-    rows = gbx_zarr_vacuum(spark_delta, table, retain="8 days").collect()
+    spark_delta.sql(
+        f"ALTER TABLE {table} SET TBLPROPERTIES "
+        "('delta.deletedFileRetentionDuration' = 'interval 1 days')"
+    )
+    rows = gbx_zarr_vacuum(spark_delta, table).collect()
     props = M._tblprops(spark_delta, table)
-    assert props["delta.deletedFileRetentionDuration"] == "interval 8 days"
+    assert props["delta.deletedFileRetentionDuration"] == "interval 7 days"
     assert props[M.HORIZON_PROP]
     assert {r["reason"] for r in rows} <= {"delta"}
+
+    other = _table("fe")
+    drop(other)
+    M.create_manifest(
+        spark_delta,
+        other,
+        M.StoreProps("managed", str(tmp_path / "fe"), None, True, "external", "7 days"),
+    )
+    with pytest.raises(ZarrUnsupported, match="external"):
+        gbx_zarr_vacuum(spark_delta, other)
 
 
 # --- history -----------------------------------------------------------------------------
@@ -666,8 +816,21 @@ def test_restore_round_trip(spark_delta, drop, tmp_path, no_hooks):
 
     with pytest.raises(ValueError, match="version_as_of or timestamp_as_of"):
         gbx_zarr_restore(spark_delta, table)
+    real, busy, pauses = M.commit, [0], []
+
+    def flaky(
+        spark, name, rows, **kw
+    ):  # seven lost rounds: more than a bare retry loop
+        if kw["meta"].get("mode") == "restore" and busy[0] < 7:
+            busy[0] += 1
+            raise M.ConcurrentCommit("another commit touched the same rows")
+        return real(spark, name, rows, **kw)
+
+    no_hooks.setattr(M, "commit", flaky)
+    no_hooks.setattr(_write, "_pause", pauses.append)  # the writes' jittered wait
     back = gbx_zarr_restore(spark_delta, table, version_as_of=v1)
-    assert back > v2
+    no_hooks.setattr(M, "commit", real)
+    assert back > v2 and len(pauses) == 7
     np.testing.assert_array_equal(H.read_variable(spark_delta, table, "t2m"), first)
     row = spark_delta.sql(
         f"SELECT key FROM {table} WHERE kind = 'commit' AND meta LIKE '%\"restore\"%'"
@@ -734,10 +897,40 @@ def test_restore_refuses_vacuumed_version(
         gbx_zarr_restore(spark_delta, table, version_as_of=v1)
     assert "later version or" in e.value.fix and "tag" in e.value.fix
     assert _latest(spark_delta, table) == latest  # nothing was committed
+    with pytest.raises(ZarrVersionUnavailable):  # a tag must not pin it either
+        gbx_zarr_tag(spark_delta, table, "old", version_as_of=v1)
+    assert spark_delta.sql(f"SELECT 1 FROM {table} WHERE tag = 'old'").first() is None
     np.testing.assert_array_equal(
         H.read_variable(spark_delta, table, "t2m"),
         np.full((48, 10, 12), 2.0, "float32"),
     )
+
+
+def test_restore_refuses_a_read_only_registration_and_a_base_that_moved(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """A read-only registration is not restored. On a writable one, a version whose base
+    objects changed since (a sync recorded it) is refused: restoring it would commit rows
+    that read as drift."""
+    ro = _table("ro")
+    drop(ro)
+    first = gbx_zarr_register(
+        spark_delta, str(make_era5_like(tmp_path / "ro.zarr", zarr_format=3)), ro
+    )
+    with pytest.raises(ZarrReadOnly):
+        gbx_zarr_restore(spark_delta, ro, version_as_of=first)
+
+    store, table = _registered(spark_delta, drop, tmp_path, "mv")
+    before = M.snapshot(spark_delta, table).version
+    shard = store / "t2m" / "c" / "0" / "0" / "0"
+    stat = os.stat(shard)  # the vendor rewrites it
+    os.utime(shard, ns=(stat.st_atime_ns, stat.st_mtime_ns + 5_000_000_000))
+    gbx_zarr_sync(spark_delta, table)
+    latest = _latest(spark_delta, table)
+    with pytest.raises(ZarrVersionUnavailable, match="changed since") as e:
+        gbx_zarr_restore(spark_delta, table, version_as_of=before)
+    assert "gbx_zarr_sync" in e.value.fix and _latest(spark_delta, table) == latest
+    assert H.read_variable(spark_delta, table, "t2m").shape[0] == 48  # still reads
 
 
 def _first_write(spark, table, version):

@@ -12,6 +12,7 @@ Linux only (the payload loads on Linux; the macOS host has neither payload nor p
 import json
 import os
 import platform
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ SRC = REPO / "python" / "geobrix" / "src"
 PAYLOAD = REPO / "build" / "env-wheel" / "env6" / "payload"
 SMOKE = REPO / "scripts" / "native" / "rust_native_smoke.py"
 NAME = "_gbx_native_probe.abi3.so"
+HASHED_NEED = re.compile(rb"lib[A-Za-z0-9_+]+-[0-9a-f]{8}\.so[.0-9]*")
 
 
 def _payload_with_probe(tmp_path, a):
@@ -46,23 +48,15 @@ def _payload_with_probe(tmp_path, a):
             f"PRECONDITION MISSING: {probe} (gbx:build:native --target rust-native) or {lib} "
             "(gbx:build:wheel --env 6)"
         )
-    ours = json.loads((PAYLOAD / "_native" / a / "MANIFEST.json").read_text())[
-        "sonames"
-    ]
-    built = (
-        REPO
-        / "build"
-        / "native"
-        / "out"
-        / a
-        / "stage-native"
-        / "gdal-native"
-        / "MANIFEST.json"
-    )
-    if json.loads(built.read_text())["sonames"] != ours:
+    # the payload libraries the probe needs, by their hashed names; a payload from another
+    # stage-native build has other names: a stale artifact, not a defect
+    needs = sorted({m.decode() for m in HASHED_NEED.findall(probe.read_bytes())})
+    absent = [n for n in needs if not (lib / n).is_file()]
+    if not needs or absent:
         pytest.skip(
-            "PRECONDITION MISSING: the env6 payload and the probe come from different stage-native builds "
-            "(rebuild the wheel with gbx:build:wheel --env 6)"
+            f"PRECONDITION MISSING: {lib} has no {absent or 'hashed library'} the probe needs "
+            "(rebuild both from one stage-native: gbx:build:native --target rust-native, "
+            "gbx:build:wheel --env 6)"
         )
     root = tmp_path / "payload"
     (root / "_native" / a / "rs").mkdir(parents=True)

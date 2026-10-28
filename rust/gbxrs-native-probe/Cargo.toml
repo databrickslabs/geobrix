@@ -3,7 +3,7 @@
 # Built and checked by `gbx:build:native --target rust-native`; the recipe a kernel crate copies is in
 # scripts/commands/gbx-build-native.md ("Rust crates that call GDAL, PROJ or GEOS").
 #
-# The georust crates are pinned exactly here and in scripts/native/pins.conf (CRATE_*_VERSION, audited against
+# The georust crates are pinned exactly here and in scripts/native/rust-pins.conf (CRATE_*_VERSION, audited against
 # Cargo.lock by pins.py). None of their bundled native builds is used (deny.toml bans them):
 #   gdal-sys `bindgen`: 0.12.0's prebuilt bindings stop at GDAL 3.12, so they are generated from the payload's 3.13
 #            headers (libclang comes with the rust-native build stage). Not the high-level `gdal` crate: 0.19.0 does not

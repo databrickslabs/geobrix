@@ -38,12 +38,12 @@ cp /recipes/cargo-offline.toml "$CARGO_HOME/config.toml"
 unset GDAL_HOME GDAL_LIB_DIR GDAL_INCLUDE_DIR GDAL_VERSION GDAL_STATIC GEOS_LIB_DIR GEOS_VERSION
 export PKG_CONFIG_LIBDIR="$GN/lib/pkgconfig" PKG_CONFIG_PATH="$GN/lib/pkgconfig" LIBRARY_PATH="$GN/lib-dev"
 export _PROJ_SYS_TEST_EXPECT_BUILD_FROM_SRC=0
-echo "dev kit: gdal $(pkg-config --modversion gdal), proj $(pkg-config --modversion proj), geos $(pkg-config --modversion geos), sqlite3 $(pkg-config --modversion sqlite3); $(cat /opt/clang-libs-version.txt)"
+echo "dev kit: gdal $(pkg-config --modversion gdal), proj $(pkg-config --modversion proj), geos $(pkg-config --modversion geos), sqlite3 $(pkg-config --modversion sqlite3); $(tr "\n" " " < /opt/clang-libs-version.txt)"
 
 rm -rf "$OUT/wheel" "$OUT/payload"
 mkdir -p "$OUT/wheel" "$OUT/payload/_native/$ARCH/rs"
 t0=$(date +%s)
-(cd "$CRATE" && maturin build --release --offline --compatibility linux --auditwheel skip -i "$PY" --out "$OUT/wheel") \
+(cd "$CRATE" && maturin build --release --offline --locked --compatibility linux --auditwheel skip -i "$PY" --out "$OUT/wheel") \
     || fail "maturin build"
 seconds=$(($(date +%s) - t0))
 whl="$(ls "$OUT"/wheel/*-cp312-abi3-linux_"$ARCH".whl 2> /dev/null | head -n 1 || true)"

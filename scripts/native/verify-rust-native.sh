@@ -8,7 +8,9 @@
 #   /verify (ro)                            scripts/native
 # Prints `ok: <check>` per check and stops at the first `VERIFY FAILED: <what>`; the last line is `VERIFY OK ...`.
 #   1 link: NEEDED holds the payload's hashed libgdal, libgeos_c and libproj (from MANIFEST.json), every NEEDED is in
-#     lib/ or the manylinux policy set (glibc, libstdc++, libgcc_s), RUNPATH is $ORIGIN/../lib and there is no RPATH
+#     lib/ or the manylinux policy set (glibc, libstdc++, libgcc_s), RUNPATH is $ORIGIN/../lib and there is no RPATH;
+#     in .dynsym every GDAL/OGR/OSR/CPL/VSI, GEOS and proj_ entry point is undefined (UND: resolved from the payload,
+#     never a static copy beside a dynamic one) and the only defined global is PyInit_<module>
 #   2 the payload layout (_native/<arch>/{lib,rs}, _native/share, _vendor/<arch> with osgeo): ldd resolves every library
 #     into _native/<arch>/lib or to a policy-set system library, nothing is "not found"
 #   3 auditwheel show on a throwaway wheel of _native/<arch>/{lib,rs}: manylinux_2_28_<arch>, no external library
@@ -71,6 +73,30 @@ if runpath != ["$ORIGIN/../lib"]:
 ours = [d for d in needed if d in libs]
 print(f"ok: link: NEEDED = {', '.join(ours)} from the payload + {', '.join(d for d in needed if d not in libs)} (policy set); "
       f"RUNPATH $ORIGIN/../lib, no RPATH")
+
+# .dynsym: a crate that also linked a static GDAL, GEOS or PROJ would define their entry points itself
+native = re.compile(r"^(GDAL|OGR|OSR|OCT|CPL|VSI|GEOS|proj_)")
+und, defined = {}, []
+for row in subprocess.run(["readelf", "--dyn-syms", "-W", so], capture_output=True, text=True).stdout.splitlines():
+    f = row.split()
+    if len(f) < 8 or not f[0].rstrip(":").isdigit():
+        continue
+    name = f[7].split("@")[0]
+    if f[6] == "UND":
+        if native.match(name):
+            fam = "GEOS" if name.startswith("GEOS") else "PROJ" if name.startswith("proj_") else "GDAL"
+            und.setdefault(fam, []).append(name)
+    elif f[4] in ("GLOBAL", "WEAK") and f[3] in ("FUNC", "OBJECT"):
+        defined.append(name)
+        if native.match(name):
+            fail(f".dynsym defines {name}: a static GDAL, GEOS or PROJ is linked in")
+module = os.path.basename(so).split(".")[0]
+if defined != [f"PyInit_{module}"]:
+    fail(f".dynsym defines {defined}, wanted only PyInit_{module}")
+if sorted(und) != ["GDAL", "GEOS", "PROJ"]:
+    fail(f".dynsym has undefined entry points only for {sorted(und)}: the probe must call GDAL, GEOS and PROJ")
+print(f"ok: .dynsym: {sum(map(len, und.values()))} GDAL, GEOS and PROJ entry points, all undefined "
+      f"(GDAL {len(und['GDAL'])}, GEOS {len(und['GEOS'])}, PROJ {len(und['PROJ'])}); the only defined global is PyInit_{module}")
 PYEOF
 
 # --- 2 the payload layout and ldd

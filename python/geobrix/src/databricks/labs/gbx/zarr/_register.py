@@ -313,7 +313,9 @@ def _read_back(marker: str, table: str, kind: str) -> None:
         raise e.__cause__ from None
 
 
-def check_owner_marker(root: str, table: str, kind: str, spark=None) -> None:
+def check_owner_marker(
+    root: str, table: str, kind: str, spark=None, *, restore: bool = True
+) -> None:
     """Refuse to write under ``root`` unless its owner marker names ``table`` as ``kind``.
 
     A writer calls this before it puts files under a managed data root or an overlay root:
@@ -321,25 +323,29 @@ def check_owner_marker(root: str, table: str, kind: str, spark=None) -> None:
     transient miss is retried; a marker that is gone, garbled or names another table
     raises ``ZarrOwnershipError``.
 
-    A marker that is gone is the note beside the claim, not the claim: given ``spark``, the
-    ownership ledger of the root is asked, and when it names ``table`` as ``kind`` the marker
-    is written again (the owner re-claiming its own root) and the check passes. A ledger that
-    names another table refuses, as a marker does.
+    A marker that is gone is the note beside the claim, not the claim. Given ``spark``, the
+    ownership ledger of the root is asked: when it names ``table`` as ``kind``, the owner
+    claims its own root again (the marker is written) and the check passes; when it holds no
+    claim at all, the table's own properties still name this root, so the claim is made again
+    through the same compare-and-swap a new one goes through, and a table that loses it is
+    refused. A ledger that names another table refuses, as a marker does. ``restore=False``
+    is for a call that must not write (a dry run): the ledger is read, a claim it already
+    holds passes without a marker being written, and anything else is refused.
     """
     root = _local_root(root)
     marker = _marker_path(root)
     try:
         _retry_transient(lambda: _read_back(marker, table, kind))
     except FileNotFoundError:
-        if spark is not None and _restore_marker(spark, root, table, kind):
+        if spark is not None and _restore_claim(spark, root, table, kind, restore):
             return
-        ledger = os.path.join(root, OWNER_LEDGER)
         raise ZarrOwnershipError(
             f"{root} has no owner marker ({OWNER_MARKER}), and its ownership ledger "
-            f"({OWNER_LEDGER}) does not name {table} as the owner, so the root cannot be "
-            "shown to belong to it.",
-            fix=f"create or register the store again at a new root, or delete {ledger} "
-            f"if no store owns {root}",
+            f"({OWNER_LEDGER}) holds no claim by {table}, so the root cannot be shown to "
+            "belong to it.",
+            fix="run a write, optimize, publish or vacuum (not a dry run) from the table's "
+            f"owner, which claims {root} again; if another store owns the root, create or "
+            "register this one at a new root",
         ) from None
     except OSError as e:
         raise ZarrError(
@@ -348,18 +354,23 @@ def check_owner_marker(root: str, table: str, kind: str, spark=None) -> None:
         ) from e
 
 
-def _restore_marker(spark, root: str, table: str, kind: str) -> bool:
-    """Write the marker of ``root`` again when its ledger names ``table`` as ``kind`` (``True``);
-    ``False`` when the ledger is absent or empty. A ledger that names another table raises.
-    """
+def _restore_claim(spark, root: str, table: str, kind: str, restore: bool) -> bool:
+    """Whether ``table`` holds the claim on ``root`` after its marker went missing.
+
+    The ledger names ``table`` and ``kind``: ``True``, the marker written again if
+    ``restore``. The ledger names another table: raises. The ledger holds no claim: the
+    claim is made again with ``claim_root`` if ``restore`` (``True``, or an ownership error
+    if another table wins), else ``False``."""
     ledger = _ledger_table(root)
-    if not _ledger_exists(spark, ledger):
+    held = _held(spark, ledger) if _ledger_exists(spark, ledger) else []
+    if held:
+        _owned_by(held[0], root, table, kind)  # raises when another table owns the root
+        if restore:
+            _claim_marker(root, table, kind)
+        return True
+    if not restore:
         return False
-    held = _held(spark, ledger)
-    if not held:
-        return False
-    _owned_by(held[0], root, table, kind)  # raises when another table owns the root
-    _claim_marker(root, table, kind)
+    claim_root(spark, root, table, kind)
     return True
 
 

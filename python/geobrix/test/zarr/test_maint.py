@@ -734,6 +734,38 @@ def test_vacuum_retain_floor_and_malformed_retain(
         gbx_zarr_vacuum(spark_delta, table)
 
 
+def test_a_dry_run_vacuum_restores_nothing_and_reads_a_read_only_root(
+    spark_delta, drop, tmp_path
+):
+    """`dry_run=True` changes nothing: with the marker gone it reads the ledger and passes,
+    without writing the marker (so it also works on a root it cannot write). A real run puts
+    the marker back. With neither marker nor ledger a dry run cannot show who owns the root,
+    and says so."""
+    import shutil
+
+    table, root, _ = _store(spark_delta, drop, tmp_path)
+    (root / OWNER_MARKER).unlink()
+    listing = sorted(p.relative_to(root).as_posix() for p in root.rglob("*"))
+    root.chmod(0o555)
+    try:
+        rows = gbx_zarr_vacuum(spark_delta, table, dry_run=True).collect()
+    finally:
+        root.chmod(0o755)
+    assert (
+        rows
+        and sorted(p.relative_to(root).as_posix() for p in root.rglob("*")) == listing
+    )
+    assert not (root / OWNER_MARKER).exists()
+
+    shutil.rmtree(root / "_gbx_owner")
+    with pytest.raises(ZarrOwnershipError, match="no owner marker") as e:
+        gbx_zarr_vacuum(spark_delta, table, dry_run=True)
+    assert "dry run" in e.value.fix and not (root / OWNER_MARKER).exists()
+
+    gbx_zarr_vacuum(spark_delta, table)  # a real run claims the root again
+    assert (root / OWNER_MARKER).exists() and (root / "_gbx_owner").is_dir()
+
+
 def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
     spark_delta, drop, tmp_path, monkeypatch
 ):

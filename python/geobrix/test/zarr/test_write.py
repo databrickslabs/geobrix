@@ -1515,12 +1515,13 @@ def test_the_wait_between_attempts_is_capped(spark_delta, drop, tmp_path, no_hoo
     assert pauses == sorted(pauses)  # and it never shrinks
 
 
-def test_a_root_whose_marker_is_gone_is_restored_from_its_ledger(
+def test_a_root_that_lost_its_marker_is_reclaimed_by_its_owner(
     spark_delta, drop, tmp_path, no_hooks
 ):
     """The marker is the note beside the claim. With the claim (the ledger) still naming the
-    table, a write puts the note back; with neither, the root cannot be shown to be the
-    table's and the Fix says which directory to look at."""
+    table, a write puts the note back. With neither left, the table's own properties still
+    name the root and no other table holds it, so the write claims it again (the same
+    compare-and-swap a new claim goes through) instead of leaving the table stuck."""
     import shutil
     import types
 
@@ -1530,16 +1531,14 @@ def test_a_root_whose_marker_is_gone_is_restored_from_its_ledger(
     table, root, version = _create(spark_delta, drop, tmp_path)
     block = _blocks(spark_delta, ("t2m", (0, 0, 0), np.ones((12, 5, 6), "float32")))
     (root / OWNER_MARKER).unlink()
-    assert gbx_zarr_write(block, table, mode="update") > version
+    version = gbx_zarr_write(block, table, mode="update")
     assert json.loads((root / OWNER_MARKER).read_text())["table"].endswith(table)
 
     (root / OWNER_MARKER).unlink()
     shutil.rmtree(root / OWNER_LEDGER)
-    latest = _latest(spark_delta, table)
-    with pytest.raises(ZarrOwnershipError, match="no owner marker") as e:
-        gbx_zarr_write(block, table, mode="update")
-    assert OWNER_LEDGER in e.value.fix and "Fix:" in str(e.value)
-    assert _latest(spark_delta, table) == latest
+    assert gbx_zarr_write(block, table, mode="update") > version
+    assert json.loads((root / OWNER_MARKER).read_text())["table"].endswith(table)
+    assert (root / OWNER_LEDGER).is_dir()
 
 
 # --- fix round 2 (Ruling Z41) ------------------------------------------------------------------

@@ -103,11 +103,15 @@ def _utcnow() -> datetime:
 # --- shared -----------------------------------------------------------------------------
 
 
-def _roots(spark, table: str, props) -> tuple[str | None, str | None]:
+def _roots(
+    spark, table: str, props, *, restore: bool = True
+) -> tuple[str | None, str | None]:
     """``(owned root, base root)`` of a store, the owner marker of the owned root verified.
 
     The owned root is where GeoBrix put its files: a managed store's data root, a writable
     registration's overlay root; ``None`` for a read-only registration, which owns none.
+    A missing marker is written again from the ownership ledger unless ``restore`` is off
+    (a dry run writes nothing).
     """
     from databricks.labs.gbx.zarr._register import (
         check_owner_marker,
@@ -118,9 +122,9 @@ def _roots(spark, table: str, props) -> tuple[str | None, str | None]:
     if props.kind == "registered":
         if not props.writable or not props.overlay_root:
             return None, props.root
-        check_owner_marker(props.overlay_root, owner, "overlay", spark)
+        check_owner_marker(props.overlay_root, owner, "overlay", spark, restore=restore)
         return props.overlay_root, props.root
-    check_owner_marker(props.root, owner, "managed", spark)
+    check_owner_marker(props.root, owner, "managed", spark, restore=restore)
     return props.root, None
 
 
@@ -827,7 +831,7 @@ def gbx_zarr_vacuum(
         return _delta_vacuum(spark, table, store_seconds, horizon, dry_run)
     require_geobrix_files(table, props.file_mode, "vacuum")
 
-    root, _ = _roots(spark, table, props)
+    root, _ = _roots(spark, table, props, restore=not dry_run)
     if root is None:
         return _report(spark, [])
     kept = _protected(spark, table, root, horizon, FileLayout.of(props))

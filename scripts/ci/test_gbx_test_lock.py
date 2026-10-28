@@ -673,16 +673,6 @@ DELEGATES = {"gbx-test-docs.sh", "gbx-test-light.sh"}
 # short; a new exec that is not listed here must go through $GBX_LOCK_RUN (or $LOCK_PREFIX).
 # A listed statement that names mvn or pytest anywhere is never exempt (see _unwrapped_execs).
 NOT_WORK = [
-    # editable-install check
-    (
-        "gbx-test-python.sh",
-        r'docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c \\\n"pip show geobrix .*--quiet"',
-    ),
-    # test-deps probe
-    (
-        "gbx-test-python.sh",
-        r'docker exec "\$GBX_DEV_CONTAINER" /bin/bash -c \\\n"python3 -c \'import importlib\.metadata as m, rio_cogeo.*anywidget==[\d.]+"',
-    ),
     # zarr extra pin check
     (
         "gbx-test-python.sh",

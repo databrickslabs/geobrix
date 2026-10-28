@@ -511,10 +511,49 @@ gbx_python_with_sdk() {
     fi
 }
 
+# gbx_ensure_container_python_deps: make the dev container able to run geobrix's Python tests.
+# Called by every command that runs them in the container (gbx:test:python, gbx:test:parity), so a
+# fresh container works whichever runs first. Idempotent and near-zero cost when everything is
+# present. The installs go through the work lock like the tests they serve (they rewrite the
+# container's shared site-packages).
+gbx_ensure_container_python_deps() {
+    # Ensure geobrix is importable in Spark worker processes. pytest's pythonpath= in
+    # pyproject.toml covers the driver (pytest) process only; UDF workers start with the
+    # system sys.path, so without an editable install every @f.udf test fails with
+    # ModuleNotFoundError. The pip show check is idempotent — near-zero cost when present.
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
+        "pip show geobrix >/dev/null 2>&1 || \
+         pip3 install -e /root/geobrix/python/geobrix --no-deps --break-system-packages --quiet"
+
+    # STOPGAP: optional test deps that the current ~4-month-old geobrix-dev image predates.
+    # Covers: rio-cogeo (COG write), scikit-image (contour/isoband), xarray-spatial
+    # (terrain/viewshed), pmtiles, h3, pyarrow, netCDF4, quadbin, numexpr, laspy/lazrs (LiDAR),
+    # rio-tiler, mapbox-vector-tile, exifread, tenacity, contextily, anywidget.
+    # All are pinned in requirements-dev-container.txt or the env5/env6-all CI lockfiles; a fresh
+    # image build bakes them in — but a local rebuild is blocked (no JFrog token; CI-only path;
+    # see dev-image-rebuild-is-ci-operation note in MEMORY.md).  Until the image is rebuilt, this
+    # targeted (NOT hash-locked) install keeps local suites collecting + running from the dev proxy.
+    # One import probe gates one install of all packages (versions match the lockfile); near-zero
+    # cost when present; transitive deps resolve off the dev proxy without drifting numpy/pandas pins.
+    # The probe also fails when the installed lazrs is older than 0.8.2 (the floor in pyproject.toml):
+    # 0.8.0 / 0.8.1 print Rust panics on a LAZ file that declares more points than it holds.
+    # Remove once the image ships these.
+    # NOTE: tippecanoe is intentionally excluded — it installs but segfaults natively in-container
+    # (exit 139); a pip install cannot fix a native crash.
+    docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
+        "python3 -c 'import importlib.metadata as m, rio_cogeo, skimage, xrspatial, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget; assert tuple(int(v) for v in m.version(\"lazrs\").split(\".\")[:3]) >= (0, 8, 2)' >/dev/null 2>&1 || \
+         pip3 install --break-system-packages --quiet \
+           rio-cogeo==7.0.2 scikit-image==0.26.0 xarray-spatial==0.9.9 \
+           pmtiles==3.7.0 h3==4.5.0 pyarrow==19.0.1 netCDF4==1.7.4 \
+           quadbin==0.2.2 numexpr==2.14.1 laspy==2.7.0 rio-tiler==9.0.6 \
+           lazrs==0.8.2 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
+           tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"
+}
+
 # Export helpers + color vars so they survive any subshell that doesn't re-source this file
 # (observed on macOS bash 3.2: "show_separator: command not found" mid-script).
 export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GBX_TEST_LOCK_FILE GBX_WORK_LOCK_FILE GBX_TEST_LOCK_TIMEOUT GBX_LOCK_NO_WAIT GBX_LOCK_CMD GBX_CONTAINER_ROOT GBX_CONTAINER_LOCK GBX_LOCK_RUN
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
           print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_python_with_sdk validate_set \
-          print_lock_help _gbx_lock_abort gbx_acquire_test_lock 2>/dev/null || true
+          print_lock_help _gbx_lock_abort gbx_acquire_test_lock gbx_ensure_container_python_deps 2>/dev/null || true

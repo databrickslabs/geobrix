@@ -117,13 +117,10 @@ gbx_acquire_test_lock
 
 STAGE_DIR="$PROJECT_ROOT/python/geobrix/lib"
 
-# Spark's Python workers do not see pytest's pythonpath= (it covers the driver only), so the
-# light kernels a parity suite registers fail on the executors with ModuleNotFoundError unless
-# geobrix is installed in the container. This is the same idempotent editable install that
-# gbx:test:python does; a container that never ran that command fails every light row without it.
-docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
-    "pip show geobrix >/dev/null 2>&1 || \
-     pip3 install -e /root/geobrix/python/geobrix --no-deps --break-system-packages --quiet"
+# A fresh container has neither geobrix installed (Spark's Python workers do not see pytest's pythonpath=,
+# so every light row would fail with ModuleNotFoundError) nor the optional light-tier test deps (the
+# Column-API legs import them): the same preparation gbx:test:python does.
+gbx_ensure_container_python_deps
 
 # --- Step 1: build the assembly JAR ---------------------------------------------------
 if [ "$SKIP_BUILD" = true ]; then

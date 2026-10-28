@@ -262,7 +262,7 @@ The GDAL reader can work with [many GDAL raster drivers](https://gdal.org/driver
 - **GRIB/GRIB2** (.grb, .grib2) - Meteorological data
 - **JPEG2000** (.jp2) - High-compression imagery
 - **ENVI** (.hdr) - Remote sensing format
-- **Zarr** - Cloud-native array storage
+- **Zarr** - Cloud-native array storage. For Zarr cubes use `gbx_zarr_read` instead of GDAL (see [Zarr stores](../formats/zarr)); the GDAL versions GeoBrix ships cannot read sharded Zarr v3 stores
 - **And 150+ more formats**
 
 :::note Format Availability
@@ -398,23 +398,12 @@ The `hrrr-weather` dataset is included in the **complete** sample-data bundle, n
   outputConstant="READ_GRIB2_output"
 />
 
-### Format Selection Guide
+### Which format to use
 
-| Format | Size | Compression | Multi-Band | Time-Series | Cloud-Friendly |
-|--------|------|-------------|------------|-------------|----------------|
-| **GeoTIFF** | Good | Good | Yes | No | Yes (COG) |
-| **NetCDF** | Excellent | Good | Yes | Yes | Moderate |
-| **HDF5** | Excellent | Good | Yes | Yes | Poor |
-| **GRIB2** | Excellent | Excellent | Yes | Yes | Poor |
-| **JPEG2000** | Excellent | Excellent | Yes | No | Moderate |
-| **Zarr** | Excellent | Good | Yes | Yes | Excellent |
-
-**General Rules**:
-- Start with **GeoTIFF** (use COG for cloud)
-- Use **NetCDF** for multi-dimensional scientific data
-- Use **HDF5** when required by data provider (e.g., MODIS)
-- Use **GRIB2** for weather models
-- Use **Zarr** for cloud-native analysis at scale
+See [Choosing a Format](../formats/overview) for the selection guide: how raster, array, vector and
+tile formats compare, and the reader, writer and functions for each. In short, start with GeoTIFF
+(COG for cloud storage), use NetCDF, HDF5 or GRIB2 when a data provider publishes them, and use
+[Zarr](../formats/zarr) for large cubes that you read in slices and write back to.
 
 ## Common functions: used vs excluded
 

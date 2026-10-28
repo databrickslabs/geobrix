@@ -101,6 +101,15 @@ const sidebars = {
     },
     {
       type: 'category',
+      label: 'Formats',
+      collapsed: true,
+      link: { type: 'doc', id: 'formats/overview' },
+      items: [
+        'formats/zarr',
+      ],
+    },
+    {
+      type: 'category',
       label: 'Readers & Writers',
       collapsed: true,
       link: { type: 'doc', id: 'readers-writers' },

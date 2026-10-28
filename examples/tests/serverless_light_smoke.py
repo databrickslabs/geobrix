@@ -402,7 +402,7 @@ def main():
     ap.add_argument("--func-validate", action="store_true",
                     help="real subprocess install + exercise the API in-session")
     ap.add_argument("--env-deps", action="store_true",
-                    help="install via the job Environment spec deps (not %pip); probe-only notebook")
+                    help="install via the job Environment spec deps (not %%pip); probe-only notebook")
     ap.add_argument("--isolate-register", action="store_true",
                     help="env-deps + wrap register to pinpoint the failing UDF registration")
     args = ap.parse_args()

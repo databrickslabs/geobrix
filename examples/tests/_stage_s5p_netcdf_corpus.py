@@ -13,6 +13,7 @@ import os
 import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 SRC = os.environ.get("GBX_S5P_SRC", "/Volumes/geospatial_docs/vapor_eyes_lf/data/vapor-eyes-lf/s5p")
 DEST = os.environ.get("GBX_S5P_DEST", "/Volumes/geospatial_docs/vapor_eyes_lf/data/vapor-eyes-lf/netcdf")
@@ -48,6 +49,7 @@ dbutils.notebook.exit(json.dumps(out))
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.service import jobs
     from databricks.sdk.service.workspace import ImportFormat

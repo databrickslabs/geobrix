@@ -40,6 +40,7 @@ import os
 import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
@@ -231,6 +232,7 @@ def _expected_rows(
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     # Force line-buffered stdout so the run URL + interim progress heartbeats appear
     # LIVE, not all at once at exit. Python block-buffers stdout when it isn't a TTY
     # (piped to a file, a log, or a background task), which otherwise hides every

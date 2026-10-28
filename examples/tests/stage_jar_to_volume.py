@@ -16,6 +16,7 @@ import sys
 from pathlib import Path
 
 from _artifact_volume import prune_stale
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 TESTS_DIR = Path(__file__).resolve().parent
 # Container side of the gbx test lock (scripts/docker/gbx-lock.sh, the repo as mounted in geobrix-dev).
@@ -39,6 +40,7 @@ if _env_file.exists():
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     # GBX_BUNDLE_SKIP_JAR: skip the JAR step ENTIRELY (no Maven build, no upload) —
     # for light-tier-only changes (pyrx/pyvx/pygx wheel) where the staged JAR is
     # unchanged. Distinct from GBX_BUNDLE_SKIP_JAR_UPLOAD, which still builds the JAR.
@@ -109,11 +111,19 @@ def main() -> int:
             file=sys.stderr,
         )
         return 1
-    if check.returncode != 0:
+    if check.returncode == 3:
         # Exit 3 is a JAR the guard could not read (missing, or not a zip file): not a bundling problem.
         print(
             f"Refusing to stage {jar_path}: it could not be checked (missing or not a readable "
             "zip file); rebuild it with mvn clean package.",
+            file=sys.stderr,
+        )
+        return 1
+    if check.returncode != 0:
+        # The guard itself failed (a usage error, a crash): say so, and do not blame the JAR.
+        print(
+            f"Refusing to stage {jar_path}: the packaging check failed to run (exit "
+            f"{check.returncode}); its output is above.",
             file=sys.stderr,
         )
         return 1

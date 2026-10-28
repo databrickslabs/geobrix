@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 CORPUS = os.environ.get("GBX_BENCH_CORPUS", "/Volumes/geospatial_docs/geobrix/sample-data/bench-corpus")
 S5P_SRC = "/Volumes/geospatial_docs/vapor_eyes_lf/data/vapor-eyes-lf/s5p"
@@ -97,6 +98,7 @@ dbutils.notebook.exit(json.dumps(out))
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     from databricks.sdk import WorkspaceClient
     from databricks.sdk.service import jobs
     from databricks.sdk.service.workspace import ImportFormat

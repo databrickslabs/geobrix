@@ -599,7 +599,7 @@ def main() -> int:
         help=(
             "After each successful run, export the run and harvest cell outputs "
             "back into the local .ipynb file (aligning by source code, not cell index). "
-            "Strips injected %pip cells and override cells; preserves local serialization."
+            "Strips injected %%pip cells and override cells; preserves local serialization."
         ),
     )
 

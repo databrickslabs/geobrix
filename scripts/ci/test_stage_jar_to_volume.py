@@ -75,6 +75,24 @@ def test_a_jar_that_is_not_a_zip_file_is_refused_without_blaming_bundling(
     assert "bundles classes" not in err
 
 
+def test_a_guard_that_fails_unexpectedly_is_refused_without_blaming_the_jar(
+    stage, capsys, monkeypatch
+):
+    module, root = stage
+    _jar(root, ["com/databricks/labs/gbx/A.class"])
+    inner = subprocess.run
+
+    def run(cmd, **kwargs):
+        if "check_jar_packaging.py" in str(cmd[1]):  # exit 2 is its usage error
+            return subprocess.CompletedProcess(cmd, 2)
+        return inner(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "run", run)
+    assert module.main() == 1
+    err = capsys.readouterr().err
+    assert "exit 2" in err and "could not be checked" not in err
+
+
 def test_a_clean_jar_passes_the_guard(stage, capsys):
     module, root = stage
     _jar(root, ["com/databricks/labs/gbx/A.class"])

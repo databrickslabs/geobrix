@@ -22,6 +22,7 @@ import sys
 from pathlib import Path
 
 from _artifact_volume import prune_stale
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 TESTS_DIR = Path(__file__).resolve().parent
 _env_file = TESTS_DIR / "databricks_cluster_config.env"
@@ -37,6 +38,7 @@ if _env_file.exists():
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     skip_wheel_upload = os.environ.get("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", "").strip().lower() in ("1", "true", "yes")
 
     project_root = TESTS_DIR.parent.parent

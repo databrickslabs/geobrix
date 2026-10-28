@@ -24,6 +24,7 @@ import subprocess
 import sys
 from pathlib import Path
 from _job_submit import submit_once  # sibling module (script dir is on sys.path)
+from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 # Load config from .env in same dir
 TESTS_DIR = Path(__file__).resolve().parent
@@ -169,6 +170,7 @@ def _notebook_json(
 
 
 def main() -> int:
+    exit_if_help(__doc__)
     do_wait = "--no-wait" not in sys.argv
 
     host = os.environ.get("DATABRICKS_HOST")

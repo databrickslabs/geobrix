@@ -30,6 +30,7 @@ import urllib.request
 from contextlib import contextmanager
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta, timezone
+from time import monotonic as _monotonic
 from typing import Protocol
 
 from databricks.labs.gbx.core._retry import _retry_transient
@@ -674,11 +675,14 @@ def _s3_region(response, url: str) -> str:
     if region:
         return str(region)
     bucket = url.partition("://")[2].partition("/")[0]
-    # Asked once per bucket per process, a "no" included: on a network that blocks the
-    # question it would otherwise cost its timeout on every vend.
-    if bucket not in _REGIONS:
-        _REGIONS[bucket] = _discover_region(bucket)
-    region = _REGIONS[bucket]
+    # Asked once per bucket per process. A "no" is kept for _NO_REGION_FOR_S seconds: on a
+    # network that blocks the question it would otherwise cost its timeout on every vend,
+    # but one transient failure must not disable direct access to the bucket for good.
+    now = _monotonic()
+    region, until = _REGIONS.get(bucket, (None, 0.0))
+    if until <= now:
+        region = _discover_region(bucket)
+        _REGIONS[bucket] = (region, float("inf") if region else now + _NO_REGION_FOR_S)
     if not region:
         raise _Unavailable(
             f"the region of the bucket {bucket!r} is not known: the response has none, "
@@ -687,8 +691,10 @@ def _s3_region(response, url: str) -> str:
     return region
 
 
-# bucket -> its region, or None when S3 did not say
-_REGIONS: dict[str, str | None] = {}
+# bucket -> (its region, or None when S3 did not say; the monotonic time that answer is
+# kept until: forever for a region, _NO_REGION_FOR_S seconds for a "no")
+_REGIONS: dict[str, tuple[str | None, float]] = {}
+_NO_REGION_FOR_S = 600.0
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -987,18 +993,13 @@ def reader_for(cfg: AccessConfig | None, root: str, base_root: str | None = None
     )
 
 
-# obstore puts a file larger than this in parts (a multipart upload), its default chunk size
-_MULTIPART_ABOVE = 5 << 20
-
-
 def put_pack(cfg: AccessConfig, local_path: str, dest_path: str) -> bool:
     """Upload the file ``local_path`` to the Volume path ``dest_path`` with one
     ``obstore.put`` (the object appears whole or not at all). ``True`` once it is there.
 
     If the storage refuses the credentials, ``False`` when the call asked for ``"auto"``
     (the caller writes the file through the mount instead) and ``ZarrAccessUnavailable``
-    when it asked for ``"direct"``. A put that fails or is refused part way leaves its
-    multipart upload open, and obstore does not abort it: it is aborted here."""
+    when it asked for ``"direct"``."""
     import obstore
 
     if cfg.refused:
@@ -1011,88 +1012,10 @@ def put_pack(cfg: AccessConfig, local_path: str, dest_path: str) -> bool:
             obstore.put(_make_store(cfg), key, f)
     except _Refused:
         _mark_refused(cfg)
-        _abort_incomplete(cfg, key, local_path)
         if cfg.fallback:
             return False
         raise _expired(cfg) from None
-    except Exception:
-        _abort_incomplete(cfg, key, local_path)
-        raise
     return True
-
-
-def _abort_incomplete(cfg: AccessConfig, key: str, local_path: str) -> None:
-    """Best effort: abort the multipart uploads of ``key`` that a failed put left open (S3
-    keeps and bills their parts until they are aborted). Credentials that have expired cannot
-    abort either; a bucket lifecycle rule that aborts incomplete uploads covers that."""
-    try:
-        if cfg.cloud == "aws" and os.path.getsize(local_path) > _MULTIPART_ABOVE:
-            _abort_s3_uploads(cfg, key)
-    except Exception as e:
-        _LOG.debug(
-            "could not abort the incomplete uploads of %s: %s",
-            key,
-            _scrub(cfg, f"{type(e).__name__}: {e}")[:200],
-        )
-
-
-def _abort_s3_uploads(cfg: AccessConfig, key: str) -> None:
-    """List the open multipart uploads of exactly ``key`` and abort each (signed requests)."""
-    from datetime import datetime, timezone
-    from urllib.parse import quote, urlparse
-    from xml.etree import ElementTree
-
-    from databricks.labs.gbx.zarr._s3sign import sign_v4
-
-    creds = cfg.creds.reveal()
-    bucket, _, prefix = cfg.volume_url.partition("://")[2].partition("/")
-    full = "/".join(p for p in (prefix.strip("/"), key) if p)
-    endpoint = _store_args(cfg).get("endpoint")
-    region = cfg.region or "us-east-1"
-    if endpoint:  # path style, as for an S3-compatible endpoint
-        base, bucket_path = endpoint.rstrip("/"), f"/{bucket}"
-    elif "." in bucket:
-        base, bucket_path = f"https://s3.{region}.amazonaws.com", f"/{bucket}"
-    else:
-        base, bucket_path = f"https://{bucket}.s3.{region}.amazonaws.com", ""
-    host = urlparse(base).netloc
-
-    def call(method: str, path: str, query: list[tuple[str, str]]) -> bytes:
-        headers = sign_v4(
-            method,
-            host,
-            path,
-            query,
-            access_key=creds["access_key_id"],
-            secret_key=creds["secret_access_key"],
-            session_token=creds.get("session_token"),
-            region=region,
-            amz_date=datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ"),
-        )
-        text = "&".join(
-            quote(k, safe="-_.~") + (f"={quote(v, safe='-_.~')}" if v else "")
-            for k, v in sorted(query)
-        )
-        url = base + quote(path, safe="/-_.~") + (f"?{text}" if text else "")
-        request = urllib.request.Request(url, method=method, headers=headers)
-        with urllib.request.urlopen(request, timeout=10) as r:
-            return r.read()
-
-    body = call("GET", bucket_path or "/", [("prefix", full), ("uploads", "")])
-    if (
-        b"<!DOCTYPE" in body
-    ):  # no entity tricks from a response we only read two fields of
-        return
-    for upload in ElementTree.fromstring(body).iter():
-        if upload.tag.rpartition("}")[2] != "Upload":
-            continue
-        fields = {c.tag.rpartition("}")[2]: (c.text or "") for c in upload}
-        if fields.get("Key") == full and fields.get("UploadId"):
-            call(
-                "DELETE",
-                f"{bucket_path}/{full}",
-                [("uploadId", fields["UploadId"])],
-            )
 
 
 def stat_for(cfg: AccessConfig | None):

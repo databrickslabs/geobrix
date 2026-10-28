@@ -661,8 +661,10 @@ def gbx_zarr_sample(
 
     Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
     executors. Under memory pressure Spark may write task data, those credentials included,
-    to the executors' local disk: turn on local-disk encryption on clusters that use direct
-    access. ``access="fuse"`` sends no credentials.
+    to the local disk of the executors and of the driver: turn on local-disk encryption on
+    clusters that use direct access. ``access="auto"`` is direct access on dedicated
+    compute, where Unity Catalog can issue the credentials, so this applies to the default
+    too; ``access="fuse"`` sends no credentials.
 
     Up to 100,000 points are collected to the driver; if they lie in at most four chunks of
     the grid and the answer is small the driver reads them and returns the result, with no

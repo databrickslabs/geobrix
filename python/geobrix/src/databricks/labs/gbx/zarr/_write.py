@@ -2816,8 +2816,15 @@ def gbx_zarr_write(
 
     Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
     executors. Under memory pressure Spark may write task data, those credentials included,
-    to the executors' local disk: turn on local-disk encryption on clusters that use direct
-    access. ``access="fuse"`` sends no credentials.
+    to the local disk of the executors and of the driver: turn on local-disk encryption on
+    clusters that use direct access. ``access="auto"`` is direct access on dedicated
+    compute, where Unity Catalog can issue the credentials, so this applies to the default
+    too; ``access="fuse"`` sends no credentials.
+
+    A pack upload that is refused or fails part way can leave an incomplete multipart upload
+    in the bucket. GeoBrix does not clean it up: add a bucket lifecycle rule that aborts
+    incomplete multipart uploads (``AbortIncompleteMultipartUpload``) to the bucket of the
+    Volume.
     """
     from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
     from databricks.labs.gbx.zarr._register import (

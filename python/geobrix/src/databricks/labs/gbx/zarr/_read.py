@@ -1266,8 +1266,10 @@ def gbx_zarr_read(
 
     Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
     executors. Under memory pressure Spark may write task data, those credentials included,
-    to the executors' local disk: turn on local-disk encryption on clusters that use direct
-    access. ``access="fuse"`` sends no credentials.
+    to the local disk of the executors and of the driver: turn on local-disk encryption on
+    clusters that use direct access. ``access="auto"`` is direct access on dedicated
+    compute, where Unity Catalog can issue the credentials, so this applies to the default
+    too; ``access="fuse"`` sends no credentials.
 
     An array GeoBrix cannot decode (a string coordinate, or one whose metadata is corrupt)
     does not fail the read, on a table or a plain path: it is left out, its dimension gets

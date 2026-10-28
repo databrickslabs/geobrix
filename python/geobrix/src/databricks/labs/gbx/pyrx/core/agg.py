@@ -293,9 +293,11 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     MASKS: when some tile has an own mask band the mosaic carries the union of the tiles' masks
     (``mask,1`` of each scratch tile), which is band 1's mask alone for a tile without one. Each such
     tile is rewritten with its validity by the rule of both tiers (:func:`_valid_u8`: any band) as its
-    mask, so a pixel with data in one band only stays valid, as in the in-RAM merge. So is a tile with
-    an alpha band: GDAL's mask of a tile with its own mask band, or of a 3-band gray+x+alpha one, does
-    not follow the alpha band, so a transparent pixel of a later tile would hide an opaque one under it.
+    mask, so a pixel with data in one band only stays valid, as in the in-RAM merge. So is every tile with
+    an alpha band, in any group: GDAL's mask of a tile with its own mask band, or of a 3-band gray+x+alpha
+    one, does not follow the alpha band, and that of RGBA leaves the alpha band itself out, so a
+    transparent pixel of a later tile would hide an opaque one under it. A group with no mask band of its
+    own gets no mask band in the mosaic (the alpha band carries it).
 
     MEMORY: peak RSS ≈ one tile's encoded bytes (decoded too, for a tile written with a mask) +
     GDAL's COG cache (≤200 MiB); the full decoded mosaic array is NEVER allocated.
@@ -340,12 +342,16 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                             _write_masked_tile(
                                 rep_ds,
                                 tile_path,
-                                _valid_u8(rep_ds) if group_masked else None,
+                                (
+                                    _valid_u8(rep_ds)
+                                    if group_masked or has_alpha[i]
+                                    else None
+                                ),
                             )
                         finally:
                             rep_ds.close()
                             rep_mf.close()
-            elif group_masked and (not has_mask[i] or has_alpha[i]):
+            elif (group_masked and not has_mask[i]) or has_alpha[i]:
                 with MemoryFile(rb) as src_mf, src_mf.open() as src:
                     _write_masked_tile(src, tile_path, _valid_u8(src))
             else:
@@ -358,7 +364,9 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
         # VRT emits ComplexSource entries (with <NODATA> masking) in tile_paths order;
         # GDAL last-valid-source-wins on overlapping pixels (ComplexSource skips nodata
         # values), matching method="last" nodata handling in the in-RAM path.
-        vrt_path = _build_mosaic_vrt(tile_paths, scratch)
+        # The mosaic carries a mask band only where the group had one; a tile with an alpha band was
+        # rewritten with its validity as its mask so that it is composited by it, not by that band.
+        vrt_path = _build_mosaic_vrt(tile_paths, scratch, carry_mask=group_masked)
 
         # Stream-convert the VRT to a COG (bounded GDAL cache; never decodes
         # the full mosaic into a numpy array).
@@ -449,14 +457,15 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # tiles' masks, built from the masks themselves (:func:`_union_own_mask`), never from the
         # pixel values: a valid pixel of 0 stays valid. Tiles without one are merged as before,
         # with no mask band.
-        # In a group with an own mask the pixels are composited by the tiles' validity, as the mask
-        # union is: a tile with an alpha band is merged as a copy whose mask band is its validity, since
-        # GDAL's mask of one with its own mask band, or of a 3-band gray+x+alpha one, ignores the alpha
-        # band (a transparent pixel of a later tile would hide an opaque one under it).
+        # The pixels are composited by the tiles' validity, as the mask union is: a tile with an alpha band
+        # is merged as a copy whose mask band is its validity, since GDAL's mask of one with its own mask
+        # band, or of a 3-band gray+x+alpha one, ignores the alpha band, and that of RGBA leaves the alpha
+        # band itself out (a transparent pixel of a later tile would hide an opaque one under it, or keep
+        # the colours and zero the alpha). The mosaic gets a mask band only if a tile had one.
         group_masked = any(_nodata.has_own_mask(d) for d in merge_ds)
         composite = []
         for d in merge_ds:
-            if group_masked and _nodata.has_alpha(d):
+            if _nodata.has_alpha(d):
                 copy_mf = MemoryFile()
                 _write_masked_tile(d, copy_mf, _valid_u8(d))
                 copy = copy_mf.open()

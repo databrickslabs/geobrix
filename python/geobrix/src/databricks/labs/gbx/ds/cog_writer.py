@@ -307,8 +307,12 @@ def _average_reproject(
 
     Returns ``None``, or for the masked path the ``(rows, cols)`` bool array of those pixels: the
     cell's mask band must hide them too, since its nearest-neighbour warp can call one valid
-    where the average found no valid pixel. Peak extra memory on the masked path: one band as
-    float64 plus the weights.
+    where the average found no valid pixel.
+
+    Memory on the masked path, per pixel of the SOURCE window: the validity as one byte (``bool``), the
+    ones of the coverage warp as one byte, and the masked band as one more copy at the source dtype
+    (``np.where``, so a NaN under the mask is zero, not NaN * 0). The weights, sums and coverage are
+    float64 but cell-sized.
     """
     import numpy as np
     from rasterio.warp import Resampling, reproject
@@ -333,16 +337,22 @@ def _average_reproject(
         src_nodata is None and _nodata.has_own_mask(src) and not _nodata.has_alpha(src)
     ):
         return None
-    valid = (src.read_masks(1, window=src_win) != 0).astype("float64")
+    valid = src.read_masks(1, window=src_win) != 0
     share = np.zeros(dst_data.shape[1:], dtype="float64")
-    reproject(source=valid, destination=share, **warp)
+    reproject(source=valid.view("uint8"), destination=share, **warp)
     reached = share > 0
     covered = np.zeros(share.shape, dtype="float64")
-    reproject(source=np.ones_like(valid), destination=covered, **warp)
+    reproject(source=np.ones(valid.shape, dtype="uint8"), destination=covered, **warp)
     dtype = dst_data.dtype
     for band in range(dst_data.shape[0]):
         total = np.zeros(share.shape, dtype="float64")
-        reproject(source=src_data[band] * valid, destination=total, **warp)
+        reproject(
+            source=np.where(valid, src_data[band], 0).astype(
+                src_data.dtype, copy=False
+            ),
+            destination=total,
+            **warp,
+        )
         mean = total[reached] / share[reached]
         if np.issubdtype(dtype, np.integer):
             info = np.iinfo(dtype)
@@ -405,6 +415,7 @@ def _build_mosaic_vrt(
     tile_paths: List[str],
     out_dir: str,
     vrt_paths: str = "relative",
+    carry_mask: bool = True,
 ) -> str:
     """Build a GDAL VRT mosaic index at ``<out_dir>/mosaic.vrt``.
 
@@ -432,9 +443,10 @@ def _build_mosaic_vrt(
        union of the tiles' masks (``mask,1`` of each tile), a pixel no tile covers being
        invalid. GDAL reads that mask ahead of the NoData, as it does for any raster.
        ``mask,1`` is band 1's mask, which for a tile WITHOUT a mask band is its NoData (or
-       alpha) on band 1 alone, not the any-band rule of ``_nodata.valid_mask``. So when masked
-       and unmasked tiles are mixed and a pixel of an unmasked tile can be NoData in one band
-       only, write that tile with its validity as its mask first, as the streamed merge of
+       alpha) on band 1 alone, not the any-band rule of ``_nodata.valid_mask``. Masked and
+       unmasked tiles do mix: the writer's commit step builds one index over the cells of every
+       source it was given. When a pixel of an unmasked tile can be NoData in one band only,
+       write that tile with its validity as its mask first, as the streamed merge of
        ``pyrx.core.agg`` does; for a tile whose bands share their NoData pixels (or that has
        none) the two agree.
 
@@ -451,6 +463,10 @@ def _build_mosaic_vrt(
         the tiles, so relative paths are bare filenames).
     vrt_paths:
         ``"relative"`` (default) or ``"absolute"``.
+    carry_mask:
+        ``True`` (default): when a tile has its own mask band the mosaic gets the union of the tiles'
+        masks as its mask band. ``False``: tiles with a mask band are still composited by it
+        (``UseMaskBand``) but the mosaic has none.
 
     Returns
     -------
@@ -609,7 +625,7 @@ def _build_mosaic_vrt(
                 ET.SubElement(src_el, "UseMaskBand").text = "true"
 
     # ── Step 4b: the union of the tiles' own masks, when any tile has one ──
-    if any(m["own_mask"] for m in metas):
+    if carry_mask and any(m["own_mask"] for m in metas):
         mask_el = ET.SubElement(root, "MaskBand")
         mask_band = ET.SubElement(mask_el, "VRTRasterBand", {"dataType": "Byte"})
         for meta in metas:

@@ -564,10 +564,14 @@ def test_an_in_ram_merge_of_rgba_tiles_with_a_nodata_raises_no_shadow_warning():
     assert out
 
 
-def _overlap_alpha_tile(x, value, *, clear_cols=(), mask_rows=()):
-    """A 12x12 gray+x+alpha tile at ``x`` degrees: the data bands hold ``value``, the alpha band is 255
-    except over ``clear_cols`` (0), and ``mask_rows`` are hidden by an own mask band."""
-    data = np.full((3, 12, 12), value, dtype="uint8")
+def _overlap_alpha_tile(
+    x, value, *, layout="gray_x_alpha", clear_cols=(), mask_rows=()
+):
+    """A 12x12 tile of alpha layout ``layout`` at ``x`` degrees: the data bands hold ``value``, the
+    alpha band is 255 except over ``clear_cols`` (0), and ``mask_rows`` are hidden by an own mask band.
+    """
+    count = len(al.LAYOUTS[layout][0])
+    data = np.full((count, 12, 12), value, dtype="uint8")
     data[-1] = 255
     data[-1, :, list(clear_cols)] = 0
     mask = None
@@ -575,7 +579,7 @@ def _overlap_alpha_tile(x, value, *, clear_cols=(), mask_rows=()):
         mask = np.full((12, 12), 255, dtype="uint8")
         mask[list(mask_rows), :] = 0
     return al.layout_bytes(
-        "gray_x_alpha",
+        layout,
         data=data,
         mask=mask,
         transform=from_origin(x, 50, 0.5, 0.5),
@@ -583,27 +587,39 @@ def _overlap_alpha_tile(x, value, *, clear_cols=(), mask_rows=()):
 
 
 @pytest.mark.parametrize("streaming", [False, True], ids=["in-ram", "streaming"])
+@pytest.mark.parametrize(
+    "layout,masked",
+    [("gray_x_alpha", True), ("gray_x_alpha", False), ("rgba", False)],
+    ids=["3-band-own-masks", "3-band-no-mask", "rgba-no-mask"],
+)
 def test_a_merge_shows_the_valid_tile_where_a_later_alpha_tile_is_transparent(
-    monkeypatch, streaming
+    monkeypatch, streaming, layout, masked
 ):
-    """Two overlapping tiles with a 3-band alpha layout (GDAL derives no mask from its alpha band) and an
-    own mask each: where one is transparent and the other opaque the mosaic holds the opaque tile's
-    pixels, valid. (The byte order puts the transparent tile last, which is the one that used to win.)
+    """Two overlapping tiles with an alpha band, with or without an own mask each (a 3-band layout, whose
+    alpha band GDAL's mask ignores, and RGBA, whose colour bands it masks but not the alpha band itself):
+    where one is transparent and the other opaque the mosaic holds the opaque tile's pixels, valid, on both
+    paths. (The byte order puts the transparent tile last, which is the one that used to win.)
     """
     if streaming:
         monkeypatch.setattr(agg, "decoded_budget_bytes", lambda s: 1)
-    opaque = _overlap_alpha_tile(10, 10, mask_rows=(11,))
+    rows = (11,) if masked else ()
+    opaque = _overlap_alpha_tile(10, 10, layout=layout, mask_rows=rows)
     # starts 6 columns in: its first 6 columns lie over the opaque tile and are transparent
-    clear = _overlap_alpha_tile(13, 99, clear_cols=range(6), mask_rows=(11,))
+    clear = _overlap_alpha_tile(
+        13, 99, layout=layout, clear_cols=range(6), mask_rows=rows
+    )
     assert opaque < clear, "fixture: the transparent tile must stand last in byte order"
     out = agg.merge_tiles([opaque, clear])
     with MemoryFile(out) as mf, mf.open() as ds:
         valid = nd.valid_mask(ds)
         data = ds.read(1)
-    over = (slice(0, 11), slice(6, 12))  # the overlap, but the row the own masks hide
+        has_mask = nd.has_own_mask(ds)
+    keep = slice(0, 11 if masked else 12)  # all rows, but the one the own masks hide
+    over = (keep, slice(6, 12))
     assert valid[over].all(), valid[over].tolist()
     assert (data[over] == 10).all(), data[over].tolist()
-    assert (data[0:11, 12:] == 99).all() and valid[0:11, 12:].all()
+    assert (data[keep, 12:] == 99).all() and valid[keep, 12:].all()
+    assert has_mask == masked  # a mask band only where the group had one
 
 
 def _rgb_merge_tile(x, *, mask_rows=()):

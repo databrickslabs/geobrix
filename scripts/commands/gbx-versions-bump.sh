@@ -178,7 +178,7 @@ RESID=$(git grep -nE "(^|[^0-9.])${O_ESC}([^0-9]|$)" -- . \
     ':!:docs/package.json' \
     ':!:**/package-lock.json' ':!:**/pnpm-lock.yaml' \
     ':!:docs/build*/**' ':!:.superpowers/**' \
-    ':!:docs/docs/release-notes.mdx' \
+    ':!:docs/docs/release-notes.mdx' ':!:docs/docs/release-notes-0-5-and-earlier.mdx' \
     ':!:resources/images/generators/*' ':!:resources/images/diagrams/**' 2>/dev/null \
     | grep -vE "geobrix-${O_ESC}-(py3-none-any\.whl|jar-with-dependencies\.jar)" \
     | grep -vE "Current version \*\*${O_ESC}\*\*")

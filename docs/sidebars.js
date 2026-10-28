@@ -29,7 +29,15 @@ const sidebars = {
     'quick-start',
     'databricks-spatial',
     'serverless-and-memory',
-    'release-notes',
+    {
+      type: 'category',
+      label: 'Release Notes',
+      collapsed: true,
+      link: { type: 'doc', id: 'release-notes' },
+      items: [
+        'release-notes-0-5-and-earlier',
+      ],
+    },
     {
       type: 'category',
       label: 'Examples',

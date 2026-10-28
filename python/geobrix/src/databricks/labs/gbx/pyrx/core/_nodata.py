@@ -12,7 +12,6 @@ import warnings
 
 import numpy as np
 from rasterio.errors import NodataShadowWarning
-from scipy import ndimage
 
 from databricks.labs.gbx.pyrx.core.compression import write_gtiff
 
@@ -243,6 +242,9 @@ def propagate_invalid(valid: np.ndarray, size: int = 3) -> np.ndarray:
     result includes BOTH the input-NoData propagation and the 1-px border ring
     that gdal.DEMProcessing produces by default.
     """
+    # Lazy: the warp path imports this module, and the UC sandbox has no scipy.
+    from scipy import ndimage
+
     structure = np.ones((size, size), dtype=bool)
     eroded = ndimage.binary_erosion(valid, structure=structure, border_value=0)
     return ~eroded

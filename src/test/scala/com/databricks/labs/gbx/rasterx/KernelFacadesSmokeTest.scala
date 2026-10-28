@@ -107,13 +107,26 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
 
     test("the BNG L2 and UC facades run on a slim classpath: no Catalyst, no unsafe, no Kryo") {
         def where(c: Class[_]): String = Paths.get(c.getProtectionDomain.getCodeSource.getLocation.toURI).toString
+        // scalastyle:off classforname
+        def whereNamed(name: String): String = where(Class.forName(name)) // a class that is private[spark]
+        // scalastyle:on classforname
         val classpath = Seq(
           where(classOf[BngEastNorthAsBngUdf]), // target/classes
           where(SlimClasspathProbe.getClass), // target/test-classes: the probe only is used
           where(classOf[scala.collection.immutable.List[_]]), // scala-library
           where(classOf[org.locationtech.jts.geom.Geometry]), // jts-core
-          where(classOf[org.apache.spark.sql.api.java.UDF3[_, _, _, _]]) // spark-sql-api
-        ).mkString(java.io.File.pathSeparator)
+          where(classOf[org.apache.spark.sql.api.java.UDF3[_, _, _, _]]), // spark-sql-api
+          // What `Row` (the element of the tessellate facade's array) loads from the API side: its error classes
+          // and JSON support. Still no Catalyst, no unsafe types and no Kryo, which the probe checks are absent.
+          whereNamed("org.apache.spark.SparkUnsupportedOperationException"), // spark-common-utils
+          where(classOf[org.json4s.JValue]), // json4s-ast
+          where(classOf[org.json4s.Formats]), // json4s-core
+          where(classOf[org.json4s.jackson.JsonMethods.type]), // json4s-jackson
+          where(classOf[com.fasterxml.jackson.core.JsonParser]), // jackson-core
+          where(classOf[com.fasterxml.jackson.databind.ObjectMapper]), // jackson-databind
+          where(classOf[com.fasterxml.jackson.annotation.JsonProperty]), // jackson-annotations
+          where(classOf[org.slf4j.Logger]) // slf4j-api
+        ).distinct.mkString(java.io.File.pathSeparator)
         val javaBin = Paths.get(System.getProperty("java.home"), "bin", "java").toString
         val child = new ProcessBuilder(javaBin, "-cp", classpath, SlimClasspathProbe.getClass.getName.stripSuffix("$"))
             .redirectErrorStream(true).start()
@@ -124,6 +137,22 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(lines.contains("UC good: TQ38SW"), output)
         for (bad <- Seq("L2 bad: ", "UC bad: ")) {
             assert(lines.exists(l => l.startsWith(bad + "RAISES IllegalStateException") && l.contains("found 1001")), output)
+        }
+        // the tessellate facade: six chips for the offset polygon, none of them a core cell, a bad resolution named
+        assert(lines.contains("L2 tessellate good: 6 TQ3080"), output)
+        assert(lines.exists(l => l.startsWith("L2 tessellate bad: RAISES IllegalStateException") && l.contains("found 3km")), output)
+        // the classpath really is slim: nothing of Catalyst, the unsafe types or Kryo can load in the child
+        assert(lines.contains("loadable: none"), output)
+    }
+
+    test("the retile facades keep to the slim API surface (their classes name no Catalyst, unsafe or Kryo type)") {
+        // They need GDAL natives, so they cannot run on the slim classpath; their constant pools are checked instead.
+        val dir = Paths.get(classOf[RstRetileCountBytesUdf].getProtectionDomain.getCodeSource.getLocation.toURI)
+        val names = Seq("RetileKernel", "RetileKernel$", "RstRetileCountBytesUdf", "RstRetilePartBytesUdf", "RstRetileArrayBytesUdf")
+        val banned = Seq("org/apache/spark/sql/catalyst", "org/apache/spark/unsafe", "com/esotericsoftware")
+        for (n <- names; b <- banned) {
+            val bytes = Files.readAllBytes(dir.resolve("com/databricks/labs/gbx/kernels/udf/" + n + ".class"))
+            assert(!new String(bytes, "ISO-8859-1").contains(b), s"$n names $b")
         }
     }
 

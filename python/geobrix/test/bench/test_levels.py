@@ -193,6 +193,43 @@ def test_levels_leg_times_every_light_shape_of_the_aggregates(
             assert len({r.rows for r in mine.values()}) == 1
 
 
+def test_the_merge_input_groups_hold_tiles_of_one_crs_sized_from_the_rows_there_are(
+    spark_session_local, tmp_path
+):
+    """A group of tiles in several CRSs is a mosaic of several places (terabytes, for the corpus' tiles), and
+    the count a group is sized from is the rows the input holds, not the rows a scale asks for.
+    """
+    from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.bench import oracles
+
+    (tmp_path / "rows").mkdir()
+    crs = (
+        ["EPSG:4326"] * 16 + ["EPSG:3857"] * 4 + ["EPSG:27700"] * 4 + ["EPSG:32618"] * 4
+    )
+    for i, c in enumerate(crs):  # 28 tiles; the scale below asks for 5000
+        (tmp_path / "rows" / f"r{i}.tif").write_bytes(oracles._tile_bytes(c, 32, 32))
+
+    def groups(name):
+        table = lf.INPUTS[name](spark_session_local, 5000, str(tmp_path), None)
+        out = {}
+        for key, raster in (
+            spark_session_local.table(table).select("key", "tile.raster").collect()
+        ):
+            with MemoryFile(bytes(raster)) as mf, mf.open() as ds:
+                out.setdefault(key, []).append(ds.crs.to_epsg())
+        return out
+
+    even = groups("tiles_grouped")
+    assert sum(map(len, even.values())) == 28
+    assert all(len(set(v)) == 1 for v in even.values()), even  # one CRS a group
+    assert len(even) >= 4 and max(map(len, even.values())) <= lf._GROUP_SIZE
+    skew = groups("tiles_grouped_skew")
+    assert sum(map(len, skew.values())) == 28
+    assert all(len(set(v)) == 1 for v in skew.values()), skew
+    assert max(map(len, skew.values())) == 14  # half the rows in one key
+
+
 class _Forbidden:
     """A Connect-like session. Whatever attribute the code reads that is not set here (a Connect
     session has no sparkContext, _jvm, _jsc, rdd, or settable conf) is recorded: the code under

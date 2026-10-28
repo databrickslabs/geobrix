@@ -32,7 +32,7 @@ BASE_ROWS = {
     "tiles_big": 4,
     # MVP-A: tiles in groups of about 50, and (key, BNG cell, value) rows; each also with half of its rows in one key
     "tiles_grouped": 2000,
-    "tiles_grouped_skew": 2000,
+    "tiles_grouped_skew": 112,  # half of it is one key: 56 tiles, 896 MiB decoded
     "bng_cells": 1_000_000,
     "bng_cells_skew": 1_000_000,
 }
@@ -223,28 +223,58 @@ def _gb_tiles(virtual: bool):
     return build
 
 
-_GROUP_SIZE = 50  # tiles a group holds, about (the key is a hash of the raster)
+_GROUP_SIZE = 50  # tiles a group holds, at most
 _CELL_KEYS = 200  # groups of the BNG cell rows
 
 
 def _grouped_tiles(skew: bool):
-    """`tiles_mat` plus a `key`: a hash of the raster, over n / 50 keys; with `skew`, half the rows are key 0."""
+    """`(key, tile)`: the corpus row tiles in groups of up to 50, every group of ONE coordinate system.
+
+    The corpus cycles four systems over four places (two cities), so a group of mixed ones is a mosaic of
+    several places: terabytes of NoData for the light merge, and one tile for the heavy one. Same-system tiles
+    share their place, so a group merges to one tile and what the shapes differ on is how they hold the members.
+    The groups are sized from the tiles there are (`n` is only an upper bound), so the 1x, 4x and 16x inputs
+    have groups of one size until the corpus runs out.
+
+    With `skew`, half the rows are one key of one system. `BASE_ROWS` for this input is chosen so that group is
+    56 tiles, 896 MiB decoded (16 MiB each): the skew is in how the rows are spread, not one group too big to
+    hold. At 4x and 16x that group is 3.5 and 14 GiB, which no merge shape can hold: those points are the
+    memory cliff, not a comparison.
+    """
 
     def build(spark, n, corpus, schema):
-        tiles = _tiles(False)(spark, n, corpus, schema)
-        if tiles is None:
+        sources = _corpus_rows(corpus)
+        if not sources:
             return None
-        from pyspark.sql import functions as F
+        import rasterio
 
-        hashed = F.xxhash64(F.col("tile.raster"))
-        key = F.pmod(hashed, F.lit(max(1, n // _GROUP_SIZE)))
+        n = min(n, len(sources))
+        half = n // 2
+        by_crs: Dict[Optional[int], List[str]] = {}
+        hot_crs = None
+        for p in sources:
+            with rasterio.open(p) as ds:
+                crs = ds.crs.to_epsg() if ds.crs else None
+            hot_crs = crs if not by_crs else hot_crs
+            by_crs.setdefault(crs, []).append(p)
+            have = sum(map(len, by_crs.values()))
+            if have >= n and (not skew or len(by_crs[hot_crs]) >= half):
+                break
+        pairs = []
         if skew:
-            key = F.when(F.pmod(hashed, F.lit(2)) == 0, F.lit(0)).otherwise(key)
+            hot, by_crs[hot_crs] = by_crs[hot_crs][:half], by_crs[hot_crs][half:]
+            pairs += [("hot", p) for p in hot]
+        left = n - len(pairs)
+        for crs, paths in sorted(by_crs.items(), key=lambda kv: str(kv[0])):
+            for i, p in enumerate(paths[: max(0, left)]):
+                pairs.append((f"{crs}-{i // _GROUP_SIZE}", p))
+            left -= len(paths)
+        kind = "skew" if skew else "even"
         return _table(
             spark,
             schema,
-            f"mvp_in_tiles_grouped_{'skew' if skew else 'even'}_v{RECIPE_VERSION}_{n}",
-            lambda: spark.table(tiles).select(key.cast("string").alias("key"), "tile"),
+            f"mvp_in_tiles_grouped_{kind}_v{RECIPE_VERSION}_{n}",
+            lambda: _tile_column(spark, pairs, False, keyed=True),
         )
 
     return build
@@ -881,8 +911,8 @@ FORMS["G"] = [
 
 _A = "databricks.labs.gbx.bench.levels_forms:"
 _MA, _BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
-# xmin, ymin, xmax, ymax, width, height: one 100 km square at 100 m
-_A_CANVAS = (530000.0, 180000.0, 630000.0, 280000.0, 1000, 1000)
+# xmin, ymin, xmax, ymax, width, height: the 100 km square TQ (where `bng_cells` puts its cells) at 100 m
+_A_CANVAS = (500000.0, 100000.0, 600000.0, 200000.0, 1000, 1000)
 _PAIRS = "collect_list(struct(cellid, value))"
 
 

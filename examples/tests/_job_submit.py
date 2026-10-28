@@ -67,7 +67,10 @@ def is_transient(exc: BaseException) -> bool:
         # requests' HTTPError (an OSError) is raised for a response the server DID send, so it
         # carries a verdict: only throttling, a request timeout and server faults can differ
         # next time; a 400/401/403/404 fails the same way again.
+        # (urllib's HTTPError has no response: its status is `code`.)
         status = getattr(getattr(exc, "response", None), "status_code", None)
+        if status is None:
+            status = getattr(exc, "code", None)
         return status is None or status in (408, 429) or status >= 500
     # Network-level failures: builtin ConnectionError/TimeoutError and requests' exceptions
     # (all OSError subclasses) carry no server verdict, so the request may have landed. Local

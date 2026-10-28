@@ -194,6 +194,14 @@ def test_an_http_error_is_retried_only_when_the_server_verdict_can_change(
     assert _job_submit.is_transient(HTTPError()) is True  # no response: no verdict
 
 
+@pytest.mark.parametrize("status, retried", [(404, False), (503, True)])
+def test_a_urllib_http_error_is_judged_by_its_code(status, retried):
+    import urllib.error
+
+    exc = urllib.error.HTTPError("http://x", status, "msg", {}, None)
+    assert _job_submit.is_transient(exc) is retried
+
+
 def test_attempts_must_be_positive():
     with pytest.raises(ValueError):
         _job_submit.submit_once(fake_workspace(), attempts=0, run_name="nb")

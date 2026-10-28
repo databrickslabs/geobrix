@@ -209,16 +209,24 @@ def _bng_batches():
     batches["fractional_resolution"] = tuple(
         _arrow_column(v) for v in ([530000.0], [180000.0], [3.5])
     )
-    # An infinity or a huge coordinate is outside GB. Nothing defines a "right" cell for it, but every rung
-    # answers what c0 answers on this CPU (numpy's int64 cast and wrap-around), in a debug build too.
-    batches["non_finite_and_huge_coordinates"] = (
+    # An infinity is NULL like NaN (AP-21), even beside a resolution that would raise. A huge finite
+    # coordinate is outside GB: no right cell exists, so every rung answers what c0 answers (int64
+    # wrap-around, no panic in a debug build). Beyond 2**63 the cast is the CPU's, so those stay out.
+    batches["non_finite_coordinates"] = (
         pa.array(
-            [float("inf"), float("-inf"), 1e300, 530000.0, 9.3e18, 5e12], pa.float64()
+            [float("inf"), float("-inf"), 530000.0, 530000.0, float("nan")],
+            pa.float64(),
         ),
         pa.array(
-            [180000.0, 180000.0, -1e13, float("inf"), 180000.0, 5e12], pa.float64()
+            [180000.0, float("inf"), float("inf"), float("-inf"), float("inf")],
+            pa.float64(),
         ),
-        pa.array([3, -3, 6, 1, -1, 2], pa.int32()),
+        pa.array(["3", "3km", "3", "3km", "3"]),
+    )
+    batches["huge_finite_coordinates"] = (
+        pa.array([5e12, -1e13, 1e15, 9e18, 530000.0], pa.float64()),
+        pa.array([180000.0, 180000.0, -1e13, 5e12, 9e18], pa.float64()),
+        pa.array([3, -3, 6, 1, -1], pa.int32()),
     )
     batches["empty"] = (
         pa.array([], pa.float64()),
@@ -232,7 +240,7 @@ def _outcome(call):
     import numpy as np
 
     try:
-        with np.errstate(all="ignore"):  # the int64 cast of an infinity warns
+        with np.errstate(all="ignore"):  # int64 overflow of a huge coordinate warns
             return ("ok", list(call()))
     except Exception as exc:  # noqa: BLE001 - the error is part of the contract
         return ("raises", type(exc).__name__, str(exc))

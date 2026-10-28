@@ -2,8 +2,9 @@
 
 Same results as c0 (pygx.functions._bng_eastnorthasbng_udf), row for row, errors included; the MVP-S
 oracle runs all three. The contract they share:
-  * a NULL (or NaN) coordinate or resolution is NULL, and a NULL coordinate is NULL before its
-    resolution is read, so a bad resolution on such a row is not an error;
+  * a NULL (or NaN, or infinite: AP-21) coordinate or a NULL resolution is NULL, and a coordinate that
+    is not a finite number is NULL before the resolution is read, so a bad resolution on such a row is
+    not an error;
   * an integral float resolution (an INT column holding a NULL arrives as 3.0) is the integer;
   * a resolution BNG does not define, or a coordinate that is not a number, raises and names the value.
 """
@@ -71,7 +72,7 @@ def _kernel():
 
 def _encode(ev: np.ndarray, nv: np.ndarray, res: pd.Series, cells) -> np.ndarray:
     out = np.full(len(ev), None, dtype=object)
-    for r, mask in _groups(res, ~np.isnan(ev) & ~np.isnan(nv)):
+    for r, mask in _groups(res, np.isfinite(ev) & np.isfinite(nv)):
         out[mask] = cells(ev[mask], nv[mask], r)
     return out
 
@@ -122,10 +123,9 @@ def _d_arrow(e, n, res):
         return pa.array(
             _d_batch(e.to_pandas(), n.to_pandas(), res.to_pandas()), type=pa.string()
         )
-    if not (~np.isnan(ev) & ~np.isnan(nv)).any():
-        return pa.nulls(
-            len(ev), pa.string()
-        )  # every row NULL: the resolution is never read
+    if not (np.isfinite(ev) & np.isfinite(nv)).any():
+        # every row NULL: the resolution is never read
+        return pa.nulls(len(ev), pa.string())
     if res.null_count == 0 and _rs.unavailable_reason() is None:
         one = pc.unique(res)
         if len(one) == 1:  # a literal resolution: the whole batch in one kernel call

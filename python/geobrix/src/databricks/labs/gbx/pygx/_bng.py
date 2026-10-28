@@ -266,8 +266,8 @@ def _point_to_cell_id_core(e, n, resolution: int):
 
 def point_to_cell_id(eastings: float, northings: float, resolution: int) -> int:
     """Scalar wrapper over :func:`_point_to_cell_id_core` (unchanged behavior)."""
-    if math.isnan(eastings) or math.isnan(northings):
-        raise ValueError("NaN coordinates are not supported.")
+    if not (math.isfinite(eastings) and math.isfinite(northings)):
+        raise ValueError("Non-finite (NaN or infinite) coordinates are not supported.")
     return int(_point_to_cell_id_core(float(eastings), float(northings), resolution))
 
 

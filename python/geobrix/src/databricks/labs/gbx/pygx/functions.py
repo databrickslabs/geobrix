@@ -15,6 +15,7 @@ from databricks.labs.gbx import _pyspark  # noqa: F401
 
 # isort: split
 
+import math
 from typing import List, Optional, Union
 
 import numpy as np
@@ -276,7 +277,12 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
         if pd.isna(ee) or pd.isna(nn) or pd.isna(r):
             out.append(None)
             continue
-        out.append(_bng.point_as_cell(float(ee), float(nn), _norm_res(r)))
+        ee, nn = float(ee), float(nn)
+        # AP-21: an infinity is NULL like NaN, before the resolution is read
+        if not (math.isfinite(ee) and math.isfinite(nn)):
+            out.append(None)
+            continue
+        out.append(_bng.point_as_cell(ee, nn, _norm_res(r)))
     return pd.Series(out)
 
 

@@ -46,12 +46,16 @@ class Case:
     geom_srid: int = (
         4326  # the integer SRID UC GEOMETRY args are built with (never a CRS string)
     )
+    # exact | null only: more argument rows with the same expectation (one batch on the session surface,
+    # one handler call each on UC). The UC warehouse statement is the primary `args` only.
+    variants: Tuple[Tuple[Any, ...], ...] = ()
 
 
 # Rows a JVM level is known to fail until it conforms to the light contract, as {row: {level: reason}}.
 # The parity run expects exactly these (level, row) pairs to fail, strictly, and a row that starts to
-# pass must be dropped from here. Empty while every MVP-S row passes on every level.
-HEAVY_PENDING: Dict[str, Dict[str, str]] = {}
+# pass must be dropped from here.
+_INF = "inf → NULL awaits the BNG.scala isfinite guard + a JAR rebuild"
+HEAVY_PENDING: Dict[str, Dict[str, str]] = {"bng_inf_e": {"L1": _INF, "L2": _INF}}
 
 B, T, M = "gbx_bng_eastnorthasbng", "gbx_rst_transformcrs", "gbx_st_makevalid"
 SQUARE = "POLYGON((0 0, 1 0, 1 1, 0 1, 0 0))"
@@ -66,6 +70,19 @@ MVP_S: Tuple[Case, ...] = (
     Case("bng_origin", B, (0.0, 0.0, 3), "exact", "SV0000"),
     Case("bng_null_e", B, (None, 180000.0, 3), "null"),
     Case("bng_nan_e", B, (float("nan"), 180000.0, 3), "null"),
+    # A non-finite coordinate is NULL like NaN, on every level (AP-21): there is no right cell for it.
+    Case(
+        "bng_inf_e",
+        B,
+        (float("inf"), 180000.0, 3),
+        "null",
+        variants=(
+            (float("-inf"), 180000.0, 3),
+            (530000.0, float("inf"), 3),
+            (530000.0, float("-inf"), 3),
+            (float("inf"), float("inf"), 3),
+        ),
+    ),
     Case("bng_null_res", B, (530000.0, 180000.0, None), "null"),
     # A NULL in an INT column makes pandas hand the whole batch over as floats (3.0): the
     # valid rows around the NULL must still answer, row by row.
@@ -526,8 +543,15 @@ def _ddl_type(value, param) -> str:
 
 
 def _argument_rows(case: Case, tmpdir: str) -> List[List[Any]]:
-    raw = case.args if case.kind == "exact_rows" else (case.args,)
+    raw = case.args if case.kind == "exact_rows" else (case.args, *case.variants)
     return [[resolve_arg(a, tmpdir) for a in row] for row in raw]
+
+
+def _verdict(case: Case, outs, rows) -> Optional[str]:
+    """`check` for the whole batch: exact_rows judges the list, any other kind each row (variants included)."""
+    if case.kind == "exact_rows":
+        return check(case, outs, rows[0])
+    return next(filter(None, (check(case, o, r) for o, r in zip(outs, rows))), None)
 
 
 def run_session(
@@ -586,12 +610,7 @@ def run_session(
                 fcols = [F.col(f"c{i}") for i in range(len(args))]
                 got = df.select(column_of(case.fn)(*fcols).alias("out")).collect()
             outs = [r["out"] for r in got]
-            results.append(
-                (
-                    case,
-                    check(case, outs if case.kind == "exact_rows" else outs[0], args),
-                )
-            )
+            results.append((case, _verdict(case, outs, rows)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
@@ -629,14 +648,17 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
         if "uc" not in case.surfaces or "L4" not in fn.levels:
             continue
         handler = manifest.resolve_ref(fn.levels["L4"]["handler"])
-        args = [resolve_arg(a, tmpdir) for a in case.args]
-        args += [  # the SQL wrapper supplies the DEFAULTs
-            None if p.default is None else p.default.strip("'")
-            for p in fn.params[len(args) :]
-        ]
-        args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
         try:
-            out.append((case, check(case, handler(*args), args)))
+            msgs = []
+            for row in (case.args, *case.variants):
+                args = [resolve_arg(a, tmpdir) for a in row]
+                args += [  # the SQL wrapper supplies the DEFAULTs
+                    None if p.default is None else p.default.strip("'")
+                    for p in fn.params[len(args) :]
+                ]
+                args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
+                msgs.append(check(case, handler(*args), args))
+            out.append((case, next(filter(None, msgs), None)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
@@ -665,6 +687,10 @@ def _sql_literal(value, param, case: Case) -> str:
         return "'" + value.replace("'", "''") + "'"
     if isinstance(value, float) and math.isnan(value):
         return "CAST('NaN' AS DOUBLE)"
+    if isinstance(value, float) and math.isinf(value):
+        return (
+            "CAST('Infinity' AS DOUBLE)" if value > 0 else "CAST('-Infinity' AS DOUBLE)"
+        )
     return repr(value)
 
 

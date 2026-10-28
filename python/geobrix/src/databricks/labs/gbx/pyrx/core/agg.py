@@ -442,13 +442,14 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     line at or beyond its top-left corner, so it can grow by up to a pixel on each
     side). The in-RAM merge and the streamed one (a VRT) place a tile by different
     rounding, ``floor(offset + 0.1)`` pixels in ``rasterio.merge`` and ``round(offset)``
-    in the VRT, so a reprojected tile whose offset from the mosaic origin was
-    fractional (0.5 up to 0.9 of a pixel) landed one pixel further east, and in
-    general one pixel further in any direction, in the streamed mosaic than in the
-    in-RAM one (measured: a 12-pixel 4326 tile merged with a 3857 tile at 50 km
-    pixels sat in columns 15-26 in RAM and 16-27 streamed). On the reference grid
-    every offset is whole and both paths place the tile alike. (Not compared with the
-    heavyweight tier, which warps a tile in another CRS with GDAL's own placement.)
+    in the VRT. A reprojected tile whose corner is off the reference grid can set the
+    mosaic's origin, which makes the offset of every other tile from it fractional: at
+    0.5 to 0.9 of a pixel the two merges put that tile one pixel apart (measured: a
+    12-pixel 4326 tile, reprojected, beside a 12-pixel 3857 tile at 50 km pixels; the
+    3857 tile covered columns 15-26 in RAM and 16-27 streamed, the reprojected one 0-12
+    in both). On the reference grid every offset is whole and both paths agree.
+    (Not compared with the heavyweight tier, which warps a tile in another CRS with
+    GDAL's own placement.)
     """
     if not rasters:
         return None

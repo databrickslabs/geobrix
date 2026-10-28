@@ -619,8 +619,9 @@ formats.
   other system is reprojected onto the pixel size of a tile in the reference system, and the
   mosaic has that size, in memory and streamed alike, whichever tile sorts first. That tile is also
   put on the reference tile's pixel grid, because the in-memory merge and the streamed one round a
-  fractional offset differently and placed it one pixel apart (a 12-pixel tile sat in columns 15 to
-  26 in memory and 16 to 27 streamed); it can grow by up to a pixel on each side;
+  fractional offset differently and placed the two tiles one pixel further apart when streamed (the
+  tile in the reference system sat in columns 15 to 26 in memory and 16 to 27 streamed, beside the
+  reprojected one); the reprojected tile can grow by up to a pixel on each side;
   `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window; and
   `gbx_rst_convolve` writes each block's result where the block is (it wrote it shifted and left
   the rest as the input), and in both tiers adds only the neighbours that are on the raster, so

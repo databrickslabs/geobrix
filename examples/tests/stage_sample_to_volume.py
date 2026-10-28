@@ -3,22 +3,30 @@
 Stage a sample-data dataset (a directory of the minimal bundle) to a Unity Catalog Volume.
 
 Uploads every file under  <src-root>/<path>  to  <volume-root>/geobrix-examples/<path>  with the
-Files API (streaming PUT), checks each remote size against the local one, and removes remote
-files under that dataset directory that the local copy does not have (a store left over from an
-older layout would read wrongly).
+Files API (streaming PUT) and checks each remote size against the local one. Finder litter
+(.DS_Store, ._* files) is not uploaded.
+
+What it deletes: only stale files INSIDE each *.zarr store directory it uploads (a chunk left by
+an older layout of the store would read wrongly). Nothing else is ever deleted: files beside a
+store, other datasets, the rest of the Volume. A path that holds no *.zarr store (for example
+--path nyc) is uploaded over what is there and deletes nothing.
 
 Options:
   --profile NAME      Databricks config profile (required; never chosen for you)
-  --path REL          dataset directory under geobrix-examples (default: global/era5-weather)
+  --path REL          dataset directory under geobrix-examples, relative, no ".." and no
+                      empty or "." segment (default: global/era5-weather)
   --src-root DIR      local geobrix-examples root
                       (default: sample-data/Volumes/main/default/test-data/geobrix-examples)
-  --volume-root DIR   Volume to stage into (default: /Volumes/geospatial_docs/geobrix/sample-data)
-  --dry-run           list what would be uploaded and removed locally; no workspace call
+  --volume-root DIR   Volume to stage into, /Volumes/<catalog>/<schema>/<volume>
+                      (default: /Volumes/geospatial_docs/geobrix/sample-data)
+  --dry-run           list what would be uploaded and pruned; no workspace call, no SDK needed
   --help, -h          this text
 
-Reads no config file: the profile and the Volume come from the options. An auth error stops the
-run (exit 3); log in with `databricks auth login --profile NAME` yourself.
+Reads no config file: the profile and the Volume come from the options. Exit codes: 0 done,
+1 an upload or check failed (nothing deleted), 2 bad arguments or nothing to stage, 3 the
+profile cannot authenticate (log in to it yourself), 4 the workspace could not be reached.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -30,17 +38,67 @@ from _cli import exit_if_help  # sibling module (script dir is on sys.path)
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
 DEFAULT_SRC_ROOT = (
-    PROJECT_ROOT
-    / "sample-data/Volumes/main/default/test-data/geobrix-examples"
+    PROJECT_ROOT / "sample-data/Volumes/main/default/test-data/geobrix-examples"
 )
 DEFAULT_VOLUME_ROOT = "/Volumes/geospatial_docs/geobrix/sample-data"
 DEFAULT_PATH = "global/era5-weather"
 WORKERS = 8
+AUTH_ERRORS = (
+    "Unauthenticated",
+    "PermissionDenied",
+)  # databricks.sdk.errors class names
+
+
+def clean_rel(path: str) -> str:
+    """The dataset path, or ValueError. Relative, and no empty, "." or ".." segment."""
+    if not path or path.startswith("/") or "\\" in path:
+        raise ValueError(
+            f"--path {path!r} must be a relative dataset directory such as {DEFAULT_PATH}"
+        )
+    rel = path[:-1] if path.endswith("/") else path
+    if any(segment in ("", ".", "..") for segment in rel.split("/")):
+        raise ValueError(
+            f"--path {path!r} has an empty, '.' or '..' segment; "
+            f"use a plain directory such as {DEFAULT_PATH}"
+        )
+    return rel
+
+
+def clean_volume_root(root: str) -> str:
+    """The Volume root as /Volumes/<catalog>/<schema>/<volume>[/dir], or ValueError."""
+    root = root.rstrip("/")
+    parts = root.split("/")
+    if (
+        not root.startswith("/Volumes/")
+        or len(parts) < 5
+        or any(part in ("", ".", "..") for part in parts[1:])
+    ):
+        raise ValueError(
+            f"--volume-root {root!r} must be /Volumes/<catalog>/<schema>/<volume>"
+        )
+    return root
+
+
+def is_litter(name: str) -> bool:
+    """Finder files that are never data (a Zarr store's own dotfiles, .zarray and the like, are)."""
+    return name == ".DS_Store" or name.startswith("._")
 
 
 def local_files(src: Path) -> list[Path]:
-    """Every file under ``src``, sorted."""
-    return sorted(p for p in src.rglob("*") if p.is_file())
+    """Every file under ``src`` that is data, sorted."""
+    return sorted(p for p in src.rglob("*") if p.is_file() and not is_litter(p.name))
+
+
+def store_roots(rel: str, files: list[Path], src: Path) -> list[str]:
+    """The *.zarr directories the upload covers, relative to geobrix-examples (outermost one)."""
+    roots = set()
+    for f in files:
+        segments = f"{rel}/{f.relative_to(src).as_posix()}".split("/")
+        for i, segment in enumerate(segments[:-1]):  # the last one is the file itself
+            if segment.endswith(".zarr"):
+                roots.add("/".join(segments[: i + 1]))
+                break
+    return sorted(roots)
 
 
 def remote_files(w, root: str) -> list[str]:
@@ -62,12 +120,24 @@ def remote_files(w, root: str) -> list[str]:
 
 def _upload(w, local: Path, remote: str) -> str | None:
     """Upload one file and check its size; returns an error text, or None."""
-    with open(local, "rb") as fh:
-        w.files.upload(remote, fh, overwrite=True)
-    size = w.files.get_metadata(remote).content_length
+    try:
+        with open(local, "rb") as fh:
+            w.files.upload(remote, fh, overwrite=True)
+        size = w.files.get_metadata(remote).content_length
+    except (
+        Exception
+    ) as e:  # noqa: BLE001 - one failed file is reported, not a traceback
+        return f"{remote}: {type(e).__name__}: {str(e)[:200]}"
     if size != local.stat().st_size:
         return f"{remote}: local {local.stat().st_size} B, remote {size} B"
     return None
+
+
+def _is_auth_error(error: Exception) -> bool:
+    """A credentials problem: a config ValueError, or the SDK's 401 / 403 errors (by class name)."""
+    return isinstance(error, ValueError) or any(
+        cls.__name__ in AUTH_ERRORS for cls in type(error).__mro__
+    )
 
 
 def main(argv=None) -> int:
@@ -80,65 +150,135 @@ def main(argv=None) -> int:
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args(argv)
 
-    rel = args.path.strip("/")
-    src = args.src_root / rel
-    dest = f"{args.volume_root.rstrip('/')}/geobrix-examples/{rel}"
+    # Everything that decides where files go is checked before any file or workspace is touched.
+    try:
+        rel = clean_rel(args.path)
+        volume_root = clean_volume_root(args.volume_root)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
+    src_root = args.src_root.resolve()
+    src = (src_root / rel).resolve()
+    try:
+        src.relative_to(src_root)
+    except ValueError:
+        print(f"Error: --path {rel!r} leaves --src-root {src_root}.", file=sys.stderr)
+        return 2
+    base = f"{volume_root}/geobrix-examples"
+    dest = f"{base}/{rel}"
     files = local_files(src) if src.is_dir() else []
     if not files:
-        print(f"Nothing to stage: no files under {src}. Generate it first "
-              "(gbx:data:generate-minimal-bundle --zarr-only).", file=sys.stderr)
+        print(
+            f"Nothing to stage: no files under {src}. Generate it first "
+            "(gbx:data:generate-minimal-bundle --zarr-only).",
+            file=sys.stderr,
+        )
         return 2
+    stores = store_roots(rel, files, src)
     total = sum(f.stat().st_size for f in files)
     print(f"Staging {len(files)} files ({total / 1e6:.2f} MB) from {src}")
     print(f"  to {dest}")
+    if stores:
+        print("  stale files are removed only inside: " + ", ".join(stores))
+    else:
+        print(
+            "  no *.zarr store here: files are uploaded over what is there, nothing is deleted"
+        )
     if args.dry_run:
         for f in files:
             print(f"  would upload {f.relative_to(src).as_posix()}")
         return 0
     if not args.profile:
-        print("Pass --profile NAME (the workspace is never chosen for you).", file=sys.stderr)
+        print(
+            "Pass --profile NAME (the workspace is never chosen for you).",
+            file=sys.stderr,
+        )
         return 2
 
-    from databricks.sdk import WorkspaceClient
-
+    try:
+        from databricks.sdk import WorkspaceClient
+    except ImportError:
+        print(
+            "Install databricks-sdk (Python 3.11 or newer) and run again.",
+            file=sys.stderr,
+        )
+        return 2
     try:
         w = WorkspaceClient(profile=args.profile)
-        w.current_user.me()  # one cheap call: an auth problem stops here
-    except Exception as e:  # noqa: BLE001 - report the auth failure and stop
-        print(f"Auth failed for profile {args.profile!r}: {type(e).__name__}. "
-              f"Log in yourself (databricks auth login --profile {args.profile}) and run again.",
-              file=sys.stderr)
+    except (
+        Exception
+    ) as e:  # noqa: BLE001 - the profile cannot be turned into credentials
+        print(
+            f"Cannot use profile {args.profile!r} ({type(e).__name__}). "
+            f"Log in yourself (databricks auth login --profile {args.profile}) and run again.",
+            file=sys.stderr,
+        )
         return 3
+    try:
+        w.current_user.me()  # one cheap call: an auth or network problem stops here
+    except Exception as e:  # noqa: BLE001
+        if _is_auth_error(e):
+            print(
+                f"Profile {args.profile!r} cannot authenticate ({type(e).__name__}). "
+                f"Log in yourself (databricks auth login --profile {args.profile}) and run again.",
+                file=sys.stderr,
+            )
+            return 3
+        print(
+            f"Could not reach the workspace of profile {args.profile!r}: "
+            f"{type(e).__name__}: {str(e)[:200]}",
+            file=sys.stderr,
+        )
+        return 4
 
-    keep = {f"{dest}/{f.relative_to(src).as_posix()}" for f in files}
-    for directory in sorted({str(Path(p).parent) for p in keep}):
+    remote = {f: f"{dest}/{f.relative_to(src).as_posix()}" for f in files}
+    for directory in sorted({str(Path(p).parent) for p in remote.values()}):
         try:
             w.files.create_directory(directory)
         except Exception:  # noqa: BLE001 - already there, or the upload creates it
             pass
     with ThreadPoolExecutor(max_workers=WORKERS) as pool:
-        errors = [
-            e
-            for e in pool.map(
-                lambda f: _upload(w, f, f"{dest}/{f.relative_to(src).as_posix()}"), files
-            )
-            if e
-        ]
+        errors = [e for e in pool.map(lambda f: _upload(w, f, remote[f]), files) if e]
     if errors:
-        print("Upload verification failed (bytes did not land):", file=sys.stderr)
+        print("Upload failed or did not land (nothing was deleted):", file=sys.stderr)
         for e in errors:
             print(f"  {e}", file=sys.stderr)
         return 1
 
-    stale = [p for p in remote_files(w, dest) if p not in keep]
-    for path in stale:
-        print(f"Removing stale file: {path}")
-        w.files.delete(path)
-    remote = remote_files(w, dest)
-    if set(remote) != keep:
-        print(f"Verification failed: {len(remote)} remote files, expected {len(keep)}.", file=sys.stderr)
-        return 1
-    print(f"Done: {len(remote)} files in {dest}")
+    # Plan every prune first: a store whose listing does not contain what was just uploaded is
+    # listed in a form we did not build, and then nothing may be deleted anywhere.
+    plan = []
+    for store in stores:
+        store_dest = f"{base}/{store}"
+        mine = {p for p in remote.values() if p.startswith(store_dest + "/")}
+        listing = remote_files(w, store_dest)
+        missing = sorted(mine - set(listing))
+        if missing or not store_dest.endswith(".zarr"):
+            print(
+                f"Error: the listing of {store_dest} does not contain the files just uploaded "
+                f"(first: {missing[:1]}); nothing was deleted.",
+                file=sys.stderr,
+            )
+            return 1
+        plan.append((store_dest, mine, [p for p in listing if p not in mine]))
+    for store_dest, _, stale in plan:
+        for path in stale:
+            if not path.startswith(
+                store_dest + "/"
+            ):  # unreachable: the listing is under it
+                print(f"Error: refusing to delete {path}.", file=sys.stderr)
+                return 1
+            print(f"Removing stale file: {path}")
+            w.files.delete(path)
+    for store_dest, mine, _ in plan:
+        left = remote_files(w, store_dest)
+        if set(left) != mine:
+            print(
+                f"Verification failed: {store_dest} holds {len(left)} files, expected {len(mine)}.",
+                file=sys.stderr,
+            )
+            return 1
+    print(f"Done: {len(files)} files in {dest}")
     return 0
 
 

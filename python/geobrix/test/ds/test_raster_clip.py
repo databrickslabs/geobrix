@@ -102,6 +102,24 @@ def test_box_clip_windows_to_aoi(spark, tmp_path):
     assert (w, h) == (2, 2)  # 1.0 deg / 0.5 px
 
 
+def test_box_clip_covers_the_far_edge_of_an_unaligned_box(spark, tmp_path):
+    """A box that ends inside a pixel gets that pixel: x 10.3..11.1 on 0.5-degree pixels is columns 0-2."""
+    p = _write_small(tmp_path)
+    spark.dataSource.register(RasterGbxDataSource)
+    df = (
+        spark.read.format("raster_gbx")
+        .option("clipPolygons", _box_wkt(10.3, 49.0, 11.1, 50.0))
+        .option("clipCrs", "EPSG:4326")
+        .option("virtualTiles", "false")
+        .load(p)
+    )
+    bounds, (w, h) = _tile_bounds(df.collect()[0])
+    assert (w, bounds[2]) == (
+        3,
+        11.5,
+    )  # the window reaches past 11.1; the clip trims inside it
+
+
 def test_box_clip_north_overhang_clips_to_dataset(spark, tmp_path):
     """A box that extends north past the dataset is clipped to the dataset top."""
     p = _write_small(tmp_path)

@@ -745,6 +745,16 @@ formats.
   value, and a cell stays `NULL` only when every one of its values is null. The heavyweight tier
   still keeps the row it receives last.
 
+### Raster windows — edge pixels of unaligned rasters (fix)
+
+- **A window cut around an area no longer drops the pixels at its far edge.** When the area ends
+  inside a pixel, the window used to stop at the pixel before, so the last column on the right and
+  the last row at the bottom were left out. On a raster whose pixels do not line up with the area
+  (typically one in another coordinate system than the area) this lost 2 to 3 per cent of the
+  pixels in the window. The window now includes the pixel the area ends in. This applies to the
+  `clipPolygons` option of the raster readers and to the bounding-box download of STAC assets; a
+  raster whose pixels line up with the area is cut as before.
+
 ### Registered PROJ grids and raster CRS transforms
 
 - **Lightweight raster CRS transforms work after `register_proj_grids`.** After you called

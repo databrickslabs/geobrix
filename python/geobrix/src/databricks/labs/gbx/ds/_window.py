@@ -9,10 +9,14 @@ unclipped window's origin -> raster shifted by the overhang) cannot occur.
 
 from __future__ import annotations
 
+import math
 from typing import Optional, Tuple
 
 from rasterio.windows import Window
 from rasterio.windows import from_bounds as _from_bounds
+
+# A bbox edge within this many pixels of a pixel edge counts as on it.
+_EDGE_EPS = 1e-9
 
 
 def window_for_geom(
@@ -50,8 +54,16 @@ def window_for_bbox(
             bbox_crs, src.crs, minx, miny, maxx, maxy
         )
     win = _from_bounds(minx, miny, maxx, maxy, transform=src.transform)
-    # Whole-pixel coverage of the bbox, then clip to the dataset extent.
-    win = win.round_offsets(op="floor").round_lengths(op="ceil")
+    # Whole-pixel coverage of the bbox, then clip to the dataset extent. Both edges snap outward: the
+    # far edge is the CEIL of (offset + length). Ceiling the length instead would end a pixel short
+    # whenever the offset's and the length's fractions add up past 1, and drop the bbox's far-edge
+    # pixels (2 to 3% of an unaligned source). `_EDGE_EPS` keeps a bbox that lies on a pixel edge
+    # from growing a pixel by float noise.
+    col0 = math.floor(win.col_off + _EDGE_EPS)
+    row0 = math.floor(win.row_off + _EDGE_EPS)
+    col1 = math.ceil(win.col_off + win.width - _EDGE_EPS)
+    row1 = math.ceil(win.row_off + win.height - _EDGE_EPS)
+    win = Window(col0, row0, col1 - col0, row1 - row0)
     try:
         win = win.intersection(Window(0, 0, src.width, src.height))
     except Exception:  # rasterio.errors.WindowError when disjoint

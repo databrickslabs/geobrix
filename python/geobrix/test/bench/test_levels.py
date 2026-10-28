@@ -7,6 +7,7 @@ import subprocess
 import sys
 import threading
 import time
+import types
 
 import pytest
 
@@ -204,6 +205,45 @@ def test_a_stale_default_parallelism_reads_null_not_a_partial_reset():
         got["peak"] is None
         and "default parallelism (2) != executor slots (4)" in got["reason"]
     )
+
+
+@pytest.mark.parametrize(
+    "master, parallelism, executors, slots",
+    [
+        # a cluster's driver is no executor, whatever cores it reports; local mode's IS
+        ("spark://h:7077", 16, {"driver": 8, "0": 8, "1": 8}, 16),
+        ("local[4]", 4, {"driver": 4}, 4),
+    ],
+)
+def test_the_slot_count_leaves_out_a_cluster_drivers_cores(
+    monkeypatch, master, parallelism, executors, slots
+):
+    sc = types.SimpleNamespace(
+        master=master, uiWebUrl="http://x", applicationId="a", getConf=dict,
+        defaultParallelism=parallelism,
+    )  # fmt: skip
+    rest = [{"id": i, "totalCores": c, "isActive": True} for i, c in executors.items()]
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(attribution, "_get", lambda url: rest)
+    peak = attribution.WorkerPeak(types.SimpleNamespace(sparkContext=sc))
+    assert (peak._slots, peak.reason) == (slots, None)
+
+
+def test_the_floor_udf_is_registered_once_outside_the_timed_region(
+    spark_session_local, tmp_path, monkeypatch
+):
+    from pyspark.sql.udf import UDFRegistration
+
+    calls, real = [], UDFRegistration.register
+    monkeypatch.setattr(
+        UDFRegistration, "register",
+        lambda self, name, *a, **k: calls.append(name) or real(self, name, *a, **k),
+    )  # fmt: skip
+    only_floor = [f for f in lf.FORMS["S"] if f.variant == "floor"]
+    monkeypatch.setitem(lf.FORMS, "S", only_floor)
+    rows = run_s(spark_session_local, tmp_path, scales=(1, 2))
+    assert [r.status for r in rows] == ["ok", "ok"]  # four timed iterations in all
+    assert calls.count("gbx_bng_floor") == 1
 
 
 def test_a_busy_cluster_cannot_stall_the_worker_reset(spark_session_local, monkeypatch):

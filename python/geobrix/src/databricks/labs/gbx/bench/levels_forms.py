@@ -122,11 +122,10 @@ _MV_UC = (
 _FLOOR = "TQ3080"
 
 
-def floor_bng(spark, src):
+def register_floor(spark):
     """The BNG function's Arrow UDF shell with nothing inside it: the same three input columns
-    and string output as ``gbx_bng_eastnorthasbng``, and a constant body. Its median is what the
-    shell costs without a kernel, so ``floor_median_s`` beside a variant's median says how much of
-    that variant is the kernel (the part a faster kernel can win back)."""
+    and string output as ``gbx_bng_eastnorthasbng``, and a constant body. Registered once, by the
+    form's ``setup``, outside the timed region."""
     import pandas as pd
     from pyspark.sql import functions as F
     from pyspark.sql.types import StringType
@@ -141,6 +140,12 @@ def floor_bng(spark, src):
     spark.udf.register(
         "gbx_bng_floor", F.pandas_udf(floor, StringType(), F.PandasUDFType.SCALAR)
     )
+
+
+def floor_bng(spark, src):
+    """The floor query. Its median is what the shell costs without a kernel, so
+    ``floor_median_s`` beside a variant's median says how much of that variant is the kernel
+    (the part a faster kernel can win back)."""
     df = spark.sql(_BNG.replace("{fn}", "gbx_bng_floor").format(src=src))
     r = df.collect()[0]
     return r[0], r[1], r[2], df
@@ -166,6 +171,7 @@ FORMS: Dict[str, List[Form]] = {
             "floor",
             "bng_points",
             run="databricks.labs.gbx.bench.levels_forms:floor_bng",
+            setup="databricks.labs.gbx.bench.levels_forms:register_floor",
             register=False,
         ),
         _f(

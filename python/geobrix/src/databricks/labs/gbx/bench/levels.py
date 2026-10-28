@@ -7,9 +7,10 @@ levels the compute offers and records the attribution split (``attribution.py``)
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from dataclasses import dataclass, replace
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Set, Tuple
 
 from databricks.labs.gbx.bench import attribution
 from databricks.labs.gbx.bench.results import ResultRow
@@ -45,6 +46,9 @@ class Form:
     # "module:function" -> f(spark, src) -> (n, fp, n_out) or (n, fp, n_out, df) for
     # DataFrame forms; the optional df is the one that ran, and its plan feeds the split.
     run: str = ""
+    # "module:function" -> f(spark), called once before the form is first timed: registers what
+    # `run` calls, so the timed region holds the work and not the registration.
+    setup: str = ""
     computes: Tuple[str, ...] = ("dedicated", "standard", "serverless")
     register: bool = True
     # A form whose function may return NULL for some rows. Otherwise n_out != n is an error:
@@ -139,6 +143,7 @@ class _Ctx:
     schema: Optional[str]
     uc: Optional[str]
     registered: Dict[str, Tuple[str, str]]
+    setups: Set[str] = dataclasses.field(default_factory=set)
 
 
 def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
@@ -162,6 +167,9 @@ def _run_one(ctx: _Ctx, form: Form, base: Dict, requested: int) -> ResultRow:
             forced = {form.fn: want} if form.level in ("L1", "L2", "L3") else None
             register(spark, only=[form.fn], _levels=forced)
             ctx.registered[form.fn] = want
+    if form.setup and form.setup not in ctx.setups:
+        resolve_ref(form.setup)(spark)
+        ctx.setups.add(form.setup)
     holder: Dict = {}
 
     def _go():

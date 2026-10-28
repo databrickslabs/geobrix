@@ -287,10 +287,13 @@ class WorkerPeak:
             sc = self.spark.sparkContext
             cpus = max(1, int(sc.getConf().get("spark.task.cpus", "1")))
             base = f"{sc.uiWebUrl}/api/v1/applications/{sc.applicationId}"
+            # A cluster's driver runs no tasks, whatever cores it reports; in local mode it IS
+            # the executor.
+            local = str(sc.master).startswith("local")
             cores = sum(
                 e.get("totalCores", 0)
                 for e in _get(f"{base}/executors")
-                if e.get("isActive", True)
+                if e.get("isActive", True) and (e.get("id") != "driver" or local)
             )
             declared = int(sc.defaultParallelism) // cpus
         except Exception as exc:  # noqa: BLE001

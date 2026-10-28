@@ -74,6 +74,7 @@ ORDER = [
     "ser_sent_bytes",
     "ser_recv_bytes",
     "py_eval_s",
+    "py_eval_frac",
     "native_s",
     "shuffle_bytes",
     "spill_bytes",
@@ -92,33 +93,53 @@ if set(ORDER) != _RR_FIELDS:
     )
 
 
+def _spark_schema():
+    """The Delta schema of ``ORDER``, from the ResultRow field types (Optional[X] -> X, nullable).
+
+    Typed explicitly because inference from pandas turns an int column holding None into
+    doubles and an all-None column into ``void``, which Delta refuses to append.
+    """
+    import typing
+
+    from pyspark.sql import types as T
+
+    spark_types = {str: T.StringType, int: T.LongType, float: T.DoubleType}
+    hints = typing.get_type_hints(ResultRow)
+    fields = []
+    for name in ORDER:
+        base = next(
+            (a for a in typing.get_args(hints[name]) if a is not type(None)),
+            hints[name],
+        )
+        fields.append(T.StructField(name, spark_types[base](), True))
+    return T.StructType(fields), {
+        f.name: {T.StringType: str, T.LongType: int, T.DoubleType: float}[
+            type(f.dataType)
+        ]
+        for f in fields
+    }
+
+
 def rows_to_dataframe(rows: List[ResultRow], spark, where: str = "cluster"):
     """Build a Spark DataFrame from ResultRows, re-tagging env_where (e.g. 'cluster').
 
     Columns are emitted in the explicit ``ORDER`` (not dataclass field order) so the
     Delta table column layout is the human-readable grouping, with the per-iter
-    distribution (iter_*) trailing.
+    distribution (iter_*) trailing. Column types come from the ResultRow field types, so
+    a field that is None in every row of a batch (a metric the session cannot report)
+    is still a nullable Long/Double column that appends to the existing table.
 
-    Optional[str] fields (e.g. ``split_strategy``) that are all-None in the batch
-    must be explicitly typed as StringType; Spark/pandas cannot infer the type of an
-    all-None column. The pandas column is filled with empty string before creating the
-    DataFrame so the inference path works; the value is preserved as-is for non-None
-    rows (the actual strategy label), and the empty string is a safe sentinel for rows
-    where the field is not applicable (all non-large-raster profiles).
+    ``split_strategy`` (the one Optional[str]) keeps its older convention: None is
+    written as the empty string.
     """
-    import pandas as pd
-
-    _OPTIONAL_STR_FIELDS = {"split_strategy"}
-
-    retagged = [replace(r, env_where=where) for r in rows]
-    records = [asdict(r) for r in retagged]
-    # Fill all-None optional-str columns so pandas can infer "object" (string) dtype.
-    for field in _OPTIONAL_STR_FIELDS:
-        if all(rec.get(field) is None for rec in records):
-            for rec in records:
-                rec[field] = ""
-    df = spark.createDataFrame(pd.DataFrame(records))
-    return df.select(*ORDER)
+    schema, cast = _spark_schema()
+    data = []
+    for r in rows:
+        rec = asdict(replace(r, env_where=where))
+        if rec.get("split_strategy") is None:
+            rec["split_strategy"] = ""
+        data.append(tuple(None if rec[c] is None else cast[c](rec[c]) for c in ORDER))
+    return spark.createDataFrame(data, schema)
 
 
 def to_delta(rows: List[ResultRow], spark, table: str, where: str = "cluster") -> int:

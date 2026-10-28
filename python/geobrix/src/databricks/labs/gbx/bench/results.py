@@ -95,19 +95,28 @@ class ResultRow:
     level: str = "na"
     form: str = "na"
     compute: str = "na"
-    # Attribution split (bench/attribution.py), taken from the plan of the last measured
-    # iteration. Bytes, seconds and MB. 0 means none was observed; a metric the session
-    # could not report at all (a Connect session has no GC time) is 0 here and named in
-    # `note` ("unavailable: ..."). native_s stays 0 until a measured split exists.
-    ser_sent_bytes: int = 0
-    ser_recv_bytes: int = 0
-    py_eval_s: float = 0.0
-    native_s: float = 0.0
-    shuffle_bytes: int = 0
-    spill_bytes: int = 0
-    peak_exec_mem_bytes: int = 0
-    gc_s: float = 0.0
-    py_worker_rss_mb: float = 0.0
+    # Attribution split (bench/attribution.py). Bytes, seconds and MB. NULL (None) means no
+    # value: the session could not report it, or it does not apply to this level (a JVM level
+    # has no Python worker); `note` says which. 0 is a measured zero, never a placeholder.
+    # Every figure is the plan of the LAST measured iteration, not a median over iterations.
+    ser_sent_bytes: Optional[int] = (
+        None  # NULL unless it scales with rows across the scales
+    )
+    ser_recv_bytes: Optional[int] = None
+    # Python-worker task-seconds (plan metric "time to run Python workers"), summed over the
+    # tasks of the execution. Divided by the execution's executor task-seconds it is
+    # py_eval_frac, a ratio of like units in (0, 1]. Unlike py_eval_s it does not grow with
+    # the number of slots the run used.
+    py_eval_s: Optional[float] = None
+    py_eval_frac: Optional[float] = None
+    native_s: Optional[float] = None  # NULL until a level reports its native time
+    shuffle_bytes: Optional[int] = None
+    spill_bytes: Optional[int] = None
+    peak_exec_mem_bytes: Optional[int] = None
+    gc_s: Optional[float] = None
+    # Peak RSS (MB) of the Python workers while the shape ran: the kernel's high-water mark,
+    # reset on every worker just before. NULL on a Connect session and off Linux.
+    py_worker_rss_mb: Optional[float] = None
     # Why an error row failed ("ExceptionType: message"); "" on every other row.
     failure_mode: str = ""
 

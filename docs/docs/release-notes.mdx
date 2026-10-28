@@ -371,7 +371,8 @@ formats.
 - **`netcdf_gbx` writes timestamp, date, string and boolean attributes.** A vector write with
   a column of one of these types failed (in the task for the default write, when the files were
   merged for `singleFile`). A timestamp is now written as a CF time variable (seconds since
-  1970-01-01 00:00:00 UTC, with `units` and `calendar` attributes), a date the same in days, a
+  1970-01-01 00:00:00 UTC, with `units` and `calendar` attributes; a timestamp without a time
+  zone is the same number of seconds, read as UTC), a date the same in days, a
   string as a text variable (a null is an empty string), and a boolean as an int8 0 or 1 with
   `flag_values` and `flag_meanings`. A null timestamp, date or boolean is the fill value, and
   `merge` keeps the attributes. See [NetCDF Writer](./writers/netcdf).

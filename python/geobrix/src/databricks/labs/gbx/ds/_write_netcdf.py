@@ -107,7 +107,9 @@ _FLOAT_NP_DTYPES = ("f4", "f8")
 
 # CF conventions for the attribute types netCDF has no native type for. Each is the set of
 # variable attributes that marks the type, so a merge of existing parts can tell it again.
-#  - TimestampType: float64 seconds since the epoch (UTC), a CF time variable;
+#  - TimestampType: float64 seconds since the epoch (UTC), a CF time variable; a
+#    TimestampNTZType (a wall-clock time with no zone) is the same number of seconds, read
+#    as if it were UTC;
 #  - DateType: int32 days since the epoch, a CF time variable;
 #  - BooleanType: int8 0 / 1 with ``flag_values`` / ``flag_meanings``;
 #  - StringType: a netCDF4 text (variable-length string) variable, a NULL is "".
@@ -926,14 +928,19 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             return "i1"  # 0 / 1
         if isinstance(dt, StringType):
             return _TEXT
-        return "f8"  # a timestamp too: seconds since the epoch
+        return "f8"  # a timestamp too (with or without a zone): seconds since the epoch
 
     def _cf_attrs(self, col: str):
         """The CF attributes that mark an attribute column as time or boolean, else None."""
-        from pyspark.sql.types import BooleanType, DateType, TimestampType
+        from pyspark.sql.types import (
+            BooleanType,
+            DateType,
+            TimestampNTZType,
+            TimestampType,
+        )
 
         dt = self.dtypes[col]
-        if isinstance(dt, TimestampType):
+        if isinstance(dt, (TimestampType, TimestampNTZType)):
             return dict(_CF_TIME_SECONDS)
         if isinstance(dt, DateType):
             return dict(_CF_TIME_DAYS)

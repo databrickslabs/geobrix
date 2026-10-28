@@ -397,8 +397,9 @@ def enu_to_lonlat(east, north, ref_lat, ref_lon):
 # NULL). Everything else (WKT, PROJJSON, PROJ4, URN/URL, other authorities, custom) is refused with a
 # Fix:. Outputs carry the integer SRID. This table is the single place that decision lives.
 UC_CRS_FORMS: Tuple[str, ...] = ("srid_int", "epsg_code", "esri_code")
-_UC_CODE = re.compile(r"^(EPSG|ESRI):([0-9]+)$", re.IGNORECASE)
-_UC_DIGITS = re.compile(r"^[0-9]+$")
+# A code has at most 9 digits: a longer digit run is refused with the Fix, never handed to int().
+_UC_CODE = re.compile(r"^(EPSG|ESRI):([0-9]{1,9})$", re.IGNORECASE)
+_UC_DIGITS = re.compile(r"^[0-9]{1,9}$")
 
 
 @dataclass(frozen=True)
@@ -420,7 +421,7 @@ def _known(authority: str, srid: int) -> bool:
 def _uc_srid_int(value) -> Optional[UcCrs]:
     if isinstance(value, bool):
         return None
-    if isinstance(value, int) or (
+    if (isinstance(value, int) and value < 10**9) or (
         isinstance(value, str) and _UC_DIGITS.match(value.strip())
     ):
         n = int(value)

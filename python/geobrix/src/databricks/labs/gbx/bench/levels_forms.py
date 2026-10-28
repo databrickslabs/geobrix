@@ -559,10 +559,13 @@ FORMS["H"] = [
 
 # --- MVP-G: generators, one form per shape ----------------------------------------------------------
 #
-# Each query answers (n, fp, n_out) over the OUTPUT rows. The retile fingerprint is the summed raster
-# length, the tessellate one the summed (reduced) hash of the cell id; the same cells or windows have
-# the same fingerprint in every shape, so the forms are comparable at one scale. A shape that is not a
-# product function runs under a `gbx_mvp_*` name that its `setup` registers (outside the timed region).
+# Each query answers (n, fp, n_out) over the OUTPUT rows. The tessellate fingerprint is the summed (reduced)
+# hash of the cell id: the same cells give the same fingerprint in every shape at every level. The retile
+# fingerprint is the summed length of the encoded pieces, and each level encodes with its own writer (rasterio
+# on L3, GDAL with the tile's own options on L1, plain GDAL GTiff on L2), so it agrees between the shapes of ONE
+# level and not between levels: across levels compare `n` (the window count) and the oracle rows.
+# A shape that is not a product function runs under a `gbx_mvp_*` name that its `setup` registers (outside the
+# timed region).
 
 _RT_CELL = (
     128,

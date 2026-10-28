@@ -30,6 +30,12 @@ def register(
     ``only`` limits the names (SQL names or short names, e.g. ``bng_eastnorthasbng``).
     Returns the level chosen for each name. A name no level can serve here is skipped (one line
     says why) and the others still register. ``_levels`` forces a level and is for tests.
+
+    A generator (a function that returns many rows per input) is a table function: call it as
+    ``FROM t, LATERAL gbx_...(args)``. That form works at every level. The select-list form
+    (``SELECT gbx_...(args)``, and ``LATERAL VIEW``) exists only where the Catalyst generator is
+    installed (L1, dedicated clusters): a light generator is a Python table function, which Spark
+    does not resolve there, and the light tier has never offered that form.
     """
     if target not in ("session", "uc"):
         raise ValueError(f"target must be 'session' or 'uc' (got {target!r})")

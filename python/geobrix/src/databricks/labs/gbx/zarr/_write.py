@@ -2514,8 +2514,20 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
     )
 
 
-def _write(spark, plan: _Plan) -> int:
-    """Files, then the commit."""
+def _touched_shards(data_rows: pa.Table) -> set:
+    """``(array, shard_key)`` of every shard that has a chunk row in ``data_rows``."""
+    chunks = data_rows.filter(pc.equal(data_rows.column("kind"), "chunk"))
+    chunks = chunks.filter(pc.is_valid(chunks.column("shard_key")))
+    return set(
+        zip(
+            chunks.column("array").to_pylist(),
+            chunks.column("shard_key").to_pylist(),
+        )
+    )
+
+
+def _write(spark, plan: _Plan, optimize: bool = False) -> int:
+    """Files, then the commit; with ``optimize``, then the fold of the shards it touched."""
     rows = _write_files(spark, plan)
     if _BEFORE_COMMIT is not None:
         _BEFORE_COMMIT(plan.write_id)
@@ -2545,7 +2557,27 @@ def _write(spark, plan: _Plan) -> int:
         ),
         "variables": written | {p.name for p in plan.patches},
     }
-    return _commit(spark, plan, data_rows, stats)
+    version = _commit(spark, plan, data_rows, stats)
+    if optimize:
+        _fold_touched(spark, plan.table, version, _touched_shards(data_rows))
+    return version
+
+
+def _fold_touched(spark, table: str, version: int, shards: set) -> None:
+    """``gbx_zarr_optimize`` for exactly the shards a write touched, right after its commit.
+
+    The write is already committed and stays so; a fold that fails says that, and a write
+    retried with the same ``write_id`` is recognised and not repeated."""
+    from databricks.labs.gbx.zarr._maint import _optimize
+
+    try:
+        _optimize(spark, table, shards=shards)
+    except ZarrError as e:
+        raise ZarrError(
+            f"the write committed (version {version}) but folding its shards failed: "
+            f"{e.message}",
+            fix=f"run gbx_zarr_optimize({table!r}); the write itself is done. {e.fix}",
+        ) from e
 
 
 # --- the public function ---------------------------------------------------------------
@@ -2725,8 +2757,10 @@ def gbx_zarr_write(
     is refused, so give them a deterministic input (a table is best). Errors raised while
     Spark runs the write arrive as ``pyspark.errors.PythonException`` with the GeoBrix
     error name and its ``Fix:`` line in the message; a failed write commits nothing.
-    ``access`` is ``"auto"`` or ``"fuse"``; ``optimize`` arrives with
-    ``gbx_zarr_optimize``.
+    ``access`` is ``"auto"`` or ``"fuse"``. ``optimize=True`` runs ``gbx_zarr_optimize`` on
+    exactly the shards the write touched, right after its commit (a few small writes into a
+    big shard cost one fold of that shard); the version returned is the write's own, and the
+    fold, if it commits, is the next one. Content is the same either way.
     """
     from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
     from databricks.labs.gbx.zarr._register import (
@@ -2749,12 +2783,6 @@ def gbx_zarr_write(
             "direct storage access is not available yet: files are written through the "
             "Volume mount",
             fix='use access="auto" or "fuse"',
-        )
-    if optimize:
-        raise ZarrUnsupported(
-            "optimize=True folds chunk rows into shards, which arrives with "
-            "gbx_zarr_optimize",
-            fix="write with optimize=False",
         )
     if mode == "create":
         if not root:
@@ -2819,7 +2847,7 @@ def gbx_zarr_write(
             owner,
             tiles,
         )
-        return _write(spark, plan)
+        return _write(spark, plan, optimize)
 
     data_root = _local_root(root)
     adopt = exists and _adoptable(spark, target, data_root, owner)
@@ -2850,7 +2878,7 @@ def gbx_zarr_write(
                 ),
             )
             made = True
-        return _write(spark, plan)
+        return _write(spark, plan, optimize)
     except BaseException:
         # Only a table this call made, and then dropped, gives its marker back: a table
         # that may hold a commit, or one another call made, relies on it.

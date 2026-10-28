@@ -55,6 +55,8 @@ __all__ = [
     "check_tag",
     "retain_seconds",
     "retain_days",
+    "property_retain_seconds",
+    "HORIZON_PROP",
 ]
 
 KINDS = ("group", "array", "shard", "chunk", "commit", "lock")
@@ -455,16 +457,23 @@ def _effective_horizon(props: dict[str, str]) -> datetime | None:
         found.append(_parse_horizon(props[HORIZON_PROP]))
     retain = props.get(PROP_PREFIX + "retain")
     if retain:
-        try:
-            window = timedelta(seconds=retain_seconds(retain))
-        except ValueError:
-            raise ZarrError(
-                f"table property {PROP_PREFIX}retain is not a duration: {retain!r}",
-                fix=f"set it with ALTER TABLE ... SET TBLPROPERTIES "
-                f"('{PROP_PREFIX}retain' = '7 days')",
-            ) from None
+        window = timedelta(seconds=property_retain_seconds(retain))
         found.append(datetime.now(timezone.utc) - window)
     return max(found) if found else None
+
+
+def property_retain_seconds(retain: str) -> int:
+    """Seconds in the ``geobrix.zarr.retain`` table property; a value that is not a
+    duration raises ``ZarrError`` (the property is edited by hand, ``retain_seconds``
+    is for what a caller passes)."""
+    try:
+        return retain_seconds(retain)
+    except ValueError:
+        raise ZarrError(
+            f"table property {PROP_PREFIX}retain is not a duration: {retain!r}",
+            fix=f"set it with ALTER TABLE ... SET TBLPROPERTIES "
+            f"('{PROP_PREFIX}retain' = '7 days')",
+        ) from None
 
 
 def _timestamp_micros(spark, value) -> int:

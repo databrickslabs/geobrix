@@ -558,6 +558,7 @@ def test_the_write_module_uses_no_api_that_spark_connect_forbids():
         "_write_tasks.py",
         "_pack.py",
         "_layout.py",
+        "_maint.py",
     ):
         path = pathlib.Path(_write.__file__).parent / name
         for node in ast.walk(ast.parse(path.read_text())):

@@ -77,7 +77,7 @@ def read_table(source, **kw):
     return cfg, table
 
 
-def read_variable(spark, table, name):
+def read_variable(spark, table, name, version_as_of=None):
     """Variable ``name`` of the store of manifest ``table``, assembled from its blocks (NaN,
     or NaT, where no block).
 
@@ -89,7 +89,7 @@ def read_variable(spark, table, name):
     from databricks.labs.gbx.zarr import _read
     from databricks.labs.gbx.zarr._read import block_to_numpy
 
-    src = _read._open_source(spark, table, "table", None, None)
+    src = _read._open_source(spark, table, "table", version_as_of, None)
     names = _read._choose_variables([name], src)
     units, cfg = _read._plan(spark, src, names, None, None, "blocks", True, None)
     rows = [r for b in run(units, cfg) for r in b.to_pylist()]

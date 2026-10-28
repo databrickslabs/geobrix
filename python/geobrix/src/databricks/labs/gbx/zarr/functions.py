@@ -10,6 +10,14 @@ The functions are added to this module as each capability lands: ``gbx_zarr_read
 ``gbx_zarr_read`` returns.
 """
 
+from databricks.labs.gbx.zarr._maint import (
+    gbx_zarr_history,
+    gbx_zarr_optimize,
+    gbx_zarr_restore,
+    gbx_zarr_tag,
+    gbx_zarr_untag,
+    gbx_zarr_vacuum,
+)
 from databricks.labs.gbx.zarr._read import (
     BLOCKS_SCHEMA,
     block_to_numpy,
@@ -25,9 +33,15 @@ __all__ = [
     "BLOCKS_SCHEMA",
     "block_to_numpy",
     "block_to_xarray",
+    "gbx_zarr_history",
+    "gbx_zarr_optimize",
     "gbx_zarr_read",
     "gbx_zarr_register",
+    "gbx_zarr_restore",
     "gbx_zarr_sample",
     "gbx_zarr_sync",
+    "gbx_zarr_tag",
+    "gbx_zarr_untag",
+    "gbx_zarr_vacuum",
     "gbx_zarr_write",
 ]

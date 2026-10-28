@@ -792,6 +792,15 @@ def _publish(spark, table: str, props, lock: str) -> int:
     for c in chunks:
         if c["shard_key"] is not None:
             inner.setdefault((c["array"], c["shard_key"]), []).append(c)
+    # a whole shard of the overlay (gbx_zarr_optimize folded it) is published like one
+    # that has overlay chunks over it
+    for r in overlay.filter(
+        pc.and_(
+            pc.equal(overlay.column("kind"), "shard"),
+            pc.is_valid(overlay.column("file")),
+        )
+    ).to_pylist():
+        inner.setdefault((r["array"], r["key"]), [])
     wanted = pa.array([_SEP.join(k) for k in inner], pa.string())
     shards = live.filter(pc.equal(kind, "shard"))
     shards = shards.filter(

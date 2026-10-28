@@ -869,6 +869,18 @@ formats.
   not clean them up, so add a lifecycle rule to the bucket that aborts incomplete multipart
   uploads (`AbortIncompleteMultipartUpload`, after a few days).
 
+### Zarr stores — copy targets and reference files (new)
+
+- **A copy export needs a path every node sees.** `gbx_zarr_export(method="copy")` is written
+  by the cluster's tasks, so a `to` on the driver's local disk is refused before any task runs
+  (`ValueError`, "export to a /Volumes path"). It used to fail after the work was done, with the
+  objects left on the executors' disks. A single-node session can still copy to a local path.
+- **Reading a reference file needs fsspec 2024.12.0 or later.** Databricks runtimes preinstall
+  fsspec 2023.5.0, which cannot open a reference file written by
+  `gbx_zarr_export(method="reference")` (`ReferenceNotReachable`). Upgrade fsspec on the compute
+  that reads the reference. GeoBrix does not pin it, because fsspec is shared with `s3fs`,
+  `gcsfs` and `adlfs` on the runtime.
+
 ### Dependencies
 
 - **GeoBrix no longer installs PySpark (breaking for local installs).** On Databricks the

@@ -165,11 +165,14 @@ else
 fi
 if [ $EXIT_CODE -eq 5 ]; then
     # pytest exit 5: nothing was collected under the marker expression. A file whose only tests are
-    # perf-marked (test_geomk_golden.py) lands here, with no other sign of why.
-    if [ $WITH_PERF -eq 0 ]; then
-        echo -e "${YELLOW}No tests ran: every selected test is excluded by the markers. The perf-marked cases are skipped by default: add --perf.${NC}"
+    # perf-marked (test_geomk_golden.py) or integration-marked lands here, with no other sign of why.
+    OPT_INS=""
+    [ $WITH_PERF -eq 0 ] && OPT_INS="--perf (the perf-marked cases)"
+    [ $WITH_INTEGRATION -eq 0 ] && OPT_INS="${OPT_INS:+$OPT_INS or }--with-integration (the integration-marked tests)"
+    if [ -n "$OPT_INS" ]; then
+        echo -e "${YELLOW}No tests ran: every selected test is excluded by the markers. Skipped by default: add $OPT_INS.${NC}"
     else
-        echo -e "${YELLOW}No tests ran: every selected test is excluded by the markers (integration, or --markers).${NC}"
+        echo -e "${YELLOW}No tests ran: every selected test is excluded by --markers.${NC}"
     fi
 fi
 show_separator

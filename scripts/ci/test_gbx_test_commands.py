@@ -369,6 +369,10 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
     words = argv.read_text().splitlines()
     assert _last_m(words) == "not integration"
 
+    sandbox.run("gbx-test-pyrx.sh", "--path", path, "--with-integration")  # opt in to the network tests
+    words = argv.read_text().splitlines()
+    assert _last_m(words) == "not perf"
+
     # --docker: the marker is still one word in the container's command, and the caller's
     # PYTEST_ADDOPTS (--durations, --junitxml) is passed into the container.
     sandbox.run(
@@ -386,8 +390,8 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
     assert env["PYTEST_ADDOPTS"] == "--durations=5"
 
 
-def test_a_run_that_selects_nothing_says_the_perf_cases_are_skipped(sandbox):
-    # A file whose only tests are perf-marked exits 5 (no tests collected) with no other sign why.
+def test_a_run_that_selects_nothing_says_which_cases_are_skipped(sandbox):
+    # A file whose only tests are perf- or integration-marked exits 5 (no tests collected) with no other sign why.
     _fake_venv(sandbox)
     path = "python/geobrix/test/pygx/test_geomk_golden.py"
 
@@ -396,6 +400,15 @@ def test_a_run_that_selects_nothing_says_the_perf_cases_are_skipped(sandbox):
 
     res = sandbox.run("gbx-test-pyrx.sh", "--path", path, "--perf", FAKE_PYTHON_RC="5")
     assert res.returncode == 5 and "--perf" not in res.output.split("exit code: 5")[-1]
+    assert "--with-integration" in res.output.split("exit code: 5")[-1]  # integration still skipped
+
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        *("--path", path, "--perf", "--with-integration"),
+        FAKE_PYTHON_RC="5",
+    )
+    hint = res.output.split("exit code: 5")[-1]
+    assert res.returncode == 5 and "--perf" not in hint and "--with-integration" not in hint
 
 
 def test_the_host_run_pins_utc_as_the_container_and_ci_do(sandbox):

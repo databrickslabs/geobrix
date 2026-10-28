@@ -2950,8 +2950,10 @@ def _asformat_udf(tile, new_format):
     if _tile_is_empty(tile) or new_format is None:
         return None
     new_bytes = _asformat_bytes(tile, new_format)
-    # metadata.driver must reflect the requested output format.
-    return _serde.build_tile(new_bytes, str(new_format), _tile_cellid(tile))
+    # metadata.driver is the driver the bytes open as (COG opens as GTiff).
+    return _serde.build_tile(
+        new_bytes, ops_core.written_driver(new_format), _tile_cellid(tile)
+    )
 
 
 @f.udf(V2_TILE_SCHEMA)
@@ -3403,16 +3405,18 @@ def rst_asformat(
     virtualize_prefix: Optional[str] = None,
     materialize: Optional[bool] = None,
 ) -> Column:
-    """Re-encode the raster to another GDAL driver (e.g. 'PNG', 'GTiff').
+    """Re-encode the raster to another GDAL driver (e.g. 'PNG', 'GTiff', 'COG').
 
     Mirrors the heavyweight ``gbx_rst_asformat``: the output tile's raster
     bytes are encoded in ``new_format`` and the tile metadata ``driver``
-    reflects it. Raises if the requested driver is unavailable in this GDAL
-    build.
+    reflects it. ``'COG'`` writes a Cloud Optimized GeoTIFF (512-pixel
+    blocks, overviews, size-adaptive ZSTD) as ``rst_cog_convert`` does; its
+    metadata ``driver`` is ``'GTiff'``, which is what the bytes open as.
+    Raises if the requested driver is unavailable in this GDAL build.
 
     Args:
         tile:       Tile struct column.
-        new_format: GDAL driver short name (e.g. 'GTiff', 'PNG').
+        new_format: GDAL driver short name, in any case (e.g. 'GTiff', 'PNG', 'COG').
         virtualize_dir:    Force-output (light-tier, Python API only): write the
             result to a durable path and return a light virtual tile.
         virtualize_prefix: Optional filename prefix for ``virtualize_dir``.

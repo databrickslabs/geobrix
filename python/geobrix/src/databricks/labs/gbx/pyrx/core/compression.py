@@ -270,6 +270,29 @@ def drop_ycbcr(profile: dict, *, unless_jpeg: bool = False) -> dict:
     return prof
 
 
+# Keys of a source profile that a write with the COG driver must not inherit: the driver lays the
+# file out and picks the photometric itself, and warns once per key it is handed (TILED,
+# BLOCKXSIZE, BLOCKYSIZE, PHOTOMETRIC); the codec keys are replaced by ``creation_opts(driver="COG")``.
+_COG_OWN_KEYS = (
+    "tiled",
+    "blockxsize",
+    "blockysize",
+    "photometric",
+    "compress",
+    "predictor",
+    "zstd_level",
+    "zlevel",
+    "LEVEL",
+)
+
+
+def cog_profile(profile: dict) -> dict:
+    """Copy of the source *profile* for a write with ``driver="COG"``: without the layout and codec keys
+    of the source (:data:`_COG_OWN_KEYS`). The caller adds ``driver="COG"``, ``blocksize``,
+    ``overview_resampling`` and ``creation_opts(..., driver="COG")``."""
+    return {k: v for k, v in profile.items() if k not in _COG_OWN_KEYS}
+
+
 def match_alpha(dst, alpha_like, all_labels: bool = False) -> None:
     """Label the bands of the new dataset *dst* alpha exactly where *alpha_like* does.
 

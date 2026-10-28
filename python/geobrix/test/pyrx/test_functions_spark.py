@@ -1,3 +1,4 @@
+import pytest
 from pyspark.sql import functions as f
 
 from databricks.labs.gbx.pyrx import functions as prx
@@ -1180,6 +1181,18 @@ def test_rst_asformat_gtiff(spark):
     meta = df.select(prx.rst_metadata(prx.rst_asformat("tile", "GTiff")).alias("m"))
     assert meta.first()["m"]["driver"] == "GTiff"
     assert out.select(prx.rst_width("t").alias("w")).first()["w"] == 4
+
+
+@pytest.mark.parametrize(
+    "requested,stamped",
+    [("GTiff", "GTiff"), ("COG", "GTiff"), ("cog", "GTiff")],
+)
+def test_rst_asformat_stamps_the_driver_the_bytes_open_as(spark, requested, stamped):
+    # COG is a layout of a GeoTIFF: rst_cog_convert stamps GTiff, so does rst_asformat, and a
+    # writer then passes the COG bytes through instead of re-encoding them with its own defaults.
+    df = _tile_df(spark, width=4, height=3)
+    out = df.select(prx.rst_asformat("tile", requested).alias("t"))
+    assert out.select("t.metadata").first()["metadata"]["driver"] == stamped
 
 
 def test_rst_buildoverviews(spark):

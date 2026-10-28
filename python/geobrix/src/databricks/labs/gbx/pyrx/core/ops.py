@@ -51,27 +51,57 @@ def try_open(raster_bytes: bytes) -> bool:
         return False
 
 
+# Raster drivers that write a file but that rasterio's extension map does not list: COG shares
+# ``tif`` with GTiff (only GTiff survives), and the Surfer grids and VICAR have no extension of
+# their own. (The other drivers the map hides, ENVI, ISCE, Leveller and ROI_PAC, write a header
+# beside the data and cannot be encoded to one buffer.)
+_EXTENSIONLESS_WRITERS = ("COG", "GS7BG", "GSAG", "GSBG", "VICAR")
+
+
 def _writable_drivers() -> set:
     """Raster driver short names this GDAL build can encode to.
 
-    ``raster_driver_extensions`` maps each file extension to ONE driver, so a
-    driver that shares its extension with another is hidden from it: COG and
-    GTiff both claim ``tif``, and only GTiff survives. COG is added back from
-    the registered-driver list.
+    ``raster_driver_extensions`` maps each file extension to ONE driver, so a driver that
+    shares its extension with another, or has none, is hidden from it:
+    :data:`_EXTENSIONLESS_WRITERS` are added back from the registered-driver list.
     """
     drivers = set(rasterio.drivers.raster_driver_extensions().values())
     with rasterio.Env() as env:
-        if "COG" in env.drivers():
-            drivers.add("COG")
+        registered = env.drivers()
+        drivers.update(d for d in _EXTENSIONLESS_WRITERS if d in registered)
     return drivers
+
+
+def driver_name(new_format: str) -> str:
+    """The GDAL short name that ``new_format`` names, in any case (GDAL looks a driver up
+    case-insensitively); ValueError when this GDAL build cannot encode to it."""
+    available = _writable_drivers()
+    by_lower = {d.lower(): d for d in available}
+    name = by_lower.get(str(new_format).lower())
+    if name is None:
+        raise ValueError(
+            f"rst_asformat: driver '{new_format}' is not available in this "
+            f"GDAL build; available: {', '.join(sorted(available))}"
+        )
+    return name
+
+
+def written_driver(new_format: str) -> str:
+    """The driver the bytes of ``as_format(ds, new_format)`` open as, for the tile metadata:
+    the driver itself, except COG, which is a layout of a GeoTIFF and opens as ``GTiff`` (the
+    stamp of ``rst_cog_convert`` too, so a writer passes the bytes through, keeping the layout
+    and the codec that were asked for, instead of re-encoding them with its own defaults).
+    """
+    name = driver_name(new_format)
+    return "GTiff" if name == "COG" else name
 
 
 def as_format(ds, new_format: str) -> bytes:
     """Re-encode the raster to another GDAL driver (e.g. PNG, GTiff, COG).
 
     Mirrors the heavyweight ``gbx_rst_asformat``. Validates the requested
-    driver is available in rasterio's bundled GDAL build; raises ValueError
-    otherwise. Returns the raster bytes encoded in ``new_format``.
+    driver (in any case) is available in rasterio's bundled GDAL build; raises
+    ValueError otherwise. Returns the raster bytes encoded in ``new_format``.
 
     ``COG`` yields a Cloud Optimized GeoTIFF (``LAYOUT=COG``): the COG driver
     only copies an existing dataset and its layout needs the canonical
@@ -80,13 +110,7 @@ def as_format(ds, new_format: str) -> bytes:
     the size-adaptive codec. Other copy-only drivers (PNG, JPEG, ...) are
     written by rasterio through a buffered copy.
     """
-    new_format = str(new_format)
-    available = _writable_drivers()
-    if new_format not in available:
-        raise ValueError(
-            f"rst_asformat: driver '{new_format}' is not available in this "
-            f"GDAL build; available: {', '.join(sorted(available))}"
-        )
+    new_format = driver_name(new_format)
     if new_format == "COG":
         return cog_convert(ds, "AUTO", 512, "AVERAGE")
     data = ds.read()

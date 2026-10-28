@@ -99,7 +99,9 @@ def encode_tile(
             driver="COG",
         )
 
-        profile = ds.profile.copy()
+        # The source's layout and codec keys are not the COG driver's (cog_profile); merge the
+        # authority options (codec + level + predictor).
+        profile = _comp.cog_profile(ds.profile)
         profile.update(
             driver="COG",
             width=win_w,
@@ -108,10 +110,6 @@ def encode_tile(
             blocksize=cog_blocksize,
             overview_resampling=str(cog_overview_resampling).upper(),
         )
-        # Remove stale compression keys from the source profile before merging authority opts.
-        for _k in ("compress", "predictor", "zstd_level", "zlevel", "LEVEL"):
-            profile.pop(_k, None)
-        # Merge authority options (codec + level + predictor)
         profile.update(_comp_opts)
 
         tmp = new_local_temp_file(suffix=".tif")

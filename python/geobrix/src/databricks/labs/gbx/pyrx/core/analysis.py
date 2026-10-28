@@ -247,16 +247,14 @@ def cog_convert(ds, compression, blocksize, overview_resampling):
         str(ds.dtypes[0]), decoded_bytes=data.nbytes, compress=_comp_arg, driver="COG"
     )
 
-    profile = ds.profile.copy()
+    # The source's layout and codec keys are not the COG driver's (cog_profile); merge the authority
+    # options (codec + level + predictor), which are empty for RAW.
+    profile = _comp.cog_profile(ds.profile)
     profile.update(
         driver="COG",
         blocksize=blocksize,
         overview_resampling=overview_resampling,
     )
-    # Remove stale compression keys from the source profile before merging authority opts.
-    for _k in ("compress", "predictor", "zstd_level", "zlevel"):
-        profile.pop(_k, None)
-    # Merge authority options (codec + level + predictor); RAW path emits empty dict.
     profile.update(_comp_opts)
 
     tmp = new_local_temp_file(suffix=".tif")

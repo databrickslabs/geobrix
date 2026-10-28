@@ -11,7 +11,7 @@ import json
 import math
 import os
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 MERC_PROJ = (
@@ -37,6 +37,7 @@ class Case:
     args: Tuple[Any, ...]
     # exact | exact_rows | null | raises | uc_refused | error_tile | tile_props | geom_props
     # exact_rows is one batch: `args` is a tuple of argument rows, `expect` one value per row.
+    # Generators (MVP-G) also use no_rows | windows | cells, and error_tile means exactly one row.
     kind: str
     # exact: the value. raises: a substring the error message must contain (the offending
     # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
@@ -377,6 +378,94 @@ MVP_H: Tuple[Case, ...] = (
         "raises",
         "different geotransform",
         ("session",),
+    ),
+)
+
+
+# MVP-G: generators, functions that return many rows per input (and the array form of tessellate).
+# A case's rows are what `LATERAL fn(args)` (or `inline(fn(args))`) gives for it; see `run_rows`.
+RT, TE, TS = "gbx_rst_retile", "gbx_bng_tessellateexplode", "gbx_bng_tessellate"
+# 2800 x 1800 m, offset 100 m into the cells it covers: six 1 km cells, every one a border cell.
+OFFSET = "POLYGON((530100 180100, 532900 180100, 532900 181900, 530100 181900, 530100 180100))"
+# 3500 x 3500 m starting 100 m outside the cells it covers: 25 cells, and the 4 in the middle are core
+# (a core cell is one the carved-in geometry reaches; a cell fully inside can still be a border cell).
+COVER = "POLYGON((529900 179900, 533400 179900, 533400 183400, 529900 183400, 529900 179900))"
+_SIX = {
+    "TQ3080": 810000.0,
+    "TQ3180": 900000.0,
+    "TQ3280": 810000.0,
+    "TQ3081": 810000.0,
+    "TQ3181": 900000.0,
+    "TQ3281": 810000.0,
+}
+_TE: Tuple[Case, ...] = (
+    Case(
+        "te_offset",
+        TE,
+        (OFFSET, 3),
+        "cells",
+        {"cells": _SIX, "core": 0},
+        geom_srid=27700,
+    ),
+    Case(
+        "te_cover",
+        TE,
+        (COVER, 3),
+        "cells",
+        {"count": 25, "core": 4, "core_chips": "null"},
+        geom_srid=27700,
+    ),
+    Case(
+        "te_cover_keep",
+        TE,
+        (COVER, 3, True),
+        "cells",
+        {"count": 25, "core": 4, "core_chips": 1.0e6},
+        geom_srid=27700,
+    ),
+    Case("te_null", TE, (None, 3), "no_rows"),
+    # A resolution BNG does not define is a parameter error: it raises on every level, never zero rows.
+    Case("te_bad_res", TE, (OFFSET, "3km"), "raises", "3km", geom_srid=27700),
+    # UC takes geometry in SRID 27700 only (BNG cells are 27700): any other is refused with a Fix.
+    Case(
+        "te_wrong_srid_uc", TE, (OFFSET, 3), "uc_refused", None, ("uc",), geom_srid=4326
+    ),
+)
+MVP_G: Tuple[Case, ...] = (
+    Case(
+        "rt_32",
+        RT,
+        (Build("tile_4326"), 32, 32),
+        "windows",
+        [(0, 0, 32, 32), (32, 0, 32, 32), (0, 32, 32, 16), (32, 32, 32, 16)],
+        ("session",),
+    ),
+    # A NULL tile has nothing to split: no rows, as explode(NULL) gives.
+    Case("rt_null", RT, (None, 32, 32), "no_rows", None, ("session",)),
+    # An error tile in comes out as the same error tile (the upstream reason survives); a tile that
+    # cannot be read is one error tile, never a failed task.
+    Case(
+        "rt_error_in",
+        RT,
+        (Build("tile_error"), 32, 32),
+        "error_tile",
+        UPSTREAM_ERROR,
+        ("session",),
+    ),
+    Case(
+        "rt_corrupt",
+        RT,
+        (Build("tile_corrupt"), 32, 32),
+        "error_tile",
+        None,
+        ("session",),
+    ),
+    *_TE,
+    # The array form returns the same chips as one value (a session function: UC reaches it through the TVF).
+    *(
+        replace(c, cid=c.cid.replace("te_", "ts_"), fn=TS, surfaces=("session",))
+        for c in _TE
+        if c.kind != "uc_refused"
     ),
 )
 
@@ -953,6 +1042,146 @@ def run_session(
     return results
 
 
+_WINDOW_KEYS = ("col_off", "row_off", "width", "height")
+
+
+def _window_of(tile, src) -> Tuple[int, int, int, int]:
+    """Where `tile` was cut from `src`, read from the pixels: its origin in the source grid and its size.
+
+    The JVM tier does not fill the tile's `window` field, so the window is the geotransform's, which
+    every level shares. A level that fills `window` has it held to the same numbers.
+    """
+    from rasterio.io import MemoryFile
+
+    with MemoryFile(bytes(_field(tile, "raster"))) as mf, mf.open() as got:
+        col = round((got.transform.c - src.transform.c) / src.transform.a)
+        row = round((got.transform.f - src.transform.f) / src.transform.e)
+        return col, row, got.width, got.height
+
+
+def _check_rows(case: Case, rows: list, args) -> Optional[str]:
+    """MVP-G: judge the rows a generator produced for one case."""
+    from databricks.labs.gbx._geom import parse_geom
+
+    tiles = [
+        _field(r, "tile") or r for r in rows
+    ]  # one `tile` column (JVM), or the tile fields (light)
+    if case.kind == "no_rows":
+        return None if not rows else f"{case.cid}: {len(rows)} rows, want none"
+    if case.kind == "error_tile":
+        if len(rows) != 1:
+            return f"{case.cid}: {len(rows)} rows, want the one error tile"
+        return check(case, tiles[0], args)
+    if case.kind == "windows":
+        from rasterio.io import MemoryFile
+        from rasterio.windows import Window
+
+        if any(_field(t, "raster") is None for t in tiles):
+            return f"{case.cid}: a sub-tile has no raster"
+        with MemoryFile(_raster_of(args[0])) as mf, mf.open() as src:
+            seen = []
+            for t in tiles:
+                win = _window_of(t, src)
+                declared = _field(t, "window")
+                if (
+                    declared is not None
+                    and tuple(declared[k] for k in _WINDOW_KEYS) != win
+                ):
+                    return f"{case.cid}: window field {tuple(declared[k] for k in _WINDOW_KEYS)}, pixels say {win}"
+                want = float(src.read(1, window=Window(*win), masked=True).sum())
+                with MemoryFile(bytes(_field(t, "raster"))) as o, o.open() as got:
+                    if abs(float(got.read(1, masked=True).sum()) - want) > 1e-6 * max(
+                        1.0, abs(want)
+                    ):
+                        return f"{case.cid}: pixel sum differs in window {win}"
+                seen.append(win)
+        return (
+            None
+            if sorted(seen) == sorted(case.expect)
+            else f"{case.cid}: windows {sorted(seen)}, want {sorted(case.expect)}"
+        )
+    if case.kind == "cells":
+        e = case.expect
+        got = {
+            (_field(r, "cellid"), bool(_field(r, "core"))): _field(r, "chip")
+            for r in rows
+        }
+        if len(got) != len(rows):
+            return f"{case.cid}: a cell is returned twice"
+        if "cells" in e:
+            areas = {
+                cid: parse_geom(bytes(ch)).area
+                for (cid, _), ch in got.items()
+                if ch is not None
+            }
+            if set(areas) != set(e["cells"]) or any(
+                abs(areas[k] - v) > 1e-6 * v for k, v in e["cells"].items()
+            ):
+                return f"{case.cid}: cells/areas {areas}, want {e['cells']}"
+        if "count" in e and len(got) != e["count"]:
+            return f"{case.cid}: {len(got)} cells, want {e['count']}"
+        cores = [ch for (_, core), ch in got.items() if core]
+        if len(cores) != e["core"]:
+            return f"{case.cid}: {len(cores)} core cells, want {e['core']}"
+        if e.get("core_chips") == "null" and any(ch is not None for ch in cores):
+            return f"{case.cid}: core chips carry geometry with keep_core_geom off"
+        if isinstance(e.get("core_chips"), float) and any(
+            abs(parse_geom(bytes(ch)).area - e["core_chips"]) > 1e-3 for ch in cores
+        ):
+            return f"{case.cid}: core chips are not whole cells"
+        return None
+    raise ValueError(case.kind)
+
+
+def run_rows(
+    spark,
+    cases,
+    shape_sql: str = "SELECT t.* FROM _gbx_oracle, LATERAL {fn}({args}) t",
+    name_of: Callable[[str], str] = lambda f: f,
+    tmpdir: Optional[str] = None,
+    surface: str = "session",
+    pad: bool = False,
+):
+    """Generators: `shape_sql` (with {fn} and {args}) yields the rows a case checks; one shape per form.
+
+    `pad` fills the optional arguments a case leaves out with their defaults, for a function of fixed arity.
+    """
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        if surface not in case.surfaces:
+            continue
+        args = [resolve_arg(a, tmpdir) for a in case.args]
+        params = man.functions[case.fn].params
+        schema = ", ".join(
+            f"c{i} {_ddl_type(v, params[i])}" for i, v in enumerate(args)
+        )
+        cols = ", ".join(
+            (
+                f"st_geomfromwkt(c{i}, {case.geom_srid})"
+                if surface == "uc" and params[i].uc == "GEOMETRY"
+                else f"c{i}"
+            )
+            for i in range(len(args))
+        )
+        if pad:
+            cols = ", ".join([cols] + [p.default for p in params[len(args) :]])
+        try:
+            spark.createDataFrame([tuple(args)], schema).createOrReplaceTempView(
+                "_gbx_oracle"
+            )
+            rows = spark.sql(shape_sql.format(fn=name_of(case.fn), args=cols)).collect()
+            out.append((case, _check_rows(case, rows, args)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
 # --- Unity Catalog surface -----------------------------------------------------------------------
 
 
@@ -994,6 +1223,38 @@ def run_handlers(cases, tmpdir: Optional[str] = None):
                 args = [_uc_value(a, p, case) for a, p in zip(args, fn.params)]
                 msgs.append(check(case, handler(*args), args))
             out.append((case, next(filter(None, msgs), None)))
+        except (
+            Exception
+        ) as exc:  # noqa: BLE001 - the case decides whether an error is expected
+            out.append((case, check_error(case, exc)))
+    return out
+
+
+def run_handlers_rows(cases, tmpdir: Optional[str] = None):
+    """T0 for UC table functions: call the handler behind the TVF and check its elements as rows."""
+    from databricks.labs.gbx import manifest
+
+    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    man = manifest.load()
+    out = []
+    for case in cases:
+        fn = man.functions[case.fn]
+        if "uc" not in case.surfaces or "tvf_over" not in fn.levels.get("L4", {}):
+            continue
+        inner = man.functions[fn.levels["L4"]["tvf_over"]]
+        handler = manifest.resolve_ref(inner.levels["L4"]["handler"])
+        args = [resolve_arg(a, tmpdir) for a in case.args]
+        args += [
+            None if p.default is None else p.default.strip("'")
+            for p in inner.params[len(args) :]
+        ]
+        args = [_uc_value(a, p, case) for a, p in zip(args, inner.params)]
+        args = [
+            a == "true" if p.uc == "BOOLEAN" and isinstance(a, str) else a
+            for a, p in zip(args, inner.params)
+        ]
+        try:
+            out.append((case, _check_rows(case, list(handler(*args) or []), args)))
         except (
             Exception
         ) as exc:  # noqa: BLE001 - the case decides whether an error is expected

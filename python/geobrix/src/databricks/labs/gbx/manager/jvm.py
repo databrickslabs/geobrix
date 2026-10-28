@@ -58,6 +58,11 @@ def install_l1(spark, fn, caps) -> Optional[str]:
         got = str(inst.acceptedArities(fqn, fn.min_args, fn.max_args))
         if got != want:
             return f"{fn.sql_name}: heavy accepts {got or 'no'} argument counts, the signature needs {want}"
+        if fn.kind == "generator":
+            # A table function (FROM t, LATERAL f(...)), the shape the light UDTFs have. There is no
+            # dispatch wrapper: a generator cannot be wrapped in a scalar SQL function.
+            r = str(inst.installGenerator(spark._jsparkSession, fn.sql_name, fqn))
+            return None if r == "ok" else r
         if not fn.accepts_virtual_tile:
             r = str(inst.install(spark._jsparkSession, fn.sql_name, fqn))
             return None if r == "ok" else r

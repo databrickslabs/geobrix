@@ -8,24 +8,26 @@ import java.util.zip.ZipEntry
 
 import com.databricks.labs.gbx.kernels.{BuildInfo, KernelGdal, L1Installer}
 import com.databricks.labs.gbx.kernels.uc.BngUc
-import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, RstTransformCrsBytesUdf}
+import com.databricks.labs.gbx.kernels.udf.{BngEastNorthAsBngUdf, BngTessellateUdf, RetileKernel, RstRetileArrayBytesUdf, RstRetileCountBytesUdf, RstRetilePartBytesUdf, RstTransformCrsBytesUdf}
 import com.databricks.labs.gbx.rasterx.gdal.{GDALManager, RasterDriver}
 import org.apache.spark.sql.catalyst.plans.PlanTest
 import org.apache.spark.sql.test.SilentSparkSession
 import org.gdal.gdalconst.gdalconstConstants
 import org.gdal.osr.SpatialReference
 
+import scala.jdk.CollectionConverters._
+
 /** One smoke per Catalyst-free facade: the JAR identity, the L1 installer, the Java UDFs and the UC Scala handlers. */
 class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
 
-    private def tinyGTiff(): Array[Byte] = {
+    private def tinyGTiff(fill: Float = 1.0f): Array[Byte] = {
         KernelGdal.ensureInit()
         val ds = GDALManager.memDriver().Create("", 16, 16, 1, gdalconstConstants.GDT_Float32)
         ds.SetGeoTransform(Array(-1.0, 0.125, 0.0, 51.0, 0.0, -0.125))
         val sr = new SpatialReference()
         sr.ImportFromEPSG(4326)
         ds.SetProjection(sr.ExportToWkt())
-        ds.GetRasterBand(1).WriteRaster(0, 0, 16, 16, Array.fill(256)(1.0f))
+        ds.GetRasterBand(1).WriteRaster(0, 0, 16, 16, Array.fill(256)(fill))
         try RasterDriver.writeToBytes(ds, Map("driver" -> "GTiff")) finally RasterDriver.releaseDataset(ds)
     }
 
@@ -133,5 +135,38 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             assert(e.getMessage.contains(bad), s"resolution $bad: ${e.getMessage}")
         }
         assert(BngUc.gdalVersion().startsWith("ok:"))
+    }
+
+    test("BngTessellateUdf returns the chips of gbx_bng_tessellate and raises for a bad resolution") {
+        // 2800 x 1800 m, offset 100 m into the cells it covers: six 1 km border cells
+        val offset = "POLYGON((530100 180100, 532900 180100, 532900 181900, 530100 181900, 530100 180100))"
+        val f = new BngTessellateUdf()
+        val chips = f.call(offset, 3, false).asScala.toSeq
+        assert(chips.map(_.getString(0)).toSet == Set("TQ3080", "TQ3180", "TQ3280", "TQ3081", "TQ3181", "TQ3281"))
+        assert(chips.forall(c => !c.getBoolean(1) && c.get(2) != null))
+        assert(f.call(null, 3, false) == null && f.call(offset, null, false) == null)
+        assert(f.call(offset.getBytes("UTF-8"), 3, false) == null) // bytes that are not a geometry: DATA, NULL
+        assert(intercept[Exception](f.call(offset, "3km", false)).getMessage.contains("3km"))
+    }
+
+    test("the retile facades cut windows from bytes") {
+        val input = tinyGTiff()
+        assert(new RstRetileCountBytesUdf().call(input, 16, 16) == 1)
+        assert(new RstRetileCountBytesUdf().call(input, 8, 8) == 4)
+        assert(new RstRetilePartBytesUdf().call(input, 16, 16, 0).nonEmpty)
+        assert(new RstRetileArrayBytesUdf().call(input, 8, 8).size == 4)
+        assert(new RstRetileCountBytesUdf().call(null, 8, 8) == null && new RstRetilePartBytesUdf().call(input, 8, 8, null) == null)
+        RetileKernel.clear()
+    }
+
+    test("RetileKernel keeps four rasters open per thread and releases the ones it pushes out") {
+        RetileKernel.clear()
+        val before = vsimemEntries()
+        for (n <- 1 to 6) RetileKernel.open(tinyGTiff(n.toFloat))
+        assert(RetileKernel.cached() == RetileKernel.Capacity)
+        // six opened, two evicted and released: only the four still held keep an in-memory file
+        assert(vsimemEntries().size - before.size == RetileKernel.Capacity, "an evicted raster kept its in-memory file")
+        RetileKernel.clear()
+        assert(RetileKernel.cached() == 0 && vsimemEntries() == before, "clear left in-memory GDAL files behind")
     }
 }

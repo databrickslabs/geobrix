@@ -72,20 +72,28 @@ def _iter_window_tiles_located(ds, tile_width, tile_height, step_x, step_y):
             w = min(tw, ds.width - col)
             h = min(th, ds.height - row)
             if w > 0 and h > 0:
-                win = Window(col, row, w, h)
-                data = ds.read(window=win)
-                profile = ds.profile.copy()
-                profile.update(
-                    driver="GTiff",
-                    width=w,
-                    height=h,
-                    transform=ds.window_transform(win),
-                )
-                yield (col, row, w, h), _comp.write_gtiff(
-                    profile, data, alpha_like=ds.colorinterp
-                )
+                yield (col, row, w, h), cut_window(ds, (col, row, w, h))
             col += step_x
         row += step_y
+
+
+def cut_window(ds, win) -> bytes:
+    """GTiff bytes of one pixel window of *ds*; *win* is ``(col_off, row_off, width, height)``.
+
+    The window is the part of the raster that lies inside it (the caller clamps it to the raster
+    edge); the output keeps the source's CRS, nodata, mask and band layout, positioned by the
+    window's geotransform.
+    """
+    col, row, w, h = (int(v) for v in win)
+    window = Window(col, row, w, h)
+    profile = ds.profile.copy()
+    profile.update(
+        driver="GTiff",
+        width=w,
+        height=h,
+        transform=ds.window_transform(window),
+    )
+    return _comp.write_gtiff(profile, ds.read(window=window), alpha_like=ds.colorinterp)
 
 
 def _window_tiles(ds, tile_width, tile_height, step_x, step_y) -> list:

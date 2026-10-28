@@ -1488,7 +1488,7 @@ Powered by the **pure-Python port of `BNG.scala`** + **shapely** as a streaming 
 **Parameters:**
 - `geometry` - Input geometry to tessellate
 - `resolution` - BNG resolution: integer index (e.g. 3 for 1 km) or string (e.g. '1km', '100m')
-- `keep_core_geom` - Optional, heavyweight tier only (default `false`). When `true`, a core cell's `chip` is the cell geometry; when `false` it is NULL. Border cells always carry their clipped geometry. The lightweight tier behaves as `false`
+- `keep_core_geom` - Optional (default `false`), in both tiers. When `true`, a core cell's `chip` is the cell geometry; when `false` it is NULL. Border cells always carry their clipped geometry
 
 **Returns:**
 - One row per cell with the columns `cellid` (STRING), `core` (BOOLEAN) and `chip` (BINARY, WKB in EPSG:27700), in both tiers and for WKB or WKT input

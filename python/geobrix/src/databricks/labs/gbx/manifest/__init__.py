@@ -87,6 +87,8 @@ class Function:
     accepts_virtual_tile: bool
     levels: Mapping[str, Mapping[str, Any]]
     oracle: str
+    # A generator's output columns as (name, SQL type): what its UC table function RETURNS.
+    columns: Tuple[Tuple[str, str], ...] = ()
 
     @property
     def max_args(self) -> int:
@@ -145,6 +147,7 @@ def load() -> Manifest:
             bool(r.get("accepts_virtual_tile")),
             _freeze(r["levels"]),
             r["oracle"],
+            tuple((c[0], c[1]) for c in r.get("columns", [])),
         )
     return Manifest(
         MappingProxyType(fns),

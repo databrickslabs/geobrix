@@ -14,10 +14,19 @@ class _Udf:
         raise RuntimeError("[CANNOT_LOAD_FUNCTION_CLASS] class not found")
 
 
+class _Udtf:
+    def __init__(self, owner):
+        self.owner = owner
+
+    def register(self, name, f):
+        self.owner.registered.append(name)
+
+
 class ConnectStub:
     def __init__(self):
         self.touched, self.registered = [], []
         self.udf = _Udf(self)
+        self.udtf = _Udtf(self)
 
     def __getattr__(self, name):
         if name in ("_jvm", "_jsc", "sparkContext", "_jsparkSession", "conf"):

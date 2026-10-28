@@ -89,7 +89,13 @@ def _l4_names(only: Optional[Iterable[str]]) -> List[str]:
         raise ValueError(
             f"install(only=...) got name(s) with no UC function: {unknown}"
         )
-    return [n for n in uc_names if n in set(want)]
+    # A table function is a SQL body over another UC function, which has to exist when it is created.
+    chosen = set(want) | {
+        man.functions[n].levels["L4"]["tvf_over"]
+        for n in want
+        if "tvf_over" in man.functions[n].levels["L4"]
+    }
+    return [n for n in uc_names if n in chosen]
 
 
 def install(

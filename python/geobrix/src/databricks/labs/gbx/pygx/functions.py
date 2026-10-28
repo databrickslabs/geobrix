@@ -610,12 +610,15 @@ class _BngGeomKLoopExplode:
 
 @udtf(returnType="cellid: string, core: boolean, chip: binary")
 class _BngTessellateExplode:
-    def eval(self, geom, res):
-        if geom is None or res is None:
+    def eval(self, geom, res, keep_core_geom=False):
+        # NULL geom, resolution or keep flag -> zero rows, as the heavy generator
+        if geom is None or res is None or keep_core_geom is None:
             return
         _bng.get_resolution(_norm_res(res))  # bad resolution PARAMETER -> raises
         try:
-            for c, core, chip in _bng.tessellate_str(geom, _norm_res(res)):
+            for c, core, chip in _bng.tessellate_str(
+                geom, _norm_res(res), keep_core_geom=bool(keep_core_geom)
+            ):
                 yield (c, bool(core), chip)
         except Exception:
             return  # bad WKB/WKT geom DATA -> zero rows (matches heavy)

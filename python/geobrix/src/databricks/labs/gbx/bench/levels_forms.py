@@ -27,6 +27,9 @@ BASE_ROWS = {
     "tiles_aligned_mat": 250,
     "tiles_gb_mat": 250,
     "tiles_gb_virt": 250,
+    # MVP-G: BNG polygons that each cover a handful of cells, and a few big tiles (4096 x 4096)
+    "bng_polys": 100_000,
+    "tiles_big": 4,
 }
 
 
@@ -76,9 +79,37 @@ def _invalid_polys(spark, n, corpus, schema):
     )
 
 
-def _tiles(virtual: bool):
+def _bng_polys(spark, n, corpus, schema):
+    """2800 x 1800 m rectangles at random places inside Great Britain (EPSG:27700): each one covers
+    about six 1 km cells, so a tessellation of them makes about six rows per input row.
+    """
+    from pyspark.sql import functions as F
+
+    x = (F.rand(5) * 500000 + 100000).alias("x")
+    y = (F.rand(6) * 800000 + 100000).alias("y")
+    return _table(
+        spark,
+        schema,
+        f"mvp_in_bng_polys_v{RECIPE_VERSION}_{n}",
+        lambda: spark.range(n)
+        .select(x, y)
+        .select(
+            F.format_string(
+                "POLYGON((%1$f %2$f, %3$f %2$f, %3$f %4$f, %1$f %4$f, %1$f %2$f))",
+                "x",
+                "y",
+                F.col("x") + 2800,
+                F.col("y") + 1800,
+            ).alias("wkt")
+        ),
+    )
+
+
+def _tiles(virtual: bool, subdir: str = "rows", name: Optional[str] = None):
+    """The corpus tiles under `subdir` as a one-column `tile` table (`name` labels the cached table)."""
+
     def build(spark, n, corpus, schema):
-        rows = corpus.rstrip("/") + "/rows"
+        rows = corpus.rstrip("/") + "/" + subdir
         if not os.path.isdir(rows):
             return None
         from databricks.labs.gbx.ds.register import register
@@ -87,7 +118,7 @@ def _tiles(virtual: bool):
         return _table(
             spark,
             schema,
-            f"mvp_in_tiles_{'virt' if virtual else 'mat'}_v{RECIPE_VERSION}_{n}",
+            f"mvp_in_tiles_{name or ('virt' if virtual else 'mat')}_v{RECIPE_VERSION}_{n}",
             lambda: spark.read.format("raster_gbx")
             .option("virtualTiles", str(virtual).lower())
             .load(rows)
@@ -197,6 +228,10 @@ INPUTS: Dict[str, Callable] = {
     "tiles_aligned_mat": _grouped("combineavg", False),
     "tiles_gb_mat": _gb_tiles(False),
     "tiles_gb_virt": _gb_tiles(True),
+    "bng_polys": _bng_polys,
+    "tiles_big": _tiles(
+        False, "big", "big"
+    ),  # absent until the 4096 x 4096 tiles are copied to {corpus}/big
 }
 
 # Each query answers one row (n, fp, n_out): the output count, an order-independent fingerprint,
@@ -519,4 +554,249 @@ FORMS["H"] = [
         setup="register_h_heavy",
         computes=("dedicated",),
     ),
+]
+
+
+# --- MVP-G: generators, one form per shape ----------------------------------------------------------
+#
+# Each query answers (n, fp, n_out) over the OUTPUT rows. The retile fingerprint is the summed raster
+# length, the tessellate one the summed (reduced) hash of the cell id; the same cells or windows have
+# the same fingerprint in every shape, so the forms are comparable at one scale. A shape that is not a
+# product function runs under a `gbx_mvp_*` name that its `setup` registers (outside the timed region).
+
+_RT_CELL = (
+    128,
+    128,
+)  # (window width, height): the corpus' small tiles get a handful of windows each
+_RT_BIG = (128, 256)  # a 4096 x 4096 tile gets 32 x 16 = 512 windows
+_RT_FP = "SELECT count(*) AS n, sum(length({x})) AS fp, count({x}) AS n_out FROM "
+_RT_LATERAL = (
+    _RT_FP.format(x="t.raster")
+    + "{{src}} s, LATERAL {fn}(s.tile, {size}) t"  # the light UDTF: the tile fields
+)
+_RT_LATERAL_L1 = (
+    _RT_FP.format(x="t.tile.raster")
+    + "{{src}} s, LATERAL {fn}(s.tile, {size}) t"  # the Catalyst generator: one `tile` column
+)
+_RT_ARRAY = (
+    _RT_FP.format(x="x.raster")
+    + "(SELECT explode(gbx_mvp_rst_retile_array(tile, {size})) AS x FROM {{src}})"
+)
+_RT_PART = (
+    _RT_FP.format(x="x.raster")
+    + "(SELECT gbx_mvp_rst_retile_part(tile, {size}, i) AS x FROM {{src}} "
+    "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count(tile, {size}) - 1)) v AS i)"
+)
+# The Java UDFs take raster bytes and give bytes back.
+_RT_ARRAY_L2 = (
+    _RT_FP.format(x="b")
+    + "(SELECT explode(gbx_mvp_rst_retile_array_l2(tile.raster, {size})) AS b FROM {{src}})"
+)
+_RT_PART_L2 = (
+    _RT_FP.format(x="b")
+    + "(SELECT gbx_mvp_rst_retile_part_l2(tile.raster, {size}, i) AS b FROM {{src}} "
+    "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count_l2(tile.raster, {size}) - 1)) v AS i)"
+)
+# The session TVF over the array form (E-K2): a SQL body, so no Python between the rows and the plan.
+_RT_TVF = (
+    _RT_FP.format(x="t.tile.raster")
+    + "{{src}} s, LATERAL gbx_mvp_rst_retile_tvf(s.tile, {w}, {h}) t"
+)
+
+_TE_FP = "SELECT count(*) AS n, sum(pmod(xxhash64({x}), 2147483647)) AS fp, count({x}) AS n_out FROM "
+_TE_LATERAL = _TE_FP.format(x="t.cellid") + "{{src}} s, LATERAL {fn}(s.wkt, 3) t"
+_TE_ARRAY = _TE_FP.format(x="c.cellid") + "(SELECT inline({fn}(wkt, 3)) FROM {{src}}) c"
+_TE_ARRAY_L2 = (
+    _TE_FP.format(x="c.cellid")
+    + "(SELECT inline(gbx_mvp_bng_tessellate_l2(wkt, 3, false)) FROM {{src}}) c"
+).format()
+_TE_UC = (
+    _TE_FP.format(x="t.cellid")
+    + "{{src}} s, LATERAL {{uc}}.gbx_bng_tessellateexplode(st_geomfromwkt(s.wkt, 27700), '3') t"
+).format()
+
+
+def setup_g_probes(spark):
+    """The light probe forms (array, count+part, Arrow UDTFs)."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    _mvp_forms.register_probe_forms(spark)
+
+
+def setup_g_l2(spark):
+    """The Java UDF facades under probe names (needs the JAR)."""
+    from databricks.labs.gbx.pyrx import _mvp_forms
+
+    _mvp_forms.register_l2_probes(spark)
+
+
+def setup_g_tvf(spark):
+    """The session SQL table function over the array probe (E-K2); its body calls the probe UDF."""
+    from databricks.labs.gbx.manifest import TILE_SQL
+
+    setup_g_probes(spark)
+    spark.sql(
+        f"CREATE OR REPLACE TEMPORARY FUNCTION gbx_mvp_rst_retile_tvf(tile {TILE_SQL}, w INT, h INT) "
+        f"RETURNS TABLE (tile {TILE_SQL}) "
+        "RETURN SELECT explode(gbx_mvp_rst_retile_array(tile, w, h)) AS tile"
+    )
+
+
+_G = "databricks.labs.gbx.bench.levels_forms:"
+RT, TE, TS = "gbx_rst_retile", "gbx_bng_tessellateexplode", "gbx_bng_tessellate"
+
+
+def _g(fn, level, variant, inp, sql, *, setup="", register=False, **kw):
+    # `register` runs the manager's own registration of `fn` at `level`; a probe shape sets `setup` instead.
+    return Form(
+        "G",
+        fn,
+        level,
+        variant,
+        inp,
+        sql=sql,
+        setup=_G + setup if setup else "",
+        register=register,
+        **kw,
+    )
+
+
+def _retile(sql, window, **fmt):
+    w, h = window
+    return sql.format(size=f"{w}, {h}", w=w, h=h, **fmt)
+
+
+FORMS["G"] = [
+    # retile on the corpus' small tiles
+    _g(
+        RT,
+        "L3",
+        "udtf",
+        "tiles_mat",
+        _retile(_RT_LATERAL, _RT_CELL, fn=RT),
+        register=True,
+    ),
+    _g(
+        RT,
+        "L3",
+        "udtf-arrow",
+        "tiles_mat",
+        _retile(_RT_LATERAL, _RT_CELL, fn="gbx_rst_retile_mvp_arrow"),
+        setup="setup_g_probes",
+    ),
+    _g(
+        RT,
+        "L3",
+        "array_inline",
+        "tiles_mat",
+        _retile(_RT_ARRAY, _RT_CELL),
+        setup="setup_g_probes",
+    ),
+    _g(
+        RT,
+        "L3",
+        "count_part",
+        "tiles_mat",
+        _retile(_RT_PART, _RT_CELL),
+        setup="setup_g_probes",
+    ),
+    _g(
+        RT,
+        "L3",
+        "session-tvf",
+        "tiles_mat",
+        _retile(_RT_TVF, _RT_CELL),
+        setup="setup_g_tvf",
+    ),
+    _g(
+        RT,
+        "L1",
+        "tvf",
+        "tiles_mat",
+        _retile(_RT_LATERAL_L1, _RT_CELL, fn=RT),
+        register=True,
+        computes=("dedicated",),
+    ),
+    _g(
+        RT,
+        "L2",
+        "array_inline",
+        "tiles_mat",
+        _retile(_RT_ARRAY_L2, _RT_CELL),
+        setup="setup_g_l2",
+        computes=("dedicated", "standard"),
+    ),
+    _g(
+        RT,
+        "L2",
+        "count_part",
+        "tiles_mat",
+        _retile(_RT_PART_L2, _RT_CELL),
+        setup="setup_g_l2",
+        computes=("dedicated", "standard"),
+    ),
+    # the same three light shapes on big tiles (512 windows each): what the shapes cost in memory
+    _g(
+        RT,
+        "L3",
+        "udtf-big",
+        "tiles_big",
+        _retile(_RT_LATERAL, _RT_BIG, fn=RT),
+        register=True,
+    ),
+    _g(
+        RT,
+        "L3",
+        "array_inline-big",
+        "tiles_big",
+        _retile(_RT_ARRAY, _RT_BIG),
+        setup="setup_g_probes",
+    ),
+    _g(
+        RT,
+        "L3",
+        "count_part-big",
+        "tiles_big",
+        _retile(_RT_PART, _RT_BIG),
+        setup="setup_g_probes",
+    ),
+    # BNG tessellate on polygons
+    _g(TE, "L3", "udtf", "bng_polys", _TE_LATERAL.format(fn=TE), register=True),
+    _g(
+        TE,
+        "L3",
+        "udtf-arrow",
+        "bng_polys",
+        _TE_LATERAL.format(fn="gbx_bng_tessellateexplode_mvp_arrow"),
+        setup="setup_g_probes",
+    ),
+    _g(
+        TE,
+        "L1",
+        "tvf",
+        "bng_polys",
+        _TE_LATERAL.format(fn=TE),
+        register=True,
+        computes=("dedicated",),
+    ),
+    _g(TS, "L3", "array_inline", "bng_polys", _TE_ARRAY.format(fn=TS), register=True),
+    _g(
+        TS,
+        "L1",
+        "array_inline",
+        "bng_polys",
+        _TE_ARRAY.format(fn=TS),
+        register=True,
+        computes=("dedicated",),
+    ),
+    _g(
+        TS,
+        "L2",
+        "array_inline",
+        "bng_polys",
+        _TE_ARRAY_L2,
+        setup="setup_g_l2",
+        computes=("dedicated", "standard"),
+    ),
+    _g(TE, "L4", "uc-tvf", "bng_polys", _TE_UC, computes=("serverless", "dedicated")),
 ]

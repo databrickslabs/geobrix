@@ -102,6 +102,42 @@ def test_levels_leg_runs_mvp_s_light_forms(spark_session_local, tmp_path):
     assert spark.catalog.tableExists(f"mvp_in_bng_points_v{lf.RECIPE_VERSION}_20000")
 
 
+def test_levels_leg_times_every_light_shape_of_the_generators(
+    spark_session_local, tmp_path
+):
+    """The shapes of one generator are the same rows asked for in different ways: one fingerprint each."""
+    from databricks.labs.gbx.bench import oracles
+
+    (tmp_path / "rows").mkdir()
+    for i in range(2):  # 300 x 200 px: six 128-px windows each
+        (tmp_path / "rows" / f"r{i}.tif").write_bytes(
+            oracles._tile_bytes("EPSG:4326", 300, 200)
+        )
+    rows = run_s(spark_session_local, tmp_path, scales=(1,), base_rows=20, mvp="G")
+    bad = [r for r in rows if r.status == "error"]
+    assert bad == [], [(r.fn, r.form, r.failure_mode) for r in bad]
+    ok = [r for r in rows if r.status == "ok"]
+    retile = {r.form: r.output_fingerprint for r in ok if r.fn == "gbx_rst_retile"}
+    assert set(retile) == {
+        "udtf",
+        "udtf-arrow",
+        "array_inline",
+        "count_part",
+        "session-tvf",
+    }
+    # the tessellate generator and the array function give the same cells, so their shapes share one answer
+    cells = {
+        (r.fn, r.form): r.output_fingerprint
+        for r in ok
+        if r.fn in ("gbx_bng_tessellateexplode", "gbx_bng_tessellate")
+    }
+    assert len(cells) == 3 and len(set(cells.values())) == 1, cells
+    assert len(set(retile.values())) == 1, retile
+    # the big-tile shapes have no tiles here, and say so
+    big = [r for r in rows if r.form.endswith("-big")]
+    assert big and {r.status for r in big} == {"na_by_design"}
+
+
 class _Forbidden:
     """A Connect-like session. Whatever attribute the code reads that is not set here (a Connect
     session has no sparkContext, _jvm, _jsc, rdd, or settable conf) is recorded: the code under

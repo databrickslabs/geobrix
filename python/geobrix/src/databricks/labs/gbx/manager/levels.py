@@ -19,6 +19,9 @@ PREFERENCE: Dict[str, Tuple[str, ...]] = {
     "gbx_bng_eastnorthasbng": ("L1", "L2", "L3"),
     "gbx_rst_transformcrs": ("L1", "L2", "L3"),
     "gbx_st_makevalid": ("L3",),
+    "gbx_rst_retile": ("L1", "L3"),
+    "gbx_bng_tessellate": ("L1", "L2", "L3"),
+    "gbx_bng_tessellateexplode": ("L1", "L3"),
 }
 L3_ORDER: Tuple[str, ...] = ("d", "c1", "c0")
 NAMES = {"L1": "heavy (Catalyst)", "L2": "heavy (Java UDF)", "L3": "light"}

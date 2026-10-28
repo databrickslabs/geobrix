@@ -402,9 +402,22 @@ def test_uc_ddl_contract(fn):
         "0.6.0",
     )
     impl = stmts[0]
+    assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only
+    if "tvf_over" in fn.levels["L4"]:
+        # A generator is a SQL table function over the array function: no Python, no environment.
+        (tvf,) = stmts
+        over = fn.levels["L4"]["tvf_over"]
+        assert "COMMENT 'geobrix 0.6.0'" in tvf and "LANGUAGE PYTHON" not in tvf
+        assert f"RETURNS TABLE ({', '.join(f'{n} {t}' for n, t in fn.columns)})" in tvf
+        assert tvf.endswith(
+            f"RETURN SELECT inline(`cat`.`sch`.{over}({', '.join(p.name for p in fn.params)}))"
+        )
+        assert (
+            all(f"{p.name} {p.uc}" in tvf for p in fn.params) and "DEFAULT false" in tvf
+        )
+        return
     assert "environment_version = '6'" in impl and "geobrix @ file:///Volumes/" in impl
     assert "COMMENT 'geobrix 0.6.0'" in impl and "LANGUAGE PYTHON" in impl
-    assert all("`cat`.`sch`." in s for s in stmts)  # 3-level names only
     has_default = any(p.default for p in fn.params)
     assert len(stmts) == (2 if has_default else 1)
     if has_default:
@@ -483,6 +496,7 @@ def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
         "    sys.modules[blocked] = None  # an import of it raises ImportError\n"
         "from databricks.labs.gbx.bench import oracles\n"
         "ran = oracles.run_handlers(oracles.MVP_S, tmpdir=tempfile.mkdtemp())\n"
+        "ran += oracles.run_handlers_rows(oracles.MVP_G, tmpdir=tempfile.mkdtemp())\n"
         "bad = [m for _, m in ran if m]\n"
         "assert ran and not bad, bad\n"
         "print(len(ran))\n"
@@ -500,9 +514,13 @@ def test_uc_handlers_import_and_run_in_a_sandbox_without_pyspark():
         [sys.executable, "-c", code], env=env, capture_output=True, text=True
     )
     assert out.returncode == 0, out.stderr[-2000:]
-    assert int(out.stdout) == sum(
+    assert int(
+        out.stdout
+    ) == sum(  # every UC row ran: the scalars, and the table function's handler
         "uc" in c.surfaces for c in oracles.MVP_S
-    )  # every UC row ran
+    ) + sum(
+        "uc" in c.surfaces and c.fn == oracles.TE for c in oracles.MVP_G
+    )
 
 
 class _UcSpark:
@@ -611,13 +629,24 @@ def test_uc_install_dry_run_emits_the_ddl_without_a_session_or_a_wheel(monkeypat
     monkeypatch.delenv("DATABRICKS_ENV_VERSION", raising=False)
     everything = uc.install("cat", "sch", VOLUME_DIR, dry_run=True)
     assert len(everything) == sum(
-        2 if any(p.default for p in f.params) else 1 for f in UC_FNS
+        (
+            1
+            if "tvf_over" in f.levels["L4"]
+            else 2 if any(p.default for p in f.params) else 1
+        )
+        for f in UC_FNS
     )
     assert all(ENV6_WHEEL in s for s in everything if "LANGUAGE PYTHON" in s)
     only = uc.install(
         "cat", "sch", VOLUME_DIR, only=["gbx_bng_eastnorthasbng"], dry_run=True
     )
     assert len(only) == 1 and "gbx_bng_eastnorthasbng(" in only[0]
+    # a table function is created after the function it wraps, which `only` brings along
+    tvf = uc.install(
+        "cat", "sch", VOLUME_DIR, only=["gbx_bng_tessellateexplode"], dry_run=True
+    )
+    assert ["LANGUAGE PYTHON" in s for s in tvf] == [True, False, False]
+    assert "RETURNS TABLE" in tvf[2] and "gbx_bng_tessellateexplode(" in tvf[2]
     hyphen = uc.install(
         "my-cat", "sch", VOLUME_DIR, only=["bng_eastnorthasbng"], dry_run=True
     )

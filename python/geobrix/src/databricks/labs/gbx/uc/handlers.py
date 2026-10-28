@@ -146,6 +146,58 @@ def _geom_bytes(geom):
     )
 
 
+def bng_tessellate(geom, resolution, keep_core_geom):
+    """UC: GEOMETRY in (SRID 27700 only: BNG cells are 27700); the chips out as EWKB with SRID 27700.
+
+    gbx_bng_tessellateexplode is a SQL table function over this one (`inline` of the array).
+    """
+    import shapely
+
+    from databricks.labs.gbx.pygx import _bng
+
+    fn = "gbx_bng_tessellate"
+    if geom is None or resolution is None:
+        return None
+    res = _res(resolution)  # an unknown resolution raises (a parameter error)
+    try:
+        raw = _geom_bytes(geom)
+        g = shapely.from_wkt(raw) if isinstance(raw, str) else shapely.from_wkb(raw)
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except Exception:  # noqa: BLE001 - unreadable geometry is NULL on UC
+        return None
+    srid = shapely.get_srid(g)
+    if srid != 27700:
+        raise _refuse(
+            fn,
+            f"BNG needs geometry in SRID 27700; got SRID {srid} (st_transform(geom, 27700) first)",
+        )
+    try:
+        chips = _bng.tessellate_str(
+            shapely.to_wkb(g), res, keep_core_geom=bool(keep_core_geom)
+        )
+    except (MemoryError, RecursionError, ImportError):
+        raise
+    except (
+        Exception
+    ):  # noqa: BLE001 - a geometry that cannot be tessellated is NULL on UC
+        return None
+    return [
+        {
+            "cellid": cell,
+            "core": bool(core),
+            "chip": (
+                None
+                if chip is None
+                else shapely.to_wkb(
+                    shapely.set_srid(shapely.from_wkb(chip), 27700), include_srid=True
+                )
+            ),
+        }
+        for cell, core, chip in chips
+    ]
+
+
 def st_makevalid(geom, level):
     from databricks.labs.gbx.pyvx._validity import st_makevalid as _makevalid
 

@@ -78,6 +78,8 @@ def function_ddl(
     if not _MANIFEST_NAME.fullmatch(sql_name):
         raise ValueError(f"function name {sql_name!r} is not a plain manifest name")
     l4 = fn.levels["L4"]
+    if "tvf_over" in l4:
+        return [_table_function_ddl(fn, q, sql_name, l4["tvf_over"], version)]
     mod, _, attr = l4["handler"].partition(":")
     has_default = any(p.default for p in fn.params)
     impl = f"gbx__{sql_name[len('gbx_'):]}" if has_default else sql_name
@@ -110,3 +112,22 @@ def function_ddl(
             f"LANGUAGE SQL\nCOMMENT {comment}\nRETURN {q}.{impl}({args})"
         )
     return stmts
+
+
+def _table_function_ddl(fn, q: str, sql_name: str, over: str, version: str) -> str:
+    """A generator on UC is a SQL table function over the array function: one row per element.
+
+    It takes the DEFAULTs itself and runs no Python of its own (the function it calls does).
+    """
+    cols = ", ".join(f"{n} {sql_type(t)}" for n, t in fn.columns)
+    sig = ", ".join(
+        f"{p.name} {sql_type(p.uc)}" + (f" DEFAULT {p.default}" if p.default else "")
+        for p in fn.params
+    )
+    args = ", ".join(p.name for p in fn.params)
+    return (
+        f"CREATE OR REPLACE FUNCTION {q}.{sql_name}({sig})\n"
+        f"RETURNS TABLE ({cols})\n"
+        f"COMMENT {quote_str(f'geobrix {version}')}\n"
+        f"RETURN SELECT inline({q}.{over}({args}))"
+    )

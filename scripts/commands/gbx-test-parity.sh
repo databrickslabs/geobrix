@@ -176,7 +176,7 @@ fi
 
 echo ""
 echo -e "${CYAN}🎯 Parity suites: ${YELLOW}${#RUN_FILES[@]}${NC}${CYAN} file(s), each in its own process${NC}"
-echo -e "${CYAN}🏷️  Markers: ${YELLOW}(none — integration ENABLED; parity is the point)${NC}"
+echo -e "${CYAN}🏷️  Markers: ${YELLOW}not connect — integration ENABLED (parity is the point); the Spark Connect tests run in gbx:test:pyrx${NC}"
 echo ""
 
 TOTAL_PASSED=0
@@ -196,7 +196,7 @@ for f in "${RUN_FILES[@]}"; do
 
     REPORT="/root/geobrix/target/parity-$(basename "$f" .py).txt"
     PYTEST_CMD="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
-        python3 -m pytest /root/geobrix/$f -v --tb=short --color=yes -rs"
+        python3 -m pytest /root/geobrix/$f -v --tb=short --color=yes -rs -m 'not connect'"
     [ -n "$KEYWORD" ] && PYTEST_CMD="$PYTEST_CMD -k '$KEYWORD'"
     PYTEST_CMD="$PYTEST_CMD | tee $REPORT"
 

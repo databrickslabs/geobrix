@@ -8,6 +8,8 @@ The host run is the default: it needs no container, takes no lock and starts at 
 
 The host run sets `TZ=UTC` (as the container and the CI runners are), and points `PYSPARK_PYTHON` and `PYSPARK_DRIVER_PYTHON` at the venv python. Without `TZ=UTC`, timestamp tests such as `test/zarr/test_read.py` fail in a US time zone.
 
+**Spark Connect tests run in their own process.** A test that uses the `spark_connect_local` fixture (a local Spark Connect session; `gbx:venv:sync --connect` installs its client deps) cannot share a pytest process with classic-session tests: the fixture skips while a classic `SparkContext` is live, a live Connect session turns `getOrCreate` into a Connect client, and a light module imported before the session exists binds its UDFs to the classic one. The test conftest marks every such test `connect`. When the selected paths contain any, the command runs `-m '<markers> and (not connect)'` over the paths first, then `-m '<markers> and (connect)'` over each file that uses the fixture, a pytest process per file. The exit code is a failure of any process (pytest's "nothing collected", 5, counts as a pass while another process ran). With no Connect deps a Connect process skips its tests with a one-line reason. Nothing to add by hand: no `-k` or `PYTEST_ADDOPTS` workaround to run them.
+
 ## Usage
 
 `bash scripts/commands/gbx-test-pyrx.sh [OPTIONS]`

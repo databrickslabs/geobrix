@@ -154,7 +154,8 @@ def pytest_collection_finish(session):
 #     sessions (SPARK_CONNECT_MODE_ENABLED), so classic tests must not run after it. The
 #     tests that use the fixture are therefore ordered LAST in a run.
 #
-# Run Connect tests on their own for a clean answer:
+# The tests that use the fixture are marked `connect` (pytest_collection_modifyitems below), and
+# gbx:test:pyrx / gbx:test:light run them in a second pytest process by themselves:
 #   gbx:test:pyrx --path python/geobrix/test/test_spark_connect_local.py
 # The client deps are opt-in: gbx:venv:sync --connect (the CI lock does not carry them).
 # ---------------------------------------------------------------------------
@@ -166,7 +167,14 @@ def _importable(name):
 
 
 def pytest_collection_modifyitems(items):
-    """Order the tests that use the local Connect session last (stable for the rest)."""
+    """Mark the tests that use the local Connect session `connect`, and order them last (stable for the rest).
+
+    The marker is what lets gbx:test:pyrx / gbx:test:light run them in a pytest process of their own and
+    gbx:test:parity leave them out (the container has no gRPC client): no test carries it by hand.
+    """
+    for item in items:
+        if "spark_connect_local" in getattr(item, "fixturenames", ()):
+            item.add_marker(pytest.mark.connect)
     items.sort(
         key=lambda item: "spark_connect_local" in getattr(item, "fixturenames", ())
     )

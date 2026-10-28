@@ -435,6 +435,7 @@ markers = [
     "integration: tests that need network or long-running setup (excluded from CI)",
     "perf: slow tessellate / geomk / streamed-merge cases (some are correctness oracles that are only slow, some bound memory); skipped by gbx:test:pyrx and gbx:test:light by default (--perf includes them), still run by CI",
     "delta: zarr tests that run on the local Spark/Delta session (marked in test/zarr/conftest.py); -m 'not delta' is the fast, Spark-free inner loop",
+    "connect: tests that use the spark_connect_local fixture (marked in test/conftest.py, not by hand); they cannot share a process with classic-session tests, so gbx:test:pyrx / gbx:test:light run them in a second pytest process and gbx:test:parity leaves them out",
 ]
 filterwarnings = [
     "ignore:Support for class-based .* config.* deprecated:",

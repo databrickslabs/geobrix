@@ -125,11 +125,55 @@ MARKERS="$BASE_MARKERS"
 if [[ -n "$EXTRA_MARKERS" ]]; then
     MARKERS="${BASE_MARKERS:+($BASE_MARKERS) and }($EXTRA_MARKERS)"
 fi
-MARKERS_Q="$(printf '%q' "$MARKERS")"   # one shell word inside the `bash -c` command string below
+# The tests that use the local Spark Connect session (the spark_connect_local fixture, marked `connect` by the test
+# conftest) cannot share a process with the classic ones: the fixture skips while a classic SparkContext is live, and
+# a live Connect session turns getOrCreate into a Connect client. So when the selected paths hold any, they run in a
+# pytest process after the first, which leaves them out. Each file that uses the fixture gets a process of its own: a
+# light module imported before the Connect session exists (any file that imports the bench modules does) binds its
+# UDFs to the classic session.
+CONNECT_FILES=()
+for p in "${TEST_PATHS[@]}"; do
+    HOST_P="${p#/root/geobrix/}"
+    while IFS= read -r f; do
+        [[ $(basename "$f") == conftest.py ]] && continue
+        CONNECT_FILES+=("${f#"$PROJECT_ROOT"/}")
+    done < <(grep -rls --include='*.py' spark_connect_local "$PROJECT_ROOT/$HOST_P" | sort)
+done
+HAS_CONNECT=0
+[[ ${#CONNECT_FILES[@]} -gt 0 ]] && HAS_CONNECT=1
+MAIN_MARKERS="$MARKERS"
+CONNECT_MARKERS="connect"
+if [[ $HAS_CONNECT -eq 1 ]]; then
+    MAIN_MARKERS="${MARKERS:+($MARKERS) and }(not connect)"
+    CONNECT_MARKERS="${MARKERS:+($MARKERS) and }(connect)"
+fi
 
 echo -e "${CYAN}Test path: ${YELLOW}${TEST_PATHS[*]}${NC}"
-echo -e "${CYAN}Markers: ${YELLOW}${MARKERS}${NC}"
+echo -e "${CYAN}Markers: ${YELLOW}${MAIN_MARKERS}${NC}"
+[[ $HAS_CONNECT -eq 1 ]] && echo -e "${CYAN}Then, a process each for ${CONNECT_FILES[*]} (Spark Connect): ${YELLOW}${CONNECT_MARKERS}${NC}"
 echo ""
+
+# run_pass <marker expression> <path>...: one pytest process over the paths; its exit code.
+run_pass() {
+    local markers_q paths=() hp
+    markers_q="$(printf '%q' "$1")"   # one shell word inside the `bash -c` command string below
+    shift
+    if [[ $USE_DOCKER -eq 1 ]]; then
+        local pytest_cmd env_args=()
+        for hp in "$@"; do paths+=("/root/geobrix/${hp#/root/geobrix/}"); done
+        pytest_cmd="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
+            python3 -m pytest ${paths[*]} -v --tb=short --color=yes -m $markers_q"
+        [[ -n "${PYTEST_ADDOPTS:-}" ]] && env_args+=(-e "PYTEST_ADDOPTS=$PYTEST_ADDOPTS")
+        docker exec "${env_args[@]}" "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$pytest_cmd"
+    else
+        # Host venv path (default): isolated from system site-packages. run_in_pyrx_venv also
+        # points PYSPARK_PYTHON at the venv python so Spark workers match the driver.
+        for hp in "$@"; do paths+=("${hp#/root/geobrix/}"); done   # strip the in-container prefix if present
+        run_in_pyrx_venv "cd '$PROJECT_ROOT' && python -m pytest ${paths[*]} \
+            -v --tb=short --color=yes -m $markers_q"
+    fi
+}
+
 show_separator
 echo -e "${CYAN}Running light-tier tests...${NC}"
 show_separator
@@ -138,22 +182,26 @@ echo ""
 if [[ $USE_DOCKER -eq 1 ]]; then
     check_docker
     gbx_acquire_test_lock   # only the container run shares Maven/Spark state; the host venv run does not
-    PYTEST_CMD="unset JAVA_TOOL_OPTIONS && cd /root/geobrix && \
-        python3 -m pytest ${TEST_PATHS[*]} -v --tb=short --color=yes -m $MARKERS_Q"
-    ENV_ARGS=()
-    [[ -n "${PYTEST_ADDOPTS:-}" ]] && ENV_ARGS+=(-e "PYTEST_ADDOPTS=$PYTEST_ADDOPTS")
-    docker exec "${ENV_ARGS[@]}" "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c "$PYTEST_CMD"
-    EXIT_CODE=$?
-else
-    # Host venv path (default): isolated from system site-packages. run_in_pyrx_venv also
-    # points PYSPARK_PYTHON at the venv python so Spark workers match the driver.
-    HOST_PATHS=()
-    for p in "${TEST_PATHS[@]}"; do
-        HOST_PATHS+=("${p#/root/geobrix/}")   # strip the in-container prefix if present
+fi
+run_pass "$MAIN_MARKERS" "${TEST_PATHS[@]}"
+EXIT_CODE=$?
+if [[ $HAS_CONNECT -eq 1 ]]; then
+    for cf in "${CONNECT_FILES[@]}"; do
+        echo ""
+        show_separator
+        echo -e "${CYAN}Running the Spark Connect tests of ${cf} in their own process...${NC}"
+        show_separator
+        echo ""
+        run_pass "$CONNECT_MARKERS" "$cf"
+        CONNECT_EXIT=$?
+        # Exit 5 is "nothing collected": fine for one process while another ran (a path of only Connect tests, or
+        # --markers that leave them out). A failure in any process wins; all 5 is 5.
+        if [[ $EXIT_CODE -ne 0 && $EXIT_CODE -ne 5 ]]; then :
+        elif [[ $CONNECT_EXIT -ne 0 && $CONNECT_EXIT -ne 5 ]]; then EXIT_CODE=$CONNECT_EXIT
+        elif [[ $EXIT_CODE -eq 5 && $CONNECT_EXIT -eq 5 ]]; then EXIT_CODE=5
+        else EXIT_CODE=0
+        fi
     done
-    run_in_pyrx_venv "cd '$PROJECT_ROOT' && python -m pytest ${HOST_PATHS[*]} \
-        -v --tb=short --color=yes -m $MARKERS_Q"
-    EXIT_CODE=$?
 fi
 
 echo ""

@@ -27,7 +27,8 @@ That means the parity gate can silently not-run. **A skipped suite reads as gree
 2. **Stages exactly one JAR**, deleting older ones so a stale artifact cannot be picked up instead.
 3. **Runs with integration enabled** — parity is the whole point of the run.
    It first prepares the container the way `gbx:test:python` does (one shared step): an editable install of geobrix, because Spark's Python workers do not see pytest's `pythonpath` and would fail every light row with `ModuleNotFoundError`; and the optional light-tier test deps, which a fresh container lacks (the Column-API legs import them). Both are idempotent and cheap when present.
-4. **Fails when any test skipped**, printing the likely cause (no staged JAR, a JAR-free Spark session already live in the process, or **sample data missing**: the container was started without the sample-data mounts, so the suites that read the sample bundle skip as `sample not mounted`; start it with `gbx:docker:start`). This is what stops a fully-skipped run from being mistaken for a pass.
+4. **Leaves the Spark Connect tests out** (`-m 'not connect'`): they run in their own process (`gbx:test:pyrx`), and the container has no gRPC client, so in a parity file's process they would only ever skip.
+5. **Fails when any test skipped**, printing the likely cause (no staged JAR, a JAR-free Spark session already live in the process, or **sample data missing**: the container was started without the sample-data mounts, so the suites that read the sample bundle skip as `sample not mounted`; start it with `gbx:docker:start`). This is what stops a fully-skipped run from being mistaken for a pass.
 
 ## Which suites run
 

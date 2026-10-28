@@ -390,6 +390,70 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
     assert env["PYTEST_ADDOPTS"] == "--durations=5"
 
 
+def _markers_of_calls(log):
+    """The `-m` expression of every pytest process the fake venv python was started for, in order."""
+    calls = [line.split("|", 2)[2] for line in log.read_text().splitlines()]
+    return [c.rsplit(" -m ", 1)[1] for c in calls]  # the log joins the words with spaces
+
+
+def test_the_spark_connect_tests_run_in_a_pytest_process_of_their_own(sandbox):
+    # A test that uses the local Connect session cannot share a process with classic-session tests. The conftest marks
+    # such tests `connect`; a run whose paths hold any does the others first and the Connect tests second.
+    _, log = _fake_venv(sandbox)
+    test_dir = sandbox.root / "python" / "geobrix" / "test"
+    (test_dir / "manager").mkdir(parents=True)
+    (test_dir / "manager" / "test_with_connect.py").write_text(
+        "def test_x(spark_connect_local):\n    pass\n"
+    )
+    (test_dir / "zarr").mkdir()
+    (test_dir / "zarr" / "test_plain.py").write_text("def test_y(spark):\n    pass\n")
+
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        *("--path", "python/geobrix/test/manager/test_with_connect.py"),
+        *("--path", "python/geobrix/test/zarr/test_plain.py"),
+    )
+    assert res.returncode == 0, res.output
+    assert _markers_of_calls(log) == [
+        "((not integration) and (not perf)) and (not connect)",
+        "((not integration) and (not perf)) and (connect)",
+    ]
+    # The second process collects only the file that uses the fixture: importing the others first would bind the
+    # light UDFs to a classic session before the Connect one exists.
+    first, second = [c.split("|", 2)[2] for c in log.read_text().splitlines()]
+    assert "test_plain.py" in first and "test_with_connect.py" in first
+    assert "test_with_connect.py" in second and "test_plain.py" not in second
+
+    log.unlink()  # paths with no Connect test: one process, the markers as before
+    res = sandbox.run(
+        "gbx-test-pyrx.sh", "--path", "python/geobrix/test/zarr/test_plain.py"
+    )
+    assert res.returncode == 0, res.output
+    assert _markers_of_calls(log) == ["(not integration) and (not perf)"]
+
+    # Only Connect tests selected: the first process collects nothing (5), which is not a failure while the second ran.
+    log.unlink()
+    res = sandbox.run(
+        "gbx-test-pyrx.sh",
+        *("--path", "python/geobrix/test/manager/test_with_connect.py"),
+        FAKE_PYTHON_RC="5",
+    )
+    assert res.returncode == 5  # both processes collected nothing here
+
+
+def test_the_parity_run_leaves_the_spark_connect_tests_out(sandbox):
+    # The container has no gRPC client and a parity file's process holds a classic session: a Connect test there can
+    # only skip, and a skip fails the gate. Connect tests run in gbx:test:pyrx.
+    tree = sandbox.root / "t"  # a one-file tree is enough to reach the pytest line
+    tree.mkdir()
+    (tree / "test_x_cross_tier.py").write_text("def test_x():\n    pass\n")
+    _parity_sandbox(sandbox, tree)
+    res, ran = _run_parity(sandbox)
+    assert res.returncode == 0, res.output
+    pytest_lines = [c[-1] for c in sandbox.execs() if PARITY_RE.search(c[-1])]
+    assert pytest_lines and all("-m 'not connect'" in c for c in pytest_lines)
+
+
 def test_a_run_that_selects_nothing_says_which_cases_are_skipped(sandbox):
     # A file whose only tests are perf- or integration-marked exits 5 (no tests collected) with no other sign why.
     _fake_venv(sandbox)

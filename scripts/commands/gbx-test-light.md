@@ -6,6 +6,8 @@ CI does not run it as one process: it runs the same dirs as four parallel shards
 
 Build or refresh the venv first with `gbx:venv:sync` (it installs the Zarr extra and the Spark line the Delta test jars need). The host is the default (no container, no lock); use `--docker` only for GDAL natives, the JAR and parity. The host run sets `TZ=UTC` like the container and CI do (see `gbx:test:pyrx`). `GBX_PYRX_VENV=<dir>` runs on another venv than `.venv-pyrx`.
 
+The Spark Connect tests (marked `connect`) run in a pytest process each, after the others, as in `gbx:test:pyrx`, which this command calls.
+
 ## Usage
 
 `bash scripts/commands/gbx-test-light.sh [OPTIONS]`

@@ -1149,6 +1149,11 @@ def _run_aggregate(  # noqa: C901
         )
         _warm_scaled = _warm_keys.crossJoin(F.broadcast(group_df))
         try:
+            _assert_lightweight(
+                fs,
+                scaled,
+                lambda d: d.groupBy("key").agg(_agg_col(d).alias("out")),
+            )
 
             def job(_df=scaled):
                 _df.groupBy("key").agg(_agg_col(_df).alias("out")).write.format(
@@ -1633,6 +1638,27 @@ def _run_sp_creation(
     return rows
 
 
+def _assert_lightweight(fs, df, build) -> None:
+    """Refuse to time ``build(df)`` unless its plan runs the LIGHTWEIGHT implementation of ``fs``.
+
+    The general function harness times the lightweight tier (every row it writes says so),
+    through the Column API or by SQL name. Both tiers register the same ``gbx_*`` names and
+    the later registration replaces the earlier, so a heavyweight function registered after
+    the lightweight ones would be timed and recorded as lightweight. ``TierResolutionError``
+    (a ``BaseException``) gets past the per-function error rows and stops the run. The
+    heavyweight tier's timings come from ``HeavyRunner`` (Scala), which has no such check yet.
+
+    The plan is read over an EMPTY DataFrame of ``df``'s schema, not over ``df``: the corpus
+    input is cached and built by a Python UDF, whose node is part of the printed plan of
+    anything selected from it and would make every plan read as lightweight.
+    """
+    from databricks.labs.gbx.bench.readers import _assert_tier
+
+    _assert_tier(
+        "lightweight", fs.name, build(df.sparkSession.createDataFrame([], df.schema))
+    )
+
+
 def _run_sp_scalar_fn(
     fs,
     run_id,
@@ -1688,6 +1714,14 @@ def _run_sp_scalar_fn(
         # repartition by F.rand() not the tile struct (avoid hashing the raster payload).
         df = _src.repartition(max(1, _parts), F.rand())
         try:
+
+            _assert_lightweight(
+                fs,
+                df,
+                lambda d: d.select(
+                    fs.col_fn(input_col_fn(fs.name, _kind, d), fs.args).alias("out")
+                ),
+            )
 
             def job(_df=df, _fs=fs, _k=_kind):
                 c = _fs.col_fn(input_col_fn(_fs.name, _k, _df), _fs.args)

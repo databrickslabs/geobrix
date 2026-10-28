@@ -6768,9 +6768,10 @@ def _run_bng_explode(
 
     ``build()`` returns the ``(rows, schema)`` input corpus, registered as ``view``;
     ``call`` is the SQL call over that view's columns. Before timing, the leg reads
-    the plan of its query and raises :class:`TierResolutionError` unless it runs
-    ``api``'s implementation. Records ``rows`` = number of input rows. Returns one
-    ResultRow (mode="spark-path", category="grid").
+    the plan of its query: a query that runs the OTHER tier's implementation raises
+    :class:`TierResolutionError`, and one that runs neither (the function is not
+    registered) gives an error row. Records ``rows`` = number of input rows. Returns
+    one ResultRow (mode="spark-path", category="grid").
     """
     env = capture_env(where)
     cat = "grid"
@@ -6820,6 +6821,21 @@ def _run_bng_explode(
             rows=n,
             status="error",
             note=str(e),
+            warmup=warmup,
+        )
+    if resolved == "unknown":
+        # EXPLAIN does not raise for a function that is not registered: it prints the
+        # [UNRESOLVED_ROUTINE] error in the plan, which has no Python node and no Generate.
+        # Nothing was resolved, so nothing can be mis-timed: an error row, not an abort.
+        return _tin_result_row(
+            run_id=run_id,
+            api=api,
+            fn=fn,
+            category=cat,
+            env=env,
+            rows=n,
+            status="error",
+            note=f"{fn} is not registered for the {api} tier (the plan runs no {api} function)",
             warmup=warmup,
         )
     _require_tier(api, fn, resolved, sql)

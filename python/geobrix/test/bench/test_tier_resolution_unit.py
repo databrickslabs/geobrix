@@ -150,3 +150,37 @@ def test_the_explode_leg_raises_before_timing_when_its_query_reaches_the_other_t
     assert spark.queries == [
         "EXPLAIN EXTENDED SELECT gbx_bng_kringexplode(cell, 1) FROM _bng_cell_bench_v"
     ]
+
+
+def test_the_explode_leg_writes_an_error_row_when_its_function_is_not_registered(
+    monkeypatch,
+):
+    """EXPLAIN of an unregistered function does not raise: its plan holds the
+    UNRESOLVED_ROUTINE error. Nothing can be mis-timed, so the run goes on with an error row.
+    """
+
+    class _DF:
+        def cache(self):
+            return self
+
+        def count(self):
+            return 1
+
+        def createOrReplaceTempView(self, name):
+            pass
+
+    class _Spark(_FakeSpark):
+        def createDataFrame(self, data, schema=None):
+            return _DF()
+
+    timed = []
+    monkeypatch.setattr(rd, "_register_bng", lambda spark, api: None)
+    monkeypatch.setattr(rd, "time_iters", lambda *a, **k: timed.append(a))
+    spark = _Spark(
+        "== Analyzed Logical Plan ==\n[UNRESOLVED_ROUTINE] Cannot resolve routine "
+        "`gbx_bng_kringexplode` on search path [`system`.`builtin`]. SQLSTATE: 42883"
+    )
+    row = rd.run_bng_kringexplode(spark, "r", 0, 1, api="heavyweight", n_rows=2)
+    assert row.status == "error" and row.api == "heavyweight"
+    assert "not registered" in row.note
+    assert not timed

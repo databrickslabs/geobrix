@@ -547,6 +547,53 @@ def test_run_spark_path_tile_aggregators_produce_raster_fingerprints(tmp_path, s
         assert parsed["kind"] == "raster", (name, parsed.get("kind"))
 
 
+def test_the_general_harness_refuses_to_time_a_plan_that_is_not_lightweight(
+    tmp_path, spark
+):
+    """The harness records every spark-path row as lightweight. A Column whose plan holds no
+    Python node (what a heavyweight function registered under the same SQL name plans as) is
+    refused, on the scalar path and the aggregate path, by the run-stopping tier error.
+    """
+    import dataclasses
+
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.bench import readers as rd
+
+    corpus = dg.generate_corpus(
+        out_dir=tmp_path,
+        seed=8,
+        tile_px=[32],
+        bands=[2],
+        dtypes=["float32"],
+        srids=[4326],
+        nodata_fracs=[0.0],
+        row_rows=4,
+        row_tile_px=32,
+        row_bands=2,
+        row_dtype="float32",
+    )
+    (scalar,) = s.select(functions=["rst_width"])
+    (agg,) = s.select(functions=["rst_merge_agg"])
+    not_light = [
+        dataclasses.replace(scalar, col_fn=lambda t, a: F.length(t["raster"])),
+        dataclasses.replace(agg, col_fn=lambda t, a: F.first(t)),
+    ]
+    for fs in not_light:
+        with pytest.raises(rd.TierResolutionError, match="heavyweight implementation"):
+            rn.run_spark_path(
+                spark=spark,
+                corpus_root=tmp_path,
+                corpus=corpus,
+                fnspecs=[fs],
+                run_id="t",
+                row_counts=[2],
+                warmup=0,
+                measured=1,
+                where="venv",
+            )
+
+
 def test_run_aggregate_passes_minimal_warmup_fn(tmp_path, spark, monkeypatch):
     # The agg perf loop must hand time_iters a warmup_fn (the minimal one-key-per-partition
     # warm scaled), so the warm-up no longer re-aggregates the full n-key group. Spy on

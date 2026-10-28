@@ -81,6 +81,7 @@ from databricks.labs.gbx.zarr._meta import (
     decode_coord,
     doc_bytes,
     is_time_coord,
+    merge_array,
     parse_v2,
     parse_v3,
     with_shape,
@@ -432,28 +433,6 @@ def _explicit_shards(
                 )
             out[i] = size
     return tuple(out)
-
-
-def _same_layout(a: ArrayMeta, b: ArrayMeta) -> bool:
-    """Everything but the shape: what a rebase may not change under a write."""
-
-    def strip(meta):
-        doc = json.loads(json.dumps(meta.doc))
-        if meta.zarr_format == 3:
-            doc.pop("shape", None)
-            doc.pop("attributes", None)
-        else:
-            doc[".zarray"].pop("shape", None)
-            doc.pop(".zattrs", None)
-        return doc
-
-    return (a.zarr_format, a.dims, a.dtype, a.chunks, a.shards) == (
-        b.zarr_format,
-        b.dims,
-        b.dtype,
-        b.chunks,
-        b.shards,
-    ) and strip(a) == strip(b)
 
 
 def _doc_keys(meta: ArrayMeta) -> list[str]:
@@ -888,6 +867,7 @@ class _Plan:
     single_pass: bool = False
     region: dict = field(default_factory=dict)
     store_labels: dict = field(default_factory=dict)  # decoded coordinates at the base
+    planned: dict | None = None  # name -> ArrayMeta as planned, before any rebase
 
 
 def _as_numbers(values):
@@ -2365,33 +2345,40 @@ def _conflict(rows: list[dict], message=None) -> ZarrWriteConflict:
 def _rebase(spark, plan: _Plan, latest) -> tuple[pa.Table, pa.Table]:
     """Doc and coordinate rows again, over ``latest``.
 
-    - The arrays this write changes keep their layout (a change is a conflict) and take
-      the maximum shape; an array it creates takes the latest extents of its dimensions.
+    - An array this write changes is rebuilt over the document that is live now
+      (``merge_array``): the larger shape, and whatever another writer did to its
+      attributes, are kept; a different layout, or an attribute both set differently, is a
+      conflict. An array it creates takes the latest extents of its dimensions.
     - An append grows every array on its dimension, including ones created meanwhile.
     - Coordinate chunks are read-modified-written over the latest ones.
     - Every metadata expectation is the latest write_id.
     """
     docs = _docs_at(spark, latest)
     latest_ext = _extents_of(docs.arrays)
+    if plan.planned is None:  # the first rebase: the arrays still are as planned
+        plan.planned = dict(plan.arrays)
+    base_arrays = plan.docs.arrays if plan.docs is not None else {}
+
+    def merged(name: str, shape) -> ArrayMeta:
+        theirs, mine = docs.arrays.get(name), plan.planned.get(name)
+        if theirs is None:
+            return with_shape(mine, shape)
+        if mine is None:  # created by another write, not planned by this one
+            return with_shape(theirs, shape)
+        return merge_array(base_arrays.get(name), mine, theirs, shape)
+
     for name in list(plan.changed):
-        mine, theirs = plan.arrays[name], docs.arrays.get(name)
-        if theirs is not None and not _same_layout(mine, theirs):
-            raise ZarrWriteConflict(
-                f"another write changed the layout of array {name!r} (its type, chunks or "
-                "codecs) since this write read it",
-                keys=(name,),
-                fix="re-read the store and write again",
-            )
+        cur, theirs = plan.arrays[name], docs.arrays.get(name)
+        same_rank = theirs is not None and len(theirs.shape) == len(cur.shape)
         shape = tuple(
             max(
                 n,
-                theirs.shape[i] if theirs is not None else 0,
+                theirs.shape[i] if same_rank else 0,  # another rank: a layout conflict
                 latest_ext.get(d, 0) if name in plan.created else 0,
             )
-            for i, (d, n) in enumerate(zip(mine.dims, mine.shape))
+            for i, (d, n) in enumerate(zip(cur.dims, cur.shape))
         )
-        if shape != mine.shape:
-            plan.arrays[name] = with_shape(mine, shape)
+        plan.arrays[name] = merged(name, shape)
     for patch in plan.patches:
         mine, theirs = plan.arrays[patch.name], docs.arrays.get(patch.name)
         if theirs is not None and theirs.shape[0] > mine.shape[0]:
@@ -2402,13 +2389,13 @@ def _rebase(spark, plan: _Plan, latest) -> tuple[pa.Table, pa.Table]:
         for name, theirs in docs.arrays.items():
             if d not in theirs.dims:
                 continue
-            mine = plan.arrays.get(name, theirs)
+            cur = plan.arrays.get(name, theirs)
             shape = tuple(
                 max(a, b, target if dim == d else 0)
-                for dim, a, b in zip(theirs.dims, mine.shape, theirs.shape)
+                for dim, a, b in zip(theirs.dims, cur.shape, theirs.shape)
             )
-            if shape != mine.shape or name not in plan.arrays:
-                plan.arrays[name] = with_shape(mine, shape)
+            if name not in plan.arrays or shape != cur.shape or name in plan.changed:
+                plan.arrays[name] = merged(name, shape)
             if shape != theirs.shape and name not in plan.changed:
                 plan.changed.append(name)
     return (

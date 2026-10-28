@@ -77,6 +77,63 @@ def read_table(source, **kw):
     return cfg, table
 
 
+def read_variable(spark, table, name):
+    """Variable ``name`` of the store of manifest ``table``, assembled from its blocks (NaN,
+    or NaT, where no block).
+
+    The blocks come from the read's own planner and task body, run in this process
+    (``run``): the manifest is queried for real, but no Spark job decodes the chunks, which
+    is most of a read's cost on a local session. The Spark-distributed read has its
+    end-to-end tests in test_read.py.
+    """
+    from databricks.labs.gbx.zarr import _read
+    from databricks.labs.gbx.zarr._read import block_to_numpy
+
+    src = _read._open_source(spark, table, "table", None, None)
+    names = _read._choose_variables([name], src)
+    units, cfg = _read._plan(spark, src, names, None, None, "blocks", True, None)
+    rows = [r for b in run(units, cfg) for r in b.to_pylist()]
+    stops = [r["stop"] for r in rows]
+    shape = tuple(max(s[i] for s in stops) for i in range(len(stops[0])))
+    first = block_to_numpy(rows[0])
+    out = np.full(shape, np.nan if first.dtype.kind == "f" else 0, dtype=first.dtype)
+    if first.dtype.kind == "M":
+        out = np.full(shape, np.datetime64("NaT"), dtype=first.dtype)
+    for r in rows:
+        out[tuple(slice(a, b) for a, b in zip(r["start"], r["stop"]))] = block_to_numpy(
+            r
+        )
+    return out
+
+
+DIMS = ("time", "latitude", "longitude")
+
+
+def blocks_frame(spark, *blocks):
+    """A blocks DataFrame of ``(variable, start, values)``; values are decoded values."""
+    from databricks.labs.gbx.zarr._read import BLOCKS_SCHEMA
+
+    rows = []
+    for name, start, values in blocks:
+        values = np.ascontiguousarray(values)
+        rows.append(
+            (
+                name,
+                [name] if name in DIMS else list(DIMS[-values.ndim :]),
+                list(start),
+                [a + n for a, n in zip(start, values.shape)],
+                None,
+                None,
+                values.dtype.str,
+                list(values.shape),
+                values.tobytes(),
+                None,
+                None,
+            )
+        )
+    return spark.createDataFrame(rows, BLOCKS_SCHEMA)
+
+
 def assemble(rows, variable, shape, dtype="float32"):
     """The blocks of ``variable`` laid back into an array of ``shape``, and a mask of the
     cells they cover (NaN, or 0, where no block)."""

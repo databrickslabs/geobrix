@@ -25,14 +25,16 @@ bash scripts/commands/gbx-test-python.sh [OPTIONS]
 | Phase | What runs | Where the list comes from |
 |---|---|---|
 | `heavy` | `test/` minus every light dir (`pytest test --ignore=test/pyrx ...`) | `LIGHT_IGNORES` in `.github/actions/python_build/action.yml` |
-| `light` | the light dirs in one process (`pytest test/pyrx test/ds ...`) | the `pytest test/... -m ...` line in `.github/actions/pyrx_build/action.yml` |
+| `light` | the light dirs in one process (`pytest test/pyrx test/ds ...`), `test/bench` included | the unsharded `pytest test/... -m ...` line in `.github/actions/pyrx_build/action.yml` |
+
+**CI splits the light phase; this command does not.** CI runs the light dirs as four parallel jobs (shards `pyrx`, `ds`, `zarr` and `rest`, the `pyrx` job matrix in `.github/workflows/build_main.yml`), each in its own pytest process, and the heavy job starts only after all four pass. CI also runs `test/bench` only when the bench code, its tests, the shared light conftest or the CI wiring changed in the pushed range or the PR (`scripts/ci/paths_changed.py`; a new branch or an unknown base runs it). The local `light` phase runs every light dir, bench included, in one process, so it needs no JAR and never skips bench. The same dirs run either way: `scripts/ci/test_ci_light_shards.py` keeps the shards equal to `_LIGHT_TEST_DIRS` and the heavy `LIGHT_IGNORES`.
 
 - The lists are **read from the CI action files**, not copied into the script, so the command cannot drift from CI. If those lines change shape the command stops with exit 2 and a message (update `load_ci_phases()` in `gbx-test-python.sh`).
 - Each phase runs from `python/geobrix` (like CI) with `-m "not integration"` (unless `--with-integration`/`--markers`), `-k` and `-rfE` (failing test ids are listed in the summary).
 - Per-phase logs: `test-logs/python-tests-<phase>.log` by default, or `<--log minus .log>-<phase>.log`.
 - After the last phase a summary prints each phase's pytest result line and, for failing phases, the FAILED/ERROR test ids (first 25; full list in the log).
 - Exit code is non-zero if **any** phase fails (a phase that selects no tests under `-k` is not a failure). A missing JAR fails the `heavy` phase before pytest starts (see below).
-- CI-only extras are not mirrored: heavy `--cov`, `python -m build`, and the fresh hash-pinned install.
+- CI-only extras are not mirrored: heavy `--cov`, `python -m build`, the fresh hash-pinned install, the light sharding and the `test/bench` path filter.
 
 ## Staged JAR (heavy tier only)
 
@@ -72,7 +74,7 @@ This command runs Maven or a Spark test JVM in `geobrix-dev`, so it takes the co
 ## Examples
 
 ```bash
-# Everything, as CI-style phases (heavy, light) with a per-phase summary
+# Everything, as CI-style phases (heavy, light; the light phase is one process here, sharded in CI) with a per-phase summary
 bash scripts/commands/gbx-test-python.sh
 
 # Include integration tests (network downloads)

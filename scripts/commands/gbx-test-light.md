@@ -1,6 +1,8 @@
 # gbx:test:light
 
-Run the light-tier Python tests natively on the host, in `.venv-pyrx`: pyrx, pyvx, pygx, ds, zarr, and the rest of `_LIGHT_TEST_DIRS` (`python/geobrix/test/conftest.py`). A thin front for `gbx:test:pyrx`, whose default is only `test/pyrx/`: with no `--path` this runs every light dir in one pytest process, in the order of the light CI phase's `pytest` line (`.github/actions/pyrx_build/action.yml`). The order is deliberate: the dirs share a process, and `test/pyvx` registers the PROJ grids that `test/bench` relies on when it builds rasters on worker threads. A wiring test pins the command's order to that line.
+Run the light-tier Python tests natively on the host, in `.venv-pyrx`: pyrx, pyvx, pygx, ds, zarr, and the rest of `_LIGHT_TEST_DIRS` (`python/geobrix/test/conftest.py`). A thin front for `gbx:test:pyrx`, whose default is only `test/pyrx/`: with no `--path` this runs every light dir in one pytest process, in the order of the unsharded `pytest` line of the light CI action (`.github/actions/pyrx_build/action.yml`). The order is deliberate: the dirs share a process, and `test/pyvx` registers the PROJ grids that `test/bench` relies on when it builds rasters on worker threads. A wiring test pins the command's order to that line.
+
+CI does not run it as one process: it runs the same dirs as four parallel shards (`pyrx`, `ds`, `zarr` and `rest`, in the `pyrx` job matrix of `.github/workflows/build_main.yml`; `pyvx` and `bench` stay together in `rest`, in that order), and runs `test/bench` only when the bench code, its tests, the shared light conftest or the CI wiring changed in the pushed range or the PR. This command always runs every dir, bench included; a CI guard (`scripts/ci/test_ci_light_shards.py`) keeps the shards equal to `_LIGHT_TEST_DIRS`.
 
 Build or refresh the venv first with `gbx:venv:sync` (it installs the Zarr extra and the Spark line the Delta test jars need). The host is the default (no container, no lock); use `--docker` only for GDAL natives, the JAR and parity. The host run sets `TZ=UTC` like the container and CI do (see `gbx:test:pyrx`). `GBX_PYRX_VENV=<dir>` runs on another venv than `.venv-pyrx`.
 
@@ -10,7 +12,7 @@ Build or refresh the venv first with `gbx:venv:sync` (it installs the Zarr extra
 
 ## Options
 
-- `--path <dir>` — test file or directory; repeatable (default: every light dir, in the light CI phase order)
+- `--path <dir>` — test file or directory; repeatable (default: every light dir, in one process, in the unsharded CI order)
 - `--markers <expr>` — extra pytest marker expression, ANDed with `not integration` (see `gbx:test:pyrx`)
 - `--docker` — run in the `geobrix-dev` container instead of the host venv (takes the container lock; see `gbx:test:pyrx`)
 - `--log <path>` — write output to `test-logs/<path>` (relative) or an absolute path

@@ -74,14 +74,17 @@ jobs:
         shard:
           - name: pyrx
             dirs: test/pyrx
-          # Also runs the tests of the scripts themselves (shortest shard).
+          # Also runs the tests of the scripts themselves (one of the shorter shards).
           - name: ds
             dirs: test/ds
             scripts_ci: true
+          # Its own shard: the Zarr tests are the longest dir after pyrx (Delta jars on the classpath).
+          - name: zarr
+            dirs: test/zarr
           - name: rest
             dirs: >-
               test/pyvx test/pygx test/pmtiles_light test/stac test/earthdata test/vizx
-              test/sample test/bench test/core test/models test/zarr
+              test/sample test/bench test/core test/models
     steps:
       - name: checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd  # v6.0.2

@@ -635,18 +635,26 @@ def h_towers_jvm_df(spark, src):
     return _towers(spark, src, "JVM-DF")
 
 
-def setup_h_towers_l1_steps(spark):
-    """The Catalyst steps of the L1-steps form under their private names (needs the staged JAR)."""
+def _set_up_towers_level(spark, level):
+    """Set `level` up for `rst_viewshed_towers` (once, outside the timed region). A session that cannot run it
+    would fall back to L3 and time that under this level's name: that is an error here, with the reason.
+    """
     from databricks.labs.gbx.manager import levels
 
-    levels.towers_level(spark, "L1-steps")
+    if levels.towers_level(spark, level) != level:
+        raise RuntimeError(
+            f"this session cannot run rst_viewshed_towers at {level}; it would time L3 (see the line above)"
+        )
+
+
+def setup_h_towers_l1_steps(spark):
+    """The Catalyst steps of the L1-steps form under their private names (needs the staged JAR)."""
+    _set_up_towers_level(spark, "L1-steps")
 
 
 def setup_h_towers_jvm_df(spark):
     """The capability check of the JVM-DF form, done once here and not in the timed region."""
-    from databricks.labs.gbx.manager import levels
-
-    levels.towers_level(spark, "JVM-DF")
+    _set_up_towers_level(spark, "JVM-DF")
 
 
 _H = "databricks.labs.gbx.bench.levels_forms:"

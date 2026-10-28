@@ -21,51 +21,33 @@ def test_mvp_h_oracle_connect(spark_connect_local, tmp_path):
     assert _red(spark_connect_local, tmp_path) == []
 
 
-TOWERS_ROW = next(c for c in oracles.MVP_H if c.fn == "rst_viewshed_towers")
+TOWERS_ROWS = [c for c in oracles.MVP_H if c.fn == "rst_viewshed_towers"]
+TOWERS_ROW = TOWERS_ROWS[0]
 
 
-# The heavy levels run the JAR's GDAL JNI (3.11) and L3 runs the light libgdal (3.12): 3.11 clips a viewshed to its
-# max-distance window and keeps its disc, 3.12 returns the whole DEM with most of it visible whatever the distance
-# (a flat 200 x 200 DEM, 80 m: 20081 of 25921 against 30967 of 40000). The counts agree again when the JNI is
-# swapped for the light libgdal; the strict xfail then fails and these marks come off.
-GDAL_VERSIONS = pytest.mark.xfail(
-    strict=True, reason="GDAL 3.11 JNI vs 3.12 libgdal: max_distance clips differently"
-)
-
-
-@pytest.mark.parametrize(
-    "lv",
-    [
-        "L3",
-        pytest.param("L1-steps", marks=[pytest.mark.integration, GDAL_VERSIONS]),
-        pytest.param("JVM-DF", marks=[pytest.mark.integration, GDAL_VERSIONS]),
-    ],
-)
-def test_mvp_h_towers(request, tmp_path, lv):
-    """Every level gives the L3 counts within 0.5% of total_px, and the same towers: a tower in no tile's reach
-    has no row, one on the corner of four tiles sees across them, one on a tile of NoData still has a row.
-    """
-    spark = request.getfixturevalue("spark" if lv == "L3" else "jvm_spark")
-    ref = oracles.run_towers(spark, TOWERS_ROW, str(tmp_path), "L3")
-    got = oracles.run_towers(spark, TOWERS_ROW, str(tmp_path), lv)
-    want = {k: ref.get(k) for k in TOWERS_ROW.expect}
-    assert oracles.towers_differ(want, got) is None
+@pytest.mark.integration
+@pytest.mark.parametrize("lv", ["L1-steps", "JVM-DF"])
+@pytest.mark.parametrize("case", TOWERS_ROWS, ids=lambda c: c.cid)
+def test_mvp_h_towers(jvm_spark, tmp_path, lv, case):
+    """The rows the host runs at L3 (test_mvp_h_oracle_session), at the two heavy levels: the same counts within
+    0.5% of total_px, no row for a tower on no tile, a NULL mast read as 0.0, and an error, not a row, for a tile
+    that cannot be read."""
+    ((_, msg),) = oracles.run_helpers(jvm_spark, [case], tmpdir=str(tmp_path), level=lv)
+    assert msg is None
 
 
 @pytest.mark.integration
 def test_the_heavy_towers_levels_agree(jvm_spark, tmp_path):
-    """Heavy steps and the one Scala step run the same GDAL, so they give the same counts, tower by tower, and
-    the same towers as L3 (a row for the NoData tile and for the four-tile corner, none for the tower out of reach).
-    """
+    """Heavy steps and the one Scala step run the same GDAL, so they give the same counts, tower by tower (no
+    tolerance), and the window of a flat 200 x 200 tile at 80 m is the 161 x 161 GDAL writes with a disc of
+    pi * 80^2 = 20106 visible pixels."""
 
     def run(lv):
         return oracles.run_towers(jvm_spark, TOWERS_ROW, str(tmp_path), lv)
 
     steps, one = run("L1-steps"), run("JVM-DF")
     assert steps == one
-    assert (
-        set(steps) == set(run("L3")) == {k for k, v in TOWERS_ROW.expect.items() if v}
-    )
+    assert steps["t1"] == (20081, 161 * 161)
 
 
 def test_a_session_without_the_jar_runs_light_and_says_why(

@@ -280,23 +280,29 @@ MVP_S: Tuple[Case, ...] = (
 
 # The towers of the MVP-H towers row, as (id, x, y) on the 200 m DSM grid of `dsm_tiles_edge`: in one tile, in
 # one tile with the ridge at the edge of its window, 20 m from a ridge that is inside its window (and so across two
-# tiles), on the corner of four tiles, in a tile of NoData, and beyond every tile.
+# tiles), on the corner of four tiles, in a tile of NoData, on the west edge of the DSM (inside it, within half a
+# pixel of its edge), 10 m west of the DSM (outside it, with a tile in reach), and in no tile's reach.
 TOWERS = (
     ("t1", 100.0, 100.0),
     ("t2", 300.0, 300.0),
     ("ridge", 260.0, 100.0),
     ("corner", 200.0, 200.0),
     ("nodata", 500.0, 100.0),
+    ("edge", 0.0, 100.0),
+    ("beyond", -10.0, 100.0),
     ("outside", 1000.0, 1000.0),
 )
 DSM_TILE_M = 200.0
-TOWERS_TOLERANCE = 0.005  # of total_px: the levels' GDAL builds differ at edges
+TOWERS_TOLERANCE = (
+    0.005  # of total_px: GDAL builds differ by a pixel or so along a visibility edge
+)
 
 # MVP-H: the DataFrame helpers in pyrx/helpers.py (a case's `fn` is the helper's name, not a SQL name).
 # The first arg builds the input rows; the rest are the helper's arguments after the DataFrame and,
 # for the by-key helpers, the method / stat. A towers row (`rst_viewshed_towers`) takes the DSM manifest
-# `(tx, ty, path)` instead of tiles, then the towers, the radius and the mast height; its `expect` is
-# {tower: (visible_px, total_px)}, or None for a tower in no tile's reach (it has no row).
+# `(tx, ty, path)` instead of tiles, then the towers (id, x, y[, mast]; a mast column is passed by name), the radius
+# and the mast height; its `expect` is {tower: (visible_px, total_px)}, or None for a tower on no tile (no row), or
+# for kind "raises" the text the error must contain.
 MVP_H: Tuple[Case, ...] = (
     Case(
         "h_retile",
@@ -399,22 +405,64 @@ MVP_H: Tuple[Case, ...] = (
         "different geotransform",
         ("session",),
     ),
-    # total_px is the pixels of the tiles in the tower's window (1, 1, 2 and 4 tiles of 200 x 200). The ground is flat
-    # except a ridge on the west edge of the odd columns: it hides what is behind it for "ridge" and for nobody else.
-    # A tile of NoData is flat to the viewshed, and a tower with no tile has no row.
+    # The viewshed is the window around the tower: 161 x 161 for 80 m, whole when the DSM ends sooner (the "edge" tower
+    # has half of it), and total_px is its pixel count. The ground is flat except a ridge on the west edge of the odd
+    # columns: it hides what is behind it for "ridge" and for nobody else. A tile of NoData is flat to the viewshed.
+    # A tower on no tile has no row, wherever its window reaches.
     Case(
         "h_towers",
         "rst_viewshed_towers",
         (Build("dsm_tiles_edge"), TOWERS, 80.0, 20.0),
         "towers",
         {
-            "t1": (30967, 40000),
-            "t2": (30967, 40000),
-            "ridge": (57697, 80000),
-            "corner": (119295, 160000),
-            "nodata": (30967, 40000),
+            "t1": (20081, 25921),
+            "t2": (20081, 25921),
+            "ridge": (18691, 25921),
+            "corner": (19286, 25921),
+            "nodata": (20081, 25921),
+            "edge": (10121, 13041),
+            "beyond": None,
             "outside": None,
         },
+        ("session",),
+    ),
+    # A NULL mast height is 0.0, at every level: the second tower is the first with its mast given as 0, the third is
+    # taller and sees more past the ridge.
+    Case(
+        "h_towers_null_mast",
+        "rst_viewshed_towers",
+        (
+            Build("dsm_tiles_edge"),
+            (
+                ("null", 260.0, 100.0, None),
+                ("zero", 260.0, 100.0, 0.0),
+                ("tall", 260.0, 100.0, 20.0),
+            ),
+            80.0,
+            "mast",
+        ),
+        "towers",
+        {"null": (18477, 25921), "zero": (18477, 25921), "tall": (18691, 25921)},
+        ("session",),
+    ),
+    # A tile that cannot be read fails the query at every level, naming the tile; never a plausible-looking row.
+    Case(
+        "h_towers_garbage_tile",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_garbage"), (("corner", 200.0, 200.0),), 80.0, 20.0),
+        "raises",
+        "dsm_1_1.tif",
+        ("session",),
+    ),
+    Case(
+        "h_towers_truncated_tile",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_truncated"), (("corner", 200.0, 200.0),), 80.0, 20.0),
+        "raises",
+        (
+            "dsm_1_1.tif",
+            "Read failed",
+        ),  # the light read says "Read failed" and no tile; the others name it
         ("session",),
     ),
 )
@@ -823,7 +871,12 @@ def dsm_tile_rows(
                 local = os.path.join(scratch, os.path.basename(p))
                 with rasterio.open(local, "w", **prof) as ds:
                     ds.write(z)
-                shutil.copyfile(local, p)  # content only: a Volume takes no copystat
+                shutil.copyfile(
+                    local, p + ".part"
+                )  # content only: a Volume takes no copystat
+                os.replace(
+                    p + ".part", p
+                )  # a tile is whole or absent: a re-run never reuses half of one
             rows.append((tx, ty, p))
     return rows
 
@@ -836,6 +889,18 @@ def _build_helper_input(name: str, tmpdir: str):
         name == "dsm_tiles_edge"
     ):  # the same four, and a tile of NoData east of them at (2, 0)
         return dsm_tile_rows(tmpdir, nodata_at=((2, 0),))
+    if name in (
+        "dsm_tiles_garbage",
+        "dsm_tiles_truncated",
+    ):  # the four, tile (1, 1) not a raster / cut short
+        rows = dsm_tile_rows(os.path.join(tmpdir, name))
+        path = next(p for tx, ty, p in rows if (tx, ty) == (1, 1))
+        data = open(path, "rb").read()
+        with open(path, "wb") as fh:
+            fh.write(
+                b"not a raster" if name.endswith("garbage") else data[: len(data) // 2]
+            )
+        return rows
     if name == "tile_32":
         return _tile(_tile_bytes("EPSG:4326", 32, 32))
     if name == "quad_tiles":
@@ -1071,7 +1136,9 @@ def check(case: Case, out, args) -> Optional[str]:
 
 def check_error(case: Case, exc: BaseException) -> Optional[str]:
     if case.kind == "raises":
-        if str(case.expect) in str(exc):
+        # a tuple is alternatives: levels that say it differently (a light read failure names no tile)
+        wanted = case.expect if isinstance(case.expect, tuple) else (case.expect,)
+        if any(str(w) in str(exc) for w in wanted):
             return None
         return f"{case.cid}: error does not mention {case.expect!r}: {type(exc).__name__}: {str(exc)[:300]}"
     if case.kind == "uc_refused":
@@ -1249,8 +1316,11 @@ def run_towers(spark, case: Case, tmpdir: str, level: Optional[str] = None):
     tiles = spark.createDataFrame(
         resolve_arg(manifest_rows, tmpdir), "tx int, ty int, path string"
     )
+    masts = len(towers[0]) == 4  # a per-tower mast column, named by `height`
     sites = spark.createDataFrame(
-        list(towers), "tower_cellid string, x double, y double"
+        list(towers),
+        "tower_cellid string, x double, y double"
+        + (f", {height} double" if masts else ""),
     )
     got = rst_viewshed_towers(
         sites, tiles, radius, height, x0=0.0, y0=0.0, tile_m=DSM_TILE_M, _levels=level
@@ -1273,8 +1343,11 @@ def towers_differ(want: Dict, got: Dict) -> Optional[str]:
     return "; ".join(bad) or None
 
 
-def run_helpers(spark, cases, tmpdir: Optional[str] = None):
-    """MVP-H: build a (key, tile) DataFrame from the case, call the helper by name, check the rows."""
+def run_helpers(
+    spark, cases, tmpdir: Optional[str] = None, level: Optional[str] = None
+):
+    """MVP-H: build a (key, tile) DataFrame from the case, call the helper by name, check the rows.
+    A towers case runs at `level` (None: the default one)."""
     from databricks.labs.gbx.manifest import TILE_SQL
     from databricks.labs.gbx.pyrx import helpers
 
@@ -1283,10 +1356,16 @@ def run_helpers(spark, cases, tmpdir: Optional[str] = None):
     for case in cases:
         if "session" not in case.surfaces:
             continue
-        if case.kind == "towers":
+        if case.fn == "rst_viewshed_towers":
             try:
-                msg = towers_differ(case.expect, run_towers(spark, case, tmpdir))
-                out.append((case, msg and f"{case.cid}: {msg}"))
+                got = run_towers(spark, case, tmpdir, level)
+                if case.kind == "raises":
+                    out.append(
+                        (case, f"{case.cid}: returned {len(got)} rows, want an error")
+                    )
+                else:
+                    msg = towers_differ(case.expect, got)
+                    out.append((case, msg and f"{case.cid}: {msg}"))
             except Exception as exc:  # noqa: BLE001
                 out.append((case, check_error(case, exc)))
             continue

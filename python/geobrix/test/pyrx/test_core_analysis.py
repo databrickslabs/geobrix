@@ -598,7 +598,7 @@ def test_viewshed_gdal_ctypes_occlusion():
         from rasterio.transform import xy as _xy
 
         ox, oy = _xy(ds.transform, 4, 4, offset="center")
-        out_arr = analysis._viewshed_gdal_ctypes(
+        out_arr, _ = analysis._viewshed_gdal_ctypes(
             ds, float(ox), float(oy), 2.0, 0.0, None
         )
 
@@ -619,10 +619,59 @@ def test_viewshed_uses_gdal_for_every_dem_size():
         with _serde.open_tile(src) as ds:
             ox, oy = _observer_world_xy(ds, col=col, row=row)
             out = analysis.viewshed(ds, ox, oy, 1.0, 0.0, None)
-            want = analysis._viewshed_gdal_ctypes(ds, ox, oy, 1.0, 0.0, None)
+            want, _ = analysis._viewshed_gdal_ctypes(ds, ox, oy, 1.0, 0.0, None)
         with _serde.open_tile(out) as o:
             np.testing.assert_array_equal(o.read(1), want)
         assert want[row, col] == 255 and want[row, -1] == 0
+
+
+def _flat_dem_bytes(n):
+    """An n x n flat DEM, 1 m pixels, origin (0, n)."""
+    profile = dict(
+        driver="GTiff",
+        width=n,
+        height=n,
+        count=1,
+        dtype="float32",
+        crs="EPSG:27700",
+        transform=from_origin(0.0, float(n), 1.0, 1.0),
+    )
+    with MemoryFile() as mf:
+        with mf.open(**profile) as dst:
+            dst.write(np.zeros((n, n), dtype="float32"), 1)
+        return mf.read()
+
+
+@pytest.mark.parametrize("n, r", [(200, 80.0), (1000, 200.0)])
+def test_viewshed_max_distance_is_the_window_around_the_observer(n, r):
+    """With a max distance the output is the window around the observer (side 2r+1, its origin r + half a pixel
+    off the observer), pixel-aligned with the DEM and holding a disc of pi r^2 visible pixels: not the DEM with
+    the disc stretched across it, which is what writing a small window into a full-size profile gives.
+    """
+    ox, oy = n // 2 + 0.5, n // 2 - 0.5  # a pixel centre
+    with _serde.open_tile(_flat_dem_bytes(n)) as ds:
+        out = analysis.viewshed(ds, ox, oy, 10.0, 0.0, r)
+    with _serde.open_tile(out) as o:
+        a = o.read(1)
+        side = int(2 * r) + 1
+        assert a.shape == (side, side)
+        assert (o.transform.c, o.transform.f) == (ox - r - 0.5, oy + r + 0.5)
+        assert (o.transform.a, o.transform.e) == (1.0, -1.0)  # the DEM's pixel grid
+    disc = math.pi * r * r
+    assert abs(int((a == 255).sum()) - disc) <= 0.01 * disc
+
+
+def test_viewshed_observer_within_half_a_pixel_of_the_edge_is_inside():
+    """GDAL takes the pixel the observer stands in, so an observer between the edge and the first pixel centre
+    gets a real viewshed (as heavy gives it), and one beyond the edge gets the all-invisible raster.
+    """
+    with _serde.open_tile(_flat_dem_bytes(40)) as ds:
+        edge = analysis.viewshed(ds, 0.2, 20.0, 5.0, 0.0, None)
+        beyond = analysis.viewshed(ds, -0.2, 20.0, 5.0, 0.0, None)
+    with _serde.open_tile(edge) as o:
+        assert int((o.read(1) == 255).sum()) > 0
+    with _serde.open_tile(beyond) as o:
+        assert o.read(1).shape == (40, 40) and int((o.read(1) == 255).sum()) == 0
 
 
 # ---------------------------------------------------------------------------

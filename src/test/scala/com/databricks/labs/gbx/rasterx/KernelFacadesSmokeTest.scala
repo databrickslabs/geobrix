@@ -367,8 +367,9 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             k -> p.toString
         }
         val before = vsimemEntries()
-        // "on_edge" stands on the seam of the two tiles; "far" is in the reach of no tile
-        val towers = spark.createDataFrame(Seq(("on_edge", 32.0, 16.0, 5.0), ("far", 1000.0, 1000.0, 5.0)))
+        // "on_edge" stands on the seam of the two tiles; "far" is in the reach of no tile; "west" is outside the DSM with
+        // a tile in reach, so it stands on no tile and has no row
+        val towers = spark.createDataFrame(Seq(("on_edge", 32.0, 16.0, 5.0), ("far", 1000.0, 1000.0, 5.0), ("west", -10.0, 16.0, 5.0)))
             .toDF("tower_id", "observer_x", "observer_y", "observer_height")
         val rows = ViewshedTowersJvm.run(spark, towers, tiles.asJava, 0.0, 0.0, 32.0, 100.0, 1.6, 2).collect()
         try {
@@ -377,6 +378,22 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
             assert(total == 64 * 32 && visible == total, s"flat ground, a mast and a range past both tiles: $visible of $total")
             for (p <- tiles.values) assert(NodeFilePathUtil.readersOf(p) == 0, s"$p is still held")
             assert(vsimemEntries() == before, "the step left in-memory GDAL files behind")
+            // A tile that cannot be read fails the query, naming it, and every hold comes back: GDAL's VRT would leave
+            // the tile out and give a plausible count; a truncated one reads as zeros.
+            val whole = Files.readAllBytes(Paths.get(tiles("1,0")))
+            val broken = Map("garbage" -> "not a raster".getBytes("UTF-8"), "truncated" -> whole.take(whole.length / 2))
+            for ((kind, bytes) <- broken) {
+                val p = dir.resolve("dsm_2_0.tif")
+                Files.write(p, bytes)
+                try {
+                    val atBroken = spark.createDataFrame(Seq(("t", 50.0, 16.0, 5.0))).toDF("tower_id", "observer_x", "observer_y", "observer_height")
+                    val e = intercept[Exception](
+                      ViewshedTowersJvm.run(spark, atBroken, (tiles + ("2,0" -> p.toString)).asJava, 0.0, 0.0, 32.0, 100.0, 1.6, 1).collect())
+                    assert(e.getMessage.contains("dsm_2_0.tif"), s"$kind: ${e.getMessage}")
+                    for (q <- tiles.values ++ Seq(p.toString)) assert(NodeFilePathUtil.readersOf(q) == 0, s"$kind: $q is still held")
+                    assert(vsimemEntries() == before, s"$kind: the step left in-memory GDAL files behind")
+                } finally Files.deleteIfExists(p)
+            }
         } finally {
             tiles.values.foreach(p => Files.deleteIfExists(Paths.get(p)))
             Files.deleteIfExists(dir)

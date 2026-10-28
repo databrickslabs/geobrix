@@ -3939,9 +3939,12 @@ def rst_viewshed(
 ) -> Column:
     """Compute a binary viewshed raster from a DEM and an observer POINT.
 
-    Wraps ``gdal.ViewshedGenerate``. Output is a Byte raster matching the
-    source extent / CRS: visible pixels = ``255``, invisible / out-of-range
-    pixels = ``0``. Non-POINT ``observer_geom`` is rejected at runtime.
+    Wraps ``gdal.ViewshedGenerate``. Output is a Byte raster in the source CRS,
+    pixel-aligned with it: visible pixels = ``255``, invisible / out-of-range
+    pixels = ``0``. With a ``max_distance`` it is the window around the observer
+    (the observer's pixel plus ``max_distance`` each way, clipped to the DEM);
+    without one it is the whole DEM. Non-POINT ``observer_geom`` is rejected at
+    runtime.
 
     Args:
         tile: Single-band DEM raster tile column.

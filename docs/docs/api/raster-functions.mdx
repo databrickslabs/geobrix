@@ -4177,6 +4177,10 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 Runs GDAL's viewshed (`GDALViewshedGenerate`) with the same settings as the heavyweight tier. Returns a Byte tile (255 visible / 0 invisible) from a DEM tile and a POINT observer.
 :::
 
+:::info Changed in 0.6.0
+With a `maxDistance`, both tiers return the window around the observer (aligned to the DEM's pixel grid), not a raster the size of the DEM; the v0.5.2 light tier stretched that window over the whole DEM on larger DEMs.
+:::
+
 :::note Lightweight Python — virtual-tile force-output
 The lightweight **Python** binding accepts three optional keyword arguments the SQL and heavyweight tiers do not — `virtualize_dir`, `virtualize_prefix`, and `materialize` — controlling whether the produced tile carries raster bytes or a bytes-free virtual reference. See [Virtual-tile force-output params](#virtual-tile-overrides).
 :::
@@ -4198,6 +4202,10 @@ The lightweight **Python** binding accepts three optional keyword arguments the 
 `rst_viewshed_towers` is **not registered as a SQL function** and is **not available in the
 heavyweight tier**. It is a pure-Python / PySpark DataFrame pipeline function in the `pyrx`
 package. Light tier; Serverless-safe; no JAR required.
+:::
+
+:::info Changed in 0.6.0
+The pixel counts now come from the window around each tower (the `radius_m` square, clipped to the DSM), as `rst_viewshed` returns it; in v0.5.2 they were inflated by a stretched mask. A tower standing in no DSM tile has no row, and a NULL `observer_height` is 0.0.
 :::
 
 `rst_viewshed_towers` runs a per-tower raster viewshed over a tiled DSM and returns one scalar

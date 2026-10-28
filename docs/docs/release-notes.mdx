@@ -492,6 +492,16 @@ formats.
   with a different line-of-sight mode; it now uses the heavyweight tier's mode. How many cells
   change depends on the terrain: from a fraction of a percent on smooth terrain to a few percent
   on rough terrain (about 3% of the cells of a rough 256 × 256 DEM).
+- **Fix: `rst_viewshed` with a `max_distance` returns the window around the observer, in both
+  tiers.** In v0.5.2 the light `rst_viewshed` with a max distance, on DEMs larger than about
+  366 × 366 pixels, and `rst_viewshed_towers`, returned a stretched mask: GDAL's window around the
+  observer was spread over a raster the size of the DEM, so the visible area (and the pixel counts
+  `rst_viewshed_towers` derives from it) came out several times too large and in the wrong place.
+  Both tiers now return that window (the observer's pixel plus `max_distance` each way, clipped to
+  the DEM), aligned to the DEM's pixel grid. Without a `max_distance` the output is still the whole
+  DEM. An observer within half a pixel of the DEM's edge now gets a viewshed in the light tier too.
+  In `rst_viewshed_towers`, a tower that stands on no DSM tile (outside the DSM) now has no row,
+  where it had an all-invisible one, and a NULL `observer_height` is 0.0.
 
 ### Raster tiling and tessellation — tier parity and large rasters (behavior change)
 

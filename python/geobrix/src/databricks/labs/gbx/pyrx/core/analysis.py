@@ -479,7 +479,9 @@ def _viewshed_gdal_ctypes(
 
     Writes the DEM to a local scratch file, calls GDALViewshedGenerate via ctypes
     against the bundled libgdal, reads the binary 0/255 output, and returns a
-    uint8 numpy array.  Peak RSS ≈ GDAL block cache (independent of DEM size).
+    ``(uint8 numpy array, affine transform)`` pair: the transform is the output's
+    own, because with a max distance GDAL writes only the window around the
+    observer.  Peak RSS ≈ GDAL block cache (independent of DEM size).
 
     The scratch dir is cleaned up unconditionally in a finally block.
     """
@@ -596,9 +598,10 @@ def _viewshed_gdal_ctypes(
                 gdal.GDALClose(out_h)
             gdal.GDALClose(ds_h)
 
-        # The output is already uint8 0/255 (GVOT_NORMAL); no remap needed.
+        # The output is already uint8 0/255 (GVOT_NORMAL); no remap needed. With a max distance GDAL
+        # writes only the window around the observer, so its transform goes back with the array.
         with _rasterio.open(out_path) as result_ds:
-            return result_ds.read(1).astype("uint8")
+            return result_ds.read(1).astype("uint8"), result_ds.transform
     finally:
         import shutil as _shutil
 
@@ -616,8 +619,10 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
     coefficient 0.85714, GVOT_NORMAL), so both tiers give the same mask. It streams
     the DEM block-by-block (peak RSS ≈ GDAL cache, independent of DEM size).
 
-    The result is a single-band Byte (uint8) GTiff at the same extent / CRS as
-    ``ds`` (no NoData; 0 = invisible).
+    The result is a single-band Byte (uint8) GTiff in the CRS of ``ds`` (no NoData;
+    0 = invisible), pixel-aligned with it. With a ``max_distance`` it is the window
+    around the observer (the observer's cell plus ``max_distance`` each way, clipped to
+    ``ds``), as the heavyweight returns it; without one it is the whole of ``ds``.
 
     Args:
         ds:              Open rasterio DatasetReader (the DEM).
@@ -661,32 +666,32 @@ def viewshed(ds, observer_x, observer_y, observer_height, target_height, max_dis
                 f"rst_viewshed: max_distance must be > 0 and finite; got {max_distance}"
             )
 
-    from rasterio.transform import xy as _xy
-
-    height, width = ds.height, ds.width
-
-    # Pixel-center world coordinates along each axis (north-up: y descends).
-    xs, _ = _xy(ds.transform, np.zeros(width), np.arange(width), offset="center")
-    _, ys = _xy(ds.transform, np.arange(height), np.zeros(height), offset="center")
-    xs = np.asarray(xs, dtype="float64")
-    ys = np.asarray(ys, dtype="float64")
-
     # Graceful out-of-bounds: an observer outside the raster extent has no valid
-    # line-of-sight origin. GDAL produces no visibility in that case. Mirror
-    # with an all-invisible (0) raster rather than crashing the job. Bounds are the
-    # min/max pixel-center coords (north-up: ys descends, so use min/max).
-    x_lo, x_hi = float(min(xs[0], xs[-1])), float(max(xs[0], xs[-1]))
-    y_lo, y_hi = float(min(ys[0], ys[-1])), float(max(ys[0], ys[-1]))
-    if not (x_lo <= observer_x <= x_hi and y_lo <= observer_y <= y_hi):
-        out = np.zeros((height, width), dtype="uint8")
+    # line-of-sight origin. Mirror with an all-invisible (0) raster rather than
+    # crashing the job. The extent is the raster's edges, so an observer within half a
+    # pixel of one is inside, as it is for GDAL.
+    left, bottom, right, top = ds.bounds
+    transform = ds.transform
+    if not (left <= observer_x <= right and bottom <= observer_y <= top):
+        out = np.zeros((ds.height, ds.width), dtype="uint8")
     else:
-        out = _viewshed_gdal_ctypes(
+        out, transform = _viewshed_gdal_ctypes(
             ds, observer_x, observer_y, observer_height, target_height, max_distance
         )
 
     decoded_bytes = out.nbytes
     profile = _comp.drop_ycbcr(ds.profile)
-    profile.update(driver="GTiff", count=1, dtype="uint8", nodata=None)
+    # The output's own grid: writing a window into the DEM's full-size profile would make
+    # GDAL resample it up to the DEM's size.
+    profile.update(
+        driver="GTiff",
+        count=1,
+        dtype="uint8",
+        nodata=None,
+        height=out.shape[0],
+        width=out.shape[1],
+        transform=transform,
+    )
     profile.update(
         _comp.creation_opts("uint8", decoded_bytes=decoded_bytes, compress="auto")
     )

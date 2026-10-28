@@ -3726,7 +3726,9 @@ def rst_viewshed(
     ``GDALViewshedGenerate`` with the same parameters (GVM_Edge, curvature
     coefficient 0.85714, binary output) for every DEM size, so they give the same
     mask. The light tier streams the DEM through the bundled libgdal, so its peak
-    memory is about GDAL's block cache whatever the DEM size. ``crs`` declares the
+    memory is about GDAL's block cache whatever the DEM size. With a ``max_distance``
+    the output is the window around the observer (pixel-aligned with the DEM), as the
+    heavyweight tier returns it; without one it is the whole DEM. ``crs`` declares the
     source CRS of a plain WKB/WKT observer point (int SRID or CRS string incl.
     ESRI/WKT); an EWKB/EWKT embedded SRID wins; absent + no SRID -> assumed in the
     raster CRS.
@@ -3783,6 +3785,43 @@ def rst_viewshed(
     if crs is None:
         return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md)
     return _viewshed_udf(_col(tile), _col(observer_geom), oh, th, md, crs_col)
+
+
+def _tower_window_paths(tile_map, x0, y0, tile_m, radius):
+    """A function (x, y) -> the sorted DSM tile paths in reach of a tower, or None for a tower that stands on
+    no tile (it is outside the DSM, or in a grid cell the manifest has no tile for) or has no usable coordinate.
+    """
+
+    def window_paths(obs_x, obs_y):
+        import math
+
+        from databricks.labs.gbx.pyrx.core.tiling import tile_range
+
+        if obs_x is None or obs_y is None:
+            return None
+        obs_x, obs_y = float(obs_x), float(obs_y)
+        if not (math.isfinite(obs_x) and math.isfinite(obs_y)):
+            return None
+        own = (math.floor((obs_x - x0) / tile_m), math.floor((obs_y - y0) / tile_m))
+        if own not in tile_map:
+            return None
+        tx_lo, tx_hi = tile_range(obs_x, x0, radius, tile_m)
+        ty_lo, ty_hi = tile_range(obs_y, y0, radius, tile_m)
+        return sorted(
+            {
+                tile_map[(tx, ty)]
+                for tx in range(tx_lo, tx_hi + 1)
+                for ty in range(ty_lo, ty_hi + 1)
+                if (tx, ty) in tile_map
+            }
+        )
+
+    return window_paths
+
+
+def _raise_if_null(check: Column, message: Column, keep: Column) -> Column:
+    """`keep`, or a failed query with `message` where `check` is NULL."""
+    return f.when(check.isNull(), f.raise_error(message)).otherwise(keep)
 
 
 def rst_viewshed_towers(
@@ -3856,6 +3895,14 @@ def rst_viewshed_towers(
                       levels need a dedicated cluster with the geobrix JAR; where
                       the session cannot run one, a line says why and L3 runs.
 
+    The viewshed of a tower is the window around it, as :func:`rst_viewshed` returns
+    it with a max distance: ``total_px`` is the window's pixel count (``radius_m``
+    each way from the tower's pixel, clipped to the tiles) and ``visible_px`` the
+    visible part of it. A tower stands on the DSM tile its coordinates fall in
+    (tile ``i`` covers ``[origin + i * tile_m, origin + (i + 1) * tile_m)``): one
+    outside the DSM, in a grid cell that has no tile, has no row. A NULL
+    ``observer_height`` is 0.0. An unreadable DSM tile fails the query.
+
     Returns:
         DataFrame with one row per tower that has in-radius DSM coverage:
         ``tower_id_col``, ``observer_x``, ``observer_y``, ``visible_px`` (long),
@@ -3865,10 +3912,13 @@ def rst_viewshed_towers(
     analysis_core._validate_towers_inputs(dsm_tiles_df.columns, radius_m)
     if tile_m is None or tile_m <= 0:
         raise ValueError(f"tile_m must be > 0 (got {tile_m!r}).")
-    if _levels == "JVM-DF" and to_crs is not None:
-        raise ValueError("_levels='JVM-DF' does not support to_crs")
     from databricks.labs.gbx.manager import levels as manager_levels
 
+    if (
+        to_crs is not None
+        and (_levels or manager_levels.PREFERENCE["rst_viewshed_towers"][0]) == "JVM-DF"
+    ):
+        raise ValueError("_levels='JVM-DF' does not support to_crs")
     level = manager_levels.towers_level(towers_df.sparkSession, _levels)
 
     # Bytes-free tile manifest -> {(tx, ty): path}. Only tile index + path
@@ -3887,6 +3937,8 @@ def rst_viewshed_towers(
     _radius = float(radius_m)
     _vrt_dir = vrt_dir
 
+    window_paths = _tower_window_paths(tile_map, _x0, _y0, _tile_m, _radius)
+
     @f.udf("string")
     def _mint_window_vrt(tower_id, obs_x, obs_y):
         # Worker-side: pick the in-radius tiles via tile_range and mint ONE VRT
@@ -3895,31 +3947,28 @@ def rst_viewshed_towers(
         import os
 
         from databricks.labs.gbx.ds._mosaic import mint_vrt
-        from databricks.labs.gbx.pyrx.core.tiling import tile_range
 
-        if obs_x is None or obs_y is None:
-            return None
-        tx_lo, tx_hi = tile_range(float(obs_x), _x0, _radius, _tile_m)
-        ty_lo, ty_hi = tile_range(float(obs_y), _y0, _radius, _tile_m)
-        paths = [
-            tile_map[(tx, ty)]
-            for tx in range(tx_lo, tx_hi + 1)
-            for ty in range(ty_lo, ty_hi + 1)
-            if (tx, ty) in tile_map
-        ]
+        paths = window_paths(obs_x, obs_y)
         if not paths:
             return None
-        paths = sorted(set(paths))
         if _vrt_dir:
             os.makedirs(_vrt_dir, exist_ok=True)
             return mint_vrt(paths, out=os.path.join(_vrt_dir, f"tower_{tower_id}.vrt"))
         return mint_vrt(paths)
 
+    @f.udf("string")
+    def _window_tiles(obs_x, obs_y):
+        return ", ".join(window_paths(obs_x, obs_y) or [])
+
     base = towers_df.select(
         f.col(tower_id_col).alias("tower_id"),
         f.col(x_col).cast(DoubleType()).alias("observer_x"),
         f.col(y_col).cast(DoubleType()).alias("observer_y"),
-        analysis_core._observer_height_col(observer_height).alias("observer_height"),
+        # A NULL mast height is 0.0 at every level (the light viewshed reads it so).
+        f.coalesce(
+            analysis_core._observer_height_col(observer_height).cast("double"),
+            f.lit(0.0),
+        ).alias("observer_height"),
     )
 
     def with_frac(df: DataFrame) -> DataFrame:
@@ -3939,15 +3988,15 @@ def rst_viewshed_towers(
     if level == "JVM-DF":
         from databricks.labs.gbx.manager import jvm
 
-        # The Scala step repartitions by tower id itself. It takes the id as a string and the mast height as
-        # a double; as on L3, a tower with no coordinate has no row.
+        # The Scala step repartitions by tower id itself. It takes the id as a string; as on L3, a tower with
+        # no coordinate has no row.
         in_df = base.where(
             f.col("observer_x").isNotNull() & f.col("observer_y").isNotNull()
         ).select(
             f.col("tower_id").cast("string"),
             "observer_x",
             "observer_y",
-            f.col("observer_height").cast("double"),
+            "observer_height",
         )
         done = jvm.viewshed_towers_jvm(
             towers_df.sparkSession,
@@ -4016,9 +4065,42 @@ def rst_viewshed_towers(
         )
         .where(f.col("_vrt").isNotNull())
         .withColumn("_dem", rst_fromfile("_vrt", materialize=heavy))
-        .withColumn("_vs", viewshed())
-        .withColumn("_hist", histogram("_vs"))
     )
+    if heavy:
+        # The light read gives NULL for a tile it cannot read, and a heavyweight step gives an error tile for a
+        # failure: either would become a (0, 0) row, where L3 fails the query. Fail it here, naming the cause.
+        tower = f.col("tower_id").cast("string")
+        piped = piped.withColumn(
+            "_dem",
+            _raise_if_null(
+                f.col("_dem"),
+                f.concat(
+                    f.lit("rst_viewshed_towers: a DSM tile for tower "),
+                    tower,
+                    f.lit(" could not be read, one of: "),
+                    _window_tiles("observer_x", "observer_y"),
+                ),
+                f.col("_dem"),
+            ),
+        ).withColumn("_vs", viewshed())
+        piped = piped.withColumn(
+            "_vs",
+            _raise_if_null(
+                f.col("_vs")["raster"],
+                f.concat(
+                    f.lit("rst_viewshed_towers: the viewshed of tower "),
+                    tower,
+                    f.lit(" failed: "),
+                    f.coalesce(
+                        f.col("_vs")["metadata"]["last_error"], f.lit("no reason given")
+                    ),
+                ),
+                f.col("_vs"),
+            ),
+        )
+    else:
+        piped = piped.withColumn("_vs", viewshed())
+    piped = piped.withColumn("_hist", histogram("_vs"))
 
     # Histogram bucket 1 = [128, 256) = the visible class (255); bucket 0 = invisible (0).
     vis = f.col("_hist")["band_1"].getItem(1)

@@ -14,6 +14,7 @@ from rasterio.io import MemoryFile
 
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import compression as _comp
+from databricks.labs.gbx.pyrx.core.analysis import cog_convert
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_file
 
 # Heavyweight gdaladdo resampling name -> rasterio.enums.Resampling name.
@@ -50,22 +51,44 @@ def try_open(raster_bytes: bytes) -> bool:
         return False
 
 
+def _writable_drivers() -> set:
+    """Raster driver short names this GDAL build can encode to.
+
+    ``raster_driver_extensions`` maps each file extension to ONE driver, so a
+    driver that shares its extension with another is hidden from it: COG and
+    GTiff both claim ``tif``, and only GTiff survives. COG is added back from
+    the registered-driver list.
+    """
+    drivers = set(rasterio.drivers.raster_driver_extensions().values())
+    with rasterio.Env() as env:
+        if "COG" in env.drivers():
+            drivers.add("COG")
+    return drivers
+
+
 def as_format(ds, new_format: str) -> bytes:
-    """Re-encode the raster to another GDAL driver (e.g. PNG, GTiff).
+    """Re-encode the raster to another GDAL driver (e.g. PNG, GTiff, COG).
 
     Mirrors the heavyweight ``gbx_rst_asformat``. Validates the requested
     driver is available in rasterio's bundled GDAL build; raises ValueError
     otherwise. Returns the raster bytes encoded in ``new_format``.
+
+    ``COG`` yields a Cloud Optimized GeoTIFF (``LAYOUT=COG``): the COG driver
+    only copies an existing dataset and its layout needs the canonical
+    block-size / overview / codec options, so it goes through ``cog_convert``
+    with the ``rst_cog_convert`` defaults (512 blocks, AVERAGE overviews) and
+    the size-adaptive codec. Other copy-only drivers (PNG, JPEG, ...) are
+    written by rasterio through a buffered copy.
     """
     new_format = str(new_format)
-    # raster_driver_extensions maps extension -> driver short name; the value
-    # set is the writable raster drivers available in this GDAL build.
-    available = set(rasterio.drivers.raster_driver_extensions().values())
+    available = _writable_drivers()
     if new_format not in available:
         raise ValueError(
             f"rst_asformat: driver '{new_format}' is not available in this "
             f"GDAL build; available: {', '.join(sorted(available))}"
         )
+    if new_format == "COG":
+        return cog_convert(ds, "AUTO", 512, "AVERAGE")
     data = ds.read()
     profile = ds.profile.copy()
     profile.update(driver=new_format)

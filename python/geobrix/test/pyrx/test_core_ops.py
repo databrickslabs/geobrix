@@ -117,6 +117,20 @@ def test_as_format_to_png():
             assert o.driver == "PNG"
 
 
+def test_as_format_to_cog_is_a_real_cog():
+    # COG has no Create(): the output must be a Cloud Optimized GeoTIFF
+    # (LAYOUT=COG), not a plain GTiff and not an error.
+    src = make_geotiff_bytes(width=256, height=256, count=2)
+    with _serde.open_tile(src) as ds:
+        before = ds.read()
+        out = ops_core.as_format(ds, "COG")
+    with _serde.open_tile(out) as o:
+        assert o.driver == "GTiff"  # COG opens as GTiff
+        assert o.tags(ns="IMAGE_STRUCTURE")["LAYOUT"] == "COG"
+        assert (o.width, o.height, o.count) == (256, 256, 2)
+        assert np.array_equal(o.read(), before)
+
+
 def test_as_format_bad_driver_raises():
     with _serde.open_tile(make_geotiff_bytes()) as ds:
         with pytest.raises(ValueError):

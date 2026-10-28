@@ -311,6 +311,12 @@ formats.
 
 ### Raster writers
 
+- **The lightweight `rst_asformat(tile, 'COG')` writes a Cloud Optimized GeoTIFF.** It used to
+  fail with `driver 'COG' is not available in this GDAL build`, although the COG driver is
+  present. The tile now comes out with the COG layout (`LAYOUT=COG`, 512-pixel blocks, an
+  overview pyramid and size-adaptive ZSTD), as `rst_cog_convert` writes it; other output
+  formats are unchanged. The heavyweight `rst_asformat` still writes a plain GeoTIFF for
+  `'COG'`; a later release fixes that.
 - **The heavyweight `gdal` writer writes Zarr with its default options.** The default compression,
   DEFLATE, is a TIFF codec name the Zarr driver does not have, so a Zarr write failed with
   `Compressor/decompressor for DEFLATE not available` unless the tile's `compression` named a Zarr

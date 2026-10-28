@@ -4,7 +4,8 @@ Stage a sample-data dataset (a directory of the minimal bundle) to a Unity Catal
 
 Uploads every file under  <src-root>/<path>  to  <volume-root>/geobrix-examples/<path>  with the
 Files API (streaming PUT) and checks each remote size against the local one. Finder litter
-(.DS_Store, ._* files) is not uploaded.
+(.DS_Store, ._* files) is not uploaded. A symlink whose target is outside --src-root, or any
+symlinked directory, is refused (exit 2) before a client is built.
 
 What it deletes: only stale files INSIDE each *.zarr store directory it uploads (a chunk left by
 an older layout of the store would read wrongly). Nothing else is ever deleted: files beside a
@@ -30,6 +31,7 @@ profile cannot authenticate (log in to it yourself), 4 the workspace could not b
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -64,9 +66,9 @@ def clean_rel(path: str) -> str:
     return rel
 
 
-def clean_volume_root(root: str) -> str:
+def clean_volume_root(given: str) -> str:
     """The Volume root as /Volumes/<catalog>/<schema>/<volume>[/dir], or ValueError."""
-    root = root.rstrip("/")
+    root = given.rstrip("/")
     parts = root.split("/")
     if (
         not root.startswith("/Volumes/")
@@ -74,7 +76,7 @@ def clean_volume_root(root: str) -> str:
         or any(part in ("", ".", "..") for part in parts[1:])
     ):
         raise ValueError(
-            f"--volume-root {root!r} must be /Volumes/<catalog>/<schema>/<volume>"
+            f"--volume-root {given!r} must be /Volumes/<catalog>/<schema>/<volume>"
         )
     return root
 
@@ -84,9 +86,36 @@ def is_litter(name: str) -> bool:
     return name == ".DS_Store" or name.startswith("._")
 
 
-def local_files(src: Path) -> list[Path]:
-    """Every file under ``src`` that is data, sorted."""
-    return sorted(p for p in src.rglob("*") if p.is_file() and not is_litter(p.name))
+def local_files(src: Path, src_root: Path) -> list[Path]:
+    """Every file under ``src`` that is data, sorted; ValueError for a link that cannot be staged.
+
+    ``src_root`` is the resolved local geobrix-examples root. A symlinked file is followed only
+    when its target is inside it, so nothing outside the bundle is uploaded; a symlinked
+    directory is refused (it is not followed, and skipping it silently would drop files).
+    """
+    files: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(src, followlinks=False):
+        base = Path(dirpath)
+        for name in dirnames:
+            if (base / name).is_symlink():
+                raise ValueError(
+                    f"{base / name} is a symlinked directory; stage the real directory instead"
+                )
+        for name in filenames:
+            path = base / name
+            if is_litter(name):
+                continue
+            if path.is_symlink():
+                try:
+                    path.resolve().relative_to(src_root)
+                except ValueError:
+                    raise ValueError(
+                        f"{path} is a symlink to {path.resolve()}, outside --src-root "
+                        f"{src_root}; refusing to stage it"
+                    ) from None
+            if path.is_file():
+                files.append(path)
+    return sorted(files)
 
 
 def store_roots(rel: str, files: list[Path], src: Path) -> list[str]:
@@ -166,7 +195,11 @@ def main(argv=None) -> int:
         return 2
     base = f"{volume_root}/geobrix-examples"
     dest = f"{base}/{rel}"
-    files = local_files(src) if src.is_dir() else []
+    try:
+        files = local_files(src, src_root) if src.is_dir() else []
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 2
     if not files:
         print(
             f"Nothing to stage: no files under {src}. Generate it first "

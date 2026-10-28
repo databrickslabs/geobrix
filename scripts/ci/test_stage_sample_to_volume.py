@@ -202,14 +202,15 @@ def test_a_bad_path_is_refused_on_a_dry_run_too(launcher, sdk, src_root, capsys)
 
 
 @pytest.mark.parametrize(
-    "volume_root", ["", "/Volumes/c", "rel/v", "/Volumes/c/s/../x"]
+    "volume_root", ["", "/", "/Volumes/c", "rel/v", "/Volumes/c/s/../x"]
 )
-def test_a_bad_volume_root_is_refused(launcher, sdk, src_root, volume_root):
+def test_a_bad_volume_root_is_refused(launcher, sdk, src_root, capsys, volume_root):
     rc = launcher.main(
         ["--src-root", str(src_root), "--volume-root", volume_root, "--profile", "p"]
     )
 
     assert rc == 2 and sdk.clients == []
+    assert f"--volume-root {volume_root!r}" in capsys.readouterr().err  # as given
 
 
 def test_the_prune_stays_inside_the_zarr_stores_it_uploads(launcher, sdk, src_root):
@@ -234,6 +235,46 @@ def test_the_prune_stays_inside_the_zarr_stores_it_uploads(launcher, sdk, src_ro
     assert sdk.files.files[f"{store3}/t2m/c/0/0/0"] == b"chunk-a"
     assert f"{store2}/.DS_Store" not in sdk.files.files  # Finder litter is not data
     assert f"{store2}/.zgroup" in sdk.files.files  # dotfiles of a store are
+
+
+@pytest.mark.parametrize(
+    "kind, rc",
+    [
+        ("file symlink in a store", 2),
+        ("directory symlink in a store", 2),
+        ("path symlink", 2),
+        ("file symlink to a file in the root", 0),
+    ],
+)
+def test_a_symlink_out_of_the_source_root_is_refused_before_any_client(
+    launcher, sdk, src_root, tmp_path, kind, rc
+):
+    outside = tmp_path / "outside"
+    (outside / "sub").mkdir(parents=True)
+    (outside / "secret.txt").write_bytes(b"SECRET")
+    (outside / "sub" / "more.txt").write_bytes(b"SECRET")
+    store = src_root / DATASET / "era5_like_v3.zarr"
+    path = DATASET
+    if kind == "file symlink in a store":
+        (store / "secret_link.txt").symlink_to(outside / "secret.txt")
+    elif kind == "directory symlink in a store":
+        (store / "t2m" / "outlink").symlink_to(
+            outside / "sub", target_is_directory=True
+        )
+    elif kind == "path symlink":
+        (src_root / "link").symlink_to(outside, target_is_directory=True)
+        path = "link"
+    else:
+        (store / "inside_link.txt").symlink_to(store / "zarr.json")
+
+    assert run(launcher, src_root, "--profile", "p", "--path", path) == rc
+
+    if rc:
+        assert sdk.clients == [] and sdk.files.uploaded == []
+    else:
+        link = f"{EXAMPLES}/{DATASET}/era5_like_v3.zarr/inside_link.txt"
+        assert sdk.files.files[link] == b"{v3}"
+    assert b"SECRET" not in b"".join(sdk.files.files.values())
 
 
 def test_a_dataset_that_is_not_a_store_is_uploaded_and_never_pruned(

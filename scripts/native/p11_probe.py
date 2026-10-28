@@ -5,6 +5,7 @@ Driver (stdlib only), run by test-bindings.sh inside the build container with --
 
     p11_probe.py closure --root /t/gbx --arch ARCH
     p11_probe.py run --arch ARCH --native DIR --bindings DIR
+    p11_probe.py recount --bindings DIR      the counts of an existing run, from its logs
 
 and a pytest plugin (`-p p11_probe`) that logs one JSON line per test phase to $P11_LOG.
 
@@ -32,10 +33,14 @@ from pathlib import Path
 # ---------------------------------------------------------------- pytest plugin (loaded with -p p11_probe)
 
 
+# Read once, when pytest loads the plugin: a test may replace os.environ for its duration (rasterio's test_session
+# does), and a record written then would be lost.
+_LOG = os.environ.get("P11_LOG")
+
+
 def _emit(record):
-    path = os.environ.get("P11_LOG")
-    if path:
-        with open(path, "a") as f:
+    if _LOG:
+        with open(_LOG, "a") as f:
             f.write(json.dumps(record) + "\n")
 
 
@@ -44,21 +49,21 @@ def pytest_runtest_logstart(nodeid, location):
 
 
 def pytest_collectreport(report):
-    if report.failed:
-        _emit(
-            {
-                "id": report.nodeid,
-                "when": "collect",
-                "outcome": "failed",
-                "tb": (getattr(report, "longreprtext", "") or "")[-6000:],
-            }
-        )
+    if report.failed or report.skipped:
+        rec = {"id": report.nodeid, "when": "collect", "outcome": report.outcome}
+        if report.failed:
+            rec["tb"] = (getattr(report, "longreprtext", "") or "")[-6000:]
+        _emit(rec)
 
 
 def pytest_runtest_logreport(report):
     rec = {"id": report.nodeid, "when": report.when, "outcome": report.outcome}
     if hasattr(report, "wasxfail"):
         rec["xfail"] = True
+    if hasattr(
+        report, "context"
+    ):  # a SubtestReport (pytest 9): counted apart from the test it belongs to
+        rec["subtest"] = True
     if report.outcome == "failed":
         text = getattr(report, "longreprtext", "") or ""
         rec["tb"] = text[-6000:]
@@ -211,46 +216,120 @@ def env_for(mode, arch):
     return env
 
 
-def read_log(path):
-    """{id: (outcome, traceback)} and the ids that started and never reported (a crash)."""
-    outcome, tb, started, finished = (
-        {},
-        {},
-        [],
-        set(),
-    )  # finished: ids whose teardown reported
+PASSING = ("passed", "xpassed")
+
+
+def parse_log(path):
+    """({id: [(phase, outcome, xfail, subtest), ...] in order}, {id: traceback of its failure}, [the test that started and never
+    tore down: a crash]). A node id can repeat (pytest allows duplicates), so every report is kept.
+    """
+    status, tb, pending = {}, {}, None
     if not Path(path).exists():
-        return outcome, tb, []
+        return status, tb, []
     for line in Path(path).read_text().splitlines():
         r = json.loads(line)
         if "start" in r:
-            started.append(r["start"])
+            pending = r["start"]
             continue
-        i, o = r["id"], r["outcome"]
-        if r["when"] in ("teardown", "collect"):
-            finished.add(i)
-        cur = outcome.get(i)
-        if o == "failed":
-            outcome[i] = "failed"
+        i = r["id"]
+        status.setdefault(i, []).append(
+            (r["when"], r["outcome"], bool(r.get("xfail")), bool(r.get("subtest")))
+        )
+        if r["when"] == "teardown" and i == pending:
+            pending = None
+        if r["outcome"] == "failed":
             tb[i] = r.get("tb", "")
-        elif r["when"] == "call" and o == "passed" and cur != "failed":
-            outcome[i] = "passed"
-        elif o == "skipped" and cur not in ("failed", "passed"):
-            outcome[i] = "skipped"
-        elif cur is None:
-            outcome[i] = o
-    crashed = [i for i in started if i not in finished]
-    return outcome, tb, crashed[-1:]
+    return status, tb, [pending] if pending else []
+
+
+def outcome_of(reports):
+    """One word per test: `failed` when any phase (or subtest) failed, else the last call phase of the test itself
+    (passed, xpassed, xfailed, skipped); a test skipped in setup is skipped."""
+    if any(o == "failed" for _, o, _, _ in reports):
+        return "failed"
+    calls = [(o, x) for when, o, x, sub in reports if when == "call" and not sub]
+    if calls:
+        o, xfail = calls[-1]
+        if o == "passed":
+            return "xpassed" if xfail else "passed"
+        return "xfailed" if xfail else "skipped"
+    if any(o == "skipped" for _, o, _, _ in reports):
+        return "skipped"
+    return "passed"
+
+
+def read_log(path):
+    """({id: outcome}, {id: traceback}, [the test that started and never tore down, a crash])."""
+    status, tb, crashed = parse_log(path)
+    return {i: outcome_of(r) for i, r in status.items()}, tb, crashed
+
+
+COUNT_KEYS = (
+    "passed",
+    "failed",
+    "errors",
+    "skipped",
+    "xfailed",
+    "xpassed",
+    "subtests_passed",
+)
+
+
+def tally(path):
+    """The counts of pytest's own summary line, one per report that has one: a call is passed, failed, skipped,
+    xfailed (skipped with a wasxfail) or xpassed (passed with one); a passed subtest is `subtests passed`; a failed
+    setup, teardown or collection is an error; a skipped setup, teardown or collection is skipped.
+    """
+    t = dict.fromkeys(COUNT_KEYS, 0)
+    for reports in parse_log(path)[0].values():
+        for when, o, xfail, sub in reports:
+            if when == "call":
+                if o == "failed":
+                    t["failed"] += 1
+                elif o == "passed":
+                    t[
+                        "subtests_passed" if sub else "xpassed" if xfail else "passed"
+                    ] += 1
+                elif o == "skipped":
+                    t["xfailed" if xfail else "skipped"] += 1
+            elif o == "failed":
+                t["errors"] += 1
+            elif o == "skipped":
+                t["skipped"] += 1
+    return t
+
+
+def summary_counts(out_path):
+    """The counts on pytest's last summary line in its output (`5 failed, 1 error, 90 passed in 3.2s`), or None."""
+    for line in reversed(Path(out_path).read_text().splitlines()):
+        found = re.findall(
+            r"(\d+) (subtests passed|passed|failed|errors?|skipped|xfailed|xpassed)\b",
+            line,
+        )
+        if found and re.search(r" in [\d.]+s", line):
+            t = dict.fromkeys(COUNT_KEYS, 0)
+            for n, word in found:
+                t[
+                    (
+                        "subtests_passed"
+                        if word.startswith("subtests")
+                        else "errors" if word.startswith("error") else word
+                    )
+                ] = int(n)
+            return t
+    return None
 
 
 def run_pytest(label, mode, venv, cwd, args, arch, logdir, timeout):
     """Run pytest (resuming past a crashing test) -> ({id: outcome}, {id: traceback}, [crashed ids], seconds)."""
     log = logdir / f"{label}.jsonl"
     out = logdir / f"{label}.out"
-    log.unlink(missing_ok=True)
     out.write_text("")
     crashed, t0 = [], time.time()
     for attempt in range(8):
+        log.unlink(
+            missing_ok=True
+        )  # a resumed run repeats every test: the log is the last attempt's
         cmd = [
             str(venv / "bin" / "python"),
             "-m",
@@ -308,14 +387,6 @@ def run_pytest(label, mode, venv, cwd, args, arch, logdir, timeout):
     return outcome, tb, crashed, time.time() - t0
 
 
-def counts(outcome):
-    return {
-        "passed": sum(1 for o in outcome.values() if o == "passed"),
-        "failed": sum(1 for o in outcome.values() if o == "failed"),
-        "skipped": sum(1 for o in outcome.values() if o == "skipped"),
-    }
-
-
 def write_args(path, ids):
     Path(path).write_text("\n".join(ids) + "\n")
     return [f"@{path}"]
@@ -351,7 +422,7 @@ def classify(failed, flaky_pass, click_pass, baseline, tbs, is_rasterio):
             res["cli_failures" if is_cli(i, tbs.get(i)) else "library_failures"].append(
                 i
             )
-        elif baseline.get(i) == "passed":
+        elif baseline.get(i) in PASSING:
             res["regressions"].append(i)
         elif i not in baseline:
             res["not_collected_in_baseline"].append(i)
@@ -578,10 +649,20 @@ def run(arch, native, bindings_dir):
         first, tbs, crashed, secs_run = run_pytest(
             b, "vendored", venv, cwd_v, s["args"], arch, logdir, timeout
         )
-        c = counts(first)
+        c = tally(logdir / f"{b}.jsonl")
+        c["failed"] += len(crashed)
+        if (
+            not crashed
+        ):  # the oracle for the counting: pytest's own summary line says the same
+            want = summary_counts(logdir / f"{b}.out")
+            if want != c:
+                fail(
+                    f"{b}: the counts from the log {c} are not pytest's summary line {want}"
+                )
         failed = sorted(i for i, o in first.items() if o == "failed")
         say(
-            f"   {b}: passed {c['passed']}, failed {c['failed']}, skipped {c['skipped']} in {secs_run:.0f}s"
+            f"   {b}: passed {c['passed']}, failed {c['failed']}, errors {c['errors']}, skipped {c['skipped']}, "
+            f"xfailed {c['xfailed']}, xpassed {c['xpassed']}, subtests passed {c['subtests_passed']} in {secs_run:.0f}s"
             + (f", crashed {crashed}" if crashed else "")
         )
         flaky_pass, click_pass, baseline = set(), set(), {}
@@ -590,7 +671,7 @@ def run(arch, native, bindings_dir):
             again, _, _, _ = run_pytest(
                 f"{b}-again", "vendored", venv, cwd_v, args, arch, logdir, timeout
             )
-            flaky_pass = {i for i in failed if again.get(i) == "passed"}
+            flaky_pass = {i for i in failed if again.get(i) in PASSING}
             rest = [i for i in failed if i not in flaky_pass]
             if rest and b == "rasterio":
                 say(f"   rasterio: {len(rest)} failures again with click {click_nc}")
@@ -604,7 +685,7 @@ def run(arch, native, bindings_dir):
                     logdir,
                     timeout,
                 )
-                click_pass = {i for i in rest if nc.get(i) == "passed"}
+                click_pass = {i for i in rest if nc.get(i) in PASSING}
             rest = [i for i in rest if i not in click_pass]
             if rest:
                 say(
@@ -627,9 +708,7 @@ def run(arch, native, bindings_dir):
             "baseline_version": base_v.get(b),
             "build_s": secs.get(b),
             "test_s": round(secs_run),
-            "passed": c["passed"],
-            "failed": c["failed"],
-            "skipped": c["skipped"],
+            **c,
             "crashed": crashed,
             "regressions": cl["regressions"],
             "environmental": cl["environmental"],
@@ -674,10 +753,50 @@ def run(arch, native, bindings_dir):
     say(
         f"P11_DONE arch={arch} regressions={tot_reg} "
         + " ".join(
-            f"{b}={result[b]['passed']}/{result[b]['failed']}/{result[b]['skipped']}"
+            f"{b}={result[b]['passed']}p/{result[b]['failed']}f/{result[b]['errors']}e/{result[b]['skipped']}s/"
+            f"{result[b]['xfailed']}xf/{result[b]['xpassed']}xp"
             for b in BINDINGS
         )
     )
+
+
+def recount(bindings_dir):
+    """Counts of an existing probe run, from its logs (test-results/<binding>.jsonl), written back into p11.json. The
+    classification is not redone: the ids that failed must be the ones it was made from, and the counts must be the
+    ones pytest printed."""
+    bdir = Path(bindings_dir)
+    d = json.loads((bdir / "p11.json").read_text())
+    for b in BINDINGS:
+        log, e = bdir / "test-results" / f"{b}.jsonl", d[b]
+        t = tally(log)
+        t["failed"] += len(e["crashed"])
+        failed = sorted(i for i, o in read_log(log)[0].items() if o == "failed")
+        listed = bdir / "test-results" / f"{b}.failed.txt"
+        if failed != (
+            sorted(listed.read_text().split("\n")[:-1]) if listed.exists() else []
+        ):
+            fail(
+                f"{b}: the ids that failed are not the ones the classification was made from"
+            )
+        if not e["crashed"] and summary_counts(bdir / "test-results" / f"{b}.out") != t:
+            fail(
+                f"{b}: counts {t} differ from pytest's summary line {summary_counts(bdir / 'test-results' / f'{b}.out')}"
+            )
+        old = (e["passed"], e["failed"], e["skipped"])
+        keep = {k: v for k, v in e.items() if k not in ("passed", "failed", "skipped")}
+        d[b] = {
+            **{
+                k: keep[k] for k in ("version", "baseline_version", "build_s", "test_s")
+            },
+            **t,
+            **{
+                k: v
+                for k, v in keep.items()
+                if k not in ("version", "baseline_version", "build_s", "test_s")
+            },
+        }
+        say(f"{b}: passed/failed/skipped {old} -> {t}")
+    (bdir / "p11.json").write_text(json.dumps(d, indent=1) + "\n")
 
 
 def main():
@@ -690,9 +809,13 @@ def main():
     r.add_argument("--arch", required=True)
     r.add_argument("--native", required=True)
     r.add_argument("--bindings", required=True)
+    n = sub.add_parser("recount")
+    n.add_argument("--bindings", required=True)
     a = ap.parse_args()
     if a.cmd == "closure":
         closure(a.root, a.arch)
+    elif a.cmd == "recount":
+        recount(a.bindings)
     else:
         run(a.arch, a.native, a.bindings)
 

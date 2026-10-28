@@ -8,7 +8,8 @@
 #                       tests/data archive (test-data.conf)
 #   wheelhouse-bindings/<arch>/  the sdists' own build requirements (bindings-requirements-<arch>.txt, hashed)
 #   wheelhouse-test/<arch>/      the probe's test environment: test-requirements{,-newclick}-<arch>.txt (hashed)
-#   wheelhouse-pypi/<arch>/      the same five versions as PyPI binary wheels: the baseline the probe compares with
+#   wheelhouse-pypi/<arch>/      the same five versions as PyPI binary wheels, pinned by sha256 (baseline-requirements-<arch>.txt):
+#                                the baseline the probe compares with
 # Stops with `PREFETCH FAILED: <file> sha256 ...` on a checksum mismatch. The package index is whatever the
 # host's pip is configured for; this script never reads, passes or prints it.
 set -euo pipefail
@@ -90,12 +91,13 @@ if [ "$RASTERIO_TESTDATA_VERSION" != "$(pin RASTERIO_VERSION)" ]; then
 fi
 fetch_verified "$OUT/sdists/rasterio-$RASTERIO_TESTDATA_VERSION-testdata.tar.gz" "$RASTERIO_TESTDATA_SHA256" "$RASTERIO_TESTDATA_URL" || exit 1
 
-# The baselines: the same versions as PyPI wheels. When a version has no binary wheel for this architecture (netCDF4
-# 1.7.5.1 has none), the newest binary wheel at or below it is used, and the test says which one it compared with.
-rm -f "$OUT/wheelhouse-pypi/$ARCH"/*.whl
-for dep in "${BINDINGS[@]}"; do
+# The baselines: the same versions as PyPI wheels, pinned by sha256 (baseline-requirements-<arch>.txt). A version that
+# differs from pins.conf stops the pre-fetch, except netCDF4 (1.7.5.1 has no binary wheel on PyPI: the lock says 1.7.5).
+for dep in RASTERIO PYOGRIO PYPROJ SHAPELY; do
     file="$(pin "${dep}_SDIST_FILE")"
-    name="${file%%-[0-9]*}"
-    pip_download "wheelhouse-pypi/$ARCH ($name)" "$OUT/wheelhouse-pypi/$ARCH" "$name<=$(pin "${dep}_VERSION")"
+    grep -iqE "^${file%%-[0-9]*}==$(pin "${dep}_VERSION") " "$GBX_NATIVE_DIR/baseline-requirements-$ARCH.txt" \
+        || { echo "PREFETCH FAILED: baseline-requirements-$ARCH.txt does not pin ${file%%-[0-9]*}==$(pin "${dep}_VERSION") (pins.conf moved; re-lock it)" >&2; exit 1; }
 done
+rm -f "$OUT/wheelhouse-pypi/$ARCH"/*.whl
+pip_download "wheelhouse-pypi/$ARCH" "$OUT/wheelhouse-pypi/$ARCH" --require-hashes -r "$GBX_NATIVE_DIR/baseline-requirements-$ARCH.txt"
 echo "prefetch: $ARCH ok ($(ls "$OUT/src" | wc -l | tr -d ' ') sources, $(ls "$OUT/wheelhouse/$ARCH" | wc -l | tr -d ' ') wheels, $(ls "$OUT/sdists" | wc -l | tr -d ' ') sdists and test archives, $(ls "$OUT/wheelhouse-pypi/$ARCH" | wc -l | tr -d ' ') baseline wheels)"

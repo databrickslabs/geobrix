@@ -21,6 +21,7 @@ Requires full bundle at sample-data/Volumes/main/default/geobrix_samples/geobrix
 The bundle also holds a small synthetic ERA5-like Zarr cube (global/era5-weather/: a sharded
 Zarr v3 store and a Zarr v2 store). It is made from code, not clipped from the full bundle, so
 `--zarr-only` writes just the cube and needs no source bundle. Needs xarray and zarr.
+The cube is gitignored (generated, not tracked): a fresh clone has to run this to get it.
 """
 
 from __future__ import annotations

@@ -1,6 +1,8 @@
-"""Helpers shared by the Zarr tests, the doc tests and the bench harness.
+"""Helpers shared by the Zarr tests, the doc tests, the bench harness and the sample cube.
 
-Not public API. ``make_era5_like`` writes a small synthetic stand-in for an ERA5
+Not public API. It ships in the wheel because ``sample/zarr_era5.py`` (the bundle's ERA5-like
+Zarr cube) builds on ``era5_like_dataset`` and ``make_era5_like``; keep their keywords.
+``make_era5_like`` writes a small synthetic stand-in for an ERA5
 reanalysis cube (hourly 2 m temperature and 10 m wind on a regular 2.5 degree grid)
 in any of the three layouts GeoBrix has to handle: Zarr v3 with sharding, Zarr v3
 without it, and Zarr v2. ``plain_store_rows`` reads such a store back as manifest rows

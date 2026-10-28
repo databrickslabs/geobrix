@@ -19,7 +19,13 @@ Layout of each store (the bundle holds both under ``global/era5-weather/``):
 - ``era5_like_v2.zarr``: Zarr v2, chunks ``(12, 91, 180)``, blosc-zstd, chunk keys such as
   ``t2m/0.0.0``.
 
-Needs ``xarray`` and ``zarr`` (the ``zarr_dbr19`` or ``zarr_env6`` extra).
+The generated cube is not tracked in git (gitignored in the bundle): write it with
+``gbx:data:generate-minimal-bundle --zarr-only`` or call ``write_era5_cube`` yourself.
+
+Needs ``xarray`` and ``zarr`` (the ``zarr_dbr19`` or ``zarr_env6`` extra). The synthetic
+fields come from ``databricks.labs.gbx.zarr._testing``, which ships in the wheel for this
+module, the Zarr tests and the bench harness: keep ``era5_like_dataset`` and
+``make_era5_like`` there (``test_zarr_era5`` fails if they go).
 """
 
 from __future__ import annotations
@@ -58,7 +64,7 @@ _ATTRS = {
 }
 
 
-def build_dataset():
+def _build_dataset():
     """The cube as an in-memory ``xarray.Dataset``: seeded, rounded to ``QUANTUM``."""
     import numpy as np
 
@@ -99,7 +105,7 @@ def write_era5_cube(out_dir) -> Dict[str, Path]:
 
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
-    ds = build_dataset()
+    ds = _build_dataset()
     with tempfile.TemporaryDirectory(dir=local_temp_root()) as tmp:
         built = {
             V3_NAME: make_era5_like(

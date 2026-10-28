@@ -19,7 +19,7 @@ sample-data/Volumes/main/default/
         │   ├── geopackage/ (nyc_complete.gpkg)
         │   └── sentinel2/  (nyc_sentinel2_red.tif, small)
         └── global/
-            └── era5-weather/  (era5_like_v3.zarr sharded, era5_like_v2.zarr; synthetic, ~7 MB, deterministic)
+            └── era5-weather/  (era5_like_v3.zarr sharded, era5_like_v2.zarr; synthetic, ~7 MB; GENERATED, not in git: run `gbx:data:generate-minimal-bundle --zarr-only`)
 ```
 
 **Path token for doc tests:** Use `sample-data/Volumes/main/default/test-data` in place of `/Volumes/main/default/geobrix_samples` so examples work with the minimal bundle (e.g. `sample-data/Volumes/main/default/test-data/geobrix-examples/nyc/subway/nyc_subway.shp.zip`). This structure mirrors Unity Catalog Volumes in Databricks.
@@ -74,7 +74,7 @@ Or: `python3 sample-data/generate-minimal-bundle.py` (in Docker or with geopanda
 - **London center**: `--london-lon`, `--london-lat` (default: -0.1276, 51.5074)
 - **Bbox size**: `--bbox-size` half-width/height in degrees (default: 0.02)
 - **Vector row limit**: `--max-rows` (default: 10); raster is full data within bbox
-- **Zarr cube only**: `--zarr-only` writes just `global/era5-weather/` (synthetic, needs no source bundle); stage it to a Volume with `gbx:data:stage-sample --profile <name>`
+- **Zarr cube only**: `--zarr-only` writes just `global/era5-weather/` (synthetic, needs no source bundle). It is gitignored: a fresh clone and CI do not have it, so generate it first. Stage it to a Volume with `gbx:data:stage-sample --profile <name>` (deletes only stale files inside the `*.zarr` stores it uploads)
 
 **Contents**: NYC (boroughs, taxi-zones, neighborhoods, subway, parks, sentinel2, elevation, geopackage, filegdb, hrrr), London (postcodes, boroughs, sentinel2, elevation).
 

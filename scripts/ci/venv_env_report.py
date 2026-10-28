@@ -14,7 +14,7 @@ Stdlib only, so the same file runs under the container's python3 and the venv's 
     python venv_env_report.py pin-drift HOST.json CONTAINER.json
 
 ``compare`` prints a table of the Python version, the natives and every drifting package, and exits
-1 on any drift. A package only one side has is not drift (it cannot be compared); the count is
+1 on any drift (a native one side cannot import counts: an unreachable host native is a broken host). A package only one side has is not drift (it cannot be compared); the count is
 printed. Packages named in the ``--extras`` file (the Spark Connect client packages that
 ``gbx:venv:sync --connect`` installs and the container does not carry yet) are listed as declared
 extras when they are host-only.
@@ -76,7 +76,9 @@ def compare(host: dict, container: dict, extras=()) -> tuple[list, list]:
     ]
     for key in sorted(host["natives"]):
         h, c = host["natives"][key], container["natives"].get(key)
-        status = "OK" if h is None or c is None or h == c else "DRIFT"
+        # A native the host cannot reach (rasterio, pyproj or shapely missing or broken) while
+        # the container has it is a broken host, not a pass; none on either side is nothing to compare.
+        status = "OK" if h == c else "DRIFT"
         rows.append((key, h or "-", c or "-", status))
     hp, cp = host["packages"], container["packages"]
     shared = sorted((set(hp) & set(cp)) - IGNORED)

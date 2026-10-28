@@ -16,6 +16,7 @@ import os
 import re
 import signal
 import subprocess
+import sys
 import time
 from pathlib import Path
 
@@ -523,6 +524,50 @@ def test_a_killed_waiter_does_not_linger_until_the_timeout(demo):
     first.communicate()
 
 
+@pytest.mark.parametrize(
+    "sig, code", [(signal.SIGTERM, 143), (signal.SIGINT, 130), (signal.SIGHUP, 129)]
+)
+def test_a_signalled_waiter_exits_with_its_signals_status_and_cleans_up(
+    demo, tmp_path, sig, code
+):
+    # Waiting for the lock, the script stops its container-side helper and removes its status dir
+    # (under $TMPDIR), and exits 128 + the signal number, not a fixed 143.
+    scratch = tmp_path / "tmp"
+    scratch.mkdir()
+    first = demo.popen("lockdemo.sh", "--hold", "30")
+    _wait_for(lambda: "start" in _events(demo))
+    second = demo.popen("lockdemo.sh", TMPDIR=str(scratch))
+    _wait_for(lambda: len(_holds(demo)) == 2)  # the second one is waiting
+
+    second.send_signal(sig)
+    second.communicate(timeout=30)
+
+    assert second.returncode == code
+    assert list(scratch.glob("gbx-lock.*")) == []
+    _wait_for(lambda: len(_holds(demo)) == 1)  # its helper went with it
+    first.kill()
+    first.communicate()
+
+
+def test_the_callers_own_signal_trap_is_back_once_the_lock_is_held(demo):
+    # The wait phase traps TERM/INT/HUP; holding the lock, the caller's traps must be restored,
+    # not cleared.
+    demo.write_command(
+        "trapdemo.sh",
+        DEMO.replace(
+            "check_docker\n",
+            "trap 'echo caller-term >> \"$GBX_DEMO_EVENTS\"; exit 3' TERM\ncheck_docker\n",
+        ),
+    )
+    run = demo.popen("trapdemo.sh", "--hold", "30")
+    _wait_for(lambda: "start" in _events(demo))  # holds the lock now
+
+    run.send_signal(signal.SIGTERM)
+    run.communicate(timeout=30)
+
+    assert run.returncode == 3 and "caller-term" in _events(demo)
+
+
 def test_the_run_and_work_lock_waits_share_one_deadline(demo):
     # The run-lock wait used the whole timeout and the work-lock wait started a fresh one:
     # a run could wait twice as long as GBX_TEST_LOCK_TIMEOUT says.
@@ -793,13 +838,20 @@ def test_the_guard_sees_a_docker_exec_after_else_do_brace_and_elif(line):
     assert len(_docker_exec_statements(line)) == 1
 
 
-def test_a_listed_probe_does_not_exempt_a_longer_exec_that_runs_pytest():
-    """NOT_WORK entries match the whole statement: `test -d /Volumes && pytest` is not the probe."""
-    probe = "if ! docker exec geobrix-dev test -d /Volumes && python -m pytest x; then"
+def test_a_listed_probe_does_not_exempt_a_longer_exec_that_does_other_work(monkeypatch):
+    """NOT_WORK entries match the WHOLE statement. With a short entry (what a careless edit adds),
+    `test -d /Volumes && rm -rf target` must still be flagged: a search would exempt it.
+    """
+    monkeypatch.setattr(
+        sys.modules[__name__],
+        "NOT_WORK",
+        [("gbx-x.sh", r"docker exec geobrix-dev test -d /Volumes")],
+    )
+    probe = "docker exec geobrix-dev test -d /Volumes"
+    longer = probe + " && rm -rf /root/geobrix/target"
 
-    bad = _unwrapped_execs("gbx-test-sql-docs.sh", probe)
-
-    assert [stmt for _, stmt in bad] == [probe]
+    assert _unwrapped_execs("gbx-x.sh", probe) == []
+    assert [stmt for _, stmt in _unwrapped_execs("gbx-x.sh", longer)] == [longer]
 
 
 def test_the_guard_catches_an_unwrapped_pytest_exec_in_gbx_test_python():

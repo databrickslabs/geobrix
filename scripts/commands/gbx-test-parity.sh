@@ -201,6 +201,9 @@ for f in "${RUN_FILES[@]}"; do
     # The pytest summary line, then the skip reasons (-rs): which one explains a skip below.
     SUMMARY=$(docker exec geobrix-dev /bin/bash -c \
         "tail -6 $REPORT 2>/dev/null | grep -E 'passed|failed|skipped|no tests ran'; grep -E '^SKIPPED' $REPORT 2>/dev/null" 2>/dev/null)
+    # pytest runs with --color=yes, so the summary and the -rs lines carry escape codes
+    # (ESC[33mSKIPPED ESC[0m ...): strip them, or '^SKIPPED' below matches nothing.
+    SUMMARY=$(printf '%s\n' "$SUMMARY" | sed $'s/\033\\[[0-9;]*m//g')
     N_PASSED=$(echo "$SUMMARY" | grep -oE '[0-9]+ passed' | grep -oE '[0-9]+' | head -1)
     N_PASSED=${N_PASSED:-0}
     N_SKIPPED=$(echo "$SUMMARY" | grep -oE '[0-9]+ skipped' | grep -oE '[0-9]+' | head -1)
@@ -218,7 +221,7 @@ for f in "${RUN_FILES[@]}"; do
         # Why: when EVERY skip reason is a missing sample (the container was started without the
         # sample-data mounts) say so, since that skips newly discovered suites wholesale.
         N_REASONS=$(echo "$SUMMARY" | grep -cE '^SKIPPED')
-        N_SAMPLE=$(echo "$SUMMARY" | grep -E '^SKIPPED' | grep -ciE 'not mounted|sample')
+        N_SAMPLE=$(echo "$SUMMARY" | grep -E '^SKIPPED' | grep -ciE 'sample( [a-z]+)? not mounted')
         WHY=""
         if [ "$N_REASONS" -gt 0 ] && [ "$N_SAMPLE" -eq "$N_REASONS" ]; then
             WHY="; sample data missing"

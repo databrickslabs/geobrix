@@ -155,6 +155,7 @@ names = set()
 for r in m.requires("pyspark") or []:
     if re.search(r"""extra\s*==\s*["']connect["']""", r):
         names.add(re.split(r"[ ;<>=!~\[(]", r)[0].lower().replace("_", "-"))
+names.add("zstandard")  # named explicitly by --connect (plan compression), not by pyspark's extra
 print("\n".join(sorted(names)))
 PY
 fi

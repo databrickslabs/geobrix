@@ -308,6 +308,15 @@ print_lock_help() {
     echo -e "  ${GREEN}--no-wait${NC}              Fail at once (exit 75) if another test run holds the container lock, instead of waiting for it"
 }
 
+# The TERM/INT/HUP handler of gbx_acquire_test_lock's wait phase: stop the container-side waiter,
+# remove the status dir, and exit with the signal's conventional status (128 + n). It reads
+# holder_pid and dir from the function that is waiting (shell dynamic scope).
+_gbx_lock_abort() {
+    [ -n "${holder_pid:-}" ] && kill "$holder_pid" 2>/dev/null
+    [ -n "${dir:-}" ] && rm -rf "$dir"
+    exit "$1"
+}
+
 # Take the container test lock, or exit 75. Call once after check_docker. Prints this run's
 # pid and the acquisition, so a duplicate launch is obvious in the log.
 gbx_acquire_test_lock() {
@@ -315,7 +324,7 @@ gbx_acquire_test_lock() {
         echo -e "${CYAN}🔒 test lock: held by the parent command (pid ${GBX_TEST_LOCK_HELD_BY}); this run is pid $$${NC}"
         return 0
     fi
-    local info dir status fifo holder_pid line start="$SECONDS" next_note=30 waiting=false
+    local info dir status fifo holder_pid line saved_traps start="$SECONDS" next_note=30 waiting=false
     info="pid=$$ cmd=${GBX_LOCK_CMD} since=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     dir="$(mktemp -d "${TMPDIR:-/tmp}/gbx-lock.XXXXXX")" || return 1
     status="$dir/status"
@@ -329,7 +338,10 @@ gbx_acquire_test_lock() {
     rm -f "$fifo"
     # A TERM/INT/HUP while waiting must not leave the container-side waiter or the status dir
     # behind (kill -9 cannot run this; the helper then notices the closed pipe by itself).
-    trap '[ -n "${holder_pid:-}" ] && kill "$holder_pid" 2>/dev/null; rm -rf "$dir"; exit 143' TERM INT HUP
+    saved_traps="$(trap -p TERM INT HUP)"   # the caller's own, put back once the lock is held
+    trap '_gbx_lock_abort 143' TERM
+    trap '_gbx_lock_abort 130' INT
+    trap '_gbx_lock_abort 129' HUP
     docker exec -i \
         -e GBX_LOCK_FILE="$GBX_TEST_LOCK_FILE" \
         -e GBX_WORK_LOCK_FILE="$GBX_WORK_LOCK_FILE" \
@@ -393,6 +405,7 @@ gbx_acquire_test_lock() {
     done
     rm -rf "$dir"
     trap - TERM INT HUP
+    [ -n "$saved_traps" ] && eval "$saved_traps"
     export GBX_TEST_LOCK_HELD_BY="$$"
     echo -e "${GREEN}🔒 test lock acquired: pid $$ ${GBX_LOCK_CMD} (waited $((SECONDS - start))s; ${GBX_TEST_LOCK_FILE} in geobrix-dev)${NC}"
 }
@@ -435,10 +448,14 @@ run_in_pyrx_venv() {
     return $_rc
 }
 
-# The databricks-sdk the launchers are run against (gbx_python_with_sdk pins `uv run --with` to
-# it, so a launcher does not float to whatever PyPI has today). Bump it on purpose, after running
-# the launchers once against the new version.
-GBX_DATABRICKS_SDK_SPEC="${GBX_DATABRICKS_SDK_SPEC:-databricks-sdk==0.102.0}"
+# The databricks-sdk the launchers run against (gbx_python_with_sdk pins `uv run --with` to it,
+# so a launcher does not float to whatever PyPI has that day). 0.157.0 is the release that
+# `uv run --with databricks-sdk` resolved on the dev workstation on 2026-10-27, and every
+# databricks.sdk import in examples/tests (38) and JobsAPI.submit(idempotency_token=...) were
+# checked against it when it was pinned. The oldest release the repo names is 0.115.0
+# (examples/tests/run_notebooks_serverless.py). Bump it on purpose: re-run that import check
+# first. GBX_DATABRICKS_SDK_SPEC overrides it for one run.
+GBX_DATABRICKS_SDK_SPEC="${GBX_DATABRICKS_SDK_SPEC:-databricks-sdk==0.157.0}"
 
 # 0 when <python> is 3.11 or newer: the serverless runner reads pyproject.toml with tomllib.
 _gbx_py_ok() {
@@ -489,4 +506,4 @@ export RED GREEN YELLOW BLUE CYAN NC GBX_DATABRICKS_SDK_SPEC DOCKER_MAVEN_ENV GB
 export -f check_docker resolve_log_path setup_log_file show_banner show_separator \
           print_report_link open_report generate_timestamp warn_if_jar_stale \
           print_banner print_separator setup_log run_in_pyrx_venv _gbx_py_ok gbx_python_with_sdk validate_set \
-          print_lock_help gbx_acquire_test_lock 2>/dev/null || true
+          print_lock_help _gbx_lock_abort gbx_acquire_test_lock 2>/dev/null || true

@@ -171,27 +171,27 @@ def test_a_dot_slash_path_still_honours_the_documented_exclusions(sandbox):
 
 def test_a_parity_skip_names_missing_sample_data_when_that_is_why(sandbox):
     # Newly discovered suites skip wholesale when the container has no sample-data mounts; the
-    # failure said only "0 tests passed", not why.
+    # failure said only "0 tests passed", not why. The command runs pytest with --color=yes, so
+    # the real summary lines are COLOURED (ESC[33mSKIPPED ESC[0m ...): the samples are too, or a
+    # grep for '^SKIPPED' that forgot the escape codes would pass here and never fire for real.
     _parity_sandbox(sandbox, TEST_ROOT)
     path = ("--path", "python/geobrix/test/ds/test_vector_parity.py")
-    sample = (
-        "SKIPPED [2] python/geobrix/test/ds/test_vector_parity.py:67: sample not mounted: /Volumes/x\n"
-        "== 0 passed, 2 skipped in 1.00s =="
-    )
-    other = (
-        "SKIPPED [2] python/geobrix/test/ds/test_vector_parity.py:23: could not import 'mapbox_vector_tile'\n"
-        "== 0 passed, 2 skipped in 1.00s =="
-    )
+    yellow, reset = "\x1b[33m", "\x1b[0m"
 
-    res = sandbox.run(
-        "gbx-test-parity.sh", "--skip-build", *path, FAKE_DOCKER_EXEC_STDOUT=sample
-    )
+    def run(reason):
+        stdout = (
+            f"{yellow}SKIPPED{reset} [2] python/geobrix/test/ds/test_vector_parity.py:67: {reason}\n"
+            f"{yellow}== 0 passed, 2 skipped in 1.00s =={reset}"
+        )
+        return sandbox.run(
+            "gbx-test-parity.sh", "--skip-build", *path, FAKE_DOCKER_EXEC_STDOUT=stdout
+        )
+
+    res = run("sample not mounted: /Volumes/x")
     assert res.returncode == 1
     assert "sample data missing" in res.output and "sample-data mounts" in res.output
 
-    res = sandbox.run(
-        "gbx-test-parity.sh", "--skip-build", *path, FAKE_DOCKER_EXEC_STDOUT=other
-    )
+    res = run("could not import 'mapbox_vector_tile' (sample of one)")
     assert res.returncode == 1 and "sample data missing" not in res.output
 
 
@@ -1005,10 +1005,18 @@ def _curated_sandbox(sandbox, host_json):
 
 
 def test_venv_check_fails_on_drift_and_passes_on_a_match(sandbox):
-    host = _env_json(python="3.12.11", numpy="2.3.4", scipy="1.16.3", extra="1.0")
+    # The host cannot reach PROJ (pyproj missing or broken): that is a broken host, not a pass.
+    host_natives = {"gdal": "3.12.1", "proj": None, "geos": "3.13.1"}
+    host = _env_json(
+        python="3.12.11",
+        numpy="2.3.4",
+        scipy="1.16.3",
+        extra="1.0",
+        natives=host_natives,
+    )
     venv = _curated_sandbox(sandbox, host)
 
-    # Python patch, numpy and a native drift; `extra` is host-only (not comparable).
+    # Python patch, numpy and natives drift; `extra` is host-only (not comparable).
     drifted = _env_json(
         python="3.12.3",
         numpy="2.1.3",
@@ -1020,11 +1028,16 @@ def test_venv_check_fails_on_drift_and_passes_on_a_match(sandbox):
     assert re.search(r"python\s+3\.12\.11\s+3\.12\.3\s+DRIFT", res.output)
     assert re.search(r"numpy\s+2\.3\.4\s+2\.1\.3\s+DRIFT", res.output)
     assert re.search(r"gdal\s+3\.12\.1\s+3\.11\.0\s+DRIFT", res.output)
+    assert re.search(
+        r"proj\s+-\s+9\.5\.1\s+DRIFT", res.output
+    )  # unreachable on the host
     assert (
         "scipy" not in res.output.split("item")[1].split("packages in both")[0]
     )  # equal: not listed
 
-    same = _env_json(python="3.12.11", numpy="2.3.4", scipy="1.16.3")
+    same = _env_json(
+        python="3.12.11", numpy="2.3.4", scipy="1.16.3", natives=host_natives
+    )
     res = sandbox.run("gbx-venv-check.sh", FAKE_DOCKER_EXEC_STDOUT=same)
     assert res.returncode == 0, res.output
     assert "2 packages in both, 0 differ" in res.output

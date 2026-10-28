@@ -272,7 +272,8 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
     # eastnorthasbng takes SCALAR EPSG:27700 eastings/northings (not a geometry).
     out = []
     for ee, nn, r in zip(e, n, res):
-        if ee is None or nn is None or r is None:
+        # A NULL DOUBLE (or INT) arrives in pandas as NaN: NULL in, NULL out.
+        if pd.isna(ee) or pd.isna(nn) or pd.isna(r):
             out.append(None)
             continue
         out.append(_bng.point_as_cell(float(ee), float(nn), _norm_res(r)))

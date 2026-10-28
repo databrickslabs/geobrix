@@ -24,7 +24,7 @@ SCHEMA_VERSION = 1
 # outside this table; add a key here in the same change that first uses it.
 LEVEL_KEYS = {
     "L1": frozenset({"companion", "needs_gdal", "session_returns"}),
-    "L2": frozenset({"class", "returns", "bytes_param", "needs_gdal"}),
+    "L2": frozenset({"class", "returns", "bytes_param", "needs_gdal", "wrapper"}),
     "L3": frozenset(
         {
             "register",
@@ -45,6 +45,8 @@ LEVEL_REQUIRED = {
     "L2": frozenset({"class", "returns"}),
     "L3": frozenset({"register"}),
 }
+# Levels whose spec must carry at least one of these keys.
+LEVEL_REQUIRED_ANY = {"L4": frozenset({"handler", "tvf_over"})}
 
 # The v2 tile struct as a SQL type (== V2_TILE_SCHEMA.simpleString(); a contract test pins it).
 TILE_SQL = (

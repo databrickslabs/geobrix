@@ -2881,11 +2881,16 @@ def _build_transformcrs_sql_udf(grid_dirs):
     def _udf(tile, crs_value):
         if _tile_is_empty(tile) or crs_value is None:
             return None
-        _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
-        new_bytes = _transformcrs_bytes(tile, crs_value)
-        return VirtualTile(
-            cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
-        ).to_row()
+        try:
+            _env.configure_gdal_env(extra_proj_dirs=grid_dirs)
+            new_bytes = _transformcrs_bytes(tile, crs_value)
+            return VirtualTile(
+                cellid=_tile_cellid(tile), raster=new_bytes, metadata={}
+            ).to_row()
+        # An unreadable tile is data, not a task failure: the error-tile contract the
+        # JVM tier follows (RST_ErrorHandler.safeEval).
+        except Exception as e:  # noqa: BLE001
+            return _serde.build_error_tile(f"RST_TransformCrs: {e}", _tile_cellid(tile))
 
     return _udf
 

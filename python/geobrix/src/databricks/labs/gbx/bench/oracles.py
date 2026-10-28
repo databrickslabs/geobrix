@@ -55,6 +55,7 @@ MVP_S: Tuple[Case, ...] = (
     Case("bng_origin", B, (0.0, 0.0, 3), "exact", "SV0000"),
     Case("bng_null_e", B, (None, 180000.0, 3), "null"),
     Case("bng_nan_e", B, (float("nan"), 180000.0, 3), "null"),
+    Case("bng_null_res", B, (530000.0, 180000.0, None), "null"),
     Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises", "3km"),
     # A UC STRING parameter receives an INT literal as its digit string, so every surface
     # accepts the digit-string form of the integer resolution.

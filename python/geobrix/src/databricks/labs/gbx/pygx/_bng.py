@@ -20,6 +20,7 @@ Mosaic-lineage bug status (validated against this port):
 """
 
 import math
+import re
 from typing import Any
 
 import numpy as np
@@ -113,6 +114,9 @@ def get_resolution(res: Any) -> int:
         )
     if isinstance(res, str) and res in RESOLUTION_MAP:
         return RESOLUTION_MAP[res]
+    if isinstance(res, str) and re.fullmatch(r"-?\d+", res):
+        # A SQL STRING parameter receives an INT literal as its digit string.
+        return get_resolution(int(res))
     raise ValueError(f"BNG resolution not supported; found {res!r}")
 
 

@@ -6,6 +6,10 @@ from pathlib import Path
 import pytest
 
 from databricks.labs.gbx import manifest
+from databricks.labs.gbx.manager import capabilities as caps_mod
+from databricks.labs.gbx.manager import levels
+
+from .connect_stub import ConnectStub
 
 MAN = manifest.load()
 FNS = sorted(MAN.functions.values(), key=lambda f: f.sql_name)
@@ -98,6 +102,8 @@ def test_level_keys_are_in_the_closed_vocabulary(fn):
             set(spec) - manifest.LEVEL_KEYS[lvl],
         )
         assert set(manifest.LEVEL_REQUIRED.get(lvl, ())) <= set(spec), lvl
+        if lvl in manifest.LEVEL_REQUIRED_ANY:
+            assert set(spec) & manifest.LEVEL_REQUIRED_ANY[lvl], lvl
 
 
 def test_manifest_is_hashable_and_immutable():
@@ -124,3 +130,101 @@ def test_uc_pins_match_env6_lock():
             name,
             ver,
         )
+
+
+def _caps(**kw):
+    base = dict(
+        connect=False,
+        serverless=False,
+        jar=None,
+        jar_reason="no geobrix JAR on classpath",
+        gdal_reason="",
+        sql_functions=True,
+    )
+    base.update(kw)
+    return caps_mod.Capabilities(**base)
+
+
+OK_JAR = caps_mod.JarIdentity("0.6.0", "dev")
+
+
+def _l1_shape_ok(fn):
+    l1 = fn.levels.get("L1", {})
+    return (
+        "L1" in fn.levels
+        and l1.get("session_returns", fn.returns_session) == fn.returns_session
+    )
+
+
+@pytest.mark.parametrize("fn", FNS, ids=lambda f: f.sql_name)
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("serverless", dict(connect=True, serverless=True)),
+        ("no-jar", dict()),
+        (
+            "stale-jar",
+            dict(jar=None, jar_reason="JAR 0.5.3 on classpath != wheel 0.6.0"),
+        ),
+        ("dedicated", dict(jar=OK_JAR, jar_reason="")),
+        ("standard", dict(connect=True, jar=OK_JAR, jar_reason="")),
+        (
+            "no-gdal",
+            dict(jar=OK_JAR, jar_reason="", gdal_reason="GDAL natives not loadable"),
+        ),
+    ],
+    ids=lambda c: c[0],
+)
+def test_level_selection_contract(fn, case):
+    """Invariants of the level table, generated per manifest row (not a hand-written expectation list)."""
+    name, kw = case
+    choice = levels.select(fn, _caps(**kw))
+    pref = [lv for lv in levels.PREFERENCE[fn.sql_name] if lv in fn.levels]
+    assert choice.level in pref
+    assert len(choice.reasons) == pref.index(
+        choice.level
+    )  # one reason per skipped, preferred level
+    if name in ("serverless", "no-jar", "stale-jar"):
+        assert choice.level == "L3"
+    if name == "standard":
+        assert choice.level != "L1"  # Catalyst is never chosen on Connect
+        l2 = fn.levels.get("L2", {})
+        if (
+            not l2
+            or fn.kind != "scalar"
+            or (fn.min_args != fn.max_args and "wrapper" not in l2)
+        ):
+            assert choice.level == "L3"
+    if name == "dedicated" and pref[0] == "L1":
+        assert (choice.level == "L1") == _l1_shape_ok(fn)
+    if name == "no-gdal" and fn.levels.get("L1", {}).get("needs_gdal"):
+        assert choice.level == "L3"
+
+
+@pytest.mark.parametrize("fn", FNS, ids=lambda f: f.sql_name)
+def test_override_is_honoured(fn):
+    variant = "c0" if "variants" in fn.levels["L3"] else "-"
+    assert levels.select(fn, _caps(), override=("L3", variant)).level == "L3"
+
+
+def test_connect_session_never_touches_the_jvm(monkeypatch, capsys):
+    from databricks.labs.gbx import manager
+
+    monkeypatch.setenv("DATABRICKS_RUNTIME_VERSION", "client.6.0")
+    stub = ConnectStub()
+    out = manager.register(stub)
+    assert {c.level for c in out.values()} == {"L3"}
+    assert stub.touched == []  # _jvm/_jsc/sparkContext/conf.set never accessed
+    printed = capsys.readouterr().out.splitlines()
+    assert printed.count(manager.messages.REMINDER) == 1
+    assert len(printed) == len(
+        set(printed)
+    )  # each reason line once per session, across all names
+    assert any("Spark Connect session (Serverless); using light" in p for p in printed)
+
+
+def test_bad_target():
+    from databricks.labs.gbx import manager
+
+    with pytest.raises(ValueError, match="target"):
+        manager.register(object(), target="both")

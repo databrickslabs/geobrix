@@ -79,7 +79,7 @@ class ResultRow:
     # (write strategy of the table the leg read/wrote; na for plain reads).
     file_mode: str = "na"
     layout: str = "na"
-    # Parallelism / fanout (spec 2e-bis). input_partitions: partitions carrying data
+    # Parallelism / fanout. input_partitions: partitions carrying data
     # on the timed input (Connect-safe spark_partition_id distinct-count).
     # launched_tasks: tasks launched for the timed stage (== input_partitions for the
     # single-stage read/write legs here; a precise multi-stage tally needs the Spark

@@ -346,8 +346,8 @@ def _pixel_accessor_udf(core_fn, return_type):
 
 # --- FILE-aware 2-arg UDF factories ------------------
 # These produce UDFs with signature (tile: Struct, file_ref: FileRef|null).
-# The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback path
-# per spec §4.3); only the public Python Column bindings use ``_uf_*``.
+# The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback path,
+# no FILE acceleration for SQL); only the public Python Column bindings use ``_uf_*``.
 def _header_accessor_udf_file(core_fn, return_type):
     """Struct + FileRef accepting header-only accessor UDF (2-arg).
 
@@ -6398,7 +6398,7 @@ def rst_color_relief(
     return _color_relief_udf(_col(tile), ctp)
 
 
-# --- Tier 0: accessors ------------------------------------------------------
+# --- Accessors ------------------------------------------------------
 # Accessor wrappers pass the FULL tile struct (not the raster subfield) so a
 # virtual tile's ``path`` is reachable; the header/pixel split is decided by the
 # factory that built each ``_u_*`` UDF (open_header vs _open).
@@ -6409,7 +6409,7 @@ def rst_color_relief(
 # ``file_ref_arg`` returns ``F.lit(None)`` and the UDF falls back to the
 # plain-path read — identical to the previous single-arg path.
 # The SQL registry keeps pointing at the single-arg ``_u_*`` UDFs (fallback,
-# no FILE acceleration for SQL per spec §4.3).
+# no FILE acceleration for SQL).
 def rst_width(tile: ColLike) -> Column:
     from databricks.labs.gbx.pyrx._file_ref import file_ref_arg
 
@@ -6522,7 +6522,7 @@ def rst_getnodata(tile: ColLike) -> Column:
     return _uf_getnodata(tc, file_ref_arg(tc))
 
 
-# --- Tier 1: coordinate transforms -----------------------------------------
+# --- Coordinate transforms -----------------------------------------
 # HEADER-ONLY accessors: pass the FULL tile struct (not the raster subfield) so
 # a virtual tile's ``path`` is reachable; the UDF resolves via open_header.
 def rst_rastertoworldcoordx(tile: ColLike, x: ColLike, y: ColLike) -> Column:
@@ -8312,7 +8312,7 @@ rst_bng_rastertogridstddev.__doc__ = _BNG_RASTERTOGRID_DOC.format(
 
 
 # ---------------------------------------------------------------------------
-# Tier 2: grouped aggregators (rst_*_agg)
+# Grouped aggregators (rst_*_agg)
 # ---------------------------------------------------------------------------
 # Spark 4.0 forbids a Python aggregate from returning a StructType, but allows
 # a grouped-agg pandas_udf to return BINARY and a scalar UDF to wrap that result

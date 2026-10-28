@@ -23,7 +23,7 @@ def test_compression_sweep_predictor_for_is_canonical():
 
 
 def test_datagen_cog_write_large_raster_has_predictor(tmp_path):
-    """Fail-on-revert (GAP-3 / COG is_cog key-mapping): datagen COG output must
+    """Fail-on-revert (COG is_cog key-mapping): datagen COG output must
     carry ZSTD + predictor, set via creation_opts(driver='COG').
 
     Old code: {"COMPRESS": compress} — no predictor, no LEVEL key.

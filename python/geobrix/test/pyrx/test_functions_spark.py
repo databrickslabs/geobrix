@@ -1236,7 +1236,7 @@ def test_rst_rastertoworldcoord_struct_roundtrip(spark):
 
 
 # ---------------------------------------------------------------------------
-# Tier 2: grouped aggregators (rst_*_agg) via .agg()
+# Grouped aggregators (rst_*_agg) via .agg()
 # ---------------------------------------------------------------------------
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402

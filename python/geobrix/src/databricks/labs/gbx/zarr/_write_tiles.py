@@ -1,4 +1,4 @@
-"""GeoBrix tiles into Zarr: the tile half of ``gbx_zarr_write`` (spec 8.6).
+"""GeoBrix tiles into Zarr: the tile half of ``gbx_zarr_write``.
 
 A DataFrame with one tile-struct column is turned into the blocks the rest of the writer
 already commits (two-phase write, CAS, rebase), so everything below this module is shared
@@ -51,7 +51,7 @@ from databricks.labs.gbx.zarr.errors import ZarrError, ZarrGridMismatch, ZarrUns
 
 __all__ = ["Prepared", "StoreView", "prepare", "tile_column"]
 
-_PIXEL = 1e-6  # how far from the grid, in cells, a tile may be (spec 8.6)
+_PIXEL = 1e-6  # how far from the grid, in cells, a tile may be
 _F32_EPS = float(np.finfo(np.float32).eps)
 _FACTS_ARROW = pa.schema([("facts", pa.string())])
 _SEEN_ARROW = pa.schema(

@@ -1,10 +1,10 @@
-"""File modes (spec 4.3): which mode a call gets, the DDL and MERGE each mode emits, and how a
+"""File modes: which mode a call gets, the DDL and MERGE each mode emits, and how a
 FILE value maps back to the path string the rest of the store uses.
 
 FILE does not exist in OSS Spark, so these use a fake probe and assert the SQL text. The
 one end-to-end test emulates the FILE type with a one-field struct and a ``try_to_file``
-function, to run the manifest's own commit and read paths; what FILE itself does is gate
-G4, on a FILE-enabled cluster.
+function, to run the manifest's own commit and read paths; what FILE itself does is checked
+on a FILE-enabled cluster.
 """
 
 import os
@@ -110,7 +110,7 @@ def test_auto_resolves_to_fuse_without_file_support(file_support, supported, mod
 
 
 def test_the_g4_gate_ships_external_open_and_managed_closed(monkeypatch):
-    """Gate G4 passed for FILE EXTERNAL and failed for FILE MANAGED (Delta VACUUM never reclaims
+    """On a FILE-enabled cluster FILE EXTERNAL passed and FILE MANAGED failed (Delta VACUUM never reclaims
     a managed file's bytes): `auto` picks external on a FILE runtime, and managed is refused by
     name. Where FILE is not supported `auto` stays on fuse."""
     assert FM.VERIFIED_FILE_MODES == frozenset({"external"})

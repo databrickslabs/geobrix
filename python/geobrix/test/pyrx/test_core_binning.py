@@ -104,7 +104,7 @@ def test_binpoints_percentile():
 
 
 # ---------------------------------------------------------------------------
-# Phase 3 – georeference-alignment (spec §5.2)
+# Phase 3 – georeference-alignment
 # ---------------------------------------------------------------------------
 
 

@@ -2,8 +2,8 @@
 
 zarr-python reads a store one key at a time: a box over a sharded array becomes one range
 request per inner chunk, and each request opens its file again. On a Unity Catalog Volume
-(FUSE) an open costs tens of milliseconds, so that is where the time goes (performance
-gate G1). This engine works from the other end. It asks the store where every chunk of the
+(FUSE) an open costs tens of milliseconds, so that is where the time goes (measured in a
+benchmark). This engine works from the other end. It asks the store where every chunk of the
 box lives, groups the chunks by pack file, reads each file once (adjacent ranges in one
 read), and decodes the chunks on the store's thread pool, writing each into its place in
 the result. The codecs are the numcodecs ones the arrays use, so the bytes decoded are the

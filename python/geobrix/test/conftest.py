@@ -148,7 +148,7 @@ def pytest_collection_finish(session):
 
 
 # ---------------------------------------------------------------------------
-# Local Spark Connect (Tier 1): the plan shapes a Connect client sends, with no cluster.
+# Local Spark Connect: the plan shapes a Connect client sends, with no cluster.
 #
 # `SparkSession.builder.remote("local[2]")` starts a Connect server inside a regular local
 # PySpark session of THIS process and returns a Connect client for it. Two consequences:

@@ -36,7 +36,7 @@ def _tile_creation_opts(
     Compression and predictor are delegated to canonical creation_opts
     (pyrx/core/compression.py), which mirrors heavy OperatorOptions.appendOptions.
     ZSTD default level 9 matches heavy OperatorOptions :77; DEFLATE default 6
-    matches heavy :86.  Blocksize (GAP-1 / D2 — stays here; canonical does not
+    matches heavy :86.  Blocksize stays here (canonical does not
     compute blocksize).
     """
     compress = str(meta.get("compression", "DEFLATE")).lower()
@@ -51,7 +51,7 @@ def _tile_creation_opts(
     opts: Dict[str, str] = dict(
         _canonical_creation_opts(dtype, compress=compress, level=level, driver=driver)
     )
-    # Blocksize: tile-dimension-aware clamping (D2 — stays at this call site).
+    # Blocksize: tile-dimension-aware clamping (stays at this call site).
     try:
         blk = int(meta.get("blocksize", "512"))
     except ValueError:

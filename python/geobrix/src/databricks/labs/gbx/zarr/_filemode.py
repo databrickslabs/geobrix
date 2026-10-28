@@ -1,4 +1,4 @@
-"""``file_mode``: how a store's manifest refers to its files (spec 4.3).
+"""``file_mode``: how a store's manifest refers to its files.
 
 ============  ====================================  ================================
 ``file_mode``  the manifest's ``file`` column         who deletes superseded files
@@ -14,9 +14,9 @@ relative to the root it lies under: the FILE value is only how the column stores
 nothing outside the manifest module has to know the mode. ``path_of`` turns either
 form into the bare ``/Volumes/...`` path that opens through the FUSE mount.
 
-The FILE modes need a workspace with the File type preview. ``VERIFIED_FILE_MODES`` is the
-gate (G4, spec 16) a mode passes once it has been verified on a cluster: while a mode is not
-in it, ``auto`` never picks it and asking for it raises ``ZarrUnsupported``.
+The FILE modes need a workspace with the File type preview. ``VERIFIED_FILE_MODES`` names the
+modes that have been verified on a cluster: while a mode is not in it, ``auto`` never picks it
+and asking for it raises ``ZarrUnsupported``.
 
 - ``external`` passed: on a runtime with FILE, ``auto`` picks it (Serverless, the Databricks
   Container Service image and a workspace without the preview stay on ``fuse``).
@@ -53,14 +53,14 @@ __all__ = [
 
 FILE_MODE_CHOICES = ("auto", "fuse", "external", "managed")
 
-# Gate G4: the FILE modes whose behaviour on a FILE-enabled workspace has been verified on a
-# cluster (spec 16, G4). ``external`` passed; ``managed`` did not (see the module docstring).
+# The FILE modes whose behaviour on a FILE-enabled workspace has been verified on a
+# cluster. ``external`` passed; ``managed`` did not (see the module docstring).
 VERIFIED_FILE_MODES: frozenset[str] = frozenset({"external"})
 
 # The modes whose files GeoBrix itself writes, reads and vacuums. A managed store's files
 # belong to the table: GeoBrix reads them and runs Delta's VACUUM, and does not yet write
 # new ones (a task creates a managed file with ``FileRef.from_local_file``; how that value
-# reaches the commit is what G4.2 settles).
+# reaches the commit is not settled yet).
 GEOBRIX_FILE_MODES = ("fuse", "external")
 
 _COLUMN_TYPES = {

@@ -472,7 +472,7 @@ def _release_marker(root: str, table: str, kind: str) -> None:
 #
 # Which table owns a root is decided by a Delta transaction, not by the file system: on a
 # Unity Catalog Volume an exclusive create (``O_EXCL``) is atomic on one node only, so two
-# nodes can both "create" the same marker (measured, Tier 2). The ledger is a small Delta
+# nodes can both "create" the same marker (measured on a cluster). The ledger is a small Delta
 # table in the root itself (``<root>/_gbx_owner``, which every claimer of the root shares and
 # needs no catalog grant to reach) with one ``lock`` row, keyed ``owner``, that names the
 # owning table. The row is inserted with the manifest's own compare-and-swap commit (the key

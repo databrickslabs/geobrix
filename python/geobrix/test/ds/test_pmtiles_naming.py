@@ -1,4 +1,4 @@
-"""Tests for PMTiles adaptive naming (Task D1).
+"""Tests for PMTiles adaptive naming.
 
 Covers:
 - _complete_ext with ext="" (directory unit: returns name unchanged).

@@ -2656,7 +2656,7 @@ def _session(data, spark):
 
 
 def _check_new_root(root: str, owner: str) -> None:
-    """``create`` makes a new data root (spec 8.1): an existing root is refused unless it
+    """``create`` makes a new data root: an existing root is refused unless it
     is empty or holds this table's own marker (a create of this table that stopped
     before its commit)."""
     from databricks.labs.gbx.core._retry import _retry_transient

@@ -1,10 +1,10 @@
 """Unit tests for VectorGbxReader._members and schema-divergence detection.
 
 These are pure-unit tests (no Spark) that verify:
-  - _members() enumerates matching vector files recursively (Task B1)
-  - divergent schemas in a multi-shapefile directory raise ValueError (Task B2)
-  - same-schema multi-shapefile directories still union without error (Task B2)
-  - single shapefiles are unaffected by the schema check (Task B2)
+  - _members() enumerates matching vector files recursively
+  - divergent schemas in a multi-shapefile directory raise ValueError
+  - same-schema multi-shapefile directories still union without error
+  - single shapefiles are unaffected by the schema check
   - flat-directory regression (existing flat behaviour unchanged)
   - bare-file path passthrough (unchanged)
   - .gdb directory passthrough (unchanged)
@@ -30,7 +30,7 @@ def _touch_shp_bundle(directory: str, stem: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Task B1 — recursive enumeration
+# Recursive enumeration
 # ---------------------------------------------------------------------------
 
 
@@ -150,7 +150,7 @@ def test_members_empty_dir_falls_back_to_path(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# Task B2 — schema-divergence error on multi-member shapefile directory
+# Schema-divergence error on multi-member shapefile directory
 # ---------------------------------------------------------------------------
 
 
@@ -167,7 +167,7 @@ def _fake_info(fields, ogr_types):
 
 def test_schema_divergence_raises_valueerror(tmp_path):
     """A directory with two shapefiles of differing schemas must raise ValueError
-    with the shared divergence message (Task B2)."""
+    with the shared divergence message."""
     # Create two stub .shp bundles
     _touch_shp_bundle(str(tmp_path), "roads")
     _touch_shp_bundle(str(tmp_path), "rivers")
@@ -196,7 +196,7 @@ def test_schema_divergence_raises_valueerror(tmp_path):
 
 def test_same_schema_multi_shapefile_no_error(tmp_path):
     """A directory with two shapefiles of IDENTICAL schemas must NOT raise — the
-    union read proceeds normally (Task B2)."""
+    union read proceeds normally."""
     _touch_shp_bundle(str(tmp_path), "roads")
     _touch_shp_bundle(str(tmp_path), "rivers")
 
@@ -220,7 +220,7 @@ def test_same_schema_multi_shapefile_no_error(tmp_path):
 
 def test_single_shapefile_no_schema_check(tmp_path):
     """A single .shp file (one member) skips the divergence check entirely
-    (Task B2 — single member is unchanged)."""
+    (a single member is unchanged)."""
     shp = tmp_path / "lone.shp"
     shp.write_bytes(b"")
 
@@ -240,7 +240,7 @@ def test_single_shapefile_no_schema_check(tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# D1 — directory of .shp.zip and mixed .shp/.shp.zip enumeration
+# Directory of .shp.zip and mixed .shp/.shp.zip enumeration
 # ---------------------------------------------------------------------------
 
 

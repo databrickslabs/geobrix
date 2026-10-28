@@ -93,7 +93,7 @@ def test_rasterize_reprojects_ewkb_source_into_output():
         assert np.any(data == 5.0), "reprojected geometry should burn inside the extent"
 
 
-# --- Group B (B4): grid rasterize_agg output CRS via cellraster ------------
+# --- Grid rasterize_agg output CRS via cellraster ------------
 
 
 def test_cellraster_grid_out_crs_string_and_int_and_esri():

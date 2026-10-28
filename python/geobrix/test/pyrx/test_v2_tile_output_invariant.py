@@ -1,4 +1,4 @@
-"""G1 — standing invariant: every registered light-tier function that RETURNS a
+"""Standing invariant: every registered light-tier function that RETURNS a
 raster tile emits the 9-field ``V2_TILE_SCHEMA``.
 
 Two guards, both data-driven so they cannot go stale:

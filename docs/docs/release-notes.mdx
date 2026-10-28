@@ -560,10 +560,10 @@ formats.
   pixels stay invalid beside a tile that has a mask band, and the result no longer depends on how
   large the group is, and whose index VRT carries the colour interpretation; the `pmtiles_gbx` reader's RGB sibling of an RGBA source;
   and the `netcdf_gbx` `bandDim` stack (four `uint8` steps used to read the fourth as alpha). The
-  h3 cells of a source with an alpha band declare no NoData over it: their pixels outside the
-  hexagon are written transparent, and each cell carries its hexagon as a mask band, so the index
-  VRT composites the cells by it (the corners of a cell's bounding box no longer overwrite its
-  neighbours).
+  h3 cells of a source with an alpha band and no NoData of its own declare none over it: their
+  pixels outside the hexagon are written transparent, and each cell carries its hexagon as a mask
+  band, so the index VRT composites the cells by it (the corners of a cell's bounding box no
+  longer overwrite its neighbours). A NoData the source does declare is kept on its cells.
 - **Chips copy the colour interpretation of every band.** Tessellation chips and clips used to
   copy only the alpha label, so RGB, and the data bands of a gray-plus-extra-plus-alpha or a
   16-bit RGBA raster, followed GDAL's defaults for a new GeoTIFF. Both tiers now label each band

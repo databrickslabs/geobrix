@@ -14,6 +14,8 @@ from scipy import ndimage
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import focal
 
+from . import _alpha_layouts as al
+
 
 def _tile(data, nodata=-9999.0):
     """Single-band float32 GTiff bytes from a 2-D array (nodata=None => undeclared)."""
@@ -87,6 +89,19 @@ def test_filter_mean_shrinks_window_at_edge():
     expected = (num / cnt).astype("float32")
     out = _read_band(_run(focal.filt, _tile(data, nodata=None), 3, "mean"))
     assert np.allclose(out, expected, atol=1e-5)
+
+
+def test_filter_mean_of_a_uint8_raster_marks_empty_windows_with_the_float_nodata():
+    """A mean is Float32 whatever the input type, so -9999 fits: a uint8 raster with no NoData of its
+    own marks an all-transparent window -9999, not 0 (which a true mean of 0 would equal).
+    """
+    data = np.zeros((2, 6, 6), dtype="uint8")
+    data[-1] = 255
+    data[-1, 2, 3] = 0  # one transparent pixel: its 1x1 window holds no valid pixel
+    raw = al.layout_bytes("gray_alpha", data=data, transform=from_origin(0, 6, 1, 1))
+    out = _read_band(_run(focal.filt, raw, 1, "mean"))
+    assert out[2, 3] == -9999.0
+    assert (np.delete(out.ravel(), 2 * 6 + 3) == 0.0).all()
 
 
 def test_filter_mean_skips_nodata_neighbor():

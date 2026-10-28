@@ -293,6 +293,64 @@ def _mask_masked_source_pixels(src, src_win, src_data, src_nodata) -> None:
         src_data[:, src.read_masks(1, window=src_win) == 0] = src_nodata
 
 
+def _average_reproject(
+    src, src_win, src_data, src_nodata, dst_data, dst_transform, dst_crs
+):
+    """Reproject *src_data* (a window of *src*) onto *dst_data* with average resampling, in place.
+
+    A source with its own mask band and no declared NoData cannot hand the masked pixels to
+    the warp as NoData, and a plain average would mix their values into the valid pixels beside
+    them. Its output pixel is then the average of the valid source pixels only (the average
+    of ``value * valid`` over the average of ``valid``), as GDAL weights a source by an
+    alpha band. A pixel that source pixels reach but no valid one keeps the plain average, i.e.
+    the values the mask hides.
+
+    Returns ``None``, or for the masked path the ``(rows, cols)`` bool array of those pixels: the
+    cell's mask band must hide them too, since its nearest-neighbour warp can call one valid
+    where the average found no valid pixel. Peak extra memory on the masked path: one band as
+    float64 plus the weights.
+    """
+    import numpy as np
+    from rasterio.warp import Resampling, reproject
+
+    from databricks.labs.gbx.pyrx.core import _nodata
+
+    warp = dict(
+        src_transform=src.window_transform(src_win),
+        src_crs=src.crs,
+        dst_transform=dst_transform,
+        dst_crs=dst_crs,
+        resampling=Resampling.average,
+    )
+    reproject(
+        source=src_data,
+        destination=dst_data,
+        src_nodata=src_nodata,
+        dst_nodata=src_nodata,
+        **warp,
+    )
+    if not (
+        src_nodata is None and _nodata.has_own_mask(src) and not _nodata.has_alpha(src)
+    ):
+        return None
+    valid = (src.read_masks(1, window=src_win) != 0).astype("float64")
+    share = np.zeros(dst_data.shape[1:], dtype="float64")
+    reproject(source=valid, destination=share, **warp)
+    reached = share > 0
+    covered = np.zeros(share.shape, dtype="float64")
+    reproject(source=np.ones_like(valid), destination=covered, **warp)
+    dtype = dst_data.dtype
+    for band in range(dst_data.shape[0]):
+        total = np.zeros(share.shape, dtype="float64")
+        reproject(source=src_data[band] * valid, destination=total, **warp)
+        mean = total[reached] / share[reached]
+        if np.issubdtype(dtype, np.integer):
+            info = np.iinfo(dtype)
+            mean = np.clip(np.rint(mean), info.min, info.max)
+        dst_data[band][reached] = mean.astype(dtype)
+    return (covered > 0) & ~reached
+
+
 # ---------------------------------------------------------------------------
 # Mosaic-mode option model
 # ---------------------------------------------------------------------------
@@ -373,6 +431,12 @@ def _build_mosaic_vrt(
     7. When a tile has its own (per-dataset) mask band the mosaic gets a mask band: the
        union of the tiles' masks (``mask,1`` of each tile), a pixel no tile covers being
        invalid. GDAL reads that mask ahead of the NoData, as it does for any raster.
+       ``mask,1`` is band 1's mask, which for a tile WITHOUT a mask band is its NoData (or
+       alpha) on band 1 alone, not the any-band rule of ``_nodata.valid_mask``. So when masked
+       and unmasked tiles are mixed and a pixel of an unmasked tile can be NoData in one band
+       only, write that tile with its validity as its mask first, as the streamed merge of
+       ``pyrx.core.agg`` does; for a tile whose bands share their NoData pixels (or that has
+       none) the two agree.
 
     Assumptions (valid for Phase A native-pixel tiling):
     - All tiles share the same CRS, pixel size, band count, and dtype.
@@ -1353,12 +1417,7 @@ class CogGbxWriter(DataSourceWriter):
         import numpy as np
         import rasterio
         from rasterio.transform import from_bounds as transform_from_bounds
-        from rasterio.warp import (
-            Resampling,
-            calculate_default_transform,
-            reproject,
-            transform_bounds,
-        )
+        from rasterio.warp import calculate_default_transform, transform_bounds
         from rasterio.windows import Window
 
         from databricks.labs.gbx.ds._quadbin_grid import quadbin_cells_for_bounds
@@ -1459,7 +1518,6 @@ class CogGbxWriter(DataSourceWriter):
                     if src_data.shape[1] == 0 or src_data.shape[2] == 0:
                         continue  # the window rounds to no pixel: the cell misses the source
                     _mask_masked_source_pixels(src, src_win, src_data, src_nodata)
-                    src_win_transform = src.window_transform(src_win)
 
                     fill = (
                         src_nodata
@@ -1469,16 +1527,14 @@ class CogGbxWriter(DataSourceWriter):
                         )
                     )
                     dst_data = np.full((count, cell_h, cell_w), fill, dtype=out_dtype)
-                    reproject(
-                        source=src_data,
-                        destination=dst_data,
-                        src_transform=src_win_transform,
-                        src_crs=src.crs,
-                        dst_transform=dst_transform,
-                        dst_crs=dst_crs,
-                        resampling=Resampling.average,
-                        src_nodata=src_nodata,
-                        dst_nodata=src_nodata,
+                    only_hidden = _average_reproject(
+                        src,
+                        src_win,
+                        src_data,
+                        src_nodata,
+                        dst_data,
+                        dst_transform,
+                        dst_crs,
                     )
                     mask = _cell_own_mask(
                         src,
@@ -1490,6 +1546,8 @@ class CogGbxWriter(DataSourceWriter):
                         dst_data,
                         src_nodata,
                     )
+                    if only_hidden is not None and mask is not None:
+                        mask[only_hidden] = 0
 
                     # ── Build intermediate GTiff bytes with GBX_CELLID tag ───
                     # GBX_CELLID and GBX_GRIDSYSTEM travel through
@@ -1592,9 +1650,11 @@ class CogGbxWriter(DataSourceWriter):
                 # Ruling A: derive out_nodata unconditionally — h3 output MUST
                 # always carry a nodata value so the hex-clip contract is honoured
                 # even when the source has none.
-                # A source with an alpha band is the exception: a NoData declared over
-                # the alpha band would shadow it, so its pixels outside the hexagon (and
-                # outside the source) are written 0, alpha 0, and no NoData is declared.
+                # A source with an alpha band that declares no NoData is the exception: a
+                # NoData declared over the alpha band would shadow it, so its pixels outside
+                # the hexagon (and outside the source) are written 0, alpha 0, and no NoData
+                # is declared. A NoData the source declares itself is kept (first branch), so
+                # the cell is valid exactly where the source is (NoData and opacity).
                 if src_nodata is not None:
                     out_nodata = src_nodata
                 elif _nodata.has_alpha(src):

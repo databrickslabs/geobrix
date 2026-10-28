@@ -16,12 +16,14 @@ These mirror the heavyweight operations:
 import logging
 import os
 import shutil
+import warnings
 from typing import List, Tuple
 
 import numpy as np
 import rasterio
 import shapely.wkb
 from rasterio.enums import ColorInterp
+from rasterio.errors import NodataShadowWarning
 from rasterio.features import rasterize as _rasterize
 from rasterio.io import MemoryFile
 from rasterio.merge import merge as _rio_merge
@@ -135,6 +137,19 @@ def _reproject_dataset(src, dst_crs, target_res=None):
     return mf, dst
 
 
+def _merge_pixels(datasets):
+    """``rasterio.merge`` of the tiles' pixels, the last tile that is valid at a pixel winning.
+
+    A tile with a NoData declared beside an alpha band makes the merge's own masked read warn that
+    the NoData shadows the alpha band. The warning is dropped: the merge only picks which tile's
+    pixels land where, and the mosaic's validity is judged afterwards by the rule of both tiers
+    (:func:`_nodata.valid_mask`, which reads the alpha values itself).
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", NodataShadowWarning)
+        return _rio_merge(datasets, method="last")
+
+
 def _valid_u8(ds) -> np.ndarray:
     """``(rows, cols)`` uint8 (255 valid, 0 invalid) validity of *ds* by THE rule of both tiers,
     :func:`_nodata.valid_mask`: valid when any data band is (its NoData, its own mask band) and, with an
@@ -144,9 +159,9 @@ def _valid_u8(ds) -> np.ndarray:
 
 
 def _write_masked_tile(ds, path, mask) -> None:
-    """Write *ds* to *path* as a GTiff whose own mask band is *mask* (``None``: no mask band), the alpha
-    label kept, with the canonical creation options: never the source's codec, so a JPEG tile is not
-    re-compressed lossily."""
+    """Write *ds* to *path* (a file path, or a ``MemoryFile``) as a GTiff whose own mask band is *mask*
+    (``None``: no mask band), the alpha label kept, with the canonical creation options: never the
+    source's codec, so a JPEG tile is not re-compressed lossily."""
     data = ds.read()
     profile = _comp.drop_ycbcr(ds.profile)
     profile.update(driver="GTiff")
@@ -155,7 +170,12 @@ def _write_masked_tile(ds, path, mask) -> None:
             profile["dtype"], decoded_bytes=data.nbytes, compress="auto"
         )
     )
-    with _comp.internal_mask_env(mask), rasterio.open(path, "w", **profile) as dst:
+    out = (
+        path.open(**profile)
+        if isinstance(path, MemoryFile)
+        else rasterio.open(path, "w", **profile)
+    )
+    with _comp.internal_mask_env(mask), out as dst:
         _comp.match_alpha(dst, ds.colorinterp)
         dst.write(data)
         if mask is not None:
@@ -273,7 +293,9 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
     MASKS: when some tile has an own mask band the mosaic carries the union of the tiles' masks
     (``mask,1`` of each scratch tile), which is band 1's mask alone for a tile without one. Each such
     tile is rewritten with its validity by the rule of both tiers (:func:`_valid_u8`: any band) as its
-    mask, so a pixel with data in one band only stays valid, as in the in-RAM merge.
+    mask, so a pixel with data in one band only stays valid, as in the in-RAM merge. So is a tile with
+    an alpha band: GDAL's mask of a tile with its own mask band, or of a 3-band gray+x+alpha one, does
+    not follow the alpha band, so a transparent pixel of a later tile would hide an opaque one under it.
 
     MEMORY: peak RSS ≈ one tile's encoded bytes (decoded too, for a tile written with a mask) +
     GDAL's COG cache (≤200 MiB); the full decoded mosaic array is NEVER allocated.
@@ -291,6 +313,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
             tile_crses = [ds.crs for ds in datasets]
             ref_pixel_res = _pixel_size(_reference_tile(datasets, ref_crs))
             has_mask = [_nodata.has_own_mask(ds) for ds in datasets]
+            has_alpha = [_nodata.has_alpha(ds) for ds in datasets]
         finally:
             _close_all(memfiles, datasets)
 
@@ -322,7 +345,7 @@ def _merge_tiles_streaming(sorted_rasters: List[bytes]) -> bytes:
                         finally:
                             rep_ds.close()
                             rep_mf.close()
-            elif group_masked and not has_mask[i]:
+            elif group_masked and (not has_mask[i] or has_alpha[i]):
                 with MemoryFile(rb) as src_mf, src_mf.open() as src:
                     _write_masked_tile(src, tile_path, _valid_u8(src))
             else:
@@ -426,12 +449,22 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
         # tiles' masks, built from the masks themselves (:func:`_union_own_mask`), never from the
         # pixel values: a valid pixel of 0 stays valid. Tiles without one are merged as before,
         # with no mask band.
-        mosaic, out_transform = _rio_merge(merge_ds, method="last")
-        own_mask = (
-            _union_own_mask(merge_ds)
-            if any(_nodata.has_own_mask(d) for d in merge_ds)
-            else None
-        )
+        # In a group with an own mask the pixels are composited by the tiles' validity, as the mask
+        # union is: a tile with an alpha band is merged as a copy whose mask band is its validity, since
+        # GDAL's mask of one with its own mask band, or of a 3-band gray+x+alpha one, ignores the alpha
+        # band (a transparent pixel of a later tile would hide an opaque one under it).
+        group_masked = any(_nodata.has_own_mask(d) for d in merge_ds)
+        composite = []
+        for d in merge_ds:
+            if group_masked and _nodata.has_alpha(d):
+                copy_mf = MemoryFile()
+                _write_masked_tile(d, copy_mf, _valid_u8(d))
+                copy = copy_mf.open()
+                extra.append((copy_mf, copy))
+                d = copy
+            composite.append(d)
+        mosaic, out_transform = _merge_pixels(composite)
+        own_mask = _union_own_mask(merge_ds) if group_masked else None
         out_dtype = str(mosaic.dtype)
         decoded_bytes = mosaic.nbytes
         profile = _comp.drop_ycbcr(ref.profile)

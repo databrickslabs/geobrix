@@ -311,7 +311,7 @@ def _fake_venv(sandbox, venv=None):
         f'printf "%s\\n" "$TZ" >> "{log}.tz"\n'
         f'printf "%s\\n" "$@" > "{log}.argv"\n'  # one word per line: the last call's arguments
         '[ "$1" = "-" ] && cat > /dev/null\n'
-        "exit 0\n"
+        'exit "${FAKE_PYTHON_RC:-0}"\n'
     )
     python.chmod(0o755)
     (bin_dir / "activate").write_text(f'export PATH="{bin_dir}:$PATH"\n')
@@ -384,6 +384,18 @@ def test_markers_narrow_the_default_and_pytest_addopts_reaches_pytest(sandbox):
     words = shlex.split(command[-1])
     assert _last_m(words) == "((not integration) and (not perf)) and (not delta)"
     assert env["PYTEST_ADDOPTS"] == "--durations=5"
+
+
+def test_a_run_that_selects_nothing_says_the_perf_cases_are_skipped(sandbox):
+    # A file whose only tests are perf-marked exits 5 (no tests collected) with no other sign why.
+    _fake_venv(sandbox)
+    path = "python/geobrix/test/pygx/test_geomk_golden.py"
+
+    res = sandbox.run("gbx-test-pyrx.sh", "--path", path, FAKE_PYTHON_RC="5")
+    assert res.returncode == 5 and "--perf" in res.output.split("exit code: 5")[-1]
+
+    res = sandbox.run("gbx-test-pyrx.sh", "--path", path, "--perf", FAKE_PYTHON_RC="5")
+    assert res.returncode == 5 and "--perf" not in res.output.split("exit code: 5")[-1]
 
 
 def test_the_host_run_pins_utc_as_the_container_and_ci_do(sandbox):
@@ -994,7 +1006,14 @@ def test_review_round_skips_the_generated_lock_files_unless_asked(sandbox):
     for severity in ("critical", "major", "minor", "info"):
         assert f"    {severity}: true" in text  # all severities are reported, not just the top two
 
-    assert "-c" not in review("--include-generated")
+    # --include-generated keeps the lock files in, and still reports every severity
+    words = review("--include-generated")
+    config = Path(words[words.index("-c") + 1])
+    assert config == sandbox.commands / "isaac-review-severities.yaml"
+    text = config.read_text()
+    assert "\nopt_out:" not in text  # the lock files stay in
+    for severity in ("critical", "major", "minor", "info"):
+        assert f"    {severity}: true" in text
     assert (
         review("--", "-c", "mine.yaml").count("-c") == 1
     )  # the caller's config, not ours

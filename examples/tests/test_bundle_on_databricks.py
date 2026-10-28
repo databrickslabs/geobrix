@@ -132,6 +132,9 @@ def test_bundle_essential_on_databricks_volume():
 
 if __name__ == "__main__":
     # Allow: python test_bundle_on_databricks.py
+    from _cli import exit_if_help  # sibling module (script dir is on sys.path)
+
+    exit_if_help(__doc__)  # before any config is read or the bundle starts
     if not _is_configured() or not _get_volumes_path():
         print("Configure DATABRICKS_HOST, DATABRICKS_TOKEN (or profile) and GBX_BUNDLE_VOLUME_*", file=sys.stderr)
         sys.exit(2)

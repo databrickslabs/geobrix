@@ -14,7 +14,7 @@ Build or refresh the venv first with `gbx:venv:sync` (it installs the Zarr extra
 
 - `--path <dir>` — test file or directory; repeatable (default: every light dir, in one process, in the unsharded CI order)
 - `--markers <expr>` — extra pytest marker expression, ANDed with `(not integration) and (not perf)` (see `gbx:test:pyrx`)
-- `--perf` — also run the perf-marked cases, which the unit loop skips (see `gbx:test:pyrx`)
+- `--perf` — also run the perf-marked cases, which the unit loop skips (see `gbx:test:pyrx`). `gbx:test:light` takes its dirs from the CI action, but without `--perf` it runs fewer tests than CI does: pass it on a full run before a push
 - `--docker` — run in the `geobrix-dev` container instead of the host venv (takes the container lock; see `gbx:test:pyrx`)
 - `--log <path>` — write output to `test-logs/<path>` (relative) or an absolute path
 - `--no-wait` — with `--docker`, fail at once (exit 75) if another test run holds the container lock (see `gbx:test:pyrx`)

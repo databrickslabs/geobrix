@@ -17,8 +17,8 @@ show_help() {
     echo -e "                          e.g. python/geobrix/test/zarr/test_manifest.py. The light dirs are _LIGHT_TEST_DIRS in test/conftest.py"
     echo -e "  ${GREEN}--markers <expr>${NC}       Extra pytest marker expression, ANDed with the default '(not integration) and (not perf)',"
     echo -e "                          e.g. --markers 'not delta' (runs as -m '((not integration) and (not perf)) and (not delta)')"
-    echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow tessellate / geomk / streamed-merge timing and memory"
-    echo -e "                          tests); the default unit loop skips them, CI runs them"
+    echo -e "  ${GREEN}--perf${NC}                 Also run the perf-marked cases (slow tessellate / geomk / streamed-merge cases, some of them"
+    echo -e "                          correctness oracles); the default unit loop skips them, CI runs them. Pass it on the full run before a push"
     echo -e "  ${GREEN}--docker${NC}               Run in the geobrix-dev container instead of the host venv (default). Only for GDAL"
     echo -e "                          natives, the JAR and parity"
     echo -e "  ${GREEN}--log <path>${NC}           Write output to log file"
@@ -149,6 +149,15 @@ if [ $EXIT_CODE -eq 0 ]; then
     echo -e "${GREEN}Light-tier tests passed!${NC}"
 else
     echo -e "${RED}Light-tier tests failed (exit code: $EXIT_CODE)${NC}"
+fi
+if [ $EXIT_CODE -eq 5 ]; then
+    # pytest exit 5: nothing was collected under the marker expression. A file whose only tests are
+    # perf-marked (test_geomk_golden.py) lands here, with no other sign of why.
+    if [ $WITH_PERF -eq 0 ]; then
+        echo -e "${YELLOW}No tests ran: every selected test is excluded by the markers. The perf-marked cases are skipped by default: add --perf.${NC}"
+    else
+        echo -e "${YELLOW}No tests ran: every selected test is excluded by the markers (integration, or --markers).${NC}"
+    fi
 fi
 show_separator
 

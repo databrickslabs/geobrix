@@ -170,14 +170,21 @@ if [[ ${#NOTEBOOKS[@]} -gt 0 && "$KEEP_OUTPUTS" -ne 1 ]]; then
     ISAAC_ARGS=(review --uncommitted)
     echo -e "${CYAN}Notebook outputs stripped${NC} for review (${#NOTEBOOKS[@]} .ipynb; --keep-outputs to include them)."
 fi
-# Skip the generated lock files by default (Isaac opt_out.paths in the layered config). A config
-# the caller passes after `--` (-c/--config) is theirs to manage, so none is added then.
+# Report every severity, and skip the generated lock files by default (Isaac opt_out.paths in the
+# layered config). One config is passed: isaac-review-local.yaml (all severities + the opt_out), or with
+# --include-generated isaac-review-severities.yaml (all severities only), so that mode does not fall back
+# to Isaac's critical/major-only threshold. A config the caller passes after `--` (-c/--config) is
+# theirs to manage, so none is added then.
 HAS_OWN_CONFIG=0
 for a in ${PASSTHRU[@]+"${PASSTHRU[@]}"}; do
     case "$a" in -c|--config|-c=*|--config=*) HAS_OWN_CONFIG=1 ;; esac
 done
-if [[ "$INCLUDE_GENERATED" -ne 1 && "$HAS_OWN_CONFIG" -ne 1 ]]; then
-    ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-local.yaml")
+if [[ "$HAS_OWN_CONFIG" -ne 1 ]]; then
+    if [[ "$INCLUDE_GENERATED" -eq 1 ]]; then
+        ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-severities.yaml")
+    else
+        ISAAC_ARGS+=(-c "$SCRIPT_DIR/isaac-review-local.yaml")
+    fi
 fi
 [[ "$FULL" -eq 1 ]] && ISAAC_ARGS+=(--full)
 [[ -n "$RULE" ]] && ISAAC_ARGS+=(--run-rule "$RULE")

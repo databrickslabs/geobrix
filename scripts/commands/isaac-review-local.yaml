@@ -2,7 +2,8 @@
 #
 # pr_commenting.auto_post_threshold: Isaac's default reporting threshold is critical/major, so
 # minor and info findings are filtered out of a run. Every severity is reported here; the triage
-# of a round decides what matters.
+# of a round decides what matters. (Only one config is passed, so the same block is in
+# isaac-review-severities.yaml, which --include-generated passes instead of this file.)
 pr_commenting:
   auto_post_threshold:
     critical: true

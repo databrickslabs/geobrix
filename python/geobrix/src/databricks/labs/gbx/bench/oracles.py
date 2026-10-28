@@ -454,6 +454,16 @@ MVP_H: Tuple[Case, ...] = (
         "dsm_1_1.tif",
         ("session",),
     ),
+    # ... also a bad block in the middle of a tile that is whole otherwise: the last row reads, and GDAL reads the
+    # rest of that strip as zeros unless something asks it whether it could.
+    Case(
+        "h_towers_garbled_tile",
+        "rst_viewshed_towers",
+        (Build("dsm_tiles_garbled"), (("corner", 200.0, 200.0),), 80.0, 20.0),
+        "raises",
+        ("dsm_1_1.tif", "Read failed"),
+        ("session",),
+    ),
     Case(
         "h_towers_truncated_tile",
         "rst_viewshed_towers",
@@ -827,14 +837,29 @@ def _build(name: str, tmpdir: str):
     return _build_helper_input(name, tmpdir)
 
 
+def _dsm_tile_is_whole(path: str, size: int) -> bool:
+    """True when `path` opens as a `size` x `size` raster whose last row reads: a copy that an interrupted run left
+    half-written does not."""
+    import rasterio
+    from rasterio.windows import Window
+
+    try:
+        with rasterio.open(path) as ds:
+            last = ds.read(1, window=Window(0, size - 1, size, 1))
+            return (ds.width, ds.height) == (size, size) and last.shape == (1, size)
+    except Exception:  # noqa: BLE001 - absent, not a raster, cut short: write it again
+        return False
+
+
 def dsm_tile_rows(
     tmpdir: str, grid: int = 2, size: int = 200, nodata_at: Sequence = ()
 ) -> List[Tuple[int, int, str]]:
     """The `(tx, ty, path)` manifest of a DSM written under `tmpdir`: a `grid` x `grid` block of tiles of `size`
     pixels at 1 m in EPSG:3857, tile (tx, ty) covering x in [tx*size, (tx+1)*size) and y likewise, plus the
     tiles in `nodata_at`, which hold NoData only. The ground is flat at 10 m, and every odd-`tx` tile has a
-    30 m ridge on its 5 westernmost columns. A file that is already there is kept, so a re-run writes nothing;
-    each is written locally and copied, as `tmpdir` may be a Volume.
+    30 m ridge on its 5 westernmost columns. A tile that is already there and whole is kept, so a re-run writes
+    nothing. `tmpdir` may be a UC Volume, which does not reliably rename: each tile is written to a local file,
+    copied (content only) to its path, and the local file removed.
     """
     import shutil
 
@@ -851,7 +876,7 @@ def dsm_tile_rows(
     with tempfile.TemporaryDirectory(prefix="gbx-dsm-") as scratch:
         for tx, ty in sorted(cells):
             p = os.path.join(tmpdir, f"dsm_{tx}_{ty}.tif")
-            if not os.path.exists(p):
+            if not _dsm_tile_is_whole(p, size):
                 z = np.full((1, size, size), 10.0, dtype="float32")
                 if tx % 2 == 1:
                     z[0, :, :5] = 40.0  # a 30 m ridge along x = tx*size .. tx*size + 5
@@ -871,12 +896,8 @@ def dsm_tile_rows(
                 local = os.path.join(scratch, os.path.basename(p))
                 with rasterio.open(local, "w", **prof) as ds:
                     ds.write(z)
-                shutil.copyfile(
-                    local, p + ".part"
-                )  # content only: a Volume takes no copystat
-                os.replace(
-                    p + ".part", p
-                )  # a tile is whole or absent: a re-run never reuses half of one
+                shutil.copyfile(local, p)  # content only: a Volume takes no copystat
+                os.remove(local)
             rows.append((tx, ty, p))
     return rows
 
@@ -889,17 +910,25 @@ def _build_helper_input(name: str, tmpdir: str):
         name == "dsm_tiles_edge"
     ):  # the same four, and a tile of NoData east of them at (2, 0)
         return dsm_tile_rows(tmpdir, nodata_at=((2, 0),))
-    if name in (
-        "dsm_tiles_garbage",
-        "dsm_tiles_truncated",
-    ):  # the four, tile (1, 1) not a raster / cut short
+    if name in ("dsm_tiles_garbage", "dsm_tiles_truncated", "dsm_tiles_garbled"):
+        # The four, tile (1, 1) not a raster / cut short / with one block gone bad in the middle of an otherwise whole
+        # file (rows 150-159: inside the window of a tower on the corner at (200, 200) with 80 m, and not the last row).
         rows = dsm_tile_rows(os.path.join(tmpdir, name))
         path = next(p for tx, ty, p in rows if (tx, ty) == (1, 1))
-        data = open(path, "rb").read()
+        data = bytearray(open(path, "rb").read())
+        if name.endswith("garbled"):
+            import rasterio
+
+            with rasterio.open(path) as ds:
+                at = int(ds.get_tag_item("BLOCK_OFFSET_0_15", "TIFF", bidx=1))
+                n = int(ds.get_tag_item("BLOCK_SIZE_0_15", "TIFF", bidx=1))
+            data[at : at + n] = b"\xff" * n
+        if name.endswith("garbage"):
+            data = bytearray(b"not a raster")
+        if name.endswith("truncated"):
+            data = data[: len(data) // 2]
         with open(path, "wb") as fh:
-            fh.write(
-                b"not a raster" if name.endswith("garbage") else data[: len(data) // 2]
-            )
+            fh.write(data)
         return rows
     if name == "tile_32":
         return _tile(_tile_bytes("EPSG:4326", 32, 32))

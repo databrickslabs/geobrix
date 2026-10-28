@@ -20,7 +20,8 @@ case class TowerOut(tower_id: String, observer_x: Double, observer_y: Double, vi
   * Per tower: pick the DSM tiles in reach, mosaic them in a VRT, run the viewshed and count the visible and the
   * invisible pixels. Executors read the tiles through NodeFileManager (Hadoop FS and the UC connector, so a bare
   * /Volumes path works). A tower stands on the tile its coordinates fall in: one on no tile has no row. A tile that
-  * cannot be read fails the query, naming the tiles of the tower's window; GDAL would skip it. */
+  * cannot be read, or has a bad block in the tower's window, fails the query, naming the tiles of the window; GDAL
+  * would skip it or read zeros. */
 object ViewshedTowersJvm {
 
     /** `towers` has tower_id, observer_x, observer_y and observer_height; `tiles` maps "tx,ty" to a tile path. */
@@ -56,11 +57,14 @@ object ViewshedTowersJvm {
             val vrtPath = s"/vsimem/towers_${java.util.UUID.randomUUID().toString.replace("-", "")}.vrt"
             val sources = new java.util.Vector[String](leases.map(_.localPath).asJava)
             // GDAL goes on past a tile it cannot read: BuildVRT leaves it out and gives a VRT of the rest, and the
-            // viewshed takes a truncated one as zeros. So each tile is opened and its last row read first.
+            // viewshed takes a block it cannot read as zeros, with the failure on a thread of its own that we never
+            // see. So each tile is opened and its last row read first (garbage, truncation), and the window the
+            // viewshed will read is read once through the VRT (a bad block anywhere in it), asking for the status.
             paths.zip(leases).foreach { case (p, l) => probe(p, l.localPath).foreach(why => throw unreadable(why)) }
             val vrt = gdal.BuildVRT(vrtPath, sources, new BuildVRTOptions(new java.util.Vector[String]()))
             if (vrt == null) throw unreadable(gdal.GetLastErrorMsg)
             try {
+                readWindow(vrt, t.observer_x, t.observer_y, radius).foreach(why => throw unreadable(why))
                 val (vs, _) = RST_Viewshed.execute(vrt, Map.empty, t.observer_x, t.observer_y, t.observer_height,
                                                    targetHeight, Some(radius))
                 try {
@@ -85,6 +89,24 @@ object ViewshedTowersJvm {
             val read = ds.GetRasterBand(1).ReadRaster(0, h - 1, w, 1, new Array[Double](w))
             if (read == gdalconstConstants.CE_None) None else Some(s"$remote: ${gdal.GetLastErrorMsg}")
         } finally ds.delete() // not releaseDataset: the lease owns the hold on the copy
+    }
+
+    /** Why the window of `radius` around (x, y) cannot be read from `vrt` (a bad block in a tile it mosaics), or None.
+      * It is the window the viewshed reads, a row at a time; a failed read comes back as a status, never as zeros. */
+    private def readWindow(vrt: Dataset, x: Double, y: Double, radius: Double): Option[String] = {
+        val gt = vrt.GetGeoTransform
+        val (cx, cy) = (math.floor((x - gt(0)) / gt(1)).toInt, math.floor((y - gt(3)) / gt(5)).toInt)
+        val (rx, ry) = (math.ceil(radius / math.abs(gt(1))).toInt, math.ceil(radius / math.abs(gt(5))).toInt)
+        val (left, right) = (math.max(0, cx - rx), math.min(vrt.getRasterXSize, cx + rx + 1))
+        val (top, bottom) = (math.max(0, cy - ry), math.min(vrt.getRasterYSize, cy + ry + 1))
+        if (right <= left || bottom <= top) return None
+        val band = vrt.GetRasterBand(1)
+        val row = new Array[Double](right - left)
+        gdal.ErrorReset()
+        for (r <- top until bottom) {
+            if (band.ReadRaster(left, r, right - left, 1, row) != gdalconstConstants.CE_None) return Some(gdal.GetLastErrorMsg)
+        }
+        None
     }
 
     /** (visible, visible + invisible) of a binary viewshed: 255 is visible, 0 is not; nothing else is counted. */

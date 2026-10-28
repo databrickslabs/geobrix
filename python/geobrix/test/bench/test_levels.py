@@ -78,6 +78,73 @@ def test_levels_leg_times_the_towers_at_l3_and_not_at_the_jvm_levels_without_a_j
         assert "no geobrix JAR" in by[level].note
 
 
+def test_a_heavy_towers_form_is_an_error_row_when_its_level_would_fall_back_to_light(
+    spark_session_local, tmp_path, monkeypatch
+):
+    """A session that has the JAR but cannot load GDAL runs rst_viewshed_towers at L3 whatever level is asked for:
+    the heavy forms must be error rows saying so, never an ok row timed under a heavy name.
+    """
+    import weakref
+
+    from databricks.labs.gbx.manager import capabilities
+    from databricks.labs.gbx.manager import levels as manager_levels
+
+    jar = capabilities.JarIdentity("0.6.0", "0" * 64)
+    no_gdal = capabilities.Capabilities(
+        False, False, jar, "", "GDAL natives not loadable (test)", True
+    )
+    monkeypatch.setattr(capabilities, "detect", lambda spark, need_jvm: no_gdal)
+    # as a session that has set nothing up (an earlier test may have set up a heavy level on this one)
+    monkeypatch.setattr(manager_levels, "_READY", weakref.WeakKeyDictionary())
+    monkeypatch.setattr(lf, "_DSM_GRID", 2)
+    monkeypatch.setattr(lf, "_DSM_TILE_PX", 64)
+    monkeypatch.setattr(lf, "_TOWER_RADIUS", 20.0)
+    monkeypatch.setitem(
+        lf.FORMS, "H", [f for f in lf.FORMS["H"] if f.fn == "rst_viewshed_towers"]
+    )
+    rows = run_s(
+        spark_session_local, tmp_path, scales=(1,), base_rows=6, mvp="H",
+        only_levels=("L1-steps", "JVM-DF"),
+    )  # fmt: skip
+    assert {r.level: r.status for r in rows} == {"L1-steps": "error", "JVM-DF": "error"}
+    for r in rows:
+        assert f"cannot run rst_viewshed_towers at {r.level}" in r.failure_mode
+
+
+def test_the_dsm_tiles_are_copied_into_place_and_a_half_written_one_is_rewritten(
+    tmp_path, monkeypatch
+):
+    """A UC Volume does not reliably rename (.claude/rules/uc-volumes.md): a tile is written locally and copied to
+    its path, never renamed there, and a tile that an interrupted run left half-written is not reused.
+    """
+    import os
+
+    import rasterio
+
+    from databricks.labs.gbx.bench import oracles
+
+    def no_rename(*args, **kwargs):
+        raise OSError("this file system has no rename")
+
+    monkeypatch.setattr(os, "replace", no_rename)
+    monkeypatch.setattr(os, "rename", no_rename)
+    rows = oracles.dsm_tile_rows(str(tmp_path), grid=2, size=40)
+    assert sorted(os.listdir(tmp_path)) == [
+        f"dsm_{x}_{y}.tif" for x in (0, 1) for y in (0, 1)
+    ]
+    path = rows[0][2]
+    with open(path, "rb") as fh:
+        whole = fh.read()
+    with open(path, "wb") as fh:
+        fh.write(whole[: len(whole) // 2])
+    oracles.dsm_tile_rows(str(tmp_path), grid=2, size=40)
+    with rasterio.open(path) as ds:
+        assert ds.read().shape == (1, 40, 40)
+    assert sorted(os.listdir(tmp_path)) == [
+        f"dsm_{x}_{y}.tif" for x in (0, 1) for y in (0, 1)
+    ]
+
+
 def test_levels_leg_runs_mvp_s_light_forms(spark_session_local, tmp_path):
     spark = spark_session_local
     # 20k rows and up: Spark's sent-bytes counter stops growing past one 10k-row Arrow batch

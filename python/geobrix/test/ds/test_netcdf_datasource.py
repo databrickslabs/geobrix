@@ -204,6 +204,62 @@ def test_vector_read_dsg_points(spark, tmp_path):
     assert rows[1]["qa_value"] == 1  # ch4==1 -> qa 1
 
 
+def test_vector_reader_types_a_time_a_date_and_a_flag_as_their_cf_attributes_say(
+    tmp_path,
+):
+    """A CF time variable reads as a timestamp (UTC), one in days as a date, a variable that
+    flags 0 / 1 as ``false true`` as a boolean, and a NULL stays NULL: not epoch nanoseconds as
+    text and a float, which is what the decoded values would give. An int8 with no flag
+    attributes is still an integer."""
+    import datetime
+
+    from databricks.labs.gbx.ds._netcdf_vector import NetcdfVectorReader
+
+    f = tmp_path / "cf.nc"
+    with Dataset(str(f), "w") as ds:
+        ds.createDimension("obs", 2)
+        for name, v in (("latitude", [50.0, 51.0]), ("longitude", [10.0, 11.0])):
+            var = ds.createVariable(name, "f8", ("obs",))
+            var.standard_name = name
+            var[:] = v
+        seen = ds.createVariable("seen", "f8", ("obs",), fill_value=-1e30)
+        seen.units, seen.calendar = (
+            "seconds since 1970-01-01 00:00:00",
+            "proleptic_gregorian",
+        )
+        seen[:] = np.ma.masked_array([1772368215.25, 0.0], mask=[False, True])
+        day = ds.createVariable("day", "i4", ("obs",), fill_value=-9999)
+        day.units, day.calendar = (
+            "days since 1970-01-01 00:00:00",
+            "proleptic_gregorian",
+        )
+        day[:] = np.ma.masked_array([20513, 0], mask=[False, True])
+        ok = ds.createVariable("ok", "i1", ("obs",), fill_value=-127)
+        ok.flag_values, ok.flag_meanings = np.array([0, 1], dtype="i1"), "false true"
+        ok[:] = np.ma.masked_array([1, 0], mask=[False, True])
+        ds.createVariable("qa", "i1", ("obs",))[:] = [3, 4]
+
+    reader = NetcdfVectorReader({"path": str(f)})
+    types = {fld.name: fld.dataType.simpleString() for fld in reader.schema().fields}
+    assert [types[c] for c in ("seen", "day", "ok", "qa")] == [
+        "timestamp",
+        "date",
+        "boolean",
+        "int",
+    ]
+    (part,) = reader.partitions()
+    names = [fld.name for fld in reader.schema().fields]
+    rows = [dict(zip(names, r)) for r in reader.read(part)]
+    utc = datetime.timezone.utc
+    assert [r["seen"] for r in rows] == [
+        datetime.datetime(2026, 3, 1, 12, 30, 15, 250000, tzinfo=utc),
+        None,
+    ]
+    assert [r["day"] for r in rows] == [datetime.date(2026, 3, 1), None]
+    assert [r["ok"] for r in rows] == [True, None]
+    assert [r["qa"] for r in rows] == [3, 4]
+
+
 def test_vector_read_curvilinear_to_points(spark, tmp_path):
     f = tmp_path / "curv.nc"
     _write_curvilinear(str(f))

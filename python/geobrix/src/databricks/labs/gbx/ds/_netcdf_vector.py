@@ -47,9 +47,7 @@ class NetcdfVectorReader(DataSourceReader):
             # The decoded dtype is known without reading the data (``.values`` would
             # read and decode every selected variable in full just for its type).
             for name in self._variables(ds):
-                fields.append(
-                    StructField(name, _netcdf.np_to_spark(ds[name].dtype), True)
-                )
+                fields.append(StructField(name, _netcdf.spark_type_of(ds[name]), True))
         fields.append(StructField("geom_0", BinaryType(), True))
         fields.append(StructField("geom_0_srid", StringType(), True))
         fields.append(StructField("geom_0_srid_proj", StringType(), True))
@@ -74,9 +72,13 @@ class NetcdfVectorReader(DataSourceReader):
             variables = self._variables(ds)
             if not variables:
                 return
+            kinds = [_netcdf.column_kind(ds[name]) for name in variables]
             lon, lat, attrs, srid = _netcdf.point_arrays(ds, variables)
         wkb = shapely.to_wkb(shapely.points(lon, lat))
         proj = f"EPSG:{srid}"
         for i in range(len(lon)):
-            row = tuple(attrs[name][i].item() for name in variables)
+            row = tuple(
+                _netcdf.cell_value(kind, attrs[name][i])
+                for name, kind in zip(variables, kinds)
+            )
             yield row + (bytes(wkb[i]), srid, proj)

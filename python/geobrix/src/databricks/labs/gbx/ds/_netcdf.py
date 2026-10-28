@@ -374,6 +374,67 @@ def select_variables(ds, options: Dict[str, str], mode: str) -> List[str]:
     return [v for v in requested if v in readable_set]
 
 
+# CF time units that make a decoded time variable a calendar date, not an instant.
+_DAYS_SINCE = "days since"
+
+
+def column_kind(var) -> Optional[str]:
+    """What a decoded variable is beyond its numpy type, read from its CF attributes (no data
+    read): ``"timestamp"`` or ``"date"`` for a time variable (``"date"`` when its units are
+    ``days since ...``), ``"boolean"`` for a variable that flags 0 and 1 as ``false true``
+    (``flag_values`` and ``flag_meanings``, which is how ``netcdf_gbx`` writes a BOOLEAN), else
+    ``None``. xarray decodes a time to ``datetime64`` and, with its fill value masked, a flag to
+    a float; the numpy type alone says neither."""
+    import numpy as np
+
+    if np.dtype(var.dtype).kind == "M":
+        units = str(var.encoding.get("units", "")).strip().lower()
+        return "date" if units.startswith(_DAYS_SINCE) else "timestamp"
+    meanings = str(var.attrs.get("flag_meanings", "")).split()
+    values = np.atleast_1d(var.attrs.get("flag_values", []))
+    if meanings == ["false", "true"] and [int(v) for v in values] == [0, 1]:
+        return "boolean"
+    return None
+
+
+def spark_type_of(var) -> "object":
+    """Spark type of a decoded variable: a timestamp, date or boolean by :func:`column_kind`,
+    else the one of its numpy type (:func:`np_to_spark`)."""
+    from pyspark.sql import types as T
+
+    kind = column_kind(var)
+    if kind is not None:
+        return {
+            "timestamp": T.TimestampType,
+            "date": T.DateType,
+            "boolean": T.BooleanType,
+        }[kind]()
+    return np_to_spark(var.dtype)
+
+
+def cell_value(kind: Optional[str], v):
+    """The Python value of one element of a decoded variable of ``kind``: a UTC ``datetime``,
+    a ``date`` or a ``bool``, ``None`` for NaT / NaN; otherwise numpy's own ``item()``.
+    """
+    import datetime
+
+    import numpy as np
+
+    if kind in ("timestamp", "date"):
+        if np.isnat(v):
+            return None
+        if kind == "date":
+            return v.astype("datetime64[D]").item()
+        # xarray decodes float seconds to nanoseconds, a hair under a microsecond boundary
+        # (…15.249999999 for …15.25): round to the microsecond, do not cut.
+        us = (int(v.astype("datetime64[ns]").astype("int64")) + 500) // 1000
+        epoch = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+        return epoch + datetime.timedelta(microseconds=us)
+    if kind == "boolean":
+        return None if v != v else bool(v)
+    return v.item()
+
+
 def np_to_spark(dtype) -> "object":
     import numpy as np
     from pyspark.sql import types as T

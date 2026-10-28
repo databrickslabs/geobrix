@@ -45,7 +45,7 @@ def test_resolved_budget_strategy_used_when_no_size_mib():
 
 
 # ---------------------------------------------------------------------------
-# _read_manifest_rows (JSON path only — Parquet needs Spark; tested in Task 4)
+# _read_manifest_rows (JSON; a Parquet manifest is read in the spark.read test below)
 # ---------------------------------------------------------------------------
 
 
@@ -378,15 +378,27 @@ def test_partitions_tiles_table_end_to_end(tmp_path, spark):
     assert parts[0].window == (0, 0, 4, 3)
 
 
-def test_partitions_manifest_full_spark_read(tmp_path, spark):
-    """End-to-end Spark read with manifest option emits correct virtual tiles."""
+@pytest.mark.parametrize("kind", ["json", "parquet"])
+def test_partitions_manifest_full_spark_read(tmp_path, spark, kind):
+    """End-to-end Spark read with manifest option emits correct virtual tiles.
+
+    The planner worker has no Spark session, so a Parquet manifest (here the directory
+    Spark writes, with a ``window`` struct) is read without one.
+    """
     from databricks.labs.gbx.ds.raster import RasterGbxDataSource
 
     _write_sample(tmp_path / "raster.tif", width=4, height=3)
-    manifest = [{"path": str(tmp_path / "raster.tif"), "window": [0, 0, 4, 3]}]
-    manifest_file = str(tmp_path / "manifest.json")
-    with open(manifest_file, "w") as f:
-        json.dump(manifest, f)
+    path = str(tmp_path / "raster.tif")
+    if kind == "json":
+        manifest_file = str(tmp_path / "manifest.json")
+        with open(manifest_file, "w") as f:
+            json.dump([{"path": path, "window": [0, 0, 4, 3]}], f)
+    else:
+        manifest_file = str(tmp_path / "manifest.parquet")
+        spark.createDataFrame(
+            [(path, (0, 0, 4, 3))],
+            "path string, window struct<col_off:int,row_off:int,width:int,height:int>",
+        ).coalesce(1).write.parquet(manifest_file)
 
     spark.dataSource.register(RasterGbxDataSource)
     rows = (
@@ -400,7 +412,7 @@ def test_partitions_manifest_full_spark_read(tmp_path, spark):
     assert len(rows) == 1
     tile = rows[0]["tile"]
     assert tile["raster"] is None  # virtual: no bytes
-    assert tile["path"] == str(tmp_path / "raster.tif")
+    assert tile["path"] == path
     assert tile["window"]["width"] == 4
     assert tile["window"]["height"] == 3
 

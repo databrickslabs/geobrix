@@ -11,6 +11,7 @@ import uuid
 import numpy as np
 import pytest
 import rasterio
+from pyspark.sql.datasource import CaseInsensitiveDict
 from rasterio.transform import from_origin
 
 from databricks.labs.gbx.ds.raster import RasterGbxDataSource, RasterGbxReader
@@ -151,8 +152,13 @@ def windowed_index(spark_delta, tmp_path):
 
 
 def _direct(options):
-    """What the reader returns for the index with a session in hand (the old direct use)."""
-    reader = RasterGbxReader({"path": "/", "virtualTiles": "true", **options})
+    """What the reader returns for the index with a session in hand (the old direct use).
+
+    Options are case-insensitive, as Spark hands them to a reader.
+    """
+    reader = RasterGbxReader(
+        CaseInsensitiveDict({"path": "/", "virtualTiles": "true", **options})
+    )
     return [
         (src, tile) for part in reader.partitions() for src, tile in reader.read(part)
     ]
@@ -164,13 +170,13 @@ def _direct(options):
     [
         ("raster_gbx", {}, None, 3),  # the latest version
         ("raster_gbx", {"versionAsOf": 0}, 2, 2),  # a pinned version (0 is one), spread
+        ("raster_gbx", {"skipOrdering": "true"}, 2, 3),  # no order inside a task
         (
-            "raster_gbx",
-            {"skipOrdering": "true"},
-            2,
+            "gtiff_gbx",
+            {"virtualtiles": "false"},
+            None,
             3,
-        ),  # spread without source grouping
-        ("gtiff_gbx", {}, None, 3),  # a named reader
+        ),  # named reader, key in any case
     ],
 )
 def test_read_tiles_table_equals_the_reader(
@@ -200,3 +206,24 @@ def test_read_tiles_table_equals_the_reader(
     )
     assert len(rows) == tiles == len(got)
     assert got == expected
+
+
+@pytest.mark.delta
+def test_read_tiles_table_spreads_the_tiles_of_one_source(spark_delta, tmp_path):
+    """A one-file index of many tiles is read by many tasks, as the reader does."""
+    from pyspark.sql import functions as F
+
+    from databricks.labs.gbx.ds.raster import read_tiles_table
+
+    src = _tif(tmp_path / "one.tif", 64, 64)
+    name = f"gbx_tiles_spread_{uuid.uuid4().hex[:8]}"
+    ddl = "path string, col_off int, row_off int, width int, height int"
+    rows = [(src, c, r, 16, 16) for c in range(0, 64, 16) for r in range(0, 64, 16)]
+    spark_delta.createDataFrame(rows, ddl).write.format("delta").saveAsTable(name)
+    try:
+        df = read_tiles_table(spark_delta, name)
+        by_task = df.groupBy(F.spark_partition_id().alias("task")).count().collect()
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
+    assert sum(r["count"] for r in by_task) == len(rows) == 16
+    assert len(by_task) > 1

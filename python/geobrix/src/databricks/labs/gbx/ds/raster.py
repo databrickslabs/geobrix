@@ -65,7 +65,12 @@ import os
 import shutil
 from typing import Dict, Iterator, Mapping, Optional, Sequence, Tuple
 
-from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
+from pyspark.sql.datasource import (
+    CaseInsensitiveDict,
+    DataSource,
+    DataSourceReader,
+    InputPartition,
+)
 from pyspark.sql.types import BinaryType, StringType, StructField, StructType
 
 from databricks.labs.gbx.ds import _encode, _listing
@@ -724,8 +729,9 @@ def _read_manifest_rows(manifest_path: str) -> list:
     ``window`` ([col_off, row_off, width, height]), ``width``, ``height``,
     ``bands``, ``dtype``, ``srid``.
 
-    Parquet: read via ``spark.table()`` / ``spark.read.parquet(...)`` on the
-    driver (Connect-safe); returns a list of ``pyspark.sql.Row`` objects.
+    Parquet (a file, or the directory Spark writes): read with pyarrow, with no Spark
+    session (``partitions()`` runs in a worker that has none); returns a list of dicts,
+    a ``window`` struct column being a dict (see :func:`_row_to_window`).
     """
     import os as _os
 
@@ -733,14 +739,9 @@ def _read_manifest_rows(manifest_path: str) -> list:
     if not _os.path.exists(local):
         raise FileNotFoundError(f"raster_gbx: manifest not found: {manifest_path!r}")
     if local.endswith(".parquet"):
-        from pyspark.sql import SparkSession
+        import pyarrow.parquet as pq
 
-        spark = SparkSession.getActiveSession()
-        if spark is None:
-            raise RuntimeError(
-                "raster_gbx: reading a Parquet manifest requires an active SparkSession."
-            )
-        return spark.read.parquet(local).collect()
+        return pq.read_table(local).to_pylist()
     # JSON (default)
     with open(local) as fh:
         return json.load(fh)
@@ -1648,6 +1649,10 @@ _TILE_INDEX_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx")
 # table (FILE columns included) is not sent through Arrow.
 _TILE_INDEX_COLUMNS = ("path", "window", "col_off", "row_off", "width", "height")
 
+# Most tasks read_tiles_table uses by default, one per tile up to this many: more
+# only adds shuffle and scheduling work.
+_DEFAULT_MAX_TASKS = 256
+
 # Tile-index rows decoded at a time: a path-only row cut into windows (tileSize,
 # sizeInMB) fans out, so this bounds the partitions held in memory at once.
 _PLAN_CHUNK_ROWS = 256
@@ -1734,11 +1739,11 @@ def read_tiles_table(
     ``skipOrdering``, ``sizeInMB``, ``tileSize`` and the others. ``format`` is
     ``"raster_gbx"``, ``"gtiff_gbx"`` or ``"cog_gbx"``.
 
-    Without ``num_partitions`` the tiles are read by as many tasks as the table scan
-    has partitions. ``num_partitions`` spreads them across that many tasks: tiles of one
-    source file stay together, as the reader's ordering by source path keeps them, unless
-    ``skipOrdering`` is ``"true"``, which spreads them evenly. A tile whose file is missing
-    fails the read.
+    The tiles are spread across tasks, as the reader gives each tile its own task: one
+    task per index row up to 256 (a row cut into several tiles by ``tileSize`` or
+    ``sizeInMB`` counts once), or ``num_partitions`` tasks when given. Inside each task the tiles are ordered by source path, so those of one source
+    that share a task are read one after another (``skipOrdering`` of ``"true"`` leaves
+    that order out). A tile whose file is missing fails the read.
 
     Uses only ``spark.read`` and DataFrame operations (Spark Connect and Serverless safe).
     """
@@ -1751,7 +1756,10 @@ def read_tiles_table(
         )
     from databricks.labs.gbx.ds.paths import resolve_format
 
-    source = resolve_format(name)({**(options or {}), "path": "/", "tilesTable": table})
+    # Spark hands a reader its options case-insensitively; so does this.
+    source = resolve_format(name)(
+        CaseInsensitiveDict({**(options or {}), "path": "/", "tilesTable": table})
+    )
     schema = source.schema()
     reader = source.reader(schema)
     budget_bytes = _resolved_budget(reader.size_mib, reader.strategy)
@@ -1767,10 +1775,15 @@ def read_tiles_table(
     planned = index.mapInArrow(
         _plan_tile_index(reader, budget_bytes), _TILE_PLAN_SCHEMA
     )
-    if num_partitions:
-        planned = planned.repartition(
-            int(num_partitions), "part" if reader.skip_ordering else "path"
-        )
-    elif not reader.skip_ordering:
+    # One task per tile (the reader's model), spread by the per-tile key. An explicit
+    # count, repartition(N, column): the Serverless fan-out rule, and AQE does not
+    # coalesce it.
+    tasks = (
+        int(num_partitions)
+        if num_partitions
+        else max(1, min(index.count(), _DEFAULT_MAX_TASKS))
+    )
+    planned = planned.repartition(tasks, "part")
+    if not reader.skip_ordering:
         planned = planned.sortWithinPartitions("path")
     return planned.mapInArrow(_read_tile_parts(reader, schema), schema)

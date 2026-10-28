@@ -208,10 +208,17 @@ def _check_options(fmt: str, options: Optional[dict]) -> str:
         given = {k.lower() for k in (options or {})}
         bad = [o for o in _PATHLESS_RASTER_OPTIONS if o.lower() in given]
         if bad:
+            fixes = {
+                "manifest": f"read a manifest with spark.read.format({fmt!r})",
+                "tilesTable": (
+                    "read a tile index with read_tiles_table(spark, table, options) "
+                    "from databricks.labs.gbx.ds.raster"
+                ),
+            }
             raise ValueError(
                 f"read_paths does not support the {bad} option(s): each row names "
-                f"one file to read, so a manifest or tiles table would be replanned "
-                f"for every row. Read it with spark.read.format({fmt!r}) instead."
+                f"one file to read, so a manifest or tile index would be replanned "
+                f"for every row. Fix: {'; '.join(fixes[o] for o in bad)}."
             )
     if name == "pmtiles_gbx":
         _pmtiles_source(options)

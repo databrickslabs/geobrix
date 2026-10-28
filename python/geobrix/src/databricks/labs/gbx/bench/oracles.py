@@ -518,8 +518,9 @@ MVP_G: Tuple[Case, ...] = (
 # MVP-A: aggregates (a case's `fn` is the aggregate; see `run_groups`). `args[0]` is the group's rows: tiles
 # for the merge, (cellid, value) pairs for the rasterize; the other args are its per-group constants.
 MA, BR = "gbx_rst_merge_agg", "gbx_rst_bng_rasterize_agg"
-# out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad: four 1 km pixels
-CANVAS = (27700, None, 530000.0, 180000.0, 532000.0, 182000.0, 2, 2, "centroids", 0)
+# out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, mode, kring_pad: 3 x 2 pixels of 1 km, the
+# last column with no cell in it
+CANVAS = (27700, None, 530000.0, 180000.0, 533000.0, 182000.0, 3, 2, "centroids", 0)
 # What a NULL value burns is the one thing the tiers do not share (raster-functions.mdx, rst_bng_rasterize_agg):
 # NaN on the lightweight tier, 1.0 on the heavyweight tier. A shape says which it follows (`run_groups`).
 NULL_BURN = "<the burn of a NULL value>"
@@ -533,24 +534,26 @@ MVP_A: Tuple[Case, ...] = (
         Build("tile_32"),
         ("session",),
     ),
-    # An aggregate over nothing but error tiles gives an error tile (the reason kept) where the output is a
-    # tile, and NULL where it is bytes (no place for a reason).
+    # An aggregate over nothing but error tiles gives the first member's error tile as it is (two members, so the
+    # one-member shortcut of the heavy aggregate does not decide), where the output is a tile; NULL where it is
+    # bytes, which have no place for a reason.
     Case(
         "ma_error_only",
         MA,
-        (Build("tile_error"),),
+        (Build("tile_error_pair"),),
         "error_group",
         UPSTREAM_ERROR,
         ("session",),
     ),
-    # A repeated cell keeps its largest value (1.0 < 3.0). A NaN-only cell burns NaN on every tier.
+    # A repeated cell keeps its largest value, also when the larger value arrives first (3.0 before 1.0), so
+    # "the last one wins" fails. A NaN-only cell burns NaN on every tier. The last column holds no cell.
     Case(
         "br_dup_max",
         BR,
         (
             (
-                ("TQ3080", 1.0),
                 ("TQ3080", 3.0),
+                ("TQ3080", 1.0),
                 ("TQ3180", 2.0),
                 ("TQ3081", None),
                 ("TQ3181", NAN),
@@ -558,12 +561,18 @@ MVP_A: Tuple[Case, ...] = (
         )
         + CANVAS,
         "pixels",
-        [[NULL_BURN, NAN], [3.0, 2.0]],
+        [[NULL_BURN, NAN, -9999.0], [3.0, 2.0, -9999.0]],
         ("session",),
     ),
-    Case("br_empty", BR, ((),) + CANVAS, "null", None, ("session",)),
-    # Rows whose cell id is NULL carry no cell: nothing to burn.
-    Case("br_null_cell", BR, (((None, 1.0),),) + CANVAS, "null", None, ("session",)),
+    # Rows whose cell id is NULL carry no cell: nothing to burn, so the group has no raster.
+    Case(
+        "br_empty",
+        BR,
+        (((None, 1.0), (None, 2.0)),) + CANVAS,
+        "null",
+        None,
+        ("session",),
+    ),
 )
 
 
@@ -699,6 +708,8 @@ def _build(name: str, tmpdir: str):
         return _tile(b"II*\x00not-a-real-tiff")
     if name == "tile_empty":
         return _tile()
+    if name == "tile_error_pair":  # two error tiles with the same reason
+        return [_build("tile_error", tmpdir), _build("tile_error", tmpdir)]
     if (
         name == "tile_error"
     ):  # what a failed upstream function returns: no raster, no path, the reason
@@ -978,6 +989,8 @@ def _check_merged(case: Case, out) -> Optional[str]:
     import numpy as np
     from rasterio.io import MemoryFile
 
+    from databricks.labs.gbx.core.crs import crs_equal
+
     got_b = _raster_bytes(out)
     want_b = _build(case.expect.name, tempfile.gettempdir())["raster"]
     if got_b is None:
@@ -988,8 +1001,10 @@ def _check_merged(case: Case, out) -> Optional[str]:
         MemoryFile(want_b) as b,
         b.open() as want,
     ):
-        if (got.shape, got.transform) != (want.shape, want.transform):
-            return f"{case.cid}: {got.shape}@{got.transform} vs {want.shape}@{want.transform}"
+        if (got.shape, got.transform) != (want.shape, want.transform) or not crs_equal(
+            got.crs, want.crs
+        ):
+            return f"{case.cid}: {got.shape}@{got.transform} in {got.crs} vs {want.shape}@{want.transform} in {want.crs}"
         return (
             None
             if np.array_equal(got.read(), want.read())
@@ -998,15 +1013,30 @@ def _check_merged(case: Case, out) -> Optional[str]:
 
 
 def _check_pixels(case: Case, out) -> Optional[str]:
-    """The first band of the raster (bytes or a tile) is `case.expect`, pixel by pixel; NaN equals NaN."""
+    """The first band of the raster (bytes or a tile) is `case.expect`, pixel by pixel (NaN equals NaN), and it sits
+    where the canvas of the case puts it: its transform, its CRS and its NoData value. A canvas aggregate's
+    arguments are the group, out_srid, pixel_size, xmin, ymin, xmax, ymax, width, height, ...
+    """
     import numpy as np
+    from affine import Affine
     from rasterio.io import MemoryFile
+
+    from databricks.labs.gbx.core.crs import crs_equal
 
     b = _raster_bytes(out)
     if b is None:
         return f"{case.cid}: no raster"
+    srid, (xmin, ymin, xmax, ymax, width, height) = case.args[1], case.args[3:9]
+    want_transform = Affine(
+        (xmax - xmin) / width, 0.0, xmin, 0.0, -(ymax - ymin) / height, ymax
+    )
     with MemoryFile(b) as m, m.open() as ds:
         got = ds.read(1).astype("float64")
+        where = (ds.transform, ds.crs, ds.nodata)
+    if not (where[0] == want_transform and crs_equal(where[1], f"EPSG:{srid}")):
+        return f"{case.cid}: placed at {where[0]} in {where[1]}, want {want_transform} in EPSG:{srid}"
+    if where[2] != -9999.0:
+        return f"{case.cid}: NoData is {where[2]}, want -9999.0"
     ok = got.shape == np.shape(case.expect) and np.array_equal(
         got, np.asarray(case.expect, dtype="float64"), equal_nan=True
     )

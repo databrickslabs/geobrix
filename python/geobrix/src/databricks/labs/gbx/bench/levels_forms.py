@@ -473,6 +473,9 @@ FORMS["H"] = [
         setup="register_h_tess_udtf",
     ),
     _h("merge_by_key", "DF", "h_merge_fold", "tiles_grouped_mat", run="h_merge_fold"),
+    # The merge inputs overlap (offset copies), and where members overlap the vrt winner is the last
+    # path, the fold winner the last bytes: compare the times of fold, vrt and the aggregate, not
+    # their pixels. The vrt result is a COG, so its fingerprint differs from fold's anyway.
     _h("merge_by_key", "DF", "h_merge_vrt", "tiles_grouped_virt", run="h_merge_vrt"),
     _h(
         "gbx_rst_merge_agg",

@@ -320,6 +320,24 @@ MVP_H: Tuple[Case, ...] = (
         {"TQ3080", "TQ3180", "TQ3081", "TQ3181"},
         ("session",),
     ),
+    # Every source pixel lands in some cell's window, also on a grid the cells do not line up with.
+    Case(
+        "h_tess_cover",
+        "bng_tessellate_virtual",
+        (Build("tile_27700_unaligned"), 3),
+        "virtual_cover",
+        None,
+        ("session",),
+    ),
+    # A tile that is already clipped is cut to the cells inside its clip, not re-opened to all of them.
+    Case(
+        "h_tess_clip",
+        "bng_tessellate_virtual",
+        (Build("tile_27700_clipped"), 3),
+        "virtual_cells",
+        {"TQ3080"},
+        ("session",),
+    ),
     Case(
         "h_merge_fold",
         "merge_by_key",
@@ -350,6 +368,15 @@ MVP_H: Tuple[Case, ...] = (
         (Build("pair_aligned"), "max"),
         "pixel_ratio",
         2.0,
+        ("session",),
+    ),
+    # Tiles on different grids are refused for avg as for max, never averaged cell by cell.
+    Case(
+        "h_combine_avg_shifted",
+        "combine_by_key",
+        (Build("pair_shifted"), "avg"),
+        "raises",
+        "different geotransform",
         ("session",),
     ),
 )
@@ -437,6 +464,11 @@ def _build(name: str, tmpdir: str):
         return _tile(
             None, path, {"col_off": 0, "row_off": 0, "width": 64, "height": 48}
         )
+    return _build_helper_input(name, tmpdir)
+
+
+def _build_helper_input(name: str, tmpdir: str):
+    """The fixtures of the MVP-H oracle (tiles for the DataFrame helpers)."""
     if name == "tile_32":
         return _tile(_tile_bytes("EPSG:4326", 32, 32))
     if name == "quad_tiles":
@@ -462,6 +494,23 @@ def _build(name: str, tmpdir: str):
                     )
                 )
         return _tile(None, path, None)
+    if name == "tile_27700_unaligned":  # 33 m pixels from an origin off the 1 km grid
+        path = os.path.join(tmpdir, "oracle_27700_unaligned.tif")
+        if not os.path.exists(path):
+            with open(path, "wb") as fh:
+                fh.write(
+                    _tile_bytes(
+                        "EPSG:27700", 60, 60, origin=(530010.0, 182010.0), px=33.0
+                    )
+                )
+        return _tile(None, path, None)
+    if name == "tile_27700_clipped":  # inside cell TQ3080 only
+        from shapely.geometry import box
+
+        t = _build("tile_27700_path", tmpdir)
+        t["clip_polygon"] = box(530100.0, 180100.0, 530900.0, 180900.0).wkb
+        t["clip_crs"] = "EPSG:27700"
+        return t
     if name == "quad_paths":
         out = []
         for i, t in enumerate(_build("quad_tiles", tmpdir)):
@@ -487,6 +536,17 @@ def _build(name: str, tmpdir: str):
                 )
             ),
         ]
+    if name == "pair_shifted":  # the same grid, moved six pixels east
+        from affine import Affine
+        from rasterio.io import MemoryFile
+
+        from databricks.labs.gbx.pyrx.core.compression import write_gtiff
+
+        a = _tile_bytes("EPSG:4326", 32, 32)
+        with MemoryFile(a) as mf, mf.open() as ds:
+            prof, arr = ds.profile.copy(), ds.read()
+        prof["transform"] = prof["transform"] * Affine.translation(6, 0)
+        return [_tile(a), _tile(write_gtiff(prof, arr))]
     raise KeyError(name)
 
 
@@ -719,6 +779,22 @@ def _check_helper(case: Case, rows, tiles) -> Optional[str]:
             for t in ts
         )
         return None if wins == sorted(case.expect) else f"{case.cid}: windows {wins}"
+    if case.kind == "virtual_cover":
+        import rasterio
+
+        with rasterio.open(tiles[0]["path"]) as src:
+            seen = np.zeros((src.height, src.width), dtype=bool)
+        for t in ts:
+            w = t["window"]
+            seen[
+                w["row_off"] : w["row_off"] + w["height"],
+                w["col_off"] : w["col_off"] + w["width"],
+            ] = True
+        return (
+            None
+            if seen.all()
+            else f"{case.cid}: {int((~seen).sum())} of {seen.size} source pixels are in no cell window"
+        )
     if case.kind == "virtual_cells":
         from databricks.labs.gbx.pygx import _bng
 

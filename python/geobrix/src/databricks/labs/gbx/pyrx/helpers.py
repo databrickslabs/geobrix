@@ -10,7 +10,8 @@ grid of ``tiling.plan_grid_windows`` (as Spark SQL), ``window_for_geom`` and the
 carries (what ``clipPolygons`` plans), and the BNG cell enumerator of the BNG mosaic. The folds are
 the aggregates' reducers (``agg.merge_tiles``, ``agg.combineavg_tiles``, ``agg.combine_max_tiles``)
 fed by the aggregates' own member rule, and the ``vrt`` merge is ``minted_vrt`` streamed through
-``cog_convert_file``. Compression and the materialize caps are theirs too. Connect-safe: no ``.rdd``,
+``cog_convert_file``. Compression and the materialize caps are theirs too, and a group's members
+are bounded by the canonical tile budget. Connect-safe: no ``.rdd``,
 ``_jvm``, ``_jsc`` or ``spark.conf.set``.
 """
 
@@ -166,12 +167,31 @@ def _window_tuple(win):
     )
 
 
-def _plan_cells(sources, resolution: int):
-    """(path, window, cellid, cell window, cell WKB) per BNG cell over each (path, window) source.
+def _clip_in_bng(clip: bytes, clip_crs: Optional[str], src_crs):
+    """A tile's clip polygon in EPSG:27700. Its CRS follows the clip rule of a virtual tile: the SRID
+    the geometry carries, else `clip_crs`, else the raster's own."""
+    import shapely
+    from rasterio.warp import transform_geom
+    from shapely.geometry import mapping, shape
 
-    One header open per path. The cells are the BNG cells over the source's bounds (the enumerator the
-    BNG mosaic uses); the cell window is the part of the source the cell covers, and the cell polygon
-    is the clip the tile will carry. A cell the source does not reach has no window and is left out.
+    from databricks.labs.gbx._geom import parse_geom
+    from databricks.labs.gbx.core.crs import crs_equal, resolve_source_crs
+
+    geom = parse_geom(bytes(clip))
+    crs = resolve_source_crs(shapely.get_srid(geom), crs=clip_crs) or src_crs
+    if crs_equal(crs, _BNG):
+        return geom
+    return shape(transform_geom(crs, _BNG, mapping(geom)))
+
+
+def _plan_cells(sources, resolution: int):
+    """(path, window, clip, clip CRS, cellid, cell window, cell WKB) per BNG cell over each source.
+
+    A source is a tile's (path, window, clip, clip CRS). One header open per path. The cells are the
+    BNG cells over the source's bounds (the enumerator the BNG mosaic uses); the cell window is the
+    part of the source the cell covers, and the cell polygon, cut to the tile's own clip when it has
+    one, is the clip the new tile will carry. A cell the source or its clip does not reach has no
+    window and is left out.
     """
     import math
 
@@ -190,17 +210,17 @@ def _plan_cells(sources, resolution: int):
 
     size = _bng.get_edge_size(resolution)
     by_path = {}
-    for path, win in sources:
-        by_path.setdefault(path, []).append(win)
+    for path, win, clip, clip_crs in sources:
+        by_path.setdefault(path, []).append((win, clip, clip_crs))
     plan, budget = [], _MAX_PLAN_CELLS
-    for path, wins in by_path.items():
+    for path, tiles in by_path.items():
         with ot.open_header(VirtualTile(cellid=0, path=path)) as src:
             if src.crs is None:
                 raise ValueError(
                     f"{path!r} has no CRS, so it has no place on the British National Grid. "
                     f"Fix: label it first (gbx_rst_setsrid)"
                 )
-            for win in wins:
+            for win, clip, clip_crs in tiles:
                 part = (
                     Window(*win)
                     if win is not None
@@ -213,8 +233,13 @@ def _plan_cells(sources, resolution: int):
                     continue  # no usable footprint on the grid (e.g. far outside its projection)
                 west, south = max(west, 0.0), max(south, 0.0)
                 east, north = min(east, _BNG_EAST_MAX), min(north, _BNG_NORTH_MAX)
+                bound = None if clip is None else _clip_in_bng(clip, clip_crs, src.crs)
+                if bound is not None:
+                    cw_, cs_, ce_, cn_ = bound.bounds
+                    west, south = max(west, cw_), max(south, cs_)
+                    east, north = min(east, ce_), min(north, cn_)
                 if west > east or south > north:
-                    continue  # outside Great Britain: no cell
+                    continue  # outside Great Britain, or outside the clip: no cell
                 budget -= (math.floor((east - west) / size) + 2) * (
                     math.floor((north - south) / size) + 2
                 )
@@ -227,6 +252,10 @@ def _plan_cells(sources, resolution: int):
                     (west, south, east, north), resolution
                 ):
                     geom = box(cell.west, cell.south, cell.east, cell.north)
+                    if bound is not None:
+                        geom = geom.intersection(bound)
+                        if geom.is_empty or geom.area == 0:
+                            continue  # the clip does not reach this cell
                     cw = window_for_geom(src, geom, _BNG)
                     if cw is not None and win is not None:
                         try:
@@ -239,6 +268,8 @@ def _plan_cells(sources, resolution: int):
                         (
                             path,
                             win,
+                            clip,
+                            clip_crs,
                             int(_bng.parse(cell.cellid)),
                             (
                                 int(cw.col_off),
@@ -259,10 +290,14 @@ def bng_tessellate_virtual(
 
     Each output tile keeps its source's path and carries the cell's window, the cell polygon as its
     clip (``clip_crs`` EPSG:27700) and the cell id as ``cellid``; the pixels are read, and clipped to
-    the cell, when something downstream needs them. The driver plans from headers, one open per
-    distinct path, so the cost follows sources times cells and not pixels. A source outside Great
-    Britain has no cells. An error tile (no raster, no path) comes through unchanged. A tile with
-    raster bytes stops the query with a ``Fix:`` message when the query runs.
+    the cell, when something downstream needs them. The tile keeps its own grid and CRS, so the
+    cells are those over its footprint (the per-row ``gbx_rst_bng_tessellate`` warps the raster to
+    EPSG:27700 and may add one-pixel edge cells). A tile that already has a clip keeps it: its cells
+    are cut to the clip, and a cell the clip does not reach is left out. The driver plans from
+    headers, one open per distinct path, so the cost follows sources times cells and not pixels. A
+    source outside Great Britain has no cells. An error tile (no raster, no path) comes through
+    unchanged. A tile with raster bytes stops the query with a ``Fix:`` message when the query runs,
+    and so does a file whose header cannot be read.
 
     Args:
         df: a DataFrame with a tile column.
@@ -276,9 +311,14 @@ def bng_tessellate_virtual(
     df = _require_virtual(df, tile_col, "bng_tessellate_virtual")
     t = F.col(tile_col)
     sources = [
-        (r["p"], _window_tuple(r["w"]))
+        (r["p"], _window_tuple(r["w"]), r["k"], r["kc"])
         for r in df.where(t["path"].isNotNull())
-        .select(t["path"].alias("p"), t["window"].alias("w"))
+        .select(
+            t["path"].alias("p"),
+            t["window"].alias("w"),
+            t["clip_polygon"].alias("k"),
+            t["clip_crs"].alias("kc"),
+        )
         .distinct()
         .collect()
     ]
@@ -292,13 +332,16 @@ def bng_tessellate_virtual(
                     if w is None
                     else dict(zip(("col_off", "row_off", "width", "height"), w))
                 ),
+                None if k is None else bytes(k),
+                kc,
                 cid,
                 dict(zip(("col_off", "row_off", "width", "height"), cw)),
                 wkb,
             )
-            for p, w, cid, cw, wkb in _plan_cells(sources, res)
+            for p, w, k, kc, cid, cw, wkb in _plan_cells(sources, res)
         ],
-        f"_gbx_p string, _gbx_w {win_type}, _gbx_cell bigint, _gbx_cw {win_type}, _gbx_g binary",
+        f"_gbx_p string, _gbx_w {win_type}, _gbx_k binary, _gbx_kc string, "
+        f"_gbx_cell bigint, _gbx_cw {win_type}, _gbx_g binary",
     )
     cells = (
         t.withField("window", F.col("_gbx_cw"))
@@ -306,11 +349,15 @@ def bng_tessellate_virtual(
         .withField("clip_polygon", F.col("_gbx_g"))
         .withField("clip_crs", F.lit(_BNG))
     )
-    joined = df.where(t["path"].isNotNull()).join(
-        plan, (t["path"] == F.col("_gbx_p")) & t["window"].eqNullSafe(F.col("_gbx_w"))
+    same_source = (
+        (t["path"] == F.col("_gbx_p"))
+        & t["window"].eqNullSafe(F.col("_gbx_w"))
+        & t["clip_polygon"].eqNullSafe(F.col("_gbx_k"))
+        & t["clip_crs"].eqNullSafe(F.col("_gbx_kc"))
     )
+    joined = df.where(t["path"].isNotNull()).join(plan, same_source)
     tessellated = joined.withColumn(tile_col, cells).drop(
-        "_gbx_p", "_gbx_w", "_gbx_cell", "_gbx_cw", "_gbx_g"
+        "_gbx_p", "_gbx_w", "_gbx_k", "_gbx_kc", "_gbx_cell", "_gbx_cw", "_gbx_g"
     )
     return tessellated.unionByName(df.where(t["path"].isNull()))
 
@@ -394,19 +441,28 @@ def _tile_member(tile, cap_bytes: int):
 
 
 def _group_stream(
-    batches, keys: List[str], value_col: str, member, finish, cap_bytes: int
+    batches,
+    keys: List[str],
+    value_col: str,
+    member,
+    finish,
+    cap_bytes: int,
+    group_budget: int,
+    fix: str,
+    weigh=len,
 ):
     """Yield one Arrow batch (the key values and the folded raster) per finished key group.
 
     The input is sorted by key within the partition, so a group is contiguous, even across batches;
-    memory is the current group's members. A group with no usable member gets a NULL raster, as an
-    aggregate over an empty group does.
+    memory is the current group's members, and a group whose members (`weigh` each, their bytes)
+    pass `group_budget` stops the query with `fix`, before the fold copies them. A group with no
+    usable member gets a NULL raster, as an aggregate over an empty group does.
     """
     import pyarrow as pa
 
     from databricks.labs.gbx.ds.file_gbx import materialize_decision
 
-    started, current, scalars, members = False, None, None, []
+    started, current, scalars, members, held = False, None, None, [], 0
 
     def emit():
         raster = finish(members)
@@ -434,9 +490,21 @@ def _group_stream(
             if not started or key != current:
                 if started:
                     yield emit()
-                started, current, scalars, members = True, key, key_scalars, []
+                started, current, scalars, members, held = (
+                    True,
+                    key,
+                    key_scalars,
+                    [],
+                    0,
+                )
             item = member(values[i].as_py())
             if item is not None:
+                held += weigh(item)
+                if held > group_budget:
+                    raise ValueError(
+                        f"the tiles for key {current!r} hold more than "
+                        f"{group_budget / 2**20:.0f} MiB, the tile budget of this session. Fix: {fix}"
+                    )
                 members.append(item)
     if started:
         yield emit()
@@ -449,28 +517,51 @@ def _cap_bytes(df: DataFrame) -> int:
     return _connect_aware_lru_sizing(df.sparkSession)[0]
 
 
-def _fold_by_key(df, keys, tile_col, num_partitions, finish):
+def _group_budget(df: DataFrame) -> int:
+    """The bytes of member tiles one key may hold: the canonical decoded-tile budget (64 MiB on
+    Serverless and Connect, 1.5 GiB on classic), taken on the driver."""
+    from databricks.labs.gbx.manager.capabilities import is_connect
+    from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+
+    return decoded_budget_bytes("serverless" if is_connect(df.sparkSession) else "auto")
+
+
+_FIX_SPLIT = (
+    "split the key so each group is smaller (add a sub-key, such as a spatial block)"
+)
+
+
+def _fold_by_key(df, keys, tile_col, num_partitions, finish, fix=_FIX_SPLIT):
     """Shuffle (keys, tile) by the keys and fold each group once with `finish(list of GTiff bytes)`."""
-    cap = _cap_bytes(df)
+    cap, budget = _cap_bytes(df), _group_budget(df)
     shuffled = _sorted_by_key(df.select(*keys, tile_col), keys, num_partitions)
 
     def run(batches):
         return _group_stream(
-            batches, keys, tile_col, lambda tile: _tile_member(tile, cap), finish, cap
+            batches,
+            keys,
+            tile_col,
+            lambda tile: _tile_member(tile, cap),
+            finish,
+            cap,
+            budget,
+            fix,
         )
 
     return shuffled.mapInArrow(run, _out_schema(df, keys))
 
 
-def _vrt_mosaic(members):
-    """One GTiff-readable COG of the mosaic of whole-file members: a VRT over their paths, streamed
-    to a COG block by block, so no member is decoded into memory."""
+def _vrt_mosaic(members, cap_bytes: int):
+    """One COG of the mosaic of whole-file members: a VRT over their paths, streamed to a COG block
+    by block, so no member is decoded into memory. The COG's size is checked against the cap before
+    it is read back."""
     import os
     import shutil
 
     import rasterio
 
     from databricks.labs.gbx.ds._mosaic import minted_vrt
+    from databricks.labs.gbx.ds.file_gbx import materialize_decision
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
     from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
@@ -488,7 +579,14 @@ def _vrt_mosaic(members):
     try:
         out = os.path.join(scratch, "mosaic.tif")
         with minted_vrt(sorted({p for p, _ in members})) as vrt:
-            cog_convert_file(vrt, out)
+            cog_convert_file(vrt, out, bigtiff="IF_SAFER")
+        size = os.path.getsize(out)
+        if materialize_decision(size, "ingest", cap_bytes=cap_bytes) == "error":
+            raise ValueError(
+                f"the merged mosaic is {size / 2**20:.0f} MiB, over the {cap_bytes / 2**20:.0f} MiB "
+                f"cap for bytes in a row. Fix: write the mosaic to files instead (the cog_gbx writer "
+                f"with vrtMosaic=true), or split the groups"
+            )
         with open(out, "rb") as fh:
             return fh.read()
     finally:
@@ -514,6 +612,18 @@ def merge_by_key(
     members must share a CRS, pixel size, band count and data type. A member that is a smaller window
     of its file, or that has a clip, stops the query with a ``Fix:`` message.
 
+    The two methods agree wherever the members do not overlap. Where they overlap, ``fold`` lets the
+    member whose encoded GeoTIFF bytes sort last win, as the aggregate does, and ``vrt`` lets the
+    last path in sorted order win: the aggregate's order comes from the decoded, re-encoded tiles, which this
+    method never reads, so it cannot follow it. The ``vrt`` result is a COG (DEFLATE, with overviews;
+    BigTIFF only when it could pass 4 GiB), where ``fold`` gives a plain zstd GeoTIFF. Use ``fold`` where
+    the aggregate's winner matters.
+
+    A key's members may hold the session's tile budget (``decoded_budget_bytes``: 64 MiB on Serverless
+    and Connect, 1.5 GiB on classic) in encoded bytes; a bigger group stops the query with a ``Fix:``
+    to split the key. The Arrow batches that carry the rows are sized by Spark and held in memory
+    besides.
+
     Args:
         df: a DataFrame with the key columns and a tile column.
         keys: the key column names.
@@ -529,9 +639,16 @@ def merge_by_key(
         )
     keys, n = _by_key(df, keys, tile_col, num_partitions)
     if method == "fold":
-        return _fold_by_key(df, keys, tile_col, n, agg_core.merge_tiles)
+        return _fold_by_key(
+            df,
+            keys,
+            tile_col,
+            n,
+            agg_core.merge_tiles,
+            _FIX_SPLIT + ", or use method='vrt', which reads paths only",
+        )
     t = F.col(tile_col)
-    cap = _cap_bytes(df)
+    cap, budget = _cap_bytes(df), _group_budget(df)
     paths = _sorted_by_key(
         _require_virtual(df, tile_col, "merge_by_key(method='vrt')").select(
             *keys,
@@ -559,7 +676,17 @@ def merge_by_key(
         )
 
     def run(batches):
-        return _group_stream(batches, keys, "_gbx_m", member, _vrt_mosaic, cap)
+        return _group_stream(
+            batches,
+            keys,
+            "_gbx_m",
+            member,
+            lambda members: _vrt_mosaic(members, cap),
+            cap,
+            budget,
+            _FIX_SPLIT,
+            weigh=lambda m: 0,  # paths only: no tile bytes are held
+        )
 
     return paths.mapInArrow(run, _out_schema(df, keys))
 
@@ -573,11 +700,17 @@ def combine_by_key(
 ) -> DataFrame:
     """Per-pixel ``avg`` or ``max`` over each key's tiles: ``DataFrame[keys..., raster BINARY]``.
 
-    The tiles of a key must share a grid (size, transform and CRS); align them first with
+    The tiles of a key must share a grid (size, transform and CRS) for both statistics; a key whose
+    tiles differ stops the query with a ``Fix:`` message to align them first with
     ``gbx_rst_align_to``. NoData is left out of the statistic, as in ``gbx_rst_combineavg_agg`` and
-    ``gbx_rst_combinemax``, whose reducers this runs: each tile is decoded once per key and the result
-    encoded once. A member that is NULL, an error tile or unreadable is left out; a group with no
-    usable member gets a NULL raster.
+    ``gbx_rst_combinemax``, whose reducers this runs: each tile is decoded once per key, one at a
+    time, and the result encoded once. A member that is NULL, an error tile or unreadable is left
+    out; a group with no usable member gets a NULL raster.
+
+    A key's members may hold the session's tile budget (``decoded_budget_bytes``: 64 MiB on Serverless
+    and Connect, 1.5 GiB on classic) in encoded bytes; a bigger group stops the query with a ``Fix:``
+    to split the key. The Arrow batches that carry the rows (Spark caps them at 256 MiB) are held in
+    memory besides.
 
     Args:
         df: a DataFrame with the key columns and a tile column.
@@ -592,19 +725,34 @@ def combine_by_key(
     if stat not in reducers:
         raise ValueError(f"combine_by_key: stat must be 'avg' or 'max'; got {stat!r}")
     keys, n = _by_key(df, keys, tile_col, num_partitions)
-    return _fold_by_key(df, keys, tile_col, n, _aligned(reducers[stat]))
+    return _fold_by_key(
+        df, keys, tile_col, n, _aligned(reducers[stat], check_grid=stat == "avg")
+    )
 
 
-def _aligned(reducer):
-    """`reducer` with a `Fix:` on the error a group of tiles on different grids raises."""
+def _aligned(reducer, check_grid: bool):
+    """`reducer` with a `Fix:` on the error a group of tiles on different grids raises.
+
+    The average reducer only compares shapes, so it would average two tiles of one size on a shifted
+    transform or another CRS; `check_grid` holds it to the check the other statistics make (size,
+    transform and CRS, from the headers).
+    """
+    from databricks.labs.gbx.pyrx.core import agg as agg_core
 
     def run(members):
         try:
+            if check_grid and len(members) > 1:
+                memfiles, datasets = agg_core._open_all(members)
+                try:
+                    agg_core._require_aligned(datasets, "combine_by_key")
+                finally:
+                    agg_core._close_all(memfiles, datasets)
             return reducer(members)
         except ValueError as exc:
             if "align" in str(exc) and "Fix:" not in str(exc):
+                lead = "" if "combine_by_key" in str(exc) else "combine_by_key: "
                 raise ValueError(
-                    f"combine_by_key: {exc}. Fix: align the tiles of each key first (gbx_rst_align_to)"
+                    f"{lead}{exc}. Fix: align the tiles of each key first (gbx_rst_align_to)"
                 ) from exc
             raise
 

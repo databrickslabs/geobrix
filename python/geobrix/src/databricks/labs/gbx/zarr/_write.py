@@ -2813,6 +2813,11 @@ def gbx_zarr_write(
     exactly the shards the write touched, right after its commit (a few small writes into a
     big shard cost one fold of that shard); the version returned is the write's own, and the
     fold, if it commits, is the next one. Content is the same either way.
+
+    Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
+    executors. Under memory pressure Spark may write task data, those credentials included,
+    to the executors' local disk: turn on local-disk encryption on clusters that use direct
+    access. ``access="fuse"`` sends no credentials.
     """
     from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
     from databricks.labs.gbx.zarr._register import (

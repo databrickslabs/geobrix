@@ -620,6 +620,11 @@ def gbx_zarr_export(
     reference points at the pack files of the pinned version, and vacuum can delete them:
     tag the version with ``gbx_zarr_tag`` to keep them.
 
+    Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
+    executors. Under memory pressure Spark may write task data, those credentials included,
+    to the executors' local disk: turn on local-disk encryption on clusters that use direct
+    access. ``access="fuse"`` sends no credentials.
+
     ``method="publish"`` runs ``gbx_zarr_sync.publish`` for a writable registered store and
     returns the version it committed; it takes neither ``to`` nor ``version_as_of``.
 

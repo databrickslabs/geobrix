@@ -787,6 +787,26 @@ formats.
   `/Volumes` paths as the lightweight readers. The `gdal` raster reader needed no change, and
   other compute is unchanged.
 
+### Zarr stores — direct storage access (new)
+
+- **`access="direct"` reads and writes a Zarr store's files straight from the Volume's cloud
+  storage.** `gbx_zarr_read`, `gbx_zarr_sample`, `gbx_zarr_write` and `gbx_zarr_export` take
+  `access="auto"` (the default), `"fuse"` or `"direct"`. Direct access asks Unity Catalog for
+  temporary credentials for the Volume on the driver and reads byte ranges with obstore, which is
+  several times faster than the Volume mount for many small ranges. `"auto"` uses it where the
+  credentials can be had (dedicated compute) and the Volume mount everywhere else, Serverless
+  included, without an error. An explicit `"direct"` raises `ZarrAccessUnavailable` where they
+  cannot be had, and for a plain-path store, which is read through its path: register the store
+  with `gbx_zarr_register` to use direct access.
+- **Direct access sends credentials to the executors.** They are short-lived (at most one hour)
+  and cover only the one Volume. Under memory pressure Spark may write task data, those
+  credentials included, to the executors' local disk, so turn on local-disk encryption on
+  clusters that use direct access. `access="fuse"` sends no credentials.
+- **Credentials that expire during a long job do not fail it under `"auto"`.** The work carries
+  on through the Volume mount; with `"direct"` the call raises and says the credentials expired.
+  A pack upload that is refused part way is aborted, but credentials that have expired cannot
+  abort it, so add a bucket lifecycle rule that aborts incomplete multipart uploads.
+
 ### Dependencies
 
 - **GeoBrix no longer installs PySpark (breaking for local installs).** On Databricks the

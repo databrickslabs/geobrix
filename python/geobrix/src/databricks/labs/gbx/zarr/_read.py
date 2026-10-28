@@ -1264,6 +1264,11 @@ def gbx_zarr_read(
     only), so ``"direct"`` raises for it: register the store to use direct access. Virtual
     tiles are opened later, over the mount, so ``"direct"`` needs ``virtual_tiles=False``.
 
+    Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
+    executors. Under memory pressure Spark may write task data, those credentials included,
+    to the executors' local disk: turn on local-disk encryption on clusters that use direct
+    access. ``access="fuse"`` sends no credentials.
+
     An array GeoBrix cannot decode (a string coordinate, or one whose metadata is corrupt)
     does not fail the read, on a table or a plain path: it is left out, its dimension gets
     no labels, and it is named only when you ask for it, select by its labels, or need its

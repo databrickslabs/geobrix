@@ -659,6 +659,11 @@ def gbx_zarr_sample(
     is read through its path (FUSE only), so ``"direct"`` raises for it: register the store
     to use direct access.
 
+    Direct access sends short-lived (at most one hour), Volume-scoped credentials to the
+    executors. Under memory pressure Spark may write task data, those credentials included,
+    to the executors' local disk: turn on local-disk encryption on clusters that use direct
+    access. ``access="fuse"`` sends no credentials.
+
     Up to 100,000 points are collected to the driver; if they lie in at most four chunks of
     the grid and the answer is small the driver reads them and returns the result, with no
     Spark job. Otherwise Spark reads each chunk once for all its points. Row order is not

@@ -25,6 +25,8 @@ on:
       - '.maven-keys.list'
       - '.github/workflows/verify-maven-pgp.yml'
       - 'scripts/security/maven-pgp-*'
+      - '.mvn/wrapper/**'
+      - 'mvnw'
   pull_request:
     branches: [main]
     paths:
@@ -32,6 +34,8 @@ on:
       - '.maven-keys.list'
       - '.github/workflows/verify-maven-pgp.yml'
       - 'scripts/security/maven-pgp-*'
+      - '.mvn/wrapper/**'
+      - 'mvnw'
   workflow_dispatch: {}
 
 permissions:
@@ -68,7 +72,14 @@ jobs:
       # (trust-bounded), then pgpverify-maven-plugin verifies their .asc
       # signatures (which JFrog mirrors transparently).
       - name: Authenticate for JFrog (Maven via OIDC)
+        id: jfrog
         uses: ./.github/actions/jfrog-auth
+
+      # The gate runs on the same pinned Maven as the builds (./mvnw), not the runner's.
+      - name: Install the pinned Maven (wrapper)
+        uses: ./.github/actions/maven-wrapper
+        with:
+          jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
 
       - name: Verify Maven dependency PGP signatures
         run: ./scripts/security/maven-pgp-verify

@@ -45,6 +45,16 @@ any compile, test, or install. CI Maven invocations also pass `-C`
 (strict-checksums), so any checksum mismatch from the registry aborts the
 build instead of warning.
 
+Maven itself is pinned too. CI runs every Maven call through the Maven wrapper
+(`./mvnw`), whose
+[properties file](https://github.com/databrickslabs/geobrix/blob/main/.mvn/wrapper/maven-wrapper.properties)
+fixes the version, the download URL and the SHA-256 of the distribution. The
+wrapper refuses a download that does not match, wherever it came from. The
+development container installs the same version with a pinned SHA-512, and a
+test fails if the two versions differ. `pom.xml` requires that version as a
+minimum, so an older Maven stops at the first build step with a message that
+names `./mvnw`.
+
 The one Maven fetch outside the project build is for the open-source Delta Lake
 jars (`delta-spark` and `delta-storage`) that the lightweight CI job and the
 development container use to test the Zarr manifest locally. They are test-only

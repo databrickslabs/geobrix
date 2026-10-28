@@ -19,7 +19,7 @@ Speed up Scala coverage on CI by:
 
 - **Strategy:** `matrix: package: [rasterx, gridx, vectorx, ds, expressions, util]`
 - **Each job:**  
-  `mvn -T 1C -q clean scoverage:test -Dsuites='com.databricks.labs.gbx.<package>.*' -Druntime=large -Dscalastyle.fail=false`  
+  `./mvnw -T 1C -q clean scoverage:test -Dsuites='com.databricks.labs.gbx.<package>.*' -Druntime=large -Dscalastyle.fail=false`  
   then upload `target/scoverage.xml` (or `target/scoverage-report/`) as artifact `scoverage-${{ matrix.package }}`.
 
 ### 2. Merge job

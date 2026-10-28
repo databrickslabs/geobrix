@@ -1,0 +1,31 @@
+name: 'Install the pinned Maven (wrapper)'
+description: >
+  Download the Maven that .mvn/wrapper/maven-wrapper.properties pins (version, URL and SHA-256),
+  through the JFrog db-maven mirror, so that every later ./mvnw call in the job runs that exact
+  Maven. The wrapper refuses a distribution whose SHA-256 differs from the pinned one, so a
+  substituted zip fails the job instead of running.
+# Why a separate step: the hardened runner blocks direct Maven Central, so the wrapper's default
+# download URL does not work there. MVNW_REPOURL swaps the repository root of that URL for the
+# JFrog mirror, which needs the OIDC token that the jfrog-auth action returns. The wrapper
+# installs under ~/.m2/wrapper/dists/<name>/<hash of the resolved URL>, so later ./mvnw calls
+# must resolve the same URL: this step exports MVNW_REPOURL (not a secret) for them and finds
+# the unpacked distribution without downloading or authenticating again. Pass the token only
+# to this step.
+# Needs a JDK on PATH or JAVA_HOME (setup-java): with credentials the wrapper downloads with a
+# small Java program instead of curl.
+inputs:
+  jfrog-access-token:
+    description: 'Output jfrog-access-token of the jfrog-auth action.'
+    required: true
+runs:
+  using: "composite"
+  steps:
+    - name: Install the pinned Maven through JFrog
+      shell: bash
+      env:
+        MVNW_REPOURL: https://databricks.jfrog.io/artifactory/db-maven
+        MVNW_USERNAME: gha-service-account
+        MVNW_PASSWORD: ${{ inputs.jfrog-access-token }}
+      run: |
+        echo "MVNW_REPOURL=${MVNW_REPOURL}" >> "${GITHUB_ENV}"
+        ./mvnw -B -v

@@ -38,7 +38,13 @@ runs:
         cache-dependency-path: '.ci-pip-cache-key'
         python-version: ${{ inputs.python_version }}
     - name: Authenticate for JFrog (pip via OIDC)
+      id: jfrog
       uses: ./.github/actions/jfrog-auth
+    # The Delta jar fetch below runs Maven; it uses the pinned ./mvnw like every other CI Maven call.
+    - name: Install the pinned Maven (wrapper)
+      uses: ./.github/actions/maven-wrapper
+      with:
+        jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
     - name: Install pyrx deps (hash-pinned) + package
       shell: bash
       run: |
@@ -65,6 +71,8 @@ runs:
     # ~/.m2/repository and puts them on PYSPARK_SUBMIT_ARGS when test/zarr is collected.
     - name: Fetch Delta Lake jars (Zarr manifest tests)
       shell: bash
+      env:
+        GBX_MVN: ./mvnw
       run: bash scripts/ci/fetch-delta-test-jars.sh
     - name: Build lightweight wheel
       shell: bash

@@ -48,8 +48,32 @@ dependencies. Two pinning regimes:
 | `list-external-actions` | `yq` (Mike Farah) | Emit the set of external actions referenced by any workflow or composite action under `.github/`, one per line. |
 | `resolve-action-ref` | `gh`, `jq` | For each `action[@ref]`, resolve the most recent pre-cutoff release tag to the commit SHA it points at. Marks already-pinned entries with `✓` and drift with `⚠`. |
 | `pin-gh-actions` | `git` | Consume `resolve-action-ref` output, rewrite every `uses:` line under `.github/` to the new SHA form (skipping `databricks*`-owned actions), and stage the result with `git add`. Prints the staged diff for review — **does not commit**. |
-| `maven-pgp-bootstrap` | `mvn`, `awk` | Run `pgpverify-maven-plugin` with relaxed settings, capture every PGP fingerprint Maven Central serves for the resolved closure, and emit draft `.maven-keys.list` entries on stdout. The output is a draft — every fingerprint must be cross-checked against the project's published signing key before being committed. |
-| `maven-pgp-verify` | `mvn` | Run strict verification (`mvn -Pverify-pgp verify`). Exits non-zero if any artifact is unsigned, weakly signed, or signed by a key not in `.maven-keys.list`. |
+| `maven-pgp-bootstrap` | `./mvnw` (or `GBX_MVN=mvn` in geobrix-dev), `awk` | Run `pgpverify-maven-plugin` with relaxed settings, capture every PGP fingerprint Maven Central serves for the resolved closure, and emit draft `.maven-keys.list` entries on stdout. The output is a draft — every fingerprint must be cross-checked against the project's published signing key before being committed. |
+| `maven-pgp-verify` | `./mvnw` (or `GBX_MVN=mvn` in geobrix-dev) | Run strict verification (`./mvnw -Pverify-pgp verify`). Exits non-zero if any artifact is unsigned, weakly signed, or signed by a key not in `.maven-keys.list`. |
+
+## Maven itself (the wrapper)
+
+CI runs every Maven call through `./mvnw` (Maven Wrapper 3.3.4, `only-script` type), so CI no
+longer uses whatever Maven the runner image ships. `.mvn/wrapper/maven-wrapper.properties` pins
+Maven by version, URL and `distributionSha256Sum`; the wrapper refuses a distribution whose
+SHA-256 differs (`Failed to validate Maven distribution SHA-256`). It is the same discipline as
+the other pinning regimes here:
+
+- **No unpinned binary in the repo.** The `only-script` type checks in only the reviewable
+  `mvnw` shell script, not a `maven-wrapper.jar` (a jar would need its own `wrapperSha256Sum`).
+- **Hash-pinned download, like the Python locks and the Dockerfile's `MAVEN_SHA512`.** The
+  SHA-256 was computed from the zip and checked against the SHA-512 Apache publishes, on two
+  Apache sources (`archive.apache.org` and `dlcdn.apache.org`, byte-identical). Apache does not
+  publish a SHA-256, so the bump procedure is in the properties file's header.
+- **Through JFrog on the hardened runner.** `.github/actions/maven-wrapper` sets
+  `MVNW_REPOURL` to the `db-maven` mirror and passes the OIDC token from `jfrog-auth`, in that
+  one step only; the wrapper's pinned hash is checked on the bytes the mirror returns.
+- **The PGP gate is unchanged and runs on the pinned Maven.** Maven itself is not a project
+  dependency, so `.maven-keys.list` does not cover it; the SHA-256 pin does.
+- **Inside geobrix-dev** the wrapper cannot download (Maven Central is blocked there), so the
+  image installs the same version with a pinned SHA-512 and
+  `scripts/ci/test_maven_wrapper.py` fails if the two ever differ. Use `GBX_MVN=mvn` for the
+  scripts above in the container.
 
 ## Typical flow — GitHub Actions
 
@@ -74,13 +98,14 @@ git commit -m "Re-pin GitHub Actions to commits from releases prior to 2026-03-1
 
 Run inside the `geobrix-dev` container so Maven hits the `db-maven-proxy`
 mirror (the proxy must pass `.asc` files through unmodified — confirm
-once before relying on this).
+once before relying on this). There the scripts take `GBX_MVN=mvn` (the image's
+Maven is the version the wrapper pins).
 
 ```sh
 cd "$(git rev-parse --show-toplevel)"
 
 # 1. Generate a draft keysmap from the current resolved closure.
-./scripts/security/maven-pgp-bootstrap > /tmp/draft.list
+GBX_MVN=mvn ./scripts/security/maven-pgp-bootstrap > /tmp/draft.list
 
 # 2. Cross-check every fingerprint in /tmp/draft.list against the
 #    project's published signing key. Trust-anchor URLs for the direct
@@ -91,7 +116,7 @@ cd "$(git rev-parse --show-toplevel)"
 #    entries.
 
 # 4. Confirm strict verification passes.
-./scripts/security/maven-pgp-verify
+GBX_MVN=mvn ./scripts/security/maven-pgp-verify
 
 # 5. Commit. Once the workflow is green on main, flip the verify-pgp
 #    profile in pom.xml to <activeByDefault>true</activeByDefault> and

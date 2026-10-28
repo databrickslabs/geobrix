@@ -132,6 +132,19 @@ RUN apt-get update \
         python3-wheel python3-setuptools python3-pip 2>/dev/null || true \
     && rm -rf /var/lib/apt/lists/*
 
+# Maven: the version .mvn/wrapper/maven-wrapper.properties pins, which pom.xml's enforcer
+# requires (apt's maven is older). Real CI runs every build through ./mvnw; the wrapper cannot
+# download in this image, so run-act.sh gives the mirror an ./mvnw that runs this Maven.
+# Same version and pinned SHA-512 as scripts/docker/Dockerfile (scripts/ci/test_maven_wrapper.py
+# keeps all three in step). The proxy settings.xml below is copied over its stock conf.
+ARG MAVEN_VERSION=3.9.16
+ARG MAVEN_SHA512=831a8591fe20c8243b1dbe7d71e3244f31d1665b0804b2e825e38cbbe5ce0cafb8338851f90780735568773e0a6cd07bbec107cda0b896b008b861075358b6f6
+RUN curl -fsSL -o /tmp/apache-maven.tar.gz https://archive.apache.org/dist/maven/maven-3/${MAVEN_VERSION}/binaries/apache-maven-${MAVEN_VERSION}-bin.tar.gz \
+    && echo "${MAVEN_SHA512}  /tmp/apache-maven.tar.gz" | sha512sum -c - \
+    && rm -rf /usr/share/maven && mkdir -p /usr/share/maven \
+    && tar -xzf /tmp/apache-maven.tar.gz -C /usr/share/maven --strip-components=1 \
+    && rm /tmp/apache-maven.tar.gz
+
 # NOTE: previously tried to pre-install gdal[numpy]==3.11.4 here to dodge
 # GDAL's broken pyproject.toml (dual `[project.license]`). All variants
 # failed: setuptools 64+ rejects the dual-license schema; setuptools ≤ 63.x

@@ -44,11 +44,22 @@ runs:
         # already configured by jfrog-pip-bootstrap above; this re-runs pip's
         # netrc/pip.conf write idempotently with a fresh token, and configures
         # Maven now that setup-java has put mvn + ~/.m2/settings.xml in place.
+        # (jfrog-auth writes the Maven settings only when `mvn` is on PATH, so the
+        # runner image's own Maven must stay installed even though builds use ./mvnw.)
         # Caller job must declare `permissions: id-token: write`.
         - name: Authenticate for JFrog (Maven + pip refresh via OIDC)
+          id: jfrog
           uses: ./.github/actions/jfrog-auth
+        # Every Maven call below is ./mvnw: the Maven pinned (version + SHA-256) in
+        # .mvn/wrapper/maven-wrapper.properties, the same version the dev image installs,
+        # instead of whatever the runner image ships. Installed here, through JFrog, so the
+        # PGP gate that follows already runs on it.
+        - name: Install the pinned Maven (wrapper)
+          uses: ./.github/actions/maven-wrapper
+          with:
+            jfrog-access-token: ${{ steps.jfrog.outputs.jfrog-access-token }}
         # Verify the PGP signature of every Maven dependency / plugin against
-        # .maven-keys.list BEFORE any other mvn call resolves or compiles them.
+        # .maven-keys.list BEFORE any other ./mvnw call resolves or compiles them.
         # This is the "verify before use" gate — if Maven Central / the JFrog
         # mirror ever serves an artifact signed by a key not in the keysmap,
         # the build stops here, before the bytes touch any test or compile.
@@ -119,10 +130,10 @@ runs:
             SUITES="${{ inputs.suite_pattern }}"
             [ -z "$SUITES" ] && SUITES="com.databricks.labs.gbx.*"
             # -C: strict-checksums — fail (not warn) on artifact checksum mismatch.
-            mvn -T 1C -C -q clean scoverage:test -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }} -Druntime=large
+            ./mvnw -T 1C -C -q clean scoverage:test -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }} -Druntime=large
             if [ -z "${{ inputs.suite_pattern }}" ]; then
-              mvn -C -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
-              mvn -C -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+              ./mvnw -C -q scoverage:report-only -Dscoverage.aggregate=true -Dscoverage.aggregateOnly=true -Druntime=large
+              ./mvnw -C -q package -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
             fi
         - name: Print Scala coverage summary
           if: inputs.skip_tests == 'false' && inputs.enable_coverage == 'true' && inputs.suite_pattern == ''
@@ -146,11 +157,11 @@ runs:
           run: |
             SUITES="${{ inputs.suite_pattern }}"
             [ -z "$SUITES" ] && SUITES="com.databricks.labs.gbx.*"
-            mvn -T 1C -C -q clean install -Dscoverage.skip -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+            ./mvnw -T 1C -C -q clean install -Dscoverage.skip -Dsuites="$SUITES" -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Build the scala JAR - skip tests is true
           if: inputs.skip_tests == 'true'
           shell: bash
-          run: mvn -C -q clean install -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
+          run: ./mvnw -C -q clean install -DskipTests -Dscoverage.skip -Dscalastyle.fail=${{ inputs.fail_on_scalastyle }}
         - name: Copy build artifacts to local staging
           if: inputs.suite_pattern == ''
           shell: bash

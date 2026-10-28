@@ -261,8 +261,11 @@
                         </goals>
                         <configuration>
                             <rules>
+                                <!-- The floor is the version .mvn/wrapper/maven-wrapper.properties pins,
+                                     so a different Maven cannot build what CI builds. -->
                                 <requireMavenVersion>
-                                    <version>[3.8.0,)</version>
+                                    <version>[3.9.16,)</version>
+                                    <message>Maven 3.9.16 or newer is required (CI and the dev image use exactly 3.9.16; see .mvn/wrapper/maven-wrapper.properties). Run ./mvnw instead of mvn; it downloads and checksum-verifies the pinned Maven.</message>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
                                     <version>[17,)</version>

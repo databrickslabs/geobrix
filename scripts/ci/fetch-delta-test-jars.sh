@@ -98,19 +98,22 @@ if [ -n "$repo" ]; then
     exit 0
 fi
 
-if ! command -v mvn >/dev/null 2>&1; then
-    echo "delta-spark ${DELTA_VERSION}: missing and mvn is not on PATH. Fix: install Maven, or run this inside geobrix-dev." >&2
+# GBX_MVN names the Maven to run. CI sets it to ./mvnw (the pinned Maven); in geobrix-dev the
+# image's mvn is the same version, so it stays the default there.
+MVN="${GBX_MVN:-mvn}"
+if ! command -v "$MVN" >/dev/null 2>&1; then
+    echo "delta-spark ${DELTA_VERSION}: missing and ${MVN} is not available. Fix: run this inside geobrix-dev, or set GBX_MVN to a Maven 3.9.16 or ./mvnw." >&2
     exit 1
 fi
 
-echo "delta-spark ${DELTA_VERSION}: fetching with mvn dependency:get"
+echo "delta-spark ${DELTA_VERSION}: fetching with ${MVN} dependency:get"
 # Fully qualified, version-pinned plugin coordinates: the short `dependency:` prefix does not
 # resolve in geobrix-dev. -C aborts on any checksum mismatch. Maven echoes repository URLs,
 # which have no place in a log, so they are redacted (the rest of each line is kept).
 MVN_ARGS=(-B -q -C)
 [ -z "${GBX_M2_REPO:-}" ] || MVN_ARGS+=("-Dmaven.repo.local=${GBX_M2_REPO}")
 set +e
-mvn "${MVN_ARGS[@]}" \
+"$MVN" "${MVN_ARGS[@]}" \
     "org.apache.maven.plugins:maven-dependency-plugin:${DEPENDENCY_PLUGIN}:get" \
     -Dartifact="io.delta:delta-spark_${SCALA}:${DELTA_VERSION}" 2>&1 \
     | sed -E 's#https?://[^ )]+#<url>#g'

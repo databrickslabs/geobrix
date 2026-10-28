@@ -976,6 +976,73 @@ def test_vector_singlefile_nullable_attrs(spark, tmp_path):
     )
 
 
+@pytest.mark.parametrize("how", ["parts", "singleFile", "merge"])
+def test_vector_write_timestamp_attribute_is_a_cf_time_variable(spark, tmp_path, how):
+    """A TIMESTAMP attribute is written as CF time (epoch seconds + units), not a bare number.
+
+    singleFile used to fail at commit (the merge wrote a datetime into a float variable)
+    and parts failed in the task; merge must keep the units of the parts it folds.
+    """
+    import datetime
+    import os
+
+    import netCDF4
+    import shapely
+    from pyspark.sql.types import (
+        BinaryType,
+        StringType,
+        StructField,
+        StructType,
+        TimestampType,
+    )
+
+    schema = StructType(
+        [
+            StructField("seen", TimestampType(), True),
+            StructField("geom_0", BinaryType(), True),
+            StructField("geom_0_srid", StringType(), True),
+            StructField("geom_0_srid_proj", StringType(), True),
+        ]
+    )
+    utc = datetime.timezone.utc
+    when = [datetime.datetime(2026, 3, 1, 12, 30, 15, 250000, tzinfo=utc), None]
+    rows = [
+        (t, bytes(shapely.to_wkb(shapely.Point(10.0 + i, 50.0))), "4326", "EPSG:4326")
+        for i, t in enumerate(when)
+    ]
+    df = spark.createDataFrame(rows, schema).repartition(2)
+    spark.dataSource.register(NetcdfGbxDataSource)
+    out = tmp_path / "vts"
+    writer = df.write.format("netcdf_gbx").option("mode", "vector").mode("overwrite")
+    if how == "singleFile":
+        writer = writer.option("singleFile", "true")
+    writer.save(str(out))
+    if how == "merge":
+        # Fold the parts the first write left (the DataFrame rows are not re-read).
+        (
+            df.write.format("netcdf_gbx")
+            .option("mode", "vector")
+            .option("merge", "true")
+            .mode("append")
+            .save(str(out))
+        )
+    ncs = sorted(f for f in os.listdir(str(out)) if f.endswith(".nc"))
+    if how != "parts":
+        assert len(ncs) == 1, ncs
+    seen = []
+    for name in ncs:
+        with netCDF4.Dataset(os.path.join(str(out), name), "r") as nc:
+            var = nc.variables["seen"]
+            assert var.units == "seconds since 1970-01-01 00:00:00"
+            assert var.calendar == "proleptic_gregorian"
+            seen += [None if x is np.ma.masked else float(x) for x in var[:]]
+    epoch = datetime.datetime(1970, 1, 1, tzinfo=utc)
+    assert sorted(x for x in seen if x is not None) == [
+        pytest.approx((when[0] - epoch).total_seconds())
+    ]
+    assert seen.count(None) == 1
+
+
 # ---------------------------------------------------------------------------
 # merge / keepParts / fileName / partPrefix
 # ---------------------------------------------------------------------------

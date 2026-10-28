@@ -105,6 +105,31 @@ _MERGE_POINTER = (
 
 _FLOAT_NP_DTYPES = ("f4", "f8")
 
+# A TimestampType attribute is written as a CF time variable: float64 seconds since the
+# epoch (UTC) with these units, so the file carries a real time axis, not a bare number.
+_CF_TIME_UNITS = "seconds since 1970-01-01 00:00:00"
+_CF_TIME_CALENDAR = "proleptic_gregorian"
+
+
+def _cf_seconds(value):
+    """Epoch seconds of a ``datetime`` (naive = UTC); any other value as is."""
+    import datetime
+
+    if not isinstance(value, datetime.datetime):
+        return value
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=datetime.timezone.utc)
+    return (
+        value - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+    ).total_seconds()
+
+
+def _set_time_attrs(var, units) -> None:
+    """CF time attributes on ``var`` when ``units`` is set (it is a time variable)."""
+    if units:
+        var.units = units
+        var.calendar = _CF_TIME_CALENDAR
+
 
 def _count_raster_data_vars(nc) -> int:
     return len([v for v in nc.variables if v not in ("lat", "lon", "crs")])
@@ -371,8 +396,9 @@ def _vector_batches_from_ncs(paths: List[str], attr_cols: List[str]):
 def _vector_nc_attr_specs(paths: List[str]):
     """Inspect the first readable part for (attr_specs, resolved_srid).
 
-    attr_specs is an ordered list of (name, numpy-dtype like 'f8'/'i4') for the
-    obs-dimension data variables (excluding latitude/longitude/crs).
+    attr_specs is an ordered list of (name, numpy-dtype like 'f8'/'i4', time units or
+    None) for the obs-dimension data variables (excluding latitude/longitude/crs); the
+    units are those of a CF time variable, so a merge keeps it a time variable.
     """
     import netCDF4
     import numpy as np
@@ -386,7 +412,14 @@ def _vector_nc_attr_specs(paths: List[str]):
                 v = nc.variables[name]
                 if tuple(v.dimensions) != ("obs",):
                     continue
-                specs.append((name, np.dtype(v.dtype).str[1:]))
+                is_time = getattr(v, "calendar", None) == _CF_TIME_CALENDAR
+                specs.append(
+                    (
+                        name,
+                        np.dtype(v.dtype).str[1:],
+                        getattr(v, "units", None) if is_time else None,
+                    )
+                )
             srid = "4326"
             if "crs" in nc.variables:
                 se = getattr(nc.variables["crs"], "spatial_epsg", None)
@@ -398,7 +431,8 @@ def _vector_nc_attr_specs(paths: List[str]):
 
 def _merge_vector_points(batches, tmp_path: str, attr_specs, resolved_srid) -> int:
     """Stream point batches into one CF-DSG point .nc with an UNLIMITED obs
-    dim at ``tmp_path``. attr_specs is an ordered list of (name, numpy-dtype).
+    dim at ``tmp_path``. attr_specs is an ordered list of (name, numpy-dtype, time
+    units or None). A ``datetime`` value of a time variable is stored as epoch seconds.
     Returns the total number of obs written."""
     import netCDF4 as _nc4
     import numpy as np
@@ -419,13 +453,14 @@ def _merge_vector_points(batches, tmp_path: str, attr_specs, resolved_srid) -> i
             crs_var = nc.createVariable("crs", "i4")
             crs_var.spatial_epsg = int(resolved_srid)
         data_vars = {}
-        for name, d in attr_specs:
+        for name, d, units in attr_specs:
             if d in _FLOAT_NP_DTYPES:
                 dv = nc.createVariable(name, d, ("obs",), fill_value=np.nan)
             else:
                 dv = nc.createVariable(
                     name, d, ("obs",), fill_value=_nc4.default_fillvals[d]
                 )
+            _set_time_attrs(dv, units)
             dv.coordinates = "latitude longitude"
             data_vars[name] = (dv, d)
 
@@ -440,6 +475,7 @@ def _merge_vector_points(batches, tmp_path: str, attr_specs, resolved_srid) -> i
                 vals = attrs.get(name)
                 if vals is None:
                     vals = [None] * k
+                vals = [_cf_seconds(v) for v in vals]
                 if d in _FLOAT_NP_DTYPES:
                     arr = np.array(
                         [v if v is not None else np.nan for v in vals], dtype=d
@@ -841,6 +877,12 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
     def _is_float_dtype(d: str) -> bool:
         return d in ("f4", "f8")
 
+    def _time_units(self, col: str) -> Optional[str]:
+        """CF time units for a ``TimestampType`` attribute column, else ``None``."""
+        from pyspark.sql.types import TimestampType
+
+        return _CF_TIME_UNITS if isinstance(self.dtypes[col], TimestampType) else None
+
     def _write_nc(
         self,
         tmp_path: str,
@@ -858,6 +900,8 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         import netCDF4 as _nc4
         import numpy as np
         from netCDF4 import Dataset
+
+        from databricks.labs.gbx.ds import _arrow_utc
 
         nc = Dataset(tmp_path, "w")
         try:
@@ -878,6 +922,13 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             for c in self.attr_cols:
                 d = self._np_dtype(self.dtypes[c])
                 vals = attrs[c]
+                units = self._time_units(c)
+                if units:
+                    # A timestamp arrives as the worker's local time: store it as UTC.
+                    vals = [
+                        None if v is None else _cf_seconds(_arrow_utc.to_utc(v))
+                        for v in vals
+                    ]
                 if self._is_float_dtype(d):
                     arr = np.array(
                         [v if v is not None else np.nan for v in vals], dtype=d
@@ -887,6 +938,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                     fv = _nc4.default_fillvals[d]
                     arr = np.array([v if v is not None else fv for v in vals], dtype=d)
                     dv = nc.createVariable(c, d, ("obs",), fill_value=fv)
+                _set_time_attrs(dv, units)
                 dv.coordinates = "latitude longitude"
                 dv[:] = arr
         finally:
@@ -1023,7 +1075,10 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             expected += feather.read_table(frag, columns=["longitude"]).num_rows
 
         # attr_specs come from the Spark schema (dynamic vector schema).
-        attr_specs = [(c, self._np_dtype(self.dtypes[c])) for c in self.attr_cols]
+        attr_specs = [
+            (c, self._np_dtype(self.dtypes[c]), self._time_units(c))
+            for c in self.attr_cols
+        ]
 
         try:
             batches = _vector_batches_from_frags(frags, self.attr_cols)
@@ -1052,7 +1107,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             )
         # Discover attr specs + srid from the parts (schema is not threaded in).
         attr_specs, resolved_srid = _vector_nc_attr_specs(parts)
-        attr_cols = [name for name, _ in attr_specs]
+        attr_cols = [name for name, *_ in attr_specs]
         expected = 0
         for p in parts:
             with netCDF4.Dataset(p, "r") as nc:

@@ -465,6 +465,14 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     3857 tile covered columns 15-26 in RAM and 16-27 streamed, the reprojected one 0-12
     in both). On the reference grid every offset is whole and both paths agree.
 
+    MASKS (tiles in another CRS): the pixels of the reprojected tile's box that the warp does not
+    reach are zeros, which read as data unless the tile has a NoData, an alpha band or a mask band
+    to mark them. A tile with none of those, and every tile with a mask band of its own, is
+    written with the footprint of its warp as its mask band (:func:`_reproject_dataset`), so it
+    does not overwrite the pixels of the tile beside it, and the mosaic then carries a mask band
+    (a pixel no tile reaches is invalid). A group whose tiles are all in the reference CRS is
+    merged as before: a gap between tiles with no NoData is zeros, valid.
+
     TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
     merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
     differs, and returns ONE tile, the one that sorts first in byte order (probed against

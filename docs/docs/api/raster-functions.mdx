@@ -1124,7 +1124,7 @@ _Multi-row fixture: 3 H3 resolution-9 cell rows with burn values 1.0/2.0/3.0. Al
 <Tier both/> <Impl groupedAgg/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS, so a mosaic built in memory and one streamed from disk (when it is too large for memory) place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. The heavyweight `gbx_rst_merge_agg` does not merge tiles in different CRSs: it returns one tile (the one that sorts first) and leaves the others out.
+Powered by **rasterio** (`rasterio.merge`). Aggregate — `groupBy(...).agg(rx.rst_merge_agg("tile"))` merges the group's tiles into one mosaic tile (output spans the union extent). A tile in a different CRS is reprojected onto the pixel size and the pixel grid of a tile in the reference CRS, so a mosaic built in memory and one streamed from disk (when it is too large for memory) place the tiles on the same pixels. The reprojected tile can grow by up to a pixel on each side to stay on that grid. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The heavyweight `gbx_rst_merge_agg` does not merge tiles in different CRSs: it returns one tile (the one that sorts first) and leaves the others out.
 :::
 
 :::warning Lightweight SQL returns BINARY (not the tile struct)
@@ -3116,7 +3116,7 @@ The **envelope** is portable, but the **calc expression language is not fully po
 <Tier both/>
 
 :::note Lightweight tier (pyrx)
-Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (first-tile-wins on overlap, in array order). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it; the heavyweight tier does not merge tiles in different CRSs and returns one of them.
+Powered by **rasterio** (`rasterio.merge`). Takes an `ARRAY<tile>` (in one row) and mosaics them into a single tile spanning the union extent (first-tile-wins on overlap, in array order). Tiles in a different CRS are reprojected onto the pixel size and grid of a tile in the reference CRS and mosaicked with it. A tile reprojected from another CRS that declares no NoData (or has its own mask band) is written with the footprint of the warp as its mask, so the mosaic then has a mask band and a pixel no tile reaches is invalid in it; a gap between tiles that are all in the reference CRS and declare no NoData is still filled with zeros. The heavyweight tier does not merge tiles in different CRSs and returns one of them.
 :::
 
 :::note Lightweight Python — virtual-tile force-output

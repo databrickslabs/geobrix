@@ -185,7 +185,38 @@ class KernelFacadesSmokeTest extends PlanTest with SilentSparkSession {
         assert(new RstRetilePartBytesUdf().call(input, 16, 16, 0).nonEmpty)
         assert(new RstRetileArrayBytesUdf().call(input, 8, 8).size == 4)
         assert(new RstRetileCountBytesUdf().call(null, 8, 8) == null && new RstRetilePartBytesUdf().call(input, 8, 8, null) == null)
+        // The error contract of the other levels, for bytes: raster bytes that do not open are one error tile, that is
+        // one piece whose bytes are NULL (what the wrapper turns into an error tile); a parameter that is no number
+        // raises, and so does an index the count never gave.
+        val junk = Array.fill[Byte](64)(7)
+        assert(new RstRetileCountBytesUdf().call(junk, 8, 8) == 1)
+        assert(new RstRetilePartBytesUdf().call(junk, 8, 8, 0) == null)
+        assert(new RstRetileArrayBytesUdf().call(junk, 8, 8).asScala.toSeq == Seq(null))
+        assert(intercept[Exception](new RstRetileCountBytesUdf().call(input, "wide", 8)).getMessage.contains("wide"))
+        intercept[IndexOutOfBoundsException](new RstRetilePartBytesUdf().call(input, 8, 8, 4))
         RetileKernel.clear()
+    }
+
+    test("RetileKernel keys a raster by a sample of its bytes, not all of them") {
+        val big = Array.tabulate[Byte](1 << 20)(i => (i % 251).toByte)
+        def with0(at: Int): Array[Byte] = { val c = big.clone(); c(at) = (c(at) + 1).toByte; c }
+        assert(RetileKernel.key(big) == RetileKernel.key(big.clone()))
+        // the first byte, a sampled block (65536 is the start of the first), and the length are in the key
+        assert(RetileKernel.key(with0(0)) != RetileKernel.key(big) && RetileKernel.key(with0(65540)) != RetileKernel.key(big))
+        assert(RetileKernel.key(big.take(big.length - 1)) != RetileKernel.key(big))
+        // a byte between the sampled blocks is not (the price of not reading a 4096 x 4096 tile once per window)
+        assert(RetileKernel.key(with0(70000)) == RetileKernel.key(big))
+        // a small raster is keyed by all of it
+        val small = big.take(1000)
+        assert(RetileKernel.key(small.updated(500, 1.toByte)) != RetileKernel.key(small.updated(500, 2.toByte)))
+    }
+
+    test("RetileKernel empties its cache when the Spark task that filled it ends") {
+        val input = tinyGTiff()
+        val before = vsimemEntries()
+        val held = spark.sparkContext.parallelize(1 to 2, 2).map { _ => RetileKernel.open(input); RetileKernel.cached() }.collect()
+        assert(held.toSeq == Seq(1, 1)) // each task did hold the raster while it ran
+        assert(vsimemEntries() == before, "a finished task left a raster open")
     }
 
     test("RetileKernel keeps four rasters open per thread and releases the ones it pushes out") {

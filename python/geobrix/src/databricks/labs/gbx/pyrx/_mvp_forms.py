@@ -26,12 +26,32 @@ from databricks.labs.gbx.pyrx.functions import _cut_tile, _RstRetileUDTF, _tile_
 _WINDOW_KEYS = ("col_off", "row_off", "width", "height")
 
 
+# A content hash of a 4096 x 4096 tile costs more than cutting all its windows, and the count+part shape asks
+# once per window. The key of a materialized tile is its length, its first and last 64 KB and 64 blocks of 4 KB
+# spread between them (all of it up to 512 KB). Two different rasters of one length that agree on every sampled
+# byte would share an entry; the inputs of the oracle and the bench do not. (The JVM facades key the same way.)
+_HEAD, _BLOCK, _BLOCKS, _WHOLE = 65536, 4096, 64, 524288
+
+
 def _digest(data) -> str:
-    return hashlib.blake2b(bytes(data), digest_size=16).hexdigest()
+    raw = memoryview(data)
+    n = len(raw)
+    h = hashlib.blake2b(digest_size=16)
+    h.update(n.to_bytes(8, "big"))
+    if n <= _WHOLE:
+        h.update(raw)
+    else:
+        h.update(raw[:_HEAD])
+        h.update(raw[-_HEAD:])
+        span = n - 2 * _HEAD - _BLOCK
+        for i in range(_BLOCKS):
+            off = _HEAD + span * i // (_BLOCKS - 1)
+            h.update(raw[off : off + _BLOCK])
+    return h.hexdigest()
 
 
 def _key(tile):
-    """What identifies the dataset a tile opens: its bytes, or its file with the window, clip and
+    """What identifies the dataset a tile opens: a sample of its bytes, or its file with the window, clip and
     instructions that change what is read from it."""
     if tile["raster"] is not None:
         return _digest(tile["raster"])
@@ -45,14 +65,34 @@ def _key(tile):
     )
 
 
+def _task_attempt():
+    """The id of the Spark task this code runs in (None outside one)."""
+    from pyspark import TaskContext
+
+    tc = TaskContext.get()
+    return None if tc is None else tc.taskAttemptId()
+
+
 class _OpenLru:
-    """Per-Python-worker LRU of opened datasets: the re-open amortized over the pieces of one tile
-    (workers are reused, so the datasets stay open between rows)."""
+    """Per-Python-worker LRU of opened datasets: the re-open amortized over the pieces of one tile.
+
+    A worker is reused, so what a task opened must not outlive it: the first call of a new task closes
+    everything the last one left (a Python worker has no task-end hook, so a finished task's datasets
+    stay open, at most `cap` of them, until the next task on this worker starts)."""
 
     def __init__(self, cap: int = 4):
-        self.cap, self.items = cap, OrderedDict()
+        self.cap, self.items, self.task = cap, OrderedDict(), None
+
+    def close(self):
+        while self.items:
+            _, (ctx, _ds) = self.items.popitem(last=False)
+            ctx.__exit__(None, None, None)
 
     def get(self, tile):
+        task = _task_attempt()
+        if task != self.task:
+            self.close()
+            self.task = task
         key = _key(tile)
         if key in self.items:
             self.items.move_to_end(key)

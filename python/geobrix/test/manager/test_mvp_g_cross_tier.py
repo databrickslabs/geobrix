@@ -16,11 +16,25 @@ from databricks.labs.gbx.bench import oracles
 RT, TE, TS = oracles.RT, oracles.TE, oracles.TS
 LAT = "SELECT t.* FROM _gbx_oracle, LATERAL {fn}({args}) t"
 INLINE = "SELECT inline({fn}({args})) FROM _gbx_oracle"
-_ROWS_OF = "SELECT explode(transform({arr}, b -> named_struct('raster', b))) AS tile FROM _gbx_oracle"
+# The Java UDFs give back bytes. This is what the manager's SQL wrapper makes of them: a tile whose raster is
+# the bytes, or an error tile (NULL raster and a reason) when they are NULL.
+_ERR = "the heavy kernel could not process this tile (see the executor log)"
+_TILE_OF = (
+    "named_struct('raster', {b}, 'path', CAST(NULL AS STRING), "
+    "'metadata', IF({b} IS NULL, map('last_error', '"
+    + _ERR
+    + "'), CAST(map() AS map<string,string>)))"
+)
+_ROWS_OF = (
+    "SELECT explode(transform({arr}, b -> "
+    + _TILE_OF.format(b="b")
+    + ")) AS tile FROM _gbx_oracle"
+)
 
 # Shape: the level it exercises ("-" = a probe form registered under its own name), the SQL, the
-# functions it answers for (and the case kinds it can judge), and the name the SQL calls.
-Shape = namedtuple("Shape", "level sql fns kinds name_of pad")
+# functions it answers for (and the case kinds it can judge), the name the SQL calls, whether to fill in
+# the default arguments, and the rows it cannot judge.
+Shape = namedtuple("Shape", "level sql fns kinds name_of pad skip", defaults=((),))
 ANY = ("windows", "no_rows", "error_tile", "cells", "raises")
 PROBE = (
     "windows",
@@ -48,8 +62,9 @@ SHAPES = {
         "-", NAMED["gbx_mvp_rst_retile_part"], (RT,), PROBE, None, False
     ),
     "udtf_arrow": Shape("-", LAT, (RT, TE), ANY, lambda f: f + "_mvp_arrow", False),
-    # probe forms: the Java UDF facades on bytes (L2). They take raster bytes, so an error tile has
-    # nowhere to ride and is not judged; a fixed-arity UDF is called with the defaults filled in.
+    # probe forms: the Java UDF facades on bytes (L2). A fixed-arity UDF is called with the defaults filled in. A
+    # raster that does not open is one error tile, as on the other levels; an error tile IN is the wrapper's to
+    # pass on (the facade only sees bytes, and a tile with no raster has none), so that row is not judged here.
     "l2_array_inline": Shape(
         "-",
         INLINE,
@@ -62,18 +77,22 @@ SHAPES = {
         "-",
         _ROWS_OF.format(arr="gbx_mvp_rst_retile_array_l2(c0.raster, c1, c2)"),
         (RT,),
-        PROBE,
+        PROBE + ("error_tile",),
         None,
         False,
+        ("rt_error_in",),
     ),
     "l2_retile_count_part": Shape(
         "-",
-        "SELECT named_struct('raster', gbx_mvp_rst_retile_part_l2(c0.raster, c1, c2, i)) AS tile FROM _gbx_oracle "
-        "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count_l2(c0.raster, c1, c2) - 1)) x AS i",
+        "SELECT "
+        + _TILE_OF.format(b="p")
+        + " AS tile FROM (SELECT gbx_mvp_rst_retile_part_l2(c0.raster, c1, c2, i) AS p FROM _gbx_oracle "
+        "LATERAL VIEW explode(sequence(0, gbx_mvp_rst_retile_count_l2(c0.raster, c1, c2) - 1)) x AS i)",
         (RT,),
-        PROBE,
+        PROBE + ("error_tile",),
         None,
         False,
+        ("rt_error_in",),
     ),
 }
 JVM = {
@@ -107,7 +126,10 @@ def test_mvp_g_oracle(request, tmp_path, shape):
         rows = [
             c
             for c in oracles.MVP_G
-            if c.fn == fn and c.kind in s.kinds and "session" in c.surfaces
+            if c.fn == fn
+            and c.kind in s.kinds
+            and "session" in c.surfaces
+            and c.cid not in s.skip
         ]
         assert rows, f"{shape}: no oracle rows for {fn}"
         ran = oracles.run_rows(

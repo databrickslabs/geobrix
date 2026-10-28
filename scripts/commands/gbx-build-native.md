@@ -1,6 +1,6 @@
 # gbx:build:native
 
-Builds the GeoBrix native stack inside one pinned `manylinux_2_28` container (`scripts/native/build.Dockerfile`), for x86_64 and aarch64. The `toolchain` target is the build container itself: Python 3.12 build tools (cmake, ninja, Cython, numpy 2.1.3, maturin, auditwheel, patchelf), OpenJDK 17, SWIG, Ant, and the pinned Rust toolchain with `cargo-deny`. Later targets build on it: `stage-native` is GDAL, PROJ, GEOS and every library they need, built from source in the same container (below); `bindings` is the Python bindings built against it. Every version comes from `scripts/native/pins.conf`. Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. It does still download two things from public hosts while it builds: the JDK (dnf, from the base image's distribution repositories) and the Rust toolchain (`rustup toolchain install` from static.rust-lang.org, checked by rustup against a manifest it fetches itself). Rust crates are the part that is truly offline: they build with `--network none` from sources vendored on the host.
+Builds the GeoBrix native stack inside one pinned `manylinux_2_28` container (`scripts/native/build.Dockerfile`), for x86_64 and aarch64. The `toolchain` target is the build container itself: Python 3.12 build tools (cmake, ninja, Cython, numpy 2.1.3, maturin, auditwheel, patchelf), OpenJDK 17, SWIG, Ant, and the pinned Rust toolchain with `cargo-deny`. Later targets build on it: `stage-native` is GDAL, PROJ, GEOS and every library they need, built from source in the same container (below); `bindings` is rasterio, pyogrio, pyproj, shapely and netCDF4 built from their sdists against it. Every version comes from `scripts/native/pins.conf`. Source tarballs, Python wheels, `rustup-init` and `cargo-deny` are fetched and checksum-checked on the host first (`scripts/native/prefetch.sh`), so the image build needs no package index. It does still download two things from public hosts while it builds: the JDK (dnf, from the base image's distribution repositories) and the Rust toolchain (`rustup toolchain install` from static.rust-lang.org, checked by rustup against a manifest it fetches itself). Rust crates are the part that is truly offline: they build with `--network none` from sources vendored on the host.
 
 ## Usage
 
@@ -11,7 +11,7 @@ bash scripts/commands/gbx-build-native.sh [--arch x86_64|aarch64|both] [--target
 ## Options
 
 - `--arch x86_64|aarch64|both` - default: this machine's architecture. `both` builds aarch64 first, then x86_64. The architecture that is not the host's runs under emulation and is much slower.
-- `--target toolchain|stage-native|bindings` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`. `stage-native` and `bindings` build on the toolchain image `geobrix-native-build:toolchain-<hash>-<arch>`: it is built first when missing, and an existing one is used as it is; a change to the toolchain stage or to a file it copies changes `<hash>`, so the next build makes a new toolchain image.
+- `--target toolchain|stage-native|bindings` - default `bindings`. A target whose stage is not in `build.Dockerfile` yet stops with `PRECONDITION MISSING`. `stage-native` and `bindings` (which builds on `stage-native`, cached) build on the toolchain image `geobrix-native-build:toolchain-<hash>-<arch>`: it is built first when missing, and an existing one is used as it is; a change to the toolchain stage or to a file it copies changes `<hash>`, so the next build makes a new toolchain image.
 - `--no-cache` - Rebuild every layer. A cold build's seconds are the full cost; a cached one reports only the layers that changed.
 - `--log <path>` - Write output to a log file (filename goes to `test-logs/<name>`, relative paths go under `test-logs/`, absolute paths are used as-is)
 - `--help` - Display help message
@@ -57,6 +57,29 @@ Per architecture, `scripts/native/verify-native.sh` runs in the toolchain image 
 8. The dev kit: a C program built against `include/` + `lib-dev/` through `pkg-config`, through `gdal-config` and through CMake `find_package(GDAL)`, run with no library path.
 
 To use the tree for a build: `export PKG_CONFIG_PATH=<root>/lib/pkgconfig LIBRARY_PATH=<root>/lib-dev GDAL_CONFIG=<root>/bin/gdal-config CMAKE_PREFIX_PATH=<root>`.
+
+## What `--target bindings` builds and checks
+
+Stage `bindings` (`FROM stage-native`) builds `shapely`, `pyproj`, `pyogrio`, `rasterio` and `netCDF4` from the sdists in `build/native/sdists/` (sha256 from `pins.conf`, fetched by `prefetch.sh` from the project's path on the public file host) with `scripts/native/build-bindings.sh`, `--no-index --no-build-isolation`. Their own build requirements are hashed and offline (`scripts/native/bindings-requirements-<arch>.txt`, installed in this stage, not in the toolchain, so changing them does not change the toolchain tag and rebuild GDAL). They link through `gdal-native`'s `lib-dev/` and `gdal-config`, `geos-config`, `nc-config`, pkg-config (never CMake's `find_package`), so each records the hashed SONAME of every library it needs. Python's own compile flags are kept (a `CFLAGS` in the environment replaces them in setuptools: `-g0` alone builds at `-O0`, and netCDF4 then fails to load). Output `build/native/out/<arch>/bindings/`:
+
+| Path | Holds |
+|---|---|
+| `vendor/` | the content of `_vendor/<arch>/`: the five packages from the wheels, no `*.dist-info`, RUNPATH `$ORIGIN/.../_native/<arch>/lib` (the layout is `_vendor/<arch>` beside `_native/<arch>/lib`) |
+| `dist/rasterio-<RASTERIO_VERSION>+gbx<GBX_NATIVE_REVISION>-cp312-cp312-linux_<arch>.whl` | our rasterio as an installable distribution: dist-info kept, the `click>=4.0,!=8.2.*` requirement relaxed to `click>=4.0` (`relax-click.py`, so the env6 base's click 8.2.1 is admitted), RUNPATH `$ORIGIN/../databricks/labs/gbx/_native/<arch>/lib`, so it needs the geobrix payload installed beside it |
+| `wheels/` | the five wheels as built (`linux_<arch>`) |
+| `build-seconds.txt`, `build.txt` | seconds per binding; the image build |
+| `p11.json`, `test.txt`, `test-results/` | the probe (below) |
+
+Per architecture, `scripts/native/test-bindings.sh` runs in the toolchain image with `--network none`, the `stage-native` export mounted read-only, and prints `ok: <check>` or `TEST FAILED: <what>`:
+
+1. The payload layout is assembled (`_native/<arch>/lib`, `_native/share`, `_vendor/<arch>` side by side) and the ELF closure of the vendored tree holds: each file has a RUNPATH that resolves to `lib/` and no RPATH, each NEEDED is in `lib/` or the glibc/libstdc++ set.
+2. Three venvs from the hashed test wheelhouse (`test-requirements{,-newclick}-<arch>.txt`): click 8.2.1, the newest click rasterio accepts, and the PyPI wheels of the same versions as the baseline (netCDF4 1.7.5.1 has no binary wheel on PyPI: the newest wheel below it).
+3. All five import from `_vendor/<arch>`; the GDAL, PROJ, GEOS, netCDF-C and HDF5 versions they report equal the pins; `libgdal`, `libproj`, `libgeos_c`, `libnetcdf` and `libhdf5` are mapped only from the payload. (`GDAL_DATA` and `PROJ_DATA` are set in the environment before the first import.)
+4. Each binding's own suite runs against the vendored package, the test directory taken out of its sdist (`pytest --pyargs`-equivalent for shapely and pyogrio, `-m "not network"` for pyproj and rasterio, `pytest test` and `run_all.py` for netCDF4). rasterio's `tests/data` comes from the project's tag archive (its sdist ships none; `scripts/native/test-data.conf`, sha256-checked by `prefetch.sh`). The payload's `gdalinfo`, `ogrinfo` and `projinfo` are on `PATH` (rasterio's `gdalbin` tests call `gdalinfo`; there is no `gdalwarp`). The rasterio suite has our rasterio's dist-info on the path beside the vendored code (the vendored tree has none, and `rio` finds its commands through entry points); the other bindings' console scripts do not exist in the vendored layout, so the tests that run them fail here and against the PyPI wheel alike (environmental).
+5. Every failure is repeated: in the same environment (flaky), for rasterio with the newest click (a pass there is click-attributable: a `cli_failure` when it comes from the `rio` command line, a `library_failure` otherwise), then against the PyPI wheel (still failing there: environmental; passing there: a regression). A pytest process that dies on a signal is a crash of that test: recorded, deselected, and the run continues.
+6. The rasterio distribution wheel installs beside the payload, imports without `PYTHONPATH`, has the relaxed requirement, and `rio info` runs.
+
+`p11.json` is `{<binding>: {version, baseline_version, build_s, test_s, passed, failed, skipped, crashed, regressions, environmental, flaky}, rasterio also click_8_2_1: {cli_failures, library_failures}}` with the test ids as lists, and the reported stack versions.
 
 ## Rust crates from other tasks
 

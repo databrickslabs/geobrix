@@ -77,3 +77,18 @@ RUN bash /recipes/stage-payload.sh
 
 FROM scratch AS export-stage-native
 COPY --from=stage-native /stage/gdal-native /gdal-native
+
+# ---------- bindings: rasterio, pyogrio, pyproj, shapely and netCDF4 built from their sdists against the staged tree ----------
+# They link through gdal-native's lib-dev/ (so each records the hashed SONAME of every library) and are packaged by
+# build-bindings.sh into out/<arch>/bindings/{wheels,vendor,dist}. Their own build requirements (hashed, offline) are
+# installed here and not in the toolchain stage, so a change to them does not change the toolchain image tag and
+# rebuild GDAL. The sdists are bind-mounted from the context; every build directory is in RAM.
+FROM stage-native AS bindings
+ARG GBX_ARCH
+COPY recipes/pins.conf recipes/build-bindings.sh recipes/relax-click.py recipes/set-rpath.py recipes/bindings-requirements-${GBX_ARCH}.txt /recipes/
+RUN --mount=type=bind,source=wheelhouse-bindings/${GBX_ARCH},target=/wheelhouse-bindings \
+    $PY -m pip install --no-index --find-links /wheelhouse-bindings --require-hashes -r /recipes/bindings-requirements-${GBX_ARCH}.txt
+RUN --mount=type=bind,source=sdists,target=/sdists --mount=type=tmpfs,target=/tmp/gbx-build,size=6442450944 bash /recipes/build-bindings.sh
+
+FROM scratch AS export-bindings
+COPY --from=bindings /out /

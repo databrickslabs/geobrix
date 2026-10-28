@@ -1,0 +1,29 @@
+# The test environment of the bindings probe (task N4, scripts/native/test-bindings.sh), shared by the two locks:
+# test-requirements.in (click 8.2.1, the env6 base) and test-requirements-newclick.in (the newest click rasterio accepts).
+# The five bindings themselves are NOT here: they are the thing under test (ours, vendored; the PyPI wheels as baseline).
+# What each binding's own suite needs: rasterio[test] (aiohttp, boto3, fsspec, hypothesis, matplotlib, packaging,
+# pytest, pytest-cov, requests; shapely is under test), pyogrio[test] (pytest, pytest-cov), pyproj's test group
+# (numpy, packaging, pandas, pytest, pytest-cov, xarray), shapely's tests group (pytest, pytest-cov, scipy-doctest),
+# netCDF4's test group (pytest; its run_all.py also imports Cython); and the bindings' runtime requirements (cftime, affine, attrs, certifi, cligj,
+# click-plugins, pyparsing, numpy).
+pytest
+pytest-cov
+hypothesis
+packaging
+cftime
+affine
+attrs
+certifi
+cligj
+click-plugins
+pyparsing
+numpy==2.1.3
+aiohttp
+boto3
+fsspec
+matplotlib
+requests
+pandas
+xarray
+scipy-doctest
+Cython

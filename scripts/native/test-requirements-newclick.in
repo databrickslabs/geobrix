@@ -1,0 +1,6 @@
+# The same test environment with the newest click that rasterio's published requirement (`click>=4.0,!=8.2.*`) accepts:
+# a rasterio failure that passes here and fails with click 8.2.1 is click-attributable. Locked per architecture:
+#   uv pip compile --generate-hashes --python-version 3.12 --python-platform <arch>-manylinux_2_28 \
+#     scripts/native/test-requirements-newclick.in -o scripts/native/test-requirements-newclick-<arch>.txt
+-r test-requirements-base.in
+click>=4.0,!=8.2.*

@@ -1,0 +1,16 @@
+# What the five Python-binding sdists need beyond the toolchain's own build requirements (build-requirements.in), task N4.
+# Read with tomllib from each sdist's [build-system] requires:
+#   rasterio 1.5.2    setuptools>=77.0.3, cython>=3.1,<=3.3, numpy>=2,<3
+#   pyogrio 0.13.0    setuptools, Cython>=3.1, versioneer[toml]==0.28
+#   pyproj 3.8.0      setuptools>=77.0.1, cython>=3.1
+#   shapely 2.2.0     Cython, meson-python>=0.15.0,!=0.22.0, numpy>=1.26,<3 (build group: meson>=1.2.1, ninja)
+#   netCDF4 1.7.5.1   Cython>=0.29, numpy>=2.0.0, setuptools>=77.0.1, setuptools_scm[toml]>=3.4
+# Cython, numpy, setuptools, ninja and wheel are already installed by the toolchain; the lock is made against its lock so
+# none of them moves. Installed in the `bindings` stage (not the toolchain), so adding a requirement here does not
+# change the toolchain image tag and rebuild GDAL. Locked per architecture with hashes:
+#   uv pip compile --generate-hashes --python-version 3.12 --python-platform <arch>-manylinux_2_28 \
+#     -c scripts/native/build-requirements-<arch>.txt scripts/native/bindings-requirements.in -o scripts/native/bindings-requirements-<arch>.txt
+meson-python>=0.15.0,!=0.22.0
+meson>=1.2.1
+versioneer[toml]==0.28
+setuptools_scm[toml]>=3.4

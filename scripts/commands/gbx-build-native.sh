@@ -27,7 +27,9 @@ usage() {
     echo "            stage-native GDAL, PROJ, GEOS and every library they need, built from source, with the JNI library, the Java"
     echo "                         classes and osgeo from the same build: build/native/out/<arch>/stage-native/gdal-native/. Verified by"
     echo "                         scripts/native/verify-native.sh (licence guard, drivers, ELF closure, auditwheel, JNI, osgeo, HTTPS, dev kit)"
-    echo "            bindings     the Python bindings built against it (default)"
+    echo "            bindings     rasterio, pyogrio, pyproj, shapely and netCDF4 built from their sdists against that tree:"
+    echo "                         build/native/out/<arch>/bindings/{vendor,dist,wheels}. Verified by scripts/native/test-bindings.sh, which"
+    echo "                         runs each binding's own test suite against it and writes p11.json (default)"
     echo "  --no-cache  Rebuild every layer (a cold build; the seconds it reports are then the full cost)"
     echo "  --log     Log file (filename -> test-logs/<name>; relative -> under test-logs/; absolute as-is)"
     echo ""
@@ -82,12 +84,13 @@ clone() { if [ "$(uname -s)" = Darwin ]; then cp -cR "$1" "$2"; else cp -R --ref
 assemble_ctx() {
     local a="$1" ctx="$GBX_NATIVE_BUILD/ctx/$1"
     rm -rf "$ctx"
-    mkdir -p "$ctx/wheelhouse" "$ctx/bin"
+    mkdir -p "$ctx/wheelhouse" "$ctx/wheelhouse-bindings" "$ctx/bin"
     clone scripts/native "$ctx/recipes"
     rm -rf "$ctx/recipes/__pycache__" "$ctx/recipes/rust-smoke/target"
     cp rust-toolchain.toml "$ctx/rust-toolchain.toml"
     clone "$GBX_NATIVE_BUILD/src" "$ctx/src"
     clone "$GBX_NATIVE_BUILD/wheelhouse/$a" "$ctx/wheelhouse/$a"
+    clone "$GBX_NATIVE_BUILD/wheelhouse-bindings/$a" "$ctx/wheelhouse-bindings/$a"
     clone "$GBX_NATIVE_BUILD/bin/$a" "$ctx/bin/$a"
     clone "$GBX_NATIVE_BUILD/sdists" "$ctx/sdists"
 }
@@ -161,6 +164,21 @@ verify_stage_native() {
         "geobrix-native-build:toolchain-$h-$a" bash /verify/verify-native.sh /gdal-native 2>&1 | tee "$out/verify.txt"
 }
 
+# The bindings against gdal-native as exported by stage-native (the tree the bindings were linked against), with the
+# hashed test environment, the sdists (for their test directories) and the PyPI wheels (the baseline), --network none.
+# test-bindings.sh prints `ok: <check>` / `TEST FAILED: <what>` and writes /bindings/p11.json.
+verify_bindings() {
+    local a="$1" plat="$2" out="$3" h="$4"
+    local sn="$GBX_NATIVE_BUILD/out/$a/stage-native/gdal-native"
+    [ -d "$sn" ] || { echo "PRECONDITION MISSING: $sn (build --target stage-native first); the bindings were not tested"; return 1; }
+    echo "== test $a: $out against $sn in geobrix-native-build:toolchain-$h-$a (--network none)"
+    docker run --rm --network none --platform "$plat" \
+        -v "$sn:/gdal-native:ro" -v "$out:/bindings" -v "$GBX_NATIVE_BUILD/sdists:/sdists:ro" \
+        -v "$GBX_NATIVE_BUILD/wheelhouse-test/$a:/wheelhouse-test:ro" -v "$GBX_NATIVE_BUILD/wheelhouse-pypi/$a:/wheelhouse-pypi:ro" \
+        -v "$PROJECT_ROOT/scripts/native:/verify:ro" "geobrix-native-build:toolchain-$h-$a" bash /verify/test-bindings.sh /gdal-native /bindings 2>&1 \
+        | tee "$out/test.txt"
+}
+
 build_arch() {
     local a="$1" plat upper tag out h args=() flag kv t0 t1 t2 size
     case "$a" in x86_64) plat=linux/amd64; upper=X86_64 ;; aarch64) plat=linux/arm64; upper=AARCH64 ;; esac
@@ -204,6 +222,7 @@ build_arch() {
     case "$TARGET" in
         toolchain) verify_toolchain "$a" "$plat" "$tag" ;;
         stage-native) verify_stage_native "$a" "$plat" "$out" "$h" ;;
+        bindings) verify_bindings "$a" "$plat" "$out" "$h" ;;
         *) echo "VERIFY FAILED: no verify for target $TARGET"; return 1 ;;
     esac
     echo "NATIVE_VERIFIED arch=$a target=$TARGET total_seconds=$(($(date +%s) - t0)) image=$tag"

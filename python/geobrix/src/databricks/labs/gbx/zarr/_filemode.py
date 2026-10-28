@@ -45,6 +45,7 @@ __all__ = [
     "layout_for",
     "path_of",
     "relative_to",
+    "require_file_compute",
     "require_geobrix_files",
     "resolve",
     "table_properties",
@@ -184,6 +185,25 @@ def require_geobrix_files(
         f"{label} keeps its files in file_mode {mode!r}, which GeoBrix does not "
         f"{verb} yet",
         fix=f"use a store with file_mode {' or '.join(map(repr, GEOBRIX_FILE_MODES))}",
+    )
+
+
+def require_file_compute(spark, label: str, mode: str) -> None:
+    """Raise ``ZarrUnsupported`` when the store ``label``, which keeps its files as FILE values
+    (``external`` or ``managed``), is used from compute that does not support them.
+
+    A FILE store is made on a runtime with the File type preview, and its manifest cannot be
+    committed to there: the commit mints each value with ``try_to_file``, a function Serverless
+    and the Container Services image lack. What reading such a store does there has not been
+    verified, so it is refused the same way, before anything is written. ``fuse`` stores pass
+    without a probe; for the others ``file_supported`` caches its answer per session."""
+    if mode == "fuse" or file_supported(spark):
+        return
+    raise ZarrUnsupported(
+        f"{label} keeps its files as FILE values (file_mode={mode!r}), and this compute "
+        "does not support FILE values, so it can neither read, write nor maintain the store",
+        fix="use FILE-enabled compute (a classic cluster in a workspace with the File type "
+        "preview); create the stores that Serverless also uses with file_mode='fuse'",
     )
 
 

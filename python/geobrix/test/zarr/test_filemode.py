@@ -177,6 +177,62 @@ def test_registered_base_never_managed(file_support):
         M.create_manifest(None, "t", _props("managed", kind="registered", root="/base"))
 
 
+@pytest.mark.parametrize(
+    "entry",
+    [
+        "read",
+        "write",
+        "sync",
+        "publish",
+        "optimize",
+        "vacuum",
+        "restore",
+        "tag",
+        "untag",
+        "history",
+        "export",
+    ],
+)
+def test_a_file_store_is_refused_on_compute_without_file(
+    spark_delta, tmp_path, fake_file_type, monkeypatch, entry
+):
+    """A store `auto` made in FILE mode on a runtime with the File type preview is used only
+    where FILE values work: every entry point refuses with a Fix, before it writes a file.
+    """
+    from databricks.labs.gbx.zarr import _sync as SY
+    from databricks.labs.gbx.zarr._export import gbx_zarr_export
+    from databricks.labs.gbx.zarr._read import gbx_zarr_read
+
+    root = tmp_path / "store"
+    root.mkdir()
+    table = f"zf_{uuid.uuid4().hex[:8]}"
+    M.create_manifest(spark_delta, table, _props("external", root=str(root)))
+    data = era5_like_dataset().isel(time=slice(0, 12), latitude=slice(0, 5))
+    calls = {
+        "read": lambda: gbx_zarr_read(spark_delta, table),
+        "write": lambda: gbx_zarr_write(data, table, mode="append", spark=spark_delta),
+        "sync": lambda: SY.gbx_zarr_sync(spark_delta, table),
+        "publish": lambda: SY.publish(spark_delta, table),
+        "optimize": lambda: MT.gbx_zarr_optimize(spark_delta, table),
+        "vacuum": lambda: MT.gbx_zarr_vacuum(spark_delta, table),
+        "restore": lambda: MT.gbx_zarr_restore(spark_delta, table, version_as_of=0),
+        "tag": lambda: MT.gbx_zarr_tag(spark_delta, table, "v1"),
+        "untag": lambda: MT.gbx_zarr_untag(spark_delta, table, "v1"),
+        "history": lambda: MT.gbx_zarr_history(spark_delta, table),
+        "export": lambda: gbx_zarr_export(spark_delta, table, str(tmp_path / "copy")),
+    }
+    monkeypatch.setattr(FM, "file_supported", lambda spark: False)
+    try:
+        with pytest.raises(ZarrUnsupported, match="FILE values") as e:
+            calls[entry]()
+        assert "Fix:" in str(e.value) and "FILE-enabled compute" in e.value.fix
+        assert list(root.iterdir()) == [] and not (tmp_path / "copy").exists()
+        monkeypatch.setattr(FM, "file_supported", lambda spark: True)
+        M.read_props(spark_delta, table, need_file=True)  # FILE compute: no refusal
+    finally:
+        spark_delta.sql(f"DROP TABLE IF EXISTS {table}")
+
+
 # --- the DDL and the commit each mode emits ------------------------------------------------
 
 

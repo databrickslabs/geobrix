@@ -335,7 +335,7 @@ def _open_table(spark, table, version_as_of, timestamp_as_of) -> _Source:
     from databricks.labs.gbx.zarr._filemode import FileLayout
     from databricks.labs.gbx.zarr._manifest import read_props, read_rows, snapshot
 
-    props = read_props(spark, table)
+    props = read_props(spark, table, need_file=True)
     snap = snapshot(
         spark,
         table,

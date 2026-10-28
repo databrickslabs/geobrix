@@ -504,7 +504,7 @@ def _release(spark, table: str, lock: str, files: FileLayout | None = None) -> N
 
 
 def _registered(spark, table: str, what: str) -> M.StoreProps:
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if props.kind != "registered":
         raise ZarrUnsupported(
             f"{what} applies to a store registered in place, and {table} holds its own data",
@@ -847,7 +847,7 @@ def publish(spark, table: str, *, break_lock: bool = False) -> int:
     refuses it. Once the lock is at least an hour old, ``break_lock=True`` replaces it; a
     younger lock is never broken, since its publish may still be writing.
     """
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if props.kind != "registered":
         raise ZarrReadOnly(
             f"{table} holds its own data, so there is no store to publish into",

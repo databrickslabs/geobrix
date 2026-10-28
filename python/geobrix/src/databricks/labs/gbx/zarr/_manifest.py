@@ -34,6 +34,7 @@ from databricks.labs.gbx.zarr._filemode import (
     layout_for,
     path_of,
     relative_to,
+    require_file_compute,
     require_geobrix_files,
     table_properties,
 )
@@ -528,8 +529,12 @@ def _stored_files(rows: pa.Table, layout: FileLayout) -> pa.Table:
     )
 
 
-def read_props(spark, table: str) -> StoreProps:
-    """The store properties recorded on the manifest table."""
+def read_props(spark, table: str, *, need_file: bool = False) -> StoreProps:
+    """The store properties recorded on the manifest table.
+
+    ``need_file``: the call is about to read, write or maintain the store, so a store that
+    keeps FILE values must be on compute that supports them (``ZarrUnsupported`` otherwise,
+    with a Fix, before any file is written)."""
     tp = _tblprops(spark, table)
     fmt = tp.get(PROP_PREFIX + "format")
     if fmt is None:
@@ -542,7 +547,7 @@ def read_props(spark, table: str) -> StoreProps:
             f"{table} uses manifest format {fmt}, this GeoBrix reads format {FORMAT_VERSION}",
             fix="upgrade GeoBrix to a release that reads this manifest format",
         )
-    return StoreProps(
+    props = StoreProps(
         kind=tp[PROP_PREFIX + "kind"],
         root=tp[PROP_PREFIX + "root"],
         overlay_root=tp.get(PROP_PREFIX + "overlay_root") or None,
@@ -550,6 +555,9 @@ def read_props(spark, table: str) -> StoreProps:
         file_mode=tp[PROP_PREFIX + "file_mode"],
         retain=tp[PROP_PREFIX + "retain"],
     )
+    if need_file:
+        require_file_compute(spark, table, props.file_mode)
+    return props
 
 
 # --- snapshots --------------------------------------------------------------------

@@ -363,7 +363,7 @@ def _optimize(
             f"target_file_mb must be a whole number of MB, at least 1; got "
             f"{target_file_mb!r}. Fix: pass target_file_mb=128."
         )
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     require_geobrix_files(table, props.file_mode, "write")
     root, base = _roots(spark, table, props)
     if root is None:
@@ -814,7 +814,7 @@ def gbx_zarr_vacuum(
     owns the files and this runs Delta's ``VACUUM`` (a ``retain`` shorter than the store's
     changes nothing there). ``fuse`` and ``external`` stores are vacuumed by GeoBrix.
     """
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     seconds, store_seconds = _check_retain(table, props, retain, force)
     now = _utcnow()
     tp = M._tblprops(spark, table)
@@ -921,7 +921,7 @@ def gbx_zarr_tag(spark, table: str, name: str, *, version_as_of=None) -> None:
     ``ZarrVersionUnavailable``.
     """
     M.check_tag(name)
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if _tag_exists(spark, table, name):
         raise ValueError(
             f"tag {name!r} already exists in {table}. Fix: pick another name, or remove "
@@ -972,7 +972,7 @@ def gbx_zarr_untag(spark, table: str, name: str) -> None:
     the next vacuum unless a live row or another tag still points at them. A tag that does
     not exist raises ``ZarrVersionUnavailable``."""
     M.check_tag(name)
-    M.read_props(spark, table)
+    M.read_props(spark, table, need_file=True)
     if not _tag_exists(spark, table, name):
         raise ZarrVersionUnavailable(
             f"tag {name!r} does not exist in {table}",
@@ -1010,7 +1010,7 @@ def gbx_zarr_history(spark, table: str):
     """
     from pyspark.sql import functions as F
 
-    M.read_props(spark, table)
+    M.read_props(spark, table, need_file=True)
     sql_table = M._q(table)
     commits = spark.sql(
         f"SELECT _metadata.row_commit_version AS version, key AS write_id, meta "
@@ -1213,7 +1213,7 @@ def gbx_zarr_restore(
             "pass version_as_of or timestamp_as_of. Fix: give the version, tag or time "
             "to restore."
         )
-    props = M.read_props(spark, table)
+    props = M.read_props(spark, table, need_file=True)
     if props.kind == "registered" and not props.writable:
         raise ZarrReadOnly(
             f"{table} is a read-only registration of {props.root}, so it cannot be "

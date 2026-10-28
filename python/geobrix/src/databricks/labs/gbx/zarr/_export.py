@@ -678,7 +678,7 @@ def gbx_zarr_export(
         _check_copy_target(path, to)
     else:
         _check_reference_target(path, to)
-    props = M.read_props(spark, source)
+    props = M.read_props(spark, source, need_file=True)
     require_geobrix_files(source, props.file_mode, "export")
     src = _open_table(spark, source, version_as_of, None)
     reach = FUSE

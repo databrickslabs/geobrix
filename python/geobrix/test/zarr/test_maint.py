@@ -19,6 +19,7 @@ xr = pytest.importorskip("xarray")
 
 from test.zarr import _helpers as H  # noqa: E402
 
+from databricks.labs.gbx.zarr import _filemode as FM  # noqa: E402
 from databricks.labs.gbx.zarr import _maint  # noqa: E402
 from databricks.labs.gbx.zarr import _write  # noqa: E402
 from databricks.labs.gbx.zarr import _manifest as M  # noqa: E402
@@ -740,6 +741,7 @@ def test_vacuum_of_a_file_mode_managed_store_runs_delta_vacuum(
     plain VACUUM runs, never a RETAIN clause, so retentionDurationCheck is never touched.
     GeoBrix does not write the files of a managed store."""
     monkeypatch.setattr(M, "file_column_type", lambda mode: "STRING")  # no FILE in OSS
+    monkeypatch.setattr(FM, "file_supported", lambda spark: True)  # a FILE runtime
     table = _table("fm")
     drop(table)
     M.create_manifest(

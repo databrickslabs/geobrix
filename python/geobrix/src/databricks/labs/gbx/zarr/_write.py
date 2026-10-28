@@ -2915,7 +2915,7 @@ def gbx_zarr_write(
                 f"{target} does not exist",
                 fix="create the store with mode='create' (or register an existing one)",
             )
-        props = M.read_props(spark, target)
+        props = M.read_props(spark, target, need_file=True)
         plan = _plan_existing(
             spark,
             target,
@@ -2955,7 +2955,9 @@ def gbx_zarr_write(
         retain=retain,
     )
     # an adopted table keeps the mode it was made with
-    plan.files = FileLayout.of(M.read_props(spark, target) if adopt else new_props)
+    plan.files = FileLayout.of(
+        M.read_props(spark, target, need_file=True) if adopt else new_props
+    )
     claimed = made = False
     try:
         claimed = claim_root(spark, data_root, owner, "managed")

@@ -122,7 +122,7 @@ Commands follow **`gbx:<category>:<action>`**:
 |----------|---------|
 | `test` | Run tests (Scala, Python, docs, SQL docs, notebooks, function-info) |
 | `coverage` | Code coverage (Scala/Python, unit/docs, gaps, baseline, package-targeted) |
-| `data` | Sample data: download (essential/complete bundle), generate minimal bundle, stage JAR/wheel to Volume |
+| `data` | Sample data: download (essential/complete bundle), generate minimal bundle, stage sample data and JAR/wheel to Volume |
 | `docs` | Documentation server (start, stop, restart, dev, serve-local, static-build, function-info) |
 | `docker` | Container lifecycle (exec, start, stop, restart, rebuild, attach) |
 | `ci` | CI / GitHub Actions: push, trigger, status, watch, logs, docs menu, setup |
@@ -166,7 +166,8 @@ Doc tests use the **in-repo minimal bundle** (no download step). Generate it onc
 | Command | When to use | What it does |
 |---------|-------------|--------------|
 | `gbx:data:download` | Need full sample data locally | Downloads essential and/or complete bundle to `sample-data/` |
-| `gbx:data:generate-minimal-bundle` | CI or doc tests; after full bundle if needed | Generates minimal bundle under `sample-data/Volumes/.../test-data/geobrix-examples/` by bbox extraction (NYC/London, `--bbox-size`, `--max-rows`); doc test commands use this, not a download step |
+| `gbx:data:generate-minimal-bundle` | CI or doc tests; after full bundle if needed | Generates minimal bundle under `sample-data/Volumes/.../test-data/geobrix-examples/` by bbox extraction (NYC/London, `--bbox-size`, `--max-rows`) plus a small synthetic ERA5-like Zarr cube (`global/era5-weather/`; `--zarr-only` writes just the cube); doc test commands use this, not a download step |
+| `gbx:data:stage-sample` | Stage a sample dataset (default: the Zarr ERA5-like cube) to a Volume | Needs `--profile`; uploads `global/era5-weather/` of the minimal bundle to `<volume-root>/geobrix-examples/` (default Volume `/Volumes/geospatial_docs/geobrix/sample-data`), checks every size, removes remote files the local copy lacks; `--dry-run` lists the files without contacting a workspace |
 | `gbx:data:stage-wheel` | Stage built JAR and wheel to Volumes | Builds JAR first (stage-jar) unless `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` or `GBX_BUNDLE_SKIP_JAR=1` (either skips the JAR build and upload), then clears `python/geobrix/dist`, runs `python3 -m build`, stages wheel to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*.whl`) and the bundle volroot (bundle/%pip path); set `GBX_BUNDLE_SKIP_WHEEL_UPLOAD=1` to skip wheel |
 | `gbx:data:stage-jar` | Stage built JAR to Volumes | Runs `mvn clean package -DskipTests`, stages product JAR to `GBX_ARTIFACT_VOLUME/` (init-script dir; holds exactly one `geobrix-*-jar-with-dependencies.jar`) and bench tests.jar to bundle volroot; set `GBX_BUNDLE_SKIP_JAR_UPLOAD=1` to build locally and skip the upload, or `GBX_BUNDLE_SKIP_JAR=1` to skip build and upload |
 

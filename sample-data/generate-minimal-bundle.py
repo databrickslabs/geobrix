@@ -17,6 +17,10 @@ Usage:
 
 Requires full bundle at sample-data/Volumes/main/default/geobrix_samples/geobrix-examples/
 (or set --source). Uses geopandas for vector clipping and GDAL for raster clipping.
+
+The bundle also holds a small synthetic ERA5-like Zarr cube (global/era5-weather/: a sharded
+Zarr v3 store and a Zarr v2 store). It is made from code, not clipped from the full bundle, so
+`--zarr-only` writes just the cube and needs no source bundle. Needs xarray and zarr.
 """
 
 from __future__ import annotations
@@ -541,7 +545,29 @@ def run(
     return ok
 
 
-def main() -> int:
+def run_zarr_era5(out_root: Path) -> bool:
+    """Write the synthetic ERA5-like Zarr cube (v3 sharded + v2) under out_root/global/era5-weather."""
+    # The generator ships in the geobrix package; run from a checkout, put its src on the path.
+    src = SCRIPT_DIR.parent / "python" / "geobrix" / "src"
+    if src.is_dir() and str(src) not in sys.path:
+        sys.path.insert(0, str(src))
+    try:
+        from databricks.labs.gbx.sample import zarr_era5
+    except ImportError as e:
+        print(f"Skipping the Zarr ERA5 cube (needs xarray, zarr and geobrix): {e}", file=sys.stderr)
+        return False
+    print(f"Generating the Zarr ERA5-like cube at {out_root / zarr_era5.BUNDLE_SUBDIR}")
+    try:
+        written = zarr_era5.write_era5_cube(out_root / zarr_era5.BUNDLE_SUBDIR)
+    except ImportError as e:
+        print(f"Skipping the Zarr ERA5 cube (needs xarray and zarr): {e}", file=sys.stderr)
+        return False
+    for name, path in written.items():
+        print(f"  {name}: digest {zarr_era5.tree_digest(path)[:16]}")
+    return True
+
+
+def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         description="Generate minimal doc-test bundle from full sample-data (bbox-based extraction)."
     )
@@ -560,7 +586,13 @@ def main() -> int:
                     help="Half-width/height of bbox in degrees (default: 0.02)")
     ap.add_argument("--max-rows", type=int, default=DEFAULT_MAX_ROWS,
                     help="Max vector features per layer (default: 10)")
-    args = ap.parse_args()
+    ap.add_argument("--zarr-only", action="store_true",
+                    help="Write only the synthetic Zarr ERA5-like cube (needs no source bundle)")
+    args = ap.parse_args(argv)
+
+    if args.zarr_only:
+        args.out.mkdir(parents=True, exist_ok=True)
+        return 0 if run_zarr_era5(args.out) else 1
 
     if not args.source.exists():
         print(f"Source not found: {args.source}", file=sys.stderr)
@@ -577,6 +609,7 @@ def main() -> int:
         args.london_lon, args.london_lat,
         args.bbox_size, args.max_rows,
     )
+    ok &= run_zarr_era5(args.out)
     return 0 if ok else 1
 
 

@@ -20,15 +20,18 @@ show_help() {
     echo -e "  ${GREEN}--london-lat <float>${NC}  London center latitude (default: 51.5074)"
     echo -e "  ${GREEN}--bbox-size <float>${NC}  Half-width/height of bbox in degrees (default: 0.02)"
     echo -e "  ${GREEN}--max-rows <int>${NC}   Max vector features per layer (default: 10)"
+    echo -e "  ${GREEN}--zarr-only${NC}        Write only the synthetic Zarr ERA5-like cube (needs no source bundle)"
     echo -e "  ${GREEN}--log <path>${NC}       Write output to log file"
     echo -e "  ${GREEN}--help${NC}             Show this help"
     echo ""
     echo -e "${CYAN}Output:${NC}"
     echo -e "  ${YELLOW}sample-data/Volumes/main/default/test-data/geobrix-examples/${NC}"
+    echo -e "  ${YELLOW}  global/era5-weather/${NC} holds the Zarr ERA5-like cube (era5_like_v3.zarr sharded, era5_like_v2.zarr)"
     echo ""
     echo -e "${CYAN}Examples:${NC}"
     echo -e "  ${YELLOW}gbx:data:generate-minimal-bundle${NC}"
     echo -e "  ${YELLOW}gbx:data:generate-minimal-bundle --bbox-size 0.03 --max-rows 20${NC}"
+    echo -e "  ${YELLOW}gbx:data:generate-minimal-bundle --zarr-only${NC}"
     echo ""
 }
 

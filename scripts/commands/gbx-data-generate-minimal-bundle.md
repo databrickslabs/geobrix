@@ -18,8 +18,13 @@ bash scripts/commands/gbx-data-generate-minimal-bundle.sh [OPTIONS]
 - `--london-lon`, `--london-lat` — London center (default: -0.1276, 51.5074)
 - `--bbox-size <float>` — Half-width/height of bbox in degrees (default: 0.02)
 - `--max-rows <int>` — Max vector features per layer (default: 10)
+- `--zarr-only` — Write only the synthetic Zarr ERA5-like cube (needs no source bundle; see below)
 - `--log <path>` — Write output to log file
 - `--help` — Show help
+
+## Zarr ERA5-like cube
+
+Besides the clipped datasets, the bundle holds a small synthetic weather cube, `global/era5-weather/`: `era5_like_v3.zarr` (Zarr v3, sharded) and `era5_like_v2.zarr` (Zarr v2). Two days of hourly `t2m`, `u10`, `v10` and `msl` on a 1 degree global grid, about 7 MB for the pair. It is made from code (`databricks.labs.gbx.sample.zarr_era5`) with a fixed seed, so a run in one environment writes the same bytes; it needs no source bundle, so `--zarr-only` writes just the cube. A normal run writes it after the clipped datasets. Needs `xarray` and `zarr` in the container.
 
 ## Requires
 

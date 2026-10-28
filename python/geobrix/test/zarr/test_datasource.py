@@ -13,7 +13,10 @@ from databricks.labs.gbx.zarr.datasource import (  # noqa: E402
     ZarrGbxDataSource,
     ZarrGbxReader,
 )
-from databricks.labs.gbx.zarr.errors import ZarrAccessUnavailable  # noqa: E402
+from databricks.labs.gbx.zarr.errors import (  # noqa: E402
+    ZarrAccessUnavailable,
+    ZarrError,
+)
 from databricks.labs.gbx.zarr.functions import gbx_zarr_read  # noqa: E402
 
 
@@ -31,6 +34,16 @@ def _load(spark, path, **options):
             key, value if isinstance(value, str) else json.dumps(value)
         )
     return reader.load(str(path))
+
+
+def _without_cap(row):
+    """A tile row with the tile-size cap taken out of its ``zarr_meta``. The function takes
+    the cap from its session (classic: 256 MiB) and the reader from the runtime it plans
+    on (Serverless 64 MiB, classic 256 MiB; test_the_tile_cap_follows_the_runtime)."""
+    row = row.asDict(recursive=True)
+    meta = row["tile"]["metadata"]
+    meta["zarr_meta"] = json.dumps({**json.loads(meta["zarr_meta"]), "cap": None})
+    return row
 
 
 # --- the DataSource reads what the function reads ---------------------------------------
@@ -105,7 +118,10 @@ def test_tiles_and_table_outputs(spark, era5_v3_sharded, output, options, call):
             r["tile"]["window"]["row_off"],
             r["tile"]["window"]["col_off"],
         )
-        got, expected = sorted(df.collect(), key=key), sorted(want.collect(), key=key)
+        got, expected = (
+            sorted(map(_without_cap, df.collect()), key=key),
+            sorted(map(_without_cap, want.collect()), key=key),
+        )
         virtual = "virtualTiles" not in options
         assert all((r["tile"]["raster"] is None) == virtual for r in got)
     else:
@@ -227,8 +243,106 @@ def test_options_parse_dimindex_fanout_banddim(era5_v3_sharded, tmp_path):
     assert isel_of(dimIndex="time=1,level=1") == {"time": 1, "level": 1}
     assert isel_of(fanout="time", isel='{"level": [0, 2]}') == {"level": slice(0, 2)}
     assert isel_of(fanout="time", bandDim="level") is None  # stacked, so not pinned
-    with pytest.raises(ValueError, match="Fix:"):
-        isel_of(fanout="depth")
+    # any one of the three switches on the NetCDF rules: what nothing names is read at 0
+    assert isel_of(dimIndex="time=1") == {"time": 1, "level": 0}
+    assert isel_of(bandDim="level") == {"time": 0}
+    for given in ({"fanout": "depth"}, {"dimIndex": "depth=1"}, {"bandDim": "depth"}):
+        with pytest.raises(ValueError, match="Fix:"):
+            isel_of(**given)
+
+
+# --- a read plans for the store it reads ------------------------------------------------
+
+
+def _growing(path):
+    """A (time=4, 4, 6) store with a coordinate per dimension; returns its group."""
+    g = zarr.open_group(str(path), mode="w", zarr_format=3)
+    for name, values in (
+        ("time", np.arange(4.0)),
+        ("latitude", np.array([1.5, 0.5, -0.5, -1.5])),
+        ("longitude", np.arange(6.0) * 0.5),
+    ):
+        coord = g.create_array(
+            name, shape=values.shape, dtype="float64", dimension_names=(name,)
+        )
+        coord[:] = values
+    v = g.create_array(
+        "v",
+        shape=(4, 4, 6),
+        chunks=(2, 4, 6),
+        dtype="float32",
+        dimension_names=("time", "latitude", "longitude"),
+    )
+    v[:] = 1.0
+    return g
+
+
+def _grow(path, steps):
+    """Append ``steps`` time steps to the store made by ``_growing``."""
+    g = zarr.open_group(str(path), mode="r+")
+    n = g["time"].shape[0]
+    g["time"].resize((n + steps,))
+    g["time"][n:] = np.arange(n, n + steps, dtype="float64")
+    g["v"].resize((n + steps, 4, 6))
+    g["v"][n:] = 1.0
+
+
+def _cells(reader, partitions):
+    return sum(
+        len(x) // 4
+        for p in partitions
+        for b in reader.read(p)
+        for x in b.column("data").to_pylist()
+    )
+
+
+def test_a_reread_of_a_changed_store_plans_for_the_store_it_reads(tmp_path):
+    """Spark reuses Python workers, so what one read derived must not serve the next read of
+    the same path and options: after the time axis grows, a new read sees all of it. A store
+    that changes between planning a read and reading it is an error, not other cells."""
+    path = tmp_path / "s.zarr"
+    _growing(path)
+    options = {"path": str(path), "variables": "v"}
+
+    def read_all():
+        reader = ZarrGbxReader(options)  # a new read: Spark makes a new reader
+        return _cells(reader, reader.partitions())
+
+    assert read_all() == 4 * 4 * 6
+    _grow(path, 2)
+    assert read_all() == 6 * 4 * 6  # the first read's plan must not be reused
+
+    reader = ZarrGbxReader(options)
+    partitions = reader.partitions()
+    _grow(path, 2)  # after planning, before a task reads
+    datasource._task_state.cache_clear()  # a worker that has not planned this read yet
+    with pytest.raises(ZarrError, match="Fix:"):
+        _cells(reader, partitions)
+
+
+def test_the_tile_cap_follows_the_runtime(tmp_path, monkeypatch):
+    """A session-free reader takes the largest tile a task may hold from the runtime probe
+    (as raster_gbx sizes its tiles): 64 MiB on Serverless, 256 MiB on classic, and
+    GBX_STREAM_MAX_BYTES wins. It is planned once, on the planner, and travels in the tiles.
+    """
+    from databricks.labs.gbx.pyrx.core import budget
+
+    path = tmp_path / "s.zarr"
+    _growing(path)
+
+    def cap():
+        reader = ZarrGbxReader({"path": str(path), "output": "tiles"})
+        first = next(iter(reader.read(reader.partitions()[0])))
+        meta = dict(first.to_pylist()[0]["tile"]["metadata"])  # an Arrow map
+        return json.loads(meta["zarr_meta"])["cap"]
+
+    monkeypatch.delenv("GBX_STREAM_MAX_BYTES", raising=False)
+    monkeypatch.setattr(budget, "runtime_kind", lambda: "serverless")
+    assert cap() == 64 * 1024**2
+    monkeypatch.setattr(budget, "runtime_kind", lambda: "classic")
+    assert cap() == 256 * 1024**2
+    monkeypatch.setenv("GBX_STREAM_MAX_BYTES", "12345")
+    assert cap() == 12345
 
 
 # --- the shape of the source ------------------------------------------------------------

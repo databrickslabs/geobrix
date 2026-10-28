@@ -1434,12 +1434,24 @@ def _grid_mapping_attrs(src: _Source, meta: ArrayMeta) -> dict | None:
 
 
 def _plan_tile_set(
-    spark, src, names, explicit, sel, isel, decode, flag, band_dim, tile_size
+    spark,
+    src,
+    names,
+    explicit,
+    sel,
+    isel,
+    decode,
+    flag,
+    band_dim,
+    tile_size,
+    cap_bytes=None,
 ):
     """The ``TilePlan`` of each of ``names`` that has a regular 2-D grid.
 
     A variable named in ``variables`` (``explicit``) that cannot be tiled raises; one picked
     by default is left out with a warning, as a variable GeoBrix cannot decode is.
+    ``cap_bytes`` is the largest tile a task may hold, for a caller that has no session to
+    measure it with; by default it is measured from ``spark``.
     """
     from databricks.labs.gbx.ds.file_gbx import _connect_aware_lru_sizing
     from databricks.labs.gbx.zarr._tiles import plan_tiles
@@ -1453,7 +1465,7 @@ def _plan_tile_set(
         )
     # the largest tile a task may hold (64 MiB on Spark Connect, 256 MiB on classic): a task
     # cannot measure it, so the driver does, and it travels with the tiles
-    cap = _connect_aware_lru_sizing(spark)[0]
+    cap = _connect_aware_lru_sizing(spark)[0] if cap_bytes is None else cap_bytes
     plans, left_out = [], {}
     for v in names:
         meta = arrays[v]

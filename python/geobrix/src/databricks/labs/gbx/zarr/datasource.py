@@ -9,9 +9,18 @@ The reader plans where ``gbx_zarr_read`` plans and decodes where it decodes (``_
 ``partitions()`` opens the store on its bare path and returns one ``InputPartition`` per
 work unit (chunk indices, no rows and no bytes); ``read(partition)`` decodes one unit into
 Arrow batches. What every task shares with the planner (the arrays, the selection, the
-labels) is not carried in the partitions, which would copy it once per unit. It is derived
-again from the options, once per Python worker (``_task_state``), because the reader is
-pickled before ``partitions()`` runs and so cannot carry what ``partitions()`` computes.
+labels) is not carried in the partitions, which would copy it once per unit. Spark pickles
+the reader before ``partitions()`` runs, so it cannot carry what ``partitions()`` computes:
+each Python worker derives it again from the options, once per read (``_task_state``, keyed
+by a nonce the reader makes and every partition carries, because Spark reuses Python
+workers and a later read of a changed store must not meet an earlier read's plan). Each
+partition also carries a fingerprint of the planner's state: a worker that derives something
+else, because the store changed since the plan, raises ``ZarrError`` rather than read cells
+the plan did not count. A plain store has no snapshot; it is read as it is.
+
+This module must not import ``databricks.labs.gbx.ds`` at module level: importing any ds
+module runs ``ds/__init__``, which imports ``ds.register``, which imports this module, and
+a worker unpickling the reader imports this module first.
 
 Options (camelCase, like the other ``*_gbx`` readers); every value is a string:
 
@@ -24,12 +33,16 @@ Options (camelCase, like the other ``*_gbx`` readers); every value is a string:
 ``output``     ``blocks`` (default), ``tiles`` or ``table`` (``gbx_zarr_read``'s outputs).
 ``virtualTiles``  ``true`` (default) or ``false``; ``output=tiles`` only.
 ``dimIndex``   ``dim=index,...``: pin dimensions to one position (NetCDF reader semantics).
-``fanout``     ``dim,...``; ``output=tiles`` only. As in the NetCDF reader the dimensions
-               named are expanded, one tile for each position, and every other non-spatial
-               dimension that is not pinned, selected or stacked is read at index 0. Without
-               ``fanout`` every selected position of every such dimension is expanded.
+``fanout``     ``dim,...``; ``output=tiles`` only. The dimensions to expand, one tile for each
+               position.
 ``bandDim``    one dimension to stack as the bands of each tile; ``output=tiles`` only.
+               ``fanout``, ``dimIndex`` and ``bandDim`` follow ``netcdf_gbx``: give any of them
+               and every other non-spatial dimension that is not pinned, selected or stacked
+               is read at index 0. Give none and every selected position of every such
+               dimension is expanded, which is what ``gbx_zarr_read`` does.
 ``tileSize``   ``w,h`` (or one ``n``) in cells; ``output=tiles`` only. Default: one inner chunk.
+               The largest tile a task may hold is 64 MiB decoded on Serverless and 256 MiB on
+               classic, from the runtime (``GBX_STREAM_MAX_BYTES`` overrides it).
 ``access``     ``auto`` (default) or ``fuse``: the store is read through its path. ``direct``
                raises ``ZarrAccessUnavailable``: it needs credentials Unity Catalog vends to
                a session, and this reader has none.
@@ -45,15 +58,17 @@ from __future__ import annotations
 
 import dataclasses
 import functools
+import hashlib
+import uuid
 from dataclasses import dataclass
 from typing import Iterator, Mapping, Sequence
 
 from pyspark.sql.datasource import DataSource, DataSourceReader, InputPartition
 from pyspark.sql.types import StructType
 
-# Nothing from databricks.labs.gbx.ds is imported at module level: importing any ds module
-# runs ds/__init__, which imports ds.register, which imports this module. A worker that
-# unpickles the reader imports this module first, so a top-level ds import here is a cycle.
+from databricks.labs.gbx.zarr.errors import ZarrError
+
+# Nothing from databricks.labs.gbx.ds is imported at module level (see the module docstring).
 
 __all__ = ["ZarrGbxDataSource", "ZarrGbxReader", "ZarrGbxOptions", "parse_options"]
 
@@ -167,14 +182,12 @@ def parse_options(options: Mapping[str, str]) -> ZarrGbxOptions:
     Raises ``ValueError`` (its message ends with ``Fix:``) for an option that is not valid
     or that does not go with another, and ``ZarrAccessUnavailable`` for ``access="direct"``.
     """
-    from databricks.labs.gbx.ds.netcdf import _parse_dim_index, _parse_fanout
+    from databricks.labs.gbx.ds.netcdf import _option, _parse_dim_index, _parse_fanout
     from databricks.labs.gbx.ds.raster import _as_tile_size
 
-    raw = {str(k).lower(): str(v) for k, v in dict(options).items()}
-
     def get(name: str, default: str | None = None) -> str | None:
-        value = raw.get(name.lower())
-        return default if value is None else value
+        value = _option(options, name, None)
+        return default if value is None else str(value)
 
     path = (get("path") or "").strip()
     if not path:
@@ -280,19 +293,26 @@ def _non_spatial(src, name: str) -> tuple[str, ...]:
 def _cut(
     opts: ZarrGbxOptions, src, names: list[str]
 ) -> tuple[dict | None, dict | None]:
-    """``(sel, isel)`` of the read: the options' own, plus ``dimIndex``, plus (with
-    ``fanout``) index 0 for each non-spatial dimension that nothing else names."""
+    """``(sel, isel)`` of the read: the options' own, plus ``dimIndex``, plus (when any of
+    ``fanout``, ``dimIndex`` or ``bandDim`` is given, as in ``netcdf_gbx``) index 0 for each
+    non-spatial dimension that nothing else names."""
     sel, isel = dict(opts.sel or {}), dict(opts.isel or {})
     isel.update(opts.dim_index)
-    if opts.fanout:
+    given = [
+        *(opts.fanout or ()),
+        *opts.dim_index,
+        *([opts.band_dim] if opts.band_dim else []),
+    ]
+    if given:
         known = {d for n in names for d in src.arrays[n].dims}
-        unknown = [d for d in opts.fanout if d not in known]
+        unknown = [d for d in dict.fromkeys(given) if d not in known]
         if unknown:
             raise _bad(
-                f"fanout names unknown dimension(s) {unknown}; the variables have {sorted(known)}.",
+                f"fanout, dimIndex or bandDim names unknown dimension(s) {unknown}; "
+                f"the variables have {sorted(known)}.",
                 "name dimensions of the variables",
             )
-        named = {*sel, *isel, *opts.fanout, *([opts.band_dim] if opts.band_dim else [])}
+        named = {*sel, *isel, *given}
         for n in names:
             isel.update({d: 0 for d in _non_spatial(src, n) if d not in named})
     return sel or None, isel or None
@@ -320,61 +340,113 @@ def _unit_plan(opts: ZarrGbxOptions, *, units: bool):
     return planned, dataclasses.replace(cfg, access=FUSE)
 
 
-def _tile_plans(opts: ZarrGbxOptions):
+def _tile_plans(opts: ZarrGbxOptions, cap: int):
     """The ``TilePlan`` of each variable, as ``gbx_zarr_read`` plans a tiles read.
 
-    A session-free reader cannot tell Serverless from classic, so the largest tile a task
-    may hold is the classic cap (``GBX_STREAM_MAX_BYTES`` overrides it).
+    ``cap`` is the largest tile a task may hold, measured once by the planner
+    (``session_free_stream_cap``) and handed to the workers with the partitions: it is baked
+    into every tile, and a worker's own probe must not decide it.
     """
     from databricks.labs.gbx.zarr import _read
 
     src, names, sel, isel = _open(opts)
-    return _read._plan_tile_set(
-        None,
-        src,
-        names,
-        opts.variables is not None,
-        sel,
-        isel,
-        True,
-        None,
-        opts.band_dim,
-        opts.tile_size,
+    return tuple(
+        _read._plan_tile_set(
+            None,
+            src,
+            names,
+            opts.variables is not None,
+            sel,
+            isel,
+            True,
+            None,
+            opts.band_dim,
+            opts.tile_size,
+            cap_bytes=cap,
+        )
     )
+
+
+def _fingerprint(state) -> str:
+    """A digest of what a plan took from the store: for a blocks or table read the metadata
+    documents of the arrays, the selection along each axis and the labels it touches, for a
+    tiles read each plan's geometry and slices. A store that has changed since the plan was
+    made derives a different one."""
+    h = hashlib.sha256()
+
+    def put(*parts) -> None:
+        h.update(repr(parts).encode())
+
+    if isinstance(state, tuple):  # the TilePlans of a tiles read
+        for p in state:
+            put(p.array, p.spec, p.crs, p.gt, p.width, p.height, p.row_pieces)
+            put(p.col_pieces, p.fan, p.band)
+    else:  # the _TaskConfig of a blocks or table read
+        put(state.output, state.variables, state.columns, state.dim_coords)
+        put(sorted(state.docs.items()), state.axes)
+        for spans in (state.coords, state.labels):
+            for path, span in sorted(spans.items()):
+                put(path, span.offset, span.values.dtype.str)
+                h.update(span.values.tobytes())
+                if span.mask is not None:
+                    h.update(span.mask.tobytes())
+    return h.hexdigest()[:16]
+
+
+@dataclass(frozen=True)
+class _State:
+    shared: (
+        object  # the _TaskConfig of a blocks or table read, or the tuple of TilePlans
+    )
+    fingerprint: str
 
 
 @functools.lru_cache(maxsize=4)
-def _task_state(key: tuple):
-    """What a task shares: the config of a blocks or table read, or the tile plans.
+def _task_state(nonce: str, key: tuple, cap: int | None) -> _State:
+    """What a task shares, derived from the options and cached per Python worker, so a
+    worker that runs many units of one read plans once.
 
-    Derived from the options and cached per Python worker, so a worker that runs many
-    units plans once. ``key`` is the options as sorted ``(name, value)`` pairs.
+    ``nonce`` is what makes the cache per read: Spark reuses Python workers, and the next
+    read of the same path and options (of a store that has since changed) must not be served
+    this read's plan. It is not used in the body. ``key`` is the options as sorted
+    ``(name, value)`` pairs; ``cap`` is the planner's tile cap (tiles reads).
     """
     opts = parse_options(dict(key))
-    return (
-        _tile_plans(opts)
+    shared = (
+        _tile_plans(opts, cap)
         if opts.output == "tiles"
         else _unit_plan(opts, units=False)[1]
     )
+    return _State(shared, _fingerprint(shared))
 
 
 # --- the source ----------------------------------------------------------------------
 
 
-class _UnitPartition(InputPartition):
-    """One work unit: chunks of one array (``zarr._plan.Unit``): paths and indices only."""
+class _Partition(InputPartition):
+    """What a partition carries besides its work: the ``nonce`` of the read that planned it
+    and the ``fingerprint`` of that plan (see ``_task_state``, ``_fingerprint``), and for
+    tiles the planner's ``cap``. Paths, indices and these; never bytes."""
 
-    def __init__(self, unit):
-        super().__init__(unit)
+    def __init__(self, value, nonce: str, fingerprint: str, cap: int | None = None):
+        super().__init__(value)
+        self.nonce, self.fingerprint, self.cap = nonce, fingerprint, cap
+
+
+class _UnitPartition(_Partition):
+    """One work unit: chunks of one array (``zarr._plan.Unit``)."""
+
+    def __init__(self, unit, nonce: str, fingerprint: str):
+        super().__init__(unit, nonce, fingerprint)
         self.unit = unit
 
 
-class _TilePartition(InputPartition):
+class _TilePartition(_Partition):
     """Tiles ``start`` to ``stop`` (exclusive) of the numbering that runs over the tiles of
     every variable in turn."""
 
-    def __init__(self, start: int, stop: int):
-        super().__init__((start, stop))
+    def __init__(self, start: int, stop: int, nonce: str, fingerprint: str, cap: int):
+        super().__init__((start, stop), nonce, fingerprint, cap)
         self.start, self.stop = start, stop
 
 
@@ -384,42 +456,54 @@ class ZarrGbxReader(DataSourceReader):
             sorted((str(k).lower(), str(v)) for k, v in dict(options).items())
         )
         self._opts = parse_options(dict(self._key))
+        self._nonce = uuid.uuid4().hex  # one per read: Spark makes a reader for each
 
     def partitions(self) -> Sequence[InputPartition]:
-        opts = self._opts
+        opts, nonce = self._opts, self._nonce
         if opts.output == "tiles":
+            from databricks.labs.gbx.ds.file_gbx import session_free_stream_cap
             from databricks.labs.gbx.zarr import _read
 
-            total = sum(p.n_tiles for p in _tile_plans(opts))
+            cap = session_free_stream_cap()
+            plans = _tile_plans(opts, cap)
+            fingerprint = _fingerprint(plans)
+            total = sum(p.n_tiles for p in plans)
             per_task = (
                 _read._TILES_PER_TASK
                 if opts.virtual_tiles
                 else _read._MATERIALIZED_PER_TASK
             )
             return [
-                _TilePartition(lo, min(lo + per_task, total))
+                _TilePartition(lo, min(lo + per_task, total), nonce, fingerprint, cap)
                 for lo in range(0, total, per_task)
             ]
-        units, _ = _unit_plan(opts, units=True)
-        return [_UnitPartition(u) for u in units]
+        units, cfg = _unit_plan(opts, units=True)
+        fingerprint = _fingerprint(cfg)
+        return [_UnitPartition(u, nonce, fingerprint) for u in units]
 
     def read(self, partition) -> Iterator:
         if partition is None:  # Spark hands one to a read that planned no partition
             return
         from databricks.labs.gbx.zarr import _read
 
-        state = _task_state(self._key)
+        state = _task_state(partition.nonce, self._key, partition.cap)
+        if state.fingerprint != partition.fingerprint:
+            raise ZarrError(
+                f"the Zarr store at {self._opts.path} changed between planning this read "
+                "and reading it",
+                fix="run the read again",
+            )
         if isinstance(partition, _TilePartition):
             import pyarrow as pa
 
             from databricks.labs.gbx.zarr._access import FUSE
 
             ids = pa.array(range(partition.start, partition.stop), pa.int64())
-            task = _read._tile_task(state, self._opts.virtual_tiles, FUSE)
+            task = _read._tile_task(state.shared, self._opts.virtual_tiles, FUSE)
             yield from task([pa.record_batch({"id": ids})])
         else:
             engine = "zarr" if self._opts.engine == "auto" else self._opts.engine
-            yield from _read._run_unit(state, partition.unit, engine)
+            yield from _read._run_unit(state.shared, partition.unit, engine)
 
 
 class ZarrGbxDataSource(DataSource):

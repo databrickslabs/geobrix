@@ -977,11 +977,13 @@ def test_vector_singlefile_nullable_attrs(spark, tmp_path):
 
 
 @pytest.mark.parametrize("how", ["parts", "singleFile", "merge"])
-def test_vector_write_timestamp_attribute_is_a_cf_time_variable(spark, tmp_path, how):
-    """A TIMESTAMP attribute is written as CF time (epoch seconds + units), not a bare number.
+def test_vector_write_attribute_types_follow_cf_conventions(spark, tmp_path, how):
+    """TIMESTAMP and DATE attributes are CF time variables (epoch seconds / days + units),
+    STRING a text variable, BOOLEAN an int8 0 / 1 with ``flag_values`` / ``flag_meanings``.
 
-    singleFile used to fail at commit (the merge wrote a datetime into a float variable)
-    and parts failed in the task; merge must keep the units of the parts it folds.
+    singleFile used to fail at commit (the merge wrote a datetime, date, string or boolean
+    into a float variable) and parts failed in the task; merge must keep the CF attributes
+    of the parts it folds. A NULL is the fill value, or "" in a text variable.
     """
     import datetime
     import os
@@ -990,6 +992,8 @@ def test_vector_write_timestamp_attribute_is_a_cf_time_variable(spark, tmp_path,
     import shapely
     from pyspark.sql.types import (
         BinaryType,
+        BooleanType,
+        DateType,
         StringType,
         StructField,
         StructType,
@@ -999,16 +1003,23 @@ def test_vector_write_timestamp_attribute_is_a_cf_time_variable(spark, tmp_path,
     schema = StructType(
         [
             StructField("seen", TimestampType(), True),
+            StructField("day", DateType(), True),
+            StructField("label", StringType(), True),
+            StructField("ok", BooleanType(), True),
             StructField("geom_0", BinaryType(), True),
             StructField("geom_0_srid", StringType(), True),
             StructField("geom_0_srid_proj", StringType(), True),
         ]
     )
     utc = datetime.timezone.utc
-    when = [datetime.datetime(2026, 3, 1, 12, 30, 15, 250000, tzinfo=utc), None]
+    seen_at = datetime.datetime(2026, 3, 1, 12, 30, 15, 250000, tzinfo=utc)
+    values = [
+        (seen_at, datetime.date(2026, 3, 1), "north", True),
+        (None, None, None, None),
+    ]
     rows = [
-        (t, bytes(shapely.to_wkb(shapely.Point(10.0 + i, 50.0))), "4326", "EPSG:4326")
-        for i, t in enumerate(when)
+        (*v, bytes(shapely.to_wkb(shapely.Point(10.0 + i, 50.0))), "4326", "EPSG:4326")
+        for i, v in enumerate(values)
     ]
     df = spark.createDataFrame(rows, schema).repartition(2)
     spark.dataSource.register(NetcdfGbxDataSource)
@@ -1029,18 +1040,33 @@ def test_vector_write_timestamp_attribute_is_a_cf_time_variable(spark, tmp_path,
     ncs = sorted(f for f in os.listdir(str(out)) if f.endswith(".nc"))
     if how != "parts":
         assert len(ncs) == 1, ncs
-    seen = []
+    got = {name: [] for name in ("seen", "day", "label", "ok")}
     for name in ncs:
         with netCDF4.Dataset(os.path.join(str(out), name), "r") as nc:
-            var = nc.variables["seen"]
-            assert var.units == "seconds since 1970-01-01 00:00:00"
-            assert var.calendar == "proleptic_gregorian"
-            seen += [None if x is np.ma.masked else float(x) for x in var[:]]
+            for col, (units, calendar) in {
+                "seen": ("seconds since 1970-01-01 00:00:00", "proleptic_gregorian"),
+                "day": ("days since 1970-01-01 00:00:00", "proleptic_gregorian"),
+            }.items():
+                assert nc.variables[col].units == units
+                assert nc.variables[col].calendar == calendar
+            assert nc.variables["label"].dtype is str
+            assert nc.variables["ok"].dtype == np.int8
+            assert nc.variables["ok"].flag_meanings == "false true"
+            assert list(nc.variables["ok"].flag_values) == [0, 1]
+            for col in got:
+                got[col] += [
+                    None if x is np.ma.masked else x for x in nc.variables[col][:]
+                ]
     epoch = datetime.datetime(1970, 1, 1, tzinfo=utc)
-    assert sorted(x for x in seen if x is not None) == [
-        pytest.approx((when[0] - epoch).total_seconds())
+    assert [x for x in got["seen"] if x is not None] == [
+        pytest.approx((seen_at - epoch).total_seconds())
     ]
-    assert seen.count(None) == 1
+    assert [int(x) for x in got["day"] if x is not None] == [
+        (datetime.date(2026, 3, 1) - datetime.date(1970, 1, 1)).days
+    ]
+    assert sorted(str(x) for x in got["label"]) == ["", "north"]
+    assert [int(x) for x in got["ok"] if x is not None] == [1]
+    assert [got[c].count(None) for c in ("seen", "day", "ok")] == [1, 1, 1]
 
 
 # ---------------------------------------------------------------------------

@@ -105,30 +105,89 @@ _MERGE_POINTER = (
 
 _FLOAT_NP_DTYPES = ("f4", "f8")
 
-# A TimestampType attribute is written as a CF time variable: float64 seconds since the
-# epoch (UTC) with these units, so the file carries a real time axis, not a bare number.
-_CF_TIME_UNITS = "seconds since 1970-01-01 00:00:00"
+# CF conventions for the attribute types netCDF has no native type for. Each is the set of
+# variable attributes that marks the type, so a merge of existing parts can tell it again.
+#  - TimestampType: float64 seconds since the epoch (UTC), a CF time variable;
+#  - DateType: int32 days since the epoch, a CF time variable;
+#  - BooleanType: int8 0 / 1 with ``flag_values`` / ``flag_meanings``;
+#  - StringType: a netCDF4 text (variable-length string) variable, a NULL is "".
 _CF_TIME_CALENDAR = "proleptic_gregorian"
+_CF_TIME_SECONDS = {
+    "units": "seconds since 1970-01-01 00:00:00",
+    "calendar": _CF_TIME_CALENDAR,
+}
+_CF_TIME_DAYS = {
+    "units": "days since 1970-01-01 00:00:00",
+    "calendar": _CF_TIME_CALENDAR,
+}
+_CF_FLAG_MEANINGS = "false true"
+_TEXT = "str"  # the attr-spec dtype of a text variable
 
 
-def _cf_seconds(value):
-    """Epoch seconds of a ``datetime`` (naive = UTC); any other value as is."""
+def _cf_flag():
+    import numpy as np
+
+    return {
+        "flag_values": np.array([0, 1], dtype="i1"),
+        "flag_meanings": _CF_FLAG_MEANINGS,
+    }
+
+
+def _cf_time_value(value):
+    """The CF number of a ``datetime`` (seconds since the epoch, naive = UTC) or a ``date``
+    (days since the epoch); any other value as is."""
     import datetime
 
-    if not isinstance(value, datetime.datetime):
-        return value
-    if value.tzinfo is None:
-        value = value.replace(tzinfo=datetime.timezone.utc)
-    return (
-        value - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
-    ).total_seconds()
+    if isinstance(value, datetime.datetime):
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=datetime.timezone.utc)
+        return (
+            value - datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+        ).total_seconds()
+    if isinstance(value, datetime.date):
+        return (value - datetime.date(1970, 1, 1)).days
+    return value
 
 
-def _set_time_attrs(var, units) -> None:
-    """CF time attributes on ``var`` when ``units`` is set (it is a time variable)."""
-    if units:
-        var.units = units
-        var.calendar = _CF_TIME_CALENDAR
+def _cf_attrs_of(var):
+    """The CF attributes of an existing variable that mark a time or boolean attribute
+    (what :func:`_create_attr_var` sets), else ``None``."""
+    if getattr(var, "calendar", None) == _CF_TIME_CALENDAR and hasattr(var, "units"):
+        return {"units": var.units, "calendar": var.calendar}
+    if getattr(var, "flag_meanings", None) == _CF_FLAG_MEANINGS:
+        return _cf_flag()
+    return None
+
+
+def _create_attr_var(nc, name, d, cf):
+    """The obs-dimension data variable ``name`` of attr-spec dtype ``d`` (a numpy code
+    like ``f8`` / ``i4`` or ``str``), with the CF attributes ``cf`` when it has any."""
+    import netCDF4 as _nc4
+    import numpy as np
+
+    if d == _TEXT:
+        dv = nc.createVariable(name, str, ("obs",))
+    elif d in _FLOAT_NP_DTYPES:
+        dv = nc.createVariable(name, d, ("obs",), fill_value=np.nan)
+    else:
+        dv = nc.createVariable(name, d, ("obs",), fill_value=_nc4.default_fillvals[d])
+    if cf:
+        dv.setncatts(cf)
+    dv.coordinates = "latitude longitude"
+    return dv
+
+
+def _attr_array(vals, d):
+    """``vals`` (None = NULL) as the array a variable of dtype ``d`` takes: the fill value
+    for a NULL, or "" in a text variable (netCDF text has no NULL)."""
+    import netCDF4 as _nc4
+    import numpy as np
+
+    vals = [_cf_time_value(v) for v in vals]
+    if d == _TEXT:
+        return np.array(["" if v is None else v for v in vals], dtype=object)
+    fv = np.nan if d in _FLOAT_NP_DTYPES else _nc4.default_fillvals[d]
+    return np.array([fv if v is None else v for v in vals], dtype=d)
 
 
 def _count_raster_data_vars(nc) -> int:
@@ -386,7 +445,11 @@ def _vector_batches_from_ncs(paths: List[str], attr_cols: List[str]):
             for name in attr_cols:
                 if name not in nc.variables:
                     continue
-                col = nc.variables[name][:]
+                var = nc.variables[name]
+                col = var[:]
+                if var.dtype is str:  # text: an object array, never masked
+                    attrs[name] = [str(v) for v in col]
+                    continue
                 data = np.array(getattr(col, "data", col)).tolist()
                 mask = np.ma.getmaskarray(col).tolist()
                 attrs[name] = [None if m else v for v, m in zip(data, mask)]
@@ -396,9 +459,10 @@ def _vector_batches_from_ncs(paths: List[str], attr_cols: List[str]):
 def _vector_nc_attr_specs(paths: List[str]):
     """Inspect the first readable part for (attr_specs, resolved_srid).
 
-    attr_specs is an ordered list of (name, numpy-dtype like 'f8'/'i4', time units or
-    None) for the obs-dimension data variables (excluding latitude/longitude/crs); the
-    units are those of a CF time variable, so a merge keeps it a time variable.
+    attr_specs is an ordered list of (name, dtype, CF attributes or None) for the
+    obs-dimension data variables (excluding latitude/longitude/crs): the numpy dtype code
+    like 'f8'/'i4' (``str`` for a text variable) and the CF attributes of a time or boolean
+    variable, so a merge keeps it one.
     """
     import netCDF4
     import numpy as np
@@ -412,14 +476,8 @@ def _vector_nc_attr_specs(paths: List[str]):
                 v = nc.variables[name]
                 if tuple(v.dimensions) != ("obs",):
                     continue
-                is_time = getattr(v, "calendar", None) == _CF_TIME_CALENDAR
-                specs.append(
-                    (
-                        name,
-                        np.dtype(v.dtype).str[1:],
-                        getattr(v, "units", None) if is_time else None,
-                    )
-                )
+                d = _TEXT if v.dtype is str else np.dtype(v.dtype).str[1:]
+                specs.append((name, d, _cf_attrs_of(v)))
             srid = "4326"
             if "crs" in nc.variables:
                 se = getattr(nc.variables["crs"], "spatial_epsg", None)
@@ -431,10 +489,9 @@ def _vector_nc_attr_specs(paths: List[str]):
 
 def _merge_vector_points(batches, tmp_path: str, attr_specs, resolved_srid) -> int:
     """Stream point batches into one CF-DSG point .nc with an UNLIMITED obs
-    dim at ``tmp_path``. attr_specs is an ordered list of (name, numpy-dtype, time
-    units or None). A ``datetime`` value of a time variable is stored as epoch seconds.
-    Returns the total number of obs written."""
-    import netCDF4 as _nc4
+    dim at ``tmp_path``. attr_specs is an ordered list of (name, dtype, CF attributes or
+    None). A ``datetime`` / ``date`` value of a time variable is stored as epoch seconds /
+    days. Returns the total number of obs written."""
     import numpy as np
     from netCDF4 import Dataset
 
@@ -453,16 +510,8 @@ def _merge_vector_points(batches, tmp_path: str, attr_specs, resolved_srid) -> i
             crs_var = nc.createVariable("crs", "i4")
             crs_var.spatial_epsg = int(resolved_srid)
         data_vars = {}
-        for name, d, units in attr_specs:
-            if d in _FLOAT_NP_DTYPES:
-                dv = nc.createVariable(name, d, ("obs",), fill_value=np.nan)
-            else:
-                dv = nc.createVariable(
-                    name, d, ("obs",), fill_value=_nc4.default_fillvals[d]
-                )
-            _set_time_attrs(dv, units)
-            dv.coordinates = "latitude longitude"
-            data_vars[name] = (dv, d)
+        for name, d, cf in attr_specs:
+            data_vars[name] = (_create_attr_var(nc, name, d, cf), d)
 
         start = 0
         for lons, lats, attrs in batches:
@@ -475,15 +524,7 @@ def _merge_vector_points(batches, tmp_path: str, attr_specs, resolved_srid) -> i
                 vals = attrs.get(name)
                 if vals is None:
                     vals = [None] * k
-                vals = [_cf_seconds(v) for v in vals]
-                if d in _FLOAT_NP_DTYPES:
-                    arr = np.array(
-                        [v if v is not None else np.nan for v in vals], dtype=d
-                    )
-                else:
-                    fv = _nc4.default_fillvals[d]
-                    arr = np.array([v if v is not None else fv for v in vals], dtype=d)
-                dv[start : start + k] = arr
+                dv[start : start + k] = _attr_array(vals, d)
             start += k
             total += k
     finally:
@@ -861,7 +902,15 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
 
     @staticmethod
     def _np_dtype(dt) -> str:
-        from pyspark.sql.types import DoubleType, FloatType, IntegerType, LongType
+        from pyspark.sql.types import (
+            BooleanType,
+            DateType,
+            DoubleType,
+            FloatType,
+            IntegerType,
+            LongType,
+            StringType,
+        )
 
         if isinstance(dt, IntegerType):
             return "i4"
@@ -871,17 +920,26 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
             return "f4"
         if isinstance(dt, DoubleType):
             return "f8"
-        return "f8"
+        if isinstance(dt, DateType):
+            return "i4"  # days since the epoch
+        if isinstance(dt, BooleanType):
+            return "i1"  # 0 / 1
+        if isinstance(dt, StringType):
+            return _TEXT
+        return "f8"  # a timestamp too: seconds since the epoch
 
-    @staticmethod
-    def _is_float_dtype(d: str) -> bool:
-        return d in ("f4", "f8")
+    def _cf_attrs(self, col: str):
+        """The CF attributes that mark an attribute column as time or boolean, else None."""
+        from pyspark.sql.types import BooleanType, DateType, TimestampType
 
-    def _time_units(self, col: str) -> Optional[str]:
-        """CF time units for a ``TimestampType`` attribute column, else ``None``."""
-        from pyspark.sql.types import TimestampType
-
-        return _CF_TIME_UNITS if isinstance(self.dtypes[col], TimestampType) else None
+        dt = self.dtypes[col]
+        if isinstance(dt, TimestampType):
+            return dict(_CF_TIME_SECONDS)
+        if isinstance(dt, DateType):
+            return dict(_CF_TIME_DAYS)
+        if isinstance(dt, BooleanType):
+            return _cf_flag()
+        return None
 
     def _write_nc(
         self,
@@ -897,9 +955,9 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
         partition). The UNLIMITED-obs streaming merge lives in
         ``_merge_vector_points`` for singleFile / merge.
         """
-        import netCDF4 as _nc4
         import numpy as np
         from netCDF4 import Dataset
+        from pyspark.sql.types import TimestampType
 
         from databricks.labs.gbx.ds import _arrow_utc
 
@@ -920,27 +978,13 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
                 crs = nc.createVariable("crs", "i4")
                 crs.spatial_epsg = int(next(iter(srids)))
             for c in self.attr_cols:
-                d = self._np_dtype(self.dtypes[c])
                 vals = attrs[c]
-                units = self._time_units(c)
-                if units:
+                if isinstance(self.dtypes[c], TimestampType):
                     # A timestamp arrives as the worker's local time: store it as UTC.
-                    vals = [
-                        None if v is None else _cf_seconds(_arrow_utc.to_utc(v))
-                        for v in vals
-                    ]
-                if self._is_float_dtype(d):
-                    arr = np.array(
-                        [v if v is not None else np.nan for v in vals], dtype=d
-                    )
-                    dv = nc.createVariable(c, d, ("obs",), fill_value=np.nan)
-                else:
-                    fv = _nc4.default_fillvals[d]
-                    arr = np.array([v if v is not None else fv for v in vals], dtype=d)
-                    dv = nc.createVariable(c, d, ("obs",), fill_value=fv)
-                _set_time_attrs(dv, units)
-                dv.coordinates = "latitude longitude"
-                dv[:] = arr
+                    vals = [None if v is None else _arrow_utc.to_utc(v) for v in vals]
+                d = self._np_dtype(self.dtypes[c])
+                dv = _create_attr_var(nc, c, d, self._cf_attrs(c))
+                dv[:] = _attr_array(vals, d)
         finally:
             nc.close()
 
@@ -1076,7 +1120,7 @@ class NetcdfVectorGbxWriter(DataSourceWriter):
 
         # attr_specs come from the Spark schema (dynamic vector schema).
         attr_specs = [
-            (c, self._np_dtype(self.dtypes[c]), self._time_units(c))
+            (c, self._np_dtype(self.dtypes[c]), self._cf_attrs(c))
             for c in self.attr_cols
         ]
 

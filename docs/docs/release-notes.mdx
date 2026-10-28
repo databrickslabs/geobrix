@@ -368,11 +368,13 @@ formats.
   on Serverless compute with `AssertionError`, because those workers have no session time zone
   for PySpark to type the column with. Timestamps are now read and written as UTC, and a
   written timestamp is exact on a worker whose time zone is not UTC.
-- **`netcdf_gbx` writes a timestamp attribute as a CF time variable.** A vector write with a
-  timestamp column failed (in the task for the default write, when the files were merged for
-  `singleFile`). The column is now written as seconds since 1970-01-01 00:00:00 UTC with CF
-  `units` and `calendar` attributes, a null timestamp is the fill value, and `merge` keeps the
-  units. See [NetCDF Writer](./writers/netcdf).
+- **`netcdf_gbx` writes timestamp, date, string and boolean attributes.** A vector write with
+  a column of one of these types failed (in the task for the default write, when the files were
+  merged for `singleFile`). A timestamp is now written as a CF time variable (seconds since
+  1970-01-01 00:00:00 UTC, with `units` and `calendar` attributes), a date the same in days, a
+  string as a text variable (a null is an empty string), and a boolean as an int8 0 or 1 with
+  `flag_values` and `flag_meanings`. A null timestamp, date or boolean is the fill value, and
+  `merge` keeps the attributes. See [NetCDF Writer](./writers/netcdf).
 
 ### Grid explode functions — `bng_tessellateexplode` columns (behavior change)
 

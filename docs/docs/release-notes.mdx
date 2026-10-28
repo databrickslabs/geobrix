@@ -423,6 +423,14 @@ formats.
   as the polygon they form. A line or point in the collection can remain in the chip of a cell the
   polygons also touch, but never yields a cell of its own.
 
+### Grid functions — a NULL resolution in a batch (fix)
+
+- **`bng_pointascell` and `bng_eastnorthasbng` answer the rows beside a NULL.** In the lightweight
+  tier, a NULL in the `resolution` column (an `INT`) of a batch made every value arrive as a float,
+  so `bng_pointascell` failed the whole batch (`BNG resolution not supported; found nan`) and
+  `bng_eastnorthasbng` did too when the resolution was NULL. A NULL resolution, easting or
+  northing now gives a NULL cell and the other rows of the batch are answered as usual.
+
 ### Raster tiling functions
 
 - **Raster generator examples show each tier's form.** The SQL and Python examples of

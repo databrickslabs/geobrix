@@ -255,6 +255,7 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
     # the EPSG:27700 easting/northing (heavy BNG_PointAsCell semantics).
     out = []
     for g, r in zip(geom, res):
+        r = _res_or_null(r)  # a NULL resolution arrives as NaN in a batch
         if g is None or r is None:
             out.append(None)
             continue
@@ -263,7 +264,7 @@ def _bng_pointascell_udf(geom: pd.Series, res: pd.Series) -> pd.Series:
             out.append(None)
             continue
         c = pg.centroid
-        out.append(_bng.point_as_cell(c.x, c.y, _norm_res(r)))
+        out.append(_bng.point_as_cell(c.x, c.y, r))
     return pd.Series(out)
 
 
@@ -272,10 +273,12 @@ def _bng_eastnorthasbng_udf(e: pd.Series, n: pd.Series, res: pd.Series) -> pd.Se
     # eastnorthasbng takes SCALAR EPSG:27700 eastings/northings (not a geometry).
     out = []
     for ee, nn, r in zip(e, n, res):
-        if ee is None or nn is None or r is None:
+        # A NULL DOUBLE (or INT) arrives in pandas as NaN: NULL in, NULL out.
+        r = _res_or_null(r)
+        if pd.isna(ee) or pd.isna(nn) or r is None:
             out.append(None)
             continue
-        out.append(_bng.point_as_cell(float(ee), float(nn), _norm_res(r)))
+        out.append(_bng.point_as_cell(float(ee), float(nn), r))
     return pd.Series(out)
 
 
@@ -670,7 +673,23 @@ def _norm_res(res):
     """
     if isinstance(res, (np.integer,)):
         return int(res)
+    if isinstance(res, (float, np.floating)) and float(res).is_integer():
+        # A NULL in an INT column makes pandas hand the whole batch over as floats (3.0).
+        return int(res)
     return res
+
+
+def _res_or_null(res):
+    """The resolution of ONE ROW of a pandas batch, NULL-safe: ``None`` for a NULL, else
+    :func:`_norm_res`.
+
+    A NULL in an INT (or DOUBLE) column makes pandas hand the whole batch over as floats with
+    ``NaN`` for the NULL, so a resolution arrives as ``3.0``, and a NULL as ``nan`` that no
+    ``is None`` test sees (``gbx_bng_pointascell`` failed with "found nan" and took the valid rows
+    of the batch with it). Every light BNG pandas UDF that takes a resolution reads it through
+    this helper; the row-wise UDFs and UDTFs receive Python ints and ``None``.
+    """
+    return None if pd.isna(res) else _norm_res(res)
 
 
 # ============================================================================

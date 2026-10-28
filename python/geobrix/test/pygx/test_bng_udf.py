@@ -26,6 +26,28 @@ def test_pointascell_wkt_uses_bng_coords(spark):
     assert row["c"] == "TQ3080"
 
 
+def test_a_null_in_an_int_resolution_column_leaves_the_other_rows_alone(spark):
+    """A NULL in an INT (or DOUBLE) column makes pandas hand the whole batch over as floats: the
+    resolution is 3.0 and the NULL is NaN. One row of each signature shape that takes a
+    resolution (geometry + res, easting + northing + res) beside the NULL rows."""
+    gx.register(spark)
+    rows = [
+        (1, "POINT(530000 180000)", 530000.0, 180000.0, 3),
+        (2, "POINT(530000 180000)", 530000.0, 180000.0, None),
+        (3, "POINT(325000 673000)", 325000.0, 673000.0, 3),
+        (4, "POINT(530000 180000)", None, 180000.0, 3),
+    ]
+    spark.createDataFrame(
+        rows, "id int, wkt string, e double, n double, res int"
+    ).coalesce(1).createOrReplaceTempView("bng_null_res")
+    got = spark.sql(
+        "SELECT id, gbx_bng_pointascell(wkt, res) AS p, "
+        "gbx_bng_eastnorthasbng(e, n, res) AS en FROM bng_null_res ORDER BY id"
+    ).collect()
+    assert [r["p"] for r in got] == ["TQ3080", None, "NT2573", "TQ3080"]
+    assert [r["en"] for r in got] == ["TQ3080", None, "NT2573", None]
+
+
 def test_aswkb_no_srid_polygon(spark):
     gx.register(spark)
     out = spark.sql("SELECT gbx_bng_aswkb('TQ3080') AS w").collect()[0]

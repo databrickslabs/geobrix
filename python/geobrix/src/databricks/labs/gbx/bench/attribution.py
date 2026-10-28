@@ -19,8 +19,10 @@ from __future__ import annotations
 import json
 import re
 import sys
+import threading
 import time
 import urllib.request
+import uuid
 from datetime import datetime
 from typing import Dict, List, Optional
 
@@ -250,16 +252,19 @@ class WorkerPeak:
     any earlier query ran on that worker. ``start()`` resets it on every worker (writing 5 to
     ``/proc/self/clear_refs``), ``read()`` collects it afterwards. Both go through a barrier
     stage with one task per slot, which puts one task on every worker process; a plain job
-    cannot promise that. ``read()`` is None, with the reason in ``reason``, where that is not
-    possible: off Linux, and on a Connect session (it cannot count the slots or reach a
-    worker).
+    cannot promise that. ``read()`` is None, with the reason in ``reason``, wherever the reset
+    cannot be shown to reach every worker: off Linux, on a Connect session, when the Spark REST
+    API does not give the executors' slots, when they differ from ``defaultParallelism`` (a
+    stale ``spark.default.parallelism`` would reset only some workers and still read a number),
+    and when no slot frees up within ``TIMEOUT_S`` (a busy cluster).
 
     Why not sampling: a sampler would have to run inside the workers during the shape and
-    compete with it for slots. The reset needs no thread, and it costs two short jobs.
+    compete with it for slots. The reset needs no thread, and it costs two short jobs. It
+    assumes a fixed-size cluster that nothing else is using.
     """
 
-    # A barrier stage that cannot get a slot per task is retried by the scheduler for minutes. If
-    # a sweep fails, the session is not asked again: one stall per run, not one per form.
+    TIMEOUT_S = 60.0
+    # A sweep that fails is not tried again on that session: one failure per run, not one per form.
     _failed: Dict[int, str] = {}
 
     def __init__(self, spark):
@@ -273,12 +278,68 @@ class WorkerPeak:
         elif id(spark) in WorkerPeak._failed:
             self.reason = WorkerPeak._failed[id(spark)]
         else:
-            try:
-                sc = spark.sparkContext
-                cpus = max(1, int(sc.getConf().get("spark.task.cpus", "1")))
-                self._slots = max(1, int(sc.defaultParallelism) // cpus)
-            except Exception as exc:  # noqa: BLE001
-                self.reason = f"slot count unavailable ({type(exc).__name__})"
+            self._slots, self.reason = self._count_slots()
+
+    def _count_slots(self):
+        """(slots, reason): the executors' task slots from the REST API, which must agree with
+        the default parallelism the barrier stage is sized by."""
+        try:
+            sc = self.spark.sparkContext
+            cpus = max(1, int(sc.getConf().get("spark.task.cpus", "1")))
+            base = f"{sc.uiWebUrl}/api/v1/applications/{sc.applicationId}"
+            cores = sum(
+                e.get("totalCores", 0)
+                for e in _get(f"{base}/executors")
+                if e.get("isActive", True)
+            )
+            declared = int(sc.defaultParallelism) // cpus
+        except Exception as exc:  # noqa: BLE001
+            return 0, f"executor slots unavailable ({type(exc).__name__})"
+        slots = cores // cpus
+        if slots < 1 or slots != declared:
+            return 0, (
+                f"default parallelism ({declared}) != executor slots ({slots}): "
+                "a reset would miss workers"
+            )
+        return slots, None
+
+    def _fail(self, what: str, exc: Exception) -> None:
+        if isinstance(exc, TimeoutError):
+            self.reason = f"worker {what} timed out: {exc}"
+        else:
+            self.reason = (
+                f"worker {what} failed ({type(exc).__name__}: {str(exc)[:120]})"
+            )
+        WorkerPeak._failed[id(self.spark)] = self.reason
+
+    def _bounded(self, run):
+        """run() as a job group cancelled after TIMEOUT_S: a barrier stage waits for a free slot
+        on every worker, and a busy cluster would hold the whole run."""
+        sc = self.spark.sparkContext
+        group = f"gbx-worker-peak-{uuid.uuid4().hex[:8]}"
+        fired = threading.Event()
+
+        def cancel():
+            fired.set()
+            sc.cancelJobGroup(group)
+
+        timer = threading.Timer(self.TIMEOUT_S, cancel)
+        timer.daemon = True
+        sc.setJobGroup(group, "gbx worker peak", interruptOnCancel=True)
+        timer.start()
+        try:
+            return run()
+        except Exception as exc:
+            if fired.is_set():
+                raise TimeoutError(
+                    f"no free slot for every worker within {self.TIMEOUT_S:g}s"
+                ) from exc
+            raise
+        finally:
+            timer.cancel()
+            sc.setLocalProperty(
+                "spark.jobGroup.id", None
+            )  # PySpark has no clearJobGroup
 
     def _sweep(self, reset: bool) -> Optional[float]:
         def task(
@@ -299,8 +360,8 @@ class WorkerPeak:
             yield pd.DataFrame({"hwm": [hwm]})
 
         n = self._slots
-        row = (
-            self.spark.range(n, numPartitions=n)
+        row = self._bounded(
+            lambda: self.spark.range(n, numPartitions=n)
             .mapInPandas(task, "hwm double", barrier=True)
             .agg({"hwm": "max"})
             .first()
@@ -312,10 +373,7 @@ class WorkerPeak:
             try:
                 self._sweep(reset=True)
             except Exception as exc:  # noqa: BLE001
-                self.reason = (
-                    f"worker reset failed ({type(exc).__name__}: {str(exc)[:120]})"
-                )
-                WorkerPeak._failed[id(self.spark)] = self.reason
+                self._fail("reset", exc)
 
     def read(self) -> Optional[float]:
         if self.reason is not None:
@@ -323,6 +381,5 @@ class WorkerPeak:
         try:
             return self._sweep(reset=False)
         except Exception as exc:  # noqa: BLE001
-            self.reason = f"worker read failed ({type(exc).__name__}: {str(exc)[:120]})"
-            WorkerPeak._failed[id(self.spark)] = self.reason
+            self._fail("read", exc)
             return None

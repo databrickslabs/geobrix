@@ -86,7 +86,12 @@ from databricks.labs.gbx.zarr._meta import (
     parse_v3,
     with_shape,
 )
-from databricks.labs.gbx.zarr._pack import PackWriter, crc32c_hex, encode_inner_chunk
+from databricks.labs.gbx.zarr._pack import (
+    PackWriter,
+    crc32c_hex,
+    encode_inner_chunk,
+    require_packs,
+)
 from databricks.labs.gbx.zarr._plan import unit_key
 from databricks.labs.gbx.zarr._write_tasks import (
     PIECES_DDL,
@@ -2454,6 +2459,14 @@ def _wait(attempt: int) -> float:
     return random.uniform(0.2, 1.0) * min(2**attempt, _MAX_WAIT_SECONDS)
 
 
+def _require_packs(plan: _Plan, rows: pa.Table) -> None:
+    """The pack files the rows point at must still be there (see ``require_packs``)."""
+    live = rows.filter(
+        pc.and_(pc.equal(rows.column("op"), "upsert"), pc.is_valid(rows.column("file")))
+    )
+    require_packs(plan.root, live.column("file").to_pylist(), what="write")
+
+
 def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
     """Phase 2: the CAS commit, rebasing metadata at most ``_ATTEMPTS`` times."""
     ids = plan.docs.ids if plan.docs is not None else {}
@@ -2470,6 +2483,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
     sharded = {n: m.shard is not None for n, m in plan.arrays.items()}
     if plan.mode == "create":
         rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
+        _require_packs(plan, rows)
         return M.commit(
             spark, plan.table, rows, write_id=plan.write_id, meta=meta, sharded=sharded
         )
@@ -2487,6 +2501,7 @@ def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
             docs_rows, coord_rows = _rebase(spark, plan, latest)
             sharded = {n: m.shard is not None for n, m in plan.arrays.items()}
             rows = pa.concat_tables([docs_rows, coord_rows, data_rows])
+        _require_packs(plan, rows)
         try:
             return M.commit(
                 spark,

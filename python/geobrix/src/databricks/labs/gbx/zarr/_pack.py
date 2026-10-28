@@ -33,6 +33,7 @@ __all__ = [
     "crc32c_hex",
     "is_fill",
     "pad_to_chunk",
+    "require_packs",
 ]
 
 _ENCODERS: OrderedDict[str, tuple] = (
@@ -134,6 +135,32 @@ def is_fill(chunk: np.ndarray, fill) -> bool:
         if np.isnan(fill):
             return bool(np.isnan(chunk).all())
     return bool((chunk == fill).all())
+
+
+def require_packs(root: str, files, *, what: str) -> None:
+    """Raise ``ZarrError`` unless every pack file in ``files`` (paths relative to ``root``)
+    still exists.
+
+    A commit calls this just before it points rows at the packs its files phase wrote: a
+    vacuum forced to delete files younger than the store's retain (``force=True``) can have
+    removed them meanwhile, and a row that points at a missing file is a version that
+    cannot be read. ``what`` names the operation in the message.
+    """
+    gone = []
+    for f in sorted(set(files)):
+        path = f if os.path.isabs(f) else os.path.join(root, f)
+        try:
+            _retry_transient(lambda p=path: os.stat(p), attempts=3, backoff=0.2)
+        except FileNotFoundError:
+            gone.append(f)
+    if gone:
+        raise ZarrError(
+            f"{len(gone)} pack file(s) of this {what} are gone before it could commit "
+            f"(e.g. {gone[0]}): a vacuum with force=True removed the files of a write "
+            "that was still running",
+            fix=f"run the {what} again; vacuum without force=True (the store's own "
+            "retain) while writes are running",
+        )
 
 
 class PackWriter:

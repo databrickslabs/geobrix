@@ -748,9 +748,9 @@ def test_read_tiles_checks_its_arguments(spark_delta, era5_v3_sharded):
         _read.gbx_zarr_read(spark_delta, path, output="rasters")
     with pytest.raises(
         ZarrAccessUnavailable
-    ) as e:  # direct access is not available yet
+    ) as e:  # a plain store has no direct access
         _tiles_df(spark_delta, path, access="direct")
-    assert e.value.fix == 'use access="auto" or "fuse"'
+    assert 'access="auto"' in e.value.fix
     assert (
         _tiles_df(
             spark_delta, path, variables=["t2m"], isel={"time": slice(0, 0)}

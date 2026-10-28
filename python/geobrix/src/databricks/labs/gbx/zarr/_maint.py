@@ -49,7 +49,7 @@ import pyarrow.compute as pc
 from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr import _manifest as M
-from databricks.labs.gbx.zarr._access import FuseRangeReader, identities_match
+from databricks.labs.gbx.zarr._access import identities_match, reader_for
 from databricks.labs.gbx.zarr._pack import PackWriter, require_packs
 from databricks.labs.gbx.zarr._register import OWNER_MARKER, identity_of
 from databricks.labs.gbx.zarr._shard import Region
@@ -227,7 +227,9 @@ def _tombstone(array, key, identity, write_id, expected) -> dict:
     }
 
 
-def _fold_array(name, meta, groups, rows, reader, root, write_id, cap, ledger) -> dict:
+def _fold_array(
+    name, meta, groups, rows, reader, root, write_id, cap, ledger, access=None
+) -> dict:
     """Commit rows per ``(array, shard_key)`` for the shards of one array.
 
     ``groups`` maps a shard key to ``(shard row or None, [chunk rows])``; ``rows`` is every
@@ -261,7 +263,9 @@ def _fold_array(name, meta, groups, rows, reader, root, write_id, cap, ledger) -
                     close_pack()
                 if pack is None:
                     pack = PackWriter(
-                        os.path.join(root, "data", name, write_id), reader_root=root
+                        os.path.join(root, "data", name, write_id),
+                        reader_root=root,
+                        access=access,
                     )
                 offset, crc, copied = None, 0, 0
                 for part in _stream(shard, reader):
@@ -338,9 +342,12 @@ def _optimize(
     variables=None,
     target_file_mb: int = 128,
     shards: set | None = None,
+    access=None,
 ) -> int:
     """``gbx_zarr_optimize``; ``shards`` (a set of ``(array, shard_key)``) narrows it to the
-    shards a write has just touched."""
+    shards a write has just touched. ``access`` (an ``AccessConfig``) is how the fold
+    reaches the files; a write passes its own, so a direct write folds directly. The public
+    function has no ``access``: it reads and writes through the Volume mount."""
     from databricks.labs.gbx.zarr import _write
 
     if (
@@ -399,7 +406,7 @@ def _optimize(
     }
 
     write_id = uuid.uuid4().hex
-    reader = FuseRangeReader(root, base_root=base)
+    reader = reader_for(access, root, base)
     plan: dict[tuple, list[dict]] = {}
     ledger: dict[tuple, tuple] = {}  # (kind, array, key) of a row -> its shard
     cap = target_file_mb * _MIB
@@ -423,6 +430,7 @@ def _optimize(
                 write_id,
                 cap,
                 ledger,
+                access,
             )
         )
 
@@ -436,6 +444,7 @@ def _optimize(
             root,
             [r["file"] for r in rows if r.get("file") and r["op"] == "upsert"],
             what="optimize",
+            access=access,
         )
         meta = {
             "mode": "optimize",

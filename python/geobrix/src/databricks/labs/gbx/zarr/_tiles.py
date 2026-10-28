@@ -26,6 +26,8 @@ chokepoint of every pyrx function); rasterio, zarr and the engines load when a t
 
 from __future__ import annotations
 
+import contextlib
+import contextvars
 import functools
 import itertools
 import json
@@ -50,6 +52,7 @@ __all__ = [
     "is_zarr_tile",
     "plan_tiles",
     "source_of",
+    "tile_access",
     "tile_rows",
     "zarr_tile_dataset_bytes",
     "zarr_tile_header",
@@ -995,6 +998,25 @@ def zarr_tile_header_view(tile) -> _ZarrHeader:
     return _ZarrHeader(zarr_tile_header(tile))
 
 
+# The AccessConfig a task reads the tiles it materializes with (set by ``tile_access``).
+# It lives in the task process only: a virtual tile carries no credentials, so one opened
+# anywhere else reads through the mount.
+_ACCESS: contextvars.ContextVar = contextvars.ContextVar(
+    "gbx_zarr_tile_access", default=None
+)
+
+
+@contextlib.contextmanager
+def tile_access(access):
+    """Within the block, tiles are read with ``access`` (an ``AccessConfig``; ``None`` is the
+    Volume mount)."""
+    token = _ACCESS.set(access)
+    try:
+        yield
+    finally:
+        _ACCESS.reset(token)
+
+
 def _mounted(root: str) -> str:
     """``root`` as a path the process can open, or ``ZarrAccessUnavailable``.
 
@@ -1043,7 +1065,7 @@ def _read_box(rd: _Read, box: list[tuple[int, int]]) -> np.ndarray:
     slices = tuple(slice(a, b) for a, b in box)
     if not rd.table:  # a plain store: whatever bytes are there now
         return read_box(open_plain_array(root, rd.array, engine="zarr"), slices)
-    from databricks.labs.gbx.zarr._access import FuseRangeReader
+    from databricks.labs.gbx.zarr._access import reader_for
     from databricks.labs.gbx.zarr._meta import doc_bytes
     from databricks.labs.gbx.zarr._store import ManifestStore
 
@@ -1052,7 +1074,7 @@ def _read_box(rd: _Read, box: list[tuple[int, int]]) -> np.ndarray:
     store = ManifestStore(
         {f"{rd.array}/{name}": raw for name, raw in doc_bytes(meta).items()},
         _rows_of(rd.array, rd.refs),
-        FuseRangeReader(root, base_root=base),
+        reader_for(_ACCESS.get(), root, base),
         {rd.array: meta},
     )
     try:

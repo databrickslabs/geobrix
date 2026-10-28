@@ -12,6 +12,7 @@ The Delta tests keep one end-to-end test per behaviour (``test_read.py``); these
 carry the matrix around it.
 """
 
+import dataclasses
 import json
 
 import numpy as np
@@ -19,10 +20,17 @@ import pyarrow as pa
 
 
 def plan(
-    source, variables=None, sel=None, isel=None, output="blocks", decode=True, flag=None
+    source,
+    variables=None,
+    sel=None,
+    isel=None,
+    output="blocks",
+    decode=True,
+    flag=None,
+    access=None,
 ):
     """``(src, names, units, cfg)`` of a read of ``source``: a path (a plain store) or a
-    ``registered_source``."""
+    ``registered_source``. ``access`` is the ``AccessConfig`` its tasks read with."""
     from databricks.labs.gbx.zarr import _read
 
     src = (
@@ -32,7 +40,7 @@ def plan(
     )
     names = _read._choose_variables(variables, src)
     units, cfg = _read._plan(None, src, names, sel, isel, output, decode, flag)
-    return src, names, units, cfg
+    return src, names, units, dataclasses.replace(cfg, access=access)
 
 
 def run(units, cfg):
@@ -294,7 +302,15 @@ def registered_source(
 
 
 def sample_table(
-    source, points, *, crs=None, engine="auto", variables=None, sel=None, flag=None
+    source,
+    points,
+    *,
+    crs=None,
+    engine="auto",
+    variables=None,
+    sel=None,
+    flag=None,
+    access=None,
 ):
     """``(cfg, pa.Table)`` of ``gbx_zarr_sample`` at the geometries ``points``, without Spark.
 
@@ -311,6 +327,7 @@ def sample_table(
     )
     names = _read._choose_variables(variables, src)
     cfg = _sample._plan_sample(src, names, sel, crs, flag)
+    cfg.read = dataclasses.replace(cfg.read, access=access)
     uid, row, col = cfg.grid.map(points, crs)
     units = _sample._units(src, cfg, np.unique(uid[uid >= 0]))
     parts = []

@@ -74,6 +74,7 @@ import pyarrow.compute as pc
 from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
 from databricks.labs.gbx.zarr import _write_tiles
+from databricks.labs.gbx.zarr._access import resolve_access
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
@@ -108,7 +109,6 @@ from databricks.labs.gbx.zarr._write_tasks import (
     part_of,
 )
 from databricks.labs.gbx.zarr.errors import (
-    ZarrAccessUnavailable,
     ZarrError,
     ZarrGridMismatch,
     ZarrOwnershipError,
@@ -876,6 +876,9 @@ class _Plan:
     region: dict = field(default_factory=dict)
     store_labels: dict = field(default_factory=dict)  # decoded coordinates at the base
     planned: dict | None = None  # name -> ArrayMeta as planned, before any rebase
+    access: object = (
+        None  # AccessConfig: how the tasks reach the files (holds credentials)
+    )
 
 
 def _as_numbers(values):
@@ -1893,6 +1896,7 @@ def _write_files(spark, plan: _Plan) -> pa.Table:
         batch_bytes=sizes["batch_bytes"],
         roll_bytes=sizes["roll_bytes"],
         fault=_FAULT,
+        access=plan.access,
     )
     pieces = frame.mapInArrow(explode_function(cfg), PIECES_DDL)
     parts, nbytes = _planned(plan)
@@ -2353,6 +2357,7 @@ def _patch_rows(spark, plan, snap, docs, patch, writers, rebase, tools):
             writer = writers[patch.name] = PackWriter(
                 os.path.join(plan.root, "data", patch.name, plan.write_id),
                 reader_root=plan.root,
+                access=plan.access,
             )
         offset, length = writer.add(data)
         out.append(
@@ -2467,7 +2472,9 @@ def _require_packs(plan: _Plan, rows: pa.Table) -> None:
     live = rows.filter(
         pc.and_(pc.equal(rows.column("op"), "upsert"), pc.is_valid(rows.column("file")))
     )
-    require_packs(plan.root, live.column("file").to_pylist(), what="write")
+    require_packs(
+        plan.root, live.column("file").to_pylist(), what="write", access=plan.access
+    )
 
 
 def _commit(spark, plan: _Plan, data_rows: pa.Table, stats: dict) -> int:
@@ -2577,11 +2584,13 @@ def _write(spark, plan: _Plan, optimize: bool = False) -> int:
     }
     version = _commit(spark, plan, data_rows, stats)
     if optimize:
-        _fold_touched(spark, plan.table, version, _touched_shards(data_rows))
+        _fold_touched(
+            spark, plan.table, version, _touched_shards(data_rows), plan.access
+        )
     return version
 
 
-def _fold_touched(spark, table: str, version: int, shards: set) -> None:
+def _fold_touched(spark, table: str, version: int, shards: set, access=None) -> None:
     """``gbx_zarr_optimize`` for exactly the shards a write touched, right after its commit.
 
     The write is already committed and stays so; a fold that fails says that, and a write
@@ -2589,7 +2598,7 @@ def _fold_touched(spark, table: str, version: int, shards: set) -> None:
     from databricks.labs.gbx.zarr._maint import _optimize
 
     try:
-        _optimize(spark, table, shards=shards)
+        _optimize(spark, table, shards=shards, access=access)
     except ZarrError as e:
         raise ZarrError(
             f"the write committed (version {version}) but folding its shards failed: "
@@ -2599,6 +2608,18 @@ def _fold_touched(spark, table: str, version: int, shards: set) -> None:
 
 
 # --- the public function ---------------------------------------------------------------
+
+
+def _write_access(spark, plan: _Plan, access: str):
+    """How this write's tasks reach the store's files (``resolve_access``, on the driver):
+    the credentials cover the Volume of ``plan.root`` and a registered store's base."""
+    return resolve_access(
+        spark,
+        plan.root,
+        access=access,
+        operation="WRITE_VOLUME",
+        also=[plan.base_root] if plan.base_root else [],
+    )
 
 
 def _session(data, spark):
@@ -2775,7 +2796,11 @@ def gbx_zarr_write(
     is refused, so give them a deterministic input (a table is best). Errors raised while
     Spark runs the write arrive as ``pyspark.errors.PythonException`` with the GeoBrix
     error name and its ``Fix:`` line in the message; a failed write commits nothing.
-    ``access`` is ``"auto"`` or ``"fuse"``. ``optimize=True`` runs ``gbx_zarr_optimize`` on
+    ``access`` is how the tasks reach the store's files: ``"fuse"`` through the Volume mount,
+    ``"direct"`` straight against the Volume's cloud storage with temporary credentials Unity
+    Catalog vends to the driver for this call (each pack is one ``obstore.put``; raises
+    ``ZarrAccessUnavailable`` where the credentials cannot be had), ``"auto"`` direct where
+    they can be had and the mount elsewhere (Serverless), without an error. ``optimize=True`` runs ``gbx_zarr_optimize`` on
     exactly the shards the write touched, right after its commit (a few small writes into a
     big shard cost one fold of that shard); the version returned is the write's own, and the
     fold, if it commits, is the next one. Content is the same either way.
@@ -2794,13 +2819,8 @@ def gbx_zarr_write(
         raise ValueError(f"mode must be one of {_MODES}, got {mode!r}. Fix: pass one.")
     if access not in _ACCESS:
         raise ValueError(
-            f"access must be one of {_ACCESS}, got {access!r}. Fix: pass 'auto' or 'fuse'."
-        )
-    if access == "direct":
-        raise ZarrAccessUnavailable(
-            "direct storage access is not available yet: files are written through the "
-            "Volume mount",
-            fix='use access="auto" or "fuse"',
+            f"access must be one of {_ACCESS}, got {access!r}. "
+            "Fix: pass 'auto', 'fuse' or 'direct'."
         )
     if mode == "create":
         if not root:
@@ -2865,6 +2885,7 @@ def gbx_zarr_write(
             owner,
             tiles,
         )
+        plan.access = _write_access(spark, plan, access)
         return _write(spark, plan, optimize)
 
     data_root = _local_root(root)
@@ -2879,6 +2900,7 @@ def gbx_zarr_write(
     fm = resolve_file_mode(spark, file_mode, has_filespace=False)
     inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
+    plan.access = _write_access(spark, plan, access)  # before anything is claimed
     claimed = made = False
     try:
         claimed = _claim_marker(data_root, owner, "managed")

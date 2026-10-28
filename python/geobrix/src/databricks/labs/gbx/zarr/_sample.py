@@ -32,6 +32,7 @@ The work runs where it is cheapest:
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 from collections.abc import Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -64,6 +65,8 @@ from databricks.labs.gbx.zarr._read import (
     check_access,
     check_version_args,
     classify_source,
+    plain_direct_error,
+    source_access,
 )
 from databricks.labs.gbx.zarr._select import AxisSel, _axis_of, touched_chunks
 from databricks.labs.gbx.zarr._tiles import _grid_crs, _is_geographic, _spatial_dims
@@ -644,7 +647,9 @@ def gbx_zarr_sample(
     ``gbx_zarr_read``) all give ``NULL``. A point that is not a POINT raises ``ValueError``.
 
     ``method`` is ``"nearest"``; ``"bilinear"`` is planned and raises ``ZarrUnsupported``.
-    ``access`` is ``"auto"`` or ``"fuse"``.
+    ``access`` is ``"auto"``, ``"fuse"`` or ``"direct"``, as in ``gbx_zarr_read`` (direct
+    storage access with Unity Catalog credentials where they can be had; a plain store is
+    read through its path, so ``"direct"`` raises for it).
 
     Up to 100,000 points are collected to the driver; if they lie in at most four chunks of
     the grid and the answer is small the driver reads them and returns the result, with no
@@ -658,6 +663,8 @@ def gbx_zarr_sample(
             fix='use method="nearest"; bilinear is planned',
         )
     check_access(access)
+    if access == "direct" and classify_source(source) == "path":
+        raise plain_direct_error(source)  # a plain store has no files to reach directly
     check_version_args(version_as_of, timestamp_as_of)
     _check_mask_flag(use_zarr_fill_value_as_mask)
     if geom_col not in points_df.columns:
@@ -681,6 +688,10 @@ def gbx_zarr_sample(
     src = _open_source(spark, source, kind, version_as_of, timestamp_as_of)
     names = _choose_variables(variables, src)
     cfg = _plan_sample(src, names, sel, crs, use_zarr_fill_value_as_mask)
+    cfg = dataclasses.replace(
+        cfg,
+        read=dataclasses.replace(cfg.read, access=source_access(spark, src, access)),
+    )
     clash = sorted({n for n, _ in cfg.columns} & {*points_df.columns, *_INTERNAL})
     if clash:
         raise ValueError(

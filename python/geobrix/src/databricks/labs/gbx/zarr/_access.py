@@ -1,29 +1,53 @@
-"""Range readers: how the store gets the bytes of a ``Region``.
+"""Range readers: how the store gets the bytes of a ``Region``, and where its packs go.
 
 ``FuseRangeReader`` reads files through the local file system, which is how a
 Unity Catalog Volume appears on a cluster (``/Volumes/...``). Blocking, so callers on
 an event loop run it in a thread. It opens only files under the store's roots: a
 manifest is data, and a row must not be able to name ``/etc/passwd``. The name is checked
 before the file is opened and, on Linux, the opened descriptor is checked again.
+
+``resolve_access`` decides, once per ``gbx_zarr_*`` call and on the driver, whether the
+tasks read and write the Volume through the file system or straight against its cloud
+storage. For direct access it asks Unity Catalog for temporary credentials for the Volume
+(``temporary-volume-credentials``), which only dedicated compute is allowed to get. The
+credentials ride in the task closure inside an ``AccessConfig`` and nowhere else: not in a
+DataFrame, a ``Unit``, tile metadata, a log line or an error message. ``ObstoreRangeReader``
+then reads byte ranges with obstore under the same containment rules as the FUSE reader,
+and ``put_pack`` writes a pack with one ``obstore.put``.
 """
 
 from __future__ import annotations
 
+import logging
 import os
+import posixpath
+import re
 import sys
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from typing import Protocol
 
 from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr._shard import Region
-from databricks.labs.gbx.zarr.errors import ZarrStoreDrift
+from databricks.labs.gbx.zarr.errors import ZarrAccessUnavailable, ZarrStoreDrift
 
 __all__ = [
     "RangeReader",
     "FuseRangeReader",
+    "ObstoreRangeReader",
+    "AccessConfig",
+    "FUSE",
+    "resolve_access",
+    "reader_for",
+    "put_pack",
+    "stat_for",
     "check_identity",
     "identities_match",
     "MTIME_RESOLUTION_MS",
 ]
+
+_LOG = logging.getLogger(__name__)
 
 # A transient FUSE miss is worth another try; these will not change by waiting.
 _PERMANENT = (PermissionError, IsADirectoryError, NotADirectoryError)
@@ -109,7 +133,57 @@ def _within(path: str, root: str) -> bool:
     return os.path.commonpath([path, root]) == root
 
 
-class FuseRangeReader:
+class _SpanReader:
+    """What the range readers share: ``read`` turns regions into per-file spans and back.
+
+    A subclass names where a region lives (``_resolve``, which also enforces that it lies
+    under the store's roots) and fetches the spans of one file (``_read_spans``). Regions of
+    one file that touch or overlap are fetched as one span; the bytes of each region come
+    back in the order the regions were given.
+    """
+
+    def _resolve(self, region: Region) -> tuple[str, str]:
+        raise NotImplementedError
+
+    def _read_spans(self, path: str, spans, root: str, recorded) -> list[bytes]:
+        raise NotImplementedError
+
+    def read(self, regions: list[Region]) -> list[bytes]:
+        out: list[bytes] = [b""] * len(regions)
+        by_file: dict[str, list[int]] = {}
+        root_of: dict[str, str] = (
+            {}
+        )  # path -> real path of the root it was checked under
+        recorded: dict[str, set[str]] = {}  # path -> identities the manifest recorded
+        for i, r in enumerate(regions):
+            path, root_of[path] = self._resolve(r)
+            if r.origin == "external" and r.identity is not None:
+                recorded.setdefault(path, set()).add(r.identity)
+            if r.offset < 0 or r.length < 0:
+                raise ZarrStoreDrift(
+                    f"manifest region {r.length} bytes at offset {r.offset} of "
+                    f"{r.file!r} is negative",
+                    fix="correct the row or run gbx_zarr_sync",
+                )
+            if r.length:
+                by_file.setdefault(path, []).append(i)
+        for path, members in by_file.items():
+            spans = _coalesce(regions, members)
+            for (start, _, held), data in zip(
+                spans,
+                self._read_spans(path, spans, root_of[path], recorded.get(path, ())),
+            ):
+                if len(held) == 1 and regions[held[0]].offset == start:
+                    out[held[0]] = data
+                    continue
+                view = memoryview(data)
+                for i in held:
+                    r = regions[i]
+                    out[i] = bytes(view[r.offset - start : r.offset - start + r.length])
+        return out
+
+
+class FuseRangeReader(_SpanReader):
     """Reads regions from files under a root with positional ``os.pread`` calls.
 
     A relative ``Region.file`` resolves under ``root``, or under ``base_root`` when the
@@ -186,40 +260,6 @@ class FuseRangeReader:
             fix="correct the row or run gbx_zarr_sync; a manifest may only point at "
             "files under the store root or, for a registered store, its base root",
         )
-
-    def read(self, regions: list[Region]) -> list[bytes]:
-        out: list[bytes] = [b""] * len(regions)
-        by_file: dict[str, list[int]] = {}
-        root_of: dict[str, str] = (
-            {}
-        )  # path -> real path of the root it was checked under
-        recorded: dict[str, set[str]] = {}  # path -> identities the manifest recorded
-        for i, r in enumerate(regions):
-            path, root_of[path] = self._resolve(r)
-            if r.origin == "external" and r.identity is not None:
-                recorded.setdefault(path, set()).add(r.identity)
-            if r.offset < 0 or r.length < 0:
-                raise ZarrStoreDrift(
-                    f"manifest region {r.length} bytes at offset {r.offset} of "
-                    f"{r.file!r} is negative",
-                    fix="correct the row or run gbx_zarr_sync",
-                )
-            if r.length:
-                by_file.setdefault(path, []).append(i)
-        for path, members in by_file.items():
-            spans = _coalesce(regions, members)
-            for (start, _, held), data in zip(
-                spans,
-                self._read_spans(path, spans, root_of[path], recorded.get(path, ())),
-            ):
-                if len(held) == 1 and regions[held[0]].offset == start:
-                    out[held[0]] = data
-                    continue
-                view = memoryview(data)
-                for i in held:
-                    r = regions[i]
-                    out[i] = bytes(view[r.offset - start : r.offset - start + r.length])
-        return out
 
     def _read_spans(self, path: str, spans, real_root: str, recorded) -> list[bytes]:
         def attempt() -> list[bytes]:
@@ -299,3 +339,420 @@ class FuseRangeReader:
             return out
         finally:
             os.close(fd)
+
+
+# --- direct access -----------------------------------------------------------------------
+
+_ACCESS_MODES = ("auto", "fuse", "direct")
+_OPERATIONS = ("READ_VOLUME", "WRITE_VOLUME")
+_VENDING_PATH = "/api/2.0/unity-catalog/temporary-volume-credentials"
+_UNAVAILABLE_FIX = (
+    'use access="auto" or "fuse" on this compute; direct access needs dedicated '
+    "compute where UC can vend volume credentials"
+)
+_VOLUME = re.compile(r"^/Volumes/([^/]+)/([^/]+)/([^/]+)(?:/|$)")
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
+_MS = timedelta(milliseconds=1)
+_SAS_SIGNATURE = re.compile(r"(?i)\bsig=[^&\s\"']+")
+
+
+@dataclass(frozen=True)
+class AccessConfig:
+    """How the tasks of one ``gbx_zarr_*`` call reach the files of a store.
+
+    ``mode`` is ``"fuse"`` (the Volume mount) or ``"direct"`` (the Volume's cloud
+    storage, through obstore). A direct config holds the Volume's mount path
+    (``volume_path``) and cloud location (``volume_url``), ``root_url`` (the cloud URL of
+    the path it was resolved for), the ``cloud`` (``"aws"``, ``"azure"`` or ``"gcp"``) and
+    ``creds``: the keyword arguments of the obstore store, which Unity Catalog vended for
+    an hour at most.
+
+    ``creds`` are secrets. They travel in a task closure (the config is a field of the
+    task configs) and nowhere else, so ``repr`` and ``str`` show the names of the fields and
+    never their values; nothing may put them in a DataFrame, a log line or an error message.
+    """
+
+    mode: str
+    root_url: str | None = None
+    creds: dict | None = field(default=None, repr=False)
+    cloud: str | None = None
+    volume_path: str | None = None
+    volume_url: str | None = None
+
+    def __repr__(self) -> str:
+        masked = (
+            None
+            if self.creds is None
+            else "<masked: " + ", ".join(sorted(self.creds)) + ">"
+        )
+        return (
+            f"AccessConfig(mode={self.mode!r}, root_url={self.root_url!r}, "
+            f"creds={masked}, cloud={self.cloud!r}, volume_path={self.volume_path!r}, "
+            f"volume_url={self.volume_url!r})"
+        )
+
+    @property
+    def is_direct(self) -> bool:
+        return self.mode == "direct"
+
+    def key_of(self, path: str) -> str:
+        """The object key, relative to the Volume's cloud location, of the file ``path``
+        (a mount path under ``volume_path``)."""
+        vol = self.volume_path
+        norm = os.path.normpath(path) if isinstance(path, str) else ""
+        if vol is None or not os.path.isabs(norm) or not _within(norm, vol):
+            raise _unavailable(
+                f"{path!r} is not under the Volume {vol} that direct access was set up for"
+            )
+        rel = os.path.relpath(norm, vol).replace(os.sep, "/")
+        return "" if rel == "." else rel
+
+    def url_of(self, path: str) -> str:
+        """The cloud URL of the file or directory ``path``."""
+        key = self.key_of(path)
+        return self.volume_url + ("/" + key if key else "")
+
+    def key_of_url(self, url: str) -> str:
+        """The object key of a cloud URL under ``volume_url``."""
+        base = self.volume_url
+        if url.rstrip("/") == base:
+            return ""
+        if not url.startswith(base + "/"):
+            raise _unavailable(
+                f"{url} is not under {base}, the cloud location of the Volume"
+            )
+        return url[len(base) + 1 :].strip("/")
+
+
+FUSE = AccessConfig("fuse")
+
+
+def _unavailable(message: str) -> ZarrAccessUnavailable:
+    return ZarrAccessUnavailable(message, fix=_UNAVAILABLE_FIX)
+
+
+class _Unavailable(Exception):
+    """Why credentials cannot be vended for a path; the text never holds a credential."""
+
+
+def _volume_of(path) -> tuple[str, str, str]:
+    """``("<catalog>.<schema>.<volume>", "/Volumes/<catalog>/<schema>/<volume>", path)`` of
+    a path on a Unity Catalog Volume (``path`` bare and normalized)."""
+    from databricks.labs.gbx.ds._listing import to_local_path
+
+    local = (
+        os.path.normpath(to_local_path(path)) if isinstance(path, str) and path else ""
+    )
+    m = _VOLUME.match(local)
+    if m is None:
+        raise _Unavailable(
+            f"{path!r} is not on a Unity Catalog Volume "
+            "(/Volumes/<catalog>/<schema>/<volume>/...)"
+        )
+    return ".".join(m.groups()), "/" + "/".join(("Volumes", *m.groups())), local
+
+
+def _workspace_client():
+    """The Databricks SDK client of this compute. Imported here, so a cluster without the
+    SDK (or a host test) still imports the package."""
+    from databricks.sdk import WorkspaceClient
+
+    return WorkspaceClient()
+
+
+def _credentials(response) -> tuple[str, dict]:
+    """``(cloud, store keyword arguments)`` of a ``temporary-volume-credentials`` response."""
+    if "aws_temp_credentials" in response:
+        c = response["aws_temp_credentials"]
+        return "aws", {
+            "access_key_id": c["access_key_id"],
+            "secret_access_key": c["secret_access_key"],
+            "session_token": c["session_token"],
+        }
+    if "azure_user_delegation_sas" in response:
+        return "azure", {
+            "sas_key": response["azure_user_delegation_sas"]["sas_token"].lstrip("?")
+        }
+    if "gcp_oauth_token" in response:
+        return "gcp", {"bearer_token": response["gcp_oauth_token"]["oauth_token"]}
+    raise _Unavailable(
+        "Unity Catalog returned credentials of a kind GeoBrix cannot use"
+    )
+
+
+def _vend(path: str, operation: str, also) -> AccessConfig:
+    """Credentials for the Volume ``path`` is on, from Unity Catalog. Driver only."""
+    name, volume_path, local = _volume_of(path)
+    for other in also:
+        if other and _volume_of(other)[1] != volume_path:
+            raise _Unavailable(
+                f"{other!r} is in another Volume than {path!r}, and one set of "
+                "credentials covers one Volume"
+            )
+    try:
+        import obstore  # noqa: F401
+    except ImportError:
+        raise _Unavailable("obstore is not installed") from None
+    try:
+        client = _workspace_client()
+    except ImportError:
+        raise _Unavailable("databricks-sdk is not installed") from None
+    volume_id = client.volumes.read(name).volume_id
+    response = client.api_client.do(
+        "POST",
+        _VENDING_PATH,
+        body={"volume_id": volume_id, "operation": operation},
+    )
+    cloud, creds = _credentials(response)
+    url = str(response["url"]).rstrip("/")
+    below = os.path.relpath(local, volume_path).replace(os.sep, "/")
+    return AccessConfig(
+        "direct",
+        url if below == "." else f"{url}/{below}",
+        creds,
+        cloud,
+        volume_path,
+        url,
+    )
+
+
+def resolve_access(
+    spark, volume_path: str, *, access: str, operation: str, also=()
+) -> AccessConfig:
+    """How the tasks of this call reach the files under ``volume_path``.
+
+    ``access`` is ``"fuse"`` (the Volume mount), ``"direct"`` (the Volume's cloud storage
+    with credentials Unity Catalog vends) or ``"auto"``: direct when the credentials can be
+    had, otherwise the mount, silently, whatever the reason (a Serverless
+    ``UC_SERVERLESS_UNTRUSTED_DOMAIN``, no SDK, no permission, no network, a path that is
+    not on a Volume). An explicit ``"direct"`` that cannot be had raises
+    ``ZarrAccessUnavailable``. ``operation`` is ``"READ_VOLUME"`` or ``"WRITE_VOLUME"``;
+    ``also`` lists other paths the tasks open (a registered store's base), which must be on
+    the same Volume. Runs on the driver; the credentials are valid for under an hour, so
+    each call asks again. ``spark`` is accepted like the other driver functions take it;
+    vending needs only the SDK.
+    """
+    if access not in _ACCESS_MODES:
+        raise ValueError(
+            f"access must be one of {_ACCESS_MODES}, got {access!r}. "
+            "Fix: pass 'auto', 'fuse' or 'direct'."
+        )
+    if operation not in _OPERATIONS:
+        raise ValueError(
+            f"operation must be one of {_OPERATIONS}, got {operation!r}. "
+            "Fix: pass 'READ_VOLUME' or 'WRITE_VOLUME'."
+        )
+    if access == "fuse":
+        return FUSE
+    try:
+        cfg = _vend(volume_path, operation, also)
+    except Exception as e:  # any failure to vend: the mount is the answer for "auto"
+        reason = (
+            str(e)
+            if isinstance(e, _Unavailable)
+            else f"{type(e).__name__}: {str(e)[:200]}"
+        )
+        _LOG.debug("direct access is not available for %s: %s", volume_path, reason)
+        if access == "auto":
+            return FUSE
+        raise _unavailable(
+            f"direct storage access is not available for {volume_path}: {reason}"
+        ) from None
+    _LOG.info("direct access to %s (%s)", cfg.volume_path, cfg.cloud)
+    return cfg
+
+
+def _make_store(cfg: AccessConfig):
+    """The obstore store of the Volume's cloud location, signed with the vended credentials
+    (the URL's scheme picks the store: ``s3``, ``abfss`` or ``gs``)."""
+    from obstore.store import from_url
+
+    return from_url(cfg.volume_url, **(cfg.creds or {}))
+
+
+def _scrub(cfg: AccessConfig, text: str) -> str:
+    """``text`` without any credential: a failed request can echo its URL or headers."""
+    for value in (cfg.creds or {}).values():
+        if isinstance(value, str) and value:
+            text = text.replace(value, "***")
+    return _SAS_SIGNATURE.sub("sig=***", text)
+
+
+@contextmanager
+def _obstore_errors(cfg: AccessConfig):
+    """Failures of an obstore call, as the errors the readers handle: a refusal of the
+    credentials is ``ZarrAccessUnavailable``, any other request failure an ``OSError``
+    (what ``_retry_transient`` retries). A missing object is ``FileNotFoundError`` already.
+    None of them holds a credential."""
+    from obstore import exceptions as ox
+
+    try:
+        yield
+    except (ox.PermissionDeniedError, ox.UnauthenticatedError) as e:
+        raise ZarrAccessUnavailable(
+            f"the storage refused the credentials Unity Catalog vended for "
+            f"{cfg.volume_path} ({type(e).__name__}); they are valid for under an hour",
+            fix='run the call again to vend new credentials, or use access="fuse"',
+        ) from None
+    except ox.NotFoundError as e:
+        raise FileNotFoundError(_scrub(cfg, str(e))) from None
+    except ox.BaseError as e:
+        raise OSError(_scrub(cfg, str(e))) from None
+
+
+class ObstoreRangeReader(_SpanReader):
+    """Reads regions from the Volume's cloud storage with ``obstore.get_ranges``.
+
+    The same protocol and the same rules as ``FuseRangeReader``: regions of one file that
+    touch or overlap are one span, a relative ``Region.file`` resolves under the store's
+    root (``cfg.root_url``) or, for an external-origin region, under ``base_url``, an
+    absolute one must lie under one of them, and nothing outside them is ever requested (the
+    credentials cover the whole Volume, so the manifest cannot be trusted to stay inside the
+    store). A missing or short object is ``ZarrStoreDrift``; an external object whose
+    modification time and size are not those recorded is drift as well (one ``head`` per
+    object per reader). The spans of an object go out in one ``get_ranges`` call, which
+    obstore sends in parallel (and merges when they are less than 1 MiB apart). Request
+    failures are retried ``attempts`` times with the helper the FUSE reader uses.
+    """
+
+    def __init__(
+        self,
+        cfg: AccessConfig,
+        *,
+        base_url: str | None = None,
+        attempts: int = 10,
+        store=None,
+    ):
+        if not cfg.is_direct or cfg.root_url is None:
+            raise ValueError(
+                "ObstoreRangeReader needs a direct AccessConfig with a root_url. "
+                "Fix: build the reader with reader_for(cfg, root, base_root)."
+            )
+        self._cfg = cfg
+        self._attempts = attempts
+        self._root = cfg.key_of_url(cfg.root_url)
+        self._base = None if base_url is None else cfg.key_of_url(base_url)
+        self._store = store if store is not None else _make_store(cfg)
+        self._observed: dict[str, str] = {}  # key -> its identity, taken once
+
+    def _show(self, key: str) -> str:
+        return self._cfg.volume_url + ("/" + key if key else "")
+
+    @staticmethod
+    def _under(key: str, root: str) -> bool:
+        if key == ".." or key.startswith("../") or key.startswith("/"):
+            return False
+        return not root or key == root or key.startswith(root + "/")
+
+    def _resolve(self, region: Region) -> tuple[str, str]:
+        """``(object key, key of the root it lies under)`` for ``region``, or
+        ``ZarrStoreDrift`` if it leaves the roots."""
+        file = region.file
+        if not isinstance(file, str) or not file or "\0" in file:
+            raise ZarrStoreDrift(
+                f"manifest file {file!r} is not a usable path",
+                fix="correct the row or run gbx_zarr_sync",
+            )
+        external = region.origin == "external" and self._base is not None
+        base = self._base if external else self._root
+        if os.path.isabs(file):
+            roots = [self._root] + ([self._base] if self._base is not None else [])
+            vol = self._cfg.volume_path
+            norm = os.path.normpath(file)
+            key = (
+                os.path.relpath(norm, vol).replace(os.sep, "/")
+                if _within(norm, vol)
+                else ".."
+            )
+        else:
+            roots = [base]
+            key = posixpath.normpath(posixpath.join(base, file))
+        for root in roots:
+            if self._under(key, root):
+                return key, root
+        raise ZarrStoreDrift(
+            f"manifest file {file!r} resolves outside the store root "
+            f"{' or '.join(self._show(r) for r in roots)}",
+            fix="correct the row or run gbx_zarr_sync; a manifest may only point at "
+            "files under the store root or, for a registered store, its base root",
+        )
+
+    def _read_spans(self, key: str, spans, _root: str, recorded) -> list[bytes]:
+        try:
+            return _retry_transient(
+                lambda: self._fetch(key, spans, recorded), attempts=self._attempts
+            )
+        except FileNotFoundError:
+            raise ZarrStoreDrift(
+                f"{self._show(key)} is recorded in the manifest but missing",
+                fix=_SYNC_FIX + "restore the file",
+            ) from None
+
+    def _fetch(self, key: str, spans, recorded) -> list[bytes]:
+        import obstore
+
+        with _obstore_errors(self._cfg):
+            if recorded:
+                observed = self._observed.get(key)
+                if observed is None:
+                    meta = obstore.head(self._store, key)
+                    mtime_ms = (meta["last_modified"] - _EPOCH) // _MS
+                    observed = self._observed[key] = f"{mtime_ms}:{meta['size']}"
+                for identity in recorded:
+                    check_identity(
+                        {"file": self._show(key), "identity": identity}, observed
+                    )
+            got = obstore.get_ranges(
+                self._store,
+                key,
+                starts=[a for a, _, _ in spans],
+                ends=[b for _, b, _ in spans],
+            )
+            out = [bytes(part) for part in got]
+        for (start, stop, _), data in zip(spans, out):
+            if len(data) != stop - start:
+                raise ZarrStoreDrift(
+                    f"{self._show(key)} ends before byte {stop}, which the manifest "
+                    "says it holds",
+                    fix=_SYNC_FIX + "the file is truncated",
+                )
+        return out
+
+
+def reader_for(cfg: AccessConfig | None, root: str, base_root: str | None = None):
+    """The range reader of a store whose files are under ``root`` (and a registered
+    store's own under ``base_root``): the FUSE reader, or for a direct ``cfg`` the obstore
+    reader of the same two directories."""
+    if cfg is None or not cfg.is_direct:
+        return FuseRangeReader(root, base_root=base_root)
+    return ObstoreRangeReader(
+        replace(cfg, root_url=cfg.url_of(root)),
+        base_url=None if base_root is None else cfg.url_of(base_root),
+    )
+
+
+def put_pack(cfg: AccessConfig, local_path: str, dest_path: str) -> None:
+    """Upload the file ``local_path`` to the Volume path ``dest_path`` with one
+    ``obstore.put`` (the object appears whole or not at all)."""
+    import obstore
+
+    key = cfg.key_of(dest_path)
+    with _obstore_errors(cfg), open(local_path, "rb") as f:
+        obstore.put(_make_store(cfg), key, f)
+
+
+def stat_for(cfg: AccessConfig | None):
+    """A function that raises ``FileNotFoundError`` for a Volume path with no file: ``os.stat``
+    for the mount, a ``head`` of the object for direct access (a file just put is seen by
+    the store at once, by the mount maybe a moment later)."""
+    if cfg is None or not cfg.is_direct:
+        return os.stat
+    import obstore
+
+    store = _make_store(cfg)
+
+    def head(path: str):
+        with _obstore_errors(cfg):
+            return obstore.head(store, cfg.key_of(path))
+
+    return head

@@ -49,7 +49,12 @@ import pyarrow.compute as pc
 from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.ds._listing import to_local_path
 from databricks.labs.gbx.zarr import _manifest as M
-from databricks.labs.gbx.zarr._access import FuseRangeReader, _within
+from databricks.labs.gbx.zarr._access import (
+    FUSE,
+    FuseRangeReader,
+    _within,
+    resolve_access,
+)
 from databricks.labs.gbx.zarr._maint import _STREAM_WINDOW, _require_files, _stream
 from databricks.labs.gbx.zarr._meta import xarray_fill_form
 from databricks.labs.gbx.zarr._read import (
@@ -102,7 +107,7 @@ def _check_arguments(source, to, method, version_as_of, access) -> None:
             f"source must be the manifest table of a store, not the path {source!r}. "
             "Fix: register the store with gbx_zarr_register and export its table."
         )
-    check_access(access)  # "direct" raises ZarrAccessUnavailable, as it does in read
+    check_access(access)
     if method != "reference" and access != "auto":
         raise ValueError(
             f"access applies to method='reference', which writes the location of each "
@@ -527,7 +532,9 @@ def _absolute(src, row: dict) -> str:
     return path
 
 
-def _reference(table: str, src, units, docs, to_path: str, write_id: str) -> None:
+def _reference(
+    table: str, src, units, docs, to_path: str, write_id: str, reach=FUSE
+) -> None:
     folded = [u for u in units if u["how"] == "assemble"]
     if folded:
         shown = ", ".join(f"{u['array']}/{u['key']}" for u in folded[:3])
@@ -540,8 +547,9 @@ def _reference(table: str, src, units, docs, to_path: str, write_id: str) -> Non
     refs: dict[str, object] = {key: raw.decode() for key, raw in docs.items()}
     for u in units:
         row = u["rows"][0]
+        where = _absolute(src, row)
         refs[f"{u['array']}/{u['key']}"] = [
-            _absolute(src, row),
+            reach.url_of(where) if reach.is_direct else where,
             int(row["offset"]),
             int(row["length"]),
         ]
@@ -603,8 +611,12 @@ def gbx_zarr_export(
     to})``). It is JSON only, about 100 bytes per object (a million shards: about 100 MB).
     Every shard must be one region: after chunk rows were written over it, run
     ``gbx_zarr_optimize`` first (``ZarrUnsupported`` otherwise). The paths are the bare
-    ``/Volumes`` paths; ``access="direct"`` (cloud URLs) raises ``ZarrAccessUnavailable``,
-    as it does in ``gbx_zarr_read``, since no registration records a cloud location. The
+    ``/Volumes`` paths for ``access="auto"`` and ``"fuse"``, so a reference reads the same on
+    every compute. ``access="direct"`` writes the cloud URL of each file instead (``s3://``,
+    ``abfss://``, ``gs://``), from the Volume's location in Unity Catalog, for readers
+    outside Databricks that bring their own credentials; where Unity Catalog will not vend
+    credentials for the Volume (Serverless, no permission, a path that is not on a Volume) it
+    raises ``ZarrAccessUnavailable``, as in ``gbx_zarr_read``. The
     reference points at the pack files of the pinned version, and vacuum can delete them:
     tag the version with ``gbx_zarr_tag`` to keep them.
 
@@ -631,6 +643,16 @@ def gbx_zarr_export(
             fix="export a store with file_mode 'fuse'",
         )
     src = _open_table(spark, source, version_as_of, None)
+    reach = FUSE
+    if method == "reference" and access == "direct":
+        # the cloud location of each file comes from Unity Catalog (nothing is read here)
+        reach = resolve_access(
+            spark,
+            src.root,
+            access="direct",
+            operation="READ_VOLUME",
+            also=[src.base_root] if src.base_root else [],
+        )
     label = src.snap.version if src.snap.tag is None else f"tag:{src.snap.tag}"
     rows = M.read_rows(spark, src.snap, kinds=["shard", "chunk"])
     known = pa.array(sorted({*src.arrays, *src.unsupported}), pa.string())
@@ -642,7 +664,7 @@ def gbx_zarr_export(
     docs = _documents(src.metas)
     write_id = uuid.uuid4().hex  # the temp-name token of the files this export writes
     if method == "reference":
-        _reference(source, src, units, docs, path, write_id)
+        _reference(source, src, units, docs, path, write_id, reach)
         return to
     blocked = sorted(
         {u["array"] for u in units if u["how"] == "assemble"} - set(src.arrays)

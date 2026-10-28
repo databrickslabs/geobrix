@@ -22,6 +22,7 @@ xr = pytest.importorskip("xarray")
 from test.zarr import _helpers as H  # noqa: E402
 
 from databricks.labs.gbx.zarr import _export, _maint  # noqa: E402
+from databricks.labs.gbx.zarr._access import AccessConfig  # noqa: E402
 from databricks.labs.gbx.zarr._export import gbx_zarr_export  # noqa: E402
 from databricks.labs.gbx.zarr._maint import (  # noqa: E402
     gbx_zarr_optimize,
@@ -340,7 +341,7 @@ def test_reference_requires_optimized_shards(spark_delta, drop, tmp_path):
             spark_delta, table, str(tmp_path / "again.json"), method="reference"
         )
 
-    # JSON only (Ruling Z9), and no cloud location is recorded to point at (access="direct")
+    # JSON only (Ruling Z9); access="direct" needs a Volume to name the cloud location of
     with pytest.raises(ValueError, match="JSON") as bad:
         gbx_zarr_export(
             spark_delta, table, str(tmp_path / "r.parquet"), method="reference"
@@ -355,6 +356,50 @@ def test_reference_requires_optimized_shards(spark_delta, drop, tmp_path):
             access="direct",
         )
     assert direct.value.fix
+
+
+def test_reference_with_direct_access_names_the_cloud_object(
+    spark_delta, drop, tmp_path, monkeypatch
+):
+    """``access="direct"`` writes the cloud URL of each file (its location from Unity
+    Catalog); "auto" and "fuse" keep the mount paths, and no credential reaches the file.
+    """
+    table, _, _ = _managed(spark_delta, drop, tmp_path)
+    gbx_zarr_optimize(spark_delta, table)
+    url = "s3://bkt/vol"
+    secret = "SENTINEL-sk-4f9c1a"
+    direct = AccessConfig(
+        "direct", url, {"secret_access_key": secret}, "aws", str(tmp_path), url
+    )
+    asked = []
+
+    def resolve(spark, path, *, access, operation, also=()):
+        asked.append((path, access, operation))
+        return direct
+
+    monkeypatch.setattr(_export, "resolve_access", resolve)
+    out = tmp_path / "direct.json"
+    gbx_zarr_export(spark_delta, table, str(out), method="reference", access="direct")
+    assert asked == [(str(tmp_path / "root_m"), "direct", "READ_VOLUME")]
+    refs = json.loads(out.read_text())["refs"]
+    pointers = [v for v in refs.values() if isinstance(v, list)]
+    assert pointers and all(
+        p[0].startswith(f"{url}/root_m/data/") and p[0].endswith(".zpack")
+        for p in pointers
+    )
+    assert secret not in out.read_text()
+    for access in ("auto", "fuse"):  # no request for credentials, and the mount paths
+        mounted = tmp_path / f"{access}.json"
+        gbx_zarr_export(
+            spark_delta, table, str(mounted), method="reference", access=access
+        )
+        paths = [
+            v[0]
+            for v in json.loads(mounted.read_text())["refs"].values()
+            if isinstance(v, list)
+        ]
+        assert paths and all(os.path.isabs(p) and "://" not in p for p in paths)
+    assert len(asked) == 1
 
 
 # --- version ----------------------------------------------------------------------------

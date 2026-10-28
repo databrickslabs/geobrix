@@ -130,6 +130,7 @@ class TaskConfig:
     roll_bytes: int
     fault: tuple | None = None
     unsupported: dict | None = None  # name -> why the store cannot decode that array
+    access: object = None  # AccessConfig: how the files are reached (holds credentials)
 
 
 # --- shared helpers ----------------------------------------------------------------------
@@ -481,7 +482,9 @@ class _Assembler:
         writer = self.writers.get(name)
         if writer is None:
             writer = self.writers[name] = PackWriter(
-                os.path.join(cfg.root, "data", name, cfg.write_id), reader_root=cfg.root
+                os.path.join(cfg.root, "data", name, cfg.write_id),
+                reader_root=cfg.root,
+                access=cfg.access,
             )
         offset, length = writer.add(data)
         base = group.chunks.get(key)
@@ -531,7 +534,7 @@ class _Assembler:
         if any(b <= a for a, b in box):
             return out
         if group.store is None:
-            from databricks.labs.gbx.zarr._access import FuseRangeReader
+            from databricks.labs.gbx.zarr._access import reader_for
             from databricks.labs.gbx.zarr._store import ManifestStore
 
             rows = list(group.chunks.values())
@@ -544,7 +547,7 @@ class _Assembler:
                     if k.rpartition("/")[0] == meta.name
                 },
                 rows,
-                FuseRangeReader(cfg.root, base_root=cfg.base_root),
+                reader_for(cfg.access, cfg.root, cfg.base_root),
                 {meta.name: base},
             )
         arr = open_manifest_array(group.store, meta.name)

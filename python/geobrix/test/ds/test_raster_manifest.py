@@ -133,6 +133,22 @@ def test_partitions_from_tile_rows_window_and_dims_no_rasterio_open(
     assert parts[1].window == (0, 0, 8, 6)
 
 
+def test_a_spark_row_window_is_read_by_field_name_not_by_position():
+    """The window struct of a table row (a Spark Row, which is a tuple) whose fields are in
+    another order than col_off, row_off, width, height."""
+    from pyspark.sql import Row
+
+    from databricks.labs.gbx.ds.raster import _partitions_from_tile_rows
+
+    row = Row(
+        path="/data/a.tif", window=Row(width=1024, height=512, col_off=0, row_off=256)
+    )
+    parts = _partitions_from_tile_rows(
+        [row], emit_virtual=True, budget_bytes=0, clip_polygons=[], windows=[]
+    )
+    assert [p.window for p in parts] == [(0, 256, 1024, 512)]
+
+
 def test_partitions_from_tile_rows_window_only_no_rasterio_open(tmp_path, monkeypatch):
     """Row with path + window but no dims → still no rasterio.open (window is enough)."""
     _write_sample(tmp_path / "a.tif", width=4, height=3)

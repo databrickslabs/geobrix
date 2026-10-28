@@ -797,7 +797,9 @@ def _partitions_from_tile_rows(
     """
     result: list = []
     for row in rows:
-        r: dict = row.asDict() if hasattr(row, "asDict") else dict(row)
+        # recursive: a nested ``window`` Row becomes a mapping, read by field name (a Row
+        # is a tuple, so as it stands its fields would be taken by position).
+        r: dict = row.asDict(recursive=True) if hasattr(row, "asDict") else dict(row)
         path = str(r.get("path") or "")
         if not path:
             raise ValueError(
@@ -1649,8 +1651,10 @@ _TILE_INDEX_FORMATS = ("raster_gbx", "gtiff_gbx", "cog_gbx")
 # table (FILE columns included) is not sent through Arrow.
 _TILE_INDEX_COLUMNS = ("path", "window", "col_off", "row_off", "width", "height")
 
-# Most tasks read_tiles_table uses by default, one per tile up to this many: more
-# only adds shuffle and scheduling work.
+# Most tasks read_tiles_table uses by default: more only adds shuffle and scheduling work.
+# The default is two tasks per index row up to this many. Tiles are assigned to tasks by a
+# hash of the tile, so several share a task while others get none; twice as many tasks as
+# rows leaves fewer tasks without a tile and fewer tiles to a task than one task per row.
 _DEFAULT_MAX_TASKS = 256
 
 # Tile-index rows decoded at a time: a path-only row cut into windows (tileSize,
@@ -1739,9 +1743,10 @@ def read_tiles_table(
     ``skipOrdering``, ``sizeInMB``, ``tileSize`` and the others. ``format`` is
     ``"raster_gbx"``, ``"gtiff_gbx"`` or ``"cog_gbx"``.
 
-    The tiles are spread across tasks, as the reader gives each tile its own task: one
-    task per index row up to 256 (a row cut into several tiles by ``tileSize`` or
-    ``sizeInMB`` counts once), or ``num_partitions`` tasks when given. Inside each task the tiles are ordered by source path, so those of one source
+    The tiles are spread across tasks by tile, as the reader gives each tile its own task:
+    two tasks per index row up to 256 (a row cut into several tiles by ``tileSize`` or
+    ``sizeInMB`` counts once), so that few tiles share a task, or ``num_partitions`` tasks
+    when given. Inside each task the tiles are ordered by source path, so those of one source
     that share a task are read one after another (``skipOrdering`` of ``"true"`` leaves
     that order out). A tile whose file is missing fails the read.
 
@@ -1781,7 +1786,7 @@ def read_tiles_table(
     tasks = (
         int(num_partitions)
         if num_partitions
-        else max(1, min(index.count(), _DEFAULT_MAX_TASKS))
+        else max(1, min(2 * index.count(), _DEFAULT_MAX_TASKS))
     )
     planned = planned.repartition(tasks, "part")
     if not reader.skip_ordering:

@@ -1197,7 +1197,7 @@ if _jpg_files:
 
 _CELL_PMTILES = """# PMTiles benchmark: light pmtiles_gbx vs heavy pmtiles (both on-cluster) + parity check
 from databricks.labs.gbx.bench import readers as _rd
-from databricks.labs.gbx.ds._pmtiles_read import iter_tiles as _iter_tiles
+from databricks.labs.gbx.pmtiles._directory import iter_tiles as _iter_tiles
 import os as _os
 import shutil as _sh
 # Both pmtiles writers are two-phase (executor-write -> driver-merge), so their

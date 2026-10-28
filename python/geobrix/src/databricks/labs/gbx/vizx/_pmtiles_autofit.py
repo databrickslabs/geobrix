@@ -40,10 +40,10 @@ def _rebuild_with_max_zoom(raw: bytes, keep_max_z: int) -> bytes:
     from pmtiles.tile import Compression, zxy_to_tileid
     from pmtiles.writer import Writer
 
-    from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
     from databricks.labs.gbx.ds.tiles._header import build_header_info, sniff_tile_type
     from databricks.labs.gbx.ds.tiles.grid import SlippyGrid
     from databricks.labs.gbx.pmtiles import pmtiles_info
+    from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
     info = pmtiles_info(raw)
     metadata = info.get("metadata") or {}

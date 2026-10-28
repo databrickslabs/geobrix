@@ -9,6 +9,8 @@ from typing import Union
 from pmtiles.reader import MemorySource, Reader
 from pmtiles.tile import Compression, TileType
 
+from databricks.labs.gbx.pmtiles._directory import iter_tiles
+
 # TileType / Compression enum -> the lowercase string keys the viewers branch on.
 _TILE_TYPE_NAME = {
     TileType.MVT: "mvt",
@@ -53,8 +55,6 @@ def pmtiles_info(path: Union[str, bytes, bytearray]) -> dict:
     ``center`` (lon, lat, zoom), ``tile_count`` (int), ``metadata`` (dict), and
     ``tile_compression`` (lowercase string). Driver-side only.
     """
-    from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
-
     data = _read_bytes(path)
     reader = Reader(MemorySource(data))
     h = reader.header()

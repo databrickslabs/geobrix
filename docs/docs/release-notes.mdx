@@ -291,6 +291,14 @@ formats.
   read back with `Not a gzipped file`. The reader now decodes directories by the compression the
   archive header declares: none and gzip are read, and any other compression fails the read with an
   error that names it.
+- **`pmtiles_info` and the `gbx.vizx` PMTiles viewers read the same archives (fix).** They failed
+  with `Not a gzipped file` on an archive written by the heavyweight `pmtiles` writer, and a
+  viewer could show no tiles instead of an error. They now decode directories by the compression
+  the archive header declares, as `pmtiles_gbx` does, so none and gzip are read. `pmtiles_info`
+  fails with `internal compression ... is not supported` on an archive that declares its directory
+  compression as unknown, brotli or zstd, including an archive that declares unknown but stores
+  gzip directories, which it used to read; the viewers treat such an archive as unreadable.
+  `pmtiles_info` also no longer imports PySpark or rasterio.
 
 ### NetCDF reader
 

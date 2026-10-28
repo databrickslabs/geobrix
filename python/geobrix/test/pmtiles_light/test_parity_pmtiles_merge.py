@@ -58,7 +58,7 @@ _Z, _X, _Y = 3, 2, 4
 def _read_tile_from_archive(archive: bytes, z: int, x: int, y: int) -> bytes:
     """Read and return tile (z, x, y) from a PMTiles archive blob (gzip or
     uncompressed directories)."""
-    from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
+    from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
     tile = dict(iter_tiles(archive)).get((z, x, y))
     assert tile is not None, f"tile ({z},{x},{y}) missing from archive"

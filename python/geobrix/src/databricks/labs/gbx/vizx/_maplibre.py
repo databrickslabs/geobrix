@@ -598,8 +598,8 @@ def _decode_pmtiles_for_static(layer) -> "Layer":
 
     Raises ValueError when the archive contains no renderable tiles.
     """
-    from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
     from databricks.labs.gbx.pmtiles import pmtiles_info
+    from databricks.labs.gbx.pmtiles._directory import iter_tiles
     from databricks.labs.gbx.vizx._layers import raster_layer, vector_layer
     from databricks.labs.gbx.vizx._pmtiles import (
         _decode_mvt_to_geoms,
@@ -771,7 +771,7 @@ def _max_tile_bytes(raw: bytes) -> int | None:
     try:
         import gzip
 
-        from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
+        from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
         max_size = 0
         found = False
@@ -1718,7 +1718,7 @@ def _mvt_layer_names_from_bytes(raw: bytes, *, max_tiles: int = 40) -> list:
     try:
         import mapbox_vector_tile as mvt
 
-        from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
+        from databricks.labs.gbx.pmtiles._directory import iter_tiles
         from databricks.labs.gbx.vizx._pmtiles import _maybe_gunzip
 
         names, seen = [], set()
@@ -1831,7 +1831,7 @@ def _raster_tile_px(info: dict) -> int:
     try:
         import struct
 
-        from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
+        from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
         for _key, payload in iter_tiles(raw):
             if payload[:8] == b"\x89PNG\r\n\x1a\n" and len(payload) >= 24:

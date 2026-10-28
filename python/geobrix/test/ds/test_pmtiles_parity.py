@@ -51,7 +51,7 @@ def spark_with_jar():
 
 
 def _decode_archive(path):
-    from databricks.labs.gbx.ds._pmtiles_read import iter_tiles
+    from databricks.labs.gbx.pmtiles._directory import iter_tiles
 
     return dict(iter_tiles(Path(path).read_bytes()))
 

@@ -580,7 +580,7 @@ def test_read_directory_decodes_by_the_declared_compression():
 
     from pmtiles.tile import Compression, Entry, serialize_directory
 
-    from databricks.labs.gbx.ds._pmtiles_read import _read_directory
+    from databricks.labs.gbx.pmtiles._directory import _read_directory
 
     entries = [Entry(5, 0, 10, 1), Entry(9, 10, 7, 3)]
     gzipped = serialize_directory(entries)
@@ -605,7 +605,7 @@ def test_read_directory_decodes_by_the_declared_compression():
 def test_read_directory_rejects_unsupported_compression(name, value):
     from pmtiles.tile import Compression
 
-    from databricks.labs.gbx.ds._pmtiles_read import _read_directory
+    from databricks.labs.gbx.pmtiles._directory import _read_directory
 
     header = {"internal_compression": Compression[name]}
     with pytest.raises(ValueError) as info:

@@ -1,6 +1,8 @@
 """Offline tests for the driver-side PMTiles inspector (pmtiles_info)."""
 
 import io
+import subprocess
+import sys
 
 import pytest
 from pmtiles.tile import Compression, TileType, zxy_to_tileid
@@ -120,3 +122,12 @@ def test_info_reads_the_uncompressed_directories_the_heavy_writer_stores(
     plain = uncompressed_internals(raster_pmtiles)
     assert plain != raster_pmtiles
     assert pmtiles_info(plain) == pmtiles_info(raster_pmtiles)
+
+
+def test_info_imports_without_pyspark_or_rasterio():
+    # A driver-side inspector: reading an archive's header must not start the Spark/GDAL stack.
+    code = (
+        "import sys; from databricks.labs.gbx.pmtiles import pmtiles_info; "
+        "assert not {'pyspark', 'rasterio'} & set(sys.modules), sorted(sys.modules)"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True, capture_output=True)

@@ -1,7 +1,7 @@
-"""Family oracle tables (rule 15): inputs -> expected, run at every level and tier.
+"""Family oracle tables: inputs -> expected, run at every implementation level and surface.
 
-One table per MVP family. Host tests (T1), container parity runs and the T2 cluster/UC
-passes all read these rows, so a level is "correct" exactly when its rows pass.
+One table per function family. Host tests, container parity runs and the cluster and
+Unity Catalog passes all read these rows, so a level is "correct" exactly when its rows pass.
 """
 
 from __future__ import annotations
@@ -15,6 +15,9 @@ MERC_PROJ = (
     "+proj=merc +a=6378137 +b=6378137 +lat_ts=0 +lon_0=0 +x_0=0 +y_0=0 +k=1 "
     "+units=m +nadgrids=@null +wktext +no_defs"
 )
+# An error tile (a swallowed failure) carries its diagnostic under this one metadata key on
+# every level. The light tier defines it (`_serde.build_error_tile`); the JVM tier conforms.
+ERROR_TILE_KEY = "last_error"
 CUSTOM_TMERC = "+proj=tmerc +lat_0=0 +lon_0=1.5 +k=0.9996 +x_0=500000 +y_0=0 +ellps=WGS84 +units=m +no_defs"
 
 
@@ -28,9 +31,10 @@ class Case:
     cid: str
     fn: str
     args: Tuple[Any, ...]
-    kind: (
-        str  # exact | null | raises | uc_refused | error_tile | tile_props | geom_props
-    )
+    # exact | null | raises | uc_refused | error_tile | tile_props | geom_props
+    kind: str
+    # exact: the value. raises: a substring the error message must contain (the offending
+    # value), so a missing function cannot pass. tile_props: the target CRS, or (CRS, SRID).
     expect: Any = None
     surfaces: Tuple[str, ...] = ("session", "uc")
     geom_srid: int = (
@@ -51,8 +55,11 @@ MVP_S: Tuple[Case, ...] = (
     Case("bng_origin", B, (0.0, 0.0, 3), "exact", "SV0000"),
     Case("bng_null_e", B, (None, 180000.0, 3), "null"),
     Case("bng_nan_e", B, (float("nan"), 180000.0, 3), "null"),
-    Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises"),
-    Case("bng_uc_digit_res", B, (530000.0, 180000.0, "3"), "exact", "TQ3080", ("uc",)),
+    Case("bng_bad_res", B, (530000.0, 180000.0, "3km"), "raises", "3km"),
+    # A UC STRING parameter receives an INT literal as its digit string, so every surface
+    # accepts the digit-string form of the integer resolution.
+    Case("bng_digit_res", B, (530000.0, 180000.0, "3"), "exact", "TQ3080"),
+    Case("bng_digit_res_quad", B, (530000.0, 180000.0, "-3"), "exact", "TQ38SW"),
     Case("tcrs_epsg", T, (Build("tile_4326"), "EPSG:3857"), "tile_props", "EPSG:3857"),
     Case(
         "tcrs_virtual",
@@ -70,7 +77,15 @@ MVP_S: Tuple[Case, ...] = (
         None,
         ("uc",),
     ),
-    # The three UC CRS rows the user's final decision requires (int SRID or EPSG:/ESRI:<n>; the rest refused):
+    # The target CRS forms UC accepts: an int SRID, EPSG:<n> or ESRI:<n> (converted to the int).
+    # Anything else is refused on UC with a Fix: line; the session accepts every CRS spelling.
+    Case(
+        "tcrs_int_srid",
+        T,
+        (Build("tile_4326"), "3857"),
+        "tile_props",
+        ("EPSG:3857", 3857),
+    ),
     Case(
         "tcrs_epsg4326",
         T,
@@ -100,6 +115,14 @@ MVP_S: Tuple[Case, ...] = (
         "uc_refused",
         None,
         ("uc",),
+    ),
+    Case(
+        "tcrs_proj4",
+        T,
+        (Build("tile_4326"), MERC_PROJ),
+        "tile_props",
+        "EPSG:3857",
+        ("session",),
     ),
     Case(
         "tcrs_proj4_uc", T, (Build("tile_4326"), MERC_PROJ), "uc_refused", None, ("uc",)
@@ -149,7 +172,7 @@ MVP_S: Tuple[Case, ...] = (
         "mv_square_ogc", M, (SQUARE, "ogc"), "geom_props", {"valid": True, "area": 1.0}
     ),
     Case("mv_null", M, (None,), "null"),
-    Case("mv_bad_level", M, (SQUARE, "bogus"), "raises"),
+    Case("mv_bad_level", M, (SQUARE, "bogus"), "raises", "bogus"),
 )
 
 
@@ -252,35 +275,72 @@ def _raster_of(tile) -> Optional[bytes]:
     return open(p, "rb").read() if p else None
 
 
+def _reference_warp(src, target_crs: str):
+    """Independent nearest-neighbour reference: rasterio.warp and numpy only.
+
+    It must not call the gbx warp code, or an implementation level would be checked against
+    itself. Returns (width, height, masked first band).
+    """
+    import numpy as np
+    from rasterio.crs import CRS
+    from rasterio.warp import Resampling, calculate_default_transform, reproject
+
+    dst_crs = CRS.from_user_input(target_crs)
+    transform, width, height = calculate_default_transform(
+        src.crs, dst_crs, src.width, src.height, *src.bounds
+    )
+    nodata = src.nodata
+    dst = np.full((height, width), 0 if nodata is None else nodata, dtype=src.dtypes[0])
+    reproject(
+        source=src.read(1),
+        destination=dst,
+        src_transform=src.transform,
+        src_crs=src.crs,
+        src_nodata=nodata,
+        dst_transform=transform,
+        dst_crs=dst_crs,
+        dst_nodata=nodata,
+        resampling=Resampling.nearest,
+    )
+    band = (
+        np.ma.masked_equal(dst, nodata)
+        if nodata is not None
+        else np.ma.masked_array(dst)
+    )
+    return width, height, band
+
+
 def _check_tile(case: Case, out, args) -> Optional[str]:
     from rasterio.io import MemoryFile
 
     from databricks.labs.gbx.core.crs import crs_equal
-    from databricks.labs.gbx.pyrx.core import warp
 
     raster = _field(out, "raster")
     if raster is None:
         return f"{case.cid}: no raster in the result (metadata={_field(out, 'metadata')!r})"
-    with MemoryFile(_raster_of(args[0])) as src_mf, src_mf.open() as src:
-        ref = warp.reproject_to_crs(src, str(args[1]))
     want_crs, want_srid = (
         case.expect if isinstance(case.expect, tuple) else (case.expect, None)
     )
-    with (
-        MemoryFile(bytes(raster)) as a,
-        a.open() as got,
-        MemoryFile(ref) as b,
-        b.open() as want,
-    ):
+    with MemoryFile(_raster_of(args[0])) as src_mf, src_mf.open() as src:
+        want_w, want_h, w = _reference_warp(src, want_crs)
+    with MemoryFile(bytes(raster)) as a, a.open() as got:
         if not crs_equal(got.crs, want_crs):
             return f"{case.cid}: CRS {got.crs} is not {want_crs}"
         from databricks.labs.gbx.core.crs import authority_srid_of
 
         if want_srid is not None and authority_srid_of(got.crs) != want_srid:
             return f"{case.cid}: SRID {authority_srid_of(got.crs)} is not {want_srid}"
-        if abs(got.width - want.width) > 1 or abs(got.height - want.height) > 1:
-            return f"{case.cid}: {got.width}x{got.height} vs reference {want.width}x{want.height}"
-        g, w = got.read(1, masked=True), want.read(1, masked=True)
+        if abs(got.width - want_w) > 1 or abs(got.height - want_h) > 1:
+            return (
+                f"{case.cid}: {got.width}x{got.height} vs reference {want_w}x{want_h}"
+            )
+        g = got.read(1, masked=True)
+        if (
+            g.shape == w.shape
+        ):  # same grid: nearest-neighbour pixels must agree, not just their mean
+            same = (g.filled(-1) == w.filled(-1)).mean()
+            if same < 0.99:
+                return f"{case.cid}: only {same:.1%} of pixels match the reference warp"
         if g.count() == 0 or abs(float(g.mean()) - float(w.mean())) > 0.01 * max(
             1.0, abs(float(w.mean()))
         ):
@@ -315,15 +375,17 @@ def check(case: Case, out, args) -> Optional[str]:
     if case.kind in ("raises", "uc_refused"):
         return f"{case.cid}: returned {out!r}, want an error"
     if case.kind == "error_tile":
+        meta = _field(out, "metadata") or {}
         ok = (
             out is not None
             and _field(out, "raster") is None
             and _field(out, "path") is None
+            and bool(meta.get(ERROR_TILE_KEY))
         )
         return (
             None
             if ok
-            else f"{case.cid}: got {out!r}, want an error tile (no raster, no path)"
+            else f"{case.cid}: got {out!r}, want an error tile (no raster, no path, metadata[{ERROR_TILE_KEY!r}] set)"
         )
     if case.kind == "tile_props":
         return _check_tile(case, out, args)
@@ -334,7 +396,9 @@ def check(case: Case, out, args) -> Optional[str]:
 
 def check_error(case: Case, exc: BaseException) -> Optional[str]:
     if case.kind == "raises":
-        return None
+        if str(case.expect) in str(exc):
+            return None
+        return f"{case.cid}: error does not mention {case.expect!r}: {type(exc).__name__}: {str(exc)[:300]}"
     if case.kind == "uc_refused":
         return (
             None
@@ -375,7 +439,9 @@ def run_session(
     """Run each case through SQL (`name_of(fn)(cols...)`) and check it. One row per case."""
     from databricks.labs.gbx import manifest
 
-    tmpdir = tmpdir or tempfile.mkdtemp(prefix="gbx-oracle-")
+    if tmpdir is None:  # virtual-tile fixtures live here; removed when the run ends
+        with tempfile.TemporaryDirectory(prefix="gbx-oracle-") as d:
+            return run_session(spark, cases, name_of, d, surface)
     man = manifest.load()
     results = []
     for case in cases:

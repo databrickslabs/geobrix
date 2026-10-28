@@ -86,6 +86,9 @@ runs:
         # test_runner.py), and the mlflow-dependent serving tests are individually
         # guarded with `pytest.importorskip("mlflow")` (test_serving.py) rather than
         # excluded via the `-m "not integration"` filter below).
+        # manager (the per-surface function manifest: contracts generated from it, plus the
+        # oracle tables that every implementation level is judged against; pure Python,
+        # local Spark only for the oracle runs).
         # All dirs run in ONE process, so state one dir leaves behind reaches the
         # next: e.g. test/pyvx registers PROJ grids before test/bench builds rasters
         # on worker threads (see test/conftest.py for the maintained condition).

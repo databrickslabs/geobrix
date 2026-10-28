@@ -1,7 +1,10 @@
-"""Per-surface manifest (OD-6): the source of truth for the streamline subset.
+"""Per-surface function manifest: the source of truth for each function's names,
+signatures and implementation levels on every surface.
 
 Pure Python (no pyspark), so the UC DDL emitter, the docs generators and the tests
-read it anywhere. JSON lives next to this module and ships as package data.
+read it anywhere. JSON lives next to this module and ships as package data. The loaded
+manifest is immutable (read-only mappings, tuples), so the cached copy cannot be edited
+by a caller.
 """
 
 from __future__ import annotations
@@ -11,7 +14,37 @@ import importlib
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from types import MappingProxyType
+from typing import Any, Mapping, Optional, Tuple
+
+SCHEMA_VERSION = 1
+
+# The closed vocabulary of keys a function's per-level spec may carry. A mistyped key
+# would be read with `.get` and silently drop a guard, so a contract test rejects any key
+# outside this table; add a key here in the same change that first uses it.
+LEVEL_KEYS = {
+    "L1": frozenset({"companion", "needs_gdal", "session_returns"}),
+    "L2": frozenset({"class", "returns", "bytes_param", "needs_gdal"}),
+    "L3": frozenset(
+        {
+            "register",
+            "variants",
+            "factory",
+            "factory_args",
+            "callable",
+            "udtf",
+            "returns",
+            "needs",
+        }
+    ),
+    "L4": frozenset({"handler", "deps", "tvf_over"}),
+}
+# Keys every spec of that level must carry.
+LEVEL_REQUIRED = {
+    "L1": frozenset({"companion"}),
+    "L2": frozenset({"class", "returns"}),
+    "L3": frozenset({"register"}),
+}
 
 # The v2 tile struct as a SQL type (== V2_TILE_SCHEMA.simpleString(); a contract test pins it).
 TILE_SQL = (
@@ -30,7 +63,8 @@ class Param:
     uc_crs: bool = False
 
 
-@dataclass(frozen=True)
+# eq=False keeps identity hashing: the level specs are mappings, which do not hash.
+@dataclass(frozen=True, eq=False)
 class Function:
     sql_name: str
     family: str
@@ -40,7 +74,7 @@ class Function:
     returns_session: str
     returns_uc: Optional[str]
     accepts_virtual_tile: bool
-    levels: Dict[str, Dict[str, Any]]
+    levels: Mapping[str, Mapping[str, Any]]
     oracle: str
 
     @property
@@ -48,10 +82,10 @@ class Function:
         return len(self.params)
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, eq=False)
 class Manifest:
-    functions: Dict[str, Function]
-    uc_dependencies: Dict[str, str]
+    functions: Mapping[str, Function]
+    uc_dependencies: Mapping[str, str]
     level_table_version: str
 
 
@@ -60,9 +94,22 @@ def sql_type(t: str) -> str:
     return TILE_SQL if t == "TILE" else t
 
 
+def _freeze(obj: Any) -> Any:
+    """Deep read-only copy: dict -> mappingproxy, list -> tuple."""
+    if isinstance(obj, dict):
+        return MappingProxyType({k: _freeze(v) for k, v in obj.items()})
+    if isinstance(obj, list):
+        return tuple(_freeze(v) for v in obj)
+    return obj
+
+
 @functools.lru_cache(maxsize=1)
 def load() -> Manifest:
     raw = json.loads((Path(__file__).with_name("functions.json")).read_text())
+    if raw.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(
+            f"functions.json schema_version {raw.get('schema_version')!r}, expected {SCHEMA_VERSION}"
+        )
     fns = {}
     for r in raw["functions"]:
         params = tuple(
@@ -84,10 +131,14 @@ def load() -> Manifest:
             r["returns"]["session"],
             r["returns"].get("uc"),
             bool(r.get("accepts_virtual_tile")),
-            r["levels"],
+            _freeze(r["levels"]),
             r["oracle"],
         )
-    return Manifest(fns, dict(raw["uc_dependencies"]), raw["level_table_version"])
+    return Manifest(
+        MappingProxyType(fns),
+        MappingProxyType(dict(raw["uc_dependencies"])),
+        raw["level_table_version"],
+    )
 
 
 def resolve_ref(ref: str) -> Any:

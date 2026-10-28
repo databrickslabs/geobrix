@@ -68,16 +68,25 @@ _PROC_FD = "/proc/self/fd"
 _CHECK_DESCRIPTORS = sys.platform.startswith("linux") and os.path.isdir(_PROC_FD)
 
 
-def identities_match(a: str, b: str) -> bool:
+def identities_match(a: str, b: str, mtime_resolution_ms: int | None = None) -> bool:
     """Whether two identities (``"<mtime_ms>:<size>"``) name the same file, at
-    ``MTIME_RESOLUTION_MS``. Every place that compares identities (a read, a sync, a
-    publish's drift check) goes through here, so one constant decides."""
+    ``mtime_resolution_ms`` (default ``MTIME_RESOLUTION_MS``). Every place that compares
+    identities (a read, a sync, a publish's drift check) goes through here, so one constant
+    decides."""
     from databricks.labs.gbx.zarr._register import same_identity
 
-    return same_identity(a, b, mtime_resolution_ms=MTIME_RESOLUTION_MS)
+    return same_identity(
+        a,
+        b,
+        mtime_resolution_ms=(
+            MTIME_RESOLUTION_MS if mtime_resolution_ms is None else mtime_resolution_ms
+        ),
+    )
 
 
-def check_identity(row: dict, observed: str) -> None:
+def check_identity(
+    row: dict, observed: str, mtime_resolution_ms: int | None = None
+) -> None:
     """Raise ``ZarrStoreDrift`` unless the file ``observed`` is the one the manifest recorded.
 
     ``row`` holds the manifest ``file`` and ``identity`` (``"<mtime_ms>:<size>"``);
@@ -85,7 +94,7 @@ def check_identity(row: dict, observed: str) -> None:
     no identity (a file GeoBrix wrote) is never drift.
     """
     expected = row.get("identity")
-    if expected is None or identities_match(expected, observed):
+    if expected is None or identities_match(expected, observed, mtime_resolution_ms):
         return
     raise ZarrStoreDrift(
         f"{row.get('file')} changed outside GeoBrix: the manifest recorded "
@@ -355,6 +364,18 @@ _UNAVAILABLE_FIX = (
 _VOLUME = re.compile(r"^/Volumes/([^/]+)/([^/]+)/([^/]+)(?:/|$)")
 _EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 _MS = timedelta(milliseconds=1)
+# Errors a storage reports for credentials it will not accept, as text: S3 answers an expired
+# session token with a 400 (obstore raises a generic error for it, not a permission error).
+_AUTH_ERROR = re.compile(
+    r"ExpiredToken|InvalidAccessKeyId|InvalidToken|TokenRefreshRequired|"
+    r"SignatureDoesNotMatch|AuthenticationFailed|InvalidAuthenticationInfo|"
+    r"AuthorizationFailure|AuthorizationPermissionMismatch|UNAUTHENTICATED"
+)
+# An object store reports a modification time to the second (HTTP ``Last-Modified``) where the
+# listing registration took the identity from may carry milliseconds, so a direct read compares
+# the time at whole seconds, with the size. A rewrite of the same size within the same second
+# goes unseen on a direct read (it is seen over the mount).
+_OBJECT_MTIME_MS = 1000
 _SAS_SIGNATURE = re.compile(r"(?i)\bsig=[^&\s\"']+")
 
 
@@ -445,6 +466,11 @@ class AccessConfig:
     def is_direct(self) -> bool:
         return self.mode == "direct"
 
+    @property
+    def refused(self) -> bool:
+        """Whether a storage has refused these credentials in this process."""
+        return self.creds is not None and self.creds.digest() in _REFUSED
+
     def key_of(self, path: str) -> str:
         """The object key, relative to the Volume's cloud location, of the file ``path``
         (a mount path under ``volume_path``)."""
@@ -475,6 +501,28 @@ class AccessConfig:
 
 
 FUSE = AccessConfig("fuse")
+
+# Credentials a storage has refused in this process, by digest. A refusal (expired token, wrong
+# key, no permission) does not pass with waiting, so once one is seen every later reader and
+# writer of the process using those credentials goes straight to the fallback (or raises).
+_REFUSED: set[str] = set()
+
+
+def _mark_refused(cfg: "AccessConfig") -> None:
+    if cfg.creds is not None:
+        _REFUSED.add(cfg.creds.digest())
+
+
+class _Refused(Exception):
+    """The storage refused the credentials: expired, wrong, or not allowed. Not transient."""
+
+
+def _expired(cfg: "AccessConfig") -> ZarrAccessUnavailable:
+    return ZarrAccessUnavailable(
+        f"the storage refused the credentials Unity Catalog vended for {cfg.volume_path}: "
+        "they expired mid-job or were revoked",
+        fix="credentials expired mid-job; use access='auto' for long jobs",
+    )
 
 
 def _unavailable(message: str) -> ZarrAccessUnavailable:
@@ -632,7 +680,7 @@ def resolve_access(
             f"direct storage access is not available for {volume_path}: {reason}"
         ) from None
     _LOG.info("direct access to %s (%s)", cfg.volume_path, cfg.cloud)
-    return cfg
+    return replace(cfg, fallback=access == "auto")
 
 
 def _make_store(cfg: AccessConfig):
@@ -660,24 +708,23 @@ def _scrub(cfg: AccessConfig, text: str) -> str:
 
 @contextmanager
 def _obstore_errors(cfg: AccessConfig):
-    """Failures of an obstore call, as the errors the readers handle: a refusal of the
-    credentials is ``ZarrAccessUnavailable``, any other request failure an ``OSError``
-    (what ``_retry_transient`` retries). A missing object is ``FileNotFoundError`` already.
-    None of them holds a credential."""
+    """Failures of an obstore call, as the errors the readers handle: credentials the storage
+    refuses are ``_Refused`` (not transient: the caller falls back or raises ``_expired``),
+    a missing object ``FileNotFoundError``, any other request failure an ``OSError`` (what
+    ``_retry_transient`` retries). None of them holds a credential."""
     from obstore import exceptions as ox
 
     try:
         yield
-    except (ox.PermissionDeniedError, ox.UnauthenticatedError) as e:
-        raise ZarrAccessUnavailable(
-            f"the storage refused the credentials Unity Catalog vended for "
-            f"{cfg.volume_path} ({type(e).__name__}); they are valid for under an hour",
-            fix='run the call again to vend new credentials, or use access="fuse"',
-        ) from None
+    except (ox.PermissionDeniedError, ox.UnauthenticatedError):
+        raise _Refused() from None
     except ox.NotFoundError as e:
         raise FileNotFoundError(_scrub(cfg, str(e))) from None
     except ox.BaseError as e:
-        raise OSError(_scrub(cfg, str(e))) from None
+        text = str(e)
+        if _AUTH_ERROR.search(text):
+            raise _Refused() from None
+        raise OSError(_scrub(cfg, text)) from None
 
 
 class ObstoreRangeReader(_SpanReader):
@@ -690,9 +737,13 @@ class ObstoreRangeReader(_SpanReader):
     credentials cover the whole Volume, so the manifest cannot be trusted to stay inside the
     store). A missing or short object is ``ZarrStoreDrift``; an external object whose
     modification time and size are not those recorded is drift as well (one ``head`` per
-    object per reader). The spans of an object go out in one ``get_ranges`` call, which
+    object per reader, compared at whole seconds: see ``_OBJECT_MTIME_MS``). The spans of an
+    object go out in one ``get_ranges`` call, which
     obstore sends in parallel (and merges when they are less than 1 MiB apart). Request
-    failures are retried ``attempts`` times with the helper the FUSE reader uses.
+    failures are retried ``attempts`` times with the helper the FUSE reader uses. Credentials
+    the storage refuses (expired, rejected) are not retried: with a ``fallback`` (the call
+    asked for ``"auto"``) the reader reads the same regions through the mount from then on,
+    without one it raises ``ZarrAccessUnavailable``.
     """
 
     def __init__(
@@ -702,6 +753,7 @@ class ObstoreRangeReader(_SpanReader):
         base_url: str | None = None,
         attempts: int = 10,
         store=None,
+        fallback=None,
     ):
         if not cfg.is_direct or cfg.root_url is None:
             raise ValueError(
@@ -714,6 +766,22 @@ class ObstoreRangeReader(_SpanReader):
         self._base = None if base_url is None else cfg.key_of_url(base_url)
         self._store = store if store is not None else _make_store(cfg)
         self._observed: dict[str, str] = {}  # key -> its identity, taken once
+        self._fallback = fallback  # builds the mount reader to carry on with, or None
+        self._carry_on = None
+
+    def read(self, regions: list[Region]) -> list[bytes]:
+        if self._carry_on is not None:
+            return self._carry_on.read(regions)
+        try:
+            return super().read(regions)
+        except _Refused:
+            _mark_refused(self._cfg)
+            if self._fallback is None:
+                raise _expired(self._cfg) from None
+            self._carry_on = (
+                self._fallback()
+            )  # the rest of this reader's work: the mount
+            return self._carry_on.read(regions)
 
     def _show(self, key: str) -> str:
         return self._cfg.volume_url + ("/" + key if key else "")
@@ -780,7 +848,9 @@ class ObstoreRangeReader(_SpanReader):
                     observed = self._observed[key] = f"{mtime_ms}:{meta['size']}"
                 for identity in recorded:
                     check_identity(
-                        {"file": self._show(key), "identity": identity}, observed
+                        {"file": self._show(key), "identity": identity},
+                        observed,
+                        _OBJECT_MTIME_MS,
                     )
             got = obstore.get_ranges(
                 self._store,
@@ -802,29 +872,53 @@ class ObstoreRangeReader(_SpanReader):
 def reader_for(cfg: AccessConfig | None, root: str, base_root: str | None = None):
     """The range reader of a store whose files are under ``root`` (and a registered
     store's own under ``base_root``): the FUSE reader, or for a direct ``cfg`` the obstore
-    reader of the same two directories."""
-    if cfg is None or not cfg.is_direct:
+    reader of the same two directories. With ``cfg.fallback`` (``"auto"``) the obstore
+    reader carries on through the mount once the storage refuses the credentials, and a
+    config already refused in this process gets the FUSE reader at once."""
+    if cfg is None or not cfg.is_direct or (cfg.fallback and cfg.refused):
         return FuseRangeReader(root, base_root=base_root)
     return ObstoreRangeReader(
         replace(cfg, root_url=cfg.url_of(root)),
         base_url=None if base_root is None else cfg.url_of(base_root),
+        fallback=(
+            (lambda: FuseRangeReader(root, base_root=base_root))
+            if cfg.fallback
+            else None
+        ),
     )
 
 
-def put_pack(cfg: AccessConfig, local_path: str, dest_path: str) -> None:
+def put_pack(cfg: AccessConfig, local_path: str, dest_path: str) -> bool:
     """Upload the file ``local_path`` to the Volume path ``dest_path`` with one
-    ``obstore.put`` (the object appears whole or not at all)."""
+    ``obstore.put`` (the object appears whole or not at all). ``True`` once it is there.
+
+    If the storage refuses the credentials, ``False`` when the call asked for ``"auto"``
+    (the caller writes the file through the mount instead) and ``ZarrAccessUnavailable``
+    when it asked for ``"direct"``."""
     import obstore
 
+    if cfg.refused:
+        if cfg.fallback:
+            return False
+        raise _expired(cfg)
     key = cfg.key_of(dest_path)
-    with _obstore_errors(cfg), open(local_path, "rb") as f:
-        obstore.put(_make_store(cfg), key, f)
+    try:
+        with _obstore_errors(cfg), open(local_path, "rb") as f:
+            obstore.put(_make_store(cfg), key, f)
+    except _Refused:
+        _mark_refused(cfg)
+        if cfg.fallback:
+            return False
+        raise _expired(cfg) from None
+    return True
 
 
 def stat_for(cfg: AccessConfig | None):
     """A function that raises ``FileNotFoundError`` for a Volume path with no file: ``os.stat``
     for the mount, a ``head`` of the object for direct access (a file just put is seen by
-    the store at once, by the mount maybe a moment later)."""
+    the store at once, by the mount maybe a moment later). If the storage refuses the
+    credentials the ``"auto"`` function asks the mount from then on; a ``"direct"`` one
+    raises ``ZarrAccessUnavailable``."""
     if cfg is None or not cfg.is_direct:
         return os.stat
     import obstore
@@ -832,7 +926,17 @@ def stat_for(cfg: AccessConfig | None):
     store = _make_store(cfg)
 
     def head(path: str):
-        with _obstore_errors(cfg):
-            return obstore.head(store, cfg.key_of(path))
+        if cfg.refused:
+            if cfg.fallback:
+                return os.stat(path)
+            raise _expired(cfg)
+        try:
+            with _obstore_errors(cfg):
+                return obstore.head(store, cfg.key_of(path))
+        except _Refused:
+            _mark_refused(cfg)
+            if cfg.fallback:
+                return os.stat(path)
+            raise _expired(cfg) from None
 
     return head

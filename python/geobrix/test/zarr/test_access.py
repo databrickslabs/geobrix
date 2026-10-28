@@ -433,6 +433,14 @@ CLOUDS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _forget_refusals():
+    """A refusal is remembered for the life of the process: every test starts without one."""
+    _access._REFUSED.clear()
+    yield
+    _access._REFUSED.clear()
+
+
 class DatabricksError(Exception):
     """Stands in for ``databricks.sdk.errors.DatabricksError``."""
 
@@ -567,7 +575,8 @@ def test_vending_asks_uc_for_the_volume_and_maps_the_credentials(cloud, monkeypa
     again = resolve_access(
         None, "dbfs:" + where, access="auto", operation="WRITE_VOLUME"
     )
-    assert again == cfg and len(client.calls) == 4
+    assert dataclasses.replace(again, fallback=False) == cfg and again.fallback
+    assert not cfg.fallback and len(client.calls) == 4
 
 
 def test_the_sdk_may_not_log_the_vending_response(monkeypatch):
@@ -814,8 +823,162 @@ def test_request_failures_are_retried_and_never_echo_the_credentials(
     before = len(sleeps)
     with pytest.raises(ZarrAccessUnavailable) as e:
         _readers(cloud)["obstore"].read([Region("x.bin", 0, 3)])
-    assert SENTINEL not in str(e.value) and "vend new credentials" in e.value.fix
+    assert SENTINEL not in str(e.value) and "credentials expired" in e.value.fix
     assert len(sleeps) == before  # a refusal is not a transient miss
+
+
+def _fail_after(monkeypatch, n, make):
+    """obstore's ``get_ranges``, ``put`` and ``head`` work ``n`` times, then fail with
+    ``make()``: a store whose credentials expire. ``calls["n"]`` counts every request.
+    """
+    import obstore
+
+    calls = {"n": 0}
+    for name in ("get_ranges", "put", "head"):
+
+        def wrapped(*args, _real=getattr(obstore, name), **kwargs):
+            calls["n"] += 1
+            if calls["n"] > n:
+                raise make()
+            return _real(*args, **kwargs)
+
+        monkeypatch.setattr(obstore, name, wrapped)
+    return calls
+
+
+def _s3_expired():
+    from obstore import exceptions as ox
+
+    return ox.GenericError(
+        "Generic S3 error: Client error with status 400 Bad Request: "
+        "<Error><Code>ExpiredToken</Code><Message>The provided token has expired.</Message>"
+    )
+
+
+def _forbidden():
+    from obstore import exceptions as ox
+
+    return ox.PermissionDeniedError("403 Forbidden")
+
+
+@pytest.mark.parametrize("mode", ["auto", "direct"])
+@pytest.mark.parametrize(
+    "op, refusal",
+    [
+        ("read", _s3_expired),
+        ("read", _forbidden),
+        ("put", _s3_expired),
+        ("stat", _s3_expired),
+    ],
+    ids=["read-S3-400", "read-403", "put", "stat"],
+)
+def test_refused_credentials_are_not_retried_and_auto_carries_on_through_the_mount(
+    cloud, monkeypatch, op, refusal, mode
+):
+    """The credentials expire after a request: nothing waits and retries; "auto" does the rest
+    of the work through the mount (a pack is written there, a read comes from there), "direct"
+    raises with a Fix that names the expiry."""
+    sleeps = []
+    monkeypatch.setattr(time, "sleep", sleeps.append)
+    vol = cloud.vol
+    mount = vol / "mnt"  # a pack written through the mount lands here, not in the cloud
+    cfg = dataclasses.replace(
+        cloud.cfg,
+        fallback=mode == "auto",
+        volume_path=str(mount) if op != "read" else str(vol),
+    )
+    root, base = str(vol / "store"), str(vol / "base")
+    expired = "credentials expired mid-job; use access='auto' for long jobs"
+    if op == "read":
+        reader = reader_for(cfg, root, base)
+        calls = _fail_after(monkeypatch, 1, refusal)
+        assert reader.read([Region("pack.bin", 0, 10)]) == [
+            cloud.pack[:10]
+        ]  # still good
+        if mode == "auto":
+            assert reader.read([Region("pack.bin", 20, 10)]) == [cloud.pack[20:30]]
+            assert reader.read([Region("pack.bin", 30, 10)]) == [cloud.pack[30:40]]
+            assert calls["n"] == 2  # one good, one refused, and no request after that
+            assert cfg.refused and isinstance(
+                reader_for(cfg, root, base), FuseRangeReader
+            )
+        else:
+            with pytest.raises(ZarrAccessUnavailable) as e:
+                reader.read([Region("pack.bin", 20, 10)])
+            assert e.value.fix == expired and SENTINEL not in str(e.value)
+            assert calls["n"] == 2
+    elif op == "put":
+        from databricks.labs.gbx.zarr._pack import PackWriter
+
+        calls = _fail_after(monkeypatch, 0, refusal)
+        packs = mount / "store"
+        writer = PackWriter(
+            str(packs / "data" / "t2m" / "w1"), reader_root=str(packs), access=cfg
+        )
+        writer.add(b"x" * 100)
+        if mode == "auto":
+            rel = writer.close()  # rewritten through the mount
+            assert (packs / rel).read_bytes() == b"x" * 100
+            assert not (vol / "store" / "data").exists()  # and not in the cloud
+        else:
+            with pytest.raises(ZarrAccessUnavailable) as e:
+                writer.close()
+            assert e.value.fix == expired
+            assert (
+                not (packs / "data").exists() and not (vol / "store" / "data").exists()
+            )
+        assert calls["n"] == 1
+    else:
+        from databricks.labs.gbx.zarr._pack import require_packs
+
+        packs = mount / "store" / "data" / "t2m" / "w1"
+        packs.mkdir(parents=True)
+        (packs / "p.zpack").write_bytes(b"x")
+        calls = _fail_after(monkeypatch, 0, refusal)
+        args = (str(mount / "store"), ["data/t2m/w1/p.zpack"])
+        if mode == "auto":
+            require_packs(*args, what="write", access=cfg)  # the mount has it
+        else:
+            with pytest.raises(ZarrAccessUnavailable) as e:
+                require_packs(*args, what="write", access=cfg)
+            assert e.value.fix == expired
+        assert calls["n"] == 1
+    assert sleeps == []
+
+
+def test_a_direct_read_compares_the_object_time_at_whole_seconds(cloud, monkeypatch):
+    """A registration took the identity from a listing that may carry milliseconds; an object
+    store answers to the second. A direct read compares at the second both share (a rewrite
+    of the same size within the second goes unseen there; the mount sees it)."""
+    from datetime import datetime, timezone
+
+    import obstore
+
+    size = len(cloud.pack[500:])
+    at = datetime(
+        2023, 11, 14, 22, 13, 20, tzinfo=timezone.utc
+    )  # an HTTP header's second
+    ms = int(at.timestamp()) * 1000
+    real_head = obstore.head
+    monkeypatch.setattr(
+        obstore,
+        "head",
+        lambda store, key: {**real_head(store, key), "last_modified": at},
+    )
+
+    def read(identity):
+        region = Region("b.bin", 0, 8, "external", identity)
+        return _readers(cloud)["obstore"].read([region])
+
+    for recorded in (ms, ms + 123, ms + 999):  # no false drift on a millisecond listing
+        assert read(f"{recorded}:{size}") == [cloud.pack[500:508]]
+    for stale in (
+        f"{ms - 1000}:{size}",
+        f"{ms + 1000}:{size}",
+        f"{ms + 123}:{size + 1}",
+    ):
+        with pytest.raises(ZarrStoreDrift, match="changed outside GeoBrix"):
+            read(stale)
 
 
 def test_a_pack_is_one_put_and_the_commit_looks_for_the_object_not_the_mount(

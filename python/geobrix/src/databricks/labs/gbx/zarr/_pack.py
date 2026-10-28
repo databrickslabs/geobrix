@@ -219,9 +219,12 @@ class PackWriter:
         self._file.close()
         dest = os.path.join(self.dest_dir, self.name)
         try:
-            if self._access is not None and self._access.is_direct:
-                _retry_transient(lambda: put_pack(self._access, self._local, dest))
-            else:
+            put = self._access is not None and self._access.is_direct
+            # False: the storage refused the credentials and the call is "auto": the mount
+            if not (
+                put
+                and _retry_transient(lambda: put_pack(self._access, self._local, dest))
+            ):
                 _retry_transient(lambda: os.makedirs(self.dest_dir, exist_ok=True))
                 _retry_transient(lambda: shutil.copyfile(self._local, dest))
         except OSError as e:

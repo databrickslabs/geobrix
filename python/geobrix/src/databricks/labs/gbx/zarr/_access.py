@@ -18,6 +18,8 @@ and ``put_pack`` writes a pack with one ``obstore.put``.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import os
 import posixpath
@@ -356,6 +358,50 @@ _MS = timedelta(milliseconds=1)
 _SAS_SIGNATURE = re.compile(r"(?i)\bsig=[^&\s\"']+")
 
 
+class Credentials:
+    """The keyword arguments of an obstore store (keys, tokens), held so that nothing prints,
+    logs or serializes them by accident.
+
+    ``repr``/``str`` show the names only, ``dataclasses.asdict`` and ``vars`` of the config
+    that holds it show this object (a ``dict`` would show the values), and it is not
+    JSON-serializable. A task closure pickles it whole: that is how a task signs its
+    requests. ``reveal()`` is the one way to the values.
+    """
+
+    __slots__ = ("_items",)
+
+    def __init__(self, items=None):
+        self._items = dict(items or {})
+
+    def reveal(self) -> dict:
+        return dict(self._items)
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self._items))
+
+    def digest(self) -> str:
+        """A short name for this set of credentials that does not reveal them."""
+        text = json.dumps(sorted(self._items.items()), default=str)
+        return hashlib.sha256(text.encode()).hexdigest()[:16]
+
+    def __bool__(self) -> bool:
+        return bool(self._items)
+
+    def __repr__(self) -> str:
+        return "<Credentials masked: " + ", ".join(self.names) + ">"
+
+    __str__ = __repr__
+
+    def __eq__(self, other) -> bool:
+        return isinstance(other, Credentials) and self._items == other._items
+
+    __hash__ = None  # type: ignore[assignment]
+
+    def __reduce__(self):
+        return (Credentials, (self._items,))
+
+
 @dataclass(frozen=True)
 class AccessConfig:
     """How the tasks of one ``gbx_zarr_*`` call reach the files of a store.
@@ -363,32 +409,36 @@ class AccessConfig:
     ``mode`` is ``"fuse"`` (the Volume mount) or ``"direct"`` (the Volume's cloud
     storage, through obstore). A direct config holds the Volume's mount path
     (``volume_path``) and cloud location (``volume_url``), ``root_url`` (the cloud URL of
-    the path it was resolved for), the ``cloud`` (``"aws"``, ``"azure"`` or ``"gcp"``) and
-    ``creds``: the keyword arguments of the obstore store, which Unity Catalog vended for
-    an hour at most.
+    the path it was resolved for), the ``cloud`` (``"aws"``, ``"azure"`` or ``"gcp"``), the
+    S3 ``region`` and ``creds`` (``Credentials``): the keyword arguments of the obstore
+    store, which Unity Catalog vended for an hour at most. ``fallback`` is true when the call
+    asked for ``"auto"``: a task whose credentials the storage refuses (they expired) carries
+    on through the mount instead of failing.
 
-    ``creds`` are secrets. They travel in a task closure (the config is a field of the
-    task configs) and nowhere else, so ``repr`` and ``str`` show the names of the fields and
-    never their values; nothing may put them in a DataFrame, a log line or an error message.
+    ``creds`` are secrets. They travel in a (small) task closure and nowhere else, so
+    ``repr`` and ``str`` show the names of the fields and never their values; nothing may put
+    them in a DataFrame, a log line or an error message.
     """
 
     mode: str
     root_url: str | None = None
-    creds: dict | None = field(default=None, repr=False)
+    creds: Credentials | None = field(default=None, repr=False)
     cloud: str | None = None
     volume_path: str | None = None
     volume_url: str | None = None
+    fallback: bool = False
+    region: str | None = None
+
+    def __post_init__(self):
+        if isinstance(self.creds, dict):
+            object.__setattr__(self, "creds", Credentials(self.creds))
 
     def __repr__(self) -> str:
-        masked = (
-            None
-            if self.creds is None
-            else "<masked: " + ", ".join(sorted(self.creds)) + ">"
-        )
         return (
             f"AccessConfig(mode={self.mode!r}, root_url={self.root_url!r}, "
-            f"creds={masked}, cloud={self.cloud!r}, volume_path={self.volume_path!r}, "
-            f"volume_url={self.volume_url!r})"
+            f"creds={self.creds!r}, cloud={self.cloud!r}, region={self.region!r}, "
+            f"volume_path={self.volume_path!r}, volume_url={self.volume_url!r}, "
+            f"fallback={self.fallback!r})"
         )
 
     @property
@@ -452,6 +502,28 @@ def _volume_of(path) -> tuple[str, str, str]:
     return ".".join(m.groups()), "/" + "/".join(("Volumes", *m.groups())), local
 
 
+@contextmanager
+def _sdk_logs_above_debug():
+    """Keep the Databricks SDK's loggers above DEBUG while a request is made: its round-trip
+    log prints the response body, which for credentials is the keys. The levels come back
+    after (loggers the SDK makes during the call inherit the raised parent)."""
+    names = ["databricks.sdk"] + [
+        n
+        for n in list(logging.root.manager.loggerDict)
+        if n.startswith("databricks.sdk.")
+    ]
+    saved = []
+    for name in names:
+        log = logging.getLogger(name)
+        saved.append((log, log.level))
+        log.setLevel(max(log.level, logging.INFO))
+    try:
+        yield
+    finally:
+        for log, level in saved:
+            log.setLevel(level)
+
+
 def _workspace_client():
     """The Databricks SDK client of this compute. Imported here, so a cluster without the
     SDK (or a host test) still imports the package."""
@@ -497,12 +569,13 @@ def _vend(path: str, operation: str, also) -> AccessConfig:
         client = _workspace_client()
     except ImportError:
         raise _Unavailable("databricks-sdk is not installed") from None
-    volume_id = client.volumes.read(name).volume_id
-    response = client.api_client.do(
-        "POST",
-        _VENDING_PATH,
-        body={"volume_id": volume_id, "operation": operation},
-    )
+    with _sdk_logs_above_debug():  # the SDK logs response bodies at DEBUG
+        volume_id = client.volumes.read(name).volume_id
+        response = client.api_client.do(
+            "POST",
+            _VENDING_PATH,
+            body={"volume_id": volume_id, "operation": operation},
+        )
     cloud, creds = _credentials(response)
     url = str(response["url"]).rstrip("/")
     below = os.path.relpath(local, volume_path).replace(os.sep, "/")
@@ -567,12 +640,19 @@ def _make_store(cfg: AccessConfig):
     (the URL's scheme picks the store: ``s3``, ``abfss`` or ``gs``)."""
     from obstore.store import from_url
 
-    return from_url(cfg.volume_url, **(cfg.creds or {}))
+    return from_url(cfg.volume_url, **_store_args(cfg))
+
+
+def _store_args(cfg: AccessConfig) -> dict:
+    args = {} if cfg.creds is None else cfg.creds.reveal()
+    if cfg.region is not None:
+        args["region"] = cfg.region
+    return args
 
 
 def _scrub(cfg: AccessConfig, text: str) -> str:
     """``text`` without any credential: a failed request can echo its URL or headers."""
-    for value in (cfg.creds or {}).values():
+    for value in ({} if cfg.creds is None else cfg.creds.reveal()).values():
         if isinstance(value, str) and value:
             text = text.replace(value, "***")
     return _SAS_SIGNATURE.sub("sig=***", text)

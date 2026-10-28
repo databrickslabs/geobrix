@@ -558,7 +558,7 @@ def test_vending_asks_uc_for_the_volume_and_maps_the_credentials(cloud, monkeypa
         ),
     ]
     url = response["url"]
-    assert (cfg.mode, cfg.cloud, cfg.creds) == ("direct", cloud, creds)
+    assert (cfg.mode, cfg.cloud, cfg.creds.reveal()) == ("direct", cloud, creds)
     assert (cfg.volume_path, cfg.volume_url) == (VOLUME, url)
     assert cfg.root_url == url + "/stores/era5"
     assert cfg.url_of(VOLUME + "/base/x.bin") == url + "/base/x.bin"
@@ -568,6 +568,48 @@ def test_vending_asks_uc_for_the_volume_and_maps_the_credentials(cloud, monkeypa
         None, "dbfs:" + where, access="auto", operation="WRITE_VOLUME"
     )
     assert again == cfg and len(client.calls) == 4
+
+
+def test_the_sdk_may_not_log_the_vending_response(monkeypatch):
+    """The SDK's round-trip log prints a response body at DEBUG: while vending, its loggers
+    sit above DEBUG, and they come back as they were."""
+    import logging
+
+    records = []
+
+    class Capture(logging.Handler):
+        def emit(self, record):
+            if record.name.startswith("databricks.sdk"):
+                records.append(record.getMessage())
+
+    log = logging.getLogger("databricks.sdk")
+    child = logging.getLogger("databricks.sdk.round_trip")
+    child.setLevel(logging.DEBUG)
+    handler = Capture(logging.DEBUG)
+    root = logging.getLogger()
+    before = (root.level, log.level, child.level)
+    root.addHandler(handler)
+    root.setLevel(logging.DEBUG)
+    try:
+        response = CLOUDS["aws"][0]
+        client = _install(monkeypatch, response=response)
+        real_do = client.api_client.do
+
+        def chatty(method, path, body=None):
+            out = real_do(method, path, body=body)
+            child.debug("< 200 OK %s", out)  # what the SDK does
+            return out
+
+        client.api_client.do = chatty
+        resolve_access(None, VOLUME, access="direct", operation="READ_VOLUME")
+        assert child.level == logging.DEBUG and log.level == before[1]  # restored
+        child.debug("after: %s", SENTINEL)
+        assert records == [f"after: {SENTINEL}"]  # only the line from outside the call
+    finally:
+        root.removeHandler(handler)
+        root.setLevel(before[0])
+        child.setLevel(before[2])
+    assert not any(SENTINEL + "-sk" in r for r in records)
 
 
 def test_fuse_never_asks_and_a_bad_argument_is_refused(monkeypatch):
@@ -848,8 +890,21 @@ def test_creds_not_in_plan_json(monkeypatch, era5_v3_sharded):
     rows = H.read_blocks(src, variables=["t2m"], access=direct)
     seen.append(json.dumps([{k: v for k, v in r.items() if k != "data"} for r in rows]))
     assert all(SENTINEL not in text for text in seen)
+    # the holder keeps them out of the ways a config is dumped: asdict, vars, json, a round trip
+    unpickled = cloudpickle.loads(cloudpickle.dumps(direct))
+    for dumped in (
+        dataclasses.asdict(direct),
+        vars(direct),
+        [direct, unpickled],
+        {"cfg": cfg},
+    ):
+        assert SENTINEL not in repr(dumped) + str(dumped)
+    with pytest.raises(TypeError):
+        json.dumps(dataclasses.asdict(direct))
     # the closure is the one place they travel: a pickled config still signs requests
-    assert cloudpickle.loads(cloudpickle.dumps(direct)).creds == direct.creds
+    assert unpickled.creds == direct.creds and unpickled.creds.reveal() == {
+        "access_key_id": SENTINEL
+    }
 
 
 @pytest.mark.parametrize("what", ["blocks", "table", "sample", "tiles"])

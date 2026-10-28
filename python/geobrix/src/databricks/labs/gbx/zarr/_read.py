@@ -162,9 +162,9 @@ def check_access(access) -> None:
 def plain_direct_error(root: str) -> ZarrAccessUnavailable:
     return ZarrAccessUnavailable(
         f"direct storage access applies to the files of a managed or registered store; "
-        f"the plain store {root} is read through its path",
-        fix='use access="auto" or "fuse" for a plain store, or register it with '
-        "gbx_zarr_register to read it with direct access",
+        f"the plain store {root} is read through its path (FUSE only)",
+        fix="register the store with gbx_zarr_register to use direct access, or use "
+        'access="auto" or "fuse"',
     )
 
 
@@ -1259,9 +1259,9 @@ def gbx_zarr_read(
     are several times faster than through the mount), and raises ``ZarrAccessUnavailable``
     where they cannot be had (Serverless, no SDK, no permission, a path that is not on a
     Volume); ``"auto"`` (the default) is direct where the credentials can be had and the
-    mount everywhere else, without an error. A plain store is read through its path, so
-    ``"direct"`` raises for it; virtual tiles are opened later, over the mount, so
-    ``"direct"`` needs ``virtual_tiles=False``.
+    mount everywhere else, without an error. A plain-path store is read through its path (FUSE
+    only), so ``"direct"`` raises for it: register the store to use direct access. Virtual
+    tiles are opened later, over the mount, so ``"direct"`` needs ``virtual_tiles=False``.
 
     An array GeoBrix cannot decode (a string coordinate, or one whose metadata is corrupt)
     does not fail the read, on a table or a plain path: it is left out, its dimension gets

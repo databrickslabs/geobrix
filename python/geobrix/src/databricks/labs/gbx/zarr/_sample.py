@@ -648,8 +648,9 @@ def gbx_zarr_sample(
 
     ``method`` is ``"nearest"``; ``"bilinear"`` is planned and raises ``ZarrUnsupported``.
     ``access`` is ``"auto"``, ``"fuse"`` or ``"direct"``, as in ``gbx_zarr_read`` (direct
-    storage access with Unity Catalog credentials where they can be had; a plain store is
-    read through its path, so ``"direct"`` raises for it).
+    storage access with Unity Catalog credentials where they can be had). A plain-path store
+    is read through its path (FUSE only), so ``"direct"`` raises for it: register the store
+    to use direct access.
 
     Up to 100,000 points are collected to the driver; if they lie in at most four chunks of
     the grid and the answer is small the driver reads them and returns the result, with no

@@ -621,7 +621,8 @@ formats.
   put on the reference tile's pixel grid, because the in-memory merge and the streamed one round a
   fractional offset differently and placed the two tiles one pixel further apart when streamed (the
   tile in the reference system sat in columns 15 to 26 in memory and 16 to 27 streamed, beside the
-  reprojected one); the reprojected tile can grow by up to a pixel on each side;
+  reprojected one); the reprojected tile can grow by up to a pixel on each side (the heavyweight
+  `gbx_rst_merge_agg` does not merge tiles in two coordinate systems: it returns one of them);
   `gbx_rst_filter` of a raster with no declared NoData no longer returns NaN for every window; and
   `gbx_rst_convolve` writes each block's result where the block is (it wrote it shifted and left
   the rest as the input), and in both tiers adds only the neighbours that are on the raster, so

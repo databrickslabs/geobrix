@@ -14,7 +14,6 @@ These mirror the heavyweight operations:
 """
 
 import logging
-import math
 import os
 import shutil
 import warnings
@@ -38,6 +37,7 @@ from databricks.labs.gbx.pyrx.core import derivedband as _derivedband
 from databricks.labs.gbx.pyrx.core import warp as _warp
 from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
 from databricks.labs.gbx.pyrx.core.budget import decoded_budget_bytes
+from databricks.labs.gbx.pyrx.core.cellraster import snap_bounds
 from databricks.labs.gbx.pyrx.core.local_temp import new_local_temp_dir
 
 _log = logging.getLogger(__name__)
@@ -74,22 +74,6 @@ def _close_all(memfiles, datasets):
         mf.close()
 
 
-def _snap_to_grid(transform, width, height, anchor, res):
-    """``(transform, width, height)`` of the grid of pixel size *res* through *anchor* (a ``(left, top)``
-    corner) that covers the same extent: the origin moves to the grid line at or beyond the extent's
-    top-left corner and the size grows to keep the bottom-right one covered."""
-    rx, ry = res
-    left, top = transform.c, transform.f
-    right, bottom = left + width * transform.a, top + height * transform.e
-    new_left = anchor[0] + math.floor((left - anchor[0]) / rx + 1e-6) * rx
-    new_top = anchor[1] - math.floor((anchor[1] - top) / ry + 1e-6) * ry
-    return (
-        rasterio.Affine(rx, 0.0, new_left, 0.0, -ry, new_top),
-        max(1, math.ceil((right - new_left) / rx - 1e-6)),
-        max(1, math.ceil((new_top - bottom) / ry - 1e-6)),
-    )
-
-
 def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
     """Reproject an open rasterio dataset to ``dst_crs``; return (memfile, dataset).
 
@@ -122,9 +106,13 @@ def _reproject_dataset(src, dst_crs, target_res=None, anchor=None):
         src.crs, dst_crs, src.width, src.height, *src.bounds, **_res_kwarg
     )
     if target_res is not None and anchor is not None:
-        transform, width, height = _snap_to_grid(
-            transform, width, height, anchor, target_res
+        # The grid line at or beyond the tile's top-left corner, the size grown to cover it.
+        left, bottom = transform.c, transform.f + height * transform.e
+        right, top = left + width * transform.a, transform.f
+        left, _, _, top, width, height = snap_bounds(
+            left, bottom, right, top, target_res, anchor=anchor, tol=1e-6
         )
+        transform = rasterio.Affine(target_res[0], 0.0, left, 0.0, -target_res[1], top)
     out_dtype = src.dtypes[0]
     decoded_bytes = src.count * width * height * np.dtype(out_dtype).itemsize
     profile = _comp.drop_ycbcr(src.profile)
@@ -438,7 +426,7 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     across tiers, so no cross-tier hash agreement is required.
 
     PIXEL PLACEMENT (tiles in another CRS): such a tile is reprojected onto the pixel
-    size AND the pixel grid of the reference tile (:func:`_snap_to_grid`; the grid
+    size AND the pixel grid of the reference tile (:func:`cellraster.snap_bounds`; the grid
     line at or beyond its top-left corner, so it can grow by up to a pixel on each
     side). The in-RAM merge and the streamed one (a VRT) place a tile by different
     rounding, ``floor(offset + 0.1)`` pixels in ``rasterio.merge`` and ``round(offset)``
@@ -448,8 +436,12 @@ def merge_tiles(rasters: List[bytes]) -> bytes:
     12-pixel 4326 tile, reprojected, beside a 12-pixel 3857 tile at 50 km pixels; the
     3857 tile covered columns 15-26 in RAM and 16-27 streamed, the reprojected one 0-12
     in both). On the reference grid every offset is whole and both paths agree.
-    (Not compared with the heavyweight tier, which warps a tile in another CRS with
-    GDAL's own placement.)
+
+    TIER DIFFERENCE (tiles in another CRS): the heavyweight ``gbx_rst_merge_agg`` does not
+    merge them. It builds a ``gdalbuildvrt`` mosaic, which skips a tile whose projection
+    differs, and returns ONE tile, the one that sorts first in byte order (probed against
+    the JVM tier: a 4326 and a 3857 tile gave a single 12 x 12 tile). Here both are
+    mosaicked, so there is nothing in the heavyweight output to place them against.
     """
     if not rasters:
         return None

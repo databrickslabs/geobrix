@@ -1144,6 +1144,7 @@ def fake_s3(monkeypatch):
 
     class S3:
         seen = []
+        headers = []
         respond = staticmethod(lambda method, target: (400, b"", {}))
 
     class Handler(http.server.BaseHTTPRequestHandler):
@@ -1152,6 +1153,7 @@ def fake_s3(monkeypatch):
             if n:
                 self.rfile.read(n)
             S3.seen.append((self.command, self.path))
+            S3.headers.append({k.lower(): v for k, v in self.headers.items()})
             status, body, headers = S3.respond(self.command, self.path)
             self.send_response(status)
             for key, value in headers.items():
@@ -1179,7 +1181,7 @@ def fake_s3(monkeypatch):
             "client_options": {"allow_http": True},
         },
     )
-    S3.seen = []
+    S3.seen, S3.headers = [], []
     yield S3
     server.shutdown()
 
@@ -1288,6 +1290,130 @@ def test_a_failure_that_is_not_the_credentials_is_still_retried(
     with pytest.raises(OSError):
         reader.read([Region("pack.bin", 0, 8)])
     assert len(fake_s3.seen) == 3 and len(sleeps) == 2 and not cfg.refused
+
+
+@pytest.mark.parametrize(
+    "date, path, query, extra, signature",
+    [
+        (  # GET Object with a Range header
+            "20130524T000000Z",
+            "/test.txt",
+            [],
+            {"Range": "bytes=0-9"},
+            "f0e8bdb87c964420e857bd35b5d6ed310bd44f0170aba48dd91039c6036bdb41",
+        ),
+        (  # GET Bucket Lifecycle: a sub-resource with no value
+            "20130524T000000Z",
+            "/",
+            [("lifecycle", "")],
+            {},
+            "fea454ca298b7da1c68078a5d1bdbfbbe0d65c699e0f91ac7a200a0136783543",
+        ),
+        (  # GET Bucket (List Objects): two parameters, sorted
+            "20130524T000000Z",
+            "/",
+            [("prefix", "J"), ("max-keys", "2")],
+            {},
+            "34b48302e7b5fa45bde8084f4b7868a86f0a534bc59db6670ed5711ef69dc6f7",
+        ),
+    ],
+    ids=["get-object", "get-lifecycle", "list-objects"],
+)
+def test_sigv4_matches_the_examples_aws_publishes(date, path, query, extra, signature):
+    from databricks.labs.gbx.zarr._s3sign import sign_v4
+
+    headers = sign_v4(
+        "GET",
+        "examplebucket.s3.amazonaws.com",
+        path,
+        query,
+        access_key="AKIAIOSFODNN7EXAMPLE",
+        secret_key="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+        session_token=None,
+        region="us-east-1",
+        amz_date=date,
+        extra_headers=extra,
+    )
+    assert headers["Authorization"].endswith("Signature=" + signature)
+
+
+@pytest.mark.parametrize("mode", ["auto", "direct"])
+def test_a_pack_put_refused_half_way_aborts_its_multipart_upload(
+    fake_s3, cloud, monkeypatch, mode
+):
+    """CreateMultipartUpload works, an UploadPart is refused (the credentials expired). obstore
+    sends no abort, so the parts would stay and be billed: the open upload of exactly this
+    key (not another's) is listed and aborted, with signed requests. "auto" then writes the
+    whole pack through the mount."""
+    from databricks.labs.gbx.zarr._pack import PackWriter
+
+    monkeypatch.setattr(time, "sleep", lambda s: None)
+    vol = cloud.vol
+    uploads = []
+
+    def respond(method, target):
+        path, _, query = target.partition("?")
+        if method == "POST" and query.startswith("uploads"):
+            return (
+                200,
+                b"<InitiateMultipartUploadResult><UploadId>U1</UploadId></InitiateMultipartUploadResult>",
+                {},
+            )
+        if method == "PUT" and "partNumber" in query:
+            return 400, b"<Error><Code>ExpiredToken</Code></Error>", {}
+        if method == "GET" and "uploads" in query:
+            mine = uploads[0]
+            return (
+                200,
+                (
+                    "<ListMultipartUploadsResult xmlns='http://s3.amazonaws.com/doc/2006-03-01/'>"
+                    f"<Upload><Key>{mine}</Key><UploadId>U1</UploadId></Upload>"
+                    "<Upload><Key>vol/store/data/t2m/w1/another.zpack</Key><UploadId>U2</UploadId></Upload>"
+                    "</ListMultipartUploadsResult>"
+                ).encode(),
+                {},
+            )
+        if method == "DELETE":
+            return 204, b"", {}
+        return 400, b"", {}
+
+    fake_s3.respond = respond
+    cfg = AccessConfig(
+        "direct",
+        "s3://bkt/vol/store",
+        {
+            "access_key_id": "AKIAEXAMPLE",
+            "secret_access_key": SENTINEL,
+            "session_token": SENTINEL + "-st",
+        },
+        "aws",
+        str(vol),
+        "s3://bkt/vol",
+        fallback=mode == "auto",
+        region="us-west-2",
+    )
+    root = vol / "store"
+    writer = PackWriter(
+        str(root / "data" / "t2m" / "w1"), reader_root=str(root), access=cfg
+    )
+    uploads.append(f"vol/store/data/t2m/w1/{writer.name}")
+    data = os.urandom(12 << 20)
+    writer.add(data)
+    if mode == "auto":
+        rel = writer.close()
+        assert (root / rel).read_bytes() == data  # whole, through the mount
+    else:
+        with pytest.raises(ZarrAccessUnavailable):
+            writer.close()
+    deletes = [t for m, t in fake_s3.seen if m == "DELETE"]
+    assert deletes == [f"/bkt/{uploads[0]}?uploadId=U1"]  # this key's upload, not U2
+    signed = [h for h in fake_s3.headers][-2:]  # the list and the abort
+    assert all(
+        h["authorization"].startswith("AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/")
+        for h in signed
+    )
+    assert all(h["x-amz-security-token"] == SENTINEL + "-st" for h in signed)
+    assert SENTINEL not in "".join(h["authorization"] for h in signed)
 
 
 def test_a_direct_read_compares_the_object_time_at_whole_seconds(cloud, monkeypatch):

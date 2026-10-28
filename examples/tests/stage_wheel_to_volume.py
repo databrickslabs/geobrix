@@ -37,6 +37,33 @@ if _env_file.exists():
                     os.environ[k] = v
 
 
+_BUILD_REQUIRES_CHECK = """
+import sys, tomllib
+from importlib.metadata import PackageNotFoundError, version
+from packaging.requirements import Requirement
+
+with open(sys.argv[1], "rb") as f:
+    requires = tomllib.load(f).get("build-system", {}).get("requires", [])
+for spec in requires:
+    req = Requirement(spec)
+    try:
+        if not req.specifier.contains(version(req.name), prereleases=True):
+            sys.exit(1)
+    except PackageNotFoundError:
+        sys.exit(1)
+"""
+
+
+def _venv_meets_build_requires(venv_py: Path, pkg_dir: Path) -> bool:
+    """True when `venv_py` has every package in pyproject's [build-system] requires at a version
+    that satisfies it, so `build --no-isolation` can use the venv. Any doubt answers False."""
+    probe = subprocess.run(
+        [str(venv_py), "-c", _BUILD_REQUIRES_CHECK, str(pkg_dir / "pyproject.toml")],
+        capture_output=True,
+    )
+    return probe.returncode == 0
+
+
 def main() -> int:
     exit_if_help(__doc__)
     skip_wheel_upload = os.environ.get("GBX_BUNDLE_SKIP_WHEEL_UPLOAD", "").strip().lower() in ("1", "true", "yes")
@@ -105,9 +132,16 @@ def main() -> int:
     # `python` may be an unrelated interpreter with a mismatched setuptools/packaging that
     # breaks even isolated builds). Fall back to sys.executable + isolation + the proxy
     # (the CI path, where the runner's env is clean and just needs the mirror).
+    # The venv's backend must also satisfy pyproject's [build-system] requires: the curated
+    # host venv can hold an older setuptools than the project needs (`project.license` as an
+    # SPDX string needs setuptools >= 77), which fails with "invalid pyproject.toml config".
+    # In that case build isolated (the backend is fetched from the ambient index) instead.
     venv_py = Path(project_root) / ".venv-pyrx" / "bin" / "python"
-    if venv_py.exists():
+    if venv_py.exists() and _venv_meets_build_requires(venv_py, pkg_dir):
         build_cmd = [str(venv_py), "-m", "build", "--no-isolation", str(pkg_dir)]
+    elif venv_py.exists():
+        print("The venv's build backend is older than pyproject's [build-system] requires: building isolated.")
+        build_cmd = [str(venv_py), "-m", "build", str(pkg_dir)]
     else:
         build_cmd = [sys.executable, "-m", "build", str(pkg_dir)]
     rc = subprocess.run(

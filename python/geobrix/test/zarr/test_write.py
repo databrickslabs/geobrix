@@ -34,6 +34,7 @@ from databricks.labs.gbx.zarr._testing import (  # noqa: E402
 )
 from databricks.labs.gbx.zarr._write import gbx_zarr_write  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402
+    ZarrGridMismatch,
     ZarrReadOnly,
     ZarrWriteConflict,
 )
@@ -589,7 +590,13 @@ def test_the_write_module_uses_no_api_that_spark_connect_forbids():
     import pathlib
 
     found = []
-    for name in ("_write.py", "_write_tasks.py", "_pack.py", "_layout.py"):
+    for name in (
+        "_write.py",
+        "_write_tiles.py",
+        "_write_tasks.py",
+        "_pack.py",
+        "_layout.py",
+    ):
         path = pathlib.Path(_write.__file__).parent / name
         for node in ast.walk(ast.parse(path.read_text())):
             if isinstance(node, ast.Attribute) and node.attr in (
@@ -1660,3 +1667,84 @@ def test_rr1_m2_side_rows_are_routed_the_same_way_every_time():
 
     first = parts()
     assert first == parts() and len(set(first)) == 1
+
+
+# --- carries from the reviews of the writer ----------------------------------------------------
+
+
+def test_an_append_needs_the_coordinate_of_its_dimension(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """Labels cannot be placed by value against a dimension that has none: the append is
+    refused and nothing of it is visible."""
+    from databricks.labs.gbx.zarr.errors import ZarrError
+
+    ds = _dataset()
+    table, _, v1 = _create(
+        spark_delta, drop, tmp_path, ds.isel(time=slice(0, 24)).drop_vars("time")
+    )
+    with pytest.raises(ZarrError, match="no coordinate array for 'time'") as e:
+        gbx_zarr_write(
+            ds.isel(time=slice(24, 48)),
+            table,
+            mode="append",
+            append_dim="time",
+            spark=spark_delta,
+        )
+    assert "Fix:" in str(e.value) and _latest(spark_delta, table) == v1
+
+
+def test_nat_into_an_integer_time_array_without_a_fill_is_refused(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    """xarray would store NaT as the smallest integer, which a read refuses as out of range."""
+    from databricks.labs.gbx.zarr.errors import ZarrUnsupported
+
+    store = make_era5_like(tmp_path / "nat.zarr", zarr_format=3)
+    table = _table("nat")
+    drop(table)
+    gbx_zarr_register(
+        spark_delta, str(store), table, writable=True, overlay_root=str(tmp_path / "ov")
+    )
+    times = np.array(["NaT", "2023-01-01T01:00"], dtype="datetime64[ns]")
+    with pytest.raises(ZarrUnsupported, match="NaT") as e:
+        gbx_zarr_write(
+            _blocks(spark_delta, ("time", (0,), times)), table, mode="update"
+        )
+    assert "add a _FillValue to the time array" in e.value.fix
+
+
+@pytest.mark.parametrize("start", [8, -1])
+def test_m21_coordinate_blocks_outside_the_array_are_refused(
+    spark_delta, drop, tmp_path, no_hooks, start
+):
+    table, _, v1 = _create(spark_delta, drop, tmp_path)
+    labels = np.linspace(40.0, 38.0, 5)  # five of the store's ten latitudes
+    with pytest.raises(ZarrGridMismatch, match="outside the array's 10 labels"):
+        gbx_zarr_write(
+            _blocks(spark_delta, ("latitude", (start,), labels)), table, mode="update"
+        )
+    assert _latest(spark_delta, table) == v1
+
+
+def test_m14_a_new_nested_variable_gets_its_parent_group(
+    spark_delta, drop, tmp_path, no_hooks
+):
+    table, _, _ = _create(spark_delta, drop, tmp_path)
+    ones = np.ones((12, 5, 6), dtype="float32")
+    gbx_zarr_write(
+        _blocks(spark_delta, ("grp/sub/x", (0, 0, 0), ones)),
+        table,
+        mode="update",
+        variables=["grp/sub/x"],
+    )
+    groups = {
+        r["array"]
+        for r in spark_delta.sql(
+            f"SELECT array FROM {table} WHERE kind = 'group' AND tag IS NULL"
+        ).collect()
+    }
+    assert groups == {None, "grp", "grp/sub"}  # the root, and both parents of the array
+    np.testing.assert_array_equal(
+        _read(spark_delta, table, "grp/sub/x")[:12, :5, :6], ones
+    )

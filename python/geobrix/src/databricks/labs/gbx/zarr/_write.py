@@ -18,7 +18,10 @@ A write has two phases.
    driver, are metadata. One MERGE commits all of it (``_manifest.commit``), so a write is
    all or nothing.
 
-**How the input is read.** An ``xarray.Dataset`` is cut into blocks on the driver. A blocks
+**How the input is read.** A DataFrame of GeoBrix tiles becomes blocks first
+(``_write_tiles``): the driver plans every block from the tiles' headers, so ``create`` and
+``append`` need no position pass, and a task decodes each tile once. An ``xarray.Dataset``
+is cut into blocks on the driver. A blocks
 DataFrame is read once for ``update`` and ``overwrite``: positions, labels and data come
 from the same evaluation. ``create`` and ``append`` need the input's extent (and an
 append its new labels) before they can lay the chunks out. They make a narrow first pass
@@ -70,6 +73,7 @@ import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
+from databricks.labs.gbx.zarr import _write_tiles
 from databricks.labs.gbx.zarr._layout import chunk_layout, coordinate_chunks
 from databricks.labs.gbx.zarr._meta import (
     ArrayMeta,
@@ -281,7 +285,7 @@ def _v3_doc(name, dims, shape, dtype, chunks, shards, fill, attrs, codecs) -> di
     zarr.create_array(
         store,
         shape=tuple(shape),
-        chunks=tuple(chunks) if chunks else None,
+        chunks=tuple(chunks) if chunks is not None else None,  # () is a scalar's
         shards=tuple(shards) if shards else None,
         dtype=np.dtype(dtype),
         fill_value=fill,
@@ -489,6 +493,7 @@ class _Input:
     attrs: dict  # xarray: the dataset attributes
     frame: object = None  # blocks: the blocks to write
     digest: tuple | None = None  # blocks: (count, hash) of the planned blocks
+    known: dict = field(default_factory=dict)  # coordinates the driver holds already
 
 
 def _wanted(names, variables) -> list[str]:
@@ -587,11 +592,6 @@ def _blocks_frame(df, variables, dims=None):
     from pyspark.sql import functions as F
 
     missing = [c for c in _BLOCK_COLUMNS if c not in df.columns]
-    if "tile" in df.columns:
-        raise ZarrUnsupported(
-            "writing GeoBrix tiles arrives with the tile reader",
-            fix="write blocks (gbx_zarr_read output='blocks') or an xarray.Dataset",
-        )
     if missing:
         raise ValueError(
             f"the DataFrame lacks the blocks column(s) {missing}. Fix: pass the "
@@ -616,14 +616,19 @@ def _digest_of(vars_: dict) -> tuple[int, int]:
     return count, digest
 
 
-def _planned_blocks(data, variables) -> _Input:
+def _planned_blocks(data, variables, seen=None, known=None) -> _Input:
     """A create's or append's blocks, planned from one position pass. With ``variables``
     the named variables are kept with the coordinates of the dimensions they use; any other
-    coordinate block is left out of the frame (and so of the digest) before writing."""
+    coordinate block is left out of the frame (and so of the digest) before writing.
+
+    ``seen`` is the positions of the blocks when the caller already holds them (tiles:
+    the driver planned every block from the tiles' headers), instead of a pass over the
+    frame; ``known`` the coordinate values it holds, which an append then does not read.
+    """
     from pyspark.sql import functions as F
 
     frame = _blocks_frame(data, variables)
-    vars_ = _position_pass(frame)
+    vars_ = _position_pass(frame) if seen is None else _summarize_positions(seen)
     names = _names(variables)
     if names is not None:
         missing = [n for n in names if n not in vars_]
@@ -639,7 +644,9 @@ def _planned_blocks(data, variables) -> _Input:
         if len(keep) < len(vars_):
             frame = frame.where(F.col("variable").isin(keep))
             vars_ = {n: vars_[n] for n in keep}
-    return _Input("blocks", vars_, {}, frame=frame, digest=_digest_of(vars_))
+    return _Input(
+        "blocks", vars_, {}, frame=frame, digest=_digest_of(vars_), known=known or {}
+    )
 
 
 def _position_pass(frame) -> dict[str, _Var]:
@@ -655,7 +662,11 @@ def _position_pass(frame) -> dict[str, _Var]:
             if opt in frame.columns
             else F.lit(None).cast("string").alias(opt)
         )
-    seen = frame.select(*cols).toArrow()
+    return _summarize_positions(frame.select(*cols).toArrow())
+
+
+def _summarize_positions(seen: pa.Table) -> dict[str, _Var]:
+    """The variables of a table of block positions (one row per block)."""
     if not seen.num_rows:
         raise ValueError(
             "the blocks DataFrame is empty. Fix: pass the blocks to write."
@@ -1318,8 +1329,60 @@ def _sizing_docs(plan: _Plan, docs: _Docs, name: str) -> None:
             plan.sizing.add(("array", source, _doc_keys(docs.arrays[source])[0]))
 
 
+def _prepare_tiles(spark, data, tiles, mode, variables, append_dim, store):
+    """The plan and blocks of a DataFrame of tiles (``_write_tiles``); ``tiles`` is
+    ``(tile column, dim_cols)``, ``store`` the existing store or ``None`` for a create.
+    """
+    column, dim_cols = tiles
+    return _write_tiles.prepare(
+        data,
+        column,
+        mode=mode,
+        dim_cols=dim_cols,
+        names=_names(variables),
+        append_dim=append_dim,
+        store=store,
+        schema=_blocks_struct(),
+    )
+
+
+def _tile_input(data, dim_cols):
+    """``(tile column, dim_cols)`` when ``data`` is a DataFrame of tiles, else ``None``;
+    ``dim_cols`` with any other input is refused."""
+    column = _write_tiles.tile_column(data) if _is_frame(data) else None
+    if column is not None:
+        return column, _write_tiles.check_dim_cols(dim_cols, data, column)
+    if dim_cols is not None:
+        raise ValueError(
+            "dim_cols places GeoBrix tiles, and the data holds none. Fix: drop dim_cols, "
+            "or pass a DataFrame with a tile column."
+        )
+    return None
+
+
+def _create_input(spark, data, tiles, variables) -> _Input:
+    """The planned input of a create."""
+    if _is_xarray(data):
+        return _xarray_input(data, variables)
+    if tiles is not None:
+        prep = _prepare_tiles(spark, data, tiles, "create", variables, None, None)
+        return _planned_blocks(_tile_frame(spark, prep), None, seen=prep.seen)
+    return _planned_blocks(data, variables)
+
+
+def _tile_frame(spark, prep):
+    """The blocks of a prepared tile write: the tiles' blocks, and the coordinate blocks the
+    driver made for them (the labels of a new store, an append's new steps)."""
+    from databricks.labs.gbx.zarr._read import _BLOCKS_ARROW
+
+    if not prep.coords:
+        return prep.frame
+    table = pa.Table.from_pylist(prep.coords, schema=_BLOCKS_ARROW)
+    return prep.frame.unionByName(to_spark_df(spark, table, _blocks_struct()))
+
+
 def _plan_existing(
-    spark, table, write_id, mode, props, data, variables, append_dim, owner
+    spark, table, write_id, mode, props, data, variables, append_dim, owner, tiles=None
 ) -> _Plan:
     root, base_root = _write_roots(table, props, owner)
     base = M.snapshot(spark, table)
@@ -1352,8 +1415,26 @@ def _plan_existing(
         fmt=fmt,
         separator=separator,
     )
+    labels = None
     if _is_xarray(data):
         inp = _xarray_input(data, variables)
+    elif tiles is not None:
+        labels = _decoded_coords(spark, docs, base, root, base_root, sorted(coords))
+        prep = _prepare_tiles(
+            spark,
+            data,
+            tiles,
+            mode,
+            variables,
+            append_dim,
+            _write_tiles.StoreView(arrays, labels, docs),
+        )
+        frame = _tile_frame(spark, prep)
+        if mode in ("update", "overwrite"):
+            return _plan_single_pass(spark, plan, frame, prep.names)
+        inp = _planned_blocks(frame, None, seen=prep.seen, known=prep.known)
+        plan.digest = inp.digest
+        append_dim = prep.append_dim
     elif mode in ("update", "overwrite"):
         return _plan_single_pass(spark, plan, data, variables)
     else:
@@ -1361,8 +1442,17 @@ def _plan_existing(
         plan.digest = inp.digest
     _check_against_store(table, inp.vars.values(), docs, extents)
     dims_in = {d for v in inp.vars.values() for d in v.dims}
-    store_labels = _decoded_coords(
-        spark, docs, base, root, base_root, sorted(c for c in coords if c in dims_in)
+    store_labels = (
+        {c: labels[c] for c in sorted(coords) if c in dims_in and c in labels}
+        if labels is not None
+        else _decoded_coords(
+            spark,
+            docs,
+            base,
+            root,
+            base_root,
+            sorted(c for c in coords if c in dims_in),
+        )
     )
     plan.store_labels = store_labels
     if mode == "append":
@@ -1375,8 +1465,14 @@ def _plan_existing(
                 f"{sorted(extents)}. Fix: name one of its dimensions."
             )
         labels, lo = _append_labels(inp, append_dim, arrays)
-        base_labels = store_labels.get(append_dim, np.arange(extents[append_dim]))
-        at = _derive_append_start(append_dim, base_labels, labels)
+        if append_dim not in store_labels:
+            raise ZarrError(
+                f"{table} has no coordinate array for {append_dim!r}, so the new labels "
+                f"cannot be placed after its {extents[append_dim]} steps",
+                fix=f"write the {append_dim!r} labels of the existing steps first "
+                f'(mode="update" with the coordinate), then append',
+            )
+        at = _derive_append_start(append_dim, store_labels[append_dim], labels)
         plan.offsets[append_dim] = at - lo
         plan.append_dim = append_dim
         plan.append_labels = labels
@@ -1398,6 +1494,7 @@ def _plan_existing(
         plan.changed.append(v.name)
         plan.created.add(v.name)
         _sizing_docs(plan, docs, v.name)
+        _add_parent_groups(plan, docs, v.name)
         if v.coordinate:
             coords.add(v.name)
     plan.changed = sorted(set(plan.changed))
@@ -1408,6 +1505,17 @@ def _plan_existing(
     }
     _finish_plan(plan, inp, store_labels=store_labels)
     return plan
+
+
+def _add_parent_groups(plan: _Plan, docs: _Docs, name: str) -> None:
+    """A new array ``a/b/x`` in an existing store needs the group documents of ``a`` and
+    ``a/b`` where the store has none (a document it has is left as it is)."""
+    key = "zarr.json" if plan.fmt == 3 else ".zgroup"
+    parts = name.split("/")[:-1]
+    for i in range(1, len(parts) + 1):
+        path = "/".join(parts[:i])
+        if ("group", path, key) not in docs.ids and path not in plan.groups:
+            plan.groups.append(path)
 
 
 def _grow_arrays(plan: _Plan) -> None:
@@ -1423,7 +1531,11 @@ def _append_labels(inp: _Input, append_dim, arrays) -> tuple[np.ndarray, int]:
     """The decoded labels an append adds along ``append_dim`` and their input start."""
     cvar = inp.vars.get(append_dim)
     if inp.kind == "blocks" and cvar is not None:
-        values, lo, attrs, _ = _coordinate_values(inp.frame, append_dim)
+        values, lo, attrs, _ = (
+            inp.known[append_dim]
+            if append_dim in inp.known
+            else _coordinate_values(inp.frame, append_dim)
+        )
         cvar.values, cvar.attrs = values, attrs
         cvar.stored = any(k in attrs for k in _CF_ATTRS + _TIME_ATTRS)
     if cvar is None or cvar.values is None:
@@ -1479,6 +1591,7 @@ def _plan_single_pass(spark, plan: _Plan, data, variables) -> _Plan:
             plan.changed.append(n)
             plan.created.add(n)
             _sizing_docs(plan, docs, n)
+            _add_parent_groups(plan, docs, n)
         data_arrays = {n: m for n, m in data_arrays.items() if n in names}
         dims = {d for n in names if n in plan.arrays for d in plan.arrays[n].dims}
         frame = _blocks_frame(
@@ -1854,6 +1967,13 @@ def _apply_coordinates(plan: _Plan, coords: dict) -> None:
         values, lo, attrs, dtype = _assemble_coordinate(name, recs)
         start = lo + plan.offsets.get(name, 0)
         meta = plan.arrays.get(name)
+        if meta is not None and (start < 0 or start + len(values) > meta.shape[0]):
+            raise ZarrGridMismatch(
+                f"the {name!r} coordinate blocks span {start}..{start + len(values)}, "
+                f"outside the array's {meta.shape[0]} labels",
+                fix='write coordinate blocks within the store\'s extent, or use mode="append" '
+                "to extend it",
+            )
         stored = (
             block_is_stored(json.dumps(attrs), meta)
             if meta is not None
@@ -2047,18 +2167,22 @@ def _doc_commit_rows(plan: _Plan, ids: dict) -> pa.Table:
     w = plan.write_id
     recs = []
     for path in plan.groups:
-        doc = {"zarr_format": 3, "node_type": "group", "attributes": {}}
-        if path == "":
-            doc["attributes"] = plan.group_attrs
+        if plan.fmt == 3:
+            key = "zarr.json"
+            doc = {"zarr_format": 3, "node_type": "group", "attributes": {}}
+            if path == "":
+                doc["attributes"] = plan.group_attrs
+        else:
+            key, doc = ".zgroup", {"zarr_format": 2}
         recs.append(
             {
                 "kind": "group",
                 "array": path or None,
-                "key": "zarr.json",
+                "key": key,
                 "origin": "gbx",
                 "write_id": w,
                 "op": "upsert",
-                "expected_write_id": ids.get(("group", path or None, "zarr.json")),
+                "expected_write_id": ids.get(("group", path or None, key)),
                 "meta": json.dumps(doc, sort_keys=True),
             }
         )
@@ -2492,8 +2616,9 @@ def gbx_zarr_write(
     """Write ``data`` to the Zarr store whose manifest table is ``target``; returns the
     store version (the Delta version) the write committed.
 
-    ``data`` is a blocks DataFrame (``BLOCKS_SCHEMA``, as ``gbx_zarr_read`` returns it) or
-    an ``xarray.Dataset`` (driver-sized). Blocks with ``decode=True`` values are CF-encoded
+    ``data`` is a blocks DataFrame (``BLOCKS_SCHEMA``, as ``gbx_zarr_read`` returns it), a
+    DataFrame with one GeoBrix tile column (below), or an ``xarray.Dataset``
+    (driver-sized). Blocks with ``decode=True`` values are CF-encoded
     with the array's attributes (times to its units, packed values to their integer type,
     NaN to the fill value); blocks that still carry the array's packing attributes
     (``decode=False``) are written as the stored values they are.
@@ -2525,6 +2650,37 @@ def gbx_zarr_write(
     to its overlay root, in the base arrays' own key encoding, and the base is never
     touched.
 
+    **Tiles.** A DataFrame with a tile column (found by its schema; other columns may
+    stay) writes each tile's pixels into the array of its variable, in any mode. A tile cut
+    from Zarr by ``gbx_zarr_read(output="tiles")`` still carries its provenance
+    (``zarr_array``, ``sliceDims``, ``window``): it goes to the array it came from, whose
+    grid (geotransform and CRS, ``crs_equal``) must be the plane it was cut from, else
+    ``ZarrGridMismatch``; its other positions are its ``sliceDims``. Most pixel-producing
+    ``rst_*`` functions return a fresh tile without provenance; so does a stack of
+    GeoTIFFs. Such a tile needs ``dim_cols`` (``{dimension: column}``, a number or time
+    column) for every non-spatial dimension, and ``variables="<name>"`` for its variable
+    (a new store defaults to ``"data"``). ``dim_cols`` also overrides ``sliceDims``. Tiles
+    are placed by their decoded geotransform against the array's grid (so a clip or a
+    change of NoData keeps its place); a null tile is skipped.
+
+    - ``create`` derives the grid from the tiles: their CRS, cell size and the extent of
+      all of them. A tile with another CRS, another cell size or an origin more than 1e-6
+      of a cell off the cell edges raises ``ZarrGridMismatch``. Each ``dim_cols`` column
+      gives the sorted labels of its dimension. The latitude/longitude (or ``y``/``x``)
+      labels come from the grid; a CRS other than EPSG:4326 is carried by a
+      ``spatial_ref`` grid-mapping variable, so ``gbx_zarr_read(output="tiles")`` reads
+      the CRS back.
+    - ``append`` takes the new labels of the ``append_dim`` (default: the ``dim_cols``
+      dimension labelled by CF times) from its column; the other ``dim_cols`` values must
+      be labels the store has.
+    - ``update`` and ``overwrite`` look the ``dim_cols`` values up in the store's
+      coordinates.
+
+    Values keep the tile's type in a new store. In an existing array they are cast to the
+    array's type (floats to integers round half to even) and the tile's NoData becomes the
+    array's ``_FillValue``. Tiles with a pending clip or warp are decoded to know their
+    grid. A tile that does not fit is refused on the driver, before any file is written.
+
     ``write_id`` (32 lowercase hex characters; default a new ``uuid4().hex``) makes a write
     idempotent: writing again with a ``write_id`` that committed returns its version and
     writes nothing.
@@ -2543,8 +2699,8 @@ def gbx_zarr_write(
     is refused, so give them a deterministic input (a table is best). Errors raised while
     Spark runs the write arrive as ``pyspark.errors.PythonException`` with the GeoBrix
     error name and its ``Fix:`` line in the message; a failed write commits nothing.
-    ``access`` is ``"auto"`` or ``"fuse"``; ``dim_cols`` and ``optimize`` arrive with the
-    tile writer and ``gbx_zarr_optimize``.
+    ``access`` is ``"auto"`` or ``"fuse"``; ``optimize`` arrives with
+    ``gbx_zarr_optimize``.
     """
     from databricks.labs.gbx.zarr._filemode import resolve as resolve_file_mode
     from databricks.labs.gbx.zarr._register import (
@@ -2573,11 +2729,6 @@ def gbx_zarr_write(
             "optimize=True folds chunk rows into shards, which arrives with "
             "gbx_zarr_optimize",
             fix="write with optimize=False",
-        )
-    if dim_cols is not None:
-        raise ZarrUnsupported(
-            "dim_cols places GeoBrix tiles, which arrive with the tile writer",
-            fix="write blocks or an xarray.Dataset, without dim_cols",
         )
     if mode == "create":
         if not root:
@@ -2615,6 +2766,7 @@ def gbx_zarr_write(
             "an xarray.Dataset."
         )
     spark = _session(data, spark)
+    tiles = _tile_input(data, dim_cols)
 
     exists = _table_exists(spark, target)
     if exists:
@@ -2630,7 +2782,16 @@ def gbx_zarr_write(
             )
         props = M.read_props(spark, target)
         plan = _plan_existing(
-            spark, target, write_id, mode, props, data, variables, append_dim, owner
+            spark,
+            target,
+            write_id,
+            mode,
+            props,
+            data,
+            variables,
+            append_dim,
+            owner,
+            tiles,
         )
         return _write(spark, plan)
 
@@ -2644,10 +2805,7 @@ def gbx_zarr_write(
         )
     _check_new_root(data_root, owner)
     fm = resolve_file_mode(spark, file_mode, has_filespace=False)
-    if _is_xarray(data):
-        inp = _xarray_input(data, variables)
-    else:
-        inp = _planned_blocks(data, variables)
+    inp = _create_input(spark, data, tiles, variables)
     plan = _plan_create(target, write_id, data_root, inp, chunks, shards, codecs)
     claimed = made = False
     try:

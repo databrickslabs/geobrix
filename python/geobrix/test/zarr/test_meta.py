@@ -963,15 +963,25 @@ def test_cf_encode_takes_singular_and_rewritten_time_unit_names(
 @pytest.mark.parametrize("fill", [None, int(np.iinfo("i8").min)])
 def test_cf_encode_stores_an_all_nat_block_as_the_fill(tmp_path, fill):
     """RR2-M1: a block of nothing but missing times is the fill, as a mixed one's NaT is
-    (xarray's encoder fails on it)."""
+    (xarray's encoder fails on it). An integer time array with no _FillValue has no cell
+    for a missing time (xarray would store the smallest integer, which a read refuses as
+    out of range), so NaT is refused there."""
     from databricks.labs.gbx.zarr._meta import cf_encode
+    from databricks.labs.gbx.zarr.errors import ZarrUnsupported
 
     attrs = {"units": "hours since 2023-01-01", "calendar": "standard"}
     if fill is not None:
         attrs["_FillValue"] = fill
     _, meta = _stored(tmp_path, 3, np.array([0, 1], "i8"), "i8", attrs, name="time")
     nat = np.array(["NaT", "NaT"], "datetime64[ns]")
-    mixed = cf_encode(np.array(["2023-01-01T01", "NaT"], "datetime64[ns]"), meta)
+    some = np.array(["2023-01-01T01", "NaT"], "datetime64[ns]")
+    if fill is None:
+        for values in (nat, some):
+            with pytest.raises(ZarrUnsupported, match="NaT") as e:
+                cf_encode(values, meta)
+            assert "add a _FillValue to the time array" in e.value.fix
+        return
+    mixed = cf_encode(some, meta)
     assert (
         list(cf_encode(nat, meta)) == [mixed[1], mixed[1]] == [np.iinfo("i8").min] * 2
     )

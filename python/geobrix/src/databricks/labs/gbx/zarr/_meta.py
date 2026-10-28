@@ -723,6 +723,18 @@ def cf_encode(values, meta: ArrayMeta, *, stored: bool = False) -> np.ndarray:
             raise _encode_refusal(meta, "times into an array with no CF time units")
         encoding["units"] = meta.attrs["units"]
         encoding["calendar"] = meta.attrs.get("calendar") or "standard"
+        if (
+            target.kind in "iu"
+            and np.isnat(values).any()
+            and "_FillValue" not in encoding
+            and "missing_value" not in encoding
+        ):
+            # xarray would store the smallest integer, which a read refuses as out of range
+            raise ZarrUnsupported(
+                f"values cannot be written to array {meta.name!r}: they hold NaT, and an "
+                "integer time array with no _FillValue has no cell for a missing time",
+                fix="add a _FillValue to the time array, or write times for every step",
+            )
         if np.isnat(values).all():
             # nothing to encode (xarray's encoder fails on it): every cell is missing,
             # stored as mixed NaT is, as the fill

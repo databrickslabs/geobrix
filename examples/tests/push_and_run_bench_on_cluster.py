@@ -450,7 +450,7 @@ def main() -> int:
     modes = _arg("--modes", "both")
     row_counts = _arg("--row-counts", "10,100,1000,10000")
     # Pure-core defaults: 1 warm-up + 3 measured. One warm-up absorbs the cold cost (e.g.
-    # numba JIT compiles on the FIRST call), and 3 measured gives a stable median of a fast
+    # imports and GDAL driver set-up on the FIRST call), and 3 measured gives a stable median of a fast
     # single-tile op without overpaying. Override with --warmup / --measured.
     warmup = int(_arg("--warmup", "1"))
     measured = int(_arg("--measured", "3"))

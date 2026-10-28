@@ -180,7 +180,7 @@ Where the lightweight and heavyweight implementations use different underlying a
 
 See [Benchmarking](./benchmarking) and [Performance](./performance) for per-function timing data across both tiers.
 
-In the GeoBrix wheels for environment 5 and 6, `rasterio` runs on GeoBrix's own GDAL build, the one the heavyweight tier loads from the same wheel, rather than the smaller GDAL bundled in PyPI's `rasterio` wheels, so both tiers read the same formats.
+With the plain GeoBrix wheel, `rasterio` brings the GDAL bundled in PyPI's `rasterio` wheels, which has a narrower driver set than the heavyweight build: for an obscure raster format (HDF4, GRIB2 with specific subtype handling, certain radar formats) the heavyweight tier is more likely to support it. The GeoBrix wheels for environment 5 and 6 give `rasterio` GeoBrix's own GDAL build instead, the one the heavyweight tier loads from the same wheel.
 
 ---
 

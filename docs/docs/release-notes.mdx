@@ -889,7 +889,8 @@ formats.
 - **The GeoBrix wheels for environment 5 and 6 ship GDAL's own Python bindings, and
   `xarray-spatial`, `numba` and `rio-cogeo` are no longer installed.** `osgeo` and `osgeo_utils`
   come built from the same GDAL as the wheel's `rasterio`, so `from osgeo import gdal` and
-  `rasterio` share one GDAL in a process. GDAL's viewshed and COG driver do the work
+  `rasterio` share one GDAL in a process (`osgeo_utils` comes without `gdal_merge` and
+  `gdal2tiles`, which are not under GDAL's MIT licence). GDAL's viewshed and COG driver do the work
   `xarray-spatial` and `rio-cogeo` did (`numba` came with `xarray-spatial`), and
   `rst_cog_convert` takes the same profile names. The lightweight extras now install `xarray`
   themselves (it came with `xarray-spatial`) and no longer list `httpcore`, which nothing they

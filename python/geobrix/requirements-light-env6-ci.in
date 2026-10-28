@@ -75,8 +75,8 @@ scikit-image==0.26.0
 
 # --- NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P,
 # ERA5): xarray with the netcdf4 engine (single wheel bundling netcdf-c + HDF5;
-# pulls cftime). Keep in lockstep with the pyproject [light-base] floors and
-# requirements-dev-container.in. ---
+# pulls cftime). Keep in lockstep with the pyproject [light-base] floors, and netcdf4 with
+# requirements-dev-container.in (where xarray comes through rioxarray). ---
 xarray==2026.7.0
 netcdf4==1.7.4
 

@@ -370,9 +370,9 @@ def _locked(table: str, lock: dict, break_lock: bool = False) -> ZarrWriteConfli
     return ZarrWriteConflict(
         why,
         fix="wait for the publish to finish. If it was killed and none is running, clear "
-        f"the lock with gbx_zarr_sync({table!r}, break_lock=True) or "
-        f"publish({table!r}, break_lock=True); a lock can be broken once it is at least "
-        f"{hours} hour old",
+        f"the lock with gbx_zarr_sync({table!r}, break_lock=True), then publish again "
+        f'with gbx_zarr_export({table!r}, method="publish"); a lock can be broken once '
+        f"it is at least {hours} hour old",
         keys=(_LOCK_KEY,),
         winner=lock.get("write_id"),
     )

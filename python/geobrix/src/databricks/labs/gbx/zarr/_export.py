@@ -35,12 +35,13 @@ from __future__ import annotations
 import contextlib
 import heapq
 import json
-import logging
 import math
 import os
 import shutil
+import uuid
 import warnings
 from dataclasses import dataclass
+from typing import Literal, overload
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -52,9 +53,9 @@ from databricks.labs.gbx.zarr._access import FuseRangeReader, _within
 from databricks.labs.gbx.zarr._maint import _STREAM_WINDOW, _require_files, _stream
 from databricks.labs.gbx.zarr._meta import xarray_fill_form
 from databricks.labs.gbx.zarr._read import (
-    _ACCESS,
     _open_table,
     _work_frame,
+    check_access,
     classify_source,
 )
 from databricks.labs.gbx.zarr._shard import Region
@@ -63,8 +64,6 @@ from databricks.labs.gbx.zarr._sync import _atomic_write, publish
 from databricks.labs.gbx.zarr.errors import ZarrError, ZarrStoreDrift, ZarrUnsupported
 
 __all__ = ["gbx_zarr_export"]
-
-_LOG = logging.getLogger(__name__)
 
 _METHODS = ("copy", "reference", "publish")
 _TASK_BYTES = 512 << 20  # bytes of shards one task copies (parallelism, not memory)
@@ -103,11 +102,7 @@ def _check_arguments(source, to, method, version_as_of, access) -> None:
             f"source must be the manifest table of a store, not the path {source!r}. "
             "Fix: register the store with gbx_zarr_register and export its table."
         )
-    if access not in _ACCESS:
-        raise ValueError(
-            f"access must be one of {_ACCESS}, got {access!r}. "
-            "Fix: pass 'auto' or 'fuse'."
-        )
+    check_access(access)  # "direct" raises ZarrAccessUnavailable, as it does in read
     if method != "reference" and access != "auto":
         raise ValueError(
             f"access applies to method='reference', which writes the location of each "
@@ -132,12 +127,6 @@ def _check_arguments(source, to, method, version_as_of, access) -> None:
                 f"a reference file is JSON (kerchunk version 1), so to must end in "
                 f".json, got {to!r}; Parquet references do not support Zarr v3. "
                 "Fix: pass a path ending in .json."
-            )
-        if access == "direct":
-            raise ZarrUnsupported(
-                'access="direct" writes the cloud URL of each file, and no registration '
-                "records a cloud location yet",
-                fix='use access="auto" or "fuse", which write the Volume path of each file',
             )
 
 
@@ -486,13 +475,13 @@ def _write_documents(to_path: str, docs: dict[str, bytes], write_id: str) -> Non
         return (root, root and key in ("zarr.json", ".zgroup"), key)
 
     for key in sorted(docs, key=order):
-        _atomic_write(os.path.join(to_path, *key.split("/")), [docs[key]], "export")
+        _atomic_write(os.path.join(to_path, *key.split("/")), [docs[key]], write_id)
 
 
 # --- the two methods --------------------------------------------------------------------
 
 
-def _copy(spark, src, units, docs, to_path: str) -> None:
+def _copy(spark, src, units, docs, to_path: str, write_id: str) -> None:
     existed = os.path.isdir(to_path)
     os.makedirs(to_path, exist_ok=True)
     try:
@@ -510,7 +499,7 @@ def _copy(spark, src, units, docs, to_path: str) -> None:
             _verify(to_path, units, frame.toArrow())
         if _AFTER_OBJECTS is not None:
             _AFTER_OBJECTS()
-        _write_documents(to_path, docs, "export")
+        _write_documents(to_path, docs, write_id)
     except BaseException:
         _discard(to_path, remove_dir=not existed)
         raise
@@ -538,7 +527,7 @@ def _absolute(src, row: dict) -> str:
     return path
 
 
-def _reference(table: str, src, units, docs, to_path: str) -> None:
+def _reference(table: str, src, units, docs, to_path: str, write_id: str) -> None:
     folded = [u for u in units if u["how"] == "assemble"]
     if folded:
         shown = ", ".join(f"{u['array']}/{u['key']}" for u in folded[:3])
@@ -557,7 +546,31 @@ def _reference(table: str, src, units, docs, to_path: str) -> None:
             int(row["length"]),
         ]
     payload = json.dumps({"version": 1, "refs": refs}, separators=(",", ":"))
-    _atomic_write(to_path, [payload.encode()], "export")
+    _atomic_write(to_path, [payload.encode()], write_id)
+
+
+@overload
+def gbx_zarr_export(
+    spark,
+    source: str,
+    to: str,
+    *,
+    method: Literal["copy", "reference"] = "copy",
+    version_as_of=None,
+    access: str = "auto",
+) -> str: ...
+
+
+@overload
+def gbx_zarr_export(
+    spark,
+    source: str,
+    to: None = None,
+    *,
+    method: Literal["publish"],
+    version_as_of: None = None,
+    access: str = "auto",
+) -> int: ...
 
 
 def gbx_zarr_export(
@@ -569,7 +582,11 @@ def gbx_zarr_export(
     version_as_of=None,
     access: str = "auto",
 ) -> str | int:
-    """Export a version of the store whose manifest table is ``source``; returns ``to``.
+    """Export a version of the store whose manifest table is ``source``.
+
+    Returns the path ``to`` (a ``str``) for ``method="copy"`` and ``"reference"``, and the
+    version of the base store's new commit (an ``int``, as ``gbx_zarr_write`` and the other
+    maintenance calls return a version) for ``"publish"``, which has no ``to``.
 
     ``method="copy"`` writes a plain Zarr store (the store's own format, canonical keys,
     consolidated metadata) into the directory ``to``, which must not exist or be empty
@@ -586,13 +603,13 @@ def gbx_zarr_export(
     to})``). It is JSON only, about 100 bytes per object (a million shards: about 100 MB).
     Every shard must be one region: after chunk rows were written over it, run
     ``gbx_zarr_optimize`` first (``ZarrUnsupported`` otherwise). The paths are the bare
-    ``/Volumes`` paths; ``access="direct"`` (cloud URLs) is not available, since no
-    registration records a cloud location. The reference points at the pack files of the
+    ``/Volumes`` paths; ``access="direct"`` (cloud URLs) raises ``ZarrAccessUnavailable``, as
+    it does in ``gbx_zarr_read``, since no registration records a cloud location. The reference points at the pack files of the
     pinned version, and vacuum can delete them: tag the version with ``gbx_zarr_tag`` to
     keep them.
 
     ``method="publish"`` runs ``gbx_zarr_sync.publish`` for a writable registered store and
-    returns its version; it takes neither ``to`` nor ``version_as_of``.
+    returns the version it committed; it takes neither ``to`` nor ``version_as_of``.
 
     ``version_as_of`` (an int or ``"tag:<name>"``) pins the version exported (default: the
     latest). A version that vacuum removed, or whose files are gone, raises
@@ -623,8 +640,9 @@ def gbx_zarr_export(
     )
     units = _units(rows)
     docs = _documents(src.metas)
+    write_id = uuid.uuid4().hex  # the temp-name token of the files this export writes
     if method == "reference":
-        _reference(source, src, units, docs, path)
+        _reference(source, src, units, docs, path, write_id)
         return to
     blocked = sorted(
         {u["array"] for u in units if u["how"] == "assemble"} - set(src.arrays)
@@ -636,5 +654,5 @@ def gbx_zarr_export(
             fix="convert the array to a numeric dtype, or export a version where its "
             "shards are whole",
         )
-    _copy(spark, src, units, docs, path)
+    _copy(spark, src, units, docs, path, write_id)
     return to

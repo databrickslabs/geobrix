@@ -35,6 +35,7 @@ from databricks.labs.gbx.zarr._testing import (  # noqa: E402
 )
 from databricks.labs.gbx.zarr._write import gbx_zarr_write  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402
+    ZarrAccessUnavailable,
     ZarrUnsupported,
     ZarrVersionUnavailable,
 )
@@ -345,7 +346,7 @@ def test_reference_requires_optimized_shards(spark_delta, drop, tmp_path):
             spark_delta, table, str(tmp_path / "r.parquet"), method="reference"
         )
     assert "Fix:" in str(bad.value)
-    with pytest.raises(ZarrUnsupported, match="direct") as direct:
+    with pytest.raises(ZarrAccessUnavailable, match="direct") as direct:
         gbx_zarr_export(
             spark_delta,
             table,

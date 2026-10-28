@@ -429,6 +429,9 @@ def test_a_dead_publish_lock_is_cleared_only_on_request(spark_delta, registered)
         with pytest.raises(ZarrWriteConflict, match="lock") as e:
             call(spark_delta, table)
         assert "break_lock=True" in e.value.fix and "hour" in e.value.fix
+        # the public calls, not the private publish() of the module
+        assert "gbx_zarr_export(" in e.value.fix and 'method="publish"' in e.value.fix
+        assert " publish(" not in e.value.fix
     assert len(_live(spark_delta, table, kind="lock")) == 1  # refusing left it alone
 
     _plant_lock(spark_delta, table, age=600)  # this young, it may be a live publish

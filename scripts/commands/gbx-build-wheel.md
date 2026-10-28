@@ -29,7 +29,7 @@ An option that needs a value given without one prints `<option> needs a value` a
 | `build/native/out/<arch>/bindings/` | `gbx:build:native --target bindings`: `vendor/` (the five bindings, no dist-info), `wheels/` (their metadata and licences), `build.txt` (which toolchain image built them) |
 | `python/geobrix/envs/env<N>/core.txt` | the wheel's default dependencies: the runtime's preinstalled ranges, the light tier, and what the vendored packages need at run time |
 | `python/geobrix/envs/env<N>/base.txt` | what the runtimes preinstall (exact versions) of the packages core.txt bounds: checked against core.txt and the vendored packages' requirements, and the constraints of the `--verify` install |
-| `python/geobrix/envs/env<N>/extra-<name>.txt` | one extra each (`[vizx]`, `[viewshed]`) |
+| `python/geobrix/envs/env<N>/extra-<name>.txt` | one extra each (`[vizx]`) |
 | `python/geobrix/envs/env<N>/vendor-pure.txt` | rio-tiler, morecantile and mapbox-vector-tile, exact versions with their wheel's sha256. They require rasterio, pyproj or shapely by distribution name, which the vendored builds do not have, so they are vendored too. The command fetches them on the host through the configured pip (`--require-hashes`) into `build/env-wheel/vendor-pure/env<N>/`, and keeps files that already have the pinned sha256 |
 
 Every line pip, uv and the builder print goes through `scripts/native/redact.py`: URLs and host names (with or without a scheme) are replaced, because the configured index may be an internal one.

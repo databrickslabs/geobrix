@@ -8,6 +8,7 @@ something is wrong with the layering.
 import logging
 import os
 import sys
+import tempfile
 
 import numpy as np
 import pytest
@@ -80,6 +81,32 @@ def make_geotiff_bytes(width=4, height=3, count=1, epsg=4326, nodata=-9999.0):
             for b in range(1, count + 1):
                 ds.write(data + (b - 1) * 100, b)
         return mf.read()
+
+
+def cog_errors(data, strict=True):
+    """GDAL's COG validator (``osgeo_utils``, through ``databricks.labs.gbx._osgeo``) on COG bytes
+    or a path: its errors, and its warnings too when ``strict``. Skips with the helper's reason
+    where GDAL's Python bindings do not import (the macOS host, the PyPI-stack CI shard).
+
+    Bytes are written to a file first: the bindings may be another GDAL than rasterio's (the dev
+    container), and a rasterio ``MemoryFile`` lives in rasterio's GDAL only.
+    """
+    from databricks.labs.gbx import _osgeo
+
+    try:
+        validator = _osgeo.utils(
+            "samples.validate_cloud_optimized_geotiff", "the COG check"
+        )
+    except _osgeo.OsgeoUnavailable as exc:
+        pytest.skip(str(exc))
+    with tempfile.TemporaryDirectory() as d:
+        path = data
+        if isinstance(data, (bytes, bytearray)):
+            path = os.path.join(d, "cog.tif")
+            with open(path, "wb") as fh:
+                fh.write(data)
+        warnings, errors, _details = validator.validate(str(path), full_check=True)
+    return errors + (warnings if strict else [])
 
 
 @pytest.fixture(scope="session")

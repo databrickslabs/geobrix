@@ -56,9 +56,6 @@ numexpr==2.14.2
 # The newest release the extras admit (rio-tiler>=9.0,<10): CI tests what users install.
 rio-tiler==9.4.12
 
-# --- COG output (rst_cog_convert) ---
-rio-cogeo==7.0.2
-
 # --- PMTiles tile-archive output (pmtiles_gbx writer) ---
 pmtiles==3.7.0
 
@@ -75,14 +72,14 @@ mapbox-vector-tile==2.1.0
 h3==4.5.0
 quadbin==0.2.2
 
-# --- contour (scikit-image) + viewshed (xarray-spatial) ---
+# --- contour (scikit-image) ---
 scikit-image==0.26.0
-xarray-spatial==0.9.9
 
 # --- NetCDF decode for the netcdf_gbx reader (NetCDF-3 + NetCDF-4/HDF5: S5P,
-# ERA5). xarray comes transitively via xarray-spatial; netcdf4 is the one new
-# engine (single wheel bundling netcdf-c + HDF5). Pulls cftime. Keep in lockstep
-# with the pyproject [light-base] floor and requirements-dev-container.in. ---
+# ERA5): xarray with the netcdf4 engine (single wheel bundling netcdf-c + HDF5;
+# pulls cftime). Keep in lockstep with the pyproject [light-base] floors and
+# requirements-dev-container.in. ---
+xarray==2026.7.0
 netcdf4==1.7.4
 
 # --- STAC light client deps the test/stac suite actually imports: requests

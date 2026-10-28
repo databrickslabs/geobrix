@@ -128,10 +128,14 @@ def list_files_filter_regex(spark, path=None):
 
 
 def halo_mode_prepare_cog(spark, src_path=None):
-    """file_gbx -> cog_gbx writer: each source file becomes a master COG."""
+    """file_gbx -> cog_gbx writer: each source file becomes a master COG (GDAL's COG validator)."""
     import rasterio
-    from rio_cogeo.cogeo import cog_validate
 
+    from databricks.labs.gbx import _osgeo
+
+    validator = _osgeo.utils(
+        "samples.validate_cloud_optimized_geotiff", "halo_mode_prepare_cog"
+    )
     _register(spark)
     src = src_path or SAMPLE_RASTER_SINGLE
 
@@ -154,8 +158,8 @@ def halo_mode_prepare_cog(spark, src_path=None):
         ]
         assert tif_files, "cog_gbx writer produced no .tif output"
         for tif in tif_files:
-            is_valid, errors, warnings = cog_validate(tif, strict=False)
-            assert is_valid, (
+            warnings, errors, _details = validator.validate(tif, full_check=True)
+            assert not errors, (
                 f"cog_gbx output is not a valid COG: {tif}\n"
                 f"errors={errors}\nwarnings={warnings}"
             )

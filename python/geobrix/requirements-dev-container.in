@@ -75,7 +75,6 @@ msgspec>=0.19,<1
 donfig>=0.8,<1
 # Lockstep with requirements-light-env6-ci.in: the newest rio-tiler the extras admit.
 rio-tiler==9.4.12
-rio-cogeo==7.0.2
 h3==4.5.0
 quadbin==0.2.2
 pmtiles==3.7.0
@@ -87,9 +86,8 @@ contextily==1.6.2
 # folium was removed from [vizx]; do not re-add here.
 mapclassify==2.10.0
 
-# --- contour (scikit-image) + viewshed (xarray-spatial) ---
+# --- contour (scikit-image) ---
 scikit-image==0.26.0
-xarray-spatial==0.9.9
 
 # --- lint tooling ---
 black==26.10.1

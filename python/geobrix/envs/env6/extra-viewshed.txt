@@ -1,4 +1,0 @@
-# [viewshed] (interim): xarray-spatial, rst_viewshed's engine for small DEMs. Without it a small DEM
-# fails with ModuleNotFoundError (large DEMs use the payload's GDALViewshedGenerate) until viewshed
-# moves to GDALViewshedGenerate for every size (spec 5.2).
-xarray-spatial>=0.4,<1

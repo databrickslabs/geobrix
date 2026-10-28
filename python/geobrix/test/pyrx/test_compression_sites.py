@@ -6,7 +6,7 @@ Covers:
 - _warp_window_bytes (reprojection path) -> zstd
 - _empty_dataset_bytes (1x1 disjoint result) -> zstd
 - encode_tile GTiff path -> zstd
-- encode_tile COG path is exempt (rio_cogeo owns the codec; not tested here)
+- encode_tile COG path is exempt (the COG driver owns the codec; not tested here)
 
 Predictor assertion: hard check is Compression.zstd; predictor checked
 best-effort via ds.profile or IMAGE_STRUCTURE tags (rasterio surfaces it

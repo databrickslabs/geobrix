@@ -3,6 +3,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).parent))
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
@@ -20,7 +22,13 @@ def test_list_files_filter_regex(spark):
 
 
 def test_halo_mode_prepare_cog(spark):
-    """file_gbx -> cog_gbx writer produces valid COG files."""
+    """file_gbx -> cog_gbx writer produces valid COG files (GDAL's validator: needs osgeo)."""
+    from databricks.labs.gbx import _osgeo
+
+    try:
+        _osgeo.bindings("the COG check")
+    except _osgeo.OsgeoUnavailable as exc:
+        pytest.skip(str(exc))
     ex.halo_mode_prepare_cog(spark)
 
 

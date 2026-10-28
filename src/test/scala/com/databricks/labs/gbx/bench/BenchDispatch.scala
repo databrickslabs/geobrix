@@ -632,7 +632,7 @@ object BenchDispatch {
     // timing-only: observer must be in-extent. A fixed (0,0) is outside the
     // UTM/3857 tile ranges, so derive the observer from the tile center (the
     // dataset geotransform + size), in the tile's own CRS. Output is not
-    // compared (also an xrspatial-vs-GDAL parity divergence on the light side).
+    // compared.
     case "rst_viewshed" =>
       val (ox, oy) = tileCenterXY(ds)
       val res = RST_Viewshed.execute(ds, Map.empty, ox, oy,

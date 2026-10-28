@@ -1,8 +1,7 @@
 """Pure-function tests for pyrx Analysis ports: proximity (scipy EDT) and
-cog_convert (rio-cogeo)."""
+cog_convert (GDAL's COG driver)."""
 
 import math
-import sys
 
 import numpy as np
 import pytest
@@ -12,7 +11,7 @@ from rasterio.transform import from_origin
 from databricks.labs.gbx.pyrx import _serde
 from databricks.labs.gbx.pyrx.core import analysis
 
-from .conftest import make_geotiff_bytes
+from .conftest import cog_errors, make_geotiff_bytes
 
 
 def _single_source_bytes(width=5, height=5, src_row=0, src_col=0, pixel=1.0):
@@ -307,26 +306,17 @@ def test_cog_convert_roundtrips_and_validates():
     with _serde.open_tile(out) as o:
         assert (o.width, o.height) == (64, 64)
     # validates as a COG
-    try:
-        from rio_cogeo.cogeo import cog_validate
-
-        with MemoryFile(out) as mf:
-            is_valid, errors, warnings = cog_validate(mf.name)
-        assert is_valid, f"COG invalid: {errors}"
-    except ImportError:
-        pytest.skip("rio-cogeo not installed")
+    errors = cog_errors(out, strict=False)
+    assert not errors, f"COG invalid: {errors}"
 
 
 def test_cog_convert_honors_blocksize_and_compression():
-    from rio_cogeo.cogeo import cog_info
-
     src = make_geotiff_bytes(width=256, height=256)
     with _serde.open_tile(src) as ds:
         out = analysis.cog_convert(ds, "LZW", 128, "NEAREST")
-    with MemoryFile(out) as mf:
-        info = cog_info(mf.name)
-    assert tuple(info.IFD[0].Blocksize) == (128, 128)
-    assert info.Compression.upper() == "LZW"
+    with _serde.open_tile(out) as o:
+        assert o.block_shapes[0] == (128, 128)
+        assert o.compression.value == "LZW"
 
 
 def test_cog_convert_bad_blocksize_raises():
@@ -347,25 +337,23 @@ def test_cog_convert_unknown_compression_raises():
             analysis.cog_convert(ds, "NOT_A_PROFILE", 512, "AVERAGE")
 
 
-def test_cog_convert_needs_no_rio_cogeo(monkeypatch):
-    """The env wheels ship no rio-cogeo: profile names resolve from a local copy of its list.
-
-    The NULL / Python default ("DEFLATE") and a named codec give the same bytes with rio-cogeo
-    hidden as with it importable, and the local list equals rio-cogeo's when it is installed.
-    """
+def test_cog_convert_profile_names():
+    """The COG profile names a caller may pass: rio-cogeo 7's list, kept as a local table."""
+    assert analysis._comp.COG_PROFILES == {
+        "deflate",
+        "jpeg",
+        "lerc",
+        "lerc_deflate",
+        "lerc_zstd",
+        "lzma",
+        "lzw",
+        "packbits",
+        "raw",
+        "webp",
+        "zstd",
+    }
     src = make_geotiff_bytes(width=64, height=64)
     with _serde.open_tile(src) as ds:
-        visible = analysis.cog_convert(ds, "DEFLATE", 256, "AVERAGE")
-    try:
-        from rio_cogeo.profiles import cog_profiles
-
-        assert set(cog_profiles.keys()) == set(analysis._comp.COG_PROFILES)
-    except ImportError:
-        pass
-    monkeypatch.setitem(sys.modules, "rio_cogeo", None)
-    monkeypatch.setitem(sys.modules, "rio_cogeo.profiles", None)
-    with _serde.open_tile(src) as ds:
-        assert analysis.cog_convert(ds, "DEFLATE", 256, "AVERAGE") == visible
         assert analysis.cog_convert(ds, "lzw", 256, "AVERAGE")[:2] in (b"II", b"MM")
         with pytest.raises(ValueError, match="valid profiles: deflate"):
             analysis.cog_convert(ds, "NOT_A_PROFILE", 256, "AVERAGE")
@@ -622,10 +610,8 @@ def test_viewshed_gdal_ctypes_occlusion():
     assert out_arr[4, 6] == 0, "cell east of wall (col 6) should be invisible (0)"
 
 
-def test_viewshed_uses_gdal_for_every_dem_size(monkeypatch):
-    """GDALViewshedGenerate (the heavyweight's call) serves every DEM size; xarray-spatial is
-    never imported (hidden here, so an import would fail)."""
-    monkeypatch.setitem(sys.modules, "xrspatial", None)
+def test_viewshed_uses_gdal_for_every_dem_size():
+    """GDALViewshedGenerate (the heavyweight's call) serves every DEM size."""
     for src, col, row in (
         (_dem_with_wall_bytes(), 0, 3),
         (_dem_ctypes_wall_bytes(), 4, 4),

@@ -82,7 +82,6 @@ light-base = [
     # path, so bound it like the other runtime-sensitive deps rather than leave it open.
     "scipy>=1.11.0,<2",
     "numexpr>=2.14.1",
-    "rio-cogeo>=7.0,<8",
     "h3>=4.1,<5",
     "quadbin>=0.2,<0.3",
     # Protomaps PMTiles archive writer/reader (pure-Python) for the pmtiles_gbx
@@ -111,13 +110,13 @@ light-base = [
     # [extras] — otherwise this pin gets expanded on that line and fails the install against the
     # base pins; the real dep install (with extras) happens on the following plain %pip line.
     "lazy_loader>=0.5",
-    "xarray-spatial>=0.4,<1",
-    # NetCDF decode for the netcdf_gbx reader. xarray is already pulled by
-    # xarray-spatial; netcdf4 is the one new engine — a single wheel bundling
-    # netcdf-c + HDF5, reading both NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5).
+    # NetCDF decode for the netcdf_gbx reader (and gbx.zarr's xarray views): xarray
+    # with the netcdf4 engine — a single wheel bundling netcdf-c + HDF5, reading both
+    # NetCDF-3 and NetCDF-4/HDF5 (S5P, ERA5). The xarray floor is the env wheels' own.
     # Folded into [light-base] so any geobrix[light_*] reads NetCDF out of the box.
     # Floor pinned; add a ceiling if a future release floats/breaks on py3.12,
     # same discipline as the mapbox-vector-tile pin above.
+    "xarray>=2025.1",
     "netcdf4>=1.6,<2",
     # Entity-hardened XML parsing for external-origin GDAL .vrt mosaic indexes
     # (raster_gbx VRT expansion). The stdlib xml.etree parser is vulnerable to
@@ -138,7 +137,7 @@ light-base = [
 # ---------------------------------------------------------------------------
 # protobuf-5 regime — classic DBR 17.3, DBR 18, Serverless env 5
 # Base images ship protobuf 3.x/4.x; mapbox-vector-tile 2.2 would pull
-# protobuf>=6, so cap at <2.2. idna is NOT capped (base 3.7): see the note at "httpcore".
+# protobuf>=6, so cap at <2.2. idna is NOT capped (base 3.7): see the note at "idna" below.
 # Canonical body: light_dbr17. Aliases: light_dbr18, light_env5.
 # ---------------------------------------------------------------------------
 # Canonical protobuf-5 runtime extra. Classic DBR 17.3.
@@ -156,18 +155,16 @@ light_dbr17 = [
     "pandas<2.3",
     "numpy<2.2",
     "urllib3<2.4",
-    # Capped at the next major, like rio-cogeo<8 / scipy<2 / pyproj<4, unified across both
+    # Capped at the next major, like scipy<2 / pyproj<4, unified across both
     # regimes. It used to stop at 9.3 because 9.3.0 failed to import on Python 3.12; that was
     # the PEP 728 TypedDict keyword fixed by the typing_extensions floor above (9.0.6, 9.3.0
     # and 9.4.12 all import with it and all fail with 4.12.2), so the cap is lifted.
     "rio-tiler>=9.0,<10",
-    # httpcore and idna are left uncapped on purpose. rio-tiler 9.2+ uses httpx2, whose patched
-    # releases (2.12+, with httpcore2 2.10+) require idna>=3.18. A cap at the runtime's idna
-    # (3.7 here, 3.11 on DBR 19 / env 6) made pip fall back to httpx2 2.3.0, which has two HIGH
-    # advisories, for every user of the light extras. An install now upgrades idna, and Databricks
-    # may show its one-time "a core package changed" notice; idna 3.x keeps the API requests and
-    # urllib3 use.
-    "httpcore>=1.0.9",
+    # idna is left uncapped on purpose. rio-tiler 9.2+ uses httpx2, whose patched releases
+    # (2.12+, with httpcore2 2.10+) require idna>=3.18. A cap at the runtime's idna (3.7 here,
+    # 3.11 on DBR 19 / env 6) made pip fall back to httpx2 2.3.0, which has two HIGH advisories,
+    # for every user of the light extras. An install now upgrades idna, and Databricks may show
+    # its one-time "a core package changed" notice; idna 3.x keeps the API requests and urllib3 use.
     "mapbox-vector-tile>=2.1,<2.2", # protobuf-5 cap (2.2 would pull protobuf 6)
 ]
 # Classic DBR 18 — identical package set to DBR 17.3 (protobuf-5 regime).
@@ -198,7 +195,6 @@ light_dbr19 = [
     "urllib3<2.6",
     # rio-tiler capped at the next major, unified across both regimes (see [light_dbr17]).
     "rio-tiler>=9.0,<10",
-    "httpcore>=1.0.9",          # DBR 19 / env 6 ship >=1.0.9; floor harmless
     # idna is not capped (base 3.11): the patched httpx2 needs idna>=3.18. See [light_dbr17].
     # Protobuf-6 floor: require >=2.2 (drops the protobuf-5-era <2.2 cap).
     "mapbox-vector-tile>=2.2",
@@ -363,10 +359,6 @@ vizx = [
 photogrammetry = [
     "pycolmap==4.2.1",
     "rasterio>=1.3",
-    "rio-cogeo>=3.5",
-    "folium",
-    "pymbtiles",
-    "mercantile",
     "pmtiles",
 ]
 # GPU is env5-only on purpose: Serverless GPU AI Runtime env5 = CUDA 12 (matches pycolmap-cuda12).
@@ -374,10 +366,6 @@ photogrammetry = [
 photogrammetry_gpu_env5 = [
     "pycolmap-cuda12==4.2.1",
     "rasterio>=1.3",
-    "rio-cogeo>=3.5",
-    "folium",
-    "pymbtiles",
-    "mercantile",
     "pmtiles",
 ]
 # Model-backed raster inference (gbx.models): GeoSAM (segment-geospatial / SamGeo)

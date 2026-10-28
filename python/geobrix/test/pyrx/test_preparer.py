@@ -486,9 +486,10 @@ def test_cog_convert_file_handles_odd_nbits_source(tmp_path):
     import numpy as np
     import rasterio
     from rasterio.transform import from_origin
-    from rio_cogeo.cogeo import cog_validate
 
     from databricks.labs.gbx.pyrx.core.analysis import cog_convert_file
+
+    from .conftest import cog_errors
 
     src, dst = str(tmp_path / "s15.tif"), str(tmp_path / "out.tif")
     data = (np.arange(64 * 64, dtype=np.uint16).reshape(1, 64, 64) % 30000).astype(
@@ -508,6 +509,6 @@ def test_cog_convert_file_handles_odd_nbits_source(tmp_path):
     ) as ds:
         ds.write(data)
     cog_convert_file(src, dst, compression="DEFLATE")
-    assert cog_validate(dst, strict=False)[0]
+    assert not cog_errors(dst, strict=False)
     with rasterio.open(dst) as out:
         assert np.array_equal(out.read(), data)

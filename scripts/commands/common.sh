@@ -531,9 +531,8 @@ gbx_ensure_container_python_deps() {
          pip3 install -e /root/geobrix/python/geobrix --no-deps --break-system-packages --quiet"
 
     # STOPGAP: optional test deps that the current ~4-month-old geobrix-dev image predates.
-    # Covers: rio-cogeo (COG write), scikit-image (contour/isoband), xarray-spatial
-    # (terrain/viewshed), pmtiles, h3, pyarrow, netCDF4, quadbin, numexpr, laspy/lazrs (LiDAR),
-    # rio-tiler, mapbox-vector-tile, exifread, tenacity, contextily, anywidget.
+    # Covers: scikit-image (contour/isoband), pmtiles, h3, pyarrow, netCDF4, quadbin, numexpr,
+    # laspy/lazrs (LiDAR), rio-tiler, mapbox-vector-tile, exifread, tenacity, contextily, anywidget.
     # All are pinned in requirements-dev-container.txt or the env5/env6-all CI lockfiles; a fresh
     # image build bakes them in — but a local rebuild is blocked (no JFrog token; CI-only path;
     # see dev-image-rebuild-is-ci-operation note in MEMORY.md).  Until the image is rebuilt, this
@@ -546,10 +545,9 @@ gbx_ensure_container_python_deps() {
     # NOTE: tippecanoe is intentionally excluded — it installs but segfaults natively in-container
     # (exit 139); a pip install cannot fix a native crash.
     docker exec "$GBX_DEV_CONTAINER" $GBX_LOCK_RUN /bin/bash -c \
-        "python3 -c 'import importlib.metadata as m, rio_cogeo, skimage, xrspatial, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget; assert tuple(int(v) for v in m.version(\"lazrs\").split(\".\")[:3]) >= (0, 8, 2)' >/dev/null 2>&1 || \
+        "python3 -c 'import importlib.metadata as m, skimage, mapbox_vector_tile, netCDF4, rio_tiler, pmtiles, h3, pyarrow, laspy, lazrs, quadbin, numexpr, exifread, tenacity, contextily, anywidget; assert tuple(int(v) for v in m.version(\"lazrs\").split(\".\")[:3]) >= (0, 8, 2)' >/dev/null 2>&1 || \
          pip3 install --break-system-packages --quiet \
-           rio-cogeo==7.0.2 scikit-image==0.26.0 xarray-spatial==0.9.9 \
-           pmtiles==3.7.0 h3==4.5.0 pyarrow==19.0.1 netCDF4==1.7.4 \
+           scikit-image==0.26.0 pmtiles==3.7.0 h3==4.5.0 pyarrow==19.0.1 netCDF4==1.7.4 \
            quadbin==0.2.2 numexpr==2.14.1 laspy==2.7.0 rio-tiler==9.4.12 \
            lazrs==0.8.2 mapbox-vector-tile==2.1.0 exifread==3.5.1 \
            tenacity==9.1.4 contextily==1.6.2 anywidget==0.11.0"

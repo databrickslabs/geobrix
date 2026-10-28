@@ -1,8 +1,9 @@
 # geobrix-0.6.0+env6 default dependencies: DBR 19, Serverless environment 6, SQL warehouses, UC
 # functions. The env wheel's unmarked Requires-Dist is exactly this file (gbx:build:wheel checks it).
 # rasterio, pyogrio, pyproj, shapely and netCDF4 are not here: the wheel carries them, built against
-# its own GDAL (_vendor/<arch>), and so rio-tiler, morecantile and mapbox-vector-tile (vendor-pure.txt).
-# rio-cogeo and xarray-spatial are dropped (spec 5.2); xarray-spatial is the [viewshed] extra.
+# its own GDAL (_vendor/<arch>), and so rio-tiler, morecantile and mapbox-vector-tile (vendor-pure.txt),
+# and GDAL's own osgeo and osgeo_utils from that GDAL. rio-cogeo and xarray-spatial are dropped (spec
+# 5.2): GDAL's COG driver and GDALViewshedGenerate do their work.
 
 # The runtime's preinstalled versions as the floor, the next minor as the cap: nothing moves.
 numpy>=2.3.4,<2.4

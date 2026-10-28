@@ -223,7 +223,10 @@ def test_read_tiles_table_spreads_the_tiles_of_one_source(spark_delta, tmp_path)
     try:
         df = read_tiles_table(spark_delta, name)
         by_task = df.groupBy(F.spark_partition_id().alias("task")).count().collect()
+        tasks = df.rdd.getNumPartitions()
     finally:
         spark_delta.sql(f"DROP TABLE IF EXISTS {name}")
     assert sum(r["count"] for r in by_task) == len(rows) == 16
     assert len(by_task) > 1
+    # two tasks per index row by default, so fewer tiles share a task than with one per row
+    assert tasks == 2 * len(rows)

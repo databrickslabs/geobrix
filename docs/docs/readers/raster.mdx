@@ -475,7 +475,7 @@ read_tiles_table(spark, table, options=None, *, format="raster_gbx", num_partiti
 | `table` | _required_ | The Delta tile index: a `path` column, and either a `window` struct or flat `col_off`, `row_off`, `width` and `height` columns for one tile per row. A row with only a `path` is a whole file (cut by `tileSize` or `sizeInMB` when you set them). |
 | `options` | `None` | Dict of the reader options on this page, for example `virtualTiles`, `versionAsOf`, `timestampAsOf`, `skipOrdering`, `tileSize`, `sizeInMB`. |
 | `format` | `"raster_gbx"` | `"raster_gbx"`, `"gtiff_gbx"` or `"cog_gbx"`. |
-| `num_partitions` | `None` | The number of tasks that read the tiles. By default two tasks per index row, up to 256, so the tiles of one source file are read in parallel and few of them share a task (a row cut into several tiles by `tileSize` or `sizeInMB` counts once). Tiles are spread by tile, not by source file. |
+| `num_partitions` | `None` | The number of tasks that read the tiles. By default two tasks per index row, up to 256, so the tiles of one source file are read in parallel and fewer of them share a task (a row cut into several tiles by `tileSize` or `sizeInMB` counts once). Tiles are spread by tile, not by source file. |
 
 A tile whose file is missing fails the read.
 

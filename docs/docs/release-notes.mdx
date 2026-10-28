@@ -339,8 +339,8 @@ formats.
   with an error that names `read_tiles_table(spark, table, options)`, which reads the table with
   your session and returns the same `(source, tile)` DataFrame the reader returns. It takes the
   reader options (in any case, as Spark gives them to a reader), `format="gtiff_gbx"` or
-  `"cog_gbx"` for those readers, and `num_partitions` to set the number of tasks; by default each
-  tile is read by its own task, up to 256, as the reader does. See
+  `"cog_gbx"` for those readers, and `num_partitions` to set the number of tasks; by default two tasks
+  per index row are used, up to 256, so that fewer tiles share a task. See
   [Raster Reader](./readers/raster#read-tiles-table).
 - **A Parquet `manifest` reads through `spark.read`.** It failed the same way as a `tilesTable`,
   because the Parquet file was read with a Spark session the planner does not have. It is now read

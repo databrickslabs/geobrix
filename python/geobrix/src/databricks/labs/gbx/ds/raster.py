@@ -1780,9 +1780,9 @@ def read_tiles_table(
     planned = index.mapInArrow(
         _plan_tile_index(reader, budget_bytes), _TILE_PLAN_SCHEMA
     )
-    # One task per tile (the reader's model), spread by the per-tile key. An explicit
-    # count, repartition(N, column): the Serverless fan-out rule, and AQE does not
-    # coalesce it.
+    # Tiles spread by the per-tile key over two tasks per index row (up to the cap). An
+    # explicit count, repartition(N, column): the Serverless fan-out rule, and AQE does
+    # not coalesce it.
     tasks = (
         int(num_partitions)
         if num_partitions

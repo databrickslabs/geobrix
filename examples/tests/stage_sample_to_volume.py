@@ -7,10 +7,13 @@ Files API (streaming PUT) and checks each remote size against the local one. Fin
 (.DS_Store, ._* files) is not uploaded. A symlink whose target is outside --src-root, or any
 symlinked directory, is refused (exit 2) before a client is built.
 
-What it deletes: only stale files INSIDE each *.zarr store directory it uploads (a chunk left by
-an older layout of the store would read wrongly). Nothing else is ever deleted: files beside a
-store, other datasets, the rest of the Volume. A path that holds no *.zarr store (for example
---path nyc) is uploaded over what is there and deletes nothing.
+What it deletes: only stale files INSIDE the uploaded part of each *.zarr store (a chunk left by
+an older layout of the store would read wrongly). That is the whole store when the store, or a
+directory above it, is uploaded, and only the uploaded subtree when --path points inside a store
+(--path <store>.zarr/<array> prunes that array and never touches zarr.json or the other arrays).
+Nothing else is ever deleted: files beside a store, other datasets, the rest of the Volume. A path
+that holds no *.zarr store (for example --path nyc) is uploaded over what is there and deletes
+nothing.
 
 Options:
   --profile NAME      Databricks config profile (required; never chosen for you)
@@ -118,16 +121,23 @@ def local_files(src: Path, src_root: Path) -> list[Path]:
     return sorted(files)
 
 
-def store_roots(rel: str, files: list[Path], src: Path) -> list[str]:
-    """The *.zarr directories the upload covers, relative to geobrix-examples (outermost one)."""
-    roots = set()
+def prune_scopes(rel: str, files: list[Path], src: Path) -> list[str]:
+    """The directories whose stale files are pruned, relative to geobrix-examples.
+
+    The uploaded part of each *.zarr store: the whole store when it is uploaded whole (or sits
+    below --path), and only the uploaded subtree when --path points inside a store
+    (<store>.zarr/<array>). Never above --path: the store's zarr.json and the sibling arrays of
+    a sub-path upload are not part of it.
+    """
+    depth = len(rel.split("/"))
+    scopes = set()
     for f in files:
         segments = f"{rel}/{f.relative_to(src).as_posix()}".split("/")
         for i, segment in enumerate(segments[:-1]):  # the last one is the file itself
             if segment.endswith(".zarr"):
-                roots.add("/".join(segments[: i + 1]))
+                scopes.add("/".join(segments[: max(i + 1, depth)]))
                 break
-    return sorted(roots)
+    return sorted(scopes)
 
 
 def remote_files(w, root: str) -> list[str]:
@@ -207,12 +217,12 @@ def main(argv=None) -> int:
             file=sys.stderr,
         )
         return 2
-    stores = store_roots(rel, files, src)
+    scopes = prune_scopes(rel, files, src)
     total = sum(f.stat().st_size for f in files)
     print(f"Staging {len(files)} files ({total / 1e6:.2f} MB) from {src}")
     print(f"  to {dest}")
-    if stores:
-        print("  stale files are removed only inside: " + ", ".join(stores))
+    if scopes:
+        print("  stale files are removed only inside: " + ", ".join(scopes))
     else:
         print(
             "  no *.zarr store here: files are uploaded over what is there, nothing is deleted"
@@ -278,36 +288,36 @@ def main(argv=None) -> int:
             print(f"  {e}", file=sys.stderr)
         return 1
 
-    # Plan every prune first: a store whose listing does not contain what was just uploaded is
+    # Plan every prune first: a scope whose listing does not contain what was just uploaded is
     # listed in a form we did not build, and then nothing may be deleted anywhere.
     plan = []
-    for store in stores:
-        store_dest = f"{base}/{store}"
-        mine = {p for p in remote.values() if p.startswith(store_dest + "/")}
-        listing = remote_files(w, store_dest)
+    for scope in scopes:
+        scope_dest = f"{base}/{scope}"
+        mine = {p for p in remote.values() if p.startswith(scope_dest + "/")}
+        listing = remote_files(w, scope_dest)
         missing = sorted(mine - set(listing))
-        if missing or not store_dest.endswith(".zarr"):
+        in_a_store = any(segment.endswith(".zarr") for segment in scope.split("/"))
+        if missing or not in_a_store:
             print(
-                f"Error: the listing of {store_dest} does not contain the files just uploaded "
+                f"Error: the listing of {scope_dest} does not contain the files just uploaded "
                 f"(first: {missing[:1]}); nothing was deleted.",
                 file=sys.stderr,
             )
             return 1
-        plan.append((store_dest, mine, [p for p in listing if p not in mine]))
-    for store_dest, _, stale in plan:
+        plan.append((scope_dest, mine, [p for p in listing if p not in mine]))
+    for scope_dest, _, stale in plan:
         for path in stale:
-            if not path.startswith(
-                store_dest + "/"
-            ):  # unreachable: the listing is under it
+            # unreachable: the listing is under the scope
+            if not path.startswith(scope_dest + "/"):
                 print(f"Error: refusing to delete {path}.", file=sys.stderr)
                 return 1
             print(f"Removing stale file: {path}")
             w.files.delete(path)
-    for store_dest, mine, _ in plan:
-        left = remote_files(w, store_dest)
+    for scope_dest, mine, _ in plan:
+        left = remote_files(w, scope_dest)
         if set(left) != mine:
             print(
-                f"Verification failed: {store_dest} holds {len(left)} files, expected {len(mine)}.",
+                f"Verification failed: {scope_dest} holds {len(left)} files, expected {len(mine)}.",
                 file=sys.stderr,
             )
             return 1

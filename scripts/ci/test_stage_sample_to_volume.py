@@ -238,6 +238,44 @@ def test_the_prune_stays_inside_the_zarr_stores_it_uploads(launcher, sdk, src_ro
 
 
 @pytest.mark.parametrize(
+    "path_in_store, deleted",
+    [
+        # a sub-path of a store: only its own stale files go; the store's zarr.json and the
+        # sibling arrays on the Volume were not part of this upload and survive
+        ("t2m", ["t2m/c/9/9/9"]),
+        # the store itself: the store is replaced, so everything the local copy lacks goes
+        ("", ["t2m/c/9/9/9", "u10/c/old", "u10/zarr.json"]),
+    ],
+)
+def test_the_prune_scope_is_the_uploaded_subtree_of_the_store(
+    launcher, sdk, src_root, path_in_store, deleted
+):
+    store = f"{EXAMPLES}/{DATASET}/era5_like_v3.zarr"
+    remote = {
+        f"{store}/zarr.json": b"the store's metadata on the Volume",
+        f"{store}/t2m/c/9/9/9": b"stale",
+        f"{store}/u10/zarr.json": b"a sibling array",
+        f"{store}/u10/c/old": b"stale if the whole store is uploaded",
+        f"{EXAMPLES}/{DATASET}/era5_like_v2.zarr/t2m/9.9.9": b"another store, not uploaded",
+    }
+    sdk.files = FakeFiles(remote)
+    path = f"{DATASET}/era5_like_v3.zarr" + (
+        f"/{path_in_store}" if path_in_store else ""
+    )
+
+    rc = run(launcher, src_root, "--profile", "p", "--path", path)
+
+    assert rc == 0
+    assert sorted(sdk.files.deleted) == sorted(f"{store}/{d}" for d in deleted)
+    untouched = set(remote) - set(sdk.files.deleted)
+    assert untouched <= set(sdk.files.files)
+    if path_in_store:  # not uploaded, so not replaced either
+        assert sdk.files.files[f"{store}/zarr.json"] == remote[f"{store}/zarr.json"]
+        assert f"{store}/u10/zarr.json" in sdk.files.files
+    assert sdk.files.files[f"{store}/t2m/c/0/0/0"] == b"chunk-a"
+
+
+@pytest.mark.parametrize(
     "kind, rc",
     [
         ("file symlink in a store", 2),

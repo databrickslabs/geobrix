@@ -17,7 +17,13 @@ from databricks.labs.gbx.core._retry import _retry_transient
 from databricks.labs.gbx.zarr._shard import Region
 from databricks.labs.gbx.zarr.errors import ZarrStoreDrift
 
-__all__ = ["RangeReader", "FuseRangeReader", "check_identity", "MTIME_RESOLUTION_MS"]
+__all__ = [
+    "RangeReader",
+    "FuseRangeReader",
+    "check_identity",
+    "identities_match",
+    "MTIME_RESOLUTION_MS",
+]
 
 # A transient FUSE miss is worth another try; these will not change by waiting.
 _PERMANENT = (PermissionError, IsADirectoryError, NotADirectoryError)
@@ -36,6 +42,15 @@ _PROC_FD = "/proc/self/fd"
 _CHECK_DESCRIPTORS = sys.platform.startswith("linux") and os.path.isdir(_PROC_FD)
 
 
+def identities_match(a: str, b: str) -> bool:
+    """Whether two identities (``"<mtime_ms>:<size>"``) name the same file, at
+    ``MTIME_RESOLUTION_MS``. Every place that compares identities (a read, a sync, a
+    publish's drift check) goes through here, so one constant decides."""
+    from databricks.labs.gbx.zarr._register import same_identity
+
+    return same_identity(a, b, mtime_resolution_ms=MTIME_RESOLUTION_MS)
+
+
 def check_identity(row: dict, observed: str) -> None:
     """Raise ``ZarrStoreDrift`` unless the file ``observed`` is the one the manifest recorded.
 
@@ -43,12 +58,8 @@ def check_identity(row: dict, observed: str) -> None:
     ``observed`` is the identity of the file as it is now, in the same form. A row with
     no identity (a file GeoBrix wrote) is never drift.
     """
-    from databricks.labs.gbx.zarr._register import same_identity
-
     expected = row.get("identity")
-    if expected is None or same_identity(
-        expected, observed, mtime_resolution_ms=MTIME_RESOLUTION_MS
-    ):
+    if expected is None or identities_match(expected, observed):
         return
     raise ZarrStoreDrift(
         f"{row.get('file')} changed outside GeoBrix: the manifest recorded "

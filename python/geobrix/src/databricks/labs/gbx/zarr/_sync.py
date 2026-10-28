@@ -38,7 +38,11 @@ import pyarrow.compute as pc
 
 from databricks.labs.gbx.core._arrow import to_spark_df
 from databricks.labs.gbx.zarr import _manifest as M
-from databricks.labs.gbx.zarr._access import FuseRangeReader, check_identity
+from databricks.labs.gbx.zarr._access import (
+    FuseRangeReader,
+    check_identity,
+    identities_match,
+)
 from databricks.labs.gbx.zarr._meta import doc_bytes, same_layout, with_shape
 from databricks.labs.gbx.zarr._register import (
     _chunk_rows,
@@ -72,9 +76,10 @@ _DOC_KINDS = ("group", "array")
 _SEP = "\x1f"
 _WORKERS = 8  # base objects written at once
 _LOCK_KEY = "publish"
-# A publish that died leaves its lock row. One this old is taken over (by compare-and-swap,
-# so two takers cannot both win); a younger one means a publish may still be running.
-_LOCK_TTL_SECONDS = 24 * 3600
+# A publish that died leaves its lock row. Nothing clears it by itself: a caller who knows
+# no publish is running passes ``break_lock=True``, which works on a lock at least this old
+# (a younger one may belong to a publish that is still writing).
+_LOCK_BREAK_AFTER_SECONDS = 3600
 _CONSOLIDATED = "consolidated_metadata"
 
 # Tests set this to run code while a publish holds its lock.
@@ -186,6 +191,11 @@ def _diff_data(diff: _Diff, live: pa.Table, new: pa.Table) -> None:
                 pc.not_equal(theirs.column("identity"), ours.column("identity")), True
             )
         )
+        # strings that differ can still be one file, seen at the resolution in force
+        for i in np.flatnonzero(moved):
+            a, b = theirs.column("identity")[int(i)], ours.column("identity")[int(i)]
+            if a.is_valid and b.is_valid and identities_match(a.as_py(), b.as_py()):
+                moved[i] = False
         for n, old, overlay in zip(
             theirs.filter(pa.array(moved)).to_pylist(),
             ours.filter(pa.array(moved)).to_pylist(),
@@ -250,10 +260,11 @@ def _with_our_extent(ours: dict, doc: dict, arrays) -> tuple[str, bool]:
     if not isinstance(shape, list) or len(shape) != len(meta.shape):
         return doc["meta"], False
     larger = tuple(max(a, b) for a, b in zip(shape, meta.shape))
-    return (
-        doc_bytes(with_shape(meta, larger))[doc["key"]].decode(),
-        larger != meta.shape,
-    )
+    if larger == tuple(
+        meta.shape
+    ):  # the store's extent wins: its own text stays as it is
+        return doc["meta"], False
+    return doc_bytes(with_shape(meta, larger))[doc["key"]].decode(), True
 
 
 def _table_arrays(live_docs: list[dict]) -> dict:
@@ -323,45 +334,94 @@ def _locks(spark, snap) -> list[dict]:
     return M.read_rows(spark, snap, kinds="lock").to_pylist()
 
 
-def _stale(lock: dict) -> bool:
+def _lock_age(lock: dict) -> float | None:
+    """Seconds since the lock was taken; ``None`` for a lock row nobody can date."""
     try:
-        started = float(json.loads(lock["meta"])["started"])
+        return time.time() - float(json.loads(lock["meta"])["started"])
     except (TypeError, ValueError, KeyError):
-        return True  # a lock row nobody can date
-    return time.time() - started > _LOCK_TTL_SECONDS
+        return None
 
 
-def _publishing(table: str, lock: dict) -> ZarrWriteConflict:
-    try:
-        taken = float(json.loads(lock["meta"])["started"])
-        when = f" (its lock was taken at {_utc(taken)})"
-    except (TypeError, ValueError, KeyError):
-        when = ""
+def _ago(seconds: float) -> str:
+    if seconds < 120:
+        return f"{seconds:.0f} seconds"
+    if seconds < 7200:
+        return f"{seconds / 60:.0f} minutes"
+    return f"{seconds / 3600:.0f} hours"
+
+
+def _breakable(lock: dict) -> bool:
+    age = _lock_age(lock)
+    return age is None or age >= _LOCK_BREAK_AFTER_SECONDS
+
+
+def _locked(table: str, lock: dict, break_lock: bool = False) -> ZarrWriteConflict:
+    """Why ``table`` cannot be synced or published now, and exactly how to clear a dead lock."""
+    age = _lock_age(lock)
+    when = "" if age is None else f", taken {_ago(age)} ago"
+    hours = _LOCK_BREAK_AFTER_SECONDS // 3600
+    if break_lock and not _breakable(lock):
+        why = (
+            f"The publish lock of {table}{when} is too young to break: the publish may "
+            "still be writing."
+        )
+    else:
+        why = f"{table} has a publish lock{when}: a publish is running, or was killed."
     return ZarrWriteConflict(
-        f"a publish of {table} is running{when}.",
-        fix="wait for it to finish, then run this again; a lock older than "
-        f"{_LOCK_TTL_SECONDS // 3600} hours is taken over",
+        why,
+        fix="wait for the publish to finish. If it was killed and none is running, clear "
+        f"the lock with gbx_zarr_sync({table!r}, break_lock=True) or "
+        f"publish({table!r}, break_lock=True); a lock can be broken once it is at least "
+        f"{hours} hour old",
         keys=(_LOCK_KEY,),
         winner=lock.get("write_id"),
     )
 
 
-def _utc(seconds: float) -> str:
-    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime(seconds))
+def _release_row_of(lock: dict, write_id: str) -> dict:
+    return {
+        "kind": "lock",
+        "key": _LOCK_KEY,
+        "write_id": write_id,
+        "op": "delete",
+        "expected_write_id": lock["write_id"],
+    }
 
 
-def _take_lock(spark, table: str) -> str:
+def _break_lock(spark, table: str, lock: dict, break_lock: bool) -> None:
+    """Clear a lock a sync found, or refuse: only on request, and only an old one."""
+    if not (break_lock and _breakable(lock)):
+        raise _locked(table, lock, break_lock)
+    wid = uuid.uuid4().hex
+    try:
+        M.commit(
+            spark,
+            table,
+            pa.Table.from_pylist([_release_row_of(lock, wid)]),
+            write_id=wid,
+            meta={"mode": "publish-lock-broken"},
+        )
+    except (ZarrWriteConflict, M.ConcurrentCommit):
+        raise _locked(table, lock) from None  # it changed under us: look again
+    _LOG.warning("broke the publish lock of %s (taken %s ago)", table, _lock_age(lock))
+
+
+def _take_lock(spark, table: str, break_lock: bool = False) -> str:
     """Insert the publish lock row; returns its ``write_id``.
 
     The insert is a compare-and-swap against "no lock", so of two publishes one gets the
-    row and the other ``ZarrWriteConflict``. A lock past ``_LOCK_TTL_SECONDS`` is replaced.
+    row and the other ``ZarrWriteConflict``. A lock that is there is replaced only with
+    ``break_lock=True`` and only when it is old enough (``_LOCK_BREAK_AFTER_SECONDS``).
     """
     held = _locks(spark, M.snapshot(spark, table))
     expected = None
     if held:
-        if not _stale(held[0]):
-            raise _publishing(table, held[0])
+        if not (break_lock and _breakable(held[0])):
+            raise _locked(table, held[0], break_lock)
         expected = held[0]["write_id"]
+        _LOG.warning(
+            "breaking the publish lock of %s (taken %s ago)", table, _lock_age(held[0])
+        )
     lock = uuid.uuid4().hex
     row = {
         "kind": "lock",
@@ -381,7 +441,7 @@ def _take_lock(spark, table: str) -> str:
         )
     except (ZarrWriteConflict, M.ConcurrentCommit):
         now = _locks(spark, M.snapshot(spark, table))
-        raise _publishing(table, now[0] if now else {}) from None
+        raise _locked(table, now[0] if now else {}) from None
     return lock
 
 
@@ -408,9 +468,10 @@ def _release(spark, table: str, lock: str) -> None:
         )
     except Exception:
         _LOG.warning(
-            "could not release the publish lock of %s; it is taken over after %d hours",
+            "could not release the publish lock of %s; clear it with break_lock=True "
+            "once it is %d hour old",
             table,
-            _LOCK_TTL_SECONDS // 3600,
+            _LOCK_BREAK_AFTER_SECONDS // 3600,
             exc_info=True,
         )
 
@@ -443,7 +504,9 @@ def _commit_diff(spark, table: str, diff: _Diff, arrays: dict, mode: str) -> int
         ) from None
 
 
-def gbx_zarr_sync(spark, table: str) -> "DataFrame":  # noqa: F821
+def gbx_zarr_sync(
+    spark, table: str, *, break_lock: bool = False
+) -> "DataFrame":  # noqa: F821
     """Bring the manifest ``table`` of a registered store up to date with its files.
 
     Lists the store again and records what other writers changed as one table version.
@@ -459,12 +522,16 @@ def gbx_zarr_sync(spark, table: str) -> "DataFrame":  # noqa: F821
     An array's extent becomes the larger of the store's and the overlay's. A store whose
     array changed its dtype, chunk grid or codecs raises ``ZarrUnsupported`` (register it
     again). Nothing is committed when nothing changed.
+
+    A sync refuses while a publish holds its lock on the table (``ZarrWriteConflict``). A
+    publish that was killed leaves the lock behind; once it is at least an hour old,
+    ``break_lock=True`` clears it and the sync goes on. A younger lock is never broken.
     """
     props = _registered(spark, table, "gbx_zarr_sync")
+    held = _locks(spark, M.snapshot(spark, table))
+    if held:
+        _break_lock(spark, table, held[0], break_lock)
     snap = M.snapshot(spark, table)
-    held = _locks(spark, snap)
-    if held and not _stale(held[0]):
-        raise _publishing(table, held[0])
     live = M.read_rows(spark, snap, kinds=_LIVE_KINDS)
     diff, arrays = _compare(spark, props.root, live, uuid.uuid4().hex)
     if diff:
@@ -594,42 +661,49 @@ def _publish_shards(pool, reader, base, meta, keys, inner, shard_rows, write_id)
     return out
 
 
-def _strip_consolidated(base: str, groups: list[dict], write_id: str) -> list[dict]:
-    """Rows for the consolidated copies of the metadata, which a publish makes stale.
+def _reconsolidate(base: str, groups: list[dict], write_id: str) -> list[dict]:
+    """Rows for the consolidated copies of the metadata, rebuilt after a publish.
 
-    ``.zmetadata`` (Zarr v2) is removed; the ``consolidated_metadata`` block of a group's
-    ``zarr.json`` (Zarr v3) is cut out. A reader then reads the per-node documents, which
-    are right, instead of a copy that predates the publish.
+    A copy (``.zmetadata`` in Zarr v2, the ``consolidated_metadata`` block of a group's
+    ``zarr.json`` in v3) is a snapshot of the per-node documents, so it is stale once
+    documents were written. Each group that had one gets it again from ``zarr`` itself, read
+    from the documents now in the store; a store that had none is left without.
     """
+    import warnings
+
+    import zarr
+
     out = []
     for row in groups:
+        had = row["key"] == ".zmetadata" or (
+            row["key"] == "zarr.json"
+            and row["meta"] is not None
+            and _CONSOLIDATED in json.loads(row["meta"])
+        )
+        if not had:
+            continue
         folder = os.path.join(base, *(row["array"].split("/") if row["array"] else ()))
-        target = os.path.join(folder, row["key"])
-        if row["key"] == ".zmetadata":
-            with contextlib.suppress(FileNotFoundError):
-                os.unlink(target)
-            out.append(_delete_of(row, write_id))
-        elif row["key"] == "zarr.json" and row["meta"] is not None:
-            doc = json.loads(row["meta"])
-            if _CONSOLIDATED not in doc:
-                continue
-            doc.pop(_CONSOLIDATED)
-            text = json.dumps(doc)
-            _atomic_write(target, [text.encode()], write_id)
-            out.append(
-                {
-                    **{k: row[k] for k in ("kind", "array", "key")},
-                    "origin": "external",
-                    "meta": text,
-                    "write_id": write_id,
-                    "op": "upsert",
-                    "expected_write_id": row["write_id"],
-                }
-            )
+        with (
+            warnings.catch_warnings()
+        ):  # zarr warns that v3 consolidation is not in the spec
+            warnings.simplefilter("ignore")
+            zarr.consolidate_metadata(folder)
+        with open(os.path.join(folder, row["key"]), encoding="utf-8") as f:
+            text = f.read()
+        out.append(
+            {
+                **{k: row[k] for k in ("kind", "array", "key")},
+                "origin": "external",
+                "meta": text,
+                "write_id": write_id,
+                "op": "upsert",
+                "expected_write_id": row["write_id"],
+            }
+        )
     return out
 
 
-def publish(spark, table: str) -> int:
+def publish(spark, table: str, *, break_lock: bool = False) -> int:
     """Write the overlay of a registered, writable store into the store itself.
 
     This is what ``gbx_zarr_export(method="publish")`` runs. In order:
@@ -641,7 +715,7 @@ def publish(spark, table: str) -> int:
        name and then renamed; a sharded array rebuilds each affected shard from the shard
        the table reads (every inner chunk) and writes it whole;
     4. the metadata documents GeoBrix wrote go last, and the consolidated copies of the
-       metadata (which would be stale) are removed;
+       metadata (which would be stale) are rebuilt from them;
     5. one commit turns the overlay rows into external rows with the new identities and
        releases the lock.
 
@@ -649,8 +723,18 @@ def publish(spark, table: str) -> int:
     ``ZarrStoreDrift`` when read. A publish that stops after step 3 leaves the store ahead
     of the table; ``gbx_zarr_sync`` then reports those objects. Returns the version of the
     publishing commit, or the current version when there was nothing to publish.
+
+    A publish killed before it finished leaves its lock row, and the next sync or publish
+    refuses it. Once the lock is at least an hour old, ``break_lock=True`` replaces it; a
+    younger lock is never broken, since its publish may still be writing.
     """
-    props = _registered(spark, table, "publish")
+    props = M.read_props(spark, table)
+    if props.kind != "registered":
+        raise ZarrReadOnly(
+            f"{table} holds its own data, so there is no store to publish into",
+            fix="publish applies to a store registered in place: gbx_zarr_register(..., "
+            "writable=True, overlay_root=...)",
+        )
     if not props.writable or not props.overlay_root:
         raise ZarrReadOnly(
             f"{table} is a read-only registration of {props.root}, so it has no overlay "
@@ -664,7 +748,7 @@ def publish(spark, table: str) -> int:
     ours = M.read_rows(spark, snap, kinds=_LIVE_KINDS)
     if not pc.any(pc.equal(ours.column("origin"), "gbx")).as_py():
         return snap.version
-    lock = _take_lock(spark, table)
+    lock = _take_lock(spark, table, break_lock)
     try:
         if _AFTER_LOCK is not None:
             _AFTER_LOCK()
@@ -748,7 +832,7 @@ def _publish(spark, table: str, props, lock: str) -> int:
         )
     if docs:
         groups = live.filter(pc.equal(kind, "group")).to_pylist()
-        out += _strip_consolidated(base, groups, write_id)
+        out += _reconsolidate(base, groups, write_id)
 
     out.append(_release_row(lock, write_id))
     meta = {

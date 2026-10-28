@@ -9,17 +9,20 @@ import json
 import os
 import shutil
 import threading
+import time
 import uuid
 
 import numpy as np
+import pyarrow as pa
 import pytest
 
 zarr = pytest.importorskip("zarr")
 
 from test.zarr import _helpers as H  # noqa: E402
 
-from databricks.labs.gbx.zarr import _manifest as M  # noqa: E402
+from databricks.labs.gbx.zarr import _access  # noqa: E402
 from databricks.labs.gbx.zarr import _sync  # noqa: E402
+from databricks.labs.gbx.zarr import _manifest as M  # noqa: E402
 from databricks.labs.gbx.zarr._register import (  # noqa: E402
     gbx_zarr_register,
     identity_of,
@@ -31,6 +34,7 @@ from databricks.labs.gbx.zarr._testing import (  # noqa: E402
 )
 from databricks.labs.gbx.zarr._write import gbx_zarr_write  # noqa: E402
 from databricks.labs.gbx.zarr.errors import (  # noqa: E402
+    ZarrReadOnly,
     ZarrStoreDrift,
     ZarrUnsupported,
     ZarrWriteConflict,
@@ -116,6 +120,86 @@ def test_touched_base_object_raises_drift(tmp_path, monkeypatch):
     with pytest.raises(ZarrStoreDrift, match="changed outside GeoBrix") as e:
         H.read_blocks(src, variables=["t2m"])
     assert "t2m/c/0/0/0" in str(e.value) and "gbx_zarr_sync" in e.value.fix
+
+
+@pytest.mark.parametrize("resolution", [1, 1000])
+def test_the_mtime_resolution_governs_every_identity_compare(monkeypatch, resolution):
+    """One constant decides whether two modification times of a file are the same: the read
+    check, and the sync diff (which publish's drift refusal uses too). The same file seen
+    400 ms apart, as two file systems might report it, is a change at 1 ms and none at 1 s.
+    """
+    monkeypatch.setattr(_access, "MTIME_RESOLUTION_MS", resolution)
+    listed, seen = "1792741018000:10", "1792741018400:10"
+    moved = resolution == 1
+
+    def row(identity, write_id):
+        return dict(
+            kind="chunk",
+            array="t2m",
+            key="c/0/0/0",
+            origin="external",
+            identity=identity,
+            write_id=write_id,
+        )
+
+    live = pa.Table.from_pylist([row(listed, "a" * 32)], schema=M._COMMIT_SCHEMA)
+    new = pa.Table.from_pylist([row(seen, "b" * 32)], schema=M._COMMIT_SCHEMA)
+    diff = _sync._Diff("c" * 32)
+    _sync._diff_data(diff, live, new)
+    assert diff.report == ([("changed", "t2m", "c/0/0/0")] if moved else [])
+    if moved:
+        with pytest.raises(ZarrStoreDrift):
+            _access.check_identity({"file": "f", "identity": listed}, seen)
+    else:
+        _access.check_identity({"file": "f", "identity": listed}, seen)
+
+
+def test_a_document_merge_keeps_the_stores_text_when_its_extent_wins():
+    """Where GeoBrix grew an array's extent, a sync lays the larger extent over the store's
+    document. When the store's extent is the larger the store's own text stays as it is,
+    so the next sync has nothing to report; where ours is larger it is rewritten."""
+    from databricks.labs.gbx.zarr._meta import parse_v3
+
+    def doc(n, **attrs):
+        return {
+            "zarr_format": 3,
+            "node_type": "array",
+            "shape": [n],
+            "data_type": "float32",
+            "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [4]}},
+            "chunk_key_encoding": {
+                "name": "default",
+                "configuration": {"separator": "/"},
+            },
+            "fill_value": "NaN",
+            "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
+            "dimension_names": ["x"],
+            "attributes": attrs,
+        }
+
+    def run(ours, theirs):
+        text = json.dumps(theirs, indent=2)  # as a vendor's tool writes it
+        base = dict(kind="array", array="x", key="zarr.json")
+        live = [dict(base, origin="gbx", write_id="a" * 32, meta=json.dumps(ours))]
+        new = [dict(base, origin="external", write_id="b" * 32, meta=text)]
+        diff = _sync._Diff("c" * 32)
+        _sync._diff_documents(diff, live, new, {"x": parse_v3("x", theirs)})
+        return text, diff
+
+    text, diff = run(doc(48, units="K"), doc(60, units="K", long_name="x"))
+    assert diff.report == [("both", "x", "zarr.json")]
+    assert (diff.rows[0]["meta"], diff.rows[0]["origin"]) == (text, "external")
+
+    text, diff = run(doc(48, units="K"), doc(24, units="K", long_name="x"))
+    assert diff.report == [("both", "x", "zarr.json")]
+    row = diff.rows[0]
+    assert json.loads(row["meta"]) == doc(48, units="K", long_name="x")
+    assert row["origin"] == "gbx"
+
+    _, diff = run(
+        doc(48, units="K"), doc(24, units="K")
+    )  # only the extent: ours is kept
+    assert diff.report == []
 
 
 def test_a_write_that_reads_a_changed_base_object_raises_drift(spark_delta, registered):
@@ -256,6 +340,102 @@ def test_sync_ignores_check_rows(spark_delta, registered):
     assert M.snapshot(spark_delta, table).version == version  # nothing was committed
 
 
+@pytest.mark.parametrize("sharded", LAYOUTS)
+def test_an_all_fill_write_stays_deleted_through_sync_and_publish(
+    spark_delta, registered, sharded
+):
+    """Writing fill over a chunk of a registered store is a deletion. It is a tombstone, not
+    a missing row, so the base object GeoBrix hid is not brought back by the next sync, and
+    a publish removes it from the store."""
+    store, table = registered(sharded, writable=True)
+    t2m = zarr.open_array(str(store / "t2m"), mode="r")
+    want = t2m[...]
+    want[12:24, 0:37, 72:144] = t2m.fill_value
+    gone = store / "t2m" / "c" / "1" / "0" / "1"
+    block = np.full(WHOLE, t2m.fill_value, dtype="float32")
+    gbx_zarr_write(
+        H.blocks_frame(spark_delta, ("t2m", (12, 0, 72), block)), table, mode="update"
+    )
+
+    (tomb,) = _live(spark_delta, table, kind="chunk", array="t2m", origin="gbx")
+    assert (tomb["file"], tomb["offset"], tomb["length"]) == (None, None, 0)
+    # unsharded: the tombstone remembers the base object it hides; in a shard the shard row does
+    assert (tomb["identity"] is not None) == (not sharded)
+    np.testing.assert_array_equal(H.read_variable(spark_delta, table, "t2m"), want)
+
+    assert _changes(gbx_zarr_sync(spark_delta, table)) == set()  # not resurrected
+    np.testing.assert_array_equal(H.read_variable(spark_delta, table, "t2m"), want)
+
+    publish(spark_delta, table)
+    np.testing.assert_array_equal(zarr.open_array(str(store / "t2m"))[...], want)
+    assert _live(spark_delta, table, origin="gbx") == []
+    if not sharded:
+        assert not gone.exists()
+        assert _live(spark_delta, table, array="t2m", key="c/1/0/1") == []
+    assert _changes(gbx_zarr_sync(spark_delta, table)) == set()
+    np.testing.assert_array_equal(H.read_variable(spark_delta, table, "t2m"), want)
+
+
+def _plant_lock(spark, table, age):
+    """A publish lock taken ``age`` seconds ago by a publish that never finished."""
+    held = _live(spark, table, kind="lock")
+    w = uuid.uuid4().hex
+    row = dict(
+        kind="lock",
+        key="publish",
+        write_id=w,
+        op="upsert",
+        expected_write_id=held[0]["write_id"] if held else None,
+        meta=json.dumps({"started": time.time() - age}),
+    )
+    M.commit(spark, table, pa.Table.from_pylist([row]), write_id=w, meta={})
+
+
+def test_a_dead_publish_lock_is_cleared_only_on_request(spark_delta, registered):
+    """A publish killed hard leaves its lock. Sync and publish both refuse it, and say how to
+    clear it. Only a lock at least an hour old can be broken, and only when asked."""
+    _, table = registered(sharded=True, writable=True)
+    _overlay_write(spark_delta, table)
+    _plant_lock(spark_delta, table, age=2 * 3600)
+    for call in (gbx_zarr_sync, publish):
+        with pytest.raises(ZarrWriteConflict, match="lock") as e:
+            call(spark_delta, table)
+        assert "break_lock=True" in e.value.fix and "hour" in e.value.fix
+    assert len(_live(spark_delta, table, kind="lock")) == 1  # refusing left it alone
+
+    _plant_lock(spark_delta, table, age=600)  # this young, it may be a live publish
+    with pytest.raises(ZarrWriteConflict, match="10 minutes"):
+        gbx_zarr_sync(spark_delta, table, break_lock=True)
+    assert len(_live(spark_delta, table, kind="lock")) == 1
+
+    _plant_lock(spark_delta, table, age=2 * 3600)
+    assert _changes(gbx_zarr_sync(spark_delta, table, break_lock=True)) == set()
+    assert _live(spark_delta, table, kind="lock") == []
+
+    _plant_lock(spark_delta, table, age=2 * 3600)
+    publish(spark_delta, table, break_lock=True)
+    assert _live(spark_delta, table, kind="lock") == []
+    assert _live(spark_delta, table, origin="gbx") == []
+
+
+@pytest.mark.parametrize("own", [True, False], ids=["own-data", "read-only"])
+def test_publish_needs_a_writable_registration(
+    spark_delta, registered, drop, tmp_path, own
+):
+    if own:  # a store that holds its own data has no base to publish into
+        from databricks.labs.gbx.zarr._testing import era5_like_dataset
+
+        table = f"gbx_zarr_sync_own_{uuid.uuid4().hex[:8]}"
+        drop(table)
+        data = era5_like_dataset().isel(time=slice(0, 12))
+        gbx_zarr_write(data, table, root=str(tmp_path / "own"), spark=spark_delta)
+    else:
+        _, table = registered(sharded=True)
+    with pytest.raises(ZarrReadOnly) as e:
+        publish(spark_delta, table)
+    assert "Fix:" in str(e.value)
+
+
 # --- publish ----------------------------------------------------------------------
 
 
@@ -283,14 +463,9 @@ def test_publish_writes_base_and_repoints(spark_delta, registered, tmp_path, fmt
     np.testing.assert_array_equal(
         zarr.open_array(str(store / "sp"))[0:12, 0:37, 0:72], new
     )
-    # the consolidated copy of the metadata would be stale: it is gone, and a plain open
-    # of the group sees the new array
-    if fmt == 3:
-        assert "consolidated_metadata" not in json.loads(
-            (store / "zarr.json").read_text()
-        )
-    else:
-        assert not (store / ".zmetadata").exists()
+    # the consolidated copy of the metadata was rebuilt from the documents now in the store,
+    # so a reader that demands it sees the new array
+    assert "sp" in set(zarr.open_consolidated(str(store)).array_keys())
     assert "sp" in set(zarr.open_group(str(store), mode="r").array_keys())
     assert version == M.snapshot(spark_delta, table).version
     assert (

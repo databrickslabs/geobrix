@@ -2077,7 +2077,7 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
     """The data rows to commit, column by column (a commit can carry millions):
 
     - each chunk with the base write_id of its key; a chunk of fill is dropped, or deletes
-      its row, or is a tombstone under a live shard row;
+      its row, or is a tombstone (under a live shard row, or over a base object it hides);
     - one check row per shard a chunk was read from;
     - in an overwrite, the deletes of every base row of the written variables that no
       chunk replaced.
@@ -2090,7 +2090,11 @@ def _commit_data_rows(plan: _Plan, rows: pa.Table, written: set) -> pa.Table:
         empty = pc.fill_null(chunks.column("empty"), False)
         live = pc.is_valid(chunks.column("expected_write_id"))
         held = pc.fill_null(chunks.column("shard_live"), False)
-        tomb = pc.and_(empty, held)
+        # an unsharded chunk row that shadows a base object (a registered store's own file)
+        # must not simply go: with no row left, the next sync would list that object as new
+        # and bring its old values back. It becomes a tombstone that remembers the object.
+        shadows = pc.is_valid(chunks.column("identity"))
+        tomb = pc.and_(empty, pc.or_(held, shadows))
         delete = pc.and_(pc.and_(empty, pc.invert(tomb)), live)
         keep = pc.invert(pc.and_(pc.and_(empty, pc.invert(tomb)), pc.invert(live)))
         parts.append(

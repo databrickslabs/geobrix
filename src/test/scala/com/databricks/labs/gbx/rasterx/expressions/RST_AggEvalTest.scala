@@ -551,6 +551,38 @@ class RST_AggEvalTest extends PlanTest with SilentSparkSession {
         row.getAs[Map[String, String]]("md")("last_error") should include("RST_MergeAgg")
     }
 
+    test("an aggregate of nothing but error tiles is an error tile with the members' reason") {
+        val sc = spark
+        import com.databricks.labs.gbx.rasterx.functions._
+        import sc.implicits._
+        functions.register(spark)
+
+        val good = Seq(tinyGTiffBytes(42)).toDF("content")
+            .select(rst_fromcontent(col("content"), lit("GTiff")).as("tile"))
+        val failed = good.select(rst_transformcrs(col("tile"), lit("EPSG:not-a-crs")).as("tile"))
+        val reason = failed.select(col("tile.metadata")("last_error").as("e")).head().getString(0)
+        assert(reason != null && reason.nonEmpty, "the failed tile must say why")
+
+        // Two members, so the single-member shortcut does not hide the rule; one readable member, an ordinary group.
+        val twoErrors = failed.union(failed)
+        for (agg <- Seq(
+               rst_merge_agg(col("tile")),
+               rst_combineavg_agg(col("tile")),
+               rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc")
+             )) {
+            val row = twoErrors.groupBy(lit(1).alias("g"))
+                .agg(agg.alias("out"))
+                .select(col("out.raster").as("raster"), col("out.metadata").as("md"))
+                .head()
+            assert(row.isNullAt(0), "an error tile has no raster")
+            row.getAs[Map[String, String]]("md")("last_error") should include(reason)
+        }
+        val mixed = good.union(failed).groupBy(lit(1).alias("g"))
+            .agg(rst_derivedband_agg(col("tile"), doublePyFunc, "myfunc").alias("out"))
+            .select(col("out.raster").isNotNull.as("ok")).head()
+        assert(mixed.getBoolean(0), "one readable member makes it an ordinary group")
+    }
+
     test("RST_DerivedBandAgg skips a corrupt member and records the drop, does not raise") {
         val sc = spark
         import com.databricks.labs.gbx.rasterx.functions._

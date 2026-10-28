@@ -1345,6 +1345,45 @@ def test_rst_derivedband_agg(spark):
         assert np.allclose(ds.read(1), 12.0)
 
 
+def _error_tiles_df(spark, *reasons):
+    from pyspark.sql.types import StringType, StructField, StructType
+
+    from databricks.labs.gbx.pyrx.core.virtual_tile import V2_TILE_SCHEMA
+
+    schema = StructType(
+        [StructField("k", StringType()), StructField("tile", V2_TILE_SCHEMA)]
+    )
+    return spark.createDataFrame(
+        [("g", _serde.build_error_tile(r, 7)) for r in reasons], schema
+    )
+
+
+@pytest.mark.parametrize(
+    "agg",
+    [
+        lambda: prx.rst_merge_agg("tile"),
+        lambda: prx.rst_combineavg_agg("tile"),
+        lambda: prx.rst_derivedband_agg("tile", PYFUNC_SUM_AGG, "addbands"),
+    ],
+    ids=["merge", "combineavg", "derivedband"],
+)
+def test_an_aggregate_of_nothing_but_error_tiles_is_an_error_tile(spark, agg):
+    """A group whose every member is an error tile gives an error tile with the members' reasons, as on the
+    JVM tier; one readable member makes it an ordinary group, the error tile dropped."""
+    for reasons in (("boom",), ("boom", "bang")):
+        out = (
+            _error_tiles_df(spark, *reasons)
+            .groupBy("k")
+            .agg(agg().alias("t"))
+            .first()["t"]
+        )
+        assert out is not None and out["raster"] is None and out["path"] is None
+        assert all(r in out["metadata"]["last_error"] for r in reasons)
+    ok = _tiles_df(spark, [("g", _ras_bytes(np.full((2, 2), 3.0)))])
+    mixed = ok.union(_error_tiles_df(spark, "boom")).groupBy("k").agg(agg().alias("t"))
+    assert mixed.first()["t"]["raster"] is not None
+
+
 # ---------------------------------------------------------------------------
 # Heavyweight-only non-aggregator constructors / array operations
 # (rst_merge, rst_combineavg, rst_frombands, rst_fromfile)

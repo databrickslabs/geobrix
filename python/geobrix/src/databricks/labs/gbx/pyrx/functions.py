@@ -1029,7 +1029,9 @@ def _merge_udf(tiles):
         return None
     result = _merge_bytes(tiles)
     if result is None:
-        return None
+        return _error_tile_of_group(
+            _only_error_tiles(tiles)
+        )  # NULL unless every element is an error tile
     new_bytes, dropped = result
     tile = _serde.build_tile(new_bytes, "GTiff", 0)
     if dropped:
@@ -8403,6 +8405,58 @@ def _tile_raster_bytes(row):
     return None
 
 
+# An aggregate over nothing but error tiles gives an error tile where its result is a tile (its reasons survive), but
+# the BINARY a grouped-agg UDF returns has no place for one. The Python API's variants spell it as this prefix, the
+# cell id and the reasons; the scalar that wraps the result turns it back into the error tile. No GTiff starts with a
+# NUL byte (II or MM), so a payload is never mistaken for a raster. The SQL variants give NULL instead.
+_ERROR_MAGIC = b"\x00GBXERR:"
+
+
+def _only_error_tiles(tiles):
+    """The members of a group as error tiles (:func:`_error_tile_of`) when it has nothing else, NULL members
+    aside; else an empty list."""
+    members = [t for t in tiles if t is not None]
+    errors = [_error_tile_of(t) for t in members]
+    return errors if members and all(e is not None for e in errors) else []
+
+
+def _error_tile_of_group(errors):
+    """One error tile for the error tiles of a group: their reasons (distinct, in order) and the cell id they
+    share (else -1). None for no errors."""
+    if not errors:
+        return None
+    reasons = dict.fromkeys(
+        (e.get("metadata") or {}).get("last_error")
+        or (e.get("metadata") or {}).get("error_message")
+        for e in errors
+    )
+    ids = {int(e.get("cellid") or 0) for e in errors}
+    return _serde.build_error_tile(
+        "; ".join(map(str, reasons)), ids.pop() if len(ids) == 1 else -1
+    )
+
+
+def _error_payload(errors):
+    """:data:`_ERROR_MAGIC` payload for a group of nothing but error tiles (`errors`); None for no errors."""
+    tile = _error_tile_of_group(errors)
+    if tile is None:
+        return None
+    return (
+        _ERROR_MAGIC
+        + tile["cellid"].to_bytes(8, "big", signed=True)
+        + tile["metadata"]["last_error"].encode("utf-8")
+    )
+
+
+def _tile_of_error_payload(payload):
+    cellid = int.from_bytes(
+        payload[len(_ERROR_MAGIC) : len(_ERROR_MAGIC) + 8], "big", signed=True
+    )
+    return _serde.build_error_tile(
+        payload[len(_ERROR_MAGIC) + 8 :].decode("utf-8"), cellid
+    )
+
+
 # --- scalar as_tile UDFs: wrap an aggregated BINARY result into a tile struct
 @f.udf(V2_TILE_SCHEMA)
 def _as_tile_udf(raster_bytes):
@@ -8411,6 +8465,8 @@ def _as_tile_udf(raster_bytes):
     rb = bytes(raster_bytes)
     if len(rb) == 0:
         return None
+    if rb.startswith(_ERROR_MAGIC):
+        return _tile_of_error_payload(rb)
     return _serde.build_tile(rb, "GTiff", 0)
 
 
@@ -8426,6 +8482,8 @@ def _as_tile_cellid_envelope_udf_fn(raster_bytes):
     if len(rb) < 8:
         return None
     cellid = int.from_bytes(rb[:8], "big", signed=True)
+    if rb[8:].startswith(_ERROR_MAGIC):
+        return _tile_of_error_payload(rb[8:])
     return _serde.build_tile(rb[8:], "GTiff", cellid)
 
 
@@ -8439,8 +8497,7 @@ _as_tile_cellid_envelope_udf = f.udf(V2_TILE_SCHEMA)(_as_tile_cellid_envelope_ud
 _VTPATH_MAGIC = b"\x00GBXVT:"
 
 
-@pandas_udf(BinaryType())
-def _merge_agg_udf(tile: pd.Series) -> bytes:
+def _merge_agg_bytes(tile: pd.Series, error_channel: bool):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
@@ -8458,10 +8515,21 @@ def _merge_agg_udf(tile: pd.Series) -> bytes:
             dropped += 1
             continue
     if not rasters:
-        return None
+        return _error_payload(_only_error_tiles(tile)) if error_channel else None
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     return agg_core.merge_tiles(rasters)
+
+
+@pandas_udf(BinaryType())
+def _merge_agg_udf(tile: pd.Series) -> bytes:
+    return _merge_agg_bytes(tile, False)
+
+
+@pandas_udf(BinaryType())
+def _merge_agg_tile_udf(tile: pd.Series) -> bytes:
+    """The Python API's variant of :func:`_merge_agg_udf`: a group of nothing but error tiles is the error payload."""
+    return _merge_agg_bytes(tile, True)
 
 
 @pandas_udf(BinaryType())
@@ -8556,7 +8624,8 @@ def _combineavg_agg_udf(tile: pd.Series) -> bytes:
             dropped += 1
             continue
     if not rasters:
-        return None
+        payload = _error_payload(_only_error_tiles(tile))
+        return None if payload is None else (0).to_bytes(8, "big") + payload
     out = agg_core.combineavg_tiles(rasters)
     if out is None:
         return None
@@ -8688,10 +8757,9 @@ def _rasterize_agg_udf(
     )
 
 
-@pandas_udf(BinaryType())
-def _derivedband_agg_udf(
-    tile: pd.Series, python_func: pd.Series, func_name: pd.Series
-) -> bytes:
+def _derivedband_agg_bytes(
+    tile: pd.Series, python_func: pd.Series, func_name: pd.Series, error_channel: bool
+):
     from databricks.labs.gbx.pyrx import _env
 
     _env.configure_gdal_env()
@@ -8709,13 +8777,28 @@ def _derivedband_agg_udf(
             dropped += 1
             continue
     if not rasters:
-        return None
+        return _error_payload(_only_error_tiles(tile)) if error_channel else None
     # NOTE: drop-count has no metadata carrier at this layer (pandas_udf returns
     # bare bytes; no struct/metadata assembly here). The skip still stops raising.
     # pyfunc/func_name are per-group constants; read them from the first row.
     return agg_core.derivedband_tiles(
         rasters, str(python_func.iloc[0]), str(func_name.iloc[0])
     )
+
+
+@pandas_udf(BinaryType())
+def _derivedband_agg_udf(
+    tile: pd.Series, python_func: pd.Series, func_name: pd.Series
+) -> bytes:
+    return _derivedband_agg_bytes(tile, python_func, func_name, False)
+
+
+@pandas_udf(BinaryType())
+def _derivedband_agg_tile_udf(
+    tile: pd.Series, python_func: pd.Series, func_name: pd.Series
+) -> bytes:
+    """The Python API's variant of :func:`_derivedband_agg_udf`: a group of nothing but error tiles is the error payload."""
+    return _derivedband_agg_bytes(tile, python_func, func_name, True)
 
 
 @pandas_udf(BinaryType())
@@ -9324,7 +9407,7 @@ def rst_merge_agg(
         return _as_virtual_tile_from_path_udf(
             _merge_agg_v2_udf(tc, f.lit(virtualize_dir), f.lit(virtualize_prefix))
         )
-    return _as_tile_udf(_merge_agg_udf(tc))
+    return _as_tile_udf(_merge_agg_tile_udf(tc))
 
 
 def rst_combineavg_agg(tile: ColLike) -> Column:
@@ -9419,7 +9502,7 @@ def rst_derivedband_agg(
     """
     pf = f.lit(python_func) if isinstance(python_func, str) else _col(python_func)
     fn = f.lit(func_name) if isinstance(func_name, str) else _col(func_name)
-    return _as_tile_udf(_derivedband_agg_udf(_col(tile), pf, fn))
+    return _as_tile_udf(_derivedband_agg_tile_udf(_col(tile), pf, fn))
 
 
 def rst_gridfrompoints_agg(

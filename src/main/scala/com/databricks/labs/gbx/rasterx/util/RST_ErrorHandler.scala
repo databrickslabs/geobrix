@@ -150,6 +150,28 @@ object RST_ErrorHandler extends Logging {
         }
     }
 
+    /** What an aggregate answers for a group of nothing but error tiles: one error tile with the members' reasons
+      * (distinct, in arrival order), so the upstream diagnostic survives the aggregate as it survives a scalar.
+      * One member is that member as it is. NULL when any member is not an error tile, or the group is empty: a group
+      * with a readable member is an ordinary one, and the aggregate drops the error tiles and says how many.
+      *
+      * @param members the aggregate's buffered tile rows
+      */
+    def errorTileOfGroup(members: scala.collection.Seq[Any], rasterType: DataType): InternalRow = {
+        val rows = members.map(_.asInstanceOf[InternalRow])
+        if (rows.isEmpty || !rows.forall(RasterSerializationUtil.isErrorTile)) null
+        else if (rows.size == 1) rows.head
+        else {
+            val reasons = rows.flatMap { r =>
+                val md = RasterSerializationUtil.metadataOf(r)
+                md.get("last_error").orElse(md.get("error_message"))
+            }.distinct
+            val cellIds = rows.map(RasterSerializationUtil.cellIdOf).distinct
+            val cellId = if (cellIds.size == 1) cellIds.head else -1L // several cell ids: none, as the readable groups do
+            RasterSerializationUtil.tileToRow((cellId, null, Map("last_error" -> reasons.mkString("; "))), rasterType, null)
+        }
+    }
+
     /** Generator variant for generators whose single output column cannot carry an error tile
       * (the `(z, x, y, bytes)` struct of `gbx_rst_xyzpyramid` has no metadata map).
       *

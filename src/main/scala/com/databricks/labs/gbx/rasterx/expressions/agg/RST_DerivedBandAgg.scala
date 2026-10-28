@@ -3,7 +3,7 @@ package com.databricks.labs.gbx.rasterx.expressions.agg
 import com.databricks.labs.gbx.expressions.{ExpressionConfig, ExpressionConfigExpr, WithExpressionInfo}
 import com.databricks.labs.gbx.rasterx.gdal.RasterDriver
 import com.databricks.labs.gbx.rasterx.operations.PixelCombineRasters
-import com.databricks.labs.gbx.rasterx.util.{RST_ExpressionUtil, RasterSerializationUtil}
+import com.databricks.labs.gbx.rasterx.util.{RST_ErrorHandler, RST_ExpressionUtil, RasterSerializationUtil}
 import org.apache.spark.sql.catalyst.InternalRow
 import org.apache.spark.sql.catalyst.analysis.FunctionRegistry.FunctionBuilder
 import org.apache.spark.sql.catalyst.expressions.aggregate.{ImperativeAggregate, TypedImperativeAggregate}
@@ -88,10 +88,11 @@ case class RST_DerivedBandAgg(
                     case _ => dropped += 1; None
                 }
             }
+            val onlyErrors = if (tiles.isEmpty) RST_ErrorHandler.errorTileOfGroup(buffer, rasterType) else null
             buffer.clear()
 
             if (tiles.isEmpty) {
-                null
+                onlyErrors // NULL unless every member is an error tile
             } else {
                 // If merging multiple index rasters, the index value is dropped
                 val idx: Long = if (tiles.map(_._1).groupBy(identity).size == 1) tiles.head._1 else -1L
